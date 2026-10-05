@@ -26,6 +26,11 @@ hn follows tmux 3.5a's keys, commands, formats and `~/.tmux.conf`, with your har
 every machine behind them. What tmux users have asked for over the years, and what hn does
 about it: [docs/tmux-improved.md](docs/tmux-improved.md).
 
+The [Harness OS image](../os/README.md) uses the same hn binary with an explicit OS session
+mode. Its live USB offers Install and Try; an installed OS offers agents, terminals and Wi-Fi.
+These screens and installation shortcuts are absent from ordinary hn on macOS and other Linux
+systems. Installing or updating hn alone does not turn a computer into Harness OS.
+
 ![Three harnesses on two machines, side by side](docs/panes.png)
 
 ![C-b s: every harness on every machine, the one waiting on you nearest the prompt](docs/launcher.png)
@@ -139,7 +144,7 @@ sends a plain Enter).
 | tmux keys | |
 |---|---|
 | `C-b s` | every harness on every machine — an fzf list with a live preview |
-| `C-b c` | new window, on the home page: your recent harnesses and the Claude Code and Codex conversations Harness did not start (last 30 days, every machine) — `1…9` opens one there (or `↑`/`↓` then `enter`; a conversation resumed as a harness). Anything you type starts a shell there with your keys in it, as after tmux's `C-b c`: `C-b c` then `claude⏎` runs `claude`. `new-window` from a script, or with options (`-c`, a command…), makes the shell at once, as tmux does; `set -g @hn-new-window shell` (or `@hn-look tmux`) makes the key tmux's too |
+| `C-b c` | new window with the task-first creation form. Type a task and Enter to start; Open Terminal opens a shell. Up to three recent sessions and Browse All Sessions appear below. `new-window` from a script, or with options (`-c`, a command…), makes the shell at once, as tmux does; `set -g @hn-new-window shell` (or `@hn-look tmux`) keeps that behavior for the key and startup too |
 | `C-b %` `C-b "` (and `C-b \|` for `%`) | split right / below — a shell, at once, in this pane's machine and folder (`C-b -` is tmux's delete-buffer) |
 | `C-b o` `C-b ;` `C-b ←↑→↓` `C-b q` | next pane, last pane, pane in a direction, pane numbers |
 | `C-b z` `C-b space` `C-b M-1…7` `C-b { }` `C-b C-o` | zoom, next layout, a layout, swap, rotate |
@@ -158,22 +163,23 @@ Harness's own, only on keys tmux leaves unbound (every tmux key does what tmux d
 | | |
 |---|---|
 | `C-b a` / `C-b A` | the next harness that needs you (`next-harness`) / all those waiting on you (`M-1…9` answers from the list; `M-a` types an answer — an option's number, several for a multi-choice question, `1,3`, or your own words) |
-| `C-b N` `C-b T` | New Harness popup / new terminal. Agent, Project and optional Task sit above Branch, Worktree, Model, Approvals and applicable Profile, with searchable choices. |
+| `C-b N` `C-b T` | New Harness popup / new terminal. The optional Task is focused first, above Agent, Project, Branch, Worktree, Model, Approvals and applicable Profile, with searchable choices. |
 | `C-b I` `C-b @` `C-b S` | models, machines, the Harness Store |
 | `C-b g` `C-b B` | send a task (Harness picks the harness) / broadcast to the window |
 | `C-b R` `C-b P` `C-b K` | restart, pause, clone the harness |
 
-`C-b N` opens a compact, centered New Harness form. Agent, Project and optional Task come first,
-then a blank row separates Branch, Worktree, Model, Approvals and applicable Profile.
+`C-b N` opens a compact, centered New Harness form with the task ready to type at the top.
+Agent and Project follow, then Branch, Worktree, Model, Approvals and applicable Profile.
 All settings are visible without expanding Options. Project reads `project @ local`, or
 `project @ machine` for a remote destination; focusing it shows the full path below.
 The initial destination is the connected local Harness machine, with successful agent
 and project choices remembered. Explicit project commands keep their destination. Enter starts
 with the displayed choices; the action names the selected agent (for example, Start Codex).
-Up/Down moves between fields and previews their choices on the right. Enter,
-Right or typing enters the chooser. Tab switches between the form and chooser; Enter accepts
-an item and returns to New Harness. A second Enter starts it in the current window, splitting
-beside the focused pane when needed. Lowercase `C-b n` remains next window.
+Tab/Shift-Tab moves between fields. Outside the task editor, Up/Down also moves between fields
+and previews their choices on the right. Enter, Right or typing enters a chooser; Enter accepts
+an item and focuses Start. Enter in the task editor starts immediately. The harness opens in
+the window that requested it, splitting beside the focused pane when needed. Switching windows
+while it starts leaves your new window focused. Lowercase `C-b n` remains next window.
 
 Agent combines coding agents and installed Store harnesses; a Store harness then offers its
 compatible coding agents. Project offers Clone Repository, Open Folder, New Folder and recent
@@ -182,8 +188,12 @@ a path. Project search includes the 50 most recently active distinct folders per
 duplicate sessions in one folder count once. Combine a machine name and folder, such as
 `office harness` or `m2 harness`, in either order. The local machine's actual
 name remains searchable when its label says `local`.
-Task opens an editor beside the form: Enter accepts, Alt-Enter inserts a newline,
-and pasted tasks retain line breaks. Escape preserves the task in the draft. Supported agents
+Task is edited directly in the form: Enter starts, Alt-Enter inserts a newline, and pasted tasks
+retain line breaks. Enhanced terminals can use Shift-Enter too. Arrow keys navigate wrapped
+lines; Home/End, Ctrl-A/E, word movement/deletion, Ctrl-U/K and Ctrl-Y work in the editor.
+On the welcome screen, `C-b ]` also pastes into the task, preserving its line breaks.
+The popup keeps text-editor keys directly, as a tmux prompt does; Escape closes it with the draft kept.
+Unicode graphemes stay intact. Escape preserves a dismissed dialog's task. Supported agents
 receive it as their first message; an unavailable first task or one exceeding the daemon's
 2,000-character limit is explained before launch. A blank task starts an ordinary session.
 Git projects default to a new worktree from main, as on desktop; missing main requires a branch
@@ -198,7 +208,19 @@ to its right; in narrow terminals they temporarily occupy the form's place. Esca
 nested choosers and preserves a dismissed draft. Confirmed failures keep the draft and reuse
 any prepared project folder on retry. A lost reply offers Check status for the original launch;
 repeated Enter cannot start another harness while its outcome is unknown. Input in the form
-never reaches a working pane. No reverse-video selection is used.
+never reaches a working pane.
+
+A fresh startup and `C-b c` use the same form, with a separate draft per window. The welcome
+screen explains the first task; later windows inherit the machine and folder they were opened
+from. Up to three recent sessions appear below the creation actions; Browse All Sessions opens
+the full launcher. Existing Claude Code, Codex and other supported histories are discovered on
+connected machines. Loading, empty and unavailable history have distinct states; Ctrl-R retries
+discovery. Digits and plain-key bindings belong to the task while you type. Your modified prefix
+(for example Ctrl-B) still switches windows and opens commands. With a plain prefix such as a
+backtick, Tab to a setting first to use it for navigation. Open Terminal is explicit and
+never sends the task to a shell. With the daemon offline, a task can be prepared while the local
+terminal remains available. Existing workspaces still restore as usual. Harness OS keeps its
+dedicated installation, network and first-launch actions.
 
 
 In the harness and command lists, fzf's keys: `C-j/C-k` `C-n/C-p` move, `Tab` marks, `C-/` toggles the preview,

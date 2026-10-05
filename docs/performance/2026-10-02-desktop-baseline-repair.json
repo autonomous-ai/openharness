@@ -1,0 +1,3312 @@
+{
+  "date_utc": "2026-10-02",
+  "host": {
+    "os": "macOS 26.6.2",
+    "architecture": "x86_64",
+    "model": "iMac20,1",
+    "logical_cpus": 16,
+    "memory_gib": 64,
+    "chrome": "154.0.8037.97",
+    "flutter": {
+      "frameworkVersion": "3.47.2",
+      "channel": "[user-branch]",
+      "repositoryUrl": "https://github.com/flutter/flutter.git",
+      "frameworkRevision": "d3b14c876900e553bc736ca19295fc09e3853e8e",
+      "frameworkCommitDate": "2026-08-26 16:07:51 -0700",
+      "engineRevision": "a804b261645ef8c13eb3d5c44a5c2fb0340c5539",
+      "engineCommitDate": "2026-08-26 18:46:13.000Z",
+      "engineContentHash": "1cf1c4773fb941c4c74a7f8bb144a8837596c0f4",
+      "engineBuildDate": "2026-08-27 02:23:07.677",
+      "dartSdkVersion": "3.13.2",
+      "devToolsVersion": "2.60.0",
+      "flutterVersion": "3.47.2"
+    }
+  },
+  "full_vm_source": "b906e3a75c46da8b6450561bb75e73c6abbca3af",
+  "final_changed_dart_sha256": {
+    "desktop/lib/models/models_panel.dart": "3dd14e2597660bbf91784c55978bbb01056d345dfb07a7858b0421e351b2c2aa",
+    "desktop/lib/screens/swarm_screen.dart": "fd259263af67627d0cc616b56aeb9cf426932a3a7dc64be827bf798e93a5c881",
+    "desktop/lib/shortcuts/keymap_commands.dart": "6433bcbfff80e72c4028d32063640ad2829aedcb97d43153559f4b296f40f1d4",
+    "desktop/lib/widgets/pane_model_status.dart": "72c5b0b7d5b3a57b96d452b84ad02e30f5dc6dae13c079d5b7b90aed4edaf378",
+    "desktop/lib/widgets/terminal_panel.dart": "a158c336a9fe9bf93f215c5c2b02bf53c60ebc577382f00959ffee09b4d9d4b0",
+    "desktop/test/agent_pause_state_test.dart": "c1d291ea7482b52ef9275cbb6e4e27fd629f9e9eb5010257c504b9ed7007ce58",
+    "desktop/test/box_flows_test.dart": "629d30856de64882812e1a609ed5cae9d71ae7fa1a4228fc6e04aa2c486d6a6d",
+    "desktop/test/daemon_workspace_test.dart": "0f572311cd50b31eadb1bb4e5ee291621c56a381b3564be75d08650108e2abaa",
+    "desktop/test/desktop_dialog_interaction_test.dart": "df0c6bd37700b299c2f19a420d53ad0d615f5220f6ed6c5a142b7ccb93f7244d",
+    "desktop/test/desktop_search_polish_test.dart": "3f4e39b2dbd0799cd400f712cff0e66d3f99f1102364e7cbf5ab7f1254595f3f",
+    "desktop/test/desktop_welcome_composer_test.dart": "f9b28a8a6f41faf00d0d6fbba92bd9ac03a47c5ace9d0d19d5bfd2e15bae540d",
+    "desktop/test/harness_placement_test.dart": "7ad01122bd238459e1decc1e0f285a99584fd827b38815a561f439238f997c5b",
+    "desktop/test/harness_store_entry_test.dart": "c5ed6a41b83b09d5e8559f9e92f715fce39a598f23828febc3a911aef1c9f198",
+    "desktop/test/machines_manager_test.dart": "c3a46eb3f197fcad0e3f43c4cb4e1d4098b93fc9d0f2926f85ad9b0a244cead7",
+    "desktop/test/new_harness_install_e2e_test.dart": "a6ad93246f52d2631b901ba5acfa2c847f584ae1d0dd0e1d1398fce630bc8131",
+    "desktop/test/new_harness_install_pane_test.dart": "b77afd7702f8c818c3ff9f1dcf0f7cb0e353e7be0bfd29ac27a922172d4b1d93",
+    "desktop/test/pane_model_status_test.dart": "011beab12e8339477c9b74bfdd55e029b4c8661acc28680060d0b68a9871746b",
+    "desktop/test/swarm_split_test.dart": "649b79b56a88b803977c7a1d4386ccf1ab3bc5221abc79d4ae6fcaf7baa1e7aa",
+    "desktop/test/terminal_panel_presentation_test.dart": "97a478cf9c1d913f7780681c428bdb25cf1910ed708d3cbd791efb93c1c6211f",
+    "desktop/test/web/native_menus_web_test.dart": "4cd56403d4177f10c411497bb353f73e92275d5ecdf5c316eabc3e1f5a572076",
+    "desktop/test/workspace_start_guide_test.dart": "a8bac125d163d15acf7fc2ed7a143865188be544d7ab8332b82863dc17d5a083"
+  },
+  "vm": {
+    "status": "complete_across_recorded_runs",
+    "passed": 5751,
+    "skipped_existing": 16,
+    "files": {
+      "test/about_section_test.dart": {
+        "passed": 4,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/account_device_detail_test.dart": {
+        "passed": 14,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/account_device_history_test.dart": {
+        "passed": 5,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/account_devices_section_test.dart": {
+        "passed": 23,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/account_devices_test.dart": {
+        "passed": 9,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/activity_evidence_test.dart": {
+        "passed": 5,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/add_phone_dialog_test.dart": {
+        "passed": 19,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/add_phone_transport_test.dart": {
+        "passed": 2,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/advanced_agent_keyboard_test.dart": {
+        "passed": 6,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/agent_alert_banner_widget_test.dart": {
+        "passed": 4,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/agent_alerts_test.dart": {
+        "passed": 11,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/agent_change_test.dart": {
+        "passed": 38,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/agent_creation_recovery_test.dart": {
+        "passed": 36,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/agent_event_invalidation_test.dart": {
+        "passed": 20,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/agent_fork_state_test.dart": {
+        "passed": 19,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/agent_last_used_test.dart": {
+        "passed": 7,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/agent_model_test.dart": {
+        "passed": 23,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/agent_pause_state_test.dart": {
+        "passed": 13,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/agent_picker_test.dart": {
+        "passed": 7,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/agent_rename_state_test.dart": {
+        "passed": 9,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/agent_restart_state_test.dart": {
+        "passed": 18,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/agent_stop_state_test.dart": {
+        "passed": 14,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/agent_unread_test.dart": {
+        "passed": 13,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/alert_sounds_test.dart": {
+        "passed": 10,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/api_client_test.dart": {
+        "passed": 11,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/api_connections_test.dart": {
+        "passed": 20,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/api_model_picker_test.dart": {
+        "passed": 11,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/app_choice_picker_test.dart": {
+        "passed": 7,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/app_dialog_responsiveness_test.dart": {
+        "passed": 1,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/app_icon_button_spin_test.dart": {
+        "passed": 6,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/app_log_test.dart": {
+        "passed": 7,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/app_menu_test.dart": {
+        "passed": 4,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/app_select_field_review_test.dart": {
+        "passed": 7,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/app_select_field_test.dart": {
+        "passed": 23,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/appearance_prefs_store_test.dart": {
+        "passed": 11,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/asset_paths_test.dart": {
+        "passed": 2,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/attach_intent_test.dart": {
+        "passed": 14,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/attention_surfaces_test.dart": {
+        "passed": 1,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/autonomous_device_pairing_test.dart": {
+        "passed": 21,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/background_pane_opacity_test.dart": {
+        "passed": 8,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/bearer_auth_interceptor_test.dart": {
+        "passed": 4,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/bios_navigation_test.dart": {
+        "passed": 3,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/boot_flow_widget_test.dart": {
+        "passed": 28,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/bootstrapping_screen_test.dart": {
+        "passed": 8,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/box_flows_test.dart": {
+        "passed": 5,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/box_polish_test.dart": {
+        "passed": 1,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/box_render_preview_test.dart": {
+        "passed": 0,
+        "skipped": 5,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/browser_label_test.dart": {
+        "passed": 1,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/browser_login_test.dart": {
+        "passed": 17,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/browser_machine_actions_test.dart": {
+        "passed": 7,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/buffered_log_test.dart": {
+        "passed": 23,
+        "skipped": 1,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/button_hover_test.dart": {
+        "passed": 13,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/cabled_device_card_test.dart": {
+        "passed": 9,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/channel_controller_test.dart": {
+        "passed": 3,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/channel_shortcut_test.dart": {
+        "passed": 3,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/channel_workspace_test.dart": {
+        "passed": 10,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/cli_login_test.dart": {
+        "passed": 12,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/cli_transcript_test.dart": {
+        "passed": 4,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/clone_agent_test.dart": {
+        "passed": 10,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/clone_repository_dialog_test.dart": {
+        "passed": 5,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/codex_profiles_test.dart": {
+        "passed": 3,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/coding_memory_activity_test.dart": {
+        "passed": 8,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/coding_memory_connection_test.dart": {
+        "passed": 2,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/coding_memory_library_test.dart": {
+        "passed": 7,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/coding_memory_notebooks_test.dart": {
+        "passed": 8,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/coding_memory_owner_lifecycle_test.dart": {
+        "passed": 3,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/coding_memory_settings_test.dart": {
+        "passed": 8,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/coding_memory_view_test.dart": {
+        "passed": 64,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/color_palette_test.dart": {
+        "passed": 6,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/command_bar_catalog_test.dart": {
+        "passed": 7,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/command_bar_test.dart": {
+        "passed": 16,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/command_dock_interaction_test.dart": {
+        "passed": 4,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/command_picker_rendering_test.dart": {
+        "passed": 4,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/companion_dial_test.dart": {
+        "passed": 3,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/companion_home_test.dart": {
+        "passed": 15,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/connection_review_render_test.dart": {
+        "passed": 6,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/copied_files_test.dart": {
+        "passed": 5,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/crash_log_test.dart": {
+        "passed": 2,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/custom_background_test.dart": {
+        "passed": 6,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/daemon_off_test.dart": {
+        "passed": 28,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/daemon_readiness_test.dart": {
+        "passed": 9,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/daemon_review_render_test.dart": {
+        "passed": 95,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/daemon_workspace_test.dart": {
+        "passed": 35,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/daemons/daemon_brain_test.dart": {
+        "passed": 16,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/daemons/daemon_colors_test.dart": {
+        "passed": 5,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/daemons/daemon_face_test.dart": {
+        "passed": 33,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/daemons/daemon_lines_test.dart": {
+        "passed": 5,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/daemons/daemon_morph_test.dart": {
+        "passed": 3,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/daemons/illustrated_art_test.dart": {
+        "passed": 13,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/daemons/illustrated_identity_test.dart": {
+        "passed": 4,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/daemons/individual_art_test.dart": {
+        "passed": 5,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/daemons/pair_rules_file_test.dart": {
+        "passed": 5,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/daemons/plates_test.dart": {
+        "passed": 13,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/daemons/render_frames_test.dart": {
+        "passed": 11,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/daemons/zoo_preview_test.dart": {
+        "passed": 3,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/daemons/zoo_test.dart": {
+        "passed": 43,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/debug_section_test.dart": {
+        "passed": 9,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/desk_sync_test.dart": {
+        "passed": 26,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/desktop_account_transition_test.dart": {
+        "passed": 10,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/desktop_compact_launch_test.dart": {
+        "passed": 25,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/desktop_composer_layout_test.dart": {
+        "passed": 47,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/desktop_dialog_interaction_test.dart": {
+        "passed": 51,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/desktop_final_ux_test.dart": {
+        "passed": 3,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/desktop_guidance_layout_test.dart": {
+        "passed": 12,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/desktop_history_dialog_test.dart": {
+        "passed": 6,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/desktop_new_harness_edge_test.dart": {
+        "passed": 15,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/desktop_palette_layout_test.dart": {
+        "passed": 12,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/desktop_preview_compatibility_test.dart": {
+        "passed": 8,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/desktop_remote_folder_picker_test.dart": {
+        "passed": 28,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/desktop_resource_forms_edge_test.dart": {
+        "passed": 9,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/desktop_search_edges_test.dart": {
+        "passed": 24,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/desktop_search_polish_test.dart": {
+        "passed": 37,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/desktop_task_palette_test.dart": {
+        "passed": 8,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/desktop_updater_test.dart": {
+        "passed": 27,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/desktop_welcome_composer_test.dart": {
+        "passed": 14,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/desktop_window_test.dart": {
+        "passed": 4,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/desktop_workspace_tab_test.dart": {
+        "passed": 6,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/device_carry_test.dart": {
+        "passed": 2,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/device_daemon_wire_test.dart": {
+        "passed": 5,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/device_finder_test.dart": {
+        "passed": 5,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/device_form_test.dart": {
+        "passed": 6,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/device_notice_bands_shell_test.dart": {
+        "passed": 6,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/device_output_search_test.dart": {
+        "passed": 3,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/device_passage_test.dart": {
+        "passed": 4,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/device_pending_sync_test.dart": {
+        "passed": 32,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/device_viewer_notices_test.dart": {
+        "passed": 27,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/device_visit_test.dart": {
+        "passed": 9,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/devices_controller_test.dart": {
+        "passed": 6,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/devices_harness_test.dart": {
+        "passed": 6,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/devices_hosts_test.dart": {
+        "passed": 3,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/devices_screen_test.dart": {
+        "passed": 10,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/devices_tab_test.dart": {
+        "passed": 5,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/dial_desk_test.dart": {
+        "passed": 23,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/dial_log_tail_test.dart": {
+        "passed": 4,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/dial_status_test.dart": {
+        "passed": 5,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/direct_auth_api_test.dart": {
+        "passed": 4,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/dsh_catalog_test.dart": {
+        "passed": 27,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/dsh_install_panel_test.dart": {
+        "passed": 12,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/e2ee/encrypted_down_types_test.dart": {
+        "passed": 1,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/e2ee/strict_down_test.dart": {
+        "passed": 4,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/engine_identity_test.dart": {
+        "passed": 7,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/entry_surfaces_render_test.dart": {
+        "passed": 16,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/environment_preflight_screen_test.dart": {
+        "passed": 6,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/environment_probe_lifecycle_test.dart": {
+        "passed": 12,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/environment_provisioner_test.dart": {
+        "passed": 35,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/environment_recheck_timer_test.dart": {
+        "passed": 3,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/environment_setup_screen_test.dart": {
+        "passed": 11,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/experimental_features_test.dart": {
+        "passed": 10,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/export_logs_dialog_test.dart": {
+        "passed": 9,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/file_type_icon_test.dart": {
+        "passed": 5,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/fingerprint_text_test.dart": {
+        "passed": 4,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/first_task_test.dart": {
+        "passed": 2,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/first_workspace_test.dart": {
+        "passed": 17,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/flasher_test.dart": {
+        "passed": 9,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/fork_agent_test.dart": {
+        "passed": 7,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/fork_keyboard_test.dart": {
+        "passed": 8,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/friendly_desktop_test.dart": {
+        "passed": 6,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/generated_project_launch_test.dart": {
+        "passed": 9,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/git_worktree_failures_test.dart": {
+        "passed": 9,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/git_worktree_test.dart": {
+        "passed": 16,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/grid_model_picker_test.dart": {
+        "passed": 47,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/grid_on_demand_test.dart": {
+        "passed": 14,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/grid_picture_test.dart": {
+        "passed": 14,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/group_a_identity_test.dart": {
+        "passed": 5,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/guest_window_test.dart": {
+        "passed": 9,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/harness_activity_test.dart": {
+        "passed": 7,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/harness_agent_selection_test.dart": {
+        "passed": 18,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/harness_attachments_test.dart": {
+        "passed": 6,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/harness_catalog_test.dart": {
+        "passed": 6,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/harness_cli_runner_test.dart": {
+        "passed": 5,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/harness_command_bar_test.dart": {
+        "passed": 10,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/harness_comments_test.dart": {
+        "passed": 8,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/harness_customize_test.dart": {
+        "passed": 15,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/harness_file_store_test.dart": {
+        "passed": 11,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/harness_join_guide_widget_test.dart": {
+        "passed": 2,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/harness_monitor_summary_test.dart": {
+        "passed": 4,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/harness_monitor_test.dart": {
+        "passed": 14,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/harness_monitor_visibility_test.dart": {
+        "passed": 4,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/harness_picker_entry_test.dart": {
+        "passed": 3,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/harness_placement_test.dart": {
+        "passed": 22,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/harness_resources_test.dart": {
+        "passed": 7,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/harness_session_picker_test.dart": {
+        "passed": 13,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/harness_sessions_test.dart": {
+        "passed": 5,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/harness_share_status_test.dart": {
+        "passed": 7,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/harness_start_page_test.dart": {
+        "passed": 5,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/harness_stats_test.dart": {
+        "passed": 11,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/harness_store_entry_test.dart": {
+        "passed": 6,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/harness_tab_test.dart": {
+        "passed": 3,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/harness_titles_test.dart": {
+        "passed": 6,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/icon_catalog_render_test.dart": {
+        "passed": 3,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/interactive_viewer_test.dart": {
+        "passed": 5,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/keyboard_practice_test.dart": {
+        "passed": 12,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/keymap_dispatch_test.dart": {
+        "passed": 11,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/keymap_edit_test.dart": {
+        "passed": 14,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/keymap_host_test.dart": {
+        "passed": 6,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/keymap_native_test.dart": {
+        "passed": 4,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/keymap_runtime_test.dart": {
+        "passed": 33,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/keymap_store_test.dart": {
+        "passed": 9,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/keymap_test.dart": {
+        "passed": 13,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/launch_preferences_test.dart": {
+        "passed": 40,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/layout_palette_move_test.dart": {
+        "passed": 14,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/layout_palette_render_test.dart": {
+        "passed": 13,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/layout_palette_test.dart": {
+        "passed": 14,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/link_another_machine_test.dart": {
+        "passed": 10,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/link_machine_dialog_widget_test.dart": {
+        "passed": 13,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/link_machine_widget_test.dart": {
+        "passed": 10,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/link_prompt_revisit_test.dart": {
+        "passed": 1,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/linux_app_image_test.dart": {
+        "passed": 5,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/linux_menu_bar_test.dart": {
+        "passed": 8,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/local_cli_discovery_test.dart": {
+        "passed": 37,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/local_daemon_transport_test.dart": {
+        "passed": 9,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/local_git_projects_test.dart": {
+        "passed": 10,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/local_model_picker_test.dart": {
+        "passed": 10,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/local_stack_e2e_test.dart": {
+        "passed": 0,
+        "skipped": 1,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/log_redact_test.dart": {
+        "passed": 10,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/log_stream_test.dart": {
+        "passed": 10,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/login_screen_phone_test.dart": {
+        "passed": 6,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/login_screen_test.dart": {
+        "passed": 12,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/machine_edits_test.dart": {
+        "passed": 9,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/machine_inventory_api_test.dart": {
+        "passed": 3,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/machine_list_outage_test.dart": {
+        "passed": 14,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/machine_list_push_test.dart": {
+        "passed": 7,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/machine_loading_test.dart": {
+        "passed": 19,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/machine_profile_test.dart": {
+        "passed": 6,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/machine_resource_monitor_test.dart": {
+        "passed": 4,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/machine_resources_test.dart": {
+        "passed": 12,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/machine_tree_widget_test.dart": {
+        "passed": 12,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/machines_manager_keyboard_test.dart": {
+        "passed": 10,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/machines_manager_test.dart": {
+        "passed": 13,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/machines_menu_stopped_test.dart": {
+        "passed": 4,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/machines_menu_test.dart": {
+        "passed": 8,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/machines_panel_test.dart": {
+        "passed": 26,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/manual_update_check_test.dart": {
+        "passed": 23,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/memory_review_text_test.dart": {
+        "passed": 2,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/model_manager_controller_test.dart": {
+        "passed": 31,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/model_mark_test.dart": {
+        "passed": 3,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/model_picker_chrome_test.dart": {
+        "passed": 2,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/model_search_catalog_test.dart": {
+        "passed": 12,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/model_use_test.dart": {
+        "passed": 6,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/models_menu_test.dart": {
+        "passed": 14,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/models_panel_test.dart": {
+        "passed": 15,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/move_pane_palette_test.dart": {
+        "passed": 10,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/native_picker_guard_test.dart": {
+        "passed": 5,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/native_toolbar_sync_test.dart": {
+        "passed": 4,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/new_agent_choices_layout_test.dart": {
+        "passed": 5,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/new_agent_codex_profile_test.dart": {
+        "passed": 14,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/new_agent_dsh_test.dart": {
+        "passed": 8,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/new_agent_engine_check_test.dart": {
+        "passed": 4,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/new_agent_permission_mode_test.dart": {
+        "passed": 9,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/new_agent_project_folder_test.dart": {
+        "passed": 3,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/new_agent_project_picker_test.dart": {
+        "passed": 10,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/new_agent_rows_and_task_test.dart": {
+        "passed": 12,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/new_agent_terminal_test.dart": {
+        "passed": 4,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/new_device_notice_test.dart": {
+        "passed": 23,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/new_harness_accessibility_test.dart": {
+        "passed": 1,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/new_harness_agent_settings_test.dart": {
+        "passed": 7,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/new_harness_attachments_test.dart": {
+        "passed": 3,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/new_harness_box_test.dart": {
+        "passed": 32,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/new_harness_controller_edges_test.dart": {
+        "passed": 24,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/new_harness_entry_rules_test.dart": {
+        "passed": 25,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/new_harness_form_test.dart": {
+        "passed": 36,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/new_harness_git_test.dart": {
+        "passed": 27,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/new_harness_grid_test.dart": {
+        "passed": 23,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/new_harness_install_e2e_test.dart": {
+        "passed": 7,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/new_harness_install_pane_test.dart": {
+        "passed": 15,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/new_harness_models_test.dart": {
+        "passed": 20,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/new_harness_paste_test.dart": {
+        "passed": 11,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/new_harness_project_context_test.dart": {
+        "passed": 14,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/new_harness_scenarios_test.dart": {
+        "passed": 65,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/new_harness_start_failures_test.dart": {
+        "passed": 5,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/notification_inbox_test.dart": {
+        "passed": 9,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/notification_parity_test.dart": {
+        "passed": 19,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/observer_codec_test.dart": {
+        "passed": 2,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/observer_transport_test.dart": {
+        "passed": 2,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/open_in_browser_test.dart": {
+        "passed": 1,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/open_picker_rendering_test.dart": {
+        "passed": 2,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/orchestrator_controls_test.dart": {
+        "passed": 14,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/orchestrator_local_e2e_test.dart": {
+        "passed": 0,
+        "skipped": 1,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/orchestrator_review_render_test.dart": {
+        "passed": 2,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/orchestrator_test.dart": {
+        "passed": 8,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/own_binding/connected_semantics_test.dart": {
+        "passed": 11,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/pane_arrangement_test.dart": {
+        "passed": 6,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/pane_defaults_test.dart": {
+        "passed": 2,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/pane_drag_swap_test.dart": {
+        "passed": 1,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/pane_file_drop_test.dart": {
+        "passed": 5,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/pane_file_menu_test.dart": {
+        "passed": 2,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/pane_focus_test.dart": {
+        "passed": 2,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/pane_lattice_test.dart": {
+        "passed": 9,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/pane_launch_failure_test.dart": {
+        "passed": 8,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/pane_layout_choices_test.dart": {
+        "passed": 4,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/pane_machine_unknown_test.dart": {
+        "passed": 19,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/pane_menu_desktop_test.dart": {
+        "passed": 9,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/pane_menu_row_test.dart": {
+        "passed": 4,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/pane_model_status_test.dart": {
+        "passed": 18,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/pane_move_terminal_test.dart": {
+        "passed": 2,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/pane_move_to_tab_test.dart": {
+        "passed": 11,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/pane_needs_link_test.dart": {
+        "passed": 4,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/pane_pin_test.dart": {
+        "passed": 9,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/pane_preset_test.dart": {
+        "passed": 68,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/pane_reorder_test.dart": {
+        "passed": 6,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/pane_restart_test.dart": {
+        "passed": 3,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/pane_ring_test.dart": {
+        "passed": 12,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/pane_shortcuts_test.dart": {
+        "passed": 10,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/pane_tab_cleanup_test.dart": {
+        "passed": 23,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/password_stretch_test.dart": {
+        "passed": 2,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/pending_question_test.dart": {
+        "passed": 25,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/phone_sign_in_test.dart": {
+        "passed": 8,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/process_responsibility_test.dart": {
+        "passed": 16,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/profile_startup_test.dart": {
+        "passed": 25,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/profiles_section_test.dart": {
+        "passed": 1,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/project_folder_test.dart": {
+        "passed": 5,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/project_history_test.dart": {
+        "passed": 3,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/project_preview_test.dart": {
+        "passed": 2,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/prompt_context_test.dart": {
+        "passed": 5,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/prompt_editing_test.dart": {
+        "passed": 7,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/pull_request_badge_test.dart": {
+        "passed": 8,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/quick_access_test.dart": {
+        "passed": 7,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/relative_time_test.dart": {
+        "passed": 3,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/remote_folder_picker_test.dart": {
+        "passed": 10,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/remote_media_download_test.dart": {
+        "passed": 16,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/remote_media_smoke_test.dart": {
+        "passed": 0,
+        "skipped": 1,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/remote_password_state_test.dart": {
+        "passed": 6,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/remote_terminal_handoff_test.dart": {
+        "passed": 4,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/remote_usage_test.dart": {
+        "passed": 7,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/rename_agent_dialog_test.dart": {
+        "passed": 2,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/rename_keyboard_test.dart": {
+        "passed": 8,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/repository_clone_test.dart": {
+        "passed": 5,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/resource_picker_test.dart": {
+        "passed": 27,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/resource_preview_actions_test.dart": {
+        "passed": 15,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/restart_keyboard_test.dart": {
+        "passed": 7,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/resting_model_picker_test.dart": {
+        "passed": 12,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/resting_models_new_harness_test.dart": {
+        "passed": 2,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/resting_models_panel_test.dart": {
+        "passed": 5,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/resting_models_test.dart": {
+        "passed": 13,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/retake_taken_over_panes_test.dart": {
+        "passed": 3,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/retarget_refusal_test.dart": {
+        "passed": 5,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/route_answer_test.dart": {
+        "passed": 8,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/runtime_model_name_test.dart": {
+        "passed": 4,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/search_result_text_test.dart": {
+        "passed": 7,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/search_when_test.dart": {
+        "passed": 5,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/search_workspace_test.dart": {
+        "passed": 4,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/select_field_typing_test.dart": {
+        "passed": 9,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/serial_port_lease_test.dart": {
+        "passed": 4,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/session_close_dialog_test.dart": {
+        "passed": 8,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/session_close_test.dart": {
+        "passed": 21,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/session_content_search_test.dart": {
+        "passed": 15,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/session_git_context_test.dart": {
+        "passed": 9,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/session_preview_app_test.dart": {
+        "passed": 1,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/session_preview_test.dart": {
+        "passed": 6,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/session_search_daemon_e2e_test.dart": {
+        "passed": 0,
+        "skipped": 1,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/session_search_rendering_test.dart": {
+        "passed": 3,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/session_tail_test.dart": {
+        "passed": 6,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/session_work_dialog_test.dart": {
+        "passed": 15,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/session_work_navigation_test.dart": {
+        "passed": 3,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/session_work_state_test.dart": {
+        "passed": 3,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/settings_compact_test.dart": {
+        "passed": 3,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/settings_review_render_test.dart": {
+        "passed": 36,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/settings_screen_test.dart": {
+        "passed": 12,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/settings_section_test.dart": {
+        "passed": 3,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/setup_review_render_test.dart": {
+        "passed": 4,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/share_harness_test.dart": {
+        "passed": 17,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/share_toolbar_test.dart": {
+        "passed": 8,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/shared_agent_page_test.dart": {
+        "passed": 7,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/shared_harness_panel_test.dart": {
+        "passed": 6,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/shared_pane_layout_test.dart": {
+        "passed": 2,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/shared_terminal_watch_test.dart": {
+        "passed": 4,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/shortcuts_browser_test.dart": {
+        "passed": 4,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/shortcuts_deck_test.dart": {
+        "passed": 9,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/shortcuts_test.dart": {
+        "passed": 20,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/signin_recovery_test.dart": {
+        "passed": 8,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/signout_recovery_test.dart": {
+        "passed": 8,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/skeleton_test.dart": {
+        "passed": 7,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/sleep_aware_test.dart": {
+        "passed": 4,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/spoken_task_test.dart": {
+        "passed": 6,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/startup_test.dart": {
+        "passed": 4,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/status_line_test.dart": {
+        "passed": 6,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/status_menu_test.dart": {
+        "passed": 9,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/stop_keyboard_test.dart": {
+        "passed": 7,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/stopped_harness_test.dart": {
+        "passed": 16,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/stopped_tab_cleanup_test.dart": {
+        "passed": 12,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/store_collections_test.dart": {
+        "passed": 3,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/store_controller_test.dart": {
+        "passed": 16,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/store_demo_dialog_test.dart": {
+        "passed": 4,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/store_discover_test.dart": {
+        "passed": 30,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/store_experiments_test.dart": {
+        "passed": 15,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/store_harness_actions_test.dart": {
+        "passed": 14,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/store_open_draft_test.dart": {
+        "passed": 2,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/store_page_test.dart": {
+        "passed": 30,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/store_screen_test.dart": {
+        "passed": 13,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/store_search_test.dart": {
+        "passed": 2,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/store_showcase_test.dart": {
+        "passed": 19,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/store_tab_state_test.dart": {
+        "passed": 9,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/store_update_e2e_test.dart": {
+        "passed": 0,
+        "skipped": 1,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/store_viewers_test.dart": {
+        "passed": 4,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/swarm_add_agent_test.dart": {
+        "passed": 4,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/swarm_arrange_keyboard_test.dart": {
+        "passed": 4,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/swarm_async_test.dart": {
+        "passed": 25,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/swarm_attention_picker_test.dart": {
+        "passed": 4,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/swarm_attention_test.dart": {
+        "passed": 5,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/swarm_canvas_test.dart": {
+        "passed": 10,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/swarm_closed_agents_test.dart": {
+        "passed": 13,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/swarm_commands_test.dart": {
+        "passed": 6,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/swarm_content_search_test.dart": {
+        "passed": 4,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/swarm_entry_picker_test.dart": {
+        "passed": 13,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/swarm_history_test.dart": {
+        "passed": 12,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/swarm_immediate_input_test.dart": {
+        "passed": 19,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/swarm_interactions_test.dart": {
+        "passed": 12,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/swarm_navigation_test.dart": {
+        "passed": 15,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/swarm_navigator_test.dart": {
+        "passed": 3,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/swarm_picker_activation_test.dart": {
+        "passed": 4,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/swarm_prompt_scope_test.dart": {
+        "passed": 4,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/swarm_reconnect_test.dart": {
+        "passed": 1,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/swarm_rename_dialog_test.dart": {
+        "passed": 4,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/swarm_reopen_test.dart": {
+        "passed": 7,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/swarm_resize_test.dart": {
+        "passed": 7,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/swarm_saved_project_test.dart": {
+        "passed": 3,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/swarm_screen_test.dart": {
+        "passed": 17,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/swarm_search_identity_test.dart": {
+        "passed": 8,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/swarm_search_preview_test.dart": {
+        "passed": 17,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/swarm_search_render_test.dart": {
+        "passed": 11,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/swarm_search_test.dart": {
+        "passed": 11,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/swarm_settings_test.dart": {
+        "passed": 5,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/swarm_split_test.dart": {
+        "passed": 17,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/swarm_state_test.dart": {
+        "passed": 24,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164620.197096Z-4838/desktop-vm-loader-retry.log"
+      },
+      "test/swarm_switcher_test.dart": {
+        "passed": 3,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/swarm_terminal_routing_test.dart": {
+        "passed": 4,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/swarm_terminal_scroll_test.dart": {
+        "passed": 2,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/system_notifications_test.dart": {
+        "passed": 32,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/take_over_dialog_test.dart": {
+        "passed": 5,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/team_controller_test.dart": {
+        "passed": 7,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/team_workspace_test.dart": {
+        "passed": 7,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/terminal_alt_buffer_scroll_test.dart": {
+        "passed": 4,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/terminal_binary_test.dart": {
+        "passed": 8,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/terminal_block_glyph_test.dart": {
+        "passed": 15,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/terminal_catalog_test.dart": {
+        "passed": 4,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/terminal_clipboard_test.dart": {
+        "passed": 14,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/terminal_composer_test.dart": {
+        "passed": 20,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/terminal_control_banner_test.dart": {
+        "passed": 34,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/terminal_cursor_idle_test.dart": {
+        "passed": 9,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/terminal_delete_detection_test.dart": {
+        "passed": 4,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/terminal_engine_test.dart": {
+        "passed": 3,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/terminal_find_test.dart": {
+        "passed": 19,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/terminal_font_store_test.dart": {
+        "passed": 9,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/terminal_glyph_presentation_test.dart": {
+        "passed": 2,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/terminal_initial_output_test.dart": {
+        "passed": 6,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/terminal_input_test.dart": {
+        "passed": 39,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/terminal_line_paint_cache_test.dart": {
+        "passed": 16,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/terminal_link_gesture_test.dart": {
+        "passed": 1,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/terminal_link_opener_test.dart": {
+        "passed": 14,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/terminal_links_test.dart": {
+        "passed": 52,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/terminal_offline_view_test.dart": {
+        "passed": 2,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/terminal_pane_test.dart": {
+        "passed": 30,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/terminal_panel_activity_test.dart": {
+        "passed": 3,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/terminal_panel_focus_test.dart": {
+        "passed": 4,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/terminal_panel_header_test.dart": {
+        "passed": 14,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/terminal_panel_links_test.dart": {
+        "passed": 18,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/terminal_panel_presentation_test.dart": {
+        "passed": 4,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/terminal_passage_test.dart": {
+        "passed": 8,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/terminal_reconnect_race_test.dart": {
+        "passed": 3,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/terminal_reconnect_view_test.dart": {
+        "passed": 3,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/terminal_render_suspension_test.dart": {
+        "passed": 5,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/terminal_rewritten_line_test.dart": {
+        "passed": 14,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/terminal_search_test.dart": {
+        "passed": 7,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/terminal_session_test.dart": {
+        "passed": 70,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/terminal_settings_section_test.dart": {
+        "passed": 5,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/terminal_tail_lifecycle_test.dart": {
+        "passed": 11,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/terminal_theme_test.dart": {
+        "passed": 2,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/terminal_typography_test.dart": {
+        "passed": 5,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/terminal_ui_scale_isolation_test.dart": {
+        "passed": 4,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/terminal_ui_typography_test.dart": {
+        "passed": 5,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/terminal_view_interaction_test.dart": {
+        "passed": 22,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/toolbar_notices_test.dart": {
+        "passed": 10,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/toolbar_onboarding_test.dart": {
+        "passed": 14,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/unavailable_harness_picker_test.dart": {
+        "passed": 3,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/update_progress_test.dart": {
+        "passed": 4,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/usage_account_key_test.dart": {
+        "passed": 2,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/usage_accounts_test.dart": {
+        "passed": 8,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/usage_credentials_test.dart": {
+        "passed": 3,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/usage_jsonl_benchmark_test.dart": {
+        "passed": 0,
+        "skipped": 2,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/usage_jsonl_scanners_test.dart": {
+        "passed": 18,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/usage_ledger_benchmark_test.dart": {
+        "passed": 0,
+        "skipped": 2,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/usage_ledger_lifecycle_test.dart": {
+        "passed": 20,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/usage_ledger_test.dart": {
+        "passed": 40,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/usage_loading_test.dart": {
+        "passed": 5,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/usage_report_test.dart": {
+        "passed": 15,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/usage_scanners_test.dart": {
+        "passed": 9,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/usage_section_test.dart": {
+        "passed": 22,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/usage_test.dart": {
+        "passed": 17,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/verdict_marks_test.dart": {
+        "passed": 4,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/viewer/device_history_test.dart": {
+        "passed": 20,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/viewer/device_log_sync_test.dart": {
+        "passed": 101,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/viewer/device_log_test.dart": {
+        "passed": 18,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/viewer/group_sync_test.dart": {
+        "passed": 4,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/viewer_auth_lifecycle_test.dart": {
+        "passed": 18,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/viewer_location_test.dart": {
+        "passed": 4,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/viewer_page_test.dart": {
+        "passed": 3,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/viewer_pane_name_test.dart": {
+        "passed": 2,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/web_machine_choice_test.dart": {
+        "passed": 2,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/web_menu_items_test.dart": {
+        "passed": 5,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/web_pane_test.dart": {
+        "passed": 14,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/web_release_test.dart": {
+        "passed": 3,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/web_store_banner_test.dart": {
+        "passed": 6,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/web_tab_switcher_test.dart": {
+        "passed": 5,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/welcome_entry_layout_test.dart": {
+        "passed": 4,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/welcome_sessions_test.dart": {
+        "passed": 11,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/welcome_wallpaper_shortcuts_test.dart": {
+        "passed": 4,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/widget_test.dart": {
+        "passed": 4,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/wire_counter_test.dart": {
+        "passed": 3,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/workspace_account_lifecycle_test.dart": {
+        "passed": 13,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/workspace_activity_test.dart": {
+        "passed": 2,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/workspace_context_navigation_test.dart": {
+        "passed": 6,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/workspace_event_isolation_test.dart": {
+        "passed": 4,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/workspace_expiry_screen_test.dart": {
+        "passed": 4,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/workspace_learning_test.dart": {
+        "passed": 2,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/workspace_machine_prompt_test.dart": {
+        "passed": 10,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/workspace_onboarding_test.dart": {
+        "passed": 8,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/workspace_pull_request_label_test.dart": {
+        "passed": 2,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/workspace_pull_request_test.dart": {
+        "passed": 3,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/workspace_start_guide_test.dart": {
+        "passed": 11,
+        "skipped": 1,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/workspace_status_test.dart": {
+        "passed": 26,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/workspace_welcome_test.dart": {
+        "passed": 4,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/ws_conn_fifo_test.dart": {
+        "passed": 2,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/ws_conn_plugin_test.dart": {
+        "passed": 7,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/ws_conn_test.dart": {
+        "passed": 16,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log"
+      },
+      "test/ws_pool_ownership_test.dart": {
+        "passed": 2,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      },
+      "test/ws_readiness_test.dart": {
+        "passed": 5,
+        "skipped": 0,
+        "log": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log"
+      }
+    },
+    "logs": [
+      {
+        "path": ".harness/validation/20261002T162859.719729Z-40360/desktop-full-suite.log",
+        "sha256": "fbbc7f3d6a65b2ee155584d34721a4506205afb451b49e75214d20239be5e66c"
+      },
+      {
+        "path": ".harness/validation/20261002T164222.119727Z-90498/desktop-full-suite-remaining.log",
+        "sha256": "f776ff32bec1700b3a3ed0538297daf02dbd29120a2bad26808416c61e5a18f3"
+      },
+      {
+        "path": ".harness/validation/20261002T164620.197096Z-4838/desktop-vm-loader-retry.log",
+        "sha256": "e8a82d24bb7d1268371fa493359bed4eb1ec7eb2c8bd5a81873faf69406570b2"
+      }
+    ],
+    "loader_retry_files": [
+      "test/devices_screen_test.dart",
+      "test/setup_review_render_test.dart",
+      "test/swarm_state_test.dart"
+    ],
+    "interrupted_files_rerun": [
+      "test/workspace_start_guide_test.dart",
+      "test/desktop_dialog_interaction_test.dart"
+    ],
+    "uninterrupted_passing_full_run": false
+  },
+  "browser": {
+    "passed": 49,
+    "files": 9,
+    "final_check": "browser-suite-final"
+  },
+  "native": {
+    "passed": 6,
+    "architecture": "x86_64",
+    "renderer": "Skia",
+    "check": "desktop-native-skia",
+    "fixture_source_commit": "b906e3a75c46da8b6450561bb75e73c6abbca3af",
+    "copied_source_manifest_sha256": "b08b84888064961f0cfec487e1f24ceeec64bcbe4d5dfb3aa20f0ebea4751089",
+    "fixture_sha256": "33629ff1346a46abec359d6591d8e26f94b54b5cf342f6e4ad71b8bcb42429a5",
+    "physical_keyboard_ime_coverage": false
+  },
+  "keymap_regressions": {
+    "passed": 94,
+    "files": 8
+  },
+  "reuse_assessment": "The final production addition after complete VM coverage is a kIsWeb-only companion shortcut mapping; full browser coverage and 94 affected keymap cases were run afterward. The four lifecycle/header production files match the native copy. Documentation and previews add no executable changes. Main advanced only with CLI prompt/research changes in #629.",
+  "initial_baseline_reproduction": {
+    "source": "a94c7aa839eb881a04a2146af8f4cc387f2d6bb6",
+    "duration_seconds": 103.4,
+    "failed_entries": [
+      {
+        "file": "desktop/test/agent_pause_state_test.dart",
+        "test": "a confirmed pause remains in inventory when its refresh fails"
+      },
+      {
+        "file": "desktop/test/boot_flow_widget_test.dart",
+        "test": "offline unlinked remote with a pending agent opens machine recovery"
+      },
+      {
+        "file": "desktop/test/box_flows_test.dart",
+        "test": "dismissed edits resume and explicit agent/project choices become defaults"
+      },
+      {
+        "file": "desktop/test/box_flows_test.dart",
+        "test": "each source pane retains its own draft and launch defaults"
+      },
+      {
+        "file": "desktop/test/daemon_workspace_test.dart",
+        "test": "the pair brain an unavailable companion engine explains setup and retries in the same DSH"
+      },
+      {
+        "file": "desktop/test/desktop_dialog_interaction_test.dart",
+        "test": "composer closes on Escape and restores its draft on reopen"
+      },
+      {
+        "file": "desktop/test/desktop_dialog_interaction_test.dart",
+        "test": "composer closes on outside click and restores its draft on reopen"
+      },
+      {
+        "file": "desktop/test/desktop_search_polish_test.dart",
+        "test": "native scopes put machines first and keep typed words and focus"
+      },
+      {
+        "file": "desktop/test/desktop_dialog_interaction_test.dart",
+        "test": "Cmd-P and Cmd-N replace each other without losing the composer"
+      },
+      {
+        "file": "desktop/test/desktop_dialog_interaction_test.dart",
+        "test": "long mixed mouse and keyboard setup keeps the draft and dismisses one level"
+      },
+      {
+        "file": "desktop/test/desktop_welcome_composer_test.dart",
+        "test": "Cmd-P round trip restores the tab draft and chosen options"
+      },
+      {
+        "file": "desktop/test/desktop_welcome_composer_test.dart",
+        "test": "each new tab keeps its own draft after switching"
+      },
+      {
+        "file": "desktop/test/desktop_welcome_composer_test.dart",
+        "test": "page launches once into its own tab and blocks another start while pending"
+      },
+      {
+        "file": "desktop/test/desktop_welcome_composer_test.dart",
+        "test": "Escape from search restores the embedded draft"
+      },
+      {
+        "file": "desktop/test/harness_placement_test.dart",
+        "test": "setup with Work profile handles escape without starting"
+      },
+      {
+        "file": "desktop/test/harness_placement_test.dart",
+        "test": "setup with Default profile handles outside without starting"
+      },
+      {
+        "file": "desktop/test/harness_store_entry_test.dart",
+        "test": "Store Open uses the dock with its harness and task"
+      },
+      {
+        "file": "desktop/test/harness_store_entry_test.dart",
+        "test": "Store Try uses the dock with its harness and task"
+      },
+      {
+        "file": "desktop/test/harness_store_entry_test.dart",
+        "test": "returning from Store restores the creation draft and selected project"
+      },
+      {
+        "file": "desktop/test/harness_placement_test.dart",
+        "test": "new-tab creation keeps the task and pending receipt through picker shortcuts"
+      },
+      {
+        "file": "desktop/test/new_harness_install_e2e_test.dart",
+        "test": "pick with keys, install with narration, then create"
+      },
+      {
+        "file": "desktop/test/new_harness_install_e2e_test.dart",
+        "test": "a failed install explains itself; New Harness retries and creates"
+      },
+      {
+        "file": "desktop/test/new_harness_install_e2e_test.dart",
+        "test": "a dropped socket says the install may still be finishing"
+      },
+      {
+        "file": "desktop/test/new_harness_install_e2e_test.dart",
+        "test": "the pane fits a 960px window at 2.0x text"
+      },
+      {
+        "file": "desktop/test/new_harness_install_e2e_test.dart",
+        "test": "the pane fits a 520px window at 1.0x text"
+      },
+      {
+        "file": "desktop/test/new_harness_install_e2e_test.dart",
+        "test": "the pane fits a 520px window at 2.0x text"
+      },
+      {
+        "file": "desktop/test/machines_manager_test.dart",
+        "test": "Search unifies categories and preserves management commands (native=false)"
+      },
+      {
+        "file": "desktop/test/new_harness_install_pane_test.dart",
+        "test": "the harness list with no history, Claude Code leads and every harness is listed"
+      },
+      {
+        "file": "desktop/test/new_harness_install_pane_test.dart",
+        "test": "what the form opens on Code and Claude Code when nothing was used before"
+      },
+      {
+        "file": "desktop/test/new_harness_install_pane_test.dart",
+        "test": "installing on the way to start outside dismissal cannot abandon a running installation"
+      },
+      {
+        "file": "desktop/test/new_harness_install_pane_test.dart",
+        "test": "installing on the way to start the right pane narrates the machine, step by step"
+      },
+      {
+        "file": "desktop/test/new_harness_install_pane_test.dart",
+        "test": "installing on the way to start a failed install stays on screen, with how to retry"
+      },
+      {
+        "file": "desktop/test/machines_manager_test.dart",
+        "test": "Search unifies categories and preserves management commands (native=true)"
+      },
+      {
+        "file": "desktop/test/pane_model_status_test.dart",
+        "test": "an agent whose frame says neither keeps the header it had"
+      },
+      {
+        "file": "desktop/test/terminal_panel_presentation_test.dart",
+        "test": "retained header uses current callbacks, names, projects and status"
+      },
+      {
+        "file": "desktop/test/terminal_panel_presentation_test.dart",
+        "test": "narrow headers preserve identity and close control at large text"
+      },
+      {
+        "file": "desktop/test/terminal_tail_lifecycle_test.dart",
+        "test": "loading /Users/autonomous/harnesses/worktrees/autonomous-harness/rapid-spruce/desktop/test/terminal_tail_lifecycle_test.dart"
+      },
+      {
+        "file": "desktop/test/swarm_split_test.dart",
+        "test": "hovering the right edge splits with its project and keeps the terminal"
+      },
+      {
+        "file": "desktop/test/workspace_start_guide_test.dart",
+        "test": "a failed first start stays actionable and retries once"
+      },
+      {
+        "file": "desktop/test/swarm_split_test.dart",
+        "test": "hovering the down edge splits with its project and keeps the terminal"
+      },
+      {
+        "file": "desktop/test/swarm_split_test.dart",
+        "test": "split creation dismissal restores terminal input immediately"
+      }
+    ],
+    "note": "40 assertion failures plus a loader failure that hid two previously recorded terminal-tail assertions; #627 had already fixed two of 1.2.54's 44 assertions and its four stalls."
+  },
+  "receipts": [
+    {
+      "path": ".harness/validation/20261002T162859.719729Z-40360/receipt.json",
+      "sha256": "4c2ff8fd62fe99bf3470c267ebd99377b49fd9187e125ce40f19ced91cb66ea6",
+      "source": {
+        "commit": "b906e3a75c46da8b6450561bb75e73c6abbca3af",
+        "tree": "e66b45411c7ef2cc0249ca1f4d1aa8ca4970f176",
+        "working_changes_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "dirty": false
+      },
+      "status": "failed",
+      "started_at": "2026-10-02T16:28:59.720129+00:00",
+      "finished_at": "2026-10-02T16:42:18.774571+00:00",
+      "checks": [
+        {
+          "name": "desktop-changed-analysis",
+          "argv": [
+            "/Users/autonomous/.local/share/flutter-3.47.2/bin/dart",
+            "analyze",
+            "lib/models/models_panel.dart",
+            "lib/screens/swarm_screen.dart",
+            "lib/widgets/pane_model_status.dart",
+            "lib/widgets/terminal_panel.dart",
+            "test/agent_pause_state_test.dart",
+            "test/box_flows_test.dart",
+            "test/daemon_workspace_test.dart",
+            "test/desktop_dialog_interaction_test.dart",
+            "test/desktop_search_polish_test.dart",
+            "test/desktop_welcome_composer_test.dart",
+            "test/harness_placement_test.dart",
+            "test/harness_store_entry_test.dart",
+            "test/machines_manager_test.dart",
+            "test/new_harness_install_e2e_test.dart",
+            "test/new_harness_install_pane_test.dart",
+            "test/pane_model_status_test.dart",
+            "test/swarm_split_test.dart",
+            "test/terminal_panel_presentation_test.dart",
+            "test/workspace_start_guide_test.dart"
+          ],
+          "started_at": "2026-10-02T16:29:02.027637+00:00",
+          "status": "passed",
+          "exit_code": 0,
+          "duration_seconds": 5.507,
+          "finished_at": "2026-10-02T16:29:07.579371+00:00",
+          "log_sha256": "7a228dcd2a3df90da8e7ca584c2b9b683c6cbf21ec7a4921944ffe8262d5f5c1"
+        },
+        {
+          "name": "desktop-full-suite",
+          "argv": [
+            "/Users/autonomous/.local/share/flutter-3.47.2/bin/flutter",
+            "test",
+            "--no-pub",
+            "--concurrency=2",
+            "--reporter=json"
+          ],
+          "started_at": "2026-10-02T16:29:02.024339+00:00",
+          "status": "cancelled",
+          "duration_seconds": 792.283,
+          "finished_at": "2026-10-02T16:42:14.342575+00:00"
+        }
+      ]
+    },
+    {
+      "path": ".harness/validation/20261002T164222.119727Z-90498/receipt.json",
+      "sha256": "995074a0179ef9eb8578dfcf933e4251807b211b38a4dbfb46624a7cc8e9dbd9",
+      "source": {
+        "commit": "b906e3a75c46da8b6450561bb75e73c6abbca3af",
+        "tree": "e66b45411c7ef2cc0249ca1f4d1aa8ca4970f176",
+        "working_changes_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "dirty": false
+      },
+      "status": "failed",
+      "started_at": "2026-10-02T16:42:22.120087+00:00",
+      "finished_at": "2026-10-02T16:44:59.262323+00:00",
+      "checks": [
+        {
+          "name": "desktop-full-suite-remaining",
+          "argv": [
+            "/Users/autonomous/.local/share/flutter-3.47.2/bin/flutter",
+            "test",
+            "--no-pub",
+            "--concurrency=8",
+            "--reporter=json",
+            "test/about_section_test.dart",
+            "test/account_device_detail_test.dart",
+            "test/account_devices_test.dart",
+            "test/add_phone_dialog_test.dart",
+            "test/agent_rename_state_test.dart",
+            "test/alert_sounds_test.dart",
+            "test/api_client_test.dart",
+            "test/api_connections_test.dart",
+            "test/app_choice_picker_test.dart",
+            "test/cli_transcript_test.dart",
+            "test/codex_profiles_test.dart",
+            "test/coding_memory_activity_test.dart",
+            "test/command_bar_test.dart",
+            "test/connection_review_render_test.dart",
+            "test/crash_log_test.dart",
+            "test/daemon_review_render_test.dart",
+            "test/desktop_dialog_interaction_test.dart",
+            "test/desktop_final_ux_test.dart",
+            "test/desktop_guidance_layout_test.dart",
+            "test/desktop_palette_layout_test.dart",
+            "test/desktop_welcome_composer_test.dart",
+            "test/device_daemon_wire_test.dart",
+            "test/device_finder_test.dart",
+            "test/device_passage_test.dart",
+            "test/device_viewer_notices_test.dart",
+            "test/devices_controller_test.dart",
+            "test/devices_hosts_test.dart",
+            "test/devices_screen_test.dart",
+            "test/environment_preflight_screen_test.dart",
+            "test/environment_provisioner_test.dart",
+            "test/environment_recheck_timer_test.dart",
+            "test/file_type_icon_test.dart",
+            "test/first_task_test.dart",
+            "test/first_workspace_test.dart",
+            "test/flasher_test.dart",
+            "test/generated_project_launch_test.dart",
+            "test/grid_picture_test.dart",
+            "test/harness_activity_test.dart",
+            "test/harness_attachments_test.dart",
+            "test/harness_command_bar_test.dart",
+            "test/harness_comments_test.dart",
+            "test/harness_join_guide_widget_test.dart",
+            "test/harness_resources_test.dart",
+            "test/harness_start_page_test.dart",
+            "test/harness_store_entry_test.dart",
+            "test/icon_catalog_render_test.dart",
+            "test/keyboard_practice_test.dart",
+            "test/keymap_edit_test.dart",
+            "test/keymap_host_test.dart",
+            "test/keymap_native_test.dart",
+            "test/keymap_runtime_test.dart",
+            "test/keymap_store_test.dart",
+            "test/layout_palette_render_test.dart",
+            "test/link_another_machine_test.dart",
+            "test/link_machine_widget_test.dart",
+            "test/local_git_projects_test.dart",
+            "test/local_model_picker_test.dart",
+            "test/log_redact_test.dart",
+            "test/log_stream_test.dart",
+            "test/login_screen_test.dart",
+            "test/machine_edits_test.dart",
+            "test/machine_list_outage_test.dart",
+            "test/machine_list_push_test.dart",
+            "test/machines_menu_stopped_test.dart",
+            "test/machines_menu_test.dart",
+            "test/machines_panel_test.dart",
+            "test/manual_update_check_test.dart",
+            "test/model_mark_test.dart",
+            "test/model_search_catalog_test.dart",
+            "test/models_panel_test.dart",
+            "test/new_agent_engine_check_test.dart",
+            "test/new_agent_permission_mode_test.dart",
+            "test/new_agent_terminal_test.dart",
+            "test/new_harness_agent_settings_test.dart",
+            "test/new_harness_git_test.dart",
+            "test/new_harness_install_e2e_test.dart",
+            "test/observer_transport_test.dart",
+            "test/open_in_browser_test.dart",
+            "test/orchestrator_local_e2e_test.dart",
+            "test/own_binding/connected_semantics_test.dart",
+            "test/pane_defaults_test.dart",
+            "test/pane_file_menu_test.dart",
+            "test/pane_layout_choices_test.dart",
+            "test/pane_machine_unknown_test.dart",
+            "test/pane_model_status_test.dart",
+            "test/pane_needs_link_test.dart",
+            "test/password_stretch_test.dart",
+            "test/prompt_context_test.dart",
+            "test/prompt_editing_test.dart",
+            "test/pull_request_badge_test.dart",
+            "test/rename_keyboard_test.dart",
+            "test/repository_clone_test.dart",
+            "test/resource_picker_test.dart",
+            "test/retarget_refusal_test.dart",
+            "test/search_result_text_test.dart",
+            "test/search_when_test.dart",
+            "test/select_field_typing_test.dart",
+            "test/session_close_test.dart",
+            "test/session_content_search_test.dart",
+            "test/session_search_rendering_test.dart",
+            "test/settings_screen_test.dart",
+            "test/settings_section_test.dart",
+            "test/setup_review_render_test.dart",
+            "test/shared_agent_page_test.dart",
+            "test/shortcuts_deck_test.dart",
+            "test/sleep_aware_test.dart",
+            "test/status_line_test.dart",
+            "test/store_collections_test.dart",
+            "test/store_discover_test.dart",
+            "test/store_harness_actions_test.dart",
+            "test/store_screen_test.dart",
+            "test/store_update_e2e_test.dart",
+            "test/swarm_attention_picker_test.dart",
+            "test/swarm_canvas_test.dart",
+            "test/swarm_closed_agents_test.dart",
+            "test/swarm_interactions_test.dart",
+            "test/swarm_search_preview_test.dart",
+            "test/swarm_split_test.dart",
+            "test/swarm_state_test.dart",
+            "test/swarm_switcher_test.dart",
+            "test/swarm_terminal_scroll_test.dart",
+            "test/terminal_catalog_test.dart",
+            "test/terminal_composer_test.dart",
+            "test/terminal_delete_detection_test.dart",
+            "test/terminal_input_test.dart",
+            "test/terminal_link_gesture_test.dart",
+            "test/terminal_link_opener_test.dart",
+            "test/terminal_panel_header_test.dart",
+            "test/terminal_panel_links_test.dart",
+            "test/terminal_panel_presentation_test.dart",
+            "test/terminal_passage_test.dart",
+            "test/terminal_reconnect_race_test.dart",
+            "test/terminal_search_test.dart",
+            "test/toolbar_notices_test.dart",
+            "test/update_progress_test.dart",
+            "test/usage_account_key_test.dart",
+            "test/usage_credentials_test.dart",
+            "test/usage_jsonl_benchmark_test.dart",
+            "test/usage_jsonl_scanners_test.dart",
+            "test/usage_ledger_benchmark_test.dart",
+            "test/usage_test.dart",
+            "test/viewer_location_test.dart",
+            "test/viewer_page_test.dart",
+            "test/web_menu_items_test.dart",
+            "test/web_store_banner_test.dart",
+            "test/workspace_pull_request_test.dart",
+            "test/workspace_start_guide_test.dart",
+            "test/ws_pool_ownership_test.dart",
+            "test/ws_readiness_test.dart"
+          ],
+          "started_at": "2026-10-02T16:42:22.399201+00:00",
+          "status": "failed",
+          "exit_code": 1,
+          "duration_seconds": 156.524,
+          "finished_at": "2026-10-02T16:44:58.961052+00:00",
+          "log_sha256": "f776ff32bec1700b3a3ed0538297daf02dbd29120a2bad26808416c61e5a18f3"
+        }
+      ]
+    },
+    {
+      "path": ".harness/validation/20261002T164620.197096Z-4838/receipt.json",
+      "sha256": "43c9fc90717ba67d045f81a30decc775ea8ed912c91795502ed8497f0cd6a7d1",
+      "source": {
+        "commit": "b906e3a75c46da8b6450561bb75e73c6abbca3af",
+        "tree": "e66b45411c7ef2cc0249ca1f4d1aa8ca4970f176",
+        "working_changes_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "dirty": false
+      },
+      "status": "failed",
+      "started_at": "2026-10-02T16:46:20.197470+00:00",
+      "finished_at": "2026-10-02T16:47:49.369456+00:00",
+      "checks": [
+        {
+          "name": "desktop-vm-loader-retry",
+          "argv": [
+            "/Users/autonomous/.local/share/flutter-3.47.2/bin/flutter",
+            "test",
+            "--no-pub",
+            "--concurrency=1",
+            "--reporter=json",
+            "test/swarm_state_test.dart"
+          ],
+          "started_at": "2026-10-02T16:46:20.474478+00:00",
+          "status": "passed",
+          "exit_code": 0,
+          "duration_seconds": 6.152,
+          "finished_at": "2026-10-02T16:46:26.669489+00:00",
+          "log_sha256": "e8a82d24bb7d1268371fa493359bed4eb1ec7eb2c8bd5a81873faf69406570b2"
+        },
+        {
+          "name": "desktop-browser-suite",
+          "argv": [
+            "/usr/bin/env",
+            "CHROME_EXECUTABLE=/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+            "/Users/autonomous/.local/share/flutter-3.47.2/bin/flutter",
+            "test",
+            "--no-pub",
+            "--platform=chrome",
+            "--concurrency=2",
+            "--dart-define=HARNESS_TEST=true",
+            "--reporter=json",
+            "test/web"
+          ],
+          "started_at": "2026-10-02T16:46:20.472433+00:00",
+          "status": "failed",
+          "exit_code": 1,
+          "duration_seconds": 88.517,
+          "finished_at": "2026-10-02T16:47:49.081985+00:00",
+          "log_sha256": "bde514f90cba9cfedbf405d2cc56abf48f6c798a4050325c728514b81956cd06"
+        }
+      ]
+    },
+    {
+      "path": ".harness/validation/20261002T165640.318778Z-41547/receipt.json",
+      "sha256": "f98af5667b44686d3b77a6c5f02f714eebbf6afd4fc4aef45db8e9f0bbb092ce",
+      "source": {
+        "commit": "b906e3a75c46da8b6450561bb75e73c6abbca3af",
+        "tree": "e66b45411c7ef2cc0249ca1f4d1aa8ca4970f176",
+        "working_changes_sha256": "8d9460995d68de9ad13fb580e64949a522b0e97629e3aa87317cec61648501b4",
+        "dirty": true
+      },
+      "status": "failed",
+      "started_at": "2026-10-02T16:56:40.319149+00:00",
+      "finished_at": "2026-10-02T16:57:55.832595+00:00",
+      "checks": [
+        {
+          "name": "browser-workspace-command-diagnostic",
+          "argv": [
+            "python3",
+            "/private/tmp/desktop-baseline-browser-diagnostic.py"
+          ],
+          "started_at": "2026-10-02T16:56:40.596556+00:00",
+          "status": "failed",
+          "exit_code": 1,
+          "duration_seconds": 41.883,
+          "finished_at": "2026-10-02T16:57:22.525153+00:00",
+          "log_sha256": "5b1ec8ab197a9fe4c74bace68edfda56a7cbbc20b602e5cfcf24e1d4984fecd6"
+        },
+        {
+          "name": "desktop-native-skia",
+          "argv": [
+            "python3",
+            "/private/tmp/desktop-baseline-native-skia.py"
+          ],
+          "started_at": "2026-10-02T16:56:40.593735+00:00",
+          "status": "passed",
+          "exit_code": 0,
+          "duration_seconds": 74.919,
+          "finished_at": "2026-10-02T16:57:55.552080+00:00",
+          "log_sha256": "bb0d1a217cdabc323a858d609d1ae1771b3db9dd50172c617758667e8f6e5167"
+        }
+      ]
+    },
+    {
+      "path": ".harness/validation/20261002T165950.220917Z-53512/receipt.json",
+      "sha256": "0a4bbce5c8fd5508c157d8bd9284535cb3f3234b6072519ee880b7f2b5c4260f",
+      "source": {
+        "commit": "b906e3a75c46da8b6450561bb75e73c6abbca3af",
+        "tree": "e66b45411c7ef2cc0249ca1f4d1aa8ca4970f176",
+        "working_changes_sha256": "40c4be1b01f2e22a79f5f21915fc691b0e03db16d0a27fed77e5ec22b32c28d8",
+        "dirty": true
+      },
+      "status": "passed",
+      "started_at": "2026-10-02T16:59:50.221303+00:00",
+      "finished_at": "2026-10-02T17:01:10.422331+00:00",
+      "checks": [
+        {
+          "name": "keymap-regressions",
+          "argv": [
+            "/Users/autonomous/.local/share/flutter-3.47.2/bin/flutter",
+            "test",
+            "--no-pub",
+            "--concurrency=4",
+            "--reporter=json",
+            "test/keymap_test.dart",
+            "test/keymap_host_test.dart",
+            "test/keymap_runtime_test.dart",
+            "test/keymap_dispatch_test.dart",
+            "test/keymap_native_test.dart",
+            "test/shortcuts_test.dart",
+            "test/shortcuts_browser_test.dart",
+            "test/channel_shortcut_test.dart"
+          ],
+          "started_at": "2026-10-02T16:59:50.528641+00:00",
+          "status": "passed",
+          "exit_code": 0,
+          "duration_seconds": 29.393,
+          "finished_at": "2026-10-02T17:00:19.964810+00:00",
+          "log_sha256": "07dcf611572a90661c0bda994cda9f2ca85fd6801abbf716ff4a1d2bf984641e"
+        },
+        {
+          "name": "browser-suite-final",
+          "argv": [
+            "/usr/bin/env",
+            "CHROME_EXECUTABLE=/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+            "/Users/autonomous/.local/share/flutter-3.47.2/bin/flutter",
+            "test",
+            "--no-pub",
+            "--platform=chrome",
+            "--dart-define=HARNESS_TEST=true",
+            "--reporter=json",
+            "test/web"
+          ],
+          "started_at": "2026-10-02T16:59:50.526458+00:00",
+          "status": "passed",
+          "exit_code": 0,
+          "duration_seconds": 79.42,
+          "finished_at": "2026-10-02T17:01:09.989455+00:00",
+          "log_sha256": "098024579ade01b3a6042ba2737bc1f54f233f5da6e3d271d9b382aa7c64d886"
+        }
+      ]
+    }
+  ],
+  "timing": {
+    "request_received": "unknown (continued existing goal)",
+    "implementation_ready_utc": "2026-10-02T16:28:33Z",
+    "final_browser_correction_validation_complete_utc": "2026-10-02T17:01:10.422331+00:00",
+    "merge_utc": "recorded on PR #630",
+    "product_release": "none",
+    "required_validation_complete_utc": "2026-10-02T17:05:15.559026+00:00"
+  },
+  "final_analysis": {
+    "receipt": ".harness/validation/20261002T170512.407513Z-74543/receipt.json",
+    "sha256": "123545ccd6b1d8f5c56392cdc61eaa5213566604ad0a800c12c4467783ca2f4a",
+    "status": "passed",
+    "duration_seconds": 2.32,
+    "finished_at": "2026-10-02T17:05:15.559026+00:00"
+  }
+}

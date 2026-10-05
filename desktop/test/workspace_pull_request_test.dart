@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/core/pull_request_status.dart';
@@ -16,6 +17,157 @@ Map<String, dynamic> found(int number, [String state = 'Open']) => {
 };
 
 void main() {
+  testWidgets(
+    'background workspace keeps its cached PR without polling and refreshes on return',
+    (tester) async {
+      final app = createApp();
+      app.stateOf('m')!.agents = const [
+        Agent(
+          id: 'a',
+          name: 'A',
+          engine: 'codex',
+          project: AgentProject(
+            name: 'repo',
+            cwd: '/repo',
+            root: '/repo',
+            branch: 'main',
+          ),
+        ),
+      ];
+      app.activeSwarm.panes.add(
+        TerminalPane(id: 1, machineId: 'm', agentId: 'a'),
+      );
+      app.activeSwarm.focusedPaneId = 1;
+      app.appLifecycleChanged(AppLifecycleState.hidden);
+      var reads = 0;
+      final controller = WorkspacePullRequest(
+        app,
+        now: tester.binding.clock.now,
+        read: (_, _) async => found(++reads),
+      );
+      await tester.pump(const Duration(minutes: 5));
+      expect(reads, 0);
+      app.appLifecycleChanged(AppLifecycleState.resumed);
+      await tester.pump();
+      expect(controller.value!.number, 1);
+      await tester.pump(const Duration(seconds: 10));
+      app.appLifecycleChanged(AppLifecycleState.inactive);
+      await tester.pump(const Duration(seconds: 40));
+      app.appLifecycleChanged(AppLifecycleState.resumed);
+      await tester.pump();
+      expect(reads, 1);
+      expect(controller.value!.number, 1);
+      await tester.pump(const Duration(seconds: 10));
+      expect(reads, 2);
+      app.appLifecycleChanged(AppLifecycleState.hidden);
+      await tester.pump(const Duration(minutes: 5));
+      expect(reads, 2);
+      app.appLifecycleChanged(AppLifecycleState.resumed);
+      await tester.pump();
+      expect(controller.value!.number, 3);
+      controller.dispose();
+      app.dispose();
+    },
+  );
+  testWidgets(
+    'resume joins an outstanding workspace lookup and disposal prevents another poll',
+    (tester) async {
+      final app = createApp();
+      app.stateOf('m')!.agents = const [
+        Agent(
+          id: 'a',
+          name: 'A',
+          engine: 'codex',
+          project: AgentProject(
+            name: 'repo',
+            cwd: '/repo',
+            root: '/repo',
+            branch: 'main',
+          ),
+        ),
+      ];
+      app.activeSwarm.panes.add(
+        TerminalPane(id: 1, machineId: 'm', agentId: 'a'),
+      );
+      app.activeSwarm.focusedPaneId = 1;
+      var reads = 0;
+      final reply = Completer<Map<String, dynamic>>();
+      final controller = WorkspacePullRequest(
+        app,
+        now: tester.binding.clock.now,
+        read: (_, _) {
+          reads++;
+          return reply.future;
+        },
+      );
+      app.appLifecycleChanged(AppLifecycleState.hidden);
+      await tester.pump(const Duration(minutes: 2));
+      app.appLifecycleChanged(AppLifecycleState.resumed);
+      await tester.pump();
+      expect(reads, 1);
+      app.appLifecycleChanged(AppLifecycleState.hidden);
+      reply.complete(found(298));
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 20));
+      app.appLifecycleChanged(AppLifecycleState.resumed);
+      await tester.pump();
+      expect(reads, 1);
+      expect(controller.value!.number, 298);
+      controller.dispose();
+      app.appLifecycleChanged(AppLifecycleState.hidden);
+      app.appLifecycleChanged(AppLifecycleState.resumed);
+      await tester.pump(const Duration(minutes: 2));
+      expect(reads, 1);
+      app.dispose();
+    },
+  );
+  testWidgets(
+    'focus changes in background defer lookups to the final identity',
+    (tester) async {
+      final app = createApp();
+      app.stateOf('m')!.agents = [
+        for (final id in ['a', 'b', 'c'])
+          Agent(
+            id: id,
+            name: id,
+            engine: 'codex',
+            project: AgentProject(
+              name: 'repo',
+              cwd: '/repo-$id',
+              root: '/repo-$id',
+              branch: id,
+            ),
+          ),
+      ];
+      app.activeSwarm.panes.addAll([
+        for (var i = 0; i < 3; i++)
+          TerminalPane(id: i + 1, machineId: 'm', agentId: ['a', 'b', 'c'][i]),
+      ]);
+      app.activeSwarm.focusedPaneId = 1;
+      final old = Completer<Map<String, dynamic>>();
+      final reads = <String>[];
+      final controller = WorkspacePullRequest(
+        app,
+        read: (_, id) {
+          reads.add(id);
+          return id == 'a' ? old.future : Future.value(found(3));
+        },
+      );
+      app.appLifecycleChanged(AppLifecycleState.hidden);
+      app.focusPane(2);
+      app.focusPane(3);
+      old.complete(found(1));
+      await tester.pump(const Duration(minutes: 5));
+      expect(reads, ['a']);
+      expect(controller.value, isNull);
+      app.appLifecycleChanged(AppLifecycleState.resumed);
+      await tester.pump();
+      expect(reads, ['a', 'c']);
+      expect(controller.value!.number, 3);
+      controller.dispose();
+      app.dispose();
+    },
+  );
   test('only valid PR states and GitHub links are actionable', () {
     for (final state in ['Draft', 'Open', 'Merged', 'Closed']) {
       expect(

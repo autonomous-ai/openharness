@@ -1,7 +1,7 @@
 import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'fs'
 import { homedir } from 'os'
 import { join } from 'path'
-import { createHash, randomBytes } from 'node:crypto'
+import { randomBytes } from 'node:crypto'
 
 export interface AuthSession {
   version: 1
@@ -18,8 +18,6 @@ export interface AuthSession {
    *  A refresh has to name the same one. Absent is the backend's configured client. */
   clientId?: SsoClientId
   updatedAt: number
-  /** Opaque local knowledge owner, learned from authenticated /auth/me, bound to this sign-in. */
-  memoryOwner?: { key: string; binding: string }
   /** Which sign-in by hand this session is: minted here when the person signs in, never anything the
    *  backend sends — the device key log keeps its marks per sign-in (deviceLogSyncer `signIn`). */
   signInEpoch?: string
@@ -71,9 +69,6 @@ function parse(raw: string): AuthSession | null {
       ...(value.method === 'qr' || value.method === 'sso' ? { method: value.method } : {}),
       ...(knownSsoClientId(value.clientId) ? { clientId: knownSsoClientId(value.clientId) } : {}),
       updatedAt: typeof value.updatedAt === 'number' ? value.updatedAt : 0,
-      ...(value.memoryOwner && /^[a-f0-9]{64}$/.test(value.memoryOwner.key)
-        && value.memoryOwner.binding === memoryOwnerBinding(value.accessToken, value.autonomousEnv)
-        ? { memoryOwner: value.memoryOwner } : {}),
       ...(typeof value.signInEpoch === 'string' && value.signInEpoch ? { signInEpoch: value.signInEpoch } : {}),
     }
   } catch { return null }
@@ -107,10 +102,6 @@ export function signInOf(epoch: string | undefined | null): { epoch: string; ado
   if (!epoch) return null
   const at = /@(\d{1,15})$/.exec(epoch)
   return { epoch, adopted: epoch.startsWith(ADOPTED_SIGN_IN), at: at ? Number(at[1]) : null }
-}
-
-function memoryOwnerBinding(token: string, environment: AuthSession['autonomousEnv']): string {
-  return createHash('sha256').update(JSON.stringify(['memory-owner-binding-v1', environment, token])).digest('hex')
 }
 
 export function readAuthSession(): AuthSession | null {
@@ -295,8 +286,6 @@ export class AuthSessionManager {
           ...(refreshed.refreshToken ? { refreshToken: refreshed.refreshToken } : {}),
           ...(refreshed.expiresIn ? { expiresAt: Date.now() + refreshed.expiresIn * 1000 } : {}),
           updatedAt: Date.now(),
-          ...(latest.memoryOwner ? { memoryOwner: { key: latest.memoryOwner.key,
-            binding: memoryOwnerBinding(refreshed.token, latest.autonomousEnv) } } : {}),
         }
         writeAuthSession(next)
         return next.accessToken
@@ -313,18 +302,5 @@ export class AuthSessionManager {
     const current = readAuthSession()
     if (!current || current.machineId === machineId) return
     writeAuthSession({ ...current, machineId, updatedAt: Date.now() })
-  }
-
-  /** A host-observed authenticated response, never an identity supplied by an agent or viewer. */
-  async bindMemoryOwner(ownerId: string, expectedToken: string, environment: AuthSession['autonomousEnv']): Promise<string | null> {
-    if (!ownerId || ownerId.length > 200 || /[\x00-\x1f\x7f]/.test(ownerId)) return null
-    return withLock(async () => {
-      const latest = readAuthSession()
-      if (!latest || latest.accessToken !== expectedToken || latest.autonomousEnv !== environment) return null
-      const key = createHash('sha256').update(JSON.stringify(['harness-memory-profile-v1', environment, ownerId])).digest('hex')
-      if (latest.memoryOwner?.key !== key) writeAuthSession({ ...latest,
-        memoryOwner: { key, binding: memoryOwnerBinding(latest.accessToken, latest.autonomousEnv) } })
-      return key
-    })
   }
 }

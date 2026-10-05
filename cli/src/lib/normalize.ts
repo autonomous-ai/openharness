@@ -491,36 +491,48 @@ export function lastTurnTextFromRawLines(rawLines: string[]): LastTurnText | nul
 /** Aggregates computed from a sub-agent's OWN transcript. Async/background agents never get totals
  *  in the launcher's toolUseResult (it only records `{isAsync, status:'async_launched', agentId}` at
  *  launch) — the real numbers live in `<session>/subagents/agent-<id>.jsonl`. totalTokens mirrors the
- *  CLI's definition: input + output + cache_read + cache_creation summed over assistant turns. */
-export function subagentStatsFromRawLines(rawLines: string[]): { totalToolUseCount: number; totalDurationMs?: number; totalTokens?: number } {
-  let toolCount = 0
-  let tokens = 0
-  let first: number | undefined
-  let last: number | undefined
-  for (const line of rawLines) {
-    if (!line.trim()) continue
+ *  CLI's definition: input + output + cache_read + cache_creation summed over assistant turns. Taken a
+ *  line at a time, so a long transcript is never held whole. */
+export class SubagentStats {
+  private toolCount = 0
+  private tokens = 0
+  private first: number | undefined
+  private last: number | undefined
+
+  push(line: string): void {
+    if (!line.trim()) return
     let raw: Record<string, unknown>
-    try { raw = JSON.parse(line) as Record<string, unknown> } catch { continue }
-    if (!raw || typeof raw !== 'object') continue
+    try { raw = JSON.parse(line) as Record<string, unknown> } catch { return }
+    if (!raw || typeof raw !== 'object') return
     const ts = typeof raw.timestamp === 'string' ? Date.parse(raw.timestamp) : NaN
-    if (!Number.isNaN(ts)) { if (first === undefined) first = ts; last = ts }
-    if (raw.type !== 'assistant') continue
+    if (!Number.isNaN(ts)) { if (this.first === undefined) this.first = ts; this.last = ts }
+    if (raw.type !== 'assistant') return
     const msg = raw.message as { content?: unknown; usage?: Record<string, unknown> } | undefined
-    if (!msg) continue
+    if (!msg) return
     if (Array.isArray(msg.content)) {
-      for (const b of msg.content) if ((b as { type?: string }).type === 'tool_use') toolCount++
+      for (const b of msg.content) if ((b as { type?: string }).type === 'tool_use') this.toolCount++
     }
     const u = msg.usage
     if (u) {
-      tokens += (Number(u.input_tokens) || 0) + (Number(u.output_tokens) || 0)
+      this.tokens += (Number(u.input_tokens) || 0) + (Number(u.output_tokens) || 0)
         + (Number(u.cache_read_input_tokens) || 0) + (Number(u.cache_creation_input_tokens) || 0)
     }
   }
-  return {
-    totalToolUseCount: toolCount,
-    totalDurationMs: first !== undefined && last !== undefined && last > first ? last - first : undefined,
-    totalTokens: tokens || undefined,
+
+  result(): { totalToolUseCount: number; totalDurationMs?: number; totalTokens?: number } {
+    const { first, last } = this
+    return {
+      totalToolUseCount: this.toolCount,
+      totalDurationMs: first !== undefined && last !== undefined && last > first ? last - first : undefined,
+      totalTokens: this.tokens || undefined,
+    }
   }
+}
+
+export function subagentStatsFromRawLines(rawLines: string[]): { totalToolUseCount: number; totalDurationMs?: number; totalTokens?: number } {
+  const stats = new SubagentStats()
+  for (const line of rawLines) stats.push(line)
+  return stats.result()
 }
 
 /** Emit tool_end events for a user message's tool_result blocks. */
@@ -713,19 +725,28 @@ export function messagesToEvents(rawLines: string[]): SessionEvent[] {
  * would drop tool names. A user-prompt line never sits between a tool_use and its tool_result, so
  * snapping there keeps every turn whole.
  */
+/**
+ * What a Claude history page knows of one line: the cursor that names it, and whether a page may start
+ * there — a real user prompt, so a turn is never split. Shared by `windowRawLines` and the bounded pager
+ * (lib/transcriptPages.ts), so the two cannot drift apart.
+ */
+export function claudePageLine(line: string): { cursor: string | null; startsPage: boolean } {
+  if (!line.trim()) return { cursor: null, startsPage: false }
+  let raw: Record<string, unknown>
+  try { raw = JSON.parse(line) as Record<string, unknown> } catch { return { cursor: null, startsPage: false } }
+  const cursor = (raw.uuid ?? raw.id ?? raw.message_id ?? null) as string | null
+  const msg = transformLine(raw)
+  return { cursor, startsPage: msg ? realUserText(msg) !== null : false }
+}
+
 export function windowRawLines(
   rawLines: string[],
   opts: { limit: number; before?: string },
 ): { window: string[]; hasMore: boolean; oldestCursor: string | null; staleCursor?: boolean } {
   // Per-line uuid + whether the line is a real user-prompt turn start (parse each line once).
   const meta = rawLines.map((line) => {
-    if (!line.trim()) return { uuid: null as string | null, turnStart: false }
-    let raw: Record<string, unknown>
-    try { raw = JSON.parse(line) as Record<string, unknown> } catch { return { uuid: null as string | null, turnStart: false } }
-    const uuid = (raw.uuid ?? raw.id ?? raw.message_id ?? null) as string | null
-    const msg = transformLine(raw)
-    const turnStart = msg ? realUserText(msg) !== null : false
-    return { uuid, turnStart }
+    const { cursor, startsPage } = claudePageLine(line)
+    return { uuid: cursor, turnStart: startsPage }
   })
 
   let endIndex = rawLines.length
@@ -755,6 +776,9 @@ export interface TurnState {
   /** tool_use ids started but not yet resolved by a tool_result. */
   pendingTools: Set<string>
   thinkingCounter: number
+  /** Before the counter in a live thinking id. A fold that starts mid-transcript names its window here
+   *  (lib/attachTranscript.ts), so its ids cannot repeat ones another fold of the same session sent. */
+  thinkingPrefix?: string
 }
 
 export function newTurnState(): TurnState {
@@ -788,6 +812,37 @@ export function foldTranscript(
     history: opts.live ? [] : folded,
     live: opts.live ? folded : [],
     turnOpen: !opts.live && turnOpenAfter(),
+  }
+}
+
+/**
+ * `foldTranscript` one record at a time, for a transcript streamed in rather than loaded
+ * (lib/attachTranscript.ts). History keeps only its last `turn_started` — the one event an attach ever
+ * replays from it — so folding a long turn holds nothing but that.
+ */
+export class TranscriptFold {
+  private lastStarted: LiveEvent | null = null
+  private readonly folded: LiveEvent[] = []
+
+  constructor(
+    private readonly ingest: (line: string) => LiveEvent[],
+    private readonly turnOpenAfter: () => boolean,
+    private readonly live: boolean,
+  ) {}
+
+  push(line: string): void {
+    for (const event of this.ingest(line)) {
+      if (this.live) this.folded.push(event)
+      else if (event.type === 'turn_started') this.lastStarted = event
+    }
+  }
+
+  finish(): { history: LiveEvent[]; live: LiveEvent[]; turnOpen: boolean } {
+    return {
+      history: this.lastStarted ? [this.lastStarted] : [],
+      live: this.folded,
+      turnOpen: !this.live && this.turnOpenAfter(),
+    }
   }
 }
 
@@ -855,7 +910,7 @@ export function lineToEvents(rawLine: string, state: TurnState): LiveEvent[] {
 
   // assistant
   const before = events.length
-  events.push(...assistantEvents(msg, state.toolIdToName, 'thinking-live-', state.thinkingCounter))
+  events.push(...assistantEvents(msg, state.toolIdToName, state.thinkingPrefix ?? 'thinking-live-', state.thinkingCounter))
   state.thinkingCounter += events.slice(before).filter((e) => e.type === 'thinking_delta').length
   for (const e of events) {
     if (e.type === 'tool_start') state.pendingTools.add(e.payload.id)
@@ -867,4 +922,56 @@ export function lineToEvents(rawLine: string, state: TurnState): LiveEvent[] {
     events.push({ type: 'turn_ended', payload: {} })
   }
   return events
+}
+
+function parseRecord(rawLine: string): Record<string, unknown> | null {
+  if (!rawLine.trim()) return null
+  try {
+    const raw = JSON.parse(rawLine) as unknown
+    return raw && typeof raw === 'object' ? raw as Record<string, unknown> : null
+  } catch { return null }
+}
+
+/**
+ * The record `lineToEvents` opens a turn on — a real user prompt — decided from the record alone, as
+ * `lineToEvents` decides it whatever came before. Attaching reads a transcript backward to the last
+ * one of these and folds only from there (lib/attachTranscript.ts): every turn-scoped piece of
+ * `TurnState` is reset by it, so the fold from here ends exactly where the whole-history fold does.
+ */
+export function startsClaudeTurn(rawLine: string): boolean {
+  const raw = parseRecord(rawLine)
+  if (!raw || compactEventFromRaw(raw) || taskNotificationEvent(raw)) return false
+  const msg = transformLine(raw)
+  if (!msg?.message || msg.type !== 'user' || isInterruptLine(msg)) return false
+  return realUserText(msg) !== null
+}
+
+/**
+ * The tool calls a Claude record makes (`defines`) and the earlier calls whose results it carries
+ * (`references`), decided along `lineToEvents`' own branches. A result names its tool from the call
+ * `lineToEvents` saw earlier, so an attach that starts mid-transcript reaches back for the calls its
+ * turn's results answer (lib/attachTranscript.ts).
+ */
+export function claudeToolLinks(rawLine: string): { defines: string[]; references: string[] } {
+  const raw = parseRecord(rawLine)
+  if (!raw || compactEventFromRaw(raw) || taskNotificationEvent(raw)) return { defines: [], references: [] }
+  const msg = transformLine(raw)
+  if (!msg?.message) return { defines: [], references: [] }
+  if (msg.type === 'assistant') {
+    return { defines: msg.message.content.filter((block) => block.type === 'tool_use').map((block) => block.id || ''), references: [] }
+  }
+  if (isInterruptLine(msg) || realUserText(msg) !== null) return { defines: [], references: [] }
+  return { defines: [], references: msg.message.content.filter((block) => block.type === 'tool_result').map((block) => block.tool_use_id || '') }
+}
+
+/** `tailFileUntil` selector for `lastTurnTextFromRawLines`: stop on the prompt it resets on, keep the
+ *  assistant records it reads after that, and drop everything else it ignores — so a recap reads the
+ *  last turn's text instead of the whole conversation. */
+export function selectClaudeRecapLine(line: string): 'keep' | 'skip' | 'stop' {
+  const raw = parseRecord(line)
+  if (!raw || compactEventFromRaw(raw) !== undefined) return 'skip'
+  const msg = transformLine(raw)
+  if (!msg?.message) return 'skip'
+  if (realUserText(msg) !== null) return 'stop'
+  return msg.type === 'assistant' ? 'keep' : 'skip'
 }

@@ -41,3 +41,6 @@ int ht_focus_engine_index(const char *engine);
  * `recap` is the same text ht_focus_face() gets. The caller redraws then.
  */
 uint32_t ht_focus_pet_next_ms(const ht_character_face_t *f, const char *recap);
+
+// True when the face plays the pet's working scene; the bell pill is raised clear of its lower-arc status.
+bool ht_focus_scene_shown(const ht_character_face_t *f, const char *recap);

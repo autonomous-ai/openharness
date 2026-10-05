@@ -1,0 +1,4 @@
+[Default Applications]
+text/html=hn-browser.desktop
+x-scheme-handler/http=hn-browser.desktop
+x-scheme-handler/https=hn-browser.desktop

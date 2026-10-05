@@ -51,15 +51,12 @@ static uint32_t cell_alias(uint32_t cp)
 }
 const ht_arc_face_t ht_arc_geist = {
     &ht_mono_24, &ht_viet_24, &ht_open_24, &ht_right_24, &ht_bell_24,
-    ht_mono_24_ink, ht_open_24_ink, ht_right_24_ink, ht_bell_24_ink};
-const ht_arc_face_t ht_arc_roboto = {
-    &ht_rmono_24, &ht_rviet_24, &ht_open_24, &ht_right_24, &ht_bell_24,
-    ht_rmono_24_ink, ht_open_24_ink, ht_right_24_ink, ht_bell_24_ink};
+    ht_mono_24_ink, ht_open_24_ink, ht_right_24_ink, ht_bell_24_ink, NULL, 0, false};
 // The arc face whose mono atlas is `font`, or NULL. A curved run carries its face as that atlas
 // (run.font), so every font comparison in the damage code already tells two faces apart.
 static const ht_arc_face_t *arc_face_of(const ht_font_t *font)
 {
-    static const ht_arc_face_t *const faces[] = {&ht_arc_geist, &ht_arc_roboto};
+    static const ht_arc_face_t *const faces[] = {&ht_arc_geist};
     for (unsigned i = 0; i < sizeof faces / sizeof faces[0]; i++) if (faces[i]->mono == font) return faces[i];
     return NULL;
 }
@@ -534,6 +531,16 @@ bool ht_icon(ht_scene_t *s, int x, int y, const ht_icon_t *icon)
                               .height = icon->h, .lvgl = true};
     return true;
 }
+bool ht_cell_sprite(ht_scene_t *s, int x, int y, const ht_cell_frame_t *f)
+{
+    if (s->count >= HT_RUNS || !f || !f->cols || !f->rows || !f->cell) return false;
+    ht_run_t *r = &s->runs[s->count++];
+    memset(r, 0, sizeof *r);
+    r->x = x; r->y = y; r->w = f->cols * f->cell; r->font = &ht_mono_16;
+    r->sprite = (ht_sprite_t){.width = r->w, .height = f->rows * f->cell, .cells = f->cells,
+                              .palette = f->palette, .cell = f->cell};
+    return true;
+}
 bool ht_box(ht_scene_t *s, int x, int y, int w, int h, int radius, uint16_t fill, uint16_t border)
 {
     if (s->count >= HT_RUNS || w <= 0 || h <= 0) return false;
@@ -547,24 +554,215 @@ bool ht_box(ht_scene_t *s, int x, int y, int w, int h, int radius, uint16_t fill
     return true;
 }
 
+/*
+ * A PROPORTIONAL ARC LABEL (Focus: Inter Medium 26 for the name and the lower status). Each glyph keeps its own advance and kerning, in
+ * 1/16 px like the straight text, and stands upright at its own place on the 205 px curve: the arc
+ * length from the label's centre to the glyph's advance centre, divided by 205, is its angle (the Q14
+ * table in arc_geometry.inc steps 1 px of arc; the 1/16 between entries is interpolated). The curve
+ * carries the middle of the caps, ARC_PROP_MID above the baseline (a face's own `mid`, when it has one), at 205 (the baseline on 194, as in
+ * mockup/focus-v2.html) so the tallest stacked Vietnamese letter ends inside the 128 px canvas at
+ * 12 o'clock; the lower arc sits 3 px nearer the centre, so its descenders end inside it as well.
+ * Inter's stacked marks stand tall (mid 14 clips them, 15 just fits), so its upper-arc face carries mid 16; its lower-arc face keeps
+ * mid 11 (its descenders would leave the canvas at 16).
+ * The three walks over a label — bounds, mask geometry, mask paint — share one placement, so the
+ * bounds can never be smaller than the ink.
+ */
+enum { ARC_PROP_MID = 11, ARC_PROP_RADIUS = 205, ARC_PROP_LOWER = 202, ARC_PROP_SPAN16 = HT_ARC_SPAN * 16 };
+#ifdef DEVICE_LAYOUT_BENCH
+static bool arc_tight;   // defined below with the mask cache
+#endif
+typedef struct {
+    pglyph_t g;
+    int cx, cy;              // the pivot in canvas px * 256 (the arc canvas is r->x, r->y)
+    int sn, cs;              // the rotation, Q14; sn already mirrored for the lower arc
+    int index;               // the glyph's place in the label's text, from 0
+    int left, top;           // the ink box from the pivot, px * 256, before rotating
+    int x0, y0, x1, y1;      // the canvas pixels it can touch (bilinear halo and rounding included)
+} arc_pplace_t;
+static int arc_advance16(const ht_pfont_t *f, const pglyph_t *g, const char *rest)
+{
+    pglyph_t n;
+    return g->g->adv + (*rest && plookup(f, peek(rest), &n) ? pkern(g, &n) : 0);
+}
+static int arc_prop_width16(const ht_pfont_t *f, const char *text)
+{
+    int w = 0;
+    for (const char *p = text; *p;) {
+        pglyph_t g;
+        uint32_t cp = ht_utf8_next(&p);
+        if (plookup(f, cp, &g)) w += arc_advance16(f, &g, p);
+    }
+    return w;
+}
+static void arc_prop_walk(const ht_run_t *r, const ht_pfont_t *f,
+                          void (*visit)(void *, const arc_pplace_t *), void *ctx)
+{
+    int total = arc_prop_width16(f, r->text), pen = 0, limit = (ARC_PROP_TRIG - 2) * 16, index = 0;
+    for (const char *p = r->text; *p;) {
+        pglyph_t g;
+        uint32_t cp = ht_utf8_next(&p);
+        int at = index++;
+        if (!plookup(f, cp, &g)) continue;
+        int adv = arc_advance16(f, &g, p);
+        const ht_glyph_t *gl = g.g;
+        int s16 = pen + gl->adv / 2 - total / 2;
+        pen += adv;
+        if (!gl->w || !gl->h) continue;
+        int mag = s16 < 0 ? -s16 : s16;
+        if (mag > limit) mag = limit;
+        int i = mag >> 4, fr = mag & 15;
+        arc_pplace_t pl = {.g = g, .index = at};
+        pl.sn = (arc_prop_trig[i][0] * (16 - fr) + arc_prop_trig[i + 1][0] * fr) >> 4;
+        pl.cs = (arc_prop_trig[i][1] * (16 - fr) + arc_prop_trig[i + 1][1] * fr) >> 4;
+        if (s16 < 0) pl.sn = -pl.sn;
+        bool lower = r->arc == 2;
+        int radius = lower ? ARC_PROP_LOWER : ARC_PROP_RADIUS;
+        pl.cx = (233 - r->x) * 256 + (radius * pl.sn * 256 >> 14);
+        pl.cy = (233 - r->y) * 256 + (lower ? 1 : -1) * (radius * pl.cs * 256 >> 14);
+        if (lower) pl.sn = -pl.sn;   // the lower arc reads left to right with upright letters
+        pl.left = gl->ox * 256 - gl->adv * 8;
+        pl.top = ((r->arc_mid ? r->arc_mid : ARC_PROP_MID) + gl->oy - g.face->ascent) * 256;
+        // The ink box and one pixel of bilinear halo, rotated about the pivot.
+        int u0 = pl.left - 256, u1 = pl.left + gl->w * 256 + 256;
+        int v0 = pl.top - 256, v1 = pl.top + gl->h * 256 + 256;
+#ifdef DEVICE_LAYOUT_BENCH
+        if (!arc_tight) { u0 -= 256; v0 -= 256; u1 += 256; v1 += 256; }   // looser than the 1 px halo
+#endif
+        int minx = 1 << 30, maxx = -minx, miny = minx, maxy = -minx;
+        for (int c = 0; c < 4; c++) {
+            int u = c & 1 ? u1 : u0, v = c & 2 ? v1 : v0;
+            int dx = (u * pl.cs - v * pl.sn) >> 14, dy = (u * pl.sn + v * pl.cs) >> 14;
+            minx = imin(minx, dx); maxx = imax(maxx, dx); miny = imin(miny, dy); maxy = imax(maxy, dy);
+        }
+        pl.x0 = imax(0, ((pl.cx + minx) >> 8) - 2);
+        pl.x1 = imin(HT_ARC_WIDTH, ((pl.cx + maxx) >> 8) + 3);
+        pl.y0 = imax(0, ((pl.cy + miny) >> 8) - 2);
+        pl.y1 = imin(HT_ARC_HEIGHT, ((pl.cy + maxy) >> 8) + 3);
+        visit(ctx, &pl);
+    }
+}
+// `text` cut to what fits the span: whole, else at the last word when that keeps at least half the span
+// (as the mono rule keeps half the columns), else per character, before "…" (none when `bare`).
+// Newlines are spaces.
+static void arc_prop_fit(char *dst, size_t cap, const ht_pfont_t *f, const char *text, bool bare)
+{
+    char flat[HT_TEXT_BYTES];
+    size_t len = strlen(text), n = len < sizeof flat - 4 ? len : sizeof flat - 4;
+    if (n > cap - 4) n = cap - 4;
+    while (n < len && n && ((uint8_t)text[n] & 0xc0) == 0x80) n--;
+    memcpy(flat, text, n);
+    flat[n] = 0;
+    for (char *c = flat; *c; c++) if (*c == '\n') *c = ' ';
+    bool cut = n < len;
+    for (;;) {
+        memcpy(dst, flat, n);
+        dst[n] = 0;
+        if (cut && !bare) strcpy(dst + n, "\xe2\x80\xa6");
+        if (arc_prop_width16(f, dst) <= ARC_PROP_SPAN16 || !n) return;
+        size_t k = n, word = 0;
+        while (k && flat[k - 1] != ' ') k--;
+        if (k) {
+            word = k - 1;   // the word before
+            while (word && flat[word - 1] == ' ') word--;
+            memcpy(dst, flat, word);
+            dst[word] = 0;
+            if (arc_prop_width16(f, dst) < ARC_PROP_SPAN16 / 2) word = 0;   // too little left: cut letters
+        }
+        if (word) n = word;
+        else do n--; while (n && ((uint8_t)flat[n] & 0xc0) == 0x80);
+        while (n && flat[n - 1] == ' ') n--;
+        cut = true;
+    }
+}
+// One glyph shorter, still ending "…" (unless `bare`); false once nothing but "…" is left.
+static bool arc_prop_trim(char *text, bool bare)
+{
+    size_t n = strlen(text);
+    if (n >= 3 && !strcmp(text + n - 3, "\xe2\x80\xa6")) n -= 3;
+    size_t kept = n;
+    if (n) do n--; while (n && ((uint8_t)text[n] & 0xc0) == 0x80);
+    while (n && text[n - 1] == ' ') n--;
+    if (bare) text[n] = 0;
+    else strcpy(text + n, "\xe2\x80\xa6");
+    return kept != 0;
+}
+enum { ARC_HALF = HT_ARC_WIDTH / 2, ARC_MASK_BYTES = 9216 };
+_Static_assert(sizeof ((ht_run_t *)0)->gain == HT_ARC_GAINS, "a run holds one gain per arc glyph");
+typedef struct {
+    uint16_t offset;
+    uint8_t first, last;
+    uint8_t ink_first, ink_last;
+} arc_span_t;
+// Widens each row's two bands by one glyph's rotated box; ctx is the spans array.
+static void arc_prop_band(void *ctx, const arc_pplace_t *g)
+{
+    arc_span_t (*spans)[2] = ctx;
+    for (int y = g->y0; y < g->y1; y++) for (int h = 0; h < 2; h++) {
+        int left = imax(0, g->x0 - h * ARC_HALF), right = imin(ARC_HALF, g->x1 - h * ARC_HALF);
+        if (left >= right) continue;
+        arc_span_t *span = &spans[y][h];
+        if (left < span->first) span->first = left;
+        if (right > span->last) span->last = right;
+    }
+}
+// The packed 4-bit mask a label needs, in bytes, with the row bands (offsets included) left in `spans`.
+static unsigned arc_prop_geometry(const ht_run_t *r, const ht_pfont_t *pf, arc_span_t (*spans)[2])
+{
+    for (int y = 0; y < HT_ARC_HEIGHT; y++) for (int h = 0; h < 2; h++)
+        spans[y][h] = (arc_span_t){.first = ARC_HALF, .ink_first = ARC_HALF};
+    arc_prop_walk(r, pf, arc_prop_band, spans);
+    unsigned used = 0;
+    for (int y = 0; y < HT_ARC_HEIGHT; y++) for (int h = 0; h < 2; h++) {
+        arc_span_t *span = &spans[y][h];
+        span->offset = used;
+        if (span->first < span->last) used += (span->last - span->first + 1) / 2;
+    }
+    return used;
+}
+typedef struct { int x0, y0, x1, y1; } arc_union_t;
+static void arc_union_visit(void *ctx, const arc_pplace_t *g)
+{
+    arc_union_t *u = ctx;
+    u->x0 = imin(u->x0, g->x0); u->y0 = imin(u->y0, g->y0);
+    u->x1 = imax(u->x1, g->x1); u->y1 = imax(u->y1, g->y1);
+}
 static void arc_text(ht_scene_t *s, uint16_t fg, const char *text, bool bottom,
                      const ht_arc_face_t *face)
 {
     if (!text || !*text) return;
     if (!face) face = &ht_arc_geist;
     char visible[HT_TEXT_BYTES];
-    bool complete = ht_display_text(visible,sizeof visible,text,face->mono);
-    if (!ht_text(s, HT_ARC_X, HT_ARC_Y, HT_ARC_COLS * face->mono->width,
-                 face->mono, fg, s->background, visible)) return;
-    ht_run_t *r = &s->runs[s->count - 1];
-    // A long name ends at a word boundary; the pane list retains its full name.
-    if (!complete || strlen(visible) > strlen(r->text)) {
-        char *last = strrchr(r->text, ' ');
-        if (last && last - r->text >= HT_ARC_COLS / 2) *last = 0;
+    if (face->prop) {
+        // The run carries the pfont's base as its font; a proportional run is fitted by the caller.
+        arc_prop_fit(visible, sizeof visible, face->prop, text, face->bare);
+        if (!ht_text(s, HT_ARC_X, HT_ARC_Y, HT_ARC_WIDTH, &face->prop->base, fg, s->background, visible)) return;
+    } else {
+        bool complete = ht_display_text(visible,sizeof visible,text,face->mono);
+        if (!ht_text(s, HT_ARC_X, HT_ARC_Y, HT_ARC_COLS * face->mono->width,
+                     face->mono, fg, s->background, visible)) return;
+        ht_run_t *m = &s->runs[s->count - 1];
+        // A long name ends at a word boundary; the pane list retains its full name.
+        if (!complete || strlen(visible) > strlen(m->text)) {
+            char *last = strrchr(m->text, ' ');
+            if (last && last - m->text >= HT_ARC_COLS / 2) *last = 0;
+        }
     }
+    ht_run_t *r = &s->runs[s->count - 1];
     r->arc = bottom ? 2 : 1;
     r->y = bottom ? HT_HEIGHT - HT_ARC_Y - HT_ARC_HEIGHT : HT_ARC_Y;
     r->w = HT_ARC_WIDTH;
+    if (face->prop) {
+        r->arc_mid = face->mid;
+        // A mask that would not fit would blank the label: cut it shorter instead, until it does.
+        arc_span_t spans[HT_ARC_HEIGHT][2];
+        while (arc_prop_geometry(r, face->prop, spans) > ARC_MASK_BYTES && arc_prop_trim(r->text, face->bare)) {}
+        // The tight bounds, laid out once here: a pure function of the run's text, face and position.
+        arc_union_t u = {HT_ARC_WIDTH, HT_ARC_HEIGHT, 0, 0};
+        arc_prop_walk(r, face->prop, arc_union_visit, &u);
+        r->ink = 1;
+        if (u.x0 < u.x1 && u.y0 < u.y1)
+            r->ink_box = (ht_rect_t){r->x + u.x0, r->y + u.y0, u.x1 - u.x0, u.y1 - u.y0};
+    }
 }
 void ht_arc_title(ht_scene_t *s, uint16_t fg, const char *text) { arc_text(s, fg, text, false, &ht_arc_geist); }
 void ht_arc_title_face(ht_scene_t *s, uint16_t fg, const char *text, const ht_arc_face_t *face)
@@ -572,6 +770,25 @@ void ht_arc_title_face(ht_scene_t *s, uint16_t fg, const char *text, const ht_ar
     arc_text(s, fg, text, false, face);
 }
 void ht_arc_status(ht_scene_t *s, uint16_t fg, const char *text) { arc_text(s, fg, text, true, &ht_arc_geist); }
+void ht_arc_status_face(ht_scene_t *s, uint16_t fg, const char *text, const ht_arc_face_t *face)
+{
+    arc_text(s, fg, text, true, face);
+}
+void ht_arc_status_sweep(ht_scene_t *s, uint16_t fg, const char *text, const ht_arc_face_t *face,
+                         const uint8_t *gain)
+{
+    int before = s->count;
+    arc_text(s, fg, text, true, face);
+    if (!gain || s->count == before || !face || !face->prop) return;
+    ht_run_t *r = &s->runs[s->count - 1];
+    r->gained = 1;
+    memcpy(r->gain, gain, HT_ARC_GAINS);
+}
+int ht_arc_measure(const ht_arc_face_t *face, const char *text)
+{
+    if (!face) face = &ht_arc_geist;
+    return face->prop ? (arc_prop_width16(face->prop, text) + 15) >> 4 : ht_measure(face->mono, text);
+}
 const char *ht_take_line(const char **cursor, int cols)
 {
     const char *p = *cursor, *start = p, *space = NULL, *end = p;
@@ -655,6 +872,14 @@ ht_rect_t ht_run_bounds(const ht_run_t *r)
 {
     if (r->sprite.width) return (ht_rect_t){r->x,r->y,r->sprite.width,r->sprite.height};
     if (r->box.h) return (ht_rect_t){r->x, r->y, r->w, (int16_t)r->box.h};
+    if (r->arc && ht_pfont(r->font)) {
+        if (r->ink) return r->ink_box;   // laid out once, by arc_text
+        // A hand-built run (no stored bounds): lay it out here.
+        arc_union_t u = {HT_ARC_WIDTH, HT_ARC_HEIGHT, 0, 0};
+        arc_prop_walk(r, ht_pfont(r->font), arc_union_visit, &u);
+        if (u.x0 >= u.x1 || u.y0 >= u.y1) return (ht_rect_t){0, 0, 0, 0};
+        return (ht_rect_t){r->x + u.x0, r->y + u.y0, u.x1 - u.x0, u.y1 - u.y0};
+    }
     if (r->arc) {
         const char *p = r->text; int count = 0;
         while (*p && count < HT_ARC_COLS) { ht_utf8_next(&p); count++; }
@@ -959,12 +1184,10 @@ static const uint16_t *glyph_cached(uint32_t c, const uint8_t *glyph,
 // All 52 count/edge geometries fit in 4538 bytes; 4608 leaves a little headroom.
 // Upper/lower text have independent keys, so they never evict each other.
 // Scenes retain immutable text, allowing old scenes to rasterize correctly.
-enum { ARC_HALF = HT_ARC_WIDTH / 2, ARC_MASK_BYTES = 4608 };
-typedef struct {
-    uint16_t offset;
-    uint8_t first, last;
-    uint8_t ink_first, ink_last;
-} arc_span_t;
+// A proportional label's mask keeps its 4-bit coverage (two pixels a byte, `bpp` 4) instead of the mono
+// atlases' two bits, so the same cache entry holds either. 9216 holds every label arc_text lets through:
+// the worst real one (stacked Vietnamese capitals, 24 glyphs) needs 9070 in Inter, and arc_text re-fits any label
+// whose mask would not fit shorter (with "…") rather than drawing nothing; the mono ones need 4538.
 typedef struct {
     uint8_t mask[ARC_MASK_BYTES];
     arc_span_t spans[HT_ARC_HEIGHT][2];
@@ -972,6 +1195,10 @@ typedef struct {
     uint16_t mask_bytes;
     uint8_t columns;
     const ht_arc_face_t *face; // the face the mask was built for; NULL = empty
+    const ht_pfont_t *prop;    // its pfont when proportional (the run's font is that face's base)
+    uint8_t bpp;               // 2 for the mono faces, 4 for a proportional one
+    uint8_t mid;               // a proportional mask's mid-caps offset (the face's `mid`: the curve carries the glyphs there)
+    uint8_t gain[HT_ARC_GAINS];   // a proportional mask's per-glyph gains (255 = plain)
 } arc_cache_t;
 _Static_assert(ARC_HALF <= UINT8_MAX, "arc span coordinates must fit in a byte");
 static arc_cache_t arc_caches[2];
@@ -983,11 +1210,13 @@ void ht_arc_tight_bounds(bool enabled)
 {
     arc_tight = enabled;
     arc_caches[0].face = arc_caches[1].face = NULL;
+    arc_caches[0].prop = arc_caches[1].prop = NULL;
 }
 void ht_arc_fast_sampling(bool enabled)
 {
     arc_fast = enabled;
     arc_caches[0].face = arc_caches[1].face = NULL;
+    arc_caches[0].prop = arc_caches[1].prop = NULL;
 }
 static unsigned glyph_alpha_reference(const uint8_t *glyph, int x, int y)
 {
@@ -1044,13 +1273,74 @@ static bool arc_pack_geometry(const ht_run_t *r, arc_cache_t *cache, int count)
     cache->mask_bytes = used <= sizeof cache->mask ? used : 0;
     return cache->mask_bytes != 0;
 }
+/*
+ * The proportional label's mask. Geometry first, from the same placement the bounds use: each glyph's
+ * rotated box widens the two row bands, so a short name costs a few rows and a long one the whole
+ * arc. Then each glyph is sampled into the mask by the mono path's bilinear rule (a pixel's centre
+ * mapped back into the upright glyph, 1/256 px, and the four nearest coverage values weighted) from
+ * the glyph's 4-bit stream, kept at 4 bits; overlapping boxes keep the larger coverage.
+ */
+static unsigned prop_coverage(const ht_glyph_t *gl, const uint8_t *bits, int x, int y)
+{
+    if (x < 0 || y < 0 || x >= gl->w || y >= gl->h) return 0;
+    unsigned k = (unsigned)(y * gl->w + x);
+    return (bits[k >> 1] >> ((k & 1) ? 0 : 4)) & 15;
+}
+static void arc_prop_paint(void *ctx, const arc_pplace_t *g)
+{
+    arc_cache_t *cache = ctx;
+    const ht_glyph_t *gl = g->g.g;
+    const unsigned gain = g->index < HT_ARC_GAINS ? cache->gain[g->index] : 255;
+    const uint8_t *bits = g->g.face->base.pixels + gl->offset;
+    for (int y = g->y0; y < g->y1; y++) for (int x = g->x0; x < g->x1; x++) {
+        int dx = x * 256 + 128 - g->cx, dy = y * 256 + 128 - g->cy;
+        int sx = ((dx * g->cs + dy * g->sn) >> 14) - g->left - 128;
+        int sy = ((-dx * g->sn + dy * g->cs) >> 14) - g->top - 128;
+        if (sx < -256 || sx >= gl->w * 256 || sy < -256 || sy >= gl->h * 256) continue;
+        int gx = sx >> 8, gy = sy >> 8;
+        unsigned fx = sx & 255, fy = sy & 255;
+        unsigned upper = prop_coverage(gl, bits, gx, gy) * (256 - fx) + prop_coverage(gl, bits, gx + 1, gy) * fx;
+        unsigned lower = prop_coverage(gl, bits, gx, gy + 1) * (256 - fx) + prop_coverage(gl, bits, gx + 1, gy + 1) * fx;
+        unsigned a = (upper * (256 - fy) + lower * fy + 32768) >> 16;
+        if (gain != 255) a = (a * gain + 127) / 255;
+        if (!a) continue;
+        arc_span_t *span = &cache->spans[y][x >= ARC_HALF];
+        int local = x - (x >= ARC_HALF ? ARC_HALF : 0);
+        if (local < span->first || local >= span->last) continue;
+        unsigned k = (unsigned)(local - span->first), shift = (k & 1) ? 0 : 4;
+        uint8_t *packed = &cache->mask[span->offset + (k >> 1)];
+        if (a > ((*packed >> shift) & 15u)) {
+            *packed = (uint8_t)((*packed & ~(15u << shift)) | (a << shift));
+            if (local < span->ink_first) span->ink_first = local;
+            if (local + 1 > span->ink_last) span->ink_last = local + 1;
+        }
+    }
+}
+static void arc_prepare_prop(const ht_run_t *r, arc_cache_t *cache, const ht_pfont_t *pf)
+{
+    uint8_t gain[HT_ARC_GAINS];
+    for (int i = 0; i < HT_ARC_GAINS; i++) gain[i] = r->gained ? r->gain[i] : 255;
+    if (cache->prop == pf && cache->bpp == 4 && cache->mid == r->arc_mid && !strcmp(cache->text, r->text) &&
+        !memcmp(cache->gain, gain, sizeof gain)) return;
+    strcpy(cache->text, r->text);
+    cache->mid = r->arc_mid;
+    memcpy(cache->gain, gain, sizeof gain);
+    cache->face = NULL; cache->prop = pf; cache->bpp = 4; cache->columns = 0; arc_builds++;
+    unsigned used = arc_prop_geometry(r, pf, cache->spans);
+    cache->mask_bytes = used <= sizeof cache->mask && used <= UINT16_MAX ? used : 0;
+    if (!cache->mask_bytes) return;
+    memset(cache->mask, 0, cache->mask_bytes);
+    arc_prop_walk(r, pf, arc_prop_paint, cache);
+}
 static void arc_prepare(const ht_run_t *r, arc_cache_t *cache)
 {
+    const ht_pfont_t *pf = ht_pfont(r->font);
+    if (pf) { arc_prepare_prop(r, cache, pf); return; }
     const ht_arc_face_t *face = arc_face_of(r->font);
     if (!face) face = &ht_arc_geist;
-    if (cache->face == face && !strcmp(cache->text, r->text)) return;   // the same text in another face is another mask
+    if (cache->face == face && cache->bpp == 2 && !strcmp(cache->text, r->text)) return;   // the same text in another face is another mask
     strcpy(cache->text, r->text);
-    cache->face = face; arc_builds++;
+    cache->face = face; cache->prop = NULL; cache->bpp = 2; arc_builds++;
     uint32_t cp[HT_ARC_COLS];
     int count = 0;
     const char *p = r->text;
@@ -1146,10 +1436,13 @@ static void arc_raster(const ht_run_t *r, ht_rect_t clip, uint16_t *out)
     arc_cache_t *cache = &arc_caches[r->arc == 2];
     arc_prepare(r, cache);
     if (!cache->mask_bytes) return;
-    uint16_t palette[4] = {0, blend(r->fg,r->bg,1), blend(r->fg,r->bg,2), panel16(r->fg)};
-    // Colour a cached mask: no glyph rotation, allocations or extra text runs.
-    // Sixteen brightness levels use 128 bytes of bounded stack scratch.
-    uint16_t sweep[16][4];
+    // Colour a cached mask: no glyph rotation, allocations or extra text runs. The 4-bit (proportional)
+    // masks mix in fifteenths; both tables are 16 wide so one loop reads either.
+    const unsigned top = cache->bpp == 4 ? 15 : 3;
+    uint16_t palette[16] = {0};
+    for (unsigned a = 1; a <= top; a++) palette[a] = panel16(mix(r->fg, r->bg, a, top));
+    // Sixteen brightness levels use at most 512 bytes of bounded stack scratch.
+    uint16_t sweep[16][16];
     int center = 0;
     if (r->shimmer) {
         center = shimmer_center(r, ht_run_bounds(r));
@@ -1160,9 +1453,7 @@ static void arc_raster(const ht_run_t *r, ht_rect_t clip, uint16_t *out)
             unsigned blue = ((r->fg & 31) * opacity + (r->bg & 31) * inverse + 127) / 255;
             uint16_t ink = (uint16_t)((red << 11) | (green << 5) | blue);
             sweep[level][0] = 0;
-            sweep[level][1] = blend(ink, r->bg, 1);
-            sweep[level][2] = blend(ink, r->bg, 2);
-            sweep[level][3] = panel16(ink);
+            for (unsigned a = 1; a <= top; a++) sweep[level][a] = panel16(mix(ink, r->bg, a, top));
         }
     }
     int x0 = imax(clip.x,r->x), x1 = imin(clip.x+clip.w,r->x+r->w);
@@ -1177,7 +1468,8 @@ static void arc_raster(const ht_run_t *r, ht_rect_t clip, uint16_t *out)
         const uint8_t *mask = cache->mask + span->offset;
         uint16_t *dst = out + (y-clip.y)*clip.w + left-clip.x;
         for (int x = left; x < right; x++, k++, dst++) {
-            unsigned a = (mask[k >> 2] >> ((3-(k&3))*2)) & 3;
+            unsigned a = cache->bpp == 4 ? (mask[k >> 1] >> ((k & 1) ? 0 : 4)) & 15
+                                         : (mask[k >> 2] >> ((3-(k&3))*2)) & 3;
             if (a) {
                 if (r->shimmer) {
                     int distance = x - center;
@@ -1193,9 +1485,23 @@ static uint16_t lv_mix24_16(uint16_t src, uint16_t dst, unsigned a);
 static void sprite_raster(const ht_run_t *r, ht_rect_t clip, uint16_t *out)
 {
     const ht_sprite_t *s=&r->sprite;
-    if(!s->pixels)return;
+    if(!s->pixels&&!s->cells)return;
     int left=imax(clip.x,r->x),right=imin(clip.x+clip.w,r->x+s->width);
     int top=imax(clip.y,r->y),bottom=imin(clip.y+clip.h,r->y+s->height);
+    if(s->cells){
+        // Cells: a run of `cell` px per palette index, 0 leaves the frame as it is.
+        int cols=s->width/s->cell;
+        for(int y=top;y<bottom;y++){
+            const uint8_t *row=s->cells+(size_t)((y-r->y)/s->cell)*cols;
+            uint16_t *dst=out+(y-clip.y)*clip.w+left-clip.x;
+            for(int x=left;x<right;){
+                int c=(x-r->x)/s->cell,end=imin(right,r->x+(c+1)*s->cell),n=end-x;
+                if(row[c])for(int k=0;k<n;k++)dst[k]=s->palette[row[c]];
+                dst+=n;x=end;
+            }
+        }
+        return;
+    }
     for(int y=top;y<bottom;y++){
         size_t at=(size_t)(y-r->y)*s->width+left-r->x;
         uint16_t *dst=out+(y-clip.y)*clip.w+left-clip.x;

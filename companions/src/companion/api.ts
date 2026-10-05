@@ -1,0 +1,12 @@
+/** Optional character subsystem. Importing this module starts no work. */
+export { PairHarness, pairPackage, pairInstructions, type PairHarnessDeps, type PairHarnessRow } from './pairHarness.js'
+export { PairBrain, type PairBrainDeps } from './brain.js'
+export { PairControl, type ControlDeps } from './control.js'
+export { PairSensor } from './sensor.js'
+export { CompanionToolCalls } from './toolCalls.js'
+export { PairJournal } from './journal.js'
+export { PairToken } from './token.js'
+export { CompanionZoo, companionIdentity } from './companionIdentity.js'
+export { DaemonsSwitch } from './daemonsSwitch.js'
+export { PlateService } from './plateService.js'
+export type { CompanionMemory } from '../memory/api.js'

@@ -1,0 +1,151 @@
+{
+  "schemaVersion": 1,
+  "reportSha256": "6b827ffb0d399ad90254336857f9b8df200cd9488e9ef761bfaf8f6e147d9dd7",
+  "suiteSha256": "6749c1751b864f83f9f769a5fcb838a7807acdd4aaca81de9d178728a5bc1511",
+  "executionAt": "2026-10-02T20:37:30.213785+00:00",
+  "execution": "Reviewed pure functions; disposable Node processes with networking and writes denied and private file contents excluded.",
+  "codeExtraction": "Only a single surrounding Markdown JSON fence is removed for offline execution. No code or JSON body is repaired; strict-format failures remain recorded.",
+  "cases": [
+    {
+      "id": "coding-01064a1f9325",
+      "taskId": "export-options",
+      "arm": "source_only",
+      "strictFormat": false,
+      "codeSha256": "220306a1022ca6624657018478007bcf856d9d577ee9b1d4fe9f417697459d77",
+      "checks": [
+        {
+          "index": 0,
+          "passed": false,
+          "error": "Expected values to be strictly deep-equal:\n+ actual - expected\n\n  [\n    'Cancel',\n    'Save copy',\n-   'Help'\n  ]\n"
+        },
+        {
+          "index": 1,
+          "passed": true
+        },
+        {
+          "index": 2,
+          "passed": false,
+          "error": "Expected values to be strictly deep-equal:\n+ actual - expected\n\n  [\n-   'Inspect',\n    'Cancel'\n  ]\n"
+        }
+      ],
+      "passed": false
+    },
+    {
+      "id": "coding-0e52209298ff",
+      "taskId": "file-tree-override",
+      "arm": "source_only",
+      "strictFormat": true,
+      "codeSha256": "a77d5ece7ace877667ce3feb2e0c2f6f658829b389886426782ee54d1a991c41",
+      "checks": [
+        {
+          "index": 0,
+          "passed": true
+        },
+        {
+          "index": 1,
+          "passed": true
+        },
+        {
+          "index": 2,
+          "passed": true
+        },
+        {
+          "index": 3,
+          "passed": true
+        },
+        {
+          "index": 4,
+          "passed": true
+        },
+        {
+          "index": 5,
+          "passed": true
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": "coding-10df35bf881b",
+      "taskId": "retry-config",
+      "arm": "source_only",
+      "strictFormat": false,
+      "codeSha256": "1dc6bbe097b2983154a143af300c325dd6a257cee47dbb02ca146760483ace28",
+      "checks": [
+        {
+          "index": 0,
+          "passed": true
+        },
+        {
+          "index": 1,
+          "passed": true
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": "coding-5178789fad4b",
+      "taskId": "navigation-default",
+      "arm": "source_only",
+      "strictFormat": true,
+      "codeSha256": "9c36257b7418699d864b22c409c95ca212b91afd3deacd2afbb7e3b0121a54aa",
+      "checks": [
+        {
+          "index": 0,
+          "passed": true
+        },
+        {
+          "index": 1,
+          "passed": true
+        },
+        {
+          "index": 2,
+          "passed": true
+        },
+        {
+          "index": 3,
+          "passed": true
+        },
+        {
+          "index": 4,
+          "passed": true
+        },
+        {
+          "index": 5,
+          "passed": true
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": "coding-684f8bce121a",
+      "taskId": "search-focus",
+      "arm": "source_only",
+      "strictFormat": false,
+      "codeSha256": "fcd4e54ee2af28251f784f928305b2964c2998b8319c5bc807a97c856e153bfd",
+      "checks": [
+        {
+          "index": 0,
+          "passed": true
+        },
+        {
+          "index": 1,
+          "passed": true
+        },
+        {
+          "index": 2,
+          "passed": true
+        }
+      ],
+      "passed": true
+    }
+  ],
+  "summary": {
+    "assessableTasks": 5,
+    "passedTasks": 4
+  },
+  "limitations": [
+    "Adaptive third arm on five synthetic microtasks; not held-out quality or native-framework benefit.",
+    "Two of five responses were strict JSON; three complete JSON responses had a single Markdown fence removed explicitly for offline code execution.",
+    "No production recall change has been validated by this standalone experiment."
+  ]
+}

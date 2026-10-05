@@ -53,7 +53,10 @@ List<Map<String, Object?>> statusMenuWorkingEntries(
   final unread = notificationInbox(app).map((row) => row.id).toSet();
   return [
     for (final session in harnessSessions(app))
-      if (!unread.contains('${session.machineId}/${session.agent.id}') &&
+      // Most rows are saved or idle. Only a processing ID can be working;
+      // avoid searching the roster again for every historical conversation.
+      if (session.working &&
+          !unread.contains('${session.machineId}/${session.agent.id}') &&
           harnessActivity(app, session.machineId, session.agent.id) ==
               HarnessActivity.working)
         {

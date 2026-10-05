@@ -1,0 +1,4 @@
+[Unit]
+Description=The hn screen
+Wants=hn-screen.service harness-install.service harness-idle.service harness-update.timer
+After=graphical-session-pre.target

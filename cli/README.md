@@ -287,9 +287,7 @@ report all fields.
 | `ADAPTER_CLI_DIR` | `~/.harness/cli` | install dir holding the `cli.js`/`notify.mjs` the updater swaps |
 | `LOG_FRAMES` | `false` | one log line per backend frame — type, audience and opaque ids, never a payload body. Every content-bearing frame is encrypted before it reaches the socket, so this is the only way to see what the daemon actually sent |
 | `HARNESS_HOOK_DEADLINE_MS` | `4500` | wall-clock budget a hook gives itself before abandoning optional work. Raise it on a slow or heavily loaded machine, where the budget is spent on load rather than on the hook and the offline registry fallback silently does nothing. Clamped, never below the default |
-| `SUMMARY_MODE` | `local` | who writes the recap HEADLINE. `local`: no model — the answer's first sentence is excerpted, instantly; the dial shows what the terminal shows. `model`: a one-shot of the session's own engine, fed the previous recap, the user's ask and the answer — reads better across turns, at ~9s of latency per turn. The `text` under the headline is the answer's own excerpt in both modes |
-| `ORI_SUMMARY_MODEL` | `deepseek/deepseek-v4-flash` | recap model for agents routed through an OpenRouter gateway (`ori claude`), which have no vendor credential to spend |
-| `ORI_VOICE_ROUTE_MODEL` | `deepseek/deepseek-v4-flash` | same, for the voice router's classification |
+| `ORI_VOICE_ROUTE_MODEL` | `deepseek/deepseek-v4-flash` | the voice router's classification model for agents routed through an OpenRouter gateway (`ori claude`), which have no vendor credential to spend |
 | `ORI_CREDENTIALS_PATH` | `~/.ori/credentials.json` | where `ori login` stores its key; read only when neither the daemon env nor the agent's own process supplies one |
 
 ## Device (hardware commander)
@@ -302,22 +300,12 @@ turns arrive as an injected `message` → `sendToTmux`. A device that joins **mi
 a client-count signal (`__clients`) — the adapter re-emits the open turn's live state on join (no
 periodic heartbeat).
 
-The per-turn **summary/recap** matches the hosted runtime: on turn end, *only while a device is
-connected*, the adapter runs a disposable one-shot from the session's own CLI engine
-(`SUMMARY_MODEL`, `CODEX_SUMMARY_MODEL`, or `CURSOR_SUMMARY_MODEL`) → a one-line `recap ≤15 words`,
-shows a `Summarizing…` indicator while it runs, persists `recap\n\ntext` per session
-(`${ADAPTER_DATA_DIR}/summaries.json`), and returns it on `project_recent` at device boot. A newer
-turn aborts a stale recap. The `text` under the headline is NOT model-written: it is the answer
-itself, flattened to one line and clipped to 250 characters (`deriveTurnBody`) — the dial shows only
-the headline, the device protocol defines `text` as an excerpt, and a paraphrase nobody reads cost
-output tokens on every turn.
-
-The one-shot is `recap = llm(instruct, previous recap, the user's ask, the answer)`. The previous
-recap is the session's last stored summary, quoted as *continuity only* — it lets a turn whose
-answer is "done, same change in the other file" recap as what was done instead of a fragment — and
-the prompt forbids repeating it or reporting it as this turn's news. `SUMMARY_MODE=local` drops the
-model: the answer's first prose sentence becomes the headline in the same tick (no `Summarizing…`),
-which is the right trade when the dial sits next to a window already showing the full text.
+The per-turn **recap** is cut from the answer the moment a turn ends, with no model in the loop: the
+answer's first prose sentence is the headline, and the `text` under it is the answer itself,
+flattened to one line and clipped to 250 characters (`deriveTurnBody`). It is persisted as
+`recap\n\ntext` per session (`${ADAPTER_DATA_DIR}/summaries.json`) and returned on
+`project_recent` at device boot. The window, the phone and the dial each show it beside the full
+answer, so the model rewrite the daemon once offered (about 9 s of every turn) is gone.
 
 ## Pair an Autonomous device directly
 

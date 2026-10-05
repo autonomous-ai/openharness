@@ -13,7 +13,6 @@ import { hermesSessionSource, isHermesInteractiveSource } from './engines/hermes
 import { hermesDbPath, listHermesHomes } from './engines/hermes/home.js'
 import { isRecentlyDeleted } from './lib/deletedSessions.js'
 import { registry, type RegisterInput, type RegisteredSession } from './lib/registry.js'
-import type { GateVerdict } from './lib/actionPolicy.js'
 import { LOCAL_WEB_HTML } from './webui.js'
 import { sid } from './lib/log.js'
 import { VERSION } from './version.js'
@@ -56,33 +55,7 @@ export interface PairOutcome {
   body: Record<string, unknown>
 }
 
-export interface NativePromptContext { additionalContext: string; memoryReceiptId?: string }
-type PromptContext = NativePromptContext | string | null
-
-/** Optional recall must never hang an engine's prompt or expose a failed lookup as a hook failure. */
-async function boundedPromptContext(read: () => PromptContext | Promise<PromptContext>): Promise<NativePromptContext | null> {
-  let timer: NodeJS.Timeout | undefined
-  try {
-    const result = await Promise.race([Promise.resolve().then(read),
-      new Promise<null>(resolve => { timer = setTimeout(() => resolve(null), 225) })])
-    const context = typeof result === 'string' ? { additionalContext: result } : result
-    if (!context || typeof context.additionalContext !== 'string' || !context.additionalContext
-      || Buffer.byteLength(context.additionalContext) > 8_000) return null
-    return { additionalContext: context.additionalContext,
-      ...(typeof context.memoryReceiptId === 'string' && /^[a-f0-9-]{36}$/.test(context.memoryReceiptId)
-        ? { memoryReceiptId: context.memoryReceiptId } : {}) }
-  } catch { return null } finally { if (timer) clearTimeout(timer) }
-}
-
 export interface HookServerHandlers {
-  /** Context for a verified process-owned agent, only on its real user turn. */
-  onPromptContext?: (agentId: string, prompt: string) => PromptContext | Promise<PromptContext>
-  /** Shared recall for a live, process-verified native adapter. Scope always comes from the host. */
-  onMemoryContext?: (agentId: string, prompt: string, adapter: { engine: AgentEngine; cliVersion: string }) => PromptContext | Promise<PromptContext>
-  /** Called only for the same process-owned native session after its hook writes context to stdout. */
-  onMemoryContextEmitted?: (agentId: string, receiptId: string) => Promise<boolean>
-  /** Private, process-verified OpenCode request metadata. Never enters the session registry or clients. */
-  onOpenCodeMemoryRuntime?: (agent: RegisteredSession, input: unknown) => Record<string, unknown>
   onCommandBar?: Pick<CommandBarService, 'status' | 'decide'>
   onAutonomousDeviceRequest?: (method: string, target: string, body?: unknown) => Promise<{ status: number; body: unknown }>
 
@@ -116,15 +89,7 @@ export interface HookServerHandlers {
     toolUseId: string
     toolName: string
     input: unknown
-  }) => void | GateVerdict | Promise<void | GateVerdict>
-  /** GET /api/attention: every agent's attention state for the bar widget and other local readers. */
-  onAttention?: () => unknown
-  /** GET /api/subscriptions: every plan's weekly used, banked, reset and the next-plan verdict. */
-  onSubscriptions?: () => Promise<unknown>
-  /** POST /api/stop-all: cancel every agent's turn except one (the panic stop). */
-  onStopAll?: (exceptAgentId: string | null) => Promise<{ cancelled: string[] }>
-  /** POST /api/fleet {action, ...args}: the local command surface behind the fleet `harness` commands. */
-  onFleet?: (action: string, args: Record<string, unknown>) => Promise<unknown>
+  }) => void
   onTurnStop?: (body: {
     sessionId: string
     status?: string
@@ -188,11 +153,6 @@ export interface HookServerHandlers {
   /** The account's Experimental switches, proxied with the daemon's own identity. */
   onExperimentalRead?: () => Promise<PairOutcome>
   onExperimentalWrite?: (body: unknown) => Promise<PairOutcome>
-  /** GET /api/zoo — the account's daemons and eggs (daemons/README.md); proxied like the desk. */
-  onZooRead?: () => Promise<PairOutcome>
-  /** POST /api/zoo/ops — habits, hatches, pair and nickname, applied on the backend (its routes/zoo.ts),
-   *  which alone draws; a local write, so CSRF-guarded like the desk's ops. */
-  onZooOps?: (body: unknown) => Promise<PairOutcome>
   /** /api/store/* — proxy the Harness Store's ratings and reviews to backend the same way: reads
    *  ungated like the machine list, writes (PUT/DELETE) CSRF-guarded like a rename. See storeProxy.ts. */
   onStore?: StoreHandler
@@ -204,7 +164,7 @@ const MAX_HOOK_BODY_BYTES = 256 * 1024
 const HOOK_BODY_FIELDS = new Set([
   'engine', 'launcherId', 'sessionId', 'transcriptPath', 'cwd', 'source', 'tmuxPane', 'title', 'model',
   'cliVersion', 'runtimeHints', 'callerPid', 'hookEvent', 'pluginVersion', 'reason', 'status', 'toolUseId',
-  'toolName', 'input', 'prompt', 'memoryReceiptId',
+  'toolName', 'input', 'prompt',
 ])
 
 function optionalBoundedString(value: unknown, max: number): boolean {
@@ -238,7 +198,6 @@ function validHookBody(value: unknown): value is BoundHookBody {
     || !optionalBoundedString(body.status, 100)
     || !optionalBoundedString(body.toolUseId, 200)
     || !optionalBoundedString(body.toolName, 200)
-    || !optionalBoundedString(body.memoryReceiptId, 36)
     || !optionalBoundedJson(body.input, 128 * 1024)) return false
   if (body.callerPid !== undefined
     && (!Number.isSafeInteger(body.callerPid) || (body.callerPid as number) <= 0)) return false
@@ -295,7 +254,6 @@ function normalizedRuntimeHints(body: RegisterInput): HookTerminalHint[] {
 }
 
 type BoundHookBody = RegisterInput & {
-  memoryReceiptId?: string
   prompt?: string
   sessionId?: string
   reason?: string
@@ -509,38 +467,6 @@ export function startHookServer(
       if (req.method === 'GET' && url === '/api/status') {
         json(200, handlers.onStatus ? await handlers.onStatus() : { supported: false }); return
       }
-      // Attention snapshot for the bar widget and any local reader: loopback only, read-only, no
-      // secrets (names, engines, states). Same trust as /api/status.
-      if (req.method === 'GET' && url === '/api/attention') {
-        json(200, handlers.onAttention ? handlers.onAttention() : { agents: [] }); return
-      }
-      if (req.method === 'GET' && (url === '/api/subscriptions' || url.startsWith('/api/subscriptions?'))) {
-        if (!handlers.onSubscriptions) { json(503, { error: 'UNAVAILABLE' }); return }
-        try { json(200, await handlers.onSubscriptions()) } catch (e) { json(500, { error: e instanceof Error ? e.message : 'INTERNAL' }) }
-        return
-      }
-      // Panic stop: every agent's turn is cancelled except the one named. Mutating, so the same
-      // same-origin guard as the other local mutations.
-      if (req.method === 'POST' && url === '/api/stop-all') {
-        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
-        if (!handlers.onStopAll) { json(503, { error: 'UNAVAILABLE' }); return }
-        let body: { except?: string } = {}
-        try { const raw = await readBody(req); body = raw ? JSON.parse(raw) as { except?: string } : {} } catch { json(400, { error: 'bad json' }); return }
-        try { json(200, await handlers.onStopAll(typeof body.except === 'string' && body.except ? body.except : null)) }
-        catch (e) { json(500, { error: e instanceof Error ? e.message : 'INTERNAL' }) }
-        return
-      }
-      if (req.method === 'POST' && url === '/api/fleet') {
-        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
-        if (!handlers.onFleet) { json(503, { error: 'UNAVAILABLE' }); return }
-        let body: { action?: unknown } & Record<string, unknown>
-        try { body = JSON.parse(await readBody(req)) as typeof body } catch { json(400, { error: 'bad json' }); return }
-        if (typeof body.action !== 'string' || !/^[a-z][a-z0-9-]{1,40}$/.test(body.action)) { json(400, { error: 'MISSING_ACTION' }); return }
-        const { action, ...args } = body
-        try { json(200, { ok: true, result: await handlers.onFleet(action, args) }) }
-        catch (e) { json(400, { ok: false, error: e instanceof Error ? e.message : String(e) }) }
-        return
-      }
       if (req.method === 'GET' && url === '/api/logs') {
         res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end(handlers.onLogs ? handlers.onLogs() : ''); return
       }
@@ -633,58 +559,8 @@ export function startHookServer(
         }
         console.log(`[hooks] ${sid(result.entry.sessionId)} ${body.hookEvent ?? 'session-start'} · engine=${result.entry.engine} · isNew=${result.isNew}`)
         handlers.onRegistered(result.entry, { isNew: result.isNew, evicted: result.evicted, rebound: result.rebound, orphaned: result.orphaned, hookEvent: body.hookEvent })
-        const context = body.hookEvent === 'UserPromptSubmit' && (engine === 'claude' || engine === 'codex') && handlers.onPromptContext
-          ? await boundedPromptContext(() => handlers.onPromptContext!(result.entry.agentId, body.prompt ?? '')) : null
-        json(200, { ok: true, ...context })
+        json(200, { ok: true })
         return
-      }
-
-      if (req.method === 'POST' && url === '/api/hook/opencode-memory-runtime') {
-        if (!hookOk) { json(401, { error: 'UNAUTHORIZED' }); return }
-        let body: BoundHookBody
-        try {
-          const parsed: unknown = JSON.parse(await readBody(req))
-          if (!validHookBody(parsed) || parsed.engine !== 'opencode' || !parsed.callerPid
-            || !optionalBoundedJson(parsed.input, 50_000)) { json(400, { error: 'invalid hook body' }); return }
-          body = parsed
-        } catch { json(400, { error: 'bad json' }); return }
-        // Unlike discovery fallback, credentials always require the host's live ancestry resolver.
-        const agent = handlers.resolveHookAgent ? await verifiedBoundMutation(body, handlers) : null
-        if (!agent?.processIdentity) { json(403, { error: 'UNBOUND_HOOK' }); return }
-        json(200, handlers.onOpenCodeMemoryRuntime?.(agent, body.input) ?? { observe: false }); return
-      }
-
-      if (req.method === 'POST' && url === '/api/hook/memory-context') {
-        if (!hookOk) { json(401, { error: 'UNAUTHORIZED' }); return }
-        let body: BoundHookBody
-        try {
-          const parsed: unknown = JSON.parse(await readBody(req))
-          if (!validHookBody(parsed) || !['claude', 'codex', 'opencode'].includes(parsed.engine ?? '')
-            || !parsed.callerPid || !parsed.cliVersion || typeof parsed.prompt !== 'string'
-            || !parsed.prompt.trim() || parsed.prompt.length > 4_000) { json(400, { error: 'invalid hook body' }); return }
-          body = parsed
-        } catch { json(400, { error: 'bad json' }); return }
-        const agent = handlers.resolveHookAgent ? await verifiedBoundMutation(body, handlers) : null
-        if (!agent?.processIdentity) { json(403, { error: 'UNBOUND_HOOK' }); return }
-        const context = handlers.onMemoryContext ? await boundedPromptContext(() => handlers.onMemoryContext!(
-          agent.agentId, body.prompt!, { engine: agent.engine, cliVersion: body.cliVersion! })) : null
-        json(200, { ok: true, ...context }); return
-      }
-
-      if (req.method === 'POST' && url === '/api/hook/memory-emitted') {
-        if (!hookOk) { json(401, { error: 'UNAUTHORIZED' }); return }
-        let body: BoundHookBody
-        try {
-          const parsed: unknown = JSON.parse(await readBody(req))
-          if (!validHookBody(parsed) || !/^[a-f0-9-]{36}$/.test(parsed.memoryReceiptId ?? '')
-            || !['claude', 'codex', 'opencode'].includes(parsed.engine ?? '')
-            || (parsed.engine === 'opencode' && !parsed.callerPid)) { json(400, { error: 'invalid hook body' }); return }
-          body = parsed
-        } catch { json(400, { error: 'bad json' }); return }
-        const agent = body.engine === 'opencode' && !handlers.resolveHookAgent ? null : await verifiedBoundMutation(body, handlers)
-        if (!agent || (body.engine === 'opencode' && !agent.processIdentity)) { json(403, { error: 'UNBOUND_HOOK' }); return }
-        const recorded = await handlers.onMemoryContextEmitted?.(agent.agentId, body.memoryReceiptId!).catch(() => false) ?? false
-        json(200, { ok: true, recorded, delivery: 'unverified' }); return
       }
 
       if (req.method === 'POST' && url === '/api/hook/session-end') {
@@ -713,24 +589,16 @@ export function startHookServer(
           body = parsed
         } catch { json(400, { error: 'bad json' }); return }
         if (!await verifiedBoundMutation(body, handlers)) { json(403, { error: 'UNBOUND_HOOK' }); return }
-        let gate: GateVerdict | undefined
         if (body.sessionId && body.toolUseId && body.toolName) {
           console.log(`[hooks] ${sid(body.sessionId)} tool-start · tool=${body.toolName}`)
-          try {
-            const verdict = await handlers.onToolStart?.({
-              sessionId: body.sessionId,
-              toolUseId: body.toolUseId,
-              toolName: body.toolName,
-              input: body.input,
-            })
-            if (verdict && verdict.decision !== 'allow') gate = verdict
-          } catch (e) {
-            console.error('[hooks] tool-start handler failed:', e instanceof Error ? e.message : e)
-          }
+          handlers.onToolStart?.({
+            sessionId: body.sessionId,
+            toolUseId: body.toolUseId,
+            toolName: body.toolName,
+            input: body.input,
+          })
         }
-        // The gate verdict rides back to the hook script, which turns it into the engine's own
-        // permission prompt. Allow is the absence of the field, so an older script sees `{ok:true}`.
-        json(200, gate ? { ok: true, gate } : { ok: true })
+        json(200, { ok: true })
         return
       }
 
@@ -939,20 +807,6 @@ export function startHookServer(
         try { body = JSON.parse(await readBody(req)) } catch { json(400, { error: { code: 'BAD_REQUEST', message: 'Invalid JSON body' } }); return }
         await proxied(() => handlers.onExperimentalWrite!(body)); return
       }
-      if (req.method === 'GET' && url === '/api/zoo') {
-        if (!handlers.onZooRead) { json(503, { error: 'UNAVAILABLE' }); return }
-        await proxied(handlers.onZooRead); return
-      }
-      if (req.method === 'POST' && url === '/api/zoo/ops') {
-        // Any local process that sets the header can send an op here, `zoo.autonomy` and `zoo.consent`
-        // included: the account's dial is only a REQUEST to each daemon, which acts above `suggest` only
-        // after the person confirms it at a window (pair/gate.ts, daemons/BRAIN.md "Security").
-        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
-        if (!handlers.onZooOps) { json(503, { error: 'UNAVAILABLE' }); return }
-        let body: unknown
-        try { body = JSON.parse(await readBody(req)) } catch { json(400, { error: { code: 'BAD_REQUEST', message: 'Invalid JSON body' } }); return }
-        await proxied(() => handlers.onZooOps!(body)); return
-      }
       if (req.method === 'GET' && url === '/api/auth/me') {
         const me = handlers.onAuthMe
         if (!me) { json(503, { error: 'UNAVAILABLE' }); return }
@@ -1023,7 +877,15 @@ export function startHookServer(
       }
 
       json(404, { error: 'not found' })
-    })()
+    })().catch((error: unknown) => {
+      // Whatever a handler throws, the request is answered: an engine's hook that waits on this server
+      // holds up that engine's turn until its own timeout, and the desktop waits out thirty seconds.
+      console.error(`[hooks] ${req.method} ${(req.url ?? '').split('?')[0].slice(0, 80)} failed:`, error instanceof Error ? error.message : error)
+      if (!res.headersSent) {
+        res.writeHead(500, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ error: 'INTERNAL' }))
+      } else if (!res.writableEnded) res.end()
+    })
   }
   const server = http.createServer(handle)
 

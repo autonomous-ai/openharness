@@ -19,6 +19,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/model_manager_controller.dart';
 import '../companions/coding_memory_connection.dart';
 import 'harness_monitor_controller.dart';
+import 'agent_handoff_file.dart';
 import 'agent_switch_handoff.dart';
 import '../api/api_client.dart';
 import '../viewer/sign_in_browser.dart';
@@ -76,7 +77,6 @@ import 'take_over.dart';
 import '../widgets/engine_identity.dart'
     show allEngines, engineIdentity, isTerminalEngine;
 import '../store/store_screen.dart' show openStoreAgent;
-import 'attention_state.dart';
 import 'dial_status.dart';
 import 'grid_pictures.dart';
 import 'model_start_watch.dart';
@@ -233,6 +233,13 @@ class _AgentChange {
   bool preservingViews = false;
   bool contextLoaded = false;
   String? handoff;
+
+  /// The handoff ran and left the new agent without a first prompt: say so once the switch is done.
+  bool handoffEmpty = false;
+
+  /// With [handoffEmpty]: the empty result came from the fallback road, so nobody confirmed the
+  /// conversation is empty. Picks the failed hint over the no-history one.
+  bool handoffFailed = false;
   String? companionTarget;
   bool launchFailed = false;
 }
@@ -379,6 +386,12 @@ class MachineState {
   // distinct from `connectionStatus`, which only reflects OUR websocket to
   // the backend. null = not seen yet (initial connect).
   bool? nodeOnline;
+  // Captured only after machine selection succeeds, including the remote
+  // handshake. Merely opening the socket to the local service is not enough.
+  WsConn? _selectedConnection;
+  bool get _selectedConnectionReady =>
+      connectionStatus == ConnectionStatus.connected &&
+      _selectedConnection?.isReady == true;
   // The agent the user selected while the Harness adapter was offline. Keep
   // this separate from activeAgentId so the UI can show a join guide without
   // opening a terminal stream against an unavailable node.
@@ -435,22 +448,16 @@ class MachineState {
 
   /// Whether this machine can be given work right now.
   ///
-  /// Two witnesses, and neither is always right. [nodeOnline] is what has been
-  /// heard ABOUT the far end — but it is also set hopefully, the moment our
-  /// own socket connects (`_onMachineConnected`), and that socket only reaches
-  /// the LOCAL daemon: it proves nothing about a computer on the other side of
-  /// the relay. The machine list is the backend's own view, and a computer it
-  /// calls `offline` is one that stopped heartbeating to it.
-  ///
-  /// So the list's `offline` counts even against a hopeful `nodeOnline`, and
-  /// the one machine exempt is this one — the computer the app is running on
-  /// is not offline, whatever a stale row says about it. Erring this way is
-  /// deliberate: the cost of being wrong is a machine that looks unavailable
-  /// for a few seconds longer, against starting work on a computer that is
-  /// not there and finding out a minute later.
+  /// An explicit offline report always wins. A saved or hopeful [nodeOnline]
+  /// value cannot override the inventory either. A successfully selected,
+  /// still-ready connection is stronger evidence: the local relay acknowledges
+  /// selection only after its handshake with the remote machine succeeds.
+  /// This computer also remains usable when its backend inventory is stale.
   bool get isOffline =>
       nodeOnline == false ||
-      (!isLocalMachine && machine.reportedOnline == false);
+      (!isLocalMachine &&
+          machine.reportedOnline == false &&
+          !(nodeOnline == true && _selectedConnectionReady));
 
   AgentProject? projectOf(Agent agent) =>
       agent.displayProject ??
@@ -2942,13 +2949,6 @@ class AppNotifier extends ChangeNotifier {
   /// frames from the local daemon; its own notifier, so the row rebuilds
   /// without dragging the whole rail through a machine-list rebuild.
   final DialState dial;
-
-  /// Per-agent attention from the local daemon's `attention` frame (cli/src/fleet/control.ts):
-  /// drives the pane frame and the fleet overview.
-  final AttentionState attention = AttentionState();
-
-  /// Whether the fleet overview panel is showing (lib/fleet/fleet_overview.dart).
-  final ValueNotifier<bool> fleetOverviewOpen = ValueNotifier(false);
   final AgentPreference agentPreference;
   final ProjectHistory projectHistory;
 
@@ -3315,6 +3315,8 @@ class AppNotifier extends ChangeNotifier {
   /// What a machine hears the moment its socket is up — first connect, or a
   /// reconnect after its daemon restarted, which has forgotten all of it.
   void _onMachineConnected(String machineId, MachineState machine) {
+    machine._selectedConnection =
+        connectionForTest?.call(machineId) ?? _pool?[machineId];
     _rereadDevicesAfterDaemonReconnect(machineId);
     // A viewer build keeps its own trust group (a CLI build's daemon keeps one for it): any session
     // that comes up is the moment to compare it with this machine.
@@ -3941,8 +3943,14 @@ class AppNotifier extends ChangeNotifier {
     environmentReadiness = EnvironmentReadiness.initial();
     notifyListeners();
     try {
-      // Always read-only here. Installation starts only after explicit confirmation in the wizard.
-      final result = await _runProvisioner(install: false);
+      // The probe is always read-only. What it finds missing is installed
+      // straight away when the whole plan runs in-app; only a plan that needs
+      // a password in Terminal waits on the wizard's Install action.
+      var result = await _runProvisioner(install: false);
+      if (!result.isReady && _canInstallUnattended(result, mode: null)) {
+        status = AppStatus.preparingEnvironment;
+        result = await _installUnattended(result);
+      }
       if (!result.isReady) {
         status = AppStatus.preparingEnvironment;
         notifyListeners();
@@ -3953,6 +3961,50 @@ class AppNotifier extends ChangeNotifier {
     } finally {
       _environmentSetupInFlight = false;
     }
+  }
+
+  /// Whether [probed] can be installed with nobody at the keyboard: it is a
+  /// review of what is missing, the person has not chosen manual setup, and
+  /// no step needs a password in Terminal (Linux apt). On macOS every step is
+  /// in-app, so a fresh Mac never stops on an Install button.
+  bool _canInstallUnattended(
+    EnvironmentReadiness probed, {
+    required EnvironmentSetupMode? mode,
+  }) =>
+      probed.phase == EnvironmentSetupPhase.review &&
+      (mode ?? probed.mode) != EnvironmentSetupMode.manual &&
+      !probed.plan.any((item) => item.requiresTerminal);
+
+  /// The install [startEnvironmentSetup] runs, for a caller that already holds
+  /// [_environmentSetupInFlight].
+  Future<EnvironmentReadiness> _installUnattended(
+    EnvironmentReadiness probed,
+  ) async {
+    _environmentInstallRequested = true;
+    // Straight to the install progress: the review and its Install button
+    // are never painted for a step nobody needs to approve. This is also the
+    // state the provisioner resumes from — it re-probes every step — so its
+    // first frame does not bring back the review's copy and red "Missing".
+    final planned = {for (final item in probed.plan) item.step};
+    environmentReadiness = probed.copyWith(
+      phase: EnvironmentSetupPhase.installing,
+      mode: EnvironmentSetupMode.automatic,
+      message: 'Installing only the missing required tools.',
+      steps: {
+        for (final entry in probed.steps.entries)
+          entry.key: planned.contains(entry.key)
+              ? EnvironmentStepStatus.running
+              : entry.value,
+      },
+    );
+    notifyListeners();
+    final result = await _runProvisioner(
+      resumeFrom: environmentReadiness,
+      install: true,
+      mode: EnvironmentSetupMode.automatic,
+    );
+    if (!result.isReady) _scheduleEnvironmentRecheck();
+    return result;
   }
 
   /// Shared with [_prepareEnvironment]: runs the provisioner, updates
@@ -4104,16 +4156,19 @@ class AppNotifier extends ChangeNotifier {
     await _continueAfterEnvironmentReady();
   }
 
-  /// A manual repair always returns to a read-only probe.
+  /// A manual repair always returns to a read-only probe. In automatic setup
+  /// the probe is followed by the install when it can run unattended, as at
+  /// launch.
   Future<void> retryEnvironmentSetup() async {
     if (_environmentSetupInFlight) return;
     _environmentSetupInFlight = true;
     notifyListeners();
     try {
-      final result = await _runProvisioner(
-        install: false,
-        mode: environmentReadiness.mode,
-      );
+      final mode = environmentReadiness.mode;
+      var result = await _runProvisioner(install: false, mode: mode);
+      if (!result.isReady && _canInstallUnattended(result, mode: mode)) {
+        result = await _installUnattended(result);
+      }
       if (result.isReady) await _continueAfterEnvironmentReady();
     } finally {
       _environmentSetupInFlight = false;
@@ -6041,7 +6096,7 @@ class AppNotifier extends ChangeNotifier {
       if (!state.isLocalMachine &&
           reportedOnline != null &&
           (state.nodeOnline == null || state.nodeOnline != reportedOnline)) {
-        unawaited(_applyNodeStatus(state, reportedOnline));
+        unawaited(_applyInventoryNodeStatus(state, reportedOnline));
       }
     }
     // A list that arrived but does not name this computer (a stale copy from before this computer
@@ -7218,7 +7273,7 @@ class AppNotifier extends ChangeNotifier {
       final reportedOnline = latest.first.reportedOnline;
       if (reportedOnline == null) return;
       machine.machine = latest.first;
-      await _applyNodeStatus(machine, reportedOnline);
+      await _applyInventoryNodeStatus(machine, reportedOnline);
     } catch (error) {
       debugPrint('offline node retry failed: $machineId: $error');
     } finally {
@@ -9655,23 +9710,41 @@ class AppNotifier extends ChangeNotifier {
     int limit = 30,
   }) async {
     if (!searchableMachineIds.contains(machineId)) return null;
+    final elapsed = Stopwatch()..start();
+    const budget = Duration(seconds: 4);
+    List<SessionContentHit>? hits;
     try {
-      final reply = await _conn(machineId).request(
-        'session_search',
-        payload: {
-          'query': query,
-          'limit': limit,
-          if (when != null) ...{
-            'from': when.from.millisecondsSinceEpoch,
-            'to': when.to.millisecondsSinceEpoch,
+      // Discovery is asynchronous. An unfinished index is not a final empty
+      // answer; ask again briefly, within the same budget as one slow request.
+      for (var attempt = 0; attempt < 20; attempt++) {
+        if (_disposed || !searchableMachineIds.contains(machineId)) return hits;
+        final remaining = budget - elapsed.elapsed;
+        if (remaining <= Duration.zero) return hits;
+        final reply = await _conn(machineId).request(
+          'session_search',
+          payload: {
+            'query': query,
+            'limit': limit,
+            if (when != null) ...{
+              'from': when.from.millisecondsSinceEpoch,
+              'to': when.to.millisecondsSinceEpoch,
+            },
           },
-        },
-        timeout: const Duration(seconds: 4),
-      );
-      if (reply['error'] != null) return null;
-      return SessionContentHit.listFromReply(machineId, reply);
+          timeout: remaining,
+        );
+        if (reply['error'] != null) return hits;
+        hits = SessionContentHit.listFromReply(machineId, reply);
+        // Older daemons omit ready; retain their single-request behavior.
+        if (reply['ready'] != false || reply['discoveryError'] == true)
+          return hits;
+        if (attempt == 19 ||
+            budget - elapsed.elapsed < const Duration(milliseconds: 200))
+          return hits;
+        await Future<void>.delayed(const Duration(milliseconds: 200));
+      }
+      return hits;
     } catch (_) {
-      return null;
+      return hits;
     }
   }
 
@@ -9683,12 +9756,17 @@ class AppNotifier extends ChangeNotifier {
     String machineId,
     String sessionId, {
     int? beforeTurn,
+    int? maxChars,
   }) async {
     if (!searchableMachineIds.contains(machineId)) return null;
     try {
       final reply = await _conn(machineId).request(
         'session_tail',
-        payload: {'sessionId': sessionId, 'beforeTurn': ?beforeTurn},
+        payload: {
+          'sessionId': sessionId,
+          'beforeTurn': ?beforeTurn,
+          'maxChars': ?maxChars,
+        },
         timeout: const Duration(seconds: 4),
       );
       if (reply['error'] != null) return null;
@@ -10775,12 +10853,12 @@ class AppNotifier extends ChangeNotifier {
   (String, String)? _touchedFocus;
 
   /// Tell a harness's own daemon that a person just opened or focused it, so
-  /// its `lastOpenedAt` moves and with it "last used" order in EVERY client
+  /// its `lastOpenedAt` records the visit in every client
   /// (`agent_update {agentId, opened: true}`, sealed like any agent_update).
   ///
   /// Fire-and-forget. Nothing waits on it and nothing is said when it fails:
-  /// an older daemon answers MISSING_UPDATE and the list simply keeps sorting
-  /// by activity; a socket that is down loses one stamp. Never dials a socket
+  /// an older daemon answers MISSING_UPDATE; a socket that is down loses one
+  /// stamp. Conversation recency is independent of this. Never dials a socket
   /// for it, and never for a view-only shared harness — its owner's order is
   /// not this window's to move.
   void touchAgent(String machineId, String agentId) {
@@ -10820,8 +10898,7 @@ class AppNotifier extends ChangeNotifier {
         timeout: const Duration(seconds: 10),
       );
       if (!_machineWorkCurrent(machine, revision)) return;
-      // The daemon's own stamp, taken now rather than on the next push, so the
-      // list this window just opened from is already in its new order. Only
+      // The daemon's own visit stamp, taken now rather than on the next push. Only
       // this one field: the reply is not a frame to rebuild the agent from.
       final returned = result['agent'];
       final raw = returned is Map && (returned['id'] ?? agentId) == agentId
@@ -11492,6 +11569,10 @@ class AppNotifier extends ChangeNotifier {
   bool Function(String machineId, String agentId)? canChangeCompanionAgent;
   void Function(String machineId, String agentId)? openAgentPicker;
 
+  /// Shows the person a message once a switch is done (the handoff hints). Set by the screen on
+  /// top, which shows it as a snack bar; null when no screen is listening.
+  void Function(String message)? agentChangeNotice;
+
   List<String> agentSwitchEngines(String machineId, Agent source) {
     if (source.dsh == 'autonomous/pair') {
       return const ['opencode', 'codex', 'claude'];
@@ -11565,6 +11646,70 @@ class AppNotifier extends ChangeNotifier {
     ).whenComplete(() => change.pending = null);
   }
 
+  /// Fill [change].handoff for the new agent, or return why the switch must not go on.
+  ///
+  /// First choice: the machine writes a record of the whole conversation into the project and the
+  /// new agent is told to read it (agent_handoff_prepare). Any failure of that — an older machine,
+  /// a busy or slow one, a reply this client will not trust — falls back to the short excerpt from
+  /// agent_recent. Only when that fails too does the switch stop, with the source still running.
+  /// Both reads happen BEFORE the source is closed: a creation retry must carry the same choices.
+  /// Also sets the flags that pick the hint shown when the new agent gets no first prompt.
+  Future<String?> _loadSwitchHandoff(
+    String machineId,
+    _AgentChange change,
+    Agent source,
+    String folder,
+  ) async {
+    try {
+      final reply = await _conn(machineId).request(
+        'agent_handoff_prepare',
+        payload: {
+          'agentId': source.id,
+          'changeId': change.creation._id,
+          'targetEngine': change.engine,
+        },
+        timeout: const Duration(seconds: 6),
+      );
+      final accepted = acceptAgentHandoffReply(
+        reply,
+        agentId: source.id,
+        changeId: change.creation._id,
+        folder: folder,
+        sourceLabel: engineIdentity(source.engine).label,
+      );
+      if (accepted.accepted) {
+        change.handoff = accepted.prompt;
+        change.handoffEmpty = accepted.prompt == null;
+        change.handoffFailed = false;
+        change.contextLoaded = true;
+        return null;
+      }
+    } catch (_) {
+      // Any failure takes the excerpt road below.
+    }
+    try {
+      final recent = await _conn(machineId).request(
+        'agent_recent',
+        payload: {'agentId': source.id, 'n': 5},
+        timeout: const Duration(seconds: 4),
+      );
+      if (recent['error'] != null ||
+          (recent['agentId'] != null && recent['agentId'] != source.id)) {
+        return 'Could not read the conversation for the handoff. Try switching again.';
+      }
+      change.handoff = agentSwitchHandoff(
+        source.engine ?? 'the previous agent',
+        recent,
+      );
+      change.handoffEmpty = change.handoff == null;
+      change.handoffFailed = change.handoffEmpty;
+      change.contextLoaded = true;
+    } catch (_) {
+      return 'Could not read the conversation for the handoff. Try switching again.';
+    }
+    return null;
+  }
+
   Future<String?> _changeAgent(String machineId, _AgentChange change) async {
     final machine = stateOf(machineId);
     final source = change.source;
@@ -11584,24 +11729,8 @@ class AppNotifier extends ChangeNotifier {
     if (source.dsh != 'autonomous/pair' &&
         supportsAgentHandoff(change.engine) &&
         !change.contextLoaded) {
-      try {
-        final recent = await _conn(machineId).request(
-          'agent_recent',
-          payload: {'agentId': source.id, 'n': 5},
-          timeout: const Duration(seconds: 4),
-        );
-        if (recent['error'] != null ||
-            (recent['agentId'] != null && recent['agentId'] != source.id)) {
-          return 'Could not read the conversation for the handoff. Try switching again.';
-        }
-        change.handoff = agentSwitchHandoff(
-          source.engine ?? 'the previous agent',
-          recent,
-        );
-        change.contextLoaded = true;
-      } catch (_) {
-        return 'Could not read the conversation for the handoff. Try switching again.';
-      }
+      final error = await _loadSwitchHandoff(machineId, change, source, folder);
+      if (error != null) return error;
       if (!_machineWorkCurrent(machine, change.revision)) {
         return 'This switch is no longer active.';
       }
@@ -11747,6 +11876,15 @@ class AppNotifier extends ChangeNotifier {
           ),
         );
       }
+    }
+    if (change.handoffEmpty) {
+      final from = engineIdentity(source.engine).label;
+      final to = engineIdentity(change.engine).label;
+      agentChangeNotice?.call(
+        change.handoffFailed
+            ? agentSwitchHandoffFailedHint(from, to)
+            : agentSwitchNoHistoryHint(from, to),
+      );
     }
     return null;
   }
@@ -12123,6 +12261,21 @@ class AppNotifier extends ChangeNotifier {
     }
     notifyListeners();
     return true;
+  }
+
+  /// An inventory snapshot can predate a successful remote selection. Keep its
+  /// offline status from taking a live connection down; socket failures and
+  /// explicit node_status pushes still go through _applyNodeStatus directly.
+  Future<void> _applyInventoryNodeStatus(
+    MachineState machine,
+    bool online,
+  ) async {
+    if (!online &&
+        machine.nodeOnline == true &&
+        machine._selectedConnectionReady) {
+      return;
+    }
+    await _applyNodeStatus(machine, online, why: 'machine inventory');
   }
 
   Future<void> _applyNodeStatus(
@@ -14995,10 +15148,6 @@ class AppNotifier extends ChangeNotifier {
       // ── the dial, over the cable, forwarded by the local daemon ──────────────────────────────────
       // Local-only frames (backend.sendLocal in the harness CLI): they describe a hand at THIS desk, so
       // they never reach the cloud web audience, who may be sitting at another computer entirely.
-      case 'attention':
-        // What each agent needs from a person; drives the pane frame and the fleet overview.
-        attention.apply(payload);
-        return;
       case 'dial_status':
         // The dial came, went, or started taking an update. Its own notifier —
         // see [dial] — so nothing else in the window rebuilds for it.

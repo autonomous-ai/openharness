@@ -1,0 +1,3 @@
+#!/bin/sh
+# Keep the agent runtime independent of the graphical session.
+systemctl --user stop harness-os.target

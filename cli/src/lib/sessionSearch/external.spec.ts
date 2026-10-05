@@ -188,6 +188,25 @@ describe('OpenSessions', () => {
     expect(sessions.known().get('me')).toBeDefined()
     expect(await sessions.fresh()).toBe(await sessions.fresh())
   })
+
+  it('reports confirmed working state without treating unknown or open as busy', async () => {
+    let busy: boolean | null = true
+    const { sessions } = open([
+      { engine: 'claude', scan: async () => [], owners: async () => [
+        { sessionId: 'live', pid: 1, record: '/live' },
+        { sessionId: 'guess', pid: 2, record: '/guess', fromArgs: true },
+      ], busy: async () => busy },
+      { engine: 'grok', scan: async () => [], owners: async () => [{ sessionId: 'error', pid: 3, record: '/bad' }], busy: async () => { throw new Error('unreadable') } },
+    ])
+    expect(await sessions.working('live')).toBe(true)
+    busy = false
+    expect(await sessions.working('live')).toBe(false)
+    busy = null
+    expect(await sessions.working('live')).toBeNull()
+    expect(await sessions.working('guess')).toBeNull()
+    expect(await sessions.working('error')).toBeNull()
+    expect(await sessions.working('closed')).toBe(false)
+  })
 })
 
 describe('stopSessionOwner', () => {

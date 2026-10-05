@@ -100,7 +100,9 @@ function unboundRouteObservation(
 /** Serialized, failure-isolated reconciliation across every enabled backend instance. */
 export class TerminalAgentReconciler {
   private readonly misses = new Map<string, number>()
-  private readonly engineMisses = new Map<string, number>()
+  /** Consecutive scans that found no engine for an agent, counted against the process identity they
+   *  missed: an engine identified since is a different engine, and its count starts again. */
+  private readonly engineMisses = new Map<string, { processKey: string | null; count: number }>()
   private readonly suppressed = new Set<string>()
   private readonly hints = new Map<string, AgentEngine>()
   /** Terminal routes currently mid an in-place process swap (restart). Held by ROUTE, not by process
@@ -108,6 +110,10 @@ export class TerminalAgentReconciler {
    *  finishes, so there is nothing to key a process-identity suppression on yet. */
   private readonly heldRoutes = new Set<string>()
   private readonly heldRouteTimers = new Map<string, NodeJS.Timeout>()
+  /** When each route was last held or released, as a sequence number, so a probe can tell a route
+   *  that changed hands while it ran (see `reconcileOnce`). */
+  private routeSeq = 0
+  private readonly routeTouched = new Map<string, number>()
   private pending = false
   private inFlight: Promise<void> | null = null
   private timer: NodeJS.Timeout | null = null
@@ -186,6 +192,7 @@ export class TerminalAgentReconciler {
    */
   holdRoute(routeKey: string, autoReleaseMs = 30_000): void {
     this.heldRoutes.add(routeKey)
+    this.routeTouched.set(routeKey, ++this.routeSeq)
     const existing = this.heldRouteTimers.get(routeKey)
     if (existing) clearTimeout(existing)
     const timer = setTimeout(() => this.releaseRoute(routeKey), autoReleaseMs)
@@ -195,7 +202,7 @@ export class TerminalAgentReconciler {
 
   /** Resume normal reconciliation for a route held by `holdRoute`. Idempotent. */
   releaseRoute(routeKey: string): void {
-    this.heldRoutes.delete(routeKey)
+    if (this.heldRoutes.delete(routeKey)) this.routeTouched.set(routeKey, ++this.routeSeq)
     const timer = this.heldRouteTimers.get(routeKey)
     if (timer) {
       clearTimeout(timer)
@@ -203,8 +210,15 @@ export class TerminalAgentReconciler {
     }
   }
 
-  private routeHeld(runtimes: readonly TerminalRuntimeRef[]): boolean {
-    return runtimes.some((runtime) => this.heldRoutes.has(terminalRouteKey(runtime)))
+  /** Held now, or held or released since the probe numbered `probeSeq` began: that probe cannot speak
+   *  for the route. A stop holds its agent's route while it retires the pane, and a probe taken before
+   *  the stop, landing after it, otherwise opened a second agent for the engine it saw starting there
+   *  (e2e/races.e2e.ts). */
+  private routeHeld(runtimes: readonly TerminalRuntimeRef[], probeSeq = this.routeSeq): boolean {
+    return runtimes.some((runtime) => {
+      const key = terminalRouteKey(runtime)
+      return this.heldRoutes.has(key) || (this.routeTouched.get(key) ?? 0) > probeSeq
+    })
   }
 
   trigger(): Promise<void> {
@@ -225,6 +239,20 @@ export class TerminalAgentReconciler {
 
   private async reconcileOnce(): Promise<void> {
     const hints = new Map(this.hints)
+    // What every agent was when the probe began. A probe is evidence only about what it could have
+    // seen: an agent created, a pane given to it, or an engine identified while the probe ran (the
+    // new-pane watcher binds one between two scans) is judged by the next probe, not this one. Four
+    // agents created at once proved it: a probe that began before one engine started counted that
+    // engine's second "miss", and the agent was retired 22ms after its engine was found
+    // (e2e/soak.e2e.ts, 2026-10-04).
+    const probedAs = new Map(this.deps.current().map((agent) => [agent.agentId, {
+      processKey: currentProcessKey(agent),
+      placements: new Set(agent.runtimes.map(terminalPlacementKey)),
+    }]))
+    // Routes that change hands from here on are this probe's blind spot. Reconciliation is serial, so
+    // anything older matters to no probe still to come.
+    const probeSeq = this.routeSeq
+    for (const [key, seq] of this.routeTouched) if (seq <= probeSeq) this.routeTouched.delete(key)
     const probe = await (this.deps.probe
       ? this.deps.probe(hints)
       : probeTerminalAgents(
@@ -279,7 +307,7 @@ export class TerminalAgentReconciler {
         // A restart in progress on this route: leave it untouched. The old process going dormant here
         // and the new one being adopted by the discovery loop below are both races restart's `holdRoute`
         // exists to prevent — see the class-level comment on `heldRoutes`.
-        if (this.routeHeld(current.runtimes)) continue
+        if (this.routeHeld(current.runtimes, probeSeq)) continue
         const processKey = currentProcessKey(current)
         const observed = (processKey ? observedByProcess.get(processKey) : undefined)
           ?? unboundRouteObservation(current, probe.agents)
@@ -333,6 +361,7 @@ export class TerminalAgentReconciler {
             // route and its active UI entry, just as a failed whole-process-table read does above.
             if (validation.state === 'unknown') continue
           }
+          if (!probedAs.get(current.agentId)?.placements.has(placement)) continue
           const misses = (this.misses.get(missKey) ?? 0) + 1
           if (misses < MISS_LIMIT) {
             this.misses.set(missKey, misses)
@@ -343,21 +372,24 @@ export class TerminalAgentReconciler {
         }
 
         if (terminalVerified) await this.deps.onTerminalAvailability?.(current, true)
+        const probed = probedAs.get(current.agentId)
         if (observed) {
           this.engineMisses.delete(current.agentId)
-        } else if (current.active && terminalVerified && !isTerminalEngine(current.engine) && !current.runtimes.some((runtime) =>
+        } else if (probed && probed.processKey === processKey
+          && current.active && terminalVerified && !isTerminalEngine(current.engine) && !current.runtimes.some((runtime) =>
           probe.ambiguousPlacements.has(terminalPlacementKey(runtime)))) {
           // A live pane with no engine process in it. For an agent that is a dormant engine; for a
           // terminal (`engine === 'terminal'`) it is simply a shell at its prompt, which is why the
           // branch is skipped for one. A terminal that ADOPTED an engine (`terminalHost`, engine no
           // longer `terminal`) does come through here when that engine exits — the handler turns it
           // back into a terminal rather than marking it dormant (cli.ts `onDormant`).
-          const misses = (this.engineMisses.get(current.agentId) ?? 0) + 1
+          const prior = this.engineMisses.get(current.agentId)
+          const misses = (prior?.processKey === processKey ? prior.count : 0) + 1
           if (misses >= MISS_LIMIT) {
             this.engineMisses.delete(current.agentId)
             await this.deps.onDormant(current, `engine process absent after ${MISS_LIMIT} confirmed scans`)
           } else {
-            this.engineMisses.set(current.agentId, misses)
+            this.engineMisses.set(current.agentId, { processKey, count: misses })
           }
         }
 
@@ -398,7 +430,7 @@ export class TerminalAgentReconciler {
         if (matchedProcesses.has(key)) continue
         // The replacement process for a restart in progress: the restart handler will bind it via
         // `updateProcessIdentity` itself once confirmed, not through ordinary discovery.
-        if (this.routeHeld(observed.runtimes)) continue
+        if (this.routeHeld(observed.runtimes, probeSeq)) continue
         await this.deps.onDiscovered(observed)
       }
     }

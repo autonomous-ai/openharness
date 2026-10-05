@@ -1,4 +1,3 @@
-import type { CompanionIdentity, CompanionMilestone } from './companionIdentity.js'
 // Everything the cable session needs from the rest of the daemon, in one place.
 //
 // The session owns the protocol and nothing else; this owns the answers. Keeping them apart is what lets
@@ -37,9 +36,6 @@ export interface RecentTurn {
 }
 
 export interface CableHostWiring {
-  companion?: () => string | null
-  companionIdentity?: () => CompanionIdentity | null
-  companionMilestone?: () => CompanionMilestone | null
   /** Exact live terminal footer for a local agent; absent when no footer is visible. */
   activityText?: (agentId: string) => Promise<string | null>
   /** The person's own last questions to a LOCAL agent, newest first. */
@@ -318,10 +314,6 @@ export class DaemonCableHost implements CableHost {
     const locale = process.env.LANG ?? ''
     return locale.startsWith('vi') ? 'vi' : 'en'
   }
-
-  companion(): string | null { return this.wiring.companion?.() ?? null }
-  companionIdentity(): CompanionIdentity | null { return this.wiring.companionIdentity?.() ?? null }
-  companionMilestone(): CompanionMilestone | null { return this.wiring.companionMilestone?.() ?? null }
 
   /** This computer's own agents, in the order every other surface reads them in. */
   private localAgents(): CableAgent[] {

@@ -1,0 +1,9 @@
+[Unit]
+Description=Prepare the selected Broadcom Wi-Fi device
+After=local-fs.target systemd-udevd.service
+ConditionPathExists=/sys/bus/pci/devices/%I
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /usr/lib/harness-os/hardware.py activate %I
+TimeoutStartSec=45

@@ -7,6 +7,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shortcuts/app_keymap.dart';
 import 'package:harness/shortcuts/keymap_host.dart';
 import 'package:harness/state/app_state.dart';
+import 'package:harness/state/harness_attachments.dart';
 import 'package:harness/state/new_harness.dart';
 import 'package:harness/terminal/terminal_binary.dart';
 import 'package:harness/widgets/desktop_search_panel.dart';
@@ -219,7 +220,10 @@ const _nativeSmokeJourneys = {
   'Shift-Tab leaves a chooser without applying its highlight',
   'Escape closes only the chooser and returns to its control',
   'outside click closes only the chooser and returns to its control',
-  'Cmd-P and Cmd-N replace each other without losing the composer',
+  'outside clicks keep the composer open before and after editing',
+  'composer closes on Escape and opens with an empty task',
+  'composer closes on Close and opens with an empty task',
+  'Cmd-P and Cmd-N replace each other without reviving cancelled edits',
   'focused Cmd-P preview control owns Return',
   'Return on Close search restores terminal focus without opening a result',
 };
@@ -349,7 +353,7 @@ void main({bool nativeSmoke = false}) {
               ValueKey(
                 reverse
                     ? 'new-harness-field-start'
-                    : 'new-harness-field-project',
+                    : 'new-harness-field-machine',
               ),
             ),
           ),
@@ -394,6 +398,17 @@ void main({bool nativeSmoke = false}) {
         reason: 'Cancel returns to the control that opened the chooser.',
       );
       expect(workspace.starts, isEmpty);
+      expect(workspace.input, isEmpty);
+      if (dismissal == 'Escape') {
+        await key(tester, LogicalKeyboardKey.escape);
+        expect(_form, findsNothing);
+      } else {
+        await tester.tapAt(const Offset(10, 400));
+        await tester.pumpAndSettle();
+        expect(_form, findsOneWidget);
+        expect(_box(tester), same(original));
+        expect(original.task, task);
+      }
     });
   }
 
@@ -435,22 +450,12 @@ void main({bool nativeSmoke = false}) {
       await tester.enterText(_task, 'Inspect $field without losing this task');
       final box = _box(tester);
       final task = box.task;
-      final opener = find.byKey(
-        ValueKey(
-          field == 'machine'
-              ? 'new-harness-field-project'
-              : 'new-harness-field-$field',
-        ),
-      );
+      final opener = find.byKey(ValueKey('new-harness-field-$field'));
+      await tester.ensureVisible(opener);
+      await tester.pumpAndSettle();
       await tester.tap(opener);
       await tester.pump();
-      if (field == 'machine') {
-        await tester.tap(
-          find.byKey(const ValueKey('new-harness-repo-machine')),
-        );
-        await tester.pump();
-      }
-      expect(_chooser, findsOneWidget);
+      expect(_chooser, field == 'machine' ? findsNothing : findsOneWidget);
       await key(tester, LogicalKeyboardKey.enter, cmd: true);
       expect(
         workspace.starts,
@@ -459,11 +464,6 @@ void main({bool nativeSmoke = false}) {
       );
       await tester.tapAt(const Offset(10, 400));
       await tester.pump();
-      if (field == 'machine') {
-        expect(_chooser, findsOneWidget);
-        await tester.tapAt(const Offset(10, 400));
-        await tester.pump();
-      }
       expect(_form, findsOneWidget);
       expect(_chooser, findsNothing);
       expect(_box(tester), same(box));
@@ -563,53 +563,89 @@ void main({bool nativeSmoke = false}) {
     );
   }
 
-  for (final dismissal in ['Escape', 'outside click']) {
-    journey('composer closes on $dismissal and restores its draft on reopen', (
+  journey('outside clicks keep the composer open before and after editing', (
+    tester,
+  ) async {
+    final workspace = await _mount(tester);
+    await _new(tester);
+    final original = _box(tester);
+    const task = 'Keep this task while I click beside the form';
+    for (final editing in [false, true]) {
+      if (editing) {
+        await tester.enterText(_task, task);
+        original.attachments!.add([
+          HarnessAttachment('notes.txt', Uint8List.fromList([65])),
+        ]);
+        await tester.pump();
+      }
+      for (var click = 0; click < 3; click++) {
+        await tester.tapAt(const Offset(10, 400));
+        await tester.pumpAndSettle();
+        expect(_form, findsOneWidget);
+        expect(_box(tester), same(original));
+        expect(original.task, editing ? task : isEmpty);
+        expect(original.attachments!.files, hasLength(editing ? 1 : 0));
+        expect(_ownsFocus(tester, _task), isTrue);
+      }
+    }
+    expect(workspace.starts, isEmpty);
+    expect(workspace.input, isEmpty);
+  });
+
+  for (final dismissal in ['Escape', 'Close']) {
+    journey('composer closes on $dismissal and opens with an empty task', (
       tester,
     ) async {
       await _mount(tester);
       await _new(tester);
       const task = 'Unfinished review with a meaningful draft';
       await tester.enterText(_task, task);
+      _box(tester).attachments!.add([
+        HarnessAttachment('notes.txt', Uint8List.fromList([65])),
+      ]);
+      await tester.pump();
       if (dismissal == 'Escape') {
         await key(tester, LogicalKeyboardKey.escape);
       } else {
-        await tester.tapAt(const Offset(10, 400));
+        await tester.tap(find.byKey(const ValueKey('new-harness-close')));
         await tester.pump();
       }
       expect(_form, findsNothing);
       await _new(tester);
-      expect(_box(tester).task, task);
-      expect(tester.widget<TextField>(_task).controller!.text, task);
+      expect(_box(tester).task, isEmpty);
+      expect(_box(tester).attachments!.files, isEmpty);
+      expect(tester.widget<TextField>(_task).controller!.text, isEmpty);
       expect(_ownsFocus(tester, _task), isTrue);
     });
   }
 
-  journey('Cmd-P and Cmd-N replace each other without losing the composer', (
-    tester,
-  ) async {
-    final workspace = await _mount(tester, withTerminal: true);
-    await _new(tester);
-    await tester.enterText(_task, 'Resume after checking existing work');
-    await openLaunchRow(tester, 'agent');
-    await key(tester, LogicalKeyboardKey.keyP, cmd: true);
-    expect(_form, findsNothing);
-    expect(_search, findsOneWidget);
-    expect(_ownsFocus(tester, _search), isTrue);
-    await _new(tester);
-    expect(_search, findsNothing);
-    expect(_chooser, findsNothing);
-    expect(_box(tester).task, 'Resume after checking existing work');
-    expect(_ownsFocus(tester, _task), isTrue);
-    expect(workspace.input, isEmpty);
-    expect(workspace.starts, isEmpty);
-  });
+  journey(
+    'Cmd-P and Cmd-N replace each other without reviving cancelled edits',
+    (tester) async {
+      final workspace = await _mount(tester, withTerminal: true);
+      await _new(tester);
+      await tester.enterText(_task, 'Resume after checking existing work');
+      await openLaunchRow(tester, 'agent');
+      await key(tester, LogicalKeyboardKey.keyP, cmd: true);
+      expect(_form, findsNothing);
+      expect(_search, findsOneWidget);
+      expect(_ownsFocus(tester, _search), isTrue);
+      await _new(tester);
+      expect(_search, findsNothing);
+      expect(_chooser, findsNothing);
+      expect(_box(tester).task, isEmpty);
+      expect(_ownsFocus(tester, _task), isTrue);
+      expect(workspace.input, isEmpty);
+      expect(workspace.starts, isEmpty);
+    },
+  );
 
   journey(
     'long mixed mouse and keyboard setup keeps the draft and dismisses one level',
     (tester) async {
       final workspace = await _mount(tester, withTerminal: true);
       await _new(tester);
+      final defaults = _box(tester).draft;
       const task =
           'Explore the API first.\nKeep the UI simple — then discuss it.';
       await tester.enterText(_task, task);
@@ -640,8 +676,17 @@ void main({bool nativeSmoke = false}) {
           await tester.tap(opener);
         }
         await tester.pumpAndSettle();
-        expect(_chooser, findsOneWidget);
-        expect(_ownsFocus(tester, _query), isTrue);
+        if (tester.widget(opener).key ==
+            const ValueKey('new-harness-field-machine')) {
+          expect(_chooser, findsNothing);
+          expect(
+            find.byKey(const ValueKey('new-harness-machine-option-m')),
+            findsOneWidget,
+          );
+        } else {
+          expect(_chooser, findsOneWidget);
+          expect(_ownsFocus(tester, _query), isTrue);
+        }
         expectStableDraft();
       }
 
@@ -748,29 +793,25 @@ void main({bool nativeSmoke = false}) {
         expectStableDraft();
 
         final machineControl = find.byKey(
-          const ValueKey('new-harness-field-project'),
+          const ValueKey('new-harness-field-machine'),
         );
         await open(machineControl, keyboard: keyboard);
-        await tester.tap(
-          find.byKey(const ValueKey('new-harness-repo-machine')),
-        );
         await tester.pumpAndSettle();
-        expect(original.field, NewHarnessField.projectMenu);
         expect(
           find.byKey(const ValueKey('new-harness-machine-option-m')),
           findsOneWidget,
         );
+        expect(_chooser, findsNothing);
         await key(tester, LogicalKeyboardKey.escape);
         await tester.pumpAndSettle();
-        expect(_chooser, findsOneWidget);
-        await tester.tapAt(const Offset(10, 400));
-        await tester.pumpAndSettle();
-        expect(_chooser, findsNothing);
+        expect(
+          find.byKey(const ValueKey('new-harness-machine-option-m')),
+          findsNothing,
+        );
         expect(_ownsFocus(tester, machineControl), isTrue);
         expectStableDraft();
       }
 
-      final accepted = original.draft;
       await key(tester, LogicalKeyboardKey.keyP, cmd: true);
       await tester.pumpAndSettle();
       expect(_form, findsNothing);
@@ -779,14 +820,14 @@ void main({bool nativeSmoke = false}) {
       await key(tester, LogicalKeyboardKey.arrowDown);
       await _new(tester);
       final restored = _box(tester).draft;
-      expect(restored.task, task);
-      expect(restored.engine, accepted.engine);
-      expect(restored.machineId, accepted.machineId);
-      expect(restored.project, accepted.project);
-      expect(restored.permissionMode, accepted.permissionMode);
-      expect(restored.profile?.path, accepted.profile?.path);
-      expect(restored.worktree, accepted.worktree);
-      expect(restored.branchRef, accepted.branchRef);
+      expect(restored.task, isEmpty);
+      expect(restored.engine, defaults.engine);
+      expect(restored.machineId, defaults.machineId);
+      expect(restored.project, defaults.project);
+      expect(restored.permissionMode, defaults.permissionMode);
+      expect(restored.profile?.path, defaults.profile?.path);
+      expect(restored.worktree, defaults.worktree);
+      expect(restored.branchRef, defaults.branchRef);
       expect(_ownsFocus(tester, _task), isTrue);
       expect(_chooser, findsNothing);
       expect(_search, findsNothing);
@@ -829,7 +870,7 @@ void main({bool nativeSmoke = false}) {
   for (final (command, field) in [
     ('creation.agent', NewHarnessField.harness),
     ('creation.project', NewHarnessField.projectMenu),
-    ('creation.project_machine', NewHarnessField.projectMenu),
+    ('creation.project_machine', NewHarnessField.launch),
   ]) {
     journey('advertised $command remap opens its chooser from the task', (
       tester,
@@ -843,7 +884,10 @@ void main({bool nativeSmoke = false}) {
       await tester.enterText(_task, 'Direct keyboard access to configuration');
       await key(tester, LogicalKeyboardKey.keyG, ctrl: true, alt: true);
       await tester.pumpAndSettle();
-      expect(_chooser, findsOneWidget);
+      expect(
+        _chooser,
+        command == 'creation.project_machine' ? findsNothing : findsOneWidget,
+      );
       expect(_box(tester).field, field);
       if (command == 'creation.project_machine') {
         expect(
@@ -880,8 +924,8 @@ void main({bool nativeSmoke = false}) {
     await _mount(tester, nativeMenus: true);
     await _new(tester);
     await _nativeCommand(tester, 'creation.project_machine');
-    expect(_chooser, findsOneWidget);
-    expect(_box(tester).field, NewHarnessField.projectMenu);
+    expect(_chooser, findsNothing);
+    expect(_box(tester).field, NewHarnessField.launch);
     expect(
       find.byKey(const ValueKey('new-harness-machine-option-m')),
       findsOneWidget,

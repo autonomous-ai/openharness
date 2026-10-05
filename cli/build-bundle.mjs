@@ -1,6 +1,7 @@
 /**
- * Release build: bundle the whole CLI into ONE self-contained `dist/cli.js` (all deps are pure-JS, so
- * a single artifact runs on every OS under the user's Node) + copy the standalone hook script.
+ * Release build: bundle the whole CLI into ONE self-contained `dist/cli.js`
+ * that runs on every OS under the user's Node, plus the standalone hook script.
+ * The optional macOS image probe is embedded as pinned bytes in that same JS.
  *
  * Version is baked in via esbuild `define(__ADAPTER_VERSION__)`, sourced from `ADAPTER_VERSION`
  * (set by scripts/upload-cli.sh) else package.json — so the running binary's version EXACTLY
@@ -13,8 +14,7 @@ import * as esbuild from 'esbuild'
 import { readFileSync, copyFileSync, rmSync } from 'fs'
 import { readDshRegistry } from './scripts/lib/dshRegistry.mjs'
 import { readBuiltinBundle, readHarnessMonitorBundle, readModelManagerBundle } from './scripts/lib/modelManagerBundle.mjs'
-import { plateWorkerSource } from './scripts/lib/plateWorker.mjs'
-import { memoryWorkerSource } from './scripts/lib/memoryWorker.mjs'
+import { readProcessImageBundle } from './scripts/lib/processImageBundle.mjs'
 import { fileURLToPath } from 'node:url'
 const modelManagerBundle = JSON.stringify(readModelManagerBundle(fileURLToPath(new URL('../store/agents/autonomous-grid', import.meta.url))))
 const devicesBundle = JSON.stringify(readBuiltinBundle(fileURLToPath(new URL('../store/agents/devices', import.meta.url)), ['harness.json', 'AGENTS.md', 'LICENSE', 'template']))
@@ -26,17 +26,20 @@ const version =
 
 // The bundled registry (the store/ folders and store/registry at the repo root) — see src/dsh/registry.ts.
 const dshRegistry = JSON.stringify(readDshRegistry(new URL('../store', import.meta.url)))
-// The plate worker, bundled on its own (src/pair/plateService.ts): harnessd starts it from this string,
-// since the release is this one file.
-const plateWorker = await plateWorkerSource({ minify: true })
-const memoryWorker = await memoryWorkerSource({ minify: true })
+const processImages = readProcessImageBundle({
+  path: process.env.HARNESS_PROCESS_IMAGES_ARTIFACT,
+  required: process.env.HARNESS_REQUIRE_PROCESS_IMAGES === '1',
+})
+
+// `BUNDLE_OUT_DIR`: somewhere other than dist/ (the end-to-end update test builds real releases).
+const outDir = process.env.BUNDLE_OUT_DIR || 'dist'
 
 // Start clean so no stale per-file `dist/*.js` / sourcemaps leak into the release artifact.
-rmSync('dist', { recursive: true, force: true })
+rmSync(outDir, { recursive: true, force: true })
 
 await esbuild.build({
   entryPoints: ['src/cli.ts'],
-  outfile: 'dist/cli.js',
+  outfile: `${outDir}/cli.js`,
   bundle: true,
   platform: 'node',
   format: 'esm',
@@ -48,8 +51,7 @@ await esbuild.build({
     __MODEL_MANAGER_BUNDLE__: JSON.stringify(modelManagerBundle),
     __DEVICES_BUNDLE__: JSON.stringify(devicesBundle),
     __HARNESS_MONITOR_BUNDLE__: JSON.stringify(harnessMonitorBundle),
-    __PLATE_WORKER__: JSON.stringify(plateWorker),
-    __MEMORY_WORKER__: JSON.stringify(memoryWorker),
+    __DARWIN_PROCESS_IMAGES__: processImages ? JSON.stringify(processImages) : 'undefined',
   },
   // The copyright line is MIT's one condition — it has to travel with the copy the user actually
   // receives, and the published bundle IS that copy (upload-cli.sh ships `cli.js` and `notify.mjs`,
@@ -65,6 +67,6 @@ await esbuild.build({
   logLevel: 'info',
 })
 
-copyFileSync('hook/notify.mjs', 'dist/notify.mjs')
+copyFileSync('hook/notify.mjs', `${outDir}/notify.mjs`)
 
-console.log(`✓ Bundled dist/cli.js (v${version}) + dist/notify.mjs`)
+console.log(`✓ Bundled ${outDir}/cli.js (v${version}) + ${outDir}/notify.mjs`)

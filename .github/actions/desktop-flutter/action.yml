@@ -1,0 +1,71 @@
+name: Prepare desktop Flutter
+description: Restore shared toolchain/dependencies; only the cache preparation workflow saves them
+inputs:
+  version:
+    description: Exact Flutter version from release-desktop.yml
+    required: true
+  save-cache:
+    description: Save missing caches (for cache preparation, never the release critical path)
+    default: 'false'
+runs:
+  using: composite
+  steps:
+    # Keep the upstream installation path and exact SDK identity. Desktop's
+    # smaller archive has its own key; the full SDK remains a compatible fallback.
+    - id: paths
+      uses: subosito/flutter-action@v2
+      with:
+        flutter-version: ${{ inputs.version }}
+        channel: stable
+        dry-run: true
+        cache: false
+        pub-cache: false
+    - id: sdk
+      uses: actions/cache/restore@v4
+      with:
+        path: ${{ steps.paths.outputs.CACHE-PATH }}
+        key: ${{ steps.paths.outputs.CACHE-KEY }}-desktop-v1
+        restore-keys: ${{ steps.paths.outputs.CACHE-KEY }}
+    - id: pub
+      uses: actions/cache/restore@v4
+      with:
+        path: ${{ steps.paths.outputs.PUB-CACHE-PATH }}
+        key: ${{ steps.paths.outputs.PUB-CACHE-KEY }}-${{ hashFiles('**/pubspec.lock') }}
+    - uses: subosito/flutter-action@v2
+      with:
+        flutter-version: ${{ inputs.version }}
+        channel: stable
+        cache: false
+        pub-cache: false
+    - name: Prepare the pinned toolchain and dependencies
+      shell: bash
+      working-directory: desktop
+      env:
+        EXPECTED_FLUTTER: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        actual="$(flutter --version --machine | jq -r .frameworkVersion)"
+        test "$actual" = "$EXPECTED_FLUTTER"
+        if [[ "$RUNNER_OS" == macOS ]]; then
+          flutter config --enable-swift-package-manager
+          flutter precache --macos
+        else
+          flutter precache --linux
+        fi
+        flutter pub get
+    - name: Trim mobile artifacts before saving the Desktop SDK cache
+      if: inputs.save-cache == 'true' && steps.sdk.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+      run: python3 "$ACTION_PATH/trim-cache.py" "$FLUTTER_ROOT"
+    - uses: actions/cache/save@v4
+      if: inputs.save-cache == 'true' && steps.sdk.outputs.cache-hit != 'true'
+      with:
+        path: ${{ steps.paths.outputs.CACHE-PATH }}
+        key: ${{ steps.paths.outputs.CACHE-KEY }}-desktop-v1
+    - uses: actions/cache/save@v4
+      if: inputs.save-cache == 'true' && steps.pub.outputs.cache-hit != 'true'
+      with:
+        path: ${{ steps.paths.outputs.PUB-CACHE-PATH }}
+        key: ${{ steps.paths.outputs.PUB-CACHE-KEY }}-${{ hashFiles('**/pubspec.lock') }}

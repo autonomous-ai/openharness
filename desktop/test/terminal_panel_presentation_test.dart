@@ -64,9 +64,13 @@ void main() {
       expect(closed, isEmpty);
       expect(deleted, isEmpty);
       expect(zoomed, isEmpty);
-      await tester.tap(find.byTooltip('New Pane Below'));
-      await tester.tap(find.byTooltip('New Pane to the Right'));
-      expect(splits, [('down', 1), ('right', 1)]);
+      // Split controls live on workspace edges (swarm_split_test.dart), not
+      // in the compact header. Its retained Close callback must still be live.
+      expect(find.byTooltip('New Pane Below'), findsNothing);
+      expect(find.byTooltip('New Pane to the Right'), findsNothing);
+      expect(splits, isEmpty);
+      await tester.tap(find.byTooltip('Close Pane'));
+      expect(closed, [1]);
       expect(find.byTooltip('Pane actions'), findsNothing);
       expect(find.byTooltip('Restart Harness'), findsNothing);
       expect(find.byTooltip('Share harness'), findsNothing);
@@ -178,9 +182,12 @@ void main() {
       );
       revision.value = 2;
       await tester.pump();
-      expect(find.byTooltip('Restore Pane').hitTestable(), findsOneWidget);
-      await tester.tap(find.byTooltip('Restore Pane'));
-      expect(zoomed, [2]);
+      expect(find.byTooltip('Restore Pane'), findsNothing);
+      expect(zoomed, isEmpty);
+      await mouse.moveTo(tester.getCenter(find.text('Renamed terminal')));
+      await tester.pump();
+      await tester.tap(find.byTooltip('Close Pane'));
+      expect(closed, [1, 2]);
       session.status = TerminalSessionStatus.takenOver;
       revision.value = 3;
       await tester.pump();
@@ -373,7 +380,7 @@ void main() {
         expect(find.byTooltip('Close Pane').hitTestable(), findsOneWidget);
         await mouse.removePointer();
         expect(find.byTooltip('Stop Harness'), findsNothing);
-        expect(find.byTooltip('Zoom Pane').hitTestable(), findsOneWidget);
+        expect(find.byTooltip('Zoom Pane'), findsNothing);
         expect(tester.getRect(title), titleBefore);
         for (final status in [
           TerminalSessionStatus.opening,

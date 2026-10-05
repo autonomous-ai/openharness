@@ -14,7 +14,7 @@
  */
 
 import { createHash } from 'crypto'
-import { copyFileSync, existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from 'fs'
+import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'fs'
 import { spawnSync } from 'child_process'
 import { join } from 'path'
 import { SpawnLockBusyError, describeSpawnLockFailure } from './daemonSpawnLock.js'
@@ -35,6 +35,33 @@ const CLI = 'cli.js'
 const NOTIFY = 'notify.mjs'
 const PACKAGE = 'package.json'
 const RUNTIME_PACKAGE = `${JSON.stringify({ type: 'module' })}\n`
+/** The version a staged update put in place, until it is kept (`confirm`) or rolled back (`restore`). */
+const PENDING = 'update-pending.json'
+/** Versions this machine rolled back. The background updater never stages them again; a newer build,
+ *  or `harness update` on purpose, moves past them. */
+const REJECTED = 'update-rejected.json'
+const REJECTED_KEPT = 10
+
+function readJson(file: string): unknown {
+  try { return JSON.parse(readFileSync(file, 'utf8')) } catch { return null }
+}
+
+function writeJson(file: string, value: unknown): void {
+  const tmp = `${file}.tmp`
+  writeFileSync(tmp, `${JSON.stringify(value)}\n`)
+  renameSync(tmp, file)
+}
+
+function pendingVersion(dir: string): string | null {
+  const pending = readJson(join(dir, PENDING)) as { version?: unknown } | null
+  return typeof pending?.version === 'string' ? pending.version : null
+}
+
+/** The versions this machine rolled back, oldest first. */
+export function rejectedVersions(dir: string): string[] {
+  const rejected = readJson(join(dir, REJECTED))
+  return Array.isArray(rejected) ? rejected.filter((version): version is string => typeof version === 'string') : []
+}
 
 /** Strict semver-greater on the `X.Y.Z` core (ignores pre-release/build). Unparseable → false, so a
  *  malformed manifest or the `0.0.0-dev` dev sentinel never triggers a downgrade/oscillation.
@@ -121,9 +148,10 @@ export function canary(cliBuf: Buffer, dir: string): boolean {
   }
 }
 
-/** Atomically swap the new bytes into `dir`, backing up the current files to `.prev` for rollback.
+/** Atomically swap the new bytes into `dir`, backing up the current files to `.prev` for rollback, and
+ *  note `version` as pending until it is kept or rolled back.
  *  (Verify-in-memory first ⇒ we only ever write bytes we already trust; write-tmp+rename ⇒ no torn file.) */
-export function stage(dir: string, cliBuf: Buffer, notifyBuf: Buffer): void {
+export function stage(dir: string, cliBuf: Buffer, notifyBuf: Buffer, version?: string): void {
   mkdirSync(dir, { recursive: true })
   writeFileSync(join(dir, PACKAGE), RUNTIME_PACKAGE)
   const swap = (name: string, buf: Buffer): void => {
@@ -135,21 +163,37 @@ export function stage(dir: string, cliBuf: Buffer, notifyBuf: Buffer): void {
   }
   swap(CLI, cliBuf)
   swap(NOTIFY, notifyBuf)
+  if (version) writeJson(join(dir, PENDING), { version, at: Date.now() })
 }
 
-/** Roll a failed update back to the `.prev` bytes (called by the supervisor when the new build crashes). */
+/**
+ * Roll a failed update back to the `.prev` bytes (called by the supervisor when the new build crashes),
+ * and remember the version that failed. Without that, the restored daemon's updater found the same
+ * build in the manifest a minute later and staged it again: a release that passed its canary but
+ * crashed the daemon restarted every machine once a minute until a fix was published.
+ */
 export function restore(dir: string): void {
   for (const name of [CLI, NOTIFY]) {
     const prev = join(dir, `${name}.prev`)
     if (existsSync(prev)) { try { renameSync(prev, join(dir, name)) } catch { /* ignore */ } }
   }
+  const failed = pendingVersion(dir)
+  try {
+    if (failed) writeJson(join(dir, REJECTED), [...rejectedVersions(dir).filter((version) => version !== failed), failed].slice(-REJECTED_KEPT))
+    rmSync(join(dir, PENDING), { force: true })
+  } catch { /* the rollback itself is what matters */ }
 }
 
-/** Drop the `.prev` backups once the new build is confirmed healthy. */
+/** Drop the `.prev` backups once the new build is confirmed healthy; a version kept is not rejected. */
 export function confirm(dir: string): void {
   for (const name of [CLI, NOTIFY]) {
     try { rmSync(join(dir, `${name}.prev`), { force: true }) } catch { /* ignore */ }
   }
+  const kept = pendingVersion(dir)
+  try {
+    if (kept && rejectedVersions(dir).includes(kept)) writeJson(join(dir, REJECTED), rejectedVersions(dir).filter((version) => version !== kept))
+    rmSync(join(dir, PENDING), { force: true })
+  } catch { /* the new build runs either way */ }
 }
 
 export interface Poller { stop(): void }
@@ -206,18 +250,19 @@ export function startSelfUpdater(opts: {
   // the lock was busy (a `harness start` or `harness update` mid-flight) the next tick should try the
   // swap again, not the whole download.
   let verified: { version: string; cliBuf: Buffer; notifyBuf: Buffer } | null = null
+  // Said once per version: the check repeats every interval.
+  let toldRejected: string | null = null
 
   const now = opts.now ?? Date.now
   const stop = (): void => { if (timer) { clearTimeout(timer); timer = null } }
   const schedule = (): void => {
-    if (done) return
     stop()
     timer = setTimeout(() => void tick(), msUntilSlot(now(), opts.slotSecond, opts.intervalMs))
     timer.unref?.()
   }
 
+  // No `done` check here or in `schedule`: `done` is set only next to `stop()`, so no tick fires after it.
   const tick = async (): Promise<void> => {
-    if (done) return
     // Booked before the work, from the clock: the next tick is on the next slot whatever this one
     // costs; a tick that stages calls `stop()` below and cancels it. Booked even when this slot is
     // skipped because the previous check is still running (a download on a slow link can outlast a
@@ -228,6 +273,11 @@ export function startSelfUpdater(opts: {
     try {
       const entry = await fetchManifest(opts.url, opts.key)
       if (!entry || !shouldAutoUpdate(entry.version, opts.currentVersion)) return
+      if (rejectedVersions(opts.dir).includes(entry.version)) {
+        if (toldRejected !== entry.version) console.log(`[update] ${entry.version} was rolled back on this machine — waiting for a newer build (\`harness update\` installs it anyway)`)
+        toldRejected = entry.version
+        return
+      }
       if (verified?.version !== entry.version) {
         console.log(`[update] newer build available: ${opts.currentVersion} → ${entry.version}`)
         const cliBuf = await downloadVerified(entry.cli)
@@ -239,20 +289,19 @@ export function startSelfUpdater(opts: {
       // Downloaded and verified OUTSIDE the lock (that can take a while on a slow link and touches
       // nothing shared); swapped and handed off INSIDE it.
       await withLock(async () => {
-        stage(opts.dir, ready.cliBuf, ready.notifyBuf)
+        stage(opts.dir, ready.cliBuf, ready.notifyBuf, ready.version)
         done = true
         stop()
         console.log(`[update] staged ${ready.version} — restarting now`)
         await opts.onStaged(ready.version)
+      }).catch((err: unknown) => {
+        // A busy lock is not a failed check: the bytes are good and waiting, and the next tick tries
+        // the swap again. Say so, or a minute of "check failed" reads as the updater being broken.
+        if (!(err instanceof SpawnLockBusyError)) throw err
+        console.log(`[update] ${ready.version} is ready but the daemon spawn lock is ${describeSpawnLockFailure(err)} — trying again next check`)
       })
     } catch (err) {
-      // A busy lock is not a failed check: the bytes are good and waiting, and the next tick tries
-      // the swap again. Say so, or a minute of "check failed" reads as the updater being broken.
-      if (err instanceof SpawnLockBusyError) {
-        console.log(`[update] ${verified?.version ?? 'a new build'} is ready but the daemon spawn lock is ${describeSpawnLockFailure(err)} — trying again next check`)
-      } else {
-        console.error('[update] check failed (will retry):', err instanceof Error ? err.message : err)
-      }
+      console.error('[update] check failed (will retry):', err instanceof Error ? err.message : err)
     } finally {
       checking = false
     }

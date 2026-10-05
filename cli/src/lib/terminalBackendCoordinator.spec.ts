@@ -133,6 +133,40 @@ describe('TerminalBackendCoordinator', () => {
     expect(coordinator.leaseIsCurrent(acquired.value, current)).toBe(true)
   })
 
+  it.each(['terminal', 'claude'] as const)('captures a retained %s pane without enabling dormant engine controls', async engine => {
+    const tmuxBackend = backend('tmux:default', vi.fn())
+    tmuxBackend.capture = vi.fn(async () => ({ state: 'succeeded' as const, value: 'saved screen' }))
+    const coordinator = new TerminalBackendCoordinator([tmuxBackend], ['tmux'])
+    const current = { ...session(), engine, active: false }
+    await expect(coordinator.capture(current)).resolves.toMatchObject({ state: 'failed' })
+    await expect(coordinator.acquireLease(current)).resolves.toMatchObject({ state: 'failed' })
+    await expect(coordinator.validate(current)).resolves.toMatchObject({ state: 'gone' })
+    expect(tmuxBackend.capture).not.toHaveBeenCalled()
+    await expect(coordinator.captureRetained(current, { historyLines: 2000 })).resolves.toEqual({
+      state: 'succeeded', value: 'saved screen',
+    })
+    expect(tmuxBackend.capture).toHaveBeenCalledExactlyOnceWith(tmux, { historyLines: 2000 })
+    expect(tmuxBackend.validate).not.toHaveBeenCalled()
+    expect(current.active).toBe(false)
+  })
+
+  it('captures only retained routes and reports unavailable panes instead of inventing a snapshot', async () => {
+    const tmuxBackend = backend('tmux:default', vi.fn())
+    const captures = vi.fn(async (runtime: TerminalRuntimeRef) => runtime.paneId === tmux.paneId
+      ? { state: 'failed' as const, reason: 'pane unavailable' }
+      : { state: 'succeeded' as const, value: '' })
+    tmuxBackend.capture = captures
+    const coordinator = new TerminalBackendCoordinator([tmuxBackend], ['tmux'])
+    const current = { ...session(), active: false }
+    await expect(coordinator.captureRetained(current)).resolves.toEqual({ state: 'succeeded', value: '' })
+    expect(captures.mock.calls.map(([runtime]) => runtime)).toEqual([tmux, second])
+    current.runtimes = [tmux]
+    await expect(coordinator.captureRetained(current)).resolves.toEqual({ state: 'failed', reason: 'pane unavailable' })
+    coordinator.replaceBackends([])
+    await expect(coordinator.captureRetained(current)).resolves.toMatchObject({ state: 'failed' })
+    expect(captures).toHaveBeenCalledTimes(3)
+  })
+
   it('uses lease-aware pre-dispatch fallback but never retries ambiguous completion', async () => {
     const tmuxBackend = backend('tmux:default', submitBy({ state: 'failed', dispatch: 'rejected', reason: 'rejected' }))
     const coordinator = new TerminalBackendCoordinator([tmuxBackend], ['tmux'])

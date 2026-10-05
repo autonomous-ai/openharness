@@ -1,0 +1,31 @@
+#!/bin/sh
+if [ "${1:-}" = hardware ]; then
+    shift
+    exec /usr/bin/python3 /usr/lib/harness-os/hardware.py report "$@"
+fi
+if [ "${1:-}" = install ]; then
+    shift
+    if [ "$#" = 0 ] && [ "$(id -u)" != 0 ]; then
+        exec /usr/lib/harness-os/open-install
+    fi
+    exec /usr/bin/python3 /usr/lib/harness-os/install.py "$@"
+fi
+if [ "${1:-}" = upgrade ]; then
+    shift
+    if [ "$#" = 0 ]; then
+        exec /usr/bin/python3 /usr/lib/harness-os/release_update.py apply
+    fi
+    exec /usr/bin/python3 /usr/lib/harness-os/runtime_update.py apply "$@"
+fi
+if [ "${1:-}" = rollback ]; then
+    shift
+    exec /usr/bin/python3 /usr/lib/harness-os/runtime_update.py rollback "$@"
+fi
+if [ "${1:-}" = updates ]; then
+    shift
+    exec /usr/bin/python3 /usr/lib/harness-os/live_update.py "$@"
+fi
+. /usr/lib/harness-os/runtime-path
+# The OS owns activation so an update cannot race its systemd supervisor.
+export ADAPTER_UPDATE_DISABLE=true
+exec /usr/bin/node "$harness_runtime/cli.mjs" "$@"

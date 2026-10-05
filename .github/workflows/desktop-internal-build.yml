@@ -16,11 +16,10 @@ name: Desktop internal build
 # summary says how); the upload step drops the release's year-long cache headers so a deletion sticks.
 #
 # Built by the release's own code, so it IS what a release would ship, flags aside:
-# scripts/publish-macos-variant.sh --build-only builds and pins each renderer (Intel on Skia, Apple
-# Silicon on Impeller — RELEASE.md, "Two macOS builds"), then scripts/upload-desktop.sh --no-build
-# signs, notarizes, staples, runs Gatekeeper's check and uploads, moved onto the internal path by the
-# env overrides it already has. A build made by hand, Info.plist edited and re-signed by hand, is how
-# a tester got "The application "Harness" can't be opened"; this replaces that rather than copying it.
+# scripts/build-macos-variants.py compiles once and pins each renderer (Intel on Skia, Apple Silicon
+# on Impeller). The same release uploader signs, notarizes, staples, checks Gatekeeper and uploads
+# to separate internal paths. Both variants' downloads are verified before links are handed out.
+# test_build=true exercises this complete path, then deletes only the run's disposable objects.
 #
 # Self-update is pinned OFF: DESKTOP_UPDATE_METADATA_URL names a manifest nothing ever writes, so the
 # updater finds nothing, forever. A tester stays on the build they were asked to test instead of being
@@ -37,6 +36,10 @@ on:
     inputs:
       debug_surface:
         description: 'Show Settings > Debug and Tracking (HARNESS_DEBUG_SURFACE)'
+        type: boolean
+        default: false
+      test_build:
+        description: 'Verify the complete internal build, then delete only this run’s disposable artifacts'
         type: boolean
         default: false
 
@@ -75,6 +78,10 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0   # release-desktop.sh reads every tag and checks HEAD is on the branch
+          sparse-checkout: |
+            /desktop/scripts/release-desktop.sh
+            /.github/workflows/release-desktop.yml
+          sparse-checkout-cone-mode: false
 
       - id: plan
         # Through env, never `${{ }}` inline in run: — a ref name may carry quotes and $().
@@ -112,36 +119,29 @@ jobs:
     needs: prepare
     runs-on: macos-15
     timeout-minutes: 60   # two notarization submissions per build (zip, then dmg)
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { variant: intel, artifact: Harness-macos, ota_key: desktop-macos, label: 'Intel, on Skia (runs on any Mac)' }
-          - { variant: apple-silicon, artifact: Harness-macos-arm64, ota_key: desktop-macos-arm64, label: 'Apple Silicon, on Impeller' }
     env:
       VERSION: ${{ needs.prepare.outputs.version }}
       PREFIX: ${{ needs.prepare.outputs.prefix }}
-      VARIANT: ${{ matrix.variant }}
       DEBUG_SURFACE: ${{ needs.prepare.outputs.debug_surface }}
-      # The file a tester downloads names the build it is: version AND commit.
-      ARTIFACT: ${{ matrix.artifact }}-${{ needs.prepare.outputs.version }}-${{ needs.prepare.outputs.short_sha }}
+      SHORT_SHA: ${{ needs.prepare.outputs.short_sha }}
     defaults:
       run:
         working-directory: desktop
     steps:
       - uses: actions/checkout@v7
-
-      - uses: subosito/flutter-action@v2
         with:
-          flutter-version: ${{ needs.prepare.outputs.flutter_version }}
-          channel: stable
-          cache: true
+          # Match the release's complete Desktop source and packaging inputs.
+          sparse-checkout: |
+            /desktop/
+            /.github/actions/
+            /scripts/validate-change.py
+            /scripts/verify-desktop-release.py
+            /mobile/pubspec.lock
+          sparse-checkout-cone-mode: false
 
-      # SPM must be on BEFORE pub get — see release-desktop.yml and desktop/CLAUDE.md.
-      - name: Enable Swift Package Manager
-        run: flutter config --enable-swift-package-manager
-
-      - run: flutter pub get
+      - uses: ./.github/actions/desktop-flutter
+        with:
+          version: ${{ needs.prepare.outputs.flutter_version }}
 
       - uses: ./.github/actions/macos-signing
         with:
@@ -166,63 +166,77 @@ jobs:
           workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
       - uses: google-github-actions/setup-gcloud@e427ad8a34f8676edf47cf7d7925499adf3eb74f # v2
+        with:
+          # Avoid copying the SDK into a local cache this hosted job discards.
+          skip_tool_cache: ${{ runner.environment == 'github-hosted' }}
 
-      - name: Build ${{ matrix.variant }} and pin its renderer
+      - name: Build once, publish both renderers and verify all four downloads
+        id: build
         env:
           KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
           SIGN_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
         run: |
           set -euo pipefail
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          bash scripts/publish-macos-variant.sh "$VARIANT" "$VERSION" --build-only \
+          export CDN_ASSET_BASE_URL="https://storage.googleapis.com/${GCS_BUCKET}"
+          python3 scripts/build-macos-variants.py "$VERSION" \
+            --metadata-prefix "$PREFIX" --artifact-prefix "$PREFIX" \
+            --artifact-suffix="-$VERSION-$SHORT_SHA" --verify-downloads \
             --dart-define=HARNESS_DEBUG_SURFACE="$DEBUG_SURFACE" \
             --dart-define=DESKTOP_UPDATE_METADATA_URL="https://storage.googleapis.com/${GCS_BUCKET}/harness/desktop-internal/no-updates.json"
 
-      - name: Sign, notarize and upload ${{ matrix.variant }} to its unlisted path
-        env:
-          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
-          SIGN_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          OTA_KEY: ${{ matrix.ota_key }}
-          DMG_KEY: ${{ matrix.ota_key }}-dmg
+      - name: Make the internal artifacts removable
         run: |
           set -euo pipefail
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          # upload-desktop.sh's own overrides, every path moved off the release's. The manifest it
-          # always writes lands under the prefix too: read by nothing, it records what was published.
-          export GCS_PATH="$PREFIX/$ARTIFACT.zip"
-          export DMG_GCS_PATH="$PREFIX/$ARTIFACT.dmg"
-          export METADATA_PATH="$PREFIX/manifest-$VARIANT.json"
-          bash scripts/upload-desktop.sh --no-build "$VERSION"
           # upload-desktop.sh uploads with a year-long immutable cache: right for a release path
           # nobody ever changes, wrong for a build that may have to be taken back.
           # `gcloud storage`, not gsutil: gsutil cannot use the external-account credential
           # federation issues, and parallelises by default so `-m` has no equivalent.
           gcloud storage objects update \
-            "gs://${GCS_BUCKET}/${GCS_PATH}" "gs://${GCS_BUCKET}/${DMG_GCS_PATH}" \
+            "gs://${GCS_BUCKET}/${PREFIX}/*.zip" "gs://${GCS_BUCKET}/${PREFIX}/*.dmg" \
             --cache-control="private, max-age=0, no-store"
 
-      - name: Hand out the link
-        env:
-          LABEL: ${{ matrix.label }}
+      - name: Hand out the links
+        if: ${{ !inputs.test_build }}
         run: |
           set -euo pipefail
-          url="https://storage.googleapis.com/${GCS_BUCKET}/${PREFIX}/${ARTIFACT}.dmg"
-          sha="$(shasum -a 256 "build/Harness-macos-${VERSION}.dmg" | awk '{print $1}')"
-          # A notice as well as the summary: it sits at the top of the run page, where it is found.
-          echo "::notice title=macOS ${VARIANT}::${url}"
-          {
-            echo "### macOS — ${LABEL}"
-            echo
-            echo "**[${ARTIFACT}.dmg](${url})**"
-            echo
-            echo "${VERSION} · \`${GITHUB_SHA::7}\` on \`${GITHUB_REF_NAME}\` · Debug ${DEBUG_SURFACE} · self-update off"
-            echo
-            echo "dmg sha256 \`${sha}\`"
-            echo
-            echo "Unlisted, not private: this repository is public, so anyone who opens this page can"
-            echo "download the build. Take it back with \`gcloud storage rm -r gs://${GCS_BUCKET}/${PREFIX}\`"
-            echo "(both builds of this run)."
-          } >> "$GITHUB_STEP_SUMMARY"
+          for variant in intel apple-silicon; do
+            artifact=Harness-macos
+            [[ "$variant" != apple-silicon ]] || artifact=Harness-macos-arm64
+            artifact="$artifact-$VERSION-$SHORT_SHA"
+            url="https://storage.googleapis.com/${GCS_BUCKET}/${PREFIX}/${artifact}.dmg"
+            sha="$(shasum -a 256 "build/macos-variants/$variant/Harness-macos-${VERSION}.dmg" | awk '{print $1}')"
+            echo "::notice title=macOS ${variant}::${url}"
+            {
+              echo "### macOS — ${variant} (universal)"
+              echo "**[${artifact}.dmg](${url})**"
+              echo "${VERSION} · \`${SHORT_SHA}\` on \`${GITHUB_REF_NAME}\` · Debug ${DEBUG_SURFACE} · self-update off"
+              echo "dmg sha256 \`${sha}\`"
+              echo "Unlisted, not private. Remove both builds with \`gcloud storage rm -r gs://${GCS_BUCKET}/${PREFIX}\`."
+            } >> "$GITHUB_STEP_SUMMARY"
+          done
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: macos-build-timings
+          path: desktop/build/macos-variants/timing.json
+          if-no-files-found: ignore
+
+      - name: Remove this test build's disposable objects
+        if: ${{ always() && inputs.test_build }}
+        env:
+          BUILD_OUTCOME: ${{ steps.build.outcome }}
+        run: |
+          set -euo pipefail
+          [[ "$PREFIX" =~ ^harness/desktop-internal/[0-9a-f]{32}$ ]]
+          if [[ "$BUILD_OUTCOME" = success ]]; then
+            gcloud storage rm --recursive "gs://${GCS_BUCKET}/${PREFIX}/"
+          else
+            # An earlier failure may have produced no objects; this is still
+            # restricted to the new random prefix owned by this run.
+            gcloud storage rm --recursive "gs://${GCS_BUCKET}/${PREFIX}/" || true
+          fi
 
       - name: Remove the signing keychain
         if: always()

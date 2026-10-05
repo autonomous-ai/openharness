@@ -19,8 +19,13 @@ Harnesses 118   Machines 3   Models 4   [Claude icon] 68%   [Codex icon] 18%
 ```
 
 The context follows the focused pane. The branch stays clickable in the
-footer; pane headers do not repeat it. An empty New Tab keeps the footer when
-there are live sessions to inspect.
+footer; pane headers do not repeat it. An empty New Tab and the first welcome
+screen keep the footer visible, including zero counts, so Machines and Models
+are discoverable. Leave the right-side context blank on Welcome and New Tab;
+show machine/project/branch context only when a harness is open. A fresh computer
+with no sessions or installed models shows `Harnesses 0`, `Machines 1`, and
+`Models 0` after local setup and inventory finish; unread model inventory shows
+`—`.
 
 The left side shows the number of open harnesses across connected owned machines, including
 idle and starting sessions. Count each live session even when no tab currently displays it. The

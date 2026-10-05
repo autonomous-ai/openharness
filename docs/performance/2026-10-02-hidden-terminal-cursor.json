@@ -1,0 +1,434 @@
+{
+  "schema": 1,
+  "date": "2026-10-02",
+  "scope": "Stop local terminal cursor timer while remote DECTCEM visibility is hidden",
+  "source": {
+    "baseline": "56d71adf501b6d85c19334abf20a909a8baa3979",
+    "validated_commit": "14b2e497a7c58c5c4fcd6d08fb7bc57ad1d651db",
+    "validated_tree": "5e4d84a8dabb7ae17fe0adf1b874fac8b046a5e7",
+    "files_sha256": {
+      "desktop/lib/terminal/terminal_session.dart": "ed640c1bdc875338718447bc4baf2ad051196d469b9c53a7adfe15a6dc8e8199",
+      "desktop/lib/widgets/terminal_panel.dart": "94d5f580a997175b8765730cc887ef6a7e12dc9e0e623af01a0a20abc28a3777",
+      "desktop/test/terminal_cursor_idle_test.dart": "4b87d69322b611ed1a0cb80bb59a2966bec08078b5bd2e4c8495905c4e1020c8",
+      "desktop/test/terminal_session_test.dart": "ee5b9e2a363692f828205b7d0e87fc6891084dcd25913fc817bdaa495e272132",
+      "desktop/integration_test/terminal_cursor_native_test.dart": "3a47bca513aa4fea2422c926f15561c27587314808bba91fce3d06fdf6c9795d",
+      "desktop/integration_test/native_terminal_e2e_test.dart": "00a1a273eb81e3c4f2d8c951f8062ec1064c5c99b45f701754363fbea16502ba",
+      "desktop/test/support/periodic_timer_probe.dart": "854fd76377403a18f60c4960baafecf8cda4c02a405d418ade9e1215aa4625ed",
+      "desktop/test/swarm_screen_test.dart": "503eb6f5a3b24dde0779d626ccd85a07002f16538c7478765d150e4ea761b348",
+      "desktop/test/swarm_state_test.dart": "80ff899fb511f710f38a98d7af5a25c07c274afe83f54a180adbb297e64fc7dd",
+      "desktop/pubspec.lock": "0987d3b363535b314a292bab02ff8ec5bc51691398f8ede9406b9885925c00b7"
+    }
+  },
+  "environment": {
+    "flutter": "3.47.2",
+    "dart": "3.13.2",
+    "platform": "macOS arm64",
+    "native_renderer": "Impeller",
+    "native_traffic": "In-memory TerminalSession, FLUTTER_TEST=1"
+  },
+  "measurement": {
+    "clock": "headless widget fake clock",
+    "simulated_seconds": 5,
+    "interval_ms": 500,
+    "before": {
+      "active_blink_timers": 1,
+      "callbacks": 10
+    },
+    "after": {
+      "active_blink_timers": 0,
+      "callbacks": 0
+    },
+    "baseline_log_sha256": "0ec77574672faeba00bd469f51b362c0cedee2fca8e84f6be1db0cc3724a5d10",
+    "baseline_log_result": "Intentional failing regression: HIDDEN_CURSOR_IDLE timers=1 callbacks=10/5s",
+    "whole_app_energy_improvement": null
+  },
+  "validation_summary": {
+    "headless_tests_passed": 137,
+    "changed_dart_analysis": "passed",
+    "native_distinct_cases_with_passing_evidence": 11,
+    "native_initial": {
+      "passed": 8,
+      "failed": 3,
+      "failure": "Resumed timer creation occurs outside probe zone on native engine callbacks"
+    },
+    "native_retry": {
+      "eligibility_cases_passed": 5,
+      "change": "Assert observable cursor phase after resume instead of zone-scoped timer count"
+    },
+    "normal_review_build_restored": true,
+    "physical_keyboard_ime_tested": false,
+    "linux_native_tested": false,
+    "browser_rendering_tested": false
+  },
+  "evidence_reuse": {
+    "rebase_from": "85816751c",
+    "rebase_to": "14b2e497a7c58c5c4fcd6d08fb7bc57ad1d651db",
+    "native_inputs_unchanged": [
+      "desktop/lib/terminal",
+      "desktop/lib/widgets/terminal_panel.dart",
+      "desktop/integration_test/native_terminal_e2e_test.dart",
+      "desktop/integration_test/terminal_cursor_native_test.dart",
+      "desktop/test/terminal_cursor_idle_test.dart",
+      "desktop/test/swarm_screen_test.dart",
+      "desktop/test/swarm_state_test.dart",
+      "desktop/pubspec.lock",
+      "desktop/macos/Runner"
+    ],
+    "upstream_changes": "Added headless test binding configuration; affected headless suite and analysis rerun. Native entry point and inputs unchanged; settings helper comments only."
+  },
+  "receipts": [
+    {
+      "role": "headless_before_rebase",
+      "local_receipt": ".harness/validation/20261002T155504.725139Z-65833/receipt.json",
+      "receipt_sha256": "ea5202f929dd356519970ec3fb0dfe7044f1e3751962ce6fbf7ff0d5baa6971f",
+      "result": {
+        "schema": 2,
+        "started_at": "2026-10-02T15:55:04.725444+00:00",
+        "reason": "Stop local cursor clocks for remotely hidden cursors without altering terminal content, focus or protocol.",
+        "source": {
+          "commit": "56d71adf501b6d85c19334abf20a909a8baa3979",
+          "tree": "ab18d942d2127f4de1b200ca0d07ad7a8d4db11e",
+          "working_changes_sha256": "4a3e4cc1f669a793bb2b1edab59a985af3dabb2514a3050c1b3bf9aaeb98dcf2",
+          "dirty": true
+        },
+        "checks": [
+          {
+            "name": "cursor-analysis",
+            "cwd": "desktop",
+            "argv": [
+              "<FLUTTER_SDK>/bin/cache/dart-sdk/bin/dart",
+              "analyze",
+              "lib/terminal/terminal_session.dart",
+              "lib/widgets/terminal_panel.dart",
+              "test/terminal_cursor_idle_test.dart",
+              "test/terminal_session_test.dart",
+              "integration_test/terminal_cursor_native_test.dart"
+            ],
+            "timeout_seconds": 120,
+            "started_at": "2026-10-02T15:55:04.966140+00:00",
+            "status": "passed",
+            "log": ".harness/validation/20261002T155504.725139Z-65833/cursor-analysis.log",
+            "exit_code": 0,
+            "duration_seconds": 2.339,
+            "finished_at": "2026-10-02T15:55:07.326450+00:00",
+            "log_sha256": "ab77e677f7b06503b76ec5c5a31152306631e2eef9f5b6707a95a9585d3efe9a"
+          },
+          {
+            "name": "cursor-regressions",
+            "cwd": "desktop",
+            "argv": [
+              "<FLUTTER_SDK>/bin/flutter",
+              "test",
+              "--no-pub",
+              "--concurrency=2",
+              "--timeout=60s",
+              "test/terminal_cursor_idle_test.dart",
+              "test/terminal_session_test.dart",
+              "test/terminal_render_suspension_test.dart",
+              "test/terminal_initial_output_test.dart",
+              "test/terminal_panel_focus_test.dart",
+              "test/terminal_view_interaction_test.dart",
+              "test/pane_focus_test.dart",
+              "test/terminal_find_test.dart"
+            ],
+            "timeout_seconds": 240,
+            "started_at": "2026-10-02T15:55:04.964319+00:00",
+            "status": "passed",
+            "log": ".harness/validation/20261002T155504.725139Z-65833/cursor-regressions.log",
+            "exit_code": 0,
+            "duration_seconds": 13.867,
+            "finished_at": "2026-10-02T15:55:18.851773+00:00",
+            "log_sha256": "d36dfe738ace46fd08293e04f670cd67ecbd47a22c1494dbfd4a4be7808f8e2e"
+          }
+        ],
+        "free_gib_before": 10.865,
+        "source_after": {
+          "commit": "56d71adf501b6d85c19334abf20a909a8baa3979",
+          "tree": "ab18d942d2127f4de1b200ca0d07ad7a8d4db11e",
+          "working_changes_sha256": "4a3e4cc1f669a793bb2b1edab59a985af3dabb2514a3050c1b3bf9aaeb98dcf2",
+          "dirty": true
+        },
+        "status": "passed",
+        "finished_at": "2026-10-02T15:55:19.069593+00:00",
+        "duration_seconds": 14.105
+      }
+    },
+    {
+      "role": "native_initial",
+      "local_receipt": ".harness/validation/20261002T155609.502505Z-81502/receipt.json",
+      "receipt_sha256": "86e43b38588e9565e01af94ca595525837a955d55d209b4d5c9be8d9d5976828",
+      "result": {
+        "schema": 2,
+        "started_at": "2026-10-02T15:56:09.502831+00:00",
+        "reason": "Native macOS cursor visibility/pixel/lifecycle checks and existing terminal/input/keyframe journeys; isolated fake sessions only.",
+        "source": {
+          "commit": "56d71adf501b6d85c19334abf20a909a8baa3979",
+          "tree": "ab18d942d2127f4de1b200ca0d07ad7a8d4db11e",
+          "working_changes_sha256": "4a3e4cc1f669a793bb2b1edab59a985af3dabb2514a3050c1b3bf9aaeb98dcf2",
+          "dirty": true
+        },
+        "checks": [
+          {
+            "name": "cursor-native",
+            "cwd": "desktop",
+            "argv": [
+              "env",
+              "FLUTTER_TEST=1",
+              "<FLUTTER_SDK>/bin/flutter",
+              "test",
+              "-d",
+              "macos",
+              "--no-pub",
+              "--timeout=90s",
+              "integration_test/terminal_cursor_native_test.dart"
+            ],
+            "timeout_seconds": 300,
+            "started_at": "2026-10-02T15:56:09.733415+00:00",
+            "status": "failed",
+            "log": ".harness/validation/20261002T155609.502505Z-81502/cursor-native.log",
+            "exit_code": 1,
+            "duration_seconds": 56.376,
+            "finished_at": "2026-10-02T15:57:06.160001+00:00",
+            "log_sha256": "83760f5ca1a872404b9444edcdb187ddf8f05885e279af48430c5bfe114476ab"
+          }
+        ],
+        "free_gib_before": 10.999,
+        "source_after": {
+          "commit": "56d71adf501b6d85c19334abf20a909a8baa3979",
+          "tree": "ab18d942d2127f4de1b200ca0d07ad7a8d4db11e",
+          "working_changes_sha256": "4a3e4cc1f669a793bb2b1edab59a985af3dabb2514a3050c1b3bf9aaeb98dcf2",
+          "dirty": true
+        },
+        "status": "failed",
+        "finished_at": "2026-10-02T15:57:06.720932+00:00",
+        "duration_seconds": 56.987
+      }
+    },
+    {
+      "role": "native_eligibility_retry",
+      "local_receipt": ".harness/validation/20261002T155843.730694Z-13909/receipt.json",
+      "receipt_sha256": "fd6c743f741f960d527d43aa7dde97064b1656f6bb1e4e500975415e34e6ab18",
+      "result": {
+        "schema": 2,
+        "started_at": "2026-10-02T15:58:43.731062+00:00",
+        "reason": "Recheck native visibility eligibility using observable cursor phases; the timer probe cannot count clocks created in the native engine callback zone.",
+        "source": {
+          "commit": "56d71adf501b6d85c19334abf20a909a8baa3979",
+          "tree": "ab18d942d2127f4de1b200ca0d07ad7a8d4db11e",
+          "working_changes_sha256": "56c530c2a28c05fecffb6e6c943d490b8af626493527236e2ed78938681c1153",
+          "dirty": true
+        },
+        "checks": [
+          {
+            "name": "cursor-native-eligibility",
+            "cwd": "desktop",
+            "argv": [
+              "env",
+              "FLUTTER_TEST=1",
+              "<FLUTTER_SDK>/bin/flutter",
+              "test",
+              "-d",
+              "macos",
+              "--no-pub",
+              "--timeout=90s",
+              "integration_test/terminal_cursor_native_test.dart",
+              "--plain-name",
+              "remote show respects"
+            ],
+            "timeout_seconds": 300,
+            "started_at": "2026-10-02T15:58:43.951022+00:00",
+            "status": "passed",
+            "log": ".harness/validation/20261002T155843.730694Z-13909/cursor-native-eligibility.log",
+            "exit_code": 0,
+            "duration_seconds": 46.646,
+            "finished_at": "2026-10-02T15:59:30.620327+00:00",
+            "log_sha256": "9cea7379ca12a0314b94b3f893859a09ee9a87da098689279eac6fd86f37f9e9"
+          }
+        ],
+        "free_gib_before": 10.96,
+        "source_after": {
+          "commit": "56d71adf501b6d85c19334abf20a909a8baa3979",
+          "tree": "ab18d942d2127f4de1b200ca0d07ad7a8d4db11e",
+          "working_changes_sha256": "56c530c2a28c05fecffb6e6c943d490b8af626493527236e2ed78938681c1153",
+          "dirty": true
+        },
+        "status": "passed",
+        "finished_at": "2026-10-02T15:59:30.848522+00:00",
+        "duration_seconds": 46.897
+      }
+    },
+    {
+      "role": "final_fixture_and_normal_build",
+      "local_receipt": ".harness/validation/20261002T160048.907155Z-33416/receipt.json",
+      "receipt_sha256": "8d55aa5d5aaead75442215f9b235f0b33728e833ee013c3a576f85f3f7927bed",
+      "result": {
+        "schema": 2,
+        "started_at": "2026-10-02T16:00:48.907461+00:00",
+        "reason": "Final changed fixture recheck after native timer instrumentation correction; prior 128 unaffected checks retain their evidence. Restore normal Debug review artifact after native tests.",
+        "source": {
+          "commit": "56d71adf501b6d85c19334abf20a909a8baa3979",
+          "tree": "ab18d942d2127f4de1b200ca0d07ad7a8d4db11e",
+          "working_changes_sha256": "56c530c2a28c05fecffb6e6c943d490b8af626493527236e2ed78938681c1153",
+          "dirty": true
+        },
+        "checks": [
+          {
+            "name": "cursor-final-analysis",
+            "cwd": "desktop",
+            "argv": [
+              "<FLUTTER_SDK>/bin/cache/dart-sdk/bin/dart",
+              "analyze",
+              "lib/terminal/terminal_session.dart",
+              "lib/widgets/terminal_panel.dart",
+              "test/terminal_cursor_idle_test.dart",
+              "test/terminal_session_test.dart",
+              "integration_test/terminal_cursor_native_test.dart"
+            ],
+            "timeout_seconds": 120,
+            "started_at": "2026-10-02T16:00:49.126920+00:00",
+            "status": "passed",
+            "log": ".harness/validation/20261002T160048.907155Z-33416/cursor-final-analysis.log",
+            "exit_code": 0,
+            "duration_seconds": 2.666,
+            "finished_at": "2026-10-02T16:00:51.813805+00:00",
+            "log_sha256": "ab77e677f7b06503b76ec5c5a31152306631e2eef9f5b6707a95a9585d3efe9a"
+          },
+          {
+            "name": "cursor-final-fixture",
+            "cwd": "desktop",
+            "argv": [
+              "<FLUTTER_SDK>/bin/flutter",
+              "test",
+              "--no-pub",
+              "--concurrency=2",
+              "--timeout=60s",
+              "test/terminal_cursor_idle_test.dart"
+            ],
+            "timeout_seconds": 120,
+            "started_at": "2026-10-02T16:00:49.125373+00:00",
+            "status": "passed",
+            "log": ".harness/validation/20261002T160048.907155Z-33416/cursor-final-fixture.log",
+            "exit_code": 0,
+            "duration_seconds": 4.387,
+            "finished_at": "2026-10-02T16:00:53.532835+00:00",
+            "log_sha256": "82942c93bc1ea052089dde90f7b3364ee2b2fc1e1b102e08ddf2441da0b11565"
+          },
+          {
+            "name": "normal-review-build",
+            "cwd": "desktop",
+            "argv": [
+              "env",
+              "PATH=<FLUTTER_SDK>/bin/:/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin",
+              "bash",
+              "scripts/build-macos-debug.sh",
+              "--no-pub",
+              "--target",
+              "lib/main.dart"
+            ],
+            "timeout_seconds": 300,
+            "started_at": "2026-10-02T16:00:51.866299+00:00",
+            "status": "passed",
+            "log": ".harness/validation/20261002T160048.907155Z-33416/normal-review-build.log",
+            "exit_code": 0,
+            "duration_seconds": 31.974,
+            "finished_at": "2026-10-02T16:01:23.861713+00:00",
+            "log_sha256": "d1f5f7774c63879f71e0cfb153de90df7a3a9c2a538e9cdc09a97b38e64483f7"
+          }
+        ],
+        "free_gib_before": 10.827,
+        "source_after": {
+          "commit": "56d71adf501b6d85c19334abf20a909a8baa3979",
+          "tree": "ab18d942d2127f4de1b200ca0d07ad7a8d4db11e",
+          "working_changes_sha256": "56c530c2a28c05fecffb6e6c943d490b8af626493527236e2ed78938681c1153",
+          "dirty": true
+        },
+        "status": "passed",
+        "finished_at": "2026-10-02T16:01:24.091993+00:00",
+        "duration_seconds": 34.966
+      }
+    },
+    {
+      "role": "rebased_headless_and_analysis",
+      "local_receipt": ".harness/validation/20261002T160403.227680Z-77699/receipt.json",
+      "receipt_sha256": "b236fe659ae8e02bb04f8717d3a9043fdfbb9b219ae7f0a3ca17bc3679f5f65a",
+      "result": {
+        "schema": 2,
+        "started_at": "2026-10-02T16:04:03.227986+00:00",
+        "reason": "Stop local cursor clocks for remotely hidden cursors without altering terminal content, focus or protocol.",
+        "source": {
+          "commit": "14b2e497a7c58c5c4fcd6d08fb7bc57ad1d651db",
+          "tree": "5e4d84a8dabb7ae17fe0adf1b874fac8b046a5e7",
+          "working_changes_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "dirty": false
+        },
+        "checks": [
+          {
+            "name": "cursor-analysis",
+            "cwd": "desktop",
+            "argv": [
+              "<FLUTTER_SDK>/bin/cache/dart-sdk/bin/dart",
+              "analyze",
+              "lib/terminal/terminal_session.dart",
+              "lib/widgets/terminal_panel.dart",
+              "test/terminal_cursor_idle_test.dart",
+              "test/terminal_session_test.dart",
+              "integration_test/terminal_cursor_native_test.dart"
+            ],
+            "timeout_seconds": 120,
+            "started_at": "2026-10-02T16:04:03.445325+00:00",
+            "status": "passed",
+            "log": ".harness/validation/20261002T160403.227680Z-77699/cursor-analysis.log",
+            "exit_code": 0,
+            "duration_seconds": 1.711,
+            "finished_at": "2026-10-02T16:04:05.177940+00:00",
+            "log_sha256": "ab77e677f7b06503b76ec5c5a31152306631e2eef9f5b6707a95a9585d3efe9a"
+          },
+          {
+            "name": "cursor-regressions",
+            "cwd": "desktop",
+            "argv": [
+              "<FLUTTER_SDK>/bin/flutter",
+              "test",
+              "--no-pub",
+              "--concurrency=2",
+              "--timeout=60s",
+              "test/terminal_cursor_idle_test.dart",
+              "test/terminal_session_test.dart",
+              "test/terminal_render_suspension_test.dart",
+              "test/terminal_initial_output_test.dart",
+              "test/terminal_panel_focus_test.dart",
+              "test/terminal_view_interaction_test.dart",
+              "test/pane_focus_test.dart",
+              "test/terminal_find_test.dart"
+            ],
+            "timeout_seconds": 240,
+            "started_at": "2026-10-02T16:04:03.443936+00:00",
+            "status": "passed",
+            "log": ".harness/validation/20261002T160403.227680Z-77699/cursor-regressions.log",
+            "exit_code": 0,
+            "duration_seconds": 14.255,
+            "finished_at": "2026-10-02T16:04:17.719299+00:00",
+            "log_sha256": "8c6f7aa67d8dc5d160d0de3c318dc30d8b449496a84c56317bdb7c424954c993"
+          }
+        ],
+        "free_gib_before": 10.647,
+        "source_after": {
+          "commit": "14b2e497a7c58c5c4fcd6d08fb7bc57ad1d651db",
+          "tree": "5e4d84a8dabb7ae17fe0adf1b874fac8b046a5e7",
+          "working_changes_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "dirty": false
+        },
+        "status": "passed",
+        "finished_at": "2026-10-02T16:04:17.929868+00:00",
+        "duration_seconds": 14.486
+      }
+    }
+  ],
+  "release_policy": "PR and merge only. No release or app update without renewed user authorization.",
+  "limitations": [
+    "No measured whole-app CPU, GPU, battery improvement or 100x result.",
+    "Native probe does not count timers created outside its Dart zone; resumed cursor behavior verified directly.",
+    "Native launcher could not foreground app; attachment, pixel checks and framework input passed.",
+    "Saved-session, daemon, real engine and shared-server behavior unchanged."
+  ]
+}

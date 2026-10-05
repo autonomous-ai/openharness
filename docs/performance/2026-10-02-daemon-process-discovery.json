@@ -1,0 +1,5470 @@
+{
+  "schema": 1,
+  "comparison": "macOS nonblocking executable discovery, background-only connected workspace",
+  "baselineCommit": "29e03783d3eb94c3a42969dbb9facce7915103e7",
+  "candidateCommit": "e2801a8b4f1761b542a7bd64c6ffdc586e1501fb",
+  "startedAt": "2026-10-03T00:23:01.303257+00:00",
+  "finishedAt": "2026-10-03T00:30:41.651618+00:00",
+  "secondsPerPhase": 30,
+  "settleSeconds": 5,
+  "terminals": 10,
+  "order": [
+    "baseline",
+    "current",
+    "current",
+    "baseline",
+    "baseline",
+    "current"
+  ],
+  "bundleHashes": {
+    "baseline": "081bef927fb76b77bb07930956a57c3e01c8619c24a9e65dc20f5f9fcac4c1a1",
+    "current": "3af3bc4973032cb532f58022be682d70238ac9df5019e2a2698a4f5d66159a0c"
+  },
+  "receiptSha256": "4622abd88fee2fc917182739b8180aba25a80ee8a085256491730dc63c0b6c33",
+  "boundary": "Release app + local daemon + tmux/ten terminal workers. Signed out, no real engine inference, installer/updater substituted. No WindowServer/shared services/GPU energy/battery measurement. Footprints may double-count shared mappings.",
+  "runs": [
+    {
+      "index": 1,
+      "variant": "baseline",
+      "startedAt": "2026-10-03T00:23:01.309236+00:00",
+      "finishedAt": "2026-10-03T00:24:17.536445+00:00",
+      "loadAverageBefore": [
+        5.74755859375,
+        5.70263671875,
+        5.65869140625
+      ],
+      "loadAverageAfter": [
+        7.998046875,
+        6.29443359375,
+        5.87939453125
+      ],
+      "resultSha256": "ae65ebe48734d00aa1872b3036e9774a782cf20639b8fe9f7848b03c69dd03e1",
+      "daemonMetadata": {
+        "bundleSha256": "081bef927fb76b77bb07930956a57c3e01c8619c24a9e65dc20f5f9fcac4c1a1",
+        "sourceRevision": "29e03783d3eb94c3a42969dbb9facce7915103e7",
+        "sourceDiffSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "boundary": "Full local daemon and tmux; private terminal shells; no cloud account or model inference."
+      },
+      "cleanup": {
+        "success": true,
+        "errors": [],
+        "daemonExit": 0,
+        "daemonSignal": null,
+        "finishedAt": "2026-10-03T00:24:17.464Z"
+      },
+      "phases": [
+        {
+          "label": "background-idle-hidden",
+          "summary": {
+            "cpuPercentOneCore": 5.124048296667986,
+            "cpuSeconds": 1.5374735416666667,
+            "elapsedSeconds": 30.005055624991655,
+            "interruptWakeupsPerSecond": 16.363909007088754,
+            "liveProcessCountMax": 24,
+            "liveProcessCountMin": 24,
+            "packageIdleWakeupsPerSecond": 0,
+            "processCountMax": 24,
+            "processCountMin": 24,
+            "summedPhysicalFootprintMiBMedian": 439.65846252441406,
+            "summedPhysicalFootprintMiBPeak": 460.20577239990234
+          },
+          "components": {
+            "desktop": {
+              "cpuPercentOneCore": 0.2433912057334737,
+              "interruptWakeupsPerSecond": 3.2327885411152932,
+              "physicalFootprintMiBMedian": 176.03227996826172
+            },
+            "daemon": {
+              "cpuPercentOneCore": 4.845533287804853,
+              "interruptWakeupsPerSecond": 12.464566127599172,
+              "physicalFootprintMiBMedian": 128.78015899658203
+            },
+            "tmuxAndWorkers": {
+              "cpuPercentOneCore": 0.035123803129658744,
+              "interruptWakeupsPerSecond": 0.6665543383742872,
+              "physicalFootprintMiBMedian": 144.25332641601562
+            }
+          },
+          "nativeBefore": {
+            "hidden": true,
+            "visible": false,
+            "height": 800.0,
+            "scale": 2.0,
+            "key": false,
+            "focusLosses": 0,
+            "width": 1280.0,
+            "active": false
+          },
+          "nativeAfter": {
+            "hidden": true,
+            "visible": false,
+            "height": 800.0,
+            "scale": 2.0,
+            "key": false,
+            "focusLosses": 0,
+            "width": 1280.0,
+            "active": false
+          },
+          "allTenTerminalsControlling": true,
+          "workers": [
+            {
+              "index": 0,
+              "mode": "idle-hidden",
+              "elapsedMs": 30065.457707999998,
+              "ticks": 0,
+              "skipped": 0,
+              "bytes": 0
+            },
+            {
+              "index": 1,
+              "mode": "idle-hidden",
+              "elapsedMs": 30064.5815,
+              "ticks": 0,
+              "skipped": 0,
+              "bytes": 0
+            },
+            {
+              "index": 2,
+              "mode": "idle-hidden",
+              "elapsedMs": 30063.614250000002,
+              "ticks": 0,
+              "skipped": 0,
+              "bytes": 0
+            },
+            {
+              "index": 3,
+              "mode": "idle-hidden",
+              "elapsedMs": 30062.724083,
+              "ticks": 0,
+              "skipped": 0,
+              "bytes": 0
+            },
+            {
+              "index": 4,
+              "mode": "idle-hidden",
+              "elapsedMs": 30061.853625000003,
+              "ticks": 0,
+              "skipped": 0,
+              "bytes": 0
+            },
+            {
+              "index": 5,
+              "mode": "idle-hidden",
+              "elapsedMs": 30060.597708999998,
+              "ticks": 0,
+              "skipped": 0,
+              "bytes": 0
+            },
+            {
+              "index": 6,
+              "mode": "idle-hidden",
+              "elapsedMs": 30059.623583,
+              "ticks": 0,
+              "skipped": 0,
+              "bytes": 0
+            },
+            {
+              "index": 7,
+              "mode": "idle-hidden",
+              "elapsedMs": 30058.757334,
+              "ticks": 0,
+              "skipped": 0,
+              "bytes": 0
+            },
+            {
+              "index": 8,
+              "mode": "idle-hidden",
+              "elapsedMs": 30057.866875,
+              "ticks": 0,
+              "skipped": 0,
+              "bytes": 0
+            },
+            {
+              "index": 9,
+              "mode": "idle-hidden",
+              "elapsedMs": 30057.009917000003,
+              "ticks": 0,
+              "skipped": 0,
+              "bytes": 0
+            }
+          ],
+          "cpuClock": {
+            "timebaseDenom": 3,
+            "timebaseNumer": 125,
+            "unit": "mach_absolute_time"
+          },
+          "rawSampleSha256": "736985fb5657bd4b6eeb651bd858b043c3b90e13ad10bee16746c83d08d16515",
+          "aggregateSamples": [
+            {
+              "elapsedSeconds": 0.007333499990636483,
+              "cpuTicks": 69106850,
+              "interruptWakeups": 1251,
+              "footprintBytes": 455689792
+            },
+            {
+              "elapsedSeconds": 1.0165157916489989,
+              "cpuTicks": 74028545,
+              "interruptWakeups": 1282,
+              "footprintBytes": 460671248
+            },
+            {
+              "elapsedSeconds": 2.0081189583288506,
+              "cpuTicks": 74048335,
+              "interruptWakeups": 1285,
+              "footprintBytes": 460671248
+            },
+            {
+              "elapsedSeconds": 3.0069629999925382,
+              "cpuTicks": 74435786,
+              "interruptWakeups": 1314,
+              "footprintBytes": 461015312
+            },
+            {
+              "elapsedSeconds": 4.014875541644869,
+              "cpuTicks": 74446791,
+              "interruptWakeups": 1320,
+              "footprintBytes": 461015312
+            },
+            {
+              "elapsedSeconds": 5.009925374994054,
+              "cpuTicks": 74459863,
+              "interruptWakeups": 1325,
+              "footprintBytes": 461015312
+            },
+            {
+              "elapsedSeconds": 6.015158458321821,
+              "cpuTicks": 85778303,
+              "interruptWakeups": 1388,
+              "footprintBytes": 464931520
+            },
+            {
+              "elapsedSeconds": 7.009639124997193,
+              "cpuTicks": 85786629,
+              "interruptWakeups": 1392,
+              "footprintBytes": 464931520
+            },
+            {
+              "elapsedSeconds": 8.010878208326176,
+              "cpuTicks": 86112797,
+              "interruptWakeups": 1426,
+              "footprintBytes": 465226432
+            },
+            {
+              "elapsedSeconds": 9.016063708317233,
+              "cpuTicks": 86136269,
+              "interruptWakeups": 1436,
+              "footprintBytes": 465226432
+            },
+            {
+              "elapsedSeconds": 10.00956591666909,
+              "cpuTicks": 86595555,
+              "interruptWakeups": 1442,
+              "footprintBytes": 482560728
+            },
+            {
+              "elapsedSeconds": 11.015581208339427,
+              "cpuTicks": 91371175,
+              "interruptWakeups": 1479,
+              "footprintBytes": 468897072
+            },
+            {
+              "elapsedSeconds": 12.013660208322108,
+              "cpuTicks": 91375938,
+              "interruptWakeups": 1481,
+              "footprintBytes": 468897072
+            },
+            {
+              "elapsedSeconds": 13.00810237499536,
+              "cpuTicks": 91787652,
+              "interruptWakeups": 1509,
+              "footprintBytes": 469110064
+            },
+            {
+              "elapsedSeconds": 14.00736754166428,
+              "cpuTicks": 91795235,
+              "interruptWakeups": 1515,
+              "footprintBytes": 469110064
+            },
+            {
+              "elapsedSeconds": 15.009492083336227,
+              "cpuTicks": 91806443,
+              "interruptWakeups": 1521,
+              "footprintBytes": 469110064
+            },
+            {
+              "elapsedSeconds": 16.01123483333504,
+              "cpuTicks": 96584078,
+              "interruptWakeups": 1549,
+              "footprintBytes": 471010656
+            },
+            {
+              "elapsedSeconds": 17.014097333332757,
+              "cpuTicks": 96593363,
+              "interruptWakeups": 1554,
+              "footprintBytes": 471010656
+            },
+            {
+              "elapsedSeconds": 18.004446000006283,
+              "cpuTicks": 96782648,
+              "interruptWakeups": 1579,
+              "footprintBytes": 471354720
+            },
+            {
+              "elapsedSeconds": 19.014704166649608,
+              "cpuTicks": 96790964,
+              "interruptWakeups": 1587,
+              "footprintBytes": 471354720
+            },
+            {
+              "elapsedSeconds": 20.015359708311735,
+              "cpuTicks": 96794670,
+              "interruptWakeups": 1589,
+              "footprintBytes": 471354720
+            },
+            {
+              "elapsedSeconds": 21.013682541670278,
+              "cpuTicks": 101736197,
+              "interruptWakeups": 1621,
+              "footprintBytes": 455773584
+            },
+            {
+              "elapsedSeconds": 22.015521958324825,
+              "cpuTicks": 101748026,
+              "interruptWakeups": 1623,
+              "footprintBytes": 455789968
+            },
+            {
+              "elapsedSeconds": 23.01299783331342,
+              "cpuTicks": 102081703,
+              "interruptWakeups": 1659,
+              "footprintBytes": 456052112
+            },
+            {
+              "elapsedSeconds": 24.014215416653315,
+              "cpuTicks": 102091961,
+              "interruptWakeups": 1666,
+              "footprintBytes": 456052112
+            },
+            {
+              "elapsedSeconds": 25.014620458328864,
+              "cpuTicks": 102150869,
+              "interruptWakeups": 1673,
+              "footprintBytes": 456068496
+            },
+            {
+              "elapsedSeconds": 26.016688916657586,
+              "cpuTicks": 105666453,
+              "interruptWakeups": 1702,
+              "footprintBytes": 456854976
+            },
+            {
+              "elapsedSeconds": 27.011402208328946,
+              "cpuTicks": 105674650,
+              "interruptWakeups": 1706,
+              "footprintBytes": 456854976
+            },
+            {
+              "elapsedSeconds": 28.01446883333847,
+              "cpuTicks": 105988174,
+              "interruptWakeups": 1730,
+              "footprintBytes": 457067968
+            },
+            {
+              "elapsedSeconds": 29.01229349998175,
+              "cpuTicks": 106000429,
+              "interruptWakeups": 1739,
+              "footprintBytes": 457067968
+            },
+            {
+              "elapsedSeconds": 30.012389124982292,
+              "cpuTicks": 106006215,
+              "interruptWakeups": 1742,
+              "footprintBytes": 457067968
+            }
+          ]
+        },
+        {
+          "label": "background-active",
+          "summary": {
+            "cpuPercentOneCore": 42.97643089996306,
+            "cpuSeconds": 12.896554833333335,
+            "elapsedSeconds": 30.00843616668135,
+            "interruptWakeupsPerSecond": 1001.7516352077358,
+            "liveProcessCountMax": 24,
+            "liveProcessCountMin": 24,
+            "packageIdleWakeupsPerSecond": 0,
+            "processCountMax": 24,
+            "processCountMin": 24,
+            "summedPhysicalFootprintMiBMedian": 649.8637847900391,
+            "summedPhysicalFootprintMiBPeak": 760.648193359375
+          },
+          "components": {
+            "desktop": {
+              "cpuPercentOneCore": 25.658425402661848,
+              "interruptWakeupsPerSecond": 232.33466620100242,
+              "physicalFootprintMiBMedian": 387.7667694091797
+            },
+            "daemon": {
+              "cpuPercentOneCore": 9.131636022103692,
+              "interruptWakeupsPerSecond": 252.8622270701673,
+              "physicalFootprintMiBMedian": 118.62422943115234
+            },
+            "tmuxAndWorkers": {
+              "cpuPercentOneCore": 8.186369475197514,
+              "interruptWakeupsPerSecond": 516.5547419365661,
+              "physicalFootprintMiBMedian": 151.06834411621094
+            }
+          },
+          "nativeBefore": {
+            "key": false,
+            "active": false,
+            "width": 1280.0,
+            "scale": 2.0,
+            "focusLosses": 0,
+            "hidden": true,
+            "visible": false,
+            "height": 800.0
+          },
+          "nativeAfter": {
+            "key": false,
+            "focusLosses": 0,
+            "height": 800.0,
+            "visible": false,
+            "hidden": true,
+            "width": 1280.0,
+            "scale": 2.0,
+            "active": false
+          },
+          "allTenTerminalsControlling": true,
+          "workers": [
+            {
+              "index": 0,
+              "mode": "active",
+              "elapsedMs": 30068.534000000007,
+              "ticks": 583,
+              "skipped": 0,
+              "bytes": 290901
+            },
+            {
+              "index": 1,
+              "mode": "active",
+              "elapsedMs": 30068.918625,
+              "ticks": 583,
+              "skipped": 0,
+              "bytes": 290901
+            },
+            {
+              "index": 2,
+              "mode": "active",
+              "elapsedMs": 30069.26400000001,
+              "ticks": 583,
+              "skipped": 0,
+              "bytes": 290901
+            },
+            {
+              "index": 3,
+              "mode": "active",
+              "elapsedMs": 30069.566417000002,
+              "ticks": 583,
+              "skipped": 0,
+              "bytes": 290901
+            },
+            {
+              "index": 4,
+              "mode": "active",
+              "elapsedMs": 30069.879791000007,
+              "ticks": 583,
+              "skipped": 0,
+              "bytes": 290901
+            },
+            {
+              "index": 5,
+              "mode": "active",
+              "elapsedMs": 30070.043416999993,
+              "ticks": 583,
+              "skipped": 0,
+              "bytes": 290901
+            },
+            {
+              "index": 6,
+              "mode": "active",
+              "elapsedMs": 30070.235792,
+              "ticks": 583,
+              "skipped": 0,
+              "bytes": 290901
+            },
+            {
+              "index": 7,
+              "mode": "active",
+              "elapsedMs": 30070.717791000003,
+              "ticks": 583,
+              "skipped": 0,
+              "bytes": 290901
+            },
+            {
+              "index": 8,
+              "mode": "active",
+              "elapsedMs": 30071.261042,
+              "ticks": 583,
+              "skipped": 0,
+              "bytes": 290901
+            },
+            {
+              "index": 9,
+              "mode": "active",
+              "elapsedMs": 30071.721708000005,
+              "ticks": 584,
+              "skipped": 0,
+              "bytes": 291400
+            }
+          ],
+          "cpuClock": {
+            "timebaseDenom": 3,
+            "timebaseNumer": 125,
+            "unit": "mach_absolute_time"
+          },
+          "rawSampleSha256": "c9c19e1ff341c0ad5c210127b7cfeedbf8beb11a413dae9d363fa78f355e0a02",
+          "aggregateSamples": [
+            {
+              "elapsedSeconds": 0.003807541652349755,
+              "cpuTicks": 138243217,
+              "interruptWakeups": 6326,
+              "footprintBytes": 562286064
+            },
+            {
+              "elapsedSeconds": 1.0163618749938905,
+              "cpuTicks": 151392572,
+              "interruptWakeups": 7350,
+              "footprintBytes": 581489216
+            },
+            {
+              "elapsedSeconds": 2.0166164999827743,
+              "cpuTicks": 159202185,
+              "interruptWakeups": 8290,
+              "footprintBytes": 585306688
+            },
+            {
+              "elapsedSeconds": 3.0068880833277944,
+              "cpuTicks": 169152440,
+              "interruptWakeups": 9238,
+              "footprintBytes": 588124736
+            },
+            {
+              "elapsedSeconds": 4.007883291662438,
+              "cpuTicks": 174592275,
+              "interruptWakeups": 10216,
+              "footprintBytes": 605475392
+            },
+            {
+              "elapsedSeconds": 5.009438041655812,
+              "cpuTicks": 185706483,
+              "interruptWakeups": 11251,
+              "footprintBytes": 608621144
+            },
+            {
+              "elapsedSeconds": 6.013406874990324,
+              "cpuTicks": 199611640,
+              "interruptWakeups": 12401,
+              "footprintBytes": 626872968
+            },
+            {
+              "elapsedSeconds": 7.011793041659985,
+              "cpuTicks": 210282979,
+              "interruptWakeups": 13435,
+              "footprintBytes": 625545888
+            },
+            {
+              "elapsedSeconds": 8.011241875006817,
+              "cpuTicks": 221895720,
+              "interruptWakeups": 14544,
+              "footprintBytes": 628363936
+            },
+            {
+              "elapsedSeconds": 9.012877750006737,
+              "cpuTicks": 233321833,
+              "interruptWakeups": 15753,
+              "footprintBytes": 636751728
+            },
+            {
+              "elapsedSeconds": 10.01640337498975,
+              "cpuTicks": 245875726,
+              "interruptWakeups": 16824,
+              "footprintBytes": 631312864
+            },
+            {
+              "elapsedSeconds": 11.016329000005499,
+              "cpuTicks": 259106977,
+              "interruptWakeups": 17933,
+              "footprintBytes": 636244472
+            },
+            {
+              "elapsedSeconds": 12.001874833338661,
+              "cpuTicks": 267450590,
+              "interruptWakeups": 19059,
+              "footprintBytes": 653349368
+            },
+            {
+              "elapsedSeconds": 13.006118791672634,
+              "cpuTicks": 277654432,
+              "interruptWakeups": 20216,
+              "footprintBytes": 656986616
+            },
+            {
+              "elapsedSeconds": 14.00988116665394,
+              "cpuTicks": 286840175,
+              "interruptWakeups": 21359,
+              "footprintBytes": 674255352
+            },
+            {
+              "elapsedSeconds": 15.01660670831916,
+              "cpuTicks": 300432842,
+              "interruptWakeups": 22601,
+              "footprintBytes": 681431568
+            },
+            {
+              "elapsedSeconds": 16.012202166661154,
+              "cpuTicks": 312773089,
+              "interruptWakeups": 23610,
+              "footprintBytes": 683299392
+            },
+            {
+              "elapsedSeconds": 17.017021166655468,
+              "cpuTicks": 322093391,
+              "interruptWakeups": 24662,
+              "footprintBytes": 692539968
+            },
+            {
+              "elapsedSeconds": 18.00804662500741,
+              "cpuTicks": 331658917,
+              "interruptWakeups": 25697,
+              "footprintBytes": 687986464
+            },
+            {
+              "elapsedSeconds": 19.006262791663175,
+              "cpuTicks": 339633920,
+              "interruptWakeups": 26504,
+              "footprintBytes": 721295136
+            },
+            {
+              "elapsedSeconds": 20.00815854166285,
+              "cpuTicks": 345935165,
+              "interruptWakeups": 27255,
+              "footprintBytes": 736501384
+            },
+            {
+              "elapsedSeconds": 21.010756125004264,
+              "cpuTicks": 354857899,
+              "interruptWakeups": 27990,
+              "footprintBytes": 752361144
+            },
+            {
+              "elapsedSeconds": 22.017351624992443,
+              "cpuTicks": 363628964,
+              "interruptWakeups": 28769,
+              "footprintBytes": 749543096
+            },
+            {
+              "elapsedSeconds": 23.012438166653737,
+              "cpuTicks": 374243721,
+              "interruptWakeups": 29656,
+              "footprintBytes": 761552568
+            },
+            {
+              "elapsedSeconds": 24.0088109166536,
+              "cpuTicks": 382116789,
+              "interruptWakeups": 30461,
+              "footprintBytes": 769941200
+            },
+            {
+              "elapsedSeconds": 25.01413141665398,
+              "cpuTicks": 393705548,
+              "interruptWakeups": 31341,
+              "footprintBytes": 785669840
+            },
+            {
+              "elapsedSeconds": 26.01518037499045,
+              "cpuTicks": 406300329,
+              "interruptWakeups": 32383,
+              "footprintBytes": 754786048
+            },
+            {
+              "elapsedSeconds": 27.013463541661622,
+              "cpuTicks": 416991116,
+              "interruptWakeups": 33394,
+              "footprintBytes": 792239872
+            },
+            {
+              "elapsedSeconds": 28.009016166673973,
+              "cpuTicks": 427475602,
+              "interruptWakeups": 34387,
+              "footprintBytes": 787537664
+            },
+            {
+              "elapsedSeconds": 29.011834750010166,
+              "cpuTicks": 437163755,
+              "interruptWakeups": 35403,
+              "footprintBytes": 783507200
+            },
+            {
+              "elapsedSeconds": 30.0122437083337,
+              "cpuTicks": 447760533,
+              "interruptWakeups": 36387,
+              "footprintBytes": 797597440
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "index": 2,
+      "variant": "current",
+      "startedAt": "2026-10-03T00:24:17.538569+00:00",
+      "finishedAt": "2026-10-03T00:25:33.601161+00:00",
+      "loadAverageBefore": [
+        7.998046875,
+        6.29443359375,
+        5.87939453125
+      ],
+      "loadAverageAfter": [
+        7.19677734375,
+        6.53515625,
+        6.01171875
+      ],
+      "resultSha256": "5c347c539b8bb5e0d175ed793bb097d9bfb75b107752517364cdb2b5a3463336",
+      "daemonMetadata": {
+        "bundleSha256": "3af3bc4973032cb532f58022be682d70238ac9df5019e2a2698a4f5d66159a0c",
+        "sourceRevision": "e2801a8b4f1761b542a7bd64c6ffdc586e1501fb",
+        "sourceDiffSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "boundary": "Full local daemon and tmux; private terminal shells; no cloud account or model inference."
+      },
+      "cleanup": {
+        "success": true,
+        "errors": [],
+        "daemonExit": 0,
+        "daemonSignal": null,
+        "finishedAt": "2026-10-03T00:25:33.531Z"
+      },
+      "phases": [
+        {
+          "label": "background-idle-hidden",
+          "summary": {
+            "cpuPercentOneCore": 4.797289526972961,
+            "cpuSeconds": 1.439263125,
+            "elapsedSeconds": 30.00158979164553,
+            "interruptWakeupsPerSecond": 15.66583648613447,
+            "liveProcessCountMax": 24,
+            "liveProcessCountMin": 24,
+            "packageIdleWakeupsPerSecond": 0,
+            "processCountMax": 24,
+            "processCountMin": 24,
+            "summedPhysicalFootprintMiBMedian": 441.9708023071289,
+            "summedPhysicalFootprintMiBPeak": 467.2062072753906
+          },
+          "components": {
+            "desktop": {
+              "cpuPercentOneCore": 0.2515433366168319,
+              "interruptWakeupsPerSecond": 3.2331619982022204,
+              "physicalFootprintMiBMedian": 179.1729278564453
+            },
+            "daemon": {
+              "cpuPercentOneCore": 4.508159015548679,
+              "interruptWakeupsPerSecond": 11.76604314809674,
+              "physicalFootprintMiBMedian": 130.76435089111328
+            },
+            "tmuxAndWorkers": {
+              "cpuPercentOneCore": 0.0375871748074504,
+              "interruptWakeupsPerSecond": 0.6666313398355094,
+              "physicalFootprintMiBMedian": 144.19080352783203
+            }
+          },
+          "nativeBefore": {
+            "active": false,
+            "visible": false,
+            "hidden": true,
+            "scale": 2.0,
+            "focusLosses": 0,
+            "key": false,
+            "width": 1280.0,
+            "height": 800.0
+          },
+          "nativeAfter": {
+            "active": false,
+            "visible": false,
+            "hidden": true,
+            "scale": 2.0,
+            "focusLosses": 0,
+            "key": false,
+            "width": 1280.0,
+            "height": 800.0
+          },
+          "allTenTerminalsControlling": true,
+          "workers": [
+            {
+              "index": 0,
+              "mode": "idle-hidden",
+              "elapsedMs": 30084.429625,
+              "ticks": 0,
+              "skipped": 0,
+              "bytes": 0
+            },
+            {
+              "index": 1,
+              "mode": "idle-hidden",
+              "elapsedMs": 30083.229791,
+              "ticks": 0,
+              "skipped": 0,
+              "bytes": 0
+            },
+            {
+              "index": 2,
+              "mode": "idle-hidden",
+              "elapsedMs": 30082.237957999998,
+              "ticks": 0,
+              "skipped": 0,
+              "bytes": 0
+            },
+            {
+              "index": 3,
+              "mode": "idle-hidden",
+              "elapsedMs": 30081.355084,
+              "ticks": 0,
+              "skipped": 0,
+              "bytes": 0
+            },
+            {
+              "index": 4,
+              "mode": "idle-hidden",
+              "elapsedMs": 30080.476125,
+              "ticks": 0,
+              "skipped": 0,
+              "bytes": 0
+            },
+            {
+              "index": 5,
+              "mode": "idle-hidden",
+              "elapsedMs": 30079.707832999997,
+              "ticks": 0,
+              "skipped": 0,
+              "bytes": 0
+            },
+            {
+              "index": 6,
+              "mode": "idle-hidden",
+              "elapsedMs": 30078.567084,
+              "ticks": 0,
+              "skipped": 0,
+              "bytes": 0
+            },
+            {
+              "index": 7,
+              "mode": "idle-hidden",
+              "elapsedMs": 30077.735667,
+              "ticks": 0,
+              "skipped": 0,
+              "bytes": 0
+            },
+            {
+              "index": 8,
+              "mode": "idle-hidden",
+              "elapsedMs": 30075.681749999996,
+              "ticks": 0,
+              "skipped": 0,
+              "bytes": 0
+            },
+            {
+              "index": 9,
+              "mode": "idle-hidden",
+              "elapsedMs": 30074.701458999996,
+              "ticks": 0,
+              "skipped": 0,
+              "bytes": 0
+            }
+          ],
+          "cpuClock": {
+            "timebaseDenom": 3,
+            "timebaseNumer": 125,
+            "unit": "mach_absolute_time"
+          },
+          "rawSampleSha256": "379c60f4461f8cac4297ea2b16578ff6ddf45e1464e1ee89397d6949bb031442",
+          "aggregateSamples": [
+            {
+              "elapsedSeconds": 0.009671416686614975,
+              "cpuTicks": 66279909,
+              "interruptWakeups": 1228,
+              "footprintBytes": 458196520
+            },
+            {
+              "elapsedSeconds": 1.0163387916691136,
+              "cpuTicks": 70495868,
+              "interruptWakeups": 1256,
+              "footprintBytes": 463112296
+            },
+            {
+              "elapsedSeconds": 2.008448958338704,
+              "cpuTicks": 70513551,
+              "interruptWakeups": 1259,
+              "footprintBytes": 463128680
+            },
+            {
+              "elapsedSeconds": 3.003019374998985,
+              "cpuTicks": 70899142,
+              "interruptWakeups": 1287,
+              "footprintBytes": 463439976
+            },
+            {
+              "elapsedSeconds": 4.008072791679297,
+              "cpuTicks": 70905658,
+              "interruptWakeups": 1291,
+              "footprintBytes": 463439976
+            },
+            {
+              "elapsedSeconds": 5.009989875019528,
+              "cpuTicks": 70924171,
+              "interruptWakeups": 1296,
+              "footprintBytes": 463439976
+            },
+            {
+              "elapsedSeconds": 6.013959583331598,
+              "cpuTicks": 81626942,
+              "interruptWakeups": 1352,
+              "footprintBytes": 472222856
+            },
+            {
+              "elapsedSeconds": 7.008838041685522,
+              "cpuTicks": 81632507,
+              "interruptWakeups": 1356,
+              "footprintBytes": 472222856
+            },
+            {
+              "elapsedSeconds": 8.010429166664835,
+              "cpuTicks": 82052052,
+              "interruptWakeups": 1392,
+              "footprintBytes": 472534152
+            },
+            {
+              "elapsedSeconds": 9.01300795833231,
+              "cpuTicks": 82059691,
+              "interruptWakeups": 1400,
+              "footprintBytes": 472534152
+            },
+            {
+              "elapsedSeconds": 10.014089750009589,
+              "cpuTicks": 82528582,
+              "interruptWakeups": 1406,
+              "footprintBytes": 489901216
+            },
+            {
+              "elapsedSeconds": 11.009862333332421,
+              "cpuTicks": 87695412,
+              "interruptWakeups": 1440,
+              "footprintBytes": 475335792
+            },
+            {
+              "elapsedSeconds": 12.010519291681703,
+              "cpuTicks": 87699515,
+              "interruptWakeups": 1442,
+              "footprintBytes": 475335792
+            },
+            {
+              "elapsedSeconds": 13.010631041659508,
+              "cpuTicks": 88052282,
+              "interruptWakeups": 1472,
+              "footprintBytes": 475548784
+            },
+            {
+              "elapsedSeconds": 14.0130035833281,
+              "cpuTicks": 88058750,
+              "interruptWakeups": 1476,
+              "footprintBytes": 475548784
+            },
+            {
+              "elapsedSeconds": 15.013931208348367,
+              "cpuTicks": 88072235,
+              "interruptWakeups": 1482,
+              "footprintBytes": 475548784
+            },
+            {
+              "elapsedSeconds": 16.016157208330696,
+              "cpuTicks": 92195009,
+              "interruptWakeups": 1507,
+              "footprintBytes": 476286112
+            },
+            {
+              "elapsedSeconds": 17.01345666666748,
+              "cpuTicks": 92209109,
+              "interruptWakeups": 1512,
+              "footprintBytes": 476286112
+            },
+            {
+              "elapsedSeconds": 18.015941374993417,
+              "cpuTicks": 92515751,
+              "interruptWakeups": 1539,
+              "footprintBytes": 476499104
+            },
+            {
+              "elapsedSeconds": 19.011870999995153,
+              "cpuTicks": 92521075,
+              "interruptWakeups": 1545,
+              "footprintBytes": 476499104
+            },
+            {
+              "elapsedSeconds": 20.00833070834051,
+              "cpuTicks": 92523101,
+              "interruptWakeups": 1547,
+              "footprintBytes": 476499104
+            },
+            {
+              "elapsedSeconds": 21.015785708354088,
+              "cpuTicks": 95876650,
+              "interruptWakeups": 1582,
+              "footprintBytes": 460066000
+            },
+            {
+              "elapsedSeconds": 22.012212625006214,
+              "cpuTicks": 95884897,
+              "interruptWakeups": 1584,
+              "footprintBytes": 460066000
+            },
+            {
+              "elapsedSeconds": 23.010765875020297,
+              "cpuTicks": 96257779,
+              "interruptWakeups": 1622,
+              "footprintBytes": 460311760
+            },
+            {
+              "elapsedSeconds": 24.009506208327366,
+              "cpuTicks": 96270395,
+              "interruptWakeups": 1627,
+              "footprintBytes": 460311760
+            },
+            {
+              "elapsedSeconds": 25.014435708348174,
+              "cpuTicks": 96336654,
+              "interruptWakeups": 1634,
+              "footprintBytes": 460311760
+            },
+            {
+              "elapsedSeconds": 26.01180454166024,
+              "cpuTicks": 100558523,
+              "interruptWakeups": 1658,
+              "footprintBytes": 461114624
+            },
+            {
+              "elapsedSeconds": 27.004237416666,
+              "cpuTicks": 100566946,
+              "interruptWakeups": 1662,
+              "footprintBytes": 461114624
+            },
+            {
+              "elapsedSeconds": 28.010402666666778,
+              "cpuTicks": 100793515,
+              "interruptWakeups": 1688,
+              "footprintBytes": 461327616
+            },
+            {
+              "elapsedSeconds": 29.0124092916667,
+              "cpuTicks": 100816105,
+              "interruptWakeups": 1695,
+              "footprintBytes": 461327616
+            },
+            {
+              "elapsedSeconds": 30.011261208332144,
+              "cpuTicks": 100822224,
+              "interruptWakeups": 1698,
+              "footprintBytes": 461327616
+            }
+          ]
+        },
+        {
+          "label": "background-active",
+          "summary": {
+            "cpuPercentOneCore": 48.59377905482565,
+            "cpuSeconds": 14.583085625,
+            "elapsedSeconds": 30.010190416651312,
+            "interruptWakeupsPerSecond": 1046.5111871657507,
+            "liveProcessCountMax": 24,
+            "liveProcessCountMin": 24,
+            "packageIdleWakeupsPerSecond": 0,
+            "processCountMax": 24,
+            "processCountMin": 24,
+            "summedPhysicalFootprintMiBMedian": 667.1918869018555,
+            "summedPhysicalFootprintMiBPeak": 786.1950225830078
+          },
+          "components": {
+            "desktop": {
+              "cpuPercentOneCore": 30.538228701968904,
+              "interruptWakeupsPerSecond": 243.18406176958698,
+              "physicalFootprintMiBMedian": 403.9855422973633
+            },
+            "daemon": {
+              "cpuPercentOneCore": 9.147406276181117,
+              "interruptWakeupsPerSecond": 278.138854972697,
+              "physicalFootprintMiBMedian": 118.84288787841797
+            },
+            "tmuxAndWorkers": {
+              "cpuPercentOneCore": 8.908144076675624,
+              "interruptWakeupsPerSecond": 525.1882704234667,
+              "physicalFootprintMiBMedian": 152.08403778076172
+            }
+          },
+          "nativeBefore": {
+            "active": false,
+            "visible": false,
+            "hidden": true,
+            "scale": 2.0,
+            "focusLosses": 0,
+            "key": false,
+            "width": 1280.0,
+            "height": 800.0
+          },
+          "nativeAfter": {
+            "active": false,
+            "visible": false,
+            "hidden": true,
+            "scale": 2.0,
+            "focusLosses": 0,
+            "key": false,
+            "width": 1280.0,
+            "height": 800.0
+          },
+          "allTenTerminalsControlling": true,
+          "workers": [
+            {
+              "index": 0,
+              "mode": "active",
+              "elapsedMs": 30063.041707999997,
+              "ticks": 584,
+              "skipped": 0,
+              "bytes": 291400
+            },
+            {
+              "index": 1,
+              "mode": "active",
+              "elapsedMs": 30062.956165999996,
+              "ticks": 584,
+              "skipped": 0,
+              "bytes": 291400
+            },
+            {
+              "index": 2,
+              "mode": "active",
+              "elapsedMs": 30062.915917000006,
+              "ticks": 585,
+              "skipped": 0,
+              "bytes": 291899
+            },
+            {
+              "index": 3,
+              "mode": "active",
+              "elapsedMs": 30062.860374999997,
+              "ticks": 584,
+              "skipped": 0,
+              "bytes": 291400
+            },
+            {
+              "index": 4,
+              "mode": "active",
+              "elapsedMs": 30062.853542000004,
+              "ticks": 584,
+              "skipped": 0,
+              "bytes": 291400
+            },
+            {
+              "index": 5,
+              "mode": "active",
+              "elapsedMs": 30062.633,
+              "ticks": 583,
+              "skipped": 0,
+              "bytes": 290901
+            },
+            {
+              "index": 6,
+              "mode": "active",
+              "elapsedMs": 30062.636999999995,
+              "ticks": 584,
+              "skipped": 0,
+              "bytes": 291400
+            },
+            {
+              "index": 7,
+              "mode": "active",
+              "elapsedMs": 30062.417499999996,
+              "ticks": 584,
+              "skipped": 0,
+              "bytes": 291400
+            },
+            {
+              "index": 8,
+              "mode": "active",
+              "elapsedMs": 30062.532791999998,
+              "ticks": 584,
+              "skipped": 0,
+              "bytes": 291400
+            },
+            {
+              "index": 9,
+              "mode": "active",
+              "elapsedMs": 30062.695667,
+              "ticks": 585,
+              "skipped": 0,
+              "bytes": 291899
+            }
+          ],
+          "cpuClock": {
+            "timebaseDenom": 3,
+            "timebaseNumer": 125,
+            "unit": "mach_absolute_time"
+          },
+          "rawSampleSha256": "241b16f5cc8e349afad411703cae94ea188968dae8476b0d7a55263cf848f297",
+          "aggregateSamples": [
+            {
+              "elapsedSeconds": 0.003428416675888002,
+              "cpuTicks": 152207296,
+              "interruptWakeups": 6466,
+              "footprintBytes": 587795760
+            },
+            {
+              "elapsedSeconds": 1.0199057499994524,
+              "cpuTicks": 164598579,
+              "interruptWakeups": 7499,
+              "footprintBytes": 596169016
+            },
+            {
+              "elapsedSeconds": 2.0147155833255965,
+              "cpuTicks": 176259689,
+              "interruptWakeups": 8400,
+              "footprintBytes": 599298360
+            },
+            {
+              "elapsedSeconds": 3.0155019583471585,
+              "cpuTicks": 188125377,
+              "interruptWakeups": 9480,
+              "footprintBytes": 648171832
+            },
+            {
+              "elapsedSeconds": 4.009783416666323,
+              "cpuTicks": 198518778,
+              "interruptWakeups": 10636,
+              "footprintBytes": 614830584
+            },
+            {
+              "elapsedSeconds": 5.007944833341753,
+              "cpuTicks": 210505305,
+              "interruptWakeups": 11696,
+              "footprintBytes": 618500600
+            },
+            {
+              "elapsedSeconds": 6.017107083345763,
+              "cpuTicks": 223643156,
+              "interruptWakeups": 12763,
+              "footprintBytes": 637751824
+            },
+            {
+              "elapsedSeconds": 7.016958458320005,
+              "cpuTicks": 235628656,
+              "interruptWakeups": 13713,
+              "footprintBytes": 640586280
+            },
+            {
+              "elapsedSeconds": 8.006404958345229,
+              "cpuTicks": 247424565,
+              "interruptWakeups": 14722,
+              "footprintBytes": 643699240
+            },
+            {
+              "elapsedSeconds": 9.010606333322357,
+              "cpuTicks": 262129229,
+              "interruptWakeups": 15874,
+              "footprintBytes": 651252312
+            },
+            {
+              "elapsedSeconds": 10.002712041663472,
+              "cpuTicks": 273892660,
+              "interruptWakeups": 16933,
+              "footprintBytes": 647254376
+            },
+            {
+              "elapsedSeconds": 11.016525541665033,
+              "cpuTicks": 283458436,
+              "interruptWakeups": 17971,
+              "footprintBytes": 664998296
+            },
+            {
+              "elapsedSeconds": 12.01310829166323,
+              "cpuTicks": 294255502,
+              "interruptWakeups": 18871,
+              "footprintBytes": 668373400
+            },
+            {
+              "elapsedSeconds": 13.016375458333641,
+              "cpuTicks": 304216289,
+              "interruptWakeups": 19842,
+              "footprintBytes": 672633240
+            },
+            {
+              "elapsedSeconds": 14.017052791663446,
+              "cpuTicks": 313562990,
+              "interruptWakeups": 20925,
+              "footprintBytes": 689689032
+            },
+            {
+              "elapsedSeconds": 15.01114641665481,
+              "cpuTicks": 324885687,
+              "interruptWakeups": 21955,
+              "footprintBytes": 699601400
+            },
+            {
+              "elapsedSeconds": 16.013841041654814,
+              "cpuTicks": 339068177,
+              "interruptWakeups": 23046,
+              "footprintBytes": 750441000
+            },
+            {
+              "elapsedSeconds": 17.0093405416701,
+              "cpuTicks": 352991097,
+              "interruptWakeups": 24103,
+              "footprintBytes": 747165400
+            },
+            {
+              "elapsedSeconds": 18.01507875000243,
+              "cpuTicks": 364477852,
+              "interruptWakeups": 25225,
+              "footprintBytes": 742151896
+            },
+            {
+              "elapsedSeconds": 19.015494124992983,
+              "cpuTicks": 375227903,
+              "interruptWakeups": 26248,
+              "footprintBytes": 755357400
+            },
+            {
+              "elapsedSeconds": 20.013723624986596,
+              "cpuTicks": 385839626,
+              "interruptWakeups": 27273,
+              "footprintBytes": 755179096
+            },
+            {
+              "elapsedSeconds": 21.015843416680582,
+              "cpuTicks": 400145321,
+              "interruptWakeups": 28381,
+              "footprintBytes": 779345544
+            },
+            {
+              "elapsedSeconds": 22.013851208321285,
+              "cpuTicks": 411640361,
+              "interruptWakeups": 29495,
+              "footprintBytes": 782605960
+            },
+            {
+              "elapsedSeconds": 23.00953995832242,
+              "cpuTicks": 421904328,
+              "interruptWakeups": 30585,
+              "footprintBytes": 786177696
+            },
+            {
+              "elapsedSeconds": 24.006865541654406,
+              "cpuTicks": 433054437,
+              "interruptWakeups": 31642,
+              "footprintBytes": 803135136
+            },
+            {
+              "elapsedSeconds": 25.01261487501324,
+              "cpuTicks": 445042083,
+              "interruptWakeups": 32709,
+              "footprintBytes": 806395552
+            },
+            {
+              "elapsedSeconds": 26.016154958342668,
+              "cpuTicks": 459465824,
+              "interruptWakeups": 33801,
+              "footprintBytes": 810376912
+            },
+            {
+              "elapsedSeconds": 27.01554733334342,
+              "cpuTicks": 470652541,
+              "interruptWakeups": 34906,
+              "footprintBytes": 819437264
+            },
+            {
+              "elapsedSeconds": 28.007543874991825,
+              "cpuTicks": 481671329,
+              "interruptWakeups": 35999,
+              "footprintBytes": 780246736
+            },
+            {
+              "elapsedSeconds": 29.012158750003437,
+              "cpuTicks": 491089907,
+              "interruptWakeups": 36914,
+              "footprintBytes": 824385232
+            },
+            {
+              "elapsedSeconds": 30.0136188333272,
+              "cpuTicks": 502201351,
+              "interruptWakeups": 37872,
+              "footprintBytes": 817405648
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "index": 3,
+      "variant": "current",
+      "startedAt": "2026-10-03T00:25:33.603323+00:00",
+      "finishedAt": "2026-10-03T00:26:49.843903+00:00",
+      "loadAverageBefore": [
+        7.19677734375,
+        6.53515625,
+        6.01171875
+      ],
+      "loadAverageAfter": [
+        7.3974609375,
+        6.82080078125,
+        6.16796875
+      ],
+      "resultSha256": "a1ca2764c170ffbeadd631b92ea0ec2f33e4934a69e0f8762a499f3445e05fe8",
+      "daemonMetadata": {
+        "bundleSha256": "3af3bc4973032cb532f58022be682d70238ac9df5019e2a2698a4f5d66159a0c",
+        "sourceRevision": "e2801a8b4f1761b542a7bd64c6ffdc586e1501fb",
+        "sourceDiffSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "boundary": "Full local daemon and tmux; private terminal shells; no cloud account or model inference."
+      },
+      "cleanup": {
+        "success": true,
+        "errors": [],
+        "daemonExit": 0,
+        "daemonSignal": null,
+        "finishedAt": "2026-10-03T00:26:49.734Z"
+      },
+      "phases": [
+        {
+          "label": "background-idle-hidden",
+          "summary": {
+            "cpuPercentOneCore": 5.116508106325055,
+            "cpuSeconds": 1.5354044583333333,
+            "elapsedSeconds": 30.008834666659823,
+            "interruptWakeupsPerSecond": 15.762024925463324,
+            "liveProcessCountMax": 24,
+            "liveProcessCountMin": 24,
+            "packageIdleWakeupsPerSecond": 0,
+            "processCountMax": 24,
+            "processCountMin": 24,
+            "summedPhysicalFootprintMiBMedian": 441.6896667480469,
+            "summedPhysicalFootprintMiBPeak": 453.7219009399414
+          },
+          "components": {
+            "desktop": {
+              "cpuPercentOneCore": 0.2706605712469469,
+              "interruptWakeupsPerSecond": 3.2323814329174256,
+              "physicalFootprintMiBMedian": 178.84475708007812
+            },
+            "daemon": {
+              "cpuPercentOneCore": 4.805514690430482,
+              "interruptWakeupsPerSecond": 11.863173094006223,
+              "physicalFootprintMiBMedian": 130.26448822021484
+            },
+            "tmuxAndWorkers": {
+              "cpuPercentOneCore": 0.04033284464762541,
+              "interruptWakeupsPerSecond": 0.6664703985396754,
+              "physicalFootprintMiBMedian": 144.42515563964844
+            }
+          },
+          "nativeBefore": {
+            "key": false,
+            "focusLosses": 0,
+            "hidden": true,
+            "active": false,
+            "visible": false,
+            "width": 1280.0,
+            "scale": 2.0,
+            "height": 800.0
+          },
+          "nativeAfter": {
+            "key": false,
+            "focusLosses": 0,
+            "hidden": true,
+            "active": false,
+            "visible": false,
+            "width": 1280.0,
+            "scale": 2.0,
+            "height": 800.0
+          },
+          "allTenTerminalsControlling": true,
+          "workers": [
+            {
+              "index": 0,
+              "mode": "idle-hidden",
+              "elapsedMs": 30086.343375,
+              "ticks": 0,
+              "skipped": 0,
+              "bytes": 0
+            },
+            {
+              "index": 1,
+              "mode": "idle-hidden",
+              "elapsedMs": 30085.694875,
+              "ticks": 0,
+              "skipped": 0,
+              "bytes": 0
+            },
+            {
+              "index": 2,
+              "mode": "idle-hidden",
+              "elapsedMs": 30084.981541,
+              "ticks": 0,
+              "skipped": 0,
+              "bytes": 0
+            },
+            {
+              "index": 3,
+              "mode": "idle-hidden",
+              "elapsedMs": 30084.179833,
+              "ticks": 0,
+              "skipped": 0,
+              "bytes": 0
+            },
+            {
+              "index": 4,
+              "mode": "idle-hidden",
+              "elapsedMs": 30083.268167000002,
+              "ticks": 0,
+              "skipped": 0,
+              "bytes": 0
+            },
+            {
+              "index": 5,
+              "mode": "idle-hidden",
+              "elapsedMs": 30081.874749999995,
+              "ticks": 0,
+              "skipped": 0,
+              "bytes": 0
+            },
+            {
+              "index": 6,
+              "mode": "idle-hidden",
+              "elapsedMs": 30081.061,
+              "ticks": 0,
+              "skipped": 0,
+              "bytes": 0
+            },
+            {
+              "index": 7,
+              "mode": "idle-hidden",
+              "elapsedMs": 30080.253666999997,
+              "ticks": 0,
+              "skipped": 0,
+              "bytes": 0
+            },
+            {
+              "index": 8,
+              "mode": "idle-hidden",
+              "elapsedMs": 30078.934082999996,
+              "ticks": 0,
+              "skipped": 0,
+              "bytes": 0
+            },
+            {
+              "index": 9,
+              "mode": "idle-hidden",
+              "elapsedMs": 30078.337375,
+              "ticks": 0,
+              "skipped": 0,
+              "bytes": 0
+            }
+          ],
+          "cpuClock": {
+            "timebaseDenom": 3,
+            "timebaseNumer": 125,
+            "unit": "mach_absolute_time"
+          },
+          "rawSampleSha256": "b0cf06ebba201cc45f60b26fc29acfa9d7d09eb74cc8e2006bee76c446125129",
+          "aggregateSamples": [
+            {
+              "elapsedSeconds": 0.007996458356501535,
+              "cpuTicks": 67950304,
+              "interruptWakeups": 1233,
+              "footprintBytes": 457786944
+            },
+            {
+              "elapsedSeconds": 1.0165936250123195,
+              "cpuTicks": 72317365,
+              "interruptWakeups": 1262,
+              "footprintBytes": 462784736
+            },
+            {
+              "elapsedSeconds": 2.0158239583543036,
+              "cpuTicks": 72335428,
+              "interruptWakeups": 1266,
+              "footprintBytes": 462735584
+            },
+            {
+              "elapsedSeconds": 3.005721541674575,
+              "cpuTicks": 72737102,
+              "interruptWakeups": 1298,
+              "footprintBytes": 463145184
+            },
+            {
+              "elapsedSeconds": 4.0075317916926,
+              "cpuTicks": 72742973,
+              "interruptWakeups": 1302,
+              "footprintBytes": 463145184
+            },
+            {
+              "elapsedSeconds": 5.008568375022151,
+              "cpuTicks": 72760780,
+              "interruptWakeups": 1307,
+              "footprintBytes": 463145184
+            },
+            {
+              "elapsedSeconds": 6.012840375013184,
+              "cpuTicks": 84047462,
+              "interruptWakeups": 1364,
+              "footprintBytes": 471960808
+            },
+            {
+              "elapsedSeconds": 7.016403208341217,
+              "cpuTicks": 84053553,
+              "interruptWakeups": 1368,
+              "footprintBytes": 471960808
+            },
+            {
+              "elapsedSeconds": 8.015588250011206,
+              "cpuTicks": 84480461,
+              "interruptWakeups": 1404,
+              "footprintBytes": 472206568
+            },
+            {
+              "elapsedSeconds": 9.006684749998385,
+              "cpuTicks": 84494440,
+              "interruptWakeups": 1412,
+              "footprintBytes": 472206568
+            },
+            {
+              "elapsedSeconds": 10.016592125000898,
+              "cpuTicks": 84589327,
+              "interruptWakeups": 1417,
+              "footprintBytes": 472255720
+            },
+            {
+              "elapsedSeconds": 11.011459916684544,
+              "cpuTicks": 90157969,
+              "interruptWakeups": 1449,
+              "footprintBytes": 474746064
+            },
+            {
+              "elapsedSeconds": 12.008381625026232,
+              "cpuTicks": 90161766,
+              "interruptWakeups": 1451,
+              "footprintBytes": 474746064
+            },
+            {
+              "elapsedSeconds": 13.015272083343007,
+              "cpuTicks": 90617879,
+              "interruptWakeups": 1483,
+              "footprintBytes": 474959056
+            },
+            {
+              "elapsedSeconds": 14.012431375012966,
+              "cpuTicks": 90623488,
+              "interruptWakeups": 1487,
+              "footprintBytes": 474959056
+            },
+            {
+              "elapsedSeconds": 15.010867291683098,
+              "cpuTicks": 90637546,
+              "interruptWakeups": 1493,
+              "footprintBytes": 474959056
+            },
+            {
+              "elapsedSeconds": 16.01350641666795,
+              "cpuTicks": 94897466,
+              "interruptWakeups": 1517,
+              "footprintBytes": 475548904
+            },
+            {
+              "elapsedSeconds": 17.01434925000649,
+              "cpuTicks": 94914088,
+              "interruptWakeups": 1522,
+              "footprintBytes": 475548904
+            },
+            {
+              "elapsedSeconds": 18.014397000020836,
+              "cpuTicks": 95256313,
+              "interruptWakeups": 1549,
+              "footprintBytes": 475761896
+            },
+            {
+              "elapsedSeconds": 19.01322733334382,
+              "cpuTicks": 95261775,
+              "interruptWakeups": 1555,
+              "footprintBytes": 475761896
+            },
+            {
+              "elapsedSeconds": 20.01517187501304,
+              "cpuTicks": 95266702,
+              "interruptWakeups": 1557,
+              "footprintBytes": 475761896
+            },
+            {
+              "elapsedSeconds": 21.010808125021867,
+              "cpuTicks": 99785424,
+              "interruptWakeups": 1587,
+              "footprintBytes": 459853080
+            },
+            {
+              "elapsedSeconds": 22.012155166681623,
+              "cpuTicks": 99795302,
+              "interruptWakeups": 1589,
+              "footprintBytes": 459885848
+            },
+            {
+              "elapsedSeconds": 23.015982666693162,
+              "cpuTicks": 100209083,
+              "interruptWakeups": 1630,
+              "footprintBytes": 460115224
+            },
+            {
+              "elapsedSeconds": 24.007907958352007,
+              "cpuTicks": 100214125,
+              "interruptWakeups": 1634,
+              "footprintBytes": 460115224
+            },
+            {
+              "elapsedSeconds": 25.009186875016894,
+              "cpuTicks": 100269819,
+              "interruptWakeups": 1641,
+              "footprintBytes": 460115224
+            },
+            {
+              "elapsedSeconds": 26.01322754166904,
+              "cpuTicks": 104440778,
+              "interruptWakeups": 1666,
+              "footprintBytes": 460967216
+            },
+            {
+              "elapsedSeconds": 27.004121958336327,
+              "cpuTicks": 104448596,
+              "interruptWakeups": 1670,
+              "footprintBytes": 460967216
+            },
+            {
+              "elapsedSeconds": 28.0085472916835,
+              "cpuTicks": 104780164,
+              "interruptWakeups": 1696,
+              "footprintBytes": 461180208
+            },
+            {
+              "elapsedSeconds": 29.012701958359685,
+              "cpuTicks": 104794881,
+              "interruptWakeups": 1703,
+              "footprintBytes": 461180208
+            },
+            {
+              "elapsedSeconds": 30.016831125016324,
+              "cpuTicks": 104800011,
+              "interruptWakeups": 1706,
+              "footprintBytes": 461180208
+            }
+          ]
+        },
+        {
+          "label": "background-active",
+          "summary": {
+            "cpuPercentOneCore": 44.14274747799078,
+            "cpuSeconds": 13.244762625,
+            "elapsedSeconds": 30.004391166643472,
+            "interruptWakeupsPerSecond": 1010.0854848770584,
+            "liveProcessCountMax": 24,
+            "liveProcessCountMin": 24,
+            "packageIdleWakeupsPerSecond": 0,
+            "processCountMax": 24,
+            "processCountMin": 24,
+            "summedPhysicalFootprintMiBMedian": 659.3793411254883,
+            "summedPhysicalFootprintMiBPeak": 783.0073852539062
+          },
+          "components": {
+            "desktop": {
+              "cpuPercentOneCore": 27.178789974579566,
+              "interruptWakeupsPerSecond": 229.93301086108247,
+              "physicalFootprintMiBMedian": 398.7667465209961
+            },
+            "daemon": {
+              "cpuPercentOneCore": 8.777585483091658,
+              "interruptWakeupsPerSecond": 260.22857643184983,
+              "physicalFootprintMiBMedian": 117.5927734375
+            },
+            "tmuxAndWorkers": {
+              "cpuPercentOneCore": 8.186372020319554,
+              "interruptWakeupsPerSecond": 519.9238975841262,
+              "physicalFootprintMiBMedian": 151.00575256347656
+            }
+          },
+          "nativeBefore": {
+            "key": false,
+            "width": 1280.0,
+            "focusLosses": 0,
+            "hidden": true,
+            "active": false,
+            "height": 800.0,
+            "visible": false,
+            "scale": 2.0
+          },
+          "nativeAfter": {
+            "focusLosses": 0,
+            "active": false,
+            "height": 800.0,
+            "visible": false,
+            "scale": 2.0,
+            "width": 1280.0,
+            "key": false,
+            "hidden": true
+          },
+          "allTenTerminalsControlling": true,
+          "workers": [
+            {
+              "index": 0,
+              "mode": "active",
+              "elapsedMs": 30047.791209000003,
+              "ticks": 584,
+              "skipped": 0,
+              "bytes": 291400
+            },
+            {
+              "index": 1,
+              "mode": "active",
+              "elapsedMs": 30047.459459000005,
+              "ticks": 584,
+              "skipped": 0,
+              "bytes": 291400
+            },
+            {
+              "index": 2,
+              "mode": "active",
+              "elapsedMs": 30047.434166000006,
+              "ticks": 584,
+              "skipped": 0,
+              "bytes": 291400
+            },
+            {
+              "index": 3,
+              "mode": "active",
+              "elapsedMs": 30047.281292,
+              "ticks": 584,
+              "skipped": 0,
+              "bytes": 291400
+            },
+            {
+              "index": 4,
+              "mode": "active",
+              "elapsedMs": 30047.140375000003,
+              "ticks": 584,
+              "skipped": 0,
+              "bytes": 291400
+            },
+            {
+              "index": 5,
+              "mode": "active",
+              "elapsedMs": 30046.962541,
+              "ticks": 584,
+              "skipped": 0,
+              "bytes": 291400
+            },
+            {
+              "index": 6,
+              "mode": "active",
+              "elapsedMs": 30046.848124999997,
+              "ticks": 584,
+              "skipped": 0,
+              "bytes": 291400
+            },
+            {
+              "index": 7,
+              "mode": "active",
+              "elapsedMs": 30046.719457999992,
+              "ticks": 584,
+              "skipped": 0,
+              "bytes": 291400
+            },
+            {
+              "index": 8,
+              "mode": "active",
+              "elapsedMs": 30046.58425,
+              "ticks": 584,
+              "skipped": 0,
+              "bytes": 291400
+            },
+            {
+              "index": 9,
+              "mode": "active",
+              "elapsedMs": 30046.457540999996,
+              "ticks": 584,
+              "skipped": 0,
+              "bytes": 291400
+            }
+          ],
+          "cpuClock": {
+            "timebaseDenom": 3,
+            "timebaseNumer": 125,
+            "unit": "mach_absolute_time"
+          },
+          "rawSampleSha256": "6e426786e8d66c5b3f0f29a063097a653856fc85a63ca009a12115c8ae07f3a1",
+          "aggregateSamples": [
+            {
+              "elapsedSeconds": 0.007147500000428408,
+              "cpuTicks": 159416035,
+              "interruptWakeups": 6556,
+              "footprintBytes": 586517904
+            },
+            {
+              "elapsedSeconds": 1.0150041666638572,
+              "cpuTicks": 171024592,
+              "interruptWakeups": 7578,
+              "footprintBytes": 595677544
+            },
+            {
+              "elapsedSeconds": 2.014940499997465,
+              "cpuTicks": 182083325,
+              "interruptWakeups": 8637,
+              "footprintBytes": 598118760
+            },
+            {
+              "elapsedSeconds": 3.015537208324531,
+              "cpuTicks": 192754802,
+              "interruptWakeups": 9595,
+              "footprintBytes": 614322536
+            },
+            {
+              "elapsedSeconds": 4.0076710833236575,
+              "cpuTicks": 200188255,
+              "interruptWakeups": 10588,
+              "footprintBytes": 616812904
+            },
+            {
+              "elapsedSeconds": 5.011676041642204,
+              "cpuTicks": 208622680,
+              "interruptWakeups": 11554,
+              "footprintBytes": 633131392
+            },
+            {
+              "elapsedSeconds": 6.014292208332336,
+              "cpuTicks": 221342253,
+              "interruptWakeups": 12658,
+              "footprintBytes": 633049640
+            },
+            {
+              "elapsedSeconds": 7.0058915833360516,
+              "cpuTicks": 231481450,
+              "interruptWakeups": 13609,
+              "footprintBytes": 635900456
+            },
+            {
+              "elapsedSeconds": 8.010923541645752,
+              "cpuTicks": 242479017,
+              "interruptWakeups": 14622,
+              "footprintBytes": 652595752
+            },
+            {
+              "elapsedSeconds": 9.01192104164511,
+              "cpuTicks": 253002147,
+              "interruptWakeups": 15672,
+              "footprintBytes": 647859888
+            },
+            {
+              "elapsedSeconds": 10.006235916662263,
+              "cpuTicks": 262854670,
+              "interruptWakeups": 16718,
+              "footprintBytes": 655266152
+            },
+            {
+              "elapsedSeconds": 11.00857333332533,
+              "cpuTicks": 273185317,
+              "interruptWakeups": 17905,
+              "footprintBytes": 660476312
+            },
+            {
+              "elapsedSeconds": 12.010010291647632,
+              "cpuTicks": 282635890,
+              "interruptWakeups": 19004,
+              "footprintBytes": 664064408
+            },
+            {
+              "elapsedSeconds": 13.007357875001617,
+              "cpuTicks": 293836550,
+              "interruptWakeups": 20036,
+              "footprintBytes": 681464216
+            },
+            {
+              "elapsedSeconds": 14.019391958310734,
+              "cpuTicks": 302137704,
+              "interruptWakeups": 21069,
+              "footprintBytes": 685150640
+            },
+            {
+              "elapsedSeconds": 15.019983333331766,
+              "cpuTicks": 313621549,
+              "interruptWakeups": 22177,
+              "footprintBytes": 691409352
+            },
+            {
+              "elapsedSeconds": 16.012998999998672,
+              "cpuTicks": 325765514,
+              "interruptWakeups": 23217,
+              "footprintBytes": 741790200
+            },
+            {
+              "elapsedSeconds": 17.015646249987185,
+              "cpuTicks": 337058500,
+              "interruptWakeups": 24158,
+              "footprintBytes": 742035960
+            },
+            {
+              "elapsedSeconds": 18.005766791669885,
+              "cpuTicks": 347377294,
+              "interruptWakeups": 25195,
+              "footprintBytes": 753914360
+            },
+            {
+              "elapsedSeconds": 19.005248999979813,
+              "cpuTicks": 356759895,
+              "interruptWakeups": 26142,
+              "footprintBytes": 749588984
+            },
+            {
+              "elapsedSeconds": 20.00822624997818,
+              "cpuTicks": 367474334,
+              "interruptWakeups": 27184,
+              "footprintBytes": 747100440
+            },
+            {
+              "elapsedSeconds": 21.006145666644443,
+              "cpuTicks": 380777024,
+              "interruptWakeups": 28270,
+              "footprintBytes": 764483912
+            },
+            {
+              "elapsedSeconds": 22.017443749995437,
+              "cpuTicks": 393834807,
+              "interruptWakeups": 29285,
+              "footprintBytes": 734617104
+            },
+            {
+              "elapsedSeconds": 23.00352741664392,
+              "cpuTicks": 404569789,
+              "interruptWakeups": 30212,
+              "footprintBytes": 783982120
+            },
+            {
+              "elapsedSeconds": 24.00897070832434,
+              "cpuTicks": 412175493,
+              "interruptWakeups": 31066,
+              "footprintBytes": 786374184
+            },
+            {
+              "elapsedSeconds": 25.016618499998003,
+              "cpuTicks": 422925491,
+              "interruptWakeups": 31997,
+              "footprintBytes": 792288808
+            },
+            {
+              "elapsedSeconds": 26.01592524998705,
+              "cpuTicks": 435731325,
+              "interruptWakeups": 32955,
+              "footprintBytes": 812785216
+            },
+            {
+              "elapsedSeconds": 27.006459166645072,
+              "cpuTicks": 446673907,
+              "interruptWakeups": 33888,
+              "footprintBytes": 811834944
+            },
+            {
+              "elapsedSeconds": 28.0143303333316,
+              "cpuTicks": 456289228,
+              "interruptWakeups": 34927,
+              "footprintBytes": 821042752
+            },
+            {
+              "elapsedSeconds": 29.011389999999665,
+              "cpuTicks": 466999840,
+              "interruptWakeups": 35886,
+              "footprintBytes": 816471616
+            },
+            {
+              "elapsedSeconds": 30.0115386666439,
+              "cpuTicks": 477290338,
+              "interruptWakeups": 36863,
+              "footprintBytes": 811966064
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "index": 4,
+      "variant": "baseline",
+      "startedAt": "2026-10-03T00:26:49.847552+00:00",
+      "finishedAt": "2026-10-03T00:28:06.194811+00:00",
+      "loadAverageBefore": [
+        7.3974609375,
+        6.82080078125,
+        6.16796875
+      ],
+      "loadAverageAfter": [
+        6.451171875,
+        6.603515625,
+        6.13525390625
+      ],
+      "resultSha256": "189f5f08298d29208dcbdfc7622d0986b16a274c3ecd32da20beb5104dd87aa3",
+      "daemonMetadata": {
+        "bundleSha256": "081bef927fb76b77bb07930956a57c3e01c8619c24a9e65dc20f5f9fcac4c1a1",
+        "sourceRevision": "29e03783d3eb94c3a42969dbb9facce7915103e7",
+        "sourceDiffSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "boundary": "Full local daemon and tmux; private terminal shells; no cloud account or model inference."
+      },
+      "cleanup": {
+        "success": true,
+        "errors": [],
+        "daemonExit": 0,
+        "daemonSignal": null,
+        "finishedAt": "2026-10-03T00:28:06.099Z"
+      },
+      "phases": [
+        {
+          "label": "background-idle-hidden",
+          "summary": {
+            "cpuPercentOneCore": 4.662359509092464,
+            "cpuSeconds": 1.399092375,
+            "elapsedSeconds": 30.008247374993516,
+            "interruptWakeupsPerSecond": 16.062250953104993,
+            "liveProcessCountMax": 24,
+            "liveProcessCountMin": 24,
+            "packageIdleWakeupsPerSecond": 0,
+            "processCountMax": 24,
+            "processCountMin": 24,
+            "summedPhysicalFootprintMiBMedian": 445.1895523071289,
+            "summedPhysicalFootprintMiBPeak": 470.612548828125
+          },
+          "components": {
+            "desktop": {
+              "cpuPercentOneCore": 0.25656863274247327,
+              "interruptWakeupsPerSecond": 3.332417210187758,
+              "physicalFootprintMiBMedian": 180.78227996826172
+            },
+            "daemon": {
+              "cpuPercentOneCore": 4.375659854189059,
+              "interruptWakeupsPerSecond": 12.063350300879684,
+              "physicalFootprintMiBMedian": 133.49874877929688
+            },
+            "tmuxAndWorkers": {
+              "cpuPercentOneCore": 0.030131022160932247,
+              "interruptWakeupsPerSecond": 0.6664834420375516,
+              "physicalFootprintMiBMedian": 145.40959930419922
+            }
+          },
+          "nativeBefore": {
+            "visible": false,
+            "active": false,
+            "width": 1280.0,
+            "hidden": true,
+            "height": 800.0,
+            "scale": 2.0,
+            "key": false,
+            "focusLosses": 0
+          },
+          "nativeAfter": {
+            "visible": false,
+            "active": false,
+            "width": 1280.0,
+            "hidden": true,
+            "height": 800.0,
+            "scale": 2.0,
+            "key": false,
+            "focusLosses": 0
+          },
+          "allTenTerminalsControlling": true,
+          "workers": [
+            {
+              "index": 0,
+              "mode": "idle-hidden",
+              "elapsedMs": 30090.281750000002,
+              "ticks": 0,
+              "skipped": 0,
+              "bytes": 0
+            },
+            {
+              "index": 1,
+              "mode": "idle-hidden",
+              "elapsedMs": 30089.617792000005,
+              "ticks": 0,
+              "skipped": 0,
+              "bytes": 0
+            },
+            {
+              "index": 2,
+              "mode": "idle-hidden",
+              "elapsedMs": 30089.134541,
+              "ticks": 0,
+              "skipped": 0,
+              "bytes": 0
+            },
+            {
+              "index": 3,
+              "mode": "idle-hidden",
+              "elapsedMs": 30088.516792000002,
+              "ticks": 0,
+              "skipped": 0,
+              "bytes": 0
+            },
+            {
+              "index": 4,
+              "mode": "idle-hidden",
+              "elapsedMs": 30087.882208,
+              "ticks": 0,
+              "skipped": 0,
+              "bytes": 0
+            },
+            {
+              "index": 5,
+              "mode": "idle-hidden",
+              "elapsedMs": 30087.200209,
+              "ticks": 0,
+              "skipped": 0,
+              "bytes": 0
+            },
+            {
+              "index": 6,
+              "mode": "idle-hidden",
+              "elapsedMs": 30086.578999999998,
+              "ticks": 0,
+              "skipped": 0,
+              "bytes": 0
+            },
+            {
+              "index": 7,
+              "mode": "idle-hidden",
+              "elapsedMs": 30085.728249999996,
+              "ticks": 0,
+              "skipped": 0,
+              "bytes": 0
+            },
+            {
+              "index": 8,
+              "mode": "idle-hidden",
+              "elapsedMs": 30084.750458,
+              "ticks": 0,
+              "skipped": 0,
+              "bytes": 0
+            },
+            {
+              "index": 9,
+              "mode": "idle-hidden",
+              "elapsedMs": 30083.868084,
+              "ticks": 0,
+              "skipped": 0,
+              "bytes": 0
+            }
+          ],
+          "cpuClock": {
+            "timebaseDenom": 3,
+            "timebaseNumer": 125,
+            "unit": "mach_absolute_time"
+          },
+          "rawSampleSha256": "410a2298100f85cabfc330c3272e4cb65bcee0a52ef31c4c5b8a5830cd0cf808",
+          "aggregateSamples": [
+            {
+              "elapsedSeconds": 0.008944166649598628,
+              "cpuTicks": 66842836,
+              "interruptWakeups": 1288,
+              "footprintBytes": 461538856
+            },
+            {
+              "elapsedSeconds": 1.0117305000021588,
+              "cpuTicks": 70896522,
+              "interruptWakeups": 1316,
+              "footprintBytes": 466487400
+            },
+            {
+              "elapsedSeconds": 2.01203291665297,
+              "cpuTicks": 70913619,
+              "interruptWakeups": 1320,
+              "footprintBytes": 466438248
+            },
+            {
+              "elapsedSeconds": 3.0095467916689813,
+              "cpuTicks": 71312375,
+              "interruptWakeups": 1352,
+              "footprintBytes": 466815080
+            },
+            {
+              "elapsedSeconds": 4.015300041646697,
+              "cpuTicks": 71316196,
+              "interruptWakeups": 1356,
+              "footprintBytes": 466815080
+            },
+            {
+              "elapsedSeconds": 5.0143928333127405,
+              "cpuTicks": 71332302,
+              "interruptWakeups": 1361,
+              "footprintBytes": 466815080
+            },
+            {
+              "elapsedSeconds": 6.0173293333209585,
+              "cpuTicks": 81826666,
+              "interruptWakeups": 1415,
+              "footprintBytes": 475909352
+            },
+            {
+              "elapsedSeconds": 7.00747933331877,
+              "cpuTicks": 81832432,
+              "interruptWakeups": 1419,
+              "footprintBytes": 475909352
+            },
+            {
+              "elapsedSeconds": 8.015227416646667,
+              "cpuTicks": 82270039,
+              "interruptWakeups": 1456,
+              "footprintBytes": 476155112
+            },
+            {
+              "elapsedSeconds": 9.010319875000278,
+              "cpuTicks": 82287153,
+              "interruptWakeups": 1464,
+              "footprintBytes": 476155112
+            },
+            {
+              "elapsedSeconds": 10.017079124983866,
+              "cpuTicks": 82749224,
+              "interruptWakeups": 1470,
+              "footprintBytes": 493473024
+            },
+            {
+              "elapsedSeconds": 11.013439291651594,
+              "cpuTicks": 86582625,
+              "interruptWakeups": 1509,
+              "footprintBytes": 481791184
+            },
+            {
+              "elapsedSeconds": 12.012057833315339,
+              "cpuTicks": 86585576,
+              "interruptWakeups": 1511,
+              "footprintBytes": 481791184
+            },
+            {
+              "elapsedSeconds": 13.00810300000012,
+              "cpuTicks": 86977774,
+              "interruptWakeups": 1541,
+              "footprintBytes": 482020560
+            },
+            {
+              "elapsedSeconds": 14.008176166651538,
+              "cpuTicks": 86983417,
+              "interruptWakeups": 1545,
+              "footprintBytes": 482020560
+            },
+            {
+              "elapsedSeconds": 15.016348208329873,
+              "cpuTicks": 86997748,
+              "interruptWakeups": 1552,
+              "footprintBytes": 482004176
+            },
+            {
+              "elapsedSeconds": 16.018117416650057,
+              "cpuTicks": 90917655,
+              "interruptWakeups": 1573,
+              "footprintBytes": 482790632
+            },
+            {
+              "elapsedSeconds": 17.012815708323615,
+              "cpuTicks": 90935829,
+              "interruptWakeups": 1578,
+              "footprintBytes": 482790632
+            },
+            {
+              "elapsedSeconds": 18.01430433333735,
+              "cpuTicks": 91245324,
+              "interruptWakeups": 1605,
+              "footprintBytes": 483003624
+            },
+            {
+              "elapsedSeconds": 19.01425612499588,
+              "cpuTicks": 91250363,
+              "interruptWakeups": 1611,
+              "footprintBytes": 483003624
+            },
+            {
+              "elapsedSeconds": 20.015247374976752,
+              "cpuTicks": 91254007,
+              "interruptWakeups": 1613,
+              "footprintBytes": 483003624
+            },
+            {
+              "elapsedSeconds": 21.011065291648265,
+              "cpuTicks": 95372863,
+              "interruptWakeups": 1649,
+              "footprintBytes": 463555840
+            },
+            {
+              "elapsedSeconds": 22.014637583313743,
+              "cpuTicks": 95381480,
+              "interruptWakeups": 1651,
+              "footprintBytes": 463555840
+            },
+            {
+              "elapsedSeconds": 23.011850583308842,
+              "cpuTicks": 95820401,
+              "interruptWakeups": 1691,
+              "footprintBytes": 463817984
+            },
+            {
+              "elapsedSeconds": 24.009157708322164,
+              "cpuTicks": 95824878,
+              "interruptWakeups": 1695,
+              "footprintBytes": 463817984
+            },
+            {
+              "elapsedSeconds": 25.008407791669015,
+              "cpuTicks": 95893227,
+              "interruptWakeups": 1702,
+              "footprintBytes": 463817984
+            },
+            {
+              "elapsedSeconds": 26.011920958320843,
+              "cpuTicks": 100023549,
+              "interruptWakeups": 1729,
+              "footprintBytes": 464637232
+            },
+            {
+              "elapsedSeconds": 27.015272499993443,
+              "cpuTicks": 100030631,
+              "interruptWakeups": 1733,
+              "footprintBytes": 464637232
+            },
+            {
+              "elapsedSeconds": 28.0150185416569,
+              "cpuTicks": 100395921,
+              "interruptWakeups": 1760,
+              "footprintBytes": 464850224
+            },
+            {
+              "elapsedSeconds": 29.014425458328333,
+              "cpuTicks": 100415098,
+              "interruptWakeups": 1767,
+              "footprintBytes": 464850224
+            },
+            {
+              "elapsedSeconds": 30.017191541643115,
+              "cpuTicks": 100421053,
+              "interruptWakeups": 1770,
+              "footprintBytes": 464850224
+            }
+          ]
+        },
+        {
+          "label": "background-active",
+          "summary": {
+            "cpuPercentOneCore": 37.00741365675263,
+            "cpuSeconds": 11.104142083333334,
+            "elapsedSeconds": 30.005182708322536,
+            "interruptWakeupsPerSecond": 1033.3881416892552,
+            "liveProcessCountMax": 25,
+            "liveProcessCountMin": 24,
+            "packageIdleWakeupsPerSecond": 0,
+            "processCountMax": 25,
+            "processCountMin": 24,
+            "summedPhysicalFootprintMiBMedian": 661.4729080200195,
+            "summedPhysicalFootprintMiBPeak": 781.4915771484375
+          },
+          "components": {
+            "desktop": {
+              "cpuPercentOneCore": 22.400726646697017,
+              "interruptWakeupsPerSecond": 233.65963367573028,
+              "physicalFootprintMiBMedian": 401.0323715209961
+            },
+            "daemon": {
+              "cpuPercentOneCore": 7.850755116426218,
+              "interruptWakeupsPerSecond": 276.418913379904,
+              "physicalFootprintMiBMedian": 117.88971710205078
+            },
+            "tmuxAndWorkers": {
+              "cpuPercentOneCore": 6.755931893629391,
+              "interruptWakeupsPerSecond": 523.309594633621,
+              "physicalFootprintMiBMedian": 150.88075256347656
+            }
+          },
+          "nativeBefore": {
+            "active": false,
+            "hidden": true,
+            "key": false,
+            "width": 1280.0,
+            "visible": false,
+            "height": 800.0,
+            "scale": 2.0,
+            "focusLosses": 0
+          },
+          "nativeAfter": {
+            "visible": false,
+            "focusLosses": 0,
+            "active": false,
+            "hidden": true,
+            "scale": 2.0,
+            "height": 800.0,
+            "key": false,
+            "width": 1280.0
+          },
+          "allTenTerminalsControlling": true,
+          "workers": [
+            {
+              "index": 0,
+              "mode": "active",
+              "elapsedMs": 30084.286249999997,
+              "ticks": 584,
+              "skipped": 0,
+              "bytes": 291400
+            },
+            {
+              "index": 1,
+              "mode": "active",
+              "elapsedMs": 30083.63804099999,
+              "ticks": 584,
+              "skipped": 0,
+              "bytes": 291400
+            },
+            {
+              "index": 2,
+              "mode": "active",
+              "elapsedMs": 30083.523791000007,
+              "ticks": 584,
+              "skipped": 0,
+              "bytes": 291400
+            },
+            {
+              "index": 3,
+              "mode": "active",
+              "elapsedMs": 30082.92004199999,
+              "ticks": 585,
+              "skipped": 0,
+              "bytes": 291899
+            },
+            {
+              "index": 4,
+              "mode": "active",
+              "elapsedMs": 30081.839625000008,
+              "ticks": 583,
+              "skipped": 0,
+              "bytes": 290901
+            },
+            {
+              "index": 5,
+              "mode": "active",
+              "elapsedMs": 30081.610125000007,
+              "ticks": 585,
+              "skipped": 0,
+              "bytes": 291899
+            },
+            {
+              "index": 6,
+              "mode": "active",
+              "elapsedMs": 30080.649000000005,
+              "ticks": 584,
+              "skipped": 0,
+              "bytes": 291400
+            },
+            {
+              "index": 7,
+              "mode": "active",
+              "elapsedMs": 30079.765207999997,
+              "ticks": 584,
+              "skipped": 0,
+              "bytes": 291400
+            },
+            {
+              "index": 8,
+              "mode": "active",
+              "elapsedMs": 30079.380958,
+              "ticks": 584,
+              "skipped": 0,
+              "bytes": 291400
+            },
+            {
+              "index": 9,
+              "mode": "active",
+              "elapsedMs": 30079.428417000003,
+              "ticks": 584,
+              "skipped": 0,
+              "bytes": 291400
+            }
+          ],
+          "cpuClock": {
+            "timebaseDenom": 3,
+            "timebaseNumer": 125,
+            "unit": "mach_absolute_time"
+          },
+          "rawSampleSha256": "f06663be05eac3d19ba5110570f0ea5378d977d9da30e18c7a967e1e2c8989cb",
+          "aggregateSamples": [
+            {
+              "elapsedSeconds": 0.007427791657391936,
+              "cpuTicks": 143922738,
+              "interruptWakeups": 5980,
+              "footprintBytes": 591088992
+            },
+            {
+              "elapsedSeconds": 1.0136017499899026,
+              "cpuTicks": 155394048,
+              "interruptWakeups": 6996,
+              "footprintBytes": 598954320
+            },
+            {
+              "elapsedSeconds": 2.012970083334949,
+              "cpuTicks": 166435908,
+              "interruptWakeups": 7982,
+              "footprintBytes": 602083664
+            },
+            {
+              "elapsedSeconds": 3.013700124982279,
+              "cpuTicks": 177144060,
+              "interruptWakeups": 9000,
+              "footprintBytes": 618123600
+            },
+            {
+              "elapsedSeconds": 4.003641708317446,
+              "cpuTicks": 184740143,
+              "interruptWakeups": 10032,
+              "footprintBytes": 620466512
+            },
+            {
+              "elapsedSeconds": 5.00324770831503,
+              "cpuTicks": 188294404,
+              "interruptWakeups": 11079,
+              "footprintBytes": 623677776
+            },
+            {
+              "elapsedSeconds": 6.011666541657178,
+              "cpuTicks": 195973505,
+              "interruptWakeups": 12063,
+              "footprintBytes": 636850632
+            },
+            {
+              "elapsedSeconds": 7.007622874982189,
+              "cpuTicks": 199187505,
+              "interruptWakeups": 13049,
+              "footprintBytes": 640684512
+            },
+            {
+              "elapsedSeconds": 8.011541833315277,
+              "cpuTicks": 202055786,
+              "interruptWakeups": 14081,
+              "footprintBytes": 657019360
+            },
+            {
+              "elapsedSeconds": 9.006278541666688,
+              "cpuTicks": 207467161,
+              "interruptWakeups": 15186,
+              "footprintBytes": 652217936
+            },
+            {
+              "elapsedSeconds": 10.00188991666073,
+              "cpuTicks": 212253789,
+              "interruptWakeups": 16247,
+              "footprintBytes": 645796008
+            },
+            {
+              "elapsedSeconds": 11.00222470832523,
+              "cpuTicks": 219251631,
+              "interruptWakeups": 17294,
+              "footprintBytes": 664113368
+            },
+            {
+              "elapsedSeconds": 12.006351666641422,
+              "cpuTicks": 223330799,
+              "interruptWakeups": 18414,
+              "footprintBytes": 667652312
+            },
+            {
+              "elapsedSeconds": 13.003143666661344,
+              "cpuTicks": 227517421,
+              "interruptWakeups": 19601,
+              "footprintBytes": 671437016
+            },
+            {
+              "elapsedSeconds": 14.01156433331198,
+              "cpuTicks": 231200197,
+              "interruptWakeups": 20745,
+              "footprintBytes": 688296152
+            },
+            {
+              "elapsedSeconds": 15.01118279164075,
+              "cpuTicks": 242166635,
+              "interruptWakeups": 21842,
+              "footprintBytes": 693604616
+            },
+            {
+              "elapsedSeconds": 16.012493249989348,
+              "cpuTicks": 254792343,
+              "interruptWakeups": 22947,
+              "footprintBytes": 746426704
+            },
+            {
+              "elapsedSeconds": 17.012685333320405,
+              "cpuTicks": 267575334,
+              "interruptWakeups": 23870,
+              "footprintBytes": 746771080
+            },
+            {
+              "elapsedSeconds": 18.00860562498565,
+              "cpuTicks": 276914577,
+              "interruptWakeups": 24865,
+              "footprintBytes": 708514128
+            },
+            {
+              "elapsedSeconds": 19.01425291664782,
+              "cpuTicks": 287240923,
+              "interruptWakeups": 25908,
+              "footprintBytes": 747671888
+            },
+            {
+              "elapsedSeconds": 20.00908291665837,
+              "cpuTicks": 297791762,
+              "interruptWakeups": 26882,
+              "footprintBytes": 717117576
+            },
+            {
+              "elapsedSeconds": 21.017407458333764,
+              "cpuTicks": 311355282,
+              "interruptWakeups": 27885,
+              "footprintBytes": 734664888
+            },
+            {
+              "elapsedSeconds": 22.010710624977946,
+              "cpuTicks": 324069061,
+              "interruptWakeups": 28833,
+              "footprintBytes": 770088272
+            },
+            {
+              "elapsedSeconds": 23.009907749976264,
+              "cpuTicks": 334494635,
+              "interruptWakeups": 29814,
+              "footprintBytes": 773807440
+            },
+            {
+              "elapsedSeconds": 24.012036916654324,
+              "cpuTicks": 344572403,
+              "interruptWakeups": 30818,
+              "footprintBytes": 793992528
+            },
+            {
+              "elapsedSeconds": 25.007952916668728,
+              "cpuTicks": 354651746,
+              "interruptWakeups": 31788,
+              "footprintBytes": 797891944
+            },
+            {
+              "elapsedSeconds": 26.007827166642528,
+              "cpuTicks": 366851625,
+              "interruptWakeups": 32803,
+              "footprintBytes": 817782144
+            },
+            {
+              "elapsedSeconds": 27.01520487497328,
+              "cpuTicks": 378347617,
+              "interruptWakeups": 33868,
+              "footprintBytes": 814488960
+            },
+            {
+              "elapsedSeconds": 28.013867041649064,
+              "cpuTicks": 388610188,
+              "interruptWakeups": 34924,
+              "footprintBytes": 777477504
+            },
+            {
+              "elapsedSeconds": 29.006342916662106,
+              "cpuTicks": 399946283,
+              "interruptWakeups": 35953,
+              "footprintBytes": 819453312
+            },
+            {
+              "elapsedSeconds": 30.012610499979928,
+              "cpuTicks": 410422148,
+              "interruptWakeups": 36987,
+              "footprintBytes": 814865840
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "index": 5,
+      "variant": "baseline",
+      "startedAt": "2026-10-03T00:28:06.196654+00:00",
+      "finishedAt": "2026-10-03T00:29:25.310829+00:00",
+      "loadAverageBefore": [
+        6.451171875,
+        6.603515625,
+        6.13525390625
+      ],
+      "loadAverageAfter": [
+        7.03125,
+        6.623046875,
+        6.17431640625
+      ],
+      "resultSha256": "a0e0d7370ca7778728a70dc251510d61d6f3e29c193e9dcbbf4df13c42b43c83",
+      "daemonMetadata": {
+        "bundleSha256": "081bef927fb76b77bb07930956a57c3e01c8619c24a9e65dc20f5f9fcac4c1a1",
+        "sourceRevision": "29e03783d3eb94c3a42969dbb9facce7915103e7",
+        "sourceDiffSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "boundary": "Full local daemon and tmux; private terminal shells; no cloud account or model inference."
+      },
+      "cleanup": {
+        "success": true,
+        "errors": [],
+        "daemonExit": 0,
+        "daemonSignal": null,
+        "finishedAt": "2026-10-03T00:29:25.195Z"
+      },
+      "phases": [
+        {
+          "label": "background-idle-hidden",
+          "summary": {
+            "cpuPercentOneCore": 5.318116812204502,
+            "cpuSeconds": 1.5958244583333332,
+            "elapsedSeconds": 30.007322416669922,
+            "interruptWakeupsPerSecond": 15.496217674579297,
+            "liveProcessCountMax": 24,
+            "liveProcessCountMin": 24,
+            "packageIdleWakeupsPerSecond": 0,
+            "processCountMax": 24,
+            "processCountMin": 24,
+            "summedPhysicalFootprintMiBMedian": 444.7207565307617,
+            "summedPhysicalFootprintMiBPeak": 469.64366149902344
+          },
+          "components": {
+            "desktop": {
+              "cpuPercentOneCore": 0.22817847273825012,
+              "interruptWakeupsPerSecond": 3.2658695314167123,
+              "physicalFootprintMiBMedian": 179.86040496826172
+            },
+            "daemon": {
+              "cpuPercentOneCore": 5.054615849888024,
+              "interruptWakeupsPerSecond": 11.563844157159174,
+              "physicalFootprintMiBMedian": 135.09247589111328
+            },
+            "tmuxAndWorkers": {
+              "cpuPercentOneCore": 0.035322489578227416,
+              "interruptWakeupsPerSecond": 0.6665039860034107,
+              "physicalFootprintMiBMedian": 144.31573486328125
+            }
+          },
+          "nativeBefore": {
+            "hidden": true,
+            "focusLosses": 0,
+            "height": 800.0,
+            "scale": 2.0,
+            "active": false,
+            "key": false,
+            "width": 1280.0,
+            "visible": false
+          },
+          "nativeAfter": {
+            "hidden": true,
+            "focusLosses": 0,
+            "height": 800.0,
+            "scale": 2.0,
+            "active": false,
+            "key": false,
+            "width": 1280.0,
+            "visible": false
+          },
+          "allTenTerminalsControlling": true,
+          "workers": [
+            {
+              "index": 0,
+              "mode": "idle-hidden",
+              "elapsedMs": 30092.792708,
+              "ticks": 0,
+              "skipped": 0,
+              "bytes": 0
+            },
+            {
+              "index": 1,
+              "mode": "idle-hidden",
+              "elapsedMs": 30091.719999999998,
+              "ticks": 0,
+              "skipped": 0,
+              "bytes": 0
+            },
+            {
+              "index": 2,
+              "mode": "idle-hidden",
+              "elapsedMs": 30090.721374999997,
+              "ticks": 0,
+              "skipped": 0,
+              "bytes": 0
+            },
+            {
+              "index": 3,
+              "mode": "idle-hidden",
+              "elapsedMs": 30089.72775,
+              "ticks": 0,
+              "skipped": 0,
+              "bytes": 0
+            },
+            {
+              "index": 4,
+              "mode": "idle-hidden",
+              "elapsedMs": 30088.793625000002,
+              "ticks": 0,
+              "skipped": 0,
+              "bytes": 0
+            },
+            {
+              "index": 5,
+              "mode": "idle-hidden",
+              "elapsedMs": 30087.826333,
+              "ticks": 0,
+              "skipped": 0,
+              "bytes": 0
+            },
+            {
+              "index": 6,
+              "mode": "idle-hidden",
+              "elapsedMs": 30086.960541,
+              "ticks": 0,
+              "skipped": 0,
+              "bytes": 0
+            },
+            {
+              "index": 7,
+              "mode": "idle-hidden",
+              "elapsedMs": 30086.112041000004,
+              "ticks": 0,
+              "skipped": 0,
+              "bytes": 0
+            },
+            {
+              "index": 8,
+              "mode": "idle-hidden",
+              "elapsedMs": 30085.350749999998,
+              "ticks": 0,
+              "skipped": 0,
+              "bytes": 0
+            },
+            {
+              "index": 9,
+              "mode": "idle-hidden",
+              "elapsedMs": 30084.568875000004,
+              "ticks": 0,
+              "skipped": 0,
+              "bytes": 0
+            }
+          ],
+          "cpuClock": {
+            "timebaseDenom": 3,
+            "timebaseNumer": 125,
+            "unit": "mach_absolute_time"
+          },
+          "rawSampleSha256": "c8708688676ff01fb3f6df99272ed3341dbbf30b2f46ff7f3a4edcee2dfa57c7",
+          "aggregateSamples": [
+            {
+              "elapsedSeconds": 0.008298208325868472,
+              "cpuTicks": 67419671,
+              "interruptWakeups": 1226,
+              "footprintBytes": 461047216
+            },
+            {
+              "elapsedSeconds": 1.0124493333278224,
+              "cpuTicks": 72267699,
+              "interruptWakeups": 1253,
+              "footprintBytes": 465979448
+            },
+            {
+              "elapsedSeconds": 2.0149006249848753,
+              "cpuTicks": 72283919,
+              "interruptWakeups": 1256,
+              "footprintBytes": 465979448
+            },
+            {
+              "elapsedSeconds": 3.00640466666664,
+              "cpuTicks": 72678754,
+              "interruptWakeups": 1289,
+              "footprintBytes": 466323512
+            },
+            {
+              "elapsedSeconds": 4.007657208334422,
+              "cpuTicks": 72686824,
+              "interruptWakeups": 1293,
+              "footprintBytes": 466323512
+            },
+            {
+              "elapsedSeconds": 5.014750125003047,
+              "cpuTicks": 72699285,
+              "interruptWakeups": 1298,
+              "footprintBytes": 466323512
+            },
+            {
+              "elapsedSeconds": 6.008129583322443,
+              "cpuTicks": 84470823,
+              "interruptWakeups": 1354,
+              "footprintBytes": 474778712
+            },
+            {
+              "elapsedSeconds": 7.011461791669717,
+              "cpuTicks": 84477411,
+              "interruptWakeups": 1358,
+              "footprintBytes": 474778712
+            },
+            {
+              "elapsedSeconds": 8.013935958326329,
+              "cpuTicks": 84892212,
+              "interruptWakeups": 1394,
+              "footprintBytes": 475073624
+            },
+            {
+              "elapsedSeconds": 9.007770374999382,
+              "cpuTicks": 84903425,
+              "interruptWakeups": 1402,
+              "footprintBytes": 475073624
+            },
+            {
+              "elapsedSeconds": 10.00164025000413,
+              "cpuTicks": 85157560,
+              "interruptWakeups": 1408,
+              "footprintBytes": 492457072
+            },
+            {
+              "elapsedSeconds": 11.015048041677801,
+              "cpuTicks": 89901465,
+              "interruptWakeups": 1433,
+              "footprintBytes": 481348672
+            },
+            {
+              "elapsedSeconds": 12.007858416676754,
+              "cpuTicks": 89903582,
+              "interruptWakeups": 1435,
+              "footprintBytes": 481348672
+            },
+            {
+              "elapsedSeconds": 13.009387375001097,
+              "cpuTicks": 90277047,
+              "interruptWakeups": 1465,
+              "footprintBytes": 481578048
+            },
+            {
+              "elapsedSeconds": 14.014635875006206,
+              "cpuTicks": 90280691,
+              "interruptWakeups": 1469,
+              "footprintBytes": 481578048
+            },
+            {
+              "elapsedSeconds": 15.010926041664788,
+              "cpuTicks": 90292153,
+              "interruptWakeups": 1475,
+              "footprintBytes": 481578048
+            },
+            {
+              "elapsedSeconds": 16.01185633332352,
+              "cpuTicks": 95389576,
+              "interruptWakeups": 1502,
+              "footprintBytes": 482331760
+            },
+            {
+              "elapsedSeconds": 17.012356333318166,
+              "cpuTicks": 95405789,
+              "interruptWakeups": 1507,
+              "footprintBytes": 482331760
+            },
+            {
+              "elapsedSeconds": 18.013754833344137,
+              "cpuTicks": 95729260,
+              "interruptWakeups": 1534,
+              "footprintBytes": 482544752
+            },
+            {
+              "elapsedSeconds": 19.008314500009874,
+              "cpuTicks": 95738102,
+              "interruptWakeups": 1540,
+              "footprintBytes": 482544752
+            },
+            {
+              "elapsedSeconds": 20.012101625005016,
+              "cpuTicks": 95742306,
+              "interruptWakeups": 1542,
+              "footprintBytes": 482544752
+            },
+            {
+              "elapsedSeconds": 21.014419374987483,
+              "cpuTicks": 100521086,
+              "interruptWakeups": 1577,
+              "footprintBytes": 461278368
+            },
+            {
+              "elapsedSeconds": 22.00791304165614,
+              "cpuTicks": 100529883,
+              "interruptWakeups": 1579,
+              "footprintBytes": 461278368
+            },
+            {
+              "elapsedSeconds": 23.01550241667428,
+              "cpuTicks": 100921831,
+              "interruptWakeups": 1615,
+              "footprintBytes": 461507744
+            },
+            {
+              "elapsedSeconds": 24.015527916664723,
+              "cpuTicks": 100928960,
+              "interruptWakeups": 1620,
+              "footprintBytes": 461507744
+            },
+            {
+              "elapsedSeconds": 25.01431608333951,
+              "cpuTicks": 100969580,
+              "interruptWakeups": 1627,
+              "footprintBytes": 461524128
+            },
+            {
+              "elapsedSeconds": 26.012331916659605,
+              "cpuTicks": 105380594,
+              "interruptWakeups": 1651,
+              "footprintBytes": 462245048
+            },
+            {
+              "elapsedSeconds": 27.01564349999535,
+              "cpuTicks": 105386831,
+              "interruptWakeups": 1655,
+              "footprintBytes": 462245048
+            },
+            {
+              "elapsedSeconds": 28.015831583325053,
+              "cpuTicks": 105706090,
+              "interruptWakeups": 1681,
+              "footprintBytes": 462458040
+            },
+            {
+              "elapsedSeconds": 29.01345624998794,
+              "cpuTicks": 105714252,
+              "interruptWakeups": 1688,
+              "footprintBytes": 462458040
+            },
+            {
+              "elapsedSeconds": 30.01562062499579,
+              "cpuTicks": 105719458,
+              "interruptWakeups": 1691,
+              "footprintBytes": 462458040
+            }
+          ]
+        },
+        {
+          "label": "background-active",
+          "summary": {
+            "cpuPercentOneCore": 33.7729072957278,
+            "cpuSeconds": 10.133762458333335,
+            "elapsedSeconds": 30.005596999981208,
+            "interruptWakeupsPerSecond": 950.0894116526945,
+            "liveProcessCountMax": 24,
+            "liveProcessCountMin": 24,
+            "packageIdleWakeupsPerSecond": 0,
+            "processCountMax": 24,
+            "processCountMin": 24,
+            "summedPhysicalFootprintMiBMedian": 668.2700119018555,
+            "summedPhysicalFootprintMiBPeak": 768.8825912475586
+          },
+          "components": {
+            "desktop": {
+              "cpuPercentOneCore": 20.91467843483977,
+              "interruptWakeupsPerSecond": 230.15706036458215,
+              "physicalFootprintMiBMedian": 406.0479965209961
+            },
+            "daemon": {
+              "cpuPercentOneCore": 6.970192927677159,
+              "interruptWakeupsPerSecond": 220.22557991444523,
+              "physicalFootprintMiBMedian": 117.70233154296875
+            },
+            "tmuxAndWorkers": {
+              "cpuPercentOneCore": 5.888035933210859,
+              "interruptWakeupsPerSecond": 499.7067713736671,
+              "physicalFootprintMiBMedian": 151.58401489257812
+            }
+          },
+          "nativeBefore": {
+            "hidden": true,
+            "focusLosses": 0,
+            "height": 800.0,
+            "scale": 2.0,
+            "active": false,
+            "key": false,
+            "width": 1280.0,
+            "visible": false
+          },
+          "nativeAfter": {
+            "hidden": true,
+            "focusLosses": 0,
+            "key": false,
+            "height": 800.0,
+            "active": false,
+            "visible": false,
+            "scale": 2.0,
+            "width": 1280.0
+          },
+          "allTenTerminalsControlling": true,
+          "workers": [
+            {
+              "index": 0,
+              "mode": "active",
+              "elapsedMs": 30075.933417,
+              "ticks": 580,
+              "skipped": 2,
+              "bytes": 289404
+            },
+            {
+              "index": 1,
+              "mode": "active",
+              "elapsedMs": 30076.262666000002,
+              "ticks": 581,
+              "skipped": 2,
+              "bytes": 289903
+            },
+            {
+              "index": 2,
+              "mode": "active",
+              "elapsedMs": 30076.587333000003,
+              "ticks": 580,
+              "skipped": 2,
+              "bytes": 289404
+            },
+            {
+              "index": 3,
+              "mode": "active",
+              "elapsedMs": 30076.753915999994,
+              "ticks": 581,
+              "skipped": 2,
+              "bytes": 289903
+            },
+            {
+              "index": 4,
+              "mode": "active",
+              "elapsedMs": 30076.98625,
+              "ticks": 580,
+              "skipped": 2,
+              "bytes": 289404
+            },
+            {
+              "index": 5,
+              "mode": "active",
+              "elapsedMs": 30077.251666999997,
+              "ticks": 580,
+              "skipped": 2,
+              "bytes": 289404
+            },
+            {
+              "index": 6,
+              "mode": "active",
+              "elapsedMs": 30077.512166,
+              "ticks": 580,
+              "skipped": 2,
+              "bytes": 289404
+            },
+            {
+              "index": 7,
+              "mode": "active",
+              "elapsedMs": 30077.72024999999,
+              "ticks": 581,
+              "skipped": 2,
+              "bytes": 289903
+            },
+            {
+              "index": 8,
+              "mode": "active",
+              "elapsedMs": 30077.845250000006,
+              "ticks": 581,
+              "skipped": 2,
+              "bytes": 289903
+            },
+            {
+              "index": 9,
+              "mode": "active",
+              "elapsedMs": 30077.995874999993,
+              "ticks": 579,
+              "skipped": 3,
+              "bytes": 288905
+            }
+          ],
+          "cpuClock": {
+            "timebaseDenom": 3,
+            "timebaseNumer": 125,
+            "unit": "mach_absolute_time"
+          },
+          "rawSampleSha256": "50607ec03cf979d44e605e28433e206fdd9193cf727ea8abe89b227ae69bcf3c",
+          "aggregateSamples": [
+            {
+              "elapsedSeconds": 0.006852458347566426,
+              "cpuTicks": 158758209,
+              "interruptWakeups": 6071,
+              "footprintBytes": 582126848
+            },
+            {
+              "elapsedSeconds": 1.0120271666673943,
+              "cpuTicks": 170406292,
+              "interruptWakeups": 6990,
+              "footprintBytes": 590926088
+            },
+            {
+              "elapsedSeconds": 2.013728624995565,
+              "cpuTicks": 181164391,
+              "interruptWakeups": 7968,
+              "footprintBytes": 607080736
+            },
+            {
+              "elapsedSeconds": 3.013549541676184,
+              "cpuTicks": 192417399,
+              "interruptWakeups": 8967,
+              "footprintBytes": 609898784
+            },
+            {
+              "elapsedSeconds": 4.014175999996951,
+              "cpuTicks": 200812982,
+              "interruptWakeups": 9978,
+              "footprintBytes": 626004256
+            },
+            {
+              "elapsedSeconds": 5.013450375001412,
+              "cpuTicks": 211587738,
+              "interruptWakeups": 10902,
+              "footprintBytes": 628871456
+            },
+            {
+              "elapsedSeconds": 6.009476041683229,
+              "cpuTicks": 223344090,
+              "interruptWakeups": 11887,
+              "footprintBytes": 632918328
+            },
+            {
+              "elapsedSeconds": 7.012595166655956,
+              "cpuTicks": 234834671,
+              "interruptWakeups": 12930,
+              "footprintBytes": 645321208
+            },
+            {
+              "elapsedSeconds": 8.014170500013279,
+              "cpuTicks": 245851792,
+              "interruptWakeups": 13967,
+              "footprintBytes": 648761848
+            },
+            {
+              "elapsedSeconds": 9.004579416679917,
+              "cpuTicks": 256360089,
+              "interruptWakeups": 15106,
+              "footprintBytes": 645418552
+            },
+            {
+              "elapsedSeconds": 10.011395666660974,
+              "cpuTicks": 267467923,
+              "interruptWakeups": 16358,
+              "footprintBytes": 652415360
+            },
+            {
+              "elapsedSeconds": 11.007038583338726,
+              "cpuTicks": 273869251,
+              "interruptWakeups": 17517,
+              "footprintBytes": 656314800
+            },
+            {
+              "elapsedSeconds": 12.008223125012591,
+              "cpuTicks": 277332782,
+              "interruptWakeups": 18684,
+              "footprintBytes": 673305008
+            },
+            {
+              "elapsedSeconds": 13.011615208350122,
+              "cpuTicks": 280096179,
+              "interruptWakeups": 19855,
+              "footprintBytes": 677319088
+            },
+            {
+              "elapsedSeconds": 14.011496708350023,
+              "cpuTicks": 282720844,
+              "interruptWakeups": 20951,
+              "footprintBytes": 680366536
+            },
+            {
+              "elapsedSeconds": 15.00833554167184,
+              "cpuTicks": 286310190,
+              "interruptWakeups": 21856,
+              "footprintBytes": 732893640
+            },
+            {
+              "elapsedSeconds": 16.011568249989068,
+              "cpuTicks": 296779443,
+              "interruptWakeups": 22807,
+              "footprintBytes": 700731896
+            },
+            {
+              "elapsedSeconds": 17.010054000013042,
+              "cpuTicks": 303237519,
+              "interruptWakeups": 23840,
+              "footprintBytes": 709644792
+            },
+            {
+              "elapsedSeconds": 18.00776145834243,
+              "cpuTicks": 310324621,
+              "interruptWakeups": 24884,
+              "footprintBytes": 705679864
+            },
+            {
+              "elapsedSeconds": 19.005143708345713,
+              "cpuTicks": 317171784,
+              "interruptWakeups": 25881,
+              "footprintBytes": 706679288
+            },
+            {
+              "elapsedSeconds": 20.00654712499818,
+              "cpuTicks": 323804919,
+              "interruptWakeups": 26924,
+              "footprintBytes": 725506448
+            },
+            {
+              "elapsedSeconds": 21.00452170832432,
+              "cpuTicks": 334032641,
+              "interruptWakeups": 27921,
+              "footprintBytes": 726769360
+            },
+            {
+              "elapsedSeconds": 22.00935070833657,
+              "cpuTicks": 342239131,
+              "interruptWakeups": 28832,
+              "footprintBytes": 776363752
+            },
+            {
+              "elapsedSeconds": 23.006515749992104,
+              "cpuTicks": 350903326,
+              "interruptWakeups": 29693,
+              "footprintBytes": 783720168
+            },
+            {
+              "elapsedSeconds": 24.012080083339242,
+              "cpuTicks": 358407741,
+              "interruptWakeups": 30512,
+              "footprintBytes": 785161960
+            },
+            {
+              "elapsedSeconds": 25.015534875012236,
+              "cpuTicks": 362833661,
+              "interruptWakeups": 31202,
+              "footprintBytes": 776068840
+            },
+            {
+              "elapsedSeconds": 26.01315929167322,
+              "cpuTicks": 375872834,
+              "interruptWakeups": 31891,
+              "footprintBytes": 802266904
+            },
+            {
+              "elapsedSeconds": 27.015493291663006,
+              "cpuTicks": 385204284,
+              "interruptWakeups": 32607,
+              "footprintBytes": 799088408
+            },
+            {
+              "elapsedSeconds": 28.00799295832985,
+              "cpuTicks": 392713254,
+              "interruptWakeups": 33345,
+              "footprintBytes": 806231832
+            },
+            {
+              "elapsedSeconds": 29.00729362500715,
+              "cpuTicks": 397749418,
+              "interruptWakeups": 34004,
+              "footprintBytes": 794205976
+            },
+            {
+              "elapsedSeconds": 30.012449458328774,
+              "cpuTicks": 401968508,
+              "interruptWakeups": 34579,
+              "footprintBytes": 795238168
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "index": 6,
+      "variant": "current",
+      "startedAt": "2026-10-03T00:29:25.314085+00:00",
+      "finishedAt": "2026-10-03T00:30:41.649280+00:00",
+      "loadAverageBefore": [
+        7.03125,
+        6.623046875,
+        6.17431640625
+      ],
+      "loadAverageAfter": [
+        7.17919921875,
+        6.76220703125,
+        6.26171875
+      ],
+      "resultSha256": "108e993700f79829df1eb9b892c69f56b36581957a1509eda5174f135902b726",
+      "daemonMetadata": {
+        "bundleSha256": "3af3bc4973032cb532f58022be682d70238ac9df5019e2a2698a4f5d66159a0c",
+        "sourceRevision": "e2801a8b4f1761b542a7bd64c6ffdc586e1501fb",
+        "sourceDiffSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "boundary": "Full local daemon and tmux; private terminal shells; no cloud account or model inference."
+      },
+      "cleanup": {
+        "success": true,
+        "errors": [],
+        "daemonExit": 0,
+        "daemonSignal": null,
+        "finishedAt": "2026-10-03T00:30:41.556Z"
+      },
+      "phases": [
+        {
+          "label": "background-idle-hidden",
+          "summary": {
+            "cpuPercentOneCore": 4.364973834607184,
+            "cpuSeconds": 1.30963925,
+            "elapsedSeconds": 30.003369999991264,
+            "interruptWakeupsPerSecond": 15.731566154073274,
+            "liveProcessCountMax": 24,
+            "liveProcessCountMin": 24,
+            "packageIdleWakeupsPerSecond": 0,
+            "processCountMax": 24,
+            "processCountMin": 24,
+            "summedPhysicalFootprintMiBMedian": 446.04876708984375,
+            "summedPhysicalFootprintMiBPeak": 471.26863861083984
+          },
+          "components": {
+            "desktop": {
+              "cpuPercentOneCore": 0.2290303833647798,
+              "interruptWakeupsPerSecond": 3.2329701630192957,
+              "physicalFootprintMiBMedian": 182.2823028564453
+            },
+            "daemon": {
+              "cpuPercentOneCore": 4.105519091134402,
+              "interruptWakeupsPerSecond": 11.832004204864432,
+              "physicalFootprintMiBMedian": 133.92060089111328
+            },
+            "tmuxAndWorkers": {
+              "cpuPercentOneCore": 0.030424360108001165,
+              "interruptWakeupsPerSecond": 0.6665917861895455,
+              "physicalFootprintMiBMedian": 145.11260986328125
+            }
+          },
+          "nativeBefore": {
+            "height": 800.0,
+            "hidden": true,
+            "key": false,
+            "scale": 2.0,
+            "active": false,
+            "width": 1280.0,
+            "visible": false,
+            "focusLosses": 0
+          },
+          "nativeAfter": {
+            "height": 800.0,
+            "hidden": true,
+            "key": false,
+            "scale": 2.0,
+            "active": false,
+            "width": 1280.0,
+            "visible": false,
+            "focusLosses": 0
+          },
+          "allTenTerminalsControlling": true,
+          "workers": [
+            {
+              "index": 0,
+              "mode": "idle-hidden",
+              "elapsedMs": 30070.162084,
+              "ticks": 0,
+              "skipped": 0,
+              "bytes": 0
+            },
+            {
+              "index": 1,
+              "mode": "idle-hidden",
+              "elapsedMs": 30069.761667,
+              "ticks": 0,
+              "skipped": 0,
+              "bytes": 0
+            },
+            {
+              "index": 2,
+              "mode": "idle-hidden",
+              "elapsedMs": 30069.318625000004,
+              "ticks": 0,
+              "skipped": 0,
+              "bytes": 0
+            },
+            {
+              "index": 3,
+              "mode": "idle-hidden",
+              "elapsedMs": 30068.834917000004,
+              "ticks": 0,
+              "skipped": 0,
+              "bytes": 0
+            },
+            {
+              "index": 4,
+              "mode": "idle-hidden",
+              "elapsedMs": 30068.463541999998,
+              "ticks": 0,
+              "skipped": 0,
+              "bytes": 0
+            },
+            {
+              "index": 5,
+              "mode": "idle-hidden",
+              "elapsedMs": 30068.096541,
+              "ticks": 0,
+              "skipped": 0,
+              "bytes": 0
+            },
+            {
+              "index": 6,
+              "mode": "idle-hidden",
+              "elapsedMs": 30067.788791999996,
+              "ticks": 0,
+              "skipped": 0,
+              "bytes": 0
+            },
+            {
+              "index": 7,
+              "mode": "idle-hidden",
+              "elapsedMs": 30067.528875,
+              "ticks": 0,
+              "skipped": 0,
+              "bytes": 0
+            },
+            {
+              "index": 8,
+              "mode": "idle-hidden",
+              "elapsedMs": 30067.350500000004,
+              "ticks": 0,
+              "skipped": 0,
+              "bytes": 0
+            },
+            {
+              "index": 9,
+              "mode": "idle-hidden",
+              "elapsedMs": 30067.142332999996,
+              "ticks": 0,
+              "skipped": 0,
+              "bytes": 0
+            }
+          ],
+          "cpuClock": {
+            "timebaseDenom": 3,
+            "timebaseNumer": 125,
+            "unit": "mach_absolute_time"
+          },
+          "rawSampleSha256": "4a1c03abe9deca6c7d26e1b7c8c631855d2b56da56894ca04857452f032df6c3",
+          "aggregateSamples": [
+            {
+              "elapsedSeconds": 0.005960791662801057,
+              "cpuTicks": 69060250,
+              "interruptWakeups": 1086,
+              "footprintBytes": 462833024
+            },
+            {
+              "elapsedSeconds": 1.0148084583343007,
+              "cpuTicks": 72778586,
+              "interruptWakeups": 1112,
+              "footprintBytes": 467371968
+            },
+            {
+              "elapsedSeconds": 2.0046325833245646,
+              "cpuTicks": 72797260,
+              "interruptWakeups": 1115,
+              "footprintBytes": 467388352
+            },
+            {
+              "elapsedSeconds": 3.0165462083241437,
+              "cpuTicks": 73189700,
+              "interruptWakeups": 1143,
+              "footprintBytes": 467716032
+            },
+            {
+              "elapsedSeconds": 4.007103416661266,
+              "cpuTicks": 73200039,
+              "interruptWakeups": 1149,
+              "footprintBytes": 467716032
+            },
+            {
+              "elapsedSeconds": 5.008534958324162,
+              "cpuTicks": 73217093,
+              "interruptWakeups": 1154,
+              "footprintBytes": 467716032
+            },
+            {
+              "elapsedSeconds": 6.016375583334593,
+              "cpuTicks": 83834802,
+              "interruptWakeups": 1212,
+              "footprintBytes": 476548184
+            },
+            {
+              "elapsedSeconds": 7.0095047499926295,
+              "cpuTicks": 83841798,
+              "interruptWakeups": 1216,
+              "footprintBytes": 476548184
+            },
+            {
+              "elapsedSeconds": 8.016541541670449,
+              "cpuTicks": 84170084,
+              "interruptWakeups": 1250,
+              "footprintBytes": 476810328
+            },
+            {
+              "elapsedSeconds": 9.014021291659446,
+              "cpuTicks": 84195155,
+              "interruptWakeups": 1260,
+              "footprintBytes": 476810328
+            },
+            {
+              "elapsedSeconds": 10.011755041661672,
+              "cpuTicks": 84590463,
+              "interruptWakeups": 1266,
+              "footprintBytes": 494160984
+            },
+            {
+              "elapsedSeconds": 11.010246874997392,
+              "cpuTicks": 88739079,
+              "interruptWakeups": 1297,
+              "footprintBytes": 483511384
+            },
+            {
+              "elapsedSeconds": 12.010799208335811,
+              "cpuTicks": 88743174,
+              "interruptWakeups": 1299,
+              "footprintBytes": 483511384
+            },
+            {
+              "elapsedSeconds": 13.014032125007361,
+              "cpuTicks": 89081022,
+              "interruptWakeups": 1329,
+              "footprintBytes": 483724376
+            },
+            {
+              "elapsedSeconds": 14.013525041664252,
+              "cpuTicks": 89092139,
+              "interruptWakeups": 1335,
+              "footprintBytes": 483724376
+            },
+            {
+              "elapsedSeconds": 15.009651291649789,
+              "cpuTicks": 89102948,
+              "interruptWakeups": 1341,
+              "footprintBytes": 483724376
+            },
+            {
+              "elapsedSeconds": 16.011509041651152,
+              "cpuTicks": 91804189,
+              "interruptWakeups": 1367,
+              "footprintBytes": 484494472
+            },
+            {
+              "elapsedSeconds": 17.0124180833227,
+              "cpuTicks": 91819569,
+              "interruptWakeups": 1372,
+              "footprintBytes": 484494472
+            },
+            {
+              "elapsedSeconds": 18.007509416667745,
+              "cpuTicks": 92094008,
+              "interruptWakeups": 1397,
+              "footprintBytes": 484723848
+            },
+            {
+              "elapsedSeconds": 19.01302954167477,
+              "cpuTicks": 92104265,
+              "interruptWakeups": 1405,
+              "footprintBytes": 484723848
+            },
+            {
+              "elapsedSeconds": 20.015925374988,
+              "cpuTicks": 92108179,
+              "interruptWakeups": 1407,
+              "footprintBytes": 484723848
+            },
+            {
+              "elapsedSeconds": 21.016291999985697,
+              "cpuTicks": 95366804,
+              "interruptWakeups": 1439,
+              "footprintBytes": 465603744
+            },
+            {
+              "elapsedSeconds": 22.010319749999326,
+              "cpuTicks": 95375304,
+              "interruptWakeups": 1441,
+              "footprintBytes": 465603744
+            },
+            {
+              "elapsedSeconds": 23.01265520832385,
+              "cpuTicks": 95748950,
+              "interruptWakeups": 1477,
+              "footprintBytes": 465865888
+            },
+            {
+              "elapsedSeconds": 24.011929333326407,
+              "cpuTicks": 95765433,
+              "interruptWakeups": 1484,
+              "footprintBytes": 465865888
+            },
+            {
+              "elapsedSeconds": 25.01261179166613,
+              "cpuTicks": 95810163,
+              "interruptWakeups": 1491,
+              "footprintBytes": 465865888
+            },
+            {
+              "elapsedSeconds": 26.003228833316825,
+              "cpuTicks": 100093791,
+              "interruptWakeups": 1518,
+              "footprintBytes": 466750672
+            },
+            {
+              "elapsedSeconds": 27.011522208340466,
+              "cpuTicks": 100099788,
+              "interruptWakeups": 1522,
+              "footprintBytes": 466750672
+            },
+            {
+              "elapsedSeconds": 28.01536458331975,
+              "cpuTicks": 100465779,
+              "interruptWakeups": 1546,
+              "footprintBytes": 466963664
+            },
+            {
+              "elapsedSeconds": 29.008255624998128,
+              "cpuTicks": 100487277,
+              "interruptWakeups": 1555,
+              "footprintBytes": 466963664
+            },
+            {
+              "elapsedSeconds": 30.009330791654065,
+              "cpuTicks": 100491592,
+              "interruptWakeups": 1558,
+              "footprintBytes": 466963664
+            }
+          ]
+        },
+        {
+          "label": "background-active",
+          "summary": {
+            "cpuPercentOneCore": 48.045770965084486,
+            "cpuSeconds": 14.418411708333334,
+            "elapsedSeconds": 30.00974158331519,
+            "interruptWakeupsPerSecond": 1046.326903976333,
+            "liveProcessCountMax": 24,
+            "liveProcessCountMin": 24,
+            "packageIdleWakeupsPerSecond": 0,
+            "processCountMax": 24,
+            "processCountMin": 24,
+            "summedPhysicalFootprintMiBMedian": 676.9259872436523,
+            "summedPhysicalFootprintMiBPeak": 793.0228729248047
+          },
+          "components": {
+            "desktop": {
+              "cpuPercentOneCore": 30.61134795567221,
+              "interruptWakeupsPerSecond": 261.6150485069487,
+              "physicalFootprintMiBMedian": 413.8136444091797
+            },
+            "daemon": {
+              "cpuPercentOneCore": 8.979755626524916,
+              "interruptWakeupsPerSecond": 266.3468453338481,
+              "physicalFootprintMiBMedian": 119.62406921386719
+            },
+            "tmuxAndWorkers": {
+              "cpuPercentOneCore": 8.454667382887356,
+              "interruptWakeupsPerSecond": 518.3650101355362,
+              "physicalFootprintMiBMedian": 151.0993881225586
+            }
+          },
+          "nativeBefore": {
+            "key": false,
+            "height": 800.0,
+            "width": 1280.0,
+            "focusLosses": 0,
+            "scale": 2.0,
+            "active": false,
+            "hidden": true,
+            "visible": false
+          },
+          "nativeAfter": {
+            "key": false,
+            "height": 800.0,
+            "width": 1280.0,
+            "focusLosses": 0,
+            "scale": 2.0,
+            "active": false,
+            "hidden": true,
+            "visible": false
+          },
+          "allTenTerminalsControlling": true,
+          "workers": [
+            {
+              "index": 0,
+              "mode": "active",
+              "elapsedMs": 30088.425541999997,
+              "ticks": 584,
+              "skipped": 0,
+              "bytes": 291400
+            },
+            {
+              "index": 1,
+              "mode": "active",
+              "elapsedMs": 30088.404458000005,
+              "ticks": 584,
+              "skipped": 0,
+              "bytes": 291400
+            },
+            {
+              "index": 2,
+              "mode": "active",
+              "elapsedMs": 30088.386042,
+              "ticks": 584,
+              "skipped": 0,
+              "bytes": 291400
+            },
+            {
+              "index": 3,
+              "mode": "active",
+              "elapsedMs": 30088.540917,
+              "ticks": 584,
+              "skipped": 0,
+              "bytes": 291400
+            },
+            {
+              "index": 4,
+              "mode": "active",
+              "elapsedMs": 30088.28316600001,
+              "ticks": 584,
+              "skipped": 0,
+              "bytes": 291400
+            },
+            {
+              "index": 5,
+              "mode": "active",
+              "elapsedMs": 30088.227625,
+              "ticks": 584,
+              "skipped": 0,
+              "bytes": 291400
+            },
+            {
+              "index": 6,
+              "mode": "active",
+              "elapsedMs": 30088.331749999998,
+              "ticks": 584,
+              "skipped": 0,
+              "bytes": 291400
+            },
+            {
+              "index": 7,
+              "mode": "active",
+              "elapsedMs": 30088.100417,
+              "ticks": 584,
+              "skipped": 0,
+              "bytes": 291400
+            },
+            {
+              "index": 8,
+              "mode": "active",
+              "elapsedMs": 30088.244249999996,
+              "ticks": 585,
+              "skipped": 0,
+              "bytes": 291899
+            },
+            {
+              "index": 9,
+              "mode": "active",
+              "elapsedMs": 30087.840916999994,
+              "ticks": 585,
+              "skipped": 0,
+              "bytes": 291899
+            }
+          ],
+          "cpuClock": {
+            "timebaseDenom": 3,
+            "timebaseNumer": 125,
+            "unit": "mach_absolute_time"
+          },
+          "rawSampleSha256": "b87e17358650dcc59ebef22d5fc72cd3d7a1161b2f5fa01ebe6a9432330b7de4",
+          "aggregateSamples": [
+            {
+              "elapsedSeconds": 0.007888708350947127,
+              "cpuTicks": 158882694,
+              "interruptWakeups": 6758,
+              "footprintBytes": 589368624
+            },
+            {
+              "elapsedSeconds": 1.0136165833391715,
+              "cpuTicks": 170192737,
+              "interruptWakeups": 7968,
+              "footprintBytes": 598610208
+            },
+            {
+              "elapsedSeconds": 2.0137197083386127,
+              "cpuTicks": 181838461,
+              "interruptWakeups": 9062,
+              "footprintBytes": 614895904
+            },
+            {
+              "elapsedSeconds": 3.0132297500094865,
+              "cpuTicks": 192823133,
+              "interruptWakeups": 10137,
+              "footprintBytes": 617992504
+            },
+            {
+              "elapsedSeconds": 4.010579958325252,
+              "cpuTicks": 204108837,
+              "interruptWakeups": 11181,
+              "footprintBytes": 621007160
+            },
+            {
+              "elapsedSeconds": 5.01433504166198,
+              "cpuTicks": 214058196,
+              "interruptWakeups": 12166,
+              "footprintBytes": 637227320
+            },
+            {
+              "elapsedSeconds": 6.016738333331887,
+              "cpuTicks": 225713260,
+              "interruptWakeups": 13269,
+              "footprintBytes": 637391280
+            },
+            {
+              "elapsedSeconds": 7.015444333344931,
+              "cpuTicks": 233475739,
+              "interruptWakeups": 14287,
+              "footprintBytes": 653562312
+            },
+            {
+              "elapsedSeconds": 8.0146651249961,
+              "cpuTicks": 242278547,
+              "interruptWakeups": 15347,
+              "footprintBytes": 657215944
+            },
+            {
+              "elapsedSeconds": 9.009790791664273,
+              "cpuTicks": 257106478,
+              "interruptWakeups": 16473,
+              "footprintBytes": 649809752
+            },
+            {
+              "elapsedSeconds": 10.014838416682323,
+              "cpuTicks": 267655372,
+              "interruptWakeups": 17611,
+              "footprintBytes": 661721232
+            },
+            {
+              "elapsedSeconds": 11.008087750000414,
+              "cpuTicks": 278173265,
+              "interruptWakeups": 18608,
+              "footprintBytes": 666439872
+            },
+            {
+              "elapsedSeconds": 12.015903541672742,
+              "cpuTicks": 289097974,
+              "interruptWakeups": 19567,
+              "footprintBytes": 670273728
+            },
+            {
+              "elapsedSeconds": 13.010862374998396,
+              "cpuTicks": 300651200,
+              "interruptWakeups": 20718,
+              "footprintBytes": 687689944
+            },
+            {
+              "elapsedSeconds": 14.012658499996178,
+              "cpuTicks": 311100239,
+              "interruptWakeups": 21786,
+              "footprintBytes": 690770136
+            },
+            {
+              "elapsedSeconds": 15.015316416684072,
+              "cpuTicks": 322743732,
+              "interruptWakeups": 22899,
+              "footprintBytes": 709808344
+            },
+            {
+              "elapsedSeconds": 16.00587220833404,
+              "cpuTicks": 335008518,
+              "interruptWakeups": 23940,
+              "footprintBytes": 749818144
+            },
+            {
+              "elapsedSeconds": 17.01509250001982,
+              "cpuTicks": 348019399,
+              "interruptWakeups": 24975,
+              "footprintBytes": 752668960
+            },
+            {
+              "elapsedSeconds": 18.008465333346976,
+              "cpuTicks": 358733193,
+              "interruptWakeups": 26050,
+              "footprintBytes": 759714080
+            },
+            {
+              "elapsedSeconds": 19.006021333334502,
+              "cpuTicks": 369236901,
+              "interruptWakeups": 27116,
+              "footprintBytes": 757682464
+            },
+            {
+              "elapsedSeconds": 20.01146845833864,
+              "cpuTicks": 378736128,
+              "interruptWakeups": 28195,
+              "footprintBytes": 733403200
+            },
+            {
+              "elapsedSeconds": 21.00954408335383,
+              "cpuTicks": 390967085,
+              "interruptWakeups": 29224,
+              "footprintBytes": 766646384
+            },
+            {
+              "elapsedSeconds": 22.012992000003578,
+              "cpuTicks": 403720104,
+              "interruptWakeups": 30241,
+              "footprintBytes": 771628416
+            },
+            {
+              "elapsedSeconds": 23.00595487499959,
+              "cpuTicks": 413374686,
+              "interruptWakeups": 31185,
+              "footprintBytes": 756194712
+            },
+            {
+              "elapsedSeconds": 24.006275708350586,
+              "cpuTicks": 422418076,
+              "interruptWakeups": 32191,
+              "footprintBytes": 792501656
+            },
+            {
+              "elapsedSeconds": 25.014181166683557,
+              "cpuTicks": 433753287,
+              "interruptWakeups": 33188,
+              "footprintBytes": 812621208
+            },
+            {
+              "elapsedSeconds": 26.01305191667052,
+              "cpuTicks": 447975418,
+              "interruptWakeups": 34145,
+              "footprintBytes": 821026224
+            },
+            {
+              "elapsedSeconds": 27.014932916674297,
+              "cpuTicks": 461779858,
+              "interruptWakeups": 35150,
+              "footprintBytes": 822304176
+            },
+            {
+              "elapsedSeconds": 28.010045833332697,
+              "cpuTicks": 474714970,
+              "interruptWakeups": 36128,
+              "footprintBytes": 831544752
+            },
+            {
+              "elapsedSeconds": 29.016387125011533,
+              "cpuTicks": 489410680,
+              "interruptWakeups": 37150,
+              "footprintBytes": 827415984
+            },
+            {
+              "elapsedSeconds": 30.017630291666137,
+              "cpuTicks": 504924575,
+              "interruptWakeups": 38158,
+              "footprintBytes": 822648288
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "medians": {
+    "background-idle-hidden": {
+      "baseline": {
+        "cpuPercentOneCore": 5.124048296667986,
+        "interruptWakeupsPerSecond": 16.062250953104993,
+        "summedPhysicalFootprintMiBMedian": 444.7207565307617
+      },
+      "current": {
+        "cpuPercentOneCore": 4.797289526972961,
+        "interruptWakeupsPerSecond": 15.731566154073274,
+        "summedPhysicalFootprintMiBMedian": 441.9708023071289
+      },
+      "relativeChangePercent": {
+        "cpuPercentOneCore": -6.376965063102668,
+        "interruptWakeupsPerSecond": -2.0587699693970563,
+        "summedPhysicalFootprintMiBMedian": -0.6183552674907777
+      }
+    },
+    "background-active": {
+      "baseline": {
+        "cpuPercentOneCore": 37.00741365675263,
+        "interruptWakeupsPerSecond": 1001.7516352077358,
+        "summedPhysicalFootprintMiBMedian": 661.4729080200195
+      },
+      "current": {
+        "cpuPercentOneCore": 48.045770965084486,
+        "interruptWakeupsPerSecond": 1046.326903976333,
+        "summedPhysicalFootprintMiBMedian": 667.1918869018555
+      },
+      "relativeChangePercent": {
+        "cpuPercentOneCore": 29.827421636955485,
+        "interruptWakeupsPerSecond": 4.449732568627485,
+        "summedPhysicalFootprintMiBMedian": 0.8645824813830139
+      }
+    }
+  },
+  "pairs": [
+    {
+      "baselineRun": 1,
+      "currentRun": 2,
+      "phases": {
+        "background-idle-hidden": {
+          "cpuPercentOneCore": -6.376965063102668,
+          "interruptWakeupsPerSecond": -4.265927662222291,
+          "summedPhysicalFootprintMiBMedian": 0.5259400147646254
+        },
+        "background-active": {
+          "cpuPercentOneCore": 13.070764689460091,
+          "interruptWakeupsPerSecond": 4.468128664320359,
+          "summedPhysicalFootprintMiBMedian": 2.666420643429901
+        }
+      }
+    },
+    {
+      "baselineRun": 4,
+      "currentRun": 3,
+      "phases": {
+        "background-idle-hidden": {
+          "cpuPercentOneCore": 9.740745996676514,
+          "interruptWakeupsPerSecond": -1.869140436905159,
+          "summedPhysicalFootprintMiBMedian": -0.7861562655602339
+        },
+        "background-active": {
+          "cpuPercentOneCore": 19.2808227222228,
+          "interruptWakeupsPerSecond": -2.2549762158199815,
+          "summedPhysicalFootprintMiBMedian": -0.3165007771516959
+        }
+      }
+    },
+    {
+      "baselineRun": 5,
+      "currentRun": 6,
+      "phases": {
+        "background-idle-hidden": {
+          "cpuPercentOneCore": -17.92256566102417,
+          "interruptWakeupsPerSecond": 1.5187478934298504,
+          "summedPhysicalFootprintMiBMedian": 0.2986167251202154
+        },
+        "background-active": {
+          "cpuPercentOneCore": 42.26128222950523,
+          "interruptWakeupsPerSecond": 10.129309004321163,
+          "summedPhysicalFootprintMiBMedian": 1.295281127034631
+        }
+      }
+    }
+  ],
+  "componentMedians": {
+    "background-idle-hidden": {
+      "baseline": {
+        "desktop": {
+          "cpuPercentOneCore": 0.2433912057334737,
+          "interruptWakeupsPerSecond": 3.2658695314167123,
+          "physicalFootprintMiBMedian": 179.86040496826172
+        },
+        "daemon": {
+          "cpuPercentOneCore": 4.845533287804853,
+          "interruptWakeupsPerSecond": 12.063350300879684,
+          "physicalFootprintMiBMedian": 133.49874877929688
+        },
+        "tmuxAndWorkers": {
+          "cpuPercentOneCore": 0.035123803129658744,
+          "interruptWakeupsPerSecond": 0.6665039860034107,
+          "physicalFootprintMiBMedian": 144.31573486328125
+        }
+      },
+      "current": {
+        "desktop": {
+          "cpuPercentOneCore": 0.2515433366168319,
+          "interruptWakeupsPerSecond": 3.2329701630192957,
+          "physicalFootprintMiBMedian": 179.1729278564453
+        },
+        "daemon": {
+          "cpuPercentOneCore": 4.508159015548679,
+          "interruptWakeupsPerSecond": 11.832004204864432,
+          "physicalFootprintMiBMedian": 130.76435089111328
+        },
+        "tmuxAndWorkers": {
+          "cpuPercentOneCore": 0.0375871748074504,
+          "interruptWakeupsPerSecond": 0.6665917861895455,
+          "physicalFootprintMiBMedian": 144.42515563964844
+        }
+      }
+    },
+    "background-active": {
+      "baseline": {
+        "desktop": {
+          "cpuPercentOneCore": 22.400726646697017,
+          "interruptWakeupsPerSecond": 232.33466620100242,
+          "physicalFootprintMiBMedian": 401.0323715209961
+        },
+        "daemon": {
+          "cpuPercentOneCore": 7.850755116426218,
+          "interruptWakeupsPerSecond": 252.8622270701673,
+          "physicalFootprintMiBMedian": 117.88971710205078
+        },
+        "tmuxAndWorkers": {
+          "cpuPercentOneCore": 6.755931893629391,
+          "interruptWakeupsPerSecond": 516.5547419365661,
+          "physicalFootprintMiBMedian": 151.06834411621094
+        }
+      },
+      "current": {
+        "desktop": {
+          "cpuPercentOneCore": 30.538228701968904,
+          "interruptWakeupsPerSecond": 243.18406176958698,
+          "physicalFootprintMiBMedian": 403.9855422973633
+        },
+        "daemon": {
+          "cpuPercentOneCore": 8.979755626524916,
+          "interruptWakeupsPerSecond": 266.3468453338481,
+          "physicalFootprintMiBMedian": 118.84288787841797
+        },
+        "tmuxAndWorkers": {
+          "cpuPercentOneCore": 8.454667382887356,
+          "interruptWakeupsPerSecond": 519.9238975841262,
+          "physicalFootprintMiBMedian": 151.0993881225586
+        }
+      }
+    }
+  },
+  "toolingSha256": {
+    "connected_run.py": "853cea7815edd5d665b0cce4df366c33dd906ffa1fbc26380a7662026d115094",
+    "connected_stack.mjs": "819ed8941fa33d05bedc732461e9753f69fba9c5796f915909b6c3c1e1f663fe",
+    "connected_worker.mjs": "3456923d6b9f6ff8628c7f84dd2540cb55adf4a83950e6970ace506a1a98295e",
+    "harness-connected-forest-usage-v2-20261002": "48816ec9467b369be056bb03c4b89aa2766a35d07d80f3d0e2a99db987c8c0fb"
+  },
+  "nativeBuildIdentity": {
+    "sourceRevision": "c966e1ac0e10d2741bad53352fcdba9b41d2a6de",
+    "productionDiffSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "source": "/Users/ab/harnesses/worktrees/autonomous-harness/noble-tiger/desktop",
+    "app": "/private/tmp/harness-native-benchmark-ht7onsw4/desktop/build/macos/Build/Products/Release/Harness Benchmark.app",
+    "connectedResource": true,
+    "flutter": "/Users/ab/development/flutter-3.47.2",
+    "developerDirectory": "/Applications/Xcode.app/Contents/Developer",
+    "retroactiveIdentityVerification": "All tracked production Dart files compared byte-for-byte with the copied build inputs; only the benchmark host integration and app identity differ.",
+    "toolingSha256": {
+      "summarize_results.py": "3ad86c3d25505bd473987e17e3a621f9d88e12608ad807e3fc44e47d1cf48d98",
+      "flutter_driver.dart": "0868e8dcbbd7de94d1ff0b3a9d55351e0569dba8b565a02d9e8ae39109ee2720",
+      "isolation.py": "091a9b9eb763f682fc9a35281f5bcf186d7746b82ba7ec5d87ca6259db0de121",
+      "run.py": "9eedafd9dca662205f2fe4d767d104f700f02f546351c02cf69fe4cc65f13280",
+      "ConnectedResourceHost.swift": "f9f58dc6d209119ee4a3440661518785e7ea13f2057c001c666b45ea20e4493e",
+      "NativeBenchmark.swift": "016345213e41a0d4209b6c14c2086ec259dc95384051cddea10b82dd43aea3c8",
+      "core_driver.dart": "6fe30381f8d931b6bf8d765ca2ccc633d9f44b054614b958d169a00d2375e68a",
+      "process_forest_usage.swift": "b05ceb0c317a34a600f15d511aeb79682dc36a3a5b6885f6dd1e5e5431e8698e",
+      "connected_stack.mjs": "b841e5f08fa8501cf55467a993eb30c4473466829a4ba753bd1f7931d6a8efa7",
+      "main.dart": "6044977011173127cc7a837a0628bb5662c609b84852bd54379bd6745b491376",
+      "README.md": "f1123fe8096ef29e99dde1ee320da1c8ba1e68e1d0e453c454aa73770a454dfb",
+      "test_process_usage.py": "fb1f310e71eb46058f7abe99a92f60b72f764c65855923e6e5efea6b169bb294",
+      "test_process_forest_usage.py": "a2f6187c89ae11861df5c705d77efe30bc27f2c0dff2e527a2683d12e355fac1",
+      "test_isolation.py": "25c4431bd64a3984f3c331f7e1c1fbc7d1fb51c6de81529a42793929f5c9c082",
+      "process_usage.swift": "996bdaef9acb5d7a1214cdabe309052178923a8a651259dcbab44c768f3c8541",
+      "connected_main.dart": "8bdf2061c52713ff5dc37939252c5184e90e8da353d3f315e505f270c4e51eed",
+      "prepare.py": "6cc261946abe70a61cfc031474c931dcdf4ac6a15897d6f6d0177aa8d8d0956e"
+    }
+  },
+  "directLsofComparison": {
+    "success": true,
+    "load": [
+      3.85400390625,
+      4.3828125,
+      5.8505859375
+    ],
+    "workers": 10,
+    "flags": {
+      "current": [],
+      "numeric": [
+        "-n",
+        "-P",
+        "-l"
+      ],
+      "direct": [
+        "-O"
+      ],
+      "noBlock": [
+        "-b"
+      ],
+      "directNumeric": [
+        "-O",
+        "-n",
+        "-P",
+        "-l"
+      ]
+    },
+    "runs": {
+      "current": [
+        {
+          "exit": 0,
+          "wallMs": 51.44766700686887,
+          "cpuMs": 50.297,
+          "bytes": 440,
+          "lines": 50
+        },
+        {
+          "exit": 0,
+          "wallMs": 51.67516699293628,
+          "cpuMs": 50.41100000000002,
+          "bytes": 440,
+          "lines": 50
+        },
+        {
+          "exit": 0,
+          "wallMs": 51.810208009555936,
+          "cpuMs": 50.55399999999999,
+          "bytes": 440,
+          "lines": 50
+        },
+        {
+          "exit": 0,
+          "wallMs": 52.2438749903813,
+          "cpuMs": 51.05399999999999,
+          "bytes": 440,
+          "lines": 50
+        },
+        {
+          "exit": 0,
+          "wallMs": 51.76754199783318,
+          "cpuMs": 50.760000000000026,
+          "bytes": 440,
+          "lines": 50
+        },
+        {
+          "exit": 0,
+          "wallMs": 54.388291988288984,
+          "cpuMs": 53.21300000000012,
+          "bytes": 440,
+          "lines": 50
+        }
+      ],
+      "numeric": [
+        {
+          "exit": 0,
+          "wallMs": 51.65579199092463,
+          "cpuMs": 50.407,
+          "bytes": 440,
+          "lines": 50
+        },
+        {
+          "exit": 0,
+          "wallMs": 51.648916996782646,
+          "cpuMs": 50.61899999999997,
+          "bytes": 440,
+          "lines": 50
+        },
+        {
+          "exit": 0,
+          "wallMs": 51.59008299233392,
+          "cpuMs": 50.288000000000025,
+          "bytes": 440,
+          "lines": 50
+        },
+        {
+          "exit": 0,
+          "wallMs": 52.17112498939969,
+          "cpuMs": 51.02599999999993,
+          "bytes": 440,
+          "lines": 50
+        },
+        {
+          "exit": 0,
+          "wallMs": 52.31208400800824,
+          "cpuMs": 51.1569999999999,
+          "bytes": 440,
+          "lines": 50
+        },
+        {
+          "exit": 0,
+          "wallMs": 52.1138749900274,
+          "cpuMs": 50.89699999999997,
+          "bytes": 440,
+          "lines": 50
+        }
+      ],
+      "direct": [
+        {
+          "exit": 0,
+          "wallMs": 26.552791998255998,
+          "cpuMs": 25.431,
+          "bytes": 440,
+          "lines": 50
+        },
+        {
+          "exit": 0,
+          "wallMs": 26.75604200339876,
+          "cpuMs": 25.787999999999993,
+          "bytes": 440,
+          "lines": 50
+        },
+        {
+          "exit": 0,
+          "wallMs": 26.329833985073492,
+          "cpuMs": 25.271999999999963,
+          "bytes": 440,
+          "lines": 50
+        },
+        {
+          "exit": 0,
+          "wallMs": 26.666083023883402,
+          "cpuMs": 25.612000000000023,
+          "bytes": 440,
+          "lines": 50
+        },
+        {
+          "exit": 0,
+          "wallMs": 26.683625008445233,
+          "cpuMs": 25.583999999999996,
+          "bytes": 440,
+          "lines": 50
+        },
+        {
+          "exit": 0,
+          "wallMs": 26.744207978481427,
+          "cpuMs": 25.655999999999956,
+          "bytes": 440,
+          "lines": 50
+        }
+      ],
+      "noBlock": [
+        {
+          "exit": 0,
+          "wallMs": 26.487666007597,
+          "cpuMs": 25.430000000000014,
+          "bytes": 440,
+          "lines": 50
+        },
+        {
+          "exit": 0,
+          "wallMs": 26.493540994124487,
+          "cpuMs": 25.454000000000033,
+          "bytes": 440,
+          "lines": 50
+        },
+        {
+          "exit": 0,
+          "wallMs": 26.819792023161426,
+          "cpuMs": 25.743000000000045,
+          "bytes": 440,
+          "lines": 50
+        },
+        {
+          "exit": 0,
+          "wallMs": 26.708291989052668,
+          "cpuMs": 25.708999999999953,
+          "bytes": 440,
+          "lines": 50
+        },
+        {
+          "exit": 0,
+          "wallMs": 26.802167005371302,
+          "cpuMs": 25.708999999999982,
+          "bytes": 440,
+          "lines": 50
+        },
+        {
+          "exit": 0,
+          "wallMs": 26.950790983391926,
+          "cpuMs": 25.86000000000005,
+          "bytes": 440,
+          "lines": 50
+        }
+      ],
+      "directNumeric": [
+        {
+          "exit": 0,
+          "wallMs": 26.47216699551791,
+          "cpuMs": 25.391000000000012,
+          "bytes": 440,
+          "lines": 50
+        },
+        {
+          "exit": 0,
+          "wallMs": 26.410791993839666,
+          "cpuMs": 25.262999999999995,
+          "bytes": 440,
+          "lines": 50
+        },
+        {
+          "exit": 0,
+          "wallMs": 26.812041003722697,
+          "cpuMs": 25.70900000000001,
+          "bytes": 440,
+          "lines": 50
+        },
+        {
+          "exit": 0,
+          "wallMs": 26.35270799510181,
+          "cpuMs": 25.40999999999996,
+          "bytes": 440,
+          "lines": 50
+        },
+        {
+          "exit": 0,
+          "wallMs": 26.67529199970886,
+          "cpuMs": 25.577000000000183,
+          "bytes": 440,
+          "lines": 50
+        },
+        {
+          "exit": 0,
+          "wallMs": 26.61604099557735,
+          "cpuMs": 25.604000000000017,
+          "bytes": 440,
+          "lines": 50
+        }
+      ]
+    }
+  },
+  "midComparisonHostObservation": {
+    "at": "2026-10-03T00:27:32.018620+00:00",
+    "loadAverage": [
+      6.29345703125,
+      6.60693359375,
+      6.11865234375
+    ],
+    "phase": "during fourth paired run, not a continuous power trace",
+    "power": {
+      "exitCode": 0,
+      "stdout": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=22806627)\t100%; charged; 0:00 remaining present: true\n",
+      "stderr": ""
+    },
+    "thermal": {
+      "exitCode": 0,
+      "stdout": "Error:Failed to get thermal warning level with error code 0xe00002bc\nError: Failed to get performance warning level with error code 0xe00002bc\nError: No CPU power status with error code 0xe00002bc\n",
+      "stderr": ""
+    },
+    "model": {
+      "exitCode": 1,
+      "stdout": "",
+      "stderr": "sysctl: sysctl fmt -1 1024 1: Operation not permitted\n"
+    },
+    "memory": {
+      "exitCode": 1,
+      "stdout": "",
+      "stderr": "sysctl: sysctl fmt -1 1024 1: Operation not permitted\n"
+    },
+    "logicalCpu": {
+      "exitCode": 1,
+      "stdout": "",
+      "stderr": "sysctl: sysctl fmt -1 1024 1: Operation not permitted\n"
+    }
+  },
+  "rejectedOrNonTimingRuns": [
+    {
+      "run": "harness-connected-idle-pair-1-baseline-20261003",
+      "reason": "Sandbox denied loopback bind before the private daemon/app started. No accepted timing or cleanup result; helper exited 1. Required permission enabled for a fresh comparison."
+    },
+    {
+      "run": "harness-connected-idle-calibration-20261003-1",
+      "reason": "Successful five-second calibration only; not included in reported medians."
+    },
+    {
+      "run": "harness-connected-spawn-diagnostic-20261002-1",
+      "reason": "Foreground focus guard failed; no accepted timing; cleanup passed."
+    }
+  ],
+  "sameProcessDiagnostic": {
+    "boundary": "Same running processes; current parser/deadlines in both modes. A test-only hook changes only lsof -b. Not an exact full-source A/B comparison.",
+    "sameRootPidsAllPhases": true,
+    "warmupActiveSeconds": 30,
+    "secondsPerPhase": 30,
+    "settleSeconds": 5,
+    "success": true,
+    "cleanup": {
+      "success": true,
+      "errors": [],
+      "daemonExit": 0,
+      "daemonSignal": null,
+      "isolatedSocket": "/private/tmp/harness-connected-idle-crossover-20261003/tmux.sock",
+      "finishedAt": "2026-10-03T00:42:31.616Z"
+    },
+    "mediansCpuPercentOneCore": {
+      "baseline": 45.80143489504459,
+      "current": 42.99347559038995
+    },
+    "pairedCpuRelativeChangesPercent": [
+      4.803344821132871,
+      -19.640341777379643,
+      -6.130723439318375
+    ],
+    "phases": [
+      {
+        "label": "1-baseline-background-active",
+        "summary": {
+          "cpuPercentOneCore": 44.404856288913564,
+          "cpuSeconds": 13.321958125,
+          "elapsedSeconds": 30.001128791685915,
+          "interruptWakeupsPerSecond": 1069.0597751404691,
+          "liveProcessCountMax": 24,
+          "liveProcessCountMin": 24,
+          "packageIdleWakeupsPerSecond": 0,
+          "processCountMax": 24,
+          "processCountMin": 24,
+          "summedPhysicalFootprintMiBMedian": 796.8545227050781,
+          "summedPhysicalFootprintMiBPeak": 844.3076705932617
+        },
+        "componentCpuPercentOneCore": {
+          "desktop": 28.53277280366499,
+          "daemon": 8.191243598633175,
+          "tmuxAndWorkers": 7.680839886615392
+        },
+        "nativeBefore": {
+          "scale": 2.0,
+          "key": false,
+          "height": 800.0,
+          "visible": false,
+          "width": 1280.0,
+          "active": false,
+          "hidden": true,
+          "focusLosses": 0
+        },
+        "nativeAfter": {
+          "scale": 2.0,
+          "key": false,
+          "height": 800.0,
+          "visible": false,
+          "width": 1280.0,
+          "active": false,
+          "hidden": true,
+          "focusLosses": 0
+        },
+        "workers": [
+          {
+            "index": 0,
+            "pidUnchanged": true,
+            "ticks": 584,
+            "skipped": 0,
+            "bytes": 293536,
+            "elapsedMs": 30079.657541
+          },
+          {
+            "index": 1,
+            "pidUnchanged": true,
+            "ticks": 585,
+            "skipped": 0,
+            "bytes": 294043,
+            "elapsedMs": 30079.152541999996
+          },
+          {
+            "index": 2,
+            "pidUnchanged": true,
+            "ticks": 585,
+            "skipped": 0,
+            "bytes": 294043,
+            "elapsedMs": 30078.364792
+          },
+          {
+            "index": 3,
+            "pidUnchanged": true,
+            "ticks": 585,
+            "skipped": 0,
+            "bytes": 294043,
+            "elapsedMs": 30077.495334
+          },
+          {
+            "index": 4,
+            "pidUnchanged": true,
+            "ticks": 585,
+            "skipped": 0,
+            "bytes": 294043,
+            "elapsedMs": 30076.590334000008
+          },
+          {
+            "index": 5,
+            "pidUnchanged": true,
+            "ticks": 585,
+            "skipped": 0,
+            "bytes": 294043,
+            "elapsedMs": 30075.528292000003
+          },
+          {
+            "index": 6,
+            "pidUnchanged": true,
+            "ticks": 585,
+            "skipped": 0,
+            "bytes": 294043,
+            "elapsedMs": 30074.652207999992
+          },
+          {
+            "index": 7,
+            "pidUnchanged": true,
+            "ticks": 584,
+            "skipped": 0,
+            "bytes": 293536,
+            "elapsedMs": 30073.774292000002
+          },
+          {
+            "index": 8,
+            "pidUnchanged": true,
+            "ticks": 585,
+            "skipped": 0,
+            "bytes": 294035,
+            "elapsedMs": 30072.944416
+          },
+          {
+            "index": 9,
+            "pidUnchanged": true,
+            "ticks": 585,
+            "skipped": 0,
+            "bytes": 294043,
+            "elapsedMs": 30072.113915999995
+          }
+        ],
+        "rawSamplesSha256": "8c05aa6b913f0102febb42d8f1459b81cab34a355ea9ed392faab108555efe76"
+      },
+      {
+        "label": "2-current-background-active",
+        "summary": {
+          "cpuPercentOneCore": 46.537774653798586,
+          "cpuSeconds": 13.964609625,
+          "elapsedSeconds": 30.00704208330717,
+          "interruptWakeupsPerSecond": 1030.0248826322681,
+          "liveProcessCountMax": 24,
+          "liveProcessCountMin": 24,
+          "packageIdleWakeupsPerSecond": 0,
+          "processCountMax": 24,
+          "processCountMin": 24,
+          "summedPhysicalFootprintMiBMedian": 837.9484558105469,
+          "summedPhysicalFootprintMiBPeak": 844.8702392578125
+        },
+        "componentCpuPercentOneCore": {
+          "desktop": 30.333157073808337,
+          "daemon": 8.189293371572795,
+          "tmuxAndWorkers": 8.015324208417455
+        },
+        "nativeBefore": {
+          "scale": 2.0,
+          "key": false,
+          "height": 800.0,
+          "visible": false,
+          "width": 1280.0,
+          "active": false,
+          "hidden": true,
+          "focusLosses": 0
+        },
+        "nativeAfter": {
+          "scale": 2.0,
+          "key": false,
+          "height": 800.0,
+          "visible": false,
+          "width": 1280.0,
+          "active": false,
+          "hidden": true,
+          "focusLosses": 0
+        },
+        "workers": [
+          {
+            "index": 0,
+            "pidUnchanged": true,
+            "ticks": 584,
+            "skipped": 0,
+            "bytes": 296088,
+            "elapsedMs": 30069.695624999993
+          },
+          {
+            "index": 1,
+            "pidUnchanged": true,
+            "ticks": 585,
+            "skipped": 0,
+            "bytes": 296595,
+            "elapsedMs": 30069.687208000003
+          },
+          {
+            "index": 2,
+            "pidUnchanged": true,
+            "ticks": 584,
+            "skipped": 0,
+            "bytes": 296088,
+            "elapsedMs": 30069.614042
+          },
+          {
+            "index": 3,
+            "pidUnchanged": true,
+            "ticks": 585,
+            "skipped": 0,
+            "bytes": 296595,
+            "elapsedMs": 30069.489791999993
+          },
+          {
+            "index": 4,
+            "pidUnchanged": true,
+            "ticks": 585,
+            "skipped": 0,
+            "bytes": 296595,
+            "elapsedMs": 30069.387665999995
+          },
+          {
+            "index": 5,
+            "pidUnchanged": true,
+            "ticks": 585,
+            "skipped": 0,
+            "bytes": 296595,
+            "elapsedMs": 30069.296709000002
+          },
+          {
+            "index": 6,
+            "pidUnchanged": true,
+            "ticks": 585,
+            "skipped": 0,
+            "bytes": 296595,
+            "elapsedMs": 30069.176083
+          },
+          {
+            "index": 7,
+            "pidUnchanged": true,
+            "ticks": 585,
+            "skipped": 0,
+            "bytes": 296595,
+            "elapsedMs": 30069.041083999997
+          },
+          {
+            "index": 8,
+            "pidUnchanged": true,
+            "ticks": 585,
+            "skipped": 0,
+            "bytes": 296595,
+            "elapsedMs": 30068.881916
+          },
+          {
+            "index": 9,
+            "pidUnchanged": true,
+            "ticks": 585,
+            "skipped": 0,
+            "bytes": 296595,
+            "elapsedMs": 30068.799832999997
+          }
+        ],
+        "rawSamplesSha256": "a05fd30e3dc0f1ec668073abd721a44fe6b519bb1a6066b318d2e9dd80a54548"
+      },
+      {
+        "label": "3-current-background-active",
+        "summary": {
+          "cpuPercentOneCore": 37.27092996481463,
+          "cpuSeconds": 11.1827645,
+          "elapsedSeconds": 30.003985708317487,
+          "interruptWakeupsPerSecond": 861.1189277042502,
+          "liveProcessCountMax": 24,
+          "liveProcessCountMin": 24,
+          "packageIdleWakeupsPerSecond": 0,
+          "processCountMax": 24,
+          "processCountMin": 24,
+          "summedPhysicalFootprintMiBMedian": 832.8235702514648,
+          "summedPhysicalFootprintMiBPeak": 842.9797515869141
+        },
+        "componentCpuPercentOneCore": {
+          "desktop": 22.533564453935554,
+          "daemon": 7.207993340255267,
+          "tmuxAndWorkers": 7.529372170623802
+        },
+        "nativeBefore": {
+          "scale": 2.0,
+          "key": false,
+          "height": 800.0,
+          "visible": false,
+          "width": 1280.0,
+          "active": false,
+          "hidden": true,
+          "focusLosses": 0
+        },
+        "nativeAfter": {
+          "scale": 2.0,
+          "key": false,
+          "height": 800.0,
+          "visible": false,
+          "width": 1280.0,
+          "active": false,
+          "hidden": true,
+          "focusLosses": 0
+        },
+        "workers": [
+          {
+            "index": 0,
+            "pidUnchanged": true,
+            "ticks": 584,
+            "skipped": 0,
+            "bytes": 296088,
+            "elapsedMs": 30091.105333
+          },
+          {
+            "index": 1,
+            "pidUnchanged": true,
+            "ticks": 584,
+            "skipped": 0,
+            "bytes": 296088,
+            "elapsedMs": 30090.610834000006
+          },
+          {
+            "index": 2,
+            "pidUnchanged": true,
+            "ticks": 584,
+            "skipped": 0,
+            "bytes": 296088,
+            "elapsedMs": 30090.045499999993
+          },
+          {
+            "index": 3,
+            "pidUnchanged": true,
+            "ticks": 583,
+            "skipped": 0,
+            "bytes": 295581,
+            "elapsedMs": 30089.436792000008
+          },
+          {
+            "index": 4,
+            "pidUnchanged": true,
+            "ticks": 584,
+            "skipped": 0,
+            "bytes": 296088,
+            "elapsedMs": 30088.779167000015
+          },
+          {
+            "index": 5,
+            "pidUnchanged": true,
+            "ticks": 584,
+            "skipped": 0,
+            "bytes": 296088,
+            "elapsedMs": 30087.980332999985
+          },
+          {
+            "index": 6,
+            "pidUnchanged": true,
+            "ticks": 584,
+            "skipped": 0,
+            "bytes": 296088,
+            "elapsedMs": 30087.312290999995
+          },
+          {
+            "index": 7,
+            "pidUnchanged": true,
+            "ticks": 584,
+            "skipped": 0,
+            "bytes": 296088,
+            "elapsedMs": 30086.633
+          },
+          {
+            "index": 8,
+            "pidUnchanged": true,
+            "ticks": 583,
+            "skipped": 0,
+            "bytes": 295581,
+            "elapsedMs": 30085.907124999998
+          },
+          {
+            "index": 9,
+            "pidUnchanged": true,
+            "ticks": 584,
+            "skipped": 0,
+            "bytes": 296088,
+            "elapsedMs": 30085.12920899999
+          }
+        ],
+        "rawSamplesSha256": "e5c3e5f5a26900f86bb900d59aca8a61ddf0a8b2a899f3d36450d17c3d49d69e"
+      },
+      {
+        "label": "4-baseline-background-active",
+        "summary": {
+          "cpuPercentOneCore": 46.38014992742126,
+          "cpuSeconds": 13.916176416666666,
+          "elapsedSeconds": 30.004595583333867,
+          "interruptWakeupsPerSecond": 981.5829684556453,
+          "liveProcessCountMax": 24,
+          "liveProcessCountMin": 24,
+          "packageIdleWakeupsPerSecond": 0,
+          "processCountMax": 24,
+          "processCountMin": 24,
+          "summedPhysicalFootprintMiBMedian": 821.9642639160156,
+          "summedPhysicalFootprintMiBPeak": 848.5267868041992
+        },
+        "componentCpuPercentOneCore": {
+          "desktop": 30.26287512007099,
+          "daemon": 8.09822724183956,
+          "tmuxAndWorkers": 8.019047565510704
+        },
+        "nativeBefore": {
+          "scale": 2.0,
+          "key": false,
+          "height": 800.0,
+          "visible": false,
+          "width": 1280.0,
+          "active": false,
+          "hidden": true,
+          "focusLosses": 0
+        },
+        "nativeAfter": {
+          "scale": 2.0,
+          "key": false,
+          "height": 800.0,
+          "visible": false,
+          "width": 1280.0,
+          "active": false,
+          "hidden": true,
+          "focusLosses": 0
+        },
+        "workers": [
+          {
+            "index": 0,
+            "pidUnchanged": true,
+            "ticks": 586,
+            "skipped": 0,
+            "bytes": 297102,
+            "elapsedMs": 30082.529833000008
+          },
+          {
+            "index": 1,
+            "pidUnchanged": true,
+            "ticks": 585,
+            "skipped": 0,
+            "bytes": 296595,
+            "elapsedMs": 30082.17841599998
+          },
+          {
+            "index": 2,
+            "pidUnchanged": true,
+            "ticks": 586,
+            "skipped": 0,
+            "bytes": 297102,
+            "elapsedMs": 30081.854208999983
+          },
+          {
+            "index": 3,
+            "pidUnchanged": true,
+            "ticks": 586,
+            "skipped": 0,
+            "bytes": 297102,
+            "elapsedMs": 30081.510958
+          },
+          {
+            "index": 4,
+            "pidUnchanged": true,
+            "ticks": 585,
+            "skipped": 0,
+            "bytes": 296595,
+            "elapsedMs": 30081.23324999999
+          },
+          {
+            "index": 5,
+            "pidUnchanged": true,
+            "ticks": 585,
+            "skipped": 0,
+            "bytes": 296595,
+            "elapsedMs": 30080.823833000002
+          },
+          {
+            "index": 6,
+            "pidUnchanged": true,
+            "ticks": 585,
+            "skipped": 0,
+            "bytes": 296595,
+            "elapsedMs": 30080.427958999993
+          },
+          {
+            "index": 7,
+            "pidUnchanged": true,
+            "ticks": 586,
+            "skipped": 0,
+            "bytes": 297102,
+            "elapsedMs": 30080.161834
+          },
+          {
+            "index": 8,
+            "pidUnchanged": true,
+            "ticks": 586,
+            "skipped": 0,
+            "bytes": 297102,
+            "elapsedMs": 30079.846416999993
+          },
+          {
+            "index": 9,
+            "pidUnchanged": true,
+            "ticks": 585,
+            "skipped": 0,
+            "bytes": 296595,
+            "elapsedMs": 30079.465790999995
+          }
+        ],
+        "rawSamplesSha256": "d409be9977886815c24001a2601feec5b25679295842779e1250a37dba919d68"
+      },
+      {
+        "label": "5-baseline-background-active",
+        "summary": {
+          "cpuPercentOneCore": 45.80143489504459,
+          "cpuSeconds": 13.740430125,
+          "elapsedSeconds": 29.99999924999429,
+          "interruptWakeupsPerSecond": 989.600024740189,
+          "liveProcessCountMax": 26,
+          "liveProcessCountMin": 24,
+          "packageIdleWakeupsPerSecond": 0,
+          "processCountMax": 26,
+          "processCountMin": 24,
+          "summedPhysicalFootprintMiBMedian": 839.3238906860352,
+          "summedPhysicalFootprintMiBPeak": 847.5113906860352
+        },
+        "componentCpuPercentOneCore": {
+          "desktop": 30.065619223868424,
+          "daemon": 8.828108415148835,
+          "tmuxAndWorkers": 6.907707256027329
+        },
+        "nativeBefore": {
+          "scale": 2.0,
+          "key": false,
+          "height": 800.0,
+          "visible": false,
+          "width": 1280.0,
+          "active": false,
+          "hidden": true,
+          "focusLosses": 0
+        },
+        "nativeAfter": {
+          "scale": 2.0,
+          "key": false,
+          "height": 800.0,
+          "visible": false,
+          "width": 1280.0,
+          "active": false,
+          "hidden": true,
+          "focusLosses": 0
+        },
+        "workers": [
+          {
+            "index": 0,
+            "pidUnchanged": true,
+            "ticks": 586,
+            "skipped": 0,
+            "bytes": 297102,
+            "elapsedMs": 30095.323041999975
+          },
+          {
+            "index": 1,
+            "pidUnchanged": true,
+            "ticks": 586,
+            "skipped": 0,
+            "bytes": 297102,
+            "elapsedMs": 30095.010792000015
+          },
+          {
+            "index": 2,
+            "pidUnchanged": true,
+            "ticks": 585,
+            "skipped": 0,
+            "bytes": 296595,
+            "elapsedMs": 30094.793208999996
+          },
+          {
+            "index": 3,
+            "pidUnchanged": true,
+            "ticks": 585,
+            "skipped": 0,
+            "bytes": 296595,
+            "elapsedMs": 30094.626499999984
+          },
+          {
+            "index": 4,
+            "pidUnchanged": true,
+            "ticks": 585,
+            "skipped": 0,
+            "bytes": 296595,
+            "elapsedMs": 30094.403749999998
+          },
+          {
+            "index": 5,
+            "pidUnchanged": true,
+            "ticks": 585,
+            "skipped": 0,
+            "bytes": 296595,
+            "elapsedMs": 30094.222458000004
+          },
+          {
+            "index": 6,
+            "pidUnchanged": true,
+            "ticks": 586,
+            "skipped": 0,
+            "bytes": 297102,
+            "elapsedMs": 30094.072917000012
+          },
+          {
+            "index": 7,
+            "pidUnchanged": true,
+            "ticks": 585,
+            "skipped": 0,
+            "bytes": 296595,
+            "elapsedMs": 30093.858792000014
+          },
+          {
+            "index": 8,
+            "pidUnchanged": true,
+            "ticks": 585,
+            "skipped": 0,
+            "bytes": 296595,
+            "elapsedMs": 30093.704582999984
+          },
+          {
+            "index": 9,
+            "pidUnchanged": true,
+            "ticks": 585,
+            "skipped": 0,
+            "bytes": 296595,
+            "elapsedMs": 30093.592458
+          }
+        ],
+        "rawSamplesSha256": "0a4a00d8a32c355229fad9dfd0f2778e7009fe259d3ad04ba35eff46e13327a7"
+      },
+      {
+        "label": "6-current-background-active",
+        "summary": {
+          "cpuPercentOneCore": 42.99347559038995,
+          "cpuSeconds": 12.900796875,
+          "elapsedSeconds": 30.006406083353795,
+          "interruptWakeupsPerSecond": 947.7309585494187,
+          "liveProcessCountMax": 24,
+          "liveProcessCountMin": 24,
+          "packageIdleWakeupsPerSecond": 0,
+          "processCountMax": 24,
+          "processCountMin": 24,
+          "summedPhysicalFootprintMiBMedian": 831.8395614624023,
+          "summedPhysicalFootprintMiBPeak": 840.6677322387695
+        },
+        "componentCpuPercentOneCore": {
+          "desktop": 28.819119966066033,
+          "daemon": 7.693659209260326,
+          "tmuxAndWorkers": 6.480696415063593
+        },
+        "nativeBefore": {
+          "scale": 2.0,
+          "key": false,
+          "height": 800.0,
+          "visible": false,
+          "width": 1280.0,
+          "active": false,
+          "hidden": true,
+          "focusLosses": 0
+        },
+        "nativeAfter": {
+          "scale": 2.0,
+          "key": false,
+          "height": 800.0,
+          "visible": false,
+          "width": 1280.0,
+          "active": false,
+          "hidden": true,
+          "focusLosses": 0
+        },
+        "workers": [
+          {
+            "index": 0,
+            "pidUnchanged": true,
+            "ticks": 584,
+            "skipped": 0,
+            "bytes": 296088,
+            "elapsedMs": 30033.976000000024
+          },
+          {
+            "index": 1,
+            "pidUnchanged": true,
+            "ticks": 584,
+            "skipped": 0,
+            "bytes": 296088,
+            "elapsedMs": 30034.013874999975
+          },
+          {
+            "index": 2,
+            "pidUnchanged": true,
+            "ticks": 585,
+            "skipped": 0,
+            "bytes": 296595,
+            "elapsedMs": 30034.043082999997
+          },
+          {
+            "index": 3,
+            "pidUnchanged": true,
+            "ticks": 584,
+            "skipped": 0,
+            "bytes": 296088,
+            "elapsedMs": 30034.047458999994
+          },
+          {
+            "index": 4,
+            "pidUnchanged": true,
+            "ticks": 583,
+            "skipped": 0,
+            "bytes": 295581,
+            "elapsedMs": 30034.042707999994
+          },
+          {
+            "index": 5,
+            "pidUnchanged": true,
+            "ticks": 584,
+            "skipped": 0,
+            "bytes": 296088,
+            "elapsedMs": 30034.093541999988
+          },
+          {
+            "index": 6,
+            "pidUnchanged": true,
+            "ticks": 584,
+            "skipped": 0,
+            "bytes": 296088,
+            "elapsedMs": 30034.13399999999
+          },
+          {
+            "index": 7,
+            "pidUnchanged": true,
+            "ticks": 583,
+            "skipped": 0,
+            "bytes": 295581,
+            "elapsedMs": 30034.130957999994
+          },
+          {
+            "index": 8,
+            "pidUnchanged": true,
+            "ticks": 585,
+            "skipped": 0,
+            "bytes": 296595,
+            "elapsedMs": 30034.126625000004
+          },
+          {
+            "index": 9,
+            "pidUnchanged": true,
+            "ticks": 583,
+            "skipped": 0,
+            "bytes": 295581,
+            "elapsedMs": 30034.127542000002
+          }
+        ],
+        "rawSamplesSha256": "707b55506af448f3a5403ed27855201dc6c2a933ebc033d784b1d73dcb843b4a"
+      }
+    ],
+    "underlyingToolHashes": {
+      "connected_run.py": "853cea7815edd5d665b0cce4df366c33dd906ffa1fbc26380a7662026d115094",
+      "connected_stack.mjs": "819ed8941fa33d05bedc732461e9753f69fba9c5796f915909b6c3c1e1f663fe",
+      "connected_worker.mjs": "3456923d6b9f6ff8628c7f84dd2540cb55adf4a83950e6970ace506a1a98295e",
+      "harness-connected-forest-usage-v2-20261002": "48816ec9467b369be056bb03c4b89aa2766a35d07d80f3d0e2a99db987c8c0fb"
+    },
+    "actualInstrumentation": {
+      "runnerScript": "import argparse,sys\nfrom pathlib import Path\nrepo=Path('/Users/ab/harnesses/worktrees/autonomous-harness/noble-tiger')\ntool=repo/'desktop/tool/native_benchmark/connected_run.py'\nsys.path.insert(0,str(tool.parent))\nsource=tool.read_text()\nstart=source.index(\"        phases = [('background', 'idle-hidden')\")\nend=source.index(\"            rpc(control, {'operation': 'show'\",start)\nsource=source[:start]+'''        # Diagnostic: retain the same app/daemon/tmux/worker PIDs and active workload.\n        rpc(control, {'operation': 'hide'})\n        for index in range(args.terminals):\n            rpc(root / f'worker-{index}.sock', {'mode': 'active'})\n        time.sleep(30)\n        result['diagnosticBoundary'] = 'Same running processes; current parser/deadlines in both modes. A test-only hook changes only lsof -b. Not an exact full-source A/B comparison.'\n        result['backgroundOnly'] = True\n        for phase_index, probe_mode in enumerate(['baseline', 'current', 'current', 'baseline', 'baseline', 'current'], 1):\n            visibility, mode = 'background', 'active'\n            (root / 'probe-mode.json').write_text(json.dumps({'mode':probe_mode}))\n            label = f'{phase_index}-{probe_mode}-background-active'\n''' + source[end:]\nnamespace={'__file__':str(tool),'__name__':'crossover_diagnostic'}\nexec(compile(source,str(tool),'exec'),namespace)\nargs=argparse.Namespace(app=Path('/private/tmp/harness-native-benchmark-ht7onsw4/desktop/build/macos/Build/Products/Release/Harness Benchmark.app'),root=Path('/private/tmp/harness-connected-idle-crossover-20261003'),node=Path('/Users/ab/.harness/runtime/node-v22.23.2-darwin-arm64/bin/node'),tmux=Path('/opt/homebrew/bin/tmux'),sampler=Path('/private/tmp/harness-connected-forest-usage-v2-20261002'),bundle=repo/'cli/dist/crossover-discovery.mjs',label='same-process-discovery-diagnostic',background_only=True,terminals=10,seconds=30,settle=5)\nnamespace['signal'].signal(namespace['signal'].SIGTERM,lambda *_: (_ for _ in ()).throw(KeyboardInterrupt('diagnostic stopped')))\nnamespace['run'](args)\n",
+      "execFileHook": "import cp from 'node:child_process';\nimport { syncBuiltinESMExports } from 'node:module';\nimport { appendFileSync, readFileSync } from 'node:fs';\nimport { dirname } from 'node:path';\nconst original = cp.execFile;\ncp.execFile = function (command, ...rest) {\n  const args = rest[0];\n  if (command === 'lsof' && Array.isArray(args) && args.includes('-d') && args.includes('txt')) {\n    let mode = 'current';\n    try { mode = JSON.parse(readFileSync(dirname(process.env.HOME) + '/probe-mode.json', 'utf8')).mode; } catch {}\n    if (mode === 'baseline') rest[0] = args.filter(arg => arg !== '-b');\n    const last = rest.length - 1, cb = rest[last], started = performance.now();\n    if (typeof cb === 'function') rest[last] = function (error, stdout, stderr) {\n      appendFileSync(process.env.HOME + '/crossover-probes.jsonl', JSON.stringify({at:new Date().toISOString(),mode,args:rest[0],elapsedMs:performance.now()-started,error:error?.code??null,stdoutBytes:Buffer.byteLength(stdout??''),stderrBytes:Buffer.byteLength(stderr??'')})+'\\n');\n      return cb(error,stdout,stderr);\n    };\n  }\n  return original.call(this, command, ...rest);\n};\nsyncBuiltinESMExports();\nawait import('./cli.js');\n"
+    },
+    "imageProbeCalls": 49,
+    "imageProbeErrors": 0,
+    "probeWallTimeMsMedianByMode": {
+      "baseline": 52.33366699999897,
+      "current": 27.170916999999463
+    },
+    "rawResultSha256": "2d620d33f4cea5163500d9842a15d14ace9c6828eb271050ff1a5ce02cb00f8b",
+    "sameTenWorkerPidsAllPhases": true
+  },
+  "fallbackDiagnostic": {
+    "allLsofCalls": 4,
+    "imageDiscoveryCalls": 3,
+    "imageFallbackCalls": 0,
+    "imageErrors": 0,
+    "unrelatedCodexProcessInventoryCalls": 1
+  },
+  "decision": "Keep candidate PR657 draft: image-helper cost improves, but connected active-output CPU results do not establish a consistent total resource improvement. No release or installed-process change."
+}

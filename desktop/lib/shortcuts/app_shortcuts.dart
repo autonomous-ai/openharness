@@ -423,6 +423,8 @@ const linuxAltCommandKeys = <String, List<String>>{
   'navigation.commands': ['ctrl+shift+p'],
   'harnesses.list': ['alt+shift+p'],
   'pane.split_down': ['alt+shift+d'],
+  // Alt-Shift-F already opens terminal Find on Linux.
+  'pane.toggle_shading': ['ctrl+alt+f'],
   'app.daemon_talk': ['alt+shift+a'],
 };
 

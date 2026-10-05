@@ -1,0 +1,13 @@
+[Unit]
+Description=Initialize this machine's package verification keyring
+After=systemd-random-seed.service time-sync.target
+Before=archlinux-keyring-wkd-sync.service
+ConditionPathExists=!/var/lib/harness-os/keyring-ready
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/harness-os/init-keyring
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

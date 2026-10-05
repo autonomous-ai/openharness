@@ -487,4 +487,113 @@ void main() {
 
     expect(local.nodeOnline, isFalse);
   });
+
+  test(
+    'a delayed offline inventory cannot override a remote reconnect',
+    () async {
+      const remote = Machine(
+        machineId: 'remote-machine',
+        name: 'Remote test computer',
+        computerId: 'remote-computer',
+        authMode: MachineAuthMode.remote,
+        status: 'offline',
+      );
+      app.machines.add(remote);
+      final state = MachineState(remote)..nodeOnline = false;
+      app.machineStates[remote.machineId] = state;
+
+      final refresh = app.refreshMachines();
+      await _tick();
+      connection.ready = true;
+      app.onMachineConnectedForTest(remote.machineId);
+      await _tick();
+      expect(state.nodeOnline, isTrue);
+
+      api.lists.single.complete([_localMachine, remote]);
+      await refresh;
+      await _tick();
+      expect(
+        state.nodeOnline,
+        isTrue,
+        reason: 'the selected remote socket is newer than the inventory',
+      );
+      expect(
+        state.isOffline,
+        isFalse,
+        reason: 'the New Harness picker must agree',
+      );
+      connection.ready = false;
+      expect(
+        state.isOffline,
+        isTrue,
+        reason: 'a closed socket cannot override inventory',
+      );
+    },
+  );
+
+  for (final cached in [false, true]) {
+    test(
+      'offline inventory still applies without a live remote socket (cached=$cached)',
+      () async {
+        const remote = Machine(
+          machineId: 'remote-machine',
+          name: 'Remote test computer',
+          authMode: MachineAuthMode.remote,
+          status: 'offline',
+        );
+        app.machines.add(remote);
+        final state = MachineState(remote)
+          ..nodeOnline = true
+          ..connectionStatus = ConnectionStatus.connected;
+        app.machineStates[remote.machineId] = state;
+        connection.ready = true;
+        app.onMachineConnectedForTest(remote.machineId);
+        await _tick();
+        connection.ready = false;
+        api.nextIsStale = cached;
+        final refresh = app.refreshMachines();
+        await _tick();
+        api.lists.single.complete([_localMachine, remote]);
+        await refresh;
+        expect(state.nodeOnline, isFalse);
+      },
+    );
+  }
+
+  test(
+    'a remote offline push wins even before its ready socket closes',
+    () async {
+      const remote = Machine(
+        machineId: 'remote-machine',
+        name: 'Remote test computer',
+        authMode: MachineAuthMode.remote,
+        status: 'offline',
+      );
+      app.machines.add(remote);
+      final state = MachineState(remote)
+        ..nodeOnline = true
+        ..connectionStatus = ConnectionStatus.connected;
+      app.machineStates[remote.machineId] = state;
+      connection.ready = true;
+      app.onMachineConnectedForTest(remote.machineId);
+      await _tick();
+      expect(state.isOffline, isFalse);
+      await app.handleEventForTest(remote.machineId, {
+        'type': 'node_status',
+        'payload': {'online': false},
+      });
+      expect(state.nodeOnline, isFalse);
+      expect(connection.isReady, isTrue);
+      expect(state.isOffline, isTrue);
+      final refresh = app.refreshMachines();
+      await _tick();
+      api.lists.single.complete([_localMachine, remote]);
+      await refresh;
+      expect(
+        state.nodeOnline,
+        isFalse,
+        reason: 'an inventory must not resurrect an explicit offline report',
+      );
+    },
+  );
 }

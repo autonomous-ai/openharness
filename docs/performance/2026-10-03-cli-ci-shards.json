@@ -1,0 +1,1139 @@
+{
+  "schema": 1,
+  "source": "b2aa5c24d366c13a8981b282d2d8b1e766a87ae6",
+  "run": {
+    "url": "https://github.com/autonomous-ai/openharness/actions/runs/37044314333",
+    "createdAt": "2026-10-02T17:58:29Z",
+    "updatedAt": "2026-10-02T18:01:48Z",
+    "status": "completed",
+    "conclusion": "success"
+  },
+  "workflow_seconds": 199.0,
+  "summary_sha256": "ad4236cba7103aaf5ee316ea997f60178fa0169b24760eedd8dd3d5399dc8aa6",
+  "coverage": {
+    "schema": 1,
+    "status": "passed",
+    "files": 508,
+    "passed": 8818,
+    "skipped": 63,
+    "todo": 0,
+    "shards": [
+      {
+        "shard": 1,
+        "files": 127,
+        "passed": 1959,
+        "skipped": 10,
+        "todo": 0,
+        "inventory_sha256": "087e2745f8f8064b5a095d9d8fb72eeed737443d1bb110791ccecfd2af7a8c9b",
+        "result_sha256": "a108f2e1f965b8fa9869f1db36ccaa748c2943aad6a2bd6efaa64f22f2ffef72"
+      },
+      {
+        "shard": 2,
+        "files": 127,
+        "passed": 2311,
+        "skipped": 16,
+        "todo": 0,
+        "inventory_sha256": "43b4520837c716c10368f0f8a1bdb49fb59f7214a33667739b0823c8d63eb35c",
+        "result_sha256": "344378cca7ed61cc1ba7df34c7bbd3fec0b4595cede2bbb00cb3da96991af55c"
+      },
+      {
+        "shard": 3,
+        "files": 127,
+        "passed": 2043,
+        "skipped": 3,
+        "todo": 0,
+        "inventory_sha256": "6684c3d438f9698113166361a9d0d51620e9704e90bddf2c4874e9475ff7eef9",
+        "result_sha256": "480bfbac32c1c99ae8b6c7bd86e3d3071cd5426609b76a0f9254073b052e5c4b"
+      },
+      {
+        "shard": 4,
+        "files": 127,
+        "passed": 2505,
+        "skipped": 34,
+        "todo": 0,
+        "inventory_sha256": "5ecd623e67729329b69b915af7c1155ec0fb3738c8b1ad6f0d47de1355b73047",
+        "result_sha256": "904e604cf30317b55a8b2e298e929bcf4f77134a223a8d023d7ab8b52de4086e"
+      }
+    ],
+    "verified_files": [
+      "src/authCommand.spec.ts",
+      "src/backendSocket.devices.spec.ts",
+      "src/backendSocket.dsh.spec.ts",
+      "src/backendSocket.gridReads.spec.ts",
+      "src/backendSocket.handoff.spec.ts",
+      "src/backendSocket.memorySettings.spec.ts",
+      "src/backendSocket.models.spec.ts",
+      "src/backendSocket.spec.ts",
+      "src/cable/cableFleet.spec.ts",
+      "src/cable/cableFrame.spec.ts",
+      "src/cable/cableHost.spec.ts",
+      "src/cable/cableSession.spec.ts",
+      "src/cable/cableVoice.spec.ts",
+      "src/cable/companionIdentity.spec.ts",
+      "src/cable/dialLog.spec.ts",
+      "src/cable/dialPortVerdicts.spec.ts",
+      "src/cable/fwPush.spec.ts",
+      "src/cable/passageCarry.spec.ts",
+      "src/cable/questionInbox.spec.ts",
+      "src/cable/serial.real.spec.ts",
+      "src/cable/serial.spec.ts",
+      "src/cable/terminalActivity.spec.ts",
+      "src/cable/voiceDraft.spec.ts",
+      "src/cable/windowForm.spec.ts",
+      "src/cable/windowRoute.spec.ts",
+      "src/cable/windowSelection.spec.ts",
+      "src/cable/windowVisit.spec.ts",
+      "src/cliCommand.spec.ts",
+      "src/config/envIsolation.spec.ts",
+      "src/config/loadEnv.spec.ts",
+      "src/config/terminalConfig.spec.ts",
+      "src/device/deviceFleet.spec.ts",
+      "src/device/machineList.spec.ts",
+      "src/devices/client.spec.ts",
+      "src/devicesCommand.spec.ts",
+      "src/dsh/artifacts.spec.ts",
+      "src/dsh/builtins.spec.ts",
+      "src/dsh/catalog.spec.ts",
+      "src/dsh/catalogPublisher.spec.ts",
+      "src/dsh/check.spec.ts",
+      "src/dsh/command.spec.ts",
+      "src/dsh/install.spec.ts",
+      "src/dsh/installed.spec.ts",
+      "src/dsh/launch.spec.ts",
+      "src/dsh/lock.spec.ts",
+      "src/dsh/manifest.spec.ts",
+      "src/dsh/materialize.spec.ts",
+      "src/dsh/portability.integration.spec.ts",
+      "src/dsh/probe.spec.ts",
+      "src/dsh/registry.spec.ts",
+      "src/dsh/runtime.spec.ts",
+      "src/dsh/service.spec.ts",
+      "src/dsh/shell.spec.ts",
+      "src/dsh/store.spec.ts",
+      "src/dsh/studios.integration.spec.ts",
+      "src/dsh/update.spec.ts",
+      "src/dsh/verdict.spec.ts",
+      "src/dsh/viewer.spec.ts",
+      "src/dsh/viewerLedger.spec.ts",
+      "src/dsh/wire.spec.ts",
+      "src/engines/agy/askQuestion.spec.ts",
+      "src/engines/agy/history.spec.ts",
+      "src/engines/agy/normalizer.spec.ts",
+      "src/engines/agy/runtimeProfile.spec.ts",
+      "src/engines/amp/askQuestion.spec.ts",
+      "src/engines/amp/normalizer.spec.ts",
+      "src/engines/amp/threadExport.spec.ts",
+      "src/engines/codex/askQuestion.spec.ts",
+      "src/engines/codex/normalizer.spec.ts",
+      "src/engines/codex/ownLoginProvider.spec.ts",
+      "src/engines/codex/portableHistory.real.spec.ts",
+      "src/engines/codex/portableHistory.spec.ts",
+      "src/engines/codex/subagent.spec.ts",
+      "src/engines/commandcode/normalizer.spec.ts",
+      "src/engines/commandcode/runtimeProfile.spec.ts",
+      "src/engines/commandcode/transcript.spec.ts",
+      "src/engines/copilot/normalizer.spec.ts",
+      "src/engines/cursor/discovery.spec.ts",
+      "src/engines/cursor/home.spec.ts",
+      "src/engines/cursor/localE2e.spec.ts",
+      "src/engines/cursor/normalizer.spec.ts",
+      "src/engines/cursor/taskHookQueue.spec.ts",
+      "src/engines/devin/askQuestion.spec.ts",
+      "src/engines/devin/errorLog.spec.ts",
+      "src/engines/devin/normalizer.spec.ts",
+      "src/engines/devin/reader.spec.ts",
+      "src/engines/devin/runtimeProfile.spec.ts",
+      "src/engines/grok/askQuestion.spec.ts",
+      "src/engines/grok/normalizer.spec.ts",
+      "src/engines/grok/runtimeProfile.spec.ts",
+      "src/engines/grok/session.spec.ts",
+      "src/engines/hermes/delegation.spec.ts",
+      "src/engines/hermes/home.spec.ts",
+      "src/engines/hermes/normalizer.spec.ts",
+      "src/engines/hermes/reader.spec.ts",
+      "src/engines/hermes/runtimeProfile.spec.ts",
+      "src/engines/kilo/askQuestion.spec.ts",
+      "src/engines/kilo/normalizer.spec.ts",
+      "src/engines/kilo/reader.spec.ts",
+      "src/engines/kilo/runtimeProfile.spec.ts",
+      "src/engines/muse/askQuestion.spec.ts",
+      "src/engines/muse/normalizer.spec.ts",
+      "src/engines/opencode/normalizer.spec.ts",
+      "src/engines/opencode/reader.spec.ts",
+      "src/engines/opencode/runtimeProfile.spec.ts",
+      "src/engines/opencode/sessionModel.spec.ts",
+      "src/engines/opencode/tuiFlags.spec.ts",
+      "src/engines/opencode/version.spec.ts",
+      "src/engines/pi/normalizer.spec.ts",
+      "src/engines/pi/runtimeProfile.spec.ts",
+      "src/gridCommand.spec.ts",
+      "src/hookNotify.spec.ts",
+      "src/hookServer.spec.ts",
+      "src/lib/accountUsage.spec.ts",
+      "src/lib/agentCreateDiagnosis.spec.ts",
+      "src/lib/agentCreationReceipt.spec.ts",
+      "src/lib/agentEvent.spec.ts",
+      "src/lib/agentFrame.spec.ts",
+      "src/lib/agentNames.spec.ts",
+      "src/lib/agentNotifications.spec.ts",
+      "src/lib/agentOutputStats.spec.ts",
+      "src/lib/agentProject.spec.ts",
+      "src/lib/agentTokenUsage.spec.ts",
+      "src/lib/apiCommand.spec.ts",
+      "src/lib/apiConnections.spec.ts",
+      "src/lib/apiConnectionsRpc.spec.ts",
+      "src/lib/apiModels.spec.ts",
+      "src/lib/appModels.spec.ts",
+      "src/lib/askQuestion.more.spec.ts",
+      "src/lib/askQuestion.polling.spec.ts",
+      "src/lib/askQuestion.spec.ts",
+      "src/lib/askQuestion.whitespace.spec.ts",
+      "src/lib/attachTracker.spec.ts",
+      "src/lib/authSession.spec.ts",
+      "src/lib/autonomous-device/command.spec.ts",
+      "src/lib/autonomous-device/direct.spec.ts",
+      "src/lib/autonomous-device/discovery.spec.ts",
+      "src/lib/autonomous-device/dump.spec.ts",
+      "src/lib/autonomous-device/input.spec.ts",
+      "src/lib/autonomous-device/localApi.spec.ts",
+      "src/lib/autonomous-device/relay.spec.ts",
+      "src/lib/autonomous-device/results.spec.ts",
+      "src/lib/autonomous-device/service.spec.ts",
+      "src/lib/autonomous-device/store.spec.ts",
+      "src/lib/autonomous-device/storeContract.spec.ts",
+      "src/lib/autonomous-device/storeRuntime.spec.ts",
+      "src/lib/autonomous-device/stream.spec.ts",
+      "src/lib/binaryOnPath.spec.ts",
+      "src/lib/captureResumeIdentity.spec.ts",
+      "src/lib/childLocale.spec.ts",
+      "src/lib/claudeProject.spec.ts",
+      "src/lib/claudeTrust.spec.ts",
+      "src/lib/closeAgentService.spec.ts",
+      "src/lib/codexHomeProbe.spec.ts",
+      "src/lib/codexProfileDiscovery.test.ts",
+      "src/lib/codexProfiles.test.ts",
+      "src/lib/codexSessionLifecycle.spec.ts",
+      "src/lib/codexStartupRetry.real.spec.ts",
+      "src/lib/codexStartupRetry.spec.ts",
+      "src/lib/codexTurnRecovery.spec.ts",
+      "src/lib/commandBar.test.ts",
+      "src/lib/commandcodeModel.spec.ts",
+      "src/lib/commander.spec.ts",
+      "src/lib/commanderNotifications.spec.ts",
+      "src/lib/commanderReplay.spec.ts",
+      "src/lib/companionOneShot.spec.ts",
+      "src/lib/computerIdentity.spec.ts",
+      "src/lib/createAgentPane.spec.ts",
+      "src/lib/cwdRepair.spec.ts",
+      "src/lib/daemonEndpoint.spec.ts",
+      "src/lib/daemonLaunch.spec.ts",
+      "src/lib/daemonSafeMode.spec.ts",
+      "src/lib/daemonSpawnLock.spec.ts",
+      "src/lib/daemonStop.spec.ts",
+      "src/lib/daemonsSwitch.spec.ts",
+      "src/lib/deleteAgentFallback.spec.ts",
+      "src/lib/deriveTurnSummary.spec.ts",
+      "src/lib/deviceAuth.spec.ts",
+      "src/lib/deviceErrors.spec.ts",
+      "src/lib/deviceRecap.spec.ts",
+      "src/lib/deviceRecentTrim.spec.ts",
+      "src/lib/devinTrust.spec.ts",
+      "src/lib/discoveryScripts.spec.ts",
+      "src/lib/disposableOneShotPool.spec.ts",
+      "src/lib/e2ee/core.test.ts",
+      "src/lib/e2ee/deviceDisplay.spec.ts",
+      "src/lib/e2ee/deviceHistory.spec.ts",
+      "src/lib/e2ee/deviceLog.spec.ts",
+      "src/lib/e2ee/deviceLogStore.spec.ts",
+      "src/lib/e2ee/deviceLogSyncer.spec.ts",
+      "src/lib/e2ee/groupSyncer.spec.ts",
+      "src/lib/e2ee/manager.test.ts",
+      "src/lib/e2ee/passwordPake.spec.ts",
+      "src/lib/e2ee/relayLink.spec.ts",
+      "src/lib/e2ee/replayWindow.spec.ts",
+      "src/lib/e2ee/store.spec.ts",
+      "src/lib/e2ee/trustGroup.spec.ts",
+      "src/lib/engineBin.spec.ts",
+      "src/lib/engineBinOpencode.spec.ts",
+      "src/lib/engineInstall.spec.ts",
+      "src/lib/engineInstall.user.spec.ts",
+      "src/lib/engineLaunch.spec.ts",
+      "src/lib/engineShellStartup.spec.ts",
+      "src/lib/firstTurnReplay.spec.ts",
+      "src/lib/flash.spec.ts",
+      "src/lib/forkAgent.spec.ts",
+      "src/lib/fsBrowse.spec.ts",
+      "src/lib/gatewayRuntime.spec.ts",
+      "src/lib/gitProject.spec.ts",
+      "src/lib/gitPullRequest.spec.ts",
+      "src/lib/goalCommand.spec.ts",
+      "src/lib/gridActs.spec.ts",
+      "src/lib/gridAssignment.spec.ts",
+      "src/lib/gridAttach.spec.ts",
+      "src/lib/gridDerive.spec.ts",
+      "src/lib/gridEnsure.spec.ts",
+      "src/lib/gridExec.spec.ts",
+      "src/lib/gridFleetRpc.spec.ts",
+      "src/lib/gridHandoff.spec.ts",
+      "src/lib/gridInstall.spec.ts",
+      "src/lib/gridLaunch.spec.ts",
+      "src/lib/gridLogout.spec.ts",
+      "src/lib/gridMcpUrl.spec.ts",
+      "src/lib/gridPicture.spellings.spec.ts",
+      "src/lib/gridReads.spec.ts",
+      "src/lib/gridSetupCommand.spec.ts",
+      "src/lib/gridTarget.spec.ts",
+      "src/lib/gridWebSearchFrame.spec.ts",
+      "src/lib/grokOneShot.spec.ts",
+      "src/lib/harnessDefaults.spec.ts",
+      "src/lib/harnessDevices.spec.ts",
+      "src/lib/harnessMonitor.spec.ts",
+      "src/lib/harnessResources.spec.ts",
+      "src/lib/harnessTelemetry.spec.ts",
+      "src/lib/harnessWebTools.spec.ts",
+      "src/lib/hermesHome.spec.ts",
+      "src/lib/hookAuth.spec.ts",
+      "src/lib/hooks.spec.ts",
+      "src/lib/hostTheme.spec.ts",
+      "src/lib/interactiveViewer.spec.ts",
+      "src/lib/jsonDriver.spec.ts",
+      "src/lib/kiloOneShot.spec.ts",
+      "src/lib/launchOverrides.spec.ts",
+      "src/lib/literalToolCall.spec.ts",
+      "src/lib/localModels.integration.spec.ts",
+      "src/lib/localModels.spec.ts",
+      "src/lib/localSocket.spec.ts",
+      "src/lib/log.spec.ts",
+      "src/lib/logBundle.spec.ts",
+      "src/lib/loginCallback.spec.ts",
+      "src/lib/loginShellEnv.spec.ts",
+      "src/lib/loopbackRequest.spec.ts",
+      "src/lib/machineHardware.spec.ts",
+      "src/lib/machineResources.spec.ts",
+      "src/lib/macosProcessGpu.integration.spec.ts",
+      "src/lib/macosProcessGpu.spec.ts",
+      "src/lib/mediaPreview.spec.ts",
+      "src/lib/newAgentModel.spec.ts",
+      "src/lib/newCommand.spec.ts",
+      "src/lib/normalize.spec.ts",
+      "src/lib/normalize.test.ts",
+      "src/lib/openFiles.spec.ts",
+      "src/lib/openTabProtection.spec.ts",
+      "src/lib/opencodeMemoryPlugin.spec.ts",
+      "src/lib/opencodeOneShot.spec.ts",
+      "src/lib/opencodeRecallPlugin.spec.ts",
+      "src/lib/openrouter.spec.ts",
+      "src/lib/osClipboard.spec.ts",
+      "src/lib/ownerCommands.spec.ts",
+      "src/lib/pathContainment.spec.ts",
+      "src/lib/processArgv.spec.ts",
+      "src/lib/processEnv.spec.ts",
+      "src/lib/processLiveness.spec.ts",
+      "src/lib/processRows.spec.ts",
+      "src/lib/projectFolder.spec.ts",
+      "src/lib/projectPreview.spec.ts",
+      "src/lib/purgeAgentService.spec.ts",
+      "src/lib/qrSignIn.spec.ts",
+      "src/lib/registry.observation.spec.ts",
+      "src/lib/registry.spec.ts",
+      "src/lib/remoteRelay.spec.ts",
+      "src/lib/remoteRelayRestart.spec.ts",
+      "src/lib/remoteViewerProxy.faults.spec.ts",
+      "src/lib/remoteViewerProxy.spec.ts",
+      "src/lib/remoteViewerRelay.spec.ts",
+      "src/lib/restartAgent.spec.ts",
+      "src/lib/restartDiscovery.real.spec.ts",
+      "src/lib/restoreAgents.spec.ts",
+      "src/lib/resumeAgentService.spec.ts",
+      "src/lib/resumeCapability.spec.ts",
+      "src/lib/resumeStoppedAgent.spec.ts",
+      "src/lib/retainExitedSession.spec.ts",
+      "src/lib/routeApi.spec.ts",
+      "src/lib/runtimeActivity.spec.ts",
+      "src/lib/runtimeInstall.spec.ts",
+      "src/lib/runtimeProfile.spec.ts",
+      "src/lib/runtimeProfileController.spec.ts",
+      "src/lib/secureState.spec.ts",
+      "src/lib/selfUpdate.spec.ts",
+      "src/lib/sessionCheckpoint.spec.ts",
+      "src/lib/sessionCheckpoint.sqlite.spec.ts",
+      "src/lib/sessionGitContext.spec.ts",
+      "src/lib/sessionGitHistory.spec.ts",
+      "src/lib/sessionGitPullRequest.spec.ts",
+      "src/lib/sessionInput.spec.ts",
+      "src/lib/sessionRepair.spec.ts",
+      "src/lib/sessionSearch/command.spec.ts",
+      "src/lib/sessionSearch/external.spec.ts",
+      "src/lib/sessionSearch/externals/agy.spec.ts",
+      "src/lib/sessionSearch/externals/claude.spec.ts",
+      "src/lib/sessionSearch/externals/codex.spec.ts",
+      "src/lib/sessionSearch/externals/commandcode.spec.ts",
+      "src/lib/sessionSearch/externals/copilot.spec.ts",
+      "src/lib/sessionSearch/externals/cursor.spec.ts",
+      "src/lib/sessionSearch/externals/devin.spec.ts",
+      "src/lib/sessionSearch/externals/grok.spec.ts",
+      "src/lib/sessionSearch/externals/hermes.spec.ts",
+      "src/lib/sessionSearch/externals/index.spec.ts",
+      "src/lib/sessionSearch/externals/muse.spec.ts",
+      "src/lib/sessionSearch/externals/opencode.spec.ts",
+      "src/lib/sessionSearch/externals/pi.spec.ts",
+      "src/lib/sessionSearch/externals/support.spec.ts",
+      "src/lib/sessionSearch/indexer.spec.ts",
+      "src/lib/sessionSearch/store.spec.ts",
+      "src/lib/sessionSearch/transcript.spec.ts",
+      "src/lib/sessionSearch/turns.spec.ts",
+      "src/lib/sessionSearch/when.spec.ts",
+      "src/lib/sessionSync.spec.ts",
+      "src/lib/sessionTitle.spec.ts",
+      "src/lib/sessionWork.spec.ts",
+      "src/lib/sessionWorkCache.spec.ts",
+      "src/lib/sessions.spec.ts",
+      "src/lib/signInMethodPicker.spec.ts",
+      "src/lib/sleepAware.spec.ts",
+      "src/lib/sqliteAvailability.spec.ts",
+      "src/lib/sqliteRead.spec.ts",
+      "src/lib/stopAgentService.spec.ts",
+      "src/lib/stoppedAgents.spec.ts",
+      "src/lib/storeProxy.spec.ts",
+      "src/lib/stunSelect.spec.ts",
+      "src/lib/subagentTurn.spec.ts",
+      "src/lib/subscriptionModel.spec.ts",
+      "src/lib/summarize.spec.ts",
+      "src/lib/terminalAgentDiscovery.codexHome.spec.ts",
+      "src/lib/terminalAgentDiscovery.gateway.spec.ts",
+      "src/lib/terminalAgentDiscovery.grid.spec.ts",
+      "src/lib/terminalAgentDiscovery.spec.ts",
+      "src/lib/terminalAgentReconciler.spec.ts",
+      "src/lib/terminalBackendCoordinator.spec.ts",
+      "src/lib/terminalBinary.spec.ts",
+      "src/lib/terminalEnvironment.spec.ts",
+      "src/lib/terminalP2p.spec.ts",
+      "src/lib/terminalRuntime.spec.ts",
+      "src/lib/terminalStreamManager.spec.ts",
+      "src/lib/tmux.spec.ts",
+      "src/lib/tmuxAgentDiscovery.real.spec.ts",
+      "src/lib/tmuxAgentDiscovery.spec.ts",
+      "src/lib/tmuxBackend.spec.ts",
+      "src/lib/tmuxBackendValidate.spec.ts",
+      "src/lib/tmuxCapture.spec.ts",
+      "src/lib/tmuxLegacySessions.spec.ts",
+      "src/lib/tmuxOnPath.spec.ts",
+      "src/lib/tmuxPaneInfo.spec.ts",
+      "src/lib/tmuxStream.decode.spec.ts",
+      "src/lib/tmuxStream.failure.spec.ts",
+      "src/lib/tmuxStream.real.spec.ts",
+      "src/lib/tmuxStream.spec.ts",
+      "src/lib/tmuxVersion.spec.ts",
+      "src/lib/transcriptActivity.spec.ts",
+      "src/lib/turnActivity.spec.ts",
+      "src/lib/turnRelay.real.spec.ts",
+      "src/lib/unusedCodexClose.spec.ts",
+      "src/lib/viewerForwarder.spec.ts",
+      "src/lib/viewerWire.spec.ts",
+      "src/lib/voiceRouter.spec.ts",
+      "src/lib/workspaceCheck.spec.ts",
+      "src/lib/worktreeDeletion.spec.ts",
+      "src/lib/worktreeSweep.spec.ts",
+      "src/lib/wsLiveness.spec.ts",
+      "src/lib/zooLessons.spec.ts",
+      "src/lib/zooTurns.spec.ts",
+      "src/localWsServer.spec.ts",
+      "src/loginForceRace.spec.ts",
+      "src/machinesCommand.spec.ts",
+      "src/memory/account.spec.ts",
+      "src/memory/activity.spec.ts",
+      "src/memory/admission.spec.ts",
+      "src/memory/capture.spec.ts",
+      "src/memory/claudeInference.spec.ts",
+      "src/memory/client.spec.ts",
+      "src/memory/companion.spec.ts",
+      "src/memory/control.spec.ts",
+      "src/memory/evaluation.spec.ts",
+      "src/memory/evaluationReview.spec.ts",
+      "src/memory/experiment.spec.ts",
+      "src/memory/extractionAuthorization.spec.ts",
+      "src/memory/extractionEvidence.spec.ts",
+      "src/memory/feedback.spec.ts",
+      "src/memory/hostSessions.spec.ts",
+      "src/memory/inference.spec.ts",
+      "src/memory/learner.spec.ts",
+      "src/memory/library.spec.ts",
+      "src/memory/native.spec.ts",
+      "src/memory/notebook.spec.ts",
+      "src/memory/opencodeBinding.spec.ts",
+      "src/memory/opencodeCapture.spec.ts",
+      "src/memory/opencodeInference.spec.ts",
+      "src/memory/project.spec.ts",
+      "src/memory/queue.spec.ts",
+      "src/memory/receipts.spec.ts",
+      "src/memory/retention.spec.ts",
+      "src/memory/runtime.spec.ts",
+      "src/memory/store.spec.ts",
+      "src/memory/usefulness.spec.ts",
+      "src/multiUserDaemon.spec.ts",
+      "src/orchestrator/command.spec.ts",
+      "src/orchestrator/prompts.spec.ts",
+      "src/orchestrator/service.spec.ts",
+      "src/orchestrator/wire.spec.ts",
+      "src/pair/brain.more.spec.ts",
+      "src/pair/brain.spec.ts",
+      "src/pair/brief.more.spec.ts",
+      "src/pair/brief.spec.ts",
+      "src/pair/classify.fuzz.spec.ts",
+      "src/pair/classify.more.spec.ts",
+      "src/pair/classify.spec.ts",
+      "src/pair/client.spec.ts",
+      "src/pair/control.more.spec.ts",
+      "src/pair/control.spec.ts",
+      "src/pair/fleet.spec.ts",
+      "src/pair/floor.spec.ts",
+      "src/pair/frames.spec.ts",
+      "src/pair/gate.more.spec.ts",
+      "src/pair/gate.spec.ts",
+      "src/pair/individuals.spec.ts",
+      "src/pair/intelligence.spec.ts",
+      "src/pair/journal.spec.ts",
+      "src/pair/learn/approval.more.spec.ts",
+      "src/pair/learn/approval.spec.ts",
+      "src/pair/learn/borrow.more.spec.ts",
+      "src/pair/learn/borrow.spec.ts",
+      "src/pair/learn/conversationReview.spec.ts",
+      "src/pair/learn/curate.spec.ts",
+      "src/pair/learn/distill.more.spec.ts",
+      "src/pair/learn/distill.spec.ts",
+      "src/pair/learn/export.more.spec.ts",
+      "src/pair/learn/export.spec.ts",
+      "src/pair/learn/guard.boundary.spec.ts",
+      "src/pair/learn/guard.spec.ts",
+      "src/pair/learn/l2.spec.ts",
+      "src/pair/learn/propose.more.spec.ts",
+      "src/pair/learn/propose.spec.ts",
+      "src/pair/learn/publish.more.spec.ts",
+      "src/pair/learn/publish.spec.ts",
+      "src/pair/learn/signals.more.spec.ts",
+      "src/pair/learn/signals.spec.ts",
+      "src/pair/learn/store.more.spec.ts",
+      "src/pair/learn/store.spec.ts",
+      "src/pair/learn/types.spec.ts",
+      "src/pair/learn/usage.more.spec.ts",
+      "src/pair/learn/usage.spec.ts",
+      "src/pair/limit.spec.ts",
+      "src/pair/mcp.more.spec.ts",
+      "src/pair/mcp.spec.ts",
+      "src/pair/owner.more.spec.ts",
+      "src/pair/owner.spec.ts",
+      "src/pair/pairHarness.engine.spec.ts",
+      "src/pair/pairHarness.more.spec.ts",
+      "src/pair/pairHarness.spec.ts",
+      "src/pair/plateService.spec.ts",
+      "src/pair/protocol.spec.ts",
+      "src/pair/rules.more.spec.ts",
+      "src/pair/rules.spec.ts",
+      "src/pair/sensor.more.spec.ts",
+      "src/pair/sensor.spec.ts",
+      "src/pair/shell.spec.ts",
+      "src/pair/shown.more.spec.ts",
+      "src/pair/shown.spec.ts",
+      "src/pair/startupProfile.spec.ts",
+      "src/pair/token.spec.ts",
+      "src/pair/triage.spec.ts",
+      "src/pair/voice.spec.ts",
+      "src/remoteCommand.spec.ts",
+      "src/scripts/buildManagedGrid.spec.ts",
+      "src/scripts/install.spec.ts",
+      "src/sharing/collaboration.spec.ts",
+      "src/sharing/crypto.spec.ts",
+      "src/sharing/grants.spec.ts",
+      "src/sharing/owner.spec.ts",
+      "src/sharing/relay.spec.ts",
+      "src/sharing/viewer.spec.ts",
+      "src/startupOrder.spec.ts",
+      "src/teams/channel_mailbox.spec.ts",
+      "src/teams/channels.spec.ts",
+      "src/teams/command.spec.ts",
+      "src/teams/preflight.spec.ts",
+      "src/teams/promptScope.spec.ts",
+      "src/teams/remote.spec.ts",
+      "src/teams/service.spec.ts",
+      "src/teams/transport.spec.ts",
+      "src/teams/tui.spec.ts",
+      "src/testing/isolatedTmux.spec.ts",
+      "src/tui/index.spec.ts",
+      "src/tui/install.spec.ts",
+      "src/tui/launcher.spec.ts",
+      "src/tui/update.integration.spec.ts",
+      "src/tui/update.spec.ts",
+      "src/watcher/watcher.spec.ts"
+    ]
+  },
+  "jobs": [
+    {
+      "name": "cli-tests (4)",
+      "status": "completed",
+      "conclusion": "success",
+      "started_at": "2026-10-02T17:58:33Z",
+      "completed_at": "2026-10-02T17:59:57Z",
+      "duration_seconds": 84.0,
+      "steps": [
+        {
+          "name": "Set up job",
+          "seconds": 1.0
+        },
+        {
+          "name": "Run actions/checkout@v7",
+          "seconds": 10.0
+        },
+        {
+          "name": "Run actions/setup-node@v7",
+          "seconds": 7.0
+        },
+        {
+          "name": "Run npm ci --no-audit --no-fund",
+          "seconds": 2.0
+        },
+        {
+          "name": "Discover the complete default-suite inventory",
+          "seconds": 0.0
+        },
+        {
+          "name": "Run default-suite shard",
+          "seconds": 59.0
+        },
+        {
+          "name": "Preserve inventory and test results",
+          "seconds": 1.0
+        },
+        {
+          "name": "Post Run actions/setup-node@v7",
+          "seconds": 0.0
+        },
+        {
+          "name": "Post Run actions/checkout@v7",
+          "seconds": 1.0
+        },
+        {
+          "name": "Complete job",
+          "seconds": 0.0
+        }
+      ]
+    },
+    {
+      "name": "serial-native (ubuntu-latest, 20.19.0)",
+      "status": "completed",
+      "conclusion": "success",
+      "started_at": "2026-10-02T17:58:33Z",
+      "completed_at": "2026-10-02T17:58:58Z",
+      "duration_seconds": 25.0,
+      "steps": [
+        {
+          "name": "Set up job",
+          "seconds": 0.0
+        },
+        {
+          "name": "Run actions/checkout@v7",
+          "seconds": 10.0
+        },
+        {
+          "name": "Run actions/setup-node@v7",
+          "seconds": 6.0
+        },
+        {
+          "name": "Run npm ci --no-audit --no-fund",
+          "seconds": 3.0
+        },
+        {
+          "name": "Require native PTY support instead of silently skipping it",
+          "seconds": 0.0
+        },
+        {
+          "name": "Serial lifecycle, binary transfer and descriptor cleanup",
+          "seconds": 2.0
+        },
+        {
+          "name": "Agent startup through the system zsh login shell",
+          "seconds": 1.0
+        },
+        {
+          "name": "Post Run actions/setup-node@v7",
+          "seconds": 0.0
+        },
+        {
+          "name": "Post Run actions/checkout@v7",
+          "seconds": 1.0
+        },
+        {
+          "name": "Complete job",
+          "seconds": 0.0
+        }
+      ]
+    },
+    {
+      "name": "cli-tests (3)",
+      "status": "completed",
+      "conclusion": "success",
+      "started_at": "2026-10-02T17:58:34Z",
+      "completed_at": "2026-10-02T17:59:39Z",
+      "duration_seconds": 65.0,
+      "steps": [
+        {
+          "name": "Set up job",
+          "seconds": 0.0
+        },
+        {
+          "name": "Run actions/checkout@v7",
+          "seconds": 11.0
+        },
+        {
+          "name": "Run actions/setup-node@v7",
+          "seconds": 7.0
+        },
+        {
+          "name": "Run npm ci --no-audit --no-fund",
+          "seconds": 3.0
+        },
+        {
+          "name": "Discover the complete default-suite inventory",
+          "seconds": 1.0
+        },
+        {
+          "name": "Run default-suite shard",
+          "seconds": 38.0
+        },
+        {
+          "name": "Preserve inventory and test results",
+          "seconds": 1.0
+        },
+        {
+          "name": "Post Run actions/setup-node@v7",
+          "seconds": 0.0
+        },
+        {
+          "name": "Post Run actions/checkout@v7",
+          "seconds": 0.0
+        },
+        {
+          "name": "Complete job",
+          "seconds": 1.0
+        }
+      ]
+    },
+    {
+      "name": "serial-native (macos-latest, 20.19.0)",
+      "status": "completed",
+      "conclusion": "success",
+      "started_at": "2026-10-02T17:58:37Z",
+      "completed_at": "2026-10-02T17:59:18Z",
+      "duration_seconds": 41.0,
+      "steps": [
+        {
+          "name": "Set up job",
+          "seconds": 1.0
+        },
+        {
+          "name": "Run actions/checkout@v7",
+          "seconds": 9.0
+        },
+        {
+          "name": "Run actions/setup-node@v7",
+          "seconds": 14.0
+        },
+        {
+          "name": "Run npm ci --no-audit --no-fund",
+          "seconds": 6.0
+        },
+        {
+          "name": "Require native PTY support instead of silently skipping it",
+          "seconds": 0.0
+        },
+        {
+          "name": "Serial lifecycle, binary transfer and descriptor cleanup",
+          "seconds": 4.0
+        },
+        {
+          "name": "Agent startup through the system zsh login shell",
+          "seconds": 2.0
+        },
+        {
+          "name": "Post Run actions/setup-node@v7",
+          "seconds": 1.0
+        },
+        {
+          "name": "Post Run actions/checkout@v7",
+          "seconds": 1.0
+        },
+        {
+          "name": "Complete job",
+          "seconds": 2.0
+        }
+      ]
+    },
+    {
+      "name": "serial-native (ubuntu-latest, 22.23.2)",
+      "status": "completed",
+      "conclusion": "success",
+      "started_at": "2026-10-02T17:58:33Z",
+      "completed_at": "2026-10-02T17:58:56Z",
+      "duration_seconds": 23.0,
+      "steps": [
+        {
+          "name": "Set up job",
+          "seconds": 0.0
+        },
+        {
+          "name": "Run actions/checkout@v7",
+          "seconds": 10.0
+        },
+        {
+          "name": "Run actions/setup-node@v7",
+          "seconds": 5.0
+        },
+        {
+          "name": "Run npm ci --no-audit --no-fund",
+          "seconds": 2.0
+        },
+        {
+          "name": "Require native PTY support instead of silently skipping it",
+          "seconds": 0.0
+        },
+        {
+          "name": "Serial lifecycle, binary transfer and descriptor cleanup",
+          "seconds": 3.0
+        },
+        {
+          "name": "Agent startup through the system zsh login shell",
+          "seconds": 1.0
+        },
+        {
+          "name": "Post Run actions/setup-node@v7",
+          "seconds": 0.0
+        },
+        {
+          "name": "Post Run actions/checkout@v7",
+          "seconds": 0.0
+        },
+        {
+          "name": "Complete job",
+          "seconds": 0.0
+        }
+      ]
+    },
+    {
+      "name": "serial-native (macos-latest, 22.23.2)",
+      "status": "completed",
+      "conclusion": "success",
+      "started_at": "2026-10-02T17:58:38Z",
+      "completed_at": "2026-10-02T17:59:07Z",
+      "duration_seconds": 29.0,
+      "steps": [
+        {
+          "name": "Set up job",
+          "seconds": 1.0
+        },
+        {
+          "name": "Run actions/checkout@v7",
+          "seconds": 15.0
+        },
+        {
+          "name": "Run actions/setup-node@v7",
+          "seconds": 1.0
+        },
+        {
+          "name": "Run npm ci --no-audit --no-fund",
+          "seconds": 4.0
+        },
+        {
+          "name": "Require native PTY support instead of silently skipping it",
+          "seconds": 0.0
+        },
+        {
+          "name": "Serial lifecycle, binary transfer and descriptor cleanup",
+          "seconds": 3.0
+        },
+        {
+          "name": "Agent startup through the system zsh login shell",
+          "seconds": 1.0
+        },
+        {
+          "name": "Post Run actions/setup-node@v7",
+          "seconds": 1.0
+        },
+        {
+          "name": "Post Run actions/checkout@v7",
+          "seconds": 1.0
+        },
+        {
+          "name": "Complete job",
+          "seconds": 0.0
+        }
+      ]
+    },
+    {
+      "name": "cli-tests (2)",
+      "status": "completed",
+      "conclusion": "success",
+      "started_at": "2026-10-02T17:58:33Z",
+      "completed_at": "2026-10-02T18:01:24Z",
+      "duration_seconds": 171.0,
+      "steps": [
+        {
+          "name": "Set up job",
+          "seconds": 1.0
+        },
+        {
+          "name": "Run actions/checkout@v7",
+          "seconds": 11.0
+        },
+        {
+          "name": "Run actions/setup-node@v7",
+          "seconds": 6.0
+        },
+        {
+          "name": "Run npm ci --no-audit --no-fund",
+          "seconds": 3.0
+        },
+        {
+          "name": "Discover the complete default-suite inventory",
+          "seconds": 0.0
+        },
+        {
+          "name": "Run default-suite shard",
+          "seconds": 144.0
+        },
+        {
+          "name": "Preserve inventory and test results",
+          "seconds": 2.0
+        },
+        {
+          "name": "Post Run actions/setup-node@v7",
+          "seconds": 0.0
+        },
+        {
+          "name": "Post Run actions/checkout@v7",
+          "seconds": 0.0
+        },
+        {
+          "name": "Complete job",
+          "seconds": 0.0
+        }
+      ]
+    },
+    {
+      "name": "cli-contracts",
+      "status": "completed",
+      "conclusion": "success",
+      "started_at": "2026-10-02T17:58:33Z",
+      "completed_at": "2026-10-02T18:01:23Z",
+      "duration_seconds": 170.0,
+      "steps": [
+        {
+          "name": "Set up job",
+          "seconds": 1.0
+        },
+        {
+          "name": "Run actions/checkout@v7",
+          "seconds": 87.0
+        },
+        {
+          "name": "Run echo \"node-version=$CLI_NODE_VERSION\" >> \"$GITHUB_OUTPUT\"",
+          "seconds": 0.0
+        },
+        {
+          "name": "Run actions/setup-node@v7",
+          "seconds": 5.0
+        },
+        {
+          "name": "Check pnpm-lock.yaml still matches package.json",
+          "seconds": 4.0
+        },
+        {
+          "name": "Run npm ci",
+          "seconds": 3.0
+        },
+        {
+          "name": "Run npx tsc --noEmit",
+          "seconds": 22.0
+        },
+        {
+          "name": "Guard fuzz and bounded hostile-input time",
+          "seconds": 5.0
+        },
+        {
+          "name": "Concurrent registry discovery, hooks and durable close intents",
+          "seconds": 1.0
+        },
+        {
+          "name": "Verify hn launcher repair in an existing installation",
+          "seconds": 13.0
+        },
+        {
+          "name": "Verify core harness rollout in the release bundle",
+          "seconds": 1.0
+        },
+        {
+          "name": "Require complete harness updater coverage",
+          "seconds": 26.0
+        },
+        {
+          "name": "Post Run actions/setup-node@v7",
+          "seconds": 0.0
+        },
+        {
+          "name": "Post Run actions/checkout@v7",
+          "seconds": 0.0
+        },
+        {
+          "name": "Complete job",
+          "seconds": 0.0
+        }
+      ]
+    },
+    {
+      "name": "cli-tests (1)",
+      "status": "completed",
+      "conclusion": "success",
+      "started_at": "2026-10-02T17:58:34Z",
+      "completed_at": "2026-10-02T18:00:52Z",
+      "duration_seconds": 138.0,
+      "steps": [
+        {
+          "name": "Set up job",
+          "seconds": 1.0
+        },
+        {
+          "name": "Run actions/checkout@v7",
+          "seconds": 10.0
+        },
+        {
+          "name": "Run actions/setup-node@v7",
+          "seconds": 6.0
+        },
+        {
+          "name": "Run npm ci --no-audit --no-fund",
+          "seconds": 2.0
+        },
+        {
+          "name": "Discover the complete default-suite inventory",
+          "seconds": 1.0
+        },
+        {
+          "name": "Run default-suite shard",
+          "seconds": 79.0
+        },
+        {
+          "name": "Preserve inventory and test results",
+          "seconds": 1.0
+        },
+        {
+          "name": "Post Run actions/setup-node@v7",
+          "seconds": 0.0
+        },
+        {
+          "name": "Post Run actions/checkout@v7",
+          "seconds": 1.0
+        },
+        {
+          "name": "Complete job",
+          "seconds": 0.0
+        }
+      ]
+    },
+    {
+      "name": "process-checks",
+      "status": "completed",
+      "conclusion": "success",
+      "started_at": "2026-10-02T17:58:34Z",
+      "completed_at": "2026-10-02T17:59:06Z",
+      "duration_seconds": 32.0,
+      "steps": [
+        {
+          "name": "Set up job",
+          "seconds": 0.0
+        },
+        {
+          "name": "Run actions/checkout@v7",
+          "seconds": 11.0
+        },
+        {
+          "name": "Validation deadlines, cleanup, receipts and release version guards",
+          "seconds": 18.0
+        },
+        {
+          "name": "Post Run actions/checkout@v7",
+          "seconds": 0.0
+        },
+        {
+          "name": "Complete job",
+          "seconds": 0.0
+        }
+      ]
+    },
+    {
+      "name": "typecheck-test",
+      "status": "completed",
+      "conclusion": "success",
+      "started_at": "2026-10-02T18:01:27Z",
+      "completed_at": "2026-10-02T18:01:47Z",
+      "duration_seconds": 20.0,
+      "steps": [
+        {
+          "name": "Set up job",
+          "seconds": 2.0
+        },
+        {
+          "name": "Run actions/checkout@v7",
+          "seconds": 12.0
+        },
+        {
+          "name": "Run actions/download-artifact@v4",
+          "seconds": 1.0
+        },
+        {
+          "name": "Require every discovered file exactly once and all checks passing",
+          "seconds": 0.0
+        },
+        {
+          "name": "Run actions/upload-artifact@v4",
+          "seconds": 1.0
+        },
+        {
+          "name": "Post Run actions/checkout@v7",
+          "seconds": 0.0
+        },
+        {
+          "name": "Complete job",
+          "seconds": 0.0
+        }
+      ]
+    }
+  ],
+  "historical_runs": [
+    {
+      "url": "https://github.com/autonomous-ai/openharness/actions/runs/37041350155",
+      "workflow_seconds": 379,
+      "default_test_step_seconds": 290
+    },
+    {
+      "url": "https://github.com/autonomous-ai/openharness/actions/runs/37040969426",
+      "workflow_seconds": 461,
+      "default_test_step_seconds": 357
+    }
+  ],
+  "comparison_note": "Adjacent real runs, not a controlled benchmark. Source, runner and checkout conditions differ; the candidate retains all default file coverage and opt-in skips.",
+  "other_checks": {
+    "process": {
+      "passed": 82,
+      "seconds": 17.634
+    },
+    "guard_fuzz": {
+      "passed": 40
+    },
+    "updater_coverage": {
+      "passed": 860,
+      "skipped": 9,
+      "statements": 100,
+      "branches": 100,
+      "functions": 100,
+      "lines": 100
+    }
+  }
+}

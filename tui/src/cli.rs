@@ -85,6 +85,7 @@ pub async fn run(args: &[String], explicit_port: Option<u16>, socket: Option<&st
     let name = name.map(str::to_string);
     let cmd = args.first()?.as_str();
     match cmd {
+        "os-action" => Some(crate::ipc::call(args, socket.as_deref(), name.as_deref()).await),
         "view" | "open-viewer" => Some(crate::viewer::cli(port, &args[1..], socket.as_deref(), name.as_deref()).await),
         // Every harness on every machine (hn's; `ls` is tmux's list-sessions).
         // The running client knows each one's state (what it asks, does, did); with none, the

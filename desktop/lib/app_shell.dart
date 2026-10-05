@@ -38,7 +38,6 @@ import 'widgets/new_device_notice.dart';
 import 'widgets/update_notice.dart';
 import 'widgets/window_chrome.dart';
 import 'sharing/shared_agent_location.dart';
-import 'branding/boot_splash.dart';
 import 'sharing/shared_agent_page.dart';
 import 'viewer/viewer_location.dart';
 import 'viewer/viewer_page.dart';
@@ -155,14 +154,10 @@ class HarnessApp extends StatelessWidget {
       builder: (context, child) {
         final app = child ?? const SizedBox.shrink();
         final framed = frame?.call(app) ?? app;
-        // The chosen boot logo lights up once on a cold launch while the app
-        // builds underneath (lib/branding/boot_splash.dart); off by default.
-        return BootSplash(
-          child: _GridTokenScope(
-            child: keymap == null
-                ? framed
-                : KeymapProvider(keymap: keymap!, child: framed),
-          ),
+        return _GridTokenScope(
+          child: keymap == null
+              ? framed
+              : KeymapProvider(keymap: keymap!, child: framed),
         );
       },
       home: StatsLifecycle(

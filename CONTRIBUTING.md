@@ -29,8 +29,8 @@ The first command links the shared viewer from this checkout. Store installation
 that dependency automatically; this also lets you try a new viewer before it is published.
 
 **A harness packages an agent’s instructions, tools, and optional viewer.** Install it,
-start it in your workspace, and group it with other harnesses in a swarm; see the
-[terminology guide](docs/terminology.md). This example has three working files:
+start it in your workspace, and group it with other harnesses in a tab; see the
+[Naming System](docs/naming-system.md). This example has three working files:
 
 - [`harness.json`](store/examples/hello-world/harness.json) declares the agent and its viewer.
 - [`AGENTS.md`](store/examples/hello-world/AGENTS.md) teaches the agent to change the greeting.
@@ -196,9 +196,12 @@ or installed dependencies change. Run `npm run typecheck` and the affected test 
 while developing. Shared state, authentication, protocols, dependencies, and changes
 with an unclear impact also need the full CLI suite. A passing CI run on the tested
 source satisfies that full-suite check; do not run it again locally before release.
-Manual CI offers `cli`, `tui`, `backend`, and `full` scopes; `full` remains the default.
+Manual CI offers `cli`, `tui`, `backend`, `desktop`, and `full` scopes; `full` remains the default.
 CLI scope includes the supported OS/Node shell and serial matrix. Cross-component
 changes need all affected scopes or `full`.
+Desktop scope runs the complete VM suite in four shards on both macOS and Linux,
+with a verified coverage summary. Changed Dart analysis, browser tests and native
+integration checks remain separate requirements when relevant.
 
 Two further suites exist and are
 **opt-in**, because they need software the machine may not have — they skip themselves rather than

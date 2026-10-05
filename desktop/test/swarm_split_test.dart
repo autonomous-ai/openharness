@@ -343,8 +343,12 @@ void main() {
         expect(_form(tester).project.folder, '/work/a0');
         expect(app.focusedPaneId, first.id);
         expect(connection.creation, isNull);
+        // Opening schedules focus after layout. Deliver it before Escape so
+        // the key reaches the composer rather than the previous terminal.
+        await tester.pump();
         await tester.sendKeyEvent(LogicalKeyboardKey.escape);
         await tester.pump();
+        expect(find.byType(NewHarnessForm), findsNothing);
         expect(app.panes, [first, neighbor]);
         expect(tester.getRect(target), rect);
         expect(tester.element(view), same(retained));
@@ -623,10 +627,12 @@ void main() {
     expect(_form(tester).split?.paneId, pane.id);
     expect(_form(tester).project.folder, '/work/checkout');
     expect(app.panes, [pane]);
+    await tester.pump();
     await tester.sendKeyEvent(LogicalKeyboardKey.escape);
     await tester.pump();
     await tester.pump();
     expect(find.byType(AlertDialog), findsNothing);
+    expect(find.byType(NewHarnessForm), findsNothing);
     expect(app.panes, [pane]);
     expect(connection.calls, isNot(contains('agent_create')));
     expect(frames, isEmpty);

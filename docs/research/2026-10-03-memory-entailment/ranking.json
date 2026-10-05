@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "kind": "post_hoc_descriptive_ranking_no_threshold_tuning",
+  "reportSha256": "bbad843edd652864b3056692f02eb22f024b6d05792185bb23b359db7458fa20",
+  "ruleExamined": "Accept when the minimum entailment score across the tested fields is at least a common threshold.",
+  "lowestSupported": {
+    "id": "audit-8625fb25e3b1",
+    "expected": "supported",
+    "minimumEntailment": 0.0623700768176642
+  },
+  "highestUnsupported": {
+    "id": "audit-776a00824696",
+    "expected": "unsupported",
+    "minimumEntailment": 0.9950874762463207
+  },
+  "perfectThresholdExistsForTheseScores": false,
+  "changesPrimaryDecision": false
+}

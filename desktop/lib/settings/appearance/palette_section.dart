@@ -36,19 +36,14 @@ class PaletteSection extends StatelessWidget {
                 spacing: 12,
                 runSpacing: 12,
                 children: [
-                  for (final palette in HarnessPalette.offered)
+                  for (final palette in HarnessPalette.values)
                     SizedBox(
                       width: width,
                       child: _PaletteChoice(
                         palette: palette,
                         selected: prefs.palette == palette,
-                        onChoose: () {
-                          // Re-read the Omarchy theme file so a theme switch shows on pick.
-                          if (palette == HarnessPalette.omarchy) {
-                            OmarchyLivePalette.refresh();
-                          }
-                          unawaited(preferences.setPalette(palette));
-                        },
+                        onChoose: () =>
+                            unawaited(preferences.setPalette(palette)),
                       ),
                     ),
                 ],

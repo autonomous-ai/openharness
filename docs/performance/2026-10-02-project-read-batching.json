@@ -1,0 +1,2198 @@
+{
+  "schema": 1,
+  "sources": {
+    "baseline": {
+      "sha256": "cb281910cb6de010d96bb34b4df75bbf3b75bf78ebef43e9d0697f356f9f98f3"
+    },
+    "candidate": {
+      "sha256": "e8aa22c64d830d27fcc63aedcc81418a398c027d1dec344dc0c9fdc074c899da"
+    }
+  },
+  "environment": {
+    "node": "v22.23.2",
+    "git": "git version 2.50.1 (Apple Git-155)",
+    "platform": "darwin",
+    "arch": "arm64"
+  },
+  "scope": "Uncached project reads; at most four concurrent repositories; six rounds after two warmups; four alternating trials.",
+  "limitations": [
+    "Node CPU excludes Git child CPU. Wall time includes Git and filesystem work.",
+    "Real user work remains active; this is a component benchmark, not a controlled whole-daemon energy comparison."
+  ],
+  "summary": [
+    {
+      "case": "attached-1",
+      "baseline": {
+        "gitProcesses": 3,
+        "medianWallMs": 39.53389600000001,
+        "medianNodeCpuMs": 3.3845
+      },
+      "candidate": {
+        "gitProcesses": 2,
+        "medianWallMs": 26.928937500000004,
+        "medianNodeCpuMs": 2.4619999999999997
+      },
+      "wallReductionPercent": 31.883926896554804
+    },
+    {
+      "case": "attached-16",
+      "baseline": {
+        "gitProcesses": 48,
+        "medianWallMs": 196.06735400000002,
+        "medianNodeCpuMs": 50.721000000000004
+      },
+      "candidate": {
+        "gitProcesses": 32,
+        "medianWallMs": 132.99764599999992,
+        "medianNodeCpuMs": 37.046
+      },
+      "wallReductionPercent": 32.16736836260875
+    },
+    {
+      "case": "unborn-1",
+      "baseline": {
+        "gitProcesses": 3,
+        "medianWallMs": 40.1460840000002,
+        "medianNodeCpuMs": 2.8689999999999998
+      },
+      "candidate": {
+        "gitProcesses": 3,
+        "medianWallMs": 40.125354000000016,
+        "medianNodeCpuMs": 2.91
+      },
+      "wallReductionPercent": 0.05163641863595858
+    },
+    {
+      "case": "detached-1",
+      "baseline": {
+        "gitProcesses": 4,
+        "medianWallMs": 54.4808959999998,
+        "medianNodeCpuMs": 3.8095
+      },
+      "candidate": {
+        "gitProcesses": 3,
+        "medianWallMs": 40.46079150000014,
+        "medianNodeCpuMs": 2.933
+      },
+      "wallReductionPercent": 25.733982972673054
+    }
+  ],
+  "observations": [
+    {
+      "trial": 0,
+      "variant": "baseline",
+      "case": "attached-1",
+      "count": 1,
+      "round": 0,
+      "gitProcesses": 3,
+      "wallMs": 37.39875000000001,
+      "nodeCpuMs": 3.497
+    },
+    {
+      "trial": 0,
+      "variant": "baseline",
+      "case": "attached-1",
+      "count": 1,
+      "round": 1,
+      "gitProcesses": 3,
+      "wallMs": 38.24333300000001,
+      "nodeCpuMs": 3.041
+    },
+    {
+      "trial": 0,
+      "variant": "baseline",
+      "case": "attached-1",
+      "count": 1,
+      "round": 2,
+      "gitProcesses": 3,
+      "wallMs": 38.554666000000026,
+      "nodeCpuMs": 3.483
+    },
+    {
+      "trial": 0,
+      "variant": "baseline",
+      "case": "attached-1",
+      "count": 1,
+      "round": 3,
+      "gitProcesses": 3,
+      "wallMs": 37.885333,
+      "nodeCpuMs": 3.498
+    },
+    {
+      "trial": 0,
+      "variant": "baseline",
+      "case": "attached-1",
+      "count": 1,
+      "round": 4,
+      "gitProcesses": 3,
+      "wallMs": 38.136041999999975,
+      "nodeCpuMs": 3.087
+    },
+    {
+      "trial": 0,
+      "variant": "baseline",
+      "case": "attached-1",
+      "count": 1,
+      "round": 5,
+      "gitProcesses": 3,
+      "wallMs": 39.09212500000001,
+      "nodeCpuMs": 3.246
+    },
+    {
+      "trial": 0,
+      "variant": "baseline",
+      "case": "attached-16",
+      "count": 16,
+      "round": 0,
+      "gitProcesses": 48,
+      "wallMs": 202.72395899999992,
+      "nodeCpuMs": 61.87
+    },
+    {
+      "trial": 0,
+      "variant": "baseline",
+      "case": "attached-16",
+      "count": 16,
+      "round": 1,
+      "gitProcesses": 48,
+      "wallMs": 195.7382500000001,
+      "nodeCpuMs": 49.797
+    },
+    {
+      "trial": 0,
+      "variant": "baseline",
+      "case": "attached-16",
+      "count": 16,
+      "round": 2,
+      "gitProcesses": 48,
+      "wallMs": 200.8695419999999,
+      "nodeCpuMs": 52.626
+    },
+    {
+      "trial": 0,
+      "variant": "baseline",
+      "case": "attached-16",
+      "count": 16,
+      "round": 3,
+      "gitProcesses": 48,
+      "wallMs": 193.39533299999994,
+      "nodeCpuMs": 50.667
+    },
+    {
+      "trial": 0,
+      "variant": "baseline",
+      "case": "attached-16",
+      "count": 16,
+      "round": 4,
+      "gitProcesses": 48,
+      "wallMs": 196.35358400000018,
+      "nodeCpuMs": 51.531
+    },
+    {
+      "trial": 0,
+      "variant": "baseline",
+      "case": "attached-16",
+      "count": 16,
+      "round": 5,
+      "gitProcesses": 48,
+      "wallMs": 189.27441699999986,
+      "nodeCpuMs": 49.433
+    },
+    {
+      "trial": 0,
+      "variant": "baseline",
+      "case": "unborn-1",
+      "count": 1,
+      "round": 0,
+      "gitProcesses": 3,
+      "wallMs": 39.815833999999995,
+      "nodeCpuMs": 5.518
+    },
+    {
+      "trial": 0,
+      "variant": "baseline",
+      "case": "unborn-1",
+      "count": 1,
+      "round": 1,
+      "gitProcesses": 3,
+      "wallMs": 39.619083000000046,
+      "nodeCpuMs": 2.801
+    },
+    {
+      "trial": 0,
+      "variant": "baseline",
+      "case": "unborn-1",
+      "count": 1,
+      "round": 2,
+      "gitProcesses": 3,
+      "wallMs": 39.40174999999999,
+      "nodeCpuMs": 2.826
+    },
+    {
+      "trial": 0,
+      "variant": "baseline",
+      "case": "unborn-1",
+      "count": 1,
+      "round": 3,
+      "gitProcesses": 3,
+      "wallMs": 38.00962499999969,
+      "nodeCpuMs": 2.83
+    },
+    {
+      "trial": 0,
+      "variant": "baseline",
+      "case": "unborn-1",
+      "count": 1,
+      "round": 4,
+      "gitProcesses": 3,
+      "wallMs": 39.41291700000011,
+      "nodeCpuMs": 2.654
+    },
+    {
+      "trial": 0,
+      "variant": "baseline",
+      "case": "unborn-1",
+      "count": 1,
+      "round": 5,
+      "gitProcesses": 3,
+      "wallMs": 38.9253749999998,
+      "nodeCpuMs": 2.744
+    },
+    {
+      "trial": 0,
+      "variant": "baseline",
+      "case": "detached-1",
+      "count": 1,
+      "round": 0,
+      "gitProcesses": 4,
+      "wallMs": 52.886625000000095,
+      "nodeCpuMs": 5.9
+    },
+    {
+      "trial": 0,
+      "variant": "baseline",
+      "case": "detached-1",
+      "count": 1,
+      "round": 1,
+      "gitProcesses": 4,
+      "wallMs": 53.72050000000036,
+      "nodeCpuMs": 3.574
+    },
+    {
+      "trial": 0,
+      "variant": "baseline",
+      "case": "detached-1",
+      "count": 1,
+      "round": 2,
+      "gitProcesses": 4,
+      "wallMs": 53.634042000000136,
+      "nodeCpuMs": 3.678
+    },
+    {
+      "trial": 0,
+      "variant": "baseline",
+      "case": "detached-1",
+      "count": 1,
+      "round": 3,
+      "gitProcesses": 4,
+      "wallMs": 53.5090839999998,
+      "nodeCpuMs": 3.467
+    },
+    {
+      "trial": 0,
+      "variant": "baseline",
+      "case": "detached-1",
+      "count": 1,
+      "round": 4,
+      "gitProcesses": 4,
+      "wallMs": 52.48050000000012,
+      "nodeCpuMs": 3.598
+    },
+    {
+      "trial": 0,
+      "variant": "baseline",
+      "case": "detached-1",
+      "count": 1,
+      "round": 5,
+      "gitProcesses": 4,
+      "wallMs": 53.80454200000031,
+      "nodeCpuMs": 3.556
+    },
+    {
+      "trial": 0,
+      "variant": "candidate",
+      "case": "attached-1",
+      "count": 1,
+      "round": 0,
+      "gitProcesses": 2,
+      "wallMs": 25.950957999999986,
+      "nodeCpuMs": 2.609
+    },
+    {
+      "trial": 0,
+      "variant": "candidate",
+      "case": "attached-1",
+      "count": 1,
+      "round": 1,
+      "gitProcesses": 2,
+      "wallMs": 26.452292,
+      "nodeCpuMs": 2.471
+    },
+    {
+      "trial": 0,
+      "variant": "candidate",
+      "case": "attached-1",
+      "count": 1,
+      "round": 2,
+      "gitProcesses": 2,
+      "wallMs": 26.886584,
+      "nodeCpuMs": 2.453
+    },
+    {
+      "trial": 0,
+      "variant": "candidate",
+      "case": "attached-1",
+      "count": 1,
+      "round": 3,
+      "gitProcesses": 2,
+      "wallMs": 26.492207999999977,
+      "nodeCpuMs": 2.301
+    },
+    {
+      "trial": 0,
+      "variant": "candidate",
+      "case": "attached-1",
+      "count": 1,
+      "round": 4,
+      "gitProcesses": 2,
+      "wallMs": 26.100791999999984,
+      "nodeCpuMs": 2.449
+    },
+    {
+      "trial": 0,
+      "variant": "candidate",
+      "case": "attached-1",
+      "count": 1,
+      "round": 5,
+      "gitProcesses": 2,
+      "wallMs": 27.08466599999997,
+      "nodeCpuMs": 2.289
+    },
+    {
+      "trial": 0,
+      "variant": "candidate",
+      "case": "attached-16",
+      "count": 16,
+      "round": 0,
+      "gitProcesses": 32,
+      "wallMs": 131.335417,
+      "nodeCpuMs": 41.645
+    },
+    {
+      "trial": 0,
+      "variant": "candidate",
+      "case": "attached-16",
+      "count": 16,
+      "round": 1,
+      "gitProcesses": 32,
+      "wallMs": 131.185834,
+      "nodeCpuMs": 36.875
+    },
+    {
+      "trial": 0,
+      "variant": "candidate",
+      "case": "attached-16",
+      "count": 16,
+      "round": 2,
+      "gitProcesses": 32,
+      "wallMs": 141.71254199999998,
+      "nodeCpuMs": 49.008
+    },
+    {
+      "trial": 0,
+      "variant": "candidate",
+      "case": "attached-16",
+      "count": 16,
+      "round": 3,
+      "gitProcesses": 32,
+      "wallMs": 130.36979199999996,
+      "nodeCpuMs": 38.069
+    },
+    {
+      "trial": 0,
+      "variant": "candidate",
+      "case": "attached-16",
+      "count": 16,
+      "round": 4,
+      "gitProcesses": 32,
+      "wallMs": 132.84020800000008,
+      "nodeCpuMs": 35.376
+    },
+    {
+      "trial": 0,
+      "variant": "candidate",
+      "case": "attached-16",
+      "count": 16,
+      "round": 5,
+      "gitProcesses": 32,
+      "wallMs": 130.55779199999984,
+      "nodeCpuMs": 36.332
+    },
+    {
+      "trial": 0,
+      "variant": "candidate",
+      "case": "unborn-1",
+      "count": 1,
+      "round": 0,
+      "gitProcesses": 3,
+      "wallMs": 38.999708000000055,
+      "nodeCpuMs": 2.947
+    },
+    {
+      "trial": 0,
+      "variant": "candidate",
+      "case": "unborn-1",
+      "count": 1,
+      "round": 1,
+      "gitProcesses": 3,
+      "wallMs": 40.88591700000006,
+      "nodeCpuMs": 2.89
+    },
+    {
+      "trial": 0,
+      "variant": "candidate",
+      "case": "unborn-1",
+      "count": 1,
+      "round": 2,
+      "gitProcesses": 3,
+      "wallMs": 39.04741600000011,
+      "nodeCpuMs": 3.741
+    },
+    {
+      "trial": 0,
+      "variant": "candidate",
+      "case": "unborn-1",
+      "count": 1,
+      "round": 3,
+      "gitProcesses": 3,
+      "wallMs": 38.980416000000105,
+      "nodeCpuMs": 2.774
+    },
+    {
+      "trial": 0,
+      "variant": "candidate",
+      "case": "unborn-1",
+      "count": 1,
+      "round": 4,
+      "gitProcesses": 3,
+      "wallMs": 41.77783299999987,
+      "nodeCpuMs": 3.068
+    },
+    {
+      "trial": 0,
+      "variant": "candidate",
+      "case": "unborn-1",
+      "count": 1,
+      "round": 5,
+      "gitProcesses": 3,
+      "wallMs": 40.16791599999988,
+      "nodeCpuMs": 3.121
+    },
+    {
+      "trial": 0,
+      "variant": "candidate",
+      "case": "detached-1",
+      "count": 1,
+      "round": 0,
+      "gitProcesses": 3,
+      "wallMs": 39.96858299999985,
+      "nodeCpuMs": 3.284
+    },
+    {
+      "trial": 0,
+      "variant": "candidate",
+      "case": "detached-1",
+      "count": 1,
+      "round": 1,
+      "gitProcesses": 3,
+      "wallMs": 39.51487499999985,
+      "nodeCpuMs": 2.687
+    },
+    {
+      "trial": 0,
+      "variant": "candidate",
+      "case": "detached-1",
+      "count": 1,
+      "round": 2,
+      "gitProcesses": 3,
+      "wallMs": 41.36900000000014,
+      "nodeCpuMs": 2.95
+    },
+    {
+      "trial": 0,
+      "variant": "candidate",
+      "case": "detached-1",
+      "count": 1,
+      "round": 3,
+      "gitProcesses": 3,
+      "wallMs": 39.55795900000021,
+      "nodeCpuMs": 2.798
+    },
+    {
+      "trial": 0,
+      "variant": "candidate",
+      "case": "detached-1",
+      "count": 1,
+      "round": 4,
+      "gitProcesses": 3,
+      "wallMs": 40.31633300000021,
+      "nodeCpuMs": 2.81
+    },
+    {
+      "trial": 0,
+      "variant": "candidate",
+      "case": "detached-1",
+      "count": 1,
+      "round": 5,
+      "gitProcesses": 3,
+      "wallMs": 39.18733299999985,
+      "nodeCpuMs": 2.858
+    },
+    {
+      "trial": 1,
+      "variant": "candidate",
+      "case": "attached-1",
+      "count": 1,
+      "round": 0,
+      "gitProcesses": 2,
+      "wallMs": 26.240750000000006,
+      "nodeCpuMs": 2.632
+    },
+    {
+      "trial": 1,
+      "variant": "candidate",
+      "case": "attached-1",
+      "count": 1,
+      "round": 1,
+      "gitProcesses": 2,
+      "wallMs": 26.736582999999996,
+      "nodeCpuMs": 2.525
+    },
+    {
+      "trial": 1,
+      "variant": "candidate",
+      "case": "attached-1",
+      "count": 1,
+      "round": 2,
+      "gitProcesses": 2,
+      "wallMs": 27.032959000000005,
+      "nodeCpuMs": 2.363
+    },
+    {
+      "trial": 1,
+      "variant": "candidate",
+      "case": "attached-1",
+      "count": 1,
+      "round": 3,
+      "gitProcesses": 2,
+      "wallMs": 28.260666000000015,
+      "nodeCpuMs": 2.425
+    },
+    {
+      "trial": 1,
+      "variant": "candidate",
+      "case": "attached-1",
+      "count": 1,
+      "round": 4,
+      "gitProcesses": 2,
+      "wallMs": 28.746083,
+      "nodeCpuMs": 2.917
+    },
+    {
+      "trial": 1,
+      "variant": "candidate",
+      "case": "attached-1",
+      "count": 1,
+      "round": 5,
+      "gitProcesses": 2,
+      "wallMs": 27.622292000000016,
+      "nodeCpuMs": 2.437
+    },
+    {
+      "trial": 1,
+      "variant": "candidate",
+      "case": "attached-16",
+      "count": 16,
+      "round": 0,
+      "gitProcesses": 32,
+      "wallMs": 133.146209,
+      "nodeCpuMs": 42.113
+    },
+    {
+      "trial": 1,
+      "variant": "candidate",
+      "case": "attached-16",
+      "count": 16,
+      "round": 1,
+      "gitProcesses": 32,
+      "wallMs": 133.521708,
+      "nodeCpuMs": 37.855
+    },
+    {
+      "trial": 1,
+      "variant": "candidate",
+      "case": "attached-16",
+      "count": 16,
+      "round": 2,
+      "gitProcesses": 32,
+      "wallMs": 129.21075000000008,
+      "nodeCpuMs": 45.816
+    },
+    {
+      "trial": 1,
+      "variant": "candidate",
+      "case": "attached-16",
+      "count": 16,
+      "round": 3,
+      "gitProcesses": 32,
+      "wallMs": 132.4848750000001,
+      "nodeCpuMs": 36.751
+    },
+    {
+      "trial": 1,
+      "variant": "candidate",
+      "case": "attached-16",
+      "count": 16,
+      "round": 4,
+      "gitProcesses": 32,
+      "wallMs": 129.46833300000003,
+      "nodeCpuMs": 35.088
+    },
+    {
+      "trial": 1,
+      "variant": "candidate",
+      "case": "attached-16",
+      "count": 16,
+      "round": 5,
+      "gitProcesses": 32,
+      "wallMs": 133.65870799999993,
+      "nodeCpuMs": 35.9
+    },
+    {
+      "trial": 1,
+      "variant": "candidate",
+      "case": "unborn-1",
+      "count": 1,
+      "round": 0,
+      "gitProcesses": 3,
+      "wallMs": 40.370542000000114,
+      "nodeCpuMs": 3.047
+    },
+    {
+      "trial": 1,
+      "variant": "candidate",
+      "case": "unborn-1",
+      "count": 1,
+      "round": 1,
+      "gitProcesses": 3,
+      "wallMs": 39.7437910000001,
+      "nodeCpuMs": 2.902
+    },
+    {
+      "trial": 1,
+      "variant": "candidate",
+      "case": "unborn-1",
+      "count": 1,
+      "round": 2,
+      "gitProcesses": 3,
+      "wallMs": 40.765583000000106,
+      "nodeCpuMs": 3.781
+    },
+    {
+      "trial": 1,
+      "variant": "candidate",
+      "case": "unborn-1",
+      "count": 1,
+      "round": 3,
+      "gitProcesses": 3,
+      "wallMs": 40.22154099999989,
+      "nodeCpuMs": 2.856
+    },
+    {
+      "trial": 1,
+      "variant": "candidate",
+      "case": "unborn-1",
+      "count": 1,
+      "round": 4,
+      "gitProcesses": 3,
+      "wallMs": 39.556749999999965,
+      "nodeCpuMs": 2.749
+    },
+    {
+      "trial": 1,
+      "variant": "candidate",
+      "case": "unborn-1",
+      "count": 1,
+      "round": 5,
+      "gitProcesses": 3,
+      "wallMs": 40.86633400000005,
+      "nodeCpuMs": 2.936
+    },
+    {
+      "trial": 1,
+      "variant": "candidate",
+      "case": "detached-1",
+      "count": 1,
+      "round": 0,
+      "gitProcesses": 3,
+      "wallMs": 40.28366600000004,
+      "nodeCpuMs": 3.165
+    },
+    {
+      "trial": 1,
+      "variant": "candidate",
+      "case": "detached-1",
+      "count": 1,
+      "round": 1,
+      "gitProcesses": 3,
+      "wallMs": 39.474290999999994,
+      "nodeCpuMs": 2.956
+    },
+    {
+      "trial": 1,
+      "variant": "candidate",
+      "case": "detached-1",
+      "count": 1,
+      "round": 2,
+      "gitProcesses": 3,
+      "wallMs": 39.96879200000012,
+      "nodeCpuMs": 2.795
+    },
+    {
+      "trial": 1,
+      "variant": "candidate",
+      "case": "detached-1",
+      "count": 1,
+      "round": 3,
+      "gitProcesses": 3,
+      "wallMs": 42.465917000000445,
+      "nodeCpuMs": 3.138
+    },
+    {
+      "trial": 1,
+      "variant": "candidate",
+      "case": "detached-1",
+      "count": 1,
+      "round": 4,
+      "gitProcesses": 3,
+      "wallMs": 40.20633399999997,
+      "nodeCpuMs": 3.042
+    },
+    {
+      "trial": 1,
+      "variant": "candidate",
+      "case": "detached-1",
+      "count": 1,
+      "round": 5,
+      "gitProcesses": 3,
+      "wallMs": 38.9965830000001,
+      "nodeCpuMs": 2.964
+    },
+    {
+      "trial": 1,
+      "variant": "baseline",
+      "case": "attached-1",
+      "count": 1,
+      "round": 0,
+      "gitProcesses": 3,
+      "wallMs": 39.292125,
+      "nodeCpuMs": 3.633
+    },
+    {
+      "trial": 1,
+      "variant": "baseline",
+      "case": "attached-1",
+      "count": 1,
+      "round": 1,
+      "gitProcesses": 3,
+      "wallMs": 39.361999999999995,
+      "nodeCpuMs": 3.05
+    },
+    {
+      "trial": 1,
+      "variant": "baseline",
+      "case": "attached-1",
+      "count": 1,
+      "round": 2,
+      "gitProcesses": 3,
+      "wallMs": 39.70475000000002,
+      "nodeCpuMs": 3.484
+    },
+    {
+      "trial": 1,
+      "variant": "baseline",
+      "case": "attached-1",
+      "count": 1,
+      "round": 3,
+      "gitProcesses": 3,
+      "wallMs": 39.314666999999986,
+      "nodeCpuMs": 3.394
+    },
+    {
+      "trial": 1,
+      "variant": "baseline",
+      "case": "attached-1",
+      "count": 1,
+      "round": 4,
+      "gitProcesses": 3,
+      "wallMs": 39.13516600000003,
+      "nodeCpuMs": 3.024
+    },
+    {
+      "trial": 1,
+      "variant": "baseline",
+      "case": "attached-1",
+      "count": 1,
+      "round": 5,
+      "gitProcesses": 3,
+      "wallMs": 39.31295800000004,
+      "nodeCpuMs": 3.272
+    },
+    {
+      "trial": 1,
+      "variant": "baseline",
+      "case": "attached-16",
+      "count": 16,
+      "round": 0,
+      "gitProcesses": 48,
+      "wallMs": 197.85362499999997,
+      "nodeCpuMs": 61.935
+    },
+    {
+      "trial": 1,
+      "variant": "baseline",
+      "case": "attached-16",
+      "count": 16,
+      "round": 1,
+      "gitProcesses": 48,
+      "wallMs": 196.82799999999997,
+      "nodeCpuMs": 50.537
+    },
+    {
+      "trial": 1,
+      "variant": "baseline",
+      "case": "attached-16",
+      "count": 16,
+      "round": 2,
+      "gitProcesses": 48,
+      "wallMs": 192.90591699999982,
+      "nodeCpuMs": 53.953
+    },
+    {
+      "trial": 1,
+      "variant": "baseline",
+      "case": "attached-16",
+      "count": 16,
+      "round": 3,
+      "gitProcesses": 48,
+      "wallMs": 194.2325830000002,
+      "nodeCpuMs": 51.038
+    },
+    {
+      "trial": 1,
+      "variant": "baseline",
+      "case": "attached-16",
+      "count": 16,
+      "round": 4,
+      "gitProcesses": 48,
+      "wallMs": 201.5618750000001,
+      "nodeCpuMs": 50.488
+    },
+    {
+      "trial": 1,
+      "variant": "baseline",
+      "case": "attached-16",
+      "count": 16,
+      "round": 5,
+      "gitProcesses": 48,
+      "wallMs": 202.31020799999988,
+      "nodeCpuMs": 49.562
+    },
+    {
+      "trial": 1,
+      "variant": "baseline",
+      "case": "unborn-1",
+      "count": 1,
+      "round": 0,
+      "gitProcesses": 3,
+      "wallMs": 40.42220800000041,
+      "nodeCpuMs": 5.504
+    },
+    {
+      "trial": 1,
+      "variant": "baseline",
+      "case": "unborn-1",
+      "count": 1,
+      "round": 1,
+      "gitProcesses": 3,
+      "wallMs": 40.297000000000025,
+      "nodeCpuMs": 2.899
+    },
+    {
+      "trial": 1,
+      "variant": "baseline",
+      "case": "unborn-1",
+      "count": 1,
+      "round": 2,
+      "gitProcesses": 3,
+      "wallMs": 38.99233400000003,
+      "nodeCpuMs": 2.839
+    },
+    {
+      "trial": 1,
+      "variant": "baseline",
+      "case": "unborn-1",
+      "count": 1,
+      "round": 3,
+      "gitProcesses": 3,
+      "wallMs": 41.69295899999997,
+      "nodeCpuMs": 2.881
+    },
+    {
+      "trial": 1,
+      "variant": "baseline",
+      "case": "unborn-1",
+      "count": 1,
+      "round": 4,
+      "gitProcesses": 3,
+      "wallMs": 40.490792000000056,
+      "nodeCpuMs": 4.36
+    },
+    {
+      "trial": 1,
+      "variant": "baseline",
+      "case": "unborn-1",
+      "count": 1,
+      "round": 5,
+      "gitProcesses": 3,
+      "wallMs": 39.8979589999999,
+      "nodeCpuMs": 2.811
+    },
+    {
+      "trial": 1,
+      "variant": "baseline",
+      "case": "detached-1",
+      "count": 1,
+      "round": 0,
+      "gitProcesses": 4,
+      "wallMs": 55.07524999999987,
+      "nodeCpuMs": 6.386
+    },
+    {
+      "trial": 1,
+      "variant": "baseline",
+      "case": "detached-1",
+      "count": 1,
+      "round": 1,
+      "gitProcesses": 4,
+      "wallMs": 55.106416999999965,
+      "nodeCpuMs": 3.995
+    },
+    {
+      "trial": 1,
+      "variant": "baseline",
+      "case": "detached-1",
+      "count": 1,
+      "round": 2,
+      "gitProcesses": 4,
+      "wallMs": 58.75500000000011,
+      "nodeCpuMs": 3.94
+    },
+    {
+      "trial": 1,
+      "variant": "baseline",
+      "case": "detached-1",
+      "count": 1,
+      "round": 3,
+      "gitProcesses": 4,
+      "wallMs": 54.54579199999989,
+      "nodeCpuMs": 3.813
+    },
+    {
+      "trial": 1,
+      "variant": "baseline",
+      "case": "detached-1",
+      "count": 1,
+      "round": 4,
+      "gitProcesses": 4,
+      "wallMs": 52.83729099999982,
+      "nodeCpuMs": 3.806
+    },
+    {
+      "trial": 1,
+      "variant": "baseline",
+      "case": "detached-1",
+      "count": 1,
+      "round": 5,
+      "gitProcesses": 4,
+      "wallMs": 56.537417000000005,
+      "nodeCpuMs": 4.133
+    },
+    {
+      "trial": 2,
+      "variant": "baseline",
+      "case": "attached-1",
+      "count": 1,
+      "round": 0,
+      "gitProcesses": 3,
+      "wallMs": 40.41133300000001,
+      "nodeCpuMs": 3.683
+    },
+    {
+      "trial": 2,
+      "variant": "baseline",
+      "case": "attached-1",
+      "count": 1,
+      "round": 1,
+      "gitProcesses": 3,
+      "wallMs": 39.82579200000001,
+      "nodeCpuMs": 3.25
+    },
+    {
+      "trial": 2,
+      "variant": "baseline",
+      "case": "attached-1",
+      "count": 1,
+      "round": 2,
+      "gitProcesses": 3,
+      "wallMs": 39.875249999999994,
+      "nodeCpuMs": 3.375
+    },
+    {
+      "trial": 2,
+      "variant": "baseline",
+      "case": "attached-1",
+      "count": 1,
+      "round": 3,
+      "gitProcesses": 3,
+      "wallMs": 42.711333000000025,
+      "nodeCpuMs": 3.968
+    },
+    {
+      "trial": 2,
+      "variant": "baseline",
+      "case": "attached-1",
+      "count": 1,
+      "round": 4,
+      "gitProcesses": 3,
+      "wallMs": 40.73275000000001,
+      "nodeCpuMs": 3.296
+    },
+    {
+      "trial": 2,
+      "variant": "baseline",
+      "case": "attached-1",
+      "count": 1,
+      "round": 5,
+      "gitProcesses": 3,
+      "wallMs": 39.36304200000001,
+      "nodeCpuMs": 3.155
+    },
+    {
+      "trial": 2,
+      "variant": "baseline",
+      "case": "attached-16",
+      "count": 16,
+      "round": 0,
+      "gitProcesses": 48,
+      "wallMs": 225.513333,
+      "nodeCpuMs": 62.572
+    },
+    {
+      "trial": 2,
+      "variant": "baseline",
+      "case": "attached-16",
+      "count": 16,
+      "round": 1,
+      "gitProcesses": 48,
+      "wallMs": 196.03975000000014,
+      "nodeCpuMs": 50.467
+    },
+    {
+      "trial": 2,
+      "variant": "baseline",
+      "case": "attached-16",
+      "count": 16,
+      "round": 2,
+      "gitProcesses": 48,
+      "wallMs": 194.83237499999996,
+      "nodeCpuMs": 55.205
+    },
+    {
+      "trial": 2,
+      "variant": "baseline",
+      "case": "attached-16",
+      "count": 16,
+      "round": 3,
+      "gitProcesses": 48,
+      "wallMs": 195.83387500000003,
+      "nodeCpuMs": 51.281
+    },
+    {
+      "trial": 2,
+      "variant": "baseline",
+      "case": "attached-16",
+      "count": 16,
+      "round": 4,
+      "gitProcesses": 48,
+      "wallMs": 194.7233749999998,
+      "nodeCpuMs": 50.008
+    },
+    {
+      "trial": 2,
+      "variant": "baseline",
+      "case": "attached-16",
+      "count": 16,
+      "round": 5,
+      "gitProcesses": 48,
+      "wallMs": 196.0949579999999,
+      "nodeCpuMs": 49.026
+    },
+    {
+      "trial": 2,
+      "variant": "baseline",
+      "case": "unborn-1",
+      "count": 1,
+      "round": 0,
+      "gitProcesses": 3,
+      "wallMs": 40.82954199999995,
+      "nodeCpuMs": 5.745
+    },
+    {
+      "trial": 2,
+      "variant": "baseline",
+      "case": "unborn-1",
+      "count": 1,
+      "round": 1,
+      "gitProcesses": 3,
+      "wallMs": 40.89645799999971,
+      "nodeCpuMs": 2.851
+    },
+    {
+      "trial": 2,
+      "variant": "baseline",
+      "case": "unborn-1",
+      "count": 1,
+      "round": 2,
+      "gitProcesses": 3,
+      "wallMs": 40.00754199999983,
+      "nodeCpuMs": 2.857
+    },
+    {
+      "trial": 2,
+      "variant": "baseline",
+      "case": "unborn-1",
+      "count": 1,
+      "round": 3,
+      "gitProcesses": 3,
+      "wallMs": 40.26545900000019,
+      "nodeCpuMs": 2.757
+    },
+    {
+      "trial": 2,
+      "variant": "baseline",
+      "case": "unborn-1",
+      "count": 1,
+      "round": 4,
+      "gitProcesses": 3,
+      "wallMs": 39.24741699999959,
+      "nodeCpuMs": 2.736
+    },
+    {
+      "trial": 2,
+      "variant": "baseline",
+      "case": "unborn-1",
+      "count": 1,
+      "round": 5,
+      "gitProcesses": 3,
+      "wallMs": 42.161417000000256,
+      "nodeCpuMs": 4.712
+    },
+    {
+      "trial": 2,
+      "variant": "baseline",
+      "case": "detached-1",
+      "count": 1,
+      "round": 0,
+      "gitProcesses": 4,
+      "wallMs": 53.177208000000064,
+      "nodeCpuMs": 5.874
+    },
+    {
+      "trial": 2,
+      "variant": "baseline",
+      "case": "detached-1",
+      "count": 1,
+      "round": 1,
+      "gitProcesses": 4,
+      "wallMs": 52.76929199999995,
+      "nodeCpuMs": 3.617
+    },
+    {
+      "trial": 2,
+      "variant": "baseline",
+      "case": "detached-1",
+      "count": 1,
+      "round": 2,
+      "gitProcesses": 4,
+      "wallMs": 52.697791999999936,
+      "nodeCpuMs": 3.62
+    },
+    {
+      "trial": 2,
+      "variant": "baseline",
+      "case": "detached-1",
+      "count": 1,
+      "round": 3,
+      "gitProcesses": 4,
+      "wallMs": 55.61783400000013,
+      "nodeCpuMs": 4.012
+    },
+    {
+      "trial": 2,
+      "variant": "baseline",
+      "case": "detached-1",
+      "count": 1,
+      "round": 4,
+      "gitProcesses": 4,
+      "wallMs": 53.337000000000444,
+      "nodeCpuMs": 3.732
+    },
+    {
+      "trial": 2,
+      "variant": "baseline",
+      "case": "detached-1",
+      "count": 1,
+      "round": 5,
+      "gitProcesses": 4,
+      "wallMs": 54.73000000000002,
+      "nodeCpuMs": 3.842
+    },
+    {
+      "trial": 2,
+      "variant": "candidate",
+      "case": "attached-1",
+      "count": 1,
+      "round": 0,
+      "gitProcesses": 2,
+      "wallMs": 26.928083000000015,
+      "nodeCpuMs": 2.681
+    },
+    {
+      "trial": 2,
+      "variant": "candidate",
+      "case": "attached-1",
+      "count": 1,
+      "round": 1,
+      "gitProcesses": 2,
+      "wallMs": 26.195750000000004,
+      "nodeCpuMs": 2.713
+    },
+    {
+      "trial": 2,
+      "variant": "candidate",
+      "case": "attached-1",
+      "count": 1,
+      "round": 2,
+      "gitProcesses": 2,
+      "wallMs": 26.364334000000014,
+      "nodeCpuMs": 2.353
+    },
+    {
+      "trial": 2,
+      "variant": "candidate",
+      "case": "attached-1",
+      "count": 1,
+      "round": 3,
+      "gitProcesses": 2,
+      "wallMs": 26.929791999999992,
+      "nodeCpuMs": 2.312
+    },
+    {
+      "trial": 2,
+      "variant": "candidate",
+      "case": "attached-1",
+      "count": 1,
+      "round": 4,
+      "gitProcesses": 2,
+      "wallMs": 27.124458000000004,
+      "nodeCpuMs": 2.638
+    },
+    {
+      "trial": 2,
+      "variant": "candidate",
+      "case": "attached-1",
+      "count": 1,
+      "round": 5,
+      "gitProcesses": 2,
+      "wallMs": 27.448083000000025,
+      "nodeCpuMs": 2.321
+    },
+    {
+      "trial": 2,
+      "variant": "candidate",
+      "case": "attached-16",
+      "count": 16,
+      "round": 0,
+      "gitProcesses": 32,
+      "wallMs": 135.55158400000005,
+      "nodeCpuMs": 41.71
+    },
+    {
+      "trial": 2,
+      "variant": "candidate",
+      "case": "attached-16",
+      "count": 16,
+      "round": 1,
+      "gitProcesses": 32,
+      "wallMs": 135.22283300000004,
+      "nodeCpuMs": 36.909
+    },
+    {
+      "trial": 2,
+      "variant": "candidate",
+      "case": "attached-16",
+      "count": 16,
+      "round": 2,
+      "gitProcesses": 32,
+      "wallMs": 135.824792,
+      "nodeCpuMs": 46.071
+    },
+    {
+      "trial": 2,
+      "variant": "candidate",
+      "case": "attached-16",
+      "count": 16,
+      "round": 3,
+      "gitProcesses": 32,
+      "wallMs": 135.5999589999999,
+      "nodeCpuMs": 37.183
+    },
+    {
+      "trial": 2,
+      "variant": "candidate",
+      "case": "attached-16",
+      "count": 16,
+      "round": 4,
+      "gitProcesses": 32,
+      "wallMs": 137.91124999999988,
+      "nodeCpuMs": 35.369
+    },
+    {
+      "trial": 2,
+      "variant": "candidate",
+      "case": "attached-16",
+      "count": 16,
+      "round": 5,
+      "gitProcesses": 32,
+      "wallMs": 132.84908299999984,
+      "nodeCpuMs": 34.579
+    },
+    {
+      "trial": 2,
+      "variant": "candidate",
+      "case": "unborn-1",
+      "count": 1,
+      "round": 0,
+      "gitProcesses": 3,
+      "wallMs": 40.45716700000003,
+      "nodeCpuMs": 2.891
+    },
+    {
+      "trial": 2,
+      "variant": "candidate",
+      "case": "unborn-1",
+      "count": 1,
+      "round": 1,
+      "gitProcesses": 3,
+      "wallMs": 40.443084,
+      "nodeCpuMs": 2.835
+    },
+    {
+      "trial": 2,
+      "variant": "candidate",
+      "case": "unborn-1",
+      "count": 1,
+      "round": 2,
+      "gitProcesses": 3,
+      "wallMs": 40.082792000000154,
+      "nodeCpuMs": 3.655
+    },
+    {
+      "trial": 2,
+      "variant": "candidate",
+      "case": "unborn-1",
+      "count": 1,
+      "round": 3,
+      "gitProcesses": 3,
+      "wallMs": 38.52150000000006,
+      "nodeCpuMs": 2.91
+    },
+    {
+      "trial": 2,
+      "variant": "candidate",
+      "case": "unborn-1",
+      "count": 1,
+      "round": 4,
+      "gitProcesses": 3,
+      "wallMs": 38.334540999999945,
+      "nodeCpuMs": 2.808
+    },
+    {
+      "trial": 2,
+      "variant": "candidate",
+      "case": "unborn-1",
+      "count": 1,
+      "round": 5,
+      "gitProcesses": 3,
+      "wallMs": 38.887083000000075,
+      "nodeCpuMs": 2.863
+    },
+    {
+      "trial": 2,
+      "variant": "candidate",
+      "case": "detached-1",
+      "count": 1,
+      "round": 0,
+      "gitProcesses": 3,
+      "wallMs": 41.674667,
+      "nodeCpuMs": 3.39
+    },
+    {
+      "trial": 2,
+      "variant": "candidate",
+      "case": "detached-1",
+      "count": 1,
+      "round": 1,
+      "gitProcesses": 3,
+      "wallMs": 39.7096660000002,
+      "nodeCpuMs": 2.953
+    },
+    {
+      "trial": 2,
+      "variant": "candidate",
+      "case": "detached-1",
+      "count": 1,
+      "round": 2,
+      "gitProcesses": 3,
+      "wallMs": 40.86891699999978,
+      "nodeCpuMs": 2.916
+    },
+    {
+      "trial": 2,
+      "variant": "candidate",
+      "case": "detached-1",
+      "count": 1,
+      "round": 3,
+      "gitProcesses": 3,
+      "wallMs": 41.55475000000024,
+      "nodeCpuMs": 3.084
+    },
+    {
+      "trial": 2,
+      "variant": "candidate",
+      "case": "detached-1",
+      "count": 1,
+      "round": 4,
+      "gitProcesses": 3,
+      "wallMs": 41.32791700000007,
+      "nodeCpuMs": 2.864
+    },
+    {
+      "trial": 2,
+      "variant": "candidate",
+      "case": "detached-1",
+      "count": 1,
+      "round": 5,
+      "gitProcesses": 3,
+      "wallMs": 41.61991599999965,
+      "nodeCpuMs": 3.308
+    },
+    {
+      "trial": 3,
+      "variant": "candidate",
+      "case": "attached-1",
+      "count": 1,
+      "round": 0,
+      "gitProcesses": 2,
+      "wallMs": 26.44366699999999,
+      "nodeCpuMs": 2.79
+    },
+    {
+      "trial": 3,
+      "variant": "candidate",
+      "case": "attached-1",
+      "count": 1,
+      "round": 1,
+      "gitProcesses": 2,
+      "wallMs": 27.11933300000001,
+      "nodeCpuMs": 2.583
+    },
+    {
+      "trial": 3,
+      "variant": "candidate",
+      "case": "attached-1",
+      "count": 1,
+      "round": 2,
+      "gitProcesses": 2,
+      "wallMs": 28.941125,
+      "nodeCpuMs": 2.334
+    },
+    {
+      "trial": 3,
+      "variant": "candidate",
+      "case": "attached-1",
+      "count": 1,
+      "round": 3,
+      "gitProcesses": 2,
+      "wallMs": 26.328625000000017,
+      "nodeCpuMs": 2.112
+    },
+    {
+      "trial": 3,
+      "variant": "candidate",
+      "case": "attached-1",
+      "count": 1,
+      "round": 4,
+      "gitProcesses": 2,
+      "wallMs": 27.095332999999982,
+      "nodeCpuMs": 2.634
+    },
+    {
+      "trial": 3,
+      "variant": "candidate",
+      "case": "attached-1",
+      "count": 1,
+      "round": 5,
+      "gitProcesses": 2,
+      "wallMs": 28.250291999999973,
+      "nodeCpuMs": 2.56
+    },
+    {
+      "trial": 3,
+      "variant": "candidate",
+      "case": "attached-16",
+      "count": 16,
+      "round": 0,
+      "gitProcesses": 32,
+      "wallMs": 133.57066699999996,
+      "nodeCpuMs": 40.252
+    },
+    {
+      "trial": 3,
+      "variant": "candidate",
+      "case": "attached-16",
+      "count": 16,
+      "round": 1,
+      "gitProcesses": 32,
+      "wallMs": 130.48787500000003,
+      "nodeCpuMs": 37.318
+    },
+    {
+      "trial": 3,
+      "variant": "candidate",
+      "case": "attached-16",
+      "count": 16,
+      "round": 2,
+      "gitProcesses": 32,
+      "wallMs": 135.86187500000005,
+      "nodeCpuMs": 45.073
+    },
+    {
+      "trial": 3,
+      "variant": "candidate",
+      "case": "attached-16",
+      "count": 16,
+      "round": 3,
+      "gitProcesses": 32,
+      "wallMs": 131.861625,
+      "nodeCpuMs": 35.616
+    },
+    {
+      "trial": 3,
+      "variant": "candidate",
+      "case": "attached-16",
+      "count": 16,
+      "round": 4,
+      "gitProcesses": 32,
+      "wallMs": 129.56433300000003,
+      "nodeCpuMs": 34.964
+    },
+    {
+      "trial": 3,
+      "variant": "candidate",
+      "case": "attached-16",
+      "count": 16,
+      "round": 5,
+      "gitProcesses": 32,
+      "wallMs": 133.29612499999985,
+      "nodeCpuMs": 35.852
+    },
+    {
+      "trial": 3,
+      "variant": "candidate",
+      "case": "unborn-1",
+      "count": 1,
+      "round": 0,
+      "gitProcesses": 3,
+      "wallMs": 39.76737500000013,
+      "nodeCpuMs": 2.852
+    },
+    {
+      "trial": 3,
+      "variant": "candidate",
+      "case": "unborn-1",
+      "count": 1,
+      "round": 1,
+      "gitProcesses": 3,
+      "wallMs": 40.426750000000084,
+      "nodeCpuMs": 2.861
+    },
+    {
+      "trial": 3,
+      "variant": "candidate",
+      "case": "unborn-1",
+      "count": 1,
+      "round": 2,
+      "gitProcesses": 3,
+      "wallMs": 39.846874999999955,
+      "nodeCpuMs": 3.72
+    },
+    {
+      "trial": 3,
+      "variant": "candidate",
+      "case": "unborn-1",
+      "count": 1,
+      "round": 3,
+      "gitProcesses": 3,
+      "wallMs": 39.93437499999982,
+      "nodeCpuMs": 2.91
+    },
+    {
+      "trial": 3,
+      "variant": "candidate",
+      "case": "unborn-1",
+      "count": 1,
+      "round": 4,
+      "gitProcesses": 3,
+      "wallMs": 40.71041700000001,
+      "nodeCpuMs": 2.943
+    },
+    {
+      "trial": 3,
+      "variant": "candidate",
+      "case": "unborn-1",
+      "count": 1,
+      "round": 5,
+      "gitProcesses": 3,
+      "wallMs": 40.98225000000002,
+      "nodeCpuMs": 3.011
+    },
+    {
+      "trial": 3,
+      "variant": "candidate",
+      "case": "detached-1",
+      "count": 1,
+      "round": 0,
+      "gitProcesses": 3,
+      "wallMs": 41.041790999999876,
+      "nodeCpuMs": 3.075
+    },
+    {
+      "trial": 3,
+      "variant": "candidate",
+      "case": "detached-1",
+      "count": 1,
+      "round": 1,
+      "gitProcesses": 3,
+      "wallMs": 40.60525000000007,
+      "nodeCpuMs": 2.769
+    },
+    {
+      "trial": 3,
+      "variant": "candidate",
+      "case": "detached-1",
+      "count": 1,
+      "round": 2,
+      "gitProcesses": 3,
+      "wallMs": 40.75258399999984,
+      "nodeCpuMs": 2.848
+    },
+    {
+      "trial": 3,
+      "variant": "candidate",
+      "case": "detached-1",
+      "count": 1,
+      "round": 3,
+      "gitProcesses": 3,
+      "wallMs": 40.805417000000034,
+      "nodeCpuMs": 2.757
+    },
+    {
+      "trial": 3,
+      "variant": "candidate",
+      "case": "detached-1",
+      "count": 1,
+      "round": 4,
+      "gitProcesses": 3,
+      "wallMs": 41.482416999999714,
+      "nodeCpuMs": 2.826
+    },
+    {
+      "trial": 3,
+      "variant": "candidate",
+      "case": "detached-1",
+      "count": 1,
+      "round": 5,
+      "gitProcesses": 3,
+      "wallMs": 39.913334000000305,
+      "nodeCpuMs": 2.87
+    },
+    {
+      "trial": 3,
+      "variant": "baseline",
+      "case": "attached-1",
+      "count": 1,
+      "round": 0,
+      "gitProcesses": 3,
+      "wallMs": 39.89729200000002,
+      "nodeCpuMs": 3.747
+    },
+    {
+      "trial": 3,
+      "variant": "baseline",
+      "case": "attached-1",
+      "count": 1,
+      "round": 1,
+      "gitProcesses": 3,
+      "wallMs": 40.383375,
+      "nodeCpuMs": 3.269
+    },
+    {
+      "trial": 3,
+      "variant": "baseline",
+      "case": "attached-1",
+      "count": 1,
+      "round": 2,
+      "gitProcesses": 3,
+      "wallMs": 40.36983300000003,
+      "nodeCpuMs": 3.718
+    },
+    {
+      "trial": 3,
+      "variant": "baseline",
+      "case": "attached-1",
+      "count": 1,
+      "round": 3,
+      "gitProcesses": 3,
+      "wallMs": 39.866084,
+      "nodeCpuMs": 3.524
+    },
+    {
+      "trial": 3,
+      "variant": "baseline",
+      "case": "attached-1",
+      "count": 1,
+      "round": 4,
+      "gitProcesses": 3,
+      "wallMs": 40.35945800000002,
+      "nodeCpuMs": 3.13
+    },
+    {
+      "trial": 3,
+      "variant": "baseline",
+      "case": "attached-1",
+      "count": 1,
+      "round": 5,
+      "gitProcesses": 3,
+      "wallMs": 41.336374999999975,
+      "nodeCpuMs": 3.687
+    },
+    {
+      "trial": 3,
+      "variant": "baseline",
+      "case": "attached-16",
+      "count": 16,
+      "round": 0,
+      "gitProcesses": 48,
+      "wallMs": 199.94941600000004,
+      "nodeCpuMs": 61.054
+    },
+    {
+      "trial": 3,
+      "variant": "baseline",
+      "case": "attached-16",
+      "count": 16,
+      "round": 1,
+      "gitProcesses": 48,
+      "wallMs": 202.21375000000012,
+      "nodeCpuMs": 50.775
+    },
+    {
+      "trial": 3,
+      "variant": "baseline",
+      "case": "attached-16",
+      "count": 16,
+      "round": 2,
+      "gitProcesses": 48,
+      "wallMs": 192.282917,
+      "nodeCpuMs": 55.004
+    },
+    {
+      "trial": 3,
+      "variant": "baseline",
+      "case": "attached-16",
+      "count": 16,
+      "round": 3,
+      "gitProcesses": 48,
+      "wallMs": 194.40537500000005,
+      "nodeCpuMs": 49.576
+    },
+    {
+      "trial": 3,
+      "variant": "baseline",
+      "case": "attached-16",
+      "count": 16,
+      "round": 4,
+      "gitProcesses": 48,
+      "wallMs": 193.6974170000001,
+      "nodeCpuMs": 50.602
+    },
+    {
+      "trial": 3,
+      "variant": "baseline",
+      "case": "attached-16",
+      "count": 16,
+      "round": 5,
+      "gitProcesses": 48,
+      "wallMs": 201.63800000000015,
+      "nodeCpuMs": 49.918
+    },
+    {
+      "trial": 3,
+      "variant": "baseline",
+      "case": "unborn-1",
+      "count": 1,
+      "round": 0,
+      "gitProcesses": 3,
+      "wallMs": 40.02670900000021,
+      "nodeCpuMs": 5.42
+    },
+    {
+      "trial": 3,
+      "variant": "baseline",
+      "case": "unborn-1",
+      "count": 1,
+      "round": 1,
+      "gitProcesses": 3,
+      "wallMs": 39.82316700000001,
+      "nodeCpuMs": 2.749
+    },
+    {
+      "trial": 3,
+      "variant": "baseline",
+      "case": "unborn-1",
+      "count": 1,
+      "round": 2,
+      "gitProcesses": 3,
+      "wallMs": 40.92716599999994,
+      "nodeCpuMs": 3.143
+    },
+    {
+      "trial": 3,
+      "variant": "baseline",
+      "case": "unborn-1",
+      "count": 1,
+      "round": 3,
+      "gitProcesses": 3,
+      "wallMs": 43.05837500000007,
+      "nodeCpuMs": 3.185
+    },
+    {
+      "trial": 3,
+      "variant": "baseline",
+      "case": "unborn-1",
+      "count": 1,
+      "round": 4,
+      "gitProcesses": 3,
+      "wallMs": 40.90074999999979,
+      "nodeCpuMs": 4.354
+    },
+    {
+      "trial": 3,
+      "variant": "baseline",
+      "case": "unborn-1",
+      "count": 1,
+      "round": 5,
+      "gitProcesses": 3,
+      "wallMs": 41.717291999999816,
+      "nodeCpuMs": 2.963
+    },
+    {
+      "trial": 3,
+      "variant": "baseline",
+      "case": "detached-1",
+      "count": 1,
+      "round": 0,
+      "gitProcesses": 4,
+      "wallMs": 55.59325000000035,
+      "nodeCpuMs": 6.292
+    },
+    {
+      "trial": 3,
+      "variant": "baseline",
+      "case": "detached-1",
+      "count": 1,
+      "round": 1,
+      "gitProcesses": 4,
+      "wallMs": 57.97458299999971,
+      "nodeCpuMs": 4.163
+    },
+    {
+      "trial": 3,
+      "variant": "baseline",
+      "case": "detached-1",
+      "count": 1,
+      "round": 2,
+      "gitProcesses": 4,
+      "wallMs": 55.42879099999982,
+      "nodeCpuMs": 3.767
+    },
+    {
+      "trial": 3,
+      "variant": "baseline",
+      "case": "detached-1",
+      "count": 1,
+      "round": 3,
+      "gitProcesses": 4,
+      "wallMs": 54.41599999999971,
+      "nodeCpuMs": 3.556
+    },
+    {
+      "trial": 3,
+      "variant": "baseline",
+      "case": "detached-1",
+      "count": 1,
+      "round": 4,
+      "gitProcesses": 4,
+      "wallMs": 54.7209170000001,
+      "nodeCpuMs": 3.704
+    },
+    {
+      "trial": 3,
+      "variant": "baseline",
+      "case": "detached-1",
+      "count": 1,
+      "round": 5,
+      "gitProcesses": 4,
+      "wallMs": 54.95837500000016,
+      "nodeCpuMs": 3.872
+    }
+  ],
+  "date": "2026-10-02",
+  "source": {
+    "baseline_commit": "afea68e8f2f802fed5a7886f6c76ae07fdbb18e1",
+    "candidate_commit": "3c715b8057a8c5102fe9789af3376f997bb096a0",
+    "files_sha256": {
+      "cli/src/lib/agentProject.ts": "e8aa22c64d830d27fcc63aedcc81418a398c027d1dec344dc0c9fdc074c899da",
+      "cli/src/lib/agentProject.spec.ts": "a7da0eb8c1b2799bb34115faaa97d480efaf70cdd33103c1bca1419b71bf1a97",
+      "cli/scripts/benchmark-project-reads.mjs": "e3718f16f88b6887c6a40a42a9756f4c7e94cb7cdd76ccd5ee6184e286af7ce4",
+      "cli/package-lock.json": "5c69dffb1423173dfab75c0aa493b5c601784ff3efd16b9bfbb41ef9ad1c4d2b"
+    },
+    "pre_rebase_candidate_commit": "437cb64c540a2dd2a4af813c25a746c0945c3220"
+  },
+  "validation": {
+    "tests_passed": 107,
+    "project_tests_passed": 18,
+    "coverage": {
+      "lines": {
+        "total": 142,
+        "covered": 140,
+        "skipped": 0,
+        "pct": 98.59
+      },
+      "statements": {
+        "total": 177,
+        "covered": 167,
+        "skipped": 0,
+        "pct": 94.35
+      },
+      "functions": {
+        "total": 22,
+        "covered": 20,
+        "skipped": 0,
+        "pct": 90.9
+      },
+      "branches": {
+        "total": 186,
+        "covered": 167,
+        "skipped": 0,
+        "pct": 89.78
+      },
+      "branchesTrue": {
+        "total": 0,
+        "covered": 0,
+        "skipped": 0,
+        "pct": "Unknown"
+      }
+    },
+    "receipt_id": ".harness/validation/20261002T163837.011259Z-24668/receipt.json",
+    "receipt_sha256": "24d532b280b74b8cd9d593461ae30685116bc0d18afa31f82619a4c6b43c278d",
+    "receipt": {
+      "schema": 2,
+      "started_at": "2026-10-02T16:38:37.011527+00:00",
+      "reason": "Batch repository path/branch metadata without changing Git semantics, freshness, worktrees or session identity. Real Git fixtures plus all direct metadata consumers.",
+      "source": {
+        "commit": "afea68e8f2f802fed5a7886f6c76ae07fdbb18e1",
+        "tree": "08ea8fc0c0d18d773b1ef9405651ccdfa3bf04a3",
+        "working_changes_sha256": "eccb3bd8e02d9d613813d3bc7d63619c60db670d6e4f3e3e27c90af106ac49aa",
+        "dirty": true
+      },
+      "checks": [
+        {
+          "name": "cli-types",
+          "cwd": "cli",
+          "argv": [
+            "<NODE_22_23_2>",
+            "node_modules/typescript/bin/tsc",
+            "--noEmit"
+          ],
+          "timeout_seconds": 180,
+          "started_at": "2026-10-02T16:38:37.205367+00:00",
+          "status": "passed",
+          "log": ".harness/validation/20261002T163837.011259Z-24668/cli-types.log",
+          "exit_code": 0,
+          "duration_seconds": 1.675,
+          "finished_at": "2026-10-02T16:38:38.899700+00:00",
+          "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "name": "benchmark-syntax",
+          "cwd": ".",
+          "argv": [
+            "<NODE_22_23_2>",
+            "--check",
+            "cli/scripts/benchmark-project-reads.mjs"
+          ],
+          "timeout_seconds": 30,
+          "started_at": "2026-10-02T16:38:38.950379+00:00",
+          "status": "passed",
+          "log": ".harness/validation/20261002T163837.011259Z-24668/benchmark-syntax.log",
+          "exit_code": 0,
+          "duration_seconds": 0.056,
+          "finished_at": "2026-10-02T16:38:39.025812+00:00",
+          "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "name": "project-regressions",
+          "cwd": "cli",
+          "argv": [
+            "<NODE_22_23_2>",
+            "node_modules/vitest/vitest.mjs",
+            "run",
+            "src/lib/agentProject.spec.ts",
+            "src/lib/agentFrame.spec.ts",
+            "src/lib/sessionGitContext.spec.ts",
+            "src/lib/sessionGitPullRequest.spec.ts",
+            "src/lib/gitProject.spec.ts",
+            "src/lib/gitPullRequest.spec.ts",
+            "src/lib/sessionGitHistory.spec.ts",
+            "--maxWorkers=2",
+            "--coverage",
+            "--coverage.include=src/lib/agentProject.ts",
+            "--coverage.reporter=text",
+            "--coverage.reporter=json-summary",
+            "--coverage.reportsDirectory=coverage/project-batch"
+          ],
+          "timeout_seconds": 180,
+          "started_at": "2026-10-02T16:38:37.206770+00:00",
+          "status": "passed",
+          "log": ".harness/validation/20261002T163837.011259Z-24668/project-regressions.log",
+          "exit_code": 0,
+          "duration_seconds": 18.615,
+          "finished_at": "2026-10-02T16:38:55.842017+00:00",
+          "log_sha256": "6986b232b2713ab6ed3da0484c80829a261fa63a72e3d4aacf8f2871d3a05f07"
+        }
+      ],
+      "free_gib_before": 11.065,
+      "source_after": {
+        "commit": "afea68e8f2f802fed5a7886f6c76ae07fdbb18e1",
+        "tree": "08ea8fc0c0d18d773b1ef9405651ccdfa3bf04a3",
+        "working_changes_sha256": "eccb3bd8e02d9d613813d3bc7d63619c60db670d6e4f3e3e27c90af106ac49aa",
+        "dirty": true
+      },
+      "status": "passed",
+      "finished_at": "2026-10-02T16:38:56.043334+00:00",
+      "duration_seconds": 18.838
+    },
+    "rebased_typecheck": {
+      "receipt_sha256": "cb1c2c89db24b6e4f9dce3e2c373e1702fc9590ff4bb3d7fd8b0ea2848499358",
+      "receipt": {
+        "schema": 2,
+        "started_at": "2026-10-02T16:45:33.085694+00:00",
+        "reason": "Rebase adds only memory extraction prompt changes outside the tested project-reader graph. Verify whole-CLI compilation on the combined source; unchanged Git behavior tests and benchmark retain their evidence.",
+        "source": {
+          "commit": "818e43e4249f1f2cd74532b66b8435077d555e51",
+          "tree": "4820ccee1199419aedfcd96c4478919b231f0a0b",
+          "working_changes_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "dirty": false
+        },
+        "checks": [
+          {
+            "name": "cli-types",
+            "cwd": "cli",
+            "argv": [
+              "<NODE_22_23_2>",
+              "node_modules/typescript/bin/tsc",
+              "--noEmit"
+            ],
+            "timeout_seconds": 180,
+            "started_at": "2026-10-02T16:45:33.313021+00:00",
+            "status": "passed",
+            "log": ".harness/validation/20261002T164533.085339Z-81673/cli-types.log",
+            "exit_code": 0,
+            "duration_seconds": 2.856,
+            "finished_at": "2026-10-02T16:45:36.187658+00:00",
+            "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        ],
+        "free_gib_before": 10.379,
+        "source_after": {
+          "commit": "818e43e4249f1f2cd74532b66b8435077d555e51",
+          "tree": "4820ccee1199419aedfcd96c4478919b231f0a0b",
+          "working_changes_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "dirty": false
+        },
+        "status": "passed",
+        "finished_at": "2026-10-02T16:45:36.389058+00:00",
+        "duration_seconds": 3.076
+      }
+    },
+    "reuse_after_rebase": "Main added only cli/src/memory/learner.ts prompt strings and research records. All cli/src/lib files, benchmark, dependency locks, test setup/config and tsconfig are byte-identical to the tested source. Reused 107 Git-consumer tests and benchmark; reran whole-CLI typecheck on the rebased source."
+  },
+  "benchmark_file_sha256": "d7e3ccd2fa4262177aa61c421912bbf52333aae8bd220f24004011db2f1768bc",
+  "fixture_repositories_removed": true,
+  "release_policy": "PR and merge only. No release or installed daemon/app update without renewed user authorization.",
+  "earlier_validation": [
+    {
+      "receipt": ".harness/validation/20261002T162740.708554Z-63618/receipt.json",
+      "status": "cleanup_failed",
+      "details": "106 tests and typecheck exited zero; sandbox blocked process inspection. Not accepted as a passing validation run."
+    },
+    {
+      "receipt": ".harness/validation/20261002T163623.940481Z-75322/receipt.json",
+      "status": "failed",
+      "details": "107 tests passed; TypeScript could not narrow the optional branch through assignment. Rewrote the same selection as a const expression, then reran typecheck and all affected tests."
+    }
+  ]
+}

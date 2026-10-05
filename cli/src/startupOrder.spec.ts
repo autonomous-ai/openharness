@@ -146,3 +146,66 @@ describe('cli.ts start-up order', () => {
     expect(arm, 'a daemon that exits here can never be updated').not.toContain('catch(onError)')
   })
 })
+
+// ── The request gate ──────────────────────────────────────────────────────────────────────────────
+// Requests that arrive while the core is starting wait (`BackendSocket.holdRequests`) and are answered
+// in order once start-up is done (`openRequests`). Moving the code that binds the handlers into
+// modules (the core boundary, docs/design/2026-10-03-harnessd.md) must keep these exactly.
+
+/** Every place `runForeground` binds a handler on the socket: a property, an owner command, a setter. */
+const BINDING = /\bbackend\.(?:ownerCommands\.)?(?:[A-Za-z_$][\w$]*\s*=(?!=)|set[A-Z][\w$]*\()/g
+
+/** The test-only hold the end-to-end harness uses for a start-up that hangs after binding. */
+const TEST_HOLD = "if (process.env.HARNESSD_TEST_HOLD_READY === '1') await new Promise<never>(() => {})"
+
+describe('cli.ts request gate', () => {
+  const source = code(SOURCE)
+  const { text, from } = runForegroundBody(source)
+  const at = (needle: string, after = from): number => {
+    const index = source.indexOf(needle, after)
+    expect(index, `runForeground still contains \`${needle}\``).toBeGreaterThan(-1)
+    return index
+  }
+  const opened = at('\n  backend.openRequests()')
+
+  it('holds requests from the moment the socket exists', () => {
+    const constructed = at('const backend = new BackendSocket(')
+    const held = at('backend.holdRequests()', constructed)
+    const between = source.slice(source.indexOf('\n', source.indexOf('}, computerId(), autonomousEnv)', constructed)), held)
+    // Only the reference other code reads the socket through may come between them; nothing that yields.
+    expect(between.split('\n').map((line) => line.trim()).filter(Boolean)).toEqual(['backendRef = backend'])
+  })
+
+  it('binds every handler before requests are answered', () => {
+    const bindings = [...text.matchAll(BINDING)]
+    expect(bindings.length, 'the socket is still wired up in runForeground').toBeGreaterThan(40)
+    const late = bindings.filter((binding) => from + binding.index > opened).map((binding) => binding[0])
+    expect(late, 'a handler bound after openRequests misses the requests held until then').toEqual([])
+  })
+
+  it('binds what restore publishes before restore runs, outside the gate', () => {
+    // `publishStoppedAgent` reads these while restoring agents and in the first reconcile, and those
+    // frames go out whether or not requests are open.
+    const restore = at('await restoreAgents({')
+    for (const provider of ['activityFrameProvider', 'runtimeProfileProvider', 'dshFrameProvider']) {
+      expect(at(`backend.${provider} =`), `backend.${provider} must be bound before restoreAgents`).toBeLessThan(restore)
+    }
+  })
+
+  it('never yields between dialing the backend and answering requests', () => {
+    // The relay callbacks (onRevoked, onBusy, onMachineMeta) are bound after `connect()`. That is safe
+    // only while nothing in between lets the socket's first frames run.
+    const dialed = at('backend.connect()')
+    const yields = source.slice(dialed, opened).split('\n')
+      .filter((line) => /^ {2}\S/.test(line) && /\bawait\b/.test(line) && line.trim() !== TEST_HOLD)
+    expect(yields, 'bind the relay callbacks before connect() first').toEqual([])
+  })
+
+  it('opens the gate, tells the master it is ready, then says so — last', () => {
+    const ready = at('coreLink.ready()', opened)
+    const logged = at("console.log('[cli] ready')", ready)
+    const tail = source.slice(opened, from + text.length).split('\n').map((line) => line.trim()).filter(Boolean)
+    expect(tail).toEqual(['backend.openRequests()', 'daemonBoot.openRequests = null', 'coreLink.ready()', "console.log('[cli] ready')"])
+    expect(logged).toBeGreaterThan(ready)
+  })
+})

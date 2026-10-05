@@ -1,0 +1,55 @@
+{
+  "schemaVersion": 1,
+  "reportSha256": "a95f6ce4eab789be5447360ed48fdb901e1ed1b34f1634ea76ce644866167a22",
+  "suiteSha256": "657aae9de4f301b660cc2c57dce0f80ae801f49e71921a2365b862ba15d0023e",
+  "reviewer": {
+    "id": "implementing-agent",
+    "kind": "agent",
+    "independent": false
+  },
+  "cases": [
+    {
+      "id": "default-with-user-override",
+      "records": [
+        {
+          "id": "46a44abc-6ea0-4b3b-94b9-0f21a5f6968a",
+          "revision": 1,
+          "supported": true,
+          "specific": true,
+          "useful": true,
+          "note": "The claim and future action preserve the compact default, the user-selected manual expansion, and the current-visit limit. No forbidden expansion or persistent setting is invented."
+        }
+      ],
+      "probes": [
+        {
+          "id": "same-project",
+          "relevantIds": [
+            "46a44abc-6ea0-4b3b-94b9-0f21a5f6968a"
+          ],
+          "requiredIds": [
+            "46a44abc-6ea0-4b3b-94b9-0f21a5f6968a"
+          ],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "The validated source-excerpt packet retains the full original qualifications for the relevant project."
+        },
+        {
+          "id": "different-project",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "The unrelated project/topic or unresolved-choice probe correctly returns no memory; no absent or unrun case is counted here."
+        },
+        {
+          "id": "unrelated-topic",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "The unrelated project/topic or unresolved-choice probe correctly returns no memory; no absent or unrun case is counted here."
+        }
+      ]
+    }
+  ]
+}

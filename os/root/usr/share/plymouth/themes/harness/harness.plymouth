@@ -1,0 +1,10 @@
+[Plymouth Theme]
+Name=Harness
+Description=Static Harness disk unlock screen
+ModuleName=script
+
+[script]
+ImageDir=/usr/share/plymouth/themes/harness
+ScriptFile=/usr/share/plymouth/themes/harness/harness.script
+Font=DejaVu Sans Mono 16
+MonospaceFont=DejaVu Sans Mono 16

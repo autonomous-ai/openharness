@@ -1,0 +1,3 @@
+# A local user may configure networking without another password prompt.
+# Both commands run the fixed, root-owned network form; no arbitrary command is accepted.
+%wheel ALL=(root) NOPASSWD: /usr/bin/python3 /usr/lib/harness-os/network.py, /usr/bin/python3 /usr/lib/harness-os/network.py --first-use

@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "purpose": "Adaptive development evidence for source-excerpt recall; not a held-out or live-user quality claim.",
+  "reviewer": {
+    "kind": "implementing_agent",
+    "identity": "Codex"
+  },
+  "variants": [
+    {
+      "name": "paired",
+      "result": {
+        "summary": {
+          "assessableTasks": 5,
+          "passedTasks": 2
+        },
+        "excerpts": {
+          "assessableTasks": 5,
+          "passedTasks": 3
+        }
+      }
+    },
+    {
+      "name": "source-only",
+      "result": {
+        "assessableTasks": 5,
+        "passedTasks": 4
+      }
+    },
+    {
+      "name": "store-format",
+      "result": {
+        "assessableTasks": 5,
+        "passedTasks": 4
+      }
+    }
+  ],
+  "limitations": [
+    "Six task pairs were initially run; the log-retention task lacked a return-type contract and is unscorable in both arms. It remains in the raw results.",
+    "Strict JSON formatting failed in 8/12 paired, 3/5 source-only and 2/5 store-format outputs. Offline execution removed only one outer Markdown fence; no code or JSON body repair.",
+    "Source-only and store-format runs were added after inspecting paired results, so results are adaptive rather than independent held-out evidence.",
+    "One controlled file-tree corruption was authored; other summaries came from the preceding actual model extraction outputs.",
+    "All inputs are synthetic and use one cached reference model, one seed and temperature zero. There is no native-only baseline, blind human review, real-user result or claim about all coding tasks.",
+    "The export-options task still fails: the model removes unrelated actions despite the exact source qualification.",
+    "Source excerpts can omit surrounding context. They do not repair inaccurate stored summaries or prove extraction faithfulness."
+  ]
+}

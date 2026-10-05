@@ -39,6 +39,88 @@ function setup(initial: string, agents?: () => string[]) {
 }
 
 describe('SessionSearchIndex', () => {
+  it('a later search discovers a new session without waiting for the idle sweep', async () => {
+    let now = Date.now()
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now)
+    cleanups.push(() => clock.mockRestore())
+    const store = SessionSearchStore.open(':memory:')!
+    let sources: SearchSource[] = []
+    let discovered: SearchSource[] = []
+    const discover = vi.fn(async () => { discovered = sources })
+    const index = new SessionSearchIndex({ store, sources: () => discovered, discover })
+    cleanups.push(() => { index.stop(); store.close() })
+    index.start(60_000)
+    expect(index.search('').ready).toBe(false)
+    await vi.waitFor(() => expect(index.search('').ready).toBe(true))
+    expect(discover).toHaveBeenCalledTimes(1)
+
+    const dir = mkdtempSync(join(tmpdir(), 'session-search-new-'))
+    dirs.push(dir)
+    const transcriptPath = join(dir, 'new-terminal.jsonl')
+    writeFileSync(transcriptPath, prompt('a new terminal conversation', 0) + answer('Ready.', 1))
+    sources = [{ agentId: '', sessionId: 'new-terminal', engine: 'claude',
+      transcriptPath, header: '', changedAt: now,
+      external: { cwd: '/repo', origin: 'terminal', title: 'New terminal conversation' },
+    }]
+    now += 5_001
+    expect(index.search('', { from: 0, to: now })).toMatchObject({ hits: [], ready: false })
+    index.search('')
+    await vi.waitFor(() => {
+      const result = index.search('', { from: 0, to: now })
+      expect(result.ready).toBe(true)
+      expect(result.hits.map((hit) => hit.sessionId)).toEqual(['new-terminal'])
+    })
+    expect(discover).toHaveBeenCalledTimes(2)
+  })
+
+  it('discovers on first search and distinguishes an unfinished scan from empty history', async () => {
+    const store = SessionSearchStore.open(':memory:')!
+    let finish!: () => void
+    const discover = vi.fn(() => new Promise<void>((resolve) => { finish = resolve }))
+    const index = new SessionSearchIndex({ store, sources: () => [], discover })
+    cleanups.push(() => { index.stop(); store.close() })
+    index.start(60_000)
+    expect(index.search('')).toMatchObject({ hits: [], ready: false, pending: 0 })
+    await Promise.resolve()
+    expect(discover).toHaveBeenCalledTimes(1)
+    index.search('')
+    index.sweep()
+    expect(discover).toHaveBeenCalledTimes(1)
+    finish()
+    await vi.waitFor(() => expect(index.search('')).toMatchObject({ hits: [], ready: true }))
+  })
+
+  it('keeps readiness false through the final indexing pass, then returns discovered history', async () => {
+    const store = SessionSearchStore.open(':memory:')!
+    let finish!: (events: LiveEvent[]) => void
+    const index = new SessionSearchIndex({ store, sources: () => [{
+      agentId: '', sessionId: 'existing-codex', engine: 'codex', transcriptPath: null,
+      header: '', changedAt: Date.now(), external: { cwd: '/repo', origin: 'terminal', title: 'Existing work' },
+      readHistory: () => new Promise<LiveEvent[]>((resolve) => { finish = resolve }),
+    }] })
+    cleanups.push(() => { index.stop(); store.close() })
+    expect(index.search('')).toMatchObject({ ready: false, pending: 0 })
+    finish([{ type: 'user_message', payload: { content: 'fix welcome' } }])
+    await vi.waitFor(() => {
+      const result = index.search('', { from: 0, to: Date.now() + 1 })
+      expect(result.ready).toBe(true)
+      expect(result.hits[0]).toMatchObject({ sessionId: 'existing-codex', external: { title: 'Existing work' } })
+    })
+  })
+
+  it('reports discovery failure and lets a later search retry without overlapping scans', async () => {
+    const store = SessionSearchStore.open(':memory:')!
+    const discover = vi.fn().mockRejectedValueOnce(new Error('not ready')).mockResolvedValue(undefined)
+    const index = new SessionSearchIndex({ store, sources: () => [], discover })
+    cleanups.push(() => { index.stop(); store.close() })
+    index.search('')
+    await vi.waitFor(() => expect(index.search('')).toMatchObject({ ready: false, discoveryError: true }))
+    expect(discover).toHaveBeenCalledTimes(1)
+    index.sweep()
+    await vi.waitFor(() => expect(index.search('').ready).toBe(true))
+    expect(discover).toHaveBeenCalledTimes(2)
+  })
+
   it('does not resurrect deleted conversation history from an in-flight pass or stale source list', async () => {
     const { index, found, settle, store } = setup(prompt('purge search history', 0) + answer('sensitive fixture', 1))
     await settle()
@@ -151,13 +233,14 @@ describe('SessionSearchIndex', () => {
     writeFileSync(untitledFile, prompt('compare retention\nby cohort please', 0) + answer('Day-7 is 35%.', 1))
     const store = SessionSearchStore.open(':memory:')!
     const open = new Map([['e1', 'terminal' as const]])
+    let working: boolean | null = true
     let sources: SearchSource[] = [
       { agentId: '', sessionId: 'e1', engine: 'claude', transcriptPath: claudeFile, header: '', changedAt: 2, external: { cwd: '/work/dial', origin: 'terminal', title: '' } },
       { agentId: '', sessionId: 'e2', engine: 'claude', transcriptPath: untitledFile, header: '', changedAt: 1, external: { cwd: '/work/cohorts', origin: 'claude-app', title: '' } },
     ]
     const index = new SessionSearchIndex({
       store, sources: () => sources, agents: () => [],
-      openSessions: { known: () => open, fresh: async () => open },
+      openSessions: { known: () => open, fresh: async () => open, working: async () => working },
     })
     cleanups.push(() => { index.stop(); store.close() })
     const settle = async () => {
@@ -173,7 +256,11 @@ describe('SessionSearchIndex', () => {
     expect(hit).toMatchObject({ sessionId: 'e1', agentId: '', external: { title: 'Dial fix', cwd: '/work/dial', origin: 'terminal', open: true, openIn: 'terminal' } })
     expect(index.search('cohort').hits[0]).toMatchObject({ sessionId: 'e2', external: { origin: 'claude-app', open: false } })
     const tail = await index.tail('e1')
-    expect(tail?.external).toEqual({ title: 'Dial fix', cwd: '/work/dial', origin: 'terminal', open: true, openIn: 'terminal' })
+    expect(tail?.external).toEqual({ title: 'Dial fix', cwd: '/work/dial', origin: 'terminal', open: true, openIn: 'terminal', working: true })
+    working = false
+    expect((await index.tail('e1'))?.external?.working).toBe(false)
+    working = null
+    expect((await index.tail('e1'))?.external).not.toHaveProperty('working')
 
     // Its file gone, it leaves the index at the next sweep.
     sources = sources.filter((source) => source.sessionId !== 'e2')

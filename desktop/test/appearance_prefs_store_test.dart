@@ -34,6 +34,7 @@ void main() {
       const prefs = AppearancePrefs();
       expect(prefs.uiFamily, isNull);
       expect(prefs.uiSize, 14);
+      expect(prefs.shadeInactivePanes, isFalse);
       // Legacy fields remain readable, but no longer control app typography.
     });
 

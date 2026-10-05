@@ -1,0 +1,126 @@
+{
+  "schemaVersion": 1,
+  "reportSha256": "783a51311b8dc2dfc0985f584dfe0a71a85d42983932350381d58409f9eec8c6",
+  "suiteSha256": "4ef4d98a8a628390b729f9a0b5a4c7ff2a9ff83995e398a48144a4c94a617059",
+  "reviewer": {
+    "id": "codex-source-review",
+    "kind": "agent",
+    "independent": false
+  },
+  "cases": [
+    {
+      "id": "personal-mixed-episodes",
+      "records": [
+        {
+          "id": "ee6ae2ee-233e-4879-afad-f0b1f60e183e",
+          "revision": 1,
+          "supported": true,
+          "specific": true,
+          "useful": true,
+          "note": "Retains the database default with empty applicability and unknown rationale, supported by the database episode alone. The proposed action describes using the default for a database choice, not rewriting existing project decisions."
+        },
+        {
+          "id": "197e6cb2-ff64-41ce-b21f-d52360897a87",
+          "revision": 1,
+          "supported": true,
+          "specific": true,
+          "useful": true,
+          "note": "Preserves the debugging preference and production-incident exception from its own episode. No invented reason or borrowed opinion."
+        }
+      ],
+      "probes": [
+        {
+          "id": "debugging",
+          "relevantIds": [
+            "197e6cb2-ff64-41ce-b21f-d52360897a87"
+          ],
+          "requiredIds": [
+            "197e6cb2-ff64-41ce-b21f-d52360897a87"
+          ],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "The matching packet preserves the correct episode-supported memory and its scope, conditions, reason and exceptions."
+        },
+        {
+          "id": "incident",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "The negative probe correctly receives no context; unrelated episodes do not supply approval or personal preferences."
+        },
+        {
+          "id": "database-default",
+          "relevantIds": [
+            "ee6ae2ee-233e-4879-afad-f0b1f60e183e"
+          ],
+          "requiredIds": [
+            "ee6ae2ee-233e-4879-afad-f0b1f60e183e"
+          ],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "The matching packet preserves the correct episode-supported memory and its scope, conditions, reason and exceptions."
+        },
+        {
+          "id": "no-borrowed-opinion",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "The negative probe correctly receives no context; unrelated episodes do not supply approval or personal preferences."
+        },
+        {
+          "id": "no-unbound-project-fact",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "The negative probe correctly receives no context; unrelated episodes do not supply approval or personal preferences."
+        }
+      ]
+    },
+    {
+      "id": "separate-conversation-acceptance",
+      "records": [
+        {
+          "id": "f6ec62dd-f96c-41ed-adc3-3a8fc5034d1e",
+          "revision": 1,
+          "supported": true,
+          "specific": true,
+          "useful": true,
+          "note": "Retains only the explicit SQLite repository decision and stated deployment rationale. It neither adopts the unrelated MongoDB experiment nor treats the separate acknowledgement as approval."
+        }
+      ],
+      "probes": [
+        {
+          "id": "same-repository",
+          "relevantIds": [
+            "f6ec62dd-f96c-41ed-adc3-3a8fc5034d1e"
+          ],
+          "requiredIds": [
+            "f6ec62dd-f96c-41ed-adc3-3a8fc5034d1e"
+          ],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "The matching packet preserves the correct episode-supported memory and its scope, conditions, reason and exceptions."
+        },
+        {
+          "id": "different-repository",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "The negative probe correctly receives no context; unrelated episodes do not supply approval or personal preferences."
+        },
+        {
+          "id": "no-cross-conversation-approval",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "The negative probe correctly receives no context; unrelated episodes do not supply approval or personal preferences."
+        }
+      ]
+    }
+  ]
+}

@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { CODEX_STARTUP_RETRY_PROBE } from './codexStartupRetry.js'
 
 const timeout = 'Error: account/read failed during TUI bootstrap: account/read failed: workspace routing discovery timed out (code -32603)'
+const updated = '🎉 Update ran successfully! Please restart Codex.'
 const dirs: string[] = []
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }) })
 
@@ -61,5 +62,43 @@ describe('Codex startup timeout evidence', () => {
     expect(f.probe('before', '', 'some-session').status).toBe(1)
     rmSync(f.tmux)
     expect(f.probe('after', JSON.stringify(before)).status).toBe(1)
+  })
+})
+
+describe('Codex startup update evidence', () => {
+  it.each([updated, updated.replace('🎉 ', '')])('accepts a fresh successful update after waiting at the prompt: %s', output => {
+    const f = fixture()
+    const before = JSON.parse(f.probe('before').out)
+    writeFileSync(f.screen, `Updating Codex via installer\n${output}\n\n`)
+    expect(f.probe('after-update', JSON.stringify({ ...before, at: Date.now() - 600_000 })).status).toBe(0)
+    expect(f.probe('after', JSON.stringify(before)).status).toBe(1)
+    expect(f.probe('after-update', f.probe('before').out).status).toBe(1)
+  })
+
+  it.each([
+    'Update failed: network error',
+    'Update available! Run npm install -g @openai/codex',
+    `quoted output: ${updated}`,
+    `${updated}\n› Ask Codex to do anything`,
+    timeout,
+    '',
+  ])('rejects output that does not end with a successful update: %s', output => {
+    const f = fixture()
+    const before = f.probe('before').out
+    writeFileSync(f.screen, output)
+    expect(f.probe('after-update', before).status).toBe(1)
+  })
+
+  it('rejects missing, malformed, future and unavailable evidence', () => {
+    const f = fixture()
+    const before = JSON.parse(f.probe('before').out)
+    writeFileSync(f.screen, updated)
+    for (const baseline of ['', '{}', '{broken', JSON.stringify({ ...before, at: Date.now() + 10_000 }), JSON.stringify({ ...before, hash: '' })]) {
+      expect(f.probe('after-update', baseline).status).toBe(1)
+    }
+    expect(f.probe('unknown', JSON.stringify(before)).status).toBe(1)
+    expect(f.probe('after-update', JSON.stringify(before), 'other-session').status).toBe(1)
+    rmSync(f.tmux)
+    expect(f.probe('after-update', JSON.stringify(before)).status).toBe(1)
   })
 })

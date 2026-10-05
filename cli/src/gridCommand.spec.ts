@@ -17,10 +17,10 @@ import { tmpdir } from 'os'
 import { delimiter, join } from 'path'
 import { fileURLToPath } from 'url'
 import { afterEach, describe, expect, it } from 'vitest'
+import { useBundledCli } from './__fixtures__/bundledCli.js'
 
 const CLI_ROOT = fileURLToPath(new URL('..', import.meta.url))
-const CLI_SOURCE = join(CLI_ROOT, 'src', 'cli.ts')
-const TSX = join(CLI_ROOT, 'node_modules', 'tsx', 'dist', 'cli.mjs')
+const cli = useBundledCli()
 const dirs: string[] = []
 const servers: Server[] = []
 
@@ -166,7 +166,7 @@ type Run = { status: number | null; stdout: string; stderr: string }
  *  would produce the same shorter stdout, so the flake would make the real failure look like noise. */
 function run(root: string, args: string[], backendUrl?: string, extra: NodeJS.ProcessEnv = {}, grid: GridOnPath = 'runnable'): Promise<Run> {
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, [TSX, CLI_SOURCE, ...args], {
+    const child = spawn(process.execPath, [cli(), ...args], {
       cwd: CLI_ROOT,
       env: envFor(root, backendUrl, extra, grid),
     })
@@ -353,7 +353,7 @@ describe('harness grid login — a signed-out computer', () => {
       resolveComputer: () => ({ machine: { machineId: 'm_new' } }),
     })
 
-    const child = spawn(process.execPath, [TSX, CLI_SOURCE, 'grid', 'login', '--json'], {
+    const child = spawn(process.execPath, [cli(), 'grid', 'login', '--json'], {
       cwd: CLI_ROOT,
       env: envFor(root, base),
     })
@@ -581,7 +581,7 @@ describe('harness grid login — the sign-in half it inherits', () => {
       resolveComputer: () => ({ machine: { machineId: 'm_seeded' } }),
     })
 
-    const child = spawn(process.execPath, [TSX, CLI_SOURCE, 'grid', 'login', '--force', '--json'], {
+    const child = spawn(process.execPath, [cli(), 'grid', 'login', '--force', '--json'], {
       cwd: CLI_ROOT,
       env: envFor(root, base),
     })

@@ -1,0 +1,57 @@
+<?xml version="1.0"?>
+<labwc_config>
+  <core><decoration>server</decoration><gap>0</gap></core>
+  <theme><name>harness</name><cornerRadius>0</cornerRadius><keepBorder>no</keepBorder></theme>
+  <focus><followMouse>no</followMouse></focus>
+  <desktops><number>1</number><popupTime>0</popupTime></desktops>
+  <keyboard>
+    <repeatRate>35</repeatRate><repeatDelay>250</repeatDelay>
+    <!-- No default desktop shortcuts. Super+b is run-or-raise, then back to hn. -->
+    <keybind key="W-b">
+      <action name="If">
+        <query identifier="chromium*" />
+        <then><action name="ForEach"><query identifier="hn" /><then><action name="Raise" /><action name="Focus" /></then></action></then>
+        <else><action name="ForEach"><query identifier="chromium*" /><then><action name="Raise" /><action name="Focus" /></then><none><action name="Execute" command="hn-browser" /></none></action></else>
+      </action>
+    </keybind>
+    <keybind key="W-Return"><action name="ForEach"><query identifier="hn" /><then><action name="Raise" /><action name="Focus" /></then></action></keybind>
+    <keybind key="A-Tab"><action name="NextWindowImmediate" /></keybind>
+    <keybind key="W-l"><action name="Execute" command="swaylock -f -c 000000" /></keybind>
+    <keybind key="W-u">
+      <action name="Execute" command="/usr/lib/harness-os/open-updates" />
+      <action name="ForEach"><query identifier="hn" /><then><action name="Raise" /><action name="Focus" /></then></action>
+    </keybind>
+    <keybind key="W-i">
+      <action name="Execute" command="/usr/lib/harness-os/open-install" />
+      <action name="ForEach"><query identifier="hn" /><then><action name="Raise" /><action name="Focus" /></then></action>
+    </keybind>
+    <keybind key="W-w">
+      <action name="Execute" command="/usr/lib/harness-os/open-wifi" />
+      <action name="ForEach"><query identifier="hn" /><then><action name="Raise" /><action name="Focus" /></then></action>
+    </keybind>
+    <keybind key="W-n">
+      <action name="Execute" command="hn os-action new" />
+      <action name="ForEach"><query identifier="hn" /><then><action name="Raise" /><action name="Focus" /></then></action>
+    </keybind>
+    <keybind key="W-t">
+      <action name="Execute" command="hn os-action terminal" />
+      <action name="ForEach"><query identifier="hn" /><then><action name="Raise" /><action name="Focus" /></then></action>
+    </keybind>
+    <keybind key="W-m">
+      <action name="Execute" command="hn os-action connect" />
+      <action name="ForEach"><query identifier="hn" /><then><action name="Raise" /><action name="Focus" /></then></action>
+    </keybind>
+    <keybind key="XF86MonBrightnessUp"><action name="Execute" command="brightnessctl --class=backlight --min-value=1 set +5%" /></keybind>
+    <keybind key="XF86MonBrightnessDown"><action name="Execute" command="brightnessctl --class=backlight --min-value=1 set 5%-" /></keybind>
+    <keybind key="XF86KbdBrightnessUp"><action name="Execute" command="brightnessctl --class=leds --device='*::kbd_backlight' set +10%" /></keybind>
+    <keybind key="XF86KbdBrightnessDown"><action name="Execute" command="brightnessctl --class=leds --device='*::kbd_backlight' set 10%-" /></keybind>
+    <keybind key="XF86AudioRaiseVolume"><action name="Execute" command="wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%+ -l 1" /></keybind>
+    <keybind key="XF86AudioLowerVolume"><action name="Execute" command="wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%-" /></keybind>
+    <keybind key="XF86AudioMute"><action name="Execute" command="wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle" /></keybind>
+  </keyboard>
+  <mouse><context name="Root"><mousebind button="Right" action="Press"><action name="None" /></mousebind></context></mouse>
+  <windowRules>
+    <windowRule identifier="hn" serverDecoration="no" />
+    <windowRule identifier="chromium*" type="normal" serverDecoration="no"><action name="Maximize" /></windowRule>
+  </windowRules>
+</labwc_config>

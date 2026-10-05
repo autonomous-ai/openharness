@@ -1,0 +1,116 @@
+{
+  "schemaVersion": 1,
+  "reportSha256": "3df25a604e36f8722234d380ce0351e113aa461931986c6ed77096239987f5c2",
+  "suiteSha256": "ae8cfbe0c3af568f068825df8c056e34c7eaf8280359e19abb6df1634ab03362",
+  "extraction": "Only a single surrounding Markdown JSON fence is removed for offline code execution. No JSON or code body is repaired. Strict-format failures remain recorded.",
+  "cases": [
+    {
+      "id": "coding-01823b564b7e",
+      "taskId": "retry-config",
+      "arm": "summary",
+      "strictFormat": true,
+      "codeSha256": "1dc6bbe097b2983154a143af300c325dd6a257cee47dbb02ca146760483ace28",
+      "assessable": true,
+      "limitation": null
+    },
+    {
+      "id": "coding-0aab4f1b2f23",
+      "taskId": "search-focus",
+      "arm": "summary",
+      "strictFormat": false,
+      "codeSha256": "fcd4e54ee2af28251f784f928305b2964c2998b8319c5bc807a97c856e153bfd",
+      "assessable": true,
+      "limitation": null
+    },
+    {
+      "id": "coding-2386fe805c36",
+      "taskId": "export-options",
+      "arm": "excerpts",
+      "strictFormat": false,
+      "codeSha256": "2d5ba040a64d95883cb847f6307fd488e3e1b6f2e3de8f42731894b5488259a5",
+      "assessable": true,
+      "limitation": null
+    },
+    {
+      "id": "coding-3c3e3566608d",
+      "taskId": "navigation-default",
+      "arm": "excerpts",
+      "strictFormat": true,
+      "codeSha256": "06735c93383bee64a1d114ca514ec4c1edd4b2925b30678f90b7cb3d41bc3441",
+      "assessable": true,
+      "limitation": null
+    },
+    {
+      "id": "coding-4f8ac504c866",
+      "taskId": "search-focus",
+      "arm": "excerpts",
+      "strictFormat": false,
+      "codeSha256": "fcd4e54ee2af28251f784f928305b2964c2998b8319c5bc807a97c856e153bfd",
+      "assessable": true,
+      "limitation": null
+    },
+    {
+      "id": "coding-76aba95c6c16",
+      "taskId": "export-options",
+      "arm": "summary",
+      "strictFormat": false,
+      "codeSha256": "220306a1022ca6624657018478007bcf856d9d577ee9b1d4fe9f417697459d77",
+      "assessable": true,
+      "limitation": null
+    },
+    {
+      "id": "coding-80eef5fd73cd",
+      "taskId": "log-retention",
+      "arm": "excerpts",
+      "strictFormat": false,
+      "codeSha256": "2ecf6ae9cfdde2d76fc53a829f60307573e58962c48b6fe262c015b1dcd58efa",
+      "assessable": false,
+      "limitation": "The task did not specify a boolean return type; frozen assertions assume one, so this pair cannot establish task failure or success."
+    },
+    {
+      "id": "coding-860dc5243256",
+      "taskId": "retry-config",
+      "arm": "excerpts",
+      "strictFormat": false,
+      "codeSha256": "349d1641a31c08613a26b2290f237839d0cb3b75e6f53acd62f987ecfc8951ac",
+      "assessable": true,
+      "limitation": null
+    },
+    {
+      "id": "coding-9b94deb0ddb6",
+      "taskId": "file-tree-override",
+      "arm": "excerpts",
+      "strictFormat": true,
+      "codeSha256": "a77d5ece7ace877667ce3feb2e0c2f6f658829b389886426782ee54d1a991c41",
+      "assessable": true,
+      "limitation": null
+    },
+    {
+      "id": "coding-bb9161f47b4a",
+      "taskId": "file-tree-override",
+      "arm": "summary",
+      "strictFormat": true,
+      "codeSha256": "ecb28ebafa19adf3ad380396ab0d91bb9e2645ab74b92856b80e93322fdc1de9",
+      "assessable": true,
+      "limitation": null
+    },
+    {
+      "id": "coding-bedd962b7b5b",
+      "taskId": "navigation-default",
+      "arm": "summary",
+      "strictFormat": false,
+      "codeSha256": "06735c93383bee64a1d114ca514ec4c1edd4b2925b30678f90b7cb3d41bc3441",
+      "assessable": true,
+      "limitation": null
+    },
+    {
+      "id": "coding-cd8f4f5057d9",
+      "taskId": "log-retention",
+      "arm": "summary",
+      "strictFormat": false,
+      "codeSha256": "c0fbf97df815d9d879f6e934366823b806b041236ed5c8f7fb1a60b01122741a",
+      "assessable": false,
+      "limitation": "The task did not specify a boolean return type; frozen assertions assume one, so this pair cannot establish task failure or success."
+    }
+  ]
+}

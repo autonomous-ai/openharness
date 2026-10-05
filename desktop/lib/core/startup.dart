@@ -1,4 +1,3 @@
-import '../branding/brand_prefs.dart';
 import '../shared/theme/appearance_prefs_store.dart';
 import '../stats/harness_stats.dart';
 import '../terminal/terminal_font_store.dart';
@@ -26,7 +25,6 @@ Future<void> loadPersistedSettings({
   AlertSoundStore? alertSounds,
   ScreenAlertStore? screenAlerts,
   DesktopNotificationStore? desktopNotifications,
-  BrandPrefsStore? brand,
 }) async {
   // Independent stores may load together, but all must finish before runApp.
   // Font and appearance share a serialized file store; each reads its related
@@ -48,7 +46,5 @@ Future<void> loadPersistedSettings({
     (alertSounds ?? alertSoundStore).load(),
     (screenAlerts ?? screenAlertStore).load(),
     (desktopNotifications ?? desktopNotificationStore).load(),
-    // Before the first frame, so the boot splash knows whether, and which logo, to draw.
-    (brand ?? brandPrefsStore).load(),
   ]);
 }

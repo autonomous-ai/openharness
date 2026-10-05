@@ -1,0 +1,5 @@
+#!/bin/sh
+# Reuse the USB's existing installer; never interrupt an active disk operation.
+set -eu
+[ -f /etc/harness-live ] || { printf '%s\n' 'Installation is available from the Harness USB.' >&2; exit 1; }
+exec systemctl --user start harness-install.service

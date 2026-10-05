@@ -109,6 +109,7 @@ For a local production build, run `bash scripts/build-web-release.sh X.Y.Z`.
   and their waiting, cancellation, and recovery states.
 - Workspace shortcuts use **Option/Alt** in the browser: Alt-P finds harnesses,
   Alt-N starts a harness, Alt-M opens machines, and Alt-T opens a swarm.
+  Alt-Shift-A opens the companion conversation without taking New Tab's key.
   Machine connection commands and link requests use that same `@` picker,
   with connection and setup forms inside its preview pane.
   Text editing and terminal

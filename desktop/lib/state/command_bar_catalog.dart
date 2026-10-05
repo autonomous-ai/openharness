@@ -171,24 +171,6 @@ List<CommandBarAction> buildCommandBarCatalog(
       },
     ),
     CommandBarAction(
-      id: 'app:fleet',
-      kind: CommandKind.command,
-      title: 'Fleet overview',
-      detail:
-          'Every machine and its agents as a live graph, coloured by what each one needs from you. Ctrl+Shift+G.',
-      automatic: true,
-      phrases: [
-        'fleet',
-        'fleet overview',
-        'show the fleet',
-        'machines and agents',
-      ],
-      perform: (_) async {
-        app.fleetOverviewOpen.value = true;
-        return null;
-      },
-    ),
-    CommandBarAction(
       id: 'create:general',
       kind: CommandKind.create,
       title: 'Start a new harness',

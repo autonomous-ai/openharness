@@ -29,6 +29,14 @@ export interface SafeModeDisposition {
   reason: string
 }
 
+/** Thrown at the top of start-up when harnessd's master asks for safe mode: the core kept crashing. */
+export class SafeModeRequest extends Error {
+  constructor(readonly why: string) {
+    super(why === 'crash-loop' ? 'harnessd saw this core crash again and again — started in safe mode' : `harnessd asked for safe mode: ${why}`)
+    this.name = 'SafeModeRequest'
+  }
+}
+
 /**
  * Whether staying alive is the right answer for THIS failure.
  *
@@ -38,14 +46,15 @@ export interface SafeModeDisposition {
  */
 export function safeModeDisposition(
   error: unknown,
-  deps: { selfPid: number; readPid: () => number | null; isAlive: (pid: number) => boolean },
+  deps: { selfPid: number; masterPid?: number | null; readPid: () => number | null; isAlive: (pid: number) => boolean },
 ): SafeModeDisposition {
   const message = error instanceof Error ? `${error.message}` : String(error)
   if (/EADDRINUSE|address already in use/i.test(message)) {
     return { stay: false, reason: 'the control port belongs to another daemon' }
   }
   const owner = deps.readPid()
-  if (owner !== null && owner !== deps.selfPid && deps.isAlive(owner)) {
+  // Under harnessd the pid file names the master that runs this core: that daemon is this one.
+  if (owner !== null && owner !== deps.selfPid && owner !== deps.masterPid && deps.isAlive(owner)) {
     return { stay: false, reason: `another daemon (pid ${owner}) owns this machine` }
   }
   return { stay: true, reason: message || 'start-up failed' }

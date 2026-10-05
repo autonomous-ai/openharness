@@ -3,8 +3,6 @@ import { readdirSync, statSync, readFileSync } from 'fs'
 import { join } from 'path'
 import { readDshRegistry } from './scripts/lib/dshRegistry.mjs'
 import { readBuiltinBundle, readHarnessMonitorBundle, readModelManagerBundle } from './scripts/lib/modelManagerBundle.mjs'
-import { plateWorkerSource } from './scripts/lib/plateWorker.mjs'
-import { memoryWorkerSource } from './scripts/lib/memoryWorker.mjs'
 import { fileURLToPath } from 'node:url'
 const modelManagerBundle = JSON.stringify(readModelManagerBundle(fileURLToPath(new URL('../store/agents/autonomous-grid', import.meta.url))))
 const devicesBundle = JSON.stringify(readBuiltinBundle(fileURLToPath(new URL('../store/agents/devices', import.meta.url)), ['harness.json', 'AGENTS.md', 'LICENSE', 'template']))
@@ -15,9 +13,6 @@ const harnessMonitorBundle = JSON.stringify(readHarnessMonitorBundle(fileURLToPa
 const version = JSON.parse(readFileSync('package.json', 'utf8')).version
 // The bundled registry (the store/ folders and store/registry at the repo root) — see src/dsh/registry.ts.
 const dshRegistry = JSON.stringify(readDshRegistry(join('..', 'store')))
-// The plate worker, bundled on its own (src/pair/plateService.ts): harnessd starts it from this string.
-const plateWorker = await plateWorkerSource()
-const memoryWorker = await memoryWorkerSource()
 
 function getAllTsFiles(dir, fileList = []) {
   const files = readdirSync(dir)
@@ -52,8 +47,6 @@ try {
       __MODEL_MANAGER_BUNDLE__: JSON.stringify(modelManagerBundle),
       __DEVICES_BUNDLE__: JSON.stringify(devicesBundle),
       __HARNESS_MONITOR_BUNDLE__: JSON.stringify(harnessMonitorBundle),
-      __PLATE_WORKER__: JSON.stringify(plateWorker),
-      __MEMORY_WORKER__: JSON.stringify(memoryWorker),
     },
     logLevel: 'info',
   })

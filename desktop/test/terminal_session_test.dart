@@ -400,6 +400,51 @@ void main() {
     },
   );
 
+  test(
+    'cursor visibility notifications ignore local blinks and ordinary output',
+    () async {
+      await ready();
+      await session.handleBinary(
+        output(
+          0,
+          utf8.encode('prompt\x1b[?25h'),
+          keyframe: true,
+          cols: 100,
+          rows: 30,
+        ),
+      );
+      final visibility = <bool>[];
+      var sessionChanges = 0;
+      session.remoteCursorVisibility.addListener(() {
+        visibility.add(session.remoteCursorVisibility.value);
+      });
+      session.addListener(() => sessionChanges++);
+
+      expect(session.setCursorBlinkPhase(false), isTrue);
+      expect(session.setCursorBlinkPhase(false), isFalse);
+      expect(session.remoteCursorVisibility.value, isTrue);
+      await session.handleBinary(output(1, utf8.encode('output')));
+      expect(session.terminal.cursorVisibleMode, isFalse);
+      expect(visibility, isEmpty);
+      expect(session.setCursorBlinkPhase(true), isTrue);
+
+      await session.handleBinary(output(2, utf8.encode('\x1b[?25l')));
+      expect(visibility, [false]);
+      expect(session.setCursorBlinkPhase(false), isFalse);
+      expect(session.setCursorBlinkPhase(true), isFalse);
+      // Transient hide/show within one packet does not change the final state.
+      await session.handleBinary(output(3, utf8.encode('\x1b[?25h\x1b[?25l')));
+      expect(visibility, [false]);
+      await session.handleBinary(output(4, utf8.encode('\x1b[?25h')));
+      expect(visibility, [false, true]);
+      expect(
+        sessionChanges,
+        0,
+        reason: 'cursor changes must not rebuild the workspace',
+      );
+    },
+  );
+
   test('remote history keyframe survives viewport resize without circular-buffer reflow', () async {
     await ready();
     final oldStyleHistory = List.generate(

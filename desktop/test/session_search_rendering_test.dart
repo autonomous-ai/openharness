@@ -201,10 +201,10 @@ void main() {
       await tester.pump(const Duration(milliseconds: 50));
       expect(tails, [null]);
       await tester.pump(const Duration(seconds: 10));
-      expect(tails, [null], reason: 'nothing refreshes while Cmd-P is open');
-      expect(find.text('Working'), findsOneWidget);
-      // Under a minute old reads "now", not "0m".
+      expect(tails, [null], reason: 'the managed preview is not refetched');
+      // The row keeps its activity time beside the shared status mark.
       expect(find.text('now'), findsOneWidget);
+      expect(find.text('Working'), findsOneWidget);
       expect(find.text('0m'), findsNothing);
 
       final list = find.byKey(const ValueKey('session-tail:m:s7'));

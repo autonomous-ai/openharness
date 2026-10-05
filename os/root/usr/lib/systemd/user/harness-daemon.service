@@ -1,0 +1,21 @@
+[Unit]
+Description=Harness agent runtime
+ConditionPathExists=!/etc/harness-live
+
+[Service]
+Type=exec
+Environment=ADAPTER_UPDATE_DISABLE=true
+Environment=HARNESS_OS=1
+Environment=HARNESS_TUI_BIN=/usr/lib/harness/hn
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin
+Environment=npm_config_prefix=%h/.local
+Environment=BROWSER=hn-browser
+ExecStart=/usr/bin/harness start --foreground
+ExecStartPost=/usr/lib/harness-os/wait-runtime
+TimeoutStartSec=150
+Restart=on-failure
+RestartSec=2
+KillMode=process
+
+[Install]
+WantedBy=default.target

@@ -98,10 +98,11 @@ export function claudeProvider(options: { projectsDir: string; home: string }): 
       }
       return claims
     },
-    async busy(owner): Promise<boolean> {
+    async busy(owner): Promise<boolean | null> {
       const row = record(await readJson(owner.record))
       // No record: the process ended with it, so it is not mid-turn.
-      return row ? row.status !== 'idle' : false
+      if (!row) return false
+      return row.status === 'busy' ? true : row.status === 'idle' ? false : null
     },
   }
 }

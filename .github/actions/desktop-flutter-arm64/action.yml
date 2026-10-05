@@ -1,0 +1,88 @@
+name: Prepare Linux ARM64 Flutter
+description: Cache the pinned Git-installed SDK where Flutter publishes no SDK archive
+inputs:
+  version:
+    description: Exact Flutter version from release-desktop.yml
+    required: true
+  save-cache:
+    description: Save missing caches during cache preparation
+    default: 'false'
+runs:
+  using: composite
+  steps:
+    - name: Resolve the pinned SDK and cache identity
+      id: paths
+      shell: bash
+      env:
+        SDK_VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        test "$RUNNER_OS/$RUNNER_ARCH" = Linux/ARM64
+        [[ "$SDK_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+        revision="$(git ls-remote https://github.com/flutter/flutter.git \
+          "refs/tags/$SDK_VERSION" "refs/tags/$SDK_VERSION^{}" \
+          | awk 'NF == 2 { if ($2 ~ /\^\{\}$/) peeled=$1; else direct=$1 } END { print peeled ? peeled : direct }')"
+        [[ "$revision" =~ ^[0-9a-f]{40}$ ]]
+        {
+          echo "revision=$revision"
+          echo "sdk-path=$RUNNER_TOOL_CACHE/flutter/stable-$SDK_VERSION-arm64"
+          echo "sdk-key=flutter-linux-stable-$SDK_VERSION-arm64-$revision-desktop-v1"
+          echo "pub-path=$HOME/.pub-cache"
+          echo "pub-key=flutter-pub-linux-stable-$SDK_VERSION-arm64-$revision"
+        } >> "$GITHUB_OUTPUT"
+    - id: sdk
+      uses: actions/cache/restore@v4
+      with:
+        path: ${{ steps.paths.outputs.sdk-path }}
+        key: ${{ steps.paths.outputs.sdk-key }}
+    - id: pub
+      uses: actions/cache/restore@v4
+      with:
+        path: ${{ steps.paths.outputs.pub-path }}
+        key: ${{ steps.paths.outputs.pub-key }}-${{ hashFiles('**/pubspec.lock') }}
+    - name: Install the exact SDK from Git when absent
+      shell: bash
+      env:
+        SDK_ROOT: ${{ steps.paths.outputs.sdk-path }}/flutter
+        SDK_VERSION: ${{ inputs.version }}
+        SDK_REVISION: ${{ steps.paths.outputs.revision }}
+        SDK_PUB_CACHE: ${{ steps.paths.outputs.pub-path }}
+      run: |
+        set -euo pipefail
+        if [[ ! -x "$SDK_ROOT/bin/flutter" ]]; then
+          git clone --depth 1 --branch "$SDK_VERSION" https://github.com/flutter/flutter.git "$SDK_ROOT"
+        fi
+        test "$(git -C "$SDK_ROOT" rev-parse HEAD)" = "$SDK_REVISION"
+        {
+          echo "FLUTTER_ROOT=$SDK_ROOT"
+          echo "PUB_CACHE=$SDK_PUB_CACHE"
+        } >> "$GITHUB_ENV"
+        {
+          echo "$SDK_ROOT/bin"
+          echo "$SDK_ROOT/bin/cache/dart-sdk/bin"
+          echo "$SDK_PUB_CACHE/bin"
+        } >> "$GITHUB_PATH"
+    - name: Verify the toolchain and prepare Linux dependencies
+      shell: bash
+      working-directory: desktop
+      env:
+        SDK_VERSION: ${{ inputs.version }}
+        SDK_REVISION: ${{ steps.paths.outputs.revision }}
+      run: |
+        set -euo pipefail
+        # Bootstrap the native Dart SDK before reading machine-formatted output.
+        flutter --version
+        flutter --version --machine | jq -e --arg version "$SDK_VERSION" --arg revision "$SDK_REVISION" \
+          '.frameworkVersion == $version and .frameworkRevision == $revision'
+        flutter precache --linux
+        flutter pub get
+    - uses: actions/cache/save@v4
+      if: inputs.save-cache == 'true' && steps.sdk.outputs.cache-hit != 'true'
+      with:
+        path: ${{ steps.paths.outputs.sdk-path }}
+        key: ${{ steps.paths.outputs.sdk-key }}
+    - uses: actions/cache/save@v4
+      if: inputs.save-cache == 'true' && steps.pub.outputs.cache-hit != 'true'
+      with:
+        path: ${{ steps.paths.outputs.pub-path }}
+        key: ${{ steps.paths.outputs.pub-key }}-${{ hashFiles('**/pubspec.lock') }}

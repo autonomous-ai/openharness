@@ -78,6 +78,72 @@ Agent _agent(String id, String name, Duration ago) => Agent(
 
 void main() {
   test(
+    'a fresh tab waits for a newly discovered terminal conversation',
+    () async {
+      final connection = SearchConnection(
+        {},
+        replies: [
+          {'ready': false, 'hits': []},
+          {'ready': false, 'hits': []},
+          {
+            'ready': true,
+            'hits': [
+              _external(
+                'new-terminal',
+                'New terminal conversation',
+                Duration.zero,
+                open: true,
+                openIn: 'terminal',
+              ),
+            ],
+          },
+        ],
+      );
+      final app = createApp(
+        connected: true,
+        connectionForTest: (_) => connection,
+      );
+      addTearDown(app.dispose);
+      final sessions = WelcomeSessions(app, now: () => _now);
+      addTearDown(sessions.dispose);
+
+      await sessions.load();
+
+      expect(sessions.rows.single.external?.sessionId, 'new-terminal');
+      expect(connection.asked, ['', '', '']);
+      expect(sessions.loading, isFalse);
+    },
+  );
+
+  test(
+    'a failed discovery retains cached conversations without retrying',
+    () async {
+      final connection = SearchConnection(
+        {},
+        replies: [
+          {
+            'ready': false,
+            'discoveryError': true,
+            'hits': [_external('known', 'Known conversation', Duration.zero)],
+          },
+        ],
+      );
+      final app = createApp(
+        connected: true,
+        connectionForTest: (_) => connection,
+      );
+      addTearDown(app.dispose);
+      final sessions = WelcomeSessions(app, now: () => _now);
+      addTearDown(sessions.dispose);
+
+      await sessions.load();
+
+      expect(sessions.rows.single.external?.sessionId, 'known');
+      expect(connection.asked, ['']);
+    },
+  );
+
+  test(
     'discovered sessions never opened by the user stay out of recents',
     () async {
       final (:sessions, connection: _) = _setup();
@@ -107,34 +173,33 @@ void main() {
     },
   );
 
-  test(
-    'a background conversation update does not count as a recent visit',
-    () async {
-      final (:sessions, connection: _) = _setup();
-      sessions.app.machineStates['m']!.agents = [
-        Agent(
-          id: 'old',
-          name: 'Last visited four days ago',
-          engine: 'codex',
-          terminalAvailable: true,
-          lastOpenedAt: _now.subtract(const Duration(days: 4)),
-          lastActivityAt: _now,
-        ),
-        _agent(
-          'recent',
-          'Last visited five minutes ago',
-          const Duration(minutes: 5),
-        ),
-      ];
+  test('conversation activity ranks ahead of a more recent visit', () async {
+    final (:sessions, connection: _) = _setup();
+    sessions.app.machineStates['m']!.agents = [
+      Agent(
+        id: 'old',
+        name: 'Last visited four days ago',
+        engine: 'codex',
+        terminalAvailable: true,
+        lastOpenedAt: _now.subtract(const Duration(days: 4)),
+        lastActivityAt: _now,
+      ),
+      _agent(
+        'recent',
+        'Last visited five minutes ago',
+        const Duration(minutes: 5),
+      ),
+    ];
 
-      await sessions.load();
+    await sessions.load();
 
-      expect(
-        sessions.rows.map((row) => row.external?.sessionId ?? row.agentId),
-        ['recent', 'e-nfc', 'old', 'e-old'],
-      );
-    },
-  );
+    expect(sessions.rows.map((row) => row.external?.sessionId ?? row.agentId), [
+      'old',
+      'recent',
+      'e-nfc',
+      'e-old',
+    ]);
+  });
 
   test('discovery alone does not block visit history arriving later', () async {
     final connection = SearchConnection({'': []});
@@ -166,7 +231,25 @@ void main() {
     expect(sessions.rows.map((row) => row.agentId), ['visited']);
   });
 
-  testWidgets('the welcome age shows the visit, never background activity', (
+  test(
+    'opening older harnesses does not crowd out a newer conversation',
+    () async {
+      final (:sessions, connection: _) = _setup();
+      sessions.app.machineStates['m']!.agents = [
+        for (var i = 0; i < 6; i++)
+          _agent(
+            'old-$i',
+            'Older work $i',
+            const Duration(days: 1),
+          ).copyWith(lastOpenedAt: _now),
+      ];
+      await sessions.load();
+      expect(sessions.rows.first.external?.sessionId, 'e-nfc');
+      expect(sessions.rows, hasLength(4));
+    },
+  );
+
+  testWidgets('the welcome age shows conversation activity, never the visit', (
     tester,
   ) async {
     final connection = SearchConnection({'': []});
@@ -175,7 +258,7 @@ void main() {
       connectionForTest: (_) => connection,
     );
     addTearDown(app.dispose);
-    final now = DateTime.now();
+    final now = tester.binding.clock.now();
     app.machineStates['m']!.agents = [
       Agent(
         id: 'old',
@@ -196,15 +279,28 @@ void main() {
     app.rememberOpenedHarness('m', 'legacy');
     await tester.pumpWidget(
       MaterialApp(
-        home: WorkspaceWelcome(onCommand: (_) {}, app: app, onOpen: (_) {}),
+        home: WorkspaceWelcome(
+          onCommand: (_) {},
+          app: app,
+          onOpen: (_) {},
+          now: tester.binding.clock.now,
+          composerBuilder: (recents) => recents ?? const SizedBox(),
+        ),
       ),
     );
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 50));
 
-    expect(find.text('4d'), findsOneWidget);
+    expect(find.text('4d'), findsNothing);
     expect(find.text('Previously opened on an older daemon'), findsOneWidget);
+    expect(find.text('now'), findsNWidgets(2));
+    final oldRow = find.text('Old conversation with new background activity');
+    final before = tester.getTopLeft(oldRow);
+    await tester.pump(const Duration(minutes: 1));
     expect(find.text('now'), findsNothing);
+    expect(find.text('1m'), findsNWidgets(2));
+    expect(tester.getTopLeft(oldRow), before);
+    await tester.pumpWidget(const SizedBox());
   });
 
   test('offers harnesses and conversations Harness did not start, latest first, never one open elsewhere', () async {
@@ -476,10 +572,9 @@ void main() {
     await pumpEventQueue();
     expect(connection.asked, ['']);
     expect(
-      sessions.lastUsedAt(sessions.rows.first),
+      sessions.rows.first.lastActivityAt,
       _now.subtract(const Duration(minutes: 5)),
-      reason:
-          'the displayed age stays with the same visit snapshot as the order',
+      reason: 'activity changes do not reorder the open list',
     );
   });
 }

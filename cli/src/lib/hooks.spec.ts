@@ -602,37 +602,3 @@ describe('Hermes hook allowlist', () => {
     expect(new Set(ours.map((a) => a.event)).size).toBe(ours.length)
   })
 })
-
-// The opt-in destructive-action gate hook (first written by Fred Nix in the nixfred fork).
-describe('Claude gate hook (harness gate install)', () => {
-  let home = ''
-  const settingsFile = () => join(home, '.claude', 'settings.json')
-  const read = () => JSON.parse(readFileSync(settingsFile(), 'utf8')) as { hooks: Record<string, Array<{ matcher?: string; hooks: Array<{ command: string }> }>> }
-  beforeEach(() => { home = mkdtempSync(join(tmpdir(), 'adapter-claude-gate-')); vi.stubEnv('HOME', home) })
-  afterEach(() => { vi.unstubAllEnvs(); rmSync(home, { recursive: true, force: true }) })
-
-  it('installs PreToolUse beside a foreign one, reports unchanged, and uninstalls only its own block', async () => {
-    mkdirSync(join(home, '.claude'), { recursive: true })
-    writeFileSync(settingsFile(), JSON.stringify({ hooks: { PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: 'my-own-guard' }] }] } }))
-    const { installGateHook, uninstallGateHook, gateHookInstalled } = await loadHooks()
-    expect(gateHookInstalled()).toBe(false)
-    expect(installGateHook(18473)).toBe('installed')
-    expect(installGateHook(18473)).toBe('unchanged')
-    expect(gateHookInstalled()).toBe(true)
-    const blocks = read().hooks.PreToolUse
-    expect(blocks.map((b) => b.hooks[0]!.command)).toEqual(['my-own-guard', expect.stringContaining('notify.mjs')])
-    expect(blocks[1]).toMatchObject({ matcher: 'Bash|Write|Edit|MultiEdit|NotebookEdit' })
-    expect(uninstallGateHook()).toBe('removed')
-    expect(read().hooks.PreToolUse.map((b) => b.hooks[0]!.command)).toEqual(['my-own-guard'])
-    expect(uninstallGateHook()).toBe('absent')
-  })
-
-  it('keeps an installed gate on the session hooks\' port, and never adds one by itself', async () => {
-    const { installGateHook, installSessionHooks } = await loadHooks()
-    installSessionHooks(18473)
-    expect(read().hooks.PreToolUse).toBeUndefined()
-    installGateHook(18473)
-    installSessionHooks(18599)
-    expect(read().hooks.PreToolUse[0]!.hooks[0]!.command).toContain('--port 18599')
-  })
-})

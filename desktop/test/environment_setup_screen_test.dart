@@ -210,31 +210,54 @@ void main() {
     );
   }
 
-  testWidgets('Retry after a launch check failure only checks the computer', (
-    tester,
-  ) async {
-    final provisioner = SetupProvisioner();
-    final app = _app(provisioner)
-      ..environmentReadiness = setupReview.copyWith(
-        phase: EnvironmentSetupPhase.failed,
-        mode: EnvironmentSetupMode.automatic,
-        failure: const EnvironmentFailure(
-          title: 'Checking this computer took too long',
-          detail: 'A required tool did not respond.',
+  testWidgets(
+    'Retry after a launch check failure checks, then installs unasked',
+    (tester) async {
+      final provisioner = SetupProvisioner();
+      final app = _app(provisioner)
+        ..environmentReadiness = setupReview.copyWith(
+          phase: EnvironmentSetupPhase.failed,
+          mode: EnvironmentSetupMode.automatic,
+          failure: const EnvironmentFailure(
+            title: 'Checking this computer took too long',
+            detail: 'A required tool did not respond.',
+          ),
+        );
+      await _mount(tester, app);
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pump();
+      expect(provisioner.attempts, hasLength(1));
+      expect(provisioner.attempts.single.install, isFalse);
+      provisioner.attempts.single.finish(setupReview);
+      await tester.pump();
+      // Everything on the plan installs in-app, so the install follows the
+      // check without stopping on the review and its Install button.
+      expect(provisioner.attempts, hasLength(2));
+      expect(provisioner.attempts.last.install, isTrue);
+      expect(find.text('Install 2 tools'), findsNothing);
+      expect(find.text('Preparing this computer'), findsOneWidget);
+      provisioner.attempts.last.finish(
+        const EnvironmentReadiness(
+          steps: {
+            EnvironmentStep.clipboard: EnvironmentStepStatus.notApplicable,
+            EnvironmentStep.tmux: EnvironmentStepStatus.ready,
+            EnvironmentStep.harness: EnvironmentStepStatus.ready,
+          },
+          phase: EnvironmentSetupPhase.ready,
         ),
       );
-    await _mount(tester, app);
-    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
-    await tester.pump();
-    expect(provisioner.attempts, hasLength(1));
-    expect(provisioner.attempts.single.install, isFalse);
-    provisioner.attempts.single.finish(setupReview);
-    await tester.pump();
-    expect(find.text('Install 2 tools').hitTestable(), findsOneWidget);
-    expect(provisioner.attempts, hasLength(1));
-    await tester.pumpWidget(const SizedBox());
-    app.dispose();
-  });
+      await tester.pump();
+      await tester.pump();
+      // Past setup: the wizard has handed off to the rest of bootstrap.
+      expect(app.status, isNot(AppStatus.preparingEnvironment));
+      expect(provisioner.attempts.map((attempt) => attempt.install), [
+        false,
+        true,
+      ]);
+      await tester.pumpWidget(const SizedBox());
+      app.dispose();
+    },
+  );
 
   testWidgets('manual setup keeps keyboard focus and never starts an install', (
     tester,

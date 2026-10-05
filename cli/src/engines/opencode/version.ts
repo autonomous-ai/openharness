@@ -10,8 +10,8 @@
  * arrived that way, under a running daemon. The file's size and mtime key the cache, so the next
  * launch after an update asks again and every other launch costs a `stat`.
  *
- * Unknown (not installed, or an answer that is not a version) is `null`, and every caller treats it as
- * v1 — the behaviour it had before this module existed.
+ * Unknown (not installed, or an answer that is not a version) is `null`. Launch flags retain their
+ * v1 fallback; the hook installer waits for a confirmed v1 before writing the incompatible v1 plugin.
  */
 
 import { execFileSync } from 'node:child_process'

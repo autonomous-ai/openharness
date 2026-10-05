@@ -1,0 +1,454 @@
+name: Harness OS
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_run_id:
+        description: 'Optional: test an existing image artifact from this workflow run ID'
+        required: false
+        type: string
+      publish_run_id:
+        description: 'Publish a previously passed and visually reviewed machine-test run; image_run_id may identify its image build'
+        required: false
+        type: string
+      dsh_run_id:
+        description: 'Optional for publication: successful DSH machine run for the same image'
+        required: false
+        type: string
+      workloads:
+        description: 'Opt in to real free OpenCode model calls, four project builds and browser/API acceptance in the disposable BIOS VM'
+        required: false
+        default: false
+        type: boolean
+      dsh:
+        description: 'Opt in to three free-model DSH agents and shared Web/Game Viewer acceptance in the disposable BIOS VM'
+        required: false
+        default: false
+        type: boolean
+      workload_seed_run_id:
+        description: 'Reuse generated projects and rerun acceptance; also enable workloads to ask the game agent to repair its layout'
+        required: false
+        type: string
+      memory_mib:
+        description: 'VM RAM; 1024 exercises constrained machines, 6144 requires USB copy-to-RAM'
+        required: false
+        default: '2048'
+        type: choice
+        options: ['2048', '1024', '4096', '6144']
+      live_transport:
+        description: 'Boot the ISO as a virtual optical disc or a writable USB with a private overlay'
+        required: false
+        default: 'cdrom'
+        type: choice
+        options: ['cdrom', 'usb']
+      development_update:
+        description: 'Build a small Harness package; test offline apply, failure, rollback and reboot using image_run_id'
+        required: false
+        default: false
+        type: boolean
+      checks:
+        description: 'Image journey, browser focus, lock/suspend, Wi-Fi/audio, or offline hardware installation; image_run_id reuses an image'
+        required: false
+        default: image
+        type: choice
+        options: [image, browser, session, essentials, hardware]
+  push:
+    branches: ['os/**']
+    paths: ['os/**', 'tui/**', 'cli/**', '.github/workflows/os.yml']
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: programmer-os-${{ github.ref }}-${{ inputs.memory_mib || '2048' }}-${{ inputs.live_transport || 'cdrom' }}-${{ inputs.development_update && 'update' || inputs.checks == 'browser' && 'browser' || inputs.checks == 'session' && 'session' || inputs.checks == 'essentials' && 'essentials' || inputs.checks == 'hardware' && 'hardware' || inputs.dsh && 'dsh' || inputs.workloads && 'workloads' || 'image' }}
+  cancel-in-progress: false
+
+jobs:
+  image:
+    if: ${{ !inputs.image_run_id && !inputs.publish_run_id && !inputs.development_update }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Record start and capacity
+        run: |
+          date -u
+          df -h .
+          free -h
+      - name: Validate installer safety and image configuration
+        run: |
+          make -C os check
+          go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/os.yml
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22.23.2'
+          cache: npm
+          cache-dependency-path: cli/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          workspaces: tui
+          shared-key: tui-x86_64-unknown-linux-musl
+          cache-bin: false
+      - name: Prepare native build tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y musl-tools tmux cryptsetup-bin btrfs-progs
+      - name: Check encrypted cleanup with real device readers and stalled udev
+        run: |
+          # Fail early on real cleanup semantics, before compressing an ISO.
+          # The fixture owns a temporary file/loop device, never a host disk.
+          sudo python3 os/tests/installer-cleanup-native.py --output os/test-results/cleanup-host
+      - name: Build Harness from the exact OS source
+        run: |
+          make -C os runtime
+      - name: Validate hn session behavior and native terminal lifecycle
+        run: |
+          npm --prefix cli run typecheck
+          cd cli
+          timeout 3m npx vitest run src/lib/engineInstall.spec.ts src/lib/engineLaunch.spec.ts --maxWorkers=2
+          cd ..
+          timeout 8m cargo test --manifest-path tui/Cargo.toml --locked --release --target x86_64-unknown-linux-musl
+          python3 scripts/validate-tui-native.py tui/target/x86_64-unknown-linux-musl/release/harness-tui
+      - name: Build offline BIOS and UEFI image
+        run: |
+          docker run --rm --privileged \
+            -v "$PWD:/src" -w /src/os \
+            -e SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)" \
+            -e HARNESS_OS_SOURCE_SHA="$(git rev-parse HEAD)" \
+            -e HARNESS_OS_RUNTIME_DIR=/src/os/work/runtime \
+            archlinux:base-devel \
+            bash -c 'set -euo pipefail; pacman -Syu --noconfirm archiso python git; bash build.sh'
+      - name: Inspect image artifact
+        run: |
+          cd os/dist
+          sha256sum -c ./*.sha256
+          cat manifest.json
+          ls -lh ./*.iso
+      - name: Retain image, checksums, package inventory and build manifest
+        uses: actions/upload-artifact@v6
+        with:
+          name: programmer-os-x86_64
+          path: os/dist/
+          retention-days: 14
+          compression-level: 0
+      - name: Retain build diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: programmer-os-build-diagnostics
+          path: |
+            .harness/validation/
+            os/test-results/cleanup-host/receipt.json
+            os/work/profile/profiledef.sh
+            os/work/profile/pacman.conf
+            os/work/archiso/x86_64/airootfs/var/log/pacman.log
+            os/work/hardware-build/root/var/lib/dkms/**/make.log
+            os/work/profile/airootfs/usr/share/harness-os/hardware/broadcom/manifest.json
+          retention-days: 7
+
+  machine:
+    needs: image
+    if: ${{ always() && !inputs.publish_run_id && !inputs.development_update && inputs.checks != 'essentials' && inputs.checks != 'hardware' && (needs.image.result == 'success' || inputs.image_run_id != '') && !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 65
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - firmware: bios
+            encryption: ''
+            agents: '--agents'
+            cpu: '--cpu Nehalem'
+          - firmware: uefi
+            encryption: '--encrypt'
+            agents: ''
+            cpu: ''
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v6
+        with:
+          name: programmer-os-x86_64
+          path: os/dist
+          run-id: ${{ inputs.image_run_id || github.run_id }}
+          github-token: ${{ github.token }}
+      - name: Install VM test tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y qemu-system-x86 qemu-utils ovmf python3-pil tesseract-ocr
+          if test -e /dev/kvm; then sudo chmod a+rw /dev/kvm; fi
+      - name: Install the disposable browser observer
+        if: ${{ inputs.checks == 'browser' }}
+        run: sudo apt-get install -y wlrctl
+      - name: Check the focused session test and workflow
+        if: ${{ inputs.checks == 'session' || inputs.checks == 'browser' }}
+        run: |
+          make -C os check
+          go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/os.yml
+      - name: Restore prior generated workload projects
+        if: ${{ inputs.workload_seed_run_id != '' && matrix.firmware == 'bios' }}
+        uses: actions/download-artifact@v6
+        with:
+          name: programmer-os-vm-bios
+          path: os/work/workload-seed
+          run-id: ${{ inputs.workload_seed_run_id }}
+          github-token: ${{ github.token }}
+      - name: Boot, operate, install and reboot the real image
+        if: ${{ inputs.checks != 'session' && inputs.checks != 'browser' }}
+        env:
+          OS_WORKLOAD_SOURCE_RUN: ${{ inputs.workload_seed_run_id }}
+          OS_MEMORY_MIB: ${{ inputs.memory_mib || '2048' }}
+          OS_LIVE_TRANSPORT: ${{ inputs.live_transport || 'cdrom' }}
+        run: |
+          live_mode=()
+          if [[ "$OS_LIVE_TRANSPORT" == usb ]]; then
+            case "$OS_MEMORY_MIB" in
+              1024) live_mode=(--expect-live-mode media) ;;
+              6144) live_mode=(--expect-live-mode ram) ;;
+            esac
+          fi
+          python3 os/tests/vm.py --iso os/dist/*.iso --memory "$OS_MEMORY_MIB" --live-transport "$OS_LIVE_TRANSPORT" "${live_mode[@]}" --firmware '${{ matrix.firmware }}' ${{ matrix.encryption }} ${{ matrix.agents }} ${{ matrix.cpu }} ${{ (inputs.workloads || inputs.workload_seed_run_id != '') && matrix.firmware == 'bios' && '--workloads' || '' }} ${{ inputs.dsh && matrix.firmware == 'bios' && '--dsh' || '' }} ${{ inputs.workload_seed_run_id != '' && matrix.firmware == 'bios' && '--workload-seed os/work/workload-seed' || '' }} ${{ inputs.workloads && inputs.workload_seed_run_id != '' && matrix.firmware == 'bios' && '--workload-repair-game' || '' }}
+      - name: Exercise password lock and actual suspend/resume
+        if: ${{ inputs.checks == 'session' }}
+        run: python3 os/tests/session_vm.py --iso os/dist/*.iso --firmware '${{ matrix.firmware }}' --session-file os/root/usr/lib/harness-os/session --theme-directory os/root/usr/share/plymouth/themes/harness
+      - name: Exercise installed browser focus and physical keyboard routing
+        if: ${{ inputs.checks == 'browser' }}
+        env:
+          OS_MEMORY_MIB: ${{ inputs.memory_mib || '2048' }}
+        run: python3 os/tests/browser_vm.py --iso os/dist/*.iso --firmware '${{ matrix.firmware }}' --memory-mib "$OS_MEMORY_MIB" --wlrctl /usr/bin/wlrctl --browser-script os/root/usr/bin/hn-browser --compositor-config os/root/usr/share/harness-os/labwc/rc.xml
+      - name: Show machine failure diagnostics
+        if: failure()
+        run: |
+          find os/test-results -type f \( -name receipt.json -o -name qemu.log -o -name guest-diagnostics.log \) -exec tail -c 14000 {} \;
+      - name: Retain screenshots, measurements and serial diagnostics
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: programmer-os-vm-${{ matrix.firmware }}
+          path: |
+            os/test-results/**/*.png
+            os/test-results/**/*.log
+            os/test-results/**/*.txt
+            os/test-results/**/*.json
+            os/test-results/**/*.jsonl
+            os/test-results/**/workloads/**
+            os/test-results/**/dsh/**
+          retention-days: 14
+
+  hardware:
+    needs: image
+    if: ${{ always() && !inputs.publish_run_id && !inputs.development_update && (needs.image.result == 'success' || inputs.checks == 'hardware' && inputs.image_run_id != '') && !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v6
+        with:
+          name: programmer-os-x86_64
+          path: os/dist
+          run-id: ${{ inputs.image_run_id || github.run_id }}
+          github-token: ${{ github.token }}
+      - name: Check the fixture and install VM tools
+        run: |
+          python3 -m py_compile os/tests/hardware_install_guest.py os/tests/hardware_install_vm.py
+          go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/os.yml
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils ovmf python3-pil tesseract-ocr
+          sudo chmod a+rw /dev/kvm
+      - name: Install the selected driver offline and reboot with 1 GiB
+        run: python3 os/tests/hardware_install_vm.py --iso os/dist/*.iso
+      - name: Retain hardware installation and rebuild evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: harness-os-hardware
+          path: |
+            os/test-results/hardware-install/
+            !os/test-results/hardware-install/*.qcow2
+            !os/test-results/hardware-install/OVMF_VARS.fd
+          retention-days: 14
+          compression-level: 0
+
+  nvidia:
+    needs: image
+    if: ${{ always() && !inputs.publish_run_id && !inputs.development_update && (needs.image.result == 'success' || inputs.checks == 'hardware' && inputs.image_run_id != '') && !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v6
+        with:
+          name: programmer-os-x86_64
+          path: os/dist
+          run-id: ${{ inputs.image_run_id || github.run_id }}
+          github-token: ${{ github.token }}
+      - name: Check the fixture and install VM tools
+        run: |
+          python3 -m py_compile os/tests/nvidia_install_guest.py os/tests/nvidia_install_vm.py
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils ovmf python3-pil tesseract-ocr
+          sudo chmod a+rw /dev/kvm
+      - name: Install the selected NVIDIA driver offline and reboot encrypted
+        run: python3 os/tests/nvidia_install_vm.py --iso os/dist/*.iso
+      - name: Retain exact-image NVIDIA installation evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: harness-os-nvidia-install
+          path: |
+            os/test-results/nvidia-install/
+            !os/test-results/nvidia-install/*.qcow2
+            !os/test-results/nvidia-install/OVMF_VARS.fd
+          retention-days: 14
+          compression-level: 0
+
+  essentials:
+    needs: image
+    if: ${{ always() && inputs.checks == 'essentials' && !inputs.publish_run_id && !inputs.development_update && (needs.image.result == 'success' || inputs.image_run_id != '') && !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v6
+        with:
+          name: programmer-os-x86_64
+          path: os/dist
+          run-id: ${{ inputs.image_run_id || github.run_id }}
+          github-token: ${{ github.token }}
+      - name: Validate test and workflow
+        run: |
+          make -C os check
+          go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/os.yml
+      - name: Install VM test tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y qemu-system-x86 qemu-utils ovmf python3-pil tesseract-ocr
+          if test -e /dev/kvm; then sudo chmod a+rw /dev/kvm; fi
+      - name: Exercise Wi-Fi and audio in the real image
+        run: python3 os/tests/essentials_vm.py --iso os/dist/*.iso
+      - name: Retain hardware plumbing evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: harness-os-essentials
+          path: |
+            os/test-results/essentials/*.json
+            os/test-results/essentials/*.txt
+            os/test-results/essentials/*.log
+            os/test-results/essentials/*.png
+            os/test-results/essentials/*.wav
+          retention-days: 14
+
+  development-update:
+    if: ${{ inputs.development_update && !inputs.publish_run_id }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Check package and updater contracts
+        env:
+          OS_IMAGE_RUN: ${{ inputs.image_run_id }}
+        run: |
+          test -n "$OS_IMAGE_RUN"
+          date -u
+          df -h .
+          make -C os check
+          go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/os.yml
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22.23.2'
+          cache: npm
+          cache-dependency-path: cli/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          workspaces: tui
+          shared-key: tui-x86_64-unknown-linux-musl
+          cache-bin: false
+      - uses: actions/download-artifact@v6
+        with:
+          name: programmer-os-x86_64
+          path: os/dist
+          run-id: ${{ inputs.image_run_id }}
+          github-token: ${{ github.token }}
+      - name: Build the small package from this source
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y musl-tools qemu-system-x86 qemu-utils ovmf python3-pil tesseract-ocr
+          if test -e /dev/kvm; then sudo chmod a+rw /dev/kvm; fi
+          make -C os runtime
+          python3 os/tools/build-package.py --runtime os/work/runtime --output os/work/development-update --development
+          python3 os/tests/build-update-fixture.py
+      - name: Exercise apply, rollback, running work and encrypted reboot
+        run: python3 os/tests/update_vm.py --iso os/dist/*.iso --bundle os/work/development-update --fast-fixture os/work/fast-update-fixture
+      - name: Show update failure diagnostics
+        if: failure()
+        run: |
+          find os/test-results/runtime-update -type f \( -name receipt.json -o -name qemu.log -o -name update.log -o -name serial.log \) -exec tail -c 10000 {} \;
+      - name: Retain the package and exact update evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: harness-development-update
+          path: |
+            os/work/development-update/
+            os/test-results/runtime-update/*.json
+            os/test-results/runtime-update/*.jsonl
+            os/test-results/runtime-update/*.log
+            os/test-results/runtime-update/*.txt
+            os/test-results/runtime-update/*.png
+          retention-days: 14
+          compression-level: 0
+
+  publish:
+    if: ${{ inputs.publish_run_id != '' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v6
+        with:
+          name: programmer-os-x86_64
+          path: os/release-input/image
+          run-id: ${{ inputs.image_run_id || inputs.publish_run_id }}
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v6
+        with:
+          pattern: programmer-os-vm-*
+          path: os/release-input/machines
+          run-id: ${{ inputs.publish_run_id }}
+          github-token: ${{ github.token }}
+      - name: Include separately validated DSH examples
+        if: ${{ inputs.dsh_run_id != '' }}
+        uses: actions/download-artifact@v6
+        with:
+          pattern: programmer-os-vm-*
+          path: os/release-input/dsh-machines
+          run-id: ${{ inputs.dsh_run_id }}
+          github-token: ${{ github.token }}
+      - name: Verify prior evidence, publish preview and verify public downloads
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OS_TEST_RUN: ${{ inputs.publish_run_id }}
+          OS_IMAGE_RUN: ${{ inputs.image_run_id || inputs.publish_run_id }}
+          OS_DSH_RUN: ${{ inputs.dsh_run_id }}
+        run: python3 os/tools/publish.py --input os/release-input --tests "$OS_TEST_RUN" --image "$OS_IMAGE_RUN" --dsh "${OS_DSH_RUN:-0}" --repo "$GITHUB_REPOSITORY"
+      - name: Retain publication receipt
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: programmer-os-publication
+          path: os/release-input/publication.json
+          retention-days: 30

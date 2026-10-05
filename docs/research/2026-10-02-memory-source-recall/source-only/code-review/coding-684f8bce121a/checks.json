@@ -1,0 +1,1 @@
+{"function": "focusAfter", "checks": [{"args": ["results", "search_completed"], "expected": "search"}, {"args": ["search", "search_completed"], "expected": "search"}, {"args": ["toolbar", "unrelated"], "expected": "toolbar"}]}

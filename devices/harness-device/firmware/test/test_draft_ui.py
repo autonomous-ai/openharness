@@ -48,6 +48,10 @@ static bool draft_emit(const ht_draft_command_t *c,void *ctx){(void)c;(void)ctx;
 '''
 code += defines('UI_FONT', source=source)
 code += defines('FACE_CX', source=source)
+# The production helpers are skin-aware; this harness has no Focus skin, so they are the mono calls.
+code += '''static int ui_rows(const char *t,const ht_font_t *f,int w){return ht_text_rows(t,f,w);}
+static bool ui_can_display(const char *t,const ht_font_t *f,int w,int l){return ht_can_display(t,f,w,l);}
+'''
 for name in ['copy','question_rows','draft_page','ui_voice_draft','ui_draft_state']:
     code+=function(name)
 code+=r'''

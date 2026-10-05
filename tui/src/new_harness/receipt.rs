@@ -8,6 +8,7 @@ pub(crate) struct Creation {
     pub id: String,
     pub machine: String,
     pub session: u32,
+    pub target: Option<crate::input::LaunchTarget>,
 }
 
 #[derive(Debug, PartialEq)]

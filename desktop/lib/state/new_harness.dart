@@ -750,6 +750,24 @@ class NewHarnessController extends ChangeNotifier {
         : '$name · new from ${_refName(currentBranchRef(_gitProject)) ?? 'HEAD'}';
   }
 
+  /// A new worktree names its base instead of implying it opens that branch.
+  String get compactBranchLabel =>
+      worktree &&
+          worktreePlan?.kind == WorktreeStart.newBranch &&
+          _branchName == null
+      ? 'From $branchLabel'
+      : branchRowLabel.split(' · ').first;
+
+  String get branchTooltip {
+    final plan = worktreePlan;
+    if (worktree && plan?.kind == WorktreeStart.newBranch) {
+      return 'New branch from ${_refName(plan!.base) ?? 'HEAD'} in a separate folder';
+    }
+    if (opensWorktree) return 'Open $branchLabel in its existing worktree';
+    if (worktree) return 'Open $branchLabel in a separate folder';
+    return 'Use $branchRowLabel in the project folder';
+  }
+
   /// Start goes into a worktree that already exists.
   bool get opensWorktree => worktree
       ? worktreePlan?.kind == WorktreeStart.openWorktree
@@ -1062,7 +1080,7 @@ class NewHarnessController extends ChangeNotifier {
   bool _profileChosen = false;
   String? get profileLabel =>
       _base == 'codex' && (_profileChosen || _profile != null)
-      ? _profile?.label ?? 'Default'
+      ? _profile?.label ?? (_desktopChoices ? 'Default account' : 'Default')
       : null;
 
   NewHarnessDraft get draft => NewHarnessDraft(

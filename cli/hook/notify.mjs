@@ -79,9 +79,6 @@ function argValue(name, fallback) {
   return fallback
 }
 
-// Set by the claude PreToolUse gate branch; written to stdout at exit (see the finally block).
-let gateOutput = null
-
 function argEngine() {
   const i = process.argv.indexOf('--engine')
   const value = i !== -1 ? process.argv[i + 1] : ''
@@ -236,35 +233,6 @@ function readStdin() {
     process.stdin.on('error', () => resolve(data))
     // Safety: if stdin never ends, don't hang.
     setTimeout(() => resolve(data), 1000)
-  })
-}
-
-// Like post(), but resolves the parsed JSON reply (or null). Used where the daemon's answer matters:
-// the destructive-action gate hands a permissionDecision back through PreToolUse.
-function postJson(port, path, body) {
-  return new Promise((resolve) => {
-    const payload = JSON.stringify(body)
-    const credential = readHookCredential()
-    if (!credential) { resolve(null); return }
-    const req = http.request(
-      {
-        host: '127.0.0.1', port, path, method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload), 'X-Harness-Hook-Token': credential },
-        timeout: Math.max(1, Math.min(1500, remainingBudget())),
-      },
-      (res) => {
-        let text = ''
-        res.setEncoding('utf8')
-        res.on('data', (chunk) => { if (text.length < 65536) text += chunk })
-        res.on('end', () => {
-          if (!((res.statusCode || 0) >= 200 && (res.statusCode || 0) < 300)) { resolve(null); return }
-          try { resolve(JSON.parse(text)) } catch { resolve(null) }
-        })
-      },
-    )
-    req.on('error', () => resolve(null))
-    req.on('timeout', () => { req.destroy(); resolve(null) })
-    req.end(payload)
   })
 }
 
@@ -500,8 +468,14 @@ function processEntrypoint(args) {
  * or run it through runpy. Require that executable prefix and actual code, never a script argument
  * or a quoted mention. argv[0] is authoritative here: macOS can truncate an absolute `comm` path.
  * Keep the standalone hook's copy in sync. */
+/** macOS `ps` prints argv through vis(3): a newline as `\\012`, a backslash as `\\\\`. Read those back
+ * so a multi-line `-c` source is the source it runs. Linux `ps` prints argv as it is, without them. */
+function unvisArgs(args) {
+  return args.replace(/\\([0-7]{3}|\\)/g, (_, code) => code === '\\' ? '\\' : String.fromCharCode(parseInt(code, 8)))
+}
+
 function hermesInlineLauncher(row) {
-  const args = row.args.trim()
+  const args = unvisArgs(row.args).trim()
   if (!/^python(?:\d+(?:\.\d+)*)?$/.test(basename(argvTokens(args)[0] ?? '').toLowerCase())) return false
   const prefix = /^(?:"[^"]+"|'[^']+'|\S+)(?:\s+-(?:I|E|s|S|u|B|O{1,2}|q))*\s+-c\s+/.exec(args)
   if (!prefix) return false
@@ -1513,33 +1487,6 @@ async function main() {
     return
   }
 
-  // Claude's PreToolUse is installed ONLY by `harness gate install` (lib/hooks.ts installGateHook). The
-  // daemon classifies the tool call against the machine's action policy; a non-allow verdict goes back
-  // on stdout in the shape Claude Code reads, so the engine shows its own permission prompt (which the
-  // question watcher mirrors to the device). Silence, on any failure, means allow: the gate must never
-  // wedge a session because the daemon was busy.
-  if (engine === 'claude' && event === 'PreToolUse') {
-    if (typeof input.tool_use_id !== 'string' || typeof input.tool_name !== 'string') return
-    const reply = await postJson(port, '/api/hook/tool-start', {
-      sessionId: input.session_id,
-      toolUseId: input.tool_use_id,
-      toolName: input.tool_name,
-      input: input.tool_input,
-      ...mutationFields,
-    })
-    const gate = reply && reply.gate
-    if (gate && (gate.decision === 'ask' || gate.decision === 'deny')) {
-      gateOutput = JSON.stringify({
-        hookSpecificOutput: {
-          hookEventName: 'PreToolUse',
-          permissionDecision: gate.decision,
-          permissionDecisionReason: `Harness gate: ${gate.reason || gate.rule || 'machine policy'}`,
-        },
-      })
-    }
-    return
-  }
-
   if (engine === 'cursor' && event === 'preToolUse') {
     if (input.tool_name === 'Task' && typeof input.tool_use_id === 'string') {
       await persistCursorTask(input)
@@ -1614,8 +1561,7 @@ async function main() {
   }
 
   // SessionStart or UserPromptSubmit (the catch hook) → register the session. Registration is
-  // idempotent, so re-registering on every prompt is cheap. The daemon verifies the process before
-  // supplying the collection persona or optional, scope-checked coding memory.
+  // idempotent, so re-registering on every prompt is cheap. The adapter verifies the process.
   // Command Code fires SessionStart BEFORE it writes the transcript, and the daemon validates the path
   // (realpath) — sending one that isn't on disk yet gets the whole registration rejected. Announce
   // without it; the session is registered again with the real path on the first Stop. Scoped to
@@ -1642,23 +1588,10 @@ async function main() {
     model: modelName(input.model),
     cliVersion: input.cli_version || input.cursor_version || input.version,
   }
-  const ok = await post(port, '/api/hook/session-start', body, (response) => {
-    if (event !== 'UserPromptSubmit' || (engine !== 'claude' && engine !== 'codex')) return
-    if (typeof response.additionalContext !== 'string' || !response.additionalContext || response.additionalContext.length > 8_000) return
-    hookOutput = JSON.stringify({ hookSpecificOutput: {
-      hookEventName: 'UserPromptSubmit', additionalContext: response.additionalContext,
-    } })
-    if (typeof response.memoryReceiptId === 'string' && /^[a-f0-9-]{36}$/.test(response.memoryReceiptId)) {
-      acknowledgeMemoryOutput = () => post(port, '/api/hook/memory-emitted', {
-        engine, sessionId: body.sessionId, ...terminalHookFields(tmuxPane), memoryReceiptId: response.memoryReceiptId,
-      })
-    }
-  })
+  const ok = await post(port, '/api/hook/session-start', body)
   if (!ok) await fallbackRegister(input, engine, tmuxPane)
 }
 
-let hookOutput = null
-let acknowledgeMemoryOutput = null
 main()
   .catch(() => {})
   .finally(() => {
@@ -1670,12 +1603,6 @@ main()
     // — there `decision` is required, and `{}` reads as a denial (measured: every tool call of the turn
     // came back "Tool call denied by pre-tool hook").
     // Copilot parses stdout as JSON too; `{}` is the documented no-op for every event installed here.
-    if (hookOutput) process.stdout.write(`${hookOutput}\n`, (error) => {
-      // This proves only the pipe write. It does not prove native ingestion, model use or usefulness.
-      if (error || !acknowledgeMemoryOutput || remainingBudget() <= 0) { process.exit(0); return }
-      Promise.resolve(acknowledgeMemoryOutput()).catch(() => {}).finally(() => process.exit(0))
-    })
-    else if (e === 'cursor' || e === 'hermes' || e === 'agy' || e === 'copilot') process.stdout.write('{}\n', () => process.exit(0))
-    else if (gateOutput) process.stdout.write(gateOutput + '\n', () => process.exit(0)) // claude PreToolUse gate verdict
+    if (e === 'cursor' || e === 'hermes' || e === 'agy' || e === 'copilot') process.stdout.write('{}\n', () => process.exit(0))
     else process.exit(0)
   })

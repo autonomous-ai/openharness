@@ -130,6 +130,8 @@ function runHook(opts: RunHookOpts): Promise<string> {
 async function collect(response: Record<string, unknown> = {}): Promise<{ port: number; requests: Array<{ url: string; body: Record<string, unknown> }> }> {
   const requests: Array<{ url: string; body: Record<string, unknown> }> = []
   const server = createServer((req, res) => {
+    // Local service discovery may probe a test port. Only hook POSTs belong to this fixture.
+    if (req.method !== 'POST') { res.writeHead(405).end(); return }
     let raw = ''
     req.on('data', (chunk) => { raw += chunk.toString() })
     req.on('end', () => {
@@ -148,18 +150,15 @@ async function collect(response: Record<string, unknown> = {}): Promise<{ port: 
 }
 
 describe('hook notify terminal scope', () => {
-  it.each(['claude', 'codex'] as const)('acknowledges an emitted %s memory packet without copying the prompt or claim into the receipt', async engine => {
+  it.each(['claude', 'codex'] as const)('ignores a stale %s memory response and only reports ordinary session registration', async engine => {
     const additionalContext = 'Historical coding memory: keep review changes small.'
     const memoryReceiptId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
     const { port, requests } = await collect({ ok: true, additionalContext, memoryReceiptId })
     const recordings = JSON.parse(readFileSync(new URL('./lib/__fixtures__/swarm-prompt-hooks.json', import.meta.url), 'utf8'))
     const input = recordings[engine].input
     const stdout = await runHook({ port, engine, tmuxPane: '%42', input })
-    expect(JSON.parse(stdout)).toEqual({ hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext } })
-    expect(requests.map(request => request.url)).toEqual(['/api/hook/session-start', '/api/hook/memory-emitted'])
-    expect(requests[1].body).toMatchObject({ engine, sessionId: input.session_id, memoryReceiptId })
-    expect(requests[1].body).not.toHaveProperty('prompt')
-    expect(requests[1].body).not.toHaveProperty('additionalContext')
+    expect(stdout).toBe('')
+    expect(requests.map(request => request.url)).toEqual(['/api/hook/session-start'])
   })
 
   it('never acknowledges a receipt without emitted user-turn context', async () => {
@@ -169,13 +168,13 @@ describe('hook notify terminal scope', () => {
     expect(requests.map(request => request.url)).toEqual(['/api/hook/session-start'])
   })
 
-  it.each(['claude', 'codex'] as const)('adds daemon-verified companion context to the actual %s user turn', async engine => {
+  it.each(['claude', 'codex'] as const)('does not inject companion context returned by an older adapter into a %s user turn', async engine => {
     const additionalContext = 'Companions collection context: selected GNU; retain this conversation.'
     const { port, requests } = await collect({ ok: true, additionalContext })
     const recordings = JSON.parse(readFileSync(new URL('./lib/__fixtures__/swarm-prompt-hooks.json', import.meta.url), 'utf8'))
     const input = recordings[engine].input
     const stdout = await runHook({ port, engine, tmuxPane: '%42', input })
-    expect(JSON.parse(stdout)).toEqual({ hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext } })
+    expect(stdout).toBe('')
     expect(requests[0]?.body.prompt).toBe(input.prompt)
     expect(await runHook({ port, engine, tmuxPane: '%42', input: { ...input, hook_event_name: 'SessionStart' } })).toBe('')
   })
@@ -243,6 +242,7 @@ describe('hook notify terminal scope', () => {
     const cursorHome = join(dir, 'cursor')
     const requests: Array<{ url: string; body: Record<string, unknown> }> = []
     const server = createServer((req, res) => {
+      if (req.method !== 'POST') { res.writeHead(405).end(); return }
       let raw = ''
       req.on('data', (chunk) => { raw += chunk.toString() })
       req.on('end', () => {
@@ -378,6 +378,7 @@ describe('hook notify terminal scope', () => {
   it('forwards tmux events regardless of legacy MACHINE_ID', async () => {
     const requests: Array<{ url: string; body: Record<string, unknown> }> = []
     const server = createServer((req, res) => {
+      if (req.method !== 'POST') { res.writeHead(405).end(); return }
       let raw = ''
       req.on('data', (chunk) => { raw += chunk.toString() })
       req.on('end', () => {
@@ -401,6 +402,7 @@ describe('hook notify terminal scope', () => {
   it('drops standalone SessionEnd but forwards tmux SessionEnd', async () => {
     const requests: Array<{ url: string; body: Record<string, unknown> }> = []
     const server = createServer((req, res) => {
+      if (req.method !== 'POST') { res.writeHead(405).end(); return }
       let raw = ''
       req.on('data', (chunk) => { raw += chunk.toString() })
       req.on('end', () => {
@@ -640,6 +642,9 @@ describe('hook notify terminal scope', () => {
     "import sys, runpy; sys.path.insert(0, '/opt/custom'); runpy.run_module('hermes_cli.main', run_name='__main__')",
     "import os, re, sys; sys.path.insert(0, '/opt/custom'); import hermes_bootstrap; from hermes_cli.main import main; sys.exit(main())",
     "import os, sys, runpy; os.environ.pop('PYTHONHOME', None); sys.path.insert(0, '/opt/custom'); os.environ['HERMES_HOME'] = os.environ.get('HERMES_HOME') or '/home/demo/.hermes'; import hermes_bootstrap; runpy.run_module('hermes_cli.main', run_name='__main__', alter_sys=True)",
+    // 0.21.5's multi-line launcher as macOS `ps` prints it: every newline as the four characters `\012`.
+    ["import os, re, sys", "os.environ.pop('PYTHONHOME', None)", "sys.path.insert(0, '/opt/custom')",
+      'import hermes_bootstrap', 'from hermes_cli.main import main', 'sys.exit(main())'].join('\\012') + '\\012',
   ])('offline Hermes discovery follows a managed Python bootstrap: %s', async (source) => {
     const dir = mkdtempSync(join(tmpdir(), 'adapter-hook-hermes-launcher-'))
     tmpDirs.push(dir)
@@ -1130,7 +1135,6 @@ describe('hook notify Command Code re-registration', () => {
       cwd: '/tmp/demo',
       title: 'Greeting',
     })
-    expect(requests[1].body).toMatchObject({ sessionId: '53955d6d' })
   })
 
   it('omits a transcript path that does not exist yet', async () => {
@@ -1167,22 +1171,5 @@ describe('hook notify Command Code re-registration', () => {
     })
 
     expect(requests.map((r) => r.url)).toEqual(['/api/hook/turn-stop'])
-  })
-})
-
-// The destructive-action gate (cli/src/lib/actionPolicy.ts; first written by Fred Nix in the nixfred fork).
-describe('claude PreToolUse gate', () => {
-  const input = { hook_event_name: 'PreToolUse', session_id: 'claude-session', tool_name: 'Bash', tool_use_id: 'toolu_1', tool_input: { command: 'git push origin main' } }
-  it('turns the daemon\'s ask verdict into Claude\'s own permission prompt', async () => {
-    const { port, requests } = await collect({ ok: true, gate: { decision: 'ask', rule: 'git push', reason: 'git push needs your approval' } })
-    const stdout = await runHook({ port, tmuxPane: '%7', input })
-    expect(JSON.parse(stdout)).toEqual({ hookSpecificOutput: {
-      hookEventName: 'PreToolUse', permissionDecision: 'ask', permissionDecisionReason: 'Harness gate: git push needs your approval',
-    } })
-    expect(requests.find((r) => r.url === '/api/hook/tool-start')?.body).toMatchObject({ sessionId: 'claude-session', toolName: 'Bash', input: { command: 'git push origin main' } })
-  })
-  it('stays silent (allow) when the daemon says nothing about the call', async () => {
-    const { port } = await collect({ ok: true })
-    expect(await runHook({ port, tmuxPane: '%7', input })).toBe('')
   })
 })

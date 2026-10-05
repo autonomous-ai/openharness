@@ -40,7 +40,7 @@ enum { A_VOICE, A_VOICE_STOP, A_VOICE_ABORT };
 enum { VOICE_CMD_NONE, VOICE_CMD_GOAL };
 typedef int view_t;
 typedef struct { int kind, value, dy; uint32_t revision; char id[64], text[192]; } action_t;
-typedef struct { char name[64], id[64]; } agent_t;
+typedef struct { char name[64], id[64], engine[12]; } agent_t;
 static ht_selection_t selection;
 static ht_carry_t carry;
 static ht_visit_t visit;
@@ -60,7 +60,7 @@ static struct {
     int pet_pose, view, voice_return, offset, pressed, active, pane_pos;
     uint32_t pet_until, nap_until, voice_retry_until, voice_started, voice_wait_until, voice_generation, voice_question_revision, voice_draft_revision;
     int voice_question_index;
-    char title[80], message[256], voice_target[64], pending_focus[64], pending_machine[64], opening_notice[48];
+    char title[80], message[256], voice_target[64], voice_engine[12], pending_focus[64], pending_machine[64], opening_notice[48];
     struct { bool valid, supported, loading, pending, uncertain; uint32_t revision, deadline; int index; char error[120],speech_error[96],agent[64],token[48]; struct { bool can_text; } item[4]; } q;
     agent_t agents[1];
     struct { bool live_summary; } memory[PANE_MEMORY_MAX];
@@ -139,6 +139,8 @@ static void discard(void) { dispatch((action_t){.kind = A_VOICE_ABORT}); }
 static void finish_audio(void) { audio_active = recording = false; }
 static void begin(void) { speak(); work(queued); assert(recording && s.view == VOICE); }
 int main(void) {
+    // The listening scene follows whom the turn is for: an agent's engine, nothing for a draft.
+    reset(); strcpy(s.agents[0].engine, "claude"); begin(); assert(!strcmp(s.voice_engine, "claude"));
     reset(); host_features=0; begin(); dispatch((action_t){.kind=A_VOICE_STOP,.value=1});
     assert(!reviews && !s.voice_review && s.voice_waiting);
     reset(); begin(); dispatch((action_t){.kind=A_VOICE_STOP,.value=1});
@@ -146,12 +148,12 @@ int main(void) {
     finish_audio(); ui_voice_routed(true,false,"","agent","Agent",1);
     assert(s.voice_open && s.voice_waiting); // Normal route receipt cannot bypass review.
     discard(); assert(!s.voice_open && !s.voice_review);
-    reset(); s.view=DRAFT; draft.page=(ht_draft_page_t){.active=true,.revision=3,.id="draft-test",.name="Original"};
+    reset(); strcpy(s.agents[0].engine, "claude"); s.view=DRAFT; draft.page=(ht_draft_page_t){.active=true,.revision=3,.id="draft-test",.name="Original"};
     view(HOME); assert(s.view==DRAFT);
     action_t edit={.kind=A_VOICE,.value=5,.revision=2,.dy=2,.text="draft-test"};
     dispatch(edit); assert(!s.voice_open);
     edit.revision=edit.dy=3; dispatch(edit); work(queued);
-    assert(starts==1 && s.voice_return==DRAFT && s.voice_review && !strcmp(s.voice_target,"Original"));
+    assert(starts==1 && s.voice_return==DRAFT && s.voice_review && !strcmp(s.voice_target,"Original") && !s.voice_engine[0]);
     done(); finish_audio(); ui_voice_error("Couldn't hear it");
     assert(s.view==DRAFT && draft.failed && draft.page.error[0]);
     draft.failed=false; dispatch(edit); work(queued); discard(); finish_audio();

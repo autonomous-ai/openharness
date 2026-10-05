@@ -122,7 +122,7 @@ void main() {
               find.descendant(of: opened, matching: find.byType(Tooltip)),
             )
             .message,
-        startsWith('Last active '),
+        startsWith('Idle · Last active '),
       );
       expect(
         find.descendant(

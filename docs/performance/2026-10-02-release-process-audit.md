@@ -84,9 +84,11 @@ All 17 published versions were included: **1.2.33–1.2.35 and 1.2.37–1.2.50**
 Attempt **1.2.36** was cancelled. This includes all ten releases initially requested
 (1.2.41–1.2.50), not just the latest example.
 
-The confirmed 4m35s concurrency wait for 1.2.47 was behind 1.2.46. Desktop's global
-publication serialization remains because its manifest merge lacks a generation
-guard; removing that lock alone would risk mixed/older platform entries. It is a
+The confirmed 4m35s concurrency wait for 1.2.47 was behind 1.2.46. At the initial
+audit, Desktop's whole-workflow lock was retained because its manifest merge lacked
+a generation guard; removing that lock alone would risk mixed/older platform
+entries. The [publication follow-up](2026-10-02-desktop-release-overlap.md) adds
+those guards and narrows the lock to publication and verification. Queueing was a
 secondary cost, not an explanation for the hours before tagging.
 
 CLI coverage is **0.3.31–0.3.57**; web coverage is **1.3.14–1.3.25**. TUI logs

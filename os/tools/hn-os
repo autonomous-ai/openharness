@@ -1,0 +1,110 @@
+#!/usr/bin/env python3
+"""System operations callable from an agent's ordinary shell."""
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import time
+
+
+def capture(*args):
+    result = subprocess.run(args, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    return {'exit_status': result.returncode, 'output': result.stdout.strip()}
+
+
+def cpu_ticks():
+    # user/nice/system/idle/iowait/irq/softirq/steal; guest times are already in user/nice.
+    values = [int(value) for value in Path('/proc/stat').read_text().splitlines()[0].split()[1:9]]
+    return sum(values), values[3] + values[4]
+
+
+def wifi():
+    return subprocess.call(['sudo', '/usr/bin/python3', '/usr/lib/harness-os/network.py'])
+
+
+def opencode_cpu_ready():
+    try:
+        lines = Path('/proc/cpuinfo').read_text().splitlines()
+    except OSError:
+        return True
+    for line in lines:
+        key, separator, value = line.partition(':')
+        if separator and key.strip() == 'flags':
+            return 'sse4_2' in value.split()
+    return True  # The x86 instruction check does not apply to an ARM CPU.
+
+
+def prepare_opencode_guidance():
+    # Fresh accounts get this from skel. An older installation receives the
+    # same guide on first use, without replacing personal instructions.
+    config = Path(os.environ.get('XDG_CONFIG_HOME') or Path.home() / '.config') / 'opencode'
+    config.mkdir(parents=True, exist_ok=True)
+    try:
+        (config / 'AGENTS.md').symlink_to('/usr/share/harness-os/guide.md')
+    except FileExistsError:
+        pass
+
+
+def try_harness():
+    if not opencode_cpu_ready():
+        print('The bundled OpenCode needs a newer CPU (SSE4.2).')
+        print('Open a terminal to work locally or connect to a remote agent.')
+        if sys.stdin.isatty():
+            input('Press Enter to return to Harness.')
+        return
+    # First-use networking belongs to onboarding.py. Rechecking here used to
+    # reject NetworkManager's "connected (site/local only)" state after a
+    # successful Wi-Fi step and reopen the form in the agent's new pane.
+    # Later launches also need to support local models and offline work.
+    project = subprocess.check_output(['/usr/bin/python3', '/usr/lib/harness-os/projects.py', 'new', 'opencode'], text=True).strip()
+    prepare_opencode_guidance()
+    os.chdir(project)
+    os.execv('/usr/bin/opencode', ['opencode'])
+
+
+def main():
+    args = sys.argv[1:]
+    command = args.pop(0) if args else 'status'
+    if command == 'install':
+        os.execv('/usr/bin/python3', ['python3', '/usr/lib/harness-os/install.py', *args])
+    if command == 'browser':
+        os.execv('/usr/bin/hn-browser', ['hn-browser', *args])
+    if command == 'wifi':
+        raise SystemExit(wifi())
+    if command == 'try':
+        try_harness()
+        return
+    if command == 'welcome':
+        os.execv('/usr/bin/python3', ['python3', '/usr/lib/harness-os/onboarding.py'])
+    if command == 'starter':
+        os.execv('/bin/bash', ['bash', '-l'])
+    if command == 'hardware':
+        os.execv('/usr/bin/python3', ['python3', '/usr/lib/harness-os/hardware.py', 'report', *args])
+    if command in ['checkpoint', 'update', 'recover']:
+        os.execv('/usr/bin/python3', ['python3', '/usr/lib/harness-os/system.py', command, *args])
+    if command == 'status':
+        print(Path('/usr/share/harness-os/lock.json').read_text())
+        subprocess.run(['systemctl', '--user', '--no-pager', 'status', 'harness-daemon', 'hn-screen'])
+        return
+    if command == 'measure':
+        before, idle_before = cpu_ticks()
+        time.sleep(2)
+        after, idle_after = cpu_ticks()
+        memory = {line.split(':')[0]: int(line.split()[1]) for line in Path('/proc/meminfo').read_text().splitlines()}
+        disk = os.statvfs('/')
+        data = {'uptime_seconds': float(Path('/proc/uptime').read_text().split()[0]),
+                'memory_total_mib': round(memory['MemTotal'] / 1024, 2),
+                'memory_used_excluding_available_mib': round((memory['MemTotal'] - memory['MemAvailable']) / 1024, 2),
+                'cpu_busy_percent_over_2s': round(100 * (1 - (idle_after - idle_before) / max(1, after - before)), 2),
+                'root_filesystem_used_bytes_including_home_and_snapshots': (disk.f_blocks - disk.f_bfree) * disk.f_frsize,
+                'boot': capture('systemd-analyze'),
+                'screen_service_started_monotonic_usec': capture('systemctl', '--user', 'show', 'hn-screen', '--property=ActiveEnterTimestampMonotonic', '--value'),
+                'processes_rss_kib_and_lifetime_cpu': capture('ps', '-eo', 'comm,rss,pcpu', '--sort=-rss')}
+        print(json.dumps(data, indent=2))
+        return
+    raise SystemExit('Usage: hn-os [status | hardware | try | wifi | install | browser [URL] | measure | checkpoint | update [--snapshot YYYY/MM/DD] | recover ROOT_DEVICE [CHECKPOINT]]')
+
+
+if __name__ == '__main__':
+    main()

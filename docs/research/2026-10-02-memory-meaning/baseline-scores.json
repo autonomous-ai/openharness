@@ -1,0 +1,180 @@
+{
+  "schemaVersion": 1,
+  "reportSha256": "fa9e66381b99f052017c952aeb6f143567b5abda9f37984f55f6f6ee7cc18543",
+  "suiteSha256": "657aae9de4f301b660cc2c57dce0f80ae801f49e71921a2365b862ba15d0023e",
+  "evidence": "development_diagnostic_only",
+  "reviewer": {
+    "id": "codex-source-review",
+    "kind": "agent",
+    "independent": false
+  },
+  "coverage": {
+    "completedCases": 7,
+    "expectedCases": 8
+  },
+  "memories": {
+    "passed": 5,
+    "reviewed": 5,
+    "total": 5,
+    "rate": null
+  },
+  "recall": {
+    "passed": 4,
+    "reviewed": 5,
+    "total": 5,
+    "rate": null
+  },
+  "abstention": {
+    "passed": 16,
+    "reviewed": 16,
+    "total": 16,
+    "rate": null
+  },
+  "cases": [
+    {
+      "id": "default-with-user-override",
+      "status": "reviewable",
+      "probes": [
+        {
+          "id": "same-project",
+          "passed": false
+        },
+        {
+          "id": "different-project",
+          "passed": true
+        },
+        {
+          "id": "unrelated-topic",
+          "passed": true
+        }
+      ]
+    },
+    {
+      "id": "firm-request-with-unresolved-placement",
+      "status": "reviewable",
+      "probes": [
+        {
+          "id": "same-project",
+          "passed": true
+        },
+        {
+          "id": "different-project",
+          "passed": true
+        },
+        {
+          "id": "unrelated-topic",
+          "passed": true
+        }
+      ]
+    },
+    {
+      "id": "polite-request",
+      "status": "reviewable",
+      "probes": [
+        {
+          "id": "same-project",
+          "passed": true
+        },
+        {
+          "id": "different-project",
+          "passed": true
+        },
+        {
+          "id": "unrelated-topic",
+          "passed": true
+        }
+      ]
+    },
+    {
+      "id": "exploratory-question",
+      "status": "reviewable",
+      "probes": [
+        {
+          "id": "same-project",
+          "passed": true
+        },
+        {
+          "id": "different-project",
+          "passed": true
+        },
+        {
+          "id": "unrelated-topic",
+          "passed": true
+        }
+      ]
+    },
+    {
+      "id": "tentative-number",
+      "status": "reviewable",
+      "probes": [
+        {
+          "id": "same-project",
+          "passed": true
+        },
+        {
+          "id": "different-project",
+          "passed": true
+        },
+        {
+          "id": "unrelated-topic",
+          "passed": true
+        }
+      ]
+    },
+    {
+      "id": "accepted-number",
+      "status": "reviewable",
+      "probes": [
+        {
+          "id": "same-project",
+          "passed": true
+        },
+        {
+          "id": "different-project",
+          "passed": true
+        },
+        {
+          "id": "unrelated-topic",
+          "passed": true
+        }
+      ]
+    },
+    {
+      "id": "quoted-plan-and-user-correction",
+      "status": "reviewable",
+      "probes": [
+        {
+          "id": "same-project",
+          "passed": true
+        },
+        {
+          "id": "different-project",
+          "passed": true
+        },
+        {
+          "id": "unrelated-topic",
+          "passed": true
+        }
+      ]
+    },
+    {
+      "id": "limited-control-set",
+      "status": "not_reviewable",
+      "probes": []
+    }
+  ],
+  "taskBenefit": "not_measured",
+  "nativeDelivery": "not_measured",
+  "limitations": [
+    "Ratings are attributed judgements, not authenticated independent review.",
+    "These diagnostics do not satisfy the held-out-history or paired coding-task release gates.",
+    "Older reports without captured recall context can be reviewed for memory content but receive no recall-quality rate.",
+    "Empty, unfinished or partially reviewed denominators never receive a passing rate."
+  ],
+  "producer": {
+    "protocol": "coding-memory-quality-review-v1",
+    "node": "v22.23.2",
+    "runnerSha256": "90252c4c052d97bdbccbd794c769a25a4e123c579afebcf6d452d58ec5b7afb9",
+    "scorerSha256": "5607bd4ae70055756a69ec33e9e43dad0ea1ce6261435ee3453f197799303aee"
+  }
+}

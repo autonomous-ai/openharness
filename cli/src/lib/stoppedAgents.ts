@@ -39,6 +39,16 @@ export class StoppedAgentStore {
     }
   }
 
+  /** The id of every saved record, readable or not (`list()` skips an unreadable one). No folder yet → none; any other error throws. */
+  ids(): string[] {
+    try {
+      return readdirSync(this.directory).filter(name => name.endsWith('.json')).map(name => name.slice(0, -5))
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
+      throw error
+    }
+  }
+
   list(): RegisteredSession[] {
     try {
       secureStateDirectory(this.directory, false)

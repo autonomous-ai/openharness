@@ -1,4 +1,5 @@
 /** Exact-resume lifecycle shared by the daemon and its isolated acceptance tests. */
+import { transcriptSize, type RelaunchMarks } from '../core/transcripts/relaunch.js'
 import { isTerminalEngine } from '../engines/types.js'
 import { installedDsh } from '../dsh/installed.js'
 import { engineKeepsTranscriptFile, registry as liveRegistry, validTranscriptPath, type RegisteredSession } from './registry.js'
@@ -31,12 +32,14 @@ export interface ResumeAgentServiceDeps {
   refreshGridWebSearch(agentId: string, overrides: LaunchOverrides): void
   clearDeleted(agentId: string): void
   attachDsh(session: RegisteredSession): void
+  /** Where the relaunched engine's own writing begins, for the attach that follows (core/transcripts/relaunch.ts). */
+  relaunchMarks?: Pick<RelaunchMarks, 'note'>
 }
 
 export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
   const { registry, stoppedAgents, tmuxBackend, restartJobs, stopJobs, pinnedControls,
     retainExitedSession, announceSession, relaunchOverrides, prepareSessionResume,
-    refreshGridWebSearch, clearDeleted, attachDsh } = deps
+    refreshGridWebSearch, clearDeleted, attachDsh, relaunchMarks } = deps
   const resumeConversations = new Set<string>()
   /** Same short form every other `[…]` line in the daemon logs uses. */
   const sid = (id: string) => id.slice(0, 8)
@@ -199,6 +202,12 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
           }
         }
         if (saved.sessionId && registry.bySession(saved.sessionId)) return { ok: false, error: 'AGENT_BUSY' }
+        // Everything the engine writes from here on is its own, and live: the attach after it folds the
+        // conversation only up to this byte. Taken after the history is prepared, which can rewrite it.
+        if (resumeSessionId && saved.sessionId && saved.transcriptPath) {
+          const offset = transcriptSize(saved.transcriptPath)
+          if (offset !== null) relaunchMarks?.note(saved.sessionId, offset)
+        }
         const { extraArgs, clearEnv } = built.overrides
         const launchEnv = permissionMode === undefined ? built.overrides.env
           : harnessPermissionEnvironment(saved.engine, built.overrides.env, permissionMode)

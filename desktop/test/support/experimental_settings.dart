@@ -34,6 +34,10 @@ class MemoryExperimentalTransport implements ExperimentalSettingsTransport {
   }
 }
 
+/// ⚠️ Built in a `setUp`, `await refresh()` there too. The constructor starts the first read from
+/// the real zone; a `testWidgets` body that awaits it (any [set] before it lands does) waits in the
+/// fake-async zone, whose microtasks nothing flushes without a pump — the test hangs until the
+/// binding's timeout instead of failing. Built inside the test body, everything stays in one zone.
 class MemoryExperimentalFeaturesStore extends ExperimentalFeaturesStore {
   MemoryExperimentalFeaturesStore({required LocalKeyValueStore storage})
     : super(pollInterval: Duration.zero) {

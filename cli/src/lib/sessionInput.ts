@@ -1,7 +1,7 @@
 import { createHash } from 'crypto'
 import type { RegisteredSession } from './registry.js'
 import { sid } from './log.js'
-import type { TerminalActionResult } from './terminalTypes.js'
+import { TERMINAL_LEASE_REFUSED, type TerminalActionResult } from './terminalTypes.js'
 
 const MAX_QUEUE_ITEMS = 8
 const MAX_QUEUE_BYTES = 24 * 1024
@@ -50,6 +50,10 @@ const AGY_SUBMIT_VERIFY_MS = 8_000
 const COPILOT_SUBMIT_VERIFY_MS = 6_000
 const CURSOR_TURN_SETTLE_MS = 750
 const SUBMIT_MAX_RETRIES = 2
+/** How long a paste the control lease refused, before a byte was written, waits for the lease, and how
+ *  often it asks again. */
+const LEASE_WAIT_MS = 15_000
+const LEASE_RETRY_MS = 250
 // Re-observe briefly while a submitted prompt awaits a transcript event. Reaching this limit is not
 // evidence of rejection: Claude can hold an accepted follow-up while background agents finish.
 const SUBMIT_MAX_OBSERVES = 5
@@ -78,6 +82,8 @@ interface QueuedInput {
 }
 
 interface InputState {
+  /** The writes this agent's messages are making, one after another in the order they arrived. */
+  writes?: Promise<void>
   deliveryId?: string
   deliveryFingerprint?: string
   dispatching?: boolean
@@ -118,6 +124,15 @@ export interface SessionInputDeps {
    * moment at which a turn is known to have started, and this one is exact: we sent it.
    */
   onSubmitted?: (sessionId: string, content: string) => void
+  /** Clock and timer for the lease wait; real ones by default. */
+  now?: () => number
+  sleep?: (ms: number) => Promise<void>
+}
+
+/** A write the pane's control lease refused before a byte of it was written. */
+function leaseRefused(delivery: boolean | TerminalActionResult): boolean {
+  return typeof delivery !== 'boolean' && delivery.state === 'failed' && delivery.dispatch === 'not_started'
+    && delivery.reason === TERMINAL_LEASE_REFUSED
 }
 
 function fingerprint(content: string): string {
@@ -133,6 +148,30 @@ export class SessionInputController {
   /** Controller dependencies take the stable agent id, never a backend route. */
   private controlSession(id: string): RegisteredSession | undefined {
     return this.deps.getSession(id)
+  }
+
+  /**
+   * A paste the pane's control lease refused before a byte was written: the agent is there, but its
+   * process is not yet the one the registry holds — a resume or restart moments ago, before the new
+   * process was confirmed — or another writer holds the pane. Wait for the lease, up to
+   * LEASE_WAIT_MS, rather than fail the message; nothing was written, so asking again can never type
+   * it twice. Found end to end: a message sent as a resume was confirmed was refused 140 ms later and
+   * lost, and a real engine takes seconds to confirm.
+   */
+  private async injectWhenLeased(
+    write: () => Promise<boolean | TerminalActionResult>,
+    current: () => boolean,
+  ): Promise<boolean | TerminalActionResult> {
+    const now = this.deps.now ?? Date.now
+    const sleep = this.deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)))
+    const deadline = now() + LEASE_WAIT_MS
+    let delivery = await write()
+    while (leaseRefused(delivery) && now() < deadline) {
+      await sleep(LEASE_RETRY_MS)
+      if (!current()) break
+      delivery = await write()
+    }
+    return delivery
   }
 
   private state(sessionId: string): InputState {
@@ -206,7 +245,18 @@ export class SessionInputController {
       return
     }
     this.delivery(sessionId, deliveryId, 'queued')
-    void this.inject(sessionId, session, content, deliveryId, tabId)
+    // One write at a time per agent, in the order the messages arrived. Claude Code and Codex take
+    // typing while a turn runs, so a message is not held for the turn — but two pastes into one pane at
+    // once interleave: one message's text lands between another's paste and its Enter, and the engine
+    // receives a single prompt made of both. Found end to end: five messages sent within 30 ms became
+    // two turns, "one" and "three" run together and the rest, out of order. Each write starts with the
+    // agent as it is by then, which a restart in between may have changed.
+    // With nothing in flight the write starts at once, so a cancel or a control request that follows
+    // the submit sees it, as before.
+    const write = (): Promise<void> => this.inject(sessionId, this.controlSession(sessionId) ?? session, content, deliveryId, tabId)
+    const running = state.writes ? state.writes.then(write, write) : write()
+    const settled: Promise<void> = running.catch(() => {}).then(() => { if (state.writes === settled) state.writes = undefined })
+    state.writes = settled
   }
 
   /** Reserve this pane for a short native control interaction such as `/model`. */
@@ -396,7 +446,8 @@ export class SessionInputController {
       await this.deps.sendKey(session.agentId, 'C-u')
     }
     const forgetScope = this.deps.beforeSubmit?.(session.agentId, content, tabId)
-    const delivery = await this.deps.inject(session.agentId, content)
+    const delivery = await this.injectWhenLeased(() => this.deps.inject(session.agentId, content),
+      () => this.controlSession(session.agentId) !== undefined)
     const accepted = typeof delivery === 'boolean'
       ? delivery
       : delivery.state === 'succeeded' || delivery.dispatch === 'possibly_executed'
@@ -461,8 +512,9 @@ export class SessionInputController {
       if (state.cancelled || this.states.get(sessionId) !== state) return
       state.writing = true
       const forgetScope = this.deps.beforeSubmit?.(session.agentId, content, tabId, deliveryId)
-      const delivery = await (deliveryId.startsWith('team:') && this.deps.injectTeam
-        ? this.deps.injectTeam(session.agentId, content, deliveryId) : this.deps.inject(session.agentId, content))
+      const delivery = await this.injectWhenLeased(() => (deliveryId.startsWith('team:') && this.deps.injectTeam
+        ? this.deps.injectTeam(session.agentId, content, deliveryId) : this.deps.inject(session.agentId, content)),
+      () => !state.cancelled && this.states.get(sessionId) === state)
       state.writing = false
       if (delivery === false || (typeof delivery !== 'boolean' && delivery.dispatch === 'not_started')) forgetScope?.()
       if (state.cancelled || this.states.get(sessionId) !== state) return
@@ -652,7 +704,6 @@ export class SessionInputController {
       return
     }
     state.retries++
-    console.log(`[inject] ${sid(sessionId)} resubmit Enter · engine=${session.engine} · retry=${state.retries}/${SUBMIT_MAX_RETRIES}`)
     const valid = await this.deps.validateRuntime(session)
     if (!valid) {
       this.finishDelivery(sessionId, state, 'unknown', 'runtime_gone_post_paste')
@@ -663,6 +714,9 @@ export class SessionInputController {
       return
     }
     if (state.deliveryId && (this.states.get(sessionId) !== state || !state.awaitingFingerprint || state.turnOpen)) return
+    // Said once the engine is known to be there: an engine that exited gets no Enter, and the log used
+    // to claim one anyway.
+    console.log(`[inject] ${sid(sessionId)} resubmit Enter · engine=${session.engine} · retry=${state.retries}/${SUBMIT_MAX_RETRIES}`)
     // Only the submit key is retried. The prompt body is never pasted twice.
     const delivery = await this.deps.sendKey(session.agentId, 'Enter')
     state.ambiguousDispatch = typeof delivery === 'boolean'
