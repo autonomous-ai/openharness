@@ -31,15 +31,17 @@ def update_identity(folder, source):
     if record.is_symlink() or not record.is_file():
         raise ValueError('Use a regular unpublished update fixture.')
     info = json.loads(record.read_text())
-    if (info.get('published') is not False or info.get('status') != 'prepared' or
+    if (not isinstance(info, dict) or info.get('published') is not False or info.get('status') != 'prepared' or
             info.get('source_commit') != source or info.get('architecture') != 'aarch64' or
             info.get('target') != 'aarch64-unknown-linux-musl' or info.get('version') != '999.0.1'):
         raise ValueError('Use the exact-source prepared native ARM update fixture.')
     required = {'harness-tui', 'cli.mjs', 'notify.mjs', 'cli-current.mjs', 'hn.json',
                 'cli.json', 'cli-current.json', 'cli-ancestor.json',
                 'feeds-ancestor.json', 'feeds-hn.json', 'feeds-both.json'}
-    if set(info.get('files', {})) != required:
+    if not isinstance(info.get('files'), dict) or set(info['files']) != required:
         raise ValueError('The private update fixture is incomplete.')
+    if {path.name for path in folder.iterdir()} != required | {'fixture.json'}:
+        raise ValueError('The private update fixture contains unverified entries.')
     for name, checksum in info['files'].items():
         path = folder / name
         if (not re.fullmatch(r'[a-f0-9]{64}', str(checksum)) or path.is_symlink() or
@@ -52,6 +54,34 @@ def update_identity(folder, source):
     release = json.loads((folder / 'hn.json').read_text())
     if set(release.get('builds', {})) != {'linux-arm64'}:
         raise ValueError('The update must exercise the linux-arm64 release entry.')
+    # The private HTTP server and guest must consume the files whose hashes
+    # were checked above, not a different URL or another checksummed artifact.
+    # In particular, a valid CLI version probe does not execute notify.mjs.
+    try:
+        current_cli = info['runtime']['versions']['cli']
+        ancestor_cli = info['runtime']['release_baselines']['cli']['version']
+    except (KeyError, TypeError) as error:
+        raise ValueError('Missing original CLI versions in the update fixture.') from error
+    if any(not isinstance(value, str) or not re.fullmatch(r'\d+\.\d+\.\d+', value)
+           for value in [current_cli, ancestor_cli]):
+        raise ValueError('Invalid original CLI versions in the update fixture.')
+    base_url = 'http://127.0.0.1:19447/'
+
+    def ref(name):
+        return {'url': base_url + name, 'sha256': info['files'][name], 'size': (folder / name).stat().st_size}
+
+    expected = {
+        'hn.json': {'version': info['version'], 'builds': {'linux-arm64': ref('harness-tui')}},
+        'cli.json': {'cli': {'version': info['version'], 'cli': ref('cli.mjs'), 'notify': ref('notify.mjs')}},
+        'cli-current.json': {'cli': {'version': current_cli, 'cli': ref('cli-current.mjs'), 'notify': ref('notify.mjs')}},
+        'cli-ancestor.json': {'cli': {'version': ancestor_cli, 'cli': ref('cli.mjs'), 'notify': ref('notify.mjs')}},
+        'feeds-ancestor.json': {'cli': base_url + 'cli-ancestor.json'},
+        'feeds-hn.json': {'hn': base_url + 'hn.json', 'cli': base_url + 'cli-current.json'},
+        'feeds-both.json': {'hn': base_url + 'hn.json', 'cli': base_url + 'cli.json'},
+    }
+    for name, document in expected.items():
+        if json.loads((folder / name).read_text()) != document:
+            raise ValueError('Private update manifest does not match its verified local assets: ' + name)
     return info
 
 
