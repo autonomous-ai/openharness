@@ -17,6 +17,7 @@ import {
 import { BYPASS_PERMISSION_FLAGS, PERMISSION_MODES, permissionModeApproves } from './engineLaunch.js'
 import { psEnv } from './childLocale.js'
 import { nativeProcessImages } from './nativeProcessImages.js'
+import { neutralizePasteControls } from './pasteText.js'
 export { captureTmuxPane, tmuxCaptureArgs } from './tmuxCapture.js'
 
 function cleanPaneTitle(title: string): string | null {
@@ -1217,10 +1218,12 @@ function tmuxDeleteBuffer(name: string): Promise<void> {
   })
 }
 
-/** Paste text from a uniquely named stdin-loaded buffer so its bytes never enter argv or errors. */
+/** Paste text from a uniquely named stdin-loaded buffer so its bytes never enter argv or errors. A
+ *  bracketed paste carries text and nothing else (pasteText.ts), not even its own end marker; an
+ *  unbracketed one is typing, and is typed as it was given. */
 async function tmuxPasteText(pane: string, content: string, bracketed: boolean): Promise<boolean> {
   const bufferName = `machinemsg-${process.pid}-${++injectBufferSequence}`
-  if (!(await tmuxLoadBuffer(bufferName, content))) {
+  if (!(await tmuxLoadBuffer(bufferName, bracketed ? neutralizePasteControls(content) : content))) {
     await tmuxDeleteBuffer(bufferName)
     console.error(`[tmux] load-buffer for ${pane} failed`)
     return false
@@ -1251,7 +1254,7 @@ async function tmuxPasteText(pane: string, content: string, bracketed: boolean):
 export function sendToTmux(pane: string, text: string): Promise<boolean> {
   const content = text.replace(/[\r\n]+$/, '') // strip trailing newlines so the submit Enter isn't doubled
   return (async () => {
-    const needsSettle = content.length > INJECT_FASTPATH_MAXLEN || content.includes('\n')
+    const needsSettle = content.length > INJECT_FASTPATH_MAXLEN || /[\r\n]/.test(content)
     if (!(await tmuxPasteText(pane, content, true))) return false
     if (needsSettle) await sleep(Math.min(1500, INJECT_PASTE_DELAY_BASE_MS + Math.floor(content.length / 60)))
     return tmuxEnter(pane)
