@@ -230,4 +230,52 @@ describe('the hook client', () => {
     await turn(client, agent.id, 'after the restart')
     client.close()
   })
+
+  it.each(engines)('%s typed into a terminal tile while the daemon is down: the hook makes the tile its agent, and the daemon takes it in', async (engine) => {
+    const d = await fresh()
+    let client = await LocalClient.connect(d)
+    // A terminal open in the app. Its row names the engine `terminal`, which the hook once read as a damaged
+    // registry, so a hook with the daemon down registered nothing.
+    const cwd = join(d.projectsDir, `in-terminal-${engine}`)
+    mkdirSync(cwd, { recursive: true })
+    const opened = await client.request('agent_create', { engine: 'terminal', cwd }, 60_000)
+    expect(opened.error, JSON.stringify(opened)).toBeUndefined()
+    const tile = await until('the terminal tile to be up', async () => {
+      const now = await row(client, opened.agent.id)
+      return now?.status === 'active' && rowOnDisk(d, now.id)?.engine === 'terminal' ? now : null
+    }, 60_000, 250)
+    client.close()
+    await d.stop()
+
+    // The person starts the engine in that terminal.
+    const from = d.hookLog().length
+    await type(d, tile.tmuxPane, engine)
+    const announced = await until('the engine to announce its conversation', () =>
+      ran(hooksSince(d, from), / SessionStart\(startup\) /), 30_000, 100)
+    const sessionId = /session=(\S+)/.exec(announced)![1]
+    // Nothing listening, the hook wrote the row itself: the tile's own, now the engine's, as the daemon
+    // would have made it.
+    const rowsOnDisk = JSON.parse(readFileSync(join(d.dataDir, 'registry.json'), 'utf8')) as Row[]
+    expect(rowsOnDisk.filter((one) => one.tmuxPane === tile.tmuxPane), JSON.stringify(rowsOnDisk)).toEqual([
+      expect.objectContaining({ agentId: tile.id, engine, sessionId, terminalHost: true, active: true }),
+    ])
+
+    // Back, the daemon takes it in: the tile is the agent, on the conversation the hook named, and works.
+    await d.start()
+    client = await LocalClient.connect(d)
+    const back = await bound(client, tile.id, sessionId)
+    expect([back.engine, back.name, back.tmuxPane]).toEqual([engine, tile.name, tile.tmuxPane])
+    await turn(client, tile.id, 'to the engine typed into the terminal')
+    // And when the engine exits, its conversation is kept under the agent's id and the pane is a terminal
+    // again, under one of its own (retainExitedSession.ts), as for any engine typed into a terminal.
+    client.send('message', { agentId: tile.id, content: '!exit' })
+    await until('the pane to be a terminal again', async () => {
+      const all = await rows(client)
+      const shell = all.find((one) => one.tmuxPane === tile.tmuxPane && one.engine === 'terminal' && one.status === 'active')
+      const kept = all.find((one) => one.id === tile.id)
+      return shell && kept?.status === 'stopped' && kept.sessionId === sessionId ? shell : null
+    }, 60_000, 500)
+    client.close()
+  })
+
 })

@@ -1120,9 +1120,13 @@ function mergeRuntimes(current, observed) {
   return [...merged.values()].sort((a, b) => runtimePlacementKey(a).localeCompare(runtimePlacementKey(b)))
 }
 
+// Every engine a registry row can name: the daemon's own list (src/engines/types.ts ENGINES), which
+// hookNotify.spec.ts keeps this one equal to. A row naming one missing here made the whole registry read
+// as damaged, and a hook while the daemon was down then registered nothing at all: `terminal` was
+// missing, so one terminal open on the machine was enough (e2e/hookclient.e2e.ts).
 const REGISTRY_ENGINES = new Set([
   'claude', 'codex', 'cursor', 'opencode', 'pi', 'hermes', 'commandcode', 'devin', 'muse', 'amp', 'kilo', 'grok',
-  'agy', 'copilot',
+  'agy', 'copilot', 'terminal',
 ])
 
 function validRegistryString(value, max = 4096) {
@@ -1244,20 +1248,26 @@ async function fallbackRegister(input, engine, tmuxPane) {
     // into an empty registry merely because the daemon is down.
     if (loaded === null) return
     let sessions = loaded
+    const routeKeys = new Set(observedRuntimes.map(runtimeRouteKey))
+    const onRoute = (s) => !!s && !!(Array.isArray(s.runtimes)
+      ? s.runtimes.some((runtime) => routeKeys.has(runtimeRouteKey(runtime)))
+      : s.tmuxPane && routeKeys.has(runtimeRouteKey({ backend: 'tmux', paneId: s.tmuxPane })))
     writeBoot(p.bootFile)
     const now = Date.now()
     const sameRuntime = (s) => s && s.engine === engine
       && s.processIdentity?.pid === process.identity.pid && s.processIdentity?.startMarker === process.identity.startMarker
-    const existingIndex = sessions.findIndex(sameRuntime)
+    let existingIndex = sessions.findIndex(sameRuntime)
+    // An engine typed into a terminal is that terminal's agent from then on, as the daemon adopts it
+    // (registry.adoptEngine): the same agent, its name and its tile, now this engine's. Taken for a
+    // stranger on its pane, the terminal's row was dropped for a new agent, and the tile the person had
+    // open was gone when the daemon came back (e2e/hookclient.e2e.ts).
+    if (existingIndex < 0) existingIndex = sessions.findIndex((s) => s?.engine === 'terminal' && onRoute(s))
     const existing = existingIndex >= 0 ? sessions[existingIndex] : null
     // A resumed session moves to this process agent; the previous process remains visible but unbound.
     sessions = sessions.map((s) => s && s.sessionId === sessionId && !sameRuntime(s)
       ? { ...s, sessionId: '', boundAt: null, transcriptPath: null, source: null, updatedAt: now }
       : s)
-    const routeKeys = new Set(observedRuntimes.map(runtimeRouteKey))
-    if (existingIndex < 0) sessions = sessions.filter((s) => !s || !(Array.isArray(s.runtimes)
-      ? s.runtimes.some((runtime) => routeKeys.has(runtimeRouteKey(runtime)))
-      : s.tmuxPane && routeKeys.has(runtimeRouteKey({ backend: 'tmux', paneId: s.tmuxPane }))))
+    if (existingIndex < 0) sessions = sessions.filter((s) => !onRoute(s))
     const agentId = typeof existing?.agentId === 'string' && existing.agentId ? existing.agentId : randomUUID()
     const runtimes = mergeRuntimes(existing?.runtimes, observedRuntimes)
     const tmuxProjection = runtimes.find((runtime) => runtime.backend === 'tmux')?.paneId || ''
@@ -1278,6 +1288,8 @@ async function fallbackRegister(input, engine, tmuxPane) {
       // When an app last opened this agent (RegisteredSession.lastOpenedAt): a fact about the person,
       // not the process, and the daemon's own rebuild carries it the same way.
       ...(Number.isSafeInteger(existing?.lastOpenedAt) && existing.lastOpenedAt > 0 ? { lastOpenedAt: existing.lastOpenedAt } : {}),
+      // A pane that was a terminal goes back to being one when this engine exits.
+      ...(existing?.engine === 'terminal' || existing?.terminalHost === true ? { terminalHost: true } : {}),
     }
     // Everything else the daemon kept on the row goes on as it stands: the agent's name, permission mode,
     // harness (DSH) and its runtime, named agent, subscription model, the web search a grid launch decided,
