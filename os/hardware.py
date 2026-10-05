@@ -135,7 +135,10 @@ def nvidia_selection(devices, supported):
     # NVIDIA display, or take over a GPU explicitly assigned to passthrough.
     if any(card['id'] not in supported for card in cards):
         return {'status': 'unchanged', 'reason': 'An NVIDIA GPU needs a different driver.'}
-    if any(card['driver'] not in {None, 'nouveau', 'nvidia'} for card in cards):
+    # An unbound GPU can still be reserved for passthrough or explicitly kept
+    # on nouveau. Installing nvidia-utils would blacklist nouveau system-wide.
+    if any(card['driver'] not in {None, 'nouveau', 'nvidia'} or
+           card.get('driver_override') not in {None, '', 'nvidia'} for card in cards):
         return {'status': 'unchanged', 'reason': 'Keep the existing GPU assignment.'}
     return {'status': 'selected', 'devices': [card['id'] for card in cards]}
 
