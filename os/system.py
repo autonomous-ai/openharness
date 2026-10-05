@@ -196,7 +196,10 @@ def update(date):
     temporary.write_text(advanced)
     temporary.chmod(stat.S_IMODE(config.stat().st_mode))
     temporary.replace(config)
-    result = subprocess.run(['pacman', '-Syyu'])
+    # Both the CLI and the public release updater already hold the operation
+    # lock and saved the recovery point. Only this transaction skips our hook.
+    result = subprocess.run(['pacman', '-Syyu'],
+                            env=dict(os.environ, HN_OS_UPDATE_CHECKPOINT='1'))
     receipt.update(finished_at=datetime.now(timezone.utc).isoformat(), exit_status=result.returncode)
     write_json(UPDATE_RECEIPT, receipt)
     if result.returncode:
@@ -323,7 +326,6 @@ def main():
         if args.command == 'checkpoint':
             checkpoint('before-packages' if args.pacman_hook else 'manual', args.pacman_hook)
         elif args.command == 'update':
-            os.environ['HN_OS_UPDATE_CHECKPOINT'] = '1'
             update(args.snapshot)
         else:
             recover(args.device, args.checkpoint)
