@@ -32,6 +32,13 @@ export interface DaemonOptions {
   /** Keep the daemon's data folder here instead of under the throwaway root (a test volume). The fake
    *  engines read their hook credential from it, so it is set for them too. */
   dataDir?: string
+  /** Run beside this daemon, as a dev daemon runs beside the release one on one computer: its home, its
+   *  tmux server, the engines' transcript folders and the projects, with a data folder, port and engines
+   *  of its own (`dataDir` and `port` can name the other's instead). Closing it leaves the shared tmux
+   *  server to the daemon it runs beside. */
+  beside?: IsolatedDaemon
+  /** Ask for this port instead of a free one: a daemon started on another daemon's port. */
+  port?: number
 }
 
 async function freePort(): Promise<number> {
@@ -56,6 +63,9 @@ export const until = async <T>(what: string, probe: () => Promise<T | null | und
   throw new Error(`timed out after ${ms}ms waiting for ${what}${last ? ` (last error: ${String(last)})` : ''}`)
 }
 
+/** How many daemons have been started beside another in this process: each gets its own folder. */
+let besideCount = 0
+
 export class IsolatedDaemon {
   child: ChildProcess | null = null
   private output = ''
@@ -69,12 +79,16 @@ export class IsolatedDaemon {
   ) {}
 
   static async create(options: DaemonOptions = {}): Promise<IsolatedDaemon> {
-    const tmux = await isolatedTmux()
+    const beside = options.beside
+    const tmux = beside?.tmux ?? await isolatedTmux()
     const root = tmux.root
-    const port = await freePort()
+    const port = options.port ?? await freePort()
+    // What a daemon beside another keeps for itself; everything else is the computer's, and shared. Short
+    // names: the socket lives in the data folder, and a Unix socket's path has room for 96 bytes.
+    const own = beside ? join(root, `b${++besideCount}`) : root
     const dirs = {
-      home: join(root, 'home'), data: options.dataDir ?? join(root, 'data'), runtime: join(root, 'runtime'), auth: join(root, 'auth'),
-      bin: join(root, 'bin'), dsh: join(root, 'dsh'), claudeProjects: join(root, 'claude', 'projects'), codexHome: join(root, 'codex'),
+      home: join(root, 'home'), data: options.dataDir ?? join(own, beside ? 'd' : 'data'), runtime: join(own, 'runtime'), auth: join(own, 'auth'),
+      bin: join(own, 'bin'), dsh: join(own, 'dsh'), claudeProjects: join(root, 'claude', 'projects'), codexHome: join(root, 'codex'),
       projects: join(root, 'projects'),
     }
     for (const dir of Object.values(dirs)) await mkdir(dir, { recursive: true })
@@ -243,6 +257,7 @@ export class IsolatedDaemon {
         try { process.kill(core, 'SIGKILL') } catch { /* gone */ }
       }
     }
-    await this.tmux.close()
+    // A daemon beside another shares its tmux server: that one closes it.
+    if (!this.options.beside) await this.tmux.close()
   }
 }

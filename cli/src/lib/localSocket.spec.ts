@@ -1,11 +1,24 @@
 import { request } from 'node:http'
 import { connect } from 'node:net'
-import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
-import { isLocalSocketName, isTrustedLocal, listenLocalSocket, localSocketName, localSocketPath, type LocalSocketServer } from './localSocket.js'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { isLocalSocketName, isTrustedLocal, listenLocalSocket, localSocketName, localSocketPath, refuseServedDataFolder, type LocalSocketServer } from './localSocket.js'
 
 const LOCAL_SOCKET_NAME = localSocketName(18473)
+
+/** A filesystem without hard links, when a test says so. */
+const fsState = vi.hoisted(() => ({ noLinks: false }))
+vi.mock('node:fs', async (importOriginal) => {
+  const real = await importOriginal<typeof import('node:fs')>()
+  return {
+    ...real,
+    linkSync: (...args: Parameters<typeof real.linkSync>) => {
+      if (fsState.noLinks) throw Object.assign(new Error('EPERM: operation not permitted, link'), { code: 'EPERM' })
+      return real.linkSync(...args)
+    },
+  }
+})
 
 // Socket paths are capped near 104 bytes; the test tmpdir on macOS is far longer.
 const dirs: string[] = []
@@ -126,6 +139,40 @@ describe('listenLocalSocket', () => {
     expect(statSync(path).mode & 0o777).toBe(0o600)
   })
 
+  it('gives the socket to one of two daemons claiming it at once, and refuses the other', async () => {
+    // Two masters racing (e2e/twodaemons.e2e.ts): both used to "claim" it, the second's socket replacing
+    // the first's, which went on listening where nothing could reach it.
+    for (let round = 0; round < 10; round++) {
+      const path = join(shortDir(), LOCAL_SOCKET_NAME)
+      const claims = await Promise.allSettled([
+        listenLocalSocket((_req, res) => res.end('first'), path),
+        listenLocalSocket((_req, res) => res.end('second'), path),
+      ])
+      const won = claims.flatMap((claim, i) => claim.status === 'fulfilled' ? [{ socket: claim.value, body: i ? 'second' : 'first' }] : [])
+      const lost = claims.flatMap((claim) => claim.status === 'rejected' ? [claim.reason as NodeJS.ErrnoException] : [])
+      expect(won).toHaveLength(1)
+      opened.push(won[0]!.socket)
+      expect(lost).toMatchObject([{ code: 'EADDRINUSE', message: `A Harness daemon is already serving ${path}` }])
+      expect((await get(path, '/')).body).toBe(won[0]!.body)
+      // Nothing staged is left behind.
+      expect(readdirSync(join(path, '..'))).toEqual([LOCAL_SOCKET_NAME])
+    }
+  })
+
+  it('takes its name the way it always did where the filesystem has no hard links', async () => {
+    fsState.noLinks = true
+    try {
+      const path = join(shortDir(), LOCAL_SOCKET_NAME)
+      const socket = await listenLocalSocket((_req, res) => res.end('renamed'), path)
+      opened.push(socket)
+      expect((await get(path, '/')).body).toBe('renamed')
+      expect(statSync(path).mode & 0o777).toBe(0o600)
+      expect(readdirSync(join(path, '..'))).toEqual([LOCAL_SOCKET_NAME])
+    } finally {
+      fsState.noLinks = false
+    }
+  })
+
   it('removes the socket file when it closes', async () => {
     const path = join(shortDir(), LOCAL_SOCKET_NAME)
     const socket = await listenLocalSocket((_req, res) => res.end(), path)
@@ -139,5 +186,26 @@ describe('listenLocalSocket', () => {
     const again = await listenLocalSocket((_req, res) => res.end(), path)
     again.closeSync()
     expect(existsSync(path)).toBe(false)
+  })
+})
+
+describe('refuseServedDataFolder', () => {
+  it('refuses only a data folder a daemon is serving right now, as the bind would', async () => {
+    const dir = shortDir()
+    const path = join(dir, LOCAL_SOCKET_NAME)
+    // No socket at all, a crashed daemon's, a file that is not one, and no path where there is none.
+    await expect(refuseServedDataFolder(path)).resolves.toBeUndefined()
+    const crashed = await listenLocalSocket((_req, res) => res.end(), path)
+    crashed.server.close()
+    await expect(refuseServedDataFolder(path)).resolves.toBeUndefined()
+    await expect(refuseServedDataFolder(null)).resolves.toBeUndefined()
+    const plain = join(dir, 'plain')
+    writeFileSync(plain, 'not a socket')
+    await expect(refuseServedDataFolder(plain)).resolves.toBeUndefined()
+
+    const running = await listenLocalSocket((_req, res) => res.end(), path)
+    opened.push(running)
+    const refused = await refuseServedDataFolder(path).catch((error: unknown) => error as NodeJS.ErrnoException)
+    expect(refused).toMatchObject({ code: 'EADDRINUSE', message: `A Harness daemon is already serving ${path}` })
   })
 })

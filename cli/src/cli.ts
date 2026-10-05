@@ -179,7 +179,7 @@ import { MODELS_REQUESTS, startModels } from './services/models.js'
 import { startWorkspaces } from './services/workspaces.js'
 import { describeMasterStatus, readStatusFile, runMaster } from './harnessd/master.js'
 import { CORE_EXIT_STOP, CORE_EXIT_UPDATE } from './harnessd/protocol.js'
-import { isLocalSocketName, localSocketPath, type LocalSocketServer } from './lib/localSocket.js'
+import { isLocalSocketName, localSocketPath, refuseServedDataFolder, type LocalSocketServer } from './lib/localSocket.js'
 import { legacyDaemonStatus, localDaemonStatus, saveDaemonPort } from './lib/daemonEndpoint.js'
 import { commandBarService } from './lib/commandBar.js'
 import { BackendSocket, isLocalClientId } from './backendSocket.js'
@@ -1645,6 +1645,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     intervalMs: env.ADAPTER_UPDATE_CHECK_MS,
     slotSecond: env.ADAPTER_UPDATE_SLOT_SEC,
   })
+
+  // Another daemon serves this data folder: leave before reading or writing anything of its — its
+  // registry, its viewers, its panes. Just after the updaters, never before them (startupOrder.spec.ts);
+  // their first check is a slot away, and a daemon that leaves here is gone long before it.
+  await refuseServedDataFolder(localSocketPath(env.ADAPTER_DATA_DIR, env.PORT))
 
   // harnessd's master saw this core crash again and again: start nothing that could do it again. The
   // updaters above keep running, so a published fix still lands (`enterSafeMode`).
@@ -5484,12 +5489,12 @@ function withoutFirst(argv: string[], token: string): string[] {
 if (!cmd || cmd === '--help' || cmd === '-h' || cmd === 'help') usage()
 if (cmd === 'version' || cmd === '--version' || cmd === '-v') { console.log(VERSION); process.exit(0) }
 
-const onError = (err: unknown): never => {
+const onError = (err: unknown, code = 1): never => {
   console.error('Failed to start adapter:', err)
   // A daemon that claimed the pid file (port bound) and then failed to finish starting must not leave
   // that file naming a corpse — the next `harness start` would refuse on it. Only ours, though.
   removePidFileIf(process.pid)
-  process.exit(1)
+  process.exit(code)
 }
 
 /**
@@ -5511,7 +5516,9 @@ const enterSafeMode = (err: unknown): void => {
   const disposition = safeModeDisposition(err, { selfPid: process.pid, masterPid: coreLink.masterPid, readPid, isAlive })
   if (!disposition.stay) {
     console.error(`[safe-mode] not staying up — ${disposition.reason}`)
-    onError(err)
+    // Under harnessd, said for good: any other exit, the master restarts, and a core that another daemon
+    // keeps from running was restarted for as long as its master lived (e2e/twodaemons.e2e.ts).
+    onError(err, coreLink.supervised ? CORE_EXIT_STOP : 1)
   }
   const detail = err instanceof Error ? (err.stack ?? err.message) : String(err)
   console.error('Failed to start adapter:', err)

@@ -25,6 +25,11 @@ describe('safeModeDisposition', () => {
       .toMatchObject({ stay: false })
     expect(safeModeDisposition(new Error('boom'), { selfPid: 100, readPid: () => 200, isAlive: () => true }))
       .toMatchObject({ stay: false, reason: 'another daemon (pid 200) owns this machine' })
+    // The data folder's socket already served, before any pid file names the daemon serving it.
+    const served = Object.assign(new Error('A Harness daemon is already serving /data/daemon-18473.sock'), { code: 'EADDRINUSE' })
+    expect(safeModeDisposition(served, nobody)).toEqual({ stay: false, reason: 'A Harness daemon is already serving /data/daemon-18473.sock' })
+    expect(safeModeDisposition(Object.assign(new Error('boom'), { code: 'ENOENT' }), nobody).stay).toBe(true)
+    expect(safeModeDisposition(null, nobody).stay).toBe(true)
   })
 
   it('stays when the pid file names us, or names a corpse', () => {

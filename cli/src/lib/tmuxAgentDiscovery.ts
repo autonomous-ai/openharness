@@ -17,7 +17,10 @@ import type { AgentEngine } from '../engines/types.js'
 import { probeGatewayRuntime } from './gatewayRuntime.js'
 import { probeGridAssignment, type GridAssignment } from './gridAssignment.js'
 import { probeCodexHome } from './codexHomeProbe.js'
-import { buildHarnessSessionLabel, isHarnessSession, isLegacyHarnessSession } from './harnessSessionLabel.js'
+import { env } from '../config/env.js'
+import {
+  buildHarnessSessionLabel, HARNESS_OWNER_OPTION, harnessPaneOwner, isLegacyHarnessSession, ownedHere,
+} from './harnessSessionLabel.js'
 import { psEnv } from './childLocale.js'
 import type { ProcessIdentity, RegisteredSession } from './registry.js'
 import {
@@ -40,6 +43,8 @@ export interface TmuxPaneSnapshot {
   rootPid: number
   tmuxSessionName: string
   cwd: string
+  /** The daemon that created the pane (`HARNESS_OWNER_OPTION`); empty when no daemon tagged it. */
+  owner?: string
 }
 
 export interface DiscoveredTmuxAgent {
@@ -97,6 +102,10 @@ function execText(
   })
 }
 
+/** What every pane listing asks tmux for. The owner tag goes last: a folder's path can hold `|`, the tag
+ *  never does, so the last `|` is always the one before it. */
+export const PANE_FORMAT = `#{pane_id}|#{pane_pid}|#{session_name}|#{pane_current_path}|#{${HARNESS_OWNER_OPTION}}`
+
 export function parsePanes(stdout: string): TmuxPaneSnapshot[] {
   const panes: TmuxPaneSnapshot[] = []
   for (const line of stdout.split('\n')) {
@@ -108,11 +117,15 @@ export function parsePanes(stdout: string): TmuxPaneSnapshot[] {
     const pidText = line.slice(first + 1, second)
     const rootPid = Number(pidText)
     if (!/^%\d+$/.test(tmuxPane) || !Number.isSafeInteger(rootPid) || rootPid <= 0) continue
+    // A listing without the owner field (an older format) is a pane nobody tagged.
+    const rest = line.slice(third + 1)
+    const tag = rest.lastIndexOf('|')
     panes.push({
       tmuxPane,
       rootPid,
       tmuxSessionName: line.slice(second + 1, third),
-      cwd: line.slice(third + 1),
+      cwd: tag < 0 ? rest : rest.slice(0, tag),
+      owner: tag < 0 ? '' : rest.slice(tag + 1),
     })
   }
   return panes
@@ -125,14 +138,16 @@ export type TmuxPaneInventory =
 /**
  * One bounded tmux inventory read, shared by discovery and the neutral backend adapter.
  *
- * Only panes from sessions this daemon itself named via `agent_create` are returned — a session
- * the user opened by hand, or one an agent spawned itself with a nested `tmux new-session`, is
- * invisible to every discovery path (autonomous-harness-desktop#6).
+ * Only this daemon's panes are returned (`ownedHere`): the ones it tagged, in whatever session the
+ * person has since renamed or moved them into, and untagged ones only in sessions Harness named. A
+ * session the user opened by hand, or one an agent spawned itself with a nested `tmux new-session`, is
+ * invisible to every discovery path (autonomous-harness-desktop#6); so is a pane another daemon on this
+ * tmux server created (`HARNESS_OWNER_OPTION`): a dev daemon beside the release one opened an agent for
+ * every one of the release daemon's panes, and could stop them (e2e/twodaemons.e2e.ts).
  */
-export async function listTmuxPanes(): Promise<TmuxPaneInventory> {
-  // Printable delimiters survive tmux's POSIX-locale output sanitiser. Split only the three fixed
-  // separators so a legitimate `|` in pane_current_path remains part of the path.
-  const read = () => execText('tmux', ['list-panes', '-a', '-F', '#{pane_id}|#{pane_pid}|#{session_name}|#{pane_current_path}'], 2_000)
+export async function listTmuxPanes(owner: string = harnessPaneOwner(env.ADAPTER_DATA_DIR)): Promise<TmuxPaneInventory> {
+  // Printable delimiters survive tmux's POSIX-locale output sanitiser (see PANE_FORMAT).
+  const read = () => execText('tmux', ['list-panes', '-a', '-F', PANE_FORMAT], 2_000)
   let result = await read()
   // A server whose socket was removed still runs its panes: asked back, it is read again, once.
   if (!result.ok && isNoTmuxServerError(result.error) && await reviveRemovedTmuxSocket()) result = await read()
@@ -144,7 +159,10 @@ export async function listTmuxPanes(): Promise<TmuxPaneInventory> {
     if (isNoTmuxServerError(result.error)) return { ok: true, panes: [] }
     return result
   }
-  return { ok: true, panes: parsePanes(result.stdout).filter((pane) => isHarnessSession(pane.tmuxSessionName)) }
+  return {
+    ok: true,
+    panes: parsePanes(result.stdout).filter((pane) => ownedHere(pane.owner ?? '', pane.tmuxSessionName, owner)),
+  }
 }
 
 export interface AdoptedLegacySession { from: string; to: string; paneId: string }
@@ -165,7 +183,7 @@ export async function adoptLegacyHarnessSessions(
   now: number = Date.now(),
 ): Promise<AdoptedLegacySession[]> {
   if (!ownedPanes.size) return []
-  const result = await execText('tmux', ['list-panes', '-a', '-F', '#{pane_id}|#{pane_pid}|#{session_name}|#{pane_current_path}'], 2_000)
+  const result = await execText('tmux', ['list-panes', '-a', '-F', PANE_FORMAT], 2_000)
   if (!result.ok) return []
   const adopted: AdoptedLegacySession[] = []
   const seen = new Set<string>()
