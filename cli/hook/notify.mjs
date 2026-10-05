@@ -1263,9 +1263,9 @@ async function fallbackRegister(input, engine, tmuxPane) {
     const tmuxProjection = runtimes.find((runtime) => runtime.backend === 'tmux')?.paneId || ''
     // What the daemon chose for this agent at launch and cannot re-derive from the process — the
     // grid launch (credential included), the Codex profile, the bypass flag, the observed grid and
-    // gateway — is carried forward exactly as `registry.register()` does. A hook arriving while the
-    // daemon is down must not be the one write that strips the row of them. `launch` is not: like
-    // there, a hook means the engine is up, whatever the launch was.
+    // gateway — is carried forward, in the shapes `registry.register()` gives them. A hook arriving
+    // while the daemon is down must not be the one write that strips the row of them. `launch` is not:
+    // like there, a hook means the engine is up, whatever the launch was.
     const carried = {
       gateway: existing?.gateway === 'ori' ? 'ori' : null,
       grid: existing?.grid ?? null,
@@ -1278,17 +1278,20 @@ async function fallbackRegister(input, engine, tmuxPane) {
       // When an app last opened this agent (RegisteredSession.lastOpenedAt): a fact about the person,
       // not the process, and the daemon's own rebuild carries it the same way.
       ...(Number.isSafeInteger(existing?.lastOpenedAt) && existing.lastOpenedAt > 0 ? { lastOpenedAt: existing.lastOpenedAt } : {}),
-      // …and the rest of what `register()` carries: the harness (DSH) and its runtime, the agent file,
-      // the permission mode, the subscription model, the default name, the web search a grid launch
-      // decided, and a close planned for after the task (#812). Dropped here, a hook in the seconds an
-      // update leaves the daemon down relaunched a harness as a plain engine and never closed an agent
-      // its person had asked to close. As there, a resume-only row's launch is over once a hook comes.
-      ...Object.fromEntries(['gridWebSearch', 'subscriptionModel', 'defaultName', 'dsh', 'dshRuntime', 'agent', 'permissionMode', 'closePlan']
-        .filter((key) => existing?.[key] !== undefined && existing?.[key] !== null).map((key) => [key, existing[key]])),
-      ...(existing?.resumeOnly === true ? { resumeOnly: true, launch: { state: 'ready' } } : {}),
-      ...(existing?.terminalHost === true ? { terminalHost: true } : {}),
     }
+    // Everything else the daemon kept on the row goes on as it stands: the agent's name, permission mode,
+    // harness (DSH) and its runtime, named agent, subscription model, the web search a grid launch decided,
+    // the close planned for after the task (#812), whether it is a terminal, that a stop must be resumed
+    // and not started over, and whatever the daemon keeps there next. Named fields alone were the row
+    // rebuilt without them, which the daemon then loaded as its own: a hook in the seconds an update or a
+    // restart leaves the daemon down relaunched a harness as a plain engine, out of the mode it was made
+    // in and under another name, and never closed an agent its person had asked to close (#831;
+    // e2e/hookclient.e2e.ts). The launch is over once a hook comes, as `registry.register()` has it:
+    // left behind, or `ready` on a row that may only be resumed.
+    const { launch: _launch, ...kept } = existing ?? {}
     const entry = {
+      ...kept,
+      ...(existing?.resumeOnly === true ? { launch: { state: 'ready' } } : {}),
       schemaVersion: 2,
       active: true,
       ...carried,
@@ -1319,7 +1322,10 @@ async function fallbackRegister(input, engine, tmuxPane) {
       cliVersion: typeof (input.cli_version || input.version) === 'string' ? (input.cli_version || input.version) : (existing?.cliVersion ?? null),
       processIdentity: process.identity,
       registeredAt: typeof existing?.registeredAt === 'number' ? existing.registeredAt : now,
+      // A bind is a change to the row, as the daemon stamps one; `updatedAt` is that stamp's name for
+      // a daemon from before 2026-09-27.
       updatedAt: now,
+      touchedAt: now,
       lastHookAt: now,
       lastTranscriptAt: typeof existing?.lastTranscriptAt === 'number' ? existing.lastTranscriptAt : now,
     }

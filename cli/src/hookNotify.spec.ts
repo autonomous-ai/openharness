@@ -946,6 +946,60 @@ describe('hook notify terminal scope', () => {
     expect(JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf-8'))[0]).toMatchObject({ resumeOnly: true, launch: { state: 'ready' }, ...CHOSEN })
   })
 
+  it('keeps everything else the daemon kept on the row through an offline re-register, a new conversation included', async () => {
+    // The hook rebuilt the row from the fields it named, and the daemon, back, loaded that as its own:
+    // the agent came back under another name and relaunched out of the mode it was made in, its harness,
+    // named agent and close plan gone (e2e/hookclient.e2e.ts, the daemon down while a conversation began).
+    const dir = mkdtempSync(join(tmpdir(), 'adapter-hook-kept-'))
+    tmpDirs.push(dir)
+    const claudeProjectsDir = join(dir, 'claude-projects')
+    const dataDir = join(dir, 'data')
+    mkdirSync(join(claudeProjectsDir, 'demo'), { recursive: true })
+    mkdirSync(dataDir, { recursive: true })
+    chmodSync(dataDir, 0o755)
+    const transcript = (sessionId: string) => {
+      const path = join(claudeProjectsDir, 'demo', `${sessionId}.jsonl`)
+      writeFileSync(path, '{}\n')
+      return path
+    }
+    const kept = {
+      defaultName: 'release notes',
+      permissionMode: 'plan',
+      dsh: 'acme/reviewer',
+      dshRuntime: 'harness-runtime-1',
+      agent: 'reviewer',
+      terminalHost: true,
+      resumeOnly: true,
+      subscriptionModel: 'claude-opus-5-5',
+      gridWebSearch: 'on',
+      closePlan: { id: 'close-1', requestedAt: 1_790_000_000_000, identity: 'session-1', state: 'waiting' },
+      forkedFrom: { agentId: 'agent-source', name: 'source', sessionId: 'session-0' },
+    }
+    writeLegacyStateFile(join(dataDir, 'registry.json'), JSON.stringify([{
+      schemaVersion: 2, active: true, launch: { state: 'starting' }, agentId: 'agent-kept', sessionId: 'session-1', boundAt: 1,
+      engine: 'claude', gateway: null, grid: null, codexHome: null, transcriptPath: transcript('session-1'), projectDir: 'demo',
+      cwd: '/tmp/demo', runtimes: [{ backend: 'tmux', paneId: '%7' }], primaryRuntimeKey: 'tmux\u0000%7', tmuxPane: '%7',
+      source: null, title: null, model: null, cliVersion: null,
+      processIdentity: { pid: 7001, executable: 'claude', startMarker: 'Mon Aug 10 10:00:01 2026' },
+      registeredAt: 1, touchedAt: 1, lastHookAt: 1, lastTranscriptAt: 1,
+      ...kept,
+    }]))
+
+    for (const [event, sessionId, source] of [['UserPromptSubmit', 'session-1', undefined], ['SessionStart', 'session-2', 'clear']] as const) {
+      await runHook({
+        port: 9, tmuxPane: '%7', processEngine: 'claude', dataDir, claudeProjectsDir,
+        input: { hook_event_name: event, session_id: sessionId, transcript_path: transcript(sessionId), cwd: '/tmp/demo', ...(source ? { source } : {}) },
+      })
+      const rows = JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf-8'))
+      expect(rows).toHaveLength(1)
+      expect(rows[0]).toMatchObject({ agentId: 'agent-kept', sessionId, ...kept })
+      // A hook means the engine is up, whatever the launch was: over, as `register()` has it, which on a
+      // row that may only be resumed reads `ready`.
+      expect(rows[0].launch).toEqual({ state: 'ready' })
+      expect(rows[0].touchedAt).toBeGreaterThan(1)
+    }
+  })
+
   it('an offline re-register of the session a row already holds keeps the row\'s folder', async () => {
     // Claude's UserPromptSubmit carries the tracked shell directory — wherever the agent last
     // `cd`'d — and a daemon-down rebuild must not move the row there any more than the daemon does.
