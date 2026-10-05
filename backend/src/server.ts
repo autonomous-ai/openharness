@@ -11,6 +11,7 @@ import { cursorRoutes } from './routes/cursor.js'
 import { voiceRoutes } from './routes/voice.js'
 import { harnessShareRoutes } from './routes/harnessShares.js'
 import { harnessLinkRoutes } from './routes/harnessLinks.js'
+import { communityRoutes } from './routes/community.js'
 import { deviceKeyRoutes } from './routes/deviceKeys.js'
 import { qrSignInRoutes } from './routes/qrSignIn.js'
 import { deskRoutes } from './routes/desk.js'
@@ -172,6 +173,7 @@ async function start(): Promise<void> {
   await app.register(storeRoutes)      // the Harness Store's ratings and reviews; the catalogue is the CLI's registry
   await app.register(harnessShareRoutes)
   await app.register(harnessLinkRoutes)
+  await app.register(communityRoutes)
   await app.register(qrSignInRoutes)       // sign a computer in by scanning its QR with a signed-in phone
   await app.register(deviceKeyRoutes)     // the account's device key log: signing in is what trusts a device
   await app.register(deskRoutes)          // the account's tabs, the same on every computer (lib/desk.ts)

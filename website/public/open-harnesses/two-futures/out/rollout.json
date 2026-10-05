@@ -1,0 +1,24 @@
+{
+  "model": {
+    "nbody": 14,
+    "nq": 19,
+    "nv": 18,
+    "nu": 12,
+    "timestep": 0.002
+  },
+  "model_path": "menagerie/unitree_go2/scene.xml",
+  "model_xml": "out/rollout.model.xml",
+  "model_patch": [
+    "key_qpos"
+  ],
+  "seconds": 14.0,
+  "fps": 30,
+  "frames": 421,
+  "video": null,
+  "nan": false,
+  "max_qvel": 0.9848347563252512,
+  "trajectory": "out/rollout.qpos.json",
+  "ctrl_recorded": true,
+  "sim_time": 14.280000000001438,
+  "wall_seconds": 0.22
+}

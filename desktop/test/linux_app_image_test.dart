@@ -32,7 +32,11 @@ void main() {
   test('an AppImage started from Downloads lands in the app list', () async {
     await launch('$home/Downloads/Harness-linux-x64.AppImage');
     final text = entry().readAsStringSync();
-    expect(text, contains('Exec=$home/Downloads/Harness-linux-x64.AppImage\n'));
+    expect(
+      text,
+      contains('Exec=$home/Downloads/Harness-linux-x64.AppImage %u\n'),
+    );
+    expect(text, contains('MimeType=x-scheme-handler/harness;\n'));
     expect(text, contains('StartupWMClass=com.autonomous.harness\n'));
     expect(text, contains('Icon=$home/.local/share/icons/harness.png\n'));
     expect(File('$home/.local/share/icons/harness.png').readAsBytesSync(), [
@@ -46,7 +50,7 @@ void main() {
     await launch('$home/My Apps/Harness.AppImage');
     expect(
       entry().readAsStringSync(),
-      contains('Exec="$home/My Apps/Harness.AppImage"\n'),
+      contains('Exec="$home/My Apps/Harness.AppImage" %u\n'),
     );
   });
 
@@ -55,7 +59,21 @@ void main() {
     await launch('$home/Downloads/Harness-linux-x64.AppImage');
     expect(
       entry().readAsStringSync(),
-      contains('Exec=$home/.local/opt/Harness.AppImage\n'),
+      contains('Exec=$home/.local/opt/Harness.AppImage %u\n'),
+    );
+  });
+
+  test('an existing launcher for this copy gains the fork protocol', () async {
+    final path = '$home/Applications/Harness.AppImage';
+    await launch(path);
+    entry().writeAsStringSync(
+      '[Desktop Entry]\nType=Application\nExec=$path\n',
+    );
+    await launch(path);
+    expect(entry().readAsStringSync(), contains('Exec=$path %u\n'));
+    expect(
+      entry().readAsStringSync(),
+      contains('MimeType=x-scheme-handler/harness;'),
     );
   });
 
@@ -65,7 +83,7 @@ void main() {
     await launch('$home/Downloads/Harness-linux-x64.AppImage');
     expect(
       entry().readAsStringSync(),
-      contains('Exec=$home/Downloads/Harness-linux-x64.AppImage\n'),
+      contains('Exec=$home/Downloads/Harness-linux-x64.AppImage %u\n'),
     );
   });
 
