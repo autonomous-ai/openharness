@@ -247,28 +247,25 @@ describe('engines updated in place', () => {
     expect(failed.launch.error).toBe('ENGINE_NOT_INSTALLED')
     expect(failed.launch.detail).toContain(`${engine} is not installed`)
 
-    // A restart cannot bring the agent back on an engine that is not there, so it should say so before
-    // it stops the one that is running, the way it already checks the agent's folder first.
+    // A restart cannot bring the agent back on an engine that is not there, so it is refused before the
+    // running agent is touched, with the reason, the way the agent's folder is checked first.
     startedAt = Date.now()
     const restarted = await client.request('agent_restart', { agentId: agent.id }, 90_000)
-    const restartMs = Date.now() - startedAt
-    expect(restarted.error, JSON.stringify(restarted)).toBeTruthy()
-    expect.soft(restartMs, `the refused restart took ${restartMs}ms: ${JSON.stringify(restarted)}`).toBeLessThan(10_000)
-    expect.soft(String(restarted.detail), 'the restart names the reason').toContain('not installed')
-    const afterRestart = await row(client, agent.id)
-    expect.soft(afterRestart?.status, `the running agent after the refused restart: ${JSON.stringify({ status: afterRestart?.status, launch: afterRestart?.launch })}`).toBe('active')
+    expect(Date.now() - startedAt).toBeLessThan(10_000)
+    expect(restarted.error, JSON.stringify(restarted)).toBe('ENGINE_NOT_INSTALLED')
+    expect(String(restarted.detail)).toContain(`${engine} is not installed`)
+    await turn(client, agent.id, 'after the refused restart')
 
     install(d, engine, { version: NEW[engine] })
     const next = await create(d, client, engine, `reinstalled-${engine}`)
     expect(await runningVersion(client, next.id)).toBe(versionLine(engine, NEW[engine]))
-    // The first agent is back on its own conversation: restarted if it was still running, resumed if
-    // the failed restart left it stopped.
-    const now = await row(client, agent.id)
-    const back = await client.request(now?.status === 'active' ? 'agent_restart' : 'agent_resume', { agentId: agent.id }, 90_000)
+    // The first agent restarts onto the engine installed again, in its own conversation.
+    const back = await client.request('agent_restart', { agentId: agent.id }, 90_000)
     expect(back.error, JSON.stringify(back)).toBeUndefined()
+    expect(back.resumed).toBe(true)
     await bound(client, agent.id, agent.sessionId)
     expect(await runningVersion(client, agent.id)).toBe(versionLine(engine, NEW[engine]))
-    expect((await thread(client, agent.sessionId)).users).toContain('after the uninstall')
+    expect((await thread(client, agent.sessionId)).users).toContain('after the refused restart')
     expect(d.coresStarted()).toBe(1)
     client.close()
   })
