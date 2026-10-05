@@ -7,9 +7,12 @@
  * in it may act as keystrokes: in particular the paste's own end marker (ESC [201~), which would end
  * the paste early and turn the rest into typing, and a carriage return inside it.
  *
- * Measured (tmux 3.7c): tmux itself defangs control characters inside a bracketed paste (the engine
- * receives ESC as the two characters `^[`), and that is what keeps the end marker from acting; the
- * daemon pastes the message as it came. This test is the guard for a tmux that does not.
+ * Measured: tmux 3.7c defangs control characters inside a bracketed paste itself (the engine receives
+ * ESC as the two characters `^[`), but 3.2a and 3.3a, what Ubuntu 22.04 and Debian 12 ship, pass ESC
+ * through raw: there the end marker ended the paste after `hello` and the engine ran `!exit` as typed
+ * input. The daemon now makes every control but tab and newline visible before it pastes
+ * (lib/pasteText.ts), so a message reads the same on every tmux. This test holds that on whichever tmux
+ * is first on PATH.
  */
 import { execFileSync } from 'node:child_process'
 import { mkdirSync } from 'node:fs'
