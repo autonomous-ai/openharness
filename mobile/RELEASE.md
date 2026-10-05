@@ -124,8 +124,9 @@ may lack symbolicated stacks until the matching symbols are supplied.
 | `1.0.1 (51)` | 2026-10-01 | TestFlight. First build on the 1.0.1 train — 1.0.0 was approved and its train closed, so ASC refused 1.0.0 (51). Faster launch to the first session; tabs named as on the desktop; Find recaps fold behind a chevron; device key log (#518). First upload from an unsigned archive signed on export (`release-ios.sh`, Xcode account). Built from `feat/mobile-ios-android` |
 | `1.0.1 (52)` | 2026-10-01 | TestFlight. The launch terminal opens before the agent list; the desktop app, web and CLI sign in by scanning a QR with the phone (#519). Built from `feat/mobile-ios-android` after merging `main` |
 | `1.0.1 (55)` | 2026-10-02 | TestFlight. Sign in with Google or Apple (an in-app SFSafariViewController over the loopback, so no Sign in with Apple entitlement); faster launch for large accounts and a full skeleton while it loads; back button on the Computers and device pages; device key codes to compare. ASC refused 54 as already uploaded — someone uploaded a 54 that is not recorded here. Built from `feat/mobile-ios-android` at `f95db4a2` |
+| `1.0.1 (56)` | 2026-10-05 | TestFlight. Copy and paste in the terminal (the key strip's `paste` asks iOS `hasImages`, which never brings up the paste prompt); computers and profiles can be renamed, removed and retried; Devices DSH frames sealed as the CLI requires. Built from `feat/mobile-ios-android` at `28e95521` |
 
-`pubspec.yaml` is now at `1.0.1+56`, the next build number. Build 55 is the last iOS upload (54 went
+`pubspec.yaml` is now at `1.0.1+57`, the next build number. Build 56 is the last iOS upload (54 went
 up outside this record) and 53 went to Play only; do not upload any of them again. Check App Store Connect before uploading if another release has happened meanwhile.
 
 ### Why the app is iPhone-only
