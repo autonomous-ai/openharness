@@ -589,6 +589,9 @@ describe('TmuxBackend with variables on a tmux that cannot take them', () => {
   it('refuses a respawn below 3.0, saying why, and asks tmux nothing', async () => {
     assumeTmuxVersion({ major: 2, minor: 9 })
     const calls = recordingTmux()
+    // Asked before a restart stops anything, with the same answer.
+    expect(await new TmuxBackend().respawnRefusal({ env })).toContain('older than 3.0')
+    expect(await new TmuxBackend().respawnRefusal({})).toBeNull()
     const moved = await new TmuxBackend().respawn({ backend: 'tmux', paneId: '%9' }, { env, command: ['codex'] })
     expect(moved).toMatchObject({ state: 'failed', dispatch: 'not_started' })
     expect(moved.state !== 'succeeded' && moved.reason).toContain('older than 3.0')

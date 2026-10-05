@@ -24,6 +24,7 @@ function setup(row: RegisteredSession | null = session()) {
   const tmuxBackend = {
     holdOpen: vi.fn(async () => ({ state: 'succeeded' })),
     respawn: vi.fn(async () => ({ state: 'succeeded' })),
+    respawnRefusal: vi.fn(async (request: { env?: Record<string, string> }) => request.env ? 'too old' : null),
   }
   const deps: PaneSwapDeps = {
     byAgent: vi.fn(() => row ?? undefined),
@@ -57,6 +58,9 @@ describe('the pane-process swap', () => {
     expect(deps.prepareSessionResume).toHaveBeenCalledWith(session())
     swapDeps.keepAbandoned?.()
     expect(deps.keepAbandonedConversation).toHaveBeenCalledWith(session())
+    // Asked of tmux with the relaunch's own environment, before anything is stopped.
+    expect(await swapDeps.respawnRefusal?.()).toBe('too old')
+    expect(await swap.paneSwapDeps(session(), runtime).respawnRefusal?.()).toBeNull()
     expect(await swapDeps.holdOpen()).toEqual({ ok: true })
     tmuxBackend.holdOpen.mockResolvedValueOnce({ state: 'failed', reason: 'pane gone' } as never).mockResolvedValueOnce({ state: 'unknown' } as never)
     expect(await swapDeps.holdOpen()).toEqual({ ok: false, reason: 'pane gone' })

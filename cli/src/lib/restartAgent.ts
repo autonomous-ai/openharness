@@ -83,6 +83,9 @@ export interface RestartAgentDeps {
   terminate: (checkAfterMs?: number) => Promise<TerminateOutcome>
   /** `tmux respawn-pane` (or equivalent) with a fully-built argv. */
   respawn: (argv: string[]) => Promise<{ ok: boolean; reason?: string }>
+  /** Why `respawn` would be refused here (a tmux too old for what the relaunch needs), asked before
+   *  anything is stopped; null when it would try. Left out, never refused. */
+  respawnRefusal?: () => Promise<string | null>
   /** Poll the pane for a recognizable engine process, up to an internal budget. Null on timeout. */
   waitForProcess: () => Promise<ProcessIdentity | null>
   /** Prepare persisted history only once the old writer is confirmed stopped. A failure must
@@ -105,6 +108,10 @@ export async function restartAgent(
 ): Promise<RestartOutcome> {
   const changed = { ok: false, detail: 'the harness changed or stopped during restart' } as const
   const current = () => deps.isCurrent?.() !== false
+  if (!current()) return changed
+  // Before anything is stopped: refused after the kill, the agent was left with no engine at all.
+  const refused = await deps.respawnRefusal?.()
+  if (refused) return { ok: false, detail: `${refused} Nothing was stopped.` }
   if (!current()) return changed
   const armed = await deps.holdOpen()
   if (!current()) return changed
