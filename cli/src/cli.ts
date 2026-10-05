@@ -1634,7 +1634,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const startedAt = Date.now()
   // Set when the restore pass could not run. The reconciler reads it at call time (its deps are built
   // long before this is decided) and keeps rows it would otherwise retire — see `onRemoved`.
-  let restoreDegraded = false
+  // Restore did not run this boot (every row), or could not look at these rows (core/agents/discovery.ts).
+  let restoreFailed = false
+  const restoreUnsurveyed = new Set<string>()
   let discoveryReady = false
   let discoveryError: string | null = null
   // How a boot that failed AFTER this server bound turns its own status not-ready: the app reads
@@ -2509,7 +2511,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     stopHeartbeat,
     retainExitedSession,
     stoppedAgents,
-    restoreDegraded: () => restoreDegraded,
+    restoreDegraded: (agentId) => restoreFailed || restoreUnsurveyed.has(agentId),
   })
   // HARNESSD_TEST_SLOW_PROBE_MS holds each discovery probe for up to that long, at random, before it is
   // applied: some scans land at once and some straddle an agent's start, as on a loaded machine. The
@@ -3428,13 +3430,13 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       log: (message) => console.log(message),
     })
     // A row restore could not look at keeps its pane for discovery to judge, but not to retire this boot.
-    if (summary.unsurveyed.length) restoreDegraded = true
+    for (const agentId of summary.unsurveyed) restoreUnsurveyed.add(agentId)
     if (summary.restored.length || summary.failed.length || registry.rebootedSinceLastRun) {
       console.log(`[restore] restored ${summary.restored.length} · skipped ${summary.skipped.length} · failed ${summary.failed.length}`
         + (registry.rebootedSinceLastRun ? ' · after reboot' : ''))
     }
    } catch (error) {
-    restoreDegraded = true
+    restoreFailed = true
     console.warn(`[restore] skipped · ${error instanceof Error ? error.message : error}`
       + ' · agents keep their rows and come back on the next start')
    }

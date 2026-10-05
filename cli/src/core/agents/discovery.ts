@@ -38,8 +38,9 @@ export interface DiscoveryDeps {
   stopHeartbeat: (sessionId: string) => void
   retainExitedSession: (agent: RegisteredSession, announce: boolean) => void
   stoppedAgents: Pick<StoppedAgentStore, 'finishResume'>
-  /** Whether restore did not run this boot: a missing pane then is one never rebuilt, not one closed. */
-  restoreDegraded: () => boolean
+  /** Whether restore did not get to this agent this boot (it did not run, or could not look at its row):
+   *  its missing pane is then one never rebuilt, not one closed. */
+  restoreDegraded: (agentId: string) => boolean
 }
 
 export function createDiscoveryHandlers({
@@ -207,7 +208,7 @@ export function createDiscoveryHandlers({
     // would archive a row whose tmux pane was simply never rebuilt, and the person would have to
     // Open each one by hand; keeping it dormant leaves the next daemon — the fixed one — something
     // to restore.
-    if (restoreDegraded()) {
+    if (restoreDegraded(agent.agentId)) {
       console.log(`[discovery] ${sid(agent.agentId)} kept · restore did not run this boot · ${reason}`)
       registry.setActive(agent.agentId, false)
       announceSession(agent)

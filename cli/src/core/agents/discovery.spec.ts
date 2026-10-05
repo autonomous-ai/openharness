@@ -20,7 +20,7 @@ const seen = (over: Partial<DiscoveredTerminalAgent> = {}): DiscoveredTerminalAg
 
 function setup(over: Partial<DiscoveryDeps> = {}) {
   const rows = new Map<string, RegisteredSession>()
-  let restoreDegraded = false
+  let restoreDegraded: (agentId: string) => boolean = () => false
   const deps: DiscoveryDeps = {
     registry: {
       byRuntimeEngine: vi.fn(() => undefined),
@@ -53,10 +53,10 @@ function setup(over: Partial<DiscoveryDeps> = {}) {
     stopHeartbeat: vi.fn(),
     retainExitedSession: vi.fn(),
     stoppedAgents: { finishResume: vi.fn() },
-    restoreDegraded: () => restoreDegraded,
+    restoreDegraded: (agentId) => restoreDegraded(agentId),
     ...over,
   }
-  return { deps, rows, handlers: createDiscoveryHandlers(deps), degrade: () => { restoreDegraded = true } }
+  return { deps, rows, handlers: createDiscoveryHandlers(deps), degrade: (only?: string) => { restoreDegraded = (agentId) => only === undefined || agentId === only } }
 }
 
 const settle = () => new Promise((done) => setTimeout(done, 0))
@@ -257,6 +257,18 @@ describe('discovery', () => {
     expect(run.deps.forgetSession).toHaveBeenCalledTimes(1)
     expect(run.deps.registry.setActive).toHaveBeenCalledWith('a1', false)
     expect(run.deps.announceSession).toHaveBeenCalled()
+  })
+
+  it('keeps only the rows restore could not look at, and retires any other whose pane is gone', () => {
+    // One row restore could not survey (a `ps` that timed out at boot) used to stop every pane closed
+    // outside the app from being retired, for as long as the core ran.
+    const run = setup()
+    run.degrade('a2')
+    run.handlers.onRemoved(row(), 'pane gone')
+    expect(run.deps.forgetSession).toHaveBeenCalledWith('a1', { force: true })
+    run.handlers.onRemoved({ ...row(), agentId: 'a2' }, 'pane gone')
+    expect(run.deps.forgetSession).toHaveBeenCalledTimes(1)
+    expect(run.deps.registry.setActive).toHaveBeenCalledWith('a2', false)
   })
 
   it('records whether a row\'s terminal is available, announcing it when it becomes so', () => {
