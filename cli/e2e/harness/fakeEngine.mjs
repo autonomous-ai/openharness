@@ -109,11 +109,20 @@ export async function run(engine, config) {
     codex('session_meta', { id: sessionId, cli_version: '0.159.0', cwd, source: 'cli' })
   }
 
+  // The port the daemon actually bound, which it saves beside its data (lib/daemonEndpoint.ts) and
+  // writes into the hook command it installs: a daemon whose configured port was taken serves another.
+  const daemonPort = () => {
+    try {
+      const { port } = JSON.parse(readFileSync(join(config.dataDir, `daemon-${config.port}.json`), 'utf8'))
+      if (Number.isInteger(port) && port > 0) return port
+    } catch { /* not bound yet, or bound where it was asked to */ }
+    return config.port
+  }
   const hook = async (path, body) => {
     if (!hooksInstalled()) return
     const token = readFileSync(join(config.dataDir, 'hook-credential'), 'utf8').trim()
     const pane = process.env.TMUX_PANE
-    const response = await fetch(`http://127.0.0.1:${config.port}/api/hook/${path}`, {
+    const response = await fetch(`http://127.0.0.1:${daemonPort()}/api/hook/${path}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-harness-hook-token': token },
       body: JSON.stringify({
