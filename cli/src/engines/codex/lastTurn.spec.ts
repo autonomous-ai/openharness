@@ -58,7 +58,9 @@ describe('Codex recap from the latest file turn', () => {
       writeFileSync(file, prefix.join('\n') + '\n')
       expect(await readLastCodexTurnText(file), `prefix ${end}`).toEqual(lastCodexTurnText(prefix))
     }
-  })
+    // A file write and a read per prefix: 5,044 ms on a loaded CI runner (run 37285695917), against
+    // vitest's 5 s default. The work is fixed; only the machine's speed varies.
+  }, 30_000)
 
   it('discards tool receipts from a long latest turn before the final parser sees them', async () => {
     const rows = [ask('prompt'), JSON.stringify({ type: 'response_item', payload: { type: 'function_call_output', output: 'x'.repeat(2 * 1024 * 1024) } }),
