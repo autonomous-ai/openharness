@@ -3,7 +3,7 @@
  * release (`REHEARSE_FROM`, its cli.js with its notify.mjs beside it) to this checkout's bundle, through
  * the real updater path and a local manifest, from the state that release leaves on a person's machine:
  * its own data folder, and its hooks installed into the (throwaway) home, which the fake engines run as
- * Claude Code and Codex run theirs (`realHooks`).
+ * Claude Code and Codex run theirs, as for every daemon under test (e2e/harness/fakeEngine.mjs).
  *
  * At the moment of the update a Claude Code and a Codex agent are mid-turn, a window is connected and a
  * terminal tile is open. After it: the same agents on the same conversations, their turns finished and
@@ -174,7 +174,6 @@ describe.skipIf(!FROM)('a release rehearsal: the update from a published release
     daemon = await IsolatedDaemon.create({
       scriptPath: join(cliDir(), 'cli.js'),
       noMaster: !fromHasMaster,
-      realHooks: true,
       env: {
         ...(backend ? { BACKEND_WS_URL: backend.wsUrl, WEB_URL: backend.httpUrl, ADAPTER_COMPUTER_ID: MACHINE.computerId } : {}),
         ADAPTER_CLI_DIR: cliDir(),

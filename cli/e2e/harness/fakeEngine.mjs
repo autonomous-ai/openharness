@@ -2,8 +2,11 @@
 // under test. It behaves the way the daemon depends on the real CLIs behaving, and nothing more:
 //
 //   - answers `--version` / `--help` probes;
-//   - announces its session through the same authenticated hook the real `notify.mjs` uses, from
-//     inside the pane (so the daemon's pane/process binding is exercised for real);
+//   - runs the hooks its own settings carry, as the real CLIs run them: the commands the daemon
+//     installed (lib/hooks.ts), through a shell, from inside the pane, with the event on stdin, killed at
+//     their timeout and waited for. So the real `hook/notify.mjs` is what reaches the daemon, with its
+//     500 ms deadline and its offline registry writes, and the daemon's pane/process binding is
+//     exercised for real;
 //   - draws a composer, turns on bracketed paste, and treats Enter as submit;
 //   - writes its conversation to a transcript in the engine's real record shapes, so the daemon's
 //     normalizers, turn lifecycle, chips and attach read are exercised for real.
@@ -31,14 +34,41 @@
 // to before it starts, and `startDelayMs` is how long it takes, once started, before
 // it draws or announces anything (an engine's first run after an update). `firstHookDelayMs` is how long
 // its first SessionStart takes to reach the daemon once the engine is up: the hook command starting on a
-// loaded machine, while the daemon has already found the engine and its conversation. `realHooks` runs
-// the hooks the daemon installed into the engine's settings, as the real CLIs do, instead of posting to
-// the daemon.
+// loaded machine, while the daemon has already found the engine and its conversation. `root` is the
+// test's throwaway root, the only place whose hooks it will run, and `hookLog` where it notes every hook
+// it ran.
 import { execFileSync, spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
+
+/**
+ * The events each CLI fires that the daemon installs hooks for (lib/hooks.ts): Claude Code's session,
+ * prompt and turn-end events, and Codex's SessionStart and UserPromptSubmit, the two it installs for
+ * Codex and the two notify.mjs reads from it. A hook for any other event in the settings is not run,
+ * as the CLI has no such moment to run it at.
+ */
+const HOOK_EVENTS = {
+  claude: new Set(['SessionStart', 'UserPromptSubmit', 'Stop', 'StopFailure', 'SessionEnd']),
+  codex: new Set(['SessionStart', 'UserPromptSubmit']),
+}
+
+/** Inside `root`, or `root` itself. */
+const within = (root, path) => {
+  const rel = relative(resolve(root), resolve(path))
+  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))
+}
+
+/**
+ * Whether a hook block's matcher takes this value. Only SessionStart's matcher means anything to these
+ * two CLIs (Codex's block carries `startup|resume|clear|compact`, matched against the event's source);
+ * Stop and StopFailure ignore one (lib/hooks.ts). No matcher, an empty one or `*` takes everything.
+ */
+const matcherTakes = (matcher, value) => {
+  if (matcher === undefined || matcher === null || matcher === '' || matcher === '*') return true
+  try { return new RegExp(`^(?:${matcher})$`).test(String(value ?? '')) } catch { return false }
+}
 
 export async function run(engine, config) {
   const args = process.argv.slice(2)
@@ -125,12 +155,35 @@ export async function run(engine, config) {
   const ownCodexHome = engine === 'codex' && process.env.CODEX_HOME && process.env.CODEX_HOME !== config.codexHome ? process.env.CODEX_HOME : null
   const projectsDir = claudeHome ? join(claudeHome, 'projects') : config.claudeProjectsDir
   const codexHome = ownCodexHome ?? config.codexHome
-  /** Whether this engine's own settings carry the daemon's hooks: a moved home has none unless the daemon put them there. */
-  const hooksInstalled = () => {
-    const file = claudeHome ? join(claudeHome, 'settings.json') : ownCodexHome ? join(ownCodexHome, 'hooks.json') : null
-    if (!file) return true
-    try { return readFileSync(file, 'utf8').includes('notify.mjs') } catch { return false }
+  // The hooks this engine's settings carry, read once as it starts, where the real CLI reads them:
+  // Claude Code's `settings.json` in its config folder (CLAUDE_CONFIG_DIR, else ~/.claude), Codex's
+  // `hooks.json` in its CODEX_HOME. Claude Code snapshots its hooks at start-up ("takes effect on the
+  // next claude session start", lib/hooks.ts) and Codex runs a user hook only once it was reviewed, so
+  // a change reaches the next process, not this one: a moved home the daemon had not yet put its hooks
+  // in starts an engine that never runs them. A settings file outside the test's root is refused out
+  // loud before anything is run: those would be the person's own hooks, talking to their own daemon.
+  const hookSettingsFile = engine === 'claude'
+    ? join(claudeHome ?? join(homedir(), '.claude'), 'settings.json')
+    : join(codexHome, 'hooks.json')
+  // Every hook it ran, and how it ended, noted in a file and never in the pane: the real CLIs draw
+  // nothing for a hook that exits 0, as notify.mjs always does, and a failure the fake once printed under
+  // its composer read to the daemon as a draft the person had not sent, so a close waiting for the agent
+  // to be idle waited for ever (e2e/ends.e2e.ts).
+  const hookLog = (line) => {
+    if (!config.hookLog) return
+    try { appendFileSync(config.hookLog, `${new Date().toISOString()} ${engine} pid=${process.pid} ${line}\n`) } catch { /* a note, never a failure */ }
   }
+  if (!config.root || !within(config.root, hookSettingsFile)) {
+    hookLog(`REFUSED hooks outside the test root: ${hookSettingsFile}`)
+    process.stderr.write(`[fake ${engine}] refusing to run the hooks in ${hookSettingsFile}: outside the test root ${config.root ?? '(none given)'}\r\n`)
+    process.exit(78)
+  }
+  const hookSettings = (() => {
+    try {
+      const parsed = JSON.parse(readFileSync(hookSettingsFile, 'utf8'))
+      return parsed && typeof parsed.hooks === 'object' && parsed.hooks ? parsed.hooks : {}
+    } catch { return {} }
+  })()
   let transcript = engine === 'claude'
     ? join(projectsDir, cwd.replace(/[^a-zA-Z0-9]/g, '-'), `${sessionId}.jsonl`)
     : resumed && !fork && config.rolloutFor?.[resumed]
@@ -167,67 +220,80 @@ export async function run(engine, config) {
     codex('session_meta', { id: sessionId, cli_version: version, cwd, source: 'cli' })
   }
 
-  // The port the daemon actually bound, which it saves beside its data (lib/daemonEndpoint.ts) and
-  // writes into the hook command it installs: a daemon whose configured port was taken serves another.
-  const daemonPort = () => {
-    try {
-      const { port } = JSON.parse(readFileSync(join(config.dataDir, `daemon-${config.port}.json`), 'utf8'))
-      if (Number.isInteger(port) && port > 0) return port
-    } catch { /* not bound yet, or bound where it was asked to */ }
-    return config.port
-  }
-  // The command the daemon installed for `event` in this engine's settings (Claude Code's settings.json,
-  // Codex's hooks.json), and how long the engine gives it; null when there is none.
-  const installedHook = (event) => {
-    const file = engine === 'claude' ? join(claudeHome ?? join(homedir(), '.claude'), 'settings.json') : join(codexHome, 'hooks.json')
-    try {
-      for (const block of JSON.parse(readFileSync(file, 'utf8'))?.hooks?.[event] ?? []) {
-        for (const entry of block?.hooks ?? []) {
-          if (entry?.type === 'command' && typeof entry.command === 'string') return { command: entry.command, timeout: Number(entry.timeout) || 60 }
-        }
-      }
-    } catch { /* no settings, or not readable: no hook */ }
-    return null
-  }
-  /** Runs an installed hook as the CLIs do: through a shell, the event's JSON on stdin, killed at its timeout. */
-  const runHook = (event, payload) => new Promise((resolve) => {
-    const installed = installedHook(event)
-    if (!installed) { resolve(); return }
-    const child = spawn('/bin/sh', ['-c', installed.command], { stdio: ['pipe', 'ignore', 'ignore'], env: process.env })
-    const timer = setTimeout(() => child.kill('SIGKILL'), installed.timeout * 1000)
-    const done = () => { clearTimeout(timer); resolve() }
-    child.on('close', done)
-    child.on('error', done)
-    child.stdin.on('error', () => {})
-    child.stdin.end(JSON.stringify(payload))
+  // What the CLI says about its permission mode in an event, read off its own argv as it reads it.
+  const permissionMode = engine === 'claude'
+    ? (args.includes('--dangerously-skip-permissions') ? 'bypassPermissions'
+      : args.includes('--permission-mode') ? args[args.indexOf('--permission-mode') + 1] ?? 'default' : 'default')
+    : (args.includes('--dangerously-bypass-approvals-and-sandbox') ? 'bypassPermissions' : 'default')
+  const codexModel = config.codexModel ?? 'gpt-6'
+  /**
+   * The JSON an event hands its hooks on stdin, in each CLI's own shape: what notify.mjs reads (session,
+   * transcript, folder, the event and its source, prompt or reason) and the rest of what the real CLIs
+   * were recorded sending (src/lib/__fixtures__/swarm-prompt-hooks.json: Claude Code's prompt id and
+   * permission mode, Codex's turn id, model and permission mode).
+   */
+  const hookInput = (event, fields) => ({
+    session_id: sessionId,
+    transcript_path: transcript,
+    cwd,
+    hook_event_name: event,
+    ...(engine === 'codex' ? { model: codexModel, permission_mode: permissionMode } : {}),
+    ...fields,
   })
-  const hook = async (path, body) => {
-    if (config.realHooks) {
-      const event = path === 'turn-stop' ? 'Stop' : path === 'session-end' ? 'SessionEnd' : body.hookEvent ?? 'SessionStart'
-      await runHook(event, {
-        session_id: sessionId, transcript_path: transcript, cwd, hook_event_name: event,
-        ...(body.source ? { source: body.source } : {}), ...(body.prompt !== undefined ? { prompt: body.prompt } : {}),
-        ...(body.reason ? { reason: body.reason } : {}),
-      })
+  /**
+   * One hook command, as the CLIs run one: through a shell, in the engine's folder and with its
+   * environment (Claude Code adds CLAUDE_PROJECT_DIR), the event on stdin, killed once its `timeout`
+   * (seconds) is up. Resolves when it exits or is killed: the CLI waits for its hooks before it goes on.
+   */
+  const runHookCommand = (event, command, timeoutSeconds, input) => new Promise((done) => {
+    const started = Date.now()
+    // What a test reads back: the event, why it fired, and the conversation it named.
+    const what = `${event}${input.source || input.reason ? `(${input.source || input.reason})` : ''} session=${input.session_id}`
+    const env = engine === 'claude' ? { ...process.env, CLAUDE_PROJECT_DIR: cwd } : process.env
+    let child
+    try {
+      child = spawn('/bin/sh', ['-c', command], { cwd, env, stdio: ['pipe', 'ignore', 'pipe'] })
+    } catch (error) {
+      hookLog(`${what} could not start: ${error?.message ?? error}`)
+      done()
       return
     }
-    if (!hooksInstalled()) return
-    const token = readFileSync(join(config.dataDir, 'hook-credential'), 'utf8').trim()
-    const pane = process.env.TMUX_PANE
-    const response = await fetch(`http://127.0.0.1:${daemonPort()}/api/hook/${path}`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-harness-hook-token': token },
-      body: JSON.stringify({
-        engine, sessionId, transcriptPath: transcript, cwd,
-        tmuxPane: pane, runtimeHints: pane ? [{ backend: 'tmux', paneId: pane }] : [], callerPid: process.pid,
-        ...body,
-      }),
-    }).catch((error) => ({ ok: false, status: 0, text: async () => String(error) }))
-    // Said in a file, never in the pane. The real hook (hook/notify.mjs) gives up silently and exits 0
-    // when the daemon cannot be reached, so the engine draws nothing; this line, printed under the
-    // composer while the daemon was stopped, read to the daemon as a draft the person had not sent, and a
-    // close waiting for the agent to be idle waited for ever (e2e/ends.e2e.ts).
-    if (!response.ok) appendFileSync(join(dirname(config.dataDir), 'fake-engine-hooks.log'), `${new Date().toISOString()} ${engine} ${sessionId} hook ${path} failed: ${response.status}\n`)
+    let stderr = ''
+    child.stderr.setEncoding('utf8')
+    child.stderr.on('data', (chunk) => { if (stderr.length < 2_000) stderr += chunk })
+    const limit = (Number(timeoutSeconds) > 0 ? Number(timeoutSeconds) : 60) * 1000
+    let killed = false
+    const timer = setTimeout(() => {
+      killed = true
+      hookLog(`${what} killed at its timeout of ${limit} ms`)
+      child.kill('SIGTERM')
+      done()
+    }, limit)
+    child.on('error', (error) => { clearTimeout(timer); hookLog(`${what} failed: ${error.message}`); done() })
+    child.on('close', (code, signal) => {
+      clearTimeout(timer)
+      hookLog(`${what} ${killed ? 'ended after it was killed' : 'ran'} in ${Date.now() - started} ms · exit=${code ?? signal}`
+        + (stderr.trim() ? ` · stderr=${JSON.stringify(stderr.trim().slice(0, 500))}` : ''))
+      done()
+    })
+    child.stdin.on('error', () => { /* a hook that exits without reading its input */ })
+    child.stdin.end(JSON.stringify(input))
+  })
+  /** Every hook the settings carry for this event, at once, each command once, and wait for them all. */
+  const runHooks = async (event, fields = {}) => {
+    if (!HOOK_EVENTS[engine].has(event)) return
+    const blocks = Array.isArray(hookSettings[event]) ? hookSettings[event] : []
+    const commands = new Map()
+    for (const block of blocks) {
+      if (event === 'SessionStart' && !matcherTakes(block?.matcher, fields.source)) continue
+      for (const entry of Array.isArray(block?.hooks) ? block.hooks : []) {
+        if (entry?.type !== 'command' || typeof entry.command !== 'string' || !entry.command) continue
+        if (!commands.has(entry.command)) commands.set(entry.command, entry.timeout)
+      }
+    }
+    if (!commands.size) return
+    const input = hookInput(event, fields)
+    await Promise.all([...commands].map(([command, timeout]) => runHookCommand(event, command, timeout, input)))
   }
 
   announceProcess()
@@ -285,7 +351,7 @@ export async function run(engine, config) {
   process.stdout.write(`  session ${sessionId}${resumed ? ' (resumed)' : ''}\r\n\r\n`)
   draw()
   if (config.firstHookDelayMs && !resumed) await new Promise((resolve) => setTimeout(resolve, config.firstHookDelayMs))
-  await hook('session-start', { hookEvent: resumed ? 'SessionStart' : 'SessionStart', source: resumed ? 'resume' : 'startup' })
+  await runHooks('SessionStart', { source: resumed ? 'resume' : 'startup' })
 
   let turn = 0
   let open = null
@@ -369,7 +435,7 @@ export async function run(engine, config) {
       codex('compacted', { message: 'Summary of the conversation so far.', replacement_history: [] })
     }
   }
-  const finish = (text) => {
+  const finish = async (text) => {
     if (engine === 'claude') {
       claude({ type: 'assistant', message: { id: `msg_${turn}`, role: 'assistant', model: config.claudeModel ?? 'claude-opus-5-5', content: [{ type: 'text', text }], stop_reason: 'end_turn' } })
     } else {
@@ -379,28 +445,35 @@ export async function run(engine, config) {
     process.stdout.write(`\r\n${text}\r\n\r\n`)
     open = null
     draw()
-    if (engine === 'claude') void hook('turn-stop', { status: 'ok' })
+    // Claude Code's Stop hooks run once the answer is in, and the CLI waits for them before it takes the
+    // next prompt; an interrupt ends a turn without them.
+    await runHooks('Stop', { stop_hook_active: false })
   }
 
   const handle = async (raw) => {
     const prompt = raw.trim()
     if (!prompt) { draw(); return }
     history.push(prompt)
-    if (prompt === '!exit') { process.stdout.write('\x1b[?2004l\r\n'); process.exit(0) }
+    if (prompt === '!exit') {
+      // Leaving at the prompt is the end of the session to Claude Code, and it says so to its hooks.
+      await runHooks('SessionEnd', { reason: 'prompt_input_exit' })
+      process.stdout.write('\x1b[?2004l\r\n')
+      process.exit(0)
+    }
     if (prompt === '!compact') {
       // `/compact` is a command, not a turn: a summary replaces the history, and Claude Code announces
       // the same session again (SessionStart, source compact), which makes the daemon re-read it.
       compact()
       process.stdout.write('\r\n(compacted)\r\n')
       draw()
-      if (engine === 'claude') await hook('session-start', { hookEvent: 'SessionStart', source: 'compact' })
+      if (engine === 'claude') await runHooks('SessionStart', { source: 'compact' })
       return
     }
     if (prompt === '!clear') {
       // The old conversation ends (its open turn first), a new id and transcript begin, and the engine
       // says both through its hooks, as the real CLIs do.
-      if (open) finish('(interrupted by a new conversation)')
-      await hook('session-end', { reason: 'clear' })
+      if (open) await finish('(interrupted by a new conversation)')
+      await runHooks('SessionEnd', { reason: 'clear' })
       sessionId = randomUUID()
       transcript = engine === 'claude'
         ? join(projectsDir, cwd.replace(/[^a-zA-Z0-9]/g, '-'), `${sessionId}.jsonl`)
@@ -413,14 +486,17 @@ export async function run(engine, config) {
       announceProcess()
       process.stdout.write('\r\n(new conversation)\r\n')
       draw()
-      await hook('session-start', { hookEvent: 'SessionStart', source: 'clear' })
+      await runHooks('SessionStart', { source: 'clear' })
       return
     }
-    if (open) finish('(interrupted by a new prompt)')
-    // Claude Code runs its UserPromptSubmit hook on every prompt, through the same door as SessionStart:
-    // the catch hook, which re-registers a session whose start-up announcement the daemon missed.
-    // Codex runs its UserPromptSubmit hook too, when the daemon installed one (`realHooks`).
-    if (engine === 'claude' || config.realHooks) await hook('session-start', { hookEvent: 'UserPromptSubmit', prompt })
+    if (open) await finish('(interrupted by a new prompt)')
+    // Both CLIs run their UserPromptSubmit hooks on every prompt, before the prompt is taken: notify.mjs
+    // sends it through the same door as SessionStart, the catch hook that re-registers a session whose
+    // start-up announcement the daemon missed. The fields beyond the prompt are those each CLI was
+    // recorded sending.
+    await runHooks('UserPromptSubmit', engine === 'claude'
+      ? { prompt_id: randomUUID(), permission_mode: permissionMode, prompt }
+      : { turn_id: `turn-${turn + 1}`, prompt })
     turn++
     open = `turn-${turn}`
     // Onto the row under the composer, which holds a footer while one is drawn: cleared, as Codex redraws
@@ -466,14 +542,14 @@ export async function run(engine, config) {
         process.stdout.write(text)
         written += text.length
       }
-      finish(`flooded ${kib} KiB`)
+      await finish(`flooded ${kib} KiB`)
       return
     }
     if (directive?.[1] === 'compactmid') {
       // An automatic compaction in the middle of a turn: the turn goes on after it and ends once.
       await new Promise((resolve) => setTimeout(resolve, 300))
       compact()
-      if (engine === 'claude') await hook('session-start', { hookEvent: 'SessionStart', source: 'compact' })
+      if (engine === 'claude') await runHooks('SessionStart', { source: 'compact' })
       await new Promise((resolve) => setTimeout(resolve, 300))
     }
     if (directive?.[1] === 'hold') return
@@ -492,7 +568,7 @@ export async function run(engine, config) {
           codex('response_item', { type: 'function_call_output', call_id: id, output: `ran ${command}` })
         }
       }
-      finish(allowed ? `ran ${command}` : `did not run ${command}`)
+      await finish(allowed ? `ran ${command}` : `did not run ${command}`)
       return
     }
     if (directive?.[1] === 'ask') {
@@ -502,7 +578,7 @@ export async function run(engine, config) {
       const choice = await new Promise((resolve) => { dialog = { cursor: 0, drawn: 0, resolve }; drawDialog() })
       if (choice === null) {
         process.stdout.write('\r\n(question cancelled)\r\n')
-        finish('(question cancelled)')
+        await finish('(question cancelled)')
         return
       }
       // The tool call is written once it is answered, as the real CLIs flush it.
@@ -518,18 +594,18 @@ export async function run(engine, config) {
         codex('response_item', { type: 'function_call_output', call_id: id, output: JSON.stringify({ answers: { [QUESTION]: choice } }) })
         process.stdout.write(`\r\n• ${QUESTION} → ${choice}\r\n`)
       }
-      finish(`you chose ${choice}${notes ? ` (notes: ${notes})` : ''}`)
+      await finish(`you chose ${choice}${notes ? ` (notes: ${notes})` : ''}`)
       return
     }
-    if (directive?.[1] === 'version') { finish(versionLine); return }
+    if (directive?.[1] === 'version') { await finish(versionLine); return }
     if (engine === 'codex' && directive?.[1] === 'goal') {
       bottom = goalBottom(directive[2] === 'done' ? 'Goal achieved (1m)' : 'Pursuing goal (1m)')
-      finish(`answer ${turn}: ${prompt}`)
+      await finish(`answer ${turn}: ${prompt}`)
       return
     }
     if (engine === 'claude' && directive?.[1] === 'transcript') {
       bottom = transcriptBottom(prompt, `answer ${turn}: ${prompt}`)
-      finish(`answer ${turn}: ${prompt}`)
+      await finish(`answer ${turn}: ${prompt}`)
       return
     }
     if (engine === 'codex' && directive?.[1] === 'overlay') {
@@ -545,11 +621,11 @@ export async function run(engine, config) {
     if (engine === 'codex' && directive?.[1] === 'browse') {
       // Reached in Codex by Esc twice on an empty composer; the directive goes straight there.
       bottom = directive[2] === 'scrollback' ? pagerBottom(prompt, `answer ${turn}: ${prompt}`) : browsingBottom
-      finish(`answer ${turn}: ${prompt}`)
+      await finish(`answer ${turn}: ${prompt}`)
       return
     }
     if (directive?.[1] === 'slow') await new Promise((resolve) => setTimeout(resolve, Number(directive[2]) || 1000))
-    finish(`answer ${turn}: ${prompt}`)
+    await finish(`answer ${turn}: ${prompt}`)
   }
 
   // Raw input: bracketed paste brackets the text, Enter (\r) submits, Ctrl-C interrupts.

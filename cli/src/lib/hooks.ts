@@ -137,9 +137,11 @@ export function installSessionHooks(port: number, settingsPath: string = SETTING
   try {
     mkdirSync(dirname(settingsPath), { recursive: true })
     writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n')
+    // Both name the file written: a daemon can write several (every moved home gets its own), and the
+    // end-to-end harness checks each one it names is inside its throwaway root.
     console.log(
       updated
-        ? `[hooks] updated (path/port changed) → ${HOOK_SCRIPT} --port ${port}`
+        ? `[hooks] updated (path/port changed) → ${HOOK_SCRIPT} --port ${port} in ${settingsPath}`
         : `[hooks] installed Claude session + turn (Stop/StopFailure) hooks → ${settingsPath}`,
     )
     console.log('[hooks] (takes effect on the next claude session start)')
