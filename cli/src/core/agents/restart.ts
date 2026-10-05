@@ -16,7 +16,7 @@ import { bypassPermissionFor, restartAgent } from '../../lib/restartAgent.js'
 import type { TerminalAgentReconciler } from '../../lib/terminalAgentReconciler.js'
 import { terminalRouteKey } from '../../lib/terminalRuntime.js'
 import type { TmuxRuntimeRef } from '../../lib/terminalTypes.js'
-import { clearPaneRemainOnExit } from '../../lib/tmux.js'
+import { clearPaneRemainOnExit, processArgs } from '../../lib/tmux.js'
 import type { TmuxBackend } from '../../lib/tmuxBackend.js'
 import { workspaceMissing } from '../../lib/workspaceCheck.js'
 import type { createLaunchHelpers } from './launch.js'
@@ -179,7 +179,8 @@ export function createAgentRestarter({
       // than left to the next scan, so the announce below already says where the engine came back.
       const [gateway, assignment] = await Promise.all([
         probeGatewayRuntime(outcome.processIdentity),
-        probeGridAssignment(outcome.processIdentity, engine, outcome.processIdentity.executable),
+        // Its command line, which carries a Codex or pi grid's address and model: never its executable.
+        processArgs(outcome.processIdentity).then((args) => probeGridAssignment(outcome.processIdentity, engine, args)),
       ])
       if (!current()) return changed
       registry.updateProcessIdentity(session.agentId, outcome.processIdentity, gateway.kind, assignment)

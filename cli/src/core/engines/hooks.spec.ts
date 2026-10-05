@@ -59,7 +59,10 @@ describe('which agent a hook belongs to', () => {
     const a1 = agent('a1', 100)
     const { deps, hooks } = setup({ '%1': a1 })
     vi.mocked(processRows).mockResolvedValueOnce(tree([300, 200], [200, 100], [100, 1]) as never)
-    expect(await hooks.resolveHookAgent({ engine: 'claude', runtimeHints: [hint('%1')], callerPid: 300 })).toBe(a1)
+    const onWait = vi.fn()
+    expect(await hooks.resolveHookAgent({ engine: 'claude', runtimeHints: [hint('%1')], callerPid: 300, onWait })).toBe(a1)
+    // Matched at once: nothing to wait for, and the hook is answered with its agent.
+    expect(onWait).not.toHaveBeenCalled()
     expect(deps.agentReconciler.triggerHint).toHaveBeenCalledWith({ backend: 'tmux', paneId: '%1' }, 'claude')
     expect(deps.registry.byRuntimeEngine).toHaveBeenCalledWith({ backend: 'tmux', paneId: '%1' }, 'claude')
     expect(console.log).not.toHaveBeenCalled()
@@ -128,9 +131,9 @@ describe('which agent a hook belongs to', () => {
     // killed; nothing in the table is it any more.
     const newEngine = () => tree([300, 200], [200, 1])
     /** Asks, and says when the hook has started waiting: after it read the process table once. */
-    const ask = (hooks: ReturnType<typeof setup>['hooks'], panes = ['%1']) => {
+    const ask = (hooks: ReturnType<typeof setup>['hooks'], panes = ['%1'], onWait?: () => void) => {
       let answer: RegisteredSession | null | undefined
-      const asked = hooks.resolveHookAgent({ engine: 'claude', runtimeHints: panes.map(hint), callerPid: 300 }).then((agent) => { answer = agent })
+      const asked = hooks.resolveHookAgent({ engine: 'claude', runtimeHints: panes.map(hint), callerPid: 300, ...(onWait ? { onWait } : {}) }).then((agent) => { answer = agent })
       const waiting = () => vi.waitFor(() => expect(processRows).toHaveBeenCalledTimes(1))
       return { asked, waiting, answer: () => answer }
     }
@@ -138,14 +141,19 @@ describe('which agent a hook belongs to', () => {
     it('in a restart, waits while the recorded process is one that is gone, and belongs to the agent once the new one is recorded', async () => {
       const onPane: Record<string, RegisteredSession> = { '%1': agent('a1', 100) }
       vi.mocked(processRows).mockResolvedValue(newEngine() as never)
-      const hook = ask(setup(onPane).hooks, ['%1', '%9'])
+      const onWait = vi.fn()
+      const hook = ask(setup(onPane).hooks, ['%1', '%9'], onWait)
       await hook.waiting()
       await new Promise((resolve) => setTimeout(resolve, 250))
       expect(hook.answer()).toBeUndefined()
+      // Said before the wait, so the hook is answered then: its client gives up after 500ms and writes
+      // the registry itself (hook/notify.mjs).
+      expect(onWait).toHaveBeenCalledTimes(1)
       // What restart.ts does once the new process is found and probed.
       onPane['%1'] = agent('a1', 200)
       await hook.asked
       expect(hook.answer()).toEqual(agent('a1', 200))
+      expect(onWait).toHaveBeenCalledTimes(1)
       expect(console.log).not.toHaveBeenCalled()
     })
 
@@ -192,6 +200,27 @@ describe('which agent a hook belongs to', () => {
         await vi.advanceTimersByTimeAsync(1)
         await hook.asked
         expect(hook.answer()).toBeNull()
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('is not cut short by a step of the wall clock, as a wake or an NTP correction makes', async () => {
+      // Round 29 steps the clock under working agents; a deadline on the wall clock ended this wait at
+      // the first poll after a step forward, and the hook was dropped as if its record never came.
+      vi.useFakeTimers()
+      try {
+        const onPane: Record<string, RegisteredSession> = { '%1': agent('a1', 100) }
+        vi.mocked(processRows).mockResolvedValue(newEngine() as never)
+        const hook = ask(setup(onPane).hooks)
+        await vi.advanceTimersByTimeAsync(1_000)
+        vi.setSystemTime(Date.now() + 3 * 3_600_000)
+        await vi.advanceTimersByTimeAsync(1_000)
+        expect(hook.answer()).toBeUndefined()
+        onPane['%1'] = agent('a1', 200)
+        await vi.advanceTimersByTimeAsync(200)
+        await hook.asked
+        expect(hook.answer()).toEqual(agent('a1', 200))
       } finally {
         vi.useRealTimers()
       }

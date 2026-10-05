@@ -4,11 +4,12 @@
  * message is being written, and two agents created in one folder at once. Whatever order they land in,
  * every request is answered, an agent ends with one engine in one pane, and it takes the next message.
  */
-import { mkdirSync } from 'node:fs'
+import { mkdirSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { LocalClient, type Frame } from './harness/client.js'
-import { IsolatedDaemon, until } from './harness/daemon.js'
+import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
 
 type Engine = 'claude' | 'codex'
 const engines: Engine[] = ['claude', 'codex']
@@ -40,6 +41,15 @@ const active = (client: LocalClient, agentId: string, sessionId?: string) =>
     const now = await row(client, agentId)
     return now?.status === 'active' && now.sessionId && (!sessionId || now.sessionId === sessionId) ? now : null
   }, 60_000, 500)
+/** The engine as it is installed for the agents created next: its config, plus what the test says
+ *  (e2e/harness/fakeEngine.mjs), written beside the old wrapper and renamed over it. */
+function install(d: IsolatedDaemon, engine: Engine, extra: Record<string, unknown>): void {
+  const config = { port: d.port, dataDir: d.dataDir, claudeProjectsDir: d.env.CLAUDE_PROJECTS_DIR, codexHome: d.env.CODEX_HOME, ...extra }
+  const module = pathToFileURL(join(CLI_ROOT, 'e2e', 'harness', 'fakeEngine.mjs')).href
+  const wrapper = join(d.root, 'bin', engine)
+  writeFileSync(`${wrapper}.new`, `#!${process.execPath}\nimport(${JSON.stringify(module)}).then((m) => m.run(${JSON.stringify(engine)}, ${JSON.stringify(config)}))\n`, { mode: 0o755 })
+  renameSync(`${wrapper}.new`, wrapper)
+}
 /** Engine processes in a pane: a pane must never end with two of them, or none while the agent is active. */
 async function engineProcesses(daemon: IsolatedDaemon, pane: string): Promise<number> {
   const panePid = Number(await daemon.tmux.run('display-message', '-p', '-t', pane, '#{pane_pid}').catch(() => '0'))
@@ -94,6 +104,28 @@ describe('lifecycle requests that race', () => {
     const back = await active(client, agent.id, agent.sessionId)
     await until('one engine in the pane', async () => (await engineProcesses(d, back.tmuxPane)) === 1 || null, 20_000, 250)
     await turn(client, agent.id, 'after two restarts at once')
+    expect((await rows(client)).filter((one) => one.status === 'active')).toHaveLength(1)
+    client.close()
+  })
+
+  // The daemon finds the engine and its conversation before the engine's first SessionStart arrives, as on
+  // a loaded machine. The first restart kills that engine just as its hook lands: registered for the
+  // engine being killed, its attach found the pane's process gone and unbound the conversation, and the
+  // second restart, finding none, started a fresh one. Seen once in eighteen runs under load; with the hook
+  // this late, two of seven before round 35. Where the hook lands against the kill varies with the
+  // machine, so three delays.
+  it.each([700, 1_100, 1_500])('codex: two restarts at once, as the engine\'s first hook reaches the daemon %i ms late, bring it back on its conversation', async (delay) => {
+    const d = await fresh()
+    install(d, 'codex', { firstHookDelayMs: Number(process.env.RACE_FIRST_HOOK_DELAY_MS ?? delay) })
+    const client = await LocalClient.connect(d)
+    const agent = await create(d, client, 'codex', `late-first-hook-${delay}`)
+    const answers = await Promise.all([1, 2].map(() => client.request('agent_restart', { agentId: agent.id }, 90_000)))
+    for (const answer of answers) if (answer.error) expect(['AGENT_BUSY'], JSON.stringify(answer)).toContain(answer.error)
+    expect(answers.some((answer) => !answer.error), JSON.stringify(answers)).toBe(true)
+    const back = await active(client, agent.id, agent.sessionId)
+    await until('one engine in the pane', async () => (await engineProcesses(d, back.tmuxPane)) === 1 || null, 20_000, 250)
+    await turn(client, agent.id, 'after two restarts at once')
+    expect((await row(client, agent.id))?.sessionId).toBe(agent.sessionId)
     expect((await rows(client)).filter((one) => one.status === 'active')).toHaveLength(1)
     client.close()
   })

@@ -3682,6 +3682,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     relaunchMarks,
   })
   const stopJobs = lifecycle.stopJobs
+  binding.whileChanging((agentId) => restartJobs.busy(agentId) || stopJobs.has(agentId))
   const stopAgent = lifecycle.stopAgent
   backend.stopProvider = createStopRequest({ byAgent: (id) => registry.byAgent(id), stop: stopAgent })
   backend.purgeAgentService = lifecycle.purgeAgentService

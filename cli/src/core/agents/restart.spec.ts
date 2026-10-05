@@ -8,7 +8,7 @@ import { probeGridAssignment } from '../../lib/gridAssignment.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { AgentRestartCoordinator, bypassPermissionFor, restartAgent } from '../../lib/restartAgent.js'
 import { terminalRouteKey } from '../../lib/terminalRuntime.js'
-import { clearPaneRemainOnExit } from '../../lib/tmux.js'
+import { clearPaneRemainOnExit, processArgs } from '../../lib/tmux.js'
 import { workspaceMissing } from '../../lib/workspaceCheck.js'
 import { createAgentRestarter, type RestartDeps } from './restart.js'
 
@@ -25,7 +25,10 @@ vi.mock('../../lib/restartAgent.js', async (real) => ({
   bypassPermissionFor: vi.fn(async (_s: unknown, live: () => Promise<boolean>) => live()),
   restartAgent: vi.fn(async () => ({ ok: true, resumed: true, processIdentity: { pid: 2, startMarker: 'new', executable: '/bin/claude' } })),
 }))
-vi.mock('../../lib/tmux.js', async (real) => ({ ...await real<object>(), clearPaneRemainOnExit: vi.fn(async () => {}) }))
+vi.mock('../../lib/tmux.js', async (real) => ({
+  ...await real<object>(), clearPaneRemainOnExit: vi.fn(async () => {}),
+  processArgs: vi.fn(async () => '/bin/claude --model opus -c model_provider=grid'),
+}))
 vi.mock('../../lib/workspaceCheck.js', () => ({ workspaceMissing: vi.fn(() => null) }))
 
 const runtime = { backend: 'tmux', paneId: '%4' }
@@ -234,7 +237,9 @@ describe('restarting an agent', () => {
       expect(swapDeps.isCurrent?.()).toBe(true)
       expect(run.deps.refreshGridWebSearch).toHaveBeenCalledWith('a1', { env: { GRID_KEY: 'k' } })
       expect(probeGatewayRuntime).toHaveBeenCalledWith(newProcess)
-      expect(probeGridAssignment).toHaveBeenCalledWith(newProcess, 'claude', '/bin/claude')
+      // Its command line, where a Codex or pi grid's address and model are: never its executable alone.
+      expect(processArgs).toHaveBeenCalledWith(newProcess)
+      expect(probeGridAssignment).toHaveBeenCalledWith(newProcess, 'claude', '/bin/claude --model opus -c model_provider=grid')
       expect(run.deps.registry.updateProcessIdentity).toHaveBeenCalledWith('a1', newProcess, 'none', undefined)
       expect(run.deps.registry.setActive).toHaveBeenCalledWith('a1', true)
       expect(clearPaneRemainOnExit).toHaveBeenCalledWith('%4')

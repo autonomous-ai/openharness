@@ -147,26 +147,105 @@ async function claim(staging: string, path: string): Promise<void> {
   }
 }
 
+/** What answers on a data folder's socket: nothing, something that does not say who it is, or a daemon
+ *  and its master (`pid`, the pid file's: the master's under one, its own otherwise) and its core. */
+export type DataFolderServer = 'none' | 'unknown' | { pid: number; corePid: number }
+
+export interface ServedFolderDeps {
+  /** Who serves the socket at `path` (`GET /api/status` over it). */
+  who(path: string, timeoutMs: number): Promise<DataFolderServer>
+  alive(pid: number): boolean
+  sleep(ms: number): Promise<void>
+  now(): number
+  log(line: string): void
+}
+
+/** How long start-up waits for the core of a master that is gone to leave: well inside the minute the
+ *  master gives a core to bind, and longer than such a core takes to stop. */
+export const ORPHAN_WAIT_MS = 20_000
+const ORPHAN_POLL_MS = 250
+
+/** Ask the daemon on a data folder's socket who it is. A socket that takes no connection serves nothing
+ *  (no socket, a stale one, one that cannot be reached: start-up goes on, and the bind decides); one that
+ *  takes it and does not say is `unknown`. */
+export function askDataFolderServer(path: string, timeoutMs: number): Promise<DataFolderServer> {
+  return new Promise((resolve) => {
+    let connected = false
+    // A connection of its own, never one kept alive from an earlier ask: that one may be to a daemon gone.
+    const request = http.request({ socketPath: path, path: '/api/status', method: 'GET', timeout: timeoutMs, agent: false }, (response) => {
+      let body = ''
+      response.setEncoding('utf8')
+      response.on('data', (chunk: string) => { if (body.length < 65_536) body += chunk })
+      response.on('end', () => {
+        try {
+          const status = JSON.parse(body) as { pid?: unknown; corePid?: unknown }
+          const pid = Number(status.pid)
+          // A daemon from before harnessd says no core of its own: it is its own master.
+          const corePid = status.corePid === undefined ? pid : Number(status.corePid)
+          resolve(Number.isSafeInteger(pid) && pid > 0 && Number.isSafeInteger(corePid) && corePid > 0 ? { pid, corePid } : 'unknown')
+        } catch { resolve('unknown') }
+      })
+      response.on('error', () => resolve('unknown'))
+    })
+    request.on('socket', (socket: Socket) => socket.once('connect', () => { connected = true }))
+    request.on('timeout', () => { request.destroy(); resolve(connected ? 'unknown' : 'none') })
+    request.on('error', () => resolve(connected ? 'unknown' : 'none'))
+    request.end()
+  })
+}
+
+const SERVED_FOLDER_DEFAULTS: ServedFolderDeps = {
+  who: askDataFolderServer,
+  alive: (pid) => { try { process.kill(pid, 0); return true } catch (error) { return (error as NodeJS.ErrnoException).code === 'EPERM' } },
+  sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  now: () => performance.now(),
+  log: (line) => console.log(line),
+}
+
 /**
  * Refuse to start a daemon whose data folder another daemon already serves: start-up asks this before it
  * reads or writes anything of that daemon's. Rejects with `EADDRINUSE`, as the bind it spares would have.
- * Anything short of a live answer — no socket, a stale one, one that cannot be checked — lets start-up
- * go on, and the bind decides.
+ * No socket, or a stale one, lets start-up go on, and the bind decides.
  *
  * A second `harness start --foreground` (a launchd or systemd unit beside the app's daemon), and the core
  * of a second master, used to get as far as that bind first: on the way they marked the running daemon's
  * agents inactive on disk and reaped its harness viewers as the orphans of a daemon that had died
  * (e2e/twodaemons.e2e.ts).
+ *
+ * ⚠️ Except the core of a master that is gone, which serves only until it notices and stops. Under launchd
+ * or systemd a master that died is started again at once, and its new core found the old one still
+ * there: refused, it exits for good, its master with it, cleanly, and neither launchd's
+ * `SuccessfulExit=false` nor systemd's `Restart=on-failure` starts a clean exit again, so the daemon stayed
+ * down until the next login. Such a core is waited for, a bounded while, and once it has said so, so is
+ * a silence from it while it stops. A daemon whose master is alive, or that runs without one, is another
+ * daemon, and refused at once as before. So is one that answers without saying who it is: every release
+ * with this socket has said its pid in `/api/status`, so a silence or an answer without one is a daemon
+ * that is busy or hung, not one that is leaving, and a person waiting on `harness start` or the app must
+ * not wait out the orphan's bound for it (cliCommand.spec.ts, the CI runs of #819).
  */
-export async function refuseServedDataFolder(path: string | null, timeoutMs = 1_000): Promise<void> {
+export async function refuseServedDataFolder(
+  path: string | null, timeoutMs = 1_000, deps: ServedFolderDeps = SERVED_FOLDER_DEFAULTS, waitMs = ORPHAN_WAIT_MS,
+): Promise<void> {
   if (!path) return
-  const served = await new Promise<boolean>((resolve) => {
-    const socket = connect(path)
-    socket.once('connect', () => { socket.destroy(); resolve(true) })
-    socket.once('error', () => resolve(false))
-    socket.setTimeout(timeoutMs, () => { socket.destroy(); resolve(false) })
-  })
-  if (served) throw alreadyServing(path)
+  const deadline = deps.now() + waitMs
+  let orphanSeen = false
+  for (;;) {
+    const server = await deps.who(path, timeoutMs)
+    if (server === 'none') {
+      if (orphanSeen) deps.log('[cli] the core whose master is gone has left — starting')
+      return
+    }
+    if (server === 'unknown') {
+      // Only the core already seen to be an orphan may go quiet while it stops.
+      if (!orphanSeen) throw alreadyServing(path)
+    } else {
+      if (server.pid === server.corePid || deps.alive(server.pid)) throw alreadyServing(path)
+      if (!orphanSeen) deps.log(`[cli] this data folder is still served by the core (pid ${server.corePid}) of a master that is gone (pid ${server.pid}) — waiting for it to leave`)
+      orphanSeen = true
+    }
+    if (deps.now() >= deadline) throw alreadyServing(path)
+    await deps.sleep(ORPHAN_POLL_MS)
+  }
 }
 
 async function refuseLiveSocket(path: string): Promise<void> {
