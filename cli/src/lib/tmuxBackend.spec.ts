@@ -40,7 +40,7 @@ esac
     chmodSync(tmux, 0o700)
     process.env.PATH = `${dir}${delimiter}${originalPath ?? ''}`
     process.env.TMUX_BACKEND_CALLS = calls
-    const backend = new TmuxBackend()
+    const backend = new TmuxBackend(undefined, () => 'daemon-a')
 
     const created = await backend.create({ cwd: '/tmp/work', label: 'harness-test' })
     expect(created).toEqual({
@@ -53,8 +53,9 @@ esac
       // exits immediately would otherwise take its session down before a follow-up call landed,
       // and its error text with it.
       // `window-style` rides the same invocation for the same reason: the engine asks its
-      // terminal for its colours (OSC 10/11) once, at startup, and never again.
-      'new-session -d -P -F #{pane_id} -c /tmp/work -s harness-test ; set-option -w remain-on-exit on ; set-option destroy-unattached off ; set-option -w window-style bg=#181818,fg=#f5f5f5',
+      // terminal for its colours (OSC 10/11) once, at startup, and never again. And so does the
+      // daemon's tag: another daemon on this tmux server must never see the pane untagged.
+      'new-session -d -P -F #{pane_id} -c /tmp/work -s harness-test ; set-option -w remain-on-exit on ; set-option destroy-unattached off ; set-option -w window-style bg=#181818,fg=#f5f5f5 ; set-option -w @harness_daemon daemon-a',
       'set-option -t %42 mouse on',
       'kill-pane -t %42',
     ])
@@ -75,6 +76,25 @@ esac
     const discovery = vi.spyOn(backend, 'inventory').mockResolvedValue({ state: 'available', roots: [] })
     expect((await backend.kill({ backend: 'tmux', paneId: '%42' })).state).toBe(mode === 'gone' || mode === 'no server' || mode === 'no socket' ? 'succeeded' : 'unknown')
     expect(discovery).not.toHaveBeenCalled()
+  })
+
+  it('sees its own panes and untagged ones, never a pane another daemon on this tmux server created', async () => {
+    // A dev daemon beside the release one, on one tmux server (2026-10-03): each opened an agent for the
+    // other's panes until a pane said whose it was.
+    const dir = mkdtempSync(join(tmpdir(), 'tmux-backend-owner-'))
+    dirs.push(dir)
+    writeFileSync(join(dir, 'tmux'), `#!/bin/sh
+case "$1" in
+  list-panes) printf '%%1|100|harness-claude-1|/work/mine|daemon-a\\n%%2|101|harness-codex-2|/work/theirs|daemon-b\\n%%3|102|harness-claude-3|/work/old|\\n%%4|103|work|/work/own-shell|daemon-a\\n' ;;
+esac
+`, { mode: 0o700 })
+    process.env.PATH = `${dir}${delimiter}${originalPath ?? ''}`
+    const inventory = await new TmuxBackend(undefined, () => 'daemon-a').inventory()
+    expect(inventory.state).toBe('available')
+    if (inventory.state !== 'available') return
+    // Its own, and one a build before the tag created; not the other daemon's, and not a session the
+    // person opened by hand whatever it is tagged.
+    expect(inventory.roots.map((root) => root.runtime.paneId)).toEqual(['%1', '%3'])
   })
 
   it('rejects broad tmux targets before executing a command', async () => {
@@ -99,7 +119,7 @@ esac
     process.env.PATH = `${dir}${delimiter}${originalPath ?? ''}`
     process.env.TMUX_BACKEND_CALLS = calls
     let theme = { background: '#171b29', foreground: '#f5f5f5' }
-    const backend = new TmuxBackend(() => theme)
+    const backend = new TmuxBackend(() => theme, () => 'daemon-a')
 
     await backend.create({ cwd: '/tmp/work', label: 'harness-codex-1' })
     await backend.inventory()
@@ -109,7 +129,7 @@ esac
     await backend.inventory()
     const styleCalls = () => readFileSync(calls, 'utf8').trim().split('\n').filter((line) => line.includes('window-style'))
     await vi.waitFor(() => expect(styleCalls()).toEqual([
-      'new-session -d -P -F #{pane_id} -c /tmp/work -s harness-codex-1 ; set-option -w remain-on-exit on ; set-option destroy-unattached off ; set-option -w window-style bg=#171b29,fg=#f5f5f5',
+      'new-session -d -P -F #{pane_id} -c /tmp/work -s harness-codex-1 ; set-option -w remain-on-exit on ; set-option destroy-unattached off ; set-option -w window-style bg=#171b29,fg=#f5f5f5 ; set-option -w @harness_daemon daemon-a',
       // The pane this daemon did not create is styled on the first scan; %7 already was.
       'set-option -w -t %9 window-style bg=#171b29,fg=#f5f5f5',
       // The app changed its palette: every live pane, once.
@@ -302,7 +322,7 @@ printf '%%42\\n'
     process.env.PATH = `${dir}${delimiter}${originalPath ?? ''}`
     process.env.TMUX_BACKEND_CALLS = calls
 
-    const created = await new TmuxBackend().create({
+    const created = await new TmuxBackend(undefined, () => 'daemon-a').create({
       cwd: '/tmp/work',
       label: 'harness-test',
       // A grid relay key. It goes here rather than into `command` precisely so it stays out of the
@@ -318,7 +338,7 @@ printf '%%42\\n'
       'new-session -d -P -F #{pane_id} -c /tmp/work -s harness-test'
       + ' -e ANTHROPIC_BASE_URL=https://relay.example/relay -e ANTHROPIC_AUTH_TOKEN=gridkey-abc123'
       + ' /bin/zsh -lic exec "$@" harness-engine claude ; set-option -w remain-on-exit on'
-      + ' ; set-option destroy-unattached off ; set-option -w window-style bg=#181818,fg=#f5f5f5',
+      + ' ; set-option destroy-unattached off ; set-option -w window-style bg=#181818,fg=#f5f5f5 ; set-option -w @harness_daemon daemon-a',
     )
   })
   it('respawns a pane in place with a new environment, keeping the pane id', async () => {
