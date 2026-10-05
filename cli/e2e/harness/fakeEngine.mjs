@@ -26,7 +26,9 @@
 // Which release is installed is the config's business, so a test can update an engine in place by
 // rewriting its wrapper: `version` is what it reports and writes, `without` lists the flags and
 // subcommands that release no longer has, and `startDelayMs` is how long it takes, once started, before
-// it draws or announces anything (an engine's first run after an update).
+// it draws or announces anything (an engine's first run after an update). `firstHookDelayMs` is how long
+// its first SessionStart takes to reach the daemon once the engine is up: the hook command starting on a
+// loaded machine, while the daemon has already found the engine and its conversation.
 import { execFileSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, writeFileSync } from 'node:fs'
@@ -196,6 +198,7 @@ export async function run(engine, config) {
   process.stdout.write(`\x1b[?2004h${engine === 'claude' ? '✻ Welcome to Claude Code (fake)' : '>_ OpenAI Codex (fake)'}\r\n`)
   process.stdout.write(`  session ${sessionId}${resumed ? ' (resumed)' : ''}\r\n\r\n`)
   draw()
+  if (config.firstHookDelayMs && !resumed) await new Promise((resolve) => setTimeout(resolve, config.firstHookDelayMs))
   await hook('session-start', { hookEvent: resumed ? 'SessionStart' : 'SessionStart', source: resumed ? 'resume' : 'startup' })
 
   let turn = 0
