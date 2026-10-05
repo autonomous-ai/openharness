@@ -442,9 +442,14 @@ function readProcField(pid, field) {
 }
 
 // The tag a daemon puts on every pane it creates, and the name it gives their sessions (both in
-// src/lib/harnessSessionLabel.ts, which hookNotify.spec.ts keeps these equal to).
+// src/lib/harnessSessionLabel.ts, which hookNotify.spec.ts keeps these equal to). Before tmux 3.0 there
+// are no pane options, and the tag rides in the pane's start command instead (`ownerCommand`); this format
+// reads it there first and from the option otherwise, as the daemon's listing does on such a tmux
+// (`paneOwnerFormat(false)`), and on a newer one a pane's start command never carries it.
 const HARNESS_OWNER_OPTION = '@harness_daemon'
 const HARNESS_SESSION_PREFIX = 'harness-'
+const OWNER_COMMAND_PREFIX = '/usr/bin/env HARNESS_DAEMON='
+const PANE_OWNER_FORMAT = `#{?#{m:${OWNER_COMMAND_PREFIX}*,#{pane_start_command}},#{=${OWNER_COMMAND_PREFIX.length + 16}:pane_start_command},#{${HARNESS_OWNER_OPTION}}}`
 
 /** A daemon's tag: its data folder, symlinks resolved, hashed — `harnessPaneOwner` in the daemon. */
 function daemonPaneOwner(dataDir) {
@@ -454,31 +459,30 @@ function daemonPaneOwner(dataDir) {
 }
 
 /**
- * Whether the daemon this hook writes for takes this pane for one of its agents at all, by the rule its
- * discovery reads panes with (`ownedHere`): one it tagged, wherever the person moved it; an untagged one
- * only in a session Harness named, or one an older build named (`<engine>-<ms>`) that its registry
- * already holds; another daemon's, never. A session the person opened by hand is not an agent: with the
- * daemon up, its hook is turned away. The offline fallback wrote a row for one all the same, and the daemon
- * came back with an agent it would never have made and could not drive, "offline" for good
- * (e2e/hookclient.e2e.ts). An answer tmux could not give is no.
+ * The pane, as tmux describes it, in one call: its root process, and whether the daemon this hook writes
+ * for takes it for one of its agents at all, by the rule its discovery reads panes with (`ownedHere`):
+ * one it tagged, wherever the person moved it; an untagged one only in a session Harness named, or one an
+ * older build named (`<engine>-<ms>`) that its registry already holds (`taken: 'if-held'`); another
+ * daemon's, never. A session the person opened by hand is not an agent: with the daemon up, its hook is
+ * turned away. The offline fallback wrote a row for one all the same, and the daemon came back with an
+ * agent it would never have made and could not drive, "offline" for good (e2e/hookclient.e2e.ts).
+ * Undefined when tmux could not answer.
  */
-async function paneTakenBy(pane, dataDir) {
-  const stdout = await execFileText('tmux', ['display-message', '-p', '-t', pane, `#{session_name}|#{${HARNESS_OWNER_OPTION}}`], 2000)
-  const line = typeof stdout === 'string' ? stdout.trim() : ''
-  const cut = line.lastIndexOf('|')
-  if (cut <= 0) return 'no'
-  const session = line.slice(0, cut)
-  const owner = line.slice(cut + 1)
-  if (owner) return owner === daemonPaneOwner(dataDir) ? 'yes' : 'no'
-  if (session.startsWith(HARNESS_SESSION_PREFIX)) return 'yes'
-  return /^[a-z][a-z0-9]*-\d{13}$/.test(session) ? 'if-held' : 'no'
-}
-
-async function panePid(pane) {
-  const stdout = await execFileText('tmux', ['display-message', '-p', '-t', pane, '#{pane_pid}'], 2000)
+async function paneFacts(pane, dataDir) {
+  const stdout = await execFileText('tmux', ['display-message', '-p', '-t', pane, `#{pane_pid}|#{session_name}|${PANE_OWNER_FORMAT}`], 2000)
   if (stdout === null) return undefined
-  const pid = Number((stdout || '').trim())
-  return Number.isSafeInteger(pid) && pid > 0 ? pid : null
+  const line = (stdout || '').trim()
+  const first = line.indexOf('|')
+  const last = line.lastIndexOf('|')
+  if (first < 0 || last <= first) return undefined
+  const pid = Number(line.slice(0, first))
+  const session = line.slice(first + 1, last)
+  const field = line.slice(last + 1)
+  const owner = field.startsWith(OWNER_COMMAND_PREFIX) ? field.slice(OWNER_COMMAND_PREFIX.length).split(' ')[0] : field
+  const taken = owner ? (owner === daemonPaneOwner(dataDir) ? 'yes' : 'no')
+    : session.startsWith(HARNESS_SESSION_PREFIX) ? 'yes'
+    : /^[a-z][a-z0-9]*-\d{13}$/.test(session) ? 'if-held' : 'no'
+  return { pid: Number.isSafeInteger(pid) && pid > 0 ? pid : null, taken }
 }
 
 function argvTokens(args) {
@@ -708,13 +712,6 @@ async function enrichProcessImages(rows) {
     }
   }
   return rows.map((row) => images.has(row.pid) ? { ...row, imageFileKey: images.get(row.pid) } : row)
-}
-
-async function paneEngineProcess(pane, engine) {
-  const rootPid = await panePid(pane)
-  if (rootPid === undefined) return { state: 'unknown' }
-  if (!rootPid) return { state: 'gone' }
-  return rootEngineProcess(rootPid, engine)
 }
 
 async function rootEngineProcess(rootPid, engine) {
@@ -1254,13 +1251,12 @@ async function fallbackRegister(input, engine, tmuxPane) {
   if (!transcriptOptional && !transcriptPath) return
   if (transcriptPath && !validTranscriptPath(engine, transcriptPath, p)) return
   const observations = []
-  const taken = /^%\d+$/.test(tmuxPane || '') ? await paneTakenBy(tmuxPane, p.dataDir) : 'no'
-  if (taken === 'no') return
-  if (/^%\d+$/.test(tmuxPane || '')) {
-    const tmux = await paneEngineProcess(tmuxPane, engine)
-    if (tmux.state === 'alive' && tmux.identity && await callerOwns(tmux.identity)) {
-      observations.push({ identity: tmux.identity, runtime: { backend: 'tmux', paneId: tmuxPane } })
-    }
+  const pane = /^%\d+$/.test(tmuxPane || '') ? await paneFacts(tmuxPane, p.dataDir) : undefined
+  const taken = pane?.taken ?? 'no'
+  if (taken === 'no' || !pane.pid) return
+  const tmux = await rootEngineProcess(pane.pid, engine)
+  if (tmux.state === 'alive' && tmux.identity && await callerOwns(tmux.identity)) {
+    observations.push({ identity: tmux.identity, runtime: { backend: 'tmux', paneId: tmuxPane } })
   }
   if (!observations.length) return
   const process = observations[0]

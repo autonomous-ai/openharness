@@ -7,7 +7,7 @@ import { join } from 'path'
 import { fileURLToPath } from 'url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ENGINES } from './engines/types.js'
-import { HARNESS_OWNER_OPTION, HARNESS_SESSION_PREFIX, harnessPaneOwner } from './lib/harnessSessionLabel.js'
+import { HARNESS_OWNER_OPTION, HARNESS_SESSION_PREFIX, harnessPaneOwner, ownerCommand, paneOwnerFormat } from './lib/harnessSessionLabel.js'
 
 // Every case here spawns the real hook as a child process, and several spawn shell shims for tmux, ps
 // and sqlite3 on top of that. On a loaded machine — this file runs alongside 88 others — that chain
@@ -85,7 +85,7 @@ function runHook(opts: RunHookOpts): Promise<string> {
       // The pane as tmux describes it: its root process, and the session and tag that say whose agent it
       // is (a Harness session, untagged, unless the test says otherwise).
       const paneFacts = `${opts.paneSession ?? 'harness-claude-1790000000000'}|${opts.paneOwner ?? ''}`
-      writeFileSync(join(binDir, 'tmux'), `#!/bin/sh\ncase "$*" in *session_name*) printf '%s\\n' ${shellQuote(paneFacts)} ;; *) echo 7000 ;; esac\n`, { mode: 0o755 })
+      writeFileSync(join(binDir, 'tmux'), `#!/bin/sh\nprintf '%s\\n' ${shellQuote(`7000|${paneFacts}`)}\n`, { mode: 0o755 })
       writeFileSync(join(binDir, 'ps'), `#!/bin/sh\nprintf '%s\\n' '7000 1 zsh Mon Aug 10 10:00:00 2026 -zsh' ${shellQuote(`7001 7000 ${executable} Mon Aug 10 10:00:01 2026 ${processArgs}`)} '${process.pid} 7001 node Mon Aug 10 10:00:02 2026 hook-parent'\n`, { mode: 0o755 })
       if (opts.processEngine === 'cursor') {
         const target = join(binDir, 'cursor-agent-target')
@@ -1001,6 +1001,11 @@ describe('hook notify terminal scope', () => {
     const source = readFileSync(HOOK, 'utf8')
     expect(/const HARNESS_OWNER_OPTION = '([^']+)'/.exec(source)?.[1]).toBe(HARNESS_OWNER_OPTION)
     expect(/const HARNESS_SESSION_PREFIX = '([^']+)'/.exec(source)?.[1]).toBe(HARNESS_SESSION_PREFIX)
+    // The tag in a pane's start command, before tmux 3.0, read with the format the daemon reads it with.
+    const prefix = /const OWNER_COMMAND_PREFIX = '([^']+)'/.exec(source)?.[1]
+    expect(`${ownerCommand('0123456789abcdef', ['zsh']).slice(0, 2).join(' ')} zsh`.startsWith(`${prefix}0123456789abcdef`)).toBe(true)
+    const format = `#{?#{m:${prefix}*,#{pane_start_command}},#{=${prefix!.length + 16}:pane_start_command},#{${HARNESS_OWNER_OPTION}}}`
+    expect(format).toBe(paneOwnerFormat(false))
   })
 
   it('registers offline only a pane its daemon takes for an agent: never a session opened by hand or another daemon\'s', async () => {
@@ -1028,6 +1033,10 @@ describe('hook notify terminal scope', () => {
     // Its own pane, wherever the person moved it, and an untagged one in a session Harness named.
     expect(await register('moved', { paneSession: 'mine', paneOwner: harnessPaneOwner(join(dir, 'moved')) })).toEqual(['moved'])
     expect(await register('untagged', { paneSession: 'harness-claude-1790000000000' })).toEqual(['untagged'])
+    // Before tmux 3.0 the tag rides in the pane's start command, cut to its prefix and the tag.
+    const startCommand = (dataDir: string) => ownerCommand(harnessPaneOwner(dataDir), []).join(' ')
+    expect(await register('old-tmux', { paneSession: 'mine', paneOwner: startCommand(join(dir, 'old-tmux')) })).toEqual(['old-tmux'])
+    expect(await register('old-tmux-other', { paneSession: 'harness-claude-1790000000000', paneOwner: startCommand(join(dir, 'elsewhere')) })).toBeNull()
     // A session an older build named, only while the registry holds an agent on that pane.
     expect(await register('legacy-new', { paneSession: 'claude-1790000000000' })).toBeNull()
     const held = {
