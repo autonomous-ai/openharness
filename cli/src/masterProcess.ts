@@ -6,8 +6,8 @@
  * process evaluated the whole bundle, and Node parses all of the file a process is started on whatever
  * it runs. Measured from the bundle at idle (2026-10-05): the master 160 MiB resident, each service 115
  * to 160. So a master started on cli.js re-executes itself, same pid, on the lean bundle cli.js carries
- * (lib/leanBundle.ts), and starts the services from it too: each then parses its own code, under 1 MB,
- * and not the CLI's 4.4.
+ * (harnessd/leanBundle.ts), and starts the services from it too: each then parses its own code and not
+ * the whole CLI's 4.4 MB.
  */
 import { spawnSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
@@ -17,7 +17,7 @@ import { processExecve, probeMaster, runMaster, type Execve } from './harnessd/m
 import { PROBE_ANSWER, PROBE_TIMEOUT_MS } from './harnessd/reexec.js'
 import { ensureUtf8Locale } from './lib/childLocale.js'
 import { DAEMON_LOG_FILE, HARNESSD_STATUS_FILE, PID_FILE } from './lib/daemonState.js'
-import { readLeanBundle, writeLeanBundle, type LeanBundle } from './lib/leanBundle.js'
+import { readLeanBundle, writeLeanBundle, type LeanBundle } from './harnessd/leanBundle.js'
 import { ts } from './lib/log.js'
 import { confirm as confirmUpdate, restore as restoreUpdate, unjudgedUpdate } from './lib/selfUpdate.js'
 import { VERSION } from './version.js'
@@ -69,7 +69,7 @@ export function probeThisMaster(): number {
 export interface BundleMasterDeps {
   env: NodeJS.ProcessEnv
   read: (path: string) => Buffer
-  /** Writes the lean bundle out and returns where (lib/leanBundle.ts `writeLeanBundle`). */
+  /** Writes the lean bundle out and returns where (harnessd/leanBundle.ts `writeLeanBundle`). */
   write: (lean: LeanBundle) => string
   /** Runs `<lean> __harnessd-probe` as the re-executed master would start: whether it answered. */
   probe: (leanPath: string, env: NodeJS.ProcessEnv) => { ok: boolean; detail: string }

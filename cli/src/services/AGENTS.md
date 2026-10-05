@@ -49,9 +49,13 @@ or a quick way back).
   requests it declared (its `<NAME>_REQUESTS`) to its process, and the same handlers answer them there.
 - `src/serviceProcess.ts` starts it (`SERVICE_RUNNERS`, which must name every service in
   `KNOWN_SERVICES`): a process imports only the runner it is named. From a release, it runs on the lean
-  bundle cli.js carries for the master and the services (`src/lib/leanBundle.ts`), so a service parses
-  its own code and not the whole CLI's: about 75 MiB resident at idle, against 115 to 160 when each
-  started on cli.js. A service's code is what its runner imports; nothing else is in its process.
+  bundle cli.js carries for the master and the services (`src/harnessd/leanBundle.ts`), split so that a
+  service loads its own code and nothing else: 61 to 77 MiB resident at idle (20 to 35 MiB physical
+  footprint), against 118 to 131 (54 to 90) when each started on cli.js (2026-10-05).
+- **What a service imports is what its process costs.** Import from small modules: one schema module
+  pulled in for a constant brought zod to search and workspaces, 8 MiB each (`src/dsh/id.ts`). A
+  failing import fails the service's start, loudly, and the master parks it. `src/leanEntry.spec.ts`
+  holds each process to its own code, and the master, search and workspaces to no zod.
 - `src/services/process.ts` is the process's side: heartbeats to the master, the connection to the
   core with the master's token, reconnecting after core restarts.
 - `src/core/serviceLinks.ts` is the core's side: it routes those requests to the process, answers

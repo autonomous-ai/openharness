@@ -3,17 +3,17 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { PROBE_ANSWER } from './harnessd/reexec.js'
-import type { LeanBundle } from './lib/leanBundle.js'
+import { LEAN_ENTRY, type LeanBundle } from './harnessd/leanBundle.js'
 
 const runMaster = vi.hoisted(() => vi.fn((_config: Record<string, unknown>) => 'supervisor'))
 vi.mock('./harnessd/master.js', async (real) => ({ ...await real<object>(), runMaster }))
 const leanBundle = vi.hoisted(() => ({ read: vi.fn((_bundle: Buffer): LeanBundle | null => null) }))
-vi.mock('./lib/leanBundle.js', async (real) => ({ ...await real<object>(), readLeanBundle: (bundle: Buffer) => leanBundle.read(bundle) }))
+vi.mock('./harnessd/leanBundle.js', async (real) => ({ ...await real<object>(), readLeanBundle: (bundle: Buffer) => leanBundle.read(bundle) }))
 
 const { BUNDLE_ENV, BUNDLE_SHA256_ENV, LEAN_DIR, probeLean, probeThisMaster, processBundleDeps, startMaster, startMasterFromBundle } = await import('./masterProcess.js')
 type Deps = Parameters<typeof startMasterFromBundle>[1] & object
 
-const LEAN: LeanBundle = { code: Buffer.from('lean'), sha256: 'a'.repeat(64), bundleSha256: 'b'.repeat(64) }
+const LEAN: LeanBundle = { files: new Map([[LEAN_ENTRY, Buffer.from('lean')]]), sha256: 'a'.repeat(64), bundleSha256: 'b'.repeat(64) }
 
 function deps(over: Partial<Deps> = {}) {
   const calls = { starts: [] as unknown[], execs: [] as Array<{ file: string; args: string[]; env: NodeJS.ProcessEnv }>, logs: [] as string[], probes: [] as Array<{ path: string; env: NodeJS.ProcessEnv }> }

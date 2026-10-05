@@ -1,14 +1,14 @@
 /**
- * The lean bundle's entry: harnessd's master and its services, and nothing else (lib/leanBundle.ts).
+ * The lean bundle's entry: harnessd's master and its services, and nothing else (harnessd/leanBundle.ts).
  *
  * Built a second time, on its own, and carried inside cli.js, so that the master and each service start
- * on under 1 MB of code instead of the whole CLI's 4.4: Node parses every byte of the file a process is
- * started on, and that cost each of them about 45 MiB at idle. A master started on cli.js re-executes on
- * this file (masterProcess.ts `startMasterFromBundle`) and starts the services from it. The core and the
- * CLI always run from cli.js.
- *
- * Each process imports only its own part: a service never evaluates the master's code, nor another
- * service's.
+ * on their own code instead of the whole CLI's 4.4 MB: Node parses every byte of the files a process
+ * loads, and the whole CLI cost each of them about 45 MiB at idle. Built split, each dynamic import below
+ * a file of its own with what only it uses, so a process loads this file, its own and the shared ones it
+ * imports: the master never the services' code, a service never the master's nor another service's
+ * (leanEntry.spec.ts holds it to that). A master started on cli.js re-executes on this file
+ * (masterProcess.ts `startMasterFromBundle`) and starts the services from it. The core and the CLI
+ * always run from cli.js.
  */
 import { fileURLToPath } from 'node:url'
 

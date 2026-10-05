@@ -17,6 +17,7 @@ import { readBuiltinBundle, readHarnessMonitorBundle, readModelManagerBundle } f
 import { readProcessImageBundle } from './scripts/lib/processImageBundle.mjs'
 import { leanBlock } from './scripts/lib/leanBlock.mjs'
 import { fileURLToPath } from 'node:url'
+import { basename } from 'node:path'
 const modelManagerBundle = JSON.stringify(readModelManagerBundle(fileURLToPath(new URL('../store/agents/autonomous-grid', import.meta.url))))
 const devicesBundle = JSON.stringify(readBuiltinBundle(fileURLToPath(new URL('../store/agents/devices', import.meta.url)), ['harness.json', 'AGENTS.md', 'LICENSE', 'template']))
 const harnessMonitorBundle = JSON.stringify(readHarnessMonitorBundle(fileURLToPath(new URL('../store/agents/harness-monitor', import.meta.url))))
@@ -67,9 +68,20 @@ const options = {
 }
 
 // harnessd's master and its services, bundled on their own (src/leanEntry.ts): Node parses all of the
-// file a process starts on, and the whole CLI's cost each of them about 45 MiB at idle. Carried inside
-// cli.js, at its end, as a comment Node only skims (scripts/lib/leanBlock.mjs).
-const lean = await esbuild.build({ ...options, entryPoints: ['src/leanEntry.ts'], write: false, logLevel: 'warning' })
+// file a process starts on, and the whole CLI's cost each of them about 45 MiB at idle. Split, so that a
+// process parses only the files its own code is in: the master never the services', search never the
+// viewers'. Carried inside cli.js, at its end, as a comment Node only skims (scripts/lib/leanBlock.mjs).
+const lean = await esbuild.build({
+  ...options,
+  entryPoints: { harnessd: 'src/leanEntry.ts' },
+  outdir: 'lean',
+  splitting: true,
+  chunkNames: '[name]-[hash]',
+  outExtension: { '.js': '.mjs' },
+  write: false,
+  logLevel: 'warning',
+})
+const leanFiles = Object.fromEntries(lean.outputFiles.map((file) => [basename(file.path), file.contents]))
 
 await esbuild.build({
   ...options,
@@ -78,7 +90,7 @@ await esbuild.build({
   entryPoints: ['src/entry.ts'],
   outfile: `${outDir}/cli.js`,
 })
-appendFileSync(`${outDir}/cli.js`, leanBlock(lean.outputFiles[0].contents))
+appendFileSync(`${outDir}/cli.js`, leanBlock(leanFiles))
 
 copyFileSync('hook/notify.mjs', `${outDir}/notify.mjs`)
 
