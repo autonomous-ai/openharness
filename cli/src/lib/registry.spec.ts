@@ -138,6 +138,24 @@ describe('registry remote display names', () => {
     expect(statSync(join(dataDir, 'registry.json')).mode & 0o777).toBe(0o600)
   })
 
+  it('tries a names write that failed again on the next save, so a rename survives a full disk', async () => {
+    const transcriptPath = join(dataDir, 'session-1.jsonl')
+    writeFileSync(transcriptPath, '{}\n')
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { registry } = await loadRegistryModule()
+    registry.load()
+    registerProcess(registry, { launcherId: 'h1', sessionId: 'session-1', transcriptPath, tmuxPane: '%1', cwd: '/tmp/demo' })
+    // The write cannot land: a directory where the names file goes stands in for a full disk.
+    mkdirSync(join(dataDir, 'agent-names.json'))
+    expect(registry.rename('session-1', 'Named while full')).toBeTruthy()
+    expect(error.mock.calls.some(([line]) => String(line).includes('save names failed'))).toBe(true)
+    // Room again: the next save of anything writes the names too, with no second rename.
+    rmSync(join(dataDir, 'agent-names.json'), { recursive: true, force: true })
+    registry.remove('session-1')
+    expect(JSON.parse(readFileSync(join(dataDir, 'agent-names.json'), 'utf-8'))).toEqual({ 'session-1': 'Named while full' })
+    error.mockRestore()
+  })
+
   it('auto-follows the tmux pane title until renamed, then the manual name stays fixed', async () => {
     const transcriptPath = join(dataDir, 'session-title.jsonl')
     writeFileSync(transcriptPath, '{}\n')
