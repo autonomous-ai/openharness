@@ -595,6 +595,36 @@ tests that older image, not product changes in the newer test checkout.
 Apple firmware provisioning, physical drivers, platform installation and Fedora
 update/recovery integration remain separate work before releasing this port.
 
+### Native runtime updates in the ARM fixture
+
+The **Harness OS private runtime update fixtures** workflow builds native x86 and
+ARM baseline runtimes plus unpublished `999.0.1` updates. It runs portable OS checks
+on both architectures, preserves the original runtime, and uploads exact-source
+artifacts. These manifests never enter a product update channel.
+
+Use the ARM artifact with an existing verified graphical fixture:
+
+```sh
+python3 os/tests/arm_update_vm.py \
+  --fixture /path/to/harness-arm-session-fixture \
+  --fixture-source FULL_IMAGE_PRODUCER_SHA \
+  --updates /path/to/fast-update-fixture \
+  --updates-source FULL_UPDATE_PRODUCER_SHA \
+  --output os/test-results/arm-updates
+```
+
+The driver verifies both immutable inputs, then adds only the candidate user
+updater and its shortcut/timer to a private writable copy. It exercises staged
+downloads, a failed screen restart, mouse activation, Super+u, and rollback with
+actual native binaries. The same agent and terminal processes, heartbeat, boot ID,
+and keyboard input must survive. Its ancestor-release check requires that the
+fixture's recorded public CLI baseline is already included in the boot image.
+
+Receipts distinguish the boot image, update producer, and test/updater source.
+This tests per-user runtime changes, not Fedora package updates, boot recovery,
+physical Apple hardware, or an ARM product installation. The passwordless test
+account and writable test disk must never be published.
+
 ## Mac support targets
 
 Intel Macs and Apple Silicon are both intended OS targets. They share the Harness
