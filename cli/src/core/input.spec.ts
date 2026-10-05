@@ -4,7 +4,8 @@ import type { AutonomousDeviceInput } from '../lib/autonomous-device/input.js'
 import { deviceErrorText } from '../lib/deviceErrors.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import type { SessionInputDelivery } from '../lib/sessionInput.js'
-import type { TerminalActionResult } from '../lib/terminalTypes.js'
+import { REWIND_PICKER_OPEN, type TerminalActionResult } from '../lib/terminalTypes.js'
+import { CLAUDE_REWIND_LIST, CODEX_BROWSING_SCROLLBACK } from '../lib/__fixtures__/rewindPickers.js'
 import { createInput, createMessageRequest, deviceInputDeps, sessionInputDeps, type InputDeps } from './input.js'
 
 const ok: TerminalActionResult = { state: 'succeeded', dispatch: 'executed' }
@@ -13,6 +14,7 @@ const READY_PANE = '────────────\n❯\n─────�
 
 const agents = new Map<string, RegisteredSession>([
   ['a1', { agentId: 'a1', sessionId: 's1', engine: 'claude' } as RegisteredSession],
+  ['cx', { agentId: 'cx', sessionId: 'cx-s', engine: 'codex' } as RegisteredSession],
   ['s1', { agentId: 'a1', sessionId: 's1', engine: 'claude' } as RegisteredSession],
   ['cc', { agentId: 'cc', sessionId: 'cc-s', engine: 'commandcode' } as RegisteredSession],
   ['cc-new', { agentId: 'cc-new', sessionId: '', engine: 'commandcode' } as RegisteredSession],
@@ -95,6 +97,28 @@ describe('the session input controller\'s dependencies', () => {
     expect(calls).toEqual(['lock a1', 'submit a1 hello', 'lock a1', 'key a1 enter'])
   })
 
+  it('never types a person\'s message into a picker for a point to rewind to, and reads no other engine\'s pane for one', async () => {
+    const run = deps()
+    const wired = sessionInputDeps(run.deps, () => lock(run.calls))
+    const refused = { state: 'failed', dispatch: 'not_started', reason: REWIND_PICKER_OPEN }
+    run.setPane(CLAUDE_REWIND_LIST)
+    expect(await wired.inject('a1', 'hello')).toEqual(refused)
+    run.setPane(CODEX_BROWSING_SCROLLBACK)
+    expect(await wired.inject('cx', 'hello')).toEqual(refused)
+    // Read inside the pane lock, and nothing written.
+    expect(run.calls).toEqual(['lock a1', 'lock cx'])
+    // A pane that cannot be read is written as before; so is one with no picker, and an engine without one.
+    run.setPane(null)
+    expect(await wired.inject('cx', 'hi')).toBe(ok)
+    run.setPane(READY_PANE)
+    expect(await wired.inject('a1', 'hi')).toBe(ok)
+    vi.mocked(run.deps.terminal.captureTerminal).mockClear()
+    expect(await wired.inject('cc', 'hi')).toBe(ok)
+    expect(await wired.inject('nobody', 'hi')).toBe(ok)
+    expect(run.deps.terminal.captureTerminal).not.toHaveBeenCalled()
+    expect(run.calls.filter((call) => call.startsWith('submit'))).toEqual(['submit cx hi', 'submit a1 hi', 'submit cc hi', 'submit nobody hi'])
+  })
+
   it('writes a team turn only into a ready pane whose delivery still holds control', async () => {
     const run = deps()
     const wired = sessionInputDeps(run.deps, () => lock(run.calls))
@@ -147,6 +171,15 @@ describe('the device input\'s dependencies', () => {
     expect(await wired.isAwaitingUser!(agents.get('a1')!)).toBe(true)
     run.setPane(READY_PANE)
     expect(await wired.isAwaitingUser!(agents.get('a1')!)).toBe(false)
+  })
+
+  it('waits for the person while a picker for a point to rewind to is open', async () => {
+    const run = deps()
+    const wired = deviceInputDeps(run.deps, () => ({ acquireControl: vi.fn(), submit: vi.fn(), cancelDelivery: vi.fn() }))
+    run.setPane(CLAUDE_REWIND_LIST)
+    expect(await wired.isAwaitingUser!(agents.get('a1')!)).toBe(true)
+    run.setPane(CODEX_BROWSING_SCROLLBACK)
+    expect(await wired.isAwaitingUser!(agents.get('cx')!)).toBe(true)
   })
 
   it('hands queued input to the controller, answering control included', () => {

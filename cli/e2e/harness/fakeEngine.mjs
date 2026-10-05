@@ -19,7 +19,8 @@
 // `/compact` does (and Claude Code then announces the same session again), `!compactmid` compacts in the
 // middle of a turn as an automatic compaction does, `!version` answers with the version this
 // process is, `!goal` and `!goal done` (Codex) start and achieve a goal the way Codex 0.160 shows one
-// under its composer, `!browse` (Codex) leaves Codex browsing its transcript, `!exit` ends the process.
+// under its composer, `!browse` (Codex) leaves Codex browsing its transcript in its default fullscreen
+// mode, and `!browse scrollback` in its scrollback mode, `!exit` ends the process.
 // Everything else is echoed as the answer.
 //
 // Which release is installed is the config's business, so a test can update an engine in place by
@@ -165,21 +166,32 @@ export async function run(engine, config) {
   // What Codex 0.160 draws under its empty composer in the two states the daemon must read off the pane
   // (tui/src/bottom_pane): a goal it is pursuing, on the right of its status line, and the footer of
   // its transcript browser, with the composer dimmed whole. Null draws the composer alone, as before.
+  // Browsing in its scrollback mode is a transcript pager over the whole pane instead, on the alternate
+  // screen, with the same footer on its last row (pager_overlay/transcript.rs).
   let bottom = null
   const placeholder = '\x1b[1m›\x1b[0m \x1b[2mAsk Codex to do anything\x1b[0m'
   const goalBottom = (goal) => ({ composer: placeholder, footer: `  gpt-6 high · ${cwd}   \x1b[35m${goal}\x1b[0m` })
-  const browsingBottom = {
-    composer: '\x1b[2m› Ask Codex to do anything\x1b[0m',
-    footer: '\x1b[36mBrowsing transcript\x1b[0m\x1b[2m · \x1b[0m↑↓/jk\x1b[2m scroll · \x1b[0m←→/hl\x1b[2m prompts · \x1b[0m↵\x1b[2m rewind · \x1b[0mesc\x1b[2m back\x1b[0m',
-    browsing: true,
-  }
+  const browsingFooter = '\x1b[36mBrowsing transcript\x1b[0m\x1b[2m · \x1b[0m↑↓/jk\x1b[2m scroll · \x1b[0m←→/hl\x1b[2m prompts · \x1b[0m↵\x1b[2m rewind · \x1b[0mesc\x1b[2m back\x1b[0m'
+  const browsingBottom = { composer: '\x1b[2m› Ask Codex to do anything\x1b[0m', footer: browsingFooter, browsing: true }
+  const pagerBottom = (prompt, answer) => ({ browsing: true, pager: `\x1b[?1049h\x1b[H\x1b[2J\x1b[2m/ T R A N S C R I P T ${'/ '.repeat(30)}\x1b[0m`
+    + `\r\n\x1b[7m› ${prompt}\x1b[0m\r\n\r\n\x1b[2m•\x1b[0m ${answer}\x1b[999;1H${browsingFooter}` })
   const draw = (line = '') => {
+    if (bottom?.pager) { process.stdout.write(bottom.pager); return }
     if (bottom && !line) {
       // The footer on the row under the composer, then the cursor back to the composer, after its glyph.
       process.stdout.write(`\r\x1b[2K${bottom.composer}\r\n\x1b[2K${bottom.footer}\x1b[1A\r\x1b[2C`)
       return
     }
     process.stdout.write(`\r\x1b[2K› ${line}`)
+  }
+  // Out of the browser, back to the composer: the pager's alternate screen left, or the footer row
+  // under the composer cleared. Enter rewinds on the way out.
+  const leaveBrowsing = (rewound) => {
+    if (bottom.pager) process.stdout.write('\x1b[?1049l')
+    else process.stdout.write('\r\n\x1b[2K\x1b[1A')
+    if (rewound) process.stdout.write('\r\x1b[2K(rewound to an earlier prompt)\r\n')
+    bottom = null
+    draw()
   }
   process.stdout.write(`\x1b[?2004h${engine === 'claude' ? '✻ Welcome to Claude Code (fake)' : '>_ OpenAI Codex (fake)'}\r\n`)
   process.stdout.write(`  session ${sessionId}${resumed ? ' (resumed)' : ''}\r\n\r\n`)
@@ -413,7 +425,7 @@ export async function run(engine, config) {
     }
     if (engine === 'codex' && directive?.[1] === 'browse') {
       // Reached in Codex by Esc twice on an empty composer; the directive goes straight there.
-      bottom = browsingBottom
+      bottom = directive[2] === 'scrollback' ? pagerBottom(prompt, `answer ${turn}: ${prompt}`) : browsingBottom
       finish(`answer ${turn}: ${prompt}`)
       return
     }
@@ -428,15 +440,24 @@ export async function run(engine, config) {
   // Inside a bracketed paste a carriage return or newline is a newline in the prompt, as Ink and
   // ratatui read it; only one typed outside a paste submits. The paste's markers say which.
   let pasting = false
-  process.stdin.on('data', (chunk) => {
-    if (dialog) { dialogKeys(chunk); return }
+  process.stdin.on('data', (input) => {
+    if (dialog) { dialogKeys(input); return }
+    let chunk = input
     if (bottom?.browsing) {
-      // Keys move through the transcript there. Esc goes back to the composer; Enter rewinds the
-      // conversation to the prompt in view, which is what a message typed into it would do.
-      if (chunk.includes('\r') || chunk.includes('\n')) process.stdout.write('\r\n\x1b[2K(rewound to an earlier prompt)\r\n')
-      else if (chunk.includes('\x1b')) process.stdout.write('\r\n\x1b[2K\x1b[1A')
-      if (chunk.includes('\x1b') || chunk.includes('\r') || chunk.includes('\n')) { bottom = null; draw() }
-      return
+      // As Codex 0.160 takes input while browsing (app.rs, app_backtrack): Esc goes back to the composer
+      // and Enter reverts the conversation to the prompt in view, in both modes; arrows and hjkl move
+      // through the transcript. Anything else, a paste included, leaves the fullscreen browser for the
+      // composer it was meant for, while the scrollback pager drops it, so the Enter behind it rewinds.
+      let rest = ''
+      for (const token of chunk.match(/\x1b\[200~[\s\S]*?(?:\x1b\[201~|$)|\x1b\[[0-9;]*[A-Za-z~]|\x1b|[\s\S]/g) ?? []) {
+        if (!bottom?.browsing) rest += token
+        else if (token === '\x1b') leaveBrowsing(false)
+        else if (token === '\r' || token === '\n') leaveBrowsing(true)
+        else if (/^(?:\x1b\[[ABCD]|[hjkl])$/.test(token) || bottom.pager) continue
+        else { leaveBrowsing(false); rest += token }
+      }
+      if (!rest) return
+      chunk = rest
     }
     for (const part of chunk.split(/(\x1b\[20[01]~|\r|\n|\x03)/)) {
       if (part === '\x1b[200~') { pasting = true; continue }
