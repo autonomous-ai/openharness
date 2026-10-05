@@ -87,7 +87,7 @@ def wait_screen(vm, words, name, timeout=20):
         time.sleep(.25)
 
 
-def wireless(vm, result, installed=False):
+def wireless(vm, result):
     print('Preparing simulated WPA2 access point inside the disposable guest', flush=True)
     vm.command('systemctl start harness-keyring', timeout=240)
     output, _ = vm.command('pacman -S --needed --noconfirm hostapd dnsmasq iw', timeout=180)
@@ -100,8 +100,8 @@ def wireless(vm, result, installed=False):
     vm.command('! ip route show default | grep -v "dev $(cat /run/harness-station)"')
     form = 'sudo python3 /usr/lib/harness-os/network.py --first-use; result=$?; printf %s "$result" > /tmp/wifi-form-result; exec bash -l'
     vm.command(USER_ENV + 'hn new-window -n Wi-Fi ' + shlex.quote(form))
-    offline_label = 'set up later' if installed else 'install without connecting'
-    wait_screen(vm, ['harness-test', offline_label], 'wifi-01-networks')
+    text = wait_screen(vm, ['harness-test', 'Rescan'], 'wifi-01-networks')
+    assert all(label not in text for label in ['set up later', 'install without connecting', 'continue offline']), text
     vm.keys('esc')
     wait_screen(vm, ['harness-test'], 'wifi-01-escape-keeps-welcome')
     vm.keys('ctrl', 'c')
@@ -140,6 +140,24 @@ def wireless(vm, result, installed=False):
                'grep -Fx harness-wifi-success; then exit 0; fi; sleep 1; done; exit 1', timeout=100)
     vm.command('find /etc/NetworkManager/system-connections -name "*.nmconnection" -exec stat -c "%a %U %n" {} \\;')
     result['checks'].append('Wireless reconnects after a radio off/on cycle using its stored profile')
+    # The on-demand Wi-Fi page is a snapshot. Lose the connection while it is
+    # open, then select the stale Connected row. Success requires a new DHCP
+    # address and actual traffic, not merely a zero exit from the form.
+    reconnect_form = form.replace(' --first-use', '').replace('/tmp/wifi-form-result', '/tmp/wifi-reconnect-result')
+    vm.command(USER_ENV + 'hn new-window -n Reconnect ' + shlex.quote(reconnect_form))
+    wait_screen(vm, [SSID, 'Connected'], 'wifi-05-before-drop')
+    vm.command('nmcli device disconnect "$(cat /run/harness-station)" && '
+               'test -z "$(ip -4 -o address show dev "$(cat /run/harness-station)" scope global)"')
+    vm.screenshot('wifi-05-stale-connected-row')
+    vm.keys('ret')
+    vm.command('for n in $(seq 1 120); do test -s /tmp/wifi-reconnect-result && '
+               'test "$(cat /tmp/wifi-reconnect-result)" = 0 && exit 0; sleep .5; done; exit 1', timeout=65)
+    output, _ = vm.command('ip -4 -o address show dev "$(cat /run/harness-station)" scope global | grep "10[.]77[.]0[.]" && '
+                           'resolvectl query harness.test && '
+                           'test "$(curl --noproxy "*" -fsS --max-time 10 http://harness.test:8080)" = harness-wifi-success')
+    (vm.folder / 'wifi-reconnected-route-and-dns.txt').write_text(output)
+    vm.screenshot('wifi-05-reconnected')
+    result['checks'].append('Selecting a stale Connected row after link loss reconnects the saved Wi-Fi profile, obtains DHCP and resolves/fetches HTTP with Ethernet still disconnected')
     # The AP has DHCP, DNS and HTTP but no upstream Internet. NM can report
     # "connected (site only)"; this must not reopen Wi-Fi in the agent pane.
     # Run the complete packaged onboarding, not just its network sub-form.
@@ -158,19 +176,6 @@ def wireless(vm, result, installed=False):
     vm.screenshot('wifi-04-onboarded-without-second-prompt')
     result['checks'].append('Full onboarding opens three panes on a saved local-only Wi-Fi connection without asking for Wi-Fi again')
     vm.command('nmcli connection modify ' + SSID + ' ipv4.never-default no ipv6.never-default no')
-    # The full-page offline action returns an explicit install result; Esc does
-    # not strand a first-time user in an empty shell.
-    vm.command('nmcli device disconnect "$(cat /run/harness-station)"')
-    vm.command(USER_ENV + 'hn new-window -n Offline ' + shlex.quote(form.replace('/tmp/wifi-form-result', '/tmp/wifi-offline-result')))
-    wait_screen(vm, [offline_label], 'wifi-05-offline')
-    if installed:
-        vm.keys('shift', 'tab')
-        vm.keys('ret')
-    else:
-        vm.keys('i')
-    expected = 11 if installed else 10
-    vm.command('for n in $(seq 1 40); do test "$(cat /tmp/wifi-offline-result 2>/dev/null)" = ' + str(expected) + ' && exit 0; sleep .25; done; exit 1')
-    result['checks'].append('Installed Wi-Fi can continue to offline work without exposing installation' if installed else 'First-use Wi-Fi always offers offline installation, and selecting it exits with the native install action')
     vm.command('nmcli connection up ' + SSID, timeout=60)
     vm.monitor('set_link', name='hnnet', up=True)
     vm.command('while read -r dev; do nmcli device set "$dev" managed yes; nmcli device connect "$dev"; done < /run/harness-ethernet')
@@ -222,6 +227,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--iso', type=Path, required=True)
     parser.add_argument('--output', type=Path, default=Path('os/test-results/essentials'))
+    parser.add_argument('--network-script', type=Path,
+                        help='Test this candidate Wi-Fi form over the verified image; record and verify its hash')
     args = parser.parse_args()
     if not os.access('/dev/kvm', os.R_OK | os.W_OK):
         parser.error('Use native x86 KVM for these hardware-plumbing checks.')
@@ -259,7 +266,18 @@ def main():
             result['checks'].append('Wi-Fi and audio checks run on an encrypted installed system after offline USB installation')
         vm.command(USER_ENV + '/usr/lib/harness-os/wait-runtime')
         vm.command(USER_ENV + 'sh -c ' + shlex.quote('for n in $(seq 1 60); do systemctl --user is-active --quiet hn-screen && pgrep -u 1000 -x foot >/dev/null && exit 0; sleep .25; done; exit 1'))
-        wireless(vm, result, installed=installed)
+        if args.network_script:
+            candidate = args.network_script.read_bytes()
+            checksum = hashlib.sha256(candidate).hexdigest()
+            result['candidate_network'] = {'path': str(args.network_script), 'sha256': checksum,
+                'scope': 'Only /usr/lib/harness-os/network.py replaced in disposable guest; other product files are the verified image'}
+            put(vm, '/tmp/network-candidate.py', candidate.decode())
+            vm.command('test "$(sha256sum /tmp/network-candidate.py | cut -d " " -f 1)" = ' + shlex.quote(checksum))
+            vm.command('install -o root -g root -m 755 /tmp/network-candidate.py /usr/lib/harness-os/network.py')
+        result['network_script_sha256'] = hashlib.sha256(vm.read_file('/usr/lib/harness-os/network.py')).hexdigest()
+        if args.network_script:
+            assert result['network_script_sha256'] == result['candidate_network']['sha256']
+        wireless(vm, result)
         sound(vm, result)
         vm.stop()
         with wave.open(str(folder / ('audio-2.wav' if installed else 'audio-1.wav')), 'rb') as recording:

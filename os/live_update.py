@@ -15,6 +15,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import platform
 import re
 import shutil
 import subprocess
@@ -143,6 +144,27 @@ def fetch(url, limit):
         return data
 
 
+def runtime_platform():
+    """Match the public hn release keys to the native Linux executable format."""
+    machine = platform.machine()
+    targets = {'x86_64': ('linux-x64', 62), 'aarch64': ('linux-arm64', 183)}
+    if platform.system() != 'Linux' or machine not in targets:
+        raise ValueError('Harness runtime updates require x86-64 or ARM64 Linux.')
+    return targets[machine]
+
+
+def verify_hn(data):
+    target, machine = runtime_platform()
+    # Check before executing even a version probe: binfmt/emulation can make a
+    # binary for the wrong CPU appear usable. Releases use 64-bit little-endian
+    # ELF executables (ET_EXEC or ET_DYN), never scripts or native Mac binaries.
+    if (len(data) < 64 or data[:7] != b'\x7fELF\x02\x01\x01' or
+            int.from_bytes(data[16:18], 'little') not in (2, 3) or
+            int.from_bytes(data[18:20], 'little') != machine or
+            int.from_bytes(data[20:24], 'little') != 1):
+        raise ValueError(f'The hn build does not match this computer ({target}).')
+
+
 def release(feed, component):
     meta = json.loads(fetch(feed, 65536))
     if not isinstance(meta, dict):
@@ -151,7 +173,10 @@ def release(feed, component):
         builds = meta.get('builds')
         if not isinstance(builds, dict):
             raise ValueError('Invalid hn release manifest.')
-        value, refs = meta.get('version'), {'harness-tui': builds.get('linux-x64')}
+        target, _ = runtime_platform()
+        if target not in builds:
+            raise ValueError(f'No hn build is available for {target}.')
+        value, refs = meta.get('version'), {'harness-tui': builds[target]}
     else:
         entry = meta.get('cli', {})
         if not isinstance(entry, dict):
@@ -175,6 +200,8 @@ def run(*args, timeout=45, **kwargs):
 
 def versions(folder):
     # Version probes do not open a terminal, start a daemon or require a network.
+    with (folder / 'harness-tui').open('rb') as handle:
+        verify_hn(handle.read(64))
     hn = run(folder / 'harness-tui', '--version', env=dict(os.environ, HN_AS_TMUX='0'))
     match = re.fullmatch(r'hn (\d+\.\d+\.\d+)(?: \(tmux [^\r\n]+\))?', hn)
     if not match:
@@ -294,6 +321,8 @@ def check(feeds=None, progress=lambda _: None, force_system=False):
                             ref.get('size') is not None and len(data) != ref['size']
                         ):
                             raise ValueError('Download checksum or size does not match the release.')
+                        if name == 'harness-tui':
+                            verify_hn(data)
                         component_files[name] = data
                     changes.update(component_files)
                     target_versions[component] = candidate

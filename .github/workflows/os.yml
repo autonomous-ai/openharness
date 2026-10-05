@@ -255,13 +255,21 @@ jobs:
           github-token: ${{ github.token }}
       - name: Check the fixture and install VM tools
         run: |
+          python3 -m unittest discover -s os/tests -p 'test_hardware*.py'
           python3 -m py_compile os/tests/hardware_install_guest.py os/tests/hardware_install_vm.py
           go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/os.yml
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils ovmf python3-pil tesseract-ocr
           sudo chmod a+rw /dev/kvm
       - name: Install the selected driver offline and reboot with 1 GiB
-        run: python3 os/tests/hardware_install_vm.py --iso os/dist/*.iso
+        env:
+          REUSED_IMAGE: ${{ inputs.image_run_id }}
+        run: |
+          args=(--iso os/dist/*.iso)
+          if [[ -n "$REUSED_IMAGE" ]]; then
+            args+=(--candidate-hardware os/hardware.py)
+          fi
+          python3 os/tests/hardware_install_vm.py "${args[@]}"
       - name: Retain hardware installation and rebuild evidence
         if: always()
         uses: actions/upload-artifact@v6
@@ -330,7 +338,7 @@ jobs:
           sudo apt-get install -y qemu-system-x86 qemu-utils ovmf python3-pil tesseract-ocr
           if test -e /dev/kvm; then sudo chmod a+rw /dev/kvm; fi
       - name: Exercise Wi-Fi and audio in the real image
-        run: python3 os/tests/essentials_vm.py --iso os/dist/*.iso
+        run: python3 os/tests/essentials_vm.py --iso os/dist/*.iso --network-script os/network.py
       - name: Retain hardware plumbing evidence
         if: always()
         uses: actions/upload-artifact@v6

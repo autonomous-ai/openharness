@@ -4,6 +4,7 @@ import fcntl
 import importlib.util
 import json
 from pathlib import Path
+import struct
 import subprocess
 import tempfile
 import unittest
@@ -12,6 +13,12 @@ from unittest.mock import patch
 spec = importlib.util.spec_from_file_location('live_update', Path(__file__).parents[1] / 'live_update.py')
 update = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(update)
+
+
+def elf_fixture(machine=62, payload=b''):
+    """A synthetic ELF header; version execution is stubbed in staging tests."""
+    return struct.pack('<16sHHIQQQIHHHHHH', b'\x7fELF\x02\x01\x01' + b'\0' * 9,
+                       2, machine, 1, 0, 64, 0, 0, 64, 56, 0, 0, 0, 0) + payload
 
 
 class FastUpdates(unittest.TestCase):
@@ -24,12 +31,15 @@ class FastUpdates(unittest.TestCase):
         self.base.write_text('{"source_commit":"initial"}\n')
         self.bundled.mkdir()
         for name in update.FILES:
-            (self.bundled / name).write_bytes(('old ' + name).encode())
+            data = ('old ' + name).encode()
+            (self.bundled / name).write_bytes(elf_fixture(payload=data) if name == 'harness-tui' else data)
         self.patches = [patch.object(update, 'STATE', self.state), patch.object(update, 'BUNDLED', self.bundled),
                         patch.object(update, 'BASE_ID', self.base),
                         patch.object(update, 'BOOT_ID', self.root / 'boot-id'),
                         patch.object(update, 'RESTART_REQUIRED', self.root / 'restart-required'),
                         patch.object(update, 'SYSTEM_LOCK', self.root / 'system.lock'),
+                        patch.object(update.platform, 'system', return_value='Linux'),
+                        patch.object(update.platform, 'machine', return_value='x86_64'),
                         patch.object(update, 'check_system', return_value={}),
                         patch.object(update, 'screen_ready'),
                         patch.object(update, 'capture_view', return_value=None),
@@ -40,15 +50,16 @@ class FastUpdates(unittest.TestCase):
         update.BOOT_ID.write_text('first-boot')
 
     def versions(self, folder):
-        return {component: '1.1.0' if (folder / name).read_bytes().startswith(b'new') else '1.0.0'
+        return {component: '1.1.0' if (folder / name).read_bytes().endswith(('new ' + name).encode()) else '1.0.0'
                 for component, name in [('hn', 'harness-tui'), ('cli', 'cli.mjs')]}
 
-    def feed(self, fail=None):
+    def feed(self, fail=None, target='linux-x64', machine=62):
         assets = {name: ('new ' + name).encode() for name in update.FILES}
+        assets['harness-tui'] = elf_fixture(machine, assets['harness-tui'])
         refs = {name: dict(url='https://example.test/' + name, sha256=hashlib.sha256(data).hexdigest(), size=len(data))
                 for name, data in assets.items()}
         manifests = {
-            update.FEEDS['hn']: json.dumps(dict(version='1.1.0', builds={'linux-x64': refs['harness-tui']})).encode(),
+            update.FEEDS['hn']: json.dumps(dict(version='1.1.0', builds={target: refs['harness-tui']})).encode(),
             update.FEEDS['cli']: json.dumps(dict(cli=dict(version='1.1.0', cli=refs['cli.mjs'], notify=refs['notify.mjs']))).encode(),
         }
         def fetch(url, limit):
@@ -74,7 +85,7 @@ class FastUpdates(unittest.TestCase):
             self.assertEqual(record['versions'], {'hn': '1.1.0', 'cli': '1.1.0'})
             self.assertEqual(update.selected(), self.bundled)
             restart.assert_not_called()
-            self.assertEqual((self.bundled / 'harness-tui').read_bytes(), b'old harness-tui')
+            self.assertEqual((self.bundled / 'harness-tui').read_bytes(), elf_fixture(payload=b'old harness-tui'))
             self.assertTrue(update.check())
             self.assertEqual(update.prepared(), target)
             self.assertEqual(len(list((self.state / 'builds').iterdir())), 1)
@@ -110,6 +121,49 @@ class FastUpdates(unittest.TestCase):
             self.assertTrue(update.check())
         self.assertEqual(update.verify(update.prepared())['versions'], {'hn': '1.0.0', 'cli': '1.1.0'})
         self.assertEqual(update.selected(), self.bundled)
+
+    def test_arm_stages_native_hn_and_cli_without_activation(self):
+        (self.bundled / 'harness-tui').write_bytes(elf_fixture(183, b'old harness-tui'))
+        with patch.object(update.platform, 'machine', return_value='aarch64'), self.feed(target='linux-arm64', machine=183), patch.object(update, 'restart') as restart:
+            self.assertTrue(update.check())
+            self.assertEqual(update.verify(update.prepared())['versions'], {'hn': '1.1.0', 'cli': '1.1.0'})
+            self.assertEqual((update.prepared() / 'harness-tui').read_bytes(), elf_fixture(183, b'new harness-tui'))
+            self.assertEqual(update.selected(), self.bundled)
+            restart.assert_not_called()
+
+    def test_missing_arm_release_keeps_hn_but_allows_independent_cli(self):
+        original = elf_fixture(183, b'old harness-tui')
+        (self.bundled / 'harness-tui').write_bytes(original)
+        with patch.object(update.platform, 'machine', return_value='aarch64'), self.feed() as fetch:
+            self.assertTrue(update.check())
+        self.assertEqual(update.verify(update.prepared())['versions'], {'hn': '1.0.0', 'cli': '1.1.0'})
+        self.assertEqual((update.prepared() / 'harness-tui').read_bytes(), original)
+        self.assertNotIn('https://example.test/harness-tui', [call.args[0] for call in fetch.call_args_list])
+        self.assertIn('No hn build is available for linux-arm64', str(update.read(self.state / 'check.json')['errors']))
+        self.assertEqual(update.selected(), self.bundled)
+
+    def test_wrong_architecture_with_valid_checksum_keeps_hn_but_allows_cli(self):
+        original = elf_fixture(183, b'old harness-tui')
+        (self.bundled / 'harness-tui').write_bytes(original)
+        # The manifest is correctly named and checksummed, but the payload is x86.
+        with patch.object(update.platform, 'machine', return_value='aarch64'), self.feed(target='linux-arm64'):
+            self.assertTrue(update.check())
+        self.assertEqual(update.verify(update.prepared())['versions'], {'hn': '1.0.0', 'cli': '1.1.0'})
+        self.assertEqual((update.prepared() / 'harness-tui').read_bytes(), original)
+        self.assertIn('does not match this computer (linux-arm64)', str(update.read(self.state / 'check.json')['errors']))
+        self.assertEqual(update.selected(), self.bundled)
+
+    def test_unusable_hn_only_feed_does_not_prepare_or_activate_an_update(self):
+        (self.bundled / 'harness-tui').write_bytes(elf_fixture(183, b'old harness-tui'))
+        for target in ['linux-x64', 'linux-arm64']:
+            # The ARM entry, when present, deliberately contains an x86 binary.
+            with (self.subTest(target=target), patch.object(update.platform, 'machine', return_value='aarch64'),
+                  self.feed(target=target), patch.object(update, 'restart') as restart):
+                with self.assertRaisesRegex(ValueError, 'Could not check for updates'):
+                    update.check(feeds={'hn': update.FEEDS['hn']})
+                self.assertIsNone(update.prepared())
+                self.assertEqual(update.selected(), self.bundled)
+                restart.assert_not_called()
 
     def test_staged_file_changed_after_download_is_rejected_before_selection(self):
         with self.feed():
@@ -327,6 +381,95 @@ class FastUpdates(unittest.TestCase):
         with self.feed():
             self.assertEqual(self.show([], refresh=True), 'update')
         self.assertFalse((self.state / 'request.json').exists())
+
+
+class RuntimeArchitecture(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        for item in [patch.object(update.platform, 'system', return_value='Linux'),
+                     patch.object(update.platform, 'machine', return_value='x86_64')]:
+            item.start()
+            self.addCleanup(item.stop)
+
+    def test_release_uses_exact_native_asset_when_both_architectures_exist(self):
+        refs = {key: {'url': f'https://example.test/{key}', 'sha256': str(index) * 64}
+                for index, key in enumerate(['linux-x64', 'linux-arm64'], 1)}
+        manifest = json.dumps({'version': '1.2.3', 'builds': refs}).encode()
+        for machine, key in [('x86_64', 'linux-x64'), ('aarch64', 'linux-arm64')]:
+            with self.subTest(machine=machine), patch.object(update.platform, 'machine', return_value=machine), patch.object(update, 'fetch', return_value=manifest):
+                self.assertEqual(update.release('https://example.test/feed', 'hn'),
+                                 ('1.2.3', {'harness-tui': refs[key]}))
+
+    def test_unsupported_platforms_never_fall_back_to_x86(self):
+        for system, machine in [('Linux', 'armv7l'), ('Linux', 'riscv64'), ('Darwin', 'arm64')]:
+            with self.subTest(system=system, machine=machine), patch.object(update.platform, 'system', return_value=system), patch.object(update.platform, 'machine', return_value=machine):
+                with self.assertRaisesRegex(ValueError, 'require x86-64 or ARM64 Linux'):
+                    update.runtime_platform()
+
+    def test_matching_elf_version_probes_run_on_each_native_platform(self):
+        for machine, elf_machine, elf_type in [('x86_64', 62, 2), ('aarch64', 183, 2), ('aarch64', 183, 3)]:
+            header = bytearray(elf_fixture(elf_machine))
+            header[16:18] = elf_type.to_bytes(2, 'little')
+            (self.root / 'harness-tui').write_bytes(header)
+            with (self.subTest(machine=machine, elf_type=elf_type),
+                  patch.object(update.platform, 'machine', return_value=machine),
+                  patch.object(update, 'run', side_effect=['hn 1.2.3', '2.3.4']) as run):
+                self.assertEqual(update.versions(self.root), {'hn': '1.2.3', 'cli': '2.3.4'})
+                self.assertEqual(run.call_args_list[0].args, (self.root / 'harness-tui', '--version'))
+
+    def test_wrong_or_malformed_binary_is_rejected_before_any_execution(self):
+        cases = {'x86-on-arm': elf_fixture(), 'script': b'#!/bin/sh\nprintf "hn 1.2.3\\n"\n',
+                 'truncated': elf_fixture(183)[:63]}
+        for name, offset, value in [('class32', 4, 1), ('big-endian', 5, 2), ('ident-version', 6, 0),
+                                    ('elf-version', 20, 0), ('core-dump', 16, 4)]:
+            data = bytearray(elf_fixture(183))
+            data[offset] = value
+            cases[name] = bytes(data)
+        with patch.object(update.platform, 'machine', return_value='aarch64'):
+            for name, data in cases.items():
+                (self.root / 'harness-tui').write_bytes(data)
+                with self.subTest(case=name), patch.object(update, 'run') as run:
+                    with self.assertRaisesRegex(ValueError, 'does not match this computer'):
+                        update.versions(self.root)
+                    run.assert_not_called()
+
+    def record(self, folder, machine):
+        folder.mkdir(parents=True)
+        for name in update.FILES:
+            (folder / name).write_bytes(elf_fixture(machine) if name == 'harness-tui' else b'fixture')
+        # Older x86 prepared updates have no architecture field; the actual ELF
+        # remains authoritative without invalidating their on-disk record format.
+        record = {'versions': {'hn': '1.2.3', 'cli': '2.3.4'}, 'files': {
+            name: {'sha256': update.digest(folder / name), 'bytes': (folder / name).stat().st_size}
+            for name in update.FILES}}
+        update.write(folder / 'release.json', record)
+        return record
+
+    def test_existing_x86_prepared_record_still_verifies(self):
+        folder = self.root / 'build'
+        record = self.record(folder, 62)
+        with patch.object(update, 'run', side_effect=['hn 1.2.3', '2.3.4']):
+            self.assertEqual(update.verify(folder), record)
+
+    def test_wrong_architecture_with_matching_manifest_cannot_be_activated(self):
+        folder = self.root / 'state/builds' / ('a' * 64)
+        self.record(folder, 62)
+        base = self.root / 'base.json'
+        base.write_text('{}\n')
+        (folder / 'base.json').write_bytes(base.read_bytes())
+        with (patch.object(update.platform, 'machine', return_value='aarch64'),
+              patch.object(update, 'STATE', self.root / 'state'), patch.object(update, 'BASE_ID', base),
+              patch.object(update, 'SYSTEM_LOCK', self.root / 'lock'),
+              patch.object(update, 'RESTART_REQUIRED', self.root / 'restart'),
+              patch.object(update, 'prepared', return_value=folder), patch.object(update, 'run') as run,
+              patch.object(update, 'select') as select, patch.object(update, 'restart') as restart):
+            with self.assertRaisesRegex(ValueError, 'does not match this computer'):
+                update.apply()
+            run.assert_not_called()
+            select.assert_not_called()
+            restart.assert_not_called()
 
 
 class ScreenSelection(unittest.TestCase):

@@ -53,14 +53,25 @@ def pci_devices(sysfs=Path('/sys')):
             if (interface / 'device').is_symlink() and (interface / 'device').resolve().is_relative_to(path.resolve()):
                 interfaces.append({'name': interface.name, 'wireless': (interface / 'wireless').is_dir() or (interface / 'phy80211').exists()})
         driver = (path / 'driver').resolve().name if (path / 'driver').is_symlink() else None
+        override = read(path / 'driver_override')
         devices.append({'address': path.name, 'id': vendor + ':' + device,
-                        'class': kind, 'driver': driver, 'interfaces': interfaces})
+                        'class': kind, 'driver': driver,
+                        'driver_override': None if override in {'', '(null)'} else override,
+                        'interfaces': interfaces})
     return devices
 
 
 def needs_broadcom(device):
-    return device['id'] in BROADCOM_IDS and device['class'] == '028000' and (
-        device['driver'] == 'wl' or not any(i['wireless'] for i in device['interfaces']))
+    if device['id'] not in BROADCOM_IDS or device['class'] != '028000':
+        return False
+    # A missing wireless interface does not mean the radio is available: it
+    # may be assigned to a VM or explicitly disabled with driver_override.
+    # Apply the same ownership policy to live activation and offline packages.
+    if device.get('driver_override') not in {None, '', 'wl'}:
+        return False
+    if device['driver'] not in {None, 'wl', 'bcma-pci-bridge', 'ssb'}:
+        return False
+    return device['driver'] == 'wl' or not any(i['wireless'] for i in device['interfaces'])
 
 
 def report(sysfs=Path('/sys'), proc=Path('/proc')):
@@ -199,8 +210,6 @@ def activate(address, sysfs=Path('/sys'), bundle=BUNDLE):
     device = next((d for d in devices if d['address'] == address), None)
     if not device or not needs_broadcom(device) or device['driver'] == 'wl':
         return {'status': 'unchanged', 'address': address}
-    if device['driver'] not in {None, 'bcma-pci-bridge', 'ssb'}:
-        return {'status': 'unchanged', 'address': address, 'reason': 'Keep an existing driver.'}
     # Verify availability before changing a binding. The live image carries only
     # a prebuilt module here; installed machines use the ordinary DKMS package.
     if (bundle / 'manifest.json').is_file():

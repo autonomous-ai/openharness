@@ -48,6 +48,29 @@ class Network(unittest.TestCase):
         self.assertEqual(found[0]['signal'], 88)
         self.assertEqual(found[0]['bssid'], 'cc:dd')
 
+    def test_opening_wifi_uses_recent_scan_when_forced_rescan_would_stall(self):
+        def command(*args, **kwargs):
+            if args[-2:] == ('--rescan', 'yes'):
+                raise subprocess.TimeoutExpired('nmcli', 13)
+            return result(output='a\\:network:88:WPA2:wlan0:cc\\:dd:*\n')
+        with patch.object(network, 'nmcli', side_effect=command):
+            found = network.scan()
+        self.assertEqual(found[0]['ssid'], WIFI['ssid'])
+        self.assertTrue(found[0]['active'])
+
+    def test_explicit_rescan_still_requests_a_new_radio_scan(self):
+        real_scan = network.scan
+        screen, page = self.page(['r', '\x1b'], first_use=False)
+        modes = []
+        def command(*args, **kwargs):
+            if '--rescan' in args:
+                modes.append(args[args.index('--rescan') + 1])
+                return result(output='a\\:network:88:WPA2:wlan0:cc\\:dd:*\n')
+            return result()
+        with patch.object(network, 'scan', side_effect=real_scan), patch.object(network, 'nmcli', side_effect=command):
+            self.assertEqual(page.run(), 1)
+        self.assertEqual(modes, ['auto', 'yes'])
+
     def test_password_is_only_passed_on_stdin_and_only_success_enables_reconnect(self):
         calls = []
         def run(*args, **kwargs):
@@ -142,6 +165,50 @@ class Network(unittest.TestCase):
              patch.object(network, 'connect', return_value=False), patch.object(page, 'password') as password:
             self.assertEqual(page.run(), 1)
             password.assert_not_called()
+
+    def test_selected_connected_row_reconnects_when_link_dropped_after_scan(self):
+        screen, page = self.page(['\n'], first_use=False)
+        active = dict(WIFI, active=True)
+        with patch.object(network, 'scan', side_effect=[[active], [WIFI]]) as scan, \
+             patch.object(network, 'connect', return_value=True) as connect:
+            self.assertEqual(page.run(), 0)
+            connect.assert_called_once_with(active)
+            self.assertEqual(scan.call_args.kwargs, {'rescan': False})
+
+    def test_selecting_current_connection_does_not_interrupt_work(self):
+        screen, page = self.page(['\n'], first_use=False)
+        with patch.object(network, 'scan', return_value=[dict(WIFI, active=True)]) as scan, \
+             patch.object(network, 'connect') as connect:
+            self.assertEqual(page.run(), 0)
+            connect.assert_not_called()
+            self.assertEqual(scan.call_count, 2)
+            self.assertEqual(scan.call_args.kwargs, {'rescan': False})
+
+    def test_same_ssid_on_another_radio_is_not_the_selected_connection(self):
+        screen, page = self.page(['\n'], first_use=False)
+        active = dict(WIFI, active=True)
+        other = dict(active, device='wlan1')
+        with patch.object(network, 'scan', side_effect=[[active], [other]]), \
+             patch.object(network, 'connect', return_value=True) as connect:
+            self.assertEqual(page.run(), 0)
+            connect.assert_called_once_with(active)
+
+    def test_wifi_scan_error_does_not_hide_ethernet_or_keep_stale_rows(self):
+        screen, page = self.page([], first_use=False)
+        with patch.object(network, 'scan', side_effect=[[WIFI], ValueError('Could not scan Wi-Fi.')]):
+            page.refresh()
+            self.assertEqual(page.networks, [WIFI])
+            page.refresh()
+        self.assertEqual(page.networks, [])
+        self.assertEqual(page.wired, [['eth0', 'ethernet', 'disconnected']])
+        self.assertEqual(page.message, 'Could not scan Wi-Fi.')
+
+    def test_ethernet_is_usable_when_wifi_scan_fails(self):
+        screen, page = self.page([curses.KEY_DOWN, '\n'])
+        with patch.object(network, 'scan', side_effect=ValueError('Could not scan Wi-Fi.')), \
+             patch.object(network, 'nmcli', return_value=result()) as command:
+            self.assertEqual(page.run(), 0)
+        self.assertEqual(command.call_args.args, ('device', 'connect', 'eth0'))
 
     def test_wide_and_control_characters_fit_the_terminal(self):
         self.assertEqual(network.fit('網路123', 5), '網路1')
