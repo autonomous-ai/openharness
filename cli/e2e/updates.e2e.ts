@@ -166,7 +166,7 @@ describe('engines updated in place', () => {
     client.close()
   })
 
-  it('codex: an update drops resume: a restart comes back on a new conversation and says so, and a resume says why it cannot', async () => {
+  it('codex: an update drops resume: a restart comes back on a new conversation and says so, the one it left is kept, and a resume says why it cannot', async () => {
     const d = await fresh()
     const client = await LocalClient.connect(d)
     const agent = await create(d, client, 'codex', 'resume-after-update')
@@ -185,6 +185,12 @@ describe('engines updated in place', () => {
       return now?.status === 'active' && now.sessionId && now.sessionId !== agent.sessionId ? now : null
     }, 30_000, 250)
     expect(await runningVersion(client, agent.id)).toBe(versionLine('codex', NEW.codex))
+    // The conversation the restart had to leave is kept as a stopped one of its own: listed, and its
+    // history readable.
+    const kept = await until('the conversation it left, kept as stopped', async () =>
+      (await rows(client)).find((one) => one.status === 'stopped' && one.sessionId === agent.sessionId), 15_000, 250)
+    expect(kept.id).not.toBe(agent.id)
+    expect((await thread(client, agent.sessionId)).users).toEqual(['before the update'])
 
     expect((await client.request('agent_delete', { agentId: agent.id }, 60_000)).error).toBeUndefined()
     await until('the agent to stop', async () => (await row(client, agent.id))?.status === 'stopped' || null, 45_000, 500)
@@ -194,6 +200,14 @@ describe('engines updated in place', () => {
     expect(resumed.error, JSON.stringify(resumed)).toBe('RESUME_FAILED')
     expect(String(resumed.detail)).toContain('exited before confirming the saved conversation')
     expect((await row(client, agent.id))?.sessionId).toBe(renewed.sessionId)
+
+    // A release that has resume again opens the kept conversation where it was.
+    install(d, 'codex', { version: '0.161.0' })
+    const reopened = await client.request('agent_resume', { agentId: kept.id }, 90_000)
+    expect(reopened.error, JSON.stringify(reopened)).toBeUndefined()
+    await bound(client, kept.id, agent.sessionId)
+    await turn(client, kept.id, 'back in the kept conversation')
+    expect((await thread(client, agent.sessionId)).users).toEqual(['before the update', 'back in the kept conversation'])
     expect(d.coresStarted()).toBe(1)
     client.close()
   })

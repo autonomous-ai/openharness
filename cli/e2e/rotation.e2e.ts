@@ -2,7 +2,9 @@
  * A new conversation in the same pane, for Claude Code and Codex — Claude Code's `/clear`, Codex's
  * `/new`: the engine ends one conversation and starts another without leaving the pane. The agent is
  * the same agent, under the same id, bound to the new conversation; its turns are seen; it comes back
- * bound to the new one after a restart, and resumes the new one after a stop.
+ * bound to the new one after a restart, and resumes the new one after a stop. The person chose to leave
+ * the old conversation, so it is not kept as a stopped harness, as one the daemon had to leave is
+ * (updates.e2e.ts): people who clear often would pile up stopped rows.
  */
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
@@ -70,8 +72,9 @@ describe('a new conversation in the same pane', () => {
     const started = await turn(client, agent.id, 'in the second conversation')
     expect(started.payload?.userMessage).toBe('in the second conversation')
     expect(await users(client, rotated.sessionId)).toEqual(['in the second conversation'])
-    // One agent for the pane, never a second minted beside it.
+    // One agent for the pane, never a second minted beside it, and no stopped row for the one left.
     expect((await rows(client)).filter((one) => one.tmuxPane === agent.tmuxPane && one.status === 'active')).toHaveLength(1)
+    expect((await rows(client)).filter((one) => one.status === 'stopped')).toEqual([])
     client.close()
   })
 
@@ -140,6 +143,7 @@ describe('a new conversation in the same pane', () => {
     expect(new Set([agent.sessionId, second.sessionId, third.sessionId]).size).toBe(3)
     await turn(client, agent.id, 'in the third conversation')
     expect(await users(client, third.sessionId)).toEqual(['in the third conversation'])
+    expect((await rows(client)).filter((one) => one.status === 'stopped')).toEqual([])
     client.close()
   })
 })

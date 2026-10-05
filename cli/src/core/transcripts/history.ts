@@ -44,6 +44,9 @@ import { streamRecords, tailFileCapped, WHOLE_READ_CAP_BYTES } from '../../lib/t
 export interface HistoryDeps {
   /** The registry's lookup, by agent or session id. */
   resolve: (id: string) => RegisteredSession | undefined
+  /** The conversations kept as stopped harnesses (lib/stoppedAgents.ts): a stop's, an exited engine's,
+   *  and one a restart, a move or a restore had to leave for a new one. */
+  stopped: () => readonly RegisteredSession[]
   /** Claude Code's and Codex's pages. The socket's pager, so the line index it keeps for a transcript is
    *  shared with the line counts `sessions_list` answers, not built twice. */
   pages: Pick<TranscriptPager, 'claude' | 'codex'>
@@ -157,7 +160,7 @@ function databasePage<M>(
   }
 }
 
-export function createHistory({ resolve, pages, dbs, hermesDb }: HistoryDeps) {
+export function createHistory({ resolve, stopped, pages, dbs, hermesDb }: HistoryDeps) {
   // Devin, OpenCode and Kilo keep one store on this machine. Hermes keeps one per HOME, so its path is
   // the session's own (`hermesDb`) rather than this machine's default.
   const databases = new Map<string, DatabasePage>([
@@ -171,10 +174,12 @@ export function createHistory({ resolve, pages, dbs, hermesDb }: HistoryDeps) {
   const sessionGet = async (payload: Record<string, unknown>): Promise<Record<string, unknown>> => {
     const sessionId = payload.sessionId as string | undefined
     if (!sessionId) return { error: 'MISSING_SESSION_ID' }
-    // Only serve transcripts for a REGISTERED tmux session, read from its own trusted
-    // transcriptPath — never resolve an arbitrary request-supplied id to a file (that let a
-    // caller read any *.jsonl on the computer, incl. unshared claude history / traversal).
-    const s = resolve(sessionId)
+    // Only serve transcripts for a session this daemon REGISTERED — live, or kept as a stopped one —
+    // read from its own trusted transcriptPath: never resolve an arbitrary request-supplied id to a
+    // file (that let a caller read any *.jsonl on the computer, incl. unshared claude history /
+    // traversal). A kept conversation used to answer NOT_FOUND, so a conversation the daemon had to
+    // leave for a new one could no longer be read at all (round 24).
+    const s = resolve(sessionId) ?? stopped().find((saved) => saved.sessionId === sessionId)
     if (!s) return { error: 'NOT_FOUND' }
     // Optional pagination: `limit` = window size; `before` = cursor (the oldest record the
     // client already holds). Absent → full transcript (legacy). Clamp limit defensively.

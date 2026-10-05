@@ -92,6 +92,7 @@ import { TmuxBackend } from './lib/tmuxBackend.js'
 import { DEFAULT_HOST_THEME, loadHostTheme, saveHostTheme, type HostTheme } from './lib/hostTheme.js'
 import { restoreAgents } from './lib/restoreAgents.js'
 import { createRetainExitedSession } from './lib/retainExitedSession.js'
+import { createKeepAbandonedConversation } from './lib/keepAbandonedConversation.js'
 import { OpenTabProtection } from './lib/openTabProtection.js'
 import { sessionCheckpoints } from './lib/sessionCheckpoint.js'
 import { repairClaudeCwd } from './lib/cwdRepair.js'
@@ -2096,6 +2097,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // A conversation's history, a page at a time, for a window that asks (core/transcripts/history.ts).
   backend.historyProvider = createHistory({
     resolve: (id) => registry.resolve(id),
+    stopped: () => stoppedAgents.list(),
     pages: backend.transcriptPages,
     dbs: { opencode: OPENCODE_DB, kilo: KILO_DB, devin: DEVIN_DB },
     hermesDb: (s) => hermesDbForSession(s),
@@ -2367,6 +2369,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     syncRecapPool,
     warn: (message, error) => console.warn(message, error),
   })
+  const keepAbandonedConversation = createKeepAbandonedConversation({ stoppedAgents, publishStoppedAgent: (saved) => backend.publishStoppedAgent(saved) })
 
 
 
@@ -3379,6 +3382,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     let paneInventory: ReturnType<typeof listTmuxPanes> | null = null
     const summary = await restoreAgents({
       retainStopped: retainExitedSession,
+      keepAbandoned: keepAbandonedConversation,
       registry,
       // "Alive" means the pane still runs THIS row's engine — not merely that tmux knows the id.
       // A new tmux server hands out `%N` from zero again, so a stale id can name someone's shell;
@@ -3652,6 +3656,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     byAgent: (agentId) => registry.byAgent(agentId),
     tmuxBackend,
     prepareSessionResume,
+    keepAbandonedConversation,
   })
   const restartJobs = paneSwap.restartJobs
   const sameRestartTarget = paneSwap.sameRestartTarget

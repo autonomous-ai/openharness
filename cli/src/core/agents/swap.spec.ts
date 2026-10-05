@@ -29,6 +29,7 @@ function setup(row: RegisteredSession | null = session()) {
     byAgent: vi.fn(() => row ?? undefined),
     tmuxBackend: tmuxBackend as unknown as PaneSwapDeps['tmuxBackend'],
     prepareSessionResume: vi.fn(),
+    keepAbandonedConversation: vi.fn(),
   }
   return { deps, tmuxBackend, swap: createPaneSwap(deps) }
 }
@@ -54,6 +55,8 @@ describe('the pane-process swap', () => {
     const swapDeps = swap.paneSwapDeps(session(), runtime, { env: { GRID_KEY: 'k' } })
     swapDeps.prepareResume?.()
     expect(deps.prepareSessionResume).toHaveBeenCalledWith(session())
+    swapDeps.keepAbandoned?.()
+    expect(deps.keepAbandonedConversation).toHaveBeenCalledWith(session())
     expect(await swapDeps.holdOpen()).toEqual({ ok: true })
     tmuxBackend.holdOpen.mockResolvedValueOnce({ state: 'failed', reason: 'pane gone' } as never).mockResolvedValueOnce({ state: 'unknown' } as never)
     expect(await swapDeps.holdOpen()).toEqual({ ok: false, reason: 'pane gone' })

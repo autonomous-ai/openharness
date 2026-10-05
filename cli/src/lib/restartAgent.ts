@@ -90,6 +90,8 @@ export interface RestartAgentDeps {
   prepareResume?: () => void | Promise<void>
   buildArgv: (opts: { bypassPermission: boolean; resumeSessionId?: string }) => string[]
   log: (message: string) => void
+  /** Keeps the conversation the fresh fallback left as a stopped harness (keepAbandonedConversation.ts). */
+  keepAbandoned?: () => void
 }
 
 /** Outcomes that mean the old process is confirmed gone — safe to respawn over the pane. `not-ours` and
@@ -156,5 +158,8 @@ export async function restartAgent(
   if (!identity) {
     return { ok: false, detail: `${session.engine} did not come back up after restart` }
   }
+  // The agent works on in a new conversation; the one it was in, which the engine could not reopen, is
+  // kept as a stopped harness to read and to resume once it can (round 24). A /clear keeps nothing.
+  if (resumeSessionId && !resumed) deps.keepAbandoned?.()
   return { ok: true, processIdentity: identity, resumed }
 }
