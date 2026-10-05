@@ -106,14 +106,15 @@ describe('production resume handler', () => {
 
   it('notes where the relaunched engine\'s writing begins, after the history is prepared and before the launch', async () => {
     writeFileSync(saved.transcriptPath!, '{"type":"session_meta"}\n')
-    const note = vi.fn((_sessionId: string, _offset: number) => {
+    const note = vi.fn((_sessionId: string, _offset: number, _engineStarted?: boolean) => {
       // The pane is not allocated yet: the engine has written nothing of its own.
       expect(create).not.toHaveBeenCalled()
     })
     vi.mocked(deps.prepareSessionResume).mockImplementation(() => { writeFileSync(saved.transcriptPath!, '{"type":"session_meta"}\n{"prepared":true}\n') })
     deps = { ...deps, relaunchMarks: { note } }
     expect(await start()).toMatchObject({ ok: true, resumed: true })
-    expect(note).toHaveBeenCalledWith(saved.sessionId, Buffer.byteLength('{"type":"session_meta"}\n{"prepared":true}\n'))
+    // A resume always starts a new engine: a turn left open before it is over.
+    expect(note).toHaveBeenCalledWith(saved.sessionId, Buffer.byteLength('{"type":"session_meta"}\n{"prepared":true}\n'), true)
   })
 
   it('notes nothing for a conversation with no file to tail, or a file that is gone', async () => {

@@ -91,9 +91,14 @@ describe('what the machine does to the daemon', () => {
     await client.next(isTurn('turn_started', agent.id), 30_000, 'turn_started')
     await until('the agent to read as working', async () => (await row(client, agent.id))?.activity?.state === 'working' || null, 15_000, 250)
 
+    const killedAt = client.frames.length
     await d.tmux.run('kill-server')
     await until('the agent to stop reading as working', async () => down(await row(client, agent.id)) || null, 45_000, 500)
     await reopen(client, agent, 'back after the server died mid-turn')
+    // The interrupted turn died with its engine: it is never announced as starting again. Checked on every
+    // frame since the kill, not only the next one, which caught it only when it came late (Codex).
+    const restarted = client.frames.slice(killedAt).filter(isTurn('turn_started', agent.id)).map((frame) => frame.payload?.userMessage)
+    expect(restarted).toEqual(['back after the server died mid-turn'])
     expect(d.coresStarted()).toBe(1)
     client.close()
   })

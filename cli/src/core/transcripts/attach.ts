@@ -124,7 +124,8 @@ export function createAttach({
     // e2e/clockjump.e2e.ts). A terminal that really is gone is retired by the reconciler's confirmed scans.
     if (await terminalGone(session)) return false
     // Taken whichever way this attach goes: a mark is for the next attach of the conversation only.
-    const relaunchedAt = relaunchMarks?.take(session.sessionId)
+    const relaunch = relaunchMarks?.take(session.sessionId)
+    const relaunchedAt = relaunch?.offset
     if (!reset && normalizers.hasState(session.sessionId)) {
       if (session.transcriptPath) {
         const unseen = neverFoldedHistory.delete(session.sessionId)
@@ -409,7 +410,12 @@ export function createAttach({
     // start included. Claude Code announces its session again when it compacts, often in the middle of
     // a long turn, and replaying the start showed every window that turn starting twice
     // (e2e/compaction.e2e.ts).
-    if (historyTurnOpen && !handover.hold) {
+    // Nor for a turn left open before a new engine was started on the conversation (a resume, or a restore
+    // that rebuilt the pane): that turn died with the engine before, and announcing it showed the
+    // interrupted message starting anew (core/transcripts/relaunch.ts).
+    if (historyTurnOpen && !handover.hold && relaunch?.engineStarted) {
+      console.log(`[agent] ${sid(session.agentId)} left the turn open at attach as history · it began before its engine was started again`)
+    } else if (historyTurnOpen && !handover.hold) {
       const opened = historyEvents.findLast((event) => event.type === 'turn_started')
       if (opened) {
         console.log(`[agent] ${sid(session.agentId)} resumed the turn already open at attach`)
