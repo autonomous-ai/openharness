@@ -40,8 +40,8 @@ def main():
     fixture, updates = args.fixture.resolve(), args.updates.resolve()
     image = fixture_identity(fixture, args.fixture_source)
     update = update_identity(updates, args.updates_source)
-    first, initial = identity(args.packages / 'first', args.package_source, args.updates_source)
-    upgrade, final = identity(args.packages / 'upgrade', args.package_source, args.updates_source)
+    first, initial = identity(args.packages / 'first', args.package_source, args.updates_source, update['runtime'])
+    upgrade, final = identity(args.packages / 'upgrade', args.package_source, args.updates_source, update['runtime'])
     assert initial['package']['version'] == final['package']['version']
     assert str(initial['package']['release']) == '1' and str(final['package']['release']) == '2'
     output = args.output.resolve()
@@ -93,15 +93,25 @@ print(json.dumps({key:identity(value) for key,value in pids.items()},sort_keys=T
                                 ' -o ' + shlex.quote(destination), timeout=130)
                 machine.command('printf %s ' + shlex.quote(metadata['package']['sha256'] + '  ' + destination + '\n') +
                                 ' | sha256sum -c -')
-                text, _ = machine.command('dnf5 -y --setopt=install_weak_deps=False --setopt=gpgcheck=True '
+                text, _ = machine.command('manager=$(command -v dnf5 || command -v microdnf); '
+                                          '"$manager" -y --setopt=install_weak_deps=False --setopt=gpgcheck=True '
                                           '--setopt=localpkg_gpgcheck=False --nodocs install ' + shlex.quote(destination),
                                           timeout=600)
                 (output / (name + '.log')).write_text(text)
+                expected = '\t'.join(['harness-os-session', metadata['package']['version'],
+                                      str(metadata['package']['release']), 'aarch64'])
+                machine.command('test "$(rpm -q --qf ' + shlex.quote('%{NAME}\t%{VERSION}\t%{RELEASE}\t%{ARCH}') +
+                                ' harness-os-session)" = ' + shlex.quote(expected))
                 machine.command('rpm -V harness-os-session')
                 after, _ = machine.user('python3 /tmp/harness-package-processes.py')
                 assert process_line in [line.strip() for line in after.splitlines()], 'RPM restarted running work'
                 machine.user('test "$(cat ~/projects/package-preservation/proof.txt)" = keep-my-project')
             result['checks'].append('Native RPM install and upgrade preserve the running agent/daemon process identities and project')
+            # Keep public releases out of the private fixture. The package bytes
+            # and its normal timer remain intact; the shared updater acceptance
+            # below starts that timer with its verified local feed.
+            machine.user('systemctl --user mask harness-update.timer; '
+                         'systemctl --user stop harness-update.timer harness-update.service')
             result['first_shutdown'] = machine.poweroff()
             machine.close()
             machine = SessionVM(output / 'packaged-session', disk, fixture / 'Image')
@@ -122,12 +132,14 @@ print(json.dumps({key:identity(value) for key,value in pids.items()},sort_keys=T
                 assert exit_status != 0 and 'fedora' in text.casefold() and 'Traceback' not in text, \
                     'Unavailable platform action did not fail clearly: ' + command
                 (output / (command.replace(' ', '-') + '.txt')).write_text(text)
-            result['checks'].append('After a real reboot the packaged session renders, accepts physical keys and reports Fedora without invoking absent PC helpers')
+            result['checks'].append('After a real reboot the packaged session renders, accepts QMP virtual keyboard input and reports Fedora without invoking absent PC helpers')
             # Only the test may grant unrestricted sudo for fault injection.
             # The RPM lifecycle separately requires all package files under /usr.
             put(machine, '/etc/sudoers.d/99-harness-update-test', 'me ALL=(ALL) NOPASSWD: ALL\n')
             machine.command('chmod 440 /etc/sudoers.d/99-harness-update-test; '
                             'visudo -cf /etc/sudoers.d/99-harness-update-test')
+            machine.user('systemctl --user stop harness-update.timer harness-update.service; '
+                         'systemctl --user unmask harness-update.timer; systemctl --user daemon-reload')
             result['fast_updates'] = exercise(UserSession(machine), updates, endpoint)
             machine.keyboard('after-fedora-updates')
             result['checks'].append('The packaged user updater activates and rolls back real ARM binaries, preserving work and keyboard input')

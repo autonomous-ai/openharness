@@ -21,12 +21,23 @@ def digest(path):
         return hashlib.file_digest(handle, 'sha256').hexdigest()
 
 
-def identity(folder, source, producer):
+def identity(folder, source, producer, expected_runtime):
     manifest = json.loads((folder / 'package-manifest.json').read_text())
     assert (manifest['schema'], manifest['kind'], manifest['architecture'], manifest['published']) == (
         1, 'harness-os-fedora-session', 'aarch64', False)
     assert manifest['package_source_commit'] == source
     assert manifest['runtime_source_commit'] == producer
+    original = manifest['runtime_source_identity']
+    assert original == expected_runtime, 'Package runtime differs from the selected producer artifact'
+    assert (original['source_commit'], original['dirty'], original['architecture'], original['target']) == (
+        producer, False, 'aarch64', 'aarch64-unknown-linux-musl')
+    assert set(original['files']) == {'harness-tui', 'cli.js', 'notify.mjs'}
+    expected = dict(original, system_profile='fedora', package_source_commit=source,
+                    files={('cli.mjs' if name == 'cli.js' else name): entry
+                           for name, entry in original['files'].items()})
+    assert manifest['runtime'] == expected, 'Installed runtime identity lost its producer provenance'
+    for name, entry in expected['files'].items():
+        assert manifest['files']['usr/lib/harness/' + name] == entry['sha256']
     name = manifest['package']['name']
     assert re.fullmatch(r'harness-os-session-[0-9A-Za-z.~+_-]+\.aarch64\.rpm', name), 'Unsafe package filename'
     package = folder / name
@@ -58,6 +69,7 @@ def main():
     parser.add_argument('--upgrade', type=Path, required=True)
     parser.add_argument('--source', required=True)
     parser.add_argument('--runtime-source', required=True)
+    parser.add_argument('--runtime', type=Path, required=True, help='Original selected producer artifact')
     parser.add_argument('--root-image', required=True)
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
@@ -89,9 +101,18 @@ def main():
         return completed
 
     try:
-        first, old = identity(args.first, args.source, args.runtime_source)
-        repeat, repeated = identity(args.repeat, args.source, args.runtime_source)
-        upgrade, new = identity(args.upgrade, args.source, args.runtime_source)
+        record = args.runtime / 'source.json'
+        assert record.is_file() and not record.is_symlink()
+        runtime = json.loads(record.read_text())
+        assert set(runtime['files']) == {'harness-tui', 'cli.js', 'notify.mjs'}
+        for name, entry in runtime['files'].items():
+            path = args.runtime / name
+            assert path.is_file() and not path.is_symlink()
+            assert path.stat().st_size == entry['bytes'] and digest(path) == entry['sha256']
+        first, old = identity(args.first, args.source, args.runtime_source, runtime)
+        repeat, repeated = identity(args.repeat, args.source, args.runtime_source, runtime)
+        upgrade, new = identity(args.upgrade, args.source, args.runtime_source, runtime)
+        assert old['runtime_identity_sha256'] == repeated['runtime_identity_sha256'] == new['runtime_identity_sha256'] == digest(record)
         assert first.read_bytes() == repeat.read_bytes(), 'Same inputs produced different RPM bytes'
         assert old['files'] == repeated['files'] == new['files']
         assert old['symlinks'] == repeated['symlinks'] == new['symlinks']

@@ -73,7 +73,7 @@ jobs:
             --mount "type=bind,source=$PWD/os/work/fedora-package-output,target=/output" \
             -e RUNTIME_SOURCE "$image" /bin/bash -euo pipefail -c '
               manager=$(command -v dnf5 || command -v microdnf)
-              "$manager" install -y --setopt=install_weak_deps=False --setopt=gpgcheck=True --nodocs python3 git rpm-build
+              "$manager" install -y --setopt=install_weak_deps=False --setopt=gpgcheck=True --nodocs python3 git rpm-build tar gzip
               python3 /source/os/tools/build-fedora-package.py --runtime /source/os/work/fedora-runtime-input/runtime --runtime-source "$RUNTIME_SOURCE" --output /output/first --release 1
               python3 /source/os/tools/build-fedora-package.py --runtime /source/os/work/fedora-runtime-input/runtime --runtime-source "$RUNTIME_SOURCE" --output /output/repeat --release 1
               python3 /source/os/tools/build-fedora-package.py --runtime /source/os/work/fedora-runtime-input/runtime --runtime-source "$RUNTIME_SOURCE" --output /output/upgrade --release 2
@@ -94,6 +94,7 @@ jobs:
                 --repeat /source/os/work/fedora-package-output/repeat \
                 --upgrade /source/os/work/fedora-package-output/upgrade \
                 --source "$PACKAGE_SOURCE" --runtime-source "$RUNTIME_SOURCE" \
+                --runtime /source/os/work/fedora-runtime-input/runtime \
                 --root-image "$ROOT_IMAGE" --output /evidence/lifecycle
             '
       - name: Retain exact package and lifecycle evidence
