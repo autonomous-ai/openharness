@@ -601,6 +601,28 @@ describe('runMaster', () => {
       } finally { log.mockRestore() }
     })
 
+    it('takes its own marker with it when it is stopped before its first core is up, and leaves another\'s', async () => {
+      // Stopped between its exec and its first core, a re-executed master left its marker, and the next
+      // start took that for a re-execution that never came up: a good update rolled back, its version
+      // rejected (recoverFailedReexec, selfUpdate.restore).
+      const script = join(dir, 'unbound.cjs')
+      writeFileSync(script, `setInterval(() => {}, 1000); process.on('SIGTERM', () => process.exit(0))`)
+      const resume = encodeResume({ restarts: 1, lastExit: 'code 75', lastExitReason: 'update', update: 'pending', claimed: true, reexecs: 1, unproven: 1 })
+      writeMarker(marker(), { pid: process.pid, from: 'the one before', to: fingerprint(script)!, at: 1 })
+      const own = start(script, { env: { ...process.env, [RESUME_ENV]: resume } })
+      await until('its core', () => own.supervisor.status().corePid !== null)
+      await own.stop()
+      expect(readMarker(marker())).toBeNull()
+      expect(own.calls).toEqual([])
+
+      const another = { pid: process.ppid, from: 'the one before', to: fingerprint(script)!, at: 1 }
+      writeMarker(marker(), another)
+      const beside = start(script)
+      await until('its core', () => beside.supervisor.status().corePid !== null)
+      await beside.stop()
+      expect(readMarker(marker())).toEqual(another)
+    })
+
     it('removes its marker once its core is up, and leaves alone what it does not judge', async () => {
       const script = bundle('')
       writeMarker(marker(), { pid: process.pid, from: 'the one before', to: fingerprint(script)!, at: 1 })

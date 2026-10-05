@@ -299,6 +299,10 @@ export function runMaster(config: MasterConfig): Supervisor {
     exit: (code) => {
       stopping = true
       reexec?.cancel()
+      // A master stopped before its first core came up has not failed to come up: its own marker goes
+      // with it. Left behind by a stop, a sign-out or a shutdown in the seconds after a re-execution, it
+      // made the next start roll a good update back and reject its version (recoverFailedReexec).
+      if (markerFile && readMarker(markerFile)?.pid === process.pid) removeMarker(markerFile)
       services.stop(() => {
         stopTrimming()
         exit(code)
