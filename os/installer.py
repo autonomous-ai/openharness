@@ -280,11 +280,38 @@ def preserve_trial(trial, target, home):
     return {key: value for key, value in receipt.items() if key != 'entries'}
 
 
-def copy_image(source, target):
-    # Bound extraction memory and skip the optional GPU archive cache entirely.
-    # Selected hardware reads its signed packages directly from the live USB.
-    run('unsquashfs', '-mem', '64M', '-f', '-no-progress', '-excludes', '-d', target, source,
-        'usr/share/harness-os/hardware/nvidia')
+def shared_broadcom_cache(source, bundle):
+    """Use the live cache only when it belongs to this exact selected payload."""
+    try:
+        manifest = json.loads((bundle / 'manifest.json').read_text())
+        embedded = json.loads(run('unsquashfs', '-cat', source,
+                                  'usr/share/harness-os/hardware/broadcom/manifest.json', capture=True))
+        if (not isinstance(manifest, dict) or manifest != embedded or not manifest.get('packages') or
+                not isinstance(manifest.get('files'), dict) or not manifest['files'] or
+                not (bundle / 'packages').is_dir()):
+            return False
+        # Avoid reading the entire archive cache on generic machines. Selected
+        # radios still verify every hash and signature before pacman sees it.
+        for name, expected in manifest['files'].items():
+            path = bundle / name
+            if (Path(name).is_absolute() or '..' in Path(name).parts or
+                    path.is_symlink() or not path.resolve().is_relative_to(bundle.resolve()) or
+                    not path.is_file() or path.stat().st_size != expected['bytes']):
+                return False
+        return True
+    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
+        # An explicit --source can differ from the running USB. Keep its own
+        # cache instead of requiring matching live files for that installation.
+        return False
+
+
+def copy_image(source, target, broadcom=Path('/usr/share/harness-os/hardware/broadcom')):
+    # Bound extraction memory. Keep the Wi-Fi module/manifest from the selected
+    # image; selected radios can read its matching signed archives from the USB.
+    excluded = ['usr/share/harness-os/hardware/nvidia']
+    if shared_broadcom_cache(source, broadcom):
+        excluded.append('usr/share/harness-os/hardware/broadcom/packages')
+    run('unsquashfs', '-mem', '64M', '-f', '-no-progress', '-excludes', '-d', target, source, *excluded)
 
 
 def install(config, source, target, progress=None):

@@ -640,7 +640,12 @@ blacklist is overridden so it cannot disable those other drivers.
 The live driver is about 2 MB. A separate signed package cache is kept on the
 USB for offline installation; its compiler, DKMS and matching LTS headers are
 installed only when the radio needs them. The cache is removed from every
-installed system. The standard package hooks then rebuild wl on kernel updates.
+installed system. When the USB cache matches the selected image, the installer
+omits its archives from extraction and selected radios use a read-only bind mount.
+The image's manifest and module are retained for comparison; full archive hashes
+and package signatures are checked before use. An explicit image override with
+different or unavailable live files retains its own cache during installation.
+The standard package hooks then rebuild wl on kernel updates.
 The driver bundle is built in a disposable root using the same complete Arch
 snapshot as the image; none of its build packages enter the normal image base.
 This selection happens during a fresh installation. Updating an older installed

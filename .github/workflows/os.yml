@@ -267,7 +267,7 @@ jobs:
         run: |
           args=(--iso os/dist/*.iso)
           if [[ -n "$REUSED_IMAGE" ]]; then
-            args+=(--candidate-hardware os/hardware.py)
+            args+=(--candidate-hardware os/hardware.py --candidate-installer os/installer.py)
           fi
           python3 os/tests/hardware_install_vm.py "${args[@]}"
       - name: Retain hardware installation and rebuild evidence
