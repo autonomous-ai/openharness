@@ -29,6 +29,9 @@ export interface DaemonOptions {
   noMaster?: boolean
   /** Run this bundle (an installed `cli.js`) instead of the checkout's source. */
   scriptPath?: string
+  /** Keep the daemon's data folder here instead of under the throwaway root (a test volume). The fake
+   *  engines read their hook credential from it, so it is set for them too. */
+  dataDir?: string
 }
 
 async function freePort(): Promise<number> {
@@ -70,7 +73,7 @@ export class IsolatedDaemon {
     const root = tmux.root
     const port = await freePort()
     const dirs = {
-      home: join(root, 'home'), data: join(root, 'data'), runtime: join(root, 'runtime'), auth: join(root, 'auth'),
+      home: join(root, 'home'), data: options.dataDir ?? join(root, 'data'), runtime: join(root, 'runtime'), auth: join(root, 'auth'),
       bin: join(root, 'bin'), dsh: join(root, 'dsh'), claudeProjects: join(root, 'claude', 'projects'), codexHome: join(root, 'codex'),
       projects: join(root, 'projects'),
     }
