@@ -204,6 +204,27 @@ describe('which agent a hook belongs to', () => {
         vi.useRealTimers()
       }
     })
+
+    it('is not cut short by a step of the wall clock, as a wake or an NTP correction makes', async () => {
+      // Round 29 steps the clock under working agents; a deadline on the wall clock ended this wait at
+      // the first poll after a step forward, and the hook was dropped as if its record never came.
+      vi.useFakeTimers()
+      try {
+        const onPane: Record<string, RegisteredSession> = { '%1': agent('a1', 100) }
+        vi.mocked(processRows).mockResolvedValue(newEngine() as never)
+        const hook = ask(setup(onPane).hooks)
+        await vi.advanceTimersByTimeAsync(1_000)
+        vi.setSystemTime(Date.now() + 3 * 3_600_000)
+        await vi.advanceTimersByTimeAsync(1_000)
+        expect(hook.answer()).toBeUndefined()
+        onPane['%1'] = agent('a1', 200)
+        await vi.advanceTimersByTimeAsync(200)
+        await hook.asked
+        expect(hook.answer()).toEqual(agent('a1', 200))
+      } finally {
+        vi.useRealTimers()
+      }
+    })
   })
 
   it('a SessionEnd only asks for a reconcile: discovery decides whether the agent still exists', () => {

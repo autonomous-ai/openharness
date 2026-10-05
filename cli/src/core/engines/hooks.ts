@@ -102,8 +102,10 @@ export function createEngineHooks({ tmuxBackend, agentReconciler, registry }: En
    *  pane), or when the wait is over. */
   const recordChanged = async (resolved: TerminalRuntimeRef[], engine: HookQuery['engine']): Promise<void> => {
     const before = resolved.map((runtime) => recordKey(registry.byRuntimeEngine(runtime, engine)))
-    const deadline = Date.now() + PROCESS_RECORD_WAIT_MS
-    while (Date.now() < deadline) {
+    // On the monotonic clock: a wall clock stepped forward (a wake, an NTP correction: round 29) ended
+    // the wait at its next poll and dropped the hook, and one stepped back kept it polling for the step.
+    const deadline = performance.now() + PROCESS_RECORD_WAIT_MS
+    while (performance.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, PROCESS_RECORD_POLL_MS))
       if (resolved.some((runtime, i) => recordKey(registry.byRuntimeEngine(runtime, engine)) !== before[i])) return
     }
