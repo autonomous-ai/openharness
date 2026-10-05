@@ -10,7 +10,7 @@ import subprocess
 import time
 from PIL import Image
 from footprint_vm import copy_file
-from vm import VM
+from vm import VM, check_live_media, install_interactively
 from session_vm import screen_text
 
 
@@ -150,6 +150,17 @@ def install_zram_candidate(vm, config, source, result):
             vm.command('dmsetup remove --deferred --noudevsync hn-browser-candidate')
 
 
+def zram_probe(vm, source, phase, live=False):
+    data = Path(__file__).with_name('zram_probe.py').read_bytes()
+    copy_file(vm, data, '/tmp/harness-zram-probe.py')
+    path = '/tmp/harness-zram-' + phase + '.json'
+    vm.command(('' if live else 'sudo -n ') + 'python3 /tmp/harness-zram-probe.py --config-sha256 ' +
+               hashlib.sha256(source.read_bytes()).hexdigest() + ' --output ' + path, timeout=15)
+    content = vm.read_file(path, timeout=10)
+    (vm.folder / ('zram-' + phase + '.json')).write_bytes(content)
+    return json.loads(content)
+
+
 def check_browser(vm, result):
     vm.command('! pgrep -u "$(id -u)" -x chromium')
     result['checks'].append('Browser is absent on installed boot')
@@ -273,23 +284,34 @@ def main():
                         help='Capture finite read-only memory snapshots; separate from ordinary focus acceptance')
     parser.add_argument('--zram-config', type=Path,
                         help='Overlay this startup configuration on the private installed disk before boot')
+    parser.add_argument('--expected-zram-config', type=Path,
+                        help='Require this configuration active from the live and installed cold boots; no overlay')
+    parser.add_argument('--interactive-install', action='store_true')
+    parser.add_argument('--live-transport', choices=['cdrom', 'usb'], default='cdrom')
+    parser.add_argument('--output', type=Path)
     args = parser.parse_args()
+    if args.zram_config and args.expected_zram_config:
+        parser.error('Choose a preboot overlay or verification of a prepared image, not both')
+    if args.expected_zram_config and not args.interactive_install:
+        parser.error('--expected-zram-config requires --interactive-install')
     if not os.access('/dev/kvm', os.R_OK | os.W_OK):
         parser.error('Native x86 KVM is required')
     iso = args.iso.resolve()
     manifest = json.loads(iso.with_name('manifest.json').read_text())
     with iso.open('rb') as handle:
         assert hashlib.file_digest(handle, 'sha256').hexdigest() == manifest['iso']['sha256']
-    folder = Path(f'os/test-results/{args.firmware}-browser').resolve()
+    folder = (args.output or Path(f'os/test-results/{args.firmware}-browser')).resolve()
     folder.mkdir(parents=True, exist_ok=False)
-    vm = BrowserVM(folder, iso, args.firmware, args.memory_mib, cpu='Nehalem')
+    vm = BrowserVM(folder, iso, args.firmware, args.memory_mib, live_transport=args.live_transport, cpu='Nehalem')
     vm.memory_samples = []
     config = dict(disk='/dev/vda', expected_serial='HN_OS_TEST', confirm_erase='/dev/vda', username='me',
                   hostname='harness', password='test-password-123', encrypt=args.firmware == 'uefi', serial_console=True)
     result = dict(status='running', started_at=time.time(), checks=[], firmware=args.firmware,
                   image_source_commit=manifest['source_commit'], iso_sha256=manifest['iso']['sha256'],
-                  test_source_commit=subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),
+                  test_source_commit=subprocess.check_output(['git','-c',f'safe.directory={Path.cwd()}',
+                                                              'rev-parse','HEAD'],text=True).strip(),
                   memory_mib=args.memory_mib, candidates={},
+                  validation_fixture=manifest.get('validation_fixture'), live_transport=args.live_transport,
                   memory_profile=args.memory_profile, cpu='Nehalem', display='virtio-vga (2D)',
                   memory_samples=vm.memory_samples,
                   observer=dict(sha256=hashlib.sha256(args.wlrctl.read_bytes()).hexdigest(),
@@ -302,12 +324,35 @@ def main():
         vm.wait(r'root@[^\r\n]*[#] ', timeout=180)
         vm.shell_ready = True
         vm.command('stty -echo')
+        if args.expected_zram_config:
+            result['zram_probe_sha256'] = hashlib.sha256(Path(__file__).with_name('zram_probe.py').read_bytes()).hexdigest()
+            result['live_zram'] = zram_probe(vm, args.expected_zram_config, 'live', live=True)
+            assert result['live_zram']['oom_kills'] == 0
+        if args.live_transport == 'usb':
+            check_live_media(vm, result, 'media')
         copy_file(vm, json.dumps(config).encode(), '/tmp/install-config.json')
         vm.command('nmcli networking off')
-        output, _ = vm.command('harness install --config /tmp/install-config.json --yes-erase-disk', timeout=360)
-        (folder / 'install.log').write_text(output)
+        if args.interactive_install:
+            assert 'install-first' in manifest.get('capabilities', [])
+            from install_first import wait_installer_screen
+            wait_installer_screen(vm, 'Repeat password', 'live-installer')
+            vm.command('! pgrep -x "hn|harness-tui|opencode|chromium"')
+            result['interactive_install_seconds'] = install_interactively(vm, config, folder, direct=True)
+            result['checks'].append('USB boots the installer; disk selection, encryption, masked passwords and offline installation succeed')
+            if config['encrypt']:
+                code = ('import json,sys; k=json.load(sys.stdin)["keyslots"]["0"]["kdf"]; '
+                        'print(json.dumps({key:k[key] for key in ["type","time","memory","cpus"]}))')
+                vm.command('cryptsetup luksDump --dump-json-metadata /dev/vda3 | python3 -c ' +
+                           shlex.quote(code) + ' > /tmp/hn-zram-argon.json')
+                result['argon'] = json.loads(vm.read_file('/tmp/hn-zram-argon.json'))
+        else:
+            output, _ = vm.command('harness install --config /tmp/install-config.json --yes-erase-disk', timeout=360)
+            (folder / 'install.log').write_text(output)
         if args.zram_config:
             install_zram_candidate(vm, config, args.zram_config, result)
+        if args.expected_zram_config:
+            result['live_installed_zram'] = zram_probe(vm, args.expected_zram_config, 'live-installed', live=True)
+            assert result['live_installed_zram']['oom_kills'] == 0, 'Live installation triggered an OOM kill'
         vm.command('sync')
         vm.stop()
         vm.start(live=False)
@@ -315,10 +360,7 @@ def main():
         result['installed_runtime_ready_seconds_including_test_login'] = round(time.monotonic() - vm.started, 3)
         vm.command('printf %s ' + shlex.quote(config['password']+'\n') + ' | sudo -S -v')
         if args.zram_config:
-            assert vm.read_file('/etc/systemd/zram-generator.conf') == args.zram_config.read_bytes()
-            output, _ = vm.command('systemctl is-active systemd-zram-setup@zram0.service dev-zram0.swap && '
-                                   'cat /sys/block/zram0/disksize /proc/swaps')
-            (folder / 'zram-startup.txt').write_text(output)
+            result['installed_zram'] = zram_probe(vm, args.zram_config, 'installed')
         vm.command('systemctl --user stop harness-update.timer harness-update.service')
         copy_file(vm, args.wlrctl.read_bytes(), '/tmp/harness-wlrctl')
         vm.command('chmod 700 /tmp/harness-wlrctl')
@@ -338,7 +380,23 @@ def main():
             copy_file(vm, data, '/tmp/harness-browser-memory.py')
             vm.command('sudo -n touch /run/harness-browser-memory-disposable')
             vm.memory_profile = True
+        if args.expected_zram_config:
+            result['install_receipt'] = json.loads(vm.read_file('/var/lib/harness-os/install.json'))
+            if config['encrypt']:
+                argon = result['argon']
+                budget = result['install_receipt']['pbkdf_memory_limit_kib']
+                assert argon['type'] == 'argon2id' and argon['time'] >= 4
+                assert 64 * 1024 <= argon['memory'] <= budget <= 1024 * 1024
+            before = result['installed_zram'] = zram_probe(vm, args.expected_zram_config, 'installed')
+            assert sum(p['role'] == 'OpenCode' for p in before['identities']) == 2, before
+            assert sum(p['role'] == 'Harness daemon' for p in before['identities']) == 1, before
+            assert before['oom_kills'] == 0
         check_browser(vm, result)
+        if args.expected_zram_config:
+            after = result['completed_zram'] = zram_probe(vm, args.expected_zram_config, 'completed')
+            assert after['identities'] == before['identities'], 'Agent or daemon process changed'
+            assert after['oom_kills'] == 0, 'The workload triggered an OOM kill'
+            result['checks'].append('Original agent and daemon PID/starttime identities survive the ordinary browser workload without OOM')
         result['status'] = 'passed'
     except BaseException as error:
         result.update(status='failed', error=repr(error))
@@ -360,7 +418,8 @@ def main():
         if vm.shell_ready:
             for name in ['events.jsonl', 'state.json', 'states.json', 'terminal-input']:
                 try:
-                    (folder / name).write_bytes(vm.read_file('/tmp/harness-browser-probe/' + name))
+                    destination = name + '.txt' if name == 'terminal-input' else name
+                    (folder / destination).write_bytes(vm.read_file('/tmp/harness-browser-probe/' + name))
                 except Exception:
                     pass
         result['finished_at'] = time.time()
