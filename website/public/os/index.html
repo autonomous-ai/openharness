@@ -5,172 +5,125 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <base href="/os/">
   <link rel="canonical" href="https://harness.autonomous.ai/os">
-  <meta name="theme-color" content="#f7f7f2">
-  <meta name="description" content="Agents are the new apps. Harness is an operating system built around agents: chat in the terminal, review the work, open a browser when you need it. Built for programmers first.">
-  <meta property="og:title" content="Harness — Agents are the new apps.">
-  <meta property="og:description" content="An operating system built around agents. Your terminal. Your agents. A browser when you need it. Built for programmers first.">
+  <meta name="theme-color" content="#11110f">
+  <meta name="description" content="Harness. The operating system built by agents, for agents. An open-source Linux operating system that boots straight into your agents.">
+  <meta property="og:title" content="Harness — The operating system built by agents, for agents">
+  <meta property="og:description" content="An open-source Linux operating system that boots straight into your agents.">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://harness.autonomous.ai/os">
-  <title>Harness — Agents are the new apps.</title>
+  <title>Harness — The operating system built by agents, for agents</title>
   <link rel="icon" href="assets/mark.svg" type="image/svg+xml">
-  <link rel="preload" href="assets/geist-semibold.woff" as="font" type="font/woff" crossorigin>
-  <link rel="stylesheet" href="style.css">
+  <link rel="preload" href="assets/geist-mono.woff" as="font" type="font/woff" crossorigin>
+  <link rel="stylesheet" href="style.css?v=6680fc59d052">
+  <script src="demo.js?v=5aa0cbec5e22" defer></script>
 </head>
 <body>
-  <a class="skip" href="#main">Skip to content</a>
+  <main>
   <div class="page">
-    <header class="header">
-      <a class="wordmark" href="#" aria-label="Harness home"><span class="mark" aria-hidden="true">hn<span>_</span></span>harness</a>
-      <nav aria-label="Main navigation">
-        <a href="#how">How it works</a>
-        <a href="https://github.com/autonomous-ai/openharness/tree/main/os">Source <span aria-hidden="true">↗</span></a>
-        <a href="#install">Install <span aria-hidden="true">↓</span></a>
+    <header class="brand">Harness<span aria-hidden="true">_</span></header>
+    <section class="intro" aria-labelledby="headline">
+      <h1 id="headline">The operating system<br>built by agents, for agents</h1>
+      <nav class="actions" aria-label="Get Harness">
+        <a class="install" href="https://harness.autonomous.ai/os/latest" aria-label="Install Harness — downloads and instructions">[ Install <span aria-hidden="true">↓</span> ]</a>
+        <a class="source" href="https://github.com/autonomous-ai/openharness/tree/main/os">[ Open Source <span aria-hidden="true">↗</span> ]</a>
       </nav>
-    </header>
-
-    <main id="main">
-      <section class="hero" aria-labelledby="headline">
-        <p class="eyebrow">An operating system built around agents <span class="edition">Preview 6</span></p>
-        <div class="hero-grid">
-          <h1 id="headline">Agents are<br>the new apps<span class="period">.</span></h1>
-          <div class="hero-copy">
-            <p class="lead">Turn on your computer.<br>Tell it what to build.</p>
-            <p>Harness boots into a place to work with agents. Describe the task. Let them use the tools. Review what they make, right in the terminal.</p>
-            <p>A browser when the work needs one.<br>Built for programmers first.</p>
+    </section>
+    <figure class="screen">
+      <img id="demo-poster" src="assets/workspace.png" width="1280" height="800" fetchpriority="high" alt="The Harness operating system: OpenCode in the left pane, two terminals on the right, and a single tab bar along the bottom.">
+      <div id="os-demo" class="os-demo" data-scene="boot" role="group" aria-label="Animated demonstration of Harness: boot into agents, build a project, preview it in the browser, and return to work. This is an illustration, not a live session." hidden>
+        <div class="demo-boot" aria-hidden="true">
+          <pre>█ █ ▄▀█ █▀█ █▄ █ █▀▀ █▀ █▀
+█▀█ █▀█ █▀▄ █ ▀█ ██▄ ▄█ ▄█</pre>
+          <p>Starting your workspace<span class="cursor">▋</span></p>
+        </div>
+        <div class="demo-workspace" aria-hidden="true">
+          <div class="demo-panes">
+            <section class="pane pane-main">
+              <header class="pane-title"><span>OpenCode · website</span><span>~/projects/orbit</span></header>
+              <div class="terminal-content">
+                <p class="agent-name">OpenCode</p>
+                <p class="prompt">› <span data-type="1600" data-speed="31">Build a landing page for our space game.</span><span class="cursor" data-caret="1600:3100">▋</span></p>
+                <p class="terminal-line muted" data-at="3400">Reading the project…</p>
+                <p class="terminal-line" data-at="4300"><span class="muted">→</span> Create index.html</p>
+                <p class="terminal-line" data-at="5300"><span class="muted">→</span> Create style.css</p>
+                <p class="terminal-line" data-at="6500"><span class="muted">→</span> Start the local preview</p>
+                <p class="terminal-line success" data-at="8200">✓ Your page is ready.</p>
+                <p class="terminal-line" data-at="8500">http://localhost:3000</p>
+                <p class="prompt follow-up" data-at="9000">› <span class="cursor">▋</span></p>
+              </div>
+            </section>
+            <section class="pane pane-upper">
+              <header class="pane-title"><span>Codex · game</span></header>
+              <div class="terminal-content">
+                <p class="prompt">› <span data-type="2700" data-speed="35">Add keyboard controls.</span><span class="cursor" data-caret="2700:3600">▋</span></p>
+                <p class="terminal-line muted" data-at="4600">Reading game.js…</p>
+                <p class="terminal-line" data-at="6000">Edited controls.js</p>
+                <p class="terminal-line" data-at="7300">Running tests…</p>
+                <p class="terminal-line success" data-at="9100">✓ Controls work. Tests pass.</p>
+              </div>
+            </section>
+            <section class="pane pane-lower">
+              <header class="pane-title"><span>Claude Code · docs</span></header>
+              <div class="terminal-content">
+                <p class="prompt">› <span data-type="3800" data-speed="35">Write the setup guide.</span><span class="cursor" data-caret="3800:4700">▋</span></p>
+                <p class="terminal-line muted" data-at="5500">Reading the project…</p>
+                <p class="terminal-line" data-at="7200">Writing README.md</p>
+                <p class="terminal-line success" data-at="9400">✓ Ready for the next developer.</p>
+              </div>
+            </section>
+          </div>
+          <div class="demo-status"><span><b>0:orbit*</b>　1:api　2:notes</span><span>harness</span></div>
+        </div>
+        <div class="demo-browser" aria-hidden="true">
+          <div class="browser-toolbar"><span>←　→　↻</span><span class="address">localhost:3000</span></div>
+          <div class="orbit-page">
+            <header><span>ORBIT</span><span>A small game. A big universe.</span></header>
+            <div class="orbit-hero">
+              <pre>       .         +
+   +      .              .
+            /\
+      .    /  \    .
+          | () |       +
+         /|    |\
+        /_|____|_\
+           /\/\
+     .     :  :      .</pre>
+              <p>One more adventure.</p>
+              <span class="orbit-play">[ Play Orbit → ]</span>
+            </div>
+            <footer>← → move　·　space to launch</footer>
           </div>
         </div>
-        <div class="hero-actions">
-          <a class="button" href="https://github.com/autonomous-ai/openharness/releases/download/os-v0.1.0-preview.6/harness-0.1.0-preview.6-x86_64.iso">Download the ISO <span aria-hidden="true">↓</span></a>
-          <a class="text-link" href="https://github.com/autonomous-ai/openharness/releases/tag/os-v0.1.0-preview.6">Release notes <span aria-hidden="true">↗</span></a>
-          <span class="download-meta">x86-64 · 1.63 GiB · Open source</span>
-        </div>
-      </section>
-
-      <figure class="screen">
-        <a href="assets/hn.png" aria-label="Open the Harness home screenshot at full size">
-          <img src="assets/hn.png" width="1280" height="800" alt="Harness running fullscreen, with shortcuts to start OpenCode, open a terminal, or connect to Wi-Fi." fetchpriority="high">
-        </a>
-        <figcaption><span>The whole desktop.</span><span>Actual preview 6 screenshot. Keyboard first.</span></figcaption>
-      </figure>
-
-      <section id="how" class="section workflow" aria-labelledby="workflow-title">
-        <div class="section-intro">
-          <p class="eyebrow">Conversation is the interface</p>
-          <h2 id="workflow-title">There’s an agent<br>for that.</h2>
-          <p>Build a backend. Fix a bug. Make a game. The starting point is a conversation. Code, commands, diffs, and tests make the work visible.</p>
-        </div>
-        <ol class="steps">
-          <li><span class="step-number">01</span><div><h3>Your agents, in their own panes.</h3><p>Claude Code, Codex, OpenCode, or pi. Press <kbd>Ctrl</kbd> + <kbd>B</kbd>, then <kbd>Shift</kbd> + <kbd>N</kbd> to start one. Keep several conversations going and move between them from the keyboard.</p></div></li>
-          <li><span class="step-number">02</span><div><h3>Ask. Build. Review.</h3><p>Have the agent set up the tools your project needs. Read the changes. Run the tests. Keep going. Want to enter a command yourself? New terminal opens a shell immediately.</p></div></li>
-          <li><span class="step-number">03</span><div><h3>A browser, when it helps.</h3><p>Most work can be reviewed in the terminal. For a website, a game, or a visual viewer, <kbd>Super</kbd> + <kbd>B</kbd> opens Chromium or switches back to Harness. The browser stays closed until you ask.</p></div></li>
-        </ol>
-      </section>
-
-      <section class="section first-boot" aria-labelledby="first-boot-title">
-        <div class="section-heading">
-          <div><p class="eyebrow">The whole OS experience</p><h2 id="first-boot-title">Install. Boot. Work.</h2></div>
-          <p class="section-caption">A few choices up front.<br>Then straight into Harness.</p>
-        </div>
-        <div class="journey">
-          <figure>
-            <a href="assets/install.png" aria-label="Open the actual Harness installer screenshot at full size"><img src="assets/install.png" width="1280" height="800" loading="lazy" alt="Install Harness with four fields: Disk, Encryption, Password, Repeat password. An Install button and a notice that all data on the selected disk will be erased."></a>
-            <figcaption><h3><span class="step-number">01</span> Install from USB.</h3><p>Press Enter on the welcome screen. Choose a disk, keep encryption on or turn it off, enter your password twice, and install. It works offline.</p><p class="caption-note">Want to try first? Press T. Connect to Wi-Fi if needed, then start the bundled OpenCode with its default settings.</p></figcaption>
-          </figure>
-          <figure>
-            <a href="assets/unlock.png" aria-label="Open the actual Harness disk unlock screenshot at full size"><img src="assets/unlock.png" width="1280" height="800" loading="lazy" alt="A yellow ASCII Harness wordmark above Enter your password, with the entered password masked."></a>
-            <figcaption><h3><span class="step-number">02</span> Unlock. Start making.</h3><p>Remove the USB and boot your computer. On an encrypted install, enter your password to open Harness. Your account is already <code>me@harness</code>.</p><p class="caption-note">Start OpenCode, choose another agent, or open a terminal. OpenCode is included; other agents install when selected. Their accounts and model usage are yours.</p></figcaption>
-          </figure>
-        </div>
-        <p class="journey-note">Real screens from preview 6. Installation erases the entire selected disk. <a href="#install">Read the installation guide below.</a></p>
-      </section>
-
-      <section class="section philosophy" aria-labelledby="philosophy-title">
-        <p class="eyebrow">Built by subtraction</p>
-        <div class="philosophy-grid">
-          <h2 id="philosophy-title">No panels.<br>No wallpaper.<br>No ceremony.</h2>
-          <div class="prose">
-            <p>A terminal for the conversation. A browser for work that needs a visual surface. The rest starts with what you ask an agent to do.</p>
-            <p>Underneath is ordinary Arch Linux: the LTS kernel, a package manager, your files, and administrator access. Compilers, databases, containers—install what the project calls for. Your agents can handle the setup.</p>
-            <p>Wi-Fi, audio, clipboard, screen locking, and recovery are included. Minimal still has to be a working computer.</p>
-          </div>
-        </div>
-        <p class="stack"><span>Under the surface</span> Arch Linux <span aria-hidden="true">/</span> labwc <span aria-hidden="true">/</span> foot <span aria-hidden="true">/</span> hn <span aria-hidden="true">/</span> Chromium</p>
-      </section>
-
-      <section class="section measurements" aria-labelledby="measurements-title">
-        <div class="section-heading"><h2 id="measurements-title">Small. Measured.</h2><a class="text-link" href="https://github.com/autonomous-ai/openharness/releases/download/os-v0.1.0-preview.6/validation.json">Read the evidence <span aria-hidden="true">↗</span></a></div>
-        <dl class="numbers">
-          <div><dt>ISO download</dt><dd>1.63<span>GiB</span></dd></div>
-          <div><dt>Settled idle memory</dt><dd>~390<span>MiB</span></dd></div>
-          <div><dt>Offline VM installation</dt><dd>37–70<span>sec</span></dd></div>
-        </dl>
-        <p class="measurement-note">Preview 6 measurements in 2-vCPU, 1-GiB x86 VMs installed from virtual USB. Idle memory is with agents and browser closed. Installation took 37 seconds without encryption and 70 seconds with encryption, excluding the download and answering prompts. Physical hardware will differ.</p>
-        <details>
-          <summary>What has actually been tested? <span aria-hidden="true">+</span></summary>
-          <div class="details-content">
-            <p>The keyboard installer, BIOS and UEFI USB boot, automatic RAM-image detection, offline installation, encrypted disks, wrong-password retry, clipboard, browser switching, update retry, and recovery that preserves projects. This image passed at 1 GiB RAM and in 4 GiB USB copy-to-RAM mode, including a real first agent conversation typed through the keyboard. Separate update tests preserve a running OpenCode agent and terminal through hn and CLI activation, failed-start recovery, and rollback.</p>
-            <p>Installed BIOS boot reached Harness readiness in 16.2 seconds, including automated login. Encrypted boot showed the password prompt in 6.0 seconds and reached Harness 8.4 seconds after the correct password was submitted. Settled idle memory was 368–396 MiB. These are VM observations, not physical power-on benchmarks.</p>
-            <p>Inside preview 6, OpenCode agents built a Python CLI, a website, a keyboard game, and a Fastify/SQLite app. Their 33 unit tests and independent browser/API checks passed, along with three harness exercises using the shared viewers. Download their source, screenshots, and exact test history separately.</p>
-            <p>A user has now reported a successful preview 4 installation, boot, and use on their ThinkPad. This is a user report, without measured hardware timings. Selected Broadcom drivers also passed offline installation and rebuilding in a VM. Physical Wi-Fi, suspend, Intel Mac support, and NVIDIA workloads still need model-specific validation.</p>
-            <a class="text-link" href="https://github.com/autonomous-ai/openharness/releases/download/os-v0.1.0-preview.6/harness-examples-preview6.zip">Download the projects and harness examples <span aria-hidden="true">↓</span></a>
-          </div>
-        </details>
-        <details class="project-example">
-          <summary>See a game built inside the OS. <span aria-hidden="true">+</span></summary>
-          <div class="details-content">
-            <img src="assets/signal-run.png" width="1280" height="800" loading="lazy" alt="Signal Run, a keyboard-controlled canvas game built by a real OpenCode agent inside Harness. The complete board and control legend fit on screen.">
-            <p>Signal Run. Built with HTML, CSS, and JavaScript by OpenCode inside preview 6. Tested with the keyboard at two laptop resolutions. This is project output, separate from the system image.</p>
-          </div>
-        </details>
-      </section>
-
-      <section id="install" class="section install" aria-labelledby="install-title">
-        <div class="section-intro">
-          <p class="eyebrow">0.1.0-preview.6</p>
-          <h2 id="install-title">Give it a machine.<br>Make something.</h2>
-          <p>An x86-64 Intel or AMD PC with SSE4.2 for OpenCode. Start with 2 GiB RAM and a spare disk of at least 12 GiB. Secure Boot off. A disposable x86 VM works too.</p>
-          <a class="text-link" href="https://github.com/autonomous-ai/openharness/releases/download/os-v0.1.0-preview.6/INSTALL.md">USB installation guide <span aria-hidden="true">↗</span></a>
-        </div>
-        <div class="install-copy">
-          <ol>
-            <li>Download the ISO and <a href="https://github.com/autonomous-ai/openharness/releases/download/os-v0.1.0-preview.6/harness-0.1.0-preview.6-x86_64.iso.sha256">verify its checksum</a>.</li>
-            <li>Write the whole image to a USB stick and boot it.</li>
-            <li>Press <kbd>Enter</kbd> on the welcome screen to install.</li>
-          </ol>
-          <p class="install-notice"><strong>The installer erases the entire selected disk.</strong> It does not resize an existing OS. Back up that disk first. Encryption is on by default.</p>
-          <p class="install-note">Choose your disk, set encryption, and enter your password twice. Choose Install to erase that disk and begin. There is no second confirmation. Your account is <code>me@harness</code>.</p>
-          <a class="button" href="https://github.com/autonomous-ai/openharness/releases/download/os-v0.1.0-preview.6/harness-0.1.0-preview.6-x86_64.iso">Download the ISO <span aria-hidden="true">↓</span></a>
-        </div>
-      </section>
-
-      <section class="practical" aria-label="Hardware and updates">
-        <details>
-          <summary>Can I install it on a Mac or an NVIDIA machine? <span aria-hidden="true">+</span></summary>
-          <div class="details-content">
-            <p>The current image targets x86-64 PCs. Older Intel Macs with 64-bit EFI and no T2 chip are an experimental target: hold Option at startup, choose EFI Boot, and try Harness before installing. The USB includes offline Wi-Fi drivers for selected BCM4331 and BCM4360 radios; ordinary installations keep those extra packages only when needed. Physical Mac testing is still required.</p>
-            <p>Core 2 CPUs cannot run bundled OpenCode; Harness explains this before trial setup and leaves the terminal available. T2 Macs, Apple Silicon, and Raspberry Pi need separate hardware work. NVIDIA desktops with RTX 4090 and 5090 cards are next. This preview does not promise local models out of the box.</p>
-            <a class="text-link" href="https://github.com/autonomous-ai/openharness/blob/main/os/DEVELOPMENT.md#mac-support-targets">Hardware roadmap <span aria-hidden="true">↗</span></a>
-          </div>
-        </details>
-        <details>
-          <summary>Already installed? Update without flashing again. <span aria-hidden="true">+</span></summary>
-          <div class="details-content">
-            <p>Harness prepares hn and CLI updates automatically. A small notice appears when one is ready. Press <kbd>Super</kbd> + <kbd>U</kbd>, then Enter to apply it. The screen reconnects; your running agents, terminals, and tabs stay with you.</p>
-            <p>System updates live in the same screen, with a recovery checkpoint and a restart when you are ready. On preview 5, use Updates to get preview 6. Still on preview 4? Apply the 7.1 MB bootstrap bundle once to get this update path. Routine updates do not require another USB flash.</p>
-            <a class="text-link" href="https://github.com/autonomous-ai/openharness/releases/tag/os-v0.1.0-preview.6">Update instructions and verified download <span aria-hidden="true">↗</span></a>
-          </div>
-        </details>
-        <details>
-          <summary>Do I need an Autonomous Computer? <span aria-hidden="true">+</span></summary>
-          <div class="details-content">
-            <p>Use your own compatible computer. The longer-term plan also brings Harness to the <a href="https://github.com/autonomous-ai/autonomous-computer">Autonomous Computer</a>, with an optional Harness device for input and status. Those hardware integrations are a roadmap, not a requirement for using the OS.</p>
-            <p>You can also <a href="https://github.com/autonomous-ai/openharness#readme">run Harness in your existing Mac or Linux terminal</a>. The USB installer and OS welcome belong only to the operating system.</p>
-          </div>
-        </details>
-      </section>
-    </main>
-
-    <footer class="footer"><a class="wordmark" href="#">harness<span class="cursor" aria-hidden="true">_</span></a><p>Your computer. Your agents.</p><a href="https://github.com/autonomous-ai/openharness">Open source, by Autonomous <span aria-hidden="true">↗</span></a></footer>
+        <span id="demo-shortcut" class="demo-shortcut" aria-hidden="true" hidden>Super + b</span>
+        <button id="demo-motion" class="demo-motion" type="button" aria-label="Pause animation" title="Pause animation">Ⅱ</button>
+      </div>
+    </figure>
   </div>
+  <section class="chapter" aria-labelledby="agents-heading">
+    <h2 id="agents-heading">Goodbye apps.<br>Hello agents.</h2>
+    <div class="chapter-copy">
+      <p>Harness is a Linux operating system that boots straight into your agents. No desktop to arrange. No app launcher to navigate. Just the work.</p>
+      <p>Start with OpenCode. Add Claude Code, Codex or pi. Give each agent a project and work side by side. Build on this computer, connect another one, and open the browser when you need to see the result.</p>
+      <p>Your files. Your tools. Your hardware.</p>
+    </div>
+  </section>
+  <section class="chapter chapter-metrics" aria-labelledby="speed-heading">
+    <h2 id="speed-heading">Small on disk.<br>Quick to work.</h2>
+    <div class="chapter-copy">
+      <dl class="metrics">
+        <div><dt>Install from USB</dt><dd>Offline</dd></div>
+        <div><dt>Boot to Harness</dt><dd>18 s</dd></div>
+        <div><dt>RAM with OpenCode</dt><dd>661 MiB</dd></div>
+        <div><dt>Installed system</dt><dd>2.04 GiB</dd></div>
+      </dl>
+      <p>Install from USB, even offline. Boot into your workspace. Press Super+u to update without reinstalling.</p>
+      <details class="measurement-note">
+        <summary>Preview 13 · measured in a 1 GiB VM</summary>
+        <p>Encrypted UEFI installation, Nehalem CPU profile. Boot time includes automated disk unlock and login. Disk usage includes OpenCode and the browser. RAM is median idle system usage with OpenCode and two terminals, plus 44 MiB of swap. Hardware and workloads change these numbers.</p>
+        <p><a href="https://github.com/autonomous-ai/openharness/actions/runs/37255459559">Measurements and test conditions ↗</a></p>
+      </details>
+    </div>
+  </section>
+  </main>
 </body>
 </html>
