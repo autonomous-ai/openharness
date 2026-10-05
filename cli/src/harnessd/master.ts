@@ -7,7 +7,7 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { performance } from 'node:perf_hooks'
-import { trimLogFile } from '../lib/log.js'
+import { trimLogFile, ts } from '../lib/log.js'
 import { platformFromEnv, type PlatformName } from './platform.js'
 import type { MasterMessage } from './protocol.js'
 import {
@@ -229,7 +229,9 @@ export function runMaster(config: MasterConfig): Supervisor {
   // Trimmed here rather than by the core: the master outlives every core, and two trimmers rewriting
   // one file in place would race.
   const stopTrimming = trimLogEvery(config.logFile)
-  const log = (line: string) => console.log(`${new Date().toISOString().replace('T', ' ').slice(0, 23)} ${line}`)
+  // The core's stamp, local time (lib/log.ts): in UTC, the master's lines sat hours away from the core's
+  // lines around them in the one log they share.
+  const log = (line: string) => console.log(`${ts()} ${line}`)
   // Set by the launchd agent or systemd unit `harness service install` writes (./platform.ts).
   const platform = platformFromEnv(env)
   if (platform) log(`[harnessd] run by ${platform}, which starts this master again if it dies`)
