@@ -117,7 +117,9 @@ export function createEngineHooks({ tmuxBackend, agentReconciler, registry }: En
     for (const hint of runtimeHints ?? []) {
       if (tmuxBackend) resolved.push({ backend: 'tmux', paneId: hint.paneId })
     }
-    for (const runtime of resolved) await agentReconciler.triggerHint(runtime, engine)
+    // A pass that outran its deadline has not yet opened the agent a hook from a new engine belongs to.
+    let overdue = false
+    for (const runtime of resolved) if (!await agentReconciler.triggerHint(runtime, engine)) overdue = true
 
     let found = await matchCaller(resolved, engine, callerPid)
     if (!found) return null
@@ -128,7 +130,9 @@ export function createEngineHooks({ tmuxBackend, agentReconciler, registry }: En
     // (round 23), and a restart's new conversation was never bound (round 24). While the agent on the
     // hook's pane has no live process recorded, the hook now waits for it to record one, and is matched
     // again against that: one rule for every relaunch, with nothing for any of them to remember to do.
-    if (!choice.agent && choice.reason === 'none' && found.unrecorded.length) {
+    // So does one that came while discovery was too slow to open its agent: the agent appearing on the
+    // pane is a change of its record too.
+    if (!choice.agent && choice.reason === 'none' && (found.unrecorded.length || overdue)) {
       onWait?.()
       await recordChanged(resolved, engine)
       found = await matchCaller(resolved, engine, callerPid)

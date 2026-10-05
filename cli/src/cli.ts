@@ -3429,7 +3429,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       clearRemainOnExit: (runtime) => clearPaneRemainOnExit(runtime.paneId),
       holdRoute: (key, ms) => agentReconciler.holdRoute(key, ms),
       releaseRoute: (key) => agentReconciler.releaseRoute(key),
-      triggerHint: (runtime, engine) => agentReconciler.triggerHint(runtime, engine),
+      triggerHint: async (runtime, engine) => { await agentReconciler.triggerHint(runtime, engine) },
       log: (message) => console.log(message),
     })
     // A row restore could not look at keeps its pane for discovery to judge, but not to retire this boot.
@@ -3576,7 +3576,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const watchNewPane = createPaneWatcher({
     registry,
     announceSession,
-    triggerHint: (runtime, engine) => agentReconciler.triggerHint(runtime, engine),
+    triggerHint: async (runtime, engine) => { await agentReconciler.triggerHint(runtime, engine) },
     captureTerminal,
     retainExitedSession,
   })
