@@ -82,14 +82,14 @@ def write(path, data):
 @contextmanager
 def screen_registration():
     """Publish only an active Updates UI, not the rest of its process lifetime."""
-    pane, socket = os.environ.get('TMUX_PANE', ''), os.environ.get('HN_SOCKET', '')
-    if re.fullmatch(r'%\d+', pane) and socket.startswith('/'):
+    token = os.environ.get('HARNESS_UPDATE_INSTANCE', '')
+    if re.fullmatch(r'[0-9a-f]{32}', token):
         (STATE / 'screens').mkdir(parents=True, exist_ok=True, mode=0o700)
         start = (PROC / str(os.getpid()) / 'stat').read_text().rsplit(')', 1)[1].split()[19]
         # Do not acquire open.lock here: the opener can be waiting for this
         # registration while serializing another simultaneous shortcut.
         write(STATE / 'screens' / str(os.getpid()), dict(
-            pid=os.getpid(), start=start, pane=pane, socket=socket, boot_id=BOOT_ID.read_text().strip()))
+            pid=os.getpid(), start=start, token=token, boot_id=BOOT_ID.read_text().strip()))
     try:
         yield
     finally:

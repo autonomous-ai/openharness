@@ -1,10 +1,12 @@
 #!/usr/bin/python3
 """Open the live updater pane; its display name is not an ownership marker."""
+import argparse
 import fcntl
 import json
 import os
 from pathlib import Path
 import re
+import secrets
 import subprocess
 import time
 
@@ -12,7 +14,8 @@ STATE = Path.home() / '.local/state/harness-os/updates'
 PROC = Path('/proc')
 BOOT_ID = Path('/proc/sys/kernel/random/boot_id')
 UPDATER = '/usr/lib/harness-os/live_update.py'
-FORMAT = '#{pane_id}\t#{pane_pid}\t#{pane_dead}\t#{window_id}\t#{socket_path}'
+OPTION = '@harness-update-instance'
+FORMAT = '#{pane_id}\t#{pane_dead}\t#{window_id}\t#{' + OPTION + '}'
 
 
 def hn(*args, socket=None):
@@ -32,27 +35,26 @@ def process(pid):
         return None
 
 
-def registration(pane, owner):
+def registration(token, owner):
     try:
         record = json.loads((STATE / 'screens' / str(owner['pid'])).read_text())
         if (record['pid'] == owner['pid'] and record['start'] == owner['start']
-                and record['pane'] == pane and record['boot_id'] == BOOT_ID.read_text().strip()
-                and isinstance(record['socket'], str) and record['socket'].startswith('/')):
+                and record['token'] == token and record['boot_id'] == BOOT_ID.read_text().strip()):
             return record
     except (OSError, ValueError, KeyError, TypeError):
         pass
     return None
 
 
-def updater_process(pane, pid):
-    # A manually opened updater can be the shell's child. Inspect only this
-    # pane's bounded process tree, and only a foreground, OS-owned entry point.
-    pending, visited = [pid], set()
-    while pending and len(visited) < 32:
-        current = pending.pop()
-        if current in visited:
+def updater_process(token):
+    # Daemon-backed panes need not expose pane_pid or HN_SOCKET, and their
+    # TMUX_PANE belongs to the backend, not hn's UI namespace. The opener binds
+    # a fresh token to both the actual UI pane and the active Python process.
+    owners = []
+    for entry in (STATE / 'screens').glob('*'):
+        if not entry.name.isdigit():
             continue
-        visited.add(current)
+        current = int(entry.name)
         before = process(current)
         if not before:
             continue
@@ -60,75 +62,82 @@ def updater_process(pane, pid):
         try:
             argv = (path / 'cmdline').read_bytes().rstrip(b'\0').split(b'\0')
             env = (path / 'environ').read_bytes().split(b'\0')
-            active = registration(pane, before)
+            active = registration(token, before)
             if (argv in ([b'/usr/bin/python3', UPDATER.encode()],
                          [b'/usr/bin/python3', UPDATER.encode(), b'screen'])
                     and active
                     and before['group'] == before['foreground']
-                    and ('TMUX_PANE=' + pane).encode() in env
-                    and ('HN_SOCKET=' + active['socket']).encode() in env
+                    and ('HARNESS_UPDATE_INSTANCE=' + token).encode() in env
                     and process(current) == before):
-                # hn keeps HN_SOCKET at a stable primary alias while a new
-                # renderer's socket_path can be name@pid.sock. Resolve the
-                # alias through hn and prove that it identifies this same pane
-                # process; basename or pathname equality is not sufficient.
-                try:
-                    actual = hn('display-message', '-p', '-t', pane, '#{pane_pid}', socket=active['socket'])
-                except (OSError, subprocess.SubprocessError):
-                    actual = ''
-                if actual == str(pid):
-                    return before
-            pending.extend(int(child) for child in (path / 'task' / str(current) / 'children').read_text().split())
+                owners.append(before)
         except (OSError, ValueError):
             continue
-    return None
+    return owners[0] if len(owners) == 1 else None
 
 
 def updater_panes(socket):
     for line in hn('list-panes', '-s', '-F', FORMAT, socket=socket).splitlines():
         parts = line.split('\t')
-        if len(parts) != 5:
+        if len(parts) != 4:
             continue
-        pane, pid, dead, window, actual_socket = parts
-        if not (re.fullmatch(r'%\d+', pane) and pid.isdigit() and dead == '0'
-                and re.fullmatch(r'@\d+', window) and actual_socket == socket):
+        pane, dead, window, token = parts
+        if not (re.fullmatch(r'%\d+', pane) and dead == '0'
+                and re.fullmatch(r'@\d+', window) and re.fullmatch(r'[0-9a-f]{32}', token)):
             continue
-        owner = updater_process(pane, int(pid))
+        owner = updater_process(token)
         if owner:
-            yield pane, window, owner
+            yield pane, window, token, owner
 
 
-def open_updates():
+def open_updates(view=False):
+    if view and (os.environ.get('SSH_CONNECTION') or os.environ.get('SSH_TTY')):
+        return False  # Keep an SSH inspection on its own terminal.
     STATE.mkdir(parents=True, exist_ok=True, mode=0o700)
     # Serialize shortcut handoff, not downloads or activation. Waiting for a new
     # pane's actual process prevents rapid shortcuts from creating duplicate tabs.
     with (STATE / 'open.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        subprocess.run(['/usr/bin/harness', 'updates', 'request'], check=True, timeout=5)
-        socket = hn('display-message', '-p', '#{socket_path}')
+        if not view:
+            subprocess.run(['/usr/bin/harness', 'updates', 'request'], check=True, timeout=5)
+        try:
+            socket = hn('display-message', '-p', '#{socket_path}')
+        except (OSError, subprocess.SubprocessError):
+            if view:
+                return False
+            raise
         if not socket.startswith('/'):
+            if view:
+                return False
             raise ValueError('Harness has no active terminal. Open a terminal and try again.')
-        for pane, window, owner in updater_panes(socket):
+        for pane, window, token, owner in updater_panes(socket):
             try:
                 hn('select-window', '-t', window, socket=socket)
                 hn('select-pane', '-t', pane, socket=socket)
             except subprocess.CalledProcessError:
                 continue  # The old pane can finish closing during selection.
-            if process(owner['pid']) == owner and registration(pane, owner):
-                return
+            if (pane, window, token, owner) in updater_panes(socket):
+                return True
+        token = secrets.token_hex(16)
         pane = hn('new-window', '-P', '-F', '#{pane_id}', '-n', 'Updates',
-                  'exec /usr/bin/harness updates', socket=socket)
+                  'exec env HARNESS_UPDATE_INSTANCE=' + token + ' /usr/bin/python3 ' + UPDATER + ' screen', socket=socket)
+        if not re.fullmatch(r'%\d+', pane):
+            raise ValueError('The Updates pane did not open.')
+        hn('set-option', '-p', '-t', pane, OPTION, token, socket=socket)
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:
-            if any(item[0] == pane for item in updater_panes(socket)):
-                return
+            if any(item[0] == pane and item[2] == token for item in updater_panes(socket)):
+                return True
             time.sleep(.05)
         raise ValueError('The Updates screen did not start. Press Super+u to try again.')
 
 
 if __name__ == '__main__':
-    if not Path('/etc/harness-live').exists():
-        try:
-            open_updates()
-        except (ValueError, OSError, subprocess.SubprocessError) as error:
-            raise SystemExit('Harness updates: ' + str(error))
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--view', action='store_true', help='Inspect without requesting an update')
+    args = parser.parse_args()
+    if Path('/etc/harness-live').exists() or (args.view and os.geteuid() == 0):
+        raise SystemExit(3 if args.view else 0)
+    try:
+        raise SystemExit(0 if open_updates(view=args.view) else 3)
+    except (ValueError, OSError, subprocess.SubprocessError) as error:
+        raise SystemExit('Harness updates: ' + str(error))

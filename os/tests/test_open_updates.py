@@ -1,6 +1,7 @@
 import importlib.machinery
 import importlib.util
 import json
+import os
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import shutil
@@ -16,6 +17,7 @@ spec = importlib.util.spec_from_loader(loader.name, loader)
 updates = importlib.util.module_from_spec(spec)
 loader.exec_module(updates)
 SOCKET = '/run/user/1000/hn/default.sock'
+TOKEN, NEW_TOKEN = 'a' * 32, 'b' * 32
 
 
 class UpdatePaneOwnership(unittest.TestCase):
@@ -24,42 +26,41 @@ class UpdatePaneOwnership(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
         self.proc = self.root / 'proc'
-        self.rows, self.commands = [], []
-        self.targets = []
+        self.rows, self.commands, self.targets = [], [], []
         self.boot_id = self.root / 'boot-id'
         self.boot_id.write_text('first-boot')
-        self.alias_pid = None
         for value in [patch.object(updates, 'PROC', self.proc),
                       patch.object(updates, 'BOOT_ID', self.boot_id),
                       patch.object(updates, 'STATE', self.root / 'state'),
                       patch.object(updates, 'hn', side_effect=self.hn),
+                      patch.object(updates.secrets, 'token_hex', return_value=NEW_TOKEN),
+                      patch.dict(os.environ, {}, clear=True),
                       patch.object(updates.subprocess, 'run')]:
             value.start()
             self.addCleanup(value.stop)
         self.request = updates.subprocess.run
 
-    def process(self, pid, *, pane='%1', parent=1, group=10, foreground=10,
-                command=None, children=(), state='S', start=123, socket=SOCKET, active=True):
+    def process(self, pid, *, token=TOKEN, group=10, foreground=10,
+                command=None, state='S', start=123, active=True):
         path = self.proc / str(pid)
-        (path / 'task' / str(pid)).mkdir(parents=True, exist_ok=True)
-        # /proc/stat's comm may contain spaces and parentheses; field 22 is the
-        # process start time, not the PID or its command's human-readable name.
-        fields = [state, str(parent), str(group), '10', '34816', str(foreground)] + ['0'] * 13 + [str(start)]
+        path.mkdir(parents=True, exist_ok=True)
+        fields = [state, '1', str(group), '10', '34816', str(foreground)] + ['0'] * 13 + [str(start)]
         (path / 'stat').write_text(f'{pid} (a test (process)) ' + ' '.join(fields))
-        argv = command if command is not None else ['/usr/bin/python3', updates.UPDATER]
+        argv = command if command is not None else ['/usr/bin/python3', updates.UPDATER, 'screen']
         (path / 'cmdline').write_bytes(b'\0'.join(word.encode() for word in argv) + b'\0')
-        (path / 'environ').write_bytes(f'TMUX_PANE={pane}\0HN_SOCKET={socket}\0'.encode())
-        (path / 'task' / str(pid) / 'children').write_text(' '.join(map(str, children)))
+        # Shipped daemon-backed panes have a backend TMUX_PANE and no HN_SOCKET.
+        # Neither value may be used as the UI's pane/process mapping.
+        (path / 'environ').write_bytes(('TMUX_PANE=%999\0HARNESS_UPDATE_INSTANCE=' + token + '\0').encode())
         screens = updates.STATE / 'screens'
         screens.mkdir(parents=True, exist_ok=True)
         if active:
             (screens / str(pid)).write_text(json.dumps(dict(
-                pid=pid, start=str(start), pane=pane, socket=socket, boot_id='first-boot')))
+                pid=pid, start=str(start), token=token, boot_id='first-boot')))
         else:
             (screens / str(pid)).unlink(missing_ok=True)
 
-    def pane(self, pane='%1', pid=100, dead='0', window='@1', socket=SOCKET):
-        self.rows.append('\t'.join([pane, str(pid), dead, window, socket]))
+    def pane(self, pane='%1', dead='0', window='@1', token=TOKEN):
+        self.rows.append('\t'.join([pane, dead, window, token]))
 
     def hn(self, *args, socket=None):
         self.commands.append(args)
@@ -67,21 +68,20 @@ class UpdatePaneOwnership(unittest.TestCase):
         if args == ('display-message', '-p', '#{socket_path}'):
             self.assertIsNone(socket)
             return SOCKET
-        if args[0] == 'display-message':
-            self.assertIsNotNone(socket)
-            self.assertEqual(args[1:3], ('-p', '-t'))
-            return str(self.alias_pid) if self.alias_pid is not None and args[3] == '%1' else next(
-                (line.split('\t')[1] for line in self.rows if line.startswith(args[3] + '\t')), '')
         self.assertEqual(socket, SOCKET)
         if args[0] == 'list-panes':
             self.assertEqual(args, ('list-panes', '-s', '-F', updates.FORMAT))
             return '\n'.join(self.rows)
         if args[0] == 'new-window':
             self.assertEqual(args, ('new-window', '-P', '-F', '#{pane_id}', '-n', 'Updates',
-                                    'exec /usr/bin/harness updates'))
-            self.pane('%9', 900, window='@9')
-            self.process(900, pane='%9')
+                'exec env HARNESS_UPDATE_INSTANCE=' + NEW_TOKEN + ' /usr/bin/python3 ' + updates.UPDATER + ' screen'))
+            self.pane('%9', window='@9', token='')
+            self.process(900, token=NEW_TOKEN)
             return '%9'
+        if args[0] == 'set-option':
+            self.assertEqual(args, ('set-option', '-p', '-t', '%9', updates.OPTION, NEW_TOKEN))
+            self.rows = [line.rsplit('\t', 1)[0] + '\t' + NEW_TOKEN if line.startswith('%9\t') else line for line in self.rows]
+            return ''
         self.assertIn(args[0], ['select-window', 'select-pane'])
         return ''
 
@@ -90,14 +90,14 @@ class UpdatePaneOwnership(unittest.TestCase):
         self.assertNotIn(('select-window', '-t', 'Updates'), self.commands)
 
     def test_an_unrelated_named_shell_cannot_swallow_the_request(self):
-        self.pane()
+        self.pane(token='')
         self.process(100, command=['/bin/bash'])
         updates.open_updates()
         self.assert_created_once()
         self.assertNotIn(('select-window', '-t', '@1'), self.commands)
         self.request.assert_called_once_with(['/usr/bin/harness', 'updates', 'request'], check=True, timeout=5)
 
-    def test_a_live_updater_is_reused_by_ids_even_after_the_tab_is_renamed(self):
+    def test_daemon_backed_owner_is_reused_without_backend_pid_or_socket_fields(self):
         self.pane()
         self.process(100)
         updates.open_updates()
@@ -105,37 +105,52 @@ class UpdatePaneOwnership(unittest.TestCase):
         self.assertIn(('select-pane', '-t', '%1'), self.commands)
         self.assertFalse(any(item[0] == 'new-window' for item in self.commands))
 
-    def test_manually_opened_updater_can_be_the_pane_shells_foreground_child(self):
-        self.pane()
-        self.process(100, command=['/bin/bash'], children=[101])
-        self.process(101, parent=100, command=['/usr/bin/python3', updates.UPDATER, 'screen'])
+    def test_manual_view_creates_no_request_and_next_shortcut_reuses_its_owner(self):
+        self.assertTrue(updates.open_updates(view=True))
+        self.request.assert_not_called()
         updates.open_updates()
-        self.assertIn(('select-pane', '-t', '%1'), self.commands)
-        self.assertFalse(any(item[0] == 'new-window' for item in self.commands))
+        self.assert_created_once()
+        self.request.assert_called_once()
+        self.assertIn(('select-pane', '-t', '%9'), self.commands)
 
-    def test_missing_dead_zombie_background_and_foreign_processes_are_not_reused(self):
-        for case in ['missing', 'dead', 'zombie', 'background', 'other-pane', 'wrong-alias', 'check', 'different-script', 'closed-screen']:
+    def test_missing_dead_zombie_background_foreign_and_unregistered_are_not_reused(self):
+        for case in ['missing', 'dead', 'zombie', 'background', 'token-mismatch', 'check', 'different-script', 'closed-screen']:
             with self.subTest(case=case):
                 self.rows, self.commands = [], []
                 shutil.rmtree(self.proc, ignore_errors=True)
+                shutil.rmtree(updates.STATE, ignore_errors=True)
                 self.pane(dead='1' if case == 'dead' else '0')
-                self.alias_pid = 999 if case == 'wrong-alias' else None
                 if case != 'missing':
                     self.process(100, state='Z' if case == 'zombie' else 'S',
                                  foreground=20 if case == 'background' else 10,
-                                 pane='%2' if case == 'other-pane' else '%1',
+                                 token='c' * 32 if case == 'token-mismatch' else TOKEN,
                                  active=case != 'closed-screen',
                                  command=['/usr/bin/python3', updates.UPDATER, 'check'] if case == 'check' else
                                          ['/usr/bin/python3', '/tmp/live_update.py'] if case == 'different-script' else None)
                 updates.open_updates()
                 self.assert_created_once()
                 self.assertNotIn(('select-window', '-t', '@1'), self.commands)
-                self.alias_pid = None
 
-    def test_exiting_or_reused_process_during_selection_opens_a_fresh_updater(self):
-        for case in ['exit', 'pid-reuse', 'pane-removed']:
+    def test_registration_must_match_process_environment_not_just_custom_option(self):
+        self.pane()
+        self.process(100)
+        (self.proc / '100/environ').write_bytes(b'TMUX_PANE=%1\0')
+        updates.open_updates()
+        self.assert_created_once()
+
+    def test_ambiguous_duplicate_process_token_is_not_reused(self):
+        self.pane()
+        self.process(100)
+        self.process(101)
+        updates.open_updates()
+        self.assert_created_once()
+
+    def test_exit_pid_reuse_pane_removal_or_marker_change_during_selection_creates_new_owner(self):
+        for case in ['exit', 'pid-reuse', 'pane-removed', 'token-removed']:
             with self.subTest(case=case):
                 self.rows, self.commands = [], []
+                shutil.rmtree(self.proc, ignore_errors=True)
+                shutil.rmtree(updates.STATE, ignore_errors=True)
                 self.pane()
                 self.process(100)
                 def select(*args, **kwargs):
@@ -143,6 +158,8 @@ class UpdatePaneOwnership(unittest.TestCase):
                     if args[0] == 'select-pane':
                         if case == 'pid-reuse':
                             self.process(100, start=456)
+                        elif case == 'token-removed':
+                            self.rows = ['%1\t0\t@1\t']
                         else:
                             shutil.rmtree(self.proc / '100')
                         if case == 'pane-removed':
@@ -152,7 +169,7 @@ class UpdatePaneOwnership(unittest.TestCase):
                     updates.open_updates()
                 self.assert_created_once()
 
-    def test_rapid_shortcuts_wait_for_the_new_process_and_reuse_one_pane(self):
+    def test_rapid_shortcuts_wait_for_new_registration_and_reuse_one_pane(self):
         ready = threading.Barrier(2)
         queries = 0
         def delayed(*args, **kwargs):
@@ -190,27 +207,20 @@ class UpdatePaneOwnership(unittest.TestCase):
             updates.open_updates()
         self.assert_created_once()
 
-    def test_surviving_primary_alias_is_resolved_to_the_actual_pane_process(self):
-        self.pane()
-        self.process(100, socket='/run/user/1000/hn/primary.sock')
-        updates.open_updates()
-        self.assertIn((('display-message', '-p', '-t', '%1', '#{pane_pid}'),
-                       '/run/user/1000/hn/primary.sock'), self.targets)
-        self.assertIn((('select-pane', '-t', '%1'), SOCKET), self.targets)
-        self.assertFalse(any(item[0] == 'new-window' for item in self.commands))
-
-    def test_targeting_stays_pinned_if_the_default_client_changes_after_discovery(self):
+    def test_targeting_stays_pinned_if_default_client_changes_after_discovery(self):
         self.pane()
         self.process(100)
         updates.open_updates()
-        unpinned = [args for args, socket in self.targets if socket is None]
-        self.assertEqual(unpinned, [('display-message', '-p', '#{socket_path}')])
+        self.assertEqual([args for args, socket in self.targets if socket is None],
+                         [('display-message', '-p', '#{socket_path}')])
         self.assertIn((('select-window', '-t', '@1'), SOCKET), self.targets)
 
-    def test_registration_from_an_earlier_boot_or_reused_pid_is_not_an_owner(self):
+    def test_registration_from_earlier_boot_or_reused_pid_is_not_an_owner(self):
         for key, value in [('boot_id', 'earlier-boot'), ('start', 'earlier-process')]:
             with self.subTest(key=key):
                 self.rows, self.commands = [], []
+                shutil.rmtree(self.proc, ignore_errors=True)
+                shutil.rmtree(updates.STATE, ignore_errors=True)
                 self.pane()
                 self.process(100)
                 path = updates.STATE / 'screens/100'
@@ -219,3 +229,78 @@ class UpdatePaneOwnership(unittest.TestCase):
                 path.write_text(json.dumps(record))
                 updates.open_updates()
                 self.assert_created_once()
+
+    def test_ssh_view_and_missing_client_fall_back_without_creating_request(self):
+        with patch.dict(os.environ, {'SSH_CONNECTION': 'example'}):
+            self.assertFalse(updates.open_updates(view=True))
+        self.assertEqual(self.commands, [])
+        with patch.object(updates, 'hn', side_effect=subprocess.CalledProcessError(1, 'hn')):
+            self.assertFalse(updates.open_updates(view=True))
+        self.request.assert_not_called()
+
+
+class UpdateEntryPoints(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.opener, self.python = self.root / 'opener', self.root / 'python'
+        self.opener.write_text('#!/bin/sh\nprintf "%s\\n" "$@" > "$OPENER_LOG"\nexit "$OPENER_EXIT"\n')
+        self.python.write_text('#!/bin/sh\nprintf "%s\\n" "$@" > "$PYTHON_LOG"\n')
+        self.opener.chmod(0o755)
+        self.python.chmod(0o755)
+        self.wrapper = self.root / 'harness'
+        source = SOURCE.parents[2] / 'bin/harness'
+        self.wrapper.write_text(source.read_text().replace('/usr/lib/harness-os/open-updates', str(self.opener))
+                                .replace('/usr/bin/python3', str(self.python)))
+        self.env = dict(os.environ, OPENER_LOG=str(self.root / 'opener.log'),
+                        PYTHON_LOG=str(self.root / 'python.log'), OPENER_EXIT='0')
+        self.env.pop('SSH_CONNECTION', None)
+        self.env.pop('SSH_TTY', None)
+
+    def run_wrapper(self, *args, interactive=True):
+        master, slave = os.openpty()
+        try:
+            result = subprocess.run(['/bin/sh', str(self.wrapper), 'updates', *args],
+                                    stdin=slave if interactive else subprocess.DEVNULL,
+                                    capture_output=True, env=self.env, timeout=5)
+        finally:
+            os.close(master)
+            os.close(slave)
+        return result
+
+    def test_plain_and_screen_inspection_use_view_without_request(self):
+        for args in [(), ('screen',)]:
+            with self.subTest(args=args):
+                self.assertEqual(self.run_wrapper(*args).returncode, 0)
+                self.assertEqual((self.root / 'opener.log').read_text(), '--view\n')
+                self.assertFalse((self.root / 'python.log').exists())
+
+    def test_no_client_preserves_current_terminal_but_other_failure_does_not_duplicate_ui(self):
+        self.env['OPENER_EXIT'] = '3'
+        self.assertEqual(self.run_wrapper('screen').returncode, 0)
+        self.assertEqual((self.root / 'python.log').read_text(), '/usr/lib/harness-os/live_update.py\nscreen\n')
+        (self.root / 'python.log').unlink()
+        self.env['OPENER_EXIT'] = '1'
+        self.assertEqual(self.run_wrapper().returncode, 1)
+        self.assertFalse((self.root / 'python.log').exists())
+
+    def test_ssh_and_noninteractive_inspection_stays_in_current_terminal(self):
+        for ssh in [False, True]:
+            with self.subTest(ssh=ssh):
+                if ssh:
+                    self.env['SSH_CONNECTION'] = 'client server'
+                self.assertEqual(self.run_wrapper(interactive=ssh).returncode, 0)
+                self.assertFalse((self.root / 'opener.log').exists())
+                self.assertEqual((self.root / 'python.log').read_text(), '/usr/lib/harness-os/live_update.py\n')
+
+    def test_other_actions_and_explicit_developer_arguments_are_forwarded_unchanged(self):
+        for args in [('check',), ('request',), ('apply',), ('rollback',), ('status',), ('screen', '--feeds', '/tmp/developer.json')]:
+            with self.subTest(args=args):
+                self.assertEqual(self.run_wrapper(*args).returncode, 0)
+                self.assertFalse((self.root / 'opener.log').exists())
+                self.assertEqual((self.root / 'python.log').read_text(), '/usr/lib/harness-os/live_update.py\n' + '\n'.join(args) + '\n')
+
+
+if __name__ == '__main__':
+    unittest.main()

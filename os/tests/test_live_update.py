@@ -423,14 +423,18 @@ class FastUpdates(unittest.TestCase):
         (proc / str(pid)).mkdir(parents=True)
         (proc / str(pid) / 'stat').write_text(f'{pid} (python) ' + ' '.join(['S'] + ['0'] * 18 + ['123']))
         with (patch.object(update, 'PROC', proc),
-              patch.dict(os.environ, {'TMUX_PANE': '%7', 'HN_SOCKET': '/tmp/hn/default.sock'})):
+              patch.dict(os.environ, {'HARNESS_UPDATE_INSTANCE': 'a' * 32}, clear=True)):
             with update.screen_registration():
                 record = update.read(self.state / 'screens' / str(pid))
-                self.assertEqual(record, dict(pid=pid, start='123', pane='%7',
-                                             socket='/tmp/hn/default.sock', boot_id='first-boot'))
+                self.assertEqual(record, dict(pid=pid, start='123', token='a' * 32, boot_id='first-boot'))
                 self.assertTrue(update.close_screen())
                 self.assertFalse((self.state / 'screens' / str(pid)).exists())
                 self.assertEqual(os.getpid(), pid)  # Still before context/process cleanup.
+
+    def test_unowned_terminal_screen_does_not_register_a_backend_pane_as_ui_identity(self):
+        with patch.dict(os.environ, {'TMUX_PANE': '%7', 'HN_SOCKET': '/tmp/hn/default.sock'}, clear=True):
+            with update.screen_registration():
+                self.assertFalse((self.state / 'screens' / str(os.getpid())).exists())
 
     def test_close_waits_for_shortcut_handoff_then_preserves_its_pending_intent(self):
         from concurrent.futures import ThreadPoolExecutor
