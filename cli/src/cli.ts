@@ -177,7 +177,7 @@ import { startStalls } from './core/stall.js'
 import { createServiceLinks } from './core/serviceLinks.js'
 import { createViewersLink } from './core/viewersLink.js'
 import { createWorkspacesLink } from './core/workspacesLink.js'
-import { KNOWN_SERVICES, serviceSpecs } from './harnessd/services.js'
+import { KNOWN_SERVICES, servicesTheMasterRuns } from './harnessd/services.js'
 import { runSearchService } from './services/searchProcess.js'
 import { runViewersService } from './services/viewersProcess.js'
 import { runWorkspacesService } from './services/workspacesProcess.js'
@@ -2312,7 +2312,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // only under a master, which is what gives this core the token they connect with. Their requests are
   // routed to them, and answered SERVICE_UNAVAILABLE while they are down (core/serviceLinks.ts).
   const serviceToken = process.env.HARNESSD_SUPERVISED === '1' ? process.env.HARNESSD_SERVICE_TOKEN : undefined
-  const outOfProcess = new Set(serviceToken ? serviceSpecs(process.env, KNOWN_SERVICES).map((spec) => spec.name) : [])
+  const outOfProcess = servicesTheMasterRuns(process.env, KNOWN_SERVICES)
   // The requests each service that can run in its own process answers (its own module declares them).
   const requestsOf: Record<string, readonly string[]> = { search: SEARCH_REQUESTS }
   // What the core keeps of the viewers in their own process, for the frames it builds (core/viewersLink.ts).

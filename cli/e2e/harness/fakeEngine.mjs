@@ -29,10 +29,13 @@
 // subcommands that release no longer has, and `startDelayMs` is how long it takes, once started, before
 // it draws or announces anything (an engine's first run after an update). `firstHookDelayMs` is how long
 // its first SessionStart takes to reach the daemon once the engine is up: the hook command starting on a
-// loaded machine, while the daemon has already found the engine and its conversation.
-import { execFileSync } from 'node:child_process'
+// loaded machine, while the daemon has already found the engine and its conversation. `realHooks` runs
+// the hooks the daemon installed into the engine's settings, as the real CLIs do, instead of posting to
+// the daemon.
+import { execFileSync, spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, writeFileSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 
 export async function run(engine, config) {
@@ -145,7 +148,41 @@ export async function run(engine, config) {
     } catch { /* not bound yet, or bound where it was asked to */ }
     return config.port
   }
+  // The command the daemon installed for `event` in this engine's settings (Claude Code's settings.json,
+  // Codex's hooks.json), and how long the engine gives it; null when there is none.
+  const installedHook = (event) => {
+    const file = engine === 'claude' ? join(claudeHome ?? join(homedir(), '.claude'), 'settings.json') : join(codexHome, 'hooks.json')
+    try {
+      for (const block of JSON.parse(readFileSync(file, 'utf8'))?.hooks?.[event] ?? []) {
+        for (const entry of block?.hooks ?? []) {
+          if (entry?.type === 'command' && typeof entry.command === 'string') return { command: entry.command, timeout: Number(entry.timeout) || 60 }
+        }
+      }
+    } catch { /* no settings, or not readable: no hook */ }
+    return null
+  }
+  /** Runs an installed hook as the CLIs do: through a shell, the event's JSON on stdin, killed at its timeout. */
+  const runHook = (event, payload) => new Promise((resolve) => {
+    const installed = installedHook(event)
+    if (!installed) { resolve(); return }
+    const child = spawn('/bin/sh', ['-c', installed.command], { stdio: ['pipe', 'ignore', 'ignore'], env: process.env })
+    const timer = setTimeout(() => child.kill('SIGKILL'), installed.timeout * 1000)
+    const done = () => { clearTimeout(timer); resolve() }
+    child.on('close', done)
+    child.on('error', done)
+    child.stdin.on('error', () => {})
+    child.stdin.end(JSON.stringify(payload))
+  })
   const hook = async (path, body) => {
+    if (config.realHooks) {
+      const event = path === 'turn-stop' ? 'Stop' : path === 'session-end' ? 'SessionEnd' : body.hookEvent ?? 'SessionStart'
+      await runHook(event, {
+        session_id: sessionId, transcript_path: transcript, cwd, hook_event_name: event,
+        ...(body.source ? { source: body.source } : {}), ...(body.prompt !== undefined ? { prompt: body.prompt } : {}),
+        ...(body.reason ? { reason: body.reason } : {}),
+      })
+      return
+    }
     if (!hooksInstalled()) return
     const token = readFileSync(join(config.dataDir, 'hook-credential'), 'utf8').trim()
     const pane = process.env.TMUX_PANE
@@ -337,7 +374,8 @@ export async function run(engine, config) {
     if (open) finish('(interrupted by a new prompt)')
     // Claude Code runs its UserPromptSubmit hook on every prompt, through the same door as SessionStart:
     // the catch hook, which re-registers a session whose start-up announcement the daemon missed.
-    if (engine === 'claude') await hook('session-start', { hookEvent: 'UserPromptSubmit', prompt })
+    // Codex runs its UserPromptSubmit hook too, when the daemon installed one (`realHooks`).
+    if (engine === 'claude' || config.realHooks) await hook('session-start', { hookEvent: 'UserPromptSubmit', prompt })
     turn++
     open = `turn-${turn}`
     // Onto the row under the composer, which holds a footer while one is drawn: cleared, as Codex redraws
