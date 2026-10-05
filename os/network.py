@@ -71,6 +71,17 @@ def wired_devices():
             if len(row := fields(line)) == 3 and row[1] == 'ethernet' and row[2] != 'unavailable']
 
 
+def still_connected(network):
+    # The page can stay open through a lost connection or suspend. IN-USE is
+    # current NetworkManager state even without a new radio scan; never trust
+    # the Connected label captured when the page opened.
+    try:
+        return any(row['active'] and all(row[key] == network[key]
+                   for key in ('ssid', 'device', 'security')) for row in scan(rescan=False))
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        return False
+
+
 def saved_connection(network):
     result = nmcli('-t', '-f', 'UUID,TYPE', 'connection', 'show', wait=3)
     if result.returncode:
@@ -197,11 +208,18 @@ class NetworkPage:
         self.line(8, 'Finding Wi-Fi…')
         self.screen.refresh()
         self.message = ''
+        self.networks, self.wired = [], []
         try:
             nmcli('radio', 'wifi', 'on', wait=3)
-            self.networks, self.wired = scan(), wired_devices()
+            self.networks = scan()
         except (OSError, subprocess.TimeoutExpired, ValueError) as error:
             self.message = str(error) if isinstance(error, ValueError) else 'Wi-Fi is unavailable. Choose Rescan to try again.'
+        # A missing or unavailable Wi-Fi radio must not hide the wired path.
+        try:
+            self.wired = wired_devices()
+        except (OSError, subprocess.TimeoutExpired):
+            if not self.message:
+                self.message = 'Could not check Ethernet. Choose Rescan to try again.'
         self.selected = 0
 
     def busy(self, name):
@@ -306,7 +324,7 @@ class NetworkPage:
                         if nmcli('device', 'connect', value[0], wait=30).returncode == 0:
                             return 0
                         self.message = 'Could not connect Ethernet. Check the cable and try again.'
-                    elif value['active'] or connect(value):
+                    elif (value['active'] and still_connected(value)) or connect(value):
                         return 0
                     elif value['security'] and value['security'] != '--':
                         if self.password(value):
