@@ -2189,6 +2189,11 @@ class SwarmSearchController extends ChangeNotifier {
     if (destination.isModel &&
         !canSelectModel(destination) &&
         !canGetModel(destination)) {
+      // A Jev model has nothing to Use: clicking one shows its pane, which says how to call it.
+      if (isJevRow(destination)) {
+        final index = rows.indexWhere((row) => row.id == destination.id);
+        if (index >= 0 && index != cursor) move(index - cursor);
+      }
       return null;
     }
     if (setupLayout && (destination.isMachine || destination.isModel)) {

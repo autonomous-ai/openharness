@@ -1082,6 +1082,26 @@ void main() {
         );
         expect(ModelSearchSection.values.last, ModelSearchSection.jev);
 
+        // Clicking a Jev row shows how to call it, and neither copies nor moves the harness.
+        expect(search(tester).isJevRow(search(tester).selected), isFalse);
+        final layaRow = find.text('laya-english', findRichText: true);
+        await tester.scrollUntilVisible(
+          layaRow,
+          100,
+          scrollable: find
+              .ancestor(
+                of: find.text('Your models', findRichText: true),
+                matching: find.byType(Scrollable),
+              )
+              .first,
+        );
+        await tester.tap(layaRow);
+        await tester.pumpAndSettle();
+        expect(search(tester).selected!.title, 'laya-english');
+        expect(find.text(jevRequest('home', 'laya-english')), findsOneWidget);
+        expect(copied, isNull);
+        expect(app.selections, isEmpty);
+
         await tester.enterText(field, ':laya');
         await tester.pumpAndSettle();
         final laya = search(tester).selected!;
