@@ -85,6 +85,59 @@ async function writeE2ee(daemon: IsolatedDaemon, files: Record<string, unknown>)
   for (const [name, value] of Object.entries(files)) await writeFile(join(dir, name), JSON.stringify(value, null, 2), { mode: 0o600 })
 }
 
+/** A daemon for one machine of the account, signed in to the fake backend and nothing else. */
+async function signedInDaemon(backend: FakeBackend, spec: FakeMachine, env: Record<string, string> = {}): Promise<IsolatedDaemon> {
+  const daemon = await IsolatedDaemon.create({ env: { ...remoteSettings(backend), ADAPTER_COMPUTER_ID: spec.computerId, ...env } })
+  // The daemon inherits the runner's environment, where a registry or a proxy may be named. None of
+  // them is anywhere a fleet daemon may go.
+  for (const [key, value] of Object.entries(daemon.env)) {
+    const host = serverHost(value)
+    if (host && !loopback(host)) delete daemon.env[key]
+  }
+  assertLocalOnly(daemon.env, backend)
+  await signIn(daemon, spec)
+  return daemon
+}
+
+export interface PhoneMachine {
+  backend: FakeBackend
+  machine: FleetMachine
+  /** A phone of the account, paired with the machine: its key is trusted there as a web client. */
+  phone: { identity: Identity; token: string }
+  close(): Promise<void>
+}
+
+/** One signed-in machine and a phone paired with it, on the fake backend: what a phone reaches the
+ *  machine through, end to end encrypted and relayed. */
+export async function startPhoneMachine(options: { env?: Record<string, string> } = {}): Promise<PhoneMachine> {
+  const backend = await FakeBackend.start()
+  const spec = { machineId: 'a1'.repeat(16), computerId: 'e2e-computer-0000-0000-00000000000a', name: 'machine-a', token: 'e2e-token-machine-a', identity: newIdentity() }
+  backend.addMachine(spec)
+  const phone = { identity: newIdentity(), token: 'e2e-token-phone' }
+  backend.addUser(phone.token)
+  let daemon: IsolatedDaemon | null = null
+  try {
+    daemon = await signedInDaemon(backend, spec, options.env)
+    await writeE2ee(daemon, {
+      'identity.json': { priv: b64e(spec.identity.priv), pub: b64e(spec.identity.pub) },
+      'paired.json': [{ identityPub: b64e(phone.identity.pub), label: 'phone', pairedAt: Date.now(), role: 'web' }],
+    })
+    await daemon.start()
+    const started = daemon
+    return {
+      backend, machine: { ...spec, daemon: started }, phone,
+      async close() {
+        await started.close().catch(() => {})
+        await backend.close()
+      },
+    }
+  } catch (error) {
+    await daemon?.close().catch(() => {})
+    await backend.close()
+    throw error
+  }
+}
+
 export async function startFleet(options: FleetOptions = {}): Promise<Fleet> {
   const backend = await FakeBackend.start()
   const specs: Array<FakeMachine & { identity: Identity }> = [
@@ -100,16 +153,8 @@ export async function startFleet(options: FleetOptions = {}): Promise<Fleet> {
       const own: DaemonOptions['env'] = index === 0
         ? { ...(dial ? { CABLE_DISABLE: 'false', HARNESSD_TEST_DIAL_PORT: dial.path } : {}), ...options.envA }
         : { ...options.envB }
-      const daemon = await IsolatedDaemon.create({ env: { ...remoteSettings(backend), ADAPTER_COMPUTER_ID: spec.computerId, ...own } })
+      const daemon = await signedInDaemon(backend, spec, own)
       created.push(daemon)
-      // The daemon inherits the runner's environment, where a registry or a proxy may be named. None of
-      // them is anywhere a fleet daemon may go.
-      for (const [key, value] of Object.entries(daemon.env)) {
-        const host = serverHost(value)
-        if (host && !loopback(host)) delete daemon.env[key]
-      }
-      assertLocalOnly(daemon.env, backend)
-      await signIn(daemon, spec)
       machines.push({ ...spec, daemon })
     }
     const [a, b] = machines
