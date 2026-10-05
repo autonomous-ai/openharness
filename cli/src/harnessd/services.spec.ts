@@ -295,7 +295,11 @@ describe('ServiceSupervisor', () => {
   it('reads the services to run from the environment, keeping only known ones, once each', () => {
     const known = { search: { heapLimitMiB: 512, rssLimitMiB: 1_024 }, devices: { heapLimitMiB: 256, rssLimitMiB: 0 } }
     expect(serviceSpecs({ HARNESSD_SERVICES: ' search, nope ,devices,search,' }, known)).toEqual([search, devices])
-    expect(serviceSpecs({}, known)).toEqual([])
+    // Every service in its own process unless told otherwise: isolation is the default.
+    expect(serviceSpecs({}, known)).toEqual([search, devices])
+    expect(serviceSpecs({ HARNESSD_SERVICES: 'none' }, known)).toEqual([])
+    expect(serviceSpecs({ HARNESSD_SERVICES: '' }, known)).toEqual([])
+    expect(serviceSpecs({ HARNESSD_SERVICES: 'none,search' }, known)).toEqual([search])
     expect(serviceSpecs({ HARNESSD_SERVICES: 'toString,constructor' }, known)).toEqual([])
     // One heap limit for every service, when given as a whole number of MiB.
     expect(serviceSpecs({ HARNESSD_SERVICES: 'search', HARNESSD_SERVICE_HEAP_LIMIT_MIB: '96' }, known)).toEqual([{ ...search, heapLimitMiB: 96 }])

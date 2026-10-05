@@ -5,9 +5,11 @@
  */
 import { spawn, type ChildProcess } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { performance } from 'node:perf_hooks'
-import { trimLogFile } from '../lib/log.js'
+import { trimLogFile, ts } from '../lib/log.js'
+import { folderFingerprint } from './leanBundle.js'
+import { leanServices } from './leanServices.js'
 import { platformFromEnv, type PlatformName } from './platform.js'
 import type { MasterMessage } from './protocol.js'
 import {
@@ -25,8 +27,20 @@ export interface MasterConfig {
   /** The node binary and flags the core runs with. */
   nodePath: string
   execArgv: string[]
-  /** The CLI entry (`cli.js`, or `src/cli.ts` under tsx). */
+  /** The CLI entry (`cli.js`, or `src/cli.ts` under tsx): what the core runs, and what an update
+   *  replaces on disk. */
   scriptPath: string
+  /** What the services run instead, when it is not the CLI entry: the lean bundle the entry carries
+   *  (./leanBundle.ts), so each service parses its own code and not the whole CLI's. Only ever an
+   *  optimisation: a service starts from `scriptPath` whenever it cannot be used (./leanServices.ts). */
+  serviceScriptPath?: string
+  /** What the lean bundle's folder fingerprints to as this master starts (./leanBundle.ts
+   *  `leanFingerprint`): checked before every service is started from it. */
+  leanFingerprint?: string
+  /** The sha256 of the bundle this master's code came from, when the master was not started on
+   *  `scriptPath` itself but on the lean bundle read from it: the bundle it runs is the one it was read
+   *  from, whatever is on disk by the time this master starts. */
+  bundleFingerprint?: string
   pidFile: string
   /** Where the master records its status for `harness status` (see `writeStatusFile`). */
   statusFile?: string
@@ -229,14 +243,19 @@ export function runMaster(config: MasterConfig): Supervisor {
   // Trimmed here rather than by the core: the master outlives every core, and two trimmers rewriting
   // one file in place would race.
   const stopTrimming = trimLogEvery(config.logFile)
-  const log = (line: string) => console.log(`${new Date().toISOString().replace('T', ' ').slice(0, 23)} ${line}`)
+  // The core's stamp, local time (lib/log.ts): in UTC, the master's lines sat hours away from the core's
+  // lines around them in the one log they share.
+  const log = (line: string) => console.log(`${ts()} ${line}`)
   // Set by the launchd agent or systemd unit `harness service install` writes (./platform.ts).
   const platform = platformFromEnv(env)
   if (platform) log(`[harnessd] run by ${platform}, which starts this master again if it dies`)
   if (resume) log(`[harnessd] master re-executed (pid ${process.pid})${config.version ? ` · now v${config.version}` : ''}`)
+  if (config.serviceScriptPath && config.serviceScriptPath !== config.scriptPath) {
+    log(`[harnessd] services run from ${config.serviceScriptPath}${config.bundleFingerprint ? ', as this master does' : ''}`)
+  }
   // The bundle this master's code came from, read once, as it starts; the bundle on disk is read
   // again before every core starts.
-  const own = fingerprint(config.scriptPath)
+  const own = config.bundleFingerprint ?? fingerprint(config.scriptPath)
   const bundle = () => fingerprint(config.scriptPath)
   const markerFile = config.reexecMarkerFile
   const alive = (pid: number): boolean => { try { process.kill(pid, 0); return true } catch { return false } }
@@ -260,12 +279,21 @@ export function runMaster(config: MasterConfig): Supervisor {
   // A new one every boot, given to the core and to each service: how the core knows a service
   // connection is one this master started, and no other local process.
   const token = randomBytes(24).toString('hex')
+  const lean = leanServices({
+    scriptPath: config.scriptPath, leanPath: config.serviceScriptPath, leanFingerprint: config.leanFingerprint,
+    folderFingerprint, exists: existsSync, sameBundle: () => bundle() === own, log,
+  })
   const specs = serviceSpecs(env, KNOWN_SERVICES)
   const services = new ServiceSupervisor(specs, {
-    spawnService: (spec, extra) => coreHandle(spawn(config.nodePath, [...coreExecArgv(config.execArgv, spec.heapLimitMiB), config.scriptPath, '__service', spec.name], {
-      env: { ...env, ...extra },
-      stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
-    })),
+    spawnService: (spec, extra) => {
+      const script = lean.scriptFor(spec.name)
+      const handle = coreHandle(spawn(config.nodePath, [...coreExecArgv(config.execArgv, spec.heapLimitMiB), script, '__service', spec.name], {
+        env: { ...env, ...extra },
+        stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
+      }))
+      lean.started(spec.name, script, handle)
+      return handle
+    },
     now: () => performance.now(),
     wallClock: () => Date.now(),
     setTimer: (run, ms) => setTimeout(run, ms),
@@ -274,7 +302,7 @@ export function runMaster(config: MasterConfig): Supervisor {
   }, serviceOptions(env), { HARNESSD_SERVICE_TOKEN: token })
   const reexec = markerFile ? createReexec({
     own, current: bundle, nodePath: config.nodePath, execArgv: config.execArgv, scriptPath: config.scriptPath, env, pid: process.pid,
-    execve,
+    execve, exists: existsSync,
     probe: (args, probeEnv) => runProbe(config.nodePath, args, probeEnv),
     stopChildren: (done) => services.stop(done),
     startChildren: () => services.start(),

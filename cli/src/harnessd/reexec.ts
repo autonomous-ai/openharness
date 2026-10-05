@@ -184,6 +184,8 @@ export interface ReexecDeps {
   pid: number
   /** `process.execve`, where this Node has it (22.15 and 23.11 on). */
   execve: ((file: string, args: string[], env: NodeJS.ProcessEnv) => void) | null
+  /** Whether a file is there: the node binary and the bundle, checked right before the exec. */
+  exists(path: string): boolean
   probe(args: string[], env: NodeJS.ProcessEnv): { result: Promise<ProbeResult>; cancel(): void }
   /** Stop the services and wait for them to be gone, so none is left a zombie or an orphan. */
   stopChildren(done: () => void): void
@@ -257,10 +259,22 @@ export function createReexec(deps: ReexecDeps): {
             carryOn('kept')
             return
           }
+          // An exec that fails cannot be caught once it has begun: on Node 22.23 a node binary that is not
+          // there aborts this process (exit 134), and a bundle that is not there ends it in the new image
+          // (MODULE_NOT_FOUND), the marker left behind for the next master to roll the update back. Both
+          // were there for the probe a moment ago; they are checked again here, right before.
+          const missing = [deps.nodePath, deps.scriptPath].find((path) => !deps.exists(path))
+          if (missing) {
+            deps.removeMarker()
+            deps.log(`[harnessd] ${missing} is not there to re-execute on — keeping this master`)
+            carryOn('kept')
+            return
+          }
           try {
             // Never returns: from here this process is the new bundle's master, with the same pid.
             deps.execve!(deps.nodePath, [deps.nodePath, ...args, '__harnessd'], env)
           } catch (error) {
+            // Only what `process.execve` refuses before it begins: arguments it cannot take.
             deps.removeMarker()
             deps.log(`[harnessd] could not re-execute this master (${error instanceof Error ? error.message : String(error)}) — keeping it`)
             carryOn('kept')

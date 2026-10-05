@@ -21,6 +21,7 @@ import { dirname, join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it, onTestFailed } from 'vitest'
 import { LocalClient, type Frame } from './harness/client.js'
 import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
+import { atVersion } from './harness/release.js'
 
 const FIRST = '42.0.1'
 const sha = (bytes: Buffer): string => createHash('sha256').update(bytes).digest('hex')
@@ -96,7 +97,7 @@ describe('the master re-executing itself on an update', () => {
     const release = (version: string, inject = ''): void => {
       // The version is baked in at build time; the others are the same bytes with it swapped, and a
       // fault put in at the top where a test needs one.
-      const source = first.replaceAll(FIRST, version).replace('\n', `\n${inject}\n`)
+      const source = atVersion(first, FIRST, version).replace('\n', `\n${inject}\n`)
       const file = join(out, `cli-${version}.js`)
       writeFileSync(file, source)
       expect(execFileSync(process.execPath, [file, 'version'], { encoding: 'utf8' }).trim()).toBe(version)

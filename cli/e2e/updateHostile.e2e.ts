@@ -24,6 +24,7 @@ import { join } from 'node:path'
 import { afterAll, afterEach, beforeAll, describe, expect, it, onTestFailed } from 'vitest'
 import { LocalClient, type Frame } from './harness/client.js'
 import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
+import { atVersion } from './harness/release.js'
 
 const FIRST = '43.0.1'
 const DISKFULL = process.env.DISKFULL === '1' && process.platform === 'darwin'
@@ -66,7 +67,8 @@ class Releases {
   readonly cli = new Map<string, Buffer>()
   readonly notify = new Map<string, Buffer>()
   add(version: string, inject = ''): void {
-    const source = built.replaceAll(FIRST, version).replace('\n', `\n${inject}\n`)
+    // In the lean bundle cli.js carries for the master and the services too (e2e/harness/release.ts).
+    const source = atVersion(built, FIRST, version).replace('\n', `\n${inject}\n`)
     const file = join(buildDir, `cli-${version}.js`)
     writeFileSync(file, source)
     expect(execFileSync(process.execPath, [file, 'version'], { encoding: 'utf8' }).trim()).toBe(version)

@@ -122,8 +122,8 @@ describe('the DSH viewers in their own process', () => {
     return d
   }
 
-  it('by default the viewers stay in the core\'s process, as before', async () => {
-    const d = await fresh('')
+  it('with HARNESSD_SERVICES=none the viewers stay in the core\'s process, as before', async () => {
+    const d = await fresh('none')
     const client = await LocalClient.connect(d)
     const sketch = await create(d, client, 'sketch-default', { dsh: HARNESS })
     const answer = await serves(await viewerUrl(client, sketch.id))

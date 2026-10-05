@@ -179,18 +179,16 @@ import { createServiceLinks } from './core/serviceLinks.js'
 import { createViewersLink } from './core/viewersLink.js'
 import { createWorkspacesLink } from './core/workspacesLink.js'
 import { KNOWN_SERVICES, servicesTheMasterRuns } from './harnessd/services.js'
-import { runSearchService } from './services/searchProcess.js'
-import { runViewersService } from './services/viewersProcess.js'
-import { runWorkspacesService } from './services/workspacesProcess.js'
 import { createTeamsLink } from './core/teamsLink.js'
-import { runTeamsService } from './services/teamsProcess.js'
 import { SEARCH_REQUESTS, startSearch } from './services/search.js'
 import { STORE_REQUESTS, startStore } from './services/store.js'
 import { startViewers } from './services/viewers.js'
 import { MODELS_REQUESTS, startModels } from './services/models.js'
 import { startWorkspaces } from './services/workspaces.js'
 import { startFleet } from './services/fleet.js'
-import { describeMasterStatus, probeMaster, readStatusFile, runMaster } from './harnessd/master.js'
+import { describeMasterStatus, readStatusFile } from './harnessd/master.js'
+import { probeThisMaster, startMaster } from './masterProcess.js'
+import { startServiceProcess } from './serviceProcess.js'
 import { CORE_EXIT_STOP, CORE_EXIT_UPDATE } from './harnessd/protocol.js'
 import { isLocalSocketName, localSocketPath, refuseServedDataFolder, type LocalSocketServer } from './lib/localSocket.js'
 import { legacyDaemonStatus, localDaemonStatus, saveDaemonPort } from './lib/daemonEndpoint.js'
@@ -220,7 +218,7 @@ import { DeviceLogSyncer, type DeviceLogFetched } from './lib/e2ee/deviceLogSync
 import { DeviceLogStore } from './lib/e2ee/deviceLogStore.js'
 import { TrustGroupStore, type GroupMember } from './lib/e2ee/trustGroup.js'
 import {
-  startSelfUpdater, restore as restoreUpdate, confirm as confirmUpdate, unjudgedUpdate,
+  startSelfUpdater, restore as restoreUpdate, confirm as confirmUpdate,
   fetchManifest, downloadVerified, canary, stage, semverGt, isLocalDevBuild,
   type Poller, type UpdateEntry,
 } from './lib/selfUpdate.js'
@@ -257,8 +255,6 @@ import {
 
 // Daemon stdout/stderr. Capped at LOG_MAX_BYTES — see prepareLogFile/trimLogFile in lib/log.ts.
 const LOG_FILE = DAEMON_LOG_FILE
-/** Where a master re-executing on a new bundle leaves word of it, until that master's core is up. */
-const HARNESSD_REEXEC_FILE = join(env.ADAPTER_DATA_DIR, 'harnessd-reexec.json')
 // Pre-rename name. Adopted (renamed, keeping the inode) the first time a daemon opens the log, so a
 // machine that updates mid-run keeps its history instead of stranding it in a file nobody tails.
 // The log has had three names; this slot holds the OLDEST. The middle one (`machine.log`) is adopted
@@ -5488,36 +5484,16 @@ switch (cmd) {
   case 'join':
     console.error('`harness join` has been removed. Run `harness login`, then `harness start`.')
     process.exit(1)
+  // The bundle starts these three without loading this file (entry.ts); from the sources they come here.
   case '__harnessd': // internal: the master `harness start` launches; it runs and supervises `__run`
-    runMaster({
-      nodePath: process.execPath,
-      execArgv: process.execArgv,
-      scriptPath: SCRIPT_PATH,
-      pidFile: PID_FILE,
-      statusFile: HARNESSD_STATUS_FILE,
-      logFile: LOG_FILE,
-      restoreUpdate: () => restoreUpdate(env.ADAPTER_CLI_DIR),
-      confirmUpdate: () => confirmUpdate(env.ADAPTER_CLI_DIR),
-      version: VERSION,
-      reexecMarkerFile: HARNESSD_REEXEC_FILE,
-      unjudgedUpdate: (bundle) => unjudgedUpdate(env.ADAPTER_CLI_DIR, bundle),
-    })
+    startMaster({ scriptPath: SCRIPT_PATH })
     break
   case '__harnessd-probe': // internal: a master about to re-execute on this bundle asks it first (harnessd/reexec.ts)
-    process.exitCode = probeMaster({ env: process.env, execArgv: process.execArgv, version: VERSION })
+    process.exitCode = probeThisMaster()
     break
-  case '__service': { // internal: a service harnessd's master runs in its own process (services/process.ts)
-    const socketPath = localSocketPath(env.ADAPTER_DATA_DIR, env.PORT)
-    const runService = rest[0] === 'search' ? runSearchService : rest[0] === 'viewers' ? runViewersService
-      : rest[0] === 'workspaces' ? runWorkspacesService : rest[0] === 'teams' ? runTeamsService : null
-    if (!runService || !socketPath) {
-      console.error(`[service] ${rest[0] ?? '(none)'}: ${socketPath ? 'no such service in this build' : 'the core has no local socket to reach'}`)
-      process.exit(2)
-    }
-    process.title = `harnessd ${rest[0]}`
-    runService({ dataDir: env.ADAPTER_DATA_DIR, socketPath, machineId: computerId(), token: process.env.HARNESSD_SERVICE_TOKEN ?? '' })
+  case '__service': // internal: a service harnessd's master runs in its own process (serviceProcess.ts)
+    void startServiceProcess(rest[0])
     break
-  }
   case '__run': // internal: the detached daemon child reads the durable SSO session — or runs without one
     // Inert unless the end-to-end suite asks for its event loop to be held (core/stall.ts).
     startStalls(testFaults(process.env.HARNESSD_TEST_FAULTS))

@@ -13,7 +13,7 @@
  * Module singleton (like the ws `clients` set) — imported by routes + reaper.
  */
 
-import { DSH_ID_RE } from '../dsh/manifest.js'
+import { DSH_ID_RE } from '../dsh/id.js'
 import { AGENT_NAME_RE } from './engineLaunch.js'
 import { resumesConversation } from './resumeCapability.js'
 import { namingTitle } from './sessionTitle.js'
