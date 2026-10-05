@@ -8,11 +8,28 @@ import subprocess
 import tarfile
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import package_image_binding as binding
 
 
 class PackageImageBindingTests(unittest.TestCase):
+    def test_version_identification_handles_unsquashfs_exit_convention_only(self):
+        for tool, code, output, valid in [
+                ('unsquashfs', 1, 'unsquashfs version 4.6.1 (2023/03/25)\n', True),
+                ('unsquashfs', 0, 'unsquashfs version 4.7.2\n', True),
+                ('unsquashfs', 1, 'unknown option\n', False),
+                ('unsquashfs', 127, 'unsquashfs version 4.6.1\n', False),
+                ('xorriso', 1, 'xorriso 1.5.6\n', False),
+                ('xorriso', 0, 'xorriso 1.5.6\n', True)]:
+            result = subprocess.CompletedProcess([tool, '-version'], code, output, '')
+            with self.subTest(tool=tool, code=code, output=output), patch.object(binding.subprocess, 'run', return_value=result):
+                if valid:
+                    self.assertEqual(binding.tool_version(tool)['version_exit_code'], code)
+                else:
+                    with self.assertRaises(ValueError):
+                        binding.tool_version(tool)
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)

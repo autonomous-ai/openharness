@@ -25,6 +25,19 @@ def identity(path):
     return {'bytes': path.stat().st_size, 'sha256': value}
 
 
+def tool_version(tool):
+    result = subprocess.run([tool, '-version'], capture_output=True, text=True, timeout=10)
+    value = (result.stdout + result.stderr).strip()
+    # SquashFS 4.6.1 prints the version then exits 1 without a filesystem
+    # argument. This applies only to its identification command; every actual
+    # listing/extraction below still requires exit 0.
+    allowed = {0, 1} if tool == 'unsquashfs' else {0}
+    prefix = r'^unsquashfs version \d+\.' if tool == 'unsquashfs' else r'^xorriso \d+\.'
+    if result.returncode not in allowed or not re.search(prefix, value):
+        raise ValueError(f'Cannot identify extraction tool: {tool} (exit {result.returncode}): {value}')
+    return {'version': value, 'version_exit_code': result.returncode}
+
+
 def safe_path(value):
     path = PurePosixPath(value)
     # These are OS-owned paths, not arbitrary user filenames. In particular,
@@ -199,13 +212,10 @@ def bind(iso, bundle, output):
                       runtime=manifest['runtime'], package_version=manifest['package']['version'])
         record['tools'] = {'python': {'version': sys.version, 'path': sys.executable,
                                      **identity(Path(sys.executable))}}
-        for tool, flag in [('xorriso', '-version'), ('unsquashfs', '-version')]:
-            result = subprocess.run([tool, flag], capture_output=True, text=True, timeout=10)
-            if result.returncode:
-                raise ValueError('Cannot identify extraction tool: ' + tool)
+        for tool in ('xorriso', 'unsquashfs'):
+            version = tool_version(tool)
             executable = Path(shutil.which(tool)).resolve()
-            record['tools'][tool] = {'version': (result.stdout + result.stderr).strip(),
-                                     'path': str(executable), **identity(executable)}
+            record['tools'][tool] = {**version, 'path': str(executable), **identity(executable)}
         with tempfile.TemporaryDirectory(prefix='harness-package-image-') as temporary:
             payload = Path(temporary) / 'airootfs.sfs'
             subprocess.run(['xorriso', '-no_rc', '-osirrox', 'on', '-indev', str(iso), '-extract',
