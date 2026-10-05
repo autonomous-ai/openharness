@@ -1966,6 +1966,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   let autonomousDeviceDirect: AutonomousDeviceDirect | undefined
   let deviceStoreRef: ReturnType<typeof createDeviceStore> | undefined
   let autonomousDeviceService: AutonomousDeviceService | undefined
+  let devicePartsBuilt = false
   let appFormWindow: { machineId: string; connId: string } | undefined
   let appVoiceFocus: { machineId: string; agentId: string; connId: string } | undefined
   let backendRef: BackendSocket | undefined
@@ -2717,7 +2718,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const { server: hookServer, port: hookPort, localSocket } = await startHookServer(daemonPort(), {
     onCommandBar: commandBarService,
     onAutonomousDeviceRequest: async (method, target, body) => {
-      if (!autonomousDeviceService) return { status: 503, body: { error: { code: 'UNAVAILABLE', message: 'Autonomous device service is starting' } } }
+      // Until the pieces below are built; after, a piece that could not be is refused by the requests
+      // that need it, and the rest (list, status, revoke) answer from the pairings.
+      if (!devicePartsBuilt) return { status: 503, body: { error: { code: 'UNAVAILABLE', message: 'Autonomous device service is starting' } } }
       return autonomousDeviceLocalRequest({
         discover: async () => ({ devices: await runningDevicePart(autonomousDeviceDirect, 'Wi-Fi device link').discover() }),
         pairStart: ({ code, device }) => runningDevicePart(autonomousDeviceDirect, 'Wi-Fi device link').pair(device, code),
@@ -2733,7 +2736,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
           if (!result.ok) throw Object.assign(new Error(result.error), { code: result.error })
           return { revoked: 1 }
         },
-        receipt: target => ({ receipt: autonomousDeviceService!.receipt(target.deviceId, target.idempotencyKey) }),
+        receipt: target => ({ receipt: runningDevicePart(autonomousDeviceService, 'Wi-Fi device service').receipt(target.deviceId, target.idempotencyKey) }),
       }, method, target, body)
     },
     resolveHookAgent: engineHooks.resolveHookAgent,
@@ -4030,7 +4033,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   }))
   if (appVoiceFocus) autonomousDeviceService?.appFocus(appVoiceFocus.machineId, appVoiceFocus.agentId, appVoiceFocus.connId)
   if (autonomousDeviceService) backend.setAutonomousDeviceService(autonomousDeviceService)
-  autonomousDeviceDirect = startDevicePart('Wi-Fi device link', () => new AutonomousDeviceDirect({
+  // No link without the service: a device it connected would be answered by nothing.
+  autonomousDeviceDirect = autonomousDeviceService && startDevicePart('Wi-Fi device link', () => new AutonomousDeviceDirect({
     machineId: backend.machineId, label: hostname(),
     receive: (connId, frame, pairing) => backend.receiveDirectDevice(connId, frame, pairing),
     attach: (connId, send) => backend.attachDirectDevice(connId, send),
@@ -4042,6 +4046,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   }, env.ADAPTER_DATA_DIR))
   backend.onDirectDeviceRevoked = fp => autonomousDeviceDirect?.revoked(fp)
   autonomousDeviceDirect?.start()
+  devicePartsBuilt = true
 
   // Worktrees Harness made that no live or stopped harness uses and nothing would miss
   // (services/workspaces.ts): a few minutes after start, once restored agents are back in the
