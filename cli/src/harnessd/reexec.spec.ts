@@ -114,8 +114,12 @@ describe('the probe', () => {
   it('passes a bundle whose master answers, and says why one that does not fails', async () => {
     const ok = await runProbe(process.execPath, [script(`console.log('loading'); console.log(${JSON.stringify(PROBE_ANSWER)} + ' · protocol 2')`), PROBE_COMMAND], process.env).result
     expect(ok).toEqual({ ok: true, detail: `${PROBE_ANSWER} · protocol 2` })
-    expect(await runProbe(process.execPath, [script(`console.error('Unknown command: ' + process.argv[2]); process.exit(1)`), PROBE_COMMAND], process.env).result)
+    // A bundle from before probes: its usage on stdout, the reason on stderr, which is what is said.
+    expect(await runProbe(process.execPath, [script(`console.error('Unknown command: ' + process.argv[2]); console.log('Usage: harness …\\n  harness --help'); process.exit(1)`), PROBE_COMMAND], process.env).result)
       .toEqual({ ok: false, detail: `Unknown command: ${PROBE_COMMAND}` })
+    // An answer on stderr is no answer.
+    expect(await runProbe(process.execPath, [script(`console.error(${JSON.stringify(PROBE_ANSWER)})`), PROBE_COMMAND], process.env).result)
+      .toEqual({ ok: false, detail: PROBE_ANSWER })
     expect(await runProbe(process.execPath, [script('console.log("something else")'), PROBE_COMMAND], process.env).result)
       .toEqual({ ok: false, detail: 'something else' })
     expect(await runProbe(process.execPath, [script('process.exit(4)')], process.env).result).toEqual({ ok: false, detail: 'exit 4' })

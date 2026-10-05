@@ -137,10 +137,12 @@ export function runProbe(
   start: (file: string, args: string[], env: NodeJS.ProcessEnv) => ChildProcess = (file, argv, environment) => spawn(file, argv, { env: environment, stdio: ['ignore', 'pipe', 'pipe'] }),
 ): { result: Promise<ProbeResult>; cancel(): void } {
   const child = start(nodePath, args, env)
-  let said = ''
-  const take = (chunk: Buffer) => { said += chunk.toString('utf8') }
-  child.stdout?.on('data', take)
-  child.stderr?.on('data', take)
+  // Apart: a bundle from before probes answers with its usage on stdout and the reason on stderr.
+  let out = ''
+  let err = ''
+  child.stdout?.on('data', (chunk: Buffer) => { out += chunk.toString('utf8') })
+  child.stderr?.on('data', (chunk: Buffer) => { err += chunk.toString('utf8') })
+  const lastLine = (text: string): string => { const lines = text.trim().split('\n'); return lines[lines.length - 1].trim() }
   const result = new Promise<ProbeResult>((resolve) => {
     let settled = false
     const done = (ok: boolean, detail: string) => {
@@ -155,9 +157,7 @@ export function runProbe(
     }, timeoutMs)
     child.on('error', (error) => done(false, error.message))
     child.on('close', (code, signal) => {
-      const lines = said.trim().split('\n')
-      const last = lines[lines.length - 1].trim()
-      done(code === 0 && said.includes(PROBE_ANSWER), last || (signal ? `signal ${signal}` : `exit ${code}`))
+      done(code === 0 && out.includes(PROBE_ANSWER), lastLine(err) || lastLine(out) || (signal ? `signal ${signal}` : `exit ${code}`))
     })
   })
   return { result, cancel: () => { try { child.kill('SIGKILL') } catch { /* gone */ } } }
