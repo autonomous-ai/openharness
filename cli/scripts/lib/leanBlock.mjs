@@ -13,7 +13,7 @@
  * brotli-compressed and base64-encoded: base64 never contains the `*` and `/` that would end a comment.
  */
 import { createHash } from 'node:crypto'
-import { brotliCompressSync, constants } from 'node:zlib'
+import { brotliCompressSync, brotliDecompressSync, constants } from 'node:zlib'
 
 /** Where the lean bundle starts, at the very end of cli.js. src/harnessd/leanBundle.ts looks for it. */
 export const LEAN_MARKER = '/*@harness-lean:'
@@ -25,4 +25,24 @@ export function leanBlock(files) {
   const sha256 = createHash('sha256').update(payload).digest('hex')
   const packed = brotliCompressSync(payload, { params: { [constants.BROTLI_PARAM_QUALITY]: 11 } }).toString('base64')
   return `\n${LEAN_MARKER}${sha256}:${packed}*/\n`
+}
+
+/**
+ * The files the comment at the end of [bundle] (cli.js's bytes) carries, by name; null when it carries
+ * none or one that does not match its checksum. For the release script's check
+ * (scripts/check-lean-bundle.mjs); the daemon reads it with src/harnessd/leanBundle.ts.
+ */
+export function readLeanBlock(bundle) {
+  const text = Buffer.from(bundle).toString('latin1')
+  const start = text.lastIndexOf(LEAN_MARKER)
+  if (start < 0) return null
+  const end = text.indexOf('*/', start)
+  if (end < 0 || text.slice(end + 2).trim() !== '') return null
+  const body = text.slice(start + LEAN_MARKER.length, end)
+  const [sha256, packed] = body.split(':')
+  if (!/^[0-9a-f]{64}$/.test(sha256 ?? '') || !packed) return null
+  let payload
+  try { payload = brotliDecompressSync(Buffer.from(packed, 'base64')) } catch { return null }
+  if (createHash('sha256').update(payload).digest('hex') !== sha256) return null
+  return JSON.parse(payload.toString('utf8'))
 }

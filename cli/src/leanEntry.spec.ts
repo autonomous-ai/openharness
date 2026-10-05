@@ -6,7 +6,7 @@
  * one of them, 8 to 19 MiB each, measured 2026-10-05).
  */
 import { execFileSync, spawnSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -62,6 +62,26 @@ describe('the lean bundle a release carries', () => {
     expect(hasZod(new Set(files.keys())), 'the bundle still holds zod, for the services whose own code uses it').toBe(true)
     for (const role of ['master', 'search', 'workspaces']) expect(hasZod(loads(role)), role).toBe(false)
   })
+
+  it('passes the release script\'s check, which a lean bundle that breaks a process does not', async () => {
+    // @ts-expect-error — plain ESM with no declaration file
+    const { leanBlock } = await import('../scripts/lib/leanBlock.mjs') as { leanBlock: (files: Record<string, string>) => string }
+    const check = (cli: string) => spawnSync(process.execPath, ['scripts/check-lean-bundle.mjs', cli], { cwd: CLI_ROOT, encoding: 'utf8', timeout: 120_000 })
+    const good = check(join(scratch, 'build', 'cli.js'))
+    expect(good.status, good.stderr).toBe(0)
+    expect(good.stdout).toMatch(/the master answers its probe, and \d+ modules load/)
+    const search = [...files.keys()].find((name) => name.startsWith('searchProcess-'))!
+    const broken = join(scratch, 'broken.js')
+    writeFileSync(broken, `console.log("cli")\n${leanBlock({ ...Object.fromEntries(files), [search]: 'throw new Error("a broken service")' })}`)
+    const bad = check(broken)
+    expect(bad.status).toBe(1)
+    expect(bad.stderr).toContain(`${search} does not load`)
+    expect(bad.stderr).toContain('a broken service')
+    writeFileSync(broken, `console.log("cli")\n${leanBlock({ ...Object.fromEntries(files), [LEAN_ENTRY]: 'process.exit(5)' })}`)
+    expect(check(broken).stderr).toContain('its master does not answer its probe')
+    writeFileSync(broken, 'console.log("no lean bundle")\n')
+    expect(check(broken).stderr).toContain('carries no lean bundle')
+  }, 120_000)
 
   it('starts as written out: its master answers the probe a re-executing master asks', () => {
     const run = spawnSync(process.execPath, [entry, '__harnessd-probe'], {
