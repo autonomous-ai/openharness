@@ -419,6 +419,14 @@ export function createAttach({
     // interrupted message starting anew (core/transcripts/relaunch.ts).
     if (historyTurnOpen && !handover.hold && relaunch?.engineStarted) {
       console.log(`[agent] ${sid(session.agentId)} left the turn open at attach as history · it began before its engine was started again`)
+      // Closed in the normalizer too, and as silently. Left open, the next message's start ended it first:
+      // a turn_ended for a turn no client saw start (a "done" and its notification), a team's or the
+      // orchestrator's delivery read as ended before it started, and the agent working until then.
+      const folds: Array<Map<string, { closeTurn(): unknown }>> = [codexNormalizers, cursorNormalizers, museNormalizers, ampNormalizers,
+        grokNormalizers, agyNormalizers, copilotNormalizers, piNormalizers, commandcodeNormalizers]
+      for (const fold of folds) fold.get(session.sessionId)?.closeTurn()
+      const state = turnStates.get(session.sessionId)
+      if (state) { state.turnOpen = false; state.pendingTools.clear() }
     } else if (historyTurnOpen && !handover.hold) {
       const opened = historyEvents.findLast((event) => event.type === 'turn_started')
       if (opened) {

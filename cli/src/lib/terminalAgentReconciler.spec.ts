@@ -669,13 +669,14 @@ describe('a pass with a deadline', () => {
       current: () => [session()], backends: [], backendOrder: ['tmux'],
       onDiscovered: vi.fn(), onObserved: vi.fn(), onDormant, onRemoved, probe: probed, passDeadlineMs: 50,
     })
-    // Before, this never returned: not to a hook waiting to bind, nor to anything after it.
-    await reconciler.triggerHint(tmux, 'claude')
+    // Before, this never returned: not to a hook waiting to bind, nor to anything after it. It says the
+    // pass was not done, so the hook knows to wait for its agent another way.
+    await expect(reconciler.triggerHint(tmux, 'claude')).resolves.toBe(false)
     expect(warn).toHaveBeenCalledWith('[discovery] the terminal probe has not answered in 50 ms; this pass is given up, every agent kept as it is')
     expect(onRemoved).not.toHaveBeenCalled()
     expect(onDormant).not.toHaveBeenCalled()
     answer = probe(available())
-    await reconciler.trigger()
+    await expect(reconciler.trigger()).resolves.toBe(true)
     expect(probed).toHaveBeenCalledTimes(2)
     // The hint the given-up pass did not use is still there for the one that answered.
     expect(probed.mock.calls[1]).toEqual([new Map([[terminalRouteKey(tmux), 'claude']])])

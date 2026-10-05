@@ -174,7 +174,8 @@ export class TerminalAgentReconciler {
     this.timer = null
   }
 
-  triggerHint(runtime: TerminalRuntimeRef, engine: AgentEngine): Promise<void> {
+  /** Asks for a pass that knows `engine` is starting in `runtime`'s pane. As [trigger]. */
+  triggerHint(runtime: TerminalRuntimeRef, engine: AgentEngine): Promise<boolean> {
     this.hints.set(terminalRouteKey(runtime), engine)
     return this.trigger()
   }
@@ -250,23 +251,30 @@ export class TerminalAgentReconciler {
     })
   }
 
-  trigger(): Promise<void> {
+  /** Asks for a pass, and resolves once it is done: true, or false when the pass outran its deadline
+   *  ([RECONCILE_PASS_DEADLINE_MS]) and the caller goes on without what it would have found. */
+  trigger(): Promise<boolean> {
     this.pending = true
     // Return promptly to startup hooks: waiting for start() here can hold up the very engines
     // restore is trying to launch. The opening pass consumes every retained hint after restore.
-    if (this.waitingForStart) return Promise.resolve()
+    if (this.waitingForStart) return Promise.resolve(true)
     if (!this.inFlight) this.inFlight = this.drain().finally(() => { this.inFlight = null })
     return this.waitFor(this.inFlight)
   }
 
   /** A pass, waited for until the pass deadline and no longer: see [RECONCILE_PASS_DEADLINE_MS]. */
-  private async waitFor(pass: Promise<void>): Promise<void> {
-    if (await withinDeadline(pass, this.passDeadlineMs) !== GIVEN_UP) return
-    if (this.overdue === pass) return
-    this.overdue = pass
-    console.warn(`[discovery] a pass has run for ${this.passDeadlineMs} ms; whoever waits for it goes on without it`)
+  private async waitFor(pass: Promise<void>): Promise<boolean> {
+    // Done in time, but on a probe it gave up: it found nothing either.
+    if (await withinDeadline(pass, this.passDeadlineMs) !== GIVEN_UP) return !this.probeGivenUp
+    if (this.overdue !== pass) {
+      this.overdue = pass
+      console.warn(`[discovery] a pass has run for ${this.passDeadlineMs} ms; whoever waits for it goes on without it`)
+    }
+    return false
   }
   private overdue: Promise<void> | null = null
+  /** Whether the last pass gave up on its probe. */
+  private probeGivenUp = false
   private get passDeadlineMs(): number { return this.deps.passDeadlineMs ?? RECONCILE_PASS_DEADLINE_MS }
 
   private async drain(): Promise<void> {
@@ -300,6 +308,7 @@ export class TerminalAgentReconciler {
         this.deps.daemonPid ?? process.pid,
         hints,
       ), this.passDeadlineMs)
+    this.probeGivenUp = probe === GIVEN_UP
     if (probe === GIVEN_UP) {
       console.warn(`[discovery] the terminal probe has not answered in ${this.passDeadlineMs} ms; this pass is given up, every agent kept as it is`)
       return

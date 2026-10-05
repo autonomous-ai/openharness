@@ -38,6 +38,64 @@ describe('what a message is not typed into', () => {
     }
   })
 
+  it('is a permission prompt whose rows wrapped in a narrow pane, read by its question alone', () => {
+    // Ink wraps a long row onto a line of its own, which ends the run of numbered rows the prompt is
+    // otherwise read by. Claude Code's edit, write and fetch prompts then went unseen, and the Enter
+    // after the paste approved the edit.
+    const edit = fixture('permission-claude-edit.txt').replace('Yes, allow all edits during this session ', 'Yes, allow all edits during this\n      session ')
+    expect(edit).not.toBe(fixture('permission-claude-edit.txt'))
+    expect(messageHold('claude', edit)).toBe('permission_open')
+    const fetch = [
+      '\u001b[38;5;239m❯ \u001b[38;5;231msummarise https://example.com\u001b[39m',
+      '',
+      '⏺ Fetch(https://example.com)',
+      RULE,
+      ' Fetch',
+      '   https://example.com',
+      ' Do you want to allow Claude to fetch this content?',
+      ' ❯ 1. Yes',
+      '   2. Yes, and don\u2019t ask again for',
+      '      example.com',
+      '   3. No, and tell Claude what to do differently',
+      '      (esc)',
+    ].join('\n')
+    expect(messageHold('claude', fetch)).toBe('permission_open')
+    const plan = fixture('permission-claude-plan.txt')
+    expect(messageHold('claude', plan)).toBe('permission_open')
+  })
+
+  it('is not a numbered list in the output of a turn at work, over its spinner', () => {
+    const working = [
+      '❯ tidy up the release script',
+      '',
+      '⏺ Here is the plan:',
+      '  1. Run the existing tests first',
+      '  2. Rename the helper',
+      '  3. Stop publishing the debug build',
+      '',
+      '✻ Pondering… (12s · ↓ 1.2k tokens · esc to interrupt)',
+      '',
+      RULE, '❯ ', RULE, '  ? for shortcuts',
+    ].join('\n')
+    expect(messageHold('claude', working)).toBeNull()
+    const codex = ['› tidy up the release script', '', '• Plan:', '  1. Run the existing tests first', '  2. Stop publishing the debug build', '', '◦ Working (5s • esc to interrupt)', '', '› ', '', '  ? for shortcuts'].join('\n')
+    expect(messageHold('codex', codex)).toBeNull()
+  })
+
+  it('is not a draft or an echo that asks a question of its own', () => {
+    expect(messageHold('claude', CLAUDE_PROMPT.replace('Try "fix lint errors"', 'Do you want to add tests? Would you like to proceed?'))).toBeNull()
+    const answered = [
+      '❯ Do you want to rename the module?',
+      '',
+      '⏺ Renamed it. Do you want to run the tests too?',
+      RULE,
+      '❯ ',
+      RULE,
+      '  ? for shortcuts',
+    ].join('\n')
+    expect(messageHold('claude', answered)).toBeNull()
+  })
+
   it('is a question, which is answered through its own path', () => {
     for (const [engine, name] of [['claude', 'question-single.txt'], ['claude', 'question-multi.txt'], ['codex', 'question-codex.txt']] as const) {
       expect(messageHold(engine, fixture(name)), name).toBe('question_open')
@@ -47,6 +105,10 @@ describe('what a message is not typed into', () => {
   it('is, in Claude Code and Codex, a menu, a picker for a point to rewind to, or Claude Code\'s transcript view', () => {
     expect(messageHold('codex', CODEX_MODEL_MENU)).toBe('menu_open')
     expect(messageHold('claude', CLAUDE_REWIND_LIST)).toBe('rewind_picker_open')
+    // In a pane narrower than its body line, which wraps.
+    const narrow = CLAUDE_REWIND_LIST.replace(' Restore the code and/or conversation to the point before', ' Restore the code and/or conversation to\n the point before')
+    expect(narrow).not.toBe(CLAUDE_REWIND_LIST)
+    expect(messageHold('claude', narrow)).toBe('rewind_picker_open')
     expect(messageHold('claude', CLAUDE_REWIND_CONFIRM)).toBe('rewind_picker_open')
     expect(messageHold('codex', CODEX_BROWSING_FULLSCREEN)).toBe('rewind_picker_open')
     expect(messageHold('codex', CODEX_BROWSING_SCROLLBACK)).toBe('rewind_picker_open')

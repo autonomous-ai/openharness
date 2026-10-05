@@ -248,6 +248,22 @@ describe('TerminalBackendCoordinator', () => {
       expect(tmuxBackend.validate).toHaveBeenLastCalledWith(tmux, expect.objectContaining({ processIdentity: current.processIdentity }))
     })
 
+    it('does not hold a lease to an engine a restart replaced while the lease was checked', async () => {
+      const current = session()
+      current.runtimes = [tmux]
+      let live = 42
+      const tmuxBackend = { ...backend('tmux:default', vi.fn()), validate: vi.fn(async (_runtime: TerminalRuntimeRef, expected: { processIdentity?: { pid: number } }) =>
+        expected.processIdentity?.pid === live ? { state: 'alive' as const } : { state: 'gone' as const, reason: 'process changed under tmux pane', replaced: true as const }) }
+      // The restart records its new engine on the row while the check waits.
+      const coordinator = new TerminalBackendCoordinator([tmuxBackend], ['tmux'], {
+        unknownRetryMs: [10], sleep: async () => { current.processIdentity = { pid: 44, executable: 'claude', startMarker: 'Sat Aug 15 10:02:00 2026' } },
+      })
+      const acquired = await coordinator.acquireLease(current)
+      if (acquired.state !== 'succeeded') throw new Error('no lease')
+      live = 44
+      await expect(coordinator.validateLease(acquired.value, current)).resolves.toBe(false)
+    })
+
     it('waits on a terminal with no engine in it while a restart is replacing that engine', async () => {
       const answers = [{ state: 'gone' as const, reason: 'no claude process under pane %1' }, { state: 'alive' as const }]
       const { coordinator } = patient(async () => answers.shift()!)

@@ -330,6 +330,14 @@ describe('attaching a session', () => {
       await restarted.attach.attachSession(s)
       expect(restarted.deps.emit).not.toHaveBeenCalled()
       expect(log.mock.calls.some(([line]) => String(line).includes('left the turn open at attach as history'))).toBe(true)
+      // Closed where the next message is read, too: its start must not first end a turn nobody saw start.
+      expect(restarted.normalizers.turnStates.get(s.sessionId)?.turnOpen).toBe(false)
+      expect(survived.normalizers.turnStates.get(s.sessionId)?.turnOpen).toBe(true)
+      // Codex's own normalizer, likewise.
+      const codex = session('codex', transcript([{ open: true }]))
+      const resumed = setup({ relaunchMarks: { take: () => ({ offset: statSync(codex.transcriptPath!).size, engineStarted: true }) } })
+      await resumed.attach.attachSession(codex)
+      expect(resumed.normalizers.codexNormalizers.get(codex.sessionId)?.turnOpen).toBe(false)
     })
 
     it('replays a Claude Code first turn live when born after its agent, unless a held tail already delivered it', async () => {

@@ -22,7 +22,14 @@ describe('the names a machine has gone by', () => {
   it('owns the name it has at start, in full and as its first part, in any case', () => {
     const names = createMachineNames(() => 'MacBook.lan')
     for (const title of ['macbook.lan', 'MacBook.lan', 'MACBOOK', 'macbook']) expect(names.owns(title), title).toBe(true)
-    for (const title of ['MacBook.local', 'Fix the login page', 'lan']) expect(names.owns(title), title).toBe(false)
+    for (const title of ['Fix the login page', 'lan', 'MacBook2.lan', 'macbook pro.lan']) expect(names.owns(title), title).toBe(false)
+  })
+
+  it('owns its name under another network, which a daemon started since has never seen it on', () => {
+    // Agents made on the home network keep their panes' titles across an update made on another.
+    const names = createMachineNames(() => 'MacBook-Pro.local')
+    for (const title of ['MacBook-Pro.lan', 'macbook-pro.example.com']) expect(names.owns(title), title).toBe(true)
+    for (const title of ['MacBook-Pro-2.lan', 'MacBook-Pro is ready', 'MacBook-Pro.lan: build']) expect(names.owns(title), title).toBe(false)
   })
 
   it('keeps the name it had after it moves on: a pane made under it still carries it', () => {

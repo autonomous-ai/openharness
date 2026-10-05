@@ -8,6 +8,7 @@ import {
   coreExecArgv, coreHandle, describeMasterStatus, heapLimitInArgv, masterDefaults, onProcessSignal, probeMaster, processExecve, processExit,
   readStatusFile, runMaster, supervisorOptions, trimLogEvery, writeStatusFile, type MasterStatusFile,
 } from './master.js'
+import { ignoreLogWriteErrors } from '../lib/log.js'
 import { folderFingerprint } from './leanBundle.js'
 import { PROBE_ANSWER, RESUME_ENV, decodeResume, encodeResume, fingerprint, readMarker, writeMarker } from './reexec.js'
 import { DEFAULT_SUPERVISOR_OPTIONS, type ResumeState } from './supervisor.js'
@@ -221,6 +222,36 @@ describe('coreHandle', () => {
 })
 
 // A real master over a real child: a few lines of JavaScript that behave like a core.
+describe('a log that cannot grow', () => {
+  // The master's stdout is the daemon's log file, on the disk everything else is on. A size limit stands
+  // in for a full disk: the write fails the same way (EFBIG for ENOSPC), and the process must live on.
+  const script = (guard: boolean) => `
+    ${guard ? `import { ignoreLogWriteErrors } from ${JSON.stringify(new URL('../lib/log.ts', import.meta.url).pathname)}\nignoreLogWriteErrors()` : ''}
+    const line = 'x'.repeat(1500)
+    let n = 0
+    const timer = setInterval(() => { console.log(line); if (++n === 30) { clearInterval(timer); process.exit(0) } }, 5)
+  `
+  const run = (guard: boolean): Promise<number | null> => {
+    const dir = mkdtempSync(join(tmpdir(), 'harnessd-full-log-'))
+    const file = join(dir, 'master.mts')
+    writeFileSync(file, script(guard))
+    const cli = new URL('../..', import.meta.url).pathname
+    const child = spawn('/bin/sh', ['-c', `ulimit -f 4; exec "$0" --import tsx "$1" > "$2" 2>&1`, process.execPath, file, join(dir, 'harness.log')], { cwd: cli, stdio: 'ignore' })
+    return new Promise((resolve) => child.once('exit', (code) => { rmSync(dir, { recursive: true, force: true }); resolve(code) }))
+  }
+
+  it('has its failed writes dropped', () => {
+    const stream = new EventEmitter()
+    ignoreLogWriteErrors([stream])
+    expect(() => stream.emit('error', Object.assign(new Error('ENOSPC: no space left on device, write'), { code: 'ENOSPC' }))).not.toThrow()
+  })
+
+  it('is not what stops the master: a write that fails is dropped', async () => {
+    expect(await run(false)).toBe(1)
+    expect(await run(true)).toBe(0)
+  }, 30_000)
+})
+
 describe('runMaster', () => {
   let dir: string
   beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'harnessd-master-')) })
@@ -271,6 +302,32 @@ describe('runMaster', () => {
     expect(exits).toEqual([0])
     expect(existsSync(pidFile)).toBe(false)
     expect(updates).toEqual([])
+  })
+
+  it('carries on, without a pid file, when the disk will not take one', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const pidFile = join(dir, 'no-such-folder', 'adapter.pid')
+    const core = join(dir, 'core.cjs')
+    writeFileSync(core, `
+      process.send({ type: 'harnessd:bound', protocol: 2, port: 1 })
+      process.send({ type: 'harnessd:ready' })
+      setInterval(() => process.send({ type: 'harnessd:heartbeat', rssBytes: 1, heapUsedBytes: 1, loopDelayMs: 0 }), 50)
+      process.on('SIGTERM', () => process.exit(0))
+    `)
+    const exits: number[] = []
+    const signals = new Map<string, () => void>()
+    const supervisor = runMaster({
+      nodePath: process.execPath, execArgv: [], scriptPath: core, pidFile,
+      restoreUpdate: () => {}, confirmUpdate: () => {},
+      exit: (code) => exits.push(code), onSignal: (signal, listener) => signals.set(signal, listener),
+    })
+    try {
+      await until('the core to be running', () => supervisor.status().state === 'running')
+      expect(log.mock.calls.map((call) => String(call[0]))).toContainEqual(expect.stringContaining('[harnessd] could not write the pid file: ENOENT'))
+      signals.get('SIGTERM')!()
+      await until('the master to finish', () => exits.length > 0)
+      expect(exits).toEqual([0])
+    } finally { log.mockRestore() }
   })
 
   it('records its status as it goes, and starts the core with the heap limit its budget is a share of', async () => {

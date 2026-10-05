@@ -38,7 +38,7 @@ const hint = (paneId: string) => ({ backend: 'tmux' as const, paneId })
 function setup(onPane: Record<string, RegisteredSession> = {}, over: Partial<EngineHookDeps> = {}) {
   const deps: EngineHookDeps = {
     tmuxBackend: {},
-    agentReconciler: { triggerHint: vi.fn(async () => {}), trigger: vi.fn(async () => {}) } as unknown as EngineHookDeps['agentReconciler'],
+    agentReconciler: { triggerHint: vi.fn(async () => true), trigger: vi.fn(async () => true) } as unknown as EngineHookDeps['agentReconciler'],
     registry: { byRuntimeEngine: vi.fn((runtime: { paneId: string }) => onPane[runtime.paneId]) } as unknown as EngineHookDeps['registry'],
     ...over,
   }
@@ -164,6 +164,24 @@ describe('which agent a hook belongs to', () => {
       await hook.waiting()
       expect(hook.answer()).toBeUndefined()
       // What resumeAgentService.ts does once waitForResumedAgent finds the engine in the pane.
+      onPane['%1'] = agent('a1', 200)
+      await hook.asked
+      expect(hook.answer()).toEqual(agent('a1', 200))
+    })
+
+    it('when discovery was too slow to open its agent, waits for the agent to appear on its pane', async () => {
+      // A hook from an engine started by hand in a terminal: only a discovery pass opens its agent, and
+      // the pass outran its deadline (a loaded machine). Nothing is on the pane yet, so nothing waited.
+      const onPane: Record<string, RegisteredSession> = {}
+      vi.mocked(processRows).mockResolvedValue(newEngine() as never)
+      const slow = setup(onPane, { agentReconciler: { triggerHint: vi.fn(async () => false), trigger: vi.fn(async () => false) } as unknown as EngineHookDeps['agentReconciler'] })
+      const onWait = vi.fn()
+      const hook = ask(slow.hooks, ['%1'], onWait)
+      await hook.waiting()
+      await new Promise((resolve) => setTimeout(resolve, 250))
+      expect(hook.answer()).toBeUndefined()
+      expect(onWait).toHaveBeenCalledTimes(1)
+      // The pass, done at last, opens the agent on the pane with the engine the hook came from.
       onPane['%1'] = agent('a1', 200)
       await hook.asked
       expect(hook.answer()).toEqual(agent('a1', 200))

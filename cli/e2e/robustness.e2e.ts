@@ -4,7 +4,7 @@
  * outside, a restart in the middle of a turn, and state files that are garbage when it starts. After
  * each, the same core is serving and a well-behaved client still works.
  */
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import WebSocket from 'ws'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
@@ -230,8 +230,13 @@ describe('what the daemon survives', () => {
     writeFileSync(join(d.dataDir, 'autonomous-device-connections.json'), '{"not": "a list"}', { mode: 0o600 })
     writeFileSync(join(d.dataDir, 'device-results.json'), '{"version": 1, "entries": [', { mode: 0o600 })
     await d.start()
-    await until('the device pieces to be left out', () => /the Wi-Fi device service could not be started/.test(d.log())
-      && /the Wi-Fi device link could not be started/.test(d.log()), 30_000)
+    await until('the device service to be left out', () => /the Wi-Fi device service could not be started/.test(d.log()), 30_000)
+    // The requests that need no device piece still answer; the ones that need one say it is not running,
+    // not that it is still starting.
+    const credential = readFileSync(join(d.dataDir, 'hook-credential'), 'utf8').trim()
+    const device = (path: string) => fetch(`http://127.0.0.1:${d.port}/api/autonomous-device/${path}`, { headers: { authorization: `Bearer ${credential}` } })
+    await until('the device requests to answer', async () => (await device('list')).status === 200, 30_000, 250)
+    expect(await (await device('discover')).json()).toMatchObject({ error: { code: 'UNAVAILABLE', message: expect.stringContaining('is not running on this computer') } })
     const client = await LocalClient.connect(d)
     expect(Array.isArray((await client.request('agents_list', { includeStopped: true })).agents)).toBe(true)
     const agent = await boundAgent(d, client, 'after-the-corruption')

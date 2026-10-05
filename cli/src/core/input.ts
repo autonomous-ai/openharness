@@ -19,7 +19,7 @@ import type { LiveEvent } from '../lib/normalize.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { SessionInputController, type SessionInputDelivery, type SessionInputDeps } from '../lib/sessionInput.js'
 import { messageHold } from '../lib/messageHold.js'
-import { terminalActionNotStarted, type TerminalActionResult } from '../lib/terminalTypes.js'
+import { TERMINAL_LEASE_REFUSED, terminalActionNotStarted, type TerminalActionResult } from '../lib/terminalTypes.js'
 import { Id } from '../teams/model.js'
 import { teamWriteHold } from '../teams/preflight.js'
 import type { TerminalControl } from './terminals/control.js'
@@ -58,10 +58,16 @@ export interface InputDeps {
  * team's, which waits for a draft too). `submitTerminalAction` is called here and nowhere else in this
  * file, and input.spec.ts keeps it so.
  */
-export function messageWriter({ resolve, terminal: { captureTerminal, submitTerminalAction } }: Pick<InputDeps, 'resolve' | 'terminal'>) {
+export function messageWriter({ resolve, terminal: { captureTerminal, validateTerminal, submitTerminalAction } }: Pick<InputDeps, 'resolve' | 'terminal'>) {
   return async (id: string, text: string, hold?: (session: RegisteredSession, capture: string | null) => string | null): Promise<TerminalActionResult> => {
     const session = resolve(id)
     if (!session) return terminalActionNotStarted('terminal agent is unavailable')
+    // The engine first, then its screen. A check of the engine can wait, seconds, for an answer: a probe
+    // a held event loop timed out, a restart still recording its new engine (TerminalBackendCoordinator
+    // validateRuntime). Read before that wait, the screen was judged as it was then, and a permission
+    // prompt opened meanwhile, or a new engine's first screen, took the paste and its Enter. An engine
+    // not there is refused as a lease is, which the caller asks again.
+    if (!await validateTerminal(session)) return terminalActionNotStarted(TERMINAL_LEASE_REFUSED)
     const capture = await captureTerminal(id)
     const reason = hold?.(session, capture) ?? messageHold(session.engine, capture)
     return reason ? terminalActionNotStarted(reason) : submitTerminalAction(id, text)

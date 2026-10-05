@@ -6,7 +6,7 @@ import type { AutonomousDeviceInput } from '../lib/autonomous-device/input.js'
 import { deviceErrorText } from '../lib/deviceErrors.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import type { SessionInputDelivery } from '../lib/sessionInput.js'
-import type { TerminalActionResult } from '../lib/terminalTypes.js'
+import { TERMINAL_LEASE_REFUSED, type TerminalActionResult } from '../lib/terminalTypes.js'
 import { CLAUDE_REWIND_LIST, CODEX_BROWSING_SCROLLBACK } from '../lib/__fixtures__/rewindPickers.js'
 import { createInput, createMessageRequest, deviceInputDeps, messageWriter, sessionInputDeps, type InputDeps } from './input.js'
 
@@ -124,6 +124,24 @@ describe('the session input controller\'s dependencies', () => {
     expect(await wired.inject('a1', 'hi')).toBe(ok)
     expect(await wired.inject('nobody', 'hi')).toEqual({ state: 'failed', dispatch: 'not_started', reason: 'terminal agent is unavailable' })
     expect(run.calls.filter((call) => call.startsWith('submit'))).toEqual(['submit cx hi', 'submit a1 hi'])
+  })
+
+  it('reads the pane after its engine has answered, so a dialog opened during the wait is seen', async () => {
+    const run = deps()
+    const wired = sessionInputDeps(run.deps, () => lock(run.calls))
+    const order: string[] = []
+    // The check that waits for the engine (a probe timed out, a restart recording its engine), and a
+    // permission prompt that opens while it waits.
+    vi.mocked(run.deps.terminal.validateTerminal).mockImplementation(async () => { order.push('validate'); run.setPane(CLAUDE_PERMISSION); return true })
+    vi.mocked(run.deps.terminal.captureTerminal).mockImplementation(async () => { order.push('capture'); return CLAUDE_PERMISSION })
+    expect(await wired.inject('a1', 'hello')).toEqual({ state: 'failed', dispatch: 'not_started', reason: 'permission_open' })
+    expect(order).toEqual(['validate', 'capture'])
+    // No engine there: refused as a lease is, which the controller asks again, and the pane is not read.
+    vi.mocked(run.deps.terminal.validateTerminal).mockImplementation(async () => false)
+    order.length = 0
+    expect(await wired.inject('a1', 'hello')).toEqual({ state: 'failed', dispatch: 'not_started', reason: TERMINAL_LEASE_REFUSED })
+    expect(order).toEqual([])
+    expect(run.calls.filter((call) => call.startsWith('submit'))).toEqual([])
   })
 
   it('writes a team turn only into a ready pane whose delivery still holds control', async () => {

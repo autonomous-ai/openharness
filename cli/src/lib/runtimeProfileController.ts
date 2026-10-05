@@ -345,7 +345,9 @@ export function paneModal(engine: RegisteredSession['engine'], capture: string):
   const currentUi = currentPaneUi(rawLines, latestPromptLine(rawLines, promptMarker(engine)))
   const takeover = takeoverIn(engine, capture, currentUi)
   if (takeover) return takeover
-  if (PERMISSION_UI.test(currentUi)) return 'permission'
+  // Below the prompt line: that line is the composer, or the echo of the last message, and either can
+  // hold anything a person typed.
+  if (PERMISSION_UI.test(currentUi.slice(currentUi.indexOf('\n') + 1))) return 'permission'
   return DIALOG_UI.test(currentUi.replace(/Starting MCP servers?/gi, '')) ? 'menu' : null
 }
 
@@ -428,7 +430,15 @@ const CLAUDE_HISTORY_SEARCH = /^\s*(?:search prompts|no matching prompt): /
 const DIALOG_UI = /Select Model(?: and Effort)?|Select Reasoning Level|Advanced Reasoning|Available models|Models matching|Edit Parameters|Type to filter.*Tab to edit|Esc to go back|Press enter to confirm|Do you want to proceed|Allow this action|permission required|Starting MCP servers?/i
 
 /** The approval prompts among them. */
-const PERMISSION_UI = /Do you want to proceed|Allow this action|permission required/i
+/**
+ * An approval prompt's question. Claude Code asks "Do you want to proceed?", "Do you want to make this
+ * edit to <file>?", "Do you want to allow Claude to fetch this content?", "Do you want to <verb> <target>?"
+ * for the other tools, and "Would you like to proceed?" over a plan (2.1.289); Codex asks "Would you like
+ * to run the following command?" and the like. The rows under it are read too (askQuestion.ts), but a
+ * row wrapped in a narrow pane breaks that reading, and the question alone must still hold a message:
+ * Enter approves the first row. Asked only below the prompt line, so never of what a person typed.
+ */
+const PERMISSION_UI = /\bDo you want to\b|\bWould you like to (?:proceed|run|make|apply|allow)\b|Allow this action|permission required/i
 
 /**
  * Codex browsing its own transcript: Esc twice on an empty composer, and its footer row reads
@@ -452,7 +462,9 @@ const CODEX_TRANSCRIPT_BROWSING = /^\s*Browsing(?: transcript)?(?:\s+·|\s*$)/m
  * A message pasted into it is dropped either way. Its focused row is drawn `❯ (current)` in italics,
  * which read as an empty, idle prompt.
  */
-const CLAUDE_REWIND_BODY = /^(?:Restore the code and\/or conversation to the point before|Restore and fork the conversation to the point before|Confirm you want to restore|Nothing to rewind to yet)/
+// Their opening words only: a pane narrower than a line wraps the rest onto the next, and the menu went
+// unseen, its Enter picking a message (with checkpoints off, rewinding to it).
+const CLAUDE_REWIND_BODY = /^(?:Restore the code\b|Restore and fork\b|Confirm you want to restore\b|Nothing to rewind to\b)/
 
 function claudeRewindMenuOpen(capture: string): boolean {
   const lines = stripAnsi(capture).replace(/\u00a0/g, ' ').split('\n').map((line) => line.trim())

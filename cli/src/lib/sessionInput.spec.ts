@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { SessionInputController } from './sessionInput.js'
 import type { RegisteredSession } from './registry.js'
@@ -466,6 +469,59 @@ describe('SessionInputController', () => {
     controller.onTurnEnded('s1')
     expect(onError).not.toHaveBeenCalled()
     controller.forget('s1')
+  })
+
+  describe('a dialog over the composer when the turn has not been seen to start', () => {
+    // Recorded on Claude Code 2.1.232: the message was taken, and its turn stopped at a Bash approval.
+    // Above the prompt, the transcript's echo of the message, which used to read as an unsent draft.
+    const screen = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '__fixtures__', 'permission-claude.txt'), 'utf8')
+    const message = 'Run this exact command with Bash, nothing else: curl -s https://api.coingecko.com/api/v3/simple/price?ids=bitcoin'
+
+    it('never presses Enter into a permission prompt, and takes it as the message accepted', async () => {
+      vi.useFakeTimers()
+      const sendKey = vi.fn(async () => true), onError = vi.fn(), onDelivery = vi.fn()
+      let pasted = false
+      const controller = new SessionInputController({
+        getSession: () => session('claude'), validateRuntime: async () => true, onDelivery,
+        inject: async () => { pasted = true; return true }, sendKey, capture: async () => pasted ? screen : '❯ ', onError,
+      })
+      controller.submit('s1', message)
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(sendKey).not.toHaveBeenCalled()
+      expect(onError.mock.calls).toEqual([])
+      controller.forget('s1')
+    })
+
+    it('reports a delivery with a receipt as unknown, still without an Enter', async () => {
+      vi.useFakeTimers()
+      const sendKey = vi.fn(async () => true), onError = vi.fn(), onDelivery = vi.fn()
+      let pasted = false
+      const controller = new SessionInputController({
+        getSession: () => session('claude'), validateRuntime: async () => true, onDelivery,
+        inject: async () => { pasted = true; return true }, sendKey, capture: async () => pasted ? screen : '❯ ', onError,
+      })
+      controller.submit('s1', message, 'delivery-1')
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(sendKey).not.toHaveBeenCalled()
+      expect(onDelivery).toHaveBeenLastCalledWith({ sessionId: 's1', deliveryId: 'delivery-1', state: 'unknown', reason: 'dispatch_ambiguous' })
+      controller.forget('s1')
+    })
+
+    it('never presses Enter into a menu either, and says the delivery could not be confirmed', async () => {
+      vi.useFakeTimers()
+      const sendKey = vi.fn(async () => true), onError = vi.fn()
+      // Codex browsing its transcript (0.160): Enter would rewind the conversation to the prompt in view.
+      const browsing = `› ${message}\n\n  Browsing transcript · ↑↓/jk scroll · ←→/hl prompts · ↵ rewind · esc back\n`
+      const controller = new SessionInputController({
+        getSession: () => session('codex'), validateRuntime: async () => true,
+        inject: async () => true, sendKey, capture: async () => browsing, onError,
+      })
+      controller.submit('s1', message)
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(sendKey).not.toHaveBeenCalled()
+      expect(onError).toHaveBeenCalledWith('s1', expect.stringContaining('could not be confirmed'))
+      controller.forget('s1')
+    })
   })
 
   it('reports uncertainty without blindly pressing Enter when the terminal shows no composer', async () => {
