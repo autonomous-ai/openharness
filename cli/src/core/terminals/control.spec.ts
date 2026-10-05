@@ -210,4 +210,17 @@ describe('terminal control', () => {
     fake.alive = false
     expect(await control.validateTerminal(session)).toBe(false)
   })
+
+  it('calls a terminal gone only when it is known to be, never on a probe that could not answer', async () => {
+    const { fake, terminals } = backend()
+    const control = createTerminalControl({ resolve, terminals })
+    expect(await control.terminalGone(session)).toBe(false)
+    fake.alive = false
+    expect(await control.terminalGone(session)).toBe(true)
+    // A probe that timed out at a wake: no reason to write to the pane, and no evidence it is gone.
+    vi.mocked(terminals.validate).mockResolvedValueOnce({ state: 'unknown', reason: 'tmux runtime probe failed' })
+    expect(await control.terminalGone(session)).toBe(false)
+    vi.mocked(terminals.validate).mockResolvedValueOnce({ state: 'unknown', reason: 'tmux runtime probe failed' })
+    expect(await control.validateTerminal(session)).toBe(false)
+  })
 })
