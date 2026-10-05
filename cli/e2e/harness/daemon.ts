@@ -39,6 +39,9 @@ export interface DaemonOptions {
   beside?: IsolatedDaemon
   /** Ask for this port instead of a free one: a daemon started on another daemon's port. */
   port?: number
+  /** The fake engines run the hooks the daemon installed (`DISABLE_HOOK_INSTALL: 'false'`) through a
+   *  shell, as the real CLIs do, instead of posting to the daemon themselves. */
+  realHooks?: boolean
 }
 
 async function freePort(): Promise<number> {
@@ -95,6 +98,7 @@ export class IsolatedDaemon {
     const config = {
       port, dataDir: dirs.data, claudeProjectsDir: dirs.claudeProjects, codexHome: dirs.codexHome,
       claudeModel: options.claudeModel, codexModel: options.codexModel,
+      ...(options.realHooks ? { realHooks: true } : {}),
     }
     const engine = pathToFileURL(join(here, 'fakeEngine.mjs')).href
     for (const name of ['claude', 'codex']) {
