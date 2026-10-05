@@ -190,6 +190,18 @@ def main():
         vm.command('printf %s ' + shlex.quote('\n127.0.0.1 github.com storage.googleapis.com\n') + ' | sudo -n tee -a /etc/hosts >/dev/null')
         (folder / 'hosts-fixture.txt').write_bytes(vm.read_file('/etc/hosts'))
         vm.command('timeout 10 sh -c ' + shlex.quote("until ss -ltnH | grep -q '127.0.0.1:443 '; do sleep .1; done"))
+        # The original session has already queried the public hosts. Flush its
+        # resolver cache after adding the private hosts file; prove this request
+        # reaches loopback before interpreting an HTTPS result as fixture trust.
+        vm.command('sudo -n resolvectl flush-caches')
+        diagnostic = ('import json, socket, urllib.request; '
+                      'print(json.dumps({"addresses": {host: sorted({item[4][0] for item in '
+                      'socket.getaddrinfo(host,443,type=socket.SOCK_STREAM)}) for host in '
+                      '["github.com","storage.googleapis.com"]}, '
+                      '"proxy_keys": sorted(urllib.request.getproxies())}))')
+        output, _ = vm.command('python3 -c ' + shlex.quote(diagnostic), timeout=15)
+        (folder / '02-private-resolution.log').write_text(output)
+        (folder / '02-nsswitch.txt').write_bytes(vm.read_file('/etc/nsswitch.conf'))
         check = 'import urllib.request; print(urllib.request.urlopen(' + repr('https://github.com' + transport.FEED) + ', timeout=10).status)'
         output, status = vm.command('python3 -c ' + shlex.quote(check), timeout=15, check=False)
         (folder / '02-untrusted-tls.log').write_text(output)
