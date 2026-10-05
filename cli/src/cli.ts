@@ -219,7 +219,7 @@ import { DeviceLogStore } from './lib/e2ee/deviceLogStore.js'
 import { TrustGroupStore, type GroupMember } from './lib/e2ee/trustGroup.js'
 import {
   startSelfUpdater, restore as restoreUpdate, confirm as confirmUpdate,
-  fetchManifest, downloadVerified, canary, stage, semverGt, isLocalDevBuild,
+  fetchManifest, downloadVerified, canary, stage, semverGt, isLocalDevBuild, DOWNLOAD_LIMITS,
   type Poller, type UpdateEntry,
 } from './lib/selfUpdate.js'
 import { managedNodePath } from './lib/nodeRuntime.js'
@@ -1687,7 +1687,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
         onWaiting: (owner) => console.log(`[update] waiting — the daemon is ${describeSpawnLockOwner(owner)}`),
       }),
       onStaged: (v) => daemonBoot.applyStagedUpdate(v),
-      limits: { idleMs: env.ADAPTER_UPDATE_IDLE_MS, deadlineMs: env.ADAPTER_UPDATE_DEADLINE_MS },
+      limits: { idleMs: env.ADAPTER_UPDATE_IDLE_MS, deadlineMs: env.ADAPTER_UPDATE_DEADLINE_MS, floorBytesPerSecond: DOWNLOAD_LIMITS.floorBytesPerSecond },
     })
     const slotted = env.ADAPTER_UPDATE_SLOT_SEC >= 0 && 60_000 % env.ADAPTER_UPDATE_CHECK_MS === 0
     console.log(`[update] self-update on · v${VERSION} · every ${Math.round(env.ADAPTER_UPDATE_CHECK_MS / 1000)}s`

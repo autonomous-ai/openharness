@@ -142,9 +142,20 @@ export function shouldAutoUpdate(candidate: string, current: string): boolean {
  * held it for as long as the trickle lasted, every later check skipped meanwhile, with a fix waiting
  * (e2e/updateHostile.e2e.ts). Each is now its own failure, retried at the next check.
  */
-export interface TransferLimits { idleMs: number; deadlineMs: number }
-/** A bundle: a minute without a byte, a quarter of an hour in all (4.4 MB at 5 KB/s). */
-export const DOWNLOAD_LIMITS: TransferLimits = { idleMs: 60_000, deadlineMs: 15 * 60_000 }
+export interface TransferLimits {
+  idleMs: number
+  deadlineMs: number
+  /**
+   * The slowest a transfer of a known size (Content-Length, or the size the manifest names) may average:
+   * its deadline grows to what that rate needs, when that is longer. A link that keeps sending, however
+   * slowly, finishes; one that trickles a byte a minute to stay under the idle limit still ends.
+   */
+  floorBytesPerSecond?: number
+}
+/** A bundle: a minute without a byte, and a quarter of an hour in all or whatever 1 KB/s needs, the longer
+ *  (4.4 MB: about 75 minutes). The fixed quarter of an hour left a link under 5 KB/s never updating: each
+ *  check started again from nothing and kept the link full. */
+export const DOWNLOAD_LIMITS: TransferLimits = { idleMs: 60_000, deadlineMs: 15 * 60_000, floorBytesPerSecond: 1_024 }
 /** The manifest is a few hundred bytes. */
 export const MANIFEST_LIMITS: TransferLimits = { idleMs: 30_000, deadlineMs: 60_000 }
 /**
@@ -158,7 +169,7 @@ export const RUNTIME_DOWNLOAD_LIMITS: TransferLimits = { idleMs: 300_000, deadli
 export class TransferStalledError extends Error {}
 
 /** GET `url` whole within `limits`: the status, and the body once it has all arrived. */
-async function fetchWithin(url: string, limits: TransferLimits): Promise<{ ok: boolean; status: number; body: Buffer }> {
+async function fetchWithin(url: string, limits: TransferLimits, expectedBytes?: number): Promise<{ ok: boolean; status: number; body: Buffer }> {
   const controller = new AbortController()
   let stalled!: (error: TransferStalledError) => void
   const gaveUp = new Promise<never>((_, reject) => { stalled = reject })
@@ -175,12 +186,23 @@ async function fetchWithin(url: string, limits: TransferLimits): Promise<{ ok: b
     return handle
   }
   // No deadline at all for an infinite one: a timer given Infinity fires at once.
-  const deadline = Number.isFinite(limits.deadlineMs) ? timer(limits.deadlineMs, `took longer than ${limits.deadlineMs} ms in all`) : undefined
+  const startedAt = performance.now()
+  let deadline = Number.isFinite(limits.deadlineMs) ? timer(limits.deadlineMs, `took longer than ${limits.deadlineMs} ms in all`) : undefined
+  /** Once the size is known: the deadline the floor rate needs, when that is the longer. */
+  const scaleDeadline = (bytes: number): void => {
+    if (!deadline || !limits.floorBytesPerSecond || !(bytes > 0)) return
+    const needed = Math.ceil(bytes / limits.floorBytesPerSecond * 1000)
+    if (needed <= limits.deadlineMs) return
+    clearTimeout(deadline)
+    deadline = timer(Math.max(0, needed - (performance.now() - startedAt)), `took longer than ${needed} ms in all (${bytes} bytes at ${limits.floorBytesPerSecond} B/s)`)
+  }
+  if (expectedBytes !== undefined) scaleDeadline(expectedBytes)
   let idle = timer(limits.idleMs, `sent nothing for ${limits.idleMs} ms`)
   const heard = (): void => { clearTimeout(idle); idle = timer(limits.idleMs, `sent nothing for ${limits.idleMs} ms`) }
   try {
     const res = await Promise.race([fetch(url, { signal: controller.signal }), gaveUp])
     heard()
+    if (expectedBytes === undefined) scaleDeadline(Number(res.headers?.get?.('content-length')))
     // Read as it arrives, so the idle timer hears every chunk. A response with no stream (a body-less
     // status, or a Response-like object that only buffers) is read whole, within the same limits.
     if (!res.body) {
@@ -221,7 +243,7 @@ export class DigestMismatchError extends Error {}
 /** Download one file within `limits` and verify its sha256 in memory; throws on a non-2xx, a stall or a
  *  digest mismatch. */
 export async function downloadVerified(ref: FileRef, limits: TransferLimits = DOWNLOAD_LIMITS): Promise<Buffer> {
-  const res = await fetchWithin(ref.url, limits)
+  const res = await fetchWithin(ref.url, limits, ref.size)
   if (!res.ok) throw new Error(`download ${ref.url} → HTTP ${res.status}`)
   const got = sha256(res.body)
   if (got.toLowerCase() !== ref.sha256.toLowerCase()) {

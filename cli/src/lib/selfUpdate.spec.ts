@@ -911,6 +911,34 @@ describe('a link that stalls without dropping (e2e/updateHostile.e2e.ts)', () =>
     await expect(downloadVerified({ url: 'https://updates.test/empty.js', sha256: sha(Buffer.alloc(0)) }, limits)).resolves.toEqual(Buffer.alloc(0))
   })
 
+  it('gives a transfer of a known size the time its floor rate needs, and no more', async () => {
+    // 40 bytes, four every 30 ms: about 300 ms, past a 100 ms deadline, within what 40 B/s needs (1 s).
+    const bytes = Buffer.from('console.log("9.9.9") // forty bytes ...\n')
+    expect(bytes.length).toBe(40)
+    const slowly = (headers: Record<string, string> = {}) => {
+      let sent = 0
+      return new Response(new ReadableStream<Uint8Array>({
+        async pull(controller) {
+          await new Promise((resolve) => setTimeout(resolve, 30))
+          if (sent >= bytes.length) { controller.close(); return }
+          controller.enqueue(new Uint8Array(bytes.subarray(sent, sent + 4)))
+          sent += 4
+        },
+      }), { headers })
+    }
+    vi.stubGlobal('fetch', async (url: string) => slowly(url.endsWith('/sized.js') ? { 'content-length': '40' } : {}))
+    const floor = { idleMs: 200, deadlineMs: 100, floorBytesPerSecond: 40 }
+    // By its Content-Length, or by the size the manifest names.
+    await expect(downloadVerified({ url: 'https://updates.test/sized.js', sha256: sha(bytes) }, floor)).resolves.toEqual(bytes)
+    await expect(downloadVerified({ url: 'https://updates.test/unsized.js', sha256: sha(bytes), size: 40 }, floor)).resolves.toEqual(bytes)
+    // Of unknown size, or slower than the floor, the deadline stands.
+    await expect(downloadVerified({ url: 'https://updates.test/unsized.js', sha256: sha(bytes) }, floor)).rejects.toThrow('took longer than 100 ms in all')
+    await expect(downloadVerified({ url: 'https://updates.test/sized.js', sha256: sha(bytes) }, { ...floor, floorBytesPerSecond: 200 }))
+      .rejects.toThrow('took longer than 200 ms in all (40 bytes at 200 B/s)')
+    // The bundle's own: a slow but steady link finishes.
+    expect(DOWNLOAD_LIMITS).toEqual({ idleMs: 60_000, deadlineMs: 15 * 60_000, floorBytesPerSecond: 1_024 })
+  })
+
   it('reads a response with no stream whole, and sets no deadline for an infinite one', async () => {
     const bytes = Buffer.from('console.log("9.9.9")\n')
     vi.stubGlobal('fetch', async (url: string) => url.endsWith('/buffered.js')
