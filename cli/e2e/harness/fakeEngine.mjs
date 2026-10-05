@@ -388,9 +388,15 @@ export async function run(engine, config) {
   process.stdin.setEncoding('utf8')
   let buffer = ''
   let queue = Promise.resolve()
+  // Inside a bracketed paste a carriage return or newline is a newline in the prompt, as Ink and
+  // ratatui read it; only one typed outside a paste submits. The paste's markers say which.
+  let pasting = false
   process.stdin.on('data', (chunk) => {
     if (dialog) { dialogKeys(chunk); return }
-    for (const part of chunk.replace(/\x1b\[20[01]~/g, '').split(/(\r|\n|\x03)/)) {
+    for (const part of chunk.split(/(\x1b\[20[01]~|\r|\n|\x03)/)) {
+      if (part === '\x1b[200~') { pasting = true; continue }
+      if (part === '\x1b[201~') { pasting = false; continue }
+      if (pasting && (part === '\r' || part === '\n')) { buffer += '\n'; continue }
       if (part === '\x03') {
         if (open) {
           if (engine === 'claude') claude({ type: 'user', message: { role: 'user', content: [{ type: 'text', text: '[Request interrupted by user]' }] } })
