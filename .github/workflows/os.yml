@@ -51,7 +51,7 @@ on:
         required: false
         default: image
         type: choice
-        options: [image, browser, session, recovery, essentials, hardware, zram, hardware-update]
+        options: [image, browser, browser-suspend, session, recovery, essentials, hardware, zram, hardware-update]
       browser_memory:
         description: 'With checks=browser, diagnose memory in the UEFI VM only; retain ordinary workload and deadlines'
         required: false
@@ -66,12 +66,12 @@ permissions:
   actions: read
 
 concurrency:
-  group: programmer-os-${{ github.ref }}-${{ inputs.memory_mib || '2048' }}-${{ inputs.live_transport || 'cdrom' }}-${{ inputs.development_update && 'update' || inputs.checks == 'browser' && 'browser' || inputs.checks == 'session' && 'session' || inputs.checks == 'recovery' && 'recovery' || inputs.checks == 'essentials' && 'essentials' || inputs.checks == 'hardware' && 'hardware' || inputs.checks == 'hardware-update' && 'hardware-update' || inputs.dsh && 'dsh' || inputs.workloads && 'workloads' || 'image' }}
+  group: programmer-os-${{ github.ref }}-${{ inputs.memory_mib || '2048' }}-${{ inputs.live_transport || 'cdrom' }}-${{ inputs.development_update && 'update' || inputs.checks == 'browser-suspend' && 'browser-suspend' || inputs.checks == 'browser' && 'browser' || inputs.checks == 'session' && 'session' || inputs.checks == 'recovery' && 'recovery' || inputs.checks == 'essentials' && 'essentials' || inputs.checks == 'hardware' && 'hardware' || inputs.checks == 'hardware-update' && 'hardware-update' || inputs.dsh && 'dsh' || inputs.workloads && 'workloads' || 'image' }}
   cancel-in-progress: false
 
 jobs:
   image:
-    if: ${{ !inputs.image_run_id && !inputs.publish_run_id && !inputs.development_update && inputs.checks != 'zram' && inputs.checks != 'hardware-update' }}
+    if: ${{ !inputs.image_run_id && !inputs.publish_run_id && !inputs.development_update && inputs.checks != 'zram' && inputs.checks != 'hardware-update' && inputs.checks != 'browser-suspend' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 50
     steps:
@@ -159,15 +159,20 @@ jobs:
 
   machine:
     needs: image
-    if: ${{ always() && !inputs.publish_run_id && !inputs.development_update && inputs.checks != 'essentials' && inputs.checks != 'hardware' && inputs.checks != 'zram' && inputs.checks != 'hardware-update' && (needs.image.result == 'success' || inputs.image_run_id != '') && !cancelled() }}
+    if: ${{ always() && !inputs.publish_run_id && !inputs.development_update && inputs.checks != 'essentials' && inputs.checks != 'hardware' && inputs.checks != 'zram' && inputs.checks != 'hardware-update' && (needs.image.result == 'success' || inputs.image_run_id != '' || inputs.checks == 'browser-suspend') && !cancelled() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 65
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ inputs.checks == 'browser' && inputs.browser_memory && fromJSON('[{"firmware":"uefi","encryption":"--encrypt","agents":"","cpu":""}]') || fromJSON('[{"firmware":"bios","encryption":"","agents":"--agents","cpu":"--cpu Nehalem"},{"firmware":"uefi","encryption":"--encrypt","agents":"","cpu":""}]') }}
+        include: ${{ (inputs.checks == 'browser-suspend' || inputs.checks == 'browser' && inputs.browser_memory) && fromJSON('[{"firmware":"uefi","encryption":"--encrypt","agents":"","cpu":""}]') || fromJSON('[{"firmware":"bios","encryption":"","agents":"--agents","cpu":"--cpu Nehalem"},{"firmware":"uefi","encryption":"--encrypt","agents":"","cpu":""}]') }}
     steps:
       - uses: actions/checkout@v7
+      - name: Require the selected image for browser suspend acceptance
+        if: ${{ inputs.checks == 'browser-suspend' }}
+        env:
+          IMAGE_RUN_ID: ${{ inputs.image_run_id }}
+        run: '[[ "$IMAGE_RUN_ID" =~ ^[0-9]+$ ]]'
       - uses: actions/download-artifact@v6
         with:
           name: programmer-os-x86_64
@@ -180,8 +185,13 @@ jobs:
           sudo apt-get install -y qemu-system-x86 qemu-utils ovmf python3-pil tesseract-ocr
           if test -e /dev/kvm; then sudo chmod a+rw /dev/kvm; fi
       - name: Install the disposable browser observer
-        if: ${{ inputs.checks == 'browser' }}
+        if: ${{ inputs.checks == 'browser' || inputs.checks == 'browser-suspend' }}
         run: sudo apt-get install -y wlrctl
+      - name: Check the focused browser suspend observer and workflow
+        if: ${{ inputs.checks == 'browser-suspend' }}
+        run: |
+          python3 -m py_compile os/tests/browser_vm.py os/tests/browser_suspend_guest.py
+          go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/os.yml
       - name: Check the focused session test and workflow
         if: ${{ inputs.checks == 'session' || inputs.checks == 'recovery' || inputs.checks == 'browser' }}
         run: |
@@ -196,7 +206,7 @@ jobs:
           run-id: ${{ inputs.workload_seed_run_id }}
           github-token: ${{ github.token }}
       - name: Boot, operate, install and reboot the real image
-        if: ${{ inputs.checks != 'session' && inputs.checks != 'recovery' && inputs.checks != 'browser' }}
+        if: ${{ inputs.checks != 'session' && inputs.checks != 'recovery' && inputs.checks != 'browser' && inputs.checks != 'browser-suspend' }}
         env:
           OS_WORKLOAD_SOURCE_RUN: ${{ inputs.workload_seed_run_id }}
           OS_MEMORY_MIB: ${{ inputs.memory_mib || '2048' }}
@@ -221,6 +231,9 @@ jobs:
         env:
           OS_MEMORY_MIB: ${{ inputs.memory_mib || '2048' }}
         run: python3 os/tests/browser_vm.py --iso os/dist/*.iso --firmware '${{ matrix.firmware }}' --memory-mib "$OS_MEMORY_MIB" --wlrctl /usr/bin/wlrctl --browser-script os/root/usr/bin/hn-browser --compositor-config os/root/usr/share/harness-os/labwc/rc.xml ${{ inputs.browser_memory && '--memory-profile --zram-config os/root/etc/systemd/zram-generator.conf' || '' }}
+      - name: Exercise browser-active suspend, unlock and input recovery
+        if: ${{ inputs.checks == 'browser-suspend' }}
+        run: timeout 12m python3 os/tests/browser_vm.py --iso os/dist/*.iso --firmware uefi --memory-mib 2048 --check suspend --wlrctl /usr/bin/wlrctl --browser-script os/root/usr/bin/hn-browser --compositor-config os/root/usr/share/harness-os/labwc/rc.xml
       - name: Show machine failure diagnostics
         if: failure()
         run: |

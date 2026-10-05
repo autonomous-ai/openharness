@@ -11,7 +11,7 @@ import time
 from PIL import Image
 from footprint_vm import copy_file
 from vm import VM, check_live_media, install_interactively
-from session_vm import screen_text
+from session_vm import screen_text, wait_lock
 
 
 class BrowserVM(VM):
@@ -272,11 +272,161 @@ def check_browser(vm, result):
     result['checks'].append('New browser windows maximize; close and reopen restores working keyboard focus without losing the terminal')
 
 
+def check_browser_suspend(vm, config, manifest, result):
+    """Suspend from a real browser window, keeping agents and terminal work alive."""
+    vm.command('! pgrep -u "$(id -u)" -x chromium')
+    vm.command('mkdir -p /tmp/harness-browser-probe ~/projects/browser-suspend; '
+               'printf %s browser-suspend-project > ~/projects/browser-suspend/proof.txt')
+    copy_file(vm, TERMINAL.encode(), '/tmp/harness-browser-terminal.py')
+    for source, target in [('browser_guest.py', '/tmp/harness-browser-page.py'),
+                           ('browser_suspend_guest.py', '/tmp/harness-browser-suspend.py')]:
+        data = Path(__file__).with_name(source).read_bytes()
+        result.setdefault('guest_observers', {})[source] = hashlib.sha256(data).hexdigest()
+        copy_file(vm, data, target)
+    vm.command('systemd-run --user --quiet --collect --unit=harness-browser-probe python3 /tmp/harness-browser-page.py')
+    wait_command(vm, 'curl --fail --silent http://127.0.0.1:18782/ >/dev/null')
+    vm.command('hn new-window -n browser-suspend ' + shlex.quote('python3 /tmp/harness-browser-terminal.py'))
+    wait_command(vm, 'test -s /tmp/harness-browser-probe/terminal-pid')
+    focused(vm, 'hn', 'suspend-terminal-before-browser')
+    vm.type_probe('before-suspend')
+    vm.keys('ret')
+    vm.keys('meta_l', 'b')
+    new_tab_ready(vm, 'suspend-browser-started')
+    for path, value in [('/first', 'window-one'), ('/second', 'window-two')]:
+        if path == '/second':
+            vm.keys('ctrl', 'n')
+            new_tab_ready(vm, 'suspend-second-window')
+        vm.keys('ctrl', 'l')
+        vm.type_probe('http://127.0.0.1:18782' + path)
+        vm.keys('ret')
+        state(vm, path=path)
+        page_fills_display(vm, 'suspend-page' + path.replace('/', '-'))
+        vm.click_word('suspend-input' + path.replace('/', '-'), 'Keyboard')
+        state(vm, path=path, ready=True)
+        vm.type_probe(value)
+        state(vm, path=path, value=value, ready=True)
+
+    expected_runtime = {name: item['sha256'] for name, item in manifest['harness_inputs']['files'].items()}
+    assert set(expected_runtime) == {'harness-tui', 'cli.mjs', 'notify.mjs'}
+
+    def snapshot(name):
+        vm.command('python3 /tmp/harness-browser-suspend.py > /tmp/harness-browser-suspend.json')
+        data = vm.read_file('/tmp/harness-browser-suspend.json')
+        (vm.folder / (name + '.json')).write_bytes(data)
+        observed = json.loads(data)
+        assert observed['runtime'] == expected_runtime, 'Shared runtime differs from the verified image'
+        return observed
+
+    before = snapshot('suspend-work-before')
+    assert before['terminal_input'] == 'before-suspend\n'
+    result['work_before'] = before
+
+    def preserved(name, terminal_input='before-suspend\n'):
+        after = snapshot(name)
+        for key in ['agents', 'browser', 'daemon', 'terminal', 'boot_id', 'runtime', 'project_sha256']:
+            assert after[key] == before[key], ('Work changed across suspend', key, before[key], after[key])
+        assert after['terminal_input'] == terminal_input, 'Lock or browser input reached the terminal'
+        return after
+
+    assert vm.monitor('query-current-machine').get('wakeup-suspend-support')
+    output, _ = vm.command('cat /sys/power/state /sys/power/mem_sleep; systemd-inhibit --list --no-pager')
+    (vm.folder / 'sleep-capabilities.txt').write_text(output)
+    started = time.monotonic()
+    vm.command('sudo -n systemctl suspend --no-block')
+    deadline = time.monotonic() + 30
+    while True:
+        current = vm.monitor('query-status')
+        if current['status'] == 'suspended':
+            break
+        assert time.monotonic() < deadline, ('Guest did not suspend', current)
+        time.sleep(.25)
+    result['suspend_seconds'] = round(time.monotonic() - started, 3)
+    result['suspended_qmp_status'] = current
+    vm.shell_ready = False
+    vm.screenshot('browser-suspended')
+    vm.monitor('system_wakeup')
+    resumed = time.monotonic()
+    # Reuse the acknowledged UART resume boundary; never type a command into
+    # the short serial FIFO while the guest driver is still waking.
+    deadline = time.monotonic() + 30
+    while True:
+        vm.send('\n')
+        try:
+            vm.wait(r'\[me@harness [^\r\n]*\]\$ ', timeout=2)
+            vm.shell_ready = True
+            break
+        except TimeoutError:
+            if time.monotonic() >= deadline:
+                raise TimeoutError('The guest serial console did not resume within 30 seconds')
+    wait_lock(vm, True)
+
+    def hidden(name):
+        text = screen_text(vm, name)
+        assert 'harness browser check' not in text and 'keyboard' not in text, 'Lock exposed the browser'
+        with Image.open(vm.folder / (name + '.png')).convert('RGB') as frame:
+            width, height = frame.size
+            pixels = [frame.getpixel(p) for p in [(3, height//2), (width-4, height//2),
+                                                 (3, height-4), (width-4, height-4)]]
+        assert all(max(pixel) <= 8 for pixel in pixels), ('Lock did not hide the page', pixels)
+        state(vm, path='/first', value='window-one')
+        state(vm, path='/second', value='window-two')
+
+    hidden('browser-resumed-locked')
+    for name, keys in [('escape', ('esc',)), ('interrupt', ('ctrl', 'c')), ('shortcut', ('meta_l', 'b'))]:
+        vm.keys(*keys)
+        wait_lock(vm, True, timeout=2)
+        hidden('browser-lock-' + name)
+    vm.type_probe('wrong-password')
+    vm.keys('ret')
+    time.sleep(4)
+    wait_lock(vm, True)
+    hidden('browser-lock-wrong-password')
+    preserved('suspend-work-locked')
+    vm.keys('ctrl', 'u')
+    vm.type_probe(config['password'])
+    vm.keys('ret')
+    wait_lock(vm, False)
+    title = 'Harness browser check /second - Chromium'
+    focused(vm, 'chromium', 'browser-resumed-unlocked', title=title)
+    state(vm, path='/second', value='window-two', ready=True)
+    page_fills_display(vm, 'browser-resumed-painted')
+    vm.type_probe('-resumed')
+    state(vm, path='/second', value='window-two-resumed')
+    state(vm, path='/first', value='window-one')
+    vm.keys('meta_l', 'b')
+    focused(vm, 'hn', 'browser-resume-terminal')
+    vm.type_probe('after-suspend')
+    vm.keys('ret')
+    wait_command(vm, 'python3 -c ' + shlex.quote('from pathlib import Path; '
+        'assert Path("/tmp/harness-browser-probe/terminal-input").read_text() == "before-suspend\\nafter-suspend\\n"'))
+    vm.keys('meta_l', 'b')
+    focused(vm, 'chromium', 'browser-resume-return', title=title)
+    state(vm, path='/second', value='window-two-resumed', ready=True)
+    vm.type_probe('-returned')
+    state(vm, path='/second', value='window-two-resumed-returned')
+    state(vm, path='/first', value='window-one')
+    result['work_after'] = preserved('suspend-work-after', 'before-suspend\nafter-suspend\n')
+    events = [json.loads(line) for line in vm.read_file('/tmp/harness-browser-probe/events.jsonl').decode().splitlines()]
+    for event in events:
+        expected = {'/first': 'window-one', '/second': 'window-two-resumed-returned'}[event['path']]
+        assert expected.startswith(event['input']), ('Unexpected input reached the page', event)
+    result['resume_check_seconds_including_lock_and_typing'] = round(time.monotonic() - resumed, 3)
+    output, _ = vm.command('sudo -n journalctl -b -u systemd-suspend.service --no-pager; '
+                           'journalctl --user -b -u harness-idle --no-pager')
+    (vm.folder / 'sleep-journal.log').write_text(output)
+    result['checks'].extend([
+        'The browser-active guest actually suspends; wake remains password-locked and hides the page.',
+        'Escape, Ctrl+c, Super+b and a wrong password stay inside the lock; browser and terminal input remain unchanged.',
+        'Unlock restores the same browser window and field; real typing and a Super+b terminal/browser round trip work without changing the other window.',
+        'Both OpenCode processes, browser main process, daemon, terminal, project, boot ID and verified runtime bytes survive unchanged.'])
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--iso', type=Path, required=True)
     parser.add_argument('--firmware', choices=['bios', 'uefi'], required=True)
     parser.add_argument('--memory-mib', type=int, choices=[1024, 2048, 4096], default=1024)
+    parser.add_argument('--check', choices=['focus', 'suspend'], default='focus')
     parser.add_argument('--wlrctl', type=Path, required=True)
     parser.add_argument('--browser-script', type=Path, required=True)
     parser.add_argument('--compositor-config', type=Path, required=True)
@@ -290,6 +440,10 @@ def main():
     parser.add_argument('--live-transport', choices=['cdrom', 'usb'], default='cdrom')
     parser.add_argument('--output', type=Path)
     args = parser.parse_args()
+    if args.check == 'suspend' and (args.firmware != 'uefi' or args.memory_mib != 2048 or
+            args.memory_profile or args.zram_config or args.expected_zram_config or args.interactive_install or
+            args.live_transport != 'cdrom'):
+        parser.error('Browser suspend requires the focused 2 GiB encrypted UEFI/CD-ROM fixture without memory/install variants')
     if args.zram_config and args.expected_zram_config:
         parser.error('Choose a preboot overlay or verification of a prepared image, not both')
     if args.expected_zram_config and not args.interactive_install:
@@ -300,9 +454,13 @@ def main():
     manifest = json.loads(iso.with_name('manifest.json').read_text())
     with iso.open('rb') as handle:
         assert hashlib.file_digest(handle, 'sha256').hexdigest() == manifest['iso']['sha256']
-    folder = (args.output or Path(f'os/test-results/{args.firmware}-browser')).resolve()
+    assert iso.stat().st_size == manifest['iso']['bytes']
+    suffix = '-suspend' if args.check == 'suspend' else ''
+    folder = (args.output or Path(f'os/test-results/{args.firmware}-browser{suffix}')).resolve()
     folder.mkdir(parents=True, exist_ok=False)
-    vm = BrowserVM(folder, iso, args.firmware, args.memory_mib, live_transport=args.live_transport, cpu='Nehalem')
+    (folder / 'image-manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
+    video = 'VGA' if args.check == 'suspend' else 'virtio-vga'
+    vm = BrowserVM(folder, iso, args.firmware, args.memory_mib, live_transport=args.live_transport, cpu='Nehalem', video=video)
     vm.memory_samples = []
     config = dict(disk='/dev/vda', expected_serial='HN_OS_TEST', confirm_erase='/dev/vda', username='me',
                   hostname='harness', password='test-password-123', encrypt=args.firmware == 'uefi', serial_console=True)
@@ -312,15 +470,25 @@ def main():
                                                               'rev-parse','HEAD'],text=True).strip(),
                   memory_mib=args.memory_mib, candidates={},
                   validation_fixture=manifest.get('validation_fixture'), live_transport=args.live_transport,
-                  memory_profile=args.memory_profile, cpu='Nehalem', display='virtio-vga (2D)',
+                  memory_profile=args.memory_profile, cpu='Nehalem', display=video, check=args.check,
                   memory_samples=vm.memory_samples,
                   observer=dict(sha256=hashlib.sha256(args.wlrctl.read_bytes()).hexdigest(),
                                 version=subprocess.check_output([str(args.wlrctl),'--version'],text=True).strip()),
                   limitations=['Only the recorded candidate files replace packaged files in the disposable guest.',
                                'Native virtual display and physical-keyboard events; not a physical laptop or GPU claim.',
                                'Observer and screenshot overhead are included in transition timings.'])
+    if args.check == 'suspend':
+        result['test_inputs'] = {name: hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
+                                for name in ['browser_vm.py', 'browser_suspend_guest.py', 'browser_guest.py',
+                                             'session_vm.py', 'footprint_vm.py', 'vm.py']}
+        result['limitations'].extend(['One virtual ACPI suspend using bochs-drm; no physical lid, panel, radio or GPU acceptance.',
+                                      'Existing OpenCode process survival is checked, not a remote model turn.'])
     try:
         vm.start(live=True)
+        if args.check == 'suspend':
+            assert vm.acceleration == 'kvm'
+            result['acceleration'] = vm.acceleration
+            result['virtual_cpus'] = 2
         vm.wait(r'root@[^\r\n]*[#] ', timeout=180)
         vm.shell_ready = True
         vm.command('stty -echo')
@@ -391,7 +559,10 @@ def main():
             assert sum(p['role'] == 'OpenCode' for p in before['identities']) == 2, before
             assert sum(p['role'] == 'Harness daemon' for p in before['identities']) == 1, before
             assert before['oom_kills'] == 0
-        check_browser(vm, result)
+        if args.check == 'suspend':
+            check_browser_suspend(vm, config, manifest, result)
+        else:
+            check_browser(vm, result)
         if args.expected_zram_config:
             after = result['completed_zram'] = zram_probe(vm, args.expected_zram_config, 'completed')
             assert after['identities'] == before['identities'], 'Agent or daemon process changed'
