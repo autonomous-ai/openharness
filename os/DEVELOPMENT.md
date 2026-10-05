@@ -546,7 +546,7 @@ repositories remain mutable; this is not a claim of an immutable package snapsho
 
 The tracked fixture accounts for Fedora's browser executable and labwc action
 name. It selects shared session files explicitly and excludes the PC installer,
-update timer, pacman configuration and x86 driver hooks. Its empty-password account
+pacman configuration and x86 driver hooks. Its empty-password account
 and root console exist only on the private regular-file disk and local QEMU socket;
 no host block device, SSH service or public listener is exposed. These test settings
 must never enter a hardware image.
@@ -580,7 +580,7 @@ the private fixture still provisions OpenCode separately and records its npm loc
 That agent input is not yet a pinned, package-owned image component.
 
 Build in the pinned Fedora aarch64 container from `arm-session.lock.json`, with
-`python3`, `git` and `rpm-build` installed from signed Fedora repositories:
+`python3`, `git`, `rpm-build`, `tar` and `gzip` installed from signed Fedora repositories:
 
 ```sh
 python3 os/tools/build-fedora-package.py --runtime /path/to/runtime \
@@ -596,6 +596,36 @@ unrelated TUI/CLI sources. Payload timestamps, RPM build time and buildhost are
 fixed; compare actual RPM bytes with the same recorded Fedora RPM toolchain.
 These private artifacts are unsigned and unpublished; their manifest checksums
 are checked before fixture installation. This is not a product update channel.
+
+The **Harness OS private Fedora package** workflow takes a successful private
+runtime run and its full producer SHA. It builds release 1 twice and release 2
+once, compares repeated RPM bytes, and installs, upgrades and removes the package
+in a fresh native Fedora container. It checks the original runtime artifact,
+exact installed versions, owned files and existing account/project/configuration
+preservation. Only these private local RPMs bypass package-signature checks;
+repository dependencies still require Fedora signatures.
+
+Use its `first/` and `upgrade/` artifacts with the immutable graphical fixture
+to check the packaged session across an actual VM reboot and user runtime update:
+
+```sh
+python3 os/tests/fedora_package_vm.py \
+  --fixture /path/to/harness-arm-session-fixture \
+  --fixture-source FULL_IMAGE_PRODUCER_SHA \
+  --packages /path/to/harness-fedora-package \
+  --package-source FULL_PACKAGE_PRODUCER_SHA \
+  --updates /path/to/fast-update-fixture \
+  --updates-source FULL_RUNTIME_PRODUCER_SHA \
+  --output os/test-results/fedora-package-vm
+```
+
+Package and update artifacts must declare the same original runtime identity.
+This check preserves a running agent and daemon through both RPM transactions,
+then tests the packaged session's keyboard, platform commands and per-user update
+activation/rollback after reboot. The private user's update timer is masked across
+the reboot and starts only after the verified local feed is ready; no public update is consumed.
+The RPM itself contains the normal timer. Neither this check nor the container
+lifecycle test establishes Apple hardware installation or Fedora base recovery.
 
 The Fedora profile reports runtime provenance through `hn-os status`. The
 `harness install/upgrade/rollback` and `hn-os install/checkpoint/update/recover`
