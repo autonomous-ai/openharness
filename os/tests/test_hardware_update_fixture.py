@@ -106,28 +106,55 @@ class ArtifactTests(unittest.TestCase):
 
 
 class ShutdownTests(unittest.TestCase):
-    # A real owned subprocess/socket reproduces EOF before a shell status,
-    # buffered bytes after process exit, and failure to exit. This does not boot
+    # Real owned subprocess/sockets exercise serial and buffered QMP independently,
+    # including quiet guests, stale events and failure to exit. This does not boot
     # a VM or turn simulated transport evidence into native kernel acceptance.
     CHILD = r'''
-import os, re, signal, socket, sys
+import json, os, re, signal, socket, sys
 channel = socket.socket(fileno=int(sys.argv[1]))
-mode = sys.argv[2]
+qmp = socket.socket(fileno=int(sys.argv[2]))
+mode = sys.argv[3]
 powerdown = b'[ 12.34] reboot: Power down\r\n'
+shutdown = {'event': 'SHUTDOWN', 'data': {'guest': True, 'reason': 'guest-shutdown'},
+            'timestamp': {'seconds': 1234, 'microseconds': 5678}}
+def encode(row):
+    return (json.dumps(row) + '\r\n').encode()
 if mode == 'stale-buffer':
     channel.sendall(powerdown)
+barrier = json.loads(qmp.makefile('rb').readline())
+assert barrier['execute'] == 'query-status'
+response = {'return': {'running': True, 'singlestep': False, 'status': 'running'}, 'id': barrier['id']}
+if mode == 'barrier-failure':
+    response = {'error': {'class': 'GenericError', 'desc': 'query failed'}, 'id': barrier['id']}
+# One write exercises events buffered alongside the correlated response.
+qmp.sendall((encode(shutdown) if mode == 'stale-event' else b'') + encode(response))
 request = b''
 while b'\n' not in request:
-    request += channel.recv(65536)
+    chunk = channel.recv(65536)
+    if not chunk:
+        sys.exit(0)
+    request += chunk
 marker = re.search(rb'HN_POWEROFF_[0-9a-f]+', request).group()
 if mode == 'unrelated-exception' or mode == 'serial-timeout':
     signal.pause()
 if mode in ('ack', 'command-failure'):
     status = b'7' if mode == 'command-failure' else b'0'
     channel.sendall(b'\r\n' + marker + b':' + status + b'\r\n')
-if mode not in ('no-proof', 'stale-log', 'stale-buffer'):
+if mode not in ('quiet-guest', 'no-proof', 'stale-log', 'stale-buffer', 'stale-event'):
     channel.sendall(powerdown)
 channel.close()
+if mode == 'qmp-timeout':
+    signal.pause()
+if mode.startswith('cause-'):
+    reason = mode.removeprefix('cause-')
+    shutdown['data'] = {'guest': reason.startswith('guest-'), 'reason': reason}
+if mode == 'guest-string':
+    shutdown['data']['guest'] = 'true'
+if mode not in ('no-proof', 'stale-log', 'stale-buffer', 'stale-event', 'kernel-only'):
+    qmp.sendall(encode(shutdown))
+    if mode == 'duplicate-event':
+        qmp.sendall(encode(shutdown))
+qmp.close()
 if mode == 'exit-timeout':
     signal.pause()
 sys.exit(9 if mode == 'nonzero' else 0)
@@ -137,9 +164,12 @@ sys.exit(9 if mode == 'nonzero' else 0)
         with tempfile.TemporaryDirectory() as directory:
             folder = Path(directory)
             host, guest = socket.socketpair()
-            process = subprocess.Popen([sys.executable, '-c', self.CHILD, str(guest.fileno()), mode],
-                                       pass_fds=(guest.fileno(),), stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            qmp_host, qmp_guest = socket.socketpair()
+            qmp_file = qmp_host.makefile('rb')
+            process = subprocess.Popen([sys.executable, '-c', self.CHILD, str(guest.fileno()), str(qmp_guest.fileno()), mode],
+                                       pass_fds=(guest.fileno(), qmp_guest.fileno()), stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
             guest.close()
+            qmp_guest.close()
             log = (folder / 'serial.log').open('ab', buffering=0)
             if mode == 'stale-log':
                 log.write(b'[ 1.0] reboot: Power down\n')
@@ -151,9 +181,11 @@ sys.exit(9 if mode == 'nonzero' else 0)
                 if mode == 'unrelated-exception':
                     raise ValueError('unrelated transport error')
                 host.sendall(command.encode())
+                if mode == 'buffered-exit':
+                    process.wait(timeout=5)
 
             vm = SimpleNamespace(folder=folder, boot_count=2, process=process, serial=host, log=log,
-                                 send=send, stop=lambda: stopped.append(process.poll()))
+                                 qmp=qmp_host, qmp_file=qmp_file, send=send, stop=lambda: stopped.append(process.poll()))
             try:
                 if expected:
                     with self.assertRaises(expected):
@@ -161,36 +193,51 @@ sys.exit(9 if mode == 'nonzero' else 0)
                 else:
                     event = graceful_stop(vm, True, timeout=5)
                     self.assertEqual(event['status'], 'passed')
-                    self.assertTrue(event['serial_eof'] and event['guest_power_down'])
+                    self.assertTrue(event['serial_eof'])
+                    self.assertEqual(event['guest_power_down'], mode != 'quiet-guest')
+                    self.assertEqual(event['guest_shutdown'], {'guest': True, 'reason': 'guest-shutdown'})
+                    self.assertEqual(event['qmp_after_request'][0]['timestamp'], {'seconds': 1234, 'microseconds': 5678})
                     self.assertEqual(event['qemu_exit_status'], 0)
                     self.assertEqual(event['command_status'], 0 if mode == 'ack' else None)
                 recorded = json.loads((folder / 'shutdown-events.jsonl').read_text())
                 self.assertEqual(recorded['qemu_pid'], process.pid)
                 self.assertEqual(recorded['status'], 'failed' if expected else 'passed')
                 self.assertEqual(stopped, [] if expected else [0], 'Forced cleanup must not establish graceful shutdown')
+                if mode == 'stale-event':
+                    self.assertEqual(recorded['qmp_before_request'][0]['event'], 'SHUTDOWN')
+                    self.assertEqual(recorded['qmp_after_request'], [])
             finally:
                 if process.poll() is None:
                     process.terminate()
                 process.wait(timeout=5)
                 process.stderr.close()
                 host.close()
+                qmp_file.close()
+                qmp_host.close()
                 log.close()
 
     def test_real_exit_after_ack_or_early_serial_disconnect(self):
-        for mode in ('ack', 'early-disconnect'):
+        for mode in ('ack', 'early-disconnect', 'quiet-guest', 'buffered-exit'):
             with self.subTest(mode=mode):
                 self.exercise(mode)
 
     def test_missing_fresh_guest_proof_or_nonzero_exit_fails(self):
-        for mode in ('no-proof', 'stale-log', 'stale-buffer', 'nonzero', 'command-failure'):
+        for mode in ('no-proof', 'stale-log', 'stale-buffer', 'stale-event', 'kernel-only', 'nonzero', 'command-failure'):
             with self.subTest(mode=mode):
                 self.exercise(mode, AssertionError)
 
-    def test_unrelated_errors_and_both_shutdown_timeouts_fail(self):
+    def test_unrelated_errors_and_transport_or_exit_timeouts_fail(self):
         for mode, error in [('unrelated-exception', ValueError), ('serial-timeout', TimeoutError),
+                            ('qmp-timeout', TimeoutError),
                             ('exit-timeout', subprocess.TimeoutExpired)]:
             with self.subTest(mode=mode):
                 self.exercise(mode, error)
+
+    def test_host_exit_reboot_panic_and_ambiguous_events_fail(self):
+        for mode in ('cause-host-qmp-quit', 'cause-host-signal', 'cause-guest-reset',
+                     'cause-guest-panic', 'duplicate-event', 'guest-string', 'barrier-failure'):
+            with self.subTest(mode=mode):
+                self.exercise(mode, AssertionError)
 
 
 class AutomaticHooksTests(unittest.TestCase):

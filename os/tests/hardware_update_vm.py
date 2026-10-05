@@ -39,20 +39,30 @@ def verify_image(iso, lock):
 
 def graceful_stop(vm, privileged, timeout=45):
     # Poweroff may terminate the requesting shell before it prints a command
-    # status. Require this guest's new kernel shutdown message and the owned
-    # QEMU process's real exit status; never use forced cleanup as evidence.
+    # status. Require QMP's fresh guest-shutdown event and the owned QEMU
+    # process's real exit status; the live ISO need not log its kernel to serial.
     process = vm.process
     started = time.monotonic()
     deadline = started + timeout
     event = {'boot': vm.boot_count, 'qemu_pid': process.pid, 'started_at': time.time(),
-             'status': 'failed', 'command_status': None, 'serial_eof': False}
+             'status': 'failed', 'command_status': None, 'serial_eof': False,
+             'qmp_before_request': [], 'qmp_after_request': []}
     output = bytearray()
+    qmp_timeout = vm.qmp.gettimeout()
 
     def remaining():
         value = deadline - time.monotonic()
         if value <= 0:
             raise TimeoutError('Guest shutdown exceeded its bounded deadline')
         return value
+
+    def qmp_message():
+        # Read the file object's buffer even after QEMU exits; select() on the
+        # socket alone cannot account for messages already buffered by readline.
+        vm.qmp.settimeout(remaining())
+        line = vm.qmp_file.readline(65537)
+        assert len(line) <= 65536, 'Oversized QMP shutdown message'
+        return json.loads(line) if line else None
 
     try:
         assert process.poll() is None, 'QEMU had already exited before shutdown request'
@@ -64,6 +74,19 @@ def graceful_stop(vm, privileged, timeout=45):
             assert chunk, 'Serial was disconnected before shutdown request'
             vm.log.write(chunk)
         event['serial_offset'] = vm.log.tell()
+        # A correlated response separates earlier events from this request,
+        # including events already read into qmp_file's buffer by other probes.
+        barrier = uuid.uuid4().hex
+        vm.qmp.sendall((json.dumps({'execute': 'query-status', 'id': barrier}) + '\n').encode())
+        while True:
+            message = qmp_message()
+            assert message is not None, 'QMP disconnected before shutdown request'
+            event['qmp_before_request'].append(message)
+            if message.get('id') == barrier:
+                status = message.get('return', {})
+                assert 'error' not in message and status.get('running') is True and status.get('status') == 'running', 'Guest was not running before shutdown'
+                break
+        assert process.poll() is None, 'QEMU exited before shutdown request'
         marker = 'HN_POWEROFF_' + uuid.uuid4().hex
         command = ('sudo -n ' if privileged else '') + 'systemctl --no-block poweroff'
         event['command'] = command
@@ -80,12 +103,21 @@ def graceful_stop(vm, privileged, timeout=45):
                 if match:
                     event['command_status'] = int(match.group(1))
                     assert event['command_status'] == 0, 'Guest poweroff command failed'
-        # Reading through EOF also retains buffered shutdown output when QEMU
-        # exits before the host next polls it.
+        # Drain QMP through EOF as well, retaining its exact events independently
+        # of serial-console configuration and the timing of the child exit.
+        while True:
+            message = qmp_message()
+            if message is None:
+                break
+            event['qmp_after_request'].append(message)
         event['qemu_exit_status'] = process.wait(timeout=remaining())
         assert event['qemu_exit_status'] == 0, 'QEMU did not exit cleanly'
         event['guest_power_down'] = bool(re.search(rb'\[\s*[0-9.]+\]\s+reboot: Power down(?:\r?\n|$)', output))
-        assert event['guest_power_down'], 'No fresh guest kernel shutdown evidence'
+        shutdown = [row for row in event['qmp_after_request'] if row.get('event') == 'SHUTDOWN']
+        assert len(shutdown) == 1, 'Missing or ambiguous fresh QMP shutdown event'
+        event['guest_shutdown'] = shutdown[0].get('data', {})
+        assert event['guest_shutdown'].get('guest') is True and event['guest_shutdown'].get('reason') == 'guest-shutdown', 'QEMU exit was not a guest shutdown'
+        assert not any(row.get('event') in ('RESET', 'GUEST_PANICKED') for row in event['qmp_after_request']), 'Guest reset or panicked during shutdown'
         event['status'] = 'passed'
     except BaseException as error:
         event['error'] = repr(error)
@@ -96,6 +128,7 @@ def graceful_stop(vm, privileged, timeout=45):
         event['serial_tail'] = output[-2000:].decode(errors='replace')
         with (vm.folder / 'shutdown-events.jsonl').open('a') as log:
             log.write(json.dumps(event) + '\n')
+        vm.qmp.settimeout(qmp_timeout)
     vm.stop()
     return event
 
