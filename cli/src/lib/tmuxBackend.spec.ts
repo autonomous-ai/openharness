@@ -54,7 +54,7 @@ esac
       // and its error text with it.
       // `window-style` rides the same invocation for the same reason: the engine asks its
       // terminal for its colours (OSC 10/11) once, at startup, and never again.
-      'new-session -d -P -F #{pane_id} -c /tmp/work -s harness-test ; set-option -w remain-on-exit on ; set-option -w window-style bg=#181818,fg=#f5f5f5',
+      'new-session -d -P -F #{pane_id} -c /tmp/work -s harness-test ; set-option -w remain-on-exit on ; set-option destroy-unattached off ; set-option -w window-style bg=#181818,fg=#f5f5f5',
       'set-option -t %42 mouse on',
       'kill-pane -t %42',
     ])
@@ -109,7 +109,7 @@ esac
     await backend.inventory()
     const styleCalls = () => readFileSync(calls, 'utf8').trim().split('\n').filter((line) => line.includes('window-style'))
     await vi.waitFor(() => expect(styleCalls()).toEqual([
-      'new-session -d -P -F #{pane_id} -c /tmp/work -s harness-codex-1 ; set-option -w remain-on-exit on ; set-option -w window-style bg=#171b29,fg=#f5f5f5',
+      'new-session -d -P -F #{pane_id} -c /tmp/work -s harness-codex-1 ; set-option -w remain-on-exit on ; set-option destroy-unattached off ; set-option -w window-style bg=#171b29,fg=#f5f5f5',
       // The pane this daemon did not create is styled on the first scan; %7 already was.
       'set-option -w -t %9 window-style bg=#171b29,fg=#f5f5f5',
       // The app changed its palette: every live pane, once.
@@ -318,7 +318,7 @@ printf '%%42\\n'
       'new-session -d -P -F #{pane_id} -c /tmp/work -s harness-test'
       + ' -e ANTHROPIC_BASE_URL=https://relay.example/relay -e ANTHROPIC_AUTH_TOKEN=gridkey-abc123'
       + ' /bin/zsh -lic exec "$@" harness-engine claude ; set-option -w remain-on-exit on'
-      + ' ; set-option -w window-style bg=#181818,fg=#f5f5f5',
+      + ' ; set-option destroy-unattached off ; set-option -w window-style bg=#181818,fg=#f5f5f5',
     )
   })
   it('respawns a pane in place with a new environment, keeping the pane id', async () => {
