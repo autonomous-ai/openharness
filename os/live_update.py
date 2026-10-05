@@ -100,13 +100,33 @@ def unregister_screen():
     (STATE / 'screens' / str(os.getpid())).unlink(missing_ok=True)
 
 
+def request_for_screen():
+    request = read(STATE / 'request.json', {})
+    if not isinstance(request, dict) or 'requested_at' not in request:
+        return False
+    target = request.get('target')
+    return target is None or (isinstance(target, str) and re.fullmatch(r'[0-9a-f]{32}', target) is not None
+                              and target == os.environ.get('HARNESS_UPDATE_INSTANCE'))
+
+
+def consume_request():
+    # Match and claim together: another client must not replace the request
+    # between our read and unlink. The opener uses this same handoff lock.
+    with (STATE / 'open.lock').open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if not request_for_screen():
+            return False
+        (STATE / 'request.json').unlink()
+        return True
+
+
 def close_screen():
     # Serialize the final close decision with Super+u's request and selection.
     # A request arriving after the last UI poll must be handled, not abandoned
     # while this Python process is still alive in curses cleanup.
     with (STATE / 'open.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        if (STATE / 'request.json').exists():
+        if request_for_screen():
             return False
         unregister_screen()
         return True
@@ -659,7 +679,7 @@ def update_all():
     (STATE / 'approved.json').unlink(missing_ok=True)
 
 
-def screen(window, message='', refresh=False):
+def screen(window, message='', refresh=False, retry=False):
     curses.curs_set(0)
     window.keypad(True)
     window.timeout(500)
@@ -733,9 +753,8 @@ def screen(window, message='', refresh=False):
             message = str(error)
     while True:
         choices = draw()
-        requested = STATE / 'request.json'
-        if requested.exists():
-            requested.unlink(missing_ok=True)
+        if consume_request() or retry:
+            retry = False
             if not RESTART_REQUIRED.exists():
                 # The shortcut starts updating. A ready download needs no
                 # further network round trip; otherwise discover it now.
@@ -781,7 +800,18 @@ def main(argv=None):
         parser.error('Open Updates as your normal user on an installed Harness system.')
     STATE.mkdir(parents=True, exist_ok=True, mode=0o700)
     if args.action == 'request':
-        write(STATE / 'request.json', {'requested_at': time.time()})
+        target = os.environ.get('HARNESS_UPDATE_TARGET')
+        request = {'requested_at': time.time()}
+        if target is not None:
+            if not re.fullmatch(r'[0-9a-f]{32}', target):
+                raise ValueError('Invalid Updates screen target.')
+            # Private opener handoff already holds open.lock while waiting for
+            # this child. Taking it again here would deadlock startup.
+            write(STATE / 'request.json', dict(request, target=target))
+        else:
+            with (STATE / 'open.lock').open('a') as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX)
+                write(STATE / 'request.json', request)
     elif args.action == 'check':
         check(read(args.feeds) if args.feeds else None)
         finish_approved_update()
@@ -799,19 +829,18 @@ def main(argv=None):
 
 def run_screen():
     message = ''
+    retry = False
     # A prepared release can be applied immediately. Otherwise check now
     # instead of exposing another command or making the user wait for a timer.
     refresh = not (prepared() or system_channel().get('available'))
     while True:
-        action = curses.wrapper(screen, message, refresh)
+        action = curses.wrapper(screen, message, refresh, retry)
         if action is None:
             break
-        message, refresh = '', action == 'check'
+        message, refresh, retry = '', action == 'check', action == 'check'
         try:
-            if action == 'check':
-                # Retry means finish updating, without another confirmation
-                # after the connection or release has recovered.
-                write(STATE / 'request.json', {'requested_at': time.time()})
+            # Retry belongs to this inspection, even when a different Updates
+            # screen is open. It must not broadcast an apply request there.
             if action == 'reboot':
                 subprocess.run(['systemctl', 'reboot'], check=True)
                 break

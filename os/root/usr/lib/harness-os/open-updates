@@ -89,6 +89,12 @@ def updater_panes(socket):
             yield pane, window, token, owner
 
 
+def request_update(token):
+    # The caller holds open.lock until the selected UI owns this request.
+    subprocess.run(['/usr/bin/harness', 'updates', 'request'],
+                   env=dict(os.environ, HARNESS_UPDATE_TARGET=token), check=True, timeout=5)
+
+
 def open_updates(view=False):
     if view and (os.environ.get('SSH_CONNECTION') or os.environ.get('SSH_TTY')):
         return False  # Keep an SSH inspection on its own terminal.
@@ -97,8 +103,6 @@ def open_updates(view=False):
     # pane's actual process prevents rapid shortcuts from creating duplicate tabs.
     with (STATE / 'open.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        if not view:
-            subprocess.run(['/usr/bin/harness', 'updates', 'request'], check=True, timeout=5)
         try:
             socket = hn('display-message', '-p', '#{socket_path}')
         except (OSError, subprocess.SubprocessError):
@@ -109,7 +113,19 @@ def open_updates(view=False):
             if view:
                 return False
             raise ValueError('Harness has no active terminal. Open a terminal and try again.')
+        if view:
+            # hn can answer from a headless server restored for stored sessions.
+            # Its own client row is empty; do not send manual inspection into
+            # an invisible pane or use another client's row via list fanout.
+            try:
+                client = hn('hn-list-clients', '-F', '#{client_tty}', socket=socket)
+            except (OSError, subprocess.SubprocessError):
+                return False
+            if not client.startswith('/dev/') or '\n' in client:
+                return False
         for pane, window, token, owner in updater_panes(socket):
+            if not view:
+                request_update(token)
             try:
                 hn('select-window', '-t', window, socket=socket)
                 hn('select-pane', '-t', pane, socket=socket)
@@ -118,6 +134,8 @@ def open_updates(view=False):
             if (pane, window, token, owner) in updater_panes(socket):
                 return True
         token = secrets.token_hex(16)
+        if not view:
+            request_update(token)
         pane = hn('new-window', '-P', '-F', '#{pane_id}', '-n', 'Updates',
                   'exec env HARNESS_UPDATE_INSTANCE=' + token + ' /usr/bin/python3 ' + UPDATER + ' screen', socket=socket)
         if not re.fullmatch(r'%\d+', pane):

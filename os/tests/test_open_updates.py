@@ -27,6 +27,7 @@ class UpdatePaneOwnership(unittest.TestCase):
         self.root = Path(temporary.name)
         self.proc = self.root / 'proc'
         self.rows, self.commands, self.targets = [], [], []
+        self.attached = True
         self.boot_id = self.root / 'boot-id'
         self.boot_id.write_text('first-boot')
         for value in [patch.object(updates, 'PROC', self.proc),
@@ -69,6 +70,9 @@ class UpdatePaneOwnership(unittest.TestCase):
             self.assertIsNone(socket)
             return SOCKET
         self.assertEqual(socket, SOCKET)
+        if args[0] == 'hn-list-clients':
+            self.assertEqual(args, ('hn-list-clients', '-F', '#{client_tty}'))
+            return '/dev/pts/7' if self.attached else ''
         if args[0] == 'list-panes':
             self.assertEqual(args, ('list-panes', '-s', '-F', updates.FORMAT))
             return '\n'.join(self.rows)
@@ -95,7 +99,8 @@ class UpdatePaneOwnership(unittest.TestCase):
         updates.open_updates()
         self.assert_created_once()
         self.assertNotIn(('select-window', '-t', '@1'), self.commands)
-        self.request.assert_called_once_with(['/usr/bin/harness', 'updates', 'request'], check=True, timeout=5)
+        self.request.assert_called_once_with(['/usr/bin/harness', 'updates', 'request'],
+                                             env={'HARNESS_UPDATE_TARGET': NEW_TOKEN}, check=True, timeout=5)
 
     def test_daemon_backed_owner_is_reused_without_backend_pid_or_socket_fields(self):
         self.pane()
@@ -104,6 +109,7 @@ class UpdatePaneOwnership(unittest.TestCase):
         self.assertIn(('select-window', '-t', '@1'), self.commands)
         self.assertIn(('select-pane', '-t', '%1'), self.commands)
         self.assertFalse(any(item[0] == 'new-window' for item in self.commands))
+        self.assertEqual(self.request.call_args.kwargs['env']['HARNESS_UPDATE_TARGET'], TOKEN)
 
     def test_manual_view_creates_no_request_and_next_shortcut_reuses_its_owner(self):
         self.assertTrue(updates.open_updates(view=True))
@@ -195,7 +201,8 @@ class UpdatePaneOwnership(unittest.TestCase):
         self.request.side_effect = subprocess.CalledProcessError(1, 'harness')
         with self.assertRaises(subprocess.CalledProcessError):
             updates.open_updates()
-        self.assertEqual(self.commands, [])
+        self.assertTrue(self.commands)  # Discover an owner before targeting it.
+        self.assertFalse(any(args[0] in ['select-window', 'select-pane', 'new-window'] for args in self.commands))
 
     def test_startup_failure_is_bounded_and_does_not_create_more_panes(self):
         def never_starts(*args, **kwargs):
@@ -237,6 +244,16 @@ class UpdatePaneOwnership(unittest.TestCase):
         with patch.object(updates, 'hn', side_effect=subprocess.CalledProcessError(1, 'hn')):
             self.assertFalse(updates.open_updates(view=True))
         self.request.assert_not_called()
+
+    def test_valid_headless_socket_keeps_view_in_the_current_terminal(self):
+        self.attached = False
+        self.pane()
+        self.process(100)
+        self.assertFalse(updates.open_updates(view=True))
+        self.request.assert_not_called()
+        self.assertEqual(self.targets, [
+            (('display-message', '-p', '#{socket_path}'), None),
+            (('hn-list-clients', '-F', '#{client_tty}'), SOCKET)])
 
 
 class UpdateEntryPoints(unittest.TestCase):
