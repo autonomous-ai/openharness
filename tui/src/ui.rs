@@ -2916,9 +2916,9 @@ mod theme_render_tests {
         crate::input::modal_key(&mut app, crossterm::event::KeyEvent::new(crossterm::event::KeyCode::Enter, crossterm::event::KeyModifiers::NONE));
         crate::input::refill(&mut app);
         let s = screen(&mut app);
-        for v in ["off", "top", "bottom"] { assert!(s.contains(v), "{v} missing after a refresh:\n{s}") }
         let Some(Modal::Picker { picker, .. }) = &app.modal else { panic!("closed") };
-        assert_eq!(picker.theme_in.as_deref(), Some("status"));
+        assert!(picker.rows.iter().all(|r| r.id.starts_with("theme:")), "shows the theme options after a refresh:\n{s}");
+        assert_eq!(picker.theme_in.as_deref(), Some("theme"));
         let _ = modal::theme_sections(&app);
     }
 
@@ -3033,8 +3033,8 @@ mod theme_render_tests {
         let mut app = app();
         let _ = app.set_look("theme", "Aizen Dark");
         crate::input::run(&mut app, "theme");
-        // (Theme is the third section: Pane titles, Focus, Theme.)
-        for code in [KeyCode::Down, KeyCode::Down, KeyCode::Right] { crate::input::modal_key(&mut app, KeyEvent::new(code, KeyModifiers::NONE)) }
+        // (Theme is the first section now: the cursor starts on it.)
+        crate::input::modal_key(&mut app, KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
         {
             let Some(Modal::Picker { picker, .. }) = &app.modal else { panic!("closed") };
             assert_eq!(picker.current_id().as_deref(), Some("theme:Aizen Dark"), "a section opens on the value in use");

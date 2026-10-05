@@ -679,9 +679,9 @@ pub fn theme_sections(app: &App) -> Vec<Row> {
         // C-b % and C-b " choose it each time, and a harness hn opens splits by the pane's shape —
         // `layout_orientation` in tui.toml, or @hn-layout, where you want one way always. Nor a
         // layout: C-b Space, C-b M-1…5 and Commands → Layout… lay the panes out now.)
+        sec("section:theme", "Theme", "bundled terminal themes", if theme.is_empty() { "terminal" } else { &theme }),
         sec("section:status", "Pane titles", "pane-border-status", &status),
         sec("section:focus", "Focus", "focus_style", focus),
-        sec("section:theme", "Theme", "bundled terminal themes", if theme.is_empty() { "terminal" } else { &theme }),
         // ── status bar ──
         sec("section:bar", "Status bar", "status_bar", status_bar_of(app)),
         sec("section:boxes", "Borders", "every pane its own box", if border_style_of(app) == "box" { "on" } else { "off" }),
@@ -825,7 +825,7 @@ mod theme_row_tests {
         let app = app();
         let rows = theme_sections(&app);
         let ids: Vec<&str> = rows.iter().map(|r| r.id.as_str()).collect();
-        assert_eq!(ids, vec!["section:status", "section:focus", "section:theme",
+        assert_eq!(ids, vec!["section:theme", "section:status", "section:focus",
             // ── status bar ──
             "section:bar", "section:boxes"]);
         // Each section shows its current value and opens onto a non-empty option list.
