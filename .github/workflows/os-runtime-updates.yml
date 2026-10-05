@@ -2,13 +2,6 @@ name: Harness OS private runtime update fixtures
 
 on:
   workflow_dispatch:
-  push:
-    branches: ['os-polish/parallel-reliability']
-    paths:
-      - 'os/tests/build-update-fixture.py'
-      - 'os/tests/test_update_fixture.py'
-      - 'os/tools/build-runtime.sh'
-      - '.github/workflows/os-runtime-updates.yml'
 
 permissions:
   contents: read
