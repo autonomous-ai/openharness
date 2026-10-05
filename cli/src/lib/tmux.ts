@@ -19,6 +19,7 @@ import { psEnv } from './childLocale.js'
 import { nativeProcessImages } from './nativeProcessImages.js'
 import { neutralizePasteControls } from './pasteText.js'
 import { patientExec } from './patientExec.js'
+import type { TmuxFeatures } from './tmuxVersion.js'
 export { captureTmuxPane, tmuxCaptureArgs } from './tmuxCapture.js'
 
 // Every tmux and `ps` call here: a held event loop must not turn a timeout into an empty answer
@@ -1141,6 +1142,17 @@ export function setPaneMouseOn(pane: string): Promise<void> {
   return new Promise((resolve) => {
     run('tmux', ['set-option', '-t', pane, 'mouse', 'on'], { timeout: 2_000 }, () => resolve())
   })
+}
+
+/**
+ * Where an option Harness keeps for one of its panes lives: on the pane, where tmux has pane options
+ * (3.0), so it goes with the pane into any window the person moves it to; on the window before that,
+ * which is the agent's own for as long as the person leaves it be. A `-p` on tmux 2.x is a usage
+ * error, and chained into `new-session` it failed every agent create (PR #789's review). Never `-g`:
+ * the daemon shares the person's tmux server.
+ */
+export function paneOptionScope(features: Pick<TmuxFeatures, 'paneOptions'>): '-p' | '-w' {
+  return features.paneOptions ? '-p' : '-w'
 }
 
 /**

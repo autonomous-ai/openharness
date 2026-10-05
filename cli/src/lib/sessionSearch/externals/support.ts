@@ -8,8 +8,9 @@ import type { Dirent } from 'node:fs'
 import { open, readdir, readFile, stat } from 'node:fs/promises'
 import { isAbsolute, relative, resolve } from 'node:path'
 
-import { HARNESS_OWNER_OPTION, isHarnessSession } from '../../harnessSessionLabel.js'
+import { isHarnessSession, paneOwnerFormat } from '../../harnessSessionLabel.js'
 import { processRows } from '../../tmux.js'
+import { tmuxFeatures } from '../../tmuxVersion.js'
 import { type ProcessView, type RunningProcess, type ScanContext, UNSETTLED } from './types.js'
 
 /** A folder's entries, or none when it is missing or unreadable. */
@@ -254,8 +255,13 @@ const ask: Ask = (command, args, timeout) => new Promise((resolve) => {
  * binding it, and a take-over never stops it. None when no tmux server is running; null when tmux could
  * not be asked (a timeout): then nobody can say.
  */
-export async function harnessTtys(exec: Ask = ask): Promise<Set<string> | null> {
-  const { stdout, failed, stderr } = await exec('tmux', ['list-panes', '-a', '-F', `#{pane_tty}\t#{session_name}\t#{${HARNESS_OWNER_OPTION}}`], 3_000)
+export async function harnessTtys(
+  exec: Ask = ask,
+  // Before tmux 3.0 the tag is not a pane option (`paneOwnerFormat`).
+  paneOptions?: boolean,
+): Promise<Set<string> | null> {
+  const format = `#{pane_tty}\t#{session_name}\t${paneOwnerFormat(paneOptions ?? (await tmuxFeatures()).paneOptions)}`
+  const { stdout, failed, stderr } = await exec('tmux', ['list-panes', '-a', '-F', format], 3_000)
   if (failed && !/no server running|error connecting to/i.test(stderr)) return null
   const ttys = new Set<string>()
   for (const line of stdout.split('\n')) {

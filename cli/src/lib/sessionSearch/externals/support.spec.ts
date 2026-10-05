@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { UNSETTLED } from './types.js'
 import {
@@ -244,9 +244,21 @@ describe('processes', () => {
     expect(await harnessTtys(async () => ({ stdout: '', failed: true, stderr: 'no server running on /tmp/tmux-501/default' }))).toEqual(new Set())
     expect(await harnessTtys(async () => ({ stdout: '', failed: true, stderr: 'error connecting to /tmp/x (No such file or directory)' }))).toEqual(new Set())
     expect(await harnessTtys(async () => ({ stdout: '', failed: true, stderr: '' }))).toBeNull()
-    // The real tmux answers one way or the other.
-    const real = await harnessTtys()
-    expect(real === null || real instanceof Set).toBe(true)
+    // Before tmux 3.0 the tag rides the pane's start command (`paneOwnerFormat`), asked for as such.
+    let asked: readonly string[] = []
+    const old = '/dev/ttys006\tmy-claude-work\t/usr/bin/env HARNESS_DAEMON=0123456789abcdef\n/dev/ttys007\tmy-own\t\n'
+    expect(await harnessTtys(async (_command, args) => { asked = args; return { stdout: old, failed: false, stderr: '' } }, false))
+      .toEqual(new Set(['/dev/ttys006']))
+    expect(asked.at(-1)).toContain('#{m:/usr/bin/env HARNESS_DAEMON=*,#{pane_start_command}}')
+    // A real tmux answers one way or the other: a private one with no server, never the developer's own.
+    vi.stubEnv('TMUX', undefined)
+    vi.stubEnv('TMUX_PANE', undefined)
+    vi.stubEnv('TMUX_TMPDIR', home())
+    try {
+      expect(await harnessTtys()).toEqual(new Set())
+    } finally {
+      vi.unstubAllEnvs()
+    }
   })
 
   it('reads entries through a symlinked folder too', async () => {

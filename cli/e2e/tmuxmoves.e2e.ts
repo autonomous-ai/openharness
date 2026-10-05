@@ -56,7 +56,13 @@ describe('the person reaching into the agents\' tmux', () => {
       await d.tmux.run('join-pane', '-d', '-s', pane, '-t', `mine-${engine}:`)
     }],
     ['breaks its pane out into a window of its own', async (d: IsolatedDaemon, pane: string, _engine: Engine) => {
-      await d.tmux.run('break-pane', '-d', '-s', pane)
+      await d.tmux.run('break-pane', '-d', '-s', pane).catch(async (error: unknown) => {
+        // tmux before 3.1 will not break out a window's only pane ("can't break with only one pane"):
+        // there the person has opened a shell beside the agent first, and it stays behind.
+        if (!/only one pane/.test(String(error))) throw error
+        await d.tmux.run('split-window', '-d', '-t', pane, '/bin/sh')
+        await d.tmux.run('break-pane', '-d', '-s', pane)
+      })
     }],
   ] as const)('the person %s: the agent stays active, works, and comes back after a restart', async (_what, move) => {
     const d = await IsolatedDaemon.create()

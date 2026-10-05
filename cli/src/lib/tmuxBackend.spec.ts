@@ -1,13 +1,18 @@
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TmuxBackend, clearEnvArgs } from './tmuxBackend.js'
+import { assumeTmuxVersion, resetTmuxVersionCache } from './tmuxVersion.js'
 
 const originalPath = process.env.PATH
 const dirs: string[] = []
 
+// A tmux that answers `-V` with no number reads as the newest; the specs that need an older one say so.
+beforeEach(() => assumeTmuxVersion(null))
+
 afterEach(() => {
+  resetTmuxVersionCache()
   process.env.PATH = originalPath
   delete process.env.TMUX_BACKEND_CALLS
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true })
@@ -412,6 +417,100 @@ exit 1
     expect(moved.state).toBe('unknown')
     expect(moved).toMatchObject({ dispatch: 'possibly_executed' })
     if (moved.state === 'unknown') expect(moved.reason).toContain('no such pane')
+  })
+})
+
+/** A fake tmux on PATH that records every call, prints [listing] for `list-panes` and `%42` otherwise. */
+function recordingTmux(listing = ''): () => string[] {
+  const dir = mkdtempSync(join(tmpdir(), 'tmux-backend-old-'))
+  dirs.push(dir)
+  const calls = join(dir, 'calls')
+  writeFileSync(join(dir, 'tmux'), `#!/bin/sh
+printf '%s\\n' "$*" >> "$TMUX_BACKEND_CALLS"
+case "$1" in
+  list-panes) printf '${listing.replace(/%/g, '%%')}' ;;
+  *) printf '%%42\\n' ;;
+esac
+`, { mode: 0o700 })
+  process.env.PATH = `${dir}${delimiter}${originalPath ?? ''}`
+  process.env.TMUX_BACKEND_CALLS = calls
+  return () => { try { return readFileSync(calls, 'utf8').trim().split('\n') } catch { return [] } }
+}
+
+// Debian 10 ships tmux 2.8 and RHEL 8 ships 2.7: no pane options, and tmux checks a whole `;` list before
+// it runs any of it. One `set-option -p` chained into `new-session` failed every agent create there.
+describe('TmuxBackend on a tmux before 3.0', () => {
+  beforeEach(() => assumeTmuxVersion({ major: 2, minor: 8 }))
+  const command = ['/bin/zsh', '-lic', 'exec "$@"', 'harness-engine', 'claude']
+
+  it('creates the session with nothing in the list that tmux cannot run, the tag on the window and in the start command', async () => {
+    const calls = recordingTmux()
+    const created = await new TmuxBackend(undefined, () => 'daemon-a').create({ cwd: '/tmp/work', label: 'harness-test', command })
+    expect(created).toEqual({ state: 'succeeded', dispatch: 'executed', runtime: { backend: 'tmux', paneId: '%42' } })
+    expect(calls()[0]).toBe(
+      'new-session -d -P -F #{pane_id} -c /tmp/work -s harness-test'
+      // The start command goes with the pane wherever the person moves it, where a window option stays.
+      + ' /usr/bin/env HARNESS_DAEMON=daemon-a /bin/zsh -lic exec "$@" harness-engine claude'
+      + ' ; set-option -w remain-on-exit on ; set-option destroy-unattached off'
+      + ' ; set-option -w window-style bg=#181818,fg=#f5f5f5 ; set-option -w @harness_daemon daemon-a',
+    )
+    expect(calls()[0]).not.toContain(' -p ')
+  })
+
+  it('starts tmux\'s default shell as it is: env with nothing to run would print and exit', async () => {
+    const calls = recordingTmux()
+    await new TmuxBackend(undefined, () => 'daemon-a').create({ label: 'harness-test' })
+    expect(calls()[0]).toMatch(/^new-session -d -P -F #\{pane_id\} -s harness-test ; set-option -w remain-on-exit on/)
+  })
+
+  it('respawns with the tag kept in the new start command and the exit mark on the window', async () => {
+    const calls = recordingTmux()
+    await expect(new TmuxBackend(undefined, () => 'daemon-a').respawn({ backend: 'tmux', paneId: '%9' }, { command: ['claude'] }))
+      .resolves.toEqual({ state: 'succeeded', dispatch: 'executed' })
+    expect(calls()).toEqual([
+      'set-option -w -t %9 remain-on-exit on ; set-option -w -t %9 @harness_engine_exit  ; respawn-pane -k -t %9 /usr/bin/env HARNESS_DAEMON=daemon-a claude',
+    ])
+  })
+
+  it('finds its panes by the start command wherever they moved, by the window\'s tag otherwise, never another daemon\'s', async () => {
+    const calls = recordingTmux(
+      '%1|100|mine-claude|/work/moved|/usr/bin/env HARNESS_DAEMON=daemon-a\\n'
+      + '%2|101|harness-codex-2|/work/theirs|/usr/bin/env HARNESS_DAEMON=daemon-b\\n'
+      + '%3|102|harness-claude-3|/work/respawned|daemon-a\\n'
+      + '%4|103|my-shell|/work/shell|\\n',
+    )
+    const inventory = await new TmuxBackend(undefined, () => 'daemon-a').inventory()
+    expect(inventory.state === 'available' && inventory.roots.map((root) => root.runtime.paneId)).toEqual(['%1', '%3'])
+    expect(calls()[0]).toContain('#{?#{m:/usr/bin/env HARNESS_DAEMON=*,#{pane_start_command}},#{=44:pane_start_command},#{@harness_daemon}}')
+  })
+})
+
+describe('TmuxBackend with variables on a tmux that cannot take them', () => {
+  const env = { CODEX_HOME: '/work/profile' }
+
+  it('refuses a create below 3.2, saying why, and asks tmux nothing', async () => {
+    assumeTmuxVersion({ major: 3, minor: 1 })
+    const calls = recordingTmux()
+    const created = await new TmuxBackend().create({ label: 'harness-test', env, command: ['codex'] })
+    expect(created).toMatchObject({ state: 'failed', dispatch: 'not_started' })
+    expect(created.state !== 'succeeded' && created.reason).toContain('older than 3.2')
+    expect(calls()).toEqual([])
+  })
+
+  it('refuses a respawn below 3.0, saying why, and asks tmux nothing', async () => {
+    assumeTmuxVersion({ major: 2, minor: 9 })
+    const calls = recordingTmux()
+    const moved = await new TmuxBackend().respawn({ backend: 'tmux', paneId: '%9' }, { env, command: ['codex'] })
+    expect(moved).toMatchObject({ state: 'failed', dispatch: 'not_started' })
+    expect(moved.state !== 'succeeded' && moved.reason).toContain('older than 3.0')
+    expect(calls()).toEqual([])
+  })
+
+  it('respawns with them from 3.0, where respawn-pane takes -e', async () => {
+    assumeTmuxVersion({ major: 3, minor: 0 })
+    const calls = recordingTmux()
+    await new TmuxBackend(undefined, () => 'daemon-a').respawn({ backend: 'tmux', paneId: '%9' }, { env, command: ['codex'] })
+    expect(calls()).toEqual(['set-option -w -t %9 remain-on-exit on ; set-option -p -t %9 @harness_engine_exit  ; respawn-pane -k -e CODEX_HOME=/work/profile -t %9 codex'])
   })
 })
 

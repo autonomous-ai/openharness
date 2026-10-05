@@ -20,8 +20,9 @@ import { probeGridAssignment, type GridAssignment } from './gridAssignment.js'
 import { probeCodexHome } from './codexHomeProbe.js'
 import { env } from '../config/env.js'
 import {
-  buildHarnessSessionLabel, HARNESS_OWNER_OPTION, harnessPaneOwner, isLegacyHarnessSession, ownedHere,
+  buildHarnessSessionLabel, harnessPaneOwner, isLegacyHarnessSession, ownedHere, paneOwnerFormat, paneOwnerOf,
 } from './harnessSessionLabel.js'
+import { tmuxFeatures } from './tmuxVersion.js'
 import { psEnv } from './childLocale.js'
 import type { ProcessIdentity, RegisteredSession } from './registry.js'
 import {
@@ -107,8 +108,14 @@ function execText(
 }
 
 /** What every pane listing asks tmux for. The owner tag goes last: a folder's path can hold `|`, the tag
- *  never does, so the last `|` is always the one before it. */
-export const PANE_FORMAT = `#{pane_id}|#{pane_pid}|#{session_name}|#{pane_current_path}|#{${HARNESS_OWNER_OPTION}}`
+ *  never does, so the last `|` is always the one before it. How the tag is read depends on the tmux
+ *  (`paneOwnerFormat`): before 3.0 it is not a pane option. */
+export function paneFormat(paneOptions: boolean): string {
+  return `#{pane_id}|#{pane_pid}|#{session_name}|#{pane_current_path}|${paneOwnerFormat(paneOptions)}`
+}
+
+/** The listing on a tmux with pane options. */
+export const PANE_FORMAT = paneFormat(true)
 
 export function parsePanes(stdout: string): TmuxPaneSnapshot[] {
   const panes: TmuxPaneSnapshot[] = []
@@ -129,7 +136,7 @@ export function parsePanes(stdout: string): TmuxPaneSnapshot[] {
       rootPid,
       tmuxSessionName: line.slice(second + 1, third),
       cwd: tag < 0 ? rest : rest.slice(0, tag),
-      owner: tag < 0 ? '' : rest.slice(tag + 1),
+      owner: tag < 0 ? '' : paneOwnerOf(rest.slice(tag + 1)),
     })
   }
   return panes
@@ -151,7 +158,8 @@ export type TmuxPaneInventory =
  */
 export async function listTmuxPanes(owner: string = harnessPaneOwner(env.ADAPTER_DATA_DIR)): Promise<TmuxPaneInventory> {
   // Printable delimiters survive tmux's POSIX-locale output sanitiser (see PANE_FORMAT).
-  const read = () => execText('tmux', ['list-panes', '-a', '-F', PANE_FORMAT], 2_000)
+  const format = paneFormat((await tmuxFeatures()).paneOptions)
+  const read = () => execText('tmux', ['list-panes', '-a', '-F', format], 2_000)
   let result = await read()
   // A server whose socket was removed still runs its panes: asked back, it is read again, once.
   if (!result.ok && isNoTmuxServerError(result.error) && await reviveRemovedTmuxSocket()) result = await read()
