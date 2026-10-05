@@ -31,6 +31,9 @@ export interface FakePlatformState {
   linger: 'yes' | 'no' | null
   /** Calls that fail instead, keyed by `<command> <first argument after --user>`. */
   fail: Record<string, { status: number; stderr: string }>
+  /** Pids a stop may SIGTERM, as launchd and systemd do the master: only stand-ins a test started
+   *  itself, never a number that could be someone's real process. */
+  killable: number[]
 }
 
 export interface FakePlatform {
@@ -43,7 +46,7 @@ export interface FakePlatform {
 }
 
 const DEFAULTS: FakePlatformState = {
-  guiDomain: true, loaded: false, enabled: false, pid: null, nextPid: 4242, pidFile: null, failed: false, linger: 'yes', fail: {},
+  guiDomain: true, loaded: false, enabled: false, pid: null, nextPid: 4242, pidFile: null, failed: false, linger: 'yes', fail: {}, killable: [],
 }
 
 // One script for all three commands, told apart by the name it was run as. Plain CommonJS on the
@@ -69,6 +72,7 @@ const run = () => {
   if (state.pidFile) fs.writeFileSync(state.pidFile, state.pid + '\n')
 }
 const halt = () => {
+  if (state.pid !== null && state.killable.includes(state.pid)) { try { process.kill(state.pid, 'SIGTERM') } catch {} }
   if (state.pidFile && state.pid !== null) {
     try { if (Number(fs.readFileSync(state.pidFile, 'utf8')) === state.pid) fs.rmSync(state.pidFile) } catch {}
   }
@@ -108,6 +112,7 @@ if (name === 'systemctl') {
   const verb = args[0]
   switch (verb) {
     case 'show':
+      if (args.includes('--property=MainPID')) { out('MainPID=' + (state.pid ?? 0) + '\n'); end(0) }
       out('LoadState=' + (state.loaded ? 'loaded' : 'not-found') + '\nUnitFileState=' + (state.enabled ? 'enabled' : state.loaded ? 'disabled' : '') +
         '\nActiveState=' + (state.failed ? 'failed' : state.pid ? 'active' : 'inactive') + '\nSubState=' + (state.failed ? 'failed' : state.pid ? 'running' : 'dead') +
         '\nMainPID=' + (state.pid ?? 0) + '\nResult=' + (state.failed ? 'start-limit-hit' : 'success') + '\n')
@@ -117,6 +122,7 @@ if (name === 'systemctl') {
     case 'enable': state.enabled = true; if (args[1] === '--now' && !state.pid) run(); end(0)
     case 'start': if (!state.pid) run(); end(0)
     case 'stop': halt(); end(0)
+    case 'kill': if (!state.pid) end(1, 'Failed to kill unit harnessd.service: No main process to kill'); halt(); end(0)
     case 'disable': state.enabled = false; if (args[1] === '--now') halt(); end(0)
     default: end(1, 'Unknown command verb ' + verb)
   }

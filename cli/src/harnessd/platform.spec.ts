@@ -137,8 +137,9 @@ describe('the systemd unit', () => {
   })
 
   it('escapes systemd\'s specifiers, its variables and its quotes', () => {
-    const unit = systemdUnit(definition({ nodePath: '/opt/my node/100%/$HOME/"q"\\b/node', home: '/home/50%', logFile: '/logs/50%.log', env: { A: 'x"y%z$w\\v' } }))
-    expect(unit).toContain('ExecStart="/opt/my node/100%%/$$HOME/\\"q\\"\\\\b/node" ')
+    const unit = systemdUnit(definition({ nodePath: '/opt/my node/100%/$HOME/"q"\\b/node', scriptPath: '/opt/$cli/cli.js', home: '/home/50%', logFile: '/logs/50%.log', env: { A: 'x"y%z$w\\v' } }))
+    // The program is substituted for no variable, so its `$` stays single; an argument's is doubled.
+    expect(unit).toContain('ExecStart="/opt/my node/100%%/$HOME/\\"q\\"\\\\b/node" "/opt/$$cli/cli.js" "__harnessd"')
     expect(unit).toContain('Environment="A=x\\"y%%z$w\\\\v"')
     expect(unit).toContain('WorkingDirectory=/home/50%%')
     expect(unit).toContain('StandardOutput=append:/logs/50%%.log')
@@ -313,7 +314,7 @@ describe('PlatformService over fake systemctl', () => {
     expect(service.ownedBy('/elsewhere/harness.log')).toBe(false)
   })
 
-  it('registers with enable --now, starts, stops and unregisters with disable --now', () => {
+  it('registers with enable --now, starts, and stops and unregisters without a stop job', () => {
     const def = definition({ home })
     expect(service.preflight()).toEqual({ ok: true })
     expect(service.inspect()).toMatchObject({ registered: false, pid: null, state: 'inactive (dead)', failed: false, lastExit: null, linger: true })
@@ -331,19 +332,28 @@ describe('PlatformService over fake systemctl', () => {
     expect(verbs()).toEqual([
       'systemctl daemon-reload', 'systemctl show', 'loginctl show-user',
       'systemctl daemon-reload', 'systemctl enable', 'systemctl show', 'loginctl show-user',
-      'systemctl stop', 'systemctl show', 'loginctl show-user',
+      'systemctl show', 'systemctl kill', 'systemctl show', 'loginctl show-user',
       'systemctl reset-failed', 'systemctl start',
       'systemctl daemon-reload', 'systemctl reset-failed', 'systemctl start',
       'systemctl show', 'loginctl show-user',
-      'systemctl disable', 'systemctl daemon-reload', 'systemctl reset-failed',
+      'systemctl disable', 'systemctl show', 'systemctl daemon-reload', 'systemctl reset-failed',
     ])
     expect(fake.calls()).toContainEqual(['systemctl', '--user', 'enable', '--now', SYSTEMD_UNIT])
-    expect(fake.calls()).toContainEqual(['systemctl', '--user', 'disable', '--now', SYSTEMD_UNIT])
+    expect(fake.calls()).toContainEqual(['systemctl', '--user', 'kill', '--kill-who=main', '--signal=SIGTERM', SYSTEMD_UNIT])
+    expect(fake.calls()).toContainEqual(['systemctl', '--user', 'disable', SYSTEMD_UNIT])
+    // A stop job would be passed to every pane scope PartOf this unit: none is ever sent.
+    for (const call of fake.calls()) expect(call.filter((word) => ['stop', 'restart', '--now'].includes(word) && call[2] !== 'enable')).toEqual([])
   })
 
   it('stops a unit whose file is already gone, and says why when systemd will not take it', () => {
     expect(service.unregister()).toEqual({ ok: true })
-    expect(fake.calls()[0]).toEqual(['systemctl', '--user', 'stop', SYSTEMD_UNIT])
+    expect(fake.calls()[0]).toEqual(['systemctl', '--user', 'show', SYSTEMD_UNIT, '--property=MainPID'])
+    fake.set({ pid: 4242 })
+    expect(service.unregister()).toEqual({ ok: true })
+    expect(fake.calls()).toContainEqual(['systemctl', '--user', 'kill', '--kill-who=main', '--signal=SIGTERM', SYSTEMD_UNIT])
+    fake.set({ pid: 4242, fail: { 'systemctl kill': { status: 1, stderr: 'Access denied' } } })
+    expect(service.unregister()).toEqual({ ok: false, detail: expect.stringContaining('Access denied') })
+    fake.set({ pid: null, fail: {} })
     fake.set({ fail: { 'systemctl daemon-reload': { status: 1, stderr: 'Failed to connect to bus: No medium found' } } })
     expect(service.preflight()).toEqual({ ok: false, detail: 'systemctl --user daemon-reload failed (exit 1): Failed to connect to bus: No medium found' })
     expect(service.register()).toMatchObject({ ok: false })
@@ -354,6 +364,19 @@ describe('PlatformService over fake systemctl', () => {
     expect(existsSync(service.file)).toBe(true)
     fake.set({ fail: { 'systemctl show': { status: 1, stderr: 'Failed to connect to bus' } }, linger: null })
     expect(service.inspect()).toMatchObject({ registered: false, linger: null, unreachable: expect.stringContaining('Failed to connect to bus') })
+  })
+})
+
+describe('discarding a definition that could not be registered', () => {
+  it('removes the file alone, and has systemd forget it', () => {
+    for (const platform of ['launchd', 'systemd'] as const) {
+      const { deps, calls, files } = stubDeps({})
+      const service = new PlatformService(platform, deps)
+      service.write(definition())
+      service.discard()
+      expect(files).toEqual({})
+      expect(calls).toEqual(platform === 'systemd' ? ['systemctl --user daemon-reload'] : [])
+    }
   })
 })
 

@@ -145,8 +145,15 @@ ${environment}
 `
 }
 
-/** One word of an ExecStart= line: quoted, with systemd's specifiers (%) and variables ($) escaped. */
-const execWord = (word: string): string => `"${word.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/%/g, '%%').replace(/\$/g, '$$$$')}"`
+/**
+ * One word of an ExecStart= line: quoted, with systemd's specifiers (%) escaped, and in an argument its
+ * variables ($) too. Not in the program: systemd substitutes no variable there, so it would leave `$$`
+ * as two dollars (systemd 259, checked with systemd-analyze verify).
+ */
+const execWord = (word: string, index: number): string => {
+  const quoted = word.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/%/g, '%%')
+  return `"${index === 0 ? quoted : quoted.replace(/\$/g, '$$$$')}"`
+}
 /** An Environment= assignment: quoted, specifiers escaped; `$` means nothing there. */
 const environmentWord = (name: string, value: string): string => `"${`${name}=${value}`.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/%/g, '%%')}"`
 /** A path in a setting that takes one path as its whole value: only the specifiers to escape. */
@@ -182,9 +189,11 @@ RestartSec=${SYSTEMD_RESTART_S}
 # order, inside TimeoutStopSec, and they leave by themselves if it dies. The cleaner split would be a
 # scope of tmux's own (systemd-run --user --scope tmux ...), which this unit could then stop with
 # control-group; it means changing how the core starts tmux, and a unit that only works with that
-# change is a unit nobody can turn back. Two consequences: a tmux server the daemon started is listed
-# under this unit, and systemd notes it as left over on the next start; and no MemoryMax= here, which
-# would cover the agents too.
+# change is a unit nobody can turn back. Consequences: a tmux server the daemon started is listed
+# under this unit, and systemd notes it as left over on the next start; no MemoryMax= here, which
+# would cover the agents too; and, where tmux is built with systemd support, each pane lives in a
+# scope PartOf this unit, so a stop job (systemctl --user stop or restart) stops every agent all the
+# same. \`harness stop\` signals the master instead, and its clean exit stops nothing else: use it.
 KillMode=process
 TimeoutStopSec=${STOP_TIMEOUT_S}
 # Appended, as \`harness start\` opens it; the master keeps it under its cap. append: needs systemd 240.
@@ -433,17 +442,30 @@ export class PlatformService {
     return this.systemctl('start', SYSTEMD_UNIT)
   }
 
-  /** Stop the master and keep it stopped: launchd unloads the job until the next login or start;
-   *  systemd stops the unit, which stays enabled for the next login. */
+  /**
+   * Stop the master and keep it stopped: launchd unloads the job until the next login or start; under
+   * systemd the master is told to stop and exits cleanly, which Restart=on-failure leaves stopped, and
+   * the unit stays enabled for the next login.
+   *
+   * Under systemd a signal, never a stop job (`systemctl stop`). tmux built with systemd support puts
+   * every pane in a scope PartOf the unit that started its server, and a stop job on this unit is passed
+   * to every one of them: each agent is stopped, whatever KillMode says. Seen with Fedora's tmux 3.7c
+   * under systemd 259, where `systemctl --user stop` ended every pane and a clean exit of the master
+   * ended none. The same goes for `restart` and `disable --now`, so nothing here uses them.
+   */
   stop(): Outcome {
     if (this.platform === 'launchd') {
       if (this.launchctl('print', this.target).status !== 0) return { ok: true }
       return this.checked('launchctl', ['bootout', this.target])
     }
-    return this.systemctl('stop', SYSTEMD_UNIT)
+    const main = Number(properties(this.deps.run('systemctl', ['--user', 'show', SYSTEMD_UNIT, '--property=MainPID']).stdout).MainPID)
+    if (!(main > 0)) return { ok: true }
+    // --kill-who: systemd 252 renamed it --kill-whom and kept this spelling, which older ones know.
+    return this.systemctl('kill', '--kill-who=main', '--signal=SIGTERM', SYSTEMD_UNIT)
   }
 
-  /** Stop the master, unregister it and remove the definition. */
+  /** Stop the master, unregister it and remove the definition. A unit whose file is already gone is
+   *  stopped all the same. */
   unregister(): Outcome {
     if (this.platform === 'launchd') {
       const stopped = this.stop()
@@ -451,18 +473,26 @@ export class PlatformService {
       this.deps.removeFile(this.file)
       return { ok: true }
     }
+    // `disable` without --now, then the master stopped by a signal: no stop job reaches the panes (see stop).
     if (this.installed()) {
-      const disabled = this.systemctl('disable', '--now', SYSTEMD_UNIT)
+      const disabled = this.systemctl('disable', SYSTEMD_UNIT)
       if (!disabled.ok) return disabled
-    } else {
-      // Its file is gone already; a unit still running from it is stopped all the same.
-      this.deps.run('systemctl', ['--user', 'stop', SYSTEMD_UNIT])
     }
+    const stopped = this.stop()
+    if (!stopped.ok) return stopped
     this.deps.removeFile(this.file)
     const reloaded = this.systemctl('daemon-reload')
     // Forgets a failed state the unit left, so `systemctl --user --failed` does not list a unit that is gone.
     this.deps.run('systemctl', ['--user', 'reset-failed', SYSTEMD_UNIT])
     return reloaded
+  }
+
+  /** Remove the definition and nothing else: an install that could not register leaves nothing half
+   *  done, so `harness start` runs the daemon as it did before. */
+  discard(): void {
+    this.deps.removeFile(this.file)
+    // Best effort: a manager that could not take the unit may not take a reload either.
+    if (this.platform === 'systemd') this.deps.run('systemctl', ['--user', 'daemon-reload'])
   }
 
   /** systemd: whether the user manager lingers. Unknown when loginctl cannot say. */
