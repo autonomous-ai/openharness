@@ -19,7 +19,8 @@ import { sid } from '../lib/log.js'
 import type { LiveEvent } from '../lib/normalize.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { SessionInputController, type SessionInputDelivery, type SessionInputDeps } from '../lib/sessionInput.js'
-import { terminalActionNotStarted } from '../lib/terminalTypes.js'
+import { REWIND_PICKER_ENGINES, rewindPickerOpen } from '../lib/runtimeProfileController.js'
+import { REWIND_PICKER_OPEN, terminalActionNotStarted } from '../lib/terminalTypes.js'
 import { Id } from '../teams/model.js'
 import { teamWriteHold } from '../teams/preflight.js'
 import type { TerminalControl } from './terminals/control.js'
@@ -67,7 +68,18 @@ export function sessionInputDeps(
       return teamWriteHold(session.engine, capture)
     },
     validateRuntime: validateTerminal,
-    inject: (id, text) => deviceInput().legacyWrite(id, () => submitTerminalAction(id, text)),
+    // A person's message is typed into the pane as it stands, a draft or a running turn included, but not
+    // into a picker for a point to rewind the conversation to, where Enter picks one: Claude Code's Rewind
+    // menu drops the text, and so does Codex's transcript browser in its scrollback mode, so the Enter
+    // behind it rewinds. (Its fullscreen mode would take the text back to the composer; the two modes are
+    // not told apart before typing.) Read inside the pane's write lock, right before the paste.
+    inject: (id, text) => deviceInput().legacyWrite(id, async () => {
+      const engine = resolve(id)?.engine
+      if (engine && REWIND_PICKER_ENGINES.has(engine) && rewindPickerOpen(engine, await captureTerminal(id))) {
+        return terminalActionNotStarted(REWIND_PICKER_OPEN)
+      }
+      return submitTerminalAction(id, text)
+    }),
     injectTeam: (id, text, deliveryId) => deviceInput().legacyWrite(id, async () => {
       const session = resolve(id)
       const reason = session ? teamWriteHold(session.engine, await captureTerminal(id)) : 'team_waiting_unavailable'
@@ -110,9 +122,11 @@ export function deviceInputDeps(
     inject: submitTerminalAction,
     sendKey: keyTerminalAction,
     capture: captureTerminal,
+    // A question on screen, or a picker for a point to rewind to: the Device's message waits for either to
+    // close rather than be typed into it.
     isAwaitingUser: async session => {
       const pane = await captureTerminal(session.agentId)
-      return pane === null || parseEngineQuestionPane(session.engine, pane) !== null
+      return pane === null || parseEngineQuestionPane(session.engine, pane) !== null || rewindPickerOpen(session.engine, pane)
     },
     acquireControl: id => input().acquireControl(id, { forAnswer: true }),
     legacySubmit: (id, text, deliveryId) => input().submit(id, text, deliveryId),

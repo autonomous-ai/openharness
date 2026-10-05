@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { SessionInputController } from './sessionInput.js'
 import type { RegisteredSession } from './registry.js'
-import { TERMINAL_LEASE_REFUSED, type TerminalActionResult } from './terminalTypes.js'
+import { REWIND_PICKER_OPEN, TERMINAL_LEASE_REFUSED, type TerminalActionResult } from './terminalTypes.js'
 
 function session(engine: 'claude' | 'codex' | 'cursor' | 'commandcode' = 'codex'): RegisteredSession {
   return {
@@ -16,6 +16,36 @@ function session(engine: 'claude' | 'codex' | 'cursor' | 'commandcode' = 'codex'
 
 describe('SessionInputController', () => {
   afterEach(() => vi.useRealTimers())
+
+  describe('a message not typed because a picker for a point to rewind to is open', () => {
+    const refused: TerminalActionResult = { state: 'failed', dispatch: 'not_started', reason: REWIND_PICKER_OPEN }
+
+    it.each([
+      ['codex', 'Codex is browsing its transcript, where Enter would rewind the conversation. Close it with Esc in its terminal, then send the message again.'],
+      ['claude', 'Claude Code has its Rewind menu open, where Enter would pick a point to rewind to. Close it with Esc in its terminal, then send the message again.'],
+    ] as const)('%s: tells the person why and how to get the next one through, asks no lease again, and awaits nothing', async (engine, text) => {
+      const onError = vi.fn(), onSubmitted = vi.fn(), sleep = vi.fn(async () => {})
+      const inject = vi.fn(async () => refused)
+      const controller = new SessionInputController({ getSession: () => session(engine), validateRuntime: async () => true,
+        inject, sendKey: async () => true, onError, onSubmitted, sleep })
+      controller.submit('s1', 'a message from the app')
+      await vi.waitFor(() => expect(onError).toHaveBeenCalledWith('s1', text))
+      expect(inject).toHaveBeenCalledTimes(1)
+      expect(sleep).not.toHaveBeenCalled()
+      expect(onSubmitted).not.toHaveBeenCalled()
+      controller.forget('s1')
+    })
+
+    it('rejects a message that wants a receipt with the reason, and says why', async () => {
+      const onError = vi.fn(), onDelivery = vi.fn()
+      const controller = new SessionInputController({ getSession: () => session('codex'), validateRuntime: async () => true,
+        inject: async () => refused, sendKey: async () => true, onError, onDelivery })
+      controller.submit('s1', 'a message from the device', 'd1')
+      await vi.waitFor(() => expect(onDelivery).toHaveBeenCalledWith({ sessionId: 's1', deliveryId: 'd1', state: 'rejected', reason: REWIND_PICKER_OPEN }))
+      expect(onError).toHaveBeenCalledWith('s1', expect.stringMatching(/^Codex is browsing its transcript/))
+      controller.forget('s1')
+    })
+  })
 
   describe('a paste the control lease refuses before a byte is written', () => {
     const refused: TerminalActionResult = { state: 'failed', dispatch: 'not_started', reason: TERMINAL_LEASE_REFUSED }

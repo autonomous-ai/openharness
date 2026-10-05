@@ -10,7 +10,12 @@ import {
   parseCursorModelPicker,
   parseCursorParameterRows,
   RuntimeProfileController,
+  rewindPickerOpen,
 } from './runtimeProfileController.js'
+import {
+  CLAUDE_PROMPT, CLAUDE_REWIND_CONFIRM, CLAUDE_REWIND_EMPTY, CLAUDE_REWIND_LIST, CLAUDE_REWIND_LIST_MESSAGE_FOCUSED,
+  CODEX_BROWSING_FULLSCREEN, CODEX_BROWSING_SCROLLBACK, CODEX_PROMPT,
+} from './__fixtures__/rewindPickers.js'
 
 // The id inside a `runtime-v1:` string is the AGENT id ('h1' here) — a client only ever echoes back an id
 // the catalog minted, and the catalog is agent-scoped. `setProfile` is still addressed with either id.
@@ -57,6 +62,33 @@ describe('runtime pane parsing', () => {
     // Other engines, and Codex's own transcript text, are not read for it.
     expect(inspectRuntimePane('claude', `\u001b[39m❯\u00a0\u001b[2mAsk about the codebase\u001b[0m\n  Browsing · esc`)).toMatchObject({ idle: true, dialog: false })
     expect(inspectRuntimePane('codex', `  Browsing transcript · as before\n${composer}\n\n  gpt-5.6-sol default · /tmp/project`)).toMatchObject({ dialog: false })
+  })
+
+  it('reads Claude Code\'s Rewind menu as a modal, in each of its views, and as closed once its prompt is back', () => {
+    // Its focused row is `❯ (current)` in italics: read as an empty, idle prompt, where Enter closes the
+    // menu and drops what was pasted, and, on a message, takes it a step from restoring the conversation.
+    for (const [view, screen] of Object.entries({ CLAUDE_REWIND_LIST, CLAUDE_REWIND_LIST_MESSAGE_FOCUSED, CLAUDE_REWIND_CONFIRM, CLAUDE_REWIND_EMPTY })) {
+      expect(inspectRuntimePane('claude', screen), view).toMatchObject({ idle: false, dialog: true })
+      expect(rewindPickerOpen('claude', screen), view).toBe(true)
+    }
+    // Its prompt back between its rules under any leftover of it, it is closed.
+    expect(inspectRuntimePane('claude', `${CLAUDE_REWIND_LIST}\n${CLAUDE_PROMPT}`)).toMatchObject({ idle: true, dialog: false })
+    expect(rewindPickerOpen('claude', `${CLAUDE_REWIND_LIST}\n${CLAUDE_PROMPT}`)).toBe(false)
+    // A message that reads `Rewind`, in the transcript or the list, is not the menu's title.
+    expect(rewindPickerOpen('claude', `\u001b[38;5;239m\u001b[48;5;237m❯ \u001b[38;5;231mRewind\u001b[39m\u001b[49m\n\n${CLAUDE_PROMPT}`)).toBe(false)
+    expect(rewindPickerOpen('claude', CLAUDE_REWIND_LIST.replace('   fix the login bug', '   Rewind'))).toBe(true)
+    // Another engine's pane is not read for it.
+    expect(rewindPickerOpen('cursor', CLAUDE_REWIND_LIST)).toBe(false)
+  })
+
+  it('finds Codex browsing its transcript in both its screen modes, and nothing in an unreadable pane', () => {
+    for (const [mode, screen] of Object.entries({ CODEX_BROWSING_FULLSCREEN, CODEX_BROWSING_SCROLLBACK })) {
+      expect(inspectRuntimePane('codex', screen), mode).toMatchObject({ idle: false, dialog: true })
+      expect(rewindPickerOpen('codex', screen), mode).toBe(true)
+    }
+    expect(rewindPickerOpen('codex', CODEX_PROMPT)).toBe(false)
+    expect(rewindPickerOpen('codex', null)).toBe(false)
+    expect(rewindPickerOpen('claude', '')).toBe(false)
   })
 
   it('reads hermes, which italicises its placeholder instead of dimming it', () => {

@@ -1,7 +1,7 @@
 import { createHash } from 'crypto'
 import type { RegisteredSession } from './registry.js'
 import { sid } from './log.js'
-import { TERMINAL_LEASE_REFUSED, type TerminalActionResult } from './terminalTypes.js'
+import { REWIND_PICKER_OPEN, TERMINAL_LEASE_REFUSED, type TerminalActionResult } from './terminalTypes.js'
 
 const MAX_QUEUE_ITEMS = 8
 const MAX_QUEUE_BYTES = 24 * 1024
@@ -127,6 +127,19 @@ export interface SessionInputDeps {
   /** Clock and timer for the lease wait; real ones by default. */
   now?: () => number
   sleep?: (ms: number) => Promise<void>
+}
+
+/** A message not typed because the pane shows a picker for a point to rewind to: nothing was written. */
+function refusedForRewindPicker(delivery: boolean | TerminalActionResult): boolean {
+  return typeof delivery !== 'boolean' && delivery.state === 'failed' && delivery.dispatch === 'not_started'
+    && delivery.reason === REWIND_PICKER_OPEN
+}
+
+/** What the person is told: why their message was not typed, and what lets the next one through. */
+function rewindPickerRefusal(engine: string): string {
+  return engine === 'codex'
+    ? 'Codex is browsing its transcript, where Enter would rewind the conversation. Close it with Esc in its terminal, then send the message again.'
+    : 'Claude Code has its Rewind menu open, where Enter would pick a point to rewind to. Close it with Esc in its terminal, then send the message again.'
 }
 
 /** A write the pane's control lease refused before a byte of it was written. */
@@ -453,6 +466,11 @@ export class SessionInputController {
       : delivery.state === 'succeeded' || delivery.dispatch === 'possibly_executed'
     if (!accepted) {
       forgetScope?.()
+      if (refusedForRewindPicker(delivery)) {
+        console.warn(`[inject] ${sid(sessionId)} not typed · engine=${session.engine} · a rewind picker is open`)
+        this.deps.onError(sessionId, rewindPickerRefusal(session.engine))
+        return
+      }
       console.warn(`[inject] ${sid(sessionId)} paste failed · engine=${session.engine} · target=${session.agentId}`)
       this.deps.onError(sessionId, 'The message could not be delivered to the agent.')
       return
@@ -520,6 +538,12 @@ export class SessionInputController {
       if (state.cancelled || this.states.get(sessionId) !== state) return
       if (typeof delivery !== 'boolean' && delivery.state === 'failed' && delivery.dispatch === 'not_started' && delivery.reason.startsWith('team_waiting_')) {
         this.finishDelivery(sessionId, state, 'rejected', delivery.reason)
+        return
+      }
+      if (refusedForRewindPicker(delivery)) {
+        console.warn(`[inject] ${sid(sessionId)} not typed · engine=${session.engine} · a rewind picker is open`)
+        this.finishDelivery(sessionId, state, 'rejected', REWIND_PICKER_OPEN)
+        this.deps.onError(sessionId, rewindPickerRefusal(session.engine))
         return
       }
       const accepted = typeof delivery === 'boolean'

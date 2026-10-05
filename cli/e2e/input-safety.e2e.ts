@@ -1,6 +1,7 @@
 /**
  * What a message must never do, for Claude Code and Codex: reach the shell an exited engine leaves in
- * its pane, where it would run as a command. And what a client must never cost the others: one that
+ * its pane, where it would run as a command, or a picker for a point to rewind the conversation to,
+ * where its Enter would pick one. And what a client must never cost the others: one that
  * stops reading is cut off, alone, and the daemon's memory stays bounded while it is.
  */
 import { existsSync, mkdirSync } from 'node:fs'
@@ -69,6 +70,31 @@ describe('what a message must never do', () => {
     client.send('message', { agentId: agent.id, content: command(marker) })
     await new Promise((resolve) => setTimeout(resolve, 6_000))
     expect(existsSync(marker), 'the second message ran as a shell command').toBe(false)
+    client.close()
+  })
+
+  it('codex: a message is not typed into its transcript browser, whose Enter rewinds: refused with the reason, it goes through once the browser is closed', async () => {
+    const d = await fresh()
+    const client = await LocalClient.connect(d)
+    const agent = await create(d, client, 'codex', 'browsing-scrollback')
+    // Codex browsing in its scrollback mode: a transcript pager over the pane, which drops a paste, so
+    // the Enter behind it would revert the conversation to the prompt in view.
+    await turn(client, agent.id, '!browse scrollback')
+    await until('the pager to be drawn', async () => (await d.capture(agent.tmuxPane)).includes('Browsing transcript') || null, 15_000, 250)
+    const from = client.frames.length
+    const refused = client.next((frame) => frame.type === 'error' && frame.agentId === agent.id, 15_000, 'the refusal')
+    client.send('message', { agentId: agent.id, content: 'what changed since then?' })
+    expect(String((await refused).payload?.message)).toBe('Codex is browsing its transcript, where Enter would rewind the conversation. Close it with Esc in its terminal, then send the message again.')
+    // Nothing typed: still browsing, nothing rewound, no turn.
+    const pane = await d.capture(agent.tmuxPane)
+    expect(pane).toContain('Browsing transcript')
+    expect(pane).not.toContain('rewound')
+    expect(client.frames.slice(from).some(isTurn('turn_started', agent.id))).toBe(false)
+    // Closed with Esc, as the refusal says, the same message goes through.
+    await d.tmux.run('send-keys', '-t', agent.tmuxPane, 'Escape')
+    await until('the composer to be back', async () => !(await d.capture(agent.tmuxPane)).includes('Browsing transcript') || null, 15_000, 250)
+    await turn(client, agent.id, 'what changed since then?')
+    expect(await d.capture(agent.tmuxPane)).not.toContain('rewound')
     client.close()
   })
 
