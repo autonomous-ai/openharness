@@ -152,7 +152,11 @@ export async function run(engine, config) {
         ...body,
       }),
     }).catch((error) => ({ ok: false, status: 0, text: async () => String(error) }))
-    if (!response.ok) process.stdout.write(`\r\n[fake ${engine}] hook ${path} failed: ${response.status}\r\n`)
+    // Said in a file, never in the pane. The real hook (hook/notify.mjs) gives up silently and exits 0
+    // when the daemon cannot be reached, so the engine draws nothing; this line, printed under the
+    // composer while the daemon was stopped, read to the daemon as a draft the person had not sent, and a
+    // close waiting for the agent to be idle waited for ever (e2e/ends.e2e.ts).
+    if (!response.ok) appendFileSync(join(dirname(config.dataDir), 'fake-engine-hooks.log'), `${new Date().toISOString()} ${engine} ${sessionId} hook ${path} failed: ${response.status}\n`)
   }
 
   announceProcess()

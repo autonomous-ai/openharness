@@ -1,10 +1,11 @@
 /**
  * How an agent's life ends, for Claude Code and Codex: closed now, closed only when idle, closed after
- * its task (and that intent cancelled, or carried across a daemon restart), and purged with its history
- * — and the search that finds a conversation until it is purged. A close never takes a turn that is
- * still working unless it was asked to; a purge leaves nothing of the conversation behind.
+ * its task (and that intent cancelled, or carried across a daemon restart, whether the turn ends while
+ * the daemon is stopped or another begins meanwhile), and purged with its history — and the search
+ * that finds a conversation until it is purged. A close never takes a turn that is still working unless
+ * it was asked to; a purge leaves nothing of the conversation behind.
  */
-import { existsSync, mkdirSync, readdirSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { LocalClient, type Frame } from './harness/client.js'
@@ -36,6 +37,15 @@ const close = (client: LocalClient, agent: Record<string, any>, mode: string) =>
   client.request('agent_close', { agentId: agent.id, sessionId: agent.sessionId, createdAt: agent.createdAt, mode }, 90_000)
 const stopped = (client: LocalClient, agentId: string, ms = 45_000) =>
   until(`${agentId.slice(0, 8)} to stop`, async () => (await row(client, agentId))?.status === 'stopped' || null, ms, 500)
+/** Whether the conversation's transcript holds this text yet: what the engine has done, read with the
+ *  daemon stopped. */
+const written = (daemon: IsolatedDaemon, agent: Record<string, any>, text: string): boolean =>
+  transcriptsOf(daemon, agent.sessionId).some((file) => readFileSync(file, 'utf8').includes(text))
+/** Closed once: one window frame said so, and two more ticks of the close service later still only one. */
+async function closedOnce(client: LocalClient, agent: Record<string, any>): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 11_000))
+  expect(client.frames.filter((frame) => frame.type === 'agent_deleted' && frame.payload?.agentId === agent.id)).toHaveLength(1)
+}
 /** The engine's own transcript files for a conversation, where the fake engines write them. */
 function transcriptsOf(daemon: IsolatedDaemon, sessionId: string): string[] {
   const found: string[] = []
@@ -141,6 +151,57 @@ describe('how an agent\'s life ends', () => {
     await d.restart()
     client = await LocalClient.connect(d)
     await stopped(client, agent.id, 60_000)
+    client.close()
+  })
+
+  it.each(engines)('%s: a close after its task whose turn ends while the daemon is stopped is carried out once it is back', async (engine) => {
+    const d = await fresh()
+    let client = await LocalClient.connect(d)
+    const agent = await create(d, client, engine, `close-while-down-${engine}`)
+    client.send('message', { agentId: agent.id, content: '!slow 3000' })
+    await client.next(isTurn('turn_started', agent.id), 30_000, 'turn_started')
+    expect(await close(client, agent, 'after_task')).toMatchObject({ deferred: true })
+    client.close()
+    await d.stop()
+    // The turn ends with nothing listening: its answer reaches the transcript, and its hooks no one.
+    await until('the turn to end while the daemon is stopped', () => written(d, agent, 'answer 1: !slow 3000'), 30_000, 250)
+    await d.start()
+    client = await LocalClient.connect(d)
+    await stopped(client, agent.id, 60_000)
+    await closedOnce(client, agent)
+    client.close()
+  })
+
+  it.each(engines)('%s: a close after its task waits for a turn begun while the daemon was stopped, then is carried out once', async (engine) => {
+    const d = await fresh()
+    let client = await LocalClient.connect(d)
+    const agent = await create(d, client, engine, `close-busy-again-${engine}`)
+    client.send('message', { agentId: agent.id, content: '!slow 2000' })
+    await client.next(isTurn('turn_started', agent.id), 30_000, 'turn_started')
+    expect(await close(client, agent, 'after_task')).toMatchObject({ deferred: true })
+    client.close()
+    await d.stop()
+    await until('the first turn to end while the daemon is stopped', () => written(d, agent, 'answer 1: !slow 2000'), 30_000, 250)
+    // The person starts another task in the terminal before the daemon is back. It runs longer than the
+    // two idle looks five seconds apart that a close waits for, so a daemon that took it for idle would
+    // close the agent in the middle of it.
+    await d.tmux.run('send-keys', '-t', agent.tmuxPane, '!slow 30000', 'Enter')
+    await until('the second turn to start while the daemon is stopped', () => written(d, agent, '!slow 30000'), 30_000, 250)
+    await d.start()
+    client = await LocalClient.connect(d)
+    // The daemon back reads that turn as open from the conversation itself, ahead of anything on screen:
+    // what holds the close.
+    await until('the daemon to see the second turn working', async () =>
+      (await close(client, agent, 'inspect')).activity === 'working' || null, 15_000, 500)
+    // Never while that turn is working: the agent is still there each time it is looked at, until the
+    // turn has written its answer.
+    await until('the second turn to end', async () => {
+      const done = written(d, agent, 'answer 2: !slow 30000')
+      if (!done) expect((await row(client, agent.id))?.status, 'closed while it was working').toBe('active')
+      return done
+    }, 60_000, 500)
+    await stopped(client, agent.id, 60_000)
+    await closedOnce(client, agent)
     client.close()
   })
 
