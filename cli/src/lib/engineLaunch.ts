@@ -547,8 +547,13 @@ export function engineFallbackPrelude(engine: AgentEngine, shellPath: string, tm
   const loginArgs = basename(shellPath).toLowerCase() === 'zsh' ? ' -l' : ''
   // Named by the command a person would type (`cursor-agent`, `cmd`), not the engine id.
   const command = basename(engineBin(engine)) || engine
-  const mark = tmuxBinary && isAbsolute(tmuxBinary)
-    ? `  [ -n "\${TMUX_PANE:-}" ] && ${shellSingleQuote(tmuxBinary)} set-option -p -t "$TMUX_PANE" ${ENGINE_EXIT_PANE_OPTION} "$harness_status" >/dev/null 2>&1 || true\n`
+  // The pane's own option; a tmux before 3.0 has no pane options and refuses `-p`, so there the mark
+  // goes on the pane's window, where `tmuxPaneState` reads it just the same. Without the second try
+  // the mark was never made on such a tmux, and an engine that left read as still starting.
+  const tmux = tmuxBinary && isAbsolute(tmuxBinary) ? shellSingleQuote(tmuxBinary) : null
+  const mark = tmux
+    ? `  [ -n "\${TMUX_PANE:-}" ] && { ${tmux} set-option -p -t "$TMUX_PANE" ${ENGINE_EXIT_PANE_OPTION} "$harness_status" >/dev/null 2>&1`
+      + ` || ${tmux} set-option -w -t "$TMUX_PANE" ${ENGINE_EXIT_PANE_OPTION} "$harness_status" >/dev/null 2>&1; } || true\n`
     : ''
   // A function has its own positional parameters. Reprobe each replacement
   // binary without adding --no-daemon to the saved launch arguments repeatedly.

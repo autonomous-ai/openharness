@@ -140,9 +140,31 @@ describe('buildEngineLaunchArgv', () => {
       const argv = buildEngineLaunchArgv('claude', {}, '/bin/sh', undefined, undefined, NO_TMUX)
       expect(run([argv[0], argv[1], argv[2], 'harness-engine', '/nowhere/claude-that-is-not-here']).status).toBe(127)
     })
+    it.each([
+      ['with pane options (3.0 and later)', '', 'set-option -p -t %5 @harness_engine_exit 3'],
+      // tmux 2.x answers `-p` with its usage text: the mark goes on the pane's window instead.
+      ['before pane options (tmux 2.x)', 'if [ "$2" = -p ]; then echo "set-option: illegal option -- p" >&2; exit 1; fi\n',
+        'set-option -w -t %5 @harness_engine_exit 3'],
+    ])('marks the pane with the engine\'s exit status on a tmux %s', (_tmux, refuse, mark) => {
+      const folder = mkdtempSync(join(tmpdir(), 'harness-exit-mark-'))
+      try {
+        const tmux = join(folder, 'tmux')
+        const calls = join(folder, 'calls')
+        writeFileSync(tmux, `#!/bin/sh\n${refuse}printf '%s\\n' "$*" >> '${calls}'\n`, { mode: 0o755 })
+        const prelude = engineFallbackPrelude('claude', '/bin/sh', tmux)
+        execFileSync('/bin/sh', ['-c', `${prelude}harness_engine "$@"`, 'harness-engine', '/bin/sh', '-c', 'exit 3'], {
+          stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, TMUX_PANE: '%5' },
+        }).toString()
+      } catch (error) {
+        expect((error as { status: number }).status).toBe(3)
+      } finally {
+        expect(readFileSync(join(folder, 'calls'), 'utf8').trim()).toBe(mark)
+        rmSync(folder, { recursive: true, force: true })
+      }
+    })
     it('marks the pane with the exit status through the daemon\'s own tmux, and only then hands over a shell', () => {
       const prelude = engineFallbackPrelude('codex', '/bin/bash', '/opt/homebrew/bin/tmux')
-      expect(prelude).toContain(`[ -n "\${TMUX_PANE:-}" ] && '/opt/homebrew/bin/tmux' set-option -p -t "$TMUX_PANE" @harness_engine_exit "$harness_status"`)
+      expect(prelude).toContain(`[ -n "\${TMUX_PANE:-}" ] && { '/opt/homebrew/bin/tmux' set-option -p -t "$TMUX_PANE" @harness_engine_exit "$harness_status"`)
       expect(prelude.indexOf('set-option')).toBeLessThan(prelude.indexOf("exec '/bin/bash'"))
       expect(prelude).toContain('if [ "$harness_status" -eq 127 ]; then exit 127; fi')
       // zsh is a login shell; bash keeps its interactive rc (same rule as a terminal).

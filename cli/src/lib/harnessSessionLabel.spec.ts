@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { harnessPaneOwner, ownedHere } from './harnessSessionLabel.js'
+import { harnessPaneOwner, ownedHere, ownerCommand, paneOwnerFormat, paneOwnerOf } from './harnessSessionLabel.js'
 
 const dirs: string[] = []
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }) })
@@ -47,5 +47,29 @@ describe('which daemon a pane belongs to', () => {
     // Another daemon's, in whatever session.
     expect(ownedHere('bbbb', 'harness-claude-1', 'aaaa')).toBe(false)
     expect(ownedHere('bbbb', 'my-claude-work', 'aaaa')).toBe(false)
+  })
+})
+
+// tmux before 3.0 (Debian 10's 2.8, RHEL 8's 2.7) has no pane options, and a window option stays behind
+// with its window when the person moves the pane. The pane's start command goes with it.
+describe('the tag on a tmux before 3.0', () => {
+  it('rides the start command through env, which execs the real command at once', () => {
+    expect(ownerCommand('0123456789abcdef', ['/bin/zsh', '-lic', 'exec "$@"', 'claude']))
+      .toEqual(['/usr/bin/env', 'HARNESS_DAEMON=0123456789abcdef', '/bin/zsh', '-lic', 'exec "$@"', 'claude'])
+  })
+
+  it('is read from the pane option where there is one, and from the start command then the window before', () => {
+    expect(paneOwnerFormat(true)).toBe('#{@harness_daemon}')
+    // tmux 2.x cannot cut a substring out of a format: the start command comes back cut to the prefix
+    // and a tag's length, never whole (it can hold the `|` and newlines a listing is split on).
+    expect(paneOwnerFormat(false))
+      .toBe('#{?#{m:/usr/bin/env HARNESS_DAEMON=*,#{pane_start_command}},#{=44:pane_start_command},#{@harness_daemon}}')
+  })
+
+  it('takes the tag out of a start command, and any other field as the tag itself', () => {
+    expect(paneOwnerOf('/usr/bin/env HARNESS_DAEMON=0123456789abcdef')).toBe('0123456789abcdef')
+    // The window's tag, a pane option, or nobody's.
+    expect(paneOwnerOf('0123456789abcdef')).toBe('0123456789abcdef')
+    expect(paneOwnerOf('')).toBe('')
   })
 })

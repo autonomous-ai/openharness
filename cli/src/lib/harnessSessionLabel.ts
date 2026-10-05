@@ -28,8 +28,49 @@ export const HARNESS_SESSION_PREFIX = 'harness-'
  * live in tmux), and a session name stops saying whose it is; a pane option goes with the pane, where a
  * window option stays behind with the window (e2e/tmuxmoves.e2e.ts). Read through the window too, which
  * is how a format resolves a pane option nobody set: a tag a build set on the window still counts.
+ *
+ * tmux before 3.0 has no pane options, and a `set-option -p` chained into `new-session` failed the whole
+ * command list there, so every agent create failed (PR #789's review). There the tag is a window option,
+ * and the pane's start command carries it too (`ownerCommand`).
  */
 export const HARNESS_OWNER_OPTION = '@harness_daemon'
+
+/**
+ * Before tmux 3.0 there are no pane options: the tag can only be a window option, and a window option
+ * stays behind with its window when the person moves the pane. What does go with a pane there is the
+ * command it was started with, `#{pane_start_command}`. So on such a tmux a daemon starts each pane
+ * through `/usr/bin/env HARNESS_DAEMON=<tag>` (`ownerCommand`), which execs the real command at once —
+ * the pane's process is the shell, as before — and leaves the tag where tmux keeps it for the pane's
+ * life, through any join, break or rename (e2e/tmuxmoves.e2e.ts, run on tmux 2.8).
+ */
+export const OWNER_COMMAND_ENV = 'HARNESS_DAEMON'
+const OWNER_COMMAND_PREFIX = `/usr/bin/env ${OWNER_COMMAND_ENV}=`
+/** How long a tag is (`harnessPaneOwner`). */
+const OWNER_TAG_LENGTH = 16
+
+/** [command], started so that tmux keeps [owner]'s tag in the pane's start command (see above). */
+export function ownerCommand(owner: string, command: readonly string[]): string[] {
+  return ['/usr/bin/env', `${OWNER_COMMAND_ENV}=${owner}`, ...command]
+}
+
+/**
+ * The tmux format for a pane's owner tag, for a pane listing. With pane options (3.0), the option: a
+ * format resolves it through the window too. Before 3.0, the tag the pane's start command carries,
+ * then the window's. tmux 2.x cannot cut a substring out of a format, so the start command comes back
+ * cut to the prefix and a tag's length, and `paneOwnerOf` takes the tag out — never the whole command,
+ * which can be long and hold the `|` and newlines a listing is split on.
+ */
+export function paneOwnerFormat(paneOptions: boolean): string {
+  if (paneOptions) return `#{${HARNESS_OWNER_OPTION}}`
+  const width = OWNER_COMMAND_PREFIX.length + OWNER_TAG_LENGTH
+  return `#{?#{m:${OWNER_COMMAND_PREFIX}*,#{pane_start_command}},#{=${width}:pane_start_command},#{${HARNESS_OWNER_OPTION}}}`
+}
+
+/** The tag out of a `paneOwnerFormat` field: the field itself, unless it is a start command's prefix. */
+export function paneOwnerOf(field: string): string {
+  if (!field.startsWith(OWNER_COMMAND_PREFIX)) return field
+  return field.slice(OWNER_COMMAND_PREFIX.length).split(' ')[0]
+}
 
 /** A path with its symlinks resolved, including one whose last parts do not exist yet: the same answer
  *  before a data folder is created as after (macOS's `/var` is `/private/var`). */
@@ -46,7 +87,7 @@ function canonicalPath(path: string): string {
 /** This daemon's tag: its data folder, which no two daemons share, hashed (a path can hold the `|` the
  *  pane listing splits on, and the tag is all a pane needs to carry). */
 export function harnessPaneOwner(dataDir: string): string {
-  return createHash('sha256').update(canonicalPath(dataDir)).digest('hex').slice(0, 16)
+  return createHash('sha256').update(canonicalPath(dataDir)).digest('hex').slice(0, OWNER_TAG_LENGTH)
 }
 
 /**
