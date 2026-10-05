@@ -44,16 +44,14 @@ jobs:
           workspaces: tui
           shared-key: tui-${{ matrix.architecture }}-unknown-linux-musl
           cache-bin: false
-      - name: Native build tools and fixture contracts
+      - name: Native build tools and portable OS checks
         run: |
           df -h . "$RUNNER_TEMP"
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends musl-tools
           mkdir -p os/test-results/runtime-updates
-          python3 -m unittest discover -s os/tests -p test_update_fixture.py -v \
-            2>&1 | tee os/test-results/runtime-updates/fixture-contracts.log
-          python3 -m unittest discover -s os/tests -p test_live_update.py -v \
-            2>&1 | tee os/test-results/runtime-updates/live-updates.log
+          timeout 180 make -C os check \
+            2>&1 | tee os/test-results/runtime-updates/portable-checks.log
       - name: Build the exact native baseline runtime
         run: bash os/tools/build-runtime.sh
       - name: Compile and verify the private update fixture
