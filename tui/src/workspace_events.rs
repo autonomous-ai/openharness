@@ -31,6 +31,7 @@ pub fn receive(app: &mut App, event: &Value) {
     if event["replacement"].is_null() {
         if let Some(agent) = app.fleet.agents.get_mut(&(machine.into(), previous.into())) { agent.status = "stopped".into(); agent.working = false; }
         for (sid, pane) in views {
+            if crate::shell_context::is_session_visit(app, pane) { continue }
             // Explicit session targeting uses the normal context save/restore path, even
             // when the receiving client currently watches a different client's session.
             crate::commands::execute(app, &format!("kill-pane -t '${sid}:.{}'", crate::pane::tag(pane)));

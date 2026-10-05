@@ -25,6 +25,8 @@ export interface CreateAgentPaneDeps {
   tmuxBackend: Pick<TerminalBackend<TmuxRuntimeRef>, 'create' | 'kill'>
   registry: { openPendingAgent: (input: {
     engine: AgentEngine
+    resumeSessionId?: string | null
+    resumeTranscriptPath?: string | null
     runtimes: TmuxRuntimeRef[]
     primaryRuntimeKey?: string
     cwd?: string | null
@@ -41,6 +43,9 @@ export interface CreateAgentPaneDeps {
     forkedFrom?: ForkOrigin | null
   }) => RegisteredSession | null }
   engine: AgentEngine
+  /** Known conversation being resumed, retained even if it exits before its first hook. */
+  resumeSessionId?: string | null
+  resumeTranscriptPath?: string | null
   cwd?: string | null
   bypassPermission?: boolean
   /** The permission mode it was launched in (`PERMISSION_MODES`), kept so a relaunch reapplies it. */
@@ -94,6 +99,7 @@ export async function createAndRegisterPane(deps: CreateAgentPaneDeps): Promise<
     }
     const pending = deps.registry.openPendingAgent({
       engine: deps.engine,
+      ...(deps.resumeSessionId ? { resumeSessionId: deps.resumeSessionId, resumeTranscriptPath: deps.resumeTranscriptPath } : {}),
       runtimes: [spawned.runtime],
       primaryRuntimeKey: terminalRouteKey(spawned.runtime),
       cwd: deps.cwd,

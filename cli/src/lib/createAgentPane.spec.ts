@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdtempSync, rmSync } from 'fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import type { TerminalCreateResult, TmuxRuntimeRef } from './terminalTypes.js'
@@ -75,6 +75,34 @@ describe('createAndRegisterPane', () => {
     expect(tmuxBackend.create).toHaveBeenNthCalledWith(2, expect.objectContaining({ label: 'harness-claude-1-r2' }))
     expect(tmuxBackend.kill).toHaveBeenCalledTimes(1)
     expect(tmuxBackend.kill).toHaveBeenCalledWith({ backend: 'tmux', paneId: '%1' })
+  })
+
+  it('retains the requested conversation when a resumed process exits before its first hook', async () => {
+    const { registry } = await loadRegistryModule()
+    const { StoppedAgentStore } = await import('./stoppedAgents.js')
+    registry.load()
+    const transcriptPath = join(dataDir, 'saved-conversation.jsonl')
+    writeFileSync(transcriptPath, '{}\n')
+    const result = await createAndRegisterPane({
+      tmuxBackend: fakeTmux([succeeded('%1')]), registry, engine: 'claude',
+      cwd: '/tmp/saved project', sessionLabel: 'resume', argv: ['claude', '--resume', 'saved-conversation'],
+      resumeSessionId: 'saved-conversation', resumeTranscriptPath: transcriptPath,
+    })
+    expect(result.ok).toBe(true)
+    if (!result.ok) throw new Error('did not create')
+    expect(result.pending).toMatchObject({ sessionId: 'saved-conversation', transcriptPath, resumeOnly: true, boundAt: null, lastHookAt: 0 })
+    // A daemon restart must not erase resume intent or invent a confirmed bind.
+    registry.load()
+    const pending = registry.byAgent(result.pending.agentId)!
+    expect(pending).toMatchObject({ sessionId: 'saved-conversation', transcriptPath, resumeOnly: true, boundAt: null })
+    const archive = new StoppedAgentStore(join(dataDir, 'stopped'))
+    archive.save(pending)
+    expect(archive.get(pending.agentId)).toMatchObject({ engine: 'claude', sessionId: 'saved-conversation', transcriptPath, cwd: '/tmp/saved project' })
+    // The intent also prevents two concurrent launch requests owning this conversation.
+    expect(registry.openPendingAgent({ engine: 'claude', resumeSessionId: 'saved-conversation',
+      runtimes: [{backend:'tmux',paneId:'%2'}] })).toBeNull()
+    registry.releaseEngine(pending.agentId, true)
+    expect(archive.get(pending.agentId)?.sessionId).toBe('saved-conversation')
   })
 
   it('gives up with REGISTRATION_FAILED after 3 attempts when every pane collides', async () => {

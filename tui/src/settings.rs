@@ -395,7 +395,7 @@ impl PickerKind {
         match self {
             // (Every launcher tab is the same size — Help too — so ←/→ on the tab row never moves it.)
             PickerKind::Open { .. } | PickerKind::Palette | PickerKind::Projects | PickerKind::Models | PickerKind::Inbox | PickerKind::Machines | PickerKind::Store | PickerKind::Help | PickerKind::Theme
-                | PickerKind::Route { .. } | PickerKind::Messages | PickerKind::Keys | PickerKind::Buffers | PickerKind::Output { .. } | PickerKind::Devices(_) | PickerKind::Account | PickerKind::AgentSwitch | PickerKind::Hardware => PanelSize::Large,
+                | PickerKind::Route { .. } | PickerKind::Messages | PickerKind::Keys | PickerKind::Buffers | PickerKind::Output { .. } | PickerKind::Devices(_) | PickerKind::Account | PickerKind::AgentSwitch | PickerKind::Hardware | PickerKind::ShellContext => PanelSize::Large,
             PickerKind::Commands | PickerKind::Keybinds | PickerKind::Layout => PanelSize::Palette,
         }
     }

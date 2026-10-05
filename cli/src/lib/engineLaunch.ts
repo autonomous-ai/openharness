@@ -1,3 +1,4 @@
+import { ENGINE_EXIT_NOTICE } from './engineExitNotice.js'
 import { execFile } from 'node:child_process'
 import { homedir, userInfo } from 'node:os'
 import { isAbsolute, basename, dirname, join } from 'node:path'
@@ -226,6 +227,8 @@ export interface LaunchCommandOptions {
    * nothing here.
    */
   terminalHint?: { machineName: string }
+  /** Shell integration for a newly created terminal; never injected into a live process. */
+  terminalInit?: string
   /**
    * Extra argv the caller has already composed, appended last.
    *
@@ -519,6 +522,7 @@ export function engineFallbackPrelude(engine: AgentEngine, shellPath: string, tm
     // Only a pane — something with a terminal on stdin — gets a shell to type into. Run without one
     // (a spec exercising the script, a wrapper piped somewhere) the engine's own status is the answer.
     + '  if ! [ -t 0 ]; then exit "$harness_status"; fi\n'
+    + `  printf '%s' ${shellSingleQuote(ENGINE_EXIT_NOTICE)}\n`
     + `  printf '\\n%s\\n' ${shellSingleQuote(`harness: ${command} exited ($harness_status). This pane is a shell now — run ${command} again, or stop the pane.`).replace('($harness_status)', `('"$harness_status"')`)}\n`
     + `  exec ${shellSingleQuote(shellPath)}${loginArgs}\n`
     + '}\n'
@@ -619,7 +623,7 @@ export function terminalHintLines(machineName: string): string[] {
  * gives the person a prompt.
  */
 export function buildTerminalLaunchArgv(
-  opts: Pick<LaunchCommandOptions, 'cwd' | 'terminalHint' | 'clearEnv'> = {},
+  opts: Pick<LaunchCommandOptions, 'cwd' | 'terminalHint' | 'terminalInit' | 'clearEnv'> = {},
   shell: string | undefined = undefined,
 ): string[] {
   const candidate = shell === undefined ? currentUserShell() : shell
@@ -628,10 +632,10 @@ export function buildTerminalLaunchArgv(
   const cwdPrelude = opts.cwd
     ? `if ! cd -- "$1"; then printf '%s\\n' 'harness: the selected working directory is unavailable.' >&2; fi\n`
     : ''
-  const hintPrelude = opts.terminalHint && process.env.HARNESS_OS !== '1'
+  const hintPrelude = !opts.terminalInit && opts.terminalHint && process.env.HARNESS_OS !== '1'
     ? `printf '%s\\n' ${terminalHintLines(opts.terminalHint.machineName).map(shellSingleQuote).join(' ')}\n`
     : ''
-  return [path, '-c', RAISE_OPEN_FILES_SH + clearEnvPrelude(opts.clearEnv) + cwdPrelude + hintPrelude + 'shift\nexec "$@"', 'harness-terminal', opts.cwd ?? '', path, ...loginArgs]
+  return [path, '-c', RAISE_OPEN_FILES_SH + clearEnvPrelude(opts.clearEnv) + cwdPrelude + hintPrelude + 'shift\nexec "$@"', 'harness-terminal', opts.cwd ?? '', ...(opts.terminalInit ? ['/bin/sh', '-c', `export SHELL=${shellSingleQuote(path)}\n${opts.terminalInit}`] : [path, ...loginArgs])]
 }
 
 /**
@@ -773,6 +777,14 @@ export function gridPanePrelude(binary: string): string {
  * source-owned candidate paths below bridge that one-shell gap without sourcing arbitrary profile
  * files a second time. npm installs also get their active global prefix as a fallback.
  */
+/** Install if needed, then run an exact native argv at an existing interactive prompt.
+ * No rc files are reread and no permissions, model or resume flags are added. */
+export function shellAgentArgv(binary: string, args: string[], recipe: EngineInstallRecipe,
+  runtimeNode: string = managedNodePath()): string[] {
+  return ['/bin/sh', '-c', RAISE_OPEN_FILES_SH + 'harness_engine() { exec "$@"; }\n'
+    + installIfMissingThenExecScript(recipe, runtimeNode), 'harness-shell-agent', binary, ...args]
+}
+
 function installIfMissingThenExecScript(recipe: EngineInstallRecipe, runtimeNode: string): string {
   const install = recipe.command
   const names = recipe.executable.names.map(shellSingleQuote).join(' ')

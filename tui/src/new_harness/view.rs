@@ -3,7 +3,7 @@ use super::*;
 use unicode_segmentation::UnicodeSegmentation;
 
 // Keep the recovery instruction readable, including long project names and wide glyphs.
-fn error_lines(text: &str, width: usize) -> Vec<String> {
+pub(super) fn error_lines(text: &str, width: usize) -> Vec<String> {
     let mut lines = Vec::new();
     let mut line = String::new();
     for word in text.split_whitespace() {
@@ -108,25 +108,30 @@ pub fn draw(buf: &mut Buffer, body: Rect, form: &mut Form) -> Option<Position> {
         let mut recent_header = None;
         let rows: Vec<_> = form.fields().into_iter().map(|field| {
             if spacious && matches!(field, Field::Branch | Field::Create) { row += 1; }
-            if page && (field == Field::Recent(0) || field == Field::Browse && form.recent.is_empty()) {
+            if page && field == Field::Browse {
                 if spacious { row += 1; }
                 recent_header = Some(row);
-                row += 1;
             }
             let at = row;
-            row += if field == Field::Task { task_h } else { 1 };
+            row += if field == Field::Task { task_h } else if page && field == Field::Browse { 2 } else { 1 };
             (at, field)
         }).collect();
         let focus = rows.iter().find(|(_, field)| *field == form.focus).map(|(row, _)| *row).unwrap_or(0);
         let skip = focus.saturating_sub(capacity.saturating_sub(1));
         if let Some(row) = recent_header.filter(|row| *row >= skip && *row < skip + capacity) {
-            put(buf, x + 3, fields_y + row - skip, form_w - 6, &form.recent_status, muted);
+            put(buf, x + 3, fields_y + row - skip, form_w.saturating_sub(12), &form.recent_status, muted);
         }
         for (row, field) in rows.into_iter().filter(|(row, _)| *row >= skip && *row < skip + capacity) {
             let fy = fields_y + row - skip;
             let active = field == form.focus;
             let st = if form.blocked(field).is_some() { muted } else if active { accent } else { base };
             let (label, value) = form.describe(field);
+            if page && field == Field::Browse {
+                let hit = Rect::new(r.right() - 6, fy, 3, 1);
+                put(buf, hit.x, hit.y, hit.width, "All", st);
+                form.hits.push((hit, field));
+                continue;
+            }
             put(buf, x + 1, fy, 1, if active { "›" } else { " " }, accent);
             let label_w = if form_w < 45 { 10 } else { 12 };
             let action = matches!(field, Field::Create | Field::Terminal | Field::Browse);
@@ -142,7 +147,7 @@ pub fn draw(buf: &mut Buffer, body: Rect, form: &mut Form) -> Option<Position> {
                 form.task_area = Rect::new(value_x, fy, value_width, height);
                 task_cursor = form.task_editor.draw(buf, form.task_area, &form.draft.task,
                     active && !form.child_active && !form.starting && form.attempt.is_none(), base, muted);
-            } else if field == Field::Project {
+            } else if field == Field::Project && !page {
                 let suffix = format!(" @ {}", form.machine_label);
                 let suffix_width = suffix.width() as u16;
                 if value_width > suffix_width + 2 {
@@ -175,9 +180,9 @@ pub fn draw(buf: &mut Buffer, body: Rect, form: &mut Form) -> Option<Position> {
             }
             if footer_h > 1 && form.focus == Field::Task && !form.local_only {
                 let count = task::length(&form.draft.task);
-                let hint = if count >= 1600 { format!("{count}/{} characters", task::MAX_LENGTH) }
-                    else { "Task is optional · leave blank to start interactively".into() };
-                put(buf, x + 2, footer_y + 1, form_w - 4, &hint, muted);
+                if count >= 1600 {
+                    put(buf, x + 2, footer_y + 1, form_w - 4, &format!("{count}/{} characters", task::MAX_LENGTH), muted);
+                }
             }
         } else {
             for (row, line) in errors.iter().take(footer_h as usize).enumerate() {
@@ -188,10 +193,13 @@ pub fn draw(buf: &mut Buffer, body: Rect, form: &mut Form) -> Option<Position> {
     if !side && !form.child_active {
         return task_cursor;
     }
-    let Some(c) = &mut form.child else {
-        return task_cursor;
-    };
     let r = Rect::new(if side { x + form_w + 2 } else { x }, y, child_w, child_h);
+    draw_child(buf, r, form).or(task_cursor)
+}
+
+pub(super) fn draw_child(buf: &mut Buffer, r: Rect, form: &mut Form) -> Option<Position> {
+    let Some(c) = &mut form.child else { return None };
+    let crate::settings::Chrome { base, muted, accent, .. } = crate::settings::chrome();
     form.child_area = r;
     panel(buf, r, base);
     let query_x = r.x + 4;

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import './config/loadEnv.js'
+import { createEngineExitObserver } from './lib/engineExitNotice.js'
 import { MODEL_MANAGER_ID, ensureBundledCoreHarnesses } from './dsh/builtins.js'
 import { runDevicesCommand } from './devices/client.js'
 import { createDeviceStore, deviceStoreAgents } from './lib/autonomous-device/storeRuntime.js'
@@ -117,7 +118,7 @@ import { SessionSearchIndex, folderWords, type SearchSource } from './lib/sessio
 import { ExternalSessions, OpenSessions, processAlive, stopSessionOwner, type SessionOwner } from './lib/sessionSearch/external.js'
 import { externalProviders } from './lib/sessionSearch/externals/index.js'
 import { engineLabel } from './lib/agentNames.js'
-import { SessionSearchStore } from './lib/sessionSearch/store.js'
+import { SessionSearchStore, type ExternalHit } from './lib/sessionSearch/store.js'
 import { SESSION_SEARCH_FILE, searchCommand } from './lib/sessionSearch/command.js'
 import { sweepWorktrees } from './lib/worktreeSweep.js'
 import { nameBranchAfterSession } from './lib/branchNaming.js'
@@ -2196,6 +2197,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const deviceIsWatching = (): boolean => backend.hasCommander() || cableWatchingLocal() || backend.autonomousDeviceConnected()
   /** Anyone who can DRAW a question: a device, a cabled dial, or a desktop window on this computer. */
   const someoneCanAnswer = (): boolean => deviceIsWatching() || backend.hasLocalClient()
+  let observeEngineExit: ((agentId: string) => Promise<void>) | undefined
+  const stopJobs = new Map<string, Promise<void>>()
   const terminalStreams = new TerminalStreamManager({
     terminals,
     resolveAgent: (agentId) => registry.resolve(agentId),
@@ -2212,6 +2215,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       return { kind: backend.e2ee.sessionRole(connId) === 'device' ? 'device' : 'web', name: label }
     },
     streamingAvailable: tmuxBackend != null,
+    onEngineExitHint: id => { void observeEngineExit?.(id) },
     onScopedInput: (id, bytes, tabId, pasted) => backend.swarmPromptScopes.raw(id, bytes, tabId, pasted),
     diagnostic: (event, fields) => console.log(`[terminal-stream] ${event}`, fields),
     // The keystroke prewarm (grid-reads-without-waking issue 03): typing into a pane whose agent runs on
@@ -3087,6 +3091,13 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       }
       const index = new SessionSearchIndex({
         store,
+        catalogMetadata: () => {
+          const entries = new Map<string, ExternalHit>(externalSessions.list().flatMap(s => [s.sessionId, ...(s.aliases ?? [])].map(id =>
+            [id, {title:s.title,cwd:s.cwd,origin:s.origin}] as const)))
+          for (const s of [...stoppedAgents.list(), ...registry.list()]) if (s.sessionId) entries.set(s.sessionId,
+            {title:s.title || projectDisplayName(s),cwd:s.cwd || '',origin:'harness'})
+          return entries
+        },
         sources: () => {
           const own = [...registry.list(), ...stoppedAgents.list()]
           const sources = own.flatMap((s): SearchSource[] => {
@@ -3499,7 +3510,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // The switch leaves exactly one trace — the `inuse.<pid>.lock` Copilot takes on the new session
     // directory. It writes nothing to the transcript and fires no hook until the next prompt.
     if (agent.resumeOnly && agent.launch && agent.launch.state !== 'ready') return
-    if (agent.sessionId) {
+    if (agent.sessionId && !(agent.resumeOnly && agent.boundAt === null)) {
       if (observed.engine === 'copilot') {
         const current = await copilotSessionForPid(env.COPILOT_HOME, observed.processIdentity.pid)
         if (!current || current === agent.sessionId || isRecentlyDeleted(current)) return
@@ -3809,6 +3820,17 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     onProbeStatus: (status) => {
       discoveryReady = status.ready
       discoveryError = status.error
+    },
+  })
+
+  observeEngineExit = createEngineExitObserver({
+    current: id => registry.byAgent(id),
+    blocked: entry => stopJobs.has(entry.agentId) || agentReconciler.routeHeld(entry.runtimes),
+    pane: tmuxPaneState,
+    process: checkPidRuntime,
+    retain: (entry, paneAlive) => {
+      retainExitedSession(entry, paneAlive)
+      if (entry.resumeOnly) stoppedAgents.finishResume(entry.agentId)
     },
   })
 
@@ -5378,7 +5400,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
           registry.updateProcessIdentity(pending.agentId, processIdentity)
           const ready = registry.setLaunch(pending.agentId, { state: 'ready' })
           await clearPaneRemainOnExit(spawned.runtime.paneId)
-          if (ready) announceSession(ready)
+          if (ready) {
+            announceSession(ready)
+            // A fast Ctrl+C can emit its exit hint while this row is still
+            // starting. Recheck after readiness so it needn't wait for discovery.
+            void observeEngineExit?.(ready.agentId)
+          }
           void agentReconciler.triggerHint(spawned.runtime, engine).catch((error) => {
             console.warn(`[agent] background bind failed · ${engine} · ${error instanceof Error ? error.message : error}`)
           })
@@ -5463,7 +5490,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
    * conversation resumes here. Asked without it, the refusal says whether that process is mid-turn,
    * so the person can choose to wait for the turn to end or stop it now. An app's is never stopped.
    */
-  const adoptableSession = async (sessionId: string, engine: AgentEngine, takeOver: 'idle' | 'now' | 'wait' | null): Promise<{ ok: true; cwd: string; title: string; owner: SessionOwner | null; busy: boolean; launchArgs: readonly string[] } | { ok: false; error: string; detail: string }> => {
+  const adoptableSession = async (sessionId: string, engine: AgentEngine, takeOver: 'idle' | 'now' | 'wait' | null): Promise<{ ok: true; cwd: string; title: string; owner: SessionOwner | null; busy: boolean; launchArgs: readonly string[]; transcriptPath: string | null } | { ok: false; error: string; detail: string }> => {
     const held = (id: string) => !!registry.bySession(id) || stoppedAgents.list().some((s) => s.sessionId === id)
     if (held(sessionId)) {
       return { ok: false, error: 'SESSION_IN_HARNESS', detail: 'This conversation is already a harness here.' }
@@ -5482,7 +5509,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     const title = found.title || sessionSearch?.session(sessionId)?.title || ''
     const launchArgs = found.launchArgs ?? []
     const owner = await openSessions.owner(sessionId)
-    if (!owner) return { ok: true, cwd: found.cwd, title, owner: null, busy: false, launchArgs }
+    if (!owner) return { ok: true, cwd: found.cwd, title, owner: null, busy: false, launchArgs, transcriptPath: found.transcriptPath ?? null }
     const engineName = engineLabel(engine)
     // A process in one of Harness's own panes is an agent the daemon is still binding: never stopped.
     if (owner.harness) return { ok: false, error: 'SESSION_IN_HARNESS', detail: 'This conversation is already a harness here.' }
@@ -5501,7 +5528,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     if (takeOver === null) {
       return { ok: false, error: 'SESSION_OPEN_IN_TERMINAL', detail: `It is open in ${engineName} in a terminal. Moving it here quits it there.` }
     }
-    return { ok: true, cwd: found.cwd, title, owner, busy, launchArgs }
+    return { ok: true, cwd: found.cwd, title, owner, busy, launchArgs, transcriptPath: found.transcriptPath ?? null }
   }
 
   /**
@@ -5538,13 +5565,14 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     return now.pid === owner.pid && !!now.tty && !now.fromArgs && !now.harness && !now.unverified ? 'same' : 'other'
   }
 
-  backend.onCreateAgent = async ({ engine, cwd, bypassPermission, permissionMode, grid, codexHome, dsh, prompt, name, agent, resumeSessionId, takeOver }) => {
+  backend.onCreateAgent = async ({ engine, cwd, bypassPermission, permissionMode, grid, codexHome, dsh, prompt, name, agent, resumeSessionId, takeOver, terminalInit, nativeArgs }) => {
     if (!tmuxBackend) return { ok: false, error: 'TMUX_UNAVAILABLE' }
     // A conversation Harness did not start opens in its own folder, under its own title — taken over
     // from the terminal that has it, when asked to.
     let owner: SessionOwner | null = null
     let ownerBusy = false
     let resumeArgs: readonly string[] = []
+    let resumeTranscriptPath: string | null = null
     if (resumeSessionId) {
       const adopted = await adoptableSession(resumeSessionId, engine, takeOver ?? null)
       if (!adopted.ok) return adopted
@@ -5553,6 +5581,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       owner = adopted.owner
       ownerBusy = adopted.busy
       resumeArgs = adopted.launchArgs
+      resumeTranscriptPath = adopted.transcriptPath
     }
     if (backend.purgeAgentService?.blocksFolder(cwd)) return { ok: false, error: 'WORKTREE_BUSY' }
     try {
@@ -5710,7 +5739,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // with a message; any other resumes where it stopped and waits.
     const waitFor = owner && takeOver === 'wait' && ownerBusy ? owner : null
     const firstPrompt = prompt ?? (owner && !waitFor && ownerBusy && supportsFirstPrompt(engine) ? 'continue' : null)
-    const launchOptions = { bypassPermission, ...(permissionMode ? { permissionMode } : {}), extraArgs: extraArgs.length ? extraArgs : undefined, installIfMissing, clearEnv, cwd, harnessNode: dsh ? true : undefined, ...(firstPrompt ? { firstPrompt } : {}), ...(resumeSessionId ? { resumeSessionId } : {}), ...(waitFor ? { waitForPid: { pid: waitFor.pid, name: engineLabel(engine) } } : {}), terminalHint: { machineName: terminalHintMachineName() } }
+    // A composed command's literal arguments belong only to this invocation.
+    // Keep them out of persisted relaunch options so resuming never repeats a prompt.
+    const commandArgs = [...extraArgs, ...(nativeArgs ?? [])]
+    const launchOptions = { terminalInit, bypassPermission, ...(permissionMode ? { permissionMode } : {}), extraArgs: commandArgs.length ? commandArgs : undefined, installIfMissing, clearEnv, cwd, harnessNode: dsh ? true : undefined, ...(firstPrompt ? { firstPrompt } : {}), ...(resumeSessionId ? { resumeSessionId } : {}), ...(waitFor ? { waitForPid: { pid: waitFor.pid, name: engineLabel(engine) } } : {}), terminalHint: { machineName: terminalHintMachineName() } }
     const command = buildEngineCommandArgv(engine, launchOptions)
     const argv = buildEngineLaunchArgv(engine, launchOptions)
     // The terminal's process goes last, once nothing here can refuse or fail the launch — the command
@@ -5741,6 +5773,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       tmuxBackend,
       registry,
       engine,
+      resumeSessionId,
+      resumeTranscriptPath,
       cwd,
       sessionLabel: label,
       argv,
@@ -6210,7 +6244,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
    * registry entry, and closes only its exact tmux pane. Exact PID/start-marker validation guards the engine's
    * SIGTERM/SIGKILL fallback. Engine conversation files, recaps and the Harness name remain on disk.
    */
-  const stopJobs = new Map<string, Promise<void>>()
   const stopAgent = createStopAgentService({
     registry, stoppedAgents, restartJobs, stopJobs, tmuxBackend, agentReconciler,
     forgetSession, markDeleted, clearDeleted,
@@ -6257,7 +6290,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
 
   const resumeAgent = createResumeAgentService({
     registry, stoppedAgents, tmuxBackend, restartJobs, stopJobs, pinnedControls,
-    retainExitedSession, announceSession, relaunchOverrides, prepareSessionResume,
+    retainExitedSession, announceSession: session => {
+      announceSession(session)
+      if (session.launch?.state === 'ready') void observeEngineExit?.(session.agentId)
+    }, relaunchOverrides, prepareSessionResume,
     refreshGridWebSearch, clearDeleted, attachDsh,
   })
   backend.onResumeAgent = (id, permissionMode) => backend.purgeAgentService?.busy(id) || backend.purgeAgentService?.blocksFolder(stoppedAgents.get(id)?.cwd)
@@ -8350,6 +8386,9 @@ switch (cmd) {
     break
   case 'tui':
     tuiCommand(rest, { port: env.PORT, dataDir: env.ADAPTER_DATA_DIR, identity: wantedDaemonIdentity }).then((code) => { process.exitCode = code }).catch(onError)
+    break
+  case 'shell-launch':
+    import('./shellLaunch.js').then(({ shellLaunch }) => shellLaunch(rest)).then((code) => { process.exitCode = code }).catch(onError)
     break
   case 'remote':
     remoteCommand({

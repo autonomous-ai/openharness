@@ -156,6 +156,7 @@ impl App {
         self.removed_machines.clear();
         let migrate = (old.local_only || local_only || status["computerId"].as_str() == Some(old.machine.as_str())).then_some(old.machine.as_str());
 
+        crate::shell_context::account_changed(self, &old.machine, machine, migrate.is_some());
         crate::mirror::leave(self);
         self.mirror = None; self.mirror_attached = 0;
         for session in &mut self.sessions { session.mirror = None; }

@@ -21,6 +21,7 @@ import * as machineResources from './lib/machineResources.js'
 import * as projectFolder from './lib/projectFolder.js'
 import * as claudeTrust from './lib/claudeTrust.js'
 import * as projectPreview from './lib/projectPreview.js'
+import * as fsBrowse from './lib/fsBrowse.js'
 import * as storeCatalog from './dsh/catalog.js'
 import * as opencodeVersion from './engines/opencode/version.js'
 import { randomUUID } from 'node:crypto'
@@ -30,6 +31,28 @@ import { LocalModels } from './lib/localModels.js'
 import type { GridAttachResult } from './lib/gridAttach.js'
 import { STRICT_DOWN_TYPES, encryptDownFrame, encryptRpcResult } from './lib/e2ee/applicationFrames.js'
 import { CloseAgentService } from './lib/closeAgentService.js'
+
+describe('folder browsing stays responsive', () => {
+  afterEach(() => vi.restoreAllMocks())
+  it('serves inventory and other folders while a directory read is stalled', async () => {
+    const socket = new BackendSocket('fixture'), frames: any[] = []
+    socket.registerLocalClient('local:folders', { sendFrame: frame => { frames.push(frame); return true }, sendBinary: () => true })
+    let finish!: (value: fsBrowse.ListDirResult) => void
+    vi.spyOn(fsBrowse, 'listDir').mockImplementation(path => path === '/slow'
+      ? new Promise(resolve => { finish = resolve })
+      : Promise.resolve({ path, entries: [], truncated: false }))
+    try {
+      socket.handleLocalFrame('local:folders', { type: 'fs_list_dir', payload: { requestId: 'slow', path: '/slow' } })
+      socket.handleLocalFrame('local:folders', { type: 'agents_list', payload: { requestId: 'inventory' } })
+      socket.handleLocalFrame('local:folders', { type: 'fs_list_dir', payload: { requestId: 'fast', path: '/fast' } })
+      await vi.waitFor(() => expect(frames.some(f => f.payload?.requestId === 'fast')).toBe(true))
+      expect(frames.some(f => f.payload?.requestId === 'inventory')).toBe(true)
+      expect(frames.some(f => f.payload?.requestId === 'slow')).toBe(false)
+      finish({ path: '/slow', entries: [], truncated: false })
+      await vi.waitFor(() => expect(frames.find(f => f.payload?.requestId === 'slow')?.payload.path).toBe('/slow'))
+    } finally { await socket.stop() }
+  })
+})
 
 describe('safe session close RPC', () => {
   it('seals cleanup previews and passes the open-tab condition to Close', async () => {
@@ -1555,10 +1578,44 @@ describe('BackendSocket outbound queue', () => {
       ask('prompt', { prompt: 'hello' })
       await vi.waitFor(() => expect(['relative', 'grid', 'prompt'].map(errorOf)).toEqual(['INVALID_CWD', 'INVALID_GRID', 'PROMPT_UNSUPPORTED']))
       expect(create).toHaveBeenCalledTimes(2)
+      for (const [id, terminalInit] of [['nul', 'bad\0init'], ['large', 'x'.repeat(65537)], ['object', {}]] as const) ask(id, { terminalInit })
+      ask('not-terminal', { engine:'codex', cwd:homedir(), terminalInit:'printf no' })
+      await vi.waitFor(() => expect(['nul','large','object','not-terminal'].map(errorOf)).toEqual(Array(4).fill('INVALID_TERMINAL_INIT')))
+      expect(create).toHaveBeenCalledTimes(2)
+      ask('initialized', { terminalInit: "printf 'private shell init'" })
+      await vi.waitFor(() => expect(create).toHaveBeenCalledTimes(3))
+      expect(create.mock.calls[2][0]).toMatchObject({terminalInit: "printf 'private shell init'"})
+      await vi.waitFor(() => expect(frames.find(f => (f.payload as any)?.requestId === 'initialized')?.payload).toMatchObject({terminalInitApplied:true}))
     } finally {
       await socket.unregisterLocalClient('local:terminal')
       await socket.stop()
     }
+  })
+
+  it('accepts literal shell argv only for a new agent using native approvals', async () => {
+    const socket = new BackendSocket('token')
+    const frames: Array<Record<string, any>> = []
+    socket.registerLocalClient('local:compose', { sendFrame: f => { frames.push(f); return true }, sendBinary: () => true })
+    const create = vi.fn(async (_input: { nativeArgs?: string[] }) => ({ ok: false as const, error: 'FIXTURE_END' }))
+    socket.onCreateAgent = create
+    const ask = (requestId: string, payload: Record<string, unknown>) => socket.handleLocalFrame('local:compose', {
+      type: 'agent_create', payload: { requestId, engine: 'claude', cwd: homedir(), bypassPermission: false, ...payload },
+    })
+    const error = (id: string) => frames.find(f => f.payload?.requestId === id)?.payload?.error
+    try {
+      const nativeArgs = ['--model', 'sonnet', '--', 'literal $(touch no); 日本語', '%unchanged']
+      ask('valid', { nativeArgs })
+      await vi.waitFor(() => expect(error('valid')).toBe('FIXTURE_END'))
+      expect(create.mock.calls[0]?.[0]).toMatchObject({ nativeArgs, engine: 'claude', bypassPermission: false })
+      for (const [id, patch] of [
+        ['not-array', { nativeArgs: 'bad' }], ['object', { nativeArgs: [{}] }],
+        ['nul', { nativeArgs: ['a\0b'] }], ['many', { nativeArgs: Array(257).fill('x') }],
+        ['large', { nativeArgs: ['x'.repeat(32769)] }], ['terminal', { engine: 'terminal', nativeArgs: [] }],
+        ['permission', { nativeArgs: [], bypassPermission: true }], ['prompt', { nativeArgs: [], prompt: 'double prompt' }],
+      ] as const) ask(id, patch)
+      await vi.waitFor(() => expect(['not-array','object','nul','many','large','terminal','permission','prompt'].map(error)).toEqual(Array(8).fill('INVALID_NATIVE_ARGS')))
+      expect(create).toHaveBeenCalledTimes(1)
+    } finally { await socket.unregisterLocalClient('local:compose'); await socket.stop() }
   })
 
   it('recovers a delayed creation on the same connection without starting another agent', async () => {

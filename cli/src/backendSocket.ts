@@ -26,6 +26,7 @@ import { WebSocket } from 'ws'
 import { BACKEND_IDLE_DEADLINE_MS, watchSocketLiveness, type LivenessWatch } from './lib/wsLiveness.js'
 import { stat, readdir } from 'fs/promises'
 import { existsSync } from 'node:fs'
+import { shellContextReply } from './lib/shellContextReply.js'
 import { dirname, isAbsolute, join } from 'path'
 import { hostname, homedir } from 'os'
 import { env } from './config/env.js'
@@ -566,6 +567,9 @@ export class BackendSocket {
      *  only between turns, `now` whatever it is doing (then tells it to continue), `wait` when its
      *  turn ends. Absent, one open elsewhere is refused and the refusal says whether it is busy. */
     takeOver?: 'idle' | 'now' | 'wait' | null
+    terminalInit?: string
+    /** Literal argv from an explicitly submitted shell command; never shell source. */
+    nativeArgs?: string[]
   }) =>
     Promise<{ ok: true; session: RegisteredSession } | { ok: false; error: string; detail?: string }>) | null = null
   /** Called on `dsh_install` — cli.ts clones/sets up/doctors the harness and reports each phase. */
@@ -793,7 +797,7 @@ export class BackendSocket {
   private readonly monitorCompletions = new MonitorCompletions()
   /** Answers `session_search` from this machine's transcript index (lib/sessionSearch/). Null when
    *  this Node has no `node:sqlite`. */
-  sessionSearchProvider: ((query: string, options: { limit?: number; from?: number; to?: number }) => SessionSearchResult) | null = null
+  sessionSearchProvider: ((query: string, options: { limit?: number; from?: number; to?: number; catalogAfter?: string }) => SessionSearchResult) | null = null
   /** The end of one session from the same index, for Cmd-P's preview (`session_tail`). */
   sessionTailProvider: ((sessionId: string, options: { beforeTurn?: number; maxChars?: number }) => Promise<SessionTail | null>) | null = null
   /** Runtime Model/Effort integration, wired by cli.ts for registered tmux sessions. */
@@ -2613,6 +2617,7 @@ export class BackendSocket {
           // of order; keeping it awaited here made a Create click sit behind an unrelated sweep.
           void this.engineProbeProvider(asked && asked.length > 0 ? asked : undefined)
             .then((availability) => reply(type, requestId, {
+              shellComposeVersion: 1,
               engines: availability.map((entry) => ({
                 engine: entry.engine,
                 installed: entry.installed,
@@ -2917,7 +2922,30 @@ export class BackendSocket {
             }
             takeOver = payload.takeOver
           }
+          // Only new terminal shells accept initialization, under the same authority
+          // as terminal creation. Existing agent input is never modified by this field.
+          let terminalInit: string | undefined
+          if (payload.terminalInit !== undefined) {
+            if (!terminal || typeof payload.terminalInit !== 'string' || !payload.terminalInit.length
+              || Buffer.byteLength(payload.terminalInit) > 64 * 1024 || payload.terminalInit.includes('\0')) {
+              reply(type, requestId, { error: 'INVALID_TERMINAL_INIT' }); return
+            }
+            terminalInit = payload.terminalInit
+          }
+          let nativeArgs: string[] | undefined
+          if (payload.nativeArgs !== undefined) {
+            if (terminal || resumeSessionId || projectFolder || dsh || prompt || agent || permissionMode
+              || payload.bypassPermission !== false || !Array.isArray(payload.nativeArgs)
+              || payload.nativeArgs.length > 256
+              || payload.nativeArgs.some(arg => typeof arg !== 'string' || arg.includes('\0'))
+              || Buffer.byteLength(JSON.stringify(payload.nativeArgs)) > 32 * 1024) {
+              reply(type, requestId, { error: 'INVALID_NATIVE_ARGS', detail: 'Shell launch needs bounded literal arguments and native approval settings.' }); return
+            }
+            nativeArgs = payload.nativeArgs as string[]
+          }
           const input = {
+            ...(nativeArgs ? { nativeArgs } : {}),
+            ...(terminalInit ? { terminalInit } : {}),
             engine,
             cwd: typeof cwd === 'string' ? cwd : terminal ? homedir() : '',
             // On unless a client says otherwise: a harness works without stopping to ask for each command.
@@ -2993,7 +3021,7 @@ export class BackendSocket {
                 if (result.error === 'SPAWN_FAILED' || result.error === 'REGISTRATION_FAILED') return { state: 'unconfirmed' }
                 return { state: 'failed', error: result.error, ...(preparedFolder ? { preparedFolder } : {}), ...(result.detail ? { detail: result.detail.slice(0, 2000) } : {}) }
               }).then(async (status) => {
-                reply(type, requestId, { creationId, ...await this.creationStatusPayload(status) })
+                reply(type, requestId, { creationId, ...await this.creationStatusPayload(status), ...(terminalInit && status.state === 'created' ? { terminalInitApplied: true } : {}) })
               }).catch(() => reply(type, requestId, { error: 'INTERNAL' }))
             } catch (error) {
               reply(type, requestId, { error: error instanceof AgentCreationReceiptError ? error.code : 'INTERNAL' })
@@ -3013,7 +3041,7 @@ export class BackendSocket {
             reply(type, requestId, result.detail ? { error: result.error, detail: result.detail } : { error: result.error })
             return
           }
-          reply(type, requestId, { agent: await this.toProject(result.session) })
+          reply(type, requestId, { agent: await this.toProject(result.session), ...(terminalInit ? { terminalInitApplied: true } : {}) })
           return
         }
 
@@ -3309,11 +3337,11 @@ export class BackendSocket {
         }
 
         case 'fs_list_dir': {
-          // One-level remote directory listing for the New Agent folder browser.
+          // A cloud/mounted/privacy-protected directory can stall. Neither the
+          // event loop nor this connection's ordered RPC chain may wait for it.
           const path = typeof payload.path === 'string' ? payload.path : ''
-          const result = listDir(path)
-          if ('error' in result) { reply(type, requestId, { error: result.error }); return }
-          reply(type, requestId, { ...result })
+          void listDir(path).then(result => reply(type, requestId, { ...result }))
+            .catch(() => reply(type, requestId, { error: 'UNAVAILABLE' }))
           return
         }
 
@@ -3438,13 +3466,18 @@ export class BackendSocket {
         // Every conversation on this machine, searched by what was said in it (lib/sessionSearch/).
         // Synchronous and a few milliseconds: the index is local SQLite FTS5. The words searched for
         // arrive sealed and the hits leave sealed — the relay reads neither.
+        case 'shell_context_reply': {
+          if (!local && this.e2ee.sessionRole(connId) !== 'web') { reply(type, requestId, { error: 'OWNER_REQUIRED' }); return }
+          reply(type, requestId, { ok: shellContextReply(payload) })
+          return
+        }
         case 'session_search': {
           if (!this.sessionSearchProvider) { reply(type, requestId, { error: 'SEARCH_UNAVAILABLE' }); return }
           const query = typeof payload.query === 'string' ? payload.query.slice(0, 500) : ''
           const number = (value: unknown) => typeof value === 'number' && Number.isFinite(value) ? value : undefined
           // `from`/`to`: only sessions worked on in that window (epoch ms) — "the dial one from last
           // week". The client reads the time words, so every machine searches the same window.
-          reply(type, requestId, { ...this.sessionSearchProvider(query, { limit: number(payload.limit), from: number(payload.from), to: number(payload.to) }) })
+          reply(type, requestId, { ...(typeof payload.catalogAfter === 'string' ? { catalog: true } : {}), ...this.sessionSearchProvider(query, { limit: number(payload.limit), from: number(payload.from), to: number(payload.to), ...(typeof payload.catalogAfter === 'string' && payload.catalogAfter.length <= 256 ? { catalogAfter: payload.catalogAfter } : {}) }) })
           return
         }
 

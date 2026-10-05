@@ -20,6 +20,18 @@ const at = (minute: number) => `2026-09-20T10:${String(minute).padStart(2, '0')}
 const prompt = (text: string, minute: number) => JSON.stringify({ type: 'user', timestamp: at(minute), message: { role: 'user', content: text } }) + '\n'
 const answer = (text: string, minute: number) => JSON.stringify({ type: 'assistant', timestamp: at(minute), message: { role: 'assistant', content: [{ type: 'text', text }], stop_reason: 'end_turn' } }) + '\n'
 
+it('catalog preserves a previous owned conversation with its own resume folder and title', async () => {
+  const store = SessionSearchStore.open(':memory:')!
+  const source: SearchSource = {agentId:'same-agent',sessionId:'old-session',engine:'claude',transcriptPath:null,header:'Previous task',changedAt:1}
+  const index = new SessionSearchIndex({store,sources:()=>[source],catalogMetadata:()=>new Map([
+    ['old-session',{title:'Earlier conversation',cwd:'/work/earlier',origin:'harness'}],
+  ])})
+  cleanups.push(()=>{index.stop();store.close()})
+  await index.pass(source)
+  expect(index.search('',{catalogAfter:''}).hits[0]).toMatchObject({agentId:'same-agent',sessionId:'old-session',catalogEntry:{title:'Earlier conversation',cwd:'/work/earlier'}})
+  expect(index.search('Previous').hits[0].external).toBeUndefined()
+})
+
 function setup(initial: string, agents?: () => string[]) {
   const dir = mkdtempSync(join(tmpdir(), 'session-search-'))
   dirs.push(dir)

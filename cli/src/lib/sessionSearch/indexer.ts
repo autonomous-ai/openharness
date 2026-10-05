@@ -17,7 +17,7 @@ import { performance } from 'node:perf_hooks'
 import type { LiveEvent } from '../normalize.js'
 import { forEachLine, lineNormalizer, lineTime, skipPredicate } from './transcript.js'
 import { TurnCollector } from './turns.js'
-import type { IndexedSession, SearchHit, SessionSearchStore, SessionTail } from './store.js'
+import type { ExternalHit, IndexedSession, SearchHit, SessionSearchStore, SessionTail } from './store.js'
 
 export interface SearchSource {
   agentId: string
@@ -92,6 +92,8 @@ export interface SessionSearchResult {
 }
 
 export interface SessionSearchIndexOptions {
+  /** Exact resume metadata for catalog entries, including an agent's earlier conversations. */
+  catalogMetadata?: () => ReadonlyMap<string, ExternalHit>
   store: SessionSearchStore
   /** Every session this machine can index: live agents and stopped ones. */
   sources: () => SearchSource[]
@@ -238,21 +240,30 @@ export class SessionSearchIndex {
     void this.drain()
   }
 
-  search(query: string, options: { limit?: number; from?: number; to?: number } = {}): SessionSearchResult {
+  search(query: string, options: { limit?: number; from?: number; to?: number; catalogAfter?: string } = {}): SessionSearchResult {
     const started = performance.now()
     // Opening welcome/search is an explicit demand for history. Start the first scan now,
     // without blocking this request or waiting for the daemon's deferred boot sweep.
     if ((!this.initialized || this.discoveryFailed) && !this.discovering &&
         (this.discoveryStartedAt === undefined || Date.now() - this.discoveryStartedAt >= 1_000)) this.sweep()
     const hits = this.opts.store.search(query, options)
+    if (options.catalogAfter !== undefined) {
+      const metadata = this.opts.catalogMetadata?.()
+      for (const hit of hits) {
+        const entry = metadata?.get(hit.sessionId)
+        if (entry) hit.catalogEntry = { ...entry }
+      }
+    }
     // Whether a terminal still has it, as last looked: a search never waits for a process table.
-    if (hits.some((hit) => hit.external) && this.opts.openSessions) {
+    if (hits.some((hit) => hit.external || hit.catalogEntry) && this.opts.openSessions) {
       const open = this.opts.openSessions.known()
       for (const hit of hits) {
-        if (!hit.external) continue
-        hit.external.open = open.has(hit.sessionId)
-        const where = open.get(hit.sessionId)
-        if (where) hit.external.openIn = where
+        for (const entry of [hit.external, hit.catalogEntry]) {
+          if (!entry) continue
+          entry.open = entry.open || open.has(hit.sessionId)
+          const where = open.get(hit.sessionId)
+          if (where) entry.openIn = where
+        }
       }
     }
     const indexed = this.opts.store.counts().sessions

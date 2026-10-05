@@ -34,6 +34,7 @@ pub struct What { pub engine: String, pub dsh: Option<String>, pub label: String
 
 #[derive(Clone, Debug)]
 pub enum PickerKind {
+    ShellContext,
     /// Harnesses — optionally inside one machine or one project folder.
     Open { filter: Filter, machine: Option<String>, project: Option<String> },
     Palette,
@@ -185,8 +186,7 @@ pub const COMMANDS: &[(&str, &str, &str, &str, &str)] = &[
     ("projects", "Projects…", "⌥O", "a project, then one of its harnesses", "Harness"),
     ("models", "Models…", "⌥I", "local, shared, subscriptions, APIs — use one on this harness", "Harness"),
     ("change-agent", "Change agent…", "", "continue this project with another agent", "Harness"),
-    ("new", "New Harness…", "⌥N", "", "Harness"),
-    ("terminal", "New terminal", "⌥⇧T", "a shell on this pane's machine", "Harness"),
+    ("terminal", "New pane", "⌥N", "a shell on this pane's machine", "Harness"),
     ("inbox", "Harnesses needing input", "⌥⇧I", "", "Harness"),
     ("next-waiting", "Next harness waiting on you", "⌥A", "oldest question first", "Harness"),
     ("send", "Send to harness…", "⌥B", "type a task — Harness picks who", "Harness"),
@@ -307,19 +307,22 @@ pub fn agent_rows(app: &App, filter: Filter, machine: Option<&str>, project: Opt
 /// harness; one open in another terminal or app is marked so, and not opened twice.
 pub fn external_rows(app: &App) -> Vec<Row> {
     let many = app.fleet.visible_machines().filter(|m| m.usable()).count() > 1;
-    app.said.iter().filter_map(|s| s.external.as_ref()).map(|x| {
+    app.said.iter().chain(app.shell_context.catalog.iter().filter(|_| app.shell_context.sessions_machine.is_some())).filter_map(|s| s.external.as_ref())
+        .filter(|x| !app.fleet.agents.values().any(|a| a.machine_id == x.machine && a.session_id == x.session_id)).map(|x| {
         let (mark, mark_color) = engine_mark(&x.engine);
         let folder = x.cwd.trim_end_matches('/').rsplit('/').next().unwrap_or("").to_string();
         let title = if x.title.is_empty() { folder.clone() } else { x.title.clone() };
-        let note = if x.open { "open elsewhere" } else { "not in Harness" };
+        let note = if x.open { "open elsewhere" } else if x.cwd.is_empty() { "folder unavailable" } else { "saved" };
         let right = [note.to_string(), if many { app.fleet.machine_name(&x.machine) } else { String::new() }, ago(x.last_at)].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join("  ");
-        Row::new(format!("external:{}:{}", x.machine, x.session_id), title)
+        let mut row = Row::new(format!("external:{}:{}", x.machine, x.session_id), title)
             .extra(format!("{} {} {} {}", x.cwd, x.engine, engine_label(&x.engine), app.fleet.machine_name(&x.machine)))
-            .group("Not in Harness")
+            .group("Saved conversations")
             .lead(vec![span("‖", fg(theme::MUTED)), span(" ", Style::default()), span(mark, fg(mark_color)), span(" ", Style::default())])
             .detail(vec![span(folder, fg(theme::MUTED))])
             .right(right)
-            .right_narrow(ago(x.last_at))
+            .right_narrow(ago(x.last_at));
+        row.disabled = x.cwd.is_empty();
+        row
     }).collect()
 }
 
@@ -391,6 +394,7 @@ pub fn is_launcher(kind: &PickerKind) -> bool {
 /// (title, placeholder) for a launcher mode.
 pub fn launcher_title(app: &App, kind: &PickerKind) -> (String, String) {
     match kind {
+        PickerKind::Open { .. } if app.shell_context.sessions_machine.is_some() => ("Sessions on this computer".into(), "Search sessions".into()),
         PickerKind::Open { machine: Some(m), project: None, .. } => (format!("harnesses · @{}", app.fleet.machine_name(m)), "Search this machine's harnesses — esc back".into()),
         PickerKind::Open { project: Some(p), .. } => (format!("harnesses · #{}", p.rsplit('/').next().unwrap_or(p)), "Search this project's harnesses — esc back".into()),
         PickerKind::Open { .. } => ("harnesses".into(), "Search harnesses   > commands   @ machines   # projects   : models   * store   ? help".into()),

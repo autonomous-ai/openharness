@@ -71,9 +71,9 @@ impl Keymap {
         // ── tmux's own table ──
         b(ch(' '), "next-layout", false, "Select next layout");
         b(ch('!'), "break-pane", false, "Break pane to a new window");
-        b(ch('"'), "split-window", false, "Split window vertically (a harness below)");
+        b(ch('"'), "split-window", false, "Split window vertically (a shell below)");
         b(ch('#'), "list-buffers", false, "List paste buffers");
-        b(ch('%'), "split-window -h", false, "Split window horizontally (a harness beside)");
+        b(ch('%'), "split-window -h", false, "Split window horizontally (a shell beside)");
         b(ch('&'), "confirm-before -p \"kill-window #W? (y/n)\" kill-window", false, "Kill current window (harnesses keep running)");
         b(ch('\''), "command-prompt -p index select-window", false, "Prompt for window index to select");
         b(ch(','), "command-prompt -I \"#W\" -p (rename-window) rename-window", false, "Rename current window");
@@ -95,7 +95,7 @@ impl Keymap {
         b(ch('L'), "switch-client -l", false, "Switch to the last harness");
         b(ch('['), "copy-mode", false, "Enter copy mode");
         b(ch(']'), "paste-buffer -p", false, "Paste the most recent paste buffer");
-        b(ch('c'), "new-window", false, "Create a new window (and choose its harness)");
+        b(ch('c'), "new-window", false, "Create a new window with a shell");
         b(ch('d'), "detach-client", false, "Detach — everything keeps running");
         b(ch('f'), "command-prompt { find-window -Z \"%%\" }", false, "Search for a pane");
         b(ch('i'), "display-message", false, "Display window information");
@@ -153,7 +153,7 @@ impl Keymap {
         // Harness's own, on keys tmux leaves unbound.
         // (Enter: the one key to remember — every command and setting by name.)
         b(k(KeyCode::Enter, none), "choose-command", false, "Commands and settings, by name");
-        b(ch('N'), "new-harness", false, "New Harness: agent, project, task and launch settings");
+        b(ch('N'), "new-harness", false, "New pane with the agent picker");
         b(ch('@'), "choose-tree -m", false, "Machines (then their harnesses)");
         b(ch('T'), "new-terminal", false, "New terminal (a shell) beside this pane");
         b(ch('a'), "next-harness", false, "Go to the next harness that needs you");
@@ -185,13 +185,22 @@ impl Keymap {
         if let Some(b) = t.iter_mut().find(|b| b.chord == ch('s')) { b.note = "Choose a harness or a session from a list".into() }
         // The root table's defaults are tmux's mouse bindings (a click selects the pane, the wheel
         // enters copy mode, a drag on a border resizes, the right button opens the menus).
-        let root: Vec<Binding> = include_str!("../tests/fixtures/tmux-3.5a-root.txt").lines().filter_map(fixture_binding).collect();
+        let mut root: Vec<Binding> = include_str!("../tests/fixtures/tmux-3.5a-root.txt").lines().filter_map(fixture_binding).collect();
+        // Extended-key terminals can distinguish this from the shell's Ctrl+N.
+        for key in ["C-S-n", "D-S-n"] {
+            root.push(Binding { chord: parse(key).unwrap(), command: "new-harness".into(), repeat: false, note: "New pane with the agent picker".into() });
+        }
         Keymap { prefix: k(KeyCode::Char('b'), ctrl), prefix2: None, prefix_table: t, root_table: root, copy_vi: Vec::new(), copy_emacs: Vec::new(), named: Default::default(), copy_unbound: Vec::new(), removed: Vec::new(), repeat_ms: 500, hint_ms: 600 }
     }
 
     /// A prefix table saved before hn added a key: the new key is added where the table has
     /// nothing on it (a key bound by hand to something else is left as it is).
     pub fn migrate_defaults(table: &mut Vec<Binding>) {
+        if let Some(binding) = table.iter_mut().find(|b| b.chord == parse("N").unwrap()
+            && b.command == "new-terminal" && b.note == "New pane with a shell") {
+            binding.command = "new-harness".into();
+            binding.note = "New pane with the agent picker".into();
+        }
         // (key, command, note) — hn's keys added since tables were first saved.
         const ADDED: &[(&str, &str, &str)] = &[
             ("Enter", "choose-command", "Commands and settings, by name"),
@@ -585,9 +594,10 @@ mod tests {
         assert_eq!(km.prefix_command(&ch('"')).unwrap().command, "split-window");
         assert_eq!(km.prefix_command(&ch('c')).unwrap().command, "new-window");
         assert!(km.prefix_command(&Chord::normal(KeyCode::Up, KeyModifiers::NONE)).unwrap().repeat);
-        // The root table is tmux's: its mouse keys, nothing else.
-        assert!(km.root_table.iter().all(|b| is_mouse(&b.chord.code)));
-        assert_eq!(km.root_table.len(), 16);
+        // Keep tmux's mouse keys plus the direct new-pane shortcuts.
+        assert!(km.root_table.iter().all(|b| is_mouse(&b.chord.code)
+            || b.command == "new-harness" && ["C-S-n", "D-S-n"].iter().any(|key| parse(key).is_ok_and(|chord| chord == b.chord))));
+        assert_eq!(km.root_table.len(), 18);
         assert_eq!(km.hint("new-window").as_deref(), Some("C-b c"));
     }
 }

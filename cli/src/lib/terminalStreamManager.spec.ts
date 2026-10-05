@@ -1,3 +1,4 @@
+import { ENGINE_EXIT_NOTICE } from './engineExitNotice.js'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ENGINES } from '../engines/types.js'
 import type { RegisteredSession } from './registry.js'
@@ -111,6 +112,26 @@ describe('TerminalStreamManager', () => {
   afterEach(async () => {
     await manager.stop()
     vi.useRealTimers()
+  })
+
+  it('forwards only live exit hints, handles split output, and rate limits repeated hints', async () => {
+    const onEngineExitHint = vi.fn()
+    await manager.stop()
+    manager = newManager({ onEngineExitHint })
+    stream.snapshotBytes = Buffer.from(ENGINE_EXIT_NOTICE)
+    await manager.handleFrame('web-1', 'terminal_open', {
+      requestId: 'exit-hint', protocolVersion: 3, agentId: 'agent-1', cols: 100, rows: 30,
+    })
+    expect(onEngineExitHint).not.toHaveBeenCalled()
+    sink!.onData(Buffer.from(ENGINE_EXIT_NOTICE.slice(0, 7)))
+    expect(onEngineExitHint).not.toHaveBeenCalled()
+    sink!.onData(Buffer.from(ENGINE_EXIT_NOTICE.slice(7)))
+    expect(onEngineExitHint).toHaveBeenCalledExactlyOnceWith('agent-1')
+    sink!.onData(Buffer.from(ENGINE_EXIT_NOTICE))
+    expect(onEngineExitHint).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(1001)
+    sink!.onData(Buffer.from(ENGINE_EXIT_NOTICE))
+    expect(onEngineExitHint).toHaveBeenCalledTimes(2)
   })
 
   it('publishes the complete engine catalog without a client whitelist', async () => {

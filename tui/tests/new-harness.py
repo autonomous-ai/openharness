@@ -133,7 +133,11 @@ def choose_field(label, query):
     wait(lambda: re.search(r'› Start ', form_screen()), 'choice accepted; launch action focused')
 def form_visible(): return re.search(field_at('Task'), form_screen()) is not None
 def new_form():
-    keys('C-b', 'N'); wait(form_visible, 'New Harness form')
+    wait(lambda:'+' in screen().splitlines()[-1], 'footer controls after status message')
+    lines=screen().splitlines()
+    footer=lines[-1]
+    click(footer.index('+'),len(lines)-1)
+    wait(form_visible, 'footer + opens New Harness form')
 def placement():
     window, windows, panes = hn('display-message', '-p', '#{window_id} #{session_windows} #{window_panes}').split()
     return window, int(windows), int(panes)
@@ -218,13 +222,15 @@ try:
     assert not re.search(field_at('Options|Machine'), form_screen()), 'settings are direct fields; machine belongs in Project'
     choose_field('Approvals', 'read only'); shows('Read only')
     task_text = 'Fix café login.\n\nKeep 界 and 🦀 intact.\nAdd a regression test.'
-    field('Task'); shows('Enter start')
+    field('Task'); assert 'Enter start' not in form_screen() and 'Task is optional' not in form_screen()
     assert field_position('Task') == anchor, 'the task editor keeps the form visible and fixed'
     raw('\x1b[200~Fix café login.\r\n\r\nKeep 界 and 🦀 intact.\x1b[201~')
     shows('Keep 界 and 🦀 intact.')
     keys('M-Enter'); type_text('Add a regression test.'); keys('BTab')
     assert create_count() == before, 'leaving the task editor does not launch'
     snapshot('new-harness-settings')
+    field('Task'); keys('Enter')
+    assert create_count() == before, 'first task Enter only highlights Start'
     keys('Enter', 'Enter'); shows('Fixture launch failure')
     assert create_count() == before + 1, 'busy popup prevents double submission'
     shows('fail-once'); shows('Read only')
@@ -315,7 +321,7 @@ try:
     shows('autonomous-harness @ local'); shows('[x]')
     tmux('resize-window', '-t', 'test', '-x', '150', '-y', '42'); settle_ui()
     snapshot('new-harness-flat')
-    field('Task'); shows('Enter start')
+    field('Task'); assert 'Enter start' not in form_screen() and 'Task is optional' not in form_screen()
     raw('\x1b[200~Improve the New Harness keyboard flow.\nKeep the launch settings visible.\x1b[201~')
     shows('Keep the launch settings visible.'); snapshot('new-harness-task')
     keys('Escape'); new_form(); shows('Improve the New Harness keyboard flow.')
@@ -331,7 +337,7 @@ try:
     count += 1
     new_form(); shows('Improve the New Harness keyboard flow.')
     choose_field('Agent|Harness', 'cursor')
-    field('Task'); keys('Enter'); shows('This agent cannot start with a task')
+    field('Task'); keys('Enter', 'Enter'); shows('This agent cannot start with a task')
     assert create_count() == count, 'unsupported first tasks never reach the daemon'
     keys('Down')
     assert re.search(r'›\s+Agent\s+Cursor', form_screen()), 'Down leaves the rejected task for Agent even in a narrow terminal'

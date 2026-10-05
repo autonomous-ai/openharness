@@ -1,3 +1,4 @@
+import { EngineExitNoticeScanner } from './engineExitNotice.js'
 import { randomUUID } from 'node:crypto'
 import { unlink } from 'node:fs/promises'
 import { deflateSync } from 'node:zlib'
@@ -147,6 +148,8 @@ interface ActiveStream {
   pausedAt: number | null
   pausedMs: number
   pendingUpload: PendingUpload | null
+  exitNotice: EngineExitNoticeScanner
+  lastExitNoticeAt: number
 }
 
 export interface TerminalStreamManagerDeps {
@@ -166,6 +169,7 @@ export interface TerminalStreamManagerDeps {
   describeClient?: (connId: string) => TerminalClientDescriptor | null
   streamingAvailable: boolean
   now?: () => number
+  onEngineExitHint?: (agentId: string) => void
   diagnostic?: (event: string, fields: Record<string, unknown>) => void
   /**
    * An agent's terminal just took input (a keystroke or a paste) from the stream that holds it — never
@@ -567,6 +571,8 @@ export class TerminalStreamManager {
         pausedAt: null,
         pausedMs: 0,
         pendingUpload: null,
+        exitNotice: new EngineExitNoticeScanner(),
+        lastExitNoticeAt: -Infinity,
       }
       this.streams.set(streamId, state)
       if (!this.deps.sendTarget(connId, 'terminal_ready', {
@@ -994,6 +1000,11 @@ export class TerminalStreamManager {
 
   private onOutput(state: ActiveStream, bytes: Uint8Array): void {
     if (state.closing || bytes.length === 0) return
+    if (this.deps.onEngineExitHint && state.exitNotice.push(bytes)
+      && this.now() - state.lastExitNoticeAt >= 1000) {
+      state.lastExitNoticeAt = this.now()
+      this.deps.onEngineExitHint(state.agentId)
+    }
     const nextBuffered = state.pendingBytes + state.outputBytes + bytes.length
     state.peakBufferedBytes = Math.max(state.peakBufferedBytes, nextBuffered)
     if (nextBuffered > MAX_TOTAL_BUFFERED_BYTES) {

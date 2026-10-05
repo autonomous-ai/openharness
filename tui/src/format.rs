@@ -1291,6 +1291,7 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         "pane_title" => focus.map(|f| pane_title(app, window, f)).unwrap_or_else(|| host.clone()),
         "pane_heading" => focus.map(|f| pane_heading(app, window, f)).unwrap_or_default(),
         "hn_controls" => crate::workspace_controls::status(app),
+        "shell_context" => crate::shell_context::status(app, focus),
         "pane_id" => focus.map(crate::pane::tag).unwrap_or_default(),
         // What tmux on the pane's machine says (terminal_info), then what the shell said (OSC 7),
         // then where the harness started.

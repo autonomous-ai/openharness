@@ -73,6 +73,8 @@ export interface ExternalHit {
 }
 
 export interface SearchHit {
+  /** Present only in requested catalog pages, including previous sessions of an owned agent. */
+  catalogEntry?: ExternalHit
   sessionId: string
   agentId: string
   engine: string
@@ -160,6 +162,8 @@ const TAIL_CHARS_MAX = 64_000
 const TAIL_BATCH = 16
 
 export interface SearchOptions {
+  /** Ordered metadata pages for a client-side fuzzy picker; no transcript bodies. */
+  catalogAfter?: string
   limit?: number
   /** Only sessions worked on in this window (epoch ms, inclusive). */
   from?: number
@@ -545,6 +549,17 @@ export class SessionSearchStore {
   commonMatches = COMMON_MATCHES
 
   search(query: string, options: SearchOptions = {}): SearchHit[] {
+    if (options.catalogAfter !== undefined) {
+      const limit = Math.max(1, Math.min(options.limit ?? 100, 100))
+      return this.statement('SELECT session_id, agent_id, engine, header, last_at, title, cwd, origin FROM sessions WHERE session_id > ? ORDER BY session_id LIMIT ?')
+        .all(options.catalogAfter, limit).map((row) => ({
+          sessionId: String(row.session_id), agentId: String(row.agent_id), engine: String(row.engine),
+          turn: -1, at: row.last_at as number | null, lastAt: row.last_at as number | null,
+          field: 'name' as const, snippet: String(row.header), together: true, score: 0,
+          catalogEntry: { title: String(row.title || row.header || ''), cwd: String(row.cwd ?? ''), origin: String(row.origin || 'harness') },
+          ...(row.agent_id ? {} : { external: { title: String(row.title ?? ''), cwd: String(row.cwd ?? ''), origin: String(row.origin ?? '') } }),
+        }))
+    }
     const terms = queryTerms(query)
     const limit = Math.max(1, Math.min(options.limit ?? 30, 100))
     const now = options.now ?? Date.now()

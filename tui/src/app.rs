@@ -560,6 +560,7 @@ pub struct App {
     pub welcome: crate::new_harness::Welcome,
     /// ── models: the Models view's replies (local models, grids, APIs) and a Use under way ──
     pub models_view: crate::models::Models,
+    pub shell_context: crate::shell_context::State,
     /// Each machine's last measured round trip (the live roster request), for `@`.
     pub rtt: HashMap<String, Duration>,
     pub homes: HashMap<String, String>,
@@ -1027,6 +1028,7 @@ impl App {
             new_harness_draft: None,
             welcome: Default::default(),
             models_view: Default::default(),
+            shell_context: crate::shell_context::State::load(),
             rtt: HashMap::new(),
             homes: HashMap::new(),
             last_focus_sent: None,
@@ -1753,6 +1755,7 @@ impl App {
                     if belled && self.options.get("monitor-bell", &tab.id, None).as_deref() == Some("on") { tab.alerts |= BELL }
                 }
             }
+            crate::shell_context::output(self, id, &bytes);
         }
     }
 
@@ -5470,16 +5473,8 @@ impl App {
         // The desk's first shell: where hn was started (-c: where it was asked to), running what
         // `hn new` asked for.
         let start = self.start_session.take().unwrap_or_default();
-        let welcome = start.command.is_none() && start.cwd.is_none() && start.window.is_none()
-            && !start.create && self.options.get("@hn-new-window", "", None).as_deref() != Some("shell")
-            && self.options.get("@hn-look", "", None).as_deref() != Some("tmux");
         let cwd = start.cwd.or_else(|| std::env::current_dir().ok().map(|d| d.display().to_string()));
-        if welcome {
-            self.tab_mut().home = true;
-            crate::new_harness::ensure_welcome(self, None, cwd.clone());
-            let tab = self.tab().id.clone();
-            crate::input::new_shell_from(self, None, Placement::Fill(tab), cwd, start.command);
-        } else { crate::input::new_shell_from(self, None, Placement::Auto(None), cwd, start.command); }
+        crate::input::new_shell_from(self, None, Placement::Auto(None), cwd, start.command);
     }
 
     fn fetch_desk(&mut self) {
@@ -5920,7 +5915,8 @@ impl App {
         let searches = crate::picker::said_searches(&query);
         let generation = self.said_generation;
         self.said_pending = 0;
-        let machines: Vec<String> = self.fleet.machines.iter().filter(|m| m.usable()).map(|m| m.id.clone()).collect();
+        let scope = match &self.modal { Some(crate::modal::Modal::Picker { kind: crate::modal::PickerKind::Open { machine, .. }, .. }) => machine.as_deref(), _ => self.shell_context.inline.as_ref().filter(|i| i.kind == "sessions").and(self.shell_context.sessions_machine.as_deref()) };
+        let machines: Vec<String> = self.fleet.machines.iter().filter(|m| m.usable() && scope.is_none_or(|s| m.id == s)).map(|m| m.id.clone()).collect();
         for machine in machines {
             for search in &searches {
                 let Some(link) = self.link(&machine) else { continue };
@@ -5950,17 +5946,20 @@ impl App {
     fn ask_tails(&mut self) {
         let Some(crate::modal::Modal::Picker { kind: crate::modal::PickerKind::Open { .. }, picker }) = &self.modal else { return };
         let ids: Vec<String> = picker.visible.iter().skip(picker.cursor).take(3).map(|(i, _)| picker.rows[*i].id.clone()).collect();
-        for id in ids {
-            let Some((machine, session)) = self.row_session(&id) else { continue };
-            if session.is_empty() || !self.tails_asked.insert(session.clone()) { continue }
-            let Some(link) = self.link(&machine) else { continue };
-            let s = session.clone();
-            let generation = link.generation;
-            self.spawn(async move { link.rpc("session_tail", json!({ "sessionId": s, "maxChars": 16_000 }), Duration::from_secs(10)).await }, move |app, reply| {
-                if app.connection_generation(&machine) != Some(generation) { return }
-                if let Ok(tail) = reply { app.tails.insert(session, tail); }
-            });
-        }
+        for id in ids { self.ask_tail_for(&id); }
+    }
+
+    /// Shared lazy preview loading for the overlay and the inline shell finder.
+    pub fn ask_tail_for(&mut self, id: &str) {
+        let Some((machine, session)) = self.row_session(id) else { return };
+        if session.is_empty() || !self.tails_asked.insert(session.clone()) { return }
+        let Some(link) = self.link(&machine) else { return };
+        let s = session.clone();
+        let generation = link.generation;
+        self.spawn(async move { link.rpc("session_tail", json!({ "sessionId": s, "maxChars": 16_000 }), Duration::from_secs(10)).await }, move |app, reply| {
+            if app.connection_generation(&machine) != Some(generation) { return }
+            if let Ok(tail) = reply { app.tails.insert(session, tail); }
+        });
     }
 
     /// A C-b s row's machine and session: a harness's (`machine:agent`), or a conversation's.
@@ -5993,6 +5992,7 @@ impl App {
         // ── models: this computer's models read as often as the Models view needs ──
         crate::models::tick(self);
         crate::account::tick(self);
+        crate::shell_context::tick(self);
         crate::agent_switch::tick(self);
         crate::hardware::tick(self);
         self.maybe_start_shell();

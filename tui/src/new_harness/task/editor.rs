@@ -182,7 +182,7 @@ impl Editor {
         if self.free_scroll { self.scroll = self.scroll.min(rows.len().saturating_sub(area.height as usize)); }
         else { self.scroll = self.scroll.min(row).max(row.saturating_sub(area.height as usize - 1)); }
         if text.is_empty() {
-            view::put(buf, area.x, area.y, area.width, "What should this agent work on?", muted);
+            view::put(buf, area.x, area.y, area.width, "What task should this agent work on?", muted);
         } else {
             for (dy, line) in rows.iter().skip(self.scroll).take(area.height as usize).enumerate() {
                 view::put(buf, area.x, area.y + dy as u16, area.width, &line.text.replace('\t', "    "), base);

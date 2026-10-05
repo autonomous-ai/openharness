@@ -967,8 +967,10 @@ class Registry {
           typeof raw?.transcriptPath === 'string' && raw.transcriptPath
             ? raw.transcriptPath
             : null
-        let bound = typeof raw?.sessionId === 'string' && raw.sessionId !== ''
         const rawSessionId = typeof raw?.sessionId === 'string' ? raw.sessionId : ''
+        const resumeIntent = raw.resumeOnly === true && raw.boundAt === null
+          && /^[A-Za-z0-9][A-Za-z0-9._-]{1,127}$/.test(rawSessionId)
+        let bound = !resumeIntent && rawSessionId !== ''
         // This row's own CODEX_HOME profile, when it was created against one other than the default —
         // see RegisteredSession.codexHome.
         const rawCodexHome = raw?.codexHome ?? undefined
@@ -994,14 +996,14 @@ class Registry {
         }
         // A process agent remains valid without a session. A missing/invalid transcript releases only the
         // binding so the discovery/store repair path can bind it again if appropriate.
-        if (!bound) transcriptPath = null
+        if (!bound && !resumeIntent) transcriptPath = null
         if (!runtimes.length) {
           changed = true
           continue
         }
         if (
           (bound && engine !== 'cursor' && engine !== 'opencode' && engine !== 'kilo' && engine !== 'pi' && engine !== 'hermes' && engine !== 'commandcode' && engine !== 'devin' && !transcriptPath)
-          || (bound && transcriptPath !== null && !validTranscriptPath(engine, transcriptPath, rawCodexHome))
+          || ((bound || resumeIntent) && transcriptPath !== null && !validTranscriptPath(engine, transcriptPath, rawCodexHome))
         ) {
           bound = false
           transcriptPath = null
@@ -1047,7 +1049,7 @@ class Registry {
           transcriptPath,
           defaultName: normalizedDefaultName(raw.defaultName),
           title: titleDisplayName(typeof raw.title === 'string' ? raw.title : null),
-          sessionId: bound ? rawSessionId : '',
+          sessionId: bound || resumeIntent ? rawSessionId : '',
           projectDir: !repairedCodexTranscript && typeof raw.projectDir === 'string' && raw.projectDir
             ? raw.projectDir
             : transcriptPath
@@ -1281,6 +1283,9 @@ class Registry {
   /** Register a terminal route before its engine process exists. */
   openPendingAgent(input: {
     engine: AgentEngine
+    /** Resume intent, not evidence that a process or transcript has bound yet. */
+    resumeSessionId?: string | null
+    resumeTranscriptPath?: string | null
     runtimes: TerminalRuntimeRef[]
     primaryRuntimeKey?: string
     cwd?: string | null
@@ -1302,6 +1307,7 @@ class Registry {
     forkedFrom?: ForkOrigin | null
   }): RegisteredSession | null {
     if (this.writeBlocked) return null
+    if (input.resumeSessionId && this.bySession(input.resumeSessionId)) return null
     const runtimes = normalizedRuntimes(input.runtimes)
     if (!runtimes.length) return null
     if (runtimes.some((runtime) => this.runtimeIndex.has(terminalRouteKey(runtime)))) return null
@@ -1313,7 +1319,8 @@ class Registry {
       launch: { state: 'starting' },
       defaultName: normalizedDefaultName(input.defaultName) ?? this.automaticName(input.label?.trim() || engineLabel(input.engine), new Date(now)),
       agentId,
-      sessionId: '',
+      sessionId: input.resumeSessionId ?? '',
+      ...(input.resumeSessionId ? { resumeOnly: true as const } : {}),
       boundAt: null,
       engine: input.engine,
       gateway: null,
@@ -1331,7 +1338,9 @@ class Registry {
       ...(permissionModeName(input.permissionMode) ? { permissionMode: input.permissionMode } : {}),
       ...(isTerminalEngine(input.engine) ? { terminalHost: true } : {}),
       ...normalizedForkedFrom(input.forkedFrom),
-      transcriptPath: null,
+      transcriptPath: input.resumeSessionId && input.resumeTranscriptPath
+        && validTranscriptPath(input.engine, input.resumeTranscriptPath, input.codexHome ?? undefined)
+        ? input.resumeTranscriptPath : null,
       projectDir: basename(input.cwd ?? '') || agentId,
       cwd: input.cwd ?? null,
       runtimes,
@@ -1344,7 +1353,7 @@ class Registry {
       processIdentity: null,
       registeredAt: now,
       touchedAt: now,
-      lastHookAt: now,
+      lastHookAt: input.resumeSessionId ? 0 : now,
       lastTranscriptAt: now,
     }
     this.index(entry)

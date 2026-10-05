@@ -3,7 +3,8 @@ pub(crate) mod data;
 pub(crate) mod receipt;
 mod task;
 mod welcome;
-pub(crate) use welcome::{Welcome, draw as draw_welcome, ensure as ensure_welcome, tick as welcome_tick};
+mod welcome_view;
+pub(crate) use welcome::{Welcome, draw as draw_welcome, tick as welcome_tick};
 pub(crate) use welcome::{key as welcome_key, mouse as welcome_mouse, paste as welcome_paste};
 pub(crate) use welcome::editing as welcome_editing;
 pub(crate) use welcome::remap as remap_welcome;
@@ -51,6 +52,7 @@ pub struct Draft {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Field {
     Agent,
+    Machine,
     Project,
     Task,
     Model,
@@ -77,7 +79,7 @@ enum Choice {
     Agent,
     Compatible(String),
     Project,
-    Machine(ProjectAction),
+    Machine(Option<ProjectAction>),
     Approvals,
     Model,
     Profile,
@@ -153,7 +155,13 @@ impl Form {
         data::project_payload(&self.draft, &self.git)
     }
     fn fields(&self) -> Vec<Field> {
-        let mut fields = vec![Field::Task, Field::Agent, Field::Project, Field::Branch, Field::Worktree];
+        let page = matches!(self.surface, Surface::Window(_));
+        let git_controls = self.draft.what.engine != "terminal"
+            && (data::git(&self.git) || self.git_loading || self.git["error"].is_string());
+        let mut fields = vec![Field::Task, Field::Agent];
+        if page { fields.push(Field::Machine); }
+        fields.push(Field::Project);
+        if !page && git_controls { fields.extend([Field::Branch, Field::Worktree]); }
         if self.draft.what.engine != "terminal" {
             fields.push(Field::Model);
         }
@@ -163,11 +171,12 @@ impl Form {
         if self.draft.what.engine == "codex" && self.draft.model.is_none() {
             fields.push(Field::Profile);
         }
+        if page && git_controls { fields.extend([Field::Worktree, Field::Branch]); }
         fields.push(Field::Create);
-        if matches!(self.surface, Surface::Window(_)) {
-            fields.push(Field::Terminal);
-            fields.extend((0..self.recent.len()).map(Field::Recent));
+        if page {
             fields.push(Field::Browse);
+            fields.extend((0..self.recent.len()).map(Field::Recent));
+            fields.push(Field::Terminal);
         }
         fields
     }
@@ -220,24 +229,12 @@ impl Form {
         format!("{} @ {}", self.project_name(), self.machine_label)
     }
     fn hint(&self) -> String {
-        let page = matches!(self.surface, Surface::Window(_));
-        if self.starting { return if page { "Launch continues if you change windows" } else { "Esc close · launch continues" }.into() }
-        if self.attempt.is_some() { return if page { "Enter check status" } else { "Enter check status · Esc close" }.into() }
-        if self.focus == Field::Task {
-            return "Enter start · Tab fields · Alt-Enter newline".into();
-        }
         if self.focus == Field::Project {
             if let Project::Folder(path) = &self.draft.project {
                 return format!("{} @ {}", short_path(path, &self.home), self.machine_label);
             }
         }
-        if self.focus == Field::Create {
-            if page { "Enter start · Tab fields" } else { "↑/↓ fields · Enter start · Esc close" }.into()
-        } else if page && matches!(self.focus, Field::Terminal | Field::Recent(_) | Field::Browse) {
-            "Enter open · Tab fields · Esc back".into()
-        } else {
-            "↑/↓ fields · Enter choose · Esc back".into()
-        }
+        String::new()
     }
     fn describe(&self, field: Field) -> (String, String) {
         let (label, value) = match field {
@@ -249,7 +246,10 @@ impl Form {
                 },
                 self.draft.what.label.clone(),
             ),
-            Field::Project => ("Project", self.project_label()),
+            Field::Machine => ("Machine", self.machine_label.clone()),
+            Field::Project => ("Project", if matches!(self.surface, Surface::Window(_)) {
+                self.project_name()
+            } else { self.project_label() }),
             Field::Task => ("Task", if self.draft.task.trim().is_empty() {
                 "Add a task (optional)".into()
             } else {
@@ -318,9 +318,9 @@ impl Form {
                 },
                 String::new(),
             ),
-            Field::Terminal => ("Open Terminal", String::new()),
+            Field::Terminal => ("New Terminal", String::new()),
             Field::Recent(i) => ("", self.recent_labels.get(i).map(|r| r.0.clone()).unwrap_or_default()),
-            Field::Browse => ("Browse All Sessions…", String::new()),
+            Field::Browse => ("All", String::new()),
         };
         (
             if field == Field::Create && !self.starting && self.attempt.is_none() {
@@ -551,6 +551,13 @@ fn make_form(app: &mut App, machine: Option<String>, cwd: Option<String>, surfac
 fn refresh_form(app: &App, form: &mut Form) {
     form.machine_label = machine_label(app, &form.draft.machine);
     form.local_only = crate::local::is_local(&form.draft.machine) && app.daemon_down;
+    // Git discovery can finish while its controls have keyboard focus.
+    if matches!(form.focus, Field::Branch | Field::Worktree) && !form.fields().contains(&form.focus) {
+        form.focus = Field::Project;
+        form.child = None;
+        form.child_active = false;
+        form.trail.clear();
+    }
     form.home = app
         .homes
         .get(&form.draft.machine)
@@ -580,8 +587,17 @@ fn refresh_form(app: &App, form: &mut Form) {
     let rows = match &c.kind {
         Choice::Agent => Some(agent_rows(app, &form.draft.machine)),
         Choice::Compatible(dsh) => Some(compatible_rows(app, &form.draft.machine, dsh)),
-        Choice::Project => Some(project_rows(app, &form.draft)),
-        Choice::Machine(_) => Some(modal::new_machine_rows(app, &app.fleet.local_id)),
+        Choice::Project => {
+            let mut rows = project_rows(app, &form.draft, !matches!(form.surface, Surface::Window(_)));
+            // The welcome header owns the destination; choosing a folder must
+            // not silently switch to a different computer with the same path.
+            if matches!(form.surface, Surface::Window(_)) {
+                rows.retain(|row| row.id.strip_prefix("at:").and_then(|s| s.split_once('\t'))
+                    .is_none_or(|(machine, _)| machine == form.draft.machine));
+            }
+            Some(rows)
+        }
+        Choice::Machine(_) => Some(modal::new_machine_rows(app, &form.draft.machine)),
         Choice::Approvals => Some(
             data::modes(&form.draft.what.engine)
                 .iter()
@@ -652,7 +668,7 @@ fn compatible_rows(app: &App, machine: &str, dsh: &str) -> Vec<Row> {
         .map(|e| Row::new(format!("engine:{e}"), theme::engine_label(e)))
         .collect()
 }
-fn project_rows(app: &App, draft: &Draft) -> Vec<Row> {
+fn project_rows(app: &App, draft: &Draft, show_machine: bool) -> Vec<Row> {
     const PER_MACHINE: usize = 50;
     let mut rows = vec![];
     if draft.what.engine != "terminal" {
@@ -700,7 +716,7 @@ fn project_rows(app: &App, draft: &Draft) -> Vec<Row> {
         );
         let mut row = Row::new(
             format!("at:{machine}\t{}", a.cwd),
-            format!("{short} @ {}", machine_label(app, machine)),
+            if show_machine { format!("{short} @ {}", machine_label(app, machine)) } else { short },
         )
         .extra(app.fleet.machine_name(machine))
         .group("Recent projects");
@@ -962,7 +978,7 @@ fn child(app: &mut App, form: &mut Form, kind: Choice, initial: &str) {
                 None
             }
         }
-        Choice::Machine(_) => Some(app.fleet.local_id.clone()),
+        Choice::Machine(action) => Some(if action.is_none() { form.draft.machine.clone() } else { app.fleet.local_id.clone() }),
         Choice::Approvals => Some(form.draft.permission.clone()),
         Choice::Model => Some(
             form.draft
@@ -1050,6 +1066,7 @@ fn reveal(app: &mut App, form: &mut Form) {
     }
     let kind = match form.focus {
         Field::Agent => Choice::Agent,
+        Field::Machine => Choice::Machine(None),
         Field::Project => Choice::Project,
         Field::Task => return,
         Field::Model => Choice::Model,
@@ -1110,6 +1127,7 @@ fn set_machine(app: &mut App, form: &mut Form, machine: &str) {
     set_project(form, project);
     form.models = Value::Null;
     form.profiles = Value::Null;
+    form.draft.profile = None;
     form.resource_generation.clear();
     crate::input::load_dsh(app, machine.into());
     refresh_form(app, form);
@@ -1140,6 +1158,15 @@ fn step_into(app: &mut App, form: &mut Form, previous: Child, kind: Choice, init
     form.trail.push(previous);
     child(app, form, kind, initial);
     form.child_active = true;
+}
+fn project_action(form: &Form, action: ProjectAction) -> Choice {
+    match action {
+        ProjectAction::Clone => Choice::Clone,
+        ProjectAction::New => Choice::NewFolder,
+        ProjectAction::Open => Choice::Folder(if let Project::Folder(path) = &form.draft.project {
+            path.clone()
+        } else { form.home.clone() }),
+    }
 }
 fn choose(app: &mut App, form: &mut Form) {
     let Some(c) = form.child.take() else { return };
@@ -1176,7 +1203,12 @@ fn choose(app: &mut App, form: &mut Form) {
                     "new" => ProjectAction::New,
                     _ => ProjectAction::Open,
                 };
-                step_into(app, form, c, Choice::Machine(action), "");
+                if matches!(form.surface, Surface::Window(_)) {
+                    let next = project_action(form, action);
+                    step_into(app, form, c, next, "");
+                } else {
+                    step_into(app, form, c, Choice::Machine(Some(action)), "");
+                }
                 return;
             }
             _ => {
@@ -1192,21 +1224,19 @@ fn choose(app: &mut App, form: &mut Form) {
             }
         },
         Choice::Machine(action) => {
+            // A machine may disconnect after the list was drawn.
+            if !app.fleet.machines.iter().any(|m| m.id == id && m.usable()) {
+                form.error = "That machine is not connected".into();
+                form.child = Some(c);
+                return;
+            }
             let action = *action;
             set_machine(app, form, &id);
-            let next = match action {
-                ProjectAction::Clone => Choice::Clone,
-                ProjectAction::New => Choice::NewFolder,
-                ProjectAction::Open => {
-                    Choice::Folder(if let Project::Folder(p) = &form.draft.project {
-                        p.clone()
-                    } else {
-                        form.home.clone()
-                    })
-                }
-            };
-            step_into(app, form, c, next, "");
-            return;
+            if let Some(action) = action {
+                let next = project_action(form, action);
+                step_into(app, form, c, next, "");
+                return;
+            }
         }
         Choice::Approvals => form.draft.permission = id,
         Choice::Model => {
@@ -1392,7 +1422,10 @@ pub fn key(app: &mut App, mut form: Box<Form>, key: KeyEvent) {
                     reveal(app, &mut form);
                 }
             }
-            KeyCode::Enter if !key.modifiers.intersects(KeyModifiers::ALT | KeyModifiers::SHIFT) => launch = true,
+            KeyCode::Enter if !key.modifiers.intersects(KeyModifiers::ALT | KeyModifiers::SHIFT) => {
+                form.focus = Field::Create;
+                form.child = None;
+            }
             _ if form.blocked(Field::Task).is_none() => {
                 form.task_editor.key(&mut form.draft.task, key, form.task_area.width.max(1) as usize);
                 form.error.clear();
@@ -1636,6 +1669,7 @@ pub fn start(app: &mut App) {
     let fail = if form.local_only && form.draft.what.engine != "terminal" {
         Some("Run `harness start` to connect agents, then retry. Your task stays here.".into())
     } else if let Some(error) = task::error(&form.draft.what.engine, &form.draft.task) {
+        form.focus = Field::Task;
         Some(error)
     } else if form.git_loading {
         form.submit_after_git = true;
@@ -1898,7 +1932,7 @@ mod tests {
             app.fleet.agents.insert(agent.key(), agent);
         }
         let Some(Modal::NewHarness(form)) = &app.modal else { panic!() };
-        let rows = project_rows(&app, &form.draft);
+        let rows = project_rows(&app, &form.draft, true);
         let recent: Vec<_> = rows.iter().filter(|r| r.id.starts_with("at:")).collect();
         assert_eq!(recent.len(), 1);
         assert_eq!(recent[0].id, "at:local\t/home/dev/repo");
@@ -1977,7 +2011,7 @@ mod tests {
         }
         open(&mut app, None, None);
         let Some(Modal::NewHarness(form)) = &app.modal else { panic!() };
-        let rows = project_rows(&app, &form.draft);
+        let rows = project_rows(&app, &form.draft, true);
         for machine in ["local", "office"] {
             let prefix = format!("at:{machine}\t");
             let actual: Vec<_> = rows.iter().filter(|r| r.id.starts_with(&prefix)).map(|r| r.id.clone()).collect();

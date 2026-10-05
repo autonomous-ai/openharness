@@ -6,6 +6,7 @@ import { registry, type RegisteredSession } from './registry.js'
 import { stoppedAgents } from './stoppedAgents.js'
 import { AgentRestartCoordinator } from './restartAgent.js'
 import { checkPidRuntime, terminateDeletedAgent } from './deleteAgentFallback.js'
+import { createEngineExitObserver } from './engineExitNotice.js'
 vi.mock('./codexSessionLifecycle.js', () => ({ stopSharedCodexSession: vi.fn(async () => {}) }))
 vi.mock('./captureResumeIdentity.js', () => ({ captureResumeIdentity: vi.fn(async session => session) }))
 vi.mock('./deleteAgentFallback.js', () => ({ checkPidRuntime: vi.fn(), terminateDeletedAgent: vi.fn() }))
@@ -58,6 +59,24 @@ it('backs up final flushed history after graceful exit and before closing the pa
   vi.mocked(deps.tmuxBackend!.kill).mockImplementation(async () => { order.push('pane'); return { state: 'succeeded', dispatch: 'executed' } })
   await createStopAgentService(deps)(row.agentId, { checkpoint: async (_, phase) => { order.push(phase) } })
   expect(order).toEqual(['before', 'exit', 'after', 'pane'])
+})
+it('the exit notification cannot archive the agent in the middle of an explicit stop', async () => {
+  row.launch = { state: 'ready' }
+  const retain = vi.fn((entry: RegisteredSession) => registry.removeAgent(entry.agentId))
+  const observe = createEngineExitObserver({
+    current: id => registry.byAgent(id), blocked: entry => deps.stopJobs.has(entry.agentId),
+    pane: async () => ({ dead: false, engineExit: 143, command: 'zsh', exitStatus: null }),
+    process: async () => ({ state: 'gone', reason: 'stopped' }), retain,
+  })
+  vi.mocked(terminateDeletedAgent).mockImplementation(async () => {
+    await observe(row.agentId)
+    return 'terminated'
+  })
+  await expect(createStopAgentService(deps)(row.agentId)).resolves.toBeUndefined()
+  expect(retain).not.toHaveBeenCalled()
+  expect(deps.tmuxBackend!.kill).toHaveBeenCalledOnce()
+  expect(deps.forgetSession).toHaveBeenCalledExactlyOnceWith(row.agentId, { force: true })
+  expect(stoppedAgents.get(row.agentId)?.sessionId).toBe('saved')
 })
 it.each(['terminal', 'without tmux', 'failed process', 'failed tmux'] as const)('retains work when stopping %s', async mode => {
   stoppedAgents.beginResume(row.agentId)

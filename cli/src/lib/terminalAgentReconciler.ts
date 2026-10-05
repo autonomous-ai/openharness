@@ -203,7 +203,8 @@ export class TerminalAgentReconciler {
     }
   }
 
-  private routeHeld(runtimes: readonly TerminalRuntimeRef[]): boolean {
+  /** Also fences event-driven exit probes during the same lifecycle operation. */
+  routeHeld(runtimes: readonly TerminalRuntimeRef[]): boolean {
     return runtimes.some((runtime) => this.heldRoutes.has(terminalRouteKey(runtime)))
   }
 

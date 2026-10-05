@@ -114,7 +114,7 @@ fn select_pane(app: &mut App, pane: u64) -> bool {
 
 pub fn activate(app: &mut App, action: Action, at: Option<(u16, u16)>) {
     match action {
-        Action::New => crate::commands::execute(app, "new-window"),
+        Action::New => crate::new_harness::open(app, None, None),
         Action::Menu => workspace_menu(app, at),
         Action::Account => crate::account::open(app),
         Action::Header(pane) => { select_pane(app, pane); }
@@ -209,8 +209,8 @@ fn hinted(app: &App, label: &str, key: &str, command: &str) -> crate::modal::Men
 fn workspace_items(app: &App) -> Vec<crate::modal::MenuItem> {
     let counts = crate::workspace_resources::counts(app);
     let mut items = vec![
-        hinted(app, "New Harness", "n", "new-harness"),
-        hinted(app, "New Tab", "w", "new-window"),
+        menu::item("New Harness", "n", "workspace-menu new-harness"),
+        menu::item("New Tab", "w", "workspace-menu new-tab"),
         hinted(app, &format!("Harnesses  {}", counts.harnesses), "h", "choose-tree -s"),
         menu::item(&format!("Machines  {}", counts.machines), "m", "devices"),
         menu::item(&format!("Models  {}", counts.models.map(|n| n.to_string()).unwrap_or_else(|| "—".into())), "o", "models"),
@@ -229,9 +229,19 @@ pub fn workspace_menu(app: &mut App, at: Option<(u16, u16)>) {
     if app.controls.workspace_open { crate::models::refresh_inventory(app); }
 }
 
+/// Mouse creation actions keep their forms; tmux's window/split commands open shells.
+pub fn command(app: &mut App, args: &[String]) {
+    match args.first().map(String::as_str) {
+        None => workspace_menu(app, None),
+        Some("new-harness") => crate::new_harness::open(app, None, None),
+        Some("new-tab") => app.new_tab(),
+        _ => app.error("Unknown workspace action"),
+    }
+}
+
 pub fn refresh_workspace(app: &mut App) {
     if !app.controls.workspace_open { return }
-    if matches!(&app.modal, Some(crate::modal::Modal::Menu(m)) if m.title == "Harness" && m.items.first().is_some_and(|i| i.command == "new-harness")) {
+    if matches!(&app.modal, Some(crate::modal::Modal::Menu(m)) if m.title == "Harness" && m.items.first().is_some_and(|i| i.command == "workspace-menu new-harness")) {
         let items = workspace_items(app);
         if let Some(crate::modal::Modal::Menu(m)) = &mut app.modal {
             if !menu::replace_items(m, items, app.size) {
@@ -305,7 +315,7 @@ pub fn run(app: &mut App, token: &str, verb: &str) {
     if app.active != tab { app.select_tab(tab); }
     if let Some(p) = pane { select_pane(app, p); }
     match verb {
-        "new" => crate::input::run(app, "new"),
+        "new" => crate::new_harness::open(app, None, None),
         "models" => if pane.is_some_and(|p| crate::models::pane_supports(app, p)) { crate::input::run(app, "models"); },
         "agent" => if let Some(pane) = pane { crate::agent_switch::open(app, pane); },
         "zoom" => crate::input::run(app, "zoom"),
@@ -514,11 +524,40 @@ mod tests {
         let range = app.status_ranges.iter().find(|(_, r)| r.kind == RangeKind::User("hn-new".into())).unwrap().clone();
         assert_eq!(buf[(range.1.start, y)].symbol(), "+", "the hit range must follow the visible glyph after sign-in");
         click(&mut app, MouseButton::Left, range.1.start, y);
-        assert_eq!(app.tabs.len(), 2);
-        assert!(app.tab().home, "+ follows the desktop New Tab action");
+        assert_eq!(app.tabs.len(), 1, "opening the composer must not create a window");
+        assert!(matches!(app.modal, Some(crate::modal::Modal::NewHarness(_))), "mouseup must leave the composer open");
+        app.modal = None;
         app.say("A real status message", theme::MUTED);
         render(&mut app);
         assert!(status_action(&app, range.1.start, y).is_none(), "a replaced row must not leave invisible clickable actions");
+    }
+
+    #[tokio::test]
+    async fn mouse_creation_actions_open_forms_without_starting_shells() {
+        use crate::modal::Modal;
+        for action in ["new-harness", "new-tab"] {
+            let mut app = app(120);
+            let before = (app.tabs.len(), app.panes.len(), app.tab().id.clone());
+            workspace_menu(&mut app, None);
+            let Some(Modal::Menu(menu)) = &app.modal else { panic!("menu"); };
+            let index = menu.items.iter().position(|item| item.command == format!("workspace-menu {action}")).unwrap();
+            let (x, y) = (menu.x + 3, menu.y + 1 + index as u16);
+            click(&mut app, MouseButton::Left, x, y);
+            assert_eq!(app.panes.len(), before.1, "opening a form cannot start a process");
+            if action == "new-harness" {
+                assert!(matches!(app.modal, Some(Modal::NewHarness(_))));
+                assert_eq!(app.tabs.len(), before.0);
+                assert_eq!(app.tab().id, before.2);
+            } else {
+                assert_eq!(app.tabs.len(), before.0 + 1);
+                assert_ne!(app.tab().id, before.2);
+                assert!(app.home_visible());
+                let buf = render(&mut app);
+                let text: String = buf.content().iter().map(|c| c.symbol()).collect();
+                assert!(text.contains("New Harness") && text.contains("What task should this agent work on?") && text.contains("New Terminal"));
+                assert!(!text.contains("machines connected"));
+            }
+        }
     }
 
     #[tokio::test]

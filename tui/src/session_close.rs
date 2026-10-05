@@ -75,6 +75,7 @@ struct Operation {
     views: Vec<View>,
     /// Plain shells obey tmux's kill contract, after an explicit confirmation.
     shells: bool,
+    return_to_shell: bool,
     stage: Stage,
     at: usize,
     force: bool,
@@ -89,7 +90,7 @@ pub struct State {
     pub sent: Vec<(String, Value)>,
 }
 
-pub fn pane(app: &mut App, pane: u64) { begin(app, vec![pane], "Stop Harness"); }
+pub fn pane(app: &mut App, pane: u64) { begin(app, vec![pane], "Stop Harness", true); }
 
 /// Default tmux close keys keep their keys, while managed harnesses use the same lifecycle as ×.
 /// Explicit kill commands and ordinary shells retain tmux's behavior.
@@ -103,10 +104,10 @@ pub fn tab(app: &mut App, tab: usize) {
     let Some(tab) = app.tabs.get(tab) else { return };
     if tab.panes().is_empty() { app.close_tab(app.tabs.iter().position(|t| t.id == tab.id).unwrap()); return }
     let title = format!("Close Tab · {}", tab.name);
-    begin(app, tab.panes(), &title);
+    begin(app, tab.panes(), &title, false);
 }
 
-fn begin(app: &mut App, panes: Vec<u64>, title: &str) {
+fn begin(app: &mut App, panes: Vec<u64>, title: &str, return_to_shell: bool) {
     if app.read_only() { app.error("client is read-only"); return }
     if app.session_close.operation.as_ref().is_some_and(|op| matches!(op.stage, Stage::Inspect | Stage::Stop) && (op.stage == Stage::Stop || showing(app, &op.id))) {
         app.say("A stop is already being checked", theme::MUTED);
@@ -140,7 +141,7 @@ fn begin(app: &mut App, panes: Vec<u64>, title: &str) {
     }
     if views.is_empty() { return }
     let id = uuid::Uuid::new_v4().simple().to_string();
-    app.session_close.operation = Some(Operation { id: id.clone(), title: title.into(), targets, views, shells,
+    app.session_close.operation = Some(Operation { id: id.clone(), title: title.into(), targets, views, shells, return_to_shell,
         stage: Stage::Inspect, at: 0, force: false });
     if !show(app, "Checking session activity…", false) { app.session_close.operation = None; return }
     advance(app, &id);
@@ -285,10 +286,13 @@ fn remove_confirmed(app: &mut App, identity: &Identity) {
     // ordinary sessions follow the view receipt, and desk tabs follow desk updates.
     let elsewhere: Vec<_> = app.owned_harness_views(&identity.machine, &identity.agent).into_iter().filter(|(sid, _)| *sid != app.session_id).collect();
     for (sid, pane) in elsewhere {
+        if crate::shell_context::is_session_visit(app, pane) { continue }
         if app.panes.contains_key(&pane) { crate::commands::execute(app, &format!("kill-pane -t '${sid}:.{}'", crate::pane::tag(pane))); }
     }
     let panes: Vec<_> = app.panes.values().filter(|p| p.machine_id == identity.machine && p.agent_id == identity.agent).map(|p| p.id).collect();
-    for pane in panes { app.close_pane(pane); }
+    for pane in panes {
+        if !crate::shell_context::is_session_visit(app, pane) { app.close_pane(pane); }
+    }
 }
 
 pub fn confirm(app: &mut App, id: &str) {
@@ -319,6 +323,7 @@ fn finish(app: &mut App) {
     }
     let mut seen = HashSet::new();
     for view in views {
+        if op.return_to_shell && crate::shell_context::is_session_visit(app, view.pane) { continue }
         if seen.insert(view.pane) && view.matches(app) {
             app.close_pane(view.pane);
         }

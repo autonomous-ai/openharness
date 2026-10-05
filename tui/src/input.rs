@@ -7,7 +7,7 @@
 use std::time::{Duration, Instant};
 
 use crossterm::event::{Event as CEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-use serde_json::json;
+use serde_json::{json, Value};
 
 use crate::app::{App, Placement};
 use crate::commands;
@@ -513,7 +513,7 @@ impl HomeRow {
 /// the last 30 days that Harness did not start, on every connected machine.
 pub fn home_rows(app: &App) -> Vec<HomeRow> {
     let mut all: Vec<(u64, HomeRow)> = app.fleet.agents.values()
-        .filter(|a| a.engine != "terminal" && app.fleet.state_of(a) != crate::fleet::State::Offline)
+        .filter(|a| app.fleet.state_of(a) != crate::fleet::State::Offline)
         .map(|a| (a.recency(), HomeRow::Harness(a.key().0, a.key().1)))
         .collect();
     all.extend(app.home_external.iter()
@@ -532,23 +532,137 @@ pub fn home_rows(app: &App) -> Vec<HomeRow> {
     out
 }
 
-/// Resume an external conversation, placed as asked (a new window, beside, below, here).
+fn catalog_conversation(app: &App, id: &str) -> Option<crate::app::External> {
+    let (machine, session) = id.strip_prefix("external:")?.split_once(':')?;
+    app.said.iter().chain(app.shell_context.catalog.iter()).filter_map(|h| h.external.as_ref())
+        .find(|x| x.machine == machine && x.session_id == session).cloned()
+}
+
+fn conversation_agent(app: &App, x: &crate::app::External) -> Option<String> {
+    if x.session_id.is_empty() { return None }
+    app.fleet.agents.values()
+        .filter(|a| a.machine_id == x.machine && a.session_id == x.session_id && a.engine == x.engine)
+        .min_by_key(|a| (a.status == "stopped", &a.id)).map(|a| a.id.clone())
+}
+
+/// A history row may now belong to a running harness. Attach its existing
+/// terminal first; only the daemon can decide whether a new resume is safe.
 pub fn resume_external_as(app: &mut App, x: &crate::app::External, placement: Placement) {
-    let Some(link) = app.link(&x.machine) else { app.say("That machine is not connected", theme::DANGER); return };
-    let mut payload = json!({ "engine": x.engine, "cwd": x.cwd, "bypassPermission": true, "resumeSessionId": x.session_id, "creationId": uuid::Uuid::new_v4().to_string() });
+    resolve_conversation(app, x, placement, true);
+}
+
+fn resolve_conversation(app: &mut App, x: &crate::app::External, placement: Placement, resume: bool) {
+    if let Some(id) = conversation_agent(app, x) {
+        app.modal = None;
+        open_picked_agent(app, &x.machine, &id, placement);
+        return;
+    }
+    let Some(link) = app.link(&x.machine) else {
+        if app.shell_context.pending.is_some() { crate::shell_context::finish(app, 1, "That computer is not connected."); }
+        else { app.say("That computer is not connected", theme::DANGER); }
+        return;
+    };
+    let epoch = app.account_epoch;
+    let generation = link.generation;
+    let inline = app.shell_context.pending.as_ref().filter(|r| r.verb == "session-inline").cloned();
+    let x = x.clone();
+    app.modal = None;
+    app.spawn(async move { link.rpc("agents_list", json!({"includeStopped":true}), Duration::from_secs(20)).await }, move |app, reply| {
+        if app.account_epoch != epoch || app.connection_generation(&x.machine) != Some(generation)
+            || inline.as_ref().is_some_and(|r| app.shell_context.pending.as_ref().is_none_or(|p| p.id != r.id || p.token != r.token)) { return }
+        let Ok(reply) = reply else {
+            let message = "Could not check the session's current state. Try opening it again.";
+            if inline.is_some() { crate::shell_context::finish(app, 1, message); }
+            else { app.say(message, theme::DANGER); }
+            return;
+        };
+        if let Some(rows) = reply["agents"].as_array() { app.fleet.merge_roster(&x.machine, rows); }
+        if let Some(id) = conversation_agent(app, &x) {
+            open_picked_agent(app, &x.machine, &id, placement);
+        } else if resume {
+            create_external_as(app, &x, placement);
+        } else {
+            let message = "The session is already in Harness but its view is still loading. Try opening it again.";
+            if inline.is_some() { crate::shell_context::finish(app, 1, message); }
+            else { app.say(message, theme::SOFT); }
+        }
+    });
+}
+
+fn already_in_harness(creation_id: &str, reply: &Result<Value, crate::daemon::RpcError>) -> bool {
+    match reply {
+        Err(error) => error.code == "SESSION_IN_HARNESS",
+        Ok(value) => value["creationId"] == creation_id && value["state"] == "failed"
+            && value.pointer("/failure/code").and_then(Value::as_str) == Some("SESSION_IN_HARNESS"),
+    }
+}
+
+fn create_external_as(app: &mut App, x: &crate::app::External, placement: Placement) {
+    let inline = app.shell_context.pending.as_ref().filter(|r| r.verb == "session-inline").cloned();
+    let Some(link) = app.link(&x.machine) else { if inline.is_some() { crate::shell_context::finish(app, 1, "That machine is not connected."); } else { app.say("That machine is not connected", theme::DANGER); } return };
+    let creation_id = uuid::Uuid::new_v4().to_string();
+    let mut payload = json!({ "engine": x.engine, "cwd": x.cwd, "bypassPermission": app.shell_context.sessions_machine.is_none(), "resumeSessionId": x.session_id, "creationId": creation_id });
     if !x.title.is_empty() { payload["name"] = json!(x.title) }
     app.say(format!("Resuming {} on {}…", if x.title.is_empty() { "the conversation" } else { &x.title }, app.fleet.machine_name(&x.machine)), theme::SOFT);
     app.modal = None;
+    let source = app.shell_context.session_picker.take().and_then(|p| app.panes.get(&p).map(|pane| (p, (pane.machine_id.clone(), pane.agent_id.clone()))));
+    let source_cwd = source.as_ref().and_then(|(p,_)| app.panes.get(p)).and_then(|p| p.cwd.clone().or_else(|| p.live_path.clone()));
     let machine = x.machine.clone();
-    app.spawn(async move { link.rpc("agent_create", payload, Duration::from_secs(180)).await }, move |app, reply| match reply {
-        Ok(reply) => {
-            if let Some(id) = reply.pointer("/agent/id").and_then(|v| v.as_str()) {
-                app.fleet.agents.insert((machine.clone(), id.to_string()), crate::fleet::agent_from(&machine, &reply["agent"], None));
-                app.open_agent(&machine, id, placement);
-                app.toast = None;
-            } else { app.say("The machine opened no harness", theme::DANGER) }
+    let conversation = x.clone();
+    let epoch = app.account_epoch;
+    app.spawn(async move { link.rpc("agent_create", payload, Duration::from_secs(180)).await }, move |app, reply| {
+        let still_pending = inline.as_ref().is_none_or(|r| app.shell_context.pending.as_ref().is_some_and(|p| p.id == r.id && p.token == r.token));
+        if app.account_epoch != epoch || !still_pending {
+            if let Some(id) = reply.as_ref().ok().and_then(|v| v.pointer("/agent/id")).and_then(|v| v.as_str()) {
+                if let Some(link) = app.link(&machine) { link.send("agent_delete", json!({"agentId":id})); }
+            }
+            return;
         }
-        Err(e) => app.say(format!("Could not open it: {e}"), theme::DANGER),
+        // It may have been opened by desktop after the roster check. Resolve
+        // that owner once; never take over or launch a duplicate conversation.
+        if already_in_harness(&creation_id, &reply) {
+            app.shell_context.session_picker = source.as_ref().map(|(p, _)| *p);
+            resolve_conversation(app, &conversation, placement, false);
+            return;
+        }
+        // New daemons record refusals in a creation receipt, not a top-level
+        // RPC error. Reuse the form's receipt validation and preserve its reason.
+        use crate::new_harness::receipt::{self, Outcome};
+        match receipt::outcome(&creation_id, &reply, false) {
+            Outcome::Created => {},
+            Outcome::Failed { message, .. } | Outcome::Uncertain(message) => {
+                let message = message.replacen("Could not start it:", "Could not open it:", 1);
+                if inline.is_some() { crate::shell_context::finish(app, 1, &message); }
+                else { app.say(message, theme::DANGER); }
+                return;
+            }
+        }
+        match reply {
+            Ok(reply) => {
+                if let Some(id) = reply.pointer("/agent/id").and_then(|v| v.as_str()) {
+                    app.fleet.agents.insert((machine.clone(), id.to_string()), crate::fleet::agent_from(&machine, &reply["agent"], None));
+                    let moved = source.as_ref().is_some_and(|(p, _)| app.focused() != Some(*p));
+                    if inline.is_some() && moved {
+                        // Keep the resumed process available, without taking the user away from
+                        // the pane they switched to while its machine was answering.
+                        crate::shell_context::finish(app, 0, "Session resumed. Find it with hn sessions.\n");
+                        return;
+                    }
+                    if inline.is_some() { crate::shell_context::finish(app, 0, ""); }
+                    let placement = if moved { Placement::Tab } else { placement };
+                    let held = source.as_ref().is_some_and(|(_, key)| app.shells.remove(key));
+                    app.open_agent(&machine, id, placement);
+                    if let Some((_, key)) = source {
+                        crate::shell_context::visiting_created(app, &key, source_cwd, &machine, id);
+                        if held { app.shells.insert(key); }
+                    }
+                    app.toast = None;
+                } else if inline.is_some() { crate::shell_context::finish(app, 1, "The computer opened no session."); }
+                else { app.say("The machine opened no harness", theme::DANGER); }
+            }
+            Err(e) => if inline.is_some() { crate::shell_context::finish(app, 1, &format!("Could not open it: {e}")); }
+                else { app.say(format!("Could not open it: {e}"), theme::DANGER); },
+        }
     });
 }
 
@@ -645,15 +759,30 @@ fn fill_rows(app: &App, kind: &PickerKind, picker: &mut Picker) {
             if machine.is_none() && project.is_none() && *filter == Filter::All { rows.extend(modal::session_rows(app)) }
             // What the query found by what was said in them: the conversations Harness did not
             // start among the rows, and every hit's row in the list whatever its line says.
-            if machine.is_none() && project.is_none() {
+            if project.is_none() {
                 let mut seen = std::collections::HashSet::new();
-                rows.extend(modal::external_rows(app).into_iter().filter(|r| seen.insert(r.id.clone())));
+                rows.extend(modal::external_rows(app).into_iter().filter(|r| machine.as_ref().is_none_or(|m| r.id.starts_with(&format!("external:{m}:"))) && seen.insert(r.id.clone())));
             }
-            // The list holds still while it is open: a row keeps the place it had when the list
-            // opened, whatever its harness does meanwhile (new ones come after) — typing re-ranks.
-            match &picker.hold {
-                Some(order) => { let at = |id: &str| order.iter().position(|o| o == id).unwrap_or(usize::MAX); rows.sort_by_key(|r| at(&r.id)) }
-                None => picker.hold = Some(rows.iter().map(|r| r.id.clone()).collect()),
+            if app.shell_context.sessions_machine.is_some() {
+                // Catalog pagination uses opaque IDs. Its arrival order is not a
+                // display order: merge saved and live work by last activity,
+                // including newer conversations that arrive on a later page.
+                // Picker::refilter preserves the selected identity as rows arrive.
+                let mut recency: std::collections::HashMap<String,u64> = app.fleet.agents.values()
+                    .map(|a| (format!("{}:{}",a.machine_id,a.id),a.recency())).collect();
+                for x in app.said.iter().chain(app.shell_context.catalog.iter()).filter_map(|s| s.external.as_ref()) {
+                    let at = recency.entry(format!("external:{}:{}",x.machine,x.session_id)).or_default();
+                    *at = (*at).max(x.last_at);
+                }
+                rows.sort_by(|a,b| recency.get(&b.id).unwrap_or(&0).cmp(recency.get(&a.id).unwrap_or(&0))
+                    .then_with(|| a.label.cmp(&b.label)).then_with(|| a.id.cmp(&b.id)));
+                picker.hold = None;
+            } else {
+                // Workspace navigation holds its existing rows still; typing re-ranks.
+                match &picker.hold {
+                    Some(order) => { let at = |id: &str| order.iter().position(|o| o == id).unwrap_or(usize::MAX); rows.sort_by_key(|r| at(&r.id)) }
+                    None => picker.hold = Some(rows.iter().map(|r| r.id.clone()).collect()),
+                }
             }
             // A row found by what was said in it shows where (its words lit as a match is), in
             // place of its detail — part of its line, so fzf lights what the query found there.
@@ -670,10 +799,17 @@ fn fill_rows(app: &App, kind: &PickerKind, picker: &mut Picker) {
                 text.push(' ');
                 text.push_str(&hit.snippet.replace(['\u{2}', '\u{3}'], ""));
             }
+            picker.catalog_ids = app.shell_context.catalog.iter().filter(|_| app.shell_context.sessions_machine.is_some()).map(|h| format!("external:{}:{}", h.machine, h.session_id)).collect();
             picker.set_rows(rows);
             picker.status = modal::open_status(app, *filter);
             picker.hints = vec![("enter", "add pane"), ("C-t", "new window"), ("M-1..9", "answer"), ("M-m", "read"), ("C-v", "beside"), ("C-x", "below"), ("M-enter", "here"), ("M-a", "type an answer"), ("M-s", "message"), ("M-r", "restart"), ("tab", "mark"), ("C-/", "preview"), ("M-p", "pause")];
             picker.empty = if app.fleet.agents.is_empty() { "no harnesses yet — C-b C makes one".into() } else { String::new() };
+            if app.shell_context.sessions_machine.is_some() {
+                picker.hints = vec![("enter", "open"), ("C-t", "new window"), ("C-/", "preview"), ("esc", "cancel")];
+                picker.status = app.shell_context.catalog_notice.clone();
+                picker.empty = "No matching sessions".into();
+                picker.multi_override = Some(0);
+            }
         }
         PickerKind::Palette => { picker.set_rows(modal::palette_rows(app)); picker.hints = vec![("enter", "run"), ("C-b :", "type one")] }
         PickerKind::Projects => {
@@ -796,6 +932,7 @@ fn fill_rows(app: &App, kind: &PickerKind, picker: &mut Picker) {
         PickerKind::Account => crate::account::fill(app, picker),
         PickerKind::AgentSwitch => crate::agent_switch::fill(app, picker),
         PickerKind::Hardware => crate::hardware::fill(app, picker),
+        PickerKind::ShellContext => crate::shell_context::fill(app, picker),
     }
 }
 
@@ -825,6 +962,9 @@ pub fn focused_agent(app: &App) -> Option<(String, String)> {
 /// The one box: open it in the mode [prefix] names (`""` harnesses, `>` `@` `#` `:` `*` `?`). The
 /// same key again, while it is already in that mode, closes it.
 pub fn launch(app: &mut App, prefix: &str, filter: Filter) {
+    crate::shell_context::cancel(app);
+    app.shell_context.session_picker = None;
+    app.shell_context.sessions_machine = None;
     // A split waits for the NEXT pick only if it asked for this box; any other opening forgets it.
     SPLIT.with(|s| s.set(None));
     if let Some(Modal::Picker { kind, picker }) = &app.modal {
@@ -864,7 +1004,7 @@ fn load_models(app: &mut App) {
 
 /// The query changed: when its first character moved the box to another mode, rebuild it as that mode.
 fn remode(app: &App, kind: PickerKind, picker: &mut Picker) -> (PickerKind, bool) {
-    if !modal::is_launcher(&kind) { return (kind, false) }
+    if !modal::is_launcher(&kind) || !picker.prefixed { return (kind, false) }
     let next = modal::launcher_kind(&picker.query, &kind);
     if std::mem::discriminant(&next) == std::mem::discriminant(&kind) { return (kind, false) }
     let (title, placeholder) = modal::launcher_title(app, &next);
@@ -894,7 +1034,10 @@ pub fn run(app: &mut App, command: &str) {
         "keybinds" => picker(app, PickerKind::Keybinds, "Keybinds", "Search keybinds"),
         "commands" => picker(app, PickerKind::Commands, "Commands", "Type a command — appearance, new, layout, models…"),
         "store" => launch(app, "*", Filter::All),
-        "new" => crate::new_harness::open(app, None, None),
+        "new" => {
+            let focused = focused_agent(app);
+            new_shell_with_picker(app, focused, Placement::Auto(None), None, None, true);
+        }
         "terminal" => {
             let focused = focused_agent(app);
             new_shell_from(app, focused, Placement::Auto(None), None, None);
@@ -925,7 +1068,7 @@ pub fn run(app: &mut App, command: &str) {
             let name = app.fleet.agent(&machine, &agent).map(|a| a.name.clone()).unwrap_or_default();
             prompt(app, PromptKind::RenameHarness { machine, agent }, "Rename Harness", "New name", "", &name, false)
         }
-        "tab" => app.new_tab(),
+        "tab" => crate::commands::execute(app, "new-window"),
         "rename-tab" => {
             let name = app.tab().name.clone();
             let target = PromptKind::RenameTab { session:app.session_id, window:app.tab().id.clone(), owner:app.fleet.local_id.clone() };
@@ -935,12 +1078,7 @@ pub fn run(app: &mut App, command: &str) {
         "next-tab" => { let n = app.tabs.len(); let i = (app.active + 1) % n; app.select_tab(i) }
         "prev-tab" => { let n = app.tabs.len(); let i = (app.active + n - 1) % n; app.select_tab(i) }
         "split-right" | "split-down" => {
-            if app.tab().root.is_none() { run(app, "open"); return }
-            let dir = if command == "split-right" { Dir::Horizontal } else { Dir::Vertical };
-            app.modal = None;
-            launch(app, "", Filter::All);
-            if let Some(Modal::Picker { picker, .. }) = &mut app.modal { picker.title = if dir == Dir::Horizontal { "split right".into() } else { "split down".into() }; picker.placeholder = "Which harness goes beside it?".into() }
-            SPLIT.with(|s| s.set(Some(dir)));
+            crate::commands::execute(app, if command == "split-right" { "split-window -h" } else { "split-window -v" });
         }
         "close-pane" => { if let Some(f) = app.focused() { crate::session_close::pane(app, f) } else if app.tabs.len() > 1 { crate::session_close::tab(app, app.active) } }
         "zoom" => {
@@ -1212,7 +1350,7 @@ pub fn shell_machine(app: &App, focused: Option<&(String, String)>) -> String {
     if app.daemon_down && app.fleet.machine(&machine).is_some_and(|m| m.local) { crate::local::MACHINE.into() } else { machine }
 }
 
-fn configure_local_shell(app: &App, machine: &str, payload: &mut serde_json::Value) {
+pub(crate) fn configure_local_shell(app: &App, machine: &str, payload: &mut serde_json::Value) {
     if crate::local::is_local(machine) {
         payload["paneId"] = json!(crate::ids::next(crate::ids::Kind::Pane));
         let shell = app.options.session.get("default-shell").or_else(|| app.options.global_session.get("default-shell")).cloned()
@@ -1226,15 +1364,26 @@ fn configure_local_shell(app: &App, machine: &str, payload: &mut serde_json::Val
 }
 
 pub fn new_shell_from(app: &mut App, focused: Option<(String, String)>, placement: Placement, cwd: Option<String>, command: Option<String>) {
+    new_shell_with_picker(app, focused, placement, cwd, command, false);
+}
+
+pub fn new_shell_with_picker(app: &mut App, focused: Option<(String, String)>, placement: Placement, cwd: Option<String>, command: Option<String>, choose_agent: bool) {
     let machine = shell_machine(app, focused.as_ref());
     let local = crate::local::is_local(&machine);
     if local { app.keep_local_shell_session() }
+    let context = command.is_none().then(|| crate::shell_context::prepare(app, focused.as_ref(), !matches!(placement, Placement::Fill(_))));
+    let init = context.as_ref().map(|token| {
+        let cli = if local || app.fleet.machine(&machine).is_some_and(|m| m.local) { std::env::var("HARNESS_SHELL_CLI").ok() } else { None };
+        let init = crate::shell_context::bootstrap(token, cli.as_deref(), local || app.fleet.machine(&machine).is_some_and(|m| m.local));
+        if choose_agent && app.capture.is_none() && !app.headless { format!("export _HN_START_PICKER=1; {init}") } else { init }
+    });
     // The folder: -c, else where the pane's shell says it is now (OSC 7), else where it started.
     let live = focused.as_ref().and_then(|(m, a)| app.find_pane(m, a)).and_then(|(_, p)| app.panes.get(&p)).and_then(|p| p.cwd.clone().or_else(|| p.live_path.clone()));
     let cwd = cwd.or(live).or_else(|| focused.as_ref().and_then(|(m, a)| app.fleet.agent(m, a)).map(|a| a.cwd.clone()).filter(|c| !c.is_empty()));
     let Some(link) = app.link(&machine) else { app.print_new = None; return app.error("That machine is not connected") };
     let mut payload = json!({ "engine": "terminal", "creationId": uuid::Uuid::new_v4().to_string(), "bypassPermission": false });
     if let Some(cwd) = &cwd { payload["cwd"] = json!(cwd) }
+    if let Some(init) = &init { payload["terminalInit"] = json!(init); }
     configure_local_shell(app, &machine, &mut payload);
     app.modal = None;
     let start_command = command.clone();
@@ -1261,6 +1410,8 @@ pub fn new_shell_from(app: &mut App, focused: Option<(String, String)>, placemen
     };
     app.spawn(async move {
         link.rpc("agent_create", payload, Duration::from_secs(60)).await.map(|mut reply| {
+            reply["_hnContext"] = json!(context);
+            reply["_hnInit"] = json!(init);
             if reply.get("agent").is_some() { reply["agent"]["startCommand"] = json!(start_command); }
             reply
         })
@@ -1311,6 +1462,13 @@ fn shell_placed(app: &mut App, machine: String, placement: Placement, reply: Res
     let id = reply.pointer("/agent/id").and_then(|v| v.as_str()).ok_or("The machine made no shell")?;
     app.fleet.agents.insert((machine.clone(), id.to_string()), crate::fleet::agent_from(&machine, &reply["agent"], None));
     app.shells.insert((machine.clone(), id.to_string()));
+    if let Some(token) = reply["_hnContext"].as_str() {
+        crate::shell_context::bind(app, token, &machine, id);
+        // Never paste an initialization script into an older daemon's shell.
+        if !crate::local::is_local(&machine) && reply["terminalInitApplied"] != true && reply["_hnInit"].is_string() {
+            app.say("Update the CLI on this computer to use ch and cm in new shells.", theme::SOFT);
+        }
+    }
     let new_window = matches!(&placement, Placement::Fill(_));
     app.open_agent(&machine, id, placement);
     let (session, _, pane) = app.find_pane_anywhere(&machine, id).ok_or("create pane failed: target window or pane disappeared")?;
@@ -2007,11 +2165,11 @@ fn end_word(chars: &[char], at: usize, ws: &str) -> usize {
     idx - 1
 }
 
-fn schedule_said(app: &mut App, kind: &PickerKind, picker: &Picker) {
+pub fn schedule_said(app: &mut App, kind: &PickerKind, picker: &Picker) {
     // search(...) changes the effective expression without changing the displayed input.
     // Schedule after change bindings, so the entire action chain has taken effect.
     let expression = picker.search.as_deref().unwrap_or(&picker.query);
-    let wanted = if matches!(kind, PickerKind::Open { machine: None, project: None, .. }) && crate::picker::scope_of(&picker.query).is_none() && !crate::picker::said_searches(expression).is_empty() { expression.to_string() } else { String::new() };
+    let wanted = if matches!(kind, PickerKind::Open { project: None, .. }) && crate::picker::scope_of(&picker.query).is_none() && !crate::picker::said_searches(expression).is_empty() { expression.to_string() } else { String::new() };
     if wanted != app.said_want {
         app.said_want = wanted;
         app.said_pending = 0;
@@ -2037,6 +2195,14 @@ fn picker_key(app: &mut App, key: KeyEvent, kind: PickerKind, picker: Picker) {
     let _ = was;
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     let alt = key.modifiers.contains(KeyModifiers::ALT);
+    // A shell helper is waiting for a reply. Closing its picker must release it.
+    if (matches!(kind, PickerKind::ShellContext) || app.shell_context.session_picker.is_some())
+        && (key.code == KeyCode::Esc || (ctrl && key.code == KeyCode::Char('c'))) {
+        crate::shell_context::cancel(app);
+        app.shell_context.session_picker = None;
+        app.shell_context.sessions_machine = None;
+        return;
+    }
     // ── keys ── Alt-k on a command: the next key you press is its key (Ctrl-k moves, as in fzf).
     if matches!(kind, PickerKind::Commands) && alt && !ctrl && key.code == KeyCode::Char('k') {
         crate::settings::capture_for_row(app, &mut picker);
@@ -2062,7 +2228,7 @@ fn picker_key(app: &mut App, key: KeyEvent, kind: PickerKind, picker: Picker) {
             picker.defer_filter = true;
             match bound_actions(&mut picker, &actions, up, multi) {
                 End::Accept => { picker.defer_filter = false; return choose(app, kind, picker, Choice::Enter) }
-                End::Abort => { SPLIT.with(|s| s.set(None)); return }
+                End::Abort => { crate::shell_context::cancel(app); app.shell_context.session_picker = None; SPLIT.with(|s| s.set(None)); return }
                 End::Stay => {}
             }
             picker.defer_filter = false;
@@ -2121,7 +2287,7 @@ fn picker_key(app: &mut App, key: KeyEvent, kind: PickerKind, picker: Picker) {
     if tabbed {} else if let Some(actions) = bound {
         match bound_actions(&mut picker, &actions, up, multi) {
             End::Accept => { choose(app, kind, picker, Choice::Enter); return }
-            End::Abort => { SPLIT.with(|s| s.set(None)); return }
+            End::Abort => { crate::shell_context::cancel(app); app.shell_context.session_picker = None; SPLIT.with(|s| s.set(None)); return }
             End::Stay => {}
         }
     } else {
@@ -2301,7 +2467,7 @@ fn picker_key(app: &mut App, key: KeyEvent, kind: PickerKind, picker: Picker) {
         if let Some(actions) = theme::fzf_opts().binds.iter().rev().find(|(k, _)| k == "change").map(|(_, a)| a.clone()) {
             match bound_actions(&mut picker, &actions, up, multi) {
                 End::Accept => { choose(app, kind, picker, Choice::Enter); return }
-                End::Abort => { SPLIT.with(|s| s.set(None)); return }
+                End::Abort => { crate::shell_context::cancel(app); app.shell_context.session_picker = None; SPLIT.with(|s| s.set(None)); return }
                 End::Stay => {}
             }
         }
@@ -2335,7 +2501,16 @@ pub fn pipe_to(cmd: &str, text: &str) {
 }
 
 /// What a bound action chain leaves the list to do.
-enum End { Stay, Accept, Abort }
+pub(crate) enum End { Stay, Accept, Abort }
+
+/// Shell finders share the safe, in-process fzf actions. Commands intended for
+/// file previews never execute on a session id; ordinary navigation still works.
+pub(crate) fn finder_binding(picker: &mut crate::picker::Picker, name: &str, up: i64) -> Option<End> {
+    if picker.unbound.contains(name) { return Some(End::Stay) }
+    let actions = theme::fzf_opts().binds.iter().rev().find(|(k, _)| k == name)?.1.clone();
+    if falls_back(name, &actions) { return None }
+    Some(bound_actions(picker, &actions, up, false))
+}
 
 /// An fzf action chain (`up+up`, `toggle+down`) split where a `+` is not inside an action's (…).
 fn split_chain(actions: &str) -> Vec<String> {
@@ -2557,7 +2732,7 @@ pub fn rebound(hint: &str) -> bool {
 }
 
 /// A key as fzf's --bind names it: ctrl-j, alt-a, enter, btab, f1, ctrl-/ …
-fn fzf_key_name(key: &KeyEvent) -> String {
+pub(crate) fn fzf_key_name(key: &KeyEvent) -> String {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     let alt = key.modifiers.contains(KeyModifiers::ALT);
     let base = match key.code {
@@ -2668,17 +2843,72 @@ pub fn answer_with(app: &mut App, machine: &str, agent: &str, value: &str) -> bo
     sent
 }
 
+pub fn open_shell_session(app: &mut App, pane: u64, id: &str) {
+    // The external row disappears from the rendered list as soon as its live
+    // owner arrives. Keep resolving the chosen conversation across that update.
+    if let Some(x) = catalog_conversation(app, id) {
+        app.shell_context.session_picker = Some(pane);
+        resume_external_as(app, &x, Placement::Replace);
+        return;
+    }
+    let kind = PickerKind::Open { filter:Filter::All, machine:Some(app.fleet.local_id.clone()), project:None };
+    let mut picker = Picker::new("", "");
+    fill(app, &kind, &mut picker);
+    if !picker.rows.iter().any(|r| r.id == id && !r.disabled) {
+        return crate::shell_context::finish(app, 1, "That session is no longer available. Run hn sessions again.");
+    }
+    // Full-text results can arrive before this session's catalog page. The
+    // selection is already validated above; an empty reconstruction query must
+    // not hide that row while dispatching the chosen action.
+    picker.catalog_ids.insert(id.to_string());
+    picker.refilter();
+    picker.select(id);
+    if picker.current_id().as_deref() != Some(id) { return crate::shell_context::finish(app, 1, "That session is no longer available.") }
+    app.shell_context.session_picker = Some(pane);
+    choose(app, kind, picker, Choice::Here);
+    // A rejected selection remains an error at the prompt, never another popup.
+    if let Some(Modal::Picker { picker, .. }) = app.modal.take() {
+        app.shell_context.session_picker = None;
+        crate::shell_context::finish(app, 1, picker.flash.as_ref().map(|f| f.0.as_str()).unwrap_or("Could not open that session."));
+    }
+}
+
+fn open_picked_agent(app: &mut App, machine: &str, agent: &str, placement: Placement) {
+    let inline = app.shell_context.pending.as_ref().is_some_and(|r| r.verb == "session-inline");
+    if inline && app.shell_context.session_picker.is_some_and(|p| app.focused() != Some(p)) {
+        app.shell_context.session_picker = None;
+        crate::shell_context::finish(app, 0, "Session is available. Find it with Ctrl+P.\n");
+        return;
+    }
+    let state = app.fleet.agent(machine, agent).map(|a| app.fleet.state_of(a));
+    let held = app.shell_context.session_picker.take().filter(|p| app.focused() == Some(*p))
+        .and_then(|p| app.panes.get(&p)).map(|p| ((p.machine_id.clone(), p.agent_id.clone()), p.cwd.clone().or_else(|| p.live_path.clone())));
+    let owned = held.as_ref().is_some_and(|(key,_)| app.shells.remove(key));
+    if inline { crate::shell_context::finish(app, 0, ""); }
+    app.open_agent(machine, agent, placement);
+    if let Some((key, cwd)) = held {
+        crate::shell_context::visiting(app, &key, cwd, machine, agent);
+        if owned { app.shells.insert(key); }
+    }
+    if state == Some(crate::fleet::State::Paused) {
+        if let Some((_, pane)) = app.find_pane(machine, agent) { app.resume(pane) }
+    }
+}
+
 fn choose(app: &mut App, kind: PickerKind, mut picker: Picker, choice: Choice) {
+    let choice = if choice == Choice::Enter && app.shell_context.session_picker.is_some()
+        && matches!(kind, PickerKind::Open { .. }) { Choice::Here } else { choice };
     // --history: the query kept for C-p to bring back.
     if choice == Choice::Enter { picker.history_add() }
     let id = picker.current_id();
     // fzf's accept with nothing matched: the list goes.
-    if id.is_none() && picker.visible.is_empty() && choice == Choice::Enter { SPLIT.with(|s| s.set(None)); return }
+    if id.is_none() && picker.visible.is_empty() && choice == Choice::Enter { crate::shell_context::cancel(app); app.shell_context.session_picker = None; SPLIT.with(|s| s.set(None)); return }
     let keep = |app: &mut App, kind: PickerKind, picker: Picker| app.modal = Some(Modal::Picker { kind, picker });
     // A list of keys, buffers, commands or text: only Enter picks — the harness lists' keys (C-v
     // beside, C-x below, M-p pause …) do nothing here, as keys fzf has no action for.
-    if choice != Choice::Enter && matches!(kind, PickerKind::Keys | PickerKind::Buffers | PickerKind::Palette | PickerKind::Commands | PickerKind::Keybinds | PickerKind::Help | PickerKind::Messages | PickerKind::Output { .. }) { return keep(app, kind, picker) }
+    if choice != Choice::Enter && matches!(kind, PickerKind::ShellContext | PickerKind::Keys | PickerKind::Buffers | PickerKind::Palette | PickerKind::Commands | PickerKind::Keybinds | PickerKind::Help | PickerKind::Messages | PickerKind::Output { .. }) { return keep(app, kind, picker) }
     match kind.clone() {
+        PickerKind::ShellContext => { crate::shell_context::choose(app, id.as_deref()); }
         // ── keys ── Enter on a command: the next key pressed is its key; on the prefix, where it is set.
         PickerKind::Keybinds => {
             let (knob, value) = id.as_deref().map(|id| id.split_once(':').unwrap_or((id, ""))).unwrap_or_default();
@@ -2690,13 +2920,10 @@ fn choose(app: &mut App, kind: PickerKind, mut picker: Picker, choice: Choice) {
             SPLIT.with(|s| s.set(None));
             app.switch_session(sid);
         }
-        // A conversation Harness did not start: resumed as a harness in this window, or where
-        // C-t, C-v, C-x, M-enter say; one open in another terminal or app is not opened twice.
+        // Resolve history to its existing Harness owner before considering resume.
         PickerKind::Open { .. } if id.as_deref().map(|i| i.starts_with("external:")).unwrap_or(false) => {
-            let found = id.as_deref().and_then(|i| i.strip_prefix("external:")).and_then(|r| r.split_once(':'))
-                .and_then(|(m, s)| app.said.iter().filter_map(|h| h.external.as_ref()).find(|x| x.machine == m && x.session_id == s).cloned());
+            let found = id.as_deref().and_then(|i| catalog_conversation(app, i));
             let Some(x) = found else { return keep(app, kind, picker) };
-            if x.open { picker.say("It is open in another terminal or app — close it there first"); return keep(app, kind, picker) }
             let placement = match choice {
                 Choice::Enter => Placement::Auto(None),
                 Choice::SplitRight => Placement::Split(Dir::Horizontal), Choice::SplitDown => Placement::Split(Dir::Vertical), Choice::Here => Placement::Replace,
@@ -2741,10 +2968,7 @@ fn choose(app: &mut App, kind: PickerKind, mut picker: Picker, choice: Choice) {
                 let state = app.fleet.agent(machine, agent).map(|a| app.fleet.state_of(a));
                 if state == Some(crate::fleet::State::Offline) { continue }
                 let place = if i == 0 || placement == Placement::Tab { placement.clone() } else { Placement::Auto(None) };
-                app.open_agent(machine, agent, place);
-                if state == Some(crate::fleet::State::Paused) {
-                    if let Some((_, pane)) = app.find_pane(machine, agent) { app.resume(pane) }
-                }
+                open_picked_agent(app, machine, agent, place);
             }
         }
         PickerKind::Inbox => {
@@ -3161,6 +3385,13 @@ fn inject_mode_key(app: &mut App, pane: u64, chord: keys::Chord) {
 /// Shift+Enter as a pane's program reads it: to an agent (Claude Code's newline) or a program that
 /// asked for the kitty keyboard protocol, CSI 13;2u; to a shell, plain Enter, as tmux sends it.
 fn for_pane(app: &App, pane: u64, key: KeyEvent) -> KeyEvent {
+    // Cmd-P, when the terminal reports it, is the shell widget's Ctrl-P. Shell
+    // integration decides when it runs; an application's own input is untouched.
+    // Root/user bindings have already had first refusal before reaching here.
+    if key.code == KeyCode::Char('p') && key.modifiers == KeyModifiers::SUPER
+        && app.panes.get(&pane).is_some_and(|p| app.shell_context.token_for(&p.machine_id, &p.agent_id).is_some()) {
+        return KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL)
+    }
     if key.code != KeyCode::Enter || !key.modifiers.contains(KeyModifiers::SHIFT) { return key }
     let Some(p) = app.panes.get(&pane) else { return key };
     let shell = app.fleet.agent(&p.machine_id, &p.agent_id).map(|a| a.engine == "terminal").unwrap_or(true);
@@ -3325,6 +3556,58 @@ pub fn menu_mouse(app: &mut App, m: &crate::mouse::Event) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn conversation_owner_matches_computer_engine_and_prefers_running_harness() {
+        let (sink, _) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(19789, sink, (100, 30));
+        let x = crate::app::External { machine: "m".into(), session_id: "s".into(), engine: "claude".into(),
+            title: "Saved".into(), cwd: "/project".into(), open: true, last_at: 1 };
+        for (machine, id, engine, status) in [("other", "elsewhere", "claude", "active"), ("m", "codex", "codex", "active")] {
+            app.fleet.agents.insert((machine.into(), id.into()), crate::fleet::agent_from(machine, &json!({"id":id,"sessionId":"s","engine":engine,"status":status}), None));
+        }
+        assert_eq!(conversation_agent(&app, &x), None);
+        for (id, status) in [("archived", "stopped"), ("desktop", "active")] {
+            app.fleet.agents.insert(("m".into(), id.into()), crate::fleet::agent_from("m", &json!({"id":id,"sessionId":"s","engine":"claude","status":status}), None));
+            assert_eq!(conversation_agent(&app, &x).as_deref(), Some(id));
+        }
+        app.shell_context.catalog.push(crate::app::Said { machine: "m".into(), session_id: "s".into(), agent_id: "".into(),
+            snippet: "".into(), turn: -1, at: 1, external: Some(x) });
+        assert!(modal::external_rows(&app).is_empty());
+        assert!(catalog_conversation(&app, "external:m:s").is_some(), "selection survives history-to-live deduplication");
+        assert!(catalog_conversation(&app, "external:other:s").is_none());
+    }
+
+    #[test]
+    fn only_authoritative_same_request_refusals_can_resolve_a_create_race() {
+        assert!(already_in_harness("attempt", &Err(crate::daemon::RpcError::new("SESSION_IN_HARNESS", "Already managed"))));
+        assert!(already_in_harness("attempt", &Ok(json!({"creationId":"attempt","state":"failed","failure":{"code":"SESSION_IN_HARNESS"}}))));
+        for value in [json!({"creationId":"other","state":"failed","failure":{"code":"SESSION_IN_HARNESS"}}),
+            json!({"creationId":"attempt","state":"pending"}),
+            json!({"creationId":"attempt","state":"failed","failure":{"code":"SESSION_OPEN_ELSEWHERE"}})] {
+            assert!(!already_in_harness("attempt", &Ok(value)));
+        }
+    }
+
+    #[test]
+    fn reported_cmd_p_reaches_only_an_integrated_shell_as_ctrl_p() {
+        let (sink, _) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(19789, sink, (100, 30));
+        app.panes.insert(1, crate::pane::Pane::new(1, "local", "shell", 100, 28));
+        let cmd = KeyEvent::new(KeyCode::Char('p'), KeyModifiers::SUPER);
+        assert_eq!(for_pane(&app, 1, cmd), cmd);
+        let mut context = crate::shell_context::Context::default();
+        context.hosts.insert("local".into(), "shell".into());
+        app.shell_context.contexts.insert("test".into(), context);
+        let forwarded = for_pane(&app, 1, cmd);
+        assert_eq!(encode_key(&forwarded, alacritty_terminal::term::TermMode::empty()), Some(vec![0x10]));
+        for key in [KeyEvent::new(KeyCode::Char('p'), KeyModifiers::SUPER | KeyModifiers::SHIFT),
+            KeyEvent::new(KeyCode::Char('r'), KeyModifiers::SUPER),
+            KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL)] {
+            assert_eq!(for_pane(&app, 1, key), key);
+        }
+        assert_eq!(for_pane(&app, 2, cmd), cmd);
+    }
 
     #[tokio::test]
     async fn clicking_a_menu_over_welcome_uses_that_row_without_prior_motion() {

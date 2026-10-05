@@ -40,6 +40,11 @@ function deskChanged() { desk.revision++; broadcast(state.currentLocal, 'desk_ch
 function json(res, data, code = 200) { res.writeHead(code, { 'content-type': 'application/json' }); res.end(JSON.stringify({ success: code === 200, data })) }
 async function body(req) { let raw = ''; for await (const chunk of req) raw += chunk; return raw ? JSON.parse(raw) : {} }
 const signedIn = () => { try { return JSON.parse(readFileSync(join(home, 'account.json'), 'utf8')).loggedIn === true } catch { return false } }
+const sessionCatalog = process.env.HN_SESSION_FIXTURE === '1' ? Array.from({length:207}, (_,i) => ({
+  sessionId:`external-${String(i).padStart(3,'0')}`, agentId:'', engine:i%2 ? 'claude' : 'codex', turn:-1,
+  at:Date.now()-(207-i)*1000, lastAt:Date.now()-(207-i)*1000, snippet:i===206 ? 'Fix workspace navigation' : `Saved task ${i}`,
+  external:{title:i===206 ? 'Fix workspace navigation' : `Saved task ${i}`,cwd:'/work/saved project',origin:'terminal',open:[203,204].includes(i)},
+})) : null
 
 const server = http.createServer(async (req, res) => {
   if (req.url === '/test' && req.method === 'GET') return json(res, { ...state, agents, desk, hardware, local: state.currentLocal, remote: REMOTE, peers: [...peers].map(p => p.machine) })
@@ -53,6 +58,22 @@ const server = http.createServer(async (req, res) => {
       state.currentLocal = update.machine; state.visibleMachines = [update.machine]
       desk = { revision: 1, tabs: update.keepLocal ? [] : [{ id: 'other-account-tab', name: 'Other account', nameIsCustom: true, panes: [ref(update.machine, 'other-account')], layout: {} }] }
       for (const peer of peers) peer.ws.terminate()
+    } else if (update.action === 'shell-command' && sessionCatalog) {
+      const created = state.requests.find(r => r.type === 'agent_create' && receipts.get(r.payload.creationId)?.agent.id === update.agent)
+      const context = created?.payload.terminalInit?.match(/--shell-init '([a-f0-9-]+)'/)?.[1]
+      if (!context || !['host','model','route','list-host','list-model','list-sessions','list-compose','compose-launch','host-inline','model-inline','session-inline','close-picker'].includes(update.verb)) return json(res,{error:'BAD_FIXTURE_COMMAND'},400)
+      const command = `\x1b]633;hn;${context};fixture-${randomUUID()};${update.verb};${Buffer.from(update.query || '').toString('base64')}\x07`
+      for (const peer of peers) for (const [id,stream] of peer.streams) if (stream.agent === update.agent) peer.ws.send(frame(2,id,stream.seq++,Buffer.from(command)))
+    } else if (update.action === 'session-owner' && sessionCatalog) {
+      const hit = sessionCatalog.find(h => h.sessionId === update.session)
+      if (!hit) return json(res,{error:'BAD_FIXTURE_SESSION'},400)
+      const owner = makeAgent(`desktop-${hit.sessionId}`,hit.external.title,hit.engine,hit.external.cwd)
+      owner.sessionId = hit.sessionId
+      agents[state.currentLocal].push(owner)
+      if (update.publish) broadcast(state.currentLocal,'agent_synced',{agent:owner})
+    } else if (update.action === 'composer-exit' && sessionCatalog) {
+      const target = agents[REMOTE].find(a => a.id === update.agent)
+      if (target) { target.engine = 'terminal'; broadcast(REMOTE, 'agent_synced', { agent: target }) }
     } else if (update.action === 'machines') {
       state.visibleMachines = update.remote ? [state.currentLocal, REMOTE] : [state.currentLocal]
       state.machinesStale = update.stale === true
@@ -69,7 +90,7 @@ const server = http.createServer(async (req, res) => {
       stream.screen += mouseMode // Resizing returns a full snapshot, including the program's modes.
       peer.ws.send(frame(2, streamId, stream.seq++, Buffer.from(mouseMode)))
     } else if (update.action === 'config') for (const [key, value] of Object.entries(update.patch || {})) {
-      if (['closeFailure', 'closeDelay', 'pruneOnClose', 'loseCreateReply', 'deviceConfirm', 'deviceDelay', 'modelDelay', 'deskFailures', 'deskNoops'].includes(key)) state[key] = value
+      if (['closeFailure', 'closeDelay', 'pruneOnClose', 'loseCreateReply', 'deviceConfirm', 'deviceDelay', 'modelDelay', 'deskFailures', 'deskNoops', 'oldComposer'].includes(key)) state[key] = value
     }
     return json(res, { ok: true })
   }
@@ -131,6 +152,7 @@ wss.on('connection', ws => {
     state.requests.push({ machine, type, payload })
     switch (type) {
       case 'agents_list': return reply({ agents: roster.filter(a => payload.includeStopped || a.status !== 'stopped') })
+      case 'engines_probe': return reply({ ...(state.oldComposer ? {} : { shellComposeVersion: 1 }), engines: [] })
       case 'fs_list_dir': return reply({ path: payload.path || '/work', entries: [{ name: 'alpha', isDir: true }, { name: 'remote', isDir: true }] })
       case 'git_project_info': return reply({ isGit: true, branch: 'feature/mouse', branches: [{ name: 'main', ref: 'refs/heads/main', remote: false }] })
       case 'git_pull_request': return reply({ status: 'none' })
@@ -138,7 +160,10 @@ wss.on('connection', ws => {
       case 'dsh_list': return reply({ dsh: [] })
       case 'codex_profiles_list': return reply({ profiles: [] })
       case 'models_list': return reply({ models: [] })
-      case 'session_search': return reply({ hits: [], ready: true, indexed: 0, pending: 0 })
+      case 'session_search': return reply({ hits:sessionCatalog ? (payload.catalogAfter !== undefined
+        ? sessionCatalog.filter(h => h.sessionId > payload.catalogAfter).slice(0,payload.limit || 100)
+        : sessionCatalog.filter(h => payload.query && h.snippet.toLowerCase().includes(payload.query.toLowerCase())).slice(0,100)) : [],
+        ...(payload.catalogAfter !== undefined ? {catalog:true} : {}), ready:true,indexed:sessionCatalog?.length || 0,pending:0 })
       case 'usage_read': return reply({ providers: [] })
       case 'api_connections': return reply({ connections: [], presets: [] })
       case 'grid_fleet_models_list': return reply({ models: [{ id: 'fixture-qwen', name: 'Fixture local model', state: 'running', canStop: true, quant: 'Q4_K_M', app: 'Grid' }], supportsDownload: true })
@@ -163,13 +188,24 @@ wss.on('connection', ws => {
       }
       case 'agent_create': {
         if (receipts.has(payload.creationId)) return reply(receipts.get(payload.creationId))
+        if (sessionCatalog && payload.resumeSessionId === 'external-202') {
+          const hit = sessionCatalog.find(h => h.sessionId === payload.resumeSessionId)
+          const owner = makeAgent(`desktop-${hit.sessionId}`,hit.external.title,hit.engine,hit.external.cwd)
+          owner.sessionId = hit.sessionId; roster.push(owner)
+          return reply({creationId:payload.creationId,state:'failed',failure:{code:'SESSION_IN_HARNESS',detail:'Already in Harness'}})
+        }
+        if (sessionCatalog && payload.resumeSessionId === 'external-201') {
+          return reply({creationId:payload.creationId,state:'failed',failure:{code:'SESSION_OPEN_ELSEWHERE',detail:'The native editor owns this conversation'}})
+        }
         const made = makeAgent(randomUUID(), payload.name || `New ${payload.engine}`, payload.engine, payload.cwd)
+        if (payload.resumeSessionId) made.sessionId = payload.resumeSessionId
         made.permissionMode = payload.permissionMode; roster.push(made)
-        const receipt = { creationId: payload.creationId, state: 'created', agent: made }; receipts.set(payload.creationId, receipt)
+        const receipt = { creationId: payload.creationId, state: 'created', agent: made, ...(payload.terminalInit ? {terminalInitApplied:true} : {}) }; receipts.set(payload.creationId, receipt)
         if (state.loseCreateReply) { state.loseCreateReply = false; return ws.terminate() }
         return reply(receipt)
       }
       case 'agent_create_status': return reply(receipts.get(payload.creationId) || { creationId: payload.creationId, state: 'missing' })
+      case 'shell_context_reply': return reply({ok:true})
       case 'harness_devices_list': return reply({ status: status(machine), revision: hardware[machine].revision })
       case 'harness_device_settings': {
         const d = hardware[machine].devices.find(d => d.id === payload.id)

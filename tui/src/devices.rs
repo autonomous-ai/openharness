@@ -1084,7 +1084,7 @@ pub fn fill(app: &App, view: View, picker: &mut Picker) {
 
 fn connect_rows(app: &App) -> Vec<Row> {
     let setup = || Row::new("here:setup", "Set up another computer").group("Get connected").lead(dot("→", theme::TEAL));
-    if app.account.status == crate::account::Status::SignedOut {
+    if app.account.status == crate::account::Status::SignedOut || app.devices.phone.signed_out {
         return vec![account_row(app), info("local-use", "Local harnesses work without an account.", "This computer"), setup()];
     }
     let (mut ready, mut done, mut away) = (Vec::new(), Vec::new(), Vec::new());
@@ -1681,10 +1681,12 @@ mod tests {
                 _ => world(req),
             }));
             open(&mut app, View::Connect);
-            assert_eq!(ids(&app), vec!["here:login", "here:setup"]);
-            go_to(&mut app, "here:login");
+            assert_eq!(ids(&app), vec!["account", "local-use", "here:setup"]);
+            if let Some(Modal::Picker { picker, .. }) = &app.modal {
+                assert!(picker.rows.iter().any(|r| r.id == "local-use" && r.disabled));
+            }
             let (text, _) = screen(&mut app, 150, 42);
-            assert!(text.contains("Sign in on this computer") && text.contains("local agents work without"), "{text}");
+            assert!(text.contains("Local harnesses work without an account"), "{text}");
             assert!(!text.contains("Every machine on your account"));
             go_to(&mut app, "here:setup");
             press(&mut app, KeyCode::Enter);

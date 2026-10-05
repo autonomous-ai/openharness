@@ -583,7 +583,7 @@ fn box_style(app: &App, id: u64) -> Style {
     if app.marked == Some(id) { style.add_modifier(Modifier::BOLD) } else { style }
 }
 
-const WORDMARK: [&str; 2] = ["█ █ ▄▀█ █▀█ █▄ █ █▀▀ █▀ █▀", "█▀█ █▀█ █▀▄ █ ▀█ ██▄ ▄█ ▄█"];
+pub(crate) const WORDMARK: [&str; 2] = ["█ █ ▄▀█ █▀█ █▄ █ █▀▀ █▀ █▀", "█▀█ █▀█ █▀▄ █ ▀█ ██▄ ▄█ ▄█"];
 
 fn empty_window(buf: &mut Buffer, app: &mut App, area: Rect) -> Option<Position> {
     if crate::input::os_home(app) { os_welcome(buf, app, area); None }
@@ -638,7 +638,7 @@ mod os_welcome_tests {
                     for action in ["Install Harness", "Try without installing", "Wi-Fi", "Super+b"] {
                         assert!(!text.contains(action), "ordinary hn must not offer {action}: {text}");
                     }
-                    assert!(text.contains("Task"), "{text}");
+                    assert!(text.contains("Task") || text.contains("What task should"), "{text}");
                 } else if live {
                     assert!(text.contains("Enter  Install Harness"), "{text}");
                     assert!(text.contains("t      Try without installing"), "{text}");
@@ -852,7 +852,7 @@ fn separator_on() -> bool {
 
 /// fzf's --height over a screen [h] rows tall: at least its minimum, no more than the screen
 /// (maxHeightFunc); with `~` no more than its items and the lines around them need (Loop's fit).
-fn fzf_rows(h: u16, height: theme::Height, picker: &Picker) -> u16 {
+pub(crate) fn fzf_rows(h: u16, height: theme::Height, picker: &Picker) -> u16 {
     let o = theme::fzf_opts();
     let term = h as i64;
     let border_lines = |(t, _, b, _): (bool, bool, bool, bool)| t as i64 + b as i64;
@@ -918,6 +918,10 @@ fn margin_and_padding(screen: Rect) -> (Rect, [u16; 4], [u16; 4]) {
 
 pub fn fzf_frame(body: Rect, picker: &Picker) -> FzfFrame {
     let screen = match theme::fzf_opts().height { Some(h) => { let rows = fzf_rows(body.height, h, picker); Rect::new(body.x, body.y + body.height - rows, body.width, rows) } None => body };
+    fzf_frame_at(screen)
+}
+
+fn fzf_frame_at(screen: Rect) -> FzfFrame {
     let (_, m, p) = margin_and_padding(screen);
     let width = screen.width.saturating_sub(m[1] + m[3]);
     let height = screen.height.saturating_sub(m[0] + m[2]);
@@ -1260,6 +1264,10 @@ fn fzf_split(inner: Rect, picker: &Picker) -> (Rect, Option<PreviewBox>, bool) {
 /// `  4/7 ───` (144, separator 59), the prompt `> ` (110). Returns where the cursor goes.
 fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, search_busy: bool, msg_style: Style) -> Position {
     let frame = fzf_frame(body, picker);
+    fzf_in_frame(buf, frame, picker, kind, search_busy, msg_style)
+}
+
+fn fzf_in_frame(buf: &mut Buffer, frame: FzfFrame, picker: &mut Picker, kind: &PickerKind, search_busy: bool, msg_style: Style) -> Position {
     crate::term_out::clear_extras(frame.screen);
     picker.screen_area.set(frame.screen);
     // (A --height list is drawn over the panes: its rows are its own.)
@@ -1410,7 +1418,7 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, sea
     }
     let cursor = Position::new(ia.x + pw + before_w as u16, prompt_y);
     picker.prompt_at.set((prompt_y, ia.x + pw));
-    let total = picker.rows.iter().filter(|r| !r.disabled).count();
+    let total = picker.total_rows.unwrap_or_else(|| picker.rows.iter().filter(|r| !r.disabled).count());
     let mut count = format!("{}/{}", picker.matched_rows.len(), total);
     // A toggle-sort binding: whether it sorts (+S) or not (-S), as fzf's info says.
     if theme::fzf_opts().binds.iter().any(|(_, a)| a.split('+').any(|x| x == "toggle-sort")) { count.push_str(if o_sorts(picker) { " +S" } else { " -S" }) }
@@ -2303,9 +2311,26 @@ fn char_wrap(line: &Line<'static>, width: usize, sign: &str) -> Vec<Line<'static
 /// they were) or `nowrap` (cut) — from where +N or follow put it; the scrollbar's column in
 /// preview-scrollbar, its thumb when the text runs past, and (info) its N/M.
 fn preview(buf: &mut Buffer, app: &App, kind: &PickerKind, picker: &Picker, pb: &PreviewBox) {
+    preview_frame(buf, picker, pb);
+    let Some(id) = picker.current_id() else { return };
+    // A harness that is on screen somewhere: its terminal, live.
+    if matches!(kind, PickerKind::Open { .. } | PickerKind::Inbox) {
+        let key = id.split('#').next().unwrap_or(&id);
+        if let Some((m, a)) = key.split_once(':') {
+            if let Some((_, _, pane_id)) = app.find_pane_anywhere(m, a) {
+                if let Some(pane) = app.panes.get(&pane_id) {
+                    if matches!(pane.phase, Phase::Live | Phase::Watching(_)) { preview_grid(buf, pane, pb.inner, picker.preview_scroll.get()); return }
+                }
+            }
+        }
+    }
+    preview_text(buf, picker, pb, crate::preview::lines(app, kind, &id),
+        crate::preview::bottom_up(app, kind, &id), !matches!(kind, PickerKind::Buffers), app.options.tmux_look());
+}
+
+fn preview_frame(buf: &mut Buffer, picker: &Picker, pb: &PreviewBox) {
     let pal = theme::fzf().pal;
     let o = theme::fzf_opts();
-    let pw = &pb.opts;
     let area = pb.rect;
     let w = area.width;
     for y in area.y..area.y + area.height {
@@ -2313,7 +2338,6 @@ fn preview(buf: &mut Buffer, app: &App, kind: &PickerKind, picker: &Picker, pb: 
     }
     // The window in preview-bg (its blanks in the default colour, as fzf clears them); the text in
     // preview-fg where it has no colour of its own.
-    let text_fg = pal.preview.style().fg;
     buf.set_style(area, Style { fg: Some(Color::Reset), ..pal.preview.style() });
     draw_box(buf, area, &pb.shape, pal.preview_border.style());
     let inner = pb.inner;
@@ -2322,7 +2346,7 @@ fn preview(buf: &mut Buffer, app: &App, kind: &PickerKind, picker: &Picker, pb: 
     // The scrollbar's column: blank in its colour until a thumb is drawn there.
     let scrollbar = o.preview_scrollbar.clone();
     if scrollbar.is_some() { for y in inner.y..inner.y + inner.height { buf.set_string(pb.bar_x, y, " ", pal.preview_scrollbar.style()) } }
-    let Some(id) = picker.current_id() else { return };
+    if picker.current_id().is_none() { return }
     // printLabel on the box's line (a shape with one).
     let has_line = bt || bb;
     if has_line {
@@ -2340,31 +2364,27 @@ fn preview(buf: &mut Buffer, app: &App, kind: &PickerKind, picker: &Picker, pb: 
             if col >= 0 { buf.set_stringn(area.x + col as u16, row, &text, (ww - col).max(0) as usize, pal.preview_label.style()); }
         }
     }
-    // A harness that is on screen somewhere: its terminal, live.
-    if matches!(kind, PickerKind::Open { .. } | PickerKind::Inbox) {
-        let key = id.split('#').next().unwrap_or(&id);
-        if let Some((m, a)) = key.split_once(':') {
-            // Open in any of this client's sessions: its screen as that pane has it.
-            if let Some((_, _, pane_id)) = app.find_pane_anywhere(m, a) {
-                if let Some(pane) = app.panes.get(&pane_id) {
-                    if matches!(pane.phase, Phase::Live | Phase::Watching(_)) { preview_grid(buf, pane, inner, picker.preview_scroll.get()); return }
-                }
-            }
-        }
-    }
+}
+
+fn preview_text(buf: &mut Buffer, picker: &Picker, pb: &PreviewBox, text: Vec<Line<'static>>, bottom_up: bool, wrap_notes: bool, tmux_look: bool) {
+    let Some(id) = picker.current_id() else { return };
+    let pal = theme::fzf().pal;
+    let text_fg = pal.preview.style().fg;
+    let o = theme::fzf_opts();
+    let pw = &pb.opts;
+    let inner = pb.inner;
+    let scrollbar = o.preview_scrollbar.clone();
     let (iw, height) = (inner.width as usize, inner.height as usize);
-    let text = crate::preview::lines(app, kind, &id);
     let fzf_wrap = pw.wrap == Some(true);
     // fzf's preview does not wrap unless told (a buffer's text is as it is); hn's own notes about a
     // harness, a machine or a command do, where nothing says otherwise.
-    let lines: Vec<Line> = match pw.wrap { None if !matches!(kind, PickerKind::Buffers) => text.into_iter().flat_map(|l| wrap_line(l, iw)).collect(), _ => text };
+    let lines: Vec<Line> = match pw.wrap { None if wrap_notes => text.into_iter().flat_map(|l| wrap_line(l, iw)).collect(), _ => text };
     let total = lines.len();
     let header = if pw.header_lines < total.min(height) { pw.header_lines } else { 0 };
     let body_height = height.saturating_sub(header);
     let first_body = pw.header_lines.min(u16::MAX as usize);
     // Explicit +N wins over hn's initial position at a conversation's latest turn. When
     // an asynchronous tail first arrives, apply it to those lines rather than the placeholder.
-    let bottom_up = crate::preview::bottom_up(app, kind, &id);
     let fresh = picker.preview_fresh.replace(false);
     if fresh { *picker.preview_bottom.borrow_mut() = None }
     let new_tail = bottom_up && picker.preview_bottom.borrow().as_deref() != Some(id.as_str());
@@ -2429,8 +2449,32 @@ fn preview(buf: &mut Buffer, app: &App, kind: &PickerKind, picker: &Picker, pb: 
     // The preview offset is a quiet label; exact tmux/fzf appearance keeps its inverse style.
     let mark = format!("{}/{}", offset + 1, total);
     if scrollable && pw.info && (mark.width() as u16) < inner.width {
-        buf.set_string(inner.x + inner.width - mark.width() as u16, inner.y, &mark, pal.info.style().add_modifier(if app.options.tmux_look() { Modifier::REVERSED } else { Modifier::BOLD }));
+        buf.set_string(inner.x + inner.width - mark.width() as u16, inner.y, &mark, pal.info.style().add_modifier(if tmux_look { Modifier::REVERSED } else { Modifier::BOLD }));
     }
+}
+
+/// The shell owns a reserved region below its prompt. Draw the very same finder
+/// there, without applying --height a second time or accessing application state.
+pub(crate) fn inline_fzf(buf: &mut Buffer, area: Rect, picker: &mut Picker, busy: bool, text: Vec<Line<'static>>, bottom_up: bool) -> Position {
+    let kind = PickerKind::ShellContext;
+    let frame = fzf_frame_at(area);
+    let inner = frame.inner;
+    // A very small resize must retain a usable input, even when the configured
+    // border, padding and preview no longer fit.
+    if area.width < 12 || area.height < 5 || inner.width < 4 || inner.height < 3 {
+        let query = format!("> {}", picker.query);
+        buf.set_stringn(area.x, area.y, &query, area.width as usize, theme::fzf().pal.input.style());
+        if area.height > 1 { if let Some(row) = picker.current() {
+            buf.set_stringn(area.x, area.y + 1, &row.label, area.width as usize, theme::fzf().pal.current.style());
+        } }
+        return Position::new(area.x + (2 + picker.query.chars().take(picker.qcursor).map(|c|unicode_width::UnicodeWidthChar::width(c).unwrap_or(0)).sum::<usize>()).min(area.width.saturating_sub(1) as usize) as u16, area.y);
+    }
+    let at = fzf_in_frame(buf, frame, picker, &kind, busy, theme::fzf().pal.info.style());
+    if let (_, Some(pb), _) = fzf_split(inner, picker) {
+        preview_frame(buf, picker, &pb);
+        preview_text(buf, picker, &pb, text, bottom_up, true, true);
+    }
+    at
 }
 
 /// A pane's terminal, drawn into a preview box: its bottom, where the work is.
@@ -2977,7 +3021,7 @@ mod theme_render_tests {
         assert_eq!(buf[(2, 0)].fg, Color::Rgb(1, 2, 3));
     }
 
-    /// The home screen follows a chosen theme: the task pointer in its accent, the screen on its
+    /// The home screen follows a chosen theme: the task border in its accent, the screen on its
     /// background; with no theme, the terminal's own background stays.
     #[test]
     fn the_home_screen_follows_the_theme() {
@@ -2987,15 +3031,15 @@ mod theme_render_tests {
             let mut term = ratatui::Terminal::new(ratatui::backend::TestBackend::new(150, 42)).unwrap();
             term.draw(|f| draw(f, app)).unwrap();
             let buf = term.backend().buffer().clone();
-            (buf[(1, 1)].bg, (0..42).flat_map(|y| (0..150).map(move |x| (x, y))).find(|p| buf[*p].symbol() == "›").map(|p| buf[p].fg))
+            (buf[(1, 1)].bg, (0..42).flat_map(|y| (0..150).map(move |x| (x, y))).find(|p| buf[*p].symbol() == "╭").map(|p| buf[p].fg))
         };
         let (plain, _) = bg_at(&mut app);
         assert_eq!(plain, Color::Reset, "no theme: the terminal's own background");
         let _ = app.set_look("theme", "Adwaita Dark");
         let t = crate::terminal_themes::TERMINAL_THEMES.iter().find(|t| t.name == "Adwaita Dark").unwrap();
-        let (themed, logo) = bg_at(&mut app);
+        let (themed, border) = bg_at(&mut app);
         assert_eq!(themed, theme::depth_fit(Color::Rgb(t.background[0], t.background[1], t.background[2])));
-        assert_eq!(logo, Some(theme::depth_fit(theme::accent())), "the task pointer in the theme's accent");
+        assert_eq!(border, Some(theme::depth_fit(theme::accent())), "the task border in the theme's accent");
         let _ = app.set_look("theme", "");
     }
 
@@ -3049,7 +3093,7 @@ mod theme_render_tests {
         let _ = app.set_look("theme", "");
         let rows = modal::command_rows(&app);
         let key = |id: &str| rows.iter().find(|r| r.id == id).map(|r| r.right.clone()).unwrap_or_default();
-        assert_eq!(key("cmd:new"), "C-b N");
+        assert_eq!(key("cmd:terminal"), "C-b T");
         assert_eq!(key("cmd:theme"), "C-b Enter");
         assert_eq!(key("cmd:split-right"), "C-b %");
     }
@@ -3066,7 +3110,7 @@ mod theme_render_tests {
         assert_eq!(bound(KeyCode::Char(' ')).as_deref(), Some("next-layout"));
         crate::commands::execute_bound(&mut app, "choose-command");
         let s = screen(&mut app);
-        assert!(s.contains("Commands") && s.contains("New Harness"), "{s}");
+        assert!(s.contains("Commands") && s.contains("New pane"), "{s}");
         let at = match &app.modal { Some(Modal::Picker { picker, .. }) => picker.screen_area.get(), _ => panic!("no panel") };
         // (A few letters are enough: the best match comes first.)
         for c in "appe".chars() { crate::input::modal_key(&mut app, KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE)) }

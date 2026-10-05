@@ -45,6 +45,7 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
     ("open-harness", "openh", "A harness into a window of its own (-h/-v beside/below -t's pane, -d not gone to): open-harness -s name"),
     ("list-windows", "lsw", "The windows (-F a format)"),
     ("list-panes", "lsp", "The panes (-a/-s every window, -t one, -F a format)"),
+    ("sessions", "sessions", "Search local running sessions and saved conversations"),
     ("list-sessions", "ls", "The session (this computer) and its windows"),
     ("list-harnesses", "lsh", "Every harness on every machine, the most urgent first (-F format: #{harness_state} #{harness_line} …, -f filter)"),
     ("list-clients", "lsc", "This client"),
@@ -1864,32 +1865,21 @@ fn run_words_in(app: &mut App, words: &[String]) {
                     app.close_tab(i);
                 }
             }
-            // C-b c (a bare new-window, from a key or the prompt): the home page in the new window —
-            // its recent harnesses and conversations to pick from, `t` a shell — as the desktop's
-            // new tab. From a script, or with anything asked of it (-c, -n, a command…), a shell as
-            // tmux makes; `set -g @hn-new-window shell` makes the key tmux's too.
-            // (Not when commands follow it in the same line or binding — `new-window \; split-window
-            // -h` — which want its pane, as tmux's has one.)
-            let bare = app.capture.is_none() && !app.headless && !app.chain_follows && command.is_none() && cwd.is_none() && name.is_none() && opt(words, "-t").is_none()
-                && !["-d", "-a", "-b", "-k", "-P"].iter().any(|f| flag(words, f)) && opt(words, "-e").is_none()
-                && app.options.get("@hn-new-window", "", None).as_deref() != Some("shell")
-                // (tmux's look is tmux's C-b c too.)
-                && app.options.get("@hn-look", "", None).as_deref() != Some("tmux");
+            // Interactive new windows start locally; explicit tmux commands retain their
+            // target semantics. Never reuse a remote absolute path on this computer.
+            let interactive = app.capture.is_none() && !app.headless && command.is_none() && cwd.is_none();
+            let from = if interactive {
+                from.filter(|(machine, _)| crate::local::is_local(machine) || app.fleet.machine(machine).is_some_and(|m| m.local))
+            } else { from };
+            let cwd = if interactive && from.is_none() {
+                std::env::current_dir().ok().filter(|p| p.is_dir()).or_else(|| std::env::var_os("HOME").map(std::path::PathBuf::from)).map(|p| p.display().to_string())
+            } else { cwd };
             // Use the local shell service when the local daemon is unavailable.
             let machine = input::shell_machine(app, from.as_ref());
             let connected = app.link(&machine).is_some();
-            if !bare && !connected { return app.error("create window failed: the daemon is not running (harness start)") }
+            if !connected { return app.error("create window failed: the daemon is not running (harness start)") }
             app.new_tab_at(idx);
             if app.capture.is_some() { app.tab_mut().size = app.cli_size; }
-            if bare {
-                app.tab_mut().home = true;
-                crate::new_harness::ensure_welcome(app, from.clone(), cwd.clone());
-                let tab = app.tab().id.clone();
-                // The welcome composer works while a machine is reconnecting. Its optional
-                // backing shell must not prevent opening the tab or drafting the next task.
-                if connected { input::new_shell_from(app, from, Placement::Fill(tab), cwd, command); }
-                return;
-            }
             if let Some(n) = &name { let n = expand(app, n); app.rename_tab(&n) }
             // A window made in a session not in front: its window-linked (notify_changes sees
             // only the one in front).
@@ -1902,7 +1892,7 @@ fn run_words_in(app: &mut App, words: &[String]) {
             // Bind it to this window, never to the later active window.
             app.tab_mut().home = false;
             let tab = app.tab().id.clone();
-            input::new_shell_from(app, from, Placement::Fill(tab), cwd, command);
+            input::new_shell_with_picker(app, from, Placement::Fill(tab), cwd, command, interactive && !flag(words, "-d"));
             // -d never visits the new window, even while its shell is still being created.
             // A later completion must not restore stale selection or last-window history.
             if flag(words, "-d") {
@@ -3525,7 +3515,7 @@ fn run_words_in(app: &mut App, words: &[String]) {
             crate::viewer::show(app, key, options);
         }
         "new-harness" => { if words.len() < 2 { input::run(app, "new") } else { input::new_harness_words(app, &words[1..]) } }
-        "workspace-menu" => crate::workspace_controls::workspace_menu(app, None),
+        "workspace-menu" => crate::workspace_controls::command(app, &words[1..]),
         "workspace-sync" => crate::agent_switch::retry_sync(app),
         "account" => crate::account::open(app),
         "change-agent" => {
@@ -3558,6 +3548,7 @@ fn run_words_in(app: &mut App, words: &[String]) {
             }
         }
         "new-terminal" => input::run(app, "terminal"),
+        "sessions" => crate::shell_context::sessions(app, app.focused(), &words[1..].join(" ")),
         "choose-command" => input::run(app, "commands"),
         "take-control" => app.take_control(),
         // A harness's verbs, on -t's harness (the hook's in a harness-* hook), else the focused
