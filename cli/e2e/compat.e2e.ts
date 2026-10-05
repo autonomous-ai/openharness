@@ -257,7 +257,14 @@ async function scenario(d: IsolatedDaemon): Promise<Answers> {
   await ask('session_get codex while stopped', 'session_get', { sessionId: session.codex, limit: 1 })
   await ask('sessions_list codex while stopped', 'sessions_list', { agentId: agent.codex })
   await ask('agent_recent codex while stopped', 'agent_recent', { agentId: agent.codex })
-  await ask('agent_resume', 'agent_resume', { agentId: agent.codex })
+  // The model a resumed agent runs is what its engine reports once it is back, a race with the reply
+  // on either build: v0.3.58 and this build each answered null in some runs and the model in others.
+  // It is compared settled, in the rows read at the end.
+  const resumed = await ask('agent_resume', 'agent_resume', { agentId: agent.codex })
+  if (resumed.agent) {
+    const { selectedModel: _model, ...settledLater } = resumed.agent
+    answers['agent_resume'] = walk({ ...resumed, agent: settledLater })
+  }
   await until('codex to be back after its resume', async () => {
     const row = (await rows()).find((one) => one.id === agent.codex)
     return row?.sessionId && row.status === 'active' ? row : null
