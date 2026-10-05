@@ -1,0 +1,28 @@
+{
+  "schema": 1,
+  "platform": "apple-t2",
+  "architecture": "x86_64",
+  "package": {
+    "name": "linux-t2",
+    "version": "7.2.8.arch1-1",
+    "filename": "linux-t2-7.2.8.arch1-1-x86_64.pkg.tar.zst",
+    "url": "https://github.com/NoaHimesaka1873/linux-t2-arch/releases/download/v7.2.8.arch1/linux-t2-7.2.8.arch1-1-x86_64.pkg.tar.zst",
+    "bytes": 164068546,
+    "sha256": "e4f1bd7ca1ffccba32393244281a6271c9525139c0a501be236da939326ddf75"
+  },
+  "kernel_release": "7.2.8-arch1-Watanare-T2-1-t2",
+  "pkgbase": "linux-t2",
+  "source": {
+    "recipe_repository": "https://github.com/NoaHimesaka1873/linux-t2-arch",
+    "recipe_commit": "b9f7fe120cda0e36f796ff78c3ea8f4eae13f1d7",
+    "patch_repository": "https://github.com/t2linux/linux-t2-patches",
+    "patch_commit": "65fdd4d492d7e219a05742ce4768f16e5ba4f976",
+    "license": "GPL-2.0-only"
+  },
+  "early_modules": ["t2bce_dma", "t2bce_core", "t2bce_vhci"],
+  "required_modules": [
+    "t2bce_dma", "t2bce_core", "t2bce_vhci", "t2bce_audio",
+    "hid_apple", "hid_appletb_kbd", "brcmfmac", "hci_bcm4377", "apfs"
+  ],
+  "kernel_parameters": ["intel_iommu=on", "iommu=pt", "pm_async=off"]
+}
