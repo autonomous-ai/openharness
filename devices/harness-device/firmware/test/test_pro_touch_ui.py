@@ -547,6 +547,33 @@ static bool has_text(const char *text) {
         if (scene.runs[i].pro_kind==1 && !strcmp(scene.runs[i].text,text)) return true;
     return false;
 }
+static void home_hierarchy(void) {
+    for (int language=0;language<2;language++) {
+        reset();strcpy(s.voice_language,language?"vi":"en");render_actual();
+        assert(has_text(PRO_TR("Ready when you are")));
+        ht_rect_t footer=action_hit(A_AGENTS)->rect;
+        assert(footer.x==32&&footer.y==598&&footer.w==492&&footer.h==104);
+        bool name=false,workspace=false;
+        for(unsigned i=0;i<scene.count;i++) {
+            const ht_run_t *r=&scene.runs[i];
+            if(r->pro_kind!=1)continue;
+            if(r->y==604){assert(r->pro_font==&ht_pro_42);name=true;}
+            if(r->x==44&&r->y==36){assert(r->pro_font==&ht_pro_24);workspace=true;}
+            if(r->y==668)assert(r->y+r->pro_height<=footer.y+footer.h);
+        }
+        assert(name&&workspace);
+        memset(s.agents[0].name,'W',sizeof s.agents[0].name-1);
+        s.agents[0].name[sizeof s.agents[0].name-1]=0;render_actual();
+        for(unsigned i=0;i<scene.count;i++)
+            if(scene.runs[i].pro_kind==1&&scene.runs[i].y==604)assert(scene.runs[i].pro_font==&ht_pro_32);
+        assert(!memcmp(&footer,&action_hit(A_AGENTS)->rect,sizeof footer));
+        s.agents[0].recap_ready=true;strcpy(s.agents[0].preview,"A result.");render_actual();
+        assert(has_text(PRO_TR("A result is ready"))&&!has_text(PRO_TR("Ready when you are")));
+        s.agents[0].busy=true;render_actual();assert(has_text(PRO_TR("Working")));
+        s.voice_retry_until=now+1000;render_actual();assert(has_text(PRO_TR("Voice was not sent. Try again.")));
+        s.connected=false;render_actual();assert(has_text(PRO_TR("Connect to your computer")));
+    }
+}
 static void docked_connection_policy(void) {
     reset();
     for (int connected=0;connected<=1;connected++) {
@@ -993,7 +1020,7 @@ static void today_refresh_contact(void) {
 
 int main(int argc,char **argv) {
     const struct { const char *name; test_fn run; } tests[]={
-        {"today_read_only",today_read_only},{"today_refresh_contact",today_refresh_contact},
+        {"today_read_only",today_read_only},{"today_refresh_contact",today_refresh_contact},{"home_hierarchy",home_hierarchy},
         {"language_controls",language_controls},{"voice_sample_controls",voice_sample_controls},{"center_voice",center_voice},{"summary_voice",summary_voice},{"deliberate_tap",deliberate_tap},
         {"thumb_drift",thumb_drift},{"panes",panes},{"pane_after_diagonal_start",pane_after_diagonal_start},
         {"scroll_output",scroll_output},

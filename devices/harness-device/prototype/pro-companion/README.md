@@ -11,6 +11,10 @@ Harness; this is no longer the swipe-only concept slideshow.
 The home screen stays simple: workspace above, creature in the middle, selected
 pane and activity below. A summary or carried passage makes the creature small
 and gives the text a paper surface. Central tap behavior stays the same.
+The workspace is subdued and the selected pane leads at 42 px, falling back to
+32 px when its measured name needs more room. Idle and completed work have
+short status lines. Paper remains an optional saved scene; its preview does
+not change the default or the person's scene preference.
 
 The Pro is now **strictly dock-only**, by the user's 2026-09-29 decision to
 remove the battery. The workspace footer stays in place whether the app is

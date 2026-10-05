@@ -2,12 +2,12 @@
  * surface; summaries and delivered letters never change what a tap means. */
 static void pro_home_header(ht_scene_t *f)
 {
-    const uint16_t ink = color(0x365343);
+    const uint16_t ink = color(0x627466);
     pro_control(f, 548, 24, 128, 64, PRO_TR("Menu"), A_LAUNCHER, 0, true);
     const char *tab = PRO_TR("Workspace");
     for (int i = 0; i < s.tab_count; i++)
         if (!strcmp(s.tabs[i].id, s.selected_tab)) { tab = s.tabs[i].name; break; }
-    ht_pro_text(f, 44, 36, 480, &ht_pro_32, ink,
+    ht_pro_text(f, 44, 36, 480, &ht_pro_24, ink,
         !s.connected ? PRO_TR("Connect to Harness") :
         s.loading ? PRO_TR("Finding your workspace...") : tab);
     pro_hit(32, 24, 496, 80, A_TABS, 0, s.connected && !s.loading);
@@ -17,19 +17,21 @@ static void pro_home_footer(ht_scene_t *f, agent_t *a, bool recap)
     const uint16_t ink = color(0x263b34);
     const uint16_t dim = color(0x627466);
     ht_pro_rect(f, 0, 596, 720, 124, 0, color(0xfbf9ef));
-    ht_pro_text(f, 44, 604, 468, &ht_pro_32, ink, a ? a->name : PRO_TR("Choose a pane"));
+    const char *name = a ? a->name : PRO_TR("Choose a pane");
+    const ht_pro_font_t *font = ht_pro_width(&ht_pro_42, name) <= 468 ? &ht_pro_42 : &ht_pro_32;
+    ht_pro_text(f, 44, 604, 468, font, ink, name);
     const char *status = !s.connected ? PRO_TR("Connect to your computer") :
         s.loading ? PRO_TR("One moment...") : s.voice_retry_until ? PRO_TR("Voice was not sent. Try again.") :
         s.nap ? PRO_TR("Taking a little rest") : a && is_question(a->id) ? PRO_TR("Needs your answer") :
         s.speech_error_until ? PRO_TR("Voice unavailable. Text is still here.") :
         pro_speech_visible() ? (s.speech.playing ? PRO_TR("Speaking. Touch to interrupt.") : PRO_TR("One moment...")) :
         a && a->busy ? (a->tool[0] ? a->tool : PRO_TR("Working")) :
-        "";
+        recap ? PRO_TR("A result is ready") : PRO_TR("Ready when you are");
     char carrying[128];
     snprintf(carrying, sizeof carrying, PRO_TR("%d line%s from %s"), carry.rows, carry.rows == 1 ? "" : PRO_TR("s"), carry.source);
     if (carry.active) status = carrying;
     else if (carry.error[0]) status = PRO_TR("Selected text expired");
-    ht_pro_text(f, 44, 656, 478, &ht_pro_24, dim, status);
+    ht_pro_text(f, 44, 668, 478, &ht_pro_24, dim, status);
     pro_hit(32, 598, 492, 104, A_AGENTS, 0, s.connected && !s.loading);
     if (carry.active || carry.error[0])
         pro_control(f, 548, 622, 128, 64, PRO_TR("Drop"), A_CARRY_DROP, 0, true);

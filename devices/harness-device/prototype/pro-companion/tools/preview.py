@@ -26,7 +26,7 @@ sys.path.insert(0, str(DEVICE / "firmware/test"))
 from native_shapes import defines, typedef  # noqa: E402
 from native_voice import voice_assets  # noqa: E402
 
-STATES = ("idle", "working", "summary", "mail", "needs_answer", "listening",
+STATES = ("idle", "idle_paper", "working", "summary", "summary_paper", "mail", "needs_answer", "listening",
           "voice_preparing", "voice_sending", "offline", "done", "asleep",
           "carrying", "launcher", "companion", "daemons", "scenes", "updates", "question", "reader", "locked", "updating",
           "instruction", "goal", "loop", "goal_listening", "loop_listening", "goal_review", "loop_review",
@@ -144,7 +144,9 @@ static void reset(void) {
 }
 static void fixture(const char *name) {
     reset();
-    if(!strcmp(name,"working")){s.agents[0].busy=true;COPY(s.agents[0].tool,"Refining your next idea");}
+    if(!strcmp(name,"idle_paper")){s.scene_choice=PRO_SCENE_PAPER;}
+    else if(!strcmp(name,"summary_paper")){s.scene_choice=PRO_SCENE_PAPER;s.agents[0].recap_ready=true;}
+    else if(!strcmp(name,"working")){s.agents[0].busy=true;COPY(s.agents[0].tool,"Refining your next idea");}
     else if(!strcmp(name,"summary")){s.agents[0].recap_ready=true;}
     else if(!strcmp(name,"mail")){s.notice_count=1;}
     else if(!strcmp(name,"needs_answer")){s.notice_count=1;s.notice[0].question=true;}
