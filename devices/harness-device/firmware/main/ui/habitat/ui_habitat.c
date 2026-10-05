@@ -2085,6 +2085,8 @@ bool habitat_scene_take(ht_scene_t *f)
     switch (s.view) {
 #ifdef DEVICE_PRO_COMPANION
     case LAUNCHER:
+    case WORK_INTENT:
+    case TODAY:
     case DAEMONS:
     case SCENES:
     case VOICE_SAMPLES:
