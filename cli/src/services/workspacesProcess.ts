@@ -57,14 +57,20 @@ export function workspacesCoreApi(
       advertised: () => [],
       terminalAvailable: () => false,
       sync: (session) => renamed(session.agentId),
+      runtimeModels: async () => [],
     },
     transcripts: { databaseHistory: () => undefined },
     external: {
       sessions: { list: () => [], scan: async () => [] },
       open: { known: () => new Map(), fresh: async () => new Map() },
     },
-    account: { mintGridName: async () => null, accessToken: () => Promise.reject(new Error('workspaces hold no credential')) },
-    clients: { viewerChanged: () => {}, gridNamed: () => {}, dshInstallStatus: () => {} },
+    account: {
+      mintGridName: async () => null,
+      accessToken: () => Promise.reject(new Error('workspaces hold no credential')),
+      privateGridName: async () => null,
+      machineName: () => null,
+    },
+    clients: { viewerChanged: () => {}, gridNamed: () => {}, gridModelsChanged: () => {}, dshInstallStatus: () => {} },
   }
 }
 
