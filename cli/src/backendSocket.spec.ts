@@ -692,6 +692,32 @@ describe('BackendSocket outbound queue', () => {
     }
   })
 
+  it('signed out, seals and queues nothing for a cloud link that never opens, and still serves its windows', async () => {
+    const socket = new BackendSocket('token')
+    const internal = socket as unknown as { e2ee: { wrapUp(frame: unknown): unknown; wrapCommander(frame: unknown): unknown }; queue: unknown[] }
+    const frames: Array<{ type?: unknown }> = []
+    socket.registerLocalClient('local:window', { sendFrame: (frame) => { frames.push(frame); return true }, sendBinary: () => true })
+    try {
+      // Sent at start-up, before the daemon has looked for a session: queued, as for any daemon.
+      socket.send({ type: 'turn_started', dbSessionId: 's1', payload: { sessionId: 's1' } })
+      expect(internal.queue).toHaveLength(1)
+      const wrapUp = vi.spyOn(internal.e2ee, 'wrapUp')
+      const wrapCommander = vi.spyOn(internal.e2ee, 'wrapCommander')
+      socket.serveThisComputerOnly()
+      expect(internal.queue).toHaveLength(0)
+      for (let i = 0; i < 100; i++) socket.send({ type: 'text_delta', dbSessionId: 's1', payload: { content: `word ${i}` } })
+      socket.sendCommander({ type: 'commander_event', agentId: 's1', dbSessionId: 's1', payload: { kind: 'done', text: 'done' } })
+      socket.sendUser({ type: 'notification', payload: {} })
+      expect(wrapUp).not.toHaveBeenCalled()
+      expect(wrapCommander).not.toHaveBeenCalled()
+      expect(internal.queue).toHaveLength(0)
+      expect(frames.filter((frame) => frame.type === 'text_delta')).toHaveLength(100)
+    } finally {
+      await socket.unregisterLocalClient('local:window')
+      await socket.stop()
+    }
+  })
+
   it('bounds the opening handshake and reconnects when it times out', async () => {
     // A connect attempt whose TCP side came up but whose upgrade was never answered used to sit in
     // CONNECTING forever: no 'open', so no heartbeat to terminate it, and `this.ws` set, so every

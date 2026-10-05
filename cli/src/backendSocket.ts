@@ -1002,8 +1002,14 @@ export class BackendSocket {
     for (const [connId, sink] of this.localClients) {
       if (!sink.sendFrame(frame)) void this.unregisterLocalClient(connId)
     }
-    this.enqueue({ t: 'up', frame: this.e2ee.wrapUp(frame) })
+    if (!this.thisComputerOnly) this.enqueue({ t: 'up', frame: this.e2ee.wrapUp(frame) })
   }
+
+  /** Signed out: the cloud link is never dialed in this process's life (a sign-in restarts it), so what
+   *  was queued for it is dropped and nothing more is sealed or queued: every frame, a text_delta's
+   *  among them, was sealed and queued for a link that never opens, two thousand deep. */
+  serveThisComputerOnly(): void { this.thisComputerOnly = true; this.queue.length = 0 }
+  private thisComputerOnly = false
 
   /** Send an up-frame to the LOOPBACK clients only — never to the cloud.
    *
@@ -1139,7 +1145,7 @@ export class BackendSocket {
     this.onOutboundCommander?.(frame)
     if (env.LOG_FRAMES) logFrame('→', 'device', frame)
     deviceDump.record('out', 'commander', undefined, frame)
-    this.enqueue({ t: 'up', webEligible: false, commanderEligible: true, frame: this.e2ee.wrapCommander(frame) })
+    if (!this.thisComputerOnly) this.enqueue({ t: 'up', webEligible: false, commanderEligible: true, frame: this.e2ee.wrapCommander(frame) })
   }
 
   /**
@@ -1225,6 +1231,7 @@ export class BackendSocket {
   }
 
   private enqueue(msg: OutboundEnvelope): void {
+    if (this.thisComputerOnly) return
     const item: QueueItem = { id: this.nextQueueId++, data: JSON.stringify(msg), msg, attempts: 0 }
     if (this.queue.length >= QUEUE_MAX) this.dropOneQueued()
     if (this.queue.length >= QUEUE_MAX) {

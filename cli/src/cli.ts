@@ -3773,6 +3773,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     backend.connect()
     console.log(`[cli] dialing ${env.BACKEND_WS_URL}/api/adapter-ws · watching registered sessions for ${ENGINES.length} engines`)
   } else {
+    backend.serveThisComputerOnly()
     console.log(`[cli] not signed in — serving this computer only · watching registered sessions for ${ENGINES.length} engines`)
   }
 
