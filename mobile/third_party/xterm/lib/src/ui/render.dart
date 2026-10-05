@@ -263,7 +263,7 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
       return;
     }
     final animator = _remoteScroll ??= RemoteScrollAnimator(
-      onFrame: markNeedsPaint,
+      onFrame: _paintSlideFrame,
       takePicture: _painter.takeLinePicture,
       onShift: _onRemoteScrollShift,
     );
@@ -273,6 +273,19 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
       _terminal.viewHeight,
       _painter.cellSize.height,
     );
+  }
+
+  /// AUTONOMOUS PATCH: a frame of the slide — drawn, unless a redraw is still
+  /// arriving.
+  ///
+  /// ⚠️ **Not while the terminal holds a frame** ([Terminal.synchronizedOutputHeld]):
+  /// its buffer is part old, part new, and the slide repaints every frame, so it
+  /// drew exactly the torn screen the hold keeps from the listeners. The frame's
+  /// end lays the terminal out and paints it anyway; the slide only loses the
+  /// frames in between, a few milliseconds of them.
+  void _paintSlideFrame() {
+    if (_terminal.synchronizedOutputHeld) return;
+    markNeedsPaint();
   }
 
   /// On the alternate screen, with no history: buffer line `i` is screen row

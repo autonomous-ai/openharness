@@ -1188,10 +1188,20 @@ class TerminalSession extends ChangeNotifier {
     // directly; only a split UTF-8 scalar needs a joined buffer.
     final combined = _utf8Tail.isEmpty ? bytes : <int>[..._utf8Tail, ...bytes];
     final decoded = decodeUtf8Chunk(combined);
+    if (kTypingTrace && decoded.text.contains('\x1b[?2026')) {
+      // Whether the program brackets its frames for synchronized output — see
+      // `Terminal.setSynchronizedOutputMode`. A mark split across two packets
+      // goes uncounted; this is a trace.
+      for (final mark in _synchronizedOutputMark.allMatches(decoded.text)) {
+        typingCount(mark.group(1) == 'h' ? 'sync.begin' : 'sync.end');
+      }
+    }
     if (decoded.text.isNotEmpty) _writeTerminalText(decoded.text);
     _utf8Tail = decoded.tail;
     return true;
   }
+
+  static final _synchronizedOutputMark = RegExp(r'\x1b\[\?2026([hl])');
 
   /// A keyframe: the stream's whole screen and its history, which replaces the emulator outright.
   /// Published whole and at once — see [writeKeyframeInSlices] for how a large one is parsed.

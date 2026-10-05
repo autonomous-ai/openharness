@@ -1694,6 +1694,13 @@ class _TerminalPanelState extends State<TerminalPanel>
                         altBufferScrollPhysics: const RemoteScrollPhysics(),
                         altBufferScrollPaced: true,
                         altBufferScrollAnimated: true,
+                        // How many redraws slid and how many jumped — the
+                        // scroll's smoothness, for the trace.
+                        onAltBufferScrollShift: kTypingTrace
+                            ? (rows) => typingCount(
+                                rows == 0 ? 'scroll.jumped' : 'scroll.slid',
+                              )
+                            : null,
                       ),
                     ),
                   ),

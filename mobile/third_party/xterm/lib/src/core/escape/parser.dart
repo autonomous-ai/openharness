@@ -1096,6 +1096,10 @@ class EscapeParser {
         return;
       case 2004:
         return handler.setBracketedPasteMode(enabled);
+      // AUTONOMOUS PATCH: synchronized output — see
+      // `Terminal.setSynchronizedOutputMode`.
+      case 2026:
+        return handler.setSynchronizedOutputMode(enabled);
       default:
         return handler.setUnknownDecMode(mode, enabled);
     }

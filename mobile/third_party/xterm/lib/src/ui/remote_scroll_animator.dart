@@ -1,4 +1,5 @@
 import 'dart:math' as math;
+import 'dart:math' show max, min;
 import 'dart:ui';
 
 import 'package:flutter/scheduler.dart';
@@ -6,6 +7,7 @@ import 'package:xterm/src/core/buffer/line.dart';
 import 'package:xterm/src/core/cell.dart';
 import 'package:xterm/src/ui/scroll_shift.dart';
 import 'package:xterm/src/utils/circular_buffer.dart';
+import 'package:xterm/src/utils/input_trace.dart';
 
 /// Hands over [line]'s recorded drawing if it still shows [version], or null —
 /// `TerminalPainter.takeLinePicture`. The caller owns, and disposes, what it gets.
@@ -21,8 +23,8 @@ typedef TakeLinePicture = Picture? Function(BufferLine line, int version);
 /// moments the replies land. When a redraw arrives within [_armedFor] of a wheel
 /// event, it is compared with the screen before it ([detectScrollShift]). Found
 /// moved by `n` rows, the moved rows are drawn `n` rows back — exactly where
-/// they were — and eased to their place over a few frames. The rows that left
-/// are drawn from their last recording ([ghosts]) as they slide out.
+/// they were — and glide to their place over a few frames ([_omega]). The rows
+/// that left are drawn from their last recording ([ghosts]) as they slide out.
 ///
 /// Only a visual offset: the emulator, hit-testing and selection all see the
 /// new screen at once. A change that is not a recognisable scroll — output, a
@@ -47,12 +49,24 @@ class RemoteScrollAnimator {
   /// A redraw this long after the last wheel event is not that scroll's answer.
   static const _armedFor = Duration(milliseconds: 400);
 
-  /// How fast a slide eases in: it keeps `e^-1` of its distance after this
-  /// long, and is all but there after three times it.
-  static const _easeSeconds = 0.040;
+  /// How fast a slide closes in, in radians a second: a critically damped
+  /// spring — `x'' = -ω²x - 2ωx'` — whose single step is all but there (5%
+  /// left) after about 130ms.
+  ///
+  /// ⚠️ **A spring with a velocity, not an ease.** The slide used to shrink by
+  /// `e^(-t/40ms)`, which sets its speed from the distance left: every redraw
+  /// that landed put the speed straight back up, and it sagged until the next
+  /// one. Redraws land 12–80ms apart, so a fling moved in surges — fast, slow,
+  /// fast — which is the stutter that was felt (measured on a phone,
+  /// 2026-10-05). The spring keeps its velocity across a redraw: the distance
+  /// grows, the speed only bends, and redraws close together run as one even
+  /// glide.
+  static const _omega = 36.0;
 
-  /// Closer than this, in logical pixels, a slide is there.
+  /// Closer than this, in logical pixels, and slower than [_stillBelowSpeed],
+  /// in logical pixels a second, a slide is there.
   static const _stillBelow = 0.5;
+  static const _stillBelowSpeed = 50.0;
 
   final _clock = Stopwatch()..start();
   int _armedUntilMs = -1;
@@ -68,6 +82,10 @@ class RemoteScrollAnimator {
   int _top = 0;
   int _bottom = -1;
   double _offset = 0;
+
+  /// How fast [_offset] is changing, in logical pixels a second — kept across
+  /// the redraws of one slide. See [_omega].
+  double _velocity = 0;
   double _lineHeight = 0;
 
   /// Rows that slid out of the region, by the row they would occupy now —
@@ -109,6 +127,7 @@ class RemoteScrollAnimator {
       _down = true;
     }
     _armedUntilMs = _clock.elapsedMilliseconds + _armedFor.inMilliseconds;
+    _wheelsSinceRedraw += lines.abs();
     if (_signatures == null) _remember(screen, rowCount, lineHeight);
   }
 
@@ -155,11 +174,15 @@ class RemoteScrollAnimator {
         up: _up,
         down: _down,
       );
-      if (shift != null && _slide(shift, lineHeight)) {
+      final slid = shift != null && _slide(shift, lineHeight);
+      if (slid) {
         onShift?.call(shift.rows);
       } else {
         finish();
         onShift?.call(0);
+      }
+      if (xtermInputTrace != null) {
+        _traceRedraw(before, signatures, blank, shift, slid);
       }
     } else {
       // Changed after the scroll was over: output, not a scroll. Jump.
@@ -169,6 +192,7 @@ class RemoteScrollAnimator {
     _lines = lines;
     _versions = versions;
     _signatures = signatures;
+    _wheelsSinceRedraw = 0;
   }
 
   /// Ends any slide where it stands: everything at its place.
@@ -180,6 +204,7 @@ class RemoteScrollAnimator {
     }
     _lastTick = null;
     _offset = 0;
+    _velocity = 0;
     _disposeGhosts();
   }
 
@@ -235,6 +260,18 @@ class RemoteScrollAnimator {
     _top = shift.top;
     _bottom = shift.bottom;
     _offset = offset;
+    // ⚠️ **Toward its place, and never past it.** The speed carried in is the
+    // last redraw's; after a turn the other way it can point away from where
+    // the rows belong, or be enough to carry them beyond it, and then the slide
+    // would swing out and back — and [_pruneGhosts], which counts on the slide
+    // only ever closing in, would have let go of the rows it swings back to.
+    // Cut to what lands exactly instead: with `u = v + ωx` on the same side as
+    // `x`, the spring closes in without crossing.
+    if (_velocity * offset > 0) {
+      _velocity = 0;
+    } else if ((_velocity + _omega * offset) * offset < 0) {
+      _velocity = -_omega * offset;
+    }
     _pruneGhosts();
     _scheduleTick();
     return true;
@@ -254,8 +291,15 @@ class RemoteScrollAnimator {
     final seconds = last == null
         ? 1 / 60
         : math.max(0, (timeStamp - last).inMicroseconds) / 1e6;
-    _offset *= math.exp(-seconds / _easeSeconds);
-    if (_offset.abs() < _stillBelow) {
+    // The spring's exact solution over this frame, so a long frame cannot make
+    // it overshoot or blow up the way a step of a numeric integration would:
+    // x(t) = (x + ut)e^(-ωt), v(t) = (v - ωut)e^(-ωt), where u = v + ωx.
+    const omega = _omega;
+    final decay = math.exp(-omega * seconds);
+    final u = _velocity + omega * _offset;
+    _offset = (_offset + u * seconds) * decay;
+    _velocity = (_velocity - omega * u * seconds) * decay;
+    if (_offset.abs() < _stillBelow && _velocity.abs() < _stillBelowSpeed) {
       finish();
     } else {
       _pruneGhosts();
@@ -295,12 +339,83 @@ class RemoteScrollAnimator {
     _lines = lines;
     _versions = [for (final line in lines) line.paintVersion];
     _signatures = [for (final line in lines) _signature(line)];
+    _wheelsSinceRedraw = 0;
   }
 
   void _forgetScreen() {
     _lines = null;
     _versions = null;
     _signatures = null;
+  }
+
+  /* Trace only — nothing below runs unless `xtermInputTrace` is set. */
+
+  /// Wheel lines sent since the screen was last compared: with the rows a
+  /// redraw moved, how many lines the program scrolls for one wheel.
+  int _wheelsSinceRedraw = 0;
+
+  /// One line per compared redraw: what moved, by how much, and what the
+  /// slide made of it.
+  void _traceRedraw(
+    List<int> before,
+    List<int> after,
+    List<bool> blank,
+    ScrollShift? shift,
+    bool slid,
+  ) {
+    final rowCount = after.length;
+    var top = 0;
+    while (top < rowCount && before[top] == after[top]) {
+      top++;
+    }
+    var bottom = rowCount - 1;
+    while (bottom > top && before[bottom] == after[bottom]) {
+      bottom--;
+    }
+    final (best, agree, candidates) =
+        _bestShift(before, after, blank, top, bottom);
+    final outcome = slid
+        ? 'slid ${shift!.rows} rows (${shift.top}..${shift.bottom})'
+        : shift != null
+            ? 'jumped — ${shift.rows} rows too far to slide'
+            : 'jumped';
+    inputTrace(
+      () => 'slide: wheels=$_wheelsSinceRedraw changed=$top..$bottom/$rowCount'
+          ' best=$best agree=$agree/$candidates → $outcome'
+          ' (offset ${_offset.toStringAsFixed(0)}px'
+          ' v=${_velocity.toStringAsFixed(0)}px/s)',
+    );
+  }
+
+  /// The shift most changed rows agree on — and how many agree, of how many
+  /// could — whether or not [detectScrollShift] believed it.
+  (int, int, int) _bestShift(
+    List<int> before,
+    List<int> after,
+    List<bool> blank,
+    int top,
+    int bottom,
+  ) {
+    final span = bottom - top + 1;
+    var best = 0;
+    var bestAgree = 0;
+    var bestCandidates = 0;
+    for (var rows = -(span - 1); rows <= span - 1; rows++) {
+      if (rows == 0) continue;
+      var agree = 0;
+      var candidates = 0;
+      for (var i = max(top, top - rows); i <= min(bottom, bottom - rows); i++) {
+        if (blank[i] || before[i] == after[i]) continue;
+        candidates++;
+        if (after[i] == before[i + rows]) agree++;
+      }
+      if (agree > bestAgree) {
+        best = rows;
+        bestAgree = agree;
+        bestCandidates = candidates;
+      }
+    }
+    return (best, bestAgree, bestCandidates);
   }
 
   bool _unchanged(IndexAwareCircularBuffer<BufferLine> screen, int rowCount) {
@@ -316,13 +431,24 @@ class RemoteScrollAnimator {
     return true;
   }
 
-  /// Everything the row draws — characters, colours, attributes — as one number.
+  /// The characters a row shows, as one number — not their colours.
+  ///
+  /// ⚠️ **Text only, and that is what made the slide work at all.** Claude
+  /// Code's rows change colour or attributes as they scroll — the same text,
+  /// moved, differs in a cell or two (most often the first column) — and a
+  /// signature that took in every cell found 8 of 257 redraws to be a scroll,
+  /// where the text alone finds 180 (measured on a phone, 2026-10-05): every
+  /// other redraw jumped. Which rows MOVED is a question about text; how they
+  /// look now is drawn from the new screen either way. An empty cell counts as
+  /// a space, as an erased one and one never written look alike.
   static int _signature(BufferLine line) {
     final data = line.data;
-    final end = line.length * 4;
-    var hash = line.length;
-    for (var i = 0; i < end; i++) {
-      hash = 0x1fffffff & (hash * 31 + data[i]);
+    final cells = line.length;
+    var hash = cells;
+    for (var i = 0; i < cells; i++) {
+      var codePoint = data[i * 4 + 3] & CellContent.codepointMask;
+      if (codePoint == 0) codePoint = 0x20;
+      hash = 0x1fffffff & (hash * 31 + codePoint);
     }
     return hash;
   }
