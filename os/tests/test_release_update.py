@@ -74,6 +74,16 @@ class ReleaseChannel(unittest.TestCase):
         with patch.object(update.subprocess, 'check_output', side_effect=['harness-os 0.1.0pre4.r3-1', '-1']):
             self.assertFalse(update.discover(self.url + '/metadata.json')['available'])
 
+    def test_existing_feed_discovers_an_official_release_without_reconfiguring_the_client(self):
+        self.manifest['requires_os_version'] = '0.1.0'
+        self.manifest['upgrades_from'] = [self.base]
+        self.manifest['package'].update(name='harness-os-0.1.0-1-x86_64.pkg.tar.gz', version='0.1.0-1')
+        self.publish()
+        result = update.discover(self.url + '/metadata.json')
+        self.assertTrue(result['available'])
+        self.assertEqual(result['version'], '0.1.0-1')
+        self.assertEqual(self.metadata['channel'], 'preview')
+
     def test_missing_channel_is_empty_but_invalid_or_truncated_channel_is_an_error(self):
         self.assertIsNone(update.discover(self.url + '/missing'))
         original = copy.deepcopy(self.metadata)

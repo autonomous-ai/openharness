@@ -28,6 +28,6 @@ export function fakeCore(over: Overrides = {}): CoreApi {
       ...over.external,
     },
     account: { mintGridName: vi.fn(async () => null), accessToken: vi.fn(async () => 'token'), ...over.account },
-    clients: { viewerChanged: vi.fn(), gridNamed: vi.fn(), ...over.clients },
+    clients: { viewerChanged: vi.fn(), gridNamed: vi.fn(), dshInstallStatus: vi.fn(), ...over.clients },
   }
 }

@@ -4,10 +4,12 @@
  * file, the log's size, signals.
  */
 import { spawn, type ChildProcess } from 'node:child_process'
+import { randomBytes } from 'node:crypto'
 import { readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { performance } from 'node:perf_hooks'
 import { trimLogFile } from '../lib/log.js'
 import type { MasterMessage } from './protocol.js'
+import { KNOWN_SERVICES, ServiceSupervisor, serviceOptions, serviceSpecs } from './services.js'
 import { DEFAULT_SUPERVISOR_OPTIONS, Supervisor, type CoreHandle, type SupervisorOptions, type SupervisorStatus } from './supervisor.js'
 
 /** How often the master keeps the daemon's log under its cap. */
@@ -171,9 +173,24 @@ export function runMaster(config: MasterConfig): Supervisor {
   // Trimmed here rather than by the core: the master outlives every core, and two trimmers rewriting
   // one file in place would race.
   const stopTrimming = trimLogEvery(config.logFile)
+  const log = (line: string) => console.log(`${new Date().toISOString().replace('T', ' ').slice(0, 23)} ${line}`)
+  // A new one every boot, given to the core and to each service: how the core knows a service
+  // connection is one this master started, and no other local process.
+  const token = randomBytes(24).toString('hex')
+  const services = new ServiceSupervisor(serviceSpecs(env, KNOWN_SERVICES), {
+    spawnService: (spec, extra) => coreHandle(spawn(config.nodePath, [...coreExecArgv(config.execArgv, spec.heapLimitMiB), config.scriptPath, '__service', spec.name], {
+      env: { ...env, ...extra },
+      stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
+    })),
+    now: () => performance.now(),
+    wallClock: () => Date.now(),
+    setTimer: (run, ms) => setTimeout(run, ms),
+    clearTimer: (timer) => clearTimeout(timer as ReturnType<typeof setTimeout>),
+    log,
+  }, serviceOptions(env), { HARNESSD_SERVICE_TOKEN: token })
   const supervisor = new Supervisor({
     spawnCore: (extra) => coreHandle(spawn(config.nodePath, [...execArgv, config.scriptPath, '__run'], {
-      env: { ...env, ...extra },
+      env: { ...env, ...extra, HARNESSD_SERVICE_TOKEN: token },
       stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
     })),
     now: () => performance.now(),
@@ -185,14 +202,18 @@ export function runMaster(config: MasterConfig): Supervisor {
     releasePidFile: () => { if (readPid() === process.pid) rmSync(config.pidFile, { force: true }) },
     restoreUpdate: config.restoreUpdate,
     confirmUpdate: config.confirmUpdate,
-    log: (line) => console.log(`${new Date().toISOString().replace('T', ' ').slice(0, 23)} ${line}`),
-    exit: (code) => {
+    log,
+    // The services go with the master, after the core: none is left holding the core's socket.
+    exit: (code) => services.stop(() => {
       stopTrimming()
       exit(code)
-    },
+    }),
   }, options)
-  for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP'] as const) onSignal(signal, () => supervisor.stop(signal))
+  // Services stop beside the core, inside the same grace `harness stop` gives the whole daemon.
+  for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP'] as const) onSignal(signal, () => { services.stop(() => {}); supervisor.stop(signal) })
   supervisor.start()
+  // Not waiting on the core: a service reaches it through its socket, and retries until it answers.
+  services.start()
   return supervisor
 }
 

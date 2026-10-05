@@ -5,6 +5,7 @@
 #include "../main/ui/habitat/focus.h"
 #include "../main/ui/habitat/focus_faces.h"
 #include <assert.h>
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -998,7 +999,7 @@ static void focus_face(void)
                 assert(ov && !cp->working_scene->overlay && !cp->listening_scene->overlay && !cp->sending_scene->overlay);
                 assert(sc->steps == steps_[kind] && sc->step_ms == ms_[kind] && sc->w == w_[kind] && sc->h == 170);
                 assert(sc->frames[0].cell == 1 && ov->frames[0].cell == 1 && !sc->frames[0].palette[0] && !ov->frames[0].palette[0]);
-                const int scene_run = kind == 0 ? 1 : 7, overlay_run = kind == 0 ? 3 : 8;
+                const int scene_run = kind == 0 ? 1 : 7, overlay_run = kind == 0 ? 3 : kind == 1 ? 1 : 8;   // the bubble sits in the second bar slot
                 for (unsigned level = 0; level < levels; level++)
                     for (unsigned step = 0; step < sc->steps; step++) {
                         ht_character_face_t v = base;
@@ -1023,7 +1024,23 @@ static void focus_face(void)
                                    !strcmp(cs_.runs[10].text, "Coalescing\xe2\x80\xa6 34s") && !cs_.runs[10].gained);
                             assert(!cs_.runs[4].text[0] && !cs_.runs[5].text[0] && !cs_.runs[6].text[0]);   // the other recap lines stay empty
                         }
-                        if (kind == 1) assert(cs_.runs[0].arc == 2 && !strcmp(cs_.runs[0].text, "Listening") && cs_.runs[0].gained);
+                        if (kind == 1) {
+                            assert(cs_.runs[0].arc == 2 && !strcmp(cs_.runs[0].text, "Listening") && cs_.runs[0].gained);
+                            // three bar boxes in the sparkle slots, over the bubble (and the robot never reaches it)
+                            const ht_pet_bars_t *b = sc->bars;
+                            assert(b && b->w == 8 && b->radius == 3 && b->min_h == 9 && b->swing == 19 && b->period_ms == 1200);
+                            for (int j = 0; j < 3; j++) {
+                                const ht_run_t *br = &cs_.runs[8 + j];
+                                float a = (sinf(6.2831853f * (float)(v.clock_ms % 1200) / 1200.0f + (float)j * 1.2f) + 1.0f) / 2.0f;
+                                int h = (int)floorf(9.0f + 19.0f * a * (float)level / 4.0f + 0.5f);
+                                assert(h >= 9 && (level || h == 9));
+                                assert(br->box.h == h + 1 && br->w == 8 && br->box.radius == 3 && !br->sprite.width && !br->text[0]);
+                                assert(br->box.fill == ht_rgb(j == 1 ? 0xb6f6ff : 0x74d7ff) && br->box.border == br->box.fill);
+                                assert(br->x == ox + b->x[j] && br->y == oy + 31 - h / 2);
+                                assert(b->x[j] == 167 + 11 * j && b->cy == 31);   // 184/195/206 and 61, from the robot's ink box
+                            }
+                            assert(cs_.runs[1].sprite.cells == ov->frames[0].cells && ov->loop[i] == 0);
+                        }
                         ht_raster(&cs_, (ht_rect_t){0, 0, HT_WIDTH, HT_HEIGHT}, full);
                         int ink = 0;
                         for (int y = 0; y < HT_HEIGHT; y++) for (int xx = 0; xx < HT_WIDTH; xx++)
@@ -1048,13 +1065,37 @@ static void focus_face(void)
             {
                 const ht_pet_overlay_t *wo = xp->working_scene->overlay, *lo = xp->listening_scene->overlay, *so = xp->sending_scene->overlay;
                 assert(wo->loop[0] != wo->loop[1] && wo->loop[0] != wo->loop[7] && wo->loop[7] != wo->loop[14] && wo->loop[14] != wo->loop[21]);
-                bool flat = true, moving = false, quiet = false;
-                for (unsigned step = 0; step < 15; step++) {
-                    flat &= lo->loop[step] == lo->loop[0];
-                    moving |= lo->loop[4 * 15 + step] != lo->loop[4 * 15];
-                    quiet |= lo->loop[15 + step] != lo->loop[0];
+                // The listening bubble is stored once (every loop entry the same frame at the same place); the bars are code.
+                for (unsigned i = 0; i < 5 * 15; i++)
+                    assert(lo->loop[i] == 0 && lo->at[i][0] == lo->at[0][0] && lo->at[i][1] == lo->at[0][1]);
+                assert(xp->listening_scene->bars && !xp->working_scene->bars && !xp->sending_scene->bars && !cp->listening_scene->bars);
+                // Heights at known clocks: level 0 is flat at 9 px; level 4 swings between 9 and 28 over 1200 ms.
+                {
+                    int lo_h = 99, hi_h = 0;
+                    for (unsigned clock = 0; clock < 1200; clock += 10) {
+                        ht_character_face_t v = base; v.voice = true; v.mood = HT_CHARACTER_LISTENING; v.clock_ms = clock;
+                        for (unsigned level = 0; level < 5; level += 4) {
+                            v.pose.level = level;
+                            ht_scene_clear(&cs_, 0); ht_character_face(&cs_, &c, &v, 0xffff, "");
+                            assert(cs_.count == 11);
+                            for (int j = 0; j < 3; j++) {
+                                int h = cs_.runs[8 + j].box.h - 1;
+                                if (!level) assert(h == 9); else { if (h < lo_h) lo_h = h; if (h > hi_h) hi_h = h; }
+                            }
+                        }
+                    }
+                    assert(lo_h == 9 && hi_h == 28);
+                    // The bars move smoothly and are scheduled: every 50 ms at level 4, no extra wake at level 0.
+                    ht_character_face_t v = base; v.voice = true; v.mood = HT_CHARACTER_LISTENING; v.clock_ms = 405;
+                    v.pose.level = 4;
+                    uint32_t nx = ht_focus_pet_next_ms(&v, "");
+                    assert(nx == 450);
+                    v.pose.level = 0;
+                    uint32_t n0 = ht_focus_pet_next_ms(&v, "");
+                    assert(n0 > 450);          // flat bars: only the word's sweep (455) or the robot's frame (480) wakes it
+                    v.pose.level = 4; v.clock_ms = 401;
+                    assert(ht_focus_pet_next_ms(&v, "") <= 450);
                 }
-                assert(flat && moving && quiet);   // level 0 is flat, level 1 already swings, level 4 swings most
                 assert(so->frames[so->loop[14]].cols == 1 && so->frames[so->loop[14]].rows == 1 && so->frames[so->loop[0]].cols > 1);
                 assert(so->at[12][0] > so->at[8][0] && so->at[12][1] < so->at[8][1] && so->loop[3] != so->loop[4]);
             }
@@ -1119,6 +1160,97 @@ static void focus_face(void)
                             }
                         assert(ink > 0);
                     }
+            }
+            // THE WAVES (L2): the sound waves are not in the frames but drawn by the dial: six ring arcs in runs 1-6
+            // (right side 1-3, left side 4-6), before the scene's run 7; hidden ones are empty rings, never skipped.
+            {
+                const ht_pet_scene_t *ls = ms_[1];
+                const ht_pet_waves_t *wv = ls->waves;
+                assert(wv && !ms_[0]->waves && !ms_[2]->waves && !cp->listening_scene->waves && !xp->listening_scene->waves);
+                assert(wv->count == 3 && wv->half_deg == 24 && wv->w16 == 48 && wv->period_ms == 1680);
+                assert(wv->r_far16 == 1128 && wv->r_near16 == 762 && wv->rgb[0] == 214 && wv->rgb[1] == 208 && wv->rgb[2] == 255);
+                // Poses that mirror each other are one stored frame; 8 distinct pictures in the 12 steps.
+                bool seen[12] = {false};
+                int distinct = 0;
+                for (unsigned t = 0; t < 12; t++) {
+                    if (!seen[ls->loop[t]]) { seen[ls->loop[t]] = true; distinct++; }
+                }
+                assert(distinct == 8);
+                // The pose swings 0 .. 3 .. 6 and back (9): the mirror pairs 1/5, 2/4, 7/11, 8/10 share a frame (the extremes 0, 3, 6, 9 are alone).
+                assert(ls->loop[1] == ls->loop[5] && ls->loop[2] == ls->loop[4] && ls->loop[7] == ls->loop[11] && ls->loop[8] == ls->loop[10]);
+                static const uint32_t clocks[] = {0, 140, 280, 420, 560, 700, 840, 1000, 1400, 1679, 1680, 3333, 100001};
+                int shown = 0, hidden = 0;
+                for (unsigned level = 0; level < HT_PET_SCENE_LEVELS; level++)
+                    for (unsigned q = 0; q < sizeof clocks / sizeof clocks[0]; q++) {
+                        ht_character_face_t v = mbase;
+                        v.voice = true; v.mood = HT_CHARACTER_LISTENING; v.clock_ms = clocks[q]; v.pose.level = level;
+                        ht_scene_clear(&ms, 0); ht_character_face(&ms, &c, &v, 0xffff, ""); only_inter(&ms);
+                        assert(ms.count == 11);
+                        assert(ms.runs[0].arc == 2 && !strcmp(ms.runs[0].text, "Listening"));
+                        unsigned step = (clocks[q] / ls->step_ms) % ls->steps;
+                        const ht_run_t *sr = &ms.runs[7];
+                        assert(sr->sprite.cells == ls->frames[ls->loop[level * ls->steps + step]].cells);
+                        int ox = (466 - ls->w) / 2 + ls->dx, oy = 233 - ls->h / 2 - 6 + ls->dy;
+                        for (int side = 0; side < 2; side++)
+                            for (int k = 0; k < 3; k++) {
+                                const ht_run_t *r = &ms.runs[1 + side * 3 + k];
+                                assert(r->ring.set && !r->sprite.width && !r->box.h && !r->arc && !r->text[0]);
+                                float u = (float)(clocks[q] % 1680) / 1680.0f + (float)k / 3.0f;
+                                if (u >= 1.0f) u -= 1.0f;
+                                float a = sinf(3.14159265f * u) * (0.4f + 0.6f * (float)level / 4.0f);
+                                if (!level && k == 0 && !clocks[q]) assert(a == 0.0f);   // u = 0: the arc is at the far edge, dark
+                                assert(r->ring.cx16 == ox * 16 + wv->cx16 && r->ring.cy16 == oy * 16 + wv->cy16);
+                                if (a < 0.12f) {
+                                    hidden++;
+                                    ht_rect_t b = ht_run_bounds(r);
+                                    assert(!r->ring.w16 && !r->ring.colour && !b.w && !b.h);
+                                    continue;
+                                }
+                                shown++;
+                                int rad = (int)floorf(1128.0f - (1128.0f - 762.0f) * u + 0.5f);
+                                assert(r->ring.r16 == rad && r->ring.w16 == 48);
+                                assert(r->ring.ux == (side ? -16384 : 16384) && r->ring.uy == 0);
+                                assert(r->ring.cosh == 14968);   // cos 24 degrees, Q14
+                                unsigned want[3];
+                                for (int i = 0; i < 3; i++) want[i] = (unsigned)floorf((float)wv->rgb[i] * a + 0.5f);
+                                assert(r->ring.colour == ht_rgb(want[0] << 16 | want[1] << 8 | want[2]));
+                                ht_rect_t b = ht_run_bounds(r);
+                                assert(b.w > 0 && b.h > 0 && b.x >= 0 && b.y >= 0 && b.x + b.w <= HT_WIDTH && b.y + b.h <= HT_HEIGHT);
+                            }
+                        // Level 0 at the brightest point of an arc: 0.4 * sin(pi u), never past 0.4.
+                        if (!level) for (int k = 0; k < 3; k++) {
+                            const ht_run_t *r = &ms.runs[1 + k];
+                            if (r->ring.w16) assert((int)((r->ring.colour >> 11) << 3) <= (int)(0.4f * 214) + 8);
+                        }
+                        // The ink is inside r 230, the arcs included, and the wake is every 50 ms at most while it glides.
+                        ht_raster(&ms, (ht_rect_t){0, 0, HT_WIDTH, HT_HEIGHT}, full);
+                        int ring_ink = 0;
+                        for (int y = 0; y < HT_HEIGHT; y++) for (int xx = 0; xx < HT_WIDTH; xx++)
+                            if (full[y * HT_WIDTH + xx]) {
+                                ring_ink++;
+                                assert((xx - 233) * (xx - 233) + (y - 233) * (y - 233) < 230 * 230);
+                            }
+                        assert(ring_ink > 0);
+                        uint32_t nx = ht_focus_pet_next_ms(&v, "");
+                        if (clocks[q]) assert(nx > clocks[q] && nx <= (clocks[q] / 50 + 1) * 50);   // clock 0 is the held face: no wake
+                    }
+                assert(shown > 0 && hidden > 0);
+                // The arcs never touch the body: (almost) no pixel of any frame lies inside an arc's slice at r_near .. r_far.
+                int touching = 0;
+                for (unsigned f = 0; f < 8; f++) {
+                    const ht_cell_frame_t *fr = &ls->frames[f];
+                    for (int y = 0; y < fr->rows; y++) for (int xx = 0; xx < fr->cols; xx++) {
+                        if (!fr->cells[y * fr->cols + xx]) continue;
+                        // the pixel's centre against the waves' centre, sixteenths of a px, scene coordinates
+                        int dx = xx * 16 + 8 - wv->cx16, dy = wv->cy16 - (y * 16 + 8);
+                        int d2 = dx * dx + dy * dy, rin = wv->r_near16 - 24, rout = wv->r_far16 + 24;
+                        if (d2 < rin * rin || d2 > rout * rout) continue;
+                        int ax = dx < 0 ? -dx : dx;                       // mirror: both sides are the same slice
+                        // tan 24 = 0.4452: inside the slice when |dy| <= 0.4452 |dx|
+                        if (dy * 1000 <= 445 * ax && -dy * 1000 <= 445 * ax) touching++;
+                    }
+                }
+                assert(touching <= 1);   // one soft edge pixel of one frame at most
             }
             // the listening scene's loop is the same 12 frames at every level
             for (unsigned level = 1; level < HT_PET_SCENE_LEVELS; level++)

@@ -13,9 +13,13 @@ class FakeSearch {
   async tail(sessionId: string) { return { sessionId } as never }
   stop(): void { this.calls.push('stop') }
 }
-const SEARCH: PortFallbacks<SearchPort> = {
+// The search port as these tests drive it: two more members, whose fallback is to fail, sync and async —
+// the shapes of a member a request needs answered. The host guards whatever the fallbacks name.
+type TestPort = SearchPort & { search(query: string, options: object): unknown; tail(sessionId: string, options: object): Promise<unknown> }
+const SEARCH = {
   touch: undefined, deleteHistory: undefined, session: undefined, search: FAIL, tail: later(FAIL), stop: undefined,
-}
+} as unknown as PortFallbacks<SearchPort>
+const testPort = (h: { ports: CorePorts }): TestPort => h.ports.search as unknown as TestPort
 const VIEWERS: PortFallbacks<ViewersPort> = {
   attach: undefined, detach: undefined, frameContext: null, forwardingUrl: null, stop: later(undefined),
 }
@@ -27,9 +31,9 @@ function host(options: Parameters<typeof createServiceHost>[1] = {}) {
   const services = createServiceHost(ports, { log: (line) => lines.push(line), now: () => at, ...options })
   return { ports, lines, services, advance: (ms: number) => { at += ms } }
 }
-function startSearch(h: ReturnType<typeof host>, port: Partial<SearchPort> = new FakeSearch()) {
+function startSearch(h: ReturnType<typeof host>, port: Partial<TestPort> = new FakeSearch()) {
   h.services.start('search', (_core, ports) => { ports.search = port as SearchPort }, fakeCore(), SEARCH)
-  return port as SearchPort
+  return port as TestPort
 }
 
 describe('hosting services so one that fails cannot take the core down', () => {
@@ -40,7 +44,7 @@ describe('hosting services so one that fails cannot take the core down', () => {
       const h = host()
       const real = new FakeSearch()
       startSearch(h, real)
-      const port = h.ports.search!
+      const port = testPort(h)
       expect(port).not.toBe(real)
       port.touch('s1')
       port.deleteHistory('s2')
@@ -93,8 +97,8 @@ describe('hosting services so one that fails cannot take the core down', () => {
         touch: () => { throw new Error('store closed') },
         session: () => { throw 'bad row' },
       })
-      expect(h.ports.search!.touch('s1')).toBeUndefined()
-      expect(h.ports.search!.session('s1')).toBeUndefined()
+      expect(testPort(h).touch('s1')).toBeUndefined()
+      expect(testPort(h).session('s1')).toBeUndefined()
       expect(port).toBeDefined()
       expect(h.lines).toEqual(['[services] search.touch failed · store closed', '[services] search.session failed · bad row'])
     })
@@ -104,10 +108,10 @@ describe('hosting services so one that fails cannot take the core down', () => {
       const cause = new Error('disk I/O error')
       startSearch(h, { ...new FakeSearch(), search: () => { throw cause }, tail: async () => { throw cause } })
       let thrown: unknown
-      try { h.ports.search!.search('x', {}) } catch (error) { thrown = error }
+      try { testPort(h).search('x', {}) } catch (error) { thrown = error }
       expect(thrown).toBeInstanceOf(ServiceUnavailableError)
       expect(thrown).toMatchObject({ service: 'search', cause, name: 'ServiceUnavailableError', message: 'the search service is unavailable' })
-      await expect(h.ports.search!.tail('s1', {})).rejects.toMatchObject({ service: 'search', cause })
+      await expect(testPort(h).tail('s1', {})).rejects.toMatchObject({ service: 'search', cause })
     })
 
     it('resolves an async member to its fallback whether it rejects or throws before its promise', async () => {
@@ -138,7 +142,7 @@ describe('hosting services so one that fails cannot take the core down', () => {
       const real = new FakeSearch()
       real.touch = () => { throw new Error('store closed') }
       startSearch(h, real)
-      const captured = h.ports.search!
+      const captured = testPort(h)
       const unbind = vi.fn()
       h.services.onOff('search', unbind)
       for (let i = 0; i < 4; i++) { captured.touch('s1'); h.advance(1_000) }
@@ -161,7 +165,7 @@ describe('hosting services so one that fails cannot take the core down', () => {
     it('forgets failures older than the window, so a slow trickle never switches a service off', () => {
       const h = host({ maxFailures: 3, windowMs: 10_000 })
       startSearch(h, { ...new FakeSearch(), touch: () => { throw new Error('flaky') } })
-      for (let i = 0; i < 10; i++) { h.ports.search!.touch('s1'); h.advance(6_000) }
+      for (let i = 0; i < 10; i++) { testPort(h).touch('s1'); h.advance(6_000) }
       expect(h.services.isOff('search')).toBe(false)
     })
 
@@ -169,7 +173,7 @@ describe('hosting services so one that fails cannot take the core down', () => {
       const h = host({ maxFailures: 2 })
       const rejects: Array<(error: Error) => void> = []
       startSearch(h, { ...new FakeSearch(), tail: () => new Promise((_resolve, reject) => { rejects.push(reject) }) })
-      const calls = [h.ports.search!.tail('a', {}), h.ports.search!.tail('b', {}), h.ports.search!.tail('c', {})]
+      const calls = [testPort(h).tail('a', {}), testPort(h).tail('b', {}), testPort(h).tail('c', {})]
       for (const reject of rejects) reject(new Error('timeout'))
       await Promise.allSettled(calls)
       expect(h.lines.filter((line) => line.includes('switched off'))).toHaveLength(1)
@@ -181,7 +185,7 @@ describe('hosting services so one that fails cannot take the core down', () => {
       startSearch(h, { ...new FakeSearch(), touch: () => { throw new Error('x') }, stop: () => { throw new Error('stop failed') } })
       h.services.onOff('search', () => { throw new Error('unbind failed') })
       h.services.onOff('search', late)
-      h.ports.search!.touch('s1')
+      testPort(h).touch('s1')
       expect(late).toHaveBeenCalled()
       expect(h.lines).toContain('[services] switching search off: stop failed')
       expect(h.lines).toContain('[services] switching search off: unbind failed')
@@ -213,6 +217,120 @@ describe('hosting services so one that fails cannot take the core down', () => {
     })
   })
 
+  describe('requests a service answers for the apps', () => {
+    const ASKER = { local: true, owner: true }
+    const collect = () => {
+      const got: Array<Record<string, unknown>> = []
+      return { got, reply: (result: Record<string, unknown>) => { got.push(result) } }
+    }
+
+    it('routes a declared request to its handler with who asked, and leaves the socket everything else', async () => {
+      const h = host()
+      const seen: unknown[] = []
+      h.services.start('search', (_core, ports) => {
+        ports.search = new FakeSearch() as unknown as SearchPort
+        return { session_search: (payload, asker) => { seen.push([payload, asker]); return { hits: [] } } }
+      }, fakeCore(), SEARCH, ['session_search'])
+      const { got, reply } = collect()
+      expect(h.services.route('session_search', { query: 'x' }, ASKER, reply)).toBe(true)
+      await vi.waitFor(() => expect(got).toEqual([{ hits: [] }]))
+      expect(seen).toEqual([[{ query: 'x' }, ASKER]])
+      expect(h.services.route('agents_list', {}, ASKER, reply)).toBe(false)
+    })
+
+    it('returns at once, and replies when a promised answer comes', async () => {
+      const h = host()
+      let answer!: (value: Record<string, unknown>) => void
+      h.services.serve('store', () => ({ dsh_list: () => new Promise((resolve) => { answer = resolve }) }), fakeCore(), ['dsh_list'])
+      const { got, reply } = collect()
+      expect(h.services.route('dsh_list', {}, ASKER, reply)).toBe(true)
+      expect(got).toEqual([])
+      answer({ dsh: [] })
+      await vi.waitFor(() => expect(got).toEqual([{ dsh: [] }]))
+    })
+
+    it('answers SERVICE_UNAVAILABLE, never UNSUPPORTED, for a service that did not start, left its port empty, or was switched off', async () => {
+      const h = host({ maxFailures: 1 })
+      h.services.start('search', () => { throw new Error('index locked') }, fakeCore(), SEARCH, ['session_search'])
+      h.services.start('viewers', () => {}, fakeCore(), VIEWERS, ['viewer_list'])
+      const switchedOff = vi.fn()
+      h.services.serve('store', () => ({ dsh_list: () => { throw new Error('catalog corrupt') } }), fakeCore(), ['dsh_list'])
+      h.services.onOff('store', switchedOff)
+      const { got, reply } = collect()
+      h.services.route('session_search', {}, ASKER, reply)
+      h.services.route('viewer_list', {}, ASKER, reply)
+      h.services.route('dsh_list', {}, ASKER, reply)
+      h.services.route('dsh_list', {}, ASKER, reply)
+      expect(got).toEqual([
+        { error: 'SERVICE_UNAVAILABLE', service: 'search', retryable: false },
+        { error: 'SERVICE_UNAVAILABLE', service: 'viewers', retryable: false },
+        { error: 'SERVICE_FAILED', service: 'store' },
+        { error: 'SERVICE_UNAVAILABLE', service: 'store', retryable: false },
+      ])
+      expect(h.services.isOff('store')).toBe(true)
+      expect(switchedOff).toHaveBeenCalledOnce()
+      expect(h.lines.at(-1)).toBe('[services] store switched off after 1 failures in 60s · it stays off until the daemon restarts')
+    })
+
+    it('answers a handler that throws, rejects or replies with nothing SERVICE_FAILED, and counts each against its service', async () => {
+      const h = host({ maxFailures: 3 })
+      h.services.serve('store', () => ({
+        a: () => { throw new Error('bad row') },
+        b: async () => { throw 'closed' },
+        c: () => undefined as unknown as Record<string, unknown>,
+      }), fakeCore(), ['a', 'b', 'c'])
+      const { got, reply } = collect()
+      for (const type of ['a', 'b', 'c']) h.services.route(type, {}, ASKER, reply)
+      await vi.waitFor(() => expect(got).toHaveLength(3))
+      expect(got).toEqual([{ error: 'SERVICE_FAILED', service: 'store' }, { error: 'SERVICE_FAILED', service: 'store' }, { error: 'SERVICE_FAILED', service: 'store' }])
+      expect(h.lines).toEqual([
+        '[services] store.a failed · bad row',
+        '[services] store.b failed · closed',
+        '[services] store.c failed · c was answered with no reply',
+        '[services] store switched off after 3 failures in 60s · it stays off until the daemon restarts',
+      ])
+    })
+
+    it('leaves off a service that claims a request another answers, or that answers other than it declared', () => {
+      const h = host()
+      h.services.serve('store', () => ({ dsh_list: () => ({ dsh: [] }) }), fakeCore(), ['dsh_list'])
+      h.services.serve('rival', () => ({ dsh_list: () => ({}) }), fakeCore(), ['dsh_list'])
+      h.services.serve('loose', () => ({ a: () => ({}), b: () => ({}), c: () => ({}) }), fakeCore(), ['a'])
+      h.services.serve('looser', () => ({ d: () => ({}), e: () => ({}) }), fakeCore(), ['d'])
+      h.services.serve('short', () => ({}), fakeCore(), ['x', 'y'])
+      h.services.serve('shorter', () => ({}), fakeCore(), ['z'])
+      expect(['rival', 'loose', 'looser', 'short', 'shorter'].every((name) => h.services.isOff(name))).toBe(true)
+      expect(h.services.isOff('store')).toBe(false)
+      expect(h.lines).toEqual([
+        '[services] rival did not start · dsh_list is answered by store · the core runs without it',
+        '[services] loose did not start · it answers b, c without declaring them · the core runs without it',
+        '[services] looser did not start · it answers e without declaring it · the core runs without it',
+        '[services] short did not start · it declares x, y without answering them · the core runs without it',
+        '[services] shorter did not start · it declares z without answering it · the core runs without it',
+      ])
+      // The store keeps its own requests.
+      const { got, reply } = collect()
+      h.services.route('dsh_list', {}, ASKER, reply)
+      return vi.waitFor(() => expect(got).toEqual([{ dsh: [] }]))
+    })
+
+    it('a service with a port that answers other than it declared is off, its port empty', () => {
+      const h = host()
+      h.services.start('search', (_core, ports) => { ports.search = new FakeSearch() as unknown as SearchPort; return {} }, fakeCore(), SEARCH, ['session_search'])
+      expect(h.ports.search).toBeNull()
+      expect(h.services.isOff('search')).toBe(true)
+      expect(h.lines).toEqual(['[services] search did not start · it declares session_search without answering it · the core runs without it'])
+    })
+
+    it('serves a service with no port, and will not serve one whose name is a port\'s', () => {
+      const h = host()
+      h.services.serve('search', () => ({}), fakeCore(), [])
+      expect(h.services.isOff('search')).toBe(true)
+      expect(h.ports.search).toBeNull()
+      expect(h.lines).toEqual(['[services] search did not start · it has a port: start it with start() · the core runs without it'])
+    })
+  })
+
   describe('faults injected for the end-to-end suite', () => {
     beforeEach(() => { vi.spyOn(console, 'warn').mockImplementation(() => {}) })
 
@@ -233,6 +351,17 @@ describe('hosting services so one that fails cannot take the core down', () => {
       member.ports.search!.deleteHistory('s1')
       expect(real.calls).toEqual(['delete s1'])
       expect(member.lines).toEqual(['[services] search.touch failed · injected fault: search.touch'])
+    })
+
+    it('fails one request on every ask, and leaves the service\'s others alone', async () => {
+      const h = host({ faults: testFaults('store.dsh_list') })
+      h.services.serve('store', () => ({ dsh_list: () => ({ dsh: [] }), dsh_remove: () => ({ ok: true }) }), fakeCore(), ['dsh_list', 'dsh_remove'])
+      const got: Array<Record<string, unknown>> = []
+      h.services.route('dsh_list', {}, { local: true, owner: true }, (result) => got.push(result))
+      h.services.route('dsh_remove', {}, { local: true, owner: true }, (result) => got.push(result))
+      await vi.waitFor(() => expect(got).toHaveLength(2))
+      expect(got).toEqual([{ error: 'SERVICE_FAILED', service: 'store' }, { ok: true }])
+      expect(h.lines).toEqual(['[services] store.dsh_list failed · injected fault: store.dsh_list'])
     })
   })
 })

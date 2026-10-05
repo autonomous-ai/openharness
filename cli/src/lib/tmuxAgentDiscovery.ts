@@ -27,6 +27,7 @@ import {
   liveProcessRows,
   parseProcessRow,
   processTreePids,
+  isNoTmuxServerError,
   resumeSessionId,
   setPaneMouseOn,
   type ProcessRow,
@@ -77,16 +78,8 @@ export interface TmuxAgentDiscoveryDeps {
 
 const MISS_LIMIT = 2
 
-/**
- * `tmux list-panes` exits non-zero before the first server exists. That is an
- * empty inventory, not a missing tmux binary or an unusable backend: the
- * first `tmux new-session` starts the server itself. Keeping the distinction
- * here prevents daemon startup from publishing a scary, and inaccurate,
- * "tmux unavailable" state on a fresh machine.
- */
-export function isNoTmuxServerError(error: string): boolean {
-  return /no server running on\s+\S+/i.test(error)
-}
+// The rule for "no server is running", shared with every other tmux read (lib/tmux.ts).
+export { isNoTmuxServerError } from './tmux.js'
 
 function execText(
   command: string,

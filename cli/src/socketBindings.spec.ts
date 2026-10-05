@@ -57,7 +57,8 @@ describe('the socket\'s slots into the core', () => {
     // Both kinds: one that starts null, and an optional callback with no initializer.
     expect(slots).toContain('onCreateAgent')
     expect(slots).toContain('onOutboundCommander')
-    expect(slots.length).toBeGreaterThan(50)
+    // Dozens, and fewer as requests move into the services that answer them (core/serviceHost.ts).
+    expect(slots.length).toBeGreaterThan(30)
     for (const name of Object.keys(NOT_BOUND_ON_PURPOSE)) expect(slots, name).toContain(name)
   })
 })

@@ -262,6 +262,41 @@ describe('runMaster', () => {
     expect(readStatusFile(statusFile, process.pid)).toMatchObject({ state: 'stopped', lastExitReason: 'stopped' })
   })
 
+  it('runs the services it is told to beside the core, with one token for both, restarts them, and stops them with it', async () => {
+    const pidFile = join(dir, 'adapter.pid')
+    const seen = join(dir, 'seen')
+    const script = join(dir, 'daemon.cjs')
+    writeFileSync(script, `
+      const { appendFileSync } = require('node:fs')
+      const role = process.argv[2] === '__service' ? 'service:' + process.argv[3] : process.argv[2]
+      appendFileSync(${JSON.stringify(seen)}, JSON.stringify({ role, token: process.env.HARNESSD_SERVICE_TOKEN, name: process.env.HARNESSD_SERVICE, restarts: process.env.HARNESSD_RESTARTS, flags: process.execArgv }) + '\\n')
+      if (role === '__run') { process.send({ type: 'harnessd:bound', protocol: 2, port: 1 }); process.send({ type: 'harnessd:ready' }) }
+      setInterval(() => process.send({ type: 'harnessd:heartbeat', rssBytes: 1, heapUsedBytes: 1, loopDelayMs: 0 }), 50)
+      process.on('SIGTERM', () => process.exit(0))
+      if (role === 'service:search' && process.env.HARNESSD_RESTARTS === '0') setTimeout(() => process.exit(1), 100)
+    `)
+    const exits: number[] = []
+    const signals = new Map<string, () => void>()
+    runMaster({
+      nodePath: process.execPath, execArgv: [], scriptPath: script, pidFile,
+      restoreUpdate: () => {}, confirmUpdate: () => {},
+      env: { ...process.env, HARNESSD_SERVICES: 'search,unknown', HARNESSD_SERVICE_INITIAL_BACKOFF_MS: '10' },
+      exit: (code) => exits.push(code), onSignal: (signal, listener) => signals.set(signal, listener),
+    })
+    const lines = (): Array<Record<string, any>> => existsSync(seen) ? readFileSync(seen, 'utf8').trim().split('\n').map((line) => JSON.parse(line)) : []
+    await until('the crashed service to be restarted', () => lines().filter((line) => line.role === 'service:search').length === 2)
+    const core = lines().find((line) => line.role === '__run')!
+    const services = lines().filter((line) => line.role === 'service:search')
+    expect(services.map((service) => service.restarts)).toEqual(['0', '1'])
+    expect(services[0]).toMatchObject({ name: 'search', flags: ['--max-old-space-size=1024'] })
+    expect(services[0].token).toMatch(/^[0-9a-f]{48}$/)
+    expect(core.token).toBe(services[0].token)
+    expect(lines().some((line) => line.role === 'service:unknown')).toBe(false)
+    signals.get('SIGTERM')!()
+    await until('the master to finish', () => exits.length > 0)
+    expect(exits).toEqual([0])
+  })
+
   it.each([
     ['is gone', (pidFile: string) => rmSync(pidFile, { force: true })],
     ['holds no number', (pidFile: string) => writeFileSync(pidFile, 'garbage\n')],

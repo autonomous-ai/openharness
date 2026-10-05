@@ -169,9 +169,14 @@ assert (root/'heartbeat').stat().st_mtime_ns != before
     vm.command('test "$(systemctl --user show harness-daemon -p MainPID --value)" != "$(cat /tmp/fast-original-daemon)"')
     alive('cli-update')
     checks.append('Super+u alone activates a separate CLI release while the same OpenCode and terminal processes remain alive')
-    vm.command('systemd-run --user --collect --unit=harness-test-rollback /usr/bin/python3 /usr/lib/harness-os/live_update.py rollback')
-    vm.command('for n in $(seq 1 120); do test "$(harness version)" != 999.0.1 && '
-               'systemctl --user is-active --quiet hn-screen && exit 0; sleep .5; done; exit 1', timeout=90)
+    # The version pointer changes before the services restart. Waiting only for
+    # that version plus is-active can observe the old screen during teardown.
+    # Wait for rollback itself (including screen readiness and view restoration)
+    # and propagate its actual result before checking the surviving workspace.
+    vm.command('systemd-run --user --wait --collect --unit=harness-test-rollback '
+               '/usr/bin/python3 /usr/lib/harness-os/live_update.py rollback', timeout=180)
+    vm.command('test "$(harness version)" != 999.0.1 && '
+               'systemctl --user is-active --quiet hn-screen')
     alive('after-rollback')
     checks.append('Rollback restores the prior CLI while retaining the fast hn release, live agent and terminal input')
     output, _ = vm.command('harness updates status; systemctl --user status harness-update.timer --no-pager; '

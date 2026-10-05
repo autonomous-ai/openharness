@@ -2,6 +2,7 @@
 #include "pets.h"
 #include "focus_faces.h"
 #include "theme.h"
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -210,6 +211,49 @@ static void scene_overlay(ht_scene_t *s, const ht_pet_scene_t *sc, int bias, uns
     ht_cell_sprite(s, x + sc->overlay->at[i][0], y + sc->overlay->at[i][1], &sc->overlay->frames[sc->overlay->loop[i]]);
 }
 /*
+ * A scene's bars (pets.h ht_pet_bars_t): bar j's height at this clock and level, h = round(min + swing * a *
+ * level / 4) with a = (sin(2 pi t / period + j * phase) + 1) / 2; the box is h + 1 px tall, top at cy - h / 2.
+ */
+enum { BARS_TICK_MS = 50 };    // redraw cadence while the bars move
+static int bar_height(const ht_pet_bars_t *b, int j, unsigned level, uint32_t clock_ms)
+{
+    if (level >= HT_PET_SCENE_LEVELS) level = HT_PET_SCENE_LEVELS - 1;
+    float t = (float)(clock_ms % b->period_ms);
+    float a = (sinf(6.2831853f * t / (float)b->period_ms + (float)j * b->phase) + 1.0f) * 0.5f;
+    return (int)floorf((float)b->min_h + (float)b->swing * a * (float)level / (float)(HT_PET_SCENE_LEVELS - 1) + 0.5f);
+}
+static void scene_bar(ht_scene_t *s, const ht_pet_scene_t *sc, int bias, int j, unsigned level, uint32_t clock_ms)
+{
+    const ht_pet_bars_t *b = sc->bars;
+    int x, y, h = bar_height(b, j, level, clock_ms);
+    scene_origin(sc, bias, &x, &y);
+    ht_box(s, x + b->x[j], y + b->cy - h / 2, b->w, h + 1, b->radius, b->fill[j], b->fill[j]);
+}
+/*
+ * A scene's waves (pets.h ht_pet_waves_t): arc k of side `side` (0 = right, 1 = left) at this clock and level, as a
+ * ring arc over the scene's origin. u = (t / period + k / count) mod 1 carries it from r_far in to r_near; its
+ * brightness a = sin(pi u) * (0.4 + 0.6 * level / 4) scales the colour over the black ground (opaque, no blend of
+ * the colour with the ground), and below WAVE_HIDDEN it is not drawn: an empty ring in the same slot.
+ */
+enum { WAVES_TICK_MS = 50 };     // redraw cadence while the waves glide
+static const float WAVE_HIDDEN = 0.12f;
+static void scene_wave(ht_scene_t *s, const ht_pet_scene_t *sc, int bias, int side, int k, unsigned level, uint32_t clock_ms)
+{
+    const ht_pet_waves_t *w = sc->waves;
+    if (level >= HT_PET_SCENE_LEVELS) level = HT_PET_SCENE_LEVELS - 1;
+    float u = (float)(clock_ms % w->period_ms) / (float)w->period_ms + (float)k / (float)w->count;
+    if (u >= 1.0f) u -= 1.0f;
+    float a = sinf(3.14159265f * u) * (0.4f + 0.6f * (float)level / (float)(HT_PET_SCENE_LEVELS - 1));
+    int x, y;
+    scene_origin(sc, bias, &x, &y);
+    int cx16 = x * 16 + w->cx16, cy16 = y * 16 + w->cy16;
+    if (a < WAVE_HIDDEN) { ht_ring_arc(s, cx16, cy16, 0, 0, 0, 0, 0); return; }
+    int r16 = (int)floorf((float)w->r_far16 - (float)(w->r_far16 - w->r_near16) * u + 0.5f);
+    unsigned c[3];
+    for (int i = 0; i < 3; i++) c[i] = (unsigned)floorf((float)w->rgb[i] * a + 0.5f);
+    ht_ring_arc(s, cx16, cy16, r16, w->w16, side ? 180 : 0, w->half_deg, ht_rgb(c[0] << 16 | c[1] << 8 | c[2]));
+}
+/*
  * THE LISTENING WORD on the lower arc of the voice face (owner, 2026-10-02: rhythm B, mockup/listening_arc.py):
  * the word at 30 % brightness, a band two letters wide sweeping left to right in 900 ms, then 400 ms at rest —
  * 1300 ms, drawn in 20 steps of 65 ms. Letter i is 0.3 + 0.7 * max(0, 1 - |i - head| / 2) bright, the head
@@ -281,6 +325,14 @@ uint32_t ht_focus_pet_next_ms(const ht_character_face_t *f, const char *recap)
         unsigned level = f->pose.level >= HT_PET_SCENE_LEVELS ? HT_PET_SCENE_LEVELS - 1 : f->pose.level;
         if (ls) {   // the scene's next frame or the word's next sweep step, whichever comes first
             uint32_t frame = scene_next_ms(ls, level, f->clock_ms), sweep = sweep_next_ms(f->clock_ms);
+            if (ls->waves) {   // the arcs glide with the clock at every level (0.4 of the brightness at level 0)
+                uint32_t tick = (f->clock_ms / WAVES_TICK_MS + 1) * WAVES_TICK_MS;
+                if (!frame || tick < frame) frame = tick;
+            }
+            if (ls->bars && level) {   // the bars move with the clock: wake every tick (flat at level 0, no wake)
+                uint32_t tick = (f->clock_ms / BARS_TICK_MS + 1) * BARS_TICK_MS;
+                if (!frame || tick < frame) frame = tick;
+            }
             return frame && frame < sweep ? frame : sweep;
         }
         const ht_pet_scene_t *ss = sending_scene(f);
@@ -385,7 +437,13 @@ static void voice_face(ht_scene_t *s, const ht_character_face_t *f, uint8_t fram
      * ELEVEN RUNS, ALWAYS, IN THIS ORDER — seven bars, the scene's slot, three sparkles — whichever
      * half is showing; the bars are empty under a scene and the slot is empty without one. A scene's
      * extras sit in slots it leaves empty: the first bar's is the "Listening" arc (a listening scene), the
-     * first sparkle's the scene's overlay (Codex's bubble or plane), after the scene's own run.
+     * first sparkle's the scene's overlay (Codex's plane), after the scene's own run. A scene with BARS
+     * (Codex's listening bubble) uses runs 0 (the arc), 1 (the bubble, before the scene: the robot's ink
+     * never reaches the bubble's box, so the order does not show) and 8, 9, 10 (the three bar boxes, over
+     * the bubble); the rest stay empty. A scene with WAVES (Muse's listening scene) uses run 0 (the arc),
+     * runs 1-6 (its six ring arcs, three on the right then three on the left, before the scene: the body
+     * never reaches the band, so the order does not show; an arc that is dim enough to be hidden is an
+     * empty ring in its slot) and the scene's run 7; sparkles 8-10 stay empty.
      *
      * ht_damage() diffs run index against run index and repaints all 466x466 the moment the count or
      * the order moves, so the half that is idle is emitted empty rather than skipped. Recording and
@@ -399,6 +457,14 @@ static void voice_face(ht_scene_t *s, const ht_character_face_t *f, uint8_t fram
             uint8_t gain[HT_ARC_GAINS];
             sweep_gains(f->clock_ms, gain);
             ht_arc_status_sweep(s, ht_rgb(FOCUS_VOICE), LISTENING_WORD, &ht_arc_inter_lower, gain);
+            continue;
+        }
+        if (k == 1 && scene && scene->bars) {
+            scene_overlay(s, scene, -6, f->pose.level, f->clock_ms, &ht_wave);
+            continue;
+        }
+        if (scene && scene->waves && k >= 1 && k <= 2 * (int)scene->waves->count) {
+            scene_wave(s, scene, -6, (k - 1) / scene->waves->count, (k - 1) % scene->waves->count, f->pose.level, f->clock_ms);
             continue;
         }
         char bar[4] = {0};
@@ -425,6 +491,10 @@ static void voice_face(ht_scene_t *s, const ht_character_face_t *f, uint8_t fram
     int spark_y = (HT_HEIGHT - ht_spark.height) / 2;
     int lit = (frame % WAVE_FRAMES) / 5;      // three steps, 200 ms each, per the old busy sweep
     for (int i = 0; i < 3; i++) {
+        if (scene && scene->bars) {
+            scene_bar(s, scene, -6, i, f->pose.level, f->clock_ms);
+            continue;
+        }
         if (i == 0 && (scene ? scene : launch) && (scene ? scene : launch)->overlay) {
             scene_overlay(s, scene ? scene : launch, scene ? -6 : 0, scene ? f->pose.level : 0, f->clock_ms, &ht_spark);
             continue;

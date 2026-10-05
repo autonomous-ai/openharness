@@ -431,6 +431,9 @@ opens the existing full-page Wi-Fi form when disconnected. Working Ethernet or a
 saved connection skips that form; connection success advances automatically to
 OpenCode on the left and two terminal panes on the right. Later launches restore
 work. The standard hn footer and shared Ctrl+b shortcuts remain intact.
+First use and Super+w share the same Wi-Fi page, without a separate welcome
+tagline or skip button. Super+t opens a terminal during setup; it does not mark
+network setup complete or require starting a cloud agent while disconnected.
 
 OpenCode reads the packaged guide through its global
 `~/.config/opencode/AGENTS.md`, linked to `/usr/share/harness-os/guide.md`.

@@ -11,7 +11,10 @@ stored as palette-indexed cell grids: 12 steps of 110 ms, 8 steps of 140 ms for 
 steps of 120 ms. Codex's three come from the owner's robot pack (assets/pets/codex; mockup/codex_options.py W2 / L1 / S2):
 the pack's 192 x 208 robot frames at one byte per pixel (cell 1) and an overlay sprite (the sandbox bubble, the
 equalizer bubble, the paper plane) drawn after them: 28 steps of 120 ms, 15 steps of 80 ms for each mic level
-0..4, and 15 steps of 140 ms.
+0..4, and 15 steps of 140 ms. The listening bubble is stored once, empty; its three bars are not stored at all:
+the scene's ht_pet_bars_t (x, centre y, size, fills, 1200 ms sine and phase step from the BAR_* constants) lets
+focus.c draw them as rounded boxes at the scene clock, so they move continuously (the old 61 overlay images,
+one per level and 80 ms step, cost 197 KB).
 Muse Code: Jolly, Meta Muse's mascot, cut from Meta's own render and from Meta's waving clip
 (assets/pets/muse, exported by mockup/muse_jolly.py; the look is mockup/muse-jolly.html). The small pet is
 the waving clip, 24 frames cropped to their ink box, one loop for all four states, stored like the scenes
@@ -20,6 +23,10 @@ bytes) and drawn with ht_cell_sprite. Its three scenes are
 pack scenes like Codex's, from straight-alpha PNG frames at device scale (cell 1): working (headphones, typing
 at the laptop) 8 steps of 140 ms, listening 12 steps of 140 ms for every mic level 0..4, and sending (the clip's
 throw of a paper plane, the plane and its swoosh an overlay sprite) 13 steps of 166 ms with the last one held.
+The listening frames (L2) carry no sound waves: assets/pets/muse/listen.json describes three arcs on each side of
+the head (centre, radii, width, span, colour, period) and the scene's ht_pet_waves_t lets focus.c draw them as ring
+arcs at the face clock, so they glide and follow the mic level. Poses that mirror each other (step t and 6 - t) are
+pixel-identical PNGs and are stored once; the loop indexes them (12 stored frames, 249 KB, before; 8 now).
 Each state (idle, working, done, asking) is a loop of 24 steps, each a frame and a vertical offset in
 px, on the Pro daemons' clock. Frames are de-duplicated per pet, so the file holds each pose once and
 the loops index it. Writes main/ui/habitat/pets.c: each pet's frames, loops and step_ms, and the
@@ -27,11 +34,10 @@ registry ht_pets[] / ht_pet_count (declared in pets.h). Frames use the same enco
 gen_focus_marks.py: RGB565 in panel order plus alpha8 (0 or 255 only).
 """
 import json
-import math
 import sys
 from pathlib import Path
 
-from PIL import Image, ImageDraw
+from PIL import Image, ImageColor, ImageDraw
 
 root = Path(__file__).resolve().parents[1]
 STEPS = 24
@@ -439,19 +445,23 @@ def work_overlay(step):
     return im
 
 
-def listen_overlay(level, step):
-    """The bubble with three bars: 9 px flat at level 0, the pack's full 9 + 19 * a swing at level 4."""
+# The listening bubble's three bars are NOT stored: focus.c draws them as rounded boxes (ht_pet_bars_t), from
+# these constants (x from the robot canvas's RX, centre y from RY; PIL's rounded_rectangle x0..x0 + 7 is 8 px of ink).
+BAR_X = (184, 195, 206)
+BAR_W = 7
+BAR_CY = 61
+BAR_RADIUS = 3
+BAR_MIN, BAR_SWING = 9, 19
+BAR_PERIOD_MS, BAR_PHASE = 1200, 1.2
+
+
+def listen_bubble():
+    """The listening bubble without its bars (they are drawn in code, see BAR_*)."""
     im = canvas()
     d = ImageDraw.Draw(im)
     d.rounded_rectangle((RX + 171, RY + 37, RX + 226, RY + 85), radius=9, fill=CX_FILL, outline=CX_LINE, width=2)
     d.polygon([(RX + 177, RY + 83), (RX + 168, RY + 91), (RX + 184, RY + 85)], fill=CX_FILL)
     d.line([(RX + 177, RY + 85), (RX + 168, RY + 91), (RX + 180, RY + 86)], fill=CX_LINE, width=2)
-    for j, x in enumerate((184, 195, 206)):
-        a = (math.sin(2 * math.pi * step * XLISTEN_MS / 1200 + j * 1.2) + 1) / 2
-        h = round(9 + 19 * a * level / (LEVELS - 1))
-        y = 61 - h // 2
-        d.rounded_rectangle((RX + x, RY + y, RX + x + 7, RY + y + h), radius=3,
-                            fill=(CX_BAR, CX_BAR_HI, CX_BAR)[j])
     return im
 
 
@@ -562,7 +572,7 @@ def generate_pack_scene(prefix, kind):
     if kind == 'work':
         images = [work_overlay(s) for s in range(steps)]
     elif kind == 'listen':
-        images = [listen_overlay(lv, s) for lv in range(levels) for s in range(steps)]
+        images = [listen_bubble()]               # one frame: the bars are drawn in code, the loop is all zeros
     else:
         images = [send_overlay(s, steps) for s in range(steps)]
     shapes, opal = exact_overlay(images)
@@ -570,6 +580,9 @@ def generate_pack_scene(prefix, kind):
     out.append(f'static const uint16_t {ov}_pal[{len(opal)}] = {{' + ','.join(str(0 if k == 0 else rgb565_panel(c)) for k, c in enumerate(opal)) + '};\n')
     code, oorder, on, obytes = cell_frames(ov, [(c, r, g) for c, r, g, _ in shapes], f'{ov}_pal')
     out += code
+    if kind == 'listen':                             # one bubble for every (level, step)
+        oorder = oorder * (levels * steps)
+        shapes = shapes * (levels * steps)
     out.append(f'static const uint8_t {ov}_loop[{len(oorder)}] = {{' + ','.join(map(str, oorder)) + '};\n')
     # at: where each step's frame sits from the scene's origin (the robot's ink box), in px.
     at = [(x - RX - box[0], y - RY - box[1]) if (x or y) else (0, 0) for *_, (x, y) in shapes]
@@ -578,7 +591,14 @@ def generate_pack_scene(prefix, kind):
     # The sprite's home-face place is the mockup's: the robot at (RX, RY) in the canvas centred on the glass.
     x0, y0 = (466 - CW) // 2 + RX + box[0], (466 - CH) // 2 + RY + box[1]
     dx, dy = x0 - (466 - w) // 2, y0 - (233 - h // 2 + bias)
-    out.append(f'static const ht_pet_scene_t {prefix} = {{{w},{h},{prefix}_frames,{prefix}_loop,{steps},{step_ms},&{ov},{dx},{dy}}};\n')
+    bars = ',NULL'
+    if kind == 'listen':
+        # The bars, from the scene's origin (the robot's ink box): x, centre y, 8 px of ink, radius, the swing, fills.
+        fills = ','.join(str(rgb565(ImageColor.getrgb(c))) for c in (CX_BAR, CX_BAR_HI, CX_BAR))
+        out.append(f'static const ht_pet_bars_t {prefix}_bars = {{{{{",".join(str(x - box[0]) for x in BAR_X)}}},{BAR_CY - box[1]},'
+                   f'{BAR_W + 1},{BAR_RADIUS},{BAR_MIN},{BAR_SWING},{{{fills}}},{BAR_PERIOD_MS},{BAR_PHASE}f}};\n')
+        bars = f',&{prefix}_bars'
+    out.append(f'static const ht_pet_scene_t {prefix} = {{{w},{h},{prefix}_frames,{prefix}_loop,{steps},{step_ms},&{ov},{dx},{dy}{bars},NULL}};\n')
     return out, n + on, nbytes + obytes + (len(palette) + len(opal)) * 2
 
 
@@ -586,6 +606,7 @@ def generate_pack_scene(prefix, kind):
 MUSE = root / 'assets/pets/muse'
 MUSE_SCENES = json.loads((MUSE / 'scenes.json').read_text())
 MUSE_FLY = json.loads((MUSE / 'send.json').read_text())
+MUSE_WAVES = json.loads((MUSE / 'listen.json').read_text())['waves']
 MUSE_REST_MS = MUSE_SCENES['rest']['step_ms']
 MUSE_SEND_HOLD = 5        # the sending scene's last step shows this many steps (900 ms asked, 5 x 166 = 830)
 
@@ -735,8 +756,25 @@ def generate_muse_scene(prefix, kind):
     x0 = meta['centre'][0] - cw // 2 + box[0]
     y0 = meta['centre'][1] - ch // 2 + box[1]
     dx, dy = x0 - (466 - w) // 2, y0 - (233 - h // 2 + bias)
-    out.append(f'static const ht_pet_scene_t {prefix} = {{{w},{h},{prefix}_frames,{prefix}_loop,{steps},{meta["step_ms"]},{ov_ref},{dx},{dy}}};\n')
+    waves = 'NULL'
+    if kind == 'listen':
+        # L2: the sound waves are drawn by the dial (ht_pet_waves_t), from assets/pets/muse/listen.json; the body
+        # frames carry none, so poses that mirror each other (step t and 6 - t) are one stored picture.
+        wv = MUSE_WAVES
+        assert 1 <= wv['count'] <= 3        # focus.c: runs 1..6 are the arcs
+        out.append(f'static const ht_pet_waves_t {prefix}_waves = {{{round((wv["centre"][0] - box[0]) * 16)},'
+                   f'{round((wv["centre"][1] - box[1]) * 16)},{round(wv["r_far"] * 16)},{round(wv["r_near"] * 16)},'
+                   f'{round(wv["width"] * 16)},{wv["half_angle_deg"]},{wv["count"]},{{{",".join(map(str, wv["colour"]))}}},'
+                   f'{wv["period_ms"]}}};\n')
+        waves = f'&{prefix}_waves'
+    out.append(f'static const ht_pet_scene_t {prefix} = {{{w},{h},{prefix}_frames,{prefix}_loop,{steps},{meta["step_ms"]},{ov_ref},{dx},{dy},NULL,{waves}}};\n')
     return out, n + extra, nbytes + obytes + len(palette) * 2
+
+
+def rgb565(rgb):
+    """Native RGB565, what ht_rgb() returns and ht_box() takes (the sprites' palettes are panel order)."""
+    r, g, b = rgb
+    return ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3)
 
 
 def rgb565_panel(rgb):
@@ -825,7 +863,7 @@ def generate_scene(prefix, loop, size, step_ms, steps, levels):
     out.append(f'_Static_assert(sizeof {prefix}_loop == {steps} * {"HT_PET_SCENE_LEVELS" if levels > 1 else 1}, "{prefix}: steps x levels");\n')
     assert len(steps_out) == steps * levels
     out.append(f'static const ht_pet_scene_t {prefix} = {{{cols * SCELL},{rows * SCELL},{prefix}_frames,'
-               f'{prefix}_loop,{steps},{step_ms},NULL,0,0}};\n')
+               f'{prefix}_loop,{steps},{step_ms},NULL,0,0,NULL,NULL}};\n')
     return out, len(refs), len(refs) * cols * rows + len(pal) * 2
 
 

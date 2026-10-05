@@ -1,7 +1,7 @@
 /** tmux process matching, runtime validation, pane capture, and input injection. */
 
 import { execFile, spawn } from 'child_process'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { readlink } from 'node:fs/promises'
 import { platform } from 'node:os'
 import { basename } from 'path'
@@ -454,10 +454,31 @@ export function processTreePids(rows: readonly ProcessRow[], rootPids: readonly 
 
 
 /**
- * The pane's root pid; `'missing'` when tmux answered that it has no such pane; null when tmux could
- * not be asked (a timeout, no server, a socket it cannot reach) — which says nothing about the pane.
- * tmux 3.7 answers `display-message -t` for an unknown pane with an empty line and exit 0; older
- * versions say "can't find pane".
+ * Whether tmux failed because no server is running on its socket: then it has no panes at all, which
+ * is an answer, not a tmux that cannot be asked. tmux says it two ways (measured on 3.7c):
+ *
+ * - "no server running on <socket>": the socket file is there, with nothing listening on it.
+ * - "error connecting to <socket> (No such file or directory)": the file is gone. This is what
+ *   `kill-server`, a tmux crash and a reboot all leave.
+ *
+ * Only the first was recognised. After the server died, every pane read as "tmux unavailable", so no
+ * agent was ever taken off and the apps showed dead agents as active until a new server happened to
+ * start. A fresh machine also published a scary "tmux unavailable" before its first agent
+ * (e2e/machine.e2e.ts). The socket file is checked too, so a translated message still counts. Any
+ * other failure (a timeout, "Permission denied") still says nothing either way.
+ */
+export function isNoTmuxServerError(error: string): boolean {
+  if (/no server running on\s+\S+/i.test(error)) return true
+  const connecting = /error connecting to (.+) \(([^)]*)\)\s*$/im.exec(error)
+  if (!connecting) return false
+  return /no such file or directory/i.test(connecting[2]) || !existsSync(connecting[1])
+}
+
+/**
+ * The pane's root pid; `'missing'` when tmux answered that it has no such pane, or that no server is
+ * running (then no pane is); null when tmux could not be asked (a timeout, a socket it cannot reach),
+ * which says nothing about the pane. tmux 3.7 answers `display-message -t` for an unknown pane with an
+ * empty line and exit 0; older versions say "can't find pane".
  */
 function panePidLookup(pane: string): Promise<number | 'missing' | null> {
   return new Promise((resolve) => {
@@ -467,6 +488,7 @@ function panePidLookup(pane: string): Promise<number | 'missing' | null> {
       if (!err && Number.isSafeInteger(pid) && pid > 0) resolve(pid)
       else if (!err && text === '') resolve('missing')
       else if (err && /can't find pane/.test(String(stderr ?? ''))) resolve('missing')
+      else if (err && isNoTmuxServerError(String(stderr ?? ''))) resolve('missing')
       else resolve(null)
     })
   })

@@ -1,6 +1,6 @@
 # Install Harness on a ThinkPad
 
-These instructions are for **0.1.0-preview.13**, using a Mac to prepare the USB.
+These instructions are for **0.1.0-preview.14**, using a Mac to prepare the USB.
 The USB opens the installer directly. Installation begins only when you choose **Install Harness**
 in the installer; it erases the entire selected disk.
 
@@ -21,20 +21,20 @@ compute still need testing on the actual hardware.
 
 ## 2. Download and verify on the Mac
 
-From the [preview 13 release](https://github.com/autonomous-ai/openharness/releases/tag/os-v0.1.0-preview.13),
+From the [preview 14 release](https://github.com/autonomous-ai/openharness/releases/tag/os-v0.1.0-preview.14),
 download both files into the same folder:
 
-- `harness-0.1.0-preview.13-x86_64.iso`
-- `harness-0.1.0-preview.13-x86_64.iso.sha256`
+- `harness-0.1.0-preview.14-x86_64.iso`
+- `harness-0.1.0-preview.14-x86_64.iso.sha256`
 
 If they are in Downloads, open Terminal and run:
 
 ```sh
 cd ~/Downloads
-shasum -a 256 -c harness-0.1.0-preview.13-x86_64.iso.sha256
+shasum -a 256 -c harness-0.1.0-preview.14-x86_64.iso.sha256
 ```
 
-The result must say `harness-0.1.0-preview.13-x86_64.iso: OK`.
+The result must say `harness-0.1.0-preview.14-x86_64.iso: OK`.
 If it does not, download the files again before flashing.
 
 ## 3. Flash the USB
@@ -119,7 +119,8 @@ disk. Changing the account password later does not change the disk password.
 There is no cloud account that resets the disk password.
 
 First boot opens OpenCode on the left and two terminal panes on the right.
-If disconnected, Wi-Fi opens first; you can connect or choose **Set up later**.
+If disconnected, Wi-Fi opens first. **Super+t** opens a terminal if you need to
+work offline or fix networking.
 Subsequent launches restore your existing work. **Super+w** opens network setup from any
 pane. Ethernet connects automatically when available.
 

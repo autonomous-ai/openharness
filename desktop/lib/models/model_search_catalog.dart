@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 
@@ -18,7 +19,11 @@ enum ModelSearchSection {
   /// Models a machine of yours can download: the grid catalog's picks for it. Its heading names the
   /// machine and its memory ([ModelSearchCatalog.catalogHeading]); this label is its search word.
   catalog('Get models'),
-  shared('Shared with you');
+  shared('Shared with you'),
+
+  /// Jev (System One) decision models, from any grid: they answer typed questions and cannot run
+  /// a harness, so they are listed last, apart from every model a harness can use.
+  jev('Jev models');
 
   const ModelSearchSection(this.label);
   final String label;
@@ -58,10 +63,15 @@ class ModelSearchEntry {
   final GridModel? gridModel;
   final String? sharedBy;
 
+  /// A Jev (System One) decision model: called at `/v1/systemone`, never run as a harness.
+  bool get isJev => gridModel?.decision == true || local?.decision == true;
+
   ModelSearchSection get section => subscription != null
       ? ModelSearchSection.subscriptions
       : api != null
       ? ModelSearchSection.apis
+      : isJev
+      ? ModelSearchSection.jev
       : isDownload
       ? ModelSearchSection.catalog
       : own
@@ -266,10 +276,13 @@ class ModelSearchCatalog extends ChangeNotifier {
     for (final section in manager.sections) {
       for (final model in section.models) {
         final owner = section.own ? _hostFor(model.node) : null;
+        // A Jev model folds only into a Jev model of yours, a chat model only into a chat one: a chat
+        // row would offer a Jev model to a harness.
         final matches =
             owner?.localModels
                 .where(
                   (local) =>
+                      local.decision == model.decision &&
                       (local.downloaded || local.canStop) &&
                       (local.name.toLowerCase() == model.id.toLowerCase() ||
                           local.id.toLowerCase() == model.id.toLowerCase()),
@@ -283,6 +296,7 @@ class ModelSearchCatalog extends ChangeNotifier {
           node: model.node,
           grid: model.grid ?? section.name,
           unavailable: model.unavailable,
+          decision: model.decision,
         );
         if (owner != null && matches.length == 1) {
           served[_managedKey(owner, matches.single)] = gridModel;
@@ -301,7 +315,11 @@ class ModelSearchCatalog extends ChangeNotifier {
                 ? 'On your machines'
                 : 'Shared · ${section.name}',
             node: owner?.machine?.machine.displayName ?? model.node,
-            searchAliases: [model.node, if (section.own) 'local'],
+            searchAliases: [
+              model.node,
+              if (section.own) 'local',
+              if (model.decision) ...['jev', 'decision'],
+            ],
             own: section.own,
             controller: owner,
             gridModel: gridModel,
@@ -317,9 +335,21 @@ class ModelSearchCatalog extends ChangeNotifier {
         );
       }
     }
+    // A Jev model a machine of yours serves (`grid join --serve` of a decision GGUF) is listed once,
+    // under Jev models: its local row would offer it to a harness, which cannot run on it.
+    final deciders = {
+      for (final section in manager.sections)
+        if (section.own)
+          for (final model in section.models)
+            if (model.decision) model.id.toLowerCase(),
+    };
     final local = [
       for (final owner in [manager, ..._hosts.values])
-        for (final model in owner.localModels) (owner: owner, model: model),
+        for (final model in owner.localModels)
+          if (model.decision ||
+              (!deciders.contains(model.name.toLowerCase()) &&
+                  !deciders.contains(model.id.toLowerCase())))
+            (owner: owner, model: model),
     ];
     int rank(ModelManagerController owner, LocalModel model) =>
         owner.operationFor(model)?.active == true
@@ -517,3 +547,28 @@ String gigabytesLabel(double bytes) {
 String thisComputerName() => defaultTargetPlatform == TargetPlatform.macOS
     ? 'this Mac'
     : 'this computer';
+
+/// How to call the Jev model [model] served on [grid], as a person pastes it into a terminal: load
+/// the grid's address and key with `harness grid env` (the harness's own `grid`, so no `grid` of
+/// one's own is needed, nor one new enough to call a resting grid), then ask it one decision. The
+/// key never appears here; the shell reads it from the variable that sets.
+String jevRequest(String grid, String model) {
+  final body = jsonEncode({
+    'model': model,
+    'state': 'I was charged twice. Please refund the duplicate.',
+    'questions': {
+      'refund': {'type': 'noul', 'instructions': 'Is a refund requested?'},
+    },
+  });
+  return 'eval "\$(harness grid env ${_shellWord(grid)})"\n'
+      'curl "\$OPENAI_BASE_URL/systemone" \\\n'
+      '  -H "Authorization: Bearer \$OPENAI_API_KEY" \\\n'
+      '  -H "Content-Type: application/json" \\\n'
+      "  -d ${_shellWord(body)}";
+}
+
+/// [value] as one shell word: bare when it is plainly safe, single-quoted otherwise.
+String _shellWord(String value) =>
+    RegExp(r'^[A-Za-z0-9._:@/+-]+$').hasMatch(value)
+    ? value
+    : "'${value.replaceAll("'", r"'\''")}'";

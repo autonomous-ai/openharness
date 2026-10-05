@@ -112,6 +112,11 @@ export interface LocalWsServerOptions {
   /** Questions still waiting on the user, as the `commander_question` frames that announced them. A window
    *  that connects after one was asked is handed them, so a terminal opened late still sees who is blocked. */
   openQuestions?: () => Frame[]
+  /** The core's end of its out-of-process services (core/serviceLinks.ts): a `machine_select` with
+   *  `role: "service"` is handed here, and the connection is the service's from then on. */
+  services?: {
+    accept(service: string, token: string, sink: LocalClientSink, close: (code: number, reason: string) => void): { receive(frame: Frame): void; closed(): void } | null
+  }
   /**
    * The window answering a `voice_route_request` — words spoken into the dial that IT was asked to route.
    *
@@ -327,6 +332,8 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
     let sentPanes = false
     let sentSwarms = false
     let chain = Promise.resolve()
+    /** Set when this connection is one of the core's services, not a window. */
+    let serviceLink: { receive(frame: Frame): void; closed(): void } | null = null
 
     const sink: LocalClientSink = {
       sendFrame: (frame) => {
@@ -373,6 +380,16 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
           close(error instanceof SharingEndedError ? 4403 : 1013,
             error instanceof Error ? error.message.slice(0, 120) : 'Sharing unavailable')
         }
+        return
+      }
+      // One of the core's own services, started by harnessd's master: its frames go to its link, and it
+      // never joins the windows' event stream.
+      if (requestedMachineId === options.machineId && payload.role === 'service') {
+        const link = options.services?.accept(String(payload.service ?? ''), String(payload.token ?? ''), sink, close) ?? null
+        if (!link) { close(4401, 'service refused'); return }
+        serviceLink = link
+        selected = true
+        sink.sendFrame({ type: 'connected', payload: { machineId: options.machineId, transport: 'local', localProtocolVersion: LOCAL_WS_PROTOCOL_VERSION, service: payload.service } })
         return
       }
       if (requestedMachineId === options.machineId) {
@@ -438,6 +455,12 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
     ws.on('message', (raw, isBinary) => {
       chain = chain.then(() => {
         if (!selected) return selectMachine(raw, isBinary)
+        if (serviceLink) {
+          const frame = isBinary ? null : jsonFrame(raw)
+          if (!frame) { close(4400, 'invalid json frame'); return }
+          serviceLink.receive(frame)
+          return
+        }
 
         // Parsed ONCE. Every sniff below used to re-run JSON.parse on the same bytes — up to seven
         // times for a frame that matched none of them, which is what a terminal_ack (every 16ms of
@@ -737,7 +760,8 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
       if (sentPanes) options.onAppPanes?.([], false)
       if (sentSwarms) options.onAppSwarms?.(null)
       if (sentSwarms) options.onAppTabAgents?.(connId, null)
-      if (relay) { relay.detach(); relay = null }
+      if (serviceLink) { serviceLink.closed(); serviceLink = null }
+      else if (relay) { relay.detach(); relay = null }
       else if (selected) void options.backend.unregisterLocalClient(connId)
       selected = false
     }

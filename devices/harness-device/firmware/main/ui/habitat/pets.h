@@ -27,6 +27,33 @@ typedef struct {
     const uint8_t *loop;
     const int16_t (*at)[2];
 } ht_pet_overlay_t;
+/*
+ * Bars drawn in code over a scene, instead of stored frames (Codex's listening bubble: three bars that follow the
+ * mic level). Bar j is a rounded box `w` px wide, x[j] px from the scene's top-left, centred on `cy`, height
+ * h + 1 with h = round(min_h + swing * a * level / (HT_PET_SCENE_LEVELS - 1)), a = (sin(2 pi t / period_ms +
+ * j * phase) + 1) / 2, t the scene clock; flat at min_h on level 0. Fills are native RGB565 (as ht_rgb() returns, for ht_box), not the palettes' panel order.
+ */
+typedef struct {
+    int16_t x[3], cy;
+    uint8_t w, radius, min_h, swing;
+    uint16_t fill[3];
+    uint16_t period_ms;
+    float phase;
+} ht_pet_bars_t;
+/*
+ * Sound waves drawn in code beside a scene (Muse's listening scene): `count` arcs on each side of a centre, `half_deg`
+ * either side of 0 and 180 degrees (3 and 9 o'clock), `width` px thick, in `rgb`. Positions are sixteenths of a px
+ * from the scene's top-left, like the overlay's `at`. Arc k travels from r_far to r_near and back in `period_ms`:
+ * with u = (t / period + k / count) mod 1 its radius is r_far - (r_far - r_near) u and its brightness
+ * sin(pi u) * (0.4 + 0.6 * level / (HT_PET_SCENE_LEVELS - 1)); below 0.12 it is not drawn (focus.c).
+ */
+typedef struct {
+    int16_t cx16, cy16;
+    uint16_t r_far16, r_near16, w16;
+    uint8_t half_deg, count;
+    uint8_t rgb[3];
+    uint16_t period_ms;
+} ht_pet_waves_t;
 typedef struct {
     uint16_t w, h;
     const ht_cell_frame_t *frames;
@@ -35,6 +62,8 @@ typedef struct {
     uint16_t step_ms;
     const ht_pet_overlay_t *overlay;             // NULL: none (zero when left out of the initializer)
     int16_t dx, dy;
+    const ht_pet_bars_t *bars;                   // NULL: none (only Codex's listening scene)
+    const ht_pet_waves_t *waves;                 // NULL: none (only Muse's listening scene)
 } ht_pet_scene_t;
 
 typedef struct {

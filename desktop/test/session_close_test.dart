@@ -68,11 +68,11 @@ class _CloseConnection extends WsConn {
 void main() {
   late AppNotifier app;
   late _CloseConnection connection;
-  Agent agent(String id, {bool started = true}) => Agent(
+  Agent agent(String id, {bool started = true, String? sessionId}) => Agent(
     id: id,
     name: 'Work $id',
     engine: 'codex',
-    sessionId: started ? 'conversation-$id' : null,
+    sessionId: started ? sessionId ?? 'conversation-$id' : null,
     createdAt: DateTime.utc(2026, 9, 30, 12),
     closeSupported: true,
     terminalAvailable: true,
@@ -241,12 +241,123 @@ void main() {
     unawaited(app.requestClosePane(pane.id));
     await tester.pumpAndSettle();
     expect(find.text('Not enough free disk space.'), findsOneWidget);
-    await tester.tap(find.text('OK'));
+    await tester.tap(find.text('Keep open'));
     await tester.pumpAndSettle();
     expect(app.panes, [pane]);
     expect(app.closedHistory, isEmpty);
     expect(modes(), ['inspect', 'idle']);
     expect(connection.requests, isNot(contains('agents_list')));
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  for (final closeTab in [false, true]) {
+    for (final failedMode in ['inspect', 'idle', 'now']) {
+      testWidgets(
+        '$failedMode failure can dismiss the ${closeTab ? 'tab' : 'pane'} without stopping again',
+        (tester) async {
+          const error =
+              'WebSocket was closed before the connection was established';
+          connection.failures[failedMode] = {
+            'error': 'BACKEND_DOWN',
+            'detail': error,
+          };
+          if (failedMode == 'now') connection.activities['a0'] = 'working';
+          final pane = app.adoptSessionForTest(terminal('a0', []));
+          final sibling = app.adoptSessionForTest(terminal('a1', []));
+          final original = app.activeSwarm;
+          app.newSwarm();
+          final other = app.activeSwarm;
+          other.panes.add(pane);
+          other.focusedPaneId = pane.id;
+          app.selectSwarm(original.id);
+          await mount(tester, app);
+          unawaited(
+            closeTab
+                ? app.requestCloseSwarm(original.id)
+                : app.requestClosePane(pane.id),
+          );
+          await tester.pumpAndSettle();
+          if (failedMode == 'now') {
+            await tester.tap(find.text('Stop'));
+            await tester.pumpAndSettle();
+          }
+          expect(find.text(error), findsOneWidget);
+          expect(
+            tester
+                .widget<TextButton>(
+                  find.widgetWithText(TextButton, 'Keep open'),
+                )
+                .focusNode!
+                .hasFocus,
+            isTrue,
+          );
+          final sent = List.of(connection.closes);
+          await tester.tap(find.byKey(const Key('session-close-view')));
+          await tester.pumpAndSettle();
+          expect(find.byType(Dialog), findsNothing);
+          expect(connection.closes, sent);
+          expect(
+            app.stateOf('m')!.agents.every((agent) => !agent.isStopped),
+            isTrue,
+          );
+          expect(other.panes, [pane]);
+          expect(pane.session, isNotNull);
+          if (closeTab) {
+            expect(app.swarms, isNot(contains(original)));
+          } else {
+            expect(original.panes, [sibling]);
+          }
+          expect(app.closedHistory, hasLength(1));
+          expect(app.canReopenLastClosed, isTrue);
+          expect(tester.takeException(), isNull);
+          await tester.pumpWidget(const SizedBox());
+        },
+      );
+    }
+  }
+
+  testWidgets('a stale pane closes and can reopen from History while offline', (
+    tester,
+  ) async {
+    connection.failures['idle'] = {'error': 'CLOSE_UNCONFIRMED'};
+    final pane = app.adoptSessionForTest(terminal('a0', []));
+    final original = app.activeSwarm;
+    await mount(tester, app);
+    unawaited(app.requestClosePane(pane.id));
+    await tester.pumpAndSettle();
+    app.stateOf('m')!
+      ..connectionStatus = ConnectionStatus.disconnected
+      ..nodeOnline = false;
+    await tester.tap(find.text('Close pane'));
+    await tester.pumpAndSettle();
+    expect(modes(), ['inspect', 'idle']);
+    expect(app.allPanes, isEmpty);
+    expect(pane.session, isNull);
+    expect(app.canReopenLastClosed, isTrue);
+    app.reopenClosedSwarm();
+    // An offline terminal keeps its loading indicator animated.
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(app.activeSwarm.id, original.id);
+    expect(app.panes.single.agentId, 'a0');
+    expect(app.stateOf('m')!.agents.first.isStopped, isFalse);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('a replaced session cannot inherit the failure dialog close', (
+    tester,
+  ) async {
+    connection.failures['idle'] = {'error': 'CLOSE_UNCONFIRMED'};
+    final pane = app.adoptSessionForTest(terminal('a0', []));
+    await mount(tester, app);
+    unawaited(app.requestClosePane(pane.id));
+    await tester.pumpAndSettle();
+    app.stateOf('m')!.agents[0] = agent('a0', sessionId: 'replacement');
+    await tester.tap(find.text('Close pane'));
+    await tester.pumpAndSettle();
+    expect(app.panes, [pane]);
+    expect(app.closedHistory, isEmpty);
+    expect(modes(), ['inspect', 'idle']);
     await tester.pumpWidget(const SizedBox());
   });
 
@@ -446,7 +557,7 @@ void main() {
     expect(find.text('Could not reach the machine.'), findsOneWidget);
     expect(find.widgetWithText(FilledButton, 'Stop'), findsNothing);
     expect(modes(), ['inspect', 'inspect']);
-    await tester.tap(find.text('OK'));
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
     await tester.pumpAndSettle();
     expect(app.panes, hasLength(2));
     expect(app.stateOf('m')!.agents.any((agent) => agent.isStopped), isFalse);
@@ -472,9 +583,12 @@ void main() {
     expect(find.text('Not enough free disk space.'), findsOneWidget);
     expect(find.text('Stopped'), findsOneWidget);
     expect(find.text('Stop not confirmed'), findsOneWidget);
-    expect(find.text('The tab stays open.'), findsOneWidget);
+    expect(
+      find.text('You can close this tab. Some sessions may still be running.'),
+      findsOneWidget,
+    );
     expect(find.widgetWithText(FilledButton, 'Stop'), findsNothing);
-    await tester.tap(find.text('OK'));
+    await tester.tap(find.text('Keep open'));
     await tester.pumpAndSettle();
     expect(app.swarms, contains(tab));
     expect(tab.panes, hasLength(2));
@@ -489,6 +603,45 @@ void main() {
     expect(app.closedHistory, isEmpty);
     await tester.pumpWidget(const SizedBox());
   });
+
+  testWidgets(
+    'a partially stopped tab can close without stopping later sessions',
+    (tester) async {
+      app.stateOf('m')!.agents.add(agent('a2'));
+      connection.activities['a0'] = 'working';
+      connection.targetedFailures[('a1', 'now')] = {
+        'error': 'CLOSE_UNCONFIRMED',
+      };
+      for (final id in ['a0', 'a1', 'a2']) {
+        app.adoptSessionForTest(terminal(id, []));
+      }
+      final tab = app.activeSwarm;
+      await mount(tester, app);
+      unawaited(app.requestCloseSwarm(tab.id));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Stop'));
+      await tester.pumpAndSettle();
+      expect(find.text('Stopped'), findsOneWidget);
+      expect(find.text('Stop not confirmed'), findsOneWidget);
+      final sent = List.of(connection.closes);
+      await tester.tap(find.text('Close Tab'));
+      await tester.pumpAndSettle();
+      expect(connection.closes, sent);
+      expect(app.swarms, isNot(contains(tab)));
+      expect(app.allPanes, isEmpty);
+      expect(
+        app
+            .stateOf('m')!
+            .agents
+            .where((agent) => agent.isStopped)
+            .map((agent) => agent.id),
+        ['a0'],
+      );
+      expect(app.closedHistory, hasLength(1));
+      expect(app.canReopenLastClosed, isTrue);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
 
   testWidgets(
     'new work during an idle close reviews all remaining sessions once',

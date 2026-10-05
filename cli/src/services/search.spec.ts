@@ -6,7 +6,7 @@ import type { SessionSearchIndexOptions } from '../lib/sessionSearch/indexer.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { SESSION_SEARCH_FILE } from '../lib/sessionSearch/command.js'
 import { SessionSearchStore } from '../lib/sessionSearch/store.js'
-import { startSearch } from './search.js'
+import { SEARCH_REQUESTS, searchRequests, startSearch } from './search.js'
 
 vi.mock('../lib/sessionSearch/store.js', () => ({ SessionSearchStore: { open: vi.fn() } }))
 // The index, recording what it was built with so its callbacks can be driven directly.
@@ -27,6 +27,8 @@ const row = (over: Partial<RegisteredSession>) =>
   ({ agentId: 'a1', sessionId: 's1', engine: 'claude', registeredAt: 1, ...over }) as RegisteredSession
 const reader = async () => []
 
+const ASKER = { local: false, owner: true }
+
 function setup(agents: RegisteredSession[] = [], external: unknown[] = [], owned: string[] = []) {
   const store = { ownedSessionIds: vi.fn(() => new Set(owned)) }
   vi.mocked(SessionSearchStore.open).mockReturnValue(store as never)
@@ -39,8 +41,8 @@ function setup(agents: RegisteredSession[] = [], external: unknown[] = [], owned
     },
   })
   const ports = emptyPorts()
-  startSearch(core, ports)
-  return { core, ports, store, index: ports.search as unknown as Recorded }
+  const requests = startSearch(core, ports)
+  return { core, ports, store, requests, index: ports.search as unknown as Recorded }
 }
 
 describe('the session search service', () => {
@@ -52,18 +54,19 @@ describe('the session search service', () => {
   afterEach(() => { vi.restoreAllMocks(); vi.clearAllMocks() })
 
   describe('starting', () => {
-    it('opens the index in the core\'s data folder, starts it, and answers the core through its port', () => {
-      const { core, index } = setup()
+    it('opens the index in the core\'s data folder, starts it, and answers the core through its port and the apps through its requests', () => {
+      const { core, index, requests } = setup()
       expect(SessionSearchStore.open).toHaveBeenCalledWith(join('/data', SESSION_SEARCH_FILE))
       expect(index.started).toBe(true)
       expect(index.opts.openSessions).toBe(core.external.open)
+      expect(Object.keys(requests ?? {})).toEqual([...SEARCH_REQUESTS])
     })
 
     it('leaves the port empty, and says so, on a Node without node:sqlite', () => {
       const { core } = setup()
       vi.mocked(SessionSearchStore.open).mockReturnValueOnce(null)
       const ports = emptyPorts()
-      startSearch(core, ports)
+      expect(startSearch(core, ports)).toBeUndefined()
       expect(ports.search).toBeNull()
       expect(console.warn).toHaveBeenCalledWith('[search] node:sqlite is not available on this Node — session search is off')
     })
@@ -78,6 +81,48 @@ describe('the session search service', () => {
       vi.mocked(SessionSearchStore.open).mockImplementationOnce(() => { throw 'locked' })
       startSearch(core, ports)
       expect(console.error).toHaveBeenLastCalledWith('[search] could not open the session index:', 'locked')
+    })
+  })
+
+  describe('the requests it answers', () => {
+    const index = () => {
+      const searched: Array<[string, unknown]> = []
+      const tailed: Array<[string, unknown]> = []
+      const tail = { sessionId: 'sess-1', rows: [{ turn: 4, at: 1, ask: 'fix the dial', answer: 'Done.', tools: '' }], hasMore: true, total: 5, lastAt: 1 }
+      return {
+        searched,
+        tailed,
+        tail,
+        index: {
+          search: (query: string, options: unknown) => { searched.push([query, options]); return { hits: [], indexed: 3, pending: 0, ready: true, tookMs: 1 } },
+          tail: async (sessionId: string, options: unknown) => { tailed.push([sessionId, options]); return sessionId === 'sess-1' ? tail : null },
+        },
+      }
+    }
+
+    it('session_search: the words cut to 500 characters, and only finite numbers for the limit and the window', () => {
+      const { index: idx, searched } = index()
+      const requests = searchRequests(idx as never)
+      expect(requests.session_search({ query: 'dial scroll', limit: 12, from: 5, to: 9 }, ASKER)).toEqual({ hits: [], indexed: 3, pending: 0, ready: true, tookMs: 1 })
+      requests.session_search({ query: 'x'.repeat(600), limit: Number.NaN, from: '5', to: Infinity }, ASKER)
+      requests.session_search({ query: 7 }, ASKER)
+      expect(searched).toEqual([
+        ['dial scroll', { limit: 12, from: 5, to: 9 }],
+        ['x'.repeat(500), { limit: undefined, from: undefined, to: undefined }],
+        ['', { limit: undefined, from: undefined, to: undefined }],
+      ])
+    })
+
+    it('session_tail: a session\'s rows, paged by whole numbers only, and says what it cannot', async () => {
+      const { index: idx, tailed, tail } = index()
+      const requests = searchRequests(idx as never)
+      expect(await requests.session_tail({ sessionId: 'sess-1', beforeTurn: 9, maxChars: 8000 }, ASKER)).toEqual(tail)
+      await requests.session_tail({ sessionId: 'sess-1', beforeTurn: '9', maxChars: 1.5 }, ASKER)
+      expect(tailed).toEqual([['sess-1', { beforeTurn: 9, maxChars: 8000 }], ['sess-1', { beforeTurn: undefined, maxChars: undefined }]])
+      expect(await requests.session_tail({ sessionId: 'nope' }, ASKER)).toEqual({ error: 'NOT_INDEXED', sessionId: 'nope' })
+      expect(await requests.session_tail({}, ASKER)).toEqual({ error: 'BAD_SESSION' })
+      await requests.session_tail({ sessionId: 's'.repeat(300) }, ASKER)
+      expect(tailed.at(-1)?.[0]).toBe('s'.repeat(200))
     })
   })
 

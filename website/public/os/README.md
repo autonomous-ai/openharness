@@ -1,9 +1,13 @@
-# Harness landing page
+# Harness OS landing page
 
-A standalone page: HTML, CSS, local fonts, and four real screenshots. No JavaScript,
-framework, package installation, analytics, or page build step. It is served at
-<https://harness.autonomous.ai/os> by the existing website host, separately from
-the OS image. `os/site` is a compatibility symlink to this directory.
+A single-screen hero: Harness, the headline, Install, Open Source, and one
+animated OS illustration, followed by two short sections about the agent interface
+and measured performance. Plain HTML/CSS and a small vanilla JavaScript timeline;
+no framework, analytics, remote fonts, backend, or build step. An actual OS
+screenshot remains the fallback when JavaScript is unavailable.
+
+Production deployment was explicitly authorized after local review. Use the
+website-only release path to retain the currently deployed app bundle.
 
 From the repository root:
 
@@ -11,96 +15,87 @@ From the repository root:
 python3 -m http.server 18092 --bind 127.0.0.1 --directory website/public
 ```
 
-Open `http://127.0.0.1:18092/os/`. The HTML base is `/os/`, so assets and in-page
-links resolve under the same path with or without a trailing slash. The website's
-`/os` rewrite serves this file directly without adding JavaScript. Release through
-the [website pipeline](../../README.md#releasing).
+Open `http://127.0.0.1:18092/os/`. The existing website host serves the same static
+page at `/os`; `os/site` is a compatibility symlink. The `<base href="/os/">`
+keeps assets correct with either entry URL. Hosting and cache-header verification
+belong to the [website release process](../../README.md#releasing).
 
-The HTML responses include `Cache-Control: no-store, no-transform`. The latter
-keeps Cloudflare's automatic Web Analytics injection out of this standalone page;
-see its [setup documentation](https://developers.cloudflare.com/web-analytics/get-started/).
-Verify the public HTML bytes after rollout as well as the origin's local routes.
+## Content
 
-## Content and assets
+Use the user-approved headline: **The operating system built by agents, for agents**.
+The title, metadata and demonstration describe the operating system, not the terminal
+application. Follow the [Naming System](../../../docs/naming-system.md).
 
-- The central narrative is **“Agents are the new apps.”** Conversation directs the
-  work; terminal output, diffs, tests, and an optional browser make it inspectable.
-  Follow the [Naming System](../../../docs/naming-system.md): Harness is the product,
-  programmers are the first audience, and owning Autonomous hardware is optional.
-- The page walks through installation, encrypted boot, and working with agents.
-  Keep shipped behavior and future hardware support distinct. Ordinary Harness
-  on macOS or another Linux distribution does not show the OS installation UI.
-- Download links target `os-v0.1.0-preview.6`. Update the
-  version, measurements, evidence links, and screenshots together for a release.
-- `assets/hn.png` is the actual installed hn home (`04-installed-hn.png`) from
-  the encrypted UEFI journey in final image validation run
-  [37149350400](https://github.com/autonomous-ai/openharness/actions/runs/37149350400),
-  source `3c15fe540de02db8a3b37d565ce8b4001b872779`.
-- `assets/install.png` and `assets/unlock.png` are unmodified screenshots from the
-  encrypted UEFI journey in that run: `01b-direct-install-offline.png` and
-  `disk-unlock-2-masked.png`. Passwords are masked. Images link to their full size.
-- `assets/signal-run.png` is actual project output from the preview 6 workload
-  [layout repair and acceptance run](https://github.com/autonomous-ai/openharness/actions/runs/37156180888).
-  It loads lazily inside the existing native HTML disclosure.
-- Footprint, installation and boot measurements cover the exact preview 6 ISO
-  (`efa4e740989770ef7fa40e259f4055d670c5531fcecdf4fcf23f1ae31bb8d380`)
-  in 2-vCPU, 1-GiB VMs booted from virtual USB. BIOS/plain installation took
-  36.290 seconds; UEFI/encrypted took 69.347 seconds. The displayed range rounds
-  those up. Six settled samples with agents/browser closed measured
-  367.90–395.57 MiB, using total memory minus available memory. BIOS readiness
-  was 16.228 seconds including test login. The UEFI password prompt appeared at
-  6.046 seconds; readiness followed the correct password submission by 8.436
-  seconds. The deliberate 100-second wait and wrong-password retry are excluded
-  from that post-password interval. These are CI VM observations.
-- Preview 6's four projects came from fresh OpenCode turns in
-  [37154010202](https://github.com/autonomous-ai/openharness/actions/runs/37154010202).
-  All 33 unit tests passed, but its game checker incorrectly required the controls
-  to be HTML text. That failed run is retained. Corrected checks in
-  [37155632007](https://github.com/autonomous-ai/openharness/actions/runs/37155632007)
-  passed without another model turn. Visual review then caught a clipped help
-  sentence; the linked repair run asks the agent to fix it and reruns acceptance.
-  Its first BIOS job failed downloading a GitHub artifact before boot; only that
-  job was retried. No uninterrupted passing suite is implied.
-  [Three fresh harness/viewer exercises](https://github.com/autonomous-ai/openharness/actions/runs/37154011980)
-  cover the same image. `harness-examples-preview6.zip` retains project source,
-  screenshots and provenance separately from the immutable ISO and its original
-  `validation.json`. Check its accompanying SHA-256 before linking a new bundle.
-- The preview 4 ThinkPad install/boot/use success is a user report from October 3,
-  2026, not a measured hardware benchmark. Wi-Fi, suspend, Mac, and NVIDIA claims
-  require their own hardware evidence.
-- Preview 5 introduced separate hn/CLI and system update channels. The preview 6
-  package passed native upgrade, runtime/channel and encrypted reboot acceptance
-  from both [preview 4](https://github.com/autonomous-ai/openharness/actions/runs/37149349981)
-  and [preview 5](https://github.com/autonomous-ai/openharness/actions/runs/37149350324).
-  The latter supplies the canonical 7.1 MB bootstrap download. The uncompressed
-  package archives match exactly; only gzip timestamps differ between runs.
-  Publish the ISO and update feed before deploying links to them.
-- Selected BCM4331/BCM4360 Wi-Fi preparation passed an actual encrypted offline
-  installation, signed package installation, module load, and offline rebuild in
-  the final image's hardware job. Only PCI selection was substituted; no physical
-  radio association or Mac suspend is inferred. Other machines retain neither
-  the optional packages nor the USB cache.
-- Older Intel Macs without T2 and with 64-bit EFI remain experimental. Actual
-  Core 2 TCG instruction emulation boots hn; OpenCode exits with SIGILL. The
-  candidate Try action's CPU explanation, return, and terminal input passed
-  with only the OS command overlaid on a checksum-verified preview 4 image.
-- [4 GiB USB journeys](https://github.com/autonomous-ai/openharness/actions/runs/37150118908)
-  passed automatic RAM copying, protected USB selection, installation, recovery,
-  and agent use on this same final ISO.
-- Geist and Geist Mono are the repository's existing fonts, converted to WOFF.
-  Their SIL Open Font License is included in `assets/OFL.txt`.
-- The prompt mark is a small local SVG. There are no remote asset requests.
+Install opens `https://harness.autonomous.ai/os/latest`, a small redirect in the
+existing website host. It reads public GitHub releases, filters complete OS
+releases, and compares version numbers. Stable is preferred once available;
+until then it selects the highest numbered preview. Drafts and desktop/CLI
+releases are excluded. The lookup is cached server-side for five minutes; the
+browser redirect is never cached. Future OS publications need no page deploy
+and this website deployment publishes no OS or runtime.
+
+Open Source opens `openharness/tree/main/os`. Neither action implies native
+Apple Silicon or T2 support.
+
+The design uses the local Geist Mono font with one font size and line height per
+breakpoint. Spacing uses character widths and text rows. The OS screen fits the
+remaining viewport without cropping; the column narrows on shorter screens so
+its left and right edges stay aligned with the content. There are two text rows
+between the brand and headline, one before the actions, and two before the image.
+The additional sections retain the same typography and column edges. The stylesheet URL carries its content
+hash so a refresh cannot reuse styling from the previous long page.
+Tiny viewports at extreme text zoom may scroll so content is never inaccessible.
+
+The performance section contains only four labeled numbers: installation time,
+boot time, idle RAM, and footprint. No footnote, update instructions, or expanded disclosure.
+The accessible group label identifies the VM measurement and terminal-only idle
+state; full methodology stays here.
+
+[Run 37258641766](https://github.com/autonomous-ai/openharness/actions/runs/37258641766)
+measured preview 14 in an encrypted UEFI, 1 GiB Nehalem VM: 57.133 seconds for the
+installation command, 17.683 seconds from boot to Harness readiness including
+automated unlock/login, and 402.30 MiB median terminal-only idle RAM with OpenCode
+and the browser closed (26.53 MiB swap). Installed root usage including home and
+snapshots is 2,203,791,360 bytes. The page rounds these to 57 s, 18 s, 402 MiB, and
+2.05 GiB. Installation timing excludes entering the form. Ten idle samples follow
+a settling period; the diagnostic login and observer are included. These are VM
+measurements, not physical hardware timings or active-agent memory consumption.
+Image SHA-256:
+`fa4f282644ac81e9e3b7de55276edd7dc08405e50875da544dc7f9fd6d50ba12`.
+Refresh all figures and their evidence links together when the measured image changes.
+
+## Animation
+
+`demo.js` runs a scripted illustration: startup, three agents working, Super+b to
+a local project preview, then back to Harness. It does not run agents, launch a
+browser, execute code or make network requests. The example output is illustrative,
+not recorded test evidence or a boot-speed measurement. The illustrated agents
+do not imply that every engine is bundled with the image.
+
+The control in the screen corner pauses or plays the sequence. Reduced-motion
+preferences start with a static completed workspace; hidden tabs stop the timer.
+The HTML remains usable if the script does not load. Both CSS and JavaScript URLs
+carry content hashes; update them when those files change.
+
+## Screenshot provenance
+
+`assets/workspace.png` is an unmodified 1280 × 800 QEMU capture from the actual
+installed OS: `01d-bundled-opencode.png` in the encrypted UEFI final-image evidence
+under `os/work/install-cleanup/first-use/install-first/nvidia-install/final-image/`.
+It shows the agent and two terminals. It is not an illustration or a hardware
+compatibility claim. The source receipt is retained beside the original capture.
+
+The bundled font's SIL Open Font License remains in `assets/OFL.txt`. The older
+screenshots remain available for historical references but are not loaded by
+this page.
 
 ## Validation
 
-Check local asset paths, image dimensions, heading/fragment targets, font loading,
-and the release's download names. Visually inspect desktop and narrow screens;
-use the keyboard to reach every link and toggle the disclosures. Confirm that
-no content overflows at 320 px, 390 px, 768 px, and desktop widths.
-
-The user reviewed and approved the prior page design on October 3. This revision
-updates copy, measurements and unmodified VM screenshots without changing CSS.
-The final OS screenshots were visually inspected. Browser Use still rejects the
-local page because of the saved permission for `127.0.0.1:18092`; responsive
-widths and keyboard interaction remain unverified for this revision. Record
-static asset checks and the website CI build/route results in the PR.
+Check desktop, laptop and mobile viewports, the complete OS screen, keyboard
+focus, the pause control, reduced motion, local assets, and destination URLs. There should be no
+horizontal overflow at normal browser zoom; the hero fits one fold and the two
+sections below it scroll normally. Record local results in
+the ignored `.harness/validation/os-one-screen/` folder. Before an authorized
+production rollout, use `website/scripts/check-os-site.mjs` against the actual
+website host to verify routes, bytes and cache headers; the simple Python preview
+does not emulate production headers.

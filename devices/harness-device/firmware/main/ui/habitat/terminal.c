@@ -555,6 +555,71 @@ bool ht_box(ht_scene_t *s, int x, int y, int w, int h, int radius, uint16_t fill
 }
 
 /*
+ * A RING ARC (the listening scene's sound waves). sin() of whole degrees 0..90 in Q14, the rest by symmetry;
+ * no floating point, no heap. The bounds are the annulus slice's, one pixel wider all round (anti-aliasing),
+ * computed once at creation from the slice's two straight edges and the axis points it spans.
+ */
+static const int16_t ring_sin[91] = {
+    0,286,572,857,1143,1428,1713,1997,2280,2563,2845,3126,3406,
+    3686,3964,4240,4516,4790,5063,5334,5604,5872,6138,6402,6664,6924,
+    7182,7438,7692,7943,8192,8438,8682,8923,9162,9397,9630,9860,10087,
+    10311,10531,10749,10963,11174,11381,11585,11786,11982,12176,12365,12551,12733,
+    12911,13085,13255,13421,13583,13741,13894,14044,14189,14330,14466,14598,14726,
+    14849,14968,15082,15191,15296,15396,15491,15582,15668,15749,15826,15897,15964,
+    16026,16083,16135,16182,16225,16262,16294,16322,16344,16362,16374,16382,16384,
+};
+static void ring_trig(int deg, int *cs, int *sn)
+{
+    deg %= 360;
+    if (deg < 0) deg += 360;
+    int q = deg / 90, a = deg % 90;
+    int s = ring_sin[a], c = ring_sin[90 - a];
+    switch (q) {
+    case 0: *cs = c; *sn = s; break;
+    case 1: *cs = -s; *sn = c; break;
+    case 2: *cs = -c; *sn = -s; break;
+    default: *cs = s; *sn = -c; break;
+    }
+}
+bool ht_ring_arc(ht_scene_t *s, int cx16, int cy16, int radius16, int width16, int mid_deg, int half_deg,
+                 uint16_t colour)
+{
+    if (s->count >= HT_RUNS || radius16 < 0 || width16 < 0 || width16 > 0xFFFF || radius16 > 0x7FFF ||
+        half_deg < 0 || cx16 < -0x7FFF || cx16 > 0x7FFF || cy16 < -0x7FFF || cy16 > 0x7FFF) return false;
+    if (half_deg > 180) half_deg = 180;
+    ht_run_t *r = &s->runs[s->count++];
+    memset(r, 0, sizeof *r);
+    // Not text, but the rest of the compositor reads every run's font; it is never drawn. The place is the
+    // centre's pixel, so equal slots stay equal as the radius moves (ht_damage's reshape test reads x, y, w).
+    r->x = (int16_t)(cx16 >> 4); r->y = (int16_t)(cy16 >> 4); r->font = &ht_mono_16;
+    r->ring.set = 1; r->ring.cx16 = (int16_t)cx16; r->ring.cy16 = (int16_t)cy16;
+    if (width16 == 0) return true;
+    int ux, uy, cs, sn;
+    ring_trig(mid_deg, &ux, &uy);
+    ring_trig(half_deg, &cs, &sn);
+    r->ring.colour = colour; r->ring.r16 = (uint16_t)radius16; r->ring.w16 = (uint16_t)width16;
+    r->ring.ux = (int16_t)ux; r->ring.uy = (int16_t)uy; r->ring.cosh = (int16_t)cs;
+    int rin = imax(0, radius16 - width16 / 2 - 16), rout = radius16 + (width16 + 1) / 2 + 16;
+    // The slice's extremes: its two edges at both radii, and every axis it spans at the outer radius.
+    int x0 = cx16, x1 = cx16, y0 = cy16, y1 = cy16;
+#define RING_PT(R, ANG) do { int pc, ps; ring_trig(ANG, &pc, &ps); \
+        int px = cx16 + ((R) * pc >> 14), py = cy16 - ((R) * ps >> 14); \
+        x0 = imin(x0, px); x1 = imax(x1, px); y0 = imin(y0, py); y1 = imax(y1, py); } while (0)
+    for (int e = -1; e <= 1; e += 2) { RING_PT(rin, mid_deg + e * half_deg); RING_PT(rout, mid_deg + e * half_deg); }
+    for (int axis = 0; axis < 360; axis += 90) {
+        int d = ((axis - mid_deg) % 360 + 540) % 360 - 180;   // the axis from mid, -180..179
+        if (d >= -half_deg && d <= half_deg) RING_PT(rout, axis);
+    }
+    if (rin > 0) RING_PT(rin, mid_deg);
+#undef RING_PT
+    // Whole pixels, a pixel of margin for the ramp and the integer rounding above.
+    int bx0 = (x0 >> 4) - 1, by0 = (y0 >> 4) - 1, bx1 = ((x1 + 15) >> 4) + 1, by1 = ((y1 + 15) >> 4) + 1;
+    r->ink = 1;
+    r->ink_box = (ht_rect_t){(int16_t)bx0, (int16_t)by0, (int16_t)(bx1 - bx0), (int16_t)(by1 - by0)};
+    return true;
+}
+
+/*
  * A PROPORTIONAL ARC LABEL (Focus: Inter Medium 26 for the name and the lower status). Each glyph keeps its own advance and kerning, in
  * 1/16 px like the straight text, and stands upright at its own place on the 205 px curve: the arc
  * length from the label's centre to the glyph's advance centre, divided by 205, is its angle (the Q14
@@ -870,6 +935,7 @@ int ht_wrap(ht_scene_t *s, int x, int y, int w, int lines, int skip, const ht_fo
 }
 ht_rect_t ht_run_bounds(const ht_run_t *r)
 {
+    if (r->ring.set) return r->ink ? r->ink_box : (ht_rect_t){0, 0, 0, 0};
     if (r->sprite.width) return (ht_rect_t){r->x,r->y,r->sprite.width,r->sprite.height};
     if (r->box.h) return (ht_rect_t){r->x, r->y, r->w, (int16_t)r->box.h};
     if (r->arc && ht_pfont(r->font)) {
@@ -1045,7 +1111,7 @@ void ht_damage(const ht_scene_t *a, const ht_scene_t *b, ht_damage_t *d)
                 // Fixed-cell text only: a proportional run's glyphs move when one before them
                 // changes width, and a box has no cells. Both repaint their whole bounds instead.
                 if (!old->sprite.width && !next->sprite.width && !old->arc && !next->arc &&
-                    !old->box.h && !next->box.h && !ht_pfont(old->font) && !ht_pfont(next->font) &&
+                    !old->ring.set && !next->ring.set && !old->box.h && !next->box.h && !ht_pfont(old->font) && !ht_pfont(next->font) &&
                     old->x == next->x && old->y == next->y && old->w == next->w &&
                     old->font == next->font && old->fg == next->fg && old->bg == next->bg) {
                     const char *p = old->text, *q = next->text;
@@ -1632,6 +1698,37 @@ static void box_raster(const ht_run_t *r, ht_rect_t clip, uint16_t *out)
         }
     }
 }
+/*
+ * A RING ARC, analytically: each pixel's centre against the band (its distance from the circle's centre within
+ * half the width of the radius; a one-pixel linear ramp is the coverage, in sixteenths) and against the slice
+ * (the squared dot product with the middle direction against |d|^2 cos^2(half), so no angle is ever computed). Blended
+ * onto what is there; one isqrt per pixel of the bounds, a few thousand at most, nothing on the heap.
+ */
+static void ring_raster(const ht_run_t *r, ht_rect_t clip, uint16_t *out)
+{
+    ht_rect_t b = r->ink_box;
+    int x1 = imax(clip.x, b.x), x2 = imin(clip.x + clip.w, b.x + b.w);
+    int y1 = imax(clip.y, b.y), y2 = imin(clip.y + clip.h, b.y + b.h);
+    int half = r->ring.w16 / 2, rad = r->ring.r16;
+    for (int y = y1; y < y2; y++) {
+        uint16_t *row = out + (y - clip.y) * clip.w - clip.x;
+        int vy = r->ring.cy16 - (y * 16 + 8);
+        for (int x = x1; x < x2; x++) {
+            int vx = x * 16 + 8 - r->ring.cx16;
+            int d = (int)isqrt((uint32_t)(vx * vx + vy * vy));
+            int cov = half - (d > rad ? d - rad : rad - d) + 8;   // 16 inside the band, 0 a pixel out
+            if (cov <= 0) continue;
+            // Inside the slice when cos(angle from mid) >= cos(half), compared squared and exactly (no truncated
+            // distance): (ux, uy) is unit to 1e-5, hence the 1/4096 of slack at the two ends.
+            int64_t dot = (int64_t)vx * r->ring.ux + (int64_t)vy * r->ring.uy;
+            int64_t lhs = dot * dot, rhs = (int64_t)(vx * vx + vy * vy) * r->ring.cosh * r->ring.cosh;
+            bool in = r->ring.cosh >= 0 ? dot >= 0 && lhs + (lhs >> 12) >= rhs : dot >= 0 || lhs <= rhs + (rhs >> 12);
+            if (!in) continue;
+            if (cov >= 16) row[x] = panel16(r->ring.colour);
+            else row[x] = panel16(mix(r->ring.colour, panel16(row[x]), (unsigned)cov, 16));
+        }
+    }
+}
 void ht_raster(const ht_scene_t *s, ht_rect_t clip, uint16_t *out)
 {
     fill(out, (size_t)clip.w * clip.h, panel16(s->background));
@@ -1642,6 +1739,7 @@ void ht_raster(const ht_scene_t *s, ht_rect_t clip, uint16_t *out)
         if (!intersect(box, clip))
             continue;
         if (r->sprite.width) { sprite_raster(r, clip, out); continue; }
+        if (r->ring.set) { ring_raster(r, clip, out); continue; }
         if (r->box.h) { box_raster(r, clip, out); continue; }
         if (r->arc) { arc_raster(r, clip, out); continue; }
         if (ht_pfont(f)) { prop_raster(r, clip, out); continue; }

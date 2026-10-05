@@ -14,7 +14,7 @@ import 'package:harness/auth/cli_link.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/models/api_connections_controller.dart';
 import 'package:harness/models/model_search_catalog.dart'
-    show ModelSearchSection;
+    show ModelSearchSection, jevRequest;
 import 'package:harness/widgets/api_picker_form.dart';
 import 'package:harness/widgets/desktop_chrome.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
@@ -980,6 +980,190 @@ void main() {
         app.dispose();
         map.dispose();
       }
+    },
+  );
+
+  testWidgets(
+    'Jev models are listed apart, and their pane says how to call them instead of offering Use',
+    (tester) async {
+      final app = _ModelSelectionApp()
+        ..inventory = const GridModels(
+          gridName: 'home',
+          models: [],
+          grids: [
+            GridSection(
+              name: 'home',
+              own: true,
+              models: [
+                GridModel(id: 'qwen3.8-27b', node: 'mac.lan'),
+                GridModel(id: 'laya-english', node: 'mac.lan', decision: true),
+              ],
+            ),
+            GridSection(
+              name: 'Team',
+              own: false,
+              state: GridSectionState.asleep,
+              models: [
+                GridModel(id: 'nimble', node: 'shared.lan', decision: true),
+              ],
+            ),
+          ],
+        );
+      await fixture(provided: app);
+      app.machineStates['m']!
+        ..localEndpoint = LocalCliEndpoint(
+          computerId: 'fixture',
+          wsUri: Uri.parse('ws://fixture.invalid'),
+          protocolVersion: 1,
+          terminalProtocolVersion: 3,
+        )
+        ..agents.add(
+          const Agent(
+            id: 'a69',
+            name: 'Current harness',
+            engine: 'codex',
+            terminalAvailable: true,
+          ),
+        );
+      // The own grid's Jev model is served by another machine of yours (`grid join --serve`), whose
+      // model list has it running: it is still listed once, under Jev models, never as a local row.
+      app.machineStates['other']!
+        ..machine = const Machine(
+          machineId: 'other',
+          authMode: MachineAuthMode.remote,
+          name: 'M2',
+          hostname: 'mac.lan',
+        )
+        ..connectionStatus = ConnectionStatus.connected
+        ..nodeOnline = true;
+      app.machineInventories['other'] = {
+        'models': [
+          {
+            'id': 'local:Laya-English-Q8_0.gguf',
+            'name': 'laya-english',
+            'state': 'running',
+            'canStop': true,
+            'sizeBytes': 449397600,
+          },
+        ],
+      };
+      String? copied;
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        (call) async {
+          if (call.method == 'Clipboard.setData') {
+            copied = (call.arguments as Map)['text'] as String;
+          }
+          return null;
+        },
+      );
+      addTearDown(
+        () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          SystemChannels.platform,
+          null,
+        ),
+      );
+      final map = MemoryKeymap();
+      try {
+        await configured.mount(tester, app, map);
+        await key(tester, LogicalKeyboardKey.keyI, cmd: true);
+        final rows = search(tester).rows.where((row) => row.isModel);
+        String section(String title) => search(tester)
+            .modelSection(rows.firstWhere((row) => row.title.startsWith(title)))
+            .label;
+        // From the own grid and a shared one alike, a Jev model is under its own heading, last.
+        expect(section('laya-english'), 'Jev models');
+        expect(section('nimble'), 'Jev models');
+        expect(section('qwen3.8-27b'), isNot('Jev models'));
+        expect(
+          rows.where((row) => row.title.startsWith('laya-english')),
+          hasLength(1),
+          reason: rows.map((row) => row.title).join('\n'),
+        );
+        expect(ModelSearchSection.values.last, ModelSearchSection.jev);
+
+        // Clicking a Jev row shows how to call it, and neither copies nor moves the harness.
+        expect(search(tester).isJevRow(search(tester).selected), isFalse);
+        final layaRow = find.text('laya-english', findRichText: true);
+        await tester.scrollUntilVisible(
+          layaRow,
+          100,
+          scrollable: find
+              .ancestor(
+                of: find.text('Your models', findRichText: true),
+                matching: find.byType(Scrollable),
+              )
+              .first,
+        );
+        await tester.tap(layaRow);
+        await tester.pumpAndSettle();
+        expect(search(tester).selected!.title, 'laya-english');
+        expect(find.text(jevRequest('home', 'laya-english')), findsOneWidget);
+        expect(copied, isNull);
+        expect(app.selections, isEmpty);
+
+        await tester.enterText(field, ':laya');
+        await tester.pumpAndSettle();
+        final laya = search(tester).selected!;
+        expect(laya.title, 'laya-english');
+        expect(search(tester).isJevRow(laya), isTrue);
+        expect(search(tester).canSelectModel(laya), isFalse);
+        expect(search(tester).modelRowAction(laya), 'Copy');
+        expect(search(tester).actionLabel(laya), 'Copy request');
+        expect(find.text('Call it from a terminal:'), findsOneWidget);
+        expect(find.text(jevRequest('home', 'laya-english')), findsOneWidget);
+        expect(
+          find.text('Enter Copy request  ·  Tab controls'),
+          findsOneWidget,
+        );
+
+        await key(tester, LogicalKeyboardKey.enter);
+        await tester.pumpAndSettle();
+        expect(copied, jevRequest('home', 'laya-english'));
+        expect(find.text('Copied. Paste it into a terminal.'), findsOneWidget);
+        expect(app.selections, isEmpty);
+        // An awake grid's pane says nothing of rest; a resting one says the call wakes it, and its
+        // row still offers the copy rather than reading as unavailable.
+        expect(find.textContaining('resting'), findsNothing);
+        await tester.enterText(field, ':nimble');
+        await tester.pumpAndSettle();
+        expect(search(tester).selected!.title, startsWith('nimble'));
+        expect(search(tester).modelRowAction(search(tester).selected!), 'Copy');
+        expect(
+          find.text(
+            'Its grid is resting. Your first request wakes it, which takes a few seconds.',
+          ),
+          findsOneWidget,
+        );
+        expect(tester.takeException(), isNull);
+      } finally {
+        await tester.pumpWidget(const SizedBox());
+        app.dispose();
+        map.dispose();
+      }
+    },
+  );
+
+  test(
+    'a Jev request loads the grid\'s key from its env and never names it',
+    () {
+      final request = jevRequest('home', 'laya-english');
+      expect(request, startsWith('eval "\$(harness grid env home)"\n'));
+      expect(request, contains('curl "\$OPENAI_BASE_URL/systemone"'));
+      expect(request, contains('Authorization: Bearer \$OPENAI_API_KEY'));
+      expect(request, contains('"model":"laya-english"'));
+      // A name a shell would read as syntax is quoted; a quote in it cannot end the word early.
+      expect(
+        jevRequest('my grid', "o'brien"),
+        allOf(
+          contains("harness grid env 'my grid')"),
+          contains(
+            r'"model":"o'
+            "'\\''"
+            'brien"',
+          ),
+        ),
+      );
     },
   );
 

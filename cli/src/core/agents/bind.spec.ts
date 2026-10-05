@@ -96,6 +96,22 @@ describe('binding a registered session to its agent', () => {
     })
   })
 
+  it('still tells the app of a binding when the record it resumes from cannot be saved, as on a full disk', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const run = setup()
+    const entry = agent({ boundAt: Date.parse('2026-10-04T10:00:00Z'), resumeOnly: true })
+    run.byAgent.set('a1', entry)
+    vi.mocked(run.deps.stoppedAgents.save).mockImplementationOnce(() => { throw Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' }) })
+    await run.binding.handleRegistered(entry, meta({ isNew: true }))
+    expect(error).toHaveBeenCalledWith('[agent] a1 could not save the record it resumes from: ENOSPC: no space left on device')
+    expect(run.deps.stoppedAgents.finishResume).toHaveBeenCalledWith('a1')
+    expect(run.deps.announceSession).toHaveBeenCalledWith(entry)
+    expect(run.deps.clients.send).toHaveBeenCalledWith(expect.objectContaining({ type: 'session_synced' }))
+    vi.mocked(run.deps.stoppedAgents.save).mockImplementationOnce(() => { throw 'disk gone' })
+    await run.binding.handleRegistered(entry, meta({ isNew: true }))
+    expect(error).toHaveBeenLastCalledWith('[agent] a1 could not save the record it resumes from: disk gone')
+  })
+
   it('stops after the attach for a session it already had, and finishes a resume it was waiting for', async () => {
     const run = setup()
     const entry = agent({ resumeOnly: true } as Partial<RegisteredSession>)

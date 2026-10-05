@@ -1,0 +1,20 @@
+{
+ "waves": {
+  "centre": [
+   83.5,
+   65.6
+  ],
+  "r_far": 70.5,
+  "r_near": 47.6,
+  "width": 3.0,
+  "half_angle_deg": 24,
+  "count": 3,
+  "colour": [
+   214,
+   208,
+   255
+  ],
+  "period_ms": 1680,
+  "brightness": "sin(pi u) * (0.4 + 0.6 * level / 4), u = (t / period + k / count) mod 1; hidden below 0.12"
+ }
+}

@@ -86,6 +86,11 @@ module.exports = {
         headers: [{ key: 'Cache-Control', value: 'no-store, no-transform' }],
       })),
       {
+        source: '/os/latest',
+        // Cache the GitHub lookup on the server, never the release redirect in a browser or CDN.
+        headers: [{ key: 'Cache-Control', value: 'no-store, max-age=0' }],
+      },
+      {
         source: '/harness-web/:path*',
         headers: [
           // Legacy paths stay available for existing tabs. New entries use the

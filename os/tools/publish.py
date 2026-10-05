@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Publish an already-tested preview; never turn an incomplete VM run into a release."""
+"""Publish an already-tested OS; never turn an incomplete VM run into a release."""
 import argparse
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
@@ -45,6 +45,78 @@ def gh(*args):
 
 def read(path):
     return json.loads(path.read_text())
+
+
+def is_preview(version):
+    if not isinstance(version, str) or not re.fullmatch(r'\d+\.\d+\.\d+(?:-preview\.\d+)?', version):
+        raise ValueError('Expected an explicit OS release or numbered preview version.')
+    return '-preview.' in version
+
+
+def version_key(version):
+    preview = is_preview(version)
+    base, _, number = version.partition('-preview.')
+    return (*map(int, base.split('.')), int(not preview), int(number or 0))
+
+
+def publish_latest_pointer(repo, manifest, release):
+    """Advance the OS-only download link after the immutable assets are verified."""
+    version = manifest['version']
+    preview = is_preview(version)
+    tag = 'os-latest'
+    endpoint = f'repos/{repo}/releases/tags/{tag}'
+    previous = subprocess.run(['gh', 'api', endpoint], capture_output=True, text=True, timeout=120)
+    exists = previous.returncode == 0
+    if not exists and '404' not in previous.stderr:
+        raise ValueError('Cannot inspect the OS latest pointer: ' + previous.stderr)
+    if exists:
+        old = json.loads(previous.stdout)
+        marker = re.search(r'<!-- harness-os-latest:(\{[^\n]+\}) -->', old.get('body', ''))
+        if not marker:
+            raise ValueError('The existing OS latest release is not a managed pointer.')
+        identity = json.loads(marker[1])
+        # Once an official OS exists, later previews keep their versioned links
+        # and cannot replace that default download.
+        if preview and not is_preview(identity['version']):
+            return {'status': 'official-release-retained', 'version': identity['version']}
+        current = version_key(identity['version'])
+        candidate = version_key(version)
+        if current > candidate:
+            return {'status': 'newer-release-retained', 'version': identity['version']}
+        if current == candidate and identity['source_commit'] != manifest['source_commit']:
+            raise ValueError('The same OS version cannot point to different source.')
+    identity = {'version': version, 'source_commit': manifest['source_commit']}
+    prefix = f'https://github.com/{repo}/releases/download/os-v{version}/'
+    iso = manifest['iso']['name']
+    notes = f'''<!-- harness-os-latest:{json.dumps(identity, separators=(',', ':'))} -->
+Harness **{version}** is the latest operating system {'preview' if preview else 'release'}.
+
+[Download the x86-64 ISO]({prefix}{iso}) · [SHA-256 checksum]({prefix}{iso}.sha256) · [Installation guide]({prefix}INSTALL.md)
+
+[Release notes, source and validation]({release['html_url']})
+
+This permanent OS link advances after validation and public download checks. Versioned releases remain unchanged. Once an official OS is available, previews cannot replace that default download.
+'''
+    with tempfile.TemporaryDirectory(prefix='harness-os-latest-') as temporary:
+        path = Path(temporary) / 'notes.md'
+        path.write_text(notes)
+        if exists:
+            # Only this explicitly mutable pointer moves. Versioned tags never do.
+            gh('api', '--method', 'PATCH', f'repos/{repo}/git/refs/tags/{tag}',
+               '-f', 'sha=' + manifest['source_commit'], '-F', 'force=true')
+            gh('release', 'edit', tag, '--repo', repo, '--target', manifest['source_commit'],
+               '--draft=false', f'--prerelease={str(preview).lower()}', '--latest=false',
+               '--title', 'Harness — latest OS', '--notes-file', path)
+        else:
+            gh('release', 'create', tag, '--repo', repo, '--target', manifest['source_commit'],
+               f'--prerelease={str(preview).lower()}', '--latest=false', '--title', 'Harness — latest OS', '--notes-file', path)
+    actual = json.loads(gh('api', endpoint))
+    ref = json.loads(gh('api', f'repos/{repo}/git/ref/tags/{tag}'))
+    if actual['draft'] or actual['prerelease'] != preview or actual['body'].strip() != notes.strip() or ref['object']['sha'] != manifest['source_commit']:
+        raise ValueError('The public OS latest pointer does not match the verified release.')
+    if not preview:
+        gh('release', 'edit', 'os-v' + version, '--repo', repo, '--latest=true')
+    return {'status': 'published', 'url': actual['html_url'], **identity}
 
 
 def validate_install_guide(manifest, guide):
@@ -163,8 +235,7 @@ def main():
     folder = root / 'image'
     manifest = read(folder / 'manifest.json')
     version = manifest['version']
-    if not re.fullmatch(r'\d+\.\d+\.\d+-preview\.\d+', version):
-        raise ValueError('This publisher only creates explicitly versioned previews.')
+    preview = is_preview(version)
     iso = folder / manifest['iso']['name']
     if iso.parent != folder or not iso.name.endswith('.iso') or iso.stat().st_size != manifest['iso']['bytes'] or digest(iso) != manifest['iso']['sha256']:
         raise ValueError('ISO identity does not match its manifest.')
@@ -205,7 +276,8 @@ def main():
         validate_receipts(manifest, dsh_receipts)
         examples['dsh'] = {'run': dsh_run['html_url'], 'machines': dsh_receipts,
                            'checks': validate_examples(root / 'dsh-machines', 'dsh')}
-    limitations = ['Physical ThinkPad, Wi-Fi, suspend and NVIDIA hardware remain unverified.',
+    limitations = ['ThinkPad installation and use have user confirmation; physical Intel Mac coverage, suspend and NVIDIA rendering/inference remain unverified.',
+                   'This release is x86-64. Apple Silicon and Raspberry Pi images are not included.',
                    'Account-authenticated Claude/Codex model turns remain unverified. Bundled OpenCode default first-use turns are recorded in the machine evidence; upstream model availability may change.',
                    'Timing and memory measurements describe these VMs, not physical laptop power-on time.']
     validation = {'status': 'passed', 'image_run': image['html_url'], 'machine_run': run['html_url'],
@@ -280,11 +352,14 @@ Source: `{manifest['source_commit']}`. [Machine validation]({run['html_url']}).
                           'notes': str(notes), 'files': identities}, indent=2))
         return
     subprocess.run(['gh', 'release', 'create', tag, '--repo', args.repo, '--target', manifest['source_commit'],
-                    '--draft', '--prerelease', '--title', 'Harness ' + version, '--notes-file', str(notes),
+                    '--draft', f'--prerelease={str(preview).lower()}', '--latest=false', '--title', 'Harness ' + version, '--notes-file', str(notes),
                     *map(str, assets)], check=True, timeout=900)
     try:
-        subprocess.run(['gh', 'release', 'edit', tag, '--repo', args.repo, '--draft=false'], check=True, timeout=120)
+        subprocess.run(['gh', 'release', 'edit', tag, '--repo', args.repo, '--draft=false', '--latest=false'], check=True, timeout=120)
         release = json.loads(gh('api', f'repos/{args.repo}/releases/tags/{tag}'))
+        ref = json.loads(gh('api', f'repos/{args.repo}/git/ref/tags/{tag}'))
+        if release['draft'] or release['prerelease'] != preview or ref['object']['sha'] != manifest['source_commit']:
+            raise ValueError('Published release kind or tag source does not match the verified build.')
         def verify(asset):
             expected = identities[asset['name']]
             with tempfile.TemporaryDirectory(prefix='hn-release-check-') as temp:
@@ -298,13 +373,16 @@ Source: `{manifest['source_commit']}`. [Machine validation]({run['html_url']}).
             raise ValueError('Published asset set differs from the verified build.')
         with ThreadPoolExecutor(max_workers=3) as pool:
             checked = list(pool.map(verify, release['assets']))
-        receipt = {'status': 'passed', 'release_url': release['html_url'], 'source_commit': manifest['source_commit'],
-                   'finished_at_unix': time.time(), 'verified_public_assets': checked, 'files': identities}
-        (root / 'publication.json').write_text(json.dumps(receipt, indent=2) + '\n')
-        print(release['html_url'])
     except BaseException:
         subprocess.run(['gh', 'release', 'edit', tag, '--repo', args.repo, '--draft=true'], check=True, timeout=120)
         raise
+    # Pointer failure must not hide an already-verified immutable release.
+    latest = publish_latest_pointer(args.repo, manifest, release)
+    receipt = {'status': 'passed', 'release_url': release['html_url'], 'source_commit': manifest['source_commit'],
+               'finished_at_unix': time.time(), 'verified_public_assets': checked, 'files': identities,
+               'prerelease': preview, 'latest_os': latest}
+    (root / 'publication.json').write_text(json.dumps(receipt, indent=2) + '\n')
+    print(release['html_url'])
 
 
 if __name__ == '__main__':

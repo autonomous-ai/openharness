@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -271,6 +271,23 @@ describe('attaching a session', () => {
       expect(run.deps.emit).not.toHaveBeenCalled()
     })
 
+    it('never replays a conversation its engine was relaunched on, however new its transcript', async () => {
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+      // A restore after a restart: the transcript is minutes old and was born after its agent, which is
+      // what the first-turn rule asks, but its engine was relaunched on it, so it is history.
+      const lines = [CLAUDE_PROMPT, { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'hi' }], stop_reason: 'end_turn' }, uuid: 'a1' }]
+      const s = session('claude', transcript(lines))
+      const take = vi.fn((_sessionId: string): number | undefined => statSync(s.transcriptPath!).size)
+      const run = setup({ relaunchMarks: { take } })
+      await run.attach.attachSession(s, false, false, true)
+      expect(run.deps.emit).not.toHaveBeenCalled()
+      expect(log.mock.calls.map(([line]) => String(line)).some((line) => line.includes('replayed the first turn'))).toBe(false)
+      // Cursor's own replay from the start is held to the same rule.
+      const cursor = session('cursor', undefined, { sessionId: 'cursor-relaunched' })
+      await run.attach.attachSession(cursor, false, true)
+      expect(run.deps.emit).not.toHaveBeenCalled()
+    })
+
     it('replays a Claude Code first turn live when born after its agent, unless a held tail already delivered it', async () => {
       vi.spyOn(console, 'log').mockImplementation(() => {})
       const run = setup()
@@ -378,6 +395,21 @@ describe('attaching a session', () => {
       await run.attach.attachSession(session('terminal', transcript(['{}'])))
       expect(run.normalizers.turnStates.has('terminal-s')).toBe(true)
       expect(run.deps.questionWatcher.start).not.toHaveBeenCalled()
+    })
+
+    it('folds only the newest part of a transcript over the cap, and says so', async () => {
+      vi.spyOn(console, 'log').mockImplementation(() => {})
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const records = Array.from({ length: 20 }, (_, i) => JSON.stringify({ n: i, pad: 'x'.repeat(40) }))
+      const capBytes = records.slice(-5).reduce((sum, record) => sum + Buffer.byteLength(record), 0)
+      const run = setup({ wholeReadCapBytes: capBytes })
+      await run.attach.attachSession(session('terminal', transcript(records)))
+      expect(warn).toHaveBeenCalledWith('[agent] terminal transcript over 0 MB · folded from its newest 0 MB')
+      // The profile was hydrated from what was read: the newest records that fit, in order.
+      expect(run.deps.runtimeProfiles.hydrate).toHaveBeenCalledWith(expect.objectContaining({ agentId: 'terminal-agent' }), records.slice(-5))
+      warn.mockClear()
+      await run.attach.attachSession(session('terminal', transcript(records.slice(0, 3)), { agentId: 'small', sessionId: 'small-s' }))
+      expect(warn).not.toHaveBeenCalled()
     })
   })
 
