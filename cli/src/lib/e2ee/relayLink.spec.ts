@@ -380,6 +380,9 @@ describe('remote-password link + relay session crypto (interop with the real E2e
       ['terminal_info_result', '/private/work/app', { requestId: 'info-1', command: 'node', path: '/private/work/app', pid: 4242, tty: '/dev/ttys001' }],
       ['voice_route_result', 'the login page', { requestId: 'route-1', agentId: 'a1', agentName: 'api', reason: 'asked to fix the login page', confidence: 0.9, needNewAgent: false }],
     ]
+    for (const type of ['dsh_list', 'dsh_install', 'dsh_update', 'dsh_remove', 'engines_probe', 'grid_models_list', 'claude_login_status', 'agent_retarget', 'remote_terminal_handoff']) {
+      replies.push([`${type}_result`, 'what-the-machine-said', { requestId: `${type}-1`, detail: 'what-the-machine-said' }])
+    }
     for (const [type, secret, answer] of replies) {
       const sealed = manager.wrapRpcReply('session-conn', type, answer.requestId, answer)!
       expect(JSON.stringify(sealed)).not.toContain(secret)
