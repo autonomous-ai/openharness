@@ -84,10 +84,36 @@ describe('the workspaces service', () => {
     it('says nothing when it removed nothing, and nothing when the sweep fails', async () => {
       const { port } = setup()
       port.sweepUnused()
+      await settle()
       vi.mocked(sweepWorktrees).mockRejectedValueOnce(new Error('EACCES'))
       port.sweepUnused()
       await settle()
+      expect(sweepWorktrees).toHaveBeenCalledTimes(2)
       expect(console.log).not.toHaveBeenCalled()
+    })
+
+    it('never runs a second sweep beside one still going, and sweeps again once it is done', async () => {
+      let finish: (removed: string[]) => void = () => {}
+      vi.mocked(sweepWorktrees).mockImplementationOnce(() => new Promise((done) => { finish = done }))
+      const { core, port } = setup([agent({ cwd: '/h/live' })])
+      port.sweepUnused()
+      port.sweepUnused()
+      expect(sweepWorktrees).toHaveBeenCalledTimes(1)
+      // Not even asked what is in use: the sweep going on already knows.
+      expect(core.agents.all).toHaveBeenCalledTimes(1)
+      finish([])
+      await settle()
+      port.sweepUnused()
+      expect(sweepWorktrees).toHaveBeenCalledTimes(2)
+    })
+
+    it('sweeps again after a sweep that failed', async () => {
+      vi.mocked(sweepWorktrees).mockRejectedValueOnce(new Error('EACCES'))
+      const { port } = setup()
+      port.sweepUnused()
+      await settle()
+      port.sweepUnused()
+      expect(sweepWorktrees).toHaveBeenCalledTimes(2)
     })
 
     it('does not sweep at all when it cannot list what is in use', () => {
