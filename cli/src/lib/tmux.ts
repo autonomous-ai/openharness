@@ -1161,18 +1161,46 @@ export interface TmuxPaneState {
 }
 
 /**
- * Pane liveness plus, for a pane kept alive by `remain-on-exit`, how its process ended.
+ * What tmux said about a pane: its state, `'gone'`, or `'unknown'`.
  *
- * Returns null when tmux does not know the pane — which is itself the answer: the process exited and
- * took its window (and, for a one-pane session, the session) with it.
+ * `'gone'` when tmux does not know the pane, or no server is running: the process exited and took its
+ * window (and, for a one-pane session, the session) with it. `'unknown'` when tmux could not be asked
+ * (a timeout, a socket it may not use), which says nothing about the pane, and a caller acts on
+ * `'gone'` only. The two used to be one null. A core whose event loop was held for a few seconds wakes
+ * to every timer that came due before it reads the answers that arrived meanwhile, so a call in flight
+ * times out with its answer sitting unread, and the null read as "gone" failed restored agents,
+ * relaunched a resumed engine fresh over its conversation, and stopped a new agent's watcher
+ * (e2e/stall.e2e.ts).
  */
-export function tmuxPaneState(pane: string): Promise<TmuxPaneState | null> {
+export type TmuxPaneRead = TmuxPaneState | 'gone' | 'unknown'
+
+/** Pane liveness plus, for a pane kept alive by `remain-on-exit`, how its process ended (see TmuxPaneRead). */
+export function tmuxPaneState(pane: string): Promise<TmuxPaneRead> {
+  return readPaneState(pane, false)
+}
+
+function readPaneState(pane: string, revived: boolean): Promise<TmuxPaneRead> {
   return new Promise((resolve) => {
     const format = `#{pane_dead}|#{pane_dead_status}|#{${ENGINE_EXIT_PANE_OPTION}}|#{pane_current_command}`
-    run('tmux', ['display-message', '-p', '-t', pane, format], { timeout: 2_000 }, (err, stdout) => {
-      if (err) { resolve(null); return }
-      const fields = stdout.trim().split('|')
-      if (fields.length < 4) { resolve(null); return }
+    run('tmux', ['display-message', '-p', '-t', pane, format], { timeout: 2_000 }, (err, stdout, stderr) => {
+      if (err) {
+        const said = String(stderr ?? '')
+        if (/can't find pane/.test(said)) { resolve('gone'); return }
+        if (!isNoTmuxServerError(said)) { resolve('unknown'); return }
+        // A server whose socket was removed is still running this pane: ask it back, then read again.
+        if (revived) { resolve('gone'); return }
+        void reviveRemovedTmuxSocket().then((asked) => {
+          if (asked) void readPaneState(pane, true).then(resolve)
+          else resolve('gone')
+        })
+        return
+      }
+      const fields = String(stdout ?? '').trim().split('|')
+      // Not the four fields asked for (no bytes at all is an answer that was lost): nothing to go on.
+      if (fields.length < 4) { resolve('unknown'); return }
+      // tmux 3.7 answers a pane it does not know with the four fields empty and exit 0; a pane it knows
+      // is dead or not, 1 or 0. Older versions say "can't find pane", above.
+      if (fields[0] === '') { resolve('gone'); return }
       const status = Number(fields[1])
       const engineExit = Number(fields[2])
       resolve({

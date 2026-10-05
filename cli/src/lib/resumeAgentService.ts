@@ -136,7 +136,9 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
         if (!ownsRoute()) return resumeChanged
         const pane = await tmuxPaneState(saved.tmuxPane)
         if (!ownsRoute()) return resumeChanged
-        retainExitedSession(row, !!pane && !pane.dead)
+        // Only a pane known to be gone or dead loses its row. One tmux could not read keeps it, as a
+        // terminal: the reconciler removes it once its scans agree the pane is gone.
+        retainExitedSession(row, pane === 'unknown' || (pane !== 'gone' && !pane.dead))
         stoppedAgents.finishResume(saved.agentId)
       }
     }

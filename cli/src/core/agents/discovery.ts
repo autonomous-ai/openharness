@@ -188,8 +188,9 @@ export function createDiscoveryHandlers({
     if (agent.resumeOnly && agent.launch?.state === 'failed') {
       const pane = await tmuxPaneState(agent.tmuxPane)
       // An unconfirmed install/startup can still be about to launch the engine. Do not
-      // turn its live shell into permission to start another one.
-      if (!pane || (!pane.dead && pane.engineExit == null)) return
+      // turn its live shell into permission to start another one. A pane that is gone is the
+      // reconciler's to remove, and one tmux could not read says nothing: both stay as they are.
+      if (typeof pane === 'string' || (!pane.dead && pane.engineExit == null)) return
     }
     if (agent.launch?.state !== 'starting') {
       retainExitedSession(agent, true)

@@ -24,6 +24,11 @@ export interface PaneWatcherDeps {
   retainExitedSession: (session: RegisteredSession, announce: boolean) => void
 }
 
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => {
+  const timer = setTimeout(resolve, ms)
+  timer.unref?.()
+})
+
 export function createPaneWatcher({ registry, announceSession, triggerHint, captureTerminal, retainExitedSession }: PaneWatcherDeps) {
   /**
    * Watch a pane this daemon just opened until its engine process shows up (ready), dies (failed), or
@@ -48,10 +53,17 @@ export function createPaneWatcher({ registry, announceSession, triggerHint, capt
           return
         }
         const paneState = await tmuxPaneState(spawned.runtime.paneId)
-        if (!paneState) {
+        if (paneState === 'gone') {
           registry.setTerminalAvailable(pending.agentId, false)
           announceSession(pending)
           return
+        }
+        // A pane tmux could not read is asked again, as one still starting is: a call that timed out
+        // says nothing about it, and giving up here left a working agent's launch unconfirmed.
+        if (paneState === 'unknown') {
+          await sleep(delayMs)
+          delayMs = Math.min(delayMs * 2, 750)
+          continue
         }
         if (paneState.dead) {
           const installed = await commandAvailableInInteractiveShell(command[0], undefined, installIfMissing)
@@ -101,10 +113,7 @@ export function createPaneWatcher({ registry, announceSession, triggerHint, capt
           console.warn(`[agent] create · ${engine} exited (${paneState.engineExit}) before ready · agent ${pending.agentId} kept as a terminal`)
           return
         }
-        await new Promise<void>((resolve) => {
-          const timer = setTimeout(resolve, delayMs)
-          timer.unref?.()
-        })
+        await sleep(delayMs)
         delayMs = Math.min(delayMs * 2, 750)
       }
       const detail = `${engine} did not expose an engine process within ${Math.round(budgetMs / 60_000)} minutes. The terminal remains available.`

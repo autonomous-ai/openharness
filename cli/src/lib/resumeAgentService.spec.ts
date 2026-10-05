@@ -433,8 +433,19 @@ describe('existing runtime and readiness verification', () => {
     if (mode === 'exit dead pane') vi.mocked(tmuxPaneState).mockResolvedValueOnce({ dead: true } as any)
     if (mode === 'exit unknown process') vi.mocked(checkPidRuntime).mockResolvedValue({ state: 'unknown', reason: 'fixture' })
     if (mode === 'cancel process probe') vi.mocked(checkPidRuntime).mockImplementation(async () => { deps.restartJobs.cancel(saved.agentId); return { state: 'gone', reason: 'fixture' } })
-    if (mode === 'cancel pane probe') vi.mocked(tmuxPaneState).mockImplementationOnce(async () => { deps.restartJobs.cancel(saved.agentId); return null })
+    if (mode === 'cancel pane probe') vi.mocked(tmuxPaneState).mockImplementationOnce(async () => { deps.restartJobs.cancel(saved.agentId); return 'gone' })
     expect(await start()).toMatchObject({ ok: false })
     expect(create).not.toHaveBeenCalled(); expect(deps.stoppedAgents.get(saved.agentId)).not.toBeNull()
+  })
+  it.each([
+    ['gone', false], ['unknown', true],
+  ] as const)('an exited engine whose pane tmux reads as %s keeps its row as a terminal: %s', async (pane, kept) => {
+    // Only a pane known to be gone loses its row. One tmux could not read (a call that timed out while
+    // the daemon's event loop was held) keeps it, for the reconciler to judge with scans that agree.
+    live()
+    vi.mocked(resolvePaneEngineProcess).mockResolvedValue(null)
+    vi.mocked(tmuxPaneState).mockResolvedValueOnce({ dead: false, engineExit: 1 } as any).mockResolvedValueOnce(pane)
+    expect(await start()).toMatchObject({ ok: false, error: 'RESUME_FAILED' })
+    expect(deps.retainExitedSession).toHaveBeenCalledWith(expect.objectContaining({ agentId: saved.agentId }), kept)
   })
 })

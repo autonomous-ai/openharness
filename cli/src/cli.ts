@@ -88,7 +88,7 @@ import { claudeProcessSession, findLiveSession, findResumedTranscript } from './
 import { handoffProviderDeps } from './lib/handoffDiscovery.js'
 import { TmuxBackend } from './lib/tmuxBackend.js'
 import { DEFAULT_HOST_THEME, loadHostTheme, saveHostTheme, type HostTheme } from './lib/hostTheme.js'
-import { restoreAgents } from './lib/restoreAgents.js'
+import { restoreAgents, tmuxSurvey } from './lib/restoreAgents.js'
 import { createRetainExitedSession } from './lib/retainExitedSession.js'
 import { createKeepAbandonedConversation } from './lib/keepAbandonedConversation.js'
 import { OpenTabProtection } from './lib/openTabProtection.js'
@@ -112,6 +112,7 @@ import { prepareApiInstructions } from './lib/apiInstructions.js'
 import type { AgentDshContext } from './lib/agentFrame.js'
 import {
   clearPaneRemainOnExit,
+  lookupPaneEngineProcess,
   resolvePaneEngineProcess,
   tmuxPaneInfo,
   tmuxPaneState,
@@ -3295,7 +3296,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
    // restore never got to, so the next daemon can put them back.
    try {
     const backend = tmuxBackend
-    let paneInventory: ReturnType<typeof listTmuxPanes> | null = null
     const summary = await restoreAgents({
       retainStopped: retainExitedSession,
       keepAbandoned: keepAbandonedConversation,
@@ -3304,16 +3304,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       // A new tmux server hands out `%N` from zero again, so a stale id can name someone's shell;
       // and a pane that outlived the daemon in a session discovery no longer lists still has its
       // engine, which a second pane resuming the same session would collide with.
-      liveProcess: (entry, runtime) => resolvePaneEngineProcess(runtime.paneId, entry.engine),
-      livePane: async (runtime) => {
-        // One inventory for the whole restore, not one `tmux list-panes` per row: this runs between
-        // the control port binding and the first reconcile pass, i.e. on the app's "starting" screen.
-        paneInventory ??= listTmuxPanes()
-        const inventory = await paneInventory
-        // Only a harness pane counts (the inventory is already that whitelist): a new tmux server
-        // hands out `%N` from zero again, and a stale id can name somebody's own shell.
-        return inventory.ok && inventory.panes.some((pane) => pane.tmuxPane === runtime.paneId)
-      },
+      ...tmuxSurvey(() => listTmuxPanes(), lookupPaneEngineProcess),
       buildLaunch: async (entry, opts) => {
         // A folder that went away with the reboot (an unmounted volume, a workspace deleted while the
         // daemon was down) is a named failure on the tile, not a pane that prints an error and exits.
@@ -3375,6 +3366,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       triggerHint: (runtime, engine) => agentReconciler.triggerHint(runtime, engine),
       log: (message) => console.log(message),
     })
+    // A row restore could not look at keeps its pane for discovery to judge, but not to retire this boot.
+    if (summary.unsurveyed.length) restoreDegraded = true
     if (summary.restored.length || summary.failed.length || registry.rebootedSinceLastRun) {
       console.log(`[restore] restored ${summary.restored.length} · skipped ${summary.skipped.length} · failed ${summary.failed.length}`
         + (registry.rebootedSinceLastRun ? ' · after reboot' : ''))
