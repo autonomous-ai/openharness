@@ -205,6 +205,22 @@ describe('how an agent\'s life ends', () => {
     client.close()
   })
 
+  it('codex: an agent between the turns of its goal is not closed after its task until the goal is done', async () => {
+    const d = await fresh()
+    const client = await LocalClient.connect(d)
+    const agent = await create(d, client, 'codex', 'close-goal')
+    // Codex 0.160 between the turns of a goal: its composer empty, `Pursuing goal` on its status line.
+    await turn(client, agent.id, '!goal')
+    expect(await close(client, agent, 'inspect')).toMatchObject({ activity: 'working' })
+    expect(await close(client, agent, 'after_task')).toMatchObject({ deferred: true })
+    // Two idle looks five seconds apart would have closed it by now.
+    await new Promise((resolve) => setTimeout(resolve, 13_000))
+    expect((await row(client, agent.id))?.status).toBe('active')
+    await turn(client, agent.id, '!goal done')
+    await stopped(client, agent.id, 60_000)
+    client.close()
+  })
+
   it('a close for an agent that is not the one asked about changes nothing', async () => {
     const d = await fresh()
     const client = await LocalClient.connect(d)
