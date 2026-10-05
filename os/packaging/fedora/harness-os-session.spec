@@ -24,6 +24,8 @@ The minimal Harness OS session and verified native ARM runtime. This is a
 component for a future Fedora/Asahi Harness image. It does not provision accounts,
 start services, install a boot chain, or implement Fedora system recovery.
 Chromium and the image's default agent are supplied separately when needed.
+The optional harness-session-setup command uses Fedora's separately installed
+greetd package for explicit, reversible next-boot login with an existing account.
 
 %prep
 %setup -q -c -T

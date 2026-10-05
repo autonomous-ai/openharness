@@ -1,7 +1,7 @@
 """The Fedora session payload, shared by RPM packaging and private VM checks.
 
-This is one component of a future Harness OS image. Account setup, platform
-packages, boot, networking policy and base-system recovery belong to that image.
+This is one component of a future Harness OS image. Platform packages, boot and
+base-system recovery belong to Fedora/Asahi. Login setup is a separate opt-in.
 """
 import hashlib
 import json
@@ -61,7 +61,7 @@ def stage(source, runtime, destination, commit, runtime_commit):
         shutil.copyfile(source / 'os/root' / name, target)
     for local, name in [
         *[('os/' + name + '.py', 'usr/lib/harness-os/' + name + '.py') for name in
-          ['onboarding', 'network', 'projects', 'hardware', 'live_update']],
+          ['onboarding', 'network', 'projects', 'hardware', 'live_update', 'fedora_session']],
         ('os/tools/hn-os', 'usr/bin/hn-os'),
         ('tui/README.md', 'usr/share/harness-os/guide/tui.md'),
         ('docs/naming-system.md', 'usr/share/harness-os/guide/naming.md'),
@@ -78,6 +78,7 @@ def stage(source, runtime, destination, commit, runtime_commit):
         shutil.copyfile(runtime / local, library / target)
     (library / 'hn').symlink_to('harness-tui')
     (destination / 'usr/bin/harness-session').symlink_to('../lib/harness-os/session')
+    (destination / 'usr/bin/harness-session-setup').symlink_to('../lib/harness-os/fedora_session.py')
     info.update(system_profile='fedora', package_source_commit=commit,
                 files={p.name: {'bytes': p.stat().st_size, 'sha256': digest(p)}
                        for p in library.iterdir() if not p.is_symlink()})

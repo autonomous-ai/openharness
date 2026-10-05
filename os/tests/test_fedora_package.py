@@ -65,6 +65,8 @@ class FedoraPayload(unittest.TestCase):
         self.assertIn('usr/lib/harness-os/live_update.py', result['files'])
         self.assertIn('usr/lib/systemd/user/harness-update.timer', result['files'])
         self.assertEqual(result['symlinks']['usr/bin/harness-session'], '../lib/harness-os/session')
+        self.assertEqual(result['symlinks']['usr/bin/harness-session-setup'], '../lib/harness-os/fedora_session.py')
+        self.assertIn('usr/lib/harness-os/fedora_session.py', result['files'])
         self.assertIn('W-u', (destination / 'usr/share/harness-os/labwc/rc.xml').read_text())
         self.assertNotIn('W-i', (destination / 'usr/share/harness-os/labwc/rc.xml').read_text())
         self.assertNotIn('harness-install', (destination / 'usr/lib/systemd/user/harness-os.target').read_text())
