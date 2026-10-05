@@ -146,6 +146,12 @@ export interface TransferLimits { idleMs: number; deadlineMs: number }
 export const DOWNLOAD_LIMITS: TransferLimits = { idleMs: 60_000, deadlineMs: 15 * 60_000 }
 /** The manifest is a few hundred bytes. */
 export const MANIFEST_LIMITS: TransferLimits = { idleMs: 30_000, deadlineMs: 60_000 }
+/**
+ * A managed runtime (lib/runtimeInstall.ts): tens of MB every daemon runs on, which a slow link must be
+ * able to finish however long it takes, so no deadline; five minutes without a byte, undici's own body
+ * timeout and what these downloads always had.
+ */
+export const RUNTIME_DOWNLOAD_LIMITS: TransferLimits = { idleMs: 300_000, deadlineMs: Number.POSITIVE_INFINITY }
 
 /** The transfer went quiet for too long, or took too long in all. */
 export class TransferStalledError extends Error {}
@@ -167,21 +173,26 @@ async function fetchWithin(url: string, limits: TransferLimits): Promise<{ ok: b
     handle.unref?.()
     return handle
   }
-  const deadline = timer(limits.deadlineMs, `took longer than ${limits.deadlineMs} ms in all`)
+  // No deadline at all for an infinite one: a timer given Infinity fires at once.
+  const deadline = Number.isFinite(limits.deadlineMs) ? timer(limits.deadlineMs, `took longer than ${limits.deadlineMs} ms in all`) : undefined
   let idle = timer(limits.idleMs, `sent nothing for ${limits.idleMs} ms`)
   const heard = (): void => { clearTimeout(idle); idle = timer(limits.idleMs, `sent nothing for ${limits.idleMs} ms`) }
   try {
     const res = await Promise.race([fetch(url, { signal: controller.signal }), gaveUp])
     heard()
+    // Read as it arrives, so the idle timer hears every chunk. A response with no stream (a body-less
+    // status, or a Response-like object that only buffers) is read whole, within the same limits.
+    if (!res.body) {
+      const whole = res.ok && typeof res.arrayBuffer === 'function' ? Buffer.from(await Promise.race([res.arrayBuffer(), gaveUp])) : Buffer.alloc(0)
+      return { ok: res.ok, status: res.status, body: whole }
+    }
     const chunks: Buffer[] = []
-    if (res.body) {
-      reader = res.body.getReader()
-      for (;;) {
-        const { done, value } = await Promise.race([reader.read(), gaveUp])
-        if (done) break
-        chunks.push(Buffer.from(value))
-        heard()
-      }
+    reader = res.body.getReader()
+    for (;;) {
+      const { done, value } = await Promise.race([reader.read(), gaveUp])
+      if (done) break
+      chunks.push(Buffer.from(value))
+      heard()
     }
     return { ok: res.ok, status: res.status, body: Buffer.concat(chunks) }
   } finally {

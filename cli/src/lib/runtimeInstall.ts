@@ -5,7 +5,7 @@ import { dirname, join, sep } from 'node:path'
 import { env } from '../config/env.js'
 import { gridChildEnv, managedGridPath, meetsVersionFloor } from './gridExec.js'
 import { managedNodePath } from './nodeRuntime.js'
-import { downloadVerified } from './selfUpdate.js'
+import { RUNTIME_DOWNLOAD_LIMITS, downloadVerified } from './selfUpdate.js'
 
 /**
  * Provisioning the Node the CLI runs on, from inside the CLI.
@@ -123,7 +123,7 @@ async function ensureManagedArchive(spec: ManagedArchive): Promise<string | null
       // downloadVerified checks the sha256 but not the length, so check it here: a truncated body
       // that somehow collided would be caught by the hash anyway, but a mismatch here is the cheaper
       // and clearer failure.
-      const bytes = await downloadVerified(artifact)
+      const bytes = await downloadVerified(artifact, RUNTIME_DOWNLOAD_LIMITS)
       if (artifact.size !== undefined && bytes.length !== artifact.size) return installed
 
       mkdirSync(env.ADAPTER_RUNTIME_DIR, { recursive: true, mode: 0o700 })

@@ -4,7 +4,7 @@ import { join } from 'path'
 import { createHash } from 'crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
-  DOWNLOAD_LIMITS, MANIFEST_LIMITS, REFUSED_RETRY_MAX_MS, TransferStalledError, canary, confirm, downloadVerified, fetchManifest, isLocalDevBuild,
+  DOWNLOAD_LIMITS, MANIFEST_LIMITS, REFUSED_RETRY_MAX_MS, RUNTIME_DOWNLOAD_LIMITS, TransferStalledError, canary, confirm, downloadVerified, fetchManifest, isLocalDevBuild,
   msUntilSlot, rejectedVersions, restore, runCanary, semverGt, settleRolledBack, shouldAutoUpdate, stage, startSelfUpdater, unjudgedUpdate,
 } from './selfUpdate.js'
 import { SpawnLockBusyError } from './daemonSpawnLock.js'
@@ -856,6 +856,21 @@ describe('a link that stalls without dropping (e2e/updateHostile.e2e.ts)', () =>
     })
     await expect(downloadVerified({ url: 'https://updates.test/slow.js', sha256: sha(bytes) }, { idleMs: 200, deadlineMs: 5_000 })).resolves.toEqual(bytes)
     await expect(downloadVerified({ url: 'https://updates.test/empty.js', sha256: sha(Buffer.alloc(0)) }, limits)).resolves.toEqual(Buffer.alloc(0))
+  })
+
+  it('reads a response with no stream whole, and sets no deadline for an infinite one', async () => {
+    const bytes = Buffer.from('console.log("9.9.9")\n')
+    vi.stubGlobal('fetch', async (url: string) => url.endsWith('/buffered.js')
+      ? { ok: true, status: 200, body: null, arrayBuffer: async () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) } as unknown as Response
+      : url.endsWith('/gone.js') ? { ok: false, status: 404, body: null } as unknown as Response
+        : new Response(new ReadableStream<Uint8Array>({
+          async pull(controller) { await new Promise((resolve) => setTimeout(resolve, 40)); controller.enqueue(new Uint8Array(bytes)); controller.close() },
+        })))
+    await expect(downloadVerified({ url: 'https://updates.test/buffered.js', sha256: sha(bytes) }, limits)).resolves.toEqual(bytes)
+    await expect(downloadVerified({ url: 'https://updates.test/gone.js', sha256: 'x' }, limits)).rejects.toThrow('HTTP 404')
+    // A timer given Infinity fires at once: an infinite deadline must be no deadline at all.
+    await expect(downloadVerified({ url: 'https://updates.test/slow.js', sha256: sha(bytes) }, RUNTIME_DOWNLOAD_LIMITS)).resolves.toEqual(bytes)
+    expect(RUNTIME_DOWNLOAD_LIMITS).toEqual({ idleMs: 300_000, deadlineMs: Number.POSITIVE_INFINITY })
   })
 
   it('is a failed check, tried again at the next one, with the limits it was given; the manifest gets at most its own', async () => {
