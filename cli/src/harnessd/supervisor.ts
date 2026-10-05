@@ -176,6 +176,15 @@ type TimerName = 'bindTimer' | 'readyTimer' | 'heartbeatTimer' | 'killTimer' | '
 
 const describeExit = (code: number | null, signal: NodeJS.Signals | null): string =>
   signal ? `signal ${signal}` : `code ${code}`
+
+/**
+ * Whether why a core could not start names the disk rather than the build: no space left, a quota
+ * spent, a file system mounted read-only. Read off the reason a core gives for its safe mode, which is
+ * the error it failed on (`listen ENOSPC: no space left on device …` for its socket's claim).
+ */
+export function namesTheDisk(reason: string): boolean {
+  return /\b(ENOSPC|EDQUOT|EROFS)\b|no space left on device|disk quota exceeded|read-only file system/i.test(reason)
+}
 const MIB = 1024 * 1024
 
 export class Supervisor {
@@ -195,6 +204,8 @@ export class Supervisor {
   private ending: 'stop' | 'restart' | null = null
   /** Why the master killed the running core, when it did. */
   private killReason: ExitReason | null = null
+  /** The core on an update could not start for want of room on the disk: its end is no verdict. */
+  private noRoom = false
   /** A core exited for an update: the next one runs the new bundle, on probation until it proves it. */
   private update: 'pending' | 'probation' | null = null
   /** Crashes inside the crash-loop window, on the monotonic clock. */
@@ -363,6 +374,15 @@ export class Supervisor {
       case 'harnessd:ready':
         if (!this.bound || this.state !== 'listening') return
         this.clearTimer('readyTimer')
+        if (message.safeMode !== undefined && this.update && namesTheDisk(message.safeMode)) {
+          // A disk too full to start on says nothing of the build: the one before would fail the same
+          // way, and a rollback that frees the room only for the updater to stage the build again is a
+          // loop. Before, the good build was rolled back and remembered as bad (e2e/updateHostile.e2e.ts).
+          // Started again, on the same bundle and still on trial, once there may be room.
+          this.noRoom = true
+          this.kill(core, 'not-ready', `could not start on the new bundle for want of room on the disk (${message.safeMode}) — not a verdict on the build`)
+          return
+        }
         if (message.safeMode !== undefined && this.update) {
           // The new bundle could not start: that is the update failing, however long it stays up.
           this.kill(core, 'crashed', `started in safe mode on the new bundle (${message.safeMode})`)
@@ -437,6 +457,17 @@ export class Supervisor {
     // that found it while the one before was on probation (e2e/updateHostile.e2e.ts: a fix published
     // moments after the release it fixes).
     const superseded = this.update !== null && reason === 'update' && this.stagedSinceSpawn()
+    const noRoom = this.noRoom
+    this.noRoom = false
+    if (this.update && noRoom) {
+      // Still on trial: the next core on this bundle is judged on it, from ready. Backed off like a
+      // crash, without counting as one: safe mode would not make room either.
+      const delay = this.backoff
+      this.backoff = Math.min(this.backoff * 2, this.options.maxBackoffMs)
+      this.deps.log(`[harnessd] the updated core had no room to start (${exit}) — keeping the update on trial; trying again in ${delay} ms`)
+      this.scheduleSpawn(delay)
+      return
+    }
     if (this.update && !superseded) {
       // The core on the new bundle did not come up, or did not stay up: the bundle before it did.
       this.update = null
