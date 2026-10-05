@@ -58,7 +58,13 @@ export function workspacesCoreApi(
       terminalAvailable: () => false,
       sync: (session) => renamed(session.agentId),
       runtimeModels: async () => [],
+      runtimeProfile: () => null,
+      setRuntime: () => {},
+      fork: async () => ({ ok: false, error: 'UNSUPPORTED' }),
     },
+    // The workspaces drive no agent: these are never asked of them.
+    turns: { send: () => {}, stop: () => {}, recent: () => [], asks: () => [] },
+    questions: { answer: () => {}, answerReviewed: async () => false },
     transcripts: { databaseHistory: () => undefined },
     external: {
       sessions: { list: () => [], scan: async () => [] },

@@ -1841,6 +1841,33 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       return (await postJson<{ gridName?: string }>('/api/grid/name', {}, headers, AbortSignal.timeout(GRID_MINT_TIMEOUT_MS))).gridName ?? null
     },
     accessToken: () => new AuthSessionManager(backendHttpBase()).accessToken(),
+    // What a device or another machine asks of an agent here: the SAME handlers the backend socket
+    // drives, called directly — the slash-command adaptation and the turn and question plumbing live there.
+    runtimeProfile: (session) => runtimeProfiles.selectedModel(session),
+    setRuntime: (agentId, model, effort) => {
+      const s = registry.resolve(agentId)
+      if (!s || !model) return
+      backendRef?.onRuntimeProfileUpdate?.(s.sessionId || agentId, `runtime-v1:${s.sessionId || agentId}:${s.engine}:${model}@${effort || 'auto'}`)
+    },
+    // The same path the window's `agent_fork` takes.
+    fork: async (agentId) => {
+      if (!backendRef?.onForkAgent) return { ok: false, error: 'UNSUPPORTED' }
+      const result = await backendRef.onForkAgent({ agentId, name: null, prompt: null })
+      return result.ok ? { ok: true, agentId: result.session.agentId } : { ok: false, error: result.error, detail: result.detail }
+    },
+    turns: {
+      send: (agentId, text) => backendRef?.onMessage?.(agentId, text),
+      stop: (agentId) => backendRef?.onCancel?.(agentId),
+      recent: (agentId, n) => mirror.recent(registry.resolve(agentId)?.sessionId || agentId, n),
+      asks: (agentId) => mirror.recentAsks(registry.resolve(agentId)?.sessionId || agentId),
+    },
+    questions: {
+      // The device's own object, verbatim: rebuilt as `{ [requestId]: optionId }` it was keyed by the
+      // REQUEST id, not the question key `onQuestionAnswer` expects, and named a question that does not exist.
+      answer: (agentId, requestId, answers) => { void backendRef?.onQuestionAnswer?.({ agentId, requestId, answers }) },
+      answerReviewed: async (answer) => (await questions.answer({ agentId: answer.agentId, requestId: answer.requestId,
+        answers: answer.answers, expectedQuestions: answer.questions, selectedLabels: answer.selections, freeTextKeys: answer.freeTextKeys })).ok,
+    },
   })
   const ports = emptyPorts()
   // Each service starts and is called through the host, so one that fails is logged and left off and
@@ -4050,27 +4077,16 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     machineId: () => backend.machineId,
     computerId: () => computerId(),
     signedIn: () => readAuthSession() !== null,
-    // The SAME handlers the backend socket drives, called directly rather than reimplemented: the
-    // slash-command adaptation, the turn bookkeeping and the question plumbing all live in them.
-    sendTurn: (agentId, text) => backend.onMessage?.(agentId, text),
-    stopTurn: (agentId) => backend.onCancel?.(agentId),
-    // The dial's own object, forwarded verbatim. It used to be rebuilt here as `{ [requestId]: optionId }`
-    // — keyed by the REQUEST id rather than by the question key `onQuestionAnswer` expects, so the answer
-    // named a question that does not exist.
-    answer: (agentId, requestId, answers) => { void backend.onQuestionAnswer?.({ agentId, requestId, answers }) },
-    answerReviewed: async answer => (await questions.answer({ agentId: answer.agentId, requestId: answer.requestId,
-      answers: answer.answers, expectedQuestions: answer.questions, selectedLabels: answer.selections, freeTextKeys: answer.freeTextKeys })).ok,
-    recent: (id, n) => mirror.recent(registry.resolve(id)?.sessionId || id, n),
-    recentAsks: (id) => mirror.recentAsks(registry.resolve(id)?.sessionId || id),
-    runtimeProfile: (session) => runtimeProfiles.selectedModel(session),
-    updateAgent: (agentId, model, effort) => {
-      const s = registry.resolve(agentId)
-      if (!s || !model) return
-      backend.onRuntimeProfileUpdate?.(s.sessionId || agentId, `runtime-v1:${s.sessionId || agentId}:${s.engine}:${model}@${effort || 'auto'}`)
-    },
-    // The same provider the web and the WiFi device read, so the dial's picker cannot show a different
-    // catalog from the one the machine will actually honour.
-    listModels: runtimeModels,
+    // The core's own doors for a local agent (core/api.ts): the same handlers the backend socket drives.
+    sendTurn: coreApi.turns.send,
+    stopTurn: coreApi.turns.stop,
+    answer: coreApi.questions.answer,
+    answerReviewed: coreApi.questions.answerReviewed,
+    recent: coreApi.turns.recent,
+    recentAsks: coreApi.turns.asks,
+    runtimeProfile: coreApi.agents.runtimeProfile,
+    updateAgent: coreApi.agents.setRuntime,
+    listModels: coreApi.agents.runtimeModels,
     // Both of these are LOCAL-ONLY on purpose (backend.sendLocal, not backend.send): they describe a hand
     // at this desk, not a change in what the machine is doing, and the cloud web audience may be sitting
     // at another computer entirely.
@@ -4083,11 +4099,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       backend.sendLocal({ type: 'dial_notification_read', payload: { machineId, agentId, readToken } }),
     forked: (machineId, agentId, sourceAgentId) => backend.sendLocal({ type: 'dial_forked', payload: { machineId, agentId, sourceAgentId } }),
     // The dial's Fork: the same path the window's `agent_fork` takes, then `forked` above lands on it.
-    forkAgent: async (agentId) => {
-      if (!backend.onForkAgent) return { ok: false, error: 'UNSUPPORTED' }
-      const result = await backend.onForkAgent({ agentId, name: null, prompt: null })
-      return result.ok ? { ok: true, agentId: result.session.agentId } : { ok: false, error: result.error, detail: result.detail }
-    },
+    forkAgent: coreApi.agents.fork,
     // No `edge`. It used to ride along for an agent the window had no tile for, naming which end of the
     // desk to replace; the carousel now only walks tiles that exist, so every focus is about one of them.
     focused: (machineId, agentId) =>

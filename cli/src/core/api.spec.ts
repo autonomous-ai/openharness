@@ -28,6 +28,11 @@ describe('the core API services stand on', () => {
       accessToken: vi.fn(async () => 'token'),
       privateGridName: vi.fn(async () => 'grid-1'),
       machineName: vi.fn(() => 'Studio'),
+      runtimeProfile: vi.fn(() => null),
+      setRuntime: vi.fn(),
+      fork: vi.fn(async () => ({ ok: true as const, agentId: 'fork' })),
+      turns: { send: vi.fn(), stop: vi.fn(), recent: vi.fn(() => []), asks: vi.fn(() => []) },
+      questions: { answer: vi.fn(), answerReviewed: vi.fn(async () => true) },
     }
     const core = createCoreApi(deps)
     expect(core.dataDir).toBe('/data')
@@ -51,6 +56,12 @@ describe('the core API services stand on', () => {
     expect(core.account.accessToken).toBe(deps.accessToken)
     expect(core.account.privateGridName).toBe(deps.privateGridName)
     expect(core.account.machineName).toBe(deps.machineName)
+    // What a device or another machine asks of an agent here: the core's own handlers, as they are.
+    expect(core.agents.runtimeProfile).toBe(deps.runtimeProfile)
+    expect(core.agents.setRuntime).toBe(deps.setRuntime)
+    expect(core.agents.fork).toBe(deps.fork)
+    expect(core.turns).toBe(deps.turns)
+    expect(core.questions).toBe(deps.questions)
   })
 
   it('falls back, when the teams fail, to an undo that has nothing to undo', () => {
