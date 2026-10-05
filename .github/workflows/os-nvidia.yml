@@ -3,6 +3,11 @@ name: Harness OS offline NVIDIA installation
 on:
   workflow_dispatch:
     inputs:
+      probe:
+        description: 'Offline driver installation or private GPU diagnostic integration'
+        type: choice
+        options: [install, health]
+        default: install
       image_run_id:
         description: 'Verified reference image for focused candidate testing'
         type: string
@@ -19,6 +24,7 @@ concurrency:
 
 jobs:
   nvidia:
+    if: ${{ inputs.probe != 'health' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -79,3 +85,42 @@ jobs:
             os/dist/nvidia-bundle-manifest.json
           retention-days: 14
           compression-level: 0
+
+  health:
+    if: ${{ inputs.probe == 'health' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v6
+        with:
+          name: programmer-os-x86_64
+          path: os/dist
+          run-id: ${{ inputs.image_run_id }}
+          github-token: ${{ github.token }}
+      - name: Prepare native ABI and VM tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends build-essential libegl1 libegl-mesa0 libgles2 mesa-vulkan-drivers qemu-system-x86 qemu-utils ovmf python3-pil tesseract-ocr
+          sudo chmod a+rw /dev/kvm
+      - name: Check OS contracts and real EGL ABI
+        env:
+          LIBGL_ALWAYS_SOFTWARE: 'true'
+        run: |
+          make -C os check
+          go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/os-nvidia.yml
+          mkdir -p os/test-results/gpu-abi
+          python3 os/tests/gpu_egl_native.py > os/test-results/gpu-abi/mesa.json
+      - name: Check automatic diagnostics across encrypted cold boots
+        run: python3 os/tests/gpu_health_vm.py --iso os/dist/*.iso --output os/test-results/gpu-health
+      - name: Retain evidence without virtual disks
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: harness-os-gpu-health
+          path: |
+            os/test-results/gpu-abi/
+            os/test-results/gpu-health/
+            !os/test-results/gpu-health/*.qcow2
+            !os/test-results/gpu-health/OVMF_VARS.fd
+          retention-days: 14
