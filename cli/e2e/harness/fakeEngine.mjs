@@ -297,6 +297,13 @@ export async function run(engine, config) {
   }
 
   announceProcess()
+  // The composer, as both CLIs keep it: the bottom of the screen, holding what is being typed and nothing
+  // else. Enter takes the prompt off it at once and into the conversation; the turn's output is written
+  // above it, and it is drawn again below. The fake used to leave a submitted prompt on its composer line
+  // until the answer came, which the daemon reads as a draft never sent: it pressed Enter again for it
+  // (sessionInput.ts) whenever the turn was slow to start, as one is behind its UserPromptSubmit hook.
+  let buffer = ''
+  let composerRows = 0
   // What Codex 0.160 draws under its empty composer in the two states the daemon must read off the pane
   // (tui/src/bottom_pane): a goal it is pursuing, on the right of its status line, and the footer of
   // its transcript browser, with the composer dimmed whole. Null draws the composer alone, as before.
@@ -329,27 +336,41 @@ export async function run(engine, config) {
       : `  \x1b[2mreverse-i-search: \x1b[0m${query}  \x1b[2menter accept · esc cancel\x1b[0m`
     return { search: true, query, match, composer: `› ${match ?? ''}`, footer }
   }
-  const draw = (line = '') => {
-    if (bottom?.pager) { process.stdout.write(bottom.pager); return }
-    if (bottom && !line) {
+  /** Rows the composer takes now: a long or multi-line draft wraps. */
+  const rowsOf = (text) => text.split('\n')
+    .reduce((rows, line) => rows + Math.max(1, Math.ceil([...line].length / Math.max(20, process.stdout.columns || 80))), 0)
+  /** Clears the composer and what is drawn under it, leaving the cursor where it began. */
+  const eraseComposer = () => {
+    process.stdout.write(`${composerRows > 1 ? `\x1b[${composerRows - 1}A` : ''}\r\x1b[0J`)
+    composerRows = 0
+  }
+  const drawComposer = () => {
+    if (bottom?.pager) { process.stdout.write(bottom.pager); composerRows = 0; return }
+    if (bottom && !buffer) {
       // The footer on the row under the composer, then the cursor back to the composer, after its glyph.
-      process.stdout.write(`\r\x1b[2K${bottom.composer}\r\n\x1b[2K${bottom.footer}\x1b[1A\r\x1b[2C`)
+      process.stdout.write(`${bottom.composer}\r\n\x1b[2K${bottom.footer}\x1b[1A\r\x1b[2C`)
+      composerRows = 1
       return
     }
-    process.stdout.write(`\r\x1b[2K› ${line}`)
+    process.stdout.write(`› ${buffer}`)
+    composerRows = rowsOf(`› ${buffer}`)
   }
-  // Out of the browser, back to the composer: the pager's alternate screen left, or the footer row
-  // under the composer cleared. Enter rewinds on the way out.
+  const draw = () => { eraseComposer(); drawComposer() }
+  /** The conversation, written above the composer. `text` ends at the start of a line. */
+  const say = (text) => { eraseComposer(); process.stdout.write(text); drawComposer() }
+  // Out of the browser, back to the composer: the pager's alternate screen left, or the dimmed composer
+  // and its footer cleared. Enter rewinds on the way out.
   const leaveBrowsing = (rewound) => {
     if (bottom.pager) process.stdout.write('\x1b[?1049l')
-    else process.stdout.write('\r\n\x1b[2K\x1b[1A')
-    if (rewound) process.stdout.write('\r\x1b[2K(rewound to an earlier prompt)\r\n')
+    else eraseComposer()
     bottom = null
-    draw()
+    composerRows = 0
+    if (rewound) process.stdout.write('\r\x1b[2K(rewound to an earlier prompt)\r\n')
+    drawComposer()
   }
   process.stdout.write(`\x1b[?2004h${engine === 'claude' ? '✻ Welcome to Claude Code (fake)' : '>_ OpenAI Codex (fake)'}\r\n`)
   process.stdout.write(`  session ${sessionId}${resumed ? ' (resumed)' : ''}\r\n\r\n`)
-  draw()
+  drawComposer()
   if (config.firstHookDelayMs && !resumed) await new Promise((resolve) => setTimeout(resolve, config.firstHookDelayMs))
   await runHooks('SessionStart', { source: resumed ? 'resume' : 'startup' })
 
@@ -403,7 +424,7 @@ export async function run(engine, config) {
   const dialogKeys = (chunk) => {
     for (const key of chunk.match(/\x1b\[200~[\s\S]*?(?:\x1b\[201~|$)|\x1b\[[AB]|\x1b|\r|\n|./gs) ?? []) {
       if (!dialog) return
-      const settle = (choice) => { eraseDialog(); const asked = dialog; dialog = null; notes = asked.notes ?? ''; asked.resolve(choice) }
+      const settle = (choice) => { eraseDialog(); const asked = dialog; dialog = null; notes = asked.notes ?? ''; drawComposer(); asked.resolve(choice) }
       const rows = dialog.kind === 'permit' ? 3 : engine === 'claude' ? CHOICES.length : CHOICES.length + 1
       if (key.startsWith('\x1b[200~')) {
         if (dialog.kind !== 'permit' && engine === 'codex') dialog.notes = key.slice(6).replace(/\x1b\[201~$/, '')
@@ -442,9 +463,8 @@ export async function run(engine, config) {
       codex('event_msg', { type: 'item_completed', item: { type: 'AgentMessage', content: [{ type: 'Text', text }], phase: 'final_answer' } })
       codex('event_msg', { type: 'task_complete', turn_id: open, last_agent_message: text })
     }
-    process.stdout.write(`\r\n${text}\r\n\r\n`)
     open = null
-    draw()
+    say(`\r\n${text}\r\n\r\n`)
     // Claude Code's Stop hooks run once the answer is in, and the CLI waits for them before it takes the
     // next prompt; an interrupt ends a turn without them.
     await runHooks('Stop', { stop_hook_active: false })
@@ -452,8 +472,11 @@ export async function run(engine, config) {
 
   const handle = async (raw) => {
     const prompt = raw.trim()
-    if (!prompt) { draw(); return }
+    // Enter on an empty composer takes nothing.
+    if (!prompt) return
     history.push(prompt)
+    // The prompt the CLI took, in the conversation, where both CLIs show what was sent.
+    say(`> ${prompt.replace(/\n/g, '\r\n  ')}\r\n`)
     if (prompt === '!exit') {
       // Leaving at the prompt is the end of the session to Claude Code, and it says so to its hooks.
       await runHooks('SessionEnd', { reason: 'prompt_input_exit' })
@@ -464,8 +487,7 @@ export async function run(engine, config) {
       // `/compact` is a command, not a turn: a summary replaces the history, and Claude Code announces
       // the same session again (SessionStart, source compact), which makes the daemon re-read it.
       compact()
-      process.stdout.write('\r\n(compacted)\r\n')
-      draw()
+      say('(compacted)\r\n')
       if (engine === 'claude') await runHooks('SessionStart', { source: 'compact' })
       return
     }
@@ -484,8 +506,7 @@ export async function run(engine, config) {
       turn = 0
       if (engine === 'codex') codex('session_meta', { id: sessionId, cli_version: version, cwd, source: 'cli' })
       announceProcess()
-      process.stdout.write('\r\n(new conversation)\r\n')
-      draw()
+      say('(new conversation)\r\n')
       await runHooks('SessionStart', { source: 'clear' })
       return
     }
@@ -499,9 +520,6 @@ export async function run(engine, config) {
       : { turn_id: `turn-${turn + 1}`, prompt })
     turn++
     open = `turn-${turn}`
-    // Onto the row under the composer, which holds a footer while one is drawn: cleared, as Codex redraws
-    // its whole bottom pane rather than leave the old one in the history above.
-    process.stdout.write(`\r\n\x1b[2K`)
     if (engine === 'claude') {
       claude({ type: 'user', message: { role: 'user', content: prompt } })
       claude({ type: 'assistant', message: { id: `msg_${turn}_t`, role: 'assistant', model: config.claudeModel ?? 'claude-opus-5-5', content: [{ type: 'thinking', thinking: `considering: ${prompt}` }], stop_reason: null } })
@@ -537,11 +555,13 @@ export async function run(engine, config) {
       // Numbered, so whoever reads the terminal can tell a lost, repeated or reordered line.
       const kib = Number(directive[2]) || 256
       let written = 0
+      eraseComposer()
       for (let line = 0; written < kib * 1024; line++) {
         const text = `flood ${String(line).padStart(7, '0')} ${'.'.repeat(80)}\r\n`
         process.stdout.write(text)
         written += text.length
       }
+      drawComposer()
       await finish(`flooded ${kib} KiB`)
       return
     }
@@ -556,7 +576,8 @@ export async function run(engine, config) {
     if (directive?.[1] === 'permit') {
       const command = directive[2] || 'printf hi'
       await new Promise((resolve) => setTimeout(resolve, 2_000))
-      const row = await new Promise((resolve) => { dialog = { kind: 'permit', command, cursor: 0, drawn: 0, resolve }; drawDialog() })
+      // The dialog takes the composer's place, as the CLIs draw theirs, until it is answered.
+      const row = await new Promise((resolve) => { eraseComposer(); dialog = { kind: 'permit', command, cursor: 0, drawn: 0, resolve }; drawDialog() })
       const allowed = row === 0 || row === 1
       const id = `call_${turn}_p`
       if (allowed) {
@@ -575,9 +596,9 @@ export async function run(engine, config) {
       // A real engine thinks before it asks; a dialog already on screen when its turn began reads to the
       // daemon as the previous turn's (askQuestion.ts `noteTurnStart`).
       await new Promise((resolve) => setTimeout(resolve, 2_000))
-      const choice = await new Promise((resolve) => { dialog = { cursor: 0, drawn: 0, resolve }; drawDialog() })
+      const choice = await new Promise((resolve) => { eraseComposer(); dialog = { cursor: 0, drawn: 0, resolve }; drawDialog() })
       if (choice === null) {
-        process.stdout.write('\r\n(question cancelled)\r\n')
+        say('(question cancelled)\r\n')
         await finish('(question cancelled)')
         return
       }
@@ -587,12 +608,12 @@ export async function run(engine, config) {
         const id = `toolu_${turn}`
         claude({ type: 'assistant', message: { id: `msg_${turn}_q`, role: 'assistant', model: config.claudeModel ?? 'claude-opus-5-5', content: [{ type: 'tool_use', id, name: 'AskUserQuestion', input: { questions } }], stop_reason: 'tool_use' } })
         claude({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: `User has answered your questions: "${QUESTION}"="${choice}"` }] } })
-        process.stdout.write(`\r\n⏺ User answered Claude's questions:\r\n  ⎿  · ${QUESTION} → ${choice}\r\n`)
+        say(`⏺ User answered Claude's questions:\r\n  ⎿  · ${QUESTION} → ${choice}\r\n`)
       } else {
         const id = `call_${turn}_q`
         codex('response_item', { type: 'function_call', call_id: id, name: 'request_user_input', arguments: JSON.stringify({ questions }) })
         codex('response_item', { type: 'function_call_output', call_id: id, output: JSON.stringify({ answers: { [QUESTION]: choice } }) })
-        process.stdout.write(`\r\n• ${QUESTION} → ${choice}\r\n`)
+        say(`• ${QUESTION} → ${choice}\r\n`)
       }
       await finish(`you chose ${choice}${notes ? ` (notes: ${notes})` : ''}`)
       return
@@ -630,7 +651,6 @@ export async function run(engine, config) {
 
   // Raw input: bracketed paste brackets the text, Enter (\r) submits, Ctrl-C interrupts.
   process.stdin.setEncoding('utf8')
-  let buffer = ''
   let queue = Promise.resolve()
   // Inside a bracketed paste a carriage return or newline is a newline in the prompt, as Ink and
   // ratatui read it; only one typed outside a paste submits. The paste's markers say which.
@@ -669,10 +689,10 @@ export async function run(engine, config) {
       // composer (chat_composer/history_search.rs), its Esc and ctrl+c leave the composer as it was.
       let rest = ''
       const leave = (draft) => {
-        process.stdout.write('\r\n\x1b[2K\x1b[1A')
+        eraseComposer()
         bottom = null
         buffer = draft
-        draw(buffer)
+        drawComposer()
       }
       for (const token of chunk.match(/\x1b\[200~[\s\S]*?(?:\x1b\[201~|$)|\x1b\[[0-9;]*[A-Za-z~]|\x1b|[\s\S]/g) ?? []) {
         if (!bottom?.search) { rest += token; continue }
@@ -709,21 +729,24 @@ export async function run(engine, config) {
       if (part === '\x1b[201~') { pasting = false; continue }
       if (pasting && (part === '\r' || part === '\n')) { buffer += '\n'; continue }
       if (part === '\x03') {
+        // Ctrl-C ends a running turn, and empties the composer either way.
+        buffer = ''
         if (open) {
           if (engine === 'claude') claude({ type: 'user', message: { role: 'user', content: [{ type: 'text', text: '[Request interrupted by user]' }] } })
           else codex('event_msg', { type: 'turn_aborted', turn_id: open })
           open = null
-          process.stdout.write('\r\n(interrupted)\r\n')
-          draw()
-        }
-        buffer = ''
+          say('(interrupted)\r\n')
+        } else draw()
       } else if (part === '\r' || part === '\n') {
         const line = buffer
         buffer = ''
+        // Taken off the composer at once, whatever the engine is doing: a prompt sent while a turn runs
+        // waits its turn out of the composer, as both CLIs queue one.
+        draw()
         queue = queue.then(() => handle(line))
       } else if (part) {
         buffer += part
-        draw(buffer)
+        draw()
       }
     }
   })
