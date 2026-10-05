@@ -29,7 +29,7 @@ export interface MasterConfig {
    *  replaces on disk. */
   scriptPath: string
   /** What the services run instead, when it is not the CLI entry: the lean bundle the entry carries
-   *  (lib/leanBundle.ts), so each service parses its own code and not the whole CLI's. */
+   *  (./leanBundle.ts), so each service parses its own code and not the whole CLI's. */
   serviceScriptPath?: string
   /** The sha256 of the bundle this master's code came from, when the master was not started on
    *  `scriptPath` itself but on the lean bundle read from it: the bundle it runs is the one it was read

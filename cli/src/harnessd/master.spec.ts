@@ -367,7 +367,7 @@ describe('runMaster', () => {
   })
 
   it('starts the services from the lean bundle when given one, and the core from the CLI entry', async () => {
-    // The lean bundle cli.js carries (lib/leanBundle.ts): each service parses its own code, not the CLI's.
+    // The lean bundle cli.js carries (./leanBundle.ts): each service parses its own code, not the CLI's.
     const pidFile = join(dir, 'adapter.pid')
     const seen = join(dir, 'seen')
     const body = (who: string) => `

@@ -2,7 +2,7 @@
  * harnessd's master and its services lean, on a real release bundle: Node parses all of the file a
  * process starts on, and started on the whole 4.4 MB cli.js each paid about 45 MiB for that alone. So
  * the master re-executes, same pid, on the lean bundle cli.js carries, and starts every service from it
- * (src/lib/leanBundle.ts); the core runs from cli.js as always. Every service still runs in its own
+ * (src/harnessd/leanBundle.ts); the core runs from cli.js as always. Every service still runs in its own
  * process and does its work, for Claude Code and Codex agents alike. A lean bundle that cannot start a
  * master is never handed the daemon, and `HARNESSD_LEAN=off` runs everything from cli.js as before.
  *
