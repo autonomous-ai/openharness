@@ -32,3 +32,4 @@ questions. Everything else is a service ([../services/AGENTS.md](../services/AGE
 - `api.ts`: the contract with services. `serviceHost.ts`: services in this process.
   `serviceLinks.ts`: services in their own processes. `viewersLink.ts`: what the core keeps of the
   viewers when they run in theirs. `workspacesLink.ts`: what the core tells workspaces in theirs.
+  `teamsLink.ts`: every change to the teams' prompt scopes, kept until their process has it.
