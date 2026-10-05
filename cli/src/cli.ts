@@ -51,7 +51,7 @@ import { DeviceFleet } from './device/deviceFleet.js'
 import { registry, projectDisplayName, validTranscriptPath, type RegisteredSession } from './lib/registry.js'
 import { engineSessionTitle } from './lib/sessionTitle.js'
 import { installCodexHooks } from './lib/hooks.js'
-import { PID_FILE, daemonPort, isAlive, isDaemonRunning, readPid } from './lib/daemonState.js'
+import { DAEMON_LOG_FILE, HARNESSD_STATUS_FILE, PID_FILE, daemonPort, isAlive, isDaemonRunning, readPid } from './lib/daemonState.js'
 import { clearSafeModeMarker, readSafeModeMarker, runBootHandoff, safeModeDisposition, safeModeStatusBody, SafeModeRequest, writeSafeModeMarker } from './lib/daemonSafeMode.js'
 import { awakeTimeout } from './lib/sleepAware.js'
 import {
@@ -59,6 +59,8 @@ import {
 } from './lib/daemonLaunch.js'
 import { SpawnLockBusyError, describeSpawnLockBusyPlainly, describeSpawnLockFailure, describeSpawnLockOwner, describeSpawnLockWaitPlainly, withSpawnLock } from './lib/daemonSpawnLock.js'
 import { stopDaemonProcess } from './lib/daemonStop.js'
+import { installedPlatform, serviceDefinition, startUnderPlatform } from './lib/platformDaemon.js'
+import { serviceCommand, serviceCommandDeps } from './lib/serviceCommand.js'
 import { ensureTmuxOnPath } from './lib/tmuxOnPath.js'
 import { flashCommand } from './lib/flash.js'
 import { readOrMintComputerId } from './lib/computerIdentity.js'
@@ -236,9 +238,7 @@ import {
 
 
 // Daemon stdout/stderr. Capped at LOG_MAX_BYTES — see prepareLogFile/trimLogFile in lib/log.ts.
-const LOG_FILE = join(env.ADAPTER_DATA_DIR, 'harness.log')
-/** What harnessd's master last said about itself, for `harness status` when no core answers. */
-const HARNESSD_STATUS_FILE = join(env.ADAPTER_DATA_DIR, 'harnessd-status.json')
+const LOG_FILE = DAEMON_LOG_FILE
 // Pre-rename name. Adopted (renamed, keeping the inode) the first time a daemon opens the log, so a
 // machine that updates mid-run keeps its history instead of stranding it in a file nobody tails.
 // The log has had three names; this slot holds the OLDEST. The middle one (`machine.log`) is adopted
@@ -350,6 +350,10 @@ Machine:
   harness stop                 stop the background adapter (keeps the SSO session)
   harness reset                stop the adapter and clear local CLI state
   harness status               show whether it's running (+ version)
+  harness service install      run the daemon under launchd (macOS) or systemd (Linux): it starts at login
+                               and comes back if it dies; start and stop then go through it (opt-in)
+  harness service uninstall    undo that: the daemon goes back to \`harness start\`
+  harness service status       what launchd or systemd has registered, and whether it runs (--json)
   harness logs export          zip the last 7 days of logs (app, CLI, dial, daemon) to the Desktop
   harness tui                  all of Harness in this terminal: swarms, panes, every machine (⌥O ⌥P ⌥N)
   harness new [agent] [@machine] [folder|name] [-- task]
@@ -428,6 +432,11 @@ no durable home, a container or CI job, pin ADAPTER_COMPUTER_ID instead.
 Env: BACKEND_WS_URL (${env.BACKEND_WS_URL}), WEB_URL (${env.WEB_URL}), ADAPTER_DATA_DIR,
      ADAPTER_COMPUTER_ID, CLAUDE_PROJECTS_DIR, PORT`)
   process.exit(exitCode)
+}
+
+/** The `supervisor` row: who keeps the daemon running when it is not `harness start`. */
+function supervisorRow(platform: string): string {
+  return `${platform} · starts at login, comes back if it dies (harness service status)`
 }
 
 /** Compact a home-relative path with `~` for display. */
@@ -4291,6 +4300,8 @@ function printInfoBlock(opts: {
   status: string; pid: number; machineId?: string; sessions: number; version: string
   /** The `device` row's text (this machine's key code and whether the account holds it); only `status` shows it. */
   device?: string
+  /** Who keeps the daemon running, when launchd or systemd does (`harness service install`). */
+  supervisor?: string
   connection: { backendUrl: string | null; autonomousEnv: string | null; signedIn: boolean; dataDir: string | null; authDir: string | null }
 }): void {
   const row = (k: string, v: string): string => `   ${k.padEnd(10)} ${v}`
@@ -4312,6 +4323,7 @@ function printInfoBlock(opts: {
   if (opts.connection.authDir) console.log(row('auth', tildify(opts.connection.authDir)))
   console.log(row('agents', `${opts.sessions} available`))
   console.log(row('pid', String(opts.pid)))
+  if (opts.supervisor) console.log(row('supervisor', opts.supervisor))
   console.log(row('logs', tildify(LOG_FILE)))
   console.log(row('dial log', tildify(join(env.HARNESS_LOGS_DIR, 'dial-YYYYMMDD.log'))))
   console.log(row('dashboard', `http://127.0.0.1:${daemonPort()}`))
@@ -4392,6 +4404,19 @@ async function spawnDaemon(session: AuthSession | null, runtimeNode: string | nu
   mkdirSync(env.ADAPTER_DATA_DIR, { recursive: true, mode: 0o700 })
   prepareLogFile(LOG_FILE, LEGACY_LOG_FILE) // adopt an older name + enforce the cap before we tail from here
   const logOffset = existsSync(LOG_FILE) ? readFileSync(LOG_FILE).length : 0
+  // Opted in to launchd or systemd (`harness service install`): the platform runs the master, and one
+  // spawned here would be a second supervisor beside it (lib/platformDaemon.ts).
+  const platform = installedPlatform()
+  if (platform) {
+    const started = await startUnderPlatform(serviceDefinition({ logFile: LOG_FILE }))
+    if (!started.ok) {
+      const fail = connectFailure(launchDeps.readLogSlice(logOffset), daemonPort())
+      console.error(`\n✗ ${fail?.detail ?? started.detail}`)
+      console.error(`  logs   ${tildify(LOG_FILE)}   ·   harness service status`)
+      process.exit(1)
+    }
+    return reportStarted(session, started.pid, platform)
+  }
   const logFd = openSync(LOG_FILE, 'a')
   // The daemon starts on the managed runtime straight away rather than inheriting this process's
   // interpreter and waiting for some later restart to adopt it.
@@ -4421,6 +4446,12 @@ async function spawnDaemon(session: AuthSession | null, runtimeNode: string | nu
     process.exit(1)
   }
 
+  return reportStarted(session, child.pid ?? 0)
+}
+
+/** What `harness start` says once the daemon it started is up, and its exit. `supervisor`: launchd or
+ *  systemd started it (`harness service install`). */
+async function reportStarted(session: AuthSession | null, pid: number, supervisor?: string): Promise<never> {
   // Bound is started. What the daemon does next — dial the backend, retry on its own backoff, sign
   // itself out on a 401, step aside on a 409 — is its own business and is logged by it; this command
   // used to sit here for up to ten seconds watching the log for "[backend] connected", and a computer
@@ -4433,7 +4464,8 @@ async function spawnDaemon(session: AuthSession | null, runtimeNode: string | nu
     status: session
       ? '● started · connecting to the backend in the background'
       : '● started · this computer only (not signed in)',
-    pid: child.pid ?? 0,
+    pid,
+    supervisor: supervisor && supervisorRow(supervisor),
     machineId: session?.machineId,
     sessions: daemonStatus?.sessions ?? 0,
     version: daemonStatus?.version ?? VERSION,
@@ -5327,7 +5359,8 @@ async function status(): Promise<void> {
   // in the one line a person reads, rather than leaving it looking like an ordinary slow start.
   const safeMode = alive ? readSafeModeMarker(env.ADAPTER_DATA_DIR, isAlive) : null
   // A core that cannot answer — restarting, starting, crash-looping — is described by its master.
-  const master = alive && daemonStatus == null ? describeMasterStatus(readStatusFile(HARNESSD_STATUS_FILE, pid)) : null
+  const masterStatus = alive ? readStatusFile(HARNESSD_STATUS_FILE, pid) : null
+  const master = daemonStatus == null ? describeMasterStatus(masterStatus) : null
   printInfoBlock({
     // The backend link is the daemon's own business, so `status` is where it is read — `start` no
     // longer waits to see it, and a daemon with no backend is still serving every local agent.
@@ -5347,6 +5380,7 @@ async function status(): Promise<void> {
             ? '● running · backend connected'
             : '● running · backend offline — retrying in the background',
     pid: pid ?? 0,
+    supervisor: masterStatus?.platform && supervisorRow(masterStatus.platform),
     machineId: session?.machineId,
     sessions: daemonStatus?.sessions ?? 0,
     // A stopped daemon answers nothing, so this falls back to the local build — which is what will run.
@@ -5754,6 +5788,10 @@ switch (cmd) {
     break
   case 'stop':
     stop().catch(onError)
+    break
+  case 'service':
+    serviceCommand(rest, serviceCommandDeps({ relaunch: () => launch(false), tildify }))
+      .then((code) => { process.exitCode = code }).catch(onError)
     break
   case 'reset':
     resetCommand().catch(onError)

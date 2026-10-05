@@ -73,4 +73,75 @@ describe('stopDaemonProcess', () => {
     expect(existsSync(PID_FILE)).toBe(false)
     expect(state.released).toBe(1)
   })
+
+  describe('when launchd or systemd runs the master', () => {
+    it('asks the platform, waits for the master to go, and sends no signal of its own', async () => {
+      const { stopDaemonProcess } = await load()
+      const { PID_FILE } = await import('./daemonState.js')
+      writeFileSync(PID_FILE, '500\n')
+      const state = { pid: 500, alive: new Set([500]), killed: [] as string[], locked: 0, released: 0 }
+      let asked = 0
+      const deps = fakeDeps(state, {
+        stopPlatform: () => { asked++; return { ok: true, stopped: 500 } },
+        sleep: async () => { state.alive.delete(500) }, // the master finishes its ordered stop
+      })
+      await expect(stopDaemonProcess(deps)).resolves.toEqual({ pid: 500, stopped: true })
+      expect(asked).toBe(1)
+      expect(state.killed).toEqual([])
+      expect(existsSync(PID_FILE)).toBe(false)
+      expect(state.released).toBe(1)
+    })
+
+    it('leaves a pid file that names someone else by the time the master has gone', async () => {
+      const { stopDaemonProcess } = await load()
+      const { PID_FILE } = await import('./daemonState.js')
+      writeFileSync(PID_FILE, '500\n')
+      const state = { pid: 500, alive: new Set([500]), killed: [] as string[], locked: 0, released: 0 }
+      const deps = fakeDeps(state, {
+        stopPlatform: () => ({ ok: true, stopped: 500 }),
+        sleep: async () => { state.alive.delete(500); state.pid = 501; writeFileSync(PID_FILE, '501\n') },
+      })
+      await expect(stopDaemonProcess(deps)).resolves.toEqual({ pid: 500, stopped: true })
+      expect(existsSync(PID_FILE)).toBe(true)
+    })
+
+    it('signals the master itself when the platform cannot stop it, or has not in time', async () => {
+      const { stopDaemonProcess, PLATFORM_STOP_WAIT_MS } = { ...(await load()), ...(await import('./platformDaemon.js')) }
+      const warnings: string[] = []
+      const refused = { pid: 500, alive: new Set([500]), killed: [] as string[], locked: 0, released: 0 }
+      await stopDaemonProcess(fakeDeps(refused, { stopPlatform: () => ({ ok: false, detail: 'launchctl bootout failed' }), warn: (m) => warnings.push(m) }))
+      expect(warnings).toEqual(['  ! launchctl bootout failed — stopping it directly'])
+      expect(refused.killed).toEqual(['500:SIGTERM', '500:SIGKILL'])
+      const slow = { pid: 500, alive: new Set([500]), killed: [] as string[], locked: 0, released: 0 }
+      const slept: number[] = []
+      const clock = { now: 0 }
+      await stopDaemonProcess(fakeDeps(slow, { stopPlatform: () => ({ ok: true, stopped: 500 }), now: () => clock.now, sleep: async (ms) => { slept.push(ms); clock.now += ms } }))
+      expect(clock.now).toBeGreaterThanOrEqual(PLATFORM_STOP_WAIT_MS)
+      expect(slow.killed).toEqual(['500:SIGTERM', '500:SIGKILL'])
+    })
+
+    it('changes nothing when no platform runs it, or nothing was running', async () => {
+      const { stopDaemonProcess } = await load()
+      const none = { pid: 500, alive: new Set([500]), killed: [] as string[], locked: 0, released: 0 }
+      await expect(stopDaemonProcess(fakeDeps(none, { stopPlatform: () => null }))).resolves.toEqual({ pid: 500, stopped: true })
+      expect(none.killed).toEqual(['500:SIGTERM', '500:SIGKILL'])
+      const idle = { pid: null, alive: new Set<number>(), killed: [] as string[], locked: 0, released: 0 }
+      let asked = 0
+      await expect(stopDaemonProcess(fakeDeps(idle, { stopPlatform: () => { asked++; return { ok: true, stopped: null } } }))).resolves.toEqual({ pid: null, stopped: false })
+      expect(asked).toBe(1)
+      expect(idle.killed).toEqual([])
+    })
+
+    it('stops with signals a daemon `harness start` spawned beside the platform\'s, once the platform\'s has gone', async () => {
+      const { stopDaemonProcess } = await load()
+      const state = { pid: 500, alive: new Set([500]), killed: [] as string[], locked: 0, released: 0 }
+      await expect(stopDaemonProcess(fakeDeps(state, { stopPlatform: () => ({ ok: true, stopped: 600 }) }))).resolves.toEqual({ pid: 500, stopped: true })
+      expect(state.killed).toEqual(['500:SIGTERM', '500:SIGKILL'])
+    })
+
+    it('asks the platform by default, which for a data folder no platform runs is nobody', async () => {
+      const { defaultStopDeps } = await load()
+      expect(defaultStopDeps().stopPlatform!()).toBeNull()
+    })
+  })
 })

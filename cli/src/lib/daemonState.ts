@@ -13,6 +13,10 @@ import { hasAuthSession } from './authSession.js'
 import { savedDaemonPort } from './daemonEndpoint.js'
 
 export const PID_FILE = join(env.ADAPTER_DATA_DIR, 'adapter.pid')
+/** The daemon's console: the master's and its core's stdout and stderr. Capped (lib/log.ts). */
+export const DAEMON_LOG_FILE = join(env.ADAPTER_DATA_DIR, 'harness.log')
+/** What harnessd's master last said about itself, for `harness status` when no core answers. */
+export const HARNESSD_STATUS_FILE = join(env.ADAPTER_DATA_DIR, 'harnessd-status.json')
 
 /** This user's recorded TCP port; the configured port still names its private Unix socket. */
 export function daemonPort(): number {
