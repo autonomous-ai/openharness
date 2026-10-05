@@ -29,6 +29,10 @@ names=['/etc/passwd','/etc/shadow','/etc/group','/etc/gshadow','/etc/sudoers',
  '/home/me/projects/login-preservation/proof.txt']
 excluded={'/etc/sudoers.d/harness-session-network'}
 files={}
+for name in ['/home/me','/home/me/projects','/home/me/.config','/home/me/.config/systemd',
+ '/home/me/.config/systemd/user']:
+ s=pathlib.Path(name).stat()
+ files[name]={'mode':s.st_mode&0o7777,'uid':s.st_uid,'gid':s.st_gid}
 for name in names:
  p=pathlib.Path(name)
  for item in sorted(p.rglob('*')) if p.is_dir() else [p]:
@@ -126,6 +130,15 @@ def handoff_evidence(machine, stage):
     if stage != 'before':
         (machine.folder / 'welcome-output.log').write_bytes(
             machine.read_file('/home/me/.local/state/harness-os/login-welcome-output.log'))
+
+
+def home_directory_evidence(machine, name, require_owned=False):
+    paths = '/home/me /home/me/projects /home/me/.config /home/me/.config/systemd /home/me/.config/systemd/user'
+    text, _ = machine.command("stat -c '%n uid=%u gid=%g mode=%a type=%F' " + paths +
+                              '; ls -Zd ' + paths, check=False)
+    (machine.folder / (name + '-home-directories.txt')).write_text(text)
+    if require_owned:
+        machine.user('for p in ' + paths + '; do test -O "$p" && test -w "$p" || exit 1; done')
 
 
 def wait_root(machine, condition, seconds=30):
@@ -290,10 +303,14 @@ def main():
             machine.command('rm -- ' + autologin)
             machine.command('printf %s ' + shlex.quote('me:' + PASSWORD + '\n') + ' | chpasswd')
             machine.command('test ! -e /home/me/.local/state/harness-os/onboarded')
-            machine.command('install -d -o me -g me /home/me/projects/login-preservation /home/me/.config/systemd/user && '
-                            'ln -s /dev/null /home/me/.config/systemd/user/harness-update.timer && '
-                            'chown -h me:me /home/me/.config/systemd/user/harness-update.timer')
-            machine.user('printf %s existing-private-project > ~/projects/login-preservation/proof.txt')
+            home_directory_evidence(machine, 'before-fixture')
+            # Root install -d assigns only its leaf ownership: intermediate
+            # .config can become root-owned and break the real first-use agent.
+            # All private home fixtures must be created by the existing user.
+            machine.user('mkdir -p ~/projects/login-preservation ~/.config/systemd/user && '
+                         'ln -s /dev/null ~/.config/systemd/user/harness-update.timer && '
+                         'printf %s existing-private-project > ~/projects/login-preservation/proof.txt')
+            home_directory_evidence(machine, 'after-fixture', require_owned=True)
             put(machine, '/usr/lib/harness-os/fedora_session.py', HELPER.read_text())
             put(machine, '/usr/local/lib/harness-test/login-protected.py', PROTECTED)
             put(machine, '/usr/local/lib/harness-test/login-handoff.py', HANDOFF_PROBE)
@@ -313,6 +330,7 @@ def main():
             boot('02-enforcing-console', allow_relabel=True)
             machine.command('test "$(getenforce)" = Enforcing && test "$(systemctl get-default)" = multi-user.target && '
                             '! systemctl is-active --quiet greetd && ! pgrep -u 1000 -x labwc >/dev/null')
+            home_directory_evidence(machine, 'enforcing', require_owned=True)
             console_login(machine, 1, 'baseline-console')
             machine.command('python3 /usr/local/lib/harness-test/login-protected.py record')
             (output / 'protected-baseline.json').write_bytes(machine.read_file('/var/lib/harness-test/login-preserved.json'))
