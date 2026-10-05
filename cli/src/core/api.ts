@@ -167,6 +167,23 @@ export type TeamsPort = Pick<SwarmPromptScopes, 'prepare' | 'started' | 'raw' | 
 /** What the core gets when the teams fail: the prompt is written with no team recorded for it. */
 export const TEAMS_FALLBACKS: PortFallbacks<TeamsPort> = { prepare: () => {}, started: undefined, raw: undefined, forget: undefined }
 
+/** The prompt scopes whole, as the socket's team features hold them: the core's calls (`TeamsPort`),
+ *  and the team a prompt came from (`current`), which an agent's answer to a team's question moves
+ *  back (`replied`). In the core's process the socket's own; in their own, core/teamsLink.ts. */
+export type PromptScopes = TeamsPort & Pick<SwarmPromptScopes, 'current' | 'replied'>
+
+/** A change to the prompt scopes, as the core tells the teams' own process (core/teamsLink.ts,
+ *  services/teamsProcess.ts): numbered within one core's life, stamped with when it happened, and
+ *  given to the process in order, once. `raw` bytes travel as base64. */
+export type TeamsEvent = { seq: number; core: string; at: number; agentId: string } & (
+  | { kind: 'prepare'; text: string; tabId?: string; deliveryId?: string }
+  | { kind: 'unprepare'; of: number }
+  | { kind: 'started'; text: string; source: 'hook' | 'transcript'; engine?: string }
+  | { kind: 'raw'; bytes: string; tabId?: string; pasted: boolean }
+  | { kind: 'forget' }
+  | { kind: 'replied'; teamId: string; questionId: string }
+)
+
 /** Each port is filled by the service that owns it when that service starts, and is null while the
  *  service is off: the core never waits on one. */
 export interface CorePorts {

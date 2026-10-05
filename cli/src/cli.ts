@@ -172,6 +172,8 @@ import { KNOWN_SERVICES, serviceSpecs } from './harnessd/services.js'
 import { runSearchService } from './services/searchProcess.js'
 import { runViewersService } from './services/viewersProcess.js'
 import { runWorkspacesService } from './services/workspacesProcess.js'
+import { createTeamsLink } from './core/teamsLink.js'
+import { runTeamsService } from './services/teamsProcess.js'
 import { SEARCH_REQUESTS, startSearch } from './services/search.js'
 import { STORE_REQUESTS, startStore } from './services/store.js'
 import { startViewers } from './services/viewers.js'
@@ -1909,10 +1911,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // Nothing is answered until start-up is done (see the end of this function).
   backend.holdRequests()
   daemonBoot.openRequests = () => backend.openRequests()
-  // The team prompt scopes are the socket's, and the core reaches them through the service host's guard
-  // (core/serviceHost.ts): a fault there can no longer cost a message its write, a hook its answer or
-  // an event its turn.
-  serviceHost.start('teams', (_core, started) => { started.teams = backend.swarmPromptScopes }, coreApi, TEAMS_FALLBACKS)
   const teams: TeamsPort = {
     prepare: (...args) => ports.teams?.prepare(...args) ?? (() => {}),
     started: (...args) => ports.teams?.started(...args),
@@ -2220,12 +2218,15 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const viewersLink = createViewersLink(coreApi, (frame, opts) => serviceLinks.notify('viewers', frame, opts))
   // How the core tells workspaces in their own process what to do, and answers them (core/workspacesLink.ts).
   const workspacesLink = createWorkspacesLink(coreApi, (frame) => serviceLinks.notify('workspaces', frame), forgetAgentProject)
+  // Every change to the prompt scopes, kept until their own process has it, and each agent's scope (core/teamsLink.ts).
+  const teamsLink = createTeamsLink({ notify: (frame) => serviceLinks.notify('teams', frame) })
   const serviceLinks = createServiceLinks({
     token: serviceToken,
     owned: Object.fromEntries([...outOfProcess].map((name) => [name, requestsOf[name] ?? []])),
     // Search asks for every agent, live then stopped, with the name the apps show for it: what it indexes.
     answer: (service, query, payload) => service === 'viewers' ? viewersLink.answer(query, payload)
-      : service === 'workspaces' ? workspacesLink.answer(query, payload) : query === 'agents'
+      : service === 'workspaces' ? workspacesLink.answer(query, payload)
+      : service === 'teams' ? teamsLink.answer(query, payload) : query === 'agents'
       ? { agents: coreApi.agents.all().map((session) => ({ ...session, displayName: coreApi.agents.displayName(session) })) }
       : { error: 'UNKNOWN_QUERY' },
   })
@@ -2253,6 +2254,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // Workspaces: in this process, or in its own (services/workspacesProcess.ts), told what to do and when.
   if (outOfProcess.has('workspaces')) ports.workspaces = workspacesLink.port
   else serviceHost.start('workspaces', startWorkspaces, coreApi, WORKSPACES_FALLBACKS)
+  // The prompt scopes, behind the service host's guard (a fault there costs no message its write) or in their own process.
+  if (outOfProcess.has('teams')) ports.teams = backend.swarmPromptScopes = teamsLink.scopes
+  else serviceHost.start('teams', (_core, started) => { started.teams = backend.swarmPromptScopes }, coreApi, TEAMS_FALLBACKS)
   // The harnesses installed here, and installing, updating and removing one (services/store.ts).
   serviceHost.serve('store', startStore, coreApi, STORE_REQUESTS)
 
@@ -5640,7 +5644,7 @@ switch (cmd) {
   case '__service': { // internal: a service harnessd's master runs in its own process (services/process.ts)
     const socketPath = localSocketPath(env.ADAPTER_DATA_DIR, env.PORT)
     const runService = rest[0] === 'search' ? runSearchService : rest[0] === 'viewers' ? runViewersService
-      : rest[0] === 'workspaces' ? runWorkspacesService : null
+      : rest[0] === 'workspaces' ? runWorkspacesService : rest[0] === 'teams' ? runTeamsService : null
     if (!runService || !socketPath) {
       console.error(`[service] ${rest[0] ?? '(none)'}: ${socketPath ? 'no such service in this build' : 'the core has no local socket to reach'}`)
       process.exit(2)
