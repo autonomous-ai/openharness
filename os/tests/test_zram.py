@@ -6,6 +6,7 @@ import shutil
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from payload_compression import compare, extract, measured
 from zram_fixture import CHECKSUM, PAYLOAD, TARGET, boot_layout, compare_iso, expected_payload, inventory, replace_config
@@ -70,6 +71,33 @@ El Torito img path : 2 /boot/efi.img
             data[80] = 0; (candidate / 'boot/bios.bin').write_bytes(data)
             with self.assertRaisesRegex(AssertionError, 'outside its replay address'):
                 compare_iso(before, after, original, candidate, layout)
+
+    def test_hidden_efi_partition_preserves_actual_bytes_across_relocation(self):
+        # Exact hidden-image report fields from the retained preview 14 failure.
+        report = '''El Torito cat path : /boot/syslinux/boot.cat
+El Torito boot img :   1  BIOS  y   none  0x0000  0x00      4         115
+El Torito boot img :   2  UEFI  y   none  0x0000  0x00      0      937480
+El Torito img path :   1  /boot/syslinux/isolinux.bin
+El Torito img opts :   1  boot-info-table isohybrid-suitable
+El Torito img blks :   2  42496
+'''
+        with patch('zram_fixture.boot_image_digest', return_value='efi-digest') as read:
+            layout = boot_layout(report, Path('preview14.iso'))
+            read.assert_called_once_with(Path('preview14.iso'), 937480, 42496)
+            self.assertEqual(layout['hidden_images']['2'], dict(blocks=42496, sha256='efi-digest'))
+        with tempfile.TemporaryDirectory() as temp:
+            original, relocated = Path(temp) / 'old.iso', Path(temp) / 'new.iso'
+            original.write_bytes(b'\0' * 3 * 2048 + b'e' * 2 * 2048)
+            relocated.write_bytes(b'\0' * 5 * 2048 + b'e' * 2 * 2048)
+            small = report.replace('937480', '3').replace('42496', '2')
+            moved = small.replace('      3\n', '      5\n')
+            expected = boot_layout(small, original)
+            self.assertEqual(expected, boot_layout(moved, relocated))
+            with relocated.open('r+b') as handle:
+                handle.seek(5 * 2048 + 12); handle.write(b'x')
+            self.assertNotEqual(expected, boot_layout(moved, relocated))
+            with self.assertRaises(AssertionError):
+                boot_layout(moved.replace('   2  2\n', '   2  3\n'), relocated)
 
 
 @unittest.skipUnless(sys.platform == 'linux' and os.geteuid() == 0 and

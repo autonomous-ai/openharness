@@ -47,24 +47,45 @@ def expected_payload(before, data):
     return expected
 
 
-def boot_layout(report):
-    entries, paths, options = {}, {}, {}
+def boot_image_digest(iso, lba, blocks):
+    offset, remaining = lba * 2048, blocks * 2048
+    assert lba >= 0 and blocks > 0 and offset + remaining <= iso.stat().st_size
+    digest = hashlib.sha256()
+    with iso.open('rb') as handle:
+        handle.seek(offset)
+        while remaining:
+            data = handle.read(min(1024 ** 2, remaining))
+            assert data, 'Truncated hidden boot image'
+            digest.update(data)
+            remaining -= len(data)
+    return digest.hexdigest()
+
+
+def boot_layout(report, iso=None):
+    entries, paths, options, addresses, blocks = {}, {}, {}, {}, {}
     catalog = None
     for line in report.splitlines():
         if match := re.match(r'El Torito boot img\s*:\s+(\d+)\s+(.*)', line):
             # LBA changes when the ISO is written again; every other boot
             # entry property (platform, emulation, load segment/size) must not.
-            entries[match[1]] = match[2].split()[:-1]
+            values = match[2].split()
+            entries[match[1]], addresses[match[1]] = values[:-1], int(values[-1])
         elif match := re.match(r'El Torito img path\s*:\s+(\d+)\s+(.*)', line):
             paths[match[1]] = match[2].strip().lstrip('/')
         elif match := re.match(r'El Torito img opts\s*:\s+(\d+)\s+(.*)', line):
             options[match[1]] = match[2].split()
+        elif match := re.match(r'El Torito img blks\s*:\s+(\d+)\s+(\d+)', line):
+            blocks[match[1]] = int(match[2])
         elif match := re.match(r'El Torito cat path\s*:\s+(.*)', line):
             catalog = match[1].strip().lstrip('/')
     assert any('BIOS' in row for row in entries.values()), entries
     assert any('UEFI' in row for row in entries.values()), entries
-    assert entries.keys() == paths.keys() and catalog
-    return dict(entries=entries, paths=paths, options=options, catalog=catalog)
+    hidden = entries.keys() - paths.keys()
+    assert paths.keys() <= entries.keys() and hidden <= blocks.keys() and catalog
+    assert not hidden or iso is not None, 'The ISO is required to verify hidden boot image bytes'
+    hidden_images = {index: dict(blocks=blocks[index], sha256=boot_image_digest(iso, addresses[index], blocks[index]))
+                     for index in sorted(hidden)}
+    return dict(entries=entries, paths=paths, options=options, catalog=catalog, hidden_images=hidden_images)
 
 
 def compare_iso(before, after, old_root, new_root, layout):
@@ -112,7 +133,7 @@ def prepare(iso, manifest, candidate, folder, source):
             original_inventory = inventory(old_iso)
             measured(['xorriso', '-no_rc', '-indev', iso, '-report_el_torito', 'plain',
                       '-report_system_area', 'plain'], folder, 'iso-original-boot-layout')
-            original_layout = boot_layout((folder / 'iso-original-boot-layout.log').read_text())
+            original_layout = boot_layout((folder / 'iso-original-boot-layout.log').read_text(), iso)
             root = work / 'root'
             result['original_payload_sha256'] = digest(old_iso / PAYLOAD)
             extract(old_iso / PAYLOAD, root, folder, 'payload-extract')
@@ -141,7 +162,7 @@ def prepare(iso, manifest, candidate, folder, source):
             shutil.rmtree(extracted)
             destination = folder / 'candidate.iso'
             result['iso'] = dict(name=destination.name, **repack(iso, payload, destination, folder, 'iso-candidate'))
-            candidate_layout = boot_layout((folder / 'iso-candidate-boot-layout.log').read_text())
+            candidate_layout = boot_layout((folder / 'iso-candidate-boot-layout.log').read_text(), destination)
             assert candidate_layout == original_layout, 'Boot entry topology changed'
             result['boot_layout'] = candidate_layout
             new_iso = work / 'candidate-iso'
