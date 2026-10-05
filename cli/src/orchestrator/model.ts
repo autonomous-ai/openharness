@@ -4,12 +4,33 @@ import { ENGINES } from '../engines/types.js'
 export const RunId = z.string().regex(/^[a-f0-9]{32}$/)
 export const TaskId = z.string().regex(/^[a-z][a-z0-9-]{0,63}$/)
 const text = z.string().trim().min(1).max(24_000)
+export const TRIGGER_RULES = ['all_success', 'all_done', 'none_failed_min_one_success'] as const
+export type TriggerRule = typeof TRIGGER_RULES[number]
+export const TASK_STATES = ['queued', 'launching', 'running', 'waiting', 'succeeded', 'failed', 'skipped', 'blocked', 'cancelled'] as const
+export type TaskState = typeof TASK_STATES[number]
+export const DecisionId = z.string().regex(/^[a-z][a-z0-9-]{0,31}$/)
+export const Verdict = z.object({ ready: z.boolean(), errors: z.number().int().min(0), warnings: z.number().int().min(0) })
+export type Verdict = z.infer<typeof Verdict>
+const Decision = z.object({ id: DecisionId, label: z.string().trim().min(1).max(100) })
+export const Outputs = z.object({ files: z.array(z.string().min(1).max(256)).min(1).max(16), verdict: z.literal('ready').optional() })
 export const TaskSpec = z.object({
   id: TaskId,
   title: z.string().trim().min(1).max(100),
   harness: z.string().max(129),
   prompt: text,
   dependsOn: z.array(TaskId).max(32).default([]),
+  // Flow-only fields. A shell step is stored with harness "run" and its command as the prompt; an approval with harness
+  // "approval" and its message; a cancel step with harness "cancel" and its reason.
+  run: text.optional(),
+  outputs: Outputs.optional(),
+  timeoutMs: z.number().int().min(1000).max(86_400_000).optional(),
+  retry: z.object({ maxAttempts: z.number().int().min(1).max(6), delayMs: z.number().int().min(1000).max(60_000).optional() }).optional(),
+  when: z.string().min(1).max(300).optional(),
+  triggerRule: z.enum(TRIGGER_RULES).optional(),
+  approval: z.object({ message: z.string().trim().min(1).max(4000), decisions: z.array(Decision).min(1).max(8).optional() }).optional(),
+  cancel: z.string().trim().min(1).max(2000).optional(),
+  loop: z.object({ untilRun: text, maxIterations: z.number().int().min(1).max(20) }).optional(),
+  idleTimeoutMs: z.number().int().min(1000).max(86_400_000).optional(),
 })
 export const StartSpec = z.object({
   id: RunId,
@@ -18,10 +39,12 @@ export const StartSpec = z.object({
   cwd: z.string().max(4096).optional(),
   bypassPermission: z.boolean().default(false),
   parallelism: z.number().int().min(1).max(6).default(3),
+  flow: z.object({ source: z.string().max(256 * 1024), path: z.string().min(1).max(4096) }).optional(),
+  inputs: z.record(z.string().max(32), z.string().max(32_768)).optional(),
 })
 export const Artifact = z.object({ path: z.string(), size: z.number(), sha256: z.string() })
 export const Task = TaskSpec.extend({
-  state: z.enum(['queued', 'launching', 'running', 'succeeded', 'failed', 'blocked', 'cancelled']),
+  state: z.enum(TASK_STATES),
   attempt: z.number().int().min(1),
   agentId: z.string().nullable(),
   cwd: z.string(),
@@ -31,6 +54,21 @@ export const Task = TaskSpec.extend({
   artifacts: z.array(Artifact),
   // Pin the attempt of every upstream result at dispatch, never "latest".
   inputs: z.record(z.string(), z.number()),
+  engine: z.string().optional(),
+  promptSha256: z.string().optional(),
+  deadline: z.number().optional(),
+  pid: z.number().int().optional(),
+  verdict: Verdict.optional(),
+  decision: z.object({ outcome: z.enum(['approved', 'rejected']), decision: DecisionId.optional(), comment: z.string().max(4000).optional(), at: z.number() }).optional(),
+  loopState: z.object({
+    phase: z.enum(['working', 'check-requested', 'checking']), completed: z.number().int().min(0), turn: z.number().int().min(0),
+    eligibleAfter: z.number().int().min(0).optional(),
+    check: z.object({ pid: z.number().int().optional(), startedAt: z.number() }).optional(),
+    finish: z.object({ summary: z.string(), paths: z.array(z.string()) }).optional(),
+    feedbackId: z.string().optional(),
+  }).optional(),
+  retryAt: z.number().optional(),
+  scripts: z.array(z.object({ path: z.string(), sha256: z.string() })).max(16).optional(),
 })
 export const Message = z.object({
   id: z.string(), role: z.enum(['user', 'assistant', 'system']), text: z.string(),
@@ -39,19 +77,27 @@ export const Message = z.object({
   delivery: z.enum(['pending', 'accepted', 'queued', 'delivered', 'started', 'failed', 'unknown']).optional(),
   deliveryReason: z.string().optional(),
 })
+export const FlowProvenance = z.object({
+  name: z.string(), path: z.string(), sha256: z.string(),
+  inputs: z.record(z.string(), z.string()), warnings: z.array(z.string()),
+  source: z.enum(['flow.yaml', 'flow.json']).optional(),
+})
 export const Run = z.object({
   version: z.literal(1), id: RunId, fingerprint: z.string(), prompt: text,
   engine: z.enum(ENGINES), bypassPermission: z.boolean(), parallelism: z.number(),
-  root: z.string(), directorId: z.string().nullable(), directorWorking: z.boolean(),
+  root: z.string(), cwd: z.string().optional(), directorId: z.string().nullable(), directorWorking: z.boolean(),
   state: z.enum(['starting', 'active', 'paused', 'completed', 'cancelled', 'failed']),
   error: z.string().nullable(), tasks: z.array(Task).max(64), messages: z.array(Message).max(200),
   revision: z.number(), createdAt: z.number(), updatedAt: z.number(),
+  flow: FlowProvenance.optional(),
 })
 export type Run = z.infer<typeof Run>
 export type Task = z.infer<typeof Task>
 export type TaskSpec = z.infer<typeof TaskSpec>
 export type Artifact = z.infer<typeof Artifact>
 export type StartSpec = z.infer<typeof StartSpec>
+export type Outputs = z.infer<typeof Outputs>
+export type FlowProvenance = z.infer<typeof FlowProvenance>
 
 export class OrchestratorError extends Error {
   constructor(readonly code: string, detail: string) { super(detail) }

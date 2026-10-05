@@ -1,0 +1,18 @@
+spec: 1
+name: all-done-report
+tasks:
+  - { id: build, run: "true" }
+  - { id: report, run: "true", depends_on: [build], trigger_rule: all_done }
+scenarios:
+  - name: a failed build still runs the report and the run stops
+    events:
+      - { settle: build, state: failed }
+      - { expect: { tasks: { report: running } } }
+      - { settle: report, state: succeeded }
+      - { expect: { run: stopped } }
+  - name: a successful build completes the run
+    events:
+      - { settle: build, state: succeeded }
+      - { expect: { tasks: { report: running } } }
+      - { settle: report, state: succeeded }
+      - { expect: { run: completed } }

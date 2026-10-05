@@ -1,0 +1,14 @@
+spec: 1
+name: parallel-approval
+tasks:
+  - { id: ok, approval: Go? }
+  - { id: a, run: "true" }
+  - { id: b, run: "true" }
+  - { id: c, run: "true" }
+  - { id: d, run: "true" }
+scenarios:
+  - name: a waiting approval takes no slot, and a fourth step waits for one
+    events:
+      - { expect: { tasks: { ok: waiting, a: running, b: running, c: running, d: queued }, decisions: { d: launch } } }
+      - { settle: a, state: succeeded }
+      - { expect: { tasks: { d: running } } }

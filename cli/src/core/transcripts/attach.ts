@@ -345,7 +345,7 @@ export function createAttach({
         // sits on the typing indicator forever.
         onTurnAborted: (message) => {
           announceTurnAborted(session.sessionId, 'devin', message)
-          emit(session.sessionId, [{ type: 'turn_ended', payload: {} }])
+          emit(session.sessionId, [{ type: 'turn_ended', payload: { aborted: true } }])
         },
         onFatal: (err) => console.warn(`[devin] ${sid(session.sessionId)} ${err.message}`),
       })

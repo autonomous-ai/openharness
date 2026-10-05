@@ -36,7 +36,7 @@ import { VERSION } from './version.js'
 import { registry, projectDisplayName, type RegisteredSession } from './lib/registry.js'
 import { AgentStopError } from './lib/stopAgentService.js'
 import type { CloseAgentService, CloseMode } from './lib/closeAgentService.js'
-import { MODEL_MANAGER_ID, isHiddenBuiltin } from './dsh/builtins.js'
+import { MODEL_MANAGER_ID } from './dsh/builtins.js'
 import { ENGINES, PROCESS_ENGINES, isTerminalEngine, type AgentEngine, type ProcessEngine } from './engines/types.js'
 import { listDir } from './lib/fsBrowse.js'
 import { linkCodexProfile, listCodexProfiles } from './lib/codexProfiles.js'
@@ -70,7 +70,8 @@ import { projectPreview } from './lib/projectPreview.js'
 import { readGitProject } from './lib/gitProject.js'
 import { agentFrame, lastActivityAt, type AgentDshContext, type AgentFrame } from './lib/agentFrame.js'
 import { agentTokenUsage } from './lib/agentTokenUsage.js'
-import { installedDsh, listInstalledDsh } from './dsh/installed.js'
+import { installedDsh } from './dsh/installed.js'
+import { installedHarnessCatalog, orchestratorEngineSupported } from './orchestrator/catalog.js'
 import { OrchestratorService } from './orchestrator/service.js'
 import { OrchestratorError } from './orchestrator/model.js'
 import { orchestratorRequest } from './orchestrator/wire.js'
@@ -685,15 +686,15 @@ export class BackendSocket {
   orchestratorRoleOf(agentId: string): ReturnType<OrchestratorService['roleOf']> {
     return this.orchestration().roleOf(agentId)
   }
+  /** Load saved orchestrator projects now, so their deadlines run without waiting for a request; resolves once saved projects were reconciled. */
+  orchestratorRecover(): Promise<void> { return this.orchestration().recover() }
   private orchestration(): OrchestratorService {
     return this.orchestratorService ??= new OrchestratorService({
       stateDir: join(env.ADAPTER_DATA_DIR, 'orchestrator'),
       workspaceDir: join(homedir(), 'harnesses', 'orchestrated'),
       command: this.orchestratorCommand ?? `${[process.execPath, ...process.execArgv, process.argv[1]].map(shellQuote).join(' ')} orchestrator --port ${env.PORT} --machine ${shellQuote(this.machineId)}`,
-      catalog: () => listInstalledDsh().filter(d => d.manifest.kind !== 'viewer' && !isHiddenBuiltin(d) && !!d.manifest.engine && supportsFirstPrompt(d.manifest.engine)).map(d => ({
-        id: d.id, name: d.manifest.name, description: d.manifest.description ?? '', engine: d.manifest.engine!, viewer: !!d.manifest.viewer,
-      })),
-      supportsEngine: engine => ENGINES.includes(engine as AgentEngine) && supportsFirstPrompt(engine as AgentEngine),
+      catalog: installedHarnessCatalog,
+      supportsEngine: orchestratorEngineSupported,
       create: async input => {
         if (!this.onCreateAgent) throw new OrchestratorError('UNSUPPORTED', 'This daemon cannot create agents.')
         const available = await this.engineProbeProvider([input.engine])

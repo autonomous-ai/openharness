@@ -89,7 +89,8 @@ describe('turn hooks', () => {
       await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS)
       expect(state.turnOpen).toBe(false)
       expect(state.pendingTools.size).toBe(0)
-      expect(run.deps.emit).toHaveBeenCalledWith('s1', END)
+      // A StopFailure ends an aborted turn: an Orchestrator flow task must not take it as finished work.
+      expect(run.deps.emit).toHaveBeenCalledWith('s1', [{ type: 'turn_ended', payload: { aborted: true } }])
       expect(String(log.mock.calls[0][0])).toContain('force-closed by StopFailure hook')
       // Closed by the transcript before the grace ran out, or never open: nothing more to do.
       state.turnOpen = true
@@ -108,6 +109,7 @@ describe('turn hooks', () => {
       run.hooks.onTurnStop({ sessionId: 's1' })
       await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS)
       expect(String(log.mock.calls[0][0])).toContain('force-closed by Stop hook')
+      expect(run.deps.emit).toHaveBeenCalledWith('s1', END)
     })
   })
 

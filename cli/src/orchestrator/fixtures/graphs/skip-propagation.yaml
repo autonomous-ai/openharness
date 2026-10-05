@@ -1,0 +1,12 @@
+spec: 1
+name: skip-propagation
+tasks:
+  - { id: a, run: "true" }
+  - { id: b, run: "true", depends_on: [a], when: "a.state == failed" }
+  - { id: c, run: "true", depends_on: [b] }
+  - { id: d, run: "true", depends_on: [c] }
+scenarios:
+  - name: a skipped task skips everything below it
+    events:
+      - { settle: a, state: succeeded }
+      - { expect: { tasks: { b: skipped, c: skipped, d: skipped }, run: completed } }

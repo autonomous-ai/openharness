@@ -1,0 +1,24 @@
+spec: 1
+name: join-after-branches
+tasks:
+  - { id: check, run: "true" }
+  - { id: fast, run: "true", depends_on: [check], trigger_rule: all_done, when: "check.state == succeeded" }
+  - { id: slow, run: "true", depends_on: [check], trigger_rule: all_done, when: "check.state == failed" }
+  - { id: join, run: "true", depends_on: [fast, slow], trigger_rule: none_failed_min_one_success }
+scenarios:
+  - name: success branch joins
+    events:
+      - { settle: check, state: succeeded }
+      - { expect: { tasks: { fast: running, slow: skipped, join: queued } } }
+      - { settle: fast, state: succeeded }
+      - { expect: { tasks: { join: running } } }
+      - { settle: join, state: succeeded }
+      - { expect: { run: completed } }
+  - name: failure branch joins but the run is not a success
+    events:
+      - { settle: check, state: failed }
+      - { expect: { tasks: { fast: skipped, slow: running, join: queued } } }
+      - { settle: slow, state: succeeded }
+      - { expect: { tasks: { join: running } } }
+      - { settle: join, state: succeeded }
+      - { expect: { run: stopped } }

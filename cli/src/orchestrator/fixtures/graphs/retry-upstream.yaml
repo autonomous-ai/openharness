@@ -1,0 +1,21 @@
+spec: 1
+name: retry-upstream
+tasks:
+  - { id: tests, run: "true" }
+  - { id: report, run: "true", depends_on: [tests], trigger_rule: all_done }
+  - { id: deploy, run: "true", depends_on: [tests] }
+  - { id: ship, run: "true", depends_on: [tests], trigger_rule: all_done, when: "tests.state == succeeded" }
+  - { id: notify, run: "true", depends_on: [deploy], when: "deploy.state == succeeded" }
+scenarios:
+  - name: retry after a report re-runs the report and unblocks deploy
+    events:
+      - { settle: tests, state: failed }
+      - { expect: { decisions: { report: launch }, tasks: { report: running, deploy: blocked, ship: skipped, notify: blocked }, summaries: { ship: "tests.state == succeeded is false" } } }
+      - { settle: report, state: succeeded }
+      - { expect: { run: stopped } }
+      - { retry: tests }
+      - { expect: { tasks: { tests: { state: running, attempt: 2 }, report: { state: queued, attempt: 2 }, deploy: { state: queued, attempt: 1 }, ship: { state: queued, attempt: 1 }, notify: { state: queued, attempt: 1 } } } }
+      - { settle: tests, state: succeeded }
+      - { expect: { tasks: { report: running, deploy: running, ship: { state: running, attempt: 1 }, notify: queued } } }
+      - { settle: deploy, state: succeeded }
+      - { expect: { tasks: { notify: running } } }

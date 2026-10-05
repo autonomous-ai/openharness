@@ -1,0 +1,14 @@
+spec: 1
+name: missing-verdict
+tasks:
+  - { id: review, run: "true" }
+  - { id: gate, run: "true", depends_on: [review], when: "review.verdict.errors == 0" }
+scenarios:
+  - name: a condition on a verdict that was never written fails the task
+    events:
+      - { settle: review, state: succeeded }
+      - { expect: { decisions: { gate: fail }, tasks: { gate: failed }, errors: { gate: "review wrote no verdict" }, run: stopped } }
+  - name: a verdict with no errors lets the gate run
+    events:
+      - { settle: review, state: succeeded, verdict: { ready: true, errors: 0, warnings: 0 } }
+      - { expect: { decisions: { gate: launch }, tasks: { gate: running } } }

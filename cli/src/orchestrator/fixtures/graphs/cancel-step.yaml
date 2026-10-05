@@ -1,0 +1,19 @@
+spec: 1
+name: cancel-step
+tasks:
+  - id: choose
+    approval:
+      message: Ship or rework?
+      decisions: [{ id: ship }, { id: rework }]
+  - { id: stop, cancel: Rework, depends_on: [choose], when: "choose.decision == rework" }
+  - { id: ship, run: "true", depends_on: [choose], when: "choose.decision == ship" }
+scenarios:
+  - name: rework cancels the run before ship is reached
+    events:
+      - { expect: { tasks: { choose: waiting } } }
+      - { settle: choose, state: succeeded, decision: rework, outcome: approved }
+      - { expect: { tasks: { stop: succeeded, ship: cancelled }, run: cancelled } }
+  - name: ship skips the cancel step
+    events:
+      - { settle: choose, state: succeeded, decision: ship, outcome: approved }
+      - { expect: { tasks: { stop: skipped, ship: running } } }

@@ -1,0 +1,21 @@
+spec: 1
+name: reverse-order
+tasks:
+  - { id: j, run: "true", depends_on: [c, e], trigger_rule: none_failed_min_one_success }
+  - { id: d, run: "true", depends_on: [c] }
+  - { id: c, run: "true", depends_on: [b], when: "b.state == failed" }
+  - { id: e, run: "true", depends_on: [b], when: "b.state == succeeded" }
+  - { id: b, run: "true", depends_on: [a] }
+  - { id: a, run: "true" }
+scenarios:
+  - name: a graph declared downstream first still branches and joins
+    events:
+      - { expect: { tasks: { a: running, b: queued, c: queued, d: queued, e: queued, j: queued } } }
+      - { settle: a, state: succeeded }
+      - { expect: { tasks: { b: running } } }
+      - { settle: b, state: succeeded }
+      - { expect: { tasks: { c: skipped, d: skipped, e: running, j: queued } } }
+      - { settle: e, state: succeeded }
+      - { expect: { tasks: { j: running } } }
+      - { settle: j, state: succeeded }
+      - { expect: { run: completed } }

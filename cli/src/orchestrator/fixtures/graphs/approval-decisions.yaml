@@ -1,0 +1,32 @@
+spec: 1
+name: approval-decisions
+tasks:
+  - { id: review, run: "true" }
+  - id: choose
+    depends_on: [review]
+    approval:
+      message: Ship or rework?
+      decisions: [{ id: ship }, { id: rework }]
+  - { id: ship, run: "true", depends_on: [choose], when: "choose.decision == ship" }
+  - { id: rework, run: "true", depends_on: [choose], when: "choose.decision == rework" }
+scenarios:
+  - name: ship decision runs ship only
+    events:
+      - { settle: review, state: succeeded }
+      - { expect: { tasks: { choose: waiting } } }
+      - { settle: choose, state: succeeded, decision: ship, outcome: approved }
+      - { expect: { tasks: { ship: running, rework: skipped } } }
+      - { settle: ship, state: succeeded }
+      - { expect: { run: completed } }
+  - name: rework decision runs rework only
+    events:
+      - { settle: review, state: succeeded }
+      - { settle: choose, state: succeeded, decision: rework, outcome: approved }
+      - { expect: { tasks: { ship: skipped, rework: running } } }
+      - { settle: rework, state: succeeded }
+      - { expect: { run: completed } }
+  - name: a rejected approval blocks both branches
+    events:
+      - { settle: review, state: succeeded }
+      - { settle: choose, state: failed, outcome: rejected }
+      - { expect: { tasks: { ship: blocked, rework: blocked }, run: stopped } }

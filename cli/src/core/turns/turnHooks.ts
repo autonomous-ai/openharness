@@ -208,7 +208,7 @@ export function createTurnHooks({
         st.turnOpen = false
         st.pendingTools.clear()
         console.log(`[turn] ${sid(sessionId)} force-closed by ${status === 'error' ? 'StopFailure' : 'Stop'} hook (after grace)`)
-        emit(sessionId, [{ type: 'turn_ended', payload: {} }])
+        emit(sessionId, [{ type: 'turn_ended', payload: status === 'error' ? { aborted: true } : {} }])
       }
     })().catch((err) => {
       console.error('[hooks] claude stop hook failed:', err instanceof Error ? err.message : err)

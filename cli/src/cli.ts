@@ -3711,6 +3711,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     return response.body.data
   }
   backend.startTeams()
+  // After the restore pass and after onCancel/onCreateAgent/onMessage exist: an expired deadline
+  // cancels its worker and may launch a retry, so the callbacks it uses must be wired first.
+  // An unreadable state folder must not stop the daemon; requests then report it as before.
+  void backend.orchestratorRecover().catch(error => console.warn(`[orchestrator] recovery skipped · ${error instanceof Error ? error.message : error}`))
 
   // Keep the log file under its cap. This daemon writes it through an inherited stdout fd, so a size
   // check on a timer is the only place that can see it grow — `prepareLogFile` at spawn time alone

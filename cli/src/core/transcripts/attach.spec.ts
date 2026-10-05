@@ -380,7 +380,7 @@ describe('attaching a session', () => {
       expect(warn).toHaveBeenCalledTimes(4)
       devin.opts.onTurnAborted('provider error')
       expect(run.deps.announceTurnAborted).toHaveBeenCalledWith('devin-s', 'devin', 'provider error')
-      expect(run.deps.emit).toHaveBeenLastCalledWith('devin-s', [{ type: 'turn_ended', payload: {} }])
+      expect(run.deps.emit).toHaveBeenLastCalledWith('devin-s', [{ type: 'turn_ended', payload: { aborted: true } }])
       // OpenCode and Devin name their model only in the pane.
       expect(vi.mocked(run.deps.captureTerminal).mock.calls).toEqual([['opencode-agent', 100], ['devin-agent', 60]])
       vi.mocked(run.deps.captureTerminal).mockResolvedValue(null)

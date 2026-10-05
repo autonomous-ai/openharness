@@ -149,14 +149,17 @@ export function killProcessGroup(child: ChildProcess, graceMs = 3_000): void {
 /** The same, for a group this process did not spawn (a viewer left over from an earlier daemon —
  *  see viewerLedger.ts): nothing to wait on, so the SIGKILL follow-up fires unconditionally. */
 export function killPidGroup(pid: number, graceMs = 3_000): NodeJS.Timeout {
-  // pid 1 would make `-pid` "every process in my session"; nothing this daemon reaps is init.
   if (!Number.isInteger(pid) || pid <= 1) return setTimeout(() => {}, 0)
-  const signalGroup = (signal: NodeJS.Signals): void => {
-    try { process.kill(-pid, signal) } catch { /* already gone */ }
-    try { process.kill(pid, signal) } catch { /* already gone */ }
-  }
-  signalGroup('SIGTERM')
-  const timer = setTimeout(() => signalGroup('SIGKILL'), graceMs)
+  signalPidGroup(pid, 'SIGTERM')
+  const timer = setTimeout(() => signalPidGroup(pid, 'SIGKILL'), graceMs)
   timer.unref?.()
   return timer
+}
+
+/** Signal a process group and its leader right now, without a grace period. */
+export function signalPidGroup(pid: number, signal: NodeJS.Signals): void {
+  // pid 1 would make `-pid` "every process in my session"; nothing this daemon reaps is init.
+  if (!Number.isInteger(pid) || pid <= 1) return
+  try { process.kill(-pid, signal) } catch { /* already gone */ }
+  try { process.kill(pid, signal) } catch { /* already gone */ }
 }

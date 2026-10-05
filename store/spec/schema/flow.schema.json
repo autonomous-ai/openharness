@@ -1,0 +1,426 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://harness.autonomous.ai/dsh/spec/1/flow.schema.json",
+  "title": "Orchestrator flow (.harness/flows/*.yaml), spec 1",
+  "type": "object",
+  "properties": {
+    "spec": {
+      "type": "number",
+      "const": 1
+    },
+    "name": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{0,63}$"
+    },
+    "description": {
+      "type": "string",
+      "maxLength": 2000
+    },
+    "engine": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{0,31}$"
+    },
+    "inputs": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string",
+        "pattern": "^[a-z][a-z0-9_]{0,31}$"
+      },
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "required": {
+            "type": "boolean"
+          },
+          "default": {
+            "type": "string",
+            "maxLength": 32768
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 500
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "tasks": {
+      "minItems": 1,
+      "maxItems": 64,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,63}$"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "harness": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 129
+          },
+          "prompt": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 24000
+          },
+          "run": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 24000,
+            "description": "Shell command, run in the task folder in its own process group. Exit 0 is success. Inputs are in HARNESS_INPUT_<NAME>; $inputs is not substituted here."
+          },
+          "outputs": {
+            "type": "object",
+            "properties": {
+              "files": {
+                "minItems": 1,
+                "maxItems": 16,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256,
+                  "pattern": "^(?!\\/)(?!(?:.*\\/)?\\.\\.(?:\\/|$))[^\\\\\\0]+$"
+                }
+              },
+              "verdict": {
+                "type": "string",
+                "const": "ready"
+              }
+            },
+            "required": [
+              "files"
+            ],
+            "additionalProperties": false,
+            "description": "Agent tasks: when the worker ends a turn and every glob matches a file in the task folder (and .harness/verdict.json says ready, if asked), the task finishes."
+          },
+          "timeout": {
+            "type": "string",
+            "pattern": "^[1-9][0-9]{0,5}[smh]$",
+            "description": "Limit for one attempt, at most 24h. Shell steps default to 10m; agent tasks and approvals have no default."
+          },
+          "retry": {
+            "type": "object",
+            "properties": {
+              "max_attempts": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 6
+              },
+              "delay": {
+                "type": "string",
+                "pattern": "^[1-9][0-9]{0,5}[smh]$"
+              }
+            },
+            "required": [
+              "max_attempts"
+            ],
+            "additionalProperties": false,
+            "description": "Automatic retries: max_attempts is the number of attempts in all, the first attempt included; delay (1s to 60s) is doubled before each next attempt."
+          },
+          "depends_on": {
+            "maxItems": 32,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9-]{0,63}$"
+            }
+          },
+          "when": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300,
+            "description": "One comparison against a direct dependency: <task>.state, <task>.decision or <task>.verdict.ready|errors|warnings."
+          },
+          "trigger_rule": {
+            "type": "string",
+            "enum": [
+              "all_success",
+              "all_done",
+              "none_failed_min_one_success"
+            ],
+            "description": "When the task may start: all_success (default), all_done, none_failed_min_one_success."
+          },
+          "approval": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4000
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "message": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4000
+                  },
+                  "decisions": {
+                    "minItems": 1,
+                    "maxItems": 8,
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "pattern": "^[a-z][a-z0-9-]{0,31}$"
+                        },
+                        "label": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 100
+                        }
+                      },
+                      "required": [
+                        "id"
+                      ],
+                      "additionalProperties": false
+                    }
+                  }
+                },
+                "required": [
+                  "message"
+                ],
+                "additionalProperties": false
+              }
+            ],
+            "description": "Waits for a person to approve or reject. $inputs is substituted in the message. The answer is saved as approval.json."
+          },
+          "cancel": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000,
+            "description": "Cancels the whole run with this reason when the task becomes ready (usually under when)."
+          },
+          "loop": {
+            "type": "object",
+            "properties": {
+              "until_run": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 24000
+              },
+              "max_iterations": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 20
+              }
+            },
+            "required": [
+              "until_run",
+              "max_iterations"
+            ],
+            "additionalProperties": false,
+            "description": "Agent tasks: after each turn the daemon runs until_run; a failure goes back to the same agent, at most max_iterations checks."
+          },
+          "idle_timeout": {
+            "type": "string",
+            "pattern": "^[1-9][0-9]{0,5}[smh]$",
+            "description": "Agent tasks: fail when the agent shows no activity for this long. No default."
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false,
+        "oneOf": [
+          {
+            "description": "A shell step: run.",
+            "required": [
+              "id",
+              "run"
+            ],
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "harness"
+                  ]
+                },
+                {
+                  "required": [
+                    "prompt"
+                  ]
+                },
+                {
+                  "required": [
+                    "outputs"
+                  ]
+                },
+                {
+                  "required": [
+                    "approval"
+                  ]
+                },
+                {
+                  "required": [
+                    "cancel"
+                  ]
+                },
+                {
+                  "required": [
+                    "loop"
+                  ]
+                },
+                {
+                  "required": [
+                    "idle_timeout"
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "description": "An agent task: harness and prompt.",
+            "required": [
+              "id",
+              "harness",
+              "prompt"
+            ],
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "run"
+                  ]
+                },
+                {
+                  "required": [
+                    "approval"
+                  ]
+                },
+                {
+                  "required": [
+                    "cancel"
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "description": "An approval: waits for a person.",
+            "required": [
+              "id",
+              "approval"
+            ],
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "run"
+                  ]
+                },
+                {
+                  "required": [
+                    "harness"
+                  ]
+                },
+                {
+                  "required": [
+                    "prompt"
+                  ]
+                },
+                {
+                  "required": [
+                    "outputs"
+                  ]
+                },
+                {
+                  "required": [
+                    "retry"
+                  ]
+                },
+                {
+                  "required": [
+                    "cancel"
+                  ]
+                },
+                {
+                  "required": [
+                    "loop"
+                  ]
+                },
+                {
+                  "required": [
+                    "idle_timeout"
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "description": "A cancel step: stops the run.",
+            "required": [
+              "id",
+              "cancel"
+            ],
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "run"
+                  ]
+                },
+                {
+                  "required": [
+                    "harness"
+                  ]
+                },
+                {
+                  "required": [
+                    "prompt"
+                  ]
+                },
+                {
+                  "required": [
+                    "outputs"
+                  ]
+                },
+                {
+                  "required": [
+                    "retry"
+                  ]
+                },
+                {
+                  "required": [
+                    "timeout"
+                  ]
+                },
+                {
+                  "required": [
+                    "approval"
+                  ]
+                },
+                {
+                  "required": [
+                    "loop"
+                  ]
+                },
+                {
+                  "required": [
+                    "idle_timeout"
+                  ]
+                }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  },
+  "required": [
+    "spec",
+    "name",
+    "tasks"
+  ],
+  "additionalProperties": false
+}
