@@ -257,7 +257,7 @@ def exercise(vm, result):
         '  if b"--type=renderer" in cmd and p.stat().st_uid==1000:\n'
         '   status=(p/"status").read_text(); assert "NoNewPrivs:\\t1" in status and "Seccomp:\\t2" in status; '
         'assert b"--no-sandbox" not in cmd; renderers.append(p.name)\n'
-        ' except FileNotFoundError: pass\nassert renderers\nprint(renderers)\nPY')
+        ' except FileNotFoundError: pass\nassert renderers\nprint(renderers)\nPY\n')
     (vm.folder / 'browser-sandbox.txt').write_text(output)
     vm.keys('meta_l', 'b')
     vm.frame('07-return', 'OpenCode')
