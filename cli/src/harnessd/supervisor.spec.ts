@@ -158,18 +158,36 @@ describe('Supervisor', () => {
     expect(supervisor.status()).toMatchObject({ restarts: 1, lastExitReason: 'not-ready' })
   })
 
-  it('kills a bound core whose heartbeats stop: it is hung', () => {
+  it('kills a bound core whose heartbeats stop, one beat\'s time after its silence runs out: it is hung', () => {
     const supervisor = make()
     supervisor.start()
     core().up()
     vi.advanceTimersByTime(5_000)
     core().beat()
-    vi.advanceTimersByTime(5_999)
+    vi.advanceTimersByTime(6_000)
+    expect(lines.at(-1)).toBe('[harnessd] core sent no heartbeat for 6000 ms — giving it 2000 ms more, in case this master was paused too')
+    vi.advanceTimersByTime(1_999)
     expect(core().kills).toEqual([])
     vi.advanceTimersByTime(1)
     expect(core().kills).toEqual(['SIGKILL'])
+    expect(lines.at(-1)).toBe('[harnessd] core sent no heartbeat for 8000 ms — it is hung; — killing it')
     core().exit(null, 'SIGKILL')
     expect(supervisor.status().lastExitReason).toBe('hung')
+  })
+
+  it('takes no silence it was paused through for a hang: the beat a resumed core sends keeps it', () => {
+    // Master and core paused together read, on resume, as the silence running out at once and the
+    // core's overdue beat arriving a moment later (e2e/paused.e2e.ts).
+    const supervisor = make()
+    supervisor.start()
+    core().up()
+    vi.advanceTimersByTime(6_000)
+    expect(lines.at(-1)).toContain('giving it 2000 ms more')
+    vi.advanceTimersByTime(10)
+    core().beat()
+    live(30_000)
+    expect(core().kills).toEqual([])
+    expect(supervisor.status()).toMatchObject({ state: 'running', restarts: 0 })
   })
 
   it('backs off crash after crash, up to its cap, and starts over after a good run', () => {
