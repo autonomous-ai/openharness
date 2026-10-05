@@ -30,9 +30,10 @@ import {
   sendKeyToTmux,
   sendLiteralToTmux,
   paneOptionScope,
+  paneStyleArgs,
   sendToTmux,
   setPaneMouseOn,
-  setPaneWindowStyle,
+  setPaneStyle,
 } from './tmux.js'
 import { env } from '../config/env.js'
 import { HARNESS_OWNER_OPTION, harnessPaneOwner, ownerCommand } from './harnessSessionLabel.js'
@@ -150,7 +151,8 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
     // Trailing args after this point become the session's shell-command. tmux execs them directly
     // (no shell interposed) when given as separate argv elements, so no quoting/escaping is needed.
     if (request.command?.length) args.push(...this.ownedCommand(features, owner, request.command))
-    // A pane option where tmux has them; the agent's own new window before tmux 3.0.
+    // Pane options where tmux has them, so these go with the pane wherever the person moves it and never
+    // change the rest of a window of theirs; the agent's own new window before tmux 3.0.
     const scope = paneOptionScope(features)
     // Keep the pane when its process dies, so an engine that exits immediately (not logged in, bad
     // config) still has its error text readable afterwards instead of taking the whole session down
@@ -158,7 +160,7 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
     // millisecond, and a second `set-option` call loses that race — measured, the session was
     // already gone before the follow-up command could reach the server.
     // Whoever created the pane owns turning this back off; see `clearPaneRemainOnExit`.
-    args.push(';', 'set-option', '-w', 'remain-on-exit', 'on')
+    args.push(';', 'set-option', scope, 'remain-on-exit', 'on')
     // An agent's session never has a client attached, so a person's `set -g destroy-unattached on`
     // (in their ~/.tmux.conf, which this server loads) ended every agent the moment it was made, and
     // Harness could not run at all on their machine (found end to end, e2e/tmuxconf.e2e.ts). Turned
@@ -167,7 +169,7 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
     // Same invocation, same reason: an engine asks its terminal for its colours (OSC 10/11) in its
     // first milliseconds and never again, so the style has to be there before the engine is.
     const style = windowStyleOf(this.hostTheme())
-    args.push(';', 'set-option', '-w', 'window-style', style)
+    args.push(';', ...paneStyleArgs(features, style))
     // Whose pane it is, from its first instant: another daemon on this tmux server scanning a moment
     // later must already see it is not its own. On the pane, which keeps it wherever the person moves
     // it (see HARNESS_OWNER_OPTION); before tmux 3.0, on the window, and in the start command.
@@ -230,7 +232,7 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
     // the same invocation, or the new engine would read as exited the moment it started. A `-p` here
     // before tmux 3.0 failed the whole list, the respawn with it, so no agent could restart there.
     const args = [
-      'set-option', '-w', '-t', runtime.paneId, 'remain-on-exit', 'on', ';',
+      'set-option', scope, '-t', runtime.paneId, 'remain-on-exit', 'on', ';',
       'set-option', scope, '-t', runtime.paneId, ENGINE_EXIT_PANE_OPTION, '', ';',
       'respawn-pane', '-k',
     ]
@@ -312,8 +314,9 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
    * instant the old process exits.
    */
   async holdOpen(runtime: TmuxRuntimeRef): Promise<TerminalActionResult> {
+    const scope = paneOptionScope(await this.features())
     const ok = await new Promise<boolean>((resolve) => {
-      run('tmux', ['set-option', '-w', '-t', runtime.paneId, 'remain-on-exit', 'on'], { timeout: 2_000 }, (error) => {
+      run('tmux', ['set-option', scope, '-t', runtime.paneId, 'remain-on-exit', 'on'], { timeout: 2_000 }, (error) => {
         resolve(!error)
       })
     })
@@ -346,7 +349,8 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
    * Retroactive, on every scan: a pane from before this build, one that outlived a daemon restart,
    * or every pane after the app changed its palette. Fire-and-forget — a scan that misses one
    * because tmux was briefly slow catches it on the next pass. Panes that are gone are forgotten
-   * so a reused pane id is styled afresh.
+   * so a reused pane id is styled afresh. Each pane on its own (`setPaneStyle`), never its window:
+   * the person may have moved it into a window of theirs.
    */
   private restyle(panes: readonly string[]): void {
     const style = windowStyleOf(this.hostTheme())
@@ -368,7 +372,7 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
     if (style === undefined || this.stylingPanes.has(pane) || this.styledPanes.get(pane) === style) return
     // Serialize writes per pane: scans can overlap a slow tmux command or a theme change.
     this.stylingPanes.add(pane)
-    void setPaneWindowStyle(pane, style).then((applied) => {
+    void setPaneStyle(pane, style).then((applied) => {
       if (applied && this.desiredStyles.has(pane)) this.styledPanes.set(pane, style)
     }).finally(() => {
       this.stylingPanes.delete(pane)

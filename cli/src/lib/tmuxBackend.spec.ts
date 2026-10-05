@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TmuxBackend, clearEnvArgs } from './tmuxBackend.js'
+import { clearPaneRemainOnExit } from './tmux.js'
 import { assumeTmuxVersion, resetTmuxVersionCache } from './tmuxVersion.js'
 
 const originalPath = process.env.PATH
@@ -60,7 +61,9 @@ esac
       // `window-style` rides the same invocation for the same reason: the engine asks its
       // terminal for its colours (OSC 10/11) once, at startup, and never again. And so does the
       // daemon's tag: another daemon on this tmux server must never see the pane untagged.
-      'new-session -d -P -F #{pane_id} -c /tmp/work -s harness-test ; set-option -w remain-on-exit on ; set-option destroy-unattached off ; set-option -w window-style bg=#181818,fg=#f5f5f5 ; set-option -p @harness_daemon daemon-a',
+      // All three on the pane itself, where tmux has pane options: they go with it wherever the person
+      // moves it, and never touch the rest of a window of theirs.
+      'new-session -d -P -F #{pane_id} -c /tmp/work -s harness-test ; set-option -p remain-on-exit on ; set-option destroy-unattached off ; set-option -p window-style bg=#181818,fg=#f5f5f5 ; set-option -p @harness_daemon daemon-a',
       'set-option -t %42 mouse on',
       'kill-pane -t %42',
     ])
@@ -162,12 +165,13 @@ esac
     await backend.inventory()
     const styleCalls = () => readFileSync(calls, 'utf8').trim().split('\n').filter((line) => line.includes('window-style'))
     await vi.waitFor(() => expect(styleCalls()).toEqual([
-      'new-session -d -P -F #{pane_id} -c /tmp/work -s harness-codex-1 ; set-option -w remain-on-exit on ; set-option destroy-unattached off ; set-option -w window-style bg=#171b29,fg=#f5f5f5 ; set-option -p @harness_daemon daemon-a',
-      // The pane this daemon did not create is styled on the first scan; %7 already was.
-      'set-option -w -t %9 window-style bg=#171b29,fg=#f5f5f5',
+      'new-session -d -P -F #{pane_id} -c /tmp/work -s harness-codex-1 ; set-option -p remain-on-exit on ; set-option destroy-unattached off ; set-option -p window-style bg=#171b29,fg=#f5f5f5 ; set-option -p @harness_daemon daemon-a',
+      // The pane this daemon did not create is styled on the first scan; %7 already was. Each pane on
+      // its own, never its window: the person may have moved it into one of theirs.
+      'set-option -p -t %9 window-style bg=#171b29,fg=#f5f5f5',
       // The app changed its palette: every live pane, once.
-      'set-option -w -t %7 window-style bg=#300a24,fg=#ffffff',
-      'set-option -w -t %9 window-style bg=#300a24,fg=#ffffff',
+      'set-option -p -t %7 window-style bg=#300a24,fg=#ffffff',
+      'set-option -p -t %9 window-style bg=#300a24,fg=#ffffff',
     ]))
     await backend.inventory()
     await new Promise((resolve) => setTimeout(resolve, 80))
@@ -221,7 +225,7 @@ printf '%s\\n' "$*" >> "$TMUX_BACKEND_CALLS"
 
     await expect(new TmuxBackend().holdOpen({ backend: 'tmux', paneId: '%9' }))
       .resolves.toEqual({ state: 'succeeded', dispatch: 'executed' })
-    expect(readFileSync(calls, 'utf8').trim()).toBe('set-option -w -t %9 remain-on-exit on')
+    expect(readFileSync(calls, 'utf8').trim()).toBe('set-option -p -t %9 remain-on-exit on')
   })
 
   it('inventory only exposes panes whose session was named by agent_create (autonomous-harness-desktop#6)', async () => {
@@ -316,8 +320,8 @@ printf '%s\\n' "$*" >> "$TMUX_BACKEND_CALLS"
       .resolves.toEqual({ state: 'succeeded', dispatch: 'executed' })
     expect(readFileSync(calls, 'utf8').trim().split('\n')).toEqual([
       // The `;` inside an argv element is never shell-interpreted — it lands as one literal token.
-      'set-option -w -t %9 remain-on-exit on ; set-option -p -t %9 @harness_engine_exit  ; respawn-pane -k -c /tmp/work -t %9 claude --resume abc; rm -rf /',
-      'set-option -w -t %9 remain-on-exit on ; set-option -p -t %9 @harness_engine_exit  ; respawn-pane -k -t %9 claude',
+      'set-option -p -t %9 remain-on-exit on ; set-option -p -t %9 @harness_engine_exit  ; respawn-pane -k -c /tmp/work -t %9 claude --resume abc; rm -rf /',
+      'set-option -p -t %9 remain-on-exit on ; set-option -p -t %9 @harness_engine_exit  ; respawn-pane -k -t %9 claude',
     ])
   })
 
@@ -370,8 +374,8 @@ printf '%%42\\n'
     expect(readFileSync(calls, 'utf8').trim().split('\n')[0]).toBe(
       'new-session -d -P -F #{pane_id} -c /tmp/work -s harness-test'
       + ' -e ANTHROPIC_BASE_URL=https://relay.example/relay -e ANTHROPIC_AUTH_TOKEN=gridkey-abc123'
-      + ' /bin/zsh -lic exec "$@" harness-engine claude ; set-option -w remain-on-exit on'
-      + ' ; set-option destroy-unattached off ; set-option -w window-style bg=#181818,fg=#f5f5f5 ; set-option -p @harness_daemon daemon-a',
+      + ' /bin/zsh -lic exec "$@" harness-engine claude ; set-option -p remain-on-exit on'
+      + ' ; set-option destroy-unattached off ; set-option -p window-style bg=#181818,fg=#f5f5f5 ; set-option -p @harness_daemon daemon-a',
     )
   })
   it('respawns a pane in place with a new environment, keeping the pane id', async () => {
@@ -396,7 +400,7 @@ printf '%s\\n' "$*" >> "$TMUX_BACKEND_CALLS"
     // `remain-on-exit` is chained BEFORE the respawn, not after: an engine handed a rejected key can
     // exit before a follow-up call lands, taking its own error message down with it.
     expect(readFileSync(calls, 'utf8').trim()).toBe(
-      'set-option -w -t %42 remain-on-exit on ; set-option -p -t %42 @harness_engine_exit  ; respawn-pane -k -c /tmp/work'
+      'set-option -p -t %42 remain-on-exit on ; set-option -p -t %42 @harness_engine_exit  ; respawn-pane -k -c /tmp/work'
       + ' -e ANTHROPIC_BASE_URL=https://relay.example/relay -e ANTHROPIC_MODEL=GLM-4.7-Flash'
       + ' -t %42 /bin/zsh -lic exec "$@" harness-engine claude --resume sess-1',
     )
@@ -452,7 +456,8 @@ describe('TmuxBackend on a tmux before 3.0', () => {
       // The start command goes with the pane wherever the person moves it, where a window option stays.
       + ' /usr/bin/env HARNESS_DAEMON=daemon-a /bin/zsh -lic exec "$@" harness-engine claude'
       + ' ; set-option -w remain-on-exit on ; set-option destroy-unattached off'
-      + ' ; set-option -w window-style bg=#181818,fg=#f5f5f5 ; set-option -w @harness_daemon daemon-a',
+      // tmux 2.x keeps a style for each pane: `select-pane -P`, aimed at the pane just made.
+      + ' ; select-pane -P bg=#181818,fg=#f5f5f5 ; set-option -w @harness_daemon daemon-a',
     )
     expect(calls()[0]).not.toContain(' -p ')
   })
@@ -472,6 +477,19 @@ describe('TmuxBackend on a tmux before 3.0', () => {
     ])
   })
 
+  it('re-arms remain-on-exit on the window, the only place it can go', async () => {
+    const calls = recordingTmux()
+    await new TmuxBackend().holdOpen({ backend: 'tmux', paneId: '%9' })
+    expect(calls()).toEqual(['set-option -w -t %9 remain-on-exit on'])
+  })
+
+  it('styles each pane with select-pane -P, never its window', async () => {
+    const calls = recordingTmux('%9|100|harness-claude-1|/work|daemon-a\\n')
+    await new TmuxBackend(undefined, () => 'daemon-a').inventory()
+    await vi.waitFor(() => expect(calls()).toContain('select-pane -t %9 -P bg=#181818,fg=#f5f5f5'))
+    expect(calls().join('\n')).not.toContain('window-style')
+  })
+
   it('finds its panes by the start command wherever they moved, by the window\'s tag otherwise, never another daemon\'s', async () => {
     const calls = recordingTmux(
       '%1|100|mine-claude|/work/moved|/usr/bin/env HARNESS_DAEMON=daemon-a\\n'
@@ -482,6 +500,24 @@ describe('TmuxBackend on a tmux before 3.0', () => {
     const inventory = await new TmuxBackend(undefined, () => 'daemon-a').inventory()
     expect(inventory.state === 'available' && inventory.roots.map((root) => root.runtime.paneId)).toEqual(['%1', '%3'])
     expect(calls()[0]).toContain('#{?#{m:/usr/bin/env HARNESS_DAEMON=*,#{pane_start_command}},#{=44:pane_start_command},#{@harness_daemon}}')
+  })
+})
+
+describe('handing a pane back to tmux\'s disposal', () => {
+  // A window option on an agent the person had moved into a window of their own switched
+  // remain-on-exit off for their panes there too.
+  it('switches remain-on-exit off on the pane alone where tmux has pane options', async () => {
+    assumeTmuxVersion({ major: 3, minor: 0 })
+    const calls = recordingTmux()
+    await clearPaneRemainOnExit('%9')
+    expect(calls()).toEqual(['set-option -p -t %9 remain-on-exit off'])
+  })
+
+  it('switches it off on the window before tmux 3.0, the only place it can go', async () => {
+    assumeTmuxVersion({ major: 2, minor: 8 })
+    const calls = recordingTmux()
+    await clearPaneRemainOnExit('%9')
+    expect(calls()).toEqual(['set-option -w -t %9 remain-on-exit off'])
   })
 })
 
@@ -510,7 +546,7 @@ describe('TmuxBackend with variables on a tmux that cannot take them', () => {
     assumeTmuxVersion({ major: 3, minor: 0 })
     const calls = recordingTmux()
     await new TmuxBackend(undefined, () => 'daemon-a').respawn({ backend: 'tmux', paneId: '%9' }, { env, command: ['codex'] })
-    expect(calls()).toEqual(['set-option -w -t %9 remain-on-exit on ; set-option -p -t %9 @harness_engine_exit  ; respawn-pane -k -e CODEX_HOME=/work/profile -t %9 codex'])
+    expect(calls()).toEqual(['set-option -p -t %9 remain-on-exit on ; set-option -p -t %9 @harness_engine_exit  ; respawn-pane -k -e CODEX_HOME=/work/profile -t %9 codex'])
   })
 })
 

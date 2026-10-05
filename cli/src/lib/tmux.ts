@@ -19,7 +19,7 @@ import { psEnv } from './childLocale.js'
 import { nativeProcessImages } from './nativeProcessImages.js'
 import { neutralizePasteControls } from './pasteText.js'
 import { patientExec } from './patientExec.js'
-import type { TmuxFeatures } from './tmuxVersion.js'
+import { tmuxFeatures, type TmuxFeatures } from './tmuxVersion.js'
 export { captureTmuxPane, tmuxCaptureArgs } from './tmuxCapture.js'
 
 // Every tmux and `ps` call here: a held event loop must not turn a timeout into an empty answer
@@ -1146,24 +1146,40 @@ export function setPaneMouseOn(pane: string): Promise<void> {
 
 /**
  * Where an option Harness keeps for one of its panes lives: on the pane, where tmux has pane options
- * (3.0), so it goes with the pane into any window the person moves it to; on the window before that,
- * which is the agent's own for as long as the person leaves it be. A `-p` on tmux 2.x is a usage
- * error, and chained into `new-session` it failed every agent create (PR #789's review). Never `-g`:
- * the daemon shares the person's tmux server.
+ * (3.0), so it goes with the pane into any window the person moves it to and touches nothing else
+ * there; on the window before that, which is the agent's own for as long as the person leaves it be.
+ * A window option on a pane the person had joined into a window of their own changed their panes too,
+ * and a `-p` on tmux 2.x is a usage error that, chained into `new-session`, failed every agent create
+ * (PR #789's review). Never `-g`: the daemon shares the person's tmux server.
  */
 export function paneOptionScope(features: Pick<TmuxFeatures, 'paneOptions'>): '-p' | '-w' {
   return features.paneOptions ? '-p' : '-w'
 }
 
 /**
- * The colours tmux reports to a program in the pane that asks (`OSC 10;?`/`OSC 11;?`) — see
- * `hostTheme.ts` for why a TUI's palette depends on it. Window-scoped, never `-g`: the daemon
- * shares the user's default tmux server and must not restyle sessions it did not create.
- * Best-effort and idempotent, like [setPaneMouseOn].
+ * The tmux command that gives one pane [style] (see `hostTheme.ts`), aimed at [pane] or, without one,
+ * at the pane a command list just made. The pane's own `window-style` from tmux 3.0; before that
+ * `select-pane -P`, the style tmux 2.x kept for each pane. Never the window's: an agent pane the
+ * person had moved into a window of their own repainted their shells there in Harness's colours on
+ * every scan (PR #789's review, e2e/tmuxmoves.e2e.ts).
  */
-export function setPaneWindowStyle(pane: string, style: string): Promise<boolean> {
+export function paneStyleArgs(features: Pick<TmuxFeatures, 'paneOptions'>, style: string, pane?: string): string[] {
+  const target = pane ? ['-t', pane] : []
+  return features.paneOptions
+    ? ['set-option', '-p', ...target, 'window-style', style]
+    : ['select-pane', ...target, '-P', style]
+}
+
+/**
+ * The colours tmux reports to a program in the pane that asks (`OSC 10;?`/`OSC 11;?`) — see
+ * `hostTheme.ts` for why a TUI's palette depends on it. Pane-scoped (`paneStyleArgs`), never the
+ * window's and never `-g`: the daemon shares the user's default tmux server and must not restyle
+ * panes it did not create. Best-effort and idempotent, like [setPaneMouseOn].
+ */
+export async function setPaneStyle(pane: string, style: string): Promise<boolean> {
+  const features = await tmuxFeatures()
   return new Promise((resolve) => {
-    run('tmux', ['set-option', '-w', '-t', pane, 'window-style', style], { timeout: 2_000 }, (error) => resolve(!error))
+    run('tmux', paneStyleArgs(features, style, pane), { timeout: 2_000 }, (error) => resolve(!error))
   })
 }
 
@@ -1271,9 +1287,12 @@ export function tmuxPaneInfo(pane: string, socket?: string): Promise<TmuxPaneInf
  * Called as soon as a created pane becomes a real agent: from then on it must vanish when its engine
  * exits, exactly like a pane the user started themselves, rather than lingering as a dead pane.
  */
-export function clearPaneRemainOnExit(pane: string): Promise<void> {
+export async function clearPaneRemainOnExit(pane: string): Promise<void> {
+  // The pane's own option where tmux has one (`paneOptionScope`): restarting an agent the person had
+  // moved into a window of their own must not switch remain-on-exit off for their panes there.
+  const scope = paneOptionScope(await tmuxFeatures())
   return new Promise((resolve) => {
-    run('tmux', ['set-option', '-w', '-t', pane, 'remain-on-exit', 'off'], { timeout: 2_000 }, () => resolve())
+    run('tmux', ['set-option', scope, '-t', pane, 'remain-on-exit', 'off'], { timeout: 2_000 }, () => resolve())
   })
 }
 
