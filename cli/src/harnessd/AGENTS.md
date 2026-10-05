@@ -25,6 +25,10 @@ It keeps the core and the services running, and nothing else.
    would lose its channel, and become an orphan or a zombie no one reaps. A master started on cli.js
    does it once more, before it has started anything: onto the lean bundle cli.js carries, so the
    master parses its own code and not the whole CLI's (`../masterProcess.ts`).
-7. **A master's lean bundle is its own while it lives** (`leanBundle.ts`). It restarts its services
-   from it, and other masters (another build, a second `harness start`) may share the data folder: a
-   folder is claimed by each master that runs from it, and removed only once no live master claims it.
+7. **The lean bundle is only ever an optimisation** (`leanBundle.ts`, `leanServices.ts`). A service is
+   started from it only while its files are the ones its master started with and cli.js is the bundle
+   they came from, and not after it died twice from it before beating; from cli.js otherwise. Other
+   masters (another build, a second `harness start`) may share the data folder: each claims the folder
+   it runs from, and one is removed only once no live master claims it. `lean-off` in the data folder
+   turns it off for masters launchd or systemd start. Never exec onto a file without checking it is
+   there: a failed exec cannot be caught (`reexec.ts`).

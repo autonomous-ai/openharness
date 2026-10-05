@@ -10,14 +10,14 @@
  * the whole CLI's 4.4 MB.
  */
 import { spawnSync } from 'node:child_process'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { env } from './config/env.js'
 import { processExecve, probeMaster, runMaster, type Execve } from './harnessd/master.js'
 import { PROBE_ANSWER, PROBE_TIMEOUT_MS } from './harnessd/reexec.js'
 import { ensureUtf8Locale } from './lib/childLocale.js'
 import { DAEMON_LOG_FILE, HARNESSD_STATUS_FILE, PID_FILE } from './lib/daemonState.js'
-import { readLeanBundle, writeLeanBundle, type LeanBundle } from './harnessd/leanBundle.js'
+import { leanFingerprint, readLeanBundle, releaseLeanClaim, writeLeanBundle, type LeanBundle } from './harnessd/leanBundle.js'
 import { ts } from './lib/log.js'
 import { confirm as confirmUpdate, restore as restoreUpdate, unjudgedUpdate } from './lib/selfUpdate.js'
 import { VERSION } from './version.js'
@@ -30,6 +30,12 @@ export const LEAN_DIR = join(env.ADAPTER_DATA_DIR, 'lean')
  *  lean bundle from, and that bundle's sha256. */
 export const BUNDLE_ENV = 'HARNESSD_BUNDLE'
 export const BUNDLE_SHA256_ENV = 'HARNESSD_BUNDLE_SHA256'
+/** And what the lean bundle's folder fingerprints to: checked before every service is started from it. */
+export const LEAN_FINGERPRINT_ENV = 'HARNESSD_LEAN_FINGERPRINT'
+/** While this file is in the data folder, masters start on cli.js alone, as with `HARNESSD_LEAN=off`: the
+ *  way to turn the lean bundle off for a master launchd or systemd starts, whose environment is the
+ *  unit's (`touch ~/.harness/cli/data/lean-off`, then `harness restart`). */
+export const LEAN_OFF_FILE = join(env.ADAPTER_DATA_DIR, 'lean-off')
 
 export interface MasterStart {
   /** What the core runs and an update replaces: cli.js, or src/cli.ts from the sources. */
@@ -38,14 +44,17 @@ export interface MasterStart {
   serviceScriptPath?: string
   /** The sha256 of the bundle the lean bundle was read from, for a master running on the lean bundle. */
   bundleFingerprint?: string
+  /** What the lean bundle's folder fingerprints to (harnessd/leanBundle.ts `leanFingerprint`). */
+  leanFingerprint?: string
 }
 
 /** Run the master. */
-export function startMaster(start: MasterStart): ReturnType<typeof runMaster> {
+export function startMaster(start: MasterStart, exit: (code: number) => void = (code) => process.exit(code)): ReturnType<typeof runMaster> {
   // Before it starts anything: on Linux an absent locale makes tmux and ps mangle their output, and the
   // core and the services inherit this environment (lib/childLocale.ts). launchd and systemd start the
   // master with no `harness start` before it to have set it.
   ensureUtf8Locale()
+  const { serviceScriptPath } = start
   return runMaster({
     nodePath: process.execPath,
     execArgv: process.execArgv,
@@ -58,6 +67,12 @@ export function startMaster(start: MasterStart): ReturnType<typeof runMaster> {
     version: VERSION,
     reexecMarkerFile: HARNESSD_REEXEC_FILE,
     unjudgedUpdate: (bundle) => unjudgedUpdate(env.ADAPTER_CLI_DIR, bundle),
+    // A master that ends cleanly gives up its claim on its lean bundle, so the next one to start can
+    // clear the folder; one that dies leaves a claim whose pid is gone, which counts for nothing.
+    exit: (code) => {
+      if (serviceScriptPath) releaseLeanClaim(serviceScriptPath)
+      exit(code)
+    },
   })
 }
 
@@ -68,6 +83,9 @@ export function probeThisMaster(): number {
 
 export interface BundleMasterDeps {
   env: NodeJS.ProcessEnv
+  /** Whether `LEAN_OFF_FILE` is there. */
+  leanOff: () => boolean
+  exists: (path: string) => boolean
   read: (path: string) => Buffer
   /** Writes the lean bundle out and returns where (harnessd/leanBundle.ts `writeLeanBundle`). */
   write: (lean: LeanBundle) => string
@@ -94,6 +112,8 @@ export function probeLean(leanPath: string, probeEnv: NodeJS.ProcessEnv, timeout
 
 export const processBundleDeps = (): BundleMasterDeps => ({
   env: process.env,
+  leanOff: () => existsSync(LEAN_OFF_FILE),
+  exists: existsSync,
   read: (path) => readFileSync(path),
   write: (lean) => writeLeanBundle(LEAN_DIR, lean),
   probe: (leanPath, probeEnv) => probeLean(leanPath, probeEnv),
@@ -106,16 +126,17 @@ export const processBundleDeps = (): BundleMasterDeps => ({
  * The master, started on [bundlePath] (cli.js): re-executed on the lean bundle cli.js carries when this
  * Node can (22.15 and 23.11 on), with the services started from it; run here, from cli.js, with the
  * services still started from the lean bundle when it cannot; and as before, from cli.js alone, when
- * there is no lean bundle to use or `HARNESSD_LEAN=off`. A lean bundle is used only once it has answered
- * the probe a master about to re-execute asks (harnessd/reexec.ts): one that cannot start a master is
- * never handed the daemon.
+ * there is no lean bundle to use, `HARNESSD_LEAN=off` or `LEAN_OFF_FILE`. A lean bundle is used only once
+ * it has answered the probe a master about to re-execute asks (harnessd/reexec.ts): one that cannot start
+ * a master is never handed the daemon.
  */
 export function startMasterFromBundle(bundlePath: string, deps: BundleMasterDeps = processBundleDeps()): void {
-  const fromBundle = (reason: string | null, serviceScriptPath?: string): void => {
+  const fromBundle = (reason: string | null, lean?: { path: string; fingerprint: string }): void => {
     if (reason) deps.log(`[harnessd] ${reason}`)
-    deps.start({ scriptPath: bundlePath, ...(serviceScriptPath ? { serviceScriptPath } : {}) })
+    deps.start({ scriptPath: bundlePath, ...(lean ? { serviceScriptPath: lean.path, leanFingerprint: lean.fingerprint } : {}) })
   }
   if (deps.env.HARNESSD_LEAN === 'off') { fromBundle(null); return }
+  if (deps.leanOff()) { fromBundle(`${LEAN_OFF_FILE} is there: the master and the services run from ${bundlePath}`); return }
   let written: { lean: LeanBundle; path: string } | null
   try {
     const lean = readLeanBundle(deps.read(bundlePath))
@@ -126,19 +147,29 @@ export function startMasterFromBundle(bundlePath: string, deps: BundleMasterDeps
   }
   if (!written) { fromBundle(`no lean bundle in ${bundlePath}: the master and the services run from it`); return }
   const { lean, path: leanPath } = written
-  const leanEnv = { ...deps.env, [BUNDLE_ENV]: bundlePath, [BUNDLE_SHA256_ENV]: lean.bundleSha256 }
+  const fingerprint = leanFingerprint(lean)
+  const leanEnv = { ...deps.env, [BUNDLE_ENV]: bundlePath, [BUNDLE_SHA256_ENV]: lean.bundleSha256, [LEAN_FINGERPRINT_ENV]: fingerprint }
   const probed = deps.probe(leanPath, leanEnv)
   if (!probed.ok) {
     fromBundle(`the lean bundle ${leanPath} did not answer its probe (${probed.detail}): the master and the services run from ${bundlePath}`)
     return
   }
   if (!deps.execve) {
-    fromBundle(`this Node cannot re-execute the master: it runs from ${bundlePath}, the services from ${leanPath}`, leanPath)
+    fromBundle(`this Node cannot re-execute the master: it runs from ${bundlePath}, the services from ${leanPath}`, { path: leanPath, fingerprint })
+    return
+  }
+  // An exec that fails cannot be caught once it has begun: on Node 22.23 a node binary that is not there
+  // aborts this process (exit 134), and a script that is not there ends it in the new image
+  // (MODULE_NOT_FOUND). The probe ran both a moment ago; they are checked again right before.
+  const missing = [process.execPath, leanPath].find((path) => !deps.exists(path))
+  if (missing) {
+    fromBundle(`${missing} is not there to re-execute on: the master and the services run from ${bundlePath}`)
     return
   }
   try {
     deps.execve(process.execPath, [process.execPath, ...process.execArgv, leanPath, '__harnessd'], leanEnv)
   } catch (error) {
-    fromBundle(`the master could not re-execute on ${leanPath} (${error instanceof Error ? error.message : String(error)}): it runs from ${bundlePath}, the services from ${leanPath}`, leanPath)
+    // Only what `process.execve` refuses before it begins: arguments it cannot take.
+    fromBundle(`the master could not re-execute on ${leanPath} (${error instanceof Error ? error.message : String(error)}): it runs from ${bundlePath}, the services from ${leanPath}`, { path: leanPath, fingerprint })
   }
 }

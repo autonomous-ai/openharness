@@ -51,7 +51,10 @@ or a quick way back).
   `KNOWN_SERVICES`): a process imports only the runner it is named. From a release, it runs on the lean
   bundle cli.js carries for the master and the services (`src/harnessd/leanBundle.ts`), split so that a
   service loads its own code and nothing else: 61 to 77 MiB resident at idle (20 to 35 MiB physical
-  footprint), against 118 to 131 (54 to 90) when each started on cli.js (2026-10-05).
+  footprint), against 118 to 131 (54 to 90) when each started on cli.js (2026-10-05). It is only an
+  optimisation: the master starts a service from cli.js whenever the lean bundle cannot be used
+  (`src/harnessd/leanServices.ts`), and the release script refuses one that does not load
+  (`scripts/check-lean-bundle.mjs`).
 - **What a service imports is what its process costs.** Import from small modules: one schema module
   pulled in for a constant brought zod to search and workspaces, 8 MiB each (`src/dsh/id.ts`). A
   failing import fails the service's start, loudly, and the master parks it. `src/leanEntry.spec.ts`

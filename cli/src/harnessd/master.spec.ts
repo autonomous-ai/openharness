@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events'
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawn, type ChildProcess } from 'node:child_process'
@@ -8,6 +8,7 @@ import {
   coreExecArgv, coreHandle, describeMasterStatus, heapLimitInArgv, masterDefaults, onProcessSignal, probeMaster, processExecve, processExit,
   readStatusFile, runMaster, supervisorOptions, trimLogEvery, writeStatusFile, type MasterStatusFile,
 } from './master.js'
+import { folderFingerprint } from './leanBundle.js'
 import { PROBE_ANSWER, RESUME_ENV, decodeResume, encodeResume, fingerprint, readMarker, writeMarker } from './reexec.js'
 import { DEFAULT_SUPERVISOR_OPTIONS, type ResumeState } from './supervisor.js'
 
@@ -397,6 +398,58 @@ describe('runMaster', () => {
       await until('the core and the service', () => roles().length >= 2)
       expect(roles().sort((a, b) => a.role.localeCompare(b.role))).toEqual([{ role: '__run', from: 'cli' }, { role: 'service:search', from: 'lean' }])
       expect(lines.some((line) => line.endsWith(`[harnessd] services run from ${lean}`))).toBe(true)
+      signals.get('SIGTERM')!()
+      await until('the master to finish', () => exits.length > 0)
+    } finally { log.mockRestore() }
+  })
+
+  it('starts a service from cli.js once its lean bundle is gone, or cli.js is no longer the bundle it came from', async () => {
+    // A master lives for weeks: a lean folder gone from under it failed every restart of every service
+    // with MODULE_NOT_FOUND, and after an update it did not re-execute on, the services ran the old lean
+    // code against the new core. The lean bundle is only an optimisation (./leanServices.ts).
+    const pidFile = join(dir, 'adapter.pid')
+    const seen = join(dir, 'seen')
+    // Each service process beats, then ends: the master starts it again at once, from wherever it may.
+    const body = (who: string) => `
+      const { appendFileSync } = require('node:fs')
+      const role = process.argv[2] === '__service' ? 'service:' + process.argv[3] : process.argv[2]
+      appendFileSync(${JSON.stringify(seen)}, JSON.stringify({ role, from: ${JSON.stringify(who)} }) + '\\n')
+      if (role === '__run') { process.send({ type: 'harnessd:bound', protocol: 2, port: 1 }); process.send({ type: 'harnessd:ready' }) }
+      process.send({ type: 'harnessd:heartbeat', rssBytes: 1, heapUsedBytes: 1, loopDelayMs: 0 })
+      setInterval(() => process.send({ type: 'harnessd:heartbeat', rssBytes: 1, heapUsedBytes: 1, loopDelayMs: 0 }), 50)
+      if (role !== '__run') setTimeout(() => process.exit(1), 100)
+      process.on('SIGTERM', () => process.exit(0))
+    `
+    const cli = join(dir, 'cli.cjs')
+    const leanDir = join(dir, 'lean')
+    const lean = join(leanDir, 'harnessd.mjs')
+    writeFileSync(cli, body('cli'))
+    mkdirSync(leanDir)
+    writeFileSync(lean, body('lean').replace("require('node:fs')", "await import('node:fs')"))
+    const lines: string[] = []
+    const log = vi.spyOn(console, 'log').mockImplementation((line: string) => { lines.push(line) })
+    const exits: number[] = []
+    const signals = new Map<string, () => void>()
+    const services = (): string[] => (existsSync(seen) ? readFileSync(seen, 'utf8').trim().split('\n').map((line) => JSON.parse(line)) : [])
+      .filter((line) => line.role === 'service:search').map((line) => line.from)
+    try {
+      runMaster({
+        nodePath: process.execPath, execArgv: [], scriptPath: cli, serviceScriptPath: lean, leanFingerprint: folderFingerprint(leanDir)!, pidFile,
+        restoreUpdate: () => {}, confirmUpdate: () => {},
+        env: { ...process.env, HARNESSD_SERVICES: 'search', HARNESSD_SERVICE_INITIAL_BACKOFF_MS: '0', HARNESSD_SERVICE_MAX_BACKOFF_MS: '0', HARNESSD_SERVICE_PARK_CRASHES: '1000' },
+        exit: (code) => exits.push(code), onSignal: (signal, listener) => signals.set(signal, listener),
+      })
+      await until('a service from the lean bundle', () => services().includes('lean'))
+      rmSync(leanDir, { recursive: true })
+      await until('a service from cli.js', () => services().at(-1) === 'cli')
+      expect(lines.some((line) => line.endsWith(`[harnessd] the lean bundle ${lean} cannot be used (it is gone): services start from ${cli}`))).toBe(true)
+      // Back as it was, and then cli.js replaced by an update this master runs no code of.
+      mkdirSync(leanDir)
+      writeFileSync(lean, body('lean').replace("require('node:fs')", "await import('node:fs')"))
+      await until('the service from the lean bundle again', () => services().at(-1) === 'lean')
+      writeFileSync(cli, `${body('cli')}\n// the next release\n`)
+      await until('the service from the new cli.js', () => services().at(-1) === 'cli')
+      expect(lines.some((line) => line.endsWith(`[harnessd] the lean bundle ${lean} cannot be used (${cli} is no longer the bundle it came from): services start from ${cli}`))).toBe(true)
       signals.get('SIGTERM')!()
       await until('the master to finish', () => exits.length > 0)
     } finally { log.mockRestore() }

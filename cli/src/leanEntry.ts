@@ -21,14 +21,17 @@ if (command === '__harnessd') {
     process.exit(2)
   }
   const bundleFingerprint = process.env[master.BUNDLE_SHA256_ENV]
+  const leanFingerprint = process.env[master.LEAN_FINGERPRINT_ENV]
   // Not for the core and the services: neither starts a master, and a master started from cli.js again,
   // after an update, hands over its own.
   delete process.env[master.BUNDLE_ENV]
   delete process.env[master.BUNDLE_SHA256_ENV]
+  delete process.env[master.LEAN_FINGERPRINT_ENV]
   master.startMaster({
     scriptPath: bundle,
     serviceScriptPath: fileURLToPath(import.meta.url),
     ...(bundleFingerprint ? { bundleFingerprint } : {}),
+    ...(leanFingerprint ? { leanFingerprint } : {}),
   })
 } else if (command === '__harnessd-probe') {
   process.exitCode = (await import('./masterProcess.js')).probeThisMaster()

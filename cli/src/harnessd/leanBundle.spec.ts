@@ -1,24 +1,45 @@
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { brotliCompressSync } from 'node:zlib'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { LEAN_ENTRY, processAlive, readLeanBundle, writeLeanBundle, type LeanBundle } from './leanBundle.js'
+import {
+  LEAN_ENTRY, LEAN_RECENT_MS, folderFingerprint, leanFingerprint, processAlive, readLeanBundle, releaseLeanClaim, writeLeanBundle, type LeanBundle,
+} from './leanBundle.js'
 
-// The real file system, with a rename a test can step in front of: another master's, at the same moment.
-const renames = vi.hoisted(() => ({ before: null as null | ((from: string, to: string) => void) }))
+// The real file system, with a rename a test can step in front of (another master's, at the same moment),
+// a read it can watch and a write it can fail (a disk that fills part-way).
+const fsHooks = vi.hoisted(() => ({
+  beforeRename: null as null | ((from: string, to: string) => void),
+  onRead: null as null | ((path: string) => void),
+  failWrite: null as null | ((path: string) => boolean),
+  beforeLstat: null as null | ((path: string) => void),
+}))
+const renames = { set before(step: null | ((from: string, to: string) => void)) { fsHooks.beforeRename = step } }
 vi.mock('node:fs', async (real) => {
   const fs = await real<typeof import('node:fs')>()
   return {
     ...fs,
     renameSync: (from: string, to: string) => {
-      const step = renames.before
-      renames.before = null
+      const step = fsHooks.beforeRename
+      fsHooks.beforeRename = null
       step?.(from, to)
       fs.renameSync(from, to)
     },
+    readFileSync: ((path: string, ...rest: unknown[]) => {
+      fsHooks.onRead?.(String(path))
+      return (fs.readFileSync as (...args: unknown[]) => unknown)(path, ...rest)
+    }) as typeof fs.readFileSync,
+    lstatSync: ((path: string, ...rest: unknown[]) => {
+      fsHooks.beforeLstat?.(String(path))
+      return (fs.lstatSync as (...args: unknown[]) => unknown)(path, ...rest)
+    }) as typeof fs.lstatSync,
+    writeFileSync: ((path: string, ...rest: unknown[]) => {
+      if (fsHooks.failWrite?.(String(path))) throw Object.assign(new Error('ENOSPC: no space left on device, write'), { code: 'ENOSPC' })
+      return (fs.writeFileSync as (...args: unknown[]) => unknown)(path, ...rest)
+    }) as typeof fs.writeFileSync,
   }
 })
 
@@ -76,7 +97,15 @@ describe('the lean bundle cli.js carries', () => {
 describe('writing the lean bundle out', () => {
   let dir: string
   beforeEach(() => { dir = join(mkdtempSync(join(tmpdir(), 'lean-')), 'lean') })
-  afterEach(() => rmSync(join(dir, '..'), { recursive: true, force: true }))
+  afterEach(() => {
+    fsHooks.beforeRename = null
+    fsHooks.onRead = null
+    fsHooks.failWrite = null
+    fsHooks.beforeLstat = null
+    rmSync(join(dir, '..'), { recursive: true, force: true })
+  })
+  /** A cleaner's clock, past the minute it leaves anything that just changed alone. */
+  const later = () => Date.now() + LEAN_RECENT_MS + 1_000
   const lean = (files: Record<string, string> = FILES): LeanBundle => ({
     files: new Map(Object.entries(files).map(([name, code]) => [name, Buffer.from(code)])),
     sha256: sha256(JSON.stringify(files)),
@@ -149,12 +178,12 @@ describe('writing the lean bundle out', () => {
     writeFileSync(join(dir, 'notes.txt'), 'not a lean bundle')
     // This master (100) moves to a new build; 200 still runs from its own; nothing else is alive.
     const bundle = lean()
-    writeLeanBundle(dir, bundle, { pid: 100, alive: alive(100, 200) })
+    writeLeanBundle(dir, bundle, { pid: 100, alive: alive(100, 200), now: later })
     expect(readdirSync(dir).sort()).toEqual([
       another.sha256.slice(0, 16), bundle.sha256.slice(0, 16), `${'d'.repeat(16)}.200.old`, 'notes.txt',
     ].sort())
     // Once that master is gone, its folder goes with the next master's start, and so does its scratch.
-    writeLeanBundle(dir, bundle, { pid: 300, alive: alive(300) })
+    writeLeanBundle(dir, bundle, { pid: 300, alive: alive(300), now: later })
     expect(readdirSync(dir).sort()).toEqual([bundle.sha256.slice(0, 16), 'notes.txt'])
     expect(readdirSync(folderOf(bundle)).filter((name) => name.startsWith('.claim'))).toEqual(['.claim-300'])
   })
@@ -166,9 +195,86 @@ describe('writing the lean bundle out', () => {
     // Named like a folder, but a file: no claims to read in it, so it goes.
     writeFileSync(join(dir, 'e'.repeat(16)), 'not a folder')
     try {
-      writeLeanBundle(dir, lean(), { pid: 200, alive: alive(200) })
+      writeLeanBundle(dir, lean(), { pid: 200, alive: alive(200), now: later })
       expect(readdirSync(dir).sort()).toEqual([lean().sha256.slice(0, 16), stuck.sha256.slice(0, 16)].sort())
     } finally { chmodSync(folderOf(stuck), 0o700) }
+  })
+
+  it('leaves alone, for a minute, any folder or write that just changed: another master may be at it now', () => {
+    const unclaimed = lean({ [LEAN_ENTRY]: 'unclaimed' })
+    writeLeanBundle(dir, unclaimed, { pid: 250, alive: alive(250) })
+    rmSync(join(folderOf(unclaimed), '.claim-250'))
+    mkdirSync(join(dir, `${'c'.repeat(16)}.4242.tmp`))
+    const bundle = lean()
+    writeLeanBundle(dir, bundle, { pid: 100, alive: alive(100) })
+    expect(readdirSync(dir).sort()).toEqual([`${'c'.repeat(16)}.4242.tmp`, bundle.sha256.slice(0, 16), unclaimed.sha256.slice(0, 16)].sort())
+    writeLeanBundle(dir, bundle, { pid: 100, alive: alive(100), now: later })
+    expect(readdirSync(dir)).toEqual([bundle.sha256.slice(0, 16)])
+  })
+
+  it('claims a folder before it checks its bytes, and claims its own write before it puts it in place', () => {
+    // From the moment the bytes are found good there is no instant a cleaner could find the folder
+    // unclaimed: not between a check and a claim, nor between a rename and a claim.
+    const bundle = lean()
+    let inScratch: string[] = []
+    fsHooks.beforeRename = (from) => { inScratch = readdirSync(from) }
+    writeLeanBundle(dir, bundle, { pid: 100, alive: alive(100) })
+    expect(inScratch).toContain('.claim-100')
+    const claimedWhenRead: boolean[] = []
+    fsHooks.onRead = (path) => { if (path.startsWith(folderOf(bundle))) claimedWhenRead.push(existsSync(join(folderOf(bundle), '.claim-200'))) }
+    writeLeanBundle(dir, bundle, { pid: 200, alive: alive(100, 200) })
+    expect(claimedWhenRead.length).toBeGreaterThan(0)
+    expect(claimedWhenRead.every(Boolean)).toBe(true)
+  })
+
+  it('keeps the claims of the live masters that run from a folder it replaces', () => {
+    const bundle = lean()
+    writeLeanBundle(dir, bundle, { pid: 100, alive: alive(100) })
+    writeLeanBundle(dir, bundle, { pid: 200, alive: alive(100, 200) })
+    writeFileSync(join(folderOf(bundle), 'master-AB12.mjs'), 'changed on disk')
+    // 100 still runs from it; 200 is gone.
+    writeLeanBundle(dir, bundle, { pid: 300, alive: alive(100, 300) })
+    expect(readFileSync(join(folderOf(bundle), 'master-AB12.mjs'), 'utf8')).toBe(FILES['master-AB12.mjs'])
+    expect(readdirSync(folderOf(bundle)).filter((name) => name.startsWith('.claim')).sort()).toEqual(['.claim-100', '.claim-300'])
+  })
+
+  it('takes a claim made before this computer started for a dead master\'s, whoever has its pid now', () => {
+    const older = lean({ [LEAN_ENTRY]: 'older' })
+    writeLeanBundle(dir, older, { pid: 100, alive: alive(100) })
+    const bootedAt = Date.now() - 1_000
+    utimesSync(join(folderOf(older), '.claim-100'), new Date('2026-01-01'), new Date('2026-01-01'))
+    const bundle = lean()
+    writeLeanBundle(dir, bundle, { pid: 300, alive: alive(100, 300), now: later, bootedAt })
+    // pid 100 is alive again, but it is not the master that claimed the folder before the restart.
+    expect(readdirSync(dir)).toEqual([bundle.sha256.slice(0, 16)])
+    writeLeanBundle(dir, bundle, { pid: 100, alive: alive(100, 300), bootedAt })
+    utimesSync(join(folderOf(bundle), '.claim-100'), new Date('2026-01-01'), new Date('2026-01-01'))
+    writeLeanBundle(dir, bundle, { pid: 300, alive: alive(100, 300), bootedAt })
+    expect(readdirSync(folderOf(bundle)).filter((name) => name.startsWith('.claim'))).toEqual(['.claim-300'])
+  })
+
+  it('takes in its stride a write another master clears while this one looks at it', () => {
+    const gone = join(dir, `${'c'.repeat(16)}.4242.tmp`)
+    mkdirSync(gone, { recursive: true })
+    fsHooks.beforeLstat = (path) => { if (path === gone) rmSync(path, { recursive: true }) }
+    const bundle = lean()
+    writeLeanBundle(dir, bundle, { pid: 100, alive: alive(100) })
+    expect(readdirSync(dir)).toEqual([bundle.sha256.slice(0, 16)])
+  })
+
+  it('removes its write when the disk fills part-way, and says why', () => {
+    let writes = 0
+    fsHooks.failWrite = () => ++writes === 3
+    expect(() => writeLeanBundle(dir, lean(), { pid: 100, alive: alive(100) })).toThrow('ENOSPC')
+    expect(readdirSync(dir)).toEqual([])
+  })
+
+  it('gives up a master\'s claim as it exits', () => {
+    const entry = writeLeanBundle(dir, lean(), { pid: 100, alive: alive(100) })
+    releaseLeanClaim(entry, 100)
+    expect(readdirSync(folderOf(lean())).filter((name) => name.startsWith('.claim'))).toEqual([])
+    releaseLeanClaim(entry, 100)
+    releaseLeanClaim(join(dir, 'nowhere', LEAN_ENTRY))
   })
 
   it('says why when the folder cannot be written, and leaves nothing half-written in place', () => {
@@ -181,6 +287,32 @@ describe('writing the lean bundle out', () => {
       expect(readdirSync(dir)).toEqual([])
     } finally { chmodSync(dir, 0o700) }
     expect(existsSync(folderOf(lean()))).toBe(false)
+  })
+})
+
+describe('the fingerprint of a lean bundle', () => {
+  let dir: string
+  beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'lean-print-')) })
+  afterEach(() => rmSync(dir, { recursive: true, force: true }))
+  const bundle = (): LeanBundle => readLeanBundle(Buffer.from(CLI + leanBlock(FILES)))!
+
+  it('is the same for the bundle and the folder written from it, claims aside, and changes with any file', () => {
+    const entry = writeLeanBundle(join(dir, 'lean'), bundle(), { pid: 100, alive: () => true })
+    const folder = join(entry, '..')
+    expect(folderFingerprint(folder)).toBe(leanFingerprint(bundle()))
+    writeFileSync(join(folder, '.claim-200'), '')
+    expect(folderFingerprint(folder)).toBe(leanFingerprint(bundle()))
+    writeFileSync(join(folder, 'master-AB12.mjs'), 'changed')
+    expect(folderFingerprint(folder)).not.toBe(leanFingerprint(bundle()))
+  })
+
+  it('is none for a folder with no entry, or one that cannot be read', () => {
+    expect(folderFingerprint(join(dir, 'missing'))).toBeNull()
+    writeFileSync(join(dir, 'master-AB12.mjs'), 'x')
+    expect(folderFingerprint(dir)).toBeNull()
+    writeFileSync(join(dir, LEAN_ENTRY), 'x')
+    chmodSync(join(dir, LEAN_ENTRY), 0o000)
+    try { expect(folderFingerprint(dir)).toBeNull() } finally { chmodSync(join(dir, LEAN_ENTRY), 0o600) }
   })
 })
 

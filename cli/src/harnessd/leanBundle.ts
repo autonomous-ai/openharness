@@ -10,15 +10,20 @@
  *
  * Nothing here is needed for the daemon to run. A cli.js without the block (one built from the
  * sources, or a test's), a block that does not match its checksum, or a folder that cannot be written
- * leaves every process running from cli.js, as before.
+ * leaves every process running from cli.js, as before; and a service is started from cli.js whenever
+ * its master's lean files are gone or changed, or cli.js is no longer the bundle they came from
+ * (./leanServices.ts).
  *
  * Several masters can share one data folder (a second `harness start`, two builds on one computer), and
  * a master restarts its services from its folder for as long as it lives. So each master claims the
- * folder it runs from (`.claim-<pid>`), and a folder is removed only once no live master claims it.
+ * folder it runs from (`.claim-<pid>`) before it is in place or checked, gives the claim up as it exits
+ * cleanly, and a folder is removed only once no live master claims it and it has not changed for a
+ * minute. A claim older than the computer's last start is a dead master's, whatever has its pid now.
  */
 import { createHash } from 'node:crypto'
-import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { uptime } from 'node:os'
+import { dirname, join } from 'node:path'
 import { brotliDecompressSync } from 'node:zlib'
 
 /** As scripts/lib/leanBlock.mjs writes it. Built in two pieces, so this file's own text never matches. */
@@ -74,10 +79,48 @@ export function processAlive(pid: number): boolean {
   try { process.kill(pid, 0); return true } catch (error) { return (error as NodeJS.ErrnoException).code === 'EPERM' }
 }
 
+/**
+ * A fingerprint of the lean bundle's code, file by file in name order, which a folder written from it
+ * reproduces (`folderFingerprint`): how a master knows, before each service it starts, that the files it
+ * would start it from are still the ones it was started with.
+ */
+export function leanFingerprint(lean: LeanBundle): string {
+  const hash = createHash('sha256')
+  for (const name of [...lean.files.keys()].sort()) hash.update(`${name}\0${sha256(lean.files.get(name)!)}\n`)
+  return hash.digest('hex')
+}
+
+/** The fingerprint of the lean bundle written in [folder] (claims aside); null when it holds none. */
+export function folderFingerprint(folder: string): string | null {
+  const names = safeList(folder).filter((name) => FILE_NAME.test(name)).sort()
+  if (!names.includes(LEAN_ENTRY)) return null
+  const hash = createHash('sha256')
+  try {
+    for (const name of names) hash.update(`${name}\0${sha256(readFileSync(join(folder, name)))}\n`)
+  } catch {
+    return null
+  }
+  return hash.digest('hex')
+}
+
+/** The claim [pid] holds on the lean bundle whose entry is [entry], given up as its master exits. */
+export function releaseLeanClaim(entry: string, pid: number = process.pid): void {
+  removeQuietly(join(dirname(entry), `.claim-${pid}`))
+}
+
+/** What a cleaner leaves alone: a folder or file changed this recently may be one a master is writing,
+ *  or has just claimed, in another process at this moment. */
+export const LEAN_RECENT_MS = 60_000
+
 export interface LeanWrite {
   /** This master: what its claim is under. */
   pid?: number
   alive?: (pid: number) => boolean
+  /** The wall clock, ms. */
+  now?: () => number
+  /** When this computer started, ms: a claim older than that was made by a process that is gone,
+   *  whatever runs under its pid now. */
+  bootedAt?: number
 }
 
 /** Whether [folder] holds every file of [lean], byte for byte. */
@@ -89,60 +132,97 @@ function holds(folder: string, lean: LeanBundle): boolean {
 }
 
 const removeQuietly = (path: string): void => { try { rmSync(path, { recursive: true, force: true }) } catch { /* the next master tries again */ } }
+const changedAt = (path: string): number => { try { return lstatSync(path).mtimeMs } catch { return 0 } }
+
+/** The pids that claim [folder], with when each claimed it. */
+function claimsIn(folder: string): Array<{ pid: number; at: number }> {
+  return safeList(folder).flatMap((file) => {
+    const claim = CLAIM.exec(file)
+    return claim ? [{ pid: Number(claim[1]), at: changedAt(join(folder, file)) }] : []
+  })
+}
+
+/** Claim [folder] for [claim], then check it holds [lean]: from the moment its bytes are found good, a
+ *  cleaner in another process sees the claim. False when there is no folder, or it does not hold them. */
+function claimed(folder: string, claim: string, lean: LeanBundle): boolean {
+  try { writeFileSync(join(folder, claim), '', { mode: 0o600 }) } catch { return false }
+  return holds(folder, lean)
+}
 
 /**
  * Write [lean] into `[dir]/<sha>/`, claim it for this master and return the path of its entry. A folder
- * already there is used only if it holds the bundle's bytes; one that does not is replaced whole. Every
- * other lean folder no live master claims, and every write a crash cut short, is removed: a process
- * running from one has read it already, and the next master writes its own. Throws when the folder
- * cannot be written.
+ * already there is used only if it holds the bundle's bytes; one that does not is replaced whole, with
+ * the claims of the live masters that run from it. Every other lean folder no live master claims, and
+ * every write a crash cut short, is removed, unless it changed in the last minute: a process running
+ * from one has read it already, and the next master writes its own. Throws when the folder cannot be
+ * written, and leaves nothing half-written.
  */
 export function writeLeanBundle(dir: string, lean: LeanBundle, options: LeanWrite = {}): string {
   const pid = options.pid ?? process.pid
   const alive = options.alive ?? processAlive
+  const now = options.now ?? Date.now
+  const bootedAt = options.bootedAt ?? Date.now() - uptime() * 1000
+  // A claim made before this computer started is a dead master's, whatever runs under its pid now.
+  const live = (claim: { pid: number; at: number }): boolean => claim.at >= bootedAt && alive(claim.pid)
+  const claim = `.claim-${pid}`
   const name = lean.sha256.slice(0, 16)
   const folder = join(dir, name)
   mkdirSync(dir, { recursive: true, mode: 0o700 })
-  if (!holds(folder, lean)) {
-    // Written whole, then renamed into place: a folder there is always complete, so two masters of one
-    // build starting at once (a second `harness start`) never see each other's half.
+  if (!claimed(folder, claim, lean)) {
+    // Written whole, claimed, then renamed into place: a folder there is always complete and never
+    // unclaimed, so two masters of one build starting at once (a second `harness start`) never see each
+    // other's half, and no cleaner takes it between the rename and the claim.
     const scratch = join(dir, `${name}.${pid}.tmp`)
     removeQuietly(scratch)
-    mkdirSync(scratch, { mode: 0o700 })
-    for (const [file, code] of lean.files) writeFileSync(join(scratch, file), code, { mode: 0o600 })
+    try {
+      mkdirSync(scratch, { mode: 0o700 })
+      for (const [file, code] of lean.files) writeFileSync(join(scratch, file), code, { mode: 0o600 })
+      writeFileSync(join(scratch, claim), '', { mode: 0o600 })
+    } catch (error) {
+      // A full disk, part-way: nothing half-written is left for the next master to trip on.
+      removeQuietly(scratch)
+      throw error
+    }
     try {
       renameSync(scratch, folder)
     } catch (error) {
-      // Not over a folder with files in it. The other master's, written first, is the same bytes.
-      if (holds(folder, lean)) {
+      // Not over a folder with files in it. Another master of this build, written first: the same bytes.
+      if (claimed(folder, claim, lean)) {
         removeQuietly(scratch)
       } else {
-        // One that changed on disk is moved aside and replaced. A master starting a service from it in
-        // that instant finds no file and fails that start, which it retries.
+        // One that changed on disk is replaced, and keeps the claims of the masters still running from
+        // it. One starting a service from it in that instant finds no file and starts it from cli.js.
+        for (const other of claimsIn(folder)) {
+          if (other.pid !== pid && live(other)) writeFileSync(join(scratch, `.claim-${other.pid}`), '', { mode: 0o600 })
+        }
         const aside = join(dir, `${name}.${pid}.old`)
-        try { renameSync(folder, aside) } catch { throw error }
-        renameSync(scratch, folder)
-        removeQuietly(aside)
+        try {
+          renameSync(folder, aside)
+          renameSync(scratch, folder)
+        } catch {
+          removeQuietly(scratch)
+          throw error
+        } finally {
+          removeQuietly(aside)
+        }
       }
     }
   }
-  writeFileSync(join(folder, `.claim-${pid}`), '', { mode: 0o600 })
+  const settled = (path: string): boolean => now() - changedAt(path) >= LEAN_RECENT_MS
   for (const entry of safeList(dir)) {
+    const path = join(dir, entry)
     const scratch = SCRATCH.exec(entry)
     if (scratch) {
-      if (Number(scratch[1]) === pid || !alive(Number(scratch[1]))) removeQuietly(join(dir, entry))
+      if (Number(scratch[1]) === pid || (!alive(Number(scratch[1])) && settled(path))) removeQuietly(path)
       continue
     }
     if (!FOLDER.test(entry)) continue
-    // A claim of this master's own on another folder is one it held before it re-executed on this one.
-    const claimants = safeList(join(dir, entry)).flatMap((file) => {
-      const claim = CLAIM.exec(file)
-      return claim ? [Number(claim[1])] : []
-    })
+    const claims = claimsIn(path)
     if (entry === name) {
-      for (const claimant of claimants) if (claimant !== pid && !alive(claimant)) removeQuietly(join(folder, `.claim-${claimant}`))
-    } else if (!claimants.some((claimant) => claimant !== pid && alive(claimant))) {
-      removeQuietly(join(dir, entry))
+      for (const other of claims) if (other.pid !== pid && !live(other)) removeQuietly(join(folder, `.claim-${other.pid}`))
+    } else if (!claims.some((other) => other.pid !== pid && live(other)) && settled(path)) {
+      // A claim of this master's own on another folder is one it held before it re-executed on this one.
+      removeQuietly(path)
     }
   }
   return join(folder, LEAN_ENTRY)

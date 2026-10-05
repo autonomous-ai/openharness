@@ -173,6 +173,7 @@ describe('re-executing', () => {
     own: 'old', current: () => onDisk, nodePath: '/opt/node', execArgv: ['--flag'], scriptPath: '/opt/cli.js',
     env: { KEEP: '1' }, pid: 4242,
     execve: (file, args, env) => { execs.push({ file, args, env }) },
+    exists: () => true,
     probe: (args, env) => {
       let settle!: (result: ProbeResult) => void
       const entry = { args, env, settle: (result: ProbeResult) => settle(result), cancelled: false }
@@ -277,6 +278,21 @@ describe('re-executing', () => {
     stopped[2]()
     await settle({ ok: true, detail: PROBE_ANSWER })
     expect(calls).toContain('[harnessd] could not re-execute this master (odd) — keeping it')
+  })
+
+  it('never execs onto a node binary or a bundle that is not there: that exec could not be caught', async () => {
+    // On Node 22.23 an exec of a node binary that is gone aborts the master (exit 134), and one onto a bundle
+    // that is gone ends it in the new image: neither reaches the catch, and the next master rolls back.
+    for (const [gone, said] of [['/opt/node', '/opt/node'], ['/opt/cli.js', '/opt/cli.js']]) {
+      calls = []
+      const missing = make({ exists: (path) => path !== gone })
+      missing.reexec(state(), (outcome) => outcomes.push(outcome))
+      stopped.at(-1)!()
+      await settle({ ok: true, detail: PROBE_ANSWER })
+      expect(execs).toEqual([])
+      expect(calls.slice(-3)).toEqual(['remove marker', `[harnessd] ${said} is not there to re-execute on — keeping this master`, 'start children'])
+    }
+    expect(outcomes).toEqual(['kept', 'kept'])
   })
 
   it('carries on as itself, and does not end, when its marker cannot be written (a full disk)', async () => {

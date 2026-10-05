@@ -11,7 +11,7 @@
 import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { afterAll, afterEach, beforeAll, describe, expect, it, onTestFailed } from 'vitest'
 import { LocalClient, type Frame } from './harness/client.js'
 import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
@@ -98,6 +98,31 @@ describe('harnessd\'s master and services lean', () => {
     await agentWorks(d, 'codex')
     expect(d.coresStarted()).toBe(1)
     expect(d.log()).not.toMatch(/service \w+ (exited|ended)/)
+    // The master claims the folder it runs from while it lives, and gives the claim up as it stops.
+    const claim = join(dirname(lean!), `.claim-${master}`)
+    expect(existsSync(claim)).toBe(true)
+    await d.stop()
+    expect(existsSync(claim)).toBe(false)
+  })
+
+  it('starts a service from cli.js once the lean bundle is gone from under its master, and the service works', async () => {
+    // A master lives for weeks; its lean folder, gone (someone tidying up), failed every restart of every
+    // service with MODULE_NOT_FOUND until the master itself restarted. The lean bundle is only ever an
+    // optimisation.
+    const d = await fresh()
+    const ours = /\[harnessd\] services run from (\S+), as this master does/.exec(d.log())![1]
+    rmSync(dirname(ours), { recursive: true })
+    const search = servicePids(d).get('search')!
+    const restarts = (): number => [...d.log().matchAll(/\[harnessd\] service search started/g)].length
+    const before = restarts()
+    process.kill(search, 'SIGKILL')
+    await until('search started again', () => restarts() > before || null, 60_000, 200)
+    // From cli.js, as the core: its path as the master resolved it.
+    expect(d.log()).toMatch(new RegExp(`\\[harnessd\\] the lean bundle \\S+ cannot be used \\(it is gone\\): services start from \\S+cli\\.js`))
+    expect(d.log()).toContain(`the lean bundle ${ours} cannot be used`)
+    await agentWorks(d, 'codex')
+    expect(d.log()).not.toMatch(/MODULE_NOT_FOUND|Cannot find module/)
+    expect(d.coresStarted()).toBe(1)
   })
 
   it('keeps a master\'s lean bundle while it lives: another build\'s master on the same data folder leaves it, and its services still restart', async () => {
