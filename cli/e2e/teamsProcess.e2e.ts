@@ -70,8 +70,8 @@ describe('the teams\' prompt scopes in their own process', () => {
     return d
   }
 
-  it('by default the scopes stay in the core\'s process, as before', async () => {
-    const d = await fresh({ HARNESSD_SERVICES: '' }, false)
+  it('with HARNESSD_SERVICES=none the scopes stay in the core\'s process, as before', async () => {
+    const d = await fresh({ HARNESSD_SERVICES: 'none' }, false)
     const client = await LocalClient.connect(d)
     const agent = await create(d, client, 'scopes-default')
     await say(client, agent.id, 'hello from the alpha tab', 'tab-alpha')
