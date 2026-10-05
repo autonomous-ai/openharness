@@ -474,13 +474,64 @@ export function isNoTmuxServerError(error: string): boolean {
   return /no such file or directory/i.test(connecting[2]) || !existsSync(connecting[1])
 }
 
+/** The tmux server the last inventory was read from (`rememberTmuxServer`); null until one was. */
+let knownServer: number | null = null
+
+/** Whether `pid` is a running process named tmux: never a pid since reused by something else. */
+function isTmuxProcess(pid: number): Promise<boolean> {
+  try { process.kill(pid, 0) } catch { return Promise.resolve(false) }
+  return new Promise((resolve) => {
+    execFile('ps', ['-o', 'comm=', '-p', String(pid)], { timeout: 2_000, env: psEnv() }, (err, stdout) => {
+      resolve(!err && basename(String(stdout ?? '').trim()) === 'tmux')
+    })
+  })
+}
+
+/**
+ * Note which server answered, after an inventory read from it. Asked of tmux only while unknown or
+ * gone, so a steady daemon spends one `kill(pid, 0)` an inventory on it.
+ */
+export async function rememberTmuxServer(): Promise<void> {
+  if (knownServer !== null) {
+    try { process.kill(knownServer, 0); return } catch { knownServer = null }
+  }
+  await new Promise<void>((resolve) => {
+    execFile('tmux', ['display-message', '-p', '#{pid}'], { timeout: 2_000 }, (err, stdout) => {
+      const pid = Number(String(stdout ?? '').trim())
+      if (!err && Number.isSafeInteger(pid) && pid > 0) knownServer = pid
+      resolve()
+    })
+  })
+}
+
+/**
+ * ⚠️ "No server" is also what tmux says when its socket was removed from under a server that still runs
+ * every agent: a cleaner of /tmp (systemd-tmpfiles ages entries out after ten days) does that to a
+ * daemon that runs for weeks. Taken for a dead server, every live agent read as stopped within 25 s
+ * (e2e/tmuxsocket.e2e.ts), and resuming them would have started each engine a second time beside
+ * itself. tmux makes its socket again on SIGUSR1 (tmux(1)), so the server last read from is asked to,
+ * when it is still a running tmux. True when it was asked: the caller reads again, once.
+ */
+export async function reviveRemovedTmuxSocket(): Promise<boolean> {
+  const pid = knownServer
+  if (pid === null || !(await isTmuxProcess(pid))) return false
+  try { process.kill(pid, 'SIGUSR1') } catch { return false }
+  // tmux makes the socket when it handles the signal, on its next turn of its loop.
+  await new Promise((resolve) => setTimeout(resolve, 200))
+  console.log(`[terminal] tmux's socket was removed while its server (pid ${pid}) still ran — asked it to make a new one`)
+  return true
+}
+
+/** Test seam. */
+export function forgetTmuxServer(): void { knownServer = null }
+
 /**
  * The pane's root pid; `'missing'` when tmux answered that it has no such pane, or that no server is
  * running (then no pane is); null when tmux could not be asked (a timeout, a socket it cannot reach),
  * which says nothing about the pane. tmux 3.7 answers `display-message -t` for an unknown pane with an
  * empty line and exit 0; older versions say "can't find pane".
  */
-function panePidLookup(pane: string): Promise<number | 'missing' | null> {
+function panePidLookup(pane: string, revived = false): Promise<number | 'missing' | null> {
   return new Promise((resolve) => {
     execFile('tmux', ['display-message', '-p', '-t', pane, '#{pane_pid}'], { timeout: 2000 }, (err, stdout, stderr) => {
       const text = String(stdout ?? '').trim()
@@ -488,8 +539,11 @@ function panePidLookup(pane: string): Promise<number | 'missing' | null> {
       if (!err && Number.isSafeInteger(pid) && pid > 0) resolve(pid)
       else if (!err && text === '') resolve('missing')
       else if (err && /can't find pane/.test(String(stderr ?? ''))) resolve('missing')
-      else if (err && isNoTmuxServerError(String(stderr ?? ''))) resolve('missing')
-      else resolve(null)
+      else if (err && isNoTmuxServerError(String(stderr ?? ''))) {
+        // A server whose socket was removed is still running this pane: ask it back, then read again.
+        if (revived) { resolve('missing'); return }
+        void reviveRemovedTmuxSocket().then((asked) => { if (asked) void panePidLookup(pane, true).then(resolve); else resolve('missing') })
+      } else resolve(null)
     })
   })
 }

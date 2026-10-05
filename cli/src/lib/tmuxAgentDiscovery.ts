@@ -28,7 +28,9 @@ import {
   parseProcessRow,
   processTreePids,
   isNoTmuxServerError,
+  rememberTmuxServer,
   resumeSessionId,
+  reviveRemovedTmuxSocket,
   setPaneMouseOn,
   type ProcessRow,
 } from './tmux.js'
@@ -130,7 +132,11 @@ export type TmuxPaneInventory =
 export async function listTmuxPanes(): Promise<TmuxPaneInventory> {
   // Printable delimiters survive tmux's POSIX-locale output sanitiser. Split only the three fixed
   // separators so a legitimate `|` in pane_current_path remains part of the path.
-  const result = await execText('tmux', ['list-panes', '-a', '-F', '#{pane_id}|#{pane_pid}|#{session_name}|#{pane_current_path}'], 2_000)
+  const read = () => execText('tmux', ['list-panes', '-a', '-F', '#{pane_id}|#{pane_pid}|#{session_name}|#{pane_current_path}'], 2_000)
+  let result = await read()
+  // A server whose socket was removed still runs its panes: asked back, it is read again, once.
+  if (!result.ok && isNoTmuxServerError(result.error) && await reviveRemovedTmuxSocket()) result = await read()
+  if (result.ok) await rememberTmuxServer()
   if (!result.ok) {
     // A server does not exist until the first Harness agent (or a user) opens
     // a tmux session. Treating this as unavailable made a clean WSL install
