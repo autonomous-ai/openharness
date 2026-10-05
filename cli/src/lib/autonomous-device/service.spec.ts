@@ -259,6 +259,39 @@ describe('Autonomous device local-agent service', () => {
     send.mockClear(); f.service.replay({ serverInstanceId: f.service.serverInstanceId, cursor: 0 }, send)
     expect(send).toHaveBeenCalledWith(expect.objectContaining({ type: 'event', eventId: 1 }))
   })
+  it('preserves permission metadata through status and reconnect without changing legacy fields', async () => {
+    const f = fixture()
+    const questions = [{ key: 'Run?', q: 'Run?', options: ['Yes', 'No'], multi: false }]
+    const permission = { dialog: 'Run printf hi?', resolution: 'desktop' }
+    f.service.commander({ type: 'commander_question', agentId: 'agent', payload: { requestId: 'permission1', questions, permission } })
+    const opened = f.events.find(e => e.kind === 'question.open')!
+    expect(opened.payload).toEqual({ questionRequestId: 'permission1', questions, permission })
+    const status = () => f.service.request('device', { type: 'status', requestId: randomUUID(), machineId: 'machine', agentId: 'agent' })
+    expect((await status()).openQuestion).toEqual({ requestId: 'permission1', questions, permission })
+    const replay = vi.fn()
+    f.service.replay({ serverInstanceId: f.service.serverInstanceId, cursor: 0 }, replay)
+    expect(replay).toHaveBeenCalledWith(opened)
+    replay.mockClear()
+    f.service.replay({ serverInstanceId: f.service.serverInstanceId, cursor: opened.eventId }, replay)
+    expect(replay).not.toHaveBeenCalled()
+    f.service.commander({ type: 'commander_question_close', agentId: 'agent', payload: { requestId: 'older' } })
+    expect((await status()).openQuestion).not.toBeNull()
+    f.service.commander({ type: 'commander_question_close', agentId: 'agent', payload: { requestId: 'permission1' } })
+    expect((await status()).openQuestion).toBeNull()
+    expect(f.events.at(-1)).toMatchObject({ kind: 'question.close', payload: { questionRequestId: 'permission1' } })
+    expect(f.answer).not.toHaveBeenCalled()
+    expect(f.submit).not.toHaveBeenCalled()
+  })
+
+  it.each([undefined, false, {}, { dialog: 42, resolution: 'desktop' }, { dialog: 'Run?', resolution: 'robot' }])(
+    'keeps legacy questions unchanged for absent or invalid permission metadata (%j)', async permission => {
+      const f = fixture()
+      f.service.commander({ type: 'commander_question', agentId: 'agent', payload: { requestId: 'q', questions: [], permission } })
+      expect(f.events[0].payload).toEqual({ questionRequestId: 'q', questions: [] })
+      const status = await f.service.request('device', { type: 'status', requestId: randomUUID(), machineId: 'machine', agentId: 'agent' })
+      expect(status.openQuestion).toEqual({ requestId: 'q', questions: [] })
+    })
+
   it('rejects stale questions and validates all answer fields', async () => {
     const f = fixture()
     const req = { type: 'question.answer', requestId: randomUUID(), machineId: 'machine', agentId: 'agent', idempotencyKey: 'q1', questionRequestId: 'question1', answers: { branch: 'main' } }

@@ -93,7 +93,7 @@ export class AutonomousDeviceService {
   private readonly ambiguousTurns = new Set<string>()
   private readonly openTurns = new Set<string>()
   private readonly pendingStarts = new Set<string>()
-  private readonly questions = new Map<string, { requestId: string; questions: unknown }>()
+  private readonly questions = new Map<string, { requestId: string; questions: unknown; permission?: { dialog: string; resolution: 'desktop' } }>()
   private events: AutonomousDeviceFrame[] = []
   private sequence = 0
   private readonly results = new Map<string, ResultRecord>()
@@ -529,12 +529,15 @@ export class AutonomousDeviceService {
     const agentId = typeof frame.agentId === 'string' ? frame.agentId : undefined
     const p = object(frame.payload) ? frame.payload : {}
     if (frame.type === 'commander_question' && agentId && typeof p.requestId === 'string') {
-      this.questions.set(agentId, { requestId: p.requestId, questions: p.questions })
+      const permission = object(p.permission) && typeof p.permission.dialog === 'string' && p.permission.resolution === 'desktop'
+        ? { dialog: p.permission.dialog, resolution: 'desktop' as const } : undefined
+      const metadata = permission ? { permission } : {}
+      this.questions.set(agentId, { requestId: p.requestId, questions: p.questions, ...metadata })
       const candidates = [...this.entries.values()].filter(e => e.receipt.agentId === agentId && e.consumed
         && e.receipt.serverInstanceId === this.serverInstanceId
         && !['completed', 'rejected'].includes(e.receipt.state))
       const single = candidates.length === 1 ? candidates[0] : this.turns.get(agentId)
-      this.event('question.open', agentId, { questionRequestId: p.requestId, questions: p.questions,
+      this.event('question.open', agentId, { questionRequestId: p.requestId, questions: p.questions, ...metadata,
         ...(single ? { idempotencyKey: single.receipt.idempotencyKey, turnId: single.receipt.turnId } : {}) })
     } else if (frame.type === 'commander_question_close' && agentId) {
       if (this.questions.get(agentId)?.requestId === p.requestId) this.questions.delete(agentId)

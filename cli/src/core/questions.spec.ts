@@ -90,6 +90,15 @@ describe('questions', () => {
     expect(log.mock.calls[1][0]).toContain('asking the user · "" · req=r2')
   })
 
+  it.each([true, false])('preserves permission metadata only for approval dialogs (%s)', permission => {
+    const { deps, asking } = setup()
+    given(asking.questionWatcher).onQuestion('s1', 'r1', [], { permission, dialog: 'Run printf hi?' })
+    const frame = vi.mocked(deps.clients.sendCommander).mock.calls[1][0]
+    expect(frame.payload.permission).toEqual(permission ? { dialog: 'Run printf hi?', resolution: 'desktop' } : undefined)
+    expect(deps.clients.sendLocal).toHaveBeenCalledWith(frame)
+    expect(asking.openQuestions.get('s1')).toBe(frame)
+  })
+
   it('closes a question answered elsewhere on every client it was shown on', () => {
     const { deps, asking } = setup()
     const answered = vi.spyOn(asking.agentNotifications, 'answered')
