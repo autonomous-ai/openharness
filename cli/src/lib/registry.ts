@@ -720,6 +720,20 @@ function threeWayRow(
   return merged
 }
 
+/** `candidate` with each intended field as `current` has it: set, or removed when `current` has none. */
+function withIntended(
+  candidate: Record<string, unknown>,
+  current: Record<string, unknown>,
+  intended: ReadonlySet<string>,
+): Record<string, unknown> {
+  const row = { ...candidate }
+  for (const key of intended) {
+    if (Object.hasOwn(current, key)) row[key] = current[key]
+    else delete row[key]
+  }
+  return row
+}
+
 function selectedRuntimeKey(runtimes: readonly TerminalRuntimeRef[], requested: unknown): string {
   const keys = new Set(runtimes.map(terminalRouteKey))
   return typeof requested === 'string' && keys.has(requested)
@@ -843,6 +857,14 @@ class Registry {
   private persistedBaseline = new Map<string, string>()
   /** Exact bytes of our last durable save; checked against the file, never just its mtime. */
   private persistedContents: string | null = null
+  /**
+   * Fields a caller set on purpose since the last save, by agent: written as they are now, whatever the
+   * file says. The merge alone keeps the file's value wherever this view matches what it last saved, so
+   * a view that had never seen another process's close plan matched while cancelling it: the cancel was
+   * dropped and the plan stayed (CI's registry-observation contract, 2026-10-05). A close retried over
+   * another process's cancel was dropped the same way.
+   */
+  private intended = new Map<string, Set<string>>()
   private rebooted = false
 
   /** True when the last `load()` found the machine had rebooted since the previous daemon run. */
@@ -898,6 +920,7 @@ class Registry {
     this.rebooted = false
     this.persistedBaseline.clear()
     this.persistedContents = null
+    this.intended.clear()
     try {
       secureStateDirectory(env.ADAPTER_DATA_DIR)
     } catch (error) {
@@ -1112,6 +1135,7 @@ class Registry {
     this.processIndex.clear()
     this.persistedBaseline.clear()
     this.persistedContents = null
+    this.intended.clear()
     const aside = `${FILE}.corrupt-${new Date().toISOString().replace(/[:.]/g, '-')}`
     try {
       renameSync(FILE, aside)
@@ -1826,9 +1850,14 @@ class Registry {
     const previous = entry.closePlan
     if (plan) entry.closePlan = normalizedClosePlan(plan)
     else delete entry.closePlan
+    const intended = this.intended.get(agentId) ?? new Set<string>()
+    intended.add('closePlan')
+    this.intended.set(agentId, intended)
     try { this.save(true) } catch (error) {
       if (previous) entry.closePlan = previous
       else delete entry.closePlan
+      intended.delete('closePlan')
+      if (!intended.size) this.intended.delete(agentId)
       throw error
     }
     return entry
@@ -2156,10 +2185,14 @@ class Registry {
         }
         for (const [agentId, current] of currentRows) {
           const baseline = this.persistedBaseline.get(agentId)
-          if (baseline === rowFingerprint(current)) continue
+          const intended = this.intended.get(agentId)
+          // An intent on a row this view otherwise left alone never brings back a row another process
+          // removed: that agent is gone, and its close plan with it.
+          if (baseline === rowFingerprint(current) && (!intended || !latest.has(agentId))) continue
           let candidate = latest.has(agentId)
             ? threeWayRow(baseline, current, latest.get(agentId)!)
             : current
+          if (intended) candidate = withIntended(candidate, current, intended)
           const process = strictPersistedRow(candidate)?.processIdentity
           const engine = candidate.engine
           const sessionId = typeof candidate.sessionId === 'string' ? candidate.sessionId : ''
@@ -2196,6 +2229,7 @@ class Registry {
         const serialized = rows.map(persistedRow)
         atomicWriteJson(FILE, serialized)
         this.persistedContents = JSON.stringify(serialized, null, 2)
+        this.intended.clear()
 
         // Refresh external daemon-down writes into the in-memory revision without replacing object
         // identities already held by controllers.
