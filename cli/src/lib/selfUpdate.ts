@@ -19,6 +19,7 @@ import { execFile } from 'child_process'
 import { join } from 'path'
 import { SpawnLockBusyError, describeSpawnLockFailure } from './daemonSpawnLock.js'
 import { managedNodePath } from './nodeRuntime.js'
+import { patientDeadline } from './patientExec.js'
 
 export interface FileRef {
   url: string
@@ -141,9 +142,20 @@ export function shouldAutoUpdate(candidate: string, current: string): boolean {
  * held it for as long as the trickle lasted, every later check skipped meanwhile, with a fix waiting
  * (e2e/updateHostile.e2e.ts). Each is now its own failure, retried at the next check.
  */
-export interface TransferLimits { idleMs: number; deadlineMs: number }
-/** A bundle: a minute without a byte, a quarter of an hour in all (4.4 MB at 5 KB/s). */
-export const DOWNLOAD_LIMITS: TransferLimits = { idleMs: 60_000, deadlineMs: 15 * 60_000 }
+export interface TransferLimits {
+  idleMs: number
+  deadlineMs: number
+  /**
+   * The slowest a transfer of a known size (Content-Length, or the size the manifest names) may average:
+   * its deadline grows to what that rate needs, when that is longer. A link that keeps sending, however
+   * slowly, finishes; one that trickles a byte a minute to stay under the idle limit still ends.
+   */
+  floorBytesPerSecond?: number
+}
+/** A bundle: a minute without a byte, and a quarter of an hour in all or whatever 1 KB/s needs, the longer
+ *  (4.4 MB: about 75 minutes). The fixed quarter of an hour left a link under 5 KB/s never updating: each
+ *  check started again from nothing and kept the link full. */
+export const DOWNLOAD_LIMITS: TransferLimits = { idleMs: 60_000, deadlineMs: 15 * 60_000, floorBytesPerSecond: 1_024 }
 /** The manifest is a few hundred bytes. */
 export const MANIFEST_LIMITS: TransferLimits = { idleMs: 30_000, deadlineMs: 60_000 }
 /**
@@ -157,7 +169,7 @@ export const RUNTIME_DOWNLOAD_LIMITS: TransferLimits = { idleMs: 300_000, deadli
 export class TransferStalledError extends Error {}
 
 /** GET `url` whole within `limits`: the status, and the body once it has all arrived. */
-async function fetchWithin(url: string, limits: TransferLimits): Promise<{ ok: boolean; status: number; body: Buffer }> {
+async function fetchWithin(url: string, limits: TransferLimits, expectedBytes?: number): Promise<{ ok: boolean; status: number; body: Buffer }> {
   const controller = new AbortController()
   let stalled!: (error: TransferStalledError) => void
   const gaveUp = new Promise<never>((_, reject) => { stalled = reject })
@@ -174,12 +186,23 @@ async function fetchWithin(url: string, limits: TransferLimits): Promise<{ ok: b
     return handle
   }
   // No deadline at all for an infinite one: a timer given Infinity fires at once.
-  const deadline = Number.isFinite(limits.deadlineMs) ? timer(limits.deadlineMs, `took longer than ${limits.deadlineMs} ms in all`) : undefined
+  const startedAt = performance.now()
+  let deadline = Number.isFinite(limits.deadlineMs) ? timer(limits.deadlineMs, `took longer than ${limits.deadlineMs} ms in all`) : undefined
+  /** Once the size is known: the deadline the floor rate needs, when that is the longer. */
+  const scaleDeadline = (bytes: number): void => {
+    if (!deadline || !limits.floorBytesPerSecond || !(bytes > 0)) return
+    const needed = Math.ceil(bytes / limits.floorBytesPerSecond * 1000)
+    if (needed <= limits.deadlineMs) return
+    clearTimeout(deadline)
+    deadline = timer(Math.max(0, needed - (performance.now() - startedAt)), `took longer than ${needed} ms in all (${bytes} bytes at ${limits.floorBytesPerSecond} B/s)`)
+  }
+  if (expectedBytes !== undefined) scaleDeadline(expectedBytes)
   let idle = timer(limits.idleMs, `sent nothing for ${limits.idleMs} ms`)
   const heard = (): void => { clearTimeout(idle); idle = timer(limits.idleMs, `sent nothing for ${limits.idleMs} ms`) }
   try {
     const res = await Promise.race([fetch(url, { signal: controller.signal }), gaveUp])
     heard()
+    if (expectedBytes === undefined) scaleDeadline(Number(res.headers?.get?.('content-length')))
     // Read as it arrives, so the idle timer hears every chunk. A response with no stream (a body-less
     // status, or a Response-like object that only buffers) is read whole, within the same limits.
     if (!res.body) {
@@ -220,7 +243,7 @@ export class DigestMismatchError extends Error {}
 /** Download one file within `limits` and verify its sha256 in memory; throws on a non-2xx, a stall or a
  *  digest mismatch. */
 export async function downloadVerified(ref: FileRef, limits: TransferLimits = DOWNLOAD_LIMITS): Promise<Buffer> {
-  const res = await fetchWithin(ref.url, limits)
+  const res = await fetchWithin(ref.url, limits, ref.size)
   if (!res.ok) throw new Error(`download ${ref.url} → HTTP ${res.status}`)
   const got = sha256(res.body)
   if (got.toLowerCase() !== ref.sha256.toLowerCase()) {
@@ -238,6 +261,8 @@ export type CanaryResult = { ok: true } | { ok: false; problem: 'unwritable' | '
 
 /** How long the canary may take to answer. */
 export const CANARY_TIMEOUT_MS = 15_000
+/** How long a canary that outlived its deadline has between SIGTERM and SIGKILL. */
+export const CANARY_KILL_GRACE_MS = 2_000
 
 /** Cheap runnability check: write the new bundle into a temp install-shaped dir and run
  *  `node cli.js version`. This catches broken ESM/CJS packaging before the live install is touched.
@@ -263,17 +288,32 @@ export async function runCanary(cliBuf: Buffer, dir: string, version?: string, t
     }
     // The interpreter the NEXT daemon will run on — see managedNodePath(). Canarying on this
     // process's interpreter would assert about a Node the new build may never be started with.
+    // The deadline counts only time this process's event loop ran (patientDeadline): Node's own timeout,
+    // fired late after a held loop, threw a build's answer away and took it for no answer. A build that
+    // outlives it is sent SIGTERM, and SIGKILL [CANARY_KILL_GRACE_MS] later: one that ignores SIGTERM held
+    // the check open for good, and with it every later check (`checking`), a fixed release's included.
     const r = await new Promise<{ failure: string | null; stdout: string }>((resolve) => {
-      execFile(managedNodePath(), [tmpCli, 'version'], { timeout: timeoutMs, encoding: 'utf8' }, (error, stdout) => {
+      let timedOut = false
+      let grace: ReturnType<typeof setTimeout> | undefined
+      let cancel = (): void => {}
+      const child = execFile(managedNodePath(), [tmpCli, 'version'], { encoding: 'utf8' }, (error, stdout) => {
+        cancel()
+        clearTimeout(grace)
+        // An answer is an answer, even one that raced the kill.
         if (!error) { resolve({ failure: null, stdout }); return }
-        const failed = error as NodeJS.ErrnoException & { killed?: boolean; signal?: NodeJS.Signals | null; code?: number | string }
+        const failed = error as NodeJS.ErrnoException & { signal?: NodeJS.Signals | null; code?: number | string }
         resolve({
-          failure: failed.killed && failed.signal === 'SIGTERM' ? `no answer within ${timeoutMs >= 1000 ? `${Math.round(timeoutMs / 1000)} s` : `${timeoutMs} ms`}`
+          failure: timedOut ? `no answer within ${timeoutMs >= 1000 ? `${Math.round(timeoutMs / 1000)} s` : `${timeoutMs} ms`}`
             : typeof failed.code === 'number' ? `exit ${failed.code}`
             : failed.signal ? `signal ${failed.signal}`
             : failed.message,
           stdout: '',
         })
+      })
+      cancel = patientDeadline(timeoutMs, () => {
+        timedOut = true
+        child.kill('SIGTERM')
+        grace = setTimeout(() => child.kill('SIGKILL'), CANARY_KILL_GRACE_MS)
       })
     })
     if (r.failure !== null) return { ok: false, problem: 'failed', detail: r.failure }
@@ -471,6 +511,15 @@ export function startSelfUpdater(opts: {
   withLock?: <T>(fn: () => Promise<T>) => Promise<T>
   /** How long a download may go without a byte, and take in all; the manifest gets at most its own. */
   limits?: TransferLimits
+  /**
+   * Whether a newer build may be staged while the bundle on disk is itself an update still being judged.
+   * A master from before #807 (v0.3.58) rolls back on ANY exit of a core on probation, the exit for the
+   * newer build included: it put back the backup, which #807's `stage` keeps as the last build kept (two
+   * builds back), and rejected the newer one for good. A core such a master runs waits for its own build
+   * to be kept, then stages. True when left out, and for every master that says it judges such an exit
+   * itself (HARNESSD_JUDGES_SUPERSEDED).
+   */
+  stageWhileJudged?: boolean
 }): Poller {
   let checking = false
   let done = false
@@ -485,6 +534,7 @@ export function startSelfUpdater(opts: {
   let refused: { entry: string; tries: number; until: number } | null = null
   // Said once per version: the check repeats every interval.
   let toldRejected: string | null = null
+  let toldWaiting: string | null = null
 
   const now = opts.now ?? Date.now
   const download = opts.limits ?? DOWNLOAD_LIMITS
@@ -492,6 +542,10 @@ export function startSelfUpdater(opts: {
     idleMs: Math.min(download.idleMs, MANIFEST_LIMITS.idleMs), deadlineMs: Math.min(download.deadlineMs, MANIFEST_LIMITS.deadlineMs),
   }
   const stop = (): void => { if (timer) { clearTimeout(timer); timer = null } }
+  // Stopped from outside: a check under way goes no further than the step it is on. Before, only the
+  // next check was cancelled, and one waiting on a download or a canary went on to swap the bundle and
+  // hand the machine over (`onStaged`) on a daemon that was shutting down.
+  let halted = false
   const schedule = (): void => {
     stop()
     timer = setTimeout(() => void tick(), msUntilSlot(now(), opts.slotSecond, opts.intervalMs))
@@ -509,7 +563,7 @@ export function startSelfUpdater(opts: {
     checking = true
     try {
       const entry = await fetchManifest(opts.url, opts.key, manifest)
-      if (!entry || !shouldAutoUpdate(entry.version, opts.currentVersion)) return
+      if (halted || !entry || !shouldAutoUpdate(entry.version, opts.currentVersion)) return
       const unremembered = settleRolledBack(opts.dir)
       if (unremembered === entry.version || rejectedVersions(opts.dir).includes(entry.version)) {
         if (toldRejected !== entry.version) console.log(`[update] ${entry.version} was rolled back on this machine — waiting for a newer build (\`harness update\` installs it anyway)`)
@@ -540,8 +594,10 @@ export function startSelfUpdater(opts: {
         }
         verified = { entry: key, version: entry.version, cliBuf, notifyBuf, canaried: false }
       }
+      if (halted) return
       if (!verified.canaried) {
         const result = await runCanary(verified.cliBuf, opts.dir, entry.version)
+        if (halted) return
         if (!result.ok && result.problem === 'unwritable') {
           console.error(`[update] could not write the canary for ${entry.version} (${result.detail}) — trying again next check`)
           return
@@ -550,9 +606,15 @@ export function startSelfUpdater(opts: {
         verified.canaried = true
       }
       const ready = verified
+      if (opts.stageWhileJudged === false && unjudgedUpdate(opts.dir, fileSha256(join(opts.dir, CLI)))) {
+        if (toldWaiting !== ready.version) console.log(`[update] ${ready.version} is ready — waiting for this build to be kept before staging it`)
+        toldWaiting = ready.version
+        return
+      }
       // Downloaded and verified OUTSIDE the lock (that can take a while on a slow link and touches
       // nothing shared); swapped and handed off INSIDE it.
       await withLock(async () => {
+        if (halted) return
         stage(opts.dir, ready.cliBuf, ready.notifyBuf, ready.version)
         done = true
         stop()
@@ -572,5 +634,5 @@ export function startSelfUpdater(opts: {
   }
 
   schedule()
-  return { stop }
+  return { stop: () => { halted = true; stop() } }
 }

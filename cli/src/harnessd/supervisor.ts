@@ -336,8 +336,12 @@ export class Supervisor {
     this.killReason = null
     // The core is told how long a silence the master allows, and beats well inside it (systemd passes
     // WATCHDOG_USEC the same way): a timeout shorter than the core's own beat would kill a healthy core.
+    // HARNESSD_JUDGES_SUPERSEDED: this master judges a build its core on probation stages on its own
+    // (#807). A master from before rolls back on any exit during probation, the update's own included,
+    // and its core must not stage then: see `stageWhileJudged` in lib/selfUpdate.ts.
     const env: Record<string, string> = {
       HARNESSD_SUPERVISED: '1', HARNESSD_RESTARTS: String(this.restarts), HARNESSD_WATCHDOG_MS: String(this.options.heartbeatTimeoutMs),
+      HARNESSD_JUDGES_SUPERSEDED: '1',
     }
     if (this.lastExit) env.HARNESSD_LAST_EXIT = this.lastExit
     if (this.safeMode) env.HARNESSD_SAFE_MODE = this.safeMode
@@ -427,6 +431,14 @@ export class Supervisor {
     this.update = 'probation'
     this.armTimer('probationTimer', () => {
       this.probationTimer = null
+      // The core on probation has staged a newer build and is on its way out for it (a teardown can
+      // take seconds). Kept now, the newer build's pending note and the backup to roll it back to were
+      // deleted with this one's, and it ran on probation with nothing to restore. Left on probation, its
+      // exit for the update is the superseded one, and the newer build is judged on its own.
+      if (this.stagedSinceSpawn()) {
+        this.deps.log('[harnessd] the update stayed up, but has staged a newer build — leaving that one to be judged')
+        return
+      }
       this.update = null
       this.deps.confirmUpdate()
       this.deps.log('[harnessd] the update stayed up — keeping it')

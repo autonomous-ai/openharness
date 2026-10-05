@@ -222,11 +222,21 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
    * immediately (a rejected key, a model the grid does not serve) must leave its error on screen
    * instead of taking the pane down with it. Whoever calls this owns turning it back off.
    */
+  /**
+   * Why [respawn] would refuse this request on this machine's tmux, or null when it would try. Asked by a
+   * restart BEFORE it stops the engine it replaces: a respawn refused after the kill left the agent with
+   * a dead pane and no engine.
+   */
+  async respawnRefusal(request: Pick<TerminalRespawnRequest, 'env'>): Promise<string | null> {
+    // `respawn-pane -e` is tmux 3.0; refused before, for the reason `create` gives.
+    return Object.keys(request.env ?? {}).length && !(await this.features()).respawnEnv ? tmuxTooOldForEnv('3.0', 'a respawned pane') : null
+  }
+
   async respawn(runtime: TmuxRuntimeRef, request: TerminalRespawnRequest): Promise<TerminalActionResult> {
+    const refused = await this.respawnRefusal(request)
+    if (refused) return terminalActionNotStarted(refused)
     const features = await this.features()
     const variables = Object.entries(request.env ?? {})
-    // `respawn-pane -e` is tmux 3.0; refused before, for the reason `create` gives.
-    if (variables.length && !features.respawnEnv) return terminalActionNotStarted(tmuxTooOldForEnv('3.0', 'a respawned pane'))
     const scope = paneOptionScope(features)
     // The engine-exit marker is the pane's, and a respawned pane is a new launch: cleared here, in
     // the same invocation, or the new engine would read as exited the moment it started. A `-p` here

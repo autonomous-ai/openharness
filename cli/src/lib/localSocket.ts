@@ -120,6 +120,16 @@ const alreadyServing = (path: string): Error =>
   Object.assign(new Error(`A Harness daemon is already serving ${path}`), { code: 'EADDRINUSE' })
 
 /**
+ * The core of a master that is gone still serves the data folder once the wait for it is over. Not another
+ * daemon: it is leaving, slowly (a client that will not answer its close). Its own code, so start-up ends
+ * in an exit its master starts again, and the next core finds it gone, where EADDRINUSE ends it for good,
+ * and launchd and systemd do not start a clean exit again (lib/daemonSafeMode.ts).
+ */
+export const ORPHAN_STILL_SERVING = 'ORPHAN_STILL_SERVING'
+const orphanStillServing = (path: string, corePid: number): Error =>
+  Object.assign(new Error(`The core (pid ${corePid}) of a master that is gone still serves ${path}`), { code: ORPHAN_STILL_SERVING })
+
+/**
  * Put the staged socket at `path`. The name taken: by a daemon serving it (refused), or by the socket of
  * one that crashed (replaced). Decided here, at the claim, never earlier: a liveness check made before
  * the listen is stale by the time a second daemon claims, and the unlink that followed it removed the
@@ -229,6 +239,7 @@ export async function refuseServedDataFolder(
   if (!path) return
   const deadline = deps.now() + waitMs
   let orphanSeen = false
+  let orphanCore = 0
   for (;;) {
     const server = await deps.who(path, timeoutMs)
     if (server === 'none') {
@@ -242,8 +253,9 @@ export async function refuseServedDataFolder(
       if (server.pid === server.corePid || deps.alive(server.pid)) throw alreadyServing(path)
       if (!orphanSeen) deps.log(`[cli] this data folder is still served by the core (pid ${server.corePid}) of a master that is gone (pid ${server.pid}) — waiting for it to leave`)
       orphanSeen = true
+      orphanCore = server.corePid
     }
-    if (deps.now() >= deadline) throw alreadyServing(path)
+    if (deps.now() >= deadline) throw orphanSeen ? orphanStillServing(path, orphanCore) : alreadyServing(path)
     await deps.sleep(ORPHAN_POLL_MS)
   }
 }

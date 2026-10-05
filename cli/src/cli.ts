@@ -51,7 +51,7 @@ import { registry, projectDisplayName, validTranscriptPath, type RegisteredSessi
 import { engineSessionTitle } from './lib/sessionTitle.js'
 import { machineNames } from './lib/machineNames.js'
 import { installCodexHooks } from './lib/hooks.js'
-import { DAEMON_LOG_FILE, HARNESSD_STATUS_FILE, PID_FILE, daemonPort, isAlive, isDaemonRunning, readPid } from './lib/daemonState.js'
+import { DAEMON_LOG_FILE, HARNESSD_REEXEC_FILE, HARNESSD_STATUS_FILE, PID_FILE, daemonPort, isAlive, isDaemonRunning, readPid } from './lib/daemonState.js'
 import { clearSafeModeMarker, readSafeModeMarker, runBootHandoff, safeModeDisposition, safeModeStatusBody, SafeModeRequest, writeSafeModeMarker } from './lib/daemonSafeMode.js'
 import { awakeTimeout } from './lib/sleepAware.js'
 import {
@@ -219,7 +219,7 @@ import { DeviceLogStore } from './lib/e2ee/deviceLogStore.js'
 import { TrustGroupStore, type GroupMember } from './lib/e2ee/trustGroup.js'
 import {
   startSelfUpdater, restore as restoreUpdate, confirm as confirmUpdate,
-  fetchManifest, downloadVerified, canary, stage, semverGt, isLocalDevBuild,
+  fetchManifest, downloadVerified, canary, stage, semverGt, isLocalDevBuild, DOWNLOAD_LIMITS,
   type Poller, type UpdateEntry,
 } from './lib/selfUpdate.js'
 import { managedNodePath } from './lib/nodeRuntime.js'
@@ -1687,7 +1687,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
         onWaiting: (owner) => console.log(`[update] waiting — the daemon is ${describeSpawnLockOwner(owner)}`),
       }),
       onStaged: (v) => daemonBoot.applyStagedUpdate(v),
-      limits: { idleMs: env.ADAPTER_UPDATE_IDLE_MS, deadlineMs: env.ADAPTER_UPDATE_DEADLINE_MS },
+      limits: { idleMs: env.ADAPTER_UPDATE_IDLE_MS, deadlineMs: env.ADAPTER_UPDATE_DEADLINE_MS, floorBytesPerSecond: DOWNLOAD_LIMITS.floorBytesPerSecond },
+      stageWhileJudged: !coreLink.supervised || process.env.HARNESSD_JUDGES_SUPERSEDED === '1',
     })
     const slotted = env.ADAPTER_UPDATE_SLOT_SEC >= 0 && 60_000 % env.ADAPTER_UPDATE_CHECK_MS === 0
     console.log(`[update] self-update on · v${VERSION} · every ${Math.round(env.ADAPTER_UPDATE_CHECK_MS / 1000)}s`
@@ -3844,9 +3845,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     await watcher.stop()
     shareRelay.close()
     sharedViewers.stop()
+    // The data folder's socket first: a successor waiting for this core to leave (lib/localSocket.ts) can
+    // start as soon as it is gone, whatever the clients below take to close.
+    await localSocket?.close()
     await localWsServer.close()
     hookServer.close()
-    await localSocket?.close()
     codexActivity.close()
     shutdownVoiceRouter()
     await ports.viewers?.stop()
@@ -5390,8 +5393,9 @@ const enterSafeMode = (err: unknown): void => {
   if (!disposition.stay) {
     console.error(`[safe-mode] not staying up — ${disposition.reason}`)
     // Under harnessd, said for good: any other exit, the master restarts, and a core that another daemon
-    // keeps from running was restarted for as long as its master lived (e2e/twodaemons.e2e.ts).
-    onError(err, coreLink.supervised ? CORE_EXIT_STOP : 1)
+    // keeps from running was restarted for as long as its master lived (e2e/twodaemons.e2e.ts). Except
+    // what stands in the way is leaving too: then the master starts this core again.
+    onError(err, coreLink.supervised && !disposition.retry ? CORE_EXIT_STOP : 1)
   }
   const detail = err instanceof Error ? (err.stack ?? err.message) : String(err)
   console.error('Failed to start adapter:', err)

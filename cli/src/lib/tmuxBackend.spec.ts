@@ -552,7 +552,7 @@ describe('TmuxBackend on a tmux before 3.0', () => {
     )
     const inventory = await new TmuxBackend(undefined, () => 'daemon-a').inventory()
     expect(inventory.state === 'available' && inventory.roots.map((root) => root.runtime.paneId)).toEqual(['%1', '%3'])
-    expect(calls()[0]).toContain('#{?#{m:/usr/bin/env HARNESS_DAEMON=*,#{pane_start_command}},#{=44:pane_start_command},#{@harness_daemon}}')
+    expect(calls()[0]).toContain('#{?#{m:/usr/bin/env HARNESS_DAEMON=*,#{pane_start_command}},#{=44:pane_start_command},#{?#{m:harness-*,#{session_name}},#{@harness_daemon},}}')
   })
 })
 
@@ -589,6 +589,9 @@ describe('TmuxBackend with variables on a tmux that cannot take them', () => {
   it('refuses a respawn below 3.0, saying why, and asks tmux nothing', async () => {
     assumeTmuxVersion({ major: 2, minor: 9 })
     const calls = recordingTmux()
+    // Asked before a restart stops anything, with the same answer.
+    expect(await new TmuxBackend().respawnRefusal({ env })).toContain('older than 3.0')
+    expect(await new TmuxBackend().respawnRefusal({})).toBeNull()
     const moved = await new TmuxBackend().respawn({ backend: 'tmux', paneId: '%9' }, { env, command: ['codex'] })
     expect(moved).toMatchObject({ state: 'failed', dispatch: 'not_started' })
     expect(moved.state !== 'succeeded' && moved.reason).toContain('older than 3.0')

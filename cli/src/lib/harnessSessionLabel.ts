@@ -63,7 +63,11 @@ export function ownerCommand(owner: string, command: readonly string[]): string[
 export function paneOwnerFormat(paneOptions: boolean): string {
   if (paneOptions) return `#{${HARNESS_OWNER_OPTION}}`
   const width = OWNER_COMMAND_PREFIX.length + OWNER_TAG_LENGTH
-  return `#{?#{m:${OWNER_COMMAND_PREFIX}*,#{pane_start_command}},#{=${width}:pane_start_command},#{${HARNESS_OWNER_OPTION}}}`
+  // The window's tag only in a session Harness named. Everywhere else it named a pane the person split
+  // into an agent's window, or joined into one they had moved into their own session: taken for the
+  // agent's, it was restyled, given mouse mode, and counted among Harness's terminals.
+  return `#{?#{m:${OWNER_COMMAND_PREFIX}*,#{pane_start_command}},#{=${width}:pane_start_command},`
+    + `#{?#{m:${HARNESS_SESSION_PREFIX}*,#{session_name}},#{${HARNESS_OWNER_OPTION}},}}`
 }
 
 /** The tag out of a `paneOwnerFormat` field: the field itself, unless it is a start command's prefix. */

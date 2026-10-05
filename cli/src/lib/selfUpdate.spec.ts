@@ -149,6 +149,61 @@ describe('startSelfUpdater', () => {
     expect(events).toEqual(['lock', 'staged:9.9.9', 'handoff-done', 'unlock'])
   })
 
+  it('stopped while a check is under way, swaps nothing and hands nothing over', async () => {
+    // A daemon shutting down (`harness stop`, a sign-out) while the updater waits on a download or a
+    // canary. Here the canary: the build answers after a moment, and the stop lands before it does.
+    const slow = Buffer.from('setTimeout(() => console.log("9.9.9"), 400)\n')
+    vi.stubGlobal('fetch', async (url: string) => {
+      if (url === 'https://updates.test/metadata.json') {
+        return new Response(JSON.stringify({ adapter: { version: '9.9.9', cli: { url: 'https://updates.test/cli.js', sha256: sha(slow) }, notify: { url: 'https://updates.test/notify.mjs', sha256: sha(notifySource) } } }))
+      }
+      if (url === 'https://updates.test/cli.js') return new Response(slow)
+      if (url === 'https://updates.test/notify.mjs') return new Response(notifySource)
+      return new Response('', { status: 404 })
+    })
+    const dir = tempDir()
+    const staged: string[] = []
+    const canarying = () => readdirSync(dir).some((name) => name.startsWith('.canary-'))
+    const poller = startSelfUpdater({
+      currentVersion: '1.0.0', url: 'https://updates.test/metadata.json', key: 'adapter', dir, intervalMs: 20,
+      onStaged: (version) => { staged.push(version) },
+    })
+    await vi.waitFor(() => expect(canarying()).toBe(true), { timeout: 5_000 })
+    poller.stop()
+    await vi.waitFor(() => expect(canarying()).toBe(false), { timeout: 5_000 })
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    expect(staged).toEqual([])
+    expect(existsSync(join(dir, 'cli.js'))).toBe(false)
+  })
+
+  it('under a master that would roll both back, waits for the build on probation to be kept before staging a newer one', async () => {
+    // v0.3.58's master rolls back on any exit of a core on probation, the one for a newer build included.
+    serveUpdate()
+    const dir = tempDir()
+    const running = Buffer.from('console.log("1.5.0")\n')
+    writeFileSync(join(dir, 'cli.js'), running)
+    writeFileSync(join(dir, 'update-pending.json'), JSON.stringify({ version: '1.5.0', sha256: sha(running), at: 1 }))
+    const staged: string[] = []
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const poller = startSelfUpdater({
+      currentVersion: '1.5.0', url: 'https://updates.test/metadata.json', key: 'adapter', dir, intervalMs: 20,
+      stageWhileJudged: false, onStaged: (version) => { staged.push(version) },
+    })
+    try {
+      await vi.waitFor(() => expect(log).toHaveBeenCalledWith('[update] 9.9.9 is ready — waiting for this build to be kept before staging it'), { timeout: 5_000 })
+      await new Promise((resolve) => setTimeout(resolve, 100))
+      expect(staged).toEqual([])
+      expect(readFileSync(join(dir, 'cli.js'))).toEqual(running)
+      expect(log.mock.calls.filter(([line]) => String(line).includes('waiting for this build to be kept'))).toHaveLength(1)
+      // Its master keeps it (the pending note goes): the newer build is staged at the next check.
+      rmSync(join(dir, 'update-pending.json'))
+      await vi.waitFor(() => expect(staged).toEqual(['9.9.9']), { timeout: 5_000 })
+    } finally {
+      poller.stop()
+      log.mockRestore()
+    }
+  })
+
   it('is already stopped when onStaged runs — a handler that defers loses the updater for good', async () => {
     // `done = true` and `stop()` happen BEFORE `onStaged`, so a handler that returns without handing
     // the machine over leaves no timer and no way back. This is why the daemon's boot-time handler
@@ -590,6 +645,14 @@ describe('the canary\'s verdicts', () => {
       .toEqual({ ok: false, problem: 'failed', detail: 'no answer within 1 s' })
   })
 
+  it('kills a build that ignores the SIGTERM at its deadline, so the next check can run', async () => {
+    const started = performance.now()
+    const stubborn = Buffer.from("process.on('SIGTERM', () => {})\nsetInterval(() => {}, 1000)\n")
+    expect(await runCanary(stubborn, tempDir(), '9.9.9', 300)).toEqual({ ok: false, problem: 'failed', detail: 'no answer within 300 ms' })
+    // SIGTERM at 300 ms, ignored; SIGKILL two seconds on.
+    expect(performance.now() - started).toBeLessThan(10_000)
+  }, 20_000)
+
   it('says why a canary that never ran failed', async () => {
     vi.resetModules()
     vi.doMock('./nodeRuntime.js', () => ({ managedNodePath: () => '/nonexistent/node' }))
@@ -874,6 +937,34 @@ describe('a link that stalls without dropping (e2e/updateHostile.e2e.ts)', () =>
     })
     await expect(downloadVerified({ url: 'https://updates.test/slow.js', sha256: sha(bytes) }, { idleMs: 200, deadlineMs: 5_000 })).resolves.toEqual(bytes)
     await expect(downloadVerified({ url: 'https://updates.test/empty.js', sha256: sha(Buffer.alloc(0)) }, limits)).resolves.toEqual(Buffer.alloc(0))
+  })
+
+  it('gives a transfer of a known size the time its floor rate needs, and no more', async () => {
+    // 40 bytes, four every 30 ms: about 300 ms, past a 100 ms deadline, within what 40 B/s needs (1 s).
+    const bytes = Buffer.from('console.log("9.9.9") // forty bytes ...\n')
+    expect(bytes.length).toBe(40)
+    const slowly = (headers: Record<string, string> = {}) => {
+      let sent = 0
+      return new Response(new ReadableStream<Uint8Array>({
+        async pull(controller) {
+          await new Promise((resolve) => setTimeout(resolve, 30))
+          if (sent >= bytes.length) { controller.close(); return }
+          controller.enqueue(new Uint8Array(bytes.subarray(sent, sent + 4)))
+          sent += 4
+        },
+      }), { headers })
+    }
+    vi.stubGlobal('fetch', async (url: string) => slowly(url.endsWith('/sized.js') ? { 'content-length': '40' } : {}))
+    const floor = { idleMs: 200, deadlineMs: 100, floorBytesPerSecond: 40 }
+    // By its Content-Length, or by the size the manifest names.
+    await expect(downloadVerified({ url: 'https://updates.test/sized.js', sha256: sha(bytes) }, floor)).resolves.toEqual(bytes)
+    await expect(downloadVerified({ url: 'https://updates.test/unsized.js', sha256: sha(bytes), size: 40 }, floor)).resolves.toEqual(bytes)
+    // Of unknown size, or slower than the floor, the deadline stands.
+    await expect(downloadVerified({ url: 'https://updates.test/unsized.js', sha256: sha(bytes) }, floor)).rejects.toThrow('took longer than 100 ms in all')
+    await expect(downloadVerified({ url: 'https://updates.test/sized.js', sha256: sha(bytes) }, { ...floor, floorBytesPerSecond: 200 }))
+      .rejects.toThrow('took longer than 200 ms in all (40 bytes at 200 B/s)')
+    // The bundle's own: a slow but steady link finishes.
+    expect(DOWNLOAD_LIMITS).toEqual({ idleMs: 60_000, deadlineMs: 15 * 60_000, floorBytesPerSecond: 1_024 })
   })
 
   it('reads a response with no stream whole, and sets no deadline for an infinite one', async () => {

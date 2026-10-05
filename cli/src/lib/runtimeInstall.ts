@@ -140,7 +140,29 @@ interface ManagedArchive {
  * Everything here is best-effort and returns rather than throws: a daemon must not fail to start
  * because a download failed.
  */
+/**
+ * The staging folders of processes that are gone: a core that exited in the middle of an unpack (an
+ * update's handoff, a master's restart) left its `.<name>-staging-<pid>-<time>`, the archive and a
+ * partial tree in it, and nothing else ever removes one. Another process's, still running, is its own.
+ */
+function sweepStaging(name: string): void {
+  const prefix = `.${name}-staging-`
+  let entries: string[]
+  try { entries = readdirSync(env.ADAPTER_RUNTIME_DIR) } catch { return }
+  for (const entry of entries) {
+    if (!entry.startsWith(prefix)) continue
+    const pid = Number(entry.slice(prefix.length).split('-')[0])
+    if (Number.isSafeInteger(pid) && pid > 0 && processAlive(pid)) continue
+    try { rmSync(join(env.ADAPTER_RUNTIME_DIR, entry), { recursive: true, force: true }) } catch { /* the next start tries again */ }
+  }
+}
+
+function processAlive(pid: number): boolean {
+  try { process.kill(pid, 0); return true } catch (error) { return (error as NodeJS.ErrnoException).code === 'EPERM' }
+}
+
 async function ensureManagedArchive(spec: ManagedArchive): Promise<string | null> {
+  sweepStaging(spec.name)
   const installed = spec.installed()
   if (installed && !spec.followsPin) return installed
   const key = platformKey()

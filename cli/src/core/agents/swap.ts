@@ -52,6 +52,7 @@ export function createPaneSwap({ byAgent, tmuxBackend, prepareSessionResume, kee
     prepareResume: () => prepareSessionResume(session),
     // The row as the swap found it: the conversation a fallback to a fresh start leaves behind.
     keepAbandoned: () => keepAbandonedConversation(session),
+    respawnRefusal: () => tmuxBackend!.respawnRefusal(launch.env ? { env: launch.env } : {}),
     holdOpen: async () => {
       const result = await tmuxBackend!.holdOpen(runtime)
       return result.state === 'succeeded'

@@ -72,6 +72,17 @@ describe('restartAgent', () => {
     expect(d.calls).toEqual(['holdOpen', 'terminate', 'buildArgv', 'respawn', 'waitForProcess'])
   })
 
+  it('stops nothing when the respawn would be refused, as on a tmux too old for the relaunch\'s environment', async () => {
+    const d = { ...deps(), respawnRefusal: async () => 'this machine\'s tmux is older than 3.0, the first version that can give a respawned pane its own environment. Upgrade tmux.' }
+    const outcome = await restartAgent({ engine: 'codex', sessionId: 's1' }, false, d)
+    expect(outcome).toEqual({ ok: false, detail: 'this machine\'s tmux is older than 3.0, the first version that can give a respawned pane its own environment. Upgrade tmux. Nothing was stopped.' })
+    expect(d.calls).toEqual([])
+    // Asked, and not refused: the restart goes on as before.
+    const allowed = { ...deps(), respawnRefusal: async () => null }
+    expect(await restartAgent({ engine: 'codex', sessionId: 's1' }, false, allowed)).toMatchObject({ ok: true })
+    expect(allowed.calls).toEqual(['holdOpen', 'terminate', 'buildArgv', 'respawn', 'waitForProcess'])
+  })
+
   it('never respawns when holdOpen fails to re-arm the pane', async () => {
     const d = deps({ holdOpen: async () => ({ ok: false, reason: 'tmux unreachable' }) })
     const outcome = await restartAgent({ engine: 'claude', sessionId: 's1' }, false, d)
