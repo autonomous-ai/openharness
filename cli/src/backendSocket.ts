@@ -929,13 +929,15 @@ export class BackendSocket {
   /** This machine's name as the Machines list shows it — what a model it serves is labelled with. */
   machineName(): string | null { return this.machineDisplayName }
 
-  /** The account's private grid, resolved the way the models RPC resolves it — for a harness
-   *  workspace that must be told which grid is "yours" rather than work it out or ask. */
+  /** The account's private grid, resolved the way the models RPC resolves it — for the models service,
+   *  and for a harness workspace that must be told which grid is "yours" rather than work it out or ask. */
   privateGridName(): Promise<string | null> { return this.resolveGridName() }
 
   /** `grid_models_changed` to the windows on this computer: the same payload `grid_models_list` answers,
-   *  built from the pictures as they stand — no read is started to build it, so a push never causes one. */
-  private async pushGridModels(): Promise<void> {
+   *  built from the pictures as they stand — no read is started to build it, so a push never causes one.
+   *  On a background read's change, and on the models service's word (a local model started or stopped,
+   *  grid set up). */
+  async pushGridModels(): Promise<void> {
     if (this.closed || this.localClients.size === 0) return
     try {
       const gridName = await this.resolveGridName()

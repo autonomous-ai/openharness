@@ -15,6 +15,7 @@ import type { GridAccess } from '../lib/gridAttach.js'
 import type { AgentGridTarget } from '../lib/gridModels.js'
 import type { LiveEvent } from '../lib/normalize.js'
 import { projectDisplayName, type registry, type RegisteredSession } from '../lib/registry.js'
+import type { RuntimeModelOption } from '../lib/runtimeProfile.js'
 import type { ExternalSessions, OpenSessions } from '../lib/sessionSearch/external.js'
 import type { SessionSearchIndex } from '../lib/sessionSearch/indexer.js'
 import type { StoppedAgentStore } from '../lib/stoppedAgents.js'
@@ -39,6 +40,9 @@ export interface CoreApi {
     terminalAvailable(agentId: string): boolean
     /** Send the agent's frame to the apps again. */
     sync(session: RegisteredSession): void
+    /** The Model/Effort choices an agent's engine offers (opaque `runtime-v1` ids): one agent's, or
+     *  every live agent's when none is named. */
+    runtimeModels(agentId?: string): Promise<RuntimeModelOption[]>
   }
   transcripts: {
     /** How to read a conversation its engine keeps in a database instead of a transcript file;
@@ -57,12 +61,21 @@ export interface CoreApi {
     mintGridName(): Promise<string | null>
     /** This machine's harness access token, for handing a sign-in to grid. Rejects when signed out. */
     accessToken(): Promise<string>
+    /** The account's private grid: the backend's word when it gave one, else what this machine works
+     *  out (`lib/gridDerive.ts`); null when it has none. */
+    privateGridName(): Promise<string | null>
+    /** This machine's name as the account's Machines list shows it (the backend's `machine_meta`); null
+     *  until the first one lands. */
+    machineName(): string | null
   }
   clients: {
     /** An agent's viewer moved: the windows' viewer panes forward to the new one. */
     viewerChanged(agentId: string): void
     /** The account's grid has a name: the models picker answers with it at once. */
     gridNamed(name: string): void
+    /** What the models picker lists may have changed (a local model started or stopped, grid set up):
+     *  the windows on this computer are pushed the list again (`grid_models_changed`). */
+    gridModelsChanged(): void
     /** A harness being installed or updated moved on (`dsh_install_status`): the apps show it in the
      *  create dialog. */
     dshInstallStatus(status: Record<string, unknown>): void
@@ -176,16 +189,20 @@ export interface CoreApiDeps {
   externalSessions: CoreApi['external']['sessions']
   openSessions: CoreApi['external']['open']
   syncSession: CoreApi['agents']['sync']
+  runtimeModels: CoreApi['agents']['runtimeModels']
   viewerChanged: CoreApi['clients']['viewerChanged']
   gridNamed: CoreApi['clients']['gridNamed']
+  gridModelsChanged: CoreApi['clients']['gridModelsChanged']
   dshInstallStatus: CoreApi['clients']['dshInstallStatus']
   mintGridName: CoreApi['account']['mintGridName']
   accessToken: CoreApi['account']['accessToken']
+  privateGridName: CoreApi['account']['privateGridName']
+  machineName: CoreApi['account']['machineName']
 }
 
 export function createCoreApi({
-  dataDir, registry, stoppedAgents, databaseHistory, externalSessions, openSessions, syncSession, viewerChanged,
-  gridNamed, dshInstallStatus, mintGridName, accessToken,
+  dataDir, registry, stoppedAgents, databaseHistory, externalSessions, openSessions, syncSession, runtimeModels, viewerChanged,
+  gridNamed, gridModelsChanged, dshInstallStatus, mintGridName, accessToken, privateGridName, machineName,
 }: CoreApiDeps): CoreApi {
   return {
     dataDir,
@@ -197,10 +214,11 @@ export function createCoreApi({
       advertised: () => registry.advertised(),
       terminalAvailable: (agentId) => registry.terminalAvailable(agentId),
       sync: syncSession,
+      runtimeModels,
     },
     transcripts: { databaseHistory },
     external: { sessions: externalSessions, open: openSessions },
-    account: { mintGridName, accessToken },
-    clients: { viewerChanged, gridNamed, dshInstallStatus },
+    account: { mintGridName, accessToken, privateGridName, machineName },
+    clients: { viewerChanged, gridNamed, gridModelsChanged, dshInstallStatus },
   }
 }

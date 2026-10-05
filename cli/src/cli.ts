@@ -221,7 +221,7 @@ import { agentFrame, lastActivityAt, type AgentFrame } from './lib/agentFrame.js
 import { agentTokenUsage } from './lib/agentTokenUsage.js'
 import { DeviceResultJournal } from './lib/autonomous-device/resultJournal.js'
 import { adaptSlashCommand } from './lib/goalCommand.js'
-import { RuntimeProfileManager } from './lib/runtimeProfile.js'
+import { RuntimeProfileManager, type RuntimeModelOption } from './lib/runtimeProfile.js'
 import { RuntimeProfileController } from './lib/runtimeProfileController.js'
 // Before ANY child is spawned: on Linux an absent locale makes tmux and ps mangle their output,
 // which silently costs the daemon every pane it would have discovered. See lib/childLocale.ts.
@@ -1762,6 +1762,13 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   }
   syncRecapPool()
   const runtimeProfiles = new RuntimeProfileManager()
+  // An agent's Model/Effort choices, or every live agent's: what `models_list` answers (services/models.ts)
+  // and the dial's picker reads, so neither can show a catalog the machine would not honour.
+  const runtimeModels = (agentId?: string): Promise<RuntimeModelOption[]> => {
+    if (!agentId) return runtimeProfiles.modelsForSessions(registry.list())
+    const session = registry.resolve(agentId)
+    return session ? runtimeProfiles.modelsForSession(session) : Promise.resolve([])
+  }
   // NB: hooks are installed AFTER the hook server binds (below), with the port it actually got — the
   // server may fall back to a free port if env.PORT is taken, and the hooks must point at the real one.
 
@@ -1794,11 +1801,15 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     externalSessions,
     openSessions,
     syncSession,
+    runtimeModels,
     viewerChanged: (agentId) => {
       backendRef?.viewerForwarder.refresh(agentId)
       backendRef?.interactiveViewers.refresh(agentId)
     },
     gridNamed: (name) => backendRef?.setHarnessGridName(name),
+    gridModelsChanged: () => { void backendRef?.pushGridModels() },
+    privateGridName: async () => (await backendRef?.privateGridName()) ?? null,
+    machineName: () => backendRef?.machineName() ?? null,
     dshInstallStatus: (status) => backendRef?.send({ type: 'dsh_install_status', payload: status }),
     // The backend mints and remembers the account's grid name; this CLI holds neither the account's
     // email nor its id. An older backend (no route) answers nothing, which the grid reconcile treats as
@@ -2241,11 +2252,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const agentIdFor = (sessionId: string): string => registry.bySession(sessionId)?.agentId ?? sessionId
 
 
-  backend.runtimeModelsProvider = (sessionId) => {
-    if (!sessionId) return runtimeProfiles.modelsForSessions(registry.list())
-    const session = registry.resolve(sessionId)
-    return session ? runtimeProfiles.modelsForSession(session) : Promise.resolve([])
-  }
+  backend.runtimeModelsProvider = runtimeModels
   backend.runtimeProfileProvider = (session) => runtimeProfiles.selectedModel(session)
   backend.dshFrameProvider = (s) => ports.viewers?.frameContext(s) ?? null
   // `harness remote` names the tile it was typed in by its tmux pane; the registry knows whose it is.
