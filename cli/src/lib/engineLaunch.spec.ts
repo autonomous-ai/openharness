@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -883,7 +883,8 @@ describe('commandSupportsFlagInInteractiveShell', () => {
 
     fakeEngine(binDir, 'opencode', '--auto')
     await expect(commandSupportsFlagInInteractiveShell('opencode', '--auto', shell)).resolves.toBe('supported')
-    // Downgraded underneath us; the cached yes stands until the cache is reset.
+    // Downgraded underneath us where the daemon cannot see the file (only the probe shell's PATH has
+    // it): remembered by name alone, the yes stands until the cache is reset.
     fakeEngine(binDir, 'opencode', '--auto-update')
     await expect(commandSupportsFlagInInteractiveShell('opencode', '--auto', shell)).resolves.toBe('supported')
     resetCommandFlagSupportCache()
@@ -891,6 +892,52 @@ describe('commandSupportsFlagInInteractiveShell', () => {
     // A refusal is never remembered, so the upgrade is seen at once.
     fakeEngine(binDir, 'opencode', '--auto')
     await expect(commandSupportsFlagInInteractiveShell('opencode', '--auto', shell)).resolves.toBe('supported')
+  })
+
+  // e2e/updates.e2e.ts: remembered by name alone, a yes outlived the update that dropped the flag,
+  // and the engine was launched with a flag it refused at once. A yes is kept for the file it was read from.
+  it('answers an unchanged engine from memory, and asks again once an update has changed its file', async () => {
+    const binDir = mkdtempSync(join(tmpdir(), 'harness-engine-update-'))
+    dirs.push(binDir)
+    process.env.HARNESS_ENGINE_TEST_PATH = binDir
+    const savedPath = process.env.PATH
+    process.env.PATH = `${binDir}:${savedPath ?? ''}`
+    try {
+      const shell = bashProbeShell()
+      const runs = join(binDir, 'runs')
+      const build = (path: string, help: string) => {
+        writeFileSync(path, `#!/bin/sh\necho run >> '${runs}'\nif [ "$1" = "--help" ]; then printf "%s\\n" '${help}'; exit 0; fi\nexit 2\n`)
+        chmodSync(path, 0o700)
+      }
+      const asked = () => existsSync(runs) ? readFileSync(runs, 'utf8').split('\n').filter(Boolean).length : 0
+      const opencode = join(binDir, 'opencode')
+
+      build(opencode, '--auto')
+      await expect(commandSupportsFlagInInteractiveShell('opencode', '--auto', shell)).resolves.toBe('supported')
+      await expect(commandSupportsFlagInInteractiveShell('opencode', '--auto', shell)).resolves.toBe('supported')
+      expect(asked()).toBe(1)
+      // Rewritten in place by an update that dropped the flag: asked again, and refused.
+      build(opencode, '--auto-update')
+      await expect(commandSupportsFlagInInteractiveShell('opencode', '--auto', shell)).resolves.toBe('unsupported')
+      expect(asked()).toBe(2)
+
+      // Installed as versions and linked, the way Homebrew and native installs update: the same size,
+      // and only the link moves.
+      mkdirSync(join(binDir, 'v1')); mkdirSync(join(binDir, 'v2'))
+      build(join(binDir, 'v1', 'opencode'), '--auto')
+      build(join(binDir, 'v2', 'opencode'), '--nope')
+      rmSync(opencode)
+      symlinkSync(join(binDir, 'v1', 'opencode'), opencode)
+      await expect(commandSupportsFlagInInteractiveShell('opencode', '--auto', shell)).resolves.toBe('supported')
+      await expect(commandSupportsFlagInInteractiveShell('opencode', '--auto', shell)).resolves.toBe('supported')
+      expect(asked()).toBe(3)
+      rmSync(opencode)
+      symlinkSync(join(binDir, 'v2', 'opencode'), opencode)
+      await expect(commandSupportsFlagInInteractiveShell('opencode', '--auto', shell)).resolves.toBe('unsupported')
+      expect(asked()).toBe(4)
+    } finally {
+      process.env.PATH = savedPath
+    }
   })
 
   // A shell's own failure exits 1 — as zsh's read-only `status` did — and must not read as a missing

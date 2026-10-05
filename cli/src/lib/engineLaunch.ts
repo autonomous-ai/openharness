@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, realpathSync, statSync, writeFileSync } from 'node:fs'
 import { homedir, userInfo } from 'node:os'
 import { isAbsolute, basename, dirname, join } from 'node:path'
 import { env } from '../config/env.js'
@@ -10,6 +10,7 @@ import { binaryOnPath, resolveBinaryOnPath } from './binaryOnPath.js'
 import { engineBin } from './engineBin.js'
 import { engineInstallPaths, npmEnginePrefix, type EngineInstallRecipe } from './engineInstall.js'
 import { GRID_NO_UPDATE_CHECK_VAR, gridBinaryPath } from './gridExec.js'
+import { loginShellEnvironment } from './loginShellEnv.js'
 import { managedNodePath } from './nodeRuntime.js'
 import { RAISE_OPEN_FILES_SH } from './openFiles.js'
 import { ENGINE_EXIT_PANE_OPTION } from './tmux.js'
@@ -952,7 +953,7 @@ export type CommandFlagSupport = 'supported' | 'unsupported' | 'unknown'
 const FLAG_UNSUPPORTED_EXIT = 64
 
 /**
- * The pairs this probe has seen the engine SUPPORT.
+ * The pairs this probe has seen the engine SUPPORT, each with the engine file it saw (`engineFileStamp`).
  *
  * Every relaunch asks, and a post-reboot restore asks once per agent, so the working case — which
  * is nearly every case — is worth answering from memory instead of spawning `--help` again.
@@ -962,8 +963,32 @@ const FLAG_UNSUPPORTED_EXIT = 64
  * `--auto`. A cached `unsupported` would go on refusing that upgraded engine until the daemon
  * happened to restart, which is the one outcome worth more than the spawn it saves. `unknown` is
  * not kept for the same reason at shorter range: one slow `--help` would turn Auto off machine-wide.
+ *
+ * ⚠️ And a kept `supported` is only good for the file it was read from. An update can drop a flag as
+ * well as add one, and remembered by name alone the answer outlived it: measured end to end
+ * (`e2e/updates.e2e.ts`), an engine updated to a build without its permission flag was still
+ * launched with it, and refused it at once — the row went ready, then stopped, with no reason given —
+ * where a daemon restarted after the update refused the create and said why.
  */
-const flagSupportCache = new Set<string>()
+const flagSupportCache = new Map<string, string>()
+
+/**
+ * Which file a command name runs, as a stamp that changes when an update replaces or rewrites it:
+ * its real path (a Homebrew or native install points at a new version's folder), inode, size and
+ * modification time. Resolved on the login shell's PATH, the one a launch resolves it on, then the
+ * daemon's own. '' when neither finds it — remembered by name alone then, as before.
+ */
+function engineFileStamp(command: string): string {
+  const path = resolveBinaryOnPath(command, { PATH: loginShellEnvironment().PATH })
+    ?? resolveBinaryOnPath(command)
+  if (!path) return ''
+  try {
+    const stat = statSync(path, { bigint: true })
+    return [realpathSync(path), stat.ino, stat.size, stat.mtimeNs].join('\u0000')
+  } catch {
+    return ''
+  }
+}
 
 /** Test seam, and for a machine where the engine was just upgraded. */
 export function resetCommandFlagSupportCache(): void { flagSupportCache.clear() }
@@ -979,7 +1004,8 @@ export async function commandSupportsFlagInInteractiveShell(
   shell: string | undefined = undefined,
 ): Promise<CommandFlagSupport> {
   const key = `${command}\u0000${flag}\u0000${shell ?? ''}`
-  if (flagSupportCache.has(key)) return 'supported'
+  const stamp = engineFileStamp(command)
+  if (flagSupportCache.get(key) === stamp) return 'supported'
   const interactive = interactiveEngineShell(shell)
   if (!interactive) return 'unknown'
   // `harness_help_status`, not `status`: in zsh `status` is a read-only special parameter (an alias
@@ -1007,7 +1033,7 @@ export async function commandSupportsFlagInInteractiveShell(
         const answer: CommandFlagSupport = !error
           ? 'supported'
           : Number((error as { code?: number | string }).code) === FLAG_UNSUPPORTED_EXIT ? 'unsupported' : 'unknown'
-        if (answer === 'supported') flagSupportCache.add(key)
+        if (answer === 'supported') flagSupportCache.set(key, stamp)
         resolve(answer)
       },
     )
