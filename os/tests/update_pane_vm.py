@@ -14,6 +14,7 @@ from vm import VM
 
 UPDATER = '/usr/lib/harness-os/live_update.py'
 OPENER = '/usr/lib/harness-os/open-updates'
+WRAPPER = '/usr/bin/harness'
 GUEST = '/home/me/update-pane-observer.py'
 STATE = '/home/me/.local/state/harness-os/updates'
 
@@ -32,7 +33,8 @@ def main():
     folder.mkdir(parents=True, exist_ok=False)
     (folder / 'image-manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
     root = Path(__file__).resolve().parents[1]
-    candidates = {UPDATER: root / 'live_update.py', OPENER: root / 'root/usr/lib/harness-os/open-updates'}
+    candidates = {UPDATER: root / 'live_update.py', OPENER: root / 'root/usr/lib/harness-os/open-updates',
+                  WRAPPER: root / 'root/usr/bin/harness'}
     receipt = dict(status='running', started_at=time.time(), image_source=manifest['source_commit'],
                    iso_sha256=manifest['iso']['sha256'], firmware='bios', memory_mib=2048, cpu='Nehalem',
                    candidates={target: candidate_record(path) for target, path in candidates.items()},
@@ -53,7 +55,8 @@ def main():
         return json.loads(data)
 
     def active(snapshot):
-        return [p for p in snapshot['screens'] if p['registration'] is not None and p['state'] not in ['Z', 'X']]
+        return [p for p in snapshot['screens'] if p['registration'] is not None
+                and p['pane'] is not None and p['state'] not in ['Z', 'X']]
 
     def wait_active(name, expected=None):
         deadline = time.monotonic() + 15
@@ -63,15 +66,35 @@ def main():
             if len(owners) == 1 and not record['request_pending']:
                 owner = owners[0]
                 pane = next(p for p in record['panes'] if p['pane'] == owner['pane'])
-                assert pane['dead'] == '0' and pane['pane_active'] == '1' and pane['window_active'] == '1', record
+                if not (pane['dead'] == '0' and pane['pane_active'] == '1' and pane['window_active'] == '1'):
+                    time.sleep(.1)
+                    continue
                 if expected:
                     assert (owner['pid'], owner['start'], owner['pane']) == (expected['pid'], expected['start'], expected['pane']), record
                 assert owner['stdin'].startswith('/dev/pts/') and owner['group'] == owner['foreground'], owner
+                assert pane['token'] == owner['token']
                 assert owner['registration'] == dict(pid=owner['pid'], start=owner['start'],
-                    pane=owner['pane'], socket=owner['primary_socket'], boot_id=record['boot_id']), owner
+                    token=owner['token'], boot_id=record['boot_id']), owner
                 return record, owner
             time.sleep(.1)
         raise TimeoutError('One active updater did not consume the shortcut: ' + name)
+
+    def wait_gone(previous):
+        script = '''import time
+from pathlib import Path
+path=Path('/proc/%d/stat')
+deadline=time.monotonic()+5
+while time.monotonic()<deadline:
+    try:
+        start=path.read_text().rsplit(')',1)[1].split()[19]
+    except FileNotFoundError:
+        break
+    if start != %r:
+        break
+    time.sleep(.05)
+else: raise TimeoutError('Previous updater process did not exit')
+''' % (previous['pid'], previous['start'])
+        vm.command('python3 -c ' + shlex.quote(script), timeout=10)
 
     def wait_ui(name):
         deadline = time.monotonic() + 15
@@ -157,6 +180,26 @@ def main():
         # Hold the *same* process alive after the real close decision released
         # open.lock and removed its registration. No close result is forged.
         trace = '''
+_observed_consume_request = consume_request
+def consume_request():
+    gate = Path('/tmp/update-pane-route-gate')
+    request = read(STATE / 'request.json', {})
+    target = gate.read_text().strip() if gate.exists() else None
+    if target and request.get('target') == target:
+        token = os.environ.get('HARNESS_UPDATE_INSTANCE')
+        if token == target:
+            deadline = time.monotonic() + 10
+            while not Path('/tmp/update-pane-route-rejected.json').exists():
+                if time.monotonic() >= deadline:
+                    raise TimeoutError('Direct inspection did not reject targeted request')
+                time.sleep(.05)
+        claimed = _observed_consume_request()
+        kind = 'claimed' if token == target else 'rejected'
+        write(Path('/tmp/update-pane-route-' + kind + '.json'), dict(
+            pid=os.getpid(), token=token, request=request, claimed=claimed))
+        return claimed
+    return _observed_consume_request()
+
 _observed_close_screen = close_screen
 def close_screen():
     closed = _observed_close_screen()
@@ -176,20 +219,26 @@ def close_screen():
         receipt['private_observer'] = dict(sha256=hashlib.sha256(fixture.encode()).hexdigest(),
             differences=['hn and CLI feed URLs use loopback version 0.0.0 metadata.',
                          'OS discovery receives its supported explicit loopback feed argument; endpoint returns 404.',
+                         'For one targeted handoff, owned consume waits up to 10 seconds for a direct inspection to execute the real consume and reject that target; both actual outcomes are retained.',
                          'After real close_screen returns True, one selected test process waits for release, at most 30 seconds.'])
         copy_file(vm, fixture.encode(), '/tmp/update-pane-ui.py')
         copy_file(vm, candidates[OPENER].read_bytes(), '/tmp/update-pane-opener')
-        vm.command('sudo install -m 644 /tmp/update-pane-ui.py ' + UPDATER + '; sudo install -m 755 /tmp/update-pane-opener ' + OPENER + '; sudo nmcli networking off')
+        copy_file(vm, candidates[WRAPPER].read_bytes(), '/tmp/update-pane-wrapper')
+        vm.command('sudo install -m 644 /tmp/update-pane-ui.py ' + UPDATER +
+                   ' && sudo install -m 755 /tmp/update-pane-opener ' + OPENER +
+                   ' && sudo install -m 755 /tmp/update-pane-wrapper ' + WRAPPER + ' && sudo nmcli networking off')
         assert hashlib.sha256(vm.read_file(OPENER)).hexdigest() == receipt['candidates'][OPENER]['sha256']
+        assert hashlib.sha256(vm.read_file(WRAPPER)).hexdigest() == receipt['candidates'][WRAPPER]['sha256']
         assert hashlib.sha256(vm.read_file(UPDATER)).hexdigest() == receipt['private_observer']['sha256']
         vm.keys('meta_l', 'u')
         first, owner = wait_active('03-owned-updater')
         wait_ui('03-owned-updater')
         assert owner['pane'] != terminal
         receipt['checks'].append('Super+u opens a real registered Updates UI beside the unrelated named terminal, and it consumes the request.')
-        for _ in range(3):
+        for index in range(3):
+            focus_terminal()
             vm.keys('meta_l', 'u')
-        wait_active('04-repeated-shortcut', owner)
+            wait_active('04-repeated-shortcut-' + str(index), owner)
         pane = next(p for p in first['panes'] if p['pane'] == owner['pane'])
         vm.command('hn rename-window -t ' + shlex.quote(pane['window']) + ' Versions')
         focus_terminal()
@@ -198,24 +247,85 @@ def close_screen():
         receipt['checks'].append('Repeated Super+u and a renamed updater reuse its same PID/start time and pane rather than creating duplicate tabs.')
 
         vm.command('systemctl --user restart hn-screen.service; /usr/lib/harness-os/wait-runtime', timeout=90)
+        focus_terminal()
         vm.keys('meta_l', 'u')
         resumed, _ = wait_active('06-renderer-reconnected', owner)
         resumed_pane = next(p for p in resumed['panes'] if p['pane'] == owner['pane'])
-        receipt['socket_handover'] = dict(primary=owner['primary_socket'], selected=resumed_pane['socket'])
-        assert owner['primary_socket'] != resumed_pane['socket'], 'The fixture did not exercise the primary-vs-owned socket distinction'
+        receipt['socket_handover'] = dict(process_environment=owner['primary_socket'],
+                                         before=pane['socket'], after=resumed_pane['socket'])
         wait_ui('06-renderer-reconnected')
         work_survives('06-work-preserved', before)
-        receipt['checks'].append('After actual renderer restart, the same updater and work processes survive; the primary socket alias resolves to the owned client without duplicate UI.')
+        receipt['checks'].append('After actual renderer restart, the same token-bound updater and work processes survive without requiring HN_SOCKET or a particular socket alias name.')
 
         vm.command('kill -TERM ' + str(owner['pid']))
-        vm.command("hn new-window -n Manual '/usr/bin/harness updates; sleep 120'")
-        manual, owner = wait_active('07-manual-child')
-        manual_pane = next(p for p in manual['panes'] if p['pane'] == owner['pane'])
-        assert int(manual_pane['pid']) != owner['pid'], 'Manual fixture must retain its parent shell'
+        wait_gone(owner)
+        vm.command('test ! -e ' + STATE + '/request.json')
+        vm.command("hn new-window -P -F '#{pane_id}' -n Manual '/usr/bin/harness updates; sleep 120' > /tmp/update-pane-manual-caller")
+        manual, owner = wait_active('07-manual-view')
+        caller = vm.read_file('/tmp/update-pane-manual-caller').decode().strip()
+        assert owner['pane'] != caller and any(p['pane'] == caller for p in manual['panes']), manual
+        vm.command('test ! -e ' + STATE + '/request.json')
+        focus_terminal()
         vm.keys('meta_l', 'u')
-        wait_active('07-manual-child-reused', owner)
-        wait_ui('07-manual-child-reused')
-        receipt['checks'].append('A manually opened UI beneath its still-running foreground parent shell is reused by its real process identity.')
+        wait_active('07-manual-view-reused', owner)
+        wait_ui('07-manual-view-reused')
+        receipt['checks'].append('Manual harness updates opens an owned inspection pane without an apply request, preserves its caller terminal, and the next Super+u reuses that same actual UI process.')
+
+        # A valid headless endpoint is not a visible client. Manual inspection
+        # must remain on its caller's real terminal and never consume another
+        # screen's targeted shortcut. Use a separate private hn namespace.
+        vm.command("hn -L update-pane-headless new-session -d -s inspection 'sleep 120' && "
+                   "hn -L update-pane-headless display-message -p '#{socket_path}' > /tmp/update-pane-headless-socket")
+        headless = vm.read_file('/tmp/update-pane-headless-socket').decode().strip()
+        assert headless.startswith('/') and '\n' not in headless, headless
+        headless_command = 'hn -S ' + shlex.quote(headless)
+        vm.command(headless_command + " hn-list-clients -F '#{client_tty}' > /tmp/update-pane-headless-clients && " +
+                   headless_command + " list-panes -s -F '#{pane_id}' > /tmp/update-pane-headless-before")
+        assert not vm.read_file('/tmp/update-pane-headless-clients').strip()
+        default_socket = next(p for p in manual['panes'] if p['pane'] == owner['pane'])['socket']
+        vm.command('hn -S ' + shlex.quote(default_socket) + " new-window -P -F '#{pane_id}' -n Inspection " +
+                   shlex.quote('env HN_SOCKET=' + headless + ' /usr/bin/harness updates; sleep 120') +
+                   ' > /tmp/update-pane-inspection-caller')
+        inspection_pane = vm.read_file('/tmp/update-pane-inspection-caller').decode().strip()
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            inspected = observe('07-direct-inspection')
+            direct = [p for p in inspected['screens'] if p['registration'] is None and p['token'] is None]
+            if len(direct) == 1:
+                inspection = direct[0]
+                assert inspection['primary_socket'] == headless
+                assert inspection['group'] == inspection['foreground'] and inspection['stdin'].startswith('/dev/pts/')
+                visible = next(p for p in inspected['panes'] if p['pane'] == inspection_pane)
+                assert visible['pane_active'] == '1' and visible['window_active'] == '1'
+                break
+            time.sleep(.1)
+        else:
+            raise TimeoutError('Manual inspection did not stay in its caller terminal')
+        wait_ui('07-direct-inspection')
+        vm.command(headless_command + " list-panes -s -F '#{pane_id}' > /tmp/update-pane-headless-after")
+        assert vm.read_file('/tmp/update-pane-headless-before') == vm.read_file('/tmp/update-pane-headless-after')
+        assert not inspected['request_pending']
+        vm.command('printf %s ' + owner['token'] + ' > /tmp/update-pane-route-gate')
+        focus_terminal()
+        vm.keys('meta_l', 'u')
+        delivered, _ = wait_active('07-targeted-delivery', owner)
+        vm.command("timeout 5 sh -c 'until test -s /tmp/update-pane-route-rejected.json && "
+                   "test -s /tmp/update-pane-route-claimed.json; do sleep .05; done'")
+        evidence = {kind: json.loads(vm.read_file('/tmp/update-pane-route-' + kind + '.json'))
+                    for kind in ['rejected', 'claimed']}
+        rejected, claimed = evidence['rejected'], evidence['claimed']
+        assert rejected['pid'] == inspection['pid'] and rejected['token'] is None and rejected['claimed'] is False
+        assert claimed['pid'] == owner['pid'] and claimed['token'] == owner['token'] and claimed['claimed'] is True
+        assert rejected['request'] == claimed['request'] and claimed['request']['target'] == owner['token']
+        assert any(p['pid'] == inspection['pid'] and p['start'] == inspection['start'] and p['registration'] is None
+                   for p in delivered['screens'])
+        (folder / '07-targeted-delivery-outcomes.json').write_text(json.dumps(evidence, indent=2) + '\n')
+        receipt['headless_inspection'] = dict(socket=headless, caller_pane=inspection_pane, process=inspection,
+                                             pane_ids=vm.read_file('/tmp/update-pane-headless-after').decode())
+        vm.command('rm /tmp/update-pane-route-gate')
+        vm.command('kill -TERM ' + str(inspection['pid']))
+        wait_gone(inspection)
+        receipt['checks'].append('A manual view with a valid headless socket stays in its current PTY without creating a hidden pane or an apply request. While it remains alive, its real consume rejects the targeted shortcut before the selected owner claims that exact request.')
 
         vm.command('printf %s ' + str(owner['pid']) + ' > /tmp/update-pane-hold-close')
         vm.keys('esc')

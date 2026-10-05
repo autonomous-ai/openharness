@@ -21,13 +21,13 @@ def process(pid):
 def snapshot():
     template = '\t'.join('#{' + key + '}' for key in [
         'pane_id', 'pane_pid', 'pane_dead', 'window_id', 'window_name',
-        'pane_active', 'window_active', 'socket_path'])
+        'pane_active', 'window_active', 'socket_path', '@harness-update-instance'])
     output = subprocess.check_output(['hn', 'list-panes', '-s', '-F', template], text=True, timeout=5)
     panes = []
     for line in output.splitlines():
         values = line.split('\t')
-        assert len(values) == 8, repr(line)
-        panes.append(dict(zip(['pane', 'pid', 'dead', 'window', 'name', 'pane_active', 'window_active', 'socket'], values)))
+        assert len(values) == 9, repr(line)
+        panes.append(dict(zip(['pane', 'pid', 'dead', 'window', 'name', 'pane_active', 'window_active', 'socket', 'token'], values)))
     screens = []
     for path in Path('/proc').iterdir():
         if not path.name.isdigit():
@@ -39,8 +39,11 @@ def snapshot():
             if record['argv'] not in (['/usr/bin/python3', UPDATER], ['/usr/bin/python3', UPDATER, 'screen']):
                 continue
             environment = dict(value.split('=', 1) for value in (path / 'environ').read_bytes().decode().split('\0') if '=' in value)
-            record['pane'] = environment.get('TMUX_PANE')
+            record['backend_pane'] = environment.get('TMUX_PANE')
             record['primary_socket'] = environment.get('HN_SOCKET')
+            record['token'] = environment.get('HARNESS_UPDATE_INSTANCE')
+            matches = [p['pane'] for p in panes if record['token'] and p['token'] == record['token']]
+            record['pane'] = matches[0] if len(matches) == 1 else None
             record['stdin'] = str((path / 'fd/0').readlink())
             registration = STATE / 'screens' / path.name
             record['registration'] = json.loads(registration.read_text()) if registration.exists() else None
