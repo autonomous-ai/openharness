@@ -44,6 +44,58 @@ def checksum(path):
         return hashlib.file_digest(handle, 'sha256').hexdigest()
 
 
+def finish_fixture_processes(home):
+    """Drain only this fixture's private-HOME processes before removing their files.
+
+    Closing a tmux server does not wait for its children to finish writing. Pin
+    each matching process with a Linux pidfd so PID reuse cannot target another
+    process, and never include an unrelated runner's command line in evidence.
+    """
+    expected = b'HOME=' + os.fsencode(home)
+    signalled = []
+    for action, seconds in [(None, 2), (signal.SIGTERM, 3), (signal.SIGKILL, 3)]:
+        deadline = time.monotonic() + seconds
+        while True:
+            pending = {}
+            try:
+                for process in Path('/proc').iterdir():
+                    if not process.name.isdigit() or int(process.name) == os.getpid():
+                        continue
+                    fd = None
+                    try:
+                        if process.stat().st_uid != os.getuid():
+                            continue
+                        fd = os.pidfd_open(int(process.name))
+                        if expected not in (process / 'environ').read_bytes().split(b'\0'):
+                            continue
+                        if select.select([fd], [], [], 0)[0]:
+                            continue
+                        pending[fd] = int(process.name)
+                        fd = None
+                    except (ProcessLookupError, FileNotFoundError, PermissionError):
+                        continue
+                    finally:
+                        if fd is not None:
+                            os.close(fd)
+                if not pending:
+                    return signalled
+                if action is not None:
+                    for fd, pid in pending.items():
+                        try:
+                            signal.pidfd_send_signal(fd, action)
+                            signalled.append({'pid': pid, 'signal': action.name})
+                        except ProcessLookupError:
+                            pass
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                select.select(list(pending), [], [], min(remaining, .2))
+            finally:
+                for fd in pending:
+                    os.close(fd)
+    raise RuntimeError('Fixture processes did not exit before cleanup')
+
+
 class Screen:
     def __init__(self, argv, env, cwd):
         self.fd, slave = pty.openpty()
@@ -150,7 +202,8 @@ def main():
     report.write_text(json.dumps(receipt, indent=2) + '\n')
     daemon = screen = None
     logs = []
-    with tempfile.TemporaryDirectory(prefix='harness-native-', dir='/tmp') as temporary:
+    temporary_directory = tempfile.TemporaryDirectory(prefix='harness-native-', dir='/tmp')
+    with temporary_directory as temporary:
         base = Path(temporary)
         home, binaries = base / 'home', base / 'bin'
         project = home / 'projects/native-agent'
@@ -393,6 +446,11 @@ def main():
             for name in ['sum.py', 'agent.pid', 'shell.pid']:
                 if (project / name).is_file():
                     shutil.copy2(project / name, output / name)
+            try:
+                receipt['cleanup_signals'] = finish_fixture_processes(home)
+                temporary_directory.cleanup()
+            except (OSError, RuntimeError) as error:
+                cleanup_errors.append('Private workspace cleanup: ' + str(error))
             receipt['finished_at_unix'] = time.time()
             if cleanup_errors:
                 receipt.update(status='failed', cleanup_errors=cleanup_errors)
