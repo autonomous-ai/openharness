@@ -216,6 +216,43 @@ describe('registry remote display names', () => {
     expect(registry.updateTitle('session-host', 'Ship settings page')?.title).toBe('Ship settings page')
   })
 
+  it('refuses every name the machine has had while the daemon ran, not only the one it started with', async () => {
+    // A laptop's name follows its network, and tmux titles each new pane with the name of the moment.
+    // Read once at start, a pane made after the machine was renamed gave its agent the machine's name.
+    const hostFile = join(dataDir, 'hostname')
+    writeFileSync(hostFile, 'laptop-one.lan')
+    process.env.HARNESSD_TEST_HOSTNAME_FILE = hostFile
+    try {
+      const transcriptPath = join(dataDir, 'session-roam.jsonl')
+      writeFileSync(transcriptPath, '{}\n')
+      const { registry, projectDisplayName } = await loadRegistryModule()
+      const { machineNames } = await import('./machineNames.js')
+      registry.load()
+      const registered = registerProcess(registry, {
+        launcherId: 'h8', sessionId: 'session-roam', transcriptPath, tmuxPane: '%8', cwd: '/tmp/demo', title: 'laptop-one.lan',
+      })
+      expect(registered?.entry.title).toBeNull()
+
+      // The machine joins another network; the title sweep reads its name again.
+      writeFileSync(hostFile, 'laptop-two.local')
+      machineNames.observe()
+      expect(registry.updateTitle('session-roam', 'laptop-two.local')?.title).toBeNull()
+      expect(registry.updateTitle('session-roam', 'laptop-two')?.title).toBeNull()
+      // A pane made under the old name keeps it.
+      expect(registry.updateTitle('session-roam', 'laptop-one.lan')?.title).toBeNull()
+      expect(registry.updateTitle('session-roam', 'Ship settings page')?.title).toBe('Ship settings page')
+
+      // A title taken before the machine had that name stops showing once it has it.
+      const retitled = registry.updateTitle('session-roam', 'laptop-three.lan')!
+      expect(projectDisplayName(retitled)).toBe('laptop-three.lan')
+      writeFileSync(hostFile, 'laptop-three.lan')
+      machineNames.observe()
+      expect(projectDisplayName(retitled)).toBe('demo · sess')
+    } finally {
+      delete process.env.HARNESSD_TEST_HOSTNAME_FILE
+    }
+  })
+
   it('only adds or updates agent-names.json entries', async () => {
     const transcriptPath = join(dataDir, 'session-3.jsonl')
     writeFileSync(transcriptPath, '{}\n')

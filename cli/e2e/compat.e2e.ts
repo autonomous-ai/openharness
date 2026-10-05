@@ -290,10 +290,11 @@ describe.skipIf(!FROM)('what the apps see, compared with the released build', ()
       ['this', { scriptPath: join(build, 'cli.js'), env: { ADAPTER_CLI_DIR: build } }],
     ] as const) {
       const d = await IsolatedDaemon.create(options)
-      // A daemon refuses the machine's own name as an agent's title, the name as it read it at start
-      // (lib/registry.ts SELF_NAMES), and tmux titles each new pane with the name as it is then. A
-      // laptop's network name can change mid-run (`MacBook.lan` to `MacBook.local`), and the panes made
-      // after it come out named after the machine on that side alone: a difference neither build made.
+      // tmux titles each new pane with the machine's name as it is then, and a daemon refuses that title
+      // as an agent's name. Released builds up to v0.3.58 read the name once, at start, so when a
+      // laptop's network name changed mid-run (`MacBook.lan` to `MacBook.local`) the panes made after
+      // it came out named after the machine, on that side alone: a difference the change made, not
+      // the build. This build reads it at every title sweep and keeps each name (lib/machineNames.ts).
       const host = hostname()
       try {
         await d.start({ ready: 'port' })
