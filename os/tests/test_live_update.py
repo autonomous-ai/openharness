@@ -4,6 +4,7 @@ import fcntl
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
 import struct
 import subprocess
@@ -372,7 +373,7 @@ class FastUpdates(unittest.TestCase):
             update.prune()
         self.assertTrue(old_runtime.is_dir())
 
-    def show(self, keys, mouse=None, refresh=False):
+    def show(self, keys, mouse=None, refresh=False, retry=False):
         class Window:
             def __init__(self): self.drawn, self.keys = [], iter(keys)
             def keypad(self, _): pass
@@ -389,7 +390,7 @@ class FastUpdates(unittest.TestCase):
         with patch.object(update.curses, 'curs_set'), patch.object(update.curses, 'has_colors', return_value=False), \
              patch.object(update.curses, 'mousemask'), patch.object(update.curses, 'mouseinterval'), \
              patch.object(update.curses, 'getmouse', side_effect=event):
-            return update.screen(window, refresh=refresh)
+            return update.screen(window, refresh=refresh, retry=retry)
 
     def test_update_button_click_and_keyboard_use_the_same_action_without_a_confirmation(self):
         with self.feed(): update.check()
@@ -404,6 +405,111 @@ class FastUpdates(unittest.TestCase):
         update.write(self.state / 'request.json', {'requested_at': 1})
         self.assertEqual(self.show([]), 'update')
         self.assertFalse((self.state / 'request.json').exists())
+
+    def test_targeted_request_is_inert_in_other_owned_or_direct_inspection(self):
+        with self.feed(): update.check()
+        request = dict(requested_at=1, target='a' * 32)
+        update.write(self.state / 'request.json', request)
+        for env in [{}, {'HARNESS_UPDATE_INSTANCE': 'b' * 32}]:
+            with self.subTest(env=env), patch.dict(os.environ, env, clear=True):
+                self.assertIsNone(self.show([27]))
+                self.assertEqual(update.read(self.state / 'request.json'), request)
+        with patch.dict(os.environ, {'HARNESS_UPDATE_INSTANCE': 'a' * 32}, clear=True):
+            self.assertEqual(self.show([]), 'update')
+        self.assertFalse((self.state / 'request.json').exists())
+
+    def test_request_claim_holds_handoff_lock_through_match_and_unlink(self):
+        from concurrent.futures import ThreadPoolExecutor
+        import threading
+        self.state.mkdir()
+        first, second = dict(requested_at=1, target='a' * 32), dict(requested_at=2, target='b' * 32)
+        update.write(self.state / 'request.json', first)
+        matched, publishing, published = threading.Event(), threading.Event(), threading.Event()
+        predicate = update.request_for_screen
+        def match():
+            result = predicate()
+            matched.set()
+            self.assertTrue(publishing.wait(timeout=2))
+            self.assertFalse(published.is_set())
+            return result
+        def publish():
+            self.assertTrue(matched.wait(timeout=2))
+            with (self.state / 'open.lock').open('a') as lock:
+                publishing.set()
+                fcntl.flock(lock, fcntl.LOCK_EX)
+                update.write(self.state / 'request.json', second)
+                published.set()
+        with (patch.dict(os.environ, {'HARNESS_UPDATE_INSTANCE': 'a' * 32}, clear=True),
+              patch.object(update, 'request_for_screen', side_effect=match),
+              ThreadPoolExecutor(max_workers=1) as pool):
+            future = pool.submit(publish)
+            self.assertTrue(update.consume_request())
+            future.result(timeout=2)
+        self.assertEqual(update.read(self.state / 'request.json'), second)
+
+    def test_explicit_request_stays_compatible_and_private_target_is_validated(self):
+        with patch.object(update.os, 'geteuid', return_value=1000), patch.dict(os.environ, {}, clear=True):
+            update.main(['request'])
+            self.assertEqual(set(update.read(self.state / 'request.json')), {'requested_at'})
+            with patch.dict(os.environ, {'HARNESS_UPDATE_TARGET': 'c' * 32}):
+                update.main(['request'])
+            self.assertEqual(update.read(self.state / 'request.json')['target'], 'c' * 32)
+            with patch.dict(os.environ, {'HARNESS_UPDATE_TARGET': 'invalid'}), self.assertRaisesRegex(ValueError, 'target'):
+                update.main(['request'])
+            self.assertEqual(update.read(self.state / 'request.json')['target'], 'c' * 32)
+
+    def test_shortcut_after_last_poll_prevents_close_and_needs_no_second_key(self):
+        with self.feed(): update.check()
+        def keys():
+            # The screen has polled request.json already. Super+u arrives just
+            # before an older Escape is handled, while the process is alive.
+            update.write(self.state / 'request.json', dict(requested_at=2, target='a' * 32))
+            yield 27
+            self.fail('The pending shortcut needed another key')
+        with patch.dict(os.environ, {'HARNESS_UPDATE_INSTANCE': 'a' * 32}, clear=True):
+            self.assertEqual(self.show(keys()), 'update')
+        self.assertFalse((self.state / 'request.json').exists())
+
+    def test_screen_registration_ends_before_close_returns_even_if_process_is_alive(self):
+        proc = self.root / 'proc'
+        pid = os.getpid()
+        (proc / str(pid)).mkdir(parents=True)
+        (proc / str(pid) / 'stat').write_text(f'{pid} (python) ' + ' '.join(['S'] + ['0'] * 18 + ['123']))
+        with (patch.object(update, 'PROC', proc),
+              patch.dict(os.environ, {'HARNESS_UPDATE_INSTANCE': 'a' * 32}, clear=True)):
+            with update.screen_registration():
+                record = update.read(self.state / 'screens' / str(pid))
+                self.assertEqual(record, dict(pid=pid, start='123', token='a' * 32, boot_id='first-boot'))
+                self.assertTrue(update.close_screen())
+                self.assertFalse((self.state / 'screens' / str(pid)).exists())
+                self.assertEqual(os.getpid(), pid)  # Still before context/process cleanup.
+
+    def test_unowned_terminal_screen_does_not_register_a_backend_pane_as_ui_identity(self):
+        with patch.dict(os.environ, {'TMUX_PANE': '%7', 'HN_SOCKET': '/tmp/hn/default.sock'}, clear=True):
+            with update.screen_registration():
+                self.assertFalse((self.state / 'screens' / str(os.getpid())).exists())
+
+    def test_close_waits_for_shortcut_handoff_then_preserves_its_pending_intent(self):
+        from concurrent.futures import ThreadPoolExecutor
+        import threading
+        self.state.mkdir()
+        marker = self.state / 'screens' / str(os.getpid())
+        marker.parent.mkdir()
+        marker.write_text('{}')
+        entering = threading.Event()
+        def close():
+            entering.set()
+            return update.close_screen()
+        with (self.state / 'open.lock').open('a') as lock, ThreadPoolExecutor(max_workers=1) as pool:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            future = pool.submit(close)
+            self.assertTrue(entering.wait(timeout=2))
+            update.write(self.state / 'request.json', {'requested_at': 3})
+            self.assertFalse(future.done())
+            fcntl.flock(lock, fcntl.LOCK_UN)
+            self.assertFalse(future.result(timeout=2))
+        self.assertTrue(marker.exists())
+        self.assertTrue((self.state / 'request.json').exists())
 
     def test_restart_is_never_the_default_action_or_triggered_by_update_shortcut(self):
         self.state.mkdir()
@@ -458,14 +564,18 @@ class FastUpdates(unittest.TestCase):
             self.assertIsNone(self.show([10], refresh=True))
         self.assertFalse((self.state / 'approved.json').exists())
 
-    def test_retry_keeps_the_request_so_recovered_downloads_apply_without_another_key(self):
-        with patch.object(update.os, 'geteuid', return_value=1000), \
-             patch.object(update.curses, 'wrapper', side_effect=['check', None]):
+    def test_manual_retry_stays_local_and_applies_recovered_download_without_another_key(self):
+        self.state.mkdir()
+        other = dict(requested_at=1, target='b' * 32)
+        update.write(self.state / 'request.json', other)
+        with patch.dict(os.environ, {}, clear=True), patch.object(update.os, 'geteuid', return_value=1000), \
+             patch.object(update.curses, 'wrapper', side_effect=['check', None]) as wrapper:
             update.main(['screen'])
-        self.assertTrue((self.state / 'request.json').exists())
-        with self.feed():
-            self.assertEqual(self.show([], refresh=True), 'update')
-        self.assertFalse((self.state / 'request.json').exists())
+        self.assertTrue(wrapper.call_args_list[1].args[3])
+        self.assertEqual(update.read(self.state / 'request.json'), other)
+        with self.feed(), patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(self.show([], refresh=True, retry=True), 'update')
+        self.assertEqual(update.read(self.state / 'request.json'), other)
 
 
 class RuntimeArchitecture(unittest.TestCase):
