@@ -764,6 +764,43 @@ describe('harness grid logout', () => {
   }, 20_000)
 })
 
+describe('harness grid env', () => {
+  it('prints the grid\'s exports from the harness\'s own grid, for a shell to eval', async () => {
+    const root = tempRoot()
+    seedSession(root)
+    const exports = "export OPENAI_BASE_URL='https://relay.example/g/1/relay/v1'\nexport OPENAI_API_KEY='k'\n"
+
+    const result = await run(root, ['grid', 'env', 'team grid'], 'http://127.0.0.1:1', { FAKE_GRID_STDOUT: exports })
+
+    expect(result.status).toBe(0)
+    expect(result.stdout).toBe(exports)
+    expect(readRecord(root).args).toEqual(['--remote', 'info', 'team grid', '--env'])
+  }, 20_000)
+
+  it('carries the grid\'s refusal out in its own words and exit code', async () => {
+    const root = tempRoot()
+    seedSession(root)
+
+    const result = await run(root, ['grid', 'env', 'home'], 'http://127.0.0.1:1',
+      { FAKE_GRID_EXIT: '1', FAKE_GRID_STDERR: 'Unknown grid home.\n' })
+
+    expect(result.status).toBe(1)
+    expect(result.stderr).toContain('Unknown grid home.')
+    expect(result.stdout).toBe('')
+  }, 20_000)
+
+  it('asks for a grid, and never passes a flag to grid as one', async () => {
+    const root = tempRoot()
+    seedSession(root)
+
+    for (const args of [['grid', 'env'], ['grid', 'env', '--help']]) {
+      const result = await run(root, args, 'http://127.0.0.1:1')
+      expect(result.status).toBe(2)
+      expect(result.stderr).toContain('Usage: harness grid env <grid>')
+    }
+  }, 20_000)
+})
+
 describe('harness logout — the grid sign-out it now performs', () => {
   // ⚠️ This suite used to be named "the grid credential it will not touch" and asserted the
   // OPPOSITE: that `harness logout` only ever printed a sentence about the grid. The one-sign-in

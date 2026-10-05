@@ -28,7 +28,7 @@ import { signedInGridEmail } from './gridDerive.js'
 import { gridJson } from './gridExec.js'
 import {
   advertisedNow, emptyPicture, mergeAwake, idKey, parsePicture, provenStopped, sectionView, servedKey, servesAModel, unspelled, withAsleep,
-  withSpellings, withUnknown, withWindows, type GridPicture, type LocalRecord, type PictureState, type RowUnavailable,
+  withDecisions, withSpellings, withUnknown, withWindows, type GridPicture, type LocalRecord, type PictureState, type RowUnavailable,
   type SectionView, type ServedHere,
 } from './gridPicture.js'
 import { ComputerPresence, computersIn, MACHINE_LIST_FRESH_MS } from './gridPresence.js'
@@ -48,6 +48,9 @@ export interface GridModel {
   /** Every computer serving it seems offline — sent only to a client that asked for row state
    *  ([presentGridSections]); an older one reads it in `node` instead. */
   unavailable?: RowUnavailable
+  /** `decision`: a Jev (System One) model, called at `/v1/systemone` and never run as an agent — a picker
+   *  lists it in its own section. Absent for a chat model; an older app ignores it. */
+  kind?: 'decision'
 }
 
 /** How an explicit wake that did not show models ended: the grid did not come up in time, or came up
@@ -440,6 +443,7 @@ export class GridModelsService {
     let picture = mergeAwake(previous, read.nodes, now, isMine, (name, key) => provenStopped(previous, here, name, key))
     const spelled = withSpellings(picture.caseMap, [...read.curatedIds, ...here.records.flatMap((r) => r.ids)])
     picture = withWindows({ ...picture, caseMap: withSpellings(spelled, advertisedNow(here.records), true) }, read.windows)
+    picture = withDecisions(picture, read.nodes)
     const unknownIds = unspelled(picture, read.nodes).filter((key) => !tracked.spelled.has(key))
     if (unknownIds.length && base) {
       unknownIds.forEach((key) => tracked.spelled.add(key))
