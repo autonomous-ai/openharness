@@ -11,15 +11,6 @@ on:
         description: 'Exact producer commit recorded in that runtime artifact'
         type: string
         required: true
-  # Bootstrap this new workflow on its one private development branch. Remove
-  # the push trigger before merge; product channels are never written here.
-  push:
-    branches: ['os-polish/fedora-validation']
-    paths:
-      - 'os/tools/*fedora*'
-      - 'os/packaging/fedora/**'
-      - 'os/tests/fedora_package*'
-      - '.github/workflows/os-fedora-package.yml'
 
 permissions:
   contents: read
@@ -34,8 +25,8 @@ jobs:
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 30
     env:
-      RUNTIME_RUN: ${{ inputs.runtime_run_id || '37282748232' }}
-      RUNTIME_SOURCE: ${{ inputs.runtime_source || 'b09174a2433d58ceb5c1871ccdf2c87b3902117a' }}
+      RUNTIME_RUN: ${{ inputs.runtime_run_id }}
+      RUNTIME_SOURCE: ${{ inputs.runtime_source }}
     steps:
       - uses: actions/checkout@v7
         with:
