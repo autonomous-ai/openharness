@@ -44,9 +44,13 @@ def connected():
         return False
 
 
-def scan(rescan=True):
+def scan(rescan=None):
+    # Opening the page should reuse a recent scan, especially just after a
+    # reconnect. NetworkManager refreshes results older than 30 seconds in auto
+    # mode. Force a scan only when the user chooses Rescan.
+    mode = 'auto' if rescan is None else 'yes' if rescan else 'no'
     result = nmcli('-t', '-e', 'yes', '-f', 'SSID,SIGNAL,SECURITY,DEVICE,BSSID,IN-USE',
-                   'device', 'wifi', 'list', '--rescan', 'yes' if rescan else 'no', wait=10)
+                   'device', 'wifi', 'list', '--rescan', mode, wait=10)
     if result.returncode:
         raise ValueError('Could not scan Wi-Fi. Check airplane mode, then choose Rescan.')
     networks = {}
@@ -203,7 +207,7 @@ class NetworkPage:
         self.line(6, 'Connect to Wi-Fi')
         return height
 
-    def refresh(self):
+    def refresh(self, rescan=None):
         self.begin()
         self.line(8, 'Finding Wi-Fi…')
         self.screen.refresh()
@@ -211,7 +215,7 @@ class NetworkPage:
         self.networks, self.wired = [], []
         try:
             nmcli('radio', 'wifi', 'on', wait=3)
-            self.networks = scan()
+            self.networks = scan(rescan=rescan)
         except (OSError, subprocess.TimeoutExpired, ValueError) as error:
             self.message = str(error) if isinstance(error, ValueError) else 'Wi-Fi is unavailable. Choose Rescan to try again.'
         # A missing or unavailable Wi-Fi radio must not hide the wired path.
@@ -312,11 +316,11 @@ class NetworkPage:
             elif key in (curses.KEY_DOWN, '\t'):
                 self.selected = (self.selected + 1) % len(rows)
             elif key in ('r', 'R'):
-                self.refresh()
+                self.refresh(rescan=True)
             elif key in ('\n', '\r', curses.KEY_ENTER):
                 kind, value = rows[self.selected]
                 if kind == 'rescan':
-                    self.refresh()
+                    self.refresh(rescan=True)
                     continue
                 self.busy(value['ssid'] if kind == 'wifi' else 'Ethernet')
                 try:

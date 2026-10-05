@@ -48,6 +48,29 @@ class Network(unittest.TestCase):
         self.assertEqual(found[0]['signal'], 88)
         self.assertEqual(found[0]['bssid'], 'cc:dd')
 
+    def test_opening_wifi_uses_recent_scan_when_forced_rescan_would_stall(self):
+        def command(*args, **kwargs):
+            if args[-2:] == ('--rescan', 'yes'):
+                raise subprocess.TimeoutExpired('nmcli', 13)
+            return result(output='a\\:network:88:WPA2:wlan0:cc\\:dd:*\n')
+        with patch.object(network, 'nmcli', side_effect=command):
+            found = network.scan()
+        self.assertEqual(found[0]['ssid'], WIFI['ssid'])
+        self.assertTrue(found[0]['active'])
+
+    def test_explicit_rescan_still_requests_a_new_radio_scan(self):
+        real_scan = network.scan
+        screen, page = self.page(['r', '\x1b'], first_use=False)
+        modes = []
+        def command(*args, **kwargs):
+            if '--rescan' in args:
+                modes.append(args[args.index('--rescan') + 1])
+                return result(output='a\\:network:88:WPA2:wlan0:cc\\:dd:*\n')
+            return result()
+        with patch.object(network, 'scan', side_effect=real_scan), patch.object(network, 'nmcli', side_effect=command):
+            self.assertEqual(page.run(), 1)
+        self.assertEqual(modes, ['auto', 'yes'])
+
     def test_password_is_only_passed_on_stdin_and_only_success_enables_reconnect(self):
         calls = []
         def run(*args, **kwargs):
