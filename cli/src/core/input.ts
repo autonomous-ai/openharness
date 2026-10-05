@@ -18,7 +18,7 @@ import { sid } from '../lib/log.js'
 import type { LiveEvent } from '../lib/normalize.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { SessionInputController, type SessionInputDelivery, type SessionInputDeps } from '../lib/sessionInput.js'
-import { messageHold } from '../lib/messageHold.js'
+import { messageHold, passingHold } from '../lib/messageHold.js'
 import { TERMINAL_LEASE_REFUSED, terminalActionNotStarted, type TerminalActionResult } from '../lib/terminalTypes.js'
 import { Id } from '../teams/model.js'
 import { teamWriteHold } from '../teams/preflight.js'
@@ -77,12 +77,23 @@ export function messageWriter({ resolve, terminal: { captureTerminal, validateTe
     if (reason) return terminalActionNotStarted(reason)
     return submitTerminalAction(id, text, {
       beforeEnter: async () => {
-        const before = messageHold(session.engine, await captureTerminal(id))
-        return before === 'popup_open' ? null : before
+        // A read that came back empty, or a composer caught between frames, is asked again for a moment
+        // (a re-attach can blank one capture): only what is on screen holds the Enter back, never a
+        // read that failed once. Still not read after that, it is held, as nothing says it is safe.
+        for (let tries = 1; ; tries++) {
+          const before = messageHold(session.engine, await captureTerminal(id))
+          if (before === 'popup_open') return null
+          if (!before || !passingHold(before) || tries >= ENTER_CHECK_TRIES) return before
+          await new Promise((settle) => setTimeout(settle, ENTER_CHECK_RETRY_MS))
+        }
       },
     })
   }
 }
+
+/** How long the check before a message's Enter asks again after a read that says nothing: 3 s. */
+const ENTER_CHECK_TRIES = 12
+const ENTER_CHECK_RETRY_MS = 250
 
 /** What `SessionInputController` is given: every write takes the device's pane lock first. */
 export function sessionInputDeps(
