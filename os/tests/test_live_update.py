@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import struct
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -373,7 +374,7 @@ class FastUpdates(unittest.TestCase):
             update.prune()
         self.assertTrue(old_runtime.is_dir())
 
-    def show(self, keys, mouse=None, refresh=False, retry=False):
+    def show(self, keys, mouse=None, refresh=False, intent=None, message=''):
         class Window:
             def __init__(self): self.drawn, self.keys = [], iter(keys)
             def keypad(self, _): pass
@@ -390,7 +391,7 @@ class FastUpdates(unittest.TestCase):
         with patch.object(update.curses, 'curs_set'), patch.object(update.curses, 'has_colors', return_value=False), \
              patch.object(update.curses, 'mousemask'), patch.object(update.curses, 'mouseinterval'), \
              patch.object(update.curses, 'getmouse', side_effect=event):
-            return update.screen(window, refresh=refresh, retry=retry)
+            return update.screen(window, refresh=refresh, intent=intent, message=message)
 
     def test_update_button_click_and_keyboard_use_the_same_action_without_a_confirmation(self):
         with self.feed(): update.check()
@@ -571,11 +572,250 @@ class FastUpdates(unittest.TestCase):
         with patch.dict(os.environ, {}, clear=True), patch.object(update.os, 'geteuid', return_value=1000), \
              patch.object(update.curses, 'wrapper', side_effect=['check', None]) as wrapper:
             update.main(['screen'])
-        self.assertTrue(wrapper.call_args_list[1].args[3])
+        self.assertTrue(wrapper.call_args_list[1].args[3].pending)
         self.assertEqual(update.read(self.state / 'request.json'), other)
+        intent = update.UpdateIntent()
+        intent.pending = True
         with self.feed(), patch.dict(os.environ, {}, clear=True):
-            self.assertEqual(self.show([], refresh=True, retry=True), 'update')
+            self.assertEqual(self.show([], refresh=True, intent=intent), 'update')
         self.assertEqual(update.read(self.state / 'request.json'), other)
+
+    def test_retry_keeps_the_request_so_recovered_downloads_apply_without_another_key(self):
+        self.state.mkdir()  # main() creates this before entering run_screen().
+        calls = []
+        def screen(function, message, refresh, intent):
+            calls.append((refresh, intent.pending))
+            if len(calls) == 1:
+                return 'check'
+            if len(calls) == 2:
+                return self.show([], refresh=refresh, intent=intent)
+            return None
+        with self.feed(), patch.object(update.curses, 'wrapper', side_effect=screen), \
+             patch.object(update, 'update_all') as apply:
+            update.run_screen()
+        self.assertEqual(calls[1], (True, True))
+        apply.assert_called_once_with()
+        self.assertFalse((self.state / 'request.json').exists())
+
+    def test_one_request_survives_actual_user_or_system_lock_until_background_staging_finishes(self):
+        self.state.mkdir()
+        for refresh in (False, True):
+            for lock_path in (self.state / 'lock', update.SYSTEM_LOCK):
+                with self.subTest(refresh=refresh, lock=lock_path.name):
+                    (self.state / 'ready.json').unlink(missing_ok=True)
+                    update.write(self.state / 'request.json', {'requested_at': 1})
+                    intent, clock = update.UpdateIntent(), [0]
+                    with lock_path.open('a') as handle:
+                        fcntl.flock(handle, fcntl.LOCK_EX)
+                        def keys():
+                            for _ in range(2):
+                                self.assertTrue(intent.pending)
+                                self.assertFalse((self.state / 'request.json').exists())
+                                self.assertIsNone(update.prepared())
+                                clock[0] += 1
+                                yield -1  # A timed UI poll, not a second user action.
+                            fcntl.flock(handle, fcntl.LOCK_UN)
+                            update.check()  # The actual background operation completes.
+                            clock[0] += 1
+                            yield -1
+                            self.fail('A successful staged request needed another key')
+                        with self.feed(), patch.object(update.time, 'monotonic', side_effect=lambda: clock[0]):
+                            self.assertEqual(self.show(keys(), refresh=refresh, intent=intent), 'update')
+                    self.assertTrue(intent.pending)  # Handoff to run_screen, not completion.
+                    self.assertFalse((self.state / 'error.json').exists())
+
+    def test_cancel_busy_intent_does_not_activate_when_a_later_timer_finishes(self):
+        self.state.mkdir()
+        intent = update.UpdateIntent()
+        update.write(self.state / 'request.json', {'requested_at': 1})
+        with update.locked():
+            self.assertIsNone(self.show([27], intent=intent))
+        self.assertFalse(intent.pending)
+        with self.feed(), patch.object(update.os, 'geteuid', return_value=1000), \
+             patch.object(update, 'apply') as apply:
+            update.main(['check'])
+        apply.assert_not_called()
+        self.assertIsNotNone(update.prepared())
+        self.assertEqual(update.selected(), self.bundled)
+
+    def test_prepared_request_waits_in_ui_while_lock_is_busy(self):
+        with self.feed(): update.check()
+        update.write(self.state / 'request.json', {'requested_at': 1})
+        intent, clock = update.UpdateIntent(), [0]
+        with (self.state / 'lock').open('a') as handle:
+            fcntl.flock(handle, fcntl.LOCK_EX)
+            def keys():
+                self.assertTrue(intent.pending)
+                self.assertGreater(intent.retry_at, 0)
+                fcntl.flock(handle, fcntl.LOCK_UN)
+                clock[0] += 1
+                yield -1
+                self.fail('A ready request needed another key after the lock was released')
+            with patch.object(update.time, 'monotonic', side_effect=lambda: clock[0]), \
+                 patch.object(update, 'check', side_effect=AssertionError('Already prepared')):
+                self.assertEqual(self.show(keys(), intent=intent), 'update')
+
+    def test_lock_permission_error_is_a_real_failure_not_busy(self):
+        with patch.object(update.fcntl, 'flock', side_effect=PermissionError('denied')):
+            with self.assertRaises(PermissionError):
+                with update.locked():
+                    self.fail('No transaction can start after denied lock access')
+
+    def test_plain_busy_inspection_stays_an_inspection_after_staging(self):
+        self.state.mkdir()
+        intent, clock = update.UpdateIntent(), [0]
+        with (self.state / 'lock').open('a') as handle:
+            fcntl.flock(handle, fcntl.LOCK_EX)
+            def keys():
+                self.assertFalse(intent.pending)
+                fcntl.flock(handle, fcntl.LOCK_UN)
+                update.check()
+                clock[0] += 1
+                yield -1
+                self.assertFalse(intent.pending)
+                yield 27
+            with self.feed(), patch.object(update.time, 'monotonic', side_effect=lambda: clock[0]):
+                self.assertIsNone(self.show(keys(), refresh=True, intent=intent))
+        self.assertEqual(update.selected(), self.bundled)
+
+    def test_check_failure_ends_intent_even_if_background_check_later_succeeds(self):
+        self.state.mkdir()
+        intent, check = update.UpdateIntent(), update.check
+        update.write(self.state / 'request.json', {'requested_at': 1})
+        def keys():
+            self.assertFalse(intent.pending)
+            check()
+            yield -1
+            yield 27
+        with self.feed(), patch.object(update, 'check', side_effect=ValueError('Invalid checksum')) as failed:
+            self.assertIsNone(self.show(keys(), intent=intent))
+        failed.assert_called_once()
+        self.assertEqual(update.selected(), self.bundled)
+
+    def test_new_request_before_cancel_is_not_discarded_with_the_older_busy_intent(self):
+        self.state.mkdir()
+        intent, clock = update.UpdateIntent(), [0]
+        update.write(self.state / 'request.json', {'requested_at': 1})
+        with (self.state / 'lock').open('a') as handle:
+            fcntl.flock(handle, fcntl.LOCK_EX)
+            def keys():
+                update.write(self.state / 'request.json', {'requested_at': 2})
+                yield 27  # close_screen must see the request after the last poll.
+                self.assertTrue(intent.pending)
+                fcntl.flock(handle, fcntl.LOCK_UN)
+                update.check()
+                clock[0] += 1
+                yield -1
+                self.fail('The new shortcut was cancelled by an older Escape')
+            with self.feed(), patch.object(update.time, 'monotonic', side_effect=lambda: clock[0]):
+                self.assertEqual(self.show(keys(), intent=intent), 'update')
+
+    def test_active_intent_retries_busy_worker_once_without_another_key(self):
+        with self.feed(): update.check()
+        update.write(self.state / 'request.json', {'requested_at': 1})
+        clock, workers = [0], []
+        def worker(*args, **kwargs):
+            workers.append(args)
+            self.assertIn('--pipe', args)
+            self.assertEqual(args[-2:], ('apply', '--worker'))
+            if len(workers) == 1:
+                raise subprocess.CalledProcessError(update.BUSY_EXIT, args, output=update.WORKER_BUSY + '\n')
+            update.apply()
+        def keys():
+            clock[0] += 1
+            yield -1
+            yield 10  # Done after actual activation.
+        events = keys()
+        def screen(function, message, refresh, intent):
+            return self.show(events, refresh=refresh, intent=intent, message=message)
+        with (patch.object(update.curses, 'wrapper', side_effect=screen),
+              patch.object(update.time, 'monotonic', side_effect=lambda: clock[0]),
+              patch.object(update, 'run', side_effect=worker), patch.object(update, 'restart')):
+            update.run_screen()
+        self.assertEqual(len(workers), 2)
+        self.assertNotEqual(update.selected(), self.bundled)
+        self.assertFalse((self.state / 'error.json').exists())
+
+    def test_arbitrary_worker_failure_is_not_a_retryable_busy_result(self):
+        with self.feed(): update.check()
+        for status, output in [(75, ''), (1, update.WORKER_BUSY + '\n'),
+                               (75, update.WORKER_BUSY + '\nextra'), (-15, '')]:
+            with self.subTest(status=status, output=output):
+                error = subprocess.CalledProcessError(status, 'systemd-run', output=output)
+                with patch.object(update, 'run', side_effect=error), self.assertRaises(subprocess.CalledProcessError):
+                    update.update_all()
+
+    def test_real_apply_failure_requires_another_decision(self):
+        with self.feed(): update.check()
+        calls = []
+        def screen(function, message, refresh, intent):
+            calls.append(intent.pending)
+            if len(calls) == 1:
+                return 'update'
+            self.assertFalse(intent.pending)
+            self.assertIn('Try again', message)
+            return None
+        with patch.object(update.curses, 'wrapper', side_effect=screen), \
+             patch.object(update, 'update_all', side_effect=ValueError('Activation failed')) as apply:
+            update.run_screen()
+        apply.assert_called_once()
+        self.assertTrue((self.state / 'error.json').exists())
+
+    def test_busy_worker_can_be_cancelled_without_relaunch(self):
+        with self.feed(): update.check()
+        update.write(self.state / 'request.json', {'requested_at': 1})
+        calls = []
+        def screen(function, message, refresh, intent):
+            calls.append(intent)
+            return self.show([] if len(calls) == 1 else [27], refresh=refresh, intent=intent)
+        with patch.object(update.curses, 'wrapper', side_effect=screen), \
+             patch.object(update, 'update_all', side_effect=update.UpdateBusy('busy')) as apply:
+            update.run_screen()
+        apply.assert_called_once()
+        self.assertFalse(calls[-1].pending)
+        self.assertEqual(update.selected(), self.bundled)
+        self.assertFalse((self.state / 'request.json').exists())
+
+    def test_timer_ignores_an_unclaimed_shortcut_and_busy_approved_completion_stays_pending(self):
+        self.state.mkdir()
+        update.write(self.state / 'request.json', {'requested_at': 1})
+        with self.feed(), patch.object(update.os, 'geteuid', return_value=1000), patch.object(update, 'apply') as apply:
+            update.main(['check'])
+        apply.assert_not_called()
+        self.assertTrue((self.state / 'request.json').exists())
+        approval = dict(status='after-reboot', boot_id='earlier', base_sha256=update.digest(self.base))
+        update.write(self.state / 'approved.json', approval)
+        with update.locked():
+            update.finish_approved_update()
+        self.assertEqual(update.read(self.state / 'approved.json'), approval)
+        with patch.object(update, 'restart'):
+            update.finish_approved_update()
+        self.assertFalse((self.state / 'approved.json').exists())
+
+    def test_actual_worker_process_reports_busy_distinctly_from_real_failure(self):
+        self.state.mkdir()
+        script = '''import importlib.util, json, sys
+from pathlib import Path
+spec = importlib.util.spec_from_file_location('worker', sys.argv[1])
+worker = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(worker)
+for name, path in json.loads(sys.argv[2]).items():
+    setattr(worker, name, Path(path))
+worker.os.geteuid = lambda: 1000
+raise SystemExit(worker.entrypoint(['apply', '--worker']))
+'''
+        paths = {name: str(getattr(update, name)) for name in
+                 ('STATE', 'BUNDLED', 'BASE_ID', 'SYSTEM_LOCK', 'RESTART_REQUIRED', 'BOOT_ID')}
+        argv = [sys.executable, '-c', script, update.__file__, json.dumps(paths)]
+        for path in (self.state / 'lock', update.SYSTEM_LOCK):
+            with self.subTest(lock=path.name), path.open('a') as handle:
+                fcntl.flock(handle, fcntl.LOCK_EX)
+                busy = subprocess.run(argv, capture_output=True, text=True, timeout=10)
+            self.assertEqual((busy.returncode, busy.stdout, busy.stderr), (75, update.WORKER_BUSY + '\n', ''))
+        failed = subprocess.run(argv, capture_output=True, text=True, timeout=10)
+        self.assertEqual(failed.returncode, 1)
+        self.assertEqual(failed.stdout, '')
+        self.assertIn('Harness is up to date', failed.stderr)
 
 
 class RuntimeArchitecture(unittest.TestCase):

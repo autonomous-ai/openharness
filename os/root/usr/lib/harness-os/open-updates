@@ -14,8 +14,9 @@ STATE = Path.home() / '.local/state/harness-os/updates'
 PROC = Path('/proc')
 BOOT_ID = Path('/proc/sys/kernel/random/boot_id')
 UPDATER = '/usr/lib/harness-os/live_update.py'
-OPTION = '@harness-update-instance'
-FORMAT = '#{pane_id}\t#{pane_dead}\t#{window_id}\t#{' + OPTION + '}'
+FORMAT = '#{pane_id}\t#{pane_dead}\t#{window_id}\t#{pane_start_command}'
+LAUNCH = re.compile(r'"exec env HARNESS_UPDATE_INSTANCE=([0-9a-f]{32}) /usr/bin/python3 '
+                    + re.escape(UPDATER) + r' screen"')
 
 
 def hn(*args, socket=None):
@@ -76,13 +77,22 @@ def updater_process(token):
 
 
 def updater_panes(socket):
+    candidates = []
     for line in hn('list-panes', '-s', '-F', FORMAT, socket=socket).splitlines():
         parts = line.split('\t')
         if len(parts) != 4:
             continue
-        pane, dead, window, token = parts
+        pane, dead, window, launch = parts
+        match = LAUNCH.fullmatch(launch)
         if not (re.fullmatch(r'%\d+', pane) and dead == '0'
-                and re.fullmatch(r'@\d+', window) and re.fullmatch(r'[0-9a-f]{32}', token)):
+                and re.fullmatch(r'@\d+', window) and match):
+            continue
+        candidates.append((pane, window, match[1]))
+    for pane, window, token in candidates:
+        # Normal OS sessions retain the original command across renderer
+        # replacement. Accept only our fixed quoted launch, never shell syntax
+        # or a copied/ambiguous token belonging to more than one pane.
+        if sum(item[2] == token for item in candidates) != 1:
             continue
         owner = updater_process(token)
         if owner:
@@ -140,7 +150,6 @@ def open_updates(view=False):
                   'exec env HARNESS_UPDATE_INSTANCE=' + token + ' /usr/bin/python3 ' + UPDATER + ' screen', socket=socket)
         if not re.fullmatch(r'%\d+', pane):
             raise ValueError('The Updates pane did not open.')
-        hn('set-option', '-p', '-t', pane, OPTION, token, socket=socket)
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:
             if any(item[0] == pane and item[2] == token for item in updater_panes(socket)):
