@@ -48,6 +48,7 @@ import { terminalActivity } from './cable/terminalActivity.js'
 import { MachineListCache, machineListCachePath, withStaleMarker } from './device/machineList.js'
 import { registry, projectDisplayName, validTranscriptPath, type RegisteredSession } from './lib/registry.js'
 import { engineSessionTitle } from './lib/sessionTitle.js'
+import { machineNames } from './lib/machineNames.js'
 import { installCodexHooks } from './lib/hooks.js'
 import { DAEMON_LOG_FILE, HARNESSD_STATUS_FILE, PID_FILE, daemonPort, isAlive, isDaemonRunning, readPid } from './lib/daemonState.js'
 import { clearSafeModeMarker, readSafeModeMarker, runBootHandoff, safeModeDisposition, safeModeStatusBody, SafeModeRequest, writeSafeModeMarker } from './lib/daemonSafeMode.js'
@@ -1883,6 +1884,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const syncTerminalTitles = async (): Promise<void> => {
     ports.workspaces?.nameBranches()
     const titles = await terminals.titles()
+    // The machine's name now, beside every name it has had: a title that is one of them is refused.
+    machineNames.observe()
     if (titles.size === 0) return
     for (const session of registry.list()) {
       // Codex's own thread name when it has one; otherwise what the engine put on its terminal.

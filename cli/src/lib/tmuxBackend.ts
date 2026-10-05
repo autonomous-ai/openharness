@@ -36,6 +36,7 @@ import {
 import { env } from '../config/env.js'
 import { HARNESS_OWNER_OPTION, harnessPaneOwner } from './harnessSessionLabel.js'
 import { DEFAULT_HOST_THEME, windowStyleOf, type HostTheme } from './hostTheme.js'
+import { machineNames } from './machineNames.js'
 import { isNoTmuxServerError, listTmuxPanes } from './tmuxAgentDiscovery.js'
 import { terminalRouteKey } from './terminalRuntime.js'
 
@@ -110,13 +111,19 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
    * use rather than captured, so a theme the app sends later reaches sessions created after it.
    * [owner] is the tag this daemon's panes carry (`HARNESS_OWNER_OPTION`), read at every create for
    * the same reason as the theme: the data folder is the daemon's to move.
+   * [observeMachineName] reads the machine's name as tmux titles the new pane with it (lib/machineNames.ts).
    */
   constructor(
     private readonly hostTheme: () => HostTheme = () => DEFAULT_HOST_THEME,
     private readonly owner: () => string = () => harnessPaneOwner(env.ADAPTER_DATA_DIR),
+    private readonly observeMachineName: () => void = () => machineNames.observe(),
   ) {}
 
   async create(request: TerminalCreateRequest): Promise<TerminalCreateResult<TmuxRuntimeRef>> {
+    // tmux titles the pane it is about to make with the machine's name as it is now, and an engine
+    // that sets no title keeps it. Read here, that name is refused even if the machine has another
+    // by the next title sweep: a name it had only between two sweeps would otherwise never be seen.
+    this.observeMachineName()
     const args = ['new-session', '-d', '-P', '-F', '#{pane_id}']
     if (request.cwd) args.push('-c', request.cwd)
     if (request.label) args.push('-s', request.label)

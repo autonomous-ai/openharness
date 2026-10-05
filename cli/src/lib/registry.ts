@@ -37,7 +37,7 @@ import {
 } from 'fs'
 import { randomUUID } from 'crypto'
 import { join, basename, dirname, relative, isAbsolute } from 'path'
-import { hostname } from 'os'
+import { machineNames } from './machineNames.js'
 import { cursorDataDir } from '../engines/cursor/home.js'
 import { env } from '../config/env.js'
 import { claudeProjectsRoots, codexHomeRoots } from './engineHomes.js'
@@ -2293,29 +2293,6 @@ function defaultProjectDisplayName(s: RegisteredSession): string {
 }
 
 /**
- * The machine's own name, in the forms a terminal title is likely to carry it.
- *
- * Computed once: a rename mid-run would at worst let one title through, and reading it per title
- * would run a syscall for every agent on every title sweep.
- */
-const SELF_NAMES: ReadonlySet<string> = (() => {
-  const names = new Set<string>()
-  try {
-    const host = hostname().trim().toLowerCase()
-    if (host) {
-      names.add(host)
-      // `MacBookPro2021.local` and `MacBookPro2021` are the same machine wearing two names, and an
-      // engine may print either.
-      const short = host.split('.')[0]
-      if (short) names.add(short)
-    }
-  } catch {
-    // No hostname is not a reason to reject nothing else; the set simply stays empty.
-  }
-  return names
-})()
-
-/**
  * A pane title, as an agent NAME — or null when the title says nothing about this agent.
  *
  * Two rejections, and the second is the interesting one.
@@ -2326,7 +2303,10 @@ const SELF_NAMES: ReadonlySet<string> = (() => {
  * identically for every one of them. A name that is the same for every agent on a machine is worse
  * than no name: `defaultProjectDisplayName` at least says which folder and which session. This is
  * about the machine, not the engine, so it is refused by what it SAYS rather than by who sent it —
- * any engine that adopts the same convention is covered without a table to keep in step.
+ * any engine that adopts the same convention is covered without a table to keep in step. tmux titles
+ * a new pane with the machine's name too, kept by any engine that sets no title of its own. Every
+ * name the machine has had while the daemon ran counts (lib/machineNames.ts): a laptop's name follows
+ * its network, and a pane keeps the name it was made under.
  */
 export function titleDisplayName(title: string | null | undefined): string | null {
   const cleaned = title
@@ -2335,7 +2315,7 @@ export function titleDisplayName(title: string | null | undefined): string | nul
     .trim()
     .slice(0, 80)
   if (!cleaned) return null
-  return SELF_NAMES.has(cleaned.toLowerCase()) ? null : cleaned
+  return machineNames.owns(cleaned) ? null : cleaned
 }
 
 function validProcessIdentity(value: unknown): value is ProcessIdentity {

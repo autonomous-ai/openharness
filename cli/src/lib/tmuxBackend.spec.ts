@@ -1,4 +1,4 @@
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -59,6 +59,21 @@ esac
       'set-option -t %42 mouse on',
       'kill-pane -t %42',
     ])
+  })
+
+  it('reads the machine\'s name before tmux makes a pane, the name tmux titles it with', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'tmux-backend-name-'))
+    dirs.push(dir)
+    const calls = join(dir, 'calls')
+    writeFileSync(join(dir, 'tmux'), `#!/bin/sh\nprintf '%s\\n' "$*" >> "$TMUX_BACKEND_CALLS"\nprintf '%%42\\n'\n`, { mode: 0o700 })
+    process.env.PATH = `${dir}${delimiter}${originalPath ?? ''}`
+    process.env.TMUX_BACKEND_CALLS = calls
+    // Whether tmux had run yet, each time the backend read the machine's name.
+    const tmuxHadRun: boolean[] = []
+    const backend = new TmuxBackend(undefined, () => 'daemon-a', () => { tmuxHadRun.push(existsSync(calls)) })
+    expect((await backend.create({ cwd: '/tmp/work' })).state).toBe('succeeded')
+    expect(tmuxHadRun).toEqual([false])
+    expect(readFileSync(calls, 'utf8')).toContain('new-session')
   })
 
   it.each(['gone', 'present', 'unknown', 'malformed', 'no server', 'no socket', 'empty'] as const)('verifies %s inventory after a failed pane-close reply', async mode => {
