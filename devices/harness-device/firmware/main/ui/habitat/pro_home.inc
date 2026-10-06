@@ -56,7 +56,8 @@ static void pro_home_footer(ht_scene_t *f, agent_t *a, bool recap)
         ht_pro_text(f, 522 - width, 668, width, &ht_pro_24, dim, elapsed);
     }
     ht_pro_text(f, 44, 668, status_width, &ht_pro_24, dim, status);
-    pro_hit(32, 598, 492, 104, A_AGENTS, 0, s.connected && !s.loading);
+    pro_hit(32, 598, 492, 104, pro_carry_available() ? A_CARRY_CHOOSE : A_AGENTS, 0,
+            s.connected && !s.loading);
     if (carry.active || carry.error[0])
         pro_control(f, 548, 622, 128, 64, PRO_TR("Drop"), A_CARRY_DROP, 0, true);
     else if (visit.available)

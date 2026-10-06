@@ -147,6 +147,8 @@ static action_t instruction(int value) {
     if(value==3) {
         s.view=CARRY_PREVIEW;carry.active=true;carry.deadline=now+10000;
         COPY(carry.id,"carry-original");COPY(carry.source,"source-agent");
+        COPY(s.carry_route.id,carry.id);COPY(s.carry_route.host,s.draft_recovery.current_host);
+        s.carry_route.generation=s.draft_recovery.generation;
         COPY(a.text,carry.id);
     }
     return a;

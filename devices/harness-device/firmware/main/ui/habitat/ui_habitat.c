@@ -101,7 +101,8 @@ typedef enum {
 #ifdef DEVICE_PRO_COMPANION
     A_LAUNCHER, A_WORK_INTENT, A_WORK_MODE, A_WORK_RECORD, A_AGENT_LAYOUT,
     A_TODAY, A_TODAY_REFRESH, A_METRICS_GET,
-    A_CARRY_PREVIEW, A_QUESTION_CLOSE, A_DRAFT_STORE,
+    A_CARRY_PREVIEW, A_CARRY_CHOOSE, A_CARRY_TARGET, A_CARRY_OPEN,
+    A_QUESTION_CLOSE, A_DRAFT_STORE,
     A_LANGUAGE, A_LANGUAGE_SET,
     A_DAEMONS, A_SCENES, A_APPEAR_PREVIOUS, A_APPEAR_NEXT, A_APPEAR_USE, A_APPEAR_SAVE,
     A_VOICE_SAMPLES, A_SAMPLE_PREVIOUS, A_SAMPLE_NEXT, A_SAMPLE_PLAY,
@@ -258,6 +259,16 @@ static EXT_RAM_BSS_ATTR struct {
     } work_capture;
     pro_metrics_t metrics;
     pro_carry_review_t carry_review;
+    struct {
+        char id[48], host[ID_MAX];
+        uint32_t generation, focus_generation;
+    } selection_owner;
+    struct {
+        char id[48], host[ID_MAX], source[96];
+        char recipient[ID_MAX], machine[ID_MAX], session[80], engine[12];
+        uint32_t generation, serial, focus_generation;
+        bool choosing, navigating, sent, with_visit, interrupted;
+    } carry_route;
     pro_draft_recovery_t draft_recovery;
     uint32_t pro_busy_second;
     bool pro_busy_visible;
@@ -392,6 +403,7 @@ static const char *voice_status(void);
 static void pro_speech_cancel(bool any);
 static void pro_speech_tick(uint32_t now);
 static bool pro_speech_visible(void);
+static void pro_open_in_app(const char *agent);
 static void pro_render_home(ht_scene_t *f);
 static void pro_render_voice(ht_scene_t *f);
 #endif
@@ -639,6 +651,47 @@ static void pro_reader_focus(const char *id)
     // A -> B -> A must not revive a contact or queued Latest for the first A.
     // Repeated echoes of the same focused pane leave the contact alone.
     if (!++s.reader_focus_generation) ++s.reader_focus_generation;
+}
+static bool pro_selection_owned(void)
+{
+    return s.connected && selection.active && !strcmp(selection.id,s.selection_owner.id) &&
+        s.selection_owner.generation==s.draft_recovery.generation &&
+        s.selection_owner.focus_generation==s.reader_focus_generation &&
+        !strcmp(s.selection_owner.host,s.draft_recovery.current_host) &&
+        active() && !strcmp(selection.agent,active()->id);
+}
+static void pro_carry_route_clear(void)
+{
+    uint32_t serial=s.carry_route.serial+1;
+    memset(&s.carry_route,0,sizeof s.carry_route);
+    s.carry_route.serial=serial ? serial : 1;
+}
+static bool pro_carry_owned(void)
+{
+    return s.connected && s.carry_route.id[0] && !strcmp(s.carry_route.id,carry.id) &&
+        s.carry_route.generation==s.draft_recovery.generation &&
+        !strcmp(s.carry_route.host,s.draft_recovery.current_host);
+}
+static bool pro_carry_available(void)
+{
+    return pro_carry_owned() && carry.active && (int32_t)(ms()-carry.deadline)<0;
+}
+static bool pro_carry_target_matches(void)
+{
+    int i=find(s.carry_route.recipient);
+    return i>=0 && !strcmp(s.agents[i].machine_id,s.carry_route.machine) &&
+        !strcmp(s.agents[i].session,s.carry_route.session) &&
+        !strcmp(s.agents[i].engine,s.carry_route.engine);
+}
+static void pro_carry_choose(void)
+{
+    if (!pro_carry_available() || s.loading || s.voice_open || visit.pending ||
+        s.pending_focus[0] || s.pending_machine[0] || draft.page.active) return;
+    if (!++s.carry_route.serial) ++s.carry_route.serial;
+    s.carry_route.choosing=true;
+    s.carry_route.navigating=s.carry_route.sent=s.carry_route.interrupted=false;
+    view(AGENTS); s.pro_agent_layout=0;
+    s.offset=s.active>1 ? s.active-1 : 0;
 }
 static void pro_reader_copy(char *dst, size_t cap, const char *src)
 {
@@ -899,6 +952,7 @@ static void view(view_t v)
         return;
 #ifdef DEVICE_PRO_COMPANION
     if (s.view==READER && v!=READER) s.reader.row=s.offset;
+    if (v!=AGENTS) s.carry_route.choosing=false;
     if (v != VOICE_SAMPLES && v != VOICE_PARAMS) pro_voice_sample_stop();
     if (v != TODAY) pro_metrics_close(&s.metrics);
 #endif
@@ -2666,6 +2720,10 @@ static bool visit_emit(const ht_visit_command_t *c, void *ctx)
     action_t a = {.kind = A_VISIT_SEND, .value = c->op, .revision = c->request};
     COPY(a.id, c->agent); COPY(a.text, c->id);
 #ifdef DEVICE_PRO_COMPANION
+    if (c->op==HT_VISIT_OPEN && s.carry_route.navigating && !strcmp(c->agent,s.carry_route.recipient)) {
+        a.kind=A_CARRY_OPEN; a.value=1;
+        a.dy=(int)s.carry_route.serial; a.velocity=(int)s.carry_route.focus_generation;
+    }
     if (c->op==HT_VISIT_LATEST && s.view==READER) {
         _Static_assert(sizeof visit.id+sizeof s.reader.host<=sizeof a.text,"Reader visit owner fits queued text");
         a.reader_serial=s.reader.serial;
@@ -2697,6 +2755,23 @@ static action_t make_action(hit_t h)
 {
     action_t a = {.kind = h.action, .value = h.value, .revision = s.q.revision};
 #ifdef DEVICE_PRO_COMPANION
+    if (h.action==A_CARRY_CHOOSE) {
+        copy(a.text,sizeof carry.id,carry.id); a.revision=s.carry_route.serial;
+        return a;
+    }
+    if (h.action==A_CARRY_TARGET && s.view==AGENTS && s.carry_route.choosing &&
+        h.value>=0 && h.value<s.count) {
+        const agent_t *target=&s.agents[h.value];
+        _Static_assert(48+sizeof target->machine_id+sizeof target->session+sizeof target->engine<=sizeof a.text,
+                       "Carry target identity fits captured action");
+        COPY(a.id,target->id); copy(a.text,48,carry.id);
+        copy(a.text+48,sizeof target->machine_id,target->machine_id);
+        copy(a.text+48+sizeof target->machine_id,sizeof target->session,target->session);
+        copy(a.text+48+sizeof target->machine_id+sizeof target->session,sizeof target->engine,target->engine);
+        a.revision=s.carry_route.serial; a.dy=(int)s.carry_route.generation;
+        a.velocity=(int)s.reader_focus_generation;
+        return a;
+    }
     if (h.action == A_WORK_MODE || h.action == A_WORK_RECORD) {
         COPY(a.id, s.work_agent); a.revision = s.work_revision;
         return a;
@@ -2727,7 +2802,7 @@ static action_t make_action(hit_t h)
     if (s.view == READER) {
         COPY(a.id, s.reader_agent);
         a.revision=s.reader.serial;
-        if (h.action==A_LATEST) {
+        if (h.action==A_LATEST || h.action==A_SELECT_BEGIN) {
             a.reader_serial=s.reader.serial;
             copy(a.text,sizeof s.reader.host,s.reader.host);
             a.dy=(int)s.reader.source_generation; a.velocity=(int)s.reader_focus_generation;
@@ -2835,11 +2910,16 @@ static void pro_open_in_app(const char *agent)
     if (!s.connected || s.voice_open || s.loading || visit.pending || !agent || !*agent) return;
     if (!cable_client_supports(CABLE_FEATURE_VISIT)) {
         action_t open = {.kind=A_DESKTOP}; COPY(open.id,agent);
+        if (s.carry_route.navigating && !strcmp(agent,s.carry_route.recipient)) {
+            open.kind=A_CARRY_OPEN; open.dy=(int)s.carry_route.serial;
+            open.velocity=(int)s.carry_route.focus_generation;
+        }
         if (queue(open)) {
             // An older host can open the pane but cannot promise a saved place.
             ht_visit_close(&visit);
             COPY(s.opening_notice,agent);
         } else {
+            if (open.kind==A_CARRY_OPEN) s.carry_route.navigating=false;
             COPY(s.title,"Device busy"); COPY(s.message,"Open the update again."); view(MESSAGE);
         }
         return;
@@ -2980,7 +3060,33 @@ static void dispatch(action_t a)
     }
     case A_METRICS_GET:
     case A_DRAFT_STORE:
+    case A_CARRY_OPEN:
         break; // Worker-only, never a touch target.
+    case A_CARRY_CHOOSE:
+        if (a.revision==s.carry_route.serial && !strcmp(a.text,carry.id)) pro_carry_choose();
+        break;
+    case A_CARRY_TARGET: {
+        int i=find(a.id);
+        if (s.view!=AGENTS || !s.carry_route.choosing || !pro_carry_available() ||
+            s.loading || s.voice_open || visit.pending || s.pending_focus[0] || s.pending_machine[0] ||
+            a.revision!=s.carry_route.serial || (uint32_t)a.dy!=s.carry_route.generation ||
+            (uint32_t)a.velocity!=s.reader_focus_generation || strcmp(a.text,carry.id) || i<0) break;
+        const agent_t *target=&s.agents[i];
+        if (strcmp(a.text+48,target->machine_id) || strcmp(a.text+48+sizeof target->machine_id,target->session) ||
+            strcmp(a.text+48+sizeof target->machine_id+sizeof target->session,target->engine)) break;
+        if (active() && !strcmp(active()->id,a.id)) { view(HOME); break; }
+        COPY(s.carry_route.recipient,target->id); COPY(s.carry_route.machine,target->machine_id);
+        COPY(s.carry_route.session,target->session); COPY(s.carry_route.engine,target->engine);
+        s.carry_route.focus_generation=s.reader_focus_generation;
+        s.carry_route.navigating=true; s.carry_route.sent=s.carry_route.interrupted=false;
+        s.carry_route.with_visit=cable_client_supports(CABLE_FEATURE_VISIT);
+        pro_open_in_app(a.id);
+        if (s.carry_route.with_visit && !visit.pending) s.carry_route.navigating=false;
+        if (s.carry_route.navigating && !s.carry_route.with_visit) {
+            COPY(s.title,"On your desktop"); COPY(s.message,"Opening the selected pane..."); view(MESSAGE);
+        }
+        break;
+    }
     case A_WORK_INTENT:
         if (!s.connected || s.loading || !active() || s.voice_open || carry.active || carry.error[0]) break;
         COPY(s.work_agent, active()->id);
@@ -3190,6 +3296,9 @@ static void dispatch(action_t a)
         break;
 #endif
     case A_AGENT: {
+#ifdef DEVICE_PRO_COMPANION
+        if (s.carry_route.choosing) break;
+#endif
         int i = find(a.id);
         if (i < 0)
             break;
@@ -3368,6 +3477,9 @@ static void dispatch(action_t a)
         }
         break;
     case A_TABS:
+#ifdef DEVICE_PRO_COMPANION
+        if (s.carry_route.choosing) break;
+#endif
         tabs_open();
         break;
 #if HT_FACE_PX >= 720
@@ -3427,7 +3539,7 @@ static void dispatch(action_t a)
     case A_VOICE:
 #ifdef DEVICE_PRO_COMPANION
         if (carry.active && s.view != SELECTION && (a.value == 0 || a.value == 1 || a.value == 8)) break;
-        if (a.value == 3 && (!cable_client_supports(CABLE_FEATURE_DRAFT) ||
+        if (a.value == 3 && (!pro_carry_available() || !cable_client_supports(CABLE_FEATURE_DRAFT) ||
             find(a.id) < 0 || (int32_t)(ms() - carry.deadline) >= 0)) break;
         // A question sheet can only record for its explicit reviewed question.
         if (question_view(s.view) && a.value != 4) break;
@@ -3571,7 +3683,9 @@ static void dispatch(action_t a)
             // pane substituted for a reader or retry action captured earlier.
             if (visit.pending || s.pending_focus[0] || s.pending_machine[0] || strcmp(a.id, active()->id)) break;
             if (a.value == 1 && (s.view != READER || strcmp(a.id, s.reader_agent) ||
-                a.revision!=s.reader.serial || s.reader.from_notice || !pro_reader_owner())) break;
+                a.revision!=s.reader.serial || s.reader.from_notice || !pro_reader_owner() ||
+                (uint32_t)a.dy!=s.reader.source_generation ||
+                (uint32_t)a.velocity!=s.reader_focus_generation)) break;
             if (s.view == SELECTION && (strcmp(a.id, selection.agent) ||
                 strcmp(a.text, selection.id) || (uint32_t)a.dy != selection.revision)) break;
             if (a.value != 1 && s.view != SETTINGS && s.view != SELECTION) break;
@@ -3580,6 +3694,11 @@ static void dispatch(action_t a)
             char id[48]; snprintf(id, sizeof(id), "pick-%08lx%08lx", (unsigned long)esp_random(), (unsigned long)esp_random());
             view(SELECTION);
             ht_selection_open(&selection, id, active()->id, ms(), selection_emit, NULL);
+#ifdef DEVICE_PRO_COMPANION
+            COPY(s.selection_owner.id,id); COPY(s.selection_owner.host,s.draft_recovery.current_host);
+            s.selection_owner.generation=s.draft_recovery.generation;
+            s.selection_owner.focus_generation=s.reader_focus_generation;
+#endif
             change();
         }
         break;
@@ -3588,12 +3707,17 @@ static void dispatch(action_t a)
         break;
     case A_CARRY:
 #ifdef DEVICE_PRO_COMPANION
-        if (!cable_client_supports(CABLE_FEATURE_DRAFT)) break;
+        if (!cable_client_supports(CABLE_FEATURE_DRAFT) || !pro_selection_owned()) break;
 #endif
         if (s.view == SELECTION && !carry.pending && ht_selection_ready(&selection) &&
             selection.excerpt[0] && !strcmp(a.id,selection.agent) &&
             !strcmp(a.text,selection.id) && (uint32_t)a.dy==selection.revision) {
             char id[48]; snprintf(id,sizeof(id),"carry-%08lx%08lx",(unsigned long)esp_random(),(unsigned long)esp_random());
+#ifdef DEVICE_PRO_COMPANION
+            pro_carry_route_clear(); COPY(s.carry_route.id,id);
+            COPY(s.carry_route.host,s.draft_recovery.current_host);
+            s.carry_route.generation=s.draft_recovery.generation;
+#endif
             ht_carry_open(&carry,id,a.id,a.text,(uint32_t)a.dy,ms(),carry_emit,NULL);
             if (carry.error[0]) COPY(selection.error,carry.error);
             change();
@@ -3602,6 +3726,9 @@ static void dispatch(action_t a)
     case A_CARRY_DROP:
         if (a.revision==carry.serial && !strcmp(a.text,carry.id)) {
             ht_carry_close(&carry); change();
+#ifdef DEVICE_PRO_COMPANION
+            pro_carry_route_clear();
+#endif
         }
         break;
     case A_COMPANION:
@@ -3639,6 +3766,9 @@ static void dispatch(action_t a)
         break;
     case A_FIND:
     case A_FORM: {
+#ifdef DEVICE_PRO_COMPANION
+        if (s.carry_route.choosing) break;
+#endif
         if (!s.connected || s.voice_open) break;
         if (!cable_client_supports(CABLE_FEATURE_FORM)) {
             if (a.kind == A_FIND) view(AGENTS);
@@ -3845,9 +3975,52 @@ static void worker(void *unused)
                 cable_client_draft(a.id, ops[a.value], a.revision, (uint32_t)a.dy, a.velocity);
             break;
         }
-        case A_CARRY_SEND:
+        case A_CARRY_SEND: {
+#ifdef DEVICE_PRO_COMPANION
+            display_lock();
+            bool current=a.value || (pro_carry_owned() && carry.pending &&
+                !strcmp(a.text,carry.id) && (uint32_t)a.dy==carry.request && pro_selection_owned() &&
+                ht_selection_ready(&selection) && !strcmp(a.id,selection.agent) &&
+                !strcmp(a.text+48,selection.id) && a.revision==selection.revision);
+            if (!current && carry.pending && !strcmp(a.text,carry.id)) {
+                ht_carry_close(&carry); pro_carry_route_clear();
+                COPY(selection.error,"Choose the text again."); change();
+            }
+            display_unlock();
+            if (!current) break;
+#endif
             cable_client_carry(a.text,a.id,a.text+48,(uint32_t)a.dy,a.revision,a.value!=0);
             break;
+        }
+#ifdef DEVICE_PRO_COMPANION
+        case A_CARRY_OPEN: {
+            display_lock();
+            bool same_owner=pro_carry_owned();
+            bool same_focus=(uint32_t)a.velocity==s.reader_focus_generation;
+            bool pending=s.carry_route.navigating && (uint32_t)a.dy==s.carry_route.serial &&
+                !strcmp(a.id,s.carry_route.recipient);
+            bool current=pending && !s.carry_route.sent && pro_carry_available() && same_focus && pro_carry_target_matches() &&
+                !s.loading && !s.voice_open && !s.pending_focus[0] && !s.pending_machine[0] &&
+                !s.carry_route.interrupted &&
+                (a.value ? (cable_client_supports(CABLE_FEATURE_VISIT) && visit.pending &&
+                    visit.op==HT_VISIT_OPEN && a.revision==visit.request && !strcmp(a.text,visit.id) &&
+                    !strcmp(a.id,visit.pending_agent)) : !s.carry_route.with_visit);
+            if (current) s.carry_route.sent=true;
+            else if (pending) {
+                if (a.value) ht_visit_reply(&visit,a.text,a.revision,false,
+                    same_owner && same_focus && visit.available,NULL);
+                s.carry_route.navigating=false;
+                if (pro_carry_available()) pro_carry_choose(); else view(HOME);
+                change();
+            }
+            display_unlock();
+            if (current) {
+                if (a.value) cable_client_visit(a.text,a.revision,"open",a.id);
+                else cable_client_send_open(a.id,NULL);
+            }
+            break;
+        }
+#endif
         case A_FORM_SEND: {
             static const char *ops[] = {"open", "state", "move", "activate", "back", "close"};
             if (a.value >= 0 && a.value < 6)
@@ -3888,6 +4061,18 @@ static void worker(void *unused)
         }
         case A_SELECT_SEND: {
             static const char *ops[] = {"begin", "step", "extend", "extend", "cancel", "match", "lines"};
+#ifdef DEVICE_PRO_COMPANION
+            display_lock();
+            bool current=a.value==HT_SELECT_CANCEL || (pro_selection_owned() && selection.pending &&
+                !strcmp(a.text,selection.id) && !strcmp(a.id,selection.agent) &&
+                (uint32_t)a.velocity==selection.request && a.revision==selection.revision);
+            if (!current && !strcmp(a.text,selection.id) && a.value!=HT_SELECT_CANCEL) {
+                selection.pending=false; selection.queued=0;
+                COPY(selection.error,"Choose the text again."); change();
+            }
+            display_unlock();
+            if (!current) break;
+#endif
             if (a.value >= 0 && a.value <= HT_SELECT_LINES)
                 cable_client_select_text(a.id, a.text, (uint32_t)a.velocity, a.revision,
                                          ops[a.value], a.dy, a.value == HT_SELECT_EXTEND);
@@ -3934,7 +4119,7 @@ static void worker(void *unused)
             if (s.connected && s.voice_open && s.voice_start_pending &&
                 a.revision == s.voice_generation) {
 #ifdef DEVICE_PRO_COMPANION
-                if (a.value == 3 && (!cable_client_supports(CABLE_FEATURE_DRAFT) || find(a.id) < 0 ||
+                if (a.value == 3 && (!pro_carry_available() || !cable_client_supports(CABLE_FEATURE_DRAFT) || find(a.id) < 0 ||
                     strcmp(a.id, s.carry_review.agent) || strcmp(a.text, s.carry_review.id) ||
                     !carry.active || strcmp(a.text, carry.id) || (int32_t)(ms() - carry.deadline) >= 0)) {
                     voice_close();
@@ -4562,6 +4747,9 @@ void habitat_tick(void)
         if (carry.error[0] && s.view==SELECTION) COPY(selection.error,carry.error);
         change();
     }
+#ifdef DEVICE_PRO_COMPANION
+    if (s.carry_route.choosing && !pro_carry_available()) view(HOME);
+#endif
     // A background read must not begin halfway through a person's tap/drag.
     // An already pending request still settles or times out normally.
     if (s.view == FORM && (!s.touch_down || form.pending) && ht_form_tick(&form, now)) change();
@@ -4572,6 +4760,9 @@ void habitat_tick(void)
         change();
     }
     if (ht_visit_tick(&visit, now)) {
+#ifdef DEVICE_PRO_COMPANION
+        s.carry_route.navigating=false;
+#endif
         s.pending_focus[0] = 0;
         COPY(s.title, "Visit ended");
         COPY(s.message, "The app did not answer. Try the alert again.");
@@ -4777,6 +4968,9 @@ void ui_set_connected(bool value)
         pro_busy_reset();
         pro_metrics_source(&s.metrics,NULL,false);
         pro_draft_recovery_disconnect(&s.draft_recovery);
+        pro_carry_route_clear();
+        ht_selection_close(&selection);
+        memset(&s.selection_owner,0,sizeof s.selection_owner);
 #endif
         input_cancel();
         s.voice_retry_until = 0;
@@ -4845,6 +5039,10 @@ bool ui_draft_source(const char *machine)
         pro_send_feedback_clear();
         pro_busy_reset();
         input_cancel();
+        if (s.carry_route.id[0]) ht_visit_close(&visit);
+        ht_carry_close(&carry); pro_carry_route_clear();
+        ht_selection_close(&selection);
+        memset(&s.selection_owner,0,sizeof s.selection_owner);
         if (draft.page.active) {
             ht_draft_detach(&draft);
             if (pro_carry_review_owns(&s.carry_review, &draft.page)) s.carry_review.detached = true;
@@ -5278,7 +5476,16 @@ void ui_focus_project(const char *id)
     if (!id || !*id || strnlen(id, ID_MAX) >= ID_MAX) return;
     display_lock();
 #ifdef DEVICE_PRO_COMPANION
+    uint32_t previous_focus=s.reader_focus_generation;
     pro_reader_focus(id);
+    bool carry_landing=false;
+    if (s.carry_route.navigating && previous_focus!=s.reader_focus_generation) {
+        if (s.carry_route.sent && pro_carry_available() && !strcmp(id,s.carry_route.recipient) &&
+            pro_carry_target_matches()) {
+            s.carry_route.focus_generation=s.reader_focus_generation;
+            carry_landing=!s.carry_route.with_visit;
+        } else s.carry_route.interrupted=true;
+    }
 #endif
     int i = find(id);
     if (i < 0) {
@@ -5297,6 +5504,9 @@ void ui_focus_project(const char *id)
         input_cancel();
     }
     s.active = i;
+#ifdef DEVICE_PRO_COMPANION
+    if (carry_landing) { s.carry_route.navigating=false; view(HOME); }
+#endif
     // Focus changes the main surface's recipient. Voice and confirmations keep their pinned targets.
     // A requested remote open lands only after the host has supplied that agent.
     if (opened && s.view == INBOX) view(HOME);
@@ -6286,6 +6496,9 @@ void ui_carry_state(const cJSON *p)
         !cJSON_IsNumber(rows) || rows->valuedouble!=rows->valueint ||
         !cJSON_IsNumber(ttl) || ttl->valuedouble!=ttl->valueint || ttl->valueint<1)) return;
     display_lock();
+#ifdef DEVICE_PRO_COMPANION
+    if (!pro_carry_owned()) { display_unlock(); return; }
+#endif
     if (ht_carry_reply(&carry,id->valuestring,(uint32_t)serial,ok,
             cJSON_IsString(source)?source->valuestring:NULL,
             cJSON_IsString(excerpt)?excerpt->valuestring:NULL,
@@ -6293,7 +6506,12 @@ void ui_carry_state(const cJSON *p)
             cJSON_IsString(error)?error->valuestring:NULL,ms())) {
         if (carry.active && s.view==SELECTION) {
             ht_selection_close(&selection);
+#ifdef DEVICE_PRO_COMPANION
+            COPY(s.carry_route.source,carry.source);
+            pro_carry_choose();
+#else
             dispatch((action_t){.kind=A_FIND});
+#endif
         } else if (s.view==SELECTION) COPY(selection.error,carry.error);
         ht_gesture_guard(&gesture,ms()); change();
     }
@@ -6635,10 +6853,23 @@ void ui_visit_state(const cJSON *p)
     if (ok && (visit.op==HT_VISIT_OPEN || latest) && strcmp(visit.pending_agent,agent->valuestring)) {
         display_unlock(); return;
     }
+#ifdef DEVICE_PRO_COMPANION
+    bool carry_visit=s.carry_route.navigating && s.carry_route.with_visit && visit.pending &&
+        !strcmp(id->valuestring,visit.id) && (uint32_t)serial==visit.request;
+    if (carry_visit && (!s.carry_route.sent || !pro_carry_available() ||
+        s.carry_route.interrupted || !pro_carry_target_matches())) {
+        ht_visit_reply(&visit,id->valuestring,(uint32_t)serial,false,false,NULL);
+        s.carry_route.navigating=false; view(HOME); change();
+        display_unlock(); return;
+    }
+#endif
     if (ht_visit_reply(&visit, id->valuestring, (uint32_t)serial,
             ok,
             cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(p, "active")),
             cJSON_IsString(label) ? label->valuestring : "")) {
+#ifdef DEVICE_PRO_COMPANION
+        if (carry_visit) s.carry_route.navigating=false;
+#endif
         s.pending_focus[0] = 0;
         if (ok) {
 #ifdef DEVICE_PRO_COMPANION

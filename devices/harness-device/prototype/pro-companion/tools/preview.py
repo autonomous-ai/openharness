@@ -28,7 +28,7 @@ from native_voice import voice_assets  # noqa: E402
 
 STATES = ("idle", "passed_task", "sent_goal", "sent_loop", "message_options", "notifications", "notifications_muted", "idle_paper", "working", "working_start", "working_59", "working_60", "working_long", "working_hour", "working_paper", "summary", "summary_paper", "mail", "needs_answer", "read_question_home", "unavailable_question_home", "pending_question_home", "listening",
           "voice_preparing", "voice_sending", "offline", "done", "asleep",
-          "carrying", "launcher", "companion", "daemons", "scenes", "updates", "question", "reader", "locked", "updating",
+          "carrying", "carry_recipient_home", "carry_return_home", "carry_expired_home", "launcher", "companion", "daemons", "scenes", "updates", "question", "reader", "locked", "updating",
           "input_shell", "input_offline", "input_link", "input_question", "input_roster", "input_carry_offline", "input_goal_busy", "input_loop_busy",
           "carry_listening", "carry_review", "carry_preview", "carry_rejected", "carry_offline", "carry_preview_offline",
           "carry_offline_long", "carry_offline_scrolled",
@@ -110,8 +110,8 @@ static bool audio_client_active(void) { return recording; }
 static bool display_is_asleep(void) { return false; }
 static bool cable_client_supports(uint32_t feature) { (void)feature; return true; }
 '''
-    for name in ("find", "active", "waiting", "working", "is_question", "notice_unread", "color",
-                 "pro_send_feedback_clear", "pro_send_feedback_matches", "pro_send_feedback_begin", "pro_send_feedback_text", "pro_work_local", "pro_work_visible", "pro_work_block_reason", "pro_work_available", "pro_work_capture_pin", "pro_work_capture_available", "pro_work_draft_available", "character_mood", "question_view", "settings_item", "settings_count",
+    for name in ("find", "active", "pro_reader_source", "pro_reader_owner", "pro_reader_matches", "pro_reader_notice_index", "pro_reader_openable", "pro_reader_latest", "waiting", "working", "is_question", "notice_unread", "color",
+                 "pro_send_feedback_clear", "pro_send_feedback_matches", "pro_send_feedback_begin", "pro_send_feedback_text", "pro_carry_owned", "pro_carry_available", "pro_work_local", "pro_work_visible", "pro_work_block_reason", "pro_work_available", "pro_work_capture_pin", "pro_work_capture_available", "pro_work_draft_available", "character_mood", "question_view", "settings_item", "settings_count",
                  "pro_speech_allowed", "pro_speech_visible", "pro_speech_emotion", "pro_busy_elapsed", "pro_surface_mood"):
         code += function(name, source)
     code += r'''
@@ -209,7 +209,14 @@ static void fixture(const char *name) {
     else if(!strcmp(name,"offline")){s.connected=false;}
     else if(!strcmp(name,"done")){s.pet_pose=3;s.notice_count=1;character.delivery.moving=true;}
     else if(!strcmp(name,"asleep")){s.nap=true;}
-    else if(!strcmp(name,"carrying")){carry.active=true;carry.rows=4;COPY(carry.source,"Research");COPY(carry.excerpt,"Keep the landscape quiet. Give the creature room to breathe, and let clear words lead whenever there is something to read.");}
+    else if(!strcmp(name,"carrying")||!strcmp(name,"carry_recipient_home")){
+        carry.active=true;carry.rows=3;carry.deadline=now+300000;COPY(carry.id,"carry-preview");
+        COPY(carry.source,"Design");COPY(carry.excerpt,"Keep the title short. Show the chosen pane. Leave room for the words.");
+        COPY(s.carry_route.id,carry.id);COPY(s.carry_route.host,"local");COPY(s.carry_route.source,carry.source);s.carry_route.generation=s.draft_recovery.generation;
+        if(!strcmp(name,"carry_recipient_home")){s.active=1;visit.available=true;COPY(visit.id,"visit-preview");COPY(visit.agent,"build");COPY(visit.label,"Your reading");}
+    }
+    else if(!strcmp(name,"carry_return_home")){visit.available=true;COPY(visit.id,"visit-preview");COPY(visit.agent,"design");COPY(visit.label,"Your reading");}
+    else if(!strcmp(name,"carry_expired_home")){COPY(carry.error,"Selected text expired. Choose it again.");}
     else if(!strncmp(name,"carry_",6)){
         carry=(ht_carry_t){.active=true,.rows=4,.id="carry-original",.source="Research",.excerpt="Keep the landscape quiet. Give the creature room to breathe, and let clear words lead whenever there is something to read."};
         pro_carry_review_begin(&s.carry_review,&carry,"design","Design");
@@ -393,7 +400,7 @@ def main():
             for state in ("idle","listening","done"):
                 target=temp/state
                 subprocess.run([str(executable),state,str(target),"24"],check=True,env=env)
-                frames=[Image.open(temp/f"{state}-{i:02d}.ppm").resize((540,540),Image.Resampling.LANCZOS) for i in range(24)]
+                frames=[Image.open(temp/f"{state}-{i:02d}.ppm").resize((540,540),getattr(Image, "Resampling", Image).LANCZOS) for i in range(24)]
                 frames[0].save(OUT/(state+".gif"),save_all=True,append_images=frames[1:],duration=120,loop=0,disposal=2)
 
     columns=4;rows=(len(states)+columns-1)//columns
@@ -402,7 +409,7 @@ def main():
     except OSError: font=ImageFont.load_default()
     for index,state in enumerate(states):
         x,y=(index%columns)*360,(index//columns)*396
-        sheet.paste(Image.open(OUT/(state+".png")).resize((360,360),Image.Resampling.LANCZOS),(x,y))
+        sheet.paste(Image.open(OUT/(state+".png")).resize((360,360),getattr(Image, "Resampling", Image).LANCZOS),(x,y))
         draw.text((x+12,y+368),state.replace("_"," "),font=font,fill="#263b34")
     sheet.save(OUT/"contact-sheet.png")
     inputs=[NATIVE/name for name in ("ui_habitat.c","pro_home.inc","pro_controls.inc","pro_work_intent.h","pro_carry_review.h","pro_draft_recovery.h","../../pro_recovery_bookmark.h","pro_metrics.h","pro_metrics.c","pro_canvas.c","pro_visual.c","terminal.c")]

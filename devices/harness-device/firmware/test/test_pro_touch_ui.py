@@ -178,11 +178,11 @@ static bool scroll_emit(ht_scroll_phase_t phase, int dy, int velocity, void *ctx
 static void dispatch(action_t action);
 static void view(view_t v);
 '''
-for name in ("copy", "find", "pane_memory", "pane_memory_apply", "notice_mark_read", "pro_reader_source", "pro_reader_owner", "pro_reader_matches", "pro_reader_notice_index", "pro_reader_openable", "pro_reader_latest", "pro_reader_focus", "pro_reader_copy", "pro_reader_begin", "pro_reader_back", "pro_send_feedback_clear", "pro_send_feedback_matches", "pro_send_feedback_begin", "pro_send_feedback_text", "pro_work_local", "pro_work_visible", "pro_work_block_reason", "pro_work_available", "pro_work_capture_pin", "pro_work_capture_available", "pro_work_draft_available", "pro_busy_reset", "ensure", "waiting", "is_question", "pro_speech_allowed", "pro_speech_visible", "pro_speech_emotion",
+for name in ("copy", "find", "pane_memory", "pane_memory_apply", "notice_mark_read", "pro_reader_source", "pro_reader_owner", "pro_reader_matches", "pro_reader_notice_index", "pro_reader_openable", "pro_reader_latest", "pro_reader_focus", "pro_carry_route_clear", "pro_carry_owned", "pro_carry_available", "pro_carry_target_matches", "pro_carry_choose", "pro_reader_copy", "pro_reader_begin", "pro_reader_back", "pro_send_feedback_clear", "pro_send_feedback_matches", "pro_send_feedback_begin", "pro_send_feedback_text", "pro_work_local", "pro_work_visible", "pro_work_block_reason", "pro_work_available", "pro_work_capture_pin", "pro_work_capture_available", "pro_work_draft_available", "pro_busy_reset", "ensure", "waiting", "is_question", "pro_speech_allowed", "pro_speech_visible", "pro_speech_emotion",
              "pro_speech_caption", "pro_speech_cancel", "ui_companion_speech_begin", "ui_companion_speech_clear",
              "pro_speech_tick", "pro_busy_elapsed", "pro_surface_mood", "status_wake_ms",
              "question_view", "hit_contains", "home_footer", "pro_written_control",
-             "settings_item", "settings_count", "tabs_move", "visit_emit", "make_action", "input_cancel", "view",
+             "settings_item", "settings_count", "tabs_move", "visit_emit", "pro_open_in_app", "make_action", "input_cancel", "view",
              "question_rows", "question_move", "pro_question_back", "draft_move",
              "pro_appearance_view", "pro_appearance_open", "pro_appearance_move", "pro_appearance_use",
              "workspace_index", "tabs_open", "workspace_failed", "pro_panes_of",
@@ -583,6 +583,39 @@ static void reader_latest_contact(void) {
     x=latest->rect.x+20;y=latest->rect.y+20;sample(true,x,y,2000);
     ui_focus_project("a");sample(false,x,y,2080);
     assert(visit.pending&&queued==1&&queued_action.value==HT_VISIT_LATEST);
+}
+static void carry_chooser_fixture(void) {
+    reset();pro_draft_recovery_source(&s.draft_recovery,"carry-host");pro_reader_focus("a");
+    carry.active=true;carry.deadline=now+300000;COPY(carry.id,"carry-touch");COPY(carry.source,"Design");
+    COPY(s.carry_route.id,carry.id);COPY(s.carry_route.host,s.draft_recovery.current_host);
+    s.carry_route.generation=s.draft_recovery.generation;
+    COPY(visit.id,"visit-touch");COPY(visit.agent,"a");visit.available=true;
+    pro_carry_choose();assert(s.view==AGENTS&&s.carry_route.choosing);
+    s.hit_count=0;hit(A_CARRY_TARGET,1,40,200,640,160);
+}
+static void carry_chooser_contacts(void) {
+    carry_chooser_fixture();tap(180,240,80);
+    assert(visit.pending&&queued_action.kind==A_CARRY_OPEN&&!strcmp(queued_action.id,"b"));
+    assert(!starts&&!switches&&!travel);
+    for(int cause=0;cause<7;cause++) {
+        carry_chooser_fixture();sample(true,180,240,2000);
+        assert(pressed_action.kind==A_CARRY_TARGET&&!strcmp(pressed_action.id,"b"));
+        if(cause==0)COPY(carry.id,"new-tray");
+        if(cause==1)carry.deadline=2001;
+        if(cause==2)COPY(s.agents[1].session,"new-session");
+        if(cause==3){ui_focus_project("unknown");ui_focus_project("a");}
+        if(cause==4)ui_set_connected(false);
+        if(cause==5)ui_draft_source("other-host");
+        if(cause==6){cable_tile_t tile={.x2=1000,.y2=1000};ui_tiles_replace(&tile,1,"moved");}
+        sample(false,180,240,2080);
+        assert(!visit.pending&&!starts&&!switches&&!travel);
+        // Disconnect/source reset may enqueue a cancel, never an open.
+        assert(!queued||queued_action.kind!=A_CARRY_OPEN);
+    }
+    carry_chooser_fixture();swipe(220,430,530,430);
+    assert(s.view==HOME&&carry.active&&visit.available&&!visit.pending&&!starts&&!queued);
+    carry_chooser_fixture();s.hit_count=0;hit(A_CARRY_TARGET,0,40,200,640,160);tap(180,240,80);
+    assert(s.view==HOME&&carry.active&&visit.available&&!visit.pending&&!queued&&!starts);
 }
 static void home_render_geometry(void) {
     reset(); render_actual(); assert(!drawn_compact);
@@ -1495,7 +1528,7 @@ static void question_back_immutable(void) {
 
 int main(int argc,char **argv) {
     const struct { const char *name; test_fn run; } tests[]={
-        {"reader_navigation_parity",reader_navigation_parity},{"reader_footer_scroll",reader_footer_scroll},{"reader_stale_contacts",reader_stale_contacts},{"reader_latest_contact",reader_latest_contact},
+        {"carry_chooser_contacts",carry_chooser_contacts},{"reader_navigation_parity",reader_navigation_parity},{"reader_footer_scroll",reader_footer_scroll},{"reader_stale_contacts",reader_stale_contacts},{"reader_latest_contact",reader_latest_contact},
         {"question_back_parity",question_back_parity},{"question_back_stale_contact",question_back_stale_contact},{"question_back_immutable",question_back_immutable},
         {"footer_send_feedback",footer_send_feedback},{"work_identity_callbacks",work_identity_callbacks},{"busy_observation",busy_observation},{"busy_connection_loss",busy_connection_loss},{"busy_precedence",busy_precedence},
         {"busy_tick_schedule",busy_tick_schedule},{"busy_render_boundaries",busy_render_boundaries},

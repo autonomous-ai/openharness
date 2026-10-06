@@ -113,7 +113,7 @@ static bool config_save_pro_recovery(const pro_recovery_bookmark_t *b) {
 }
 static bool config_clear_pro_recovery(void) {clear_calls++;if(fail_clear)return false;stored_present=false;return true;}
 '''
-for name in ("pro_reader_focus", "pro_send_feedback_clear", "pro_send_feedback_matches", "pro_send_feedback_begin", "pro_send_feedback_text", "pro_work_local", "pro_work_visible", "pro_work_draft_available", "pro_busy_reset", "ui_project_set_machine", "question_view", "question_rows", "voice_close", "draft_emit", "pro_draft_forget", "pro_draft_store_queue", "pro_draft_store_work", "pro_draft_restore", "make_action", "draft_move",
+for name in ("pro_reader_focus", "pro_carry_route_clear", "pro_send_feedback_clear", "pro_send_feedback_matches", "pro_send_feedback_begin", "pro_send_feedback_text", "pro_work_local", "pro_work_visible", "pro_work_draft_available", "pro_busy_reset", "ui_project_set_machine", "question_view", "question_rows", "voice_close", "draft_emit", "pro_draft_forget", "pro_draft_store_queue", "pro_draft_store_work", "pro_draft_restore", "make_action", "draft_move",
              "notice_sync_view", "pro_result_source_reset", "pro_notice_source", "ui_set_connected", "ui_draft_source", "draft_page", "ui_voice_draft", "ui_draft_state"):
     code += function(name)
 code += "static void dispatch(action_t a) { switch(a.kind) {\n"
@@ -463,7 +463,7 @@ with tempfile.TemporaryDirectory(prefix="harness-pro-draft-recovery-") as direct
         "-DHT_FACE_PX=720","-DDEVICE_PRO_COMPANION=1","-DHT_PANEL_NATIVE=1",
         "-I",str(NATIVE),"-I",str(JSON_DIR),str(build/"recovery.c"),str(JSON_DIR/"cJSON.c"),
         str(NATIVE/"../../cable_features.c"),str(NATIVE/"../../cable_machines.c"),str(NATIVE/"pro_canvas.c"),str(FONTS),str(NATIVE/"terminal.c"),str(NATIVE/"fonts.c"),
-        *[str(NATIVE/(name+".c")) for name in ("draft","carry","visit","workspace","form","gestures")],
+        *[str(NATIVE/(name+".c")) for name in ("draft","carry","visit","workspace","form","selection","gestures")],
         "-o",str(build/"recovery")],check=True)
     destination=os.environ.get("HABITAT_PRO_PREVIEW_DIR","")
     if destination:Path(destination).mkdir(parents=True,exist_ok=True)

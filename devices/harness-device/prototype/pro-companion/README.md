@@ -213,8 +213,14 @@ sound and companion preferences. Compatible hosts also expose:
 - **Find Harness** and **New Harness**, controlling the desktop's actual semantic
   picker/form. Voice filters names; a separate action confirms the choice.
 - **Select text** and spoken **Find in output**, with line/range selection.
-- **Carry text** requires a draft-capable host and always reviews speech before
-  Send. The recipient, source and passage preview stay pinned through edits.
+- **Carry text** opens **Choose a pane** for known panes in the current app tab
+  (up to 16), using the same map or list. Choosing the current pane stays local;
+  another pane uses the host’s visit and preserves Return where supported. Back
+  keeps the tray without moving app focus. Ordinary Find/Tabs navigation remains
+  separate and does not promise to preserve that Return.
+  A separate voice tap starts the instruction; a draft-capable host is required,
+  and speech always enters review before Send. The recipient, source and passage
+  preview stay pinned through edits.
   **Passage preview** opens a temporary reading sheet; the host owns the complete
   selected passage (up to 4096 bytes / 16 lines), while this device shows its
   shortened excerpt. The five-minute expiry applies only to an unused tray;

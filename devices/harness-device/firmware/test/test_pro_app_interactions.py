@@ -143,13 +143,14 @@ static void dispatch(action_t a);
 static void notice_mark_read(cable_notif_t *n);
 '''
 code += typedef("pro_notice_plan_t", source=SOURCE)
-for name in ("pro_reader_source", "pro_reader_owner", "pro_reader_matches", "pro_reader_notice_index", "pro_reader_openable", "pro_reader_latest", "pro_reader_focus", "pro_reader_copy", "pro_reader_begin", "pro_reader_back", "pro_send_feedback_clear", "pro_work_local", "pro_work_visible", "pro_work_block_reason", "pro_work_capture_pin", "pro_busy_reset", "question_view", "waiting", "recap_preview", "notice_was_read", "notice_forget_read", "notice_flush_reads", "notice_mark_read", "notice_open", "notice_sync_view", "notice_selection", "notice_restore_selection", "notice_remove", "pro_notice_pinned", "notice_add", "pro_notice_plan_source", "pro_notice_plan_card", "pro_notice_replace", "ui_notif_replace",
+for name in ("pro_reader_source", "pro_reader_owner", "pro_reader_matches", "pro_reader_notice_index", "pro_reader_openable", "pro_reader_latest", "pro_reader_focus", "pro_selection_owned", "pro_carry_route_clear", "pro_carry_owned", "pro_carry_available", "pro_carry_target_matches", "pro_carry_choose", "pro_reader_copy", "pro_reader_begin", "pro_reader_back", "pro_send_feedback_clear", "pro_work_local", "pro_work_visible", "pro_work_block_reason", "pro_work_capture_pin", "pro_busy_reset", "question_view", "waiting", "recap_preview", "notice_was_read", "notice_forget_read", "notice_flush_reads", "notice_mark_read", "notice_open", "notice_sync_view", "notice_selection", "notice_restore_selection", "notice_remove", "pro_notice_pinned", "notice_add", "pro_notice_plan_source", "pro_notice_plan_card", "pro_notice_replace", "ui_notif_replace",
              "visit_emit", "selection_emit", "carry_emit", "make_action", "read_question", "open_question",
              "pro_open_in_app", "question_answer", "question_rows", "question_move", "pro_question_back", "send_answer", "question_load", "pro_question_signature", "ui_question_show",
              "ui_question_state", "ui_answer_receipt", "ui_question_close", "pro_result_source_reset", "pro_notice_source", "ui_set_connected",
              "ui_focus_project", "ui_notif_read", "ui_visit_state", "ui_voice_question"):
     code += function(name)
 code += "static void dispatch(action_t a) { if(s.locked)return;switch(a.kind) {\n"
+code += cases("A_CARRY_CHOOSE", "A_WORK_INTENT")
 code += cases("A_READER", "A_TABS")
 code += cases("A_DESKTOP", "A_LOCK")
 code += cases("A_VOICE", "A_VOICE_STOP")

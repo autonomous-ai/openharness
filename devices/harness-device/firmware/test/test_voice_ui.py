@@ -74,6 +74,9 @@ static struct {
     cable_notif_t notice[2]; int notice_count;
     struct {char draft[48],agent[48],host[48],machine[48],session[80];uint32_t request,until;uint8_t mode;bool accepted;} send_feedback;
     pro_metrics_t metrics; pro_carry_review_t carry_review; pro_draft_recovery_t draft_recovery;
+    struct { char id[48],host[48]; uint32_t generation,focus_generation; } selection_owner;
+    struct { char id[48],host[48],source[96],recipient[48],machine[48],session[80],engine[12];
+        uint32_t generation,serial,focus_generation; bool choosing,navigating,sent,with_visit,interrupted; } carry_route;
     struct { bool valid, supported, loading, pending, uncertain; uint32_t revision, deadline; int index; char error[120],speech_error[96],agent[64],name[64],token[48]; struct { bool can_text; } item[4]; } q;
     agent_t agents[1];
     struct { bool live_summary; } memory[PANE_MEMORY_MAX];
@@ -144,7 +147,7 @@ void open_question(void) { assert(false); }
 bool queue(action_t action) { if (queue_full) return false; queued = action; return true; }
 '''
 harness += '#ifdef DEVICE_PRO_COMPANION\n'
-for name in ('pro_reader_focus','pro_send_feedback_clear','pro_send_feedback_matches','pro_send_feedback_begin','pro_send_feedback_text','pro_work_local','pro_work_visible','pro_work_block_reason','pro_work_available','pro_work_capture_pin','pro_work_capture_available','pro_work_draft_available'):
+for name in ('pro_reader_focus','pro_carry_route_clear','pro_carry_owned','pro_carry_available','pro_send_feedback_clear','pro_send_feedback_matches','pro_send_feedback_begin','pro_send_feedback_text','pro_work_local','pro_work_visible','pro_work_block_reason','pro_work_available','pro_work_capture_pin','pro_work_capture_available','pro_work_draft_available'):
     harness += function(name)
 harness += '#endif\n'
 harness += function('ui_project_set_machine')
@@ -321,7 +324,7 @@ static void test_pro_instructions(void) {
 }
 static void carry_setup(void) {
     reset(); carry.active=true; carry.rows=3; carry.deadline=now+300000;
-    COPY(carry.id,"carry-test"); COPY(carry.source,"Research"); COPY(carry.excerpt,"Keep the original API.");
+    COPY(carry.id,"carry-test"); COPY(s.carry_route.id,carry.id); COPY(s.carry_route.host,s.draft_recovery.current_host); s.carry_route.generation=s.draft_recovery.generation; COPY(carry.source,"Research"); COPY(carry.excerpt,"Keep the original API.");
 }
 static void carry_start(void) {
     dispatch((action_t){.kind=A_VOICE,.value=3,.id="agent",.text="carry-test"});
@@ -434,7 +437,7 @@ int main(void) {
     ui_voice_error("Transcription failed"); assert(!s.voice_open && s.view==QUESTION && s.q.speech_error[0]);
     dispatch(question_voice); work(queued); discard(); finish_audio();
     assert(!s.voice_open && s.view==QUESTION && starts==2); // Discard goes back to the question
-    reset(); carry.active=true; strcpy(carry.id,"carry-test"); carry.deadline=now+100;
+    reset(); carry.active=true; strcpy(carry.id,"carry-test"); COPY(s.carry_route.id,carry.id); COPY(s.carry_route.host,s.draft_recovery.current_host); s.carry_route.generation=s.draft_recovery.generation; carry.deadline=now+100;
     dispatch((action_t){.kind=A_VOICE,.value=3,.id="agent",.text="wrong"});
     assert(!s.voice_open && !starts);
     dispatch((action_t){.kind=A_VOICE,.value=3,.id="agent",.text="carry-test"});
@@ -444,7 +447,7 @@ int main(void) {
     habitat_tick(); assert(!carry.active && carry.error[0]);
     speak(); assert(!s.voice_open && starts==1); // expiry cannot fall through to bare voice
     ht_carry_close(&carry); begin(); assert(recording && !s.voice_carry);
-    reset(); carry.active=true; strcpy(carry.id,"carry-test"); carry.deadline=now+300000;
+    reset(); carry.active=true; strcpy(carry.id,"carry-test"); COPY(s.carry_route.id,carry.id); COPY(s.carry_route.host,s.draft_recovery.current_host); s.carry_route.generation=s.draft_recovery.generation; carry.deadline=now+300000;
     dispatch((action_t){.kind=A_VOICE,.value=3,.id="agent",.text="carry-test"});
     work(queued); done(); finish_audio(); ui_voice_routed(true,false,"","agent","Agent",1);
 #ifdef DEVICE_PRO_COMPANION

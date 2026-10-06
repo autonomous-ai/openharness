@@ -96,7 +96,7 @@ static uint16_t color(unsigned rgb) { return ht_rgb(rgb); }
 #define ERROR color(HT_THEME_ERROR)
 #define SEL color(HT_THEME_SELECTION)
 '''
-for name in ("pro_reader_source", "pro_reader_owner", "pro_reader_matches", "pro_reader_notice_index", "pro_reader_openable", "pro_reader_latest", "pro_work_local", "pro_work_visible", "pro_work_block_reason", "pro_work_available", "pro_work_draft_available"):
+for name in ("pro_reader_source", "pro_reader_owner", "pro_reader_matches", "pro_reader_notice_index", "pro_reader_openable", "pro_reader_latest", "pro_carry_owned", "pro_carry_available", "pro_work_local", "pro_work_visible", "pro_work_block_reason", "pro_work_available", "pro_work_draft_available"):
     code += function(name)
 code += function("settings_item") + function("settings_count")
 code += '#include "pro_controls.inc"\n'

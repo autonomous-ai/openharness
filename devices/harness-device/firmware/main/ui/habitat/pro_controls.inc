@@ -372,9 +372,10 @@ static void pro_agent_map(ht_scene_t *f)
         if (r.w <= 0 || r.h <= 0) continue;
         int ai = find(tile->agent_id);
         const agent_t *a = ai >= 0 ? &s.agents[ai] : NULL;
-        bool enabled = s.connected && pro_map_focusable(r, ai) &&
+        bool enabled = s.connected && (!s.carry_route.choosing || pro_carry_available()) && pro_map_focusable(r, ai) &&
                        s.hit_count < (int)(sizeof s.hits / sizeof s.hits[0]) - 2;
-        int hit = enabled ? pro_hit(r.x, r.y, r.w, r.h, A_AGENT, ai, true) : -1;
+        int hit = enabled ? pro_hit(r.x, r.y, r.w, r.h,
+            s.carry_route.choosing ? A_CARRY_TARGET : A_AGENT, ai, true) : -1;
         bool focused = a && ai == s.active;
         uint16_t fill = !a ? color(0xe9e9e2) : hit >= 0 && hit == s.pressed ? SEL : color(0xfcfbf4);
         bool ring = focused && !outlined && r.w > 8 && r.h > 8;
@@ -397,6 +398,11 @@ static void pro_agent_map(ht_scene_t *f)
                         &ht_pro_24, is_question(a->id) ? ACCENT : DIM, PRO_TR(status));
         }
     }
+    if (s.carry_route.choosing) {
+        char source[128]; snprintf(source,sizeof source,"From %s",s.carry_route.source);
+        ht_pro_text(f,48,680,624,&ht_pro_24,DIM,source);
+        return;
+    }
     pro_control(f, 32, 606, 304, 68, PRO_TR("Tabs"), A_TABS, 0, s.connected);
     if (cable_client_supports(CABLE_FEATURE_FORM))
         pro_control(f, 384, 606, 304, 68, PRO_TR("Find"), A_FIND, 0, s.connected && !s.loading);
@@ -409,8 +415,8 @@ static void pro_agents(ht_scene_t *f)
     // chooses the map, including a crowded but still truthful overview.
     bool list = !ready || s.pro_agent_layout == 1 || (s.pro_agent_layout == 0 && pro_map_prefers_list());
     pro_control(f, 28, 28, 136, 64, PRO_TR("Back"), A_HOME, 0, true);
-    const char *title = PRO_TR("Panes");
-    for (int i = 0; i < s.tab_count; i++)
+    const char *title = s.carry_route.choosing ? "Choose a pane" : PRO_TR("Panes");
+    for (int i = 0; !s.carry_route.choosing && i < s.tab_count; i++)
         if (!strcmp(s.tabs[i].id, s.selected_tab)) { title = s.tabs[i].name; break; }
     const ht_pro_font_t *font = ht_pro_width(&ht_pro_42, title) <= 332 ? &ht_pro_42 : &ht_pro_32;
     ht_pro_text(f, 188, 39, 332, font, FG, title);
@@ -423,8 +429,10 @@ static void pro_agents(ht_scene_t *f)
     pro_clamp_list(s.count, 4);
     if (!s.count) {
         ht_pro_center(f, 258, &ht_pro_42, FG, s.loading ? PRO_TR("Finding your panes...") : PRO_TR("A place for your next idea."));
-        ht_pro_center(f, 322, &ht_pro_24, DIM, PRO_TR("Choose a tab to get started."));
-        pro_control(f, 216, 424, 288, 76, PRO_TR("Choose a tab"), A_TABS, 0, s.connected);
+        ht_pro_center(f, 322, &ht_pro_24, DIM, s.carry_route.choosing ?
+            "No panes available here." : PRO_TR("Choose a tab to get started."));
+        if (!s.carry_route.choosing)
+            pro_control(f, 216, 424, 288, 76, PRO_TR("Choose a tab"), A_TABS, 0, s.connected);
         return;
     }
     for (int row = 0; row < 4 && s.offset + row < s.count; row++) {
@@ -436,10 +444,15 @@ static void pro_agents(ht_scene_t *f)
         snprintf(identity, sizeof identity, "%s%s%s", engine, engine[0] && a->machine[0] ? "  ·  " : "", a->machine);
         const char *detail = identity[0] ? identity : is_question(a->id) ? PRO_TR("Needs your answer") :
             a->busy ? PRO_TR("Working") : a->recap_ready ? PRO_TR("A result is ready") : PRO_TR("Ready when you are");
-        pro_row(f, 146 + row * 108, a->name, detail, A_AGENT, i, s.connected, i == s.active);
+        pro_row(f, 146 + row * 108, a->name, detail,
+                s.carry_route.choosing ? A_CARRY_TARGET : A_AGENT, i,
+                s.connected && (!s.carry_route.choosing || pro_carry_available()), i == s.active);
     }
     pro_pager(f, s.count, 4);
-    if (!ready && s.count) pro_note(f, PRO_TR("The layout is updating."));
+    if (s.carry_route.choosing) {
+        char source[128]; snprintf(source,sizeof source,"From %s",s.carry_route.source);
+        ht_pro_text(f,48,680,624,&ht_pro_24,DIM,source);
+    } else if (!ready && s.count) pro_note(f, PRO_TR("The layout is updating."));
 }
 
 static void pro_tabs(ht_scene_t *f)
