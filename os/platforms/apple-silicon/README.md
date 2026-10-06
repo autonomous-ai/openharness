@@ -5,8 +5,8 @@ KIWI description with a separately verified Harness session RPM. It includes
 hn, OpenCode with upstream defaults, terminal panes and the optional Chromium
 browser. It selects no GNOME or KDE desktop profile.
 
-This is image construction work, **not an installable Harness release**. Encryption,
-Fedora base-system updates/recovery and physical Apple hardware acceptance remain
+This is private installation work, **not an installable Harness release**. Installer
+media/UI, Fedora base-system updates/recovery and physical Apple hardware acceptance remain
 required. The image contains no pre-created user or known login password. Never
 flash this raw disk over a Mac's disk or use the PC whole-disk installer on Apple
 Silicon. No public installer metadata or download feed is generated.
@@ -178,7 +178,51 @@ It compares every copied tree, checks the exact frozen runtime hashes and unchan
 LUKS header, then verifies that a completed retry preserves a new project. Its
 source image is attached read-only and checked again afterwards.
 
-This remains a private construction stage. Boot configuration, account handoff,
-installer UI/media and physical Apple acceptance are still required before this
-is a bootable Harness installation. The native test uses a public fixture password;
-its resulting disk must never be released.
+This remains a private construction stage. `startup.py` performs the subsequent
+boot configuration and account handoff; storage copying alone does not make the
+target bootable. The native test uses a public fixture password; its resulting
+disk must never be released.
+
+## Private boot and account enrollment
+
+`startup.py` follows a completed `storage.py` copy. It rechecks the verified source,
+firmware-owned target, filesystem identities and frozen runtime before configuring
+the new root, home, boot and EFI mounts. It uses a consistent `harness-root` mapping
+in crypttab and the kernel command line, then regenerates Fedora's boot entries
+and initramfs with encryption and Asahi modules.
+
+The chosen installation password also provisions `me@harness`, using the image's
+existing first-boot helper and Fedora account tools. This runs in an offline chroot
+with private runtime mounts; it cannot contact the installer's systemd or D-Bus.
+Normal account, login-policy and rollback checks still apply. Root remains locked,
+and the installed system does not ask for a second account password at first boot.
+No frozen RPM or first-boot helper file is changed.
+
+A durable EFI receipt separates boot preparation, account enrollment and activation.
+Retry resumes those stages, verifies completed files and never resets the account
+or recopies user work. New ARM EFI files are installed only after the account is
+ready; the fallback loader is written last. Foreign EFI files stop installation,
+and a missing or changed completed loader cannot be reported as success. Existing
+m1n1, vendor firmware and protected partitions remain untouched.
+
+```sh
+python3 os/tests/asahi_startup_vm.py \
+  --image /path/to/harness-asahi-private.raw --sha256 IMAGE_SHA256 \
+  --image-source FULL_IMAGE_COMMIT \
+  --fixture /path/to/verified-arm-fixture --fixture-source FULL_FIXTURE_COMMIT \
+  --output os/test-results/asahi-startup
+```
+
+The native test creates a fresh encrypted installation from the actual image,
+interrupts after boot preparation and account enrollment, reboots offline between
+stages, and retries the completed installation. It then uses UEFI and graphical
+keyboard input to reject a wrong disk password, unlock with the chosen password,
+and reach OpenCode plus two terminals without an account wizard. A second boot
+must preserve the account and a project, with enforcing SELinux and no failed
+services. The observer adds only QEMU console and keyboard configuration.
+
+This does not validate Apple's boot policy, m1n1 handoff, physical hardware or
+recovery from arbitrary power loss. The existing Apple boot chain still needs its
+platform integration and hardware acceptance. These modules are not yet packaged
+into installer media or connected to a user-facing installation screen. Never
+publish the test disk, which contains a known fixture password.
