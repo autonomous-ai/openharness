@@ -51,7 +51,8 @@ def main():
     folder.mkdir(parents=True, exist_ok=False)
     (folder / 'image-manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
     root = Path(__file__).resolve().parents[1]
-    candidates = {'hardware': root / 'hardware.py', 'installer': root / 'installer.py'}
+    candidates = {'hardware': root / 'hardware.py', 'installer': root / 'installer.py',
+                  'boot_profile': root / 'boot_profile.py'}
     scripts = ['platform_preflight_vm.py', 'platform_preflight_guest.py', 'vm.py',
                'footprint_vm.py', 'hardware_install_vm.py', 'session_vm.py']
     receipt = dict(status='running', started_at=time.time(), image_source_commit=manifest['source_commit'],
@@ -82,7 +83,7 @@ def main():
         vm.command('test ! -e /mnt/harness-os && test "$(id -u me)" = 1000')
         receipt['original_image_files'] = {}
         for name, source in candidates.items():
-            destination = '/usr/lib/harness-os/' + ('install.py' if name == 'installer' else 'hardware.py')
+            destination = '/usr/lib/harness-os/' + ('install.py' if name == 'installer' else name + '.py')
             receipt['original_image_files'][name] = hashlib.sha256(vm.read_file(destination)).hexdigest()
             copy_file(vm, source.read_bytes(), destination)
             actual = hashlib.sha256(vm.read_file(destination)).hexdigest()

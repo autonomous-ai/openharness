@@ -80,6 +80,10 @@ def main():
                         '--candidate-sha256', candidate['sha256']]
         if args.candidate_installer:
             candidate = receipt['candidate_installer']
+            helper = args.candidate_installer.with_name('boot_profile.py')
+            receipt['candidate_boot_profile'] = candidate_record(helper)
+            copy_file(vm, helper.read_bytes(), '/usr/lib/harness-os/boot_profile.py')
+            assert hashlib.sha256(vm.read_file('/usr/lib/harness-os/boot_profile.py')).hexdigest() == receipt['candidate_boot_profile']['sha256']
             copy_file(vm, args.candidate_installer.read_bytes(), '/run/installer-candidate.py')
             command += ['--candidate-installer', '/run/installer-candidate.py',
                         '--installer-sha256', candidate['sha256']]
