@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shlex
 import subprocess
 import time
@@ -75,6 +76,9 @@ def main():
         assert before['inventory']['boot_id'] == vm.read_file('/proc/sys/kernel/random/boot_id').decode().strip()
         (folder / 'first-check.json').write_text(json.dumps(before, indent=2) + '\n')
         check_graphical_keyboard(vm, 'gpu-health-keyboard')
+        vm.command('hn display-message -p "#{pane_id}" > /tmp/gpu-original-pane')
+        original_pane = vm.read_file('/tmp/gpu-original-pane').decode().strip()
+        assert re.fullmatch(r'%\d+', original_pane), 'Expected the existing shell pane'
         # The reference client restores terminal shells after a cold boot; it
         # does not replay an arbitrary prior foreground command. Start a real
         # bundled agent explicitly before asserting that checks preserve it.
@@ -108,6 +112,9 @@ def main():
         (folder / 'notification.log').write_text(output)
         assert 'GPU needs attention' in output
         vm.command('pgrep -x opencode | diff /tmp/gpu-agent-pids - && systemctl --user show harness-daemon -p MainPID --value | diff /tmp/gpu-daemon-pid -')
+        # The shared keyboard fixture waits for a visible shell prompt. OpenCode
+        # is now active in its own tab, so select the retained shell first.
+        vm.command('hn select-window -t ' + original_pane + ' && hn select-pane -t ' + original_pane)
         check_graphical_keyboard(vm, 'gpu-health-after-check')
         record['checks'].append('Packaged timer cold-boots, skips absent hardware quickly, caches within the boot, exposes a fresh JSON report, and routes a fixture failure without replacing the agent or daemon.')
         auth()
