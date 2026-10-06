@@ -9,9 +9,9 @@ on:
         default: '37222390225'
         required: true
       probe:
-        description: 'Laptop controls, Apple boot modules, install refusal or updater pane ownership'
+        description: 'Laptop controls, Apple/T2 boot modules, install refusal or updater pane ownership'
         type: choice
-        options: [laptop-input, apple-boot, install-preflight, update-pane, update-context]
+        options: [laptop-input, apple-boot, t2-boot, install-preflight, update-pane, update-context]
         default: laptop-input
         required: true
   push:
@@ -42,7 +42,9 @@ jobs:
         env:
           PROBE: ${{ inputs.probe }}
         run: |
-          if [[ "$PROBE" == update-pane || "$PROBE" == update-context ]]; then
+          if [[ "$PROBE" == t2-boot ]]; then
+            python3 -m py_compile os/tests/t2_boot_vm.py os/tools/prepare-t2-kernel.py
+          elif [[ "$PROBE" == update-pane || "$PROBE" == update-context ]]; then
             python3 -m py_compile os/tests/update_pane_vm.py os/tests/update_pane_guest.py os/tests/update_context_vm.py os/live_update.py os/root/usr/lib/harness-os/open-updates
           elif [[ "$PROBE" == install-preflight ]]; then
             PYTHONPATH=os/tests python3 -m unittest test_hardware test_installer
@@ -53,8 +55,26 @@ jobs:
           fi
           go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/os-input.yml
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils ovmf python3-pil tesseract-ocr
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils ovmf python3-pil tesseract-ocr zstd
           sudo chmod a+rw /dev/kvm
+      - name: Prepare the pinned T2 kernel and check encrypted cold boot
+        if: ${{ inputs.probe == 't2-boot' }}
+        run: |
+          python3 -m unittest discover -s os/tests -p 'test_t2_kernel.py' -v
+          python3 - <<'PY'
+          import json, subprocess
+          from pathlib import Path
+          lock = json.loads(Path('os/platforms/apple-t2/kernel.json').read_text())
+          folder = Path('os/work/t2-inputs')
+          folder.mkdir(parents=True, exist_ok=False)
+          package = lock['package']
+          subprocess.run(['curl', '--fail', '--location', '--proto', '=https', '--proto-redir', '=https',
+                          '--max-time', '180', package['url'], '-o', str(folder / package['filename'])], check=True)
+          PY
+          python3 os/tools/prepare-t2-kernel.py \
+            --package os/work/t2-inputs/*.pkg.tar.zst --output os/work/t2-kernel-bundle
+          python3 os/tests/t2_boot_vm.py --iso os/dist/*.iso \
+            --bundle os/work/t2-kernel-bundle --output os/test-results/t2-boot
       - name: Check actual media-key input on USB and installed sessions
         if: ${{ inputs.probe == 'laptop-input' || !inputs.probe }}
         run: python3 os/tests/input_vm.py --iso os/dist/*.iso
@@ -78,6 +98,7 @@ jobs:
           path: |
             os/test-results/input/
             os/test-results/apple-boot/
+            os/test-results/t2-boot/
             os/test-results/install-preflight/
             os/test-results/update-pane/
             os/test-results/update-context/
@@ -85,6 +106,8 @@ jobs:
             !os/test-results/input/OVMF_VARS.fd
             !os/test-results/apple-boot/*.qcow2
             !os/test-results/apple-boot/OVMF_VARS.fd
+            !os/test-results/t2-boot/*.qcow2
+            !os/test-results/t2-boot/OVMF_VARS.fd
             !os/test-results/install-preflight/*.qcow2
             !os/test-results/install-preflight/OVMF_VARS.fd
             !os/test-results/update-pane/*.qcow2
