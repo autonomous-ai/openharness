@@ -106,7 +106,12 @@ export const userService = {
         ...(existing.email !== em ? { email: em } : {}),
         ...(input.name && existing.name !== input.name ? { name: input.name } : {}),
         ...(existing.role !== role ? { role } : {}),
-        ...(input.autonomousEnv === 'prod' && existing.externalId !== externalId ? { externalId } : {}),
+        // A new production subject on this row makes its stored Google subject (lib/googleSubject.ts)
+        // somebody else's answer: forget it, so the account is unchecked until a live read of THIS
+        // customer's profile — never answered for a QR-signed computer from the previous customer's.
+        ...(input.autonomousEnv === 'prod' && existing.externalId !== externalId
+          ? { externalId, googleSub: null, googleSubCheckedAt: null }
+          : {}),
         ...(input.autonomousEnv === 'stag' && existing.stagExternalId !== externalId
           ? { stagExternalId: externalId }
           : {}),
@@ -196,10 +201,26 @@ export const userService = {
 
   /**
    * Record what a live read of the Autonomous profile said about the account's Google subject — a
-   * subject, or null for "none". Every successful live read overwrites, including to none.
+   * subject, or null for "none". Every successful live read overwrites, including to none — unless a
+   * read that STARTED later has already been recorded: `readAt` is when this one began, so a slow read
+   * never replaces a fresher answer. False when it was not recorded.
+   *
+   * ⚠️ `googleSubCheckedAt: null` alone does NOT match a row written before the field existed — on
+   * MongoDB absent is not null (the trap `routes/grid.ts` documents). `isSet: false` covers those.
    */
-  async recordGoogleSubject(userId: string, googleSub: string | null, checkedAt: Date): Promise<void> {
-    await prisma.user.update({ where: { id: userId }, data: { googleSub, googleSubCheckedAt: checkedAt } })
+  async recordGoogleSubject(userId: string, googleSub: string | null, readAt: Date): Promise<boolean> {
+    const { count } = await prisma.user.updateMany({
+      where: {
+        id: userId,
+        OR: [
+          { googleSubCheckedAt: null },
+          { googleSubCheckedAt: { isSet: false } },
+          { googleSubCheckedAt: { lt: readAt } },
+        ],
+      },
+      data: { googleSub, googleSubCheckedAt: readAt },
+    })
+    return count === 1
   },
 
   get(id: string): Promise<User | null> {

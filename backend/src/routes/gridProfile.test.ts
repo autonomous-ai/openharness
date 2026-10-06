@@ -62,6 +62,22 @@ const fakes = vi.hoisted(() => {
       Object.assign(row, data)
       return { ...row }
     }),
+    // MongoDB's reading of the one filter the Google subject write uses: `field: null` matches a null
+    // and NOT an absent field; `{ isSet: false }` matches only an absent one; `{ lt }` a smaller date.
+    updateMany: vi.fn(async ({ where, data }: { where: { id: string; OR: Array<Record<string, unknown>> }; data: Record<string, unknown> }) => {
+      const row = users.get(where.id)
+      const holds = (cond: Record<string, unknown>) => Object.entries(cond).every(([key, want]) => {
+        const has = key in row! && row![key] !== undefined
+        if (want === null) return has && row![key] === null
+        const op = want as { isSet?: boolean; lt?: Date }
+        if (op.isSet === false) return !has
+        if (op.lt) return row![key] instanceof Date && (row![key] as Date) < op.lt
+        return row![key] === want
+      })
+      if (!row || !where.OR.some(holds)) return { count: 0 }
+      Object.assign(row, data)
+      return { count: 1 }
+    }),
   }
   const harnessSession = {
     create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => {
@@ -87,7 +103,10 @@ vi.mock('../lib/clientGeo.js', async (importOriginal) => ({
 
 import { clearSsoProfileCache } from '../lib/ssoAuth.js'
 import { answerQrSignIn, claimQrSignIn, redeemHandoff, startHandoff, startQrSignIn } from '../lib/harnessSession.js'
-import { GOOGLE_SUBJECT_RECHECK_MS } from '../lib/googleSubject.js'
+import {
+  FILL_RETRY_AFTER_MS, GOOGLE_SUBJECT_RECHECK_MS, recordLiveProfile, resetGoogleSubjectFill,
+} from '../lib/googleSubject.js'
+import { GRID_PROFILE_LIVE_READS_PER_MINUTE, resetGridProfileLimits } from '../lib/gridProfile.js'
 import { userService } from '../services/UserService.js'
 import { registerAuthMiddleware } from '../middlewares/authMiddleware.js'
 import { errorHandler } from '../middlewares/errorHandler.js'
@@ -180,6 +199,8 @@ describe('GET /api/grid/profile — who holds a Harness sign-in token, in the Au
     fakes.users.clear()
     fakes.stampUserCountry.mockClear()
     clearSsoProfileCache()
+    resetGoogleSubjectFill()
+    resetGridProfileLimits()
     logs = []
     for (const level of ['log', 'warn', 'error', 'debug', 'info'] as const) {
       vi.spyOn(console, level).mockImplementation((...args: unknown[]) => { logs.push(args.map(String).join(' ')) })
@@ -195,6 +216,7 @@ describe('GET /api/grid/profile — who holds a Harness sign-in token, in the Au
 
   afterEach(async () => {
     await app.close()
+    vi.useRealTimers()
     vi.unstubAllGlobals()
     vi.restoreAllMocks()
   })
@@ -262,6 +284,16 @@ describe('GET /api/grid/profile — who holds a Harness sign-in token, in the Au
       expect(autonomous.profileReads()).toBe(1)
     })
 
+    it('reads once for concurrent requests of one account', async () => {
+      seedUser()
+      const autonomous = stubAutonomous(googleProfile())
+
+      await Promise.all(['n1', 'n2', 'n3', 'n4', 'n5'].map((n) => get('/api/anything', autonomousToken('x', n))))
+      await settle()
+
+      expect(autonomous.profileReads()).toBe(1)
+    })
+
     it('reads the profile at most once in 7 days outside the profile route', async () => {
       seedUser()
       const autonomous = stubAutonomous(googleProfile())
@@ -311,7 +343,8 @@ describe('GET /api/grid/profile — who holds a Harness sign-in token, in the Au
       expect(res.statusCode).toBe(200)
     })
 
-    it('never fails the request, and leaves the account unchecked so the next request retries', async () => {
+    it('never fails the request, and leaves the account unchecked so a later request retries', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] })
       seedUser()
       const autonomous = stubAutonomous(() => json(502, { message: 'bad gateway' }))
 
@@ -319,7 +352,13 @@ describe('GET /api/grid/profile — who holds a Harness sign-in token, in the Au
       await settle()
       expect(fakes.users.get('known')!.googleSubCheckedAt).toBeUndefined()
 
+      // Not on every request: a read that keeps failing would be a storefront read per request.
       expect((await get('/api/anything', autonomousToken('x', 'n2'))).statusCode).toBe(200)
+      await settle()
+      expect(autonomous.profileReads()).toBe(1)
+
+      vi.setSystemTime(Date.now() + FILL_RETRY_AFTER_MS + 1)
+      expect((await get('/api/anything', autonomousToken('x', 'n3'))).statusCode).toBe(200)
       await settle()
       expect(autonomous.profileReads()).toBe(2)
     })
@@ -366,7 +405,7 @@ describe('GET /api/grid/profile — who holds a Harness sign-in token, in the Au
       expect((await get('/api/grid/profile', autonomousToken('x', 'n3'))).statusCode).toBe(503)
     })
 
-    it('takes the customer id from the live profile, and records what it read', async () => {
+    it('records what it read', async () => {
       seedUser({ googleSub: null, googleSubCheckedAt: null })
       stubAutonomous(googleProfile())
 
@@ -374,6 +413,39 @@ describe('GET /api/grid/profile — who holds a Harness sign-in token, in the Au
 
       expect(res.json().data.id).toBe(CUSTOMER_ID)
       expect(fakes.users.get('known')).toMatchObject({ googleSub: GOOGLE_SUB })
+    })
+
+    it('takes the customer id from the live profile, not from the row', async () => {
+      seedUser({ googleSub: GOOGLE_SUB, googleSubCheckedAt: new Date() })
+      // Authentication (the identity endpoint) mirrors one id onto the row; the live profile says another.
+      stubAutonomous(googleProfile(), () => json(200, { status: 1, data: { id: 'identity-id', email: EMAIL } }))
+
+      const res = await get('/api/grid/profile', autonomousToken())
+
+      expect(fakes.users.get('known')!.externalId).toBe('identity-id')
+      expect(res.json().data.id).toBe(CUSTOMER_ID)
+    })
+
+    it('is one read and no fill: the route records its own live read', async () => {
+      seedUser({ googleSub: 'stale-sub', googleSubCheckedAt: new Date(Date.now() - GOOGLE_SUBJECT_RECHECK_MS - 60_000) })
+      const autonomous = stubAutonomous(googleProfile())
+
+      await get('/api/grid/profile', autonomousToken())
+      await settle()
+
+      expect(autonomous.profileReads()).toBe(1)
+      expect(logs.filter((l) => l.includes('stored and live'))).toHaveLength(1)
+    })
+
+    it('refuses a 21-digit Google subject that arrived as a JSON number rather than store it rounded', async () => {
+      seedUser({ googleSub: null, googleSubCheckedAt: null })
+      stubAutonomous(() => new Response(
+        `{"status":1,"data":{"id":"${CUSTOMER_ID}","email":"${EMAIL}","customer_socials":[{"source":"google","uid":104857600000000000042}]}}`,
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ))
+
+      expect((await get('/api/grid/profile', autonomousToken())).statusCode).toBe(503)
+      expect(fakes.users.get('known')!.googleSubCheckedAt).toBeNull()
     })
 
     it('refuses a staging-plane sign-in with 403', async () => {
@@ -463,9 +535,67 @@ describe('GET /api/grid/profile — who holds a Harness sign-in token, in the Au
     for (const value of [GOOGLE_SUB, 'stale-sub', EMAIL, CUSTOMER_ID, FULL_NAME]) expect(all).not.toContain(value)
   })
 
+  describe('a stored Google subject is always the row\'s own customer\'s', () => {
+    it('forgets it when the row takes a new production subject, so a computer sign-in is "not yet known"', async () => {
+      seedUser({ googleSub: GOOGLE_SUB, googleSubCheckedAt: new Date() })
+      // Another Autonomous customer reaching the same email; its own profile read fails, so nothing
+      // fresher replaces what is forgotten.
+      stubAutonomous(() => json(502, {}), () => json(200, { status: 1, data: { id: 'another-customer', email: EMAIL } }))
+
+      await get('/api/anything', autonomousToken())
+      await settle()
+
+      expect(fakes.users.get('known')).toMatchObject({ externalId: 'another-customer', googleSub: null, googleSubCheckedAt: null })
+      expect((await get('/api/grid/profile', await computerToken('known'))).statusCode).toBe(409)
+    })
+
+    it('does not record a live read of another customer than the row, and says so by field name', async () => {
+      seedUser({ googleSub: GOOGLE_SUB, googleSubCheckedAt: new Date(Date.now() - GOOGLE_SUBJECT_RECHECK_MS - 1) })
+      stubAutonomous(() => json(200, { status: 1, data: { id: 'another-customer', email: EMAIL, customer_socials: [{ source: 'google', uid: '7' }] } }))
+
+      await get('/api/anything', autonomousToken())
+      await settle()
+
+      expect(fakes.users.get('known')!.googleSub).toBe(GOOGLE_SUB)
+      const lines = logs.filter((l) => l.includes('another customer'))
+      expect(lines).toHaveLength(1)
+      expect(lines[0]).toContain('customer_id')
+      expect(lines[0]).not.toContain('another-customer')
+    })
+
+    it('never lets a slower read replace a fresher one', async () => {
+      const fresh = new Date()
+      seedUser({ googleSub: GOOGLE_SUB, googleSubCheckedAt: fresh })
+      const stored = { ...fakes.users.get('known')! } as never
+
+      await recordLiveProfile(stored, { customerId: CUSTOMER_ID, email: EMAIL, fullName: FULL_NAME, googleSub: null }, new Date(fresh.getTime() - 1000))
+
+      expect(fakes.users.get('known')).toMatchObject({ googleSub: GOOGLE_SUB, googleSubCheckedAt: fresh })
+    })
+  })
+
+  it(`allows ${GRID_PROFILE_LIVE_READS_PER_MINUTE} live reads a minute per account, then 429 — never 409`, async () => {
+    seedUser({ googleSub: GOOGLE_SUB, googleSubCheckedAt: new Date() })
+    const autonomous = stubAutonomous(googleProfile())
+    const token = autonomousToken()
+
+    for (let i = 0; i < GRID_PROFILE_LIVE_READS_PER_MINUTE; i++) expect((await get('/api/grid/profile', token)).statusCode).toBe(200)
+    expect((await get('/api/grid/profile', token)).statusCode).toBe(429)
+    expect(autonomous.profileReads()).toBe(GRID_PROFILE_LIVE_READS_PER_MINUTE)
+    // A computer sign-in reads nothing upstream and is not counted.
+    expect((await get('/api/grid/profile', await computerToken('known'))).statusCode).toBe(200)
+  })
+
+  it('tells every cache in between not to keep the answer', async () => {
+    seedUser({ googleSub: GOOGLE_SUB, googleSubCheckedAt: new Date() })
+    const res = await get('/api/grid/profile', await computerToken('known'))
+    expect(res.headers['cache-control']).toBe('no-store')
+    expect((await get('/api/grid/profile', await phoneToken('known'))).headers['cache-control']).toBe('no-store')
+  })
+
   describe('the stored-versus-live check', () => {
     it('logs one line naming the fields that disagree, never a value', async () => {
-      seedUser({ googleSub: 'stale-sub', googleSubCheckedAt: new Date() })
+      seedUser({ googleSub: 'stale-sub', googleSubCheckedAt: new Date(Date.now() - 60_000) })
       stubAutonomous(googleProfile())
 
       await get('/api/grid/profile', autonomousToken())

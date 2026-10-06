@@ -56,9 +56,12 @@ export async function gridRoutes(app: FastifyInstance): Promise<void> {
    *   Autonomous token  → a live profile read (Autonomous 401 → 401, unreachable or 5xx → 503)
    *   computer sign-in  → the stored values; never checked → 409 (and 409 means only that here)
    *   phone sign-in, staging-plane account, provisional customer id → 403
+   *   more than GRID_PROFILE_LIVE_READS_PER_MINUTE live reads for one account → 429
    */
   app.get(GRID_PROFILE_PATH, async (req, reply) => {
     const answer = await answerGridProfile(req.user!, bearerToken(req.headers['authorization'])!)
+    // A person's email, name and Google subject: nothing between here and the caller may keep it.
+    reply.header('Cache-Control', 'no-store')
     if (answer.status === 200) return reply.code(200).send(answer.body)
     return sendError(reply, answer.message, answer.code, answer.status)
   })

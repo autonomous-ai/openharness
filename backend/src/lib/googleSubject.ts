@@ -127,9 +127,16 @@ function profileFrom(raw: unknown): LiveProfile {
   return { customerId, email, fullName, googleSub }
 }
 
-/** One trimmed string, or ''. `uid` is a string in every sample but a number in the API's schema. */
+/**
+ * One trimmed string, or ''. `uid` is a string in every sample but a number in the API's schema — and
+ * a 21-digit Google subject parsed as a JSON number has already lost its last digits (JS doubles hold
+ * 15–16). So a number counts only when it is exact; anything else reads as missing, which for a
+ * Google social is "unreadable", never a rounded subject keyed on for good.
+ */
 function text(value: unknown): string {
-  return typeof value === 'string' || typeof value === 'number' ? String(value).trim() : ''
+  if (typeof value === 'string') return value.trim()
+  if (typeof value === 'number' && Number.isSafeInteger(value)) return String(value)
+  return ''
 }
 
 /** Never checked, or checked longer ago than the recheck interval. Absent and null are both "never". */
@@ -141,20 +148,30 @@ export function needsGoogleSubjectCheck(user: Pick<StoredGoogleSubject, 'googleS
 
 /**
  * Overwrite the stored Google subject with what a live read said, and run the stored-versus-live check
- * against what was there. The check runs only on an account checked before: a first fill has nothing
- * stored to disagree with.
+ * against what was there. `readAt` is when the read BEGAN: a slower read never replaces a fresher one.
+ *
+ * Two guards, one log line each, field names only — never a value from either side:
+ *  - **The read must be of THIS row's customer.** A live profile naming another customer id or email
+ *    than the row (two Autonomous accounts reaching one email) is not recorded at all: its Google
+ *    subject would then be answered for a computer of the row's account. Together with the upsert
+ *    forgetting the Google subject whenever a row's production subject changes
+ *    (`UserService.upsertFromSso`), a stored Google subject is always the row's own customer's.
+ *  - **The stored-versus-live check** runs only on an account checked before — a first fill has
+ *    nothing stored to disagree with — and by the guard above it can only ever name `google_sub`.
  */
-export async function recordLiveProfile(stored: StoredGoogleSubject, live: LiveProfile, now = new Date()): Promise<void> {
-  if (stored.googleSubCheckedAt) {
-    const fields = [
-      ...(stored.externalId !== live.customerId ? ['customer_id'] : []),
-      ...(normalizeUserEmail(stored.email) !== live.email ? ['email'] : []),
-      ...((stored.googleSub ?? null) !== live.googleSub ? ['google_sub'] : []),
-    ]
-    // Field names and the internal user id only: never a value from either side.
-    if (fields.length > 0) logger.warn('google subject: stored and live disagree', { userId: stored.id, fields })
+export async function recordLiveProfile(stored: StoredGoogleSubject, live: LiveProfile, readAt = new Date()): Promise<void> {
+  const otherCustomer = [
+    ...(stored.externalId !== live.customerId ? ['customer_id'] : []),
+    ...(normalizeUserEmail(stored.email ?? '') !== live.email ? ['email'] : []),
+  ]
+  if (otherCustomer.length > 0) {
+    logger.warn('google subject: live read is of another customer than the row; not recorded', { userId: stored.id, fields: otherCustomer })
+    return
   }
-  await userService.recordGoogleSubject(stored.id, live.googleSub, now)
+  if (stored.googleSubCheckedAt && (stored.googleSub ?? null) !== live.googleSub) {
+    logger.warn('google subject: stored and live disagree', { userId: stored.id, fields: ['google_sub'] })
+  }
+  await userService.recordGoogleSubject(stored.id, live.googleSub, readAt)
 }
 
 // One fill per account per process at a time. Across processes (a pm2 cluster) two workers can each
@@ -162,11 +179,35 @@ export async function recordLiveProfile(stored: StoredGoogleSubject, live: LiveP
 // once per account per recheck interval, and it is what keeps a fill free of any shared lock.
 const filling = new Set<string>()
 
+/** How many fills one process runs at once. Past it a fill is DROPPED, not queued: the account stays
+ *  unchecked and a later request picks it up. Bounds the burst after a deploy reconnects every daemon. */
+export const MAX_CONCURRENT_FILLS = 16
+
+/** After a failed read, how long this process leaves the account alone. A read that keeps failing
+ *  (Autonomous degraded, a profile it cannot serve) must not become one storefront read per request. */
+export const FILL_RETRY_AFTER_MS = 60_000
+const FILL_RETRY_ENTRIES_MAX = 10_000
+const retryAfter = new Map<string, number>()
+
+function backOff(userId: string): void {
+  if (retryAfter.size >= FILL_RETRY_ENTRIES_MAX) {
+    const oldest = retryAfter.keys().next().value
+    if (oldest !== undefined) retryAfter.delete(oldest)
+  }
+  retryAfter.set(userId, Date.now() + FILL_RETRY_AFTER_MS)
+}
+
+/** Forget this process' in-flight and back-off state. Tests only. */
+export function resetGoogleSubjectFill(): void {
+  filling.clear()
+  retryAfter.clear()
+}
+
 /**
  * After an Autonomous token authenticates: if the account is unchecked or its check is older than
  * [GOOGLE_SUBJECT_RECHECK_MS], read the profile once and record the answer. Fire-and-forget — the
  * request never waits for it, and nothing it does can fail the request. A failed read records
- * nothing, so the account stays unchecked and the next request retries.
+ * nothing, so the account stays unchecked and is retried by a request after [FILL_RETRY_AFTER_MS].
  */
 export function scheduleGoogleSubjectFill(
   token: string,
@@ -176,12 +217,17 @@ export function scheduleGoogleSubjectFill(
   try {
     if (autonomousEnv !== 'prod') return
     if (!needsGoogleSubjectCheck(user) || filling.has(user.id)) return
+    if ((retryAfter.get(user.id) ?? 0) > Date.now()) return
+    if (filling.size >= MAX_CONCURRENT_FILLS) return
     filling.add(user.id)
+    const readAt = new Date()
     void (async () => {
       try {
-        await recordLiveProfile(user, await readLiveProfile(token))
+        await recordLiveProfile(user, await readLiveProfile(token), readAt)
+        retryAfter.delete(user.id)
       } catch (err) {
-        // The error's own message names a status or a field, never a value from the body.
+        backOff(user.id)
+        // A status or a field name, never a value from the body.
         logger.warn('google subject fill failed', {
           userId: user.id,
           reason: err instanceof LiveProfileError ? err.code : 'RECORD_FAILED',

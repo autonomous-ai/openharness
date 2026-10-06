@@ -7,7 +7,9 @@ import { countryCodeFromHeaders, stampUserCountry } from '../lib/clientGeo.js'
 import { isPublicCommunityRead } from '../lib/communityAccess.js'
 import { GRID_PROFILE_PATH } from '../lib/gridProfile.js'
 
-const isGridProfileRequest = (url: string): boolean => url.split('?')[0] === GRID_PROFILE_PATH
+/** By the matched route, not the raw URL, so an encoded spelling of the path is the same route. */
+const isGridProfileRequest = (request: FastifyRequest): boolean =>
+  (request.routeOptions?.url ?? request.url.split('?')[0]) === GRID_PROFILE_PATH
 
 /**
  * Public local routes (no user access token). Data-plane requests never reach Fastify — they're
@@ -88,7 +90,9 @@ export function registerAuthMiddleware(
     } catch {
       return reply.code(400).send({ success: false, error: { code: 'INVALID_AUTONOMOUS_ENV', message: 'Invalid Autonomous environment' } })
     }
-    const auth = await resolveSsoAuth(token, authenticate, autonomousEnv)
+    // The Grid profile route reads the profile live and records it itself; a fill on top of that would
+    // be a second storefront read and a second stored-versus-live line for one request.
+    const auth = await resolveSsoAuth(token, authenticate, autonomousEnv, isGridProfileRequest(request))
     if ('user' in auth) {
       request.user = auth.user
       // Where the person is, per Cloudflare (`CF-IPCountry`, absent off-Cloudflare). Every control-plane
@@ -98,7 +102,7 @@ export function registerAuthMiddleware(
       // Except the Grid profile route: its caller is the Grid control plane asking on the person's
       // behalf, from a datacenter, and stamping that would relabel them (routes/grid.ts).
       const countryCode = countryCodeFromHeaders(request.headers)
-      if (countryCode && !isGridProfileRequest(request.url)) void stampUserCountry(auth.user.sub, countryCode)
+      if (countryCode && !isGridProfileRequest(request)) void stampUserCountry(auth.user.sub, countryCode)
       return
     }
     return reply.code(auth.status).send({
@@ -116,6 +120,7 @@ export async function resolveSsoAuth(
   token: string,
   authenticate: typeof authenticateAccessToken = authenticateAccessToken,
   autonomousEnv: AutonomousEnvironment = 'prod',
+  readsProfileItself = false,
 ): Promise<
   | { user: AuthUser }
   | {
@@ -126,7 +131,11 @@ export async function resolveSsoAuth(
   }
 > {
   try {
-    return { user: await authenticate(token, autonomousEnv) }
+    return {
+      user: await (readsProfileItself
+        ? authenticate(token, autonomousEnv, { learnGoogleSubject: false })
+        : authenticate(token, autonomousEnv)),
+    }
   } catch (err) {
     if (err instanceof SsoAuthError && err.code === 'AUTH_SERVICE_UNAVAILABLE') {
       return { status: 503, code: 'AUTH_SERVICE_UNAVAILABLE', message: 'Authentication service unavailable' }

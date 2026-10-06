@@ -30,7 +30,35 @@ export interface GridProfileBody {
 
 export type GridProfileAnswer =
   | { status: 200; body: GridProfileBody }
-  | { status: 401 | 403 | 409 | 503; code: string; message: string }
+  | { status: 401 | 403 | 409 | 429 | 503; code: string; message: string }
+
+/**
+ * Live reads one account may cause through this route per minute, in this process. The control plane
+ * asks once per Grid sign-in; anything past this is somebody looping the route with their own
+ * Autonomous token to make this backend hammer the storefront from its own address — which every
+ * user's token validation shares. A computer sign-in reads nothing upstream and is not counted.
+ */
+export const GRID_PROFILE_LIVE_READS_PER_MINUTE = 10
+const LIVE_READ_WINDOW_MS = 60_000
+const LIVE_READ_ENTRIES_MAX = 10_000
+const liveReads = new Map<string, number[]>()
+
+/** Count one live read for this account; false when it is over the limit. */
+function admitLiveRead(userId: string, now = Date.now()): boolean {
+  const recent = (liveReads.get(userId) ?? []).filter((at) => now - at < LIVE_READ_WINDOW_MS)
+  if (recent.length >= GRID_PROFILE_LIVE_READS_PER_MINUTE) return false
+  if (!liveReads.has(userId) && liveReads.size >= LIVE_READ_ENTRIES_MAX) {
+    const oldest = liveReads.keys().next().value
+    if (oldest !== undefined) liveReads.delete(oldest)
+  }
+  liveReads.set(userId, [...recent, now])
+  return true
+}
+
+/** Forget the per-account live read counts. Tests only. */
+export function resetGridProfileLimits(): void {
+  liveReads.clear()
+}
 
 /** Only these fields, and never a social's `token`, whatever the source held. */
 export function gridProfileBody(profile: LiveProfile): GridProfileBody {
@@ -45,7 +73,7 @@ export function gridProfileBody(profile: LiveProfile): GridProfileBody {
   }
 }
 
-const refuse = (status: 401 | 403 | 409 | 503, code: string, message: string): GridProfileAnswer => ({ status, code, message })
+const refuse = (status: 401 | 403 | 409 | 429 | 503, code: string, message: string): GridProfileAnswer => ({ status, code, message })
 
 const UNAUTHORIZED = refuse(401, 'UNAUTHORIZED', 'Unauthorized')
 const STAGING_PLANE = refuse(403, 'STAGING_PLANE', 'This account signs in through the staging Autonomous plane, which Grid does not accept')
@@ -67,7 +95,12 @@ export async function answerGridProfile(caller: AuthUser, token: string): Promis
   if (!user) return UNAUTHORIZED
   if (storedAutonomousEnvironment(user.autonomousEnv) !== 'prod') return STAGING_PLANE
 
+  if (!admitLiveRead(user.id)) {
+    return refuse(429, 'TOO_MANY_REQUESTS', 'Too many Grid profile reads for this account; try again in a minute')
+  }
+
   let live: LiveProfile
+  const readAt = new Date()
   try {
     live = await readLiveProfile(token)
   } catch (err) {
@@ -77,7 +110,7 @@ export async function answerGridProfile(caller: AuthUser, token: string): Promis
     return refuse(503, 'AUTH_SERVICE_UNAVAILABLE', 'The Autonomous account service could not be reached; try again in a moment')
   }
   try {
-    await recordLiveProfile(user, live)
+    await recordLiveProfile(user, live, readAt)
   } catch {
     // The answer is the live read's either way; a failed write only leaves the stored value older.
     logger.warn('grid profile: could not record the live read', { userId: user.id })
