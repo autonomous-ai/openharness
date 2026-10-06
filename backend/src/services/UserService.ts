@@ -7,10 +7,12 @@ import { ConflictError, NotFoundError } from '../errors/index.js'
 import type { AutonomousEnvironment } from '../lib/autonomousEnvironment.js'
 import type { SignInAttribution } from '../lib/signInAttribution.js'
 
-export type PublicUser = Omit<User, 'passwordHash'>
+// The Google subject and its check time (lib/googleSubject.ts) are internal: they exist to answer the
+// control plane's `GET /api/grid/profile`, and must not reach every client a user is described to.
+export type PublicUser = Omit<User, 'passwordHash' | 'googleSub' | 'googleSubCheckedAt'>
 
 function toPublic(u: User): PublicUser {
-  const { passwordHash: _omit, ...rest } = u
+  const { passwordHash: _hash, googleSub: _sub, googleSubCheckedAt: _checked, ...rest } = u
   return rest
 }
 
@@ -190,6 +192,14 @@ export const userService = {
       where: { id: userId },
       data: { lastAttribution: { ...attribution, recordedAt: new Date() } },
     })
+  },
+
+  /**
+   * Record what a live read of the Autonomous profile said about the account's Google subject — a
+   * subject, or null for "none". Every successful live read overwrites, including to none.
+   */
+  async recordGoogleSubject(userId: string, googleSub: string | null, checkedAt: Date): Promise<void> {
+    await prisma.user.update({ where: { id: userId }, data: { googleSub, googleSubCheckedAt: checkedAt } })
   },
 
   get(id: string): Promise<User | null> {

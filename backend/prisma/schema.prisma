@@ -113,6 +113,14 @@ model User {
   // `lastAttribution` is the latest tagged sign-in.
   signUpAttribution SignInAttribution?
   lastAttribution   SignInAttribution?
+  // The account's Google subject as this backend last read it LIVE from the Autonomous profile
+  // (lib/googleSubject.ts, ADR 0046), so `GET /api/grid/profile` can answer for a computer signed in
+  // by QR, whose token Autonomous cannot read. `googleSubCheckedAt` unset means never checked — and on
+  // MongoDB that is absent on every row written before today as well as null, the trap `gridName`
+  // documents above. Once checked, a null `googleSub` means "this account has no Google identity".
+  // Both are internal: `UserService.toPublic` leaves them out of every user-describing response.
+  googleSub          String?
+  googleSubCheckedAt DateTime?
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 

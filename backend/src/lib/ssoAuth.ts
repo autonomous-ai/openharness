@@ -11,6 +11,7 @@ import {
 } from './autonomousEnvironment.js'
 import { createSsoProfileCache, type SharedProfileStore } from './ssoProfileCache.js'
 import { isHarnessAccessToken } from './harnessTokenFormat.js'
+import { scheduleGoogleSubjectFill } from './googleSubject.js'
 import type { SignInAttribution } from './signInAttribution.js'
 
 /** Internal identity attached to authenticated backend requests and user WebSockets. */
@@ -242,5 +243,9 @@ export async function authenticateAccessToken(
     ...metadata,
     ...(signUpAttribution ? { signUpAttribution } : {}),
   })
+  // Learn the account's Google subject while an Autonomous token is in hand, so a computer of the same
+  // account signed in by QR can be answered later (lib/googleSubject.ts). Not awaited, never throws.
+  // Here and not in the REST hook, because a daemon that only holds a socket authenticates here too.
+  scheduleGoogleSubjectFill(token, user, autonomousEnv)
   return { sub: user.id, email: user.email, role: user.role, autonomousEnv }
 }

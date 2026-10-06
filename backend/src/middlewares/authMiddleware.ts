@@ -5,6 +5,9 @@ import { ForbiddenError } from '../errors/index.js'
 import { parseAutonomousEnvironment, type AutonomousEnvironment } from '../lib/autonomousEnvironment.js'
 import { countryCodeFromHeaders, stampUserCountry } from '../lib/clientGeo.js'
 import { isPublicCommunityRead } from '../lib/communityAccess.js'
+import { GRID_PROFILE_PATH } from '../lib/gridProfile.js'
+
+const isGridProfileRequest = (url: string): boolean => url.split('?')[0] === GRID_PROFILE_PATH
 
 /**
  * Public local routes (no user access token). Data-plane requests never reach Fastify — they're
@@ -91,8 +94,11 @@ export function registerAuthMiddleware(
       // Where the person is, per Cloudflare (`CF-IPCountry`, absent off-Cloudflare). Every control-plane
       // call comes from their own computer, which is what makes this — and not the daemon's socket —
       // the "user country" signal. Fire-and-forget and rate-floored inside; never on the request path.
+      //
+      // Except the Grid profile route: its caller is the Grid control plane asking on the person's
+      // behalf, from a datacenter, and stamping that would relabel them (routes/grid.ts).
       const countryCode = countryCodeFromHeaders(request.headers)
-      if (countryCode) void stampUserCountry(auth.user.sub, countryCode)
+      if (countryCode && !isGridProfileRequest(request.url)) void stampUserCountry(auth.user.sub, countryCode)
       return
     }
     return reply.code(auth.status).send({
