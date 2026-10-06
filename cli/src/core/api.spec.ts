@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { projectDisplayName, type RegisteredSession } from '../lib/registry.js'
-import { ACCOUNT_BACKEND_OFF, AGENT_ACTIONS_OFF, createCoreApi, DAEMON_UNKNOWN, DELIVERIES_OFF, DEVICES_FALLBACKS, emptyPorts, LANE_OFF, LONG_ANSWERS, MODELS_OFF, MODELS_REQUESTS, MONITOR_OFF, OBSERVER_KEY_OFF, ORCHESTRATOR_FALLBACKS, resolveAgent, SHARING_FALLBACKS, TEAMS_FALLBACKS, TERMINALS_OFF, WIFI_FALLBACKS, WIFI_OFF, type CoreApiDeps } from './api.js'
+import { CONVERSATIONS_OFF, ACCOUNT_BACKEND_OFF, AGENT_ACTIONS_OFF, createCoreApi, DAEMON_UNKNOWN, DELIVERIES_OFF, DEVICES_FALLBACKS, emptyPorts, LANE_OFF, LONG_ANSWERS, MODELS_OFF, MODELS_REQUESTS, MONITOR_OFF, OBSERVER_KEY_OFF, ORCHESTRATOR_FALLBACKS, resolveAgent, SHARING_FALLBACKS, TEAMS_FALLBACKS, TERMINALS_OFF, WIFI_FALLBACKS, WIFI_OFF, type CoreApiDeps } from './api.js'
 import { FAIL, readFallback } from './serviceHost.js'
 
 const row = (agentId: string) => ({ agentId, sessionId: `s-${agentId}`, engine: 'claude', cwd: '/work/app' }) as RegisteredSession
@@ -84,6 +84,9 @@ describe('the core API services stand on', () => {
   it('lists every agent, live then stopped, and names them as the apps do', async () => {
     const deps = coreDeps()
     const core = createCoreApi(deps)
+    expect(core.conversations).toBe(CONVERSATIONS_OFF)
+    const conversations = { ...CONVERSATIONS_OFF }
+    expect(createCoreApi({ ...deps, conversations }).conversations).toBe(conversations)
     expect(core.dataDir).toBe('/data')
     expect(await core.terminals.open({ argv: ['/bin/zsh'], cwd: '/work' })).toEqual({ ok: false, error: 'SERVICE_UNAVAILABLE' })
     const terminals = { open: vi.fn(async () => ({ ok: true as const, agentId: 'shell' })), watch: TERMINALS_OFF.watch }

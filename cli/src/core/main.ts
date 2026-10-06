@@ -55,7 +55,6 @@ import { OpenTabProtection } from '../lib/openTabProtection.js'
 import { sessionCheckpoints } from '../lib/sessionCheckpoint.js'
 import { repairClaudeCwd } from '../lib/cwdRepair.js'
 import { stoppedAgents } from '../lib/stoppedAgents.js'
-import { prepareAgentHandoff } from '../lib/agentHandoff.js'
 import { ExternalSessions, OpenSessions } from '../lib/sessionSearch/external.js'
 import { externalProviders } from '../lib/sessionSearch/externals/index.js'
 import { type LaunchOverridesDeps } from '../lib/launchOverrides.js'
@@ -112,14 +111,14 @@ import { createAgentRetargeter } from './agents/retarget.js'
 import { createAgentRestarter } from './agents/restart.js'
 import { createAgentLifecycle, createPurgeRequest, createStopRequest } from './agents/lifecycle.js'
 import { createAgentClosing, createCloseRequests } from './agents/close.js'
-import { createHandoffRequest } from './agents/handoff.js'
+import { answerConversationQuery, conversationReads } from './conversationQueries.js'
 import { createLaunchRequests } from './agents/launches.js'
 import { createAgentList } from './agents/list.js'
 import { createAgentUpdate } from './agents/update.js'
 import { createEngineHooks, installEngineHooks } from './engines/hooks.js'
 import { createCursorTaskHooks } from './engines/cursorTasks.js'
 import { databaseHistory } from './transcripts/databaseHistory.js'
-import { createCoreApi, DEVICES_FALLBACKS, DEVICES_REQUESTS, emptyPorts, EXPERIMENTS, LONG_ANSWERS, MODELS_FALLBACKS, MODELS_OFF, MODELS_REQUESTS, MONITOR_FALLBACKS, MONITOR_OFF, MONITOR_REQUESTS, ORCHESTRATOR_FALLBACKS, ORCHESTRATOR_REQUESTS, SHARE_REQUESTS, SHARING_FALLBACKS, PROJECTS_REQUESTS, SEARCH_FALLBACKS, SEARCH_REQUESTS, STORE_REQUESTS, TEAMS_FALLBACKS, TEAMS_REQUESTS, USAGE_REQUESTS, VIEWERS_FALLBACKS, WIFI_FALLBACKS, WORKSPACES_FALLBACKS, type GatewayAccount, type GatewayOps, type GatewayStatus, type RouteAnswer, type TeamsPort, type WindowFocus } from './api.js'
+import { createCoreApi, DEVICES_FALLBACKS, DEVICES_REQUESTS, emptyPorts, HANDOFF_REQUESTS, EXPERIMENTS, LONG_ANSWERS, MODELS_FALLBACKS, MODELS_OFF, MODELS_REQUESTS, MONITOR_FALLBACKS, MONITOR_OFF, MONITOR_REQUESTS, ORCHESTRATOR_FALLBACKS, ORCHESTRATOR_REQUESTS, SHARE_REQUESTS, SHARING_FALLBACKS, PROJECTS_REQUESTS, SEARCH_FALLBACKS, SEARCH_REQUESTS, STORE_REQUESTS, TEAMS_FALLBACKS, TEAMS_REQUESTS, USAGE_REQUESTS, VIEWERS_FALLBACKS, WIFI_FALLBACKS, WORKSPACES_FALLBACKS, type GatewayAccount, type GatewayOps, type GatewayStatus, type RouteAnswer, type TeamsPort, type WindowFocus } from './api.js'
 import { createServiceHost, testFaults } from './serviceHost.js'
 import { startStalls } from './stall.js'
 import { createServiceLinks, type ServiceLinks } from './serviceLinks.js'
@@ -1117,10 +1116,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // and the voice router know. Resolve across the two, or every tile restores empty.
   backend.agentRecentProvider = recaps.agentRecent
 
-  // "Change agent": the desktop asks for the structured handoff file (lib/agentHandoff.ts) before it
-  // closes the old engine; the new one is then told to read it.
-  // Built ONCE: its discovery keeps "one search per agent" across requests.
-  const handoffDeps = handoffProviderDeps({
+  // Quiet-machine QA: the edge host renders Change agent's handoff from these conversation reads.
+  // Build discovery once to keep "one search per agent" across requests.
+  coreApi.conversations = conversationReads(handoffProviderDeps({
     registry,
     stopped: {
       get: (id) => stoppedAgents.get(id),
@@ -1134,12 +1132,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     isRecentlyDeleted,
     findResumedTranscript,
     validTranscriptPath,
-  })
-  backend.handoffRequestProvider = createHandoffRequest({ prepare: (req) => prepareAgentHandoff(handoffDeps, req) })
+  }))
 
   // The requests each service that can run in its own process answers, as core/api.ts declares them.
   const requestsOf: Record<string, readonly string[]> = {
-    search: SEARCH_REQUESTS, store: STORE_REQUESTS, usage: USAGE_REQUESTS, monitor: MONITOR_REQUESTS, projects: PROJECTS_REQUESTS, models: MODELS_REQUESTS,
+    search: SEARCH_REQUESTS, store: STORE_REQUESTS, usage: USAGE_REQUESTS, monitor: MONITOR_REQUESTS, projects: PROJECTS_REQUESTS, models: MODELS_REQUESTS, handoff: HANDOFF_REQUESTS,
     devices: DEVICES_REQUESTS,
     ...Object.fromEntries(Object.entries(EXPERIMENTS).map(([name, experiment]) => [name, experiment.requests])),
   }
@@ -1201,6 +1198,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       : service === 'teams' || service === 'collaboration' ? teamsLink.answer(query, payload)
       : service === 'devices' ? devicesLink.answer(query, payload)
       : service === 'wifi' ? wifiLink.answer(query, payload)
+      : service === 'handoff' ? answerConversationQuery(coreApi, query, payload)
       : service === 'gateway' && gatewayLink ? gatewayLink.answer(query, payload) : answerAgentQuery(coreApi, query)),
     // The gateway's own traffic: its remote clients and what they sent, and its comings and goings; and what
     // the devices tell the core (a turn, a frame for the windows, a dial on the wire).
@@ -1272,6 +1270,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // An agent's branch and pull request, a project's repository and preview, a folder's subfolders and a
   // media file from an agent's project (services/projects.ts): in this process, or in the edge host.
   if (!outOfProcess.has('projects')) serviceHost.serve('projects', inline!.startProjects, coreApi, PROJECTS_REQUESTS)
+  if (!outOfProcess.has('handoff')) serviceHost.serve('handoff', inline!.startHandoff, coreApi, HANDOFF_REQUESTS)
   serviceHost.serve('shell', startShell, coreApi, SHELL_REQUESTS)
   // Models: grid access and its pin, the model pictures on agents' frames, the keystroke prewarm, where an
   // agent on a grid model sends its inference, and the models requests the apps send (services/models.ts):

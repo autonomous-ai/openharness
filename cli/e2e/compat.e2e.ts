@@ -18,7 +18,7 @@
  * sides' answers and every difference, for reading one by one.
  */
 import { execFileSync } from 'node:child_process'
-import { copyFileSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { hostname, tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -228,6 +228,16 @@ async function scenario(d: IsolatedDaemon): Promise<Answers> {
     await ask(`terminal_info ${engine}`, 'terminal_info', { agentId: agent[engine] })
     await ask(`agent_read_file ${engine}`, 'agent_read_file', { agentId: agent[engine], path: 'README.md' })
     await ask(`git_pull_request ${engine}`, 'git_pull_request', { agentId: agent[engine] })
+    // Quiet-machine QA: the handoff's edge-host move must preserve both the reply and what the next
+    // engine actually reads. Empty/error replies cannot pass merely by matching each other.
+    const handoff = await ask(`agent_handoff_prepare ${engine}`, 'agent_handoff_prepare', {
+      agentId: agent[engine], changeId: '0123456789abcdef0123456789abcdef', targetEngine: engine === 'claude' ? 'codex' : 'claude',
+    })
+    expect(handoff.error, JSON.stringify(handoff)).toBeUndefined()
+    expect(handoff.file).toEqual(expect.any(String))
+    for (const [kind, path] of [['summary', handoff.file], ['transcript', handoff.file.replace(/\.md$/, '.transcript.md')]]) {
+      answers[`handoff ${kind} ${engine}`] = walk(readFileSync(join(cwd(engine), path), 'utf8'))
+    }
   }
   await ask('models_list', 'models_list')
   await ask('git_project_info', 'git_project_info', { path: cwd('claude') })
@@ -285,6 +295,9 @@ async function scenario(d: IsolatedDaemon): Promise<Answers> {
   await ask('session_get codex while stopped', 'session_get', { sessionId: session.codex, limit: 1 })
   await ask('sessions_list codex while stopped', 'sessions_list', { agentId: agent.codex })
   await ask('agent_recent codex while stopped', 'agent_recent', { agentId: agent.codex })
+  await ask('agent_handoff_prepare codex while stopped', 'agent_handoff_prepare', {
+    agentId: agent.codex, changeId: 'fedcba9876543210fedcba9876543210', targetEngine: 'claude',
+  })
   // The model a resumed agent runs is what its engine reports once it is back, a race with the reply
   // on either build: v0.3.58 and this build each answered null in some runs and the model in others.
   // It is compared settled, in the rows read at the end.
