@@ -16,7 +16,9 @@ export function startShell(core: CoreApi): ServiceRequests {
   const visitStatus = async (agentId: string): Promise<Record<string, unknown>> => {
     const row = core.agents.byAgent(agentId)
     // Discovery clears a completed launch record when it binds the engine's conversation.
-    if (!row || !row.active || row.engine === 'terminal' || row.launch?.state === 'starting' || row.launch?.state === 'failed'
+    // October 6 shell-return E2E: a resumed process exited after discovery marked its row inactive,
+    // before retirement. That flag cannot suppress an exact exit probe or the parked shell is stranded.
+    if (!row || row.engine === 'terminal' || row.launch?.state === 'starting' || row.launch?.state === 'failed'
       || !row.tmuxPane || !row.processIdentity?.startMarker) return { exited: false }
     const session = { ...row, processIdentity: { ...row.processIdentity } }
     const identity = (value: ReturnType<typeof core.agents.byAgent>) => JSON.stringify([value?.engine, value?.sessionId,

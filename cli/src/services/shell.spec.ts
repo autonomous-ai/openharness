@@ -115,7 +115,7 @@ describe('shells through a service', () => {
     const row = { agentId: 'agent', active: true, engine: 'claude', sessionId: 'chat', tmuxPane: '%2', launch: { state: 'ready' },
       processIdentity: { pid: 22, startMarker: 'start', executable: '/bin/claude' } } as RegisteredSession
     for (const agentId of [undefined, '', 4, 'x'.repeat(257)]) expect(await ask('shell_visit_status', { agentId })).toEqual({ error: 'INVALID_AGENT_ID' })
-    for (const current of [undefined, { ...row, active: false }, { ...row, engine: 'terminal' },
+    for (const current of [undefined, { ...row, engine: 'terminal' },
       { ...row, launch: { state: 'starting' } }, { ...row, launch: { state: 'failed' } }, { ...row, tmuxPane: '' }, { ...row, processIdentity: undefined },
       { ...row, processIdentity: { ...row.processIdentity!, startMarker: '' } }]) {
       vi.mocked(core.agents.byAgent).mockReturnValue(current as RegisteredSession | undefined)
@@ -143,6 +143,19 @@ describe('shells through a service', () => {
     }
     expect(core.terminals.open).not.toHaveBeenCalled()
     expect(core.agents.sync).not.toHaveBeenCalled()
+  })
+  it('verifies an inactive resumed engine instead of stranding its parked shell', async () => {
+    const { core, ask } = setup()
+    const row = { agentId: 'agent', active: false, engine: 'claude', sessionId: 'chat', tmuxPane: '%2', launch: { state: 'ready' },
+      processIdentity: { pid: 22, startMarker: 'resumed', executable: '/bin/claude' } } as RegisteredSession
+    vi.mocked(core.agents.byAgent).mockReturnValue(row)
+    vi.mocked(tmuxPaneState).mockResolvedValue({ dead: false, engineExit: 0 } as Awaited<ReturnType<typeof tmuxPaneState>>)
+    for (const state of ['alive', 'unknown', 'gone'] as const) {
+      vi.mocked(checkPidRuntime).mockResolvedValue({ state, reason: 'fixture' })
+      expect(await ask('shell_visit_status', { agentId: 'agent' })).toEqual({ exited: state === 'gone' })
+    }
+    expect(core.agents.sync).not.toHaveBeenCalled()
+    expect(row.active).toBe(false)
   })
   it('coalesces exit probes, keeps a value snapshot and releases failed probes', async () => {
     const { core, ask } = setup()

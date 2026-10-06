@@ -293,7 +293,9 @@ try:
         keys('Enter');assert finder_ready(),'empty match unexpectedly accepted'
         keys('M-Up')
         wait(lambda:browsing(PROJECT/'code') and 'client 日本/' in finder_text(),'go back from unavailable directory')
-        keys('Escape');wait(lambda:not finder_ready(),'folder cancel')
+        # Picker teardown precedes zsh repainting its line. Wait for both, not
+        # just the missing picker, before checking the original draft.
+        keys('Escape');wait(lambda:not finder_ready() and 'SHELL_READY> claude :' in hn('capture-pane','-p'),'folder cancel restores original draft')
         assert 'SHELL_READY> claude :' in hn('capture-pane','-p'),'cancel changed the original draft'
         keys('C-c');wait(prompt_ready,'draft discarded without launch')
         assert not (BASE/'fixture-agent.json').exists()
@@ -651,10 +653,14 @@ try:
         tm('send-keys','-t','test','-l','fxwsp')
         wait(lambda:'Fix workspace navigation' in screen(),'inline fuzzy match beyond 200 sessions',35)
         keys('C-u'); tm('send-keys','-t','test','-l','spectral kiwi')
-        wait(lambda:'Fix workspace navigation' in screen(),'inline full-text match',20)
-        wait(lambda:'conversation is complete' in screen(),'inline conversation preview',20)
+        # Both searches return the same row and preview. The October 6 Linux
+        # run read those from the previous query while only "spectra" had been
+        # consumed, then asserted against its cleared interim results.
+        def full_text_preview():
+            capture=hn('capture-pane','-p')
+            return capture if '> spectral kiwi ' in capture and re.search(r'\b1/\d+',capture) and 'Fix workspace navigation' in capture and 'conversation is complete' in capture else None
+        capture=wait(full_text_preview,'inline full-text match and conversation preview for the new query',20)
         # The shared layout takes the user's 45%, right:50% and inline count.
-        capture=hn('capture-pane','-p')
         box=[i for i,line in enumerate(capture.splitlines()) if '╭' in line or '╰' in line]
         assert box and 12 <= max(box)-min(box)+1 <= 18, capture
         assert any(line.find('conversation')>55 for line in capture.splitlines()),capture
