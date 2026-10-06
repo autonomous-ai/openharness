@@ -302,7 +302,26 @@ def main():
         vm.command('test ! -e ' + STATE + '/current && test ! -e ' + STATE + '/ready.json')
         # The unchanged user timer finishes the one approved request after boot.
         # Do not manually activate the worker or issue a second update action.
-        vm.command('for n in $(seq 1 360); do test ! -e ' + STATE + '/approved.json && exit 0; sleep .5; done; exit 1', timeout=185)
+        # Its two-minute startup delay also has up to 30 seconds of random delay
+        # and systemd's default one-minute timer accuracy window. Retain the
+        # actual scheduling evidence; a three-minute wait can expire too early.
+        output, _ = vm.command('systemctl --user show harness-update.timer harness-update.service', check=False)
+        (folder / '15-update-units-before-wait.log').write_text(output)
+        output, status = vm.command('for n in $(seq 1 600); do test ! -e ' + STATE +
+                                   '/approved.json && exit 0; sleep .5; done; exit 1', timeout=305, check=False)
+        (folder / '16-update-completion-wait.log').write_text(output)
+        diagnostic = ('import json; from pathlib import Path; p=Path(' + repr(STATE) + '); '
+                      'print(json.dumps({n:json.loads((p/n).read_text()) if (p/n).is_file() else None '
+                      'for n in ["approved.json","check.json","system.json"]},indent=2))')
+        output, _ = vm.command('python3 -c ' + shlex.quote(diagnostic))
+        (folder / '17-update-completion-state.log').write_text(output)
+        output, _ = vm.command('systemctl --user show harness-update.timer harness-update.service', check=False)
+        (folder / '18-update-units-after-wait.log').write_text(output)
+        if status:
+            authenticate()
+            vm.command('sudo -n journalctl -b --no-pager > /tmp/public-update-completion-failed.log')
+            (folder / 'completion-failed-journal.log').write_bytes(vm.read_file('/tmp/public-update-completion-failed.log'))
+            raise TimeoutError('The ordinary update timer did not finish the approved request; see retained unit, state and journal evidence.')
         vm.command('test ! -e ' + STATE + '/current && test ! -e ' + STATE + '/ready.json')
         vm.command('sudo -n cat ' + FIXTURE + '/requests.jsonl > /tmp/public-update-requests.jsonl')
         requests = vm.read_file('/tmp/public-update-requests.jsonl')
