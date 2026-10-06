@@ -150,6 +150,38 @@ void main() {
     await tester.pumpWidget(const SizedBox());
     app.dispose();
   });
+
+  testWidgets('a paste reported by the runner lands in the focused field', (
+    tester,
+  ) async {
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(SystemChannels.platform, (call) async {
+      if (call.method == 'Clipboard.getData') return {'text': 'dictated text'};
+      return null;
+    });
+    addTearDown(
+      () => messenger.setMockMethodCallHandler(SystemChannels.platform, null),
+    );
+    final app = createApp()..status = AppStatus.authenticated;
+    final field = TextEditingController();
+    addTearDown(field.dispose);
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [appStateProvider.overrideWithValue(app)],
+        child: HarnessApp(
+          authenticatedScreen: (_) =>
+              Scaffold(body: TextField(controller: field, autofocus: true)),
+        ),
+      ),
+    );
+    await tester.pump();
+    await _menu(tester, 'paste');
+    await tester.pump();
+    expect(field.text, 'dictated text');
+    await tester.pumpWidget(const SizedBox());
+    app.dispose();
+  });
 }
 
 /// The screen the desktop app mounts once signed in — the argument `HarnessApp`
