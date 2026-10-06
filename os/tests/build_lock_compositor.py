@@ -38,6 +38,15 @@ def main():
     upstream = output / 'source' / ('labwc-' + identity['commit'])
     subprocess.run(['patch', '--batch', '--fuzz=0', '-p1', '-i', str(patch)],
                    cwd=upstream, check=True, timeout=30)
+    shutil.copy2(source / 'os/tests/lock_presentation_policy.c', upstream / 't/harness-lock-presentation.c')
+    with (upstream / 't/meson.build').open('a') as meson:
+        meson.write('''
+test('harness_lock_presentation', executable('test_harness_lock_presentation',
+  sources: 'harness-lock-presentation.c', include_directories: [labwc_inc],
+  dependencies: labwc_deps,
+  c_args: ['-UNDEBUG', '-ffunction-sections', '-fdata-sections'],
+  link_args: ['-Wl,--gc-sections']), is_parallel: false)
+''')
     build = output / 'build'
     subprocess.run(['meson', 'setup', str(build), str(upstream), '--prefix=/usr',
                     '--buildtype=release', '--wrap-mode=nodownload',
