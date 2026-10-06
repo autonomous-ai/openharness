@@ -100,9 +100,7 @@ function toolCalls(engine: string, rec: Record<string, unknown>): string[] {
   const p = rec.payload as { type?: string; name?: string; namespace?: string; input?: unknown; arguments?: unknown } | undefined
   if (!p?.type) return []
   if (p.type === 'function_call' || p.type === 'custom_tool_call') {
-    // A namespaced call arrives as name `sub` + namespace `mcp__e2e_calc` (codex 0.156.1 on the grid).
-    const ns = p.namespace && p.name && !p.name.startsWith(p.namespace) ? p.namespace : ''
-    const name = ns ? `${ns}${ns.endsWith('__') ? '' : '__'}${p.name}` : String(p.name)
+    const name = codexCallName(p)
     if (name === 'exec' && typeof p.input === 'string') {
       // Code mode: one `exec` of JavaScript that calls the real tools as `tools.<name>(…)`.
       const inner = [...p.input.matchAll(/tools\.([A-Za-z0-9_]+)\s*\(/g)].map((m) => `exec→${m[1]}`)
@@ -112,6 +110,79 @@ function toolCalls(engine: string, rec: Record<string, unknown>): string[] {
   }
   if (p.type === 'local_shell_call') return ['local_shell']
   return []
+}
+
+/** A namespaced call arrives as name `sub` + namespace `mcp__e2e_calc` (codex 0.156.1 on the grid). */
+function codexCallName(p: { name?: string; namespace?: string }): string {
+  const ns = p.namespace && p.name && !p.name.startsWith(p.namespace) ? p.namespace : ''
+  return ns ? `${ns}${ns.endsWith('__') ? '' : '__'}${p.name}` : String(p.name)
+}
+
+export interface ToolResult {
+  /** `tool` was called after this step's prompt. */
+  called: boolean
+  /** One of those calls came back with results: not an error, and a link in what it returned. */
+  answered: boolean
+  /** What the first call returned, cut short — the probe quotes it when the step is not proven. */
+  output?: string
+}
+
+/**
+ * Whether `tool` was called for the step tagged `ref` and came back with results — the proof for a
+ * tool whose server is not on this machine (the harness's web search runs on the grid), so its own
+ * log cannot be read the way `e2e_calc`'s is. "Results" is a link in what the tool returned: a web
+ * search that answered has one, and an error or an approval refusal ("MCP tool call requires
+ * approval") does not.
+ *
+ *   claude  assistant `tool_use` { id, name } → user `tool_result` { tool_use_id, is_error, content }
+ *   codex   `function_call` { name, namespace, call_id } → `function_call_output` { call_id, output }
+ */
+export function toolResult(engine: string, cwd: string, ref: string, tool: string, home = homedir()): ToolResult {
+  const files = engine === 'claude' ? claudeSessionFiles(cwd, home) : engine === 'codex' ? codexSessionFiles([ref], home) : []
+  const calls = new Set<string>()
+  const outputs: string[] = []
+  let errored = false
+  for (const file of files) {
+    let inStep = false
+    for (const line of readText(file).split('\n')) {
+      let rec: Record<string, unknown>
+      try { rec = JSON.parse(line) as Record<string, unknown> } catch { continue }
+      const found = userRef(engine, rec, [ref])
+      if (found) { inStep = true; continue }
+      if (!inStep) continue
+      // The next step's prompt — another `(ref-…)` — ends this one. Not any user line: both engines
+      // also record context and hook text in the user role, in the middle of a turn.
+      if (isOtherStep(engine, rec)) { inStep = false; continue }
+      if (engine === 'claude') {
+        const content = (rec.message as { content?: unknown } | undefined)?.content
+        if (!Array.isArray(content)) continue
+        for (const c of content as Array<Record<string, unknown>>) {
+          if (rec.type === 'assistant' && c?.type === 'tool_use' && c.name === tool) calls.add(String(c.id))
+          if (rec.type === 'user' && c?.type === 'tool_result' && calls.has(String(c.tool_use_id))) {
+            outputs.push(textOf(c.content))
+            if (c.is_error === true) errored = true
+          }
+        }
+      } else {
+        const p = rec.payload as { type?: string; name?: string; namespace?: string; call_id?: string; output?: unknown } | undefined
+        if (p?.type === 'function_call' && codexCallName(p) === tool && p.call_id) calls.add(p.call_id)
+        if (p?.type === 'function_call_output' && p.call_id && calls.has(p.call_id)) outputs.push(textOf(p.output))
+      }
+    }
+  }
+  const answered = !errored && outputs.some((o) => /https?:\/\//.test(o))
+  return { called: calls.size > 0, answered, ...(outputs.length ? { output: outputs[0].replace(/\s+/g, ' ').slice(0, 160) } : {}) }
+}
+
+/** A user line carrying a step's `(ref-…)` tag (paneProbe.ts checkRef) — the probe's next prompt. */
+function isOtherStep(engine: string, rec: Record<string, unknown>): boolean {
+  let text = ''
+  if (engine === 'claude' && rec.type === 'user') text = textOf((rec.message as { content?: unknown } | undefined)?.content)
+  if (engine === 'codex') {
+    const p = rec.payload as { type?: string; role?: string; content?: unknown } | undefined
+    if (p?.type === 'message' && p.role === 'user') text = textOf(p.content)
+  }
+  return /\(ref-[0-9a-z]{6}\)/.test(text)
 }
 
 function claudeSessionFiles(cwd: string, home: string): string[] {
