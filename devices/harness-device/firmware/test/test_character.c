@@ -930,6 +930,19 @@ static void focus_face(void)
             int dy0 = pt->loops[HT_PET_IDLE][0].dy * (claude ? 6 : 8) / 4;
             assert(m->y - dy0 == 44 + (cap - 44 - h) / 2);
         }
+        // No pane's engine (no pet, no mark: design 2026-10-06 "No pane"): the resting line alone, its one or two lines
+        // 50 px apart and centred on the glass, each baseline where a browser puts Inter 36's.
+        for (int k = 0; k < 6; k++) {
+            ht_character_face_t g = {.recipient = "Deploy latest firmware", .engine = "", .activity = "", .status = "",
+                .hint = "", .detail = "", .mood = HT_CHARACTER_IDLE, .clock_ms = (uint32_t)k * 977 + 1};
+            ht_scene_t sc; ht_scene_clear(&sc, 0); ht_character_face(&sc, &c, &g, 0xffff, "");
+            int n = 0, base[2];
+            for (int i = 0; i < sc.count; i++)
+                if (sc.runs[i].font == &ht_lv_inter_36.base && sc.runs[i].text[0] && n < 2)
+                    base[n++] = sc.runs[i].y + ht_lv_inter_36.ascent;
+            assert(n >= 1 && !sc.runs[1].sprite.cells);
+            for (int i = 0; i < n; i++) assert(base[i] == 233 - n * 25 + 25 + 36 * 93 / 256 + i * 50);
+        }
         // Every engine's working mascot (the scene's frames, props apart) is centred on the glass (design 2026-10-06).
         for (unsigned pe = 0; pe < ht_pet_count; pe++) {
             const ht_pet_scene_t *w = ht_pets[pe].working_scene;

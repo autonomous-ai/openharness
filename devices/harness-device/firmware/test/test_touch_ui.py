@@ -368,7 +368,8 @@ static bool title_is(const char *text) {
 static void portrait(const char *dir, const char *name);
 static bool focus_inter(const ht_font_t *f) {
     return f==&ht_lv_inter_20.base || f==&ht_lv_inter_25.base || f==&ht_lv_inter_med_26.base ||
-           f==&ht_lv_inter_30.base || f==&ht_lv_inter_36.base || f==&ht_lv_inter_28.base || f==&ht_lv_inter_44.base;
+           f==&ht_lv_inter_30.base || f==&ht_lv_inter_36.base || f==&ht_lv_inter_28.base || f==&ht_lv_inter_44.base ||
+           f==&ht_lv_inter_bold_48.base;
 }
 static void focus_only_inter(void) {
     for (int i = 0; i < scene.count; i++) {
@@ -395,7 +396,8 @@ static const char *spec_font(const ht_font_t *f) {
     static const struct { const ht_font_t *f; const char *name; } names[] = {
         {&ht_lv_inter_20.base,"inter_20"},{&ht_lv_inter_25.base,"inter_25"},{&ht_lv_inter_med_26.base,"inter_med_26"},
         {&ht_lv_inter_30.base,"inter_30"},{&ht_lv_inter_36.base,"inter_36"},
-        {&ht_lv_inter_28.base,"inter_28"},{&ht_lv_inter_44.base,"inter_44"},{&ht_lv_montserrat_14.base,"montserrat_14"},
+        {&ht_lv_inter_28.base,"inter_28"},{&ht_lv_inter_44.base,"inter_44"},{&ht_lv_inter_bold_48.base,"inter_bold_48"},
+        {&ht_lv_montserrat_14.base,"montserrat_14"},
         {&ht_lv_montserrat_22.base,"montserrat_22"},{&ht_done_28,"done_28"},{&ht_wave,"wave"},{&ht_spark,"spark"},
         {&ht_mono_16,"mono_16"},{&ht_mono_20,"mono_20"},{&ht_mono_24,"mono_24"},{&ht_mono_28,"mono_28"}};
     for (unsigned i = 0; i < sizeof names / sizeof names[0]; i++) if (names[i].f == f) return names[i].name;
@@ -2230,7 +2232,7 @@ int main(int argc, char **argv) {
     // THE FOCUS INBOX (design 2026-10-06; owner, 2026-10-06: four lines and arrows): the close pill, then the notices
     // paged like the tabs. A notice is a block centred on the glass — machine (Inter 25, muted), mark + name (Inter 25,
     // green), the message in the recap's Inter 30 on up to four lines — with a faint › on the side that has more, and
-    // "1/2" at y 400. Showing it reads nothing. A swipe pages (s.offset follows), a tap on an arrow's side pages back,
+    // "1/2" at y 400. The page shown is the one read. A swipe pages (s.offset follows), a tap on an arrow's side pages back,
     // a tap on the page opens that agent, the cross goes back; the run count holds while the finger drags.
     reset(); ht_character_select(&character, HT_CHARACTER_FOCUS); strcpy(s.agents[0].engine, "claude");
     {
@@ -2239,7 +2241,7 @@ int main(int argc, char **argv) {
                                {.agent_id="b",.name="Landing page",.machine="Studio Mac",.summary="Hero and pricing are in."}};
         ui_notif_replace(rows,2); ui_notif_open(); scene_take(); portrait_focus(dir,"focus-inbox");
         assert(s.view == INBOX && scene.background == BG);   // black, like the face
-        assert(habitat_scene_receipt() == 0 && !s.notice[0].read_on_dial);   // shown is not read: only a tap reads
+        assert(habitat_scene_receipt() == s.notice[0].display_revision);    // the page on the glass is the one read
         bool machine=false, name=false, right=false, left=false; int lines = 0, last = 0, name_y = -1, first_y = 999;
         for (int i = 0; i < scene.count; i++) {
             const ht_run_t *r = &scene.runs[i];
@@ -2277,6 +2279,7 @@ int main(int argc, char **argv) {
             more |= !strcmp(scene.runs[i].text,"\xe2\x80\xba");
         }
         assert(two && back && !more);
+        assert(habitat_scene_receipt() == s.notice[1].display_revision);   // and now the second one is read
         tap(2000, 20, 233);                                                         // the left arrow's side pages back
         for (uint32_t t=2100;t<=2600;t+=16) surface_tick(t);
         scene_take(); assert(s.view == INBOX && s.offset == 0 && !desktop_opens);
@@ -2438,7 +2441,7 @@ int main(int argc, char **argv) {
     portrait(dir,"panes-last");
     // FOCUS'S PANES (design 2026-10-06): paged like the tabs. The pane on the face is the chosen page, Inter 44 green,
     // "claude - Harness" on two balanced lines ("claude -" / "Harness"), the next one peeking in Inter 28; "PANES" on
-    // top, a green Done at the foot. A swipe browses and changes nothing; Done opens the chosen pane; the cross, back.
+    // top, a green Done at the foot. A swipe browses and changes nothing; Done opens the chosen pane; no close pill.
     reset(); ht_character_select(&character, HT_CHARACTER_FOCUS); s.count=3; s.active=0;
     {
         const char *names[3]={"claude - Harness","Energy","Opencode"};
@@ -2480,7 +2483,9 @@ int main(int argc, char **argv) {
         tap(2500,233,420); assert(switches==1 && s.view==AGENT && s.active==1);   // Done opens it
         dispatch((action_t){.kind=A_AGENTS}); scene_take();
         assert(ht_tab_carousel_index(&pane_carousel)==1);                       // and the pages open on it next time
-        tap(3500,233,30); assert(s.view==HOME && s.active==1);                   // the cross goes back, nothing changed
+        for (int i = 0; i < scene.count; i++) assert(strcmp(scene.runs[i].text, HT_LV_CROSS));   // no close pill
+        switches=0;
+        tap(4500,233,233); assert(switches==1 && s.view==AGENT && s.active==1);   // a tap on the name opens it, as Done does
         // The run count holds while the finger drags, and nothing leaves the glass.
         dispatch((action_t){.kind=A_AGENTS}); scene_take(); runs = scene.count;
         for (int d = -200; d <= 200; d += 40) {
@@ -2560,7 +2565,7 @@ int main(int argc, char **argv) {
         assert(title && !arrow && done && action_enabled(A_TAB_DONE) && !action_enabled(A_HOME));
         // The chosen "Harness repo" on two balanced lines of Inter 44 (52 px apart, centred on 233); the next tab, "Doi",
         // in Inter 28 a letter to a run, each darker than #6a6962 and darker still toward the edge; the close pill
-        // closes as Done does; the run count holds while the finger drags the pages.
+        // is gone; the run count holds while the finger drags the pages.
         int big_lines = 0, last_x = -1; uint16_t last_ink = 0xffff; bool darker = true;
         for(int i=0;i<scene.count;i++) {
             const ht_run_t *r=&scene.runs[i];
@@ -2578,7 +2583,8 @@ int main(int argc, char **argv) {
         assert(big_lines == 2 && last_x >= 0 && darker);
         int closes = 0;
         for (int i = 0; i < s.hit_count; i++) closes += s.hits[i].action == A_TAB_DONE && s.hits[i].rect.y == 0;
-        assert(closes == 1);
+        for (int i = 0; i < scene.count; i++) assert(strcmp(scene.runs[i].text, HT_LV_CROSS));
+        assert(closes == 0);                                                   // no close pill (owner, 2026-10-06)
         int runs = scene.count;
         for (int d = -200; d <= 200; d += 40) {
             int keep = tab_carousel.position; tab_carousel.position = keep + d;
@@ -2590,12 +2596,14 @@ int main(int argc, char **argv) {
         }
         scene_take();
         tap(3000,233,420); assert(s.view==HOME);
+        dispatch((action_t){.kind=A_TABS}); scene_take();
+        tap(4000,233,233); assert(s.view==HOME);                  // a tap on the chosen name is the check too
     }
     // The Focus states that say something plain: connecting (the wordmark) and a tab list with no tabs.
     reset(); ht_character_select(&character, HT_CHARACTER_FOCUS); s.connected = false; scene_take();
     {
         bool brand = false;
-        for (int i = 0; i < scene.count; i++) brand |= !strcmp(scene.runs[i].text, "Harness") && scene.runs[i].font == &ht_lv_inter_36.base;
+        for (int i = 0; i < scene.count; i++) brand |= !strcmp(scene.runs[i].text, "Harness") && scene.runs[i].font == &ht_lv_inter_bold_48.base;
         assert(brand);
     }
     portrait_focus(dir,"focus-connecting");

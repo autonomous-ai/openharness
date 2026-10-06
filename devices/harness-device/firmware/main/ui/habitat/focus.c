@@ -812,8 +812,14 @@ void ht_focus_face(ht_scene_t *s, const ht_character_face_t *f, uint8_t frame, u
                    ht_rgb(retry ? FOCUS_FG : FOCUS_VOICE), s->background);
     else no_text(s, sf);
 
-    // Nothing yet: said in the resting grey.
-    if (empty) label_runs(s, &body, 2, (HT_WIDTH - EMPTY_W) / 2, body_y, ef->height, ef,
+    // Nothing yet: said in the resting grey. With nothing standing above it (no pet, no mark: design 2026-10-06
+    // "No pane"), its lines are 50 px apart and centred on the glass, each baseline where a browser puts Inter's.
+    bool bare = !pet && engine < 0;
+    if (empty && bare) {
+        int n = body.lines < 2 ? body.lines : 2, top = HT_HEIGHT / 2 - n * 50 / 2;
+        label_runs(s, &body, 2, (HT_WIDTH - EMPTY_W) / 2, top + 25 + 36 * 93 / 256 - ht_pfont(ef)->ascent, 50, ef,
+                   ht_rgb(FOCUS_EMPTY), s->background);
+    } else if (empty) label_runs(s, &body, 2, (HT_WIDTH - EMPTY_W) / 2, body_y, ef->height, ef,
                           ht_rgb(FOCUS_EMPTY), s->background);
     else { no_text(s, ef); no_text(s, ef); }
 

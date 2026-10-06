@@ -8,3 +8,4 @@ extern const ht_pfont_t ht_lv_inter_28;
 extern const ht_pfont_t ht_lv_inter_30;
 extern const ht_pfont_t ht_lv_inter_44;
 extern const ht_pfont_t ht_lv_inter_36;
+extern const ht_pfont_t ht_lv_inter_bold_48;
