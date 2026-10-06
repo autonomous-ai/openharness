@@ -351,6 +351,37 @@ jobs:
       - name: Require complete harnessd and core coverage
         run: npm run test:harnessd && npm run test:core
 
+  # The other per-file 100% coverage gates in cli/package.json, beside cli-contracts' harnessd and core
+  # ones, on a runner of their own so the CI run takes no longer. They used to run only when somebody
+  # remembered: test:resume had slipped to 93% of stoppedAgents.ts and test:orchestrator below 100% by
+  # 5 October 2026 without anyone noticing. One step per gate, so a red run names the gate.
+  # test:local-models is not here yet: it is at 95% of localModels.ts and needs its own tests first.
+  cli-coverage-gates:
+    if: ${{ contains(fromJSON('["full","cli"]'), inputs.scope || 'full') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: cli
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.CLI_NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: cli/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - name: Stopped harnesses, stop and resume
+        run: npm run test:resume
+      - name: Orchestrator
+        run: npm run test:orchestrator
+      - name: Sharing
+        run: npm run test:sharing
+      - name: Remote viewers
+        run: npm run test:remote-viewers
+      - name: Harness portability
+        run: npm run test:portability
+
   cli-tests:
     if: ${{ contains(fromJSON('["full","cli"]'), inputs.scope || 'full') }}
     strategy:

@@ -85,7 +85,7 @@ print('HN_LIVE_MEDIA=' + json.dumps(dict(mode=mode, payload=str(payload), payloa
 
 
 class VM:
-    def __init__(self, folder, iso, firmware, memory, live_transport='cdrom', cpu=None, video='virtio-vga', audio=False):
+    def __init__(self, folder, iso, firmware, memory, live_transport='cdrom', cpu=None, video='virtio-vga', audio=False, apple_model=None):
         self.folder, self.iso, self.firmware, self.memory = folder, iso, firmware, memory
         self.live_transport = live_transport
         self.cpu = cpu
@@ -93,6 +93,9 @@ class VM:
             raise ValueError('Unsupported test display: ' + video)
         self.video = video
         self.audio = audio
+        if apple_model is not None and not re.fullmatch(r'(?:MacBook(?:Air|Pro)|Macmini|MacPro|iMac|iMacPro)[0-9]+,[0-9]+', apple_model):
+            raise ValueError('Invalid synthetic Apple DMI model.')
+        self.apple_model = apple_model
         self.unlock_count = 0
         self.boot_count = 0
         self.process = None
@@ -134,6 +137,10 @@ class VM:
                 '-device', 'virtio-net-pci,netdev=net,id=hnnet', '-netdev', 'user,id=net',
                 '-serial', f'unix:{self.control_path / "serial.sock"},server=on,wait=off',
                 '-qmp', f'unix:{self.control_path / "qmp.sock"},server=on,wait=off']
+        if self.apple_model:
+            # Explicit synthetic DMI for firmware selection tests. This does
+            # not emulate the T2 bridge, physical input, radios or audio.
+            args += ['-smbios', 'type=1,manufacturer=Apple Inc.,product=' + self.apple_model.replace(',', ',,')]
         if self.audio:
             args += ['-audiodev', f'wav,id=sound,path={self.folder / ("audio-" + str(self.boot_count) + ".wav")}',
                      '-device', 'intel-hda', '-device', 'hda-duplex,audiodev=sound']

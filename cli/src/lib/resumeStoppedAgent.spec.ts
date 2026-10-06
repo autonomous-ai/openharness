@@ -89,6 +89,17 @@ describe('Enter resumes stopped work', () => {
 
 
 describe('resume runtime verification', () => {
+  // Another client stopped or deleted the live harness while this one checked its runtime: the row this
+  // request was about is gone, and nothing it learned about it may be acted on.
+  it('reports the harness changed when its live row is gone after the runtime check, and acts on nothing', async () => {
+    const deps = fixture()
+    deps.live.mockReturnValue(saved)
+    deps.checkLive.mockImplementation(async () => { deps.live.mockReturnValue(undefined); return { state: 'gone', reason: 'fixture' } })
+    await expect(resumeStoppedAgent(deps)).resolves.toMatchObject({ ok: false, error: 'AGENT_CHANGED' })
+    expect(deps.retain).not.toHaveBeenCalled()
+    expect(deps.launch).not.toHaveBeenCalled()
+  })
+
   it.each(['unknown', 'gone'] as const)('never calls a %s registry row a successful attachment', async state => {
     const deps = fixture()
     deps.live.mockReturnValue(saved)

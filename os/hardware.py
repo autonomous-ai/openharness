@@ -67,6 +67,16 @@ def installation_blocker(sysfs=Path('/sys')):
     # and the currently bound driver. The stock image does not ship its stack.
     # https://github.com/t2linux/linux-t2-patches/blob/main/1001-Add-t2bce-driver-stack.patch
     if any(device['id'] == '106b:1801' for device in pci_devices(sysfs)):
+        path = Path(__file__).with_name('boot_profile.py')
+        if path.is_file():
+            spec = importlib.util.spec_from_file_location('harness_boot_profile', path)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            if module.selected()['id'] == 'apple-t2':
+                pkgbase = Path('/usr/lib/modules') / os.uname().release / 'pkgbase'
+                if read(pkgbase) == 'linux-t2':
+                    return None
+                return 'Boot this Mac using the Harness T2 image before installing.'
         return 'This Harness image does not support Apple T2 Macs yet.'
     return None
 

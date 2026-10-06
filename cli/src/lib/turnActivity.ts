@@ -42,7 +42,12 @@ export class TurnActivity {
       entry = { runtime: runtime.key, state: runtime.turnOpen ? 'unknown' : 'idle', revision: ++this.revision, until: 0 }
       this.entries.set(sessionId, entry)
     }
-    if (entry.state === 'working' && this.now() >= entry.until) this.set(entry, 'unknown')
+    // A Working claim whose evidence ran out reads as unknown while a turn is open: the heartbeat probes
+    // open turns and settles it. With no turn open nothing probes it again, so unknown stuck until the
+    // next prompt. That is what a cancel left when the aborted tool's output landed after it and read as
+    // work (a real Codex 0.160, found by daemon QA). The transcript says no turn is open and nothing
+    // renewed the claim: idle.
+    if (entry.state === 'working' && this.now() >= entry.until) this.set(entry, runtime.turnOpen ? 'unknown' : 'idle')
     return entry
   }
   private set(entry: Entry, state: ActivityState): void {

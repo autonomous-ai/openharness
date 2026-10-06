@@ -17,7 +17,9 @@ import tarfile
 import tempfile
 
 
-CONVERTER = Path(__file__).parents[1] / 'platforms/apple-t2/firmware_names.py'
+CONVERTER = Path(__file__).with_name('firmware_names.py')
+if not CONVERTER.is_file():
+    CONVERTER = Path(__file__).parents[1] / 'platforms/apple-t2/firmware_names.py'
 spec = importlib.util.spec_from_file_location('harness_apple_firmware_names', CONVERTER)
 names = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(names)
@@ -202,6 +204,13 @@ def unique_object(pairs):
 
 
 def verify(bundle, model):
+    try:
+        return verify_archive(bundle, model)
+    except (tarfile.TarError, UnicodeError, KeyError, TypeError) as error:
+        raise ValueError('Invalid preserved firmware archive.') from error
+
+
+def verify_archive(bundle, model):
     check_model(model)
     data = regular_bytes(bundle, MAX_ARCHIVE)
     files, manifest = {}, None
