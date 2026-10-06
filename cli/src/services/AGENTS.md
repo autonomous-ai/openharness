@@ -43,12 +43,12 @@ let several people build features at once without touching the core or each othe
 
 A service that can crash natively, hang or leak should run in a process of its own, where it costs only
 that process. A process per risk, not per feature: search (native `node:sqlite`), the viewers (their
-servers), the teams' prompt scopes, and the edge host, one process for the light services that only
-answer requests (workspaces, usage, the monitor, the project readers). A fault in one of the edge
-host's services can cost the others in it, never the core. Every service in `KNOWN_SERVICES` runs out
-of the core's process by default, unless `HARNESSD_SERVICES` names a subset, by service
-(`search,usage`) or by process (`edge`), and `HARNESSD_SERVICES=none` runs them all inside the core's
-process (for debugging or a quick way back).
+servers) with the Store (its minutes-long installs), the teams' prompt scopes, and the edge host, one
+process for the light services that only answer requests (workspaces, usage, the monitor, the project
+readers). A fault in one of the edge host's services can cost the others in it, never the core. Every
+service in `KNOWN_SERVICES` runs out of the core's process by default, unless `HARNESSD_SERVICES` names
+a subset, by service (`search,usage`) or by process (`edge`), and `HARNESSD_SERVICES=none` runs them
+all inside the core's process (for debugging or a quick way back).
 
 - `src/harnessd/services.ts` runs it (`SERVICE_HOSTS`: each process, the services it hosts and its
   memory budget, one heartbeat for all of them). The core routes the requests it declared (its

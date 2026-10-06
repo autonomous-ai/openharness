@@ -14,7 +14,7 @@ import { FakeBackend, type FakeMachine } from './harness/fakeBackend.js'
 
 type Engine = 'claude' | 'codex'
 const MACHINE: FakeMachine = { machineId: 'c3'.repeat(16), computerId: 'e2e-computer-0000-0000-00000000000c', name: 'signed-in', token: 'e2e-token-signed-in' }
-const SERVICES = ['search', 'viewers', 'workspaces', 'usage', 'monitor', 'projects', 'teams'] as const
+const SERVICES = ['search', 'viewers', 'store', 'workspaces', 'usage', 'monitor', 'projects', 'teams'] as const
 
 const row = async (client: LocalClient, agentId: string) =>
   ((await client.request<{ agents: Array<Record<string, any>> }>('agents_list', { includeStopped: true }, 30_000)).agents)

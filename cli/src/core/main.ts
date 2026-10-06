@@ -74,7 +74,7 @@ import { externalProviders } from '../lib/sessionSearch/externals/index.js'
 import { type LaunchOverridesDeps } from '../lib/launchOverrides.js'
 import { buildHarnessSessionLabel } from '../lib/harnessSessionLabel.js'
 import { adoptLegacyHarnessSessions, listTmuxPanes } from '../lib/tmuxAgentDiscovery.js'
-import { installedDsh } from '../dsh/installed.js'
+import { installedDsh, invalidateInstalledDsh } from '../dsh/installed.js'
 import { prepareHarnessLaunch } from '../dsh/runtime.js'
 import { ApiConnections } from '../lib/apiConnections.js'
 import { rememberSavedApis } from '../lib/apiModels.js'
@@ -138,10 +138,10 @@ import { createServiceLinks } from './serviceLinks.js'
 import { createViewersLink } from './viewersLink.js'
 import { createWorkspacesLink } from './workspacesLink.js'
 import { createMonitorLink } from './monitorLink.js'
+import { createStoreLink } from './storeLink.js'
 import { answerAgentQuery } from './agentQueries.js'
 import { KNOWN_SERVICES, servicesTheMasterRuns } from '../harnessd/services.js'
 import { createTeamsLink } from './teamsLink.js'
-import { startStore } from '../services/store.js'
 import { startModels } from '../services/models.js'
 import { startFleet } from '../services/fleet.js'
 import { CORE_EXIT_STOP, CORE_EXIT_UPDATE } from '../harnessd/protocol.js'
@@ -817,6 +817,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   }
   backend.viewerTargetProvider = (agentId) => ports.viewers?.forwardingUrl(agentId) ?? null
 
+  // The harnesses the release bundles (the Model Manager, Devices, the Harness Monitor), before restore
+  // relaunches an agent on one. Here and not in the Store's process: its lean bundle would carry a second
+  // copy of their files (571 KB more cli.js) and the viewers' process held 12 MiB more at idle (measured
+  // 2026-10-06), while cli.js, which the core runs, carries them anyway.
   ensureBundledCoreHarnesses()
 
   // Models: grid access, the model pictures on agents' frames, the keystroke prewarm, and the models
@@ -1120,18 +1124,21 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const serviceToken = process.env.HARNESSD_SUPERVISED === '1' ? process.env.HARNESSD_SERVICE_TOKEN : undefined
   const outOfProcess = servicesTheMasterRuns(process.env, KNOWN_SERVICES)
   // The requests each service that can run in its own process answers, as core/api.ts declares them.
-  const requestsOf: Record<string, readonly string[]> = { search: SEARCH_REQUESTS, usage: USAGE_REQUESTS, monitor: MONITOR_REQUESTS, projects: PROJECTS_REQUESTS }
+  const requestsOf: Record<string, readonly string[]> = { search: SEARCH_REQUESTS, store: STORE_REQUESTS, usage: USAGE_REQUESTS, monitor: MONITOR_REQUESTS, projects: PROJECTS_REQUESTS }
   // What the core keeps of the viewers in their own process, for the frames it builds (core/viewersLink.ts).
   const viewersLink = createViewersLink(coreApi, (frame, opts) => serviceLinks.notify('viewers', frame, opts))
   // How the core tells workspaces in their own process what to do, and answers them (core/workspacesLink.ts).
   const workspacesLink = createWorkspacesLink(coreApi, (frame) => serviceLinks.notify('workspaces', frame), forgetAgentProject)
   // Every change to the prompt scopes, kept until their own process has it, and each agent's scope (core/teamsLink.ts).
   const teamsLink = createTeamsLink({ notify: (frame) => serviceLinks.notify('teams', frame) })
+  // What the Store in its own process tells the core: an install's progress, and that what is installed changed (core/storeLink.ts).
+  const storeLink = createStoreLink(coreApi, invalidateInstalledDsh)
   const serviceLinks = createServiceLinks({
     token: serviceToken,
     owned: Object.fromEntries([...outOfProcess].map((name) => [name, requestsOf[name] ?? []])),
     answer: (service, query, payload) => service === 'viewers' ? viewersLink.answer(query, payload)
       : service === 'workspaces' ? workspacesLink.answer(query, payload)
+      : service === 'store' ? storeLink.answer(query, payload)
       : service === 'teams' ? teamsLink.answer(query, payload) : answerAgentQuery(coreApi, query),
   })
   // A request a service declared goes to it: in its own process, or in this one (core/serviceHost.ts).
@@ -1164,8 +1171,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // The prompt scopes, behind the service host's guard (a fault there costs no message its write) or in their own process.
   if (outOfProcess.has('teams')) ports.teams = backend.swarmPromptScopes = teamsLink.scopes
   else serviceHost.start('teams', (_core, started) => { started.teams = backend.swarmPromptScopes }, coreApi, TEAMS_FALLBACKS)
-  // The harnesses installed here, and installing, updating and removing one (services/store.ts).
-  serviceHost.serve('store', startStore, coreApi, STORE_REQUESTS)
+  // The harnesses installed here, and installing, updating and removing one (services/store.ts): in this
+  // process, or beside the viewers in theirs (services/storeProcess.ts).
+  if (!outOfProcess.has('store')) serviceHost.serve('store', inline!.startStore, coreApi, STORE_REQUESTS)
   // This machine's Claude and Codex rate limits, read with its own credentials (services/usage.ts): in this
   // process, or in the edge host (services/usageProcess.ts).
   if (!outOfProcess.has('usage')) serviceHost.serve('usage', inline!.startUsage, coreApi, USAGE_REQUESTS)

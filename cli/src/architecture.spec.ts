@@ -177,12 +177,13 @@ const SERVICE_MAY_IMPORT: Record<string, string> = {
  *
  * Then at 102,019 in 430 with #893's shell launch (step 5), from 106,006 in 451: search, the viewers, workspaces, usage, the
  * monitor and the project readers run in processes of their own, and their code is loaded into the
- * core's only when they run there instead (services/inline.ts).
+ * core's only when they run there instead (services/inline.ts). Then at 101,896 in 430 (step 6): the
+ * Store runs beside the viewers.
  */
 //
 // Connected TUI shells added a literal-argv launch port and shell service (#893, 160 loaded lines); moving
 // the search filename out of its CLI command removed 188, so that change lowered the closure by 28.
-const CORE_CLOSURE_BUDGET = 102_110
+const CORE_CLOSURE_BUDGET = 101_990
 
 /** What is not the core's, by path: each goes to a service or its own process, in the plan's order. */
 const EDGE: RegExp[] = [
@@ -199,6 +200,11 @@ const EDGE: RegExp[] = [
  * The edge files the core's process still loads, each with the step of the plan that takes it out. The
  * list only shrinks: an entry no longer reached fails the test, so remove it with the move that ends it.
  */
+/** The Wi-Fi device lists, installs and checks harnesses with the Store's code, in the core's process
+ *  (lib/autonomous-device/storeRuntime.ts). It reaches the Store through the Store's process once a port
+ *  can carry an install's progress back to it, or it leaves with the device (step 10). */
+const STORE_BYPASS = 'step 10: the Wi-Fi device\'s own way into the Store, until it goes through the Store\'s process'
+
 const CORE_MAY_REACH: Record<string, string> = {
   'cable/cableFleet.ts': 'step 9: the dial, in the devices process',
   'cable/cableFrame.ts': 'step 9: the dial, in the devices process',
@@ -223,15 +229,14 @@ const CORE_MAY_REACH: Record<string, string> = {
   'device/deviceFleet.ts': 'step 9: the fleet, beside the dial',
   'device/deviceLink.ts': 'step 9: the fleet, beside the dial',
   'device/machineList.ts': 'step 9: the dial, in the devices process',
-  'dsh/builtins.ts': 'step 6: the Store, in the viewers\' process',
-  'dsh/catalog.ts': 'step 6: the Store, in the viewers\' process',
-  'dsh/install.ts': 'step 6: the Store, in the viewers\' process',
-  'dsh/lock.ts': 'step 6: the Store, in the viewers\' process',
-  'dsh/registry.ts': 'step 6: the Store, in the viewers\' process',
-  'dsh/service.ts': 'step 6: the Store, in the viewers\' process',
-  'dsh/update.ts': 'step 6: the Store, in the viewers\' process',
-  'dsh/updates.ts': 'step 6: the Store, in the viewers\' process',
-  'dsh/wire.ts': 'step 6: the Store, in the viewers\' process',
+  'dsh/builtins.ts': 'the bundled harnesses are put in place by the core\'s start, which cli.js carries them for anyway; in the Store\'s lean process they cost a second copy (core/main.ts)',
+  'dsh/catalog.ts': STORE_BYPASS,
+  'dsh/install.ts': STORE_BYPASS,
+  'dsh/lock.ts': STORE_BYPASS,
+  'dsh/registry.ts': STORE_BYPASS,
+  'dsh/service.ts': STORE_BYPASS,
+  'dsh/update.ts': STORE_BYPASS,
+  'dsh/updates.ts': STORE_BYPASS,
   'lib/autonomous-device/direct.ts': 'step 10: the Wi-Fi device, into the devices process over the gateway',
   'lib/autonomous-device/discovery.ts': 'step 10: the Wi-Fi device, into the devices process over the gateway',
   'lib/autonomous-device/dump.ts': 'step 10: the Wi-Fi device, into the devices process over the gateway',
@@ -291,7 +296,6 @@ const CORE_MAY_REACH: Record<string, string> = {
   'services/models.ts': 'step 7: models, in its own process',
   'services/shell.ts': 'shell setup and launch receipts, in the edge host; only the argv launch stays in the core (#893)',
   'services/requestErrors.ts': 'step 7: with the last service that uses it, models, out of the core\'s process',
-  'services/store.ts': 'step 6: the Store, in the viewers\' process',
   'sharing/collaboration.ts': 'step 8: the experimental host',
   'sharing/crypto.ts': 'step 8: the experimental host',
   'sharing/grants.ts': 'step 8: the experimental host',

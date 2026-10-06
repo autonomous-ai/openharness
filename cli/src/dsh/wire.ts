@@ -9,7 +9,7 @@ import { DSH_ID_RE, dshSupportedEngines, dshTier, viewerUse } from './manifest.j
 import { registrySourceUrl, type DshRegistryEntry } from './registry.js'
 import { currentDshRegistry } from './catalog.js'
 import { dshUpdateInfo } from './updates.js'
-import { isHiddenBuiltin } from './builtins.js'
+import { isHiddenBuiltin } from './builtinIds.js'
 
 /**
  * `dsh_list`: the harnesses installed on this machine, then what the registry offers that is not.

@@ -11,7 +11,7 @@
 import { join } from 'node:path'
 import { baseNode } from '../harnessd/baseNode.js'
 import type { CoreApi, CorePorts, ModelsPort, ServiceRequest, ServiceRequests } from '../core/api.js'
-import { MODEL_MANAGER_ID } from '../dsh/builtins.js'
+import { MODEL_MANAGER_ID } from '../dsh/builtinIds.js'
 import { installedDsh } from '../dsh/installed.js'
 import { ApiConnections, apiConnectionsRequest } from '../lib/apiConnections.js'
 import { apiModelsRequest, rememberSavedApis } from '../lib/apiModels.js'

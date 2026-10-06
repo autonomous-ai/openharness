@@ -13,6 +13,7 @@
 export { startMonitor } from './monitor.js'
 export { startProjects } from './projects.js'
 export { startSearch } from './search.js'
+export { startStore } from './store.js'
 export { startUsage } from './usage.js'
 export { startViewers } from './viewers.js'
 export { startWorkspaces } from './workspaces.js'
