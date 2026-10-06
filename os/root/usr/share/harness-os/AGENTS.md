@@ -49,6 +49,24 @@ is required.
 
 ## Network and hardware
 
+- GPU verification runs briefly after the installed workspace starts. Success
+  is quiet. Read `harness hardware` → `gpu_health` before changing NVIDIA drivers;
+  `harness hardware --check-gpu` repeats the checks as the current user. Do not run
+  it with sudo: ordinary session device access is part of the check. Each PCI GPU
+  has separate binding, memory, computation and offscreen graphics results, with
+  the exact failed API and error. `stale: true` means the saved result no longer
+  describes this boot/driver. Unavailable or skipped checks are not passes.
+- These are small readiness checks, not full VRAM, display, browser, sleep or
+  model-workload validation. A headless GPU can pass compute while graphics stays
+  explicitly unverified. Passthrough devices are never touched. Reports stay in
+  `~/.local/state/harness-os/gpu/`; no hardware data is uploaded.
+- Updates retain the original Btrfs root and matching boot checkpoint. GPU
+  diagnostics run again after reboot, never by resetting a GPU used by agents.
+  A failure does not automatically roll back or reboot. Use the reported update
+  checkpoint with the existing offline recovery procedure when appropriate;
+  projects remain in the separate home subvolume. Local models belong to the
+  TUI's existing local-model workflow, not this hardware check.
+
 - `harness hardware` reports the model, CPU baseline, PCI devices, bound drivers
   and backlights. It does not collect serial numbers, Wi-Fi names, MAC addresses
   or passwords. Use actual device IDs when diagnosing hardware.

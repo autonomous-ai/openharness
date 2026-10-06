@@ -1,0 +1,9 @@
+[Unit]
+Description=Check GPU readiness after the workspace starts
+ConditionPathExists=!/etc/harness-live
+PartOf=harness-os.target
+
+[Timer]
+OnActiveSec=15
+AccuracySec=1
+Unit=harness-gpu-check.service

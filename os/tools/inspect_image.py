@@ -40,6 +40,8 @@ def inspect(iso):
                       'usr/lib/harness-os/live_update.py': source / 'live_update.py',
                       'usr/lib/harness-os/release_update.py': source / 'release_update.py',
                       'usr/lib/harness-os/hardware.py': source / 'hardware.py',
+                      'usr/lib/harness-os/gpu_health.py': source / 'gpu_health.py',
+                      'usr/lib/harness-os/gpu_probe.py': source / 'gpu_probe.py',
                       'usr/bin/hn-os': source / 'tools/hn-os',
                       'usr/share/harness-os/lock.json': source / 'lock.json',
                       'usr/share/harness-os/guide/tui.md': source.parent / 'tui/README.md',
