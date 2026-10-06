@@ -139,7 +139,7 @@ jobs:
               path = pathlib.Path(out('rustup', 'which', 'rustc') if name == 'rustc' else shutil.which(args[0])).resolve()
               tools[name] = {'version': out(*args), 'path': str(path),
                              'sha256': hashlib.sha256(path.read_bytes()).hexdigest()}
-          record = {'source_commit': source, 'os_source': '8ce9b9d3eb676cecb118159e723653e459089da4',
+          record = {'source_commit': source, 'os_source': '6d3e036b52c87f1ea15ddf85a6c130b0facd279c',
                     'runtime_input_source': 'b6cbaf3e3090f43106ad1ee47606349bd1a0ae89',
                     'runtime_trees': frozen, 'release_baselines': baselines, 'tools': tools, 'musl': musl,
                     'runner': {key: os.environ.get(key) for key in ('ImageOS', 'ImageVersion', 'RUNNER_OS', 'RUNNER_ARCH')}}
