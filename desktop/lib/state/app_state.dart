@@ -6240,6 +6240,50 @@ class AppNotifier extends ChangeNotifier {
     _offlineRetryTimers.remove(machineId)?.cancel();
   }
 
+  /// Dials [machineId] now instead of at the link retry's next tick. A machine
+  /// that trusts this device through the account's device key log answers with
+  /// no password at all. True once it is connected; false when it still wants
+  /// this device linked (a CLI from before the log, or a log that does not name
+  /// this device yet), or has not answered within [timeout].
+  Future<bool> connectTrusted(
+    String machineId, {
+    Duration timeout = const Duration(seconds: 12),
+  }) async {
+    final state = machineStates[machineId];
+    if (state == null || state.machine.isShared) return false;
+    final done = Completer<bool>();
+    var dialed = false;
+    void settle() {
+      final now = machineStates[machineId];
+      if (done.isCompleted) return;
+      if (now == null) return done.complete(false);
+      final status = now.connectionStatus;
+      if (status == ConnectionStatus.connected && !now.needsLink) {
+        return done.complete(true);
+      }
+      if (status == ConnectionStatus.connecting ||
+          status == ConnectionStatus.reconnecting) {
+        dialed = true;
+      } else if (dialed && now.needsLink) {
+        done.complete(false);
+      }
+    }
+
+    addListener(settle);
+    final timer = Timer(timeout, () {
+      if (!done.isCompleted) done.complete(false);
+    });
+    try {
+      await _pool?.closeMachine(machineId);
+      if (machineStates[machineId] case final current?) _connectMachine(current);
+      settle();
+      return await done.future;
+    } finally {
+      timer.cancel();
+      removeListener(settle);
+    }
+  }
+
   void _startLinkRetry(String machineId) {
     if (_linkRetryTimers.containsKey(machineId)) return;
     _linkRetryTimers[machineId] = Timer.periodic(offlineRetryInterval, (_) {

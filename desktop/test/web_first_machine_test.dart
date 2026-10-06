@@ -28,6 +28,21 @@ class _Linking extends AppNotifier {
   String? machineLinkStage(String machineId) => 'deriving_key';
 }
 
+/// Dialing with no password: [trusted] says how the computer answers.
+class _Dialing extends AppNotifier {
+  _Dialing({required this.trusted})
+    : super(config: AppConfig.dev, authSession: AuthSession(), configStore: null);
+
+  final bool trusted;
+  final dialed = <String>[];
+
+  @override
+  Future<bool> connectTrusted(String machineId, {Duration? timeout}) async {
+    dialed.add(machineId);
+    return trusted;
+  }
+}
+
 void main() {
   late AppNotifier app;
   late List<Uri> opened;
@@ -106,23 +121,42 @@ void main() {
     await tester.pump(const Duration(seconds: 3));
   });
 
-  testWidgets('a computer waiting on this browser connects right here', (
-    tester,
-  ) async {
+  void addWaitingComputer(AppNotifier on) {
     const machine = Machine(
       machineId: 'mac',
       name: 'MacBookPro2021.local',
       authMode: MachineAuthMode.remote,
     );
-    app.machines.add(machine);
-    app.machineStates['mac'] = MachineState(machine)
+    on.machines.add(machine);
+    on.machineStates['mac'] = MachineState(machine)
       ..nodeOnline = true
       ..needsLink = true;
+  }
+
+  testWidgets('a computer that trusts this browser connects with a click', (
+    tester,
+  ) async {
+    app.dispose();
+    app = _Dialing(trusted: true); // tearDown disposes it
+    addWaitingComputer(app);
     await mount(tester);
 
     expect(find.text('Connect your computer'), findsOneWidget);
-    expect(find.text('MacBookPro2021.local'), findsOneWidget);
     expect(find.text('Or set up another computer'), findsOneWidget);
+    await tester.tap(find.widgetWithText(FilledButton, 'Connect'));
+    await tester.pump();
+
+    expect((app as _Dialing).dialed, ['mac']);
+    expect(find.byType(MachinePickerForm), findsNothing);
+  });
+
+  testWidgets('one that refuses asks for its password, and says why', (
+    tester,
+  ) async {
+    app.dispose();
+    app = _Dialing(trusted: false);
+    addWaitingComputer(app);
+    await mount(tester);
 
     await tester.tap(find.widgetWithText(FilledButton, 'Connect'));
     await tester.pump();
@@ -130,7 +164,21 @@ void main() {
     expect(find.byType(MachinePickerForm), findsOneWidget);
     // The row follows the form: no second Connect beside the form's own.
     expect(find.widgetWithText(FilledButton, 'Connect'), findsNothing);
-    expect(find.text('Enter its password below.'), findsOneWidget);
+    expect(find.textContaining("hasn't trusted this browser"), findsOneWidget);
+  });
+
+  testWidgets('an offline computer says what to do on it', (tester) async {
+    const machine = Machine(
+      machineId: 'mac',
+      name: 'MacBookPro2021.local',
+      authMode: MachineAuthMode.remote,
+    );
+    app.machines.add(machine);
+    app.machineStates['mac'] = MachineState(machine)..nodeOnline = false;
+    await mount(tester);
+
+    expect(find.textContaining('Offline'), findsOneWidget);
+    expect(find.widgetWithText(FilledButton, 'Connect'), findsNothing);
   });
 
   testWidgets('a link in progress reads the same in the row as in the form', (
@@ -156,20 +204,6 @@ void main() {
     await mount(tester);
 
     expect(find.text('Checking password…'), findsOneWidget);
-    expect(find.widgetWithText(FilledButton, 'Connect'), findsNothing);
-  });
-
-  testWidgets('an offline computer says what to do on it', (tester) async {
-    const machine = Machine(
-      machineId: 'mac',
-      name: 'MacBookPro2021.local',
-      authMode: MachineAuthMode.remote,
-    );
-    app.machines.add(machine);
-    app.machineStates['mac'] = MachineState(machine)..nodeOnline = false;
-    await mount(tester);
-
-    expect(find.textContaining('Offline'), findsOneWidget);
     expect(find.widgetWithText(FilledButton, 'Connect'), findsNothing);
   });
 
