@@ -1091,6 +1091,9 @@ fn reveal(app: &mut App, form: &mut Form) {
 }
 fn activate(app: &mut App, form: &mut Form) -> bool {
     form.error.clear();
+    // The compact welcome page has no persistent daemon hint. Let submission
+    // explain an unavailable launch and preserve the task instead of doing nothing.
+    if form.focus == Field::Create { return true }
     if form.blocked(form.focus).is_some() {
         if form.git["error"].is_string() {
             sync_git(app, form, true);
@@ -2108,6 +2111,30 @@ mod tests {
         key(&mut app, form, KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
         let Some(Modal::NewHarness(form)) = &app.modal else { panic!() };
         assert_eq!(form.focus, Field::Task);
+    }
+
+    #[tokio::test]
+    async fn offline_submission_explains_recovery_and_preserves_the_task_on_both_surfaces() {
+        for window in [false, true] {
+            let mut app = app();
+            app.daemon_down = true;
+            app.fleet.machines[0].reach = crate::fleet::Reach::Offline;
+            app.tab_mut().home = window;
+            let surface = if window { Surface::Window(app.tab().id.clone()) } else { Surface::Dialog };
+            let mut form = make_form(&mut app, Some(crate::local::MACHINE.into()), Some("/home/dev/project".into()), surface).unwrap();
+            assert!(form.local_only);
+            form.draft.task = "Keep my offline task".into();
+            key(&mut app, form, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+            let form = take_active(&mut app).unwrap();
+            assert_eq!(form.focus, Field::Create);
+            assert!(form.error.is_empty());
+            key(&mut app, form, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+            let form = take_active(&mut app).unwrap();
+            assert!(form.error.contains("harness start"));
+            assert!(form.error.contains("task stays here"));
+            assert_eq!(form.draft.task, "Keep my offline task");
+            assert!(!form.starting && form.attempt.is_none());
+        }
     }
 
     #[tokio::test]
