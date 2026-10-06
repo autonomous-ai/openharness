@@ -132,6 +132,103 @@ describe('handOffToGrid — a Harness-issued sign-in', () => {
 })
 
 /**
+ * What a refusal says. `grid` refuses on stderr, and under `--json` it writes one JSON line there —
+ * `{"error": {"code", "message", "status"}}` (autonomous-grid `cli/json_error.py`) — before the
+ * interpreter prints the same sentence in plain text. The daemon's Set up shows this module's
+ * `message` and nothing else, so a refusal that names its own way forward has to arrive there, not
+ * only on `stderr`.
+ */
+describe('handOffToGrid — grid\'s own refusal', () => {
+  /** What the control plane says while Harness has not yet learned the account's Google identity
+   *  (ADR 0046), rendered the way `grid` renders every control-plane refusal (`control_plane._raise`). */
+  const SENTENCE = 'POST https://cp.example.test/v1/grid/auth/harness failed (409): {"detail":"Harness hasn\'t '
+    + 'confirmed this account\'s Google identity yet, so nothing was changed. Sign in to Harness once with '
+    + 'Google, Apple or your email on any device, then try again."}'
+  const ENVELOPE = JSON.stringify({ error: { code: null, message: SENTENCE, status: 409 } })
+
+  /** A `grid` that reads the token, writes `stderr` and exits `status`. The text goes through a file
+   *  so no shell quoting stands between the test and the bytes `grid` would write. */
+  function refusingGrid(dir: string, stderr: string, status: number): string {
+    mkdirSync(dir, { recursive: true })
+    const said = join(dir, 'stderr.txt')
+    writeFileSync(said, stderr)
+    const bin = join(dir, 'grid')
+    writeFileSync(bin, ['#!/bin/sh', '/bin/cat > /dev/null', `/bin/cat "${said}" >&2`, `exit ${status}`, ''].join('\n'), { mode: 0o755 })
+    return bin
+  }
+
+  it('carries the envelope\'s sentence as the message, and leaves stderr as grid wrote it', async () => {
+    // The order the real `grid` writes them in: the envelope from `main()`'s handler, then the
+    // interpreter's own print of the same `SystemExit` on its way out.
+    const stderr = `${ENVELOPE}\n${SENTENCE}\n`
+    process.env.HARNESS_GRID_BIN = refusingGrid(join(root, 'refuses'), stderr, 1)
+    const { handOffToGrid } = await load()
+
+    const result = await handOffToGrid('tok_refused', { json: true })
+
+    expect(result).toMatchObject({ code: 'GRID_LOGIN_FAILED', exitCode: 1, message: SENTENCE, stderr })
+  })
+
+  it('falls back to the exit code when grid wrote no envelope', async () => {
+    process.env.HARNESS_GRID_BIN = refusingGrid(join(root, 'plain'), `${SENTENCE}\n`, 1)
+    const { handOffToGrid } = await load()
+
+    const result = await handOffToGrid('tok_plain', { json: true })
+
+    expect(result).toMatchObject({ code: 'GRID_LOGIN_FAILED', exitCode: 1, message: '`grid login --harness` exited 1.' })
+  })
+
+  it('falls back to the exit code when no envelope carries a sentence', async () => {
+    const blank = JSON.stringify({ error: { code: 'some_code', message: ' \n ', status: 400 } })
+    const none = JSON.stringify({ error: { code: null, message: null, status: null } })
+    process.env.HARNESS_GRID_BIN = refusingGrid(join(root, 'blank'), `{not json\n${blank}\n${none}\n`, 1)
+    const { handOffToGrid } = await load()
+
+    const result = await handOffToGrid('tok_blank', { json: true })
+
+    expect(result.message).toBe('`grid login --harness` exited 1.')
+  })
+
+  it('reads no envelope without json: grid\'s stderr went to the terminal, uncaptured', async () => {
+    process.env.HARNESS_GRID_BIN = refusingGrid(join(root, 'human'), `${ENVELOPE}\n${SENTENCE}\n`, 1)
+    const { handOffToGrid } = await load()
+
+    const result = await handOffToGrid('tok_human')
+
+    expect(result).toMatchObject({ code: 'GRID_LOGIN_FAILED', message: '`grid login --harness` exited 1.', stderr: '' })
+  })
+
+  it('still calls exit 2 an outdated grid, though argparse\'s refusal comes with an envelope too', async () => {
+    // What a `grid` predating `--harness` writes under `--json`: argparse's `SystemExit(2)` carries no
+    // sentence, so the envelope's is json_error's generic one — and "too old" is the only useful reading.
+    const argparse = JSON.stringify({ error: { code: null, message: 'the command failed with exit status 2', status: null } })
+    process.env.HARNESS_GRID_BIN = refusingGrid(join(root, 'old'), `${argparse}\nusage: grid login [-h]\n`, 2)
+    const { handOffToGrid } = await load()
+
+    const result = await handOffToGrid('tok_old', { json: true })
+
+    expect(result).toMatchObject({ code: 'GRID_CLI_OUTDATED', exitCode: 2 })
+    expect(result.message).toContain('too old')
+  })
+
+  it('shows the sentence as one bounded line, whatever bytes the child put in it', async () => {
+    // Astral characters past the bound: a cut by UTF-16 unit would leave half a surrogate pair.
+    const noisy = `first line\nsecond\tline \u001b[31mred\u001b[0m \u009b2J \u202eagain\u2066\u200b. ${'\u{1F600}'.repeat(700)}`
+    const envelope = JSON.stringify({ error: { code: null, message: noisy, status: 500 } })
+    process.env.HARNESS_GRID_BIN = refusingGrid(join(root, 'noisy'), `${envelope}\n`, 1)
+    const { handOffToGrid } = await load()
+
+    const result = await handOffToGrid('tok_noisy', { json: true })
+
+    expect(result.message.startsWith('first line second line [31mred [0m 2J again . \u{1F600}')).toBe(true)
+    expect(result.message).not.toMatch(/[\p{Cc}\p{Cf}]/u)
+    expect(result.message).not.toMatch(/\p{Surrogate}/u)
+    expect(Array.from(result.message)).toHaveLength(600)
+    expect(result.message.endsWith('\u{1F600}…')).toBe(true)
+  })
+})
+
+/**
  * The watchdog. `grid login --harness` makes two control-plane round trips, and a connection that is
  * accepted and then answered by nobody used to leave this promise pending for good — a `harness
  * login` that never returned, and a daemon reconcile that never settled.

@@ -781,13 +781,15 @@ async function gridLoginCommand(force: boolean, json: boolean): Promise<void> {
   }))
 }
 
-/** What `grid` itself said, carried out on the result line beside this command's own classification.
+/** What `grid` itself said, carried out on the result line beside `message` — which is already `grid`'s
+ *  own sentence when it refused with its `--json` envelope (`lib/gridHandoff.ts`), else the hand-off's.
  *
  *  `grid`'s answer on success is a JSON document on stdout, so it travels parsed, under `grid`. Its
  *  refusals go to **stderr** — every one of them already names its own way forward — and those
- *  travel verbatim under `detail`, because a client reading NDJSON off stdout would otherwise have
- *  the exit code and no sentence to show anybody. Both are omitted when empty rather than sent as
- *  `null`: an absent key reads as "the child said nothing there", which is what it means. */
+ *  travel verbatim under `detail` (the envelope line included), because a client reading NDJSON off
+ *  stdout would otherwise have the exit code and no sentence to show anybody. Both are omitted when
+ *  empty rather than sent as `null`: an absent key reads as "the child said nothing there", which is
+ *  what it means. */
 function gridSaid(handoff: { stdout: string; stderr: string }): Record<string, unknown> {
   const out = handoff.stdout.trim()
   const err = handoff.stderr.trim()

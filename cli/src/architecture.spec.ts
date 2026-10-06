@@ -221,7 +221,7 @@ const CORE_CLOSURE_BUDGET = 95_420
 /** What is not the core's, by path: each goes to a service or its own process, in the plan's order. */
 const EDGE: RegExp[] = [
   /^gateway\//, /^lib\/e2ee\//, /^cable\//, /^device\//, /^lib\/autonomous-device\//, /^sharing\//, /^teams\//, /^orchestrator\//, /^services\//,
-  /^lib\/grid(Attach|Credentials|Derive|Ensure|Exec|FleetRpc|Handoff|Install|McpUrl|Models|ModelsPayload|Picture|Presence|Reader|Target|Wake)\.ts$/,
+  /^lib\/grid(Attach|Credentials|Derive|Ensure|Envelope|Exec|FleetRpc|Handoff|Install|McpUrl|Models|ModelsPayload|Picture|Presence|Reader|Target|Wake)\.ts$/,
   /^lib\/localModels\.ts$/,
   // The relay's own parts, the gateway's alone: the windows' sessions to other machines, P2P and STUN, the
   // remote viewers' proxy, and the shaping of what goes up the link.
@@ -295,6 +295,7 @@ const CORE_MAY_REACH: Record<string, string> = {
   'lib/gridCredentials.ts': 'step 7: models, in its own process',
   'lib/gridDerive.ts': 'step 7: models, in its own process',
   'lib/gridEnsure.ts': 'step 7: models, in its own process',
+  'lib/gridEnvelope.ts': 'step 7: models, in its own process',
   'lib/gridExec.ts': 'step 7: models, in its own process',
   'lib/gridFleetRpc.ts': 'step 7: models, in its own process',
   'lib/gridHandoff.ts': 'step 7: models, in its own process',

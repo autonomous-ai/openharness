@@ -50,6 +50,11 @@ function answer(stdin) {
     return
   }
   if (process.env.FAKE_GRID_STDOUT) process.stdout.write(process.env.FAKE_GRID_STDOUT)
+  // The refusal envelope the real \`grid\` writes under \`--json\` only (\`cli/json_error.py\`), one
+  // line, BEFORE the interpreter prints the same sentence in plain text on its way out.
+  if (process.env.FAKE_GRID_ENVELOPE && args.includes('--json')) {
+    process.stderr.write(JSON.stringify({ error: { code: null, message: process.env.FAKE_GRID_ENVELOPE, status: 409 } }) + '\\n')
+  }
   // Where the real \`grid\` puts every refusal — see the test that reads it back off the result line.
   if (process.env.FAKE_GRID_STDERR) process.stderr.write(process.env.FAKE_GRID_STDERR)
   process.exitCode = Number(process.env.FAKE_GRID_EXIT || '0')
@@ -492,6 +497,42 @@ describe('harness grid login — when the hand-off fails', () => {
     // And a person watching the terminal still sees it where it has always been.
     expect(result.stderr).toContain('cannot sign you in')
   }, 20_000)
+
+  describe('a refusal grid words itself', () => {
+    // What the control plane says while Harness has not yet learned the account's Google identity
+    // (ADR 0046): a sentence that names its own way forward, and so the one thing worth showing.
+    const sentence = 'Harness hasn\'t confirmed this account\'s Google identity yet, so nothing was changed. '
+      + 'Sign in to Harness once with Google, Apple or your email on any device, then try again.'
+
+    it('puts grid\'s sentence in the message, and still carries what grid wrote verbatim', async () => {
+      const root = tempRoot()
+      seedSession(root)
+      const { base } = await signedInBackend()
+
+      const result = await run(root, ['grid', 'login', '--json'], base,
+        { FAKE_GRID_EXIT: '1', FAKE_GRID_ENVELOPE: sentence, FAKE_GRID_STDERR: `${sentence}\n` })
+
+      expect(result.status).toBe(1)
+      const [line] = ndjson(result.stdout)
+      expect(line).toMatchObject({ type: 'result', status: 'error', code: 'GRID_LOGIN_FAILED', message: sentence })
+      // `detail` is the transcript, untouched: the envelope line and the plain sentence, as written.
+      expect(String(line.detail).startsWith('{"error":')).toBe(true)
+      expect(String(line.detail).endsWith(sentence)).toBe(true)
+    }, 20_000)
+
+    it('says it once on the human path, where grid speaks to the terminal itself', async () => {
+      const root = tempRoot()
+      seedSession(root)
+      const { base } = await signedInBackend()
+
+      const result = await run(root, ['grid', 'login'], base,
+        { FAKE_GRID_EXIT: '1', FAKE_GRID_ENVELOPE: sentence, FAKE_GRID_STDERR: `${sentence}\n` })
+
+      expect(result.status).toBe(1)
+      expect(result.stderr.split(sentence)).toHaveLength(2)
+      expect(result.stderr).toContain('`grid login --harness` exited 1.')
+    }, 20_000)
+  })
 
   it('says nothing where the child said nothing, rather than sending empty keys', async () => {
     const root = tempRoot()

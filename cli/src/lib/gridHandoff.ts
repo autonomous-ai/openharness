@@ -23,6 +23,7 @@
  */
 import { spawn } from 'node:child_process'
 import { binaryOnPath } from './binaryOnPath.js'
+import { gridEnvelopes } from './gridEnvelope.js'
 import { gridBinaryPath, gridChildEnv } from './gridExec.js'
 
 /** The flag on `grid login` that means "read the token off stdin" (autonomous-grid's `cli/parser.py`).
@@ -45,7 +46,8 @@ export interface GridHandoffResult {
   code: GridHandoffCode
   /** The child's own exit code, propagated; 1 when there was no child, or it died on a signal. */
   exitCode: number
-  /** This module's own classification of the failure. Empty on success. Never contains the token. */
+  /** What to show a person: `grid`'s own refusal under `json` ({@link refusalMessage}), else this
+   *  module's classification. Empty on success. Never contains the token (`grid` redacts it). */
   message: string
   /** The child's stdout, captured only when `json` was asked for; otherwise it went straight out. */
   stdout: string
@@ -95,6 +97,13 @@ function failedMessage(status: number | null, signal: NodeJS.Signals | null): st
   // No "see the output above": under --json there IS no above for whatever is reading the stream.
   // What `grid` said travels with the failure instead, on `stderr`.
   return `\`grid login ${GRID_HANDOFF_FLAG}\` ${how}.`
+}
+
+/** `grid`'s sentence off its `--json` envelope, or null: none written, or stderr never captured (no
+ *  `json`). ⚠️ Found in ticket 03's review: Set up shows `message` alone, so a refusal naming its own
+ *  remedy reached the person as "`grid login --harness` exited 1." It is `grid`'s to word (ADR 0046). */
+function refusalMessage(stderr: string): string | null {
+  return gridEnvelopes(stderr).find((envelope) => envelope.message !== null)?.message ?? null
 }
 
 /**
@@ -179,7 +188,7 @@ export async function handOffToGrid(
     child.once('close', (status, signal) => {
       if (status === 0) { settle({ code: 'OK', exitCode: 0, message: '', stdout, stderr }); return }
       if (status === ARGPARSE_USAGE_EXIT) { settle({ code: 'GRID_CLI_OUTDATED', exitCode: status, message: OUTDATED_MESSAGE, stdout, stderr }); return }
-      settle({ code: 'GRID_LOGIN_FAILED', exitCode: status ?? 1, message: failedMessage(status, signal), stdout, stderr })
+      settle({ code: 'GRID_LOGIN_FAILED', exitCode: status ?? 1, message: refusalMessage(stderr) ?? failedMessage(status, signal), stdout, stderr })
     })
   })
 }
