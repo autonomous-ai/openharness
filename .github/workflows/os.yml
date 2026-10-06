@@ -159,7 +159,7 @@ jobs:
 
   machine:
     needs: image
-    if: ${{ always() && !inputs.publish_run_id && !inputs.development_update && inputs.checks != 'essentials' && inputs.checks != 'hardware' && inputs.checks != 'zram' && inputs.checks != 'hardware-update' && inputs.checks != 'public-update' && (needs.image.result == 'success' || inputs.image_run_id != '' || inputs.checks == 'browser-suspend') && !cancelled() }}
+    if: ${{ always() && !inputs.publish_run_id && !inputs.development_update && inputs.checks != 'essentials' && inputs.checks != 'hardware' && inputs.checks != 'zram' && inputs.checks != 'hardware-update' && inputs.checks != 'public-update' && inputs.checks != 'network-recovery' && (needs.image.result == 'success' || inputs.image_run_id != '' || inputs.checks == 'browser-suspend') && !cancelled() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 65
     strategy:
@@ -473,6 +473,10 @@ jobs:
     if: ${{ inputs.checks == 'network-recovery' && !inputs.publish_run_id && !inputs.development_update }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [automatic, saved]
     steps:
       - uses: actions/checkout@v7
       - name: Require an existing baseline image
@@ -493,12 +497,12 @@ jobs:
           sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils ovmf python3-pil tesseract-ocr
           sudo chmod a+rw /dev/kvm
       - name: Recover Ethernet through the real network page after sleep
-        run: python3 os/tests/network_recovery_vm.py --iso os/dist/*.iso --network-script os/network.py
+        run: python3 os/tests/network_recovery_vm.py --iso os/dist/*.iso --network-script os/network.py --profile ${{ matrix.profile }}
       - name: Retain network recovery evidence
         if: always()
         uses: actions/upload-artifact@v6
         with:
-          name: harness-os-network-recovery
+          name: harness-os-network-recovery-${{ matrix.profile }}
           path: |
             os/test-results/network-recovery/*.json
             os/test-results/network-recovery/*.txt

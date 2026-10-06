@@ -21,6 +21,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--iso', type=Path, required=True)
     parser.add_argument('--network-script', type=Path, required=True)
+    parser.add_argument('--profile', choices=('automatic', 'saved'), required=True)
     args = parser.parse_args()
     if not os.access('/dev/kvm', os.R_OK | os.W_OK):
         parser.error('Use native x86 KVM for this acceptance check.')
@@ -42,6 +43,7 @@ def main():
     result = dict(status='running', started_at=time.time(), checks=[],
                   image_source=manifest['source_commit'], iso_sha256=manifest['iso']['sha256'],
                   candidate_network_sha256=checksum,
+                  profile_mode=args.profile,
                   test_source=subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
                   limits=['Virtual Ethernet and ACPI only; no physical Wi-Fi acceptance.',
                           'Only the candidate network.py replaces a product file in the verified image.'])
@@ -62,6 +64,11 @@ def main():
         vm.command('nmcli -g GENERAL.CON-UUID device show ens5 > /tmp/network-profile')
         return vm.read_file('/tmp/network-profile').decode().strip()
 
+    def settings(identity):
+        vm.command('nmcli -g connection.id,connection.uuid,connection.interface-name,ipv4.method,ipv4.route-metric '
+                   'connection show uuid ' + shlex.quote(identity) + ' > /tmp/network-settings')
+        return vm.read_file('/tmp/network-settings')
+
     try:
         vm.start(live=True)
         vm.wait(r'root@[^\r\n]*[#] ', timeout=180)
@@ -80,6 +87,20 @@ def main():
         original_profile = profile()
         assert original_profile and original_profile != '--'
         result['original_profile'] = original_profile
+        # NetworkManager's first automatic Ethernet connection is generated in
+        # memory, not a saved user configuration. Exercise that case separately
+        # from a genuinely persisted profile with a nondefault route metric.
+        vm.command('sudo -n find /etc/NetworkManager/system-connections -maxdepth 1 -type f '
+                   '> /tmp/saved-network-files')
+        assert not vm.read_file('/tmp/saved-network-files').strip(), 'Baseline unexpectedly has saved network profiles'
+        if args.profile == 'saved':
+            vm.command('sudo -n nmcli connection modify uuid ' + shlex.quote(original_profile)
+                       + ' connection.id "Harness recovery fixture" ipv4.route-metric 321')
+            vm.command('sudo -n grep -rlFx ' + shlex.quote('uuid=' + original_profile)
+                       + ' /etc/NetworkManager/system-connections > /tmp/saved-network-files')
+            assert vm.read_file('/tmp/saved-network-files').strip(), 'Fixture did not persist its connection'
+            original_settings = settings(original_profile)
+            result['saved_settings_sha256'] = hashlib.sha256(original_settings).hexdigest()
         result['original_network_sha256'] = hashlib.sha256(vm.read_file('/usr/lib/harness-os/network.py')).hexdigest()
         put(vm, '/tmp/network-candidate.py', candidate.decode())
         vm.command('sudo -n install -o root -g root -m 755 /tmp/network-candidate.py /usr/lib/harness-os/network.py')
@@ -90,6 +111,8 @@ def main():
         vm.start(live=False)
         login()
         vm.command('test "$(nmcli networking)" = disabled')
+        if args.profile == 'saved':
+            assert settings(original_profile) == original_settings, 'Saved configuration did not survive reboot'
         network_state(vm, 'disabled-boot')
         vm.command('sudo -n systemctl suspend --no-block')
         deadline = time.monotonic() + 30
@@ -133,11 +156,17 @@ def main():
         vm.keys('ret')
         vm.command('nm-online -q --timeout=35', timeout=40)
         http()
-        assert profile() == original_profile, 'Recovery replaced the saved connection'
+        connected_profile = profile()
+        assert connected_profile and connected_profile != '--'
+        result['connected_profile'] = connected_profile
+        if args.profile == 'saved':
+            assert connected_profile == original_profile, 'Recovery did not use the saved connection'
+            assert settings(original_profile) == original_settings, 'Recovery changed the saved configuration'
+            result['checks'].append('Recovery uses the persisted connection UUID and retains its nondefault route metric')
         vm.command('test "$(cat ~/projects/network-recovery/proof)" = keep')
         network_state(vm, 'after-ui-recovery')
         vm.screenshot('ethernet-connected')
-        result['checks'].append('Super+w shows unavailable Ethernet; keyboard selection reconnects it using the same saved profile and transfers exact HTTP bytes')
+        result['checks'].append('Super+w shows unavailable Ethernet; keyboard selection reconnects it and transfers exact HTTP bytes')
         result['checks'].append('The project survives the encrypted reboot and recovery; no NetworkManager restart or shell activation command is used for recovery')
         result['status'] = 'passed'
     except BaseException as error:
