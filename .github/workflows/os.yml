@@ -93,7 +93,7 @@ jobs:
             archlinux:base-devel@sha256:51dd3d24f7fba779e7c471caeee7804c50e8c134ad948e19685a1c83a42facc3 \
             bash -euc '
               printf "Server = https://archive.archlinux.org/repos/%s/\$repo/os/\$arch\n" "$LOCK_SNAPSHOT" > /etc/pacman.d/mirrorlist
-              pacman -Syu --noconfirm --needed labwc meson cmocka wayland-protocols glib2-devel python
+              pacman -Syu --noconfirm --needed labwc meson cmocka wayland-protocols glib2-devel python git
               python3 os/tests/build_lock_compositor.py --output os/work/lock-compositor
             '
       - name: Prepare native VM tools
