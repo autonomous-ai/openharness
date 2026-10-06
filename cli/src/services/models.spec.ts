@@ -19,6 +19,9 @@ import {
 import type { RegisteredSession } from '../lib/registry.js'
 import type { RuntimeModelOption } from '../lib/runtimeProfile.js'
 import { ensureManagedGrid } from '../lib/runtimeInstall.js'
+import { apiConnectionsRequest } from '../lib/apiConnections.js'
+import { apiModelsRequest, rememberSavedApis } from '../lib/apiModels.js'
+import { linkCodexProfile, listCodexProfiles } from '../lib/codexProfiles.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { compactRuntimePickerModels, MODELS_REQUESTS, startModels } from './models.js'
 
@@ -45,6 +48,20 @@ vi.mock('../lib/gridModels.js', () => ({
   warmGridModels: vi.fn(async () => {}),
 }))
 vi.mock('../lib/runtimeInstall.js', () => ({ ensureManagedGrid: vi.fn(async () => {}) }))
+/** The saved APIs and the Codex profiles: their files and folders are the lib's, never this machine's here. */
+const apis = vi.hoisted(() => ({ stores: [] as string[] }))
+vi.mock('../lib/apiConnections.js', () => ({
+  ApiConnections: class { constructor(dataDir: string) { apis.stores.push(dataDir) } },
+  apiConnectionsRequest: vi.fn((_store: unknown, payload: Record<string, unknown>) => ({ connections: [], presets: [], action: payload.action })),
+}))
+vi.mock('../lib/apiModels.js', () => ({
+  apiModelsRequest: vi.fn(async (_store: unknown, payload: Record<string, unknown>) => ({ id: payload.id, models: ['m1'] })),
+  rememberSavedApis: vi.fn(),
+}))
+vi.mock('../lib/codexProfiles.js', () => ({
+  listCodexProfiles: vi.fn((observed: string[]) => observed.map((path) => ({ path, label: 'Codex' }))),
+  linkCodexProfile: vi.fn((path: string) => (path ? { path, label: 'Linked' } : { error: 'INVALID_PATH' })),
+}))
 vi.mock('../lib/appModels.js', () => ({ appEngineOps: vi.fn(() => ({ engines: 'app' })), scanAppModels: vi.fn(async () => []) }))
 vi.mock('../dsh/installed.js', async (importOriginal) => ({
   ...await importOriginal<typeof import('../dsh/installed.js')>(),
@@ -489,6 +506,49 @@ describe('the models service', () => {
         expect(forgetGridModels).toHaveBeenCalledOnce()
         expect(core.clients.gridModelsChanged).toHaveBeenCalledOnce()
         expect(await ask('grid_fleet_models_list')).toMatchObject({ models: [] })
+      })
+    })
+
+    describe('what an agent can be launched on besides a model: the saved APIs and the Codex profiles', () => {
+      it('api_connections: only the owner manages the saved APIs, kept in the data folder', async () => {
+        const { requests } = setup([], { dataDir: '/data/here' })
+        expect(apis.stores.at(-1)).toBe('/data/here')
+        // A device or an observer may not, whatever it asked.
+        expect(await requests.api_connections!({ action: 'list' }, { local: false, owner: false })).toEqual({ error: 'OWNER_REQUIRED' })
+        expect(apiConnectionsRequest).not.toHaveBeenCalled()
+      })
+
+      it('api_connections: lists, saves (and recognises agents already on the saved endpoints), removes, and reads an API\'s models', async () => {
+        const { ask } = setup()
+        expect(await ask('api_connections', { action: 'list' })).toEqual({ connections: [], presets: [], action: 'list' })
+        expect(rememberSavedApis).not.toHaveBeenCalled()
+        expect(await ask('api_connections', { action: 'save', connection: { name: 'x' } })).toEqual({ connections: [], presets: [], action: 'save' })
+        expect(rememberSavedApis).toHaveBeenCalledOnce()
+        expect(await ask('api_connections', { action: 'remove', id: 'a' })).toEqual({ connections: [], presets: [], action: 'remove' })
+        expect(await ask('api_connections', { action: 'models', id: 'a' })).toEqual({ id: 'a', models: ['m1'] })
+        expect(apiModelsRequest).toHaveBeenCalledOnce()
+        expect(rememberSavedApis).toHaveBeenCalledOnce()
+      })
+
+      it('codex_profiles_list: the folders this machine offers, with the ones the asker has seen; a failed scan is said', async () => {
+        const { ask } = setup()
+        expect(await ask('codex_profiles_list', { observedPaths: ['/home/me/.codex-work', 7] })).toEqual({ profiles: [{ path: '/home/me/.codex-work', label: 'Codex' }] })
+        expect(listCodexProfiles).toHaveBeenLastCalledWith(['/home/me/.codex-work'])
+        expect(await ask('codex_profiles_list')).toEqual({ profiles: [] })
+        vi.mocked(listCodexProfiles).mockImplementationOnce(() => { throw new Error('unreadable') })
+        expect(await ask('codex_profiles_list')).toEqual({ error: 'CODEX_PROFILES_FAILED' })
+      })
+
+      it('codex_profile_link: links the folder and answers the profile, or why not; a failure to save answers INTERNAL, as the socket did', async () => {
+        const { ask } = setup()
+        expect(await ask('codex_profile_link', { path: '/home/me/.codex-work' })).toEqual({ profile: { path: '/home/me/.codex-work', label: 'Linked' } })
+        expect(await ask('codex_profile_link', { path: 42 })).toEqual({ error: 'INVALID_PATH' })
+        expect(linkCodexProfile).toHaveBeenLastCalledWith('')
+        const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+        vi.mocked(linkCodexProfile).mockImplementationOnce(() => { throw new Error('disk full') })
+        expect(await ask('codex_profile_link', { path: '/home/me/.codex-work' })).toEqual({ error: 'INTERNAL' })
+        expect(log).toHaveBeenCalledWith('[backend] dispatch codex_profile_link failed:', expect.any(Error))
+        log.mockRestore()
       })
     })
   })

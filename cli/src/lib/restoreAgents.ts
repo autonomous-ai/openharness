@@ -31,6 +31,7 @@ import { isTerminalEngine, type AgentEngine } from '../engines/types.js'
 import type { AgentLaunch, ProcessIdentity, RegisteredSession } from './registry.js'
 import type { TerminalRuntimeRef, TmuxRuntimeRef } from './terminalTypes.js'
 import { terminalRouteKey } from './terminalRuntime.js'
+import { resumesConversation } from './resumeCapability.js'
 
 export interface RestoreLaunch {
   argv: string[]
@@ -251,9 +252,13 @@ export async function restoreAgents(deps: RestoreAgentsDeps): Promise<RestoreSum
       summary.skipped.push({ agentId: entry.agentId, reason: 'saved conversation awaits explicit Open' })
       continue
     }
-    // A terminal whose pane is gone comes back as a terminal — never as the engine that was once
-    // typed into it: that engine's session went with the pane.
-    if (entry.terminalHost) {
+    // A terminal whose pane is gone comes back as a terminal — unless the engine typed into it keeps
+    // its conversation on disk under a recorded id. Then the session did NOT go with the pane, and
+    // the engine comes back resuming it, in a shell pane as before (it drops to that shell on exit).
+    // Measured on Harness OS: OpenCode, which its welcome flow types into a terminal, came back from
+    // every reboot as a bare prompt with the conversation unbound, while Claude came back. A resume
+    // the engine refuses falls back to the shell, never a fresh engine (`relaunchFresh`).
+    if (entry.terminalHost && !resumesConversation(entry.engine, entry.sessionId)) {
       if (!isTerminalEngine(entry.engine)) deps.registry.releaseEngine(entry.agentId)
       missing.push({ entry: deps.registry.byAgent(entry.agentId) ?? entry, runtime })
       continue
@@ -371,6 +376,27 @@ async function watchRestoredPane(
     }
     if (!mayRetryFresh) {
       fail('ENGINE_DID_NOT_START', `${engine} exited before its engine process became ready. See the terminal output for details.`)
+      return false
+    }
+    // A terminal that was resuming an engine typed into it goes back to being that terminal: nobody
+    // asked this pane for a new conversation. The one it held is kept as a stopped harness.
+    if (entry.terminalHost) {
+      mayRetryFresh = false
+      deps.log(`[restore] ${engine} · agent ${agentId} · did not come back up resuming its session — back to the terminal`)
+      deps.keepAbandoned?.({ ...entry })
+      deps.registry.releaseEngine(agentId)
+      const launch = await deps.buildLaunch(deps.registry.byAgent(agentId) ?? { ...entry, engine: 'terminal' }, {})
+      if ('error' in launch) {
+        fail(launch.error, launch.detail)
+        return false
+      }
+      const spawned = await deps.respawn(runtime, launch)
+      if (!spawned.ok) {
+        fail('ENGINE_DID_NOT_START', `The terminal could not be reopened: ${spawned.reason ?? 'unknown reason'}`)
+        return false
+      }
+      deps.registry.setLaunch(agentId, { state: 'ready' })
+      await deps.clearRemainOnExit(runtime)
       return false
     }
     // A resume id the engine no longer honours is not worth a dead agent: the row's name comes

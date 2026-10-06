@@ -23,6 +23,7 @@ import { forkName, planFork } from '../../lib/forkAgent.js'
 import { buildHarnessSessionLabel } from '../../lib/harnessSessionLabel.js'
 import { projectDisplayName, type registry, type RegisteredSession } from '../../lib/registry.js'
 import type { TmuxBackend } from '../../lib/tmuxBackend.js'
+import type { createLaunchHelpers } from './launch.js'
 import { mergedLaunchEnv } from './launchEnv.js'
 import type { createPaneWatcher } from './newPane.js'
 
@@ -38,12 +39,14 @@ export interface ForkAgentDeps {
   announceSession: (session: RegisteredSession) => void
   attachDsh: (session: RegisteredSession) => void
   prepareApiTools: (cwd: string | null | undefined, engine: string) => void
+  /** What a restart or a resume relaunches the row with (launch.ts): its own login, model and profile. */
+  relaunchOverrides: ReturnType<typeof createLaunchHelpers>['relaunchOverrides']
   /** This account's private grid, as the socket knows it (BackendSocket.gridName). */
   gridName: () => string | null
 }
 
 export function createAgentForker({
-  tmuxBackend, registry, mirror, pendingForkInherit, watchNewPane, announceSession, attachDsh, prepareApiTools, gridName,
+  tmuxBackend, registry, mirror, pendingForkInherit, watchNewPane, announceSession, attachDsh, prepareApiTools, relaunchOverrides, gridName,
 }: ForkAgentDeps) {
   const forkAgent: ForkAgent = async ({ agentId, name, prompt }) => {
     if (!tmuxBackend) return { ok: false, error: 'TMUX_UNAVAILABLE' }
@@ -89,11 +92,19 @@ export function createAgentForker({
       dshArgs = prepared.launch.args
       dshLabel = installed.manifest.name
     }
+    // The row's own login, model and profile, as a restart and a resume relaunch it (launch.ts): a Codex
+    // agent moved back off a grid names its provider again (`-c model_provider=…`,
+    // engines/codex/ownLoginProvider.ts) and the model it had before the grid (`-m`), and a profile gets
+    // its hooks. A fork was launched without any of them, and came back on Codex's default model where a
+    // restart of its source came back on the source's own (e2e/forks.e2e.ts). The harness and the named
+    // agent are the fork's own (a new runtime, above and below), so they are not rebuilt here.
+    const built = await relaunchOverrides(source, { ...source, dsh: null, agent: null })
+    if (!built.ok) return { ok: false, error: built.error, detail: built.detail }
     const installIfMissing = enginePathOverride(engine) ? undefined : engineInstallRecipe(engine)
     // Same guard as a relaunch (`buildLaunchOverrides`): an opencode agent recorded on v1 forks on v2
     // as a general session rather than handing the v2 TUI an `--agent` it exits on.
     const forkMajor = opencodeMajorVersion()
-    const extraArgs = [...dshArgs, ...(source.agent && supportsNamedAgent(engine, forkMajor) ? namedAgentArgs(engine, source.agent, forkMajor) : [])]
+    const extraArgs = [...built.overrides.extraArgs, ...dshArgs, ...(source.agent && supportsNamedAgent(engine, forkMajor) ? namedAgentArgs(engine, source.agent, forkMajor) : [])]
     const firstPrompt = plan.level === 'native' ? (prompt ?? undefined) : plan.firstPrompt
     const launchOptions = {
       clearEnv: harnessEnvToClear(dshEnv),
@@ -123,7 +134,7 @@ export function createAgentForker({
       cwd: source.cwd,
       sessionLabel: label,
       argv,
-      env: mergedLaunchEnv(source.codexHome ? { CODEX_HOME: source.codexHome } : undefined, dshEnv),
+      env: mergedLaunchEnv(Object.keys(built.overrides.env).length ? built.overrides.env : undefined, dshEnv),
       grid: null,
       gridLaunchRecord: null,
       codexHome: source.codexHome ?? null,

@@ -46,8 +46,8 @@ function enginesByPane(daemon: IsolatedDaemon, panes: Array<{ id: string; pid: n
   for (const pane of panes) {
     const tree = new Set<number>([pane.pid])
     for (const pid of tree) for (const child of children.get(pid) ?? []) tree.add(child)
-    // The fake engines take their engine's name as their process title.
-    result.set(pane.id, table.filter(([, pid, , command]) => tree.has(Number(pid)) && /^(claude|codex)$/.test(command.trim())).length)
+    // The fake engines' process title is their engine's name, then their arguments, as a CLI's is.
+    result.set(pane.id, table.filter(([, pid, , command]) => tree.has(Number(pid)) && /^(claude|codex)(?:\s|$)/.test(command.trim())).length)
   }
   void daemon
   return result

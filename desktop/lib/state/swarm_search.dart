@@ -331,6 +331,18 @@ class SwarmSearchController extends ChangeNotifier {
     return row.title;
   }
 
+  /// The end of the model's name in a row titled `gemma-4-31B-it · video-editor-tom` — a shared
+  /// model with the machine serving it, which is drawn on a second line under the name. Null for a
+  /// row that names no machine.
+  int? modelRowNameEnd(SwarmDestination row) {
+    final entry = models?.entries[row.modelId];
+    final machine = entry?.sharedBy;
+    if (entry == null || machine == null || machine.isEmpty) return null;
+    return row.title == '${entry.name}$modelMachineSeparator$machine'
+        ? entry.name.length
+        : null;
+  }
+
   /// Whether the harness this picker chooses for is on [row]'s model now: the grid model the
   /// daemon read off its process, or a saved API's model at that API's address.
   bool modelRowInUse(SwarmDestination row) {

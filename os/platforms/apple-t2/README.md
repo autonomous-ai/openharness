@@ -95,11 +95,35 @@ fresh verified bundle from `prepare-t2-kernel.py`. The output is named
 `harness-t2-<version>-x86_64.iso`. The default PC build and its NVIDIA/Broadcom
 bundle selection are unchanged.
 
-The initial image retains its pinned T2 kernel during ordinary Arch updates.
-An OS update must retain the T2 helpers and the identical kernel pin; older PC
-packages and a changed pin are refused before mutation. Automatic T2 kernel
-upgrades need a separately validated download/transaction path before this image
-can become a supported release. Do not add a moving unsigned repository.
+## Kernel updates and recovery
+
+Ordinary Arch updates retain the pinned T2 kernel. A Harness update can advance
+that pin through `t2_update.py`: it downloads and verifies both the old and new
+immutable upstream archives before changing any packages. Corrupt or missing
+inputs stop the update. The old archive is retained privately with the recovery
+receipt, and one pacman transaction installs the new kernel and matching Harness
+package. Verification reads back the installed kernel, required modules, early
+unlock drivers, initramfs and GRUB parameters. Apple firmware is restored from
+the computer's verified local copy. No headers, compiler or moving kernel
+repository are added.
+
+The running session stays alive; a restart activates the new kernel. Package
+rollback uses the retained old archive without network access, regenerates the
+matching boot files and verifies them. USB checkpoint recovery restores root and
+its exact boot files together while keeping newer home/project files. A failed
+transaction retains its original checkpoint and blocks another package update
+until rollback completes.
+
+An initial T2 installation must first receive an update that adds this capable
+updater while keeping its kernel pin unchanged. Older updaters deliberately refuse
+a changed pin. Do not publish a changed-pin update as that first migration or
+bypass the platform checks. No T2 kernel update has been published yet.
+
+The private **Harness OS T2 kernel update** workflow uses real pinned 7.2.7 and
+7.2.8 kernel packages, an explicitly constructed older-version Harness fixture,
+encrypted cold boots, interrupted transactions, offline rollback and USB recovery.
+It verifies running terminal process preservation and retained project files.
+Its synthetic Mac identity and firmware do not establish physical hardware support.
 
 Upstream references: [maintained kernel](https://github.com/NoaHimesaka1873/linux-t2-arch),
 [early input and kernel parameters](https://wiki.t2linux.org/guides/postinstall/),

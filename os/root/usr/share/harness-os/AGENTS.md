@@ -91,8 +91,11 @@ is required.
   `/boot/harness-apple-firmware.tar`. Firmware package hooks restore this data
   automatically. Retain both copies; never upload them as diagnostic attachments.
   Use the T2 USB for offline recovery. The current T2 kernel stays pinned during
-  ordinary Arch updates; a changed kernel pin requires a separately verified
-  upgrade path. Do not bypass the updater's platform checks or add a moving
+  ordinary Arch updates. Harness updates that change the pin stage and verify
+  both kernel archives before mutation and retain the old one for offline
+  rollback. The update receipt records both identities and the checkpoint.
+  Older updaters refuse a changed pin and first need an update with the same
+  pin that adds this capability. Do not bypass these checks or add a moving
   kernel repository to work around a refused update.
 - Ethernet uses NetworkManager automatically. For Wi-Fi, use
   `Super+w` or `hn-os wifi`, which opens the Harness Wi-Fi form.
@@ -101,8 +104,12 @@ is required.
 - npm installs into `~/.local`. The initial npm configuration permits the vendor
   install scripts for Claude Code, Codex and OpenCode. When another package needs
   an install script, approve that package explicitly; keep npm's other defaults.
-- `Super+b` opens/focuses Chromium or returns to hn; `Super+Enter` focuses hn;
+- `Super+b` opens/focuses Chromium or returns to hn; `Super+e` does the same for
+  the file manager window (`hn files DIR`); `Super+Enter` focuses hn;
   `Super+l` locks the screen. `sudo systemctl poweroff` shuts down cleanly.
+- Print/`Super+p` saves a full screenshot and Shift+Print/`Super+r` a region to
+  `~/Pictures/Screenshots`, also copied to the clipboard. When the user mentions
+  "the screenshot", read the newest file there. `grim` and `slurp` are installed.
 - On the PC image, the packages for supported NVIDIA Turing and newer GPUs are
   `nvidia-open-lts nvidia-utils`, including RTX 4090/5090 and RTX 6000 generations.
   New USB images carrying the NVIDIA bundle install them offline when the exact

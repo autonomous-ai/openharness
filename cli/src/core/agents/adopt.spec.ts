@@ -55,6 +55,18 @@ describe('whether a conversation can be opened here', () => {
     expect(await run.adoption.adoptableSession('c1', 'claude', null)).toMatchObject({ error: 'SESSION_FOLDER_GONE' })
   })
 
+  // Codex will not resume a conversation it archived ("session <id> is archived. Run `codex unarchive
+  // <id>` to unarchive it first"). Search finds archived ones, and opening one used to start a pane that
+  // only printed that error: refused before anything starts or is stopped, with how to get it back.
+  it('refuses a conversation Codex archived, saying how to put it back, before asking who has it open', async () => {
+    const run = setup()
+    run.found.set('c1', conversation({ engine: 'codex', archived: true }))
+    expect(await run.adoption.adoptableSession('c1', 'codex', 'now')).toEqual({
+      ok: false, error: 'SESSION_ARCHIVED', detail: 'Codex archived this conversation. Run `codex unarchive c1` in a terminal, then open it here.',
+    })
+    expect(run.deps.openSessions.owner).not.toHaveBeenCalled()
+  })
+
   it('opens one nobody has open, under its own title, or search\'s, or none', async () => {
     const run = setup({ search: { session: () => ({ title: 'From search' }) } })
     run.found.set('c1', conversation({ launchArgs: ['--model', 'opus'] }))

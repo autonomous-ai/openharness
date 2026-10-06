@@ -144,8 +144,11 @@ the next key. A capital letter in a prefix binding means Shift + letter.
 | Super+m | Connect a computer |
 | Super+w | Connect to Wi-Fi |
 | Super+b | Open/focus Chromium, or return to Harness |
+| Super+e | Open/focus the file manager, or return to Harness |
 | Super+Enter | Focus Harness |
 | Super+l | Lock; unlock with the account password |
+| Print or Super+p | Screenshot the whole screen |
+| Shift+Print or Super+r | Screenshot a region dragged with the pointer (Esc cancels) |
 | Super+u | Update Harness |
 | `hn-browser http://localhost:3000` | Open a local project in the browser |
 | `sudo systemctl poweroff` | Shut down |

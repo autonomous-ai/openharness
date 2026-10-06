@@ -10,9 +10,14 @@ import { AGENT_OPENED_THROTTLE_MS } from './core/agents/update.js'
 import { deviceAgentListItem, deviceAgentRow } from './core/agents/list.js'
 import { grokHistoryPage } from './core/transcripts/history.js'
 import { bindAgentList, bindAgentUpdate, bindCancelRequest, bindLaunchRequests, bindCloseRequests, bindMessageRequest, bindPurgeRequest, bindQuestionResponse, bindStopRequest, bindTerminalRequests } from './testing/socketCore.js'
-import { emptyPorts, MODELS_FALLBACKS } from './core/api.js'
+import { emptyPorts, MODELS_FALLBACKS, MONITOR_FALLBACKS } from './core/api.js'
 import { createServiceHost, ServiceUnavailableError } from './core/serviceHost.js'
 import { MODELS_REQUESTS, startModels } from './services/models.js'
+import { USAGE_REQUESTS, startUsage } from './services/usage.js'
+import { MONITOR_REQUESTS, startMonitor, type MonitorDeps } from './services/monitor.js'
+import { PROJECTS_REQUESTS, startProjects } from './services/projects.js'
+import { createHarnessResourcesReader } from './lib/harnessResources.js'
+import { createHarnessStorageReader } from './lib/harnessTelemetry.js'
 import { fakeCore } from './testing/fakeCore.js'
 import { AuthSessionError, type AuthSessionManager } from './lib/authSession.js'
 import { WS_IDLE_DEADLINE_MS as IDLE_DEADLINE_MS } from './lib/wsLiveness.js'
@@ -595,6 +600,34 @@ function serveModels(socket: BackendSocket, over: Parameters<typeof fakeCore>[0]
   return host
 }
 
+/** The machine monitor (services/monitor.ts) in `host`, reading this machine as the daemon does unless a
+ *  spec says otherwise; its totals through the module, so a spy on it is what answers. */
+function serveMonitor(host: ReturnType<typeof createServiceHost>, over: Partial<MonitorDeps> = {}) {
+  host.start('monitor', (core, ports) => startMonitor(core, ports, {
+    machine: () => machineResources.readMachineResources(),
+    resources: createHarnessResourcesReader(() => registry.advertised()),
+    storage: createHarnessStorageReader(),
+    ...over,
+  }), fakeCore(), MONITOR_FALLBACKS, MONITOR_REQUESTS)
+  return host
+}
+
+/** The project and folder readers (services/projects.ts) answering `socket`, over the registry as the
+ *  daemon's core API reads it, so a spec's spies on the registry are what they see. */
+function serveProjects(socket: BackendSocket) {
+  return serveOn(socket, (host) => host.serve('projects', startProjects, fakeCore({
+    agents: { live: () => registry.list(), resolve: (id: string) => registry.resolve(id) },
+  }), PROJECTS_REQUESTS))
+}
+
+/** A socket whose service requests go to the services `serve` starts in a host of their own. */
+function serveOn(socket: BackendSocket, serve: (host: ReturnType<typeof createServiceHost>) => void) {
+  const host = createServiceHost(emptyPorts(), { log: () => {} })
+  serve(host)
+  socket.serviceRouter = (type, payload, asker, reply) => host.route(type, payload, asker, reply)
+  return host
+}
+
 /** The session a requester holds whenever its sealed request was opened. Replies of a sealed type go back
  *  sealed to it; this stub seals them transparently, so a test reads the reply as the client does, opened. */
 function withSession(socket: BackendSocket, connId: string): void {
@@ -1105,9 +1138,9 @@ describe('BackendSocket outbound queue', () => {
     await socket.stop()
   })
 
-  it('seals what a pane runs and where a spoken task went to a requester that holds a session, and to it alone', async () => {
-    // A pane's folder, pid and tty, and the router's restatement of a spoken task, used to go to every
-    // web client in the clear. Every client that holds a session opens a sealed payload of any type.
+  it('seals what a pane runs to a requester that holds a session, and to it alone', async () => {
+    // A pane's folder, pid and tty used to go to every web client in the clear. Every client that holds a
+    // session opens a sealed payload of any type.
     const socket = new BackendSocket('token')
     // `terminal_info` is the core's (core/terminals/requests.ts), bound here as the daemon binds it.
     bindTerminalRequests(socket)
@@ -1121,28 +1154,23 @@ describe('BackendSocket outbound queue', () => {
       unwrap.mockReturnValueOnce({ type, payload })
       ws.message({ t: 'down', connId, frame: { type, payload: { __e2e: { v: 1, k: 's', n: 1, ct: 'ciphertext' } } } })
     }
-    const answers = () => parseSent(ws).filter((item) => ['terminal_info_result', 'voice_route_result'].includes(String((item.frame as { type?: unknown })?.type)))
+    const answers = () => parseSent(ws).filter((item) => (item.frame as { type?: unknown })?.type === 'terminal_info_result')
     ask('web-1', 'terminal_info', { requestId: 'info-1', agentId: 'no-such-agent' })
-    ask('web-1', 'voice_route', { requestId: 'route-1', transcript: '' })
-    await vi.waitFor(() => expect(answers()).toHaveLength(2))
+    await vi.waitFor(() => expect(answers()).toHaveLength(1))
     expect(wrap).toHaveBeenCalledWith('web-1', 'terminal_info_result', 'info-1', { error: 'AGENT_NOT_FOUND' })
-    expect(wrap).toHaveBeenCalledWith('web-1', 'voice_route_result', 'route-1', { error: 'MISSING_TRANSCRIPT' })
     const sealed = { __e2e: { v: 1, k: 'p', n: 1, ct: 'ciphertext' } }
     expect(answers()).toEqual([
       { t: 'up', targetConnId: 'web-1', frame: { type: 'terminal_info_result', payload: sealed } },
-      { t: 'up', targetConnId: 'web-1', frame: { type: 'voice_route_result', payload: sealed } },
     ])
     // A requester whose session went away meanwhile gets the bare refusal a refused request gets, never
     // the answer in the clear.
     ask('web-2', 'terminal_info', { requestId: 'info-2', agentId: 'no-such-agent' })
-    await vi.waitFor(() => expect(answers()).toHaveLength(3))
-    expect(answers()[2]).toEqual({ t: 'up', targetConnId: 'web-2', frame: { type: 'terminal_info_result', payload: { requestId: 'info-2', error: 'E2EE_REQUIRED' } } })
-    // Only the replies: the requests keep the rule they had, since an older daemon reads a sealed one as empty.
-    for (const type of ['terminal_info', 'voice_route']) {
-      expect(encryptDownFrame(type)).toBe(false)
-      expect(encryptDownFrameFor(type, { strictDown: true })).toBe(false)
-      expect(encryptRpcResult(`${type}_result`)).toBe(true)
-    }
+    await vi.waitFor(() => expect(answers()).toHaveLength(2))
+    expect(answers()[1]).toEqual({ t: 'up', targetConnId: 'web-2', frame: { type: 'terminal_info_result', payload: { requestId: 'info-2', error: 'E2EE_REQUIRED' } } })
+    // Only the reply: the request keeps the rule it had, since an older daemon reads a sealed one as empty.
+    expect(encryptDownFrame('terminal_info')).toBe(false)
+    expect(encryptDownFrameFor('terminal_info', { strictDown: true })).toBe(false)
+    expect(encryptRpcResult('terminal_info_result')).toBe(true)
     await socket.stop()
   })
 
@@ -1201,7 +1229,8 @@ describe('BackendSocket outbound queue', () => {
 
   it('answers usage_read with this machine\'s own readings, wrapped for the requester', async () => {
     // What goes back names what the person spends and on whose account, so it must leave encrypted.
-    // The reader is the socket's own field: this never touches a real home, Keychain or network.
+    // The usage service answers it (services/usage.ts), with a reader that never touches a real home,
+    // Keychain or network.
     const socket = new BackendSocket('token')
     const readings = [
       {
@@ -1212,7 +1241,7 @@ describe('BackendSocket outbound queue', () => {
         body: { seven_day: { utilization: 42 } },
       },
     ]
-    socket.accountUsageReader = async () => readings
+    serveOn(socket, (host) => host.serve('usage', (core) => startUsage(core, { read: async () => readings }), fakeCore(), USAGE_REQUESTS))
     socket.connect()
     const ws = wsMock.instances[0]
     ws.open()
@@ -1240,6 +1269,7 @@ describe('BackendSocket outbound queue', () => {
     const preview = { path: '/remote/workspace', readme: 'Private project README', branch: 'main', files: ['README.md'], contributors: [] }
     const read = vi.spyOn(projectPreview, 'projectPreview').mockResolvedValue(preview)
     const socket = new BackendSocket('token')
+    serveProjects(socket)
     socket.connect()
     const ws = wsMock.instances[0]
     ws.open()
@@ -1266,6 +1296,7 @@ describe('BackendSocket outbound queue', () => {
     const preview = { isGit: true, root: '/remote/workspace', branch: 'main', branches: [{ ref: 'refs/heads/private-branch', name: 'private-branch', remote: false }] }
     const read = vi.spyOn(gitProject, 'readGitProject').mockResolvedValue(preview)
     const socket = new BackendSocket('token')
+    serveProjects(socket)
     socket.connect()
     const ws = wsMock.instances[0]
     ws.open()
@@ -1294,6 +1325,7 @@ describe('BackendSocket outbound queue', () => {
     vi.spyOn(registry, 'resolve').mockReturnValue({ cwd: '/remote/workspace' } as RegisteredSession)
     const read = vi.spyOn(gitPullRequest, 'readGitPullRequest').mockResolvedValue(preview)
     const socket = new BackendSocket('token')
+    serveProjects(socket)
     socket.connect()
     const ws = wsMock.instances[0]
     ws.open()
@@ -1322,7 +1354,7 @@ describe('BackendSocket outbound queue', () => {
     }, history: { branches: [{ cwd: '/private/worktree', remote: null, branch: 'private-fix', at: '2026-09-27' }], pullRequests: [], truncated: false }, lookups: [], nextOffset: null }
     vi.spyOn(registry, 'resolve').mockReturnValue({ cwd: '/remote/workspace' } as RegisteredSession)
     vi.spyOn(sessionGitPullRequest, 'readSessionGitPullRequest').mockResolvedValue(history)
-    const socket = new BackendSocket('token'); socket.connect()
+    const socket = new BackendSocket('token'); serveProjects(socket); socket.connect()
     const ws = wsMock.instances[0]; ws.open()
     vi.spyOn(socket.e2ee, 'unwrapDown').mockReturnValue({ type: 'git_pull_request', payload: {
       requestId: 'history-1', agentId: 'agent1', history: true,
@@ -1339,6 +1371,7 @@ describe('BackendSocket outbound queue', () => {
   it('returns a correlated Git error when discovery rejects or the path is malformed', async () => {
     const read = vi.spyOn(gitProject, 'readGitProject').mockRejectedValue(new Error('unavailable'))
     const socket = new BackendSocket('token')
+    serveProjects(socket)
     socket.connect()
     const ws = wsMock.instances[0]
     ws.open()
@@ -1363,6 +1396,7 @@ describe('BackendSocket outbound queue', () => {
       revision: 'a'.repeat(64), contentBase64: 'AQID' }
     const read = vi.spyOn(mediaPreview, 'readMediaPreviewChunk').mockResolvedValue(media)
     const socket = new BackendSocket('token')
+    serveProjects(socket)
     socket.connect()
     const ws = wsMock.instances[0]
     ws.open()
@@ -1571,7 +1605,7 @@ describe('BackendSocket outbound queue', () => {
       () => new Promise(resolve => { finish = resolve }),
     )
     const socket = new BackendSocket('token')
-    serveModels(socket)
+    serveMonitor(serveModels(socket))
     const frames: Array<Record<string, unknown>> = []
     socket.registerLocalClient('local:stats', {
       sendFrame: frame => { frames.push(frame); return true }, sendBinary: () => true,
@@ -1601,6 +1635,7 @@ describe('BackendSocket outbound queue', () => {
     const reading = { cpuPercent: 18, memoryUsedBytes: 10, memoryTotalBytes: 32 }
     vi.spyOn(machineResources, 'readMachineResources').mockResolvedValue(reading)
     const socket = new BackendSocket('token')
+    serveOn(socket, (host) => serveMonitor(host))
     socket.connect()
     const ws = wsMock.instances[0]
     ws.open()
@@ -1624,8 +1659,7 @@ describe('BackendSocket outbound queue', () => {
     const system = vi.spyOn(machineResources, 'readMachineResources')
     const socket = new BackendSocket('token')
     let finish!: (value: { sampledAt: string; agents: [] }) => void
-    socket.harnessResourcesReader = vi.fn(() => new Promise<{ sampledAt: string; agents: [] }>(resolve => { finish = resolve }))
-    serveModels(socket)
+    serveMonitor(serveModels(socket), { resources: vi.fn(() => new Promise<{ sampledAt: string; agents: [] }>(resolve => { finish = resolve })) })
     const frames: Array<Record<string, unknown>> = []
     socket.registerLocalClient('local:monitor', {
       sendFrame: frame => { frames.push(frame); return true }, sendBinary: () => true,
@@ -2598,8 +2632,8 @@ describe('agent_restart RPC', () => {
     vi.spyOn(registry, 'advertised').mockReturnValue([BASE_SESSION])
     vi.spyOn(registry, 'list').mockReturnValue([BASE_SESSION])
     vi.spyOn(stoppedAgents, 'available').mockReturnValue([{ ...BASE_SESSION, agentId: 'stopped' }])
-    socket.harnessResourcesReader = vi.fn(async () => ({ sampledAt: new Date().toISOString(), agents: [{ agentId: 'agent-1', memoryBytes: 123, cpuPercent: 2, processCount: 1 }] }))
-    bindAgentList(socket, { monitorActivityProvider: sessionId => sessionId === BASE_SESSION.sessionId ? 'needsInput' : 'idle' })
+    const resources = vi.fn(async () => ({ sampledAt: new Date().toISOString(), agents: [{ agentId: 'agent-1', memoryBytes: 123, cpuPercent: 2, processCount: 1 }] }))
+    bindAgentList(socket, { harnessResourcesReader: resources, monitorActivityProvider: sessionId => sessionId === BASE_SESSION.sessionId ? 'needsInput' : 'idle' })
     for (const [requestId, monitor] of [['plain', false], ['monitor', true]] as const) {
       socket.handleLocalFrame('local:restart', { type: 'agents_list', payload: { requestId, monitor, includeStopped: true } })
     }
@@ -2608,7 +2642,7 @@ describe('agent_restart RPC', () => {
     expect(response('plain').every((agent: any) => agent.monitor === undefined)).toBe(true)
     expect(response('monitor').find((a: any) => a.id === 'agent-1').monitor).toMatchObject({ activity: 'needsInput', activityKnown: true, rssBytes: 123, cpu: 2, pid: BASE_SESSION.processIdentity?.pid ?? null })
     expect(response('monitor').find((a: any) => a.id === 'stopped').monitor).toMatchObject({ rssBytes: 0, cpu: 0, pid: null })
-    expect(socket.harnessResourcesReader).toHaveBeenCalledOnce()
+    expect(resources).toHaveBeenCalledOnce()
     await socket.unregisterLocalClient('local:restart'); await socket.stop()
   })
 
@@ -3183,8 +3217,8 @@ describe('the connect burst with no network', () => {
     const socket = new BackendSocket('token')
     bindAgentList(socket)
     socket.deriveGridName = () => new Promise<null>(() => {}) // a grid read that never lands
-    socket.accountUsageReader = () => new Promise(() => {})   // a vendor that never answers
-    serveModels(socket)
+    // A vendor that never answers, asked of the usage service beside models.
+    serveModels(socket).serve('usage', (core) => startUsage(core, { read: () => new Promise(() => {}) }), fakeCore(), USAGE_REQUESTS)
     const frames: Array<Record<string, unknown>> = []
     socket.registerLocalClient('local:burst', { sendFrame: (frame) => { frames.push(frame); return true }, sendBinary: () => true })
 

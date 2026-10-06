@@ -20,7 +20,7 @@
 // the engine does and runs it only if allowed, `!flood <KiB>` prints that much to the terminal, in
 // numbered lines, the way a build log or a long diff does, `!clear` starts a new conversation in the
 // same pane as Claude Code's `/clear` and Codex's `/new` do, `!compact` compacts the conversation as
-// `/compact` does (and Claude Code then announces the same session again), `!compactmid` compacts in the
+// `/compact` does (a real `/compact` (Claude Code) is written exactly as Claude Code writes it, with no turn) (and Claude Code then announces the same session again), `!compactmid` compacts in the
 // middle of a turn as an automatic compaction does, `!version` answers with the version this
 // process is, `!goal` and `!goal done` (Codex) start and achieve a goal the way Codex 0.160 shows one
 // under its composer, `!browse` (Codex) leaves Codex browsing its transcript in its default fullscreen
@@ -42,7 +42,8 @@
 // its first SessionStart takes to reach the daemon once the engine is up: the hook command starting on a
 // loaded machine, while the daemon has already found the engine and its conversation. `root` is the
 // test's throwaway root, the only place whose hooks it will run, and `hookLog` where it notes every hook
-// it ran.
+// it ran. `trustPrompt` makes it ask whether to trust a folder its own config has no answer for. Codex
+// refuses to resume a conversation it archived, as the real one does.
 //
 // Ctrl+Z suspends it, as both CLIs do on Unix (Claude Code 2.1.289: "Claude Code has been suspended.
 // Run `fg` to bring Claude Code back."; Codex 0.160: "`ctrl-z` is reserved for suspending the terminal
@@ -53,7 +54,7 @@
 // child in the same process group and terminal (`codexWrapper`).
 import { execFileSync, spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, writeFileSync } from 'node:fs'
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -142,7 +143,12 @@ export async function run(engine, config = {}, { native = false } = {}) {
       : `error: unexpected argument '${refused}' found\n\nUsage: codex [OPTIONS] [PROMPT]\n\nFor more information, try '--help'.\n`)
     process.exit(engine === 'claude' ? 1 : 2)
   }
-  process.title = engine
+  // The process table shows it as it shows the real CLI: named `claude` or `codex`, with the command line
+  // it was started with, both of which discovery reads (tmux.ts: a resume typed into a pane names its
+  // conversation on that command line). The title used to be the name alone, so no argument was ever on
+  // the command line discovery read. The name is padded to the 16 columns macOS's `ps` gives a name in a
+  // table, so the arguments are not read as part of it; a control character is shown as `ps` shows one.
+  process.title = [engine.padEnd(16), ...args].join(' ').replace(/[\x00-\x1f\x7f]/g, '?')
   // Raw at once, as the real CLIs are (Ink and ratatui take the terminal before they draw anything): a
   // terminal still in line mode keeps at most 1 KiB of a line, so a paste that arrived before the
   // engine was ready lost the rest of itself (measured: 1,018 of 2,406 characters).
@@ -223,6 +229,69 @@ export async function run(engine, config = {}, { native = false } = {}) {
       return parsed && typeof parsed.hooks === 'object' && parsed.hooks ? parsed.hooks : {}
     } catch { return {} }
   })()
+  // A conversation Codex archived (its rollout moved to `archived_sessions/`) is not resumed: Codex
+  // refuses before its TUI is up (codex-rs app-server thread_processor.rs) until `codex unarchive <id>`
+  // moves it back under `sessions/`.
+  if (engine === 'codex' && resumed && !fork) {
+    const holds = (dir) => {
+      let names = []
+      try { names = readdirSync(dir, { withFileTypes: true }) } catch { return false }
+      return names.some((entry) => entry.isDirectory() ? holds(join(dir, entry.name)) : entry.name.startsWith('rollout-') && entry.name.endsWith(`-${resumed}.jsonl`))
+    }
+    if (!holds(join(codexHome, 'sessions')) && holds(join(codexHome, 'archived_sessions'))) {
+      process.stderr.write(`Error: session ${resumed} is archived. Run \`codex unarchive ${resumed}\` to unarchive it first.\n`)
+      process.exit(1)
+    }
+  }
+  // Asking whether to trust the folder (`trustPrompt`), before any conversation starts, as both CLIs
+  // ask in a folder they have no answer for, reading the answer from their own config: Claude Code's
+  // `projects[<folder or one above it>].hasTrustDialogAccepted` in `.claude.json` in CLAUDE_CONFIG_DIR,
+  // else the home folder (2.1.290: `join(CLAUDE_CONFIG_DIR || homedir(), '.claude.json')`); Codex's
+  // `[projects."<folder>"] trust_level = "trusted"` in its CODEX_HOME's config.toml (0.160:
+  // onboarding/directory_trust.rs, whatever the permission flags). Enter or 1 trusts and saves it as they
+  // do; Esc, 2 or ctrl+c quits. Off unless a test asks: the real ones also skip folders this models
+  // nothing of (Codex a folder outside any project, Claude Code a sandbox), and the daemon answers the
+  // question only for folders it made empty (lib/claudeTrust.ts).
+  if (config.trustPrompt) {
+    const trustFile = engine === 'claude' ? join(claudeHome ?? homedir(), '.claude.json') : join(codexHome, 'config.toml')
+    const trusted = (() => {
+      let text = ''
+      try { text = readFileSync(trustFile, 'utf8') } catch { return false }
+      if (engine === 'codex') {
+        const at = text.indexOf(`[projects.${JSON.stringify(cwd)}]`)
+        return at >= 0 && /^trust_level\s*=\s*"trusted"/m.test(text.slice(at).split(/\n\[/)[0])
+      }
+      try {
+        const projects = JSON.parse(text).projects ?? {}
+        return Object.entries(projects).some(([key, entry]) => entry?.hasTrustDialogAccepted === true
+          && (cwd === key.replace(/\/+$/, '') || cwd.startsWith(`${key.replace(/\/+$/, '')}/`)))
+      } catch { return false }
+    })()
+    if (!trusted) {
+      process.stdout.write(engine === 'claude'
+        ? `\r\n Accessing workspace:\r\n\r\n ${cwd}\r\n\r\n Quick safety check: Is this a project you created or one you trust?\r\n\r\n`
+          + ' \x1b[36m❯ 1. Yes, I trust this folder\x1b[39m\r\n   2. No, exit\r\n\r\n Enter to confirm · Esc to cancel\r\n'
+        : `\r\n> You are in ${cwd}\r\n\r\n  Trust this folder? Codex can read, edit, and run files here, subject to your permission settings.\r\n\r\n`
+          + '\x1b[36m› 1. Trust and continue\x1b[39m\r\n  2. Quit\r\n\r\n  enter\x1b[2m continue · \x1b[0mesc\x1b[2m quit\x1b[0m\r\n')
+      const trust = await new Promise((resolve) => {
+        const keys = (chunk) => {
+          for (const token of String(chunk).match(/\x1b\[200~[\s\S]*?(?:\x1b\[201~|$)|\x1b\[[0-9;]*[A-Za-z~]|\x1b|[\s\S]/g) ?? []) {
+            if (token === '\r' || token === '\n' || token === '1') { process.stdin.off('data', keys); resolve(true); return }
+            if (token === '\x1b' || token === '2' || token === '\x03') { process.stdin.off('data', keys); resolve(false); return }
+          }
+        }
+        process.stdin.on('data', keys)
+      })
+      if (!trust) process.exit(1)
+      if (engine === 'codex') appendFileSync(trustFile, `\n[projects.${JSON.stringify(cwd)}]\ntrust_level = "trusted"\n`)
+      else {
+        let saved = {}
+        try { saved = JSON.parse(readFileSync(trustFile, 'utf8')) } catch { /* none yet */ }
+        writeFileSync(trustFile, JSON.stringify({ ...saved, projects: { ...saved.projects, [cwd]: { ...saved.projects?.[cwd], hasTrustDialogAccepted: true } } }))
+      }
+      process.stdout.write('\x1b[H\x1b[2J')
+    }
+  }
   let transcript = engine === 'claude'
     ? join(projectsDir, cwd.replace(/[^a-zA-Z0-9]/g, '-'), `${sessionId}.jsonl`)
     : resumed && !fork && config.rolloutFor?.[resumed]
@@ -265,8 +334,11 @@ export async function run(engine, config = {}, { native = false } = {}) {
       : args.includes('--permission-mode') ? args[args.indexOf('--permission-mode') + 1] ?? 'default' : 'default')
     : (args.includes('--dangerously-bypass-approvals-and-sandbox') ? 'bypassPermissions' : 'default')
   // The model and effort the thread runs on: what Codex writes in each turn's context, and what its
-  // `/model` picker changes (below).
-  let current = { model: config.codexModel ?? 'gpt-6', effort: 'high' }
+  // `/model` picker changes (below). Its `-m`/`--model` on the command line outranks the configured one, as
+  // in the real CLI: that is how a relaunch puts an agent back on the model it had before a grid
+  // (subscriptionModel.ts).
+  const modelAt = engine === 'codex' ? args.findIndex((arg) => arg === '-m' || arg === '--model') : -1
+  let current = { model: (modelAt >= 0 && args[modelAt + 1]) || config.codexModel || 'gpt-6', effort: 'high' }
   /**
    * The JSON an event hands its hooks on stdin, in each CLI's own shape: what notify.mjs reads (session,
    * transcript, folder, the event and its source, prompt or reason) and the rest of what the real CLIs
@@ -937,6 +1009,19 @@ export async function run(engine, config = {}, { native = false } = {}) {
       compact()
       say('(compacted)\r\n')
       if (engine === 'claude') await runHooks('SessionStart', { source: 'compact' })
+      return
+    }
+    if (engine === 'claude' && /^\/compact(\s|$)/.test(prompt)) {
+      // Claude Code's own /compact, written as 2.1.290 writes it (recorded by daemon QA): the command as a
+      // plain user line, the compaction, a caveat and the command's tags, then its output. There is no
+      // answer, no UserPromptSubmit and no turn of its own, and it announces the same session again.
+      claude({ type: 'user', message: { role: 'user', content: prompt } })
+      compact()
+      claude({ type: 'user', isMeta: true, message: { role: 'user', content: '<local-command-caveat>Caveat: The messages below were generated by the user while running local commands. DO NOT respond to these messages or otherwise consider them in your response unless the user explicitly asks you to.</local-command-caveat>' } })
+      claude({ type: 'user', message: { role: 'user', content: '<command-name>/compact</command-name>\n            <command-message>compact</command-message>\n            <command-args></command-args>' } })
+      claude({ type: 'user', message: { role: 'user', content: '<local-command-stdout>Compacted (ctrl+o to see full summary)</local-command-stdout>' } })
+      say('(compacted)\r\n')
+      await runHooks('SessionStart', { source: 'compact' })
       return
     }
     if (prompt === '!clear') {

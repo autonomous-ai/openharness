@@ -33,6 +33,27 @@ class ReleaseUpdateFixture(unittest.TestCase):
             with self.assertRaises(ValueError):
                 relocate_boot_loader(changed, '/tmp/unused')
 
+    def test_relocated_release_helper_loads_complete_runtime_prefetch_api(self):
+        source = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            dependencies = root / 'dependencies'
+            dependencies.mkdir()
+            shutil.copyfile(source / 'boot_profile.py', dependencies / 'boot_profile.py')
+            original = (source / 'runtime_update.py').read_text()
+            relocated = relocate_boot_loader(original, dependencies)
+            self.assertEqual(relocated.replace('Path(' + repr(str(dependencies / 'boot_profile.py')) + ')',
+                                               "Path(__file__).with_name('boot_profile.py')"), original)
+            (root / 'runtime_update.py').write_text(relocated)
+            shutil.copyfile(source / 'release_update.py', root / 'release_update.py')
+            spec = importlib.util.spec_from_file_location('candidate_release_fixture', root / 'release_update.py')
+            release = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(release)
+            updater = release.load_runtime_updater()
+            self.assertTrue(callable(updater.prepare_kernel_bundle))
+            self.assertEqual(Path(updater.__file__), root / 'runtime_update.py')
+            self.assertEqual(Path(updater.boot_module().__file__), dependencies / 'boot_profile.py')
+
 
 if __name__ == '__main__':
     unittest.main()

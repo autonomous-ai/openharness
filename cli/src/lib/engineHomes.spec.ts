@@ -1,9 +1,13 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { env } from '../config/env.js'
-import { adoptEngineHomes, claudeProjectsRoots, codexHomeRoots, movedEngineHomes, resetEngineHomes } from './engineHomes.js'
+import { adoptEngineHomes, claudeProjectsRoots, codexHomeRoots, launchClaudeConfigDir, launchCodexHome, movedEngineHomes, resetEngineHomes } from './engineHomes.js'
+
+// The login shell's environment, as the daemon captured it at start-up: none, unless a test says so.
+const shell = vi.hoisted(() => ({ env: {} as NodeJS.ProcessEnv }))
+vi.mock('./loginShellEnv.js', () => ({ loginShellEnvironment: () => shell.env }))
 
 const saved = () => join(env.ADAPTER_DATA_DIR, 'engine-homes.json')
 const defaults = { claudeHome: '/home/someone/.claude', codexHome: '/home/someone/.codex' }
@@ -74,5 +78,37 @@ describe('the homes the person moved', () => {
       env.ADAPTER_DATA_DIR = before
     }
     mkdirSync(root, { recursive: true })
+  })
+})
+
+// The home an agent launched now writes in, for what has to be in that engine's own config before it
+// starts (its folder trust): the pane runs through the person's login shell, so the home that shell
+// moves is the engine's, over the daemon's own environment; an agent's own Codex profile outranks both.
+describe('the home an engine launched now uses', () => {
+  afterEach(() => { shell.env = {}; vi.unstubAllEnvs() })
+
+  it('Codex: the agent\'s own profile, else the CODEX_HOME the environment moves, else the daemon\'s', () => {
+    expect(launchCodexHome('/profiles/work', { CODEX_HOME: '/moved' })).toBe('/profiles/work')
+    expect(launchCodexHome(null, { CODEX_HOME: '/moved/' })).toBe('/moved')
+    expect(launchCodexHome(undefined, {})).toBe(env.CODEX_HOME)
+    // A relative or `~` path is not one the engine resolves the same way from every folder.
+    expect(launchCodexHome(null, { CODEX_HOME: '~/codex' })).toBe(env.CODEX_HOME)
+    expect(launchCodexHome(null, { CODEX_HOME: '  ' })).toBe(env.CODEX_HOME)
+  })
+
+  it('Claude Code: the CLAUDE_CONFIG_DIR the environment moves, else the home folder, as Claude Code resolves .claude.json', () => {
+    expect(launchClaudeConfigDir({ CLAUDE_CONFIG_DIR: '/claude-work' })).toBe('/claude-work')
+    expect(launchClaudeConfigDir({ CLAUDE_CONFIG_DIR: 'relative' })).toBe(homedir())
+    expect(launchClaudeConfigDir({})).toBe(homedir())
+  })
+
+  it('reads the login shell\'s environment over the daemon\'s own: the profile is what the pane runs', () => {
+    vi.stubEnv('CODEX_HOME', '/daemon-codex')
+    vi.stubEnv('CLAUDE_CONFIG_DIR', '/daemon-claude')
+    expect(launchCodexHome(null)).toBe('/daemon-codex')
+    expect(launchClaudeConfigDir()).toBe('/daemon-claude')
+    shell.env = { CODEX_HOME: '/profile-codex', CLAUDE_CONFIG_DIR: '/profile-claude' }
+    expect(launchCodexHome(null)).toBe('/profile-codex')
+    expect(launchClaudeConfigDir()).toBe('/profile-claude')
   })
 })

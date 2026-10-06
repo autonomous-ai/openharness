@@ -59,7 +59,7 @@ function engines(d: IsolatedDaemon): number {
     .map((line) => /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(line)).filter((m): m is RegExpExecArray => !!m)
     .map((m) => ({ pid: Number(m[1]), ppid: Number(m[2]), command: m[3].trim() }))
   const launchers = new Set(table.filter((p) => p.command.includes(join(d.root, 'bin'))).map((p) => p.pid))
-  return table.filter((p) => (p.command === 'claude' || p.command === 'codex') && launchers.has(p.ppid)).length
+  return table.filter((p) => /^(claude|codex)(?:\s|$)/.test(p.command) && launchers.has(p.ppid)).length
 }
 const panes = async (d: IsolatedDaemon): Promise<number> =>
   (await d.tmux.run('list-panes', '-a', '-F', '#{pane_id}').catch(() => '')).split('\n').filter(Boolean).length

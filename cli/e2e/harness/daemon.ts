@@ -40,6 +40,8 @@ export interface EngineConfig {
   startDelayMs?: number
   firstHookDelayMs?: number
   updateAvailable?: string
+  /** Ask whether to trust a folder the engine's own config has no answer for, as the real CLIs do. */
+  trustPrompt?: boolean
 }
 
 export interface DaemonOptions {
@@ -64,6 +66,8 @@ export interface DaemonOptions {
   beside?: IsolatedDaemon
   /** Ask for this port instead of a free one: a daemon started on another daemon's port. */
   port?: number
+  /** The fake engines ask whether to trust a folder their config has no answer for (fakeEngine.mjs). */
+  trustPrompt?: boolean
 }
 
 async function freePort(): Promise<number> {
@@ -193,6 +197,7 @@ export class IsolatedDaemon {
       port, dataDir: dirs.data, claudeProjectsDir: dirs.claudeProjects, codexHome: dirs.codexHome,
       claudeModel: options.claudeModel, codexModel: options.codexModel,
       root, hookLog: join(own, 'fake-engine-hooks.log'),
+      ...(options.trustPrompt ? { trustPrompt: true } : {}),
     }
     const engine = pathToFileURL(join(here, 'fakeEngine.mjs')).href
     for (const name of ['claude', 'codex']) {

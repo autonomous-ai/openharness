@@ -19,8 +19,10 @@
  * and every agent bound in it lost its binding at each restart (measured, the same test).
  */
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { env } from '../config/env.js'
+import { loginShellEnvironment } from './loginShellEnv.js'
 
 const claudeHomes: string[] = []
 const codexHomes: string[] = []
@@ -96,6 +98,43 @@ export function claudeProjectsRoots(own: string): string[] {
 export function codexHomeRoots(own: string): string[] {
   load()
   return [own, ...codexHomes]
+}
+
+/**
+ * The environment an engine launched now starts with, as far as its homes go. Every pane runs the engine
+ * through the person's login shell, which reads their profile, so the login shell's variables outrank the
+ * daemon's own; before that shell has been read (the first seconds of a start), the daemon's alone.
+ */
+function launchEnvironment(): NodeJS.ProcessEnv {
+  return { ...process.env, ...loginShellEnvironment() }
+}
+
+/** A home an environment moves, absolute; null for none, or for one the engine would not resolve the
+ *  same way from every folder (relative, `~`). */
+function movedHome(value: string | undefined): string | null {
+  const dir = value?.trim()
+  return dir && isAbsolute(dir) ? resolve(dir) : null
+}
+
+/**
+ * The Codex home an agent launched now reads its `config.toml` from: its own profile (the row's
+ * `codexHome`, set on its pane as CODEX_HOME), else the CODEX_HOME the person's shell moves, else the
+ * daemon's. What has to be in that config before Codex starts (its folder trust, lib/claudeTrust.ts) was
+ * written to `~/.codex` alone, so an agent on its own profile, or a person who moved CODEX_HOME, got
+ * Codex's trust prompt in a folder Harness had just made.
+ */
+export function launchCodexHome(codexHome: string | null | undefined, environment: NodeJS.ProcessEnv = launchEnvironment()): string {
+  return codexHome || movedHome(environment.CODEX_HOME) || env.CODEX_HOME
+}
+
+/**
+ * The folder Claude Code keeps `.claude.json` in for an agent launched now: the CLAUDE_CONFIG_DIR the
+ * person's shell sets, else the home folder. Claude Code's own rule (2.1.290:
+ * `join(process.env.CLAUDE_CONFIG_DIR || homedir(), '.claude.json')`); its folder trust was read and
+ * written in `~/.claude.json` alone, which a moved Claude Code never reads.
+ */
+export function launchClaudeConfigDir(environment: NodeJS.ProcessEnv = launchEnvironment()): string {
+  return movedHome(environment.CLAUDE_CONFIG_DIR) || homedir()
 }
 
 /** Test seam: forget every home, and read the data folder's again on next use. */

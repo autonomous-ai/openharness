@@ -1,0 +1,9 @@
+#!/bin/sh
+# Super+e: the file manager in a window of its own, beside hn as the browser is (Super+b) — a folder
+# tree on the left, the folder's contents on the right. It is hn's own file view run standalone
+# (`hn files`), in the same foot look as the hn screen, so a file opens in the editor right there.
+. /usr/lib/harness-os/runtime-path
+cd "$HOME" || exit 1
+export HARNESS_OS=1
+exec /usr/bin/foot --app-id=harness-files --title=Files \
+  --config=/usr/share/harness-os/foot.ini "$HARNESS_TUI_BIN" files "${1:-$HOME}"

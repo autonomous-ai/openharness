@@ -8,7 +8,7 @@
  * process's alone: a crash or a leak in search costs search, and the master starts it again.
  */
 import type { CoreApi } from '../core/api.js'
-import { emptyPorts } from '../core/api.js'
+import { emptyPorts, resolveAgent } from '../core/api.js'
 import { databaseHistory } from '../core/transcripts/databaseHistory.js'
 import { ExternalSessions, OpenSessions } from '../lib/sessionSearch/external.js'
 import { externalProviders } from '../lib/sessionSearch/externals/index.js'
@@ -45,6 +45,7 @@ export function searchCoreApi(
       live: () => agents().filter((agent) => agent.active),
       displayName: (session) => (session as { displayName?: string }).displayName ?? '',
       byAgent: (agentId) => agents().find((agent) => agent.agentId === agentId),
+      resolve: (id) => resolveAgent(agents(), id),
       advertised: () => [],
       terminalAvailable: () => false,
       sync: () => {},

@@ -958,6 +958,8 @@ fn put(app: &mut App, pane: u64, t: Box<Tree>) { if let Some(p) = app.panes.get_
 /// tree it has goes).
 pub fn enter(app: &mut App, pane: u64, window: usize, a: &Start) {
     if let Some(old) = take(app, pane) { finish(app, *old) }
+    // (Over the file manager: it ends.)
+    crate::files::exit(app, pane);
     let (sx, sy) = crate::copy::screen_size(app, pane);
     let t = Tree::start(app, pane, window, a, sx, sy);
     let depth = app.panes.get(&pane).map(|p| p.modes.len()).unwrap_or(0);

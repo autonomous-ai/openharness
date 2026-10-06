@@ -995,7 +995,7 @@ pub fn now_secs() -> i64 { SystemTime::now().duration_since(UNIX_EPOCH).map(|d| 
 fn started(app: &App) -> i64 { now_secs() - app.started.elapsed().as_secs() as i64 }
 
 /// localtime(3): a time's parts in this computer's zone, for the date the time is on (its DST).
-fn local_tm(t: i64) -> libc::tm {
+pub(crate) fn local_tm(t: i64) -> libc::tm {
     // SAFETY: localtime_r only writes the struct it is given.
     let mut tm: libc::tm = unsafe { std::mem::zeroed() };
     let tt = t as libc::time_t;
@@ -1347,7 +1347,7 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         "socket_path" => crate::ipc::here().map(|p| p.display().to_string()).unwrap_or_default(),
         "client_session" => app.session_name(),
         "client_name" | "client_tty" => crate::app::tty_name(),
-        "pane_mode" => pane.and_then(|p| if clock_on(app, focus) { Some("clock-mode") } else if p.tree_top() { Some(crate::tree::MODE_NAME) } else { p.modes.last().map(|m| if m.view { "view-mode" } else { "copy-mode" }) }).unwrap_or("").into(),
+        "pane_mode" => pane.and_then(|p| if clock_on(app, focus) { Some("clock-mode") } else if p.tree_top() { Some(crate::tree::MODE_NAME) } else if p.files_top() { Some(crate::files::MODE_NAME) } else { p.modes.last().map(|m| if m.view { "view-mode" } else { "copy-mode" }) }).unwrap_or("").into(),
         // window_copy_formats: a pane in copy or view mode has them (some only with a selection
         // or a search); others none.
         "scroll_position" | "rectangle_toggle" | "copy_cursor_x" | "copy_cursor_y" | "selection_start_x" | "selection_start_y" | "selection_end_x" | "selection_end_y"

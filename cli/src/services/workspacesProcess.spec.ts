@@ -152,6 +152,7 @@ describe('workspaces in their own process', () => {
     expect(api.agents.all()).toEqual(everyone)
     expect(api.agents.byAgent('a1')).toEqual(agent('a1'))
     expect(api.agents.byAgent('old')).toBeUndefined()
+    expect(api.agents.resolve('a1')).toEqual(agent('a1'))
     expect(api.agents.displayName(agent())).toBe('')
     expect(api.agents.advertised()).toEqual([])
     expect(api.agents.terminalAvailable('a1')).toBe(false)
