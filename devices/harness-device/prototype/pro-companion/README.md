@@ -302,8 +302,9 @@ fifteen-minute rest remain in Companion controls.
 
 The ten-daemon pack uses lossless, independent XOR anchors for repeated layers.
 Its decoded pixels are unchanged; the renderer reserves two decode planes per
-role so anchors never form a chain. Its renderer reserves six fixed active
-layer caches totaling 1,634,004 bytes, independent of collection size. Identical
+role so anchors never form a chain. The six fixed active
+layer caches total 3,268,008 bytes, including both decode planes, independent of
+collection size. Identical
 layers reuse their decoded pixels. Decode/preparation and full render times
 are reported separately in the hardware heartbeat; host timing is not a device
 latency claim.
