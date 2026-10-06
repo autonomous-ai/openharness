@@ -64,7 +64,7 @@ import { serviceCommand, serviceCommandDeps } from './lib/serviceCommand.js'
 import { ensureTmuxOnPath } from './lib/tmuxOnPath.js'
 import { flashCommand } from './lib/flash.js'
 import { readOrMintComputerId } from './lib/computerIdentity.js'
-import { awaitLoginCallback, extractCallbackParams, LOGIN_TIMEOUT_MESSAGE } from './lib/loginCallback.js'
+import { awaitLoginCallback, extractCallbackParams, LOGIN_TIMEOUT_MESSAGE, type LoginCallbackParams } from './lib/loginCallback.js'
 import { AUTH_DIR, AuthSessionError, AuthSessionManager, clearAuthSession, ensureSignInEpoch, knownSsoClientId, newSignInEpoch, readAuthSession, signInOf, ssoClientIdFor, writeAuthSession, type AuthSession } from './lib/authSession.js'
 import { handOffToGrid } from './lib/gridHandoff.js'
 import { qrSignIn } from './lib/qrSignIn.js'
@@ -1118,7 +1118,7 @@ async function browserSignIn(
     // redirect never arrives here. It still lands on a URL carrying `code`/`state` (the page just fails
     // to load); let them paste that URL back in instead of hanging until the 5-minute timeout.
     const manual = !json && process.stdin.isTTY ? promptForCallbackUrl(redirectUri) : null
-    let callbackResult: { code: string; state: string }
+    let callbackResult: LoginCallbackParams
     try {
       callbackResult = await awaitLoginCallback({ server: callback, redirectUri, manual: manual?.promise ?? null, timeoutMs: 5 * 60_000, entryPoint })
     } catch (err) {
@@ -1133,8 +1133,11 @@ async function browserSignIn(
     let exchanged: { token?: string; refreshToken?: string; expiresIn?: number; autonomousEnv?: 'prod' | 'stag'; clientId?: string }
     try {
       exchanged = await postJson<typeof exchanged>('/api/auth/exchange', {
-        ...callbackResult,
+        code: callbackResult.code,
+        state: callbackResult.state,
         tx: start.tx,
+        // The utm_* and rid auth.autonomous.ai carried back: how the account came (PR #785).
+        ...(callbackResult.attribution ? { attribution: callbackResult.attribution } : {}),
       })
       if (!exchanged.token) throw new Error('SSO exchange returned no access token')
     } catch (err) {
@@ -1296,12 +1299,12 @@ async function gridEnvCommand(grid: string | undefined): Promise<void> {
  * on the way out either way.
  */
 function promptForCallbackUrl(redirectUri: string): {
-  promise: Promise<{ code: string; state: string }>
+  promise: Promise<LoginCallbackParams>
   cancel: () => void
 } {
   const rl = createInterface({ input: process.stdin, output: process.stdout })
   let settled = false
-  const promise = new Promise<{ code: string; state: string }>((resolve, reject) => {
+  const promise = new Promise<LoginCallbackParams>((resolve, reject) => {
     const ask = (): void => {
       rl.question(
         '\n  If your browser could not reach back to this machine (SSH/remote), paste the URL it landed on\n' +
@@ -1310,14 +1313,14 @@ function promptForCallbackUrl(redirectUri: string): {
           if (settled) return
           const trimmed = answer.trim()
           if (!trimmed) { ask(); return }
-          const { code, state, error } = extractCallbackParams(trimmed, redirectUri)
+          const { code, state, error, attribution } = extractCallbackParams(trimmed, redirectUri)
           if (error) { reject(new Error(`SSO login failed: ${error}`)); return }
           if (!code || !state) {
             console.log('  No login code found in that — paste the full callback URL or its code=...&state=... part.')
             ask()
             return
           }
-          resolve({ code, state })
+          resolve({ code, state, ...(attribution ? { attribution } : {}) })
         },
       )
     }

@@ -1,7 +1,37 @@
 import type { IncomingMessage, Server, ServerResponse } from 'http'
 import { renderLoginSuccessHtml } from './loginPage.js'
 
-export interface LoginCallbackParams { code: string; state: string }
+/** The `utm_*` and `rid` of a sign-in, under their URL keys. See callbackAttribution. */
+export type CallbackAttribution = Record<string, string>
+
+export interface LoginCallbackParams {
+  code: string
+  state: string
+  /** Where the sign-in came from, for `/api/auth/exchange` to record on the account. */
+  attribution?: CallbackAttribution
+}
+
+/**
+ * The keys auth.autonomous.ai carries back onto the callback: the `utm_*` tags and Autonomous's referral
+ * id `rid`. The marketing site (autonomous.ai/harness-app, where the desktop app is downloaded) leaves
+ * them in `.autonomous.ai` cookies, and the sign-in page appends them to our redirect_uri. Same keys as
+ * the web client (desktop/lib/viewer/sign_in_attribution.dart) and the backend (lib/signInAttribution.ts).
+ */
+const ATTRIBUTION_KEYS = ['utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content', 'rid'] as const
+
+/**
+ * The [ATTRIBUTION_KEYS] of a callback, under their URL keys, or nothing when it carries none. Empty
+ * values are dropped: the site sets `utm_term=` and `utm_content=` even when the link had neither.
+ * The backend filters and caps these again — the code exchange is reachable by anyone holding a code.
+ */
+export function callbackAttribution(params: URLSearchParams): CallbackAttribution | undefined {
+  const attribution: CallbackAttribution = {}
+  for (const key of ATTRIBUTION_KEYS) {
+    const value = params.get(key)?.trim()
+    if (value) attribution[key] = value
+  }
+  return Object.keys(attribution).length ? attribution : undefined
+}
 
 /** The exact message `harness login --json` maps to `code: 'TIMEOUT'` — keep the string stable. */
 export const LOGIN_TIMEOUT_MESSAGE = 'SSO login timed out'
@@ -20,12 +50,17 @@ export function extractCallbackParams(input: string, redirectUri: string): {
   code: string | null
   state: string | null
   error: string | null
+  attribution?: CallbackAttribution
 } {
-  const read = (params: URLSearchParams) => ({
-    code: params.get('code'),
-    state: params.get('state'),
-    error: params.get('error'),
-  })
+  const read = (params: URLSearchParams) => {
+    const attribution = callbackAttribution(params)
+    return {
+      code: params.get('code'),
+      state: params.get('state'),
+      error: params.get('error'),
+      ...(attribution ? { attribution } : {}),
+    }
+  }
   try {
     const viaUrl = read(new URL(input, redirectUri).searchParams)
     if (viaUrl.code || viaUrl.state || viaUrl.error) return viaUrl
@@ -62,7 +97,10 @@ export function awaitLoginCallback(opts: {
       ? '<h1>Harness login failed</h1><p>You can close this window.</p>'
       : renderLoginSuccessHtml(entryPoint))
     if (error) reject(new Error(`SSO login failed: ${error}`))
-    else if (code && state) resolve({ code, state })
+    else if (code && state) {
+      const attribution = callbackAttribution(url.searchParams)
+      resolve({ code, state, ...(attribution ? { attribution } : {}) })
+    }
   }
   // Hoisted so the handler above can settle the promise, and be removed once it has: the server
   // outlives this race (it is closed by the caller), and a late redirect must not touch a settled login.
