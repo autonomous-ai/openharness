@@ -31,7 +31,7 @@ export type HarnessSummary = {
   forkedFrom?: string;
 };
 export type OpenHarness = HarnessSummary & HarnessSnapshot;
-export type HarnessComment = { id: string; body: string; authorName: string; createdAt: string; mine: boolean };
+export type HarnessComment = { id: string; body: string; authorName: string; createdAt: string; mine: boolean; creator?: boolean; parentId?: string; parentAuthorName?: string };
 export type SocialState = {
   likes: number;
   liked: boolean;

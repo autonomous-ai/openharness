@@ -6,6 +6,12 @@
 .wrap{width:84%;max-width:1712px;margin:0 auto}
 .bar{display:flex;align-items:center;gap:26px;min-height:80px;padding:22px 0}
 .brand{font-weight:600;font-size:25px;letter-spacing:-1px;margin-right:auto}
+.hubWord{font-weight:400;color:#999;letter-spacing:-.7px}
+.feedIntro{margin-bottom:40px;color:#777}.feedIntro h1{font-size:28px;font-weight:400;color:#242424;margin-bottom:8px}
+.cardSocial{display:flex;gap:18px;margin-top:12px;color:#888;font-size:12px}.cardSocial button,.cardSocial a{display:inline-flex;align-items:center;gap:6px}.cardSocial svg{height:14px;width:14px}
+.creator{font-style:normal;font-size:10px;color:#777;background:#f4f4f2;padding:2px 5px}
+.reply{padding-left:20px}.replyContext{display:block;color:#999;font-size:11px;margin-bottom:5px}
+.page .replyButton{font-size:11px;color:#888;margin-top:8px;text-decoration:underline;text-underline-offset:3px}
 .nav{display:flex;align-items:center;gap:26px;color:#777;font-size:15px}
 .nav a,.nav button{display:inline-flex;align-items:center;gap:5px;white-space:nowrap}
 .nav [aria-current=page]{color:#242424}
@@ -108,6 +114,8 @@
 .cardMeta{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:12px}
 .cardMeta small{margin:0}
 .handoff{display:inline-flex;flex-direction:column;align-items:flex-start;gap:9px}
+.filesReview{margin:30px 0}.filesReview summary{cursor:pointer;font-size:14px}.fileRow{display:flex;align-items:center;gap:12px;margin:10px 0;font-size:12px}.fileRow code{flex:1;overflow-wrap:anywhere}.fileRow button{text-decoration:underline;color:#777}.importActions{margin:24px 0;background:#f7f7f5;padding:22px}.importActions p{color:#777;font-size:13px;margin-top:8px}
+@media(max-width:760px){.bar{flex-wrap:wrap}.bar .brand{width:100%;margin-bottom:4px}.nav{gap:16px;flex-wrap:wrap}.nav .openApp{display:none}}
 .handoffHelp{font-size:11px;color:#888;max-width:220px;line-height:1.6}
 .handoffHelp a{text-decoration:underline;text-underline-offset:3px}
 .fork details{margin-top:32px;color:#777;font-size:13px}
@@ -115,3 +123,5 @@
 
 .recording{display:block;width:100%;height:720px;object-fit:contain;background:#191b1b}
 @media(max-width:760px){.recording{height:auto;aspect-ratio:4/3}}
+
+.fileRow>details{flex:1;min-width:0}.sourceText{max-height:320px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;background:#f6f6f4;padding:14px;font:11px/1.7 ui-monospace,monospace}

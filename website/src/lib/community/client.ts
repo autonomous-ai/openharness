@@ -1,4 +1,5 @@
 import type { SocialState } from './types';
+import { refreshHubSession } from './session';
 
 /** Read the existing Harness web session; the community does not mint a second identity. */
 export function sessionHeaders(): Record<string, string> {
@@ -21,9 +22,13 @@ export async function communityRequest<T>(path: string, options: { method?: stri
     ...(options.body ? { body: JSON.stringify(options.body) } : {}), cache: 'no-store',
   };
   let response = await fetch(`/api/community/${path}`, request);
+  if (response.status === 401 && headers.Authorization && await refreshHubSession(headers.Authorization)) {
+    Object.assign(headers, sessionHeaders());
+    response = await fetch(`/api/community/${path}`, { ...request, headers: { ...request.headers, ...headers } });
+  }
   // An expired workspace sign-in must not hide public projects. Private following
   // views and all writes still require an authenticated request.
-  if (response.status === 401 && request.method === 'GET' && headers.Authorization && !new URLSearchParams(path.split('?')[1]).has('following')) {
+  if (response.status === 401 && request.method === 'GET' && headers.Authorization && path.startsWith('harnesses') && !new URLSearchParams(path.split('?')[1]).has('following') && !new URLSearchParams(path.split('?')[1]).has('mine')) {
     delete headers.Authorization;
     response = await fetch(`/api/community/${path}`, { ...request, headers });
   }

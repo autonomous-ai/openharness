@@ -16,11 +16,12 @@ retired; only the host routes below were kept.
 | `/os` | The Harness operating system landing page: plain HTML/CSS, local fonts and screenshots in `public/os/` |
 | `/os/latest` | Redirect to the newest complete published OS release; OS tags only, stable preferred, five-minute server lookup cache |
 | `/desktop` | Desktop download page |
-| `/explore`, `/explore/following` | Public three-column gallery and followed creators |
-| `/explore/:id` | Full-page output viewer and published conversation, with likes and comments |
-| `/explore/:id/fork`, `/explore/:id/download` | Desktop handoff fallback and an optional project ZIP |
-| `/explore/:id/snapshot` | Public, bounded snapshot consumed by the desktop handoff |
-| `/explore/publish` | Review and explicitly publish one portable session snapshot |
+| `/hub`, `/hub/following`, `/hub/yours` | Public three-column gallery, followed creators, and your publications |
+| `/hub/:id` | Full-page output viewer and published conversation, with likes and comments |
+| `/hub/:id/fork`, `/hub/:id/download` | Desktop handoff fallback and an optional project ZIP |
+| `/hub/:id/snapshot` | Public, bounded snapshot consumed by the desktop handoff |
+| `/hub/import` | One-use desktop handoff into a private browser draft |
+| `/hub/publish` | Review and explicitly publish one portable session snapshot |
 | `/api/community/*` | Same-origin proxy for the backend's community API |
 | `/desktop/download-macos`, `/desktop/download/linux-{x64,arm64}` | Redirect to the latest build in the desktop manifest |
 | `/flash-circle.sh` | The dial firmware flasher script |
@@ -70,8 +71,10 @@ downloading one, with the same checksum and metadata checks.
 `COMMUNITY_API_URL` selects the backend at runtime (default `https://harness-api.autonomous.ai`).
 Only HTTPS and loopback HTTP are accepted. Set it to a disposable local backend for development.
 The proxy forwards the existing Harness web access token and account environment; it does not
-create another identity. Signing in opens the workspace; returning to the community refreshes
-the session. Expired tokens fall back to anonymous public browsing; writes require sign-in.
+create another identity. Sign-in uses the existing Flutter login and returns to the same Hub page.
+Access-token refresh uses the same Web Lock, storage, environment and SSO client as the web app.
+An invalid session clears credentials; a temporary refresh failure preserves them. Public browsing
+can fall back to anonymous access; writes, Following and Yours require sign-in.
 
 A publication is an immutable, explicit copy of self-contained HTML, source files, and a reviewed
 conversation. It is separate from `/s/:id`, which remains a live encrypted observer stream from
@@ -100,12 +103,21 @@ only allowlisted Store harnesses and the locally authored generic Web Viewer pac
 An optional ZIP includes a spec-1 Web Viewer package, editable project, `SESSION.md`, MIT license
 and `OPEN-HARNESS.json`. Native source and binary artifacts remain included, but use the desktop
 handoff to open the named harness's tools. Publishing a fork retains its source and copyright chain.
-Import `OPEN-HARNESS.json`, update the files and conversation, review, and publish explicitly.
+In the desktop Share dialog, **Publish to Hub** gathers the current local project files and recent
+conversation through existing app APIs. A short-lived loopback page transfers them into an IndexedDB
+draft in the browser, then opens `/hub/publish` for review. No access token or native session ID is
+transferred. Nothing becomes public until the creator reviews the output, source and conversation
+and clicks Publish. A draft survives the existing sign-in flow; repeated submission uses one
+publication ID. Remote projects and older apps can use the project-folder picker or import
+`OPEN-HARNESS.json`. The first version requires a self-contained HTML preview, up to 30 files/6 MB;
+hidden configuration, symlinks and installed dependencies are excluded. Conversation tails may be
+incomplete and the review form says so. `/explore` links remain compatible with `/hub`.
 
 Backend reads are public; likes, comments, following, publication, and unpublication require SSO.
 Counts are persisted, like/follow writes are idempotent, comment retries have per-user request IDs,
+replies retain their parent and display a Creator badge,
 and authors can remove their publication and moderate its comments. Reads and writes are isolated
-by account environment. The first feed page holds 30 publications; comment views show the latest
+by account environment. The feed loads 30 publications per page as visitors scroll; comment views show the latest
 100 comments. Search filters loaded projects. Public navigation and downloads use the production
 account plane; staging API isolation is supported for backend testing.
 

@@ -52,6 +52,8 @@ model CommunityComment {
   authorName    String
   body          String
   clientId      String
+  parentId      String?
+  parentAuthorName String?
   createdAt     DateTime @default(now())
 
   @@unique([autonomousEnv, harnessId, userId, clientId])

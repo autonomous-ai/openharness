@@ -11,6 +11,6 @@ export function ForkButton({ id, children = 'Open in Harness' }: { id: string; c
       // Stay in the click gesture: browsers can ask permission to open the app.
       window.location.href = desktopForkLink(id, forkRequestId(id)); setOpened(true);
     }}>{children}</button>
-    {opened && <span className={styles.handoffHelp} role="status">Opening Harness… <Link href={`/explore/${id}/fork`}>Need the app?</Link></span>}
+    {opened && <span className={styles.handoffHelp} role="status">Opening Harness… <Link href={`/hub/${id}/fork`}>Need the app?</Link></span>}
   </span>;
 }
