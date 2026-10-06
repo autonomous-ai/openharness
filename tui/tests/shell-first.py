@@ -23,6 +23,9 @@ assert Path(SHELL).name in ('zsh','bash')
 with socket.socket() as probe: probe.bind(('127.0.0.1',PORT))
 ENV={k:os.environ[k] for k in ('PATH','LANG','LC_ALL','TZ') if k in os.environ}
 ENV.update(HOME=str(BASE),HN_TMPDIR=str(BASE),HN_SOCKET_NAME=NAME,PORT=str(PORT),SHELL=SHELL,TERM='xterm-256color',COLORTERM='truecolor',HN_DESKTOP='off',HARNESS_TUI_DESK='off',HARNESS_TUI_NOTIFY='off')
+# These fixtures install their own widgets; Ubuntu's global compinit must not
+# ask about completion directories supplied by the runner's unrelated tools.
+ENV['skip_global_compinit']='1'
 CLI=os.environ.get('HN_SHELL_TEST_CLI')
 daemon=None; daemon_log=None
 if CLI:

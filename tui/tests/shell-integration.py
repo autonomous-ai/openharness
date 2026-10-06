@@ -56,7 +56,7 @@ class Shell:
             env = {k:v for k,v in os.environ.items() if k in ('LANG','LC_ALL','TZ')}
             env.update(HOME=str(root), SHELL=shell, PATH=str(binpath)+':/usr/bin:/bin:/usr/sbin:/sbin', _HN_CLI=str(binpath/'harness'),
                        TERM='xterm-256color', STARTUP=str(root/'startup'), CALLS=str(self.capture),
-                       TMPDIR=str(root), _HN_CONTEXT=TOKEN, _HN_PICKER=str(picker))
+                       TMPDIR=str(root), _HN_CONTEXT=TOKEN, _HN_PICKER=str(picker), skip_global_compinit='1')
             os.execve('/bin/sh', ['/bin/sh','-c',bootstrap], env)
         self.data = b''
         self.request_ids = set()
