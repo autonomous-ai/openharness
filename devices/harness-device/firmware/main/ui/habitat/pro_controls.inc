@@ -499,7 +499,7 @@ static void pro_inbox(ht_scene_t *f)
     bool available = s.connected && !visit.pending;
     if (answer)
         pro_control(f, 32, 606, 280, 68, PRO_TR("Answer"), A_QUESTION, s.offset,
-                    available && (!s.q.pending || !strcmp(s.q.agent,n->agent_id)));
+                    available && !s.q.pending);
     pro_control(f, answer ? 328 : 220, 606, answer ? 360 : 280, 68,
                 PRO_TR("Open on desktop"), A_NOTICE, s.offset, available);
     s.notice_frame = n->read_on_dial ? 0 : n->display_revision;

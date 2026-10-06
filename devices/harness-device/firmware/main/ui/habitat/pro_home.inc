@@ -60,7 +60,7 @@ static void pro_home_footer(ht_scene_t *f, agent_t *a, bool recap)
     else if (visit.available)
         pro_control(f, 548, 622, 128, 64, PRO_TR("Return"), A_RETURN, 0, s.connected && !visit.pending);
     else if (a && is_question(a->id))
-        pro_control(f, 548, 622, 128, 64, PRO_TR("Answer"), A_QUESTION, 0, s.connected);
+        pro_control(f, 548, 622, 128, 64, PRO_TR("Answer"), A_QUESTION, 0, s.connected && !s.q.pending);
     else if (recap)
         pro_control(f, 548, 622, 128, 64, PRO_TR("Read"), A_READER, 0, true);
 }

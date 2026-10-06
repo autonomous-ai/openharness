@@ -505,7 +505,7 @@ static void home_render_geometry(void) {
     tap(630,520,75); assert(starts==1 && !strcmp(sent.id,"a"));
 }
 static void home_state_geometry(void) {
-    for (int state=0;state<8;state++) {
+    for (int state=0;state<9;state++) {
         reset();
         if (state==0) s.connected=false;
         if (state==1) s.loading=true;
@@ -514,12 +514,14 @@ static void home_state_geometry(void) {
         if (state==4) { carry.active=true; carry.rows=4; strcpy(carry.source,"A long source title"); }
         if (state==5) strcpy(carry.error,"Selected text expired");
         if (state==6) visit.available=true;
-        if (state==7) { s.notice_count=1; s.notice[0].question=true; strcpy(s.notice[0].agent_id,"a"); }
+        if (state>=7) { s.notice_count=1; s.notice[0].question=true; strcpy(s.notice[0].agent_id,"a"); }
+        if (state==8) {s.q.pending=s.q.uncertain=true;COPY(s.q.agent,"a");}
         memset(s.agents[0].name,'W',sizeof s.agents[0].name-1);
         s.agents[0].name[sizeof s.agents[0].name-1]=0;
         render_actual();
         assert(action_hit(A_LAUNCHER) && action_hit(A_LAUNCHER)->enabled);
         if (state==7) assert(action_hit(A_QUESTION) && action_hit(A_QUESTION)->enabled);
+        if (state==8) {assert(action_hit(A_QUESTION)&&!action_hit(A_QUESTION)->enabled);tap(600,650,450);assert(!starts&&!queued&&s.q.pending);}
     }
 }
 static void actual_home_tabs(void) {

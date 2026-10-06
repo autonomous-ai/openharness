@@ -482,6 +482,7 @@ int main(int argc,char **argv) {
     action_t pending_review=make_action(hit(A_QUESTION,-1));dispatch(pending_review);assert(s.view==QUESTION);
     s.notice[0]=pending_notice;s.notice_count=1;
     ui_set_connected(true);view(INBOX);queued=enqueued;act(A_QUESTION,0);
+    assert(s.view==INBOX&&enqueued==queued&&s.q.pending);act(A_QUESTION,-1);
     assert(s.view==QUESTION&&enqueued==queued&&s.q.pending);work(submit);assert(answers==1);
     receipt("wrong-token",true);assert(s.q.pending);receipt("token-remote",true);
     assert(!s.q.pending&&s.view==HOME&&s.active==1&&opens==0);

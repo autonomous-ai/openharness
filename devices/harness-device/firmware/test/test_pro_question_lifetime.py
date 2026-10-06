@@ -104,11 +104,19 @@ static void lifetime(const char *dir) {
   if(settle!=2){ui_set_connected(false);ui_set_connected(true);ui_draft_source("fixture-host");revision=s.q.revision;}
   pushed("remote","Q2","A different option");empty_snapshot();
   assert(s.q.pending&&s.q.revision==revision&&!strcmp(s.q.request,"Q1")&&!strcmp(s.q.item[0].answer,"This file only")&&notice("remote")&&!strcmp(notice("remote")->question_id,"Q2")&&enqueued==queued);
+  view(INBOX);s.offset=(int)(notice("remote")-s.notice);ht_scene_t pending_card;render(&pending_card);
+  for(int i=0;i<s.hit_count;i++)if(s.hits[i].action==A_QUESTION && s.hits[i].value>=0)assert(!s.hits[i].enabled);
+  action_t current_card=make_action(hit(A_QUESTION,s.offset));dispatch(current_card);assert(s.view==INBOX&&enqueued==queued);
+  if(settle==1)inspect(dir,"connected-q2-awaiting-review");
+  COPY(s.agents[0].id,"remote");
+  view(HOME);act(A_QUESTION,0);assert(s.view==HOME&&enqueued==queued);
+  view(AGENT);act(A_QUESTION,0);assert(s.view==AGENT&&enqueued==queued);
   view(HOME);act(A_INBOX,1);assert(s.view==QUESTION);inspect(dir,settle==2?"old-answer-new-question":"unknown-answer-new-question");
   if(settle==0)act(A_QUESTION_CLOSE,0);
   else if(settle==1)receipt_frame("remote",fetch,"token-1",true,false);
   else ui_question_close("remote","Q1");
   assert(!s.q.pending&&notice("remote")&&!strcmp(notice("remote")->question_id,"Q2")&&waiting()==1&&!answers&&!opens);
+  view(INBOX);s.offset=(int)(notice("remote")-s.notice);render(&pending_card);assert(controls(A_QUESTION));act(A_QUESTION,s.offset);assert(s.q.loading&&!strcmp(s.q.request,"Q2"));
  }
  // A different host cannot settle an old unknown answer with coincident IDs.
  start();pushed("remote","Q1","The whole project");view(INBOX);act(A_QUESTION,0);projected_state(true);s.q.item[0].selected=1;view(ANSWER_REVIEW);act(A_ANSWER,0);

@@ -2973,6 +2973,9 @@ static void dispatch(action_t a)
         break;
     case A_QUESTION:
 #ifdef DEVICE_PRO_COMPANION
+        // Only the explicit retained-answer control may reopen a pending Q1.
+        // A current Q2 card or Home shortcut must not silently show Q1 instead.
+        if (s.q.pending && !(s.view==INBOX && a.value==-1)) break;
         if (s.view == INBOX) {
             if (a.value == -1) {
                 if (s.q.pending && a.revision==s.q.revision && !strcmp(a.id,s.q.agent)) view(QUESTION);
