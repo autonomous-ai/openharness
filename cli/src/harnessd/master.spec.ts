@@ -462,7 +462,8 @@ describe('runMaster', () => {
       env: { ...process.env, HARNESSD_SERVICES: 'search,unknown,monitor,usage', HARNESSD_SERVICE_INITIAL_BACKOFF_MS: '10' },
       exit: (code) => exits.push(code), onSignal: (signal, listener) => signals.set(signal, listener),
     })
-    const lines = (): Array<Record<string, any>> => existsSync(seen) ? readFileSync(seen, 'utf8').trim().split('\n').map((line) => JSON.parse(line)) : []
+    // Children append while we read: only newline-terminated records are complete.
+    const lines = (): Array<Record<string, any>> => existsSync(seen) ? readFileSync(seen, 'utf8').split('\n').slice(0, -1).map((line) => JSON.parse(line)) : []
     await until('the crashed service to be restarted', () => lines().filter((line) => line.role === 'service:search').length === 2)
     // The light services share one process, the edge host, which runs each of those named.
     await until('the edge host to start', () => lines().some((line) => line.role === 'service:usage,monitor'))
@@ -508,7 +509,7 @@ describe('runMaster', () => {
         env: { ...process.env, HARNESSD_SERVICES: 'search' },
         exit: (code) => exits.push(code), onSignal: (signal, listener) => signals.set(signal, listener),
       })
-      const roles = (): Array<Record<string, string>> => existsSync(seen) ? readFileSync(seen, 'utf8').trim().split('\n').map((line) => JSON.parse(line)) : []
+      const roles = (): Array<Record<string, string>> => existsSync(seen) ? readFileSync(seen, 'utf8').split('\n').slice(0, -1).map((line) => JSON.parse(line)) : []
       await until('the core and the service', () => roles().length >= 2)
       expect(roles().sort((a, b) => a.role.localeCompare(b.role))).toEqual([{ role: '__run', from: 'cli' }, { role: 'service:search', from: 'lean' }])
       expect(lines.some((line) => line.endsWith(`[harnessd] services run from ${lean}`))).toBe(true)
@@ -544,7 +545,7 @@ describe('runMaster', () => {
     const log = vi.spyOn(console, 'log').mockImplementation((line: string) => { lines.push(line) })
     const exits: number[] = []
     const signals = new Map<string, () => void>()
-    const services = (): string[] => (existsSync(seen) ? readFileSync(seen, 'utf8').trim().split('\n').map((line) => JSON.parse(line)) : [])
+    const services = (): string[] => (existsSync(seen) ? readFileSync(seen, 'utf8').split('\n').slice(0, -1).map((line) => JSON.parse(line)) : [])
       .filter((line) => line.role === 'service:search').map((line) => line.from)
     try {
       runMaster({

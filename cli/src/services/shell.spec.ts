@@ -112,11 +112,11 @@ describe('shells through a service', () => {
   })
   it('returns a shell view only after independent exit evidence for the same ready process', async () => {
     const { core, ask } = setup()
-    const row = { agentId: 'agent', engine: 'claude', sessionId: 'chat', tmuxPane: '%2', launch: { state: 'ready' },
+    const row = { agentId: 'agent', active: true, engine: 'claude', sessionId: 'chat', tmuxPane: '%2', launch: { state: 'ready' },
       processIdentity: { pid: 22, startMarker: 'start', executable: '/bin/claude' } } as RegisteredSession
     for (const agentId of [undefined, '', 4, 'x'.repeat(257)]) expect(await ask('shell_visit_status', { agentId })).toEqual({ error: 'INVALID_AGENT_ID' })
-    for (const current of [undefined, { ...row, engine: 'terminal' }, { ...row, launch: undefined },
-      { ...row, launch: { state: 'starting' } }, { ...row, tmuxPane: '' }, { ...row, processIdentity: undefined },
+    for (const current of [undefined, { ...row, active: false }, { ...row, engine: 'terminal' },
+      { ...row, launch: { state: 'starting' } }, { ...row, launch: { state: 'failed' } }, { ...row, tmuxPane: '' }, { ...row, processIdentity: undefined },
       { ...row, processIdentity: { ...row.processIdentity!, startMarker: '' } }]) {
       vi.mocked(core.agents.byAgent).mockReturnValue(current as RegisteredSession | undefined)
       expect(await ask('shell_visit_status', { agentId: 'agent' })).toEqual({ exited: false })
@@ -133,6 +133,9 @@ describe('shells through a service', () => {
       vi.mocked(checkPidRuntime).mockResolvedValue({ state, reason: 'fixture' })
       expect(await ask('shell_visit_status', { agentId: 'agent' })).toEqual({ exited: state === 'gone' })
     }
+    vi.mocked(core.agents.byAgent).mockReturnValue({ ...row, launch: undefined })
+    expect(await ask('shell_visit_status', { agentId: 'agent' })).toEqual({ exited: true })
+    vi.mocked(core.agents.byAgent).mockReturnValue(row)
     for (const replacement of [undefined, { ...row, sessionId: 'different' }, { ...row, launch: { state: 'starting' } },
       { ...row, processIdentity: { ...row.processIdentity!, startMarker: 'reused-pid' } }]) {
       vi.mocked(core.agents.byAgent).mockReturnValueOnce(row).mockReturnValueOnce(replacement as RegisteredSession | undefined)
@@ -143,7 +146,7 @@ describe('shells through a service', () => {
   })
   it('coalesces exit probes, keeps a value snapshot and releases failed probes', async () => {
     const { core, ask } = setup()
-    const row = { agentId: 'agent', engine: 'claude', tmuxPane: '%2', launch: { state: 'ready' },
+    const row = { agentId: 'agent', active: true, engine: 'claude', tmuxPane: '%2', launch: { state: 'ready' },
       processIdentity: { pid: 22, startMarker: 'start', executable: '/bin/claude' } } as RegisteredSession
     vi.mocked(core.agents.byAgent).mockReturnValue(row)
     let finish!: (value: Awaited<ReturnType<typeof tmuxPaneState>>) => void
