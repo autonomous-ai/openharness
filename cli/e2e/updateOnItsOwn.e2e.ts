@@ -22,7 +22,7 @@ import { join } from 'node:path'
 import { afterAll, afterEach, beforeAll, describe, expect, it, onTestFailed } from 'vitest'
 import { LocalClient, type Frame } from './harness/client.js'
 import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
-import { atVersion } from './harness/release.js'
+import { atVersion, withFault } from './harness/release.js'
 
 const FIRST = '44.0.1'
 const sha = (bytes: Buffer): string => createHash('sha256').update(bytes).digest('hex')
@@ -110,7 +110,7 @@ describe('a core with no master', () => {
     /** A release; `dies` names the commands it dies on (exit 3), after the updater's canary (`cli.js version`). */
     const release = (version: string, dies: string[] = []): void => {
       let source = atVersion(first, FIRST, version)
-      if (dies.length) source = source.replace('\n', `\nif(${JSON.stringify(dies)}.includes(process.argv[2]))process.exit(3);\n`)
+      if (dies.length) source = withFault(source, `if(${JSON.stringify(dies)}.includes(process.argv[2]))process.exit(3);`)
       releases.set(version, Buffer.from(source))
     }
     release(FIRST)

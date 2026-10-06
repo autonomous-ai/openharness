@@ -26,7 +26,8 @@ import { createInterface, emitKeypressEvents } from 'readline'
 import { homedir, hostname } from 'os'
 import { env } from './config/env.js'
 import { VERSION } from './version.js'
-import { runCore, runCoreInForeground } from './core/main.js'
+import { runCoreInForeground } from './core/main.js'
+import { startCoreProcess } from './coreProcess.js'
 import { GRID_MINT_TIMEOUT_MS, backendHttpBase, requestJson, postJson, controlPlaneAuth } from './lib/controlPlane.js'
 import { LEGACY_LOG_FILE, MACHINE_NAME_FILE, tildify, computerId, thisDeviceLabel, DAEMON_LOG_FILE, HARNESSD_STATUS_FILE, daemonPort, isAlive, isDaemonRunning, readPid } from './lib/daemonState.js'
 import { onError, BIND_WAIT_MS, connectFailure, defaultLaunchDeps, waitForBind } from './lib/daemonLaunch.js'
@@ -2445,7 +2446,8 @@ switch (cmd) {
     void startServiceProcess(rest[0])
     break
   case '__run': // internal: the detached daemon child reads the durable SSO session — or runs without one
-    runCore(SCRIPT_PATH)
+    // From the sources: cli.js and the lean bundle start it in coreProcess.ts without loading this file.
+    startCoreProcess(SCRIPT_PATH)
     break
   case 'autonomous-device':
     runAutonomousDeviceCommand(rest, env.ADAPTER_DATA_DIR, daemonPort()).then(code => { process.exitCode = code }).catch(onError)

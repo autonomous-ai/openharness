@@ -20,8 +20,10 @@ import { join } from 'node:path'
  * the source, rather than left to whoever next adds a helper below the restore block.
  */
 const SOURCE = readFileSync(join(import.meta.dirname, 'core', 'main.ts'), 'utf-8')
-/** The CLI, which starts the core for `harness __run` (core/main.ts `runCore`). */
+/** The CLI, which starts the core for `harness __run` (coreProcess.ts, then core/main.ts `runCore`). */
 const CLI_SOURCE = readFileSync(join(import.meta.dirname, 'cli.ts'), 'utf-8')
+/** The one start of the core's process, from cli.ts, cli.js and the lean bundle alike. */
+const CORE_PROCESS_SOURCE = readFileSync(join(import.meta.dirname, 'coreProcess.ts'), 'utf-8')
 
 /** `runForeground`'s own body. Other functions are indented the same way; their locals are not ours. */
 function runForegroundBody(source: string): { text: string; from: number } {
@@ -163,8 +165,12 @@ describe('the core\'s start-up order (core/main.ts)', () => {
     const cli = code(CLI_SOURCE)
     const start = cli.indexOf("case '__run'")
     const arm = cli.slice(start, cli.indexOf('break', start))
-    expect(arm, 'cli.ts starts the core through its entry').toContain('runCore(')
+    expect(arm, 'cli.ts starts the core through its process\'s start').toContain('startCoreProcess(')
     expect(arm, 'a daemon that exits here can never be updated').not.toContain('catch(onError)')
+    // That start, which entry.ts and the lean bundle's core entry call too, runs the core's entry.
+    const processStart = code(CORE_PROCESS_SOURCE)
+    expect(processStart, 'coreProcess.ts starts the core through its entry').toContain('runCore(')
+    expect(processStart, 'a daemon that exits here can never be updated').not.toContain('catch(onError)')
     // The entry it calls: what the arm did before the core had one of its own.
     const source = code(SOURCE)
     const from = source.indexOf('export function runCore(')

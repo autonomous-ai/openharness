@@ -1,3 +1,4 @@
+import { createHash, randomBytes } from 'node:crypto'
 import { EventEmitter } from 'node:events'
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -6,7 +7,7 @@ import type { ChildProcess } from 'node:child_process'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   PROBE_ANSWER, PROBE_COMMAND, PROBE_TIMEOUT_MS, REEXEC_LIMIT, RESUME_ENV, createReexec, decodeResume, encodeResume, fingerprint,
-  readMarker, recoverFailedReexec, removeMarker, runProbe, writeMarker, type ProbeResult, type ReexecDeps,
+  readMarker, recoverFailedReexec, removeMarker, runProbe, sha256File, writeMarker, type ProbeResult, type ReexecDeps,
 } from './reexec.js'
 import type { ReexecOutcome, ResumeState } from './supervisor.js'
 
@@ -23,11 +24,21 @@ describe('which bundle', () => {
     const file = join(dir, 'cli.js')
     writeFileSync(file, 'one')
     const one = fingerprint(file)
-    expect(one).toMatch(/^[0-9a-f]{64}$/)
+    expect(one).toBe(createHash('sha256').update('one').digest('hex'))
     writeFileSync(file, 'two')
     expect(fingerprint(file)).not.toBe(one)
     expect(fingerprint(join(dir, 'none.js'))).toBeNull()
-    expect(fingerprint('x', () => Buffer.from('one'))).toBe(one)
+    expect(fingerprint(dir)).toBeNull()
+  })
+
+  it('reads it a piece at a time, to the same sha256 as all its bytes at once, empty or not', () => {
+    // A bundle is megabytes: more than one piece, and a last piece that is not whole.
+    const file = join(dir, 'cli.js')
+    const bytes = randomBytes(3 * 64 * 1024 + 123)
+    writeFileSync(file, bytes)
+    expect(sha256File(file)).toBe(createHash('sha256').update(bytes).digest('hex'))
+    writeFileSync(file, '')
+    expect(sha256File(file)).toBe(createHash('sha256').update('').digest('hex'))
   })
 })
 

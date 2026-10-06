@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { LEAN_EARLY_DEATHS, leanServices, type LeanServicesDeps } from './leanServices.js'
+import { CORE, LEAN_EARLY_DEATHS, leanServices, type LeanServicesDeps } from './leanServices.js'
 import type { CoreHandle } from './supervisor.js'
 
 const CLI = '/cli/cli.js'
 const LEAN = '/data/lean/aaaa/harnessd.mjs'
+const LEAN_CORE = '/data/lean/aaaa/harnessd-core.mjs'
 
 function fakeProcess() {
   const messages: Array<(message: unknown) => void> = []
@@ -35,7 +36,7 @@ function make(over: Partial<LeanServicesDeps> = {}) {
   return { lean, logs, world }
 }
 
-describe('the file a service starts from', () => {
+describe('the file a service, or the core, starts from', () => {
   it('is the lean bundle while its files are the ones the master started with, and cli.js is the bundle they came from', () => {
     const { lean, logs } = make()
     expect(lean.scriptFor('search')).toBe(LEAN)
@@ -56,8 +57,8 @@ describe('the file a service starts from', () => {
     world.fingerprint = 'changed'
     expect(lean.scriptFor('search')).toBe(CLI)
     expect(logs).toEqual([
-      `[harnessd] the lean bundle ${LEAN} cannot be used (it is gone): services start from ${CLI}`,
-      `[harnessd] the lean bundle ${LEAN} cannot be used (its files changed): services start from ${CLI}`,
+      `[harnessd] the lean bundle ${LEAN} cannot be used (it is gone): the core and the services start from ${CLI}`,
+      `[harnessd] the lean bundle ${LEAN} cannot be used (its files changed): the core and the services start from ${CLI}`,
     ])
     world.fingerprint = 'f'
     expect(lean.scriptFor('search')).toBe(LEAN)
@@ -72,7 +73,7 @@ describe('the file a service starts from', () => {
     const { lean, logs, world } = make()
     world.same = false
     expect(lean.scriptFor('search')).toBe(CLI)
-    expect(logs).toEqual([`[harnessd] the lean bundle ${LEAN} cannot be used (${CLI} is no longer the bundle it came from): services start from ${CLI}`])
+    expect(logs).toEqual([`[harnessd] the lean bundle ${LEAN} cannot be used (${CLI} is no longer the bundle it came from): the core and the services start from ${CLI}`])
   })
 
   it('checks only that the entry is there when it has no fingerprint to check against', () => {
@@ -95,6 +96,20 @@ describe('the file a service starts from', () => {
     expect(lean.scriptFor('search')).toBe(CLI)
     // Only that service: the others still start from the lean bundle.
     expect(lean.scriptFor('viewers')).toBe(LEAN)
+  })
+
+  it('is cli.js for the core that died twice running from the lean bundle before it beat, counted apart from any service', () => {
+    const { lean, logs } = make()
+    for (let death = 1; death <= LEAN_EARLY_DEATHS; death++) {
+      // Its own entry, beside the services'.
+      expect(lean.scriptFor(CORE)).toBe(LEAN_CORE)
+      const child = fakeProcess()
+      lean.started(CORE, LEAN_CORE, child.handle)
+      child.exit(1)
+    }
+    expect(logs).toEqual([`[harnessd] the core died ${LEAN_EARLY_DEATHS} times from the lean bundle before it beat: it starts from ${CLI} from now on`])
+    expect(lean.scriptFor(CORE)).toBe(CLI)
+    expect(lean.scriptFor('search')).toBe(LEAN)
   })
 
   it('counts only deaths in a row before a beat, and never the master\'s own stop', () => {

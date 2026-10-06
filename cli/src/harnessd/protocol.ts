@@ -24,6 +24,14 @@ export const PROBE_ANSWER = 'harnessd-probe ok'
 /** How long a probe may take: the updater gives its canary as long. */
 export const PROBE_TIMEOUT_MS = 15_000
 
+/**
+ * Handed by a master to a core it starts from the lean bundle (./leanBundle.ts): the cli.js that bundle
+ * was read from. The core's own file is then the lean bundle's, which runs no command but the daemon's,
+ * and everything the core hands on (the hooks it installs, the CLI it writes into agents' panes, a
+ * successor it starts on an update) must name the CLI (leanCoreEntry.ts).
+ */
+export const LEAN_CORE_SCRIPT_ENV = 'HARNESSD_CORE_SCRIPT'
+
 /** The exit code a core uses to be restarted at once on the bundle now on disk (a staged update). */
 export const CORE_EXIT_UPDATE = 75
 
