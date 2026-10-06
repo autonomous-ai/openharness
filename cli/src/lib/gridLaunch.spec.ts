@@ -885,17 +885,17 @@ describe('web search status — what the app is told about the launch it got', (
     vi.stubEnv('HOME', fixtureHome)
     try {
       // "The engine wired it" is not taken on trust from the contract that reports it: the launch
-      // either carries the `harness` server (in argv or in a file it writes) or it does not, and the
+      // either carries the MCP endpoint (in argv or in a file it writes) or it does not, and the
       // status must agree with that. A future contract that took a url and forgot to wire it, or
       // wired it and reported otherwise, fails here.
-      const names = (launch: ReturnType<typeof launchOf>): string =>
+      const launchContent = (launch: ReturnType<typeof launchOf>): string =>
         [...launch.args, ...(launch.configDir?.files.map((f) => f.content) ?? [])].join('\n')
       for (const machine of [PLAIN_MACHINE, { hermesSystemManaged: true }]) {
         for (const engine of gridCapableEngines()) {
           for (const override of [WITH_MCP, WITH_MODEL]) {
             const built = buildGridEngineLaunch(engine, override, machine)
             if (!built.ok) continue // copilot without a model — refused, nothing to describe
-            const wired = names(built.launch).includes('harness')
+            const wired = launchContent(built.launch).includes(MCP_URL)
             expect(built.launch.webSearch === 'on', `${engine} · mcpUrl ${!!override.mcpUrl} · pinned ${machine.hermesSystemManaged}`)
               .toBe(wired)
           }
