@@ -83,6 +83,13 @@ class Shell:
         self.request_ids.add(match[2])
         self.reply(match, reply, code)
         return self.read_until(b'READY> ')
+    def result(self, marker):
+        # Bash bind-x may redraw PS1 while a command containing '%' is still
+        # being edited. Only the expanded output line proves it ran.
+        pattern=re.compile(rb'(?:^|\r?\n)(?:\r|\x1b\[[0-?]*[ -/]*[@-~])*'+re.escape(marker)+rb'\r?\n')
+        data=self.read_until(pattern)
+        if b'READY> ' not in data[pattern.search(data).end():]: self.read_until(b'READY> ')
+        return data
     def reply(self, match, reply='', code=0):
         path = self.root/'.harness/shell-requests'/TOKEN/match[2].decode()
         with path.open('w') as out:
@@ -103,7 +110,7 @@ class Shell:
         os.close(self.fd)
 
 with tempfile.TemporaryDirectory(prefix='hn-shell-test-') as tmp:
-    for shell in ('/bin/zsh','/bin/bash'):
+    for shell in ('/bin/zsh',os.environ.get('HN_SHELL_TEST_BASH','/bin/bash')):
         for custom in (False,True):
             root=Path(tmp)/(Path(shell).name+str(custom)); root.mkdir()
             print('starting',shell,custom,flush=True)
@@ -131,14 +138,19 @@ with tempfile.TemporaryDirectory(prefix='hn-shell-test-') as tmp:
                     s.reply(match,'Changed.\n')
                     s.read_until(b'READY> ')
                     s.send('M\r')
-                    assert b'DRAFT_LMRIGHT' in s.read_until(b'READY> ')
+                    s.result(b'DRAFT_LMRIGHT')
                 (root/'picker-choice').unlink()
                 (root/'picker-choice').write_text('sessions\nexternal:local:missing\n')
                 s.send('\x10')
                 match=REQUEST.search(s.read_until(REQUEST))
                 assert match[3]==b'session-inline'
                 s.reply(match,'Could not open it: fixture folder is unavailable.',code=1)
-                s.read_until(b'Could not open it: fixture folder is unavailable.')
+                failed=s.read_until(b'Could not open it: fixture folder is unavailable.')
+                # Bash prints the explanation before bind-x returns to Readline.
+                # Wait for that redraw before cancelling; an old prompt must not
+                # acknowledge Ctrl-C and race the next draft's first characters.
+                if shell.endswith('bash') and b'READY> ' not in failed.split(b'Could not open it: fixture folder is unavailable.',1)[1]:
+                    s.read_until(b'READY> ')
                 s.send('\x03');s.read_until(b'READY> ')
                 (root/'picker-choice').unlink()
                 s.send("printf 'CANCEL_DRAFT_%s\\n' LRIGHT")
@@ -147,7 +159,7 @@ with tempfile.TemporaryDirectory(prefix='hn-shell-test-') as tmp:
                 s.send('M\r')
                 # A bind-x redraw can leave an earlier prompt in the PTY. Wait
                 # for the command's actual result, not that pending redraw.
-                s.read_until(b'CANCEL_DRAFT_LMRIGHT')
+                s.result(b'CANCEL_DRAFT_LMRIGHT')
                 # Tab selects INTO the current shell line, without taking the
                 # action. Shell quoting must preserve every byte as literal data.
                 malicious="office ' ; $(touch SHOULD_NOT_EXIST); # 日本語"
@@ -178,7 +190,7 @@ with tempfile.TemporaryDirectory(prefix='hn-shell-test-') as tmp:
                 assert match[3]==b'host-inline' and base64.b64decode(match[4])==b'local'
                 s.reply(match);s.read_until(b'READY> ')
                 s.send("printf '%s\\n' \x14\x12\r")
-                assert b'KEPT_TKEPT_R' in s.read_until(b'READY> ')
+                s.result(b'KEPT_TKEPT_R')
                 s.send('ch local\r')
                 match = REQUEST.search(s.read_until(REQUEST))
                 s.send("printf 'TYPEAHEAD_%s\\n' OK\r")
@@ -236,7 +248,10 @@ with tempfile.TemporaryDirectory(prefix='hn-shell-test-') as tmp:
                 # Helpers restore echo and do not alter the user's prompt or cwd.
                 weird=root/'folder ü % #'; weird.mkdir()
                 s.send("cd '"+str(weird)+"'\r")
-                result=s.read_until(b'READY> ')
+                # The '%' binding can redraw the prompt while cd is still being
+                # edited. OSC 7, rather than that redraw, proves cd has finished.
+                result=s.read_until(re.compile(rb'\x1b\]7;file://localhost[^\x07]+\x07'))
+                if b'READY> ' not in result.rsplit(b'\x07',1)[-1]: s.read_until(b'READY> ')
                 paths=re.findall(rb'\x1b\]7;file://localhost([^\x07]+)\x07',result)
                 assert paths and urllib.parse.unquote(paths[-1].decode())==str(weird), result
                 s.send("stty -a\r"); result=s.read_until(b'READY> ')

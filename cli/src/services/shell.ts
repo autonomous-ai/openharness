@@ -15,7 +15,9 @@ export function startShell(core: CoreApi): ServiceRequests {
   // A banner or Ctrl-C is not proof: require the launcher's exit mark AND the exact process gone.
   const visitStatus = async (agentId: string): Promise<Record<string, unknown>> => {
     const row = core.agents.byAgent(agentId)
-    if (!row || row.engine === 'terminal' || row.launch?.state !== 'ready' || !row.tmuxPane || !row.processIdentity?.startMarker) return { exited: false }
+    // Discovery clears a completed launch record when it binds the engine's conversation.
+    if (!row || !row.active || row.engine === 'terminal' || row.launch?.state === 'starting' || row.launch?.state === 'failed'
+      || !row.tmuxPane || !row.processIdentity?.startMarker) return { exited: false }
     const session = { ...row, processIdentity: { ...row.processIdentity } }
     const identity = (value: ReturnType<typeof core.agents.byAgent>) => JSON.stringify([value?.engine, value?.sessionId,
       value?.registeredAt, value?.tmuxPane, value?.launch?.state, value?.processIdentity])

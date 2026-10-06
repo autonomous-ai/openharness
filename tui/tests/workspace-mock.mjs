@@ -178,6 +178,12 @@ wss.on('connection', ws => {
         return setTimeout(() => { broadcast(machine, 'agent_synced', { agent: target }); reply({ ok: true }) }, state.modelDelay)
       }
       case 'agent_recent': return reply({ agentId: payload.agentId, asks: ['Preserve the current project.'], events: [{ kind: 'summary', text: 'The project is ready for the next step.' }] })
+      case 'agent_resume': {
+        if (!target) return reply({ error: 'AGENT_NOT_FOUND' })
+        target.status = 'idle'; target.terminal.available = true
+        broadcast(machine, 'agent_synced', { agent: target })
+        return reply({ ok: true, agent: target })
+      }
       case 'agent_handoff_prepare': return reply({ agentId: payload.agentId, degraded: [], file: `.harness/handoff/${payload.agentId}-${payload.changeId}.md`, cwd: target?.project.cwd, gitRepo: true })
       case 'agent_close': {
         if (!target || target.sessionId !== payload.sessionId || target.createdAt !== payload.createdAt) return reply({ error: 'SESSION_CHANGED' })
