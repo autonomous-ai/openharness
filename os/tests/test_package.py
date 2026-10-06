@@ -42,7 +42,8 @@ class PackageIdentity(unittest.TestCase):
             with tarfile.open(output) as archive:
                 metadata = archive.extractfile('.PKGINFO').read().decode().splitlines()
             depends = {row.removeprefix('depend = ') for row in metadata if row.startswith('depend = ')}
-            self.assertTrue({'gtklock', 'grim', 'slurp', 'foot', 'labwc', 'tmux', 'nodejs-lts-jod'} <= depends)
+            self.assertTrue({'gtklock', 'grim', 'slurp', 'foot', 'tmux', 'nodejs-lts-jod'} <= depends)
+            self.assertNotIn('labwc', depends)
             self.assertTrue(depends <= set((Path(__file__).parents[1] / 'packages.x86_64').read_text().split()))
             spec = importlib.util.spec_from_file_location('runtime_package_check', Path(__file__).parents[1] / 'runtime_update.py')
             updater = importlib.util.module_from_spec(spec)

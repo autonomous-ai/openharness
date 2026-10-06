@@ -14,10 +14,15 @@ VERSION=$(python3 -c 'import json; print(json.load(open("lock.json"))["version"]
 SNAPSHOT=$(python3 -c 'import json; print(json.load(open("lock.json"))["arch_snapshot"])')
 BUILD_DIR=${HARNESS_OS_BUILD_DIR:-$OS_DIR/work}
 RUNTIME_DIR=${HARNESS_OS_RUNTIME_DIR:-$OS_DIR/work/runtime}
+COMPOSITOR_DIR=${HARNESS_OS_COMPOSITOR_DIR:-$OS_DIR/work/compositor}
 PLATFORM=${HARNESS_OS_PLATFORM:-pc}
 [[ $PLATFORM == pc || $PLATFORM == apple-t2 ]] || { echo 'Unknown OS boot platform.' >&2; exit 1; }
 [[ -s "$RUNTIME_DIR/source.json" && -x "$RUNTIME_DIR/harness-tui" ]] || {
     echo 'Build the OS runtimes first with make -C os runtime on x86_64 Linux.' >&2
+    exit 1
+}
+[[ -s "$COMPOSITOR_DIR/manifest.json" && -x "$COMPOSITOR_DIR/labwc" ]] || {
+    echo 'Build the compositor first with make -C os compositor.' >&2
     exit 1
 }
 mkdir -p "$BUILD_DIR" "$OS_DIR/dist"
@@ -46,7 +51,7 @@ EOF
 # Reuse the same package assembly for fresh images and small development updates.
 # Use the same source-versioned identity as its update-channel package. An ISO
 # installation should not immediately be offered this identical build again.
-python3 tools/build-package.py --runtime "$RUNTIME_DIR" --output "$BUILD_DIR/repo" --development
+python3 tools/build-package.py --runtime "$RUNTIME_DIR" --compositor "$COMPOSITOR_DIR" --output "$BUILD_DIR/repo" --development
 PROFILE_ARGS=(--profile "$PROFILE" --platform "$PLATFORM")
 if [[ $PLATFORM == apple-t2 ]]; then
     [[ -n ${HARNESS_OS_T2_BUNDLE:-} ]] || { echo 'Prepare the pinned T2 kernel bundle first.' >&2; exit 1; }
