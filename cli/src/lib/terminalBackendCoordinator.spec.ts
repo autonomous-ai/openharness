@@ -286,6 +286,19 @@ describe('TerminalBackendCoordinator', () => {
       expect(waits).toEqual([10])
     })
 
+    it('waits for a restored agent whose launch is starting before an engine process exists', async () => {
+      // Found by QA on a quiet machine: a message after restore was rejected before Codex started.
+      const answers = [{ state: 'gone' as const, reason: 'no codex process under pane %1' }, { state: 'alive' as const }]
+      const { coordinator } = patient(async () => answers.shift()!)
+      const current = session()
+      current.engine = 'codex'
+      current.runtimes = [tmux]
+      current.processIdentity = null
+      current.launch = { state: 'starting' }
+      await expect(coordinator.validate(current)).resolves.toEqual({ state: 'alive' })
+      expect(waits).toEqual([10])
+    })
+
     it('gives the last answer once the waits run out, and never waits on a terminal known to be gone', async () => {
       const unknown = patient(async () => ({ state: 'unknown' as const, reason: 'still failing' }))
       const current = session()
