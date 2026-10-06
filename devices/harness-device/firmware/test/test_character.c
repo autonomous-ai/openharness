@@ -714,7 +714,8 @@ static void focus_face(void)
                     int frame = scene_frame(ws, mark->sprite.cells, 1);
                     assert(frame == ws->loop[(step * pet->step_ms[state] + 1) / ws->step_ms % ws->steps]);
                     assert(mark->sprite.width == ws->w && mark->sprite.height == ws->h && mark->x == (466 - ws->w) / 2 + ws->dx);
-                    assert(mark->y == 233 + 4 - ws->h / 2 + ws->dy);
+                    int bob = ws->step_dy ? ws->step_dy[(step * pet->step_ms[state] + 1) / ws->step_ms % ws->steps] : 0;
+                    assert(mark->y == 233 + 4 - ws->h / 2 + ws->dy + bob);
                     assert(!scene.runs[7].text[0]);                 // the centred status is empty
                     const ht_run_t *lower = &scene.runs[10];
                     assert(lower->arc == 2 && !strcmp(lower->text, "Working\xe2\x80\xa6 5s"));   // Inter has the real ellipsis
@@ -862,7 +863,7 @@ static void focus_face(void)
         const ht_pet_t *xp = pet_of("codex");
         assert(xp && xp->working_scene && xp->listening_scene && xp->sending_scene && !pet_of("cursor"));
         const ht_pet_scene_t *ws = cp->working_scene;
-        assert(ws->w == 147 && ws->h == 148 && ws->steps == 26 && ws->step_ms == 55 && ws->overlay && ws->step_dy);
+        assert(ws->w == 117 && ws->h == 117 && ws->steps == 26 && ws->step_ms == 55 && ws->overlay && ws->step_dy);
         int frames_seen[26], distinct = 0;
         for (unsigned step = 0; step < ws->steps; step++) {
             ht_character_face_t f = {.recipient = "Payments refactor", .engine = "claude",
@@ -881,7 +882,7 @@ static void focus_face(void)
             }
             assert(big == 1 && !small);
             assert(scene_frame(ws, scene.runs[1].sprite.cells, 1) == ws->loop[step]);
-            assert(!scene.runs[7].text[0] && scene.runs[3].sprite.cells);   // the props (pan, food, steam) in run 3
+            assert(!scene.runs[7].text[0] && scene.runs[3].sprite.cells);   // the props (pan, food) in run 3
             assert(scene.runs[10].arc == 2 && scene.runs[10].fg == ht_rgb(0x00ff2f) &&
                    !strcmp(scene.runs[10].text, "Coalescing\xe2\x80\xa6 34s") &&
                    scene.runs[10].font == &ht_lv_inter_med_26.base);
@@ -893,9 +894,17 @@ static void focus_face(void)
                 if (full[y * HT_WIDTH + x])
                     assert((x - 233) * (x - 233) + (y - 233) * (y - 233) < 230 * 230);
             // It is scheduled: the next change is the next step's boundary.
-            assert(ht_focus_pet_next_ms(&f, "") == (step + 1) * ws->step_ms);
+            // (the pan's still steps draw the same, so it skips those)
+            unsigned nx = step + 1;
+            const ht_pet_overlay_t *o = ws->overlay;
+            for (; nx < step + ws->steps; nx++) {
+                unsigned a = nx % ws->steps;
+                if (ws->loop[a] != ws->loop[step] || ws->step_dy[a] != ws->step_dy[step] || o->loop[a] != o->loop[step] ||
+                    o->at[a][0] != o->at[step][0] || o->at[a][1] != o->at[step][1]) break;
+            }
+            assert(ht_focus_pet_next_ms(&f, "") == nx * ws->step_ms);
         }
-        assert(distinct >= 4);   // a few body poses; the props move every step
+        assert(distinct == 2);   // two body poses (eyes open, ^ ^ on the flick); a bob moves them
         // The other states and the recap keep the small pet, the centred line and no lower arc.
         ht_character_face_t g = {.recipient = "x", .engine = "claude", .activity = "Coalescing", .elapsed = 34,
             .status = "", .hint = "", .detail = "", .mood = HT_CHARACTER_WORKING, .clock_ms = 500};

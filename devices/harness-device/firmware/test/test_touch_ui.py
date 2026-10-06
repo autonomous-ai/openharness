@@ -1991,15 +1991,23 @@ int main(int argc, char **argv) {
         s.touch_down = false;
         s.view = HOME;
     }
-    // THE WORKING SCENE (claude): a busy agent's face is the large cooking Clawd, which changes every
-    // 110 ms, so s.pet_next_ms is the next step and surface_tick redraws then and not before.
+    // THE WORKING SCENE (claude): a busy agent's face is the large cooking Clawd, which changes on its step
+    // clock, so s.pet_next_ms is its next change and surface_tick redraws then and not before.
     {
         const ht_pet_scene_t *ws = ht_pets[0].working_scene;
         assert(!strcmp(ht_pets[0].engine, "claude") && ws);
         reset(); ht_character_select(&character, HT_CHARACTER_FOCUS); strcpy(s.agents[0].engine, "claude");
         s.agents[0].busy = true; strcpy(s.agents[0].tool, "Running firmware checks");
         fake_ms = 1200; scene_take();
-        uint32_t due = (1201 / ws->step_ms + 1) * ws->step_ms;
+        // the next step that draws differently (the pan's still steps draw the same)
+        unsigned now = 1201 / ws->step_ms, nx = now + 1;
+        const ht_pet_overlay_t *o = ws->overlay;
+        for (; nx < now + ws->steps; nx++) {
+            unsigned a = nx % ws->steps, b = now % ws->steps;
+            if (ws->loop[a] != ws->loop[b] || (ws->step_dy && ws->step_dy[a] != ws->step_dy[b]) ||
+                (o && (o->loop[a] != o->loop[b] || o->at[a][0] != o->at[b][0] || o->at[a][1] != o->at[b][1]))) break;
+        }
+        uint32_t due = nx * ws->step_ms;
         assert(s.pet_next_ms == due);
         bool scene_run = false, lower_arc = false;
         for (int i = 0; i < scene.count; i++) {
