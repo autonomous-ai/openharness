@@ -53,7 +53,11 @@ if [[ $PLATFORM == apple-t2 ]]; then
     PROFILE_ARGS+=(--t2-bundle "$HARNESS_OS_T2_BUNDLE")
 fi
 python3 tools/configure-boot-profile.py "${PROFILE_ARGS[@]}"
-repo-add "$BUILD_DIR/repo/harness-build.db.tar.gz" "$BUILD_DIR/repo/"*.pkg.tar.*
+REPO_PACKAGES=("$BUILD_DIR/repo/"*.pkg.tar.gz)
+if [[ $PLATFORM == apple-t2 ]]; then
+    REPO_PACKAGES+=("$BUILD_DIR/repo/"*.pkg.tar.zst)
+fi
+repo-add "$BUILD_DIR/repo/harness-build.db.tar.gz" "${REPO_PACKAGES[@]}"
 if [[ $PLATFORM == pc ]]; then
   python3 tools/build-hardware.py --config "$PROFILE/pacman.conf" \
     --work "$BUILD_DIR/hardware-build" \
