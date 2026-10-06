@@ -85,6 +85,7 @@ describe('the Store in its own process, beside the viewers', () => {
     const cwd = join(d.projectsDir, 'installed-here')
     mkdirSync(cwd, { recursive: true })
     const early = () => client.request('agent_create', { engine: 'claude', cwd, bypassPermission: true, dsh: HARNESS }, 30_000)
+    // Found by QA on a quiet machine: an in-flight warming request can succeed as installation finishes.
     let warming = true
     const warmed = (async () => {
       while (warming) {
