@@ -490,6 +490,45 @@ describe('runMaster', { timeout: 60_000 }, () => {
     expect(exits).toEqual([0])
   })
 
+  it('runs the updater when told to, whatever HARNESSD_SERVICES names, and has the core hand over for what it stages', async () => {
+    const pidFile = join(dir, 'adapter.pid')
+    const seen = join(dir, 'seen')
+    const script = join(dir, 'daemon.cjs')
+    writeFileSync(script, `
+      const { appendFileSync } = require('node:fs')
+      const role = process.argv[2] === '__service' ? 'service:' + process.argv[3] : process.argv[2]
+      const say = (what) => appendFileSync(${JSON.stringify(seen)}, JSON.stringify({ role, what, restarts: process.env.HARNESSD_RESTARTS }) + '\\n')
+      say('started')
+      if (role === '__run') {
+        process.send({ type: 'harnessd:bound', protocol: 3, port: 1 }); process.send({ type: 'harnessd:ready' })
+        process.on('message', (message) => { if (message.type === 'harnessd:update') { say('asked for ' + message.version); process.exit(75) } })
+      }
+      if (role === 'service:updater' && process.env.HARNESSD_RESTARTS === '0') setTimeout(() => process.send({ type: 'harnessd:staged', version: '9.9.9' }), 100)
+      setInterval(() => process.send({ type: 'harnessd:heartbeat', rssBytes: 1, heapUsedBytes: 1, loopDelayMs: 0 }), 50)
+      process.on('SIGTERM', () => process.exit(0))
+    `)
+    const exits: number[] = []
+    const signals = new Map<string, () => void>()
+    const lines: string[] = []
+    const log = vi.spyOn(console, 'log').mockImplementation((line: string) => { lines.push(line) })
+    try {
+      runMaster({
+        nodePath: process.execPath, execArgv: [], scriptPath: script, pidFile, updater: true,
+        restoreUpdate: () => {}, confirmUpdate: () => {},
+        env: { ...process.env, HARNESSD_SERVICES: 'none', HARNESSD_UPDATE_PROBATION_MS: '50' },
+        exit: (code) => exits.push(code), onSignal: (signal, listener) => signals.set(signal, listener),
+      })
+      const said = (): Array<Record<string, string>> => existsSync(seen) ? readFileSync(seen, 'utf8').trim().split('\n').map((line) => JSON.parse(line)) : []
+      await until('the core to hand over and a new one to start', () => said().filter((line) => line.role === '__run' && line.what === 'started').length === 2)
+      expect(said().filter((line) => line.role.startsWith('service:')).map((line) => line.role)).toEqual(['service:updater'])
+      expect(said()).toContainEqual({ role: '__run', what: 'asked for 9.9.9', restarts: '0' })
+      expect(lines.some((line) => line.endsWith('[harnessd] the updater staged 9.9.9 — asking the core to hand over'))).toBe(true)
+      expect(lines.some((line) => line.endsWith('[harnessd] core exited (code 75) for an update — restarting'))).toBe(true)
+      signals.get('SIGTERM')!()
+      await until('the master to finish', () => exits.length > 0)
+    } finally { log.mockRestore() }
+  })
+
   it('starts the services from the lean bundle when given one, and the core from the CLI entry', async () => {
     // The lean bundle cli.js carries (./leanBundle.ts): each service parses its own code, not the CLI's.
     const pidFile = join(dir, 'adapter.pid')

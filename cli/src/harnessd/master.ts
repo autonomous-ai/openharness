@@ -16,7 +16,7 @@ import type { MasterMessage } from './protocol.js'
 import {
   PROBE_ANSWER, RESUME_ENV, createReexec, decodeResume, fingerprint, readMarker, recoverFailedReexec, removeMarker, runProbe, writeMarker,
 } from './reexec.js'
-import { SERVICE_HOSTS, ServiceSupervisor, serviceOptions, serviceProcessesEnv, serviceSpecs } from './services.js'
+import { SERVICE_HOSTS, ServiceSupervisor, UPDATER_HOST, serviceOptions, serviceProcessesEnv, serviceSpecs } from './services.js'
 import {
   DEFAULT_SUPERVISOR_OPTIONS, Supervisor, type CoreHandle, type SupervisorDeps, type SupervisorOptions, type SupervisorStatus,
 } from './supervisor.js'
@@ -67,6 +67,8 @@ export interface MasterConfig {
   /** The version of the update the bundle with this fingerprint is, when it is one no master kept or
    *  rolled back (`selfUpdate.unjudgedUpdate`); null otherwise. Left out, never. */
   unjudgedUpdate?: (bundle: string | null) => string | null
+  /** Run the updater (`UPDATER_HOST`): the installed copy, with updates on (masterProcess.ts). */
+  updater?: boolean
 }
 
 export type Execve = (file: string, args: string[], env: NodeJS.ProcessEnv) => void
@@ -295,7 +297,10 @@ export function runMaster(config: MasterConfig): Supervisor {
     folderFingerprint, exists: existsSync, sameBundle: () => bundle() === own, log,
   })
   const specs = serviceSpecs(env, SERVICE_HOSTS)
-  const services = new ServiceSupervisor(specs, {
+  // The updater beside them, whatever HARNESSD_SERVICES says: the core neither routes to it nor runs it.
+  const processes = config.updater ? [...specs, { name: 'updater', ...UPDATER_HOST }] : specs
+  let supervisor: Supervisor | null = null
+  const services = new ServiceSupervisor(processes, {
     spawnService: (spec, extra) => {
       const script = lean.scriptFor(spec.name)
       // One process for every service it hosts, each on its own link to the core (services/process.ts).
@@ -311,6 +316,8 @@ export function runMaster(config: MasterConfig): Supervisor {
     setTimer: (run, ms) => setTimeout(run, ms),
     clearTimer: (timer) => clearTimeout(timer as ReturnType<typeof setTimeout>),
     log,
+    // The updater staged a build: the core is asked to hand over for it, and the new core judged.
+    staged: (version) => supervisor?.updateStaged(version),
   }, serviceOptions(env), { HARNESSD_SERVICE_TOKEN: token })
   const reexec = markerFile ? createReexec({
     own, current: bundle, nodePath: named('harnessd'), execArgv: config.execArgv, scriptPath: config.scriptPath, env, pid: process.pid,
@@ -324,7 +331,7 @@ export function runMaster(config: MasterConfig): Supervisor {
     now: () => Date.now(),
     log,
   }) : null
-  const supervisor = new Supervisor({
+  supervisor = new Supervisor({
     spawnCore: (extra) => coreHandle(spawn(named('harnessd-core'), [...execArgv, config.scriptPath, '__run'], {
       // Told which services this master runs, so it routes to exactly those and runs the rest itself.
       env: { ...env, ...extra, HARNESSD_SERVICE_TOKEN: token, ...serviceProcessesEnv(specs) },

@@ -18,6 +18,7 @@ import { baseNode, namedNode } from './harnessd/processName.js'
 import { PROBE_ANSWER, PROBE_TIMEOUT_MS } from './harnessd/reexec.js'
 import { ensureUtf8Locale } from './lib/childLocale.js'
 import { DAEMON_LOG_FILE, HARNESSD_STATUS_FILE, PID_FILE } from './lib/daemonState.js'
+import { isInstalledCopy } from './lib/installedCopy.js'
 import { leanFingerprint, readLeanBundle, releaseLeanClaim, writeLeanBundle, type LeanBundle } from './harnessd/leanBundle.js'
 import { ts } from './lib/log.js'
 import { confirm as confirmUpdate, restore as restoreUpdate, unjudgedUpdate } from './lib/selfUpdate.js'
@@ -69,6 +70,8 @@ export function startMaster(start: MasterStart, exit: (code: number) => void = (
     version: VERSION,
     reexecMarkerFile: HARNESSD_REEXEC_FILE,
     unjudgedUpdate: (bundle) => unjudgedUpdate(env.ADAPTER_CLI_DIR, bundle),
+    // The updater runs for the installed copy alone (lib/installedCopy.ts), beside the core, never in it.
+    updater: !env.ADAPTER_UPDATE_DISABLE && isInstalledCopy(start.scriptPath, env.ADAPTER_CLI_DIR),
     // A master that ends cleanly gives up its claim on its lean bundle, so the next one to start can
     // clear the folder; one that dies leaves a claim whose pid is gone, which counts for nothing.
     exit: (code) => {

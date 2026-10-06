@@ -38,6 +38,8 @@ export const SERVICE_RUNNERS: ReadonlyMap<string, () => Promise<Runner>> = new M
   ['sharing', async () => (await import('./services/sharingProcess.js')).runSharingService],
   ['orchestrator', async () => (await import('./services/orchestratorProcess.js')).runOrchestratorService],
   ['commandBar', async () => (await import('./services/commandBarProcess.js')).runCommandBarService],
+  // Not a service the core knows: the master runs it beside them (harnessd/services.ts `UPDATER_HOST`).
+  ['updater', async () => (await import('./services/updaterProcess.js')).runUpdaterService],
   ['gateway', async () => (await import('./gateway/gatewayProcess.js')).runGatewayService],
   ['models', async () => (await import('./services/modelsProcess.js')).runModelsService],
   ['devices', async () => (await import('./services/devicesProcess.js')).runDevicesService],

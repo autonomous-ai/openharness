@@ -12,7 +12,7 @@
 import { ensureBundledCoreHarnesses } from '../dsh/builtins.js'
 import { readFileSync, writeFileSync, openSync, existsSync, rmSync, statSync } from 'fs'
 import { join } from 'path'
-import { execFile, spawn, spawnSync } from 'child_process'
+import { execFile, spawn } from 'child_process'
 import { createServer, type Server } from 'http'
 import { homedir, hostname } from 'os'
 import { env } from '../config/env.js'
@@ -28,10 +28,9 @@ import { engineSessionTitle } from '../lib/sessionTitle.js'
 import { machineNames } from '../lib/machineNames.js'
 import { installCodexHooks } from '../lib/hooks.js'
 import { DAEMON_LOG_FILE, PID_FILE, daemonPort, isAlive, readPid, LEGACY_LOG_FILE, MACHINE_NAME_FILE, tildify, computerId, thisDeviceLabel } from '../lib/daemonState.js'
-import { clearSafeModeMarker, runBootHandoff, safeModeDisposition, safeModeStatusBody, SafeModeRequest, writeSafeModeMarker } from '../lib/daemonSafeMode.js'
+import { clearSafeModeMarker, safeModeDisposition, safeModeStatusBody, SafeModeRequest, writeSafeModeMarker } from '../lib/daemonSafeMode.js'
 import { awakeTimeout } from '../lib/sleepAware.js'
 import { removePidFileIf, onError } from '../lib/daemonLaunch.js'
-import { describeSpawnLockOwner, withSpawnLock } from '../lib/daemonSpawnLock.js'
 import { ensureTmuxOnPath } from '../lib/tmuxOnPath.js'
 import { AUTH_DIR, AuthSessionError, AuthSessionManager, clearAuthSession, ensureSignInEpoch, readAuthSession, signInOf, type AuthSession } from '../lib/authSession.js'
 import { ENGINES, enginePathOverride } from '../lib/engineBin.js'
@@ -88,7 +87,8 @@ import { createQuestions } from './questions.js'
 import { createTurnActivity } from './turns/activity.js'
 import { createLastTurnReader } from './transcripts/lastTurn.js'
 import { createRecaps } from './turns/recaps.js'
-import { createUpdateHandoff, probeStagedMaster, probeVerdict } from './updateHandoff.js'
+import { createUpdateHandoff, handOverOnceReleased, probeStagedMaster, type TeardownStep } from './updateHandoff.js'
+import { needsUpdaterBeside, startUpdaterBeside } from './updaterBeside.js'
 import { createHeartbeats } from './turns/heartbeats.js'
 import { createEventFunnel } from './turns/funnel.js'
 import { createAgyBackstop } from './turns/agyBackstop.js'
@@ -139,7 +139,7 @@ import { daemonCommand } from '../lib/daemonCommand.js'
 import { KNOWN_SERVICES, servicesTheMasterRuns } from '../harnessd/services.js'
 import { createTeamsLink, teamsOutOfProcess } from './teamsLink.js'
 import { createDevicesLink } from './devicesLink.js'
-import { CORE_EXIT_STOP, CORE_EXIT_UPDATE, PROBE_COMMAND, PROBE_TIMEOUT_MS } from '../harnessd/protocol.js'
+import { CORE_EXIT_STOP, CORE_EXIT_UPDATE, PROBE_COMMAND } from '../harnessd/protocol.js'
 import { localSocketPath, refuseServedDataFolder, type LocalSocketServer } from '../lib/localSocket.js'
 import { saveDaemonPort } from '../lib/daemonEndpoint.js'
 import { publishHookRoute } from '../lib/hookRoutes.js'
@@ -154,9 +154,8 @@ import { autonomousDeviceLocalRequest } from '../lib/autonomous-device/localApi.
 import { attachLocalWsServer, LOCAL_WS_PATH, LOCAL_WS_PROTOCOL_VERSION } from '../localWsServer.js'
 import { TERMINAL_BINARY_VERSION } from '../lib/terminalBinary.js'
 import { isLoopbackRequest, loopbackHosts } from '../lib/loopbackRequest.js'
-import { startSelfUpdater, restore as restoreUpdate, DOWNLOAD_LIMITS, type Poller } from '../lib/selfUpdate.js'
+import { isInstalledCopy } from '../lib/installedCopy.js'
 import { managedNodePath } from '../lib/nodeRuntime.js'
-import { startTuiUpdater } from '../tui/update.js'
 import { type ActivityFrame } from '../lib/turnActivity.js'
 import { CursorTranscriptDiscovery } from '../engines/cursor/discovery.js'
 import { cursorDataDir } from '../engines/cursor/home.js'
@@ -269,23 +268,23 @@ function startMasterHere(): void {
  * What a staged update does while the daemon is still starting up — and the little the boot needs to
  * know about itself to do it.
  *
- * The self-updater is started in `runForeground`'s prologue, before anything that can throw or hang,
- * because a daemon that cannot finish booting is a daemon that can never be fixed: there is no
- * supervisor, and the desktop app only re-runs `harness start` on the same broken bytes, once a
- * minute, for ever. Its `onStaged` therefore has to mean something LONG before `restartForUpdate`
- * exists — hence the indirection: `applyStagedUpdate` is `bootHandoff` until the body has built
- * everything `restartForUpdate` tears down, and is swapped for it at that one line.
+ * The master's updater (services/updaterProcess.ts) can stage a build at any moment, and the master then
+ * asks this core to hand over (`harnessd:update`), which `runForeground`'s prologue listens for before
+ * anything that can throw or hang: a daemon that cannot finish booting must still leave for its fix. That
+ * request therefore has to mean something LONG before `restartForUpdate` exists — hence the indirection:
+ * `applyStagedUpdate` is `bootHandoff` until the body has built everything `restartForUpdate` tears down,
+ * and is swapped for it at that one line.
  */
 /** This process's channel to a harnessd master, when one started it (see harnessd/coreLink.ts).
- *  Inert otherwise: a daemon run on its own claims its pid file and hands off updates itself. */
+ *  Inert otherwise: a daemon run on its own claims its pid file, and gets no updates. */
 const coreLink = connectToMaster()
 /** When the devices' process starts: once there is a device, a dial's port, a Wi-Fi device or a request for one
  *  (core/devicesWake.ts). Asked of the master through the channel above. */
 const devicesWake = createDevicesWake({ want: (service) => coreLink.want(service), dataDir: env.ADAPTER_DATA_DIR, cableDisabled: env.CABLE_DISABLE, testDialPort: process.env.HARNESSD_TEST_DIAL_PORT })
 
 const daemonBoot: {
-  updater: Poller | null
-  tuiUpdater: Poller | null
+  /** Stops the updater this core runs beside itself under a master too old to run it (core/updaterBeside.ts). */
+  updaterBeside: (() => void) | null
   /** The hook server, once bound — the only thing a mid-boot handoff has to release. */
   hookServer: Server | null
   /** Its Unix-socket twin (lib/localSocket.ts), when one could be opened. Read by `/api/status`. */
@@ -298,52 +297,24 @@ const daemonBoot: {
   applyStagedUpdate: (version: string) => void | Promise<void>
   /** Opens the request gate of a start-up that did not finish, so its clients are answered (safe mode). */
   openRequests: (() => void) | null
-} = { updater: null, tuiUpdater: null, hookServer: null, localSocket: null, markNotReady: null, safeMode: null, handingOff: false, applyStagedUpdate: bootHandoff, openRequests: null }
+} = { updaterBeside: null, hookServer: null, localSocket: null, markNotReady: null, safeMode: null, handingOff: false, applyStagedUpdate: bootHandoff, openRequests: null }
 
 /**
- * Hand the machine to a newer build without finishing start-up.
+ * Hand the machine to a newer build without finishing start-up: the master asked (its updater staged one),
+ * and starts the new bundle the moment this exits, and judges it.
  *
  * SYNCHRONOUS END TO END, and that is the whole safety argument: never awaiting means the half-built
- * `runForeground` body cannot interleave between the port closing and the exit, so it can never
- * reach the code that would bind the port the successor is about to take, and two daemons are
- * impossible by construction. That is also why it does not wait for the master to claim the pid file the
- * way `restartForUpdate` does — waiting would leave this process running alongside the new core, both
- * reconciling tmux and writing the registry.
- *
- * Without a master it spawns one rather than merely exiting, because on a machine with no desktop app
- * nothing else would ever start the successor, and even with one the next spawn window is up to ~70s
- * away. The master judges the update it starts on (core/updateHandoff.ts); the core this once spawned
- * instead ran it unjudged.
+ * `runForeground` body cannot interleave between the port closing and the exit, so it can never reach the
+ * code that would bind the port the successor is about to take. Only a master asks; a core without one
+ * gets no updates.
  */
 function bootHandoff(version: string): void {
   if (daemonBoot.handingOff) return
   daemonBoot.handingOff = true
-  daemonBoot.tuiUpdater?.stop()
-  if (coreLink.supervised) {
-    // The master starts the new bundle the moment this exits, and rolls it back if it does not stay
-    // up; a successor spawned from here would be a daemon outside its supervision.
-    console.log(`[update] ${VERSION} → ${version} staged during start-up — handing back to harnessd`)
-    try { daemonBoot.hookServer?.close() } catch { /* already gone */ }
-    try { daemonBoot.localSocket?.closeSync() } catch { /* already gone */ }
-    process.exit(CORE_EXIT_UPDATE)
-  }
-  runBootHandoff(VERSION, version, {
-    // The hook port has no fallback: a successor that cannot bind it is a daemon that does not come up.
-    closeServer: () => {
-      try { (daemonBoot.hookServer as unknown as { closeAllConnections?: () => void } | null)?.closeAllConnections?.() } catch { /* already gone */ }
-      try { daemonBoot.hookServer?.close() } catch { /* already gone */ }
-      try { daemonBoot.localSocket?.closeSync() } catch { /* already gone */ }
-    },
-    // Synchronous, as all of this is: start-up has not finished, and has nothing to serve meanwhile.
-    probeMaster: () => {
-      const probe = spawnSync(managedNodePath(), [SCRIPT_PATH, PROBE_COMMAND], { encoding: 'utf8', timeout: PROBE_TIMEOUT_MS })
-      return probeVerdict(probe.error ?? (probe.status === 0 ? null : new Error(probe.signal ? `signal ${probe.signal}` : `exit ${probe.status}`)), probe.stdout ?? '')
-    },
-    rollBack: () => restoreUpdate(env.ADAPTER_CLI_DIR),
-    startMaster: startMasterHere,
-    exit: (code) => process.exit(code),
-    log: (message) => console.log(message),
-  })
+  console.log(`[update] ${VERSION} → ${version} staged during start-up — handing back to harnessd`)
+  try { daemonBoot.hookServer?.close() } catch { /* already gone */ }
+  try { daemonBoot.localSocket?.closeSync() } catch { /* already gone */ }
+  process.exit(CORE_EXIT_UPDATE)
 }
 
 /** Set by runForeground once the DSH companions exist; a frame projected before that carries none. */
@@ -398,75 +369,49 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     console.error('[fatal-guard] uncaughtException:', err instanceof Error ? (err.stack ?? err.message) : err)
   })
 
-  // ── THE UPDATER GOES FIRST. Everything below this point can throw, hang, or wait on a vendor file,
-  // a port, or tmux — and a daemon that never finishes starting is a daemon that can never be fixed:
-  // there is no supervisor, and the desktop app only re-runs `harness start` on the same broken bytes.
-  // Started here, a published fix lands on its own however badly the rest of the boot goes.
+  // ── THE MASTER'S UPDATE IS HEARD FIRST. Everything below this point can throw, hang, or wait on a vendor
+  // file, a port, or tmux — and a daemon that never finishes starting must still leave for its fix. The
+  // updater is the master's, in a process of its own (services/updaterProcess.ts): the core never
+  // downloads a build. When it stages one, the master asks this core to hand over, and the request is
+  // listened for here, before anything that can fail.
   //
-  // `onStaged` is one indirection on purpose: the handoff's teardown does not exist yet and must not move
-  // (it tears down two dozen subsystems declared further down). Until it is ready, a staged update is
+  // `applyStagedUpdate` is one indirection on purpose: the handoff's teardown does not exist yet and must not
+  // move (it tears down two dozen subsystems declared further down). Until it is ready, a staged update is
   // applied by `bootHandoff`, which hands the machine over without finishing start-up.
-
-  // Self-update ONLY manages the INSTALLED copy (`~/.harness/cli/cli.js`). A dev/repo run — `tsx`
-  // (`npm run dev`) OR `node dist/cli.js` from the checkout — must NEVER self-update: it would swap
-  // the published bundle into ~/.harness/cli and restart, hijacking the version you're developing.
-  // Match by inode so symlinks/realpath don't fool it; fall back to a path compare.
-  const installedCli = join(env.ADAPTER_CLI_DIR, 'cli.js')
-  let isInstalledCopy = SCRIPT_PATH === installedCli
-  try { isInstalledCopy = statSync(SCRIPT_PATH).ino === statSync(installedCli).ino } catch { /* keep path compare */ }
-  if (isInstalledCopy && !env.ADAPTER_UPDATE_DISABLE) {
-    daemonBoot.updater = startSelfUpdater({
-      currentVersion: VERSION,
-      url: env.ADAPTER_UPDATE_URL,
-      key: env.ADAPTER_UPDATE_KEY,
-      dir: env.ADAPTER_CLI_DIR,
-      intervalMs: env.ADAPTER_UPDATE_CHECK_MS,
-      slotSecond: env.ADAPTER_UPDATE_SLOT_SEC,
-      // The lock spans the byte swap AND the handoff it triggers, as one critical section: a
-      // `harness start` that lands between the two would otherwise stage over our .prev, and one
-      // that lands during the handoff would spawn a second daemon.
-      withLock: (fn) => withSpawnLock('handoff', fn, {
-        onWaiting: (owner) => console.log(`[update] waiting — the daemon is ${describeSpawnLockOwner(owner)}`),
-      }),
-      onStaged: (v) => daemonBoot.applyStagedUpdate(v),
-      limits: { idleMs: env.ADAPTER_UPDATE_IDLE_MS, deadlineMs: env.ADAPTER_UPDATE_DEADLINE_MS, floorBytesPerSecond: DOWNLOAD_LIMITS.floorBytesPerSecond },
-      stageWhileJudged: !coreLink.supervised || process.env.HARNESSD_JUDGES_SUPERSEDED === '1',
+  coreLink.onUpdate((version) => { void daemonBoot.applyStagedUpdate(version) })
+  // …or, under a master too old to run the updater, from the updater this core runs beside itself
+  // (core/updaterBeside.ts), in a process of its own: the core downloads no build either way.
+  if (needsUpdaterBeside(process.env, coreLink.supervised, isInstalledCopy(SCRIPT_PATH, env.ADAPTER_CLI_DIR), env.ADAPTER_UPDATE_DISABLE)) {
+    daemonBoot.updaterBeside = startUpdaterBeside({
+      spawn: () => {
+        const updater = spawn(managedNodePath(), [SCRIPT_PATH, '__service', 'updater'], {
+          env: { ...process.env, HARNESSD_SERVICE: 'updater', HARNESSD_UPDATER_BESIDE_CORE: '1' }, stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
+        })
+        updater.on('error', (e) => console.error('[update] the updater could not start:', e instanceof Error ? e.message : e))
+        return { onMessage: (listener) => { updater.on('message', listener) }, onExit: (listener) => { updater.on('exit', listener) }, kill: () => { updater.kill() } }
+      },
+      staged: (version) => { void daemonBoot.applyStagedUpdate(version) },
+      log: (line) => console.log(line),
     })
-    const slotted = env.ADAPTER_UPDATE_SLOT_SEC >= 0 && 60_000 % env.ADAPTER_UPDATE_CHECK_MS === 0
-    console.log(`[update] self-update on · v${VERSION} · every ${Math.round(env.ADAPTER_UPDATE_CHECK_MS / 1000)}s`
-      + (slotted ? ` at :${String(env.ADAPTER_UPDATE_SLOT_SEC % 60).padStart(2, '0')}` : ''))
-  } else if (!env.ADAPTER_UPDATE_DISABLE) {
-    console.log(`[update] self-update off · running a dev/repo build (v${VERSION}), not the installed copy`)
   }
-
-  // Keep the CLI's recovery updater armed first. hn is an independent, optional download.
-  daemonBoot.tuiUpdater = startTuiUpdater({
-    currentVersion: VERSION,
-    isInstalledCopy,
-    disabled: env.ADAPTER_UPDATE_DISABLE,
-    intervalMs: env.ADAPTER_UPDATE_CHECK_MS,
-    slotSecond: env.ADAPTER_UPDATE_SLOT_SEC,
-  })
-  // The update handoff (core/updateHandoff.ts): after the updaters, never above them (startupOrder.spec.ts),
-  // and ahead of the /api/status handler that reads whether it is under way and of shutdown(), which takes
-  // a successor it is judging down with us.
+  // The update handoff (core/updateHandoff.ts): after the update is listened for, never above it
+  // (startupOrder.spec.ts), and ahead of the /api/status handler that reads whether it is under way.
   const updateHandoff = createUpdateHandoff({
     version: VERSION, supervised: coreLink.supervised, exitForUpdate: () => process.exit(CORE_EXIT_UPDATE),
-    // A core on its own: the staged bundle's master must answer its probe, as a master asks before it
-    // re-executes on one; then a master takes the machine, and judges the update.
+    // A core on its own that an older release started: its master must answer its probe, as a master asks
+    // before it re-executes on a bundle; then the master takes the machine, and runs the updater.
     probeMaster: () => probeStagedMaster((done) => execFile(managedNodePath(), [SCRIPT_PATH, PROBE_COMMAND], { encoding: 'utf8' }, (error, stdout) => done(error, stdout))),
-    rollBack: () => restoreUpdate(env.ADAPTER_CLI_DIR),
     handOff: () => { startMasterHere(); process.exit(0) },
     log: (line) => console.log(line), error: (line) => console.error(line),
   })
 
   // Another daemon serves this data folder: leave before reading or writing anything of its — its
-  // registry, its viewers, its panes. Just after the updaters, never before them (startupOrder.spec.ts);
-  // their first check is a slot away, and a daemon that leaves here is gone long before it.
+  // registry, its viewers, its panes. Just after the update is listened for, never before it
+  // (startupOrder.spec.ts).
   await refuseServedDataFolder(localSocketPath(env.ADAPTER_DATA_DIR, env.PORT))
 
   // harnessd's master saw this core crash again and again: start nothing that could do it again. The
-  // updaters above keep running, so a published fix still lands (`enterSafeMode`).
+  // master's updater runs on, and a published fix still lands (`enterSafeMode`).
   if (process.env.HARNESSD_SAFE_MODE) throw new SafeModeRequest(process.env.HARNESSD_SAFE_MODE)
 
   const savedApis = new ApiConnections(env.ADAPTER_DATA_DIR)
@@ -503,7 +448,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // Missing tmux is a STATE, not a reason to refuse to start. The daemon already models a machine
   // without it — `tmuxBackend` is null whenever the config omits tmux, every caller tests it, and the
   // create/restart/resume paths answer `TMUX_UNAVAILABLE` — so it can still serve its status, the
-  // local socket, the backend link and its updater, and say what is missing. Refusing instead left a
+  // local socket and the backend link, leave for an update, and say what is missing. Refusing instead left a
   // machine whose PATH lost tmux with a daemon that could not start and therefore could not be fixed.
   let tmuxUnavailable: string | null = null
   if (tmuxPathPromise) {
@@ -1664,8 +1609,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       restarting: updateHandoff.restarting(),
       discoveryReady,
       discoveryError: discoveryError ?? (tmuxUnavailable ? `tmux unavailable: ${tmuxUnavailable}` : null),
-      // Present only when start-up failed and this daemon is holding the machine open for its
-      // updater. Clients key on `discoveryReady`; this says WHY, in one word, for a person reading it.
+      // Present only when start-up failed and this daemon is holding the machine open until a fix
+      // arrives. Clients key on `discoveryReady`; this says WHY, in one word, for a person reading it.
       ...(daemonBoot.safeMode ? { safeMode: true } : {}),
       // Agents whose history is being read right now, and how many wait their turn. Normally empty or
       // gone in a second; one that stays here names the store that is slow, which no other field does.
@@ -2447,12 +2392,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     console.log(`[cli] not signed in — serving this computer only · watching registered sessions for ${ENGINES.length} engines`)
   }
 
-  // ── self-update: a staged bundle restarts the daemon IMMEDIATELY (core/updateHandoff.ts, and
-  // handOffToMaster for a core run on its own). The handler stops being `bootHandoff` HERE, and not a
-  // line earlier: everything the teardown releases exists by now. A straight-line assignment, never a
-  // wait: if the body never reaches this line the handler stays `bootHandoff`, and the fix still lands.
-  daemonBoot.applyStagedUpdate = (v) => updateHandoff.restartForUpdate(v, [
-    ['the registry', () => registry.flush()], ['the updaters', () => { daemonBoot.updater?.stop(); daemonBoot.tuiUpdater?.stop() }],
+  // ── self-update: a staged bundle restarts the daemon IMMEDIATELY (core/updateHandoff.ts). The handler
+  // stops being `bootHandoff` HERE, and not a line earlier: everything the teardown releases exists by now.
+  // A straight-line assignment, never a wait: if the body never reaches this line the handler stays
+  // `bootHandoff`, and the fix still lands.
+  const updateTeardown = (): TeardownStep[] => [
+    ['the registry', () => registry.flush()], ['the updater', () => daemonBoot.updaterBeside?.()],
     ['the reconciler', () => agentReconciler.stop()],
     ['the timers', () => { clearInterval(logTrimTimer); clearInterval(runtimeReconcileTimer); clearInterval(paneTitleSyncTimer) }],
     ['the question watchers', () => questionWatcher.stopAll()],
@@ -2472,7 +2417,15 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     ['the viewers', () => ports.viewers?.stop()], ['the gateway', () => gateway.stop()],
     // A graceful close releases the backend's one-machine claim, given a moment before the reclaim.
     ['the backend', () => backend.stop()], ['a grace', () => new Promise((r) => setTimeout(r, 1000))],
-  ])
+  ]
+  daemonBoot.applyStagedUpdate = (v) => updateHandoff.restartForUpdate(v, updateTeardown())
+  // A core an older release's own handoff started (it spawned this `cli.js __run` and judged it) has no
+  // master, and so no updater: it would run this build until its next start. Once that release has gone,
+  // it hands the machine to a master on this build (core/updateHandoff.ts). Not a core HARNESS_NO_MASTER=1
+  // asked for, and not a dev or repo run.
+  if (!coreLink.supervised && process.env.ADAPTER_UPDATED_TO && process.env.HARNESS_NO_MASTER !== '1' && isInstalledCopy(SCRIPT_PATH, env.ADAPTER_CLI_DIR)) {
+    handOverOnceReleased({ startedBy: process.ppid, parent: () => process.ppid, alive: isAlive, handOver: () => { void updateHandoff.handOver(updateTeardown()) } })
+  }
 
   /** Stopping for good — removed from the account, or connected from elsewhere: tell harnessd's master,
    *  which restarts any other exit (harnessd/protocol.ts). */
@@ -2488,8 +2441,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // Release the serial port first. It is exclusive, and a daemon that exits still holding it makes
     // esptool fail in a way that reads exactly like dead hardware.
     void ports.devices?.stop()
-    daemonBoot.updater?.stop()
-    daemonBoot.tuiUpdater?.stop()
+    daemonBoot.updaterBeside?.()
     agentReconciler.stop()
     clearInterval(logTrimTimer)
     clearInterval(runtimeReconcileTimer)
@@ -2602,14 +2554,14 @@ async function runForeground(session: AuthSession | null): Promise<void> {
 }
 
 /**
- * The daemon's start-up threw. STAY UP anyway, running nothing but the updater.
+ * The daemon's start-up threw. STAY UP anyway, waiting for a fix.
  *
- * Exiting here is what made one bad build unrecoverable: nothing supervises this process, the desktop
- * app answers a dead port by running `harness start` again — the same bytes, about once a minute, for
- * ever — and the updater that could have fixed it lives most of the way down a body that never
- * finished. The updater is started in the prologue now (see `runForeground`), so by the time this
- * runs it is already polling; all this has to do is keep the process alive long enough for a
- * published fix to land, and tell everyone what state the machine is in.
+ * Exiting here is what made one bad build unrecoverable: the desktop app answers a dead port by running
+ * `harness start` again — the same bytes, about once a minute, for ever. The updater is the master's, in a
+ * process of its own (services/updaterProcess.ts), and the request to hand over for its fix is listened for
+ * in the prologue (see `runForeground`); all this has to do is keep the process alive long enough for a
+ * published fix to land, and tell everyone what state the machine is in. A core with no master gets no fix
+ * here: its safe mode runs out (`ADAPTER_SAFE_MODE_MS`) and a clean start tries again.
  *
  * Three ways it earns its keep, in order: the bound control port answers `discoveryReady: false`, so
  * the app reads the machine as not-ready instead of dead and STOPS respawning; the pid file stays
@@ -2627,8 +2579,8 @@ const enterSafeMode = (err: unknown): void => {
   }
   const detail = err instanceof Error ? (err.stack ?? err.message) : String(err)
   console.error('Failed to start adapter:', err)
-  console.error(`[safe-mode] staying up on v${VERSION} with the updater only — a published fix will be`
-    + ' applied on its own. Nothing else on this machine works until then.')
+  console.error(`[safe-mode] staying up on v${VERSION} — a published fix will be applied on its own.`
+    + ' Nothing else on this machine works until then.')
   writeSafeModeMarker(env.ADAPTER_DATA_DIR, { pid: process.pid, version: VERSION, at: Date.now(), error: detail })
   daemonBoot.safeMode = disposition.reason
   daemonBoot.markNotReady?.(disposition.reason)
@@ -2643,8 +2595,8 @@ const enterSafeMode = (err: unknown): void => {
   }
   process.on('SIGINT', () => leave('SIGINT — leaving safe mode', 0))
   process.on('SIGTERM', () => leave('SIGTERM — leaving safe mode', 0))
-  // Up, though not ready: the master must neither give up waiting for a bind nor take it for hung,
-  // or the updater that can fix this build would never get its chance. It hears why, and rolls back an
+  // Up, though not ready: the master must neither give up waiting for a bind nor take it for hung, or the
+  // fix its updater stages would find no core to hand over. It hears why, and rolls back an
   // update whose first core ends up here.
   coreLink.bound(daemonPort())
   coreLink.ready(disposition.reason)
@@ -2668,7 +2620,7 @@ const enterSafeMode = (err: unknown): void => {
     })
     status.on('error', (e) => {
       console.error(`[safe-mode] could not serve status on ${port}: ${e instanceof Error ? e.message : e}`)
-      // A ref'd timer, unlike the updater's: something has to hold the event loop open.
+      // A ref'd timer: something has to hold the event loop open.
       setInterval(() => console.log(`[safe-mode] still waiting for a fixed build · v${VERSION}`), 10 * 60_000)
     })
     status.listen(port, '127.0.0.1')

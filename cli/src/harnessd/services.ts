@@ -12,7 +12,7 @@
  * bind and no update to prove; it beats, or it is restarted. Everything that touches the operating
  * system is injected, so every decision here is tested without one.
  */
-import { heartbeatGraceMs, isCoreMessage } from './protocol.js'
+import { SERVICE_EXIT_RESTART, heartbeatGraceMs, isCoreMessage, isUpdaterMessage } from './protocol.js'
 import type { CoreHandle } from './supervisor.js'
 
 export interface ServiceSpec {
@@ -42,6 +42,8 @@ export interface ServiceSupervisorDeps {
   setTimer(run: () => void, ms: number): unknown
   clearTimer(timer: unknown): void
   log(line: string): void
+  /** The updater staged `version` on disk (`harnessd:staged`): the core is to hand over for it. */
+  staged?(version: string): void
 }
 
 export interface ServiceSupervisorOptions {
@@ -77,7 +79,7 @@ export const DEFAULT_SERVICE_OPTIONS: ServiceSupervisorOptions = {
 
 /** `off`: an experiment's process that no one has asked for yet, and so was never started. */
 export type ServiceState = 'off' | 'starting' | 'running' | 'restarting' | 'parked' | 'stopping' | 'stopped'
-export type ServiceExitReason = 'crashed' | 'hung' | 'memory' | 'stopped'
+export type ServiceExitReason = 'crashed' | 'hung' | 'memory' | 'stopped' | 'restart'
 
 export interface ServiceStatus {
   name: string
@@ -178,6 +180,11 @@ class Service {
   }
 
   private onMessage(child: CoreHandle, message: unknown): void {
+    if (isUpdaterMessage(message)) {
+      this.deps.log(`[harnessd] service ${this.spec.name} staged ${message.version}`)
+      this.deps.staged?.(message.version)
+      return
+    }
     if (!isCoreMessage(message) || message.type !== 'harnessd:heartbeat') return
     this.watchHeartbeat(child)
     if (this.state === 'starting' || this.state === 'restarting') this.setState('running')
@@ -207,6 +214,16 @@ class Service {
       this.deps.log(`[harnessd] service ${this.spec.name} stopped (${exit})`)
       this.setState('stopped')
       this.stopped()
+      return
+    }
+    if (code === SERVICE_EXIT_RESTART && !this.killReason) {
+      // Asked for: the updater, once it has staged a build, so that it next runs as that build (a lean
+      // bundle that no longer matches cli.js is not used, ./leanServices.ts). Not a crash, and not delayed.
+      this.lastExitReason = 'restart'
+      this.restarts++
+      this.deps.log(`[harnessd] service ${this.spec.name} asked to start again (${exit}) — restarting`)
+      this.setState('restarting')
+      this.armTimer('restartTimer', () => { this.restartTimer = null; this.start() }, 0)
       return
     }
     const reason = this.killReason ?? 'crashed'
@@ -376,6 +393,16 @@ export const SERVICE_HOSTS: Readonly<Record<string, ServiceHostSpec>> = {
 
 /** Every service this build can run outside the core's process: what `HARNESSD_SERVICES` names. */
 export const KNOWN_SERVICES: readonly string[] = Object.values(SERVICE_HOSTS).flatMap((host) => host.services)
+
+/**
+ * The updater's process (services/updaterProcess.ts): checks for a newer build of the CLI and of hn, and
+ * downloads, verifies, canaries and stages it, then tells the master, which has the core hand over. Its own
+ * process and never the core's: the core never downloads a build, and a core that cannot start (safe mode)
+ * or a host whose services keep crashing must not stop the fix from arriving. Not one of `SERVICE_HOSTS`:
+ * the core neither routes to it nor runs it, and `HARNESSD_SERVICES` does not turn it off; the master runs
+ * it when it runs the installed copy with updates on (masterProcess.ts). It holds one download at a time.
+ */
+export const UPDATER_HOST: ServiceHostSpec = { services: ['updater'], heapLimitMiB: 256, rssLimitMiB: 512 }
 
 /** Service timings from the environment (for tests and support); anything unset or invalid keeps its default. */
 export function serviceOptions(env: NodeJS.ProcessEnv): ServiceSupervisorOptions {

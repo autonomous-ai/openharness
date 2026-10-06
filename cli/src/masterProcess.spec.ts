@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { env } from './config/env.js'
 import { PROBE_ANSWER } from './harnessd/reexec.js'
 import { LEAN_ENTRY, leanFingerprint, type LeanBundle } from './harnessd/leanBundle.js'
 
@@ -167,6 +168,11 @@ describe('starting the master', () => {
     const config = runMaster.mock.calls[0][0] as Record<string, unknown> & { restoreUpdate(): void; confirmUpdate(): void }
     expect(config).toMatchObject({ scriptPath: '/cli/cli.js', serviceScriptPath: '/lean.mjs', bundleFingerprint: 'f', nodePath: process.execPath })
     expect(String(config.reexecMarkerFile)).toMatch(/harnessd-reexec\.json$/)
+    // Not the installed copy: no updater. The installed one runs it.
+    expect(config.updater).toBe(false)
+    runMaster.mockClear()
+    startMaster({ scriptPath: join(env.ADAPTER_CLI_DIR, 'cli.js') })
+    expect((runMaster.mock.calls[0][0] as { updater: boolean }).updater).toBe(true)
     expect(LEAN_DIR).toMatch(/[\\/]lean$/)
     expect(LEAN_OFF_FILE).toMatch(/[\\/]lean-off$/)
   })

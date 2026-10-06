@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
-  DEFAULT_SERVICE_OPTIONS, KNOWN_SERVICES, SERVICE_HOSTS, SERVICE_PROCESSES_ENV, ServiceSupervisor, serviceOptions, serviceProcessesEnv, serviceSpecs, servicesTheMasterRuns,
+  DEFAULT_SERVICE_OPTIONS, KNOWN_SERVICES, SERVICE_HOSTS, SERVICE_PROCESSES_ENV, ServiceSupervisor, UPDATER_HOST, serviceOptions, serviceProcessesEnv, serviceSpecs, servicesTheMasterRuns,
   type ServiceSpec, type ServiceSupervisorOptions,
 } from './services.js'
 import type { CoreHandle } from './supervisor.js'
@@ -40,8 +40,10 @@ describe('ServiceSupervisor', () => {
   let children: FakeService[]
   let lines: string[]
   const latest = (name = 'search') => children.filter((child) => child.spec.name === name).at(-1)!
-  const make = (specs: ServiceSpec[] = [search], overrides: Partial<ServiceSupervisorOptions> = {}, env: Record<string, string> = {}) =>
+  const staged: string[] = []
+  const make = (specs: ServiceSpec[] = [search], overrides: Partial<ServiceSupervisorOptions> = {}, env: Record<string, string> = {}, tell = true) =>
     new ServiceSupervisor(specs, {
+      ...(tell ? { staged: (version: string) => { staged.push(version) } } : {}),
       spawnService: (spec, extra) => {
         const child = new FakeService(2000 + children.length, spec, extra)
         children.push(child)
@@ -73,6 +75,34 @@ describe('ServiceSupervisor', () => {
     latest().say({ type: 'harnessd:bound', protocol: 2, port: 1 })
     latest().say('noise')
     expect(supervisor.status()[0].state).toBe('running')
+  })
+
+  it('passes on what the updater staged, and starts it again at once when it asks: not a crash', () => {
+    const updater: ServiceSpec = { name: 'updater', ...UPDATER_HOST }
+    staged.length = 0
+    const supervisor = make([updater], { parkCrashes: 2 })
+    supervisor.start()
+    latest('updater').beat()
+    latest('updater').say({ type: 'harnessd:staged', version: '9.9.9' })
+    expect(staged).toEqual(['9.9.9'])
+    expect(lines).toContain('[harnessd] service updater staged 9.9.9')
+    for (let i = 0; i < 3; i++) {
+      latest('updater').exit(75)
+      vi.advanceTimersByTime(0)
+    }
+    expect(children).toHaveLength(4)
+    expect(supervisor.status()[0]).toMatchObject({ state: 'restarting', restarts: 3, lastExit: 'code 75', lastExitReason: 'restart' })
+    expect(lines).toContain('[harnessd] service updater asked to start again (code 75) — restarting')
+    // Killed for hanging, its 75 is no request.
+    latest('updater').beat()
+    vi.advanceTimersByTime(options.heartbeatTimeoutMs * 2)
+    latest('updater').exit(75)
+    expect(supervisor.status()[0].lastExitReason).toBe('hung')
+    // A master that was not told how to pass a staging on only says it.
+    const quiet = make([updater], {}, {}, false)
+    quiet.start()
+    latest('updater').say({ type: 'harnessd:staged', version: '9.9.10' })
+    expect(staged).toEqual(['9.9.9'])
   })
 
   it('restarts a crashed service with a backoff that doubles, caps, and is forgiven after a long run', () => {

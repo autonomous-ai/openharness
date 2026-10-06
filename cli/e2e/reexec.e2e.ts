@@ -260,10 +260,13 @@ describe.skipIf(!RELEASED)('a released master and this one, each over the other\
   let scratch = ''
   let server: Server | undefined
   let daemon: IsolatedDaemon | undefined
-  let offered: 'released' | 'next' = 'released'
+  let offered: 'released' | 'next' | 'later' = 'released'
   let releasedVersion = ''
   let releasedCanReexec = false
-  const bundles = new Map<'released' | 'next', { cli: Buffer; notify: Buffer; version: string }>()
+  const bundles = new Map<'released' | 'next' | 'later', { cli: Buffer; notify: Buffer; version: string }>()
+  const LATER = '0.99.1'
+  /** The newest build this machine has kept: NEXT, or LATER once a released master's core updated to it. */
+  let newest = NEXT
   const cliDir = () => join(scratch, 'cli')
   const status = async (): Promise<Record<string, any> | null> =>
     fetch(`http://127.0.0.1:${daemon!.port}/api/status`).then((response) => response.json()).catch(() => null)
@@ -273,6 +276,7 @@ describe.skipIf(!RELEASED)('a released master and this one, each over the other\
     const out = join(scratch, 'build')
     execFileSync(process.execPath, ['build-bundle.mjs'], { cwd: CLI_ROOT, env: { ...process.env, ADAPTER_VERSION: NEXT, BUNDLE_OUT_DIR: out }, stdio: 'pipe' })
     bundles.set('next', { cli: readFileSync(join(out, 'cli.js')), notify: readFileSync(join(out, 'notify.mjs')), version: NEXT })
+    bundles.set('later', { cli: Buffer.from(atVersion(readFileSync(join(out, 'cli.js'), 'utf8'), NEXT, LATER)), notify: readFileSync(join(out, 'notify.mjs')), version: LATER })
     releasedVersion = execFileSync(process.execPath, [RELEASED!, 'version'], { encoding: 'utf8' }).trim()
     bundles.set('released', { cli: readFileSync(RELEASED!), notify: readFileSync(join(dirname(RELEASED!), 'notify.mjs')), version: releasedVersion })
     server = createServer((request, response) => {
@@ -339,8 +343,18 @@ describe.skipIf(!RELEASED)('a released master and this one, each over the other\
       expect(daemon!.log()).not.toContain('re-executing')
     }
     await until('the released master to keep the update', () => daemon!.log().includes('the update stayed up — keeping it'), 30_000)
+    if (!releasedCanReexec) {
+      // A master from before the updater left the core runs none, and could not become this build's: the
+      // core runs it beside itself (core/updaterBeside.ts), so the next build still arrives.
+      expect(daemon!.log()).toContain('[update] this core\'s master runs no updater — running it beside this core')
+      offered = 'later'
+      await until(`the released master to run ${LATER}`, async () => (await status())?.version === LATER || null, 90_000, 250)
+      expect((await status())?.harnessd.masterPid).toBe(master)
+      await until('the released master to keep it too', () => daemon!.log().split('the update stayed up — keeping it').length > 2 || null, 30_000)
+      newest = LATER
+    }
     await daemon!.restart()
-    expect((await status())?.harnessd).toMatchObject({ masterVersion: NEXT, masterPid: daemon!.pid })
+    expect((await status())?.harnessd).toMatchObject({ masterVersion: newest, masterPid: daemon!.pid })
   })
 
   it('this master returns to the released bundle, re-executing only when it answers the probe', async () => {
@@ -355,7 +369,7 @@ describe.skipIf(!RELEASED)('a released master and this one, each over the other\
       return current?.version === releasedVersion ? current : null
     }, 60_000, 250)
     expect(now.harnessd).toMatchObject({
-      masterVersion: releasedCanReexec ? releasedVersion : NEXT,
+      masterVersion: releasedCanReexec ? releasedVersion : newest,
       masterPid: master,
       reexecs: releasedCanReexec ? 1 : 0,
     })
