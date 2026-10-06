@@ -5,10 +5,9 @@ KIWI description with a separately verified Harness session RPM. It includes
 hn, OpenCode with upstream defaults, terminal panes and the optional Chromium
 browser. It selects no GNOME or KDE desktop profile.
 
-This is image construction work, **not an installable Harness release**. First-boot
-account setup, encryption, Fedora base-system updates/recovery and physical Apple
-hardware acceptance remain required. The image currently retains Fedora's text
-initial setup; it contains no pre-created user or known login password. Never
+This is image construction work, **not an installable Harness release**. Encryption,
+Fedora base-system updates/recovery and physical Apple hardware acceptance remain
+required. The image contains no pre-created user or known login password. Never
 flash this raw disk over a Mac's disk or use the PC whole-disk installer on Apple
 Silicon. No public installer metadata or download feed is generated.
 
@@ -51,3 +50,23 @@ space prepared by Asahi. The upstream prebuilt-image and UEFI-media paths are
 described in the [distribution guidelines](https://asahilinux.org/docs/alt/policy/).
 This build is the image foundation for that work; it does not invoke either
 installer on the host.
+
+## First boot
+
+The image's first screen asks for **Password** and **Repeat password**, then
+**Start Harness**. It creates `me@harness` through Fedora's account tools and
+enables the existing Harness session through greetd. The new account belongs to
+Fedora's `wheel` group; administrative commands and recovery-console login use
+the chosen password. Root stays locked. No password or password hash is saved in
+the setup receipt, command arguments or temporary files.
+
+Account creation belongs only to this private image, not to installing or updating
+the session RPM on an existing Fedora system. First boot refuses existing accounts,
+homes and conflicting login settings. A private receipt lets interrupted account
+creation or login configuration resume; it does not overwrite another account.
+After setup, the normal OS networking page runs when needed, followed by the
+existing agent workspace. Subsequent boots enter Harness directly.
+
+This step does not encrypt the disk. It keeps the maintained Fedora/Asahi boot,
+swap, extras, authentication and SELinux configuration. The stock account wizard
+remains installed but is disabled in the Harness image.
