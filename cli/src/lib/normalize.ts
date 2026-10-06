@@ -823,10 +823,9 @@ export interface TurnState {
   /** Before the counter in a live thinking id. A fold that starts mid-transcript names its window here
    *  (lib/attachTranscript.ts), so its ids cannot repeat ones another fold of the same session sent. */
   thinkingPrefix?: string
-  /** Counts the turns opened, so a Stop hook can tell the turn it fired for from one opened after it. */
-  turnSeq?: number
-  /** `turnSeq` of the last turn a blocking Stop hook continued (`stopHookContinuation`). */
-  continuedSeq?: number
+  /** The open turn is one a blocking Stop hook continued (`stopHookContinuation`), not a prompt's. Its
+   *  end is the transcript's to say: its end_turn, or Claude Code's turn_duration (core/turns/turnHooks.ts). */
+  continued?: boolean
 }
 
 /**
@@ -966,8 +965,7 @@ export function lineToEvents(rawLine: string, state: TurnState): LiveEvent[] {
     if (state.turnOpen) return []
     state.turnOpen = true
     state.pendingTools.clear()
-    state.turnSeq = (state.turnSeq ?? 0) + 1
-    state.continuedSeq = state.turnSeq
+    state.continued = true
     return [{ type: 'turn_started', payload: { userMessage: continued } }]
   }
   // Claude Code's own record that its turn is over. A pass a blocking hook continued can end with no
@@ -975,7 +973,7 @@ export function lineToEvents(rawLine: string, state: TurnState): LiveEvent[] {
   // paused · …") and writes only this (real 2.1.283). No end_turn and no further Stop hook follows, so
   // the pass opened above would stay open until the next prompt. Every other turn is closed as before.
   if (raw.type === 'system' && raw.subtype === 'turn_duration') {
-    if (!state.turnOpen || state.continuedSeq === undefined || state.continuedSeq !== state.turnSeq) return []
+    if (!state.turnOpen || !state.continued) return []
     state.turnOpen = false
     state.pendingTools.clear()
     return [{ type: 'turn_ended', payload: {} }]
@@ -1000,7 +998,7 @@ export function lineToEvents(rawLine: string, state: TurnState): LiveEvent[] {
       if (state.turnOpen) events.push({ type: 'turn_ended', payload: {} })
       state.turnOpen = true
       state.pendingTools.clear()
-      state.turnSeq = (state.turnSeq ?? 0) + 1
+      state.continued = false
       events.push({ type: 'turn_started', payload: { userMessage: userText } })
       return events
     }

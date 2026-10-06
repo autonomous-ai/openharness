@@ -1236,17 +1236,24 @@ export async function run(engine, config = {}, { native = false } = {}) {
       // its Stop hooks, then the goal hook's refusal (a hidden feedback line, the goal's status and the
       // hooks' summary) and the next pass in the SAME turn, with no prompt line between; a tool runs in it.
       // The daemon closed the turn at the first stop and read the next pass as no turn at all.
+      //
+      // The first pass's Stop reaches the daemon only once the next pass is on disk, as a loaded daemon took
+      // it in a full end-to-end run (520 ms after that pass started): the CLI waits for its hook commands,
+      // but the hook's request can be read after it has gone on. So the hooks run once the pass has begun.
       const condition = directive[2] || 'the work is done'
       const model = config.claudeModel ?? 'claude-opus-5-5'
+      const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
       claude({ type: 'assistant', message: { id: `msg_${turn}_g1`, role: 'assistant', model, content: [{ type: 'text', text: `first pass at: ${condition}` }], stop_reason: 'end_turn' } })
       say(`\r\nfirst pass at: ${condition}\r\n`)
-      await runHooks('Stop', { stop_hook_active: false })
       claude({ type: 'user', isMeta: true, promptId: randomUUID(), message: { role: 'user', content: `Stop hook feedback:\n[goal]: not met yet: ${condition}` } })
       claude({ type: 'attachment', attachment: { type: 'goal_status', met: false, condition, reason: 'one check still fails' } })
       claude({ type: 'system', subtype: 'stop_hook_summary', hookCount: 1, hookInfos: [], hookErrors: [], preventedContinuation: false, stopReason: '', hasOutput: false, level: 'suggestion' })
       const id = `call_${turn}_g`
       claude({ type: 'assistant', message: { id: `msg_${turn}_g2`, role: 'assistant', model, content: [{ type: 'tool_use', id, name: 'Bash', input: { command: 'make check' } }], stop_reason: 'tool_use' } })
-      await new Promise((resolve) => setTimeout(resolve, Number(config.goalPassMs) || 4_000))
+      await pause(600)
+      const lateStop = runHooks('Stop', { stop_hook_active: false })
+      await pause(Number(config.goalPassMs) || 4_000)
+      await lateStop
       claude({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: 'all checks pass' }] } })
       await finish(`goal met: ${condition}`)
       claude({ type: 'attachment', attachment: { type: 'goal_status', met: true, condition, reason: 'all checks pass' } })

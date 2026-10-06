@@ -368,7 +368,7 @@ describe('a Stop hook that blocks', () => {
     expect(lineToEvents(feedback, state)).toEqual([])
     expect(lineToEvents(goal(false), state)).toEqual([{ type: 'turn_started', payload: { userMessage: 'Continuing goal: every page loads under a second' } }])
     expect(state.turnOpen).toBe(true)
-    expect(state.continuedSeq).toBe(state.turnSeq)
+    expect(state.continued).toBe(true)
     expect(lineToEvents(summary, state)).toEqual([])
     expect(lineToEvents(answer('made the rest fast'), state)).toEqual([
       { type: 'text_delta', payload: { content: 'made the rest fast' } },
@@ -394,8 +394,7 @@ describe('a Stop hook that blocks', () => {
     const open = newTurnState()
     lineToEvents(user('fix it'), open)
     expect(lineToEvents(goal(false), open)).toEqual([])
-    expect(open.turnSeq).toBe(1)
-    expect(open.continuedSeq).toBeUndefined()
+    expect(open.continued).toBe(false)
   })
 
   it('closes a pass that ends with no output when the goal pauses, and only such a pass', () => {

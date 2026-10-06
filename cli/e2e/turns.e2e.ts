@@ -102,8 +102,9 @@ describe('how turns end', () => {
     await until('the agent to read as working in the next pass', async () => (await row(client, agent.id))?.activity?.state === 'working' || null, 3_000, 100)
     const end = await client.waitFor(isTurn('turn_ended', agent.id), 45_000, 'the goal\'s next pass to end', at)
     expect(end.payload?.aborted).toBeUndefined()
-    // Ended by its own answer, after its tool: not by the Stop hook of the pass before it, which fired
-    // just as the next pass was written and force-closed it after the grace while its tool still ran.
+    // Ended by its own answer, after its tool: not by the Stop of the pass before it, which reached the
+    // daemon after this pass had started (as under load) and force-closed it after the grace while its
+    // tool still ran.
     const tool = client.frames.slice(at).find(isTurn('tool_end', agent.id))
     expect(tool && client.frames.indexOf(tool) < client.frames.indexOf(end), 'the pass\'s tool to finish before it ends').toBe(true)
     await settled(client, agent.id)
