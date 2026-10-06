@@ -54,6 +54,39 @@ describe('the person\'s engines keeping their data elsewhere', () => {
   let daemon: IsolatedDaemon | undefined
   afterEach(async () => { await daemon?.close(); daemon = undefined })
 
+  it.each(['claude', 'codex'] as const)('%s model picker follows the login shell home', async engine => {
+    const d = await IsolatedDaemon.create(); daemon = d
+    d.env.NODE_OPTIONS = `--import=${pathToFileURL(join(CLI_ROOT, 'e2e/harness/hiddenProcessEnv.mjs')).href}`
+    onTestFailed(() => console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`))
+    const home = join(d.root, `${engine}-models`)
+    mkdirSync(home)
+    const variable = engine === 'claude' ? 'CLAUDE_CONFIG_DIR' : 'CODEX_HOME'
+    writeFileSync(join(d.env.ZDOTDIR!, '.zshrc'), `export ${variable}=${JSON.stringify(home)}\n`)
+    if (engine === 'claude') {
+      writeFileSync(join(d.engineConfig.claudeProjectsDir, '..', 'settings.json'), JSON.stringify({ availableModels: ['haiku'] }))
+      writeFileSync(join(home, 'settings.json'), JSON.stringify({ availableModels: ['sonnet'] }))
+    } else {
+      const cache = (slug: string) => JSON.stringify({ models: [{ slug, display_name: slug, visibility: 'list', supported_reasoning_levels: [{ effort: 'high' }] }] })
+      writeFileSync(join(d.env.CODEX_HOME!, 'models_cache.json'), cache('wrong-login-model'))
+      writeFileSync(join(home, 'models_cache.json'), cache('gpt-6-luna'))
+    }
+    await d.start()
+    await until('the core to read the login shell', () => /\[env\] read \d+ variables/.test(d.log()))
+    const client = await LocalClient.connect(d)
+    const created = await client.request('agent_create', { engine, cwd: d.projectsDir, bypassPermission: true }, 90_000)
+    expect(created.error, JSON.stringify(created)).toBeUndefined()
+    const agent = await until('the model-picker agent to bind', async () => {
+      const now = await row(client, created.agent.id); return now?.sessionId ? now : null
+    }, 30_000)
+    if (engine === 'codex') expect(agent.codexHome).toBeNull()
+    const answer = await client.request('models_list', { agentId: agent.id }, 30_000)
+    expect(answer.error, JSON.stringify(answer)).toBeUndefined()
+    const ids = answer.models.map((model: Row) => model.id)
+    expect(ids).toContain(`runtime-v1:${agent.id}:${engine}:${engine === 'claude' ? 'sonnet' : 'gpt-6-luna'}@auto`)
+    expect(ids.some((id: string) => id.includes(engine === 'claude' ? ':haiku@' : ':wrong-login-model@'))).toBe(false)
+    client.close()
+  })
+
   it.each(['activity', 'resources', 'close'] as const)('a moved shared Codex server supplies %s when process environment discovery is unavailable', async operation => {
     const d = await IsolatedDaemon.create(); daemon = d
     d.env.NODE_OPTIONS = `--import=${pathToFileURL(join(CLI_ROOT, 'e2e/harness/hiddenProcessEnv.mjs')).href}`
