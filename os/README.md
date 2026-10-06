@@ -84,6 +84,13 @@ for requirements and remaining work.
   repository snapshot and record the installed package inventory.
 - labwc supplies Wayland, focus, input and display management. No panel, launcher,
   wallpaper process, desktop icons, or notification daemon.
+  On PC and Intel Mac builds, the OS package owns its pinned compositor at
+  `/usr/lib/harness-os/labwc`. Its lock acknowledgement waits until every active
+  display presents a covered frame. Updating or rolling back that package moves
+  the session and compositor together; the running session is left alone until
+  restart. Corresponding GPL source, the patch and rebuild instructions are in
+  `/usr/share/licenses/harness-os/labwc/`. Fresh images do not install a second
+  compositor. The experimental Fedora session still uses Fedora's labwc.
 - One fullscreen foot window displays the existing Rust `hn`. Agent/runtime
   processes are supervised separately from that window. The image does not fork
   foot or add a second graphical Harness client.
@@ -116,6 +123,7 @@ rustup default stable
 rustup target add x86_64-unknown-linux-musl
 make -C os check
 make -C os runtime
+make -C os compositor
 make -C os build
 ```
 

@@ -78,7 +78,7 @@ jobs:
       - uses: actions/checkout@v7
       - name: Check the private compositor observer
         run: |
-          python3 -m py_compile os/tests/build_lock_compositor.py os/tests/session_vm.py
+          python3 -m py_compile os/tools/build-compositor.py os/tests/session_vm.py
           go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/os.yml
       - uses: actions/download-artifact@v6
         with:
@@ -88,14 +88,7 @@ jobs:
           github-token: ${{ github.token }}
       - name: Build only the pinned compositor correction
         run: |
-          LOCK_SNAPSHOT=$(python3 -c 'import json; print(json.load(open("os/packaging/labwc/source.json"))["arch_snapshot"])')
-          docker run --rm -v "$PWD:/source" -w /source -e LOCK_SNAPSHOT="$LOCK_SNAPSHOT" \
-            archlinux:base-devel@sha256:51dd3d24f7fba779e7c471caeee7804c50e8c134ad948e19685a1c83a42facc3 \
-            bash -euc '
-              printf "Server = https://archive.archlinux.org/repos/%s/\$repo/os/\$arch\n" "$LOCK_SNAPSHOT" > /etc/pacman.d/mirrorlist
-              pacman -Syu --noconfirm --needed labwc meson cmocka wayland-protocols glib2-devel python git
-              python3 os/tests/build_lock_compositor.py --output os/work/lock-compositor
-            '
+          bash os/tools/build-compositor-container.sh os/work/lock-compositor
       - name: Prepare native VM tools
         run: |
           sudo apt-get update -qq
@@ -118,6 +111,12 @@ jobs:
             os/work/lock-compositor/labwc
             os/work/lock-compositor/manifest.json
             os/work/lock-compositor/LICENSE
+            os/work/lock-compositor/source.tar.gz
+            os/work/lock-compositor/source.json
+            os/work/lock-compositor/session-lock-presentation.patch
+            os/work/lock-compositor/build-compositor.py
+            os/work/lock-compositor/rebuild.sh
+            os/work/lock-compositor/lock_presentation_policy.c
             os/work/lock-compositor/build/meson-logs/*.txt
             os/test-results/**/*.json
             os/test-results/**/*.jsonl
@@ -176,6 +175,8 @@ jobs:
           cd ..
           timeout 8m cargo test --manifest-path tui/Cargo.toml --locked --release --target x86_64-unknown-linux-musl
           python3 scripts/validate-tui-native.py tui/target/x86_64-unknown-linux-musl/release/harness-tui
+      - name: Build the pinned OS compositor
+        run: bash os/tools/build-compositor-container.sh os/work/compositor
       - name: Build offline BIOS and UEFI image
         run: |
           docker run --rm --privileged \
@@ -608,7 +609,8 @@ jobs:
           sudo apt-get install -y musl-tools qemu-system-x86 qemu-utils ovmf python3-pil tesseract-ocr
           if test -e /dev/kvm; then sudo chmod a+rw /dev/kvm; fi
           make -C os runtime
-          python3 os/tools/build-package.py --runtime os/work/runtime --output os/work/development-update --development
+          bash os/tools/build-compositor-container.sh os/work/compositor
+          python3 os/tools/build-package.py --runtime os/work/runtime --compositor os/work/compositor --output os/work/development-update --development
           python3 os/tests/build-update-fixture.py
       - name: Exercise apply, rollback, running work and encrypted reboot
         run: python3 os/tests/update_vm.py --iso os/dist/*.iso --bundle os/work/development-update --fast-fixture os/work/fast-update-fixture
