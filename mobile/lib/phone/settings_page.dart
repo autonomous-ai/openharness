@@ -282,10 +282,32 @@ class _Body extends StatelessWidget {
           icon: LucideIcons.logOut300,
           label: 'Sign out',
           destructive: true,
-          onTap: () => unawaited(notifier.logout()),
+          onTap: () => unawaited(_confirmSignOut(context, notifier)),
         ),
       ],
     );
+  }
+
+  /// Asked first, because a sign-out is more than leaving this screen: the phone's key leaves the
+  /// account's devices ([AppNotifier.logout]), and signing in again makes a new one — which every
+  /// other device then announces as a new device. One stray tap in the sheet used to be all of it.
+  Future<void> _confirmSignOut(
+    BuildContext context,
+    AppNotifier notifier,
+  ) async {
+    final confirmed = await confirmPhoneAction(
+      context,
+      // The sheet row's own icon — see [confirmPhoneAction].
+      icon: LucideIcons.logOut300,
+      title: 'Sign out?',
+      detail: notifier.currentUser?.email,
+      message:
+          'Your harnesses keep running on your computers. When you sign in again, '
+          'your other devices will see this phone as a new device.',
+      confirmLabel: 'Sign out',
+    );
+    if (!confirmed) return;
+    await notifier.logout();
   }
 }
 

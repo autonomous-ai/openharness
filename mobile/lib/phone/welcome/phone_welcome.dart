@@ -98,6 +98,24 @@ class _PhoneWelcomeState extends State<PhoneWelcome> {
 
   /// Between a scan and the session it signs in: the scan page says so.
   bool _signingInWithScan = false;
+
+  /// The scan read a computer's own sign-in QR — "Scan with your phone" on its sign-in sheet, the
+  /// button someone adding a phone is most likely to press there. It needs a phone that is signed in
+  /// already, so the scan page says what to do instead. Gone when the step is left.
+  bool _readComputerSignIn = false;
+
+  /// Under the scan page's hint. A desktop app opens signed out (its guest mode), and its Add Phone
+  /// then shows no code, only "Sign in to add your phone." — with no way to sign in from there.
+  static const _signInThereFirst =
+      'Does it say “Sign in to add your phone”? Sign in on the computer first '
+      '(Settings ▸ Account, with Google or Apple), then open Add Phone… again.';
+
+  /// In its place once a computer's sign-in QR is read ([_readComputerSignIn]).
+  static const _notThatCode =
+      'That code signs a computer in from a phone that is already signed in. '
+      'On the computer, choose Continue with Google or Apple instead, then scan the code in '
+      'Add Phone….';
+
   String? _error;
   int _resendIn = 0;
   Timer? _resendTimer;
@@ -168,6 +186,7 @@ class _PhoneWelcomeState extends State<PhoneWelcome> {
     setState(() {
       _step = step;
       _error = null;
+      _readComputerSignIn = false;
     });
     if (step == _Step.email) _emailFocus.requestFocus();
     if (step == _Step.code) _codeFocus.requestFocus();
@@ -269,6 +288,7 @@ class _PhoneWelcomeState extends State<PhoneWelcome> {
                   ? null
                   : (provider) => unawaited(_signInWith(provider)),
               waitingOn: widget.notifier.signInProvider,
+              signedOutReason: widget.notifier.signedOutReason,
               // Past the page and the exchange, the session is saved and the machines are on
               // their way: nothing is waited on in the browser any more, and nothing to cancel.
               entering:
@@ -288,6 +308,12 @@ class _PhoneWelcomeState extends State<PhoneWelcome> {
             _Step.scan => ScanToConnectPage(
               camera: widget.scanCamera,
               onCode: (code) => unawaited(_onScanned(code)),
+              // Read, not ignored: a phone pointed at a computer's sign-in QR is a person who chose
+              // the wrong button there, and nothing happening was all they used to get.
+              onSignInCode: (_) => setState(() => _readComputerSignIn = true),
+              signInCodeEndsScan: false,
+              note: _readComputerSignIn ? _notThatCode : _signInThereFirst,
+              noteWarns: _readComputerSignIn,
               signingIn: _signingInWithScan,
               onUseEmail: () => _go(_Step.email),
               onBack: () => _go(_Step.hello),
@@ -379,7 +405,12 @@ class _Hello extends StatelessWidget {
     this.waitingOn,
     this.entering = false,
     this.error,
+    this.signedOutReason,
   });
+
+  /// Why the phone is back here when it was signed in a moment ago ([AppNotifier.signedOutReason]):
+  /// said above the question, or the welcome reads as a first run with no account behind it.
+  final String? signedOutReason;
 
   final VoidCallback onScan;
   final VoidCallback onSetUp;
@@ -446,6 +477,10 @@ class _Hello extends StatelessWidget {
                     style: hero,
                   ),
                   const Spacer(),
+                  if (signedOutReason case final reason?) ...[
+                    _SignedOutNotice(reason: reason),
+                    const SizedBox(height: 18),
+                  ],
                   TtyText(
                     'Is Harness on your computer?',
                     color: tty.faint,
@@ -544,6 +579,44 @@ class _Answer extends StatelessWidget {
               Icon(LucideIcons.chevronRight300, size: 18, color: tty.faint),
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Why a phone that was signed in is back on the welcome: a raised block over the question, the
+/// sign-out mark in the terminal's yellow beside the sentence. Not the red of [_Hello.error] — the
+/// person did nothing wrong, and signing in again is the whole of what to do.
+class _SignedOutNotice extends StatelessWidget {
+  const _SignedOutNotice({required this.reason});
+
+  final String reason;
+
+  @override
+  Widget build(BuildContext context) {
+    final tty = Tty.of(context);
+    return Semantics(
+      liveRegion: true,
+      child: Container(
+        key: const ValueKey('welcome-signed-out'),
+        padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+        decoration: BoxDecoration(
+          color: ttyRaised(tty),
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.only(top: 1),
+              child: Icon(LucideIcons.logOut300, size: 16, color: tty.yellow),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(reason, style: tty.style(size: TtySize.row)),
+            ),
+          ],
         ),
       ),
     );
