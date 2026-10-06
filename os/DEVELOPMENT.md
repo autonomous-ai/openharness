@@ -458,6 +458,27 @@ change, explicitly approved for all platforms. Publishing the ISO did not releas
 these through the general TUI channel. The small updater adds no changes to `tui/`
 or `cli/`.
 
+### Public update acceptance
+
+Run the OS workflow with `checks=public-update` and the candidate's successful
+`image_run_id`. The producer must retain both `programmer-os-x86_64` and
+`harness-os-candidate-inputs`. This check compares every update-package file,
+permission, owner and link with the actual ISO before installing the original
+preview 14 image to a disposable encrypted disk.
+
+The stock updater receives the candidate through its ordinary HTTPS URLs. A
+temporary server and certificate authority exist only in the disposable test
+machine; host trust, public feeds, updater code and sudo policy stay unchanged.
+The test first proves that the guest rejects the untrusted certificate. Its
+private metadata holds the separate hn/CLI channels at the image's baselines.
+
+One real Super+u with cleared sudo credentials must apply the package, preserve
+agent/daemon/terminal processes and keyboard input, retain a verified recovery
+checkpoint, and cold boot into the candidate with project files unchanged. The
+receipt records the image producer and observer separately. This establishes
+the installed public update path with private transport, not CDN publication,
+kernel migration or physical hardware support. The job never publishes.
+
 ## Installation and first-use onboarding
 
 The USB starts `harness-install.service`: foot runs the offline installer directly.
