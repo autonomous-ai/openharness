@@ -162,6 +162,10 @@ def main():
         if args.profile == 'saved':
             assert connected_profile == original_profile, 'Recovery did not use the saved connection'
             assert settings(original_profile) == original_settings, 'Recovery changed the saved configuration'
+            vm.command('ip -j -4 route show default dev ens5 > /tmp/recovered-routes')
+            routes = json.loads(vm.read_file('/tmp/recovered-routes'))
+            assert any(route.get('metric') == 321 for route in routes), 'Saved route metric was not applied'
+            result['active_route_metric'] = 321
             result['checks'].append('Recovery uses the persisted connection UUID and retains its nondefault route metric')
         vm.command('test "$(cat ~/projects/network-recovery/proof)" = keep')
         network_state(vm, 'after-ui-recovery')
