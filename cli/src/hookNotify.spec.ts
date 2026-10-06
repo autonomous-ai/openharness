@@ -150,11 +150,12 @@ function runHook(opts: RunHookOpts): Promise<string> {
 }
 
 /** A throwaway localhost adapter that records every hook POST. */
-async function collect(response: Record<string, unknown> = {}): Promise<{ port: number; requests: Array<{ url: string; body: Record<string, unknown> }> }> {
+async function collect(response: Record<string, unknown> = {}, credential?: string): Promise<{ port: number; requests: Array<{ url: string; body: Record<string, unknown> }> }> {
   const requests: Array<{ url: string; body: Record<string, unknown> }> = []
   const server = createServer((req, res) => {
     // Local service discovery may probe a test port. Only hook POSTs belong to this fixture.
     if (req.method !== 'POST') { res.writeHead(405).end(); return }
+    if (credential && req.headers['x-harness-hook-token'] !== credential) { req.resume(); res.writeHead(401).end(); return }
     let raw = ''
     req.on('data', (chunk) => { raw += chunk.toString() })
     req.on('end', () => {
@@ -1521,8 +1522,9 @@ describe('a hook reaches the daemon that made its pane', () => {
     const daemon = (name: string) => {
       const dataDir = join(dir, name)
       mkdirSync(dataDir, { recursive: true, mode: 0o700 })
-      writeFileSync(join(dataDir, 'hook-credential'), `${'a'.repeat(43)}\n`, { mode: 0o600 })
-      return { dataDir, tag: harnessPaneOwner(dataDir) }
+      const credential = name[0].repeat(43)
+      writeFileSync(join(dataDir, 'hook-credential'), `${credential}\n`, { mode: 0o600 })
+      return { dataDir, tag: harnessPaneOwner(dataDir), credential }
     }
     return { dir, routes, release: daemon('release'), dev: daemon('dev') }
   }
@@ -1530,8 +1532,8 @@ describe('a hook reaches the daemon that made its pane', () => {
 
   it('follows the pane\'s tag to its daemon, whichever daemon\'s command ran it', async () => {
     const { routes, release, dev } = computer()
-    const atRelease = await collect()
-    const atDev = await collect()
+    const atRelease = await collect({}, release.credential)
+    const atDev = await collect({}, dev.credential)
     publishHookRoute(release.dataDir, atRelease.port, routes)
     publishHookRoute(dev.dataDir, atDev.port, routes)
     // The dev daemon started last: the command is its own. The pane is the release daemon's.
@@ -1553,6 +1555,26 @@ describe('a hook reaches the daemon that made its pane', () => {
       env: { HARNESS_HOOK_ROUTES_DIR: routes }, input: sessionEnd,
     })
     expect(atRelease.requests).toHaveLength(2)
+  })
+
+  it('the actual hook rejects malformed route records and uses its installed command', async () => {
+    // These checks used to exercise an unused TypeScript reader, not the hook that consumes the file.
+    const { routes, release, dev } = computer()
+    const atRelease = await collect({}, release.credential)
+    const atDev = await collect({}, dev.credential)
+    publishHookRoute(release.dataDir, atRelease.port, routes)
+    const bodies = ['broken', 'null', '{}', JSON.stringify({ dataDir: release.dataDir, port: 0 }),
+      JSON.stringify({ dataDir: release.dataDir, port: 65_536 }),
+      JSON.stringify({ dataDir: release.dataDir, port: String(atRelease.port) }),
+      JSON.stringify({ dataDir: 7, port: atRelease.port }),
+      JSON.stringify({ dataDir: dev.dataDir, port: atRelease.port })]
+    for (const body of bodies) {
+      writeFileSync(hookRouteFile(release.tag, routes), body, { mode: 0o600 })
+      await runHook({ port: atDev.port, dataDir: dev.dataDir, tmuxPane: '%7', paneOwner: release.tag,
+        env: { HARNESS_HOOK_ROUTES_DIR: routes }, input: sessionEnd })
+    }
+    expect(atRelease.requests).toEqual([])
+    expect(atDev.requests).toHaveLength(bodies.length)
   })
 
   it('keeps the command\'s own --port and --data-dir, as every installed command carried them, when the pane names no daemon it can trust', async () => {
@@ -1615,4 +1637,3 @@ describe('a hook reaches the daemon that made its pane', () => {
     expect(readFileSync(HOOK, 'utf8')).toContain("process.env.HARNESS_HOOK_ROUTES_DIR || join(homedir(), '.harness', 'hook-routes')")
   })
 })
-
