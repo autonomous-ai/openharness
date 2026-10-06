@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 
 import '../shared/widgets/qr_code_view.dart';
 import '../api/api_client.dart';
+import '../screens/login_screen.dart' show showSignInSheet;
 import '../shared/theme/app_theme.dart' as grid;
 import '../shortcuts/app_keymap.dart';
 import '../state/app_state.dart';
@@ -302,6 +303,21 @@ class _AddPhoneDialogState extends State<AddPhoneDialog> {
   bool _signInAsked = false;
   Timer? _signInTimer;
 
+  /// Bumped to start the renewal over (see [_restartSignIn]): an answer to an
+  /// older ask is dropped, so only one chain of renewals ever runs.
+  int _signInRound = 0;
+
+  /// This computer had no account while the dialog was open, so the sign-in
+  /// code it asked for then was refused. When the account lands it asks again
+  /// at once — see [_appChanged].
+  bool _awaitingAccount = false;
+
+  /// The account landed while the dialog was open — see [_appChanged].
+  bool _signedInWhileOpen = false;
+
+  /// The sign-in sheet raised from here is up — see [_signInHere].
+  bool _signingIn = false;
+
   /// No pairing to be had from this daemon — asking stopped for good.
   bool _stopped = false;
   String? _connected;
@@ -315,6 +331,7 @@ class _AddPhoneDialogState extends State<AddPhoneDialog> {
   @override
   void initState() {
     super.initState();
+    _awaitingAccount = app.isGuest;
     app.addListener(_appChanged);
     _syncLoop();
     unawaited(_renewSignIn());
@@ -340,8 +357,41 @@ class _AddPhoneDialogState extends State<AddPhoneDialog> {
 
   void _appChanged() {
     if (_closed) return;
+    if (app.isGuest) {
+      _awaitingAccount = true;
+    } else if (_awaitingAccount && _target != null) {
+      // Signed in while the dialog was open. The code asked for before was
+      // refused, and the next renewal is a minute off: without asking now,
+      // the first QR the phone can scan has no sign-in in it, and the phone
+      // falls back to an emailed code.
+      _awaitingAccount = false;
+      _signedInWhileOpen = true;
+      _restartSignIn();
+    }
     setState(() {});
     _syncLoop();
+  }
+
+  /// A guest's way in, raised over this dialog rather than instead of it: the
+  /// sheet closes itself when the account lands, and the QR comes up here.
+  ///
+  /// Without Scan with your phone: that way in needs a phone already signed
+  /// in, and the person here is adding one.
+  Future<void> _signInHere() async {
+    if (_signingIn || _closed) return;
+    _signingIn = true;
+    try {
+      await showSignInSheet(
+        context,
+        app,
+        reason:
+            'Sign in to add your phone. Your phone signs in to the same '
+            'account when it scans the code.',
+        offerPhone: false,
+      );
+    } finally {
+      _signingIn = false;
+    }
   }
 
   /// Who and what the QR is for, or null while there is nothing to show yet.
@@ -351,7 +401,9 @@ class _AddPhoneDialogState extends State<AddPhoneDialog> {
   /// daemon serves this computer under the account's `machineId` then — see
   /// `AppNotifier._followLocalMachineId`).
   ({String email, String machineId})? get _target {
-    if (app.isGuest) return null;
+    // Mid sign-in the daemon moves onto the account, and this computer's id
+    // with it (`AppNotifier.login`): nothing to show or arm until it lands.
+    if (app.isGuest || app.signingIn) return null;
     final email = app.currentUser?.email.trim();
     final machineId = app.viewer == null
         ? app.localMachineState?.machine.machineId
@@ -445,14 +497,16 @@ class _AddPhoneDialogState extends State<AddPhoneDialog> {
   /// Ask for a sign-in code, put it in the QR, and ask again before it runs
   /// out — for as long as the QR is on screen. A failure is not retried
   /// sooner: the QR works without one, and the next renewal tries again.
+  /// The one exception is an account arriving — see [_restartSignIn].
   Future<void> _renewSignIn() async {
+    final round = _signInRound;
     ({String code, Duration ttl})? next;
     try {
       next = await widget.signInCode();
     } catch (_) {
       next = null;
     }
-    if (_closed || !mounted) return;
+    if (_closed || !mounted || round != _signInRound) return;
     setState(() {
       _signIn = next?.code;
       _signInAsked = true;
@@ -466,6 +520,17 @@ class _AddPhoneDialogState extends State<AddPhoneDialog> {
       wait > Duration.zero ? wait : _signInRenew,
       () => unawaited(_renewSignIn()),
     );
+  }
+
+  /// The renewal from the top, now: the pending one is cancelled, an ask
+  /// still in flight is dropped when it lands, and the QR waits on
+  /// "Preparing your code…" for the new code. The caller rebuilds.
+  void _restartSignIn() {
+    _signInTimer?.cancel();
+    _signInRound++;
+    _signIn = null;
+    _signInAsked = false;
+    unawaited(_renewSignIn());
   }
 
   void _say(String message, {bool sticky = false}) => setState(() {
@@ -517,18 +582,38 @@ class _AddPhoneDialogState extends State<AddPhoneDialog> {
             ),
           ),
         ),
-        actions: [TextButton(onPressed: _close, child: const Text('Done'))],
+        actions: [
+          TextButton(onPressed: _close, child: const Text('Done')),
+          if (app.isGuest)
+            FilledButton(
+              key: const ValueKey('add-phone-sign-in'),
+              autofocus: true,
+              onPressed: () => unawaited(_signInHere()),
+              child: const Text('Sign in…'),
+            ),
+        ],
       ),
     );
   }
 
   List<Widget> _body(double qrSide, double row) {
     if (app.isGuest) {
-      return [Text('Sign in to add your phone.', style: _ink())];
+      // ⚠️ Keep the first line word for word: the phone app's scan screen
+      // quotes it, to tell someone who sees it here what to do.
+      return [
+        Text('Sign in to add your phone.', style: _ink()),
+        SizedBox(height: row / 2),
+        Text(
+          'Your phone signs in to the same account when it scans the code.',
+          style: _ink(_faint),
+        ),
+      ];
     }
     final target = _target;
     if (target == null) {
-      if (app.viewer != null && app.currentUser?.email.contains('@') == true) {
+      if (app.viewer != null &&
+          !app.signingIn &&
+          app.currentUser?.email.contains('@') == true) {
         return [
           Text('Connect a computer to add your phone.', style: _ink()),
           if (widget.onConnectMachine case final connect?) ...[
@@ -590,7 +675,10 @@ class _AddPhoneDialogState extends State<AddPhoneDialog> {
       // One line, and it is the status too: what to do, then that it worked.
       // The phone's own screen says the rest (Yes — scan to connect).
       _status(),
-      if (widget.onManageDevices case final manage?) ...[
+      // Not after a sign-in from here: it rebuilt the screen that opened this
+      // dialog, and that screen is the one the link would open Settings from.
+      if (widget.onManageDevices case final manage?
+          when !_signedInWhileOpen) ...[
         SizedBox(height: row),
         TextButton(
           key: const ValueKey('add-phone-manage-devices'),
