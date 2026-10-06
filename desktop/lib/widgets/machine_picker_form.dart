@@ -24,6 +24,14 @@ import 'terminal_text_action.dart';
 
 enum MachinePickerFormKind { connect, rename, password, delete, app, cli }
 
+/// What a password link in progress is doing, for anything that shows it — this
+/// form, and whatever lists the machine beside it.
+String machineLinkProgress(String? stage) => switch (stage) {
+  'deriving_key' => 'Checking password…',
+  'exchanging' || 'verifying' => 'Verifying the link…',
+  _ => 'Connecting…',
+};
+
 /// An editor in the resource preview, not another route or machine picker.
 /// Pending writes belong to AppNotifier and survive leaving this editor.
 class MachinePickerForm extends StatefulWidget {
@@ -460,13 +468,9 @@ class MachinePickerFormState extends State<MachinePickerForm> {
       label == 'Show' || label == 'Hide' ? 'visibility' : label;
 
   String get _progress => switch (widget.kind) {
-    MachinePickerFormKind.connect => switch (app.machineLinkStage(
-      widget.machineId!,
-    )) {
-      'deriving_key' => 'Checking password…',
-      'exchanging' || 'verifying' => 'Verifying the link…',
-      _ => 'Connecting…',
-    },
+    MachinePickerFormKind.connect => machineLinkProgress(
+      app.machineLinkStage(widget.machineId!),
+    ),
     MachinePickerFormKind.delete => 'Deleting…',
     _ => 'Saving…',
   };

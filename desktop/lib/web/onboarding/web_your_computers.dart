@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../core/models.dart';
 import '../../shared/theme/app_icons.dart';
 import '../../shared/theme/app_theme.dart' as grid;
 import '../../state/app_state.dart';
@@ -40,7 +41,9 @@ class _WebYourComputersState extends State<WebYourComputers> {
       children: [
         for (final state in WebYourComputers.listed(widget.app)) ...[
           _ComputerRow(
+            app: widget.app,
             state: state,
+            formOpen: _connecting == state.machine.machineId,
             onConnect: () =>
                 setState(() => _connecting = state.machine.machineId),
           ),
@@ -70,51 +73,100 @@ class _WebYourComputersState extends State<WebYourComputers> {
   }
 }
 
-class _ComputerRow extends StatelessWidget {
-  const _ComputerRow({required this.state, required this.onConnect});
+/// Where a computer stands with this browser, read from the same link state the
+/// connect form shows — so the row and the form never say different things.
+enum ComputerLinkState { offline, linking, connecting, entering, ready, idle }
 
+ComputerLinkState computerLinkState(
+  AppNotifier app,
+  MachineState state, {
+  required bool formOpen,
+}) {
+  final id = state.machine.machineId;
+  if (state.nodeOnline == false) return ComputerLinkState.offline;
+  if (app.pendingMachineLink(id) != null) return ComputerLinkState.linking;
+  if (state.connectionStatus == ConnectionStatus.connecting ||
+      state.connectionStatus == ConnectionStatus.reconnecting) {
+    return ComputerLinkState.connecting;
+  }
+  if (formOpen) return ComputerLinkState.entering;
+  return state.needsLink ? ComputerLinkState.ready : ComputerLinkState.idle;
+}
+
+class _ComputerRow extends StatelessWidget {
+  const _ComputerRow({
+    required this.app,
+    required this.state,
+    required this.formOpen,
+    required this.onConnect,
+  });
+
+  final AppNotifier app;
   final MachineState state;
+  final bool formOpen;
   final VoidCallback onConnect;
 
-  bool get _offline => state.nodeOnline == false;
-
-  String get _status => _offline
-      ? 'Offline. Open Harness on it, or run harness start there.'
-      : state.needsLink
-      ? 'Ready to connect to this browser.'
-      : 'Not connected yet.';
-
   @override
-  Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-    decoration: BoxDecoration(
-      color: DesktopChrome.field,
-      border: Border.all(color: DesktopChrome.rim),
-      borderRadius: BorderRadius.circular(DesktopChrome.dialogRadius),
-    ),
-    child: Row(
-      children: [
-        Icon(
-          _offline ? AppIcons.monitorOff : AppIcons.laptop,
-          size: 18,
-          color: DesktopChrome.foreground,
-        ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                state.machine.displayName,
-                style: DesktopChrome.text(medium: true),
-              ),
-              Text(_status, style: DesktopChrome.metadata()),
-            ],
+  Widget build(BuildContext context) {
+    final link = computerLinkState(app, state, formOpen: formOpen);
+    final status = switch (link) {
+      ComputerLinkState.offline =>
+        'Offline. Open Harness on it, or run harness start there.',
+      ComputerLinkState.linking => machineLinkProgress(
+        app.machineLinkStage(state.machine.machineId),
+      ),
+      ComputerLinkState.connecting => 'Connecting…',
+      ComputerLinkState.entering => 'Enter its password below.',
+      ComputerLinkState.ready => 'Ready to connect to this browser.',
+      ComputerLinkState.idle => 'Not connected yet.',
+    };
+    final busy =
+        link == ComputerLinkState.linking ||
+        link == ComputerLinkState.connecting;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: DesktopChrome.field,
+        border: Border.all(color: DesktopChrome.rim),
+        borderRadius: BorderRadius.circular(DesktopChrome.dialogRadius),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            link == ComputerLinkState.offline
+                ? AppIcons.monitorOff
+                : AppIcons.laptop,
+            size: 18,
+            color: DesktopChrome.foreground,
           ),
-        ),
-        if (state.needsLink && !_offline)
-          FilledButton(onPressed: onConnect, child: const Text('Connect')),
-      ],
-    ),
-  );
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  state.machine.displayName,
+                  style: DesktopChrome.text(medium: true),
+                ),
+                Semantics(
+                  liveRegion: true,
+                  child: Text(status, style: DesktopChrome.metadata()),
+                ),
+              ],
+            ),
+          ),
+          if (busy)
+            SizedBox.square(
+              dimension: 14,
+              child: CircularProgressIndicator(
+                strokeWidth: 1.5,
+                color: DesktopChrome.muted,
+              ),
+            )
+          else if (link == ComputerLinkState.ready)
+            FilledButton(onPressed: onConnect, child: const Text('Connect')),
+        ],
+      ),
+    );
+  }
 }

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -8,10 +10,23 @@ import 'package:harness/shared/theme/app_icons.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/app_state.dart';
 import 'package:harness/web/onboarding/web_first_machine.dart';
+import 'package:harness/web/onboarding/web_your_computers.dart';
 import 'package:harness/widgets/machine_picker_form.dart';
 import 'package:harness/widgets/link_another_machine_dialog.dart'
     show kLinkServerInstallCommand, kLinkServerLoginCommand;
 import 'package:harness/widgets/web_download_button.dart';
+
+/// A password link under way, at its first stage.
+class _Linking extends AppNotifier {
+  _Linking()
+    : super(config: AppConfig.dev, authSession: AuthSession(), configStore: null);
+
+  @override
+  Future<String?>? pendingMachineLink(String machineId) => Completer<String?>().future;
+
+  @override
+  String? machineLinkStage(String machineId) => 'deriving_key';
+}
 
 void main() {
   late AppNotifier app;
@@ -113,6 +128,35 @@ void main() {
     await tester.pump();
 
     expect(find.byType(MachinePickerForm), findsOneWidget);
+    // The row follows the form: no second Connect beside the form's own.
+    expect(find.widgetWithText(FilledButton, 'Connect'), findsNothing);
+    expect(find.text('Enter its password below.'), findsOneWidget);
+  });
+
+  testWidgets('a link in progress reads the same in the row as in the form', (
+    tester,
+  ) async {
+    final linking = _Linking();
+    const machine = Machine(
+      machineId: 'mac',
+      name: 'MacBookPro2021.local',
+      authMode: MachineAuthMode.remote,
+    );
+    linking.machines.add(machine);
+    final state = linking.machineStates['mac'] = MachineState(machine)
+      ..nodeOnline = true
+      ..needsLink = true;
+
+    expect(
+      computerLinkState(linking, state, formOpen: true),
+      ComputerLinkState.linking,
+    );
+    app.dispose();
+    app = linking; // tearDown disposes it
+    await mount(tester);
+
+    expect(find.text('Checking password…'), findsOneWidget);
+    expect(find.widgetWithText(FilledButton, 'Connect'), findsNothing);
   });
 
   testWidgets('an offline computer says what to do on it', (tester) async {
