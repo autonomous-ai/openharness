@@ -73,6 +73,9 @@ export interface DeviceLogSyncerDeps {
   tombstoned: (pub: string) => boolean
   /** Whether this machine's user unpaired `pub` here — a local override the log never beats. */
   blocked: (pub: string) => boolean
+  /** Whether `pub` may open a session here right now (it is paired). Given, every read of the log trusts
+   *  again an active key that is not: one the adoption of its entry missed stays trusted by no one. */
+  isTrusted?: (pub: string) => boolean
   /** A key joined the log after this machine did: "New device: X". */
   announce: (member: DevLogMember) => void
   /** A device was taken out of the log after this machine joined (not by this machine). */
@@ -138,6 +141,9 @@ export interface DeviceLogHistory {
   complete: boolean
   frozen: DevLogFreeze | null
 }
+
+/** What `trustFromLog` made of a key: trusted, or why not. */
+export type DeviceLogTrustOutcome = 'trusted' | 'self' | 'absent' | 'suspended' | 'blocked' | 'tombstoned' | 'frozen' | 'unavailable'
 
 export type DeviceLogRemoveResult = { ok: true } | { ok: false; error: 'NOT_ACTIVE' | 'NOT_IN_LOG' | 'UNAVAILABLE' | 'REFUSED'; detail?: string }
 
@@ -253,6 +259,35 @@ export class DeviceLogSyncer {
       .catch((err) => { this.deps.log?.(`[devlog] refresh failed: ${err instanceof Error ? err.message : String(err)}`) })
       .finally(() => { this.refreshing = null })
     return this.refreshing
+  }
+
+  /**
+   * Read the log now and trust `pub` if it is on it: a hello from a key not paired here may be a device
+   * that joined the account after this machine last read the log (a browser signed in before this machine
+   * did), and without this it is denied until the next scheduled read. Says why not otherwise. Never throws.
+   */
+  async trustFromLog(pub: string): Promise<DeviceLogTrustOutcome> {
+    try {
+      // A read already on its way may have fetched before this key was added: wait for it, then read again.
+      const earlier = this.refreshing
+      await this.refresh()
+      if (earlier) await this.refresh()
+      const file = this.deps.store.read()
+      if (file.frozen) return 'frozen'
+      const state = file.state
+      if (!state) return 'unavailable'
+      const member = state.active[pub]
+      if (!member) return 'absent'
+      if (pub === this.deps.identity().pub) return 'self'
+      if (this.suspendedKeys().includes(pub)) return 'suspended'
+      if (this.deps.blocked(pub)) return 'blocked'
+      if (this.deps.tombstoned(pub)) return 'tombstoned'
+      this.trustState(state, [member])
+      return 'trusted'
+    } catch (err) {
+      this.deps.log?.(`[devlog] could not read the log for a key: ${err instanceof Error ? err.message : String(err)}`)
+      return 'unavailable'
+    }
   }
 
   /** The file, with the joined point filled in for one written before it existed (or by a client that
@@ -391,6 +426,30 @@ export class DeviceLogSyncer {
       // first read of a log is over: what is verified from here on is news. Held open, a backend that
       // stalls the second page would have every key it adds later taken for one there at joining.
       this.endJoin()
+    }
+    this.reconcile()
+  }
+
+  /**
+   * Trust again every key the log leaves active that is not trusted here. A key is adopted as its entry is
+   * verified, and only then: the head is written first, so an adoption that threw, a process that died in
+   * between, or a roster that already held the member (nothing new to merge, so nothing trusted) left it
+   * untrusted for good — its device saw "Link required" however often it came back. Never announces: what
+   * is news was decided when the entry was read. Never throws.
+   */
+  private reconcile(): void {
+    const isTrusted = this.deps.isTrusted
+    if (!isTrusted) return
+    try {
+      const file = this.deps.store.read()
+      const state = file.state
+      if (file.frozen || !state) return
+      const selfPub = this.deps.identity().pub
+      const missing = Object.values(state.active).filter((m) => m.pub !== selfPub && !isTrusted(m.pub))
+      const adopted = this.trustState(state, missing)
+      if (adopted.length) this.deps.log?.(`[devlog] trusting ${adopted.length} key(s) the log has and this machine did not: ${adopted.map((m) => fp(m.pub)).join(', ')}`)
+    } catch (err) {
+      this.deps.log?.(`[devlog] could not trust what the log has: ${err instanceof Error ? err.message : String(err)}`)
     }
   }
 
@@ -583,12 +642,14 @@ export class DeviceLogSyncer {
     return true
   }
 
-  private trustState(state: DevLogState, members: DevLogMember[]): void {
+  /** Trust those of `members` the log leaves active and nothing here holds back; returns them. */
+  private trustState(state: DevLogState, members: DevLogMember[]): DevLogMember[] {
     const selfPub = this.deps.identity().pub
     const suspended = this.suspendedKeys()
     const adopt = members.filter((m) => m.pub !== selfPub && state.active[m.pub] && !suspended.includes(m.pub)
       && !this.deps.blocked(m.pub) && !this.deps.tombstoned(m.pub))
     if (adopt.length) this.deps.adopt(adopt)
+    return adopt
   }
 
   /** A removal made in the trust group before the log existed must not be undone by the log: this

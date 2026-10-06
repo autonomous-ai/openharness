@@ -3,6 +3,7 @@
 // removal it reads becomes a band — red when a device nobody has looked at did it.
 import 'dart:async';
 
+import 'package:flutter/widgets.dart' show AppLifecycleState;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/api/api_client.dart';
 import 'package:harness/auth/auth_session.dart';
@@ -169,8 +170,14 @@ class _Api extends ApiClient {
           };
   }
 
+  /// How many times the machine list was read.
+  int machineReads = 0;
+
   @override
-  Future<List<Machine>> machines() async => const [];
+  Future<List<Machine>> machines() async {
+    machineReads++;
+    return const [];
+  }
 }
 
 /// A viewer that is already signed in when it opens.
@@ -290,6 +297,46 @@ void main() {
     await settle();
     return app;
   }
+
+  test('with no machine to hear pushes from, the machine list is read again on its own and on coming back to the tab', () async {
+    final app = AppNotifier(
+      config: AppConfig.dev,
+      authSession: AuthSession(storage: MemoryStore()),
+      configStore: null,
+      cliLogin: _SignedIn(),
+      viewer: ViewerServices(
+        config: AppConfig.dev,
+        session: AuthSession(storage: MemoryStore()),
+        keys: keys,
+      ),
+    )..deafMachineListInterval = const Duration(milliseconds: 40);
+    final api = _Api(backend)..user = 'user-a';
+    app.api = api;
+    addTearDown(app.dispose);
+    await app.bootstrap();
+    await settle();
+    final afterBoot = api.machineReads;
+    expect(afterBoot, greaterThan(0));
+
+    // Nothing connected: no `machines_changed` can reach this tab, so the list is asked for again.
+    await Future<void>.delayed(const Duration(milliseconds: 130));
+    await settle();
+    expect(api.machineReads, greaterThan(afterBoot));
+
+    // Behind other tabs: not asked for at all.
+    app.appLifecycleChanged(AppLifecycleState.hidden);
+    final hidden = api.machineReads;
+    await Future<void>.delayed(const Duration(milliseconds: 130));
+    await settle();
+    expect(api.machineReads, hidden);
+
+    // Back to the tab (the person was signing in their computer): asked for at once.
+    final beforeResume = api.machineReads;
+    app.deafMachineListInterval = const Duration(hours: 1);
+    app.appLifecycleChanged(AppLifecycleState.resumed);
+    await settle();
+    expect(api.machineReads, greaterThan(beforeResume));
+  });
 
   test('signing in by hand as another account starts that account\'s list over', () async {
     // Account A: this browser joined its log.
@@ -966,5 +1013,128 @@ void main() {
     await settle();
     expect(app.newDevices, isEmpty);
     expect(app.deviceRemovals, isEmpty);
+  });
+
+  // A web app signed in first, then `harness login` on a computer: the machine is new to this app's
+  // copy of the log (or this app to the machine's), and the refusal says nothing more than "early".
+  // It is settled — this app joins the log, reads it, dials again — before a password is asked for.
+  group('a machine that refuses this app for want of trust', () {
+    final mid = 'b' * 32;
+
+    AppNotifier withMachine() {
+      final app = start();
+      addTearDown(app.dispose);
+      const name = 'box2';
+      final machine = Machine(
+        machineId: mid,
+        authMode: MachineAuthMode.remote,
+        name: name,
+      );
+      app.machines = [machine];
+      app.machineStates[mid] = MachineState(machine)..nodeOnline = true;
+      return app;
+    }
+
+    Future<void> until(bool Function() done) async {
+      for (var i = 0; i < 500 && !done(); i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+    }
+
+    test(
+      'the log names it: pinned and dialled again, no password asked',
+      () async {
+        final app = withMachine();
+        await backend.add(box2, 'machine', mid, 'box2');
+        expect(
+          await keys.peer(mid),
+          isNull,
+          reason: 'this app has not read the log since',
+        );
+        final redialled = <String>[];
+        app.onRedialForTest = redialled.add;
+
+        app.localFailureForTest(mid, 4404, 'NO_PEER_LINK');
+        expect(
+          app.stateOf(mid)!.needsLink,
+          isFalse,
+          reason: 'still connecting while it is settled',
+        );
+        await until(() => redialled.isNotEmpty);
+
+        expect(redialled, [mid]);
+        expect(app.stateOf(mid)!.needsLink, isFalse);
+        expect(await keys.peer(mid), isNotNull);
+        final me = b64e((await keys.identity()).pub);
+        expect(
+          backend.state.active[me]?.kind,
+          'viewer',
+          reason: 'this app joined the log on the way',
+        );
+      },
+    );
+
+    test('denied once, then let in: never asks for a password', () async {
+      final app = withMachine()
+        ..trustDeniedWait = const Duration(milliseconds: 10);
+      await keys.pin(mid, box2.pub, label: 'box2');
+      final redialled = <String>[];
+      app.onRedialForTest = redialled.add;
+
+      app.localFailureForTest(mid, 4404, 'E2E_DENIED');
+      await until(() => redialled.isNotEmpty);
+      await settle();
+
+      expect(redialled, [mid]);
+      expect(app.stateOf(mid)!.needsLink, isFalse);
+      expect(
+        app.stateOf(mid)!.agentLoadStatus,
+        isNot(AgentLoadStatus.needsLink),
+      );
+    });
+
+    test('still refused after the grace: the password it is', () async {
+      final app = withMachine()
+        ..trustSettleRound = const Duration(milliseconds: 20);
+      var redials = 0;
+      // Each dial again is refused again: nothing names this machine.
+      app.onRedialForTest = (id) {
+        redials++;
+        scheduleMicrotask(
+          () => app.localFailureForTest(id, 4404, 'NO_PEER_LINK'),
+        );
+      };
+
+      app.localFailureForTest(mid, 4404, 'NO_PEER_LINK');
+      await until(() => app.stateOf(mid)!.needsLink);
+
+      expect(app.stateOf(mid)!.needsLink, isTrue);
+      expect(app.stateOf(mid)!.agentLoadStatus, AgentLoadStatus.needsLink);
+      expect(redials, 2, reason: 'two rounds, then the password');
+    });
+
+    test('a frozen log settles nothing: the password at once, and the list asks for a review', () async {
+      final app = withMachine();
+      await backend.add(box2, 'machine', 'c' * 32, 'box3');
+      await logOf(app).refresh();
+      final file = Map<String, Object?>.from(await keys.deviceLog() as Map);
+      file['frozen'] = {
+        'reason': 'fork',
+        'at': 1,
+        'lastGoodHead': backend.state.head.toJson(),
+      };
+      await keys.writeDeviceLog(file);
+      final redialled = <String>[];
+      app.onRedialForTest = redialled.add;
+
+      app.localFailureForTest(mid, 4404, 'NO_PEER_LINK');
+      await until(
+        () => app.stateOf(mid)!.needsLink && app.deviceListNeedsReview,
+      );
+
+      expect(app.stateOf(mid)!.needsLink, isTrue);
+      expect(app.deviceListNeedsReview, isTrue);
+      expect(redialled, isEmpty);
+    });
   });
 }

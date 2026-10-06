@@ -321,6 +321,45 @@ void main() {
     expect((await log.list()).frozen?.reason, 'fork');
   });
 
+  group('ensureRegistered', () {
+    test('a boot that could not register is made good once the backend answers', () async {
+      await backend.add(box2, 'machine', _mid2, 'box2');
+      final log = makeLog();
+      backend.offline = true;
+      await log.register();
+      final me = b64e((await keys.identity()).pub);
+      expect(backend.state.active[me], isNull, reason: 'no log to read, nothing appended');
+
+      backend.offline = false;
+      expect(await log.ensureRegistered(), DeviceLogRegistration.registered);
+      expect(backend.state.active[me]?.kind, 'viewer');
+      expect(await keys.peer(_mid2), isNotNull, reason: 'the read that came with it pinned the machine');
+    });
+
+    test('already in the log: reads it and appends nothing', () async {
+      final log = makeLog();
+      await log.register();
+      final entries = backend.entries.length;
+      await backend.add(box2, 'machine', _mid2, 'box2');
+      expect(await log.ensureRegistered(), DeviceLogRegistration.active);
+      expect(backend.entries.length, entries + 1);
+      expect(await keys.peer(_mid2), isNotNull);
+    });
+
+    test('a frozen log is left as it is', () async {
+      await backend.add(box2, 'machine', _mid2, 'box2');
+      await backend.add(box3, 'machine', _mid3, 'box3');
+      final log = makeLog();
+      await log.refresh();
+      backend.lie = backend.entries.sublist(0, 1);
+      await log.refresh();
+      expect((await log.list()).frozen, isNotNull);
+      final entries = backend.entries.length;
+      expect(await log.ensureRegistered(), DeviceLogRegistration.frozen);
+      expect(backend.entries.length, entries);
+    });
+  });
+
   test('says which machines report a frozen log', () async {
     await backend.add(box2, 'machine', _mid2, 'box2');
     final log = makeLog();

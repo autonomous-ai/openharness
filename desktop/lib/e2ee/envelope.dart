@@ -64,6 +64,9 @@ const Set<String> encryptedDownTypes = {
   'fs_list_dir',
   'project_preview',
   'git_project_info',
+  // The harness's branch and pull-request history is a machine RPC too (applicationFrames.ts
+  // `MACHINE_REQUESTS`): unsealed, the machine answers E2EE_REQUIRED.
+  'git_pull_request',
   // The trust-group roster swap (`viewer/group_sync.dart`): the keys every member trusts.
   'group_sync',
   'codex_profiles_list',

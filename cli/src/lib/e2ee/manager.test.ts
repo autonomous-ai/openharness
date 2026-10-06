@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest'
-import { mkdtempSync, rmSync } from 'fs'
+import { mkdtempSync, readFileSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 
@@ -325,6 +325,99 @@ describe('E2eeManager pairing', () => {
     mgr.handleFrame('c4', web.hello())
     expect((takeLast('e2e_denied').payload as Record<string, unknown>).reason).toBe('unpaired')
     expect(mgr.hasSession('c4')).toBe(false)
+  })
+
+  describe('a hello from a key the device key log may name (onUnknownHello)', () => {
+    /** A signed-in browser this machine has not trusted yet: the hook stands for the log's read. */
+    const label = 'Chrome · macOS'
+
+    it('waits for the log to trust the key, then opens the session', async () => {
+      const web = new WebPeer()
+      const seen: string[] = []
+      const h = machine({
+        onUnknownHello: async (pub) => { seen.push(pub); h.mgr.trustPeer({ pub, label, kind: 'viewer' }) },
+      })
+      h.mgr.handleFrame('w1', web.hello())
+      await vi.waitFor(() => expect(h.lastFor('w1', 'e2e_welcome')).toBeTruthy())
+      expect(seen).toEqual([C.b64e(web.identity.pub)])
+      expect(h.lastFor('w1', 'e2e_denied')).toBeUndefined()
+      const machinePub = (JSON.parse(readFileSync(join(process.env.ADAPTER_DATA_DIR as string, 'e2e', 'identity.json'), 'utf8')) as { pub: string }).pub
+      web.onWelcome(h.lastFor('w1', 'e2e_welcome')!, C.b64d(machinePub))
+      expect(h.mgr.hasSession('w1')).toBe(true)
+    })
+
+    it('denies the hello as unpaired when the log does not trust the key within the bound', async () => {
+      vi.useFakeTimers()
+      try {
+        const h = machine({ onUnknownHello: () => new Promise<void>(() => {}) })
+        h.mgr.handleFrame('w2', new WebPeer().hello())
+        await vi.advanceTimersByTimeAsync(3_999)
+        expect(h.lastFor('w2', 'e2e_denied')).toBeUndefined()
+        await vi.advanceTimersByTimeAsync(1)
+        expect((h.lastFor('w2', 'e2e_denied')!.payload as Record<string, unknown>).reason).toBe('unpaired')
+        expect(h.mgr.hasSession('w2')).toBe(false)
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('denies at once, as unpaired, when the read fails', async () => {
+      const h = machine({ onUnknownHello: async () => { throw new Error('offline') } })
+      h.mgr.handleFrame('w3', new WebPeer().hello())
+      await vi.waitFor(() => expect(h.lastFor('w3', 'e2e_denied')).toBeTruthy())
+      expect((h.lastFor('w3', 'e2e_denied')!.payload as Record<string, unknown>).reason).toBe('unpaired')
+    })
+
+    it('never reads the log for a hello whose signature does not verify', () => {
+      const hook = vi.fn(async () => {})
+      const h = machine({ onUnknownHello: hook })
+      const hello = new WebPeer().hello()
+      ;(hello.payload as Record<string, unknown>).sig = C.b64e(new Uint8Array(64))
+      h.mgr.handleFrame('w4', hello)
+      expect(hook).not.toHaveBeenCalled()
+      expect((h.lastFor('w4', 'e2e_denied')!.payload as Record<string, unknown>).reason).toBe('bad_sig')
+    })
+
+    it('drops the answer to a hello a newer one on the same connection replaced', async () => {
+      const web = new WebPeer()
+      const pending: Array<() => void> = []
+      const h = machine({ onUnknownHello: (pub) => new Promise<void>((resolve) => pending.push(() => { h.mgr.trustPeer({ pub, label }); resolve() })) })
+      h.mgr.handleFrame('w5', web.hello())
+      const first = C.b64e(web.session!.myEph.pub)
+      h.mgr.handleFrame('w5', web.hello())
+      await vi.waitFor(() => expect(pending).toHaveLength(2))
+      // The first read trusts the key; the hello it was for is not answered, the newer one still waits.
+      pending[0]()
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      expect(h.sent.filter((s) => s.connId === 'w5')).toEqual([])
+      pending[1]()
+      await vi.waitFor(() => expect(h.lastFor('w5', 'e2e_welcome')).toBeTruthy())
+      const answers = h.sent.filter((s) => s.connId === 'w5')
+      expect(answers).toHaveLength(1)
+      expect((answers[0].frame.payload as Record<string, unknown>).webEphPub).toBe(C.b64e(web.session!.myEph.pub))
+      expect((answers[0].frame.payload as Record<string, unknown>).webEphPub).not.toBe(first)
+    })
+
+    it('answers nothing for a connection that went while its hello waited', async () => {
+      let release: () => void = () => {}
+      const h = machine({ onUnknownHello: (pub) => new Promise<void>((resolve) => { release = () => { h.mgr.trustPeer({ pub, label }); resolve() } }) })
+      h.mgr.handleFrame('w6', new WebPeer().hello())
+      h.mgr.dropSession('w6')
+      release()
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      expect(h.sent.filter((s) => s.connId === 'w6')).toEqual([])
+      expect(h.mgr.hasSession('w6')).toBe(false)
+    })
+
+    it('answers a paired key at once, without reading the log', () => {
+      const hook = vi.fn(async () => {})
+      const h = machine({ onUnknownHello: hook })
+      const web = new WebPeer()
+      h.mgr.trustPeer({ pub: C.b64e(web.identity.pub), label })
+      h.mgr.handleFrame('w7', web.hello())
+      expect(h.lastFor('w7', 'e2e_welcome')).toBeTruthy()
+      expect(hook).not.toHaveBeenCalled()
+    })
   })
 
   it('a second concurrent pair_intent is rejected as PAIRING_BUSY while active', async () => {

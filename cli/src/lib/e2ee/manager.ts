@@ -77,6 +77,10 @@ const ROUND_TIMEOUT_MS = 15_000
 const RATE_WINDOW_MS = 5 * 60_000
 const RATE_MAX = 3
 const MAX_SESSIONS = 64
+/** How long a hello from a key not paired here waits for `onUnknownHello` (a re-read of the account's
+ *  device key log) before it is denied: one backend round trip, with room, and the client waiting on its
+ *  hello is answered either way. */
+const UNKNOWN_HELLO_WAIT_MS = 4_000
 
 // Persistent remote-password linking (`harness remote-password set` + `harness link connect`) — a
 // SEPARATE state machine from PairSlot above: no human "arm" step (a correct password is the only
@@ -122,6 +126,11 @@ export interface E2eeManagerDeps {
   /** A person unpaired `identityPub` (`harness unpair`, or a trusted client's unpair RPC) — not called
    *  for the trust group's own removals, so the group can keep an unpairing from being undone. */
   onUnpaired?: (identityPub: string) => void
+  /** A hello signed by a key not paired here. The account's device key log may name it already and this
+   *  machine has not adopted it yet (a browser that signed in before this machine did): the caller reads
+   *  the log and trusts it if so. The hello waits for it, at most UNKNOWN_HELLO_WAIT_MS, then is answered
+   *  as the key stands. Absent, such a hello is denied at once. */
+  onUnknownHello?: (identityPub: string) => Promise<void>
 }
 
 export interface LinkedPeer {
@@ -152,6 +161,10 @@ export class E2eeManager {
   private attempts: number[] = [] // timestamps of FAILED pairings — anti online-guessing rate limit
   private pwSlots = new Map<string, PwPairSlot>() // connId -> in-progress password-PAKE attempt
   private sessionGoneTold = new Map<string, number>() // connId -> when it was last told its session is gone
+  /** connId -> the hello waiting on `onUnknownHello` there. A newer hello, or the connection going, ends
+   *  the wait: the reply to the older one would open a session the client has moved on from. */
+  private helloWaits = new Map<string, number>()
+  private helloSeq = 0
   private now: () => number
   /** Local dashboard port (loopback) — surfaced to the web in e2e_status so it can link there to
    *  approve pairing. Not sensitive (a localhost port); set by the adapter after the hook server binds. */
@@ -804,14 +817,46 @@ export class E2eeManager {
     const sigB64 = String(p.sig ?? '')
     if (!identityPub || !ephPubB64 || !sigB64) return true
     const webEphPub = C.b64d(ephPubB64)
-    const role = this.store.pairedRole(identityPub)
-    if (!role) {
-      this.deps.sendTo(connId, { type: 'e2e_denied', payload: { webEphPub: ephPubB64, reason: 'unpaired' } })
-      return true
-    }
+    // The signature first: only a hello the key's holder signed may make this machine re-read the log, and
+    // a forged one must not end the wait of a real one on the same connection.
     if (!C.helloVerify(C.b64d(identityPub), this.deps.machineId, webEphPub, C.b64d(sigB64))) {
       this.deps.sendTo(connId, { type: 'e2e_denied', payload: { webEphPub: ephPubB64, reason: 'bad_sig' } })
       return true
+    }
+    this.helloWaits.delete(connId)
+    const role = this.store.pairedRole(identityPub)
+    const unknownHello = this.deps.onUnknownHello
+    if (role || !unknownHello) {
+      this.answerHello(connId, identityPub, ephPubB64, webEphPub, role)
+      return true
+    }
+    void this.answerUnknownHello(connId, identityPub, ephPubB64, webEphPub, unknownHello)
+    return true
+  }
+
+  /** A browser that signed in before this machine did is in the account's device key log, and the first
+   *  hello it sent here was denied as unpaired: the log is read only on its own schedule, so the browser
+   *  showed "Link required" until it was. Its hello now waits for that read. */
+  private async answerUnknownHello(connId: string, identityPub: string, ephPubB64: string, webEphPub: Uint8Array, unknownHello: (identityPub: string) => Promise<void>): Promise<void> {
+    const seq = ++this.helloSeq
+    this.helloWaits.set(connId, seq)
+    let timer: ReturnType<typeof setTimeout> | undefined
+    await Promise.race([
+      Promise.resolve().then(() => unknownHello(identityPub)).catch(() => { /* answered as the key stands */ }),
+      new Promise<void>((resolve) => { timer = setTimeout(resolve, UNKNOWN_HELLO_WAIT_MS) }),
+    ])
+    clearTimeout(timer)
+    if (this.helloWaits.get(connId) !== seq) return
+    this.helloWaits.delete(connId)
+    this.answerHello(connId, identityPub, ephPubB64, webEphPub, this.store.pairedRole(identityPub))
+  }
+
+  /** A verified hello, answered under the role its key is paired with: a session and its welcome, or
+   *  `unpaired` with none. */
+  private answerHello(connId: string, identityPub: string, ephPubB64: string, webEphPub: Uint8Array, role: C.PairRole | null): void {
+    if (!role) {
+      this.deps.sendTo(connId, { type: 'e2e_denied', payload: { webEphPub: ephPubB64, reason: 'unpaired' } })
+      return
     }
     const eph = C.newEphemeral()
     // webEphPub is attacker-controlled: a wrong-length or low-order / invalid curve point makes
@@ -821,7 +866,7 @@ export class E2eeManager {
       keys = C.sessionKeys(eph.priv, webEphPub, this.deps.machineId, webEphPub, eph.pub)
     } catch {
       this.deps.sendTo(connId, { type: 'e2e_denied', payload: { webEphPub: ephPubB64, reason: 'bad_key' } })
-      return true
+      return
     }
     this.evictIfFull()
     this.dropSession(connId)
@@ -855,13 +900,14 @@ export class E2eeManager {
         enc: C.b64e(enc),
       },
     })
-    return true
   }
 
   /** Drop a session when its web connection closes (called from backendSocket on down close is n/a —
    *  connections are relayed; sessions are pruned by LRU + overwrite-on-new-hello). Also cleans up any
-   *  in-progress password-PAKE attempt on this connId — the joiner may have disconnected mid-round. */
+   *  in-progress password-PAKE attempt on this connId — the joiner may have disconnected mid-round — and
+   *  a hello waiting on the device key log there, which would open a session for a connection gone. */
   dropSession(connId: string): void {
+    this.helloWaits.delete(connId)
     if (this.sessions.delete(connId)) this.deps.onSessionDropped?.(connId)
     this.clearPwSlot(connId)
   }

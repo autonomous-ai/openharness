@@ -17,8 +17,11 @@ import 'package:harness/ws/ws_conn.dart';
 import 'swarm_state_test.dart' show createApp;
 
 /// Records the frames this window puts on a machine's socket.
+///
+/// Local by default: this computer's daemon, which is the only one these frames are for. A relayed
+/// connection — every one a viewer (web) build has — must hear none of them.
 class _Conn extends WsConn {
-  _Conn()
+  _Conn({bool local = true})
     : super(
         wsBaseUrl: 'ws://fixture.invalid',
         autonomousEnv: 'test',
@@ -27,6 +30,10 @@ class _Conn extends WsConn {
         onAuthFailure: (_) {},
         onEvent: (_) {},
         onStatus: (_) {},
+        transportKind: local
+            ? WsTransportKind.localPlaintext
+            : WsTransportKind.cloudE2ee,
+        localWsUri: local ? Uri.parse('ws://127.0.0.1:1/ws') : null,
       );
 
   final sent = <({String type, Map<String, dynamic> payload})>[];
@@ -344,6 +351,45 @@ void main() {
       await Future<void>.delayed(Duration.zero);
 
       expect(conn.sent.where((f) => f.type == 'agent_seen'), isEmpty);
+    });
+  });
+
+  // The desk frames are this window's state for the daemon on this computer
+  // (cli/src/localWsServer.ts). A relayed connection would carry them to the
+  // machine in the clear — refused there as plaintext, and read on the way.
+  group('the desk frames stay on this computer', () {
+    Future<List<String>> sentOver({required bool local}) async {
+      final conn = _Conn(local: local);
+      final app = createApp(connectionForTest: (_) => conn, connected: true)
+        ..watchedAgents = () => const [];
+      addTearDown(app.dispose);
+      app.adoptPoolConnectionForTest('m', conn);
+      await app.handleEventForTest('m', {
+        'type': 'turn_summary',
+        'agentId': 'a1',
+        'payload': <String, dynamic>{
+          'notification': {'id': 'desk-result', 'kind': 'done'},
+        },
+      });
+      app.announceWindowForeground();
+      app.markAgentSeen('m', 'a1');
+      await Future<void>.delayed(Duration.zero);
+      return [for (final frame in conn.sent) frame.type];
+    }
+
+    test('this computer\'s daemon hears them', () async {
+      expect(
+        await sentOver(local: true),
+        containsAll(['app_unread', 'app_panes', 'app_swarms', 'agent_seen']),
+      );
+    });
+
+    test('a relayed machine hears none of them', () async {
+      final sent = await sentOver(local: false);
+      expect(
+        sent.where((type) => type.startsWith('app_') || type == 'agent_seen'),
+        isEmpty,
+      );
     });
   });
 }

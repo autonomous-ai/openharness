@@ -25,7 +25,7 @@ import type { AuthSessionManager } from '../lib/authSession.js'
 import { thisDeviceLabel } from '../lib/daemonState.js'
 import { b64d, b64e, fingerprint } from '../lib/e2ee/core.js'
 import { DeviceLogStore } from '../lib/e2ee/deviceLogStore.js'
-import { DeviceLogSyncer, type DeviceLogFetched } from '../lib/e2ee/deviceLogSyncer.js'
+import { DeviceLogSyncer, type DeviceLogFetched, type DeviceLogTrustOutcome } from '../lib/e2ee/deviceLogSyncer.js'
 import { GroupSyncer, relayRequester, SELF_STAMP } from '../lib/e2ee/groupSyncer.js'
 import { MachinePeerStore } from '../lib/e2ee/machinePeers.js'
 import { E2eeStore } from '../lib/e2ee/store.js'
@@ -55,6 +55,48 @@ export interface StartedGateway {
   ops: GatewayOps
   windowRelay: WindowRelay
   stop(): Promise<void>
+}
+
+/** A key is looked up in the device key log at most this often for a hello: a client that retries its
+ *  hello every few seconds, or a relay replaying one, reads the log once, not each time. */
+const UNKNOWN_HELLO_EVERY_MS = 10_000
+
+/** What `trustFromLog` found, as the log line says it. */
+const TRUST_OUTCOME: Record<DeviceLogTrustOutcome, string> = {
+  trusted: 'trusted: it is on the account\'s device list',
+  self: 'not trusted: it is this machine\'s own key',
+  absent: 'not on the account\'s device list',
+  suspended: 'not trusted: suspended on the device list until it is reviewed (harness devices)',
+  blocked: 'not trusted: blocked, it was unpaired here',
+  tombstoned: 'not trusted: removed from this machine\'s trust group',
+  frozen: 'not trusted: the device log is frozen here until it is reviewed (harness devices)',
+  unavailable: 'not trusted: the device log could not be read',
+}
+
+/**
+ * The gateway's `onUnknownHello`: a hello from a key not paired here re-reads the account's device key log,
+ * which trusts the key if it is on it. A web viewer that signs in before this machine does is added to the
+ * log before this machine joins it; its hello was denied as unpaired until the next scheduled read, and
+ * the person saw "Link required" for up to ten minutes with nothing in the log to say why.
+ */
+export function unknownHelloReader(
+  devlog: Pick<DeviceLogSyncer, 'trustFromLog'>, log: (line: string) => void, now: () => number = Date.now,
+): (identityPub: string) => Promise<void> {
+  // A hello said again while its key's read is still on its way waits for that read rather than being
+  // denied at once: the browser dials again a second after a denial, and the read that trusts it may
+  // well take longer than that.
+  const lastRead = new Map<string, { at: number; read: Promise<void> }>()
+  return (identityPub) => {
+    const at = now()
+    for (const [pub, r] of lastRead) if (at - r.at >= UNKNOWN_HELLO_EVERY_MS) lastRead.delete(pub)
+    const earlier = lastRead.get(identityPub)
+    if (earlier) return earlier.read
+    const who = fingerprint(b64d(identityPub))
+    log(`[e2ee] hello from ${who} is not paired here — re-reading the device log`)
+    const read = devlog.trustFromLog(identityPub).then((outcome) => { log(`[e2ee] ${who}: ${TRUST_OUTCOME[outcome]}`) })
+    lastRead.set(identityPub, { at, read })
+    return read
+  }
 }
 
 /** Pairing errors as `harness pair` maps them to HTTP. */
@@ -130,7 +172,15 @@ export function startGateway(host: GatewayHost): StartedGateway {
     // Unpairing a device here takes it out of the account's log too — or the log would trust it again.
     void devLogSyncer?.remove(pub)
   }
-  if (host.signedIn) syncer.start()
+  // Started once this machine is signed in: at start, or on the first link-up after a sign-in that the
+  // core told it of (`ops.account`).
+  let groupStarted = false
+  const startGroup = (): void => {
+    if (groupStarted || !account.machineId) return
+    groupStarted = true
+    syncer.start()
+  }
+  if (host.signedIn) { groupStarted = true; syncer.start() }
   const devlog = new DeviceLogSyncer({
     store: new DeviceLogStore(),
     identity: () => { const id = relayIdentityStore.getIdentity(); return { pub: b64e(id.pub), priv: id.priv } },
@@ -164,6 +214,7 @@ export function startGateway(host: GatewayHost): StartedGateway {
     ])],
     tombstoned: (pub) => !!syncer.tombstoned(pub),
     blocked: (pub) => !!syncer.isBlocked(pub),
+    isTrusted: (pub) => gateway.pairedPeers().some((p) => p.identityPub === pub),
     announce: (m) => {
       const fp = fingerprint(b64d(m.pub))
       console.log(`[devlog] NEW DEVICE on this account: ${m.label || '(no name)'} (${m.kind}) ${fp} — not yours? harness devices remove ${fp}`)
@@ -208,14 +259,19 @@ export function startGateway(host: GatewayHost): StartedGateway {
     if (devlog.list().members.some((m) => m.pub === pub && !m.self)) void devlog.remove(pub)
   }
   gateway.onDeviceKeysChanged = () => { void devlog.refresh() }
-  let devlogTimer: ReturnType<typeof setInterval> | null = null
-  if (host.signedIn) {
-    // Every time the link comes up: a sign-in from before the log existed joins it with no one doing
-    // anything, and one that joined already only reads what it missed while offline.
-    gateway.onLinkUp = () => { void devlog.register() }
-    devlogTimer = setInterval(() => { void devlog.refresh() }, 10 * 60_000)
-    devlogTimer.unref()
+  // Every time the link comes up: a sign-in from before the log existed joins it with no one doing
+  // anything, and one that joined already only reads what it missed while offline. Wired signed out
+  // too, and register() rather than refresh() on the timer: a daemon that was signed out when it started
+  // never registered after `harness login` signed it in (register does nothing while signed out).
+  gateway.onLinkUp = () => {
+    startGroup()
+    void devlog.register()
   }
+  const devlogTimer = setInterval(() => { void devlog.register() }, 10 * 60_000)
+  devlogTimer.unref()
+  // Signed out there is no account, and no device log of one, to find a key on.
+  const readForHello = unknownHelloReader(devlog, (line) => console.log(line))
+  gateway.onUnknownHello = (pub) => account.machineId ? readForHello(pub) : Promise.resolve()
 
   // The Wi-Fi device's direct links, which carry its E2EE sessions: only while its service runs in the
   // core, or a device it connected would be answered by nothing.
@@ -340,7 +396,8 @@ export function startGateway(host: GatewayHost): StartedGateway {
     revokeIdentity: (identity) => { gateway.e2ee.revoke(fingerprint(b64d(identity))) },
     account: (next) => {
       account = next
-      if (host.signedIn) void devlog.register()
+      startGroup()
+      void devlog.register()
     },
     reachable: (machineIds) => { reachable = machineIds ? new Set(machineIds) : null },
   }
@@ -350,7 +407,7 @@ export function startGateway(host: GatewayHost): StartedGateway {
     ops,
     windowRelay: relayPool,
     stop: async () => {
-      if (devlogTimer) clearInterval(devlogTimer)
+      clearInterval(devlogTimer)
       syncer.stop()
       direct?.stop()
       relayPool.close()

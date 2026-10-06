@@ -69,7 +69,7 @@ class FakeBackend {
 
 /** `signIn`: the sign-in's epoch (one starting ADOPTED_SIGN_IN is adopted), made at `signInAt` (the
  *  clock's 5_000 by default — just now). */
-function setup(opts: { known?: string[]; tombstoned?: string[]; blocked?: string[]; store?: DeviceLogStore; backend?: FakeBackend; signIn?: () => string | null; signInAt?: number | null } = {}) {
+function setup(opts: { known?: string[]; tombstoned?: string[]; blocked?: string[]; store?: DeviceLogStore; backend?: FakeBackend; signIn?: () => string | null; signInAt?: number | null; isTrusted?: (pub: string) => boolean } = {}) {
   const backend = opts.backend ?? new FakeBackend()
   const store = opts.store ?? new DeviceLogStore(join(mkdtempSync(join(tmpdir(), 'devlog-')), 'devlog.json'))
   const calls = {
@@ -94,6 +94,7 @@ function setup(opts: { known?: string[]; tombstoned?: string[]; blocked?: string
     trustedNow: () => [...trusted],
     tombstoned: (pub) => tombstoned.has(pub),
     blocked: (pub) => (opts.blocked ?? []).includes(pub),
+    ...(opts.isTrusted ? { isTrusted: opts.isTrusted } : {}),
     announce: calls.announce,
     removed: calls.removed,
     conflict: calls.conflict,
@@ -354,6 +355,118 @@ describe('DeviceLogSyncer', () => {
     t.backend.offline = true
     await t.syncer.register()
     expect(t.store.read().state).toBeNull()
+    expect(t.calls.adopt).not.toHaveBeenCalled()
+  })
+})
+
+describe('DeviceLogSyncer — a key the log has and this machine does not trust', () => {
+  const adopted = (t: ReturnType<typeof setup>): string[] => t.calls.adopt.mock.calls.flat(2).map((m: { pub: string }) => m.pub)
+  it('trustFromLog trusts a key on the log even when the head has not moved since it was read', async () => {
+    const t = setup()
+    t.backend.add(phone, 'viewer', '', 'phone')
+    await t.syncer.register()
+    t.calls.adopt.mockClear()
+    // The head is the one already verified: reading the log adopts nothing, the key is trusted all the same.
+    await t.syncer.refresh()
+    expect(t.calls.adopt).not.toHaveBeenCalled()
+    expect(await t.syncer.trustFromLog(phone.pub)).toBe('trusted')
+    expect(adopted(t)).toEqual([phone.pub])
+    expect(t.calls.announce).not.toHaveBeenCalled()
+    expect(await t.syncer.trustFromLog(me.pub)).toBe('self')
+  })
+
+  it('trustFromLog reads the log first: a key added since the last read is trusted', async () => {
+    const t = setup()
+    await t.syncer.register()
+    t.backend.add(phone, 'viewer', '', 'phone')
+    expect(await t.syncer.trustFromLog(phone.pub)).toBe('trusted')
+    expect(adopted(t)).toContain(phone.pub)
+  })
+
+  it('trustFromLog reads again after a read that was already on its way', async () => {
+    const t = setup()
+    await t.syncer.register()
+    let release: () => void = () => {}
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    const fetch = t.backend.fetch.getMockImplementation()!
+    t.backend.fetch.mockImplementationOnce(async (since) => { const got = await fetch(since); await gate; return got })
+    const earlier = t.syncer.refresh()
+    t.backend.add(phone, 'viewer', '', 'phone')
+    const outcome = t.syncer.trustFromLog(phone.pub)
+    release()
+    await earlier
+    expect(await outcome).toBe('trusted')
+  })
+
+  it('trustFromLog says why a key is not trusted', async () => {
+    const t = setup({ blocked: [box2.pub], tombstoned: [phone.pub] })
+    t.backend.add(box2, 'machine', MID2, 'box2')
+    t.backend.add(phone, 'viewer', '', 'phone')
+    // Read, not registered: with this machine on the log, it would write the tombstone into it.
+    await t.syncer.refresh()
+    t.calls.adopt.mockClear()
+    expect(await t.syncer.trustFromLog(evil.pub)).toBe('absent')
+    expect(await t.syncer.trustFromLog(box2.pub)).toBe('blocked')
+    expect(await t.syncer.trustFromLog(phone.pub)).toBe('tombstoned')
+    t.store.write({ ...t.store.read(), suspended: [phone.pub] })
+    expect(await t.syncer.trustFromLog(phone.pub)).toBe('suspended')
+    expect(t.calls.adopt).not.toHaveBeenCalled()
+  })
+
+  it('trustFromLog trusts nothing from a frozen log, and nothing without one', async () => {
+    const offline = setup()
+    offline.backend.offline = true
+    expect(await offline.syncer.trustFromLog(phone.pub)).toBe('unavailable')
+    const t = setup()
+    t.backend.add(phone, 'viewer', '', 'phone')
+    await t.syncer.register()
+    t.backend.lie = t.backend.entries.slice(0, 1)
+    await t.syncer.refresh()
+    expect(t.store.read().frozen?.reason).toBe('rollback')
+    t.calls.adopt.mockClear()
+    expect(await t.syncer.trustFromLog(phone.pub)).toBe('frozen')
+    expect(t.calls.adopt).not.toHaveBeenCalled()
+  })
+
+  it('every read trusts again an active key this machine does not trust, and announces nothing', async () => {
+    const trusted = new Set<string>()
+    const t = setup({ isTrusted: (pub) => trusted.has(pub) })
+    t.backend.add(box2, 'machine', MID2, 'box2')
+    t.backend.add(phone, 'viewer', '', 'phone')
+    await t.syncer.register()
+    // The adoption trusted box2; phone's was lost (a crash between the head and the trust).
+    trusted.add(box2.pub)
+    t.calls.adopt.mockClear()
+    await t.syncer.refresh()
+    expect(t.calls.adopt).toHaveBeenCalledOnce()
+    expect(adopted(t)).toEqual([phone.pub])
+    expect(t.calls.announce).not.toHaveBeenCalled()
+    trusted.add(phone.pub)
+    t.calls.adopt.mockClear()
+    await t.syncer.refresh()
+    expect(t.calls.adopt).not.toHaveBeenCalled()
+  })
+
+  it('trusts again no key that is blocked, tombstoned or suspended, nor from a frozen log', async () => {
+    const t = setup({ isTrusted: () => false, blocked: [box2.pub], tombstoned: [phone.pub] })
+    const viewer = key(4)
+    t.backend.add(box2, 'machine', MID2, 'box2')
+    t.backend.add(phone, 'viewer', '', 'phone')
+    t.backend.add(evil, 'viewer', '', 'evil')
+    t.backend.add(viewer, 'viewer', '', 'viewer')
+    // Read, not registered: with this machine on the log, it would write the tombstone into it. That this
+    // machine's own key is never trusted again is the test above (it is on the log there).
+    await t.syncer.refresh()
+    t.store.write({ ...t.store.read(), suspended: [evil.pub] })
+    expect(t.store.read().state!.active[phone.pub]).toBeDefined()
+    t.calls.adopt.mockClear()
+    await t.syncer.refresh()
+    expect(adopted(t)).toEqual([viewer.pub])
+    t.backend.lie = t.backend.entries.slice(0, 1)
+    await t.syncer.refresh()
+    expect(t.store.read().frozen).not.toBeNull()
+    t.calls.adopt.mockClear()
+    await t.syncer.refresh()
     expect(t.calls.adopt).not.toHaveBeenCalled()
   })
 })

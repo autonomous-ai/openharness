@@ -104,6 +104,9 @@ export class RelayGateway implements GatewayPort {
   onPeerLinked?: (peer: LinkedPeer) => void
   /** A person unpaired this identity here (not the trust group removing it). */
   onUnpaired?: (identityPub: string) => void
+  /** A hello signed by a key not paired here: the account's device key log may name it (manager.ts
+   *  `onUnknownHello`). The hello waits for this, a few seconds at most. */
+  onUnknownHello: ((identityPub: string) => Promise<void>) | null = null
 
   constructor({ machineId, auth, computerId = '', autonomousEnv = 'prod', core }: RelayGatewayOptions) {
     this.machineId = machineId
@@ -142,6 +145,7 @@ export class RelayGateway implements GatewayPort {
         this.onPeerLinked?.(peer)
       },
       onUnpaired: (pub) => this.onUnpaired?.(pub),
+      onUnknownHello: (pub) => this.onUnknownHello?.(pub) ?? Promise.resolve(),
     })
     this.terminalP2p = new TerminalP2pResponderPool({
       sendSignal: (connId, type, payload) => this.sendP2pSignal(connId, type, payload),

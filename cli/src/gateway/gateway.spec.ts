@@ -15,6 +15,8 @@ import * as C from '../lib/e2ee/core.js'
 import { TerminalBinaryKind } from '../lib/terminalBinary.js'
 import { bindMessageRequest } from '../testing/socketCore.js'
 import { dispatchDown, gatewayOf, relaySocket, upstreamOf } from '../testing/relaySocket.js'
+import type { DeviceLogTrustOutcome } from '../lib/e2ee/deviceLogSyncer.js'
+import { unknownHelloReader } from './start.js'
 
 /** The machine the sessions are bound to: every hello and welcome is signed over it. */
 const MACHINE = 'a1b2c3d4e5f60718293a4b5c6d7e8f90'
@@ -256,5 +258,63 @@ describe('the Wi-Fi device, over the gateway\'s sessions', () => {
     await dispatchDown(socket, withSession, 'dial-1')
     expect(heard.mock.lastCall?.[2]).toBeNull()
     await socket.stop()
+  })
+})
+
+describe('a hello from a key the device key log may name', () => {
+  it('waits for the gateway to read the log, and opens the session the read trusted', async () => {
+    const socket = relaySocket(MACHINE)
+    const gateway = gatewayOf(socket)
+    const identity = C.newIdentity()
+    const pub = C.b64e(identity.pub)
+    const asked: string[] = []
+    gateway.onUnknownHello = async (key) => { asked.push(key); gateway.trustPeer({ pub: key, label: 'Chrome · macOS', kind: 'viewer' }) }
+    const eph = C.newEphemeral()
+    await dispatchDown(socket, { type: 'e2e_hello', payload: { identityPub: pub, ephPub: C.b64e(eph.pub), sig: C.b64e(C.helloSig(identity.priv, MACHINE, eph.pub)) } }, 'web-1')
+    await vi.waitFor(() => expect(queuedFor(socket, 'web-1').some((frame) => frame.type === 'e2e_welcome')).toBe(true))
+    expect(asked).toEqual([pub])
+    expect(socket.remoteClient('web-1')).toMatchObject({ role: 'web', identity: pub })
+    await socket.stop()
+  })
+})
+
+describe('unknownHelloReader', () => {
+  const pub = C.b64e(C.newIdentity().pub)
+
+  it('reads the log for a key, says what it found, and not again for the same key within ten seconds', async () => {
+    let now = 1_000
+    const lines: string[] = []
+    const trustFromLog = vi.fn(async (): Promise<DeviceLogTrustOutcome> => 'absent')
+    const read = unknownHelloReader({ trustFromLog }, (line) => lines.push(line), () => now)
+    await read(pub)
+    const fp = C.fingerprint(C.b64d(pub))
+    expect(lines).toEqual([
+      `[e2ee] hello from ${fp} is not paired here — re-reading the device log`,
+      `[e2ee] ${fp}: not on the account's device list`,
+    ])
+    now += 9_999
+    await read(pub)
+    expect(trustFromLog).toHaveBeenCalledTimes(1)
+    now += 1
+    trustFromLog.mockResolvedValueOnce('trusted')
+    await read(pub)
+    expect(trustFromLog).toHaveBeenCalledTimes(2)
+    expect(lines.at(-1)).toBe(`[e2ee] ${fp}: trusted: it is on the account's device list`)
+  })
+
+  it('makes a hello said again while the read is on its way wait for that read, not be denied at once', async () => {
+    let finish!: (outcome: DeviceLogTrustOutcome) => void
+    const trustFromLog = vi.fn(() => new Promise<DeviceLogTrustOutcome>((resolve) => { finish = resolve }))
+    const read = unknownHelloReader({ trustFromLog }, () => {}, () => 1_000)
+    let firstDone = false
+    let againDone = false
+    void read(pub).then(() => { firstDone = true })
+    void read(pub).then(() => { againDone = true })
+    await Promise.resolve()
+    expect(againDone).toBe(false)
+    finish('trusted')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect([firstDone, againDone]).toEqual([true, true])
+    expect(trustFromLog).toHaveBeenCalledTimes(1)
   })
 })
