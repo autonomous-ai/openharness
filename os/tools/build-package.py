@@ -50,6 +50,8 @@ def stage(source, runtime, destination, commit):
         'os/system.py': 'usr/lib/harness-os/system.py',
         'os/boot_profile.py': 'usr/lib/harness-os/boot_profile.py',
         'os/t2_install.py': 'usr/lib/harness-os/t2_install.py',
+        'os/t2_update.py': 'usr/lib/harness-os/t2_update.py',
+        'os/tools/prepare-t2-kernel.py': 'usr/lib/harness-os/t2_kernel.py',
         'os/tools/prepare-t2-firmware.py': 'usr/lib/harness-os/t2_firmware.py',
         'os/platforms/apple-t2/firmware_names.py': 'usr/lib/harness-os/firmware_names.py',
         'os/platforms/apple-t2/kernel.json': 'usr/share/harness-os/apple-t2/kernel.json',
@@ -124,7 +126,8 @@ def bootstrap(source, folder):
     """Ship every helper needed before the first platform-aware OS package."""
     files = {'apply-update.py': 'runtime_update.py', 'boot_profile.py': 'boot_profile.py',
              't2_install.py': 't2_install.py', 't2_firmware.py': 'tools/prepare-t2-firmware.py',
-             'firmware_names.py': 'platforms/apple-t2/firmware_names.py'}
+             'firmware_names.py': 'platforms/apple-t2/firmware_names.py',
+             't2_update.py': 't2_update.py', 't2_kernel.py': 'tools/prepare-t2-kernel.py'}
     spec = importlib.util.spec_from_file_location('bootstrap_runtime', source / 'os/runtime_update.py')
     updater = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(updater)

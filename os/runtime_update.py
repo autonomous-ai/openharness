@@ -24,7 +24,7 @@ LOCK = Path('/usr/share/harness-os/lock.json')
 PACKAGE_DB = Path('/var/lib/pacman/local')
 RESTART_REQUIRED = Path('/run/harness-os-restart-required')
 BOOTSTRAP_FILES = ('apply-update.py', 'boot_profile.py', 't2_install.py',
-                   't2_firmware.py', 'firmware_names.py')
+                   't2_firmware.py', 'firmware_names.py', 't2_update.py', 't2_kernel.py')
 
 
 def digest(path):
@@ -148,7 +148,7 @@ def validate_bundle(folder, base):
     if path.is_symlink() or not path.is_file() or package.get('bytes') != path.stat().st_size or digest(path) != package.get('sha256'):
         raise ValueError('Package checksum or size mismatch; download the complete bundle again.')
     inspect_package(path, version, runtime)
-    boot_module().validate_update(path)
+    boot_module().validate_update(path, allow_kernel_change=True)
     return manifest, path
 
 
@@ -157,6 +157,18 @@ def installed_version():
     if len(value) != 2 or value[0] != 'harness-os' or not re.fullmatch(r'[0-9A-Za-z.+_-]+', value[1]):
         raise ValueError('Cannot identify the installed Harness package.')
     return value[1]
+
+
+def prepare_kernel_bundle(folder):
+    """Finish T2 downloads before the public updater advances any Arch packages."""
+    manifest = read_json(folder / 'package-manifest.json')
+    with tempfile.TemporaryDirectory(prefix='.kernels-', dir=folder) as temp:
+        staging = Path(temp)
+        change = boot_module().prepare_update(folder / manifest['package']['name'], folder, staging)
+        if change:
+            for pin in (change['previous'], change['candidate']):
+                name = pin['package']['filename']
+                (staging / name).replace(folder / name)
 
 
 def verify_runtime(expected):
@@ -216,10 +228,10 @@ def latest():
     return receipt
 
 
-def install_package(package, version, runtime):
+def install_package(package, version, runtime, additional=()):
     # The caller already holds the system-operation lock and made its checkpoint.
     # Keep pacman's own lock and other hooks; suppress only our duplicate checkpoint.
-    subprocess.run(['pacman', '--noconfirm', '-U', str(package)], check=True,
+    subprocess.run(['pacman', '--noconfirm', '-U', *map(str, additional), str(package)], check=True,
                    env=dict(os.environ, HN_OS_UPDATE_CHECKPOINT='1'))
     if installed_version() != version:
         raise ValueError('The installed package version did not change as expected.')
@@ -245,32 +257,46 @@ def apply(folder, system, base, installation):
     STATE.mkdir(parents=True, exist_ok=True, mode=0o700)
     STATE.chmod(0o700)
     # Copy before mutation; a user-owned download may change while it is being read.
-    with tempfile.TemporaryDirectory(prefix='.incoming-', dir=STATE) as temp:
+    # Stage outside the root subvolume: a kernel download must not be copied
+    # into every root checkpoint in addition to the retained rollback package.
+    with tempfile.TemporaryDirectory(prefix='.harness-incoming-', dir=system.CHECKPOINTS) as temp:
         incoming = Path(temp)
         shutil.copyfile(source_package, incoming / source_package.name)
         system.write_json(incoming / 'package-manifest.json', manifest)
         validate_bundle(incoming, base)
+        kernel_change = boot.prepare_update(incoming / source_package.name, folder, incoming)
+        kernel = boot.module('t2_update') if kernel_change else None
         checkpoint = system.checkpoint('before-harness-update')
         identity = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ-') + uuid.uuid4().hex[:8]
         saved = STATE / identity
         saved.mkdir(mode=0o700)
         backup = saved / 'previous.pkg.tar.gz'
         package_backup(system.CHECKPOINTS / checkpoint / 'root', old_version, backup)
+        with backup.open('rb') as handle:
+            os.fsync(handle.fileno())
+        if kernel_change:
+            kernel.retain(kernel_change, incoming, saved)
         receipt = {'id': identity, 'status': 'applying', 'started_at': now(),
                    'root_uuid': installation['root_uuid'], 'checkpoint': checkpoint,
                    'previous_version': old_version, 'previous_runtime': old_runtime,
                    'backup_sha256': digest(backup), 'candidate': manifest}
+        if kernel_change:
+            receipt['kernel_update'] = kernel_change
         system.write_json(saved / 'receipt.json', receipt)
         system.write_json(STATE / 'latest.json', {'id': identity})
         try:
             # The fast user updater must not mix a running old session with newly
             # installed OS integration. /run clears this only on a real reboot.
             system.write_json(RESTART_REQUIRED, {'status': 'applying', 'package': manifest['package']['version']})
-            install_package(incoming / source_package.name, manifest['package']['version'], manifest['runtime'])
+            additional = [incoming / kernel_change['candidate']['package']['filename']] if kernel_change else []
+            install_package(incoming / source_package.name, manifest['package']['version'], manifest['runtime'], additional)
             boot.restore_firmware()
             # Plymouth and other initramfs assets may change without a kernel
             # package transaction, so rebuild them on this path as well.
             system.run('mkinitcpio', '-P')
+            if kernel_change:
+                system.run('grub-mkconfig', '-o', '/boot/grub/grub.cfg')
+                kernel.verify(kernel_change['candidate'], kernel_change['candidate_files'])
         except BaseException:
             receipt.update(status='failed', finished_at=now())
             system.write_json(saved / 'receipt.json', receipt)
@@ -300,13 +326,21 @@ def rollback(system, installation):
     # A legacy PC rollback removes the new platform helpers from disk. Retain
     # the loaded helper until this transaction finishes using it.
     boot = boot_module()
-    boot.validate_update(backup)
+    change = receipt.get('kernel_update')
+    boot.validate_update(backup, allow_kernel_change=bool(change), kernel_rollback=bool(change))
+    kernel = boot.module('t2_update') if change else None
+    # Verify the retained archive and matching previous Harness pin before
+    # recording rollback or touching pacman's database. No network is needed.
+    additional = [kernel.rollback(change, folder, backup)] if change else []
     receipt.update(status='rolling-back', rollback_started_at=now())
     system.write_json(folder / 'receipt.json', receipt)
     system.write_json(RESTART_REQUIRED, {'status': 'failed'})
-    install_package(backup, receipt['previous_version'], receipt['previous_runtime'])
+    install_package(backup, receipt['previous_version'], receipt['previous_runtime'], additional)
     boot.restore_firmware()
     system.run('mkinitcpio', '-P')
+    if change:
+        system.run('grub-mkconfig', '-o', '/boot/grub/grub.cfg')
+        kernel.verify(change['previous'], change['previous_files'])
     receipt.update(status='rolled-back', rollback_finished_at=now())
     system.write_json(folder / 'receipt.json', receipt)
     system.write_json(RESTART_REQUIRED, {'status': 'ready', 'package': receipt['previous_version']})
