@@ -618,7 +618,7 @@ pub(super) fn launch(app: &mut App, request: Request) {
                     }
                     reply_data(app,&request,0,"",Some(json!({"attached":true})));
                     let shell=app.shells.remove(&source);app.open_agent(&machine,id,Placement::Replace);if shell{app.shells.insert(source.clone());}
-                    visiting_created(app,&source,source_cwd,&machine,id);app.save_sessions();
+                    visiting_shell_launch(app,&source,source_cwd,&machine,id);app.save_sessions();
                 }else{finish(app,1,"The computer did not create the agent.")},
                 Err(e)=>finish(app,1,&format!("Could not start: {e}")),
             }

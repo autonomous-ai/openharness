@@ -5,7 +5,7 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { promisify } from 'node:util'
-import { afterEach, expect, it, onTestFailed } from 'vitest'
+import { afterEach, expect, it } from 'vitest'
 import { startFleet, type Fleet } from './harness/fleet.js'
 import { until } from './harness/daemon.js'
 
@@ -14,7 +14,11 @@ const binary = process.env.HN_TUI_BINARY && resolve(process.env.HN_TUI_BINARY)
 const quote = (value: string) => `'${value.replace(/'/g, "'\\''")}'`
 let world: Fleet | undefined
 let hn: ((...args: string[]) => Promise<string>) | undefined
-afterEach(async () => {
+afterEach(async context => {
+  if (context.task.result?.state === 'fail') {
+    console.log('hn:', await hn?.('capture-pane', '-p', '-S', '-').catch(String))
+    console.log('source:', world?.a.daemon.log().slice(-8000), 'destination:', world?.b.daemon.log().slice(-8000))
+  }
   await hn?.('kill-server').catch(() => {})
   await world?.close()
   hn = undefined; world = undefined
@@ -25,10 +29,6 @@ it.runIf(binary)('keeps connected local shells interactive and composes a remote
   expect(process.env.E2E_BUNDLE_PATH, 'run with E2E_BUNDLE=1').toBeTruthy()
   world = await startFleet({ envA: { SHELL: '/bin/zsh' }, envB: { SHELL: '/bin/zsh' } })
   const { a, b } = world
-  onTestFailed(async () => {
-    console.log('hn:', await hn?.('capture-pane', '-p', '-S', '-').catch(String))
-    console.log('source:', a.daemon.log().slice(-8000), 'destination:', b.daemon.log().slice(-8000))
-  })
   // These wrappers are the private equivalent of installed harness/hn binaries. They
   // retain each daemon's own environment and never fall through to a user's install.
   for (const machine of [a, b]) {
