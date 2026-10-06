@@ -16,6 +16,34 @@ from test_t2_firmware import firmware, source_fixture
 from vm import VM, check_graphical_keyboard
 
 
+def guest_result(output):
+    # Shell integration may put OSC metadata before the first output line.
+    # Compare the structured evidence, never the changing shell transcript.
+    matches = re.findall(r'T2_RESULT=(\{[^\r\n]+\})', output)
+    if len(matches) != 1:
+        raise ValueError('Expected exactly one T2 guest result.')
+    return json.loads(matches[0])
+
+
+def image_source_binding(root, image_source, observer_source):
+    def git(*args):
+        return subprocess.check_output(['git', '-C', str(root), *args], text=True).strip()
+    if not re.fullmatch(r'[a-f0-9]{40}', image_source):
+        raise ValueError('Invalid image source identity.')
+    changed = git('diff', '--name-only', image_source, observer_source).splitlines()
+    workflow = '.github/workflows/os-t2.yml'
+    if any(not name.startswith('os/tests/') and name != workflow for name in changed):
+        raise ValueError('Image build or runtime inputs changed; build a new T2 image.')
+    if workflow in changed:
+        old = git('show', image_source + ':' + workflow)
+        new = git('show', observer_source + ':' + workflow)
+        if '\n  machine:' not in old or '\n  machine:' not in new or old.split('\n  machine:', 1)[0] != new.split('\n  machine:', 1)[0]:
+            raise ValueError('Image workflow inputs changed; build a new T2 image.')
+    return {'image_source': image_source, 'observer_source': observer_source,
+            'changed_paths': changed, 'build_inputs_identical': True,
+            'scope': 'Complete repository except OS test observers and the machine-only workflow job; image job is byte-identical.'}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--iso', type=Path, required=True)
@@ -28,7 +56,8 @@ def main():
     source = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
     if subprocess.check_output(['git', 'status', '--porcelain'], text=True).strip():
         parser.error('Commit the observer before native acceptance.')
-    assert image['platform'] == 'apple-t2' and image['source_commit'] == source
+    assert image['platform'] == 'apple-t2'
+    binding = image_source_binding(Path(__file__).resolve().parents[2], image['source_commit'], source)
     assert iso.name == image['iso']['name'] and iso.stat().st_size == image['iso']['bytes']
     with iso.open('rb') as handle:
         assert hashlib.file_digest(handle, 'sha256').hexdigest() == image['iso']['sha256']
@@ -39,6 +68,7 @@ def main():
     firmware.prepare(folder / 'synthetic-firmware', bundle, model)
     lock = json.loads((Path(__file__).parents[1] / 'platforms/apple-t2/kernel.json').read_text())
     record = {'status': 'running', 'started_at': time.time(), 'source_commit': source,
+              'image_source_commit': image['source_commit'], 'source_binding': binding,
               'image': image['iso'], 'kernel': lock, 'synthetic_model': model, 'checks': [],
               'limits': ['QEMU does not emulate the T2 bridge, built-in input, radios, audio, graphics or suspend.',
                          'Firmware contains invented sentinel bytes. This tests preservation, not radio functionality.',
@@ -82,8 +112,7 @@ def main():
         copy_file(vm, Path(__file__).with_name('t2_install_guest.py').read_bytes(), '/tmp/t2-guest.py')
         output, _ = vm.command('sudo -n python3 /tmp/t2-guest.py verify')
         (folder / (label + '-verification.log')).write_text(output)
-        marker = 'T2_RESULT='
-        return json.loads(next(line.split(marker, 1)[1] for line in output.splitlines() if line.startswith(marker)))
+        return guest_result(output)
 
     try:
         live()
@@ -97,19 +126,25 @@ def main():
         # Hash both GPT copies and the full export partition around refusals.
         fingerprint = 'python3 /tmp/t2-guest.py fingerprint'
         before, _ = vm.command(fingerprint)
+        before = guest_result(before)
         output, status = vm.command(install, timeout=90, check=False)
         (folder / 'missing-firmware.log').write_text(output)
         assert status != 0 and 'No disk has been erased' in output
         after, _ = vm.command(fingerprint)
-        assert before.strip() == after.strip(), 'Missing firmware changed the disk'
+        after = guest_result(after)
+        record['missing_firmware_disk'] = {'before': before, 'after': after}
+        assert before == after, 'Missing firmware changed the disk'
         vm.command('mkdir /tmp/mac-efi && mount /dev/vda1 /tmp/mac-efi && '
                    'printf corrupt > /tmp/mac-efi/harness-apple-firmware.tar && umount /tmp/mac-efi')
         before, _ = vm.command(fingerprint)
+        before = guest_result(before)
         output, status = vm.command(install, timeout=90, check=False)
         (folder / 'corrupt-firmware.log').write_text(output)
         assert status != 0 and 'No disk has been erased' in output
         after, _ = vm.command(fingerprint)
-        assert before.strip() == after.strip(), 'Invalid firmware changed the disk'
+        after = guest_result(after)
+        record['invalid_firmware_disk'] = {'before': before, 'after': after}
+        assert before == after, 'Invalid firmware changed the disk'
         record['checks'].append('Missing and corrupt firmware both refuse installation; both GPT copies and the export partition remain byte-identical.')
         vm.command('mount /dev/vda1 /tmp/mac-efi')
         copy_file(vm, bundle.read_bytes(), '/tmp/mac-efi/harness-apple-firmware.tar')
