@@ -61,6 +61,27 @@ describe('service links', () => {
     expect(links.route('agents_list', {}, ASKER, reply)).toBe(false)
   })
 
+  it('asks a service what the core itself needs, as the core, and settles every way a routed request does', async () => {
+    const links = make({ owned: { monitor: ['machine_resources'] } })
+    // Down: unavailable at once, never a rejection.
+    await expect(links.call('monitor', 'resources', {})).resolves.toEqual({ error: 'SERVICE_UNAVAILABLE', service: 'monitor', retryable: true })
+    const monitor = sink()
+    const link = links.accept('monitor', TOKEN, monitor, vi.fn())!
+    const answered = links.call('monitor', 'storage', { agents: [], invalidate: true })
+    expect(monitor.sent).toEqual([{ type: 'storage', payload: { agents: [], invalidate: true, requestId: 'route-1' }, asker: { local: true, owner: true } }])
+    link.receive({ type: 'storage_result', payload: { requestId: 'route-1', entries: [['a1', { workspaceBytes: 1 }]] } })
+    await expect(answered).resolves.toEqual({ entries: [['a1', { workspaceBytes: 1 }]] })
+    // The types it asks are not the apps' to route.
+    expect(links.route('storage', {}, ASKER, vi.fn())).toBe(false)
+    // Too slow, or gone before it answers: unavailable.
+    const slow = links.call('monitor', 'resources', {})
+    vi.advanceTimersByTime(5_000)
+    await expect(slow).resolves.toEqual({ error: 'SERVICE_UNAVAILABLE', service: 'monitor', retryable: true })
+    const cut = links.call('monitor', 'resources', {})
+    link.closed()
+    await expect(cut).resolves.toEqual({ error: 'SERVICE_UNAVAILABLE', service: 'monitor', retryable: true })
+  })
+
   it('answers SERVICE_UNAVAILABLE at once while the service is down, and when it cannot be sent to', () => {
     const links = make()
     const reply = vi.fn()

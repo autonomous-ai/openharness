@@ -41,18 +41,14 @@ describe('the viewers in their own process', () => {
     const viewers = fakeViewers()
     let api: CoreApi | null = null
     let options: ServiceProcessOptions | null = null
-    let onSigterm: (() => void) | null = null
     const service = { stop: vi.fn() }
-    const exits: number[] = []
     const handle = runViewersService({
       dataDir: '/data', socketPath: '/data/daemon-1.sock', machineId: 'm', token: 't',
       run: (given) => { options = given; return service },
       start: (core: CoreApi, ports: CorePorts) => { api = core; ports.viewers = viewers.port },
-      onSignal: (signal, handler) => { if (signal === 'SIGTERM') onSigterm = handler },
-      exit: (code) => exits.push(code),
       ...over,
     })
-    return { viewers, api: api!, options: options!, service, handle, exits, sigterm: () => onSigterm!() }
+    return { viewers, api: api!, options: options!, service, handle }
   }
 
   it('reaches the core as `viewers`, through the socket and token it was given, and answers the apps nothing', () => {
@@ -184,24 +180,20 @@ describe('the viewers in their own process', () => {
     expect(viewers.port.detach).not.toHaveBeenCalled()
   })
 
-  it('stops its viewer servers before it goes, however it ends, and only once', async () => {
-    const { viewers, service, handle, exits, options, sigterm } = setup()
-    sigterm()
-    options.exit!(1)
-    handle.stop()
-    await flush()
+  it('stops its viewer servers when its process stops it, and only once, however often asked', async () => {
+    const { viewers, service, handle } = setup()
+    const first = handle.stop()
+    const second = handle.stop()
+    await Promise.all([first, second])
     expect(service.stop).toHaveBeenCalledOnce()
     expect(viewers.port.stop).toHaveBeenCalledOnce()
-    expect(exits).toEqual([0, 1])
   })
 
-  it('goes all the same when its viewers fail to stop', async () => {
+  it('says so when its viewers fail to stop: its process goes all the same (services/process.ts)', async () => {
     const viewers = fakeViewers()
     viewers.port.stop.mockRejectedValue(new Error('a watch would not close'))
-    const { exits, sigterm } = setup({ start: (_core, ports) => { ports.viewers = viewers.port } })
-    sigterm()
-    await flush()
-    expect(exits).toEqual([0])
+    const { handle } = setup({ start: (_core, ports) => { ports.viewers = viewers.port } })
+    await expect(handle.stop()).rejects.toThrow('a watch would not close')
   })
 
   it('does not run without viewers: the master starts it again, or parks it', () => {
@@ -247,19 +239,9 @@ describe('the viewers in their own process', () => {
     api.clients.dshInstallStatus({ phase: 'clone' })
   })
 
-  it('runs as a real service process by default: its viewers, its signal, its exit', async () => {
-    const once = vi.spyOn(process, 'once').mockImplementation(() => process)
-    const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never)
-    try {
-      runViewersService({ dataDir: '/data', socketPath: '/data/daemon-1.sock', machineId: 'm', token: 't' })
-      expect(runServiceProcess).toHaveBeenCalledWith(expect.objectContaining({ name: 'viewers', socketPath: '/data/daemon-1.sock' }))
-      const [signal, handler] = once.mock.calls.at(-1)!
-      expect(signal).toBe('SIGTERM')
-      ;(handler as () => void)()
-      await vi.waitFor(() => expect(exit).toHaveBeenCalledWith(0))
-    } finally {
-      once.mockRestore()
-      exit.mockRestore()
-    }
+  it('runs as a real service by default: its viewers, on its own link to the core', async () => {
+    const handle = runViewersService({ dataDir: '/data', socketPath: '/data/daemon-1.sock', machineId: 'm', token: 't' })
+    expect(runServiceProcess).toHaveBeenCalledWith(expect.objectContaining({ name: 'viewers', socketPath: '/data/daemon-1.sock' }))
+    await handle.stop()
   })
 })

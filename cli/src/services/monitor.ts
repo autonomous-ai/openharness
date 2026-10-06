@@ -10,8 +10,8 @@ import { createHarnessStorageReader } from '../lib/harnessTelemetry.js'
 import { readMachineResources } from '../lib/machineResources.js'
 import { internalOnThrow } from './requestErrors.js'
 
-/** The request the monitor answers for the apps. */
-export const MONITOR_REQUESTS = ['machine_resources'] as const
+/** The request the monitor answers for the apps, declared in core/api.ts for the core to route. */
+export { MONITOR_REQUESTS } from '../core/api.js'
 
 export interface MonitorDeps {
   /** The machine's own totals. */

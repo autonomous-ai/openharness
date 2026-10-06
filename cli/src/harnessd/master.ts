@@ -16,7 +16,7 @@ import type { MasterMessage } from './protocol.js'
 import {
   PROBE_ANSWER, RESUME_ENV, createReexec, decodeResume, fingerprint, readMarker, recoverFailedReexec, removeMarker, runProbe, writeMarker,
 } from './reexec.js'
-import { KNOWN_SERVICES, ServiceSupervisor, serviceOptions, serviceProcessesEnv, serviceSpecs } from './services.js'
+import { SERVICE_HOSTS, ServiceSupervisor, serviceOptions, serviceProcessesEnv, serviceSpecs } from './services.js'
 import {
   DEFAULT_SUPERVISOR_OPTIONS, Supervisor, type CoreHandle, type SupervisorDeps, type SupervisorOptions, type SupervisorStatus,
 } from './supervisor.js'
@@ -221,7 +221,7 @@ export function probeMaster(config: { env: NodeJS.ProcessEnv; execArgv: string[]
     const handed = config.env[RESUME_ENV]
     const resume = decodeResume(handed)
     if (handed !== undefined && !resume) throw new Error('the state it would be handed is not one this master can read')
-    serviceSpecs(config.env, KNOWN_SERVICES)
+    serviceSpecs(config.env, SERVICE_HOSTS)
     const inert = { wallClock: () => Date.now() } as unknown as SupervisorDeps
     const status = new Supervisor(inert, supervisorOptions(config.env, config.execArgv), { version: config.version, resume }).status()
     say(`${PROBE_ANSWER} · protocol ${status.protocol} · v${status.masterVersion}`)
@@ -294,11 +294,12 @@ export function runMaster(config: MasterConfig): Supervisor {
     scriptPath: config.scriptPath, leanPath: config.serviceScriptPath, leanFingerprint: config.leanFingerprint,
     folderFingerprint, exists: existsSync, sameBundle: () => bundle() === own, log,
   })
-  const specs = serviceSpecs(env, KNOWN_SERVICES)
+  const specs = serviceSpecs(env, SERVICE_HOSTS)
   const services = new ServiceSupervisor(specs, {
     spawnService: (spec, extra) => {
       const script = lean.scriptFor(spec.name)
-      const handle = coreHandle(spawn(named(`harnessd-${spec.name}`), [...coreExecArgv(config.execArgv, spec.heapLimitMiB), script, '__service', spec.name], {
+      // One process for every service it hosts, each on its own link to the core (services/process.ts).
+      const handle = coreHandle(spawn(named(`harnessd-${spec.name}`), [...coreExecArgv(config.execArgv, spec.heapLimitMiB), script, '__service', spec.services.join(',')], {
         env: { ...env, ...extra },
         stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
       }))

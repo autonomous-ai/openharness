@@ -32,9 +32,6 @@ export interface ViewersServiceOptions {
   run?: typeof runServiceProcess
   /** Swapped in tests for viewers that start no server and watch no file. */
   start?: typeof startViewers
-  /** How the master's stop (SIGTERM) reaches this process; this process's own signal when absent. */
-  onSignal?: (signal: NodeJS.Signals, handler: () => void) => void
-  exit?: (code: number) => void
 }
 
 /** Whether what the core sent is an agent this process can attach. */
@@ -131,7 +128,9 @@ export function runViewersService(options: ViewersServiceOptions): ServiceProces
     for (const agentId of [...sessions.keys()]) if (!listed.has(agentId) && !heard.has(agentId)) detach(agentId)
   }
 
-  const exit = options.exit ?? ((code: number) => process.exit(code))
+  // Its process stops it before it exits, however it ends (services/process.ts `hostServices`): the viewer
+  // servers run in process groups of their own and would otherwise outlive it, holding their ports, until
+  // the next viewers process reaped them. Once, whoever asks.
   let stopping: Promise<void> | null = null
   const stop = (): Promise<void> => {
     stopping ??= Promise.resolve().then(() => {
@@ -139,12 +138,6 @@ export function runViewersService(options: ViewersServiceOptions): ServiceProces
       return viewers.stop()
     })
     return stopping
-  }
-  // However this process ends (the master's SIGTERM, the master going, a test fault), its viewer servers
-  // are stopped first: they run in process groups of their own and would otherwise outlive it, holding
-  // their ports, until the next viewers process reaped them.
-  const leave = (code: number): void => {
-    void stop().catch(() => {}).then(() => exit(code))
   }
 
   const run = options.run ?? runServiceProcess
@@ -155,7 +148,6 @@ export function runViewersService(options: ViewersServiceOptions): ServiceProces
     token: options.token,
     // The apps ask the viewers nothing: only the core does, through the context it keeps.
     requests: {},
-    exit: leave,
     onEvent: (payload) => {
       if (payload.kind === 'attach' && isSession(payload.session)) {
         heard.add(payload.session.agentId)
@@ -174,6 +166,5 @@ export function runViewersService(options: ViewersServiceOptions): ServiceProces
       void connection.query('agents').then((answer) => { if (core === connection) catchUp(answer.agents) }, () => {})
     },
   })
-  ;(options.onSignal ?? ((signal, handler) => { process.once(signal, handler) }))('SIGTERM', () => leave(0))
-  return { stop: () => { void stop() } }
+  return { stop }
 }
