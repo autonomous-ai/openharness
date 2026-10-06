@@ -1041,6 +1041,42 @@ describe('local CLI WebSocket', () => {
     ws.close()
   })
 
+  it('takes the core\'s own services by their token, whatever machine id they name', async () => {
+    // A signed-in core serves under its account's machine id; its services name this computer's.
+    const accepted: string[] = []
+    const services = {
+      accept: (service: string, token: string) => {
+        if (token !== 'boot-token') return null
+        accepted.push(service)
+        return { receive: vi.fn(), closed: vi.fn() }
+      },
+    }
+    const url = await start(new FakeBackend(), { services })
+    const ws = new WebSocket(url)
+    await onceOpen(ws)
+    const connected = onceMessage(ws)
+    ws.send(JSON.stringify({
+      type: 'machine_select',
+      payload: { machineId: 'this-computer-id', localProtocolVersion: 1, role: 'service', service: 'search', token: 'boot-token' },
+    }))
+    await expect(connected).resolves.toMatchObject({ type: 'connected', payload: { machineId, service: 'search' } })
+    expect(accepted).toEqual(['search'])
+    ws.close()
+
+    // The token is the check: a wrong one is refused, whichever machine id it names.
+    for (const named of [machineId, 'this-computer-id']) {
+      const wrong = new WebSocket(url)
+      await onceOpen(wrong)
+      const closed = new Promise<number>((resolve) => wrong.once('close', resolve))
+      wrong.send(JSON.stringify({
+        type: 'machine_select',
+        payload: { machineId: named, localProtocolVersion: 1, role: 'service', service: 'search', token: 'guessed' },
+      }))
+      await expect(closed).resolves.toBe(4401)
+    }
+    expect(accepted).toEqual(['search'])
+  })
+
   it('rejects browser origins and machine-id mismatches', async () => {
     const url = await start(new FakeBackend())
     const browser = new WebSocket(url, { origin: 'https://example.com' })

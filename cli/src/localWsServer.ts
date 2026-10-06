@@ -386,8 +386,11 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
         return
       }
       // One of the core's own services, started by harnessd's master: its frames go to its link, and it
-      // never joins the windows' event stream.
-      if (requestedMachineId === options.machineId && payload.role === 'service') {
+      // never joins the windows' event stream. Known by its token, the secret the master gave only it and
+      // the core for this boot, never by the machine id it names: a signed-in core serves under its
+      // account's machine id while a service names this computer's, and matching them refused every
+      // service of every signed-in daemon (found by the release rehearsal, signed in).
+      if (payload.role === 'service') {
         const link = options.services?.accept(String(payload.service ?? ''), String(payload.token ?? ''), sink, close) ?? null
         if (!link) { close(4401, 'service refused'); return }
         serviceLink = link
