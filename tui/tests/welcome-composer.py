@@ -5,9 +5,10 @@ Uses only a disposable mock daemon, UI home and named tmux servers.
 import json, os, re, shlex, shutil, socket, subprocess, tempfile, time, urllib.request, uuid
 from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
-BASE = Path(tempfile.mkdtemp(prefix='hn-welcome-composer-', dir='/private/tmp'))
+BASE = Path(tempfile.mkdtemp(prefix='hn-welcome-composer-', dir='/tmp'))
 PROJECT = BASE / 'autonomous-harness'; PROJECT.mkdir()
-PORT = 19788
+PORT = int(os.environ.get('HN_WELCOME_TEST_PORT', '19788'))
+assert 19780 <= PORT <= 19789
 NAME = 'hn-welcome-composer-' + str(os.getpid())
 HN = BASE / 'hn'; shutil.copy2(os.environ.get('HN_WELCOME_TEST_BINARY', ROOT / 'target/release/harness-tui'), HN)
 TMUX = shutil.which('tmux'); assert TMUX

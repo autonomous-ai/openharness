@@ -6,7 +6,8 @@ ROOT=Path(__file__).resolve().parents[1]
 BASE=Path(tempfile.mkdtemp(prefix='hn-workspace-sessions-',dir='/tmp')).resolve()
 HN=BASE/'hn'; shutil.copy2(os.environ['HN_SESSION_TEST_BINARY'],HN)
 TMUX=shutil.which('tmux'); NODE=shutil.which('node'); assert TMUX and NODE
-NAME=f'hn-workspace-sessions-{os.getpid()}'; PORT=19929
+NAME=f'hn-workspace-sessions-{os.getpid()}'; PORT=int(os.environ.get('HN_SESSION_TEST_PORT','19929'))
+assert 19920 <= PORT <= 19929
 with socket.socket() as probe: probe.bind(('127.0.0.1',PORT))
 ENV={k:os.environ[k] for k in ('PATH','LANG','LC_ALL','TZ') if k in os.environ}
 ENV.update(HOME=str(BASE),HN_TMPDIR=str(BASE),HN_SOCKET_NAME=NAME,PORT=str(PORT),SHELL='/bin/sh',TERM='xterm-256color',COLORTERM='truecolor',HN_DESKTOP='off',HARNESS_TUI_DESK='sync',HARNESS_TUI_NOTIFY='off',HN_SESSION_FIXTURE='1')
