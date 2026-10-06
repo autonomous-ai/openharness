@@ -39,10 +39,10 @@ code = r'''
 '''
 # Keep real protocol capacities: a larger fake buffer can hide target truncation.
 code += defines('CABLE_READ_TOKEN_MAX','ID_MAX','CABLE_NAME_MAX','SWARM_ID_MAX','SWARMS_MAX','CABLE_MAX_AGENTS','MAX_PROJECTS')
-code += defines('NOTICES','QUESTION_MAX','OPTION_MAX','PANE_MEMORY_MAX','UI_FONT',source=source)
+code += defines('QUESTION_MAX','OPTION_MAX','PANE_MEMORY_MAX','UI_FONT',source=source)
 # Keep both branches: taking the first define would give a round replay the Pro's
 # six-row reading limits instead of the production round face's three rows.
-for name in ('Q_ROWS', 'DRAFT_ROWS'):
+for name in ('NOTICES', 'Q_ROWS', 'DRAFT_ROWS'):
     branch = re.search(r'^#ifdef DEVICE_PRO_COMPANION\n#define ' + name +
                        r'[^\n]*\n#else\n#define ' + name + r'[^\n]*\n#endif$', source, re.M)
     code += branch.group(0) + '\n' if branch else defines(name, source=source)

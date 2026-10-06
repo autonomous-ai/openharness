@@ -213,6 +213,12 @@ typedef struct {
     // Local display bookkeeping. Incoming snapshots never supply these values.
     bool read_on_dial;
     uint32_t display_revision;
+#ifdef DEVICE_PRO_COMPANION
+    // Local question lifetime; these fields never come from notif.replace.
+    char question_id[80];
+    uint64_t question_signature;
+    bool question_unavailable;
+#endif
 } cable_notif_t;
 
 bool cable_client_notification_read(const char *agent_id, const char *read_token);

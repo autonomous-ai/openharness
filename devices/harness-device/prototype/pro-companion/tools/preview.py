@@ -26,7 +26,7 @@ sys.path.insert(0, str(DEVICE / "firmware/test"))
 from native_shapes import defines, typedef  # noqa: E402
 from native_voice import voice_assets  # noqa: E402
 
-STATES = ("idle", "passed_task", "sent_goal", "sent_loop", "message_options", "notifications", "notifications_muted", "idle_paper", "working", "working_start", "working_59", "working_60", "working_long", "working_hour", "working_paper", "summary", "summary_paper", "mail", "needs_answer", "listening",
+STATES = ("idle", "passed_task", "sent_goal", "sent_loop", "message_options", "notifications", "notifications_muted", "idle_paper", "working", "working_start", "working_59", "working_60", "working_long", "working_hour", "working_paper", "summary", "summary_paper", "mail", "needs_answer", "read_question_home", "unavailable_question_home", "pending_question_home", "listening",
           "voice_preparing", "voice_sending", "offline", "done", "asleep",
           "carrying", "launcher", "companion", "daemons", "scenes", "updates", "question", "reader", "locked", "updating",
           "carry_listening", "carry_review", "carry_preview", "carry_rejected", "carry_offline", "carry_preview_offline",
@@ -173,6 +173,12 @@ static void fixture(const char *name) {
     else if(!strcmp(name,"summary")){s.agents[0].recap_ready=true;}
     else if(!strcmp(name,"mail")){s.notice_count=1;}
     else if(!strcmp(name,"needs_answer")){s.notice_count=1;s.notice[0].question=true;}
+    else if(!strcmp(name,"read_question_home")||!strcmp(name,"unavailable_question_home")||!strcmp(name,"pending_question_home")){
+        s.notice_count=1;s.notice[0].question=s.notice[0].read_on_dial=true;
+        COPY(s.notice[0].summary,"Which scope should we use?");
+        if(!strcmp(name,"unavailable_question_home"))s.notice[0].question_unavailable=true;
+        if(!strcmp(name,"pending_question_home")){s.q.pending=s.q.uncertain=true;COPY(s.q.item[0].answer,"This file only");}
+    }
     else if(!strcmp(name,"listening")){s.view=VOICE;s.voice_open=recording=true;character.motion.reaction.pose.level=3;}
     else if(!strcmp(name,"voice_preparing")){s.view=VOICE;s.voice_open=s.voice_start_pending=true;}
     else if(!strcmp(name,"voice_sending")){s.view=VOICE;s.voice_open=s.voice_waiting=true;}

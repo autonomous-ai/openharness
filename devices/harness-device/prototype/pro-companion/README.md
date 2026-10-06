@@ -164,7 +164,18 @@ The creature holds a letter while updates remain unread. Fresh updates get a
 brief delivery reaction; restoring notification history does not replay that
 reaction. Updates become read only after their content reaches the display.
 Reading is separate from **Open on desktop**, and reading a question never
-answers it.
+answers it. Read acknowledgments and an empty unread snapshot retain unanswered
+Pro question cards. Identical question replays remain read and quiet; a changed
+question or read occurrence revokes an unsent review. An unusable host response
+keeps an explicit desktop Open route without advertising a local Answer.
+
+Pro reserves 72 notification rows for the host's 64-question catalog plus eight
+unread notices. Results cannot evict unresolved questions or the current reader.
+Cumulative overflow admits the newest question, protects the exact current review
+and pending answer, and shows “More in Harness” in Updates; eviction never means
+answered. The bounded local catalog is volatile and bound to the owning computer.
+Only exact matching answer/close evidence resolves a retained question. A same-host
+link interruption retains attention, while a different host clears its local cards.
 
 Question choices and speech stay pinned to the reviewed question's identity and
 token. A disconnect or missing receipt leaves the answer visibly unconfirmed;
@@ -173,8 +184,9 @@ after an empty notification replacement. The read-only view lets you scroll thro
 the retained answers, check them in Harness, or explicitly Close the local copy to
 unblock other questions. Close never removes or acknowledges the host's alert, and
 cannot apply to a replacement question. Pending answers without uncertainty remain
-protected. A matching receipt, close event or replacement question keeps its existing
-authoritative behavior. A freshly read, already-submitted question may have no saved
+protected. A matching receipt or close event keeps its existing authoritative behavior.
+A newer question retains the prior unconfirmed answer until its own receipt, close
+or explicit local Close; it does not inherit that answer or its submission authority. A freshly read, already-submitted question may have no saved
 answer text on the device; the recovery view says so.
 Opening in the app is a separate, deliberate action. Older hosts use a plain
 open without a Return promise. A closed pane, pruned reading position or timed-out
@@ -540,3 +552,15 @@ replay, and `HABITAT_PRO_PREVIEW_DIR` records native 720 px PPMs. These checks c
 identity/revision guards, offline/unknown states, metadata storage failures,
 stale workers, local Close and read-only multi-part navigation. They do not
 establish physical unplug recovery, touch comfort, flash wear or terminal delivery.
+
+The read-question lifetime replay uses the same pinned SDK cJSON and Pro fonts:
+
+```sh
+IDF_PATH=/path/to/esp-idf-v5.5.3 python3 devices/harness-device/firmware/test/test_pro_question_lifetime.py
+```
+
+`HABITAT_QUESTION_TRANSCRIPT` optionally supplies the exact native Desktop/CLI
+cable event export. It replays real notification read receipts, empty unread
+snapshots, and question-close frames. Coverage includes 25/64-card navigation,
+72-row overflow, pinned old answers, changed hosts and stale taps. These are
+software replays, not physical touch or USB reliability measurements.

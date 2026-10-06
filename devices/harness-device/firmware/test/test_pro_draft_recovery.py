@@ -112,7 +112,7 @@ static bool config_save_pro_recovery(const pro_recovery_bookmark_t *b) {
 static bool config_clear_pro_recovery(void) {clear_calls++;if(fail_clear)return false;stored_present=false;return true;}
 '''
 for name in ("pro_send_feedback_clear", "pro_send_feedback_matches", "pro_send_feedback_begin", "pro_send_feedback_text", "pro_work_local", "pro_work_available", "pro_work_capture_available", "pro_work_draft_available", "pro_busy_reset", "ui_project_set_machine", "question_view", "question_rows", "voice_close", "draft_emit", "pro_draft_forget", "pro_draft_store_queue", "pro_draft_store_work", "pro_draft_restore", "make_action", "draft_move",
-             "ui_set_connected", "ui_draft_source", "draft_page", "ui_voice_draft", "ui_draft_state"):
+             "notice_sync_view", "pro_notice_source", "ui_set_connected", "ui_draft_source", "draft_page", "ui_voice_draft", "ui_draft_state"):
     code += function(name)
 code += "static void dispatch(action_t a) { switch(a.kind) {\n"
 code += "    case A_DRAFT_EDIT:" + SOURCE.split("    case A_DRAFT_EDIT:",1)[1].split("    case A_HOME:",1)[0]

@@ -92,7 +92,7 @@ static ht_gesture_t gesture;
 static question_submit_t packet;
 static uint32_t now=100,random_value=1,features=~0u;
 static bool congested,transport_ok=true;
-static unsigned enqueued,answers,reads,opens,voice_commands,removed;
+static unsigned enqueued,answers,reads,opens,voice_commands;
 static action_t sent,transport;
 static uint32_t ms(void) { return now; }
 static uint32_t esp_random(void) { return random_value++; }
@@ -117,20 +117,6 @@ static int actions=1;
 #define pdPASS 1
 static unsigned uxQueueSpacesAvailable(int q) { (void)q;return congested?0:20; }
 static int xQueueSend(int q,const action_t *a,int wait) { (void)q;(void)wait;return queue(*a); }
-static bool notice_was_read(const cable_notif_t *n) { return n->read_on_dial; }
-static void notice_forget_read(const char *id) { (void)id; }
-static void notice_add(const char *id,const char *name,const char *machine,const char *text,bool question,bool failed) {
-    int i=0;for(;i<s.notice_count;i++)if(!strcmp(id,s.notice[i].agent_id))break;
-    assert(i<NOTICES);if(i==s.notice_count)s.notice_count++;
-    cable_notif_t *n=&s.notice[i];COPY(n->agent_id,id);COPY(n->name,name);COPY(n->machine,machine);COPY(n->summary,text);
-    n->question=question;n->failed=failed;n->display_revision=++s.notice_revision;
-}
-static void notice_remove(const char *id,bool all) {
-    assert(all);removed++;
-    for(int i=s.notice_count-1;i>=0;i--)if(!strcmp(id,s.notice[i].agent_id)) {
-        memmove(&s.notice[i],&s.notice[i+1],(size_t)(s.notice_count-i-1)*sizeof s.notice[0]);s.notice_count--;
-    }
-}
 static void cable_client_question_read(const char *id,const char *fetch) {
     reads++;transport=(action_t){.kind=A_QUESTION_READ};COPY(transport.id,id);COPY(transport.text,fetch);
 }
@@ -153,15 +139,15 @@ static uint16_t color(unsigned rgb) { return ht_rgb(rgb); }
 #define SEL color(HT_THEME_SELECTION)
 static void dispatch(action_t a);
 '''
-for name in ("pro_send_feedback_clear", "pro_work_local", "pro_work_available", "pro_busy_reset", "question_view", "waiting", "notice_flush_reads", "notice_mark_read", "notice_open", "notice_sync_view", "notice_selection", "notice_restore_selection", "ui_notif_replace",
+for name in ("pro_send_feedback_clear", "pro_work_local", "pro_work_available", "pro_busy_reset", "question_view", "waiting", "recap_preview", "notice_was_read", "notice_forget_read", "notice_flush_reads", "notice_mark_read", "notice_open", "notice_sync_view", "notice_selection", "notice_restore_selection", "notice_remove", "pro_notice_pinned", "notice_add", "ui_notif_replace",
              "visit_emit", "selection_emit", "carry_emit", "make_action", "read_question", "open_question",
-             "pro_open_in_app", "question_answer", "question_rows", "question_move", "send_answer", "question_load", "ui_question_show",
-             "ui_question_state", "ui_answer_receipt", "ui_question_close", "ui_set_connected",
-             "ui_focus_project", "ui_visit_state", "ui_voice_question"):
+             "pro_open_in_app", "question_answer", "question_rows", "question_move", "send_answer", "question_load", "pro_question_signature", "ui_question_show",
+             "ui_question_state", "ui_answer_receipt", "ui_question_close", "pro_notice_source", "ui_set_connected",
+             "ui_focus_project", "ui_notif_read", "ui_visit_state", "ui_voice_question"):
     code += function(name)
 code += "static void dispatch(action_t a) { if(s.locked)return;switch(a.kind) {\n"
 code += cases("A_READER", "A_TABS")
-code += cases("A_DESKTOP", "A_UP")
+code += cases("A_DESKTOP", "A_LOCK")
 code += cases("A_VOICE", "A_VOICE_STOP")
 code += cases("A_SELECT_BEGIN", "A_COMPANION")
 code += "default:break;} }\n"
@@ -177,8 +163,8 @@ code += r'''
 static void reset(void) {
     memset(&s,0,sizeof s);memset(&visit,0,sizeof visit);memset(&form,0,sizeof form);memset(&draft,0,sizeof draft);
     memset(&selection,0,sizeof selection);memset(&carry,0,sizeof carry);memset(&workspace,0,sizeof workspace);
-    enqueued=answers=reads=opens=voice_commands=removed=selections=0;features=~0u;congested=false;transport_ok=true;
-    s.connected=s.ready=true;s.active=0;s.count=2;s.pressed=-1;
+    enqueued=answers=reads=opens=voice_commands=selections=0;features=~0u;congested=false;transport_ok=true;
+    s.connected=s.ready=true;COPY(s.notice_host,"fixture-host");s.active=0;s.count=2;s.pressed=-1;
     COPY(s.agents[0].id,"design");COPY(s.agents[0].name,"Design");COPY(s.agents[0].full,"The design is ready to review.");
     COPY(s.agents[1].id,"build");COPY(s.agents[1].name,"Build");COPY(s.agents[1].full,"The build passed its checks.");
     notice_add("remote","Research","Other workspace","Which option should we use?",true,false);
@@ -285,15 +271,18 @@ static void unknown_answer_recovery(const char *dir) {
     // notification replacement. Menu/Updates must expose the retained record.
     ui_set_connected(false);view(LAUNCHER);act(A_INBOX,0);
     ui_set_connected(true);ui_notif_replace(NULL,0);
-    assert(s.view==INBOX&&s.q.pending&&s.q.uncertain&&!s.notice_count);
+    assert(s.view==INBOX&&s.q.pending&&s.q.uncertain&&s.notice_count==1);
+    // Unread absence now correctly retains the unresolved card. Independently
+    // exercise the empty local-cache recovery path (e.g. after owning-host reset).
+    pro_notice_source("replacement-host");assert(!s.notice_count&&s.q.pending);
     render(&scene);portrait(&scene,dir,"unknown-updates-empty");
     act(A_QUESTION,-1);assert(s.view==QUESTION);render(&scene);
     assert(controls(A_QUESTION_CLOSE)&&controls(A_DESKTOP));portrait(&scene,dir,"unknown-online");
-    queued=enqueued;unsigned prior_removed=removed;
+    queued=enqueued;
     COPY(s.pending_focus,"build");close=make_action(hit(A_QUESTION_CLOSE,0));
     uint32_t revision=s.q.revision;dispatch(close);work(submit);
     assert(!s.q.pending&&!s.q.agent[0]&&s.q.revision==revision+1&&s.view==INBOX);
-    assert(answers==1&&enqueued==queued&&removed==prior_removed&&!strcmp(s.pending_focus,"build"));
+    assert(answers==1&&enqueued==queued&&!strcmp(s.pending_focus,"build"));
     render(&scene);assert(text_has(&scene,"All caught up"));portrait(&scene,dir,"unknown-closed");
 
     // A different agent is now reachable. A late old receipt and a stale Close
@@ -309,12 +298,12 @@ static void unknown_answer_recovery(const char *dir) {
 
     // Closing a retained record does not remove/read-ack its remaining host
     // notification. A queued, never-written old answer is invalidated locally.
-    submit=submit_choice();ui_set_connected(false);queued=enqueued;prior_removed=removed;
+    submit=submit_choice();ui_set_connected(false);queued=enqueued;
     COPY(s.notice[0].read_token,"still-unread");
     COPY(s.notice_reads[0].id,"elsewhere");COPY(s.notice_reads[0].token,"pending-read");s.notice_reads[0].pending=true;
     cable_notif_t original=s.notice[0];notice_receipt_t read_record=s.notice_reads[0];
     act(A_QUESTION_CLOSE,0);work(submit);
-    assert(s.view==INBOX&&!s.q.pending&&answers==0&&enqueued==queued&&removed==prior_removed);
+    assert(s.view==INBOX&&!s.q.pending&&answers==0&&enqueued==queued);
     assert(s.notice_count==1&&!memcmp(&original,&s.notice[0],sizeof original));
     assert(!memcmp(&read_record,&s.notice_reads[0],sizeof read_record));
 
@@ -322,7 +311,7 @@ static void unknown_answer_recovery(const char *dir) {
     // old answer. The replacement retains its own token and notice revision.
     submit_choice();ui_set_connected(false);close=make_action(hit(A_QUESTION_CLOSE,0));
     ui_set_connected(true);ui_question_show("remote","Research","","question-new",NULL);
-    assert(!s.q.pending);act(A_INBOX,0);act(A_QUESTION,0);
+    assert(s.q.pending);dispatch(close);assert(!s.q.pending);act(A_INBOX,0);act(A_QUESTION,0);
     question_state_reply(true,false,"question-new","token-new");
     revision=s.q.revision;queued=enqueued;original=s.notice[0];dispatch(close);
     ui_question_close("remote","question-remote");
@@ -396,7 +385,7 @@ static void everyday_shortcuts(const char *dir) {
     assert(s.view==QUESTION&&s.q.pending&&opens==0);
     ui_notif_replace(NULL,0);view(HOME);render(&scene);assert(text_has(&scene,"Review answer"));
     act(A_INBOX,1);assert(s.view==QUESTION);
-    s.q.pending=false;view(HOME);render(&scene);assert(text_has(&scene,"Updates"));
+    s.q.pending=false;s.notice_count=0;view(HOME);render(&scene);assert(text_has(&scene,"Updates")); // Separate fixture: all questions resolved.
     act(A_INBOX,1);render(&scene);assert(s.view==INBOX&&text_has(&scene,"All caught up."));
     view(READER);before=enqueued;dispatch(attention);assert(s.view==READER&&enqueued==before);
 
@@ -510,9 +499,11 @@ int main(int argc,char **argv) {
     assert(s.view==MESSAGE&&!s.voice_open&&!s.q.item[0].draft[0]);
     reset();act(A_QUESTION,0);question_state(true);act(A_QUESTION_CHOICES,0);act(A_CHOICE,0);act(A_QUESTION_REVIEW,0);act(A_ANSWER,0);
     ui_set_connected(false);ui_set_connected(true);view(INBOX);
-    notice_add("another","Other","","Other question",true,false);s.offset=1;render(&scene);assert(controls(A_QUESTION)==1);
-    queued=enqueued;act(A_QUESTION,1);assert(enqueued==queued&&s.view==INBOX);
-    ui_question_show("remote","Research","","new-question",NULL);assert(!s.q.pending&&!s.q.valid);
+    notice_add("another","Other","","Other question",true,false);
+    for(int i=0;i<s.notice_count;i++)if(!strcmp(s.notice[i].agent_id,"another"))s.offset=i;
+    render(&scene);assert(controls(A_QUESTION)==1);
+    queued=enqueued;act(A_QUESTION,s.offset);assert(enqueued==queued&&s.view==INBOX);
+    ui_question_show("remote","Research","","new-question",NULL);assert(s.q.pending&&!s.q.valid);
 
     // Unsupported answers stay explicit; an older host only offers the plain app open.
     reset();features&=~CABLE_FEATURE_QUESTIONS;render(&scene);assert(!controls(A_QUESTION)&&controls(A_NOTICE));

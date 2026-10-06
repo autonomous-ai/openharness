@@ -21,7 +21,7 @@ static void pro_control(ht_scene_t *f, int x, int y, int w, int h, const char *l
     bool primary = action == A_ANSWER || action == A_DRAFT_SEND || action == A_FORM_MAIN ||
                    action == A_CHOICE || action == A_QUESTION || action == A_CARRY || action == A_APPEAR_USE ||
                    (action == A_NOTICE && !(s.view == INBOX && value >= 0 && value < s.notice_count &&
-                       s.notice[value].question && cable_client_supports(CABLE_FEATURE_QUESTIONS))) ||
+                       s.notice[value].question && !s.notice[value].question_unavailable && cable_client_supports(CABLE_FEATURE_QUESTIONS))) ||
                    action == A_SAMPLE_PLAY;
     uint16_t fill = enabled && (pressed || primary) ? ACCENT : SEL;
     if (enabled && action == A_STOP_YES) fill = color(0xa44343);
@@ -472,6 +472,11 @@ static void pro_inbox(ht_scene_t *f)
             pro_control(f,220,606,280,68,PRO_TR("Review answer"),A_QUESTION,-1,true);
             return;
         }
+        if (s.notice_overflow) {
+            ht_pro_center(f,272,&ht_pro_42,FG,"More in Harness");
+            pro_control(f,220,462,280,76,PRO_TR("Home"),A_HOME,0,true);
+            return;
+        }
         ht_pro_center(f, 272, &ht_pro_42, FG, PRO_TR("All caught up."));
         ht_pro_center(f, 338, &ht_pro_24, DIM, PRO_TR("I'll let you know when something arrives."));
         pro_control(f, 220, 462, 280, 76, PRO_TR("Home"), A_HOME, 0, true);
@@ -483,14 +488,14 @@ static void pro_inbox(ht_scene_t *f)
     if (s.q.pending)
         pro_control(f,484,28,204,64,PRO_TR("Review answer"),A_QUESTION,-1,true);
     char position[72];
-    snprintf(position, sizeof position, "%s   %d / %d", n->question ? PRO_TR("Needs your answer") :
+    snprintf(position, sizeof position, "%s   %d / %d", n->question ? PRO_TR(n->question_unavailable ? "Needs attention" : "Needs your answer") :
         n->failed ? PRO_TR("Needs attention") : PRO_TR("Ready for you"), s.offset + 1, s.notice_count);
     ht_pro_text(f, 48, 138, 624, &ht_pro_24, n->failed ? color(0xa44343) : ACCENT, position);
     ht_pro_wrap(f, 48, 184, 624, 2, 0, &ht_pro_32, FG, n->name);
     ht_pro_wrap(f, 48, 282, 624, 7, 0, &ht_pro_32, s.connected ? FG : DIM,
                 n->summary[0] ? n->summary : PRO_TR("No preview available."));
     // Answering is local to this ID. Opening is the separate focus-changing action.
-    bool answer = n->question && cable_client_supports(CABLE_FEATURE_QUESTIONS);
+    bool answer = n->question && !n->question_unavailable && cable_client_supports(CABLE_FEATURE_QUESTIONS);
     bool available = s.connected && !visit.pending;
     if (answer)
         pro_control(f, 32, 606, 280, 68, PRO_TR("Answer"), A_QUESTION, s.offset,
@@ -498,7 +503,7 @@ static void pro_inbox(ht_scene_t *f)
     pro_control(f, answer ? 328 : 220, 606, answer ? 360 : 280, 68,
                 PRO_TR("Open on desktop"), A_NOTICE, s.offset, available);
     s.notice_frame = n->read_on_dial ? 0 : n->display_revision;
-    pro_note(f, PRO_TR("Swipe for other updates. Opening changes your pane."));
+    pro_note(f, s.notice_overflow ? "More in Harness" : PRO_TR("Swipe for other updates. Opening changes your pane."));
 }
 
 static void pro_machines(ht_scene_t *f)

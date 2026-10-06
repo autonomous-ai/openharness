@@ -180,7 +180,7 @@ for name in ("copy", "find", "pane_memory", "pane_memory_apply", "pro_send_feedb
              "pro_appearance_view", "pro_appearance_open", "pro_appearance_move", "pro_appearance_use",
              "workspace_index", "tabs_open", "workspace_failed", "pro_panes_of",
              "ui_land_after_reload", "voice_status", "ui_scroll_reportable", "habitat_next_wake_ms",
-             "voice_close", "power", "ui_set_connected", "ui_draft_source", "ui_focus_project",
+             "voice_close", "power", "notice_sync_view", "pro_notice_source", "ui_set_connected", "ui_draft_source", "ui_focus_project",
              "ui_swarms_replace", "ui_tiles_replace", "ui_project_remove", "ui_project_apply_order",
              "ui_project_clear_all", "ui_project_set_name", "ui_project_set_machine", "ui_set_selected_machine",
              "recap_preview", "activity_text", "event", "ui_project_emit", "ui_project_restore_event",

@@ -63,6 +63,7 @@ static struct {
     uint32_t pet_until, nap_until, voice_retry_until, voice_started, voice_wait_until, voice_generation, voice_question_revision, voice_draft_revision;
     int voice_question_index;
     char title[80], message[256], voice_target[64], pending_focus[64], pending_machine[64], opening_notice[48];
+    char notice_host[48];
     char work_agent[64], work_host[48]; uint32_t work_revision, work_generation; uint8_t work_mode, work_voice_mode;
     struct {char draft[48],agent[48],host[48],machine[48],session[80];uint32_t request,until;uint8_t mode;bool accepted;} send_feedback;
     pro_metrics_t metrics; pro_carry_review_t carry_review; pro_draft_recovery_t draft_recovery;
@@ -139,6 +140,8 @@ harness += function('ui_project_set_machine')
 harness += function('question_view') + function('copy') + function('input_cancel') + function('view') + function('voice_close') + function('workspace_failed')
 harness += r'''
 #ifdef DEVICE_PRO_COMPANION
+// Notification lifetime is exercised with real callbacks in test_pro_question_lifetime.py.
+static void pro_notice_source(const char *host) { (void)host; }
 static bool pro_draft_store_queue(bool clear) {
     if(clear){ht_draft_reset(&draft);memset(&s.carry_review,0,sizeof s.carry_review);pro_draft_recovery_close(&s.draft_recovery);view(HOME);}
     else s.draft_recovery.store=PRO_RECOVERY_SAVED;

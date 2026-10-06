@@ -53,7 +53,11 @@ static ht_gallery_t gallery;
 #include "../../pro_voice_samples.h"
 #endif
 
+#ifdef DEVICE_PRO_COMPANION
+#define NOTICES 72 // Host catalog: 64 pending questions plus eight unread notices.
+#else
 #define NOTICES 24
+#endif
 #define QUESTION_MAX 4
 #define OPTION_MAX 6
 // FOUR ROWS, PITCH 64. Five at 56 put the last line at 112 + 4*56 + 14 + 38 = 388, two pixels into
@@ -198,6 +202,10 @@ typedef struct {
     int count, index, choice, drag;
     bool valid, pending, supported, loading, uncertain;
     char token[48], fetch[48], error[120], speech_error[96];
+#ifdef DEVICE_PRO_COMPANION
+    char notice_token[CABLE_READ_TOKEN_MAX], host[ID_MAX];
+    uint64_t signature;
+#endif
     uint32_t revision, deadline;
 } question_t;
 typedef struct {
@@ -281,6 +289,10 @@ static EXT_RAM_BSS_ATTR struct {
     int machine_count;
     char selected_machine[ID_MAX], pending_machine[ID_MAX];
     uint32_t machine_deadline;
+#ifdef DEVICE_PRO_COMPANION
+    char notice_host[ID_MAX];
+    bool notice_overflow;
+#endif
     cable_notif_t notice[NOTICES];
     notice_receipt_t notice_reads[NOTICES];
     uint8_t notice_read_next;
@@ -354,6 +366,9 @@ static ht_rect_t pressed_rect;
 #endif
 static bool queue(action_t a);
 static void view(view_t v);
+#ifdef DEVICE_PRO_COMPANION
+static void notice_sync_view(void);
+#endif
 static const char *voice_status(void);
 #ifdef DEVICE_PRO_COMPANION
 static void pro_speech_cancel(bool any);
@@ -483,7 +498,7 @@ static void notice_mark_read(cable_notif_t *n)
 static void notice_open(void)
 {
 #ifdef DEVICE_PRO_COMPANION
-    view(s.notice_count || s.q.pending ? INBOX : HOME);
+    view(s.notice_count || s.q.pending || s.notice_overflow ? INBOX : HOME);
 #else
     view(s.notice_count ? INBOX : HOME);
 #endif
@@ -749,7 +764,11 @@ static int waiting(void)
 {
     int n = 0;
     for (int i = 0; i < s.notice_count; i++)
-        n += s.notice[i].question;
+        n += s.notice[i].question
+#ifdef DEVICE_PRO_COMPANION
+            && !s.notice[i].question_unavailable
+#endif
+            ;
     return n;
 }
 static int working(void)
@@ -762,7 +781,11 @@ static int working(void)
 static bool is_question(const char *id)
 {
     for (int i = 0; i < s.notice_count; i++)
-        if (s.notice[i].question && !strcmp(id, s.notice[i].agent_id))
+        if (s.notice[i].question && !strcmp(id, s.notice[i].agent_id)
+#ifdef DEVICE_PRO_COMPANION
+            && !s.notice[i].question_unavailable
+#endif
+            )
             return true;
     return false;
 }
@@ -2568,6 +2591,14 @@ static void read_question(const char *id, const char *label)
     uint32_t revision = s.q.revision + 1;
     memset(&s.q,0,sizeof s.q); s.q.revision=revision; s.q.loading=true;
     COPY(s.q.agent,agent); COPY(s.q.name,name);
+#ifdef DEVICE_PRO_COMPANION
+    COPY(s.q.host,s.notice_host);
+    for (int i=0; i<s.notice_count; i++) if (s.notice[i].question && !strcmp(s.notice[i].agent_id,agent)) {
+        COPY(s.q.request,s.notice[i].question_id); s.q.signature=s.notice[i].question_signature;
+        COPY(s.q.notice_token,s.notice[i].read_token);
+        break;
+    }
+#endif
     snprintf(s.q.fetch,sizeof s.q.fetch,"q-%08lx%08lx",(unsigned long)esp_random(),(unsigned long)esp_random());
     s.q.deadline=ms()+4000;
     action_t a={.kind=A_QUESTION_READ,.revision=revision}; COPY(a.id,agent); copy(a.text,sizeof s.q.fetch,s.q.fetch);
@@ -2949,7 +2980,7 @@ static void dispatch(action_t a)
             }
             for (int i=0; i<s.notice_count; i++) {
                 const cable_notif_t *n=&s.notice[i];
-                if (n->question && n->display_revision==a.revision && !strcmp(n->agent_id,a.id)) {
+                if (n->question && !n->question_unavailable && n->display_revision==a.revision && !strcmp(n->agent_id,a.id)) {
                     read_question(n->agent_id,n->name);
                     break;
                 }
@@ -3005,7 +3036,7 @@ static void dispatch(action_t a)
             if (s.q.pending) { view(QUESTION); break; }
             view(INBOX);
             for (int i = 0; i < s.notice_count; i++)
-                if (s.notice[i].question) { s.offset = i; break; }
+                if (s.notice[i].question && !s.notice[i].question_unavailable) { s.offset = i; break; }
             if (!waiting()) for (int i = 0; i < s.notice_count; i++)
                 if (!s.notice[i].read_on_dial) { s.offset = i; break; }
             break;
@@ -4347,12 +4378,36 @@ void ui_set_brightness(uint8_t level)
 }
 
 // Protocol-facing adapter. The cable reader never waits for rendering or a DMA transaction.
+#ifdef DEVICE_PRO_COMPANION
+static void pro_notice_source(const char *host)
+{
+    const char *next=host && host[0] && strnlen(host,ID_MAX)<ID_MAX ? host : "";
+    if (next[0] && !strcmp(next,s.notice_host)) return;
+    // Unread snapshots cannot establish question ownership. A different or
+    // unidentified cable host must not inherit another host's pending cards.
+    for (int i=s.notice_count-1; i>=0; i--) if (s.notice[i].question) {
+        memmove(&s.notice[i],&s.notice[i+1],(size_t)(s.notice_count-i-1)*sizeof s.notice[0]);
+        s.notice_count--;
+    }
+    for (int i=0; i<NOTICES; i++) if (s.notice_reads[i].question) memset(&s.notice_reads[i],0,sizeof s.notice_reads[i]);
+    COPY(s.notice_host,next);s.notice_overflow=false;
+    if (!s.q.pending) {
+        s.q.valid=s.q.loading=false; s.q.revision++;
+        if (question_view(s.view)) view(HOME);
+    } else {
+        s.q.valid=s.q.loading=false; s.q.uncertain=true; s.q.revision++;
+        COPY(s.q.error,"No answer receipt. Check the terminal before trying again.");
+    }
+    notice_sync_view();
+}
+#endif
 void ui_set_connected(bool value)
 {
     display_lock();
     if (!value) {
 #ifdef DEVICE_PRO_COMPANION
         pro_send_feedback_clear();
+        if (!s.notice_host[0]) pro_notice_source(NULL);
         pro_busy_reset();
         pro_metrics_source(&s.metrics,NULL,false);
         pro_draft_recovery_disconnect(&s.draft_recovery);
@@ -4411,6 +4466,7 @@ void ui_set_connected(bool value)
 void ui_draft_source(const char *machine)
 {
     display_lock();
+    pro_notice_source(s.connected ? machine : NULL);
     if (pro_draft_recovery_source(&s.draft_recovery, s.connected ? machine : NULL)) {
         pro_send_feedback_clear();
         pro_busy_reset();
@@ -5021,7 +5077,7 @@ static void notice_sync_view(void)
     input_cancel();
     if (!s.notice_count) {
 #ifdef DEVICE_PRO_COMPANION
-        if (s.q.pending) { s.offset=0; return; }
+        if (s.q.pending || s.notice_overflow) { s.offset=0; return; }
 #endif
         view(HOME);
     }
@@ -5038,17 +5094,45 @@ static void notice_restore_selection(const char *id)
     for (int i = 0; i < s.notice_count; i++)
         if (!strcmp(id, s.notice[i].agent_id)) { s.offset = i; return; }
 }
+#ifdef DEVICE_PRO_COMPANION
+static bool pro_notice_pinned(const cable_notif_t *n, const char *selected)
+{
+    if (!strcmp(n->agent_id,selected)) return true;
+    if (!n->question || strcmp(n->agent_id,s.q.agent) || strcmp(s.q.host,s.notice_host) ||
+        !(s.q.pending || (question_view(s.view) && (s.q.valid || s.q.loading)))) return false;
+    return (s.q.request[0] && !strcmp(n->question_id,s.q.request) && n->question_signature==s.q.signature) ||
+        (s.q.notice_token[0] && !strcmp(n->read_token,s.q.notice_token));
+}
+#endif
 static void notice_add(const char *id, const char *name, const char *machine, const char *recap,
                        bool question, bool failed)
 {
     if (!id || !*id || strnlen(id, ID_MAX) >= ID_MAX) return;
     char selected[ID_MAX]; notice_selection(selected, sizeof selected);
+#ifdef DEVICE_PRO_COMPANION
+    // A completion/unread result does not resolve an independently pending question.
+    if (!question) for (int i=0; i<s.notice_count; i++)
+        if (s.notice[i].question && !strcmp(s.notice[i].agent_id,id)) return;
+#endif
     notice_remove(id, true);
     if (s.notice_count == NOTICES) {
         // Keep a message being read even when the bounded inbox fills. The
         // oldest other message gives way; arrival never moves the current card.
         int drop = s.notice_count - 1;
+#ifdef DEVICE_PRO_COMPANION
+        // The host has at most 64 pending questions. Results may consume spare
+        // rows but cannot evict an unresolved question or the current reader.
+        while (drop>=0 && (s.notice[drop].question || !strcmp(selected,s.notice[drop].agent_id))) drop--;
+        if (drop<0 && question) {
+            // Overflow is a local display limit, never an answered/closed event.
+            drop=s.notice_count-1;
+            while (drop>=0 && pro_notice_pinned(&s.notice[drop],selected)) drop--;
+            if (drop>=0) s.notice_overflow=true;
+        }
+        if (drop<0) return;
+#else
         if (!strcmp(selected, s.notice[drop].agent_id)) drop--;
+#endif
         memmove(&s.notice[drop], &s.notice[drop + 1],
                 (size_t)(s.notice_count - drop - 1) * sizeof(cable_notif_t));
         s.notice_count--;
@@ -5118,7 +5202,11 @@ void ui_notif_read(const char *id, const char *token)
         if (strcmp(n->agent_id, id) || strcmp(n->read_token, token)) continue;
         n->read_on_dial = true;
         opened = !strcmp(s.opening_notice, id);
+#ifdef DEVICE_PRO_COMPANION
+        if (!n->question && (s.view != INBOX || i != s.offset || opened)) {
+#else
         if (s.view != INBOX || i != s.offset || opened) {
+#endif
             notice_remove(id, true); notice_sync_view();
         }
         change(); break;
@@ -5129,6 +5217,14 @@ void ui_notif_read(const char *id, const char *token)
 void ui_notif_replace(const cable_notif_t *rows, int count)
 {
     display_lock();
+#ifdef DEVICE_PRO_COMPANION
+    if (!s.connected) { display_unlock(); return; }
+    // Display lock serializes this bounded scratch array without using the UI
+    // task's stack. The snapshot contains unread notices, not open questions.
+    static EXT_RAM_BSS_ATTR cable_notif_t questions[NOTICES];
+    int question_count=0;
+    for (int i=0; i<s.notice_count; i++) if (s.notice[i].question) questions[question_count++]=s.notice[i];
+#endif
     char selected[ID_MAX]; notice_selection(selected, sizeof selected);
     cable_notif_t held = {0};
     if (selected[0] && s.notice[s.offset].read_on_dial && s.notice[s.offset].read_token[0])
@@ -5145,8 +5241,58 @@ void ui_notif_replace(const cable_notif_t *rows, int count)
             break;
         }
     }
-    // An authoritative absence acknowledges the read. It must not make the
-    // card disappear while the person is still reading it.
+#ifdef DEVICE_PRO_COMPANION
+    // Reserve a currently read result before merging the pending catalog.
+    // A full 64-question + eight-unread snapshot must not displace its reader.
+    if (held.agent_id[0] && !held.question) {
+        bool present=false;
+        for (int i=0; i<s.notice_count; i++) if (!strcmp(s.notice[i].agent_id,held.agent_id)) present=true;
+        if (!present) {
+            int at=s.notice_count<NOTICES ? s.notice_count++ : -1;
+            if (at<0) for (int i=s.notice_count-1; i>=0; i--) if (!s.notice[i].question) { at=i; break; }
+            if (at>=0) s.notice[at]=held;
+        }
+    }
+    for (int k=0; k<question_count; k++) {
+        const cable_notif_t *old=&questions[k]; int at=-1;
+        for (int i=0; i<s.notice_count; i++) if (!strcmp(s.notice[i].agent_id,old->agent_id)) { at=i; break; }
+        if (at>=0 && s.notice[at].question) {
+            cable_notif_t *n=&s.notice[at];
+            if (!strcmp(n->read_token,old->read_token) ||
+                (!old->read_token[0] && old->question_id[0] && !strcmp(n->summary,old->summary))) {
+                COPY(n->question_id,old->question_id); n->question_signature=old->question_signature;
+                n->question_unavailable=old->question_unavailable;
+                n->read_on_dial=old->read_on_dial;
+            }
+            continue; // A new token is a new occurrence, never the old question ID.
+        }
+        if (at<0) {
+            if (s.notice_count==NOTICES) {
+                // Questions take priority over the oldest result; never evict a
+                // different unresolved question to retain this one.
+                for (int i=s.notice_count-1; i>=0; i--) if (!s.notice[i].question && strcmp(s.notice[i].agent_id,selected)) { at=i; break; }
+                if (at<0 && pro_notice_pinned(old,selected)) {
+                    for (int i=s.notice_count-1; i>=0; i--) if (!pro_notice_pinned(&s.notice[i],selected)) { at=i; break; }
+                }
+                if (at<0) { s.notice_overflow=true; continue; }
+                if (s.notice[at].question) s.notice_overflow=true;
+            } else at=s.notice_count++;
+        }
+        s.notice[at]=*old;
+    }
+    if (!s.q.pending && (s.q.valid || s.q.loading) && s.q.notice_token[0]) {
+        for (int i=0; i<s.notice_count; i++) {
+            const cable_notif_t *n=&s.notice[i];
+            if (!n->question || strcmp(n->agent_id,s.q.agent) || !strcmp(n->read_token,s.q.notice_token)) continue;
+            s.q.valid=s.q.loading=false;s.q.revision++;
+            COPY(s.q.error,"The question changed. Open the alert again.");
+            if (question_view(s.view)) view(QUESTION);
+            break;
+        }
+    }
+#endif
+    // An unread absence acknowledges the read, not an answer. Keep the current
+    // result card in place as before; Pro questions remain until exact resolution.
     for (int i = 0; i < NOTICES; i++) if (s.notice_reads[i].pending) {
         bool present = false;
         for (int j = 0; j < count; j++)
@@ -5194,6 +5340,31 @@ static void question_load(const cJSON *questions)
     }
     s.q.valid=s.q.count>0;
 }
+#ifdef DEVICE_PRO_COMPANION
+static uint64_t pro_question_signature(const cJSON *questions)
+{
+    // A local change detector, never submission authority. Hash the ordered
+    // semantic fields so JSON spacing/key order cannot restart a read question.
+    uint64_t h=UINT64_C(14695981039346656037);
+    const cJSON *q,*option;
+    cJSON_ArrayForEach(q,questions) {
+        const char *keys[]={"key","q"};
+        for (unsigned k=0;k<2;k++) {
+            const cJSON *v=cJSON_GetObjectItemCaseSensitive(q,keys[k]);
+            const unsigned char *p=(const unsigned char *)(cJSON_IsString(v)?v->valuestring:"");
+            do { h=(h ^ *p)*UINT64_C(1099511628211); } while (*p++);
+        }
+        cJSON_ArrayForEach(option,cJSON_GetObjectItemCaseSensitive(q,"options")) {
+            const unsigned char *p=(const unsigned char *)(cJSON_IsString(option)?option->valuestring:"");
+            do { h=(h ^ *p)*UINT64_C(1099511628211); } while (*p++);
+        }
+        h=(h ^ 0xff)*UINT64_C(1099511628211);
+        h=(h ^ cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(q,"multi")))*UINT64_C(1099511628211);
+        // canText is current host speech eligibility, not question identity.
+    }
+    return h ? h : 1;
+}
+#endif
 void ui_question_show(const char *id, const char *name, const char *machine, const char *request,
                       const cJSON *questions)
 {
@@ -5201,16 +5372,58 @@ void ui_question_show(const char *id, const char *name, const char *machine, con
     display_lock();
     const cJSON *first=cJSON_GetArrayItem(questions,0);
     const cJSON *prompt=cJSON_GetObjectItemCaseSensitive(first,"q");
+#ifdef DEVICE_PRO_COMPANION
+    if (!s.connected || !id[0] || strnlen(id,ID_MAX)>=ID_MAX) { display_unlock(); return; }
+    bool identifiable=request[0] && strnlen(request,sizeof s.q.request)<sizeof s.q.request;
+    uint64_t signature=pro_question_signature(questions);
+    bool same=false, read=false, unavailable=false; char read_token[CABLE_READ_TOKEN_MAX]="";
+    char preview[240];recap_preview(preview,sizeof preview,cJSON_IsString(prompt)?prompt->valuestring:"Needs your answer");
+    for (int i=0; i<s.notice_count; i++) {
+        const cable_notif_t *n=&s.notice[i];
+        if (!n->question || strcmp(n->agent_id,id)) continue;
+        same=identifiable && !strcmp(n->question_id,request) && n->question_signature==signature && !strcmp(n->summary,preview);
+        if (same || !n->question_id[0]) COPY(read_token,n->read_token);
+        read=same && n->read_on_dial; unavailable=same && n->question_unavailable;
+        break;
+    }
+    if (!same) notice_forget_read(id);
+#else
     notice_forget_read(id);
+#endif
+#ifdef DEVICE_PRO_COMPANION
+    if (!same)
+#endif
     notice_add(id,name,machine,cJSON_IsString(prompt) ? prompt->valuestring : "Needs your answer",true,false);
+#ifdef DEVICE_PRO_COMPANION
+    for (int i=0; i<s.notice_count; i++) if (!strcmp(s.notice[i].agent_id,id)) {
+        cable_notif_t *n=&s.notice[i];
+        COPY(n->question_id,identifiable?request:""); n->question_signature=signature;
+        COPY(n->read_token,read_token);n->read_on_dial=read;n->question_unavailable=!identifiable || unavailable;
+        break;
+    }
+    if (!same) s.notice_sequence++;
+#else
     s.notice_sequence++;
+#endif
     // A different agent's alert cannot replace the question being read.
     if ((s.q.valid
 #ifdef DEVICE_PRO_COMPANION
-         || s.q.pending
+         || s.q.loading
 #endif
-        ) && !strcmp(s.q.agent,id) && strcmp(s.q.request,request)) {
-        s.q.valid=false; s.q.pending=false; s.q.revision++;
+        )
+#ifdef DEVICE_PRO_COMPANION
+        && !s.q.pending
+#endif
+        && !strcmp(s.q.agent,id) && (strcmp(s.q.request,request)
+#ifdef DEVICE_PRO_COMPANION
+            || (s.q.signature && s.q.signature!=signature)
+#endif
+            )) {
+        s.q.valid=false; s.q.pending=false;
+#ifdef DEVICE_PRO_COMPANION
+        s.q.loading=false;
+#endif
+        s.q.revision++;
         if (question_view(s.view)) { COPY(s.q.error,"The question changed. Open the alert again."); view(QUESTION); }
     }
     change(); display_unlock();
@@ -5227,17 +5440,42 @@ void ui_question_state(const cJSON *p)
     display_lock();
     if (s.q.loading && s.view==QUESTION && !strcmp(agent->valuestring,s.q.agent) && !strcmp(fetch->valuestring,s.q.fetch)) {
         s.q.loading=false;
+#ifdef DEVICE_PRO_COMPANION
+        cable_notif_t *notice=NULL;
+        for (int i=0; i<s.notice_count; i++) if (s.notice[i].question && !strcmp(s.notice[i].agent_id,s.q.agent)) { notice=&s.notice[i]; break; }
+        if (notice && strcmp(s.q.notice_token,notice->read_token)) {
+            s.q.valid=false;COPY(s.q.error,"The question changed. Open the alert again.");
+            input_cancel();change();display_unlock();return;
+        }
+#endif
         if (cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(p,"ok")) && cJSON_IsString(id) &&
+#ifdef DEVICE_PRO_COMPANION
+            id->valuestring[0] &&
+#endif
             strlen(id->valuestring)<sizeof s.q.request && cJSON_IsString(token) && token->valuestring[0] &&
             strlen(token->valuestring)<sizeof s.q.token) {
             COPY(s.q.request,id->valuestring); COPY(s.q.token,token->valuestring);
+#ifdef DEVICE_PRO_COMPANION
+            s.q.signature=pro_question_signature(cJSON_GetObjectItemCaseSensitive(p,"questions"));
+            if (notice) { COPY(notice->question_id,id->valuestring); notice->question_signature=s.q.signature; notice->question_unavailable=false; }
+#endif
             if (cJSON_IsString(name)) COPY(s.q.name,name->valuestring);
             question_load(cJSON_GetObjectItemCaseSensitive(p,"questions"));
+#ifdef DEVICE_PRO_COMPANION
+            if (notice) notice->question_unavailable=!s.q.valid || !s.q.supported;
+#endif
             if (cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(p,"submitted"))) {
                 s.q.pending=s.q.uncertain=true;
                 COPY(s.q.error,"An answer was already sent. Check the terminal.");
             }
-        } else COPY(s.q.error,cJSON_IsString(error) ? error->valuestring : "Could not load the question.");
+        } else {
+            COPY(s.q.error,cJSON_IsString(error) ? error->valuestring : "Could not load the question.");
+#ifdef DEVICE_PRO_COMPANION
+            // An unsuccessful read is not a close receipt. Keep its context but
+            // require the desktop; do not keep offering an unanswerable dialog.
+            if (notice) notice->question_unavailable=true;
+#endif
+        }
         input_cancel(); change();
     }
     display_unlock();
@@ -5250,11 +5488,26 @@ void ui_answer_receipt(const cJSON *p)
         *error=cJSON_GetObjectItemCaseSensitive(p,"error");
     if (!cJSON_IsString(agent) || !cJSON_IsString(fetch) || !cJSON_IsString(token)) return;
     display_lock();
-    if (s.q.pending && !strcmp(s.q.agent,agent->valuestring) && !strcmp(s.q.fetch,fetch->valuestring) &&
+    if (s.q.pending &&
+#ifdef DEVICE_PRO_COMPANION
+        s.q.host[0] && !strcmp(s.q.host,s.notice_host) &&
+#endif
+        !strcmp(s.q.agent,agent->valuestring) && !strcmp(s.q.fetch,fetch->valuestring) &&
         !strcmp(s.q.token,token->valuestring)) {
         if (cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(p,"ok"))) {
             if (cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(p,"pending"))) { display_unlock(); return; }
-            s.q.valid=s.q.pending=false; s.q.revision++; notice_remove(s.q.agent,true);
+            s.q.valid=s.q.pending=false; s.q.revision++;
+#ifdef DEVICE_PRO_COMPANION
+            for (int i=0; i<s.notice_count; i++) {
+                const cable_notif_t *n=&s.notice[i];
+                if (!n->question || strcmp(n->agent_id,s.q.agent)) continue;
+                if ((!strcmp(n->question_id,s.q.request) && n->question_signature==s.q.signature) ||
+                    (!n->question_id[0] && !strcmp(n->read_token,s.q.notice_token))) notice_remove(s.q.agent,true);
+                break;
+            }
+#else
+            notice_remove(s.q.agent,true);
+#endif
             if (question_view(s.view)) view(HOME);
             notice_sync_view();
         } else {
@@ -5269,11 +5522,27 @@ void ui_question_close(const char *id, const char *request)
 {
     if (!id || !request) return;
     display_lock();
+#ifdef DEVICE_PRO_COMPANION
+    if (!request[0] || strnlen(request,sizeof s.q.request)>=sizeof s.q.request) { display_unlock(); return; }
+    bool current=s.q.host[0] && !strcmp(s.q.host,s.notice_host) &&
+        !strcmp(s.q.agent,id) && !strcmp(s.q.request,request);
+    if (current) {
+        s.q.valid=s.q.pending=s.q.loading=false; s.q.revision++;
+        if (question_view(s.view)) view(HOME);
+    }
+    for (int i=0; i<s.notice_count; i++) {
+        const cable_notif_t *n=&s.notice[i];
+        if (n->question && !strcmp(n->agent_id,id) && n->question_id[0] && !strcmp(n->question_id,request)) {
+            notice_remove(id,true); break;
+        }
+    }
+#else
     if (!strcmp(s.q.agent,id) && !strcmp(s.q.request,request)) {
         s.q.valid=s.q.pending=s.q.loading=false; s.q.revision++;
         if (question_view(s.view)) view(HOME);
         notice_remove(id,true);
     } else if (strcmp(s.q.agent,id)) notice_remove(id,true);
+#endif
     notice_sync_view();
     change(); display_unlock();
 }
