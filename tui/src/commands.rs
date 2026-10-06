@@ -3379,8 +3379,14 @@ fn run_words_in(app: &mut App, words: &[String]) {
         "run-shell" | "run" => {}
         "send-prefix" => {
             // The prefix key (-2: prefix2) to the pane, as if typed there.
-            let Some((_, pane)) = target_pane(app, words) else { return };
             let key = if flag(words, "-2") { app.keymap.prefix2 } else { Some(app.keymap.prefix) };
+            // A GUI-created welcome tab has no backing pane. Its task editor still owns
+            // the forwarded key; an explicit -t keeps addressing a terminal as in tmux.
+            if opt(words, "-t").is_none() && app.home_visible() {
+                if let Some(key) = key { input::send_prefix_key(app, crossterm::event::KeyEvent::new(key.code, key.mods)); }
+                return;
+            }
+            let Some((_, pane)) = target_pane(app, words) else { return };
             // To the active pane: what has the keyboard there (a list open over it) gets it.
             if let Some(key) = key {
                 if Some(pane) == app.focused() { input::send_prefix_key(app, crossterm::event::KeyEvent::new(key.code, key.mods)) } else { input::send_chord(app, pane, key) }

@@ -203,8 +203,10 @@ try:
     assert pane_edge_background(second, inactive_bg)
     tab = value(hn('show', '-gwv', 'window-status-current-format'))
     label = value('#{window_index}:#{window_short_name}')
-    assert tab.startswith(label + '* '), (tab, label)
-    assert value('#{window_agent_icon}') in tab[len(label):]
+    assert tab.startswith(label + '*'), (tab, label)
+    mark = value('#{window_agent_icon}')
+    if value('#{window_agent_state}') != 'idle': assert mark in tab[len(label):]
+    else: assert tab == label + '*', 'idle tabs have no status mark'
     assert '*' in value('#{window_flags}')
     # The tab styles leave the bar's own colour alone (#877: no filled tab by default), whatever it is.
     assert hn('show', '-gwv', 'window-status-current-style') == hn('show', '-gwv', 'window-status-style'), 'the star identifies the active tab without a second filled highlight'
