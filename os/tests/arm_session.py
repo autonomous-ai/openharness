@@ -93,6 +93,16 @@ class SessionVM(VM):
         return self.user('for n in $(seq 1 ' + str(seconds * 2) + '); do if ' + command +
                          '; then exit 0; fi; sleep .5; done; exit 1', timeout=seconds + 10)
 
+    def keys(self, *keys):
+        # QMP send-key releases held keys on a guest timer. Under HVF load that
+        # release can arrive after the compositor starts repeating a character.
+        # Queue actual presses and releases together, leaving normal OS repeat
+        # settings intact and still exercising the graphical keyboard path.
+        events = [{'type': 'key', 'data': {'down': down, 'key': {'type': 'qcode', 'data': key}}}
+                  for down, chord in [(True, keys), (False, reversed(keys))] for key in chord]
+        self.monitor('input-send-event', events=events)
+        time.sleep(.12)
+
     def frame(self, name, text, seconds=60, absent=()):
         from PIL import Image, ImageOps
         deadline = time.monotonic() + seconds
