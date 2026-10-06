@@ -105,3 +105,38 @@ enrollment flow. The test uses a public fixture password: **never publish its di
 copies**. A user installer still needs to create a unique encryption key, preserve
 macOS and recovery, and handle interruption before it can offer encrypted installs.
 Physical Apple keyboard, storage and recovery acceptance remain separate.
+
+## Private installation target
+
+`target.py` is the disk-preparation stage for an Asahi UEFI-media installation.
+It reads Asahi's firmware-provided EFI partition identity and uses only the
+unallocated space immediately after that partition. It never shrinks, moves,
+formats or removes existing macOS, recovery or other operating-system partitions.
+The prepared gap must hold a 1 GiB boot partition and at least 12 GiB for the
+encrypted root. This module is not yet packaged or connected to an installer UI.
+
+Before either GPT entry is written, a plan is atomically saved in a private
+directory on the owning FAT EFI partition. Mount that ESP with root ownership,
+`fmask=0177,dmask=0077`, inside the installer's private mount namespace. On every
+attempt the stage rechecks firmware ownership, disk identity, both GPT checksums,
+all existing entries, and its exact planned additions. It can resume after the
+first completed write; unrelated changes or damaged/disagreeing GPT copies stop
+installation without attempting a repair. A disk lock excludes cooperating
+partition tools and allows a brief bounded wait for udev probing.
+
+Run the native disposable-disk acceptance check on an Apple Silicon Mac:
+
+```sh
+python3 os/tests/asahi_target_vm.py \
+  --fixture /path/to/verified-arm-fixture --fixture-source FULL_FIXTURE_COMMIT \
+  --output os/test-results/asahi-target
+```
+
+The test creates an owned 4096-byte-sector GPT disk, saves the actual plan on
+FAT, interrupts after one partition write, reboots, and resumes offline. It
+checks protected partition bytes, existing GPT entries, Asahi EFI fixture files,
+kernel partition geometry, repeated execution, and refusal of changed or damaged
+metadata. QEMU injects the firmware ESP identity; its protected partitions contain
+sentinels, not macOS filesystems. These checks do not establish physical Apple
+support or recovery from a torn GPT write. Fresh encryption, payload copying,
+boot configuration and installer-media integration remain the next stages.
