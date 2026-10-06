@@ -95,6 +95,92 @@ enum TerminalFontChoice {
       kIsWeb ? robotoMono : (hasAppleFonts ? sfMono : dejaVuSansMono);
 }
 
+/// What the terminal is drawn in: one of the [TerminalFontChoice] presets, or any family installed on
+/// this computer (`installed_fonts.dart`).
+///
+/// The presets stay because they carry what a bare family name cannot: SF Mono is reached through
+/// a CoreText alias, and each has a fallback chain chosen for its platform. An installed family gets
+/// the platform's default chain behind it, so a glyph it lacks — a Vietnamese tone mark, a box
+/// drawing — still comes from a monospaced face.
+sealed class TerminalFontSelection {
+  const TerminalFontSelection();
+
+  String get fontFamily;
+  List<String> get fontFamilyFallback;
+  String get label;
+
+  /// How the choice is saved: a preset by its enum name (what every older build wrote), an
+  /// installed family as `font:<family>`.
+  String get storageKey;
+
+  static const _installedPrefix = 'font:';
+
+  /// The selection a saved [storageKey] names, or null when it names nothing this build knows.
+  static TerminalFontSelection? fromStorage(String? saved) {
+    if (saved == null || saved.isEmpty) return null;
+    if (saved.startsWith(_installedPrefix)) {
+      final family = saved.substring(_installedPrefix.length).trim();
+      if (family.isEmpty || kIsWeb) return null;
+      return InstalledFontFamily(family);
+    }
+    final preset = TerminalFontChoice.values
+        .where(
+          (c) =>
+              c.name == saved &&
+              (!kIsWeb || c == TerminalFontChoice.robotoMono),
+        )
+        .firstOrNull;
+    return preset == null ? null : PresetFont(preset);
+  }
+}
+
+final class PresetFont extends TerminalFontSelection {
+  const PresetFont(this.choice);
+
+  final TerminalFontChoice choice;
+
+  @override
+  String get fontFamily => choice.fontFamily;
+  @override
+  List<String> get fontFamilyFallback => choice.fontFamilyFallback;
+  @override
+  String get label => choice.label;
+  @override
+  String get storageKey => choice.name;
+
+  @override
+  bool operator ==(Object other) =>
+      other is PresetFont && other.choice == choice;
+  @override
+  int get hashCode => choice.hashCode;
+}
+
+final class InstalledFontFamily extends TerminalFontSelection {
+  const InstalledFontFamily(this.family);
+
+  final String family;
+
+  @override
+  String get fontFamily => family;
+
+  /// The platform default first (on a Mac, SF Mono through its alias), then its own chain.
+  @override
+  List<String> get fontFamilyFallback => [
+    terminalFontFamily,
+    ...terminalFontFallback,
+  ];
+  @override
+  String get label => family;
+  @override
+  String get storageKey => '${TerminalFontSelection._installedPrefix}$family';
+
+  @override
+  bool operator ==(Object other) =>
+      other is InstalledFontFamily && other.family == family;
+  @override
+  int get hashCode => family.hashCode;
+}
+
 /// The user's chosen terminal typography (family + size), remembered across
 /// launches.
 ///
@@ -114,7 +200,12 @@ enum TerminalFontChoice {
 class TerminalFontStore extends ValueNotifier<TerminalStyle> {
   TerminalFontStore({LocalKeyValueStore? storage})
     : _storage = storage ?? HarnessFileStore.shared,
-      super(_styleFor(TerminalFontChoice.defaultForPlatform, terminalFontSize));
+      super(_styleFor(_defaultSelection, terminalFontSize));
+
+  static TerminalFontSelection get _defaultSelection =>
+      PresetFont(TerminalFontChoice.defaultForPlatform);
+
+  TerminalFontSelection _selection = _defaultSelection;
 
   static const _familyKey = 'terminal_font_family';
   static const _sizeKey = 'terminal_font_size';
@@ -128,21 +219,27 @@ class TerminalFontStore extends ValueNotifier<TerminalStyle> {
 
   final LocalKeyValueStore _storage;
 
-  static final _cache = <(TerminalFontChoice, double), TerminalStyle>{};
-  static TerminalStyle _styleFor(TerminalFontChoice choice, double size) =>
-      _cache.putIfAbsent(
-        (choice, size),
-        () => TerminalStyle(
-          fontSize: size,
-          fontFamily: choice.fontFamily,
-          fontFamilyFallback: choice.fontFamilyFallback,
-        ),
-      );
-
-  TerminalFontChoice get family => TerminalFontChoice.values.firstWhere(
-    (choice) => choice.fontFamily == value.fontFamily,
-    orElse: () => TerminalFontChoice.defaultForPlatform,
+  static final _cache = <(TerminalFontSelection, double), TerminalStyle>{};
+  static TerminalStyle _styleFor(
+    TerminalFontSelection selection,
+    double size,
+  ) => _cache.putIfAbsent(
+    (selection, size),
+    () => TerminalStyle(
+      fontSize: size,
+      fontFamily: selection.fontFamily,
+      fontFamilyFallback: selection.fontFamilyFallback,
+    ),
   );
+
+  /// What the terminal is drawn in now — a preset or an installed family.
+  TerminalFontSelection get selection => _selection;
+
+  /// The preset in use, or null while an installed family is.
+  TerminalFontChoice? get family => switch (_selection) {
+    PresetFont(:final choice) => choice,
+    InstalledFontFamily() => null,
+  };
 
   double get size => value.fontSize;
 
@@ -152,51 +249,47 @@ class TerminalFontStore extends ValueNotifier<TerminalStyle> {
   Future<void> load() async {
     try {
       final saved = await _storage.readMany([_familyKey, _sizeKey]);
-      final savedFamily = saved[_familyKey];
       final savedSize = saved[_sizeKey];
-      final choice = TerminalFontChoice.values
-          .where(
-            (c) =>
-                c.name == savedFamily &&
-                (!kIsWeb || c == TerminalFontChoice.robotoMono),
-          )
-          .firstOrNull;
+      // An installed family is not checked for still being installed: that would hold up start-up
+      // on a font scan, and a family that has gone renders through its fallback chain anyway.
+      _selection =
+          TerminalFontSelection.fromStorage(saved[_familyKey]) ??
+          _defaultSelection;
       final size = savedSize == null ? null : double.tryParse(savedSize);
-      value = _styleFor(
-        choice ?? TerminalFontChoice.defaultForPlatform,
-        _clamp(size ?? terminalFontSize),
-      );
+      value = _styleFor(_selection, _clamp(size ?? terminalFontSize));
     } catch (_) {
-      value = _styleFor(
-        TerminalFontChoice.defaultForPlatform,
-        terminalFontSize,
-      );
+      _selection = _defaultSelection;
+      value = _styleFor(_selection, terminalFontSize);
     }
   }
 
-  Future<void> setFamily(TerminalFontChoice choice) => _set(choice, size);
+  Future<void> setFamily(TerminalFontChoice choice) =>
+      _set(PresetFont(choice), size);
 
-  Future<void> increaseSize() => _set(family, size + _step);
-  Future<void> decreaseSize() => _set(family, size - _step);
-  Future<void> setSize(double size) => _set(family, size);
+  /// Draw the terminal in [selection] — a preset or a family installed here.
+  Future<void> setSelection(TerminalFontSelection selection) =>
+      _set(selection, size);
 
-  Future<void> reset() =>
-      _set(TerminalFontChoice.defaultForPlatform, terminalFontSize);
+  Future<void> increaseSize() => _set(_selection, size + _step);
+  Future<void> decreaseSize() => _set(_selection, size - _step);
+  Future<void> setSize(double size) => _set(_selection, size);
+
+  Future<void> reset() => _set(_defaultSelection, terminalFontSize);
 
   /// Whether the current pick *is* the default — what [reset] would leave the
   /// store at, so a Reset control can say it has nothing to do.
   bool get isDefault =>
-      family == TerminalFontChoice.defaultForPlatform &&
-      size == terminalFontSize;
+      _selection == _defaultSelection && size == terminalFontSize;
 
   double _clamp(double size) => size.clamp(minSize, maxSize);
 
-  Future<void> _set(TerminalFontChoice choice, double size) async {
-    final next = _styleFor(choice, _clamp(size));
+  Future<void> _set(TerminalFontSelection selection, double size) async {
+    final next = _styleFor(selection, _clamp(size));
+    _selection = selection;
     if (next == value) return;
     value = next;
     try {
-      await _storage.write(_familyKey, choice.name);
+      await _storage.write(_familyKey, selection.storageKey);
       await _storage.write(_sizeKey, next.fontSize.toString());
     } catch (_) {
       // Kept in memory for this run; see load()'s doc.
