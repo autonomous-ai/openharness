@@ -40,3 +40,5 @@ questions. Everything else is a service ([../services/AGENTS.md](../services/AGE
   theirs. `teamsLink.ts`: every change to the teams' prompt scopes, kept until their process has it.
   `monitorLink.ts`: the monitor's port, asked of its process. `storeLink.ts`: what the Store in its
   process tells the core. `agentQueries.ts`: what a service in its own process may ask of the agents.
+  `gatewayLink.ts`: the relay and its E2EE in their own process (src/gateway/), as the core sees them:
+  the link's state and the remote clients it reads in line, the frames it hands over in the clear.

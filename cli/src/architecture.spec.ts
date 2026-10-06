@@ -144,8 +144,10 @@ const WALK_TIMEOUT_MS = 60_000
  * those moves, and runForeground gained 28.
  */
 const RUN_FOREGROUND_BUDGET = 2_600
-/** Lowered from 2,180 when the relay and its E2EE left the socket for the gateway (step 10, R1). */
-const BACKEND_SOCKET_BUDGET = 1_440
+/** Lowered from 2,180 when the relay and its E2EE left the socket for the gateway (step 10, R1: 1,440).
+ *  The Wi-Fi device's relay came back to it in R2, beside the device service it answers for, over the
+ *  gateway's sessions (lib/autonomous-device/overGateway.ts): 1,460. */
+const BACKEND_SOCKET_BUDGET = 1_460
 
 /** Exceptions, each with its reason. Keep this short. */
 const SERVICE_MAY_IMPORT: Record<string, string> = {
@@ -186,17 +188,25 @@ const SERVICE_MAY_IMPORT: Record<string, string> = {
  * through (`GatewayPort`, `GatewayEvents` in core/api.ts), still in the core's process. The socket lost
  * 742 lines; the gateway's 1,193 and the interfaces' 110 are loaded until R2 runs the gateway in a process
  * of its own, which takes them, the E2EE manager and the P2P channels out of the core's process.
+ *
+ * Then at 95,689 in 420 (step 10, R2), from 102,524 in 433: the gateway runs in a process of its own (gateway/gatewayProcess.ts),
+ * and the core loads it only to run it in its own process instead (services/inline.ts). With it went the
+ * E2EE manager, the backend link, P2P and STUN, the windows' relay pool, the trust group and the device
+ * key log. What of lib/e2ee the core still loads is the fleet's lane (R3) and Share's own crypto (step 8).
  */
 //
 // Connected TUI shells added a literal-argv launch port and shell service (#893, 160 loaded lines); moving
 // the search filename out of its CLI command removed 188, so that change lowered the closure by 28.
-const CORE_CLOSURE_BUDGET = 102_600
+const CORE_CLOSURE_BUDGET = 95_800
 
 /** What is not the core's, by path: each goes to a service or its own process, in the plan's order. */
 const EDGE: RegExp[] = [
   /^gateway\//, /^lib\/e2ee\//, /^cable\//, /^device\//, /^lib\/autonomous-device\//, /^sharing\//, /^teams\//, /^orchestrator\//, /^services\//,
   /^lib\/grid(Attach|Credentials|Derive|Ensure|Exec|FleetRpc|Handoff|Install|McpUrl|Models|ModelsPayload|Picture|Presence|Reader|Target|Wake)\.ts$/,
   /^lib\/localModels\.ts$/,
+  // The relay's own parts, the gateway's alone: the windows' sessions to other machines, P2P and STUN, the
+  // remote viewers' proxy, and the shaping of what goes up the link.
+  /^lib\/(remoteRelay|terminalP2p|stunSelect|remoteViewerProxy|deviceRecentTrim|commanderReplay)\.ts$/,
   // The Store's and the viewers' parts of dsh; the launch path (installed, manifest, launch, runtime, …) is the core's.
   /^dsh\/(catalog|install|update|updates|registry|wire|service|lock|builtins|viewer|viewerLedger|verdict|artifacts)\.ts$/,
   // Search's index; the readers of other engines' sessions (external.ts, externals/) are the core's, for adoption.
@@ -244,13 +254,10 @@ const CORE_MAY_REACH: Record<string, string> = {
   'dsh/service.ts': STORE_BYPASS,
   'dsh/update.ts': STORE_BYPASS,
   'dsh/updates.ts': STORE_BYPASS,
-  'gateway/gateway.ts': 'step 10, R2: the gateway, in a process of its own',
-  'gateway/upstream.ts': 'step 10, R2: the gateway, in a process of its own',
-  'lib/autonomous-device/direct.ts': 'step 10: the Wi-Fi device, into the devices process over the gateway',
-  'lib/autonomous-device/discovery.ts': 'step 10: the Wi-Fi device, into the devices process over the gateway',
   'lib/autonomous-device/dump.ts': 'step 10: the Wi-Fi device, into the devices process over the gateway',
   'lib/autonomous-device/input.ts': 'step 9: the pane writer lock, into core/input.ts',
   'lib/autonomous-device/localApi.ts': 'step 10: the Wi-Fi device, into the devices process over the gateway',
+  'lib/autonomous-device/overGateway.ts': 'step 10: the Wi-Fi device, into the devices process over the gateway',
   'lib/autonomous-device/parts.ts': 'step 10: the Wi-Fi device, into the devices process over the gateway',
   'lib/autonomous-device/relay.ts': 'step 10: the Wi-Fi device, into the devices process over the gateway',
   'lib/autonomous-device/resultContract.ts': 'step 10: the Wi-Fi device, into the devices process over the gateway',
@@ -261,20 +268,14 @@ const CORE_MAY_REACH: Record<string, string> = {
   'lib/autonomous-device/storeContract.ts': 'step 10: the Wi-Fi device, into the devices process over the gateway',
   'lib/autonomous-device/storeRuntime.ts': 'step 10: the Wi-Fi device, into the devices process over the gateway',
   'lib/autonomous-device/stream.ts': 'step 10: the Wi-Fi device, into the devices process over the gateway',
-  'lib/e2ee/applicationFrames.ts': 'step 10: the relay and E2EE, in the gateway',
-  'lib/e2ee/core.ts': 'step 10: the relay and E2EE, in the gateway',
-  'lib/e2ee/deviceHistory.ts': 'step 10: the relay and E2EE, in the gateway',
-  'lib/e2ee/deviceLog.ts': 'step 10: the relay and E2EE, in the gateway',
-  'lib/e2ee/deviceLogStore.ts': 'step 10: the relay and E2EE, in the gateway',
-  'lib/e2ee/deviceLogSyncer.ts': 'step 10: the relay and E2EE, in the gateway',
-  'lib/e2ee/groupSyncer.ts': 'step 10: the relay and E2EE, in the gateway',
-  'lib/e2ee/machinePeers.ts': 'step 10: the relay and E2EE, in the gateway',
-  'lib/e2ee/manager.ts': 'step 10: the relay and E2EE, in the gateway',
-  'lib/e2ee/passwordPake.ts': 'step 10: the relay and E2EE, in the gateway',
-  'lib/e2ee/relayClient.ts': 'step 10: the relay and E2EE, in the gateway',
-  'lib/e2ee/replayWindow.ts': 'step 10: the relay and E2EE, in the gateway',
-  'lib/e2ee/store.ts': 'step 10: the relay and E2EE, in the gateway',
-  'lib/e2ee/trustGroup.ts': 'step 10: the relay and E2EE, in the gateway',
+  'lib/e2ee/applicationFrames.ts': 'step 10, R3: the fleet\'s lane, signed and sealed through the gateway',
+  'lib/e2ee/core.ts': 'step 8: Share seals its own frames with it (and R3: the fleet\'s lane)',
+  'lib/e2ee/machinePeers.ts': 'step 10, R3: the fleet\'s lane, signed and sealed through the gateway',
+  'lib/e2ee/passwordPake.ts': 'with lib/e2ee/store.ts',
+  'lib/e2ee/relayClient.ts': 'step 10, R3: the fleet\'s lane, signed and sealed through the gateway',
+  'lib/e2ee/replayWindow.ts': 'step 10, R3: the fleet\'s lane, signed and sealed through the gateway',
+  'lib/e2ee/store.ts': 'step 8 and R3: this machine\'s identity, for Share and the fleet\'s lane',
+  'lib/e2ee/terminalSeal.ts': 'step 10, R3: the fleet\'s lane, signed and sealed through the gateway',
   'lib/gridAttach.ts': 'step 7: models, in its own process',
   'lib/gridCredentials.ts': 'step 7: models, in its own process',
   'lib/gridDerive.ts': 'step 7: models, in its own process',

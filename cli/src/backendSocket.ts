@@ -6,6 +6,8 @@ import type { ActivityFrame } from './lib/turnActivity.js'
 import { MonitorCompletions } from './lib/harnessMonitor.js'
 import type { HarnessShareOwner } from './sharing/owner.js'
 import { SHARE_REQUEST_TYPES } from './sharing/protocol.js'
+import { deviceRelayOverGateway, type DeviceRelayOverGateway } from './lib/autonomous-device/overGateway.js'
+import type { AutonomousDeviceService, AutonomousDeviceFrame } from './lib/autonomous-device/service.js'
 /**
  * BackendSocket — the clients' hub and the request dispatch: the windows and tools on this computer
  * (localWsServer.ts), and the remote clients the gateway hands on (gateway/gateway.ts), each in its own
@@ -62,8 +64,7 @@ import { OwnerCommands, OWNER_COMMAND_TYPES } from './lib/ownerCommands.js'
 import { VIEWER_DOWN_TYPES } from './lib/viewerWire.js'
 import type { TerminalStreamManager } from './lib/terminalStreamManager.js'
 import { encodeTerminalLocal, type TerminalBinaryClear } from './lib/terminalBinary.js'
-import { PAIR_REQUESTS, PLATE_REQUEST, rpcResultType } from './lib/e2ee/applicationFrames.js'
-import { BACKEND_ONLY_DOWN_TYPES, GATEWAY_REQUEST_TYPES, isLocalClientId, logSafeType, type DownTransport } from './lib/relayFrames.js'
+import { BACKEND_ONLY_DOWN_TYPES, GATEWAY_REQUEST_TYPES, isLocalClientId, logSafeType, PAIR_REQUESTS, PLATE_REQUEST, rpcResultType, type DownTransport } from './lib/relayFrames.js'
 import { sid, logFrame } from './lib/log.js'
 
 export { isLocalClientId, type DownTransport }
@@ -446,6 +447,11 @@ export class BackendSocket {
     return this.localClients.size > this.toolClients.size
   }
 
+  /** True after a paired device has completed the E2EE hello/welcome session (the local dashboard's dot). */
+  deviceE2eeConnected(): boolean {
+    return [...this.remoteClients.values()].some((client) => client.role === 'device')
+  }
+
   /** Live backend link state (local dashboard), as the gateway last said. */
   isConnected(): boolean {
     return this.linkUp
@@ -485,6 +491,7 @@ export class BackendSocket {
       this.viewerForwarder.closeConnection(connId); this.interactiveViewers.closeConnection(connId); this.ownerCommands.closeConnection(connId)
     },
     disconnected: async (connId) => {
+      this.autonomousDeviceRelay?.drop(connId)
       this.remoteClients.delete(connId)
       this.viewerForwarder.closeConnection(connId)
       this.interactiveViewers.closeConnection(connId); this.ownerCommands.closeConnection(connId)
@@ -534,7 +541,26 @@ export class BackendSocket {
     },
     revoked: () => this.onRevoked?.(),
     busy: () => this.onBusy?.(),
+    device: async (connId, frame, opened) => { await this.autonomousDeviceRelay?.handle(connId, frame, opened) },
+    deviceRevoked: (identity) => this.autonomousDeviceRelay?.revoke(identity),
+    toWindows: (frame) => this.sendLocal(frame),
   }
+
+  /** The Wi-Fi device's application protocol, beside the device service it answers for, over the
+   *  gateway's sessions (lib/autonomous-device/overGateway.ts). */
+  private autonomousDeviceRelay?: DeviceRelayOverGateway
+  setAutonomousDeviceService(service: AutonomousDeviceService, onRemoteRevoke: (identity: string) => void): void {
+    this.autonomousDeviceRelay = deviceRelayOverGateway({
+      client: (connId) => this.remoteClients.get(connId),
+      send: (connId, type, payload) => { this.throughGateway('device', (gateway) => gateway.device(connId, type, payload), false) },
+      service, machineId: this.machineId, onReady: () => this.onCommanderJoin?.(), onRemoteRevoke,
+      onClient: (connId, identity) => this.gatewayPort?.deviceClient(connId, identity),
+    })
+  }
+  /** Wi-Fi device sessions on a direct link that said hello to the device service. */
+  directAutonomousDeviceSessions(): number { return this.autonomousDeviceRelay?.directSessions() ?? 0 }
+  autonomousDeviceConnected(): boolean { return this.autonomousDeviceRelay?.connected() ?? false }
+  emitAutonomousDeviceEvent(frame: AutonomousDeviceFrame, deviceId?: string): void { this.autonomousDeviceRelay?.emit(frame, deviceId) }
 
   setTerminalStreamManager(manager: TerminalStreamManager): void {
     this.terminalStreams = manager

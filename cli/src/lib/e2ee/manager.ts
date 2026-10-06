@@ -16,13 +16,8 @@
  * The relay never sees plaintext user content: only ciphertext envelopes + public PAKE messages.
  */
 import * as C from './core.js'
-import {
-  deriveTerminalBinaryKey,
-  openTerminalBinary,
-  parseTerminalBinaryEnvelope,
-  sealTerminalBinary,
-  type TerminalBinaryClear,
-} from '../terminalBinary.js'
+import { parseTerminalBinaryEnvelope, type TerminalBinaryClear } from '../terminalBinary.js'
+import { deriveTerminalBinaryKey, openTerminalBinary, sealTerminalBinary } from './terminalSeal.js'
 import { E2eeStore, type PeerKind } from './store.js'
 import { pwCpaceGenerator, pwContext } from './passwordPake.js'
 import { ReplayWindow } from './replayWindow.js'

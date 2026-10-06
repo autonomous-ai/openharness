@@ -1,5 +1,5 @@
-import { isWrapped } from '../e2ee/core.js'
 import type { E2eeManager } from '../e2ee/manager.js'
+import { isWrapped } from '../relayFrames.js'
 import { deviceDump } from './dump.js'
 import { type AutonomousDeviceService, type AutonomousDeviceFrame } from './service.js'
 
@@ -10,7 +10,11 @@ export class AutonomousDeviceRelay {
   constructor(private readonly crypto: Pick<E2eeManager, 'sessionIdentity' | 'sessionRole' | 'unwrapDown' | 'wrapTarget'>,
     private readonly send: (connId: string, frame: Frame) => void,
     private readonly service: AutonomousDeviceService, private readonly machineId: string, private readonly onReady?: () => void,
-    private readonly onRemoteRevoke?: (identity: string) => void) {}
+    private readonly onRemoteRevoke?: (identity: string) => void,
+    /** Which identity's app said hello on a session, and when it left: the gateway tells such a device it was
+     *  unpaired while its session still stands, which an unpairing in the gateway's process cannot wait for
+     *  this relay to do (gateway/gateway.ts). Observation only. */
+    private readonly onClient?: (connId: string, identity: string | null) => void) {}
   count(include: (connId: string) => boolean = () => true): number { return [...this.clients].filter(([id, client]) => include(id) && this.crypto.sessionIdentity(id) === client.identity && this.crypto.sessionRole(id) === 'device').length }
   connected(): boolean { return this.count() > 0 }
   private sendTo(connId: string, identity: string, type: string, payload: Frame): void {
@@ -32,6 +36,7 @@ export class AutonomousDeviceRelay {
       if (req.proto !== 1 || typeof req.requestId !== 'string') { reply({ type: 'hello_result', requestId: req.requestId, error: { code: 'PROTO_UNSUPPORTED', message: 'Protocol 1 required' } }); return }
       const current = this.clients.get(connId)
       this.clients.set(connId, current?.identity === identity ? current : { identity, tokens: 20, at: Date.now(), active: 0 })
+      this.onClient?.(connId, identity)
       const resume = req.resume as { serverInstanceId?: unknown; cursor?: unknown } | undefined
       reply({ type: 'hello_result', requestId: req.requestId, proto: 1, machineId: this.machineId, serverInstanceId: this.service.serverInstanceId, capabilities: this.service.capabilities, ...this.service.resume(resume) })
       this.service.replay(resume, event => this.sendEvent(connId, identity, event))
@@ -78,6 +83,7 @@ export class AutonomousDeviceRelay {
   drop(connId: string): void {
     const client = this.clients.get(connId)
     this.clients.delete(connId)
+    if (client) this.onClient?.(connId, null)
     if (client && ![...this.clients.values()].some(c => c.identity === client.identity)) this.service.deviceOffline(client.identity)
   }
   /** App-side revoke: tell the device while its authenticated session still exists (the E2eeManager drops
@@ -87,6 +93,7 @@ export class AutonomousDeviceRelay {
     for (const [connId, client] of this.clients) if (client.identity === identity) {
       try { this.sendTo(connId, identity, 'autonomous_device_event', { type: 'pair.revoke', machineId: this.machineId }) } catch { /* Local removal must proceed regardless. */ }
       this.clients.delete(connId)
+      this.onClient?.(connId, null)
     }
     this.service.revoke(identity)
   }

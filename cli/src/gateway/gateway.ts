@@ -16,8 +16,6 @@
 import { env } from '../config/env.js'
 import type { GatewayEvents, GatewayPort, RemoteRole, RemoteTransport } from '../core/api.js'
 import { deviceDump } from '../lib/autonomous-device/dump.js'
-import { AutonomousDeviceRelay } from '../lib/autonomous-device/relay.js'
-import type { AutonomousDeviceFrame, AutonomousDeviceService } from '../lib/autonomous-device/service.js'
 import type { AuthSessionManager } from '../lib/authSession.js'
 import { shouldReplayCommander } from '../lib/commanderReplay.js'
 import { DEVICE_RECENT_SAFE_FRAME_BYTES, fitRecentReplyPayloadForDevice } from '../lib/deviceRecentTrim.js'
@@ -42,7 +40,7 @@ type Frame = Record<string, unknown>
 export interface RelayGatewayOptions {
   /** Backend-resolved machine id, persisted by the SSO login preflight; in isolated unit tests, the token. */
   machineId: string
-  auth?: AuthSessionManager
+  auth?: Pick<AuthSessionManager, 'accessToken'>
   computerId?: string
   autonomousEnv?: string
   /** The core, as the gateway tells it what happened. */
@@ -86,7 +84,9 @@ export class RelayGateway implements GatewayPort {
   private localClientCount = 0
   private readonly directDeviceSinks = new Map<string, (frame: Frame) => void>()
   private readonly directDevicePins = new Map<string, string>()
-  private autonomousDeviceRelay?: AutonomousDeviceRelay
+  /** The Wi-Fi device sessions whose app said hello to the device service (in the core), by connection:
+   *  the ones told, sealed, that they were unpaired (`onIdentityRevoked`). */
+  private readonly deviceClients = new Map<string, string>()
 
   /** Answers the trust group's roster exchange (`group_sync`); null until the daemon wires it. */
   groupSync: { handle: (peerPub: string, payload: Record<string, unknown>) => Record<string, unknown> } | null = null
@@ -128,8 +128,10 @@ export class RelayGateway implements GatewayPort {
       isConnected: () => this.connected(),
       isConnectionAvailable: connId => this.directDeviceSinks.has(connId) || this.connected(),
       onIdentityPaired: (connId, pub) => { if (this.directDeviceSinks.has(connId)) this.directDevicePins.set(connId, pub) },
-      onIdentityRevoked: identity => { this.autonomousDeviceRelay?.revoke(identity); this.onDirectDeviceRevoked?.(fingerprint(b64d(identity))) },
-      onSessionOpened: (connId, role) => this.core.client(connId, { role, label: this.e2ee.sessionLabel(connId) }),
+      onIdentityRevoked: identity => { this.deviceUnpaired(identity); this.onDirectDeviceRevoked?.(fingerprint(b64d(identity))) },
+      onSessionOpened: (connId, role, identity) => this.core.client(connId, {
+        role, label: this.e2ee.sessionLabel(connId), identity, direct: this.directDeviceSinks.has(connId),
+      }),
       onSessionDropped: (connId) => this.core.client(connId, null),
       onPeerLinked: (peer) => {
         // The mutual half of a password link: a machine that proved this one's password is pinned back,
@@ -431,7 +433,7 @@ export class RelayGateway implements GatewayPort {
       return
     }
     if (type === 'autonomous_device_request') {
-      await this.autonomousDeviceRelay?.handle(connId, frame)
+      await this.deviceRequest(connId, frame)
       return
     }
     // ⚠️ Default-deny: the relay is NOT trusted. A frame is acted on only if it opens under this connId's
@@ -523,7 +525,7 @@ export class RelayGateway implements GatewayPort {
       // The backend is authoritative for the outer connId. Drop both kinds of
       // connection-scoped state immediately; otherwise a dead Desktop keeps a
       // terminal controller lease until the 30-second heartbeat timeout.
-      this.autonomousDeviceRelay?.drop(connId)
+      this.deviceClients.delete(connId)
       this.e2ee.dropSession(connId)
       await this.terminalP2p.closeConnection(connId, 'client_disconnected', false)
       this.p2pPendingOpens.delete(connId)
@@ -757,7 +759,8 @@ export class RelayGateway implements GatewayPort {
   }
   attachDirectDevice(connId: string, send: (frame: Frame) => void): void { this.directDeviceSinks.set(connId, send) }
   detachDirectDevice(connId: string): void {
-    this.directDeviceSinks.delete(connId); this.directDevicePins.delete(connId); this.e2ee.dropSession(connId); this.autonomousDeviceRelay?.drop(connId)
+    this.directDeviceSinks.delete(connId); this.directDevicePins.delete(connId); this.deviceClients.delete(connId); this.e2ee.dropSession(connId)
+    void this.core.disconnected(connId)
     this.core.commanders(this.commanderCount, this.commanderActive, true)
   }
   pairedDirectFingerprint(connId: string): string | null { const pub = this.directDevicePins.get(connId); return pub ? fingerprint(b64d(pub)) : null }
@@ -766,24 +769,59 @@ export class RelayGateway implements GatewayPort {
     const type = frame.type
     if (type !== 'autonomous_device_request') deviceDump.record('in', 'wire', connId, frame) // requests: decrypted in the relay
     if (type === 'machine_selected') return
-    if (type === 'autonomous_device_request') { await this.autonomousDeviceRelay?.handle(connId, frame); return }
+    if (type === 'autonomous_device_request') { await this.deviceRequest(connId, frame); return }
     const controls = pairingAllowed ? ['e2e_pair_intent', 'e2e_pair_cancel', 'e2e_pake', 'e2e_hello', 'e2e_status'] : ['e2e_hello', 'e2e_status']
     if ((type === 'e2e_pake' || type === 'e2e_pair_cancel') && this.e2ee.pendingConnection() !== connId) return
     if (typeof type === 'string' && controls.includes(type)) this.e2ee.handleFrame(connId, frame)
   }
-  setAutonomousDeviceService(service: AutonomousDeviceService): void {
-    this.autonomousDeviceRelay = new AutonomousDeviceRelay(
-      this.e2ee,
-      (connId, frame) => this.sendTo(connId, frame),
-      service,
-      this.machineId,
-      () => this.core.commanderJoined(),
-      identity => this.e2ee.revoke(fingerprint(b64d(identity))),
-    )
+
+  /**
+   * A Wi-Fi device's request, for the device service's relay in the core (lib/autonomous-device/relay.ts),
+   * opened here under the session that sealed it. Opened only when the relay would open it (a device's
+   * session, a sealed frame, no session id beside it), so its replay window moves exactly as it did when
+   * the relay opened the frame itself.
+   */
+  private async deviceRequest(connId: string, frame: Frame): Promise<void> {
+    const opens = !!this.e2ee.sessionIdentity(connId) && this.e2ee.sessionRole(connId) === 'device' && isWrapped(frame.payload) && frame.dbSessionId === undefined
+    await this.core.device(connId, frame, opens ? this.e2ee.unwrapDown(connId, frame) : null)
   }
-  directAutonomousDeviceSessions(): number { return this.autonomousDeviceRelay?.count(id => this.directDeviceSinks.has(id)) ?? 0 }
-  autonomousDeviceConnected(): boolean { return this.autonomousDeviceRelay?.connected() ?? false }
-  emitAutonomousDeviceEvent(frame: AutonomousDeviceFrame, deviceId?: string): void { this.autonomousDeviceRelay?.emit(frame, deviceId) }
+
+  /** The device service's answer or event for one Wi-Fi device session, sealed to it. */
+  device(connId: string, type: string, payload: Record<string, unknown>): boolean {
+    const wrapped = this.e2ee.wrapTarget(connId, type, payload)
+    if (!wrapped) return false
+    this.sendTo(connId, wrapped)
+    return true
+  }
+
+  deviceClient(connId: string, identity: string | null): void {
+    if (identity) this.deviceClients.set(connId, identity)
+    else this.deviceClients.delete(connId)
+  }
+
+  /**
+   * App-side revoke: tell the device while its authenticated session still exists (the E2eeManager drops
+   * the session right after this), so it clears its own pin instead of showing "paired / disconnected"
+   * forever. The device service's relay did this itself when it shared this process; the core is now a
+   * frame away, and the session would be gone by the time it answered, so the gateway sends the same frame
+   * to the same sessions here, and the service hears of the unpairing once they are gone. Best-effort: a
+   * device that is offline learns it on reconnect, when its e2e_hello gets e2e_denied.
+   */
+  private deviceUnpaired(identity: string): void {
+    for (const [connId, client] of [...this.deviceClients]) {
+      if (client !== identity) continue
+      this.deviceClients.delete(connId)
+      if (this.e2ee.sessionIdentity(connId) !== identity || this.e2ee.sessionRole(connId) !== 'device') continue
+      const event = { type: 'pair.revoke', machineId: this.machineId }
+      try {
+        deviceDump.record('out', 'rpc', connId, { type: 'autonomous_device_event', payload: event })
+        this.device(connId, 'autonomous_device_event', event)
+      } catch { /* Local removal must proceed regardless. */ }
+    }
+    // After the sessions are dropped, which the manager does once this returns: the service's relay then
+    // finds none left to tell, and only forgets the identity.
+    setImmediate(() => this.core.deviceRevoked(identity))
+  }
 
   // ── the pairings, for the daemon's own commands (`harness pair`, `unpair`, `remote-password`, …) ──
 

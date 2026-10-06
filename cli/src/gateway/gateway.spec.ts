@@ -53,8 +53,8 @@ describe('a remote client, as the core hears it', () => {
   it('is registered with the role and label its session proved, and forgotten when the relay says it left', async () => {
     const socket = relaySocket(MACHINE)
     expect(socket.remoteClient('phone-1')).toBeNull()
-    await pairedClient(socket, 'phone-1', { label: 'Dee’s phone' })
-    expect(socket.remoteClient('phone-1')).toEqual({ role: 'web', label: 'Dee’s phone' })
+    const phone = await pairedClient(socket, 'phone-1', { label: 'Dee’s phone' })
+    expect(socket.remoteClient('phone-1')).toEqual({ role: 'web', label: 'Dee’s phone', identity: phone.pub, direct: false })
     await dispatchDown(socket, { type: '__client_disconnected', payload: {} }, 'phone-1')
     expect(socket.remoteClient('phone-1')).toBeNull()
     await socket.stop()
@@ -209,6 +209,52 @@ describe('terminal streams on a client\'s P2P channel', () => {
     await dispatchDown(socket, phone.seal('terminal_resync', { streamId: LIVE }), 'phone-1', 'p2p')
     gateway.terminalBinary('phone-1', bytes(LIVE))
     expect(viaP2p.calls).toBe(1)
+    await socket.stop()
+  })
+})
+
+describe('the Wi-Fi device, over the gateway\'s sessions', () => {
+  it('an unpaired device is told so, sealed, while its session still stands, and the service forgets it after', async () => {
+    // The device clears its own pin on this frame; told after its session is gone, it could not open it
+    // and would show "paired, disconnected" for ever (lib/autonomous-device/relay.ts `revoke`).
+    const socket = relaySocket(MACHINE)
+    const gateway = gatewayOf(socket)
+    const revoked = vi.fn()
+    socket.fromGateway.deviceRevoked = revoked
+    const dial = await pairedClient(socket, 'dial-1', { role: 'device', label: 'Desk dial' })
+    gateway.deviceClient('dial-1', dial.pub)
+    gateway.revoke(C.fingerprint(C.b64d(dial.pub)))
+    const told = queuedFor(socket, 'dial-1').map((frame) => frame.type)
+    expect(told.indexOf('autonomous_device_event')).toBeGreaterThanOrEqual(0)
+    expect(told.indexOf('autonomous_device_event')).toBeLessThan(told.indexOf('e2e_denied'))
+    const event = queuedFor(socket, 'dial-1').find((frame) => frame.type === 'autonomous_device_event')!
+    expect(dial.open(event)).toEqual({ type: 'pair.revoke', machineId: MACHINE })
+    // The service hears of it once the session is gone, so its relay has nobody left to tell twice.
+    expect(revoked).not.toHaveBeenCalled()
+    expect(socket.remoteClient('dial-1')).toBeNull()
+    await new Promise((done) => setImmediate(done))
+    expect(revoked).toHaveBeenCalledWith(dial.pub)
+    await socket.stop()
+  })
+
+  it('opens a device\'s request only when the relay would, and hands it on with the frame as it came', async () => {
+    const socket = relaySocket(MACHINE)
+    const heard = vi.fn()
+    socket.fromGateway.device = heard
+    const dial = await pairedClient(socket, 'dial-1', { role: 'device', label: 'Desk dial' })
+    const phone = await pairedClient(socket, 'phone-1')
+    const sealed = dial.seal('autonomous_device_request', { type: 'hello', proto: 1, requestId: 'h' })
+    await dispatchDown(socket, sealed, 'dial-1')
+    expect(heard).toHaveBeenLastCalledWith('dial-1', sealed, { type: 'autonomous_device_request', payload: { type: 'hello', proto: 1, requestId: 'h' } })
+    // A web session's, an unsealed one, or one beside a session id: never opened, as the relay never did.
+    const fromPhone = phone.seal('autonomous_device_request', { type: 'hello' })
+    await dispatchDown(socket, fromPhone, 'phone-1')
+    expect(heard).toHaveBeenLastCalledWith('phone-1', fromPhone, null)
+    await dispatchDown(socket, { type: 'autonomous_device_request', payload: { type: 'hello' } }, 'dial-1')
+    expect(heard.mock.lastCall?.[2]).toBeNull()
+    const withSession = { ...dial.seal('autonomous_device_request', { type: 'hello' }), dbSessionId: 's1' }
+    await dispatchDown(socket, withSession, 'dial-1')
+    expect(heard.mock.lastCall?.[2]).toBeNull()
     await socket.stop()
   })
 })

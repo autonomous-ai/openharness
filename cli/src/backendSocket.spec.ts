@@ -179,7 +179,7 @@ describe('reviewed permanent deletion RPCs', () => {
   it('tells a relayed client whose terminal bytes find no session that its session is gone', async () => {
     const socket = relaySocket('fixture')
     const internals = socket as any
-    const { sealTerminalBinary } = await import('./lib/terminalBinary.js')
+    const { sealTerminalBinary } = await import('./lib/e2ee/terminalSeal.js')
     const raw = sealTerminalBinary(new Uint8Array(32).fill(7), 9, { kind: 1, streamId: '00112233-4455-6677-8899-aabbccddeeff', seq: 1, bytes: new TextEncoder().encode('ls\r'), compressed: false })!
     const gateway = gatewayOf(socket) as any
     gateway.enqueueTerminalBinary('web:gone', raw)

@@ -1044,11 +1044,14 @@ describe('local CLI WebSocket', () => {
   it('takes the core\'s own services by their token, whatever machine id they name', async () => {
     // A signed-in core serves under its account's machine id; its services name this computer's.
     const accepted: string[] = []
+    const receiveBinary = vi.fn()
+    let buffered: (() => number) | undefined
     const services = {
-      accept: (service: string, token: string) => {
+      accept: (service: string, token: string, sink: { buffered(): number }) => {
         if (token !== 'boot-token') return null
         accepted.push(service)
-        return { receive: vi.fn(), closed: vi.fn() }
+        buffered = sink.buffered
+        return { receive: vi.fn(), receiveBinary, closed: vi.fn() }
       },
     }
     const url = await start(new FakeBackend(), { services })
@@ -1061,6 +1064,11 @@ describe('local CLI WebSocket', () => {
     }))
     await expect(connected).resolves.toMatchObject({ type: 'connected', payload: { machineId, service: 'search' } })
     expect(accepted).toEqual(['search'])
+    // A service that carries terminals (the gateway) sends bytes on its link, and the core can ask how many
+    // of its own wait on the socket to it.
+    ws.send(Uint8Array.of(1, 2, 3))
+    await vi.waitFor(() => expect(receiveBinary).toHaveBeenCalledWith(new Uint8Array([1, 2, 3])))
+    expect(buffered?.()).toBe(0)
     ws.close()
 
     // The token is the check: a wrong one is refused, whichever machine id it names.

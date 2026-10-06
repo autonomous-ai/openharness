@@ -13,7 +13,11 @@ import { ENCRYPTED_RPC_RESULT_TYPES, isEncryptedDownType } from './core.js'
 import { SHARE_REQUEST_TYPES, SHARE_RESULT_TYPES } from '../../sharing/protocol.js'
 import { VIEWER_DOWN_TYPES } from '../viewerWire.js'
 import { TEAM_REQUEST_TYPES, TEAM_RESULT_TYPES } from '../../teams/wire.js'
-export const OWNER_COMMAND_TYPES = new Set(['command_bar', 'route_task', 'route_send'])
+import { OWNER_COMMAND_TYPES, PAIR_REQUESTS, PLATE_REQUEST, PLATE_RESULT, rpcResultType } from '../relayFrames.js'
+
+// The ones the core reads too, to dispatch a request and name its reply, live with its other frame rules
+// (lib/relayFrames.ts), which load no cipher; this stays the one place every extension is listed.
+export { OWNER_COMMAND_TYPES, PAIR_REQUESTS, PLATE_REQUEST, PLATE_RESULT, rpcResultType }
 
 const FLEET_REQUESTS = new Set(['grid_fleet_capabilities', 'grid_fleet_run', 'grid_fleet_cancel',
   'grid_fleet_models_list', 'grid_fleet_model_download', 'grid_fleet_model_start', 'grid_fleet_model_stop'])
@@ -24,8 +28,6 @@ const MACHINE_RESULTS = new Set([...MACHINE_REQUESTS].map(type => `${type}_resul
 /** The pair brain, machine to machine (daemons/BRAIN.md). A watch carries question text and recaps; the
  * writes (answer, send, stop, start, pause, resume) act on a harness through the owning machine's floor
  * (pair/owner.ts). Sealed both ways, always: the relay sees the outer type only. */
-export const PAIR_REQUESTS = new Set(['pair_watch', 'pair_journal', 'pair_read', 'pair_list',
-  'pair_answer', 'pair_send', 'pair_stop', 'pair_start', 'pair_pause', 'pair_resume'])
 export const PAIR_RESULTS = new Set([...PAIR_REQUESTS].map(type => `${type}_result`))
 /** Pushed to one watcher with the daemon's `wrapTarget` (pairwise, that connection only), never broadcast. */
 export const PAIR_PUSHES = new Set(['pair_event'])
@@ -35,12 +37,8 @@ const LOCAL_PAIR_RESULT = 'pair_result'
 /** An individual's art for the phone (pair/plateService.ts; a window asks `daemon_plate_get` over the Unix
  * socket instead). Sealed both ways, answered to that connection alone. Its reply is `pair_plate`, not
  * `pair_plate_get_result`: see rpcResultType. */
-export const PLATE_REQUEST = 'pair_plate_get'
-export const PLATE_RESULT = 'pair_plate'
 export const isPairFrameType = (type: string): boolean =>
   PAIR_REQUESTS.has(type) || PAIR_RESULTS.has(type) || PAIR_PUSHES.has(type) || type === PLATE_REQUEST || type === PLATE_RESULT
-/** The reply's type for a request: `<type>_result`, except the plate's `pair_plate`. */
-export const rpcResultType = (type: string): string => type === PLATE_REQUEST ? PLATE_RESULT : `${type}_result`
 /**
  * Whether a `pair_*` frame that arrived through the relay may be believed. `RelaySessionCrypto` passes a
  * never-wrapped frame straight through (control frames are plaintext), so without this the relay could

@@ -39,6 +39,50 @@ describe('service links', () => {
     expect(make({ token: undefined }).accept('search', TOKEN, sink(), vi.fn())).toBeNull()
   })
 
+  it('hands on what a service tells the core without asking, its bytes and its comings and goings (the gateway)', () => {
+    const notice = vi.fn(), binary = vi.fn(), connected = vi.fn(), disconnected = vi.fn()
+    const links = make({ owned: { gateway: [] }, notice, binary, connected, disconnected })
+    // Nothing to send bytes to, and nothing waiting, while it is away.
+    expect(links.notifyBinary('gateway', Uint8Array.of(1))).toBe(false)
+    expect(links.buffered('gateway')).toBe(0)
+    const gateway = { ...sink(), sendBinary: vi.fn(() => true), buffered: vi.fn(() => 42) }
+    const link = links.accept('gateway', TOKEN, gateway, vi.fn())!
+    expect(connected).toHaveBeenCalledWith('gateway')
+    link.receive({ type: 'service_notice', payload: { kind: 'status', connected: true } })
+    expect(notice).toHaveBeenCalledWith('gateway', { kind: 'status', connected: true })
+    link.receiveBinary(Uint8Array.of(7))
+    expect(binary).toHaveBeenCalledWith('gateway', Uint8Array.of(7))
+    expect(links.notifyBinary('gateway', Uint8Array.of(2))).toBe(true)
+    expect(gateway.sendBinary).toHaveBeenCalledWith(Uint8Array.of(2))
+    expect(links.buffered('gateway')).toBe(42)
+    link.closed()
+    expect(disconnected).toHaveBeenCalledWith('gateway')
+    // A service whose sink carries no bytes, and that says nothing of what waits on it.
+    const plain = links.accept('gateway', TOKEN, sink(), vi.fn())!
+    expect(links.notifyBinary('gateway', Uint8Array.of(3))).toBe(false)
+    expect(links.buffered('gateway')).toBe(0)
+    // Without the hooks, the same frames are taken and nothing is said.
+    const bare = make({ owned: { gateway: [] } })
+    const quiet = bare.accept('gateway', TOKEN, sink(), vi.fn())!
+    quiet.receive({ type: 'service_notice', payload: {} })
+    quiet.receiveBinary(Uint8Array.of(1))
+    quiet.closed()
+    plain.closed()
+  })
+
+  it('waits as long as a call says it may (a pairing), and answers SERVICE_UNAVAILABLE after', async () => {
+    const links = make({ owned: { gateway: [] } })
+    links.accept('gateway', TOKEN, sink(), vi.fn())
+    const answer = links.call('gateway', 'gateway_pair', { code: 'X' }, 60_000)
+    vi.advanceTimersByTime(30_000)
+    let settled = false
+    void answer.then(() => { settled = true })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(settled).toBe(false)
+    vi.advanceTimersByTime(30_000)
+    await expect(answer).resolves.toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'gateway' })
+  })
+
   it('routes a request to its service and relays the answer under the asker\'s own request', async () => {
     const links = make()
     const search = sink()
