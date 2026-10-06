@@ -42,6 +42,8 @@ export interface CoreApi {
     displayName(session: RegisteredSession): string
     /** A live agent, by its agent id. */
     byAgent(agentId: string): RegisteredSession | undefined
+    /** A live agent, by its agent id or its engine session id: whichever the apps asked by. */
+    resolve(id: string): RegisteredSession | undefined
     /** The live agents the apps are shown. */
     advertised(): RegisteredSession[]
     /** Whether the agent's terminal is attached: a frame without one reads to the apps as "agent gone". */
@@ -111,6 +113,12 @@ export interface CoreApi {
      *  create dialog. */
     dshInstallStatus(status: Record<string, unknown>): void
   }
+}
+
+/** `agents.resolve` over a service process's own copy of the agents, as the registry answers it: by agent
+ *  id, then by engine session id (an agent with none yet is never found by an empty one). */
+export function resolveAgent(agents: readonly RegisteredSession[], id: string): RegisteredSession | undefined {
+  return agents.find((agent) => agent.agentId === id) ?? (id ? agents.find((agent) => agent.sessionId === id) : undefined)
 }
 
 /** Who sent a request, as the core established it. A service trusts this, never a field of the
@@ -306,7 +314,7 @@ export function emptyPorts(): CorePorts {
 
 export interface CoreApiDeps {
   dataDir: string
-  registry: Pick<typeof registry, 'list' | 'byAgent' | 'advertised' | 'terminalAvailable'>
+  registry: Pick<typeof registry, 'list' | 'byAgent' | 'resolve' | 'advertised' | 'terminalAvailable'>
   stoppedAgents: Pick<StoppedAgentStore, 'list'>
   databaseHistory: CoreApi['transcripts']['databaseHistory']
   externalSessions: CoreApi['external']['sessions']
@@ -340,6 +348,7 @@ export function createCoreApi({
       live: () => registry.list(),
       displayName: projectDisplayName,
       byAgent: (agentId) => registry.byAgent(agentId),
+      resolve: (id) => registry.resolve(id),
       advertised: () => registry.advertised(),
       terminalAvailable: (agentId) => registry.terminalAvailable(agentId),
       sync: syncSession,

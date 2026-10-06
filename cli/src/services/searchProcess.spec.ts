@@ -116,6 +116,7 @@ describe('search in its own process', () => {
     expect(api.agents.all()).toEqual([live, stopped])
     expect(api.agents.live()).toEqual([live])
     expect(api.agents.byAgent('stopped')).toBe(stopped)
+    expect(api.agents.resolve('stopped')).toBe(stopped)
     expect(api.agents.displayName(live as never)).toBe('Live one')
     expect(api.agents.displayName(stopped as never)).toBe('')
     expect(api.agents.advertised()).toEqual([])
