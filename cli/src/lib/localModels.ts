@@ -606,8 +606,10 @@ export class LocalModels {
     if (!this.options.appModels) return []
     // A daemon just started answers from the scan it saved last time: a first scan while a llama-server
     // was busy kept the picker without these models, and held a Stop two minutes [run].
-    this.appsRead ??= await this.savedApps()
-    if (force || !this.appsRead || Date.now() - this.appsRead.at >= 30_000) void this.scanApps()
+    if (!this.appsRead) this.appsRead = await this.savedApps()
+    if (force || !this.appsRead || Date.now() - this.appsRead.at >= 30_000) {
+      void this.scanApps()
+    }
     return this.appsRead?.value ?? this.scanApps()
   }
 

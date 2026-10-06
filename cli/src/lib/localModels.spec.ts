@@ -1479,6 +1479,21 @@ describe('models other apps downloaded, started in their own app', () => {
     expect(JSON.parse(await readFile(join(stateDir, 'app-engines.json'), 'utf8'))).toEqual([])
   })
 
+  it('refreshes the picker without rescanning apps until their 30-second cache expires', async () => {
+    // Found by QA's coverage audit: refreshing the picker should not repeatedly probe installed engines.
+    vi.useFakeTimers({ toFake: ['Date'] })
+    const start = Date.now(), scan = vi.fn(async () => apps)
+    service = appService({ appModels: scan })
+    await service.list('home')
+    expect(scan).toHaveBeenCalledTimes(1)
+    vi.setSystemTime(start + 3000)
+    await service.list('home')
+    expect(scan).toHaveBeenCalledTimes(1)
+    vi.setSystemTime(start + 30_000)
+    await service.list('home')
+    expect(scan).toHaveBeenCalledTimes(2)
+  })
+
   it('answers from the last scan while a slow one runs, and the list after it has the new one', async () => {
     let scans = 0, release!: () => void
     const models = modelFixture({ stateDir, processEnv: { GRID_HOME: home }, run, request: request as typeof fetch, inventory,
