@@ -8,7 +8,7 @@
  * process's alone: a crash or a leak in search costs search, and the master starts it again.
  */
 import type { CoreApi } from '../core/api.js'
-import { DELIVERIES_OFF, emptyPorts, LANE_OFF, resolveAgent, TERMINALS_OFF } from '../core/api.js'
+import { AGENT_ACTIONS_OFF, DAEMON_UNKNOWN, DELIVERIES_OFF, emptyPorts, LANE_OFF, resolveAgent, TERMINALS_OFF } from '../core/api.js'
 import { databaseHistory } from '../core/transcripts/databaseHistory.js'
 import { ExternalSessions, OpenSessions } from '../lib/sessionSearch/external.js'
 import { externalProviders } from '../lib/sessionSearch/externals/index.js'
@@ -54,6 +54,7 @@ export function searchCoreApi(
       runtimeProfile: () => null,
       setRuntime: () => {},
       fork: async () => ({ ok: false, error: 'UNSUPPORTED' }),
+      ...AGENT_ACTIONS_OFF,
     },
     // Search drives no agent: these are never asked of it.
     turns: { send: () => {}, stop: () => {}, recent: () => [], asks: () => [], ...DELIVERIES_OFF },
@@ -71,7 +72,8 @@ export function searchCoreApi(
       privateGridName: async () => null,
       machineName: () => null,
     },
-    clients: { viewerChanged: () => {}, gridNamed: () => {}, gridModelsChanged: () => {}, dshInstallStatus: () => {} },
+    clients: { viewerChanged: () => {}, gridNamed: () => {}, gridModelsChanged: () => {}, dshInstallStatus: () => {}, windows: () => {} },
+    daemon: DAEMON_UNKNOWN,
   }
 }
 

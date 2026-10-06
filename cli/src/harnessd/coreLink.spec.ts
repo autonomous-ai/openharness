@@ -94,6 +94,13 @@ describe('connectToMaster', () => {
     expect(channel.sent.filter((message) => message.type === 'harnessd:heartbeat')).toHaveLength(3)
   })
 
+  it('asks its master for an experiment\'s process, and asks nothing without one', () => {
+    const channel = new FakeChannel()
+    connectToMaster(channel, supervised).want('orchestrator')
+    connectToMaster(channel, {}).want('orchestrator')
+    expect(channel.sent).toEqual([{ type: 'harnessd:want', service: 'orchestrator' }])
+  })
+
   it('says why when start-up gave way to safe mode', () => {
     const channel = new FakeChannel()
     connectToMaster(channel, supervised).ready('no tmux')

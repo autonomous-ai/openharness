@@ -128,7 +128,7 @@ import { createAgentUpdate } from './agents/update.js'
 import { createEngineHooks, installEngineHooks } from './engines/hooks.js'
 import { createCursorTaskHooks } from './engines/cursorTasks.js'
 import { databaseHistory } from './transcripts/databaseHistory.js'
-import { createCoreApi, emptyPorts, FLEET_FALLBACKS, LONG_ANSWERS, MODELS_FALLBACKS, MODELS_OFF, MODELS_REQUESTS, MONITOR_FALLBACKS, MONITOR_OFF, MONITOR_REQUESTS, PROJECTS_REQUESTS, SEARCH_FALLBACKS, SEARCH_REQUESTS, STORE_REQUESTS, TEAMS_FALLBACKS, USAGE_REQUESTS, VIEWERS_FALLBACKS, WORKSPACES_FALLBACKS, type GatewayAccount, type GatewayOps, type GatewayStatus, type TeamsPort } from './api.js'
+import { createCoreApi, emptyPorts, EXPERIMENTS, FLEET_FALLBACKS, LONG_ANSWERS, MODELS_FALLBACKS, MODELS_OFF, MODELS_REQUESTS, MONITOR_FALLBACKS, MONITOR_OFF, MONITOR_REQUESTS, ORCHESTRATOR_FALLBACKS, ORCHESTRATOR_REQUESTS, PROJECTS_REQUESTS, SEARCH_FALLBACKS, SEARCH_REQUESTS, STORE_REQUESTS, TEAMS_FALLBACKS, USAGE_REQUESTS, VIEWERS_FALLBACKS, WORKSPACES_FALLBACKS, type GatewayAccount, type GatewayOps, type GatewayStatus, type TeamsPort } from './api.js'
 import { createServiceHost, testFaults } from './serviceHost.js'
 import { startStalls } from './stall.js'
 import { createServiceLinks, type ServiceLinks } from './serviceLinks.js'
@@ -139,6 +139,10 @@ import { createStoreLink } from './storeLink.js'
 import { createModelsLink } from './modelsLink.js'
 import { answerAgentQuery } from './agentQueries.js'
 import { createDeliveries } from './deliveries.js'
+import { wakeExperiments } from './experiments.js'
+import { answerExperimentQuery, createForExperiment } from './experimentQueries.js'
+import { createOrchestratorLink } from './orchestratorLink.js'
+import { daemonCommand } from '../lib/daemonCommand.js'
 import { KNOWN_SERVICES, servicesTheMasterRuns } from '../harnessd/services.js'
 import { createTeamsLink } from './teamsLink.js'
 import { startFleet } from '../services/fleet.js'
@@ -627,8 +631,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     submit: (agentId, text, deliveryId) => backendRef?.onMessage?.(agentId, text, deliveryId),
     cancel: (deliveryId) => backendRef?.onCancelOrchestratorMessage?.(deliveryId) ?? false,
     tell: (service, event) => { serviceLinksRef?.notify(service, { type: 'service_event', payload: { kind: 'delivery', event } }, { untilDelivered: true }) },
-    // None yet: the teams and the orchestrator, which deliver turns, still run in this process.
-    deliverers: new Set(),
+    // The experiments: the orchestrator's turns, and those of the experiments after it.
+    deliverers: new Set(Object.keys(EXPERIMENTS)),
   })
   const coreApi = createCoreApi({
     terminals: createTerminalOpener({ tmuxBackend, registry, announceSession, blocksFolder: (cwd) => !!backendRef?.purgeAgentService?.blocksFolder(cwd) }),
@@ -668,6 +672,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       if (!s || !model) return
       void runtimeController.setProfile(s.sessionId || agentId, `runtime-v1:${s.sessionId || agentId}:${s.engine}:${model}@${effort || 'auto'}`)
     },
+    // The window's `agent_create` for an experiment's agents (core/experimentQueries.ts).
+    create: (request) => createForExperiment(backendRef?.onCreateAgent ?? null, request),
+    dsh: (session) => backendRef?.dshFrameProvider?.(session) ?? null,
+    windows: (frame) => backendRef?.sendLocal(frame),
+    daemon: { command: daemonCommand(), port: env.PORT, machineId: () => backendRef?.machineId ?? '' },
     // The same path the window's `agent_fork` takes.
     fork: async (agentId) => {
       if (!backendRef?.onForkAgent) return { ok: false, error: 'UNSUPPORTED' }
@@ -977,7 +986,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     teams: {
       prepare: (id, text, tabId, deliveryId) => teams.prepare(id, text, tabId, deliveryId),
       delivery: (event) => {
-        backend.orchestratorDelivery(event)
         backend.teamDelivery(event)
         deliveries.settled(event)
       },
@@ -1049,7 +1057,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     bySession: (sessionId) => registry.bySession(sessionId),
     resolve: (id) => registry.resolve(id),
     stopped: (agentId) => stoppedAgents.get(agentId),
-    orchestratorRoleOf: (agentId) => backend.orchestratorRoleOf(agentId),
+    orchestratorRoleOf: (agentId) => ports.orchestrator?.roleOf(agentId) ?? null,
     readLastTurn,
     dataDir: env.ADAPTER_DATA_DIR,
     recapForce: env.RECAP_FORCE,
@@ -1083,7 +1091,15 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   backend.handoffRequestProvider = createHandoffRequest({ prepare: (req) => prepareAgentHandoff(handoffDeps, req) })
 
   // The requests each service that can run in its own process answers, as core/api.ts declares them.
-  const requestsOf: Record<string, readonly string[]> = { search: SEARCH_REQUESTS, store: STORE_REQUESTS, usage: USAGE_REQUESTS, monitor: MONITOR_REQUESTS, projects: PROJECTS_REQUESTS, models: MODELS_REQUESTS }
+  const requestsOf: Record<string, readonly string[]> = {
+    search: SEARCH_REQUESTS, store: STORE_REQUESTS, usage: USAGE_REQUESTS, monitor: MONITOR_REQUESTS, projects: PROJECTS_REQUESTS, models: MODELS_REQUESTS,
+    ...Object.fromEntries(Object.entries(EXPERIMENTS).map(([name, experiment]) => [name, experiment.requests])),
+  }
+  // The experiments (core/api.ts `EXPERIMENTS`): each may act on the core through the hooks an experiment has.
+  const experiments = new Set(Object.keys(EXPERIMENTS))
+  // What the core keeps of the orchestrator in its own process: each agent's role, and which frames are its
+  // Directors' (core/orchestratorLink.ts).
+  const orchestratorLink = createOrchestratorLink((frame) => serviceLinks.notify('orchestrator', frame))
   // What the core keeps of the viewers in their own process, for the frames it builds (core/viewersLink.ts).
   const viewersLink = createViewersLink(coreApi, (frame, opts) => serviceLinks.notify('viewers', frame, opts))
   // How the core tells workspaces in their own process what to do, and answers them (core/workspacesLink.ts).
@@ -1098,7 +1114,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     token: serviceToken,
     owned: Object.fromEntries([...outOfProcess].map((name) => [name, requestsOf[name] ?? []])),
     waits: LONG_ANSWERS,
-    answer: (service, query, payload) => deliveries.answer(service, query, payload)
+    // An experiment's process runs only once it is on: a request for one that is off asks the master for it.
+    onDemand: experiments,
+    want: (service) => coreLink.want(service),
+    answer: async (service, query, payload) => deliveries.answer(service, query, payload)
+      ?? await answerExperimentQuery(coreApi, experiments, service, query, payload)
+      ?? (service === 'orchestrator' ? orchestratorLink.answer(query, payload) : null)
       ?? (service === 'viewers' ? viewersLink.answer(query, payload)
       : service === 'workspaces' ? workspacesLink.answer(query, payload)
       : service === 'store' ? storeLink.answer(query, payload)
@@ -1135,6 +1156,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // Workspaces: in this process, or in the edge host (services/workspacesProcess.ts), told what to do and when.
   if (outOfProcess.has('workspaces')) ports.workspaces = workspacesLink.port
   else serviceHost.start('workspaces', inline!.startWorkspaces, coreApi, WORKSPACES_FALLBACKS)
+  // The orchestrator, an experiment (services/orchestrator.ts): in this process, or in its own once it is on,
+  // as the core sees it there (core/orchestratorLink.ts). It reads its Directors' turns from the frames sent.
+  if (outOfProcess.has('orchestrator')) ports.orchestrator = orchestratorLink.port
+  else serviceHost.start('orchestrator', inline!.startOrchestrator, coreApi, ORCHESTRATOR_FALLBACKS, ORCHESTRATOR_REQUESTS)
+  backend.onFrameSent = (frame) => ports.orchestrator?.frame(frame)
   // The prompt scopes, behind the service host's guard (a fault there costs no message its write) or in their own process.
   if (outOfProcess.has('teams')) ports.teams = backend.swarmPromptScopes = teamsLink.scopes
   else serviceHost.start('teams', (_core, started) => { started.teams = backend.swarmPromptScopes }, coreApi, TEAMS_FALLBACKS)
@@ -1682,6 +1708,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   if (coreLink.supervised) {
     coreLink.bound(hookPort)
     coreLink.startHeartbeat()
+    // The experiments with saved state are on: their processes are asked for now, the master heeding a
+    // bound core alone (core/experiments.ts). The others wait for their first request.
+    wakeExperiments({ dataDir: env.ADAPTER_DATA_DIR, experiments: EXPERIMENTS, outOfProcess, want: (service) => coreLink.want(service) })
   } else {
     try { writeFileSync(PID_FILE, String(process.pid) + '\n') } catch { /* best effort */ }
   }

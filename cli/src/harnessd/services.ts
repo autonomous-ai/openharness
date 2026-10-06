@@ -24,6 +24,9 @@ export interface ServiceSpec {
   heapLimitMiB: number
   /** Resident memory past which it is restarted, MiB; 0: off. */
   rssLimitMiB: number
+  /** An experiment's process: not started with the others, only once the core asks for one of its
+   *  services (`want`), and then kept running like any other. */
+  onDemand?: boolean
 }
 
 export interface ServiceSupervisorDeps {
@@ -69,7 +72,8 @@ export const DEFAULT_SERVICE_OPTIONS: ServiceSupervisorOptions = {
   parkRetryMs: 1_800_000,
 }
 
-export type ServiceState = 'starting' | 'running' | 'restarting' | 'parked' | 'stopping' | 'stopped'
+/** `off`: an experiment's process that no one has asked for yet, and so was never started. */
+export type ServiceState = 'off' | 'starting' | 'running' | 'restarting' | 'parked' | 'stopping' | 'stopped'
 export type ServiceExitReason = 'crashed' | 'hung' | 'memory' | 'stopped'
 
 export interface ServiceStatus {
@@ -89,7 +93,7 @@ const describeExit = (code: number | null, signal: NodeJS.Signals | null): strin
 
 /** One service's process, restarted for as long as the master runs. */
 class Service {
-  state: ServiceState = 'starting'
+  state: ServiceState
   private since: number
   private child: CoreHandle | null = null
   private restarts = 0
@@ -114,6 +118,7 @@ class Service {
   ) {
     this.backoff = options.initialBackoffMs
     this.since = deps.wallClock()
+    this.state = spec.onDemand ? 'off' : 'starting'
   }
 
   status(): ServiceStatus {
@@ -144,6 +149,12 @@ class Service {
     this.deps.log(`[harnessd] service ${this.spec.name} started (pid ${child.pid ?? '?'})${this.restarts ? ` · restart ${this.restarts}` : ''}`)
     this.setState(this.restarts === 0 ? 'starting' : 'restarting')
     this.watchHeartbeat(child)
+  }
+
+  /** Start an experiment's process the core asked for: once, while it is off. One already started is
+   *  the master's to keep running, parked included. */
+  want(): void {
+    if (this.state === 'off') this.start()
   }
 
   /** SIGTERM, then SIGKILL after the grace; `done` once it is gone. A parked or waiting one is simply stopped. */
@@ -272,9 +283,18 @@ export class ServiceSupervisor {
     this.services = specs.map((spec) => new Service(spec, deps, options, env))
   }
 
-  /** Start every service; none waits on another, or on the core. */
+  /** Start every service but the experiments; none waits on another, or on the core. */
   start(): void {
-    for (const service of this.services) service.start()
+    for (const service of this.services) if (!service.spec.onDemand) service.start()
+  }
+
+  /**
+   * Start the experiment's process that hosts [service], if it is not running yet: the core asked for it
+   * (`harnessd:want`). With null, every experiment's: a core from before `want` never asks, and ran them
+   * all as it ran every other service.
+   */
+  want(service: string | null): void {
+    for (const each of this.services) if (service === null || each.spec.services.includes(service)) each.want()
   }
 
   /** Stop every service; `done` once all are gone. */
@@ -315,6 +335,10 @@ export const SERVICE_HOSTS: Readonly<Record<string, ServiceHostSpec>> = {
   // The monitor parses up to 8 MB of ioreg output per Monitor poll on a Mac with a GPU, hence more
   // than workspaces alone had.
   edge: { services: ['workspaces', 'usage', 'monitor', 'projects'], heapLimitMiB: 384, rssLimitMiB: 768 },
+  // The orchestrator (services/orchestratorProcess.ts), an experiment: started only once it is on, for a
+  // saved project or a request (core/api.ts `EXPERIMENTS`). Its projects' files and the frames of their
+  // Directors; the agents it runs are the core's.
+  orchestrator: { services: ['orchestrator'], heapLimitMiB: 256, rssLimitMiB: 512, onDemand: true },
   // The prompt scopes hold a few drafts and fingerprints per agent: small, bounded state.
   teams: { services: ['teams'], heapLimitMiB: 256, rssLimitMiB: 512 },
   // The relay and its E2EE (gateway/gatewayProcess.ts): the backend link, every remote client's session,
@@ -388,7 +412,8 @@ export function servicesTheMasterRuns(env: NodeJS.ProcessEnv, known: readonly st
  * opt-in. Each process hosts the services named of its own, and is not started for none. A process
  * named as one of its services is named whole: `viewers` runs the viewers' process, the Store beside
  * them, as it ran the viewers' before the Store joined it. `HARNESSD_SERVICE_HEAP_LIMIT_MIB` gives every
- * one the same heap limit instead (tests, support).
+ * one the same heap limit instead (tests, support). An experiment's process (`onDemand`) waits for the core
+ * to ask for it; named in `HARNESSD_SERVICES`, it starts with the others.
  */
 export function serviceSpecs(env: NodeJS.ProcessEnv, hosts: Readonly<Record<string, ServiceHostSpec>>): ServiceSpec[] {
   const named = env.HARNESSD_SERVICES === undefined ? null
@@ -396,6 +421,9 @@ export function serviceSpecs(env: NodeJS.ProcessEnv, hosts: Readonly<Record<stri
   const heap = Number(env.HARNESSD_SERVICE_HEAP_LIMIT_MIB)
   return Object.entries(hosts).flatMap(([name, host]) => {
     const services = host.services.filter((service) => !named || named.has(service) || named.has(name))
-    return services.length ? [{ name, ...host, services, ...(Number.isInteger(heap) && heap > 0 ? { heapLimitMiB: heap } : {}) }] : []
+    // An experiment named outright runs from the start, as every service named does (a test, support).
+    const onDemand = host.onDemand && !named ? { onDemand: true } : {}
+    const { onDemand: _given, ...rest } = host
+    return services.length ? [{ name, ...rest, services, ...onDemand, ...(Number.isInteger(heap) && heap > 0 ? { heapLimitMiB: heap } : {}) }] : []
   })
 }

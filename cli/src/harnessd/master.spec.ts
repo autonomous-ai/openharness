@@ -11,6 +11,7 @@ import {
 import { ignoreLogWriteErrors } from '../lib/log.js'
 import { folderFingerprint } from './leanBundle.js'
 import { PROBE_ANSWER, RESUME_ENV, decodeResume, encodeResume, fingerprint, readMarker, writeMarker } from './reexec.js'
+import { HARNESSD_PROTOCOL } from './protocol.js'
 import { DEFAULT_SUPERVISOR_OPTIONS, type ResumeState } from './supervisor.js'
 
 describe('supervisorOptions', () => {
@@ -165,7 +166,7 @@ describe('the probe a re-executing master asks a bundle', () => {
     expect(probeMaster({ env: {}, execArgv: [], version: '9.9.9' }, (line) => said.push(line))).toBe(0)
     const resume: ResumeState = { restarts: 1, lastExit: 'code 75', lastExitReason: 'update', update: 'pending', claimed: true, reexecs: 1, unproven: 1 }
     expect(probeMaster({ env: { [RESUME_ENV]: encodeResume(resume) }, execArgv: [], version: '9.9.9' }, (line) => said.push(line))).toBe(0)
-    expect(said).toEqual([`${PROBE_ANSWER} · protocol 2 · v9.9.9`, `${PROBE_ANSWER} · protocol 2 · v9.9.9`])
+    expect(said).toEqual([`${PROBE_ANSWER} · protocol ${HARNESSD_PROTOCOL} · v9.9.9`, `${PROBE_ANSWER} · protocol ${HARNESSD_PROTOCOL} · v9.9.9`])
   })
 
   it('refuses a state it cannot read, and says so on stdout by default', () => {

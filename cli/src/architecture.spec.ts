@@ -227,7 +227,12 @@ const SERVICE_MAY_IMPORT: Record<string, string> = {
 // device, the teams and the orchestrator write a turn and hear of it, which lets the latter two run in
 // processes of their own. Its lines are added here, ahead of the moves that take the teams and the
 // orchestrator out of this process.
-const CORE_CLOSURE_BUDGET = 89_860
+//
+// Then at 89,443 in 402, from 89,796 in 402: the orchestrator is an experiment, in a process of its own
+// started only once it is on (services/orchestratorProcess.ts); its 640 lines leave. What stays is what any
+// experiment acts on the core through (core/experiments.ts, core/experimentQueries.ts) and what the core
+// keeps of the orchestrator (core/orchestratorLink.ts): 290 lines.
+const CORE_CLOSURE_BUDGET = 89_540
 
 /** What is not the core's, by path: each goes to a service or its own process, in the plan's order. */
 const EDGE: RegExp[] = [
@@ -305,11 +310,7 @@ const CORE_MAY_REACH: Record<string, string> = {
   'lib/sessionSearch/sessionTurns.ts': 'the handoff (lib/agentHandoff.ts), in the edge host once CoreApi gives it the stopped agents, recaps and discovery it reads',
   'lib/sessionSearch/transcript.ts': 'the readers of other engines\' sessions keep this helper: it moves beside them, out of search\'s folder',
   'lib/sessionSearch/turns.ts': 'the handoff (lib/agentHandoff.ts), in the edge host once CoreApi gives it the stopped agents, recaps and discovery it reads',
-  'orchestrator/artifacts.ts': 'step 8: the experimental host',
-  'orchestrator/model.ts': 'step 8: the experimental host',
-  'orchestrator/prompts.ts': 'step 8: the experimental host',
-  'orchestrator/service.ts': 'step 8: the experimental host',
-  'orchestrator/wire.ts': 'step 8: the experimental host',
+  'orchestrator/prompts.ts': 'step 8: the teams\' command line quotes with it (backendSocket.ts), until the teams leave',
   'services/fleet.ts': 'step 9: the fleet, beside the dial',
   'services/fleetRouter.ts': 'step 9: the fleet, beside the dial',
   'services/shell.ts': 'shell setup and launch receipts, in the edge host; only the argv launch stays in the core (#893)',

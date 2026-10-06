@@ -181,6 +181,7 @@ describe('workspaces in their own process', () => {
     api.clients.viewerChanged('a1')
     api.clients.gridNamed('grid')
     api.clients.dshInstallStatus({ phase: 'clone' })
+    api.clients.windows({ type: 'orchestrator_changed', payload: {} })
   })
 
   it('runs as a real service process, with the real workspaces, by default', () => {
