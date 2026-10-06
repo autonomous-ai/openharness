@@ -2051,6 +2051,15 @@ impl App {
     pub fn resume(&mut self, pane_id: u64) {
         let Some(pane) = self.panes.get_mut(&pane_id) else { return };
         let Some(link) = self.links.get(&pane.machine_id).and_then(|s| s.link.clone()) else { return };
+        // Selecting a saved conversation may have opened its old terminal already.
+        // Hold the input until resume finishes; a late open must not send the first
+        // keystrokes to the shell in which the previous agent exited.
+        pane.open_token += 1;
+        let token = pane.open_token;
+        pane.opening = true;
+        if let Some(stream) = pane.stream.take() {
+            link.send("terminal_close", json!({ "streamId": stream.to_string() }));
+        }
         pane.phase = Phase::Connecting("Resuming the conversation…".into());
         let agent_id = pane.agent_id.clone();
         let machine_id = pane.machine_id.clone();
@@ -2062,7 +2071,8 @@ impl App {
         self.spawn(async move { link.rpc("agent_resume", json!({ "agentId": agent_id }), Duration::from_secs(120)).await }, move |app, reply| {
             if let Some(visit) = visit { crate::shell_context::resumed(app, &visit); }
             if app.account_epoch != epoch || app.connection_generation(&machine_id) != Some(generation)
-                || app.panes.get(&pane_id).is_none_or(|p| p.agent_id != expected_agent || p.machine_id != machine_id) { return }
+                || app.panes.get(&pane_id).is_none_or(|p| p.agent_id != expected_agent || p.machine_id != machine_id || p.open_token != token) { return }
+            if let Some(pane) = app.panes.get_mut(&pane_id) { pane.opening = false; }
             match reply {
             Ok(_) => { app.relist(&machine_id); app.open_stream(pane_id, true) }
             Err(error) => {
@@ -6699,6 +6709,25 @@ mod recovery_tests {
         app.opened(2, "test-peer", 7, (80, 24), Ok(("terminal_ready".into(), json!({"streamId":Uuid::new_v4().to_string(),"readOnly":true}))));
         assert!(matches!(app.panes[&2].phase, Phase::Watching(_)));
         assert!(!app.panes[&2].opening);
+        app.links["test-peer"].link.as_ref().unwrap().close();
+    }
+
+    #[tokio::test]
+    async fn resume_holds_input_when_the_old_terminal_finishes_opening() {
+        let mut app = fixture();
+        app.panes.get_mut(&1).unwrap().queued.push(b"q".to_vec());
+        app.resume(1);
+        assert!(app.panes[&1].opening);
+        assert!(app.panes[&1].stream.is_none());
+        assert_eq!(app.panes[&1].open_token, 8);
+        app.opened(1, "test-peer", 7, (80, 24), Ok(("terminal_ready".into(), json!({"streamId":Uuid::new_v4().to_string(),"readOnly":false}))));
+        assert!(matches!(app.panes[&1].phase, Phase::Connecting(_)));
+        assert_eq!(app.panes[&1].queued, [b"q".to_vec()]);
+        // Reconnect/takeover gestures cannot bypass the pending resume either.
+        app.open_stream(1, true);
+        assert!(app.panes[&1].opening);
+        assert!(app.panes[&1].stream.is_none());
+        assert_eq!(app.panes[&1].open_token, 8);
         app.links["test-peer"].link.as_ref().unwrap().close();
     }
 
