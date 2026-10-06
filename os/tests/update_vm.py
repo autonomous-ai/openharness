@@ -14,6 +14,7 @@ import subprocess
 import threading
 import time
 from vm import VM, check_graphical_keyboard
+import session_update_vm
 
 
 def main():
@@ -27,6 +28,8 @@ def main():
         parser.error('This acceptance run requires native x86 KVM.')
     iso, bundle, folder = args.iso.resolve(), args.bundle.resolve(), args.output.resolve()
     image = json.loads(iso.with_name('manifest.json').read_text())
+    manifest = json.loads((bundle / 'package-manifest.json').read_text())
+    session_tools = session_update_vm.required(bundle)
     with iso.open('rb') as handle:
         assert hashlib.file_digest(handle, 'sha256').hexdigest() == image['iso']['sha256']
     folder.mkdir(parents=True, exist_ok=False)
@@ -67,6 +70,8 @@ def main():
             vm.command('curl --fail --silent --show-error --max-time 90 ' + shlex.quote(url + '/' + name) +
                        ' -o ' + shlex.quote('/home/me/update-bundle/' + name), timeout=100)
         vm.command('cd /home/me/update-bundle && sha256sum -c SHA256SUMS')
+        if session_tools:
+            receipt['session_dependencies'] = session_update_vm.prepare(vm, manifest)
         # The actual update/rollback must not require a package repository or network.
         vm.command('sudo nmcli networking off')
         output, status = vm.command('python3 /home/me/update-bundle/update_guest.py /home/me/update-bundle', timeout=600, check=False)
@@ -80,7 +85,6 @@ def main():
         vm.stop()
         vm.start(live=False)
         vm.login_installed(config)
-        manifest = json.loads((bundle / 'package-manifest.json').read_text())
         vm.command('test "$(pacman -Q harness-os)" = ' + shlex.quote('harness-os ' + manifest['package']['version']))
         vm.command('test -s ~/projects/update-survivor/keep.txt')
         receipt['keyboard'] = check_graphical_keyboard(vm, 'updated')
@@ -97,6 +101,9 @@ def main():
         vm.keys('ctrl', 'd')
         receipt['checks'].append('A rebooted upgrade preserves hn’s standard footer and Ctrl+b, c opens a real terminal tab')
         receipt['checks'].append('Updated encrypted machine reboots to hn, accepts physical-keyboard input and retains the project')
+        if session_tools:
+            vm.command('printf %s ' + shlex.quote(config['password'] + '\n') + ' | sudo -S -v')
+            session_update_vm.exercise(vm, config, receipt['session_dependencies'])
         if args.fast_fixture:
             vm.command('printf %s ' + shlex.quote(config['password'] + '\n') + ' | sudo -S -v')
             from fast_update_vm import exercise

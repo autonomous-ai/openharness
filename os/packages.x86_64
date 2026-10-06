@@ -38,13 +38,15 @@ vulkan-radeon
 libva-intel-driver
 intel-media-driver
 wl-clipboard
+grim
+slurp
 xdg-utils
 xdg-desktop-portal-wlr
 pipewire
 pipewire-pulse
 wireplumber
 swayidle
-swaylock
+gtklock
 brightnessctl
 ttf-dejavu
 ttf-nerd-fonts-symbols-mono

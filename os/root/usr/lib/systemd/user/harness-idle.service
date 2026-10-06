@@ -4,5 +4,5 @@ ConditionPathExists=!/etc/harness-live
 PartOf=harness-os.target
 
 [Service]
-ExecStart=/usr/bin/swayidle -w timeout 600 'swaylock -f -c 000000' before-sleep 'swaylock -f -c 000000'
+ExecStart=/usr/bin/swayidle -w timeout 600 /usr/lib/harness-os/lock before-sleep /usr/lib/harness-os/lock
 Restart=on-failure

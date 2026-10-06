@@ -13,6 +13,20 @@ import tarfile
 import tempfile
 
 
+DEPENDENCIES = ('nodejs-lts-jod', 'tmux', 'foot', 'labwc', 'gtklock', 'grim', 'slurp')
+
+
+def package_info(version, timestamp, size):
+    # These are needed on upgrades too; adding a tool to the ISO list alone
+    # leaves existing computers with new launchers but no executable to run.
+    return (f'pkgname = harness-os\npkgbase = harness-os\nxdata = pkgtype=pkg\npkgver = {version}\n'
+            'pkgdesc = Harness session and verified Harness runtime\n'
+            'url = https://github.com/autonomous-ai/openharness\n'
+            f'builddate = {timestamp}\npackager = OpenHarness\nsize = {size}\n'
+            'arch = x86_64\nlicense = MIT\n'
+            + ''.join(f'depend = {name}\n' for name in DEPENDENCIES))
+
+
 def digest(path):
     with path.open('rb') as handle:
         return hashlib.file_digest(handle, 'sha256').hexdigest()
@@ -167,12 +181,7 @@ def main():
         root = Path(temp) / 'root'
         runtime = stage(source, args.runtime.resolve(), root, commit)
         size = sum(p.stat().st_size for p in root.rglob('*') if p.is_file() and not p.is_symlink())
-        pkginfo = (f'pkgname = harness-os\npkgbase = harness-os\nxdata = pkgtype=pkg\npkgver = {version}\n'
-                   'pkgdesc = Harness session and verified Harness runtime\n'
-                   'url = https://github.com/autonomous-ai/openharness\n'
-                   f'builddate = {timestamp}\npackager = OpenHarness\nsize = {size}\n'
-                   'arch = x86_64\nlicense = MIT\ndepend = nodejs-lts-jod\ndepend = tmux\n'
-                   'depend = foot\ndepend = labwc\n')
+        pkginfo = package_info(version, timestamp, size)
         archive_package(root, package, pkginfo, timestamp)
     manifest = {'schema': 1, 'kind': 'harness-os-package', 'development': args.development,
                 'source_commit': commit, 'architecture': lock['architecture'],

@@ -187,7 +187,12 @@ is no connection. Connecting advances automatically to OpenCode on the left and
 two terminal panes on the right. Working Ethernet skips Wi-Fi setup. Later boots
 reconnect to saved Wi-Fi and restore existing work. Super+n starts New Harness,
 Super+t opens a shell directly, Super+m connects a computer, Super+w opens Wi-Fi
-and Super+l locks the session. These require no Shift or prefix. The shared TUI
+and Super+l locks the session behind the same wordmark and "Enter your password"
+as disk unlock. Super+e opens the file manager in its own window, a folder
+tree on the left and the folder on the right; pressing it again returns to hn.
+Print or Super+p captures the screen, Shift+Print or Super+r a
+dragged region; each picture is saved under `~/Pictures/Screenshots` and copied
+to the clipboard. The Super keys require no Shift or prefix. The shared TUI
 shortcuts still work; ordinary hn on macOS and other Linux distributions retains
 its usual UI.
 Recovery remains available through another console or the USB; the owner retains
