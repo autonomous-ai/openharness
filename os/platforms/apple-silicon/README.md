@@ -140,3 +140,45 @@ metadata. QEMU injects the firmware ESP identity; its protected partitions conta
 sentinels, not macOS filesystems. These checks do not establish physical Apple
 support or recovery from a torn GPT write. Fresh encryption, payload copying,
 boot configuration and installer-media integration remain the next stages.
+
+## Private encrypted payload copy
+
+`storage.py` continues from a completed target plan. It verifies the entire
+read-only raw source image by SHA-256 before writing the destination, then checks
+the image's Harness provenance, pristine account state and Fedora/Asahi layout.
+The disk lock spans enrollment and copying; kernel device extents must match the
+saved GPT plan before a filesystem can be created.
+
+Every installation receives fresh LUKS2, Btrfs and ext4 identities. Cryptsetup
+creates the volume key and an Argon2id password slot. The password is passed only
+through stdin, never process arguments, temporary files or the EFI progress record.
+The record is committed before formatting. A retry recognizes only its own
+encryption/filesystem identities; a wrong password or foreign filesystem stops
+the stage. It does not format a missing filesystem after copying has begun.
+
+Root, home and boot files are copied with Unix ownership, hard links, ACLs and
+extended attributes preserved. An interrupted copy can resume from the same
+verified image. Once the copy is complete, a retry does not copy or format again,
+so later work stays intact. Existing Asahi EFI files and vendor firmware are left
+in place. Cleanup unmounts only owned paths and never recursively deletes a mount
+directory.
+
+```sh
+python3 os/tests/asahi_storage_vm.py \
+  --image /path/to/harness-asahi-private.raw --sha256 IMAGE_SHA256 \
+  --image-source FULL_IMAGE_COMMIT \
+  --fixture /path/to/verified-arm-fixture --fixture-source FULL_FIXTURE_COMMIT \
+  --output os/test-results/asahi-storage
+```
+
+The native test repeats partition interruption/reboot acceptance, exits after the
+LUKS format but before its progress update, rejects a wrong password on retry,
+kills a real rsync during its copy, and resumes offline after another reboot.
+It compares every copied tree, checks the exact frozen runtime hashes and unchanged
+LUKS header, then verifies that a completed retry preserves a new project. Its
+source image is attached read-only and checked again afterwards.
+
+This remains a private construction stage. Boot configuration, account handoff,
+installer UI/media and physical Apple acceptance are still required before this
+is a bootable Harness installation. The native test uses a public fixture password;
+its resulting disk must never be released.

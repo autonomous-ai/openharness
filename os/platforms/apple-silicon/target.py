@@ -6,6 +6,7 @@ partitions are never removed, moved, resized or formatted by this module.
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
 import hashlib
 import fcntl
 import json
@@ -337,13 +338,23 @@ def lock_disk(fd, timeout=5):
             time.sleep(.05)
 
 
-def apply_plan(path):
-    """Append only the persisted plan's missing entries; safe to resume after one write.
+def verify_partition_devices(plan):
+    """The kernel's writable device nodes must describe the same planned extents."""
+    disk = os.stat(plan['original']['device']).st_rdev
+    for part in plan['additions']:
+        node = os.stat(part['node'], follow_symlinks=False)
+        if not stat.S_ISBLK(node.st_mode):
+            raise TargetError('An installation partition is not a block device.')
+        block = (Path('/sys/dev/block') / f'{os.major(node.st_rdev)}:{os.minor(node.st_rdev)}').resolve(strict=True)
+        if (int((block / 'start').read_text()) * 512 != part['start'] * 4096 or
+                int((block / 'size').read_text()) * 512 != part['size'] * 4096 or
+                (block.parent / 'dev').read_text().strip() != f'{os.major(disk)}:{os.minor(disk)}'):
+            raise TargetError('Kernel partition devices differ from the installation plan. Restart before continuing.')
 
-    Re-read firmware ownership on every attempt. The plan must be persisted on
-    that ESP, mounted with private root-only permissions. This function does not
-    create filesystems or update boot files.
-    """
+
+@contextmanager
+def locked_plan(path, *, allow_missing=False):
+    """Revalidate ownership and hold the disk lock through an installation stage."""
     if platform.system() != 'Linux' or os.geteuid() != 0:
         raise TargetError('Partition preparation requires the Linux installer.')
     if (os.readlink('/proc/self/ns/mnt') == os.readlink('/proc/1/ns/mnt') or
@@ -364,6 +375,27 @@ def apply_plan(path):
                 or command('blockdev', '--getro', device) != '0'):
             raise TargetError('The planned disk is not a writable 4096-byte-sector block device.')
         lock_disk(fd)
+        snapshot = read_table(device)
+        verify_gpt(fd, int(command('blockdev', '--getsize64', device)), normalize(snapshot))
+        missing = remaining(plan, snapshot)
+        if missing and not allow_missing:
+            raise TargetError('Prepare the planned Linux partitions before copying Harness.')
+        if not allow_missing:
+            verify_partition_devices(plan)
+        yield plan, fd
+    finally:
+        os.close(fd)
+
+
+def apply_plan(path):
+    """Append only the persisted plan's missing entries; safe to resume after one write.
+
+    Re-read firmware ownership on every attempt. The plan must be persisted on
+    that ESP, mounted with private root-only permissions. This function does not
+    create filesystems or update boot files.
+    """
+    with locked_plan(path, allow_missing=True) as (plan, fd):
+        device = plan['original']['device']
         # Revalidate each time. Foreign changes must never be mistaken for
         # resumable progress. The lock also excludes cooperating disk tools.
         for part in plan['additions']:
@@ -379,11 +411,10 @@ def apply_plan(path):
         verify_gpt(fd, int(command('blockdev', '--getsize64', device)), normalize(snapshot))
         if remaining(plan, snapshot):
             raise TargetError('The planned Linux partitions were not fully created.')
-    finally:
-        os.close(fd)
     # An ESP mounted for the journal can prevent a whole-table kernel reread.
     # Update only our two entries, never remove/re-add existing partitions.
     for part in plan['additions']:
         command('partx', '--update', '--nr', partition_number(device, part['node']), device)
     command('udevadm', 'settle', '--timeout=10')
+    verify_partition_devices(plan)
     return plan
