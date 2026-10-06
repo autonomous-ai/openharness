@@ -6,7 +6,9 @@ export HARNESS_CLI=/usr/bin/harness
 export HARNESS_CLI_ARGS='[]'
 # This computer's working tabs must survive an update without a cloud account or
 # network. hn's ordinary local sessions retain their complete pane references.
-export HARNESS_TUI_DESK=off
+# Signed in, these windows join the account's shared tabs as in the desktop app;
+# on sign-out, the harnesses running on this computer stay.
+export HARNESS_TUI_DESK=off HARNESS_TUI_DESK_SIGNED_IN=sync
 if [ ! -f "$HOME/.local/state/harness-os/onboarded" ]; then
     export HARNESS_OS_FIRST_USE=1
 else
