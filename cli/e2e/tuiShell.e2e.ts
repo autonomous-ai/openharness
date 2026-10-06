@@ -27,7 +27,10 @@ afterEach(async context => {
 it.runIf(binary)('keeps connected local shells interactive and composes a remote agent with literal argv, then returns to the original shell', async () => {
   expect(existsSync(binary!)).toBe(true)
   expect(process.env.E2E_BUNDLE_PATH, 'run with E2E_BUNDLE=1').toBeTruthy()
-  world = await startFleet({ envA: { SHELL: '/bin/zsh' }, envB: { SHELL: '/bin/zsh' } })
+  // Ubuntu's system zshrc otherwise prompts about the runner's shared completion
+  // directories before this private HOME's rc file can set up the test shell.
+  const shellEnv = { SHELL: '/bin/zsh', skip_global_compinit: '1' }
+  world = await startFleet({ envA: shellEnv, envB: shellEnv })
   const { a, b } = world
   // These wrappers are the private equivalent of installed harness/hn binaries. They
   // retain each daemon's own environment and never fall through to a user's install.
