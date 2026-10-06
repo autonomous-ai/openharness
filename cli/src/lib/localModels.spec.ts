@@ -328,6 +328,35 @@ describe('local model discovery and lifecycle', () => {
       .toMatchObject({ state: 'running', canStop: true })
   })
 
+  it('uses the file name for a legacy engine sharing a record without per-engine aliases', async () => {
+    // Found by QA on a quiet machine: the new per-engine alias fallback had no multi-engine coverage.
+    catalogCards = []
+    await writeFile(join(home, 'models', 'Small-Q4.gguf'), Buffer.alloc(64))
+    await writeFile(join(records, 'remote.json'), JSON.stringify({ node_id: 'local-node', advertise_as: ['other-model'],
+      engines: [{ models: ['Small-Q4.gguf'] }, { endpoint_url: 'http://127.0.0.1:50872/v1', models: ['other-model'] }] }))
+    await writeFile(join(records, 'remote.heartbeat'), '')
+    inventory.mockResolvedValue({ state: 'awake', status: 'running',
+      nodes: [{ node_id: 'local-node', online: true, models: ['Small-Q4.gguf'] }] })
+    expect((await service.list('home')).models.find(model => model.id === 'local:Small-Q4.gguf'))
+      .toMatchObject({ name: 'Small-Q4', state: 'running', canStop: true })
+  })
+
+  it.each([false, true])('keeps the node concurrency safe when a newly discovered engine has its own slots: %s', async slotted => {
+    // Found by QA on a quiet machine: a record arriving during download did not exercise the slot limit.
+    const original = run.getMockImplementation()!
+    run.mockImplementation(async (args, output) => {
+      const result = await original(args, output)
+      if (args[0] === 'pull') await writeFile(join(records, 'neighbour.json'), JSON.stringify({ node_id: 'local-node',
+        engines: [{ models: ['Neighbour.gguf'], ...(slotted ? { launch: { parallel: 1 } } : {}) }] }))
+      return result
+    })
+    const result = await service.act('home', 'org/Small-GGUF', 'start'); await service.settled()
+    expect(result.operation?.phase).toBe('done')
+    const joined = calls.find(args => args.includes('join'))!
+    expect(joined[joined.indexOf('--max-concurrency') + 1]).toBe(slotted ? '5' : '1')
+    expect(joined[joined.indexOf('--parallel') + 1]).toBe('1')
+  })
+
   it.each(['current', 'legacy', 'malformed'])('preserves imported routing names across restart with %s receipts', async scenario => {
     catalogCards = []; serving = true
     await writeFile(join(home, 'models', 'Small-Q4.gguf'), Buffer.alloc(64))
@@ -1984,6 +2013,32 @@ describe('Jev models: Get brings Grid\'s llama.cpp up to a build that serves the
     expect(await offered(models)).toMatchObject({ 'kev-9b': 'Q8_0', clef: 'Q4_K_M' })
     await models.act('home', 'jev:ggml-org/Clef-GGUF', 'download'); await models.settled()
     expect(calls.filter(args => args[0] === 'pull')).toEqual([['pull', 'ggml-org/Clef-GGUF:Clef-Q4_K_M.gguf']])
+  })
+
+  it.each(['start', 'download'] as const)('refuses a Jev %s when memory shrinks after the catalog was shown', async action => {
+    // Found by QA on a quiet machine: the catalog's memory check lacked the later allocation refusal.
+    const device = { ...card10 }
+    const models = jevService({}, {}, device)
+    expect(await laya(models)).toMatchObject({ state: 'available', canStart: true })
+    device.usable_bytes = 0
+    const result = await models.act('home', LAYA, action); await models.settled()
+    expect(result.operation).toMatchObject({ phase: 'failed',
+      error: 'This computer does not have the memory to run laya-english. Close some apps, or choose a smaller model.' })
+    expect(calls.some(args => args[0] === 'pull' || args[0] === 'engine' || args.includes('join'))).toBe(false)
+    expect(ops.start).not.toHaveBeenCalled()
+    expect(await laya(models)).toMatchObject({ quant: 'Q8_0', sizeBytes: LAYA_SIZE, operation: { phase: 'failed' } })
+  })
+
+  it('keeps a running Jev engine stoppable when its weights disappear and no quant fits now', async () => {
+    const device = { ...card10 }
+    const models = jevService({}, {}, device)
+    await models.act('home', LAYA, 'start'); await models.settled()
+    await rm(join(home, 'models', 'Laya-Q8_0.gguf'))
+    device.usable_bytes = 0
+    expect(await laya(models)).toMatchObject({ state: 'running', canStart: false, canStop: true, quant: 'Q8_0', sizeBytes: LAYA_SIZE })
+    await models.act('home', LAYA, 'stop'); await models.settled()
+    expect(ops.stop).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ modelId: LAYA }))
+    expect(JSON.parse(await readFile(join(stateDir, 'app-engines.json'), 'utf8'))).toEqual([])
   })
 
   it('updates an engine new enough for Jev models but not for Clef, whose architecture came later', async () => {
