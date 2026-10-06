@@ -31,6 +31,9 @@ process.env.ZDOTDIR = process.env.ADAPTER_DATA_DIR
 // discover, refresh, or replace the developer's real Harness account session.
 process.env.HARNESS_AUTH_DIR = join(process.env.ADAPTER_DATA_DIR, 'auth')
 process.env.DSH_DIR = join(process.env.ADAPTER_DATA_DIR, 'dsh')
+// Every daemon of this user records where it listens here (lib/hookRoutes.ts), and the hook reads it: a
+// spec must neither write a record beside the person's daemons nor route a test hook by one of theirs.
+process.env.HARNESS_HOOK_ROUTES_DIR = join(process.env.ADAPTER_DATA_DIR, 'hook-routes')
 // The Store catalog is fetched from GitHub by dsh_list; a test must never depend on what that branch
 // holds today (a published catalog turned a fixture registry of two into the live shelf of 23).
 // Loopback port 9 refuses at once, so the live catalog falls back to the registry each test stubs.
