@@ -68,3 +68,21 @@ it.skipIf(!hasPty).each(['duplex', 'disconnect', 'close'])(
     }
   }, 15_000,
 )
+
+it.skipIf(!hasPty).each(['gone', 'early'])('opens a port whose far end is %s without waiting in open()', async (mode) => {
+  const scratch = await mkdtemp(join(tmpdir(), 'serial-gone-'))
+  try {
+    const worker = join(scratch, 'serial-gone.mjs')
+    await build({
+      entryPoints: [fileURLToPath(new URL('./__fixtures__/serialGone.ts', import.meta.url))],
+      outfile: worker, bundle: true, platform: 'node', format: 'esm', target: 'node20',
+    })
+    const driver = fileURLToPath(new URL('./__fixtures__/serialGone.py', import.meta.url))
+    const { stdout } = await promisify(execFile)('python3', [driver, process.execPath, worker, mode], { timeout: 12_000 })
+    const result = JSON.parse(stdout)
+    if (mode === 'gone') expect(result).toMatchObject({ mode, opened: false })
+    else expect(result).toEqual({ mode, opened: true, received: 'before after' })
+  } finally {
+    await rm(scratch, { recursive: true, force: true })
+  }
+}, 15_000)
