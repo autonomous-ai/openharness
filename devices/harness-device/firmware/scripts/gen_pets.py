@@ -4,11 +4,11 @@
     python3 devices/harness-device/firmware/scripts/gen_pets.py          # write
     python3 devices/harness-device/firmware/scripts/gen_pets.py --check  # fail if stale
 
-Claude Code: a 12 x 8 cell sprite at 5 px per cell plus one spare row on top, 60 x 45 px per frame.
-Codex: a 14 x 14 cell cloud-headed robot at 4 px per cell, 56 x 56 px per frame.
-Claude has three large scenes (Clawd cooking / headphones / rocket, mockup/clawd_scenes.py) at 8 px per cell,
-stored as palette-indexed cell grids: 12 steps of 110 ms, 8 steps of 140 ms for each mic level 0..4, and 12
-steps of 120 ms. Codex's three come from the owner's robot pack (assets/pets/codex; mockup/codex_options.py W2 / L1 / S2):
+Claude Code: Clawd, drawn at the glass's 1 px with anti-aliased edges (assets/pets/claude, exported by
+mockup/clawd_v3.py; the look is mockup/clawd-v3.html): the small pet is the rest loop (24 steps of 120 ms, cell
+frames like Muse's), and four scenes — working 26 steps of 55 ms, listening 56 of 60 (its sound arcs drawn by
+focus.c), sending 40 of 60, the alert 20 of 65 — each a few body poses moved by a per-step dy, and a props sprite.
+Codex's three come from the owner's robot pack (assets/pets/codex; mockup/codex_options.py W2 / L1 / S2):
 the pack's 192 x 208 robot frames at one byte per pixel (cell 1) and an overlay sprite (the sandbox bubble, the
 equalizer bubble, the paper plane) drawn after them: 28 steps of 120 ms, 15 steps of 80 ms for each mic level
 0..4, and 15 steps of 140 ms. The listening bubble is stored once, empty; its three bars are not stored at all:
@@ -34,6 +34,7 @@ registry ht_pets[] / ht_pet_count (declared in pets.h). Frames use the same enco
 gen_focus_marks.py: RGB565 in panel order plus alpha8 (0 or 255 only).
 """
 import json
+import math
 import sys
 from pathlib import Path
 
@@ -41,79 +42,6 @@ from PIL import Image, ImageColor, ImageDraw
 
 root = Path(__file__).resolve().parents[1]
 STEPS = 24
-
-# ---- Claude Code ----
-CELL = 5
-W, H = 12 * CELL, 9 * CELL
-BODY = (204, 120, 92)
-EYE = (0, 0, 0)
-LEGS = (2, 4, 7, 9)                  # leg columns
-STEP_MS = (150, 90, 55, 140)         # idle, working, done, asking
-
-
-def sprite(eyes='open', arms=0, legs=(2, 2, 2, 2), look=0):
-    """One pose as {(col, row): colour}. arms: 0 level, -1 raised one row. legs: rows per leg."""
-    cells = {}
-    for r in range(6):
-        for c in range(2, 10):
-            cells[(c, r)] = BODY
-    for r in (2 + arms, 3 + arms):
-        for c in (0, 1, 10, 11):
-            cells[(c, r)] = BODY
-    for c, n in zip(LEGS, legs):
-        for r in range(6, 6 + n):
-            cells[(c, r)] = BODY
-    if eyes == 'open':
-        cells[(3 + look, 1)] = EYE
-        cells[(8 + look, 1)] = EYE
-    elif eyes == 'happy':            # ^ ^ : the eye cell lifted a row
-        for c in (3, 8):
-            cells[(c, 0)] = EYE
-    return cells                     # 'closed' leaves the eyes as body
-
-
-def idle():
-    bob = (0,) * 6 + (1,) * 6 + (0,) * 6 + (1,) * 6
-    return [(sprite('closed' if i in (20, 21) else 'open'), bob[i]) for i in range(STEPS)]
-
-
-def working():
-    out = []
-    for i in range(STEPS):
-        phase = (i // 3) % 4
-        legs = [(2, 1, 2, 1), (2, 2, 2, 2), (1, 2, 1, 2), (2, 2, 2, 2)][phase]
-        look = ([0] * 6 + [1] * 6 + [0] * 6 + [-1] * 6)[i]
-        out.append((sprite('open', 0, legs, look), 0 if phase in (1, 3) else -1))
-    return out
-
-
-def done():
-    hop = (0, -1, -2, -3, -4, -4, -3, -2, -1, 0, 0, 0)
-    out = []
-    for i in range(STEPS):
-        if i < 12:
-            arms = -1 if hop[i] < -1 else 0
-            legs = (2, 2, 2, 2) if hop[i] == 0 else (1, 1, 1, 1)
-            out.append((sprite('happy', arms, legs), hop[i] * CELL // 2))
-        else:
-            out.append((sprite('happy' if i < 20 else 'open'), 0))
-    return out
-
-
-def asking():
-    return [(sprite('open', -1 if (i // 4) % 2 == 0 else 0), 0) for i in range(STEPS)]
-
-
-def render(cells):
-    """Row r at y = (r + 1) * CELL: the spare row on top is for the hop."""
-    im = Image.new('RGBA', (W, H), (0, 0, 0, 0))
-    d = ImageDraw.Draw(im)
-    for (c, r), col in cells.items():
-        y = r * CELL + CELL
-        d.rectangle([c * CELL, y, c * CELL + CELL - 1, y + CELL - 1], fill=col)
-    return im
-
-
 
 # ---- Codex ----
 XCELL = 4
@@ -221,172 +149,20 @@ def xasking():
     return [(glyphs(xbase(-1 if (i // 4) % 2 == 0 else 0), QUESTION), 0) for i in range(STEPS)]
 
 
-def xrender(cells):
-    """Row r at y = r * XCELL; the hop is the loop's dy, not part of the image."""
-    im = Image.new('RGBA', (XW, XH), (0, 0, 0, 0))
-    d = ImageDraw.Draw(im)
+def xgrid(cells):
+    """The robot's 14 x 14 grid, one px a cell: stored with 8 px cells (CELL_PETS), shown at 4 (1x) up to 8 (2x)."""
+    im = Image.new('RGBA', (XW // XCELL, XH // XCELL), (0, 0, 0, 0))
     for (c, r), col in cells.items():
-        y = r * XCELL
-        d.rectangle([c * XCELL, y, c * XCELL + XCELL - 1, y + XCELL - 1], fill=col)
+        im.putpixel((c, r), col + (255,))
     return im
 
-# ---- Claude's scenes: cooking (working) and headphones (voice listening) ----
-SCELL = 8
-SCENE_WORK = (26, 22, 110, 12)       # cells wide, cells high, step_ms, steps
-SCENE_LISTEN = (24, 24, 140, 8)      # one loop per mic level 0..4, level-major
-SCENE_SEND = (26, 26, 120, 12)       # the voice "sending" state: Clawd launches a rocket
+
+def half_size(size):
+    """The 1x size of a 2x drawing, as ht_cell_sprite_zoom draws it at zoom 4."""
+    return ((size[0] * 4 + 7) // 8, (size[1] * 4 + 7) // 8)
+
+
 LEVELS = 5                           # pets.h HT_PET_SCENE_LEVELS (a _Static_assert in the output holds them)
-SOR = (222, 120, 86)      # body
-SOR_D = (190, 92, 64)     # shade
-SEYE = (16, 16, 16)
-HAT = (240, 236, 228)
-HAT_D = (214, 208, 198)
-PAN = (34, 34, 38)
-PAN_L = (70, 70, 78)
-FOOD = (250, 200, 60)
-NAVY = (22, 38, 84)
-SBLUE = (48, 96, 176)
-PAD = (220, 220, 214)
-NOTE = (250, 204, 90)
-WHITE = (236, 236, 232)
-GREY = (170, 172, 178)
-GLASS = (170, 205, 235)
-RED = (226, 60, 40)
-FLAME = (250, 190, 50)
-FLAME_HOT = (255, 236, 150)
-
-
-def rect(c, x0, x1, y0, y1, col):
-    for y in range(y0, y1 + 1):
-        for x in range(x0, x1 + 1):
-            c[(x, y)] = col
-
-
-def cooking(t):
-    """t: 0..11. Hat, body, a pan held out; three bits tossed from it."""
-    c = {}
-    bob = 1 if t % 6 in (3, 4, 5) else 0
-    lift = 1 if t % 4 in (1, 2) else 0          # the pan flicks up and back
-    oy = 6 + bob
-    rect(c, 6, 8, oy - 6, oy - 6, HAT); rect(c, 10, 12, oy - 6, oy - 6, HAT)
-    rect(c, 4, 14, oy - 5, oy - 3, HAT)
-    for x, y in ((5, oy - 4), (9, oy - 5), (13, oy - 4), (8, oy - 3), (11, oy - 3)):
-        c[(x, y)] = HAT_D
-    rect(c, 5, 13, oy - 2, oy - 1, HAT); rect(c, 5, 13, oy - 1, oy - 1, HAT_D)
-    rect(c, 4, 13, oy, oy + 8, SOR); rect(c, 4, 4, oy, oy + 8, SOR_D)
-    rect(c, 2, 3, oy + 4, oy + 5, SOR); c[(2, oy + 5)] = SOR_D               # left arm
-    rect(c, 14, 15, oy + 4, oy + 5, SOR)                                     # right arm
-    for x in (5, 7, 10, 12):
-        rect(c, x, x, oy + 9, oy + 10, SOR_D if x in (5, 10) else SOR)
-    rect(c, 6, 6, oy + 2, oy + 3, SEYE)
-    rect(c, 11, 11, oy + 2, oy + 3, SEYE); c[(11, oy + 1)] = SEYE; c[(12, oy + 1)] = SEYE
-    py = oy + 4 - lift
-    rect(c, 16, 17, py, py, PAN_L)
-    rect(c, 18, 24, py - 1, py - 1, PAN_L); rect(c, 18, 24, py, py, PAN); rect(c, 19, 23, py + 1, py + 1, PAN)
-    for x0, ph in ((19, 0), (21, 4), (23, 8)):
-        u = (t + ph) % 12
-        h = [0, 2, 4, 5, 6, 6, 5, 4, 2, 0, -9, -9][u]
-        if h >= 0:
-            c[(x0 + (1 if u in (4, 5, 6) else 0), py - 2 - h)] = FOOD
-    # One cell right, as the mockup's frame sits: the pan side is the wider one.
-    return {(x + 1, y): col for (x, y), col in c.items()}
-
-
-def listening(t, level):
-    """t: 0..7. Headphones, eyes closed, a nod with the beat, notes floating up."""
-    c = {}
-    nod = [0, 1, 1, 0, 0, 1, 1, 0][t] if level else 0
-    oy = 8 + nod
-    rect(c, 7, 16, oy, oy, SOR); rect(c, 5, 18, oy + 1, oy + 1, SOR); rect(c, 4, 19, oy + 2, oy + 10, SOR)
-    rect(c, 4, 5, oy + 2, oy + 10, SOR_D)
-    rect(c, 2, 3, oy + 8, oy + 9, SOR_D); rect(c, 20, 21, oy + 8, oy + 9, SOR)   # arms
-    for x in (6, 9, 14, 17):
-        rect(c, x, x, oy + 11, oy + 11, SOR_D)
-    rect(c, 7, 8, oy + 5, oy + 5, SEYE); rect(c, 15, 16, oy + 5, oy + 5, SEYE)
-    c[(7, oy + 6)] = SOR_D; c[(16, oy + 6)] = SOR_D
-    rect(c, 7, 16, oy - 3, oy - 3, NAVY); rect(c, 5, 6, oy - 2, oy - 2, NAVY); rect(c, 17, 18, oy - 2, oy - 2, NAVY)
-    rect(c, 4, 4, oy - 1, oy + 1, NAVY); rect(c, 19, 19, oy - 1, oy + 1, NAVY)
-    rect(c, 7, 16, oy - 2, oy - 2, SBLUE); rect(c, 7, 16, oy - 1, oy - 1, PAD)
-    squeeze = 1 if level >= 3 and t % 2 else 0
-    for x0 in (2, 19):
-        rect(c, x0, x0 + 2, oy + 1, oy + 5, NAVY)
-        rect(c, x0 + 1, x0 + 1 + (squeeze if x0 == 2 else -squeeze), oy + 2, oy + 4, SBLUE)
-    for k, (x0, ph) in enumerate(((8, 0), (14, 4))):
-        u = (t + ph) % 8
-        y = oy - 4 - u
-        if u < 7:
-            c[(x0 + (u % 2), y)] = NOTE; c[(x0 + 1 + (u % 2), y)] = NOTE
-            if k == 0:
-                c[(x0 + 1 + (u % 2), y - 1)] = NOTE; c[(x0 + 2 + (u % 2), y - 1)] = NOTE
-    return c
-
-
-def sending(t):
-    """t: 0..11. Clawd presses the launch button; the rocket shakes, fires and lifts off, then resets."""
-    c = {}
-    pressed = t in (1, 2, 3)
-    # Clawd: body, a raised arm (cheering the launch), the other hand on the box
-    rect(c, 2, 11, 13, 20, SOR); rect(c, 2, 2, 13, 20, SOR_D)
-    for x, y in ((0, 10), (0, 11), (1, 11), (1, 12), (1, 13)):
-        c[(x, y)] = SOR_D if x == 0 else SOR
-    rect(c, 12, 13, 17, 17, SOR)
-    for x in (3, 5, 8, 10):
-        rect(c, x, x, 21, 22, SOR_D if x in (3, 8) else SOR)
-    # determined eyes with brows
-    rect(c, 4, 4, 15, 16, SEYE); c[(5, 15)] = SEYE
-    rect(c, 9, 9, 15, 16, SEYE); c[(8, 15)] = SEYE
-    # the launch box and its button, pushed down while pressed
-    rect(c, 13, 16, 18, 20, PAN); rect(c, 13, 16, 18, 18, PAN_L)
-    rect(c, 14, 15, 17 + (1 if pressed else 0), 17 + (1 if pressed else 0), RED)
-    # the rocket: on the pad (shaking) for 0..3, then climbing two cells a frame
-    lift = 0 if t < 4 else (t - 3) * 3
-    shake = (t % 2) if 1 <= t <= 3 else 0
-    rx = 19 + shake
-    base = 20 - lift
-    def at(x, y, col):
-        if 0 <= y:
-            c[(x, y)] = col
-    for y, (x0, x1) in zip(range(base - 12, base - 9), ((21, 21), (20, 22), (19, 23))):
-        for x in range(x0 + shake, x1 + 1 + shake):
-            at(x, y, NAVY)
-    for y in range(base - 9, base - 1):
-        for x in range(rx, rx + 5):
-            at(x, y, WHITE)
-        at(rx, y, GREY)
-    for x in range(rx + 1, rx + 4):                      # a round window: navy ring, glass inside
-        for y in range(base - 7, base - 4):
-            at(x, y, NAVY)
-    at(rx + 2, base - 6, GLASS)
-    for y in range(base - 4, base):
-        at(rx - 1, y, NAVY); at(rx + 5, y, NAVY)
-    at(rx - 2, base - 1, NAVY); at(rx + 6, base - 1, NAVY)
-    for x in range(rx + 1, rx + 4):
-        at(x, base - 1, PAN)
-    # flame: flickers on the pad, long and bright while climbing
-    if t >= 1:
-        n = 2 if t < 4 else 4
-        for k in range(n):
-            y = base + k
-            w = 1 if k < n - 1 else 0
-            for x in range(rx + 2 - w, rx + 3 + w):
-                if y < 26:
-                    at(x, y, FLAME_HOT if k == 0 else FLAME)
-        for k, (dx, dy) in enumerate(((-2, 1), (4, 2), (-1, 3), (5, 0), (0, 4))):
-            if (t + k) % 3 == 0 and base + dy < 26:
-                at(rx + dx + (t % 2), base + dy, FLAME)
-    return c
-
-
-def cooking_loop():
-    return [(cooking(t), 0) for t in range(SCENE_WORK[3])]
-
-
-def sending_loop():
-    return [(sending(t), 0) for t in range(SCENE_SEND[3])]
-
-
-def listening_loop():
-    return [(listening(t, level), 0) for level in range(LEVELS) for t in range(SCENE_LISTEN[3])]
 
 
 # ---- Codex's scenes: the owner's robot pack (assets/pets/codex, 192 x 208 RGBA frames) ----
@@ -533,18 +309,20 @@ def exact_overlay(images):
     return out, [(0, 0, 0)] + list(colours)
 
 
-def cell_frames(prefix, items, palette_name):
+def cell_frames(prefix, items, palette_name, cell=1):
     """C definitions of de-duplicated cell frames; returns (code, index per item, count, bytes)."""
     code, seen, refs, order = [], {}, [], []
-    for cols, rows, grid in items:
-        key = (cols, rows, tuple(grid))
+    for item in items:
+        cols, rows, grid = item[:3]
+        c = item[3] if len(item) > 3 else cell
+        key = (cols, rows, c, tuple(grid))
         if key not in seen:
             seen[key] = len(refs)
             code.append(f'static const uint8_t {prefix}_c{len(refs)}[{cols * rows}] = {{' + ','.join(map(str, grid)) + '};\n')
-            refs.append(f'{{{cols},{rows},1,{palette_name},{prefix}_c{len(refs)}}}')
+            refs.append(f'{{{cols},{rows},{c},{palette_name},{prefix}_c{len(refs)}}}')
         order.append(seen[key])
     code.append(f'static const ht_cell_frame_t {prefix}_frames[{len(refs)}] = {{' + ','.join(refs) + '};\n')
-    return code, order, len(refs), sum(c * r for c, r, _ in seen)
+    return code, order, len(refs), sum(c * r for c, r, *_ in seen)
 
 
 def generate_pack_scene(prefix, kind):
@@ -598,7 +376,7 @@ def generate_pack_scene(prefix, kind):
         out.append(f'static const ht_pet_bars_t {prefix}_bars = {{{{{",".join(str(x - box[0]) for x in BAR_X)}}},{BAR_CY - box[1]},'
                    f'{BAR_W + 1},{BAR_RADIUS},{BAR_MIN},{BAR_SWING},{{{fills}}},{BAR_PERIOD_MS},{BAR_PHASE}f}};\n')
         bars = f',&{prefix}_bars'
-    out.append(f'static const ht_pet_scene_t {prefix} = {{{w},{h},{prefix}_frames,{prefix}_loop,{steps},{step_ms},&{ov},{dx},{dy}{bars},NULL}};\n')
+    out.append(f'static const ht_pet_scene_t {prefix} = {{{w},{h},{prefix}_frames,{prefix}_loop,{steps},{step_ms},&{ov},{dx},{dy}{bars},NULL,NULL}};\n')
     return out, n + on, nbytes + obytes + (len(palette) + len(opal)) * 2
 
 
@@ -657,7 +435,7 @@ def quantise_pieces(pieces):
 
 def muse_rest_images():
     """The small pet: the 24 waving frames over black, cropped to their union ink box (RGBA, alpha 0 / 255)."""
-    frames = muse_frames('rest')
+    frames = muse_frames('rest2x')
     box = union_box(frames)
     out = []
     for f in frames:
@@ -765,10 +543,103 @@ def generate_muse_scene(prefix, kind):
         out.append(f'static const ht_pet_waves_t {prefix}_waves = {{{round((wv["centre"][0] - box[0]) * 16)},'
                    f'{round((wv["centre"][1] - box[1]) * 16)},{round(wv["r_far"] * 16)},{round(wv["r_near"] * 16)},'
                    f'{round(wv["width"] * 16)},{wv["half_angle_deg"]},{wv["count"]},{{{",".join(map(str, wv["colour"]))}}},'
-                   f'{wv["period_ms"]}}};\n')
+                   f'{wv["period_ms"]},0}};\n')
         waves = f'&{prefix}_waves'
-    out.append(f'static const ht_pet_scene_t {prefix} = {{{w},{h},{prefix}_frames,{prefix}_loop,{steps},{meta["step_ms"]},{ov_ref},{dx},{dy},NULL,{waves}}};\n')
+    out.append(f'static const ht_pet_scene_t {prefix} = {{{w},{h},{prefix}_frames,{prefix}_loop,{steps},{meta["step_ms"]},{ov_ref},{dx},{dy},NULL,{waves},NULL}};\n')
     return out, n + extra, nbytes + obytes + len(palette) * 2
+
+
+# ---- Claude Code's Clawd: PNG frames (assets/pets/claude, exported by mockup/clawd_v3.py) ----
+# Drawn at the glass's 1 px with every edge anti-aliased into opaque colour over black (the dial keeps on/off
+# alpha), at 55-65 ms a step. Each scene is a body (a few stored poses; a hop or a nod is the step's dy, not a new
+# pose) and per step a props sprite (the pan and food, the rocket and its smoke, the alert's bubble) placed per px;
+# the sending scene's tall sprites (smoke, the rocket in flight) are stored at 2 px cells. Listening's sound arcs
+# are drawn by focus.c (ht_pet_waves_t, one set at each cup). The small pet is the rest loop, 24 steps.
+CLAUDE = root / 'assets/pets/claude'
+CLAUDE_SCENES = json.loads((CLAUDE / 'scenes.json').read_text())
+
+
+def claude_frames(folder):
+    return [Image.open(p).convert('RGBA') for p in sorted((CLAUDE / folder).glob('*.png'))]
+
+
+def half(im):
+    """A soft sprite at 2 px cells: box-filtered to half size, colour kept over black, alpha cut at 1/4."""
+    w, h = (im.width + 1) // 2, (im.height + 1) // 2
+    big = Image.new('RGBA', (w * 2, h * 2), (0, 0, 0, 0))
+    big.paste(im, (0, 0))
+    small = big.resize((w, h), Image.BOX)
+    rgb = Image.alpha_composite(Image.new('RGBA', small.size, (0, 0, 0, 255)), small)
+    rgb.putalpha(small.getchannel('A').point(lambda a: 255 if a >= 64 else 0))
+    return rgb
+
+
+def generate_claude_scene(prefix, name, levels, bias):
+    meta = CLAUDE_SCENES[name]
+    bodies, props = claude_frames(f'{name}/body'), claude_frames(f'{name}/props')
+    w, h = bodies[0].size
+    assert w < 256 and h < 256
+    steps = meta['steps']
+    grids, palette = quantise_pieces(bodies)
+    out = [f'static const uint16_t {prefix}_pal[{len(palette)}] = {{' + ','.join(str(0 if k == 0 else rgb565_panel(c)) for k, c in enumerate(palette)) + '};\n']
+    code, order, n, nbytes = cell_frames(prefix, [(w, h, g) for g in grids], f'{prefix}_pal')
+    out += code
+    loop = [order[st[0]] for _ in range(levels) for st in steps]
+    dys = [st[4] for _ in range(levels) for st in steps]
+    assert all(-128 <= d < 128 for d in dys)
+    out.append(f'static const uint8_t {prefix}_loop[{len(loop)}] = {{' + ','.join(map(str, loop)) + '};\n')
+    out.append(f'_Static_assert(sizeof {prefix}_loop == {len(steps)} * {"HT_PET_SCENE_LEVELS" if levels > 1 else 1}, "{prefix}: steps x levels");\n')
+    out.append(f'static const int8_t {prefix}_dy[{len(dys)}] = {{' + ','.join(map(str, dys)) + '};\n')
+    x0, y0 = meta['body_at']
+    ov_ref, on, obytes = 'NULL', 0, 0
+    if props:
+        soft = set(meta.get('cell2', []))
+        pieces = [half(p) if i in soft else p for i, p in enumerate(props)]
+        ogrids, opal = quantise_pieces(pieces)
+        shapes = [(p.width, p.height, g, 2 if i in soft else 1) for i, (p, g) in enumerate(zip(pieces, ogrids))]
+        shapes.append((1, 1, [0]))                     # "nothing now"
+        ov = prefix + '_ov'
+        out.append(f'static const uint16_t {ov}_pal[{len(opal)}] = {{' + ','.join(str(0 if k == 0 else rgb565_panel(c)) for k, c in enumerate(opal)) + '};\n')
+        ocode, oorder, on, obytes = cell_frames(ov, shapes, f'{ov}_pal')
+        out += ocode
+        none = oorder[-1]
+        oloop = [oorder[st[1]] if st[1] >= 0 else none for _ in range(levels) for st in steps]
+        at = [(st[2] - x0, st[3] - y0) if st[1] >= 0 else (0, 0) for _ in range(levels) for st in steps]
+        out.append(f'static const uint8_t {ov}_loop[{len(oloop)}] = {{' + ','.join(map(str, oloop)) + '};\n')
+        out.append(f'static const int16_t {ov}_at[{len(at)}][2] = {{' + ','.join(f'{{{x},{y}}}' for x, y in at) + '};\n')
+        out.append(f'static const ht_pet_overlay_t {ov} = {{{ov}_frames,{ov}_loop,{ov}_at}};\n')
+        ov_ref, obytes = '&' + ov, obytes + len(opal) * 2
+    dx, dy = x0 - (466 - w) // 2, y0 - (233 - h // 2 + bias)
+    waves = 'NULL'
+    if 'waves' in meta:
+        wv = meta['waves']
+        assert 1 <= wv['count'] <= 3        # focus.c: runs 1..6 are the arcs
+        out.append(f'static const ht_pet_waves_t {prefix}_waves = {{{round((wv["centre"][0] - x0) * 16)},'
+                   f'{round((wv["centre"][1] - y0) * 16)},{round(wv["r_far"] * 16)},{round(wv["r_near"] * 16)},'
+                   f'{round(wv["width"] * 16)},{wv["half_angle_deg"]},{wv["count"]},{{{",".join(map(str, wv["colour"]))}}},'
+                   f'{wv["period_ms"]},{round(wv["gap"] * 16)}}};\n')
+        waves = f'&{prefix}_waves'
+    out.append(f'static const ht_pet_scene_t {prefix} = {{{w},{h},{prefix}_frames,{prefix}_loop,{len(steps)},'
+               f'{meta["step_ms"]},{ov_ref},{dx},{dy},NULL,{waves},{prefix}_dy}};\n')
+    return out, n + on, nbytes + obytes + len(palette) * 2 + len(dys)
+
+
+def claude_pet_states():
+    """The small pet: the rest loop (24 steps) for idle / working / done / asking; identical frames stored once."""
+    ims = claude_frames('rest2x')
+    assert len(ims) == STEPS
+    seen, index = {}, []
+    for i, im in enumerate(ims):
+        index.append(seen.setdefault(im.tobytes(), i))
+    loop = [({'i': index[i]}, 0) for i in range(STEPS)]
+    return (lambda: loop,) * 4, ims
+
+
+CLAUDE_STATES, CLAUDE_IMAGES = claude_pet_states()
+
+
+def claude_render(cells):
+    return CLAUDE_IMAGES[cells['i']]
 
 
 def rgb565(rgb):
@@ -797,15 +668,18 @@ def emit(name, img):
 
 # engine, prefix, frame size, the four states, renderer, step_ms
 PETS = (
-    ('claude', 'claude', (W, H), (idle, working, done, asking), render, STEP_MS),
-    ('codex', 'codex', (XW, XH), (xidle, xworking, xdone, xasking), xrender, XSTEP_MS),
-    ('muse', 'muse', MUSE_SIZE, MUSE_STATES, muse_render, (MUSE_REST_MS,) * 4),
+    ('claude', 'claude', half_size(CLAUDE_IMAGES[0].size), CLAUDE_STATES, claude_render, (CLAUDE_SCENES['rest']['step_ms'],) * 4),
+    ('codex', 'codex', (XW, XH), (xidle, xworking, xdone, xasking), xgrid, XSTEP_MS),
+    ('muse', 'muse', half_size(MUSE_SIZE), MUSE_STATES, muse_render, (MUSE_REST_MS,) * 4),
 )
 # Pets whose small self is palette-indexed cell frames (ht_pet_t.cells) rather than RGB565 + alpha8 (frames).
-CELL_PETS = ('muse',)
+# Every small pet is cell frames drawn at TWICE its size (claude, muse: 1 px cells of a 2x picture; codex: its 14 x 14
+# grid at 8 px a cell), which focus.c shows at 1x, 1.5x, 1.75x or 2x with ht_cell_sprite_zoom: one good drawing, every
+# size a clean reduction of it (owner, 2026-10-05). The value is the frames' cell; ht_pet_t.w, h are the 1x size.
+CELL_PETS = {'claude': 1, 'codex': 8, 'muse': 1}
 
 
-def generate_pet(prefix, states, draw, size, cells_out=False):
+def generate_pet(prefix, states, draw, size, cells_out=False, cell=1):
     frames, index, loops = [], {}, []
     for state in states:
         steps = []
@@ -822,57 +696,109 @@ def generate_pet(prefix, states, draw, size, cells_out=False):
         images = [draw(cells) for cells in frames]
         grids, palette = quantise_pieces(images)
         out.append(f'static const uint16_t {prefix}_pal[{len(palette)}] = {{' + ','.join(str(0 if k == 0 else rgb565_panel(c)) for k, c in enumerate(palette)) + '};\n')
-        code, order, n, nbytes = cell_frames(prefix, [(im.width, im.height, g) for im, g in zip(images, grids)], f'{prefix}_pal')
+        code, order, n, nbytes = cell_frames(prefix, [(im.width, im.height, g) for im, g in zip(images, grids)], f'{prefix}_pal', cell)
         out += code
-        return out, n, [[(order[f], dy) for f, dy in steps] for steps in loops], nbytes + len(palette) * 2
+        rep = [None] * n
+        for f, j in enumerate(order):
+            if rep[j] is None:
+                rep[j] = frames[f]
+        return out, n, [[(order[f], dy) for f, dy in steps] for steps in loops], nbytes + len(palette) * 2, rep
     for n, cells in enumerate(frames):
         code, ref = emit(f'{prefix}{n}', draw(cells))
         out.append(code)
         refs.append(ref)
     out.append(f'static const ht_icon_t {prefix}_frames[{len(refs)}] = {{' + ','.join(refs) + '};\n')
-    return out, len(refs), loops, len(refs) * size[0] * size[1] * 3
+    return out, len(refs), loops, len(refs) * size[0] * size[1] * 3, frames
 
 
-def generate_scene(prefix, loop, size, step_ms, steps, levels):
-    """One scene as CELL GRIDS: per de-duplicated frame cols x rows bytes (a palette index, 0 transparent;
-    cells outside the grid are dropped, as the mockup's sprite() does), one RGB565 panel-order palette,
-    the flat loop of frame indices and the ht_pet_scene_t that points at them."""
-    cols, rows = size
-    colours, frames, index, steps_out = {}, [], {}, []
-    for cells, _ in loop():
-        grid = {p: c for p, c in cells.items() if 0 <= p[0] < cols and 0 <= p[1] < rows}
-        key = tuple(sorted(grid.items()))
-        if key not in index:
-            index[key] = len(frames)
-            frames.append(grid)
-        steps_out.append(index[key])
-    for col in sorted({c for g in frames for c in g.values()}):
-        colours[col] = len(colours) + 1
-    assert len(colours) < 256
+# ---- THE ALERT SCENES: a notice arrives while the agent works (owner, 2026-10-05; mockup/notice-pets.html) ----
+# Played once in the working scene's place, 17 steps of 110 ms: the pet reacts (Clawd hops with its arms up, the
+# Codex robot jumps, Jolly waves) and from the fourth step a small bubble with a bell pops up beside it — the
+# scene's overlay. Then ui_habitat.c flies a blue dot from the bubble round the rim to 12 o'clock, where it stays
+# until the notice is read. Each is placed exactly where the mockup put it on the glass.
+ALERT_STEPS, ALERT_MS, ALERT_BIAS = 17, 110, 4      # ALERT_BIAS: focus.c draws it in the working slot (bias 4)
+ABLUE = (0, 111, 255)
+
+
+def abell(d, cx, cy, s, col):
+    d.pieslice([cx - 5 * s, cy - 6 * s, cx + 5 * s, cy + 4 * s], 180, 360, fill=col)
+    d.rectangle([cx - 5 * s, cy - 1 * s, cx + 5 * s, cy + 3 * s], fill=col)
+    d.rectangle([cx - 6.5 * s, cy + 3 * s, cx + 6.5 * s, cy + 4.5 * s], fill=col)
+    d.ellipse([cx - 1.6 * s, cy + 4.5 * s, cx + 1.6 * s, cy + 7 * s], fill=col)
+
+
+def bubble_round(im, cx, cy, k, fill, edge, ink):
+    """Codex's and Muse's bubble: `k` 0..1 pops it in with a little overshoot; the bell and the blue dot it becomes."""
+    s = (1.0 + 0.18 * math.sin(k * math.pi) if k < 1 else 1.0) * min(1.0, k * 1.6)
+    w, h = 54 * s, 40 * s
+    d = ImageDraw.Draw(im)
+    tx = cx - w / 2 + 10 * s
+    d.polygon([(tx - 6 * s, cy + h / 2 - 2), (tx + 6 * s, cy + h / 2 - 2), (tx - 10 * s, cy + h / 2 + 11 * s)], fill=edge)
+    d.rounded_rectangle([cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2], radius=12 * s, fill=fill, outline=edge, width=2)
+    d.polygon([(tx - 4 * s, cy + h / 2 - 3), (tx + 4 * s, cy + h / 2 - 3), (tx - 7 * s, cy + h / 2 + 7 * s)], fill=fill)
+    abell(d, cx - 8 * s, cy - 1, 1.15 * s, ink)
+    d.ellipse([cx + 7 * s, cy - 6 * s, cx + 19 * s, cy + 6 * s], fill=ABLUE)
+
+
+def alert_bubbles(at, style):
+    """The overlay per step, on a glass-sized canvas: nothing for three steps, popped in over three, then bobbing."""
     out = []
-    pal = [0] + [rgb565_panel(c) for c in colours]
-    out.append(f'static const uint16_t {prefix}_pal[{len(pal)}] = {{' + ','.join(map(str, pal)) + '};\n')
-    refs = []
-    for n, grid in enumerate(frames):
-        data = [grid[(x, y)] if (x, y) in grid else None for y in range(rows) for x in range(cols)]
-        out.append(f'static const uint8_t {prefix}_c{n}[{cols * rows}] = {{'
-                   + ','.join(str(colours[v]) if v else '0' for v in data) + '};\n')
-        refs.append(f'{{{cols},{rows},{SCELL},{prefix}_pal,{prefix}_c{n}}}')
-    out.append(f'static const ht_cell_frame_t {prefix}_frames[{len(refs)}] = {{' + ','.join(refs) + '};\n')
-    out.append(f'static const uint8_t {prefix}_loop[{len(steps_out)}] = {{' + ','.join(map(str, steps_out)) + '};\n')
-    out.append(f'_Static_assert(sizeof {prefix}_loop == {steps} * {"HT_PET_SCENE_LEVELS" if levels > 1 else 1}, "{prefix}: steps x levels");\n')
-    assert len(steps_out) == steps * levels
-    out.append(f'static const ht_pet_scene_t {prefix} = {{{cols * SCELL},{rows * SCELL},{prefix}_frames,'
-               f'{prefix}_loop,{steps},{step_ms},NULL,0,0,NULL,NULL}};\n')
-    return out, len(refs), len(refs) * cols * rows + len(pal) * 2
+    for t in range(ALERT_STEPS):
+        im = Image.new('RGBA', (466, 466), (0, 0, 0, 0))
+        if t >= 3:
+            k = min(1.0, (t - 3) / 3)
+            cx, cy = at[0], at[1] - (2 if ((t + 1) // 2) % 2 else 0)
+            if k > 0:
+                bubble_round(im, cx, cy, k, *style)
+        out.append(im)
+    return out
+
+
+def alert_spec(engine):
+    """(frames, cell, where the frames' canvas sits on the glass, frame per step, the bubble's centre and style)."""
+    if engine == 'codex':
+        style = (ImageColor.getrgb(CX_FILL), ImageColor.getrgb(CX_LINE), (200, 224, 255))
+        return pack_frames('jumping', 5), 1, ((466 - CW) // 2 + RX, (466 - CH) // 2 + RY), \
+            [0, 1, 2, 3, 4] * 3 + [0, 0], (318, 148), style
+    spec = json.loads((MUSE / 'alert.json').read_text())
+    return muse_frames('alert'), 1, (spec['x'], spec['y']), spec['seq'], (318, 140), \
+        ((246, 244, 240), (205, 200, 192), (40, 60, 110))
+
+
+def generate_alert_scene(prefix, engine):
+    frames, cell, (gx, gy), seq, at, style = alert_spec(engine)
+    assert len(seq) == ALERT_STEPS
+    box = union_box(frames)
+    crops = [f.crop(box) for f in frames]
+    grids, palette = quantise_pieces(crops)
+    assert len(palette) <= 256
+    cols, rows = box[2] - box[0], box[3] - box[1]
+    w, h = cols * cell, rows * cell
+    out = [f'static const uint16_t {prefix}_pal[{len(palette)}] = {{' + ','.join(str(0 if k == 0 else rgb565_panel(c)) for k, c in enumerate(palette)) + '};\n']
+    code, order, n, nbytes = cell_frames(prefix, [(cols, rows, g) for g in grids], f'{prefix}_pal', cell)
+    out += code
+    loop = [order[i] for i in seq]
+    out.append(f'static const uint8_t {prefix}_loop[{len(loop)}] = {{' + ','.join(map(str, loop)) + '};\n')
+    x0, y0 = gx + box[0] * cell, gy + box[1] * cell
+    shapes, opal = exact_overlay(alert_bubbles(at, style))
+    ov = prefix + '_ov'
+    out.append(f'static const uint16_t {ov}_pal[{len(opal)}] = {{' + ','.join(str(0 if k == 0 else rgb565_panel(c)) for k, c in enumerate(opal)) + '};\n')
+    ocode, oorder, on, obytes = cell_frames(ov, [(c_, r_, g_) for c_, r_, g_, _ in shapes], f'{ov}_pal')
+    out += ocode
+    out.append(f'static const uint8_t {ov}_loop[{len(oorder)}] = {{' + ','.join(map(str, oorder)) + '};\n')
+    oat = [(x - x0, y - y0) if (x or y) else (0, 0) for *_, (x, y) in shapes]
+    out.append(f'static const int16_t {ov}_at[{len(oat)}][2] = {{' + ','.join(f'{{{x},{y}}}' for x, y in oat) + '};\n')
+    out.append(f'static const ht_pet_overlay_t {ov} = {{{ov}_frames,{ov}_loop,{ov}_at}};\n')
+    dx, dy = x0 - (466 - w) // 2, y0 - (233 - h // 2 + ALERT_BIAS)
+    out.append(f'static const ht_pet_scene_t {prefix} = {{{w},{h},{prefix}_frames,{prefix}_loop,{ALERT_STEPS},{ALERT_MS},'
+               f'&{ov},{dx},{dy},NULL,NULL,NULL}};\n')
+    return out, n + on, nbytes + obytes + (len(palette) + len(opal)) * 2
 
 
 # engine -> (working scene, listening scene, sending scene): prefix, loop, size in cells, step_ms, steps; levels
 # (Codex's: prefix and kind, generate_pack_scene)
 SCENES = {
-    'claude': (('claude_work', cooking_loop, SCENE_WORK, 1),
-               ('claude_listen', listening_loop, SCENE_LISTEN, LEVELS),
-               ('claude_send', sending_loop, SCENE_SEND, 1)),
+    'claude': (('claude_work', 'cwork'), ('claude_listen', 'clisten'), ('claude_send', 'csend')),
     'codex': (('codex_work', 'work'), ('codex_listen', 'listen'), ('codex_send', 'send')),
     'muse': (('muse_work', 'mwork'), ('muse_listen', 'mlisten'), ('muse_send', 'msend')),
 }
@@ -885,7 +811,7 @@ def generate():
     table, counts, scene_stats = [], [], []
     for engine, prefix, (w, h), states, draw, step_ms in PETS:
         cells_out = engine in CELL_PETS
-        code, n_frames, loops, nbytes = generate_pet(prefix, states, draw, (w, h), cells_out)
+        code, n_frames, loops, nbytes, rep = generate_pet(prefix, states, draw, (w, h), cells_out, CELL_PETS.get(engine, 1))
         out += code
         counts.append((n_frames, nbytes))
         rows = ['{' + ','.join(f'{{{f},{dy}}}' for f, dy in steps) + '}' for steps in loops]
@@ -896,19 +822,27 @@ def generate():
             if not spec:
                 refs_to.append('NULL')
                 continue
-            if spec[1] in ('mwork', 'mlisten', 'msend'):
+            if spec[1] in ('cwork', 'clisten', 'csend'):
+                sprefix = spec[0]
+                name = spec[1][1:]
+                code, n, nbytes = generate_claude_scene(sprefix, name, LEVELS if name == 'listen' else 1,
+                                                        {'work': 4, 'listen': -6, 'send': 0}[name])
+            elif spec[1] in ('mwork', 'mlisten', 'msend'):
                 sprefix = spec[0]
                 code, n, nbytes = generate_muse_scene(sprefix, spec[1][1:])
             elif spec[1] in ('work', 'listen', 'send'):
                 sprefix = spec[0]
                 code, n, nbytes = generate_pack_scene(sprefix, spec[1])
-            else:
-                sprefix, loop, (cw, ch, sms, steps), levels = spec
-                code, n, nbytes = generate_scene(sprefix, loop, (cw, ch), sms, steps, levels)
             out += code
             scene_stats.append((sprefix, n, nbytes))
             refs_to.append('&' + sprefix)
-        table.append(f'{{"{engine}",{w},{h},{"NULL" if cells_out else prefix + "_frames"},{prefix}_loops,{prefix}_step_ms,{",".join(refs_to)},{prefix + "_frames" if cells_out else "NULL"}}}')
+        if engine == 'claude':
+            code, n, nbytes = generate_claude_scene('claude_alert', 'alert', 1, ALERT_BIAS)
+        else:
+            code, n, nbytes = generate_alert_scene(f'{engine}_alert', engine)
+        out += code
+        scene_stats.append((f'{engine}_alert', n, nbytes))
+        table.append(f'{{"{engine}",{w},{h},{"NULL" if cells_out else prefix + "_frames"},{prefix}_loops,{prefix}_step_ms,{",".join(refs_to)},{prefix + "_frames" if cells_out else "NULL"},&{engine}_alert}}')
     out.append('const ht_pet_t ht_pets[] = {' + ','.join(table) + '};\n')
     out.append(f'const unsigned ht_pet_count = {len(PETS)};\n')
     return ''.join(out), counts, scene_stats

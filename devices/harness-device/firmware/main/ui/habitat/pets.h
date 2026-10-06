@@ -53,6 +53,7 @@ typedef struct {
     uint8_t half_deg, count;
     uint8_t rgb[3];
     uint16_t period_ms;
+    int16_t gap16;   // each side's arcs centred this far out from the centre (Claude's cups); 0 = one centre (Muse)
 } ht_pet_waves_t;
 typedef struct {
     uint16_t w, h;
@@ -63,20 +64,24 @@ typedef struct {
     const ht_pet_overlay_t *overlay;             // NULL: none (zero when left out of the initializer)
     int16_t dx, dy;
     const ht_pet_bars_t *bars;                   // NULL: none (only Codex's listening scene)
-    const ht_pet_waves_t *waves;                 // NULL: none (only Muse's listening scene)
+    const ht_pet_waves_t *waves;                 // NULL: none (Muse's and Claude's listening scenes)
+    const int8_t *step_dy;                       // per (level, step) like `loop`: the frame's offset in px, down; NULL = 0
+                                                 // (Claude: a hop or a nod moves one stored pose instead of storing more)
 } ht_pet_scene_t;
 
 typedef struct {
     const char *engine;                          // focus.c ENGINES name: "claude", "codex"
-    uint16_t w, h;                               // frame size
+    uint16_t w, h;                               // the 1x size (the cells are drawn at 2x: focus.c zooms them)
     const ht_icon_t *frames;                     // RGB565 + alpha8 frames; NULL when `cells` holds them
     const ht_pet_step_t (*loops)[HT_PET_STEPS];  // [HT_PET_STATES][HT_PET_STEPS]
     const uint16_t *step_ms;                     // [HT_PET_STATES]
     const ht_pet_scene_t *working_scene;         // NULL: the small pet and the centred working line
     const ht_pet_scene_t *listening_scene;       // NULL: the voice screen's meter
     const ht_pet_scene_t *sending_scene;         // NULL: the voice screen's three sparkles
-    const ht_cell_frame_t *cells;                // non-NULL (Muse): the small pet as cell frames (cell 1, w x h), drawn
-                                                 // with ht_cell_sprite in place of frames[]; same indices, same place
+    const ht_cell_frame_t *cells;                // the small pet as cell frames drawn at 2x, shown with ht_cell_sprite_zoom at
+                                                 // 1x (w x h), 1.5x, 1.75x or 2x; `frames` is NULL then (every pet now)
+    const ht_pet_scene_t *alert_scene;           // played once, in the working scene's place, when a notice arrives while
+                                                 // it works (gen_pets.py THE ALERT SCENES); its overlay is the bubble
 } ht_pet_t;
 extern const ht_pet_t ht_pets[];
 extern const unsigned ht_pet_count;
