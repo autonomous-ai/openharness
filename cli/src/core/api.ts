@@ -26,6 +26,7 @@ import type { RouterContinuity } from '../lib/voiceRouter.js'
 import type { ExternalSessions, OpenSessions } from '../lib/sessionSearch/external.js'
 import type { SessionSearchIndex } from '../lib/sessionSearch/indexer.js'
 import type { StoppedAgentStore } from '../lib/stoppedAgents.js'
+import type { TerminalBinaryClear } from '../lib/terminalBinary.js'
 import type { RouteAnswer } from '../localWsServer.js'
 import type { SwarmPromptScopes } from '../teams/promptScope.js'
 import { FAIL, later, ServiceUnavailableError, type PortFallbacks } from './serviceHost.js'
@@ -364,6 +365,116 @@ export const FLEET_FALLBACKS: PortFallbacks<FleetPort> = {
   canSpeakQuestion: FAIL, answerReviewed: later(FAIL), answer: FAIL, updateAgent: FAIL, recentSummaries: later(FAIL),
   recentAsks: later(FAIL), listModels: later(FAIL), forkAgent: later(FAIL), hasLane: FAIL, online: later(FAIL),
   select: later(FAIL), release: FAIL,
+}
+
+/*
+ * The gateway: the relay and its end-to-end encryption (docs/design/2026-10-06-core-boundary-next.md,
+ * "Relay and E2EE", step 10). It holds the backend link, the E2EE sessions and the keys; every remote
+ * client (a phone, a browser, another machine's desktop, a device) reaches the core through it, and every
+ * frame the core has for one leaves through it. The core speaks plaintext to it, and never sees a key.
+ *
+ * Unlike a service it is transport: what it tells the core (`GatewayEvents`) is who the remote clients
+ * are and what they asked, and what the core asks of it (`GatewayPort`) is to carry frames to them, sealed
+ * by its rules (which frames, to whom, what is refused unsealed), which stay the gateway's alone.
+ */
+
+/** What a remote client proved with its E2EE session: an owner's app or browser, or a device. */
+export type RemoteRole = 'web' | 'device'
+
+/** A remote client the gateway holds a session with, as the core may know it: its role, and the label
+ *  its identity was paired under (null for none), for naming it to the person. */
+export interface RemoteClient {
+  role: RemoteRole
+  label: string | null
+}
+
+/** How a remote client's frame arrived: the backend's relay, or a paired client's own P2P channel. */
+export type RemoteTransport = 'relay' | 'p2p'
+
+/** The control frames only the backend sends, as the gateway hands them on once it has checked that the
+ *  backend sent them (on its own address, in the clear, over the relay). */
+export type BackendNotice =
+  | { type: 'desk_changed'; revision: number }
+  | { type: 'zoo_changed'; revision: number }
+  | { type: 'machines_changed'; reason: string }
+  | { type: 'device_keys_changed' }
+
+/** What the core asks of the gateway: everything bound for a remote client, and the link's state. */
+export interface GatewayPort {
+  /** Dial the backend: this daemon is signed in. */
+  connect(): void
+  /** Never dial: signed out, so nothing is sealed or queued for a link that will not open. */
+  serveThisComputerOnly(): void
+  /** Hold remote clients' frames, in order, until `openRequests`: the core is not ready to answer. */
+  holdRequests(): void
+  openRequests(): void
+  /** Whether the backend link is up. */
+  connected(): boolean
+  /** A frame for the web audience: sealed under the group key when it carries content, queued while the
+   *  link is down. */
+  broadcast(frame: Record<string, unknown>): void
+  /** A frame for the devices (the commander audience), sealed the same way. */
+  commander(frame: Record<string, unknown>): void
+  /** A notification for every browser signed in to the account (the user audience). */
+  user(frame: Record<string, unknown>): void
+  /** The answer to a remote client's request: to it alone, sealed when its type carries content, and a
+   *  bare E2EE_REQUIRED when it cannot be. `connId` '' is the backend's own request. */
+  reply(connId: string, type: string, requestId: unknown, payload: Record<string, unknown>): void
+  /** A frame for one remote client, sealed to it; false when it holds no session. */
+  target(connId: string, type: string, payload: Record<string, unknown>): boolean
+  /** A terminal frame for one remote client, sealed to it, over its P2P channel when the stream moved
+   *  there; false when it could not be sent. */
+  terminal(connId: string, type: string, payload: Record<string, unknown>): boolean
+  terminalBinary(connId: string, clear: TerminalBinaryClear): boolean
+  /** Share's frame to an observer: plaintext to the relay, sealed by Share itself. */
+  observer(connId: string, type: string, payload: Record<string, unknown>): boolean
+  /** A window opened on this computer: the backend counts it as the person's session at once, or when
+   *  the link next comes up. */
+  windowOpened(): void
+  /** How many processes on this computer are attached, windows and tools. */
+  localClients(count: number): void
+  /** A local connection's request the gateway answers (the E2EE pairings), answered back to it through
+   *  `GatewayEvents.toLocal`. */
+  local(connId: string, frame: Record<string, unknown>): Promise<void>
+  stop(): Promise<void>
+}
+
+/** What the gateway tells the core. In the core's process these are calls; in the gateway's own, frames
+ *  on the link the master started it with, which no other process can open. */
+export interface GatewayEvents {
+  /** A remote client's request, opened and admitted. `role` is the session that sealed it: who asked is
+   *  the gateway's word, and the core trusts nothing in the frame for it. Resolves once it is handled. */
+  frame(connId: string, frame: Record<string, unknown>, transport: RemoteTransport, role: RemoteRole): Promise<void> | void
+  /** A remote client's terminal bytes, opened. */
+  binary(connId: string, clear: TerminalBinaryClear): Promise<void> | void
+  /** A remote client gained a session (its role and label), or lost it (null). */
+  client(connId: string, client: RemoteClient | null): void
+  /** The relay says a client's connection closed: what it had open goes with it. */
+  disconnected(connId: string): Promise<void> | void
+  /** Share's observer, relayed: Share opens its own frames. */
+  observer(connId: string, type: string, payload: Record<string, unknown>): Promise<void> | void
+  /** A frame for a window on this computer that asked the gateway something (`GatewayPort.local`); with
+   *  `connId` '', for every process attached here (the answer to the backend's own request, which the
+   *  windows heard with every event before the gateway was its own part). */
+  toLocal(connId: string, frame: Record<string, unknown>): void
+  /** The backend link's state, as it changes. */
+  status(connected: boolean): void
+  /** The link went down: every remote client with it. */
+  linkDown(): void
+  /** How many devices watch this machine, and how many of them render it now (null: the backend does not
+   *  say). `recheck`: the presence was asked about again, though it may not have changed. */
+  commanders(count: number, active: number | null, recheck?: boolean): void
+  /** A device attached: the live state is sent again for it. */
+  commanderJoined(): void
+  /** The backend's word on this machine: its name, the account's private grid. A key that is absent is
+   *  unchanged; null is "none". */
+  meta(meta: { name?: string | null; gridName?: string | null }): void
+  /** The account's other changes, for the windows on this computer. */
+  notice(notice: BackendNotice): void
+  /** This machine was removed from the account, or its session ended: stop for good. */
+  revoked(): void
+  /** Another computer holds this machine: stop for good, keeping the session. */
+  busy(): void
 }
 
 /** Each port is filled by the service that owns it when that service starts, and is null while the

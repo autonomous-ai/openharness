@@ -18,6 +18,9 @@ SERVICES src/services/     everything else: search, viewers, models, workspaces,
 `src/core/main.ts` `runForeground()` is the composition root: it creates the modules and wires them
 together. It is the core's own entry (`harness __run`); `src/cli.ts` is the CLI, and calls in for
 `__run` and `start -f`. `src/backendSocket.ts` is the transport: it receives frames and dispatches them.
+`src/gateway/` is the relay: the backend link, the E2EE sessions and keys, and every rule about what a
+remote client may send and how what it is sent is sealed. The socket speaks to it in the clear through
+`GatewayPort` and hears it through `GatewayEvents` (`src/core/api.ts`), and never holds a key.
 
 ## Where new code goes
 

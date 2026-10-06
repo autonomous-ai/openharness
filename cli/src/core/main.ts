@@ -149,6 +149,7 @@ import { localSocketPath, refuseServedDataFolder, type LocalSocketServer } from 
 import { saveDaemonPort } from '../lib/daemonEndpoint.js'
 import { commandBarService } from '../lib/commandBar.js'
 import { BackendSocket, isLocalClientId } from '../backendSocket.js'
+import { RelayGateway } from '../gateway/gateway.js'
 import { AutonomousDeviceService } from '../lib/autonomous-device/service.js'
 import { autonomousDeviceLocalRequest } from '../lib/autonomous-device/localApi.js'
 import { attachLocalWsServer, LOCAL_WS_PATH, LOCAL_WS_PROTOCOL_VERSION } from '../localWsServer.js'
@@ -797,17 +798,22 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     try { renameSync(identityFile, `${identityFile}.removed-${Date.now()}`) } catch { /* already gone */ }
   }
   const autonomousEnv = session?.autonomousEnv ?? env.AUTONOMOUS_ENV
-  const backend = new BackendSocket(session?.machineId ?? computerId(), auth, (connected) => {
+  const backend = new BackendSocket(session?.machineId ?? computerId(), (connected) => {
     if (!connected) return
     const sessions = registry.advertised()
     console.log(`[cli] connected · ${sessions.length} agent(s) registered`)
     void fullReconcile(true).catch((err) => {
       console.error('[runtime-profile] connect reconcile failed:', err instanceof Error ? err.message : err)
     })
-  }, computerId(), autonomousEnv)
+  })
   backendRef = backend
   // Nothing is answered until start-up is done (see the end of this function).
   backend.holdRequests()
+  // The relay and its E2EE (gateway/gateway.ts): the backend link, the sessions and the keys, which every
+  // remote client's frames go through, held at the same gate. The socket hears it through `fromGateway`
+  // and speaks to it in the clear; it holds no key of its own.
+  const gateway = new RelayGateway({ machineId: backend.machineId, auth, computerId: computerId(), autonomousEnv, core: backend.fromGateway })
+  backend.useGateway(gateway)
   daemonBoot.openRequests = () => backend.openRequests()
   const teams: TeamsPort = {
     prepare: (...args) => ports.teams?.prepare(...args) ?? (() => {}),
@@ -868,7 +874,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     appWindowForeground && openPaneAgents.has(agentId)
   const cableWatchingLocal = (): boolean => cableRef?.isConnected === true
 
-  const deviceIsWatching = (): boolean => backend.hasCommander() || cableWatchingLocal() || backend.autonomousDeviceConnected()
+  const deviceIsWatching = (): boolean => backend.hasCommander() || cableWatchingLocal() || gateway.autonomousDeviceConnected()
   /** Anyone who can DRAW a question: a device, a cabled dial, or a desktop window on this computer. */
   const someoneCanAnswer = (): boolean => deviceIsWatching() || backend.hasLocalClient()
   const terminalStreams = new TerminalStreamManager({
@@ -882,9 +888,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // that label is one of the placeholders pairing hands out — those name nothing.
     describeClient: (connId) => {
       if (isLocalClientId(connId)) return { kind: 'desktop', name: terminalHintMachineName() }
-      const label = backend.e2ee.sessionLabel(connId)
+      const client = backend.remoteClient(connId)
+      const label = client?.label
       if (!label || GENERIC_PAIR_LABELS.has(label)) return null
-      return { kind: backend.e2ee.sessionRole(connId) === 'device' ? 'device' : 'web', name: label }
+      return { kind: client.role === 'device' ? 'device' : 'web', name: label }
     },
     streamingAvailable: tmuxBackend != null,
     onScopedInput: (id, bytes, tabId, pasted) => teams.raw(id, bytes, tabId, pasted),
@@ -1550,14 +1557,14 @@ async function runForeground(session: AuthSession | null): Promise<void> {
         discover: async () => ({ devices: await runningDevicePart(autonomousDeviceDirect, 'Wi-Fi device link').discover() }),
         pairStart: ({ code, device }) => runningDevicePart(autonomousDeviceDirect, 'Wi-Fi device link').pair(device, code),
         pairStatus: () => {
-          const pending = backend.pendingPair()
+          const pending = gateway.pendingPair()
           return pending?.role === 'device' ? { state: pending.active ? 'running' : 'waiting', pairId: pending.pairId, deviceLabel: pending.label, expiresAt: pending.expiresAt } : { state: 'idle' }
         },
-        list: () => ({ devices: backend.listPairs().filter(p => p.role === 'device').map(p => ({ ...p, id: p.fingerprint })) }),
-        status: () => ({ transport: 'direct', connected: backend.directAutonomousDeviceSessions() > 0, paired: backend.listPairs().filter(p => p.role === 'device').length, sessions: backend.directAutonomousDeviceSessions(), proto: 1 }),
+        list: () => ({ devices: gateway.listPairs().filter(p => p.role === 'device').map(p => ({ ...p, id: p.fingerprint })) }),
+        status: () => ({ transport: 'direct', connected: gateway.directAutonomousDeviceSessions() > 0, paired: gateway.listPairs().filter(p => p.role === 'device').length, sessions: gateway.directAutonomousDeviceSessions(), proto: 1 }),
         revoke: ({ id }) => {
-          if (!backend.listPairs().some(p => p.role === 'device' && p.fingerprint === id)) throw Object.assign(new Error('Device pairing not found'), { code: 'UNKNOWN_DEVICE' })
-          const result = backend.revoke(id)
+          if (!gateway.listPairs().some(p => p.role === 'device' && p.fingerprint === id)) throw Object.assign(new Error('Device pairing not found'), { code: 'UNKNOWN_DEVICE' })
+          const result = gateway.revoke(id)
           if (!result.ok) throw Object.assign(new Error(result.error), { code: result.error })
           return { revoked: 1 }
         },
@@ -1574,7 +1581,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     onTurnStop: turnHooks.onTurnStop,
     // `harness pair <code>` → run CPace toward the waiting browser; map the result to an HTTP outcome.
     onPair: async (code) => {
-      const r = await backend.pair(code)
+      const r = await gateway.pair(code)
       if (r.ok) return { status: 200, body: { label: r.label, fingerprint: r.fingerprint } }
       const codeMap: Record<string, number> = {
         NO_INTENT: 409, EXPIRED: 409, CODE_MISMATCH: 403, BACKEND_DOWN: 503,
@@ -1582,23 +1589,23 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       }
       return { status: codeMap[r.error] ?? 400, body: { error: r.error } }
     },
-    onListPairs: () => ({ status: 200, body: { pairs: backend.listPairs() } }),
+    onListPairs: () => ({ status: 200, body: { pairs: gateway.listPairs() } }),
     onRevoke: (id) => {
-      const r = backend.revoke(id)
+      const r = gateway.revoke(id)
       if (r.ok) return { status: 200, body: { label: r.label, fingerprint: r.fingerprint } }
       return { status: r.error === 'AMBIGUOUS' ? 409 : 404, body: { error: r.error } }
     },
-    onRevokeAll: () => ({ status: 200, body: backend.revokeAll() }),
+    onRevokeAll: () => ({ status: 200, body: gateway.revokeAll() }),
     // `harness remote-password set|clear|status` — mutate/read the running daemon's live E2EE state
     // directly, so `harness link connect` from another machine sees a just-set password immediately.
     onSetRemotePassword: async (password) => {
-      const r = await backend.setRemotePassword(password)
+      const r = await gateway.setRemotePassword(password)
       return { status: 200, body: r }
     },
-    onClearRemotePassword: () => { backend.clearRemotePassword(); return { status: 200, body: { ok: true } } },
-    onRemotePasswordStatus: () => ({ status: 200, body: backend.remotePasswordStatus() }),
+    onClearRemotePassword: () => { gateway.clearRemotePassword(); return { status: 200, body: { ok: true } } },
+    onRemotePasswordStatus: () => ({ status: 200, body: gateway.remotePasswordStatus() }),
     onTrustLinkedPeer: (peer) => {
-      backend.trustPeer({ ...peer, kind: 'machine' })
+      gateway.trustPeer({ ...peer, kind: 'machine' })
       groupSyncer?.linked({ ...peer, kind: 'machine' })
       return { status: 200, body: { ok: true } }
     },
@@ -1669,7 +1676,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       webUrl: env.WEB_URL,
       connected: backend.isConnected(),
       deviceTransportConnected: backend.hasCommander(),
-      deviceE2eeConnected: backend.deviceE2eeConnected(),
+      deviceE2eeConnected: gateway.deviceE2eeConnected(),
       uptimeSec: Math.round((Date.now() - startedAt) / 1000),
       // The daemon as everything outside knows it: the pid file's pid, which `harness stop` signals
       // and the desktop app judges the owner of. Under a master that is the master's. A core's pid
@@ -1693,7 +1700,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       // gone in a second; one that stays here names the store that is slow, which no other field does.
       attaching: attaches.attaching(),
       attachQueue: attaches.queued(),
-      fingerprint: backend.e2eeFingerprint(),
+      fingerprint: gateway.fingerprint(),
       config: {
         watching: `${terminalConfig.backends.join(' + ')} terminals across all supported engines`,
         terminalBackends: terminalConfig.backends,
@@ -1716,8 +1723,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
         // When the conversation last moved, as in every agent frame — not the row's `touchedAt`.
         updatedAt: await lastActivityAt(s),
       }))),
-      pairs: backend.listPairs(),
-      pending: backend.pendingPair(),
+      pairs: gateway.listPairs(),
+      pending: gateway.pendingPair(),
     }),
     onLogs: () => {
       try { return readFileSync(LOG_FILE, 'utf-8').split('\n').slice(-120).join('\n') } catch { return '' }
@@ -1794,9 +1801,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     store: new TrustGroupStore(),
     peers: new MachinePeerStore(),
     self: groupSelf,
-    trust: (peer) => backend.trustPeer(peer),
-    untrust: (pub) => { backend.untrustPeer(pub) },
-    paired: () => backend.pairedPeers(),
+    trust: (peer) => gateway.trustPeer(peer),
+    untrust: (pub) => { gateway.untrustPeer(pub) },
+    paired: () => gateway.pairedPeers(),
     request: relayRequester(relayPool, () => readAuthSession()?.autonomousEnv ?? env.AUTONOMOUS_ENV),
     dropSessions: (machineId) => { relayPool.invalidate(machineId); relayPool.invalidateIsolated(machineId) },
     suspended: () => new Set(devLogSyncer?.suspendedKeys() ?? []),
@@ -1807,9 +1814,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     },
     log: (line) => console.log(line),
   })
-  backend.groupSync = groupSyncer
-  backend.onPeerLinked = (peer) => groupSyncer?.linked(peer)
-  backend.onUnpaired = (pub) => {
+  gateway.groupSync = groupSyncer
+  gateway.onPeerLinked = (peer) => groupSyncer?.linked(peer)
+  gateway.onUnpaired = (pub) => {
     groupSyncer?.unpaired(pub)
     // Unpairing a device here takes it out of the account's log too — or the log would trust it again.
     void devLogSyncer?.remove(pub)
@@ -1831,7 +1838,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       return { acct: data.acct, head: { seq: head.seq, hash: head.hash }, entries: data.entries }
     },
     append: async (entry) => {
-      const p = await backend.appendDeviceLog(entry as unknown as Record<string, unknown>)
+      const p = await gateway.appendDeviceLog(entry as unknown as Record<string, unknown>)
       if (!p) return null
       const head = p.head as { seq?: unknown; hash?: unknown } | undefined
       const parsedHead = typeof head?.seq === 'number' && typeof head.hash === 'string' ? { seq: head.seq, hash: head.hash } : undefined
@@ -1842,7 +1849,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     drop: (pub) => { groupSyncer?.remove(pub) },
     // Snapshotted once, when this machine joins the log: what it already trusts then is never news.
     trustedNow: () => [...new Set([
-      ...backend.pairedPeers().map((p) => p.identityPub),
+      ...gateway.pairedPeers().map((p) => p.identityPub),
       ...relayPeers.list().map((p) => p.pub),
       ...(groupSyncer?.roster().members.map((m) => m.pub) ?? []),
     ])],
@@ -1878,23 +1885,23 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // Removed while online: the backend's `machine_revoked` arrives before this machine reads the log, and
   // stops it. The key is spent all the same, or the next `harness login` would come back under a banned
   // key and be signed out again.
-  backend.onDeviceRemoved = (pub) => {
+  gateway.onDeviceRemoved = (pub) => {
     if (pub === b64e(relayIdentityStore.getIdentity().pub)) spendIdentity()
   }
   // A removal of another key under this machine id — the earlier install a reinstall waits behind — is
   // not this machine signed out: the log re-read that follows registers this key (deviceLogSyncer).
-  backend.isOwnDeviceKey = (pub) => pub === b64e(relayIdentityStore.getIdentity().pub)
+  gateway.isOwnDeviceKey = (pub) => pub === b64e(relayIdentityStore.getIdentity().pub)
   // A removal the trust group carried in — typically `harness group remove` on a machine that predates
   // the log — goes into the log as well, signed by this machine, so a device that only reads the log
   // stops trusting that key too. A key the log no longer has is left alone.
   groupSyncer.onDropped = (pub) => {
     if (devLogSyncer?.list().members.some((m) => m.pub === pub && !m.self)) void devLogSyncer.remove(pub)
   }
-  backend.onDeviceKeysChanged = () => { void devLogSyncer?.refresh() }
+  gateway.onDeviceKeysChanged = () => { void devLogSyncer?.refresh() }
   if (session?.machineId) {
     // Every time the link comes up: a sign-in from before the log existed joins it with no one doing
     // anything, and one that joined already only reads what it missed while offline.
-    backend.onLinkUp = () => { void devLogSyncer?.register() }
+    gateway.onLinkUp = () => { void devLogSyncer?.register() }
     // The link may have come up before this line; a second register in flight is harmless. A session
     // from before sign-in epochs gets one first: adopted, so it never starts the device log over.
     void ensureSignInEpoch().catch(() => null).then(() => devLogSyncer?.register())
@@ -2076,7 +2083,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   })
   // Every engine's hooks, pointed at the port the local server actually bound (core/engines/hooks.ts).
   if (!env.DISABLE_HOOK_INSTALL) installEngineHooks(hookPort, { only: env.HOOK_INSTALL_ENGINES, loginShell: loginShellEnvPromise })
-  backend.setDashboardPort(hookPort) // surfaced to the web (e2e_status) so it can link here to approve
+  gateway.setDashboardPort(hookPort) // surfaced to the web (e2e_status) so it can link here to approve
   console.log(`[cli] local dashboard → http://127.0.0.1:${hookPort}`)
 
   // Each transcript line, through its engine's normalizer, into the funnel (core/transcripts/ingest.ts).
@@ -2857,22 +2864,22 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     answer: async (agentId, requestId, answers) => (await questions.answer({ agentId, requestId, answers, allowPermissions: false })).ok,
     recent: (id, n) => mirror.recent(registry.byAgent(id)?.sessionId ?? id, n),
     fullText: id => mirror.lastFullText(registry.byAgent(id)?.sessionId ?? id),
-    emit: (frame, deviceId) => backend.emitAutonomousDeviceEvent(frame, deviceId),
+    emit: (frame, deviceId) => gateway.emitAutonomousDeviceEvent(frame, deviceId),
   }))
   if (appVoiceFocus) autonomousDeviceService?.appFocus(appVoiceFocus.machineId, appVoiceFocus.agentId, appVoiceFocus.connId)
-  if (autonomousDeviceService) backend.setAutonomousDeviceService(autonomousDeviceService)
+  if (autonomousDeviceService) gateway.setAutonomousDeviceService(autonomousDeviceService)
   // No link without the service: a device it connected would be answered by nothing.
   autonomousDeviceDirect = autonomousDeviceService && startDevicePart('Wi-Fi device link', () => new AutonomousDeviceDirect({
     machineId: backend.machineId, label: hostname(),
-    receive: (connId, frame, pairing) => backend.receiveDirectDevice(connId, frame, pairing),
-    attach: (connId, send) => backend.attachDirectDevice(connId, send),
-    detach: connId => backend.detachDirectDevice(connId),
-    pending: () => backend.pendingPair(), pendingConnection: () => backend.e2ee.pendingConnection(),
-    authenticatedFingerprint: connId => { const pub = backend.e2ee.sessionIdentity(connId); return pub ? e2eeCoreFingerprint(e2eeCoreDecode(pub)) : null },
-    pairedFingerprint: connId => backend.pairedDirectFingerprint(connId),
-    pair: code => backend.pair(code), paired: () => backend.listPairs(),
+    receive: (connId, frame, pairing) => gateway.receiveDirectDevice(connId, frame, pairing),
+    attach: (connId, send) => gateway.attachDirectDevice(connId, send),
+    detach: connId => gateway.detachDirectDevice(connId),
+    pending: () => gateway.pendingPair(), pendingConnection: () => gateway.e2ee.pendingConnection(),
+    authenticatedFingerprint: connId => { const pub = gateway.e2ee.sessionIdentity(connId); return pub ? e2eeCoreFingerprint(e2eeCoreDecode(pub)) : null },
+    pairedFingerprint: connId => gateway.pairedDirectFingerprint(connId),
+    pair: code => gateway.pair(code), paired: () => gateway.listPairs(),
   }, env.ADAPTER_DATA_DIR))
-  backend.onDirectDeviceRevoked = fp => autonomousDeviceDirect?.revoked(fp)
+  gateway.onDirectDeviceRevoked = fp => autonomousDeviceDirect?.revoked(fp)
   autonomousDeviceDirect?.start()
   devicePartsBuilt = true
 

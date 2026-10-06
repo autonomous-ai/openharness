@@ -4,6 +4,7 @@
 // in cli.ts) does the work.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { BackendSocket } from './backendSocket.js'
+import { dispatchDown, gatewayOf, relaySocket, upstreamOf } from './testing/relaySocket.js'
 import { bindHandoffRequest } from './testing/socketCore.js'
 import { env } from './config/env.js'
 import * as logModule from './lib/log.js'
@@ -31,7 +32,7 @@ describe('agent_handoff_prepare on the local socket', () => {
   let frames: Frame[]
   let provider: ReturnType<typeof vi.fn<(req: Req) => Promise<Result>>>
   beforeEach(() => {
-    socket = new BackendSocket('token')
+    socket = relaySocket('token')
     frames = []
     socket.registerLocalClient('local:w', { sendFrame: (frame) => { frames.push(frame as Frame); return true }, sendBinary: () => true })
     provider = vi.fn(async () => OK)
@@ -190,11 +191,11 @@ describe('agent_handoff_prepare through the relay', () => {
   let provider: ReturnType<typeof vi.fn<(req: Req) => Promise<Result>>>
   const internals = (): any => socket as any
   beforeEach(() => {
-    socket = new BackendSocket('token')
+    socket = relaySocket('token')
     provider = vi.fn(async () => OK)
     bindHandoffRequest(socket, provider)
-    vi.spyOn(internals().e2ee, 'hasSession').mockReturnValue(true)
-    vi.spyOn(internals().e2ee, 'unwrapDown').mockReturnValue({ type: 'agent_handoff_prepare', payload: good() })
+    vi.spyOn(gatewayOf(socket).e2ee, 'hasSession').mockReturnValue(true)
+    vi.spyOn(gatewayOf(socket).e2ee, 'unwrapDown').mockReturnValue({ type: 'agent_handoff_prepare', payload: good() })
   })
   afterEach(async () => {
     await socket.stop()
@@ -203,17 +204,17 @@ describe('agent_handoff_prepare through the relay', () => {
   const sealed = { type: 'agent_handoff_prepare', payload: { __e2e: { v: 1, k: 'p', n: 1, ct: 'fixture' } } }
 
   it('never reaches the provider from a device session, and says OWNER_REQUIRED sealed', async () => {
-    vi.spyOn(internals().e2ee, 'sessionRole').mockReturnValue('device')
-    const wrap = vi.spyOn(internals().e2ee, 'wrapRpcReply').mockReturnValue({ type: 'agent_handoff_prepare_result', payload: { __e2e: 'sealed' } })
-    await internals().dispatchDown(sealed, 'dev-1', 'relay')
+    vi.spyOn(gatewayOf(socket).e2ee, 'sessionRole').mockReturnValue('device')
+    const wrap = vi.spyOn(gatewayOf(socket).e2ee, 'wrapRpcReply').mockReturnValue({ type: 'agent_handoff_prepare_result', payload: { __e2e: 'sealed' } })
+    await dispatchDown(socket, sealed, 'dev-1', 'relay')
     expect(provider).not.toHaveBeenCalled()
     expect(wrap).toHaveBeenCalledWith('dev-1', 'agent_handoff_prepare_result', 'r-1', { error: 'OWNER_REQUIRED' })
   })
 
   it('reaches the provider from a web session and seals the reply to that connection', async () => {
-    vi.spyOn(internals().e2ee, 'sessionRole').mockReturnValue('web')
-    const wrap = vi.spyOn(internals().e2ee, 'wrapRpcReply').mockReturnValue({ type: 'agent_handoff_prepare_result', payload: { __e2e: 'sealed' } })
-    await internals().dispatchDown(sealed, 'web-1', 'relay')
+    vi.spyOn(gatewayOf(socket).e2ee, 'sessionRole').mockReturnValue('web')
+    const wrap = vi.spyOn(gatewayOf(socket).e2ee, 'wrapRpcReply').mockReturnValue({ type: 'agent_handoff_prepare_result', payload: { __e2e: 'sealed' } })
+    await dispatchDown(socket, sealed, 'web-1', 'relay')
     await vi.waitFor(() => expect(wrap).toHaveBeenCalled())
     expect(provider).toHaveBeenCalledTimes(1)
     expect(wrap).toHaveBeenCalledWith('web-1', 'agent_handoff_prepare_result', 'r-1',
@@ -221,30 +222,30 @@ describe('agent_handoff_prepare through the relay', () => {
   })
 
   it('checks the owner before anything else: a device with a malformed request still gets OWNER_REQUIRED', async () => {
-    vi.spyOn(internals().e2ee, 'sessionRole').mockReturnValue('device')
-    vi.spyOn(internals().e2ee, 'unwrapDown').mockReturnValue({ type: 'agent_handoff_prepare', payload: good({ agentId: '', changeId: 'X', targetEngine: 'nope' }) })
-    const wrap = vi.spyOn(internals().e2ee, 'wrapRpcReply').mockReturnValue({ type: 'agent_handoff_prepare_result', payload: { __e2e: 'sealed' } })
-    await internals().dispatchDown(sealed, 'dev-1', 'relay')
+    vi.spyOn(gatewayOf(socket).e2ee, 'sessionRole').mockReturnValue('device')
+    vi.spyOn(gatewayOf(socket).e2ee, 'unwrapDown').mockReturnValue({ type: 'agent_handoff_prepare', payload: good({ agentId: '', changeId: 'X', targetEngine: 'nope' }) })
+    const wrap = vi.spyOn(gatewayOf(socket).e2ee, 'wrapRpcReply').mockReturnValue({ type: 'agent_handoff_prepare_result', payload: { __e2e: 'sealed' } })
+    await dispatchDown(socket, sealed, 'dev-1', 'relay')
     expect(wrap).toHaveBeenCalledWith('dev-1', 'agent_handoff_prepare_result', 'r-1', { error: 'OWNER_REQUIRED' })
   })
 
   it('refuses a session with no role', async () => {
-    vi.spyOn(internals().e2ee, 'sessionRole').mockReturnValue(null)
-    const wrap = vi.spyOn(internals().e2ee, 'wrapRpcReply').mockReturnValue({ type: 'agent_handoff_prepare_result', payload: { __e2e: 'sealed' } })
-    await internals().dispatchDown(sealed, 'x-1', 'relay')
+    vi.spyOn(gatewayOf(socket).e2ee, 'sessionRole').mockReturnValue(null)
+    const wrap = vi.spyOn(gatewayOf(socket).e2ee, 'wrapRpcReply').mockReturnValue({ type: 'agent_handoff_prepare_result', payload: { __e2e: 'sealed' } })
+    await dispatchDown(socket, sealed, 'x-1', 'relay')
     expect(provider).not.toHaveBeenCalled()
     expect(wrap).toHaveBeenCalledWith('x-1', 'agent_handoff_prepare_result', 'r-1', { error: 'OWNER_REQUIRED' })
   })
 
   it('sends only E2EE_REQUIRED, to that connection, when the web session is gone by the time the provider settles', async () => {
-    vi.spyOn(internals().e2ee, 'sessionRole').mockReturnValue('web')
-    const hasSession = vi.spyOn(internals().e2ee, 'hasSession').mockReturnValue(true)
-    const wrap = vi.spyOn(internals().e2ee, 'wrapRpcReply')
+    vi.spyOn(gatewayOf(socket).e2ee, 'sessionRole').mockReturnValue('web')
+    const hasSession = vi.spyOn(gatewayOf(socket).e2ee, 'hasSession').mockReturnValue(true)
+    const wrap = vi.spyOn(gatewayOf(socket).e2ee, 'wrapRpcReply')
     const queued: Array<{ t?: string; targetConnId?: string; frame?: Frame }> = []
-    vi.spyOn(internals(), 'enqueue').mockImplementation((msg: unknown) => { queued.push(msg as never) })
+    vi.spyOn(upstreamOf(socket) as any, 'enqueue').mockImplementation((msg: unknown) => { queued.push(msg as never) })
     const held = deferred<Result>()
     provider.mockReturnValue(held.promise)
-    await internals().dispatchDown(sealed, 'web-1', 'relay')
+    await dispatchDown(socket, sealed, 'web-1', 'relay')
     await vi.waitFor(() => expect(provider).toHaveBeenCalledTimes(1))
     hasSession.mockReturnValue(false)
     held.resolve({ ...OK, file: '.harness/handoff/SECRETFILE.md' })
@@ -257,8 +258,8 @@ describe('agent_handoff_prepare through the relay', () => {
 
   it('refuses a plaintext relayed request without calling the provider', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const enqueue = vi.spyOn(internals(), 'enqueue').mockImplementation(() => {})
-    await internals().dispatchDown({ type: 'agent_handoff_prepare', payload: good() }, 'web-1', 'relay')
+    const enqueue = vi.spyOn(upstreamOf(socket) as any, 'enqueue').mockImplementation(() => {})
+    await dispatchDown(socket, { type: 'agent_handoff_prepare', payload: good() }, 'web-1', 'relay')
     expect(provider).not.toHaveBeenCalled()
     expect(warn).toHaveBeenCalled()
     expect(JSON.stringify(enqueue.mock.calls)).toContain('E2EE_REQUIRED')
@@ -267,12 +268,12 @@ describe('agent_handoff_prepare through the relay', () => {
 
 describe('agent_handoff_prepare after the client went away', () => {
   it('drops the late reply: never broadcast in the clear, and never queued for the relay', async () => {
-    const socket = new BackendSocket('token')
+    const socket = relaySocket('token')
     const asker: Frame[] = [], other: Frame[] = []
     socket.registerLocalClient('local:w', { sendFrame: (f) => { asker.push(f as Frame); return true }, sendBinary: () => true })
     socket.registerLocalClient('local:other', { sendFrame: (f) => { other.push(f as Frame); return true }, sendBinary: () => true })
     const queued: unknown[] = []
-    vi.spyOn(socket as any, 'enqueue').mockImplementation((msg: unknown) => { queued.push(msg) })
+    vi.spyOn(upstreamOf(socket) as any, 'enqueue').mockImplementation((msg: unknown) => { queued.push(msg) })
     const replied = vi.spyOn(socket as any, 'emitReply')
     const held = deferred<Result>()
     const provider = vi.fn(() => held.promise)
