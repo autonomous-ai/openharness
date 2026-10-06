@@ -12,7 +12,7 @@ import type { CursorSubagentManager } from '../../engines/cursor/subagent.js'
 import type { CursorTaskHookQueue } from '../../engines/cursor/taskHookQueue.js'
 import type { CommanderMirror } from '../../lib/commander.js'
 import { sid } from '../../lib/log.js'
-import type { LiveEvent } from '../../lib/normalize.js'
+import type { LiveEvent, TurnState } from '../../lib/normalize.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import type { SessionNormalizers } from '../transcripts/normalizers.js'
 
@@ -191,6 +191,13 @@ export function createTurnHooks({
       return
     }
     if (session.engine !== 'claude') return
+    // The turn this Stop fired for is the one open before the drain, or one the drain closes. A Stop hook
+    // that BLOCKS (a /goal loop) makes Claude Code write its continuation right after the hooks return, so
+    // the drain below can read the iteration's end and the next iteration's start together: force-closing
+    // what is open after the grace then ended the goal's next iteration while it ran.
+    const seqAtStop = turnStates.get(sessionId)?.turnSeq
+    const continuedSince = (st: TurnState): boolean =>
+      st.continuedSeq !== undefined && st.continuedSeq === st.turnSeq && st.turnSeq !== seqAtStop
     void (async () => {
       await drain(sessionId)
       // A Stop hook is the one precise "the engine stopped writing" signal we get. When the mirror is
@@ -198,13 +205,14 @@ export function createTurnHooks({
       // on disk — without it the recap fires on its settle timer and can beat claude's closing summary
       // to the punch (measured: recap at 10:18:41, wrap-up written at 10:18:44).
       mirror.noteEngineStopped(sessionId)
-      if (!turnStates.get(sessionId)?.turnOpen) return // natural JSONL close already won → nothing to do
+      const open = turnStates.get(sessionId)
+      if (!open?.turnOpen || continuedSince(open)) return // natural JSONL close already won → nothing to do
       // Still open: the transcript may just be lagging the Stop hook. Wait, re-poll, and only force-close
       // if it STILL hasn't closed — a genuinely wedged turn, whose assistant text is on disk by now.
       await new Promise((r) => setTimeout(r, STOP_HOOK_GRACE_MS))
       await drain(sessionId)
       const st = turnStates.get(sessionId)
-      if (st?.turnOpen) {
+      if (st?.turnOpen && !continuedSince(st)) {
         st.turnOpen = false
         st.pendingTools.clear()
         console.log(`[turn] ${sid(sessionId)} force-closed by ${status === 'error' ? 'StopFailure' : 'Stop'} hook (after grace)`)
