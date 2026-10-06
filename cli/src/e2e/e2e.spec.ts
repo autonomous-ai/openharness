@@ -7,8 +7,8 @@ import { buildMatrixEntry } from './matrix.js'
 import type { AgentEngine } from '../engines/types.js'
 import { SMOKE_CHECKS, SCENARIO, LEGS, firstStuck, plannedLegs, quotaHit, scenarioFor, type CheckId } from './smokeChecks.js'
 import { pickGridModel } from './gridSwitchDriver.js'
-import { prepareWorkspace, readLog, logPath, readWorkspaceFile, preAcceptClaudeBypassMode, CALC_SH, CALC_MCP_MJS } from './workspace.js'
-import { useByRef } from './sessionTools.js'
+import { prepareWorkspace, readLog, logPath, readWorkspaceFile, preAcceptClaudeBypassMode, CALC_MCP_MJS } from './workspace.js'
+import { toolResult, useByRef } from './sessionTools.js'
 import { execFileSync } from 'node:child_process'
 import { probeLeg, runCheck, dismissStartupDialogs, STARTUP_DIALOGS, type Tmux } from './paneProbe.js'
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, chmodSync, existsSync, rmSync } from 'node:fs'
@@ -193,9 +193,12 @@ describe('matrix entry (dry run)', () => {
 })
 
 describe('scenario (what a person does, on each side of the switch)', () => {
-  it('the same five plain requests on each side — bash, read, write, edit, MCP — with nothing shared', () => {
+  it('five plain requests on each side — read, write, edit, delete, then MCP — with nothing shared', () => {
     expect(LEGS).toEqual(['subscription', 'grid'])
-    for (const leg of LEGS) expect(SCENARIO[leg].map((c) => c.id)).toEqual(['bash', 'read', 'write', 'edit', 'mcp'])
+    // The own account calls the workspace's MCP server; the grid, the harness's web search.
+    expect(SCENARIO.subscription.map((c) => c.id)).toEqual(['read', 'write', 'edit', 'delete', 'mcp'])
+    expect(SCENARIO.grid.map((c) => c.id)).toEqual(['read', 'write', 'edit', 'delete', 'web'])
+    expect(SCENARIO.grid[4].sessionTool).toBe('mcp__harness__web_search')
     // Nothing the first side leaves behind can pass the second: its own numbers and its own files.
     const patterns = SMOKE_CHECKS.filter((c) => c.logPattern).map((c) => c.logPattern)
     expect(new Set(patterns).size).toBe(patterns.length)
@@ -208,7 +211,7 @@ describe('scenario (what a person does, on each side of the switch)', () => {
     for (const c of SMOKE_CHECKS) {
       expect(c.prompt).not.toMatch(/reply with exactly|<result>|RECALL_|TOOL_|MCP_/i)
       if (c.logPattern) expect(c.prompt).not.toContain(c.logPattern) // "add 40 2" is asked; "= 42" is only the log's
-      expect(!!c.log || !!c.answerFromFile || !!c.file).toBe(true) // proven by the machine, never by the reply
+      expect(!!c.log || !!c.answerFromFile || !!c.file || !!c.sessionTool).toBe(true) // proven by the machine, never by the reply
       // The result is what is tested, not the route: no request tells the engine which tool to use.
       expect(c.prompt).not.toMatch(/\b(Bash|Read|Write|Edit) tool\b|apply_patch|in the shell/)
     }
@@ -221,7 +224,7 @@ describe('scenario (what a person does, on each side of the switch)', () => {
     legs[0].checks.forEach((c) => (c.status = 'ok'))
     legs[1].checks[0].status = 'ok'
     legs[1].checks[1].status = 'stuck'
-    expect(firstStuck(legs)).toEqual({ leg: 'grid', check: 'read', status: 'stuck' })
+    expect(firstStuck(legs)).toEqual({ leg: 'grid', check: 'write', status: 'stuck' })
     legs.forEach((l) => l.checks.forEach((c) => (c.status = 'ok')))
     expect(firstStuck(legs)).toBeNull()
   })
@@ -255,31 +258,38 @@ function fakePane(reply: (prompt: string) => string | null): Tmux & { typed: str
   }
 }
 
-/** A tool/MCP log that gains a line whenever the fake tool "uses" it. */
+/** An MCP log that gains a line whenever the fake tool "uses" the server. */
 function fakeLogs() {
-  const lines: Record<'tool' | 'mcp', string[]> = { tool: [], mcp: [] }
-  return { lines, readLog: (k: 'tool' | 'mcp') => [...lines[k]] }
+  const lines: Record<'mcp', string[]> = { mcp: [] }
+  return { lines, readLog: (k: 'mcp') => [...lines[k]] }
 }
 
 /**
- * A fake coding tool on a fake machine: it does what each of the five requests asks — runs the
- * script (a log line), reads the file, writes it, edits it, calls the MCP server (a log line). With
- * `lie`, it only SAYS it did those steps, which is the case the proofs exist for.
+ * A fake coding tool on a fake machine: it does what each request asks — reads the file, writes
+ * it, edits it, deletes it, calls the MCP server (a log line), searches the web (a result in its
+ * session, as `toolResult` would read it). With `lie`, it only SAYS it did those steps, which is the
+ * case the proofs exist for; with `empty`, its web search comes back with nothing.
  */
-function fakeAgent(opts: { lie?: CheckId[] } = {}) {
+function fakeAgent(opts: { lie?: CheckId[]; empty?: boolean } = {}) {
   const files: Record<string, string> = {
     'notes/info-1.txt': 'kiwi-4821-tulip\n', 'notes/info-2.txt': 'otter-1234-ember\n',
     'notes/todo-1.txt': '# todo 1\nstatus: pending\n', 'notes/todo-2.txt': '# todo 2\nstatus: pending\n',
+    'notes/old-1.txt': '# old notes 1\n', 'notes/old-2.txt': '# old notes 2\n',
   }
   const logs = fakeLogs()
+  const searched: Record<string, string> = {}
   const lie = new Set(opts.lie ?? [])
   const reply = (p: string): string | null => {
     let m: RegExpMatchArray | null
-    if ((m = p.match(/tools\/calc\.sh add (\d+) (\d+)/))) {
-      if (!lie.has('bash')) logs.lines.tool.push(`t add ${m[1]} ${m[2]} = ${+m[1] + +m[2]}`)
-      return `The result is ${+m[1] + +m[2]}.`
-    }
     if ((m = p.match(/Read (notes\/info-\d\.txt)/))) return lie.has('read') ? 'It says hello.' : `It says: ${files[m[1]].trim()}`
+    if ((m = p.match(/Delete the file (\S+)\. \(ref-/))) {
+      if (!lie.has('delete')) delete files[m[1]]
+      return 'Deleted.'
+    }
+    if ((m = p.match(/Search the web .*\((ref-[0-9a-z]{6})\)/))) {
+      if (!lie.has('web')) searched[m[1]] = opts.empty ? 'No results.' : 'Node.js 24.11.0 — https://nodejs.org/en/download'
+      return 'The latest stable Node.js is 24.11.0.'
+    }
     if ((m = p.match(/Create the file (\S+) with this text: (.*) \(ref-/))) {
       if (!lie.has('write')) files[m[1]] = `${m[2]}\n`
       return 'Done.'
@@ -295,42 +305,56 @@ function fakeAgent(opts: { lie?: CheckId[] } = {}) {
     return null
   }
   const pane = fakePane(reply)
-  const probe = { settleMs: 1, pollMs: 1, checkTimeoutMs: 5_000, readLog: logs.readLog, readFile: (f: string) => files[f] ?? null }
+  const toolResult = (ref: string, tool: string) => {
+    const out = tool === 'mcp__harness__web_search' ? searched[ref] : undefined
+    return { called: out !== undefined, answered: !!out && out.includes('https://'), ...(out ? { output: out } : {}) }
+  }
+  const probe = { settleMs: 1, pollMs: 1, checkTimeoutMs: 5_000, readLog: logs.readLog, readFile: (f: string) => files[f] ?? null, toolResult }
   return { pane, files, logs, probe }
 }
 
-const BASH_STEP = SCENARIO.subscription[0]
-const READ_STEP = SCENARIO.subscription[1]
+const READ_STEP = SCENARIO.subscription[0]
+const MCP_STEP = SCENARIO.subscription[4]
+const WEB_STEP = SCENARIO.grid[4]
 
 describe('pane probe (live steps on a tmux pane)', () => {
   it('a tool that really does the five requests passes both sides, and each proof is recorded', async () => {
     const { pane, probe, files } = fakeAgent()
     const own = await probeLeg(pane, '%1', 'subscription', probe)
     const grid = await probeLeg(pane, '%1', 'grid', probe)
-    expect(own.checks.map((c) => `${c.id}=${c.status}`)).toEqual(['bash=ok', 'read=ok', 'write=ok', 'edit=ok', 'mcp=ok'])
-    expect(grid.checks.map((c) => `${c.id}=${c.status}`)).toEqual(['bash=ok', 'read=ok', 'write=ok', 'edit=ok', 'mcp=ok'])
-    expect(own.checks[0].logLines).toEqual(['t add 40 2 = 42'])
-    expect(grid.checks[4].logLines).toEqual(['t add 60 18 = 78'])
+    expect(own.checks.map((c) => `${c.id}=${c.status}`)).toEqual(['read=ok', 'write=ok', 'edit=ok', 'delete=ok', 'mcp=ok'])
+    expect(grid.checks.map((c) => `${c.id}=${c.status}`)).toEqual(['read=ok', 'write=ok', 'edit=ok', 'delete=ok', 'web=ok'])
+    expect(own.checks[4].logLines).toEqual(['t add 30 12 = 42'])
     expect(files['out/hello-2.txt']).toBe('hello from step 2\n')
     expect(files['notes/todo-1.txt']).toContain('status: done')
+    expect(files['notes/old-1.txt']).toBeUndefined()
+    expect(files['notes/old-2.txt']).toBeUndefined()
     // Every step carries the tag its prompt was typed with — how its tools are found afterwards.
     expect([...own.checks, ...grid.checks].every((c) => /^ref-[0-9a-z]{6}$/.test(c.ref ?? ''))).toBe(true)
   })
 
   it('saying is not doing: each step fails when the tool only claims it, with what was missing', async () => {
     const notes: Record<CheckId, RegExp> = {
-      bash: /no tool log line for "add 40 2 = 42"/,
       read: /notes\/info-1\.txt's token never appeared/,
       write: /out\/hello-1\.txt does not exist/,
       edit: /notes\/todo-1\.txt is "# todo 1\\nstatus: pending"/,
+      delete: /notes\/old-1\.txt still exists/,
       mcp: /no mcp log line for "add 30 12 = 42"/,
+      web: /mcp__harness__web_search was never called/,
     }
-    for (const step of SCENARIO.subscription) {
+    for (const step of [...SCENARIO.subscription, WEB_STEP]) {
       const { pane, probe } = fakeAgent({ lie: [step.id] })
       const out = await runCheck(pane, '%1', step, probe)
       expect(out.status, step.id).toBe('stuck')
       expect(out.note, step.id).toMatch(notes[step.id])
     }
+  })
+
+  it('web: a search that came back with no results is not a search that worked', async () => {
+    const { pane, probe } = fakeAgent({ empty: true })
+    const out = await runCheck(pane, '%1', WEB_STEP, probe)
+    expect(out.status).toBe('stuck')
+    expect(out.note).toBe('mcp__harness__web_search came back without results: "No results."')
   })
 
   it('read: the token must come after THIS question — one already on screen is no proof', async () => {
@@ -342,7 +366,7 @@ describe('pane probe (live steps on a tmux pane)', () => {
   it('write: the exact text, not merely a file', async () => {
     const { pane, probe, files } = fakeAgent({ lie: ['write'] })
     files['out/hello-1.txt'] = 'hello from step one\n'
-    const out = await runCheck(pane, '%1', SCENARIO.subscription[2], probe)
+    const out = await runCheck(pane, '%1', SCENARIO.subscription[1], probe)
     expect(out.status).toBe('stuck')
     expect(out.note).toBe('out/hello-1.txt is "hello from step one"')
   })
@@ -365,30 +389,30 @@ describe('pane probe (live steps on a tmux pane)', () => {
     ]
     for (const [said, resets] of cases) {
       const pane = fakePane(() => said)
-      const out = await runCheck(pane, '%1', BASH_STEP, { settleMs: 1, pollMs: 1, checkTimeoutMs: 120_000 })
+      const out = await runCheck(pane, '%1', MCP_STEP, { settleMs: 1, pollMs: 1, checkTimeoutMs: 120_000 })
       expect(out.status, said).toBe('no-quota')
       expect(out.resets ?? null, said).toBe(resets)
       expect(out.elapsedMs!, said).toBeLessThan(10) // one poll, not the whole budget
     }
     // Claude's early warning is not the limit: the step carries on and passes.
     const logs = fakeLogs()
-    const warned = fakePane(() => { logs.lines.tool.push('t add 40 2 = 42'); return 'Approaching usage limit · resets 6pm\n42' })
-    expect((await runCheck(warned, '%1', BASH_STEP, { settleMs: 1, pollMs: 1, readLog: logs.readLog })).status).toBe('ok')
+    const warned = fakePane(() => { logs.lines.mcp.push('t add 30 12 = 42'); return 'Approaching usage limit · resets 6pm\n42' })
+    expect((await runCheck(warned, '%1', MCP_STEP, { settleMs: 1, pollMs: 1, readLog: logs.readLog })).status).toBe('ok')
   })
 
   it('an old limit message already on screen does not count against a new request', async () => {
     const { pane, probe } = fakeAgent()
     await pane.type('%1', "You've hit your session limit · resets 6pm") // yesterday's, still in the scrollback
     pane.typed.length = 0
-    expect((await runCheck(pane, '%1', BASH_STEP, probe)).status).toBe('ok')
+    expect((await runCheck(pane, '%1', MCP_STEP, probe)).status).toBe('ok')
   })
 
   it('out of usage ends the leg: nothing more is typed into an account that cannot answer', async () => {
     const pane = fakePane(() => "You've hit your usage limit. try again at 6:02 PM.")
-    const leg = await probeLeg(pane, '%1', 'subscription', { settleMs: 1, pollMs: 1 })
-    expect(leg.checks.map((c) => `${c.id}=${c.status}`)).toEqual(['bash=no-quota', 'read=not-run', 'write=not-run', 'edit=not-run', 'mcp=not-run'])
+    const leg = await probeLeg(pane, '%1', 'subscription', { settleMs: 1, pollMs: 1, readFile: () => 'kiwi-4821-tulip\n' })
+    expect(leg.checks.map((c) => `${c.id}=${c.status}`)).toEqual(['read=no-quota', 'write=not-run', 'edit=not-run', 'delete=not-run', 'mcp=not-run'])
     expect(pane.typed).toHaveLength(1)
-    expect(quotaHit([leg])).toEqual({ leg: 'subscription', check: 'bash', resets: 'try again at 6:02 PM' })
+    expect(quotaHit([leg])).toEqual({ leg: 'subscription', check: 'read', resets: 'try again at 6:02 PM' })
   })
 
   it('answers codex 0.156\'s stacked startup screens — the one on top first, each once', async () => {
@@ -402,7 +426,7 @@ describe('pane probe (live steps on a tmux pane)', () => {
     expect(pane.typed).toEqual(['<2>', '<Enter>', '<Down>', '<Enter>'])
     // And the step typed after them is not disturbed by their text still being in the scrollback.
     pane.typed.length = 0
-    expect((await runCheck(pane, '%1', BASH_STEP, probe)).status).toBe('ok')
+    expect((await runCheck(pane, '%1', MCP_STEP, probe)).status).toBe('ok')
     expect(pane.typed).toHaveLength(1)
   })
 
@@ -413,7 +437,7 @@ describe('pane probe (live steps on a tmux pane)', () => {
     let dropped = false
     pane.type = async (id, text) => { if (!dropped) { dropped = true; pane.typed.push(text); return } await realType(id, text) }
     // The real per-step budget: the 5s spent seeing whether the first paste landed comes out of it.
-    const out = await runCheck(pane, '%1', BASH_STEP, { ...probe, pollMs: 100, checkTimeoutMs: 120_000 })
+    const out = await runCheck(pane, '%1', MCP_STEP, { ...probe, pollMs: 100, checkTimeoutMs: 120_000 })
     expect(out.status).toBe('ok')
     expect(pane.typed).toHaveLength(2) // typed, not seen, typed again
     expect(pane.typed[0]).toBe(pane.typed[1]) // the same request with the same tag
@@ -430,8 +454,8 @@ describe('pane probe (live steps on a tmux pane)', () => {
   it('a step that is not proven stops the leg there: nothing more is typed after it', async () => {
     const { pane, probe } = fakeAgent({ lie: ['write'] })
     const leg = await probeLeg(pane, '%1', 'subscription', { ...probe, checkTimeoutMs: 5 })
-    expect(leg.checks.map((c) => `${c.id}=${c.status}`)).toEqual(['bash=ok', 'read=ok', 'write=stuck', 'edit=not-run', 'mcp=not-run'])
-    expect(pane.typed).toHaveLength(3)
+    expect(leg.checks.map((c) => `${c.id}=${c.status}`)).toEqual(['read=ok', 'write=stuck', 'edit=not-run', 'delete=not-run', 'mcp=not-run'])
+    expect(pane.typed).toHaveLength(2)
   })
 
   it('answers a startup dialog (codex update → Skip) before typing the first request, and records it', async () => {
@@ -441,7 +465,7 @@ describe('pane probe (live steps on a tmux pane)', () => {
     pane.typed.length = 0
     const leg = await probeLeg(pane, '%1', 'subscription', probe)
     expect(pane.typed.slice(0, 2)).toEqual(['<2>', '<Enter>'])
-    expect(pane.typed[2]).toContain(BASH_STEP.prompt)
+    expect(pane.typed[2]).toContain(READ_STEP.prompt)
     expect(leg.dialogs).toEqual(['codex-update'])
     expect(leg.checks.every((c) => c.status === 'ok')).toBe(true)
     expect(await dismissStartupDialogs(pane, '%1', { settleMs: 1 })).toEqual([]) // nothing left on screen
@@ -502,6 +526,61 @@ describe('session tools and models (read from the engine\'s own session file)', 
       rmSync(home, { recursive: true, force: true })
     }
   })
+
+  it('codex: the web search of THIS step, and whether it came back with results', () => {
+    const home = mkdtempSync(join(tmpdir(), 'wd-sess-'))
+    try {
+      const dir = join(home, '.codex', 'sessions', '2026', '10', '06')
+      mkdirSync(dir, { recursive: true })
+      const rec = (o: object) => JSON.stringify(o)
+      const item = (payload: object) => rec({ type: 'response_item', payload })
+      const user = (t: string) => item({ type: 'message', role: 'user', content: [{ type: 'input_text', text: t }] })
+      // The output shape codex 0.160.0 recorded for an MCP call on the grid (grid-dev, 2026-10-01).
+      const out = (callId: string, text: string) => item({ type: 'function_call_output', call_id: callId, output: [{ type: 'input_text', text: 'Wall time: 0.4 seconds\nOutput:' }, { type: 'input_text', text }] })
+      writeFileSync(join(dir, 'rollout-x.jsonl'), [
+        user('Delete the file notes/old-2.txt. (ref-aaaaaa)'),
+        user('<environment_context>a context line in the user role, mid-step</environment_context>'),
+        user('Search the web for the latest stable version of Node.js and tell me the version number. (ref-bbbbbb)'),
+        user('<environment_context>a context line in the user role, mid-step</environment_context>'),
+        item({ type: 'function_call', name: 'web_search', namespace: 'mcp__harness', arguments: '{"query":"node"}', call_id: 'c1' }),
+        out('c1', 'Node.js 24.11.0 (LTS) https://nodejs.org/en/download'),
+        user('Search again. (ref-cccccc)'),
+        item({ type: 'function_call', name: 'web_search', namespace: 'mcp__harness', arguments: '{}', call_id: 'c2' }),
+        out('c2', 'MCP tool call requires approval, which the policy denies'),
+      ].join('\n'))
+      expect(toolResult('codex', '/unused', 'ref-aaaaaa', 'mcp__harness__web_search', home)).toEqual({ called: false, answered: false })
+      expect(toolResult('codex', '/unused', 'ref-bbbbbb', 'mcp__harness__web_search', home)).toMatchObject({ called: true, answered: true })
+      // Called, refused: no results, and the refusal is what the probe quotes.
+      expect(toolResult('codex', '/unused', 'ref-cccccc', 'mcp__harness__web_search', home)).toEqual({
+        called: true, answered: false, output: 'Wall time: 0.4 seconds Output: MCP tool call requires approval, which the policy denies',
+      })
+    } finally {
+      rmSync(home, { recursive: true, force: true })
+    }
+  })
+
+  it('claude: the web search tool_use, its tool_result, and an error result', () => {
+    const home = mkdtempSync(join(tmpdir(), 'wd-sess-'))
+    try {
+      const cwd = '/tmp/ws'
+      const dir = join(home, '.claude', 'projects', '-tmp-ws')
+      mkdirSync(dir, { recursive: true })
+      const rec = (o: object) => JSON.stringify(o)
+      const prompt = (t: string) => rec({ type: 'user', message: { role: 'user', content: t } })
+      const call = (id: string) => rec({ type: 'assistant', message: { model: 'DeepSeek-V4-Flash-0731', content: [{ type: 'tool_use', id, name: 'mcp__harness__web_search', input: { query: 'node' } }] } })
+      const result = (id: string, text: string, isError = false) => rec({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, is_error: isError, content: [{ type: 'text', text }] }] } })
+      writeFileSync(join(dir, 's.jsonl'), [
+        prompt('Search the web for the latest stable version of Node.js and tell me the version number. (ref-dddddd)'),
+        call('t1'), result('t1', 'Node.js 24.11.0 https://nodejs.org'),
+        prompt('Search again. (ref-eeeeee)'),
+        call('t2'), result('t2', 'see https://example.com — upstream timed out', true),
+      ].join('\n'))
+      expect(toolResult('claude', cwd, 'ref-dddddd', 'mcp__harness__web_search', home)).toMatchObject({ called: true, answered: true })
+      expect(toolResult('claude', cwd, 'ref-eeeeee', 'mcp__harness__web_search', home)).toMatchObject({ called: true, answered: false })
+    } finally {
+      rmSync(home, { recursive: true, force: true })
+    }
+  })
 })
 
 describe('grid model pick (live)', () => {
@@ -526,7 +605,7 @@ describe('grid model pick (live)', () => {
 })
 
 describe('workspace (the person\'s project the agent is created in)', () => {
-  it('lays out the script tool, the MCP config for the engine, and the logs the steps are proven by', () => {
+  it('lays out the notes, the MCP config for the engine, and the log the MCP step is proven by', () => {
     const cwd = mkdtempSync(join(tmpdir(), 'wd-ws-'))
     try {
       // A stand-in for the codex binary: it records the argv it was called with and answers
@@ -539,11 +618,12 @@ describe('workspace (the person\'s project the agent is created in)', () => {
       const codexConfig = join(cwd, 'codex-config.toml')
       writeFileSync(codexConfig, 'model = "gpt-6-luna"\n')
       const laid = prepareWorkspace(cwd, 'codex', { codexBin, codexConfig })
-      // The read / write / edit steps' files: a fresh unguessable secret per side, a todo to edit.
+      // The file steps' files: a fresh unguessable secret per side, a todo to edit, a note to delete.
       const secrets = [1, 2].map((n) => readWorkspaceFile(cwd, `notes/info-${n}.txt`)?.trim() ?? '')
       for (const t of secrets) expect(t).toMatch(/^[a-z]+-\d{4}-[a-z]+$/)
       expect(secrets[0]).not.toBe(secrets[1])
       expect(readWorkspaceFile(cwd, 'notes/todo-1.txt')).toContain('status: pending')
+      for (const n of [1, 2]) expect(readWorkspaceFile(cwd, `notes/old-${n}.txt`)).not.toBeNull()
       expect(existsSync(join(cwd, 'out'))).toBe(true)
       expect(readWorkspaceFile(cwd, 'out/hello-1.txt')).toBeNull() // written by the step, never by us
       // Fresh per run: two workspaces never share a secret.
@@ -557,9 +637,7 @@ describe('workspace (the person\'s project the agent is created in)', () => {
       expect(calls[0]).toBe('mcp remove e2e_calc')
       expect(calls[1]).toBe(`mcp add e2e_calc -- node ${laid.mcpServer} ${logPath(cwd, 'mcp')}`)
       expect(calls[2]).toBe('mcp list')
-      expect(existsSync(join(cwd, 'tools', 'calc.sh'))).toBe(true)
-      // The strings shipped in the bundle are the files in workspace/, byte for byte.
-      expect(CALC_SH).toBe(readFileSync(join(__dirname, 'workspace', 'calc.sh'), 'utf8'))
+      // The string shipped in the bundle is the file in workspace/, byte for byte.
       expect(CALC_MCP_MJS).toBe(readFileSync(join(__dirname, 'workspace', 'calc-mcp.mjs'), 'utf8'))
       expect(existsSync(join(cwd, 'tools', 'calc-mcp.mjs'))).toBe(true)
       // codex has no project-level MCP config — a `<cwd>/.codex/config.toml` is never read (measured:
@@ -575,9 +653,6 @@ describe('workspace (the person\'s project the agent is created in)', () => {
       const toml = readFileSync(codexConfig, 'utf8')
       expect(toml.startsWith('model = "gpt-6-luna"\n')).toBe(true) // appended, nothing rewritten
       for (const tool of ['add', 'sub']) expect(toml).toContain(`[mcp_servers.e2e_calc.tools.${tool}]\napproval_mode = "approve"\n`)
-      // The script answers and leaves its line in the tool log.
-      expect(execFileSync('sh', [join(cwd, 'tools', 'calc.sh'), 'add', '40', '2']).toString().trim()).toBe('42')
-      expect(readLog(cwd, 'tool').at(-1)).toContain('add 40 2 = 42')
       // The MCP server answers tools/call and leaves its line in the MCP log.
       const rpc = ['{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}', '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"sub","arguments":{"a":60,"b":18}}}'].join('\n') + '\n'
       const out = execFileSync('node', [laid.mcpServer, logPath(cwd, 'mcp')], { input: rpc }).toString()
@@ -589,7 +664,7 @@ describe('workspace (the person\'s project the agent is created in)', () => {
       expect(claude.mcpConfig).toBe(join(cwd, '.mcp.json'))
       // …and the project settings a person who said "don't ask again" has: the steps' tools allowed.
       const settings = JSON.parse(readFileSync(join(cwd, '.claude', 'settings.json'), 'utf8'))
-      expect(settings.permissions.allow).toEqual(expect.arrayContaining(['Write', 'Edit', 'Bash(bash tools/calc.sh:*)', 'mcp__e2e_calc']))
+      expect(settings.permissions.allow).toEqual(expect.arrayContaining(['Write', 'Edit', 'Bash(rm:*)', 'mcp__e2e_calc', 'mcp__harness']))
       expect(settings.enabledMcpjsonServers).toEqual(['e2e_calc'])
     } finally {
       rmSync(cwd, { recursive: true, force: true })

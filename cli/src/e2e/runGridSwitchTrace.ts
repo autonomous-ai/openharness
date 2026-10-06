@@ -42,7 +42,7 @@ import { env } from '../config/env.js'
 import { daemonUrl, machineId, waitForPane, gridOverrideFromEnv } from './harnessLocal.js'
 import { parseVersionLine } from './currentVersion.js'
 import { preTrustClaudeProject, preTrustCodexProject } from '../lib/claudeTrust.js'
-import { useByRef } from './sessionTools.js'
+import { toolResult, useByRef } from './sessionTools.js'
 
 const execFileP = promisify(execFile)
 
@@ -89,8 +89,9 @@ const CHECK_TIMEOUT_MS: Record<LegOutcome['leg'], number> = { subscription: 120_
 async function checks(leg: LegOutcome['leg']): Promise<void> {
   const readLogs = workspace ? (kind: LogKind) => readLog(workspace!, kind) : undefined
   const readFile = workspace ? (rel: string) => readWorkspaceFile(workspace!, rel) : undefined
+  const usedTool = workspace ? (ref: string, tool: string) => toolResult(engine, workspace!, ref, tool) : undefined
   const outcome = pane
-    ? await probeLeg(realTmux, pane, leg, { engine, checkTimeoutMs: CHECK_TIMEOUT_MS[leg], ...(readLogs ? { readLog: readLogs } : {}), ...(readFile ? { readFile } : {}) })
+    ? await probeLeg(realTmux, pane, leg, { engine, checkTimeoutMs: CHECK_TIMEOUT_MS[leg], ...(readLogs ? { readLog: readLogs } : {}), ...(readFile ? { readFile } : {}), ...(usedTool ? { toolResult: usedTool } : {}) })
     : planned.find((l) => l.leg === leg)!
   legs.push(outcome)
   console.error(`[grid-e2e] ${leg}: ${outcome.checks.map((c) => `${c.id}=${c.status}`).join(' ')}${outcome.dialogs ? ` (answered: ${outcome.dialogs.join(', ')})` : ''}`)
@@ -149,10 +150,10 @@ try {
     // realpath: $TMPDIR is a symlink on macOS (`/var/…` → `/private/var/…`) and the engine keys its
     // trust on the resolved path — a trust written for the symlink is never matched.
     const cwd = realpathSync(mkdirAll(join(outDir(), 'agents', workspaceDirName(sessionName({ engine, version, testcase: TESTCASE, at: startedAt })))))
-    // The person's project: a script tool, an MCP server registered for this engine, and their logs.
+    // The person's project: the notes the file steps work on, an MCP server registered for this engine, and its log.
     const laid = prepareWorkspace(cwd, engine)
     workspace = cwd
-    console.error(`[grid-e2e] workspace ${cwd} · tool ${laid.tool} · mcp ${laid.mcpConfig ?? '(none)'} — ${laid.mcpNote}`)
+    console.error(`[grid-e2e] workspace ${cwd} · mcp ${laid.mcpConfig ?? '(none)'} — ${laid.mcpNote}`)
     // codex's registration is global (`codex mcp add`), so it is this run's to take back out.
     if (engine === 'codex' && laid.mcpConfig) registeredCodexMcp = true
     mcpSetup = { config: laid.mcpConfig, note: laid.mcpNote }
@@ -224,7 +225,7 @@ const report = {
       gridModel,
       agentId,
       pane,
-      /** The folder the agent worked in: tools/calc.sh, the MCP config, and .e2e/*.log with every tool/MCP call. */
+      /** The folder the agent worked in: notes/, out/, the MCP server and config, and .e2e/calc-mcp.log with every MCP call. */
       workspace,
       /** The mode the engine was launched in — always the app's default, `auto`. */
       permissionMode,
@@ -249,7 +250,7 @@ const reportPath = join(bundle, 'trace.json')
 ;(report.engines[0] as Record<string, unknown>).runDir = bundle
 writeFileSync(reportPath, JSON.stringify(report, null, 2))
 if (workspace) {
-  for (const rel of ['tools', '.e2e', '.codex', '.mcp.json']) {
+  for (const rel of ['notes', 'out', 'tools', '.e2e', '.codex', '.mcp.json']) {
     const src = join(workspace, rel)
     if (existsSync(src)) cpSync(src, join(bundle, 'workspace', rel), { recursive: true })
   }

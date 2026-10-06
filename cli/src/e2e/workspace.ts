@@ -1,12 +1,15 @@
 /**
  * workspace — the folder the test agent is created in, laid out like a person's real project:
- * a script tool (`tools/calc.sh`), an MCP server registered for the engine (`e2e_calc`), and the
- * two logs those write to. The scenario (`smokeChecks.ts`) names them; the probe reads the logs.
+ * the notes the file steps read, edit and delete, an MCP server registered for the engine
+ * (`e2e_calc`), and the log it writes to. The scenario (`smokeChecks.ts`) names them; the probe
+ * reads the files and the log.
  *
- *   <cwd>/tools/calc.sh              the script tool (copied from workspace/calc.sh)
+ *   <cwd>/notes/info-N.txt           read: a token made fresh for this run
+ *   <cwd>/notes/todo-N.txt           edit: `status: pending`
+ *   <cwd>/notes/old-N.txt            delete
+ *   <cwd>/tools/calc-mcp.mjs         the MCP server
  *   <cwd>/.mcp.json                  claude: project-level MCP server
  *   ~/.codex/config.toml             codex: registered with `codex mcp add` — see below
- *   <cwd>/.e2e/calc-tool.log         one line per script call
  *   <cwd>/.e2e/calc-mcp.log          one line per MCP tools/call
  *
  * The two engines differ, and both shapes here were measured against the installed CLIs rather than
@@ -21,31 +24,16 @@
  *     codex's own `codex mcp add`, which writes `~/.codex/config.toml`, with its tools always allowed
  *     (`approveCodexMcpTools`) — and `removeCodexMcp` takes the entry out again when the run is over.
  */
-import { mkdirSync, readFileSync, writeFileSync, chmodSync, existsSync, renameSync, realpathSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync, existsSync, renameSync, realpathSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { randomInt } from 'node:crypto'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { LogKind } from './smokeChecks.js'
 
-// Both assets are written from these strings, not copied from beside this file: the published CLI is
-// ONE bundled `cli.js` (build-bundle.mjs), and files next to the source never reach an installed
-// machine. The originals under `workspace/` are the readable copies; the spec pins them equal.
-export const CALC_SH = `#!/bin/sh
-# e2e calc tool — the "tool the user already has in their folder". Usage: tools/calc.sh add|sub A B
-# Every call is logged next to it (\`.e2e/calc-tool.log\`) so the e2e can prove the tool was used.
-op="$1"; a="$2"; b="$3"
-case "$op" in
-  add) r=$((a + b)) ;;
-  sub) r=$((a - b)) ;;
-  *) echo "usage: calc.sh add|sub A B" >&2; exit 2 ;;
-esac
-dir=$(cd "$(dirname "$0")/.." && pwd)
-mkdir -p "$dir/.e2e"
-printf '%s %s %s %s = %s\\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$op" "$a" "$b" "$r" >> "$dir/.e2e/calc-tool.log"
-echo "$r"
-`
-
+// Written from this string, not copied from beside this file: the published CLI is ONE bundled
+// `cli.js` (build-bundle.mjs), and files next to the source never reach an installed machine. The
+// original under `workspace/` is the readable copy; the spec pins them equal.
 export const CALC_MCP_MJS = `#!/usr/bin/env node
 /**
  * e2e_calc — the smallest MCP server that can prove "the tool still uses MCP after a switch".
@@ -114,11 +102,11 @@ export const CALC_MCP_TOOLS = ['add', 'sub'] as const
 
 /**
  * What a person using claude in this project has long since answered "Yes, and don't ask again"
- * to: the file tools, the project's script, reading a file with cat, and the project's MCP server —
- * kept by claude in the project's `.claude/settings.json` (`permissions.allow`), with the `.mcp.json`
- * server approved in the same file (`enabledMcpjsonServers`). Measured on claude 2.1.274 + Haiku in
- * `auto`: without it the first step stopped on "This command requires approval" for
- * `bash tools/calc.sh add 40 2`.
+ * to: the file tools, reading and deleting a file through the shell, the project's MCP server and
+ * the harness's web search on a grid — kept by claude in the project's `.claude/settings.json`
+ * (`permissions.allow`), with the `.mcp.json` server approved in the same file
+ * (`enabledMcpjsonServers`). Measured on claude 2.1.274 + Haiku in `auto`: without it a shell step
+ * stopped on "This command requires approval".
  */
 export function allowClaudeProjectTools(cwd: string): void {
   mkdirSync(join(cwd, '.claude'), { recursive: true })
@@ -126,9 +114,9 @@ export function allowClaudeProjectTools(cwd: string): void {
     permissions: {
       allow: [
         'Read', 'Write', 'Edit',
-        'Bash(tools/calc.sh:*)', 'Bash(./tools/calc.sh:*)', 'Bash(bash tools/calc.sh:*)', 'Bash(sh tools/calc.sh:*)',
-        'Bash(cat:*)',
+        'Bash(cat:*)', 'Bash(rm:*)',
         `mcp__${MCP_SERVER_NAME}`,
+        'mcp__harness',
       ],
     },
     enabledMcpjsonServers: [MCP_SERVER_NAME],
@@ -136,12 +124,11 @@ export function allowClaudeProjectTools(cwd: string): void {
   writeFileSync(join(cwd, '.claude', 'settings.json'), JSON.stringify(settings, null, 2) + '\n')
 }
 
-export function logPath(cwd: string, kind: LogKind): string {
-  return join(cwd, '.e2e', kind === 'tool' ? 'calc-tool.log' : 'calc-mcp.log')
+export function logPath(cwd: string, _kind: LogKind): string {
+  return join(cwd, '.e2e', 'calc-mcp.log')
 }
 
 export interface WorkspaceLayout {
-  tool: string
   mcpServer: string
   /** Where this engine's MCP registration ended up, or null when there is none. */
   mcpConfig: string | null
@@ -209,12 +196,9 @@ export function removeCodexMcp(bin = 'codex'): boolean {
 export function prepareWorkspace(cwd: string, engine: string, opts: { codexBin?: string; codexConfig?: string } = {}): WorkspaceLayout {
   mkdirSync(join(cwd, 'tools'), { recursive: true })
   mkdirSync(join(cwd, '.e2e'), { recursive: true })
-  const tool = join(cwd, 'tools', 'calc.sh')
-  writeFileSync(tool, CALC_SH)
-  chmodSync(tool, 0o755)
-  for (const kind of ['tool', 'mcp'] as const) writeFileSync(logPath(cwd, kind), '', { flag: 'a' })
+  writeFileSync(logPath(cwd, 'mcp'), '', { flag: 'a' })
 
-  // read / write / edit (smokeChecks.ts): one set of files per side, so the grid side can never pass
+  // read / write / edit / delete (smokeChecks.ts): one set of files per side, so the grid side can never pass
   // (named `info-N.txt`, not `secret-N.txt`: gpt-6-luna refused outright to read a file called
   // "secret" — "I can't provide the contents of a file named notes/secret-1.txt" — and a test that
   // provokes a refusal measures the refusal, not the switch)
@@ -225,6 +209,7 @@ export function prepareWorkspace(cwd: string, engine: string, opts: { codexBin?:
   for (const n of [1, 2]) {
     writeFileSync(join(cwd, 'notes', `info-${n}.txt`), `${freshToken()}\n`)
     writeFileSync(join(cwd, 'notes', `todo-${n}.txt`), `# todo ${n}\nstatus: pending\n`)
+    writeFileSync(join(cwd, 'notes', `old-${n}.txt`), `# old notes ${n}, no longer needed\n`)
   }
 
   // The MCP server runs from the workspace too, so the engine's config points at a path that exists
@@ -250,7 +235,7 @@ export function prepareWorkspace(cwd: string, engine: string, opts: { codexBin?:
     allowClaudeProjectTools(cwd)
     mcpNote = 'project .mcp.json; the steps\' tools always allowed in .claude/settings.json'
   }
-  return { tool, mcpServer, mcpConfig, mcpNote }
+  return { mcpServer, mcpConfig, mcpNote }
 }
 
 /**
