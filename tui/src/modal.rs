@@ -517,14 +517,15 @@ fn tmux_group(name: &str) -> &'static str {
 }
 
 /// The command list as it shows: hn's own commands and one row for tmux's — searched, tmux's too,
-/// after hn's (their tier); [in_tmux] (Enter on that row): tmux's alone, grouped.
+/// after hn's (their tier); [in_tmux] (Enter on that row): tmux's alone, grouped. The Panes
+/// commands show only to a search: a harness is a pane already, and their keys stay as they are.
 pub fn command_rows_for(app: &App, searching: bool, in_tmux: bool) -> Vec<Row> {
     let all = command_rows(app);
     if in_tmux { return all.into_iter().filter(|r| r.id.starts_with("tmux:")).collect() }
     let n = crate::commands::COMMANDS.len();
     let more = Row::new("cmd:tmux-commands", "tmux commands…").extra("tmux every command")
         .detail(vec![span(format!("every tmux command, grouped — {n} of them"), fg(theme::MUTED))]).group("Settings & help");
-    let (own, tmux): (Vec<Row>, Vec<Row>) = all.into_iter().partition(|r| r.id.starts_with("cmd:"));
+    let (own, tmux): (Vec<Row>, Vec<Row>) = all.into_iter().filter(|r| searching || r.group.as_deref() != Some("Panes")).partition(|r| r.id.starts_with("cmd:"));
     // (The row for tmux's after hn's own settings, before Close hn.)
     let at = own.iter().position(|r| r.id == "cmd:quit").unwrap_or(own.len());
     let mut rows = own;
@@ -943,6 +944,9 @@ mod theme_row_tests {
         let own: Vec<&Row> = rows.iter().filter(|r| r.id.starts_with("cmd:")).collect();
         assert!(rows.iter().all(|r| r.id.starts_with("cmd:")), "tmux's are behind their one row");
         assert!(own.iter().any(|r| r.id == "cmd:tmux-commands"));
+        // The Panes commands only to a search (a harness is a pane already).
+        assert!(!rows.iter().any(|r| r.group.as_deref() == Some("Panes")), "no Panes until searched");
+        assert!(command_rows_for(&app, true, false).iter().any(|r| r.id == "cmd:split-right"), "searched, Split right is there");
         let inside = command_rows_for(&app, false, true);
         assert!(inside.iter().all(|r| r.id.starts_with("tmux:")), "inside: tmux's only");
         let tmux: Vec<&Row> = inside.iter().collect();
