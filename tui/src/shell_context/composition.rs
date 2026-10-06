@@ -13,7 +13,7 @@ pub(super) struct Catalog {
     seed: Vec<Row>,
     revision: String,
 }
-fn host(app: &App, source: &str, name: Option<&str>) -> Result<String, String> {
+fn host(app: &App, source: &str, name: Option<&str>, connecting: bool) -> Result<String, String> {
     let Some(name) = name else {
         return Ok(source.into());
     };
@@ -29,7 +29,9 @@ fn host(app: &App, source: &str, name: Option<&str>) -> Result<String, String> {
     if matches.len() != 1 {
         return Err("Computer is missing or ambiguous. Choose it again with Ctrl+P @.".into());
     }
-    if !matches[0].usable() {
+    if !matches[0].usable()
+        && !(connecting && matches[0].online() && matches[0].reach == crate::fleet::Reach::Connecting)
+    {
         return Err("That computer is offline. The command was not started.".into());
     }
     Ok(matches[0].id.clone())
@@ -53,7 +55,7 @@ fn data(app: &mut App, request: &Request, rows: Vec<Row>, notice: String) {
     } else { crate::shell_picker::Items::from_picker(&picker) };
     if args["kind"] == "host" {
         let source = app.panes.get(&request.pane).map(|p| p.machine_id.as_str()).unwrap_or("");
-        items.machine = host(app, source, args["compose"]["host"].as_str()).ok();
+        items.machine = host(app, source, args["compose"]["host"].as_str(), false).ok();
     }
     if args["kind"] == "folder" {
         if let Some(catalog) = &app.shell_context.composition {
@@ -228,7 +230,7 @@ pub(super) fn list(app: &mut App, request: Request) {
     if !["folder", "model"].contains(&kind) {
         return reply(app, &request, 1, "Unknown completion.");
     }
-    let machine = match host(app, &source, args["compose"]["host"].as_str()) {
+    let machine = match host(app, &source, args["compose"]["host"].as_str(), false) {
         Ok(m) => m,
         Err(e) => return data(app, &request, vec![], e),
     };
@@ -518,10 +520,31 @@ pub(super) fn launch(app: &mut App, request: Request) {
     else {
         return;
     };
-    let machine = match host(app, &source.0, launch.host.as_deref()) {
+    let machine = match host(app, &source.0, launch.host.as_deref(), true) {
         Ok(m) => m,
         Err(e) => return reply(app, &request, 1, &e),
     };
+    if app.fleet.machines.iter().any(|m| m.id == machine && m.reach == crate::fleet::Reach::Connecting) {
+        // The October 6 remote-composer E2E reached the prompt before machine_select
+        // finished. Wait for that connection before issuing any launch RPC; a
+        // cancelled command must not start later when the computer becomes ready.
+        if request.at.elapsed() >= Duration::from_secs(25) {
+            return reply(app, &request, 1, "Could not connect to that computer. The command was not started.");
+        }
+        app.shell_context.pending = Some(request.clone());
+        let epoch = app.account_epoch;
+        app.spawn(async { tokio::time::sleep(Duration::from_millis(100)).await }, move |app, ()| {
+            if app.account_epoch != epoch || app.shell_context.pending.as_ref()
+                .is_none_or(|r| r.id != request.id || r.token != request.token) { return }
+            if app.panes.get(&request.pane)
+                .is_none_or(|p| p.machine_id != source.0 || p.agent_id != source.1) {
+                return cancel(app);
+            }
+            app.shell_context.pending = None;
+            self::launch(app, request);
+        });
+        return;
+    }
     let route = app
         .shell_context
         .contexts
@@ -629,6 +652,53 @@ pub(super) fn launch(app: &mut App, request: Request) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn connecting_remote_launch_waits_and_cancellation_prevents_late_work() {
+        let (sink, mut events) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(19448, sink, (100, 35));
+        app.panes.insert(1, crate::pane::Pane::new(1, "local", "shell", 100, 32));
+        app.fleet.machines.push(crate::fleet::Machine {
+            id: "remote".into(), name: "Office".into(), shared: false, local: false,
+            status: "running".into(), reach: crate::fleet::Reach::Connecting,
+        });
+        let request = Request {
+            token: uuid::Uuid::new_v4().to_string(), id: "connecting-launch".into(), pane: 1,
+            verb: "compose-launch".into(), at: Instant::now(),
+            query: json!({"engine":"claude","host":"Office","path":"/project","cwd":"/local","args":[]}).to_string(),
+        };
+        launch(&mut app, request.clone());
+        assert_eq!(app.shell_context.pending.as_ref().map(|r| r.id.as_str()), Some("connecting-launch"));
+        assert!(app.shell_context.replies.is_empty(), "connecting must not be reported as offline");
+        cancel(&mut app);
+        let cancelled = app.shell_context.replies.len();
+        app.fleet.machines[0].reach = crate::fleet::Reach::Ready;
+        if let crate::event::Event::Apply(apply) = tokio::time::timeout(Duration::from_secs(1), events.recv()).await.unwrap().unwrap() {
+            apply(&mut app);
+        } else { panic!("expected the bounded connection wait") }
+        assert!(app.shell_context.pending.is_none());
+        assert_eq!(app.shell_context.replies.len(), cancelled, "cancelled work must not restart when the connection opens");
+        assert!(app.fleet.agents.is_empty());
+
+        app.fleet.machines[0].reach = crate::fleet::Reach::Connecting;
+        let mut expired = request.clone();
+        expired.at = Instant::now() - Duration::from_secs(26);
+        launch(&mut app, expired);
+        assert!(app.shell_context.pending.is_none());
+        assert_eq!(app.shell_context.replies.back().unwrap().code, 1);
+        assert!(app.shell_context.replies.back().unwrap().text.contains("Could not connect"));
+
+        launch(&mut app, request);
+        app.panes.get_mut(&1).unwrap().agent_id = "another-shell".into();
+        app.fleet.machines[0].reach = crate::fleet::Reach::Ready;
+        if let crate::event::Event::Apply(apply) = tokio::time::timeout(Duration::from_secs(1), events.recv()).await.unwrap().unwrap() {
+            apply(&mut app);
+        } else { panic!("expected the pending connection wait") }
+        assert!(app.shell_context.pending.is_none());
+        assert_eq!(app.shell_context.replies.back().unwrap().code, 1);
+        assert!(app.shell_context.replies.back().unwrap().text.is_empty(), "changing the source pane cancels the command");
+        assert!(app.fleet.agents.is_empty());
+    }
 
     #[test]
     fn large_folder_catalog_stays_within_transport_and_searches_beyond_first_batch() {
