@@ -91,8 +91,11 @@ is required.
   `/boot/harness-apple-firmware.tar`. Firmware package hooks restore this data
   automatically. Retain both copies; never upload them as diagnostic attachments.
   Use the T2 USB for offline recovery. The current T2 kernel stays pinned during
-  ordinary Arch updates; a changed kernel pin requires a separately verified
-  upgrade path. Do not bypass the updater's platform checks or add a moving
+  ordinary Arch updates. Harness updates that change the pin stage and verify
+  both kernel archives before mutation and retain the old one for offline
+  rollback. The update receipt records both identities and the checkpoint.
+  Older updaters refuse a changed pin and first need an update with the same
+  pin that adds this capability. Do not bypass these checks or add a moving
   kernel repository to work around a refused update.
 - Ethernet uses NetworkManager automatically. For Wi-Fi, use
   `Super+w` or `hn-os wifi`, which opens the Harness Wi-Fi form.

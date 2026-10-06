@@ -23,12 +23,15 @@ class BootProfiles(unittest.TestCase):
             pin.parent.mkdir(parents=True)
             pin.write_text('{"kernel_release":"tested"}')
             package = root / 'package.tar.gz'
-            def archive(version, helpers=True):
+            def archive(version, helpers=True, kernel_helpers=False):
                 with tarfile.open(package, 'w:gz') as output:
                     entries = {'usr/share/harness-os/apple-t2/kernel.json': json.dumps({'kernel_release': version}).encode()}
                     if helpers:
                         entries.update({'usr/lib/harness-os/' + name + '.py': b'fixture' for name in
                                         ['boot_profile', 't2_install', 't2_firmware', 'firmware_names']})
+                    if kernel_helpers:
+                        entries.update({'usr/lib/harness-os/' + name + '.py': b'fixture' for name in
+                                        ['t2_update', 't2_kernel']})
                     for name, data in entries.items():
                         info = tarfile.TarInfo(name)
                         info.size = len(data)
@@ -38,6 +41,13 @@ class BootProfiles(unittest.TestCase):
             archive('untested')
             with self.assertRaisesRegex(ValueError, 'different T2 kernel'):
                 boot.validate_update(package, root)
+            with self.assertRaisesRegex(ValueError, 'transaction helpers'):
+                boot.validate_update(package, root, allow_kernel_change=True)
+            archive('untested', kernel_helpers=True)
+            self.assertEqual(boot.validate_update(package, root, allow_kernel_change=True), {'kernel_release': 'untested'})
+            archive('untested')
+            self.assertEqual(boot.validate_update(package, root, allow_kernel_change=True, kernel_rollback=True),
+                             {'kernel_release': 'untested'})
             archive('tested', False)
             with self.assertRaisesRegex(ValueError, 'does not include the T2 platform'):
                 boot.validate_update(package, root)
