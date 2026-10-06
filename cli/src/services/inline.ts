@@ -13,6 +13,7 @@
  * declared in core/api.ts, which it loads either way.
  */
 export { startGateway } from '../gateway/start.js'
+export { startDevices } from './devices.js'
 export { startModels } from './models.js'
 export { startTeamsInCore } from './collaboration.js'
 export { startMonitor } from './monitor.js'

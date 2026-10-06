@@ -5,7 +5,7 @@
 // a per-platform release matrix into a distribution that is currently a download. A tty is a file, `stty`
 // puts it in raw mode, and that is the whole of what this needs.
 import { execFile } from 'node:child_process'
-import { closeSync, constants, existsSync, lstatSync, openSync, readFileSync, readdirSync } from 'node:fs'
+import { closeSync, constants, existsSync, lstatSync, openSync, readFileSync, readSync, readdirSync } from 'node:fs'
 import { basename } from 'node:path'
 import { ReadStream } from 'node:tty'
 import { promisify } from 'node:util'
@@ -281,9 +281,27 @@ export class SerialLink {
       // uses libuv readiness instead, including short writes/backpressure, without a polling timer.
       // ReadStream is a net.Socket; opening O_RDWR and enabling both sides makes it full duplex.
       const fd = openSync(path, constants.O_RDWR | constants.O_NOCTTY | constants.O_NONBLOCK)
+      // THE FAR END MUST STILL BE THERE, OR THE NEXT LINE NEVER RETURNS. libuv reopens a tty by its name
+      // with a plain, blocking open() (uv_tty_init), and a terminal whose other end has closed blocks such an
+      // open until something opens that end again: measured 2026-10-06, a fake dial on a pseudo-terminal
+      // unplugged while its port was being opened (during `stty` above) held the devices' process in that
+      // open for 40 s, until the master killed it as hung, and the other dial with it. A dial on USB is a
+      // callout device (cu.*) that does not wait, but nothing here should rest on that. So one read first,
+      // without waiting: it ends (0) or fails, other than with "nothing yet", when the far end is gone, and
+      // what it read is the dial's and is handed to the stream ahead of the rest.
+      let early: Buffer | null = null
+      try {
+        const probe = Buffer.alloc(4096)
+        const read = readSync(fd, probe, 0, probe.length, null)
+        if (read === 0) throw Object.assign(new Error('the port has no far end'), { code: 'EOF' })
+        early = probe.subarray(0, read)
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EAGAIN') { closeSync(fd); throw error }
+      }
       let stream: ReadStream
       try { stream = new ReadStream(fd, { readable: true, writable: true }) }
       catch (error) { closeSync(fd); throw error }
+      if (early) stream.unshift(early)
       // On POSIX libuv normally reopens the tty and owns a duplicate. On its fallback path it owns
       // the supplied fd itself. Check the native handle exactly once so neither path leaks a
       // descriptor or closes it twice. The managed Node runtime's real-PTY tests cover ownership.

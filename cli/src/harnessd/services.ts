@@ -353,6 +353,11 @@ export const SERVICE_HOSTS: Readonly<Record<string, ServiceHostSpec>> = {
   // Grid's pictures, the Model Manager's catalog and the models found on this machine. Its downloads, model
   // servers and `grid` commands run in processes of their own, outside this budget.
   models: { services: ['models'], heapLimitMiB: 512, rssLimitMiB: 1_024 },
+  // The devices (services/devicesProcess.ts): the dials on USB (pure-JS serial, a frame decoder whose buffer
+  // is bounded per dial), the window bridges, the fleet's router and its lane, the voice router's engine
+  // worker (a process of its own, outside this budget). Hardware that speaks whatever its firmware says:
+  // what it costs, it costs here, never a session.
+  devices: { services: ['devices'], heapLimitMiB: 256, rssLimitMiB: 512 },
 }
 
 /** Every service this build can run outside the core's process: what `HARNESSD_SERVICES` names. */

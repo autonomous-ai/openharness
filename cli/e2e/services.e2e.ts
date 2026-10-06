@@ -358,12 +358,13 @@ describe('a failing service never takes the core down', () => {
     }
   })
 
-  it('with the devices not starting, or the Devices tab failing, the dial, ⌘K and the tab say so and the core runs on', async () => {
+  it('with the devices not starting in the core\'s process, or the Devices tab failing, ⌘K and the tab say so and the core runs on', async () => {
+    // In their own process this is e2e/devicesProcess.e2e.ts's crash loop; here, the service host's guard.
     for (const [faults, said] of [
       ['devices', '[services] devices did not start · injected fault: devices · the core runs without it'],
       ['devices.harness_devices_list', '[services] devices.harness_devices_list failed · injected fault: devices.harness_devices_list'],
     ]) {
-      daemon = await IsolatedDaemon.create({ env: { HARNESSD_TEST_FAULTS: faults } })
+      daemon = await IsolatedDaemon.create({ env: { HARNESSD_TEST_FAULTS: faults, ...IN_THE_CORE } })
       const d = daemon
       onTestFailed(() => { console.log(`---- daemon log (${faults})\n${d.log().split('\n').slice(-80).join('\n')}`) })
       await d.start()

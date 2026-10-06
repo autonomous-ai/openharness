@@ -53,6 +53,8 @@ interface Heard {
   shapes: Map<string, Set<string>>
   /** What the scenario checked by value, as it found it. */
   values: Record<string, unknown>
+  /** Everything the dial and the window heard, in order, for reading a difference (COMPAT_REPORT). */
+  order: string[]
 }
 
 function hear(into: Heard, key: string, value: unknown): void {
@@ -66,7 +68,7 @@ async function scenario(scriptPath: string | undefined, label: string): Promise<
   const dial = await FakeDial.open()
   const daemon = await IsolatedDaemon.create({ ...(scriptPath ? { scriptPath } : {}), env: { CABLE_DISABLE: 'false', HARNESSD_TEST_DIAL_PORT: dial.path } })
   onTestFailed(() => { console.log(`---- ${label} daemon log\n${daemon.log().split('\n').slice(-120).join('\n')}\n---- the dial heard\n${dial.messages.map((m) => m.t).join(' ')}`) })
-  const heard: Heard = { shapes: new Map(), values: {} }
+  const heard: Heard = { shapes: new Map(), values: {}, order: [] }
   try {
     await daemon.start()
     const window = await LocalClient.connect(daemon)
@@ -79,6 +81,10 @@ async function scenario(scriptPath: string | undefined, label: string): Promise<
     // The window opens a tab with the agent on it, as the desktop does on every change.
     window.send('app_swarms', { active: 't1', swarms: [{ id: 't1', name: 'Tab', agentIds: [agentId], panes: 1 }, { id: 't2', name: 'Other', agentIds: [], panes: 0 }], tiles: [] })
     window.send('app_panes', { agentIds: [agentId], foreground: true })
+    // A moment for the tab to reach the devices, a process away from the window since step 9: a dial that
+    // greets in the same millisecond is first shown the empty desk it was plugged into, then the tab. A dial
+    // plugged in after the window opened its tab, as people do, is shown the tab.
+    await new Promise((resolve) => setTimeout(resolve, 1_000))
     await dial.greet()
     await dial.next((m) => m.t === 'agents.end', 30_000, 'the agent list')
     // A turn from the window: the dial is told it started and ended, and its recap.
@@ -127,6 +133,7 @@ async function scenario(scriptPath: string | undefined, label: string): Promise<
     for (const message of dial.messages as DialMessage[]) {
       if (message.t === 'ping') continue
       hear(heard, `dial ${message.t}`, message)
+      heard.order.push(`dial ${JSON.stringify(message).slice(0, 160)}`)
     }
     for (const frame of window.frames as Frame[]) {
       if (!frame.type.startsWith('dial_') && frame.type !== 'harness_devices_changed' && frame.type !== 'voice_route_request') continue
@@ -155,7 +162,7 @@ describe.skipIf(!FROM)('the devices\' frames, against another build\'s', () => {
     const before = await scenario(FROM, 'released')
     const after = await scenario(process.env.E2E_BUNDLE_PATH, 'this build')
     if (process.env.COMPAT_REPORT) {
-      const side = (heard: Heard) => ({ shapes: Object.fromEntries([...heard.shapes].map(([key, set]) => [key, [...set].map((s) => JSON.parse(s))])), values: heard.values })
+      const side = (heard: Heard) => ({ shapes: Object.fromEntries([...heard.shapes].map(([key, set]) => [key, [...set].map((s) => JSON.parse(s))])), values: heard.values, order: heard.order })
       writeFileSync(process.env.COMPAT_REPORT, JSON.stringify({ before: side(before), after: side(after) }, null, 2))
     }
     const differences: string[] = []

@@ -115,6 +115,8 @@ export interface FleetDeps {
   machines: MachineListCache
   /** The window's tiles on its active tab, in tile order, as it last reported them. */
   desk(): string[]
+  /** Read this computer's agents again before a list is built from them (FleetLocal.refresh). */
+  refresh?: () => Promise<void>
 }
 
 /** Start the fleet: what ⌘K and the dial reach it through. The router itself is returned beside it, for
@@ -164,6 +166,7 @@ export function startFleet(core: CoreApi, deps: FleetDeps): { fleet: Fleet; rout
     machineId: () => core.machine.id(),
     computerId: () => core.machine.computerId(),
     sessions: () => core.agents.advertised(),
+    refresh: deps.refresh,
     displayName: (session) => core.agents.displayName(session),
     runtimeProfile: (session) => core.agents.runtimeProfile(session),
     desk: () => deps.desk(),

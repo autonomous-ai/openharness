@@ -16,7 +16,7 @@
 // whenever the fleet cannot answer — off, or its call failed — as the dial did before the fleet was a
 // service. Its tests give it a bare fleet to route over by itself.
 import { join } from 'node:path'
-import { notificationReadToken, type UnreadNotification } from './notificationRead.js'
+import { notificationReadToken, type UnreadNotification } from '../lib/notificationRead.js'
 
 import type { RegisteredSession } from '../lib/registry.js'
 import { fetchRelease, loadImage, otaKeyForBoard, shouldOffer } from './fwPush.js'
@@ -52,7 +52,9 @@ export interface CableHostWiring {
   /** Exact live terminal footer for a local agent; absent when no footer is visible. */
   activityText?: (agentId: string) => Promise<string | null>
   /** The person's own last questions to a LOCAL agent, newest first. */
-  recentAsks: (agentId: string) => string[]
+  recentAsks: (agentId: string) => string[] | Promise<string[]>
+  /** Read the agents again before a list is built from them (see FleetLocal.refresh). */
+  refresh?: () => Promise<void>
   machineName: () => string
   /** This computer's machineId, or '' when the daemon has never resolved one (signed out). */
   machineId: () => string
@@ -75,7 +77,7 @@ export interface CableHostWiring {
   answer: (agentId: string, requestId: string, answers: Record<string, string>) => void
   answerReviewed?: (answer: ReviewedAnswer) => Promise<boolean>
   /** Recaps of an agent's last `n` completed turns — for routing, and for redrawing a reattached dial. */
-  recent: (agentId: string, n: number) => RecentTurn[]
+  recent: (agentId: string, n: number) => RecentTurn[] | Promise<RecentTurn[]>
   /** The opaque runtime-v1 profile, which is where the dial's Model/Effort chips come from. */
   runtimeProfile?: (session: RegisteredSession) => string | null
   updateAgent?: (agentId: string, model?: string, effort?: string) => void

@@ -54,4 +54,6 @@ questions. Everything else is a service ([../services/AGENTS.md](../services/AGE
   `gatewayLink.ts`: the relay and its E2EE in their own process (src/gateway/), as the core sees them:
   the link's state and the remote clients it reads in line, the frames it hands over in the clear, a
   window's sessions to another machine or a shared harness, and the fleet's lane's sealing
-  (`core.account.lane`).
+  (`core.account.lane`). `devicesLink.ts`: the devices in their own process (the dials, the window
+  bridges, the fleet): what the core tells them, what it asks with a deadline and a fallback, and what it
+  answers them.

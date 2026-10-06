@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { AppSwarms } from './cable/cableSession.js'
-import { notificationReadToken, type UnreadNotification } from './cable/notificationRead.js'
+import { notificationReadToken, type UnreadNotification } from './lib/notificationRead.js'
 import type http from 'node:http'
 import type { Socket } from 'node:net'
 import { WebSocket, WebSocketServer, type RawData } from 'ws'

@@ -179,7 +179,7 @@ describe('this computer’s side of every route', () => {
         fork: vi.fn(async () => ({ ok: true as const, agentId: 'a1-fork' })),
         runtimeModels: vi.fn(async () => [{ id: 'opus', displayName: 'Opus' }]),
       },
-      turns: { recent: vi.fn(() => [{ recap: 'Done', text: 'Done' }]), asks: vi.fn(() => ['what next?']) },
+      turns: { recent: vi.fn(async () => [{ recap: 'Done', text: 'Done' }]), asks: vi.fn(async () => ['what next?']) },
       questions: { answerReviewed: vi.fn(async () => true) },
     })
     // Asked as the dial asks it: through the port, the router's own answers.
@@ -250,7 +250,7 @@ describe('⌘K: which agent a typed task belongs to', () => {
   it('weighs every agent it knows with the person’s own questions, and remembers who they were just talking to', async () => {
     const core = fakeCore({
       agents: { advertised: vi.fn(() => [session('a1'), session('a2', 2, 'codex')]), displayName: vi.fn((s: RegisteredSession) => `name-${s.agentId}`) },
-      turns: { asks: vi.fn((agentId: string) => (agentId === 'a1' ? ['  fix the\nparser '] : [])) },
+      turns: { asks: vi.fn(async (agentId: string) => (agentId === 'a1' ? ['  fix the\nparser '] : [])) },
     })
     const { fleet } = setup({}, core)
     route.mockResolvedValue(decision({ agentId: 'a2', confidence: 0.8, reason: 'parser work', via: 'claude' }))

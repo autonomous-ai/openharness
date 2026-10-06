@@ -2,8 +2,8 @@ import { EventEmitter } from 'node:events'
 import { constants } from 'node:fs'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-const io = vi.hoisted(() => ({ open: vi.fn(), close: vi.fn(), configure: vi.fn(), stream: vi.fn(), readdir: vi.fn(), lstat: vi.fn() }))
-vi.mock('node:fs', async (original) => ({ ...await original<typeof import('node:fs')>(), openSync: io.open, closeSync: io.close, readdirSync: io.readdir, lstatSync: io.lstat }))
+const io = vi.hoisted(() => ({ open: vi.fn(), close: vi.fn(), configure: vi.fn(), stream: vi.fn(), readdir: vi.fn(), lstat: vi.fn(), read: vi.fn() }))
+vi.mock('node:fs', async (original) => ({ ...await original<typeof import('node:fs')>(), openSync: io.open, closeSync: io.close, readdirSync: io.readdir, lstatSync: io.lstat, readSync: io.read }))
 vi.mock('node:tty', () => ({ ReadStream: io.stream }))
 vi.mock('node:child_process', () => ({ execFile: io.configure }))
 
@@ -15,6 +15,7 @@ function port(nativeFd = 43) {
     destroyed: false,
     write: vi.fn((_bytes: Uint8Array, done: (error?: Error) => void) => { queueMicrotask(() => done()); return true }),
     destroy: vi.fn(() => { queueMicrotask(() => stream.emit('close')); return stream }),
+    unshift: vi.fn(),
   })
   io.stream.mockImplementation(function () { return stream })
   return stream
@@ -28,8 +29,30 @@ describe('event-driven serial link', () => {
     io.open.mockReturnValue(42)
     if (claimsPort) io.open.mockReturnValueOnce(41)
     io.configure.mockImplementation((_cmd, _args, callback) => callback(null, '', ''))
+    // The far end is there and has said nothing yet.
+    io.read.mockImplementation(() => { throw Object.assign(new Error('EAGAIN'), { code: 'EAGAIN' }) })
   })
   afterEach(() => { vi.useRealTimers(); vi.resetAllMocks() })
+
+  it('refuses a port whose far end is gone before the stream reopens it, which would wait for it forever', async () => {
+    port()
+    io.read.mockReturnValueOnce(0)
+    await expect(SerialLink.open('/dev/fake', vi.fn(), vi.fn())).rejects.toMatchObject({ code: 'EOF' })
+    expect(io.stream).not.toHaveBeenCalled()
+    expect(io.close).toHaveBeenCalledWith(42)
+    io.open.mockReturnValue(42)
+    if (claimsPort) io.open.mockReturnValueOnce(41)
+    io.read.mockImplementationOnce(() => { throw Object.assign(new Error('EIO'), { code: 'EIO' }) })
+    await expect(SerialLink.open('/dev/fake', vi.fn(), vi.fn())).rejects.toMatchObject({ code: 'EIO' })
+    expect(io.stream).not.toHaveBeenCalled()
+  })
+
+  it('hands the stream what the dial said before the port opened, ahead of the rest', async () => {
+    const stream = port()
+    io.read.mockImplementationOnce((_fd: number, buffer: Buffer) => buffer.write('hello', 0))
+    await SerialLink.open('/dev/fake', vi.fn(), vi.fn())
+    expect(stream.unshift).toHaveBeenCalledWith(Buffer.from('hello'))
+  })
 
   it('stays idle without a timer, preserves raw bytes, and closes the duplicate descriptor', async () => {
     const stream = port(), received = vi.fn(), closed = vi.fn()

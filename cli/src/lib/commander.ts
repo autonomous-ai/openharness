@@ -776,6 +776,28 @@ export class CommanderMirror {
    *  device that missed it is stuck "Working…" forever. A bare `done` clears that stale busy WITHOUT a beep or
    *  recap card, and is a harmless no-op on a tile that isn't busy; the device's recent-poll restores the
    *  stored summary text afterwards. */
+  /**
+   * What a dial attaching now must be shown of the turns in progress: the cards `heartbeat` would send for
+   * each busy session, returned rather than sent, and not gated on a device watching (the dial is). The
+   * devices restart in a process of their own and come back to a dial whose tiles were mid-turn; without
+   * these the tile reads idle until the next heartbeat, or the next turn.
+   */
+  liveCards(): Array<Record<string, unknown>> {
+    const cards: Array<Record<string, unknown>> = []
+    for (const [sessionId, st] of this.states) {
+      const card = (payload: Record<string, unknown>) =>
+        cards.push({ type: 'commander_event', agentId: this.opts.agentIdFor?.(sessionId) ?? sessionId, dbSessionId: sessionId, payload })
+      if (st.turnOpen) {
+        if (this.opts.verifiedWorking?.(sessionId) === false) continue
+        card(st.lastTodos ? { kind: 'processing', text: 'Processing', todos: st.lastTodos } : { kind: 'processing', text: 'Processing' })
+        if (st.lastTool) card(st.lastTool)
+      } else if (st.summarizing) {
+        card({ kind: 'processing', text: 'Summarizing…' })
+      }
+    }
+    return cards
+  }
+
   replayAll(): void {
     for (const sessionId of this.states.keys()) {
       // Busy session → re-assert its live processing/summarizing state (shared with heartbeat()).

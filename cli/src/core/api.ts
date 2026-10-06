@@ -14,7 +14,7 @@ import type { RecentTurn } from '../cable/cableHost.js'
 import type { ReviewedAnswer } from '../cable/questionInbox.js'
 import type { AgentEngine } from '../engines/types.js'
 import type { AppSwarms } from '../cable/cableSession.js'
-import type { UnreadNotification } from '../cable/notificationRead.js'
+import type { UnreadNotification } from '../lib/notificationRead.js'
 import type { AgentDshContext } from '../lib/agentFrame.js'
 import type { GridAccess } from '../lib/gridAttach.js'
 import type { createHarnessResourcesReader } from '../lib/harnessResources.js'
@@ -123,10 +123,11 @@ export interface CoreApi {
     send(agentId: string, text: string): void
     /** Stop a live agent's turn. */
     stop(agentId: string): void
-    /** A live agent's last `n` completed turns, newest first. */
-    recent(agentId: string, n: number): RecentTurn[]
+    /** A live agent's last `n` completed turns, newest first. A promise, so that the devices in their own
+     *  process ask it of the core when they need it. */
+    recent(agentId: string, n: number): Promise<RecentTurn[]>
     /** The person's own last questions to a live agent, newest first. */
-    asks(agentId: string): string[]
+    asks(agentId: string): Promise<string[]>
     /** Deliver text into a live agent under a delivery id of the caller's own, as the Wi-Fi device, a team
      *  and the orchestrator deliver their turns: one path for the three. What becomes of it is heard through
      *  `onDelivery`, under the same id. */

@@ -44,7 +44,8 @@ let several people build features at once without touching the core or each othe
 A service that can crash natively, hang or leak should run in a process of its own, where it costs only
 that process. A process per risk, not per feature: search (native `node:sqlite`), the viewers (their
 servers) with the Store (its minutes-long installs), each experiment (below), models (grid's installs,
-downloads and commands), and the edge host, one process for the light services that only answer requests
+downloads and commands), the devices (the dials' serial ports, the fleet's lane, the voice router's
+worker), and the edge host, one process for the light services that only answer requests
 (workspaces, usage, the monitor, the project readers). A fault in one of the edge host's services can
 cost the others in it, never the core. Every service in `KNOWN_SERVICES` runs out of the core's process
 by default, unless `HARNESSD_SERVICES` names a subset, by service (`search,usage`) or by process
@@ -113,6 +114,14 @@ way back).
   takes one back with `cancelDelivery` (core/deliveries.ts). In its own process `services/turnsLink.ts`
   asks the core over its link, in order, and hears only its own deliveries; the core lets a process deliver
   only when it is an experiment (below).
+- A service that drives hardware: the devices (src/services/devicesProcess.ts, src/core/devicesLink.ts).
+  The dial reads a dozen facts in line while it builds each frame, so the process keeps a copy of what it
+  reads (this computer's agents, its name, the sign-in, whether a window is there), asked of the core as
+  the dial's tick or ⌘K builds a list; the core keeps what the windows said and says it again each time
+  the process connects, and a dial attaching is shown the open questions and the working tiles. Inside,
+  one device failing is that device's alone: its session's faults and a flood on its port drop it, and
+  its port is looked at again later (src/cable/cableFleet.ts). `e2e/devicesProcess.e2e.ts` proves it,
+  with fake dials on pseudo-terminals.
 - State built from every change must get every change exactly once. The teams show how
   (`src/services/teamsProcess.ts`, `src/core/teamsLink.ts`): the core numbers each change and keeps it
   until the process acknowledges it; on each connection the process says what it applied and gets

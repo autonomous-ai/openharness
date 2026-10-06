@@ -114,8 +114,8 @@ export function processCoreApi(dataDir: string, service: string, view: AgentsVie
     turns: {
       send: () => {},
       stop: (agentId) => { void ask?.('stop_turn', { agentId }).catch(() => {}) },
-      recent: () => [],
-      asks: () => [],
+      recent: async () => [],
+      asks: async () => [],
       ...(view.deliveries?.turns ?? DELIVERIES_OFF),
     },
     questions: { answer: () => {}, answerReviewed: async () => false },
