@@ -80,12 +80,15 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path
-          import subprocess
+          import re, subprocess
           for core in Path('../.harness/cores').glob('core.*'):
-            out=Path('../.harness/validation')/(core.name+'.backtrace.txt')
+            out=Path('../.harness/validation')/(re.sub(r'[^a-zA-Z0-9._-]', '_', core.name)+'.backtrace.txt')
             with out.open('w') as f:
               try: subprocess.run(['gdb','-batch','-ex','set debuginfod enabled on','-ex','thread apply all bt full','/usr/bin/tmux',str(core)],stdout=f,stderr=subprocess.STDOUT,timeout=60,check=False)
               except subprocess.TimeoutExpired: f.write('\nGDB diagnostic deadline reached\n')
+            print(out.name, out.read_text()[:40000])
+          for log in Path('../.harness/validation').glob('round-*.log'):
+            print(log.name, log.read_text()[-60000:])
           PY
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() }}
