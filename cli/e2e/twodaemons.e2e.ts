@@ -187,6 +187,22 @@ describe('two daemons on one computer', () => {
     atDev.close()
   }, 240_000)
 
+  it('a routes path that is a regular file leaves the daemon serving its own installed hooks', async () => {
+    // Found by QA on a quiet machine: a routing warning must not become a startup failure in cleanup.
+    const d = await make('route-unavailable', { noMaster: true })
+    d.env.HARNESS_HOOK_ROUTES_DIR = join(d.root, 'blocked-routes')
+    writeFileSync(d.env.HARNESS_HOOK_ROUTES_DIR, 'not a folder')
+    await d.start()
+    expect(d.log()).toContain('could not record this daemon\'s hook route')
+    const client = await LocalClient.connect(d)
+    const agent = await create(d, client, 'claude', 'route-unavailable')
+    await turn(client, agent.id, 'the installed command still names this daemon')
+    await until('the hook at the installed command\'s daemon', () =>
+      d.log().includes(`[hooks] ${String(agent.sessionId).slice(0, 8)} UserPromptSubmit`), 20_000)
+    expect(readFileSync(d.env.HARNESS_HOOK_ROUTES_DIR, 'utf8')).toBe('not a folder')
+    client.close()
+  })
+
   it('a second harness start while one runs leaves it alone; a foreground one leaves at once, touching nothing', async () => {
     const daemon = await make('running')
     await daemon.start()

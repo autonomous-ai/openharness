@@ -19,6 +19,17 @@ function root(): string {
 }
 
 describe('hook routes', () => {
+  it('never stops a daemon when the routes path is a regular file', () => {
+    // Found by QA on a quiet machine: the optional route's finally block threw ENOTDIR after its warning.
+    const base = root()
+    const dir = join(base, 'hook-routes')
+    writeFileSync(dir, 'not a folder')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    expect(() => publishHookRoute(join(base, 'data'), 18473, dir)).not.toThrow()
+    expect(warn.mock.calls[0]?.[0]).toContain('could not record this daemon\'s hook route')
+    expect(readFileSync(dir, 'utf8')).toBe('not a folder')
+  })
+
   it('records a daemon under its pane tag, readable only by this user, and reads it back', () => {
     const base = root()
     const dir = join(base, 'hook-routes')
