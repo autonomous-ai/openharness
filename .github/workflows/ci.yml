@@ -501,7 +501,7 @@ jobs:
         working-directory: .
         run: |
           sudo apt-get update
-          sudo apt-get install -y tmux musl-tools
+          sudo apt-get install -y tmux musl-tools zsh
           npm ci --prefix cli --no-audit --no-fund
       - name: Real tmux question polling and answer routing
         working-directory: cli
@@ -528,6 +528,23 @@ jobs:
       - name: Complete native fixtures with bounded parallelism
         working-directory: .
         run: python3 scripts/validate-tui-native.py tui/target/${{ matrix.target }}/release/harness-tui
+      - name: Connected hn local and remote shells through the real service
+        working-directory: cli
+        env:
+          HN_TUI_BINARY: ${{ github.workspace }}/tui/target/${{ matrix.target }}/release/harness-tui
+          E2E_BUNDLE: '1'
+          E2E_ARTIFACTS_DIR: ${{ github.workspace }}/.harness/validation/connected-shells
+        run: npm run test:e2e -- e2e/tuiShell.e2e.ts e2e/shell.e2e.ts
+      - name: Real daemon composer and recursive folder search
+        working-directory: .
+        env:
+          HN_SHELL_TEST_BINARY: ${{ github.workspace }}/tui/target/${{ matrix.target }}/release/harness-tui
+          HN_SHELL_TEST_CLI: ${{ github.workspace }}/cli/dist/cli.js
+          HN_SHELL_TEST_FZF: '0'
+        run: |
+          npm run build --prefix cli
+          HN_SHELL_TEST_COMPOSER=1 HN_SHELL_TEST_COMPOSER_ONLY=1 python3 -u tui/tests/shell-first.py
+          HN_SHELL_TEST_FOLDERS=1 HN_SHELL_TEST_LARGE_FOLDERS=1 HN_SHELL_TEST_FOLDERS_ONLY=1 python3 -u tui/tests/shell-first.py
       - name: Show native fixture failures
         if: failure()
         working-directory: .

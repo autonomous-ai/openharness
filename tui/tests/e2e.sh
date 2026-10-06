@@ -73,13 +73,11 @@ wait_eq() { # wait_eq <what> <expected> <command…>: until the command prints w
   echo "✓ $what"
 }
 
-# The first window is ready for a task; Open Terminal is an explicit keyboard action.
-expect "starts with the task-first welcome" "Welcome to Harness" 5000
-tmux_ send-keys -t t Tab Tab Tab Tab Tab Tab Tab Tab Enter
-expect "Open Terminal opens a shell here" "Mock terminal (mock)" 5000
+# Keyboard startup goes straight to a shell. GUI creation is covered by welcome.py.
+expect "starts with an interactive shell" "Mock terminal (mock)" 5000
 status_tabs() { screen | tail -n 1 | grep -q '^ 0:' && echo yes; }
 wait_eq "status line starts with window tabs, without a session label" yes status_tabs
-expect "status line quotes the local machine's app name" '"mock-local"'
+expect "status line shows the local machine and model" 'mock-local · Agent default'
 wait_eq "desk=off: the first session is still tmux's 0" 0 hn display -p '#{session_name}'
 start_window=$(hn display -p '#{window_id}')
 tmux_ send-keys -t t C-b s
@@ -269,14 +267,10 @@ wait_eq "deleting the final buffer leaves no trapped mode" 0 hn display -p '#{pa
 tmux_ send-keys -t t C-b x
 expect "C-b x asks first" "(y/n)"
 tmux_ send-keys -t t n
-# C-b c: the same task-first composer, with recent sessions below it.
+# C-b c opens another shell without interrupting the keyboard flow with a form.
 tmux_ send-keys -t t C-b c
 expect "C-b c: another new window" "2:"
-expect "C-b c: the creation form and secondary session browser" "Browse All Sessions"
-# Open Terminal may replace the backing shell if its resolved folder changed.
-# Assert the displayed shell is killed exactly once, independently of that retirement.
-tmux_ send-keys -t t Tab Tab Tab Tab Tab Tab Tab Tab Enter
-expect "Open Terminal shows the new window's shell" "Mock terminal (mock)"
+expect "C-b c shows the new window's shell" "Mock terminal (mock)"
 wait_eq "the dial's new window has one shell" 1 dial "d.said.app_panes?.agentIds?.length"
 closing_window=$(hn display -p '#{window_id}')
 E2E_CLOSING_AGENT=$(dial "d.said.app_panes.agentIds[0]")

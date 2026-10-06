@@ -1823,6 +1823,16 @@ mod tests {
 
     /// What the status line renders when the current window is `filled` and the tab name is `pane`.
     #[test]
+    fn default_tab_format_includes_the_working_state_after_its_name() {
+        let mut app = status_fixture(1, 1);
+        app.tabs[0].root = Some(crate::layout::Node::new(1, 80, 24));
+        let fmt = crate::options::status_window_format("tmux", true);
+        let mark = super::expand(&app, "#{window_agent_icon}", 0, Some(1), false);
+        assert!(!mark.is_empty());
+        assert_eq!(super::expand(&app, &fmt, 0, Some(1), false), format!("0:Project 0* {mark}"));
+    }
+
+    #[test]
     fn window_status_overrides_reach_the_status_line() {
         let mut app = status_fixture(2, 2);
         let global = crate::options::SetFlags { global: true, ..Default::default() };

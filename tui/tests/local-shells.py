@@ -188,7 +188,7 @@ try:
     wait(lambda: f'WITH_DAEMON:{pid}:remembered' in capture(), 'original local shell survives daemon arrival')
     wait(lambda: hn('display-message', '-p', '#{local_machine}|#{pane_machine}').stdout.strip() == 'mock-local|mock-local',
          'local shell and status share the machine name from the app')
-    tm('send-keys', '-t', 'outer', 'C-b', 'N')
+    hn('workspace-menu', 'new-harness')
     wait(lambda: ' @ local' in tm('capture-pane', '-p', '-t', 'outer').stdout, 'New Harness identifies the local destination')
     tm('send-keys', '-t', 'outer', 'Escape')
     print('PASS daemon arrival preserves local shell and identifies the local destination', flush=True)

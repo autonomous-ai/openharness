@@ -514,6 +514,19 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn forwarded_prefix_edits_a_welcome_tab_without_a_backing_pane() {
+        let mut app = app();
+        ensure(&mut app, None, Some("/work/project".into()));
+        let tab = app.tab().id.clone();
+        assert!(app.focused().is_none());
+        paste(&mut app, "word.");
+        event(&mut app, KeyCode::Char('b'), KeyModifiers::CONTROL);
+        event(&mut app, KeyCode::Char('b'), KeyModifiers::CONTROL);
+        event(&mut app, KeyCode::Char('!'), KeyModifiers::NONE);
+        assert_eq!(app.welcome.forms[&tab].draft.task, "word!.");
+    }
+
+    #[tokio::test]
     async fn tmux_paste_and_forwarded_prefix_edit_the_task_without_reaching_a_pane() {
         let mut app = app();
         ensure(&mut app, None, Some("/work/project".into()));
