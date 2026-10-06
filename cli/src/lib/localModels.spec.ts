@@ -1500,7 +1500,8 @@ describe('models other apps downloaded, started in their own app', () => {
       appEngines: ops as unknown as AppEngineOps,
       appModels: async () => {
         if (++scans === 1) return [ollama]
-        await new Promise<void>(resolve => { release = resolve })
+        // QA's coverage CI exposed an unending third scan: only the second is deliberately held.
+        if (scans === 2) await new Promise<void>(resolve => { release = resolve })
         return [ollama, studio]
       } })
     expect((await models.list('home')).models.filter(m => m.app && m.app !== 'Grid').map(m => m.id)).toEqual([ollama.id])
