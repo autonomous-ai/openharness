@@ -4,43 +4,40 @@ on:
 permissions:
   contents: read
 jobs:
-  tmux-compatibility:
+  detached-core-final:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - label: upstream-3.4-with-init-fix
-            tmux: 9ae69c3795ab5ef6b4d760f6398cd9281151f632
-            patch: true
-          - label: released-3.7c
-            tmux: e476c1230b958df0cb12977517d24b3dc931375b
-            patch: false
+        suite: [full, races-1, races-2, races-3]
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 60
     defaults:
       run:
         working-directory: cli
         shell: bash
     env:
-      E2E_WORKERS: '4'
-      E2E_BUNDLE: '1'
       LANG: C.UTF-8
       SHELL: /bin/zsh
+      TEST_SUITE: ${{ matrix.suite }}
+      E2E_WORKERS: '4'
+      E2E_BUNDLE: '1'
+      MIGRATION_FROM: ${{ github.workspace }}/.harness/migration/cli.js
+      E2E_ARTIFACTS_DIR: ${{ github.workspace }}/.harness/validation/daemons
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: 877c381f9e1b140f489d926647af91de164aad29
+          ref: 299151f34f9c30e2d628744e265b7e0d00364152
       - uses: actions/checkout@v7
         with:
           repository: tmux/tmux
-          ref: ${{ matrix.tmux }}
+          ref: e476c1230b958df0cb12977517d24b3dc931375b
           path: .harness/tmux-source
       - uses: actions/setup-node@v7
         with:
           node-version: '22.23.2'
           cache: npm
           cache-dependency-path: cli/package-lock.json
-      - name: Private test prerequisites
+      - name: Prepare private test prerequisites
         run: |
           sudo apt-get update -q
           sudo apt-get install -y -q --no-install-recommends zsh tcsh dash lsof build-essential autoconf automake bison pkg-config libevent-dev libncurses-dev
@@ -52,42 +49,50 @@ jobs:
           fi
           npm ci --no-audit --no-fund
           mkdir -p ../.harness/validation
-          git rev-parse HEAD HEAD^{tree} > ../.harness/validation/source.txt
           test -z "$(git symbolic-ref -q HEAD || true)"
           test -z "$(git status --porcelain)"
-      - name: Build the pinned tmux dependency in the throwaway runner
+          git rev-parse HEAD HEAD^{tree} > ../.harness/validation/source.txt
+          date -u +%FT%TZ > ../.harness/validation/started.txt
+      - name: Build pinned released tmux with the verified upstream initialization fix
         working-directory: .harness/tmux-source
-        env:
-          PATCH_INITIALIZATION: ${{ matrix.patch }}
         run: |
           git rev-parse HEAD > ../validation/tmux-source.txt
-          if [ "$PATCH_INITIALIZATION" = true ]; then
-            curl --fail --location --max-time 30 https://github.com/tmux/tmux/commit/e5a2a25fafb8ee107c230d8acad694f6b635f8bb.patch -o ../validation/upstream-init.patch
-            git apply --check ../validation/upstream-init.patch
-            git apply ../validation/upstream-init.patch
-          fi
-          git diff > ../validation/tmux-source.diff
+          test -z "$(git status --porcelain)"
           sh autogen.sh
           ./configure --prefix="$GITHUB_WORKSPACE/.harness/tmux-install" CFLAGS='-O2 -g'
           make -j2
           make install
           echo "$GITHUB_WORKSPACE/.harness/tmux-install/bin" >> "$GITHUB_PATH"
-      - name: Three bounded rapid-view rounds with the diagnosed dependency corrected
+      - name: Fetch verified published migration fixture
+        run: |
+          mkdir -p ../.harness/migration
+          curl --fail --location --retry 3 https://cdn.autonomous.ai/harness/cli/0.3.60/cli.js -o ../.harness/migration/cli.js
+          curl --fail --location --retry 3 https://cdn.autonomous.ai/harness/cli/0.3.60/notify.mjs -o ../.harness/migration/notify.mjs
+          echo 'cb1ae2452d006d414cefc6ce2deddd07a7a43fc9824402691a1ef0737d2277e3  ../.harness/migration/cli.js' | sha256sum -c -
+          echo 'bca62ec5991a1f727b362b666bcef004d04fb1d13efb64de068dd602a45095f8  ../.harness/migration/notify.mjs' | sha256sum -c -
+          echo '{"type":"module"}' > ../.harness/migration/package.json
+      - name: Complete assigned suite with four workers from the detached bundle
         run: |
           command -v tmux > ../.harness/validation/tmux-version.txt
           tmux -V >> ../.harness/validation/tmux-version.txt
           sha256sum "$(command -v tmux)" >> ../.harness/validation/tmux-version.txt
-          for round in 1 2 3; do
-            export E2E_ARTIFACTS_DIR="$GITHUB_WORKSPACE/.harness/validation/daemons-$round"
-            env -u TMUX -u TMUX_PANE -u NO_COLOR npm run test:e2e -- e2e/windows.e2e.ts -t 'windows that open a terminal and go, round after round' --reporter=default --reporter=json --outputFile.json="../.harness/validation/round-$round.json" 2>&1 | tee "../.harness/validation/round-$round.log"
-          done
+          npx vitest list --config vitest.e2e.config.ts --filesOnly --json=../.harness/validation/inventory.json
+          args=()
+          if [ "$TEST_SUITE" != full ]; then
+            args=(e2e/machine.e2e.ts e2e/recovery.e2e.ts e2e/races.e2e.ts e2e/restoreInput.e2e.ts e2e/ends.e2e.ts e2e/startup.e2e.ts e2e/migration.e2e.ts)
+          fi
+          env -u TMUX -u TMUX_PANE -u NO_COLOR npm run test:e2e -- "${args[@]}" --reporter=default --reporter=json --outputFile.json="../.harness/validation/$TEST_SUITE.json" 2>&1 | tee "../.harness/validation/$TEST_SUITE.log"
+      - name: Record final source
+        if: ${{ !cancelled() }}
+        run: |
+          date -u +%FT%TZ > ../.harness/validation/ended.txt
           git status --porcelain > ../.harness/validation/source-status.txt
           test -z "$(git status --porcelain)"
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() }}
         with:
-          name: tmux-compatibility-${{ matrix.label }}
+          name: detached-core-299151-${{ matrix.suite }}
           path: .harness/validation/
-          include-hidden-files: true
           if-no-files-found: error
+          include-hidden-files: true
           retention-days: 7
