@@ -6,7 +6,7 @@ on:
       probe:
         description: 'Offline driver installation or private GPU diagnostic integration'
         type: choice
-        options: [install, health]
+        options: [install, health, ptx]
         default: install
       image_run_id:
         description: 'Verified reference image for focused candidate testing'
@@ -19,12 +19,12 @@ permissions:
   actions: read
 
 concurrency:
-  group: harness-nvidia-install-${{ github.ref }}
+  group: harness-nvidia-${{ inputs.probe || 'install' }}-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
   nvidia:
-    if: ${{ inputs.probe != 'health' }}
+    if: ${{ !inputs.probe || inputs.probe == 'install' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -83,6 +83,23 @@ jobs:
             !os/test-results/nvidia-install/OVMF_VARS.fd
             !os/test-results/nvidia-install/served/bundle.tar
             os/dist/nvidia-bundle-manifest.json
+          retention-days: 14
+          compression-level: 0
+
+  ptx:
+    if: ${{ inputs.probe == 'ptx' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - name: Assemble the exact probe with the pinned NVIDIA compiler
+        run: python3 os/tests/gpu_ptx_native.py --output os/test-results/gpu-ptx
+      - name: Retain compiler evidence without the tool archive
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: harness-os-gpu-ptx
+          path: os/test-results/gpu-ptx/
           retention-days: 14
           compression-level: 0
 

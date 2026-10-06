@@ -75,6 +75,22 @@ def main():
         assert before['inventory']['boot_id'] == vm.read_file('/proc/sys/kernel/random/boot_id').decode().strip()
         (folder / 'first-check.json').write_text(json.dumps(before, indent=2) + '\n')
         check_graphical_keyboard(vm, 'gpu-health-keyboard')
+        # The reference client restores terminal shells after a cold boot; it
+        # does not replay an arbitrary prior foreground command. Start a real
+        # bundled agent explicitly before asserting that checks preserve it.
+        vm.command("mkdir -p ~/projects/gpu-health-proof && hn new-window -n gpu-proof " +
+                   shlex.quote('cd "$HOME/projects/gpu-health-proof" && exec /usr/bin/opencode'))
+        vm.command('timeout 40 sh -c ' + shlex.quote('until pgrep -u 1000 -x opencode >/dev/null; do sleep .2; done'), timeout=45)
+        deadline = time.monotonic() + 40
+        while True:
+            output, _ = vm.command('hn capture-pane -p')
+            if 'opencode' in output.lower() and 'Ask anything' in output:
+                break
+            if time.monotonic() > deadline:
+                raise TimeoutError('The bundled OpenCode did not become interactive')
+            time.sleep(.5)
+        (folder / 'agent-before-check.txt').write_text(output)
+        vm.screenshot('agent-before-check')
         # Existing work must remain alive while checks and reports run.
         vm.command('pgrep -x opencode > /tmp/gpu-agent-pids && systemctl --user show harness-daemon -p MainPID --value > /tmp/gpu-daemon-pid')
         vm.command('systemctl --user start harness-gpu-check.service')
