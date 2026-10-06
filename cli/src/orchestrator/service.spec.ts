@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import * as filesystem from 'node:fs/promises'
 import * as privateState from '../lib/secureState.js'
-import { OrchestratorService, type OrchestratorDependencies } from './service.js'
+import { OrchestratorService, hasSavedProjects, type OrchestratorDependencies } from './service.js'
 import { OrchestratorError, type Task } from './model.js'
 import { orchestratorRequest } from './wire.js'
 
@@ -501,3 +501,28 @@ describe('durable orchestrator lifecycle', () => {
     expect(service.snapshot(id).state).toBe('completed')
   }, 30_000)
 })
+
+// The daemon asks a project's role of every turn that ends (backendSocket), and asks this first so that a
+// machine that never used the orchestrator never builds the service, its folder or its reads.
+describe('whether a machine has a saved project, asked without building the service', () => {
+  it('answers from the folder alone: none without a saved run, one with a run file, and one when it cannot tell', () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'orchestrator-saved-')))
+    try {
+      const folder = join(root, 'orchestrator')
+      expect(hasSavedProjects(folder)).toBe(false)
+      mkdirSync(folder)
+      expect(hasSavedProjects(folder)).toBe(false)
+      // Files that are not a run's `<32 hex>.json` are not a project.
+      writeFileSync(join(folder, 'notes.json'), '{}')
+      writeFileSync(join(folder, `${'a'.repeat(32)}.json.tmp`), '{}')
+      expect(hasSavedProjects(folder)).toBe(false)
+      writeFileSync(join(folder, `${'0123456789abcdef'.repeat(2)}.json`), '{}')
+      expect(hasSavedProjects(folder)).toBe(true)
+      // A folder that cannot be listed counts as one, so the service is built and reports it.
+      const file = join(root, 'not-a-folder')
+      writeFileSync(file, '')
+      expect(hasSavedProjects(file)).toBe(true)
+    } finally { rmSync(root, { recursive: true, force: true }) }
+  })
+})
+

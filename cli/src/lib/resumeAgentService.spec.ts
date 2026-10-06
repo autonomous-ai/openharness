@@ -11,7 +11,7 @@ import { AgentRestartCoordinator } from './restartAgent.js'
 import { checkPidRuntime } from './deleteAgentFallback.js'
 import { listTmuxPanes } from './tmuxAgentDiscovery.js'
 import { checkSessionRuntime, clearPaneRemainOnExit, resolvePaneEngineProcess, tmuxPaneState } from './tmux.js'
-import { buildEngineLaunchArgv, refusePermissionFlagIfUnsupported } from './engineLaunch.js'
+import { buildEngineLaunchArgv, dropPermissionFlagIfUnsupported, refusePermissionFlagIfUnsupported } from './engineLaunch.js'
 import { enginePathOverride } from './engineBin.js'
 import { installedDsh } from '../dsh/installed.js'
 
@@ -450,3 +450,56 @@ describe('existing runtime and readiness verification', () => {
     expect(deps.retainExitedSession).toHaveBeenCalledWith(expect.objectContaining({ agentId: saved.agentId }), kept)
   })
 })
+
+describe('resume edges the desk sees', () => {
+  // The probe proves a new process, and the row must record it before anyone is told the harness is up:
+  // an engine that is "ready" with no recorded process cannot be attached to or stopped.
+  it('does not confirm a resume off a process the registry cannot record, and keeps its reservation', async () => {
+    vi.mocked(resolvePaneEngineProcess).mockResolvedValue({ ...identity, pid: 0 })
+    expect(await start()).toMatchObject({ ok: false, error: 'AGENT_CHANGED' })
+    expect(registry.byAgent(saved.agentId)?.launch?.state).not.toBe('ready')
+    expect(deps.stoppedAgents.beginResume(saved.agentId)).toBeNull()
+  })
+
+  // A verdict another path set on the row (a hook's mismatch guard) is reported as itself, and said in the
+  // log as it is, with no "undefined" where a reason would be.
+  it('reports a failure the row was given elsewhere, without a reason, as itself', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    vi.mocked(resolvePaneEngineProcess).mockImplementation(async () => {
+      registry.setLaunch(saved.agentId, { state: 'failed', error: 'RESUME_MISMATCH' } as never)
+      return null
+    })
+    const result = await start()
+    expect(result).toMatchObject({ ok: false, error: 'RESUME_MISMATCH' })
+    expect(registry.byAgent(saved.agentId)?.launch).toMatchObject({ state: 'failed', error: 'RESUME_MISMATCH' })
+    const said = log.mock.calls.map(([line]) => String(line)).find((line) => line.startsWith('[resume]') && line.includes('RESUME_MISMATCH'))
+    expect(said).toBe(`[resume] ${saved.agentId.slice(0, 8)} RESUME_MISMATCH · engine=codex`)
+  })
+
+  // Asking the engine whether it takes the chosen permission flag can take a while (its --help); a Stop
+  // or another Open in that time wins, and this one allocates nothing.
+  it('allocates nothing when the harness changes while the engine is asked about the permission flag', async () => {
+    vi.mocked(refusePermissionFlagIfUnsupported).mockImplementation(async () => { deps.restartJobs.cancel(saved.agentId); return null })
+    expect(await createResumeAgentService(deps)(saved.agentId, 'ask')).toMatchObject({ ok: false, error: 'AGENT_CHANGED' })
+    expect(create).not.toHaveBeenCalled()
+  })
+
+  // An engine downgraded since the pause no longer takes the saved permission flag (openharness#285): the
+  // harness still comes back, in Ask, and the log says how to get the saved mode back.
+  it.each([
+    ['plan', false, 'plan'],
+    [undefined, true, 'Auto'],
+  ] as const)('resumes in Ask when the engine no longer takes the saved %s flag, and says how to get it back', async (mode, bypass, named) => {
+    rewrite({ permissionMode: mode, bypassPermission: bypass })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.mocked(dropPermissionFlagIfUnsupported).mockResolvedValueOnce({
+      choice: { permissionMode: null, bypassPermission: false }, droppedFlag: '--permission-mode',
+    })
+    expect(await start()).toMatchObject({ ok: true, resumed: true })
+    expect(buildEngineLaunchArgv).toHaveBeenCalledWith('codex', expect.objectContaining({ bypassPermission: false }))
+    expect(vi.mocked(buildEngineLaunchArgv).mock.calls[0][1]).not.toHaveProperty('permissionMode')
+    expect(warn).toHaveBeenCalledWith(`[resume] ${saved.agentId.slice(0, 8)} · codex does not take --permission-mode`
+      + ` · resuming in Ask · update codex to get ${named} back`)
+  })
+})
+
