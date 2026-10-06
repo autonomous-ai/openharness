@@ -381,7 +381,7 @@ jobs:
       - name: Harness portability
         run: npm run test:portability
       - name: Local models and bundled harnesses
-        run: npm run test:local-models -- --coverage.reporter=json
+        run: npm run test:local-models -- --coverage.reporter=json --coverage.reportOnFailure
       - name: Preserve local-model coverage details
         if: always()
         uses: actions/upload-artifact@v4
