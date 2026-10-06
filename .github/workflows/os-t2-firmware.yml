@@ -30,7 +30,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v6
         with:
-          python-version: '3.12.12'
+          python-version: '3.14.7'
       - name: Verify local export, archive refusal and private staging
         run: |
           python3 - <<'PY'
