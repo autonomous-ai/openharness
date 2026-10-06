@@ -8,6 +8,7 @@ import subprocess
 import tarfile
 import tempfile
 import unittest
+from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location('t2_kernel', Path(__file__).parents[1] / 'tools/prepare-t2-kernel.py')
 t2 = importlib.util.module_from_spec(spec)
@@ -52,6 +53,45 @@ class T2KernelBundleTests(unittest.TestCase):
         self.assertFalse((self.root / 'usr').exists())
         with self.assertRaisesRegex(ValueError, 'fresh'):
             t2.prepare(self.package, output, lock)
+
+    def test_live_profile_and_runtime_package_have_no_file_conflicts(self):
+        source = Path(__file__).resolve().parents[2]
+        def load(name, path):
+            spec = importlib.util.spec_from_file_location(name, path)
+            value = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(value)
+            return value
+        profile = load('image_profile', source / 'os/tools/configure-boot-profile.py')
+        package = load('image_package', source / 'os/tools/build-package.py')
+        selected = profile.boot.profile('apple-t2')
+        self.lock.update(early_modules=selected['modules'], required_modules=selected['modules'],
+                         kernel_parameters=selected['parameters'])
+        for name in selected['modules']:
+            self.files['usr/lib/modules/7.2.8-test-t2/kernel/' + name + '.ko.zst'] = b'module fixture'
+        self.write_package()
+        lock = self.root / 'lock.json'
+        lock.write_text(json.dumps(self.lock))
+        runtime = self.root / 'runtime'
+        runtime.mkdir()
+        # Assembly checks do not execute this format-only ELF fixture.
+        (runtime / 'harness-tui').write_bytes(b'\x7fELF\x02\x01' + bytes(12) + b'\x3e\x00')
+        (runtime / 'cli.js').write_text('// fixture\n')
+        (runtime / 'notify.mjs').write_text('// fixture\n')
+        (runtime / 'source.json').write_text(json.dumps({
+            'dirty': False, 'source_commit': 'a' * 40, 'target': 'x86_64-unknown-linux-musl'}))
+        staged = self.root / 'package'
+        package.stage(source, runtime, staged, 'a' * 40)
+        owned = {p.relative_to(staged) for p in staged.rglob('*') if not p.is_dir()}
+        self.assertIn(Path('usr/share/harness-os/apple-t2/kernel.json'), owned)
+        for identity in ('pc', 'apple-t2'):
+            with self.subTest(identity=identity):
+                folder = self.root / identity / 'profile'
+                (folder / 'airootfs').mkdir(parents=True)
+                (folder / 'packages.x86_64').write_text('linux-lts\nharness-os\n')
+                with patch.object(profile, 'module', return_value=t2), patch.object(t2, 'LOCK', lock):
+                    profile.configure(folder, identity, self.root)
+                overlay = {p.relative_to(folder / 'airootfs') for p in (folder / 'airootfs').rglob('*') if not p.is_dir()}
+                self.assertEqual(owned & overlay, set(), 'Live files must not preempt package-owned files')
 
     def test_corruption_fails_before_archive_tool_runs(self):
         self.package.write_bytes(b'truncated')

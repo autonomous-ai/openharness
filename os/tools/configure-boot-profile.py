@@ -57,10 +57,11 @@ def configure(folder, identity, bundle=None):
                         'Target = linux-firmware*\nTarget = linux-t2\n\n[Action]\n'
                         'Description = Preserving this Mac’s wireless firmware\nWhen = PostTransaction\n'
                         'Exec = /usr/bin/python3 /usr/lib/harness-os/t2_install.py restore\n')
-        pin = root / 'usr/share/harness-os/apple-t2/kernel.json'
-        pin.parent.mkdir(parents=True, exist_ok=True)
-        pin.write_text(json.dumps(lock, indent=2) + '\n')
-        pin.with_name('manifest.json').write_text(json.dumps({'kernel': lock, 'verified_files': verified}, indent=2) + '\n')
+        # kernel.json belongs to the harness-os package. Precreating it in the
+        # live overlay makes pacman refuse the image with a file conflict.
+        manifest = root / 'usr/share/harness-os/apple-t2/manifest.json'
+        manifest.parent.mkdir(parents=True, exist_ok=True)
+        manifest.write_text(json.dumps({'kernel': lock, 'verified_files': verified}, indent=2) + '\n')
     marker = root / 'etc/harness-platform.json'
     marker.parent.mkdir(parents=True, exist_ok=True)
     marker.write_text(json.dumps({'schema': 1, 'id': identity}) + '\n')
