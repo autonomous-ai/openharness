@@ -668,20 +668,23 @@ try:
          and 'Stop Harness' not in painted and 'Remote' not in painted.splitlines()[-1],
          'idle stop paints the remaining workspace and dismisses its dialog')
 
-    # The quiet + has the desktop tab-bar meaning and opens the task-first welcome form.
+    # Mouse creation keeps the GUI: + opens a harness dialog in this window;
+    # New Tab opens the welcome composer in a separate window.
     click_text('+', row=43)
-    try:
-        wait(lambda: value('#{window_id}') != workspace, 'plus opens a new tab')
-    except AssertionError:
-        print('Footer action diagnostics:', '\n'.join(line for line in hn('show-messages').splitlines() if 'command: display-message' not in line)[:6000], flush=True)
-        print('Input state:', value('#{client_prefix} #{client_key_table} #{client_width}x#{client_height}'), hn('show-options', '-g', 'mouse'), hn('list-keys', '-T', 'root', 'MouseDown1Status'), flush=True)
-        raise
-    shown('Browse All Sessions')
-    shown('Open Terminal')
+    shown('New Harness')
+    assert value('#{window_id}') == workspace
+    tmux('send-keys', '-l', '-t', 'test', 'A harness from the mouse')
+    shown('A harness from the mouse')
+    keys('Escape')
+    hn('workspace-menu')
+    click_text('New Tab')
+    wait(lambda: value('#{window_id}') != workspace, 'New Tab opens a new window')
+    shown('Recent harnesses')
+    shown('New Terminal')
     added_window = value('#{window_id}')
     tmux('send-keys', '-l', '-t', 'test', 'Draft from the mouse')
     shown('Draft from the mouse')
-    snapshot('new-tab-from-plus')
+    snapshot('new-tab-from-menu')
     hn('kill-window', '-t', added_window)
     hn('select-window', '-t', workspace)
 

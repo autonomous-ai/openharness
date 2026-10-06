@@ -437,7 +437,15 @@ wss.on('connection', (ws) => {
       // What tmux says a pane runs and where (the real daemon asks its tmux; here, fixed).
       case 'terminal_info': return reply({ command: 'zsh', path: '/home/demo/src', pid: 4242, tty: '/dev/ttys042' })
       // The e2e reads which harnesses were deleted (a killed pane's shell goes with it).
-      case 'agent_delete': dial.deleted = [...(dial.deleted || []), payload.agentId]; return reply({ agent: agents[machine][0], deleted: true })
+      case 'agent_delete': {
+        dial.deleted = [...(dial.deleted || []), payload.agentId]
+        const removed = agents[machine].find(a => a.id === payload.agentId)
+        if (welcomeTest) {
+          agents[machine] = agents[machine].filter(a => a.id !== payload.agentId)
+          send('agent_deleted', { agentId: payload.agentId })
+        }
+        return reply({ agent: removed, deleted: true })
+      }
       case 'agent_update': case 'agent_resume': case 'agent_restart': return reply({ agent: agents[machine][0], deleted: true })
       case 'session_search': {
         if (welcomeTest) {
