@@ -18,7 +18,7 @@
  * no longer restarts every viewer: they stay up here, and the new core hears their URLs at once.
  */
 import type { CoreApi } from '../core/api.js'
-import { emptyPorts, resolveAgent } from '../core/api.js'
+import { emptyPorts, resolveAgent, TERMINALS_OFF } from '../core/api.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcess } from './process.js'
 import { startViewers } from './viewers.js'
@@ -50,6 +50,7 @@ export function viewersCoreApi(dataDir: string, sessions: ReadonlyMap<string, Re
   const attached = (): RegisteredSession[] => [...sessions.values()]
   return {
     dataDir,
+    terminals: TERMINALS_OFF,
     agents: {
       all: attached,
       live: attached,

@@ -4,11 +4,10 @@ import { emptyPorts, type CoreApi } from '../core/api.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import type { SessionSearchIndexOptions } from '../lib/sessionSearch/indexer.js'
 import { fakeCore } from '../testing/fakeCore.js'
-import { SESSION_SEARCH_FILE } from '../lib/sessionSearch/command.js'
-import { SessionSearchStore } from '../lib/sessionSearch/store.js'
+import { SessionSearchStore, SESSION_SEARCH_FILE } from '../lib/sessionSearch/store.js'
 import { SEARCH_REQUESTS, searchRequests, startSearch } from './search.js'
 
-vi.mock('../lib/sessionSearch/store.js', () => ({ SessionSearchStore: { open: vi.fn() } }))
+vi.mock('../lib/sessionSearch/store.js', () => ({ SESSION_SEARCH_FILE: 'session-search.db', SessionSearchStore: { open: vi.fn() } }))
 // The index, recording what it was built with so its callbacks can be driven directly.
 vi.mock('../lib/sessionSearch/indexer.js', async (real) => {
   const actual = await real<typeof import('../lib/sessionSearch/indexer.js')>()

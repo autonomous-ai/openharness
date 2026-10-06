@@ -162,7 +162,10 @@ const SERVICE_MAY_IMPORT: Record<string, string> = {
  * Grew by 97 for the Jev catalog (#888, lib/localModels.ts and appModels.ts): the models service's own
  * code, in the core's process only until step 7 runs models in a process of its own and takes it out.
  */
-const CORE_CLOSURE_BUDGET = 106_034
+// Connected TUI shells add a literal-argv launch port and shell service (160 loaded lines).
+// Moving the search filename out of its CLI command removes 188 loaded lines, so this lowers
+// the measured closure by 28. Shell policy stays in the service; the core only launches argv.
+const CORE_CLOSURE_BUDGET = 106_006
 
 /** What is not the core's, by path: each goes to a service or its own process, in the plan's order. */
 const EDGE: RegExp[] = [
@@ -262,13 +265,11 @@ const CORE_MAY_REACH: Record<string, string> = {
   'lib/gridTarget.ts': 'step 7: models, in its own process',
   'lib/gridWake.ts': 'step 7: models, in its own process',
   'lib/localModels.ts': 'step 7: models, in its own process',
-  'lib/sessionSearch/command.ts': 'step 5: search\'s in-process start, into services/inline.ts',
   'lib/sessionSearch/indexer.ts': 'step 5: search\'s in-process start, into services/inline.ts',
   'lib/sessionSearch/sessionTurns.ts': 'step 5: the handoff (lib/agentHandoff.ts), in the edge host',
   'lib/sessionSearch/store.ts': 'step 5: search\'s in-process start, into services/inline.ts',
   'lib/sessionSearch/transcript.ts': 'step 5: search\'s in-process start, into services/inline.ts; the readers keep this helper, beside them',
   'lib/sessionSearch/turns.ts': 'step 5: the handoff (lib/agentHandoff.ts), in the edge host',
-  'lib/sessionSearch/when.ts': 'step 5: the handoff (lib/agentHandoff.ts), in the edge host',
   'orchestrator/artifacts.ts': 'step 8: the experimental host',
   'orchestrator/model.ts': 'step 8: the experimental host',
   'orchestrator/prompts.ts': 'step 8: the experimental host',
@@ -278,6 +279,7 @@ const CORE_MAY_REACH: Record<string, string> = {
   'services/fleetRouter.ts': 'step 9: the fleet, beside the dial',
   'services/models.ts': 'step 7: models, in its own process',
   'services/monitor.ts': 'step 5: the machine monitor, in the edge host',
+  'services/shell.ts': 'step 5: shell setup and launch receipts, in the edge host; only the argv launch stays in the core',
   'services/projects.ts': 'step 5: the project and folder readers, in the edge host',
   'services/requestErrors.ts': 'step 7: with the last service that uses it, models, out of the core\'s process',
   'services/search.ts': 'step 5: search\'s in-process start, into services/inline.ts',

@@ -13,6 +13,7 @@ import { bindAgentList, bindAgentUpdate, bindCancelRequest, bindLaunchRequests, 
 import { emptyPorts, MODELS_FALLBACKS, MONITOR_FALLBACKS } from './core/api.js'
 import { createServiceHost, ServiceUnavailableError } from './core/serviceHost.js'
 import { MODELS_REQUESTS, startModels } from './services/models.js'
+import { SHELL_REQUESTS, startShell } from './services/shell.js'
 import { USAGE_REQUESTS, startUsage } from './services/usage.js'
 import { MONITOR_REQUESTS, startMonitor, type MonitorDeps } from './services/monitor.js'
 import { PROJECTS_REQUESTS, startProjects } from './services/projects.js'
@@ -3684,6 +3685,28 @@ describe('relay down-frames are default-deny: sealed, or the backend\'s own', ()
     expect(serviceRouter).not.toHaveBeenCalled()
     expect(cancel).not.toHaveBeenCalled()
     expect(replies).toEqual([{ connId: 'web-1', type, payload: { error: 'E2EE_REQUIRED' } }])
+  })
+
+  it.each([...SHELL_REQUESTS])('requires sealing for %s and its requester-only result', async type => {
+    const { socket, replies, dispatch } = harness()
+    const serviceRouter = vi.fn(() => true)
+    socket.serviceRouter = serviceRouter
+    expect(encryptDownFrame(type)).toBe(true)
+    expect(encryptDownFrameFor(type, { strictDown: false })).toBe(true)
+    expect(encryptRpcResult(`${type}_result`)).toBe(true)
+    await dispatch({ type, payload: { requestId: 'r', argv: ['/bin/sh'], cwd: '/tmp', owner: true } }, 'web-1')
+    expect(serviceRouter).not.toHaveBeenCalled()
+    expect(replies).toEqual([{ connId: 'web-1', type, payload: { error: 'E2EE_REQUIRED' } }])
+  })
+
+  it.each([...SHELL_REQUESTS])('refuses a sealed %s from a device even when its payload claims ownership', async type => {
+    const { socket, replies, dispatch } = harness()
+    const core = fakeCore()
+    serveOn(socket, host => host.serve('shell', startShell, core, SHELL_REQUESTS))
+    vi.spyOn(socket.e2ee, 'sessionRole').mockReturnValue('device')
+    await dispatch(sealedDown(socket, 'device-1', type, { requestId: 'r', owner: true }).frame, 'device-1')
+    await vi.waitFor(() => expect(replies).toEqual([{ connId: 'device-1', type, payload: { error: 'OWNER_REQUIRED' } }]))
+    expect(core.terminals.open).not.toHaveBeenCalled()
   })
 
   it('hands a sealed dsh_install from a paired client to the service that answers it', async () => {
