@@ -24,7 +24,7 @@
     <keybind key="A-Tab"><action name="NextWindowImmediate" /></keybind>
     <keybind key="W-l"><action name="Execute" command="/usr/lib/harness-os/lock" /></keybind>
     <keybind key="W-u">
-      <action name="Execute" command="/usr/lib/harness-os/open-updates" />
+      <action name="Execute" command="/usr/lib/harness-os/screen-action updates" />
       <action name="ForEach"><query identifier="hn" /><then><action name="Raise" /><action name="Focus" /></then></action>
     </keybind>
     <keybind key="W-i">
@@ -36,11 +36,11 @@
       <action name="ForEach"><query identifier="hn" /><then><action name="Raise" /><action name="Focus" /></then></action>
     </keybind>
     <keybind key="W-n">
-      <action name="Execute" command="hn os-action new" />
+      <action name="Execute" command="/usr/lib/harness-os/screen-action new" />
       <action name="ForEach"><query identifier="hn" /><then><action name="Raise" /><action name="Focus" /></then></action>
     </keybind>
     <keybind key="W-t">
-      <action name="Execute" command="hn os-action terminal" />
+      <action name="Execute" command="/usr/lib/harness-os/screen-action terminal" />
       <action name="ForEach"><query identifier="hn" /><then><action name="Raise" /><action name="Focus" /></then></action>
     </keybind>
     <!-- Super+e is run-or-raise for the file manager window, then back to hn, as Super+b is. -->
@@ -56,7 +56,7 @@
     <!-- Super+o asks for a folder or a file in a new file manager window. -->
     <keybind key="W-o"><action name="Execute" command="/usr/lib/harness-os/files --open" /></keybind>
     <keybind key="W-m">
-      <action name="Execute" command="hn os-action connect" />
+      <action name="Execute" command="/usr/lib/harness-os/screen-action connect" />
       <action name="ForEach"><query identifier="hn" /><then><action name="Raise" /><action name="Focus" /></then></action>
     </keybind>
     <!-- Screenshots go to ~/Pictures/Screenshots and the clipboard. Super+p/r stand in for Print
