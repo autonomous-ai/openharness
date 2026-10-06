@@ -109,7 +109,7 @@ describe('TerminalBackendCoordinator', () => {
     const result = await new TerminalBackendCoordinator([backend('tmux:default', submit)], ['tmux']).submitText(session(), 'hello')
     expect(result).toEqual({ state: 'succeeded', dispatch: 'executed' })
     expect(submit).toHaveBeenCalledTimes(2)
-    expect(submit).toHaveBeenLastCalledWith(second, 'hello')
+    expect(submit).toHaveBeenLastCalledWith(second, 'hello', undefined)
   })
 
   it('never retries a possibly executed side effect', async () => {
@@ -200,7 +200,19 @@ describe('TerminalBackendCoordinator', () => {
       state: 'failed', dispatch: 'rejected',
     })
     expect(submit).toHaveBeenCalledOnce()
-    expect(submit).toHaveBeenCalledWith(tmux, 'hello')
+    expect(submit).toHaveBeenCalledWith(tmux, 'hello', undefined)
+  })
+
+  it('hands the check before the Enter to the backend, on every way a text is submitted', async () => {
+    const submit = submitBy({ state: 'succeeded', dispatch: 'executed' })
+    const coordinator = new TerminalBackendCoordinator([backend('tmux:default', submit)], ['tmux'])
+    const options = { beforeEnter: async () => null }
+    await coordinator.submitText(session(), 'hello', options)
+    const acquired = await coordinator.acquireLease(session())
+    if (acquired.state !== 'succeeded') throw new Error('no lease')
+    await coordinator.submitTextLease(acquired.value, 'hello', options)
+    await coordinator.submitTextForLease(session(), acquired.value, 'hello', options)
+    expect(submit.mock.calls.map((call) => (call as unknown[])[2])).toEqual([options, options, options])
   })
 
   it('keeps an active lease valid when the backends are replaced by the same instance', async () => {

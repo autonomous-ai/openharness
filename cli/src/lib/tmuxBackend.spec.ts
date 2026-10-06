@@ -79,6 +79,21 @@ describe('TmuxBackend lifecycle', () => {
     })).toMatchObject({ state: 'unknown' })
   })
 
+  it('submits a text, and leaves it typed with no Enter when the check before the Enter says so', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'tmux-backend-submit-'))
+    dirs.push(dir)
+    const calls = join(dir, 'calls')
+    writeFileSync(join(dir, 'tmux'), `#!/bin/sh\nprintf '%s\\n' "$1" >> "$TMUX_BACKEND_CALLS"\nif [ "$1" = "load-buffer" ]; then cat > /dev/null; fi\n`, { mode: 0o700 })
+    process.env.PATH = `${dir}${delimiter}${originalPath ?? ''}`
+    process.env.TMUX_BACKEND_CALLS = calls
+    const backend = new TmuxBackend(undefined, () => 'daemon-a')
+    const pane = { backend: 'tmux' as const, paneId: '%42' }
+    await expect(backend.submitText(pane, 'hi', { beforeEnter: async () => null })).resolves.toEqual({ state: 'succeeded', dispatch: 'executed' })
+    await expect(backend.submitText(pane, 'hi', { beforeEnter: async () => 'permission_open' })).resolves
+      .toEqual({ state: 'unknown', dispatch: 'possibly_executed', reason: 'enter_withheld:permission_open' })
+    expect(readFileSync(calls, 'utf8').trim().split('\n')).toEqual(['load-buffer', 'paste-buffer', 'send-keys', 'load-buffer', 'paste-buffer'])
+  })
+
   it('creates a detached session and closes only its exact pane', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'tmux-backend-lifecycle-'))
     dirs.push(dir)

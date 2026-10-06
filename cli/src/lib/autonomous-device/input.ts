@@ -1,9 +1,9 @@
 import { createHash } from 'node:crypto'
 import type { RegisteredSession } from '../registry.js'
 import type { SessionInputDelivery } from '../sessionInput.js'
-import type { TerminalActionResult } from '../terminalTypes.js'
 import type { LiveEvent } from '../normalize.js'
 import { isMessageHold } from '../messageHold.js'
+import { enterWithheldReason, type TerminalActionResult } from '../terminalTypes.js'
 
 const NATIVE = new Set(['claude', 'codex'])
 const VERIFY_MS = 1500
@@ -193,6 +193,11 @@ export class AutonomousDeviceInput {
       const result = await this.deps.inject(session.agentId, item.content)
       if (this.states.get(id) !== state) return
       if (item.started) { this.finishWrite(id, state, item); return }
+      if (enterWithheldReason(result)) {
+        // Typed, its Enter not pressed: something opened before it, and the Enter is never pressed later.
+        state.pending = state.pending.filter(next => next !== item)
+        this.delivery(id, item, 'rejected', 'enter_withheld'); this.finishWrite(id, state, item); return
+      }
       if (rejected(result)) {
         state.pending = state.pending.filter(next => next !== item)
         // A dialog that opened between the look for one and the write: refused unwritten, and why.

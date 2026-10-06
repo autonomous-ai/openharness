@@ -18,7 +18,7 @@ import { sid } from '../lib/log.js'
 import type { LiveEvent } from '../lib/normalize.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { SessionInputController, type SessionInputDelivery, type SessionInputDeps } from '../lib/sessionInput.js'
-import { messageHold } from '../lib/messageHold.js'
+import { messageHold, passingHold } from '../lib/messageHold.js'
 import { TERMINAL_LEASE_REFUSED, terminalActionNotStarted, type TerminalActionResult } from '../lib/terminalTypes.js'
 import { Id } from '../teams/model.js'
 import { teamWriteHold } from '../teams/preflight.js'
@@ -55,8 +55,12 @@ export interface InputDeps {
  * The pane is read right before the paste, by the caller that holds the pane's write lock, and nothing
  * is typed into a dialog, a menu or a view a message does not belong in (messageHold.ts): the reason
  * comes back instead, with nothing written. `hold` adds a caller's own check of the same reading (a
- * team's, which waits for a draft too). `submitTerminalAction` is called here and nowhere else in this
- * file, and input.spec.ts keeps it so.
+ * team's, which waits for a draft too). The pane is read again once the text is in, right before its
+ * Enter: a dialog opened in between (a long or multi-line paste waits up to 1.5 s for the engine to take
+ * it, mid-turn) keeps the Enter from being pressed, which would answer it, and the text waits in the
+ * composer, unsent (sessionInput.ts says so). A list of suggestions opened by the message itself is no
+ * reason. `submitTerminalAction` is called here and nowhere else in this file, and input.spec.ts keeps
+ * it so.
  */
 export function messageWriter({ resolve, terminal: { captureTerminal, validateTerminal, submitTerminalAction } }: Pick<InputDeps, 'resolve' | 'terminal'>) {
   return async (id: string, text: string, hold?: (session: RegisteredSession, capture: string | null) => string | null): Promise<TerminalActionResult> => {
@@ -70,9 +74,26 @@ export function messageWriter({ resolve, terminal: { captureTerminal, validateTe
     if (!await validateTerminal(session)) return terminalActionNotStarted(TERMINAL_LEASE_REFUSED)
     const capture = await captureTerminal(id)
     const reason = hold?.(session, capture) ?? messageHold(session.engine, capture)
-    return reason ? terminalActionNotStarted(reason) : submitTerminalAction(id, text)
+    if (reason) return terminalActionNotStarted(reason)
+    return submitTerminalAction(id, text, {
+      beforeEnter: async () => {
+        // A read that came back empty, or a composer caught between frames, is asked again for a moment
+        // (a re-attach can blank one capture): only what is on screen holds the Enter back, never a
+        // read that failed once. Still not read after that, it is held, as nothing says it is safe.
+        for (let tries = 1; ; tries++) {
+          const before = messageHold(session.engine, await captureTerminal(id))
+          if (before === 'popup_open') return null
+          if (!before || !passingHold(before) || tries >= ENTER_CHECK_TRIES) return before
+          await new Promise((settle) => setTimeout(settle, ENTER_CHECK_RETRY_MS))
+        }
+      },
+    })
   }
 }
+
+/** How long the check before a message's Enter asks again after a read that says nothing: 3 s. */
+const ENTER_CHECK_TRIES = 12
+const ENTER_CHECK_RETRY_MS = 250
 
 /** What `SessionInputController` is given: every write takes the device's pane lock first. */
 export function sessionInputDeps(

@@ -5,6 +5,8 @@ import {
   TERMINAL_ACTION_SUCCEEDED,
   terminalActionNotStarted,
   terminalActionPossiblyExecuted,
+  terminalEnterWithheld,
+  type SubmitOptions,
   type TerminalActionResult,
   type TerminalCaptureOptions,
   type TerminalCreateRequest,
@@ -431,8 +433,9 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
     return legacyActionResult(await sendLiteralToTmux(runtime.paneId, text), 'tmux literal input')
   }
 
-  async submitText(runtime: TmuxRuntimeRef, text: string): Promise<TerminalActionResult> {
-    return legacyActionResult(await sendToTmux(runtime.paneId, text), 'tmux submission')
+  async submitText(runtime: TmuxRuntimeRef, text: string, options?: SubmitOptions): Promise<TerminalActionResult> {
+    const sent = await sendToTmux(runtime.paneId, text, options?.beforeEnter)
+    return typeof sent === 'boolean' ? legacyActionResult(sent, 'tmux submission') : terminalEnterWithheld(sent.withheld)
   }
 
   async sendKey(runtime: TmuxRuntimeRef, key: TerminalLogicalKey): Promise<TerminalActionResult> {

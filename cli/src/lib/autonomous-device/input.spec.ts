@@ -408,3 +408,14 @@ it('says why a write the pane refused was not typed, when a dialog opened after 
   await vi.waitFor(() => expect(onDelivery).toHaveBeenCalledWith(expect.objectContaining({ deliveryId: 'delivery-B', state: 'rejected', reason: 'paste_failed' })))
   device.forget('agent')
 })
+
+it('refuses with the reason a message typed but not sent, its Enter withheld as a dialog opened, and presses no Enter later', async () => {
+  const onDelivery = vi.fn(), sendKey = vi.fn(async () => true)
+  const device = makeDevice({ inject: async () => ({ state: 'unknown', dispatch: 'possibly_executed', reason: 'enter_withheld:question_open' }),
+    isAwaitingUser: async () => false, onDelivery, sendKey, capture: async () => '› A' })
+  device.submit('agent', 'A', 'delivery-A')
+  await vi.waitFor(() => expect(onDelivery).toHaveBeenCalledWith(expect.objectContaining({ deliveryId: 'delivery-A', state: 'rejected', reason: 'enter_withheld' })))
+  await new Promise((resolve) => setTimeout(resolve, 2_000))
+  expect(sendKey).not.toHaveBeenCalled()
+  device.forget('agent')
+})

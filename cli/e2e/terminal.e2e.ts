@@ -203,7 +203,9 @@ describe('the terminal', () => {
     const words = 'pasted ' + 'words '.repeat(400).trim()
     const started = client.next(isTurn('turn_started', agent.id), 30_000, 'turn_started')
     terminal.paste(words)
-    await until('the paste to reach the composer', async () => (await d.capture(agent.tmuxPane)).includes('words words') || null, 15_000, 100)
+    // Shown in the composer as the engines show a large paste, a placeholder, and sent whole on Enter.
+    const shown = engine === 'claude' ? '[Pasted text #1]' : `[Pasted Content ${words.length} chars]`
+    await until('the paste to reach the composer', async () => (await d.capture(agent.tmuxPane)).includes(shown) || null, 15_000, 100)
     terminal.type('\r')
     expect((await started).payload?.userMessage).toBe(words)
     client.close()
