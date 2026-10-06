@@ -43,6 +43,10 @@ if CLI:
     launch_cli.write_text('#!/bin/sh\nexec '+shlex.join([shutil.which('node'),CLI])+' "$@"\n')
     launch_cli.chmod(0o700)
     ENV['HARNESS_SHELL_CLI']=str(launch_cli)
+    notify=Path(CLI).parent/'notify.mjs'
+    if not notify.exists(): notify=ROOT.parent/'cli/hook/notify.mjs'
+    assert notify.is_file()
+    ENV['HN_FIXTURE_NOTIFY']=str(notify)
 FZF=shutil.which('fzf') if os.environ.get('HN_SHELL_TEST_FZF','1')!='0' else None
 if not FZF: print('SKIP external fzf widgets: unavailable or HN_SHELL_TEST_FZF=0; native hn pickers are still tested',flush=True)
 rc="PS1='SHELL_READY> '\n"
@@ -83,7 +87,29 @@ if CLI:
 const fs = require('node:fs');
 if (process.argv.includes('--help')) { console.log('--resume --permission-mode'); process.exit(0); }
 if (process.argv.includes('--version')) { console.log('2.0.0'); process.exit(0); }
+if (process.argv.includes('-p') || process.argv.includes('--print')) { console.log('{}'); process.exit(0); }
+// Native Claude and the daemon's fakeEngine fixture advertise the engine name
+// to process discovery; a generic Node title is not a stable engine identity.
+process.title = ['claude'.padEnd(16), ...process.argv.slice(2)].join(' ').replace(/[\\x00-\\x1f\\x7f]/g, '?');
 fs.writeFileSync(process.env.HOME+'/fixture-agent.json', JSON.stringify({pid:process.pid,args:process.argv.slice(2),cwd:process.cwd()}));
+// Like the recorded Claude fixture in cli/e2e/harness/fakeEngine.mjs: discovery
+// reads the native per-process record when SessionStart hooks are disabled.
+const resumeAt = process.argv.indexOf('--resume');
+if (resumeAt >= 0) {
+  const sessions = process.env.HOME+'/.claude/sessions';
+  fs.mkdirSync(sessions, { recursive: true });
+  const procStart = require('node:child_process').execFileSync('ps', ['-o', 'lstart=', '-p', String(process.pid)]).toString().trim();
+  fs.writeFileSync(sessions+'/'+process.pid+'.json', JSON.stringify({pid:process.pid,sessionId:process.argv[resumeAt+1],cwd:process.cwd(),procStart}));
+  // Claude waits for SessionStart before it accepts input. Use the packaged
+  // hook and its real credential/transport, as the daemon E2E fixture does.
+  require('node:child_process').execFileSync(process.execPath, [process.env.HN_FIXTURE_NOTIFY,
+    '--port', process.env.PORT, '--data-dir', process.env.ADAPTER_DATA_DIR,
+    '--claude-projects-dir', process.env.HOME+'/.claude/projects', '--engine', 'claude'], {
+      input: JSON.stringify({hook_event_name:'SessionStart', source:'resume',
+        session_id:process.argv[resumeAt+1], transcript_path:process.env.HOME+'/.claude/projects/fixture/'+process.argv[resumeAt+1]+'.jsonl', cwd:process.cwd()}),
+      env:{...process.env, CLAUDE_PROJECT_DIR:process.cwd()}, stdio:['pipe','ignore','pipe'], timeout:5000,
+    });
+}
 console.log('CLAUDE_FIXTURE_READY');
 if (process.argv.includes('--resume') && fs.existsSync(process.env.HOME+'/fixture-exit-on-resume')) setTimeout(() => process.exit(130), 200);
 process.stdin.setRawMode(true);
@@ -102,9 +128,13 @@ process.stdin.on('data', data => {
         with (BASE/name).open('a') as f: f.write('export PATH='+shlex.quote(str(binary))+':"$PATH"\n')
     claude=BASE/'.claude/projects/fixture';claude.mkdir(parents=True)
     claude_sid='6a7913ad-1f1a-4d30-8f56-267ee834b393'
-    (claude/(claude_sid+'.jsonl')).write_text(json.dumps({'type':'user','sessionId':claude_sid,
+    saved_user={'type':'user','sessionId':claude_sid,
         'cwd':str(PROJECT),'entrypoint':'cli','timestamp':'2026-09-20T10:00:00Z',
-        'message':{'role':'user','content':'Claude shell lifecycle regression'}})+'\n')
+        'message':{'role':'user','content':'Claude shell lifecycle regression'}}
+    saved_answer={'type':'assistant','sessionId':claude_sid,'cwd':str(PROJECT),
+        'timestamp':'2026-09-20T10:00:01Z','message':{'role':'assistant',
+        'content':[{'type':'text','text':'The fixture conversation is complete.'}],'stop_reason':'end_turn'}}
+    (claude/(claude_sid+'.jsonl')).write_text(json.dumps(saved_user)+'\n'+json.dumps(saved_answer)+'\n')
     missing_sid='6a7913ad-1f1a-4d30-8f56-267ee834b394'
     (claude/(missing_sid+'.jsonl')).write_text(json.dumps({'type':'user','sessionId':missing_sid,
         'cwd':str(BASE/'removed-project'),'entrypoint':'cli','timestamp':'2026-09-20T10:00:00Z',
