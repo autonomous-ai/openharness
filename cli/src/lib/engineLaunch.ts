@@ -448,31 +448,21 @@ function engineShellArgv(shell: InteractiveEngineShell, args: readonly string[])
 /** The startup files zsh's new-user module looks for (zshmodules(1), zsh/newuser). */
 const ZSH_STARTUP_FILES = ['.zshenv', '.zprofile', '.zshrc', '.zlogin'] as const
 
-/**
- * The .zshenv in Harness's own ZDOTDIR (`zshNewUserGuard`): the person's ZDOTDIR back as it was, or
- * unset, before anything of theirs is read, and their .zshenv if one has appeared since. zsh reads each
- * later startup file from ZDOTDIR as it is by then, so .zprofile, .zshrc and .zlogin come from theirs.
- */
+/** The .zshenv in Harness's own ZDOTDIR (`zshNewUserGuard`): the person's ZDOTDIR back as it was, or unset,
+ *  before anything of theirs is read; zsh then reads .zprofile, .zshrc and .zlogin from theirs. */
 export const ZSH_GUARD_ZSHENV = `# Written by Harness (engineLaunch.ts zshNewUserGuard): keeps zsh's new-user menu out of an agent's pane.
 if (( \${+HARNESS_ZDOTDIR} )); then ZDOTDIR="\$HARNESS_ZDOTDIR"; unset HARNESS_ZDOTDIR; else unset ZDOTDIR; fi
 [[ -r "\${ZDOTDIR:-\$HOME}/.zshenv" ]] && builtin source "\${ZDOTDIR:-\$HOME}/.zshenv"
 `
 
 /**
- * What an engine's zsh is started with so that zsh's new-user menu never takes its pane.
- *
- * Debian, Ubuntu, Fedora and Arch ship zsh with its `zsh/newuser` module: a zsh on a terminal, started
- * by someone with none of .zshenv, .zprofile, .zshrc or .zlogin in $ZDOTDIR (else $HOME), runs
- * `zsh-newuser-install` before anything else, a full-screen menu that waits for a key. An agent's pane
- * is a terminal, so on such a Linux machine every agent's pane showed that menu and its engine never
- * started: the agent never bound its conversation. Found by the end-to-end suite's first runs on Linux
- * (2026-10-06); macOS's zsh has no such module, and this never showed there.
- *
- * The module looks only for those four files, and only in ZDOTDIR, right after the global zshenv. So
- * for such a person the launch points ZDOTDIR at a folder of Harness's holding just a .zshenv
- * (`ZSH_GUARD_ZSHENV`), which puts their ZDOTDIR back (`HARNESS_ZDOTDIR`; absent means it was unset)
- * before anything of theirs would be read. The global startup files run as before. Anyone with a
- * startup file of their own gets nothing here: their zsh starts exactly as it did.
+ * Keeps zsh's new-user menu out of an engine's pane. Debian, Ubuntu, Fedora and Arch ship zsh's
+ * `zsh/newuser` module: on a terminal, for someone with none of the four startup files in $ZDOTDIR (else
+ * $HOME), it runs a full-screen menu that waits for a key, so every agent's pane showed it and no engine
+ * started (the end-to-end suite's first Linux runs, 2026-10-06; macOS's zsh has no such module). The
+ * module looks only there, right after the global zshenv: for such a person ZDOTDIR points at a folder of
+ * Harness's whose .zshenv puts theirs back (`HARNESS_ZDOTDIR`; absent means unset). Anyone with a startup
+ * file of their own starts exactly as before.
  */
 export function zshNewUserGuard(environment: NodeJS.ProcessEnv = process.env): string[] {
   const dotdir = environment.ZDOTDIR || environment.HOME

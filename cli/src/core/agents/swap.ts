@@ -89,11 +89,9 @@ export function createPaneSwap({ byAgent, tmuxBackend, prepareSessionResume, kee
         waited += delayMs
         const found = await resolvePaneEngineProcess(runtime.paneId, session.engine)
         if (found) {
-          // Up means still up a moment later. A launch the engine refuses (a flag or subcommand an update
-          // dropped: `codex resume` after Codex lost it) runs for an instant and exits; seen in that
-          // instant, the restart reported the conversation resumed, and never fell back to the fresh
-          // start that was the only way the agent could work again (e2e/updates.e2e.ts, on Linux, whose
-          // faster process start put the refused process in the first look).
+          // Up means still up a moment later: a launch the engine refuses (`codex resume` after an update
+          // dropped it) runs for an instant, and seen then, the restart said "resumed" and never fell back
+          // to a fresh start (e2e/updates.e2e.ts on Linux, whose faster start put it in the first look).
           await new Promise((resolve) => setTimeout(resolve, SWAP_SETTLE_MS))
           waited += SWAP_SETTLE_MS
           const still = await resolvePaneEngineProcess(runtime.paneId, session.engine)

@@ -107,13 +107,10 @@ export function createEngineHooks({ tmuxBackend, agentReconciler, registry }: En
 
   const resolveHookAgent: ResolveHookAgent = async ({ engine, runtimeHints, callerPid, onWait }) => {
     if (!callerPid) return null
-    // Who the hook came from, read the moment it arrives, while its process is sure to be there. On Linux
-    // a hook runs under dash, which keeps its `sh -c` as the hook's parent instead of exec'ing it, so the
-    // caller is a shell that exits with the hook: after the 500ms the hook waits for its answer, or once
-    // `onWait` has answered it. Its ancestry read only after the reconcile pass, or again after the wait,
-    // stopped at a pid already gone, and the hook was turned away as "not a descendant" of its own engine:
-    // a restart's new conversation was never bound (e2e/updates.e2e.ts, on Linux). macOS's /bin/sh is a
-    // bash that execs the hook, whose parent is then the engine itself, and this never showed there.
+    // Who the hook came from, read as it arrives. On Linux dash keeps its `sh -c` as the hook's parent, a
+    // shell that exits with the hook (its 500ms, or `onWait`'s answer); read after the reconcile pass or
+    // the wait, the ancestry stopped at a pid already gone and a restart's new conversation was never
+    // bound (e2e/updates.e2e.ts). macOS's /bin/sh is a bash that execs the hook: never seen there.
     const arrival = processRows()
     const resolved: TerminalRuntimeRef[] = []
     for (const hint of runtimeHints ?? []) {
@@ -124,8 +121,7 @@ export function createEngineHooks({ tmuxBackend, agentReconciler, registry }: En
     for (const runtime of resolved) if (!await agentReconciler.triggerHint(runtime, engine)) overdue = true
 
     let table = await arrival
-    // processRows hands every caller the `ps` already running, and one that began before the hook's
-    // process was started cannot list it. The hook is still waiting for its answer: the next read has it.
+    // A `ps` already running (processRows shares it) may predate the hook's process; the next read has it.
     if (table && !table.some((row) => row.pid === callerPid)) table = await processRows()
     if (!table) return null
     const parents = new Map(table.map((row) => [row.pid, row.parentPid]))
