@@ -166,7 +166,10 @@ export function createBinding({
       // engine; and a second restart queued behind a first found no conversation to resume and started a
       // fresh one (e2e/races.e2e.ts). The binding stands while one of them runs: a stop retires it, and a
       // restart's new engine registers it again.
-      if (!changing(entry.agentId)) registry.unbindSession(entry.sessionId)
+      // The October 6 TUI picker exit/resume incident: a verified engine exited while its startup
+      // attach was pending. Unbinding here erased the conversation before discovery retired it, so
+      // Open started a fresh one under the saved title. Keep that verified id for the existing lifecycle.
+      if (!changing(entry.agentId) && !entry.processIdentity) registry.unbindSession(entry.sessionId)
       announceSession(entry)
       return
     }
