@@ -7,6 +7,7 @@
  * The relay is the spy: nothing here recomputes what the daemon sends, it reads what arrived.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { randomUUID } from 'node:crypto'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer, type IncomingHttpHeaders, type Server } from 'node:http'
 import { tmpdir } from 'node:os'
@@ -72,9 +73,17 @@ function expectNoCredential(): void {
 
 beforeEach(async () => {
   seen = []
+  const clientId = randomUUID()
   overview = { status: 200, body: { nodes: [{ name: 'mac', engine: 'llama.cpp', models: ['small-q4'], online: true }], models: [{ id: 'Small-Q4' }] } }
   modelsDelayMs = 0
   server = createServer((req, res) => {
+    // Quiet-machine QA found local discovery probing this port. Identify the test client, so
+    // unrelated probes cannot pollute its log while every path that it requests remains visible.
+    if (req.headers['x-harness-test-client'] !== clientId) {
+      req.resume()
+      res.writeHead(404).end()
+      return
+    }
     seen.push({ path: req.url ?? '', headers: req.headers })
     const models = req.url === `/g/${OWN_ID}/relay/v1/models`
     const found = req.url === `/g/${OWN_ID}${OVERVIEW}` ? overview : models ? { status: 200, body: { data: [] } } : { status: 404, body: {} }
@@ -86,6 +95,14 @@ beforeEach(async () => {
   })
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
   base = `http://127.0.0.1:${(server.address() as { port: number }).port}`
+  const relayOrigin = base
+  vi.stubGlobal('fetch', (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+    const url = input instanceof Request ? input.url : input.toString()
+    if (new URL(url).origin !== relayOrigin) return externalFetch(input, init)
+    const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined))
+    headers.set('x-harness-test-client', clientId)
+    return externalFetch(input, { ...init, headers })
+  })
   root = mkdtempSync(join(tmpdir(), 'grid-reads-rpc-'))
   gridHome = join(root, 'grid-home')
   mkdirSync(gridHome, { recursive: true })
@@ -128,6 +145,7 @@ afterEach(async () => {
   vi.unstubAllEnvs()
   server.closeAllConnections()
   await new Promise<void>((resolve) => server.close(() => resolve()))
+  vi.unstubAllGlobals()
   rmSync(root, { recursive: true, force: true })
 })
 
