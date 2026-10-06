@@ -25,6 +25,8 @@ export function fakeCore(over: Overrides = {}): CoreApi {
       runtimeProfile: vi.fn(() => null),
       setRuntime: vi.fn(),
       fork: vi.fn(async () => ({ ok: false as const, error: 'UNSUPPORTED' })),
+      create: vi.fn(async () => ({ ok: false as const, error: 'UNSUPPORTED' })),
+      dsh: vi.fn(() => null),
       ...over.agents,
     },
     turns: {
@@ -54,6 +56,7 @@ export function fakeCore(over: Overrides = {}): CoreApi {
       machineName: vi.fn(() => null),
       ...over.account,
     },
-    clients: { viewerChanged: vi.fn(), gridNamed: vi.fn(), gridModelsChanged: vi.fn(), dshInstallStatus: vi.fn(), ...over.clients },
+    clients: { viewerChanged: vi.fn(), gridNamed: vi.fn(), gridModelsChanged: vi.fn(), dshInstallStatus: vi.fn(), windows: vi.fn(), ...over.clients },
+    daemon: { command: 'harness', port: 18473, machineId: () => 'machine-1', ...over.daemon },
   }
 }

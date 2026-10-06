@@ -22,27 +22,21 @@ import type { AutonomousDeviceService, AutonomousDeviceFrame } from './lib/auton
 
 import { existsSync } from 'node:fs'
 import { join } from 'path'
-import { hostname, homedir } from 'os'
+import { hostname } from 'os'
 import { env } from './config/env.js'
 import { registry, projectDisplayName, type RegisteredSession } from './lib/registry.js'
 import type { CloseAgentService } from './lib/closeAgentService.js'
-import { isHiddenBuiltin } from './dsh/builtinIds.js'
 import { ENGINES, type AgentEngine } from './engines/types.js'
 import { gridCliPresence } from './lib/gridBinary.js'
 import { GRID_FLEET_PROTOCOL, GRID_FLEET_MAX_TIMEOUT_MS } from './lib/gridFleetProtocol.js'
 import { ApiConnectionError, ApiConnections } from './lib/apiConnections.js'
 import { resolveApiTarget } from './lib/apiModels.js'
 import { isApiLaunch, parseGridLaunchOverride, type GridLaunchOverride } from './lib/gridLaunch.js'
-import { supportsFirstPrompt } from './lib/engineLaunch.js'
 import { probeEngines } from './lib/engineProbe.js'
 import { harnessDevicesRequest, type HarnessDevicesService } from './lib/harnessDevices.js'
 import { engineInstallRecipe } from './lib/engineInstall.js'
 import { agentFrame, type AgentDshContext, type AgentFrame } from './lib/agentFrame.js'
 import { agentTokenUsage } from './lib/agentTokenUsage.js'
-import { listInstalledDsh } from './dsh/installed.js'
-import { OrchestratorService, hasSavedProjects } from './orchestrator/service.js'
-import { OrchestratorError } from './orchestrator/model.js'
-import { orchestratorRequest } from './orchestrator/wire.js'
 import { TeamService } from './teams/service.js'
 import { SwarmPromptScopes } from './teams/promptScope.js'
 import { ChannelDirectory } from './teams/channels.js'
@@ -197,14 +191,11 @@ export class BackendSocket {
   })
   /** Injectable for queue-isolation tests; production uses the machine-local probe. */
   engineProbeProvider: typeof probeEngines = probeEngines
-  /** Entrypoint override for isolated integration fixtures; never a wire option. */
-  orchestratorCommand: string | null = null
   readonly ownerCommands = new OwnerCommands()
   onCancelOrchestratorMessage: ((deliveryId: string) => boolean) | null = null
-  orchestratorDelivery(event: SessionInputDelivery): void {
-    this.orchestratorService?.delivery(event)
-  }
-  private orchestratorService: OrchestratorService | null = null
+  /** Every frame sent to the apps, as it is sent: the orchestrator reads its Directors' turns from them
+   *  (services/orchestrator.ts, through its port). One that throws costs it that frame, never the apps. */
+  onFrameSent: ((frame: Frame) => void) | null = null
   /** Isolated daemon fixtures can override these without touching installed state. */
   teamStateDir = join(env.ADAPTER_DATA_DIR, 'teams')
   teamCommand: string | null = null
@@ -289,45 +280,6 @@ export class BackendSocket {
     if (!existsSync(this.teamStateDir)) return
     try { this.teamMailbox().start(); this.teams().start() }
     catch { console.warn('[teams] preserved unreadable team state; inspect Team for recovery') }
-  }
-  /** The commander asks this for every turn that ends — see OrchestratorService.roleOf. "No role",
-   *  without building the service, on a machine with no saved project (see hasSavedProjects). */
-  orchestratorRoleOf(agentId: string): ReturnType<OrchestratorService['roleOf']> {
-    if (!this.orchestratorService && !(this.orchestratorSaved ??= hasSavedProjects(join(env.ADAPTER_DATA_DIR, 'orchestrator')))) return null
-    return this.orchestration().roleOf(agentId)
-  }
-  private orchestratorSaved: boolean | null = null
-  private orchestration(): OrchestratorService {
-    return this.orchestratorService ??= new OrchestratorService({
-      stateDir: join(env.ADAPTER_DATA_DIR, 'orchestrator'),
-      workspaceDir: join(homedir(), 'harnesses', 'orchestrated'),
-      command: this.orchestratorCommand ?? `${[baseNode(process.execPath), ...process.execArgv, process.argv[1]].map(shellQuote).join(' ')} orchestrator --port ${env.PORT} --machine ${shellQuote(this.machineId)}`,
-      catalog: () => listInstalledDsh().filter(d => d.manifest.kind !== 'viewer' && !isHiddenBuiltin(d) && !!d.manifest.engine && supportsFirstPrompt(d.manifest.engine)).map(d => ({
-        id: d.id, name: d.manifest.name, description: d.manifest.description ?? '', engine: d.manifest.engine!, viewer: !!d.manifest.viewer,
-      })),
-      supportsEngine: engine => ENGINES.includes(engine as AgentEngine) && supportsFirstPrompt(engine as AgentEngine),
-      create: async input => {
-        if (!this.onCreateAgent) throw new OrchestratorError('UNSUPPORTED', 'This daemon cannot create agents.')
-        const available = await this.engineProbeProvider([input.engine])
-        if (!available.some(e => e.engine === input.engine && e.installed)) throw new OrchestratorError('ENGINE_NOT_INSTALLED', `${input.engine} must be installed before starting this specialist.`)
-        const result = await this.onCreateAgent({ ...input, grid: null, codexHome: null, agent: null, permissionMode: null })
-        if (!result.ok) throw new OrchestratorError(result.error, result.detail ?? result.error)
-        return { agentId: result.session.agentId }
-      },
-      send: (id, text, deliveryId) => {
-        if (!this.onMessage || !registry.resolve(id)) throw new OrchestratorError('AGENT_UNAVAILABLE', 'The agent is not available to receive a message.')
-        this.onMessage(id, text, deliveryId)
-      },
-      cancelDelivery: id => this.onCancelOrchestratorMessage?.(id) ?? false,
-      cancel: id => this.onCancel?.(id),
-      agent: id => {
-        const agent = registry.resolve(id)
-        if (!agent) return null
-        const context = this.dshFrameProvider?.(agent)
-        return { viewerUrl: context?.viewerUrl, viewerName: context?.viewerName, error: agent.launch?.state === 'failed' ? agent.launch.detail ?? agent.launch.error : null }
-      },
-      changed: (id, revision) => this.sendLocal({ type: 'orchestrator_changed', payload: { id, revision } }),
-    })
   }
   /**
    * Called on `agent_retarget` — cli.ts re-execs an EXISTING agent's pane against a different grid,
@@ -602,7 +554,6 @@ export class BackendSocket {
   async stop(): Promise<void> {
     this.closed = true
     this.closeAgentService?.dispose()
-    this.orchestratorService?.stop()
     this.teamService?.stop()
     this.teamMailboxService?.stop()
     this.channelDirectory?.stop()
@@ -644,10 +595,9 @@ export class BackendSocket {
    *  what carries content and queues it while the link is down. */
   send(frame: Frame): void {
     this.monitorCompletions.observe(frame)
-    // Only an already-open orchestration service observes events; ordinary sessions
-    // do not create project state or incur disk work. Project payloads stay local. Its state it cannot
-    // read (a full disk: reading makes its folder) must not cost every frame after it (e2e/diskfull.e2e.ts).
-    try { this.orchestratorService?.ingest(frame) } catch { /* the frame goes out regardless */ }
+    // The orchestrator's state it cannot read (a full disk: reading makes its folder) must not cost every
+    // frame after it (e2e/diskfull.e2e.ts).
+    try { this.onFrameSent?.(frame) } catch { /* the frame goes out regardless */ }
     if (env.LOG_FRAMES) logFrame('→', 'web', frame)
     for (const [connId, sink] of this.localClients) {
       if (!sink.sendFrame(frame)) void this.unregisterLocalClient(connId)
@@ -1001,15 +951,6 @@ export class BackendSocket {
     if (OWNER_COMMAND_TYPES.has(type)) {
       if (!owner) { reply(type, requestId, { error: 'OWNER_REQUIRED' }); return }
       void this.ownerCommands.request(connId, type, payload).then(result => reply(type, requestId, result))
-      return
-    }
-
-    if (type === 'orchestrator') {
-      if (!owner) { reply(type, requestId, { error: 'OWNER_REQUIRED' }); return }
-      // Detached: a large artifact snapshot must not block cancel/status on this connection.
-      void orchestratorRequest(this.orchestration(), payload)
-        .then(result => reply(type, requestId, result))
-        .catch(() => reply(type, requestId, { error: 'ORCHESTRATOR_FAILED' }))
       return
     }
 

@@ -251,6 +251,42 @@ describe('ServiceSupervisor', () => {
     expect(supervisor.status().map((status) => status.state)).toEqual(['stopped', 'stopped'])
   })
 
+  it('starts an experiment\'s process only once the core asks for one of its services, and keeps it like any other', () => {
+    const experiment: ServiceSpec = { name: 'experiments', services: ['orchestrator', 'teams'], heapLimitMiB: 256, rssLimitMiB: 512, onDemand: true }
+    const supervisor = make([search, experiment])
+    supervisor.start()
+    expect(children.map((child) => child.spec.name)).toEqual(['search'])
+    expect(supervisor.status().map((status) => status.state)).toEqual(['starting', 'off'])
+    supervisor.want('search')
+    supervisor.want('nobody')
+    expect(children).toHaveLength(1)
+    supervisor.want('teams')
+    expect(latest('experiments').env.HARNESSD_SERVICE).toBe('experiments')
+    // Asked again, while it runs or after it crashed: the master's to restart, once.
+    supervisor.want('orchestrator')
+    latest('experiments').exit(1)
+    supervisor.want('teams')
+    expect(children.filter((child) => child.spec.name === 'experiments')).toHaveLength(1)
+    vi.advanceTimersByTime(1_000)
+    expect(children.filter((child) => child.spec.name === 'experiments')).toHaveLength(2)
+    expect(lines.filter((line) => line.includes('service experiments started'))).toHaveLength(2)
+  })
+
+  it('starts every experiment for a core that never asks, and stops one never started at once', () => {
+    const experiment: ServiceSpec = { name: 'orchestrator', services: ['orchestrator'], heapLimitMiB: 256, rssLimitMiB: 512, onDemand: true }
+    const idle: ServiceSpec = { ...experiment, name: 'teams', services: ['teams'] }
+    const supervisor = make([experiment])
+    supervisor.start()
+    supervisor.want(null)
+    expect(children.map((child) => child.spec.name)).toEqual(['orchestrator'])
+    const never = make([idle])
+    never.start()
+    const done = vi.fn()
+    never.stop(done)
+    expect(done).toHaveBeenCalledOnce()
+    expect(never.status()[0].state).toBe('stopped')
+  })
+
   it('with no services, starting does nothing and stopping is done at once', () => {
     const supervisor = make([])
     supervisor.start()
@@ -313,6 +349,15 @@ describe('ServiceSupervisor', () => {
     expect(serviceSpecs({ HARNESSD_SERVICES: 'monitor,workspaces' }, hosts)).toEqual([{ name: 'edge', ...edge, services: ['workspaces', 'monitor'] }])
     expect(serviceSpecs({ HARNESSD_SERVICES: 'edge,search' }, hosts)).toEqual([search, { name: 'edge', ...edge }])
     expect(serviceSpecs({ HARNESSD_SERVICES: 'usage' }, hosts)).toEqual([{ name: 'edge', ...edge, services: ['usage'] }])
+  })
+
+  it('leaves an experiment\'s process to the core\'s asking, unless it is named: then it starts with the others', () => {
+    const orchestrator = { services: ['orchestrator'], heapLimitMiB: 256, rssLimitMiB: 512, onDemand: true }
+    const hosts = { search: { services: ['search'], heapLimitMiB: 512, rssLimitMiB: 1_024 }, orchestrator }
+    expect(serviceSpecs({}, hosts)).toEqual([search, { name: 'orchestrator', ...orchestrator }])
+    expect(serviceSpecs({ HARNESSD_SERVICES: 'search,orchestrator' }, hosts))
+      .toEqual([search, { name: 'orchestrator', services: ['orchestrator'], heapLimitMiB: 256, rssLimitMiB: 512 }])
+    expect(serviceSpecs({ HARNESSD_SERVICES: 'search' }, hosts)).toEqual([search])
   })
 
   it('knows every service each process this build runs hosts, and each in one process only', () => {

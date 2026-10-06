@@ -70,6 +70,50 @@ describe('service links', () => {
     plain.closed()
   })
 
+  it('asks for an experiment that is off, and sends the request that woke it once it connects, in order', () => {
+    const want = vi.fn()
+    const links = make({ owned: { orchestrator: ['orchestrator'] }, onDemand: new Set(['orchestrator']), want })
+    const replies: Array<Record<string, unknown>> = []
+    links.route('orchestrator', { action: 'list' }, ASKER, (result) => replies.push(result))
+    links.route('orchestrator', { action: 'catalog' }, ASKER, (result) => replies.push(result))
+    expect(want.mock.calls).toEqual([['orchestrator'], ['orchestrator']])
+    expect(replies).toEqual([])
+    const orchestrator = sink()
+    const link = links.accept('orchestrator', TOKEN, orchestrator, vi.fn())!
+    expect(orchestrator.sent).toEqual([
+      { type: 'orchestrator', payload: { action: 'list', requestId: 'route-1' }, asker: ASKER },
+      { type: 'orchestrator', payload: { action: 'catalog', requestId: 'route-2' }, asker: ASKER },
+    ])
+    link.receive({ type: 'orchestrator_result', payload: { requestId: 'route-2', projects: [] } })
+    link.receive({ type: 'orchestrator_result', payload: { requestId: 'route-1', projects: [] } })
+    expect(replies).toEqual([{ projects: [] }, { projects: [] }])
+    // Connected again later, nothing is sent twice.
+    const again = links.accept('orchestrator', TOKEN, sink(), vi.fn())!
+    expect(want).toHaveBeenCalledTimes(2)
+    // On, then down: answered at once, as any service is, and not asked for again.
+    again.closed()
+    const down = vi.fn()
+    links.route('orchestrator', { action: 'list' }, ASKER, down)
+    expect(down).toHaveBeenCalledWith({ error: 'SERVICE_UNAVAILABLE', service: 'orchestrator', retryable: true })
+    expect(want).toHaveBeenCalledTimes(2)
+  })
+
+  it('answers SERVICE_UNAVAILABLE for an experiment that does not come in time, or will not take the request', () => {
+    const links = make({ owned: { orchestrator: ['orchestrator'], search: ['session_search'] }, onDemand: new Set(['orchestrator']) })
+    const late = vi.fn()
+    links.route('orchestrator', { action: 'list' }, ASKER, late)
+    vi.advanceTimersByTime(5_000)
+    expect(late).toHaveBeenCalledWith({ error: 'SERVICE_UNAVAILABLE', service: 'orchestrator', retryable: true })
+    const refused = vi.fn()
+    links.route('orchestrator', { action: 'list' }, ASKER, refused)
+    links.accept('orchestrator', TOKEN, sink(false), vi.fn())
+    expect(refused).toHaveBeenCalledWith({ error: 'SERVICE_UNAVAILABLE', service: 'orchestrator', retryable: true })
+    // A service that is not an experiment is never waited for.
+    const search = vi.fn()
+    links.route('session_search', {}, ASKER, search)
+    expect(search).toHaveBeenCalledWith({ error: 'SERVICE_UNAVAILABLE', service: 'search', retryable: true })
+  })
+
   it('waits as long as a call says it may (a pairing), and answers SERVICE_UNAVAILABLE after', async () => {
     const links = make({ owned: { gateway: [] } })
     links.accept('gateway', TOKEN, sink(), vi.fn())
