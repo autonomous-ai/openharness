@@ -170,6 +170,9 @@ typedef struct {
     char text[192];
     uint32_t revision;
     int dy, velocity;
+#ifdef DEVICE_PRO_COMPANION
+    uint32_t reader_serial;
+#endif
 } action_t;
 typedef struct {
     ht_rect_t rect;
@@ -245,7 +248,7 @@ static EXT_RAM_BSS_ATTR struct {
         int entry, origin, row;
         bool captured, from_notice, failed;
     } reader;
-    uint32_t result_generation;
+    uint32_t result_generation, reader_focus_generation;
     uint32_t work_revision, work_generation;
     uint32_t work_roster_after;
     bool work_roster_pending;
@@ -622,6 +625,21 @@ static bool pro_reader_openable(void)
         !s.pending_focus[0] && !s.pending_machine[0] &&
         (s.reader.from_notice || find(s.reader_agent)>=0);
 }
+static bool pro_reader_latest(void)
+{
+    const agent_t *a=active();
+    return pro_reader_owner() && a && !strcmp(a->id,s.reader_agent) &&
+        cable_client_supports(CABLE_FEATURE_VISIT);
+}
+static void pro_reader_focus(const char *id)
+{
+    const agent_t *a=active();
+    const char *current=s.pending_focus[0] ? s.pending_focus : a ? a->id : "";
+    if (id && !strcmp(id,current)) return;
+    // A -> B -> A must not revive a contact or queued Latest for the first A.
+    // Repeated echoes of the same focused pane leave the contact alone.
+    if (!++s.reader_focus_generation) ++s.reader_focus_generation;
+}
 static void pro_reader_copy(char *dst, size_t cap, const char *src)
 {
     if (!cap) return;
@@ -919,6 +937,9 @@ static void tabs_open(void)
 static void workspace_failed(const char *message)
 {
     ht_workspace_cancel_request(&workspace);
+#ifdef DEVICE_PRO_COMPANION
+    pro_reader_focus(NULL);
+#endif
     s.loading=false; s.active=-1;
     COPY(s.title,"Workspaces"); COPY(s.message,message); view(MESSAGE);
 }
@@ -2644,6 +2665,14 @@ static bool visit_emit(const ht_visit_command_t *c, void *ctx)
     if (!actions || uxQueueSpacesAvailable(actions) < (c->op == HT_VISIT_CANCEL ? 1 : 2)) return false;
     action_t a = {.kind = A_VISIT_SEND, .value = c->op, .revision = c->request};
     COPY(a.id, c->agent); COPY(a.text, c->id);
+#ifdef DEVICE_PRO_COMPANION
+    if (c->op==HT_VISIT_LATEST && s.view==READER) {
+        _Static_assert(sizeof visit.id+sizeof s.reader.host<=sizeof a.text,"Reader visit owner fits queued text");
+        a.reader_serial=s.reader.serial;
+        a.dy=(int)s.reader.source_generation; a.velocity=(int)s.reader_focus_generation;
+        copy(a.text+sizeof visit.id,sizeof s.reader.host,s.reader.host);
+    }
+#endif
     return xQueueSend(actions, &a, 0) == pdPASS;
 }
 static bool selection_emit(const ht_select_command_t *c, void *ctx)
@@ -2698,6 +2727,11 @@ static action_t make_action(hit_t h)
     if (s.view == READER) {
         COPY(a.id, s.reader_agent);
         a.revision=s.reader.serial;
+        if (h.action==A_LATEST) {
+            a.reader_serial=s.reader.serial;
+            copy(a.text,sizeof s.reader.host,s.reader.host);
+            a.dy=(int)s.reader.source_generation; a.velocity=(int)s.reader_focus_generation;
+        }
         if (h.action==A_UP || h.action==A_DOWN) a.value=1;
         return a;
     }
@@ -3127,6 +3161,9 @@ static void dispatch(action_t a)
         break;
     case A_HOME:
         if (workspace.phase!=HT_WORKSPACE_IDLE) {
+#ifdef DEVICE_PRO_COMPANION
+            pro_reader_focus(NULL);
+#endif
             ht_workspace_cancel_request(&workspace); s.loading=false; s.active=-1;
         }
         if (visit.pending) { ht_visit_close(&visit); s.pending_focus[0] = 0; }
@@ -3159,6 +3196,7 @@ static void dispatch(action_t a)
         if (visit.available && strcmp(visit.agent, a.id)) ht_visit_close(&visit);
 #ifdef DEVICE_PRO_COMPANION
         if (s.active != i) pro_send_feedback_clear();
+        pro_reader_focus(a.id);
 #endif
         s.active = i;
         view(AGENT);
@@ -3297,6 +3335,13 @@ static void dispatch(action_t a)
         break;
     }
     case A_LATEST:
+#ifdef DEVICE_PRO_COMPANION
+        if (a.value==1 && (s.view!=READER || a.reader_serial!=s.reader.serial ||
+            a.revision!=s.reader.serial || strcmp(a.id,s.reader_agent) ||
+            strcmp(a.text,s.reader.host) || (uint32_t)a.dy!=s.reader.source_generation ||
+            (uint32_t)a.velocity!=s.reader_focus_generation ||
+            !pro_reader_openable() || !pro_reader_latest())) break;
+#endif
         if (cable_client_supports(CABLE_FEATURE_VISIT) && s.connected && !s.voice_open && !s.loading && !visit.pending &&
             active() && !strcmp(active()->id,a.id)) {
             char id[48];
@@ -3814,6 +3859,28 @@ static void worker(void *unused)
             display_lock();
             bool current=a.value==HT_VISIT_CANCEL ||
                 (visit.pending && a.revision==visit.request && a.value==(int)visit.op && !strcmp(a.text,visit.id));
+#ifdef DEVICE_PRO_COMPANION
+            if (current && a.value==HT_VISIT_LATEST && a.reader_serial) {
+                bool reader=s.connected && !s.voice_open && !s.loading && !s.pending_focus[0] &&
+                    !s.pending_machine[0] && a.reader_serial==s.reader.serial &&
+                    !strcmp(a.id,s.reader_agent) && !strcmp(a.id,visit.pending_agent) &&
+                    !strcmp(a.text+sizeof visit.id,s.reader.host) &&
+                    (uint32_t)a.dy==s.reader.source_generation &&
+                    (uint32_t)a.velocity==s.reader_focus_generation && pro_reader_latest();
+                if (!reader) {
+                    // Nothing left this worker. Keep an acknowledged Return
+                    // only if its source and focus survived the unsent peek.
+                    bool same_source=(uint32_t)a.dy==s.result_generation &&
+                        !strcmp(a.text+sizeof visit.id,s.notice_host);
+                    bool same_focus=(uint32_t)a.velocity==s.reader_focus_generation;
+                    ht_visit_reply(&visit,a.text,a.revision,false,same_source && same_focus && visit.available,NULL);
+                    if (s.view==MESSAGE && a.reader_serial==s.reader.serial) {
+                        view(READER); s.offset=s.reader.row;
+                    }
+                    change(); current=false;
+                }
+            }
+#endif
             display_unlock();
             if (current && a.value >= 0 && a.value <= HT_VISIT_LATEST)
                 cable_client_visit(a.text, a.revision, ops[a.value], a.id);
@@ -4693,6 +4760,7 @@ void ui_set_connected(bool value)
     display_lock();
 #ifdef DEVICE_PRO_COMPANION
     if (s.connected != value) {
+        pro_reader_focus(NULL);
         s.work_roster_pending = true;
         s.work_roster_after = roster_generation;
     }
@@ -4898,6 +4966,9 @@ void ui_project_remove(const char *id)
 #endif
     int i = find(id);
     if (i >= 0) {
+#ifdef DEVICE_PRO_COMPANION
+        if (s.active==i) pro_reader_focus(NULL);
+#endif
         if (s.active == i
 #ifdef DEVICE_PRO_COMPANION
             || s.view == AGENTS || s.workspace_chord
@@ -4920,6 +4991,7 @@ void ui_project_clear_all(void)
     display_lock();
 #ifdef DEVICE_PRO_COMPANION
     pro_send_feedback_clear();
+    pro_reader_focus(NULL);
 #endif
     input_cancel();
     s.count = 0;
@@ -5205,6 +5277,9 @@ void ui_focus_project(const char *id)
 {
     if (!id || !*id || strnlen(id, ID_MAX) >= ID_MAX) return;
     display_lock();
+#ifdef DEVICE_PRO_COMPANION
+    pro_reader_focus(id);
+#endif
     int i = find(id);
     if (i < 0) {
         COPY(s.pending_focus, id);
@@ -5332,7 +5407,11 @@ void ui_swipe_end(int dir)
 {
     display_lock();
     if (s.count) {
-        s.active = (s.active + (dir > 0 ? 1 : s.count - 1)) % s.count;
+        int next=(s.active + (dir > 0 ? 1 : s.count - 1)) % s.count;
+#ifdef DEVICE_PRO_COMPANION
+        pro_reader_focus(s.agents[next].id);
+#endif
+        s.active = next;
         view(AGENT);
     }
     display_unlock();
@@ -6562,6 +6641,9 @@ void ui_visit_state(const cJSON *p)
             cJSON_IsString(label) ? label->valuestring : "")) {
         s.pending_focus[0] = 0;
         if (ok) {
+#ifdef DEVICE_PRO_COMPANION
+            pro_reader_focus(agent->valuestring);
+#endif
             int i = find(agent->valuestring);
             if (i >= 0) {
                 input_cancel(); s.active = i;
@@ -6719,6 +6801,9 @@ void ui_voice_routed(bool auto_sent, bool need_new, const char *route, const cha
     if (auto_sent && s.voice_carry) ht_carry_close(&carry);
     voice_close();
     if (!need_new && id && *id) {
+#ifdef DEVICE_PRO_COMPANION
+        pro_reader_focus(id);
+#endif
         int i = find(id);
         if (i >= 0)
             s.active = i;

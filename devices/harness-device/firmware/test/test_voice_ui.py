@@ -62,6 +62,7 @@ static ht_tab_carousel_t tab_carousel;
 static struct {
     bool workspace_chord, quick_open, coasting, ready, connected, loading, nap, voice_open, voice_start_pending, voice_waiting, voice_carry, voice_review, voice_review_preview, voice_draft_append, voice_search, touch_down, touch_cancelled;
     int pet_pose, view, voice_return, offset, pressed, active;
+    uint32_t reader_focus_generation;
     uint32_t pet_until, nap_until, voice_retry_until, voice_started, voice_wait_until, voice_generation, voice_question_revision, voice_draft_revision;
     int voice_question_index;
     char title[80], message[256], voice_target[64], pending_focus[64], pending_machine[64], opening_notice[48];
@@ -143,7 +144,7 @@ void open_question(void) { assert(false); }
 bool queue(action_t action) { if (queue_full) return false; queued = action; return true; }
 '''
 harness += '#ifdef DEVICE_PRO_COMPANION\n'
-for name in ('pro_send_feedback_clear','pro_send_feedback_matches','pro_send_feedback_begin','pro_send_feedback_text','pro_work_local','pro_work_visible','pro_work_block_reason','pro_work_available','pro_work_capture_pin','pro_work_capture_available','pro_work_draft_available'):
+for name in ('pro_reader_focus','pro_send_feedback_clear','pro_send_feedback_matches','pro_send_feedback_begin','pro_send_feedback_text','pro_work_local','pro_work_visible','pro_work_block_reason','pro_work_available','pro_work_capture_pin','pro_work_capture_available','pro_work_draft_available'):
     harness += function(name)
 harness += '#endif\n'
 harness += function('ui_project_set_machine')

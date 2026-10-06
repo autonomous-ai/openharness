@@ -121,6 +121,10 @@ static bool queue(action_t action) {
     if (congested) return false;
     queued++; queued_action=action; return true;
 }
+static int actions=1;
+#define pdPASS 1
+static unsigned uxQueueSpacesAvailable(int q) { (void)q;return congested?0:20; }
+static int xQueueSend(int q,const action_t *a,int wait) { (void)q;(void)wait;return queue(*a); }
 static bool config_check_lock(const char *pattern) {
     lock_checks++; return !strcmp(pattern,"0,1,2,5");
 }
@@ -174,11 +178,11 @@ static bool scroll_emit(ht_scroll_phase_t phase, int dy, int velocity, void *ctx
 static void dispatch(action_t action);
 static void view(view_t v);
 '''
-for name in ("copy", "find", "pane_memory", "pane_memory_apply", "notice_mark_read", "pro_reader_source", "pro_reader_owner", "pro_reader_matches", "pro_reader_notice_index", "pro_reader_openable", "pro_reader_copy", "pro_reader_begin", "pro_reader_back", "pro_send_feedback_clear", "pro_send_feedback_matches", "pro_send_feedback_begin", "pro_send_feedback_text", "pro_work_local", "pro_work_visible", "pro_work_block_reason", "pro_work_available", "pro_work_capture_pin", "pro_work_capture_available", "pro_work_draft_available", "pro_busy_reset", "ensure", "waiting", "is_question", "pro_speech_allowed", "pro_speech_visible", "pro_speech_emotion",
+for name in ("copy", "find", "pane_memory", "pane_memory_apply", "notice_mark_read", "pro_reader_source", "pro_reader_owner", "pro_reader_matches", "pro_reader_notice_index", "pro_reader_openable", "pro_reader_latest", "pro_reader_focus", "pro_reader_copy", "pro_reader_begin", "pro_reader_back", "pro_send_feedback_clear", "pro_send_feedback_matches", "pro_send_feedback_begin", "pro_send_feedback_text", "pro_work_local", "pro_work_visible", "pro_work_block_reason", "pro_work_available", "pro_work_capture_pin", "pro_work_capture_available", "pro_work_draft_available", "pro_busy_reset", "ensure", "waiting", "is_question", "pro_speech_allowed", "pro_speech_visible", "pro_speech_emotion",
              "pro_speech_caption", "pro_speech_cancel", "ui_companion_speech_begin", "ui_companion_speech_clear",
              "pro_speech_tick", "pro_busy_elapsed", "pro_surface_mood", "status_wake_ms",
              "question_view", "hit_contains", "home_footer", "pro_written_control",
-             "settings_item", "settings_count", "tabs_move", "make_action", "input_cancel", "view",
+             "settings_item", "settings_count", "tabs_move", "visit_emit", "make_action", "input_cancel", "view",
              "question_rows", "question_move", "pro_question_back", "draft_move",
              "pro_appearance_view", "pro_appearance_open", "pro_appearance_move", "pro_appearance_use",
              "workspace_index", "tabs_open", "workspace_failed", "pro_panes_of",
@@ -191,7 +195,8 @@ for name in ("copy", "find", "pane_memory", "pane_memory_apply", "notice_mark_re
     code += function(name)
 reader_actions = SOURCE.split("    case A_READER:", 1)[1].split("    case A_QUESTION:", 1)[0]
 reader_scroll = SOURCE.split("    case A_UP:", 1)[1].split("    case A_LOCK:", 1)[0]
-code += "static bool reader_action(action_t a) { switch(a.kind) { case A_READER:" + reader_actions + "case A_UP:" + reader_scroll + "default: return false; } return true; }\n"
+reader_latest = SOURCE.split("    case A_LATEST:", 1)[1].split("    case A_RETURN:", 1)[0]
+code += "static bool reader_action(action_t a) { switch(a.kind) { case A_READER:" + reader_actions + "case A_UP:" + reader_scroll + "case A_LATEST:" + reader_latest + "default: return false; } return true; }\n"
 agent_layout_actions = SOURCE.split("    case A_AGENTS:", 1)[1].split("    case A_AGENT:", 1)[0]
 code += "static bool agent_layout_action(action_t a) { switch(a.kind) { case A_AGENTS:" + agent_layout_actions + "default: return false; } return true; }\n"
 workspace_actions = SOURCE.split("    case A_TABS:", 1)[1].split("    case A_MACHINE:", 1)[0]
@@ -553,6 +558,31 @@ static void reader_stale_contacts(void) {
     COPY(s.agents[0].full,"Original summary.");sample(true,200,240,2000);
     ui_draft_source("other-host");COPY(s.agents[0].full,"Replacement summary.");
     sample(false,200,240,2080);assert(!s.reader.captured&&!starts&&!queued&&!travel);
+}
+static void reader_latest_contact(void) {
+    reader_fixture(LAUNCHER);const hit_t *latest=action_hit(A_LATEST);
+    assert(latest&&latest->enabled&&latest->value==1&&!action_hit(A_DESKTOP));
+    int x=latest->rect.x+latest->rect.w/2,y=latest->rect.y+latest->rect.h/2;
+    tap(x,y,80);
+    assert(queued==1&&visit.pending&&queued_action.kind==A_VISIT_SEND&&queued_action.value==HT_VISIT_LATEST);
+    assert(queued_action.reader_serial==s.reader.serial&&!strcmp(queued_action.id,s.reader_agent));
+    assert(!starts&&!selected&&!switches&&!travel);
+    for(int cause=0;cause<5;cause++) {
+        reader_fixture(LAUNCHER);latest=action_hit(A_LATEST);assert(latest&&latest->enabled);
+        x=latest->rect.x+20;y=latest->rect.y+20;sample(true,x,y,2000);
+        assert(pressed_action.kind==A_LATEST&&pressed_action.reader_serial==s.reader.serial);
+        if(cause==0){ui_focus_project("b");ui_focus_project("a");}
+        else if(cause==1){ui_focus_project("not-in-roster");ui_focus_project("a");}
+        else if(cause==2){ui_draft_source("other-host");ui_draft_source("reader-host");}
+        else if(cause==3){s.reader.serial++;}
+        else {ui_set_connected(false);ui_set_connected(true);}
+        sample(false,x,y,2080);
+        assert(!visit.pending&&!queued&&!starts&&!selected&&!switches&&!travel);
+    }
+    reader_fixture(LAUNCHER);latest=action_hit(A_LATEST);assert(latest&&latest->enabled);
+    x=latest->rect.x+20;y=latest->rect.y+20;sample(true,x,y,2000);
+    ui_focus_project("a");sample(false,x,y,2080);
+    assert(visit.pending&&queued==1&&queued_action.value==HT_VISIT_LATEST);
 }
 static void home_render_geometry(void) {
     reset(); render_actual(); assert(!drawn_compact);
@@ -1465,7 +1495,7 @@ static void question_back_immutable(void) {
 
 int main(int argc,char **argv) {
     const struct { const char *name; test_fn run; } tests[]={
-        {"reader_navigation_parity",reader_navigation_parity},{"reader_footer_scroll",reader_footer_scroll},{"reader_stale_contacts",reader_stale_contacts},
+        {"reader_navigation_parity",reader_navigation_parity},{"reader_footer_scroll",reader_footer_scroll},{"reader_stale_contacts",reader_stale_contacts},{"reader_latest_contact",reader_latest_contact},
         {"question_back_parity",question_back_parity},{"question_back_stale_contact",question_back_stale_contact},{"question_back_immutable",question_back_immutable},
         {"footer_send_feedback",footer_send_feedback},{"work_identity_callbacks",work_identity_callbacks},{"busy_observation",busy_observation},{"busy_connection_loss",busy_connection_loss},{"busy_precedence",busy_precedence},
         {"busy_tick_schedule",busy_tick_schedule},{"busy_render_boundaries",busy_render_boundaries},

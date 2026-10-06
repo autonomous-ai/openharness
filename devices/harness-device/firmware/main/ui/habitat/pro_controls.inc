@@ -616,11 +616,13 @@ static void pro_reader(ht_scene_t *f)
                       cable_client_supports(CABLE_FEATURE_SELECTION);
     ht_pro_text(f, 48, 134, s.reader.from_notice ? 624 : 384, &ht_pro_24, DIM, s.reader.name);
     if (!s.reader.from_notice)
-        pro_control(f, 456, 124, 232, 64, PRO_TR("Current output"), A_SELECT_BEGIN, 1, can_select);
+        pro_control(f, 456, 124, 232, 64, PRO_TR("Select in app"), A_SELECT_BEGIN, 1, can_select);
     const char *value = s.reader.text[0] ? s.reader.text : PRO_TR("No saved summary.");
     pro_read_text(f, value, 190, 9);
     pro_control(f, 32, 606, 160, 68, PRO_TR("Earlier"), A_UP, 0, s.offset > 0);
-    pro_control(f, 216, 606, 288, 68, PRO_TR("Open on desktop"), A_DESKTOP, 2, pro_reader_openable());
+    bool latest=pro_reader_latest();
+    pro_control(f, 216, 606, 288, 68, PRO_TR(latest ? "Latest output" : "Open on desktop"),
+                latest ? A_LATEST : A_DESKTOP, latest ? 1 : 2, pro_reader_openable() && !s.voice_open);
     int total = ht_pro_text_rows(value, &ht_pro_32, 608);
     pro_control(f, 528, 606, 160, 68, PRO_TR("More"), A_DOWN, 0, s.offset + 9 < total);
     const char *note="More in Harness.";

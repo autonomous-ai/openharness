@@ -14,7 +14,7 @@ ns = {"__file__": str(fixture), "__name__": "pro_reader_fixture"}
 exec(compile(fixture.read_text().split(
     'with tempfile.TemporaryDirectory(prefix="harness-pro-app-interactions-")'
 )[0], str(fixture), "exec"), ns)
-code, function = ns["code"], ns["function"]
+code, function, cases = ns["code"], ns["function"], ns["cases"]
 NATIVE, FONTS = ns["NATIVE"], ns["FONTS"]
 code = code.replace("int main(int argc,char **argv)", "void prior_main(int argc,char **argv)")
 code = code.replace("static void view(view_t v) { input_cancel();s.view=v;s.offset=0; }",
@@ -25,9 +25,21 @@ for name in ("habitat_scene_receipt", "habitat_scene_presented", "pane_memory", 
              "ui_project_remove", "ui_project_clear_all", "ui_draft_source"):
     code += function(name)
 code += r'''
+static unsigned visit_wires;
+static char wire_visit[48],wire_agent[64],wire_op[16];
+static uint32_t wire_request;
+static void cable_client_visit(const char *id,uint32_t request,const char *op,const char *agent) {
+    visit_wires++;COPY(wire_visit,id);COPY(wire_agent,agent);COPY(wire_op,op);wire_request=request;
+}
+'''
+worker = ns["SOURCE"].split("static void worker(", 1)[1]
+code += "static void visit_worker(action_t a) { switch(a.kind) {\n"
+code += cases("A_VISIT_SEND", "A_SELECT_SEND", worker, "        ")
+code += "default:assert(false);}}\n"
+code += r'''
 static unsigned checks;
 static void fresh(void) {
-    reset();s.notice_count=0;s.view=HOME;now=1000;
+    reset();s.notice_count=0;s.view=HOME;now=1000;visit_wires=0;
     pro_draft_recovery_source(&s.draft_recovery,"fixture-host");
 }
 static int card(const char *id) {
@@ -228,6 +240,119 @@ static void representative_english_reader(const char *dir) {
     unsigned guard=0;while(controls(A_DOWN)&&guard++<20){act(A_DOWN,0);render(&scene);}
     assert(guard<20);portrait(&scene,dir,"reader-english-last");checks++;
 }
+static void latest_reader(void) {
+    fresh();
+    COPY(s.agents[0].full,"The design review is ready. The main voice surface stays quiet, with one clear place to speak and a small Updates entry when something needs attention.\n\nThis Summary keeps the words you opened. New terminal output can arrive while you continue reading these notes.\n\nThe next review should focus on the physical screen: readable type, clear controls, and a comfortable return to work.");
+    view(LAUNCHER);act(A_READER,0);assert(s.view==READER);
+}
+static action_t latest_contact(void) {
+    action_t a=make_action(hit(A_LATEST,1));
+    assert(a.reader_serial==s.reader.serial&&a.revision==s.reader.serial);
+    assert((uint32_t)a.dy==s.reader.source_generation&&(uint32_t)a.velocity==s.reader_focus_generation);
+    assert(!strcmp(a.id,s.reader_agent)&&!strcmp(a.text,s.reader.host));return a;
+}
+static action_t queue_latest(void) {
+    unsigned before=enqueued;dispatch(latest_contact());
+    assert(visit.pending&&enqueued==before+1&&sent.kind==A_VISIT_SEND&&sent.value==HT_VISIT_LATEST);
+    assert(sent.reader_serial==s.reader.serial&&!strcmp(sent.text+sizeof visit.id,s.reader.host));
+    return sent;
+}
+static void latest_label_states(const char *dir) {
+    ht_scene_t scene;latest_reader();render(&scene);
+    assert(text_has(&scene,"Latest output")&&controls(A_LATEST)==1&&!controls(A_DESKTOP));
+    for(int i=0;i<s.hit_count;i++)if(s.hits[i].action==A_LATEST)
+        assert(s.hits[i].rect.x==216&&s.hits[i].rect.y==606&&s.hits[i].rect.w==288&&s.hits[i].rect.h==68);
+    portrait(&scene,dir,"latest-reader-current");checks++;
+    ui_focus_project("build");render(&scene);
+    assert(text_has(&scene,"Open on desktop")&&controls(A_DESKTOP)==1&&!controls(A_LATEST));
+    portrait(&scene,dir,"latest-reader-other");checks++;
+    latest_reader();features&=~CABLE_FEATURE_VISIT;render(&scene);
+    assert(text_has(&scene,"Open on desktop")&&controls(A_DESKTOP)==1&&!controls(A_LATEST));
+    portrait(&scene,dir,"latest-reader-legacy");act(A_DESKTOP,2);
+    assert(opens==1&&sent.kind==A_DESKTOP&&!visit.pending&&!visit_wires);checks++;
+    latest_reader();s.connected=false;render(&scene);
+    assert(text_has(&scene,"Latest output")&&!controls(A_LATEST));portrait(&scene,dir,"latest-reader-offline");checks++;
+    latest_reader();visit.pending=true;render(&scene);
+    assert(text_has(&scene,"Latest output")&&!controls(A_LATEST));portrait(&scene,dir,"latest-reader-pending");checks++;
+    latest_reader();ui_project_remove("design");render(&scene);
+    assert(!controls(A_DESKTOP)&&!controls(A_LATEST));portrait(&scene,dir,"latest-reader-unavailable");checks++;
+    // The clicked notice may represent the current pane too; no loose body-cache join.
+    latest_reader();add_result("design","Design","current-result",false);read_card("design");render(&scene);
+    assert(s.reader.from_notice&&controls(A_LATEST)==1);checks++;
+}
+static void latest_receipts_and_original_return(void) {
+    ht_scene_t scene;latest_reader();render(&scene);act(A_DOWN,0);render(&scene);
+    char words[sizeof s.reader.text],name[sizeof s.reader.name];COPY(words,s.reader.text);COPY(name,s.reader.name);
+    int row=s.offset;assert(row>0);
+    action_t first=queue_latest();assert(!visit.available);visit_worker(first);
+    assert(visit_wires==1&&!strcmp(wire_op,"latest")&&!strcmp(wire_agent,"design")&&wire_request==first.revision);
+    char id[48];COPY(id,wire_visit);
+    visit_reply("build",true,true,NULL);assert(visit.pending&&!visit.available); // Wrong target cannot create Return.
+    visit_reply("design",true,true,NULL);assert(visit.available&&!visit.pending&&s.view==HOME);
+    assert(!strcmp(s.reader.text,words)&&!strcmp(s.reader.name,name)&&s.reader.row==row);checks++;
+    view(LAUNCHER);act(A_READER,0);assert(s.offset==row);
+    action_t second=queue_latest();assert(!strcmp(second.text,id));visit_worker(second);
+    assert(visit_wires==2&&!strcmp(wire_visit,id)&&!strcmp(wire_op,"latest"));
+    visit_reply("design",true,true,NULL);assert(visit.available&&!strcmp(visit.id,id));checks++;
+    // A later explicit alert visit shares the same original Return.
+    pro_open_in_app("build");action_t third=sent;visit_worker(third);
+    assert(visit_wires==3&&!strcmp(wire_op,"open")&&!strcmp(wire_visit,id));
+    visit_reply("build",true,true,NULL);assert(visit.available&&!strcmp(visit.id,id));
+    act(A_RETURN,0);visit_worker(sent);
+    assert(visit_wires==4&&!strcmp(wire_op,"back")&&!strcmp(wire_visit,id)&&!strcmp(wire_agent,"build"));
+    visit_reply("design",true,false,NULL);assert(!visit.available&&s.active==0);
+    assert(!strcmp(s.reader.text,words)&&!strcmp(s.reader.name,name)&&s.reader.row==row);
+    view(LAUNCHER);act(A_READER,0);assert(s.offset==row);act(A_READER_BACK,0);assert(s.view==LAUNCHER);
+    assert(!answers&&!opens&&!voice_commands);checks++;
+}
+static void latest_stale_context(int cause) {
+    switch(cause) {
+    case 0:ui_focus_project("build");ui_focus_project("design");break;
+    case 1:ui_focus_project("not-in-roster");ui_focus_project("design");break;
+    case 2:view(LAUNCHER);act(A_READER,0);break;
+    case 3:ui_draft_source("other-host");ui_draft_source("fixture-host");break;
+    case 4:ui_set_connected(false);ui_set_connected(true);break;
+    case 5:features&=~CABLE_FEATURE_VISIT;break;
+    case 6:s.loading=true;break;
+    case 7:COPY(s.pending_machine,"another-machine");break;
+    case 8:ui_project_remove("design");break;
+    default:assert(false);
+    }
+}
+static void latest_stale_contact_and_worker(void) {
+    for(int cause=0;cause<9;cause++) {
+        latest_reader();action_t contact=latest_contact();latest_stale_context(cause);unsigned count=enqueued;
+        dispatch(contact);assert(enqueued==count&&!visit.pending&&!visit_wires&&!opens&&!answers&&!voice_commands);checks++;
+        latest_reader();action_t queued=queue_latest();latest_stale_context(cause);
+        count=enqueued;visit_worker(queued);
+        assert(!visit_wires&&!visit.pending&&enqueued==count&&!opens&&!answers&&!voice_commands);checks++;
+    }
+    // A non-navigation reader refresh drops only the unsent peek. The earlier
+    // acknowledged Return survives while source and focus remain the same.
+    latest_reader();action_t first=queue_latest();visit_worker(first);visit_reply("design",true,true,NULL);
+    char id[48],label[80];COPY(id,visit.id);COPY(label,visit.label);
+    view(LAUNCHER);act(A_READER,0);action_t stale=queue_latest();
+    view(LAUNCHER);act(A_READER,0);visit_worker(stale);
+    assert(visit_wires==1&&!visit.pending&&visit.available&&!strcmp(visit.id,id)&&!strcmp(visit.label,label));
+    assert(s.view==READER&&s.reader.text[0]);checks++;
+    // A real changed focus, even A -> unknown B -> A, ends the previous Return
+    // just like ordinary manual navigation outside a queued peek.
+    for(int change=0;change<3;change++) {
+        latest_reader();first=queue_latest();visit_worker(first);visit_reply("design",true,true,NULL);
+        view(LAUNCHER);act(A_READER,0);stale=queue_latest();
+        ui_focus_project(change==2?"not-in-roster":"build");
+        if(change)ui_focus_project("design");visit_worker(stale);
+        assert(visit_wires==1&&!visit.pending&&!visit.available&&!visit.id[0]);checks++;
+    }
+    latest_reader();first=queue_latest();visit_worker(first);visit_reply("design",true,true,NULL);
+    COPY(id,visit.id);COPY(label,visit.label);view(LAUNCHER);act(A_READER,0);stale=queue_latest();
+    features&=~CABLE_FEATURE_VISIT;visit_worker(stale);
+    assert(visit_wires==1&&!visit.pending&&visit.available&&!strcmp(visit.id,id)&&!strcmp(visit.label,label));checks++;
+    // Ordinary same-pane echoes do not spuriously revoke a fresh contact/queue.
+    latest_reader();action_t echo=latest_contact();ui_focus_project("design");dispatch(echo);
+    assert(visit.pending);action_t queued=sent;ui_focus_project("design");visit_worker(queued);
+    assert(visit_wires==1&&!strcmp(wire_op,"latest"));checks++;
+}
 static void unicode_and_render_boundaries(const char *dir) {
     ht_scene_t scene;fresh();memset(s.agents[0].full,'W',sizeof s.agents[0].full-1);
     s.agents[0].full[1021]=(char)0xe2;s.agents[0].full[1022]=(char)0x80;s.agents[0].full[1023]=0;
@@ -242,6 +367,7 @@ int main(int argc,char **argv) {
     const char *dir=argc>1?argv[1]:NULL;
     gates_and_exact_snapshot(dir);frozen_normal_reader(dir);receipts_and_return_position(dir);
     stale_actions_and_owner(dir);unknown_owner_boundaries();representative_english_reader(dir);unicode_and_render_boundaries(dir);
+    latest_label_states(dir);latest_receipts_and_original_return();latest_stale_contact_and_worker();
     printf("Pro frozen reader: PASS (%u actual-handler/owner/occurrence checks; no real cable or focus)\n",checks);
 }
 '''

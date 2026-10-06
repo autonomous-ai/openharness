@@ -135,7 +135,8 @@ do not establish those qualities.
 | Updates with a question | Answer | Read and answer that question locally; the home recipient and desktop focus stay in place |
 | Updates with an unconfirmed answer | Review answer | Reopen the retained answer and delivery state, even if its original alert has disappeared |
 | Unconfirmed answer | Swipe / Close | Read the retained answers; Close removes only the local copy and unblocks other questions, without resending or acknowledging the host |
-| Updates or Read | Open on desktop | Open that exact pane; compatible hosts preserve the previous reading place for Return |
+| Updates or a Summary from another pane | Open on desktop | Open that exact pane; compatible hosts preserve the previous reading place for Return |
+| Summary from the currently focused pane | Latest output, on compatible hosts | Visit the live terminal tail and retain the original reading place for Return; the saved Summary words stay unchanged |
 | Home after a supported visit | Return | Ask the app to restore its saved pane and reading position |
 | Reading, question or draft sheets | Drag vertically | Read the local text or advance its choices/parts, rather than scrolling the desktop |
 | A list or form | Drag vertically, then tap a choice | Browse and activate the chosen item |
@@ -188,6 +189,10 @@ protected. A matching receipt or close event keeps its existing authoritative be
 A newer question retains the prior unconfirmed answer until its own receipt, close
 or explicit local Close; it does not inherit that answer or its submission authority. A freshly read, already-submitted question may have no saved
 answer text on the device; the recovery view says so.
+The Summary reader offers Latest output only while its pinned pane is still focused.
+This visits the live tail, not the historical location of the saved summary. A focus,
+owner, or reader change after contact cancels that action without turning it into Open.
+Repeated peeks reuse the acknowledged visit and preserve its original Return.
 Opening in the app is a separate, deliberate action. Older hosts use a plain
 open without a Return promise. A closed pane, pruned reading position or timed-out
 visit reports the host's limitation instead of claiming exact restoration.

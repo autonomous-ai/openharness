@@ -96,7 +96,7 @@ static uint16_t color(unsigned rgb) { return ht_rgb(rgb); }
 #define ERROR color(HT_THEME_ERROR)
 #define SEL color(HT_THEME_SELECTION)
 '''
-for name in ("pro_reader_source", "pro_reader_owner", "pro_reader_matches", "pro_reader_notice_index", "pro_reader_openable", "pro_work_local", "pro_work_visible", "pro_work_block_reason", "pro_work_available", "pro_work_draft_available"):
+for name in ("pro_reader_source", "pro_reader_owner", "pro_reader_matches", "pro_reader_notice_index", "pro_reader_openable", "pro_reader_latest", "pro_work_local", "pro_work_visible", "pro_work_block_reason", "pro_work_available", "pro_work_draft_available"):
     code += function(name)
 code += function("settings_item") + function("settings_count")
 code += '#include "pro_controls.inc"\n'
@@ -299,9 +299,11 @@ static void reader_checks(const char *dir) {
         assert(has_text(&sheet,"Summary")&&action_count(A_READER_BACK,true)==1);
         assert(action_count(A_SELECT_BEGIN,false)==(unsigned)!notice);
         bool openable=state==0||state==3||(notice&&state==4);
-        assert(action_count(A_DESKTOP,true)==(unsigned)openable);
+        assert(action_count(A_LATEST,true)==(unsigned)(state==0));
+        assert(action_count(A_DESKTOP,true)==(unsigned)(openable&&state!=0));
+        assert(has_text(&sheet,state==0||state==1 ? "Latest output" : "Open on desktop"));
         assert(action_count(A_SELECT_BEGIN,true)==(unsigned)(!notice&&state==0));
-        if(!notice)assert(has_text(&sheet,"Current output"));
+        if(!notice)assert(has_text(&sheet,"Select in app"));
         if(!stress) {char name[64];snprintf(name,sizeof name,"reader-scope-%d-%d",notice,state);portrait(&sheet,dir,name);}
     }
 }
