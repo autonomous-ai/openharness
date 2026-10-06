@@ -6,6 +6,7 @@ import type { Frame, LocalClientSink } from './backendSocket.js'
 import { attachLocalWsServer, LOCAL_WS_CLOSE_GRACE_MS, type LocalWsBackend, type LocalWsServer, type LocalWsServerOptions } from './localWsServer.js'
 import { encodeTerminalLocal, TerminalBinaryKind, type TerminalBinaryClear } from './lib/terminalBinary.js'
 import { listenLocalSocket } from './lib/localSocket.js'
+import { RelayConnectError } from './lib/relayFrames.js'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { WindowForm } from './cable/windowForm.js'
@@ -397,8 +398,7 @@ describe('local CLI WebSocket', () => {
       })
       const ws = new WebSocket(await start(backend, {
         autonomousEnv: 'test',
-        relayPool: { acquire, acquireIsolated: acquire } as unknown as LocalWsServerOptions['relayPool'],
-        shareRelay: { acquire } as unknown as LocalWsServerOptions['shareRelay'],
+        relayPool: { acquire, acquireIsolated: acquire, acquireShare: acquire } as unknown as LocalWsServerOptions['relayPool'],
       }))
       await onceOpen(ws)
       ws.send(JSON.stringify({ type: 'machine_select', payload: {
@@ -417,6 +417,34 @@ describe('local CLI WebSocket', () => {
     },
   )
 
+  // Watching a shared harness goes through the gateway's Share relay (gateway/share.ts): the window is told
+  // what the Share relay said, with the close it set (4403 the share ended, 1013 out of reach).
+  it.each([
+    ['a share that ended', new RelayConnectError('Sharing ended or invitation expired', 4403), [4403, 'Sharing ended or invitation expired']],
+    ['one out of reach', new RelayConnectError('The owner’s machine is offline.', 1013), [1013, 'The owner’s machine is offline.']],
+    ['one failing without a close', new Error('boom'), [1013, 'boom']],
+    ['one failing with no words', 'down', [1013, 'Sharing unavailable']],
+  ] as const)('closes a window watching %s with the close the Share relay gave', async (_name, error, expected) => {
+    const backend = new FakeBackend()
+    const ws = new WebSocket(await start(backend, {
+      autonomousEnv: 'test',
+      relayPool: { acquire: vi.fn(), acquireShare: vi.fn(async () => { throw error }) } as unknown as LocalWsServerOptions['relayPool'],
+    }))
+    await onceOpen(ws)
+    const closed = new Promise<[number, string]>((resolve) => ws.once('close', (code, reason) => resolve([code, reason.toString()])))
+    ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId: 'owner', localProtocolVersion: 1, shareId: 'share' } }))
+    expect(await closed).toEqual(expected)
+  })
+
+  it('refuses to watch a shared harness with no gateway to watch it through', async () => {
+    const backend = new FakeBackend()
+    const ws = new WebSocket(await start(backend, { autonomousEnv: 'test', relayPool: { acquire: vi.fn() } as unknown as LocalWsServerOptions['relayPool'] }))
+    await onceOpen(ws)
+    const closed = new Promise<[number, string]>((resolve) => ws.once('close', (code, reason) => resolve([code, reason.toString()])))
+    ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId: 'owner', localProtocolVersion: 1, shareId: 'share' } }))
+    expect(await closed).toEqual([4403, 'Sharing is unavailable'])
+  })
+
   it.each(['owned', 'shared'] as const)('detaches a late %s relay after its window disconnects', async (kind) => {
     const backend = new FakeBackend(), pending = gate(), entered = gate(), disconnected = gate(), detach = vi.fn()
     const acquire = async () => {
@@ -426,8 +454,7 @@ describe('local CLI WebSocket', () => {
     }
     const ws = new WebSocket(await start(backend, {
       autonomousEnv: 'test',
-      relayPool: { acquire } as unknown as LocalWsServerOptions['relayPool'],
-      shareRelay: { acquire } as unknown as LocalWsServerOptions['shareRelay'],
+      relayPool: { acquire, acquireShare: acquire } as unknown as LocalWsServerOptions['relayPool'],
     }))
     server!.once('connection', (socket) => socket.once('close', disconnected.resolve))
     await onceOpen(ws)
@@ -1044,11 +1071,14 @@ describe('local CLI WebSocket', () => {
   it('takes the core\'s own services by their token, whatever machine id they name', async () => {
     // A signed-in core serves under its account's machine id; its services name this computer's.
     const accepted: string[] = []
+    const receiveBinary = vi.fn()
+    let buffered: (() => number) | undefined
     const services = {
-      accept: (service: string, token: string) => {
+      accept: (service: string, token: string, sink: { buffered(): number }) => {
         if (token !== 'boot-token') return null
         accepted.push(service)
-        return { receive: vi.fn(), closed: vi.fn() }
+        buffered = sink.buffered
+        return { receive: vi.fn(), receiveBinary, closed: vi.fn() }
       },
     }
     const url = await start(new FakeBackend(), { services })
@@ -1061,6 +1091,11 @@ describe('local CLI WebSocket', () => {
     }))
     await expect(connected).resolves.toMatchObject({ type: 'connected', payload: { machineId, service: 'search' } })
     expect(accepted).toEqual(['search'])
+    // A service that carries terminals (the gateway) sends bytes on its link, and the core can ask how many
+    // of its own wait on the socket to it.
+    ws.send(Uint8Array.of(1, 2, 3))
+    await vi.waitFor(() => expect(receiveBinary).toHaveBeenCalledWith(new Uint8Array([1, 2, 3])))
+    expect(buffered?.()).toBe(0)
     ws.close()
 
     // The token is the check: a wrong one is refused, whichever machine id it names.

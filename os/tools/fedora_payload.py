@@ -10,6 +10,8 @@ import re
 import shutil
 import xml.etree.ElementTree as ET
 
+import opencode_payload
+
 
 def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
@@ -42,7 +44,7 @@ def runtime_identity(runtime, commit):
     return info
 
 
-def stage(source, runtime, destination, commit, runtime_commit):
+def stage(source, runtime, destination, commit, runtime_commit, agent=None):
     info = runtime_identity(runtime, runtime_commit)
     # An allowlist keeps PC hooks and private fixture provisioning out of RPMs.
     paths = [
@@ -104,6 +106,10 @@ def stage(source, runtime, destination, commit, runtime_commit):
     tree.write(config, encoding='unicode')
     browser = destination / 'usr/bin/hn-browser'
     browser.write_text(browser.read_text().replace('/usr/bin/chromium ', '/usr/bin/chromium-browser '))
+    # The experimental Fedora/Asahi session still uses its distribution's
+    # compositor; the pinned PC executable is an x86-64 Arch payload.
+    session = destination / 'usr/lib/harness-os/session'
+    session.write_text(session.read_text().replace('/usr/lib/harness-os/labwc -C', 'labwc -C'))
     for path in destination.rglob('*'):
         if not path.is_symlink():
             path.chmod(0o755 if path.is_dir() else 0o644)
@@ -114,7 +120,9 @@ def stage(source, runtime, destination, commit, runtime_commit):
     for name in ['autostart', 'shutdown']:
         (destination / 'usr/share/harness-os/labwc' / name).chmod(0o755)
     (library / 'harness-tui').chmod(0o755)
-    return {'runtime': info, 'files': {str(p.relative_to(destination)): digest(p)
+    bundled = (opencode_payload.stage(agent, destination,
+               opencode_payload.read_lock(source / 'os/packaging/fedora/opencode.lock.json')) if agent else None)
+    return {'runtime': info, 'agent': bundled, 'files': {str(p.relative_to(destination)): digest(p)
                                      for p in sorted(destination.rglob('*')) if p.is_file() and not p.is_symlink()},
             'symlinks': {str(p.relative_to(destination)): str(p.readlink())
                          for p in sorted(destination.rglob('*')) if p.is_symlink()}}

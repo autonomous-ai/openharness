@@ -12,6 +12,7 @@ import { createServer, type IncomingHttpHeaders, type Server } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { BackendSocket } from './backendSocket.js'
+import { relaySocket } from './testing/relaySocket.js'
 import { env } from './config/env.js'
 import { emptyPorts, MODELS_FALLBACKS } from './core/api.js'
 import { createServiceHost } from './core/serviceHost.js'
@@ -92,7 +93,7 @@ beforeEach(async () => {
     sleep: async (ms) => { clock += ms },
   })
   grid = installFakeGrid(plan())
-  socket = new BackendSocket('token')
+  socket = relaySocket('token')
   socket.setHarnessGridName(OWN)
   const models = createServiceHost(emptyPorts(), { log: () => {} })
   models.start('models', startModels, fakeCore({

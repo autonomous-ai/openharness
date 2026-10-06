@@ -199,6 +199,13 @@ The native desktop target uses the CLI for cloud access and SSO tokens:
   `LocalCliDiscovery`, which runs `harness start` when needed). The CLI terminates E2EE for relayed
   machines; the app carries no crypto. Close code `4404`/`NO_PEER_LINK` means the machine needs
   `harness link import` — surfaced as `MachineState.needsLink` and polled via `_linkRetryTimers`.
+  A viewer build settles its own `NO_PEER_LINK`/`E2E_DENIED` first (`_settleTrust`): it joins the
+  device log if it is not in it (`ViewerDeviceLog.ensureRegistered`), reads it and dials again,
+  showing the machine as connecting; only a refusal that outlasts two rounds (~15s), or a frozen
+  log, asks for the password. The desk frames (`app_focus`, `app_panes`, `app_swarms`, `app_unread`,
+  `agent_seen`) are for this computer's daemon and only ride a loopback connection. A viewer with no
+  machine connected hears no push, so it re-reads the machine list every 20s while that lasts
+  (`deafMachineListInterval`) and when the tab comes back to the front.
 - **Both REST and the local WS prefer the daemon's Unix socket** (`lib/ws/local_daemon_transport.dart`;
   CLI `lib/localSocket.ts`): `~/.harness/cli/data/daemon-<port>.sock`, 0600, named for the port in
   `localCliBaseUrl` so it always leads to the same daemon as the TCP fallback. The loopback port takes

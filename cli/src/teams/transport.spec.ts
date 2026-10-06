@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, it, vi } from 'vitest'
 import { BackendSocket } from '../backendSocket.js'
+import { relaySocket } from '../testing/relaySocket.js'
 import { attachLocalWsServer } from '../localWsServer.js'
 import { registry } from '../lib/registry.js'
 import { Team } from './model.js'
@@ -11,7 +12,7 @@ import { teamRpc } from './client.js'
 
 it('runs create, ask, explicit reply, and continuation through the real daemon WebSocket', async () => {
   const root = mkdtempSync(join(tmpdir(), 'team-transport-'))
-  const backend = new BackendSocket('team-fixture')
+  const backend = relaySocket('team-fixture')
   backend.teamStateDir = root
   backend.teamCommand = 'fixture-harness team'
   const sent: Array<{ agent: string; text: string; id: string }> = []

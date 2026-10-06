@@ -1,7 +1,7 @@
 import { CommandBarError, commandBarService, type CommandBarService } from './commandBar.js'
 import type { LocalWsServerOptions } from '../localWsServer.js'
-import { OWNER_COMMAND_TYPES } from './e2ee/applicationFrames.js'
-export { OWNER_COMMAND_TYPES } from './e2ee/applicationFrames.js'
+import { OWNER_COMMAND_TYPES } from './relayFrames.js'
+export { OWNER_COMMAND_TYPES } from './relayFrames.js'
 
 /** The same decisions and task delivery as the desktop, behind the paired-owner boundary.
  * A decision never executes an action. The client still reviews and commits the selected action. */

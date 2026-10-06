@@ -271,12 +271,16 @@ if [ -d "$DESKTOP_ENTRY_DIR" ]; then
 Type=Application
 Name=Harness
 Comment=Attach terminals to the agents running on your Harness machines
-Exec=$DESTINATION
+Exec=$DESTINATION %u
+MimeType=x-scheme-handler/harness;
 Icon=$ICON_DIR/harness.png
 Terminal=false
 Categories=Development;
 StartupWMClass=com.autonomous.harness
 EOF
+  if command -v update-desktop-database >/dev/null 2>&1; then
+    update-desktop-database "$DESKTOP_ENTRY_DIR" >/dev/null 2>&1 || true
+  fi
 fi
 
 printf '%s\n' "Harness $VERSION installed at $DESTINATION"

@@ -591,6 +591,26 @@ void main() {
     await tester.pumpWidget(const SizedBox());
   });
 
+  testWidgets('a frozen device list is offered beside a machine\'s password', (
+    tester,
+  ) async {
+    app
+      ..add('remote', 'Mac mini')
+      ..deviceListNeedsReviewForTest = true;
+    await mount(tester);
+    // The row, and the form it opens: the password stays, the review sits under it.
+    expect(find.text('Your device list needs a review.'), findsOneWidget);
+    await tap(tester, find.byKey(const ValueKey('connect-machine-remote')));
+    expect(find.text('Your device list needs a review.'), findsOneWidget);
+    expect(find.byKey(const Key('device-list-review')), findsOneWidget);
+    expect(remoteInput, findsOneWidget);
+
+    app.deviceListNeedsReviewForTest = false;
+    await tester.pumpAndSettle();
+    expect(find.text('Your device list needs a review.'), findsNothing);
+    await tester.pumpWidget(const SizedBox());
+  });
+
   testWidgets('connection continues across closing and reopening', (
     tester,
   ) async {

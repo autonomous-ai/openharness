@@ -9,7 +9,7 @@ import { CableSession, type CableHost, type CablePort } from './cableSession.js'
 import { CableDecoder, CableType, encodeCableFrame } from './cableFrame.js'
 import { DialLog } from './dialLog.js'
 import { DialVerdicts } from './dialPortVerdicts.js'
-import { parseDarwinDialPorts, portInUse, type DialPort } from './serial.js'
+import { createDarwinDialFinder, parseDarwinDialPorts, portInUse, type DialPort } from './serial.js'
 
 // Run the same two-device scenarios against the staged helper before deployment.
 const CableFleet: typeof SourceFleet = process.env.HARNESS_TEST_USB_FLEET
@@ -465,5 +465,138 @@ describe('macOS USB inventory', () => {
     "IOCalloutDevice" = "/dev/debug-console"`
     // The attachment identity is the USB device's own sessionID, not one from a node below it.
     expect(parseDarwinDialPorts(dump)).toEqual([device('/dev/tim', 'AA:01'), { ...device('/dev/tux', 'BB:02'), session: '14351572441873' }])
+  })
+
+  describe('dial scan gate', () => {
+    const dump = `+-o Tim <class IOUSBHostDevice>
+  "idVendor" = 12346
+  "idProduct" = 4097
+  "USB Serial Number" = "AA:01"
+  +-o CDC
+    +-o serial
+      "IOCalloutDevice" = "/dev/cu.usbmodem1101"`
+    const base = ['cu.debug-console:623:1', 'cu.usbmodem1101:900:7']
+    function rig(entries = base) {
+      const state = { entries, now: 0, listDev: () => state.entries }
+      const runIoreg = vi.fn(async () => dump)
+      const find = createDarwinDialFinder({ listDev: () => state.listDev(), runIoreg, now: () => state.now })
+      return { state, runIoreg, find }
+    }
+
+    it('runs ioreg once for an unchanged /dev set and serves copies', async () => {
+      const { runIoreg, find } = rig()
+      for (let i = 0; i < 3; i++) expect(await find()).toEqual([device('/dev/cu.usbmodem1101', 'AA:01')])
+      expect(runIoreg).toHaveBeenCalledTimes(1)
+      const first = await find()
+      first[0].path = 'x'
+      expect(await find()).toEqual([device('/dev/cu.usbmodem1101', 'AA:01')])
+    })
+
+    it('ignores the order of /dev entries', async () => {
+      const { state, runIoreg, find } = rig()
+      await find()
+      state.entries = [...base].reverse()
+      await find()
+      expect(runIoreg).toHaveBeenCalledTimes(1)
+    })
+
+    it('rescans on an added or removed entry, a new inode, or a new rdev', async () => {
+      const { state, runIoreg, find } = rig()
+      await find()
+      state.entries = [...base, 'cu.usbmodem2:950:8']; await find()
+      expect(runIoreg).toHaveBeenCalledTimes(2)
+      state.entries = base; await find()
+      expect(runIoreg).toHaveBeenCalledTimes(3)
+      state.entries = ['cu.debug-console:623:1', 'cu.usbmodem1101:901:7']; await find()
+      expect(runIoreg).toHaveBeenCalledTimes(4)
+      state.entries = ['cu.debug-console:623:1', 'cu.usbmodem1101:901:8']; await find()
+      expect(runIoreg).toHaveBeenCalledTimes(5)
+      await find() // the confirm scan after the last change
+      expect(runIoreg).toHaveBeenCalledTimes(6)
+      await find()
+      expect(runIoreg).toHaveBeenCalledTimes(6)
+    })
+
+    it('confirms a change with one more scan, so a plug edge cannot cache a half-seen port', async () => {
+      const { state, runIoreg, find } = rig()
+      await find()
+      state.entries = [...base, 'cu.usbmodem2:950:8']
+      runIoreg.mockResolvedValueOnce('') // devfs has the node, the IORegistry does not yet
+      expect(await find()).toEqual([])
+      expect(await find()).toEqual([device('/dev/cu.usbmodem1101', 'AA:01')])
+      expect(runIoreg).toHaveBeenCalledTimes(3)
+      await find()
+      expect(runIoreg).toHaveBeenCalledTimes(3)
+    })
+
+    it('rescans after 5 minutes, not before', async () => {
+      const { state, runIoreg, find } = rig()
+      await find()
+      state.now = 299_999; await find()
+      expect(runIoreg).toHaveBeenCalledTimes(1)
+      state.now = 300_000; await find()
+      expect(runIoreg).toHaveBeenCalledTimes(2)
+      state.now = 300_001; await find()
+      expect(runIoreg).toHaveBeenCalledTimes(2)
+    })
+
+    it('rescans when the clock steps back below the last scan', async () => {
+      const { state, runIoreg, find } = rig()
+      state.now = 1_000_000; await find()
+      state.now = 500_000; await find()
+      expect(runIoreg).toHaveBeenCalledTimes(2)
+    })
+
+    it('treats an empty /dev/cu.* set as a valid fingerprint', async () => {
+      const { runIoreg, find } = rig([])
+      runIoreg.mockResolvedValue('') // no cu.* nodes, so no dial in the IORegistry either
+      for (let i = 0; i < 3; i++) await find()
+      expect(runIoreg).toHaveBeenCalledTimes(1)
+    })
+
+    it('keeps rescanning while ioreg lists a port whose /dev node is gone, then caches again', async () => {
+      const { state, runIoreg, find } = rig()
+      await find()
+      state.entries = ['cu.debug-console:623:1'] // unplugged: the node left /dev, the IORegistry still lists the dial
+      for (let i = 0; i < 3; i++) expect(await find()).toEqual([device('/dev/cu.usbmodem1101', 'AA:01')])
+      expect(runIoreg).toHaveBeenCalledTimes(4)
+      runIoreg.mockResolvedValue('') // the IORegistry caught up
+      expect(await find()).toEqual([])
+      expect(runIoreg).toHaveBeenCalledTimes(5)
+      await find()
+      await find()
+      expect(runIoreg).toHaveBeenCalledTimes(5) // nothing left to doubt, so cached
+    })
+
+    it('retries after an ioreg failure and never serves stale ports for changed entries', async () => {
+      const { state, runIoreg, find } = rig()
+      runIoreg.mockRejectedValueOnce(new Error('Could not enumerate USB dials'))
+      await expect(find()).rejects.toThrow('Could not enumerate USB dials')
+      expect(await find()).toEqual([device('/dev/cu.usbmodem1101', 'AA:01')])
+      expect(runIoreg).toHaveBeenCalledTimes(2)
+      state.entries = [...base, 'cu.usbmodem2:950:8']
+      runIoreg.mockRejectedValueOnce(new Error('Could not enumerate USB dials'))
+      await expect(find()).rejects.toThrow('Could not enumerate USB dials')
+      await find()
+      expect(runIoreg).toHaveBeenCalledTimes(4)
+      await find() // confirm scan for the change that the failure interrupted
+      expect(runIoreg).toHaveBeenCalledTimes(5)
+      await find()
+      expect(runIoreg).toHaveBeenCalledTimes(5)
+    })
+
+    it('falls back to ioreg every call while /dev cannot be read', async () => {
+      const { state, runIoreg, find } = rig()
+      state.listDev = () => { throw new Error('EACCES') }
+      for (let i = 0; i < 3; i++) await find()
+      expect(runIoreg).toHaveBeenCalledTimes(3)
+      state.listDev = () => state.entries
+      await find()
+      expect(runIoreg).toHaveBeenCalledTimes(4)
+      await find() // recovery counts as a change, so it is confirmed once
+      expect(runIoreg).toHaveBeenCalledTimes(5)
+      await find()
+      expect(runIoreg).toHaveBeenCalledTimes(5)
+    })
   })
 })

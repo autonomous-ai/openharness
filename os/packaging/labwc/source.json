@@ -1,0 +1,12 @@
+{
+  "version": "0.20.2",
+  "tag_object": "400c1d6d57bfd58d88f623d763b8812aef582469",
+  "commit": "97f28877a343e062f3178d201f0248cd9c2610cf",
+  "url": "https://codeload.github.com/labwc/labwc/tar.gz/97f28877a343e062f3178d201f0248cd9c2610cf",
+  "bytes": 553914,
+  "sha256": "022676dbcbf6b6206b97d7bac8a339c8a0203e3e99693107c15b5a6183e4b0ea",
+  "arch_snapshot": "2026/10/01",
+  "scope": "PC and Intel Mac compositor owned by the Harness OS package",
+  "patch": "session-lock-presentation.patch",
+  "patch_sha256": "e911639c8b7d8eef1a2d75ff623587df3e78455905c5f6a5c1c0b0fcc689e2fb"
+}

@@ -1,0 +1,9 @@
+[
+  "sim/hello.py",
+  "sim/go2_model.py",
+  "sim/go2_stand.py",
+  "sim/go2_bob.py",
+  "out/rollout.model.xml",
+  "out/rollout.qpos.json",
+  "out/rollout.json"
+]

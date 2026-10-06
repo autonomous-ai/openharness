@@ -26,6 +26,7 @@ import 'link_another_machine_dialog.dart'
         kLinkServerStartCommand;
 import 'link_machine_dialog.dart';
 import 'machine_actions.dart';
+import 'new_device_notice.dart' show DeviceListReviewLine;
 import 'terminal_name_prompt.dart';
 import 'terminal_prompt.dart';
 import 'transient_menus.dart';
@@ -722,6 +723,7 @@ class _MachinesPanelState extends State<_MachinesPanel>
           : null,
       menuBuilder: machine.machine.isShared ? null : menu,
       offline: offline,
+      footer: canConnect ? DeviceListReviewLine(notifier: app) : null,
     );
   }
 
@@ -986,6 +988,7 @@ class _MachineRow extends StatelessWidget {
     this.offline = false,
     this.onTap,
     this.hint,
+    this.footer,
   });
   final String name;
   final bool local;
@@ -997,6 +1000,9 @@ class _MachineRow extends StatelessWidget {
   final bool offline;
   final VoidCallback? onTap;
   final String? hint;
+
+  /// A line under the row, aligned with its text.
+  final Widget? footer;
 
   @override
   Widget build(BuildContext context) {
@@ -1074,6 +1080,11 @@ class _MachineRow extends StatelessWidget {
                 Padding(
                   padding: const EdgeInsets.only(top: 10),
                   child: Align(alignment: Alignment.centerRight, child: action),
+                ),
+              if (footer case final footer?)
+                Padding(
+                  padding: const EdgeInsets.only(left: 34, top: 4),
+                  child: footer,
                 ),
             ],
           );
@@ -1560,6 +1571,7 @@ class _MachinePasswordState extends State<_MachinePassword> {
                 : 'On ${widget.machine.machine.displayName}, open Machines → Set password.',
           ),
         ],
+        if (!_local) DeviceListReviewLine(notifier: widget.app),
         if (_local && _status?.hasPassword == true)
           Align(
             alignment: Alignment.centerLeft,

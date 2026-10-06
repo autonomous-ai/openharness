@@ -13,12 +13,9 @@ import { createDeviceStore, deviceStoreAgents } from '../lib/autonomous-device/s
 import { HarnessShareOwner } from '../sharing/owner.js'
 import { HarnessGrantStore } from '../sharing/grants.js'
 import { HarnessCollaborationStore } from '../sharing/collaboration.js'
-import { HarnessShareRelay, type SharedMachineReference } from '../sharing/relay.js'
 import { SharedViewerPool } from '../sharing/viewer.js'
-import { fingerprint as e2eeCoreFingerprint, b64d as e2eeCoreDecode } from '../lib/e2ee/core.js'
-import { AutonomousDeviceDirect } from '../lib/autonomous-device/direct.js'
 import { runningDevicePart, startDevicePart } from '../lib/autonomous-device/parts.js'
-import { readFileSync, writeFileSync, openSync, existsSync, rmSync, statSync, renameSync } from 'fs'
+import { readFileSync, writeFileSync, openSync, existsSync, rmSync, statSync } from 'fs'
 import { join } from 'path'
 import { spawn } from 'child_process'
 import { createServer, type Server } from 'http'
@@ -131,10 +128,10 @@ import { createAgentUpdate } from './agents/update.js'
 import { createEngineHooks, installEngineHooks } from './engines/hooks.js'
 import { createCursorTaskHooks } from './engines/cursorTasks.js'
 import { databaseHistory } from './transcripts/databaseHistory.js'
-import { createCoreApi, emptyPorts, FLEET_FALLBACKS, MODELS_FALLBACKS, MODELS_REQUESTS, MONITOR_FALLBACKS, MONITOR_OFF, MONITOR_REQUESTS, PROJECTS_REQUESTS, SEARCH_FALLBACKS, SEARCH_REQUESTS, STORE_REQUESTS, TEAMS_FALLBACKS, USAGE_REQUESTS, VIEWERS_FALLBACKS, WORKSPACES_FALLBACKS, type TeamsPort } from './api.js'
+import { createCoreApi, emptyPorts, FLEET_FALLBACKS, MODELS_FALLBACKS, MODELS_REQUESTS, MONITOR_FALLBACKS, MONITOR_OFF, MONITOR_REQUESTS, PROJECTS_REQUESTS, SEARCH_FALLBACKS, SEARCH_REQUESTS, STORE_REQUESTS, TEAMS_FALLBACKS, USAGE_REQUESTS, VIEWERS_FALLBACKS, WORKSPACES_FALLBACKS, type GatewayAccount, type GatewayOps, type GatewayStatus, type TeamsPort } from './api.js'
 import { createServiceHost, testFaults } from './serviceHost.js'
 import { startStalls } from './stall.js'
-import { createServiceLinks } from './serviceLinks.js'
+import { createServiceLinks, type ServiceLinks } from './serviceLinks.js'
 import { createViewersLink } from './viewersLink.js'
 import { createWorkspacesLink } from './workspacesLink.js'
 import { createMonitorLink } from './monitorLink.js'
@@ -147,8 +144,10 @@ import { startFleet } from '../services/fleet.js'
 import { CORE_EXIT_STOP, CORE_EXIT_UPDATE } from '../harnessd/protocol.js'
 import { localSocketPath, refuseServedDataFolder, type LocalSocketServer } from '../lib/localSocket.js'
 import { saveDaemonPort } from '../lib/daemonEndpoint.js'
+import { publishHookRoute } from '../lib/hookRoutes.js'
 import { commandBarService } from '../lib/commandBar.js'
 import { BackendSocket, isLocalClientId } from '../backendSocket.js'
+import { createGatewayLink, laneOf } from './gatewayLink.js'
 import { AutonomousDeviceService } from '../lib/autonomous-device/service.js'
 import { autonomousDeviceLocalRequest } from '../lib/autonomous-device/localApi.js'
 import { attachLocalWsServer, LOCAL_WS_PATH, LOCAL_WS_PROTOCOL_VERSION } from '../localWsServer.js'
@@ -156,18 +155,11 @@ import { createWindowRouter } from '../cable/windowRoute.js'
 import { WindowSelection } from '../cable/windowSelection.js'
 import { WindowVisit } from '../cable/windowVisit.js'
 import { WindowForm } from '../cable/windowForm.js'
-import { RemoteRelayPool } from '../lib/remoteRelay.js'
 import { TERMINAL_BINARY_VERSION } from '../lib/terminalBinary.js'
 import { TeamError } from '../teams/model.js'
 import { setVoiceRouterDeviceConnected, setVoiceRouterSessions, shutdownVoiceRouter } from '../lib/voiceRouter.js'
 import { E2eeStore } from '../lib/e2ee/store.js'
 import { isLoopbackRequest, loopbackHosts } from '../lib/loopbackRequest.js'
-import { b64e } from '../lib/e2ee/core.js'
-import { MachinePeerStore } from '../lib/e2ee/machinePeers.js'
-import { GroupSyncer, relayRequester, SELF_STAMP } from '../lib/e2ee/groupSyncer.js'
-import { DeviceLogSyncer, type DeviceLogFetched } from '../lib/e2ee/deviceLogSyncer.js'
-import { DeviceLogStore } from '../lib/e2ee/deviceLogStore.js'
-import { TrustGroupStore, type GroupMember } from '../lib/e2ee/trustGroup.js'
 import { startSelfUpdater, restore as restoreUpdate, confirm as confirmUpdate, DOWNLOAD_LIMITS, type Poller } from '../lib/selfUpdate.js'
 import { managedNodePath } from '../lib/nodeRuntime.js'
 import { startTuiUpdater } from '../tui/update.js'
@@ -680,6 +672,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const externalEngines = externalProviders()
   const externalSessions = new ExternalSessions({ providers: externalEngines, excluded: [env.ADAPTER_DATA_DIR], log: (line) => console.warn(line) })
   const openSessions = new OpenSessions({ providers: externalEngines, log: (line) => console.warn(line) })
+  // The core's one session manager: the backend link, the gateway's dials and the fleet's lane all take
+  // their tokens from it, so a refresh in flight is shared rather than raced.
+  const auth = new AuthSessionManager(backendHttpBase())
   // The core's side of the boundary its services stand on, and the ports it reaches them through (core/api.ts).
   const coreApi = createCoreApi({
     terminals: createTerminalOpener({ tmuxBackend, registry, announceSession, blocksFolder: (cwd) => !!backendRef?.purgeAgentService?.blocksFolder(cwd) }),
@@ -707,7 +702,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       const { headers } = await controlPlaneAuth()
       return (await postJson<{ gridName?: string }>('/api/grid/name', {}, headers, AbortSignal.timeout(GRID_MINT_TIMEOUT_MS))).gridName ?? null
     },
-    accessToken: () => new AuthSessionManager(backendHttpBase()).accessToken(),
+    accessToken: (options) => auth.accessToken(options),
+    // The fleet's lane's sessions are the gateway's, which holds this machine's E2EE identity; it starts
+    // below, before the fleet that seals through it.
+    lane: laneOf(() => gatewayOps.lane),
     // What a device or another machine asks of an agent here: the SAME handlers the backend socket
     // drives, called directly — the slash-command adaptation and the turn and question plumbing live there.
     runtimeProfile: (session) => runtimeProfiles.selectedModel(session),
@@ -769,7 +767,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       }
     }
   }
-  let autonomousDeviceDirect: AutonomousDeviceDirect | undefined
   let deviceStoreRef: ReturnType<typeof createDeviceStore> | undefined
   let autonomousDeviceService: AutonomousDeviceService | undefined
   let devicePartsBuilt = false
@@ -780,34 +777,50 @@ async function runForeground(session: AuthSession | null): Promise<void> {
    *  control plane is reachable again, which is precisely what an earlier attempt may have lacked. */
   let fullReconcile: (announceDevice?: boolean) => Promise<void> = async () => {}
 
-  const auth = new AuthSessionManager(backendHttpBase())
   // The account's machine id when this computer is signed in; its own durable computer id when it is
   // not. Both are just "the id this daemon serves under" to everything downstream — the local
   // websocket binds clients to it, the app selects by it — and the backend binds a machine to the
   // computer id at login, so a sign-in ADOPTS this machine rather than minting a second one.
-  // The trust group (lib/e2ee/groupSyncer.ts). Built once the relay pool exists, far below; the hook
-  // handlers and the backend callbacks declared before then reach it through this.
-  let groupSyncer: GroupSyncer | null = null
-  // The account's device key log (lib/e2ee/deviceLogSyncer.ts): signing in is what makes this machine's
-  // devices trust it, and it them. Built beside the trust group, which it feeds.
-  let devLogSyncer: DeviceLogSyncer | null = null
-  /** The identity this machine was removed under is never used again: the next start mints a new one. */
-  const spendIdentity = (): void => {
-    const identityFile = join(env.ADAPTER_DATA_DIR, 'e2e', 'identity.json')
-    try { renameSync(identityFile, `${identityFile}.removed-${Date.now()}`) } catch { /* already gone */ }
-  }
   const autonomousEnv = session?.autonomousEnv ?? env.AUTONOMOUS_ENV
-  const backend = new BackendSocket(session?.machineId ?? computerId(), auth, (connected) => {
+  const backend = new BackendSocket(session?.machineId ?? computerId(), (connected) => {
     if (!connected) return
     const sessions = registry.advertised()
     console.log(`[cli] connected · ${sessions.length} agent(s) registered`)
     void fullReconcile(true).catch((err) => {
       console.error('[runtime-profile] connect reconcile failed:', err instanceof Error ? err.message : err)
     })
-  }, computerId(), autonomousEnv)
+  })
   backendRef = backend
   // Nothing is answered until start-up is done (see the end of this function).
   backend.holdRequests()
+  // The services harnessd's master runs in their own processes (harnessd/services.ts, `HARNESSD_SERVICES`):
+  // only under a master, which is what gives this core the token they connect with. Their requests are
+  // routed to them, and answered SERVICE_UNAVAILABLE while they are down (core/serviceLinks.ts).
+  const serviceToken = process.env.HARNESSD_SUPERVISED === '1' ? process.env.HARNESSD_SERVICE_TOKEN : undefined
+  const outOfProcess = servicesTheMasterRuns(process.env, KNOWN_SERVICES)
+  // The services' own code, for those that run in this process (services/inline.ts): loaded only then, so
+  // one in its own process, as each is by default, is never loaded here.
+  const inline = KNOWN_SERVICES.some((name) => !outOfProcess.has(name)) ? await import('../services/inline.js') : null
+  // The relay and its E2EE (gateway/): the backend link, the sessions and the keys, which every remote
+  // client's frames go through, held at the same gate. In its own process by default (core/gatewayLink.ts),
+  // or here (gateway/start.ts); the socket hears it through `fromGateway` and speaks to it in the clear.
+  const account = (): GatewayAccount => ({ machineId: readAuthSession()?.machineId ?? null, signIn: signInOf(readAuthSession()?.signInEpoch) })
+  let serviceLinksRef: ServiceLinks | null = null
+  const gatewayLink = outOfProcess.has('gateway') ? createGatewayLink({
+    events: backend.fromGateway,
+    notify: (frame) => serviceLinksRef?.notify('gateway', frame) ?? false,
+    notifyBinary: (bytes) => serviceLinksRef?.notifyBinary('gateway', bytes) ?? false,
+    buffered: () => serviceLinksRef?.buffered('gateway') ?? 0,
+    call: (type, payload, waitMs) => serviceLinksRef?.call('gateway', type, payload, waitMs) ?? Promise.resolve({ error: 'SERVICE_UNAVAILABLE' }),
+    start: () => ({ machineId: backend.machineId, computerId: computerId(), autonomousEnv, signedIn: !!session?.machineId, account: account() }),
+    tokens: auth, backend: (method, path) => proxyBackend(method, path),
+  }) : null
+  const gateway = gatewayLink ?? inline!.startGateway({
+    events: backend.fromGateway, machineId: backend.machineId, computerId: computerId(), autonomousEnv,
+    signedIn: !!session?.machineId, tokens: auth, backend: (method, path) => proxyBackend(method, path), account: account(),
+  })
+  backend.useGateway(gateway.port)
+  const gatewayOps = gateway.ops
   daemonBoot.openRequests = () => backend.openRequests()
   const teams: TeamsPort = {
     prepare: (...args) => ports.teams?.prepare(...args) ?? (() => {}),
@@ -882,9 +895,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // that label is one of the placeholders pairing hands out — those name nothing.
     describeClient: (connId) => {
       if (isLocalClientId(connId)) return { kind: 'desktop', name: terminalHintMachineName() }
-      const label = backend.e2ee.sessionLabel(connId)
+      const client = backend.remoteClient(connId)
+      const label = client?.label
       if (!label || GENERIC_PAIR_LABELS.has(label)) return null
-      return { kind: backend.e2ee.sessionRole(connId) === 'device' ? 'device' : 'web', name: label }
+      return { kind: client.role === 'device' ? 'device' : 'web', name: label }
     },
     streamingAvailable: tmuxBackend != null,
     onScopedInput: (id, bytes, tabId, pasted) => teams.raw(id, bytes, tabId, pasted),
@@ -1118,11 +1132,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   })
   backend.handoffRequestProvider = createHandoffRequest({ prepare: (req) => prepareAgentHandoff(handoffDeps, req) })
 
-  // The services harnessd's master runs in their own processes (harnessd/services.ts, `HARNESSD_SERVICES`):
-  // only under a master, which is what gives this core the token they connect with. Their requests are
-  // routed to them, and answered SERVICE_UNAVAILABLE while they are down (core/serviceLinks.ts).
-  const serviceToken = process.env.HARNESSD_SUPERVISED === '1' ? process.env.HARNESSD_SERVICE_TOKEN : undefined
-  const outOfProcess = servicesTheMasterRuns(process.env, KNOWN_SERVICES)
   // The requests each service that can run in its own process answers, as core/api.ts declares them.
   const requestsOf: Record<string, readonly string[]> = { search: SEARCH_REQUESTS, store: STORE_REQUESTS, usage: USAGE_REQUESTS, monitor: MONITOR_REQUESTS, projects: PROJECTS_REQUESTS }
   // What the core keeps of the viewers in their own process, for the frames it builds (core/viewersLink.ts).
@@ -1139,15 +1148,18 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     answer: (service, query, payload) => service === 'viewers' ? viewersLink.answer(query, payload)
       : service === 'workspaces' ? workspacesLink.answer(query, payload)
       : service === 'store' ? storeLink.answer(query, payload)
-      : service === 'teams' ? teamsLink.answer(query, payload) : answerAgentQuery(coreApi, query),
+      : service === 'teams' ? teamsLink.answer(query, payload)
+      : service === 'gateway' && gatewayLink ? gatewayLink.answer(query, payload) : answerAgentQuery(coreApi, query),
+    // The gateway's own traffic: its remote clients and what they sent, and its comings and goings.
+    notice: (service, payload) => { if (service === 'gateway') gatewayLink?.notice(payload) },
+    binary: (service, bytes) => { if (service === 'gateway') gatewayLink?.binary(bytes) },
+    connected: (service) => { if (service === 'gateway') gatewayLink?.connected() },
+    disconnected: (service) => { if (service === 'gateway') gatewayLink?.disconnected() },
   })
+  serviceLinksRef = serviceLinks
   // A request a service declared goes to it: in its own process, or in this one (core/serviceHost.ts).
   backend.serviceRouter = (type, payload, asker, reply) =>
     serviceLinks.route(type, payload, asker, reply) || serviceHost.route(type, payload, asker, reply)
-  // The services' own code, for those that run in this process (services/inline.ts): loaded only then, so
-  // one in its own process, as each is by default, is never loaded here.
-  const inline = KNOWN_SERVICES.some((name) => !outOfProcess.has(name)) ? await import('../services/inline.js') : null
-
   // Session search (services/search.ts): in this process, or in its own (services/searchProcess.ts),
   // where the core tells it what changed. A purge's forgetting waits for it if it is down.
   if (outOfProcess.has('search')) {
@@ -1438,11 +1450,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     publish: (method, path, body) => proxyBackend(method, path, body),
     watchViewer: (id, send) => sharedViewers.watch(id, send),
   })
-  const shareRelay = new HarnessShareRelay(auth, env.BACKEND_WS_URL, autonomousEnv, async () => {
-    const result = await proxyBackend('GET', '/api/harness-shares')
-    if (result.status !== 200) throw new Error('Shared harnesses are temporarily unavailable.')
-    return ((result.body as { data?: { machines?: SharedMachineReference[] } }).data?.machines ?? [])
-  })
 
   /**
    * The machine list a signed-out daemon answers with: this computer, alone.
@@ -1483,6 +1490,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // Which of the owner's other computers have been reading offline — a label on the models only they
   // serve on a sleeping grid, never a removal (grid-reads-without-waking issue 03).
   machineListCache.listen((body) => observeMachineList(body, computerId()))
+  // The trust group swaps rosters only with the members the backend last said were online (gateway/start.ts).
+  machineListCache.listen(() => {
+    const { machines, source } = machineListCache.list()
+    gatewayOps.reachable(source !== 'backend' ? null : machines.filter((m) => m.state !== 'offline').map((m) => m.machineId))
+  })
 
   /**
    * `GET /api/machines` for local clients, answered from the last known-good list when the backend leg
@@ -1524,128 +1536,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   }
 
 
-  const turnHooks = createTurnHooks({
-    resolve: (id) => registry.resolve(id),
-    normalizers,
-    emit: (sessionId, events) => emitSessionEvents(sessionId, events),
-    drain: (sessionId) => watcher.pollSession(sessionId),
-    onCursorTaskStart,
-    cursorTaskHooks,
-    cursorSubagents,
-    announceTurnAborted,
-    armAgyIdleWatch,
-    clearAgyIdleWatch,
-    mirror,
-    dataDir: env.ADAPTER_DATA_DIR,
-  })
-  // Which agent a hook belongs to, and what a SessionEnd means (core/engines/hooks.ts).
-  const engineHooks = createEngineHooks({ tmuxBackend, agentReconciler, registry })
-  const { server: hookServer, port: hookPort, localSocket } = await startHookServer(daemonPort(), {
-    onCommandBar: commandBarService,
-    onAutonomousDeviceRequest: async (method, target, body) => {
-      // Until the pieces below are built; after, a piece that could not be is refused by the requests
-      // that need it, and the rest (list, status, revoke) answer from the pairings.
-      if (!devicePartsBuilt) return { status: 503, body: { error: { code: 'UNAVAILABLE', message: 'Autonomous device service is starting' } } }
-      return autonomousDeviceLocalRequest({
-        discover: async () => ({ devices: await runningDevicePart(autonomousDeviceDirect, 'Wi-Fi device link').discover() }),
-        pairStart: ({ code, device }) => runningDevicePart(autonomousDeviceDirect, 'Wi-Fi device link').pair(device, code),
-        pairStatus: () => {
-          const pending = backend.pendingPair()
-          return pending?.role === 'device' ? { state: pending.active ? 'running' : 'waiting', pairId: pending.pairId, deviceLabel: pending.label, expiresAt: pending.expiresAt } : { state: 'idle' }
-        },
-        list: () => ({ devices: backend.listPairs().filter(p => p.role === 'device').map(p => ({ ...p, id: p.fingerprint })) }),
-        status: () => ({ transport: 'direct', connected: backend.directAutonomousDeviceSessions() > 0, paired: backend.listPairs().filter(p => p.role === 'device').length, sessions: backend.directAutonomousDeviceSessions(), proto: 1 }),
-        revoke: ({ id }) => {
-          if (!backend.listPairs().some(p => p.role === 'device' && p.fingerprint === id)) throw Object.assign(new Error('Device pairing not found'), { code: 'UNKNOWN_DEVICE' })
-          const result = backend.revoke(id)
-          if (!result.ok) throw Object.assign(new Error(result.error), { code: result.error })
-          return { revoked: 1 }
-        },
-        receipt: target => ({ receipt: runningDevicePart(autonomousDeviceService, 'Wi-Fi device service').receipt(target.deviceId, target.idempotencyKey) }),
-      }, method, target, body)
-    },
-    resolveHookAgent: engineHooks.resolveHookAgent,
-    onRegistered: handleRegistered,
-    onPromptSubmitted: (id, text) => teams.started(id, text, 'hook', registry.byAgent(id)?.engine),
-    onSessionEnd: engineHooks.onSessionEnd,
-    // What the engines' own hooks say about a turn (core/turns/turnHooks.ts).
-    onTurnStart: turnHooks.onTurnStart,
-    onToolStart: turnHooks.onToolStart,
-    onTurnStop: turnHooks.onTurnStop,
-    // `harness pair <code>` → run CPace toward the waiting browser; map the result to an HTTP outcome.
-    onPair: async (code) => {
-      const r = await backend.pair(code)
-      if (r.ok) return { status: 200, body: { label: r.label, fingerprint: r.fingerprint } }
-      const codeMap: Record<string, number> = {
-        NO_INTENT: 409, EXPIRED: 409, CODE_MISMATCH: 403, BACKEND_DOWN: 503,
-        RATE_LIMITED: 429, BUSY: 409, TIMEOUT: 504,
-      }
-      return { status: codeMap[r.error] ?? 400, body: { error: r.error } }
-    },
-    onListPairs: () => ({ status: 200, body: { pairs: backend.listPairs() } }),
-    onRevoke: (id) => {
-      const r = backend.revoke(id)
-      if (r.ok) return { status: 200, body: { label: r.label, fingerprint: r.fingerprint } }
-      return { status: r.error === 'AMBIGUOUS' ? 409 : 404, body: { error: r.error } }
-    },
-    onRevokeAll: () => ({ status: 200, body: backend.revokeAll() }),
-    // `harness remote-password set|clear|status` — mutate/read the running daemon's live E2EE state
-    // directly, so `harness link connect` from another machine sees a just-set password immediately.
-    onSetRemotePassword: async (password) => {
-      const r = await backend.setRemotePassword(password)
-      return { status: 200, body: r }
-    },
-    onClearRemotePassword: () => { backend.clearRemotePassword(); return { status: 200, body: { ok: true } } },
-    onRemotePasswordStatus: () => ({ status: 200, body: backend.remotePasswordStatus() }),
-    onTrustLinkedPeer: (peer) => {
-      backend.trustPeer({ ...peer, kind: 'machine' })
-      groupSyncer?.linked({ ...peer, kind: 'machine' })
-      return { status: 200, body: { ok: true } }
-    },
-    onGroupList: () => ({ status: 200, body: { self: groupSelf(), members: new TrustGroupStore().list() } }),
-    onGroupSync: () => { void groupSyncer?.syncAll(); return { status: 200, body: { ok: true } } },
-    onGroupRemove: (selector) => {
-      const found = findGroupMember(selector)
-      if (!found.ok) return { status: found.error === 'AMBIGUOUS' ? 409 : 404, body: { error: found.error } }
-      groupSyncer?.remove(found.pub)
-      // And out of the device key log, or the next read of it would put the device back.
-      void devLogSyncer?.remove(found.pub)
-      return { status: 200, body: { label: found.label, fingerprint: found.fingerprint } }
-    },
-    onDevicesList: async () => {
-      if (!devLogSyncer) return { status: 503, body: { error: 'UNAVAILABLE' } }
-      // When each key last opened a session, from the backend — a hint for removing apps not used in a
-      // long while. Without it the list is still the list.
-      const seen = await proxyBackend('GET', '/api/device-keys/seen').catch(() => null)
-      const lastSeen = seen?.status === 200 ? (seen.body.data as { seen?: unknown } | undefined)?.seen : undefined
-      return { status: 200, body: { ...devLogSyncer.list(), lastSeen: lastSeen && typeof lastSeen === 'object' ? lastSeen : {} } }
-    },
-    onDevicesRemove: async (pub) => {
-      if (!devLogSyncer) return { status: 503, body: { error: 'UNAVAILABLE' } }
-      groupSyncer?.remove(pub)
-      const r = await devLogSyncer.remove(pub)
-      if (r.ok) return { status: 200, body: { ok: true } }
-      const status = r.error === 'NOT_IN_LOG' ? 404 : r.error === 'UNAVAILABLE' ? 503 : 409
-      return { status, body: { error: r.error, ...(r.detail ? { detail: r.detail } : {}) } }
-    },
-    onDevicesHistory: async () => {
-      if (!devLogSyncer) return { status: 503, body: { error: 'UNAVAILABLE' } }
-      return { status: 200, body: { ...(await devLogSyncer.history()) } }
-    },
-    onDevicesDismiss: (body) => {
-      if (!devLogSyncer) return { status: 503, body: { error: 'UNAVAILABLE' } }
-      devLogSyncer.dismiss(body)
-      return { status: 200, body: { ok: true } }
-    },
-    onDevicesRebaseline: async (confirm, head) => {
-      if (!devLogSyncer) return { status: 503, body: { error: 'UNAVAILABLE' } }
-      const r = await devLogSyncer.rebaseline(confirm, head)
-      if (r && 'error' in r) return { status: 409, body: { error: r.error } }
-      return r ? { status: 200, body: { ...r, applied: confirm } } : { status: 502, body: { error: 'LOG_UNAVAILABLE' } }
-    },
-    // Local dashboard (GET /api/status): adapter health + computer fingerprint + local pairings. It
-    // deliberately does NOT expose chat/transcripts — those live in the cloud web (WEB_URL/commander).
-    onStatus: async () => ({
+  // Local dashboard (GET /api/status): adapter health + computer fingerprint + local pairings. It
+  // deliberately does NOT expose chat/transcripts — those live in the cloud web (WEB_URL/commander). The
+  // fingerprint and the pairings are the gateway's, asked for each time (bounded: core/gatewayLink.ts).
+  const statusBody = async (relay: GatewayStatus): Promise<Record<string, unknown>> => ({
       machineId: backend.machineId,
       computerId: computerId(),
       // Whether this daemon booted with an account. Read LIVE, not from the boot session: a login or
@@ -1693,7 +1587,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       // gone in a second; one that stays here names the store that is slow, which no other field does.
       attaching: attaches.attaching(),
       attachQueue: attaches.queued(),
-      fingerprint: backend.e2eeFingerprint(),
+      fingerprint: relay.fingerprint,
       config: {
         watching: `${terminalConfig.backends.join(' + ')} terminals across all supported engines`,
         terminalBackends: terminalConfig.backends,
@@ -1716,9 +1610,77 @@ async function runForeground(session: AuthSession | null): Promise<void> {
         // When the conversation last moved, as in every agent frame — not the row's `touchedAt`.
         updatedAt: await lastActivityAt(s),
       }))),
-      pairs: backend.listPairs(),
-      pending: backend.pendingPair(),
-    }),
+      pairs: relay.pairs,
+      pending: relay.pending,
+    })
+
+  const turnHooks = createTurnHooks({
+    resolve: (id) => registry.resolve(id),
+    normalizers,
+    emit: (sessionId, events) => emitSessionEvents(sessionId, events),
+    drain: (sessionId) => watcher.pollSession(sessionId),
+    onCursorTaskStart,
+    cursorTaskHooks,
+    cursorSubagents,
+    announceTurnAborted,
+    armAgyIdleWatch,
+    clearAgyIdleWatch,
+    mirror,
+    dataDir: env.ADAPTER_DATA_DIR,
+  })
+  // Which agent a hook belongs to, and what a SessionEnd means (core/engines/hooks.ts).
+  const engineHooks = createEngineHooks({ tmuxBackend, agentReconciler, registry })
+  const { server: hookServer, port: hookPort, localSocket } = await startHookServer(daemonPort(), {
+    onCommandBar: commandBarService,
+    onAutonomousDeviceRequest: async (method, target, body) => {
+      // Until the pieces below are built; after, a piece that could not be is refused by the requests
+      // that need it, and the rest (list, status, revoke) answer from the pairings.
+      if (!devicePartsBuilt) return { status: 503, body: { error: { code: 'UNAVAILABLE', message: 'Autonomous device service is starting' } } }
+      // The Wi-Fi device's pairings and direct links are the gateway's (gateway/start.ts); its receipts the
+      // device service's, here.
+      const viaGateway = async (request: Parameters<GatewayOps['wifi']>[0]): Promise<Record<string, unknown>> => {
+        const answer = await gatewayOps.wifi(request)
+        if ('refused' in answer) throw Object.assign(new Error(answer.refused.message), { code: answer.refused.code })
+        return answer.result
+      }
+      return autonomousDeviceLocalRequest({
+        discover: () => viaGateway({ op: 'discover' }),
+        pairStart: ({ code, device }) => viaGateway({ op: 'pair', code, device }),
+        pairStatus: () => viaGateway({ op: 'pairStatus' }),
+        list: () => viaGateway({ op: 'list' }),
+        status: async () => ({ transport: 'direct', connected: backend.directAutonomousDeviceSessions() > 0,
+          paired: ((await viaGateway({ op: 'list' })).devices as unknown[]).length, sessions: backend.directAutonomousDeviceSessions(), proto: 1 }),
+        revoke: ({ id }) => viaGateway({ op: 'revoke', id }),
+        receipt: target => ({ receipt: runningDevicePart(autonomousDeviceService, 'Wi-Fi device service').receipt(target.deviceId, target.idempotencyKey) }),
+      }, method, target, body)
+    },
+    resolveHookAgent: engineHooks.resolveHookAgent,
+    onRegistered: handleRegistered,
+    onPromptSubmitted: (id, text) => teams.started(id, text, 'hook', registry.byAgent(id)?.engine),
+    onSessionEnd: engineHooks.onSessionEnd,
+    // What the engines' own hooks say about a turn (core/turns/turnHooks.ts).
+    onTurnStart: turnHooks.onTurnStart,
+    onToolStart: turnHooks.onToolStart,
+    onTurnStop: turnHooks.onTurnStop,
+    // `harness pair`, `unpair`, `remote-password`, `link connect`, `group` and `devices`: the keys are the
+    // gateway's, and so are these answers (gateway/start.ts).
+    onPair: (code) => gatewayOps.pair(code),
+    onListPairs: () => gatewayOps.listPairs(),
+    onRevoke: (id) => gatewayOps.revoke(id),
+    onRevokeAll: () => gatewayOps.revokeAll(),
+    onSetRemotePassword: (password) => gatewayOps.setRemotePassword(password),
+    onClearRemotePassword: () => gatewayOps.clearRemotePassword(),
+    onRemotePasswordStatus: () => gatewayOps.remotePasswordStatus(),
+    onTrustLinkedPeer: (peer) => gatewayOps.trustLinkedPeer(peer),
+    onGroupList: () => gatewayOps.groupList(),
+    onGroupSync: () => gatewayOps.groupSync(),
+    onGroupRemove: (selector) => gatewayOps.groupRemove(selector),
+    onDevicesList: () => gatewayOps.devicesList(),
+    onDevicesRemove: (pub) => gatewayOps.devicesRemove(pub),
+    onDevicesHistory: () => gatewayOps.devicesHistory(),
+    onDevicesDismiss: (body) => gatewayOps.devicesDismiss(body),
+    onDevicesRebaseline: (confirm, head) => gatewayOps.devicesRebaseline(confirm, head),
+    onStatus: async () => statusBody(await gatewayOps.status()),
     onLogs: () => {
       try { return readFileSync(LOG_FILE, 'utf-8').split('\n').slice(-120).join('\n') } catch { return '' }
     },
@@ -1747,6 +1709,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     hookServer.close()
     throw error
   }
+  publishHookRoute(env.ADAPTER_DATA_DIR, hookPort)
   // Claim the pid file for OURSELVES, and only now that the control port is bound. It used to be
   // written by whoever spawned us — so a parent that died mid-handover left a daemon nothing could
   // manage — and then, for a while, by us at the top of this function, before the bind — so a child
@@ -1765,141 +1728,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   daemonBoot.hookServer = hookServer
   daemonBoot.localSocket = localSocket
   console.log(`[cli] daemon pid ${process.pid} · v${VERSION}${process.env.ADAPTER_UPDATED_TO ? ' · updated' : ''} · listening on 127.0.0.1:${hookPort}`)
-  // Same on-disk identity `harness remote-password set`/`link connect` use (E2eeStore.init() is
-  // idempotent per file, so a separate in-memory instance here just reads the one this machine
-  // already has).
-  const relayIdentityStore = new E2eeStore()
-  relayIdentityStore.init()
-  const relayPeers = new MachinePeerStore()
-  const relayPool = new RemoteRelayPool(
-    auth,
-    env.BACKEND_WS_URL.replace(/\/$/, ''),
-    relayIdentityStore.getIdentity(),
-    relayPeers,
-    {
-      onSessionReady: (machineId) => groupSyncer?.sessionOpened(machineId),
-      // A machine the account's device key log names under this very key will trust us as soon as it
-      // reads the log: keep its pin through a few denials, and nudge it (and us) to read.
-      expectsTrust: (machineId, pub) => {
-        const m = devLogSyncer?.list().members.find((x) => x.pub === pub)
-        const expected = !!m && m.kind === 'machine' && m.machineId === machineId && !devLogSyncer?.suspendedKeys().includes(pub)
-        if (expected) void devLogSyncer?.refresh()
-        return expected
-      },
-    },
-  )
-  // Every machine and phone linked to this one, directly or through another member, trusts every other:
-  // rosters are swapped over any session that opens, and pushed on whenever they change.
-  groupSyncer = new GroupSyncer({
-    store: new TrustGroupStore(),
-    peers: new MachinePeerStore(),
-    self: groupSelf,
-    trust: (peer) => backend.trustPeer(peer),
-    untrust: (pub) => { backend.untrustPeer(pub) },
-    paired: () => backend.pairedPeers(),
-    request: relayRequester(relayPool, () => readAuthSession()?.autonomousEnv ?? env.AUTONOMOUS_ENV),
-    dropSessions: (machineId) => { relayPool.invalidate(machineId); relayPool.invalidateIsolated(machineId) },
-    suspended: () => new Set(devLogSyncer?.suspendedKeys() ?? []),
-    reachable: () => {
-      // Only a list the backend answered says who is offline; otherwise try every member.
-      const { machines, source } = machineListCache.list()
-      return source !== 'backend' ? null : new Set(machines.filter((m) => m.state !== 'offline').map((m) => m.machineId))
-    },
-    log: (line) => console.log(line),
-  })
-  backend.groupSync = groupSyncer
-  backend.onPeerLinked = (peer) => groupSyncer?.linked(peer)
-  backend.onUnpaired = (pub) => {
-    groupSyncer?.unpaired(pub)
-    // Unpairing a device here takes it out of the account's log too — or the log would trust it again.
-    void devLogSyncer?.remove(pub)
-  }
-  if (session?.machineId) groupSyncer.start()
-  devLogSyncer = new DeviceLogSyncer({
-    store: new DeviceLogStore(),
-    identity: () => { const id = relayIdentityStore.getIdentity(); return { pub: b64e(id.pub), priv: id.priv } },
-    self: () => ({ machineId: readAuthSession()?.machineId ?? null, label: thisDeviceLabel() }),
-    // Which sign-in by hand this machine is under (minted by `harness login`, never a backend answer —
-    // the machine id is one): the device log can start over only when THIS changes.
-    signIn: () => signInOf(readAuthSession()?.signInEpoch),
-    fetch: async (since) => {
-      const r = await proxyBackend('GET', `/api/device-keys?since=${since}`)
-      const data = r.status === 200 ? r.body.data as Partial<DeviceLogFetched> | undefined : undefined
-      const head = data?.head as { seq?: unknown; hash?: unknown } | undefined
-      if (!data || typeof data.acct !== 'string' || !Array.isArray(data.entries) || typeof head?.seq !== 'number'
-        || !Number.isSafeInteger(head.seq) || head.seq < 0 || typeof head.hash !== 'string') return null
-      return { acct: data.acct, head: { seq: head.seq, hash: head.hash }, entries: data.entries }
-    },
-    append: async (entry) => {
-      const p = await backend.appendDeviceLog(entry as unknown as Record<string, unknown>)
-      if (!p) return null
-      const head = p.head as { seq?: unknown; hash?: unknown } | undefined
-      const parsedHead = typeof head?.seq === 'number' && typeof head.hash === 'string' ? { seq: head.seq, hash: head.hash } : undefined
-      if (typeof p.error === 'string') return { error: p.error, ...(parsedHead ? { head: parsedHead } : {}) }
-      return parsedHead ? { head: parsedHead } : null
-    },
-    adopt: (members) => groupSyncer?.adoptFromLog(members),
-    drop: (pub) => { groupSyncer?.remove(pub) },
-    // Snapshotted once, when this machine joins the log: what it already trusts then is never news.
-    trustedNow: () => [...new Set([
-      ...backend.pairedPeers().map((p) => p.identityPub),
-      ...relayPeers.list().map((p) => p.pub),
-      ...(groupSyncer?.roster().members.map((m) => m.pub) ?? []),
-    ])],
-    tombstoned: (pub) => !!groupSyncer?.tombstoned(pub),
-    blocked: (pub) => !!groupSyncer?.isBlocked(pub),
-    announce: (m) => {
-      const fp = e2eeCoreFingerprint(e2eeCoreDecode(m.pub))
-      console.log(`[devlog] NEW DEVICE on this account: ${m.label || '(no name)'} (${m.kind}) ${fp} — not yours? harness devices remove ${fp}`)
-      backend.sendLocal({ type: 'device_key_added', payload: { pub: m.pub, label: m.label, kind: m.kind, machineId: m.machineId, at: m.addedAt, fingerprint: fp } })
-    },
-    removed: (n) => {
-      if (n.selfRemoved) console.log(`[devlog] ${n.label || '(no name)'} signed out of this account (${n.fingerprint})`)
-      else if (n.signerPending) console.log(`[devlog] ⚠ ${n.label || '(no name)'} (${n.fingerprint}) was removed by a NEW device you have not looked at: ${n.signerLabel || 'another device'} (${n.signerFingerprint}) — not yours? harness devices remove ${n.signerFingerprint}`)
-      else console.log(`[devlog] ${n.label || '(no name)'} (${n.fingerprint}) was removed from this account by ${n.signerLabel || 'another device'}`)
-      backend.sendLocal({ type: 'device_key_removed', payload: { ...n } })
-    },
-    conflict: (c) => {
-      backend.sendLocal({ type: 'device_conflict', payload: { pub: c.pub, label: c.label, fingerprint: c.fingerprint, addedAt: c.addedAt, afterJoin: c.afterJoin } })
-    },
-    suspend: (pubs) => groupSyncer?.suspend(pubs),
-    resume: () => groupSyncer?.resume(),
-    signedOut: () => {
-      // This machine's key was removed from the account: it is signed out, and comes back — after a
-      // new `harness login` — with a NEW key, which every other device announces as a new device.
-      console.log('[devlog] this machine was removed from the account\'s devices — signing out')
-      spendIdentity()
-      backend.onRevoked?.()
-    },
-    changed: () => backend.sendLocal({ type: 'device_keys_changed', payload: {} }),
-    log: (line) => console.log(line),
-  })
-  groupSyncer.devlog = devLogSyncer
-  // Removed while online: the backend's `machine_revoked` arrives before this machine reads the log, and
-  // stops it. The key is spent all the same, or the next `harness login` would come back under a banned
-  // key and be signed out again.
-  backend.onDeviceRemoved = (pub) => {
-    if (pub === b64e(relayIdentityStore.getIdentity().pub)) spendIdentity()
-  }
-  // A removal of another key under this machine id — the earlier install a reinstall waits behind — is
-  // not this machine signed out: the log re-read that follows registers this key (deviceLogSyncer).
-  backend.isOwnDeviceKey = (pub) => pub === b64e(relayIdentityStore.getIdentity().pub)
-  // A removal the trust group carried in — typically `harness group remove` on a machine that predates
-  // the log — goes into the log as well, signed by this machine, so a device that only reads the log
-  // stops trusting that key too. A key the log no longer has is left alone.
-  groupSyncer.onDropped = (pub) => {
-    if (devLogSyncer?.list().members.some((m) => m.pub === pub && !m.self)) void devLogSyncer.remove(pub)
-  }
-  backend.onDeviceKeysChanged = () => { void devLogSyncer?.refresh() }
-  if (session?.machineId) {
-    // Every time the link comes up: a sign-in from before the log existed joins it with no one doing
-    // anything, and one that joined already only reads what it missed while offline.
-    backend.onLinkUp = () => { void devLogSyncer?.register() }
-    // The link may have come up before this line; a second register in flight is harmless. A session
-    // from before sign-in epochs gets one first: adopted, so it never starts the device log over.
-    void ensureSignInEpoch().catch(() => null).then(() => devLogSyncer?.register())
-    setInterval(() => { void devLogSyncer?.refresh() }, 10 * 60_000).unref()
-  }
+  // The device key log records which sign-in this machine is under: a session from before sign-in epochs
+  // gets one first, adopted so it never starts the log over, and the gateway registers with it then.
+  if (session?.machineId) void ensureSignInEpoch().catch(() => null).then(() => gatewayOps.account(account()))
   // The dial, the window bridges and the WiFi device answer for themselves. A throw in any of them is
   // logged — at most once a minute each, with a count of the rest (core/turns/funnel.ts) — and goes no
   // further: the local socket closes a connection whose frame handler throws, so a device fault left
@@ -1937,7 +1768,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   })
   const localWsServer = attachLocalWsServer(hookServer, {
     localSocketServer: localSocket?.server ?? null,
-    shareRelay,
     services: serviceLinks,
     onSelectionReply: (connId, machineId, payload) => devices('window', () => windowSelection.reply(connId, machineId, payload)),
     onVisitReply: (connId, machineId, payload) => devices('window', () => windowVisit.reply(connId, machineId, payload)),
@@ -2067,7 +1897,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     onVoiceRouteReply: (voiceId, reply) => devices('window', () => windowRouter.reply(voiceId, reply)),
     machineId: backend.machineId,
     backend,
-    relayPool,
+    relayPool: gateway.windowRelay,
     autonomousEnv: readAuthSession()?.autonomousEnv ?? env.AUTONOMOUS_ENV,
     // A window from before it introduced itself still gets named on the far side's "took control"
     // banner: the relay knows it is this machine's desktop. Same source as `describeClient` above.
@@ -2076,7 +1906,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   })
   // Every engine's hooks, pointed at the port the local server actually bound (core/engines/hooks.ts).
   if (!env.DISABLE_HOOK_INSTALL) installEngineHooks(hookPort, { only: env.HOOK_INSTALL_ENGINES, loginShell: loginShellEnvPromise })
-  backend.setDashboardPort(hookPort) // surfaced to the web (e2e_status) so it can link here to approve
+  gatewayOps.dashboardPort(hookPort) // surfaced to the web (e2e_status) so it can link here to approve
   console.log(`[cli] local dashboard → http://127.0.0.1:${hookPort}`)
 
   // Each transcript line, through its engine's normalizer, into the funnel (core/transcripts/ingest.ts).
@@ -2619,12 +2449,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // The FIXED hook port, released before the successor binds it (no fallback → EADDRINUSE otherwise).
     // Process-owned agents stay in the persisted registry and are revalidated by its first discovery passes.
     ['the hook connections', () => (hookServer as unknown as { closeAllConnections?: () => void }).closeAllConnections?.()],
-    ['the share relay', () => shareRelay.close()], ['the shared viewers', () => sharedViewers.stop()],
+    ['the shared viewers', () => sharedViewers.stop()],
     ['the local websocket', () => localWsServer.close()], ['the hook server', () => hookServer.close()],
     ['the local socket', () => localSocket?.close()], ['Codex activity', () => codexActivity.close()],
     ['the voice router', () => shutdownVoiceRouter()],
     // The successor starts its own viewers for the agents it restores; ours must not hold the ports.
-    ['the viewers', () => ports.viewers?.stop()], ['the device link', () => autonomousDeviceDirect?.stop()],
+    ['the viewers', () => ports.viewers?.stop()], ['the gateway', () => gateway.stop()],
     // A graceful close releases the backend's one-machine claim, given a moment before the reclaim.
     ['the backend', () => backend.stop()], ['a grace', () => new Promise((r) => setTimeout(r, 1000))],
   ]).catch((err) => {
@@ -2668,7 +2498,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     normalizers.stopPollers()
     await cursorDiscovery.stop()
     await watcher.stop()
-    shareRelay.close()
     sharedViewers.stop()
     // The data folder's socket first: a successor waiting for this core to leave (lib/localSocket.ts) can
     // start as soon as it is gone, whatever the clients below take to close.
@@ -2678,7 +2507,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     codexActivity.close()
     shutdownVoiceRouter()
     await ports.viewers?.stop()
-    autonomousDeviceDirect?.stop()
+    await gateway.stop()
     await backend.stop()
     try { if (readPid() === process.pid) rmSync(PID_FILE, { force: true }) } catch { /* ignore */ }
     process.exit(coreLink.supervised && forGood(signal) ? CORE_EXIT_STOP : 0)
@@ -2725,8 +2554,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   serviceHost.start('fleet', (core, started) => {
     startFleet(core, started, {
       machines: machineListCache, guestMachines: guestMachinesBody, computerId, machineId: () => backend.machineId,
-      machineName: dialMachineName, desk: () => appPaneAgents, auth,
-      autonomousEnv: readAuthSession()?.autonomousEnv ?? env.AUTONOMOUS_ENV, identity: relayIdentityStore.getIdentity(),
+      machineName: dialMachineName, desk: () => appPaneAgents,
+      autonomousEnv: readAuthSession()?.autonomousEnv ?? env.AUTONOMOUS_ENV,
     })
   }, coreApi, FLEET_FALLBACKS)
 
@@ -2860,20 +2689,13 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     emit: (frame, deviceId) => backend.emitAutonomousDeviceEvent(frame, deviceId),
   }))
   if (appVoiceFocus) autonomousDeviceService?.appFocus(appVoiceFocus.machineId, appVoiceFocus.agentId, appVoiceFocus.connId)
-  if (autonomousDeviceService) backend.setAutonomousDeviceService(autonomousDeviceService)
-  // No link without the service: a device it connected would be answered by nothing.
-  autonomousDeviceDirect = autonomousDeviceService && startDevicePart('Wi-Fi device link', () => new AutonomousDeviceDirect({
-    machineId: backend.machineId, label: hostname(),
-    receive: (connId, frame, pairing) => backend.receiveDirectDevice(connId, frame, pairing),
-    attach: (connId, send) => backend.attachDirectDevice(connId, send),
-    detach: connId => backend.detachDirectDevice(connId),
-    pending: () => backend.pendingPair(), pendingConnection: () => backend.e2ee.pendingConnection(),
-    authenticatedFingerprint: connId => { const pub = backend.e2ee.sessionIdentity(connId); return pub ? e2eeCoreFingerprint(e2eeCoreDecode(pub)) : null },
-    pairedFingerprint: connId => backend.pairedDirectFingerprint(connId),
-    pair: code => backend.pair(code), paired: () => backend.listPairs(),
-  }, env.ADAPTER_DATA_DIR))
-  backend.onDirectDeviceRevoked = fp => autonomousDeviceDirect?.revoked(fp)
-  autonomousDeviceDirect?.start()
+  // The device's requests reach the service through its relay in the socket; its sessions and its direct
+  // links are the gateway's, which starts the links only with the service up: a device it connected would
+  // be answered by nothing.
+  if (autonomousDeviceService) {
+    backend.setAutonomousDeviceService(autonomousDeviceService, (identity) => gatewayOps.revokeIdentity(identity))
+    gatewayOps.wifiService(true)
+  }
   devicePartsBuilt = true
 
   // Worktrees Harness made that no live or stopped harness uses and nothing would miss
@@ -2955,30 +2777,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   daemonBoot.openRequests = null
   coreLink.ready()
   console.log('[cli] ready')
-}
-
-/** This machine as its trust group knows it — see groupSyncer.ts's SELF_STAMP for the stamp. */
-let groupSelfPub: string | null = null
-
-function groupSelf(): GroupMember {
-  groupSelfPub ??= b64e(new E2eeStore().init().pub)
-  const machineId = readAuthSession()?.machineId
-  return { pub: groupSelfPub, kind: 'machine', label: hostname(), at: SELF_STAMP, ...(machineId ? { machineId } : {}) }
-}
-
-/** A trust-group member by machine id, list number, or fingerprint (full or unique prefix). */
-function findGroupMember(selector: string): { ok: true; pub: string; label: string; fingerprint: string } | { ok: false; error: 'NOT_FOUND' | 'AMBIGUOUS' } {
-  const members = new TrustGroupStore().list()
-  const norm = (v: string): string => v.toUpperCase().replace(/[·\s-]/g, '')
-  const byIndex = /^\d+$/.test(selector) ? members[Number(selector) - 1] : undefined
-  const byMachine = members.find((m) => m.machineId === selector)
-  const hit = byMachine ?? byIndex ?? (() => {
-    const matches = members.filter((m) => norm(m.fingerprint).startsWith(norm(selector)))
-    return matches.length > 1 ? 'AMBIGUOUS' as const : matches[0]
-  })()
-  if (hit === 'AMBIGUOUS') return { ok: false, error: 'AMBIGUOUS' }
-  if (!hit || !selector.trim()) return { ok: false, error: 'NOT_FOUND' }
-  return { ok: true, pub: hit.pub, label: hit.label, fingerprint: hit.fingerprint }
 }
 
 /**

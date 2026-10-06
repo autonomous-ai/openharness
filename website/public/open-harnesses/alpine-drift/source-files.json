@@ -1,0 +1,8 @@
+[
+  "index.html",
+  "studio.json",
+  "package.json",
+  "tsconfig.json",
+  "src/main.ts",
+  "src/style.css"
+]

@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { BackendSocket } from './backendSocket.js'
+import { dispatchDown, relaySocket } from './testing/relaySocket.js'
 import { codexMessagesToEvents, windowCodexLines } from './engines/codex/normalizer.js'
 import { messagesToEvents, subagentStatsFromRawLines, windowRawLines } from './lib/normalize.js'
 import { registry } from './lib/registry.js'
@@ -42,7 +43,7 @@ describe.each([
     dir = mkdtempSync(join(root, 'history-'))
     file = join(dir, 'transcript.jsonl')
     writeFileSync(file, scenario().join('\n') + '\n')
-    socket = new BackendSocket('fixture')
+    socket = relaySocket('fixture')
     bindHistory(socket)
     frames = []
     socket.registerLocalClient('local:history', { sendFrame: (frame) => { frames.push(frame as never); return true }, sendBinary: () => true })
@@ -61,7 +62,7 @@ describe.each([
   let requests = 0
   async function ask(type: string, payload: Record<string, unknown>): Promise<Record<string, any>> {
     const requestId = `r${++requests}`
-    await (socket as any).dispatchDown({ type, payload: { requestId, ...payload } }, 'local:history', 'local')
+    await dispatchDown(socket, { type, payload: { requestId, ...payload } }, 'local:history', 'local')
     return frames.find((frame) => frame.type === `${type}_result` && frame.payload.requestId === requestId)!.payload
   }
 

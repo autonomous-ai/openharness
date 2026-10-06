@@ -1,4 +1,3 @@
-import { SharingEndedError, type HarnessShareRelay } from './sharing/relay.js'
 import { randomUUID } from 'node:crypto'
 import type { AppSwarms } from './cable/cableSession.js'
 import { notificationReadToken, type UnreadNotification } from './cable/notificationRead.js'
@@ -15,7 +14,8 @@ import {
   TERMINAL_LOCAL_PASTE_MAX_PAYLOAD_BYTES,
   type TerminalBinaryClear,
 } from './lib/terminalBinary.js'
-import { RelayConnectError, type RelaySession, type RemoteRelayPool } from './lib/remoteRelay.js'
+import { RelayConnectError } from './lib/relayFrames.js'
+import type { WindowRelay, WindowRelaySession } from './core/api.js'
 // Reserved retired feature frames: transport refusals only, no optional implementation.
 const DAEMON_IN_TYPES = new Set(['daemon_act', 'daemon_presence', 'daemon_talk', 'daemon_open', 'daemon_shown', 'daemon_confirm'])
 const DAEMON_PLATE_GET = 'daemon_plate_get'
@@ -50,9 +50,9 @@ export interface LocalWsServerOptions {
   /** The daemon's Unix-socket server (lib/localSocket.ts), served the same endpoint beside TCP. */
   localSocketServer?: http.Server | null
   /** Serves a `machine_select` for any OTHER machine this signed-in user owns, by relaying to
-   *  backend's `/api/web-ws` — see lib/remoteRelay.ts. Omit to keep today's own-machine-only behavior. */
-  relayPool?: RemoteRelayPool
-  shareRelay?: HarnessShareRelay
+   *  backend's `/api/web-ws` — see lib/remoteRelay.ts — and one for a harness shared with this account
+   *  (`shareId`, sharing/relay.ts). Both are the gateway's. Omit to keep today's own-machine-only behavior. */
+  relayPool?: WindowRelay
   autonomousEnv?: string
   /**
    * Who a window on this computer is, for a `terminal_open` it relays to another machine without
@@ -115,7 +115,8 @@ export interface LocalWsServerOptions {
   /** The core's end of its out-of-process services (core/serviceLinks.ts): a `machine_select` with
    *  `role: "service"` is handed here, and the connection is the service's from then on. */
   services?: {
-    accept(service: string, token: string, sink: LocalClientSink, close: (code: number, reason: string) => void): { receive(frame: Frame): void; closed(): void } | null
+    accept(service: string, token: string, sink: LocalClientSink & { buffered(): number }, close: (code: number, reason: string) => void):
+      { receive(frame: Frame): void; receiveBinary(bytes: Uint8Array): void; closed(): void } | null
   }
   /**
    * The window answering a `voice_route_request` — words spoken into the dial that IT was asked to route.
@@ -330,13 +331,13 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
     // Which machine THIS connection is bound to. The app opens one local socket per machine, so it is
     // fixed for the life of the connection — set once, beside `selected`.
     let boundMachineId: string | null = null
-    let relay: RelaySession | null = null
+    let relay: WindowRelaySession | null = null
     /** Whether this connection ever reported a tile roster — only then is clearing it ours to do. */
     let sentPanes = false
     let sentSwarms = false
     let chain = Promise.resolve()
     /** Set when this connection is one of the core's services, not a window. */
-    let serviceLink: { receive(frame: Frame): void; closed(): void } | null = null
+    let serviceLink: { receive(frame: Frame): void; receiveBinary(bytes: Uint8Array): void; closed(): void } | null = null
 
     const sink: LocalClientSink = {
       sendFrame: (frame) => {
@@ -373,14 +374,16 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
         close(4403, 'machine mismatch')
         return
       }
+      // A harness someone shared with this account, watched read-only through the gateway, which holds the
+      // Share relay's socket (sharing/relay.ts): 4403 when the share ended, 1013 when it is out of reach.
       if (typeof payload.shareId === 'string') {
-        if (!options.shareRelay) { close(4403, 'Sharing is unavailable'); return }
+        if (!options.relayPool?.acquireShare) { close(4403, 'Sharing is unavailable'); return }
         try {
-          relay = await options.shareRelay.acquire(requestedMachineId, payload.shareId, terminalSink, close)
+          relay = await options.relayPool.acquireShare(requestedMachineId, payload.shareId, terminalSink, close)
           if (ws.readyState !== WebSocket.OPEN) { relay.detach(); return }
           selected = true
         } catch (error) {
-          close(error instanceof SharingEndedError ? 4403 : 1013,
+          close(error instanceof RelayConnectError && error.closeCode ? error.closeCode : 1013,
             error instanceof Error ? error.message.slice(0, 120) : 'Sharing unavailable')
         }
         return
@@ -391,7 +394,7 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
       // account's machine id while a service names this computer's, and matching them refused every
       // service of every signed-in daemon (found by the release rehearsal, signed in).
       if (payload.role === 'service') {
-        const link = options.services?.accept(String(payload.service ?? ''), String(payload.token ?? ''), sink, close) ?? null
+        const link = options.services?.accept(String(payload.service ?? ''), String(payload.token ?? ''), { ...sink, buffered: () => ws.bufferedAmount }, close) ?? null
         if (!link) { close(4401, 'service refused'); return }
         serviceLink = link
         selected = true
@@ -462,7 +465,8 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
       chain = chain.then(() => {
         if (!selected) return selectMachine(raw, isBinary)
         if (serviceLink) {
-          const frame = isBinary ? null : jsonFrame(raw)
+          if (isBinary) { serviceLink.receiveBinary(binaryBytes(raw)); return }
+          const frame = jsonFrame(raw)
           if (!frame) { close(4400, 'invalid json frame'); return }
           serviceLink.receive(frame)
           return

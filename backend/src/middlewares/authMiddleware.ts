@@ -4,6 +4,7 @@ import type { AuthUser } from '../lib/ssoAuth.js'
 import { ForbiddenError } from '../errors/index.js'
 import { parseAutonomousEnvironment, type AutonomousEnvironment } from '../lib/autonomousEnvironment.js'
 import { countryCodeFromHeaders, stampUserCountry } from '../lib/clientGeo.js'
+import { isPublicCommunityRead } from '../lib/communityAccess.js'
 
 /**
  * Public local routes (no user access token). Data-plane requests never reach Fastify — they're
@@ -71,6 +72,7 @@ export function registerAuthMiddleware(
   app.addHook('onRequest', async (request: FastifyRequest, reply: FastifyReply) => {
     if (shouldSkipAuth(request.url)) return
     const token = bearerToken(request.headers['authorization'])
+    if (!token && isPublicCommunityRead(request.method, request.url)) return
     // Anonymous public-link discovery only. With a token, authenticate normally so private links
     // and commenting use the real account. Never exempt a mutation or the invitation inventory.
     if (!token && request.method === 'GET' && /^\/api\/shared-agents\/[a-f0-9-]{36}$/.test(request.url.split('?')[0])) return

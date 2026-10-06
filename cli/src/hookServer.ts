@@ -101,25 +101,25 @@ export interface HookServerHandlers {
   /** `harness pair <code>` from a second CLI process: run CPace toward the waiting browser. */
   onPair?: (code: string) => Promise<PairOutcome>
   /** `harness pairings` — list E2EE-paired browsers. */
-  onListPairs?: () => PairOutcome
+  onListPairs?: () => PairOutcome | Promise<PairOutcome>
   /** `harness unpair <id>` — unpair one browser (by fingerprint/prefix/index). */
-  onRevoke?: (id: string) => PairOutcome
+  onRevoke?: (id: string) => PairOutcome | Promise<PairOutcome>
   /** `harness unpair --all` — unpair every browser. */
-  onRevokeAll?: () => PairOutcome
+  onRevokeAll?: () => PairOutcome | Promise<PairOutcome>
   /** `harness remote-password set` — stretch + persist a new persistent remote password on the
    *  running daemon's live E2EE state. */
   onSetRemotePassword?: (password: string) => Promise<PairOutcome>
   /** `harness remote-password clear` — remove the persistent remote password. */
-  onClearRemotePassword?: () => PairOutcome
+  onClearRemotePassword?: () => PairOutcome | Promise<PairOutcome>
   /** `harness remote-password status` — whether one is set, and its fingerprint. */
-  onRemotePasswordStatus?: () => PairOutcome
+  onRemotePasswordStatus?: () => PairOutcome | Promise<PairOutcome>
   /** `harness link connect` — the machine this one just linked pinned it back, so trust that machine
    *  here too (the mutual half of the link). Goes through the daemon: it holds paired.json in memory. */
-  onTrustLinkedPeer?: (peer: { pub: string; machineId: string; label: string }) => PairOutcome
+  onTrustLinkedPeer?: (peer: { pub: string; machineId: string; label: string }) => PairOutcome | Promise<PairOutcome>
   /** `harness group list|sync|remove` — the trust group this machine belongs to (groupSyncer.ts). */
-  onGroupList?: () => PairOutcome
-  onGroupSync?: () => PairOutcome
-  onGroupRemove?: (selector: string) => PairOutcome
+  onGroupList?: () => PairOutcome | Promise<PairOutcome>
+  onGroupSync?: () => PairOutcome | Promise<PairOutcome>
+  onGroupRemove?: (selector: string) => PairOutcome | Promise<PairOutcome>
   /** `harness devices list|remove|rebaseline` and the window's Devices list — the account's device key
    *  log as this machine verified it (lib/e2ee/deviceLogSyncer.ts). */
   onDevicesList?: () => Promise<PairOutcome>
@@ -128,7 +128,7 @@ export interface HookServerHandlers {
   /** `harness devices history` and the window's History — every add and remove, as this machine verified it. */
   onDevicesHistory?: () => Promise<PairOutcome>
   /** `harness devices dismiss` and the window's "It's mine" / "Got it" — mark new devices as seen. */
-  onDevicesDismiss?: (body: { pub?: string; pubs?: string[]; baseline?: boolean }) => PairOutcome
+  onDevicesDismiss?: (body: { pub?: string; pubs?: string[]; baseline?: boolean }) => PairOutcome | Promise<PairOutcome>
   /** Local dashboard status snapshot (GET /api/status). */
   onStatus?: () => Record<string, unknown> | Promise<Record<string, unknown>>
   /** Recent adapter log tail (GET /api/logs). */
@@ -686,7 +686,7 @@ export function startHookServer(
       if (req.method === 'POST' && url === '/api/remote-password/clear') {
         if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
         if (!handlers.onClearRemotePassword) { json(503, { error: 'UNAVAILABLE' }); return }
-        const out = handlers.onClearRemotePassword(); json(out.status, out.body); return
+        const out = await handlers.onClearRemotePassword(); json(out.status, out.body); return
       }
 
       // `harness link connect` → trust the machine just linked back, on the daemon's live E2EE state.
@@ -698,20 +698,20 @@ export function startHookServer(
         const isKey = typeof body.pub === 'string' && /^[A-Za-z0-9+/]{43}=$/.test(body.pub) // 32-byte Ed25519, base64
         if (!isKey || typeof body.machineId !== 'string' || !/^[a-f0-9]{32}$/.test(body.machineId)) { json(400, { error: 'BAD_PEER' }); return }
         const label = typeof body.label === 'string' && body.label.trim() ? body.label.trim().slice(0, 60) : body.machineId
-        const out = handlers.onTrustLinkedPeer({ pub: body.pub as string, machineId: body.machineId, label })
+        const out = await handlers.onTrustLinkedPeer({ pub: body.pub as string, machineId: body.machineId, label })
         json(out.status, out.body); return
       }
 
       // `harness group list` → the trust group's members. Read-only (keys and labels, no secrets).
       if (req.method === 'GET' && url === '/api/group') {
         if (!handlers.onGroupList) { json(503, { error: 'UNAVAILABLE' }); return }
-        const out = handlers.onGroupList(); json(out.status, out.body); return
+        const out = await handlers.onGroupList(); json(out.status, out.body); return
       }
       // `harness group sync` → compare rosters with every reachable member now.
       if (req.method === 'POST' && url === '/api/group/sync') {
         if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
         if (!handlers.onGroupSync) { json(503, { error: 'UNAVAILABLE' }); return }
-        const out = handlers.onGroupSync(); json(out.status, out.body); return
+        const out = await handlers.onGroupSync(); json(out.status, out.body); return
       }
       // `harness group remove <id|#|fp>` / `harness link unlink` → drop a member everywhere.
       if (req.method === 'POST' && url === '/api/group/remove') {
@@ -720,7 +720,7 @@ export function startHookServer(
         let body: { selector?: unknown }
         try { body = JSON.parse(await readBody(req)) as typeof body } catch { json(400, { error: 'bad json' }); return }
         if (typeof body.selector !== 'string' || !body.selector.trim()) { json(400, { error: 'MISSING_SELECTOR' }); return }
-        const out = handlers.onGroupRemove(body.selector.trim()); json(out.status, out.body); return
+        const out = await handlers.onGroupRemove(body.selector.trim()); json(out.status, out.body); return
       }
 
       // `harness devices list` / the window's Devices list → the account's devices, as this machine's
@@ -775,7 +775,7 @@ export function startHookServer(
         // The keys a window displayed, so a key accepted since the window read the list is not cleared unseen.
         if (body.pubs !== undefined && (!Array.isArray(body.pubs) || body.pubs.length > 256
           || body.pubs.some((k) => typeof k !== 'string' || !k || k.length > 256))) { json(400, { error: 'BAD_PUBS' }); return }
-        const out = handlers.onDevicesDismiss({
+        const out = await handlers.onDevicesDismiss({
           ...(typeof body.pub === 'string' ? { pub: body.pub } : {}),
           ...(Array.isArray(body.pubs) ? { pubs: body.pubs as string[] } : {}),
           ...(body.baseline === true ? { baseline: true } : {}),
@@ -786,7 +786,7 @@ export function startHookServer(
       // gating tier as /api/pairs.
       if (req.method === 'GET' && url === '/api/remote-password/status') {
         if (!handlers.onRemotePasswordStatus) { json(503, { error: 'UNAVAILABLE' }); return }
-        const out = handlers.onRemotePasswordStatus(); json(out.status, out.body); return
+        const out = await handlers.onRemotePasswordStatus(); json(out.status, out.body); return
       }
 
       // Local GUI clients (e.g. the desktop app): read the full machine list / rename or delete one /
@@ -873,7 +873,7 @@ export function startHookServer(
       // `harness pairings` — list paired browsers.
       if (req.method === 'GET' && url === '/api/pairs') {
         if (!handlers.onListPairs) { json(503, { error: 'UNAVAILABLE' }); return }
-        const out = handlers.onListPairs(); json(out.status, out.body); return
+        const out = await handlers.onListPairs(); json(out.status, out.body); return
       }
 
       // `harness unpair <id>` — unpair one browser; signals it (if online) to re-pair.
@@ -883,14 +883,14 @@ export function startHookServer(
         let body: { id?: string }
         try { body = JSON.parse(await readBody(req)) as { id?: string } } catch { json(400, { error: 'bad json' }); return }
         if (!body.id) { json(400, { error: 'MISSING_ID' }); return }
-        const out = handlers.onRevoke(body.id); json(out.status, out.body); return
+        const out = await handlers.onRevoke(body.id); json(out.status, out.body); return
       }
 
       // `harness unpair --all` — unpair every browser.
       if (req.method === 'POST' && url === '/api/revoke-all') {
         if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
         if (!handlers.onRevokeAll) { json(503, { error: 'UNAVAILABLE' }); return }
-        const out = handlers.onRevokeAll(); json(out.status, out.body); return
+        const out = await handlers.onRevokeAll(); json(out.status, out.body); return
       }
 
       json(404, { error: 'not found' })

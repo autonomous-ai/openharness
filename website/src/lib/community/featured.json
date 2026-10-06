@@ -1,0 +1,98 @@
+[
+  {
+    "slug": "ribbon-lamp",
+    "title": "Light, shaped by you",
+    "description": "Ask for the controls that matter to your design. Turn them yourself, watch Blender rebuild the geometry, and keep the directions you want to come back to.",
+    "category": "Design",
+    "harnessId": "autonomous/blender",
+    "harnessName": "Blender",
+    "cover": "cover.png",
+    "recording": "/open-harnesses/ribbon-lamp/recording.mp4",
+    "prompt": "Design a sculptural desk lamp from twisting ribbons. Give me Shape Lab controls for height, twist, ribbon count and finish, with sensible ranges. I want to explore the proportions myself and keep a few directions before the final render.",
+    "result": "Real Blender session \u00b7 shape a ribbon lamp and keep named design variants. Each preview builds real Blender geometry. Build time depends on the scene; previews stay separate from the main export until the next full build. Fork includes the editable project; Codex is the selected agent for continuing it."
+  },
+  {
+    "slug": "signal-study",
+    "title": "A different kind of signal",
+    "description": "Capture a circuit, turn a component value and overlay the new trace. Place two cursors around the part that interests you and keep the observations with the circuit that produced them.",
+    "category": "Experiments",
+    "harnessId": "autonomous/circuitjs",
+    "harnessName": "CircuitJS",
+    "cover": "cover.png",
+    "recording": "/open-harnesses/signal-study/recording.mp4",
+    "prompt": "Build a 100 Hz RC low-pass filter with a 1 k\u03a9 resistor and 1 \u00b5F capacitor. Label the input and output nodes. I want to capture both in Scope Lab, double the resistance and compare the amplitude and timing.",
+    "result": "Real CircuitJS solver \u00b7 compare RC filter traces at 1 k\u03a9 and 2 k\u03a9, measure and keep both. Each capture starts a separate native simulation from the current circuit export. It uses a fresh time origin; initial transients can differ. Keep both captures to preserve a comparison. Fork includes the editable project; Codex is the selected agent for continuing it."
+  },
+  {
+    "slug": "alpine-drift",
+    "title": "Alpine Drift",
+    "description": "Miss a jump, rewind and try another move. When something feels great or needs work, pin the exact moment so the agent can see what you mean.",
+    "category": "Games",
+    "harnessId": "autonomous/godogen",
+    "harnessName": "Godogen",
+    "cover": "cover.png",
+    "recording": "/open-harnesses/alpine-drift/recording.mp4",
+    "prompt": "Make a low-poly snowboarding game with pine trees, six golden gates, carving and jumping. Support Rewind and Try from here for the complete game state so I can retry a jump and pin precise playtest feedback.",
+    "result": "Alpine Drift \u00b7 a real playable run, rewind, retry and saved feedback. Rewind needs snapshot support in the authored game. Saved moments preserve compiled output; editable source stays in the project, and external assets still need their original service. Fork includes the editable project; Codex is the selected agent for continuing it."
+  },
+  {
+    "slug": "better-questions",
+    "title": "Ask a better question",
+    "description": "Before asking a whole spreadsheet, compare two versions of a question on frozen rows. Read the answers side by side and use your judgment to decide what the wording missed.",
+    "category": "Data",
+    "harnessId": "autonomous/jev-sheets",
+    "harnessName": "Jev Sheets",
+    "cover": "cover.png",
+    "recording": "/open-harnesses/better-questions/recording.mp4",
+    "prompt": "Create an offline practice sheet of fictional support tickets. Help me compare two urgency questions on the same frozen rows in Question Lab, inspect changed answers and unsure rows, and keep the trial with my notes.",
+    "result": "Offline practice recording \u00b7 fictional support tickets \u00b7 paired questions and a kept review. Real answers send sampled rows to your connected Jev provider and require a key. Offline mode is practice only. Confidence and reviewer preferences are not measures of accuracy. Fork includes the editable project; Codex is the selected agent for continuing it."
+  },
+  {
+    "slug": "two-futures",
+    "title": "One robot. Two futures.",
+    "description": "Take one moment in a robot's run and see two futures unfold together. Change the ground, gravity or a sideways shove, then scrub to the moment they part ways.",
+    "category": "Experiments",
+    "harnessId": "autonomous/mujoco",
+    "harnessName": "MuJoCo",
+    "cover": "cover.png",
+    "recording": "/open-harnesses/two-futures/recording.mp4",
+    "prompt": "Load the Unitree Go2 in MuJoCo. Let me pin a moment, apply a 100 N sideways shove for 0.15 seconds and compare the next three seconds with the original world. I want to inspect the greatest measured difference and keep a reproducible experiment.",
+    "result": "Real Go2 session \u00b7 100 N shove \u00b7 compare two futures and keep the experiment. Both futures use the same recorded controls. This compares open-loop physics; it does not rerun the Python controller. Fork includes the editable project; Codex is the selected agent for continuing it."
+  },
+  {
+    "slug": "molecular-shapes",
+    "title": "The shape of a molecule",
+    "description": "Choose a flexible bond and move through its sampled shapes. Watch atoms approach one another, follow the calculated energy curve and keep a pose worth investigating.",
+    "category": "Experiments",
+    "harnessId": "autonomous/rdkit",
+    "harnessName": "RDKit",
+    "cover": "cover.png",
+    "recording": "/open-harnesses/molecular-shapes/recording.mp4",
+    "prompt": "Build 3D conformers of butane and phenethyl acetate with explicit hydrogens. Let me rotate a flexible bond in the acetate, compare the sampled shapes and rigid MMFF94 energy, then keep a pose and a reproducible study.",
+    "result": "Phenethyl acetate \u00b7 real rigid MMFF94 bond scan \u00b7 25 poses and a kept study. This is a rigid MMFF94 scan, with the other internal coordinates fixed. It does not establish a relaxed barrier, equilibrium population or biological activity. Fork includes the editable project; Codex is the selected agent for continuing it."
+  },
+  {
+    "slug": "lantern-room",
+    "title": "Lantern room",
+    "description": "A track is an instrument you can play. Bring voices in and out, try a code change and mark the part you want to hear again. Keep the sound of that performance.",
+    "category": "Music",
+    "harnessId": "autonomous/strudel",
+    "harnessName": "Strudel",
+    "cover": "cover.png",
+    "recording": "/open-harnesses/lantern-room/recording.mp4",
+    "prompt": "Write a warm 112 bpm synth groove with five named voices: Pulse drums, Sand noise, Low tide bass, Glass melody and Lantern chords. Let me bring voices in and out, mark a moment and keep a recording of my live performance.",
+    "result": "Lantern room \u00b7 real 112 bpm performance with audio \u00b7 keep the WAV, source and markers. Takes capture up to two minutes of the instrument's output. The WAV preserves what you heard from it; external samples and custom imports are not bundled. Fork includes the editable project; Codex is the selected agent for continuing it."
+  },
+  {
+    "slug": "portable-light",
+    "title": "Light that travels",
+    "description": "Hold a draft still while you read it. Quote a sentence, circle a detail or leave a page note, then compare the next draft without losing the one you reviewed.",
+    "category": "Documents",
+    "harnessId": "autonomous/typst",
+    "harnessName": "Typst",
+    "cover": "cover.png",
+    "recording": "/open-harnesses/portable-light/recording.mp4",
+    "prompt": "Make a three-page Typst design brief for a portable reading light, with a proportion sketch, provisional targets and open questions. I want to hold the PDF, annotate text and areas, then compare a revision without losing the draft I reviewed.",
+    "result": "Portable light \u00b7 real Typst PDF \u00b7 anchored notes carried into a later revision. Changed or repeated quotations need human inspection. Area and page notes stay with the reviewed PDF. The packet includes the PDF and feedback; editable source stays in the workspace. Fork includes the editable project; Codex is the selected agent for continuing it."
+  }
+]

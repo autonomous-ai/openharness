@@ -54,6 +54,10 @@ class FedoraPayload(unittest.TestCase):
         self.assertEqual((destination / 'usr/lib/harness/cli.mjs').read_bytes(), b'cli')
         self.assertEqual((destination / 'usr/lib/harness/harness-tui').read_bytes(),
                          (self.runtime / 'harness-tui').read_bytes())
+        session = (destination / 'usr/lib/harness-os/session').read_text()
+        self.assertIn('if labwc -C ', session)
+        self.assertNotIn('/usr/lib/harness-os/labwc -C', session)
+        self.assertNotIn('usr/lib/harness-os/labwc', result['files'])
 
     def test_inert_profile_contains_no_base_system_or_fixture_takeover(self):
         destination = self.folder / 'payload'

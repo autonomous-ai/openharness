@@ -359,9 +359,31 @@ function parseDarwinProcessImages(stdout: string | null): Map<number, string> {
   return images
 }
 
-/** macOS has no /proc. Prefer the bundled read-only kernel image probe; retain
- * both lsof readers for missing paths, inside the same total 3s budget.
- * Never cache by PID: exec can replace an image without changing its birth. */
+export function createDeletedImageMemo({ exists }: { exists: (path: string) => boolean }) {
+  const memo = new Map<number, { startMarker: string; args: string; path: string }>()
+  return {
+    recall(row: ProcessRow): string | undefined {
+      const entry = memo.get(row.pid)
+      return entry && entry.startMarker === row.startMarker && entry.args === row.args && !exists(entry.path) ? entry.path : undefined
+    },
+    remember({ pid, startMarker, args }: ProcessRow, path: string): void {
+      if (exists(path)) memo.delete(pid)
+      else memo.set(pid, { startMarker, args, path })
+    },
+    forget(pid: number): void { memo.delete(pid) },
+    prune(rows: readonly ProcessRow[]): void { for (const pid of memo.keys()) if (!rows.some(row => row.pid === pid)) memo.delete(pid) },
+  }
+}
+const deletedImages = createDeletedImageMemo({ exists: existsSync })
+
+/** macOS has no /proc. Prefer the bundled kernel probe and retain both lsof
+ * fallbacks within the same 3s budget. Never cache by PID alone: exec can replace
+ * an image without changing its birth. Memo safety rests on !exists(path) and
+ * the helper reporting the PID unavailable this same pass; birth and args must match.
+ * We accept an exec into another binary keeping argv and birth, then deletion
+ * before the helper reads it: only the imagePath evidence string can be wrong.
+ * Claude auto-updates left deleted images costing lsof -d txt ~18 ms every
+ * 5 s (~0.4% core), measured 2026-10-06. */
 async function darwinProcessImages(rows: readonly ProcessRow[]): Promise<{
   images: Map<number, string>; stale: Set<number>
 }> {
@@ -374,8 +396,13 @@ async function darwinProcessImages(rows: readonly ProcessRow[]): Promise<{
   const normalizeStart = (marker: string) => marker.trim().split(/\s+/)
     .map((part, index) => index === 2 ? String(Number(part)) : part).join(' ')
   for (const row of rows) {
-    const image = native.get(row.pid)
-    if (!image) continue
+    const image = native.images.get(row.pid)
+    if (!image) {
+      const path = native.unavailable.has(row.pid) && deletedImages.recall(row)
+      if (path) images.set(row.pid, path)
+      continue
+    }
+    deletedImages.forget(row.pid)
     if (normalizeStart(image.startMarker) === normalizeStart(row.startMarker)) images.set(row.pid, image.path)
     // The PID changed owners since ps. Do not combine the new executable with
     // old ancestry/arguments, or let the fallback reintroduce that stale row.
@@ -396,20 +423,23 @@ async function darwinProcessImages(rows: readonly ProcessRow[]): Promise<{
       images.set(pid, path)
     }
   }
+  for (const row of rows) if (native.unavailable.has(row.pid) && images.has(row.pid)) deletedImages.remember(row, images.get(row.pid)!)
   return { images, stale }
 }
 
 /**
  * Attach executable-image and entrypoint identity to selected process rows.
  *
- * Callers pass only descendants of terminal roots (or one saved PID during validation), so native
- * binary ownership is available for every engine without asking lsof to inspect the whole machine.
+ * The rows argument is the whole process table used for memo pruning.
+ * Only selectedPids are probed: terminal descendants or one saved PID during validation.
  */
 export async function enrichProcessRows(
   rows: ProcessRow[],
   selectedPids: ReadonlySet<number> = new Set(rows.map((row) => row.pid)),
 ): Promise<ProcessRow[]> {
   const candidates = rows.filter((row) => selectedPids.has(row.pid))
+  // Prune the full table so one-pane lookups keep other panes' memo (18 ms/pass, 2026-10-06).
+  if (platform() === 'darwin') deletedImages.prune(rows)
   if (!candidates.length) return rows
   const imagePaths = new Map<number, string>()
   const imageIdentities = new Map<number, ReturnType<typeof executableFileIdentity>>()

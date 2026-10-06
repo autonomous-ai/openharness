@@ -434,8 +434,10 @@ def main():
     parser.add_argument('--memory-mib', type=int, choices=[1024, 2048, 4096], default=1024)
     parser.add_argument('--check', choices=['focus', 'suspend'], default='focus')
     parser.add_argument('--wlrctl', type=Path, required=True)
-    parser.add_argument('--browser-script', type=Path, required=True)
-    parser.add_argument('--compositor-config', type=Path, required=True)
+    parser.add_argument('--browser-script', type=Path,
+                        help='Explicitly overlay a candidate browser launcher; omit to test the packaged image')
+    parser.add_argument('--compositor-config', type=Path,
+                        help='Explicitly overlay a candidate compositor configuration; omit to test the packaged image')
     parser.add_argument('--memory-profile', action='store_true',
                         help='Capture finite read-only memory snapshots; separate from ordinary focus acceptance')
     parser.add_argument('--zram-config', type=Path,
@@ -540,13 +542,18 @@ def main():
         vm.command('chmod 700 /tmp/harness-wlrctl')
         for source, target, mode in [(args.browser_script, '/usr/bin/hn-browser', '755'),
                                      (args.compositor_config, '/usr/share/harness-os/labwc/rc.xml', '644')]:
+            if source is None:
+                continue
             data = source.read_bytes()
             base = vm.read_file(target)
             result['candidates'][target] = dict(source=str(source), sha256=hashlib.sha256(data).hexdigest(),
                                                 original_sha256=hashlib.sha256(base).hexdigest(), changed=data != base)
             copy_file(vm, data, '/tmp/browser-candidate')
             vm.command('sudo install -m ' + mode + ' /tmp/browser-candidate ' + shlex.quote(target))
-        vm.command('systemd-run --user --quiet --wait --pipe --collect labwc --reconfigure')
+        if args.compositor_config:
+            # Signal the actual running compositor, including the private
+            # OS-owned executable. Exact-image acceptance needs no reload.
+            vm.command('pkill -HUP -u "$(id -u)" -x labwc')
         if args.memory_profile:
             data = Path(__file__).with_name('browser_memory.py').read_bytes()
             result['memory_observer_sha256'] = hashlib.sha256(data).hexdigest()

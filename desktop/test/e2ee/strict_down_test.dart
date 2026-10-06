@@ -68,6 +68,23 @@ void main() {
     }
   });
 
+  test('a pull-request lookup is sealed for every machine', () async {
+    // A machine RPC (applicationFrames.ts `MACHINE_REQUESTS`): unsealed, the machine refuses it with
+    // E2EE_REQUIRED, and the relay reads which harness was asked about.
+    for (final features in [
+      <String, Object>{},
+      <String, Object>{'strictDown': 1},
+    ]) {
+      final session = await _session(features);
+      final out = session.wrapOutgoing({
+        'type': 'git_pull_request',
+        'payload': {'requestId': 'pr-1', 'agentId': 'private-agent'},
+      });
+      expect(isWrapped(out['payload']), isTrue);
+      expect(jsonEncode(out), isNot(contains('private-agent')));
+    }
+  });
+
   final install = {
     'type': 'dsh_install',
     'payload': {'requestId': 'r', 'url': 'https://example.invalid/h.git'},

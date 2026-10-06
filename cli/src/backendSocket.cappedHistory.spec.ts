@@ -27,6 +27,7 @@ vi.mock('./lib/transcriptTail.js', async (importOriginal) => {
 })
 
 import { BackendSocket } from './backendSocket.js'
+import { dispatchDown, relaySocket } from './testing/relaySocket.js'
 import { registry } from './lib/registry.js'
 import { bindHistory } from './testing/socketCore.js'
 
@@ -40,7 +41,7 @@ describe('session_get past the cap, for an engine without pages', () => {
   let requests = 0
 
   beforeEach(() => {
-    socket = new BackendSocket('fixture')
+    socket = relaySocket('fixture')
     bindHistory(socket)
     frames = []
     socket.registerLocalClient('local:capped', { sendFrame: (frame) => { frames.push(frame as never); return true }, sendBinary: () => true })
@@ -67,7 +68,7 @@ describe('session_get past the cap, for an engine without pages', () => {
   }
   const ask = async (payload: Record<string, unknown>): Promise<Record<string, any>> => {
     const requestId = `c${++requests}`
-    await (socket as any).dispatchDown({ type: 'session_get', payload: { requestId, ...payload } }, 'local:capped', 'local')
+    await dispatchDown(socket, { type: 'session_get', payload: { requestId, ...payload } }, 'local:capped', 'local')
     return frames.find((frame) => frame.type === 'session_get_result' && frame.payload.requestId === requestId)!.payload
   }
 

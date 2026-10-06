@@ -216,6 +216,10 @@ const fields = {
   // `app-*.log`/`cli-*.log`, so one directory holds everything a bug report needs. Not the data dir:
   // `harness.log` there is the daemon's console, and `harness reset` wipes it.
   HARNESS_LOGS_DIR: text(join(adapterRootDir, 'logs')),
+  // Where each daemon on this computer records its data folder and port under the tag it puts on its
+  // panes, so an engine's hook reaches the daemon that made its pane whichever daemon installed the hook
+  // (lib/hookRoutes.ts). Product-root state, shared by every daemon of this user: not in a data folder.
+  HARNESS_HOOK_ROUTES_DIR: text(join(adapterRootDir, 'hook-routes')),
   // Where domain-specific harnesses are installed (`harness dsh install`): one directory per
   // `<owner>/<name>` plus `installed.json`. Product-root state like the SSO session, not daemon data.
   DSH_DIR: text(join(adapterRootDir, 'dsh')),

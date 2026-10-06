@@ -100,25 +100,27 @@ export async function prepareProcessImageHelper(
   finally { if (temporary) await unlink(temporary).catch(() => {}) }
 }
 
-/** Keep complete, uniquely identified records only. A timeout may leave usable
+/** Keep complete, unique images and unavailable PIDs. A timeout may leave usable
  * records before a truncated line, exactly as with the ordinary image reader. */
 export function parseNativeProcessImages(
   stdout: string, requested: ReadonlySet<number>,
-): Map<number, NativeProcessImage> {
+): { images: Map<number, NativeProcessImage>; unavailable: Set<number> } {
   const images = new Map<number, NativeProcessImage>()
+  const unavailable = new Set<number>()
   const lines = stdout.slice(0, stdout.lastIndexOf('\n') + 1).split('\n')
   try {
     const header = JSON.parse(lines.shift() ?? '')
-    if (header?.schema !== 1 || header?.mode !== 'paths') return images
-  } catch { return images }
+    if (header?.schema !== 1 || header?.mode !== 'paths') return { images, unavailable }
+  } catch { return { images, unavailable } }
   const seen = new Set<number>()
   for (const line of lines) {
     let row
     try { row = JSON.parse(line) } catch { continue }
     if (!row || !validPid(row.pid) || !requested.has(row.pid)) continue
-    if (seen.has(row.pid)) { images.delete(row.pid); continue }
+    if (seen.has(row.pid)) { images.delete(row.pid); unavailable.delete(row.pid); continue }
     seen.add(row.pid)
-    if (row.unavailable === true || typeof row.imageHex !== 'string'
+    if (row.unavailable === true) { unavailable.add(row.pid); continue }
+    if (typeof row.imageHex !== 'string'
       || row.imageHex.length < 2 || row.imageHex.length >= MAX_PATH_BYTES * 2
       || row.imageHex.length % 2 !== 0 || !/^[0-9a-f]+$/i.test(row.imageHex)
       || typeof row.startMarker !== 'string'
@@ -130,7 +132,7 @@ export function parseNativeProcessImages(
       if (path.startsWith('/') && !path.includes('\0')) images.set(row.pid, { path, startMarker: row.startMarker })
     } catch { /* Invalid filesystem bytes cannot identify a JS string path. Fall back. */ }
   }
-  return images
+  return { images, unavailable }
 }
 
 async function bundledHelper(): Promise<{ path: string; key: string } | null> {
@@ -162,11 +164,11 @@ async function bundledHelper(): Promise<{ path: string; key: string } | null> {
 }
 
 /** A fresh kernel query on every call. Only the immutable executable's
- * preparation is shared; no PID, image or completed process result is cached. */
+ * preparation is shared; neither images nor unavailable PID results are cached. */
 export async function nativeProcessImages(
   pids: readonly number[], timeout: number,
-): Promise<Map<number, NativeProcessImage>> {
-  const empty = new Map<number, NativeProcessImage>()
+): Promise<{ images: Map<number, NativeProcessImage>; unavailable: Set<number> }> {
+  const empty = { images: new Map<number, NativeProcessImage>(), unavailable: new Set<number>() }
   if (platform() !== 'darwin' || !pids.length || pids.length > MAX_PIDS
     || !pids.every(validPid) || !Number.isFinite(timeout) || timeout <= 0) return empty
   const deadline = performance.now() + timeout
@@ -181,14 +183,14 @@ export async function nativeProcessImages(
     return await new Promise(resolve => {
       execFile(helper.path, ['--paths', ...new Set(pids).values()].map(String),
         { timeout: remaining, maxBuffer: 4 * 1024 * 1024, env: psEnv() }, (error, stdout) => {
-          const images = parseNativeProcessImages(stdout ?? '', new Set(pids))
-          if (error && !images.size) {
+          const result = parseNativeProcessImages(stdout ?? '', new Set(pids))
+          if (error && !result.images.size) {
             // A missing/blocked helper must not become a failed spawn every
             // reconcile. Retry preparation later; ordinary discovery continues.
             prepared.delete(helper.key)
             retryAfter.set(helper.key, performance.now() + 60_000)
           }
-          resolve(images)
+          resolve(result)
         })
     })
   } catch { return empty }

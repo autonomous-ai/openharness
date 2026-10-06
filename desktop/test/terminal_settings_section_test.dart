@@ -112,12 +112,15 @@ void main() {
     'the font list is the presets, then installed monospaced faces, then the rest',
     (tester) async {
       debugResetInstalledFonts();
-      debugFontLister = () async => const [
-        InstalledFont('Helvetica', monospace: false),
-        InstalledFont('PT Mono', monospace: true),
-        // A preset by another route: offered once, as the preset with its fallback chain.
-        InstalledFont('Menlo', monospace: true),
-        InstalledFont('Andale Mono', monospace: true),
+      debugFontLister = () async => [
+        const InstalledFont('Helvetica', monospace: false),
+        const InstalledFont('PT Mono', monospace: true),
+        // Duplicate a preset available on this host. Menlo is not a Linux preset.
+        InstalledFont(
+          TerminalFontChoice.available.first.label,
+          monospace: true,
+        ),
+        const InstalledFont('Andale Mono', monospace: true),
       ];
       addTearDown(() {
         debugFontLister = null;

@@ -321,7 +321,7 @@ async function authStatusCommand(json: boolean): Promise<void> {
 type SignInOutcome =
   /** Signed in — `alreadySignedIn` distinguishes a session that was already there from a fresh one,
    *  which is the one fact a caller cannot re-derive except by watching for an `authorize_url`. */
-  | { signedIn: true; alreadySignedIn: boolean }
+  | { signedIn: true; alreadySignedIn: boolean; stoppedDaemon?: boolean }
   /** Refused. Under `--json` its own coded result line has already been emitted. */
   | { signedIn: false }
 
@@ -493,8 +493,10 @@ async function loginCommand(
       // here would take every local terminal on this computer down for as long as the person is in
       // the browser. There is nothing to race either: the lock is held, and the identity swap happens
       // afterwards, once there is an identity to swap to (`restartDaemonForIdentity`).
-      if (readAuthSession()) await stopDaemonProcess()
-      return await signIn()
+      const stopped = readAuthSession() ? (await stopDaemonProcess()).pid !== null : false
+      const outcome = await signIn()
+      // The daemon stopped for the switch comes back once it is made (`restartDaemonForIdentity`).
+      return outcome.signedIn && stopped ? { ...outcome, stoppedDaemon: true } : outcome
     }, {
       onWaiting: (owner) => {
         // On stdout too, for the app: stderr is a developer's, and a sign-in that shows nothing while
@@ -1141,13 +1143,21 @@ async function logout(): Promise<void> {
  * local binding at once, and the daemon already survives a restart cleanly for every update.
  *
  * No-op when nothing is running (`harness start` boots on the new session by itself) or when the daemon
- * already wears the right id (a `harness login` on a computer that was signed in all along).
+ * already wears the right id (a `harness login` on a computer that was signed in all along) — unless the
+ * sign-in itself stopped it (`stoppedDaemon`: `login --force` stops a signed-in daemon before switching
+ * accounts). That one is started again on the new session: left down, the computer was off the account
+ * until someone ran `harness start`, and the web showed it offline.
  */
-async function restartDaemonForIdentity(): Promise<void> {
+async function restartDaemonForIdentity(stoppedDaemon = false): Promise<void> {
   // OUR daemon, by its pid file and private socket. A login in another HOME must never restart a
   // different OS user's daemon just because it happens to hold the default TCP port.
   const pid = readPid()
-  if (!pid || !isAlive(pid)) return
+  if (!pid || !isAlive(pid)) {
+    if (!stoppedDaemon) return
+    console.log('  starting the daemon again on this account…')
+    await launch(false)   // prints the status block and exits
+    return
+  }
   const daemon = await runningDaemonStatus()
   if (!daemon) return
   if (daemon.machineId === wantedDaemonIdentity()) return
@@ -2387,7 +2397,7 @@ switch (cmd) {
       entryPoint: entryPointFlag(),
       method: signInMethodFlag(flags) ?? (flags.includes('--json') || !process.stdin.isTTY ? undefined : 'ask'),
     })
-      .then((outcome) => outcome.signedIn ? restartDaemonForIdentity() : undefined)
+      .then((outcome) => outcome.signedIn ? restartDaemonForIdentity(outcome.stoppedDaemon) : undefined)
       .catch(onError)
     break
   case 'auth':

@@ -139,7 +139,10 @@ export class GroupSyncer {
   }
 
   /** Keys the device key log holds (deviceLogSyncer.ts): members of the group like any link, stamped
-   *  when they joined the log, so a device that predates the log hears of them through the group. */
+   *  when they joined the log, so a device that predates the log hears of them through the group. A key
+   *  the roster holds already, as it is, is trusted here too if it is not: the merge has nothing new to
+   *  say about it, and when it was all that trusted a key, one roster that outran this machine's trust
+   *  (a crash between the two writes, a peer's roster first) kept that device out for good. */
   adoptFromLog(members: Array<{ pub: string; kind: GroupMember['kind']; machineId: string; label: string; addedAt: number }>): void {
     const now = this.now()
     const parsed = members
@@ -147,7 +150,11 @@ export class GroupSyncer {
       .filter((m): m is GroupMember => m !== null)
     if (!parsed.length) return
     const before = rosterDigest(this.deps.store.read())
-    const result = this.deps.store.merge({ members: parsed, removed: [] }, this.selfPub())
+    const merged = this.deps.store.merge({ members: parsed, removed: [] }, this.selfPub())
+    const paired = new Set(this.deps.paired().map((p) => p.identityPub))
+    const untrusted = merged.roster.members.filter((m) =>
+      !paired.has(m.pub) && parsed.some((p) => p.pub === m.pub) && !merged.upserted.some((u) => u.pub === m.pub))
+    const result = { ...merged, upserted: [...merged.upserted, ...untrusted] }
     this.apply(result)
     if (rosterDigest(result.roster) !== before) this.scheduleFanOut(1_000)
   }

@@ -26,6 +26,7 @@ import type { RouterContinuity } from '../lib/voiceRouter.js'
 import type { ExternalSessions, OpenSessions } from '../lib/sessionSearch/external.js'
 import type { SessionSearchIndex } from '../lib/sessionSearch/indexer.js'
 import type { StoppedAgentStore } from '../lib/stoppedAgents.js'
+import type { TerminalBinaryClear } from '../lib/terminalBinary.js'
 import type { RouteAnswer } from '../localWsServer.js'
 import type { SwarmPromptScopes } from '../teams/promptScope.js'
 import { FAIL, later, ServiceUnavailableError, type PortFallbacks } from './serviceHost.js'
@@ -107,8 +108,13 @@ export interface CoreApi {
     /** The account's private grid name, minted and remembered by the backend; null when an older
      *  backend issues none. Bounded in time. */
     mintGridName(): Promise<string | null>
-    /** This machine's harness access token, for handing a sign-in to grid. Rejects when signed out. */
-    accessToken(): Promise<string>
+    /** This machine's harness access token, for handing a sign-in to grid or dialling the fleet's lane.
+     *  Rejects when signed out. `force` refreshes it (once, after a 401 for `failedToken`): the core's one
+     *  session manager shares a refresh in flight with the backend link. */
+    accessToken(options?: { force?: boolean; failedToken?: string }): Promise<string>
+    /** The fleet's lane to the owner's other machines, sealed by the gateway with this machine's E2EE
+     *  identity, which no service holds (`LaneSeal`). */
+    lane: LaneSeal
     /** The account's private grid: the backend's word when it gave one, else what this machine works
      *  out (`lib/gridDerive.ts`); null when it has none. */
     privateGridName(): Promise<string | null>
@@ -366,6 +372,265 @@ export const FLEET_FALLBACKS: PortFallbacks<FleetPort> = {
   select: later(FAIL), release: FAIL,
 }
 
+/*
+ * The gateway: the relay and its end-to-end encryption (docs/design/2026-10-06-core-boundary-next.md,
+ * "Relay and E2EE", step 10). It holds the backend link, the E2EE sessions and the keys; every remote
+ * client (a phone, a browser, another machine's desktop, a device) reaches the core through it, and every
+ * frame the core has for one leaves through it. The core speaks plaintext to it, and never sees a key.
+ *
+ * Unlike a service it is transport: what it tells the core (`GatewayEvents`) is who the remote clients
+ * are and what they asked, and what the core asks of it (`GatewayPort`) is to carry frames to them, sealed
+ * by its rules (which frames, to whom, what is refused unsealed), which stay the gateway's alone.
+ */
+
+/** What a remote client proved with its E2EE session: an owner's app or browser, or a device. */
+export type RemoteRole = 'web' | 'device'
+
+/** A remote client the gateway holds a session with, as the core may know it: its role, the label its
+ *  identity was paired under (null for none) for naming it to the person, its identity's public key (the
+ *  Wi-Fi device's requests are kept apart by it), and whether it is on a device's direct link rather than
+ *  the relay. Nothing here is a secret. */
+export interface RemoteClient {
+  role: RemoteRole
+  label: string | null
+  identity: string
+  direct: boolean
+}
+
+/** How a remote client's frame arrived: the backend's relay, or a paired client's own P2P channel. */
+export type RemoteTransport = 'relay' | 'p2p'
+
+/** The control frames only the backend sends, as the gateway hands them on once it has checked that the
+ *  backend sent them (on its own address, in the clear, over the relay). */
+export type BackendNotice =
+  | { type: 'desk_changed'; revision: number }
+  | { type: 'zoo_changed'; revision: number }
+  | { type: 'machines_changed'; reason: string }
+  | { type: 'device_keys_changed' }
+
+/** What the core asks of the gateway: everything bound for a remote client, and the link's state. */
+export interface GatewayPort {
+  /** Dial the backend: this daemon is signed in. */
+  connect(): void
+  /** Never dial: signed out, so nothing is sealed or queued for a link that will not open. */
+  serveThisComputerOnly(): void
+  /** Hold remote clients' frames, in order, until `openRequests`: the core is not ready to answer. */
+  holdRequests(): void
+  openRequests(): void
+  /** Whether the backend link is up. */
+  connected(): boolean
+  /** A frame for the web audience: sealed under the group key when it carries content, queued while the
+   *  link is down. */
+  broadcast(frame: Record<string, unknown>): void
+  /** A frame for the devices (the commander audience), sealed the same way. */
+  commander(frame: Record<string, unknown>): void
+  /** A notification for every browser signed in to the account (the user audience). */
+  user(frame: Record<string, unknown>): void
+  /** The answer to a remote client's request: to it alone, sealed when its type carries content, and a
+   *  bare E2EE_REQUIRED when it cannot be. `connId` '' is the backend's own request. */
+  reply(connId: string, type: string, requestId: unknown, payload: Record<string, unknown>): void
+  /** A frame for one remote client, sealed to it; false when it holds no session. */
+  target(connId: string, type: string, payload: Record<string, unknown>): boolean
+  /** A terminal frame for one remote client, sealed to it, over its P2P channel when the stream moved
+   *  there; false when it could not be sent. */
+  terminal(connId: string, type: string, payload: Record<string, unknown>): boolean
+  terminalBinary(connId: string, clear: TerminalBinaryClear): boolean
+  /** Share's frame to an observer: plaintext to the relay, sealed by Share itself. */
+  observer(connId: string, type: string, payload: Record<string, unknown>): boolean
+  /** A window opened on this computer: the backend counts it as the person's session at once, or when
+   *  the link next comes up. */
+  windowOpened(): void
+  /** How many processes on this computer are attached, windows and tools. */
+  localClients(count: number): void
+  /** A local connection's request the gateway answers (the E2EE pairings), answered back to it through
+   *  `GatewayEvents.toLocal`. */
+  local(connId: string, frame: Record<string, unknown>): Promise<void>
+  /** The Wi-Fi device's answer or event for one of its sessions, sealed to it, over its direct link or the
+   *  relay; false when that session is gone. */
+  device(connId: string, type: string, payload: Record<string, unknown>): boolean
+  /** Which identity's app said hello on a Wi-Fi device session (null: it left), so that the gateway can
+   *  tell the device it was unpaired while its session still stands. */
+  deviceClient(connId: string, identity: string | null): void
+  stop(): Promise<void>
+}
+
+/** What the gateway tells the core. In the core's process these are calls; in the gateway's own, frames
+ *  on the link the master started it with, which no other process can open. */
+export interface GatewayEvents {
+  /** A remote client's request, opened and admitted. `role` is the session that sealed it: who asked is
+   *  the gateway's word, and the core trusts nothing in the frame for it. Resolves once it is handled. */
+  frame(connId: string, frame: Record<string, unknown>, transport: RemoteTransport, role: RemoteRole): Promise<void> | void
+  /** A remote client's terminal bytes, opened. */
+  binary(connId: string, clear: TerminalBinaryClear): Promise<void> | void
+  /** A remote client gained a session (its role and label), or lost it (null). */
+  client(connId: string, client: RemoteClient | null): void
+  /** The relay says a client's connection closed: what it had open goes with it. */
+  disconnected(connId: string): Promise<void> | void
+  /** Share's observer, relayed: Share opens its own frames. */
+  observer(connId: string, type: string, payload: Record<string, unknown>): Promise<void> | void
+  /** A frame for a window on this computer that asked the gateway something (`GatewayPort.local`); with
+   *  `connId` '', for every process attached here (the answer to the backend's own request, which the
+   *  windows heard with every event before the gateway was its own part). */
+  toLocal(connId: string, frame: Record<string, unknown>): void
+  /** The backend link's state, as it changes. */
+  status(connected: boolean): void
+  /** The link went down: every remote client with it. */
+  linkDown(): void
+  /** How many devices watch this machine, and how many of them render it now (null: the backend does not
+   *  say). `recheck`: the presence was asked about again, though it may not have changed. */
+  commanders(count: number, active: number | null, recheck?: boolean): void
+  /** A device attached: the live state is sent again for it. */
+  commanderJoined(): void
+  /** The backend's word on this machine: its name, the account's private grid. A key that is absent is
+   *  unchanged; null is "none". */
+  meta(meta: { name?: string | null; gridName?: string | null }): void
+  /** The account's other changes, for the windows on this computer. */
+  notice(notice: BackendNotice): void
+  /** This machine was removed from the account, or its session ended: stop for good. */
+  revoked(): void
+  /** Another computer holds this machine: stop for good, keeping the session. */
+  busy(): void
+  /** A Wi-Fi device's request (`autonomous_device_request`), as it arrived sealed and as the session that
+   *  sealed it opened it (null when it could not be opened, or was not the device's to send). */
+  device(connId: string, frame: Record<string, unknown>, opened: Record<string, unknown> | null): Promise<void> | void
+  /** A paired identity was unpaired: the Wi-Fi device service forgets it. */
+  deviceRevoked(identity: string): void
+  /** Something the windows on this computer show of the account's devices (the device key log's notices). */
+  toWindows(frame: Record<string, unknown>): void
+}
+
+/**
+ * The fleet's lane to the owner's other machines (device/deviceLink.ts), sealed by the gateway, which holds
+ * this machine's E2EE identity (the one `harness link connect` proves knowledge against). The lane keeps
+ * which machines have a session; the session itself, its keys and its counters, is the gateway's, one per
+ * machine. A gateway that restarted holds none and says so (`lost`): the lane then starts one again, and
+ * sends nothing for that machine in the clear meanwhile.
+ */
+export interface LaneSeal {
+  /** Start a session with a linked machine, pinned to the key `harness link connect` left for it (`peerPub`,
+   *  base64): the hello to send it, in the clear. Replaces any session that machine had. Rejects when the
+   *  gateway cannot start one (it is not running). */
+  hello(machineId: string, peerPub: string): Promise<Record<string, unknown>>
+  /** The machine's welcome to that hello: true once the session is up. */
+  welcome(machineId: string, payload: Record<string, unknown>): Promise<boolean>
+  /** The machine's new keys, for a session that is up. */
+  rekey(machineId: string, payload: Record<string, unknown>): Promise<void>
+  /** A frame for the machine, sealed as its session seals that type (a type it does not seal goes as it is). */
+  seal(machineId: string, frame: Record<string, unknown>): Promise<LaneSealed>
+  /** A sealed frame from the machine, opened; `unreadable` when it does not open (stale, forged, garbled). */
+  open(machineId: string, frame: Record<string, unknown>): Promise<LaneOpened>
+  /** The lane is done with the machine's session. */
+  drop(machineId: string): void
+}
+export type LaneSealed = { frame: Record<string, unknown> } | { lost: true }
+export type LaneOpened = { frame: Record<string, unknown> } | { unreadable: true } | { lost: true }
+/** A service with no lane of the core's: it starts no session and seals nothing, never sends in the clear. */
+export const LANE_OFF: LaneSeal = {
+  hello: () => Promise.reject(new Error('no lane: this process holds no E2EE identity')),
+  welcome: async () => false,
+  rekey: async () => {},
+  seal: async () => ({ lost: true }),
+  open: async () => ({ lost: true }),
+  drop: () => {},
+}
+
+/** An HTTP answer for the daemon's own routes (`harness pair`, `harness devices`, …), as the hook server sends it. */
+export interface HttpAnswer {
+  status: number
+  body: Record<string, unknown>
+}
+
+/** What the core's status reads of the relay: the machine's E2EE fingerprint, its pairings and the one
+ *  waiting to pair. */
+export interface GatewayStatus {
+  fingerprint: string | null
+  pairs: Array<Record<string, unknown>>
+  pending: Record<string, unknown> | null
+}
+
+/** The account's sign-in as the gateway's device key log reads it: no credential, only which sign-in. */
+export interface GatewayAccount {
+  /** The machine id the backend gave this sign-in; null signed out. */
+  machineId: string | null
+  /** Which sign-in by hand this is (lib/authSession.ts `signInOf`), or null. */
+  signIn: { epoch: string; adopted: boolean; at: number | null } | null
+}
+
+/** A Wi-Fi device operation refused, with the code the device's local API answers it under. */
+export interface GatewayRefusal {
+  code: string
+  message: string
+}
+
+/**
+ * The daemon's own commands about the keys, which the gateway holds: `harness pair`, `unpair`,
+ * `remote-password`, `link connect`, `group`, `devices`, and the Wi-Fi device's pairing. Each answers as
+ * the hook server's route does; while the gateway is down, a 503.
+ */
+export interface GatewayOps {
+  status(): Promise<GatewayStatus>
+  pair(code: string): Promise<HttpAnswer>
+  listPairs(): Promise<HttpAnswer>
+  revoke(id: string): Promise<HttpAnswer>
+  revokeAll(): Promise<HttpAnswer>
+  setRemotePassword(password: string): Promise<HttpAnswer>
+  clearRemotePassword(): Promise<HttpAnswer>
+  remotePasswordStatus(): Promise<HttpAnswer>
+  trustLinkedPeer(peer: { pub: string; machineId: string; label: string }): Promise<HttpAnswer>
+  groupList(): Promise<HttpAnswer>
+  groupSync(): Promise<HttpAnswer>
+  groupRemove(selector: string): Promise<HttpAnswer>
+  devicesList(): Promise<HttpAnswer>
+  devicesRemove(pub: string): Promise<HttpAnswer>
+  devicesHistory(): Promise<HttpAnswer>
+  devicesDismiss(body: { pub?: string; pubs?: string[]; baseline?: boolean }): Promise<HttpAnswer>
+  devicesRebaseline(confirm: boolean, head?: { seq: number; hash: string }): Promise<HttpAnswer>
+  /** The Wi-Fi device's direct links: discovered devices, pairing one, and its pairings. A refusal is an
+   *  answer (`{ refused }`), as the device's local API words it. */
+  wifi(request: { op: 'discover' | 'pair' | 'pairStatus' | 'list' | 'revoke'; device?: string; code?: string; id?: string }):
+    Promise<{ result: Record<string, unknown> } | { refused: GatewayRefusal }>
+  /** The local dashboard's port, said to the web in `e2e_status` so it can link there to approve a pairing. */
+  dashboardPort(port: number): void
+  /** The Wi-Fi device service is up (its direct links start) or gone (they stop). */
+  wifiService(on: boolean): void
+  /** A Wi-Fi device asked to be unpaired, over its own authenticated session. */
+  revokeIdentity(identity: string): void
+  /** The account's sign-in, as it is now (after start-up recorded which sign-in it is); the device key log
+   *  registers this machine with it. */
+  account(account: GatewayAccount): void
+  /** The owner's machines the backend last said were online, for the trust group's exchanges; null when
+   *  the list is not the backend's. */
+  reachable(machineIds: string[] | null): void
+  /** The fleet's lane's sessions (`core.account.lane`). */
+  lane: LaneSeal
+}
+
+/** A window on this computer working on another of the owner's machines, through the relay: what the
+ *  local socket asks of the gateway for it (lib/remoteRelay.ts `RemoteRelayPool`, or its link). */
+export interface WindowRelaySession {
+  send(frame: Record<string, unknown>): Promise<void>
+  sendBinary(clear: TerminalBinaryClear): Promise<void>
+  detach(): void
+}
+export interface WindowRelaySink {
+  sendFrame(frame: Record<string, unknown>): boolean
+  sendBinary(frame: Uint8Array): boolean
+}
+export interface WindowRelay {
+  acquire(machineId: string, autonomousEnv: string, selectFrame: Record<string, unknown>, sink: WindowRelaySink,
+    onClosed: (code: number, reason: string) => void): Promise<WindowRelaySession>
+  acquireIsolated(machineId: string, autonomousEnv: string, selectFrame: Record<string, unknown>, sink: WindowRelaySink,
+    onClosed: (code: number, reason: string) => void): Promise<WindowRelaySession>
+  invalidate(machineId: string): void
+  invalidateIsolated(machineId: string): void
+  /** A window here watching, read-only, a harness someone shared with this account (sharing/relay.ts, the
+   *  Share relay's own socket, `/api/observer-ws`). Fails with the close the window gets: 4403 when the
+   *  share ended or was never there, 1013 when it could not be reached just now. The gateway's has it; a
+   *  bare pool of sessions to other machines (lib/remoteRelay.ts) does not, and shares nothing. */
+  acquireShare?(machineId: string, shareId: string, sink: WindowRelaySink,
+    onClosed: (code: number, reason: string) => void): Promise<WindowRelaySession>
+}
+
 /** Each port is filled by the service that owns it when that service starts, and is null while the
  *  service is off: the core never waits on one. */
 export interface CorePorts {
@@ -398,6 +663,7 @@ export interface CoreApiDeps {
   dshInstallStatus: CoreApi['clients']['dshInstallStatus']
   mintGridName: CoreApi['account']['mintGridName']
   accessToken: CoreApi['account']['accessToken']
+  lane: CoreApi['account']['lane']
   privateGridName: CoreApi['account']['privateGridName']
   machineName: CoreApi['account']['machineName']
   runtimeProfile: CoreApi['agents']['runtimeProfile']
@@ -409,7 +675,7 @@ export interface CoreApiDeps {
 
 export function createCoreApi({
   dataDir, registry, stoppedAgents, databaseHistory, externalSessions, openSessions, syncSession, runtimeModels, viewerChanged,
-  gridNamed, gridModelsChanged, dshInstallStatus, mintGridName, accessToken, privateGridName, machineName,
+  gridNamed, gridModelsChanged, dshInstallStatus, mintGridName, accessToken, lane, privateGridName, machineName,
   runtimeProfile, setRuntime, fork, turns, questions, terminals = TERMINALS_OFF,
 }: CoreApiDeps): CoreApi {
   return {
@@ -433,7 +699,7 @@ export function createCoreApi({
     questions,
     transcripts: { databaseHistory },
     external: { sessions: externalSessions, open: openSessions },
-    account: { mintGridName, accessToken, privateGridName, machineName },
+    account: { mintGridName, accessToken, lane, privateGridName, machineName },
     clients: { viewerChanged, gridNamed, gridModelsChanged, dshInstallStatus },
   }
 }

@@ -1,11 +1,20 @@
 import { describe, expect, it, vi } from 'vitest'
 import { projectDisplayName, type RegisteredSession } from '../lib/registry.js'
-import { createCoreApi, emptyPorts, FLEET_FALLBACKS, MONITOR_OFF, resolveAgent, TEAMS_FALLBACKS, type CoreApiDeps } from './api.js'
+import { createCoreApi, emptyPorts, FLEET_FALLBACKS, LANE_OFF, MONITOR_OFF, resolveAgent, TEAMS_FALLBACKS, type CoreApiDeps } from './api.js'
 import { FAIL } from './serviceHost.js'
 
 const row = (agentId: string) => ({ agentId, sessionId: `s-${agentId}`, engine: 'claude', cwd: '/work/app' }) as RegisteredSession
 
 describe('the core API services stand on', () => {
+  it('gives a service with no lane of the core\'s nothing to seal with, and never its frame back in the clear', async () => {
+    await expect(LANE_OFF.hello('m', 'pub')).rejects.toThrow(/no E2EE identity/)
+    expect(await LANE_OFF.welcome('m', {})).toBe(false)
+    await expect(LANE_OFF.rekey('m', {})).resolves.toBeUndefined()
+    expect(await LANE_OFF.seal('m', { type: 'message', payload: { text: 'hello' } })).toEqual({ lost: true })
+    expect(await LANE_OFF.open('m', { type: 'message' })).toEqual({ lost: true })
+    expect(LANE_OFF.drop('m')).toBeUndefined()
+  })
+
   it('resolves an agent in a service\'s own copy as the registry does: by agent id, then session id', () => {
     const agents = [{ ...row('a'), sessionId: '' }, row('b')]
     expect(resolveAgent(agents, 'b')?.agentId).toBe('b')
@@ -36,6 +45,7 @@ describe('the core API services stand on', () => {
       dshInstallStatus: vi.fn(),
       mintGridName: vi.fn(async () => 'grid-1'),
       accessToken: vi.fn(async () => 'token'),
+      lane: LANE_OFF,
       privateGridName: vi.fn(async () => 'grid-1'),
       machineName: vi.fn(() => 'Studio'),
       runtimeProfile: vi.fn(() => null),
@@ -69,6 +79,7 @@ describe('the core API services stand on', () => {
     expect(core.clients.gridModelsChanged).toBe(deps.gridModelsChanged)
     expect(core.account.mintGridName).toBe(deps.mintGridName)
     expect(core.account.accessToken).toBe(deps.accessToken)
+    expect(core.account.lane).toBe(deps.lane)
     expect(core.account.privateGridName).toBe(deps.privateGridName)
     expect(core.account.machineName).toBe(deps.machineName)
     // What a device or another machine asks of an agent here: the core's own handlers, as they are.

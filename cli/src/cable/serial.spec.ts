@@ -2,12 +2,12 @@ import { EventEmitter } from 'node:events'
 import { constants } from 'node:fs'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-const io = vi.hoisted(() => ({ open: vi.fn(), close: vi.fn(), configure: vi.fn(), stream: vi.fn() }))
-vi.mock('node:fs', async (original) => ({ ...await original<typeof import('node:fs')>(), openSync: io.open, closeSync: io.close }))
+const io = vi.hoisted(() => ({ open: vi.fn(), close: vi.fn(), configure: vi.fn(), stream: vi.fn(), readdir: vi.fn(), lstat: vi.fn() }))
+vi.mock('node:fs', async (original) => ({ ...await original<typeof import('node:fs')>(), openSync: io.open, closeSync: io.close, readdirSync: io.readdir, lstatSync: io.lstat }))
 vi.mock('node:tty', () => ({ ReadStream: io.stream }))
 vi.mock('node:child_process', () => ({ execFile: io.configure }))
 
-import { SerialLink } from './serial.js'
+import { SerialLink, findDialPorts } from './serial.js'
 
 function port(nativeFd = 43) {
   const stream = Object.assign(new EventEmitter(), {
@@ -202,5 +202,33 @@ describe('event-driven serial link', () => {
     expect(writes[0]).toMatchObject({ status: 'rejected', reason: new Error('write failed') })
     expect(writes[1].status).toBe('fulfilled')
     await link.close()
+  })
+})
+
+describe('macOS dial discovery wiring', () => {
+  const dump = `+-o Tim <class IOUSBHostDevice>
+  "idVendor" = 12346
+  "idProduct" = 4097
+  +-o serial
+    "IOCalloutDevice" = "/dev/cu.usbmodem1101"`
+  afterEach(() => vi.resetAllMocks())
+
+  it.skipIf(process.platform !== 'darwin')('stats only cu.* entries, gates ioreg on them and keeps the error text', async () => {
+    io.readdir.mockReturnValue(['cu.usbmodem1101', 'tty.usbmodem1101', 'null'])
+    io.lstat.mockReturnValue({ ino: 900, rdev: 7 })
+    io.configure.mockImplementation((_c, _a, _o, cb) => cb(null, { stdout: dump, stderr: '' }))
+    await findDialPorts()
+    await findDialPorts()
+    expect(io.configure).toHaveBeenCalledTimes(1)
+    expect(io.configure.mock.calls[0].slice(0, 2)).toEqual(['ioreg', ['-r', '-c', 'IOUSBHostDevice', '-w0', '-l']])
+    expect(io.lstat.mock.calls.every(([path]) => path === '/dev/cu.usbmodem1101')).toBe(true)
+    expect(io.lstat).toHaveBeenCalled()
+
+    io.lstat.mockReturnValue({ ino: 901, rdev: 7 })
+    io.configure.mockImplementation((_c, _a, _o, cb) => cb(new Error('boom')))
+    await expect(findDialPorts()).rejects.toThrow('Could not enumerate USB dials')
+    io.configure.mockImplementation((_c, _a, _o, cb) => cb(null, { stdout: dump, stderr: '' }))
+    await expect(findDialPorts()).resolves.toHaveLength(1)
+    expect(io.configure).toHaveBeenCalledTimes(3)
   })
 })

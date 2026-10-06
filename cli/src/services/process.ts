@@ -21,6 +21,11 @@ type Payload = Record<string, unknown>
 export interface CoreConnection {
   /** Ask the core something (`service_query`); rejects when the connection goes before it answers. */
   query(query: string, payload?: Payload): Promise<Payload>
+  /** Tell the core something without asking (`service_notice`): the gateway's remote clients and what
+   *  they sent. Dropped when the connection is going. */
+  notice?(kind: string, payload?: Payload): void
+  /** Bytes for the core (a remote client's terminal, from the gateway); false when the connection is going. */
+  sendBinary?(bytes: Uint8Array): boolean
 }
 
 export interface ServiceProcessOptions {
@@ -36,6 +41,10 @@ export interface ServiceProcessOptions {
   onEvent?: (payload: Payload) => void | Promise<unknown>
   /** Each time it is connected to a core: the first time, and after every core restart. */
   onConnected?: (core: CoreConnection) => void
+  /** Each time that connection ends: what was the core's to hear is gone with it. */
+  onDisconnected?: () => void
+  /** A binary frame from the core (a remote client's terminal, for the gateway). A throw is logged. */
+  onBinary?: (bytes: Uint8Array) => void
   env?: NodeJS.ProcessEnv
   connect?: (url: string) => WebSocket
   log?: (line: string) => void
@@ -173,6 +182,8 @@ export function runServiceProcess(options: ServiceProcessOptions): ServiceProces
   let socket: WebSocket | null = null
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null
   let queries = 0
+  /** The core took this connection (`connected`): only then does its end mean the service was cut off. */
+  let opened = false
   const pending = new Map<string, { resolve: (payload: Payload) => void; reject: (error: Error) => void }>()
 
   const send = (frame: { type: string; payload: Payload }): void => {
@@ -186,14 +197,25 @@ export function runServiceProcess(options: ServiceProcessOptions): ServiceProces
       pending.set(requestId, { resolve, reject })
       send({ type: 'service_query', payload: { ...payload, query, requestId } })
     }),
+    notice: (kind, payload = {}) => send({ type: 'service_notice', payload: { ...payload, kind } }),
+    sendBinary: (bytes) => {
+      if (!socket || socket.readyState !== WebSocket.OPEN) return false
+      try { socket.send(bytes, { binary: true }); return true } catch { return false }
+    },
   }
 
-  const onFrame = (raw: WebSocket.RawData): void => {
+  const onFrame = (raw: WebSocket.RawData, isBinary = false): void => {
+    if (isBinary) {
+      try { options.onBinary?.(raw instanceof Buffer ? new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength) : new Uint8Array(Buffer.concat(raw as Buffer[]))) }
+      catch (error) { log(`[service ${options.name}] binary frame failed · ${describe(error)}`) }
+      return
+    }
     let frame: { type?: unknown; payload?: Payload; asker?: { local?: unknown; owner?: unknown } }
     try { frame = JSON.parse(raw.toString()) as typeof frame } catch { return }
     const payload = frame.payload ?? {}
     if (frame.type === 'connected') {
       backoff = initialBackoffMs
+      opened = true
       log(`[service ${options.name}] connected to the core`)
       options.onConnected?.(core)
       return
@@ -247,12 +269,17 @@ export function runServiceProcess(options: ServiceProcessOptions): ServiceProces
         machineId: options.machineId, localProtocolVersion: 1, role: 'service', service: options.name, token: options.token,
       } })
     })
-    ws.on('message', onFrame)
+    ws.on('message', (raw, isBinary) => onFrame(raw, isBinary))
     ws.on('error', () => { /* `close` follows, and reconnects */ })
     ws.on('close', (code: number) => {
       // A new socket is dialled only after this one closes, so this is always the current one.
+      const wasOpen = socket === ws && opened
       socket = null
+      opened = false
       for (const [id, waiting] of pending) { pending.delete(id); waiting.reject(new Error('the core went away')) }
+      if (wasOpen) {
+        try { options.onDisconnected?.() } catch (error) { log(`[service ${options.name}] disconnect failed · ${describe(error)}`) }
+      }
       if (stopped) return
       // Refused: this core does not run the service out of its process, as a core from before it did under
       // a newer master, for as long as the two differ. Asked again every few seconds, it only filled both

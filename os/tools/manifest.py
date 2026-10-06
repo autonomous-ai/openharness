@@ -48,6 +48,7 @@ manifest = {
     'capabilities': capabilities,
     'package_version': dict(row.split(maxsplit=1) for row in packages.splitlines())['harness-os'],
     'harness_inputs': json.loads((root / 'usr/share/harness-os/runtime.json').read_text()), 'validation': 'pending',
+    'compositor': json.loads((root / 'usr/share/harness-os/compositor.json').read_text()),
     'hardware': hardware,
 }
 (out / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')

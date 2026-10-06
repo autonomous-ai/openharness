@@ -73,6 +73,19 @@ def inspect(iso):
         for name, identity in runtime['files'].items():
             data = read('usr/lib/harness/' + name)
             assert len(data) == identity['bytes'] and hashlib.sha256(data).hexdigest() == identity['sha256'], f'Runtime mismatch: {name}'
+        compositor = json.loads(read('usr/share/harness-os/compositor.json'))
+        assert compositor == manifest['compositor'], 'Compositor differs from the image manifest'
+        assert compositor['source_commit'] == manifest['source_commit'], 'Compositor belongs to another source'
+        assert compositor['upstream'] == json.loads((source / 'packaging/labwc/source.json').read_text())
+        assert '-Dxwayland=enabled' in compositor['build_options']
+        entries = {'usr/lib/harness-os/labwc': compositor['binary']}
+        entries.update({'usr/share/licenses/harness-os/labwc/' + name: info
+                        for name, info in compositor['corresponding_source'].items()})
+        for name, info in entries.items():
+            data = read(name)
+            assert len(data) == info['bytes'] and hashlib.sha256(data).hexdigest() == info['sha256'], name
+            assert owners.get(name) == '0/0', name
+            checked.append(name)
         kernel = json.loads(read('usr/share/harness-os/kernel.json'))
         assert re.fullmatch(r'usr/lib/modules/[a-zA-Z0-9._+-]+/vmlinuz', kernel['path'])
         assert hashlib.sha256(read(kernel['path'])).hexdigest() == kernel['sha256'], 'Offline install kernel mismatch'
@@ -86,6 +99,8 @@ def inspect(iso):
         assert packages == (iso.parent / 'packages.txt').read_text(), 'Package inventory mismatch'
         inventory = dict(row.split(maxsplit=1) for row in packages.splitlines())
         names = set(inventory)
+        assert 'labwc' not in names, 'Fresh image contains a duplicate compositor'
+        assert set(compositor['runtime_dependencies']) <= names, 'A compositor library is missing'
         version = json.loads(read('usr/share/harness-os/lock.json'))['version']
         assert version == manifest['version'], 'Image version differs from the build manifest'
         package_version = inventory['harness-os']

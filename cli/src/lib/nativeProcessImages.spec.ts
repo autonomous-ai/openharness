@@ -47,21 +47,34 @@ afterEach(async () => {
 describe('native process-image protocol', () => {
   it('preserves valid UTF-8 paths including JSON delimiters and newlines', () => {
     const path = '/fixture/引擎 "quote"\nnew line\\tail'
-    expect(parseNativeProcessImages(output(record(10, path)), new Set([10])).get(10))
+    expect(parseNativeProcessImages(output(record(10, path)), new Set([10])).images.get(10))
       .toEqual({ path, startMarker: record(10).startMarker })
   })
 
   it('requires the protocol header and ignores unrequested processes', () => {
-    expect(parseNativeProcessImages(JSON.stringify(record(10)) + '\n', new Set([10])).size).toBe(0)
-    expect(parseNativeProcessImages(output(record(20)), new Set([10])).size).toBe(0)
-    expect(parseNativeProcessImages(output(record(10)).replace('"schema":1', '"schema":2'), new Set([10])).size).toBe(0)
+    expect(parseNativeProcessImages(JSON.stringify(record(10)) + '\n', new Set([10])).images.size).toBe(0)
+    expect(parseNativeProcessImages(output(record(20)), new Set([10])).images.size).toBe(0)
+    expect(parseNativeProcessImages(output(record(10)).replace('"schema":1', '"schema":2'), new Set([10])).images.size).toBe(0)
+  })
+
+  it('reports only requested unavailable PIDs separately from readable images', () => {
+    const result = parseNativeProcessImages(output(
+      { pid: 10, unavailable: true }, record(20), { pid: 30, unavailable: true },
+    ), new Set([10, 20]))
+    expect([...result.images.keys()]).toEqual([20])
+    expect(result.unavailable).toEqual(new Set([10]))
   })
 
   it('keeps complete records before a truncated tail but refuses conflicting duplicates', () => {
     const partial = output(record(10)) + JSON.stringify(record(20)).slice(0, -4)
-    expect([...parseNativeProcessImages(partial, new Set([10, 20])).keys()]).toEqual([10])
+    expect([...parseNativeProcessImages(partial, new Set([10, 20])).images.keys()]).toEqual([10])
     const conflict = output(record(10), { pid: 10, unavailable: true }, record(20), record(10))
-    expect([...parseNativeProcessImages(conflict, new Set([10, 20])).keys()]).toEqual([20])
+    const result = parseNativeProcessImages(conflict, new Set([10, 20]))
+    expect([...result.images.keys()]).toEqual([20])
+    expect(result.unavailable).toEqual(new Set())
+    expect(parseNativeProcessImages(output(
+      { pid: 10, unavailable: true }, { pid: 10, unavailable: true },
+    ), new Set([10]))).toEqual({ images: new Map(), unavailable: new Set() })
   })
 
   it('rejects malformed bytes, relative paths and unavailable birth metadata', () => {
@@ -71,7 +84,7 @@ describe('native process-image protocol', () => {
       { ...record(10), imageHex: '2f'.repeat(4096) }, { ...record(10), startSeconds: -1 },
       { ...record(10), startMicros: 1_000_000 }, { ...record(10), startMarker: 'unknown' },
       { ...record(10), unavailable: true }, { ...record(10), pid: 10.5 },
-    ]) expect(parseNativeProcessImages(output(row), new Set([10])).size).toBe(0)
+    ]) expect(parseNativeProcessImages(output(row), new Set([10])).images.size).toBe(0)
   })
 })
 
@@ -117,20 +130,29 @@ describe('bundled native helper preparation', () => {
 
 describe('fresh native image reads', () => {
   it('does nothing on other platforms or when no native artifact was bundled', async () => {
-    expect((await nativeProcessImages([10], 500)).size).toBe(0)
+    expect(await nativeProcessImages([10], 500)).toEqual({ images: new Map(), unavailable: new Set() })
     vi.stubGlobal('__DARWIN_PROCESS_IMAGES__', JSON.stringify(artifact))
     host.platform = 'linux'
-    expect((await nativeProcessImages([10], 500)).size).toBe(0)
+    expect(await nativeProcessImages([10], 500)).toEqual({ images: new Map(), unavailable: new Set() })
     expect(host.execFile).not.toHaveBeenCalled()
     expect(await readdir(root)).toEqual([])
+  })
+
+  it('returns readable images and unavailable PIDs from the helper together', async () => {
+    vi.stubGlobal('__DARWIN_PROCESS_IMAGES__', JSON.stringify(artifact))
+    host.execFile.mockImplementationOnce((_path, _args, _options, done) =>
+      done(null, output(record(10), { pid: 20, unavailable: true })))
+    const result = await nativeProcessImages([10, 20], 500)
+    expect([...result.images.keys()]).toEqual([10])
+    expect(result.unavailable).toEqual(new Set([20]))
   })
 
   it('shares only executable preparation and issues a fresh query after exec', async () => {
     vi.stubGlobal('__DARWIN_PROCESS_IMAGES__', JSON.stringify(artifact))
     host.execFile.mockImplementationOnce((_path, _args, _options, done) => done(null, output(record(10, '/before'))))
       .mockImplementationOnce((_path, _args, _options, done) => done(null, output(record(10, '/after'))))
-    expect((await nativeProcessImages([10], 500)).get(10)?.path).toBe('/before')
-    expect((await nativeProcessImages([10], 500)).get(10)?.path).toBe('/after')
+    expect((await nativeProcessImages([10], 500)).images.get(10)?.path).toBe('/before')
+    expect((await nativeProcessImages([10], 500)).images.get(10)?.path).toBe('/after')
     expect(host.execFile).toHaveBeenCalledTimes(2)
     for (const [path, args, options] of host.execFile.mock.calls) {
       expect(path).toBe(join(root, 'process-images', artifact.sha256))
@@ -145,16 +167,16 @@ describe('fresh native image reads', () => {
     vi.stubGlobal('__DARWIN_PROCESS_IMAGES__', JSON.stringify(artifact))
     host.execFile.mockImplementationOnce((_path, _args, _options, done) => done(new Error('timeout'), output(record(10)) + '{'))
       .mockImplementationOnce((_path, _args, _options, done) => done(new Error('cannot execute'), ''))
-    expect([...(await nativeProcessImages([10, 20], 500)).keys()]).toEqual([10])
-    expect((await nativeProcessImages([10], 500)).size).toBe(0)
+    expect([...(await nativeProcessImages([10, 20], 500)).images.keys()]).toEqual([10])
+    expect((await nativeProcessImages([10], 500)).images.size).toBe(0)
   })
 
   it('rejects unbounded or invalid requests without preparing an executable', async () => {
     vi.stubGlobal('__DARWIN_PROCESS_IMAGES__', JSON.stringify(artifact))
     for (const pids of [[], [0], [-1], [10.1], [0x80000000], new Array(4097).fill(7)]) {
-      expect((await nativeProcessImages(pids, 500)).size).toBe(0)
+      expect((await nativeProcessImages(pids, 500)).images.size).toBe(0)
     }
-    expect((await nativeProcessImages([10], 0)).size).toBe(0)
+    expect((await nativeProcessImages([10], 0)).images.size).toBe(0)
     expect(host.execFile).not.toHaveBeenCalled()
     expect(await readdir(root)).toEqual([])
   })
@@ -166,14 +188,14 @@ describe('fresh native image reads', () => {
     host.execFile.mockImplementationOnce((_path, _args, _options, done) => done(null, output(record(10))))
       .mockImplementationOnce((_path, _args, _options, done) => done(Object.assign(new Error('missing'), { code: 'ENOENT' }), ''))
       .mockImplementationOnce((_path, _args, _options, done) => done(null, output(record(10, '/new'))))
-    expect((await nativeProcessImages([10], 500)).size).toBe(1)
+    expect((await nativeProcessImages([10], 500)).images.size).toBe(1)
     const path = join(root, 'process-images', artifact.sha256)
     await rm(path)
-    expect((await nativeProcessImages([10], 500)).size).toBe(0)
-    expect((await nativeProcessImages([10], 500)).size).toBe(0)
+    expect((await nativeProcessImages([10], 500)).images.size).toBe(0)
+    expect((await nativeProcessImages([10], 500)).images.size).toBe(0)
     expect(host.execFile).toHaveBeenCalledTimes(2)
     now = 60_001
-    expect((await nativeProcessImages([10], 500)).get(10)?.path).toBe('/new')
+    expect((await nativeProcessImages([10], 500)).images.get(10)?.path).toBe('/new')
     expect(await readFile(path)).toEqual(bytes)
   })
 
@@ -181,7 +203,7 @@ describe('fresh native image reads', () => {
     vi.stubGlobal('__DARWIN_PROCESS_IMAGES__', JSON.stringify(artifact))
     let resume!: () => void
     host.beforeStat = new Promise<void>(resolve => { resume = resolve })
-    expect((await nativeProcessImages([10], 20)).size).toBe(0)
+    expect((await nativeProcessImages([10], 20)).images.size).toBe(0)
     expect(host.execFile).not.toHaveBeenCalled()
     resume()
     await vi.waitFor(async () => expect(await readFile(join(root, 'process-images', artifact.sha256))).toEqual(bytes))

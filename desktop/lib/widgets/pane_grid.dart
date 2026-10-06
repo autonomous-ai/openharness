@@ -31,6 +31,7 @@ import 'agent_drag.dart';
 import 'harness_join_guide_screen.dart';
 import 'link_machine_screen.dart';
 import 'new_agent_dialog.dart';
+import 'new_device_notice.dart' show DeviceListReviewLine, showDeviceListReview;
 import 'delete_agent_dialog.dart';
 import 'restart_agent_action.dart';
 import 'terminal_panel.dart';
@@ -1574,11 +1575,15 @@ class _PaneContent extends StatelessWidget {
               : 'Waiting for this machine. Retained output is read only.',
         );
       } else if (needsLink) {
+        // A frozen device list may be why it asks: the band says so, beside
+        // the password.
+        final review = notifier.deviceListNeedsReview;
         notice = terminalNotice(
           label: 'Link required',
           icon: AppIcons.unlink,
-          detail:
-              '${machine.machine.displayName} needs linking. Retained output is read only.',
+          detail: review
+              ? '${machine.machine.displayName} needs linking. Your device list needs a review.'
+              : '${machine.machine.displayName} needs linking. Retained output is read only.',
           // A tile still showing its last screen gets the same way out as an
           // empty one — the band's button asks for the remote password.
           actionLabel: 'Link…',
@@ -1587,6 +1592,11 @@ class _PaneContent extends StatelessWidget {
             notifier,
             pane.machineId,
           ).ignore(),
+          secondaryLabel: review ? 'Your devices' : null,
+          onSecondary: review
+              ? () => showDeviceListReview(context, notifier)
+              : null,
+          banner: review,
         );
       } else if (offline) {
         notice = terminalNotice(
@@ -1749,6 +1759,7 @@ class _PaneContent extends StatelessWidget {
           notifier,
           pane.machineId,
         ).ignore(),
+        footer: DeviceListReviewLine(notifier: notifier, center: true),
       );
     }
     if (offline) {
@@ -2287,6 +2298,7 @@ class _PaneStatus extends StatelessWidget {
     this.busy = false,
     this.actionLabel,
     this.onAction,
+    this.footer,
   });
 
   final String title;
@@ -2300,6 +2312,10 @@ class _PaneStatus extends StatelessWidget {
   /// reporting a failure the user can retry does, and it reads the same as the error strip's RETRY.
   final String? actionLabel;
   final VoidCallback? onAction;
+
+  /// Anything more under the way out — a machine asking for its password:
+  /// a device list to review.
+  final Widget? footer;
 
   @override
   Widget build(BuildContext context) {
@@ -2342,6 +2358,7 @@ class _PaneStatus extends StatelessWidget {
                     const SizedBox(height: 4),
                     TextButton(onPressed: onAction, child: Text(actionLabel!)),
                   ],
+                  ?footer,
                 ],
               ),
             ),

@@ -197,7 +197,7 @@ describe('the core\'s request gate (core/main.ts)', () => {
   it('holds requests from the moment the socket exists', () => {
     const constructed = at('const backend = new BackendSocket(')
     const held = at('backend.holdRequests()', constructed)
-    const between = source.slice(source.indexOf('\n', source.indexOf('}, computerId(), autonomousEnv)', constructed)), held)
+    const between = source.slice(source.indexOf('\n', source.indexOf('\n  })', constructed) + 1), held)
     // Only the reference other code reads the socket through may come between them; nothing that yields.
     expect(between.split('\n').map((line) => line.trim()).filter(Boolean)).toEqual(['backendRef = backend'])
   })

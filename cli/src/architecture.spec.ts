@@ -144,7 +144,10 @@ const WALK_TIMEOUT_MS = 60_000
  * those moves, and runForeground gained 28.
  */
 const RUN_FOREGROUND_BUDGET = 2_600
-const BACKEND_SOCKET_BUDGET = 2_180
+/** Lowered from 2,180 when the relay and its E2EE left the socket for the gateway (step 10, R1: 1,440).
+ *  The Wi-Fi device's relay came back to it in R2, beside the device service it answers for, over the
+ *  gateway's sessions (lib/autonomous-device/overGateway.ts): 1,460. */
+const BACKEND_SOCKET_BUDGET = 1_460
 
 /** Exceptions, each with its reason. Keep this short. */
 const SERVICE_MAY_IMPORT: Record<string, string> = {
@@ -179,17 +182,45 @@ const SERVICE_MAY_IMPORT: Record<string, string> = {
  * monitor and the project readers run in processes of their own, and their code is loaded into the
  * core's only when they run there instead (services/inline.ts). Then at 101,896 in 430 (step 6): the
  * Store runs beside the viewers.
+ *
+ * Grew to 102,524 in 433 (step 10, R1), from 101,896 in 430: the relay and its E2EE left the socket for
+ * the gateway (gateway/gateway.ts, gateway/upstream.ts) behind the two interfaces it speaks to the core
+ * through (`GatewayPort`, `GatewayEvents` in core/api.ts), still in the core's process. The socket lost
+ * 742 lines; the gateway's 1,193 and the interfaces' 110 are loaded until R2 runs the gateway in a process
+ * of its own, which takes them, the E2EE manager and the P2P channels out of the core's process.
+ *
+ * Then at 95,689 in 420 (step 10, R2), from 102,524 in 433: the gateway runs in a process of its own (gateway/gatewayProcess.ts),
+ * and the core loads it only to run it in its own process instead (services/inline.ts). With it went the
+ * E2EE manager, the backend link, P2P and STUN, the windows' relay pool, the trust group and the device
+ * key log. What of lib/e2ee the core still loads is the fleet's lane (R3) and Share's own crypto (step 8).
+ *
+ * Grew by 67 to 95,757 in 420 for the daemon's periodic CPU, measured on harnessd-core 0.3.58/0.3.59: the
+ * dial scan runs `ioreg` (~150 ms of CPU every 2 s, about 7.5% of a core) only when /dev/cu.* changes
+ * (cable/serial.ts, +31, with one confirming scan after each change or phantom port, since devfs and the
+ * IORegistry do not change together); a deleted executable already found by `lsof -d txt` (~18 ms every
+ * 5 s, about 0.4%) is not asked about again every 5 s (lib/tmux.ts and lib/nativeProcessImages.ts,
+ * +32); and an unchanged registry.json is not rewritten every 5 s (about 720 writes an hour) because
+ * its keys were in another order (lib/registry.ts, +4). The dial's part leaves with step 9 (the devices
+ * process).
  */
 //
 // Connected TUI shells added a literal-argv launch port and shell service (#893, 160 loaded lines); moving
 // the search filename out of its CLI command removed 188, so that change lowered the closure by 28.
-const CORE_CLOSURE_BUDGET = 101_990
+//
+// Then at 95,340 in 416 (step 10, R3), from 95,757 in 420: the fleet's lane seals through the gateway, so
+// the session crypto it ran in the core's process (lib/e2ee/relayClient.ts and what it loads) is the
+// gateway's alone, and the Share relay (sharing/relay.ts) runs in the gateway with the relay's other sockets.
+// What a service in its own process may ask of the account (core/accountQueries.ts) is the 41 lines added.
+const CORE_CLOSURE_BUDGET = 95_440
 
 /** What is not the core's, by path: each goes to a service or its own process, in the plan's order. */
 const EDGE: RegExp[] = [
-  /^lib\/e2ee\//, /^cable\//, /^device\//, /^lib\/autonomous-device\//, /^sharing\//, /^teams\//, /^orchestrator\//, /^services\//,
+  /^gateway\//, /^lib\/e2ee\//, /^cable\//, /^device\//, /^lib\/autonomous-device\//, /^sharing\//, /^teams\//, /^orchestrator\//, /^services\//,
   /^lib\/grid(Attach|Credentials|Derive|Ensure|Exec|FleetRpc|Handoff|Install|McpUrl|Models|ModelsPayload|Picture|Presence|Reader|Target|Wake)\.ts$/,
   /^lib\/localModels\.ts$/,
+  // The relay's own parts, the gateway's alone: the windows' sessions to other machines, P2P and STUN, the
+  // remote viewers' proxy, and the shaping of what goes up the link.
+  /^lib\/(remoteRelay|terminalP2p|stunSelect|remoteViewerProxy|deviceRecentTrim|commanderReplay)\.ts$/,
   // The Store's and the viewers' parts of dsh; the launch path (installed, manifest, launch, runtime, …) is the core's.
   /^dsh\/(catalog|install|update|updates|registry|wire|service|lock|builtins|viewer|viewerLedger|verdict|artifacts)\.ts$/,
   // Search's index; the readers of other engines' sessions (external.ts, externals/) are the core's, for adoption.
@@ -237,11 +268,10 @@ const CORE_MAY_REACH: Record<string, string> = {
   'dsh/service.ts': STORE_BYPASS,
   'dsh/update.ts': STORE_BYPASS,
   'dsh/updates.ts': STORE_BYPASS,
-  'lib/autonomous-device/direct.ts': 'step 10: the Wi-Fi device, into the devices process over the gateway',
-  'lib/autonomous-device/discovery.ts': 'step 10: the Wi-Fi device, into the devices process over the gateway',
   'lib/autonomous-device/dump.ts': 'step 10: the Wi-Fi device, into the devices process over the gateway',
   'lib/autonomous-device/input.ts': 'step 9: the pane writer lock, into core/input.ts',
   'lib/autonomous-device/localApi.ts': 'step 10: the Wi-Fi device, into the devices process over the gateway',
+  'lib/autonomous-device/overGateway.ts': 'step 10: the Wi-Fi device, into the devices process over the gateway',
   'lib/autonomous-device/parts.ts': 'step 10: the Wi-Fi device, into the devices process over the gateway',
   'lib/autonomous-device/relay.ts': 'step 10: the Wi-Fi device, into the devices process over the gateway',
   'lib/autonomous-device/resultContract.ts': 'step 10: the Wi-Fi device, into the devices process over the gateway',
@@ -252,20 +282,10 @@ const CORE_MAY_REACH: Record<string, string> = {
   'lib/autonomous-device/storeContract.ts': 'step 10: the Wi-Fi device, into the devices process over the gateway',
   'lib/autonomous-device/storeRuntime.ts': 'step 10: the Wi-Fi device, into the devices process over the gateway',
   'lib/autonomous-device/stream.ts': 'step 10: the Wi-Fi device, into the devices process over the gateway',
-  'lib/e2ee/applicationFrames.ts': 'step 10: the relay and E2EE, in the gateway',
-  'lib/e2ee/core.ts': 'step 10: the relay and E2EE, in the gateway',
-  'lib/e2ee/deviceHistory.ts': 'step 10: the relay and E2EE, in the gateway',
-  'lib/e2ee/deviceLog.ts': 'step 10: the relay and E2EE, in the gateway',
-  'lib/e2ee/deviceLogStore.ts': 'step 10: the relay and E2EE, in the gateway',
-  'lib/e2ee/deviceLogSyncer.ts': 'step 10: the relay and E2EE, in the gateway',
-  'lib/e2ee/groupSyncer.ts': 'step 10: the relay and E2EE, in the gateway',
-  'lib/e2ee/machinePeers.ts': 'step 10: the relay and E2EE, in the gateway',
-  'lib/e2ee/manager.ts': 'step 10: the relay and E2EE, in the gateway',
-  'lib/e2ee/passwordPake.ts': 'step 10: the relay and E2EE, in the gateway',
-  'lib/e2ee/relayClient.ts': 'step 10: the relay and E2EE, in the gateway',
-  'lib/e2ee/replayWindow.ts': 'step 10: the relay and E2EE, in the gateway',
-  'lib/e2ee/store.ts': 'step 10: the relay and E2EE, in the gateway',
-  'lib/e2ee/trustGroup.ts': 'step 10: the relay and E2EE, in the gateway',
+  'lib/e2ee/core.ts': 'step 8: Share seals its own frames with it',
+  'lib/e2ee/machinePeers.ts': 'step 9: the fleet reads which machines are linked (their public keys, no credential), beside the dial',
+  'lib/e2ee/passwordPake.ts': 'with lib/e2ee/store.ts',
+  'lib/e2ee/store.ts': 'step 8: this machine\'s identity, for Share\'s owner',
   'lib/gridAttach.ts': 'step 7: models, in its own process',
   'lib/gridCredentials.ts': 'step 7: models, in its own process',
   'lib/gridDerive.ts': 'step 7: models, in its own process',
@@ -301,7 +321,6 @@ const CORE_MAY_REACH: Record<string, string> = {
   'sharing/grants.ts': 'step 8: the experimental host',
   'sharing/owner.ts': 'step 8: the experimental host',
   'sharing/protocol.ts': 'step 8: the experimental host',
-  'sharing/relay.ts': 'step 8: the experimental host',
   'sharing/viewer.ts': 'step 8: the experimental host',
   'teams/channels.ts': 'step 8: the experimental host',
   'teams/client.ts': 'step 8: the experimental host',
@@ -336,6 +355,18 @@ describe('the daemon\'s shape', () => {
         : /(^|\/)services\//.test(from) || (/(^|\/)(cli|backendSocket|localWsServer)\.js$/.test(from) && !typeOnly)))
       .map(({ file, from }) => `${file} imports ${from}`)
     expect(wrong, 'The core calls services only through CorePorts, and is handed the socket\'s pieces as dependencies (src/core/AGENTS.md).').toEqual([])
+  })
+
+  it('the gateway reaches the core only through core/api.ts: never a core module, the registry, cli.ts or the socket', () => {
+    // It speaks to the core through GatewayPort and GatewayEvents alone, so that it can run in a process of
+    // its own (step 10, R2) without taking any of the core with it.
+    const wrong = importsIn('gateway').filter(({ from, typeOnly }) => {
+      if (/(^|\/)core\//.test(from)) return from !== '../core/api.js' || !typeOnly
+      if (/(^|\/)(cli|backendSocket|localWsServer)\.js$/.test(from)) return true
+      return /(^|\/)lib\/registry\.js$/.test(from)
+    }).map(({ file, from }) => `${file} imports ${from}`)
+    expect(wrong, 'The gateway is the relay, not the core: what it needs of the core is an event in GatewayEvents (src/core/api.ts).').toEqual([])
+    expect(importsIn('gateway').some(({ from, typeOnly }) => from === '../core/api.js' && typeOnly)).toBe(true)
   })
 
   it('the master holds no feature code: Node itself, its own folder, and the log trimmer', () => {

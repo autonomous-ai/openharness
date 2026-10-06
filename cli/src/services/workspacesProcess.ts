@@ -13,7 +13,7 @@
  * alone: a hang or a crash in it costs workspaces, and the master starts them again.
  */
 import type { CoreApi } from '../core/api.js'
-import { emptyPorts, resolveAgent, TERMINALS_OFF } from '../core/api.js'
+import { emptyPorts, LANE_OFF, resolveAgent, TERMINALS_OFF } from '../core/api.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcess } from './process.js'
 import { startWorkspaces } from './workspaces.js'
@@ -75,6 +75,7 @@ export function workspacesCoreApi(
     account: {
       mintGridName: async () => null,
       accessToken: () => Promise.reject(new Error('workspaces hold no credential')),
+      lane: LANE_OFF,
       privateGridName: async () => null,
       machineName: () => null,
     },

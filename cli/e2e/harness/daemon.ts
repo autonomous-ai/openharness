@@ -115,6 +115,8 @@ export function assertHooksContained(root: string, env: NodeJS.ProcessEnv): void
   check('CODEX_HOME', env.CODEX_HOME)
   if (env.CLAUDE_CONFIG_DIR !== undefined) check('CLAUDE_CONFIG_DIR', env.CLAUDE_CONFIG_DIR)
   check('ZDOTDIR', env.ZDOTDIR)
+  // Not a hook, but what routes every hook: a record outside the root would send the person's hooks here.
+  if (env.HARNESS_HOOK_ROUTES_DIR !== undefined) check('HARNESS_HOOK_ROUTES_DIR', env.HARNESS_HOOK_ROUTES_DIR)
   for (const [folder, names] of Object.entries(PROFILES) as Array<[keyof typeof PROFILES, string[]]>) {
     for (const name of names) {
       const file = join(env[folder]!, name)
@@ -237,6 +239,9 @@ export class IsolatedDaemon {
       // folders these tests have no engine for.
       DISABLE_HOOK_INSTALL: 'false',
       HOOK_INSTALL_ENGINES: 'claude,codex',
+      // Where each daemon records its data folder and port for the hooks of its panes (lib/hookRoutes.ts):
+      // under the home, as on a person's computer, so daemons beside each other share it.
+      HARNESS_HOOK_ROUTES_DIR: join(dirs.home, '.harness', 'hook-routes'),
       ADAPTER_UPDATE_DISABLE: 'true',
       ANALYTICS_ENABLED: 'false',
       RECAP_FORCE: 'false',

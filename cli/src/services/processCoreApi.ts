@@ -7,7 +7,7 @@
  * What these services never ask (turns, questions, sign-in, the windows) answers as nothing, and a
  * credential is refused: a service holds none (services/AGENTS.md).
  */
-import { resolveAgent, TERMINALS_OFF, type CoreApi } from '../core/api.js'
+import { LANE_OFF, resolveAgent, TERMINALS_OFF, type CoreApi } from '../core/api.js'
 import type { RegisteredSession } from '../lib/registry.js'
 
 /** The agents a process was last told of. Those it is never told of read as none. */
@@ -57,6 +57,7 @@ export function processCoreApi(dataDir: string, service: string, view: AgentsVie
     account: {
       mintGridName: async () => null,
       accessToken: () => Promise.reject(new Error(`${service} holds no credential`)),
+      lane: LANE_OFF,
       privateGridName: async () => null,
       machineName: () => null,
     },

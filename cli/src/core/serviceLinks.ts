@@ -21,11 +21,18 @@ export interface ServiceFrame {
 /** Where frames to one service's connection go. */
 export interface ServiceSink {
   sendFrame(frame: ServiceFrame): boolean
+  /** Bytes, for a service that carries terminals (the gateway); false when the socket refused them. */
+  sendBinary?(bytes: Uint8Array): boolean
+  /** How many bytes are waiting on the socket to the service: a hung one stops reading, and what the core
+   *  keeps sending it would pile up in the core's memory. */
+  buffered?(): number
 }
 
 /** What the local socket hands back for a service connection: its frames in, its end. */
 export interface ServiceLink {
   receive(frame: ServiceFrame): void
+  /** A binary frame from the service. */
+  receiveBinary(bytes: Uint8Array): void
   closed(): void
 }
 
@@ -36,6 +43,13 @@ export interface ServiceLinksOptions {
   owned: Readonly<Record<string, readonly string[]>>
   /** The core's answer to a service's question (`service_query`): `query` names it. */
   answer(service: string, query: string, payload: Record<string, unknown>): Record<string, unknown> | Promise<Record<string, unknown>>
+  /** What a service tells the core without asking (`service_notice`), and its binary frames: the gateway's
+   *  remote clients and what they sent. Only the services that send them are given these. */
+  notice?(service: string, payload: Record<string, unknown>): void
+  binary?(service: string, bytes: Uint8Array): void
+  /** A service connected (each time, a restarted one too), or its connection ended. */
+  connected?(service: string): void
+  disconnected?(service: string): void
   /** How long a routed request may wait for its service before it is answered SERVICE_UNAVAILABLE. */
   timeoutMs?: number
   log?: (line: string) => void
@@ -91,13 +105,13 @@ export function createServiceLinks(options: ServiceLinksOptions) {
   }
 
   /** Send `type` to `service`, its answer to `reply`, whatever becomes of the service. */
-  const ask = (service: string, type: string, payload: Record<string, unknown>, asker: Asker, reply: (result: Record<string, unknown>) => void): void => {
+  const ask = (service: string, type: string, payload: Record<string, unknown>, asker: Asker, reply: (result: Record<string, unknown>) => void, waitMs = timeoutMs): void => {
     const link = links.get(service)
     if (!link) { reply(unavailable(service)); return }
     const id = newId()
     const entry: Waiting = { service, type, reply, timer: null }
     // Cleared whenever the entry is settled, so it only ever fires for one still waiting.
-    entry.timer = setTimer(() => settle(id, entry, unavailable(service)), timeoutMs)
+    entry.timer = setTimer(() => settle(id, entry, unavailable(service)), waitMs)
     waiting.set(id, entry)
     if (!link.sink.sendFrame({ type, payload: { ...payload, requestId: id }, asker })) settle(id, entry, unavailable(service))
   }
@@ -117,9 +131,11 @@ export function createServiceLinks(options: ServiceLinksOptions) {
       const owed = held.get(service) ?? []
       held.delete(service)
       for (const frame of owed) sink.sendFrame(frame)
+      options.connected?.(service)
       return {
         receive: (frame) => {
           const payload = frame.payload ?? {}
+          if (frame.type === 'service_notice') { options.notice?.(service, payload); return }
           if (frame.type === 'service_query') {
             const requestId = payload.requestId
             const query = typeof payload.query === 'string' ? payload.query : ''
@@ -136,11 +152,13 @@ export function createServiceLinks(options: ServiceLinksOptions) {
           const { requestId: _routed, ...result } = payload
           settle(id, entry, result)
         },
+        receiveBinary: (bytes) => { options.binary?.(service, bytes) },
         closed: () => {
           if (links.get(service) !== connected) return
           links.delete(service)
           log(`[services] ${service} disconnected`)
           for (const [id, entry] of waiting) if (entry.service === service) settle(id, entry, unavailable(service))
+          options.disconnected?.(service)
         },
       }
     },
@@ -157,8 +175,18 @@ export function createServiceLinks(options: ServiceLinksOptions) {
     /** Ask a service what the core itself needs (a port's call, core/monitorLink.ts): answered by its
      *  handler for `type` in its process, or SERVICE_UNAVAILABLE as a routed request is, while it is down
      *  or slow. Never rejects. The types it asks are no client's to route: only the core sends them. */
-    call(service: string, type: string, payload: Record<string, unknown>): Promise<Record<string, unknown>> {
-      return new Promise((resolve) => { ask(service, type, payload, THE_CORE, resolve) })
+    call(service: string, type: string, payload: Record<string, unknown>, waitMs?: number): Promise<Record<string, unknown>> {
+      return new Promise((resolve) => { ask(service, type, payload, THE_CORE, resolve, waitMs) })
+    },
+
+    /** Bytes for a service that carries terminals; false when it is not connected or would not take them. */
+    notifyBinary(service: string, bytes: Uint8Array): boolean {
+      return links.get(service)?.sink.sendBinary?.(bytes) ?? false
+    },
+
+    /** How many bytes wait on the socket to a service; 0 when it is not connected. */
+    buffered(service: string): number {
+      return links.get(service)?.sink.buffered?.() ?? 0
     },
 
     /** Tell a service something it needs to know; false when it is not connected to hear it. With

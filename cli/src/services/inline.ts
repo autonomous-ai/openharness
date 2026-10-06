@@ -3,6 +3,8 @@
  * when they run in the core's instead: with `HARNESSD_SERVICES=none` (debugging, or a quick way back), a
  * subset named, a master too old to run them, or no master at all (`harness start -f`).
  *
+ * The gateway (gateway/start.ts) is here too: the relay and its keys, run in the core's process the same way.
+ *
  * The core imports this module only then, and only dynamically (core/main.ts): what it reaches is the
  * services' own code, which the core's process then never loads by default. That is how a service in its
  * own process leaves the core's import closure, which src/architecture.spec.ts holds to a budget and
@@ -10,6 +12,7 @@
  * and its test"). The core still routes these services' requests and holds their fallbacks: both are
  * declared in core/api.ts, which it loads either way.
  */
+export { startGateway } from '../gateway/start.js'
 export { startMonitor } from './monitor.js'
 export { startProjects } from './projects.js'
 export { startSearch } from './search.js'

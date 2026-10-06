@@ -1,13 +1,14 @@
 import { execFileSync, spawn, spawnSync } from 'child_process'
 import { createServer } from 'http'
 import { createServer as createNetServer } from 'net'
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'fs'
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { fileURLToPath } from 'url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ENGINES } from './engines/types.js'
 import { HARNESS_OWNER_OPTION, HARNESS_SESSION_PREFIX, harnessPaneOwner, ownerCommand, paneOwnerFormat } from './lib/harnessSessionLabel.js'
+import { hookRouteFile, publishHookRoute } from './lib/hookRoutes.js'
 
 // Every case here spawns the real hook as a child process, and several spawn shell shims for tmux, ps
 // and sqlite3 on top of that. On a loaded machine — this file runs alongside 88 others — that chain
@@ -74,18 +75,30 @@ function runHook(opts: RunHookOpts): Promise<string> {
     if (opts.env) Object.assign(env, opts.env)
     delete env.TMUX_PANE
     if (opts.tmuxPane) env.TMUX_PANE = opts.tmuxPane
+    // Every hook asks tmux whose pane it is (notify.mjs routeToPaneOwner). Without a shim below, that
+    // question must reach no server at all, least of all the developer's: TMUX outranks TMUX_TMPDIR, and
+    // TMUX_TMPDIR has to exist or tmux falls back to the default socket.
+    delete env.TMUX
+    env.TMUX_TMPDIR = mkdtempSync(join(tmpdir(), 'adapter-hook-tmux-'))
+    tmpDirs.push(env.TMUX_TMPDIR)
     delete env.MACHINE_ID
     if (opts.launcherId !== null) env.MACHINE_ID = opts.launcherId ?? '11111111-2222-4333-8444-555555555555'
+    if (opts.processEngine || opts.paneOwner !== undefined || opts.paneSession !== undefined) {
+      const binDir = mkdtempSync(join(tmpdir(), 'adapter-hook-bin-'))
+      tmpDirs.push(binDir)
+      const shellQuote = (value: string) => "'" + value.replace(/'/g, "'\\''") + "'"
+      // The pane as tmux describes it: its root process, and the session and tag that say whose agent it
+      // is (a Harness session, untagged, unless the test says otherwise).
+      const paneFacts = `${opts.paneSession ?? 'harness-claude-1790000000000'}|${opts.paneOwner ?? ''}`
+      writeFileSync(join(binDir, 'tmux'), `#!/bin/sh\nprintf '%s\\n' ${shellQuote(`7000|${paneFacts}`)}\n`, { mode: 0o755 })
+      env.PATH = `${binDir}:${env.PATH ?? ''}`
+    }
     if (opts.processEngine) {
       const binDir = mkdtempSync(join(tmpdir(), 'adapter-hook-bin-'))
       tmpDirs.push(binDir)
       const executable = opts.processExecutable ?? (opts.processEngine === 'cursor' ? 'agent' : opts.processEngine)
       const processArgs = opts.processArgs ?? executable
       const shellQuote = (value: string) => "'" + value.replace(/'/g, "'\\''") + "'"
-      // The pane as tmux describes it: its root process, and the session and tag that say whose agent it
-      // is (a Harness session, untagged, unless the test says otherwise).
-      const paneFacts = `${opts.paneSession ?? 'harness-claude-1790000000000'}|${opts.paneOwner ?? ''}`
-      writeFileSync(join(binDir, 'tmux'), `#!/bin/sh\nprintf '%s\\n' ${shellQuote(`7000|${paneFacts}`)}\n`, { mode: 0o755 })
       writeFileSync(join(binDir, 'ps'), `#!/bin/sh\nprintf '%s\\n' '7000 1 zsh Mon Aug 10 10:00:00 2026 -zsh' ${shellQuote(`7001 7000 ${executable} Mon Aug 10 10:00:01 2026 ${processArgs}`)} '${process.pid} 7001 node Mon Aug 10 10:00:02 2026 hook-parent'\n`, { mode: 0o755 })
       if (opts.processEngine === 'cursor') {
         const target = join(binDir, 'cursor-agent-target')
@@ -137,11 +150,12 @@ function runHook(opts: RunHookOpts): Promise<string> {
 }
 
 /** A throwaway localhost adapter that records every hook POST. */
-async function collect(response: Record<string, unknown> = {}): Promise<{ port: number; requests: Array<{ url: string; body: Record<string, unknown> }> }> {
+async function collect(response: Record<string, unknown> = {}, credential?: string): Promise<{ port: number; requests: Array<{ url: string; body: Record<string, unknown> }> }> {
   const requests: Array<{ url: string; body: Record<string, unknown> }> = []
   const server = createServer((req, res) => {
     // Local service discovery may probe a test port. Only hook POSTs belong to this fixture.
     if (req.method !== 'POST') { res.writeHead(405).end(); return }
+    if (credential && req.headers['x-harness-hook-token'] !== credential) { req.resume(); res.writeHead(401).end(); return }
     let raw = ''
     req.on('data', (chunk) => { raw += chunk.toString() })
     req.on('end', () => {
@@ -1493,5 +1507,133 @@ describe('hook notify Command Code re-registration', () => {
     })
 
     expect(requests.map((r) => r.url)).toEqual(['/api/hook/turn-stop'])
+  })
+})
+
+describe('a hook reaches the daemon that made its pane', () => {
+  // A computer has one Claude Code entry and one Codex entry, and each daemon writes its own --port and
+  // --data-dir into them as it starts. With a dev daemon beside the release one, the last to start took
+  // every hook and turned the other's away. Each daemon records where it listens under its pane tag
+  // (lib/hookRoutes.ts), and the hook follows the pane's tag there (notify.mjs routeToPaneOwner).
+  function computer() {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'adapter-hook-routes-')))
+    tmpDirs.push(dir)
+    const routes = join(dir, 'hook-routes')
+    const daemon = (name: string) => {
+      const dataDir = join(dir, name)
+      mkdirSync(dataDir, { recursive: true, mode: 0o700 })
+      const credential = name[0].repeat(43)
+      writeFileSync(join(dataDir, 'hook-credential'), `${credential}\n`, { mode: 0o600 })
+      return { dataDir, tag: harnessPaneOwner(dataDir), credential }
+    }
+    return { dir, routes, release: daemon('release'), dev: daemon('dev') }
+  }
+  const sessionEnd = { hook_event_name: 'SessionEnd', session_id: 'session-routed', reason: 'logout' }
+
+  it('follows the pane\'s tag to its daemon, whichever daemon\'s command ran it', async () => {
+    const { routes, release, dev } = computer()
+    const atRelease = await collect({}, release.credential)
+    const atDev = await collect({}, dev.credential)
+    publishHookRoute(release.dataDir, atRelease.port, routes)
+    publishHookRoute(dev.dataDir, atDev.port, routes)
+    // The dev daemon started last: the command is its own. The pane is the release daemon's.
+    await runHook({
+      port: atDev.port, dataDir: dev.dataDir, tmuxPane: '%7', paneOwner: release.tag,
+      env: { HARNESS_HOOK_ROUTES_DIR: routes }, input: sessionEnd,
+    })
+    expect(atRelease.requests.map((r) => r.url)).toEqual(['/api/hook/session-end'])
+    expect(atDev.requests).toEqual([])
+    // Its own pane, through its own command, as before.
+    await runHook({
+      port: atDev.port, dataDir: dev.dataDir, tmuxPane: '%8', paneOwner: dev.tag,
+      env: { HARNESS_HOOK_ROUTES_DIR: routes }, input: sessionEnd,
+    })
+    expect(atDev.requests.map((r) => r.url)).toEqual(['/api/hook/session-end'])
+    // Before tmux 3.0 the tag rides in the pane's start command.
+    await runHook({
+      port: atDev.port, dataDir: dev.dataDir, tmuxPane: '%9', paneOwner: ownerCommand(release.tag, []).join(' '),
+      env: { HARNESS_HOOK_ROUTES_DIR: routes }, input: sessionEnd,
+    })
+    expect(atRelease.requests).toHaveLength(2)
+  })
+
+  it('the actual hook rejects malformed route records and uses its installed command', async () => {
+    // These checks used to exercise an unused TypeScript reader, not the hook that consumes the file.
+    const { routes, release, dev } = computer()
+    const atRelease = await collect({}, release.credential)
+    const atDev = await collect({}, dev.credential)
+    publishHookRoute(release.dataDir, atRelease.port, routes)
+    const bodies = ['broken', 'null', '{}', JSON.stringify({ dataDir: release.dataDir, port: 0 }),
+      JSON.stringify({ dataDir: release.dataDir, port: 65_536 }),
+      JSON.stringify({ dataDir: release.dataDir, port: String(atRelease.port) }),
+      JSON.stringify({ dataDir: 7, port: atRelease.port }),
+      JSON.stringify({ dataDir: dev.dataDir, port: atRelease.port })]
+    for (const body of bodies) {
+      writeFileSync(hookRouteFile(release.tag, routes), body, { mode: 0o600 })
+      await runHook({ port: atDev.port, dataDir: dev.dataDir, tmuxPane: '%7', paneOwner: release.tag,
+        env: { HARNESS_HOOK_ROUTES_DIR: routes }, input: sessionEnd })
+    }
+    expect(atRelease.requests).toEqual([])
+    expect(atDev.requests).toHaveLength(bodies.length)
+  })
+
+  it('keeps the command\'s own --port and --data-dir, as every installed command carried them, when the pane names no daemon it can trust', async () => {
+    const { dir, routes, release, dev } = computer()
+    const atRelease = await collect()
+    const atDev = await collect()
+    const hook = (paneOwner: string, extra: Partial<RunHookOpts> = {}) => runHook({
+      port: atDev.port, dataDir: dev.dataDir, tmuxPane: '%7', paneOwner, env: { HARNESS_HOOK_ROUTES_DIR: routes }, input: sessionEnd, ...extra,
+    })
+    const record = hookRouteFile(release.tag, routes)
+    // An untagged pane in a session Harness named (a pane from before the tag), and a tag with no record
+    // (a daemon from before the records).
+    await hook('')
+    await hook(release.tag)
+    // A record that is not the tag's own: another daemon's folder under this tag.
+    publishHookRoute(release.dataDir, atRelease.port, routes)
+    writeFileSync(record, JSON.stringify({ dataDir: dev.dataDir, port: atRelease.port }), { mode: 0o600 })
+    await hook(release.tag)
+    // A record others could have written, in a folder others could write, and one whose folder is gone.
+    publishHookRoute(release.dataDir, atRelease.port, routes)
+    chmodSync(record, 0o666)
+    await hook(release.tag)
+    publishHookRoute(release.dataDir, atRelease.port, routes)
+    chmodSync(routes, 0o777)
+    await hook(release.tag)
+    chmodSync(routes, 0o700)
+    const gone = join(dir, 'gone')
+    mkdirSync(gone)
+    publishHookRoute(gone, atRelease.port, routes)
+    rmSync(gone, { recursive: true })
+    await hook(harnessPaneOwner(gone))
+    expect(atRelease.requests).toEqual([])
+    expect(atDev.requests).toHaveLength(6)
+    // And with the record in order, the same hook goes to the release daemon.
+    publishHookRoute(release.dataDir, atRelease.port, routes)
+    await hook(release.tag)
+    expect(atRelease.requests).toHaveLength(1)
+  })
+
+  it('offline, writes its registry row into the daemon that made the pane, which reads it when it is back', async () => {
+    const { dir, routes, release, dev } = computer()
+    const claudeProjectsDir = join(dir, 'claude-projects')
+    mkdirSync(join(claudeProjectsDir, 'demo'), { recursive: true })
+    const transcriptPath = join(claudeProjectsDir, 'demo', 'session-offline.jsonl')
+    writeFileSync(transcriptPath, '{}\n')
+    // The release daemon is down: nothing listens on port 9.
+    publishHookRoute(release.dataDir, 9, routes)
+    await runHook({
+      port: 9, dataDir: dev.dataDir, tmuxPane: '%7', processEngine: 'claude', claudeProjectsDir,
+      paneSession: 'mine', paneOwner: release.tag, env: { HARNESS_HOOK_ROUTES_DIR: routes },
+      input: { hook_event_name: 'SessionStart', session_id: 'session-offline', transcript_path: transcriptPath, cwd: '/tmp/demo', source: 'startup' },
+    })
+    const rows = (folder: string) => { try { return JSON.parse(readFileSync(join(folder, 'registry.json'), 'utf8')) as Array<{ sessionId: string }> } catch { return null } }
+    expect(rows(release.dataDir)?.map((row) => row.sessionId)).toEqual(['session-offline'])
+    expect(rows(dev.dataDir)).toBeNull()
+  })
+
+  it('looks where the daemons record by default', () => {
+    // lib/hookRoutes.ts writes under env.HARNESS_HOOK_ROUTES_DIR, whose default is the product root's.
+    expect(readFileSync(HOOK, 'utf8')).toContain("process.env.HARNESS_HOOK_ROUTES_DIR || join(homedir(), '.harness', 'hook-routes')")
   })
 })
