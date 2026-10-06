@@ -2,10 +2,10 @@
  * A failing service never takes the core down, proven on the real daemon: every service made to fail as
  * it starts, and services made to fail on every call, while a client starts an agent, the agent binds,
  * messages become turns that start and end, and the daemon restarts. Both ways a service runs: in a
- * process of its own (the default for search, the viewers, the teams and the edge host's workspaces,
- * usage, monitor and project readers, harnessd/services.ts), and inside the core's process
- * (`HARNESSD_SERVICES=none`, and always for models, the Store and the fleet), where the core's host
- * guards it (core/serviceHost.ts).
+ * process of its own (the default for search, the viewers with the Store, the teams, models and the edge
+ * host's workspaces, usage, monitor and project readers, harnessd/services.ts), and inside the core's
+ * process (`HARNESSD_SERVICES=none`, and always for the fleet), where the core's host guards it
+ * (core/serviceHost.ts).
  */
 import { randomUUID } from 'node:crypto'
 import { mkdirSync } from 'node:fs'
@@ -52,15 +52,15 @@ const IN_THE_CORE = { HARNESSD_SERVICES: 'none' }
 /** A master quick to give up on a service that keeps failing as it starts. */
 const QUICK_TO_PARK = { HARNESSD_SERVICE_PARK_CRASHES: '3', HARNESSD_SERVICE_INITIAL_BACKOFF_MS: '200', HARNESSD_SERVICE_MAX_BACKOFF_MS: '1000' }
 /** The processes the services run in by default, and what makes every one of them fail as it starts. */
-const SERVICE_PROCESSES = ['search', 'viewers', 'edge', 'teams'] as const
-const EVERY_PROCESS_FAILING = 'search,viewers,store,workspaces,usage,monitor,projects,teams'
+const SERVICE_PROCESSES = ['search', 'viewers', 'edge', 'teams', 'models'] as const
+const EVERY_PROCESS_FAILING = 'search,viewers,store,workspaces,usage,monitor,projects,teams,models'
 
 describe('a failing service never takes the core down', () => {
   let daemon: IsolatedDaemon | undefined
   afterEach(async () => { await daemon?.close(); daemon = undefined })
 
   it('with every service failing to start, in its own process or in the core, the core starts, runs an agent through turns and a restart, and says each one is unavailable', async () => {
-    daemon = await IsolatedDaemon.create({ env: { HARNESSD_TEST_FAULTS: `${EVERY_PROCESS_FAILING},models`, ...QUICK_TO_PARK } })
+    daemon = await IsolatedDaemon.create({ env: { HARNESSD_TEST_FAULTS: EVERY_PROCESS_FAILING, ...QUICK_TO_PARK } })
     const d = daemon
     onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-120).join('\n')}`) })
     await d.start()
@@ -68,7 +68,6 @@ describe('a failing service never takes the core down', () => {
     for (const service of SERVICE_PROCESSES) {
       await until(`the master to park ${service}`, () => d.log().includes(`[harnessd] service ${service} ended 3 times`) || null, 60_000, 250)
     }
-    expect(d.log()).toContain('[services] models did not start · injected fault: models · the core runs without it')
     const client = await LocalClient.connect(d)
     const agentId = await boundAgent(d, client, 'no-service-processes')
     await turn(client, agentId, 'first, with every service down')
@@ -76,6 +75,10 @@ describe('a failing service never takes the core down', () => {
     expect(await client.request('dsh_list', {})).toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'store', retryable: true })
     expect(await client.request('fs_list_dir', { path: d.projectsDir })).toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'projects', retryable: true })
     expect(await client.request('machine_resources', {})).toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'monitor', retryable: true })
+    expect(await client.request('grid_fleet_models_list', {})).toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'models', retryable: true })
+    // A create on a grid model, with models parked, is refused as the grid being unavailable, at once.
+    const onGrid = await client.request('agent_create', { engine: 'codex', cwd: d.projectsDir, gridModel: 'Qwen-35B', gridName: 'mine', bypassPermission: true }, 30_000)
+    expect(onGrid).toMatchObject({ error: 'GRID_UNAVAILABLE' })
     // With the monitor's process parked, the Monitor's list is still the list: its rows, without readings.
     const monitored = (await client.request('agents_list', { monitor: true })).agents.find((agent: Record<string, any>) => agent.id === agentId)
     expect(monitored.monitor).toMatchObject({ rssBytes: null, cpu: null, processes: [], sampledAt: null })
@@ -144,7 +147,7 @@ describe('a failing service never takes the core down', () => {
       expect(await client.request(type, { id: 'acme/thing' }), type).toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'store', retryable: false })
     }
     for (const type of ['grid_models_list', 'models_list', 'grid_fleet_models_list', 'grid_fleet_model_download', 'grid_fleet_model_start', 'grid_fleet_model_stop',
-      'api_connections', 'codex_profiles_list', 'codex_profile_link']) {
+      'grid_fleet_run', 'grid_fleet_cancel', 'api_connections', 'codex_profiles_list', 'codex_profile_link']) {
       expect(await client.request(type, { modelId: 'org/Model-GGUF' }), type).toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'models', retryable: false })
     }
     // The services that came out of the socket's switch (docs/design/2026-10-06-core-boundary-next.md, step 4).
@@ -157,8 +160,8 @@ describe('a failing service never takes the core down', () => {
     // With the monitor off, the Monitor's list is still the list: its rows, without readings.
     const monitored = (await client.request('agents_list', { monitor: true })).agents.find((agent: Record<string, any>) => agent.id === agentId)
     expect(monitored.monitor).toMatchObject({ rssBytes: null, cpu: null, processes: [] })
-    // The Model Manager's grid commands are still the socket's, and so is their handshake: models being
-    // off does not tell the Grid harness to update Harness.
+    // The Model Manager's grid commands' handshake is still the socket's: models being off does not tell
+    // the Grid harness to update Harness.
     expect(await client.request('grid_fleet_capabilities', {})).toMatchObject({ protocol: 1, thinkingControl: true })
 
     await daemon.restart()
@@ -297,11 +300,14 @@ describe('a failing service never takes the core down', () => {
 
   it('models answers from its own service; one of its requests failing leaves its others and the core alone', async () => {
     daemon = await IsolatedDaemon.create({ env: { HARNESSD_TEST_FAULTS: 'models.grid_models_list' } })
-    onTestFailed(() => { console.log(`---- daemon log\n${daemon?.log().split('\n').slice(-80).join('\n')}`) })
-    await daemon.start()
+    const d = daemon
+    onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-80).join('\n')}`) })
+    await d.start()
+    // In its own process: asked before it has connected, it is answered SERVICE_UNAVAILABLE, retryable.
+    await until('models to connect', () => d.log().includes('[services] models connected') || null, 30_000, 200)
     const client = await LocalClient.connect(daemon)
     expect(await client.request('grid_models_list', {})).toMatchObject({ error: 'SERVICE_FAILED', service: 'models' })
-    expect(daemon.log()).toContain('[services] models.grid_models_list failed · injected fault: models.grid_models_list')
+    expect(daemon.log()).toContain('[service models] grid_models_list failed · injected fault: models.grid_models_list')
     // Its other requests are still its own answers: with no agent here, no Model/Effort choices.
     expect(await client.request('models_list', {})).toMatchObject({ models: [] })
     expect(await client.request('grid_fleet_capabilities', {})).toMatchObject({ protocol: 1 })

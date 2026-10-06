@@ -18,7 +18,10 @@ import type { AgentDshContext } from '../lib/agentFrame.js'
 import type { GridAccess } from '../lib/gridAttach.js'
 import type { createHarnessResourcesReader } from '../lib/harnessResources.js'
 import type { createHarnessStorageReader } from '../lib/harnessTelemetry.js'
-import type { AgentGridTarget } from '../lib/gridModels.js'
+import type { AgentGridTarget, GridAnnotation } from '../lib/gridAnnotation.js'
+import { GRID_FLEET_MAX_TIMEOUT_MS } from '../lib/gridFleetProtocol.js'
+import type { GridLaunchOverride } from '../lib/gridLaunch.js'
+import type { NewAgentModel } from '../lib/newAgentModel.js'
 import type { LiveEvent } from '../lib/normalize.js'
 import { projectDisplayName, type registry, type RegisteredSession } from '../lib/registry.js'
 import type { RuntimeModelOption } from '../lib/runtimeProfile.js'
@@ -115,8 +118,9 @@ export interface CoreApi {
     /** The fleet's lane to the owner's other machines, sealed by the gateway with this machine's E2EE
      *  identity, which no service holds (`LaneSeal`). */
     lane: LaneSeal
-    /** The account's private grid: the backend's word when it gave one, else what this machine works
-     *  out (`lib/gridDerive.ts`); null when it has none. */
+    /** The account's private grid as the backend named it (`machine_meta`), or as grid's set-up just
+     *  confirmed it; null before either. Working it out when neither has said is the models service's
+     *  (`lib/gridDerive.ts`). */
     privateGridName(): Promise<string | null>
     /** This machine's name as the account's Machines list shows it (the backend's `machine_meta`); null
      *  until the first one lands. */
@@ -150,6 +154,11 @@ export interface Asker {
   /** Whether it may act as this machine's owner: a local process, or the owner's paired app over the
    *  relay. A device or an observer may not. */
   owner: boolean
+  /** The connection it came over, as the core names it, and the id it asked under: what a service keys
+   *  work by that belongs to one connection's request (the Model Manager's grid commands, which a cancel
+   *  on the same connection stops). Absent when the core itself asks. */
+  connection?: string
+  requestId?: string
 }
 
 /** A request a service answers for the apps: the reply, or a promise of it. A throw or a rejection is
@@ -179,18 +188,45 @@ export const PROJECTS_REQUESTS = ['git_pull_request', 'git_project_info', 'proje
 /**
  * Models (services/models.ts).
  *
- * The Model Manager's grid commands, `grid_fleet_run` and `grid_fleet_cancel`, are still the socket's:
- * a command is a job of the connection that started it, and a cancel stops only that connection's job
- * (`lib/gridFleetRpc.ts`), while a request answered by a service knows who asked but not over which
- * connection. Their handshake, `grid_fleet_capabilities`, stays beside them: the Grid harness runs a
- * command only after it, and reads an answer without its protocol as "update Harness".
+ * The Model Manager's grid commands, `grid_fleet_run` and `grid_fleet_cancel`, are among them: a command
+ * is a job of the connection that started it, and a cancel stops only that connection's own
+ * (`lib/gridFleetRpc.ts`), keyed by the connection and request id the core gives every request
+ * (`Asker`). Their handshake, `grid_fleet_capabilities`, is still the socket's: the Grid harness runs a
+ * command only after it and reads an answer without its protocol as "update Harness", which a models
+ * service that is down must not make it say.
  * The saved APIs and the Codex profiles came out of the socket's switch (launchTargetRequests).
  */
 export const MODELS_REQUESTS = [
   'grid_models_list', 'models_list',
   'grid_fleet_models_list', 'grid_fleet_model_download', 'grid_fleet_model_start', 'grid_fleet_model_stop',
+  'grid_fleet_run', 'grid_fleet_cancel',
   'api_connections', 'codex_profiles_list', 'codex_profile_link',
 ] as const
+
+const MINUTE = 60_000
+
+/**
+ * How long the core waits on a service in a process of its own for these answers before it answers
+ * SERVICE_UNAVAILABLE, where the half minute it gives any other would cut short what they do
+ * (core/serviceLinks.ts). By service, then by request or port call. A wait that runs out answers the
+ * asker; the work itself goes on in the service's process.
+ *
+ * - A grid command runs as long as its caller asked, up to half an hour (`GRID_FLEET_MAX_TIMEOUT_MS`).
+ * - Grid's set-up installs `grid` on first use (its installer is given ten minutes, `gridInstall.ts`),
+ *   hands it this machine's sign-in and makes the account's grid: a Set up, a Get, a Use, `ensure` and
+ *   a move onto a grid model (`moveTarget`) each wait for it.
+ * - A launch target, the private grid's name and the lists each run a few `grid` calls of up to 30 s.
+ * - The Store's install and update set up a harness's toolchain: minutes.
+ */
+export const LONG_ANSWERS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
+  models: {
+    grid_fleet_run: GRID_FLEET_MAX_TIMEOUT_MS + MINUTE,
+    grid_fleet_models_list: 15 * MINUTE, grid_fleet_model_download: 15 * MINUTE, grid_fleet_model_start: 15 * MINUTE,
+    ensure: 15 * MINUTE, moveTarget: 15 * MINUTE,
+    launchTarget: 3 * MINUTE, privateGridName: 2 * MINUTE, lists: 2 * MINUTE,
+  },
+  store: { dsh_install: 30 * MINUTE, dsh_update: 30 * MINUTE },
+}
 
 /** The core's calls into session search: index a session at its turn boundaries, forget a purged
  *  conversation, the title it indexed for one being adopted, and stopping its sweeps. The apps' own
@@ -223,23 +259,61 @@ export const VIEWERS_FALLBACKS: PortFallbacks<ViewersPort> = {
   attach: undefined, detach: undefined, frameContext: null, forwardingUrl: null, stop: later(undefined),
 }
 
-/** The core's calls into models (grid): have grid ready, whether it is set up, and the two things
- *  the core tells it — someone is typing to an agent on a grid, and the sign-in ended. */
+/**
+ * The core's calls into models (grid). Everything an agent's launch, its frame or a keystroke to it needs
+ * of grid, so the core never loads grid's code (docs/design/2026-10-06-core-boundary-next.md, step 7):
+ * in the core's process the service answers itself; in its own, core/modelsLink.ts does, from what the
+ * service last told it for what a frame or a keystroke reads, and by asking it for the rest.
+ */
 export interface ModelsPort {
   /** Have grid ready for what the caller is about to do; resolves with what happened, never rejects. */
   ensure: GridAccess['ensure']
-  /** Offline: is there a `grid` here holding a sign-in? */
-  setUp(): boolean
-  /** Start the agent's sleeping grid while someone types to it. */
+  /** What an agent's frame says of the grid it is on: from memory, so a frame costs no I/O. */
+  annotation(grid: AgentGridTarget): GridAnnotation | null
+  /** Someone is typing to an agent on `grid`: start it while they type, if it sleeps. */
   prewarm(grid: AgentGridTarget): void
+  /** Where a new agent on `selection` sends its inference, resolved from this machine's own signed-in
+   *  grid; null when that grid does not serve the model now. */
+  launchTarget(selection: NewAgentModel): Promise<GridLaunchOverride | null>
+  /** Where a running agent moved onto `model` sends its inference (`agent_retarget`): grid set up first,
+   *  on `gridName` or the account's own; the sentence a person reads when it cannot be. */
+  moveTarget(request: { gridName: string | null; model: string }): Promise<{ target: GridLaunchOverride } | { detail: string }>
+  /** An agent was just moved onto a grid model: start that grid while its pane restarts, if it sleeps. */
+  moved(launch: GridLaunchOverride): void
+  /** The account's private grid: the backend's word, else what this machine works out; null for none. */
+  privateGridName(): Promise<string | null>
+  /** What `grid_models_changed` tells the windows: the list as a window that draws row state reads it,
+   *  and as one that does not. */
+  lists(): Promise<{ plain: Record<string, unknown>; rowState: Record<string, unknown> }>
+  /** The machine list the core just read (null when signed out): which of the account's other computers
+   *  seem offline, for the models only they serve. */
+  machines(body: Record<string, unknown> | null, computerId: string): void
   /** The sign-in ended: drop what lives exactly as long as it. */
   signedOut(): void
 }
 
-/** What the core gets when models fails: a grid request answered with an error, grid read as not
- *  set up, and no prewarm. */
+/**
+ * What the core gets when models fails: grid set-up and every target answered with an error (a create on
+ * a grid model answers GRID_UNAVAILABLE), frames with no note and no prewarm, the private grid as the
+ * backend said it or none, and no push of the lists.
+ */
 export const MODELS_FALLBACKS: PortFallbacks<ModelsPort> = {
-  ensure: later(FAIL), setUp: false, prewarm: undefined, signedOut: undefined,
+  ensure: later(FAIL), annotation: null, prewarm: undefined, launchTarget: later(FAIL), moveTarget: later(FAIL), moved: undefined,
+  privateGridName: later(null), lists: later(FAIL), machines: undefined, signedOut: undefined,
+}
+
+/** What the core calls while `ports.models` is null (models is off): its fallbacks' answers. */
+export const MODELS_OFF: ModelsPort = {
+  ensure: () => Promise.reject(new ServiceUnavailableError('models')),
+  annotation: () => null,
+  prewarm: () => {},
+  launchTarget: () => Promise.reject(new ServiceUnavailableError('models')),
+  moveTarget: () => Promise.reject(new ServiceUnavailableError('models')),
+  moved: () => {},
+  privateGridName: async () => null,
+  lists: () => Promise.reject(new ServiceUnavailableError('models')),
+  machines: () => {},
+  signedOut: () => {},
 }
 
 /** The core's calls into the machine monitor: the readings `agents_list` adds to its rows when a window

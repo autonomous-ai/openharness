@@ -9,6 +9,7 @@
  * answer or record, or this computer's own run records. Everything that is not evidence leaves the list
  * stale, never shorter, and never wakes anything.
  */
+import { idKey, type PictureState } from './gridAnnotation.js'
 import type { OfflineReading } from './gridPresence.js'
 import type { LastKnown, ReadNode } from './gridReader.js'
 
@@ -38,12 +39,8 @@ export const GRID_LAST_KNOWN_MAX_AGE_MS = 29 * 24 * 60 * 60 * 1000
 /** Engines that are a router rather than a model (`grid-router` serves `auto`) are never offered. */
 const ROUTER_ENGINE = 'grid-router'
 
-/**
- * `awake` — the last read answered. `asleep` — the platform says it is resting. `unknown` — the last
- * read failed any other way, or nothing has been read yet (the list shown, if any, is the last known).
- * `waking` — a person asked for it to start (issue 03's explicit wake; never set by a read).
- */
-export type PictureState = 'awake' | 'asleep' | 'waking' | 'unknown'
+// Where a picture's state is read without the pictures' code: an agent's frame (gridAnnotation.ts).
+export type { PictureState }
 
 export interface PictureModel {
   /** The id without case — the join key across sources. Its spelling lives in `caseMap`. */
@@ -112,9 +109,10 @@ export function withDecisions(picture: GridPicture, nodes: readonly ReadNode[]):
   return same ? picture : { ...picture, decisions }
 }
 
-/** The join key for a model id across every source: trimmed, without case. (Not `localModels.ts`'s own
- *  private key, which also strips `.gguf` for a different comparison.) */
-export const idKey = (id: string): string => id.trim().toLowerCase()
+// The join key for a model id across every source: trimmed, without case (not `localModels.ts`'s own
+// private key, which also strips `.gguf` for a different comparison). gridAnnotation.ts's, which the core
+// reads an agent's note with.
+export { idKey }
 const hasUpperCase = (id: string): boolean => id !== id.toLowerCase()
 
 /**
