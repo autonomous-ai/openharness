@@ -12,7 +12,7 @@ import subprocess
 import tarfile
 import tempfile
 
-from fedora_payload import digest, package_identity, runtime_identity, stage
+from fedora_payload import digest, runtime_identity, stage
 
 
 def command(*args, **kwargs):
@@ -44,10 +44,11 @@ def file_list(root):
     for path in sorted(root.rglob('*')):
         name = '/' + str(path.relative_to(root))
         if path.is_dir() and not path.is_symlink():
-            if name in ['/usr/lib/harness', '/usr/lib/harness-os', '/usr/share/licenses/harness-os'] or name.startswith('/usr/share/harness-os'):
+            if name in ['/usr/lib/harness', '/usr/lib/harness-os', '/usr/lib/harness-opencode',
+                        '/usr/share/licenses/harness-os', '/usr/share/licenses/harness-opencode'] or name.startswith('/usr/share/harness-os'):
                 lines.append('%dir ' + name)
         else:
-            lines.append(('%license ' if name.endswith('/licenses/harness-os/LICENSE') else '') + name)
+            lines.append(('%license ' if name.startswith('/usr/share/licenses/') else '') + name)
     return '\n'.join(lines) + '\n'
 
 
@@ -56,6 +57,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--runtime', type=Path, required=True)
     parser.add_argument('--runtime-source', required=True, help='Full producer SHA of the explicitly selected native runtime.')
+    parser.add_argument('--agent', type=Path, required=True, help='Verified pinned OpenCode payload; no npm scripts run during packaging.')
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--release', default='1', help='Positive RPM package release, also used for private lifecycle tests.')
     args = parser.parse_args()
@@ -85,7 +87,7 @@ def main():
         for name in ['SOURCES', 'SPECS', 'BUILD', 'RPMS', 'SRPMS', 'BUILDROOT']:
             (top / name).mkdir()
         payload = top / 'payload'
-        identity = stage(source, runtime, payload, commit, args.runtime_source)
+        identity = stage(source, runtime, payload, commit, args.runtime_source, args.agent.resolve())
         archive_payload(payload, top / 'SOURCES/payload.tar.gz', timestamp)
         (top / 'SOURCES/files.list').write_text(file_list(payload))
         spec = top / 'SPECS/harness-os-session.spec'
@@ -106,7 +108,8 @@ def main():
                 'runtime_source_identity': original_runtime, 'runtime_identity_sha256': digest(runtime / 'source.json'),
                 **identity, 'toolchain': toolchain,
                 'external_components': {
-                    'default_agent': {'owner': 'image', 'included': False, 'fixture_package': 'opencode-ai'},
+                    'default_agent': {'owner': 'harness-os-session', 'included': True,
+                                      'name': 'OpenCode', 'version': identity['agent']['version']},
                     'browser': {'owner': 'image', 'included': False, 'optional': True, 'package': 'chromium'},
                     'platform': {'owner': 'Fedora/Asahi', 'included': False}},
                 'package': {'name': package.name, 'version': version, 'release': args.release,
