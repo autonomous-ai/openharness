@@ -20,6 +20,8 @@ import type { IndexedTurn } from './turns.js'
 const SCHEMA_VERSION = '11'
 
 /** The row that holds a session's name, title and folder: searchable beside its turns. */
+export const SESSION_SEARCH_FILE = 'session-search.db'
+
 export const HEADER_TURN = -1
 
 interface Statement {

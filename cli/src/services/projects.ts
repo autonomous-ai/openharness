@@ -12,8 +12,8 @@ import { projectPreview } from '../lib/projectPreview.js'
 import { readSessionGitPullRequest, type ExpectedGitContext } from '../lib/sessionGitPullRequest.js'
 import { internalOnThrow } from './requestErrors.js'
 
-/** The requests the project readers answer for the apps. */
-export const PROJECTS_REQUESTS = ['git_pull_request', 'git_project_info', 'project_preview', 'fs_list_dir', 'agent_read_file'] as const
+/** The requests the project readers answer for the apps, declared in core/api.ts for the core to route. */
+export { PROJECTS_REQUESTS } from '../core/api.js'
 
 export function startProjects(core: CoreApi): ServiceRequests {
   /** The browsable home, widened by the folders agents are running in: a repository outside both is not

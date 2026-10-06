@@ -32,9 +32,22 @@ import { FAIL, later, ServiceUnavailableError, type PortFallbacks } from './serv
 
 export type { RouteAnswer }
 
+/** A service may open a terminal with a literal argv, never shell source. */
+export interface TerminalOpen {
+  argv: string[]
+  cwd: string
+}
+export type TerminalOpenResult = { ok: true; agentId: string } | { ok: false; error: string; detail?: string }
+export interface TerminalsPort { open(request: TerminalOpen): Promise<TerminalOpenResult> }
+/** A service without the core's launch call must refuse, never launch outside the core. */
+export const TERMINALS_OFF: TerminalsPort = {
+  open: async () => ({ ok: false, error: 'SERVICE_UNAVAILABLE' }),
+}
+
 export interface CoreApi {
   /** The daemon's data folder; a service keeps its own files in it. */
   dataDir: string
+  terminals: TerminalsPort
   agents: {
     /** Every agent on this machine: the live ones, then the stopped ones. */
     all(): RegisteredSession[]
@@ -139,6 +152,39 @@ export type ServiceRequest = (payload: Record<string, unknown>, asker: Asker) =>
 
 /** The requests a service answers, by frame type: what its start returns. */
 export type ServiceRequests = Readonly<Record<string, ServiceRequest>>
+
+/*
+ * The requests each service answers for the apps, declared here rather than in the service's own module.
+ * The core routes them, and answers them SERVICE_UNAVAILABLE while their service is off, from these
+ * lists alone: a service that runs in its own process is never loaded into the core's to learn them
+ * (docs/design/2026-10-06-core-boundary-next.md, "The target, and its test"). Its module re-exports its own.
+ */
+
+/** Session search (services/search.ts). */
+export const SEARCH_REQUESTS = ['session_search', 'session_tail'] as const
+/** The Harness Store (services/store.ts). */
+export const STORE_REQUESTS = ['dsh_list', 'dsh_install', 'dsh_update', 'dsh_remove'] as const
+/** Account usage (services/usage.ts). */
+export const USAGE_REQUESTS = ['usage_read'] as const
+/** The machine monitor (services/monitor.ts). */
+export const MONITOR_REQUESTS = ['machine_resources'] as const
+/** The project and folder readers (services/projects.ts). */
+export const PROJECTS_REQUESTS = ['git_pull_request', 'git_project_info', 'project_preview', 'fs_list_dir', 'agent_read_file'] as const
+/**
+ * Models (services/models.ts).
+ *
+ * The Model Manager's grid commands, `grid_fleet_run` and `grid_fleet_cancel`, are still the socket's:
+ * a command is a job of the connection that started it, and a cancel stops only that connection's job
+ * (`lib/gridFleetRpc.ts`), while a request answered by a service knows who asked but not over which
+ * connection. Their handshake, `grid_fleet_capabilities`, stays beside them: the Grid harness runs a
+ * command only after it, and reads an answer without its protocol as "update Harness".
+ * The saved APIs and the Codex profiles came out of the socket's switch (launchTargetRequests).
+ */
+export const MODELS_REQUESTS = [
+  'grid_models_list', 'models_list',
+  'grid_fleet_models_list', 'grid_fleet_model_download', 'grid_fleet_model_start', 'grid_fleet_model_stop',
+  'api_connections', 'codex_profiles_list', 'codex_profile_link',
+] as const
 
 /** The core's calls into session search: index a session at its turn boundaries, forget a purged
  *  conversation, the title it indexed for one being adopted, and stopping its sweeps. The apps' own
@@ -337,6 +383,7 @@ export function emptyPorts(): CorePorts {
 }
 
 export interface CoreApiDeps {
+  terminals?: TerminalsPort
   dataDir: string
   registry: Pick<typeof registry, 'list' | 'byAgent' | 'resolve' | 'advertised' | 'terminalAvailable'>
   stoppedAgents: Pick<StoppedAgentStore, 'list'>
@@ -363,10 +410,11 @@ export interface CoreApiDeps {
 export function createCoreApi({
   dataDir, registry, stoppedAgents, databaseHistory, externalSessions, openSessions, syncSession, runtimeModels, viewerChanged,
   gridNamed, gridModelsChanged, dshInstallStatus, mintGridName, accessToken, privateGridName, machineName,
-  runtimeProfile, setRuntime, fork, turns, questions,
+  runtimeProfile, setRuntime, fork, turns, questions, terminals = TERMINALS_OFF,
 }: CoreApiDeps): CoreApi {
   return {
     dataDir,
+    terminals,
     agents: {
       all: () => [...registry.list(), ...stoppedAgents.list()],
       live: () => registry.list(),

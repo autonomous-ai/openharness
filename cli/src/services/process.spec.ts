@@ -2,7 +2,7 @@ import { EventEmitter } from 'node:events'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import WebSocket from 'ws'
 import type { MasterChannel } from '../harnessd/coreLink.js'
-import { runServiceProcess, serviceFaults, type ServiceProcessOptions } from './process.js'
+import { hostServices, LEAVE_GRACE_MS, REFUSED, runServiceProcess, serviceFaults, type ServiceHostOptions, type ServiceProcessOptions } from './process.js'
 
 /** A socket that records what it is sent, and is told what the core says. */
 class FakeSocket extends EventEmitter {
@@ -17,7 +17,7 @@ class FakeSocket extends EventEmitter {
   close(): void { this.closed = true }
   open(): void { this.readyState = WebSocket.OPEN; this.emit('open') }
   say(frame: unknown): void { this.emit('message', Buffer.from(typeof frame === 'string' ? frame : JSON.stringify(frame))) }
-  drop(): void { this.readyState = WebSocket.CLOSED; this.emit('error', new Error('reset')); this.emit('close') }
+  drop(code = 1006): void { this.readyState = WebSocket.CLOSED; this.emit('error', new Error('reset')); this.emit('close', code) }
 }
 
 class FakeChannel extends EventEmitter implements MasterChannel {
@@ -27,48 +27,36 @@ class FakeChannel extends EventEmitter implements MasterChannel {
   memoryUsage() { return { rss: 10, heapUsed: 5 } }
 }
 
-describe('a service in its own process', () => {
-  let sockets: FakeSocket[]
+describe('the process the services run in', () => {
   let exits: number[]
-  let lines: string[]
-  const socket = () => sockets[sockets.length - 1]
-  const run = (over: Partial<ServiceProcessOptions> = {}) => runServiceProcess({
-    name: 'search',
-    socketPath: '/data/daemon-1.sock',
-    machineId: 'machine-1',
-    token: 'token-1',
-    requests: {},
+  let sigterm: (() => void) | null
+  const host = (over: Partial<ServiceHostOptions> = {}) => hostServices({
+    name: 'edge',
+    services: ['workspaces', 'usage'],
     channel: new FakeChannel(),
     env: {},
-    connect: (url) => { const next = new FakeSocket(url); sockets.push(next); return next as unknown as WebSocket },
     exit: (code) => exits.push(code),
     loopDelay: { take: () => 4, stop: vi.fn() },
-    log: (line) => lines.push(line),
-    initialBackoffMs: 100,
-    maxBackoffMs: 400,
+    onSignal: (signal, handler) => { if (signal === 'SIGTERM') sigterm = handler },
     ...over,
   })
 
-  beforeEach(() => { vi.useFakeTimers(); sockets = []; exits = []; lines = [] })
+  beforeEach(() => { vi.useFakeTimers(); exits = []; sigterm = null })
   afterEach(() => vi.useRealTimers())
 
-  it('connects to the core\'s socket as the service it is, with the master\'s token', () => {
-    const service = run()
-    expect(socket().url).toBe('ws+unix:///data/daemon-1.sock:/api/local-ws')
-    socket().open()
-    expect(socket().sent).toEqual([{ type: 'machine_select', payload: { machineId: 'machine-1', localProtocolVersion: 1, role: 'service', service: 'search', token: 'token-1' } }])
-    service.stop()
-    expect(socket().closed).toBe(true)
-  })
-
-  it('beats to the master as the core does, and exits when the master goes', () => {
+  it('beats to the master as the core does, one beat for all it runs, and exits when the master goes', async () => {
     const channel = new FakeChannel()
     const loopDelay = { take: () => 4, stop: vi.fn() }
-    run({ channel, loopDelay, env: { HARNESSD_WATCHDOG_MS: '3000' } })
+    const running = host({ channel, loopDelay, env: { HARNESSD_WATCHDOG_MS: '3000' } })
+    const stops = [vi.fn(), vi.fn()]
+    for (const stop of stops) running.add({ stop })
     expect(channel.beats).toEqual([{ type: 'harnessd:heartbeat', rssBytes: 10, heapUsedBytes: 5, loopDelayMs: 4 }])
     vi.advanceTimersByTime(1_000)
     expect(channel.beats).toHaveLength(2)
     channel.emit('disconnect')
+    await vi.advanceTimersByTimeAsync(0)
+    // Every service it runs is stopped before it goes.
+    for (const stop of stops) expect(stop).toHaveBeenCalledOnce()
     expect(exits).toEqual([0])
     expect(loopDelay.stop).toHaveBeenCalled()
     vi.advanceTimersByTime(10_000)
@@ -78,9 +66,109 @@ describe('a service in its own process', () => {
   it('without a master to beat to, runs all the same', () => {
     const channel = new FakeChannel()
     ;(channel as { send?: unknown }).send = undefined
-    const service = run({ channel })
+    host({ channel })
     expect(channel.beats).toEqual([])
+  })
+
+  it('stops what it runs on the master\'s SIGTERM, waiting for a stop that takes a moment, and leaves once', async () => {
+    const running = host()
+    let stopped!: () => void
+    const slow = vi.fn(() => new Promise<void>((done) => { stopped = done }))
+    const failing = vi.fn(() => { throw new Error('would not stop') })
+    running.add({ stop: slow })
+    running.add({ stop: failing })
+    sigterm!()
+    running.leave(1)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(exits).toEqual([])
+    stopped()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(slow).toHaveBeenCalledOnce()
+    expect(failing).toHaveBeenCalledOnce()
+    expect(exits).toEqual([0])
+    // The bound it had set on the stop is gone with it.
+    await vi.advanceTimersByTimeAsync(LEAVE_GRACE_MS)
+    expect(exits).toEqual([0])
+  })
+
+  it('exits all the same when a service never finishes stopping', async () => {
+    const running = host({ leaveGraceMs: 300 })
+    running.add({ stop: () => new Promise<void>(() => {}) })
+    running.leave(0)
+    await vi.advanceTimersByTimeAsync(299)
+    expect(exits).toEqual([])
+    await vi.advanceTimersByTimeAsync(1)
+    expect(exits).toEqual([0])
+  })
+
+  it('crashes or leaks on purpose when a test asks it to, of the process or of any service in it', async () => {
+    host({ env: { HARNESSD_TEST_FAULTS: 'edge.crash' } })
+    await vi.advanceTimersByTimeAsync(200)
+    expect(exits).toEqual([1])
+    host({ env: { HARNESSD_TEST_FAULTS: 'usage.crash' } })
+    await vi.advanceTimersByTimeAsync(200)
+    expect(exits).toEqual([1, 1])
+    const leaking = host({ env: { HARNESSD_TEST_FAULTS: 'workspaces.leak' } })
+    vi.advanceTimersByTime(300)
+    leaking.leave(0)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(exits).toEqual([1, 1, 0])
+    // A fault of a service it does not run is not its own.
+    host({ env: { HARNESSD_TEST_FAULTS: 'search.crash' } })
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(exits).toEqual([1, 1, 0])
+  })
+
+  it('runs on this process by default: its channel, its signal, its exit', async () => {
+    // No beat may reach the test runner's own channel: this process's `send` is set aside.
+    const send = process.send
+    ;(process as { send?: unknown }).send = undefined
+    const on = vi.spyOn(process, 'once').mockImplementation(() => process)
+    const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never)
+    try {
+      hostServices({ name: 'search', services: ['search'] })
+      expect(on).toHaveBeenCalledWith('disconnect', expect.any(Function))
+      expect(on).toHaveBeenCalledWith('SIGTERM', expect.any(Function))
+      const leave = on.mock.calls.find(([event]) => event === 'disconnect')![1] as () => void
+      leave()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(exit).toHaveBeenCalledWith(0)
+    } finally {
+      ;(process as { send?: unknown }).send = send
+      on.mockRestore()
+      exit.mockRestore()
+    }
+  })
+})
+
+describe('a service in its own process', () => {
+  let sockets: FakeSocket[]
+  let lines: string[]
+  const socket = () => sockets[sockets.length - 1]
+  const run = (over: Partial<ServiceProcessOptions> = {}) => runServiceProcess({
+    name: 'search',
+    socketPath: '/data/daemon-1.sock',
+    machineId: 'machine-1',
+    token: 'token-1',
+    requests: {},
+    env: {},
+    connect: (url) => { const next = new FakeSocket(url); sockets.push(next); return next as unknown as WebSocket },
+    log: (line) => lines.push(line),
+    initialBackoffMs: 100,
+    maxBackoffMs: 400,
+    ...over,
+  })
+
+  beforeEach(() => { vi.useFakeTimers(); sockets = []; lines = [] })
+  afterEach(() => vi.useRealTimers())
+
+  it('connects to the core\'s socket as the service it is, with the master\'s token', () => {
+    const service = run()
+    expect(socket().url).toBe('ws+unix:///data/daemon-1.sock:/api/local-ws')
+    socket().open()
+    expect(socket().sent).toEqual([{ type: 'machine_select', payload: { machineId: 'machine-1', localProtocolVersion: 1, role: 'service', service: 'search', token: 'token-1' } }])
     service.stop()
+    expect(socket().closed).toBe(true)
   })
 
   it('answers the requests routed to it under their own request, failures included', async () => {
@@ -172,6 +260,29 @@ describe('a service in its own process', () => {
     expect(sockets).toHaveLength(6)
   })
 
+  it('asks again only once a minute when the core refuses it: a core that does not run it out of its process', () => {
+    const service = run({ refusedBackoffMs: 60_000 })
+    socket().drop(REFUSED)
+    vi.advanceTimersByTime(59_999)
+    expect(sockets).toHaveLength(1)
+    vi.advanceTimersByTime(1)
+    expect(sockets).toHaveLength(2)
+    // Any other end is the usual backoff.
+    socket().drop()
+    vi.advanceTimersByTime(200)
+    expect(sockets).toHaveLength(3)
+    service.stop()
+    // A minute by default.
+    const refused = runServiceProcess({ name: 'store', socketPath: '/s', machineId: 'm', token: 't', requests: {}, env: {},
+      connect: (url) => { const next = new FakeSocket(url); sockets.push(next); return next as unknown as WebSocket }, log: () => {} })
+    socket().drop(REFUSED)
+    vi.advanceTimersByTime(59_999)
+    expect(sockets).toHaveLength(4)
+    vi.advanceTimersByTime(1)
+    expect(sockets).toHaveLength(5)
+    refused.stop()
+  })
+
   it('stops a reconnect it had scheduled, and stopping twice is stopping once', () => {
     const service = run()
     socket().drop()
@@ -199,10 +310,8 @@ describe('a service in its own process', () => {
     expect(serviceFaults({}, 'search')).toEqual({ start: false, crash: false, leak: false, calls: new Set() })
   })
 
-  it('fails its start when a test asks it to, before it beats or connects, as a service whose start throws', () => {
-    const channel = new FakeChannel()
-    expect(() => run({ channel, env: { HARNESSD_TEST_FAULTS: 'search' } })).toThrow('injected fault: search')
-    expect(channel.beats).toEqual([])
+  it('fails its start when a test asks it to, before it connects, as a service whose start throws', () => {
+    expect(() => run({ env: { HARNESSD_TEST_FAULTS: 'search' } })).toThrow('injected fault: search')
     expect(sockets).toEqual([])
   })
 
@@ -242,30 +351,13 @@ describe('a service in its own process', () => {
     await vi.waitFor(() => expect(lines).toContain('[service search] rejects failed · index closed'))
     expect(heard).toEqual(['throws', 'rejects', undefined, 'fine'])
     expect(lines).toEqual(expect.arrayContaining(['[service search] throws failed · bad row', '[service search] event failed · not an error']))
-    expect(exits).toEqual([])
-  })
-
-  it('crashes or leaks on purpose when a test asks it to', () => {
-    run({ env: { HARNESSD_TEST_FAULTS: 'search.crash' } })
-    vi.advanceTimersByTime(200)
-    expect(exits).toEqual([1])
-    const leaking = run({ env: { HARNESSD_TEST_FAULTS: 'search.leak' } })
-    vi.advanceTimersByTime(300)
-    leaking.stop()
-    // Without a fault, connecting is just connecting.
-    run({ env: {} })
-    socket().open()
-    socket().say({ type: 'connected' })
-    expect(lines.at(-1)).toBe('[service search] connected to the core')
   })
 
   it('says it connected on the console by default', () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     const service = runServiceProcess({
       name: 'search', socketPath: '/data/daemon-1.sock', machineId: 'm', token: 't', requests: {}, env: {},
-      channel: Object.assign(new FakeChannel(), { send: undefined }),
       connect: (url) => { const next = new FakeSocket(url); sockets.push(next); return next as unknown as WebSocket },
-      loopDelay: { take: () => 0, stop: () => {} },
     })
     socket().open()
     socket().say({ type: 'connected' })
@@ -274,24 +366,18 @@ describe('a service in its own process', () => {
     log.mockRestore()
   })
 
-  it('runs on this process by default: its channel, its exit, its sockets', () => {
-    // No beat may reach the test runner's own channel: this process's `send` is set aside.
-    const send = process.send
-    ;(process as { send?: unknown }).send = undefined
-    const on = vi.spyOn(process, 'once').mockImplementation(() => process)
-    const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never)
+  it('runs on this process by default: its environment, its sockets', () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const before = process.env.HARNESSD_TEST_FAULTS
+    process.env.HARNESSD_TEST_FAULTS = 'search'
     try {
+      expect(() => runServiceProcess({ name: 'search', socketPath: '/nonexistent/daemon.sock', machineId: 'm', token: 't', requests: {} })).toThrow('injected fault: search')
+      delete process.env.HARNESSD_TEST_FAULTS
       const service = runServiceProcess({ name: 'search', socketPath: '/nonexistent/daemon.sock', machineId: 'm', token: 't', requests: {} })
-      expect(on).toHaveBeenCalledWith('disconnect', expect.any(Function))
-      const leave = on.mock.calls.find(([event]) => event === 'disconnect')![1] as () => void
-      leave()
-      expect(exit).toHaveBeenCalledWith(0)
       service.stop()
     } finally {
-      ;(process as { send?: unknown }).send = send
-      on.mockRestore()
-      exit.mockRestore()
+      if (before === undefined) delete process.env.HARNESSD_TEST_FAULTS
+      else process.env.HARNESSD_TEST_FAULTS = before
       log.mockRestore()
     }
   })

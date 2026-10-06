@@ -1,5 +1,5 @@
 /**
- * Every slot BackendSocket calls into the core through is bound by the composition root (cli.ts) — the
+ * Every slot BackendSocket calls into the core through is bound by the composition root (core/main.ts) — the
  * core boundary's step 14 (docs/design/2026-10-03-harnessd.md). A slot left null answers its requests
  * UNSUPPORTED or does nothing at all, and nothing says so: that is how `onLocalClient` came to be
  * declared and never wired. The bindings stay where start-up puts them (startupOrder.spec.ts pins that
@@ -39,9 +39,9 @@ function socketSlots(): string[] {
   return slots.sort()
 }
 
-/** What cli.ts assigns on the socket: `backend.<slot> =`. */
+/** What the composition root assigns on the socket: `backend.<slot> =`. */
 function boundInCli(): Set<string> {
-  const cli = readFileSync(join(SRC, 'cli.ts'), 'utf8')
+  const cli = readFileSync(join(SRC, 'core', 'main.ts'), 'utf8')
   return new Set([...cli.matchAll(/\bbackend\.([A-Za-z]+)\s*=(?!=)/g)].map((match) => match[1]))
 }
 

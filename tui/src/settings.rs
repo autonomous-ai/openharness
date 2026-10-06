@@ -711,6 +711,10 @@ pub struct Look {
     pub boxes: bool,
     /// The panes you are not in, a little quieter (`@hn-dim`).
     pub dim: bool,
+    /// How the current tab is marked: `star` (`*`) | `filled` (a filled block, no `*`).
+    pub window_active: String,
+    /// How a tab's name is shown: `tmux` (short) | `pane` (full).
+    pub window_name: String,
 }
 
 impl Look {
@@ -731,6 +735,8 @@ impl Look {
             bar: match o.status_bar() { "bottom" if app.status_top => "top".into(), b => b.into() },
             boxes: o.border_style() == "box",
             dim: o.dim_others(),
+            window_active: get("@hn-window-active", "star"),
+            window_name: get("@hn-window-name", "tmux"),
         }
     }
 
@@ -749,6 +755,9 @@ impl Look {
             "status_bar" => self.bar = value.into(),
             "border_style" => self.boxes = value == "box",
             "dim" => self.dim = value == "on",
+            // ── status bar tabs ──
+            "window_active" => self.window_active = value.into(),
+            "window_name" => self.window_name = value.into(),
             _ => {}
         }
         self
@@ -948,9 +957,13 @@ pub fn preview(buf: &mut Buffer, r: Rect, look: &Look, c: &Chrome) {
         let sstyle = Style::default().fg(pal.background).bg(pal.foreground);
         for x in screen.x..screen.right() { buf.set_string(x, status_row, " ", sstyle) }
         let mut x = screen.x + 1;
+        let filled = look.window_active == "filled";
         for (i, n) in names.iter().take(panes.len()).enumerate() {
-            let s = if i == 0 { sstyle.fg(accent).add_modifier(Modifier::BOLD) } else { sstyle };
-            x += put(buf, x, status_row, screen.right().saturating_sub(x), &format!("{}:{}{} ", i, n, if i == 0 { "*" } else { "" }), s);
+            let (s, star) = if i == 0 {
+                if filled { (Style::default().fg(pal.foreground).bg(pal.background).add_modifier(Modifier::BOLD), "") }
+                else { (sstyle.fg(accent).add_modifier(Modifier::BOLD), "*") }
+            } else { (sstyle, "") };
+            x += put(buf, x, status_row, screen.right().saturating_sub(x), &format!("{}:{}{} ", i, n, star), s);
         }
         put(buf, screen.right().saturating_sub(7), status_row, 6, "studio", sstyle);
     }
@@ -1220,5 +1233,19 @@ mod tests {
         assert_eq!(bottom[(panes[1].x, panes[1].y)].fg, border);
         let line = draw(&look.clone().with(Some("border_style:line")));
         assert_ne!(line[(panes[1].x, panes[1].y)].symbol(), "┌", "tmux's shared lines");
+    }
+
+    #[test]
+    fn a_filled_current_tab_drops_the_star() {
+        let app = app((150, 42));
+        let r = Rect::new(0, 0, 64, 20);
+        let show = |look: &Look| { let mut buf = Buffer::empty(r); preview(&mut buf, r, look, &chrome()); buf };
+        let row = |buf: &Buffer, y: u16| (0..r.width).map(|x| buf[(x, y)].symbol().to_string()).collect::<String>();
+        let star = show(&Look::of(&app));
+        assert!(row(&star, 19).contains("0:claude*"), "{}", text(&star));
+        let filled = show(&Look::of(&app).with(Some("window_active:filled")));
+        // `with` read the knob, and the filled tab has no `*` beside its name.
+        assert_eq!(Look::of(&app).with(Some("window_active:filled")).window_active, "filled");
+        assert!(row(&filled, 19).contains("0:claude") && !row(&filled, 19).contains("0:claude*"), "{}", text(&filled));
     }
 }

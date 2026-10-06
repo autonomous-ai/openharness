@@ -20,7 +20,9 @@
 // the engine does and runs it only if allowed, `!flood <KiB>` prints that much to the terminal, in
 // numbered lines, the way a build log or a long diff does, `!clear` starts a new conversation in the
 // same pane as Claude Code's `/clear` and Codex's `/new` do, `!compact` compacts the conversation as
-// `/compact` does (a real `/compact` (Claude Code) is written exactly as Claude Code writes it, with no turn) (and Claude Code then announces the same session again), `!compactmid` compacts in the
+// `/compact` does (a real `/compact` (Claude Code) is written exactly as Claude Code writes it, with no turn) (and Claude Code then announces the same session again), `!goalloop <condition>`
+// (Claude Code) works on after its first stop because the /goal hook refused it (`!goalpause <condition>`:
+// refused, and the goal paused with no further output), `!compactmid` compacts in the
 // middle of a turn as an automatic compaction does, `!version` answers with the version this
 // process is, `!goal` and `!goal done` (Codex) start and achieve a goal the way Codex 0.160 shows one
 // under its composer, `!browse` (Codex) leaves Codex browsing its transcript in its default fullscreen
@@ -1085,6 +1087,49 @@ export async function run(engine, config = {}, { native = false } = {}) {
         codex('response_item', { type: 'function_call_output', call_id: id, output: `ran ${directive[2]}` })
       }
     }
+    if (engine === 'claude' && directive?.[1] === 'bgagent') {
+      // A background sub-agent that finishes while its parent still works, as Claude Code 2.1.287 records
+      // it: the Agent call, its launch ack, the parent's own next tool, then the sub-agent's
+      // `<task-notification>` handed back INTO the running turn as a queued_command attachment, not as the
+      // user record Claude Code writes when the parent is idle.
+      const name = directive[2] || 'scout'
+      const id = `toolu_${turn}_bg`
+      claude({ type: 'assistant', message: { id: `msg_${turn}_bg`, role: 'assistant', model: config.claudeModel ?? 'claude-opus-5-5', content: [{ type: 'tool_use', id, name: 'Agent', input: { description: `Count for ${name}`, prompt: `Count the files for ${name}.`, run_in_background: true } }], stop_reason: 'tool_use' } })
+      claude({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: 'Async agent launched successfully.\nagentId: a0f1e2d3c4b5a6978' }] }, toolUseResult: { isAsync: true, status: 'async_launched', agentId: 'a0f1e2d3c4b5a6978' } })
+      const edit = `toolu_${turn}_ed`
+      claude({ type: 'assistant', message: { id: `msg_${turn}_ed`, role: 'assistant', model: config.claudeModel ?? 'claude-opus-5-5', content: [{ type: 'tool_use', id: edit, name: 'Bash', input: { command: 'true' } }], stop_reason: 'tool_use' } })
+      claude({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: edit, content: 'ran true' }] } })
+      const notification = `<task-notification>\n<task-id>a0f1e2d3c4b5a6978</task-id>\n<tool-use-id>${id}</tool-use-id>\n<output-file>${join(cwd, '.tasks', 'a0f1e2d3c4b5a6978.output')}</output-file>\n<status>completed</status>\n<summary>Agent "Count for ${name}" finished</summary>\n<result>${name} found 3 files</result>\n</task-notification>`
+      claude({ type: 'attachment', attachment: { type: 'queued_command', prompt: notification, commandMode: 'task-notification', origin: { kind: 'task-notification', producer: 'session-task' } } })
+    }
+    if (engine === 'codex' && directive?.[1] === 'spawn') {
+      // A sub-agent, recorded as Codex 0.160 records one (multi-agent v2, measured on real rollouts): the
+      // spawn call; a SubAgentActivity naming the child's thread, written before the spawn's output; an output
+      // that names the child only by its path; the child's report to its parent; and its completion. No
+      // `<subagent_notification>`, which is what 0.160's parent never writes. The child keeps a rollout of
+      // its own, as Codex does, that the Task card reads its work from.
+      const name = directive[2] || 'scout'
+      const id = `call_${turn}_spawn`
+      const thread = randomUUID()
+      const path = `/root/${name}`
+      const childFile = join(codexHome, 'sessions', '2026', '10', '03', `rollout-2026-10-03T00-00-01-${thread}.jsonl`)
+      const child = (type, payload) => appendFileSync(childFile, JSON.stringify({ timestamp: now(), type, payload }) + '\n')
+      codex('response_item', { type: 'function_call', namespace: 'collaboration', name: 'spawn_agent', call_id: id, arguments: JSON.stringify({ task_name: name, agent_type: 'explorer', message: `Count the files for ${name}.` }) })
+      child('session_meta', { id: thread, cli_version: version, cwd, agent_nickname: 'Goodall', agent_role: 'explorer', agent_path: path, multi_agent_version: 'v2',
+        source: { subagent: { thread_spawn: { parent_thread_id: sessionId, depth: 1, agent_path: path, agent_nickname: 'Goodall', agent_role: 'explorer' } } } })
+      codex('event_msg', { type: 'item_completed', turn_id: open, item: { type: 'SubAgentActivity', id, kind: 'started', agent_thread_id: thread, agent_path: path } })
+      codex('response_item', { type: 'function_call_output', call_id: id, output: JSON.stringify({ task_name: path }) })
+      child('event_msg', { type: 'task_started', turn_id: `${thread}-1` })
+      child('response_item', { type: 'function_call', call_id: `${thread}-ls`, name: 'exec_command', arguments: JSON.stringify({ cmd: 'ls' }) })
+      child('response_item', { type: 'function_call_output', call_id: `${thread}-ls`, output: 'one\ntwo\nthree' })
+      child('event_msg', { type: 'task_complete', turn_id: `${thread}-1`, last_agent_message: `${name} found 3 files` })
+      codex('inter_agent_communication_metadata', { trigger_turn: false })
+      codex('response_item', { type: 'agent_message', author: path, recipient: '/root', content: [
+        { type: 'input_text', text: `Message Type: FINAL_ANSWER\nTask name: /root\nSender: ${path}\nPayload:\n${name} found 3 files` },
+        { type: 'encrypted_content', encrypted_content: 'gAAAA' },
+      ] })
+      codex('event_msg', { type: 'item_completed', turn_id: open, item: { type: 'SubAgentActivity', id: `subagent-completed-${thread}`, kind: 'completed', agent_thread_id: thread, agent_path: path } })
+    }
     if (directive?.[1] === 'flood') {
       // Numbered, so whoever reads the terminal can tell a lost, repeated or reordered line.
       const kib = Number(directive[2]) || 256
@@ -1153,6 +1198,66 @@ export async function run(engine, config = {}, { native = false } = {}) {
         say(`• ${QUESTION} → ${choice}\r\n`)
       }
       await finish(`you chose ${choice}${notes ? ` (notes: ${notes})` : ''}`)
+      return
+    }
+    if (engine === 'codex' && directive?.[1] === 'askasync') {
+      // Codex 0.160's question that does not stop the turn (shape measured on real rollouts): the call, its
+      // `{"accepted":true}` at once, and later the person's answer as a user message wrapped in
+      // `<send_user_message_question_reply>`. Only the transcript is faked: the answer is written as if
+      // given at once, with no dialog drawn, since 0.160's panel for it was not recorded.
+      const id = `call_${turn}_qa`
+      const question = 'Which database should the service use?'
+      codex('response_item', { type: 'function_call', name: 'request_user_input_async', call_id: id, arguments: JSON.stringify({ questions: [{ title: question, options: ['Postgres', 'SQLite'] }] }) })
+      codex('event_msg', { type: 'item_completed', turn_id: open, item: { type: 'AgentMessage', content: [{ type: 'Text', text: 'Asked which database to use.' }], phase: 'commentary' } })
+      codex('response_item', { type: 'function_call_output', call_id: id, output: JSON.stringify({ accepted: true }) })
+      const answer = `<send_user_message_question_reply>\n${JSON.stringify([{ answer: directive[2] || 'Postgres', question, questionItemId: JSON.stringify([id]) }])}\n</send_user_message_question_reply>`
+      codex('response_item', { type: 'message', role: 'user', content: [{ type: 'input_text', text: answer }] })
+      codex('event_msg', { type: 'item_completed', turn_id: open, item: { type: 'UserMessage', id: `${id}-reply`, content: [{ type: 'text', text: answer, text_elements: [] }] } })
+    }
+    if (engine === 'claude' && directive?.[1] === 'goalpause') {
+      // The same refusal, after which Claude Code pauses the goal instead of working on (real 2.1.283): two
+      // notices and its turn_duration, with no output and no further Stop hook.
+      const condition = directive[2] || 'the work is done'
+      claude({ type: 'assistant', message: { id: `msg_${turn}_p1`, role: 'assistant', model: config.claudeModel ?? 'claude-opus-5-5', content: [{ type: 'text', text: `first pass at: ${condition}` }], stop_reason: 'end_turn' } })
+      say(`\r\nfirst pass at: ${condition}\r\n`)
+      await runHooks('Stop', { stop_hook_active: false })
+      claude({ type: 'user', isMeta: true, promptId: randomUUID(), message: { role: 'user', content: `Stop hook feedback:\n[goal]: not met yet: ${condition}` } })
+      claude({ type: 'attachment', attachment: { type: 'goal_status', met: false, condition, reason: 'one check still fails' } })
+      claude({ type: 'system', subtype: 'stop_hook_summary', hookCount: 1, hookInfos: [], hookErrors: [], preventedContinuation: false, stopReason: '', hasOutput: false, level: 'suggestion' })
+      claude({ type: 'system', subtype: 'informational', content: 'A hook blocked the stop again — pausing the goal.', level: 'notice' })
+      claude({ type: 'system', subtype: 'informational', content: 'Goal paused · /goal to resume', level: 'notice' })
+      claude({ type: 'system', subtype: 'turn_duration', durationMs: 5_000, messageCount: 6 })
+      say('Goal paused\r\n')
+      open = null
+      return
+    }
+    if (engine === 'claude' && directive?.[1] === 'goalloop') {
+      // Claude Code's /goal, its condition not met at the first stop, as 2.1.283 writes it: the answer and
+      // its Stop hooks, then the goal hook's refusal (a hidden feedback line, the goal's status and the
+      // hooks' summary) and the next pass in the SAME turn, with no prompt line between; a tool runs in it.
+      // The daemon closed the turn at the first stop and read the next pass as no turn at all.
+      //
+      // The first pass's Stop reaches the daemon only once the next pass is on disk, as a loaded daemon took
+      // it in a full end-to-end run (520 ms after that pass started): the CLI waits for its hook commands,
+      // but the hook's request can be read after it has gone on. So the hooks run once the pass has begun.
+      const condition = directive[2] || 'the work is done'
+      const model = config.claudeModel ?? 'claude-opus-5-5'
+      const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+      claude({ type: 'assistant', message: { id: `msg_${turn}_g1`, role: 'assistant', model, content: [{ type: 'text', text: `first pass at: ${condition}` }], stop_reason: 'end_turn' } })
+      say(`\r\nfirst pass at: ${condition}\r\n`)
+      claude({ type: 'user', isMeta: true, promptId: randomUUID(), message: { role: 'user', content: `Stop hook feedback:\n[goal]: not met yet: ${condition}` } })
+      claude({ type: 'attachment', attachment: { type: 'goal_status', met: false, condition, reason: 'one check still fails' } })
+      claude({ type: 'system', subtype: 'stop_hook_summary', hookCount: 1, hookInfos: [], hookErrors: [], preventedContinuation: false, stopReason: '', hasOutput: false, level: 'suggestion' })
+      const id = `call_${turn}_g`
+      claude({ type: 'assistant', message: { id: `msg_${turn}_g2`, role: 'assistant', model, content: [{ type: 'tool_use', id, name: 'Bash', input: { command: 'make check' } }], stop_reason: 'tool_use' } })
+      await pause(600)
+      const lateStop = runHooks('Stop', { stop_hook_active: false })
+      await pause(Number(config.goalPassMs) || 4_000)
+      await lateStop
+      claude({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: 'all checks pass' }] } })
+      await finish(`goal met: ${condition}`)
+      claude({ type: 'attachment', attachment: { type: 'goal_status', met: true, condition, reason: 'all checks pass' } })
+      claude({ type: 'system', subtype: 'turn_duration', durationMs: 6_000, messageCount: 8 })
       return
     }
     if (directive?.[1] === 'version') { await finish(versionLine); return }

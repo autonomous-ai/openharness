@@ -27,7 +27,14 @@ def fetch_sources(root):
             git("remote", "add", "origin", source["url"])
             if source.get("sparse"):
                 git("sparse-checkout", "init", "--cone")
-        if git("remote", "get-url", "origin") != source["url"]:
+        # The URL as stored, not `remote get-url`: that answers with any `url.<base>.insteadOf`
+        # rewrite applied, and a machine that sends GitHub over SSH would read its own pin as a
+        # foreign remote. Fetching below still takes the rewrite, as the person configured.
+        try:
+            origin = git("config", "--get", "remote.origin.url")
+        except subprocess.CalledProcessError:
+            origin = ""  # a checkout with no origin at all is not ours either
+        if origin != source["url"]:
             raise SystemExit(f"Unexpected upstream remote in {target}")
         try:
             current = git("rev-parse", "--verify", "HEAD", quiet=True)

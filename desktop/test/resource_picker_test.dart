@@ -14,7 +14,7 @@ import 'package:harness/auth/cli_link.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/models/api_connections_controller.dart';
 import 'package:harness/models/model_search_catalog.dart'
-    show ModelSearchSection, jevRequest;
+    show ModelSearchGroup, ModelSearchSection, jevRequest;
 import 'package:harness/widgets/api_picker_form.dart';
 import 'package:harness/widgets/desktop_chrome.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
@@ -1068,19 +1068,20 @@ void main() {
         await configured.mount(tester, app, map);
         await key(tester, LogicalKeyboardKey.keyI, cmd: true);
         final rows = search(tester).rows.where((row) => row.isModel);
-        String section(String title) => search(tester)
-            .modelSection(rows.firstWhere((row) => row.title.startsWith(title)))
-            .label;
-        // From the own grid and a shared one alike, a Jev model is under its own heading, last.
-        expect(section('laya-english'), 'Jev models');
-        expect(section('nimble'), 'Jev models');
-        expect(section('qwen3.8-27b'), isNot('Jev models'));
+        ModelSearchSection section(String title) => search(
+          tester,
+        ).modelSection(rows.firstWhere((row) => row.title.startsWith(title)));
+        // A Jev model is a decision model, listed apart from the chat models: Your models when the
+        // own grid serves it, Shared with you when a shared grid does.
+        expect(section('laya-english'), ModelSearchSection.jevLocal);
+        expect(section('nimble'), ModelSearchSection.jevShared);
+        expect(section('qwen3.8-27b').group, ModelSearchGroup.chat);
         expect(
           rows.where((row) => row.title.startsWith('laya-english')),
           hasLength(1),
           reason: rows.map((row) => row.title).join('\n'),
         );
-        expect(ModelSearchSection.values.last, ModelSearchSection.jev);
+        expect(ModelSearchSection.values.last.group, ModelSearchGroup.decision);
 
         // Clicking a Jev row shows how to call it, and neither copies nor moves the harness.
         expect(search(tester).isJevRow(search(tester).selected), isFalse);
@@ -1089,12 +1090,14 @@ void main() {
           layaRow,
           100,
           scrollable: find
-              .ancestor(
-                of: find.text('Your models', findRichText: true),
+              .descendant(
+                of: find.byType(SwarmSearchResults),
                 matching: find.byType(Scrollable),
               )
               .first,
         );
+        await tester.ensureVisible(layaRow);
+        await tester.pumpAndSettle();
         await tester.tap(layaRow);
         await tester.pumpAndSettle();
         expect(search(tester).selected!.title, 'laya-english');
@@ -1109,6 +1112,9 @@ void main() {
         expect(search(tester).isJevRow(laya), isTrue);
         expect(search(tester).canSelectModel(laya), isFalse);
         expect(search(tester).modelRowAction(laya), 'Copy');
+        // Served by another machine of yours: its row says Serving, live, as one served here does.
+        expect(search(tester).modelRowStatus(laya), 'Serving');
+        expect(search(tester).modelRowLive(laya), isTrue);
         expect(search(tester).actionLabel(laya), 'Copy request');
         expect(find.text('Call it from a terminal:'), findsOneWidget);
         expect(find.text(jevRequest('home', 'laya-english')), findsOneWidget);

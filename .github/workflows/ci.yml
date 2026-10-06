@@ -355,7 +355,6 @@ jobs:
   # ones, on a runner of their own so the CI run takes no longer. They used to run only when somebody
   # remembered: test:resume had slipped to 93% of stoppedAgents.ts and test:orchestrator below 100% by
   # 5 October 2026 without anyone noticing. One step per gate, so a red run names the gate.
-  # test:local-models is not here yet: it is at 95% of localModels.ts and needs its own tests first.
   cli-coverage-gates:
     if: ${{ contains(fromJSON('["full","cli"]'), inputs.scope || 'full') }}
     runs-on: ubuntu-latest
@@ -381,6 +380,16 @@ jobs:
         run: npm run test:remote-viewers
       - name: Harness portability
         run: npm run test:portability
+      - name: Local models and bundled harnesses
+        run: npm run test:local-models -- --coverage.reporter=json --coverage.reportOnFailure
+      - name: Preserve local-model coverage details
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cli-local-models-coverage
+          path: cli/coverage/local-models/*.json
+          if-no-files-found: ignore
+          retention-days: 7
 
   cli-tests:
     if: ${{ contains(fromJSON('["full","cli"]'), inputs.scope || 'full') }}

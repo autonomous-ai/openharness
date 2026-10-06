@@ -4,13 +4,18 @@
  * The parsing is deliberately small — one key, top level only — so what is worth pinning is where
  * it must NOT find that key, and what it hands back when it finds nothing.
  */
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   CODEX_DEFAULT_PROVIDER,
   codexConfigPath,
   ownLoginProviderArgs,
   parseCodexModelProvider,
 } from './ownLoginProvider.js'
+
+// The login shell's environment, as the daemon captured it at start-up: none, unless a test says so.
+const shell = vi.hoisted(() => ({ env: {} as NodeJS.ProcessEnv }))
+vi.mock('../../lib/loginShellEnv.js', () => ({ loginShellEnvironment: () => shell.env }))
+afterEach(() => { shell.env = {} })
 
 describe('parseCodexModelProvider', () => {
   it('reads a top-level key, with either kind of quote and any spacing', () => {
@@ -68,6 +73,18 @@ describe('codexConfigPath', () => {
 
   it('falls back to CODEX_HOME when the agent names no profile', () => {
     expect(codexConfigPath(null, { CODEX_HOME: '/elsewhere' })).toBe('/elsewhere/config.toml')
+  })
+
+  // The CODEX_HOME a person moves is set in their shell profile, which every pane's Codex reads and the
+  // daemon never does: the desktop app or launchd starts it. Read from the daemon's own environment, the
+  // provider a move back off a grid named came from ~/.codex/config.toml, and argv outranks the config, so
+  // the person's own `model_provider` in the moved config.toml was overridden with Codex's default.
+  it('reads the CODEX_HOME the login shell moves, as every pane\'s Codex does', () => {
+    shell.env = { CODEX_HOME: '/codex-work' }
+    expect(codexConfigPath(null)).toBe('/codex-work/config.toml')
+    expect(codexConfigPath('/profiles/work')).toBe('/profiles/work/config.toml')
+    const read = (path: string) => path === '/codex-work/config.toml' ? 'model_provider = "azure"' : null
+    expect(ownLoginProviderArgs('codex', null, { read })).toEqual(['-c', 'model_provider="azure"'])
   })
 })
 

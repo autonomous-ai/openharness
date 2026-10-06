@@ -9,8 +9,9 @@
  * reaches it only through `ports.models`, and the apps through the requests it answers.
  */
 import { join } from 'node:path'
+import { baseNode } from '../harnessd/baseNode.js'
 import type { CoreApi, CorePorts, ModelsPort, ServiceRequest, ServiceRequests } from '../core/api.js'
-import { MODEL_MANAGER_ID } from '../dsh/builtins.js'
+import { MODEL_MANAGER_ID } from '../dsh/builtinIds.js'
 import { installedDsh } from '../dsh/installed.js'
 import { ApiConnections, apiConnectionsRequest } from '../lib/apiConnections.js'
 import { apiModelsRequest, rememberSavedApis } from '../lib/apiModels.js'
@@ -32,21 +33,9 @@ import { parseRuntimeProfile, type RuntimeModelOption } from '../lib/runtimeProf
 import { ensureManagedGrid } from '../lib/runtimeInstall.js'
 import { internalOnThrow } from './requestErrors.js'
 
-/**
- * The requests models answers for the apps.
- *
- * The Model Manager's grid commands, `grid_fleet_run` and `grid_fleet_cancel`, are still the socket's:
- * a command is a job of the connection that started it, and a cancel stops only that connection's job
- * (`lib/gridFleetRpc.ts`), while a request answered here knows who asked but not over which connection.
- * Their handshake, `grid_fleet_capabilities`, stays beside them: the Grid harness runs a command only
- * after it, and reads an answer without its protocol as "update Harness".
- * The saved APIs and the Codex profiles came out of the socket's switch (launchTargetRequests).
- */
-export const MODELS_REQUESTS = [
-  'grid_models_list', 'models_list',
-  'grid_fleet_models_list', 'grid_fleet_model_download', 'grid_fleet_model_start', 'grid_fleet_model_stop',
-  'api_connections', 'codex_profiles_list', 'codex_profile_link',
-] as const
+/** The requests models answers for the apps, declared in core/api.ts for the core to route (why the Model
+ *  Manager's grid commands are not among them is said there). */
+export { MODELS_REQUESTS } from '../core/api.js'
 
 export function startModels(core: CoreApi, ports: CorePorts): ServiceRequests {
   // Grid is an add-on (`lib/gridAttach.ts`): nothing on this path installs `grid`, signs this machine in
@@ -145,7 +134,7 @@ function modelsRequests(core: CoreApi, grid: Pick<ModelsPort, 'ensure' | 'setUp'
     onChanged: () => { forgetGridModels(); core.clients.gridModelsChanged() },
     // Models Ollama, LM Studio and llama.cpp downloaded here, found by the Model Manager's own scan (the
     // bundled harness), so the picker and that harness agree on what is here and what starts it.
-    appModels: () => scanAppModels({ node: process.execPath, packageDir: installedDsh(MODEL_MANAGER_ID)?.realDir ?? null, env: process.env }),
+    appModels: () => scanAppModels({ node: baseNode(process.execPath), packageDir: installedDsh(MODEL_MANAGER_ID)?.realDir ?? null, env: process.env }),
     appEngines: appEngineOps(process.env),
   })
   /** The grid listing currently out, shared by every `grid_models_list` for the same own grid that lands

@@ -286,6 +286,41 @@ describe('TerminalBackendCoordinator', () => {
       expect(waits).toEqual([10])
     })
 
+    it('waits for a restored agent whose launch is starting before an engine process exists', async () => {
+      // Found by QA on a quiet machine: a message after restore was rejected before Codex started.
+      const answers = [{ state: 'gone' as const, reason: 'no codex process under pane %1' }, { state: 'alive' as const }]
+      const { coordinator } = patient(async () => answers.shift()!)
+      const current = session()
+      current.engine = 'codex'
+      current.runtimes = [tmux]
+      current.processIdentity = null
+      current.launch = { state: 'starting' }
+      await expect(coordinator.validate(current)).resolves.toEqual({ state: 'alive' })
+      expect(waits).toEqual([10])
+    })
+
+    it('bounds the wait for a restored engine that never starts', async () => {
+      const { coordinator, tmuxBackend } = patient(async () => ({ state: 'gone', reason: 'no engine process' }))
+      const current = session()
+      current.runtimes = [tmux]
+      current.launch = { state: 'starting' }
+      await expect(coordinator.acquireLease(current)).resolves.toMatchObject({ state: 'failed' })
+      expect(waits).toEqual([10, 20, 30])
+      expect(tmuxBackend.validate).toHaveBeenCalledTimes(4)
+    })
+
+    it('stops waiting when a restored launch fails', async () => {
+      const current = session()
+      current.runtimes = [tmux]
+      current.launch = { state: 'starting' }
+      const { coordinator } = patient(async () => {
+        if (waits.length) current.launch = { state: 'failed', error: 'ENGINE_EXITED' }
+        return { state: 'gone', reason: 'no engine process' }
+      })
+      await expect(coordinator.validate(current)).resolves.toMatchObject({ state: 'gone' })
+      expect(waits).toEqual([10])
+    })
+
     it('gives the last answer once the waits run out, and never waits on a terminal known to be gone', async () => {
       const unknown = patient(async () => ({ state: 'unknown' as const, reason: 'still failing' }))
       const current = session()

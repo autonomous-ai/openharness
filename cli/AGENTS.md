@@ -15,16 +15,17 @@ SERVICES src/services/     everything else: search, viewers, models, workspaces,
                            Reaches the core only through core/api.ts; can fail without the core.
 ```
 
-`src/cli.ts` `runForeground()` is the composition root: it creates the modules and wires them
-together. `src/backendSocket.ts` is the transport: it receives frames and dispatches them.
+`src/core/main.ts` `runForeground()` is the composition root: it creates the modules and wires them
+together. It is the core's own entry (`harness __run`); `src/cli.ts` is the CLI, and calls in for
+`__run` and `start -f`. `src/backendSocket.ts` is the transport: it receives frames and dispatches them.
 
 ## Where new code goes
 
 | You are adding | Put it in | Not in |
 |---|---|---|
-| A new feature (anything a session can run without) | a new service, `src/services/<name>.ts` | the core, `cli.ts`, `backendSocket.ts` |
+| A new feature (anything a session can run without) | a new service, `src/services/<name>.ts` | the core, `core/main.ts`, `backendSocket.ts` |
 | A request the apps send to a feature | the service's start returns its handler ([src/services/AGENTS.md](src/services/AGENTS.md)) | a case in `backendSocket.ts`, a slot on `BackendSocket` |
-| Behaviour of agents, terminals, transcripts, turns, input or questions | the module under `src/core/` that owns it | `cli.ts` |
+| Behaviour of agents, terminals, transcripts, turns, input or questions | the module under `src/core/` that owns it | `core/main.ts` |
 | Support for an engine (Claude Code, Codex, …) | `src/engines/<engine>/` | the core |
 | A pure helper with no daemon state | `src/lib/` | the core |
 | Supervision of processes | `src/harnessd/` | anywhere else |
@@ -33,14 +34,18 @@ together. `src/backendSocket.ts` is the transport: it receives frames and dispat
 
 1. **No logic in `runForeground` or the `backendSocket.ts` request switch.** Wiring and dispatch only:
    a handler there is one call into a module or service. `src/architecture.spec.ts` fails when either
-   grows; move the logic out instead of raising the budget.
+   grows; move the logic out instead of raising the budget. It also walks the imports from
+   `src/core/main.ts` and holds what the core's process loads to `CORE_CLOSURE_BUDGET`, with no file from
+   an edge folder (a service, the dial, the relay, …) but those it lists, each with the step that ends it
+   ([../docs/design/2026-10-06-core-boundary-next.md](../docs/design/2026-10-06-core-boundary-next.md)).
 2. **A feature is a service.** It runs against `CoreApi` and is reached through a port in `CorePorts`,
    both in `src/core/api.ts`. A service never imports core modules, the registry, `cli.ts` or
    `backendSocket.ts` (`src/architecture.spec.ts` checks it). See [src/services/AGENTS.md](src/services/AGENTS.md).
 3. **The core does not wait on a service and does not crash with one.** Services start through
    `serviceHost.start()`; every port declares fallbacks beside it in `core/api.ts`.
 4. **100% coverage, per file,** for `src/core/`, `src/services/` (`npm run test:core`) and `src/harnessd/`
-   (`npm run test:harnessd`). CI enforces both. Write the test that fails without your change.
+   (`npm run test:harnessd`). CI enforces both. Write the test that fails without your change. The one
+   file outside it is `src/core/main.ts`, the wiring, which the end-to-end suite runs.
 5. **End to end for every user-facing flow** (`npm run test:e2e`, `e2e/`): the real daemon, a private
    tmux server and fake Claude Code and Codex engines (`e2e/harness/fakeEngine.mjs`). Prefer extending
    the fake engine faithfully over loosening a test.

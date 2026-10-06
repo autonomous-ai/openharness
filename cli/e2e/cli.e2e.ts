@@ -162,6 +162,19 @@ describe('harness start, stop and status from the installed bundle', () => {
     return m
   }
 
+  it('starts on an external Node reached through a managed-runtime symlink without relocating it', async () => {
+    // Found by QA on a quiet machine: a Homebrew Node hard-linked under a daemon name aborted in dyld.
+    // install() deliberately points this managed path at the external interpreter running the fixture.
+    const m = await install()
+    const started = await harness(m, 'start')
+    expect(started.status, said(started)).toBe(0)
+    seen.add(pidOf(m)!)
+    expect((await fetch(`http://127.0.0.1:${m.daemon.port}/api/health`)).ok).toBe(true)
+    expect(existsSync(join(dirname(dirname(m.node)), 'libexec', 'harnessd', 'harnessd'))).toBe(false)
+    const stopped = await harness(m, 'stop')
+    expect(stopped.status, said(stopped)).toBe(0)
+  })
+
   it('without the service: start runs a master and core, an agent outlives stop in tmux and is back on the next start, and no platform is asked', async () => {
     const m = await install()
     const started = await harness(m, 'start')

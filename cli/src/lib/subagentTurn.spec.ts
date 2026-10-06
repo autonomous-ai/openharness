@@ -171,3 +171,59 @@ describe('async sub-agents (real claude transcript)', () => {
     expect(summarize).toHaveBeenCalledTimes(1)
   })
 })
+
+/**
+ * A background sub-agent that finishes while its parent is still working is handed back INTO the running
+ * turn: Claude Code writes its `<task-notification>` as a `queued_command` attachment (commandMode
+ * `task-notification`), not as the `type:"user"` record it writes when the parent is idle. Across real
+ * 2.1.270–2.1.287 transcripts the attachment is the more common of the two (about 800 against 370). Read only from
+ * user records, that sub-agent never finished: its row stayed running on the dial, and the parent's recap
+ * was held until the backstop gave up on it. Records synthesized in the real shape; the text is invented.
+ */
+describe('async sub-agents handed back mid-turn', () => {
+  const line = (o: Record<string, unknown>) => JSON.stringify(o)
+  const notification = (id: string, status: string) =>
+    `<task-notification>\n<task-id>a1b2c3d4e5f6a7b8c</task-id>\n<tool-use-id>${id}</tool-use-id>\n<output-file>/tmp/tasks/a1b2c3d4e5f6a7b8c.output</output-file>\n<status>${status}</status>\n<summary>Agent "Count the fixtures" finished</summary>\n<result>There are 12 fixtures.</result>\n</task-notification>`
+  const turn = [
+    line({ type: 'user', uuid: 'u1', message: { role: 'user', content: 'count the fixtures in the background, then tidy the README' } }),
+    line({ type: 'assistant', uuid: 'a1', message: { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_bg1', name: 'Agent', input: { description: 'Count the fixtures', run_in_background: true } }], stop_reason: 'tool_use' } }),
+    line({ type: 'user', uuid: 'r1', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_bg1', content: 'Async agent launched successfully.' }] } }),
+    line({ type: 'assistant', uuid: 'a2', message: { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_ed1', name: 'Edit', input: { file_path: 'README.md' } }], stop_reason: 'tool_use' } }),
+    line({ type: 'user', uuid: 'r2', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_ed1', content: 'The file README.md has been updated successfully.' }] } }),
+    line({
+      type: 'attachment', uuid: 'q1',
+      attachment: { type: 'queued_command', prompt: notification('toolu_bg1', 'completed'), commandMode: 'task-notification', origin: { kind: 'task-notification', producer: 'session-task' } },
+    }),
+    line({ type: 'assistant', uuid: 'a3', message: { role: 'assistant', content: [{ type: 'text', text: 'README tidied; the scout counted 12 fixtures.' }], stop_reason: 'end_turn' } }),
+  ]
+
+  it('finishes the sub-agent, keyed by its tool-use id, and opens no turn', () => {
+    const state = newTurnState()
+    const events = turn.flatMap((raw) => lineToEvents(raw, state))
+    expect(events.filter((e) => e.type === 'subagent_finished')).toEqual([
+      { type: 'subagent_finished', payload: { id: 'toolu_bg1', status: 'completed', summary: 'Agent "Count the fixtures" finished' } },
+    ])
+    expect(events.filter((e) => e.type === 'turn_started')).toHaveLength(1)
+    expect(events.at(-1)).toEqual({ type: 'turn_ended', payload: {} })
+  })
+
+  it('ticks the row off on the dial, so the recap is not held for it', async () => {
+    vi.useFakeTimers()
+    const dir = mkdtempSync(join(tmpdir(), 'adapter-subagent-'))
+    try {
+      const frames: CommanderFrame[] = []
+      const summarize = vi.fn(async () => 'recap\n\nbody')
+      const mirror = new CommanderMirror({ send: (f) => frames.push(f), sendWeb: () => {}, hasDevice: () => true, summarize, dataDir: dir })
+      const state = newTurnState()
+      for (const raw of turn) mirror.ingest(lineToEvents(raw, state), 'sess-midturn')
+      const rows = frames.filter((f) => (f.payload as { kind?: string }).kind === 'agents')
+        .map((f) => (f.payload as { agents: Array<{ text: string }> }).agents.map((a) => a.text))
+      expect(rows.at(-1)?.every((text) => text.startsWith('✓'))).toBe(true)
+      await vi.advanceTimersByTimeAsync(13_000)
+      expect(summarize).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})

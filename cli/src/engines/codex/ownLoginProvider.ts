@@ -29,9 +29,9 @@
  * is asked first and `openai` is the fallback — the same value Codex itself would have picked.
  */
 import { readFileSync } from 'node:fs'
-import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { AgentEngine } from '../../engines/types.js'
+import { launchCodexHome } from '../../lib/engineHomes.js'
 
 /** What Codex uses when nothing configures otherwise. */
 export const CODEX_DEFAULT_PROVIDER = 'openai'
@@ -71,9 +71,11 @@ function stripComment(line: string): string {
   return line
 }
 
-/** Where Codex keeps its configuration — the same resolution `prepareCodexResume` uses. */
-export function codexConfigPath(codexHome: string | null | undefined, env = process.env): string {
-  return join(codexHome || env.CODEX_HOME || join(homedir(), '.codex'), 'config.toml')
+/** Where the Codex about to be launched reads its config (lib/engineHomes.ts `launchCodexHome`). The daemon's
+ *  own CODEX_HOME was read, not the login shell's: a person who moved it had their own `model_provider`
+ *  overridden with Codex's default, which argv outranks the config with. */
+export function codexConfigPath(codexHome: string | null | undefined, environment?: NodeJS.ProcessEnv): string {
+  return join(launchCodexHome(codexHome, environment), 'config.toml')
 }
 
 /** Read a Codex `config.toml`; an unreadable or absent file is "nothing configured", not an error. */
@@ -96,7 +98,7 @@ export function ownLoginProviderArgs(
 ): string[] {
   if (engine !== 'codex') return []
   const read = deps.read ?? readCodexConfig
-  const toml = read(codexConfigPath(codexHome, deps.env ?? process.env))
+  const toml = read(codexConfigPath(codexHome, deps.env))
   const configured = toml ? parseCodexModelProvider(toml) : null
   return ['-c', `model_provider="${configured ?? CODEX_DEFAULT_PROVIDER}"`]
 }

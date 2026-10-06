@@ -47,6 +47,28 @@ const CHANGED: Record<string, string> = {
   'session_get codex while stopped': 'answered now; the released build said NOT_FOUND for a stopped conversation',
 }
 
+/**
+ * Changes made on purpose that show in the same field under many steps, by its path. Each must still
+ * match a difference, like CHANGED.
+ */
+const CHANGED_FIELDS: Array<[RegExp, string, { optional?: boolean }?]> = [
+  // An agent keeps the name it was given ("Codex harness 10-6 4:12", lib/agentNames.ts) once it binds.
+  // The released build showed the project fallback ("compat-codex · 7da6") instead, and a fork of a
+  // renamed agent is called after it ("Renamed in compat - fork").
+  [/^\.(agents_list[^.]*\.agents\[\d+\]|agent_(restart|resume)\.agent)\.name$/, 'the agent keeps its given name after it binds; the released build showed the project fallback'],
+  [/^\.(session_get [^.]*|sessions_list [^.]*\.sessions\[\d+\])\.title$/, 'the conversation\'s title is the agent\'s name, which it now keeps'],
+  // The Codex agent's model as Harness chose it, from Codex 0.160's catalog (#848). Added, nothing taken
+  // away; it is read in the background, so whether it is there by the last list is timing.
+  [/^\.agents_list[^.]*\.agents\[\d+\]\.selectedModel$/, 'the selected model is read for Codex 0.160 (#848)', { optional: true }],
+  // A resumed Codex agent's permission mode is read back from its engine's arguments once discovery has
+  // seen the process, where the released build left it null. Whether that read lands before the last
+  // list is timing (3 runs in 4), so it may or may not differ.
+  [/^\.agents_list[^.]*\.agents\[\d+\]\.permissionMode$/, 'the permission mode is read back from the engine\'s arguments', { optional: true }],
+  // Whether the search index had finished its first build when the query came, and how many conversations
+  // it still had to read, is timing; search runs in its own process now (#829) and is often ready sooner.
+  [/^\.session_search [^.]*\.(ready|pending)$/, 'the index\'s readiness, and what it still has to read, at the moment of the query is timing', { optional: true }],
+]
+
 type Engine = 'claude' | 'codex'
 type Answers = Record<string, unknown>
 const ENGINES: Engine[] = ['claude', 'codex']
@@ -92,6 +114,9 @@ function comparable(d: IsolatedDaemon, known: Map<string, string>) {
 function shape(frames: Frame[]): string[] {
   const out: string[] = []
   for (const frame of frames) {
+    // When the activity is announced is timing, not an answer: one run's sequence had an extra
+    // agent_activity before turn_started, or after turn_summary, on either build.
+    if (frame.type === 'agent_activity') continue
     const keys = Object.keys(frame.payload ?? {}).sort().join(',')
     const line = `${frame.type} {${keys}}`
     if (out.at(-1) !== line) out.push(line)
@@ -331,7 +356,7 @@ describe.skipIf(!FROM)('what the apps see, compared with the released build', ()
     const explained = (path: string) => Object.keys(CHANGED).find((prefix) => {
       const step = `.${prefix}`
       return path === step || path.startsWith(`${step}.`) || path.startsWith(`${step}[`)
-    })
+    }) ?? CHANGED_FIELDS.find(([field]) => field.test(path))?.[0].source
     const added = found.filter((difference) => difference.from === undefined)
     const unexplained = found.filter((difference) => difference.from !== undefined && !explained(difference.path))
     if (process.env.COMPAT_REPORT) {
@@ -344,5 +369,8 @@ describe.skipIf(!FROM)('what the apps see, compared with the released build', ()
     expect(unexplained, `${unexplained.length} differences from ${released.version}; see COMPAT_REPORT`).toEqual([])
     // An explanation nothing needs any more is removed.
     for (const prefix of Object.keys(CHANGED)) expect(found.some((difference) => explained(difference.path) === prefix), `${prefix} no longer differs`).toBe(true)
+    for (const [field, , options] of CHANGED_FIELDS) {
+      if (!options?.optional) expect(found.some((difference) => field.test(difference.path)), `${field.source} no longer differs`).toBe(true)
+    }
   })
 })

@@ -179,6 +179,32 @@ describe('preparing a stopped Codex session for resume', () => {
     expect(readdirSync(join(profile, 'sessions', '2026', '09', '15'))).toHaveLength(1)
   })
 
+  // A person who moved CODEX_HOME in their shell profile keeps their rollouts there, and an agent of theirs
+  // names no profile of its own. The rollout was held to the daemon's own CODEX_HOME, refused as "outside the
+  // session profile", and every restart or reopen of that agent failed after its engine had been stopped.
+  it('prepares a rollout kept in a CODEX_HOME the person moved, for an agent on no profile of its own', async () => {
+    writeFileSync(file, history(badReasoning()))
+    vi.resetModules()
+    vi.stubEnv('CODEX_HOME', join(profile, 'daemon-codex'))
+    const homes = await import('../../lib/engineHomes.js')
+    homes.adoptEngineHomes({ CODEX_HOME: profile }, { claudeHome: '/nowhere/.claude', codexHome: '/nowhere/.codex' })
+    try {
+      const fresh = await import('./portableHistory.js')
+      expect(fresh.prepareCodexResume({ ...source(), codexHome: null }).repairedItems).toBe(1)
+      // Found by its id there too, when the registry has no path for it.
+      writeFileSync(file, history(badReasoning()))
+      expect(fresh.prepareCodexResume({ ...source(), codexHome: null, transcriptPath: null }).repairedItems).toBe(1)
+      // A file in no Codex home at all is still refused.
+      const stray = join(profile, 'stray.jsonl')
+      writeFileSync(stray, history(badReasoning()))
+      expect(() => fresh.prepareCodexResume({ ...source(), codexHome: null, transcriptPath: stray })).toThrow('outside the session profile')
+    } finally {
+      vi.unstubAllEnvs()
+      rmSync(join(process.env.ADAPTER_DATA_DIR!, 'engine-homes.json'), { force: true })
+      homes.resetEngineHomes()
+    }
+  })
+
   it('refuses a different session instead of modifying the wrong history', () => {
     const original = history(badReasoning())
     writeFileSync(file, original)

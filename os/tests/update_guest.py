@@ -103,7 +103,7 @@ while True:
     assert version() == 'harness-os ' + manifest['package']['version']
     assert json.loads(Path('/usr/share/harness-os/runtime.json').read_text()) == manifest['runtime']
     alive()
-    receipt['checks'].append('Small package installed offline and verified without restarting the existing terminal process')
+    receipt['checks'].append('Package and cached dependencies installed offline and verified without restarting the existing terminal process')
     run('sudo', 'harness', 'upgrade', str(bundle))
     alive()
     receipt['checks'].append('Repeated apply recognizes the installed build without another transaction')

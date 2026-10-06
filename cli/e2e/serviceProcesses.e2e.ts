@@ -1,9 +1,11 @@
 /**
  * Services in their own processes, for Claude Code and Codex, on the real daemon: harnessd's master runs
- * search beside the core (`HARNESSD_SERVICES=search`), and whatever happens to search — killed outright,
- * hung, leaking memory, crashing on every start — costs search alone. The core never restarts, every
- * agent keeps working, a search asked while it is down is answered SERVICE_UNAVAILABLE at once, and the
- * master brings search back (or parks it, when it keeps crashing).
+ * search beside the core (`HARNESSD_SERVICES=search`), and the edge host, one process for several light
+ * services (`HARNESSD_SERVICES=edge`: workspaces, usage, the monitor and the project readers). Whatever
+ * happens to either process — killed outright, hung, leaking memory, crashing on every start — costs that
+ * process alone. The core never restarts, every agent keeps working, a request asked while it is down is
+ * answered SERVICE_UNAVAILABLE at once, and the master brings it back (or parks it, when it keeps
+ * crashing), every service in it connected again.
  */
 import { execFileSync } from 'node:child_process'
 import { mkdirSync } from 'node:fs'
@@ -42,7 +44,7 @@ function searchPids(d: IsolatedDaemon): number[] {
   const ours = new Set([...d.log().matchAll(/\[harnessd\] service search started \(pid (\d+)\)/g)].map((match) => Number(match[1])))
   const table = execFileSync('ps', ['-A', '-o', 'pid=,command=']).toString().trim().split('\n')
   return table.map((line) => line.trim().match(/^(\d+)\s+(.*)$/)).filter((match): match is RegExpMatchArray => !!match)
-    .filter(([, pid, command]) => command.trim() === 'harnessd search' && ours.has(Number(pid))).map(([, pid]) => Number(pid))
+    .filter(([, pid, command]) => command.trim() === 'harnessd-search' && ours.has(Number(pid))).map(([, pid]) => Number(pid))
 }
 const finds = async (client: LocalClient, word: string, sessionId: string): Promise<boolean> =>
   JSON.stringify(await client.request('session_search', { query: word }, 30_000)).includes(sessionId)
@@ -153,6 +155,126 @@ describe('services in their own processes', () => {
     expect(deleted, JSON.stringify(deleted)).toMatchObject({ deleted: true })
     await until('search to be back', () => restarts(d) >= 1 && d.log().split('[services] search connected').length >= 3 || null, 60_000, 250)
     await until('search to have forgotten it', async () => !(await finds(client, 'quokka', agent.sessionId)) || null, 30_000, 1_000)
+    client.close()
+  })
+})
+
+/** This daemon's edge host: titled `harnessd-edge` AND started by its own master, by the pid it logged. */
+function edgePids(d: IsolatedDaemon): number[] {
+  const ours = new Set([...d.log().matchAll(/\[harnessd\] service edge started \(pid (\d+)\)/g)].map((match) => Number(match[1])))
+  const table = execFileSync('ps', ['-A', '-o', 'pid=,command=']).toString().trim().split('\n')
+  return table.map((line) => line.trim().match(/^(\d+)\s+(.*)$/)).filter((match): match is RegExpMatchArray => !!match)
+    .filter(([, pid, command]) => command.trim() === 'harnessd-edge' && ours.has(Number(pid))).map(([, pid]) => Number(pid))
+}
+/** The services the edge host runs, each on its own link to the core. */
+const EDGE = ['workspaces', 'usage', 'monitor', 'projects']
+/** How many times each of the edge host's services has connected to the core. */
+const edgeConnections = (d: IsolatedDaemon): number => Math.min(...EDGE.map((service) => d.log().split(`[services] ${service} connected`).length - 1))
+/** The edge host answers, through the core: the home folder's subfolders, and the machine's own totals. */
+async function edgeAnswers(client: LocalClient): Promise<boolean> {
+  const listed = await client.request('fs_list_dir', {}, 30_000)
+  const machine = await client.request('machine_resources', {}, 30_000)
+  return listed.error === undefined && machine.error === undefined
+}
+/** Asked while the edge host is down: an answer at once, not a hang, and the Monitor's list still lists. */
+async function edgeDown(client: LocalClient, agentId: string): Promise<void> {
+  const listed = await client.request('fs_list_dir', {}, 40_000)
+  if (listed.error) expect(listed).toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'projects', retryable: true })
+  const row = (await client.request('agents_list', { monitor: true }, 40_000)).agents.find((agent: Record<string, any>) => agent.id === agentId)
+  expect(row?.monitor).toBeDefined()
+}
+
+describe('the edge host: several services in one process of their own', () => {
+  let daemon: IsolatedDaemon | undefined
+  afterEach(async () => { await daemon?.close(); daemon = undefined })
+  const fresh = async (env: Record<string, string> = {}) => {
+    const d = await IsolatedDaemon.create({ env: {
+      HARNESSD_SERVICES: 'edge',
+      HARNESSD_SERVICE_INITIAL_BACKOFF_MS: '200',
+      HARNESSD_SERVICE_MAX_BACKOFF_MS: '1000',
+      ...env,
+    } })
+    daemon = d
+    onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`) })
+    await d.start()
+    return d
+  }
+  const restarts = (d: IsolatedDaemon) => d.log().split('\n').filter((line) => /\[harnessd\] service edge started .* restart \d+/.test(line)).length
+
+  it('runs its services in one process, each on its own link, and answers through the core for both engines', async () => {
+    const d = await fresh()
+    const client = await LocalClient.connect(d)
+    await until('every edge service to connect to the core', () => edgeConnections(d) >= 1 || null, 30_000, 200)
+    expect(edgePids(d)).toHaveLength(1)
+    for (const engine of ['claude', 'codex'] as const) {
+      const agent = await create(d, client, engine, `edge-${engine}`)
+      await turn(client, agent.id, `with the edge host (${engine})`)
+      // The Monitor's rows carry the sample the core asked the monitor's process for.
+      const row = (await client.request('agents_list', { monitor: true }, 30_000)).agents.find((one: Record<string, any>) => one.id === agent.id)
+      expect(row.monitor.sampledAt).toEqual(expect.any(String))
+      expect(await client.request('git_project_info', { path: join(d.projectsDir, `edge-${engine}`) }, 30_000)).not.toHaveProperty('service')
+    }
+    expect(await edgeAnswers(client)).toBe(true)
+    expect(d.coresStarted()).toBe(1)
+    client.close()
+  })
+
+  it('killed outright: asked meanwhile it says so at once, agents go on, and the master brings it back with every service', async () => {
+    const d = await fresh()
+    const client = await LocalClient.connect(d)
+    const agent = await create(d, client, 'claude', 'edge-killed')
+    await until('every edge service to connect', () => edgeConnections(d) >= 1 || null, 30_000, 200)
+    const before = edgePids(d)
+    expect(before).toHaveLength(1)
+    for (const pid of before) process.kill(pid, 'SIGKILL')
+    await edgeDown(client, agent.id)
+    await turn(client, agent.id, 'while the edge host was gone')
+    await until('the master to restart the edge host', () => restarts(d) >= 1 || null, 30_000, 200)
+    await until('every edge service to connect again', () => edgeConnections(d) >= 2 || null, 30_000, 200)
+    await until('the edge host to answer again', () => edgeAnswers(client).then((ok) => ok || null), 30_000, 500)
+    expect(edgePids(d).some((pid) => !before.includes(pid))).toBe(true)
+    expect(d.coresStarted()).toBe(1)
+    client.close()
+  })
+
+  it('hung, it is killed by the master\'s heartbeat watch and started again; the core goes on', async () => {
+    const d = await fresh({ HARNESSD_SERVICE_HEARTBEAT_TIMEOUT_MS: '2000' })
+    const client = await LocalClient.connect(d)
+    const agent = await create(d, client, 'codex', 'edge-hung')
+    await until('every edge service to connect', () => edgeConnections(d) >= 1 || null, 30_000, 200)
+    for (const pid of edgePids(d)) process.kill(pid, 'SIGSTOP')
+    // Asked while it is stopped: answered when the link gives up on it or the master kills it, never a hang.
+    await edgeDown(client, agent.id)
+    await until('the master to find the edge host hung', () => d.log().includes('[harnessd] service edge sent no heartbeat') || null, 30_000, 200)
+    await until('the edge host to be started again', () => restarts(d) >= 1 || null, 30_000, 200)
+    await turn(client, agent.id, 'the core never waited on the edge host')
+    await until('the edge host to answer again', () => edgeAnswers(client).then((ok) => ok || null), 30_000, 500)
+    expect(d.coresStarted()).toBe(1)
+    client.close()
+  })
+
+  it('leaking, it is restarted at its memory budget, before it can hurt anything else', async () => {
+    const d = await fresh({ HARNESSD_TEST_FAULTS: 'edge.leak', HARNESSD_SERVICE_HEAP_LIMIT_MIB: '128' })
+    const client = await LocalClient.connect(d)
+    const agent = await create(d, client, 'claude', 'edge-leaking')
+    await until('the master to restart the edge host for memory', () => /\[harnessd\] service edge: (its heap is at|it is using)/.test(d.log()) || null, 60_000, 250)
+    await until('the edge host to be started again', () => restarts(d) >= 1 || null, 30_000, 200)
+    await turn(client, agent.id, 'the leak was the edge host\'s alone')
+    expect(d.coresStarted()).toBe(1)
+    client.close()
+  })
+
+  it('crashing on every start, it is parked, and asked meanwhile says so; agents go on', async () => {
+    const d = await fresh({ HARNESSD_TEST_FAULTS: 'edge.crash', HARNESSD_SERVICE_PARK_CRASHES: '3' })
+    const client = await LocalClient.connect(d)
+    const agent = await create(d, client, 'codex', 'edge-crash-loop')
+    await until('the master to park the edge host', () => d.log().includes('[harnessd] service edge ended 3 times') || null, 60_000, 250)
+    expect(await client.request('fs_list_dir', {}, 10_000)).toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'projects', retryable: true })
+    expect(await client.request('machine_resources', {}, 10_000)).toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'monitor', retryable: true })
+    const row = (await client.request('agents_list', { monitor: true }, 30_000)).agents.find((one: Record<string, any>) => one.id === agent.id)
+    expect(row.monitor).toMatchObject({ rssBytes: null, cpu: null, processes: [], sampledAt: null })
+    await turn(client, agent.id, 'the edge host is parked and nothing else cares')
+    expect(d.coresStarted()).toBe(1)
     client.close()
   })
 })

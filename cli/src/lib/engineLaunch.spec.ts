@@ -37,6 +37,8 @@ import {
   supportsFirstPrompt,
   supportsNamedAgent,
   unreadableCwdGuard,
+  ZSH_GUARD_ZSHENV,
+  zshNewUserGuard,
 } from './engineLaunch.js'
 import { ENGINES, type AgentEngine } from '../engines/types.js'
 import { engineBin } from './engineBin.js'
@@ -53,6 +55,19 @@ import { TmuxBackend } from './tmuxBackend.js'
 const developersOwnGridBin = process.env.HARNESS_GRID_BIN
 beforeEach(() => { delete process.env.HARNESS_GRID_BIN })
 afterAll(() => { if (developersOwnGridBin !== undefined) process.env.HARNESS_GRID_BIN = developersOwnGridBin })
+
+// A zsh user as most are: with a startup file of their own, so the zsh launches below are the plain
+// ones. vitest.setup.ts points ZDOTDIR at an empty folder, which is the new-user case `zshNewUserGuard`
+// handles; that case has its own tests at the end of this file.
+const suiteZdotdir = process.env.ZDOTDIR
+const zshUserHome = mkdtempSync(join(tmpdir(), 'launch-zdotdir-'))
+writeFileSync(join(zshUserHome, '.zshrc'), '')
+beforeEach(() => { process.env.ZDOTDIR = zshUserHome })
+afterAll(() => {
+  if (suiteZdotdir === undefined) delete process.env.ZDOTDIR
+  else process.env.ZDOTDIR = suiteZdotdir
+  rmSync(zshUserHome, { recursive: true, force: true })
+})
 
 /** The prelude every case below gets by default: no managed grid on this machine, so PATH is left
  *  alone and only grid's update check is turned off. */
@@ -1416,3 +1431,95 @@ async function runPaneScript(
     )
   })
 }
+
+describe('zsh\'s new-user menu, kept out of an agent\'s pane', () => {
+  // Debian, Ubuntu, Fedora and Arch build zsh with its zsh/newuser module: on a terminal, for a person
+  // with no .zshenv, .zprofile, .zshrc or .zlogin, it runs a full-screen setup menu before anything else.
+  // On the end-to-end suite's first Linux run every zsh agent's pane showed it, and no engine started.
+  let root = ''
+  let savedDataDir = ''
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'launch-newuser-'))
+    savedDataDir = env.ADAPTER_DATA_DIR
+    env.ADAPTER_DATA_DIR = join(root, 'data')
+  })
+  afterEach(() => {
+    env.ADAPTER_DATA_DIR = savedDataDir
+    rmSync(root, { recursive: true, force: true })
+  })
+  const folder = () => join(root, 'data', 'zsh-startup')
+
+  it('points a person with no zsh startup files at a .zshenv of Harness\'s that puts their ZDOTDIR back', () => {
+    const home = join(root, 'home')
+    mkdirSync(home)
+    expect(zshNewUserGuard({ HOME: home })).toEqual([`ZDOTDIR=${folder()}`])
+    expect(zshNewUserGuard({ HOME: home, ZDOTDIR: home })).toEqual([`ZDOTDIR=${folder()}`, `HARNESS_ZDOTDIR=${home}`])
+    expect(readFileSync(join(folder(), '.zshenv'), 'utf8')).toBe(ZSH_GUARD_ZSHENV)
+    expect(statSync(join(folder(), '.zshenv')).mode & 0o777).toBe(0o600)
+    // In the launch itself, before the shell and its flags.
+    process.env.ZDOTDIR = home
+    expect(buildEngineLaunchArgv('claude', {}, '/bin/zsh', undefined, undefined, NO_TMUX).slice(0, 6)).toEqual([
+      '/usr/bin/env', 'DISABLE_AUTO_UPDATE=true', `ZDOTDIR=${folder()}`, `HARNESS_ZDOTDIR=${home}`, '/bin/zsh', '-lic',
+    ])
+  })
+
+  it.each(['.zshenv', '.zprofile', '.zshrc', '.zlogin'])('leaves anyone with a %s exactly as they were', (name) => {
+    const home = join(root, 'home')
+    mkdirSync(home)
+    writeFileSync(join(home, name), '')
+    expect(zshNewUserGuard({ HOME: home })).toEqual([])
+    expect(zshNewUserGuard({ HOME: join(root, 'elsewhere'), ZDOTDIR: home })).toEqual([])
+    expect(existsSync(folder())).toBe(false)
+  })
+
+  it('launches as before when it cannot write its .zshenv, or there is no home to look in', () => {
+    writeFileSync(join(root, 'data'), 'a file where the data folder should be')
+    expect(zshNewUserGuard({ HOME: root })).toEqual([])
+    expect(zshNewUserGuard({})).toEqual([])
+  })
+
+  // What the .zshenv does, in a real zsh: a person's ZDOTDIR, set or unset, is theirs again before any
+  // of their own files is read, and a startup file of theirs that appears later is read from it.
+  it.skipIf(!existsSync('/bin/zsh'))('gives a real zsh back the person\'s ZDOTDIR, set or unset, and reads their files from it', () => {
+    const home = join(root, 'home')
+    mkdirSync(home)
+    const run = (environment: NodeJS.ProcessEnv) => {
+      const guard = zshNewUserGuard(environment)
+      expect(guard).not.toEqual([])
+      const out = execFileSync('/usr/bin/env', [...guard, '/bin/zsh', '-lic', 'print -r -- "${ZDOTDIR-unset}|${+HARNESS_ZDOTDIR}|${HARNESS_PROFILE-}"'], {
+        encoding: 'utf8', env: { PATH: process.env.PATH, ...environment }, stdio: ['ignore', 'pipe', 'ignore'],
+      })
+      return out.trim().split('\n').at(-1)
+    }
+    expect(run({ HOME: home })).toBe('unset|0|')
+    expect(run({ HOME: join(root, 'not-here'), ZDOTDIR: home })).toBe(`${home}|0|`)
+    // A .zshenv only at the guard's decision: one written after it is still the person's to run.
+    const later = join(root, 'later')
+    mkdirSync(later)
+    const guard = zshNewUserGuard({ HOME: later })
+    writeFileSync(join(later, '.zshenv'), 'export HARNESS_PROFILE=theirs\n')
+    const out = execFileSync('/usr/bin/env', [...guard, '/bin/zsh', '-lic', 'print -r -- "${ZDOTDIR-unset}|${HARNESS_PROFILE-}"'], {
+      encoding: 'utf8', env: { PATH: process.env.PATH, HOME: later }, stdio: ['ignore', 'pipe', 'ignore'],
+    })
+    expect(out.trim().split('\n').at(-1)).toBe('unset|theirs')
+  })
+
+  // The menu itself needs zsh's newuser script (not on macOS) and a terminal, which a pseudo-terminal
+  // from python's pty module provides. Without the guard the menu waits for a key and the marker never
+  // comes; with it the shell runs the command at once.
+  const newuserScript = ['/usr/share/zsh', '/usr/local/share/zsh'].flatMap((base) => {
+    try { return readdirSync(base).map((version) => join(base, version, 'scripts', 'newuser')) } catch { return [] }
+  }).find((file) => existsSync(file))
+  it.skipIf(!existsSync('/bin/zsh') || !newuserScript || !existsSync('/usr/bin/python3'))('runs a new user\'s pane straight to its command, with no setup menu', () => {
+    const home = join(root, 'home')
+    mkdirSync(home)
+    const argv = ['/usr/bin/env', ...zshNewUserGuard({ HOME: home }), '/bin/zsh', '-lic', 'print HARNESS-MARKER; exit']
+    const pty = `import os, pty, sys, select, time\npid, fd = pty.fork()\nif pid == 0:\n    os.execvpe(sys.argv[1], sys.argv[1:], os.environ)\nout = b''\nend = time.time() + 8\nwhile time.time() < end and b'HARNESS-MARKER' not in out:\n    r, _, _ = select.select([fd], [], [], 0.2)\n    if r:\n        try: out += os.read(fd, 4096)\n        except OSError: break\nos.kill(pid, 9)\nsys.stdout.write(out.decode('utf8', 'replace'))\n`
+    const out = execFileSync('/usr/bin/python3', ['-c', pty, ...argv], {
+      encoding: 'utf8', env: { PATH: process.env.PATH, HOME: home, TERM: 'xterm', LINES: '40', COLUMNS: '120' }, timeout: 20_000,
+    })
+    expect(out).not.toContain('zsh-newuser-install')
+    expect(out).toContain('HARNESS-MARKER')
+  })
+})
+

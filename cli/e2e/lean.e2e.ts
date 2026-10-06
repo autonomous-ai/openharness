@@ -19,11 +19,13 @@ import { withLean } from './harness/release.js'
 import { readLeanBundle } from '../src/harnessd/leanBundle.js'
 
 type Engine = 'claude' | 'codex'
-const SERVICES = ['search', 'viewers', 'workspaces', 'teams']
+/** The processes the master runs the services in, and the services, each on its own link to the core. */
+const PROCESSES = ['search', 'viewers', 'edge', 'teams']
+const SERVICES = ['search', 'viewers', 'store', 'workspaces', 'usage', 'monitor', 'projects', 'teams']
 
 const commandOf = (pid: number): string => execFileSync('ps', ['-o', 'command=', '-p', String(pid)], { encoding: 'utf8' }).trim()
 const rssMiB = (pid: number): number => Number(execFileSync('ps', ['-o', 'rss=', '-p', String(pid)], { encoding: 'utf8' }).trim()) / 1024
-const servicePids = (d: IsolatedDaemon): Map<string, number> => new Map(SERVICES.map((name) => {
+const servicePids = (d: IsolatedDaemon): Map<string, number> => new Map(PROCESSES.map((name) => {
   const started = [...d.log().matchAll(new RegExp(`\\[harnessd\\] service ${name} started \\(pid (\\d+)\\)`, 'g'))]
   return [name, Number(started.at(-1)?.[1] ?? 0)]
 }))
@@ -47,7 +49,7 @@ describe('harnessd\'s master and services lean', () => {
     daemon = d
     onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-120).join('\n')}`) })
     await d.start()
-    await until('every service', () => SERVICES.every((name) => new RegExp(`service ${name} started`).test(d.log())) || null, 60_000, 200)
+    await until('every service process', () => PROCESSES.every((name) => new RegExp(`service ${name} started`).test(d.log())) || null, 60_000, 200)
     return d
   }
   async function agentWorks(d: IsolatedDaemon, engine: Engine): Promise<void> {
@@ -84,7 +86,7 @@ describe('harnessd\'s master and services lean', () => {
     const master = d.pid!
     expect(commandOf(master)).toBe('harnessd')
     expect(commandOf(d.corePid()!)).toContain(`${bundle} __run`)
-    for (const [name, pid] of servicePids(d)) expect(commandOf(pid), name).toBe(`harnessd ${name}`)
+    for (const [name, pid] of servicePids(d)) expect(commandOf(pid), name).toBe(`harnessd-${name}`)
     // Lean: under the cost of parsing the whole CLI, which every one of them paid before (at idle,
     // 115 to 160 MiB each), and a long way under it at that (55 to 80).
     for (const [name, pid] of [['master', master], ...servicePids(d)] as Array<[string, number]>) {

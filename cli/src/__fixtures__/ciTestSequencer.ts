@@ -2,9 +2,13 @@ import { readFileSync } from 'node:fs'
 import { relative } from 'node:path'
 import { BaseSequencer, type TestSpecification } from 'vitest/node'
 
-type TimingHints = { defaultDurationMs: number; durationMs: Record<string, number> }
+export type TimingHints = { defaultDurationMs: number; durationMs: Record<string, number> }
 
-export function readTimingHints(value: unknown): TimingHints {
+/** The files each suite's hints may name: the default suite's specs, and the end-to-end files. */
+export const UNIT_HINT_PATH = /^src\/.+\.(spec|test)\.ts$/
+export const E2E_HINT_PATH = /^e2e\/.+\.e2e\.ts$/
+
+export function readTimingHints(value: unknown, paths: RegExp = UNIT_HINT_PATH): TimingHints {
   const raw = value as { schema?: unknown; defaultDurationMs?: unknown; durationMs?: unknown } | null
   const positive = (n: unknown): n is number => typeof n === 'number' && Number.isFinite(n) && n > 0
   if (raw?.schema !== 1 || !positive(raw.defaultDurationMs) || !raw.durationMs
@@ -12,14 +16,17 @@ export function readTimingHints(value: unknown): TimingHints {
     throw new Error('Invalid CLI test timing hints')
   }
   for (const [path, duration] of Object.entries(raw.durationMs)) {
-    if (!/^src\/.+\.(spec|test)\.ts$/.test(path) || path.includes('\\') || path.split('/').includes('..') || !positive(duration)) {
+    if (!paths.test(path) || path.includes('\\') || path.split('/').includes('..') || !positive(duration)) {
       throw new Error(`Invalid CLI test timing hint: ${path}`)
     }
   }
   return { defaultDurationMs: raw.defaultDurationMs, durationMs: raw.durationMs as Record<string, number> }
 }
 
-const hints = readTimingHints(JSON.parse(readFileSync(new URL('../../ci-test-durations.json', import.meta.url), 'utf8')))
+/** A suite's hints file (`ci-test-durations.json`, `ci-e2e-durations.json`), read and checked. */
+export function readTimingHintsFile(name: string, paths: RegExp): TimingHints {
+  return readTimingHints(JSON.parse(readFileSync(new URL(`../../${name}`, import.meta.url), 'utf8')), paths)
+}
 
 /** Longest estimated files first, each assigned to the least-loaded shard. Timing hints never
  * select tests: the caller's complete discovery list is the only source of entries. New files
@@ -44,17 +51,24 @@ export function durationShards<T>(entries: Array<{ key: string; durationMs: numb
   return shards.map(shard => shard.values)
 }
 
-export class DurationSequencer extends BaseSequencer {
-  override async shard(files: TestSpecification[]): Promise<TestSpecification[]> {
-    const shard = this.ctx.config.shard
-    if (!shard) return files
-    const entries = files.map(spec => {
-      const path = relative(this.ctx.config.root, spec.moduleId).replaceAll('\\', '/')
-      return { key: `${spec.project.name}\0${spec.pool}\0${path}`,
-        durationMs: hints.durationMs[path] ?? hints.defaultDurationMs, value: spec }
-    })
-    return durationShards(entries, shard.count)[shard.index - 1]
+/** A sequencer that shards by [hints]; one per suite, since each has its own files and timings. */
+export function createDurationSequencer(hints: TimingHints): typeof BaseSequencer {
+  return class extends BaseSequencer {
+    override async shard(files: TestSpecification[]): Promise<TestSpecification[]> {
+      const shard = this.ctx.config.shard
+      if (!shard) return files
+      const entries = files.map(spec => {
+        const path = relative(this.ctx.config.root, spec.moduleId).replaceAll('\\', '/')
+        return { key: `${spec.project.name}\0${spec.pool}\0${path}`,
+          durationMs: hints.durationMs[path] ?? hints.defaultDurationMs, value: spec }
+      })
+      return durationShards(entries, shard.count)[shard.index - 1]
+    }
+    // Keep Vitest's normal failed-first/cache-aware ordering within each shard, and its
+    // project/isolation/group ordering. Unsharded local runs retain the default behavior.
   }
-  // Keep Vitest's normal failed-first/cache-aware ordering within each shard, and its
-  // project/isolation/group ordering. Unsharded local runs retain the default behavior.
 }
+
+/** The default suite's CI shards (`vitest.ci.config.ts`). The end-to-end suite builds its own from
+ *  `ci-e2e-durations.json` (`vitest.e2e.ci.config.ts`). */
+export const DurationSequencer = createDurationSequencer(readTimingHintsFile('ci-test-durations.json', UNIT_HINT_PATH))

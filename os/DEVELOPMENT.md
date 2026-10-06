@@ -344,9 +344,13 @@ The installed OS checks the existing public hn and CLI release channels every
 15 minutes, with a small randomized delay. Complete, checksum-verified runtimes
 are prepared under the user's state directory. The OS-owned copy remains an
 offline fallback. Neither downloading nor checking restarts working processes.
-OS windows use hn's local session storage (`HARNESS_TUI_DESK=off`), so their
-layout and pane references survive reconnects without signing into the cloud.
-This setting is confined to the OS launcher; ordinary hn installs are unchanged.
+Signed out, OS windows use hn's local session storage (`HARNESS_TUI_DESK=off`),
+so their layout and pane references survive reconnects without a cloud account.
+Signed in (`HARNESS_TUI_DESK_SIGNED_IN=sync`), this computer's windows join the
+account's shared tabs, as the desktop app's do at sign-in, under the names the
+app shows. On sign-out the harnesses running on this computer stay in their
+windows; another machine's go with the account. An older hn reads `off` alone. These settings are confined to
+the OS launcher; ordinary hn installs are unchanged.
 
 The installed system keeps hn's standard status bar. Super+u records an update
 request and selects the Updates terminal; the request starts checking/applying

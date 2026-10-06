@@ -1,13 +1,13 @@
 import { closeSync, existsSync, openSync, readSync, readdirSync } from 'fs'
-import { homedir } from 'os'
 import { join } from 'path'
+import { env } from '../../config/env.js'
+import { codexHomeRoots } from '../../lib/engineHomes.js'
 
 type JsonObject = Record<string, unknown>
 
 const MAX_WALK_ENTRIES = 5_000
 const MAX_META_BYTES = 128 * 1024
 const THREAD_ID_RE = /^[a-zA-Z0-9-]{8,128}$/
-const CODEX_SESSIONS_DIR = join(process.env.CODEX_HOME || join(homedir(), '.codex'), 'sessions')
 
 export interface CodexRolloutMeta {
   id: string
@@ -56,8 +56,13 @@ export function readCodexRolloutMeta(file: string): CodexRolloutMeta | null {
   }
 }
 
-/** Find one rollout by thread id without scanning unbounded user history. */
-export function resolveCodexRollout(threadId: string, root = CODEX_SESSIONS_DIR): string | null {
+/** Find one rollout by thread id without scanning unbounded user history: under `root`, else in every Codex
+ *  home the person moved too (lib/engineHomes.ts). The daemon's own alone missed the sub-agents of a Codex
+ *  in a moved home, and its Task cards closed with no tools and no totals. */
+export function resolveCodexRollout(threadId: string, root?: string): string | null {
+  if (root === undefined) {
+    return codexHomeRoots(env.CODEX_HOME).reduce<string | null>((found, home) => found ?? resolveCodexRollout(threadId, join(home, 'sessions')), null)
+  }
   if (!THREAD_ID_RE.test(threadId) || !existsSync(root)) return null
   const stack = [root]
   let visited = 0

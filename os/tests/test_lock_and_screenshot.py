@@ -60,6 +60,14 @@ class SessionLock(unittest.TestCase):
         self.assertRegex(style, r'window \{\s*background-color: #000000;')
 
 
+class StatusBar(unittest.TestCase):
+    def test_only_the_tab_in_front_is_bold(self):
+        conf = (ROOT / 'usr/share/harness-os/tmux.conf').read_text().splitlines()
+        self.assertIn('set -g window-status-activity-style default', conf)
+        self.assertIn('set -g window-status-bell-style default', conf)
+        self.assertIn('set -g window-status-current-style bold', conf)
+
+
 class FileManager(unittest.TestCase):
     def test_super_e_runs_or_raises_its_own_window_like_the_browser(self):
         keyboard = ET.parse(RC).getroot().find('keyboard')
@@ -74,10 +82,24 @@ class FileManager(unittest.TestCase):
         rules = ET.parse(RC).getroot().find('windowRules')
         self.assertTrue([r for r in rules if r.get('identifier') == 'harness-files' and r.get('serverDecoration') == 'no'])
 
+    def test_super_o_asks_for_a_folder_or_file_in_a_new_window(self):
+        self.assertEqual(bindings()['W-o'], ['/usr/lib/harness-os/files --open'])
+        script = (ROOT / 'usr/lib/harness-os/files').read_text()
+        # A small dialog of its own (centred, no server frame) that launches the explorer or editor
+        # windows back through this script.
+        self.assertIn('--app-id=harness-open', script)
+        self.assertIn('-o initial-window-mode=windowed --window-size-chars=130x34', script)
+        self.assertIn('HARNESS_FILES_LAUNCH=/usr/lib/harness-os/files', script)
+        self.assertIn('"$HARNESS_TUI_BIN" files "$1" "${2:?}"', script)
+        rules = ET.parse(RC).getroot().find('windowRules')
+        self.assertTrue([r for r in rules if r.get('identifier') == 'harness-open' and r.get('serverDecoration') == 'no'])
+
     def test_window_runs_hn_files_in_the_screen_look(self):
         script = (ROOT / 'usr/lib/harness-os/files').read_text()
         self.assertIn('--app-id=harness-files', script)
-        self.assertIn('--config=/usr/share/harness-os/foot.ini "$HARNESS_TUI_BIN" files', script)
+        self.assertIn('config=/usr/share/harness-os/foot.ini', script)
+        self.assertIn('--app-id=harness-files --title=Files --config="$config"', script)
+        self.assertIn('"$HARNESS_TUI_BIN" files "${1:-$HOME}"', script)
         subprocess.run(['sh', '-n', ROOT / 'usr/lib/harness-os/files'], check=True)
 
 
