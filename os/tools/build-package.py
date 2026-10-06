@@ -13,18 +13,18 @@ import tarfile
 import tempfile
 
 
-DEPENDENCIES = ('nodejs-lts-jod', 'tmux', 'foot', 'labwc', 'gtklock', 'grim', 'slurp')
+DEPENDENCIES = ('nodejs-lts-jod', 'tmux', 'foot', 'gtklock', 'grim', 'slurp')
 
 
-def package_info(version, timestamp, size):
+def package_info(version, timestamp, size, compositor_dependencies=()):
     # These are needed on upgrades too; adding a tool to the ISO list alone
     # leaves existing computers with new launchers but no executable to run.
     return (f'pkgname = harness-os\npkgbase = harness-os\nxdata = pkgtype=pkg\npkgver = {version}\n'
             'pkgdesc = Harness session and verified Harness runtime\n'
             'url = https://github.com/autonomous-ai/openharness\n'
             f'builddate = {timestamp}\npackager = OpenHarness\nsize = {size}\n'
-            'arch = x86_64\nlicense = MIT\n'
-            + ''.join(f'depend = {name}\n' for name in DEPENDENCIES))
+            'arch = x86_64\nlicense = MIT\nlicense = GPL-2.0-only\n'
+            + ''.join(f'depend = {name}\n' for name in dict.fromkeys((*DEPENDENCIES, *compositor_dependencies))))
 
 
 def digest(path):
@@ -155,6 +155,8 @@ def bootstrap(source, folder):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--runtime', type=Path, required=True)
+    parser.add_argument('--compositor', type=Path, required=True,
+                        help='Verified native compositor from this source and Arch snapshot')
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--development', action='store_true', help='Include a source revision in the package version')
     args = parser.parse_args()
@@ -162,6 +164,10 @@ def main():
     if git(source, 'status', '--porcelain', '--untracked-files=normal'):
         parser.error('Commit source changes before building a traceable package.')
     commit = git(source, 'rev-parse', 'HEAD')
+    spec = importlib.util.spec_from_file_location('harness_compositor', Path(__file__).with_name('compositor_payload.py'))
+    compositor = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(compositor)
+    compositor.validate(source, args.compositor.resolve(), commit)
     timestamp = int(git(source, 'log', '-1', '--format=%ct'))
     lock = json.loads((source / 'os/lock.json').read_text())
     if lock['architecture'] != 'x86_64' or not re.fullmatch(r'\d+\.\d+\.\d+(?:-preview\.\d+)?', lock['version']):
@@ -180,13 +186,14 @@ def main():
     with tempfile.TemporaryDirectory(prefix='harness-package-') as temp:
         root = Path(temp) / 'root'
         runtime = stage(source, args.runtime.resolve(), root, commit)
+        display = compositor.stage(source, args.compositor.resolve(), root, commit)
         size = sum(p.stat().st_size for p in root.rglob('*') if p.is_file() and not p.is_symlink())
-        pkginfo = package_info(version, timestamp, size)
+        pkginfo = package_info(version, timestamp, size, display['runtime_dependencies'])
         archive_package(root, package, pkginfo, timestamp)
     manifest = {'schema': 1, 'kind': 'harness-os-package', 'development': args.development,
                 'source_commit': commit, 'architecture': lock['architecture'],
                 'requires_os_version': lock['version'], 'arch_snapshot': lock['arch_snapshot'],
-                'runtime': runtime,
+                'runtime': runtime, 'compositor': display,
                 'package': {'name': package.name, 'version': version, 'bytes': package.stat().st_size, 'sha256': digest(package)}}
     if lock.get('upgrades_from'):
         manifest['upgrades_from'] = lock['upgrades_from']

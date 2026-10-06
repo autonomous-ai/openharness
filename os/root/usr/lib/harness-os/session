@@ -34,7 +34,7 @@ compositor_config=/usr/share/harness-os/labwc
 if [ -f /etc/harness-live ]; then
     compositor_config=/usr/share/harness-os/labwc-install
 fi
-if labwc -C "$compositor_config" > "$HOME/.local/state/harness-os/display.log" 2>&1; then
+if /usr/lib/harness-os/labwc -C "$compositor_config" > "$HOME/.local/state/harness-os/display.log" 2>&1; then
     exit 0
 fi
 restore_tty

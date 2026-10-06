@@ -59,7 +59,8 @@ jobs:
       - name: Build private update and verify both immutable kernel archives
         run: |
           make -C os runtime
-          python3 os/tools/build-package.py --runtime os/work/runtime --output os/work/t2-update --development
+          bash os/tools/build-compositor-container.sh os/work/compositor
+          python3 os/tools/build-package.py --runtime os/work/runtime --compositor os/work/compositor --output os/work/t2-update --development
           python3 - <<'PY'
           import importlib.util, json
           from pathlib import Path
