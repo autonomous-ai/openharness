@@ -14,6 +14,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { env } from './config/env.js'
 import { processExecve, probeMaster, runMaster, type Execve } from './harnessd/master.js'
+import { baseNode, namedNode } from './harnessd/processName.js'
 import { PROBE_ANSWER, PROBE_TIMEOUT_MS } from './harnessd/reexec.js'
 import { ensureUtf8Locale } from './lib/childLocale.js'
 import { DAEMON_LOG_FILE, HARNESSD_STATUS_FILE, PID_FILE } from './lib/daemonState.js'
@@ -56,8 +57,9 @@ export function startMaster(start: MasterStart, exit: (code: number) => void = (
   ensureUtf8Locale()
   const { serviceScriptPath } = start
   return runMaster({
-    nodePath: process.execPath,
+    nodePath: baseNode(process.execPath),
     execArgv: process.execArgv,
+    runtimeDir: env.ADAPTER_RUNTIME_DIR,
     ...start,
     pidFile: PID_FILE,
     statusFile: HARNESSD_STATUS_FILE,
@@ -92,6 +94,10 @@ export interface BundleMasterDeps {
   /** Runs `<lean> __harnessd-probe` as the re-executed master would start: whether it answered. */
   probe: (leanPath: string, env: NodeJS.ProcessEnv) => { ok: boolean; detail: string }
   execve: Execve | null
+  /** The node the master re-executes on: the managed one under the name `harnessd`
+   *  (harnessd/processName.ts), so Activity Monitor names it. Asked only when it re-executes; defaults
+   *  to this process's. */
+  node?: () => string
   start: (start: MasterStart) => unknown
   log: (line: string) => void
 }
@@ -118,6 +124,7 @@ export const processBundleDeps = (): BundleMasterDeps => ({
   write: (lean) => writeLeanBundle(LEAN_DIR, lean),
   probe: (leanPath, probeEnv) => probeLean(leanPath, probeEnv),
   execve: processExecve(),
+  node: () => namedNode(baseNode(process.execPath), 'harnessd', env.ADAPTER_RUNTIME_DIR, { log: (line) => console.log(`${ts()} ${line}`) }),
   start: startMaster,
   log: (line) => console.log(`${ts()} ${line}`),
 })
@@ -161,13 +168,14 @@ export function startMasterFromBundle(bundlePath: string, deps: BundleMasterDeps
   // An exec that fails cannot be caught once it has begun: on Node 22.23 a node binary that is not there
   // aborts this process (exit 134), and a script that is not there ends it in the new image
   // (MODULE_NOT_FOUND). The probe ran both a moment ago; they are checked again right before.
-  const missing = [process.execPath, leanPath].find((path) => !deps.exists(path))
+  const node = deps.node?.() ?? process.execPath
+  const missing = [node, leanPath].find((path) => !deps.exists(path))
   if (missing) {
     fromBundle(`${missing} is not there to re-execute on: the master and the services run from ${bundlePath}`)
     return
   }
   try {
-    deps.execve(process.execPath, [process.execPath, ...process.execArgv, leanPath, '__harnessd'], leanEnv)
+    deps.execve(node, [node, ...process.execArgv, leanPath, '__harnessd'], leanEnv)
   } catch (error) {
     // Only what `process.execve` refuses before it begins: arguments it cannot take.
     fromBundle(`the master could not re-execute on ${leanPath} (${error instanceof Error ? error.message : String(error)}): it runs from ${bundlePath}, the services from ${leanPath}`, { path: leanPath, fingerprint })

@@ -42,7 +42,7 @@ function searchPids(d: IsolatedDaemon): number[] {
   const ours = new Set([...d.log().matchAll(/\[harnessd\] service search started \(pid (\d+)\)/g)].map((match) => Number(match[1])))
   const table = execFileSync('ps', ['-A', '-o', 'pid=,command=']).toString().trim().split('\n')
   return table.map((line) => line.trim().match(/^(\d+)\s+(.*)$/)).filter((match): match is RegExpMatchArray => !!match)
-    .filter(([, pid, command]) => command.trim() === 'harnessd search' && ours.has(Number(pid))).map(([, pid]) => Number(pid))
+    .filter(([, pid, command]) => command.trim() === 'harnessd-search' && ours.has(Number(pid))).map(([, pid]) => Number(pid))
 }
 const finds = async (client: LocalClient, word: string, sessionId: string): Promise<boolean> =>
   JSON.stringify(await client.request('session_search', { query: word }, 30_000)).includes(sessionId)

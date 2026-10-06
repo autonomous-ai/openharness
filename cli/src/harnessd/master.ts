@@ -11,6 +11,7 @@ import { ignoreLogWriteErrors, trimLogFile, ts } from '../lib/log.js'
 import { folderFingerprint } from './leanBundle.js'
 import { leanServices } from './leanServices.js'
 import { platformFromEnv, type PlatformName } from './platform.js'
+import { baseNode, namedNode } from './processName.js'
 import type { MasterMessage } from './protocol.js'
 import {
   PROBE_ANSWER, RESUME_ENV, createReexec, decodeResume, fingerprint, readMarker, recoverFailedReexec, removeMarker, runProbe, writeMarker,
@@ -27,6 +28,9 @@ export interface MasterConfig {
   /** The node binary and flags the core runs with. */
   nodePath: string
   execArgv: string[]
+  /** The managed runtime's folder: a node inside it runs each process under its own name
+   *  (./processName.ts); any other node runs as `node`. */
+  runtimeDir?: string
   /** The CLI entry (`cli.js`, or `src/cli.ts` under tsx): what the core runs, and what an update
    *  replaces on disk. */
   scriptPath: string
@@ -250,6 +254,9 @@ export function runMaster(config: MasterConfig): Supervisor {
   // The core's stamp, local time (lib/log.ts): in UTC, the master's lines sat hours away from the core's
   // lines around them in the one log they share.
   const log = (line: string) => console.log(`${ts()} ${line}`)
+  // Each process exec'd through a link named after it, so Activity Monitor and `top` tell them apart.
+  const node = baseNode(config.nodePath)
+  const named = (name: string): string => namedNode(node, name, config.runtimeDir, { log })
   // Set by the launchd agent or systemd unit `harness service install` writes (./platform.ts).
   const platform = platformFromEnv(env)
   if (platform) log(`[harnessd] run by ${platform}, which starts this master again if it dies`)
@@ -291,7 +298,7 @@ export function runMaster(config: MasterConfig): Supervisor {
   const services = new ServiceSupervisor(specs, {
     spawnService: (spec, extra) => {
       const script = lean.scriptFor(spec.name)
-      const handle = coreHandle(spawn(config.nodePath, [...coreExecArgv(config.execArgv, spec.heapLimitMiB), script, '__service', spec.name], {
+      const handle = coreHandle(spawn(named(`harnessd-${spec.name}`), [...coreExecArgv(config.execArgv, spec.heapLimitMiB), script, '__service', spec.name], {
         env: { ...env, ...extra },
         stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
       }))
@@ -305,9 +312,9 @@ export function runMaster(config: MasterConfig): Supervisor {
     log,
   }, serviceOptions(env), { HARNESSD_SERVICE_TOKEN: token })
   const reexec = markerFile ? createReexec({
-    own, current: bundle, nodePath: config.nodePath, execArgv: config.execArgv, scriptPath: config.scriptPath, env, pid: process.pid,
+    own, current: bundle, nodePath: named('harnessd'), execArgv: config.execArgv, scriptPath: config.scriptPath, env, pid: process.pid,
     execve, exists: existsSync,
-    probe: (args, probeEnv) => runProbe(config.nodePath, args, probeEnv),
+    probe: (args, probeEnv) => runProbe(node, args, probeEnv),
     stopChildren: (done) => services.stop(done),
     startChildren: () => services.start(),
     writeMarker: (marker) => writeMarker(markerFile, marker),
@@ -317,7 +324,7 @@ export function runMaster(config: MasterConfig): Supervisor {
     log,
   }) : null
   const supervisor = new Supervisor({
-    spawnCore: (extra) => coreHandle(spawn(config.nodePath, [...execArgv, config.scriptPath, '__run'], {
+    spawnCore: (extra) => coreHandle(spawn(named('harnessd-core'), [...execArgv, config.scriptPath, '__run'], {
       // Told which services this master runs, so it routes to exactly those and runs the rest itself.
       env: { ...env, ...extra, HARNESSD_SERVICE_TOKEN: token, ...serviceProcessesEnv(specs) },
       stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
