@@ -1590,6 +1590,7 @@ class AppNotifier extends ChangeNotifier {
     signInProvider = null;
     // The code was scanned into the session that just ended — see [logout].
     pendingPairing = null;
+    pendingComputerSignIn = null;
     _clearDeviceNotices();
     _desk.reset();
     zoo.reset();
@@ -1787,8 +1788,10 @@ class AppNotifier extends ChangeNotifier {
     // the next sign-in — perhaps another account's — would spend it on the first
     // locked machine of that id and show a pairing error where its password form
     // belongs. Not in [_invalidateAuthWork]: signing IN starts there too, and the
-    // code is set before that sign-in on purpose (`phone_welcome.dart`).
+    // code is set before that sign-in on purpose (`phone_welcome.dart`). The same for a computer's
+    // sign-in code: held for the sign-in it asked for, not the one after this.
     pendingPairing = null;
+    pendingComputerSignIn = null;
     _closedHistory.clear();
     // Best-effort and fire-and-forget: local state is cleared below regardless, but the saved
     // session goes too, so the NEXT launch doesn't silently sign back in without ever showing the
@@ -2850,6 +2853,16 @@ class AppNotifier extends ChangeNotifier {
   /// up locked, the phone pairs with the code ([connectWithCode]) instead of asking for a password.
   /// See `phone/welcome/connect_code.dart`. Null the rest of the time.
   ({String machineId, String code})? pendingPairing;
+
+  /// A computer's own sign-in QR (the bare `hnq_…` code, [SignInCode] in
+  /// `phone/welcome/connect_code.dart`) read on the welcome screen by a phone not yet signed in —
+  /// the desktop app's "Scan with your phone". Only a signed-in phone can approve it, so the welcome
+  /// signs this one in first and holds the code across that sign-in; the signed-in shell then asks
+  /// to approve it (`phone/phone_shell.dart`), and spends it. Null the rest of the time.
+  ///
+  /// Like [pendingPairing], set before the sign-in on purpose and so not cleared by
+  /// [_invalidateAuthWork]: a sign-out drops it instead.
+  String? pendingComputerSignIn;
 
   /// The scanned code is spent (it failed, or the person chose the password): the computer's
   /// password form is what the home screen shows next.

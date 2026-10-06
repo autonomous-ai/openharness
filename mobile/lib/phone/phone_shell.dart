@@ -6,10 +6,12 @@ import 'package:harness_mobile/state/app_state.dart';
 
 import '../p2p/phone_terminal_p2p.dart';
 import 'agent_home.dart';
+import 'approve_sign_in.dart';
 import 'devices_page.dart';
 import 'exit_app.dart';
 import 'new_device_banner.dart';
 import 'phone_shell_scope.dart';
+import 'welcome/connect_code.dart';
 
 /// The signed-in phone app: one page stack, rooted in [AgentHome] — the terminal the phone opens
 /// on and stays on. Machines and Settings are pages pushed onto it, from the terminal's menu and
@@ -53,6 +55,13 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
         _openNoticedAgent();
         _openNoticedDevice();
       });
+    }
+    // A computer's sign-in QR read before this phone was signed in: the sign-in was the way to
+    // answer it, and this shell is the first thing up after it — see [_approveHeldComputerSignIn].
+    if (widget.notifier.pendingComputerSignIn != null) {
+      WidgetsBinding.instance.addPostFrameCallback(
+        (_) => _approveHeldComputerSignIn(),
+      );
     }
     // ⚠️ Not asked here any more. Signed in with nothing on screen, "Harness would like to send you
     // notifications" is a question with no reason attached. It is asked the first time a harness
@@ -126,6 +135,27 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
     _openAgentRequest.value = null;
     _openAgentRequest.value = (machineId: machineId, agentId: agentId);
     setState(() => _canPop = false);
+  }
+
+  /// The computer whose "Scan with your phone" QR the welcome screen read before this phone was
+  /// signed in ([AppNotifier.pendingComputerSignIn]): the approval it asked for, now that it can be
+  /// given. Spent here whatever the answer — a code is one computer's sign-in, once.
+  ///
+  /// From this shell's context and not a page's: the home page under it is still settling (the
+  /// machines loading, "Waiting for your computer…" swapping with "Looking for your machines…") and
+  /// a page swapped out mid-answer would drop it. The dialog stands on the root navigator either way.
+  void _approveHeldComputerSignIn() {
+    final code = widget.notifier.pendingComputerSignIn;
+    if (!mounted || code == null) return;
+    widget.notifier.pendingComputerSignIn = null;
+    unawaited(
+      approveComputerSignIn(
+        context,
+        widget.notifier,
+        SignInCode(code),
+        scanAgain: 'Show it again on the computer, then scan it from Settings ▸ Sign in a computer.',
+      ),
+    );
   }
 
   /// A tapped "agent finished" notice: that agent, as the home screen — the

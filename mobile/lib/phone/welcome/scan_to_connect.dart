@@ -47,8 +47,6 @@ class ScanToConnectPage extends StatefulWidget {
     this.title = 'Scan the code on your computer',
     this.hint = 'On your Mac: Harness ▸ Add Phone…',
     this.note,
-    this.noteWarns = false,
-    this.signInCodeEndsScan = true,
   });
 
   final ValueChanged<ConnectCode> onCode;
@@ -56,17 +54,9 @@ class ScanToConnectPage extends StatefulWidget {
   /// A computer's sign-in QR ([SignInCode]) was read — offered only where the page takes one.
   final ValueChanged<SignInCode>? onSignInCode;
 
-  /// Whether reading a sign-in QR ends the scan, as it does where the page is pushed to fetch one.
-  /// False keeps the camera reading after [onSignInCode] — for the first screen, which can only say
-  /// why that code is not the one, and then has to read the right one. The same code still in frame
-  /// is answered once, not every frame.
-  final bool signInCodeEndsScan;
-
   /// A line or two under the hint, in words that wrap: what to do when the computer cannot show the
-  /// code yet, or why the code just read is not the one. [noteWarns] draws it in the terminal's
-  /// yellow, for the second.
+  /// code yet.
   final String? note;
-  final bool noteWarns;
 
   /// Whether an Add Phone QR ([ConnectCode]) is one this page takes.
   final bool acceptConnectCodes;
@@ -94,10 +84,6 @@ class _ScanToConnectPageState extends State<ScanToConnectPage>
     with WidgetsBindingObserver {
   /// Set once a code of ours is read: the camera keeps reporting it every frame.
   bool _done = false;
-
-  /// The sign-in QR last answered while the scan went on ([ScanToConnectPage.signInCodeEndsScan]
-  /// false) — still in frame, it is reported every frame and must not be answered every frame.
-  String? _answeredSignIn;
 
   /// The camera, held here rather than left to [MobileScanner] — null when [ScanToConnectPage.camera]
   /// stands in for it.
@@ -186,13 +172,6 @@ class _ScanToConnectPageState extends State<ScanToConnectPage>
     for (final barcode in capture.barcodes) {
       final raw = barcode.rawValue ?? '';
       final signIn = widget.onSignInCode == null ? null : SignInCode.parse(raw);
-      if (signIn != null && !widget.signInCodeEndsScan) {
-        if (raw == _answeredSignIn) continue;
-        _answeredSignIn = raw;
-        HapticFeedback.mediumImpact();
-        widget.onSignInCode!(signIn);
-        continue;
-      }
       if (signIn != null) {
         _done = true;
         HapticFeedback.mediumImpact();
@@ -288,18 +267,11 @@ class _ScanToConnectPageState extends State<ScanToConnectPage>
           const SizedBox(height: 12),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: Tty.origin),
-            // Wraps, unlike the hint above it: a sentence of what to do, not a label. Announced when
-            // it changes — it is the page's only answer to a code it will not take.
-            child: Semantics(
-              liveRegion: true,
-              child: Text(
-                note,
-                key: const ValueKey('scan-note'),
-                style: tty.style(
-                  size: TtySize.meta,
-                  color: widget.noteWarns ? tty.yellow : tty.faint,
-                ),
-              ),
+            // Wraps, unlike the hint above it: a sentence of what to do, not a label.
+            child: Text(
+              note,
+              key: const ValueKey('scan-note'),
+              style: tty.style(size: TtySize.meta, color: tty.faint),
             ),
           ),
         ],

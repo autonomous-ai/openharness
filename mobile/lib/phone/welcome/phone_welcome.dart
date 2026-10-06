@@ -85,7 +85,8 @@ class PhoneWelcome extends StatefulWidget {
   State<PhoneWelcome> createState() => _PhoneWelcomeState();
 }
 
-enum _Step { hello, setUp, scan, email, code }
+/// [signInFirst]: a computer's own sign-in QR was scanned — see [_SignInFirst].
+enum _Step { hello, setUp, scan, signInFirst, email, code }
 
 class _PhoneWelcomeState extends State<PhoneWelcome> {
   _Step _step = _Step.hello;
@@ -99,22 +100,11 @@ class _PhoneWelcomeState extends State<PhoneWelcome> {
   /// Between a scan and the session it signs in: the scan page says so.
   bool _signingInWithScan = false;
 
-  /// The scan read a computer's own sign-in QR — "Scan with your phone" on its sign-in sheet, the
-  /// button someone adding a phone is most likely to press there. It needs a phone that is signed in
-  /// already, so the scan page says what to do instead. Gone when the step is left.
-  bool _readComputerSignIn = false;
-
   /// Under the scan page's hint. A desktop app opens signed out (its guest mode), and its Add Phone
   /// then shows no code, only "Sign in to add your phone." — with no way to sign in from there.
   static const _signInThereFirst =
       'Does it say “Sign in to add your phone”? Sign in on the computer first '
       '(Settings ▸ Account, with Google or Apple), then open Add Phone… again.';
-
-  /// In its place once a computer's sign-in QR is read ([_readComputerSignIn]).
-  static const _notThatCode =
-      'That code signs a computer in from a phone that is already signed in. '
-      'On the computer, choose Continue with Google or Apple instead, then scan the code in '
-      'Add Phone….';
 
   String? _error;
   int _resendIn = 0;
@@ -181,12 +171,18 @@ class _PhoneWelcomeState extends State<PhoneWelcome> {
 
   void _go(_Step step) {
     // Leaving for another way in takes the account's page with it: whatever it came back with
-    // would sign the phone in behind the step the person chose instead.
-    if (step != _Step.hello) widget.notifier.cancelProviderSignIn();
+    // would sign the phone in behind the step the person chose instead. Any step that is left — two
+    // of them offer the accounts now, the first screen and [_SignInFirst].
+    if (step != _step) widget.notifier.cancelProviderSignIn();
+    // A computer's sign-in code is held only on the way to the sign-in it asked for — its own step,
+    // and the email and code it may send the person to. Back at the start, at set-up or at the
+    // camera, it is let go: a sign-in from there must not end in a computer to approve.
+    if (step == _Step.hello || step == _Step.setUp || step == _Step.scan) {
+      widget.notifier.pendingComputerSignIn = null;
+    }
     setState(() {
       _step = step;
       _error = null;
-      _readComputerSignIn = false;
     });
     if (step == _Step.email) _emailFocus.requestFocus();
     if (step == _Step.code) _codeFocus.requestFocus();
@@ -257,11 +253,29 @@ class _PhoneWelcomeState extends State<PhoneWelcome> {
     });
   }
 
+  /// Where back goes from [step] — the system's back and each page's own `‹ Back` alike.
+  _Step _backFrom(_Step step) => switch (step) {
+    _Step.code => _Step.email,
+    _Step.email when _forComputer => _Step.signInFirst,
+    _Step.signInFirst => _Step.scan,
+    _ => _Step.hello,
+  };
+
+  /// A computer's sign-in code is waiting on this sign-in ([AppNotifier.pendingComputerSignIn]).
+  bool get _forComputer => widget.notifier.pendingComputerSignIn != null;
+
   @override
   Widget build(BuildContext context) {
     AppTheme.watch(context);
     final tty = Tty.of(context);
     final signingIn = widget.notifier.signingIn;
+    // Past the page and the exchange, the session is saved and the machines are on their way:
+    // nothing is waited on in the browser any more, and nothing to cancel.
+    final entering =
+        signingIn && widget.notifier.status == AppStatus.bootstrapping;
+    final onProvider = signingIn
+        ? null
+        : (SignInProvider provider) => unawaited(_signInWith(provider));
     return PopScope(
       // The first screen lets the press go to the system — except on Android, which asks before
       // the app is left ([confirmExitApp]) and so keeps it here too.
@@ -272,7 +286,7 @@ class _PhoneWelcomeState extends State<PhoneWelcome> {
           unawaited(confirmExitApp(context));
           return;
         }
-        _go(_step == _Step.code ? _Step.email : _Step.hello);
+        _go(_backFrom(_step));
       },
       child: Scaffold(
         backgroundColor: tty.ground,
@@ -284,16 +298,10 @@ class _PhoneWelcomeState extends State<PhoneWelcome> {
               onSample: widget.onTrySample == null
                   ? null
                   : () => unawaited(_trySample()),
-              onProvider: signingIn
-                  ? null
-                  : (provider) => unawaited(_signInWith(provider)),
+              onProvider: onProvider,
               waitingOn: widget.notifier.signInProvider,
               signedOutReason: widget.notifier.signedOutReason,
-              // Past the page and the exchange, the session is saved and the machines are on
-              // their way: nothing is waited on in the browser any more, and nothing to cancel.
-              entering:
-                  signingIn &&
-                  widget.notifier.status == AppStatus.bootstrapping,
+              entering: entering,
               onCancel: widget.notifier.cancelProviderSignIn,
               error: _error,
             ),
@@ -308,21 +316,37 @@ class _PhoneWelcomeState extends State<PhoneWelcome> {
             _Step.scan => ScanToConnectPage(
               camera: widget.scanCamera,
               onCode: (code) => unawaited(_onScanned(code)),
-              // Read, not ignored: a phone pointed at a computer's sign-in QR is a person who chose
-              // the wrong button there, and nothing happening was all they used to get.
-              onSignInCode: (_) => setState(() => _readComputerSignIn = true),
-              signInCodeEndsScan: false,
-              note: _readComputerSignIn ? _notThatCode : _signInThereFirst,
-              noteWarns: _readComputerSignIn,
+              // Taken, not ignored: a phone pointed at a computer's sign-in QR has a person behind it
+              // who chose "Scan with your phone" there — nothing happening was all they used to get.
+              // Held for the sign-in this phone needs before it can approve that computer.
+              onSignInCode: (code) {
+                widget.notifier.pendingComputerSignIn = code.code;
+                _go(_Step.signInFirst);
+              },
+              note: _signInThereFirst,
               signingIn: _signingInWithScan,
               onUseEmail: () => _go(_Step.email),
               onBack: () => _go(_Step.hello),
             ),
+            _Step.signInFirst => _SignInFirst(
+              onBack: () => _go(_backFrom(_Step.signInFirst)),
+              onProvider: onProvider,
+              waitingOn: widget.notifier.signInProvider,
+              entering: entering,
+              onCancel: widget.notifier.cancelProviderSignIn,
+              onUseEmail: () => _go(_Step.email),
+              error: _error,
+            ),
             _Step.email => _Form(
-              onBack: () => _go(_Step.hello),
+              onBack: () => _go(_backFrom(_Step.email)),
               title: 'Your email',
-              lines: const [
-                'The one Harness on your computer is signed in with. We’ll send you a 4-digit code.',
+              lines: [
+                _forComputer
+                    // The computer is not signed in yet: the account is chosen here, for both.
+                    ? 'The account to sign this phone and your computer in with. We’ll send you a '
+                          '4-digit code.'
+                    : 'The one Harness on your computer is signed in with. We’ll send you a '
+                          '4-digit code.',
               ],
               field: TtyField(
                 key: const Key('welcome-email'),
@@ -493,38 +517,13 @@ class _Hello extends StatelessWidget {
                   const SizedBox(height: 18),
                   const _OrDivider(label: 'or sign in with'),
                   const SizedBox(height: 14),
-                  for (final provider in SignInProvider.values) ...[
-                    if (provider != SignInProvider.values.first)
-                      const SizedBox(height: 10),
-                    SignInProviderButton(
-                      provider: provider,
-                      onPressed: onProvider == null
-                          ? null
-                          : () => onProvider!(provider),
-                      busyLabel: provider == waitingOn
-                          ? (entering
-                                ? 'Signing in…'
-                                : 'Waiting for ${provider.label}…')
-                          : null,
-                    ),
-                  ],
-                  if (error case final error?)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 10),
-                      child: Text(
-                        '✗ $error',
-                        style: tty.style(size: TtySize.meta, color: tty.red),
-                      ),
-                    ),
-                  if (waitingOn != null && !entering) ...[
-                    const SizedBox(height: 4),
-                    Center(
-                      child: TtyTextButton(
-                        label: 'Cancel',
-                        onPressed: onCancel,
-                      ),
-                    ),
-                  ],
+                  _ProviderSignIn(
+                    onProvider: onProvider,
+                    waitingOn: waitingOn,
+                    entering: entering,
+                    onCancel: onCancel,
+                    error: error,
+                  ),
                   if (onSample != null) ...[
                     const SizedBox(height: 8),
                     TtyTextButton(label: 'Try the sample', onPressed: onSample),
@@ -535,6 +534,164 @@ class _Hello extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// The two accounts the desktop and web sign in with ([SignInProviderButton]), and what goes with
+/// them while one is waited on: its button saying so, Cancel under it, and why the last one did not
+/// finish. On the first screen ([_Hello]) and on [_SignInFirst].
+class _ProviderSignIn extends StatelessWidget {
+  const _ProviderSignIn({
+    required this.onProvider,
+    required this.onCancel,
+    this.waitingOn,
+    this.entering = false,
+    this.error,
+  });
+
+  /// "Continue with …" pressed. Null while any sign-in is in flight, which both buttons wait out.
+  final ValueChanged<SignInProvider>? onProvider;
+
+  /// The account whose page is up — its button says so, and [onCancel] is offered under it.
+  final SignInProvider? waitingOn;
+
+  /// The page is done with and the phone is going in: the button says so, and there is nothing
+  /// left to cancel.
+  final bool entering;
+  final VoidCallback onCancel;
+
+  /// Why the last account's sign-in did not finish.
+  final String? error;
+
+  @override
+  Widget build(BuildContext context) {
+    final tty = Tty.of(context);
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        for (final provider in SignInProvider.values) ...[
+          if (provider != SignInProvider.values.first)
+            const SizedBox(height: 10),
+          SignInProviderButton(
+            provider: provider,
+            onPressed: onProvider == null ? null : () => onProvider!(provider),
+            busyLabel: provider == waitingOn
+                ? (entering ? 'Signing in…' : 'Waiting for ${provider.label}…')
+                : null,
+          ),
+        ],
+        if (error case final error?)
+          Padding(
+            padding: const EdgeInsets.only(top: 10),
+            child: Text(
+              '✗ $error',
+              style: tty.style(size: TtySize.meta, color: tty.red),
+            ),
+          ),
+        if (waitingOn != null && !entering) ...[
+          const SizedBox(height: 4),
+          Center(
+            child: TtyTextButton(label: 'Cancel', onPressed: onCancel),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+/// A computer's own sign-in QR, read by a phone that is not signed in: "Scan with your phone" on the
+/// desktop app's sign-in sheet — the button someone adding a phone is most likely to press there,
+/// and where a new desktop app's Add Phone sends them, since it opens signed out and its Add Phone
+/// only says "Sign in to add your phone.".
+///
+/// Only a signed-in phone can approve that code, so this one signs in first. The code is held
+/// meanwhile ([AppNotifier.pendingComputerSignIn]); once in, the phone asks to approve the computer
+/// (`phone_shell.dart`), and the computer then asks its person to confirm the account — this one.
+/// Both end up on one account, which is all it takes for them to trust each other.
+///
+/// ```
+/// ‹ Back
+/// Sign in on this phone first
+/// That code lets a signed-in phone sign your computer in. …
+///
+/// [G  Continue with Google]
+/// [   Continue with Apple ]
+///         Use email instead
+/// ```
+class _SignInFirst extends StatelessWidget {
+  const _SignInFirst({
+    required this.onBack,
+    required this.onProvider,
+    required this.onCancel,
+    required this.onUseEmail,
+    this.waitingOn,
+    this.entering = false,
+    this.error,
+  });
+
+  final VoidCallback onBack;
+  final ValueChanged<SignInProvider>? onProvider;
+  final VoidCallback onCancel;
+  final VoidCallback onUseEmail;
+  final SignInProvider? waitingOn;
+  final bool entering;
+  final String? error;
+
+  @override
+  Widget build(BuildContext context) {
+    final tty = Tty.of(context);
+    final faint = tty.style(size: TtySize.row, color: tty.faint);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Align(
+          alignment: Alignment.centerLeft,
+          child: TtyBackButton(onPressed: onBack),
+        ),
+        Expanded(
+          child: ListView(
+            padding: const EdgeInsets.fromLTRB(Tty.origin, 12, Tty.origin, 16),
+            children: [
+              // A Text and not a TtyText: at a large size the title wraps rather than being cut off.
+              Text(
+                'Sign in on this phone first',
+                key: const ValueKey('welcome-sign-in-first'),
+                style: tty.style(size: 24, weight: FontWeight.w600),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                'That code lets a signed-in phone sign your computer in. Sign in here, and the '
+                'phone asks you to approve the computer next.',
+                style: faint,
+              ),
+              const SizedBox(height: 6),
+              Text(
+                'Leave the code on the computer’s screen until then.',
+                style: faint,
+              ),
+              const SizedBox(height: 24),
+              _ProviderSignIn(
+                onProvider: onProvider,
+                waitingOn: waitingOn,
+                entering: entering,
+                onCancel: onCancel,
+                error: error,
+              ),
+              const SizedBox(height: 8),
+              Center(
+                child: TtyTextButton(
+                  label: 'Use email instead',
+                  color: tty.faint,
+                  // Not while an account's page is up: the email would sign in behind it.
+                  onPressed: onProvider == null ? null : onUseEmail,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 }

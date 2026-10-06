@@ -28,17 +28,34 @@ Future<void> signInAComputer(BuildContext context, AppNotifier notifier, {Widget
 }
 
 /// The prompt and the answer for one scanned [code].
-Future<void> approveComputerSignIn(BuildContext context, AppNotifier notifier, SignInCode code) async {
+///
+/// [scanAgain], when given, follows the reason a code could not be read: where to scan a fresh one.
+/// For a code scanned a while before it is answered — on the welcome screen, before the sign-in this
+/// phone needed first — when the camera that read it is long gone.
+Future<void> approveComputerSignIn(
+  BuildContext context,
+  AppNotifier notifier,
+  SignInCode code, {
+  String? scanAgain,
+}) async {
   final Map<String, dynamic> asking;
   try {
     asking = await notifier.api.signInLookup(code.code);
   } catch (error) {
-    if (context.mounted) await _tell(context, "Couldn't read that code", '$error');
+    if (context.mounted) {
+      await _tell(context, "Couldn't read that code", scanAgain == null ? '$error' : '$error $scanAgain');
+    }
     return;
   }
   if (!context.mounted) return;
   if (asking['status'] != 'pending') {
-    await _tell(context, 'Already answered', 'That code was already answered. Scan the new one.');
+    await _tell(
+      context,
+      'Already answered',
+      scanAgain == null
+          ? 'That code was already answered. Scan the new one.'
+          : 'That code was already answered. $scanAgain',
+    );
     return;
   }
   final answer = await showAppDialog<_Answer>(
