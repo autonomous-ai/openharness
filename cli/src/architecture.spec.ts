@@ -299,7 +299,13 @@ const SERVICE_MAY_IMPORT: Record<string, string> = {
 // it is the core's (core/devicesWake.ts, 146: a dial's port in /dev every two seconds, a paired Wi-Fi
 // device); a Wi-Fi device's requests are held while it starts (core/wifi.ts, +50), and a process on demand
 // that did not come in time is answered at once (core/serviceLinks.ts).
-const CORE_CLOSURE_BUDGET = 73_355
+//
+// Grew by 157 to 73,411 in 338, from 73,254 in 337: the gate that keeps a terminal attaching apart from what
+// tmux tells every terminal (lib/tmuxControlGate.ts and its uses in the terminal stream, the pastes, and
+// session create, kill and rename). Before tmux 3.7 the two meeting crashed the tmux server, and every agent
+// with it (windows.e2e.ts, 7 of 27 CI runs on Ubuntu's 3.4). It guards the core's own terminals, so it
+// cannot move to a service. The budget keeps the 101 lines of room it had.
+const CORE_CLOSURE_BUDGET = 73_512
 
 /** What is not the core's, by path: each goes to a service or its own process, in the plan's order. */
 const EDGE: RegExp[] = [
