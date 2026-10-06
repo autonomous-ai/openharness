@@ -1804,7 +1804,12 @@ private extension SwarmTabStrip {
     let buttons = tab.accessibilityChildren()!.compactMap { $0 as? NSButton }
     try checkTitlebar(buttons.count == 2, "Hover exposes selection and close to native accessibility")
     for button in buttons {
+      let beforeFocus = tab.renderedPixels()
       try checkTitlebar(window.makeFirstResponder(button), "An enabled tab action accepts keyboard focus")
+      if button === buttons[0] {
+        try checkTitlebar(tab.renderedPixels() != beforeFocus,
+          "Explicit keyboard focus still outlines the native tab control")
+      }
       try tab.checkCenteredLabel()
       try checkTitlebar(scroll.documentVisibleRect.contains(tab.frame),
         "Keyboard focus reveals the entire overflowed tab")
@@ -1887,8 +1892,7 @@ private extension SwarmTabStrip {
 }
 
 private extension SwarmTabStrip {
-  /// Dart's `tabsFocused`: closing the active tab left the keyboard on the
-  /// strip, so the selected tab is drawn focused until the person goes in.
+  /// Dart's `tabsFocused`: Close parks keys without adding a visual outline.
   func checkKeyboardOnTabs() throws {
     let rows = (0..<3).map { ["id": "strip-\($0)", "name": "Strip \($0)", "label": "\($0 + 1):work"] }
     update(["enabled": true, "activeId": "strip-1", "tabs": rows])
@@ -1897,9 +1901,9 @@ private extension SwarmTabStrip {
     update(["enabled": true, "activeId": "strip-1", "tabs": rows, "tabsFocused": true])
     try checkTitlebar(tabs.map(\.keyboardFocus) == [false, true, false],
       "Only the selected tab shows the strip's keyboard focus")
-    try checkTitlebar(tabs[1].renderedPixels() != resting[1] &&
+    try checkTitlebar(tabs[1].renderedPixels() == resting[1] &&
       tabs[0].renderedPixels() == resting[0] && tabs[2].renderedPixels() == resting[2],
-      "The selected tab is drawn focused and its neighbours are unchanged")
+      "Closing a tab keeps the normal selected appearance without an automatic focus ring")
     let select = tabs[1].accessibilityChildren()!.compactMap { $0 as? NSButton }.first!
     try checkTitlebar(select.accessibilityHelp()?.contains("Return") == true,
       "VoiceOver hears that Return types in the selected tab")

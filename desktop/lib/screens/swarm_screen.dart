@@ -263,8 +263,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
   final _shellFocus = FocusNode(debugLabel: 'Tab shell');
 
   /// Where the keyboard waits after the active tab closes
-  /// ([AppNotifier.tabStripFocused]): the strip drawn here, or the native one
-  /// in the title bar, which draws its selected tab as focused.
+  /// ([AppNotifier.tabStripFocused]). This passive hold has no focus outline;
+  /// tab controls show one when explicitly reached by keyboard navigation.
   final _tabStripFocus = FocusNode(
     debugLabel: 'Tab strip',
     skipTraversal: true,
@@ -1848,7 +1848,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       'searchTooltip': _commandTooltip('Open Harness', 'harnesses.list'),
       'storeTooltip': _commandTooltip('Explore Harness Store', 'app.store'),
       'devicesVisible': app.devicesEnabled,
-      // The selected tab is drawn with keyboard focus: ⏎ goes into it.
+      // Native accessibility explains that ⏎ enters the selected tab.
       'tabsFocused': app.tabStripFocused && _tabStripFocus.hasPrimaryFocus,
       // Only once the slot is shown: until then (and whenever daemons are
       // off) native lays out the bar it had before daemons existed.
@@ -7767,10 +7767,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
                             ),
                             tooltip: tabHint.isEmpty ? null : tabHint,
                             activityLabel: activity?.label,
-                            highlighted:
-                                selected &&
-                                app.tabStripFocused &&
-                                _tabStripFocus.hasPrimaryFocus,
                             onSelect: _shortcutsEnabled
                                 ? () => app.selectSwarm(swarm.id)
                                 : null,

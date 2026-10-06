@@ -352,6 +352,10 @@ inner edge beneath their 1-point rim. Only their frame changes: terminal content
 input, selection and status typography remain the terminal's own. AppKit mirrors
 these shared geometry values; Flutter uses AppDesktop directly.
 
+Closing a tab leaves the remaining tab in its normal selected appearance.
+Show a focus outline when a tab control is deliberately reached by keyboard
+navigation; the temporary input hold after Close does not add one.
+
 **Pane header** — terminal panes show agent, model and close at every width.
 Splitting is revealed at the pane edges; zoom remains available through menus,
 command search and shortcuts. Keep split, add and zoom icons out of the header.
