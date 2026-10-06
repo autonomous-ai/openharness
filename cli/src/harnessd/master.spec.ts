@@ -274,14 +274,18 @@ describe('a log that cannot grow', () => {
   }, 30_000)
 })
 
-describe('runMaster', () => {
+// Every test here starts real Node processes one after another (a core, services, probes) and waits on
+// what they write or say. A Node starts in about 50 ms on a quiet machine and in seconds at a load of 50
+// to 60, where vitest's 5 s for a whole test ran out before the conditions did.
+describe('runMaster', { timeout: 60_000 }, () => {
   let dir: string
   // runMaster titles the process it runs in: here, the test worker.
   const title = process.title
   beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'harnessd-master-')) })
   afterEach(() => { rmSync(dir, { recursive: true, force: true }); process.title = title })
 
-  const until = async (what: string, test: () => boolean, ms = 10_000) => {
+  /** Wait for [test] to hold. The deadline only names what never came, well before the test's own. */
+  const until = async (what: string, test: () => boolean, ms = 30_000) => {
     const deadline = Date.now() + ms
     while (!test()) {
       if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`)
@@ -524,16 +528,18 @@ describe('runMaster', () => {
     // code against the new core. The lean bundle is only an optimisation (./leanServices.ts).
     const pidFile = join(dir, 'adapter.pid')
     const seen = join(dir, 'seen')
-    // Each service process beats, then ends: the master starts it again at once, from wherever it may.
+    // The test ends each service process itself, once the world has changed, and the master starts it
+    // again at once, from wherever it may. Ended by SIGTERM, as the master ends one, which is never the
+    // lean bundle's fault: a service that ended itself on a timer could end before its master had read
+    // its first beat, on a loaded machine, and two of those in a row sent it to cli.js for good.
     const body = (who: string) => `
       const { appendFileSync } = require('node:fs')
       const role = process.argv[2] === '__service' ? 'service:' + process.argv[3] : process.argv[2]
-      appendFileSync(${JSON.stringify(seen)}, JSON.stringify({ role, from: ${JSON.stringify(who)} }) + '\\n')
+      appendFileSync(${JSON.stringify(seen)}, JSON.stringify({ role, from: ${JSON.stringify(who)}, pid: process.pid }) + '\\n')
       if (role === '__run') { process.send({ type: 'harnessd:bound', protocol: 2, port: 1 }); process.send({ type: 'harnessd:ready' }) }
       process.send({ type: 'harnessd:heartbeat', rssBytes: 1, heapUsedBytes: 1, loopDelayMs: 0 })
       setInterval(() => process.send({ type: 'harnessd:heartbeat', rssBytes: 1, heapUsedBytes: 1, loopDelayMs: 0 }), 50)
-      if (role !== '__run') setTimeout(() => process.exit(1), 100)
-      process.on('SIGTERM', () => process.exit(0))
+      if (role === '__run') process.on('SIGTERM', () => process.exit(0))
     `
     const cli = join(dir, 'cli.cjs')
     const leanDir = join(dir, 'lean')
@@ -545,8 +551,15 @@ describe('runMaster', () => {
     const log = vi.spyOn(console, 'log').mockImplementation((line: string) => { lines.push(line) })
     const exits: number[] = []
     const signals = new Map<string, () => void>()
-    const services = (): string[] => (existsSync(seen) ? readFileSync(seen, 'utf8').trim().split('\n').map((line) => JSON.parse(line)) : [])
-      .filter((line) => line.role === 'service:search').map((line) => line.from)
+    const services = (): Array<{ from: string; pid: number }> => (existsSync(seen) ? readFileSync(seen, 'utf8').trim().split('\n').map((line) => JSON.parse(line)) : [])
+      .filter((line) => line.role === 'service:search')
+    /** End the service running now, and wait for the master to start the next: where it started it from. */
+    const restart = async (): Promise<string> => {
+      const before = services()
+      process.kill(before.at(-1)!.pid, 'SIGTERM')
+      await until('search started again', () => services().length > before.length)
+      return services().at(-1)!.from
+    }
     try {
       runMaster({
         nodePath: process.execPath, execArgv: [], scriptPath: cli, serviceScriptPath: lean, leanFingerprint: folderFingerprint(leanDir)!, pidFile,
@@ -554,16 +567,17 @@ describe('runMaster', () => {
         env: { ...process.env, HARNESSD_SERVICES: 'search', HARNESSD_SERVICE_INITIAL_BACKOFF_MS: '0', HARNESSD_SERVICE_MAX_BACKOFF_MS: '0', HARNESSD_SERVICE_PARK_CRASHES: '1000' },
         exit: (code) => exits.push(code), onSignal: (signal, listener) => signals.set(signal, listener),
       })
-      await until('a service from the lean bundle', () => services().includes('lean'))
+      await until('a service', () => services().length > 0)
+      expect(services()[0]!.from).toBe('lean')
       rmSync(leanDir, { recursive: true })
-      await until('a service from cli.js', () => services().at(-1) === 'cli')
+      expect(await restart()).toBe('cli')
       expect(lines.some((line) => line.endsWith(`[harnessd] the lean bundle ${lean} cannot be used (it is gone): services start from ${cli}`))).toBe(true)
       // Back as it was, and then cli.js replaced by an update this master runs no code of.
       mkdirSync(leanDir)
       writeFileSync(lean, body('lean').replace("require('node:fs')", "await import('node:fs')"))
-      await until('the service from the lean bundle again', () => services().at(-1) === 'lean')
+      expect(await restart()).toBe('lean')
       writeFileSync(cli, `${body('cli')}\n// the next release\n`)
-      await until('the service from the new cli.js', () => services().at(-1) === 'cli')
+      expect(await restart()).toBe('cli')
       expect(lines.some((line) => line.endsWith(`[harnessd] the lean bundle ${lean} cannot be used (${cli} is no longer the bundle it came from): services start from ${cli}`))).toBe(true)
       signals.get('SIGTERM')!()
       await until('the master to finish', () => exits.length > 0)
@@ -820,7 +834,9 @@ describe('runMaster', () => {
     it('judges the newer build a core on probation staged, instead of rolling it back as a failure', async () => {
       // Its first core stages a build and exits for the update; the next, on probation, stages another before it is kept.
       const script = bundle(`if (process.env.HARNESSD_RESTARTS !== '2') setTimeout(() => { fs.appendFileSync(__filename, '\\n// a newer build\\n'); process.exit(75) }, process.env.HARNESSD_RESTARTS === '0' ? 100 : 20)`)
-      const master = start(script, { reexecMarkerFile: undefined })
+      // Its staging 20 ms after it starts must come inside its probation. A loaded machine can leave a
+      // process waiting for the CPU longer than the 100 ms the other tests give it, never 3 s.
+      const master = start(script, { reexecMarkerFile: undefined, env: { ...process.env, HARNESSD_SERVICES: 'none', HARNESSD_INITIAL_BACKOFF_MS: '10', HARNESSD_UPDATE_PROBATION_MS: '3000' } })
       await until('the newest build to be kept', () => master.calls.includes('confirm'))
       expect(master.calls).toEqual(['confirm'])
       expect(master.supervisor.status()).toMatchObject({ state: 'running', restarts: 2 })
