@@ -1,4 +1,4 @@
-import { linkSync, mkdirSync, mkdtempSync, rmSync, statSync } from 'node:fs'
+import { linkSync, mkdirSync, mkdtempSync, rmSync, statSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -67,6 +67,19 @@ describe('namedNode', () => {
     const { fs, files } = memFs({ [node]: { dev: 1, ino: 7 } }, { rename: new Error('EPERM') })
     expect(namedNode(node, 'harnessd-viewers', runtime, { fs, pid: 4, platform: 'darwin' })).toBe(node)
     expect(Object.keys(files)).toEqual([node])
+  })
+
+  it('keeps a managed symlink to an external Node at its original executable path', () => {
+    // Found by QA on a quiet machine: naming this symlink hard-linked Homebrew Node itself on macOS,
+    // and dyld aborted it because its relative libnode dependency was no longer beside the executable.
+    const dir = mkdtempSync(join(tmpdir(), 'harnessd-node-symlink-'))
+    try {
+      const bin = join(dir, 'node-v1', 'bin')
+      mkdirSync(bin, { recursive: true })
+      const externalNode = join(bin, 'node')
+      symlinkSync(process.execPath, externalNode)
+      expect(namedNode(externalNode, 'harnessd', dir)).toBe(externalNode)
+    } finally { rmSync(dir, { recursive: true, force: true }) }
   })
 
   it('makes a real hard link the kernel names the process by', () => {
