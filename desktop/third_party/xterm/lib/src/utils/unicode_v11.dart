@@ -510,3 +510,14 @@ class UnicodeV11 {
 }
 
 final unicodeV11 = UnicodeV11();
+
+/// Columns [rune] takes on the grid: two for a wide character, none for a
+/// combining mark or a control.
+int runeCells(int rune) {
+  final width = unicodeV11.wcwidth(rune);
+  return width > 0 ? width : 0;
+}
+
+/// Columns [runes] take on the grid together.
+int runesCells(Iterable<int> runes) =>
+    runes.fold(0, (cells, rune) => cells + runeCells(rune));
