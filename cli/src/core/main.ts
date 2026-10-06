@@ -5,8 +5,9 @@
  * is measured from its own entry rather than from the CLI's (docs/design/2026-10-06-core-boundary-next.md,
  * step 1); `src/architecture.spec.ts` walks the imports from this file and holds them to a budget.
  *
- * cli.ts stays the process's entry and the CLI: it parses the command and, for `__run` and
- * `start -f`, calls in here.
+ * cli.ts stays the process's entry and the CLI: it parses the command and, for `__run` (and a start under tsx,
+ * or `start -f` with `HARNESS_NO_MASTER=1`), calls in here. `start -f` runs harnessd's master, which starts
+ * the core with `__run`.
  */
 import { ensureBundledCoreHarnesses } from '../dsh/builtins.js'
 import { createDeviceStore, deviceStoreAgents } from '../lib/autonomous-device/storeRuntime.js'
@@ -17,7 +18,7 @@ import { SharedViewerPool } from '../sharing/viewer.js'
 import { runningDevicePart, startDevicePart } from '../lib/autonomous-device/parts.js'
 import { readFileSync, writeFileSync, openSync, existsSync, rmSync, statSync } from 'fs'
 import { join } from 'path'
-import { spawn } from 'child_process'
+import { execFile, spawn, spawnSync } from 'child_process'
 import { createServer, type Server } from 'http'
 import { homedir, hostname } from 'os'
 import { env } from '../config/env.js'
@@ -38,7 +39,7 @@ import { installCodexHooks } from '../lib/hooks.js'
 import { DAEMON_LOG_FILE, PID_FILE, daemonPort, isAlive, readPid, LEGACY_LOG_FILE, MACHINE_NAME_FILE, tildify, computerId, thisDeviceLabel } from '../lib/daemonState.js'
 import { clearSafeModeMarker, runBootHandoff, safeModeDisposition, safeModeStatusBody, SafeModeRequest, writeSafeModeMarker } from '../lib/daemonSafeMode.js'
 import { awakeTimeout } from '../lib/sleepAware.js'
-import { BIND_WAIT_MS, defaultLaunchDeps, removePidFileIf, waitForBind, waitForReady, onError } from '../lib/daemonLaunch.js'
+import { removePidFileIf, onError } from '../lib/daemonLaunch.js'
 import { describeSpawnLockOwner, withSpawnLock } from '../lib/daemonSpawnLock.js'
 import { ensureTmuxOnPath } from '../lib/tmuxOnPath.js'
 import { AUTH_DIR, AuthSessionError, AuthSessionManager, clearAuthSession, ensureSignInEpoch, readAuthSession, signInOf, type AuthSession } from '../lib/authSession.js'
@@ -98,7 +99,7 @@ import { createQuestions } from './questions.js'
 import { createTurnActivity } from './turns/activity.js'
 import { createLastTurnReader } from './transcripts/lastTurn.js'
 import { createRecaps } from './turns/recaps.js'
-import { createUpdateHandoff, type HandoffChild } from './updateHandoff.js'
+import { createUpdateHandoff, probeStagedMaster, probeVerdict } from './updateHandoff.js'
 import { createHeartbeats } from './turns/heartbeats.js'
 import { createEventFunnel, outsideConsumers } from './turns/funnel.js'
 import { createAgyBackstop } from './turns/agyBackstop.js'
@@ -141,7 +142,7 @@ import { KNOWN_SERVICES, servicesTheMasterRuns } from '../harnessd/services.js'
 import { createTeamsLink } from './teamsLink.js'
 import { startModels } from '../services/models.js'
 import { startFleet } from '../services/fleet.js'
-import { CORE_EXIT_STOP, CORE_EXIT_UPDATE } from '../harnessd/protocol.js'
+import { CORE_EXIT_STOP, CORE_EXIT_UPDATE, PROBE_COMMAND, PROBE_TIMEOUT_MS } from '../harnessd/protocol.js'
 import { localSocketPath, refuseServedDataFolder, type LocalSocketServer } from '../lib/localSocket.js'
 import { saveDaemonPort } from '../lib/daemonEndpoint.js'
 import { publishHookRoute } from '../lib/hookRoutes.js'
@@ -160,7 +161,7 @@ import { TeamError } from '../teams/model.js'
 import { setVoiceRouterDeviceConnected, setVoiceRouterSessions, shutdownVoiceRouter } from '../lib/voiceRouter.js'
 import { E2eeStore } from '../lib/e2ee/store.js'
 import { isLoopbackRequest, loopbackHosts } from '../lib/loopbackRequest.js'
-import { startSelfUpdater, restore as restoreUpdate, confirm as confirmUpdate, DOWNLOAD_LIMITS, type Poller } from '../lib/selfUpdate.js'
+import { startSelfUpdater, restore as restoreUpdate, DOWNLOAD_LIMITS, type Poller } from '../lib/selfUpdate.js'
 import { managedNodePath } from '../lib/nodeRuntime.js'
 import { startTuiUpdater } from '../tui/update.js'
 import { ensureManagedGrid, startGridPinRecheck } from '../lib/runtimeInstall.js'
@@ -248,26 +249,32 @@ const ATTACH_CONCURRENCY = 4
 let SCRIPT_PATH = ''
 
 /**
- * Start the daemon that succeeds this one, on whatever bytes are in `~/.harness/cli` right now.
- *
- * Extracted from `restartForUpdate`'s own closure so the update handoff, the rollback respawn and the
- * BOOT handoff below all spawn the same way. Not to be confused with the module's `spawnDaemon`: that
- * one serves `harness start`, reads the pid file, finds THIS daemon in it and exits — called from
- * inside the daemon it would quietly do nothing and lose the update.
- *
- * `managedNodePath()` is re-read here rather than captured at boot, so a runtime provisioned during
- * this process's lifetime is the one the next daemon runs on.
+ * Start harnessd's master, detached, on the bundle on disk, and name it in the pid file: how a core on its
+ * own hands the machine to a newer build (core/updateHandoff.ts); the master judges it. Named at once, so a
+ * `harness start` in the seconds after this core leaves finds a live daemon and starts no second master,
+ * whose core would lose to this one's and roll the update back. Not `harness start`'s `spawnDaemon`, which
+ * finds THIS daemon in the pid file and exits. The managed Node is re-read, so a runtime provisioned while
+ * this ran is the master's. `ADAPTER_UPDATED_TO` (an older build's handoff) and `HARNESSD_SAFE_MODE` (a
+ * master's word to its own core) are not for the master to pass to every core it starts.
  */
-function spawnDaemonChild(extraEnv: Record<string, string>): ReturnType<typeof spawn> {
-  prepareLogFile(LOG_FILE, LEGACY_LOG_FILE) // before the fd, so the caller's sinceOffset sees one size
-  const fd = openSync(LOG_FILE, 'a')
-  const child = spawn(managedNodePath(), [SCRIPT_PATH, '__run'], {
-    detached: true, env: { ...process.env, ...extraEnv }, stdio: ['ignore', fd, fd],
-  })
+function startMasterHere(): void {
+  // A log that cannot be opened (a full disk) costs the master's lines, never the handoff.
+  let log: number | 'ignore' = 'ignore'
+  try {
+    prepareLogFile(LOG_FILE, LEGACY_LOG_FILE)
+    log = openSync(LOG_FILE, 'a')
+  } catch (e) { console.error('[update] the master starts without the log:', e instanceof Error ? e.message : e) }
+  const { ADAPTER_UPDATED_TO: _handedOver, HARNESSD_SAFE_MODE: _safeMode, ...inherited } = process.env
+  const master = spawn(managedNodePath(), [SCRIPT_PATH, '__harnessd'], { detached: true, env: inherited, stdio: ['ignore', log, log] })
   // A spawn failure (e.g. EMFILE) emits 'error' on the child; with no listener that is an
-  // uncaughtException. Catch it so a failed restart can't take the daemon that asked for it down.
-  child.on('error', (e) => console.error('[update] daemon spawn error:', e instanceof Error ? e.message : e))
-  return child
+  // uncaughtException. This core is leaving either way, and the next `harness start` starts the daemon.
+  master.on('error', (e) => console.error('[update] master spawn error:', e instanceof Error ? e.message : e))
+  master.unref()
+  try {
+    if (master.pid) writeFileSync(PID_FILE, `${master.pid}\n`)
+    else removePidFileIf(process.pid)
+  } catch { /* the master claims it itself once its core has bound */ }
+  console.log(`[update] harnessd's master started (pid ${master.pid ?? '?'})`)
 }
 
 /**
@@ -308,12 +315,14 @@ const daemonBoot: {
  * SYNCHRONOUS END TO END, and that is the whole safety argument: never awaiting means the half-built
  * `runForeground` body cannot interleave between the port closing and the exit, so it can never
  * reach the code that would bind the port the successor is about to take, and two daemons are
- * impossible by construction. That is also why it does not supervise the child the way
- * `restartForUpdate` does — waiting would leave this process running alongside the new one for up to
- * a minute, both reconciling tmux and writing the registry.
+ * impossible by construction. That is also why it does not wait for the master to claim the pid file the
+ * way `restartForUpdate` does — waiting would leave this process running alongside the new core, both
+ * reconciling tmux and writing the registry.
  *
- * It spawns rather than merely exiting because on a machine with no desktop app nothing else would
- * ever start the successor, and even with one the next spawn window is up to ~70s away.
+ * Without a master it spawns one rather than merely exiting, because on a machine with no desktop app
+ * nothing else would ever start the successor, and even with one the next spawn window is up to ~70s
+ * away. The master judges the update it starts on (core/updateHandoff.ts); the core this once spawned
+ * instead ran it unjudged.
  */
 function bootHandoff(version: string): void {
   if (daemonBoot.handingOff) return
@@ -334,75 +343,17 @@ function bootHandoff(version: string): void {
       try { daemonBoot.hookServer?.close() } catch { /* already gone */ }
       try { daemonBoot.localSocket?.closeSync() } catch { /* already gone */ }
     },
-    // Only if it still names us — a no-op when start-up never got as far as claiming it.
-    removePidFile: () => { removePidFileIf(process.pid) },
-    spawn: (extraEnv) => spawnDaemonChild(extraEnv),
+    // Synchronous, as all of this is: start-up has not finished, and has nothing to serve meanwhile.
+    probeMaster: () => {
+      const probe = spawnSync(managedNodePath(), [SCRIPT_PATH, PROBE_COMMAND], { encoding: 'utf8', timeout: PROBE_TIMEOUT_MS })
+      return probeVerdict(probe.error ?? (probe.status === 0 ? null : new Error(probe.signal ? `signal ${probe.signal}` : `exit ${probe.status}`)), probe.stdout ?? '')
+    },
+    rollBack: () => restoreUpdate(env.ADAPTER_CLI_DIR),
+    startMaster: startMasterHere,
     exit: (code) => process.exit(code),
     log: (message) => console.log(message),
   })
 }
-
-/**
- * The update handoff of a core run on its own (core/updateHandoff.ts, once the teardown is done): hand
- * off to a freshly spawned daemon running the just-swapped cli.js, then SUPERVISE it and roll back to the
- * .prev bytes if it fails to come up. NOT launch() — that refuses while a daemon is alive.
- *
- * Runs under the spawn lock for its whole length (the updater's `withLock` wraps the staging and this
- * together), so no `harness start` can spawn into the seconds where the port is free and the pid file
- * names nothing. `track` names the child a signal mid-handoff must take down with us, rather than leave
- * two daemons — see shutdown(); null the moment the handoff is CONFIRMED, when that child is the daemon.
- */
-async function handOffWithoutMaster(newVersion: string, track: (child: HandoffChild | null) => void): Promise<void> {
-  const sinceOffset = existsSync(LOG_FILE) ? statSync(LOG_FILE).size : 0
-  const child = spawnDaemonChild({ ADAPTER_UPDATED_TO: newVersion })
-  track(child)
-  let childExited = false
-  child.on('exit', () => { childExited = true })
-
-  // Two phases. First the child has to BIND the port — it claims the pid file itself at that
-  // moment, and nothing else writes that file any more. A child that exits or stalls before then
-  // is a bad build (or a port it could not take): roll back at once instead of burning the whole
-  // connect window on it. Then, bound, wait for the backend: KEEP on connected/unreachable/busy
-  // (the new build RAN), ROLL BACK only on `fatal`. unreachable = backend transient, not a bad build.
-  const bind = await waitForBind(child.pid ?? -1, () => childExited, BIND_WAIT_MS, launchDeps)
-  const ready = bind === 'bound' ? await waitForReady(sinceOffset, 30_000, launchDeps) : null
-  if (bind === 'bound' && !childExited && ready?.state !== 'fatal') {
-    // Confirmed: it is the daemon now. Let go of it BEFORE anything else — a SIGTERM landing between
-    // here and the exit below must not take it down with us (see shutdown()).
-    track(null)
-    child.unref()
-    confirmUpdate(env.ADAPTER_CLI_DIR) // drop the .prev backups
-    console.log(`[update] now running ${newVersion} (pid ${child.pid})`)
-    process.exit(0)
-  }
-  console.error(`[update] new build failed to start (${bind !== 'bound' ? bind : childExited ? 'exited' : ready?.state}) — rolling back`)
-  try { if (child.pid) process.kill(child.pid, 'SIGKILL') } catch { /* ignore */ }
-  // A killed child cannot remove its own pid file; do it for it — but only once it is actually
-  // dead (SIGKILL is asynchronous, and a child mid-bind could still write the file after our
-  // removal) and only if it is still ITS file.
-  if (child.pid) {
-    const gone = Date.now() + 2_000
-    while (Date.now() < gone && isAlive(child.pid)) await new Promise((r) => setTimeout(r, 50))
-  }
-  removePidFileIf(child.pid)
-  restoreUpdate(env.ADAPTER_CLI_DIR) // restore .prev → cli.js/notify.mjs
-  const good = spawnDaemonChild({})
-  track(good)
-  let goodExited = false
-  good.on('exit', () => { goodExited = true })
-  // Hold the lock — and this process — until the rollback child has bound too. Exiting the moment it
-  // is spawned would free the lock while the port is still unclaimed, which is the window this whole
-  // arrangement exists to close. Nothing to do if it fails: the .prev bytes were the build that was
-  // running a minute ago, and `harness start` can be tried by hand.
-  const goodBind = await waitForBind(good.pid ?? -1, () => goodExited, BIND_WAIT_MS, launchDeps)
-  if (goodBind !== 'bound') console.error(`[update] rollback build did not come up either (${goodBind}) — run harness start`)
-  good.unref()
-  process.exit(0)
-}
-
-/** The log-tail readiness classifier and the two-phase wait live in lib/daemonLaunch.ts — see there.
- *  `launchDeps` binds them to this process's log file and port. */
-const launchDeps = defaultLaunchDeps(LOG_FILE, daemonPort())
 
 /** Set by runForeground once the DSH companions exist; a frame projected before that carries none. */
 let activityFrameContextRef: ((s: RegisteredSession) => ActivityFrame | null) | null = null
@@ -506,7 +457,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // a successor it is judging down with us.
   const updateHandoff = createUpdateHandoff({
     version: VERSION, supervised: coreLink.supervised, exitForUpdate: () => process.exit(CORE_EXIT_UPDATE),
-    handOff: handOffWithoutMaster, log: (line) => console.log(line), error: (line) => console.error(line),
+    // A core on its own: the staged bundle's master must answer its probe, as a master asks before it
+    // re-executes on one; then a master takes the machine, and judges the update.
+    probeMaster: () => probeStagedMaster((done) => execFile(managedNodePath(), [SCRIPT_PATH, PROBE_COMMAND], { encoding: 'utf8' }, (error, stdout) => done(error, stdout))),
+    rollBack: () => restoreUpdate(env.ADAPTER_CLI_DIR),
+    handOff: () => { startMasterHere(); process.exit(0) },
+    log: (line) => console.log(line), error: (line) => console.error(line),
   })
 
   // Another daemon serves this data folder: leave before reading or writing anything of its — its
@@ -2435,7 +2391,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   }
 
   // ── self-update: a staged bundle restarts the daemon IMMEDIATELY (core/updateHandoff.ts, and
-  // handOffWithoutMaster for a core run on its own). The handler stops being `bootHandoff` HERE, and not a
+  // handOffToMaster for a core run on its own). The handler stops being `bootHandoff` HERE, and not a
   // line earlier: everything the teardown releases exists by now. A straight-line assignment, never a
   // wait: if the body never reaches this line the handler stays `bootHandoff`, and the fix still lands.
   daemonBoot.applyStagedUpdate = (v) => updateHandoff.restartForUpdate(v, [
@@ -2457,27 +2413,16 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     ['the viewers', () => ports.viewers?.stop()], ['the gateway', () => gateway.stop()],
     // A graceful close releases the backend's one-machine claim, given a moment before the reclaim.
     ['the backend', () => backend.stop()], ['a grace', () => new Promise((r) => setTimeout(r, 1000))],
-  ]).catch((err) => {
-    // Only without a master: a step or the successor failed before anything was handed over.
-    console.error('[update] restart failed — staying on current build:', err instanceof Error ? err.message : err)
-    updateHandoff.abandon()
-  })
+  ])
 
   /** Stopping for good — removed from the account, or connected from elsewhere: tell harnessd's master,
    *  which restarts any other exit (harnessd/protocol.ts). */
   const forGood = (reason: string): boolean => reason === 'revoked' || reason === 'busy'
   const shutdown = async (signal: string): Promise<void> => {
     console.log(`\n[cli] ${signal} — shutting down`)
-    // Mid-handoff everything below has already been torn down once, and the daemon that matters is
-    // the child being supervised. Take it down with us and leave — a second teardown of closed servers
-    // is noise, and a child left running would be a daemon nothing manages.
+    // Mid-handoff everything below is already being torn down, and nothing has been started yet: leave
+    // — a second teardown of closed servers is noise.
     if (updateHandoff.restarting()) {
-      const child = updateHandoff.child() // null once the handoff was confirmed — that daemon stays up
-      if (child?.pid) {
-        console.log(`[cli] ${signal} during an update handoff — stopping the new daemon (pid ${child.pid}) too`)
-        try { process.kill(child.pid, 'SIGTERM') } catch { /* ignore */ }
-        removePidFileIf(child.pid)
-      }
       try { if (readPid() === process.pid) rmSync(PID_FILE, { force: true }) } catch { /* ignore */ }
       process.exit(0)
     }
@@ -2872,7 +2817,7 @@ export function runCore(scriptPath: string): void {
   runForeground(readAuthSession()).catch(enterSafeMode)
 }
 
-/** `harness start -f`, and a start under tsx: the core in the process of the command that asked for it. */
+/** `harness start -f` with `HARNESS_NO_MASTER=1`, and a start under tsx: the core alone, in the process of the command that asked for it. */
 export function runCoreInForeground(session: AuthSession | null, scriptPath: string): Promise<void> {
   SCRIPT_PATH = scriptPath
   return runForeground(session)

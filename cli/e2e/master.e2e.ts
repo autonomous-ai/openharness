@@ -3,6 +3,7 @@
  * own, the agents keep running in tmux, and a client picks up where it was. Whatever happens to the
  * master, nothing is left behind holding the port.
  */
+import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
@@ -112,6 +113,31 @@ describe('harnessd', () => {
     process.kill(master, 'SIGTERM')
     await until('both to exit', () => !IsolatedDaemon.alive(master) && !IsolatedDaemon.alive(core), 10_000, 25)
     expect(Date.now() - started).toBeLessThan(3_000)
+    expect(existsSync(join(d.dataDir, 'adapter.pid'))).toBe(false)
+  })
+
+  it('`harness start -f` runs the master in the foreground, as launchd does: the core its child, a stop ends both', async () => {
+    // It ran the core alone, with no master: every update then had to be handed over by the core itself.
+    daemon = await IsolatedDaemon.create({ foreground: true, env: { HARNESSD_INITIAL_BACKOFF_MS: '100' } })
+    const d = daemon
+    onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-80).join('\n')}`) })
+    await d.start()
+    const master = d.pid!
+    const core = d.corePid()!
+    expect(core).not.toBe(master)
+    expect(Number(execFileSync('ps', ['-o', 'ppid=', '-p', String(core)], { encoding: 'utf8' }).trim())).toBe(master)
+    const status = await (await fetch(`http://127.0.0.1:${d.port}/api/status`)).json() as Record<string, any>
+    expect(status.harnessd.masterPid).toBe(master)
+    expect(readFileSync(join(d.dataDir, 'adapter.pid'), 'utf8').trim()).toBe(String(master))
+    // A crashed core is restarted under it, and the agent goes on.
+    const { agentId } = await withAgent(d)
+    const wired = wiredCount(d)
+    process.kill(core, 'SIGKILL')
+    await until('a new core to finish starting', () => wiredCount(d) > wired, 60_000)
+    await turnWorks(d, agentId)
+    const second = d.corePid()!
+    process.kill(master, 'SIGTERM')
+    await until('both to exit', () => !IsolatedDaemon.alive(master) && !IsolatedDaemon.alive(second), 10_000, 25)
     expect(existsSync(join(d.dataDir, 'adapter.pid'))).toBe(false)
   })
 

@@ -78,6 +78,22 @@ export function startMaster(start: MasterStart, exit: (code: number) => void = (
   })
 }
 
+/**
+ * `harness start -f`, for a supervisor (launchd, systemd, a terminal): the master in this process, as
+ * launchd and systemd run it (`__harnessd`, entry.ts), the core and the services its children, their lines
+ * on this process's output. The core used to run here on its own, and a core with no master has to hand
+ * each update over itself (docs/design/2026-10-06-core-boundary-next.md, "Updaters"). A bundle
+ * re-executes on the lean bundle it carries, same pid, as a master launchd starts does; the sources have
+ * none, and run as cli.ts's `__harnessd` runs them.
+ */
+export function startMasterInForeground(
+  scriptPath: string,
+  start: { fromBundle: (bundlePath: string) => void; fromSources: (start: MasterStart) => unknown } = { fromBundle: startMasterFromBundle, fromSources: startMaster },
+): void {
+  if (scriptPath.endsWith('.ts')) start.fromSources({ scriptPath })
+  else start.fromBundle(scriptPath)
+}
+
 /** Whether this bundle can run a master that takes over from the running one; the exit code. */
 export function probeThisMaster(): number {
   return probeMaster({ env: process.env, execArgv: process.execArgv, version: VERSION })

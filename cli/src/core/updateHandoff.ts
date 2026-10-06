@@ -9,8 +9,12 @@
  * (e2e/updateHostile.e2e.ts, round 40). Now every step is tried, one that fails is said and passed, and
  * the core exits 75 whatever happened; one that hangs is given up on after `TEARDOWN_DEADLINE_MS`.
  *
- * Without a master (a core run on its own) the old way stands: the first step that fails ends the
- * handoff, and `handOff` spawns the successor and judges it itself.
+ * Without a master (a core an older release's own handoff started, e2e/migration.e2e.ts, or
+ * `HARNESS_NO_MASTER=1`) the core gives the machine to one, which judges the build as every update: the
+ * staged bundle's master must answer its probe first, as before a re-execution (harnessd/reexec.ts), or the
+ * build before goes back, rejected; then the same teardown, and `handOff` starts `__harnessd` and exits.
+ * The master finds the pending note and puts its first core on probation (harnessd/supervisor.ts,
+ * `unjudgedUpdate`). The core once spawned a core like itself and judged it, which then had no master.
  *
  * Staged means restart now. The restart once waited for the computer to go idle, and "idle" is a set of
  * latches (an open turn, a settling composer, an awaited submit, the control lock, a recap in flight):
@@ -21,11 +25,11 @@
  * Moved out of `runForeground` (src/architecture.spec.ts).
  */
 
+import { patientDeadline } from '../lib/patientExec.js'
+import { PROBE_ANSWER, PROBE_TIMEOUT_MS } from '../harnessd/protocol.js'
+
 /** One thing the next core needs released, named for the log. */
 export type TeardownStep = readonly [name: string, release: () => unknown]
-
-/** The successor a handoff without a master spawned, which a signal must take down with this core. */
-export interface HandoffChild { pid?: number }
 
 /** How long the teardown may take before the core hands over all the same: it takes about a second. */
 export const TEARDOWN_DEADLINE_MS = 15_000
@@ -37,19 +41,21 @@ export interface UpdateHandoffDeps {
   supervised: boolean
   /** Exit for the update (`CORE_EXIT_UPDATE`), to the master that starts the new bundle. */
   exitForUpdate(): void
-  /**
-   * The handoff without a master: spawn the successor on the staged bundle, keep it or roll back.
-   * `track` names the successor a signal must take down with this core, and null once it is the daemon.
-   */
-  handOff(newVersion: string, track: (child: HandoffChild | null) => void): Promise<void>
+  /** Without a master: whether the staged bundle's master answers its probe (`probeStagedMaster`); null when
+   *  it does, why not otherwise. */
+  probeMaster(): Promise<string | null>
+  /** Without a master: put the build before back (`selfUpdate.restore`), remembering this one as rejected. */
+  rollBack(): void
+  /** Without a master: start harnessd's master on the bundle now on disk, name it in the pid file, exit. */
+  handOff(): void
   log(line: string): void
   error(line: string): void
   teardownDeadlineMs?: number
 }
 
 export function createUpdateHandoff(deps: UpdateHandoffDeps) {
+  let started = false
   let restarting = false
-  let child: HandoffChild | null = null
   const deadlineMs = deps.teardownDeadlineMs ?? TEARDOWN_DEADLINE_MS
   const message = (error: unknown): string => error instanceof Error ? error.message : String(error)
 
@@ -75,36 +81,61 @@ export function createUpdateHandoff(deps: UpdateHandoffDeps) {
   }
 
   return {
-    /** Between an update being staged and this core leaving (`/api/status`, and a signal mid-handoff). */
+    /** Between the teardown starting and this core leaving (`/api/status`, and a signal mid-handoff). */
     restarting: (): boolean => restarting,
-    /** The successor a handoff without a master is judging, until it is the daemon. */
-    child: (): HandoffChild | null => child,
-    /**
-     * Hand over to `newVersion`, releasing `teardown` first. Once: a second call while one is under way
-     * does nothing. Rejects only without a master, when a step failed or the successor could not be
-     * started; then `abandon` lets this core carry on.
-     */
+    /** Hand over to `newVersion`, releasing `teardown` first. Once: a second call while one is under way does nothing. */
     async restartForUpdate(newVersion: string, teardown: readonly TeardownStep[]): Promise<void> {
-      if (restarting) return
-      restarting = true
+      if (started) return
+      started = true
       deps.log(`[update] applying ${deps.version} → ${newVersion} — restarting daemon`)
+      // Asked before anything is let go: the core serves on while it answers.
+      const refused = deps.supervised ? null : await deps.probeMaster()
+      if (refused !== null) {
+        deps.error(`[update] ${newVersion}'s master did not answer its probe (${refused}) — rolled back; this build goes on under a master of its own`)
+        deps.rollBack()
+      }
+      restarting = true
+      await releaseAll(teardown)
       if (deps.supervised) {
-        await releaseAll(teardown)
         // Everything above is released, or said not to be; the master starts the new bundle as soon as
         // this exits and rolls back to the .prev bytes if it does not come up and stay up.
         deps.log(`[update] handing ${newVersion} to harnessd`)
         deps.exitForUpdate()
         return
       }
-      for (const [, release] of teardown) await release()
-      await deps.handOff(newVersion, (successor) => { child = successor })
-    },
-    /** A handoff without a master that failed before it handed anything over: this core stays. */
-    abandon(): void {
-      restarting = false
-      child = null
+      deps.log(`[update] handing ${refused === null ? newVersion : deps.version} to a harnessd master, which judges it — this core is leaving`)
+      deps.handOff()
     },
   }
 }
 
 export type UpdateHandoff = ReturnType<typeof createUpdateHandoff>
+
+/** Run the staged bundle's master probe (`node cli.js __harnessd-probe`); `done` gets how it ended. */
+export type ProbeRun = (done: (error: Error | null, stdout: string) => void) => { kill(): void }
+
+/**
+ * Whether the staged bundle's master answers its probe: null when it does, why not otherwise. Its deadline
+ * counts only time this process ran (`patientDeadline`), as the canary's does: a lid closed mid-probe must
+ * not reject a good build.
+ */
+export function probeStagedMaster(run: ProbeRun, timeoutMs = PROBE_TIMEOUT_MS, deadline = patientDeadline): Promise<string | null> {
+  return new Promise((resolve) => {
+    let probe: { kill(): void } | null = null
+    const cancel = deadline(timeoutMs, () => {
+      probe?.kill()
+      resolve(`no answer within ${timeoutMs} ms`)
+    })
+    probe = run((error, stdout) => {
+      cancel()
+      resolve(probeVerdict(error, stdout))
+    })
+  })
+}
+
+/** What a master probe's end says: null when it answered as a master, why not otherwise. Shared by the
+ *  boot handoff's synchronous probe (lib/daemonSafeMode.ts `runBootHandoff`). */
+export function probeVerdict(error: Error | null | undefined, stdout: string): string | null {
+  if (!error && stdout.includes(PROBE_ANSWER)) return null
+  return stdout.trim().split('\n').pop()?.trim() || error?.message || 'no answer'
+}
