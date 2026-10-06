@@ -4,13 +4,13 @@ on:
 permissions:
   contents: read
 jobs:
-  windows-metadata:
+  detached-core-full-trace:
     strategy:
       fail-fast: false
       matrix:
-        source: [6420c5846ee11ebc6a2fd78ee05ca443b96f0126, 663f921eca353a57f32d8d5da05b423286b48092]
+        source: [663f921eca353a57f32d8d5da05b423286b48092]
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 60
     defaults:
       run:
         working-directory: cli
@@ -20,6 +20,7 @@ jobs:
       SHELL: /bin/zsh
       E2E_WORKERS: '4'
       E2E_BUNDLE: '1'
+      MIGRATION_FROM: ${{ github.workspace }}/.harness/migration/cli.js
       E2E_ARTIFACTS_DIR: ${{ github.workspace }}/.harness/validation/daemons
     steps:
       - uses: actions/checkout@v7
@@ -42,7 +43,18 @@ jobs:
           fi
           npm ci --no-audit --no-fund
           mkdir -p ../.harness/validation
+          test -z "$(git symbolic-ref -q HEAD || true)"
+          test -z "$(git status --porcelain)"
           git rev-parse HEAD HEAD^{tree} > ../.harness/validation/source.txt
+          date -u +%FT%TZ > ../.harness/validation/started.txt
+      - name: Fetch verified published migration fixture
+        run: |
+          mkdir -p ../.harness/migration
+          curl --fail --location --retry 3 https://cdn.autonomous.ai/harness/cli/0.3.60/cli.js -o ../.harness/migration/cli.js
+          curl --fail --location --retry 3 https://cdn.autonomous.ai/harness/cli/0.3.60/notify.mjs -o ../.harness/migration/notify.mjs
+          echo 'cb1ae2452d006d414cefc6ce2deddd07a7a43fc9824402691a1ef0737d2277e3  ../.harness/migration/cli.js' | sha256sum -c -
+          echo 'bca62ec5991a1f727b362b666bcef004d04fb1d13efb64de068dd602a45095f8  ../.harness/migration/notify.mjs' | sha256sum -c -
+          echo '{"type":"module"}' > ../.harness/migration/package.json
       - name: Capture failing tmux metadata without changing behavior
         run: |
           cat > ../.harness/metadata-trace.cjs <<'JS'
@@ -68,16 +80,22 @@ jobs:
             require('node:module').syncBuiltinESMExports();
           }
           JS
-      - name: One bounded baseline or candidate reproduction
+      - name: Full suite with unchanged tmux replies and diagnostic logging
         env:
           NODE_OPTIONS: --require ${{ github.workspace }}/.harness/metadata-trace.cjs
           E2E_TMUX_TRACE: ${{ github.workspace }}/.harness/validation/tmux-metadata.jsonl
         run: |
-          env -u TMUX -u TMUX_PANE -u NO_COLOR npm run test:e2e -- e2e/windows.e2e.ts -t 'windows that open a terminal and go' --reporter=default --reporter=json --outputFile.json=../.harness/validation/windows.json 2>&1 | tee ../.harness/validation/windows.log
+          env -u TMUX -u TMUX_PANE -u NO_COLOR npm run test:e2e -- --reporter=default --reporter=json --outputFile.json=../.harness/validation/full.json 2>&1 | tee ../.harness/validation/full.log
+      - name: Record final source
+        if: ${{ !cancelled() }}
+        run: |
+          date -u +%FT%TZ > ../.harness/validation/ended.txt
+          git status --porcelain > ../.harness/validation/source-status.txt
+          test -z "$(git status --porcelain)"
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() }}
         with:
-          name: windows-metadata-${{ matrix.source }}
+          name: detached-core-full-trace-${{ matrix.source }}
           path: .harness/validation/
           if-no-files-found: error
           include-hidden-files: true
