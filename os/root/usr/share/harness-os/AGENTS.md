@@ -104,8 +104,12 @@ is required.
 - npm installs into `~/.local`. The initial npm configuration permits the vendor
   install scripts for Claude Code, Codex and OpenCode. When another package needs
   an install script, approve that package explicitly; keep npm's other defaults.
-- `Super+b` opens/focuses Chromium or returns to hn; `Super+Enter` focuses hn;
+- `Super+b` opens/focuses Chromium or returns to hn; `Super+e` does the same for
+  the file manager window (`hn files DIR`); `Super+Enter` focuses hn;
   `Super+l` locks the screen. `sudo systemctl poweroff` shuts down cleanly.
+- Print/`Super+p` saves a full screenshot and Shift+Print/`Super+r` a region to
+  `~/Pictures/Screenshots`, also copied to the clipboard. When the user mentions
+  "the screenshot", read the newest file there. `grim` and `slurp` are installed.
 - On the PC image, the packages for supported NVIDIA Turing and newer GPUs are
   `nvidia-open-lts nvidia-utils`, including RTX 4090/5090 and RTX 6000 generations.
   New USB images carrying the NVIDIA bundle install them offline when the exact

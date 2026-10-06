@@ -1,0 +1,16 @@
+#!/bin/sh
+# The session lock, laid out as the disk unlock screen: the HARNESS wordmark, "Enter your password"
+# and a rectangular field showing one * per key (lock/layout.ui, lock/style.css). It replaced
+# `swaylock -c 000000`: a black screen whose only sign of life was a ring that appeared after the
+# first key, and people did not know where to type.
+#
+# -d returns only once the compositor has acknowledged the lock, so swayidle's before-sleep waits
+# for it, as it did for swaylock -f. The marker says the same to the session checks
+# (tests/session_vm.py): gtklock, unlike swaylock, leaves no session leader to look for.
+marker=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/harness-os-locked
+rm -f "$marker"
+exec gtklock -d \
+  -s /usr/share/harness-os/lock/style.css \
+  -x /usr/share/harness-os/lock/layout.ui \
+  -L "touch $marker" -U "rm -f $marker" \
+  "$@"

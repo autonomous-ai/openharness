@@ -48,11 +48,11 @@ def screen_text(vm, name):
 
 
 def wait_lock(vm, locked, timeout=15):
-    # -f returns only after the compositor acknowledges the lock, then its child
-    # calls setsid(). A matching process alone includes the pre-lock parent/PAM
-    # helper and can race the screen and keyboard grab.
-    command = ("ps -u 1000 -o pid=,sid=,comm= | awk '$1 == $2 && $3 == \"swaylock\" {ready=1} END {exit !ready}'"
-               if locked else '! pgrep -u 1000 -x swaylock >/dev/null')
+    # The lock's marker is written only once the compositor acknowledges the lock
+    # (gtklock's lock command, usr/lib/harness-os/lock). A matching process alone
+    # includes the pre-lock parent and can race the screen and keyboard grab.
+    command = ('pgrep -u 1000 -x gtklock >/dev/null && test -e /run/user/1000/harness-os-locked'
+               if locked else '! pgrep -u 1000 -x gtklock >/dev/null')
     vm.command('for n in $(seq 1 ' + str(timeout * 4) + '); do if ' + command + '; then exit 0; fi; sleep 0.25; done; exit 1', timeout=timeout + 5)
 
 
@@ -64,7 +64,7 @@ def live_lock(vm, user):
         print('Checking live ' + name, flush=True)
         trigger()
         time.sleep(1)
-        _, status = vm.command('pgrep -u 1000 -x swaylock', check=False)
+        _, status = vm.command('pgrep -u 1000 -x gtklock', check=False)
         if status == 0:
             vm.screenshot('live-' + name + '-locked')
             vm.keys('ret')
@@ -333,7 +333,7 @@ def main():
                 result['live_lock_error'] = str(error)
                 vm.screenshot('live-lock-failure')
                 # Recover this disposable fixture so installed locking can still be diagnosed.
-                vm.command('pkill -u 1000 -x swaylock || true')
+                vm.command('pkill -u 1000 -x gtklock || true')
         put(vm, '/tmp/install-config.json', json.dumps(config))
         vm.command('nmcli networking off')
         print('Installing offline into the disposable test disk', flush=True)

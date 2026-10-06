@@ -1,0 +1,110 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- The session lock, laid out as the disk unlock screen (plymouth/themes/harness): the wordmark,
+     "Enter your password" and a field that shows one * per key. gtklock looks its widgets up by
+     these ids; the clock and Unlock button it expects are kept but never shown. The wordmark is
+     the Plymouth theme's, character for character (tests/test_lock_and_screenshot.py). -->
+<interface>
+  <object class="GtkBox" id="window-box">
+    <property name="name">window-box</property>
+    <property name="halign">center</property>
+    <property name="valign">center</property>
+    <property name="orientation">vertical</property>
+    <child>
+      <object class="GtkBox" id="info-box">
+        <property name="name">info-box</property>
+        <property name="halign">center</property>
+        <property name="orientation">vertical</property>
+        <child>
+          <object class="GtkLabel" id="wordmark">
+            <property name="name">wordmark</property>
+            <property name="label"> _   _    _    ____  _   _ _____ ____ ____ 
+| | | |  / \  |  _ \| \ | | ____/ ___/ ___|
+| |_| | / _ \ | |_) |  \| |  _| \___ \___ \
+|  _  |/ ___ \|  _ &lt;| |\  | |___ ___) |__) |
+|_| |_/_/   \_\_| \_\_| \_|_____|____/____/</property>
+          </object>
+        </child>
+        <child>
+          <object class="GtkBox" id="time-box">
+            <property name="name">time-box</property>
+            <property name="no-show-all">1</property>
+            <property name="visible">0</property>
+            <property name="orientation">vertical</property>
+            <child><object class="GtkLabel" id="clock-label"><property name="name">clock-label</property></object></child>
+            <child><object class="GtkLabel" id="date-label"><property name="name">date-label</property></object></child>
+          </object>
+        </child>
+      </object>
+    </child>
+    <child>
+      <object class="GtkRevealer" id="body-revealer">
+        <property name="transition-type">none</property>
+        <property name="reveal-child">0</property>
+        <child>
+          <object class="GtkGrid" id="body-grid">
+            <property name="halign">center</property>
+            <property name="row-spacing">12</property>
+            <child>
+              <object class="GtkLabel" id="input-label">
+                <property name="name">input-label</property>
+                <property name="label">Enter your password</property>
+              </object>
+              <packing><property name="left-attach">0</property><property name="top-attach">0</property></packing>
+            </child>
+            <child>
+              <object class="GtkEntry" id="input-field">
+                <property name="name">input-field</property>
+                <property name="width-request">420</property>
+                <property name="visibility">0</property>
+                <property name="invisible-char">*</property>
+                <property name="xalign">0.5</property>
+                <property name="caps-lock-warning">0</property>
+                <property name="input-purpose">password</property>
+                <signal name="activate" handler="window_pw_check"/>
+              </object>
+              <packing><property name="left-attach">0</property><property name="top-attach">1</property></packing>
+            </child>
+            <child>
+              <object class="GtkRevealer" id="message-revealer">
+                <property name="transition-type">none</property>
+                <property name="no-show-all">1</property>
+                <child>
+                  <object class="GtkScrolledWindow" id="message-scrolled-window">
+                    <property name="hscrollbar-policy">never</property>
+                    <property name="max-content-height">256</property>
+                    <property name="propagate-natural-height">1</property>
+                    <child><object class="GtkViewport"><child>
+                      <object class="GtkBox" id="message-box">
+                        <property name="orientation">vertical</property>
+                        <property name="homogeneous">1</property>
+                      </object>
+                    </child></object></child>
+                  </object>
+                </child>
+              </object>
+              <packing><property name="left-attach">0</property><property name="top-attach">2</property></packing>
+            </child>
+            <child>
+              <object class="GtkBox">
+                <property name="halign">center</property>
+                <property name="spacing">8</property>
+                <child><object class="GtkLabel" id="warning-label"><property name="name">warning-label</property></object></child>
+                <child><object class="GtkLabel" id="error-label"><property name="name">error-label</property></object></child>
+                <child>
+                  <object class="GtkButton" id="unlock-button">
+                    <property name="name">unlock-button</property>
+                    <property name="no-show-all">1</property>
+                    <property name="visible">0</property>
+                    <property name="label">Unlock</property>
+                    <signal name="clicked" handler="window_pw_check"/>
+                  </object>
+                </child>
+              </object>
+              <packing><property name="left-attach">0</property><property name="top-attach">3</property></packing>
+            </child>
+          </object>
+        </child>
+      </object>
+    </child>
+  </object>
+</interface>

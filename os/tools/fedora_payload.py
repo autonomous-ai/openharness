@@ -48,9 +48,10 @@ def stage(source, runtime, destination, commit, runtime_commit):
     paths = [
         'usr/bin/hn', 'usr/bin/harness', 'usr/bin/hn-browser',
         'usr/share/harness-os/foot.ini', 'usr/share/harness-os/tmux.conf',
+        'usr/share/harness-os/lock/layout.ui', 'usr/share/harness-os/lock/style.css',
         *['usr/share/harness-os/labwc/' + name for name in ['autostart', 'shutdown', 'rc.xml']],
         *['usr/lib/harness-os/' + name for name in
-          ['session', 'session-settings.py', 'runtime-path', 'wait-runtime', 'virtio-2d', 'open-wifi', 'open-updates']],
+          ['session', 'session-settings.py', 'runtime-path', 'wait-runtime', 'virtio-2d', 'open-wifi', 'open-updates', 'screenshot', 'lock', 'files']],
         *['usr/lib/systemd/user/' + name for name in
           ['hn-screen.service', 'harness-daemon.service', 'harness-idle.service',
            'harness-update.service', 'harness-update.timer']],
