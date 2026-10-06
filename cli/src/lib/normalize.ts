@@ -408,8 +408,11 @@ function userTextRaw(msg: NormalizedMessage): string | null {
  * then the text block is empty and there is nothing left to parse.
  */
 function taskNotificationEvent(raw: Record<string, unknown>): LiveEvent | null {
-  if (raw.type !== 'user') return null
-  const content = (raw.message as { content?: unknown } | undefined)?.content ?? raw.content
+  // One that finishes while its parent still works comes as a `queued_command` attachment, the more common
+  // delivery (real 2.1.270–2.1.287). Read from user records alone, it never finished on the dial.
+  const attachment = raw.type === 'attachment' ? raw.attachment as { type?: unknown; prompt?: unknown } | undefined : undefined
+  if (raw.type !== 'user' && attachment?.type !== 'queued_command') return null
+  const content = attachment ? attachment.prompt : (raw.message as { content?: unknown } | undefined)?.content ?? raw.content
   let text = ''
   if (typeof content === 'string') text = content
   else if (Array.isArray(content)) {
