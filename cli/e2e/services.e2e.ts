@@ -301,6 +301,9 @@ describe('a failing service never takes the core down', () => {
     await daemon.start()
     const client = await LocalClient.connect(daemon)
     expect(await client.request('grid_models_list', {})).toMatchObject({ error: 'SERVICE_FAILED', service: 'models' })
+    // The October 6 bundled run received the RPC before the master's stdout delivered this same
+    // fault. They are separate streams: the reply is not a barrier on the captured daemon log.
+    await until('the model service fault to reach the daemon log', () => daemon!.log().includes('[services] models.grid_models_list failed · injected fault: models.grid_models_list'))
     expect(daemon.log()).toContain('[services] models.grid_models_list failed · injected fault: models.grid_models_list')
     // Its other requests are still its own answers: with no agent here, no Model/Effort choices.
     expect(await client.request('models_list', {})).toMatchObject({ models: [] })
