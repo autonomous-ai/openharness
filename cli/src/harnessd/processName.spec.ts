@@ -12,6 +12,7 @@ const libexec = `${runtime}/node-v22/libexec/harnessd`
 function memFs(files: Record<string, { dev: number; ino: number }>, fail: Partial<Record<keyof NamedNodeFs, Error>> = {}) {
   const calls: string[] = []
   const fs: NamedNodeFs = {
+    realpath: (path) => { if (fail.realpath) throw fail.realpath; return path },
     identity: (path) => files[path] ?? null,
     mkdir: (path) => { calls.push(`mkdir ${path}`); if (fail.mkdir) throw fail.mkdir },
     link: (from, to) => { calls.push(`link ${to}`); if (fail.link) throw fail.link; files[to] = files[from] },
@@ -45,6 +46,22 @@ describe('namedNode', () => {
     expect(namedNode(node, 'harnessd', undefined, { fs, platform: 'darwin' })).toBe(node)
     expect(namedNode(node, 'harnessd', `${runtime}/node-v22/bin/node`, { fs, platform: 'darwin' })).toBe(node)
     expect(namedNode(node, 'harnessd', runtime, { fs, platform: 'win32' })).toBe(node)
+    expect(calls).toEqual([])
+  })
+
+  it('resolves runtime aliases too, and refuses a path resolving to the runtime root', () => {
+    const { fs, calls } = memFs({ [node]: { dev: 1, ino: 7 } })
+    fs.realpath = path => path.replace(runtime, '/resolved/runtime')
+    expect(namedNode(node, 'harnessd', runtime, { fs, platform: 'darwin' })).toBe(`${libexec}/harnessd`)
+    calls.length = 0
+    fs.realpath = () => '/resolved/runtime'
+    expect(namedNode(node, 'harnessd', runtime, { fs, platform: 'darwin' })).toBe(node)
+    expect(calls).toEqual([])
+  })
+
+  it('leaves the executable alone when resolving its path fails', () => {
+    const { fs, calls } = memFs({ [node]: { dev: 1, ino: 7 } }, { realpath: new Error('EACCES') })
+    expect(namedNode(node, 'harnessd', runtime, { fs, platform: 'darwin' })).toBe(node)
     expect(calls).toEqual([])
   })
 
