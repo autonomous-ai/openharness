@@ -131,7 +131,8 @@ if (output !== undefined) {
     await f.accept()
     await f.waitFor(async () => await f.exited() === String(status))
     expect(await f.attempts()).toHaveLength(1)
-    expect(await f.screen()).toContain('This pane is a shell now')
+    // The pane is marked before the input left for the engine is drained, and says so only after.
+    await f.waitFor(async () => (await f.screen()).includes('This pane is a shell now'))
   })
 
   it('bounds update restarts even when the replacement requests another restart', async () => {

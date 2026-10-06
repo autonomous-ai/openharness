@@ -40,11 +40,20 @@
 // loaded machine, while the daemon has already found the engine and its conversation. `root` is the
 // test's throwaway root, the only place whose hooks it will run, and `hookLog` where it notes every hook
 // it ran.
+//
+// Ctrl+Z suspends it, as both CLIs do on Unix (Claude Code 2.1.289: "Claude Code has been suspended.
+// Run `fg` to bring Claude Code back."; Codex 0.160: "`ctrl-z` is reserved for suspending the terminal
+// on Unix"): it gives the terminal back and stops its whole process group with SIGTSTP. Continued from
+// that stop it takes the terminal again; continued from any stop it repaints, and nothing more.
+//
+// Codex runs as npm installs it: a Node wrapper, the command the pane starts, with the engine as its
+// child in the same process group and terminal (`codexWrapper`).
 import { execFileSync, spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 /**
  * The events each CLI fires that the daemon installs hooks for (lib/hooks.ts): Claude Code's session,
@@ -73,7 +82,28 @@ const matcherTakes = (matcher, value) => {
   try { return new RegExp(`^(?:${matcher})$`).test(String(value ?? '')) } catch { return false }
 }
 
-export async function run(engine, config) {
+/** What the npm wrapper hands its child, the Codex engine itself: this module, run as a script. */
+const CODEX_NATIVE = 'HARNESS_FAKE_CODEX_NATIVE'
+
+/**
+ * `@openai/codex`'s bin/codex.js (0.160.0): it starts the native binary as its child with the same
+ * terminal, process group and arguments, forwards SIGINT, SIGTERM and SIGHUP to it, and ends as the
+ * child ended — re-raising a signal the child died of, which ends the wrapper with that signal unless
+ * it is one the wrapper listens for (then the wrapper exits 0).
+ */
+async function codexWrapper(config) {
+  const child = spawn(process.execPath, [fileURLToPath(import.meta.url), ...process.argv.slice(2)], {
+    stdio: 'inherit',
+    env: { ...process.env, [CODEX_NATIVE]: JSON.stringify(config) },
+  })
+  for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(signal, () => { try { child.kill(signal) } catch { /* gone */ } })
+  const ended = await new Promise((resolve) => child.on('exit', (code, signal) => resolve({ code, signal })))
+  if (ended.signal) process.kill(process.pid, ended.signal)
+  else process.exit(ended.code ?? 1)
+}
+
+export async function run(engine, config = {}, { native = false } = {}) {
+  if (engine === 'codex' && !native) return codexWrapper(config)
   const args = process.argv.slice(2)
   const version = config.version ?? (engine === 'claude' ? '2.1.270' : '0.159.0')
   const versionLine = engine === 'claude' ? `${version} (Claude Code)` : `codex-cli ${version}`
@@ -792,7 +822,7 @@ export async function run(engine, config) {
     await finish(`answer ${turn}: ${prompt}`)
   }
 
-  // Raw input: bracketed paste brackets the text, Enter (\r) submits, Ctrl-C interrupts.
+  // Raw input: bracketed paste brackets the text, Enter (\r) submits, Ctrl-C interrupts, Ctrl+Z suspends.
   process.stdin.setEncoding('utf8')
   let queue = Promise.resolve()
   // Inside a bracketed paste a carriage return or newline is a newline in the prompt, as Ink and
@@ -816,7 +846,27 @@ export async function run(engine, config) {
     pastes.clear()
     return text
   }
+  // Ctrl+Z, as the real CLIs do it: give the terminal back, and stop the whole process group (the
+  // npm Codex's wrapper with it) once the terminal is restored; in raw mode the terminal sends no
+  // SIGTSTP of its own. Raw mode comes back only from this stop: Claude Code arms a one-time SIGCONT
+  // handler here, Codex takes the terminal again when its stop returns.
+  const suspend = () => {
+    process.stdout.write('\x1b[?2004l')
+    if (engine === 'claude') process.stdout.write('\r\nClaude Code has been suspended. Run `fg` to bring Claude Code back.\r\n')
+    process.stdin.setRawMode?.(false)
+    process.once('SIGCONT', () => {
+      process.stdin.setRawMode?.(true)
+      process.stdout.write('\x1b[?2004h')
+    })
+    process.kill(0, 'SIGTSTP')
+  }
+  // Continued, whoever stopped it, the renderer repaints, and that is all: after a stop from outside
+  // the terminal is in whatever modes the shell that resumed it left (an interactive bash puts back its
+  // own, line mode), as it is for the real CLIs.
+  process.on('SIGCONT', () => draw())
   process.stdin.on('data', (input) => {
+    // The key, not the byte: a Ctrl+Z inside a paste is pasted text.
+    if (input.includes('\x1a') && !pasting && !input.includes('\x1b[200~')) { suspend(); return }
     if (dialog) { dialogKeys(input); return }
     let chunk = input
     if (bottom?.transcript) {
@@ -952,4 +1002,12 @@ export async function run(engine, config) {
   })
   process.on('SIGTERM', () => process.exit(0))
   setInterval(() => {}, 60_000)
+}
+
+// The native Codex: this module run as a script by `codexWrapper`. Last, so everything `run` reads at
+// the top level of the module is there when it starts.
+if (process.env[CODEX_NATIVE] && process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  const config = JSON.parse(process.env[CODEX_NATIVE])
+  delete process.env[CODEX_NATIVE]
+  void run('codex', config, { native: true })
 }

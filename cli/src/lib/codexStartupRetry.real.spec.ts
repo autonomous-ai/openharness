@@ -74,7 +74,8 @@ real('Codex startup recovery in an isolated real tmux server', () => {
     const f = await launch(100)
     await eventually(async () => await f.exit() === '1')
     expect(await f.attempts()).toHaveLength(3)
-    expect(await f.screen()).toContain('This pane is a shell now')
+    // The pane is marked before the input left for the engine is drained, and says so only after.
+    await eventually(async () => (await f.screen()).includes('This pane is a shell now'))
   }, 20_000)
 
   it('does not retry other errors after a transient first failure', async () => {
@@ -95,6 +96,7 @@ real('Codex startup recovery in an isolated real tmux server', () => {
     await tmux('send-keys', '-t', f.pane, 'C-c')
     await eventually(async () => await f.exit() === '130')
     expect(await f.attempts()).toHaveLength(1)
-    expect(await f.screen()).toContain('This pane is a shell now')
+    // The pane is marked before the input left for the engine is drained, and says so only after.
+    await eventually(async () => (await f.screen()).includes('This pane is a shell now'))
   }, 15_000)
 })
