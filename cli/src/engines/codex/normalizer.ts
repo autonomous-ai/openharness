@@ -109,6 +109,32 @@ function messageText(item: JsonObject): string {
   return string(item.message) || textContent(item)
 }
 
+const QUESTION_REPLY = /^\s*<send_user_message_question_reply>\s*([\s\S]*?)\s*(?:<\/send_user_message_question_reply>\s*)?$/
+
+/**
+ * What the person said, from a user message. Codex 0.160 asks some questions without stopping
+ * (`request_user_input_async`, answered `{"accepted":true}` at once), and the person's answer comes back
+ * later as a user message wrapped in `<send_user_message_question_reply>` around a JSON list of
+ * `{answer, question, questionItemId}`. Read as typed text, the wrapper and its JSON were the person's
+ * message in the live turn, the history, the recap and search (found auditing real 0.160 rollouts). It
+ * reads as `question → answer` instead, one to a line.
+ */
+function userText(item: JsonObject): string {
+  const text = messageText(item)
+  const body = QUESTION_REPLY.exec(text)?.[1]
+  if (body === undefined) return text
+  let replies: unknown
+  try { replies = JSON.parse(body) } catch { return body }
+  if (!Array.isArray(replies)) return body
+  const lines = replies.flatMap((reply) => {
+    const entry = object(reply)
+    const answer = string(entry?.answer).trim()
+    const question = string(entry?.question).trim()
+    return answer ? [question ? `${question} → ${answer}` : answer] : []
+  })
+  return lines.join('\n') || body
+}
+
 function parseInput(value: unknown): unknown {
   if (typeof value !== 'string') return value ?? {}
   try { return JSON.parse(value) } catch { return value }
@@ -322,7 +348,7 @@ export class CodexNormalizer implements EngineNormalizer {
     }
 
     if (USER_TURN_TYPES.has(type)) {
-      const message = messageText(item)
+      const message = userText(item)
       if (!message) return []
       if (this.mode === 'replay') return [{ type: 'user_message', payload: { content: message } }]
       const events: LiveEvent[] = []
@@ -620,7 +646,7 @@ export function selectCodexRecapLine(line: string): 'keep' | 'skip' | 'stop' {
   if (raw.type === 'response_item' && string(item.type) === 'message') return goalObjective(item) ? 'stop' : 'skip'
   if (raw.type !== 'event_msg') return 'skip'
   const itemType = string(item.type)
-  if (USER_TURN_TYPES.has(itemType) && messageText(item)) return 'stop'
+  if (USER_TURN_TYPES.has(itemType) && userText(item)) return 'stop'
   return AGENT_TEXT_TYPES.has(itemType) ? 'keep' : 'skip'
 }
 
@@ -635,7 +661,7 @@ export function startsCodexTurn(line: string): boolean {
   const item = payload(raw)
   if (!item) return false
   const type = string(item.type)
-  if (raw.type === 'event_msg') return USER_TURN_TYPES.has(type) && !!messageText(item)
+  if (raw.type === 'event_msg') return USER_TURN_TYPES.has(type) && !!userText(item)
   return raw.type === 'response_item' && type === 'message' && goalObjective(item) !== null
 }
 
@@ -692,7 +718,7 @@ export function lastCodexTurnText(rawLines: string[]): LastTurnText | null {
     if (raw.type !== 'event_msg') continue
     const itemType = string(item.type)
     if (USER_TURN_TYPES.has(itemType)) {
-      const message = messageText(item)
+      const message = userText(item)
       if (message) { userMessage = message; assistantText = ''; finalText = ''; sawPhase = false }
     } else if (AGENT_TEXT_TYPES.has(itemType)) {
       const message = messageText(item)
