@@ -56,7 +56,11 @@ def package():
                 entry = tarfile.TarInfo(name)
                 entry.size, entry.mode = len(data), 0o644
                 output.addfile(entry, io.BytesIO(data))
-        subprocess.run(['pacman', '--noconfirm', '--overwrite', path, '-U', str(archive)], check=True, timeout=150)
+        # Pacman splits --overwrite on commas, including the comma in Apple's
+        # board filenames. This archive contains exactly one firmware member;
+        # match that separator with one glob character rather than two patterns.
+        overwrite = path.replace(',', '?')
+        subprocess.run(['pacman', '--noconfirm', '--overwrite', overwrite, '-U', str(archive)], check=True, timeout=150)
     assert subprocess.check_output(['pgrep', '-xo', 'hn|harness-tui'], text=True).strip() == process
     return verify()
 

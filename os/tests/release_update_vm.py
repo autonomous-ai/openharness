@@ -9,18 +9,34 @@ import time
 from session_vm import put, PROBE
 
 
+def relocate_boot_loader(source, directory):
+    """Keep candidate-only dependencies outside the legacy package's file set."""
+    directory = Path(directory)
+    if not directory.is_absolute():
+        raise ValueError('The private bootstrap directory must be absolute')
+    original = "Path(__file__).with_name('boot_profile.py')"
+    if source.count(original) != 1:
+        raise ValueError('The candidate boot loader changed; review its fixture relocation')
+    return source.replace(original, 'Path(' + repr(str(directory / 'boot_profile.py')) + ')')
+
+
 def exercise(vm, manifest, config):
     # Retain the new bootstrap outside pacman-owned paths before restoring the
     # public preview. It has no updater; this is its one-time migration path.
     vm.command('mkdir -p /tmp/system-channel; cp /usr/lib/harness-os/release_update.py '
                '/usr/lib/harness-os/runtime_update.py /usr/lib/harness-os/system.py /usr/lib/harness-os/live_update.py '
-               '/usr/lib/harness-os/boot_profile.py '
+               '/usr/lib/harness-os/boot_profile.py /usr/lib/harness-os/t2_install.py '
+               '/usr/lib/harness-os/t2_firmware.py /usr/lib/harness-os/firmware_names.py '
                '/usr/lib/harness-os/open-updates /tmp/system-channel/; '
                'sudo cat /etc/sudoers.d/30-harness-updates > /tmp/system-channel/30-harness-updates')
     source = Path(__file__).resolve().parents[1]
     helper_hashes = {}
-    for name in ['system.py', 'release_update.py', 'runtime_update.py', 'live_update.py', 'boot_profile.py']:
-        expected = hashlib.sha256((source / name).read_bytes()).hexdigest()
+    helpers = {name: name for name in ['system.py', 'release_update.py', 'runtime_update.py',
+                                      'live_update.py', 'boot_profile.py', 't2_install.py']}
+    helpers.update({'t2_firmware.py': 'tools/prepare-t2-firmware.py',
+                    'firmware_names.py': 'platforms/apple-t2/firmware_names.py'})
+    for name, relative in helpers.items():
+        expected = hashlib.sha256((source / relative).read_bytes()).hexdigest()
         assert hashlib.sha256(vm.read_file('/tmp/system-channel/' + name)).hexdigest() == expected, \
             'The candidate package contains a different updater: ' + name
         helper_hashes[name] = expected
@@ -83,11 +99,22 @@ metadata = dict(schema=1, channel='preview', architecture='x86_64',
     # Restore the candidate UI on the old package solely to exercise its new
     # combined action. Only the root helper's parser default uses the private
     # loopback feed; the shipped helper never accepts a user-owned feed cache.
-    # Keep the baseline's actual system updater until pacman replaces the OS
-    # package. Overlaying a newer system.py alone would lack its dependencies;
-    # planting unowned helper files would instead collide with the new package.
+    # This case tests the candidate's combined action on the old package, after
+    # the independent real bootstrap/rollback checks. Its system updater must
+    # match the new caller (the old update() has no noninteractive argument).
+    # Keep new dependencies in a root-owned private directory so pacman can
+    # install its actual files without an "exists in filesystem" collision.
     baseline_system_sha256 = hashlib.sha256(vm.read_file('/usr/lib/harness-os/system.py')).hexdigest()
+    output, _ = vm.command('printf "HN_UPDATE_BOOTSTRAP=%s\\n" "$(sudo mktemp -d /tmp/harness-update-bootstrap.XXXXXXXX)"')
+    match = re.search(r'HN_UPDATE_BOOTSTRAP=(/tmp/harness-update-bootstrap\.[A-Za-z0-9]+)', output)
+    assert match, 'The private root bootstrap directory was not created'
+    bootstrap = match[1]
+    for name in ['boot_profile.py', 't2_install.py', 't2_firmware.py', 'firmware_names.py']:
+        vm.command('sudo install -m 644 ' + shlex.quote('/tmp/system-channel/' + name) + ' ' + shlex.quote(bootstrap + '/' + name))
+    system_helper = relocate_boot_loader(vm.read_file('/tmp/system-channel/system.py').decode(), bootstrap)
+    put(vm, '/tmp/system-channel/test-system-helper.py', system_helper)
     vm.command('sudo install -m 644 /tmp/system-channel/live_update.py /usr/lib/harness-os/live_update.py; '
+               'sudo install -m 644 /tmp/system-channel/test-system-helper.py /usr/lib/harness-os/system.py; '
                'sudo install -m 755 /tmp/system-channel/open-updates /usr/lib/harness-os/open-updates; '
                # The old package does not own the new policy path. Use a
                # fixture-only name so pacman can install its actual owned file
@@ -100,7 +127,7 @@ metadata = dict(schema=1, channel='preview', architecture='x86_64',
     put(vm, '/tmp/system-channel/test-release-helper.py', helper)
     vm.command('sudo install -m 644 /tmp/system-channel/test-release-helper.py /usr/lib/harness-os/release_update.py; '
                'sudo visudo -c -f /etc/sudoers')
-    for name, expected in [('system.py', baseline_system_sha256),
+    for name, expected in [('system.py', hashlib.sha256(system_helper.encode()).hexdigest()),
                            ('release_update.py', hashlib.sha256(helper.encode()).hexdigest())]:
         assert hashlib.sha256(vm.read_file('/usr/lib/harness-os/' + name)).hexdigest() == expected, \
             'The test helper was not activated: ' + name
@@ -145,6 +172,10 @@ metadata = dict(schema=1, channel='preview', architecture='x86_64',
     assert public_retry['status'] == 'passed' and public_retry['runtime_update']['candidate'] == manifest
     public_retry['candidate_helpers_sha256'] = helper_hashes
     public_retry['baseline_system_sha256'] = baseline_system_sha256
+    public_retry['private_system_helper'] = {'path': '/usr/lib/harness-os/system.py',
+                                            'sha256': hashlib.sha256(system_helper.encode()).hexdigest(),
+                                            'boot_loader_directory': bootstrap,
+                                            'scope': 'Candidate system helper with only its boot dependency path relocated; real legacy upgrade and rollback are separate checks'}
     public_retry['private_feed_helper'] = {'path': '/usr/lib/harness-os/release_update.py',
                                           'sha256': hashlib.sha256(helper.encode()).hexdigest()}
     public_retry['fixture_sha256'] = fixture_hashes
