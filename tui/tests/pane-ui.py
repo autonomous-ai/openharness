@@ -273,10 +273,13 @@ try:
     wait(lambda: 'Claude 0%  Codex 89%' in tmux('capture-pane', '-p', '-t', 'test').splitlines()[-1], 'all subscription allowances reach the status row, even below the warning threshold')
     assert value('#{usage_remaining}') == 'Claude 0%  Codex 89%', 'accounts shared across fixture machines appear once'
     assert value('#{usage_high}') == 'claude 5h 100%', 'existing custom used-quota format is preserved'
-    row = tmux('capture-pane', '-p', '-t', 'test').splitlines()[-1]
-    assert color_at(row.index('0%'), 41, foreground=True) == '#ff9b8e', 'exhausted allowance uses red text'
-    assert color_at(row.index('89%'), 41, foreground=True) == color_at(row.index('Codex'), 41, foreground=True), 'healthy allowance has no warning styling'
-    assert background_at(row.index('0%'), 41) == background_at(row.index('Codex'), 41), 'subscription text keeps the continuous status background'
+    def quota_colors_ready():
+        row = tmux('capture-pane', '-p', '-t', 'test').splitlines()[-1]
+        if 'Claude 0%  Codex 89%' not in row: return False
+        return (color_at(row.index('0%'), 41, foreground=True) == '#ff9b8e'
+                and color_at(row.index('89%'), 41, foreground=True) == color_at(row.index('Codex'), 41, foreground=True)
+                and background_at(row.index('0%'), 41) == background_at(row.index('Codex'), 41))
+    wait(quota_colors_ready, 'exhausted allowance is red, healthy allowance plain, on one status background after command notices clear')
     hn('set', '-gw', 'pane-border-lines', 'double')
     wait(lambda: not pane_outline(first) and not pane_outline(second), 'border line options do not draw outlines in pane appearance')
     hn('set', '-g', '@hn-look', 'classic')
@@ -300,7 +303,7 @@ try:
     x, y, w = map(int, value('#{pane_left} #{pane_top} #{pane_width}', second).split())
     def waiting_heading():
         return tmux('capture-pane', '-p', '-t', 'test').splitlines()[y - 1][x:x + w].strip()
-    wait(lambda: re.search(r'\(2\) \?\s+Codex\s+…\s+×$', waiting_heading()), 'long pane names retain their suffix and waiting indicator before the mouse controls')
+    wait(lambda: re.search(r'\(2\) \?\s+Codex\s+(?:default\s+)?…\s+×$', waiting_heading()), 'long pane names retain their suffix and waiting indicator before the mouse controls')
     assert '…' in waiting_heading()
     assert value('#{pane_title}', second) == long_title, 'raw pane title must remain unchanged'
     hn('select-pane', '-t', second, '-T', original_title)
