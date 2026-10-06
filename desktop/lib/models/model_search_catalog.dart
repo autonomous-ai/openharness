@@ -11,6 +11,9 @@ import 'api_connections_controller.dart';
 import 'local_model.dart';
 import 'model_manager_controller.dart';
 
+/// Between a shared model's name and the machine serving it, in its row's title.
+const modelMachineSeparator = ' · ';
+
 enum ModelSearchSection {
   subscriptions('Subscriptions'),
   apis('APIs'),
@@ -103,7 +106,9 @@ class ModelSearchEntry {
     id: id,
     modelId: id,
     // An API's model is listed under its API's row, so it is named alone.
-    title: sharedBy?.isNotEmpty == true ? '$name · $sharedBy' : name,
+    title: sharedBy?.isNotEmpty == true
+        ? '$name$modelMachineSeparator$sharedBy'
+        : name,
     detail: [source, node, status].whereType<String>().join(' · '),
     swarmId: null,
     current: false,

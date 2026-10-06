@@ -1167,6 +1167,99 @@ void main() {
     },
   );
 
+  testWidgets('a refresh keeps the models list where it was scrolled', (
+    tester,
+  ) async {
+    GridModels inventory(int shared) => GridModels(
+      gridName: 'home',
+      models: const [],
+      grids: [
+        const GridSection(
+          name: 'home',
+          own: true,
+          models: [GridModel(id: 'qwen3.8-27b', node: 'mac.lan')],
+        ),
+        GridSection(
+          name: 'Team',
+          own: false,
+          models: [
+            for (var i = 0; i < shared; i++)
+              GridModel(id: 'shared-$i', node: 'box-$i.lan'),
+          ],
+        ),
+      ],
+    );
+    final app = _ModelSelectionApp()..inventory = inventory(12);
+    await fixture(provided: app);
+    final map = MemoryKeymap();
+    try {
+      await configured.mount(tester, app, map);
+      await key(tester, LogicalKeyboardKey.keyI, cmd: true);
+      final selected = search(tester).selected!.id;
+      final list = tester
+          .state<ScrollableState>(
+            find
+                .ancestor(
+                  of: find.text('Your models', findRichText: true),
+                  matching: find.byType(Scrollable),
+                )
+                .first,
+          )
+          .position;
+      // Scrolled by the wheel: the list moves, the selection stays above it.
+      list.jumpTo(list.maxScrollExtent);
+      await tester.pumpAndSettle();
+      final scrolled = list.pixels;
+      expect(scrolled, greaterThan(0));
+      // A shared model's machine is on a second line, under its name and quieter than it.
+      final machine = tester
+          .widgetList<SearchResultText>(find.byType(SearchResultText))
+          .firstWhere(
+            (widget) => '${widget.key}'.contains('model-row-machine:'),
+          );
+      final sharedRow = search(tester).rows.singleWhere(
+        (row) => '${machine.key}'.contains('model-row-machine:${row.id}'),
+      );
+      final name = sharedRow.title.substring(0, sharedRow.title.indexOf(' · '));
+      expect(
+        machine.text.substring(machine.from),
+        sharedRow.title.split(' · ').last,
+      );
+      final nameLine = tester.widget<SearchResultText>(
+        find.byWidgetPredicate(
+          (widget) =>
+              widget is SearchResultText &&
+              widget.text == sharedRow.title &&
+              widget.to == name.length,
+        ),
+      );
+      expect(machine.style.color, isNot(nameLine.style.color));
+      expect(
+        tester.getTopLeft(find.byWidget(machine)).dy,
+        greaterThan(tester.getBottomLeft(find.byWidget(nameLine)).dy - 1),
+      );
+      expect(find.text(name, findRichText: true), findsOneWidget);
+
+      app.inventory = inventory(13);
+      await app.modelManager.refresh(force: true);
+      await tester.pumpAndSettle();
+      expect(
+        search(tester).rows.map((row) => row.title),
+        contains(startsWith('shared-12')),
+      );
+      expect(search(tester).selected!.id, selected);
+      expect(list.pixels, scrolled);
+
+      // A new selection is still brought into view.
+      await key(tester, LogicalKeyboardKey.arrowDown);
+      expect(list.pixels, lessThan(scrolled));
+    } finally {
+      await tester.pumpWidget(const SizedBox());
+      app.dispose();
+      map.dispose();
+    }
+  });
+
   testWidgets(
     'platform picker and command shortcuts',
     (tester) async {
