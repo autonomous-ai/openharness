@@ -28,6 +28,7 @@ import { sqlitePreflightMessage } from './sqliteAvailability.js'
 import { sqliteReadAll, type SqliteParam } from './sqliteRead.js'
 import { piSessionFolder, readPiHead } from './sessionSearch/externals/pi.js'
 import { claudeProjectsRoots, codexHomeRoots } from './engineHomes.js'
+import { argvTokens, engineProcessMatchScore, processRows, type ProcessRow } from './tmux.js'
 
 /**
  * Clock granularity only. `ps` reports start time to the second, so a file created in the same second
@@ -642,6 +643,24 @@ export async function openFiles(pid: number): Promise<string[]> {
   return stdout.split('\n').filter((line) => line.startsWith('n/')).map((line) => line.slice(1))
 }
 
+/** The rollout may be held by the native child of npm's Node launcher, not the launcher itself.
+ *  October 6 ownership E2E: removing the folder guess exposed that distinction for a manually started
+ *  Codex with no hook. Read only one direct Codex child of a Node launcher, never a nested tool. */
+export async function codexProcessFiles(
+  pid: number,
+  files: typeof openFiles = openFiles,
+  processes: () => Promise<readonly Pick<ProcessRow, 'pid' | 'parentPid' | 'executable' | 'args'>[] | null> = processRows,
+): Promise<string[]> {
+  const own = await files(pid)
+  if (own.some(path => /rollout-[^/]*\.jsonl$/.test(path))) return own
+  const rows = await processes()
+  const wrapper = rows?.find(row => row.pid === pid)
+  if (!wrapper || ![wrapper.executable, argvTokens(wrapper.args)[0] ?? '']
+    .some(path => /^node(?:js)?$/.test(basename(path)))) return own
+  const children = rows!.filter(row => row.parentPid === pid && engineProcessMatchScore(row, 'codex') > 0)
+  return children.length === 1 ? [...own, ...await files(children[0].pid)] : own
+}
+
 /**
  * The conversation a Codex process is writing: the rollout it holds open.
  *
@@ -654,7 +673,7 @@ export async function codexProcessSession(
   pid: number,
   sessionsRoot: string | string[],
   cwd: string,
-  files: (pid: number) => Promise<string[]> = openFiles,
+  files: (pid: number) => Promise<string[]> = codexProcessFiles,
 ): Promise<RepairedSession | null> {
   const roots = await Promise.all((typeof sessionsRoot === 'string' ? [sessionsRoot] : sessionsRoot)
     .map((one) => realpath(one).catch(() => one)))
