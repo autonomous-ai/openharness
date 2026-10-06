@@ -58,6 +58,18 @@ describe('what an experiment in its own process may ask of the core', () => {
     expect(await answerExperimentQuery(core, experiments, 'orchestrator', 'daemon', {})).toEqual({ command: `'node' 'cli.js'`, port: 18473, machineId: 'machine-7' })
   })
 
+  it('reads and writes the account\'s backend under /api/, signed in by the core, and nothing else', async () => {
+    const backend = vi.fn(async () => ({ status: 200, body: { success: true, data: { tabs: [] } } }))
+    const core = fakeCore({ account: { backend } })
+    expect(await answerExperimentQuery(core, experiments, 'orchestrator', 'backend', { method: 'PATCH', path: '/api/tab-channels/settings', body: { enabled: true } }))
+      .toEqual({ status: 200, body: { success: true, data: { tabs: [] } } })
+    expect(backend).toHaveBeenCalledWith('PATCH', '/api/tab-channels/settings', { enabled: true })
+    for (const bad of [{ method: 'TRACE', path: '/api/x' }, { method: 'GET', path: '/auth/token' }, { method: 'GET' }]) {
+      expect(await answerExperimentQuery(core, experiments, 'orchestrator', 'backend', bad)).toEqual({ error: 'INVALID_REQUEST' })
+    }
+    expect(backend).toHaveBeenCalledOnce()
+  })
+
   it('answers none of these for a process that is not an experiment, and leaves other queries to whoever answers them', async () => {
     const core = fakeCore()
     expect(await answerExperimentQuery(core, experiments, 'gateway', 'create', {})).toEqual({ error: 'NOT_AN_EXPERIMENT' })

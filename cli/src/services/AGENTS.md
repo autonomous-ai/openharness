@@ -43,7 +43,7 @@ let several people build features at once without touching the core or each othe
 
 A service that can crash natively, hang or leak should run in a process of its own, where it costs only
 that process. A process per risk, not per feature: search (native `node:sqlite`), the viewers (their
-servers) with the Store (its minutes-long installs), the teams' prompt scopes, models (grid's installs,
+servers) with the Store (its minutes-long installs), each experiment (below), models (grid's installs,
 downloads and commands), and the edge host, one process for the light services that only answer requests
 (workspaces, usage, the monitor, the project readers). A fault in one of the edge host's services can
 cost the others in it, never the core. Every service in `KNOWN_SERVICES` runs out of the core's process
@@ -122,7 +122,7 @@ way back).
 
 ## Experiments
 
-An experiment (the orchestrator; Tab collaboration and Share next) is a service that costs nothing until it is
+An experiment (the orchestrator, Tab collaboration; Share next) is a service that costs nothing until it is
 on: its own process, which the master starts only when the core asks for it (`want`), when one of its
 requests arrives or, as the core starts, when its saved state is in the data folder. Off, nothing of it runs or
 is loaded anywhere; one failing costs its own process and nothing else. `e2e/experiments.e2e.ts` proves it:
@@ -143,7 +143,12 @@ To add one:
    it there when `HARNESSD_SERVICES` keeps it in (`serviceHost.serve`, or `start` with a port).
 
 Removing one is deleting those. A port the core calls in line (the orchestrator's `roleOf`) is answered
-from what the process last reported (`src/core/orchestratorLink.ts`), as the viewers' are.
+from what the process last reported (`src/core/orchestratorLink.ts`), as the viewers' are. Tab collaboration
+(`src/services/collaboration.ts`, beside the prompt scopes in the teams' process) shows the rest: whether a
+team's turn may still be written, which the core asks as it writes it, is reported for a few seconds at a
+time, so a process that stops reporting leaves none writable (`collaborationProcess.ts`, `core/teamsLink.ts`);
+a cancel its mailbox reads in line is asked of the core first (`takingBack`); and the core keeps nothing for
+the scopes until the experiment is on.
 
 ## Do not
 

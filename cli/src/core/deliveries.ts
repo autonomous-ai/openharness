@@ -15,6 +15,9 @@ import type { CoreApi, TurnDelivery } from './api.js'
 
 type Payload = Record<string, unknown>
 
+/** The most deliveries held while the core starts: a teams' mailbox resumes a few at most. */
+export const HELD_DELIVERIES = 1_000
+
 /** The most deliveries whose maker is remembered: past it the oldest is forgotten, and what becomes of it
  *  is told to no process. A delivery settles within minutes (its queue item lives five), and a process
  *  makes a few a minute. */
@@ -39,10 +42,41 @@ export function createDeliveries(deps: DeliveriesDeps) {
   const listeners = new Set<(event: TurnDelivery) => void>()
   /** Which process made each delivery, oldest first. */
   const makers = new Map<string, string>()
+  /**
+   * What was delivered before the core's input was wired (`ready`), in order. A teams' mailbox resumes its
+   * queue on a timer as soon as it starts, in the core's process or in its own, and the socket held such a
+   * turn back with "Agent input is not ready" until then; dropped, it would read as written and never be.
+   */
+  let held: Array<{ agentId: string; text: string; deliveryId: string }> | null = []
+  const submit = (agentId: string, content: string, deliveryId: string): void => {
+    if (!held) { deps.submit(agentId, content, deliveryId); return }
+    held.push({ agentId, text: content, deliveryId })
+    if (held.length > HELD_DELIVERIES) {
+      const dropped = held.shift()!
+      settled({ deliveryId: dropped.deliveryId, sessionId: dropped.agentId, state: 'rejected', reason: 'queue_full' })
+    }
+  }
+  /** Take back a delivery still held, as the input would one still queued, or ask the input. */
+  const cancel = (deliveryId: string): boolean => {
+    const at = held?.findIndex((delivery) => delivery.deliveryId === deliveryId) ?? -1
+    if (at < 0) return deps.cancel(deliveryId)
+    const [taken] = held!.splice(at, 1)
+    settled({ deliveryId, sessionId: taken.agentId, state: 'rejected', reason: 'cancelled' })
+    return true
+  }
+  const settled = (event: TurnDelivery): void => {
+    for (const listener of listeners) {
+      try { listener(event) } catch (error) {
+        log(`[deliveries] a listener failed on ${event.deliveryId.slice(0, 40)} · ${error instanceof Error ? error.message : String(error)}`)
+      }
+    }
+    const maker = makers.get(event.deliveryId)
+    if (maker) deps.tell(maker, event)
+  }
 
   const turns: Pick<CoreApi['turns'], 'deliver' | 'cancelDelivery' | 'onDelivery'> = {
-    deliver: (agentId, content, deliveryId) => deps.submit(agentId, content, deliveryId),
-    cancelDelivery: (deliveryId) => deps.cancel(deliveryId),
+    deliver: (agentId, content, deliveryId) => submit(agentId, content, deliveryId),
+    cancelDelivery: (deliveryId) => cancel(deliveryId),
     onDelivery: (listener) => {
       listeners.add(listener)
       return () => { listeners.delete(listener) }
@@ -56,14 +90,13 @@ export function createDeliveries(deps: DeliveriesDeps) {
     /** The core's input says what became of a delivery: every listener here hears it, each guarded, and the
      *  process that made it is told. A listener that throws costs that listener the event, never the input
      *  that said it or another listener. */
-    settled(event: TurnDelivery): void {
-      for (const listener of listeners) {
-        try { listener(event) } catch (error) {
-          log(`[deliveries] a listener failed on ${event.deliveryId.slice(0, 40)} · ${error instanceof Error ? error.message : String(error)}`)
-        }
-      }
-      const maker = makers.get(event.deliveryId)
-      if (maker) deps.tell(maker, event)
+    settled,
+
+    /** The core's input is wired: what was held is written, in order, and the rest as it comes. */
+    ready(): void {
+      const waiting = held ?? []
+      held = null
+      for (const delivery of waiting) deps.submit(delivery.agentId, delivery.text, delivery.deliveryId)
     },
 
     /** A service in its own process delivering a turn, or taking one back (`service_query`): null when the
@@ -73,14 +106,14 @@ export function createDeliveries(deps: DeliveriesDeps) {
       if (!deps.deliverers.has(service)) return { error: 'NOT_A_DELIVERER' }
       const deliveryId = text(payload.deliveryId)
       if (!deliveryId) return { error: 'INVALID_DELIVERY' }
-      if (query === 'cancel_delivery') return { cancelled: deps.cancel(deliveryId) }
+      if (query === 'cancel_delivery') return { cancelled: cancel(deliveryId) }
       const agentId = text(payload.agentId)
       if (!agentId || typeof payload.text !== 'string') return { error: 'INVALID_DELIVERY' }
       // Known before it is written: the input says `queued` as it takes it, and that is the maker's to hear.
       makers.delete(deliveryId)
       makers.set(deliveryId, service)
       if (makers.size > KEPT_DELIVERERS) makers.delete(makers.keys().next().value!)
-      deps.submit(agentId, payload.text, deliveryId)
+      submit(agentId, payload.text, deliveryId)
       return {}
     },
   }

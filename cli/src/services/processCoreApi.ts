@@ -8,8 +8,8 @@
  * credential is refused: a service holds none (services/AGENTS.md).
  *
  * An experiment acts on the core as well (core/experimentQueries.ts): it creates agents, stops a turn,
- * delivers turns (services/turnsLink.ts) and tells the windows it changed, each asked of the core over its
- * link (`ask`). The agents it reads come as the apps are shown them (`service_query shown`): each with its
+ * delivers turns (services/turnsLink.ts), reads and writes the account's backend and tells the windows it
+ * changed, each asked of the core over its link (`ask`). The agents it reads come as the apps are shown them (`service_query shown`): each with its
  * name, whether its terminal is there and its harness's viewer.
  */
 import { DAEMON_UNKNOWN, DELIVERIES_OFF, LANE_OFF, resolveAgent, TERMINALS_OFF, type CoreApi, type DaemonAddress } from '../core/api.js'
@@ -33,6 +33,8 @@ export interface AgentsView {
   deliveries?: ReturnType<typeof turnsLink>
   /** Where this daemon runs, as the core last said (`service_query daemon`). */
   daemon?: () => DaemonAddress | null
+  /** The account's notices the core tells it (`service_event` kind `notice`), for whoever listens. */
+  onNotice?: CoreApi['account']['onNotice']
 }
 
 /** Whether what the core sent is an agent. */
@@ -101,6 +103,14 @@ export function processCoreApi(dataDir: string, service: string, view: AgentsVie
       lane: LANE_OFF,
       privateGridName: async () => null,
       machineName: () => null,
+      backend: async (method, path, body) => {
+        const answer = await (ask?.('backend', { method, path, ...(body === undefined ? {} : { body }) }) ?? Promise.reject(new Error('no core to ask')))
+          .catch((): Payload => ({ status: 503, body: { error: 'SERVICE_UNAVAILABLE' } }))
+        return typeof answer.status === 'number' && answer.body && typeof answer.body === 'object'
+          ? { status: answer.status, body: answer.body as Payload }
+          : { status: 502, body: { error: typeof answer.error === 'string' ? answer.error : 'BACKEND_UNREACHABLE' } }
+      },
+      onNotice: (listener) => view.onNotice?.(listener) ?? (() => {}),
     },
     clients: {
       viewerChanged: () => {}, gridNamed: () => {}, gridModelsChanged: () => {}, dshInstallStatus: () => {},

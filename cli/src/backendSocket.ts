@@ -1,6 +1,5 @@
 import type { PurgeAgentService } from './lib/purgeAgentService.js'
-import { baseNode } from './harnessd/baseNode.js'
-import type { Asker, BackendNotice, GatewayEvents, GatewayPort, ModelsPort, PromptScopes, RemoteClient, RemoteRole, RemoteTransport } from './core/api.js'
+import { TEAMS_REQUESTS, type Asker, type BackendNotice, type GatewayEvents, type GatewayPort, type ModelsPort, type RemoteClient, type RemoteRole, type RemoteTransport } from './core/api.js'
 import { ServiceUnavailableError } from './core/serviceHost.js'
 import type { ActivityFrame } from './lib/turnActivity.js'
 import { MonitorCompletions } from './lib/harnessMonitor.js'
@@ -20,7 +19,6 @@ import type { AutonomousDeviceService, AutonomousDeviceFrame } from './lib/auton
  * the gateway, which seals it.
  */
 
-import { existsSync } from 'node:fs'
 import { join } from 'path'
 import { hostname } from 'os'
 import { env } from './config/env.js'
@@ -37,15 +35,6 @@ import { harnessDevicesRequest, type HarnessDevicesService } from './lib/harness
 import { engineInstallRecipe } from './lib/engineInstall.js'
 import { agentFrame, type AgentDshContext, type AgentFrame } from './lib/agentFrame.js'
 import { agentTokenUsage } from './lib/agentTokenUsage.js'
-import { TeamService } from './teams/service.js'
-import { SwarmPromptScopes } from './teams/promptScope.js'
-import { ChannelDirectory } from './teams/channels.js'
-import { TeamMailbox } from './teams/mailbox.js'
-import { teamRequest, teamDeliveryRequest, TEAM_REQUEST_TYPES, teamFailure } from './teams/wire.js'
-import { teamRpc } from './teams/client.js'
-import { Address, Id, OperationId, Receipt, TeamError, type MemberRuntime } from './teams/model.js'
-import { shellQuote } from './orchestrator/prompts.js'
-import type { SessionInputDelivery } from './lib/sessionInput.js'
 import { terminalHandoffRequest } from './lib/terminalHandoff.js'
 import { ViewerForwarder } from './lib/viewerForwarder.js'
 import { InteractiveViewers } from './lib/interactiveViewer.js'
@@ -61,6 +50,8 @@ export { isLocalClientId, type DownTransport }
 /** Requests one local connection may queue before the daemon is ready (see `openRequests`). The app
  *  sends a handful on connect; hundreds is a client looping, not a person. */
 const MAX_REQUESTS_BEFORE_READY = 256
+/** The teams' requests, which the frame log leaves out: they carry what agents ask each other. */
+const TEAM_REQUESTS: ReadonlySet<string> = new Set(TEAMS_REQUESTS)
 
 export type Frame = Record<string, unknown>
 
@@ -192,95 +183,14 @@ export class BackendSocket {
   /** Injectable for queue-isolation tests; production uses the machine-local probe. */
   engineProbeProvider: typeof probeEngines = probeEngines
   readonly ownerCommands = new OwnerCommands()
+  /** Takes back a delivered turn not yet being written (core/deliveries.ts, cli.ts binds core/input.ts). */
   onCancelOrchestratorMessage: ((deliveryId: string) => boolean) | null = null
   /** Every frame sent to the apps, as it is sent: the orchestrator reads its Directors' turns from them
    *  (services/orchestrator.ts, through its port). One that throws costs it that frame, never the apps. */
   onFrameSent: ((frame: Frame) => void) | null = null
-  /** Isolated daemon fixtures can override these without touching installed state. */
-  teamStateDir = join(env.ADAPTER_DATA_DIR, 'teams')
-  teamCommand: string | null = null
-  private teamService: TeamService | null = null
-  swarmPromptScopes: PromptScopes = new SwarmPromptScopes()
-  private teamMailboxService: TeamMailbox | null = null
-  readChannelDesk: (() => Promise<unknown>) | null = null
-  writeChannelSettings: ((enabled: boolean) => Promise<unknown>) | null = null
-  private channelsEnabled = false
-  private channelDirectory: ChannelDirectory | null = null
-  private channels(): ChannelDirectory {
-    if (!this.readChannelDesk) throw new TeamError('CHANNELS_UNSUPPORTED', 'Tab channels are not available on this daemon.')
-    return this.channelDirectory ??= new ChannelDirectory({
-      machineId: this.machineId, service: this.teams(), readDesk: () => this.readChannelDesk!(),
-      writeSettings: async enabled => {
-        if (!this.writeChannelSettings) throw new TeamError('CHANNELS_UNSUPPORTED', 'Update Harness to configure swarm collaboration.')
-        return this.writeChannelSettings(enabled)
-      },
-      enabledChanged: enabled => { this.channelsEnabled = enabled; this.teamMailboxService?.pump() },
-      forward: (machineId, payload) => teamRpc({ port: env.PORT, machineId, dataDir: env.ADAPTER_DATA_DIR }, 'team', payload),
-    })
-  }
-  refreshChannels(): void { if (this.readChannelDesk) void this.channels().refresh(true).catch(() => {}) }
-  teamDelivery(event: SessionInputDelivery): void { this.teamMailboxService?.observe(event) }
-  teamCanWrite(deliveryId: string): boolean { return this.teamMailboxService?.canWrite(deliveryId) ?? false }
-  private localTeamRuntime(agentId: string): MemberRuntime | null {
-    const agent = registry.byAgent(agentId)
-    return agent ? { name: projectDisplayName(agent), engine: agent.engine, cwd: agent.cwd ?? undefined,
-      available: agent.active && registry.terminalAvailable(agentId),
-      ...(!agent.active ? { reason: 'Session is paused or offline.' } : {}) } : null
-  }
-  private teamMailbox(): TeamMailbox {
-    return this.teamMailboxService ??= new TeamMailbox({
-      stateDir: join(this.teamStateDir, 'mailboxes'),
-      channelsEnabled: () => this.channelsEnabled,
-      runtime: id => this.localTeamRuntime(id),
-      send: (id, text, deliveryId) => {
-        if (!this.onMessage) throw new TeamError('UNAVAILABLE', 'Agent input is not ready.')
-        this.onMessage(id, text, deliveryId)
-      },
-      cancel: id => this.onCancelOrchestratorMessage?.(id) ?? false,
-    })
-  }
-  private teams(): TeamService {
-    return this.teamService ??= new TeamService({
-      stateDir: join(this.teamStateDir, 'ledgers'), machineId: this.machineId,
-      taskScope: async address => {
-        if (address.machineId === this.machineId) return this.swarmPromptScopes.current(address.agentId)
-        const result = await teamRpc({ port: env.PORT, machineId: address.machineId, dataDir: env.ADAPTER_DATA_DIR },
-          'team_delivery', { action: 'prompt_scope', agentId: address.agentId })
-        return typeof result.teamId === 'string' ? result.teamId : null
-      },
-      questionReplied: async (address, teamId, questionId) => {
-        if (address.machineId === this.machineId) this.swarmPromptScopes.replied(address.agentId, teamId, questionId)
-        else await teamRpc({ port: env.PORT, machineId: address.machineId, dataDir: env.ADAPTER_DATA_DIR },
-          'team_delivery', { action: 'prompt_replied', agentId: address.agentId, teamId, questionId })
-      },
-      command: address => address.machineId === this.machineId
-        ? this.teamCommand ?? `${[baseNode(process.execPath), ...process.execArgv, process.argv[1]].map(shellQuote).join(' ')} team --port ${env.PORT}`
-        : 'harness team',
-      runtime: async address => {
-        Address.parse(address)
-        if (address.machineId === this.machineId) return this.localTeamRuntime(address.agentId)
-        const result = await teamRpc({ port: env.PORT, machineId: address.machineId, dataDir: env.ADAPTER_DATA_DIR }, 'team_delivery', { action: 'runtime', agentId: address.agentId })
-        return result.runtime as MemberRuntime | null
-      },
-      delivery: async (address, action, delivery) => {
-        if (address.machineId === this.machineId) {
-          const mailbox = this.teamMailbox()
-          return action === 'send' ? mailbox.accept(delivery) : action === 'status' ? mailbox.status(delivery.id)
-            : action === 'hold' || action === 'release' ? mailbox.hold(delivery.id, action === 'hold') : mailbox.cancel(delivery.id, action === 'consume')
-        }
-        const result = await teamRpc({ port: env.PORT, machineId: address.machineId, dataDir: env.ADAPTER_DATA_DIR }, 'team_delivery', { action, delivery })
-        return result.receipt == null ? null : Receipt.parse(result.receipt)
-      },
-      changed: (id, revision) => this.sendLocal({ type: 'team_changed', payload: { id, revision } }),
-    })
-  }
-  /** Resume persisted queues after input wiring is ready, even with no UI attached. */
-  startTeams(): void {
-    if (this.readChannelDesk) this.channels().start()
-    if (!existsSync(this.teamStateDir)) return
-    try { this.teamMailbox().start(); this.teams().start() }
-    catch { console.warn('[teams] preserved unreadable team state; inspect Team for recovery') }
-  }
+  /** The account's notices the backend announces (`desk_changed`, …), for the experiments that hear them
+   *  (Tab collaboration reads its tab channels again), as well as the windows here. */
+  onAccountNotice: ((notice: BackendNotice) => void) | null = null
   /**
    * Called on `agent_retarget` — cli.ts re-execs an EXISTING agent's pane against a different grid,
    * or, when `grid` is null, back onto its own login.
@@ -477,7 +387,7 @@ export class BackendSocket {
       this.onMachineMeta?.(meta.name ?? null)
     },
     notice: (notice: BackendNotice) => {
-      if (notice.type === 'desk_changed') this.refreshChannels()
+      this.onAccountNotice?.(notice)
       this.sendLocal(notice.type === 'machines_changed' ? { type: notice.type, payload: { reason: notice.reason } }
         : notice.type === 'device_keys_changed' ? { type: notice.type, payload: {} }
           : { type: notice.type, payload: { revision: notice.revision } })
@@ -554,9 +464,6 @@ export class BackendSocket {
   async stop(): Promise<void> {
     this.closed = true
     this.closeAgentService?.dispose()
-    this.teamService?.stop()
-    this.teamMailboxService?.stop()
-    this.channelDirectory?.stop()
     this.viewerForwarder.closeAll()
     this.interactiveViewers.closeAll(); this.ownerCommands.closeAll()
     await this.terminalStreams?.stop()
@@ -837,7 +744,7 @@ export class BackendSocket {
   private emitReply(connId: string, type: string, requestId: unknown, payload: Record<string, unknown>): void {
     const resultType = rpcResultType(type)
     // Before the E2EE wrap: an RPC reply is only readable here.
-    if (env.LOG_FRAMES && !TEAM_REQUEST_TYPES.has(type) && !OWNER_COMMAND_TYPES.has(type) && !type.startsWith('viewer_') && type !== 'phone_pair' && type !== 'api_connections' && type !== 'orchestrator' && !type.startsWith('grid_fleet_') && type !== 'agent_read_file' && type !== 'project_preview' && type !== 'git_project_info' && type !== 'git_pull_request' && type !== 'agent_handoff_prepare' && !SHARE_REQUEST_TYPES.has(type) && !type.startsWith('pair')) logFrame('→', connId ? `conn:${sid(connId)}` : 'backend', { type: resultType, payload: { requestId, ...payload } })
+    if (env.LOG_FRAMES && !TEAM_REQUESTS.has(type) && !OWNER_COMMAND_TYPES.has(type) && !type.startsWith('viewer_') && type !== 'phone_pair' && type !== 'api_connections' && type !== 'orchestrator' && !type.startsWith('grid_fleet_') && type !== 'agent_read_file' && type !== 'project_preview' && type !== 'git_project_info' && type !== 'git_pull_request' && type !== 'agent_handoff_prepare' && !SHARE_REQUEST_TYPES.has(type) && !type.startsWith('pair')) logFrame('→', connId ? `conn:${sid(connId)}` : 'backend', { type: resultType, payload: { requestId, ...payload } })
     if (this.localClients.has(connId)) {
       this.sendTo(connId, { type: resultType, payload: { requestId, ...payload } })
       return
@@ -896,7 +803,7 @@ export class BackendSocket {
     // actually asked for rather than as an opaque __e2e envelope.
     // Terminal frames contain raw keystrokes, paste text and screen bytes after
     // unwrap. Never pass them to the frame logger, even in diagnostic mode.
-    if (env.LOG_FRAMES && !TEAM_REQUEST_TYPES.has(type) && !OWNER_COMMAND_TYPES.has(type) && !type.startsWith('terminal_') && !type.startsWith('viewer_') && !type.startsWith('grid_fleet_') && type !== 'agent_read_file' && type !== 'project_preview' && type !== 'git_project_info' && type !== 'git_pull_request' && type !== 'agent_handoff_prepare' && type !== 'orchestrator' && type !== 'api_connections' && type !== 'phone_pair' && !SHARE_REQUEST_TYPES.has(type) && !type.startsWith('pair')) {
+    if (env.LOG_FRAMES && !TEAM_REQUESTS.has(type) && !OWNER_COMMAND_TYPES.has(type) && !type.startsWith('terminal_') && !type.startsWith('viewer_') && !type.startsWith('grid_fleet_') && type !== 'agent_read_file' && type !== 'project_preview' && type !== 'git_project_info' && type !== 'git_pull_request' && type !== 'agent_handoff_prepare' && type !== 'orchestrator' && type !== 'api_connections' && type !== 'phone_pair' && !SHARE_REQUEST_TYPES.has(type) && !type.startsWith('pair')) {
       logFrame('←', connId ? `conn:${sid(connId)}` : 'backend', frame)
     }
     const reply = (t: string, rid: unknown, p: Record<string, unknown>): void => this.emitReply(connId, t, rid, p)
@@ -917,34 +824,6 @@ export class BackendSocket {
     const payload = (frame.payload ?? {}) as Record<string, unknown>
     const requestId = payload.requestId
     const answer = (result: Record<string, unknown>): void => reply(type, requestId, result)
-
-    if (TEAM_REQUEST_TYPES.has(type)) {
-      // Observers were handled above; only the owner or a paired owner client reaches this route.
-      if (!owner) {
-        reply(type, requestId, { error: 'OWNER_REQUIRED', detail: 'Team communication requires an owner connection.' })
-        return
-      }
-      void Promise.resolve().then(async () => {
-        if (type === 'team') {
-          if (payload.action === 'context') {
-            const agentId = Id.parse(payload.agentId)
-            return this.channels().taskContext(agentId, this.swarmPromptScopes.current(agentId))
-          }
-          if (String(payload.action).startsWith('channel_')) return this.channels().request(payload)
-          if (typeof payload.teamId === 'string' && this.teams().isChannel(payload.teamId)
-              && ['ask', 'get', 'members'].includes(String(payload.action))) await this.channels().refresh(payload.action === 'ask')
-          return teamRequest(this.teams(), payload)
-        }
-        if (payload.action === 'runtime') return { runtime: this.localTeamRuntime(Id.parse(payload.agentId)) }
-        if (payload.action === 'prompt_scope') return { teamId: this.swarmPromptScopes.current(Id.parse(payload.agentId)) }
-        if (payload.action === 'prompt_replied') {
-          this.swarmPromptScopes.replied(Id.parse(payload.agentId), OperationId.parse(payload.teamId), OperationId.parse(payload.questionId))
-          return { ok: true }
-        }
-        return teamDeliveryRequest(this.teamMailbox(), payload)
-      }).then(result => reply(type, requestId, result)).catch(error => reply(type, requestId, teamFailure(error)))
-      return
-    }
 
     // A paired owner can run the machine's orchestrator; observers and device sessions cannot.
     // Both requests and replies are encrypted, including project artifacts.

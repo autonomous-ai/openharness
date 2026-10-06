@@ -128,7 +128,7 @@ import { createAgentUpdate } from './agents/update.js'
 import { createEngineHooks, installEngineHooks } from './engines/hooks.js'
 import { createCursorTaskHooks } from './engines/cursorTasks.js'
 import { databaseHistory } from './transcripts/databaseHistory.js'
-import { createCoreApi, emptyPorts, EXPERIMENTS, FLEET_FALLBACKS, LONG_ANSWERS, MODELS_FALLBACKS, MODELS_OFF, MODELS_REQUESTS, MONITOR_FALLBACKS, MONITOR_OFF, MONITOR_REQUESTS, ORCHESTRATOR_FALLBACKS, ORCHESTRATOR_REQUESTS, PROJECTS_REQUESTS, SEARCH_FALLBACKS, SEARCH_REQUESTS, STORE_REQUESTS, TEAMS_FALLBACKS, USAGE_REQUESTS, VIEWERS_FALLBACKS, WORKSPACES_FALLBACKS, type GatewayAccount, type GatewayOps, type GatewayStatus, type TeamsPort } from './api.js'
+import { createCoreApi, emptyPorts, EXPERIMENTS, FLEET_FALLBACKS, LONG_ANSWERS, MODELS_FALLBACKS, MODELS_OFF, MODELS_REQUESTS, MONITOR_FALLBACKS, MONITOR_OFF, MONITOR_REQUESTS, ORCHESTRATOR_FALLBACKS, ORCHESTRATOR_REQUESTS, PROJECTS_REQUESTS, SEARCH_FALLBACKS, SEARCH_REQUESTS, STORE_REQUESTS, TEAMS_FALLBACKS, TEAMS_REQUESTS, USAGE_REQUESTS, VIEWERS_FALLBACKS, WORKSPACES_FALLBACKS, type GatewayAccount, type GatewayOps, type GatewayStatus, type TeamsPort } from './api.js'
 import { createServiceHost, testFaults } from './serviceHost.js'
 import { startStalls } from './stall.js'
 import { createServiceLinks, type ServiceLinks } from './serviceLinks.js'
@@ -139,12 +139,12 @@ import { createStoreLink } from './storeLink.js'
 import { createModelsLink } from './modelsLink.js'
 import { answerAgentQuery } from './agentQueries.js'
 import { createDeliveries } from './deliveries.js'
-import { wakeExperiments } from './experiments.js'
+import { createExperimentHooks, wakeExperiments } from './experiments.js'
 import { answerExperimentQuery, createForExperiment } from './experimentQueries.js'
 import { createOrchestratorLink } from './orchestratorLink.js'
 import { daemonCommand } from '../lib/daemonCommand.js'
 import { KNOWN_SERVICES, servicesTheMasterRuns } from '../harnessd/services.js'
-import { createTeamsLink } from './teamsLink.js'
+import { createTeamsLink, teamsOutOfProcess } from './teamsLink.js'
 import { startFleet } from '../services/fleet.js'
 import { CORE_EXIT_STOP, CORE_EXIT_UPDATE, PROBE_COMMAND, PROBE_TIMEOUT_MS } from '../harnessd/protocol.js'
 import { localSocketPath, refuseServedDataFolder, type LocalSocketServer } from '../lib/localSocket.js'
@@ -161,7 +161,6 @@ import { WindowSelection } from '../cable/windowSelection.js'
 import { WindowVisit } from '../cable/windowVisit.js'
 import { WindowForm } from '../cable/windowForm.js'
 import { TERMINAL_BINARY_VERSION } from '../lib/terminalBinary.js'
-import { TeamError } from '../teams/model.js'
 import { setVoiceRouterDeviceConnected, setVoiceRouterSessions, shutdownVoiceRouter } from '../lib/voiceRouter.js'
 import { E2eeStore } from '../lib/e2ee/store.js'
 import { isLoopbackRequest, loopbackHosts } from '../lib/loopbackRequest.js'
@@ -652,6 +651,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     gridModelsChanged: () => { void backendRef?.pushGridModels() },
     privateGridName: async () => backendRef?.gridName() ?? null,
     machineName: () => backendRef?.machineName() ?? null,
+    // An experiment's account-wide settings (Tab collaboration's tab channels), signed in by this core.
+    backend: (method, path, body) => proxyBackend(method, path, body),
+    onNotice: (listener) => experimentHooks.onNotice(listener),
     dshInstallStatus: (status) => backendRef?.send({ type: 'dsh_install_status', payload: status }),
     // The backend mints and remembers the account's grid name; this CLI holds neither the account's
     // email nor its id. An older backend (no route) answers nothing, which the grid reconcile treats as
@@ -793,6 +795,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     started: (...args) => ports.teams?.started(...args),
     raw: (...args) => ports.teams?.raw(...args),
     forget: (agentId) => ports.teams?.forget(agentId),
+    canWrite: (deliveryId) => ports.teams?.canWrite(deliveryId) ?? false,
   }
   backend.viewerTargetProvider = (agentId) => ports.viewers?.forwardingUrl(agentId) ?? null
 
@@ -986,10 +989,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     teams: {
       prepare: (id, text, tabId, deliveryId) => teams.prepare(id, text, tabId, deliveryId),
       delivery: (event) => {
-        backend.teamDelivery(event)
         deliveries.settled(event)
       },
-      canWrite: (deliveryId) => backend.teamCanWrite(deliveryId),
+      canWrite: (deliveryId) => teams.canWrite(deliveryId),
     },
     device: () => autonomousDeviceService,
     clients: backend,
@@ -1104,8 +1106,14 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const viewersLink = createViewersLink(coreApi, (frame, opts) => serviceLinks.notify('viewers', frame, opts))
   // How the core tells workspaces in their own process what to do, and answers them (core/workspacesLink.ts).
   const workspacesLink = createWorkspacesLink(coreApi, (frame) => serviceLinks.notify('workspaces', frame), forgetAgentProject)
-  // Every change to the prompt scopes, kept until their own process has it, and each agent's scope (core/teamsLink.ts).
-  const teamsLink = createTeamsLink({ notify: (frame) => serviceLinks.notify('teams', frame) })
+  // Tab collaboration and teams, an experiment: the prompt scopes and the teams beside them, both in its process
+  // or both in this one (core/teamsLink.ts), which keeps the scopes' changes from the moment it is on.
+  const teamsOut = teamsOutOfProcess(outOfProcess)
+  const teamsLink = createTeamsLink({ notify: (frame) => serviceLinks.notify('teams', frame), off: true })
+  // An experiment asked for, and the account's notices for those that hear them (core/experiments.ts).
+  const experimentHooks = createExperimentHooks({ want: (service) => coreLink.want(service), notify: (service, frame) => serviceLinks.notify(service, frame),
+    outOfProcess, experiments, onWant: { collaboration: () => teamsLink.on() } })
+  backend.onAccountNotice = (notice) => experimentHooks.notice(notice)
   // What the Store in its own process tells the core: an install's progress, and that what is installed changed (core/storeLink.ts).
   const storeLink = createStoreLink(coreApi, invalidateInstalledDsh)
   // What the core keeps of models in its own process for frames and keystrokes, and how it asks it the rest (core/modelsLink.ts).
@@ -1116,7 +1124,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     waits: LONG_ANSWERS,
     // An experiment's process runs only once it is on: a request for one that is off asks the master for it.
     onDemand: experiments,
-    want: (service) => coreLink.want(service),
+    want: (service) => experimentHooks.want(service),
     answer: async (service, query, payload) => deliveries.answer(service, query, payload)
       ?? await answerExperimentQuery(coreApi, experiments, service, query, payload)
       ?? (service === 'orchestrator' ? orchestratorLink.answer(query, payload) : null)
@@ -1124,18 +1132,21 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       : service === 'workspaces' ? workspacesLink.answer(query, payload)
       : service === 'store' ? storeLink.answer(query, payload)
       : service === 'models' ? modelsLink.answer(query, payload)
-      : service === 'teams' ? teamsLink.answer(query, payload)
+      : service === 'teams' || service === 'collaboration' ? teamsLink.answer(query, payload)
       : service === 'gateway' && gatewayLink ? gatewayLink.answer(query, payload) : answerAgentQuery(coreApi, query)),
     // The gateway's own traffic: its remote clients and what they sent, and its comings and goings.
     notice: (service, payload) => { if (service === 'gateway') gatewayLink?.notice(payload) },
     binary: (service, bytes) => { if (service === 'gateway') gatewayLink?.binary(bytes) },
-    connected: (service) => { if (service === 'gateway') gatewayLink?.connected() },
+    connected: (service) => {
+      if (service === 'gateway') gatewayLink?.connected()
+      if (service === 'teams') teamsLink.on()
+    },
     disconnected: (service) => { if (service === 'gateway') gatewayLink?.disconnected() },
   })
   serviceLinksRef = serviceLinks
   // A request a service declared goes to it: in its own process, or in this one (core/serviceHost.ts).
-  backend.serviceRouter = (type, payload, asker, reply) =>
-    serviceLinks.route(type, payload, asker, reply) || serviceHost.route(type, payload, asker, reply)
+  backend.serviceRouter = (type, payload, asker, reply) => (teamsOut && teamsLink.route(type, payload, asker, reply))
+    || serviceLinks.route(type, payload, asker, reply) || serviceHost.route(type, payload, asker, reply)
   // Session search (services/search.ts): in this process, or in its own (services/searchProcess.ts),
   // where the core tells it what changed. A purge's forgetting waits for it if it is down.
   if (outOfProcess.has('search')) {
@@ -1161,9 +1172,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   if (outOfProcess.has('orchestrator')) ports.orchestrator = orchestratorLink.port
   else serviceHost.start('orchestrator', inline!.startOrchestrator, coreApi, ORCHESTRATOR_FALLBACKS, ORCHESTRATOR_REQUESTS)
   backend.onFrameSent = (frame) => ports.orchestrator?.frame(frame)
-  // The prompt scopes, behind the service host's guard (a fault there costs no message its write) or in their own process.
-  if (outOfProcess.has('teams')) ports.teams = backend.swarmPromptScopes = teamsLink.scopes
-  else serviceHost.start('teams', (_core, started) => { started.teams = backend.swarmPromptScopes }, coreApi, TEAMS_FALLBACKS)
+  // Tab collaboration and teams (services/collaboration.ts): in their own process, or in this one behind the
+  // service host's guard (a fault there costs no message its write), the prompt scopes the service's own.
+  if (teamsOut) ports.teams = teamsLink.scopes
+  else serviceHost.start('teams', inline!.startTeamsInCore, coreApi, TEAMS_FALLBACKS, TEAMS_REQUESTS)
   // The harnesses installed here, and installing, updating and removing one (services/store.ts): in this
   // process, or beside the viewers in theirs (services/storeProcess.ts).
   if (!outOfProcess.has('store')) serviceHost.serve('store', inline!.startStore, coreApi, STORE_REQUESTS)
@@ -1710,7 +1722,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     coreLink.startHeartbeat()
     // The experiments with saved state are on: their processes are asked for now, the master heeding a
     // bound core alone (core/experiments.ts). The others wait for their first request.
-    wakeExperiments({ dataDir: env.ADAPTER_DATA_DIR, experiments: EXPERIMENTS, outOfProcess, want: (service) => coreLink.want(service) })
+    wakeExperiments({ dataDir: env.ADAPTER_DATA_DIR, experiments: EXPERIMENTS, outOfProcess, want: (service) => experimentHooks.want(service) })
   } else {
     try { writeFileSync(PID_FILE, String(process.pid) + '\n') } catch { /* best effort */ }
   }
@@ -2396,19 +2408,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   backend.onMessage = (id, content, deliveryId, tabId) => submitAgent(id, content, deliveryId, tabId)
   backend.messageProvider = inputs.messageRequest
   backend.onCancelOrchestratorMessage = id => input.cancelDelivery(id)
-  backend.readChannelDesk = async () => {
-    const response = await proxyBackend('GET', '/api/tab-channels')
-    if (response.status === 404) throw new TeamError('CHANNELS_UNSUPPORTED', 'Tab channels are not enabled on this Harness server.')
-    if (response.status !== 200 || response.body.success !== true) throw new Error('The saved channel directory is unavailable.')
-    return response.body.data
-  }
-  backend.writeChannelSettings = async enabled => {
-    const response = await proxyBackend('PATCH', '/api/tab-channels/settings', { enabled })
-    if (response.status === 404) throw new TeamError('CHANNELS_UNSUPPORTED', 'Update the Harness server to configure swarm collaboration.')
-    if (response.status !== 200 || response.body.success !== true) throw new TeamError('CHANNEL_SETTINGS_FAILED', 'The swarm setting could not be saved. Refresh Settings to check its state.')
-    return response.body.data
-  }
-  backend.startTeams()
+  deliveries.ready() // The input is wired: what was delivered meanwhile (a teams' queue resuming) is written now.
 
   // Keep the log file under its cap. This daemon writes it through an inherited stdout fd, so a size
   // check on a timer is the only place that can see it grow — `prepareLogFile` at spawn time alone

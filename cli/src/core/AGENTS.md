@@ -39,7 +39,8 @@ questions. Everything else is a service ([../services/AGENTS.md](../services/AGE
 - `api.ts`: the contract with services, their ports, fallbacks and requests. `serviceHost.ts`: services
   in this process. `serviceLinks.ts`: services in their own processes. `viewersLink.ts`: what the core
   keeps of the viewers when they run in theirs. `workspacesLink.ts`: what the core tells workspaces in
-  theirs. `teamsLink.ts`: every change to the teams' prompt scopes, kept until their process has it.
+  theirs. `teamsLink.ts`: every change to the teams' prompt scopes, kept until their process has it once Tab
+  collaboration is on, which of its deliveries may be written, and the scopes' own two questions.
   `monitorLink.ts`: the monitor's port, asked of its process. `storeLink.ts`: what the Store in its
   process tells the core. `modelsLink.ts`: what the core keeps of models in its process for frames and
   keystrokes, and how it asks it the rest. `agentQueries.ts`: what a service in its own process may ask of the agents;

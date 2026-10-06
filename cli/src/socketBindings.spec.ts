@@ -14,7 +14,6 @@ const SRC = join(__dirname)
 
 /** Slots left unbound on purpose, and why. */
 const NOT_BOUND_ON_PURPOSE: Record<string, string> = {
-  teamCommand: 'a test override: null runs the daemon\'s own `team` command',
   onLocalClient: 'declared and never wired (the design doc\'s "Found while mapping")',
 }
 

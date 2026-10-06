@@ -51,9 +51,10 @@ async function turn(client: LocalClient, agentId: string, content: string): Prom
 const IN_THE_CORE = { HARNESSD_SERVICES: 'none' }
 /** A master quick to give up on a service that keeps failing as it starts. */
 const QUICK_TO_PARK = { HARNESSD_SERVICE_PARK_CRASHES: '3', HARNESSD_SERVICE_INITIAL_BACKOFF_MS: '200', HARNESSD_SERVICE_MAX_BACKOFF_MS: '1000' }
-/** The processes the services run in by default, and what makes every one of them fail as it starts. */
-const SERVICE_PROCESSES = ['search', 'viewers', 'edge', 'teams', 'models'] as const
-const EVERY_PROCESS_FAILING = 'search,viewers,store,workspaces,usage,monitor,projects,teams,models'
+/** The processes the services run in by default, and what makes every one of them fail as it starts. The
+ *  experiments' (the teams', the orchestrator's) start only once they are on: e2e/experiments.e2e.ts. */
+const SERVICE_PROCESSES = ['search', 'viewers', 'edge', 'models'] as const
+const EVERY_PROCESS_FAILING = 'search,viewers,store,workspaces,usage,monitor,projects,models'
 
 describe('a failing service never takes the core down', () => {
   let daemon: IsolatedDaemon | undefined

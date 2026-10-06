@@ -21,6 +21,15 @@
  * scope as it acknowledges events (`ack`), and the core answers from that report. While a change to an
  * agent's scope is on its way to the process, or after the process started over, the answer is null:
  * no team, never a wrong one. That is the fallback while the process is down, too.
+ *
+ * Teams is an experiment (core/api.ts `EXPERIMENTS`): its process runs only once it is on. Until then
+ * (`off`), nothing is kept for it, and nothing it would read is said: the core keeps no journal for a process
+ * no one asked for (`on`, once it is asked for or connects). The rest of what the core keeps of it:
+ * - which of its deliveries may be written now (`canWrite`, asked in line as a team's turn is written,
+ *   core/input.ts), as the process last reported them (`writable`); none before, so a team's turn waits;
+ * - the two `team_delivery` questions about the scopes themselves (`prompt_scope`, `prompt_replied`), which
+ *   the core answered while the scopes' process was down and still does (`route`), and the same two asked
+ *   by the process itself for its teams (`team_scope`, `team_replied`).
  */
 import { randomUUID } from 'node:crypto'
 import type { PromptScopes, TeamsEvent } from './api.js'
@@ -39,6 +48,8 @@ export interface TeamsLinkOptions {
   log?: (line: string) => void
   keptEvents?: number
   keptBytes?: number
+  /** Teams is not on yet: nothing is kept for its process until `on`. */
+  off?: boolean
 }
 
 type Change = TeamsEvent extends infer E ? E extends TeamsEvent ? Omit<E, 'seq' | 'core' | 'at'> : never : never
@@ -61,8 +72,13 @@ export function createTeamsLink(options: TeamsLinkOptions) {
   const reported = new Map<string, string>()
   /** The last event that could move an agent's team: until the process has it, the team is unknown. */
   const moved = new Map<string, number>()
+  /** Whether teams is on: its process asked for, or connected. */
+  let active = options.off !== true
+  /** Each delivery the process says may be written now, and until when. */
+  let writable = new Map<string, number>()
 
   const record = (change: Change, movesScope: boolean): number => {
+    if (!active) return 0
     const event = { ...change, seq: ++seq, core, at: now() } as TeamsEvent
     const size = 256 + ('text' in event ? event.text.length : 0) + ('bytes' in event ? event.bytes.length : 0)
     journal.push({ event, size })
@@ -77,10 +93,10 @@ export function createTeamsLink(options: TeamsLinkOptions) {
     return event.seq
   }
 
-  const scopes: PromptScopes = {
+  const scopes: PromptScopes & { canWrite(deliveryId: string): boolean } = {
     prepare: (agentId, text, tabId, deliveryId) => {
       const of = record({ kind: 'prepare', agentId, text, tabId, deliveryId }, false)
-      return () => { record({ kind: 'unprepare', agentId, of }, false) }
+      return () => { if (of) record({ kind: 'unprepare', agentId, of }, false) }
     },
     started: (agentId, text, source = 'transcript', engine) => { record({ kind: 'started', agentId, text, source, engine }, true) },
     raw: (agentId, bytes, tabId, pasted = false) => {
@@ -89,6 +105,20 @@ export function createTeamsLink(options: TeamsLinkOptions) {
     forget: (agentId) => { record({ kind: 'forget', agentId }, true) },
     replied: (agentId, teamId, questionId) => { record({ kind: 'replied', agentId, teamId, questionId }, true) },
     current: (agentId) => ((moved.get(agentId) ?? 0) > acked ? null : reported.get(agentId) ?? null),
+    canWrite: (deliveryId) => (writable.get(deliveryId) ?? 0) > now(),
+  }
+
+  const agentOf = (value: unknown): string | null => (typeof value === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value) ? value : null)
+  const operationOf = (value: unknown): string | null => (typeof value === 'string' && /^[a-f0-9]{32}$/.test(value) ? value : null)
+  /** A scope's own question, answered here: `{ teamId }` for `prompt_scope`, the reply taken for `prompt_replied`. */
+  const scopeAnswer = (action: unknown, payload: Record<string, unknown>): Record<string, unknown> => {
+    const agentId = agentOf(payload.agentId)
+    if (!agentId) return { error: 'INVALID_REQUEST', detail: 'agentId: Invalid' }
+    if (action === 'prompt_scope') return { teamId: scopes.current(agentId) }
+    const teamId = operationOf(payload.teamId), questionId = operationOf(payload.questionId)
+    if (!teamId || !questionId) return { error: 'INVALID_REQUEST', detail: `${teamId ? 'questionId' : 'teamId'}: Invalid` }
+    scopes.replied(agentId, teamId, questionId)
+    return { ok: true }
   }
 
   /** The process connected: the events it lacks, or everything this side holds and a fresh start. */
@@ -120,13 +150,43 @@ export function createTeamsLink(options: TeamsLinkOptions) {
 
   return {
     scopes,
+    /** Teams is on: keep everything for its process from now on. */
+    on(): void { active = true },
     /** The core's answers to the teams' questions (core/serviceLinks.ts `answer`, for `teams`). */
     answer(query: string, payload: Record<string, unknown>): Record<string, unknown> {
       if (query === 'hello') return hello(payload)
       if (query === 'ack') return ack(payload)
+      if (query === 'team_scope') return scopeAnswer('prompt_scope', payload)
+      if (query === 'team_replied') return scopeAnswer('prompt_replied', payload)
+      if (query === 'writable') {
+        const reported = payload.deliveries && typeof payload.deliveries === 'object' ? payload.deliveries as Record<string, unknown> : {}
+        writable = new Map(Object.entries(reported).flatMap(([id, until]) => (typeof until === 'number' ? [[id, until] as const] : [])))
+        return {}
+      }
       return { error: 'UNKNOWN_QUERY' }
+    },
+    /** A `team_delivery` question about the scopes themselves, answered here as it was while the scopes'
+     *  process was down: false for every other request, which goes to the teams' process. */
+    route(type: string, payload: Record<string, unknown>, asker: { owner: boolean }, reply: (result: Record<string, unknown>) => void): boolean {
+      if (type !== 'team_delivery' || (payload.action !== 'prompt_scope' && payload.action !== 'prompt_replied')) return false
+      reply(asker.owner ? scopeAnswer(payload.action, payload) : { error: 'OWNER_REQUIRED', detail: 'Team communication requires an owner connection.' })
+      return true
     },
   }
 }
 
 export type TeamsLink = ReturnType<typeof createTeamsLink>
+
+/**
+ * Whether Tab collaboration runs in its own process: the prompt scopes (`teams`) and the teams beside them
+ * (`collaboration`) both, or both in the core's. Named apart (`HARNESSD_SERVICES=collaboration`), they would
+ * be two mailboxes on one folder: both run in the core's process then, and it says so.
+ */
+export function teamsOutOfProcess(outOfProcess: Set<string>, log: (line: string) => void = (line) => console.warn(line)): boolean {
+  if (outOfProcess.has('teams') !== outOfProcess.has('collaboration')) {
+    log('[services] the prompt scopes and the teams run in one process or none: both run in this one')
+    outOfProcess.delete('teams')
+    outOfProcess.delete('collaboration')
+  }
+  return outOfProcess.has('teams')
+}

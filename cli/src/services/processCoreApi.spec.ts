@@ -61,6 +61,27 @@ describe('the core API a light service runs on in its own process', () => {
     expect(api.turns.cancelDelivery('d1')).toBe(false)
     expect(api.daemon).toMatchObject({ command: 'harness', port: 0 })
     expect(api.daemon.machineId()).toBe('')
+    expect(await api.account.backend('GET', '/api/tab-channels')).toEqual({ status: 503, body: { error: 'SERVICE_UNAVAILABLE' } })
+    expect(api.account.onNotice(() => {})()).toBeUndefined()
+  })
+
+  it('reads the account\'s backend through the core for an experiment, and hears the notices it is told', async () => {
+    let answer: Record<string, unknown> | Error = { status: 200, body: { success: true } }
+    const ask = vi.fn(async () => { if (answer instanceof Error) throw answer; return answer })
+    const listeners: Array<(notice: never) => void> = []
+    const api = processCoreApi('/data', 'collaboration', { ask, onNotice: (listener) => { listeners.push(listener as never); return () => {} } })
+    expect(await api.account.backend('PATCH', '/api/tab-channels/settings', { enabled: true })).toEqual({ status: 200, body: { success: true } })
+    expect(ask).toHaveBeenLastCalledWith('backend', { method: 'PATCH', path: '/api/tab-channels/settings', body: { enabled: true } })
+    await api.account.backend('GET', '/api/tab-channels')
+    expect(ask).toHaveBeenLastCalledWith('backend', { method: 'GET', path: '/api/tab-channels' })
+    answer = { error: 'INVALID_REQUEST' }
+    expect(await api.account.backend('GET', '/nope')).toEqual({ status: 502, body: { error: 'INVALID_REQUEST' } })
+    answer = { status: 200 }
+    expect(await api.account.backend('GET', '/api/x')).toEqual({ status: 502, body: { error: 'BACKEND_UNREACHABLE' } })
+    answer = new Error('the link went')
+    expect(await api.account.backend('GET', '/api/x')).toEqual({ status: 503, body: { error: 'SERVICE_UNAVAILABLE' } })
+    api.account.onNotice(() => {})
+    expect(listeners).toHaveLength(1)
   })
 
   it('acts on the core for an experiment: agents made, turns stopped and delivered, windows told, each asked', async () => {

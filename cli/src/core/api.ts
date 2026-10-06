@@ -144,6 +144,11 @@ export interface CoreApi {
     /** This machine's name as the account's Machines list shows it (the backend's `machine_meta`); null
      *  until the first one lands. */
     machineName(): string | null
+    /** A read or write of the account's backend, signed in by the core (`proxyBackend`): an experiment's
+     *  account-wide settings (Tab collaboration's tab channels). A failure is an answer: 502, 504, 401. */
+    backend(method: string, path: string, body?: unknown): Promise<{ status: number; body: Record<string, unknown> }>
+    /** Hear the account's changes the backend announces (`desk_changed`, …). Returns how to stop hearing. */
+    onNotice(listener: (notice: BackendNotice) => void): () => void
   }
   clients: {
     /** An agent's viewer moved: the windows' viewer panes forward to the new one. */
@@ -189,6 +194,12 @@ export interface DaemonAddress {
 export const AGENT_ACTIONS_OFF: Pick<CoreApi['agents'], 'create' | 'dsh'> = {
   create: async () => ({ ok: false, error: 'SERVICE_UNAVAILABLE' }),
   dsh: () => null,
+}
+
+/** The account as a service that reads no backend and hears no notice has it. */
+export const ACCOUNT_BACKEND_OFF: Pick<CoreApi['account'], 'backend' | 'onNotice'> = {
+  backend: async () => ({ status: 503, body: { error: 'SERVICE_UNAVAILABLE' } }),
+  onNotice: () => () => {},
 }
 
 /** Where a service that was never told runs this daemon from: the installed CLI, on no port it knows. */
@@ -297,6 +308,9 @@ export const LONG_ANSWERS: Readonly<Record<string, Readonly<Record<string, numbe
 
 /** The orchestrator (services/orchestrator.ts): its projects, for the apps and for the agents it runs. */
 export const ORCHESTRATOR_REQUESTS = ['orchestrator'] as const
+/** Tab collaboration and teams (services/collaboration.ts): the teams' own requests, from the apps, from `harness team`
+ *  in an agent's shell and from the other machines' teams. */
+export const TEAMS_REQUESTS = ['team', 'team_delivery'] as const
 
 /**
  * The experiments: services that cost nothing until they are on (docs/design/2026-10-06-core-boundary-next.md,
@@ -313,6 +327,9 @@ export const ORCHESTRATOR_REQUESTS = ['orchestrator'] as const
  */
 export const EXPERIMENTS: Readonly<Record<string, { requests: readonly string[]; state: readonly string[] }>> = {
   orchestrator: { requests: ORCHESTRATOR_REQUESTS, state: ['orchestrator/*.json'] },
+  // Tab collaboration and teams, beside the prompt scopes in the teams' process (harnessd/services.ts). Its
+  // ledgers and mailboxes: a team was made here, or another machine's team delivered to an agent here.
+  collaboration: { requests: TEAMS_REQUESTS, state: ['teams'] },
 }
 
 /** What an agent is to the orchestrator's projects: a specialist (`worker`), or a project's Director, and
@@ -451,18 +468,23 @@ export interface WorkspacesPort {
 /** What the core gets when workspaces fails: branches keep their names and nothing is swept. */
 export const WORKSPACES_FALLBACKS: PortFallbacks<WorkspacesPort> = { nameBranches: undefined, sweepUnused: undefined }
 
-/** The core's calls into the teams: which team a prompt belongs to, recorded as a message is written,
- *  as a turn starts (from its hook or its transcript), as it is typed into a scoped terminal, and
- *  forgotten with its agent. */
-export type TeamsPort = Pick<SwarmPromptScopes, 'prepare' | 'started' | 'raw' | 'forget'>
+/** The prompt scopes whole: the core's calls, which team a prompt belongs to, recorded as a message is
+ *  written, as a turn starts (from its hook or its transcript), as it is typed into a scoped terminal, and
+ *  forgotten with its agent; and the team a prompt came from (`current`), which an agent's answer to a
+ *  team's question moves back (`replied`). In the core's process the teams service's own; in their own,
+ *  core/teamsLink.ts. */
+export type PromptScopes = Pick<SwarmPromptScopes, 'prepare' | 'started' | 'raw' | 'forget' | 'current' | 'replied'>
 
-/** What the core gets when the teams fail: the prompt is written with no team recorded for it. */
-export const TEAMS_FALLBACKS: PortFallbacks<TeamsPort> = { prepare: () => {}, started: undefined, raw: undefined, forget: undefined }
+/** The core's calls into the teams: the prompt scopes' records, and whether a team's delivery still holds
+ *  the agent's pane, asked in line as its turn is written (core/input.ts). */
+export type TeamsPort = Pick<PromptScopes, 'prepare' | 'started' | 'raw' | 'forget'> & {
+  canWrite(deliveryId: string): boolean
+}
 
-/** The prompt scopes whole, as the socket's team features hold them: the core's calls (`TeamsPort`),
- *  and the team a prompt came from (`current`), which an agent's answer to a team's question moves
- *  back (`replied`). In the core's process the socket's own; in their own, core/teamsLink.ts. */
-export type PromptScopes = TeamsPort & Pick<SwarmPromptScopes, 'current' | 'replied'>
+/** What the core gets when the teams fail: the prompt is written with no team recorded for it, and a team's
+ *  delivery holds no pane (it waits, unwritten). */
+export const TEAMS_FALLBACKS: PortFallbacks<TeamsPort> = { prepare: () => {}, started: undefined, raw: undefined, forget: undefined, canWrite: false }
+
 
 /** A change to the prompt scopes, as the core tells the teams' own process (core/teamsLink.ts,
  *  services/teamsProcess.ts): numbered within one core's life, stamped with when it happened, and
@@ -845,6 +867,8 @@ export interface CoreApiDeps {
   lane: CoreApi['account']['lane']
   privateGridName: CoreApi['account']['privateGridName']
   machineName: CoreApi['account']['machineName']
+  backend: CoreApi['account']['backend']
+  onNotice: CoreApi['account']['onNotice']
   create: CoreApi['agents']['create']
   dsh: CoreApi['agents']['dsh']
   windows: CoreApi['clients']['windows']
@@ -858,7 +882,7 @@ export interface CoreApiDeps {
 
 export function createCoreApi({
   dataDir, registry, stoppedAgents, databaseHistory, externalSessions, openSessions, syncSession, runtimeModels, viewerChanged,
-  gridNamed, gridModelsChanged, dshInstallStatus, mintGridName, accessToken, lane, privateGridName, machineName,
+  gridNamed, gridModelsChanged, dshInstallStatus, mintGridName, accessToken, lane, privateGridName, machineName, backend, onNotice,
   runtimeProfile, setRuntime, fork, create, dsh, windows, daemon, turns, questions, terminals = TERMINALS_OFF,
 }: CoreApiDeps): CoreApi {
   return {
@@ -884,7 +908,7 @@ export function createCoreApi({
     questions,
     transcripts: { databaseHistory },
     external: { sessions: externalSessions, open: openSessions },
-    account: { mintGridName, accessToken, lane, privateGridName, machineName },
+    account: { mintGridName, accessToken, lane, privateGridName, machineName, backend, onNotice },
     clients: { viewerChanged, gridNamed, gridModelsChanged, dshInstallStatus, windows },
     daemon,
   }
