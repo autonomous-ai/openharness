@@ -25,7 +25,8 @@ For Codex: `CodexNormalizer` (live and replay), `lastCodexTurnText`, `codexTaskB
 |---|---|---|---|---|
 | 1 | Codex 0.160 | `function_call_output` of `spawn_agent` is `{"task_name":"/root/<name>"}`; the child is named by `event_msg/item_completed/SubAgentActivity` (`started`, `completed`) | Every sub-agent Codex started closed at once as a failed Task, with `{"task_name":…}` as its output, live and in the history. Its work and result never showed. | this PR: the spawn's child comes from the `started` activity (or the path), the Task closes on `completed`, and its result is the child's report (`response_item/agent_message`, `Payload:`) |
 | 2 | Claude | `attachment/queued_command` with `commandMode: "task-notification"`: a background sub-agent's `<task-notification>` handed back into a turn still running | That sub-agent never finished: its row stayed running on the dial, and the parent's recap was held until the backstop gave up on it. This is the more common delivery (about 800, against 370 as user records). | this PR: `taskNotificationEvent` reads the attachment as well as the user record |
-| 3 | Claude | `user` (isMeta) `"Stop hook feedback:…"`, then `attachment/goal_status` `{met:false}` (the `/goal` loop) or `attachment/hook_blocking_error` (a Stop hook that blocks); Claude continues in the same turn | The turn closed at the iteration's `end_turn`. The continuation ran with no turn open: no `turn_started`, no `turn_ended`, no recap, and the agent read idle again after each 30 s lease. | separate PR, branch `fidelity-claude-goal` |
+| 3 | Claude | `user` (isMeta) `"Stop hook feedback:…"`, then `attachment/goal_status` `{met:false}` (the `/goal` loop) or `attachment/hook_blocking_error` (a Stop hook that blocks); Claude continues in the same turn | The turn closed at the iteration's `end_turn`. The continuation ran with no turn open: no `turn_started`, no `turn_ended`, no recap, and the agent read idle again after each 30 s lease. | #863 |
+| 4 | Codex 0.160 | `item_completed/UserMessage` (and its `response_item/message`) wrapping `<send_user_message_question_reply>[{"answer","question","questionItemId"}]</…>`: the person's answer to `request_user_input_async`, a question that does not stop the turn | The wrapper and its JSON were the person's message, in the live turn, the history, the recap and search. | separate PR, branch `fidelity-codex-question-reply` |
 
 Moved engine homes (`CLAUDE_CONFIG_DIR`, `CODEX_HOME` from the login shell) are the same class of drift but not a record type. They are fixed on branch `fidelity-moved-homes`.
 
@@ -65,7 +66,7 @@ Moved engine homes (`CLAUDE_CONFIG_DIR`, `CODEX_HOME` from the login shell) are 
 | Record | Count | Verdict | Evidence |
 |---|---|---|---|
 | `event_msg/task_started`, `task_complete`, `turn_aborted` | 2,285 / 2,276 / 6 | handled | The turn lifecycle, `codexTaskBoundary`, and the turn error (`codexTaskError`) |
-| `event_msg/item_completed/UserMessage`, `AgentMessage` | 297 / 3,093 | handled | The 0.147+ TUI vocabulary (`USER_TURN_TYPES`, `AGENT_TEXT_TYPES`). A message typed mid-task (75 measured) opens a new turn card while Codex keeps working. That is long-standing behaviour, not drift. |
+| `event_msg/item_completed/UserMessage`, `AgentMessage` | 297 / 3,093 | handled, except **GAP 4** | The 0.147+ TUI vocabulary (`USER_TURN_TYPES`, `AGENT_TEXT_TYPES`). A message typed mid-task (75 measured) opens a new turn card while Codex keeps working. That is long-standing behaviour, not drift. A `UserMessage` can be the answer to an async question, wrapped (gap 4). |
 | `event_msg/token_count` | 7,723 | handled | Token usage and context (`agentTokenUsage.ts`) |
 | `token_usage_record` | 7,415 | irrelevant | The same usage, written beside each `token_count`. |
 | `event_msg/thread_settings_applied`, `turn_context` | 2,377 / 2,375 | handled | The model controller's model and effort |
@@ -85,4 +86,4 @@ Moved engine homes (`CLAUDE_CONFIG_DIR`, `CODEX_HOME` from the login shell) are 
 ## Not record types, noted on the way
 
 - `runtimeProfile.ts` `readCodexCache` and `sessionTitle.ts` `codexThreadName` fall back to the daemon's own `CODEX_HOME`. This is the moved-homes class, and it is left to that branch.
-- `request_user_input_async` (11 calls) is Codex 0.160's question tool beside `request_user_input`. Its card is the plain tool name, as before. Questions are read from the pane, which this audit does not cover.
+- `request_user_input_async` (11 calls) is Codex 0.160's question tool beside `request_user_input`. It returns `{"accepted":true}` at once, and the answer arrives later as a user message (gap 4). Its card is the plain tool name, as before. The question itself is read from the pane, and how 0.160 draws this one was not recorded, so this audit does not cover it.
