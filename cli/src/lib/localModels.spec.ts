@@ -1509,6 +1509,8 @@ describe('models other apps downloaded, started in their own app', () => {
     expect((await models.list('home', true)).models.filter(m => m.app && m.app !== 'Grid').map(m => m.id)).toEqual([ollama.id])
     expect(scans).toBe(2)
     release()
+    // QA's coverage CI let the receipt finish before the next forced read; make that ordering explicit.
+    await models.settled()
     await vi.waitFor(async () => expect((await models.list('home', true)).models.some(m => m.id === studio.id)).toBe(true))
   })
 
