@@ -223,10 +223,18 @@ def verify_runtime(root, payload):
             raise Error('A frozen runtime file changed: ' + name)
 
 
+def label_files(root, *paths):
+    # restorecon can silently do nothing when the installer kernel has SELinux
+    # disabled. setfiles explicitly labels an offline filesystem with the
+    # installed policy, regardless of the installer's enforcement mode.
+    run('chroot', root, '/usr/sbin/setfiles', '-F', '-e', '/boot/efi',
+        '/etc/selinux/targeted/contexts/files/file_contexts', *paths, timeout=90)
+
+
 def build_boot(root, configs):
     for name, content in configs.items():
         atomic(checked(root, name), content.encode(), 0o600 if name == 'etc/crypttab' else 0o644)
-    run('chroot', root, 'restorecon', '-F', *('/' + name for name in configs))
+    label_files(root, *('/' + name for name in configs))
     run('chroot', root, 'grubby', '--update-kernel=ALL', '--remove-args=root rd.luks.uuid rd.luks.name',
         '--args=' + configs['etc/kernel/cmdline'].strip())
     run('chroot', root, 'grub2-mkconfig', '-o', '/boot/grub2/grub.cfg')
@@ -245,6 +253,7 @@ def build_boot(root, configs):
                   if line.startswith('options ')), '').split()) for p in entries):
         raise Error('The kernel boot entries do not select the installed root.')
     names += [str(p.relative_to(root)) for p in entries]
+    label_files(root, '/boot')
     run('sync', '-f', root / 'boot')
     run('sync', '-f', root)
     return {name: snapshot(root, name) for name in names}
@@ -302,7 +311,9 @@ def finish(plan_path, payload, password, *, progress=None):
                 if state['phase'] == 'boot':
                     with offline(root):
                         run('chroot', root, '/usr/bin/python3', '-c', ACCOUNT, 'configure', secret=password.encode(), timeout=90)
-                        run('chroot', root, 'restorecon', '-RF', '/etc', '/var/lib/harness-os', '/home/me')
+                        label_files(root, '/etc', '/var/lib/harness-os', '/home')
+                        run('chroot', root, '/usr/sbin/matchpathcon', '-V', '/etc/passwd', '/etc/shadow',
+                            '/etc/group', '/etc/gshadow', '/etc/greetd/harness.toml', '/home', '/home/me')
                     run('sync', '-f', root)
                     state['phase'] = 'account'
                     storage.save_state(state_path, state)

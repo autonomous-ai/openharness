@@ -196,7 +196,9 @@ existing first-boot helper and Fedora account tools. This runs in an offline chr
 with private runtime mounts; it cannot contact the installer's systemd or D-Bus.
 Normal account, login-policy and rollback checks still apply. Root remains locked,
 and the installed system does not ask for a second account password at first boot.
-No frozen RPM or first-boot helper file is changed.
+The installed SELinux policy labels new files explicitly with `setfiles`, including
+when the maintenance kernel has SELinux disabled; account and login labels are
+verified before activation. No frozen RPM or first-boot helper file is changed.
 
 A durable EFI receipt separates boot preparation, account enrollment and activation.
 Retry resumes those stages, verifies completed files and never resets the account

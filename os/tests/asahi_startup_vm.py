@@ -47,6 +47,8 @@ assert '/dev/vda6' in run('cryptsetup','status','harness-root')
 assert run('findmnt','-no','SOURCE','/boot')=='/dev/vda5'
 assert run('findmnt','-no','SOURCE','/boot/efi')=='/dev/vda2'
 assert run('systemctl','--failed','--no-pager','--no-legend')==''
+subprocess.run(['matchpathcon','-V','/etc/passwd','/etc/shadow','/etc/group','/etc/gshadow',
+ '/etc/greetd/harness.toml','/home','/home/me'],check=True)
 record={'kernel':run('uname','-r'),'root':run('findmnt','-no','SOURCE','/'),
  'selinux':run('getenforce'),'failed_units':[],
  'journal':run('journalctl','-b','--no-pager','-o','cat','-u','systemd-cryptsetup@harness\\\\x2droot.service')}
