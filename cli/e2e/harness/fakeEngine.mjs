@@ -171,6 +171,17 @@ export async function run(engine, config = {}, { native = false } = {}) {
   process.stdin.setRawMode?.(true)
   // Slow to start, as an engine is on its first run after an update: the process is there and holds
   // the terminal, and nothing is drawn, announced or read until it is ready.
+  // October 6 sibling-conversation incident: hold startup before this process has a transcript, while
+  // another process in the same folder writes its own. Only the disposable fixture can release it.
+  if (config.startupGate) {
+    if (!within(config.root, config.startupGate)) throw new Error('startup gate outside its throwaway home')
+    writeFileSync(`${config.startupGate}.waiting`, String(process.pid))
+    const deadline = performance.now() + 60_000
+    while (!existsSync(`${config.startupGate}.release`)) {
+      if (performance.now() > deadline) throw new Error('startup gate was not released')
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+  }
   if (config.startDelayMs) await new Promise((resolve) => setTimeout(resolve, config.startDelayMs))
   // A newer release out (`updateAvailable`): Codex 0.160 asks first, before its session starts
   // (update_prompt.rs, snapshot `update_prompt_modal`). It drops a paste; Enter takes the highlighted row,

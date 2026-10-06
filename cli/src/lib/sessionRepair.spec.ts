@@ -499,6 +499,19 @@ describe('session repair — Codex profiles', () => {
 })
 
 describe('session repair — a Codex process names its own rollout', () => {
+  it('does not give a starting process the only sibling rollout before its own file opens', async () => {
+    const profile = tempRoot()
+    const sibling = 'a1b2c3d4-1111-4a4a-8a8a-000000000009'
+    writeCodexRollout(profile, sibling, CWD, Date.now())
+    vi.resetModules()
+    const { codexProcessSession, findLiveSession } = await import('./sessionRepair.js')
+    // October 6 full E2E: two Codex processes start together, but only one has written
+    // its rollout yet. This process holds neither: a directory match is not ownership.
+    await expect(codexProcessSession(process.pid, join(profile, 'sessions'), CWD)).resolves.toBeNull()
+    await expect(findLiveSession('codex', CWD, Date.now() - 1_000,
+      { codexHome: profile, bornOnly: true, pid: process.pid })).resolves.toBeNull()
+  })
+
   it('names a fork among its siblings by the rollout its process holds open, where a scan must refuse', async () => {
     const profile = tempRoot()
     const fork = 'a1b2c3d4-1111-4a4a-8a8a-000000000003'
