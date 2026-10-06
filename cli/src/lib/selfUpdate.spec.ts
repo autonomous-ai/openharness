@@ -695,6 +695,8 @@ describe('a build that fails on its own merits (e2e/updateHostile.e2e.ts)', () =
   it.each([
     ['whose bytes do not match its manifest', (state: { cli: Buffer; named?: string }) => { state.named = sha(Buffer.from('other bytes')) }, 'does not match its manifest (sha256 mismatch'],
     ['that fails its canary', (state: { cli: Buffer; named?: string }) => { state.cli = Buffer.from('process.exit(3)\n') }, 'failed its canary (exit 3)'],
+    // Found by QA on a quiet machine: a canary can finish after the test's fixed 55 ms wait.
+    ['that fails its delayed canary', (state: { cli: Buffer; named?: string }) => { state.cli = Buffer.from('setTimeout(() => process.exit(3), 150)\n') }, 'failed its canary (exit 3)'],
     ['that says it is another version', (state: { cli: Buffer; named?: string }) => { state.cli = Buffer.from('console.log("9.9.8")\n') }, 'failed its canary (it says it is 9.9.8)'],
   ])('is not downloaded again at every check: a build %s waits two intervals, then four, eight, …', async (_, breakIt, why) => {
     const state = { cli: Buffer.from('console.log("9.9.9")\n'), named: undefined as string | undefined, downloads: 0 }
