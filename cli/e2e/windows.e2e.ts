@@ -384,6 +384,35 @@ describe('many windows at once', () => {
     for (const window of [desk, phone, tui]) window.close()
   }, 300_000)
 
+  it('a watcher that leaves immediately never detaches the window driving the terminal', async () => {
+    // Found by QA on a quiet machine: closing a watcher before its control client attached sent an
+    // untargeted detach-client, which could pick the persistent controller. Exercise the real close
+    // boundary repeatedly, without waiting for a watcher's keyframe or its attach acknowledgement.
+    const d = await fresh()
+    const desk = await LocalClient.connect(d)
+    const agent = await create(d, desk, 'claude', 'immediate-watchers')
+    const driving = await openTerminal(desk, agent.id)
+    expect(driving.type, JSON.stringify(driving)).toBe('terminal_ready')
+    const streamId = String(driving.payload?.streamId)
+    const stopBeating = keepAlive(desk, streamId)
+    try {
+      for (let round = 0; round < 40; round++) {
+        const watcher = await LocalClient.connect(d)
+        try {
+          const opened = await openTerminal(watcher, agent.id, { takeover: false })
+          expect(opened.type, JSON.stringify(opened)).toBe('terminal_ready')
+          expect(opened.payload?.readOnly).toBe(true)
+        } finally { watcher.close() }
+      }
+      await until('only the persistent controller to remain', async () => (await attached(d, agent.tmuxPane)) === 1 || null, 15_000, 100)
+      expect(desk.frames.filter((frame) => frame.type === 'terminal_closed')).toEqual([])
+      const from = desk.frames.length
+      typeInto(desk, streamId, 'the controller survived immediate watchers\r')
+      await desk.waitFor(startedWith(agent.id, 'the controller survived immediate watchers'), 45_000, 'the surviving controller turn', from)
+      await endOf(desk, agent.id, 'the controller survived immediate watchers')
+    } finally { stopBeating(); desk.close() }
+  })
+
   it('windows that open a terminal and go, round after round: no tmux client is left behind, and the window driving it keeps it', async () => {
     const d = await fresh()
     const desk = await LocalClient.connect(d)
