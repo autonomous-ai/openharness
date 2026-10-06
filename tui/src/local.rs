@@ -183,6 +183,12 @@ impl Shell {
         // an immediate `stty size` sees that size, keeping one PID across the bootstrap.
         args.extend(["/bin/sh".into(), "-c".into(), "kill -STOP $$; exec \"$@\"".into(), "hn-local-shell".into()]);
         if let Some(command) = payload["command"].as_str() { args.extend([shell.clone(), "-c".into(), command.into()]); }
+        else if let Some(argv) = payload["argv"].as_array() {
+            let argv = argv.iter().map(|arg| arg.as_str().map(str::to_string)).collect::<Option<Vec<_>>>()
+                .filter(|argv| !argv.is_empty() && !argv[0].is_empty() && argv.iter().all(|arg| !arg.contains('\0')))
+                .ok_or_else(|| io::Error::other("Invalid shell arguments."))?;
+            args.extend(argv);
+        }
         else { args.extend([shell.clone(), "-l".into(), "-i".into()]); }
         let options = tty::Options { shell: Some(tty::Shell::new("/usr/bin/env".into(), args)), working_directory: Some(cwd.clone()), env, drain_on_exit: true };
         let pty = tty::new(&options, winsize(80, 24), 0)?;
@@ -383,6 +389,7 @@ pub async fn run(_port: u16) -> io::Result<()> {
                     }
                     if !clients.get(&client).is_some_and(|c| c.selected) { continue }
                     match ty {
+                        "shell_context_reply" => reply(&mut clients, client, "shell_context_reply_result", &p, json!({"ok":crate::shell_context::local_reply(&p)})),
                         "agents_list" => reply(&mut clients, client, "agents_list_result", &p, json!({"agents":shells.values().filter(|s| !s.ended || p["includeStopped"].as_bool() == Some(true)).map(|s| s.agent.clone()).collect::<Vec<_>>()})),
                         "agent_create" => {
                             if p["engine"].as_str() != Some("terminal") { error(&mut clients, client, ty, &p, "DAEMON_UNREACHABLE", "start the Harness daemon to create an agent"); continue }

@@ -10,7 +10,7 @@
 import { join } from 'node:path'
 import type { CoreApi, CorePorts, ServiceRequests } from '../core/api.js'
 import { SessionSearchIndex, folderWords, type SearchSource } from '../lib/sessionSearch/indexer.js'
-import { SessionSearchStore, SESSION_SEARCH_FILE } from '../lib/sessionSearch/store.js'
+import { SESSION_SEARCH_FILE, SessionSearchStore, type ExternalHit } from '../lib/sessionSearch/store.js'
 
 /** The requests search answers for the apps, declared in core/api.ts for the core to route. */
 export { SEARCH_REQUESTS } from '../core/api.js'
@@ -28,7 +28,12 @@ export function searchRequests(index: Pick<SessionSearchIndex, 'search' | 'tail'
     // searches the same window.
     session_search: (payload) => {
       const query = typeof payload.query === 'string' ? payload.query.slice(0, 500) : ''
-      return { ...index.search(query, { limit: number(payload.limit), from: number(payload.from), to: number(payload.to) }) }
+      const catalogAfter = typeof payload.catalogAfter === 'string' && payload.catalogAfter.length <= 256
+        ? payload.catalogAfter : undefined
+      return { ...(catalogAfter !== undefined ? { catalog: true } : {}), ...index.search(query, {
+        limit: number(payload.limit), from: number(payload.from), to: number(payload.to),
+        ...(catalogAfter !== undefined ? { catalogAfter } : {}),
+      }) }
     },
     // A session's latest rows, newest last; `beforeTurn` pages up from the first row the client has.
     // The same index as `session_search`, so it reads no transcript for a preview.
@@ -57,6 +62,13 @@ function openIndex(core: CoreApi): SessionSearchIndex | null {
     }
     const index = new SessionSearchIndex({
       store,
+      catalogMetadata: () => {
+        const entries = new Map<string, ExternalHit>(core.external.sessions.list().flatMap(s =>
+          [s.sessionId, ...(s.aliases ?? [])].map(id => [id, { title: s.title, cwd: s.cwd, origin: s.origin }] as const)))
+        for (const s of core.agents.all()) if (s.sessionId) entries.set(s.sessionId,
+          { title: s.title || core.agents.displayName(s), cwd: s.cwd || '', origin: 'harness' })
+        return entries
+      },
       sources: () => {
         const own = core.agents.all()
         const sources = own.flatMap((s): SearchSource[] => {
