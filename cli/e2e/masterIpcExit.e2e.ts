@@ -79,7 +79,12 @@ if (process.argv[2] === '__run' && process.env.HARNESSD_RESTARTS === '0') {
     if (paused) { try { process.kill(paused, 'SIGCONT') } catch { /* already gone */ } }
     // The deliberately disconnected first core is ours even if a broken master replaced it early.
     writeFileSync(file('exit'), '')
-    if (firstCore) await until('the first core to exit', () => !IsolatedDaemon.alive(firstCore), 10_000).catch(() => { try { process.kill(firstCore!, 'SIGKILL') } catch { /* gone */ } })
+    if (firstCore) await until('the first core to exit', () => !IsolatedDaemon.alive(firstCore), 10_000).catch(() => {
+      try {
+        const command = execFileSync('ps', ['-o', 'command=', '-p', String(firstCore)], { encoding: 'utf8' })
+        if (command.includes(options.scriptPath!) && command.includes('__run')) process.kill(firstCore!, 'SIGKILL')
+      } catch { /* gone */ }
+    })
     await daemon.close()
   }
 })
