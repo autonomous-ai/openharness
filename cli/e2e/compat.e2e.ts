@@ -215,12 +215,14 @@ async function scenario(d: IsolatedDaemon): Promise<Answers> {
     await ask(`agent_recent ${engine}`, 'agent_recent', { agentId: agent[engine] })
     await ask(`terminal_info ${engine}`, 'terminal_info', { agentId: agent[engine] })
     await ask(`agent_read_file ${engine}`, 'agent_read_file', { agentId: agent[engine], path: 'README.md' })
+    await ask(`git_pull_request ${engine}`, 'git_pull_request', { agentId: agent[engine] })
   }
   await ask('models_list', 'models_list')
   await ask('git_project_info', 'git_project_info', { path: cwd('claude') })
   await ask('fs_list_dir', 'fs_list_dir', { path: d.projectsDir })
   await ask('project_preview', 'project_preview', { path: cwd('claude') })
   await ask('codex_profiles_list', 'codex_profiles_list')
+  await ask('api_connections', 'api_connections', { action: 'list' })
   await ask('claude_login_status', 'claude_login_status')
   await ask('agents_cleanup_preview', 'agents_cleanup_preview')
   await ask('harness_devices_list', 'harness_devices_list')
@@ -233,7 +235,9 @@ async function scenario(d: IsolatedDaemon): Promise<Answers> {
   const malformed = ['session_get', 'sessions_list', 'agent_recent', 'terminal_info', 'agent_read_file', 'agent_update', 'agent_fork',
     'agent_restart', 'agent_delete', 'agent_resume', 'agent_purge', 'agent_retarget', 'agent_close', 'cancel', 'question_response',
     'git_project_info', 'fs_list_dir', 'project_preview', 'session_tail', 'dsh_remove', 'dsh_install', 'dsh_update', 'theme_set',
-    'agent_create', 'agent_create_status', 'agent_handoff_prepare', 'agent_worktree_delete', 'message']
+    'agent_create', 'agent_create_status', 'agent_handoff_prepare', 'agent_worktree_delete', 'message',
+    // Moved out of the socket's switch into services (docs/design/2026-10-06-core-boundary-next.md, step 4).
+    'git_pull_request', 'codex_profile_link', 'api_connections']
   for (const type of malformed) {
     // `cancel` and `message` are fire-and-forget: no build answers them, so waiting a minute shows nothing more.
     const ms = type === 'cancel' || type === 'message' ? 5_000 : 60_000
