@@ -48,6 +48,15 @@ static const ht_pro_bitmap_t *decode(cache_t *cache,const pro_art_frame_t *asset
         size_t got=tinfl_decompress_mem_to_mem(cache->memory,cache->capacity,
             pro_art_start+asset->offset,asset->length,TINFL_FLAG_PARSE_ZLIB_HEADER);
         assert(got==asset->raw_length);
+        if (asset->base_length) {
+            assert(asset->base_offset<=pack_size && asset->base_length<=pack_size-asset->base_offset);
+            assert(asset->raw_length*2<=cache->capacity);
+            uint8_t *base=cache->memory+asset->raw_length;
+            got=tinfl_decompress_mem_to_mem(base,asset->raw_length,
+                pro_art_start+asset->base_offset,asset->base_length,TINFL_FLAG_PARSE_ZLIB_HEADER);
+            assert(got==asset->raw_length);
+            for (size_t i=0;i<asset->raw_length;i++) cache->memory[i]^=base[i];
+        }
     }
     cache->asset=asset;
     cache->bitmap=(ht_pro_bitmap_t){.pixels=(const uint16_t*)cache->memory,

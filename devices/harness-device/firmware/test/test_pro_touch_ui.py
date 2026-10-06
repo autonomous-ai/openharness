@@ -263,6 +263,10 @@ void pro_visual_background(ht_scene_t *f, pro_scene_id_t choice, ht_character_id
     (void)choice; (void)id;
     ht_pro_rect(f,0,0,720,720,0,ht_rgb(0xd9e8cf));
 }
+void pro_living_image(ht_scene_t *f,unsigned character,unsigned mood,unsigned frame,int x,int y,unsigned size) {
+    (void)character;(void)mood;(void)frame;
+    ht_pro_rect(f,x,y,(int)size,(int)size,0,ht_rgb(0x9974af));
+}
 void pro_visual_character(ht_scene_t *f, const ht_character_t *c, ht_character_mood_t mood,
                           bool compact, int x, int y, uint32_t at, bool quiet, bool mail) {
     (void)at; (void)quiet; (void)mail;
@@ -277,6 +281,7 @@ code += function("pro_hit", controls) + function("pro_control", controls) + func
 code += function("pro_voice_samples", controls) + function("pro_voice_params", controls) + function("pro_launcher", controls) + function("pro_row", controls) + function("pro_language", controls)
 code += function("pro_note", controls) + function("pro_today", controls) + function("pro_selection", controls)
 code += function("pro_read_text", controls) + function("pro_unknown_answer", controls) + function("pro_reader", controls)
+code += (NATIVE / "pro_living_controls.inc").read_text()
 code += (NATIVE / "pro_home.inc").read_text()
 code += function("render_lock") + function("render_brand")
 code += r'''
@@ -496,6 +501,7 @@ static void render_actual(void) {
     else if (s.view==OTA) render_brand(&scene);
     else if (pro_appearance_view()) pro_appearance(&scene);
     else if (s.view==TODAY) pro_today(&scene);
+    else if (s.view==LIVING) pro_living_review(&scene);
     else if (s.view==READER) pro_reader(&scene);
     else if (question_view(s.view) && s.q.pending && s.q.uncertain) pro_unknown_answer(&scene);
     else if (s.view==VOICE) pro_render_voice(&scene); else pro_render_home(&scene);
@@ -1378,6 +1384,23 @@ static void appearance_interrupted(void) {
         assert(character.id==HT_CHARACTER_TIM&&s.scene_choice==PRO_SCENE_MATCH&&!queued&&!starts&&!switches);
     }
 }
+static void living_review_controls(void) {
+    reset();s.connected=false;s.view=LAUNCHER;s.hit_count=0;ht_scene_clear(&scene,BG);pro_launcher(&scene);
+    const hit_t *entry=action_hit(A_LIVING);assert(entry&&entry->enabled);
+    tap(entry->rect.x+30,entry->rect.y+30,80);assert(s.view==LIVING&&!queued);
+    for(unsigned c=0;c<PRO_LIVING_CHARACTERS;c++)for(unsigned m=0;m<PRO_LIVING_MOODS;m++) {
+        render_actual();tap(90+(int)c*224,130,80);assert(s.living_character==c);
+        render_actual();tap(90+(int)(m%3)*224,590+(int)(m/3)*64,80);assert(s.living_mood==m);
+        now=s.living_started+PRO_LIVING_STEP_MS;surface_tick(now);assert(s.living_frame==1);
+        assert(habitat_next_wake_ms()<=PRO_LIVING_STEP_MS);
+        render_actual();tap(610,50,80);assert(s.living_watch);render_actual();assert(s.hit_count==1);
+        tap(360,360,80);assert(!s.living_watch);
+        assert(!queued&&!starts&&!switches&&!moves);
+    }
+    s.living_started=UINT32_MAX-20;now=60;surface_tick(now);assert(s.living_frame==2);
+    s.locked=true;now+=120;surface_tick(now);assert(s.living_frame==2);s.locked=false;
+    render_actual();tap(80,50,80);assert(s.view==LAUNCHER&&!queued);
+}
 typedef void (*test_fn)(void);
 
 static void language_controls(void) {
@@ -1587,7 +1610,7 @@ int main(int argc,char **argv) {
         {"speech_playback_caption",speech_playback_caption},{"speech_touch_interrupts",speech_touch_interrupts},
         {"speech_context_cancellation",speech_context_cancellation},{"speech_error_and_emotions",speech_error_and_emotions},
         {"appearance_browse_is_local",appearance_browse_is_local},{"appearance_use_and_cancel",appearance_use_and_cancel},
-        {"appearance_scene_override",appearance_scene_override},{"appearance_interrupted",appearance_interrupted}
+        {"living_review_controls",living_review_controls},{"appearance_scene_override",appearance_scene_override},{"appearance_interrupted",appearance_interrupted}
     };
     for(unsigned i=0;i<sizeof tests/sizeof tests[0];i++)
         if(argc==1 || !strcmp(argv[1],tests[i].name)) { tests[i].run(); printf("PASS %s\n",tests[i].name); }

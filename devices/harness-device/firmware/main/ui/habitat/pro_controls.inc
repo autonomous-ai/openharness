@@ -95,6 +95,7 @@ static void pro_launcher(ht_scene_t *f)
     pro_control(f, 256, 132, 208, 70, PRO_TR("Voice"), A_VOICE_SAMPLES, 0, true);
     pro_control(f, 480, 132, 208, 70, PRO_TR("Language"), A_LANGUAGE, 0, true);
     static const struct { const char *title, *detail; action_kind_t action; } items[] = {
+        {"Characters", "Meet the living ones", A_LIVING},
         {"Panes", "Choose who to talk to", A_AGENTS},
         {"Tabs", "Change your workspace", A_TABS},
         {"Updates", "Read what came back", A_INBOX},
@@ -104,16 +105,16 @@ static void pro_launcher(ht_scene_t *f)
         {"Machines", "Reach another computer", A_MACHINES},
         {"Controls", "Make it yours", A_SETTINGS},
     };
-    for (int i = 0; i < 8; i++) {
-        int x = 32 + (i % 2) * 336, y = 218 + (i / 2) * 112;
-        bool enabled = items[i].action == A_INBOX || items[i].action == A_SETTINGS ||
+    for (int i = 0; i < 9; i++) {
+        int x = 32 + (i % 2) * 336, y = 218 + (i / 2) * 92;
+        bool enabled = items[i].action == A_LIVING || items[i].action == A_INBOX || items[i].action == A_SETTINGS ||
                        items[i].action == A_DAEMONS || items[i].action == A_SCENES ||
                        (s.connected && (items[i].action != A_READER || active()));
-        int hit = pro_hit(x, y, 320, 100, items[i].action, 0, enabled);
+        int hit = pro_hit(x, y, 320, 86, items[i].action, 0, enabled);
         bool pressed = hit >= 0 && hit == s.pressed;
-        ht_pro_rect(f, x, y, 320, 100, 28, pressed ? SEL : color(0xfcfbf4));
-        ht_pro_text(f, x + 22, y + 9, 276, &ht_pro_32, enabled ? FG : DIM, PRO_TR(items[i].title));
-        ht_pro_wrap(f, x + 22, y + 58, 276, 1, 0, &ht_pro_24, DIM, PRO_TR(items[i].detail));
+        ht_pro_rect(f, x, y, 320, 86, 28, pressed ? SEL : color(0xfcfbf4));
+        ht_pro_text(f, x + 22, y + 2, 276, &ht_pro_32, enabled ? FG : DIM, PRO_TR(items[i].title));
+        ht_pro_wrap(f, x + 22, y + 48, 276, 1, 0, &ht_pro_24, DIM, PRO_TR(items[i].detail));
     }
 }
 
@@ -941,10 +942,13 @@ static void pro_message(ht_scene_t *f)
     pro_control(f, 220, 606, 280, 68, PRO_TR("Home"), A_HOME, 0, true);
 }
 
+#include "pro_living_controls.inc"
+
 static bool pro_render_controls(ht_scene_t *f)
 {
     switch (s.view) {
     case LAUNCHER: pro_launcher(f); return true;
+    case LIVING: pro_living_review(f); return true;
     case WORK_INTENT: pro_work_intent(f); return true;
     case TODAY: pro_today(f); return true;
     case LANGUAGE: pro_language(f); return true;

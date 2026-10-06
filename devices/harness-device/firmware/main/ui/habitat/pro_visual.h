@@ -1,6 +1,7 @@
 #pragma once
 #include "pro_canvas.h"
 #include "pro_daemon.h"
+#include "pro_living.h"
 void pro_visual_init(void);
 // Only the renderer prepares pixels, after releasing the model lock and after
 // the previous DMA completes. Old scenes then serve damage comparison only.

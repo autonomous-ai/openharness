@@ -32,6 +32,7 @@ static unsigned visual_inits;
 static uint8_t config_load_habitat_character(uint8_t fallback) { return legacy==255?fallback:legacy; }
 static uint16_t config_load_pro_appearance(uint16_t fallback) { return stored?appearance:fallback; }
 void pro_visual_init(void) { visual_inits++; }
+void pro_living_init(void) {}
 static ht_character_id_t painted;
 void pro_visual_paint(ht_scene_t *scene, ht_character_id_t id, const ht_character_face_t *face,
                       uint8_t frame, ht_character_size_t size, int y) {

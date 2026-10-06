@@ -58,6 +58,12 @@ static void eager_pixels(const ht_scene_t *s){
         const pro_art_frame_t *frame=bitmap->asset;
         memory[i]=malloc(frame->raw_length);assert(memory[i]);uLongf got=frame->raw_length;
         assert(uncompress(memory[i],&got,pack_start+frame->offset,frame->length)==Z_OK&&got==frame->raw_length);
+        if(frame->base_length){
+            uint8_t *base=malloc(frame->raw_length);assert(base);uLongf n=frame->raw_length;
+            assert(uncompress(base,&n,pack_start+frame->base_offset,frame->base_length)==Z_OK&&n==frame->raw_length);
+            for(size_t j=0;j<n;j++)((uint8_t*)memory[i])[j]^=base[j];
+            free(base);
+        }
         bitmap->pixels=memory[i];bitmap->alpha=frame->alpha?(const uint8_t*)memory[i]+frame->width*frame->height*2:NULL;
         bitmap->asset=NULL;
     }

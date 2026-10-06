@@ -440,6 +440,7 @@ static void render_task(void *arg)
 #ifdef DEVICE_PRO_COMPANION
             // Decompress only on the renderer, after releasing the UI model.
             // Touch/voice state must never wait for an artwork cache miss.
+            pro_living_prepare(&scenes[front ^ 1]);
             pro_visual_prepare(&scenes[front ^ 1]);
 #endif
 #ifdef DEVICE_TIM_ILLUSTRATED

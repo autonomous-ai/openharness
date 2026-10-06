@@ -71,7 +71,7 @@ typedef enum {
     HOME,
 #ifdef DEVICE_PRO_COMPANION
     LAUNCHER, WORK_INTENT, TODAY, CARRY_PREVIEW,
-    DAEMONS, SCENES, VOICE_SAMPLES, VOICE_PARAMS, LANGUAGE,
+    DAEMONS, SCENES, VOICE_SAMPLES, VOICE_PARAMS, LANGUAGE, LIVING,
 #endif
     AGENTS,
     AGENT,
@@ -104,6 +104,7 @@ typedef enum {
     A_CARRY_PREVIEW, A_CARRY_CHOOSE, A_CARRY_TARGET, A_CARRY_OPEN,
     A_QUESTION_CLOSE, A_DRAFT_STORE,
     A_LANGUAGE, A_LANGUAGE_SET,
+    A_LIVING, A_LIVING_CHARACTER, A_LIVING_MOOD, A_LIVING_WATCH,
     A_DAEMONS, A_SCENES, A_APPEAR_PREVIOUS, A_APPEAR_NEXT, A_APPEAR_USE, A_APPEAR_SAVE,
     A_VOICE_SAMPLES, A_SAMPLE_PREVIOUS, A_SAMPLE_NEXT, A_SAMPLE_PLAY,
     A_SAMPLE_VOLUME, A_SAMPLE_PARAMS,
@@ -282,6 +283,9 @@ static EXT_RAM_BSS_ATTR struct {
         bool accepted;
     } send_feedback;
     ht_character_t preview_character;
+    uint8_t living_character, living_mood, living_frame;
+    uint32_t living_started;
+    bool living_watch;
     struct {
         uint32_t id, poll_due;
         char agent[ID_MAX], caption[240];
@@ -1497,6 +1501,10 @@ static void surface_tick(uint32_t now)
             s.sample_poll_due = now + 20;
         }
     }
+    if (s.view == LIVING && !s.locked && !display_is_asleep()) {
+        unsigned frame = pro_living_frame(now - s.living_started);
+        if (frame != s.living_frame) { s.living_frame = (uint8_t)frame; change(); }
+    }
     pro_speech_tick(now);
     if (pro_appearance_view() && !s.locked && !display_is_asleep()) {
         ht_character_tick(&s.preview_character, now, HT_CHARACTER_IDLE, s.quiet, true,
@@ -2508,6 +2516,7 @@ bool habitat_scene_take(ht_scene_t *f)
     case VOICE_SAMPLES:
     case VOICE_PARAMS:
     case LANGUAGE:
+    case LIVING:
         break; // Handled by the Pro controls sheet above.
 #endif
     case FORM:
@@ -3187,6 +3196,24 @@ static void dispatch(action_t a)
         change();
         break;
     }
+    case A_LIVING:
+        view(LIVING);
+        s.living_watch = false;
+        s.living_started = ms(); s.living_frame = 0;
+        break;
+    case A_LIVING_CHARACTER:
+        if (s.view != LIVING || a.value < 0 || a.value >= PRO_LIVING_CHARACTERS) break;
+        s.living_character = (uint8_t)a.value;
+        s.living_started = ms(); s.living_frame = 0; change();
+        break;
+    case A_LIVING_MOOD:
+        if (s.view != LIVING || a.value < 0 || a.value >= PRO_LIVING_MOODS) break;
+        s.living_mood = (uint8_t)a.value;
+        s.living_started = ms(); s.living_frame = 0; change();
+        break;
+    case A_LIVING_WATCH:
+        if (s.view == LIVING) { s.living_watch = !s.living_watch; change(); }
+        break;
     case A_DAEMONS:
         pro_appearance_open(DAEMONS);
         break;
@@ -4704,6 +4731,8 @@ uint32_t habitat_next_wake_ms(void)
         int32_t left = (int32_t)(s.sample_poll_due - now);
         delay = left > 0 ? (uint32_t)left : 1;
     }
+    if (!s.locked && !display_is_asleep() && s.view == LIVING)
+        delay = PRO_LIVING_STEP_MS - (now - s.living_started) % PRO_LIVING_STEP_MS;
     if (!s.locked && !display_is_asleep() && pro_appearance_view())
         delay = pro_visual_next_wake_ms(&s.preview_character, HT_CHARACTER_IDLE, now, s.quiet, false);
     if (!s.locked && !display_is_asleep() && (s.view == HOME || s.view == AGENT || s.view == VOICE)) {
@@ -4911,6 +4940,7 @@ void ui_init(void)
     unsigned scene = appearance >> 8;
     s.scene_choice = scene < PRO_SCENE_COUNT ? (pro_scene_id_t)scene : PRO_SCENE_MATCH;
     pro_visual_init();
+    pro_living_init();
 #endif
     ESP_LOGI("habitat", "character %s; shared moods and controls", ht_character_name(character.id));
     uint8_t options = config_load_habitat_options();

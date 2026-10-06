@@ -78,6 +78,10 @@ const char *ht_character_name(ht_character_id_t id) { return pro_daemon_definiti
 void pro_visual_background(ht_scene_t *f, pro_scene_id_t scene, ht_character_id_t id) {
     (void)scene; (void)id; ht_pro_rect(f,0,0,720,720,0,ht_rgb(0xf4f2e8));
 }
+void pro_living_image(ht_scene_t *f,unsigned character,unsigned mood,unsigned frame,int x,int y,unsigned size) {
+    (void)character;(void)mood;(void)frame;
+    ht_pro_rect(f,x,y,(int)size,(int)size,0,ht_rgb(0x9974af));
+}
 void pro_visual_character(ht_scene_t *f, const ht_character_t *c, ht_character_mood_t mood,
                           bool small, int x, int y, uint32_t now, bool quiet, bool mail) {
     (void)c;(void)mood;(void)now;(void)quiet;(void)mail;
@@ -311,6 +315,15 @@ int main(int argc,char **argv) {
     const char *dir=argc>1?argv[1]:NULL;
     map_checks(dir);
     reader_checks(dir);
+    for(int lang=0;lang<2;lang++)for(unsigned c=0;c<3;c++)for(unsigned m=0;m<6;m++){
+        reset(false);COPY(s.voice_language,lang?"vi":"en");s.view=LIVING;
+        s.living_character=c;s.living_mood=m;ht_scene_t scene;
+        ht_scene_clear(&scene,BG);assert(pro_render_controls(&scene));inspect(&scene,"living");
+        assert(action_count(A_LIVING_CHARACTER,true)==3&&action_count(A_LIVING_MOOD,true)==6);
+        assert(action_count(A_LIVING_WATCH,true)==2);
+        if(!c&&!m&&!lang)portrait(&scene,dir,"living-controls");
+    }
+
     for(int lang=0;lang<2;lang++)for(int stress=0;stress<2;stress++)for(int state=0;state<4;state++) {
         reset(stress);COPY(s.voice_language,lang?"vi":"en");
         carry=(ht_carry_t){.active=true,.rows=4,.id="carry-original",.source="Research",.excerpt="Keep the landscape quiet. Give the creature room to breathe, and let clear words lead when there is something to read."};

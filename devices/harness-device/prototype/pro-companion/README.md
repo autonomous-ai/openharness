@@ -300,7 +300,9 @@ daemon** is the default, choosing Meadow, Shore, Dusk or Paper from the registry
 A manual scene choice survives daemon changes and reboot. Quiet motion and a
 fifteen-minute rest remain in Companion controls.
 
-The ten-daemon pack is 5,696,650 bytes. Its renderer reserves six fixed active
+The ten-daemon pack uses lossless, independent XOR anchors for repeated layers.
+Its decoded pixels are unchanged; the renderer reserves two decode planes per
+role so anchors never form a chain. Its renderer reserves six fixed active
 layer caches totaling 1,634,004 bytes, independent of collection size. Identical
 layers reuse their decoded pixels. Decode/preparation and full render times
 are reported separately in the hardware heartbeat; host timing is not a device
@@ -417,12 +419,14 @@ Run the following from the repository root with Python 3, Pillow, NumPy and a
 native C compiler available. Font generation currently requires the macOS
 system Avenir Next collection at `/System/Library/Fonts/Avenir Next.ttc`.
 The scripts rasterize local outlines into four-bit alpha atlases; they do not
-copy the source font file. Artwork is code-authored geometry derived from the
-approved Field companion, not an external image-generation service.
+copy the source font file. The original daemon artwork is code-authored geometry derived from the
+approved Field companion. The living review gallery uses image-generated
+character poses, with source atlases and prompts in `assets/living`.
 
 ```sh
 python3 devices/harness-device/prototype/pro-companion/tools/generate_fonts.py
 python3 devices/harness-device/prototype/pro-companion/tools/generate_daemons.py
+python3 devices/harness-device/prototype/pro-companion/tools/generate_living.py
 python3 devices/harness-device/prototype/pro-companion/tools/preview.py --animate
 ```
 
@@ -575,3 +579,28 @@ cable event export. It replays real notification read receipts, empty unread
 snapshots, and question-close frames. Coverage includes 25/64-card navigation,
 72-row overflow, pinned old answers, changed hosts and stale taps. These are
 software replays, not physical touch or USB reliability measurements.
+
+
+## Living character animation review
+
+Hold the home creature to open **Menu → Characters**. Choose **Tim**, **Spirit**,
+or **Moss**, then **At ease**, **Listening**, **Thinking**, **Happy**, **Sleepy**,
+or **Surprised**. **Just watch** (or tapping the portrait) hides the controls;
+tap the glass to restore them. Back returns to Menu. Selection is local review
+state and does not change the saved daemon, send a voice request, or submit work.
+
+The device animates at a requested 25 frames per second, using a continuous
+integer body rig: breathing, head bends, independent ear/tentacle sway, happy
+bounce, sleepy breathing, and short eyelid gestures. Actual hardware frame rate
+depends on the display workload. The nine registered poses per character are
+packed at 320 px using a 192-color RGB565 palette on the gallery's fixed dark
+background. The original transparent atlases are retained. These are animated
+2D characters, not a 3D simulation. Normal and fullscreen views use 384/512 px
+portraits with bilinear subpixel movement and fixed renderer-owned caches; no per-frame heap allocation or
+image decoding occurs under the UI model lock.
+
+`test_pro_living.py` exercises all 18 combinations, blinks, the complete loop,
+cache switching, fullscreen output, and exact full/partial repaint parity under
+sanitizers. Set `PRO_LIVING_PREVIEW_DIR` to an existing directory to export real
+renderer frames. `test_pro_touch_ui.py` exercises menu entry, all character/mood
+controls, fullscreen return, time wrap, lock gating, and absence of host actions.
