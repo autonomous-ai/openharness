@@ -55,7 +55,7 @@ class FedoraPayload(unittest.TestCase):
         self.assertEqual((destination / 'usr/lib/harness/harness-tui').read_bytes(),
                          (self.runtime / 'harness-tui').read_bytes())
         session = (destination / 'usr/lib/harness-os/session').read_text()
-        self.assertIn('if labwc -C ', session)
+        self.assertIn('\nlabwc -C ', session)
         self.assertNotIn('/usr/lib/harness-os/labwc -C', session)
         self.assertNotIn('usr/lib/harness-os/labwc', result['files'])
 
@@ -76,6 +76,9 @@ class FedoraPayload(unittest.TestCase):
         self.assertIn('W-u', (destination / 'usr/share/harness-os/labwc/rc.xml').read_text())
         self.assertNotIn('W-i', (destination / 'usr/share/harness-os/labwc/rc.xml').read_text())
         self.assertNotIn('harness-install', (destination / 'usr/lib/systemd/user/harness-os.target').read_text())
+        self.assertEqual((destination / 'usr/lib/systemd/user/harness-os.target').read_text(),
+                         (ROOT / 'os/root/usr/lib/systemd/user/harness-os.target').read_text()
+                         .replace(' harness-install.service', '').replace(' harness-gpu-check.timer', ''))
         guide = (destination / 'usr/share/harness-os/AGENTS.md').read_text()
         self.assertIn('Fedora', guide)
         self.assertNotIn('sudo pacman', guide)

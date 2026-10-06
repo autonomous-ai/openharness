@@ -1,4 +1,5 @@
 [Unit]
 Description=The hn screen
+BindsTo=graphical-session.target
 Wants=hn-screen.service harness-install.service harness-idle.service harness-update.timer harness-gpu-check.timer
 After=graphical-session-pre.target
