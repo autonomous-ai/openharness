@@ -12,6 +12,7 @@ import time
 
 from footprint_vm import copy_file
 from hardware_update_vm import graceful_stop
+from session_vm import screen_text
 from test_t2_firmware import firmware, source_fixture
 from vm import VM, check_graphical_keyboard
 
@@ -98,6 +99,20 @@ def main():
         command_line = vm.read_file('/proc/cmdline').decode()
         assert set(lock['kernel_parameters']) <= set(command_line.split())
         record[label + '_boot_id'] = vm.read_file('/proc/sys/kernel/random/boot_id').decode().strip()
+        # This machine stays offline: first use legitimately presents Wi-Fi.
+        # Exercise the owner's normal terminal escape, without fabricating an
+        # onboarded marker or treating a running process as a visible workspace.
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            text = screen_text(vm, label + '-offline-first-use')
+            if 'me@harness' in re.sub(r'\s+', '', text):
+                break
+            if 'connect to wi-fi' in text:
+                vm.keys('meta_l', 't')
+                break
+            time.sleep(.5)
+        else:
+            raise TimeoutError('The installed offline workspace did not render.')
         record[label + '_keyboard'] = check_graphical_keyboard(vm, label)
         output, _ = vm.command('sudo -n lsinitcpio --list /boot/initramfs-linux-t2.img')
         (folder / (label + '-initramfs.txt')).write_text(output)
