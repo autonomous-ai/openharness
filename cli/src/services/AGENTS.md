@@ -23,7 +23,7 @@ let several people build features at once without touching the core or each othe
    off or failing: `undefined` for nothing, a value, or `FAIL` to answer that one request
    `SERVICE_UNAVAILABLE`. The core only ever calls the port, never the service. Most features need no
    port: only the apps call them.
-4. **Start it in `src/cli.ts` through the host, never directly:**
+4. **Start it in `src/core/main.ts` through the host, never directly:**
    `serviceHost.serve('<name>', start<Name>, coreApi, <NAME>_REQUESTS)` for a service with no port, or
    `serviceHost.start('<name>', start<Name>, coreApi, <NAME>_FALLBACKS, <NAME>_REQUESTS)` for one with a
    port. The host leaves a service off when its start throws, guards every call and request, and
