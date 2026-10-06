@@ -258,7 +258,7 @@ try:
         tm('send-keys','-t','test','-l','cd')
         # The temporary root name can also fuzzy-match "cd". The desired code
         # directory must rank first and open; the match count need not be one.
-        wait(lambda:finder_ready() and '> :cd ' in finder_text() and re.search(r'\b[1-9]\d*/\d+',finder_text()),'fuzzy folder search without full spelling')
+        wait(lambda:finder_ready() and '> :cd ' in finder_text() and '~/project ü %/code' in finder_text() and re.search(r'\b[1-9]\d*/\d+',finder_text()),'fuzzy folder search without full spelling')
         keys('Tab')
         wait(lambda:browsing(PROJECT/'code') and 'cool-project/' in finder_text() and 'client 日本/' in finder_text(),'Tab browses code')
         tm('send-keys','-t','test','-l','clpj')
