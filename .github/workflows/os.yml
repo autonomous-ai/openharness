@@ -51,7 +51,7 @@ on:
         required: false
         default: image
         type: choice
-        options: [image, browser, browser-suspend, session, recovery, essentials, network-recovery, hardware, zram, hardware-update, public-update]
+        options: [image, browser, browser-suspend, session, recovery, essentials, network-recovery, hardware, zram, hardware-update, public-update, lock-presentation]
       browser_memory:
         description: 'With checks=browser, diagnose memory in the UEFI VM only; retain ordinary workload and deadlines'
         required: false
@@ -70,8 +70,64 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  lock-presentation:
+    if: ${{ inputs.checks == 'lock-presentation' && inputs.image_run_id != '' && !inputs.publish_run_id && !inputs.development_update }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - name: Check the private compositor observer
+        run: |
+          python3 -m py_compile os/tests/build_lock_compositor.py os/tests/session_vm.py
+          go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/os.yml
+      - uses: actions/download-artifact@v6
+        with:
+          name: programmer-os-x86_64
+          path: os/dist
+          run-id: ${{ inputs.image_run_id }}
+          github-token: ${{ github.token }}
+      - name: Build only the pinned compositor correction
+        run: |
+          LOCK_SNAPSHOT=$(python3 -c 'import json; print(json.load(open("os/packaging/labwc/source.json"))["arch_snapshot"])')
+          docker run --rm -v "$PWD:/source" -w /source -e LOCK_SNAPSHOT="$LOCK_SNAPSHOT" \
+            archlinux:base-devel@sha256:51dd3d24f7fba779e7c471caeee7804c50e8c134ad948e19685a1c83a42facc3 \
+            bash -euc '
+              printf "Server = https://archive.archlinux.org/repos/%s/\$repo/os/\$arch\n" "$LOCK_SNAPSHOT" > /etc/pacman.d/mirrorlist
+              pacman -Syu --noconfirm --needed labwc meson cmocka wayland-protocols glib2-devel python
+              python3 os/tests/build_lock_compositor.py --output os/work/lock-compositor
+            '
+      - name: Prepare native VM tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils ovmf python3-pil tesseract-ocr
+          sudo chmod a+rw /dev/kvm
+      - name: Check the real encrypted UEFI lock transition and work preservation
+        run: >-
+          timeout 10m python3 os/tests/session_vm.py --iso os/dist/*.iso --firmware uefi
+          --compositor-file os/work/lock-compositor/labwc
+      - name: Check the real BIOS lock transition and work preservation
+        run: >-
+          timeout 10m python3 os/tests/session_vm.py --iso os/dist/*.iso --firmware bios
+          --compositor-file os/work/lock-compositor/labwc
+      - name: Retain the private correction and every completed check
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: harness-os-lock-presentation
+          path: |
+            os/work/lock-compositor/labwc
+            os/work/lock-compositor/manifest.json
+            os/work/lock-compositor/LICENSE
+            os/work/lock-compositor/build/meson-logs/*.txt
+            os/test-results/**/*.json
+            os/test-results/**/*.jsonl
+            os/test-results/**/*.png
+            os/test-results/**/*.txt
+            os/test-results/**/*.log
+          retention-days: 14
+
   image:
-    if: ${{ !inputs.image_run_id && !inputs.publish_run_id && !inputs.development_update && inputs.checks != 'zram' && inputs.checks != 'hardware-update' && inputs.checks != 'browser-suspend' && inputs.checks != 'public-update' && inputs.checks != 'network-recovery' }}
+    if: ${{ !inputs.image_run_id && !inputs.publish_run_id && !inputs.development_update && inputs.checks != 'zram' && inputs.checks != 'hardware-update' && inputs.checks != 'browser-suspend' && inputs.checks != 'public-update' && inputs.checks != 'network-recovery' && inputs.checks != 'lock-presentation' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 50
     steps:
@@ -159,7 +215,7 @@ jobs:
 
   machine:
     needs: image
-    if: ${{ always() && !inputs.publish_run_id && !inputs.development_update && inputs.checks != 'essentials' && inputs.checks != 'hardware' && inputs.checks != 'zram' && inputs.checks != 'hardware-update' && inputs.checks != 'public-update' && inputs.checks != 'network-recovery' && (needs.image.result == 'success' || inputs.image_run_id != '' || inputs.checks == 'browser-suspend') && !cancelled() }}
+    if: ${{ always() && !inputs.publish_run_id && !inputs.development_update && inputs.checks != 'essentials' && inputs.checks != 'hardware' && inputs.checks != 'zram' && inputs.checks != 'hardware-update' && inputs.checks != 'public-update' && inputs.checks != 'network-recovery' && inputs.checks != 'lock-presentation' && (needs.image.result == 'success' || inputs.image_run_id != '' || inputs.checks == 'browser-suspend') && !cancelled() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 65
     strategy:
