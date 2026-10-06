@@ -117,6 +117,9 @@ describe('codexProvider', () => {
       [D, 'codex-app', ''],
     ].sort())
     expect(found.find((s) => s.sessionId === C)).toMatchObject({ engine: 'codex', transcriptPath: live, mtime: Date.parse('2026-09-25T00:00:00Z') })
+    // An archived one is found, to read, and says so: Codex resumes it only once `codex unarchive` puts it back.
+    expect(found.find((s) => s.sessionId === C)).not.toHaveProperty('archived')
+    expect(found.find((s) => s.sessionId === D)).toMatchObject({ archived: true })
   })
 
   it('knows its owners from the rollouts Codex processes hold open, and asks their rollout about the turn', async () => {

@@ -3625,6 +3625,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     announceSession,
     attachDsh,
     prepareApiTools,
+    relaunchOverrides,
     gridName: () => backend.gridName(),
   })
 

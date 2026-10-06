@@ -173,7 +173,8 @@ export function createAgentCreator({
         if (emptyBefore && materialized.created.some((item) => item.startsWith('template'))) {
           try {
             if (engine === 'claude') preTrustClaudeProject(cwd)
-            if (engine === 'codex') preTrustCodexProject(cwd)
+            // In the agent's own profile when it has one: that config.toml is the one it reads.
+            if (engine === 'codex') preTrustCodexProject(cwd, codexHome)
           } catch (error) { console.warn(`[dsh] pre-trust ${cwd} · ${error instanceof Error ? error.message : error}`) }
         }
       } catch (error) {

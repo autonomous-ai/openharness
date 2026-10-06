@@ -57,6 +57,10 @@ function setup(row: RegisteredSession | null = source(), over: Partial<ForkAgent
     announceSession: vi.fn(),
     attachDsh: vi.fn(),
     prepareApiTools: vi.fn(),
+    // What a restart or a resume relaunches the row with (launch.ts): a Codex profile's CODEX_HOME here.
+    relaunchOverrides: vi.fn(async (session: RegisteredSession) => ({
+      ok: true as const, overrides: { env: (session.codexHome ? { CODEX_HOME: session.codexHome } : {}) as Record<string, string>, extraArgs: [] as string[], clearEnv: [] as string[] },
+    })),
     gridName: () => 'grid-me',
     ...over,
   }
@@ -135,6 +139,33 @@ describe('forking an agent', () => {
     // A session without a transcript on record still forks from its session.
     await setup(source({ transcriptPath: undefined } as Partial<RegisteredSession>)).fork({ agentId: 'a1', name: null, prompt: null })
     expect(vi.mocked(createAndRegisterPane).mock.calls[1][0]).toMatchObject({ forkedFrom: { agentId: 'a1', sessionId: 's1' } })
+  })
+
+  // A fork launched without the overrides a restart and a resume rebuild from the row: a Codex agent
+  // moved back off a grid lost `-c model_provider=…` and its model, and the fork came back on Codex's
+  // default model where a restart came back on the agent's own.
+  it('launches with the row\'s own-login overrides, as a restart and a resume do, the harness and named agent its own', async () => {
+    vi.mocked(installedDsh).mockReturnValue({ manifest: { name: 'Blender' } } as never)
+    const relaunchOverrides = vi.fn(async () => ({
+      ok: true as const,
+      overrides: { env: { CODEX_HOME: '/codex', MODEL_ENV: 'x' }, extraArgs: ['-c', 'model_provider="openai"', '-m', 'gpt-6'], clearEnv: ['HARNESS_DSH'] },
+    }))
+    const row = source({ engine: 'codex', codexHome: '/codex', subscriptionModel: 'gpt-6', dsh: 'blender', agent: 'reviewer' } as Partial<RegisteredSession>)
+    await setup(row, { relaunchOverrides }).fork({ agentId: 'a1', name: null, prompt: null })
+    // The harness's runtime is the fork's own and so is its named agent: neither is rebuilt from the row.
+    expect(relaunchOverrides).toHaveBeenCalledWith(row, expect.objectContaining({ codexHome: '/codex', subscriptionModel: 'gpt-6', dsh: null, agent: null }))
+    expect(vi.mocked(buildEngineLaunchArgv).mock.calls[0][1]).toMatchObject({
+      extraArgs: ['-c', 'model_provider="openai"', '-m', 'gpt-6', '--dsh', '--agent', 'reviewer'],
+      // What the harness's launch provides is never cleared under it.
+      clearEnv: expect.not.arrayContaining(['HARNESS_DSH']),
+    })
+    expect(vi.mocked(createAndRegisterPane).mock.calls[0][0]).toMatchObject({ env: { CODEX_HOME: '/codex', MODEL_ENV: 'x', HARNESS_DSH: 'blender' }, codexHome: '/codex' })
+    vi.mocked(installedDsh).mockReset().mockReturnValue(undefined)
+    // A launch the row cannot be given (a saved API since removed) is refused before any pane opens.
+    vi.mocked(createAndRegisterPane).mockClear()
+    const refused = vi.fn(async () => ({ ok: false as const, error: 'API_UNAVAILABLE', detail: 'gone' }))
+    expect(await setup(source(), { relaunchOverrides: refused }).fork({ agentId: 'a1', name: null, prompt: null })).toEqual({ ok: false, error: 'API_UNAVAILABLE', detail: 'gone' })
+    expect(createAndRegisterPane).not.toHaveBeenCalled()
   })
 
   it('carries the harness and the named agent over, when the engine still takes it', async () => {
