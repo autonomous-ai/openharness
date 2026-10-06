@@ -12,7 +12,8 @@
  * fleet (its tests, and a daemon whose fleet service is off) without loading the cloud socket and the
  * E2EE stores the service starts.
  */
-import type { FleetRouting, ForkOutcome, ForkResult, SelectResult, SendResult } from '../core/api.js'
+import type { ForkResult, SendResult } from '../core/api.js'
+import type { FleetRouting, ForkOutcome, SelectResult } from './fleet.js'
 import { extendShortRecap } from '../lib/deviceRecap.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import type { RouterContinuity } from '../lib/voiceRouter.js'

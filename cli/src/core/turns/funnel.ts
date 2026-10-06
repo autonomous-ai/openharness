@@ -11,11 +11,11 @@
  * Moved verbatim out of `runForeground` (the core boundary, step 8: docs/design/2026-10-03-harnessd.md).
  */
 import { correlateAgentEvent } from '../../lib/agentEvent.js'
-import type { AutonomousDeviceInput } from '../../lib/autonomous-device/input.js'
-import { isDeviceInputBoundary } from '../../lib/autonomous-device/input.js'
+import type { AutonomousDeviceInput } from '../deviceInput.js'
+import { isDeviceInputBoundary } from '../deviceInput.js'
 import type { AutonomousDeviceService } from '../../lib/autonomous-device/service.js'
 import type { CommanderMirror } from '../../lib/commander.js'
-import { deviceErrorText } from '../../lib/deviceErrors.js'
+import { deviceErrorText } from '../cardText.js'
 import { preview, sid } from '../../lib/log.js'
 import type { CursorNormalizer } from '../../engines/cursor/normalizer.js'
 import type { QuestionWatcher } from '../../lib/askQuestion.js'

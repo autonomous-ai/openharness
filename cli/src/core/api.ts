@@ -11,10 +11,10 @@
  * returns. The core routes them to it; a port is only for what the core itself must ask.
  */
 import type { RecentTurn } from '../cable/cableHost.js'
-import type { CableAgent, CableMachine, CableMachineSource } from '../cable/cableSession.js'
-import type { FleetEvent } from '../cable/machineFleet.js'
-import type { AnswerReceipt, ReviewedAnswer } from '../cable/questionInbox.js'
+import type { ReviewedAnswer } from '../cable/questionInbox.js'
 import type { AgentEngine } from '../engines/types.js'
+import type { AppSwarms } from '../cable/cableSession.js'
+import type { UnreadNotification } from '../cable/notificationRead.js'
 import type { AgentDshContext } from '../lib/agentFrame.js'
 import type { GridAccess } from '../lib/gridAttach.js'
 import type { createHarnessResourcesReader } from '../lib/harnessResources.js'
@@ -27,16 +27,18 @@ import type { LiveEvent } from '../lib/normalize.js'
 import type { SessionInputDelivery } from '../lib/sessionInput.js'
 import { projectDisplayName, type registry, type RegisteredSession } from '../lib/registry.js'
 import type { RuntimeModelOption } from '../lib/runtimeProfile.js'
-import type { RouterContinuity } from '../lib/voiceRouter.js'
 import type { ExternalSessions, OpenSessions } from '../lib/sessionSearch/external.js'
 import type { SessionSearchIndex } from '../lib/sessionSearch/indexer.js'
 import type { StoppedAgentStore } from '../lib/stoppedAgents.js'
 import type { TerminalBinaryClear } from '../lib/terminalBinary.js'
 import type { RouteAnswer } from '../localWsServer.js'
 import type { SwarmPromptScopes } from '../teams/promptScope.js'
-import { FAIL, later, ServiceUnavailableError, type PortFallbacks } from './serviceHost.js'
+import { FAIL, later, readFallback, ServiceUnavailableError, type PortFallbacks } from './serviceHost.js'
 
 export type { RouteAnswer }
+/** What a service guards its own parts with, as the core guards a service (core/serviceHost.ts): the
+ *  devices keep a dial failing from costing ⌘K its routing (services/devices.ts). */
+export { FAIL, later, readFallback, ServiceUnavailableError, type PortFallbacks }
 
 /** A service may open a terminal with a literal argv, never shell source. */
 export interface TerminalOpen {
@@ -71,6 +73,15 @@ export interface CoreApi {
   /** The daemon's data folder; a service keeps its own files in it. */
   dataDir: string
   terminals: TerminalsPort
+  /** This computer, as the dial's wheel and the fleet name it. */
+  machine: {
+    /** The account's id for this machine, or '' until the daemon has one (signed out). */
+    id(): string
+    /** This computer's own durable id. */
+    computerId(): string
+    /** Its display name, else "This machine". */
+    name(): string
+  }
   agents: {
     /** Every agent on this machine: the live ones, then the stopped ones. */
     all(): RegisteredSession[]
@@ -102,6 +113,9 @@ export interface CoreApi {
     create(request: AgentCreateRequest): Promise<{ ok: true; agentId: string } | { ok: false; error: string; detail?: string }>
     /** What a live agent's frame says about its harness: its name, its viewer and its verdict; null for none. */
     dsh(session: RegisteredSession): AgentDshContext | null
+    /** What a live Claude Code or Codex agent's pane footer says it is doing ("Reading 3 files"), or null:
+     *  the dial's working card. The pane is read by the core; only the line leaves it. */
+    activityText(agentId: string): Promise<string | null>
   }
   /** A device's or another machine's turns for an agent on this one: the doors the web and the hooks use. */
   turns: {
@@ -147,15 +161,22 @@ export interface CoreApi {
     /** The account's private grid name, minted and remembered by the backend; null when an older
      *  backend issues none. Bounded in time. */
     mintGridName(): Promise<string | null>
-    /** This machine's harness access token, for handing a sign-in to grid or dialling the fleet's lane.
-     *  Rejects when signed out. `force` refreshes it (once, after a 401 for `failedToken`): the core's one
-     *  session manager shares a refresh in flight with the backend link. */
+    /** This machine's harness access token, for handing a sign-in to grid, dialling the fleet's lane or a
+     *  dial's spoken words to the transcriber. Rejects when signed out. `force` refreshes it (once, after a
+     *  401 for `failedToken`): the core's one session manager shares a refresh in flight with the backend link. */
     accessToken(options?: { force?: boolean; failedToken?: string }): Promise<string>
     /** The fleet's lane to the owner's other machines, sealed by the gateway with this machine's E2EE
      *  identity, which no service holds (`LaneSeal`). */
     lane: LaneSeal
     /** This machine's E2EE identity as Share's owner signs with it, held by the gateway (`ObserverKey`). */
     observerKey: ObserverKey
+    /** Whether this computer holds an account: a sign-in or sign-out restarts the daemon. */
+    signedIn(): boolean
+    /** The account's environment (`prod`, …), which the backend checks every request against. */
+    environment(): string
+    /** The owner's machines, read from the backend now (`GET /api/machines`, or this computer alone signed
+     *  out), and kept as the core's own list for the windows and the trust group. Never rejects. */
+    machines(): Promise<{ status: number; body: Record<string, unknown> }>
     /** The account's private grid as the backend named it (`machine_meta`), or as grid's set-up just
      *  confirmed it; null before either. Working it out when neither has said is the models service's
      *  (`lib/gridDerive.ts`). */
@@ -186,6 +207,20 @@ export interface CoreApi {
     /** A frame for one of Share's observers, sealed by Share itself, to the relay through the gateway; false
      *  when it could not be handed over. */
     observer(connId: string, type: string, payload: Record<string, unknown>): boolean
+    /** A frame from the devices for every window on this computer, never the cloud: what a hand at this
+     *  desk did. Only `DEVICE_WINDOW_FRAMES`; the core drops any other. */
+    sendLocal(frame: DeviceWindowFrame): void
+    /** A window bridge's ask, to one window on this computer; false when it is gone. Only
+     *  `DEVICE_BRIDGE_FRAMES`. */
+    sendToWindow(connId: string, frame: DeviceBridgeFrame): boolean
+    /** Whether a window on this computer is attached. */
+    hasWindow(): boolean
+    /** The devices on this computer changed (`harness_devices_changed`): the windows and the owner's apps
+     *  show them. */
+    devicesChanged(payload: Record<string, unknown>): void
+    /** A dial on this computer is watching it, or no longer is: the core then makes the turn cards and
+     *  recaps for it, as for a device watching through the backend. */
+    dialWatching(watching: boolean): void
   }
   /** How an agent's shell reaches this daemon: the command that runs this harness's CLI, the port the daemon
    *  serves and the machine it serves as. An experiment writes them into the prompts of the agents it runs
@@ -562,74 +597,99 @@ export type TeamsEvent = { seq: number; core: string; at: number; agentId: strin
 export type SendResult = { ok: true } | { ok: false; machine: string; reason: string }
 /** What a fork answers: the new agent's id, or why not. */
 export type ForkResult = { ok: true; agentId: string } | { ok: false; error: string; detail?: string }
-/** A fork and where it was asked: `asked` is false for a refusal made before asking anyone (an agent
- *  never listed, a daemon or a fleet that cannot fork), which nobody needs to hear about. */
-export interface ForkOutcome { result: ForkResult; machineId: string; asked: boolean }
-/** A machine selected for the dial, or the refusal a person can act on. */
-export type SelectResult = { ok: true } | { ok: false; code: string; message: string }
 
-/**
- * Which machine an agent is on, and a turn, a stop or an answer reaching it there: the fleet's router
- * (services/fleetRouter.ts), as the dial asks it. Also the lane to the other machines, which the dial
- * holds while it is plugged in. A refusal is an answer here, never a throw: through the port, a throw is
- * a failure of the fleet service, and counts toward switching it off.
+/*
+ * The devices (services/devices.ts): the dials on USB, the window bridges they speak through, and the
+ * fleet's router every turn goes through, ⌘K's included (docs/design/2026-10-06-core-boundary-next.md,
+ * "Devices", step 9). They answer the core through `DevicesPort` and reach it through `CoreApi`, so that
+ * they can run in a process of their own: a device that fails, hangs or leaks costs the devices, never a
+ * session.
  */
-export interface FleetRouting {
-  listMachines(): Promise<{ machines: CableMachine[]; source: CableMachineSource }>
-  listAgentsFlat(): Promise<CableAgent[]>
-  agentTotal(): number
-  describe(agentId: string): { name: string; engine: string; machine: string } | undefined
-  noteAgent(machineId: string, agentId: string): void
-  machineOf(agentId: string): string
-  knows(agentId: string): boolean
-  isLocalAgent(agentId: string): boolean
-  sendTurn(agentId: string, text: string): SendResult
-  lastRouted(): RouterContinuity | undefined
-  stopTurn(agentId: string): void
-  canSpeakQuestion(agentId: string): boolean
-  answerReviewed(answer: ReviewedAnswer): Promise<AnswerReceipt>
-  answer(agentId: string, requestId: string, answers: Record<string, string>): void
-  updateAgent(agentId: string, model?: string, effort?: string): void
-  recentSummaries(agentId: string): Promise<Array<{ recap: string; text: string; ask: string }>>
-  recentAsks(agentId: string): Promise<string[]>
-  listModels(agentId: string): Promise<string[]>
-  forkAgent(agentId: string): Promise<ForkOutcome>
-  /** Whether a lane to the other machines exists: signed in, with the fleet's own fleet. */
-  hasLane(): boolean
-  /** Hold the lane for a dial, attached to no machine. Resolves with how it went; never rejects. */
-  online(): Promise<{ ok: true } | { ok: false; message: string }>
-  select(machineId: string): Promise<SelectResult>
-  release(immediate?: boolean): void
+
+/** The frames the devices may send every window on this computer (`clients.sendLocal`): what a hand at
+ *  this desk did on a dial, and a spoken task offered to the window's palette. Never to the cloud. */
+export const DEVICE_WINDOW_FRAMES = [
+  'dial_open', 'dial_notification_read', 'dial_forked', 'dial_focus', 'dial_swarm', 'dial_scroll', 'dial_status',
+  'voice_route_request',
+] as const
+export type DeviceWindowFrame = { type: (typeof DEVICE_WINDOW_FRAMES)[number]; payload: Record<string, unknown> }
+
+/** The frames the devices may send one window (`clients.sendToWindow`): a window bridge's ask, to the
+ *  window that has the person's attention. */
+export const DEVICE_BRIDGE_FRAMES = ['dial_selection', 'dial_visit', 'dial_form'] as const
+export type DeviceBridgeFrame = { type: (typeof DEVICE_BRIDGE_FRAMES)[number]; payload: Record<string, unknown> }
+
+/** Which window has the person's attention, as the local socket last heard (`app_focus` with a focus
+ *  revision): where a spoken selection or visit goes (`voice`), and a New Harness form (`form`). */
+export interface WindowFocus {
+  voice: { machineId: string; agentId: string; connId: string } | null
+  form: { machineId: string; connId: string } | null
 }
 
-/** The core's calls into the fleet: ⌘K's two requests — which agent a typed task belongs to, on any of
- *  the owner's machines, and delivering it to that agent's own machine — the routing the dial asks of
- *  it, the cards the other machines send, and stopping the lane to them for a shutdown. */
-export interface FleetPort extends FleetRouting {
+/** A window's answer to a spoken task it was offered (`voice_route_reply`). */
+export type VoiceRouteReply = { t: 'taken' } | { t: 'sent'; agentId: string } | { t: 'cancelled' }
+
+/** The Devices tab (services/devices.ts): the devices on this computer, and a device's settings. Only
+ *  the owner, on this computer or through the owner's own app, may manage them. */
+export const DEVICES_REQUESTS = ['harness_devices_list', 'harness_device_settings'] as const
+
+/**
+ * The core's calls into the devices: what the windows on this computer said that the dial follows, the
+ * cards every device is sent, ⌘K, and stopping. Every one is a notice or a request the core never waits
+ * on in line: across a process, a hung devices process answers the fallbacks, never a frozen core.
+ */
+export interface DevicesPort {
+  /** A frame bound for the devices (`commander_event`, `commander_question`, `commander_question_close`):
+   *  every one the core sends the Wi-Fi devices, as it is sent, so a dial cannot drift from them. */
+  card(frame: Record<string, unknown>): void
+  /** The window's tiles on its active tab, in tile order, and whether the window is in front. */
+  desk(agentIds: string[], foreground: boolean): void
+  /** The window's tabs, or null once it has gone. */
+  swarms(swarms: AppSwarms | null): void
+  /** What the window still has unread, newest first. */
+  unread(items: UnreadNotification[]): void
+  /** The window moved to an agent. */
+  appFocus(machineId: string, agentId: string): void
+  /** The window looked at an agent. */
+  seen(agentId: string, readToken?: string): void
+  /** A window changing one device's settings. */
+  settings(id: string, patch: Record<string, unknown>): void
+  /** Which window has the person's attention now. */
+  windowFocus(focus: WindowFocus): void
+  /** A window's answer to a bridge's ask. */
+  windowReply(kind: 'selection' | 'visit' | 'form', connId: string, machineId: string, payload: Record<string, unknown>): void
+  /** A window's answer to a spoken task it was offered. */
+  voiceReply(voiceId: string, reply: VoiceRouteReply): void
+  /** A window left. */
+  windowGone(connId: string): void
+  /** ⌘K: which agent a typed task belongs to, on any of the owner's machines. */
   routeTask(text: string): Promise<RouteAnswer>
-  routeSend(agentId: string, text: string): SendResult
-  /** The other machines' cards, for the dial. Returns how to stop hearing them. */
-  onEvent(listener: (event: FleetEvent) => void): () => void
-  stop(): void
+  /** ⌘K's send: the turn delivered on the agent's own machine, or refused with why. */
+  routeSend(agentId: string, text: string): Promise<SendResult>
+  /** The Wi-Fi device borrowing the dial's walk along the desk (until it joins the devices: step 10). */
+  stepFocus(direction: 'next' | 'previous', currentAgentId?: string): Promise<{ machineId: string; agentId: string } | 'no_agents'>
+  /** The Wi-Fi device borrowing the dial's stroke for the window's terminal. */
+  scroll(phase: 'down' | 'move' | 'up', dy: number, velocity: number): void
+  /** The engines the live agents run: the voice router's worker is one of them. */
+  engines(engines: string[]): void
+  /** Whether a device watches through the backend: the voice router keeps its worker warm meanwhile. */
+  commanders(connected: boolean): void
+  /** Let go of the serial ports and the lane, for a restart or a shutdown. */
+  stop(): Promise<void>
 }
 
-const FLEET_UNAVAILABLE = 'the fleet service is unavailable'
+const DEVICES_UNAVAILABLE = 'the devices service is unavailable'
 
 /**
- * What the core gets when the fleet fails. ⌘K says so, picking no agent and sending nothing; a shutdown
- * goes on; the cards stop. The dial's routing FAILs: the dial routes this computer by itself then, as it
- * does with the fleet off (cable/cableHost.ts), rather than reading a made-up answer as the fleet's.
+ * What the core gets when the devices fail: the dial and the window bridges hear nothing, ⌘K says so,
+ * picking no agent and sending nothing, the Wi-Fi device finds no desk to walk, and a shutdown goes on.
  */
-export const FLEET_FALLBACKS: PortFallbacks<FleetPort> = {
-  routeTask: later({ agentId: '', machineId: '', name: '', confidence: 0, reason: FLEET_UNAVAILABLE, candidates: [], weighed: 0, machines: 0, via: '' }),
-  routeSend: { ok: false, machine: '', reason: FLEET_UNAVAILABLE },
-  onEvent: () => {},
-  stop: undefined,
-  listMachines: later(FAIL), listAgentsFlat: later(FAIL), agentTotal: FAIL, describe: FAIL, noteAgent: FAIL,
-  machineOf: FAIL, knows: FAIL, isLocalAgent: FAIL, sendTurn: FAIL, lastRouted: FAIL, stopTurn: FAIL,
-  canSpeakQuestion: FAIL, answerReviewed: later(FAIL), answer: FAIL, updateAgent: FAIL, recentSummaries: later(FAIL),
-  recentAsks: later(FAIL), listModels: later(FAIL), forkAgent: later(FAIL), hasLane: FAIL, online: later(FAIL),
-  select: later(FAIL), release: FAIL,
+export const DEVICES_FALLBACKS: PortFallbacks<DevicesPort> = {
+  card: undefined, desk: undefined, swarms: undefined, unread: undefined, appFocus: undefined, seen: undefined,
+  settings: undefined, windowFocus: undefined, windowReply: undefined, voiceReply: undefined, windowGone: undefined,
+  routeTask: later({ agentId: '', machineId: '', name: '', confidence: 0, reason: DEVICES_UNAVAILABLE, candidates: [], weighed: 0, machines: 0, via: '' }),
+  routeSend: later({ ok: false, machine: '', reason: DEVICES_UNAVAILABLE }),
+  stepFocus: later('no_agents'), scroll: undefined, engines: undefined, commanders: undefined, stop: later(undefined),
 }
 
 /*
@@ -901,14 +961,14 @@ export interface CorePorts {
   models: ModelsPort | null
   workspaces: WorkspacesPort | null
   teams: TeamsPort | null
-  fleet: FleetPort | null
+  devices: DevicesPort | null
   monitor: MonitorPort | null
   orchestrator: OrchestratorPort | null
   sharing: SharingPort | null
 }
 
 export function emptyPorts(): CorePorts {
-  return { search: null, viewers: null, models: null, workspaces: null, teams: null, fleet: null, monitor: null, orchestrator: null, sharing: null }
+  return { search: null, viewers: null, models: null, workspaces: null, teams: null, devices: null, monitor: null, orchestrator: null, sharing: null }
 }
 
 export interface CoreApiDeps {
@@ -943,16 +1003,36 @@ export interface CoreApiDeps {
   fork: CoreApi['agents']['fork']
   turns: CoreApi['turns']
   questions: CoreApi['questions']
+  machine: CoreApi['machine']
+  activityText: CoreApi['agents']['activityText']
+  signedIn: CoreApi['account']['signedIn']
+  environment: CoreApi['account']['environment']
+  machines: CoreApi['account']['machines']
+  /** Where the devices' frames go: every window on this computer, or one. Only the devices' own frame
+   *  types reach these (`createCoreApi`). */
+  sendLocal(frame: { type: string; payload: Record<string, unknown> }): void
+  sendToWindow(connId: string, frame: { type: string; payload: Record<string, unknown> }): boolean
+  hasWindow: CoreApi['clients']['hasWindow']
+  devicesChanged: CoreApi['clients']['devicesChanged']
+  dialWatching: CoreApi['clients']['dialWatching']
+  log?: (line: string) => void
 }
 
 export function createCoreApi({
   dataDir, registry, stoppedAgents, databaseHistory, externalSessions, openSessions, syncSession, runtimeModels, viewerChanged,
   gridNamed, gridModelsChanged, dshInstallStatus, mintGridName, accessToken, lane, observerKey, observer, privateGridName, machineName, backend, onNotice,
-  runtimeProfile, setRuntime, fork, create, dsh, windows, daemon, turns, questions, terminals = TERMINALS_OFF,
+  runtimeProfile, setRuntime, fork, create, dsh, windows, daemon, turns, questions, terminals = TERMINALS_OFF, machine, activityText,
+  signedIn, environment, machines, sendLocal, sendToWindow, hasWindow, devicesChanged, dialWatching, log = (line) => console.warn(line),
 }: CoreApiDeps): CoreApi {
+  // The devices reach the windows through these alone, and only with their own frames: a devices process
+  // speaks to the core as a service, and what it may put in front of a person is decided here, not there.
+  const windowFrames = new Set<string>(DEVICE_WINDOW_FRAMES)
+  const bridgeFrames = new Set<string>(DEVICE_BRIDGE_FRAMES)
+  const refused = (type: unknown): void => log(`[services] the devices sent a window ${String(type).slice(0, 40)}, which is not theirs to send`)
   return {
     dataDir,
     terminals,
+    machine,
     agents: {
       all: () => [...registry.list(), ...stoppedAgents.list()],
       live: () => registry.list(),
@@ -968,13 +1048,25 @@ export function createCoreApi({
       fork,
       create,
       dsh,
+      activityText,
     },
     turns,
     questions,
     transcripts: { databaseHistory },
     external: { sessions: externalSessions, open: openSessions },
-    account: { mintGridName, accessToken, lane, observerKey, privateGridName, machineName, backend, onNotice },
-    clients: { viewerChanged, gridNamed, gridModelsChanged, dshInstallStatus, windows, observer },
+    account: { mintGridName, accessToken, lane, observerKey, privateGridName, machineName, backend, onNotice, signedIn, environment, machines },
+    clients: {
+      viewerChanged, gridNamed, gridModelsChanged, dshInstallStatus, windows, observer, hasWindow, devicesChanged, dialWatching,
+      sendLocal: (frame) => {
+        if (windowFrames.has(frame?.type)) sendLocal(frame)
+        else refused(frame?.type)
+      },
+      sendToWindow: (connId, frame) => {
+        if (bridgeFrames.has(frame?.type)) return sendToWindow(connId, frame)
+        refused(frame?.type)
+        return false
+      },
+    },
     daemon,
   }
 }

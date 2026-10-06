@@ -14,6 +14,7 @@ import { ExternalSessions, OpenSessions } from '../lib/sessionSearch/external.js
 import { externalProviders } from '../lib/sessionSearch/externals/index.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcess } from './process.js'
+import { UNASKED } from './processCoreApi.js'
 import { SEARCH_REQUESTS, startSearch } from './search.js'
 
 export interface SearchServiceOptions {
@@ -41,6 +42,7 @@ export function searchCoreApi(
   return {
     dataDir,
     terminals: TERMINALS_OFF,
+    machine: UNASKED.machine,
     agents: {
       all: agents,
       live: () => agents().filter((agent) => agent.active),
@@ -55,6 +57,7 @@ export function searchCoreApi(
       setRuntime: () => {},
       fork: async () => ({ ok: false, error: 'UNSUPPORTED' }),
       ...AGENT_ACTIONS_OFF,
+      activityText: UNASKED.activityText,
     },
     // Search drives no agent: these are never asked of it.
     turns: { send: () => {}, stop: () => {}, recent: () => [], asks: () => [], ...DELIVERIES_OFF },
@@ -72,8 +75,9 @@ export function searchCoreApi(
       privateGridName: async () => null,
       machineName: () => null,
       ...ACCOUNT_BACKEND_OFF,
+      ...UNASKED.account,
     },
-    clients: { viewerChanged: () => {}, gridNamed: () => {}, gridModelsChanged: () => {}, dshInstallStatus: () => {}, windows: () => {}, observer: () => false },
+    clients: { viewerChanged: () => {}, gridNamed: () => {}, gridModelsChanged: () => {}, dshInstallStatus: () => {}, windows: () => {}, observer: () => false, ...UNASKED.clients },
     daemon: DAEMON_UNKNOWN,
   }
 }

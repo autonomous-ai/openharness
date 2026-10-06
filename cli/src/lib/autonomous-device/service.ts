@@ -1,7 +1,7 @@
 import { DeviceResultPayloadSchema } from './resultContract.js'
 import { DeviceResultEvidence, inputHash, type ResultEvidence } from './resultEvidence.js'
 import type { DeviceResultJournal } from './resultJournal.js'
-import type { DeviceInputStatus } from './input.js'
+import type { DeviceInputStatus } from '../../core/deviceInput.js'
 import type { AutonomousDeviceStore } from './store.js'
 import { DEVICE_STORE_CAPABILITIES, DeviceStoreError } from './storeContract.js'
 import { createHash, randomUUID } from 'node:crypto'

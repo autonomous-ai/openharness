@@ -8,8 +8,8 @@ import type { MachineListCache } from '../device/machineList.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { routeVoiceTask, type RouteDecision, type RouterAgent } from '../lib/voiceRouter.js'
 import { fakeCore } from '../testing/fakeCore.js'
-import { emptyPorts, type CorePorts, type FleetPort } from '../core/api.js'
-import { startFleet, type FleetDeps } from './fleet.js'
+import { FAIL, type CoreApi } from '../core/api.js'
+import { FLEET_FALLBACKS, startFleet, type Fleet, type FleetDeps } from './fleet.js'
 
 // The lane is a cloud socket and the pinned keys a file under the data folder: neither in a test.
 const lane = vi.hoisted(() => ({
@@ -61,21 +61,26 @@ function machinesOf(rows: Row[] = [THIS, OTHER]) {
   }
 }
 
-function setup(over: Partial<FleetDeps> = {}, core = fakeCore()) {
+/** This computer as the core names it: its ids, its name and its account's environment. */
+function coreOf(over: { machineId?: () => string } = {}, core: CoreApi = fakeCore()): CoreApi {
+  return {
+    ...core,
+    machine: { id: over.machineId ?? (() => 'mine'), computerId: () => 'computer-1', name: () => 'MacbookPro.local' },
+    account: { ...core.account, environment: () => 'test-env' },
+  }
+}
+
+function setup(over: Partial<FleetDeps> & { machineId?: () => string } = {}, base = fakeCore()) {
   const machines = machinesOf()
+  const { machineId, ...rest } = over
+  const core = coreOf({ machineId }, base)
   const deps: FleetDeps = {
     machines: machines as unknown as MachineListCache,
-    guestMachines: vi.fn(() => null),
-    computerId: () => 'computer-1',
-    machineId: () => 'mine',
-    machineName: () => 'MacbookPro.local',
     desk: () => [],
-    autonomousEnv: 'test-env',
-    ...over,
+    ...rest,
   }
-  const ports: CorePorts = emptyPorts()
-  const router = startFleet(core, ports, deps)
-  return { router, ports, fleet: ports.fleet as FleetPort, deps, machines, core }
+  const { fleet, router } = startFleet(core, deps)
+  return { router, fleet: fleet as Fleet, deps, machines, core }
 }
 
 const decision = (over: Partial<RouteDecision> = {}): RouteDecision =>
@@ -96,20 +101,16 @@ afterEach(() => {
 })
 
 describe('the machine list', () => {
-  it('is this computer alone signed out, the backend’s signed in, read again every minute until the fleet stops', () => {
+  it('is read through the core at once, and again every minute until the fleet stops', () => {
     vi.useFakeTimers()
-    const guest = { success: true, data: { machines: [] } }
-    let signedOut = true
-    const { fleet, machines } = setup({ guestMachines: () => (signedOut ? guest : null) })
-    expect(machines.adopt).toHaveBeenCalledWith(guest)
-    expect(machines.refresh).not.toHaveBeenCalled()
-    signedOut = false
-    vi.advanceTimersByTime(60_000)
+    const { fleet, machines } = setup()
     expect(machines.refresh).toHaveBeenCalledTimes(1)
+    vi.advanceTimersByTime(60_000)
+    expect(machines.refresh).toHaveBeenCalledTimes(2)
     fleet.stop()
     expect(lane.stop).toHaveBeenCalled()
     vi.advanceTimersByTime(120_000)
-    expect(machines.refresh).toHaveBeenCalledTimes(1)
+    expect(machines.refresh).toHaveBeenCalledTimes(2)
   })
 })
 
@@ -299,5 +300,22 @@ describe('⌘K: which agent a typed task belongs to', () => {
       agentId: '', machineId: '', name: '', confidence: 0, reason: 'no agents in machine', weighed: 1, machines: 0, via: 'model',
       candidates: [{ agentId: 'x1', name: 'orphan', machineId: '', machine: '', engine: '', recent: 'y'.repeat(120), confidence: 0 }],
     })
+  })
+})
+
+describe('the fleet failing', () => {
+  it('answers ⌘K with no agent picked and nothing sent, saying why', () => {
+    expect(FLEET_FALLBACKS.routeSend).toEqual({ ok: false, machine: '', reason: 'the fleet service is unavailable' })
+    expect(FLEET_FALLBACKS.stop).toBeUndefined()
+    // No cards, and nothing to stop hearing.
+    expect((FLEET_FALLBACKS.onEvent as () => void)()).toBeUndefined()
+  })
+
+  it('fails the dial\'s routing rather than making an answer up', () => {
+    // The dial routes this computer by itself then (cable/cableHost.ts): a made-up answer read as the
+    // fleet's would send a turn nowhere and say it went.
+    for (const member of ['agentTotal', 'describe', 'machineOf', 'knows', 'isLocalAgent', 'sendTurn', 'hasLane', 'release'] as const) {
+      expect(FLEET_FALLBACKS[member], member).toBe(FAIL)
+    }
   })
 })

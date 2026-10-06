@@ -16,6 +16,7 @@ export function fakeCore(over: Overrides = {}): CoreApi {
       watch: { frame: vi.fn(async () => {}), close: vi.fn(async () => {}), onOutput: vi.fn(() => () => {}) },
       ...over.terminals,
     },
+    machine: { id: vi.fn(() => 'machine-1'), computerId: vi.fn(() => 'computer-1'), name: vi.fn(() => 'This machine'), ...over.machine },
     agents: {
       all: vi.fn(() => []),
       live: vi.fn(() => []),
@@ -31,6 +32,7 @@ export function fakeCore(over: Overrides = {}): CoreApi {
       fork: vi.fn(async () => ({ ok: false as const, error: 'UNSUPPORTED' })),
       create: vi.fn(async () => ({ ok: false as const, error: 'UNSUPPORTED' })),
       dsh: vi.fn(() => null),
+      activityText: vi.fn(async () => null),
       ...over.agents,
     },
     turns: {
@@ -61,9 +63,16 @@ export function fakeCore(over: Overrides = {}): CoreApi {
       backend: vi.fn(async () => ({ status: 200, body: {} })),
       observerKey: { publicKey: vi.fn(async () => 'cHVi'), signWelcome: vi.fn(async () => 'c2ln') },
       onNotice: vi.fn(() => () => {}),
+      signedIn: vi.fn(() => true),
+      environment: vi.fn(() => 'prod'),
+      machines: vi.fn(async () => ({ status: 200, body: { success: true, data: { machines: [] } } })),
       ...over.account,
     },
-    clients: { viewerChanged: vi.fn(), gridNamed: vi.fn(), gridModelsChanged: vi.fn(), dshInstallStatus: vi.fn(), windows: vi.fn(), observer: vi.fn(() => true), ...over.clients },
+    clients: {
+      viewerChanged: vi.fn(), gridNamed: vi.fn(), gridModelsChanged: vi.fn(), dshInstallStatus: vi.fn(), windows: vi.fn(), observer: vi.fn(() => true),
+      sendLocal: vi.fn(), sendToWindow: vi.fn(() => true), hasWindow: vi.fn(() => true), devicesChanged: vi.fn(), dialWatching: vi.fn(),
+      ...over.clients,
+    },
     daemon: { command: 'harness', port: 18473, machineId: () => 'machine-1', autonomousEnv: 'prod', ...over.daemon },
   }
 }

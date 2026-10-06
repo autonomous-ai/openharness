@@ -101,6 +101,9 @@ function shape(frames: Frame[]): string[] {
     // When the activity is announced is timing, not an answer: one run's sequence had an extra
     // agent_activity before turn_started, or after turn_summary, on either build.
     if (frame.type === 'agent_activity') continue
+    // A heartbeat comes every few seconds of an open turn: whether a question's turn lasts long enough for
+    // one is timing too. Under load one run's question had an extra turn_heartbeat, on either build.
+    if (frame.type === 'turn_heartbeat') continue
     const keys = Object.keys(frame.payload ?? {}).sort().join(',')
     const line = `${frame.type} {${keys}}`
     if (out.at(-1) !== line) out.push(line)

@@ -29,7 +29,6 @@ import { ApiConnectionError, ApiConnections } from './lib/apiConnections.js'
 import { resolveApiTarget } from './lib/apiModels.js'
 import { isApiLaunch, parseGridLaunchOverride, type GridLaunchOverride } from './lib/gridLaunch.js'
 import { probeEngines } from './lib/engineProbe.js'
-import { harnessDevicesRequest, type HarnessDevicesService } from './lib/harnessDevices.js'
 import { engineInstallRecipe } from './lib/engineInstall.js'
 import { agentFrame, type AgentDshContext, type AgentFrame } from './lib/agentFrame.js'
 import { agentTokenUsage } from './lib/agentTokenUsage.js'
@@ -61,7 +60,6 @@ export interface LocalClientSink {
 }
 
 export class BackendSocket {
-  harnessDevices: HarnessDevicesService | null = null
   /** This machine's name as Harness shows it (Machines), from the backend's `machine_meta`. Null
    *  until the first one arrives. */
   private machineDisplayName: string | null = null
@@ -1134,17 +1132,6 @@ export class BackendSocket {
         case 'question_response':
           this.questionProvider?.(payload, answer)
           return
-
-        // Physical devices belong to this machine; only its owner or loopback tools may manage them.
-        case 'harness_devices_list':
-        case 'harness_device_settings': {
-          if (!owner) {
-            reply(type, requestId, { error: 'OWNER_REQUIRED' })
-            return
-          }
-          reply(type, requestId, await harnessDevicesRequest(this.harnessDevices, type, payload))
-          return
-        }
 
         // The colours the desktop paints its panes with (core/terminals/requests.ts, bound by cli.ts).
         case 'theme_set':

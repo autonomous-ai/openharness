@@ -62,6 +62,22 @@ function keyAnswer(answer: Payload): string {
   throw new Error(typeof answer.error === 'string' ? answer.error : 'the gateway did not answer for this machine\'s key')
 }
 
+/**
+ * What only the devices ask of the core (services/devices.ts), as every other service in its own process
+ * answers it: nothing. Shared, so that a member added for the devices is added once for the others.
+ */
+export const UNASKED = {
+  machine: { id: () => '', computerId: () => '', name: () => '' },
+  activityText: async (): Promise<string | null> => null,
+  account: { signedIn: () => false, environment: () => '', machines: async () => ({ status: 503, body: {} }) },
+  clients: { sendLocal: () => {}, sendToWindow: () => false, hasWindow: () => false, devicesChanged: () => {}, dialWatching: () => {} },
+} satisfies {
+  machine: CoreApi['machine']
+  activityText: CoreApi['agents']['activityText']
+  account: Pick<CoreApi['account'], 'signedIn' | 'environment' | 'machines'>
+  clients: Pick<CoreApi['clients'], 'sendLocal' | 'sendToWindow' | 'hasWindow' | 'devicesChanged' | 'dialWatching'>
+}
+
 export function processCoreApi(dataDir: string, service: string, view: AgentsView = {}): CoreApi {
   const live = (): ShownAgent[] => view.live?.() ?? []
   const ask = view.ask
@@ -71,6 +87,7 @@ export function processCoreApi(dataDir: string, service: string, view: AgentsVie
     // Terminals are launched by the core alone (the shell service, #893): a service in its own process
     // is refused, never handed a way to start a process outside the core.
     terminals: { open: TERMINALS_OFF.open, watch: view.watch ?? TERMINALS_OFF.watch },
+    machine: UNASKED.machine,
     agents: {
       // The stopped agents are never sent to these services: none of them reads one.
       all: live,
@@ -92,6 +109,7 @@ export function processCoreApi(dataDir: string, service: string, view: AgentsVie
         return { ok: false, error: typeof answer.error === 'string' ? answer.error : 'CREATE_FAILED', ...(typeof answer.detail === 'string' ? { detail: answer.detail } : {}) }
       },
       dsh: (session) => (session as ShownAgent).dshContext ?? null,
+      activityText: UNASKED.activityText,
     },
     turns: {
       send: () => {},
@@ -125,6 +143,7 @@ export function processCoreApi(dataDir: string, service: string, view: AgentsVie
           : { status: 502, body: { error: typeof answer.error === 'string' ? answer.error : 'BACKEND_UNREACHABLE' } }
       },
       onNotice: (listener) => view.onNotice?.(listener) ?? (() => {}),
+      ...UNASKED.account,
     },
     clients: {
       viewerChanged: () => {}, gridNamed: () => {}, gridModelsChanged: () => {}, dshInstallStatus: () => {},
@@ -136,6 +155,7 @@ export function processCoreApi(dataDir: string, service: string, view: AgentsVie
         void ask('observer_send', { connId, type, payload }).catch(() => {})
         return true
       },
+      ...UNASKED.clients,
     },
     daemon: {
       get command() { return daemon().command },

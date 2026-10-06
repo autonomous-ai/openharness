@@ -15,6 +15,7 @@ import { ACCOUNT_BACKEND_OFF, AGENT_ACTIONS_OFF, DELIVERIES_OFF, LANE_OFF, TERMI
 import { projectDisplayName, registry } from '../lib/registry.js'
 import type { SessionInputDelivery } from '../lib/sessionInput.js'
 import { startCollaboration, type Teams } from '../services/collaboration.js'
+import { UNASKED } from '../services/processCoreApi.js'
 import { SwarmPromptScopes } from '../teams/promptScope.js'
 
 export interface TeamFixture {
@@ -39,12 +40,14 @@ export function attachTeams<T extends BackendSocket>(socket: T): T & TeamFixture
   const core = (): CoreApi => ({
     dataDir: env.ADAPTER_DATA_DIR,
     terminals: TERMINALS_OFF,
+    machine: UNASKED.machine,
     agents: {
       all: () => registry.list(), live: () => registry.list(), displayName: projectDisplayName,
       byAgent: (agentId) => registry.byAgent(agentId), resolve: (id) => registry.resolve(id), advertised: () => registry.advertised(),
       terminalAvailable: (agentId) => registry.terminalAvailable(agentId), sync: () => {},
       runtimeModels: async () => [], runtimeProfile: () => null, setRuntime: () => {}, fork: async () => ({ ok: false, error: 'UNSUPPORTED' }),
       ...AGENT_ACTIONS_OFF,
+      activityText: UNASKED.activityText,
     },
     turns: {
       send: () => {}, stop: () => {}, recent: () => [], asks: () => [],
@@ -60,6 +63,7 @@ export function attachTeams<T extends BackendSocket>(socket: T): T & TeamFixture
       mintGridName: async () => null, accessToken: () => Promise.reject(new Error('no credential')), lane: LANE_OFF,
       privateGridName: async () => null, machineName: () => null,
       ...ACCOUNT_BACKEND_OFF,
+      ...UNASKED.account,
       // The tab channels as the spec says the account has them; a backend without them answers 404.
       backend: async (method, path) => {
         if (method !== 'GET' || path !== '/api/tab-channels' || !fixture.readChannelDesk) return { status: 404, body: {} }
@@ -70,6 +74,7 @@ export function attachTeams<T extends BackendSocket>(socket: T): T & TeamFixture
       viewerChanged: () => {}, gridNamed: () => {}, gridModelsChanged: () => {}, dshInstallStatus: () => {},
       windows: (frame) => socket.sendLocal(frame),
       observer: () => false,
+      ...UNASKED.clients,
     },
     daemon: { command: 'harness', port: env.PORT, machineId: () => socket.machineId, autonomousEnv: 'prod' },
   })

@@ -22,6 +22,7 @@ import { gridGlances, onGridModelsChanged } from '../lib/gridModels.js'
 import type { RuntimeModelOption } from '../lib/runtimeProfile.js'
 import { startModels } from './models.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcess } from './process.js'
+import { UNASKED } from './processCoreApi.js'
 
 type Payload = Record<string, unknown>
 
@@ -56,6 +57,7 @@ export function modelsCoreApi(dataDir: string, ask: (query: string, payload?: Pa
     dataDir,
     // Models opens no terminal.
     terminals: TERMINALS_OFF,
+    machine: UNASKED.machine,
     agents: {
       all: () => [],
       live: () => [],
@@ -74,6 +76,7 @@ export function modelsCoreApi(dataDir: string, ask: (query: string, payload?: Pa
       setRuntime: () => {},
       fork: async () => ({ ok: false, error: 'UNSUPPORTED' }),
       ...AGENT_ACTIONS_OFF,
+      activityText: UNASKED.activityText,
     },
     turns: { send: () => {}, stop: () => {}, recent: () => [], asks: () => [], ...DELIVERIES_OFF },
     questions: { answer: () => {}, answerReviewed: async () => false },
@@ -104,6 +107,7 @@ export function modelsCoreApi(dataDir: string, ask: (query: string, payload?: Pa
       // Models never reaches another machine: the fleet's lane is not its to seal.
       lane: LANE_OFF,
       ...ACCOUNT_BACKEND_OFF,
+      ...UNASKED.account,
     },
     clients: {
       viewerChanged: () => {},
@@ -111,6 +115,7 @@ export function modelsCoreApi(dataDir: string, ask: (query: string, payload?: Pa
       gridModelsChanged: () => told('gridModelsChanged'),
       dshInstallStatus: () => {},
       windows: () => {}, observer: () => false,
+      ...UNASKED.clients,
     },
     daemon: DAEMON_UNKNOWN,
   }

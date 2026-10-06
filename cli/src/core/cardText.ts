@@ -5,6 +5,9 @@
  * you to check the pane. None of that is actionable on a device — the reader cannot follow a URL, and a
  * long sentence pushes the one fact that matters off the card. So each rule here keeps the WHAT and the
  * WHEN and drops the rest, rather than truncating, which cuts the end — where the useful part usually is.
+ *
+ * The core writes these into the cards it sends every device (core/turns/funnel.ts, core/input.ts), so
+ * the text is the core's: a device, in its own process, draws what it is sent.
  */
 
 const AGENT_DID_NOT_ACCEPT = 'The agent did not accept the message. Please try again.'

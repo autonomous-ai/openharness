@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { deviceErrorText } from './deviceErrors.js'
+import { deviceErrorText } from './cardText.js'
 
 describe('deviceErrorText', () => {
   it('makes Claude submit-verification failures device-friendly', () => {
@@ -42,5 +42,7 @@ describe('deviceErrorText', () => {
     // A message with nothing to strip is passed through untouched.
     expect(deviceErrorText('This agent process is no longer running.', 'pi'))
       .toBe('This agent process is no longer running.')
+    // One that is nothing but a link keeps it: an empty card says less than a link nobody can follow.
+    expect(deviceErrorText(' https://example.com/status', 'pi')).toBe(' https://example.com/status')
   })
 })

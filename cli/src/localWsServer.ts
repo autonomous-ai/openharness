@@ -97,10 +97,13 @@ export interface LocalWsServerOptions {
    * It answers for the same reason `route_task` does. The remote leg carries no ack of its own, so a
    * machine that has gone deaf takes the turn and nothing comes back; with the palette closing silently
    * on a confident route, that is a spoken instruction that vanishes with no mark anywhere.
+   *
+   * Answered when the fleet's router has decided, which is beside the dial in the devices: in a process of
+   * their own that is a hop, so the answer is awaited off this connection's ordered chain.
    */
-  onRouteSend?: (agentId: string, text: string) => { ok: true } | { ok: false; machine: string; reason: string }
+  onRouteSend?: (agentId: string, text: string) => Promise<{ ok: true } | { ok: false; machine: string; reason: string }>
   /** The dial right now, sent to a window the moment it connects — it may have missed the announcement. */
-  dialStatus?: () => { attached: boolean; fw?: string; updating?: string }
+  dialStatus?: () => Record<string, unknown>
   /**
    * A window changed a device's settings. `id` names which device on this desk; the rest of the payload
    * is the patch, and an absent field is a setting the window is not changing.
@@ -590,10 +593,15 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
         //
         // Consumed here like app_focus: it describes a hand at this desk, not anything the machine could
         // act on.
+        //
+        // Answered OFF this connection's ordered chain, which carries the terminal's keystrokes: the answer
+        // is the devices' (the fleet's router), which may be in a process of their own, and one that hangs
+        // must not hold a window's typing until the request times out. Nothing orders on the answer but its
+        // request id.
         if (!isBinary && (options.onRouteTask || options.onRouteSend || options.onVoiceRouteReply)) {
           if (parsed?.type === 'route_task' && options.onRouteTask) {
             const onRouteTask = options.onRouteTask
-            return (async () => {
+            void (async () => {
               const payload = parsed.payload as Record<string, unknown> | undefined
               const requestId = typeof payload?.requestId === 'string' ? payload.requestId : ''
               const text = typeof payload?.text === 'string' ? payload.text.trim() : ''
@@ -608,8 +616,8 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
                 }
               }
               sink.sendFrame({ type: 'route_result', payload: { requestId, ...answer } })
-              return
             })()
+            return
           }
           if (parsed?.type === 'voice_route_reply' && options.onVoiceRouteReply) {
             const payload = parsed.payload as Record<string, unknown> | undefined
@@ -626,25 +634,28 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
             return
           }
           if (parsed?.type === 'route_send' && options.onRouteSend) {
-            const payload = parsed.payload as Record<string, unknown> | undefined
-            const requestId = typeof payload?.requestId === 'string' ? payload.requestId : ''
-            const agentId = typeof payload?.agentId === 'string' ? payload.agentId : ''
-            const text = typeof payload?.text === 'string' ? payload.text : ''
-            let sent: { ok: true } | { ok: false; machine: string; reason: string } =
-              { ok: false, machine: '', reason: 'nothing to send' }
-            if (agentId && text) {
-              try {
-                sent = options.onRouteSend(agentId, text)
-              } catch (err) {
-                sent = { ok: false, machine: '', reason: (err as Error).message.slice(0, 120) }
+            const onRouteSend = options.onRouteSend
+            void (async () => {
+              const payload = parsed.payload as Record<string, unknown> | undefined
+              const requestId = typeof payload?.requestId === 'string' ? payload.requestId : ''
+              const agentId = typeof payload?.agentId === 'string' ? payload.agentId : ''
+              const text = typeof payload?.text === 'string' ? payload.text : ''
+              let sent: { ok: true } | { ok: false; machine: string; reason: string } =
+                { ok: false, machine: '', reason: 'nothing to send' }
+              if (agentId && text) {
+                try {
+                  sent = await onRouteSend.call(options, agentId, text)
+                } catch (err) {
+                  sent = { ok: false, machine: '', reason: (err as Error).message.slice(0, 120) }
+                }
               }
-            }
-            sink.sendFrame({
-              type: 'route_send_result',
-              payload: sent.ok
-                ? { requestId, ok: true }
-                : { requestId, ok: false, machine: sent.machine, reason: sent.reason },
-            })
+              sink.sendFrame({
+                type: 'route_send_result',
+                payload: sent.ok
+                  ? { requestId, ok: true }
+                  : { requestId, ok: false, machine: sent.machine, reason: sent.reason },
+              })
+            })()
             return
           }
         }

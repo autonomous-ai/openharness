@@ -9,7 +9,7 @@
  */
 import { AgentNotifications } from '../lib/agentNotifications.js'
 import { AskQuestionController, QuestionWatcher, type QuestionAnswerPayload, type QuestionAnswerResult } from '../lib/askQuestion.js'
-import type { AutonomousDeviceInput } from '../lib/autonomous-device/input.js'
+import type { AutonomousDeviceInput } from './deviceInput.js'
 import { preview, sid } from '../lib/log.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import type { TerminalControl } from './terminals/control.js'
