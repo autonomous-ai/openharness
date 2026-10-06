@@ -5,7 +5,7 @@
  * ships with macOS, so it stands in for every shell that is not POSIX: an agent must start, in its
  * own folder, and work, whichever shell it is.
  */
-import { mkdirSync, realpathSync } from 'node:fs'
+import { existsSync, mkdirSync, realpathSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { LocalClient, type Frame } from './harness/client.js'
@@ -74,4 +74,29 @@ describe('the person\'s login shell', () => {
       client.close()
     }, 240_000)
   }
+
+  // A zsh user with no startup files of their own. The zsh of Debian, Ubuntu, Fedora and Arch then opens
+  // its new-user setup menu on any terminal before anything else, and every agent's pane showed that menu
+  // instead of starting its engine: on the suite's first Linux run, no zsh agent bound at all. The launch
+  // keeps the menu out of an agent's pane (engineLaunch.ts zshNewUserGuard). macOS's zsh has no such menu.
+  it.skipIf(!existsSync('/bin/zsh')).each(['claude', 'codex'] as const)('%s for a zsh user with no startup files: an agent starts and works', async (engine: Engine) => {
+    const d = await IsolatedDaemon.create({ env: { SHELL: '/bin/zsh' } })
+    daemon = d
+    onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`) })
+    rmSync(join(d.env.ZDOTDIR!, '.zshrc'))
+    await d.start()
+    const client = await LocalClient.connect(d)
+    const cwd = join(d.projectsDir, `new-zsh-user-${engine}`)
+    mkdirSync(cwd, { recursive: true })
+    const created = await client.request('agent_create', { engine, cwd, bypassPermission: true }, 120_000)
+    expect(created.error, JSON.stringify(created)).toBeUndefined()
+    const agent = await until(`the ${engine} agent to bind`, async () => {
+      const now = await row(client, created.agent.id)
+      return now?.sessionId && now.status === 'active' ? now : null
+    }, 60_000, 500)
+    await turn(client, agent.id, 'from a new zsh user')
+    // Nothing was written into the person's home to get there.
+    expect(['.zshenv', '.zprofile', '.zshrc', '.zlogin'].filter((name) => existsSync(join(d.env.ZDOTDIR!, name)))).toEqual([])
+    client.close()
+  }, 240_000)
 })

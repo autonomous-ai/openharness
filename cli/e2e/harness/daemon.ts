@@ -194,6 +194,11 @@ export class IsolatedDaemon {
       projects: join(root, 'projects'),
     }
     for (const dir of Object.values(dirs)) await mkdir(dir, { recursive: true })
+    // A zsh user as most are, with a .zshrc of their own (empty: nothing of anyone's). With none, the zsh
+    // of Debian, Ubuntu and Fedora opens its new-user setup menu in every terminal tile and every shell an
+    // engine leaves behind, and a test typing into one types into the menu. The person with no startup
+    // files at all has their own case (shells.e2e.ts). Appended, never truncated: a test's own stays.
+    await writeFile(join(dirs.home, '.zshrc'), '', { flag: 'a' })
     const config: EngineConfig = {
       port, dataDir: dirs.data, claudeProjectsDir: dirs.claudeProjects, codexHome: dirs.codexHome,
       claudeModel: options.claudeModel, codexModel: options.codexModel,
