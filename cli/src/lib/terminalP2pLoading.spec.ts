@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -38,12 +38,30 @@ it('loads the real peer library once, only when a peer negotiation needs it', as
             assert.equal(evaluations(), 0, 'idle pools, disabled peers and irrelevant signals stay lightweight');
             const offer = { sessionId: '00000000-0000-4000-8000-000000000001',
               protocolVersion: 1, sdp: 'not-a-real-sdp', stunUrls: [] };
+            if (process.env.EXPECT_PEER_LOAD_FAILURE === '1') {
+              let failed;
+              const failure = new Promise(resolve => { failed = resolve });
+              const peer = new TerminalP2pInitiator({
+                policy: { enabled: true, protocolVersion: 1, stunUrls: [], openWaitMs: 0 },
+                sendSignal() {}, onData() {},
+                onState(state, _ms, reason) { if (state === 'failed') failed(reason) },
+              });
+              peer.start();
+              assert.equal(await failure, 'offer_failed');
+              assert.equal(await peer.waitUntilReady(1), false);
+              await peer.stop('test_complete', false);
+              // The gateway's dispatch boundary catches a rejected responder negotiation.
+              await assert.rejects(pool.handleSignal('missing', 'p2p_offer', offer), /Cannot find module/);
+              assert.equal(evaluations(), 0);
+              console.log(JSON.stringify({ unavailable: true }));
+            } else {
             // The real SDP parser must load to refuse this offer. No external STUN or TURN server.
             await pool.handleSignal('first', 'p2p_offer', offer);
             assert.equal(evaluations(), 1, 'the first offer must actually load the peer library');
             await Promise.all(['second', 'third'].map(id => pool.handleSignal(id, 'p2p_offer', offer)));
             assert.equal(evaluations(), 1, 'later and concurrent offers reuse the module');
             console.log(JSON.stringify({ evaluations: evaluations() }));
+            }
           } finally {
             await off.stop('test_complete', false);
             await pool.stop();
@@ -73,6 +91,16 @@ it('loads the real peer library once, only when a peer negotiation needs it', as
       env: { ...process.env, NODE_OPTIONS: '' },
     })
     expect(JSON.parse(output.trim())).toEqual({ evaluations: 1 })
+    // A missing split chunk costs only P2P. In particular begin() must not reject unhandled.
+    const peerChunk = readdirSync(root).find(name => name.startsWith('part-')
+      && readFileSync(join(root, name), 'utf8').includes('globalThis.__qaPeerLibraryEvaluations ='))
+    expect(peerChunk, 'the actual peer module must live in a deferred chunk').toBeDefined()
+    rmSync(join(root, peerChunk!))
+    const unavailable = execFileSync(process.execPath, [join(root, 'probe.mjs')], {
+      cwd: cli, encoding: 'utf8', timeout: 15_000, maxBuffer: 1024 * 1024,
+      env: { ...process.env, NODE_OPTIONS: '', EXPECT_PEER_LOAD_FAILURE: '1' },
+    })
+    expect(JSON.parse(unavailable.trim())).toEqual({ unavailable: true })
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
