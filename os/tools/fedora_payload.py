@@ -55,7 +55,7 @@ def stage(source, runtime, destination, commit, runtime_commit, agent=None):
         *['usr/lib/harness-os/' + name for name in
           ['session', 'session-settings.py', 'runtime-path', 'wait-runtime', 'virtio-2d', 'open-wifi', 'open-updates', 'screen-action', 'screenshot', 'lock', 'files']],
         *['usr/lib/systemd/user/' + name for name in
-          ['hn-screen.service', 'harness-daemon.service', 'harness-idle.service',
+          ['harness-os.target', 'hn-screen.service', 'harness-daemon.service', 'harness-idle.service',
            'harness-update.service', 'harness-update.timer']],
     ]
     for name in paths:
@@ -90,10 +90,8 @@ def stage(source, runtime, destination, commit, runtime_commit, agent=None):
         'package_source_commit': commit, 'runtime_source_commit': runtime_commit,
         'tui_reference': 'tui/README.md', 'tui_reference_source_commit': commit,
     }, indent=2) + '\n')
-    (destination / 'usr/lib/systemd/user/harness-os.target').write_text(
-        '[Unit]\nDescription=The hn screen\n'
-        'Wants=hn-screen.service harness-idle.service harness-update.timer\n'
-        'After=graphical-session-pre.target\n')
+    target = destination / 'usr/lib/systemd/user/harness-os.target'
+    target.write_text(target.read_text().replace(' harness-install.service', '').replace(' harness-gpu-check.timer', ''))
     config = destination / 'usr/share/harness-os/labwc/rc.xml'
     tree = ET.parse(config)
     keyboard = tree.getroot().find('keyboard')
