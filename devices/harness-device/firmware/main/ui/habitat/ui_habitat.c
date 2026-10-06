@@ -2255,7 +2255,7 @@ static bool draft_emit(const ht_draft_command_t *c, void *ctx)
             (c->op != HT_DRAFT_STATE && c->op != HT_DRAFT_MOVE) ||
             (c->op == HT_DRAFT_MOVE && !s.draft_recovery.ready)) return false;
         s.draft_recovery.request_generation = s.draft_recovery.generation;
-        COPY(a.text, s.draft_recovery.original_host);
+        copy(a.text, sizeof s.draft_recovery.original_host, s.draft_recovery.original_host);
     }
 #endif
     return xQueueSend(actions, &a, 0) == pdPASS;
@@ -2286,7 +2286,8 @@ static bool pro_draft_store_queue(bool clear)
         change(); return true;
     }
     r->store = clear ? PRO_RECOVERY_CLEAR_FAILED : PRO_RECOVERY_SAVE_FAILED;
-    COPY(draft.page.error, clear ? "Couldn't clear recovery. Try Close again." : "Recovery unavailable after power loss.");
+    snprintf(draft.page.error, sizeof draft.page.error, "%s",
+        clear ? "Couldn't clear recovery. Try Close again." : "Recovery unavailable after power loss.");
     change(); return false;
 }
 static void pro_draft_store_work(action_t a)
@@ -2315,7 +2316,8 @@ static void pro_draft_store_work(action_t a)
         if (ok && a.value) pro_draft_forget();
         else {
             r->store = ok ? PRO_RECOVERY_SAVED : a.value ? PRO_RECOVERY_CLEAR_FAILED : PRO_RECOVERY_SAVE_FAILED;
-            if (!ok) COPY(draft.page.error, a.value ? "Couldn't clear recovery. Try Close again." : "Recovery unavailable after power loss.");
+            if (!ok) snprintf(draft.page.error, sizeof draft.page.error, "%s",
+                a.value ? "Couldn't clear recovery. Try Close again." : "Recovery unavailable after power loss.");
             input_cancel(); change();
         }
     }
@@ -4248,7 +4250,7 @@ void ui_draft_source(const char *machine)
         if (draft.page.active) {
             ht_draft_detach(&draft);
             if (pro_carry_review_owns(&s.carry_review, &draft.page)) s.carry_review.detached = true;
-            COPY(draft.page.error, s.draft_recovery.has_words ? "Only this part is here." : "");
+            snprintf(draft.page.error, sizeof draft.page.error, "%s", s.draft_recovery.has_words ? "Only this part is here." : "");
         }
         // A new welcome cannot accept an edit result captured on the prior link.
         if (s.voice_open || audio_client_active()) {
