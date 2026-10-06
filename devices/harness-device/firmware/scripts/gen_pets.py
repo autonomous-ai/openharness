@@ -19,7 +19,8 @@ focus.c draw them as rounded boxes at the scene clock, so they move continuously
 one per level and 80 ms step, cost 197 KB).
 Muse Code: Jolly, Meta Muse's mascot, cut from Meta's own render and from Meta's waving clip
 (assets/pets/muse, exported by mockup/muse_jolly.py; the look is mockup/muse-jolly.html). The small pet is
-the waving clip, 24 frames cropped to their ink box, one loop for all four states, stored like the scenes
+eighteen frames of the waving clip cropped to their ink box (two waves, then the arm down and
+up: MUSE_REST_SEQ), one 18-step loop for all four states, stored like the scenes
 (palette-indexed cell frames at cell 1, <= 255 colours, index 0 transparent: a third of the RGB565 + alpha8
 bytes) and drawn with ht_cell_sprite. Its three scenes are
 pack scenes like Codex's, from straight-alpha PNG frames at device scale (cell 1): working (headphones, typing
@@ -246,20 +247,49 @@ def mascot_centred(w, h, bias):
     return (233 - w // 2) - (466 - w) // 2, (233 - h // 2) - (233 - h // 2 + bias)
 
 
+def pack_rows(cols, rows, grid):
+    """A frame's cells packed (terminal.h ht_cell_frame_t): per row, (skip, count) byte pairs each followed by `count`
+    indices, until the row's cols are covered; and each row's start. Transparent runs cost two bytes, not their
+    length (owner, 2026-10-06)."""
+    out, at = [], []
+    for r in range(rows):
+        at.append(len(out))
+        row, x = grid[r * cols:(r + 1) * cols], 0
+        while x < cols:
+            skip = 0
+            while x < cols and not row[x]:
+                skip += 1; x += 1
+            run = []
+            while x < cols and row[x]:
+                run.append(row[x]); x += 1
+            out += [skip, len(run)] + run
+    assert len(out) < 65536
+    return out, at
+
+
 def cell_frames(prefix, items, palette_name, cell=1):
-    """C definitions of de-duplicated cell frames; returns (code, index per item, count, bytes)."""
-    code, seen, refs, order = [], {}, [], []
+    """C definitions of de-duplicated cell frames, packed (pack_rows) when that is smaller; returns (code, index per
+    item, count, bytes)."""
+    code, seen, refs, order, nbytes = [], {}, [], [], 0
     for item in items:
         cols, rows, grid = item[:3]
         c = item[3] if len(item) > 3 else cell
         key = (cols, rows, c, tuple(grid))
         if key not in seen:
-            seen[key] = len(refs)
-            code.append(f'static const uint8_t {prefix}_c{len(refs)}[{cols * rows}] = {{' + ','.join(map(str, grid)) + '};\n')
-            refs.append(f'{{{cols},{rows},{c},{palette_name},{prefix}_c{len(refs)}}}')
+            seen[key] = n = len(refs)
+            packed, at = pack_rows(cols, rows, grid)
+            if len(packed) + 2 * rows < cols * rows:
+                code.append(f'static const uint8_t {prefix}_c{n}[{len(packed)}] = {{' + ','.join(map(str, packed)) + '};\n')
+                code.append(f'static const uint16_t {prefix}_r{n}[{rows}] = {{' + ','.join(map(str, at)) + '};\n')
+                refs.append(f'{{{cols},{rows},{c},{palette_name},{prefix}_c{n},{prefix}_r{n}}}')
+                nbytes += len(packed) + 2 * rows
+            else:
+                code.append(f'static const uint8_t {prefix}_c{n}[{cols * rows}] = {{' + ','.join(map(str, grid)) + '};\n')
+                refs.append(f'{{{cols},{rows},{c},{palette_name},{prefix}_c{n},NULL}}')
+                nbytes += cols * rows
         order.append(seen[key])
     code.append(f'static const ht_cell_frame_t {prefix}_frames[{len(refs)}] = {{' + ','.join(refs) + '};\n')
-    return code, order, len(refs), sum(c * r for c, r, *_ in seen)
+    return code, order, len(refs), nbytes
 
 
 def generate_pack_scene(prefix, kind):
@@ -385,14 +415,18 @@ def muse_rest_images():
     return out
 
 
+# The rest loop: two waves, and on the third the arm goes down and comes back up (owner, 2026-10-06; mockup/
+# muse-wave.html "C2"; the 24-frame clip cost 408 KB). The clip's own order, so every step is a neighbour: wave 1
+# (18-21), wave 2 (22, 23, 3-5: frames 0-2 left out, where the clip straightens the head and tilts it back), the
+# third (6, 7) turning into the way down (11-15) and up again (16, 17), which runs on into 18. 18 steps of 217 ms.
+MUSE_REST_SEQ = [18, 19, 20, 21, 22, 23, 3, 4, 5, 6, 7, 11, 12, 13, 14, 15, 16, 17]
+
+
 def muse_pet_states():
-    """One waving loop for idle / working / done / asking; identical frames stored once."""
+    """One loop (MUSE_REST_SEQ) for idle / working / done / asking; only the frames it shows are stored."""
     ims = muse_rest_images()
-    seen, index = {}, []
-    for i, im in enumerate(ims):
-        index.append(seen.setdefault(im.tobytes(), i))
-    loop = [({'i': index[i]}, 0) for i in range(STEPS)]
-    assert len(ims) == STEPS
+    assert len(ims) == 24 and len(MUSE_REST_SEQ) <= STEPS
+    loop = [({'i': i}, 0) for i in MUSE_REST_SEQ]
     return (lambda: loop,) * 4, ims
 
 
@@ -800,7 +834,10 @@ def generate():
         code, n_frames, loops, nbytes, rep = generate_pet(prefix, states, draw, (w, h), cells_out, CELL_PETS.get(engine, 1))
         out += code
         counts.append((n_frames, nbytes))
-        rows = ['{' + ','.join(f'{{{f},{dy}}}' for f, dy in steps) + '}' for steps in loops]
+        n_steps = len(loops[0])
+        assert all(len(steps) == n_steps for steps in loops) and n_steps <= STEPS
+        # The loops' arrays hold HT_PET_STEPS; a shorter loop (ht_pet_t.steps) leaves the tail unused.
+        rows = ['{' + ','.join(f'{{{f},{dy}}}' for f, dy in steps + [steps[-1]] * (STEPS - n_steps)) + '}' for steps in loops]
         out.append(f'static const ht_pet_step_t {prefix}_loops[HT_PET_STATES][HT_PET_STEPS] = {{' + ','.join(rows) + '};\n')
         out.append(f'static const uint16_t {prefix}_step_ms[HT_PET_STATES] = {{' + ','.join(map(str, step_ms)) + '};\n')
         refs_to = []
@@ -828,7 +865,7 @@ def generate():
             code, n, nbytes = generate_alert_scene(f'{engine}_alert', engine)
         out += code
         scene_stats.append((f'{engine}_alert', n, nbytes))
-        table.append(f'{{"{engine}",{w},{h},{"NULL" if cells_out else prefix + "_frames"},{prefix}_loops,{prefix}_step_ms,{",".join(refs_to)},{prefix + "_frames" if cells_out else "NULL"},&{engine}_alert}}')
+        table.append(f'{{"{engine}",{w},{h},{"NULL" if cells_out else prefix + "_frames"},{prefix}_loops,{prefix}_step_ms,{",".join(refs_to)},{prefix + "_frames" if cells_out else "NULL"},&{engine}_alert,{0 if n_steps == STEPS else n_steps}}}')
     out.append('const ht_pet_t ht_pets[] = {' + ','.join(table) + '};\n')
     out.append(f'const unsigned ht_pet_count = {len(PETS)};\n')
     return ''.join(out), counts, scene_stats

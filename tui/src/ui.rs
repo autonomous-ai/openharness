@@ -139,6 +139,41 @@ mod repaint_tests {
     }
 }
 
+#[cfg(test)]
+mod border_style_tests {
+    use super::*;
+
+    fn app() -> App {
+        let (sink, _) = tokio::sync::mpsc::unbounded_channel();
+        App::new(19789, sink, (100, 30))
+    }
+
+    /// The selected pane's border/status colour is the theme's when nothing is set, and the pane's
+    /// own when the style is set anyhow — in tmux.conf, by a set-option, or the config's `[look]`,
+    /// all of which reach the options store. (Setting it only in a tmux.conf that `app.look` reads
+    /// must not be the only way the user's colour wins.)
+    #[test]
+    fn a_border_style_set_anywhere_wins_over_the_theme() {
+        let mut a = app();
+        let (_, fg, _) = crate::theme::palette();
+        // Nothing set: the active pane's border is the theme's readable foreground, not tmux's green.
+        assert_eq!(border_style(&a, true).fg, Some(fg), "default active border is the theme's foreground");
+
+        // Give the window a focused pane, and set pane-active-border-style through the options
+        // store (a live set-option, or the config's `[look]`) — not only via a tmux.conf.
+        a.tabs[a.active].focus = Some(1);
+        let tid = a.tab().id.clone();
+        let global = crate::options::SetFlags { global: true, ..Default::default() };
+        let _ = a.options.set("pane-active-border-style", Some("fg=red"), &global, &tid, 1);
+        assert_eq!(border_style(&a, true).fg, Some(Color::Red), "a set pane-active-border-style is respected, not overridden by the theme");
+        assert_eq!(box_style(&a, 1).fg, Some(Color::Red), "a box pane's focused frame takes the set pane-active-border-style");
+
+        // The non-active border, set the same way, is respected too.
+        let _ = a.options.set("pane-border-style", Some("fg=blue"), &global, &tid, 1);
+        assert_eq!(border_style(&a, false).fg, Some(Color::Blue), "a set pane-border-style is respected for the quiet panes");
+    }
+}
+
 /// screen_write_box_border_set: a box's corners, sides and its rule's joins, for tmux's box
 /// lines (single, double, heavy, simple, rounded, padded, none).
 fn box_set(lines: &str) -> (&'static str, &'static str, &'static str, &'static str, &'static str, &'static str, &'static str, &'static str) {
@@ -505,10 +540,17 @@ fn borders(buf: &mut Buffer, app: &App, body: Rect) {
 /// hn leaves a stock border — tmux's green active border — alone only when you set one yourself;
 /// otherwise it takes the theme's readable foreground (the active pane dimmed), so the selected
 /// pane reads as the theme rather than tmux's green.
+/// Whether the user set a pane *-border-style for the current window — in tmux.conf, by a
+/// set-option, or in the config's `[look]` (any of which reaches the options store) — so its
+/// colour is theirs, not the theme's.
+fn border_owned(app: &App, active: bool) -> bool {
+    let name = if active { "pane-active-border-style" } else { "pane-border-style" };
+    app.options.has_window_override(name, &app.tab().id, app.focused().unwrap_or(0))
+}
+
 fn border_style(app: &App, active: bool) -> Style {
     let mut s = app.style_of(if active { "pane-active-border-style" } else { "pane-border-style" }, app.active, app.focused());
-    let own = if active { app.look.active_border.is_some() } else { app.look.border.is_some() };
-    if !own && !app.options.tmux_look() {
+    if !border_owned(app, active) && !app.options.tmux_look() {
         let (_, fg, _) = crate::theme::palette();
         s = s.fg(fg);
         if !active { s = s.add_modifier(Modifier::DIM) }
@@ -545,8 +587,8 @@ fn boxes(buf: &mut Buffer, app: &App) {
     let hz = box_set(&lines).4;
     let inner = app.box_inner(tab);
     let frames: Vec<(u64, crate::pane_frame::Frame)> = app.rects.iter().map(|(id, r)| (*id, crate::pane_frame::boxed_in(*r, canvas, inner, status))).filter(|(_, f)| f.content != f.surface).collect();
-    // Each box its own line, in its own colour — boxes side by side touch (`││`), never sharing a
-    // line or joining at a corner.
+    // Each box its own line, in its own colour, never sharing a cell with another (see
+    // `pane_frame::boxed`: `│ │` side by side, touching stacked).
     for (id, f) in &frames {
         let (r, style) = (f.surface, box_style(app, *id));
         let edge: std::collections::HashSet<(u16, u16)> = (r.x..r.right()).flat_map(|x| [(x, r.y), (x, r.bottom() - 1)]).chain((r.y..r.bottom()).flat_map(|y| [(r.x, y), (r.right() - 1, y)])).collect();
@@ -579,8 +621,7 @@ fn boxes(buf: &mut Buffer, app: &App) {
 /// tmux's own under `@hn-look tmux`, which draws no boxes). The marked pane's frame is bold.
 fn box_style(app: &App, id: u64) -> Style {
     let active = Some(id) == app.focused();
-    let own = if active { app.look.active_border.is_some() } else { app.look.border.is_some() };
-    let style = if own { border_style(app, active) }
+    let style = if border_owned(app, active) { border_style(app, active) }
         // The focused frame is the status bar's own background colour, so the active pane's box
         // always sits in the same colour as the bar — not the accent, and not the pane text.
         else if active { Style::default().fg(theme::paint(app.status_style().bg.unwrap_or(Color::Reset))).add_modifier(if theme::no_color() { Modifier::BOLD } else { Modifier::empty() }) }

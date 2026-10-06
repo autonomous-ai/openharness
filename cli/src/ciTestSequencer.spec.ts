@@ -1,7 +1,7 @@
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import type { TestSpecification, Vitest } from 'vitest/node'
-import { durationShards, DurationSequencer, readTimingHints } from './__fixtures__/ciTestSequencer.js'
+import { createDurationSequencer, durationShards, DurationSequencer, E2E_HINT_PATH, readTimingHints, readTimingHintsFile } from './__fixtures__/ciTestSequencer.js'
 
 const entries = (costs: number[]) => costs.map((durationMs, value) => ({ key: `file-${value}`, durationMs, value }))
 
@@ -67,5 +67,28 @@ describe('duration-based CLI shards', () => {
     } as Vitest).shard(files)))
     expect(new Set(shards.flat())).toEqual(new Set(files))
     expect(shards.flat()).toHaveLength(files.length)
+  })
+
+  it('reads the end-to-end hints with their own file pattern, and neither suite accepts the other\'s files', () => {
+    const e2e = { schema: 1, defaultDurationMs: 60_000, durationMs: { 'e2e/races.e2e.ts': 264_300 } }
+    expect(readTimingHints(e2e, E2E_HINT_PATH)).toEqual({ defaultDurationMs: 60_000, durationMs: e2e.durationMs })
+    expect(() => readTimingHints(e2e)).toThrow('timing hint: e2e/races.e2e.ts')
+    expect(() => readTimingHints({ ...e2e, durationMs: { 'src/slow.spec.ts': 10 } }, E2E_HINT_PATH)).toThrow('timing hint')
+    expect(() => readTimingHints({ ...e2e, durationMs: { 'e2e/../races.e2e.ts': 10 } }, E2E_HINT_PATH)).toThrow('timing hint')
+    // The checked-in hints parse: a malformed file would fail every CI shard before a test ran.
+    expect(readTimingHintsFile('ci-e2e-durations.json', E2E_HINT_PATH).defaultDurationMs).toBeGreaterThan(0)
+  })
+
+  it('splits end-to-end files by their hints, so the longest files land on different shards', async () => {
+    const root = resolve('worktree')
+    const hints = { defaultDurationMs: 60_000, durationMs: { 'e2e/a.e2e.ts': 400_000, 'e2e/b.e2e.ts': 300_000, 'e2e/c.e2e.ts': 250_000 } }
+    const paths = ['e2e/a.e2e.ts', 'e2e/b.e2e.ts', 'e2e/c.e2e.ts', 'e2e/d.e2e.ts', 'e2e/e.e2e.ts', 'e2e/f.e2e.ts']
+    const files = paths.map(path => ({ moduleId: resolve(root, path), project: { name: '' }, pool: 'forks' }) as TestSpecification)
+    const Sequencer = createDurationSequencer(hints)
+    const shards = await Promise.all([1, 2, 3].map(index => new Sequencer({
+      config: { root, shard: { index, count: 3 } },
+    } as Vitest).shard(files).then(shard => shard.map(spec => paths.find(path => resolve(root, path) === spec.moduleId)!))))
+    expect(shards.flat().sort()).toEqual(paths)
+    expect(shards.map(shard => shard.filter(path => path in hints.durationMs))).toEqual([['e2e/a.e2e.ts'], ['e2e/b.e2e.ts'], ['e2e/c.e2e.ts']])
   })
 })

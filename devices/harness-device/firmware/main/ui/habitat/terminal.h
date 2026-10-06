@@ -62,7 +62,13 @@ extern const ht_pfont_t ht_lv_montserrat_22, ht_lv_montserrat_14;
 typedef struct { uint16_t w, h; const uint16_t *px; const uint8_t *a; } ht_icon_t;
 // A CELL SPRITE (the pets' large scenes, scripts/gen_pets.py): cols x rows cells of `cell` px, one byte
 // each — a palette index, 0 transparent — and the palette in RGB565 panel order, entry 0 unused.
-typedef struct { uint8_t cols, rows, cell; const uint16_t *palette; const uint8_t *cells; } ht_cell_frame_t;
+// Packed when `row_at` is set (owner, 2026-10-06: transparent runs cost bytes): row r starts at cells + row_at[r]
+// and is pairs of (transparent cells to skip, opaque cells that follow) bytes, each pair followed by those cells'
+// indices, until the row's `cols` are covered. Unset, `cells` is the plain cols x rows grid.
+typedef struct { uint8_t cols, rows, cell; const uint16_t *palette; const uint8_t *cells; const uint16_t *row_at; }
+    ht_cell_frame_t;
+// One cell of a frame, plain or packed (0 transparent).
+uint8_t ht_cell_at(const ht_cell_frame_t *frame, int col, int row);
 // The engines' marks in focus.c's ENGINES order: 20 px as the inbox drew them, and 27 px — LVGL's
 // own 28/20 scaling of the same 20 px art, as the header drew it. And the microphone.
 extern const ht_icon_t ht_icon_engine20[14], ht_icon_engine28[14], ht_icon_mic;
@@ -118,6 +124,7 @@ typedef struct {
     // A cell sprite instead of pixels (ht_cell_sprite): width x height px of `cell`-px squares.
     const uint8_t *cells;
     const uint16_t *palette;
+    const uint16_t *row_at;   // packed cells (ht_cell_frame_t), NULL plain
     uint8_t cell;
     // A cell sprite drawn smaller (ht_cell_sprite_zoom): width x height is the frame's src_w x src_h px times zoom / 8,
     // each pixel the area-weighted mean of the frame pixels it covers, over black. 0 = drawn at its own size.

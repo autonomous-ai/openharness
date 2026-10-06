@@ -262,18 +262,24 @@ static int pet_frame(const ht_pet_t *pet, const ht_sprite_t *sp)
 {
     assert(!pet->frames != !pet->cells);
     for (int s = 0; s < HT_PET_STATES; s++)
-        for (int k = 0; k < HT_PET_STEPS; k++) {
+        for (int k = 0; k < (int)ht_pet_steps(pet); k++) {
             int fr = pet->loops[s][k].frame;
             if (pet->cells ? sp->cells == pet->cells[fr].cells : sp->pixels == pet->frames[fr].px) return fr;
         }
     return -1;
 }
-// Whether row `row` of the pet's frame `fr` has any ink (alpha, or a non-zero palette index).
+// Whether row `row` of the pet's frame `fr`, as drawn at 1x, has any ink (alpha, or a non-zero palette index: the
+// cell frames are drawn at 2x, so the 1x row is two of theirs).
 static bool pet_row_inked(const ht_pet_t *pet, int fr, int row)
 {
     int w = pet->w;
-    for (int x = 0; x < w; x++)
-        if (pet->cells ? pet->cells[fr].cells[row * w + x] != 0 : pet->frames[fr].a[row * w + x] != 0) return true;
+    if (pet->cells) {
+        const ht_cell_frame_t *f = &pet->cells[fr];
+        for (int y = 2 * row; y < 2 * row + 2; y++)
+            for (int x = 0; x < f->cols; x++) if (ht_cell_at(f, x, y)) return true;
+        return false;
+    }
+    for (int x = 0; x < w; x++) if (pet->frames[fr].a[row * w + x] != 0) return true;
     return false;
 }
 // The index of the scene's frame whose cells these are, or -1.
@@ -679,7 +685,7 @@ static void focus_face(void)
         // Clear of the curved title: no layout, state or step puts ink above the foot of its cells.
         for (int layout = 0; layout < 3; layout++)       // recap card, working line, resting line
             for (int state = 0; state < HT_PET_STATES; state++)
-                for (int step = 0; step < HT_PET_STEPS; step++) {
+                for (int step = 0; step < (int)ht_pet_steps(pet); step++) {
                     ht_character_face_t f = {.recipient = "Payments refactor", .engine = eng,
                         .activity = layout == 1 ? "Working" : "", .elapsed = 5, .status = "", .hint = "",
                         .detail = "", .mood = state == HT_PET_DONE ? HT_CHARACTER_DONE : HT_CHARACTER_IDLE,
@@ -702,7 +708,7 @@ static void focus_face(void)
                 }
         int frame_at[HT_PET_STATES][HT_PET_STEPS];
         for (int state = 0; state < HT_PET_STATES; state++)
-            for (int step = 0; step < HT_PET_STEPS; step++) {
+            for (int step = 0; step < (int)ht_pet_steps(pet); step++) {
                 ht_character_face_t f = {.recipient = "Payments refactor", .engine = eng,
                     .activity = "", .status = "", .hint = "", .detail = "", .mood = HT_CHARACTER_IDLE,
                     .foreground = 0xffff, .dim = 0x8410, .ink = 0xffff,
@@ -758,7 +764,7 @@ static void focus_face(void)
         // Each state moves: more than one frame (or a hop) over its loop, and one step_ms changes it.
         for (int state = 0; state < HT_PET_STATES; state++) {
             bool moves = false;
-            for (int step = 0; step < HT_PET_STEPS; step++)
+            for (int step = 0; step < (int)ht_pet_steps(pet); step++)
                 moves |= frame_at[state][step] != frame_at[state][0] ||
                          pet->loops[state][step].dy != pet->loops[state][0].dy;
             assert(moves);
@@ -929,6 +935,21 @@ static void focus_face(void)
             int cap = 233 - ht_lv_inter_30.base.height / 2 + ht_lv_inter_30.ascent - 22;
             int dy0 = pt->loops[HT_PET_IDLE][0].dy * (claude ? 6 : 8) / 4;
             assert(m->y - dy0 == 44 + (cap - 44 - h) / 2);
+        }
+        // Codex over a four-line recap is 1.5x, not 1x (owner, 2026-10-06: "it looks tiny"), between the name and the
+        // recap's first line; Muse stays 1x there.
+        for (int e = 0; e < 2; e++) {
+            const char *eng_ = e ? "muse" : "codex";
+            ht_character_face_t g = {.recipient = "x", .engine = eng_, .activity = "", .status = "", .hint = "",
+                .detail = "", .mood = HT_CHARACTER_DONE, .clock_ms = 0};
+            ht_scene_t sc; ht_scene_clear(&sc, 0);
+            ht_character_face(&sc, &c, &g, 0xffff, "Flashed 0.0.91 to both dials and verified the image on each. All 44 "
+                              "host checks pass, including the new reader tests. Nothing is committed yet; say commit.");
+            int lines = 0;
+            for (int i = 3; i < 7; i++) lines += sc.runs[i].text[0] != 0;
+            const ht_run_t *m = &sc.runs[1];
+            assert(lines == 4 && m->sprite.cells && m->sprite.zoom == (e ? 4 : 6));
+            assert(m->y >= 44 && m->y + m->sprite.height <= sc.runs[3].y + ht_lv_inter_30.ascent - 22);
         }
         // No pane's engine (no pet, no mark: design 2026-10-06 "No pane"): the resting line alone, its one or two lines
         // 50 px apart and centred on the glass, each baseline where a browser puts Inter 36's.
@@ -1220,7 +1241,20 @@ static void focus_face(void)
                 assert(mp->step_ms[st] == mp->step_ms[0]);
                 for (int k = 0; k < HT_PET_STEPS; k++) assert(mp->loops[st][k].frame == mp->loops[0][k].frame && !mp->loops[st][k].dy);
             }
-            assert(mp->step_ms[0] == 217);
+            // Two waves and the arm down and up, 18 steps (owner, 2026-10-06): the loop wraps at 18, not 24.
+            assert(mp->step_ms[0] == 217 && ht_pet_steps(mp) == 18);
+            {
+                ht_character_face_t g = {.recipient = "x", .engine = "muse", .activity = "", .status = "", .hint = "",
+                    .detail = "", .mood = HT_CHARACTER_IDLE, .clock_ms = 18 * 217 + 1};
+                ht_scene_t a, b; ht_scene_clear(&a, 0); ht_scene_clear(&b, 0);
+                ht_character_face(&a, &c, &g, 0xffff, "");
+                g.clock_ms = 1; ht_character_face(&b, &c, &g, 0xffff, "");
+                assert(a.runs[1].sprite.cells == b.runs[1].sprite.cells && a.runs[1].sprite.cells == mp->cells[mp->loops[0][0].frame].cells);
+                g.clock_ms = 17 * 217 + 1;
+                ht_scene_t z; ht_scene_clear(&z, 0); ht_character_face(&z, &c, &g, 0xffff, "");
+                assert(z.runs[1].sprite.cells == mp->cells[mp->loops[0][17].frame].cells);
+                assert(ht_focus_pet_next_ms(&g, "") == 18 * 217);   // the last step's end is the loop's start again
+            }
             const ht_pet_scene_t *ms_[3] = {mp->working_scene, mp->listening_scene, mp->sending_scene};
             assert(!ms_[0]->overlay && !ms_[1]->overlay && ms_[2]->overlay);
             assert(ms_[0]->steps == 8 && ms_[0]->step_ms == 140 && ms_[1]->steps == 12 && ms_[1]->step_ms == 140);
@@ -1339,7 +1373,7 @@ static void focus_face(void)
                 for (unsigned f = 0; f < 8; f++) {
                     const ht_cell_frame_t *fr = &ls->frames[f];
                     for (int y = 0; y < fr->rows; y++) for (int xx = 0; xx < fr->cols; xx++) {
-                        if (!fr->cells[y * fr->cols + xx]) continue;
+                        if (!ht_cell_at(fr, xx, y)) continue;
                         // the pixel's centre against the waves' centre, sixteenths of a px, scene coordinates
                         int dx = xx * 16 + 8 - wv->cx16, dy = wv->cy16 - (y * 16 + 8);
                         int d2 = dx * dx + dy * dy, rin = wv->r_near16 - 24, rout = wv->r_far16 + 24;
@@ -1430,7 +1464,7 @@ static void focus_face(void)
                 ht_raster(&scene, (ht_rect_t){0, 0, HT_WIDTH, HT_HEIGHT}, full);
                 int inked = 0;
                 for (int y = y0; y < y0 + sc->h; y++) for (int x = x0; x < x0 + sc->w; x++) {
-                    unsigned idx = fr->cells[((y - y0) / fr->cell) * fr->cols + (x - x0) / fr->cell];
+                    unsigned idx = ht_cell_at(fr, (x - x0) / fr->cell, (y - y0) / fr->cell);
                     uint16_t want = idx ? fr->palette[idx] : 0x3412;   // the background, in panel order
                     if (full[y * HT_WIDTH + x] != want) { fprintf(stderr, "px %d,%d idx %u got %04x want %04x\n", x, y, idx, full[y * HT_WIDTH + x], want); assert(0); }
                     inked += idx != 0;

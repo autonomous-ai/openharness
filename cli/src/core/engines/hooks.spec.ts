@@ -68,6 +68,21 @@ describe('which agent a hook belongs to', () => {
     expect(console.log).not.toHaveBeenCalled()
   })
 
+  it('reads the table again when the one in flight began before the hook\'s own process, and matches it', async () => {
+    const a1 = agent('a1', 100)
+    vi.mocked(processRows)
+      .mockResolvedValueOnce(tree([200, 100], [100, 1]) as never)
+      .mockResolvedValueOnce(tree([300, 200], [200, 100], [100, 1]) as never)
+    expect(await setup({ '%1': a1 }).hooks.resolveHookAgent({ engine: 'claude', runtimeHints: [hint('%1')], callerPid: 300 })).toBe(a1)
+    expect(processRows).toHaveBeenCalledTimes(2)
+    expect(console.log).not.toHaveBeenCalled()
+  })
+
+  it('none when the table read again for a missing caller cannot be read', async () => {
+    vi.mocked(processRows).mockResolvedValueOnce(tree([100, 1]) as never).mockResolvedValueOnce(null)
+    expect(await setup({ '%1': agent('a1', 100) }).hooks.resolveHookAgent({ engine: 'claude', runtimeHints: [hint('%1')], callerPid: 300 })).toBeNull()
+  })
+
   it('none when the process table cannot be read', async () => {
     vi.mocked(processRows).mockResolvedValueOnce(null)
     expect(await setup({ '%1': agent('a1', 100) }).hooks.resolveHookAgent({ engine: 'claude', runtimeHints: [hint('%1')], callerPid: 300 })).toBeNull()
@@ -130,11 +145,13 @@ describe('which agent a hook belongs to', () => {
     // The new engine is 200 and the hook's process, 300, is its child. Pid 100 was the engine a restart
     // killed; nothing in the table is it any more.
     const newEngine = () => tree([300, 200], [200, 1])
-    /** Asks, and says when the hook has started waiting: after it read the process table once. */
+    /** Asks, and says when the hook has started waiting: once it has been answered with `onWait`. */
     const ask = (hooks: ReturnType<typeof setup>['hooks'], panes = ['%1'], onWait?: () => void) => {
       let answer: RegisteredSession | null | undefined
-      const asked = hooks.resolveHookAgent({ engine: 'claude', runtimeHints: panes.map(hint), callerPid: 300, ...(onWait ? { onWait } : {}) }).then((agent) => { answer = agent })
-      const waiting = () => vi.waitFor(() => expect(processRows).toHaveBeenCalledTimes(1))
+      let waited = false
+      const asked = hooks.resolveHookAgent({ engine: 'claude', runtimeHints: panes.map(hint), callerPid: 300, onWait: () => { waited = true; onWait?.() } })
+        .then((agent) => { answer = agent })
+      const waiting = () => vi.waitFor(() => expect(waited).toBe(true))
       return { asked, waiting, answer: () => answer }
     }
 
@@ -185,6 +202,30 @@ describe('which agent a hook belongs to', () => {
       onPane['%1'] = agent('a1', 200)
       await hook.asked
       expect(hook.answer()).toEqual(agent('a1', 200))
+    })
+
+    // On Linux the hook runs under dash, whose `sh -c` stays the hook's parent and exits with it: once
+    // `onWait` has answered the hook, the caller is gone from the table. It still belongs to its engine.
+    it('belongs to the agent after the wait though its own process has exited by then, by its ancestry as it arrived', async () => {
+      const onPane: Record<string, RegisteredSession> = { '%1': agent('a1', 100) }
+      vi.mocked(processRows).mockResolvedValueOnce(newEngine() as never).mockResolvedValue(tree([200, 1]) as never)
+      const hook = ask(setup(onPane).hooks)
+      await hook.waiting()
+      onPane['%1'] = agent('a1', 200)
+      await hook.asked
+      expect(hook.answer()).toEqual(agent('a1', 200))
+    })
+
+    it('reads who it came from as it arrives, while the reconcile pass for its pane still runs', async () => {
+      const onPane: Record<string, RegisteredSession> = { '%1': agent('a1', 200) }
+      vi.mocked(processRows).mockResolvedValueOnce(newEngine() as never)
+      let readDuringPass = -1
+      const { hooks } = setup(onPane, { agentReconciler: {
+        triggerHint: vi.fn(async () => { readDuringPass = vi.mocked(processRows).mock.calls.length; return true }),
+        trigger: vi.fn(async () => true),
+      } as unknown as EngineHookDeps['agentReconciler'] })
+      expect(await hooks.resolveHookAgent({ engine: 'claude', runtimeHints: [hint('%1')], callerPid: 300 })).toEqual(agent('a1', 200))
+      expect(readDuringPass).toBe(1)
     })
 
     it('none when what is recorded is a process it does not come from, or the table cannot be read again', async () => {

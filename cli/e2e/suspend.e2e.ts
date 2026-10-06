@@ -72,6 +72,9 @@ async function lineMode(d: IsolatedDaemon, pane: string): Promise<boolean> {
   const tty = (await d.tmux.run('display-message', '-p', '-t', pane, '#{pane_tty}')).trim()
   return / icanon /.test(` ${execFileSync('/bin/sh', ['-c', 'stty -a < "$0"', tty], { encoding: 'utf8' }).replace(/\s+/g, ' ')} `)
 }
+// The pane's command as tmux names it: on Linux, from the process's argv[0], and Debian's tcsh rewrites
+// its own to "-bin/tcsh", which tmux reads as "bin/tcsh" (macOS's tmux reads the process name, "tcsh").
+// Compared by basename.
 const processState = (pid: number): string => {
   try { return execFileSync('ps', ['-o', 'stat=', '-p', String(pid)], { encoding: 'utf8' }).trim() } catch { return '' }
 }
@@ -140,7 +143,7 @@ describe('an engine that is stopped, or killed', () => {
       await until('the agent to stop counting as active', async () => (await row(client, agent.id))?.status !== 'active' || null, 45_000, 500)
       expect(await until('the pane to be a shell', async () => {
         const [dead, command] = (await d.tmux.run('display-message', '-p', '-t', pane, '#{pane_dead} #{pane_current_command}')).trim().split(' ')
-        return dead === '0' && command === basename(shell) ? command : null
+        return dead === '0' && basename(command) === basename(shell) ? basename(command) : null
       }, 30_000, 200)).toBe(basename(shell))
       expect(d.coresStarted()).toBe(1)
       client.close()
@@ -170,7 +173,7 @@ describe('an engine that is stopped, or killed', () => {
       await until('the agent to stop counting as active', async () => (await row(client, agent.id))?.status !== 'active' || null, 45_000, 500)
       expect(await until('the pane to be a shell', async () => {
         const [dead, command] = (await d.tmux.run('display-message', '-p', '-t', pane, '#{pane_dead} #{pane_current_command}')).trim().split(' ')
-        return dead === '0' && command === basename(shell) ? command : null
+        return dead === '0' && basename(command) === basename(shell) ? basename(command) : null
       }, 30_000, 200)).toBe(basename(shell))
       expect(d.coresStarted()).toBe(1)
       client.close()
