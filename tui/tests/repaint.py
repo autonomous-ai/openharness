@@ -112,7 +112,12 @@ try:
               *[f'{k}={v}' for k, v in ENV.items()], *COMMAND]
     outer('new-session', '-d', '-s', 'view', '-x', '120', '-y', '32', shlex.join(launch))
     started = True
-    wait(lambda: 'Mock terminal' in screen() and 'REPAINT_IDLE' in screen(), 'initial frame')
+    wait(lambda: 'Mock terminal' in screen(), 'initial frame')
+    # Loading this fixture's config shows a startup notice over the status line.
+    # Dismiss it as a person would before testing the status timers themselves;
+    # otherwise their five-second startup deadline races that unrelated notice.
+    outer('send-keys', '-t', 'view', 'C-g')
+    wait(lambda: 'REPAINT_IDLE' in screen(), 'initial status line')
 
     hn('set', '-g', 'status-right', 'REPAINT_ANIM=#{spinner}')
     wait(lambda: 'REPAINT_ANIM=' in screen(), 'custom spinner visible')
