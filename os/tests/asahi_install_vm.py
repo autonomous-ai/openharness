@@ -133,7 +133,7 @@ def main():
         vm.keys('ret')
         vm.frame('05-ready', 'Install Harness', absent=[PASSWORD])
         vm.keys('ret')
-        vm.frame('06-copying', 'Copying Harness', seconds=90)
+        vm.frame('06-progress', 'Checking installation files', seconds=60)
         vm.frame('07-complete', ['Harness is installed', 'Shut down'], seconds=400)
         receipt['after'] = inspect(vm)
         assert receipt['after']['storage']['phase'] == 'copied'

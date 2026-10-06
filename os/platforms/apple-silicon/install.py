@@ -181,7 +181,8 @@ class Page:
                 self.line(row, (' ' + mask).ljust(self.width - 18), offset=18,
                           attr=self.active if self.focus == index else 0)
                 self.hits.append((self.top + row, self.left + 18, self.left + self.width, index))
-            self.line(12, self.error)
+            for row, text in enumerate(self.error.splitlines()[:2]):
+                self.line(12 + row, text)
             self.button(14, 'Install Harness', 2)
         try:
             editing = usable and status is None and self.focus < 2
@@ -299,7 +300,7 @@ def application(screen, payload):
                 break
             except (OSError, ValueError, subprocess.SubprocessError) as error:
                 diagnostic(error)
-                view.error, view.focus = 'Installation stopped. Details: ' + str(LOG), 0
+                view.error, view.focus = 'Installation stopped. Details:\n' + str(LOG), 0
             finally:
                 password = None
     # Unmount the ESP before reporting success or asking the computer to stop.

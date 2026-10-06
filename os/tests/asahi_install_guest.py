@@ -21,7 +21,10 @@ assert fixture.run('lsblk', '-ndo', 'SERIAL', '/dev/vdc') == 'HARNESS_PAYLOAD'
 
 
 def inspect():
-    fixture.mount()
+    # The live form already has a read-only view. Observe with the same flags;
+    # asking for a writable FAT superblock here would conflict with that view.
+    fixture.run('mount', '-t', 'vfat', '-o', 'ro,noatime,uid=0,gid=0,fmask=0177,dmask=0077',
+                fixture.DISK + '2', fixture.ROOT)
     try:
         baseline = json.loads(fixture.BASELINE.read_text())
         protected = fixture.protected()
