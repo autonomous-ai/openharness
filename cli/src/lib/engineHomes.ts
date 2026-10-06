@@ -142,6 +142,17 @@ export function sessionCodexHome(session: { codexHome?: string | null; transcrip
   return home || launchCodexHome(null)
 }
 
+/** Found by QA on a quiet machine: Claude's picker and effort read another login's settings.
+ * A known transcript keeps its home after the shell changes. Settings default to .claude, unlike
+ * the folder-trust .claude.json below, which defaults to the user's home itself. */
+export function sessionClaudeHome(session: { transcriptPath?: string | null }): string {
+  const projects = session.transcriptPath && claudeProjectsRoots(env.CLAUDE_PROJECTS_DIR).find(root => {
+    const path = relative(root, session.transcriptPath!)
+    return !!path && path !== '..' && !path.startsWith(`..${sep}`) && !isAbsolute(path)
+  })
+  return projects ? dirname(projects) : movedHome(launchEnvironment().CLAUDE_CONFIG_DIR) || dirname(env.CLAUDE_PROJECTS_DIR)
+}
+
 /**
  * The folder Claude Code keeps `.claude.json` in for an agent launched now: the CLAUDE_CONFIG_DIR the
  * person's shell sets, else the home folder. Claude Code's own rule (2.1.290:
