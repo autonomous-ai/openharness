@@ -189,6 +189,19 @@ def main():
                    'sudo -n systemctl daemon-reload && sudo -n systemctl enable --now harness-public-update-test.service')
         vm.command('printf %s ' + shlex.quote('\n127.0.0.1 github.com storage.googleapis.com\n') + ' | sudo -n tee -a /etc/hosts >/dev/null')
         (folder / 'hosts-fixture.txt').write_bytes(vm.read_file('/etc/hosts'))
+        # Arch's resolve NSS module precedes files; the observed baseline still
+        # resolved public addresses after flush-caches. This is an explicit
+        # guest-only transport fixture, so put its hosts entries first. Do not
+        # change the updater, its URLs, signature/hash checks or privilege policy.
+        nss = vm.read_file('/etc/nsswitch.conf').decode()
+        (folder / 'nsswitch-before.txt').write_text(nss)
+        lines = nss.splitlines(keepends=True)
+        rows = [i for i, line in enumerate(lines) if line.startswith('hosts:')]
+        if len(rows) != 1:
+            raise ValueError('Expected one hosts NSS entry for the private transport')
+        lines[rows[0]] = 'hosts: files mymachines resolve [!UNAVAIL=return] myhostname dns\n'
+        copy_file(vm, ''.join(lines).encode(), '/tmp/harness-test-nsswitch.conf')
+        vm.command('sudo -n install -m 644 /tmp/harness-test-nsswitch.conf /etc/nsswitch.conf')
         vm.command('timeout 10 sh -c ' + shlex.quote("until ss -ltnH | grep -q '127.0.0.1:443 '; do sleep .1; done"))
         # The original session has already queried the public hosts. Flush its
         # resolver cache after adding the private hosts file; prove this request
@@ -202,6 +215,9 @@ def main():
         output, _ = vm.command('python3 -c ' + shlex.quote(diagnostic), timeout=15)
         (folder / '02-private-resolution.log').write_text(output)
         (folder / '02-nsswitch.txt').write_bytes(vm.read_file('/etc/nsswitch.conf'))
+        vm.command('python3 -c ' + shlex.quote('import socket; '
+                   'assert all({i[4][0] for i in socket.getaddrinfo(host,443,type=socket.SOCK_STREAM)} == {"127.0.0.1"} '
+                   'for host in ["github.com","storage.googleapis.com"]), "Private transport must resolve only to loopback"'))
         check = 'import urllib.request; print(urllib.request.urlopen(' + repr('https://github.com' + transport.FEED) + ', timeout=10).status)'
         output, status = vm.command('python3 -c ' + shlex.quote(check), timeout=15, check=False)
         (folder / '02-untrusted-tls.log').write_text(output)
