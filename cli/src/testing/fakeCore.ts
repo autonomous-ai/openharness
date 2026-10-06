@@ -16,6 +16,7 @@ export function fakeCore(over: Overrides = {}): CoreApi {
       live: vi.fn(() => []),
       displayName: vi.fn(() => ''),
       byAgent: vi.fn(() => undefined),
+      resolve: vi.fn(() => undefined),
       advertised: vi.fn(() => []),
       terminalAvailable: vi.fn(() => false),
       sync: vi.fn(),

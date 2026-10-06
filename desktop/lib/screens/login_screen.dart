@@ -55,7 +55,26 @@ class LoginScreen extends StatelessWidget {
   /// 2026-09-23).
   final VoidCallback? onClose;
 
-  const LoginScreen({super.key, required this.notifier, this.onClose});
+  /// Why this sign-in, now — said in place of the pitch under the title. Null
+  /// keeps the pitch. See [showSignInSheet].
+  final String? reason;
+
+  /// Offers Scan with your phone where this app can sign in that way. False
+  /// where the person is here to add a phone: that way in needs a phone that
+  /// is already signed in.
+  final bool offerPhone;
+
+  const LoginScreen({
+    super.key,
+    required this.notifier,
+    this.onClose,
+    this.reason,
+    this.offerPhone = true,
+  });
+
+  static const _pitch =
+      'At home, at the office, in the cloud — every machine you '
+      'sign in to becomes part of one desk, here.';
 
   /// Matches `EnvironmentSetupScreen` (560) and `LinkMachineScreen` (460) —
   /// wide enough for the diagram to breathe, still centred at the 880×560
@@ -145,8 +164,7 @@ class LoginScreen extends StatelessWidget {
                                   ),
                                   const SizedBox(height: 8),
                                   Text(
-                                    'At home, at the office, in the cloud — every machine you '
-                                    'sign in to becomes part of one desk, here.',
+                                    reason ?? _pitch,
                                     textAlign: TextAlign.center,
                                     style: Theme.of(context)
                                         .textTheme
@@ -161,6 +179,7 @@ class LoginScreen extends StatelessWidget {
                                     notifier: notifier,
                                     waiting: waiting,
                                     compact: compact,
+                                    offerPhone: offerPhone,
                                   ),
                                   if (notifier.lastError != null &&
                                       !notifier.sessionExpired) ...[
@@ -248,8 +267,7 @@ class LoginScreen extends StatelessWidget {
                                   maxWidth: 650,
                                 ),
                                 child: Text(
-                                  'At home, at the office, in the cloud — every machine you '
-                                  'sign in to becomes part of one desk, here.',
+                                  reason ?? _pitch,
                                   textAlign: TextAlign.center,
                                   style: grid.AppType.body().copyWith(
                                     fontSize: 16,
@@ -274,6 +292,7 @@ class LoginScreen extends StatelessWidget {
                                   waiting: waiting,
                                   compact: compact,
                                   prominent: true,
+                                  offerPhone: offerPhone,
                                 ),
                               ),
                               if (notifier.lastError != null &&
@@ -319,6 +338,7 @@ class _Action extends StatefulWidget {
     required this.waiting,
     required this.compact,
     this.prominent = false,
+    this.offerPhone = true,
   });
 
   final AppNotifier notifier;
@@ -329,6 +349,9 @@ class _Action extends StatefulWidget {
   /// screen at the minimum window.
   final bool compact;
   final bool prominent;
+
+  /// See [LoginScreen.offerPhone].
+  final bool offerPhone;
 
   @override
   State<_Action> createState() => _ActionState();
@@ -409,7 +432,8 @@ class _ActionState extends State<_Action> {
               otherWays: [
                 // The other way in: a QR a phone already signed in scans and approves. Not on a
                 // web page at phone width — that page IS the phone.
-                if (notifier.canSignInWithPhone &&
+                if (widget.offerPhone &&
+                    notifier.canSignInWithPhone &&
                     !(kIsWeb && MediaQuery.sizeOf(context).width < 720)) ...[
                   if (!widget.compact) const OrDivider(),
                   OutlinedButton.icon(
@@ -799,7 +823,10 @@ class _AppMark extends StatelessWidget {
 /// asked for at the moment the person reaches for it. This is [LoginScreen]
 /// ITSELF on a route above the desk, not a smaller copy: a second layout was a
 /// second sign-in to keep in step, and it read as the screen having been
-/// redesigned. [reason] is accepted for the call sites that have one to give.
+/// redesigned. [reason], when a call site has one, takes the place of the
+/// pitch under the title: the person reached for something, and this says
+/// what the sign-in is for. [offerPhone] false leaves out Scan with your phone
+/// — see [LoginScreen.offerPhone].
 ///
 /// Closes itself the moment the account arrives — [AppNotifier.signedIn] flips
 /// — or when the person cancels, whichever comes first. Returns whether the
@@ -809,6 +836,7 @@ Future<bool> showSignInSheet(
   BuildContext context,
   AppNotifier notifier, {
   String? reason,
+  bool offerPhone = true,
 }) async {
   if (notifier.signedIn) return true;
   final completed = await Navigator.of(context).push<bool>(
@@ -817,18 +845,26 @@ Future<bool> showSignInSheet(
       barrierDismissible: false,
       transitionDuration: Duration.zero,
       reverseTransitionDuration: Duration.zero,
-      pageBuilder: (_, _, _) =>
-          _SignInSheet(notifier: notifier, reason: reason),
+      pageBuilder: (_, _, _) => _SignInSheet(
+        notifier: notifier,
+        reason: reason,
+        offerPhone: offerPhone,
+      ),
     ),
   );
   return completed ?? notifier.signedIn;
 }
 
 class _SignInSheet extends StatefulWidget {
-  const _SignInSheet({required this.notifier, this.reason});
+  const _SignInSheet({
+    required this.notifier,
+    this.reason,
+    this.offerPhone = true,
+  });
 
   final AppNotifier notifier;
   final String? reason;
+  final bool offerPhone;
 
   @override
   State<_SignInSheet> createState() => _SignInSheetState();
@@ -889,7 +925,12 @@ class _SignInSheetState extends State<_SignInSheet> {
       },
       child: ListenableBuilder(
         listenable: notifier,
-        builder: (_, _) => LoginScreen(notifier: notifier, onClose: _dismiss),
+        builder: (_, _) => LoginScreen(
+          notifier: notifier,
+          onClose: _dismiss,
+          reason: widget.reason,
+          offerPhone: widget.offerPhone,
+        ),
       ),
     );
   }

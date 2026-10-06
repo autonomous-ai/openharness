@@ -135,6 +135,12 @@ const LOCAL_ONLY_COMMANDS = new Set([
   'upgrade', 'vim',
 ])
 
+/** A whole prompt that is one of LOCAL_ONLY_COMMANDS, typed plainly: `/compact`, `/model opus`. */
+function isLocalOnlyCommandLine(text: string): boolean {
+  const name = /^\/([A-Za-z][\w-]*)(?:\s|$)/.exec(text.trim())?.[1]
+  return name !== undefined && LOCAL_ONLY_COMMANDS.has(name.toLowerCase())
+}
+
 /**
  * `<command-name>/goal</command-name>…<command-args>x</command-args>` → `/goal x`.
  *
@@ -430,6 +436,11 @@ function isInterruptLine(msg: NormalizedMessage): boolean {
 function realUserText(msg: NormalizedMessage): string | null {
   const text = userTextRaw(msg)
   if (text === null || INTERRUPT_MARKER.test(text)) return null
+  // Claude Code 2.1.290 also writes a built-in command it runs itself as a plain user line ("/compact"),
+  // ahead of the tagged record `commandPromptText` already keeps out. Taken as a prompt, it opened a turn
+  // nothing ever closed: after a /compact the agent read working, then unknown, until the next message
+  // (found by daemon QA). The same list decides both forms.
+  if (isLocalOnlyCommandLine(text)) return null
   // A `!command` line is not a prompt — skip it so the turn (and its recap) stays anchored to the last
   // real ask. Only when nothing but bash blocks remain: a message that also carries prose still counts.
   if (!stripBashModeBlocks(text)) return null
@@ -656,6 +667,24 @@ export function compactEventFromRaw(raw: Record<string, unknown>): SessionEvent[
 // ── Full replay (session_get) ─────────────────────────────────────────────────────────────────────
 
 /** Convert a whole session's raw JSONL lines to replay events (same render path as streaming). */
+/**
+ * A message the person typed while Claude Code was working. Claude Code delivers it into the running
+ * turn as a `queued_command` attachment, not a prompt record. The live view leaves it out on purpose
+ * (it opens no turn there), but the history must show it: without it a reopened conversation answered a
+ * question it never showed (found by daemon QA with Claude Code 2.1.290). Sub-agent hand-backs and
+ * Claude's own continuations arrive the same way, and they are not the person's words.
+ */
+function queuedHumanPrompt(raw: Record<string, unknown>): string | null {
+  if (raw.type !== 'attachment') return null
+  const attachment = raw.attachment as { type?: unknown; commandMode?: unknown; prompt?: unknown; origin?: { kind?: unknown } } | undefined
+  if (attachment?.type !== 'queued_command' || attachment.commandMode !== 'prompt' || attachment.origin?.kind !== 'human') return null
+  const prompt = attachment.prompt
+  const text = typeof prompt === 'string' ? prompt
+    : Array.isArray(prompt) ? prompt.map((block) => (block as { type?: unknown; text?: unknown })?.type === 'text' ? String((block as { text?: unknown }).text ?? '') : '').join('\n')
+    : ''
+  return text.trim() ? text : null
+}
+
 export function messagesToEvents(rawLines: string[]): SessionEvent[] {
   const events: SessionEvent[] = []
   const toolIdToName = new Map<string, string>()
@@ -668,6 +697,8 @@ export function messagesToEvents(rawLines: string[]): SessionEvent[] {
     try { raw = JSON.parse(line) as Record<string, unknown> } catch { continue }
     const compact = compactEventFromRaw(raw)
     if (compact) { events.push(...compact); continue } // compact boundary → indicator; summary/meta → suppressed
+    const queued = queuedHumanPrompt(raw)
+    if (queued) { events.push({ type: 'user_message', payload: { content: queued } }); continue }
     const msg = transformLine(raw)
     if (!msg?.message) continue
 

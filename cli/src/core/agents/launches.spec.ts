@@ -303,8 +303,8 @@ describe('agent_create with a receipt', () => {
     expect(preTrustClaudeProject).toHaveBeenCalledWith('/projects/prepared')
     vi.mocked(codexTrusts).mockReturnValueOnce(true)
     await launch({ engine: 'codex', projectSource: 'worktree', gitSource: '/repo', branchName: 'feature' }, 2)
-    expect(codexTrusts).toHaveBeenCalledWith('/repo')
-    expect(preTrustCodexProject).toHaveBeenCalledWith('/projects/prepared')
+    expect(codexTrusts).toHaveBeenCalledWith('/repo', null)
+    expect(preTrustCodexProject).toHaveBeenCalledWith('/projects/prepared', null)
     await launch({ engine: 'claude', projectSource: 'worktree', gitSource: '/repo', branchName: 'feature' }, 3)
     await launch({ engine: 'claude', projectSource: 'branch', gitSource: '/repo', branchRef: 'refs/heads/main' }, 4)
     await launch({ engine: 'pi', projectSource: 'new' }, 5)
@@ -316,6 +316,21 @@ describe('agent_create with a receipt', () => {
     expect(console.warn).toHaveBeenCalledWith('[agent] pre-trust /projects/prepared · config locked')
     expect(console.warn).toHaveBeenCalledWith('[agent] pre-trust /projects/prepared · busy')
     expect(claudeTrusts).toHaveBeenCalledWith('/repo')
+  })
+
+  // A Codex agent on its own profile reads its trust from THAT profile's config.toml: the trust was
+  // read and written in ~/.codex alone, so it got Codex's trust prompt in a folder Harness had just made.
+  it('asks and records a Codex agent\'s trust in its own profile', async () => {
+    const { ask, replies } = setup()
+    const empty = join(root.projects, 'fresh-profile')
+    mkdirSync(empty)
+    vi.mocked(codexTrusts).mockReturnValueOnce(true)
+    await ask({ creationId: `${CREATION}-1`, engine: 'codex', codexHome: '/profiles/work', projectSource: 'worktree', gitSource: '/repo', branchName: 'feature' })
+    await ask({ creationId: `${CREATION}-2`, engine: 'codex', codexHome: '/profiles/work', cwd: empty })
+    await vi.waitFor(() => expect(replies).toHaveLength(2))
+    expect(codexTrusts).toHaveBeenCalledWith('/repo', '/profiles/work')
+    expect(preTrustCodexProject).toHaveBeenNthCalledWith(1, '/projects/prepared', '/profiles/work')
+    expect(preTrustCodexProject).toHaveBeenNthCalledWith(2, empty, '/profiles/work')
   })
 
   it('trusts an empty workspace this machine\'s own window made in the projects folder, and nothing else', async () => {
@@ -330,7 +345,7 @@ describe('agent_create with a receipt', () => {
     await launch({ engine: 'claude', cwd: empty }, true, 1)
     await launch({ engine: 'codex', cwd: empty }, true, 2)
     expect(preTrustClaudeProject).toHaveBeenCalledWith(empty)
-    expect(preTrustCodexProject).toHaveBeenCalledWith(empty)
+    expect(preTrustCodexProject).toHaveBeenCalledWith(empty, null)
     await launch({ engine: 'claude', cwd: filled }, true, 3)
     await launch({ engine: 'claude', cwd: join(root.projects, 'missing') }, true, 4)
     await launch({ engine: 'claude', cwd: empty }, false, 5)

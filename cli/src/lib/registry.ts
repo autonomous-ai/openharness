@@ -1753,11 +1753,11 @@ class Registry {
    *
    * What goes is what described the PROCESS and its session — session id, transcript, pid,
    * gateway, grid assignment, model, title — because the next thing typed into this shell may be a
-   * different engine, and `unboundRouteOwner` only claims a route for a row with no session. What
-   * stays is what describes the PANE's launch — `gridLaunch`, `codexHome`, `dsh`, `agent`, the
-   * permission choice: the tmux session's environment still carries the grid endpoint and the
-   * Codex profile, the workspace is still that harness's, and a restart or a relaunch after a
-   * reboot puts the same engine back with the same shape. Dropping `gridLaunch` in particular made
+   * different engine, and the reconciler hands a pane's engine to a row by its route only when the row
+   * lacks a session or a process (`unboundRouteObservation`). What stays is what describes the PANE's
+   * launch — `gridLaunch`, `codexHome`, `dsh`, `agent`, the permission choice: the tmux session's
+   * environment still carries the grid endpoint and the Codex profile, the workspace is still that
+   * harness's, and a restart or a relaunch after a reboot puts the same engine back with the same shape. Dropping `gridLaunch` in particular made
    * a released grid agent unrestorable ("credential not persisted"). The row itself, its id, its
    * pane and its name stay: this is the opposite of dormant, the terminal is live. `terminalHost`
    * is set from here on, since that is what the pane now is.

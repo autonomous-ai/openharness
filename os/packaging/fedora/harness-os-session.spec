@@ -15,8 +15,8 @@ Source1: files.list
 
 Requires: python3, nodejs22, nodejs22-bin, tmux, foot, labwc
 Requires: systemd, dbus-tools, NetworkManager, sudo, util-linux, procps-ng, kmod, iproute
-Requires: pipewire, pipewire-pulseaudio, wireplumber, swayidle, swaylock, brightnessctl
-Requires: wl-clipboard, xdg-utils, xdg-desktop-portal-wlr, dejavu-sans-mono-fonts
+Requires: pipewire, pipewire-pulseaudio, wireplumber, swayidle, gtklock, brightnessctl
+Requires: wl-clipboard, grim, slurp, xdg-utils, xdg-desktop-portal-wlr, dejavu-sans-mono-fonts
 Requires: google-noto-color-emoji-fonts, cascadia-mono-nf-fonts
 
 %description

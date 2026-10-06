@@ -142,4 +142,46 @@ void main() {
       semantics.dispose();
     },
   );
+
+  testWidgets(
+    'a label drawn in parts keeps the emphasis of a match across them',
+    (tester) async {
+      Future<List<(String, bool)>> runsOf(
+        int from,
+        int? to,
+        Iterable<SearchFieldMatch> matches,
+      ) async {
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: SearchResultText(
+                'nimble · zeus',
+                from: from,
+                to: to,
+                matches: matches,
+                style: const TextStyle(fontSize: 13),
+              ),
+            ),
+          ),
+        );
+        final rich = tester.widget<RichText>(find.byType(RichText).last).text;
+        final spans = (rich as TextSpan).children;
+        if (spans == null) return [(rich.toPlainText(), false)];
+        // Text.rich wraps the widget's span in its own.
+        final own = spans.single as TextSpan;
+        return [
+          for (final span in own.children!.cast<TextSpan>())
+            (span.text!, span.style?.fontWeight == FontWeight.w700),
+        ];
+      }
+
+      const across = [
+        (field: 'nimble · zeus', term: 'le · ze', title: true, strict: false),
+      ];
+      expect(await runsOf(0, 6, const []), [('nimble', false)]);
+      expect(await runsOf(0, 6, across), [('nimb', false), ('le', true)]);
+      expect(await runsOf(9, null, across), [('ze', true), ('us', false)]);
+      expect(tester.takeException(), isNull);
+    },
+  );
 }

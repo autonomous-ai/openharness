@@ -15,5 +15,6 @@ Future<void> main() {
   return startHarness(
     authenticatedScreen: authenticatedWorkspace,
     frame: appFrame,
+    transportPlugins: terminalTransportPlugins,
   );
 }

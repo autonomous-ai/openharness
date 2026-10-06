@@ -27,6 +27,7 @@ import { hermesDbPath, listHermesHomes } from '../engines/hermes/home.js'
 import { sqlitePreflightMessage } from './sqliteAvailability.js'
 import { sqliteReadAll, type SqliteParam } from './sqliteRead.js'
 import { piSessionFolder, readPiHead } from './sessionSearch/externals/pi.js'
+import { claudeProjectsRoots, codexHomeRoots } from './engineHomes.js'
 
 /**
  * Clock granularity only. `ps` reports start time to the second, so a file created in the same second
@@ -589,15 +590,27 @@ export async function findResumedTranscript(
     return matches.length ? join(directory, matches[0]) : null
   }
   if (!/^[0-9a-f-]{16,}$/i.test(sessionId)) return null
-  if (engine === 'codex') return resolveCodexRollout(sessionId, join(opts?.codexHome || env.CODEX_HOME, 'sessions'))
+  // In every home the registry takes a transcript from (registry.validTranscriptPath): the daemon's own and
+  // each one the person moved in their shell profile (lib/engineHomes.ts), or an agent's own Codex profile
+  // alone. Only the default folders were looked in, so a resume typed into a pane for a conversation in a
+  // moved home found no file and never bound, though the registry would have taken it.
+  if (engine === 'codex') {
+    for (const home of opts?.codexHome ? [opts.codexHome] : codexHomeRoots(env.CODEX_HOME)) {
+      const found = resolveCodexRollout(sessionId, join(home, 'sessions'))
+      if (found) return found
+    }
+    return null
+  }
   if (engine !== 'claude') return null
-  let projects: string[]
-  try { projects = await readdir(env.CLAUDE_PROJECTS_DIR) } catch { return null }
-  for (const project of projects) {
-    const candidate = join(env.CLAUDE_PROJECTS_DIR, project, `${sessionId}.jsonl`)
-    try {
-      if ((await stat(candidate)).isFile()) return candidate
-    } catch { /* not this project */ }
+  for (const root of claudeProjectsRoots(env.CLAUDE_PROJECTS_DIR)) {
+    let projects: string[]
+    try { projects = await readdir(root) } catch { continue }
+    for (const project of projects) {
+      const candidate = join(root, project, `${sessionId}.jsonl`)
+      try {
+        if ((await stat(candidate)).isFile()) return candidate
+      } catch { /* not this project */ }
+    }
   }
   return null
 }

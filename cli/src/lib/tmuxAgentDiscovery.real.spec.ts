@@ -12,8 +12,7 @@ import {
   installedEngineBin,
 } from './engineBin.js'
 import { TmuxBackend } from './tmuxBackend.js'
-import { probeTmuxAgents } from './tmuxAgentDiscovery.js'
-import { probeTerminalAgents } from './terminalAgentDiscovery.js'
+import { probeTerminalAgents, type DiscoveredTerminalAgent } from './terminalAgentDiscovery.js'
 import { HARNESS_SESSION_PREFIX } from './harnessSessionLabel.js'
 import { isolatedTmux, type IsolatedTmux } from '../testing/isolatedTmux.js'
 
@@ -47,6 +46,13 @@ for (const [engine, candidates] of [
 async function tmux(args: string[]): Promise<string> {
   if (!server) throw new Error('The private tmux test server has not been initialized')
   return server.run(...args)
+}
+
+/** The daemon's own scan (probeTerminalAgents over the tmux backend), narrowed to one pane. */
+async function agentsInPane(pane: string): Promise<DiscoveredTerminalAgent[]> {
+  const result = await probeTerminalAgents([new TmuxBackend()], ['tmux'])
+  if (!result.processTableAvailable) throw new Error('the process table could not be read')
+  return result.agents.filter((agent) => agent.runtimes.some((runtime) => runtime.paneId === pane))
 }
 
 async function eventually<T>(read: () => Promise<T | null>, timeoutMs = 20_000): Promise<T | null> {
@@ -108,22 +114,16 @@ realDescribe.sequential('real installed CLI process discovery', () => {
         await tmux(['send-keys', '-t', pane, 'C-m'])
 
         const discovered = await eventually(async () => {
-          const result = await probeTmuxAgents()
-          if (!result.ok) throw new Error(result.error)
-          const inPane = result.agents.filter((candidate) => candidate.tmuxPane === pane)
+          const inPane = await agentsInPane(pane)
           return inPane.length === 1 && inPane[0].engine === engine ? inPane[0] : null
         })
         const capture = await tmux(['capture-pane', '-p', '-t', pane]).catch(() => '')
         expect(discovered, `${bin} was not discovered in ${pane}\n${capture}`).not.toBeNull()
 
-        // The daemon uses the backend-neutral scan. Exercise it against the same real process,
-        // not only the older tmux-specific reader, before checking that stop preserves the pane.
-        const current = await probeTerminalAgents([new TmuxBackend()], ['tmux'])
-        expect(current.processTableAvailable).toBe(true)
-        const matches = current.agents.filter(agent => agent.runtimes.some(runtime => runtime.paneId === pane))
+        // A second scan finds the same process. Node engines may change their process title between
+        // snapshots; the PID and birth stamp prove this is still the same launched process.
+        const matches = await agentsInPane(pane)
         expect(matches).toHaveLength(1)
-        // Node engines may change their process title between these snapshots.
-        // The PID and birth stamp prove this is still the same launched process.
         expect(matches[0]).toMatchObject({ engine, processIdentity: {
           pid: discovered!.processIdentity.pid,
           startMarker: discovered!.processIdentity.startMarker,
@@ -141,11 +141,7 @@ realDescribe.sequential('real installed CLI process discovery', () => {
           }
         }
 
-        const absent = await eventually(async () => {
-          const result = await probeTmuxAgents()
-          if (!result.ok) throw new Error(result.error)
-          return result.agents.some((candidate) => candidate.tmuxPane === pane) ? null : true
-        }, 5_000)
+        const absent = await eventually(async () => (await agentsInPane(pane)).length > 0 ? null : true, 5_000)
         expect(absent, `${bin} remained discoverable after its exact saved PID was terminated`).toBe(true)
         await expect(tmux(['display-message', '-p', '-t', pane, '#{pane_id}'])).resolves.toBe(pane)
       } finally {
@@ -193,9 +189,7 @@ realDescribe.sequential('real installed CLI process discovery', () => {
       await tmux(['send-keys', '-t', pane, '-l', '--', path])
       await tmux(['send-keys', '-t', pane, 'C-m'])
       const discovered = await eventually(async () => {
-        const result = await probeTmuxAgents()
-        if (!result.ok) throw new Error(result.error)
-        const inPane = result.agents.filter((candidate) => candidate.tmuxPane === pane)
+        const inPane = await agentsInPane(pane)
         return inPane.length === 1 && inPane[0].engine === engine ? inPane[0] : null
       })
       const capture = await tmux(['capture-pane', '-p', '-t', pane]).catch(() => '')

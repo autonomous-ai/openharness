@@ -97,14 +97,6 @@ export function parseVerdict(text: string): DshVerdict | null {
   }
 }
 
-export function readVerdictFile(file: string): DshVerdict | null {
-  try {
-    return parseVerdict(readFileSync(file, 'utf8'))
-  } catch {
-    return null
-  }
-}
-
 const DEBOUNCE_MS = 150
 
 interface Watched {

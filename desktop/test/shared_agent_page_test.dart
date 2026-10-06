@@ -13,6 +13,8 @@ import 'package:harness/sharing/shared_agent_page.dart';
 import 'package:harness/sharing/shared_harness_panel.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/app_state.dart';
+import 'package:harness/widgets/web_download_button.dart';
+import 'package:url_launcher/link.dart';
 
 import 'support/real_fonts.dart';
 
@@ -112,6 +114,22 @@ void main() {
       image.dispose();
     });
   }
+
+  testWidgets('the Harness mark opens the product page in a new tab', (
+    tester,
+  ) async {
+    await show(tester);
+    final link = tester.widget<Link>(
+      find.ancestor(of: find.text('Harness'), matching: find.byType(Link)),
+    );
+    expect(link.uri, Uri.parse('https://www.autonomous.ai/harness-app'));
+    expect(link.target, LinkTarget.blank);
+    expect(
+      WebDownloadButton.uri,
+      Uri.parse('https://www.autonomous.ai/harness-app?page=download'),
+    );
+    await tester.pumpWidget(const SizedBox());
+  });
 
   testWidgets('incomplete and changed owner identities never open a viewer', (
     tester,

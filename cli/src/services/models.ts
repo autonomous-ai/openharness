@@ -12,7 +12,10 @@ import { join } from 'node:path'
 import type { CoreApi, CorePorts, ModelsPort, ServiceRequest, ServiceRequests } from '../core/api.js'
 import { MODEL_MANAGER_ID } from '../dsh/builtins.js'
 import { installedDsh } from '../dsh/installed.js'
+import { ApiConnections, apiConnectionsRequest } from '../lib/apiConnections.js'
+import { apiModelsRequest, rememberSavedApis } from '../lib/apiModels.js'
 import { appEngineOps, scanAppModels } from '../lib/appModels.js'
+import { linkCodexProfile, listCodexProfiles } from '../lib/codexProfiles.js'
 import { createGridAccess, gridNamesLocal, reconcileGridAttach } from '../lib/gridAttach.js'
 import { resetGridDeriveMemo, signedInGridEmail } from '../lib/gridDerive.js'
 import { ensureHarnessGrid } from '../lib/gridEnsure.js'
@@ -27,6 +30,7 @@ import { gridModelsPayload } from '../lib/gridModelsPayload.js'
 import { LocalModels } from '../lib/localModels.js'
 import { parseRuntimeProfile, type RuntimeModelOption } from '../lib/runtimeProfile.js'
 import { ensureManagedGrid } from '../lib/runtimeInstall.js'
+import { internalOnThrow } from './requestErrors.js'
 
 /**
  * The requests models answers for the apps.
@@ -36,10 +40,12 @@ import { ensureManagedGrid } from '../lib/runtimeInstall.js'
  * (`lib/gridFleetRpc.ts`), while a request answered here knows who asked but not over which connection.
  * Their handshake, `grid_fleet_capabilities`, stays beside them: the Grid harness runs a command only
  * after it, and reads an answer without its protocol as "update Harness".
+ * The saved APIs and the Codex profiles came out of the socket's switch (launchTargetRequests).
  */
 export const MODELS_REQUESTS = [
   'grid_models_list', 'models_list',
   'grid_fleet_models_list', 'grid_fleet_model_download', 'grid_fleet_model_start', 'grid_fleet_model_stop',
+  'api_connections', 'codex_profiles_list', 'codex_profile_link',
 ] as const
 
 export function startModels(core: CoreApi, ports: CorePorts): ServiceRequests {
@@ -256,6 +262,49 @@ function modelsRequests(core: CoreApi, grid: Pick<ModelsPort, 'ensure' | 'setUp'
     grid_fleet_model_download: localModel('grid_fleet_model_download'),
     grid_fleet_model_start: localModel('grid_fleet_model_start'),
     grid_fleet_model_stop: localModel('grid_fleet_model_stop'),
+    ...launchTargetRequests(core),
+  }
+}
+
+/**
+ * What an agent can be launched on besides a model: the saved APIs and the Codex profiles, moved out of the
+ * socket's switch (docs/design/2026-10-06-core-boundary-next.md, step 4). Its own function so the socket's
+ * specs can serve it alone behind the gates.
+ */
+export function launchTargetRequests(core: CoreApi): ServiceRequests {
+  // The saved APIs, a file in the data folder (lib/apiConnections.ts): read afresh on every request.
+  const apiConnections = new ApiConnections(core.dataDir)
+  return {
+    // The APIs saved on this machine (lib/apiConnections.ts): list, save and remove one, and one API's
+    // models. Their keys stay here, so only the owner manages them: this machine's app, or its paired one.
+    api_connections: internalOnThrow('api_connections', (payload, asker) => {
+      if (!asker.owner) return { error: 'OWNER_REQUIRED' }
+      if (payload.action === 'models') return apiModelsRequest(apiConnections, payload)
+      const reply = apiConnectionsRequest(apiConnections, payload)
+      if (payload.action === 'save') rememberSavedApis(apiConnections)
+      return reply
+    }),
+
+    // Which CODEX_HOME folders THIS machine can offer — answered here, on the machine in question, for
+    // the same reason `engines_probe` is: a Codex profile is a folder on disk, and a folder on a Mac means
+    // nothing on the Docker rig it was asked about instead.
+    codex_profiles_list: internalOnThrow('codex_profiles_list', (payload) => {
+      const observed = Array.isArray(payload.observedPaths)
+        ? payload.observedPaths.filter((p): p is string => typeof p === 'string')
+        : []
+      try {
+        return { profiles: listCodexProfiles(observed) }
+      } catch {
+        return { error: 'CODEX_PROFILES_FAILED' }
+      }
+    }),
+
+    codex_profile_link: internalOnThrow('codex_profile_link', (payload) => {
+      const path = typeof payload.path === 'string' ? payload.path : ''
+      const result = linkCodexProfile(path)
+      if ('error' in result) return { error: result.error }
+      return { profile: result }
+    }),
   }
 }
 

@@ -220,7 +220,10 @@ describe('creating an agent', () => {
       const pane = vi.mocked(createAndRegisterPane).mock.calls[0][0]
       expect(pane).toMatchObject({ dsh: 'blender', dshRuntime: expect.any(String), label: 'Blender', env: expect.objectContaining({ HARNESS_DSH: 'blender' }) })
       await create(request({ dsh: 'blender', engine: 'codex' }))
-      expect(preTrustCodexProject).toHaveBeenCalled()
+      expect(preTrustCodexProject).toHaveBeenLastCalledWith(expect.any(String), null)
+      // A Codex agent on its own profile is trusted in that profile's config.toml, which it reads.
+      await create(request({ dsh: 'blender', engine: 'codex', codexHome: '/profiles/work' }))
+      expect(preTrustCodexProject).toHaveBeenLastCalledWith(expect.any(String), '/profiles/work')
       // A folder that already held something, or could not be read: trust stays the person's call.
       await create(request({ dsh: 'blender', cwd: folder(['README.md']) }))
       await create(request({ dsh: 'blender', engine: 'pi' }))

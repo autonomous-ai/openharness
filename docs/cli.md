@@ -48,7 +48,7 @@ through this daemon's link to it.
 What it answers: `agents_list`, `agent_create`, `agent_restart`, `agent_retarget`, `agent_delete`,
 `agent_update`, `agent_recent`, `agent_handoff_prepare`, `agent_read_file` (media previews, in 128 KiB chunks),
 `fs_list_dir`, `engines_probe`, `codex_profiles_list`, `codex_profile_link`, `models_list`,
-`usage_read`, `question_response`, `voice_route`, `message`, `cancel`, and `terminal_open` for a
+`usage_read`, `question_response`, `message`, `cancel`, and `terminal_open` for a
 binary terminal channel with scroll, resync and paste. The same frames travel from the web client
 over the relay.
 

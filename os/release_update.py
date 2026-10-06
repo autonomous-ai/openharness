@@ -119,6 +119,7 @@ def apply(feed=FEED):
                 raise ValueError('Restore the previous Harness package before starting another system update.')
             base = json.loads(LOCK.read_text())
             updater.validate_bundle(folder, base)
+            updater.prepare_kernel_bundle(folder)
             date = system.snapshot_date(manifest['arch_snapshot'])
             text = system.PACMAN_CONFIG.read_text()
             dates = set(re.findall(r'https://archive\.archlinux\.org/repos/(\d{4}/\d{2}/\d{2})/', text))

@@ -16,6 +16,8 @@ import type { FleetEvent } from '../cable/machineFleet.js'
 import type { AnswerReceipt, ReviewedAnswer } from '../cable/questionInbox.js'
 import type { AgentDshContext } from '../lib/agentFrame.js'
 import type { GridAccess } from '../lib/gridAttach.js'
+import type { createHarnessResourcesReader } from '../lib/harnessResources.js'
+import type { createHarnessStorageReader } from '../lib/harnessTelemetry.js'
 import type { AgentGridTarget } from '../lib/gridModels.js'
 import type { LiveEvent } from '../lib/normalize.js'
 import { projectDisplayName, type registry, type RegisteredSession } from '../lib/registry.js'
@@ -26,7 +28,7 @@ import type { SessionSearchIndex } from '../lib/sessionSearch/indexer.js'
 import type { StoppedAgentStore } from '../lib/stoppedAgents.js'
 import type { RouteAnswer } from '../localWsServer.js'
 import type { SwarmPromptScopes } from '../teams/promptScope.js'
-import { FAIL, later, type PortFallbacks } from './serviceHost.js'
+import { FAIL, later, ServiceUnavailableError, type PortFallbacks } from './serviceHost.js'
 
 export type { RouteAnswer }
 
@@ -42,6 +44,8 @@ export interface CoreApi {
     displayName(session: RegisteredSession): string
     /** A live agent, by its agent id. */
     byAgent(agentId: string): RegisteredSession | undefined
+    /** A live agent, by its agent id or its engine session id: whichever the apps asked by. */
+    resolve(id: string): RegisteredSession | undefined
     /** The live agents the apps are shown. */
     advertised(): RegisteredSession[]
     /** Whether the agent's terminal is attached: a frame without one reads to the apps as "agent gone". */
@@ -113,6 +117,12 @@ export interface CoreApi {
   }
 }
 
+/** `agents.resolve` over a service process's own copy of the agents, as the registry answers it: by agent
+ *  id, then by engine session id (an agent with none yet is never found by an empty one). */
+export function resolveAgent(agents: readonly RegisteredSession[], id: string): RegisteredSession | undefined {
+  return agents.find((agent) => agent.agentId === id) ?? (id ? agents.find((agent) => agent.sessionId === id) : undefined)
+}
+
 /** Who sent a request, as the core established it. A service trusts this, never a field of the
  *  payload: a payload says whatever its sender wrote. */
 export interface Asker {
@@ -178,6 +188,27 @@ export interface ModelsPort {
  *  set up, and no prewarm. */
 export const MODELS_FALLBACKS: PortFallbacks<ModelsPort> = {
   ensure: later(FAIL), setUp: false, prewarm: undefined, signedOut: undefined,
+}
+
+/** The core's calls into the machine monitor: the readings `agents_list` adds to its rows when a window
+ *  asks for the monitor, and forgetting what a purged agent's workspace held. The same readers answer the
+ *  monitor's own request (`machine_resources`), so the two share one sample and one cache. */
+export interface MonitorPort {
+  /** Each live agent's processes, and the shared ones (lib/harnessResources.ts). */
+  resources: ReturnType<typeof createHarnessResourcesReader>
+  /** What each agent's workspace and transcript hold on disk; `invalidate` drops what was measured
+   *  (lib/harnessTelemetry.ts). */
+  storage: ReturnType<typeof createHarnessStorageReader>
+}
+
+/** What the core gets when the monitor fails: the list's rows without readings (core/agents/list.ts
+ *  answers a failed sample as none), and nothing measured to forget. */
+export const MONITOR_FALLBACKS: PortFallbacks<MonitorPort> = { resources: later(FAIL), storage: later(new Map()) }
+
+/** What the core calls while `ports.monitor` is null (the monitor is off): its fallbacks' answers. */
+export const MONITOR_OFF: MonitorPort = {
+  resources: () => Promise.reject(new ServiceUnavailableError('monitor')),
+  storage: async () => new Map(),
 }
 
 /** The core's calls into workspaces: name made-up worktree branches after their sessions, on each
@@ -298,15 +329,16 @@ export interface CorePorts {
   workspaces: WorkspacesPort | null
   teams: TeamsPort | null
   fleet: FleetPort | null
+  monitor: MonitorPort | null
 }
 
 export function emptyPorts(): CorePorts {
-  return { search: null, viewers: null, models: null, workspaces: null, teams: null, fleet: null }
+  return { search: null, viewers: null, models: null, workspaces: null, teams: null, fleet: null, monitor: null }
 }
 
 export interface CoreApiDeps {
   dataDir: string
-  registry: Pick<typeof registry, 'list' | 'byAgent' | 'advertised' | 'terminalAvailable'>
+  registry: Pick<typeof registry, 'list' | 'byAgent' | 'resolve' | 'advertised' | 'terminalAvailable'>
   stoppedAgents: Pick<StoppedAgentStore, 'list'>
   databaseHistory: CoreApi['transcripts']['databaseHistory']
   externalSessions: CoreApi['external']['sessions']
@@ -340,6 +372,7 @@ export function createCoreApi({
       live: () => registry.list(),
       displayName: projectDisplayName,
       byAgent: (agentId) => registry.byAgent(agentId),
+      resolve: (id) => registry.resolve(id),
       advertised: () => registry.advertised(),
       terminalAvailable: (agentId) => registry.terminalAvailable(agentId),
       sync: syncSession,

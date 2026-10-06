@@ -2,7 +2,6 @@ import type { PurgeAgentService } from './lib/purgeAgentService.js'
 import type { Asker, PromptScopes } from './core/api.js'
 import { ServiceUnavailableError } from './core/serviceHost.js'
 import type { ActivityFrame } from './lib/turnActivity.js'
-import { readSessionGitPullRequest } from './lib/sessionGitPullRequest.js'
 import { MonitorCompletions } from './lib/harnessMonitor.js'
 import type { HarnessShareOwner } from './sharing/owner.js'
 import { SHARE_REQUEST_TYPES } from './sharing/protocol.js'
@@ -36,12 +35,10 @@ import { registry, projectDisplayName, type RegisteredSession } from './lib/regi
 import type { CloseAgentService } from './lib/closeAgentService.js'
 import { isHiddenBuiltin } from './dsh/builtins.js'
 import { ENGINES, type AgentEngine } from './engines/types.js'
-import { listDir } from './lib/fsBrowse.js'
-import { linkCodexProfile, listCodexProfiles } from './lib/codexProfiles.js'
 import { gridCliPresence } from './lib/gridExec.js'
 import { GridFleetRpc, GRID_FLEET_PROTOCOL, GRID_FLEET_MAX_TIMEOUT_MS, parseGridFleetRequest } from './lib/gridFleetRpc.js'
-import { ApiConnectionError, ApiConnections, apiConnectionsRequest } from './lib/apiConnections.js'
-import { apiModelsRequest, rememberSavedApis, resolveApiTarget } from './lib/apiModels.js'
+import { ApiConnectionError, ApiConnections } from './lib/apiConnections.js'
+import { resolveApiTarget } from './lib/apiModels.js'
 import { isApiLaunch, parseGridLaunchOverride, type GridLaunchOverride } from './lib/gridLaunch.js'
 import { listAllGridModels, onGridModelsChanged, retargetPrewarm } from './lib/gridModels.js'
 import { gridModelsPayload } from './lib/gridModelsPayload.js'
@@ -49,15 +46,9 @@ import { resolveGridTarget } from './lib/gridTarget.js'
 import type { GridAttachResult } from './lib/gridAttach.js'
 import { deriveHarnessGridName } from './lib/gridDerive.js'
 import { supportsFirstPrompt } from './lib/engineLaunch.js'
-import { readAccountUsage, type AccountUsageReading } from './lib/accountUsage.js'
 import { probeEngines } from './lib/engineProbe.js'
-import { readMachineResources } from './lib/machineResources.js'
 import { harnessDevicesRequest, type HarnessDevicesService } from './lib/harnessDevices.js'
-import { createHarnessResourcesReader } from './lib/harnessResources.js'
-import { createHarnessStorageReader } from './lib/harnessTelemetry.js'
 import { engineInstallRecipe } from './lib/engineInstall.js'
-import { projectPreview } from './lib/projectPreview.js'
-import { readGitProject } from './lib/gitProject.js'
 import { agentFrame, type AgentDshContext, type AgentFrame } from './lib/agentFrame.js'
 import { agentTokenUsage } from './lib/agentTokenUsage.js'
 import { listInstalledDsh } from './dsh/installed.js'
@@ -74,8 +65,6 @@ import { Address, Id, OperationId, Receipt, TeamError, type MemberRuntime } from
 import { shellQuote } from './orchestrator/prompts.js'
 import type { SessionInputDelivery } from './lib/sessionInput.js'
 import { terminalHandoffRequest } from './lib/terminalHandoff.js'
-import { routeVoiceTask } from './lib/voiceRouter.js'
-import { MediaPreviewError, readMediaPreviewChunk } from './lib/mediaPreview.js'
 import { ViewerForwarder } from './lib/viewerForwarder.js'
 import { InteractiveViewers } from './lib/interactiveViewer.js'
 import { OwnerCommands, OWNER_COMMAND_TYPES } from './lib/ownerCommands.js'
@@ -102,10 +91,6 @@ import {
   type TerminalP2pData,
   type TerminalP2pSignal,
 } from './lib/terminalP2p.js'
-
-/** Answers the device `project_recent` RPC — set by cli.ts to the CommanderMirror's `recent`. */
-export type RecentProvider = (sessionId: string, n: number) => Array<{ kind: string; text: string; recap?: string }>
-
 
 const APP_PING_MS = 15_000
 // Floor between two `app_presence` up-frames while a window is attached. Rides the 15s app-ping
@@ -517,8 +502,6 @@ export class BackendSocket {
   /** Called when this machine is already connected from ANOTHER computer (HTTP 409 on the upgrade) — the
    *  SSO session is valid, so CLI keeps it and stops without a retry loop. */
   onBusy: (() => void) | null = null
-  /** An agent's last turn summaries, which `voice_route` routes by (cli.ts wires this to the recaps). */
-  recentProvider: RecentProvider | null = null
   /** Answers `agent_recent` with the whole reply: an agent's last turn summaries and the person's last
    *  questions, for a device's tiles (cli.ts binds core/turns/recaps.ts). Null answers UNSUPPORTED. */
   agentRecentProvider: ((payload: Record<string, unknown>) => Record<string, unknown>) | null = null
@@ -541,11 +524,6 @@ export class BackendSocket {
   /** How each agent's last turn ended, from the turn frames this socket sends: the monitor's activity
    *  once a turn is over (`agents_list`, core/agents/list.ts). */
   readonly monitorCompletions = new MonitorCompletions()
-  /** Answers `usage_read` — this machine's own agent-account usage (lib/accountUsage.ts). A field
-   *  rather than a direct call so a spec answers it without a real home, Keychain or network. */
-  accountUsageReader: () => Promise<AccountUsageReading[]> = readAccountUsage
-  harnessResourcesReader = createHarnessResourcesReader(() => registry.advertised())
-  harnessStorageReader = createHarnessStorageReader()
   /** The windows on this computer that draw row state (`grid_models_list` with `rowState: true`) and so
    *  are pushed labels as `unavailable` rather than in the node text. Kept here, by connection: the
    *  models service answers the list, and a request reaches it without its connection. */
@@ -1764,17 +1742,6 @@ export class BackendSocket {
       return
     }
 
-    if (type === 'api_connections') {
-      if (!local && this.e2ee.sessionRole(connId) !== 'web') { reply(type, requestId, { error: 'OWNER_REQUIRED' }); return }
-      if (payload.action === 'models') {
-        reply(type, requestId, await apiModelsRequest(this.apiConnections, payload))
-        return
-      }
-      reply(type, requestId, apiConnectionsRequest(this.apiConnections, payload))
-      if (payload.action === 'save') rememberSavedApis(this.apiConnections)
-      return
-    }
-
     // A paired owner can run the machine's orchestrator; observers and device sessions cannot.
     // Both requests and replies are encrypted, including project artifacts.
     if (OWNER_COMMAND_TYPES.has(type)) {
@@ -1847,18 +1814,6 @@ export class BackendSocket {
 
     try {
       switch (type) {
-        case 'machine_resources':
-          // Sampling CPU must not hold up typing or other machine requests.
-          void (payload.harnesses === true
-            ? this.harnessResourcesReader().then(async harnesses => {
-              if (payload.storage !== true) return { harnesses }
-              const storage = await this.harnessStorageReader(registry.advertised())
-              return { harnesses: { ...harnesses, agents: harnesses.agents.map(row => ({ ...row, ...storage.get(row.agentId) })) } }
-            })
-            : readMachineResources())
-            .then(resources => reply(type, requestId, { ...resources }))
-            .catch(() => reply(type, requestId, { error: 'UNAVAILABLE' }))
-          return
         // The Model Manager's grid commands stay here while the rest of models answers from its service
         // (services/models.ts). A command is a job of the connection that started it, keyed by that
         // connection, and a cancel stops only that connection's own (lib/gridFleetRpc.ts); a request the
@@ -1987,34 +1942,6 @@ export class BackendSocket {
           if (this.handoffRequestProvider) this.handoffRequestProvider(payload, asker, answer)
           else answer({ error: 'UNSUPPORTED' })
           return
-
-        case 'voice_route': {
-          // Voice router (REMOTE machine): pick the best-fit agent for a transcribed Overview voice task,
-          // using each agent's name + recent-turn recap. Once asked plaintext by the backend's legacy
-          // device-ws voice path; that path no longer reaches a harness machine, and the relay gate now
-          // refuses it unsealed like any other RPC.
-          const transcript = typeof payload.transcript === 'string' ? payload.transcript : ''
-          if (!transcript.trim()) {
-            console.log('[voice-route] backend sent an empty transcript — nothing to route')
-            reply(type, requestId, { error: 'MISSING_TRANSCRIPT' })
-            return
-          }
-          const projects = (await Promise.all(registry.advertised().map((s) => this.toProject(s)))).slice(0, 24) // cap the router prompt (mirror the hosted runtime path)
-          const agents = projects.map((p) => {
-            // Use the last 3 turns' recaps (not just 1) — a single turn can misrepresent what the agent is
-            // actually working on; 3 gives the router a more stable picture.
-            const recents = this.recentProvider?.(p.id, 3) ?? []
-            const recentSummary = recents.map((r) => r?.recap || r?.text || '').filter(Boolean).join(' · ')
-            // engine: the router classifies with a CLI the machine actually runs (a live agent proves it is
-            // installed and logged in), so it has to travel with the agent.
-            const session = registry.resolve(p.id)
-            return { id: p.id, name: p.name, recentSummary, engine: session?.engine, gateway: session?.gateway }
-          })
-          const decision = await routeVoiceTask(transcript, agents)   // logs the task, candidates and pick
-          const chosen = projects.find((p) => p.id === decision.agentId)
-          reply(type, requestId, { ...decision, agentName: chosen?.name ?? '' })
-          return
-        }
 
         // A rename, a model and effort, or an app opening the agent (core/agents/update.ts, bound by cli.ts).
         case 'agent_update':
@@ -2157,95 +2084,6 @@ export class BackendSocket {
           else reply(type, requestId, { error: 'UNSUPPORTED' })
           return
 
-        case 'git_pull_request': {
-          const id = payload.agentId
-          const agent = typeof id === 'string' ? registry.resolve(id) : undefined
-          if (!agent?.cwd) { reply(type, requestId, { status: 'unavailable' }); return }
-          const requested = payload.context
-          if (requested !== undefined && (!requested || typeof requested !== 'object'
-            || typeof (requested as Record<string, unknown>).cwd !== 'string'
-            || typeof (requested as Record<string, unknown>).branch !== 'string'
-            || (requested as Record<string, unknown>).remote !== null && typeof (requested as Record<string, unknown>).remote !== 'string')) {
-            reply(type, requestId, { status: 'unavailable' }); return
-          }
-          void readSessionGitPullRequest(agent, {
-            expected: requested as import('./lib/sessionGitPullRequest.js').ExpectedGitContext | undefined,
-            history: payload.history === true, offset: typeof payload.offset === 'number' ? payload.offset : undefined,
-          }).then(result => reply(type, requestId, result))
-            .catch(() => reply(type, requestId, { status: 'unavailable' }))
-          return
-        }
-
-        case 'git_project_info': {
-          const path = typeof payload.path === 'string' ? payload.path : ''
-          // Same root set as project_preview below: the browsable home, widened by the workspaces
-          // agents are running in, so a repo outside both is not somewhere this daemon runs git.
-          void readGitProject(path, { refresh: payload.refresh === true,
-            knownRoots: registry.list().flatMap(agent => agent.cwd ? [agent.cwd] : []) })
-            .then(result => reply(type, requestId, result))
-            .catch(() => reply(type, requestId, { error: 'UNAVAILABLE' }))
-          return
-        }
-
-        case 'project_preview': {
-          const path = typeof payload.path === 'string' ? payload.path : ''
-          // Preview work is detached so typing and other RPCs stay responsive.
-          void projectPreview(path, registry.list().flatMap(agent => agent.cwd ? [agent.cwd] : []))
-            .then(result => reply(type, requestId, result))
-            .catch(() => reply(type, requestId, { error: 'UNAVAILABLE' }))
-          return
-        }
-
-        case 'fs_list_dir': {
-          // One-level remote directory listing for the New Agent folder browser.
-          const path = typeof payload.path === 'string' ? payload.path : ''
-          const result = listDir(path)
-          if ('error' in result) { reply(type, requestId, { error: result.error }); return }
-          reply(type, requestId, { ...result })
-          return
-        }
-
-        case 'codex_profiles_list': {
-          // Which CODEX_HOME folders THIS machine can offer — answered here, on the machine in
-          // question, for the same reason `engines_probe` is: a Codex profile is a folder on disk,
-          // and a folder on a Mac means nothing on the Docker rig it was asked about instead.
-          const observed = Array.isArray(payload.observedPaths)
-            ? payload.observedPaths.filter((p): p is string => typeof p === 'string')
-            : []
-          try {
-            reply(type, requestId, { profiles: listCodexProfiles(observed) })
-          } catch {
-            reply(type, requestId, { error: 'CODEX_PROFILES_FAILED' })
-          }
-          return
-        }
-
-        case 'codex_profile_link': {
-          const path = typeof payload.path === 'string' ? payload.path : ''
-          const result = linkCodexProfile(path)
-          if ('error' in result) { reply(type, requestId, { error: result.error }); return }
-          reply(type, requestId, { profile: result })
-          return
-        }
-
-        case 'agent_read_file': {
-          // Media previews, in bounded binary chunks. The text mode this RPC also used to serve was
-          // read by nothing — every client has always asked with `media: true` — so it is gone rather
-          // than carrying a second, laxer file reader (lib/mediaPreview.ts).
-          const projectId = payload.agentId as string | undefined
-          const path = payload.path as string | undefined
-          if (!projectId || !path) { reply(type, requestId, { error: 'MISSING_AGENT_OR_PATH' }); return }
-          if (payload.media !== true) { reply(type, requestId, { error: 'UNSUPPORTED', detail: 'agent_read_file serves media previews only' }); return }
-          const s = registry.resolve(projectId)
-          if (!s?.cwd) { reply(type, requestId, { error: 'AGENT_NOT_FOUND' }); return }
-          try {
-            reply(type, requestId, { ...await readMediaPreviewChunk(s.cwd, path, payload.offset, payload.revision) })
-          } catch (error) {
-            reply(type, requestId, { error: error instanceof MediaPreviewError ? error.message : 'MEDIA_READ_FAILED' })
-          }
-          return
-        }
-
         case 'claude_login_status':
           // Legacy RPC name; report the selected agent's actual engine when one was supplied.
           {
@@ -2263,40 +2101,10 @@ export class BackendSocket {
         // A person interrupting an agent's turn (core/turns/cancel.ts, bound by cli.ts).
         case 'cancel': this.cancelProvider?.(payload); return
 
-        case 'speaking': {
-          // A device is capturing a voice instruction. Mirror the hosted runtime: re-broadcast the presence
-          // signal to the web (indicator) + other devices. Ephemeral, no requestId.
-          const p = payload as { speaking?: boolean; agentId?: string; sessionId?: string }
-          const sessionId = p.sessionId ?? p.agentId
-          const projectId = p.agentId ?? p.sessionId ?? null
-          const on = p.speaking !== false
-          // Echo the canonical agent id, whichever id the sender used to address it.
-          const speaker = projectId ? registry.resolve(projectId) : undefined
-          const speakerAgentId = speaker?.agentId ?? projectId
-          const evt = { type: 'speaking', dbSessionId: speaker?.sessionId ?? sessionId, agentId: speakerAgentId, payload: { speaking: on, agentId: speakerAgentId, sessionId: speaker?.sessionId ?? sessionId } }
-          this.send(evt) // web
-          this.sendCommander(evt) // other devices (firmware ignores its own echo; matches node forwardToCommander)
-          return
-        }
-
         // A person's answer to an agent's question, keyed into its dialog (core/questions.ts, bound by cli.ts).
         case 'question_response':
           this.questionProvider?.(payload, answer)
           return
-
-        // This machine's Claude/Codex rate limits, read with ITS OWN credentials. The desktop reads the
-        // account on the computer it runs on directly; this is how it reads one on a machine it does
-        // not — which may be signed in to a different subscription entirely. The vendor's answer goes
-        // back as it came: see lib/accountUsage.ts for why the parsing stays on the client.
-        case 'usage_read': {
-          // Two vendor round trips (up to 8s each, lib/accountUsage.ts) — detached from the ordered
-          // chain for the same reason as `grid_models_list`: it is asked on connect beside the RPCs
-          // the terminal needs, and with no network it held them past the app's timeout.
-          void this.accountUsageReader()
-            .then((providers) => reply(type, requestId, { providers }))
-            .catch(() => reply(type, requestId, { error: 'USAGE_READ_FAILED' }))
-          return
-        }
 
         // Physical devices belong to this machine; only its owner or loopback tools may manage them.
         case 'harness_devices_list':

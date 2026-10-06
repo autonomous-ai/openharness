@@ -37,12 +37,11 @@ def boot_files(identity):
     return {'vmlinuz-' + kernel, 'initramfs-' + kernel + '.img', 'grub/grub.cfg'}
 
 
-def validate_update(package, root=Path('/')):
+def validate_update(package, root=Path('/'), *, allow_kernel_change=False, kernel_rollback=False):
     if selected(root)['id'] != 'apple-t2':
         return
-    # The initial T2 image has one verified kernel. A general PC package must
-    # not remove its helpers or silently advance the required T2 kernel. A
-    # future kernel change needs its own staged, verified package transaction.
+    # A general package must retain the platform. Only the updater that stages
+    # both verified kernels and retains an offline rollback can advance the pin.
     pin = 'usr/share/harness-os/apple-t2/kernel.json'
     required = {'usr/lib/harness-os/' + name + '.py' for name in
                 ['boot_profile', 't2_install', 't2_firmware', 'firmware_names']}
@@ -53,8 +52,21 @@ def validate_update(package, root=Path('/')):
         if files[pin].size > 65536:
             raise ValueError('Invalid T2 kernel requirements in the update.')
         requested = json.loads(archive.extractfile(files[pin]).read())
-    if requested != json.loads((root / pin).read_text()):
+    if requested != json.loads((root / pin).read_text()) and not allow_kernel_change:
         raise ValueError('This update needs a different T2 kernel; a verified T2 kernel update is required. Nothing updated.')
+    if allow_kernel_change and not kernel_rollback and requested != json.loads((root / pin).read_text()):
+        if any(not files.get('usr/lib/harness-os/' + name + '.py') or
+               not files['usr/lib/harness-os/' + name + '.py'].isfile()
+               for name in ['t2_update', 't2_kernel']):
+            raise ValueError('This update omits the T2 kernel transaction helpers.')
+    return requested
+
+
+def prepare_update(package, source, destination):
+    requested = validate_update(package, allow_kernel_change=True)
+    if requested is None or requested == json.loads(Path('/usr/share/harness-os/apple-t2/kernel.json').read_text()):
+        return None
+    return module('t2_update').prepare(requested, source, destination)
 
 
 def restore_firmware(root=Path('/')):
@@ -64,7 +76,8 @@ def restore_firmware(root=Path('/')):
 
 
 def module(name):
-    paths = {'t2_install': 't2_install.py', 't2_firmware': 'tools/prepare-t2-firmware.py'}
+    paths = {'t2_install': 't2_install.py', 't2_firmware': 'tools/prepare-t2-firmware.py',
+             't2_update': 't2_update.py'}
     if name not in paths:
         raise ValueError('Unknown platform helper.')
     path = Path(__file__).with_name(name + '.py')

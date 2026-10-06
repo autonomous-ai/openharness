@@ -573,13 +573,43 @@ describe('restoreAgents — terminals', () => {
     expect(h.launches).toEqual([{ agentId: 'agent-a', resumeSessionId: 'session-a' }, { agentId: 'agent-a' }])
   })
 
-  it('brings a terminal whose adopted engine AND pane are gone back as a shell, never as the engine', async () => {
-    const h = harness([terminal({ engine: 'claude', sessionId: 'session-t', boundAt: 1 })])
+  it('brings a terminal whose adopted engine left no conversation id back as a shell', async () => {
+    const h = harness([terminal({ engine: 'claude', sessionId: '', boundAt: 1 })])
     const summary = await restoreAgents(h.deps)
     expect(summary).toEqual({ restored: ['term-1'], skipped: [], failed: [], unsurveyed: [] })
     expect(h.calls[0]).toBe('releaseEngine:term-1')
     expect(h.launches).toEqual([{ agentId: 'term-1' }])
     expect(h.launched[0].launch.argv[0]).toBe('terminal')
+    expect(h.rows.get('term-1')).toMatchObject({ engine: 'terminal', launch: { state: 'ready' } })
+  })
+
+  it.each(['opencode', 'claude'] as const)('brings a terminal back resuming the %s conversation typed into it', async (engine) => {
+    // Harness OS's welcome types OpenCode into a terminal; after a reboot it came back a bare prompt.
+    const h = harness([terminal({ engine, sessionId: 'ses_kept', boundAt: 1 })])
+    h.probes.set('%0', [identity(9)])
+    const summary = await restoreAgents(h.deps)
+    expect(summary).toEqual({ restored: ['term-1'], skipped: [], failed: [], unsurveyed: [] })
+    expect(h.calls).not.toContain('releaseEngine:term-1')
+    expect(h.launches).toEqual([{ agentId: 'term-1', resumeSessionId: 'ses_kept' }])
+    expect(h.launched[0].launch.argv).toEqual([engine, '--resume', 'ses_kept'])
+    await settled(h, 1, 1)
+    expect(h.rows.get('term-1')).toMatchObject({ engine, terminalHost: true, sessionId: 'ses_kept' })
+    expect(h.respawns).toBe(0)
+  })
+
+  it('reopens the terminal, never a fresh engine, when the conversation it was resuming is refused', async () => {
+    const h = harness([terminal({ engine: 'opencode', sessionId: 'ses_gone', boundAt: 1 })])
+    const kept: string[] = []
+    h.deps.keepAbandoned = (left) => { kept.push(left.sessionId) }
+    h.states.set('%0', [{ dead: true }])
+    const summary = await restoreAgents(h.deps)
+    expect(summary.restored).toEqual(['term-1'])
+    await settled(h, 1)
+    expect(kept).toEqual(['ses_gone'])
+    expect(h.calls).toContain('releaseEngine:term-1')
+    expect(h.launches).toEqual([{ agentId: 'term-1', resumeSessionId: 'ses_gone' }, { agentId: 'term-1' }])
+    expect(h.calls).toContain('respawn:%0:terminal')
+    expect(h.calls).not.toContain('unbind:ses_gone')
     expect(h.rows.get('term-1')).toMatchObject({ engine: 'terminal', launch: { state: 'ready' } })
   })
 })
