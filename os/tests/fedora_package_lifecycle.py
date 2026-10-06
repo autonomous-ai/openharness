@@ -14,6 +14,7 @@ import platform
 import re
 import shutil
 import subprocess
+import tempfile
 import time
 
 
@@ -249,7 +250,15 @@ def main():
                 assert os.readlink(Path('/') / relative) == target
             agent = metadata['agent']
             assert agent == json.loads(Path('/usr/share/harness-os/opencode.json').read_text())
-            assert run('runuser', '-u', 'harness-rpm-probe', '--', '/usr/bin/opencode', '--version').stdout.strip() == agent['version']
+            # OpenCode initializes XDG directories even for --version. Keep
+            # this executable probe separate from the existing-user snapshot,
+            # which must measure only the RPM transaction's effects.
+            with tempfile.TemporaryDirectory(prefix='harness-agent-version-') as temporary:
+                run('chown', 'harness-rpm-probe:harness-rpm-probe', temporary)
+                environment = ['HOME=' + temporary, *['XDG_' + kind.upper() + '_HOME=' + temporary + '/' + kind
+                               for kind in ['config', 'data', 'cache', 'state']]]
+                assert run('runuser', '-u', 'harness-rpm-probe', '--', 'env', *environment,
+                           '/usr/bin/opencode', '--version', timeout=30).stdout.strip() == agent['version']
             assert run('rpm', '-qf', '--qf', '%{NAME}', '/usr/bin/opencode').stdout == 'harness-os-session'
             assert run('rpm', '-qf', '--qf', '%{NAME}', '/usr/lib/harness-opencode/opencode').stdout == 'harness-os-session'
             assert '/usr/share/licenses/harness-opencode/LICENSE' in installed
