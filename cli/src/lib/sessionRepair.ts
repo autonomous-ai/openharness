@@ -2,8 +2,8 @@
  * Find the session a live discovered engine process is running, when no hook has bound one yet.
  *
  * Process discovery can see an engine immediately, including after a daemon restart, but a session id is
- * owned by the engine and may not be present in argv. Ask the engine's own store which session belongs to
- * that pane's directory and process start time.
+ * owned by the engine and may not be present in argv. Prefer the engine's process evidence; when no
+ * exact process lookup applies, narrow the engine's store by directory and process start time.
  *
  * Two rules keep it honest:
  *   - **Started after the engine process did.** A session older than the process cannot be the one it is
@@ -304,13 +304,15 @@ export async function findLiveSession(
       // The agent's own profile alone, else the daemon's home and every one the person moved, as
       // findResumedTranscript looks: the default alone missed a rollout in a moved CODEX_HOME.
       const sessions = (opts?.codexHome ? [opts.codexHome] : codexHomeRoots(env.CODEX_HOME)).map((home) => join(home, 'sessions'))
-      // Exact first, as for Claude: the rollout the process holds open (see `codexProcessSession`).
-      const exact = opts?.pid ? await codexProcessSession(opts.pid, sessions, cwd) : null
+      // October 6 parallel-create incident: the only rollout in a folder can belong to a sibling
+      // whose file opened first. A known Codex process must name its own open rollout; until then,
+      // leave it unbound for its next discovery pass or startup hook, never guess from the folder.
+      if (opts?.pid) return codexProcessSession(opts.pid, sessions, cwd)
       // Codex writes no `cwd` on line one; its rollout meta carries it — and says whether the rollout
       // belongs to a subagent, which must never become an agent of its own.
       // Its session id lives INSIDE the file: the name is `rollout-<timestamp>-<id>.jsonl`, so deriving
       // the id from the filename produced the literal string "rollout-…" (seen on a live pane).
-      return exact ?? fileEngineSession(sessions, cwd, startedAtMs, async (path) => {
+      return fileEngineSession(sessions, cwd, startedAtMs, async (path) => {
         const meta = readCodexRolloutMeta(path)
         return meta && !meta.isSubagent ? { cwd: meta.cwd, sessionId: meta.id || undefined } : null
       }, opts)
