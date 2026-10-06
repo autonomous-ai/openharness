@@ -2894,13 +2894,16 @@ fn open_picked_agent(app: &mut App, machine: &str, agent: &str, placement: Place
     let held = app.shell_context.session_picker.take().filter(|p| app.focused() == Some(*p))
         .and_then(|p| app.panes.get(&p)).map(|p| ((p.machine_id.clone(), p.agent_id.clone()), p.cwd.clone().or_else(|| p.live_path.clone())));
     let owned = held.as_ref().is_some_and(|(key,_)| app.shells.remove(key));
+    // A just-exited process can still have a live discovery row. Resume verifies
+    // its exact process and attaches an existing one without launching a duplicate.
+    let verify_visit = held.is_some() && app.fleet.agent(machine, agent).is_some_and(|a| a.engine != "terminal");
     if inline { crate::shell_context::finish(app, 0, ""); }
     app.open_agent(machine, agent, placement);
     if let Some((key, cwd)) = held {
         crate::shell_context::visiting(app, &key, cwd, machine, agent);
         if owned { app.shells.insert(key); }
     }
-    if state == Some(crate::fleet::State::Paused) {
+    if verify_visit || state == Some(crate::fleet::State::Paused) {
         if let Some((_, pane)) = app.find_pane(machine, agent) { app.resume(pane) }
     }
 }
