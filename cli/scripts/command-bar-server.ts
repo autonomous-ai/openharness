@@ -1,7 +1,11 @@
 /** Run the JEV experiment without replacing or restarting the user's Harness daemon. */
 import { createServer } from 'node:http'
+import { COMMAND_BAR_REQUESTS, emptyPorts } from '../src/core/api.js'
+import { createServiceHost } from '../src/core/serviceHost.js'
 import { commandBarService } from '../src/lib/commandBar.js'
-import { handleCommandBarHttp } from '../src/lib/commandBarHttp.js'
+import { handleCommandBarHttp, routedCommandBar } from '../src/lib/commandBarHttp.js'
+import { processCoreApi } from '../src/services/processCoreApi.js'
+import { startCommandBar } from '../src/services/commandBar.js'
 
 // Optional hidden input for a throwaway experiment. Never write credentials to disk or argv.
 if (process.argv.includes('--key-stdin')) {
@@ -34,8 +38,13 @@ if (process.argv.includes('--key-stdin')) {
 const port = Number(process.env.HARNESS_JEV_PORT ?? '18476')
 if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error('HARNESS_JEV_PORT must be between 1024 and 65535')
 
+// The command bar in this process, behind the same door the daemon gives it, with nothing of a daemon's.
+const host = createServiceHost(emptyPorts())
+host.serve('commandBar', startCommandBar, processCoreApi('', 'commandBar'), COMMAND_BAR_REQUESTS)
+const door = routedCommandBar({ serviceRouter: host.route, onConnectionClosed: host.closeConnection })
+
 const server = createServer((req, res) => {
-  void handleCommandBarHttp(req, res, commandBarService).then(handled => {
+  void handleCommandBarHttp(req, res, door).then(handled => {
     if (!handled && !res.writableEnded) { res.writeHead(404); res.end() }
   }).catch(() => { if (!res.destroyed) { res.writeHead(500); res.end() } })
 })

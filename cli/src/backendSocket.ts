@@ -33,7 +33,7 @@ import { engineInstallRecipe } from './lib/engineInstall.js'
 import { agentFrame, type AgentDshContext, type AgentFrame } from './lib/agentFrame.js'
 import { agentTokenUsage } from './lib/agentTokenUsage.js'
 import { terminalHandoffRequest } from './lib/terminalHandoff.js'
-import { OwnerCommands, OWNER_COMMAND_TYPES } from './lib/ownerCommands.js'
+import { OwnerCommands, OWNER_COMMAND_TYPES, ROUTE_COMMAND_TYPES } from './lib/ownerCommands.js'
 import { VIEWER_DOWN_TYPES } from './lib/viewerFrames.js'
 import type { TerminalStreamManager } from './lib/terminalStreamManager.js'
 import { encodeTerminalLocal, type TerminalBinaryClear } from './lib/terminalBinary.js'
@@ -810,7 +810,7 @@ export class BackendSocket {
 
     // A paired owner can run the machine's orchestrator; observers and device sessions cannot.
     // Both requests and replies are encrypted, including project artifacts.
-    if (OWNER_COMMAND_TYPES.has(type)) {
+    if (ROUTE_COMMAND_TYPES.has(type)) {
       if (!owner) { reply(type, requestId, { error: 'OWNER_REQUIRED' }); return }
       void this.ownerCommands.request(connId, type, payload).then(result => reply(type, requestId, result))
       return

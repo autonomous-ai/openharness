@@ -20,8 +20,7 @@ import { hookCredentialMatches, loadOrCreateHookCredential } from './lib/hookAut
 import { routeStoreRequest, type StoreHandler } from './lib/storeProxy.js'
 import type { HookTerminalHint } from './lib/terminalTypes.js'
 import { ENGINES, type AgentEngine } from './engines/types.js'
-import type { CommandBarService } from './lib/commandBar.js'
-import { handleCommandBarHttp } from './lib/commandBarHttp.js'
+import { handleCommandBarHttp, type CommandBarDoor } from './lib/commandBarHttp.js'
 import { isLoopbackRequest, loopbackHosts } from './lib/loopbackRequest.js'
 import { isTrustedLocal, listenLocalSocket, type LocalSocketServer } from './lib/localSocket.js'
 
@@ -55,7 +54,7 @@ export interface PairOutcome {
 }
 
 export interface HookServerHandlers {
-  onCommandBar?: Pick<CommandBarService, 'status' | 'decide'>
+  onCommandBar?: CommandBarDoor
   onAutonomousDeviceRequest?: (method: string, target: string, body?: unknown) => Promise<{ status: number; body: unknown }>
 
   onRegistered: (

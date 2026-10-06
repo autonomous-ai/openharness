@@ -8,14 +8,26 @@ import { registry, type RegisteredSession } from './lib/registry.js'
 import { env } from './config/env.js'
 import { readHookCredential } from './lib/hookAuth.js'
 import { CommandBarService } from './lib/commandBar.js'
+import { routedCommandBar } from './lib/commandBarHttp.js'
+import { COMMAND_BAR_REQUESTS, emptyPorts } from './core/api.js'
+import { createServiceHost } from './core/serviceHost.js'
+import { startCommandBar, type Commands } from './services/commandBar.js'
+import { fakeCore } from './testing/fakeCore.js'
 import { ENGINES } from './engines/types.js'
 
 let server: Server | null = null
 
 describe('native command bar endpoints', () => {
+  /** The command bar in this process, behind the core's door to it, as `HARNESSD_SERVICES=none` runs it. */
+  const commandBar = (commands: Commands) => {
+    const host = createServiceHost(emptyPorts(), { log: () => {} })
+    host.serve('commandBar', (core) => startCommandBar(core, commands), fakeCore(), COMMAND_BAR_REQUESTS)
+    return routedCommandBar({ serviceRouter: host.route, onConnectionClosed: host.closeConnection })
+  }
+
   it('requires a native local header and rejects browser origins before evaluating', async () => {
     const decide = vi.fn()
-    const { base } = await start({ onCommandBar: { status: vi.fn(), decide } })
+    const { base } = await start({ onCommandBar: commandBar({ status: vi.fn(), decide }) })
     const attempts: Record<string, string>[] = [{}, { 'x-adapter-local': '1', origin: 'https://example.com' }]
     for (const headers of attempts) {
       const response = await fetch(`${base}/api/command-bar/resolve`, { method: 'POST', headers, body: '{}' })
@@ -25,7 +37,7 @@ describe('native command bar endpoints', () => {
   })
 
   it('returns configuration without credentials and wraps useful setup errors', async () => {
-    const { base } = await start({ onCommandBar: new CommandBarService({ key: async () => null }) })
+    const { base } = await start({ onCommandBar: commandBar(new CommandBarService({ key: async () => null })) })
     const headers = { 'x-adapter-local': '1', 'content-type': 'application/json' }
     const status = await fetch(`${base}/api/command-bar/status`, { headers })
     expect(await status.json()).toMatchObject({ success: true, data: { configured: false, provider: 'OpenRouter' } })
@@ -559,8 +571,8 @@ describe('the daemon socket', () => {
     const dir = mkdtempSync('/tmp/hsock-')
     const socketPath = join(dir, 'daemon.sock')
     const onStatus = vi.fn(() => ({ ok: true }))
-    const commandBar = { status: vi.fn(async () => ({ configured: false })), decide: vi.fn() }
-    const started = await startHookServer(0, { onRegistered: vi.fn(), onSessionEnd: vi.fn(), onStatus, onCommandBar: commandBar as never }, { socketPath })
+    const door = { ask: vi.fn(async () => ({ status: 200, body: { success: true, data: { configured: false } } })), closed: vi.fn() }
+    const started = await startHookServer(0, { onRegistered: vi.fn(), onSessionEnd: vi.fn(), onStatus, onCommandBar: door }, { socketPath })
     server = started.server
     try {
       expect(started.localSocket?.path).toBe(socketPath)
