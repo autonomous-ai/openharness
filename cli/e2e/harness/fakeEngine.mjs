@@ -111,6 +111,20 @@ async function codexWrapper(config) {
 export async function run(engine, config = {}, { native = false } = {}) {
   if (engine === 'codex' && !native) return codexWrapper(config)
   const args = process.argv.slice(2)
+  if (engine === 'codex' && args[0] === 'app-server' && args[1] === 'proxy') {
+    // Found by QA on a quiet machine: moved-home close/activity must reach that home's shared server.
+    // Real Codex proxy carries raw WebSocket bytes and fails when the profile has no server; it starts none.
+    const home = process.env.CODEX_HOME || config.codexHome
+    if (!within(config.root, home)) throw new Error('fake Codex proxy outside its throwaway home')
+    const { port } = JSON.parse(readFileSync(join(home, 'app-server-daemon', 'fake-proxy.json'), 'utf8'))
+    if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('invalid fixture server port')
+    const { createConnection } = await import('node:net')
+    const socket = createConnection({ host: '127.0.0.1', port })
+    process.stdin.pipe(socket).pipe(process.stdout)
+    socket.on('error', () => process.exit(1))
+    socket.on('close', () => process.exit(0))
+    return
+  }
   const version = config.version ?? (engine === 'claude' ? '2.1.270' : '0.160.0')
   const versionLine = engine === 'claude' ? `${version} (Claude Code)` : `codex-cli ${version}`
   const without = new Set(config.without ?? [])

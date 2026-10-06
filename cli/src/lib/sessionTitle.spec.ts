@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { appendFileSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -119,14 +119,17 @@ describe('codexThreadName: Codex’s own name for a thread', () => {
     expect(codexThreadName('t1', home)).toBeNull()
   })
 
-  it('falls back to ~/.codex when neither the agent nor the environment names a Codex home', () => {
+  it('falls back to ~/.codex when neither the agent nor the environment names a Codex home', async () => {
     const savedUserHome = process.env.HOME
     delete process.env.CODEX_HOME
     process.env.HOME = home
     try {
       mkdirSync(join(home, '.codex'))
       writeFileSync(join(home, '.codex', 'session_index.jsonl'), JSON.stringify({ id: 't1', thread_name: 'Default home' }) + '\n')
-      expect(codexThreadName('t1')).toBe('Default home')
+      // Configuration is captured at process startup; give this fresh HOME a fresh config module too.
+      vi.resetModules()
+      const fresh = await import('./sessionTitle.js')
+      expect(fresh.codexThreadName('t1')).toBe('Default home')
     } finally {
       process.env.HOME = savedUserHome
     }

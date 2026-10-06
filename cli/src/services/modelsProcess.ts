@@ -15,7 +15,7 @@
  * it asks for (`service_query`), each time it needs it: a service keeps no credential.
  */
 import type { CoreApi, ServiceRequests } from '../core/api.js'
-import { emptyPorts, LANE_OFF, TERMINALS_OFF } from '../core/api.js'
+import { DELIVERIES_OFF, emptyPorts, LANE_OFF, TERMINALS_OFF } from '../core/api.js'
 import type { AgentGridTarget, GridGlance } from '../lib/gridAnnotation.js'
 import { parseGridLaunchOverride } from '../lib/gridLaunch.js'
 import { gridGlances, onGridModelsChanged } from '../lib/gridModels.js'
@@ -74,7 +74,7 @@ export function modelsCoreApi(dataDir: string, ask: (query: string, payload?: Pa
       setRuntime: () => {},
       fork: async () => ({ ok: false, error: 'UNSUPPORTED' }),
     },
-    turns: { send: () => {}, stop: () => {}, recent: () => [], asks: () => [] },
+    turns: { send: () => {}, stop: () => {}, recent: () => [], asks: () => [], ...DELIVERIES_OFF },
     questions: { answer: () => {}, answerReviewed: async () => false },
     transcripts: { databaseHistory: () => undefined },
     external: {

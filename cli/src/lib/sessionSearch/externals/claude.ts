@@ -53,48 +53,52 @@ export async function readClaudeHead(path: string, windows: readonly number[] = 
   return null
 }
 
-export function claudeProvider(options: { projectsDir: string; home: string }): ExternalProvider {
+export function claudeProvider(options: { projectsDir: string; home: string; roots?: () => string[] }): ExternalProvider {
   return {
     engine: 'claude',
     async scan(ctx: ScanContext): Promise<ExternalSession[]> {
       const found: ExternalSession[] = []
-      for (const project of await entries(options.projectsDir)) {
-        if (!project.isDirectory()) continue
-        const folder = join(options.projectsDir, project.name)
-        // Only the project's own files: a sub-agent's are in a folder beneath it.
-        for (const file of await entries(folder)) {
-          if (!file.name.endsWith('.jsonl')) continue
-          const path = join(folder, file.name)
-          // A file, or a link to one; not a folder, not a broken link.
-          const stamp = await fileStamp(path)
-          if (!stamp) continue
-          // A transcript's first lines never change: its head is read once, however it grows.
-          const head = await ctx.head(`claude:${path}`, stamp.stamp, () => readClaudeHead(path))
-          await ctx.pace()
-          if (!head || ctx.excluded(head.cwd)) continue
-          found.push({ ...head, engine: 'claude', title: '', mtime: stamp.mtime, transcriptPath: path })
+      for (const projectsDir of options.roots?.() ?? [options.projectsDir]) {
+        for (const project of await entries(projectsDir)) {
+          if (!project.isDirectory()) continue
+          const folder = join(projectsDir, project.name)
+          // Only the project's own files: a sub-agent's are in a folder beneath it.
+          for (const file of await entries(folder)) {
+            if (!file.name.endsWith('.jsonl')) continue
+            const path = join(folder, file.name)
+            // A file, or a link to one; not a folder, not a broken link.
+            const stamp = await fileStamp(path)
+            if (!stamp) continue
+            // A transcript's first lines never change: its head is read once, however it grows.
+            const head = await ctx.head(`claude:${path}`, stamp.stamp, () => readClaudeHead(path))
+            await ctx.pace()
+            if (!head || ctx.excluded(head.cwd)) continue
+            found.push({ ...head, engine: 'claude', title: '', mtime: stamp.mtime, transcriptPath: path })
+          }
         }
       }
       return found
     },
     async owners(view: ProcessView): Promise<OwnerClaim[]> {
-      const dir = join(options.home, 'sessions')
       const claims: OwnerClaim[] = []
-      const records = (await entries(dir)).filter((file) => file.isFile() && file.name.endsWith('.json'))
-      if (!records.length) return claims
-      const processes = new Map((await view.list()).map((process): [number, RunningProcess] => [process.pid, process]))
-      const ownership = agentCommandOwnershipSnapshot()
-      for (const file of records) {
-        const path = join(dir, file.name)
-        const row = record(await readJson(path))
-        const pid = row?.pid
-        if (typeof pid !== 'number' || !text(row?.sessionId) || !view.alive(pid)) continue
-        // A record outlives a crash, and its pid can be handed to anything after — a shell in another
-        // tab. Only a Claude process already running when the record says Claude started still has it.
-        const process = processes.get(pid)
-        if (!process || engineProcessMatch(process, 'claude', ownership).score <= 0) continue
-        if (process.started !== undefined && typeof row?.startedAt === 'number' && process.started > row.startedAt + START_SLACK_MS) continue
-        claims.push({ sessionId: text(row?.sessionId), pid, record: path })
+      const dirs = options.roots?.().map(root => join(root, '..', 'sessions')) ?? [join(options.home, 'sessions')]
+      for (const dir of dirs) {
+        const records = (await entries(dir)).filter((file) => file.isFile() && file.name.endsWith('.json'))
+        if (!records.length) continue
+        const processes = new Map((await view.list()).map((process): [number, RunningProcess] => [process.pid, process]))
+        const ownership = agentCommandOwnershipSnapshot()
+        for (const file of records) {
+          const path = join(dir, file.name)
+          const row = record(await readJson(path))
+          const pid = row?.pid
+          if (typeof pid !== 'number' || !text(row?.sessionId) || !view.alive(pid)) continue
+          // A record outlives a crash, and its pid can be handed to anything after — a shell in another
+          // tab. Only a Claude process already running when the record says Claude started still has it.
+          const process = processes.get(pid)
+          if (!process || engineProcessMatch(process, 'claude', ownership).score <= 0) continue
+          if (process.started !== undefined && typeof row?.startedAt === 'number' && process.started > row.startedAt + START_SLACK_MS) continue
+          claims.push({ sessionId: text(row?.sessionId), pid, record: path })
+        }
       }
       return claims
     },

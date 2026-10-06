@@ -1,8 +1,9 @@
 import { readFile } from 'fs/promises'
-import { dirname, join } from 'path'
+import { join } from 'path'
 import { execFile } from 'child_process'
 import { promisify } from 'util'
 import { env } from '../config/env.js'
+import { sessionClaudeHome, sessionCodexHome } from './engineHomes.js'
 import { parseMuseSettings } from '../engines/muse/runtimeProfile.js'
 import { parseAmpSession } from '../engines/amp/runtimeProfile.js'
 import type { AgentEngine } from '../engines/types.js'
@@ -568,7 +569,7 @@ async function readText(file: string): Promise<string> {
 }
 
 function claudeSettingsFiles(session: RegisteredSession): string[] {
-  const root = dirname(env.CLAUDE_PROJECTS_DIR)
+  const root = sessionClaudeHome(session)
   const files = [join(root, 'settings.json')]
   if (session.cwd) {
     files.push(join(session.cwd, '.claude', 'settings.json'))
@@ -1336,13 +1337,12 @@ export class RuntimeProfileManager {
   }
 
   /**
-   * `models_cache.json` in this agent's own CODEX_HOME profile, when it has one other than the default
-   * (see RegisteredSession.codexHome) — otherwise the picker would show the default profile's cached
-   * models for an agent that is not actually running on it.
+   * Found by QA on a quiet machine: the picker read the daemon's login instead of the agent's.
+   * Use the bound conversation's home, or the launch shell's, with an explicit Codex profile first.
    */
   private async readCodexCache(session: RegisteredSession): Promise<CodexCache> {
     try {
-      const cache: unknown = JSON.parse(await readFile(join(session.codexHome || env.CODEX_HOME, 'models_cache.json'), 'utf8'))
+      const cache: unknown = JSON.parse(await readFile(join(sessionCodexHome(session), 'models_cache.json'), 'utf8'))
       return record(cache) ?? {}
     } catch {
       return {}

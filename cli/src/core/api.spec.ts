@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { projectDisplayName, type RegisteredSession } from '../lib/registry.js'
-import { createCoreApi, emptyPorts, FLEET_FALLBACKS, LANE_OFF, LONG_ANSWERS, MODELS_OFF, MODELS_REQUESTS, MONITOR_OFF, resolveAgent, TEAMS_FALLBACKS, type CoreApiDeps } from './api.js'
+import { createCoreApi, DELIVERIES_OFF, emptyPorts, FLEET_FALLBACKS, LANE_OFF, LONG_ANSWERS, MODELS_OFF, MODELS_REQUESTS, MONITOR_OFF, resolveAgent, TEAMS_FALLBACKS, type CoreApiDeps } from './api.js'
 import { FAIL } from './serviceHost.js'
 
 const row = (agentId: string) => ({ agentId, sessionId: `s-${agentId}`, engine: 'claude', cwd: '/work/app' }) as RegisteredSession
@@ -13,6 +13,12 @@ describe('the core API services stand on', () => {
     expect(await LANE_OFF.seal('m', { type: 'message', payload: { text: 'hello' } })).toEqual({ lost: true })
     expect(await LANE_OFF.open('m', { type: 'message' })).toEqual({ lost: true })
     expect(LANE_OFF.drop('m')).toBeUndefined()
+  })
+
+  it('gives a service with no delivery of the core\'s nothing to write, take back or hear', async () => {
+    expect(DELIVERIES_OFF.deliver('a', 'hello', 'd1')).toBeUndefined()
+    expect(DELIVERIES_OFF.cancelDelivery('d1')).toBe(false)
+    expect(DELIVERIES_OFF.onDelivery(() => {})()).toBeUndefined()
   })
 
   it('resolves an agent in a service\'s own copy as the registry does: by agent id, then session id', () => {
@@ -51,7 +57,7 @@ describe('the core API services stand on', () => {
       runtimeProfile: vi.fn(() => null),
       setRuntime: vi.fn(),
       fork: vi.fn(async () => ({ ok: true as const, agentId: 'fork' })),
-      turns: { send: vi.fn(), stop: vi.fn(), recent: vi.fn(() => []), asks: vi.fn(() => []) },
+      turns: { send: vi.fn(), stop: vi.fn(), recent: vi.fn(() => []), asks: vi.fn(() => []), deliver: vi.fn(), cancelDelivery: vi.fn(() => true), onDelivery: vi.fn(() => () => {}) },
       questions: { answer: vi.fn(), answerReviewed: vi.fn(async () => true) },
     }
     const core = createCoreApi(deps)
