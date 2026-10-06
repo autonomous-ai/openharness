@@ -144,7 +144,11 @@ Each relay connection also negotiates a WebRTC data channel to the machine
 terminal frames take it when it is up and fall back to the relay. Those files,
 the transport interface and the E2EE session are copies of the phone's (mobile
 stays a standalone package); `test/p2p/mobile_parity_test.dart` fails until a
-change is carried to both.
+change is carried to both. The browser's E2EE is pure Dart on the UI thread,
+and that is fine: sealing plus opening a 4 KiB frame measured 316 µs under
+dart2js `-O4`, 282 µs on the Dart VM and 479 µs as `-O4` WASM (Node 24,
+2026-10-06) — `flutter test --platform chrome` compiles unoptimized and reads
+~40× slower, so do not judge it there. WASM is not worth adopting for speed.
 Shared sessions use `ObserverRelayCodec` and `/api/observer-ws`, verifying the
 owner and permitting only observation and authenticated comments. `/s/:id#key=…`
 opens `SharedAgentPage` without restoring the visitor's workspace. Public links
