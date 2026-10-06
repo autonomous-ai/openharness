@@ -1321,37 +1321,9 @@ impl App {
     /// dialling the old id and showed `daemon down` beside a running daemon until it was restarted
     /// (seen on Harness OS after a phone sign-in). Ask the daemon who it is now, and follow it.
     fn recheck_local_identity(&mut self) {
-        let port = self.port;
-        self.spawn(async move { http_json(port, "GET", "/api/status", None).await }, |app, status| {
-            let Ok(status) = status else { return };
-            let id = status.get("machineId").and_then(Value::as_str).unwrap_or("");
-            if id.is_empty() || id == app.fleet.local_id || crate::local::is_local(&app.fleet.local_id) { return }
-            app.adopt_local_identity(id.to_string());
-            app.follow_account(status.get("signedIn").and_then(Value::as_bool).unwrap_or(false));
-        });
-    }
-
-    /// Everything hn held under this computer's old id moves to the new one: its panes reopen
-    /// there, and its harnesses are listed again from the daemon, which kept them.
-    pub(crate) fn adopt_local_identity(&mut self, id: String) {
-        let old = std::mem::replace(&mut self.fleet.local_id, id.clone());
-        // A link to the new id made while it looked like another machine is dropped with the old
-        // one: the fresh link's Connected is what clears `daemon down` and reopens the panes.
-        if let Some(state) = self.links.remove(&id) { if let Some(link) = state.link { link.close() } }
-        for pane in self.panes.values_mut().filter(|p| p.machine_id == id) {
-            pane.stream = None;
-            pane.opening = false;
-            pane.takeover_pending = false;
-            pane.open_token += 1;
-            pane.dirty = true;
-        }
-        self.move_machine(&old, &id);
-        for machine in &mut self.fleet.machines { machine.local = machine.id == id || crate::local::is_local(&machine.id) }
-        if self.fleet.machine(&id).is_none() {
-            self.fleet.machines.insert(0, Machine { id: id.clone(), name: fleet::machine_display_name(&id, None), local: true, status: "running".into(), reach: Reach::Unknown });
-        }
-        self.connect(&id);
-        self.refresh_machines();
+        // Use the same generation-checked transition as startup: a new account
+        // must invalidate old requests and shell contexts as well as pane links.
+        self.boot();
     }
 
     /// What hn holds under machine `old` becomes `id`'s: its panes, which of them are shells and
@@ -5571,7 +5543,7 @@ impl App {
     }
 
     /// This client's changes to the desk's windows are written to it.
-    fn desk_syncs(&self) -> bool {
+    pub(crate) fn desk_syncs(&self) -> bool {
         self.desk_mode == DeskMode::Sync || self.desk_mode == DeskMode::Account && self.signed_in
     }
 
@@ -6619,11 +6591,13 @@ mod recovery_tests {
         app.fleet.machines[0].local = true;
         app.fleet.local_id = "test-peer".into();
         // The account's id was already listed, as if another machine, with a link of its own.
-        app.fleet.machines.push(Machine { id: "account-id".into(), name: "harness".into(), local: false, status: "running".into(), reach: Reach::Ready });
+        app.fleet.machines.push(Machine { shared: false, id: "account-id".into(), name: "harness".into(), local: false, status: "running".into(), reach: Reach::Ready });
         app.links.insert("account-id".into(), LinkState { link: Some(Link::spawn(app.port, "account-id", 2, app.sink.clone())), generation: 2, attempts: 0, retry_at: None });
         app.daemon_down = true;
         app.generation = 2;
-        app.adopt_local_identity("account-id".into());
+        app.adopt_daemon_identity(&json!({"machineId":"test-peer","computerId":"test-peer","signedIn":false}));
+        app.adopt_daemon_identity(&json!({"machineId":"account-id","computerId":"test-peer","signedIn":true}));
+        app.connect("account-id");
         assert_eq!(app.fleet.local_id, "account-id");
         assert!(app.fleet.machine("test-peer").is_none());
         assert!(app.fleet.machine("account-id").is_some_and(|m| m.local));
@@ -6635,7 +6609,7 @@ mod recovery_tests {
             assert!(app.panes[&id].stream.is_none());
             assert_eq!(app.panes[&id].open_token, 8);
         }
-        assert_eq!(app.panes[&4].machine_id, "other-peer");
+        assert!(!app.panes.contains_key(&4), "remote views are scoped to the new account");
         assert!(app.shells.contains(&("account-id".into(), "agent-2".into())));
         app.on_machine("account-id".into(), generation, MachineEvent::Connected);
         assert!(!app.daemon_down);

@@ -368,6 +368,8 @@ try:
     shows('Keep this task on the remote machine')
     snapshot('new-window-remote-offline')
     state('reconnect', {'action': 'online', 'machine': remote})
+    wait(lambda: hn('display', '-p', '-t', remote_pane, '#{pane_agent_state}') not in ('', 'offline'),
+         'the remote connection and agent roster recover', 20)
     wait(lambda: '[x]' in screen(), 'remote Git state recovers without replacing the draft', 20)
     click('Worktree'); click('New Harness'); shows('Mock codex (mock)')
     assert hn('display', '-p', '#{pane_machine}') == 'mock-remote'
