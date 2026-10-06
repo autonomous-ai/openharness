@@ -9,7 +9,7 @@ import type { AgentEngine } from '../engines/types.js'
  * unknown-command error in the user's terminal, so each is adapted per engine.
  *
  * The backend prepends UNCONDITIONALLY — it does not know the engine. On the routed path it picks the
- * agent only after transcribing, and `voice_route` replies without an engine field; the fixed-agent and
+ * agent only after transcribing, and its router answers without the engine; the fixed-agent and
  * route_confirm paths would each need their own lookup. This module is the one place that always knows
  * the engine (`registry.get(sessionId).engine`), so the filtering lives here for every path at once.
  */

@@ -2,7 +2,7 @@ import { PROCESS_ENGINES } from '../engines/types.js'
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { DshManifestSchema, dshSupportedEngines, dshTier, dshVerdictPath, dshViewerName, expandDshValue, parseDshManifest, readDshManifest , isViewerPackage, dshEngine, viewerUse} from './manifest.js'
+import { DshManifestSchema, dshSupportedEngines, dshTier, dshVerdictPath, dshViewerName, expandDshValue, parseDshManifest, readDshManifest , isViewerPackage, viewerUse} from './manifest.js'
 
 const STARTER = fileURLToPath(new URL('../../../store/starter', import.meta.url))
 
@@ -110,7 +110,7 @@ describe('spec 1.1: package kinds and viewer.use', () => {
     expect(viewer.ok).toBe(true)
     if (viewer.ok) {
       expect(isViewerPackage(viewer.manifest)).toBe(true)
-      expect(dshEngine(viewer.manifest)).toBeNull()
+      expect(viewer.manifest.engine).toBeUndefined()
       expect(dshTier(viewer.manifest)).toBe(2)
     }
     expect(parseDshManifest(JSON.stringify({ ...base, kind: 'viewer' })).ok).toBe(false)

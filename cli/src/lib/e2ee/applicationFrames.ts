@@ -86,8 +86,6 @@ const QUESTION_RESULT = 'question_response_result'
 const SEALED_REPLIES = new Set([
   // What a pane runs and where: its folder, pid and tty.
   'terminal_info_result',
-  // Which agent a spoken task went to, and the router's reason, which restates the task.
-  'voice_route_result',
   // The rest of what a machine tells the client that asked about it: its Store harnesses, its engines
   // and their versions, its grids and models, the login an engine uses (with the computer's name), a
   // move onto a model, and a terminal handed between machines (refused over the relay).

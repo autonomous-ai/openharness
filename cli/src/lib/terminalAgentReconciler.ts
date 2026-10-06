@@ -87,18 +87,6 @@ function routeEngineMatches(current: Pick<RegisteredSession, 'engine'>, observed
   return current.engine === observed.engine || isTerminalEngine(current.engine)
 }
 
-function unboundRouteOwner(
-  current: readonly RegisteredSession[],
-  observed: DiscoveredTerminalAgent,
-): RegisteredSession | undefined {
-  const matches = current.filter((candidate) => (
-    !candidate.sessionId
-    && routeEngineMatches(candidate, observed)
-    && sharesPlacement(candidate, observed)
-  ))
-  return matches.length === 1 ? matches[0] : undefined
-}
-
 /**
  * The observation for a row that cannot be matched by process identity, because it does not have one
  * yet. Its terminal route is the only identity it has.
@@ -178,30 +166,6 @@ export class TerminalAgentReconciler {
   triggerHint(runtime: TerminalRuntimeRef, engine: AgentEngine): Promise<boolean> {
     this.hints.set(terminalRouteKey(runtime), engine)
     return this.trigger()
-  }
-
-  /**
-   * Adopt an engine process that a backend-specific, pane-scoped probe already verified.
-   *
-   * New-agent creation has stronger evidence than the periodic inventory scan: it owns the exact
-   * runtime it just created and resolves the requested engine beneath that runtime. Passing that
-   * observation through the same callbacks used by reconciliation keeps process-agent creation and
-   * later session binding on one path, while avoiding a second best-effort inventory snapshot.
-   */
-  async adoptVerified(observed: DiscoveredTerminalAgent): Promise<RegisteredSession | undefined> {
-    const apply = async (): Promise<RegisteredSession | undefined> => {
-      const key = processIdentityKey(observed.engine, observed.processIdentity)
-      const before = this.deps.current()
-      const current = before.find((candidate) => currentProcessKey(candidate) === key)
-        ?? unboundRouteOwner(before, observed)
-      if (current) await this.deps.onTerminalAvailability?.(current, true)
-      if (current) await this.deps.onObserved(observed, current)
-      else await this.deps.onDiscovered(observed)
-      const after = this.deps.current()
-      return after.find((candidate) => currentProcessKey(candidate) === key)
-        ?? unboundRouteOwner(after, observed)
-    }
-    return this.deps.transaction ? this.deps.transaction(apply) : apply()
   }
 
   /** Hide an explicitly deleted process until an authoritative scan proves that process exited. */

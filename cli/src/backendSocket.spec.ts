@@ -1105,9 +1105,9 @@ describe('BackendSocket outbound queue', () => {
     await socket.stop()
   })
 
-  it('seals what a pane runs and where a spoken task went to a requester that holds a session, and to it alone', async () => {
-    // A pane's folder, pid and tty, and the router's restatement of a spoken task, used to go to every
-    // web client in the clear. Every client that holds a session opens a sealed payload of any type.
+  it('seals what a pane runs to a requester that holds a session, and to it alone', async () => {
+    // A pane's folder, pid and tty used to go to every web client in the clear. Every client that holds a
+    // session opens a sealed payload of any type.
     const socket = new BackendSocket('token')
     // `terminal_info` is the core's (core/terminals/requests.ts), bound here as the daemon binds it.
     bindTerminalRequests(socket)
@@ -1121,28 +1121,23 @@ describe('BackendSocket outbound queue', () => {
       unwrap.mockReturnValueOnce({ type, payload })
       ws.message({ t: 'down', connId, frame: { type, payload: { __e2e: { v: 1, k: 's', n: 1, ct: 'ciphertext' } } } })
     }
-    const answers = () => parseSent(ws).filter((item) => ['terminal_info_result', 'voice_route_result'].includes(String((item.frame as { type?: unknown })?.type)))
+    const answers = () => parseSent(ws).filter((item) => (item.frame as { type?: unknown })?.type === 'terminal_info_result')
     ask('web-1', 'terminal_info', { requestId: 'info-1', agentId: 'no-such-agent' })
-    ask('web-1', 'voice_route', { requestId: 'route-1', transcript: '' })
-    await vi.waitFor(() => expect(answers()).toHaveLength(2))
+    await vi.waitFor(() => expect(answers()).toHaveLength(1))
     expect(wrap).toHaveBeenCalledWith('web-1', 'terminal_info_result', 'info-1', { error: 'AGENT_NOT_FOUND' })
-    expect(wrap).toHaveBeenCalledWith('web-1', 'voice_route_result', 'route-1', { error: 'MISSING_TRANSCRIPT' })
     const sealed = { __e2e: { v: 1, k: 'p', n: 1, ct: 'ciphertext' } }
     expect(answers()).toEqual([
       { t: 'up', targetConnId: 'web-1', frame: { type: 'terminal_info_result', payload: sealed } },
-      { t: 'up', targetConnId: 'web-1', frame: { type: 'voice_route_result', payload: sealed } },
     ])
     // A requester whose session went away meanwhile gets the bare refusal a refused request gets, never
     // the answer in the clear.
     ask('web-2', 'terminal_info', { requestId: 'info-2', agentId: 'no-such-agent' })
-    await vi.waitFor(() => expect(answers()).toHaveLength(3))
-    expect(answers()[2]).toEqual({ t: 'up', targetConnId: 'web-2', frame: { type: 'terminal_info_result', payload: { requestId: 'info-2', error: 'E2EE_REQUIRED' } } })
-    // Only the replies: the requests keep the rule they had, since an older daemon reads a sealed one as empty.
-    for (const type of ['terminal_info', 'voice_route']) {
-      expect(encryptDownFrame(type)).toBe(false)
-      expect(encryptDownFrameFor(type, { strictDown: true })).toBe(false)
-      expect(encryptRpcResult(`${type}_result`)).toBe(true)
-    }
+    await vi.waitFor(() => expect(answers()).toHaveLength(2))
+    expect(answers()[1]).toEqual({ t: 'up', targetConnId: 'web-2', frame: { type: 'terminal_info_result', payload: { requestId: 'info-2', error: 'E2EE_REQUIRED' } } })
+    // Only the reply: the request keeps the rule it had, since an older daemon reads a sealed one as empty.
+    expect(encryptDownFrame('terminal_info')).toBe(false)
+    expect(encryptDownFrameFor('terminal_info', { strictDown: true })).toBe(false)
+    expect(encryptRpcResult('terminal_info_result')).toBe(true)
     await socket.stop()
   })
 

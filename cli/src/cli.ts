@@ -2286,7 +2286,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // Recaps are STORED under the engine session id — that is what lets `--resume` bring the last recap
   // back under a brand-new agent — but they are ASKED FOR by agent id, which is the only id the device
   // and the voice router know. Resolve across the two, or every tile restores empty.
-  backend.recentProvider = recaps.recent
   backend.agentRecentProvider = recaps.agentRecent
 
   // "Change agent": the desktop asks for the structured handoff file (lib/agentHandoff.ts) before it
