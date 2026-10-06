@@ -22,11 +22,14 @@ from session_vm import put
 
 
 class MaintenanceVM(SessionVM):
-    def __init__(self, folder, disk, kernel, target):
+    def __init__(self, folder, disk, kernel, target, source=None):
         super().__init__(folder, disk, kernel)
         if not target.is_file() or target.is_symlink():
             raise ValueError('The encryption target must be a cloned regular file.')
         self.target = target
+        if source is not None and (not source.is_file() or source.is_symlink()):
+            raise ValueError('The read-only payload must be a verified regular image file.')
+        self.source = source
 
     def start(self, offline=False):
         self.started = time.monotonic()
@@ -41,6 +44,9 @@ class MaintenanceVM(SessionVM):
                 '-netdev', 'user,id=net', '-device', 'virtio-net-pci,netdev=net,id=hnnet,romfile=',
                 '-serial', f'unix:{self.control_path / "serial.sock"},server=on,wait=off',
                 '-qmp', f'unix:{self.control_path / "qmp.sock"},server=on,wait=off']
+        if self.source is not None:
+            args.extend(['-drive', f'file={self.source},format=raw,if=none,id=payload,readonly=on',
+                         '-device', 'virtio-blk-pci,drive=payload,serial=HARNESS_PAYLOAD,logical_block_size=4096,physical_block_size=4096'])
         (self.folder / 'command.json').write_text(json.dumps(args, indent=2) + '\n')
         self.process = subprocess.Popen(args, stdout=self.stderr, stderr=self.stderr)
         self.serial = self.connect('serial.sock')
