@@ -2,7 +2,6 @@ import type { PurgeAgentService } from './lib/purgeAgentService.js'
 import type { Asker, PromptScopes } from './core/api.js'
 import { ServiceUnavailableError } from './core/serviceHost.js'
 import type { ActivityFrame } from './lib/turnActivity.js'
-import { readSessionGitPullRequest } from './lib/sessionGitPullRequest.js'
 import { MonitorCompletions } from './lib/harnessMonitor.js'
 import type { HarnessShareOwner } from './sharing/owner.js'
 import { SHARE_REQUEST_TYPES } from './sharing/protocol.js'
@@ -36,7 +35,6 @@ import { registry, projectDisplayName, type RegisteredSession } from './lib/regi
 import type { CloseAgentService } from './lib/closeAgentService.js'
 import { isHiddenBuiltin } from './dsh/builtins.js'
 import { ENGINES, type AgentEngine } from './engines/types.js'
-import { listDir } from './lib/fsBrowse.js'
 import { gridCliPresence } from './lib/gridExec.js'
 import { GridFleetRpc, GRID_FLEET_PROTOCOL, GRID_FLEET_MAX_TIMEOUT_MS, parseGridFleetRequest } from './lib/gridFleetRpc.js'
 import { ApiConnectionError, ApiConnections } from './lib/apiConnections.js'
@@ -51,8 +49,6 @@ import { supportsFirstPrompt } from './lib/engineLaunch.js'
 import { probeEngines } from './lib/engineProbe.js'
 import { harnessDevicesRequest, type HarnessDevicesService } from './lib/harnessDevices.js'
 import { engineInstallRecipe } from './lib/engineInstall.js'
-import { projectPreview } from './lib/projectPreview.js'
-import { readGitProject } from './lib/gitProject.js'
 import { agentFrame, type AgentDshContext, type AgentFrame } from './lib/agentFrame.js'
 import { agentTokenUsage } from './lib/agentTokenUsage.js'
 import { listInstalledDsh } from './dsh/installed.js'
@@ -69,7 +65,6 @@ import { Address, Id, OperationId, Receipt, TeamError, type MemberRuntime } from
 import { shellQuote } from './orchestrator/prompts.js'
 import type { SessionInputDelivery } from './lib/sessionInput.js'
 import { terminalHandoffRequest } from './lib/terminalHandoff.js'
-import { MediaPreviewError, readMediaPreviewChunk } from './lib/mediaPreview.js'
 import { ViewerForwarder } from './lib/viewerForwarder.js'
 import { InteractiveViewers } from './lib/interactiveViewer.js'
 import { OwnerCommands, OWNER_COMMAND_TYPES } from './lib/ownerCommands.js'
@@ -2088,72 +2083,6 @@ export class BackendSocket {
           if (this.terminalInfoProvider) this.terminalInfoProvider(payload, answer)
           else reply(type, requestId, { error: 'UNSUPPORTED' })
           return
-
-        case 'git_pull_request': {
-          const id = payload.agentId
-          const agent = typeof id === 'string' ? registry.resolve(id) : undefined
-          if (!agent?.cwd) { reply(type, requestId, { status: 'unavailable' }); return }
-          const requested = payload.context
-          if (requested !== undefined && (!requested || typeof requested !== 'object'
-            || typeof (requested as Record<string, unknown>).cwd !== 'string'
-            || typeof (requested as Record<string, unknown>).branch !== 'string'
-            || (requested as Record<string, unknown>).remote !== null && typeof (requested as Record<string, unknown>).remote !== 'string')) {
-            reply(type, requestId, { status: 'unavailable' }); return
-          }
-          void readSessionGitPullRequest(agent, {
-            expected: requested as import('./lib/sessionGitPullRequest.js').ExpectedGitContext | undefined,
-            history: payload.history === true, offset: typeof payload.offset === 'number' ? payload.offset : undefined,
-          }).then(result => reply(type, requestId, result))
-            .catch(() => reply(type, requestId, { status: 'unavailable' }))
-          return
-        }
-
-        case 'git_project_info': {
-          const path = typeof payload.path === 'string' ? payload.path : ''
-          // Same root set as project_preview below: the browsable home, widened by the workspaces
-          // agents are running in, so a repo outside both is not somewhere this daemon runs git.
-          void readGitProject(path, { refresh: payload.refresh === true,
-            knownRoots: registry.list().flatMap(agent => agent.cwd ? [agent.cwd] : []) })
-            .then(result => reply(type, requestId, result))
-            .catch(() => reply(type, requestId, { error: 'UNAVAILABLE' }))
-          return
-        }
-
-        case 'project_preview': {
-          const path = typeof payload.path === 'string' ? payload.path : ''
-          // Preview work is detached so typing and other RPCs stay responsive.
-          void projectPreview(path, registry.list().flatMap(agent => agent.cwd ? [agent.cwd] : []))
-            .then(result => reply(type, requestId, result))
-            .catch(() => reply(type, requestId, { error: 'UNAVAILABLE' }))
-          return
-        }
-
-        case 'fs_list_dir': {
-          // One-level remote directory listing for the New Agent folder browser.
-          const path = typeof payload.path === 'string' ? payload.path : ''
-          const result = listDir(path)
-          if ('error' in result) { reply(type, requestId, { error: result.error }); return }
-          reply(type, requestId, { ...result })
-          return
-        }
-
-        case 'agent_read_file': {
-          // Media previews, in bounded binary chunks. The text mode this RPC also used to serve was
-          // read by nothing — every client has always asked with `media: true` — so it is gone rather
-          // than carrying a second, laxer file reader (lib/mediaPreview.ts).
-          const projectId = payload.agentId as string | undefined
-          const path = payload.path as string | undefined
-          if (!projectId || !path) { reply(type, requestId, { error: 'MISSING_AGENT_OR_PATH' }); return }
-          if (payload.media !== true) { reply(type, requestId, { error: 'UNSUPPORTED', detail: 'agent_read_file serves media previews only' }); return }
-          const s = registry.resolve(projectId)
-          if (!s?.cwd) { reply(type, requestId, { error: 'AGENT_NOT_FOUND' }); return }
-          try {
-            reply(type, requestId, { ...await readMediaPreviewChunk(s.cwd, path, payload.offset, payload.revision) })
-          } catch (error) {
-            reply(type, requestId, { error: error instanceof MediaPreviewError ? error.message : 'MEDIA_READ_FAILED' })
-          }
-          return
-        }
 
         case 'claude_login_status':
           // Legacy RPC name; report the selected agent's actual engine when one was supplied.

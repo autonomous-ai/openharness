@@ -15,6 +15,7 @@ import { createServiceHost, ServiceUnavailableError } from './core/serviceHost.j
 import { MODELS_REQUESTS, startModels } from './services/models.js'
 import { USAGE_REQUESTS, startUsage } from './services/usage.js'
 import { MONITOR_REQUESTS, startMonitor, type MonitorDeps } from './services/monitor.js'
+import { PROJECTS_REQUESTS, startProjects } from './services/projects.js'
 import { createHarnessResourcesReader } from './lib/harnessResources.js'
 import { createHarnessStorageReader } from './lib/harnessTelemetry.js'
 import { fakeCore } from './testing/fakeCore.js'
@@ -609,6 +610,14 @@ function serveMonitor(host: ReturnType<typeof createServiceHost>, over: Partial<
     ...over,
   }), fakeCore(), MONITOR_FALLBACKS, MONITOR_REQUESTS)
   return host
+}
+
+/** The project and folder readers (services/projects.ts) answering `socket`, over the registry as the
+ *  daemon's core API reads it, so a spec's spies on the registry are what they see. */
+function serveProjects(socket: BackendSocket) {
+  return serveOn(socket, (host) => host.serve('projects', startProjects, fakeCore({
+    agents: { live: () => registry.list(), resolve: (id: string) => registry.resolve(id) },
+  }), PROJECTS_REQUESTS))
 }
 
 /** A socket whose service requests go to the services `serve` starts in a host of their own. */
@@ -1260,6 +1269,7 @@ describe('BackendSocket outbound queue', () => {
     const preview = { path: '/remote/workspace', readme: 'Private project README', branch: 'main', files: ['README.md'], contributors: [] }
     const read = vi.spyOn(projectPreview, 'projectPreview').mockResolvedValue(preview)
     const socket = new BackendSocket('token')
+    serveProjects(socket)
     socket.connect()
     const ws = wsMock.instances[0]
     ws.open()
@@ -1286,6 +1296,7 @@ describe('BackendSocket outbound queue', () => {
     const preview = { isGit: true, root: '/remote/workspace', branch: 'main', branches: [{ ref: 'refs/heads/private-branch', name: 'private-branch', remote: false }] }
     const read = vi.spyOn(gitProject, 'readGitProject').mockResolvedValue(preview)
     const socket = new BackendSocket('token')
+    serveProjects(socket)
     socket.connect()
     const ws = wsMock.instances[0]
     ws.open()
@@ -1314,6 +1325,7 @@ describe('BackendSocket outbound queue', () => {
     vi.spyOn(registry, 'resolve').mockReturnValue({ cwd: '/remote/workspace' } as RegisteredSession)
     const read = vi.spyOn(gitPullRequest, 'readGitPullRequest').mockResolvedValue(preview)
     const socket = new BackendSocket('token')
+    serveProjects(socket)
     socket.connect()
     const ws = wsMock.instances[0]
     ws.open()
@@ -1342,7 +1354,7 @@ describe('BackendSocket outbound queue', () => {
     }, history: { branches: [{ cwd: '/private/worktree', remote: null, branch: 'private-fix', at: '2026-09-27' }], pullRequests: [], truncated: false }, lookups: [], nextOffset: null }
     vi.spyOn(registry, 'resolve').mockReturnValue({ cwd: '/remote/workspace' } as RegisteredSession)
     vi.spyOn(sessionGitPullRequest, 'readSessionGitPullRequest').mockResolvedValue(history)
-    const socket = new BackendSocket('token'); socket.connect()
+    const socket = new BackendSocket('token'); serveProjects(socket); socket.connect()
     const ws = wsMock.instances[0]; ws.open()
     vi.spyOn(socket.e2ee, 'unwrapDown').mockReturnValue({ type: 'git_pull_request', payload: {
       requestId: 'history-1', agentId: 'agent1', history: true,
@@ -1359,6 +1371,7 @@ describe('BackendSocket outbound queue', () => {
   it('returns a correlated Git error when discovery rejects or the path is malformed', async () => {
     const read = vi.spyOn(gitProject, 'readGitProject').mockRejectedValue(new Error('unavailable'))
     const socket = new BackendSocket('token')
+    serveProjects(socket)
     socket.connect()
     const ws = wsMock.instances[0]
     ws.open()
@@ -1383,6 +1396,7 @@ describe('BackendSocket outbound queue', () => {
       revision: 'a'.repeat(64), contentBase64: 'AQID' }
     const read = vi.spyOn(mediaPreview, 'readMediaPreviewChunk').mockResolvedValue(media)
     const socket = new BackendSocket('token')
+    serveProjects(socket)
     socket.connect()
     const ws = wsMock.instances[0]
     ws.open()

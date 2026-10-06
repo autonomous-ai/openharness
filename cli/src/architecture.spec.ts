@@ -66,7 +66,7 @@ function runForegroundLines(): number {
  * those moves, and runForeground gained 28.
  */
 const RUN_FOREGROUND_BUDGET = 2_600
-const BACKEND_SOCKET_BUDGET = 2_320
+const BACKEND_SOCKET_BUDGET = 2_180
 
 /** Exceptions, each with its reason. Keep this short. */
 const SERVICE_MAY_IMPORT: Record<string, string> = {

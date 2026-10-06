@@ -1,12 +1,8 @@
 /**
- * This machine's Claude and Codex rate limits, read with its own credentials (`usage_read`). The desktop
- * reads the account on the computer it runs on directly; this is how it reads one on a machine it does
- * not, which may be signed in to a different subscription entirely. The vendor's answer goes back as it
- * came: lib/accountUsage.ts says why the parsing stays on the client. The core never calls it, so it has
- * no port.
- *
- * Moved out of the socket's request switch as it was (docs/design/2026-10-06-core-boundary-next.md,
- * step 4).
+ * This machine's Claude and Codex rate limits, read with its own credentials (`usage_read`): how the
+ * desktop reads an account on a machine it does not run on, which may be signed in to another
+ * subscription. The vendors' answers go back as they came (lib/accountUsage.ts says why). Moved out of
+ * the socket's switch as it was (docs/design/2026-10-06-core-boundary-next.md, step 4).
  */
 import type { CoreApi, ServiceRequests } from '../core/api.js'
 import { readAccountUsage, type AccountUsageReading } from '../lib/accountUsage.js'

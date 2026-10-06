@@ -1,11 +1,8 @@
 /**
- * The machine monitor: this machine's CPU and memory, each agent's processes and what its workspace and
- * transcript hold (`machine_resources`), and the same readings for the rows `agents_list` draws when a
- * window asks for the monitor, which the core reads through `ports.monitor`. Sampling spawns `ps`, `du`
- * and `ioreg`, so it is answered when it settles, never in the connection's line.
- *
- * Moved out of the socket's request switch as it was (docs/design/2026-10-06-core-boundary-next.md,
- * step 4): one sample and one cache for both, as when the socket held the readers.
+ * The machine monitor: this machine's totals, each agent's processes and what its workspace and transcript
+ * hold (`machine_resources`), and the same readers for `agents_list`'s rows through `ports.monitor`: one
+ * sample and one cache for both, as when the socket held them. Moved out of the socket's switch as it was
+ * (docs/design/2026-10-06-core-boundary-next.md, step 4).
  */
 import type { CoreApi, CorePorts, ServiceRequests } from '../core/api.js'
 import { createHarnessResourcesReader } from '../lib/harnessResources.js'

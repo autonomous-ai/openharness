@@ -184,6 +184,7 @@ import { SEARCH_REQUESTS, startSearch } from './services/search.js'
 import { STORE_REQUESTS, startStore } from './services/store.js'
 import { USAGE_REQUESTS, startUsage } from './services/usage.js'
 import { MONITOR_REQUESTS, startMonitor } from './services/monitor.js'
+import { PROJECTS_REQUESTS, startProjects } from './services/projects.js'
 import { startViewers } from './services/viewers.js'
 import { MODELS_REQUESTS, startModels } from './services/models.js'
 import { startWorkspaces } from './services/workspaces.js'
@@ -2367,6 +2368,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   serviceHost.serve('usage', startUsage, coreApi, USAGE_REQUESTS)
   // This machine's and each agent's resources, for the Monitor and the list's readings (services/monitor.ts).
   serviceHost.start('monitor', startMonitor, coreApi, MONITOR_FALLBACKS, MONITOR_REQUESTS)
+  // An agent's branch and pull request, a project's repository and preview, a folder's subfolders and a
+  // media file from an agent's project (services/projects.ts).
+  serviceHost.serve('projects', startProjects, coreApi, PROJECTS_REQUESTS)
 
   const runtimeController = new RuntimeProfileController({
     manager: runtimeProfiles,

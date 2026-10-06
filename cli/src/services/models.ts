@@ -40,10 +40,7 @@ import { internalOnThrow } from './requestErrors.js'
  * (`lib/gridFleetRpc.ts`), while a request answered here knows who asked but not over which connection.
  * Their handshake, `grid_fleet_capabilities`, stays beside them: the Grid harness runs a command only
  * after it, and reads an answer without its protocol as "update Harness".
- *
- * The saved APIs (`api_connections`) and the Codex profiles (`codex_profiles_list`, `codex_profile_link`)
- * moved here out of the socket's switch (docs/design/2026-10-06-core-boundary-next.md, step 4): what an
- * agent can be launched on, as the models are.
+ * The saved APIs and the Codex profiles came out of the socket's switch (launchTargetRequests).
  */
 export const MODELS_REQUESTS = [
   'grid_models_list', 'models_list',
@@ -270,9 +267,9 @@ function modelsRequests(core: CoreApi, grid: Pick<ModelsPort, 'ensure' | 'setUp'
 }
 
 /**
- * What an agent can be launched on besides a model, answered with models' requests: the APIs saved on
- * this machine and its Codex profiles. Its own function so the socket's specs can serve it alone, to
- * prove the gates in front of it.
+ * What an agent can be launched on besides a model: the saved APIs and the Codex profiles, moved out of the
+ * socket's switch (docs/design/2026-10-06-core-boundary-next.md, step 4). Its own function so the socket's
+ * specs can serve it alone behind the gates.
  */
 export function launchTargetRequests(core: CoreApi): ServiceRequests {
   // The saved APIs, a file in the data folder (lib/apiConnections.ts): read afresh on every request.
