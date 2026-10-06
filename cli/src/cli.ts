@@ -80,7 +80,8 @@ import { TrustGroupStore } from './lib/e2ee/trustGroup.js'
 import { confirm as confirmUpdate, fetchManifest, downloadVerified, canary, stage, semverGt, isLocalDevBuild, type UpdateEntry } from './lib/selfUpdate.js'
 import { managedNodePath } from './lib/nodeRuntime.js'
 import { updateManagedTui } from './tui/manage.js'
-import { ensureHnLauncher, ensureLauncher, ensureManagedGrid, ensureManagedRuntime } from './lib/runtimeInstall.js'
+import { ensureHnLauncher, ensureLauncher } from './lib/launchers.js'
+import { ensureManagedGrid, ensureManagedRuntime } from './lib/runtimeInstall.js'
 // Before ANY child is spawned: on Linux an absent locale makes tmux and ps mangle their output,
 // which silently costs the daemon every pane it would have discovered. See lib/childLocale.ts.
 ensureUtf8Locale()

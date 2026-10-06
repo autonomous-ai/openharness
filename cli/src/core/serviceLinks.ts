@@ -52,6 +52,9 @@ export interface ServiceLinksOptions {
   disconnected?(service: string): void
   /** How long a routed request may wait for its service before it is answered SERVICE_UNAVAILABLE. */
   timeoutMs?: number
+  /** Longer waits for the answers that take longer, by service and then by type (core/api.ts
+   *  `LONG_ANSWERS`): a grid command, grid's set-up, a harness's install. */
+  waits?: Readonly<Record<string, Readonly<Record<string, number>>>>
   log?: (line: string) => void
   newId?: () => string
   setTimer?: (run: () => void, ms: number) => unknown
@@ -104,14 +107,20 @@ export function createServiceLinks(options: ServiceLinksOptions) {
     entry.reply(result)
   }
 
+  /** How long an answer from `service` to `type` is waited for: its own wait when it has one. */
+  const waitFor = (service: string, type: string): number => {
+    const waits = options.waits?.[service]
+    return waits && Object.hasOwn(waits, type) ? waits[type] : timeoutMs
+  }
+
   /** Send `type` to `service`, its answer to `reply`, whatever becomes of the service. */
-  const ask = (service: string, type: string, payload: Record<string, unknown>, asker: Asker, reply: (result: Record<string, unknown>) => void, waitMs = timeoutMs): void => {
+  const ask = (service: string, type: string, payload: Record<string, unknown>, asker: Asker, reply: (result: Record<string, unknown>) => void, waitMs?: number): void => {
     const link = links.get(service)
     if (!link) { reply(unavailable(service)); return }
     const id = newId()
     const entry: Waiting = { service, type, reply, timer: null }
     // Cleared whenever the entry is settled, so it only ever fires for one still waiting.
-    entry.timer = setTimer(() => settle(id, entry, unavailable(service)), waitMs)
+    entry.timer = setTimer(() => settle(id, entry, unavailable(service)), waitMs ?? waitFor(service, type))
     waiting.set(id, entry)
     if (!link.sink.sendFrame({ type, payload: { ...payload, requestId: id }, asker })) settle(id, entry, unavailable(service))
   }

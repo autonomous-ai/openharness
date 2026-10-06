@@ -14,6 +14,7 @@ import { join } from 'node:path'
 import { installFakeGrid, type FakeGrid, type FakeGridPlan } from './__fixtures__/fakeGrid.js'
 import { startFakeRelay, type FakeRelay, type RelayAnswer, type RelayRequest } from './__fixtures__/fakeRelay.js'
 import { agentFrame } from './agentFrame.js'
+import { annotate, glanceFor } from './gridAnnotation.js'
 import { presentGridSections, resetGridModels, type GridModelsService, type GridSection } from './gridModels.js'
 import type { RegisteredSession } from './registry.js'
 
@@ -416,9 +417,30 @@ describe('the note on an agent already on a model', () => {
     const agent = { agentId: 'a1', sessionId: 's1', engine: 'claude', active: true, cwd: '/tmp', runtimes: [], registeredAt: 1,
       grid: onOwn('small-q4') } as unknown as RegisteredSession
 
-    const frame = await agentFrame(agent, { selectedModel: null, terminalAvailable: true })
+    const frame = await agentFrame(agent, { selectedModel: null, terminalAvailable: true, gridAnnotation: (target) => service.annotation(target) })
 
     expect(frame.grid).toEqual({ ...onOwn('small-q4'), state: 'asleep', note: { reason: 'not_served', model: 'small-q4' } })
+  })
+
+  it('reads the same off the glances models tells a core that runs apart from it, and says asleep where a keystroke would start it', async () => {
+    answer(OWN_ID, OVERVIEW, { status: 200, body: { nodes: [node('studio', ['big-model'])], models: [{ id: 'Big-Model' }] } })
+    answer(TEAM_ID, OVERVIEW, asleep(record(30, [{ name: 'rig', models: ['other-model'] }])))
+    await look()
+    later()
+    answer(OWN_ID, OVERVIEW, asleep())
+    await look()
+    studioOfflineTwice()
+    await service.sections(OWN, { refresh: false })
+    const glances = service.glances()
+    expect(glances.map((g) => g.id).sort()).toEqual([OWN_ID, TEAM_ID])
+    const onTeam = (model: string | null) => ({ baseUrl: `${relay.base}/g/${TEAM_ID}/relay`, model })
+    for (const target of [onOwn('big-model'), onOwn('small-q4'), onOwn(null), onTeam('other-model'), onTeam('gone'), { baseUrl: `${relay.base}/g/net-elsewhere/relay`, model: 'x' }]) {
+      expect(annotate(glanceFor(glances, target.baseUrl), target)).toEqual(service.annotation(target))
+    }
+    // Each model is its id and the computer it waits for, nothing more: what a frame reads, and no more to send.
+    expect(glances.find((g) => g.id === OWN_ID)!.view!.models).toEqual([{ id: 'Big-Model', unavailable: { machine: 'Studio' } }])
+    expect(glances.find((g) => g.id === OWN_ID)!.asleep).toBe(true)
+    expect(await service.keystrokePrewarm(onOwn('big-model'))).not.toBe('not-asleep')
   })
 
   it('has no note for Auto, and no annotation for a grid this daemon does not know', async () => {
@@ -467,9 +489,13 @@ describe('after the daemon restarts', () => {
     service = freshService()
     const reads = relay.seen.length
 
+    const changed = vi.fn()
+    service.onChange(changed)
     await service.warm()
 
     expect(service.annotation(onTeam('big-model'))).toEqual({ state: 'asleep' })
+    // Said as a change: a frame built before it carried no note, and a core reading models' glances has none yet.
+    await vi.waitFor(() => expect(changed).toHaveBeenCalled())
     expect(service.annotation(onTeam('other-model'))).toEqual({ state: 'asleep', note: { reason: 'not_served', model: 'other-model' } })
     // Warming read the pictures on disk, not the grid.
     expect(relay.seen.length).toBe(reads)

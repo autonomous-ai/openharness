@@ -26,6 +26,9 @@ import { LocalClient, type Frame } from './harness/client.js'
 import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
 
 const FROM = process.env.COMPAT_FROM
+/** No `grid` on either side's machine as far as the daemons can tell: never the developer's own, and the
+ *  same answer from both. */
+const NO_GRID = '/nonexistent/harness-compat/grid'
 
 /**
  * Differences on purpose, by the path that differs (a prefix covers everything under it), each with
@@ -233,6 +236,16 @@ async function scenario(d: IsolatedDaemon): Promise<Answers> {
   await ask('agents_cleanup_preview', 'agents_cleanup_preview')
   await ask('harness_devices_list', 'harness_devices_list')
   await ask('theme_set', 'theme_set', { background: '#000000', foreground: '#ffffff' })
+  // Models, in its own process from step 7 (docs/design/2026-10-06-core-boundary-next.md): the pickers, the
+  // Model Manager and its grid commands, a create on a grid model. Nothing that sets grid up is asked: a
+  // Set up, a Get or a Use would install it.
+  await ask('grid_models_list', 'grid_models_list')
+  await ask('grid_models_list with row state', 'grid_models_list', { rowState: true })
+  await ask('grid_fleet_models_list', 'grid_fleet_models_list')
+  await ask('grid_fleet_capabilities', 'grid_fleet_capabilities')
+  await ask('grid_fleet_run', 'grid_fleet_run', { args: ['--remote', 'ls', '--json'], timeoutMs: 5_000 })
+  await ask('grid_fleet_cancel', 'grid_fleet_cancel', { commandId: 'compat-not-running' })
+  await ask('agent_create on a grid model', 'agent_create', { engine: 'codex', cwd: cwd('codex'), gridModel: 'Qwen3-Coder-30B', gridName: 'mine', bypassPermission: true })
   await ask('a request nobody answers', 'compat_unknown_request')
   await ask('agent_create_status for no such creation', 'agent_create_status', { creationId: 'compat-no-such-creation' })
 
@@ -243,7 +256,9 @@ async function scenario(d: IsolatedDaemon): Promise<Answers> {
     'git_project_info', 'fs_list_dir', 'project_preview', 'session_tail', 'dsh_remove', 'dsh_install', 'dsh_update', 'theme_set',
     'agent_create', 'agent_create_status', 'agent_handoff_prepare', 'agent_worktree_delete', 'message',
     // Moved out of the socket's switch into services (docs/design/2026-10-06-core-boundary-next.md, step 4).
-    'git_pull_request', 'codex_profile_link', 'api_connections']
+    'git_pull_request', 'codex_profile_link', 'api_connections',
+    // Into models' own process (step 7). A Get and a Use are left out: they set grid up.
+    'grid_fleet_run', 'grid_fleet_cancel', 'grid_fleet_model_stop']
   for (const type of malformed) {
     // `cancel` and `message` are fire-and-forget: no build answers them, so waiting a minute shows nothing more.
     const ms = type === 'cancel' || type === 'message' ? 5_000 : 60_000
@@ -303,8 +318,8 @@ describe.skipIf(!FROM)('what the apps see, compared with the released build', ()
     for (const dir of [build, released]) writeFileSync(join(dir, 'package.json'), '{"type":"module"}\n')
 
     for (const [side, options] of [
-      ['released', { scriptPath: join(released, 'cli.js'), env: { ADAPTER_CLI_DIR: released } }],
-      ['this', { scriptPath: join(build, 'cli.js'), env: { ADAPTER_CLI_DIR: build } }],
+      ['released', { scriptPath: join(released, 'cli.js'), env: { ADAPTER_CLI_DIR: released, HARNESS_GRID_BIN: NO_GRID } }],
+      ['this', { scriptPath: join(build, 'cli.js'), env: { ADAPTER_CLI_DIR: build, HARNESS_GRID_BIN: NO_GRID } }],
     ] as const) {
       const d = await IsolatedDaemon.create(options)
       // tmux titles each new pane with the machine's name as it is then, and a daemon refuses that title

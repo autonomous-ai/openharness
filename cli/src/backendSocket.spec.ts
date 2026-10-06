@@ -11,7 +11,7 @@ import { AGENT_OPENED_THROTTLE_MS } from './core/agents/update.js'
 import { deviceAgentListItem, deviceAgentRow } from './core/agents/list.js'
 import { grokHistoryPage } from './core/transcripts/history.js'
 import { bindAgentList, bindAgentUpdate, bindCancelRequest, bindLaunchRequests, bindCloseRequests, bindMessageRequest, bindPurgeRequest, bindQuestionResponse, bindStopRequest, bindTerminalRequests } from './testing/socketCore.js'
-import { emptyPorts, MODELS_FALLBACKS, MONITOR_FALLBACKS } from './core/api.js'
+import { emptyPorts, MODELS_FALLBACKS, MODELS_OFF, MONITOR_FALLBACKS, type ModelsPort } from './core/api.js'
 import { createServiceHost, ServiceUnavailableError } from './core/serviceHost.js'
 import { MODELS_REQUESTS, startModels } from './services/models.js'
 import { SHELL_REQUESTS, startShell } from './services/shell.js'
@@ -41,7 +41,6 @@ import { randomUUID } from 'node:crypto'
 import { fakeGridAnswers, installFakeGrid, type FakeGrid } from './lib/__fixtures__/fakeGrid.js'
 import { clearGridMcpUrlCache } from './lib/gridMcpUrl.js'
 import { LocalModels } from './lib/localModels.js'
-import type { GridAttachResult } from './lib/gridAttach.js'
 import { STRICT_DOWN_TYPES, encryptDownFrame, encryptDownFrameFor, encryptRpcResult } from './lib/e2ee/applicationFrames.js'
 import { CloseAgentService } from './lib/closeAgentService.js'
 import { env } from './config/env.js'
@@ -567,6 +566,12 @@ const wsMock = vi.hoisted(() => {
 })
 
 vi.mock('ws', () => ({ WebSocket: wsMock.MockWebSocket }))
+// Grid's set-up, which the models service asks for before a move onto a grid model: set up already here,
+// as on a machine that has used grid before. Never a real install or sign-in from a spec.
+vi.mock('./lib/gridAttach.js', async (real) => ({
+  ...await real<object>(),
+  createGridAccess: () => ({ ensure: async () => ({ status: 'converged', name: null, detail: 'set up already' }) }),
+}))
 // Never the person's real ~/.claude.json or ~/.codex/config.toml: creating an agent records folder trust,
 // and an unmocked run of these specs used to write test paths into the developer's own config.
 vi.mock('./lib/claudeTrust.js', () => ({
@@ -591,15 +596,17 @@ function sealedDown(socket: BackendSocket, connId: string, type: string, payload
 /** The models service (services/models.ts) answering the socket's models requests through a service host,
  *  as the daemon runs it: its core reads the grid name and this machine's name off the socket. */
 function serveModels(socket: BackendSocket, over: Parameters<typeof fakeCore>[0] = {}) {
-  const host = createServiceHost(emptyPorts(), { log: () => {} })
+  const ports = emptyPorts()
+  const host = createServiceHost(ports, { log: () => {} })
   const core = fakeCore({
     dataDir: process.env.ADAPTER_DATA_DIR,
     ...over,
-    account: { privateGridName: () => socket.privateGridName(), machineName: () => socket.machineName(), ...over.account },
+    account: { privateGridName: async () => socket.gridName(), machineName: () => socket.machineName(), ...over.account },
     clients: { gridModelsChanged: () => { void socket.pushGridModels() }, ...over.clients },
   })
   host.start('models', startModels, core, MODELS_FALLBACKS, MODELS_REQUESTS)
   socket.serviceRouter = (type, payload, asker, reply) => host.route(type, payload, asker, reply)
+  socket.models = () => ports.models ?? MODELS_OFF
   return host
 }
 
@@ -1012,13 +1019,13 @@ describe('BackendSocket outbound queue', () => {
     await vi.waitFor(() => {
       expect(wrapReply).toHaveBeenCalledWith('web-1', 'session_search_result', 's-1', { hits: [], indexed: 3, pending: 0, ready: true, tookMs: 1 })
     })
-    expect(routed[0]).toEqual({ type: 'session_search', payload: { requestId: 's-1', query: 'dial scroll', limit: 12 }, asker: { local: false, owner: true } })
+    expect(routed[0]).toEqual({ type: 'session_search', payload: { requestId: 's-1', query: 'dial scroll', limit: 12 }, asker: { local: false, owner: true, connection: 'web-1', requestId: 's-1' } })
 
     // A device's session may not act as the owner, and the service is told so.
     role.mockReturnValue('device')
     ask('session_search', { requestId: 's-2', query: 'dial' })
     await vi.waitFor(() => expect(routed).toHaveLength(2))
-    expect(routed[1].asker).toEqual({ local: false, owner: false })
+    expect(routed[1].asker).toEqual({ local: false, owner: false, connection: 'web-1', requestId: 's-2' })
 
     // A type no service declared is the socket's own: an unknown one is refused at once, in the clear,
     // as a reply that carries nothing is.
@@ -1032,7 +1039,7 @@ describe('BackendSocket outbound queue', () => {
     socket.registerLocalClient('local:app', { sendFrame: (frame) => { frames.push(frame as Record<string, unknown>); return true }, sendBinary: () => true })
     socket.handleLocalFrame('local:app', { type: 'session_search', payload: { requestId: 'l-1', query: 'dial' } })
     await vi.waitFor(() => expect(frames).toContainEqual(expect.objectContaining({ type: 'session_search_result' })))
-    expect(routed.at(-1)?.asker).toEqual({ local: true, owner: true })
+    expect(routed.at(-1)?.asker).toEqual({ local: true, owner: true, connection: 'local:app', requestId: 'l-1' })
     await socket.stop()
   })
 
@@ -2966,6 +2973,8 @@ describe('agent_retarget onto a Local model resolves web tools', () => {
     const seen: Array<{ agentId: string; grid: unknown }> = []
     const socket = relaySocket('token')
     socket.onRetargetAgent = async (input) => { seen.push(input); return { ok: true } }
+    // Where the move goes is the models service's: it resolves the target from this machine's own grid.
+    serveModels(socket)
     socket.connect()
     const ws = wsMock.instances[0]
     ws.open()
@@ -3157,20 +3166,15 @@ describe('grid_models_list says whether this machine has a grid CLI', () => {
   })
 })
 
-describe('grid is set up on demand — by an act, never by a read', () => {
-  afterEach(() => { vi.restoreAllMocks() })
-
-  const READY: GridAttachResult = { status: 'signed-in', name: 'kelvin-1a2b3c4d', detail: '', ownGrid: 'created' }
-
-  /** A daemon whose grid set-up is a stub, asked over a local frame. The models picker's Set up and a
-   *  local model's Get and Use are the models service's (services/models.spec.ts); a Grid harness command
-   *  and a move onto a grid model are the socket's. */
-  function daemon(ready: GridAttachResult = READY) {
+describe('a move onto a grid model asks models where it goes', () => {
+  /** A daemon whose models is a stub, asked over a local frame. Where the move goes, grid's set-up before
+   *  it and the prewarm after it are the models service's (services/models.spec.ts). */
+  function daemon(moveTarget: ModelsPort['moveTarget'] | null) {
     const socket = relaySocket('token')
-    socket.deriveGridName = async () => 'kelvin-1a2b3c4d'
-    const ensureGrid = vi.fn(async (_request?: { ownGrid?: boolean }) => ready)
-    socket.ensureGrid = ensureGrid
-    socket.onRetargetAgent = async () => ({ ok: true })
+    const moved = vi.fn()
+    if (moveTarget) socket.models = () => ({ annotation: () => null, lists: () => Promise.reject(new Error('no lists')), moveTarget, moved })
+    const retargeted = vi.fn(async (_request: { agentId: string; grid: unknown }) => ({ ok: true as const }))
+    socket.onRetargetAgent = retargeted
     const frames: Array<Record<string, unknown>> = []
     socket.registerLocalClient('local:grid', { sendFrame: (frame) => { frames.push(frame); return true }, sendBinary: () => true })
     let asked = 0
@@ -3183,28 +3187,100 @@ describe('grid is set up on demand — by an act, never by a read', () => {
       await vi.waitFor(() => expect(answer()).toBeDefined())
       return answer()!
     }
-    return { socket, ensureGrid, ask, done: async () => { await socket.unregisterLocalClient('local:grid'); await socket.stop() } }
+    return { socket, moved, retargeted, ask, done: async () => { await socket.unregisterLocalClient('local:grid'); await socket.stop() } }
   }
+  const TARGET = { networkId: 'net-1', networkName: 'team-grid-0000aaaa', baseUrl: 'https://fixture.invalid/g/net-1/relay/v1', apiKey: 'fixture-key', model: 'Shared-Model' }
 
-  it('a Grid harness command runs against grid as it stands — its viewer asks on its own, so it never sets grid up', async () => {
-    const d = daemon()
-    const run = vi.fn(async () => ({ ok: true, code: 0, stdout: '[]', stderr: '', error: null }))
-    Object.assign(d.socket as unknown as Record<string, unknown>, { gridFleet: { run, cancel: () => false } })
-    await d.ask('grid_fleet_run', { args: ['--remote', 'ls', '--json'], timeoutMs: 5_000 })
-    expect(run).toHaveBeenCalledTimes(1)
-    expect(d.ensureGrid).not.toHaveBeenCalled()
+  it('moves onto what models resolved, from the grid the model was picked from, and has models start it', async () => {
+    const moveTarget = vi.fn(async () => ({ target: TARGET }))
+    const d = daemon(moveTarget)
+    expect(await d.ask('agent_retarget', { agentId: 'a1', gridModel: 'Shared-Model', gridName: ' team-grid-0000aaaa ' })).toEqual({ requestId: 'agent_retarget-1', retargeted: true })
+    expect(moveTarget).toHaveBeenCalledWith({ gridName: 'team-grid-0000aaaa', model: 'Shared-Model' })
+    expect(d.retargeted).toHaveBeenCalledWith({ agentId: 'a1', grid: TARGET })
+    expect(d.moved).toHaveBeenCalledWith(TARGET)
+    // The account's own grid when the picker names none.
+    await d.ask('agent_retarget', { agentId: 'a1', gridModel: 'Own-Model' })
+    expect(moveTarget).toHaveBeenLastCalledWith({ gridName: null, model: 'Own-Model' })
     await d.done()
   })
 
-  it("a move onto a grid model signs grid in first — with the account's own grid only when the model is on it", async () => {
-    // Refused, so the move stops at the set-up and no grid is read: what is pinned is what was asked.
-    const d = daemon({ status: 'handoff-failed', name: null, detail: 'no grid on this computer' })
+  it('says why it cannot move, in models\' words, and moves nothing', async () => {
+    const d = daemon(async () => ({ detail: 'no grid on this computer' }))
     expect(await d.ask('agent_retarget', { agentId: 'a1', gridModel: 'Shared-Model', gridName: 'team-grid-0000aaaa' }))
       .toMatchObject({ error: 'GRID_UNAVAILABLE', detail: 'no grid on this computer' })
-    expect(await d.ask('agent_retarget', { agentId: 'a1', gridModel: 'Own-Model' }))
-      .toMatchObject({ error: 'GRID_UNAVAILABLE' })
-    expect(d.ensureGrid.mock.calls).toEqual([[{ ownGrid: false }], [{ ownGrid: true }]])
+    expect(d.retargeted).not.toHaveBeenCalled()
+    expect(d.moved).not.toHaveBeenCalled()
     await d.done()
+  })
+
+  it('with models down or off, the move answers GRID_UNAVAILABLE at once', async () => {
+    for (const down of [async () => { throw new Error('models is down') }, null]) {
+      const d = daemon(down)
+      expect(await d.ask('agent_retarget', { agentId: 'a1', gridModel: 'Own-Model' }))
+        .toMatchObject({ error: 'GRID_UNAVAILABLE', detail: 'Models are unavailable. Try again.' })
+      expect(d.retargeted).not.toHaveBeenCalled()
+      await d.done()
+    }
+  })
+
+  it('a move onto an API, or back onto the own login, asks models nothing', async () => {
+    const moveTarget = vi.fn()
+    const d = daemon(moveTarget)
+    expect(await d.ask('agent_retarget', { agentId: 'a1', clearGrid: true })).toMatchObject({ retargeted: true })
+    expect(moveTarget).not.toHaveBeenCalled()
+    expect(d.moved).not.toHaveBeenCalled()
+    await d.done()
+  })
+})
+
+describe('the models lists pushed to the windows', () => {
+  it('pushes each window the list in the form it asked for, as models built it; nothing while models is off or failing', async () => {
+    const socket = relaySocket('token')
+    const rows: Array<Record<string, unknown>> = []
+    const plain: Array<Record<string, unknown>> = []
+    socket.registerLocalClient('local:rows', { sendFrame: (frame) => { rows.push(frame); return true }, sendBinary: () => true })
+    socket.registerLocalClient('local:plain', { sendFrame: (frame) => { plain.push(frame); return true }, sendBinary: () => true })
+    // A window that draws row state says so when it asks for the list.
+    socket.handleLocalFrame('local:rows', { type: 'grid_models_list', payload: { requestId: 'r1', rowState: true } })
+    await vi.waitFor(() => expect(rows.some((frame) => frame.type === 'grid_models_list_result')).toBe(true))
+    rows.length = 0
+    plain.length = 0
+
+    await socket.pushGridModels()
+    socket.models = () => ({ ...MODELS_OFF, lists: async () => ({ plain: { form: 'plain' }, rowState: { form: 'rows' } }) })
+    await socket.pushGridModels()
+    expect(rows).toEqual([{ type: 'grid_models_changed', payload: { form: 'rows' } }])
+    expect(plain).toEqual([{ type: 'grid_models_changed', payload: { form: 'plain' } }])
+    socket.models = () => MODELS_OFF
+    await socket.pushGridModels()
+    expect(rows).toHaveLength(1)
+    await socket.unregisterLocalClient('local:rows')
+    await socket.unregisterLocalClient('local:plain')
+    await socket.stop()
+  })
+
+  it('carries models\' note on the grid an agent is on in every frame it builds, and none while models is off', async () => {
+    const socket = relaySocket('token')
+    const grid = { baseUrl: 'https://fixture.invalid/g/n1/relay/v1', model: 'm' }
+    const agent = { agentId: 'a-note', sessionId: 's-note', engine: 'claude', cwd: '/tmp', runtimes: [], registeredAt: 1, active: true, grid } as unknown as RegisteredSession
+    expect((await socket.toProject(agent)).grid).toEqual(grid)
+    socket.models = () => ({ ...MODELS_OFF, annotation: () => ({ state: 'asleep' as const }) })
+    expect((await socket.toProject(agent)).grid).toEqual({ ...grid, state: 'asleep' })
+    expect((await socket.toStoppedProject(agent)).grid).toEqual({ ...grid, state: 'asleep' })
+    await socket.stop()
+  })
+
+  it('answers the grid commands\' handshake itself, so a Grid harness never reads models being down as "update Harness"', async () => {
+    const socket = relaySocket('token')
+    socket.models = () => MODELS_OFF
+    const frames: Array<Record<string, unknown>> = []
+    socket.registerLocalClient('local:grid', { sendFrame: (frame) => { frames.push(frame); return true }, sendBinary: () => true })
+    socket.handleLocalFrame('local:grid', { type: 'grid_fleet_capabilities', payload: { requestId: 'c1' } })
+    await vi.waitFor(() => expect(frames.some((frame) => frame.type === 'grid_fleet_capabilities_result')).toBe(true))
+    expect(frames.find((frame) => frame.type === 'grid_fleet_capabilities_result')!.payload)
+      .toMatchObject({ requestId: 'c1', protocol: 1, maxTimeoutMs: 30 * 60_000, thinkingControl: true, gridCli: expect.any(String) })
+    await socket.unregisterLocalClient('local:grid')
+    await socket.stop()
   })
 })
 
@@ -3220,9 +3296,9 @@ describe('the connect burst with no network', () => {
     // "offline" the whole time.
     const socket = relaySocket('token')
     bindAgentList(socket)
-    socket.deriveGridName = () => new Promise<null>(() => {}) // a grid read that never lands
-    // A vendor that never answers, asked of the usage service beside models.
-    serveModels(socket).serve('usage', (core) => startUsage(core, { read: () => new Promise(() => {}) }), fakeCore(), USAGE_REQUESTS)
+    // A grid name that never comes, as a grid read that never lands; and a vendor that never answers, asked
+    // of the usage service beside models.
+    serveModels(socket, { account: { privateGridName: () => new Promise<null>(() => {}) } }).serve('usage', (core) => startUsage(core, { read: () => new Promise(() => {}) }), fakeCore(), USAGE_REQUESTS)
     const frames: Array<Record<string, unknown>> = []
     socket.registerLocalClient('local:burst', { sendFrame: (frame) => { frames.push(frame); return true }, sendBinary: () => true })
 
@@ -3718,7 +3794,7 @@ describe('relay down-frames are default-deny: sealed, or the backend\'s own', ()
     const serviceRouter = vi.fn(() => true)
     socket.serviceRouter = serviceRouter
     await dispatch(sealedDown(socket, 'web-1', 'dsh_install', { requestId: 'r', id: 'acme/some-dsh' }).frame, 'web-1')
-    expect(serviceRouter).toHaveBeenCalledWith('dsh_install', expect.objectContaining({ id: 'acme/some-dsh' }), { local: false, owner: expect.any(Boolean) }, expect.any(Function))
+    expect(serviceRouter).toHaveBeenCalledWith('dsh_install', expect.objectContaining({ id: 'acme/some-dsh' }), { local: false, owner: expect.any(Boolean), connection: 'web-1', requestId: 'r' }, expect.any(Function))
   })
 
   it('refuses a plaintext RPC even from the backend itself (connId \'\'), which would read the reply', async () => {

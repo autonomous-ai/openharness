@@ -43,8 +43,6 @@ import { removePidFileIf, onError } from '../lib/daemonLaunch.js'
 import { describeSpawnLockOwner, withSpawnLock } from '../lib/daemonSpawnLock.js'
 import { ensureTmuxOnPath } from '../lib/tmuxOnPath.js'
 import { AUTH_DIR, AuthSessionError, AuthSessionManager, clearAuthSession, ensureSignInEpoch, readAuthSession, signInOf, type AuthSession } from '../lib/authSession.js'
-import { observeMachineList } from '../lib/gridModels.js'
-import { managedGridPath } from '../lib/gridExec.js'
 import { ENGINES, enginePathOverride } from '../lib/engineBin.js'
 import { isTerminalEngine } from '../engines/types.js'
 import { engineInstallRecipe } from '../lib/engineInstall.js'
@@ -78,6 +76,7 @@ import { ApiConnections } from '../lib/apiConnections.js'
 import { rememberSavedApis } from '../lib/apiModels.js'
 import { prepareApiInstructions } from '../lib/apiInstructions.js'
 import type { AgentDshContext } from '../lib/agentFrame.js'
+import type { AgentGridTarget, GridAnnotation } from '../lib/gridAnnotation.js'
 import { clearPaneRemainOnExit, lookupPaneEngineProcess, resolvePaneEngineProcess, tmuxPaneInfo, tmuxPaneState } from '../lib/tmux.js'
 import { ALL_TERMINAL_BACKENDS } from '../config/terminalConfig.js'
 import { TerminalBackendCoordinator } from '../lib/terminalBackendCoordinator.js'
@@ -129,7 +128,7 @@ import { createAgentUpdate } from './agents/update.js'
 import { createEngineHooks, installEngineHooks } from './engines/hooks.js'
 import { createCursorTaskHooks } from './engines/cursorTasks.js'
 import { databaseHistory } from './transcripts/databaseHistory.js'
-import { createCoreApi, emptyPorts, FLEET_FALLBACKS, MODELS_FALLBACKS, MODELS_REQUESTS, MONITOR_FALLBACKS, MONITOR_OFF, MONITOR_REQUESTS, PROJECTS_REQUESTS, SEARCH_FALLBACKS, SEARCH_REQUESTS, STORE_REQUESTS, TEAMS_FALLBACKS, USAGE_REQUESTS, VIEWERS_FALLBACKS, WORKSPACES_FALLBACKS, type GatewayAccount, type GatewayOps, type GatewayStatus, type TeamsPort } from './api.js'
+import { createCoreApi, emptyPorts, FLEET_FALLBACKS, LONG_ANSWERS, MODELS_FALLBACKS, MODELS_OFF, MODELS_REQUESTS, MONITOR_FALLBACKS, MONITOR_OFF, MONITOR_REQUESTS, PROJECTS_REQUESTS, SEARCH_FALLBACKS, SEARCH_REQUESTS, STORE_REQUESTS, TEAMS_FALLBACKS, USAGE_REQUESTS, VIEWERS_FALLBACKS, WORKSPACES_FALLBACKS, type GatewayAccount, type GatewayOps, type GatewayStatus, type TeamsPort } from './api.js'
 import { createServiceHost, testFaults } from './serviceHost.js'
 import { startStalls } from './stall.js'
 import { createServiceLinks, type ServiceLinks } from './serviceLinks.js'
@@ -137,10 +136,10 @@ import { createViewersLink } from './viewersLink.js'
 import { createWorkspacesLink } from './workspacesLink.js'
 import { createMonitorLink } from './monitorLink.js'
 import { createStoreLink } from './storeLink.js'
+import { createModelsLink } from './modelsLink.js'
 import { answerAgentQuery } from './agentQueries.js'
 import { KNOWN_SERVICES, servicesTheMasterRuns } from '../harnessd/services.js'
 import { createTeamsLink } from './teamsLink.js'
-import { startModels } from '../services/models.js'
 import { startFleet } from '../services/fleet.js'
 import { CORE_EXIT_STOP, CORE_EXIT_UPDATE, PROBE_COMMAND, PROBE_TIMEOUT_MS } from '../harnessd/protocol.js'
 import { localSocketPath, refuseServedDataFolder, type LocalSocketServer } from '../lib/localSocket.js'
@@ -164,7 +163,6 @@ import { isLoopbackRequest, loopbackHosts } from '../lib/loopbackRequest.js'
 import { startSelfUpdater, restore as restoreUpdate, DOWNLOAD_LIMITS, type Poller } from '../lib/selfUpdate.js'
 import { managedNodePath } from '../lib/nodeRuntime.js'
 import { startTuiUpdater } from '../tui/update.js'
-import { ensureManagedGrid, startGridPinRecheck } from '../lib/runtimeInstall.js'
 import { type ActivityFrame } from '../lib/turnActivity.js'
 import { CursorTranscriptDiscovery } from '../engines/cursor/discovery.js'
 import { cursorDataDir } from '../engines/cursor/home.js'
@@ -360,6 +358,9 @@ let activityFrameContextRef: ((s: RegisteredSession) => ActivityFrame | null) | 
 
 let dshFrameContextRef: ((s: RegisteredSession) => AgentDshContext | null) | null = null
 
+/** Set by runForeground once models can be asked: what an agent's frame says of its grid. */
+let gridAnnotationRef: ((grid: AgentGridTarget) => GridAnnotation | null) | null = null
+
 function projectFrame(s: RegisteredSession, selectedModel: string | null): Promise<AgentFrame> {
   return agentFrame(s, {
     tokenUsage: agentTokenUsage.get(s),
@@ -367,6 +368,7 @@ function projectFrame(s: RegisteredSession, selectedModel: string | null): Promi
     terminalAvailable: registry.terminalAvailable(s.agentId),
     dsh: dshFrameContextRef?.(s) ?? null,
     activity: () => activityFrameContextRef?.(s) ?? null,
+    gridAnnotation: (grid) => gridAnnotationRef?.(grid) ?? null,
   })
 }
 
@@ -482,20 +484,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     try { prepareApiInstructions(savedApis, cwd, engine) }
     catch { console.warn('[apis] Tool instructions could not be added. Saved connections remain available through harness api.') }
   }
-
-  // A managed grid already here follows its pin on EVERY daemon start — this one, and the restart a
-  // self-update ends in — not only on `--repair`: the pin is expected to move, and a machine installed
-  // last month has to notice. A machine with none gets none from a start: grid is an add-on, installed
-  // the first time a grid feature is used (`ensureGrid`, below). Not awaited: a download must never
-  // hold the control port back, and every grid call resolves the binary afresh (`gridBinaryPath`), so
-  // whatever lands is picked up as it lands. Best-effort by construction — it returns, never throws.
-  const followGridPin = (): Promise<unknown> => managedGridPath()
-    ? ensureManagedGrid((m) => console.log(`[grid-runtime] ${m}`))
-    : Promise.resolve(null)
-  void followGridPin()
-  // …and keeps following it while this daemon runs: a pin moved after the start reaches it within ten
-  // minutes rather than at the next restart (`startGridPinRecheck`).
-  startGridPinRecheck({ ensure: followGridPin })
 
   registry.load()
   // Persisted locators are hints until this process has observed their terminal root and PID/start marker.
@@ -648,7 +636,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     },
     gridNamed: (name) => backendRef?.setHarnessGridName(name),
     gridModelsChanged: () => { void backendRef?.pushGridModels() },
-    privateGridName: async () => (await backendRef?.privateGridName()) ?? null,
+    privateGridName: async () => backendRef?.gridName() ?? null,
     machineName: () => backendRef?.machineName() ?? null,
     dshInstallStatus: (status) => backendRef?.send({ type: 'dsh_install_status', payload: status }),
     // The backend mints and remembers the account's grid name; this CLI holds neither the account's
@@ -696,6 +684,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const serviceHost = createServiceHost(ports, { faults: testFaults(process.env.HARNESSD_TEST_FAULTS) })
   // The DSH companions: each harness agent's viewer and verdict watch (services/viewers.ts), started below.
   dshFrameContextRef = (s) => ports.viewers?.frameContext(s) ?? null
+  // Models (services/models.ts), started below: what an agent's frame says of its grid, from memory.
+  gridAnnotationRef = (grid) => (ports.models ?? MODELS_OFF).annotation(grid)
   const attachDsh = (s: RegisteredSession): void => ports.viewers?.attach(s)
   const detachDsh = (agentId: string): void => ports.viewers?.detach(agentId)
 
@@ -791,14 +781,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // copy of their files (571 KB more cli.js) and the viewers' process held 12 MiB more at idle (measured
   // 2026-10-06), while cli.js, which the core runs, carries them anyway.
   ensureBundledCoreHarnesses()
-
-  // Models: grid access, the model pictures on agents' frames, the keystroke prewarm, and the models
-  // requests the apps send (services/models.ts).
-  serviceHost.start('models', startModels, coreApi, MODELS_FALLBACKS, MODELS_REQUESTS)
-  const models = ports.models
-  backend.ensureGrid = models ? (request) => models.ensure(request) : null
-  // Models switched off: the socket reads grid as it stands, as it does with no models at all.
-  serviceHost.onOff('models', () => { backend.ensureGrid = null })
 
   /**
    * Is ANY device surface watching this machine?
@@ -1089,7 +1071,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   backend.handoffRequestProvider = createHandoffRequest({ prepare: (req) => prepareAgentHandoff(handoffDeps, req) })
 
   // The requests each service that can run in its own process answers, as core/api.ts declares them.
-  const requestsOf: Record<string, readonly string[]> = { search: SEARCH_REQUESTS, store: STORE_REQUESTS, usage: USAGE_REQUESTS, monitor: MONITOR_REQUESTS, projects: PROJECTS_REQUESTS }
+  const requestsOf: Record<string, readonly string[]> = { search: SEARCH_REQUESTS, store: STORE_REQUESTS, usage: USAGE_REQUESTS, monitor: MONITOR_REQUESTS, projects: PROJECTS_REQUESTS, models: MODELS_REQUESTS }
   // What the core keeps of the viewers in their own process, for the frames it builds (core/viewersLink.ts).
   const viewersLink = createViewersLink(coreApi, (frame, opts) => serviceLinks.notify('viewers', frame, opts))
   // How the core tells workspaces in their own process what to do, and answers them (core/workspacesLink.ts).
@@ -1098,12 +1080,16 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const teamsLink = createTeamsLink({ notify: (frame) => serviceLinks.notify('teams', frame) })
   // What the Store in its own process tells the core: an install's progress, and that what is installed changed (core/storeLink.ts).
   const storeLink = createStoreLink(coreApi, invalidateInstalledDsh)
+  // What the core keeps of models in its own process for frames and keystrokes, and how it asks it the rest (core/modelsLink.ts).
+  const modelsLink = createModelsLink(coreApi, (type, payload) => serviceLinks.call('models', type, payload), (frame) => serviceLinks.notify('models', frame))
   const serviceLinks = createServiceLinks({
     token: serviceToken,
     owned: Object.fromEntries([...outOfProcess].map((name) => [name, requestsOf[name] ?? []])),
+    waits: LONG_ANSWERS,
     answer: (service, query, payload) => service === 'viewers' ? viewersLink.answer(query, payload)
       : service === 'workspaces' ? workspacesLink.answer(query, payload)
       : service === 'store' ? storeLink.answer(query, payload)
+      : service === 'models' ? modelsLink.answer(query, payload)
       : service === 'teams' ? teamsLink.answer(query, payload)
       : service === 'gateway' && gatewayLink ? gatewayLink.answer(query, payload) : answerAgentQuery(coreApi, query),
     // The gateway's own traffic: its remote clients and what they sent, and its comings and goings.
@@ -1153,6 +1139,13 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // media file from an agent's project (services/projects.ts): in this process, or in the edge host.
   if (!outOfProcess.has('projects')) serviceHost.serve('projects', inline!.startProjects, coreApi, PROJECTS_REQUESTS)
   serviceHost.serve('shell', startShell, coreApi, SHELL_REQUESTS)
+  // Models: grid access and its pin, the model pictures on agents' frames, the keystroke prewarm, where an
+  // agent on a grid model sends its inference, and the models requests the apps send (services/models.ts):
+  // in this process, or in its own (services/modelsProcess.ts), reached through core/modelsLink.ts.
+  if (outOfProcess.has('models')) ports.models = modelsLink.port
+  else serviceHost.start('models', inline!.startModels, coreApi, MODELS_FALLBACKS, MODELS_REQUESTS)
+  // What the socket asks of models: read on each use, so a models service switched off answers its fallbacks.
+  backend.models = () => ports.models ?? MODELS_OFF
 
   const runtimeController = new RuntimeProfileController({
     manager: runtimeProfiles,
@@ -1445,7 +1438,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   )
   // Which of the owner's other computers have been reading offline — a label on the models only they
   // serve on a sleeping grid, never a removal (grid-reads-without-waking issue 03).
-  machineListCache.listen((body) => observeMachineList(body, computerId()))
+  machineListCache.listen((body) => ports.models?.machines(body, computerId()))
   // The trust group swaps rosters only with the members the backend last said were online (gateway/start.ts).
   machineListCache.listen(() => {
     const { machines, source } = machineListCache.list()
@@ -2221,8 +2214,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     gridLaunchMachine,
     terminalHintMachineName,
     blocksFolder: (cwd) => backend.purgeAgentService?.blocksFolder(cwd),
-    gridSetup: () => backend.ensureGrid,
-    privateGridName: () => backend.privateGridName(),
+    gridSetup: () => {
+      const models = ports.models
+      return models ? (request) => models.ensure(request) : null
+    },
+    // The backend's word, else what the models service works out (services/models.ts).
+    privateGridName: async () => backend.gridName() ?? await (ports.models ?? MODELS_OFF).privateGridName(),
   })
 
   // Forking an agent (core/agents/fork.ts).
@@ -2346,6 +2343,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     createAgent: () => backend.onCreateAgent, forkAgent: () => backend.onForkAgent,
     resumeAgent: () => lifecycle.resumeAgent, restartAgent: () => restartAgent,
     byAgent: (id) => registry.byAgent(id), toProject: (s) => backend.toProject(s),
+    modelTarget: (selection) => (ports.models ?? MODELS_OFF).launchTarget(selection),
   })
   backend.createProvider = launches.create
   backend.createStatusProvider = launches.createStatus

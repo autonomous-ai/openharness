@@ -12,7 +12,7 @@
  * and asks the core what it needs to know.
  */
 import WebSocket from 'ws'
-import type { ServiceRequests } from '../core/api.js'
+import type { Asker, ServiceRequests } from '../core/api.js'
 import { heartbeatInterval, processLoopDelay, type LoopDelay, type MasterChannel } from '../harnessd/coreLink.js'
 
 type Payload = Record<string, unknown>
@@ -210,7 +210,7 @@ export function runServiceProcess(options: ServiceProcessOptions): ServiceProces
       catch (error) { log(`[service ${options.name}] binary frame failed · ${describe(error)}`) }
       return
     }
-    let frame: { type?: unknown; payload?: Payload; asker?: { local?: unknown; owner?: unknown } }
+    let frame: { type?: unknown; payload?: Payload; asker?: { local?: unknown; owner?: unknown; connection?: unknown; requestId?: unknown } }
     try { frame = JSON.parse(raw.toString()) as typeof frame } catch { return }
     const payload = frame.payload ?? {}
     if (frame.type === 'connected') {
@@ -243,8 +243,14 @@ export function runServiceProcess(options: ServiceProcessOptions): ServiceProces
     const handle = Object.hasOwn(options.requests, type) ? options.requests[type] : undefined
     if (!handle) return
     const requestId = payload.requestId
-    // Who asked, as the core established it; read as the least it could be if it is missing.
-    const asker = { local: frame.asker?.local === true, owner: frame.asker?.owner === true }
+    // Who asked, as the core established it; read as the least it could be if it is missing. The connection
+    // and its own request id, when the core gave them, are what work belonging to one connection is keyed by.
+    const asker: Asker = {
+      local: frame.asker?.local === true,
+      owner: frame.asker?.owner === true,
+      ...(typeof frame.asker?.connection === 'string' ? { connection: frame.asker.connection } : {}),
+      ...(typeof frame.asker?.requestId === 'string' ? { requestId: frame.asker.requestId } : {}),
+    }
     // A request that fails here is answered as failed, never left for the core's timeout, and in the
     // words the core's host uses: what went wrong goes to the log, not to whoever asked.
     void Promise.resolve()

@@ -206,8 +206,14 @@ describe('a service in its own process', () => {
     socket().say({ type: 'session_search', payload: { requestId: 'r1' }, asker: { local: true, owner: true } })
     socket().say({ type: 'session_search', payload: { requestId: 'r2' }, asker: { local: 'yes', owner: 1 } })
     socket().say({ type: 'session_search', payload: { requestId: 'r3' } })
-    await vi.waitFor(() => expect(asked).toHaveLength(3))
-    expect(asked).toEqual([{ local: true, owner: true }, { local: false, owner: false }, { local: false, owner: false }])
+    // The connection and the client's own request id, when the core gave them: what a grid command is a job of.
+    socket().say({ type: 'session_search', payload: { requestId: 'r4' }, asker: { local: true, owner: true, connection: 'local:1', requestId: 'cmd-1' } })
+    socket().say({ type: 'session_search', payload: { requestId: 'r5' }, asker: { local: true, owner: true, connection: 7, requestId: null } })
+    await vi.waitFor(() => expect(asked).toHaveLength(5))
+    expect(asked).toEqual([
+      { local: true, owner: true }, { local: false, owner: false }, { local: false, owner: false },
+      { local: true, owner: true, connection: 'local:1', requestId: 'cmd-1' }, { local: true, owner: true },
+    ])
   })
 
   it('hears what the core tells it, and asks the core what it needs to know', async () => {

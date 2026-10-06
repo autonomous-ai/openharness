@@ -5,25 +5,27 @@ import { createServiceHost } from '../core/serviceHost.js'
 import { installedDsh } from '../dsh/installed.js'
 import { appEngineOps, scanAppModels } from '../lib/appModels.js'
 import { createGridAccess, gridNamesLocal, reconcileGridAttach, type GridAttachResult } from '../lib/gridAttach.js'
-import { resetGridDeriveMemo, signedInGridEmail } from '../lib/gridDerive.js'
+import { deriveHarnessGridName, resetGridDeriveMemo, signedInGridEmail } from '../lib/gridDerive.js'
 import { ensureHarnessGrid } from '../lib/gridEnsure.js'
-import { gridAvailable } from '../lib/gridExec.js'
+import { gridAvailable, managedGridPath } from '../lib/gridExec.js'
+import { GridFleetRpc } from '../lib/gridFleetRpc.js'
 import { handOffToGrid } from '../lib/gridHandoff.js'
 import { gridCapableEngines } from '../lib/gridLaunch.js'
 import { ensureGridInstalled } from '../lib/gridInstall.js'
 import { clearGridMcpUrlCache } from '../lib/gridMcpUrl.js'
 import {
-  forgetGridModels, gridAnnotation, gridInventory, keystrokePrewarm, listAllGridModels, onGridModelsChanged, presentGridSections, warmGridModels,
-  type GridSection,
+  forgetGridModels, gridAnnotation, gridInventory, keystrokePrewarm, listAllGridModels, listGridModels, observeMachineList, onGridModelsChanged,
+  presentGridSections, retargetPrewarm, warmGridModels, type GridSection,
 } from '../lib/gridModels.js'
+import { resolveGridTarget } from '../lib/gridTarget.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import type { RuntimeModelOption } from '../lib/runtimeProfile.js'
-import { ensureManagedGrid } from '../lib/runtimeInstall.js'
+import { ensureManagedGrid, startGridPinRecheck } from '../lib/runtimeInstall.js'
 import { apiConnectionsRequest } from '../lib/apiConnections.js'
 import { apiModelsRequest, rememberSavedApis } from '../lib/apiModels.js'
 import { linkCodexProfile, listCodexProfiles } from '../lib/codexProfiles.js'
 import { fakeCore } from '../testing/fakeCore.js'
-import { compactRuntimePickerModels, MODELS_REQUESTS, startModels } from './models.js'
+import { compactRuntimePickerModels, launchTarget, MODELS_REQUESTS, startModels } from './models.js'
 
 const access = vi.hoisted(() => ({ ensure: vi.fn(async (_request?: { ownGrid?: boolean }): Promise<GridAttachResult> => ({ status: 'converged', name: 'grid-1', detail: 'ok' })) }))
 vi.mock('../lib/gridAttach.js', () => ({
@@ -31,9 +33,16 @@ vi.mock('../lib/gridAttach.js', () => ({
   gridNamesLocal: vi.fn(() => ['grid-1']),
   reconcileGridAttach: vi.fn(async () => ({ status: 'signed-in', name: 'grid-1', detail: 'ok' })),
 }))
-vi.mock('../lib/gridDerive.js', () => ({ resetGridDeriveMemo: vi.fn(), signedInGridEmail: vi.fn(() => 'me@example.com') }))
+vi.mock('../lib/gridDerive.js', () => ({ deriveHarnessGridName: vi.fn(async () => null), resetGridDeriveMemo: vi.fn(), signedInGridEmail: vi.fn(() => 'me@example.com') }))
 vi.mock('../lib/gridEnsure.js', () => ({ ensureHarnessGrid: vi.fn(async () => 'converged') }))
-vi.mock('../lib/gridExec.js', () => ({ gridAvailable: vi.fn(() => true), gridCliPresence: vi.fn(() => 'managed') }))
+vi.mock('../lib/gridExec.js', () => ({ gridAvailable: vi.fn(() => true), gridCliPresence: vi.fn(() => 'managed'), managedGridPath: vi.fn(() => null) }))
+/** The Model Manager's grid commands: what each job was run as, and what it answers. */
+const fleet = vi.hoisted(() => ({ run: vi.fn(async (..._args: unknown[]): Promise<Record<string, unknown>> => ({ ok: true, code: 0, stdout: '[]', stderr: '', error: null })), cancel: vi.fn((..._args: unknown[]) => true) }))
+vi.mock('../lib/gridFleetRpc.js', async (real) => ({
+  ...await real<object>(),
+  GridFleetRpc: vi.fn(class { run = fleet.run; cancel = fleet.cancel }),
+}))
+vi.mock('../lib/gridTarget.js', () => ({ resolveGridTarget: vi.fn(async () => null) }))
 vi.mock('../lib/gridHandoff.js', () => ({ handOffToGrid: vi.fn(async () => ({ ok: true })) }))
 vi.mock('../lib/gridInstall.js', () => ({ ensureGridInstalled: vi.fn(async () => ({ status: 'present', message: '' })) }))
 vi.mock('../lib/gridMcpUrl.js', () => ({ clearGridMcpUrlCache: vi.fn() }))
@@ -43,11 +52,14 @@ vi.mock('../lib/gridModels.js', () => ({
   gridInventory: vi.fn(),
   keystrokePrewarm: vi.fn(async () => 'started'),
   listAllGridModels: vi.fn(async () => []),
+  listGridModels: vi.fn(async () => []),
+  observeMachineList: vi.fn(),
   onGridModelsChanged: vi.fn(),
+  retargetPrewarm: vi.fn(async () => 'fired'),
   presentGridSections: vi.fn((sections: unknown[]) => sections),
   warmGridModels: vi.fn(async () => {}),
 }))
-vi.mock('../lib/runtimeInstall.js', () => ({ ensureManagedGrid: vi.fn(async () => {}) }))
+vi.mock('../lib/runtimeInstall.js', () => ({ ensureManagedGrid: vi.fn(async () => {}), startGridPinRecheck: vi.fn(() => () => {}) }))
 /** The saved APIs and the Codex profiles: their files and folders are the lib's, never this machine's here. */
 const apis = vi.hoisted(() => ({ stores: [] as string[] }))
 vi.mock('../lib/apiConnections.js', () => ({
@@ -191,6 +203,12 @@ describe('the models service', () => {
       expect(gridAnnotation).not.toHaveBeenCalledWith(undefined)
     })
 
+    it('tells the core the windows\' lists may have changed, whatever the agents', () => {
+      const { core, changed } = setup()
+      changed()
+      expect(core.clients.gridModelsChanged).toHaveBeenCalledOnce()
+    })
+
     it('forgets an agent that left a grid, so its next appearance is announced', () => {
       const { core, list, changed } = setup([onGrid('a1', 'awake')])
       changed()
@@ -209,37 +227,173 @@ describe('the models service', () => {
     })
   })
 
+  describe('the managed grid\'s pin', () => {
+    it('follows a managed grid\'s pin as it starts and every recheck after, and leaves a machine with none alone', async () => {
+      setup()
+      expect(ensureManagedGrid).not.toHaveBeenCalled()
+      const recheck = vi.mocked(startGridPinRecheck).mock.calls.at(-1)![0]!.ensure!
+      vi.mocked(managedGridPath).mockReturnValue('/runtime/grid-0.3.49/bin/grid')
+      try {
+        await recheck()
+        expect(ensureManagedGrid).toHaveBeenCalledOnce()
+        vi.mocked(ensureManagedGrid).mock.calls[0]![0]!('pinned 0.3.49')
+        expect(console.log).toHaveBeenCalledWith('[grid-runtime] pinned 0.3.49')
+        setup()
+        expect(ensureManagedGrid).toHaveBeenCalledTimes(2)
+      } finally {
+        vi.mocked(managedGridPath).mockReturnValue(null)
+      }
+    })
+  })
+
   describe('its port', () => {
-    it('has grid ready through the one access, and says offline whether grid is set up', async () => {
+    it('has grid ready through the one access', async () => {
       const { port } = setup()
       expect(await port.ensure({ ownGrid: true })).toMatchObject({ status: 'converged' })
       expect(access.ensure).toHaveBeenCalledWith({ ownGrid: true })
-      expect(port.setUp()).toBe(true)
-      vi.mocked(signedInGridEmail).mockReturnValueOnce(null)
-      expect(port.setUp()).toBe(false)
-      vi.mocked(gridAvailable).mockReturnValueOnce(false)
-      expect(port.setUp()).toBe(false)
     })
 
-    it('starts a sleeping grid while someone types, ignoring a prewarm that fails, and forgets the web tools on sign-out', async () => {
+    it('reads an agent\'s note off the pictures, and starts a sleeping grid while someone types, ignoring a prewarm that fails', async () => {
       const { port } = setup()
-      const grid = { networkId: 'n1', model: 'big' } as never
+      const grid = { baseUrl: 'https://fixture.invalid/g/n1/relay/v1', model: 'big' }
+      expect(port.annotation({ state: 'asleep' } as never)).toEqual({ state: 'asleep' })
       port.prewarm(grid)
       expect(keystrokePrewarm).toHaveBeenCalledWith(grid)
       vi.mocked(keystrokePrewarm).mockRejectedValueOnce(new Error('asleep'))
       port.prewarm(grid)
       await Promise.resolve()
+    })
+
+    it('starts the grid an agent was just moved onto, ignoring a prewarm that fails, and forgets the web tools on sign-out', async () => {
+      const { port } = setup()
+      const launch = { networkId: 'n1', networkName: 'mine', baseUrl: 'https://fixture.invalid/g/n1/relay/v1', apiKey: 'k', model: 'big' }
+      port.moved(launch)
+      expect(retargetPrewarm).toHaveBeenCalledWith(launch)
+      vi.mocked(retargetPrewarm).mockRejectedValueOnce(new Error('offline'))
+      port.moved(launch)
+      await Promise.resolve()
       port.signedOut()
       expect(clearGridMcpUrlCache).toHaveBeenCalledTimes(1)
+    })
+
+    it('hears which of the account\'s computers seem offline from the machine list the core read', () => {
+      const { port } = setup()
+      port.machines({ data: { machines: [] } }, 'computer-here')
+      expect(observeMachineList).toHaveBeenCalledWith({ data: { machines: [] } }, 'computer-here')
+    })
+
+    it('names the account\'s grid as the backend did, else as this machine works it out', async () => {
+      const told = setup([], { account: { privateGridName: vi.fn(async () => 'mine') } })
+      expect(await told.port.privateGridName()).toBe('mine')
+      expect(deriveHarnessGridName).not.toHaveBeenCalled()
+      vi.mocked(deriveHarnessGridName).mockResolvedValueOnce('derived-1a2b3c4d')
+      expect(await setup().port.privateGridName()).toBe('derived-1a2b3c4d')
+    })
+
+    it('builds the lists the windows are pushed from the pictures as they stand, in both forms', async () => {
+      const sections = [section('mine', true, [{ id: 'Small-Q4', node: 'mac' }])]
+      vi.mocked(listAllGridModels).mockResolvedValueOnce(sections)
+      const { port } = setup([], { account: { privateGridName: vi.fn(async () => 'mine') } })
+      const lists = await port.lists()
+      expect(listAllGridModels).toHaveBeenCalledWith('mine', { refresh: false })
+      expect(lists.plain).toMatchObject({ gridName: 'mine', models: [{ id: 'Small-Q4', node: 'mac' }] })
+      expect(lists.rowState).toMatchObject({ gridName: 'mine', grids: sections })
+      expect(presentGridSections).toHaveBeenCalledWith(sections, { rowState: false })
+      expect(presentGridSections).toHaveBeenCalledWith(sections, { rowState: true })
+    })
+
+    describe('where an agent on a grid model sends its inference', () => {
+      const target = { networkId: 'g', networkName: 'my-grid', baseUrl: 'https://fixture.invalid/relay/v1', apiKey: 'fixture-key', model: 'Qwen-35B' }
+
+      it('a new agent: the exact model, refreshed, on the grid it was picked from', async () => {
+        vi.mocked(listGridModels).mockResolvedValueOnce([{ id: 'Qwen-35B', node: 'Mac Studio' }])
+        vi.mocked(resolveGridTarget).mockResolvedValueOnce(target)
+        const { port } = setup()
+        expect(await port.launchTarget({ model: 'Qwen-35B', grid: 'my-grid' })).toEqual(target)
+        expect(forgetGridModels).toHaveBeenCalledOnce()
+        expect(listGridModels).toHaveBeenCalledWith('my-grid')
+        expect(resolveGridTarget).toHaveBeenCalledWith('my-grid', 'Qwen-35B')
+      })
+
+      it('a new agent: a stopped model resolves nothing, and a failure is the caller\'s to refuse', async () => {
+        vi.mocked(listGridModels).mockResolvedValueOnce([{ id: 'Another-model', node: 'Mac Studio' }])
+        expect(await launchTarget({ model: 'Qwen-35B', grid: 'my-grid' })).toBeNull()
+        expect(resolveGridTarget).not.toHaveBeenCalled()
+        vi.mocked(listGridModels).mockResolvedValueOnce([{ id: 'Qwen-35B', node: '' }])
+        expect(await launchTarget({ model: 'Qwen-35B', grid: 'my-grid' })).toBeNull()
+        vi.mocked(listGridModels).mockRejectedValueOnce(new Error('offline'))
+        await expect(launchTarget({ model: 'Qwen-35B', grid: 'my-grid' })).rejects.toThrow('offline')
+      })
+
+      it("a move signs grid in first — with the account's own grid only when the model is on it", async () => {
+        vi.mocked(resolveGridTarget).mockResolvedValue(target)
+        try {
+          const { port } = setup([], { account: { privateGridName: vi.fn(async () => 'mine') } })
+          expect(await port.moveTarget({ gridName: 'team-grid-0000aaaa', model: 'Shared-Model' })).toEqual({ target })
+          expect(resolveGridTarget).toHaveBeenLastCalledWith('team-grid-0000aaaa', 'Shared-Model')
+          expect(await port.moveTarget({ gridName: null, model: 'Own-Model' })).toEqual({ target })
+          expect(resolveGridTarget).toHaveBeenLastCalledWith('mine', 'Own-Model')
+          expect(await port.moveTarget({ gridName: 'mine', model: 'Own-Model' })).toEqual({ target })
+          expect(access.ensure.mock.calls).toEqual([[{ ownGrid: false }], [{ ownGrid: true }], [{ ownGrid: true }]])
+        } finally {
+          vi.mocked(resolveGridTarget).mockReset()
+        }
+      })
+
+      it('a move grid cannot be set up for says why and reads no grid; one whose endpoint cannot be read says so', async () => {
+        const { port } = setup()
+        access.ensure.mockResolvedValueOnce({ status: 'handoff-failed', name: null, detail: 'no grid on this computer' })
+        expect(await port.moveTarget({ gridName: 'team', model: 'Shared-Model' })).toEqual({ detail: 'no grid on this computer' })
+        expect(resolveGridTarget).not.toHaveBeenCalled()
+        expect(await port.moveTarget({ gridName: 'team', model: 'Shared-Model' })).toEqual({ detail: 'Could not read this machine\'s grid endpoint.' })
+      })
+    })
+  })
+
+  describe("the Model Manager's grid commands", () => {
+    const COMMAND = { args: ['--remote', 'ls', '--json'], timeoutMs: 5_000 }
+    const asker = { local: true, owner: true, connection: 'local:grid', requestId: 'cmd-1' }
+
+    it('runs against grid as it stands, as a job of the connection and request that asked — never setting grid up', async () => {
+      const { requests } = setup()
+      expect(await requests.grid_fleet_run!(COMMAND, asker)).toEqual({ ok: true, code: 0, stdout: '[]', stderr: '', error: null })
+      expect(fleet.run).toHaveBeenCalledWith('local:grid', 'cmd-1', { args: COMMAND.args, timeoutMs: 5_000 })
+      expect(access.ensure).not.toHaveBeenCalled()
+      expect(GridFleetRpc).toHaveBeenCalledTimes(1)
+    })
+
+    it('refuses a command it cannot read, or one with no connection or request to belong to', async () => {
+      const { requests } = setup()
+      expect(await requests.grid_fleet_run!({ args: [] }, asker)).toEqual({ error: 'INVALID_GRID_COMMAND' })
+      expect(await requests.grid_fleet_run!(COMMAND, { local: true, owner: true, requestId: 'cmd-1' })).toEqual({ error: 'INVALID_GRID_COMMAND' })
+      expect(await requests.grid_fleet_run!(COMMAND, { local: true, owner: true, connection: 'local:grid' })).toEqual({ error: 'INVALID_GRID_COMMAND' })
+      expect(fleet.run).not.toHaveBeenCalled()
+    })
+
+    it('a run that fails unexpectedly is answered in one sentence', async () => {
+      fleet.run.mockRejectedValueOnce(new Error('spawn EMFILE'))
+      const { requests } = setup()
+      expect(await requests.grid_fleet_run!(COMMAND, asker)).toEqual({ ok: false, code: 1, error: 'Grid command failed unexpectedly.' })
+    })
+
+    it('a cancel stops only the asking connection\'s own command', async () => {
+      const { requests } = setup()
+      expect(await requests.grid_fleet_cancel!({ commandId: 'cmd-1' }, asker)).toEqual({ cancelled: true })
+      expect(fleet.cancel).toHaveBeenCalledWith('local:grid', 'cmd-1')
+      fleet.cancel.mockReturnValueOnce(false)
+      expect(await requests.grid_fleet_cancel!({ commandId: 'cmd-2' }, asker)).toEqual({ cancelled: false })
+      expect(await requests.grid_fleet_cancel!({ commandId: 7 }, asker)).toEqual({ cancelled: false })
+      expect(await requests.grid_fleet_cancel!({ commandId: 'cmd-1' }, { local: true, owner: true })).toEqual({ cancelled: false })
+      expect(fleet.cancel).toHaveBeenCalledTimes(2)
     })
   })
 
   describe('the requests it answers for the apps', () => {
     it('answers exactly the requests it declares, and while it is off the host answers them unavailable', async () => {
       expect(Object.keys(setup().requests).sort()).toEqual([...MODELS_REQUESTS].sort())
-      // Not the Model Manager's grid commands, whose jobs belong to the connection that started them, nor
-      // their handshake, which the Grid harness reads as "update Harness" when it does not answer.
-      for (const socketOwn of ['grid_fleet_run', 'grid_fleet_cancel', 'grid_fleet_capabilities']) expect(MODELS_REQUESTS).not.toContain(socketOwn)
+      // Not the grid commands' handshake, which the Grid harness reads as "update Harness" when it does
+      // not answer: the socket's own, so a models service that is down does not make it say that.
+      expect(MODELS_REQUESTS).not.toContain('grid_fleet_capabilities')
 
       const on = createServiceHost(emptyPorts(), { log: () => {} })
       on.start('models', startModels, fakeCore(), MODELS_FALLBACKS, MODELS_REQUESTS)
@@ -309,8 +463,10 @@ describe('the models service', () => {
         expect(listAllGridModels).toHaveBeenLastCalledWith('b')
         ofA.resolve([section('a', true, [{ id: 'from-a' }])])
         expect(await a).toMatchObject({ gridName: 'a', models: [{ id: 'from-a' }] })
-        // b's listing is still the one out: a third ask for b joins it rather than starting another.
+        // b's listing is still the one out: a third ask for b joins it rather than starting another, once it
+        // has the grid's name.
         const again = ask('grid_models_list')
+        await new Promise((resolve) => setImmediate(resolve))
         ofB.resolve([section('b', true, [{ id: 'from-b' }])])
         expect(await b).toMatchObject({ gridName: 'b', models: [{ id: 'from-b' }] })
         expect(await again).toMatchObject({ gridName: 'b', models: [{ id: 'from-b' }] })

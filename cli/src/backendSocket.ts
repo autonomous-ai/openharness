@@ -1,6 +1,6 @@
 import type { PurgeAgentService } from './lib/purgeAgentService.js'
 import { baseNode } from './harnessd/baseNode.js'
-import type { Asker, BackendNotice, GatewayEvents, GatewayPort, PromptScopes, RemoteClient, RemoteRole, RemoteTransport } from './core/api.js'
+import type { Asker, BackendNotice, GatewayEvents, GatewayPort, ModelsPort, PromptScopes, RemoteClient, RemoteRole, RemoteTransport } from './core/api.js'
 import { ServiceUnavailableError } from './core/serviceHost.js'
 import type { ActivityFrame } from './lib/turnActivity.js'
 import { MonitorCompletions } from './lib/harnessMonitor.js'
@@ -28,16 +28,11 @@ import { registry, projectDisplayName, type RegisteredSession } from './lib/regi
 import type { CloseAgentService } from './lib/closeAgentService.js'
 import { isHiddenBuiltin } from './dsh/builtinIds.js'
 import { ENGINES, type AgentEngine } from './engines/types.js'
-import { gridCliPresence } from './lib/gridExec.js'
-import { GridFleetRpc, GRID_FLEET_PROTOCOL, GRID_FLEET_MAX_TIMEOUT_MS, parseGridFleetRequest } from './lib/gridFleetRpc.js'
+import { gridCliPresence } from './lib/gridBinary.js'
+import { GRID_FLEET_PROTOCOL, GRID_FLEET_MAX_TIMEOUT_MS } from './lib/gridFleetProtocol.js'
 import { ApiConnectionError, ApiConnections } from './lib/apiConnections.js'
 import { resolveApiTarget } from './lib/apiModels.js'
 import { isApiLaunch, parseGridLaunchOverride, type GridLaunchOverride } from './lib/gridLaunch.js'
-import { listAllGridModels, onGridModelsChanged, retargetPrewarm } from './lib/gridModels.js'
-import { gridModelsPayload } from './lib/gridModelsPayload.js'
-import { resolveGridTarget } from './lib/gridTarget.js'
-import type { GridAttachResult } from './lib/gridAttach.js'
-import { deriveHarnessGridName } from './lib/gridDerive.js'
 import { supportsFirstPrompt } from './lib/engineLaunch.js'
 import { probeEngines } from './lib/engineProbe.js'
 import { harnessDevicesRequest, type HarnessDevicesService } from './lib/harnessDevices.js'
@@ -82,13 +77,9 @@ export interface LocalClientSink {
 
 export class BackendSocket {
   harnessDevices: HarnessDevicesService | null = null
-  private readonly gridFleet = new GridFleetRpc()
   /** This machine's name as Harness shows it (Machines), from the backend's `machine_meta`. Null
    *  until the first one arrives. */
   private machineDisplayName: string | null = null
-  /** A read the window did not ask for changed what a picker would show: tell the window
-   *  (`grid_models_changed`), so its one picture stays current without polling. */
-  private readonly stopGridModelsPush = onGridModelsChanged(() => { void this.pushGridModels() })
   private readonly apiConnections = new ApiConnections(env.ADAPTER_DATA_DIR)
   /** The relay and its E2EE (gateway/gateway.ts): the one way to a remote client. Null in a unit test
    *  that has none, which then serves this computer alone. */
@@ -569,69 +560,38 @@ export class BackendSocket {
   /** The account's private harness grid name, as the backend last reported it. Null until the first
    *  `machine_meta` lands, or when this account has none yet. */
   private harnessGridName: string | null = null
-  /** Injected so the derivation (a `grid` spawn) is a seam in tests; see `lib/gridDerive.ts`. */
-  deriveGridName: () => Promise<string | null> = deriveHarnessGridName
-  /** Have grid ready for a grid feature the person is using now (`lib/gridAttach.ts`): `grid` installed,
-   *  signed in as this account with its harness token, and — `ownGrid` — the account's own grid there.
-   *  Asked by acts only (here a move onto a grid model, and making a Model Manager; the models service
-   *  asks its own for Set up, Get and Use), never by a read. Set by `cli.ts`; null (tests) reads grid as
-   *  it stands. */
-  ensureGrid: ((request?: { ownGrid?: boolean }) => Promise<GridAttachResult>) | null = null
+
+  /**
+   * What the socket asks of models (core/api.ts `ModelsPort`): an agent's grid note for its frame, the
+   * lists it pushes the windows, and where a move onto a grid model goes. Read on each use, since models
+   * can be switched off or run in a process of its own; set by core/main.ts. Unset (tests), it reads as
+   * models being off.
+   */
+  models: (() => Pick<ModelsPort, 'annotation' | 'lists' | 'moveTarget' | 'moved'>) | null = null
 
   /** Set the account's private grid name from the reconcile that just confirmed it, so the RPCs
    *  answer with it at once rather than waiting for the next `machine_meta` (`lib/gridAttach.ts`). */
   setHarnessGridName(name: string | null): void { this.harnessGridName = name }
 
-  /** Which grid this machine's agents can be pointed at — for `harness status` and the models RPC. */
+  /** Which grid this machine's agents can be pointed at — for `harness status`, the models service, and a
+   *  relaunch that names it. The backend's word only: working one out is the models service's. */
   gridName(): string | null { return this.harnessGridName }
 
   /** This machine's name as the Machines list shows it — what a model it serves is labelled with. */
   machineName(): string | null { return this.machineDisplayName }
 
-  /** The account's private grid, resolved the way the models RPC resolves it — for the models service,
-   *  and for a harness workspace that must be told which grid is "yours" rather than work it out or ask. */
-  privateGridName(): Promise<string | null> { return this.resolveGridName() }
-
   /** `grid_models_changed` to the windows on this computer: the same payload `grid_models_list` answers,
-   *  built from the pictures as they stand — no read is started to build it, so a push never causes one.
-   *  On a background read's change, and on the models service's word (a local model started or stopped,
-   *  grid set up). */
+   *  as the models service builds it from its pictures as they stand, each window in the form it asked
+   *  for. On the models service's word: a read it did not wait for changed the list, a local model started
+   *  or stopped, grid was set up. */
   async pushGridModels(): Promise<void> {
-    if (this.closed || this.localClients.size === 0) return
+    if (this.closed || this.localClients.size === 0 || !this.models) return
     try {
-      const gridName = await this.resolveGridName()
-      const grids = await listAllGridModels(gridName, { refresh: false })
-      // Each window in the form it asked for — see `gridModelsPayload`.
-      const plain: Frame = { type: 'grid_models_changed', payload: gridModelsPayload(gridName, grids, false) }
-      const withRowState: Frame = { type: 'grid_models_changed', payload: gridModelsPayload(gridName, grids, true) }
-      this.sendLocal((connId) => this.rowStateWindows.has(connId) ? withRowState : plain)
+      const { plain, rowState } = await this.models().lists()
+      const forPlain: Frame = { type: 'grid_models_changed', payload: plain }
+      const forRowState: Frame = { type: 'grid_models_changed', payload: rowState }
+      this.sendLocal((connId) => this.rowStateWindows.has(connId) ? forRowState : forPlain)
     } catch { /* the next ask answers the same thing */ }
-  }
-
-  /**
-   * The account's private grid: the backend's word when it gave one, else what this machine can
-   * work out for itself (`lib/gridDerive.ts`). A backend that predates `machine_meta.gridName`
-   * left every picker empty while `grid models` listed the model fine; the derivation is the
-   * skill's own rule, so the daemon and the agent it opens agree on which grid is "yours".
-   */
-  private async resolveGridName(): Promise<string | null> {
-    return this.harnessGridName ?? await this.deriveGridName()
-  }
-
-  /**
-   * Grid set up for an act, or the sentence saying why it could not be: null when it is ready — or
-   * when this daemon has no [ensureGrid] to ask (tests), which reads grid as it stands.
-   */
-  private async gridNotReady(ownGrid: boolean): Promise<string | null> {
-    if (!this.ensureGrid) return null
-    const ready = await this.ensureGrid({ ownGrid })
-    if (ready.status !== 'converged' && ready.status !== 'signed-in') {
-      return ready.detail || 'Grid could not be set up on this computer. Try again.'
-    }
-    if (ownGrid && ready.ownGrid && !['created', 'existed', 'adopted'].includes(ready.ownGrid)) {
-      return ready.detail || 'Your grid could not be created. Try again.'
-    }
-    return null
   }
 
   /** Dial the backend, through the gateway: this daemon is signed in. */
@@ -642,7 +602,6 @@ export class BackendSocket {
   async stop(): Promise<void> {
     this.closed = true
     this.closeAgentService?.dispose()
-    this.stopGridModelsPush()
     this.orchestratorService?.stop()
     this.teamService?.stop()
     this.teamMailboxService?.stop()
@@ -1099,7 +1058,7 @@ export class BackendSocket {
     // A request a service answers, in its own process or in this one: routed to it, or answered
     // SERVICE_UNAVAILABLE while it is off. Never waited on in line: the next frame is not held for it.
     // Who asked is established here, after the gates above, and the service trusts only that.
-    const asker: Asker = { local, owner }
+    const asker: Asker = { local, owner, connection: connId, ...(typeof requestId === 'string' ? { requestId } : {}) }
     // A window that draws row state asks for the models list with `rowState`, and the list's changes are
     // pushed to it in that form (`pushGridModels`). Noted here, by connection: the models service answers
     // the list, and a request reaches it without its connection.
@@ -1108,33 +1067,12 @@ export class BackendSocket {
 
     try {
       switch (type) {
-        // The Model Manager's grid commands stay here while the rest of models answers from its service
-        // (services/models.ts). A command is a job of the connection that started it, keyed by that
-        // connection, and a cancel stops only that connection's own (lib/gridFleetRpc.ts); a request the
-        // service answers knows who asked (`Asker`) but not over which connection. `grid_fleet_capabilities`
-        // is the commands' handshake (their protocol, longest timeout and thinking control): the Grid
-        // harness sends `grid_fleet_run` only once it answers protocol 1, and reads anything else as
-        // "update Harness", so it stays beside them rather than go off with the models service.
+        // The Model Manager's grid commands' handshake (their protocol, longest timeout and thinking control),
+        // answered here although the commands are the models service's (core/api.ts `MODELS_REQUESTS`): the
+        // Grid harness sends `grid_fleet_run` only once it answers protocol 1 and reads anything else as
+        // "update Harness", which a models service that is down must not make it say.
         case 'grid_fleet_capabilities':
           reply(type, requestId, { protocol: GRID_FLEET_PROTOCOL, gridCli: gridCliPresence(), maxTimeoutMs: GRID_FLEET_MAX_TIMEOUT_MS, thinkingControl: true })
-          return
-        case 'grid_fleet_run': {
-          const request = parseGridFleetRequest(payload)
-          if (!request || typeof requestId !== 'string') { reply(type, requestId, { error: 'INVALID_GRID_COMMAND' }); return }
-          // Detached: pulls/builds can take minutes. Keep typing, cancellation, and telemetry responsive.
-          // ⚠️ Run against grid AS IT STANDS — never set up first. A Grid harness session issues these
-          // on its own the moment its viewer comes up (every open one, on every daemon start), so
-          // setting grid up here signed a machine in to grid right after a Harness-only sign-in,
-          // with nobody asking. Grid is set up by the picker's Set up, by making or opening a Model
-          // Manager, and by that harness's own `harness grid setup`; until then grid answers these in
-          // its own words.
-          void this.gridFleet.run(connId, requestId, request)
-            .then(result => reply(type, requestId, { ...result }))
-            .catch(() => reply(type, requestId, { ok: false, code: 1, error: 'Grid command failed unexpectedly.' }))
-          return
-        }
-        case 'grid_fleet_cancel':
-          reply(type, requestId, { cancelled: typeof payload.commandId === 'string' && this.gridFleet.cancel(connId, payload.commandId) })
           return
         // The pairings, which the gateway holds: a window here asks it through the core
         // (GATEWAY_REQUEST_TYPES), and a remote client's own requests never reach this switch.
@@ -1281,23 +1219,15 @@ export class BackendSocket {
             }
           }
           if (picked && payload.grid === undefined && !clear) {
-            // The grid the model was picked FROM, when the picker says (a shared grid's section);
-            // the account's own grid otherwise, as before.
-            // A move onto a grid model is a grid feature in use: grid is signed in first, if it is not
-            // yet — and the account's own grid made sure of when that is where the model is.
+            // The grid the model was picked FROM, when the picker says (a shared grid's section); the
+            // account's own grid otherwise. The models service sets grid up first and resolves the target.
             const named = typeof payload.gridName === 'string' && payload.gridName.trim() ? payload.gridName.trim() : null
-            const notReady = await this.gridNotReady(!named || named === this.harnessGridName)
-            if (notReady) {
-              reply(type, requestId, { error: 'GRID_UNAVAILABLE', detail: notReady })
+            const moving = this.models ? await this.models().moveTarget({ gridName: named, model: picked }).catch(() => null) : null
+            if (!moving || !('target' in moving)) {
+              reply(type, requestId, { error: 'GRID_UNAVAILABLE', detail: moving?.detail ?? 'Models are unavailable. Try again.' })
               return
             }
-            const pickedGrid = named ?? await this.resolveGridName()
-            const resolved = await resolveGridTarget(pickedGrid, picked)
-            if (!resolved) {
-              reply(type, requestId, { error: 'GRID_UNAVAILABLE', detail: 'Could not read this machine\'s grid endpoint.' })
-              return
-            }
-            payload.grid = resolved
+            payload.grid = moving.target
           }
           const target = parseGridLaunchOverride(payload.grid)
           // Exactly one, and `clearGrid` is a separate field rather than `grid: null` on purpose:
@@ -1321,11 +1251,10 @@ export class BackendSocket {
             return
           }
           reply(type, requestId, { retargeted: true })
-          // The agent is on a grid model now and its pane is restarting: start that grid meanwhile if it
-          // sleeps, so the first message rarely waits on a boot (issue 03). Detached — the move is done
-          // and answered — and it decides for itself whether a wake is worth it.
-          // An API has no sleep to wake it from, and is not a grid to look up.
-          if (override && !isApiLaunch(override)) void retargetPrewarm(override).catch(() => {})
+          // The agent is on a grid model now and its pane is restarting: the models service starts that grid
+          // meanwhile if it sleeps (issue 03). The move is done and answered. An API has no sleep to wake it
+          // from, and is not a grid to look up.
+          if (override && !isApiLaunch(override)) this.models?.().moved(override)
           return
         }
 
@@ -1433,7 +1362,7 @@ export class BackendSocket {
   /** A stopped agent's frame: no pane, no terminal, nothing to fork. */
   async toStoppedProject(s: RegisteredSession): Promise<AgentFrame> {
     const frame = await agentFrame(s, { selectedModel: s.model, terminalAvailable: false, dsh: this.dshFrameProvider?.(s) ?? null,
-      tokenUsage: agentTokenUsage.get(s) })
+      tokenUsage: agentTokenUsage.get(s), gridAnnotation: this.gridAnnotation })
     return {
       ...frame,
       status: 'stopped',
@@ -1452,6 +1381,11 @@ export class BackendSocket {
       terminalAvailable: registry.terminalAvailable(s.agentId),
       dsh: this.dshFrameProvider?.(s) ?? null,
       activity: () => this.activityFrameProvider?.(s) ?? null,
+      gridAnnotation: this.gridAnnotation,
     })
   }
+
+  /** What an agent's frame says of the grid it is on: the models service's word, from memory. */
+  private readonly gridAnnotation = (grid: Parameters<ModelsPort['annotation']>[0]): ReturnType<ModelsPort['annotation']> =>
+    this.models?.().annotation(grid) ?? null
 }
