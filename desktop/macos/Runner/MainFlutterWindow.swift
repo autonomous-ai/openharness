@@ -1,5 +1,6 @@
 import Cocoa
 import FlutterMacOS
+import WebKit
 
 /// Channel the app menu talks to Dart over.
 ///
@@ -20,6 +21,10 @@ class MainFlutterWindow: NSWindow {
   private var menuChannel: FlutterMethodChannel?
   private var clipboardImageChannel: FlutterMethodChannel?
   private var notifications: HarnessNotifications?
+  private var injectedPasteMonitor: Any?
+  /// Whether Command is down as this window's event stream tells it, which is what
+  /// Flutter's keyboard believes. See [isInjectedPaste].
+  private var commandPressed = false
 
   override func awakeFromNib() {
     let flutterViewController = FlutterViewController()
@@ -35,6 +40,7 @@ class MainFlutterWindow: NSWindow {
     )
     swarmTitlebar = SwarmTitlebar(window: self, messenger: flutterViewController.engine.binaryMessenger)
     installClipboardImageChannel(messenger: flutterViewController.engine.binaryMessenger)
+    installInjectedPasteMonitor()
     notifications = HarnessNotifications(messenger: flutterViewController.engine.binaryMessenger)
 
     // Flutter's own theme does not reach AppKit — every native surface (the
@@ -323,6 +329,46 @@ class MainFlutterWindow: NSWindow {
     menuChannel?.invokeMethod("resetTerminalFontSize", arguments: nil)
   }
 
+  /// Hands a ⌘V that Flutter would drop ([isInjectedPaste]) to Dart's own paste over the
+  /// menu channel, so dictation tools and clipboard managers paste as the keyboard does.
+  /// Only while the keyboard is in Flutter: a web pane or a native field reads the posted
+  /// chord correctly by itself.
+  private func installInjectedPasteMonitor() {
+    injectedPasteMonitor = NSEvent.addLocalMonitorForEvents(matching: [.flagsChanged, .keyDown]) {
+      [weak self] event in
+      guard let self else { return event }
+      if event.type == .flagsChanged {
+        if event.window === self { self.commandPressed = event.modifierFlags.contains(.command) }
+        return event
+      }
+      guard event.window === self, self.keyboardIsInFlutter,
+        isInjectedPaste(event, commandPressed: self.commandPressed)
+      else { return event }
+      // One paste per chord, as `terminal_panel.dart` does for a held ⌘V.
+      if !event.isARepeat { self.menuChannel?.invokeMethod("paste", arguments: nil) }
+      return nil
+    }
+  }
+
+  /// Whether the first responder is Flutter's view or inside it, and not a web pane in it.
+  private var keyboardIsInFlutter: Bool {
+    guard let flutterView = contentViewController?.view,
+      var view = firstResponder as? NSView
+    else { return false }
+    while true {
+      if view is WKWebView { return false }
+      if view === flutterView { return true }
+      guard let parent = view.superview else { return false }
+      view = parent
+    }
+  }
+
+  override func resignKey() {
+    super.resignKey()
+    // A Command released while another window or app has the keyboard never reaches this one.
+    commandPressed = false
+  }
+
   private func installClipboardImageChannel(messenger: FlutterBinaryMessenger) {
     let channel = FlutterMethodChannel(name: kClipboardImageChannel, binaryMessenger: messenger)
     channel.setMethodCallHandler { call, result in
@@ -441,4 +487,17 @@ enum HarnessAppMenu {
       for item in group { menu.addItem(item) }
     }
   }
+}
+
+/// Whether [event] is a ⌘V that only a posted key event could produce: Command on the
+/// key's flags with no Command press seen before it.
+///
+/// Dictation tools (Wispr Flow, SuperWhisper), clipboard managers and text expanders paste
+/// by posting exactly that. Flutter's keyboard tracks modifiers from their presses, so it
+/// reports Command up and drops the chord: nothing pastes (flutter/flutter#184571). A ⌘V
+/// typed on a keyboard always has its Command press first, and stays on Flutter's path.
+func isInjectedPaste(_ event: NSEvent, commandPressed: Bool) -> Bool {
+  let modifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
+  return event.type == .keyDown && !commandPressed && modifiers == .command
+    && event.charactersIgnoringModifiers?.lowercased() == "v"
 }

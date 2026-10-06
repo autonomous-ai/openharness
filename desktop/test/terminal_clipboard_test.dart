@@ -6,8 +6,10 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/shortcuts/app_shortcuts.dart' show kTerminalOwnedKeys;
+import 'package:harness/shortcuts/shortcut_paste.dart';
 import 'package:harness/terminal/terminal_binary.dart';
 import 'package:harness/terminal/terminal_session.dart';
+import 'package:harness/widgets/terminal_composer.dart';
 import 'package:harness/widgets/terminal_panel.dart';
 import 'package:xterm/xterm.dart';
 
@@ -47,6 +49,7 @@ Future<void> mount(
   AppNotifier app,
   TerminalSession session, {
   bool readOnly = false,
+  bool composerVisible = false,
 }) async {
   await tester.pumpWidget(
     MaterialApp(
@@ -56,6 +59,8 @@ Future<void> mount(
           session: session,
           focused: true,
           readOnly: readOnly,
+          composerVisible: composerVisible,
+          onToggleComposer: composerVisible ? () {} : null,
         ),
       ),
     ),
@@ -178,6 +183,57 @@ void main() {
       await tester.pumpWidget(const SizedBox());
       original.dispose();
       next.dispose();
+      app.dispose();
+    },
+  );
+
+  onPlatform(
+    TargetPlatform.macOS,
+    'an injected ⌘V with no Command press pastes like the physical chord',
+    (tester) async {
+      // Dictation tools post ⌘V with no Command press before it, which Flutter's keyboard
+      // never sees as held (flutter/flutter#184571). The runner hands that one to Dart.
+      final app = createApp();
+      app.stateOf('m')!.terminalPasteRawAvailable = true;
+      final frames = <TerminalBinaryFrame>[];
+      final session = liveSession('a0', frames);
+      clipboard = 'dictated line\nsecond line';
+      await mount(tester, app, session);
+      pasteIntoPrimaryFocus();
+      await tester.pump(const Duration(milliseconds: 20));
+      expect(reads, 1);
+      expect(frames, hasLength(1));
+      expect(frames.single.kind, TerminalBinaryKind.paste);
+      expect(utf8.decode(frames.single.bytes), clipboard);
+      expect(frames.single.streamId, session.streamId);
+      await tester.pumpWidget(const SizedBox());
+      session.dispose();
+      app.dispose();
+    },
+  );
+
+  onPlatform(
+    TargetPlatform.macOS,
+    'an injected ⌘V in the pane composer fills the composer, not the terminal',
+    (tester) async {
+      final app = createApp();
+      expect(app.stateOf('m')!.isLocalMachine, isFalse);
+      final frames = <TerminalBinaryFrame>[];
+      final session = liveSession('a0', frames);
+      clipboard = 'dictated draft';
+      await mount(tester, app, session, composerVisible: true);
+      final composer = find.descendant(
+        of: find.byType(TerminalComposer),
+        matching: find.byType(TextField),
+      );
+      await tester.tap(composer);
+      await tester.pump();
+      pasteIntoPrimaryFocus();
+      await tester.pump(const Duration(milliseconds: 20));
+      expect(tester.widget<TextField>(composer).controller!.text, clipboard);
+      expect(frames, isEmpty);
+      await tester.pumpWidget(const SizedBox());
+      session.dispose();
       app.dispose();
     },
   );

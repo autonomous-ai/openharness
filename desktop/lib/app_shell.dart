@@ -33,6 +33,7 @@ import 'logging/app_log.dart';
 import 'logging/install.dart';
 import 'shortcuts/app_keymap.dart';
 import 'shortcuts/keyboard_practice.dart';
+import 'shortcuts/shortcut_paste.dart';
 import 'widgets/shortcuts_sheet.dart';
 import 'widgets/new_device_notice.dart';
 import 'widgets/update_notice.dart';
@@ -295,6 +296,10 @@ class _RootShellState extends ConsumerState<RootShell>
         await terminalFontStore.decreaseSize();
       case 'resetTerminalFontSize':
         await terminalFontStore.reset();
+      case 'paste':
+        // A ⌘V the runner saw posted without a Command press, which Flutter's
+        // keyboard would drop — see `shortcuts/shortcut_paste.dart`.
+        pasteIntoPrimaryFocus();
     }
   }
 
