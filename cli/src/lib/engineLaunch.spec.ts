@@ -18,6 +18,7 @@ import {
   terminalHintLines,
   buildEngineCommandArgv,
   buildEngineLaunchArgv,
+  shellAgentArgv,
   buildTerminalLaunchArgv,
   interactiveEngineShell,
   isPosixShell,
@@ -95,6 +96,24 @@ const RUN_LINE = '"$harness_engine_bin" "$@" || harness_status=$?'
 const SOURCED = /^\. '.+\.sh'$/
 
 describe('buildEngineLaunchArgv', () => {
+  it('runs the exact native command in the current shell environment after a missing-agent install', () => {
+    const dir = mkdtempSync(join(tmpdir(),'hn-shell-install-'))
+    const binary = join(dir,'fake-agent'), source = join(dir,'template'), marker = join(dir,'installed')
+    try {
+      writeFileSync(source,'#!/bin/sh\nprintf "%s\\n" "$@"\nexit 17\n',{mode:0o700})
+      const recipe: EngineInstallRecipe = {command:`cp '${source}' '${binary}'; touch '${marker}'`,source:'test fixture',executable:{names:[binary]}}
+      const argv = shellAgentArgv(binary,['task; $(literal)','--model','mine'],recipe,'/missing-node')
+      try { execFileSync(argv[0],argv.slice(1),{encoding:'utf8'}); throw new Error('expected native exit 17') }
+      catch (error) {
+        expect((error as {status:number}).status).toBe(17)
+        expect(String((error as {stdout:string}).stdout)).toContain('task; $(literal)\n--model\nmine\n')
+      }
+      expect(existsSync(marker)).toBe(true)
+      rmSync(marker)
+      try { execFileSync(argv[0],argv.slice(1),{encoding:'utf8'}) } catch (error) { expect((error as {status:number}).status).toBe(17) }
+      expect(existsSync(marker)).toBe(false)
+    } finally { rmSync(dir,{recursive:true,force:true}) }
+  })
   it.each(['claude', 'terminal'] as const)('clears inherited harness context before a plain %s session runs', (engine) => {
     const argv = buildEngineLaunchArgv(engine, { clearEnv: harnessEnvToClear() }, '/bin/sh', undefined, undefined, NO_TMUX)
     const probe = 'for name in HARNESS_DSH HARNESS_DSH_DIR HARNESS_WORKSPACE HARNESS_CONTEXT_FILE HARNESS_SKILLS_DIR HARNESS_PRIVATE_GRID; do printenv "$name" && exit 9; done; printf "%s" "$KEEP_ME"'
