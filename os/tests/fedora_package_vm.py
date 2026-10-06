@@ -70,7 +70,15 @@ def main():
             threading.Thread(target=server.serve_forever, daemon=True).start()
             endpoint = f'http://10.0.2.2:{server.server_port}'
             machine = SessionVM(output / 'package-install', disk, fixture / 'Image')
-            machine.start()
+            machine.start(offline=True)
+            # Isolate the private update fixture before enabling networking.
+            # A slow package transaction otherwise lets the normal timer stage
+            # public releases before exercise() supplies its exact test feed.
+            machine.wait_user('systemctl --user show-environment >/dev/null', 60)
+            machine.user('systemctl --user mask --now harness-update.timer harness-update.service')
+            machine.user('test ! -e ~/.local/state/harness-os/updates/ready.json && '
+                         'test ! -e ~/.local/state/harness-os/updates/current')
+            machine.monitor('set_link', name='hnnet', up=True)
             machine.wait_user('test -f ~/.local/state/harness-os/onboarded && pgrep -u 1000 -x opencode >/dev/null', 150)
             machine.user('mkdir -p ~/projects/package-preservation; printf %s keep-my-project '
                          '> ~/projects/package-preservation/proof.txt')
@@ -94,10 +102,17 @@ print(json.dumps({key:identity(value) for key,value in pids.items()},sort_keys=T
                                 ' -o ' + shlex.quote(destination), timeout=130)
                 machine.command('printf %s ' + shlex.quote(metadata['package']['sha256'] + '  ' + destination + '\n') +
                                 ' | sha256sum -c -')
-                text, _ = machine.command('manager=$(command -v dnf5 || command -v microdnf); '
-                                          '"$manager" -y --setopt=install_weak_deps=False --setopt=gpgcheck=True '
+                # The prepared image already has the signed Fedora dependencies;
+                # the container lifecycle check covers repository provisioning.
+                # This local transaction still checks dependencies, without an
+                # unrelated mirror refresh delaying the live-process assertions.
+                text, _ = machine.command('if command -v dnf5 >/dev/null; then '
+                                          'manager=dnf5; repo_option="--disable-repo=*"; else '
+                                          'manager=microdnf; repo_option="--disablerepo=*"; fi; '
+                                          '"$manager" -y "$repo_option" '
+                                          '--setopt=install_weak_deps=False --setopt=gpgcheck=True '
                                           '--setopt=localpkg_gpgcheck=False --nodocs install ' + shlex.quote(destination),
-                                          timeout=600)
+                                          timeout=180)
                 (output / (name + '.log')).write_text(text)
                 expected = '\t'.join(['harness-os-session', metadata['package']['version'],
                                       str(metadata['package']['release']), 'aarch64'])
@@ -108,11 +123,6 @@ print(json.dumps({key:identity(value) for key,value in pids.items()},sort_keys=T
                 assert process_line in [line.strip() for line in after.splitlines()], 'RPM restarted running work'
                 machine.user('test "$(cat ~/projects/package-preservation/proof.txt)" = keep-my-project')
             result['checks'].append('Native RPM install and upgrade preserve the running agent/daemon process identities and project')
-            # Keep public releases out of the private fixture. The package bytes
-            # and its normal timer remain intact; the shared updater acceptance
-            # below starts that timer with its verified local feed.
-            machine.user('systemctl --user mask harness-update.timer; '
-                         'systemctl --user stop harness-update.timer harness-update.service')
             result['first_shutdown'] = machine.poweroff()
             machine.close()
             machine = SessionVM(output / 'packaged-session', disk, fixture / 'Image')
@@ -152,7 +162,8 @@ print(json.dumps({key:identity(value) for key,value in pids.items()},sort_keys=T
             machine.command('chmod 440 /etc/sudoers.d/99-harness-update-test; '
                             'visudo -cf /etc/sudoers.d/99-harness-update-test')
             machine.user('systemctl --user stop harness-update.timer harness-update.service; '
-                         'systemctl --user unmask harness-update.timer; systemctl --user daemon-reload')
+                         'systemctl --user unmask harness-update.timer harness-update.service; '
+                         'systemctl --user daemon-reload')
             result['fast_updates'] = exercise(UserSession(machine), updates, endpoint)
             machine.keyboard('after-fedora-updates')
             result['checks'].append('The packaged user updater activates and rolls back real ARM binaries, preserving work and keyboard input')
