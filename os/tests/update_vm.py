@@ -28,9 +28,9 @@ def network_state(vm, name):
         'sudo -n journalctl -b -u NetworkManager -u systemd-logind -u systemd-suspend --no-pager',
         'sudo -n journalctl -b -k --no-pager',
     ]:
-        output, status = vm.command(command, timeout=15, check=False)
+        output, status = vm.command('env PAGER= LC_ALL=C ' + command, timeout=15, check=False)
         state[command] = {'status': status, 'output': output}
-    (vm.folder / (name + '-network.json')).write_text(json.dumps(state, indent=2) + '\n')
+        (vm.folder / (name + '-network.json')).write_text(json.dumps(state, indent=2) + '\n')
 
 
 def main():
