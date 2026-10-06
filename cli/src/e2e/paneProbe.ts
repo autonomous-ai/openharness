@@ -236,8 +236,8 @@ export async function runCheck(tmux: Tmux, pane: string, check: SmokeCheck, opts
     await tmux.type(pane, `${check.prompt} (${ref})`)
   }
 
-  // The proof, never the reply: a log line for exactly these numbers, the file on disk as asked (or
-  // gone), the read file's token on the pane after this prompt (nobody guesses `kiwi-4821-tulip`),
+  // The proof, never the reply: a log line for exactly these numbers, the file on disk as asked,
+  // the read file's token on the pane after this prompt (nobody guesses `kiwi-4821-tulip`),
   // or the engine's own record of the tool coming back with results.
   const proven = (afterEcho: string | null, tail: string): { logLines?: string[] } | null => {
     if (check.log) {
@@ -247,7 +247,6 @@ export async function runCheck(tmux: Tmux, pane: string, check: SmokeCheck, opts
     if (check.sessionTool) return o.toolResult(ref, check.sessionTool).answered ? {} : null
     if (check.file) {
       const content = o.readFile(check.file.path)
-      if (check.file.absent) return content === null ? {} : null
       if (content === null) return null
       const f = check.file
       if (f.equals !== undefined && content.trim() !== f.equals) return null
@@ -298,8 +297,7 @@ export async function runCheck(tmux: Tmux, pane: string, check: SmokeCheck, opts
   else if (check.sessionTool) {
     const used = o.toolResult(ref, check.sessionTool)
     note = !used.called ? `${check.sessionTool} was never called` : `${check.sessionTool} came back without results${used.output ? `: ${JSON.stringify(used.output)}` : ''}`
-  } else if (check.file?.absent) note = `${check.file.path} still exists`
-  else if (check.file) {
+  } else if (check.file) {
     const content = o.readFile(check.file.path)
     note = content === null ? `${check.file.path} does not exist` : `${check.file.path} is ${JSON.stringify(content.trim().slice(0, 120))}`
   } else note = `${check.answerFromFile}'s token never appeared after the question`
