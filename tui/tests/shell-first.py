@@ -164,6 +164,11 @@ def finder_text():
     return pane[start:pane.find('╰',start)] if start>=0 else ''
 def finder_ready():
     return re.search(r'\d+/\d+',finder_text())
+def browsing(directory):
+    # A recursive result already contains its descendants' names. Those names
+    # alone do not prove Tab was handled or the destination's list was loaded.
+    query=':~/'+directory.relative_to(BASE).as_posix()+'/'
+    return '> '+query+' ' in finder_text()
 def prompt_ready():
     lines=[line.strip() for line in hn('capture-pane','-p',check=False).splitlines() if line.strip()]
     return bool(lines) and lines[-1]=='SHELL_READY>'
@@ -255,20 +260,20 @@ try:
         # directory must rank first and open; the match count need not be one.
         wait(lambda:finder_ready() and '> :cd ' in finder_text() and re.search(r'\b[1-9]\d*/\d+',finder_text()),'fuzzy folder search without full spelling')
         keys('Tab')
-        wait(lambda:'cool-project/' in finder_text() and 'client 日本/' in finder_text(),'Tab browses code')
+        wait(lambda:browsing(PROJECT/'code') and 'cool-project/' in finder_text() and 'client 日本/' in finder_text(),'Tab browses code')
         tm('send-keys','-t','test','-l','clpj')
         wait(lambda:finder_ready() and re.search(r'\b1/\d+',finder_text()),'fuzzy child name')
         keys('Right')
-        wait(lambda:finder_ready() and re.search(r'\b1/1\b',finder_text()) and 'cool-project/' in finder_text(),'Right browses empty directory')
+        wait(lambda:browsing(PROJECT/'code'/'cool-project') and re.search(r'\b1/1\b',finder_text()),'Right browses empty directory')
         keys('M-Up')
-        wait(lambda:'client 日本/' in finder_text(),'Alt-Up goes back')
+        wait(lambda:browsing(PROJECT/'code') and 'client 日本/' in finder_text(),'Alt-Up goes back')
         tm('send-keys','-t','test','-l','cl日')
         wait(lambda:finder_ready() and re.search(r'\b2/\d+',finder_text()),'fuzzy Unicode folder and descendant')
         keys('Tab')
-        wait(lambda:'empty folder/' in finder_text(),'Unicode folder entered')
+        wait(lambda:browsing(FOLDER.parent) and 'empty folder/' in finder_text(),'Unicode folder entered')
         tm('send-keys','-t','test','-l','emp')
         keys('Tab')
-        wait(lambda:finder_ready() and re.search(r'\b1/1\b',finder_text()),'empty folder remains selectable')
+        wait(lambda:browsing(FOLDER) and re.search(r'\b1/1\b',finder_text()),'empty folder remains selectable')
         keys('Enter')
         wait(lambda:not finder_ready() and 'empty folder' in hn('capture-pane','-p'),'Enter inserts full quoted path')
         assert not (BASE/'fixture-agent.json').exists(),'folder choice executed the command'
@@ -281,13 +286,13 @@ try:
         tm('send-keys','-t','test','-l','claude :')
         wait(finder_ready,'relative path folder picker')
         tm('send-keys','-t','test','-l','code/')
-        wait(lambda:'cool-project/' in finder_text() and 'client 日本/' in finder_text(),'relative code/ resolves against shell cwd')
+        wait(lambda:'> :code/ ' in finder_text() and 'cool-project/' in finder_text() and 'client 日本/' in finder_text(),'relative code/ resolves against shell cwd')
         tm('send-keys','-t','test','-l','missing/')
         wait(lambda:finder_ready() and ('unavailable' in finder_text() or 'Could not read' in finder_text()),'missing folder explains failure')
         assert re.search(r'\b0/0\b',finder_text()),screen()
         keys('Enter');assert finder_ready(),'empty match unexpectedly accepted'
         keys('M-Up')
-        wait(lambda:'client 日本/' in finder_text(),'go back from unavailable directory')
+        wait(lambda:browsing(PROJECT/'code') and 'client 日本/' in finder_text(),'go back from unavailable directory')
         keys('Escape');wait(lambda:not finder_ready(),'folder cancel')
         assert 'SHELL_READY> claude :' in hn('capture-pane','-p'),'cancel changed the original draft'
         keys('C-c');wait(prompt_ready,'draft discarded without launch')
