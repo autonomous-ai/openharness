@@ -188,7 +188,7 @@ static void capacity(const char *dir) {
  start();pushed("reviewed","reviewed-request","The whole project");view(INBOX);act(A_QUESTION,0);question_state_reply(true,false,"reviewed-request","reviewed-token");
  for(int i=0;i<80;i++){snprintf(agent,sizeof agent,"new-%03d",i);snprintf(id,sizeof id,"new-request-%03d",i);pushed(agent,id,"The whole project");}
  assert(s.q.valid&&notice("reviewed")&&notice("new-079")&&s.notice_count==72&&s.notice_overflow);
- printf("Question capacity: PASS (25/64 exact card routes, all pending retained across results/empty snapshots, selected result reserved); Pro notice=%zu bytes, receipt=%zu bytes, arrays=%zu bytes\n",sizeof(cable_notif_t),sizeof(notice_receipt_t),sizeof s.notice+sizeof s.notice_reads+NOTICES*sizeof(cable_notif_t));
+ printf("Question capacity: PASS (25/64 exact card routes, all pending retained across results/empty snapshots, selected result reserved); Pro notice=%zu bytes, receipt=%zu bytes, persistent arrays=%zu bytes, merge scratch=%zu bytes\n",sizeof(cable_notif_t),sizeof(notice_receipt_t),sizeof s.notice+sizeof s.notice_reads,NOTICES*(sizeof(pro_notice_plan_t)+sizeof(uint8_t)));
 }
 static void transcript(const char *path) {
  if(!path||!*path)return;FILE *f=fopen(path,"rb");assert(f);fseek(f,0,SEEK_END);long n=ftell(f);rewind(f);assert(n>0&&n<1000000);char *bytes=calloc((size_t)n+1,1);assert(bytes&&fread(bytes,1,(size_t)n,f)==(size_t)n);fclose(f);

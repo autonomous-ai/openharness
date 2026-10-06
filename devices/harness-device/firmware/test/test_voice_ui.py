@@ -30,6 +30,7 @@ harness += r'''
 #define PRO_TR(text) (text)
 #include <assert.h>
 #include "../../cable_features.h"
+#include "../../cable_machines.h"
 static uint32_t host_features=31;
 static bool cable_client_supports(uint32_t features) { return (host_features & features)==features; }
 #include "selection.h"
@@ -49,7 +50,8 @@ enum { VOICE_CMD_NONE, VOICE_CMD_GOAL, VOICE_CMD_LOOP };
 typedef int view_t;
 typedef struct { int kind, value, dy, velocity; uint32_t revision; char id[64], text[192]; } action_t;
 #define ID_MAX 48
-typedef struct { char name[64], id[64], engine[16], machine_id[48], machine[64], session[80]; } agent_t;
+typedef struct { char name[64], id[64], engine[16], machine_id[48], machine[64], session[80]; bool busy; uint32_t last_busy; } agent_t;
+typedef struct { char agent_id[48]; bool question, question_current, question_unavailable; } cable_notif_t;
 static ht_selection_t selection;
 static ht_carry_t carry;
 static ht_visit_t visit;
@@ -63,8 +65,11 @@ static struct {
     uint32_t pet_until, nap_until, voice_retry_until, voice_started, voice_wait_until, voice_generation, voice_question_revision, voice_draft_revision;
     int voice_question_index;
     char title[80], message[256], voice_target[64], pending_focus[64], pending_machine[64], opening_notice[48];
-    char notice_host[48];
-    char work_agent[64], work_host[48]; uint32_t work_revision, work_generation; uint8_t work_mode, work_voice_mode;
+    char notice_host[48], selected_tab[48];
+    char work_agent[64], work_host[48]; uint32_t work_revision, work_generation, work_roster_after; bool work_roster_pending; uint8_t work_mode, work_voice_mode;
+    struct { char machine[48], session[80], engine[12]; } work_capture;
+    cable_machine_t machines[2]; int machine_count;
+    cable_notif_t notice[2]; int notice_count;
     struct {char draft[48],agent[48],host[48],machine[48],session[80];uint32_t request,until;uint8_t mode;bool accepted;} send_feedback;
     pro_metrics_t metrics; pro_carry_review_t carry_review; pro_draft_recovery_t draft_recovery;
     struct { bool valid, supported, loading, pending, uncertain; uint32_t revision, deadline; int index; char error[120],speech_error[96],agent[64],name[64],token[48]; struct { bool can_text; } item[4]; } q;
@@ -84,6 +89,10 @@ static agent_t *active(void) { return &s.agents[0]; }
 #define COPY(dst, src) snprintf(dst, sizeof(dst), "%s", (src) ? (src) : "")
 #define ESP_LOGI(...) ((void)0)
 uint32_t ms(void) { return now; }
+#ifdef DEVICE_PRO_COMPANION
+static uint32_t roster_generation=1;
+static uint32_t cable_client_agent_generation(void) { return roster_generation; }
+#endif
 void change(void) {}
 void surface_tick(uint32_t value) { (void)value; }
 void display_lock(void) {}
@@ -133,10 +142,11 @@ void open_question(void) { assert(false); }
 bool queue(action_t action) { if (queue_full) return false; queued = action; return true; }
 '''
 harness += '#ifdef DEVICE_PRO_COMPANION\n'
-for name in ('pro_send_feedback_clear','pro_send_feedback_matches','pro_send_feedback_begin','pro_send_feedback_text','pro_work_local','pro_work_available','pro_work_capture_available','pro_work_draft_available'):
+for name in ('pro_send_feedback_clear','pro_send_feedback_matches','pro_send_feedback_begin','pro_send_feedback_text','pro_work_local','pro_work_visible','pro_work_block_reason','pro_work_available','pro_work_capture_pin','pro_work_capture_available','pro_work_draft_available'):
     harness += function(name)
 harness += '#endif\n'
 harness += function('ui_project_set_machine')
+harness += function('ui_workspace_applied')
 harness += function('question_view') + function('copy') + function('input_cancel') + function('view') + function('voice_close') + function('workspace_failed')
 harness += r'''
 #ifdef DEVICE_PRO_COMPANION
@@ -229,7 +239,7 @@ static void test_pro_instructions(void) {
         if(invalidation==0) COPY(s.agents[0].engine,"codex");
         else if(invalidation==1) recipient_missing=true;
         else host_features=0;
-        work(delayed); assert(!starts && !s.voice_open && s.view==MESSAGE && s.message[0]);
+        work(delayed); assert(!starts && !s.voice_open && s.view==WORK_INTENT && s.message[0]);
     }
     reset(); choose_instruction(PRO_WORK_LOOP); dispatch(instruction_action(A_WORK_RECORD,0));
     action_t delayed=queued; discard(); work(delayed); assert(!starts && !s.voice_open);
@@ -267,7 +277,7 @@ static void test_pro_instructions(void) {
         dispatch(instruction);assert(!s.voice_open&&!starts);
         dispatch((action_t){.kind=A_VOICE,.value=pro_work_voice_value(mode),.id="agent"});
         // A fresh direct request to a known new local host is allowed; the old sheet is not.
-        assert(s.voice_open==(invalidation==4||invalidation==8));if(s.voice_open) {work(queued);assert(starts==1);}
+        assert(s.voice_open==(invalidation==4));if(s.voice_open) {work(queued);assert(starts==1);}
         else assert(!starts);
     }
     for(int mode=PRO_WORK_GOAL;mode<=PRO_WORK_LOOP;mode++)for(int invalidation=0;invalidation<7;invalidation++) {
@@ -504,7 +514,11 @@ int main(void) {
     reset(); speak(); delayed = queued; COPY(s.pending_machine,"machine"); ui_set_connected(false); work(delayed);
     assert(!s.pending_machine[0]);
     assert(!starts && !s.voice_open && s.view == HOME);
-    ui_set_connected(true); begin();
+    ui_set_connected(true);
+#ifdef DEVICE_PRO_COMPANION
+    speak();assert(!s.voice_open);ui_workspace_applied("",++roster_generation);
+#endif
+    begin();
     // Recover from a legacy hidden capture without allocating a second one.
     s.view = HOME; s.voice_open = false; speak();
     assert(s.view == VOICE && s.voice_open && starts == 1);

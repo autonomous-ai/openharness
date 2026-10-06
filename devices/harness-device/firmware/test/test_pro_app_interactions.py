@@ -95,6 +95,8 @@ static bool congested,transport_ok=true;
 static unsigned enqueued,answers,reads,opens,voice_commands;
 static action_t sent,transport;
 static uint32_t ms(void) { return now; }
+static uint32_t roster_generation = 1;
+static uint32_t cable_client_agent_generation(void) { return roster_generation; }
 static uint32_t esp_random(void) { return random_value++; }
 static bool cable_client_supports(uint32_t mask) { return (features&mask)==mask; }
 static agent_t *active(void) { return s.active>=0&&s.active<s.count?&s.agents[s.active]:NULL; }
@@ -139,7 +141,8 @@ static uint16_t color(unsigned rgb) { return ht_rgb(rgb); }
 #define SEL color(HT_THEME_SELECTION)
 static void dispatch(action_t a);
 '''
-for name in ("pro_send_feedback_clear", "pro_work_local", "pro_work_available", "pro_busy_reset", "question_view", "waiting", "recap_preview", "notice_was_read", "notice_forget_read", "notice_flush_reads", "notice_mark_read", "notice_open", "notice_sync_view", "notice_selection", "notice_restore_selection", "notice_remove", "pro_notice_pinned", "notice_add", "ui_notif_replace",
+code += typedef("pro_notice_plan_t", source=SOURCE)
+for name in ("pro_send_feedback_clear", "pro_work_local", "pro_work_visible", "pro_work_block_reason", "pro_work_capture_pin", "pro_busy_reset", "question_view", "waiting", "recap_preview", "notice_was_read", "notice_forget_read", "notice_flush_reads", "notice_mark_read", "notice_open", "notice_sync_view", "notice_selection", "notice_restore_selection", "notice_remove", "pro_notice_pinned", "notice_add", "pro_notice_plan_source", "pro_notice_plan_card", "pro_notice_replace", "ui_notif_replace",
              "visit_emit", "selection_emit", "carry_emit", "make_action", "read_question", "open_question",
              "pro_open_in_app", "question_answer", "question_rows", "question_move", "send_answer", "question_load", "pro_question_signature", "ui_question_show",
              "ui_question_state", "ui_answer_receipt", "ui_question_close", "pro_notice_source", "ui_set_connected",

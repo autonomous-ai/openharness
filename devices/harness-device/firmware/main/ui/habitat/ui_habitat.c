@@ -237,7 +237,12 @@ static EXT_RAM_BSS_ATTR struct {
     char work_host[ID_MAX];
     char reader_agent[ID_MAX];
     uint32_t work_revision, work_generation;
+    uint32_t work_roster_after;
+    bool work_roster_pending;
     uint8_t work_mode, work_voice_mode;
+    struct {
+        char machine[ID_MAX], session[80], engine[12];
+    } work_capture;
     pro_metrics_t metrics;
     pro_carry_review_t carry_review;
     pro_draft_recovery_t draft_recovery;
@@ -616,26 +621,76 @@ static bool pro_work_local(const agent_t *a)
     return a && a->machine_id[0] && s.draft_recovery.current_host[0] &&
         !strcmp(a->machine_id, s.draft_recovery.current_host);
 }
-static bool pro_work_available(const agent_t *a, int mode)
+static bool pro_work_visible(const agent_t *a, int mode)
 {
     if (mode == PRO_WORK_TASK) return true;
-    return s.connected && !s.loading && pro_work_local(a) &&
+    return pro_work_local(a) &&
         pro_work_supported(a->engine, mode, cable_client_supports(CABLE_FEATURE_DRAFT));
+}
+static const char *pro_work_block_reason(const agent_t *a, int mode)
+{
+    // Negative evidence only. Roster presence and voice.draft cannot attest
+    // process readiness; the host still validates delivery at submission.
+    if (!s.connected) return "Connect to Harness.";
+    if (s.work_roster_pending) return "Finding your panes...";
+    if (s.loading || !a) return "Choose a pane.";
+    if (!strcmp(a->engine, "terminal")) return "Choose an agent pane.";
+    if (!pro_work_local(a) && a->machine_id[0]) {
+        for (int i = 0; i < s.machine_count; i++) if (!strcmp(a->machine_id, s.machines[i].id)) {
+            if (!strcmp(s.machines[i].state, "offline")) return "This computer is offline.";
+            if (!strcmp(s.machines[i].state, "needs-link")) return "Link this computer in Harness.";
+            break; // unknown or an absent row says nothing about reachability
+        }
+    }
+    if (mode != PRO_WORK_TASK && !pro_work_local(a) &&
+        pro_work_supported(a->engine, mode, cable_client_supports(CABLE_FEATURE_DRAFT)))
+        return !strcmp(a->engine, "claude") ? "Goal and Loop need a local pane." : "Goal needs a local pane.";
+    if (!pro_work_visible(a, mode)) return "Choose the pane and instruction again.";
+    for (int i = 0; i < s.notice_count; i++) {
+        const cable_notif_t *n = &s.notice[i];
+        if (n->question && n->question_current && !strcmp(a->id, n->agent_id))
+            return n->question_unavailable ? "Check its question in Harness." : "Answer its question first.";
+    }
+    if (mode != PRO_WORK_TASK && a->busy && (uint32_t)(ms() - a->last_busy) <= 25000)
+        return "Wait for this turn to finish.";
+    return NULL;
+}
+static bool pro_work_available(const agent_t *a, int mode)
+{
+    return !pro_work_block_reason(a, mode);
+}
+static void pro_work_capture_pin(const agent_t *a, int mode)
+{
+    COPY(s.work_capture.machine, a->machine_id);
+    COPY(s.work_capture.session, a->session);
+    COPY(s.work_capture.engine, a->engine);
+    pro_draft_recovery_pin(&s.draft_recovery, a->id, (uint8_t)mode);
 }
 static bool pro_work_capture_available(const char *agent, int mode)
 {
-    if (mode == PRO_WORK_TASK) return true;
     int recipient = find(agent);
     return recipient >= 0 && pro_work_available(&s.agents[recipient], mode) &&
+        !strcmp(s.agents[recipient].machine_id, s.work_capture.machine) &&
+        !strcmp(s.agents[recipient].session, s.work_capture.session) &&
+        !strcmp(s.agents[recipient].engine, s.work_capture.engine) &&
         !strcmp(agent, s.draft_recovery.recipient) && mode == s.draft_recovery.mode &&
         s.draft_recovery.capture_generation == s.draft_recovery.generation &&
-        pro_draft_recovery_same_host(&s.draft_recovery);
+        !strcmp(s.draft_recovery.original_host, s.draft_recovery.current_host) &&
+        (mode == PRO_WORK_TASK || pro_draft_recovery_same_host(&s.draft_recovery));
 }
 static bool pro_work_draft_available(void)
 {
+    // A new busy/question observation must not strand words already recorded.
+    // The reviewed writer owns final readiness checks when Send is requested.
+    int recipient = find(draft.page.agent);
     return s.work_voice_mode == PRO_WORK_TASK ||
-        (!strcmp(draft.page.agent, s.work_agent) &&
-         pro_work_capture_available(draft.page.agent, s.work_voice_mode));
+        (s.connected && !s.loading && recipient >= 0 &&
+         pro_work_visible(&s.agents[recipient], s.work_voice_mode) &&
+         !strcmp(draft.page.agent, s.work_agent) &&
+         !strcmp(draft.page.agent, s.draft_recovery.recipient) &&
+         s.work_voice_mode == s.draft_recovery.mode &&
+         s.draft_recovery.capture_generation == s.draft_recovery.generation &&
+         pro_draft_recovery_same_host(&s.draft_recovery));
 }
 static void pro_busy_reset(void)
 {
@@ -2762,10 +2817,11 @@ static void dispatch(action_t a)
         int recipient = find(s.work_agent);
         if (recipient < 0) break;
         int mode = a.kind == A_WORK_MODE ? a.value : s.work_mode;
-        if (!pro_work_available(&s.agents[recipient], mode) ||
+        if (!pro_work_visible(&s.agents[recipient], mode) ||
             (mode != PRO_WORK_TASK && (s.work_generation != s.draft_recovery.generation ||
                                       strcmp(s.work_host, s.draft_recovery.current_host)))) break;
         if (a.kind == A_WORK_MODE) { s.work_mode = (uint8_t)mode; change(); break; }
+        if (!pro_work_available(&s.agents[recipient], mode)) { change(); break; }
         a.kind = A_VOICE; a.value = pro_work_voice_value(mode);
         a.text[0] = 0; a.dy = 0;
         ht_gesture_guard(&gesture, ms());
@@ -3177,9 +3233,17 @@ static void dispatch(action_t a)
         if (question_view(s.view) && a.value != 4) break;
         // Reject known engine/recipient mismatches before recording. Existing
         // voice.draft support does not attest a host's strict intent handling.
-        if (a.value == 1 || a.value == 8) {
+        if (a.value == 0 || a.value == 1 || a.value == 3 || a.value == 8) {
             int recipient = find(a.id);
-            if (recipient < 0 || !pro_work_available(&s.agents[recipient], pro_work_voice_mode(a.value))) break;
+            const char *reason = pro_work_block_reason(recipient >= 0 ? &s.agents[recipient] : NULL,
+                                                       pro_work_voice_mode(a.value));
+            if (reason) {
+                if (s.view != WORK_INTENT &&
+                    ((a.value == 1 || a.value == 8) || (s.view != HOME && s.view != AGENT))) {
+                    COPY(s.title, "Instruction unavailable"); COPY(s.message, reason); view(MESSAGE);
+                }
+                change(); break;
+            }
         }
         pro_speech_cancel(true);
 #endif
@@ -3235,7 +3299,9 @@ static void dispatch(action_t a)
             }
             if (a.value != 5 && a.value != 6) {
                 s.work_voice_mode = pro_work_voice_mode(a.value);
-                pro_draft_recovery_pin(&s.draft_recovery, a.id, (uint8_t)s.work_voice_mode);
+                if (a.value == 0 || a.value == 1 || a.value == 3 || a.value == 8)
+                    pro_work_capture_pin(&s.agents[find(a.id)], s.work_voice_mode);
+                else pro_draft_recovery_pin(&s.draft_recovery, a.id, (uint8_t)s.work_voice_mode);
             }
             if (a.value == 1 || a.value == 8) {
                 COPY(s.work_agent, a.id);
@@ -3646,12 +3712,18 @@ static void worker(void *unused)
                     display_unlock();
                     break;
                 }
-                if (a.value == 1 || a.value == 8) {
+                if (a.value == 0 || a.value == 1 || a.value == 3 || a.value == 8) {
                     if (!pro_work_capture_available(a.id, pro_work_voice_mode(a.value))) {
+                        int recipient = find(a.id);
+                        const char *reason = pro_work_block_reason(recipient >= 0 ? &s.agents[recipient] : NULL,
+                                                                   pro_work_voice_mode(a.value));
                         voice_close();
                         COPY(s.title, "Instruction unavailable");
-                        COPY(s.message, "Choose the pane and instruction again.");
-                        view(MESSAGE);
+                        COPY(s.message, reason ? reason : "Choose the pane and instruction again.");
+                        if (reason && (s.voice_return == WORK_INTENT ||
+                            ((a.value == 0 || a.value == 3) && (s.voice_return == HOME || s.voice_return == AGENT))))
+                            view(s.voice_return);
+                        else view(MESSAGE);
                         display_unlock();
                         break;
                     }
@@ -4406,10 +4478,20 @@ static void pro_notice_source(const char *host)
 #endif
 void ui_set_connected(bool value)
 {
+#ifdef DEVICE_PRO_COMPANION
+    uint32_t roster_generation = cable_client_agent_generation();
+#endif
     display_lock();
+#ifdef DEVICE_PRO_COMPANION
+    if (s.connected != value) {
+        s.work_roster_pending = true;
+        s.work_roster_after = roster_generation;
+    }
+#endif
     if (!value) {
 #ifdef DEVICE_PRO_COMPANION
         pro_send_feedback_clear();
+        for (int i = 0; i < s.notice_count; i++) s.notice[i].question_current = false;
         if (!s.notice_host[0]) pro_notice_source(NULL);
         pro_busy_reset();
         pro_metrics_source(&s.metrics,NULL,false);
@@ -4466,11 +4548,19 @@ void ui_set_connected(bool value)
     display_unlock();
 }
 #ifdef DEVICE_PRO_COMPANION
-void ui_draft_source(const char *machine)
+bool ui_draft_source(const char *machine)
 {
+    uint32_t roster_generation = cable_client_agent_generation();
     display_lock();
     pro_notice_source(s.connected ? machine : NULL);
-    if (pro_draft_recovery_source(&s.draft_recovery, s.connected ? machine : NULL)) {
+    bool changed = pro_draft_recovery_source(&s.draft_recovery, s.connected ? machine : NULL);
+    if (changed) {
+        // A welcome can change owner without a prior disconnect. Old rows and
+        // fleet state are not evidence about the new computer. Only a newer
+        // completed roster may enable a fresh recording after this boundary.
+        s.work_roster_pending = true;
+        s.work_roster_after = roster_generation;
+        s.machine_count = 0;
         pro_send_feedback_clear();
         pro_busy_reset();
         input_cancel();
@@ -4488,6 +4578,7 @@ void ui_draft_source(const char *machine)
         change();
     }
     display_unlock();
+    return changed;
 }
 void ui_metrics_source(const char *machine, bool supported)
 {
@@ -4976,6 +5067,12 @@ void ui_land_after_reload(void)
 void ui_workspace_applied(const char *tab, uint32_t generation)
 {
     display_lock();
+#ifdef DEVICE_PRO_COMPANION
+    if (s.connected && s.work_roster_pending && (int32_t)(generation - s.work_roster_after) > 0) {
+        s.work_roster_pending = false;
+        change();
+    }
+#endif
     if (!strcmp(s.selected_tab,workspace.pending)) ht_workspace_applied(&workspace,tab,generation);
     display_unlock();
 }
@@ -5217,23 +5314,148 @@ void ui_notif_read(const char *id, const char *token)
     display_unlock();
     if (opened) ui_focus_project(id);
 }
+#ifdef DEVICE_PRO_COMPANION
+typedef struct {
+    uint32_t revision;
+    int8_t old, row, token;
+} pro_notice_plan_t;
+
+static const cable_notif_t *pro_notice_plan_source(const pro_notice_plan_t *p, const cable_notif_t *rows)
+{
+    return p->row >= 0 ? &rows[p->row] : &s.notice[p->old];
+}
+static void pro_notice_plan_card(cable_notif_t *dst, const pro_notice_plan_t *p,
+                                 const cable_notif_t *rows, const cable_notif_t *old)
+{
+    if (p->row < 0) { *dst=*old; return; }
+    const cable_notif_t *row=&rows[p->row];
+    memset(dst,0,sizeof *dst);
+    COPY(dst->agent_id,row->agent_id);
+    COPY(dst->name,row->name[0] ? row->name : "Harness");
+    COPY(dst->machine,row->machine);
+    recap_preview(dst->summary,sizeof dst->summary,row->summary);
+    dst->question=row->question;dst->failed=row->failed;
+    COPY(dst->read_token,rows[p->token].read_token);
+    dst->read_on_dial=notice_was_read(dst);
+    dst->display_revision=p->revision;
+    dst->question_current=dst->question && s.connected;
+    if (old) {
+        COPY(dst->question_id,old->question_id);
+        dst->question_signature=old->question_signature;
+        dst->question_unavailable=old->question_unavailable;
+        dst->read_on_dial=old->read_on_dial;
+    }
+}
+static void pro_notice_replace(const cable_notif_t *rows, int count, const char *selected)
+{
+    // The display lock protects this small plan. Keep every old card intact
+    // until the merge is decided; no second 72-card copy or heap allocation.
+    static pro_notice_plan_t plan[NOTICES];
+    static uint8_t origin[NOTICES];
+    _Static_assert(NOTICES <= INT8_MAX, "notification plan indices must fit");
+    cable_notif_t card;
+    int old_count=s.notice_count, used=0, cursor=s.offset, held=-1;
+    if (selected[0] && s.notice[s.offset].read_on_dial && s.notice[s.offset].read_token[0]) held=s.offset;
+    // Mirror notice_add's ordering and revisions without overwriting sources.
+    for (int i=count-1;i>=0;i--) {
+        const cable_notif_t *row=&rows[i];
+        if (!row->agent_id[0] || strnlen(row->agent_id,ID_MAX)>=ID_MAX) continue;
+        int found=-1;
+        for (int j=0;j<used;j++) if (!strcmp(pro_notice_plan_source(&plan[j],rows)->agent_id,row->agent_id)) { found=j;break; }
+        if (found>=0 && !row->question && pro_notice_plan_source(&plan[found],rows)->question) {
+            plan[found].token=i; // Same duplicate-row behavior as notice_add + token assignment.
+            continue;
+        }
+        const char *current=s.view==INBOX && cursor>=0 && cursor<used ? pro_notice_plan_source(&plan[cursor],rows)->agent_id : "";
+        if (found>=0) {
+            memmove(&plan[found],&plan[found+1],(size_t)(used-found-1)*sizeof *plan);used--;
+            if (s.view==INBOX && found<cursor) cursor--;
+        }
+        int pos=0;
+        if (!row->question) while (pos<used && pro_notice_plan_source(&plan[pos],rows)->question) pos++;
+        memmove(&plan[pos+1],&plan[pos],(size_t)(used-pos)*sizeof *plan);used++;
+        if (!++s.notice_revision) ++s.notice_revision;
+        plan[pos]=(pro_notice_plan_t){.old=-1,.row=i,.token=i,.revision=s.notice_revision};
+        if (s.view==INBOX) {
+            if (current[0]) for (int j=0;j<used;j++) if (!strcmp(pro_notice_plan_source(&plan[j],rows)->agent_id,current)) { cursor=j;break; }
+            if (cursor>=used) cursor=used-1;
+        }
+    }
+    // Reserve the selected read result before retaining absent questions.
+    if (held>=0 && !s.notice[held].question) {
+        bool present=false;
+        for (int i=0;i<used;i++) if (!strcmp(pro_notice_plan_source(&plan[i],rows)->agent_id,selected)) present=true;
+        if (!present) {
+            int at=used<NOTICES ? used++ : -1;
+            if (at<0) for (int i=used-1;i>=0;i--) if (!pro_notice_plan_source(&plan[i],rows)->question) { at=i;break; }
+            if (at>=0) plan[at]=(pro_notice_plan_t){.old=held,.row=-1,.token=-1};
+        }
+    }
+    for (int k=0;k<old_count;k++) {
+        const cable_notif_t *old=&s.notice[k];
+        if (!old->question) continue;
+        int at=-1;
+        for (int i=0;i<used;i++) if (!strcmp(pro_notice_plan_source(&plan[i],rows)->agent_id,old->agent_id)) { at=i;break; }
+        if (at>=0 && pro_notice_plan_source(&plan[at],rows)->question) {
+            pro_notice_plan_card(&card,&plan[at],rows,plan[at].old>=0 ? &s.notice[plan[at].old] : NULL);
+            if (!strcmp(card.read_token,old->read_token) ||
+                (!old->read_token[0] && old->question_id[0] && !strcmp(card.summary,old->summary))) plan[at].old=k;
+            continue;
+        }
+        if (at<0) {
+            if (used==NOTICES) {
+                for (int i=used-1;i>=0;i--) {
+                    const cable_notif_t *n=pro_notice_plan_source(&plan[i],rows);
+                    if (!n->question && strcmp(n->agent_id,selected)) { at=i;break; }
+                }
+                if (at<0 && pro_notice_pinned(old,selected)) for (int i=used-1;i>=0;i--) {
+                    pro_notice_plan_card(&card,&plan[i],rows,plan[i].old>=0 ? &s.notice[plan[i].old] : NULL);
+                    if (!pro_notice_pinned(&card,selected)) { at=i;break; }
+                }
+                if (at<0) { s.notice_overflow=true;continue; }
+                if (pro_notice_plan_source(&plan[at],rows)->question) s.notice_overflow=true;
+            } else at=used++;
+        }
+        plan[at]=(pro_notice_plan_t){.old=k,.row=-1,.token=-1};
+    }
+    bool retained=false;
+    for (int i=0;i<used;i++) if (!strcmp(pro_notice_plan_source(&plan[i],rows)->agent_id,selected)) retained=true;
+    if (held>=0 && !retained && used<NOTICES) plan[used++]=(pro_notice_plan_t){.old=held,.row=-1,.token=-1};
+    // Every retained old source occurs at most once in the plan. Permute those
+    // sources first, including cycles, then materialize incoming rows in place.
+    for (int i=0;i<NOTICES;i++) origin[i]=i;
+    for (int i=0;i<used;i++) if (plan[i].old>=0) {
+        int from=0;while (origin[from]!=plan[i].old) from++;
+        if (from!=i) {
+            card=s.notice[i];s.notice[i]=s.notice[from];s.notice[from]=card;
+            uint8_t at=origin[i];origin[i]=origin[from];origin[from]=at;
+        }
+    }
+    for (int i=0;i<used;i++) if (plan[i].row>=0) {
+        pro_notice_plan_card(&card,&plan[i],rows,plan[i].old>=0 ? &s.notice[i] : NULL);
+        s.notice[i]=card;
+    }
+    s.notice_count=used;
+    if (s.view==INBOX) s.offset=cursor;
+}
+#endif
 void ui_notif_replace(const cable_notif_t *rows, int count)
 {
     display_lock();
 #ifdef DEVICE_PRO_COMPANION
     if (!s.connected) { display_unlock(); return; }
-    // Display lock serializes this bounded scratch array without using the UI
-    // task's stack. The snapshot contains unread notices, not open questions.
-    static EXT_RAM_BSS_ATTR cable_notif_t questions[NOTICES];
-    int question_count=0;
-    for (int i=0; i<s.notice_count; i++) if (s.notice[i].question) questions[question_count++]=s.notice[i];
 #endif
     char selected[ID_MAX]; notice_selection(selected, sizeof selected);
+#ifndef DEVICE_PRO_COMPANION
     cable_notif_t held = {0};
     if (selected[0] && s.notice[s.offset].read_on_dial && s.notice[s.offset].read_token[0])
         held = s.notice[s.offset];
+#endif
     if (!rows || count < 0) count = 0;
     if (count > NOTICES) count = NOTICES;
+#ifdef DEVICE_PRO_COMPANION
+    pro_notice_replace(rows,count,selected);
+#else
     s.notice_count = 0;
     for (int i = count - 1; i >= 0; i--) {
         notice_add(rows[i].agent_id, rows[i].name, rows[i].machine, rows[i].summary,
@@ -5244,45 +5466,8 @@ void ui_notif_replace(const cable_notif_t *rows, int count)
             break;
         }
     }
+#endif
 #ifdef DEVICE_PRO_COMPANION
-    // Reserve a currently read result before merging the pending catalog.
-    // A full 64-question + eight-unread snapshot must not displace its reader.
-    if (held.agent_id[0] && !held.question) {
-        bool present=false;
-        for (int i=0; i<s.notice_count; i++) if (!strcmp(s.notice[i].agent_id,held.agent_id)) present=true;
-        if (!present) {
-            int at=s.notice_count<NOTICES ? s.notice_count++ : -1;
-            if (at<0) for (int i=s.notice_count-1; i>=0; i--) if (!s.notice[i].question) { at=i; break; }
-            if (at>=0) s.notice[at]=held;
-        }
-    }
-    for (int k=0; k<question_count; k++) {
-        const cable_notif_t *old=&questions[k]; int at=-1;
-        for (int i=0; i<s.notice_count; i++) if (!strcmp(s.notice[i].agent_id,old->agent_id)) { at=i; break; }
-        if (at>=0 && s.notice[at].question) {
-            cable_notif_t *n=&s.notice[at];
-            if (!strcmp(n->read_token,old->read_token) ||
-                (!old->read_token[0] && old->question_id[0] && !strcmp(n->summary,old->summary))) {
-                COPY(n->question_id,old->question_id); n->question_signature=old->question_signature;
-                n->question_unavailable=old->question_unavailable;
-                n->read_on_dial=old->read_on_dial;
-            }
-            continue; // A new token is a new occurrence, never the old question ID.
-        }
-        if (at<0) {
-            if (s.notice_count==NOTICES) {
-                // Questions take priority over the oldest result; never evict a
-                // different unresolved question to retain this one.
-                for (int i=s.notice_count-1; i>=0; i--) if (!s.notice[i].question && strcmp(s.notice[i].agent_id,selected)) { at=i; break; }
-                if (at<0 && pro_notice_pinned(old,selected)) {
-                    for (int i=s.notice_count-1; i>=0; i--) if (!pro_notice_pinned(&s.notice[i],selected)) { at=i; break; }
-                }
-                if (at<0) { s.notice_overflow=true; continue; }
-                if (s.notice[at].question) s.notice_overflow=true;
-            } else at=s.notice_count++;
-        }
-        s.notice[at]=*old;
-    }
     if (!s.q.pending && (s.q.valid || s.q.loading) && s.q.notice_token[0]) {
         for (int i=0; i<s.notice_count; i++) {
             const cable_notif_t *n=&s.notice[i];
@@ -5303,11 +5488,13 @@ void ui_notif_replace(const cable_notif_t *rows, int count)
                 !strcmp(rows[j].read_token, s.notice_reads[i].token)) present = true;
         if (!present) s.notice_reads[i].pending = false;
     }
+#ifndef DEVICE_PRO_COMPANION
     bool retained = false;
     for (int i = 0; i < s.notice_count; i++) if (!strcmp(s.notice[i].agent_id, selected)) retained = true;
     if (held.agent_id[0] && !retained && s.notice_count < NOTICES) {
         s.notice[s.notice_count++] = held;
     }
+#endif
     notice_restore_selection(selected);
     notice_sync_view();
     change();
@@ -5402,6 +5589,7 @@ void ui_question_show(const char *id, const char *name, const char *machine, con
         cable_notif_t *n=&s.notice[i];
         COPY(n->question_id,identifiable?request:""); n->question_signature=signature;
         COPY(n->read_token,read_token);n->read_on_dial=read;n->question_unavailable=!identifiable || unavailable;
+        n->question_current=true;
         break;
     }
     if (!same) s.notice_sequence++;
@@ -5460,7 +5648,7 @@ void ui_question_state(const cJSON *p)
             COPY(s.q.request,id->valuestring); COPY(s.q.token,token->valuestring);
 #ifdef DEVICE_PRO_COMPANION
             s.q.signature=pro_question_signature(cJSON_GetObjectItemCaseSensitive(p,"questions"));
-            if (notice) { COPY(notice->question_id,id->valuestring); notice->question_signature=s.q.signature; notice->question_unavailable=false; }
+            if (notice) { COPY(notice->question_id,id->valuestring); notice->question_signature=s.q.signature; notice->question_unavailable=false; notice->question_current=true; }
 #endif
             if (cJSON_IsString(name)) COPY(s.q.name,name->valuestring);
             question_load(cJSON_GetObjectItemCaseSensitive(p,"questions"));

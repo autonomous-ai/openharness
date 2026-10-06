@@ -316,7 +316,8 @@ void ui_cable_toast(const char *msg);
 void ui_selection_state(const struct cJSON *payload);
 void ui_draft_state(const struct cJSON *p);
 #ifdef DEVICE_PRO_COMPANION
-void ui_draft_source(const char *machine);
+// Returns whether the complete, validated cable host identity changed.
+bool ui_draft_source(const char *machine);
 void ui_metrics_source(const char *machine, bool supported);
 void ui_metrics_state(const struct cJSON *p);
 #endif

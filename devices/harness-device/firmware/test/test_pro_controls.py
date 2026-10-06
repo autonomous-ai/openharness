@@ -96,7 +96,7 @@ static uint16_t color(unsigned rgb) { return ht_rgb(rgb); }
 #define ERROR color(HT_THEME_ERROR)
 #define SEL color(HT_THEME_SELECTION)
 '''
-for name in ("pro_work_local", "pro_work_available", "pro_work_capture_available", "pro_work_draft_available"):
+for name in ("pro_work_local", "pro_work_visible", "pro_work_block_reason", "pro_work_available", "pro_work_draft_available"):
     code += function(name)
 code += function("settings_item") + function("settings_count")
 code += '#include "pro_controls.inc"\n'
@@ -350,6 +350,33 @@ int main(int argc,char **argv) {
         assert(action_count(A_WORK_MODE,true)==expected&&action_count(A_WORK_RECORD,true)==1);
     }
     features=~0u;
+    // Known blockers change the existing explanation/Speak state, not which
+    // supported modes can be explored. These are English-only new surfaces.
+    for(int state=0;state<8;state++) {
+        reset(false);s.view=WORK_INTENT;
+        const char *reason;
+        unsigned modes=3;
+        switch(state) {
+        case 0:COPY(s.agents[0].engine,"terminal");reason="Choose an agent pane.";modes=1;break;
+        case 1:COPY(s.agents[0].machine_id,"machine-2");reason="This computer is offline.";modes=1;break;
+        case 2:COPY(s.agents[0].machine_id,"machine-2");COPY(s.machines[2].state,"needs-link");reason="Link this computer in Harness.";modes=1;break;
+        case 3:s.work_mode=PRO_WORK_GOAL;s.agents[0].busy=true;s.agents[0].last_busy=1000;reason="Wait for this turn to finish.";break;
+        case 4:s.work_mode=PRO_WORK_LOOP;s.agents[0].busy=true;s.agents[0].last_busy=1000;reason="Wait for this turn to finish.";break;
+        case 7:s.work_roster_pending=true;reason="Finding your panes...";break;
+        default:s.notice[0].question=s.notice[0].question_current=true;
+            s.notice[0].question_unavailable=state==6;
+            reason=state==6?"Check its question in Harness.":"Answer its question first.";break;
+        }
+        ht_scene_t held;ht_scene_clear(&held,BG);assert(pro_render_controls(&held));inspect(&held,"recording held");
+        assert(action_count(A_WORK_MODE,true)==modes && !action_count(A_WORK_RECORD,true));
+        assert(has_text(&held,reason));
+        char name[48];snprintf(name,sizeof name,"instruction-held-%d",state);portrait(&held,dir,name);
+        if(state==3 || state==4) {
+            s.work_mode=PRO_WORK_TASK;s.hit_count=0;ht_scene_clear(&held,BG);assert(pro_render_controls(&held));
+            assert(action_count(A_WORK_MODE,true)==3 && action_count(A_WORK_RECORD,true)==1);
+            assert(has_text(&held,"Speak to this pane."));
+        }
+    }
     reset(false);s.view=WORK_INTENT;s.connected=false;ht_scene_t missing;ht_scene_clear(&missing,BG);
     assert(pro_render_controls(&missing));inspect(&missing,"instruction offline");assert(!action_count(A_WORK_RECORD,true));
     reset(false);s.view=WORK_INTENT;s.work_mode=PRO_WORK_LOOP;COPY(s.agents[0].engine,"codex");ht_scene_clear(&missing,BG);

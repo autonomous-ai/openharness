@@ -783,6 +783,9 @@ static void session_up(const cJSON *p)
     // The CABLED computer's identity, and what `local` is judged against. Proto 1 put the dial's own MAC
     // here, which named nothing anyone could select.
     const char *mid = str_of(machine, "id");
+#ifdef DEVICE_PRO_COMPANION
+    if (!mid) s_machine_id[0] = 0;
+#endif
     if (mid) snprintf(s_machine_id, sizeof(s_machine_id), "%s", mid);
     // Stated in `welcome` so the ✓ is right from the first frame — before any list arrives, which matters
     // after a dial reboot that lands mid-session on a machine that is not this one.
@@ -792,9 +795,28 @@ static void session_up(const cJSON *p)
     const bool was = s_session;
     s_session = true;
     ui_set_connected(true);
+    bool refresh_lists = !was;
 #ifdef DEVICE_PRO_COMPANION
     // Use the complete identity, never the legacy truncated machine buffer.
-    ui_draft_source(mid);
+    if (ui_draft_source(mid)) {
+        refresh_lists = true;
+    }
+    if (refresh_lists) {
+        // A greeting may change host without a disconnect. The UI invalidates
+        // its roster authority; do not let an old machine cache refill it.
+        cable_machines_clear(&s_machines);
+        if (s_agents_lock) {
+            // Discard a partial stream from before this ownership boundary. Its
+            // eventual end must not make old rows into a new completed roster.
+            xSemaphoreTake(s_agents_lock, portMAX_DELAY);
+            s_agent_count = 0;
+            s_agents_total = 0; s_has_window = false;
+            s_agents_tab[0] = 0;
+            s_agents_building = false;
+            xSemaphoreGive(s_agents_lock);
+            ui_request_agent_reload();
+        }
+    }
     ui_metrics_source(mid, cable_client_supports(CABLE_FEATURE_METRICS));
 #endif
     if (!was) {
@@ -806,11 +828,16 @@ static void session_up(const cJSON *p)
                  (cJSON_IsNumber(cJSON_GetObjectItemCaseSensitive(p, "proto"))
                            ? cJSON_GetObjectItemCaseSensitive(p, "proto")->valueint
                            : 0));
+    }
+    if (refresh_lists) {
         // ASK FOR BOTH, EXPLICITLY. A rebooted dial greets with the same mac and the same firmware, so
         // the daemon's re-attach test reads that greeting as a keepalive and pushes nothing at all — the
-        // dial would sit on an empty carousel opposite a daemon convinced it had already spoken.
+        // dial would sit on an empty carousel opposite a daemon convinced it had already spoken. Pro
+        // also needs a complete new roster after a changed host greeting on an already-live link.
         send_json(msg("machines.list"));
         send_json(msg("agents.list"));
+    }
+    if (!was) {
         // Now that someone is listening: why this boot happened, and what was said before it if the
         // answer is a crash. Framed like every other line, so it lands in the same file.
         last_words_report();
@@ -903,6 +930,12 @@ static void handle_agents_end(const cJSON *p)
 {
     if (!s_agents_lock) return;
     xSemaphoreTake(s_agents_lock, portMAX_DELAY);
+#ifdef DEVICE_PRO_COMPANION
+    if (!s_agents_building) {
+        xSemaphoreGive(s_agents_lock);
+        return;
+    }
+#endif
     s_agents_building = false;
     const int n = s_agent_count;
     // The list is the window's active tab. Beside it: how many agents the account has in all (the

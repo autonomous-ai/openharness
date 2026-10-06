@@ -29,6 +29,7 @@ from native_voice import voice_assets  # noqa: E402
 STATES = ("idle", "passed_task", "sent_goal", "sent_loop", "message_options", "notifications", "notifications_muted", "idle_paper", "working", "working_start", "working_59", "working_60", "working_long", "working_hour", "working_paper", "summary", "summary_paper", "mail", "needs_answer", "read_question_home", "unavailable_question_home", "pending_question_home", "listening",
           "voice_preparing", "voice_sending", "offline", "done", "asleep",
           "carrying", "launcher", "companion", "daemons", "scenes", "updates", "question", "reader", "locked", "updating",
+          "input_shell", "input_offline", "input_link", "input_question", "input_roster", "input_carry_offline", "input_goal_busy", "input_loop_busy",
           "carry_listening", "carry_review", "carry_preview", "carry_rejected", "carry_offline", "carry_preview_offline",
           "carry_offline_long", "carry_offline_scrolled",
           "panes_map", "panes_list", "panes_dense", "panes_mixed", "panes_waiting",
@@ -110,7 +111,7 @@ static bool display_is_asleep(void) { return false; }
 static bool cable_client_supports(uint32_t feature) { (void)feature; return true; }
 '''
     for name in ("find", "active", "waiting", "working", "is_question", "notice_unread", "color",
-                 "pro_send_feedback_clear", "pro_send_feedback_matches", "pro_send_feedback_begin", "pro_send_feedback_text", "pro_work_local", "pro_work_available", "pro_work_capture_available", "pro_work_draft_available", "character_mood", "question_view", "settings_item", "settings_count",
+                 "pro_send_feedback_clear", "pro_send_feedback_matches", "pro_send_feedback_begin", "pro_send_feedback_text", "pro_work_local", "pro_work_visible", "pro_work_block_reason", "pro_work_available", "pro_work_capture_pin", "pro_work_capture_available", "pro_work_draft_available", "character_mood", "question_view", "settings_item", "settings_count",
                  "pro_speech_allowed", "pro_speech_visible", "pro_speech_emotion", "pro_busy_elapsed", "pro_surface_mood"):
         code += function(name, source)
     code += r'''
@@ -157,6 +158,22 @@ static void fixture(const char *name) {
     }
     else if(!strcmp(name,"message_options")){s.view=DRAFT_OPTIONS;draft.page.active=true;}
     else if(!strcmp(name,"notifications")||!strcmp(name,"notifications_muted")){s.view=SETTINGS;s.offset=4;s.muted=!strcmp(name,"notifications_muted");}
+    else if(!strncmp(name,"input_",6)){
+        s.agents[0].busy=true;s.agents[0].busy_ms=1000;now=16000;s.agents[0].last_busy=now;
+        if(!strcmp(name,"input_shell"))COPY(s.agents[0].engine,"terminal");
+        else if(!strcmp(name,"input_question")){
+            s.notice_count=1;s.notice[0].question=s.notice[0].question_current=s.notice[0].question_unavailable=true;
+        } else if(!strcmp(name,"input_roster"))s.work_roster_pending=true;
+        else if(!strcmp(name,"input_goal_busy")||!strcmp(name,"input_loop_busy")){
+            s.view=WORK_INTENT;s.work_mode=!strcmp(name,"input_goal_busy")?PRO_WORK_GOAL:PRO_WORK_LOOP;
+        } else {
+            COPY(s.agents[0].machine_id,"remote");s.machine_count=1;COPY(s.machines[0].id,"remote");
+            COPY(s.machines[0].state,!strcmp(name,"input_link")?"needs-link":"offline");
+            if(!strcmp(name,"input_carry_offline")){
+                carry.active=true;carry.rows=3;COPY(carry.source,"Research");COPY(carry.excerpt,"Keep the main action clear. Let the words have room. Preserve the selected passage.");
+            }
+        }
+    }
     else if(!strcmp(name,"idle_paper")){s.scene_choice=PRO_SCENE_PAPER;}
     else if(!strcmp(name,"summary_paper")){s.scene_choice=PRO_SCENE_PAPER;s.agents[0].recap_ready=true;}
     else if(!strncmp(name,"working",7)){

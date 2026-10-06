@@ -123,7 +123,7 @@ static void pro_work_intent(ht_scene_t *f)
     static const char *details[] = {"One request", "Work toward an objective", "Say a task and an interval"};
     int row = 0;
     for (int mode = PRO_WORK_TASK; mode <= PRO_WORK_LOOP; mode++) {
-        if (!pro_work_available(a, mode) ||
+        if (!pro_work_visible(a, mode) ||
             (mode != PRO_WORK_TASK && (s.work_generation != s.draft_recovery.generation ||
                                       strcmp(s.work_host, s.draft_recovery.current_host)))) continue;
         pro_row(f, 188 + row++ * 118, PRO_TR(pro_work_label(mode)), PRO_TR(details[mode]),
@@ -135,7 +135,8 @@ static void pro_work_intent(ht_scene_t *f)
     pro_control(f, 216, 606, 288, 68, PRO_TR("Speak"), A_WORK_RECORD, 0, supported);
     bool needs_local = ready && !pro_work_local(a) &&
         pro_work_supported(a->engine, PRO_WORK_GOAL, cable_client_supports(CABLE_FEATURE_DRAFT));
-    pro_note(f, needs_local ? (!strcmp(a->engine, "claude") ?
+    const char *reason = pro_work_block_reason(a, s.work_mode);
+    pro_note(f, reason ? PRO_TR(reason) : needs_local ? (!strcmp(a->engine, "claude") ?
                             "Goal and Loop need a local pane." : "Goal needs a local pane.") :
                 !supported ? PRO_TR("Choose the pane and instruction again.") :
                 s.work_mode == PRO_WORK_TASK ? PRO_TR("Speak to this pane.") : PRO_TR("Review before sending."));

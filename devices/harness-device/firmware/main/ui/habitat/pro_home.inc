@@ -30,21 +30,23 @@ static void pro_home_footer(ht_scene_t *f, agent_t *a, bool recap)
     const ht_pro_font_t *font = ht_pro_width(&ht_pro_42, name) <= 468 ? &ht_pro_42 : &ht_pro_32;
     ht_pro_text(f, 44, 604, 468, font, ink, name);
     const char *feedback = pro_send_feedback_text(ms());
+    const char *blocked = pro_work_block_reason(a, PRO_WORK_TASK);
     const char *status = !s.connected ? PRO_TR("Connect to your computer") :
         s.loading ? PRO_TR("One moment...") : s.voice_retry_until ? PRO_TR("Voice was not sent. Try again.") :
+        blocked ? PRO_TR(blocked) :
         s.nap ? PRO_TR("Taking a little rest") : a && is_question(a->id) ? PRO_TR("Needs your answer") :
         s.speech_error_until ? PRO_TR("Voice unavailable. Text is still here.") :
         pro_speech_visible() ? (s.speech.playing ? PRO_TR("Speaking. Touch to interrupt.") : PRO_TR("One moment...")) :
         feedback ? feedback :
         a && a->busy ? (a->tool[0] ? a->tool : PRO_TR("Working")) :
-        recap ? PRO_TR("A result is ready") : PRO_TR("Ready when you are");
+        recap ? PRO_TR("A result is ready") : PRO_TR("Tap to speak");
     char carrying[128];
     snprintf(carrying, sizeof carrying, PRO_TR("%d line%s from %s"), carry.rows, carry.rows == 1 ? "" : PRO_TR("s"), carry.source);
-    if (carry.active) status = carrying;
+    if (carry.active && !blocked) status = carrying;
     else if (carry.error[0]) status = PRO_TR("Selected text expired");
     uint32_t seconds;
     int status_width = 478;
-    if (pro_busy_elapsed(a, ms(), &seconds)) {
+    if (!blocked && pro_busy_elapsed(a, ms(), &seconds)) {
         char elapsed[24];
         if (seconds < 60) snprintf(elapsed, sizeof elapsed, "%lus", (unsigned long)seconds);
         else snprintf(elapsed, sizeof elapsed, "%lum %02lus",
@@ -61,6 +63,8 @@ static void pro_home_footer(ht_scene_t *f, agent_t *a, bool recap)
         pro_control(f, 548, 622, 128, 64, PRO_TR("Return"), A_RETURN, 0, s.connected && !visit.pending);
     else if (a && is_question(a->id))
         pro_control(f, 548, 622, 128, 64, PRO_TR("Answer"), A_QUESTION, 0, s.connected && !s.q.pending);
+    else if (a && blocked && !strcmp(blocked, "Check its question in Harness."))
+        pro_control(f, 548, 622, 128, 64, PRO_TR("Open"), A_DESKTOP, 0, s.connected);
     else if (recap)
         pro_control(f, 548, 622, 128, 64, PRO_TR("Read"), A_READER, 0, true);
 }

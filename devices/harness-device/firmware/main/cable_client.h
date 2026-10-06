@@ -218,6 +218,9 @@ typedef struct {
     char question_id[80];
     uint64_t question_signature;
     bool question_unavailable;
+    // Observed on this connection. Retained cards alone cannot establish that
+    // a question is still pending after the cable reconnects.
+    bool question_current;
 #endif
 } cable_notif_t;
 

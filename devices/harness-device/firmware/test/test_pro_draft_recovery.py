@@ -76,6 +76,8 @@ static bool congested, recording;
 static unsigned enqueued, wires, mutations;
 static action_t sent, wire;
 static uint32_t ms(void) { return now; }
+static uint32_t roster_generation = 1;
+static uint32_t cable_client_agent_generation(void) { return roster_generation; }
 static bool cable_client_supports(uint32_t mask) { return (features&mask)==mask; }
 static agent_t *active(void) { return s.active>=0&&s.active<s.count?&s.agents[s.active]:NULL; }
 static int find(const char *id) { for(int i=0;i<s.count;i++)if(!strcmp(id,s.agents[i].id))return i;return -1; }
@@ -111,7 +113,7 @@ static bool config_save_pro_recovery(const pro_recovery_bookmark_t *b) {
 }
 static bool config_clear_pro_recovery(void) {clear_calls++;if(fail_clear)return false;stored_present=false;return true;}
 '''
-for name in ("pro_send_feedback_clear", "pro_send_feedback_matches", "pro_send_feedback_begin", "pro_send_feedback_text", "pro_work_local", "pro_work_available", "pro_work_capture_available", "pro_work_draft_available", "pro_busy_reset", "ui_project_set_machine", "question_view", "question_rows", "voice_close", "draft_emit", "pro_draft_forget", "pro_draft_store_queue", "pro_draft_store_work", "pro_draft_restore", "make_action", "draft_move",
+for name in ("pro_send_feedback_clear", "pro_send_feedback_matches", "pro_send_feedback_begin", "pro_send_feedback_text", "pro_work_local", "pro_work_visible", "pro_work_draft_available", "pro_busy_reset", "ui_project_set_machine", "question_view", "question_rows", "voice_close", "draft_emit", "pro_draft_forget", "pro_draft_store_queue", "pro_draft_store_work", "pro_draft_restore", "make_action", "draft_move",
              "notice_sync_view", "pro_notice_source", "ui_set_connected", "ui_draft_source", "draft_page", "ui_voice_draft", "ui_draft_state"):
     code += function(name)
 code += "static void dispatch(action_t a) { switch(a.kind) {\n"
@@ -127,6 +129,14 @@ code += r'''
 static const char *TAG="cable";
 static char s_machine_name[40],s_machine_id[48],selected_machine[48];
 static bool s_session;
+static cable_machines_t s_machines;
+static int s_agents_lock=1,s_agent_count,s_agents_total;
+static bool s_has_window,s_agents_building;
+static char s_agents_tab[ID_MAX];
+#define portMAX_DELAY 0
+static void xSemaphoreTake(int lock,int timeout){(void)lock;(void)timeout;}
+static void xSemaphoreGive(int lock){(void)lock;}
+static void ui_request_agent_reload(void){}
 static void ui_set_selected_machine(const char *id){COPY(selected_machine,id);}
 static void ui_metrics_source(const char *id,bool supported){(void)id;(void)supported;}
 static void cable_link_set_log_framing(bool enabled){assert(enabled);}
@@ -452,7 +462,7 @@ with tempfile.TemporaryDirectory(prefix="harness-pro-draft-recovery-") as direct
         "-fsanitize="+os.environ.get("SANITIZERS","undefined,bounds"),
         "-DHT_FACE_PX=720","-DDEVICE_PRO_COMPANION=1","-DHT_PANEL_NATIVE=1",
         "-I",str(NATIVE),"-I",str(JSON_DIR),str(build/"recovery.c"),str(JSON_DIR/"cJSON.c"),
-        str(NATIVE/"../../cable_features.c"),str(NATIVE/"pro_canvas.c"),str(FONTS),str(NATIVE/"terminal.c"),str(NATIVE/"fonts.c"),
+        str(NATIVE/"../../cable_features.c"),str(NATIVE/"../../cable_machines.c"),str(NATIVE/"pro_canvas.c"),str(FONTS),str(NATIVE/"terminal.c"),str(NATIVE/"fonts.c"),
         *[str(NATIVE/(name+".c")) for name in ("draft","carry","visit","workspace","form","gestures")],
         "-o",str(build/"recovery")],check=True)
     destination=os.environ.get("HABITAT_PRO_PREVIEW_DIR","")

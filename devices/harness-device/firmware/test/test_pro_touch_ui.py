@@ -111,6 +111,8 @@ bool audio_speech_push(uint32_t id,uint32_t offset,const void *pcm,size_t bytes)
 bool audio_speech_end(uint32_t id,uint32_t bytes) { (void)id;(void)bytes;return true; }
 bool audio_speech_set_volume(uint32_t id,uint8_t volume) { (void)id;(void)volume;return true; }
 static uint32_t ms(void) { return now; }
+static uint32_t roster_generation = 1;
+static uint32_t cable_client_agent_generation(void) { return roster_generation; }
 static uint32_t esp_random(void) { return 0x12345678; }
 static void change(void) { changes++; }
 static void display_lock(void) {}
@@ -171,7 +173,7 @@ static bool scroll_emit(ht_scroll_phase_t phase, int dy, int velocity, void *ctx
 }
 static void dispatch(action_t action);
 '''
-for name in ("copy", "find", "pane_memory", "pane_memory_apply", "pro_send_feedback_clear", "pro_send_feedback_matches", "pro_send_feedback_begin", "pro_send_feedback_text", "pro_work_local", "pro_work_available", "pro_work_capture_available", "pro_work_draft_available", "pro_busy_reset", "ensure", "waiting", "is_question", "pro_speech_allowed", "pro_speech_visible", "pro_speech_emotion",
+for name in ("copy", "find", "pane_memory", "pane_memory_apply", "pro_send_feedback_clear", "pro_send_feedback_matches", "pro_send_feedback_begin", "pro_send_feedback_text", "pro_work_local", "pro_work_visible", "pro_work_block_reason", "pro_work_available", "pro_work_capture_pin", "pro_work_capture_available", "pro_work_draft_available", "pro_busy_reset", "ensure", "waiting", "is_question", "pro_speech_allowed", "pro_speech_visible", "pro_speech_emotion",
              "pro_speech_caption", "pro_speech_cancel", "ui_companion_speech_begin", "ui_companion_speech_clear",
              "pro_speech_tick", "pro_busy_elapsed", "pro_surface_mood", "status_wake_ms",
              "question_view", "hit_contains", "home_footer", "pro_written_control",
@@ -179,7 +181,7 @@ for name in ("copy", "find", "pane_memory", "pane_memory_apply", "pro_send_feedb
              "question_rows", "question_move", "draft_move",
              "pro_appearance_view", "pro_appearance_open", "pro_appearance_move", "pro_appearance_use",
              "workspace_index", "tabs_open", "workspace_failed", "pro_panes_of",
-             "ui_land_after_reload", "voice_status", "ui_scroll_reportable", "habitat_next_wake_ms",
+             "ui_land_after_reload", "ui_workspace_applied", "voice_status", "ui_scroll_reportable", "habitat_next_wake_ms",
              "voice_close", "power", "notice_sync_view", "pro_notice_source", "ui_set_connected", "ui_draft_source", "ui_focus_project",
              "ui_swarms_replace", "ui_tiles_replace", "ui_project_remove", "ui_project_apply_order",
              "ui_project_clear_all", "ui_project_set_name", "ui_project_set_machine", "ui_set_selected_machine",
@@ -817,6 +819,7 @@ static void busy_render_boundaries(void) {
 
 static void work_identity_callbacks(void) {
     reset();ui_draft_source("host-a");ui_project_set_machine("a","host-a","Cable host");
+    assert(!pro_work_available(active(),PRO_WORK_TASK));ui_workspace_applied("",++roster_generation);
     assert(pro_work_local(active())&&pro_work_available(active(),PRO_WORK_TASK));
     COPY(active()->engine,"claude");assert(pro_work_available(active(),PRO_WORK_GOAL)&&pro_work_available(active(),PRO_WORK_LOOP));
     ui_project_set_machine("a","remote","Other host");assert(!pro_work_local(active())&&!pro_work_available(active(),PRO_WORK_GOAL));
@@ -833,7 +836,7 @@ static void work_identity_callbacks(void) {
 
 
 static void footer_send_feedback(void) {
-    reset();ui_draft_source("host-a");ui_project_set_machine("a","host-a","Host");
+    reset();ui_draft_source("host-a");ui_project_set_machine("a","host-a","Host");ui_workspace_applied("",++roster_generation);
     pro_draft_recovery_pin(&s.draft_recovery,"a",PRO_WORK_TASK);
     draft.page=(ht_draft_page_t){.active=true,.id="message",.agent="a"};pro_send_feedback_begin(1);
     s.send_feedback.accepted=true;s.send_feedback.until=now+3000;
@@ -849,10 +852,29 @@ static void footer_send_feedback(void) {
     ui_project_remove("a");assert(!s.send_feedback.agent[0]);
 }
 
+static void home_recording_blockers(void) {
+    for(int carried=0;carried<2;carried++)for(int reason=0;reason<4;reason++) {
+        reset();busy_heartbeat("a","session-a",1000);now=2000;
+        const char *label;
+        switch(reason) {
+        case 0:COPY(active()->engine,"terminal");label="Choose an agent pane.";break;
+        case 1:COPY(active()->machine_id,"remote");s.machine_count=1;
+            COPY(s.machines[0].id,"remote");COPY(s.machines[0].state,"offline");label="This computer is offline.";break;
+        case 2:s.notice_count=1;s.notice[0]=(cable_notif_t){.question=true,.question_current=true,.question_unavailable=true};
+            COPY(s.notice[0].agent_id,"a");label="Check its question in Harness.";break;
+        default:s.work_roster_pending=true;label="Finding your panes...";break;
+        }
+        if(carried) {carry.active=true;carry.rows=2;COPY(carry.source,"Research");COPY(carry.excerpt,"Keep these selected words.");}
+        render_actual();assert(has_text(label)&&!has_text("1s"));
+        if(carried)assert(action_hit(A_CARRY_DROP));
+        else if(reason==2)assert(action_hit(A_DESKTOP));
+        assert(!starts&&!queued);
+    }
+}
 static void home_hierarchy(void) {
     for (int language=0;language<2;language++) {
         reset();strcpy(s.voice_language,language?"vi":"en");render_actual();
-        assert(has_text(PRO_TR("Ready when you are")));
+        assert(has_text(PRO_TR("Tap to speak")));
         ht_rect_t footer=action_hit(A_AGENTS)->rect;
         assert(footer.x==32&&footer.y==598&&footer.w==492&&footer.h==104);
         bool name=false,workspace=false;
@@ -870,7 +892,7 @@ static void home_hierarchy(void) {
             if(scene.runs[i].pro_kind==1&&scene.runs[i].y==604)assert(scene.runs[i].pro_font==&ht_pro_32);
         assert(!memcmp(&footer,&action_hit(A_AGENTS)->rect,sizeof footer));
         s.agents[0].recap_ready=true;strcpy(s.agents[0].preview,"A result.");render_actual();
-        assert(has_text(PRO_TR("A result is ready"))&&!has_text(PRO_TR("Ready when you are")));
+        assert(has_text(PRO_TR("A result is ready"))&&!has_text(PRO_TR("Tap to speak")));
         s.agents[0].busy=true;render_actual();assert(has_text(PRO_TR("Working")));
         s.voice_retry_until=now+1000;render_actual();assert(has_text(PRO_TR("Voice was not sent. Try again.")));
         s.connected=false;render_actual();assert(has_text(PRO_TR("Connect to your computer")));
@@ -1339,7 +1361,7 @@ int main(int argc,char **argv) {
         {"home_render_geometry",home_render_geometry},{"home_state_geometry",home_state_geometry},
         {"home_header_drag_cancel",home_header_drag_cancel},{"home_header_tap_tabs",home_header_tap_tabs},
         {"current_tab_returns_home",current_tab_returns_home},{"changed_tab_stays_on_home",changed_tab_stays_on_home},
-        {"carried_excerpt_is_readable",carried_excerpt_is_readable},{"question_retained_reading",question_retained_reading},
+        {"carried_excerpt_is_readable",carried_excerpt_is_readable},{"home_recording_blockers",home_recording_blockers},{"question_retained_reading",question_retained_reading},
         {"docked_connection_policy",docked_connection_policy},{"home_gesture_consistency",home_gesture_consistency},
         {"workspace_chord_navigation",workspace_chord_navigation},{"workspace_chord_gates",workspace_chord_gates},
         {"workspace_chord_context",workspace_chord_context},{"map_contact_invalidation",map_contact_invalidation},{"map_layout_is_local",map_layout_is_local},
