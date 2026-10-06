@@ -137,7 +137,7 @@ def new_form():
     lines=screen().splitlines()
     footer=lines[-1]
     click(footer.index('+'),len(lines)-1)
-    wait(form_visible, 'footer + opens New Harness form')
+    wait(form_visible, 'footer + opens New Harness form; clicked ' + str((footer.index('+'), len(lines)-1)) + '\nCaptured footer: ' + footer)
 def placement():
     window, windows, panes = hn('display-message', '-p', '#{window_id} #{session_windows} #{window_panes}').split()
     return window, int(windows), int(panes)

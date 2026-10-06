@@ -113,13 +113,16 @@ def screen():
     return tmux('capture-pane', '-p', '-t', TARGET)
 
 
+last_mouse_target = None
+
+
 def wait(fn, label, seconds=8):
     end = time.monotonic() + seconds
     while time.monotonic() < end:
         if fn():
             return
         time.sleep(.05)
-    raise AssertionError(label + '\n' + screen())
+    raise AssertionError(label + '\n' + screen() + '\nLast mouse target: ' + str(last_mouse_target))
 
 
 def shown(text, seconds=8):
@@ -146,8 +149,10 @@ def width(text):
 
 def click_text(text, occurrence=0, button=0, row=None, before=None):
     def locate():
+        global last_mouse_target
         hits = []
-        for y, line in enumerate(screen().splitlines()):
+        captured = screen()
+        for y, line in enumerate(captured.splitlines()):
             if row is not None and y != row:
                 continue
             start = 0
@@ -156,6 +161,7 @@ def click_text(text, occurrence=0, button=0, row=None, before=None):
                 if before is None or x < before:
                     hits.append((x, y))
                 start = index + len(text)
+        last_mouse_target = {'text': text, 'hits': hits, 'occurrence': occurrence, 'screen': captured}
         return hits
     wait(lambda: len(locate()) > occurrence, 'mouse target ' + text)
     click(*locate()[occurrence], button=button)
