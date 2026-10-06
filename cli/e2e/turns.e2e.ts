@@ -4,6 +4,7 @@
  */
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
+import { WORK_EVIDENCE_MS } from '../src/lib/turnActivity.js'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { LocalClient, type Frame } from './harness/client.js'
 import { IsolatedDaemon, until } from './harness/daemon.js'
@@ -64,6 +65,25 @@ describe('how turns end', () => {
     await turn(client, agent.id, 'after the cancel')
     client.close()
   })
+
+  it.each(engines)('%s: a turn cancelled while a tool runs settles idle after the aborted tool\'s late output, not unknown for good', async (engine) => {
+    const d = await fresh()
+    const client = await LocalClient.connect(d)
+    const agent = await create(d, client, engine, `cancel-tool-${engine}`)
+    const started = client.next(isTurn('turn_started', agent.id), 30_000, 'turn_started')
+    client.send('message', { agentId: agent.id, content: '!holdtool sleep 45' })
+    await started
+    await until('the agent to read as working', async () => (await row(client, agent.id))?.activity?.state === 'working' || null, 15_000, 250)
+    // The CLI writes the aborted tool's output only after the interrupt, and it reads as work for one
+    // lease. With no turn open nothing probes the agent again: it stuck at unknown until the next prompt
+    // (a real Codex 0.160, found by daemon QA). It must settle idle once that late evidence runs out.
+    const late = client.next(isTurn('tool_end', agent.id), 30_000, 'the aborted tool\'s late output')
+    client.send('cancel', { agentId: agent.id })
+    await late
+    await until('the agent to settle idle', async () => (await row(client, agent.id))?.activity?.state === 'idle' || null, WORK_EVIDENCE_MS + 20_000, 500)
+    await turn(client, agent.id, 'after the cancel')
+    client.close()
+  }, 150_000)
 
   it.each(engines)('%s: Ctrl-C typed in the terminal itself ends the turn, and the agent goes on', async (engine) => {
     const d = await fresh()
