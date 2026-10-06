@@ -8,7 +8,7 @@
  * on, and the master brings it back.
  */
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { LocalClient, type Frame } from './harness/client.js'
@@ -18,11 +18,20 @@ const HARNESS = 'e2e/installed-here'
 const FIRST = 'e2e/installed-first'
 
 /** A harness in a git repository of its own, whose setup says a line: what `dsh_install` clones and sets up. */
-function repository(d: IsolatedDaemon, id = HARNESS, name = 'Installed Here'): string {
+function repository(d: IsolatedDaemon, id = HARNESS, name = 'Installed Here', gate?: { ready: string; release: string }): string {
   const dir = join(d.root, `repo-${id.replace('/', '-')}`)
   mkdirSync(dir, { recursive: true })
   writeFileSync(join(dir, 'harness.json'), JSON.stringify({ spec: 1, id, name, engine: 'claude', toolchain: { setup: './setup.sh' } }))
-  writeFileSync(join(dir, 'setup.sh'), '#!/bin/sh\necho setting up\n', { mode: 0o755 })
+  const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`
+  // Found by QA on a quiet machine: hold setup while the core reads the uninstalled index. A
+  // warming loop can cross the install's completion and mistake a successful create for a failure.
+  const wait = gate ? `${quote(process.execPath)} -e ${quote(`
+    const fs = require('node:fs');
+    fs.writeFileSync(${JSON.stringify(gate.ready)}, 'ready');
+    setInterval(() => { if (fs.existsSync(${JSON.stringify(gate.release)})) process.exit(0); }, 10);
+    setTimeout(() => { console.error('test did not release the install setup'); process.exit(1); }, 30000);
+  `)}\n` : ''
+  writeFileSync(join(dir, 'setup.sh'), `#!/bin/sh\necho setting up\n${wait}`, { mode: 0o755 })
   const git = (...args: string[]) => execFileSync('git', ['-C', dir, ...args], { env: { ...process.env, HOME: d.env.HOME, GIT_CONFIG_NOSYSTEM: '1' } })
   git('init', '-q', '-b', 'main')
   git('add', '.')
@@ -78,26 +87,23 @@ describe('the Store in its own process, beside the viewers', () => {
     const client = await LocalClient.connect(d)
     expect(await client.request('dsh_install', { url: repository(d, FIRST, 'Installed First') }, 180_000)).toMatchObject({ ok: true, id: FIRST })
     expect(await create(d, client, 'installed-first', FIRST)).toMatchObject({ dsh: FIRST, dshName: 'Installed First' })
-    // The core keeps what is installed for two seconds (dsh/installed.ts), read whenever it creates,
-    // forks, resumes or relaunches an agent on a harness, or the models read the Model Manager's. Asked to
-    // create on the second harness all through its install (refused: not installed yet), it holds an index
-    // without it when the install answers. Told the index changed, it reads it again.
+    // The core keeps what is installed for two seconds (dsh/installed.ts). Read the missing
+    // harness while setup is held, then finish the install inside that cache's lifetime.
     const cwd = join(d.projectsDir, 'installed-here')
     mkdirSync(cwd, { recursive: true })
-    const early = () => client.request('agent_create', { engine: 'claude', cwd, bypassPermission: true, dsh: HARNESS }, 30_000)
-    let warming = true
-    const warmed = (async () => {
-      while (warming) {
-        expect(await early()).toMatchObject({ error: 'INVALID_DSH' })
-        await new Promise((done) => setTimeout(done, 50))
-      }
-    })()
-    const installing = client.request('dsh_install', { url: repository(d) }, 180_000)
+    const createHere = () => client.request('agent_create', { engine: 'claude', cwd, bypassPermission: true, dsh: HARNESS }, 30_000)
+    const gate = { ready: join(d.root, 'setup-ready'), release: join(d.root, 'setup-release') }
+    const installing = client.request('dsh_install', { url: repository(d, HARNESS, 'Installed Here', gate) }, 180_000)
+    let warmedAt = 0
+    try {
+      await until('the installer held in setup', () => existsSync(gate.ready) || null, 30_000, 10)
+      warmedAt = Date.now()
+      expect(await createHere()).toMatchObject({ error: 'INVALID_DSH' })
+    } finally { writeFileSync(gate.release, 'continue') }
     expect(await installing).toMatchObject({ ok: true, id: HARNESS })
-    // At once, inside the two seconds the core keeps the installed index for.
-    warming = false
-    const created = await early()
-    await warmed
+    const created = await createHere()
+    // Expiry must not hide a missing invalidation: both requests completed inside the cache lifetime.
+    expect(Date.now() - warmedAt, 'created inside the core cache lifetime').toBeLessThan(2_000)
     expect(created.error, JSON.stringify(created)).toBeUndefined()
     const agent = await until('the harness agent to bind', async () => {
       const found = await row(client, created.agent.id)
