@@ -236,7 +236,7 @@ jobs:
           RUN_DARWIN_PROCESS_IMAGES: '1'
         run: |
           node scripts/test-process-images-bundled.mjs
-          npx vitest run src/lib/nativeProcessImages.spec.ts src/lib/processImages.spec.ts src/lib/processImages.real.spec.ts --maxWorkers=1
+          npx vitest run src/lib/nativeProcessImages.spec.ts src/lib/processImages.spec.ts src/lib/processImages.real.spec.ts src/lib/periodicCpu.integration.spec.ts --maxWorkers=1
 
   # The optional product has its own dependencies, bundle and suites. CLI-only CI
   # deliberately checks core without installing or building this package.

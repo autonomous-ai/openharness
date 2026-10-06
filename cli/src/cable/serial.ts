@@ -5,7 +5,8 @@
 // a per-platform release matrix into a distribution that is currently a download. A tty is a file, `stty`
 // puts it in raw mode, and that is the whole of what this needs.
 import { execFile } from 'node:child_process'
-import { closeSync, constants, existsSync, openSync, readFileSync, readdirSync } from 'node:fs'
+import { closeSync, constants, existsSync, lstatSync, openSync, readFileSync, readdirSync } from 'node:fs'
+import { basename } from 'node:path'
 import { ReadStream } from 'node:tty'
 import { promisify } from 'node:util'
 
@@ -85,18 +86,48 @@ function depthOf(line: string): number {
   return m ? m[0].length : 0
 }
 
-async function findDarwin(): Promise<DialPort[]> {
-  let dump: string
-  try {
-    // Keep each USB device's children (the tty lives below its vendor/product IDs), but do not
-    // serialize the whole IOService plane every two seconds just to detect a hot-plugged dial.
-    const { stdout } = await runFile('ioreg', ['-r', '-c', 'IOUSBHostDevice', '-w0', '-l'], { maxBuffer: 64 * 1024 * 1024 })
-    dump = stdout
-  } catch {
-    throw new Error('Could not enumerate USB dials')
+// `ioreg` cost ~150 ms CPU every 2 s (~7.5% of a core, measured 2026-10-06) even with no dial attached, so
+// it runs only when /dev/cu.* changes (~0.3 ms to fingerprint two cu.* nodes, same measurement).
+// `ino` is in the fingerprint because a re-plug makes a new devfs node, and that attachment is what moves
+// `session`. No mtime/ctime: I/O on an open tty bumps them, defeating the gate exactly when a dial is
+// attached. Every 5 min is a safety net (~0.05%); no name filter, so an odd name is never invisible.
+// devfs and the IORegistry do not change atomically, so a scan on a plug/unplug edge can see a missing or
+// phantom port; a scan that followed a change, or that lists a port whose /dev node is gone, is therefore
+// confirmed by another (one extra ioreg per edge, and one per call while the IORegistry lags an unplug).
+const DIAL_RESCAN_MS = 300_000
+
+export function createDarwinDialFinder(deps: { listDev: () => string[]; runIoreg: () => Promise<string>; now: () => number }) {
+  let last: { settled: boolean; fingerprint: string | null; ports: DialPort[]; at: number } | null = null
+  return async (): Promise<DialPort[]> => {
+    let entries: string[] | null
+    try { entries = deps.listDev().sort() } catch { entries = null }
+    const fingerprint = entries && entries.join('\n')
+    const age = last ? deps.now() - last.at : -1 // a clock stepped back (age < 0) must not pin the cache; '' is a valid fingerprint
+    if (!(last && last.settled && fingerprint !== null && fingerprint === last.fingerprint && age >= 0 && age < DIAL_RESCAN_MS)) {
+      const prev = last // read before the await; the first scan ever is not an edge
+      const ports = parseDarwinDialPorts(await deps.runIoreg())
+      const names = new Set((entries ?? []).map(entry => entry.replace(/:\d+:\d+$/, '')))
+      last = { settled: (!prev || prev.fingerprint === fingerprint) && ports.every(port => names.has(basename(port.path))), fingerprint, ports, at: deps.now() }
+    }
+    return last.ports.map(port => ({ ...port }))
   }
-  return parseDarwinDialPorts(dump)
 }
+
+const findDarwin = createDarwinDialFinder({
+  listDev: () => readdirSync('/dev').filter(name => name.startsWith('cu.')).map(name => {
+    const { ino, rdev } = lstatSync(`/dev/${name}`)
+    return `${name}:${ino}:${rdev}`
+  }),
+  runIoreg: async () => {
+    try {
+      // Keep each USB device's children (the tty lives below its vendor/product IDs), but skip the rest of the IOService plane.
+      return (await runFile('ioreg', ['-r', '-c', 'IOUSBHostDevice', '-w0', '-l'], { maxBuffer: 64 * 1024 * 1024 })).stdout
+    } catch {
+      throw new Error('Could not enumerate USB dials')
+    }
+  },
+  now: () => Date.now(),
+})
 
 export function parseDarwinDialPorts(dump: string): DialPort[] {
   const lines = dump.split('\n')

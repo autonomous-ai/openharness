@@ -69,7 +69,7 @@ realDescribe.sequential('real macOS executable identity', () => {
     // First execution of a freshly written Mach-O may wait on macOS signature
     // inspection. Production can use lsof during that cold start; warm the
     // private helper here before requiring the native integration path.
-    expect((await nativeProcessImages([process.pid], 3000)).size).toBe(1)
+    expect((await nativeProcessImages([process.pid], 3000)).images.size).toBe(1)
   })
 
   it('resolves renamed, Unicode, symlinked and hard-linked native images', async () => {

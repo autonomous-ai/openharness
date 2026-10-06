@@ -439,8 +439,12 @@ function rowId(row: unknown): string {
     : typeof candidate.launcherId === 'string' ? candidate.launcherId : ''
 }
 
+// Key order carries no meaning but differs between load()'s literal, register(), strictPersistedRow and
+// setters that add keys (`launch`); compared as JSON text it rewrote registry.json (lock, 3 fsyncs, rename)
+// every 5 s on an unchanged row, ~720 writes/hour measured 2026-10-06. Array order still counts.
 function rowFingerprint(row: unknown): string {
-  return JSON.stringify(row)
+  return JSON.stringify(row, (_key, value) => value && typeof value === 'object' && !Array.isArray(value)
+    ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, value[key]])) : value)
 }
 
 export function atomicWriteJson(file: string, value: unknown, exclusive = false): void {
@@ -715,7 +719,7 @@ function threeWayRow(
     if (!(key in current)) delete merged[key]
   }
   for (const [key, value] of Object.entries(current)) {
-    if (JSON.stringify(value) !== JSON.stringify(baseline[key])) merged[key] = value
+    if (rowFingerprint(value) !== rowFingerprint(baseline[key])) merged[key] = value
   }
   return merged
 }
