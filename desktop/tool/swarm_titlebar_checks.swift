@@ -546,13 +546,42 @@ private extension SwarmTabButton {
 
   func drawWithHoverControl() {
     draw(bounds)
-    guard !closeButton.isHidden else { return }
-    NSGraphicsContext.saveGraphicsState()
-    let transform = NSAffineTransform()
-    transform.translateX(by: closeButton.frame.minX, yBy: closeButton.frame.minY)
-    transform.concat()
-    closeButton.draw(closeButton.bounds)
-    NSGraphicsContext.restoreGraphicsState()
+    for control in [selectButton, closeButton] where !control.isHidden {
+      NSGraphicsContext.saveGraphicsState()
+      let transform = NSAffineTransform()
+      transform.translateX(by: control.frame.minX, yBy: control.frame.minY)
+      transform.concat()
+      control.draw(control.bounds)
+      NSGraphicsContext.restoreGraphicsState()
+    }
+  }
+
+  func checkSelectionSurface() throws {
+    frame = NSRect(x: 0, y: 0, width: 256, height: 40)
+    layoutSubtreeIfNeeded()
+    let hover = NSEvent.mouseEvent(with: .mouseMoved, location: .zero, modifierFlags: [],
+      timestamp: 0, windowNumber: 0, context: nil, eventNumber: 0, clickCount: 0, pressure: 0)!
+    for appearance in [NSAppearance.Name.darkAqua, .aqua] {
+      self.appearance = NSAppearance(named: appearance)
+      for active in [false, true] {
+        selected = active
+        for pressed in [false, true] {
+          selectButton.performClick(nil)
+          selectButton.mouseEntered(with: hover)
+          selectButton.highlight(pressed)
+          let bitmap = selectButton.renderedBitmap()
+          let paintsOverTab = (0..<bitmap.pixelsWide).contains { x in
+            (0..<bitmap.pixelsHigh).contains { y in
+              (bitmap.colorAt(x: x, y: y)?.alphaComponent ?? 0) > 0
+            }
+          }
+          try checkTitlebar(!paintsOverTab,
+            "The selection target adds no second surface over the tab in \(appearance.rawValue), selected=\(active), pressed=\(pressed)")
+          selectButton.highlight(false)
+          selectButton.mouseExited(with: hover)
+        }
+      }
+    }
   }
 
   func checkClickOwnership() throws {
@@ -2606,6 +2635,7 @@ do {
   try strip.checkActivityMarks()
   try SwarmTabButton(id: "label-measurements").checkLabelMeasurementChanges()
   try SwarmTabButton(id: "close-shortcuts").checkHoverCloseAndShortcutHints()
+  try SwarmTabButton(id: "selection-surface").checkSelectionSurface()
   try strip.checkTabPresentationAndCapture()
   try SwarmTabButton(id: "hover-fixture").checkHoverStyleAndTooltips()
   try strip.checkDaemon()

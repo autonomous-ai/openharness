@@ -2991,6 +2991,11 @@ private class SwarmTabActionButton: SwarmIconButton {
 }
 
 private final class SwarmSelectButton: SwarmTabActionButton {
+  // The parent draws the complete tab, including hover, press and focus.
+  // NSButton can retain an on-state after activation and paint a second
+  // rounded background even though this selection target is borderless.
+  override func draw(_ dirtyRect: NSRect) {}
+
   override func mouseDown(with event: NSEvent) {
     guard isEnabled else { return }
     highlight(true)
