@@ -240,6 +240,12 @@ Enter and ordinary field-editing keys work. Labels stay unhighlighted, entered
 characters stay masked, and the install button gains emphasis when focused. The
 same centered wordmark and status placement carry through progress and completion.
 
+Actual private ARM VM console, with the password field focused and then the install
+button focused. These are interface checks, not physical Apple hardware evidence.
+
+![Password field focused; install button gray](screenshots/install.png)
+![Install button focused; black text on white](screenshots/install-focused.png)
+
 Asahi firmware identifies the destination. There is no whole-disk picker or
 macOS partition-resizing action. Opening or canceling the form mounts the owning
 EFI partition read-only and creates no installation record. Pressing Install

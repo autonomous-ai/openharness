@@ -128,20 +128,37 @@ class Page:
         self.screen = screen
         self.values, self.positions, self.focus = ['', ''], [0, 0], 0
         self.error = ''
-        self.accent, self.idle, self.active = curses.A_BOLD, curses.A_REVERSE, curses.A_REVERSE | curses.A_BOLD
+        self.accent, self.idle, self.active = curses.A_BOLD, curses.A_REVERSE, curses.A_REVERSE
+        self.palette = []
         self.hits = []
         screen.keypad(True)
         try:
             curses.start_color()
             curses.use_default_colors()
             curses.init_pair(1, curses.COLOR_YELLOW, -1)
-            curses.init_pair(2, curses.COLOR_BLACK, 250 if curses.COLORS >= 256 else curses.COLOR_WHITE)
-            curses.init_pair(3, curses.COLOR_BLACK, 255 if curses.COLORS >= 256 else curses.COLOR_WHITE)
+            idle, active = (250, 255) if curses.COLORS >= 256 else (curses.COLOR_WHITE, curses.COLOR_WHITE)
+            if curses.COLORS < 256 and curses.can_change_color():
+                # The Linux console exposes eight colors. Bold black becomes
+                # gray rather than making a background brighter. Reserve two
+                # palette entries so focus is black-on-white, never gray-on-gray.
+                idle, active = curses.COLOR_CYAN, curses.COLOR_WHITE
+                for color, level in ((idle, 700), (active, 1000)):
+                    self.palette.append((color, *curses.color_content(color)))
+                    curses.init_color(color, level, level, level)
+            curses.init_pair(2, curses.COLOR_BLACK, idle)
+            curses.init_pair(3, curses.COLOR_BLACK, active)
             self.accent |= curses.color_pair(1)
-            self.idle, self.active = curses.color_pair(2), curses.color_pair(3) | curses.A_BOLD
+            self.idle, self.active = curses.color_pair(2), curses.color_pair(3)
             curses.mousemask(curses.BUTTON1_CLICKED | curses.BUTTON1_RELEASED)
         except curses.error:
             pass
+
+    def close(self):
+        for entry in reversed(self.palette):
+            try:
+                curses.init_color(*entry)
+            except curses.error:
+                pass
 
     def line(self, row, text, *, offset=0, width=None, attr=0):
         height, columns = self.screen.getmaxyx()
@@ -288,23 +305,26 @@ class Page:
 def application(screen, payload):
     curses.raw()
     view = Page(screen)
-    with destination() as (root, plan):
-        size = sum(p['size'] for p in plan['additions']) * 4096 / 1024**3
-        label = f'{Path(plan["original"]["device"]).name} · {size:.1f} GiB prepared'
-        while True:
-            password = view.password(label)
-            if password is None:
-                return
-            try:
-                install(root, plan, payload, password, view.progress)
-                break
-            except (OSError, ValueError, subprocess.SubprocessError) as error:
-                diagnostic(error)
-                view.error, view.focus = 'Installation stopped. Details:\n' + str(LOG), 0
-            finally:
-                password = None
-    # Unmount the ESP before reporting success or asking the computer to stop.
-    view.complete()
+    try:
+        with destination() as (root, plan):
+            size = sum(p['size'] for p in plan['additions']) * 4096 / 1024**3
+            label = f'{Path(plan["original"]["device"]).name} · {size:.1f} GiB prepared'
+            while True:
+                password = view.password(label)
+                if password is None:
+                    return
+                try:
+                    install(root, plan, payload, password, view.progress)
+                    break
+                except (OSError, ValueError, subprocess.SubprocessError) as error:
+                    diagnostic(error)
+                    view.error, view.focus = 'Installation stopped. Details:\n' + str(LOG), 0
+                finally:
+                    password = None
+        # Unmount the ESP before reporting success or asking the computer to stop.
+        view.complete()
+    finally:
+        view.close()
 
 
 def main():
