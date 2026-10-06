@@ -147,12 +147,13 @@ void open_question(void) { assert(false); }
 bool queue(action_t action) { if (queue_full) return false; queued = action; return true; }
 '''
 harness += '#ifdef DEVICE_PRO_COMPANION\n'
-for name in ('pro_reader_focus','pro_carry_route_clear','pro_carry_owned','pro_carry_available','pro_send_feedback_clear','pro_send_feedback_matches','pro_send_feedback_begin','pro_send_feedback_text','pro_work_local','pro_work_visible','pro_work_block_reason','pro_work_available','pro_work_capture_pin','pro_work_capture_available','pro_work_draft_available'):
+for name in ('pro_reader_focus','pro_selection_owned','pro_carry_route_clear','pro_carry_owned','pro_carry_available','pro_send_feedback_clear','pro_send_feedback_matches','pro_send_feedback_begin','pro_send_feedback_text','pro_work_local','pro_work_visible','pro_work_block_reason','pro_work_available','pro_work_capture_pin','pro_work_capture_available','pro_work_draft_available'):
     harness += function(name)
 harness += '#endif\n'
 harness += function('ui_project_set_machine')
 harness += function('ui_workspace_applied')
 harness += function('question_view') + function('copy') + function('input_cancel') + function('view') + function('voice_close') + function('workspace_failed')
+harness += '#ifdef DEVICE_PRO_COMPANION\n' + function('pro_selection_search_refuse') + '#endif\n'
 harness += r'''
 #ifdef DEVICE_PRO_COMPANION
 // Notification lifetime is exercised with real callbacks in test_pro_question_lifetime.py.
@@ -551,13 +552,26 @@ int main(void) {
     memset(&form,0,sizeof form);
     reset(); memset(&selection,0,sizeof selection); selection.active=true; selection.revision=3;
     strcpy(selection.id,"search-test"); strcpy(selection.agent,"agent"); s.view=SELECTION;
+#ifdef DEVICE_PRO_COMPANION
+    COPY(s.selection_owner.id,selection.id); COPY(s.selection_owner.host,s.draft_recovery.current_host);
+    s.selection_owner.generation=s.draft_recovery.generation; s.selection_owner.focus_generation=s.reader_focus_generation;
+#endif
     action_t lookup={.kind=A_VOICE,.value=7,.dy=2,.id="agent",.text="search-test"};
     dispatch(lookup); assert(!s.voice_open); lookup.dy=3; dispatch(lookup); work(queued);
     assert(recording && s.voice_search && s.voice_return==SELECTION && !s.voice_review);
     dispatch((action_t){.kind=A_VOICE_STOP,.value=1}); assert(s.voice_waiting && !s.voice_review && !reviews);
     finish_audio(); ui_voice_routed(true,false,"","agent","Agent",1); assert(s.voice_open);
     ui_voice_error("Say the phrase again"); assert(!s.voice_open && s.view==SELECTION && selection.error[0]);
-    selection.error[0]=0; dispatch(lookup); work(queued); discard(); finish_audio();
+    selection.error[0]=0;
+#ifdef DEVICE_PRO_COMPANION
+    // A real Retry begins a new cursor; seed its owner for this audio-only boundary.
+    COPY(s.selection_owner.id,selection.id);
+    dispatch(lookup); work(queued); s.selection_owner.focus_generation++; habitat_tick();
+    assert(!s.voice_open && abort_requested && selection.error[0] && !pro_selection_owned());
+    finish_audio(); selection.error[0]=0; COPY(s.selection_owner.id,selection.id);
+    s.selection_owner.focus_generation=s.reader_focus_generation;
+#endif
+    dispatch(lookup); work(queued); discard(); finish_audio();
     assert(!selection.active && s.view==HOME);
     puts("voice UI: PASS (production handlers; queued cancellation, discard/retry, late replies, modal ownership, timeout, cap, disconnect and hidden-capture recovery)");
 }

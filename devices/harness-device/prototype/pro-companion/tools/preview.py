@@ -27,7 +27,7 @@ from native_shapes import defines, typedef  # noqa: E402
 from native_voice import voice_assets  # noqa: E402
 
 STATES = ("idle", "passed_task", "sent_goal", "sent_loop", "message_options", "notifications", "notifications_muted", "idle_paper", "working", "working_start", "working_59", "working_60", "working_long", "working_hour", "working_paper", "summary", "summary_paper", "mail", "needs_answer", "read_question_home", "unavailable_question_home", "pending_question_home", "listening",
-          "voice_preparing", "voice_sending", "offline", "done", "asleep",
+          "voice_preparing", "voice_sending", "search_listening", "search_waiting", "offline", "done", "asleep",
           "carrying", "carry_recipient_home", "carry_return_home", "carry_expired_home", "launcher", "companion", "daemons", "scenes", "updates", "question", "reader", "locked", "updating",
           "input_shell", "input_offline", "input_link", "input_question", "input_roster", "input_carry_offline", "input_goal_busy", "input_loop_busy",
           "carry_listening", "carry_review", "carry_preview", "carry_rejected", "carry_offline", "carry_preview_offline",
@@ -111,7 +111,7 @@ static bool display_is_asleep(void) { return false; }
 static bool cable_client_supports(uint32_t feature) { (void)feature; return true; }
 '''
     for name in ("find", "active", "pro_reader_source", "pro_reader_owner", "pro_reader_matches", "pro_reader_notice_index", "pro_reader_openable", "pro_reader_latest", "waiting", "working", "is_question", "notice_unread", "color",
-                 "pro_send_feedback_clear", "pro_send_feedback_matches", "pro_send_feedback_begin", "pro_send_feedback_text", "pro_carry_owned", "pro_carry_available", "pro_work_local", "pro_work_visible", "pro_work_block_reason", "pro_work_available", "pro_work_capture_pin", "pro_work_capture_available", "pro_work_draft_available", "character_mood", "question_view", "settings_item", "settings_count",
+                 "pro_send_feedback_clear", "pro_send_feedback_matches", "pro_send_feedback_begin", "pro_send_feedback_text", "pro_selection_owned", "pro_carry_owned", "pro_carry_available", "pro_work_local", "pro_work_visible", "pro_work_block_reason", "pro_work_available", "pro_work_capture_pin", "pro_work_capture_available", "pro_work_draft_available", "character_mood", "question_view", "settings_item", "settings_count",
                  "pro_speech_allowed", "pro_speech_visible", "pro_speech_emotion", "pro_busy_elapsed", "pro_surface_mood"):
         code += function(name, source)
     code += r'''
@@ -197,6 +197,7 @@ static void fixture(const char *name) {
         if(!strcmp(name,"pending_question_home")){s.q.pending=s.q.uncertain=true;COPY(s.q.item[0].answer,"This file only");}
     }
     else if(!strcmp(name,"listening")){s.view=VOICE;s.voice_open=recording=true;character.motion.reaction.pose.level=3;}
+    else if(!strcmp(name,"search_listening")||!strcmp(name,"search_waiting")){s.view=VOICE;s.voice_open=s.voice_search=true;s.voice_return=SELECTION;s.voice_waiting=!strcmp(name,"search_waiting");recording=!s.voice_waiting;COPY(s.voice_target,"Find in output");}
     else if(!strcmp(name,"voice_preparing")){s.view=VOICE;s.voice_open=s.voice_start_pending=true;}
     else if(!strcmp(name,"voice_sending")){s.view=VOICE;s.voice_open=s.voice_waiting=true;}
     else if(!strcmp(name,"speech_pending") || !strncmp(name,"speaking_",9)){

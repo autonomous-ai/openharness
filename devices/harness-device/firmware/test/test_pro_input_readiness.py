@@ -113,6 +113,8 @@ static void audio_client_start_selection(const char *agent,const char *id,unsign
 }
 static void audio_client_request_review(void) { review_requests++; }
 '''
+code += 'static void audio_client_copy_upload_id(char *out,size_t cap) {snprintf(out,cap,"fixture-upload");}\n'
+code += function("pro_selection_search_refuse")
 worker = SOURCE.split("static void worker(", 1)[1]
 code += "static void record_worker(action_t a) { switch(a.kind) {\n"
 code += cases("A_VOICE", "A_VOICE_ABORT", worker, "        ")
@@ -287,6 +289,8 @@ static void special_recordings(void) {
         } else {
             s.view=SELECTION;selection.active=selection.announced=true;selection.revision=10;
             COPY(selection.id,"selection-original");COPY(selection.agent,"design");
+            COPY(s.selection_owner.id,selection.id);COPY(s.selection_owner.host,s.draft_recovery.current_host);
+            s.selection_owner.generation=s.draft_recovery.generation;s.selection_owner.focus_generation=s.reader_focus_generation;
             COPY(a.text,selection.id);a.dy=10;
         }
         dispatch(a);assert(enqueued==1&&sent.kind==A_VOICE);record_worker(sent);

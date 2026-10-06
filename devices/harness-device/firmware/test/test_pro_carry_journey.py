@@ -67,7 +67,7 @@ extra = "#define DRAFT_ROWS 6\n" + "\n".join(re.findall(r"^#define TAB_\w+ \d+$"
 for name in ("pro_work_available", "pro_work_capture_available", "pro_work_draft_available",
              "pro_send_feedback_matches", "pro_send_feedback_begin", "pro_send_feedback_text",
              "draft_emit", "pro_draft_forget", "pro_draft_store_queue", "pro_draft_store_work",
-             "ui_draft_source", "selection_search_fields", "ui_selection_state", "ui_carry_state",
+             "ui_draft_source", "pro_selection_search_refuse", "selection_search_fields", "ui_selection_state", "ui_carry_state",
              "draft_page", "ui_voice_draft", "ui_draft_state"):
     extra += function(name)
 code = code.replace("static void dispatch(action_t a) { if(s.locked)return;switch(a.kind) {\n",

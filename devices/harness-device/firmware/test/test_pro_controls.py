@@ -96,7 +96,7 @@ static uint16_t color(unsigned rgb) { return ht_rgb(rgb); }
 #define ERROR color(HT_THEME_ERROR)
 #define SEL color(HT_THEME_SELECTION)
 '''
-for name in ("pro_reader_source", "pro_reader_owner", "pro_reader_matches", "pro_reader_notice_index", "pro_reader_openable", "pro_reader_latest", "pro_carry_owned", "pro_carry_available", "pro_work_local", "pro_work_visible", "pro_work_block_reason", "pro_work_available", "pro_work_draft_available"):
+for name in ("pro_reader_source", "pro_reader_owner", "pro_reader_matches", "pro_reader_notice_index", "pro_reader_openable", "pro_reader_latest", "pro_selection_owned", "pro_carry_owned", "pro_carry_available", "pro_work_local", "pro_work_visible", "pro_work_block_reason", "pro_work_available", "pro_work_draft_available"):
     code += function(name)
 code += function("settings_item") + function("settings_count")
 code += '#include "pro_controls.inc"\n'
@@ -148,7 +148,7 @@ static void reset(bool stress) {
     COPY(q->options[0],"A quieter landscape with a bigger, more expressive creature and clearer text.");
     COPY(q->answer,q->options[0]);COPY(q->draft,"spoken-answer");
     COPY(selection.agent,"agent-0");COPY(selection.id,"selection");selection.active=true;selection.announced=true;selection.rows=3;
-    selection.revision=1;COPY(selection.excerpt,"A quieter layout gives your words more room, and keeps every interaction predictable.");
+    selection.revision=1; COPY(s.selection_owner.id,selection.id); COPY(s.selection_owner.host,s.draft_recovery.current_host); s.selection_owner.generation=s.draft_recovery.generation; s.selection_owner.focus_generation=s.reader_focus_generation; COPY(selection.excerpt,"A quieter layout gives your words more room, and keeps every interaction predictable.");
     COPY(form.id,"find-fixture");form.page.active=form.page.enabled=form.page.can_query=true;
     COPY(form.page.title,"Find Harness");COPY(form.page.previous,"Yesterday's sketchbook");
     COPY(form.page.label,"A little company");COPY(form.page.detail,"The Pro companion prototype. Last worked on moments ago, on this computer.");

@@ -157,6 +157,9 @@ typedef enum {
     A_CARRY, A_CARRY_DROP, A_CARRY_SEND,
     A_DRAFT_EDIT, A_DRAFT_APPEND, A_DRAFT_UNDO, A_DRAFT_SEND, A_DRAFT_DISCARD,
     A_DRAFT_STATE, A_DRAFT_OPTIONS, A_DRAFT_BACK, A_DRAFT_COMMAND, A_NOTICE_READ
+#ifdef DEVICE_PRO_COMPANION
+    , A_SELECT_MATCH
+#endif
 } action_kind_t;
 #ifdef DEVICE_PRO_COMPANION
 typedef enum {
@@ -976,6 +979,25 @@ static void voice_close(void)
 #endif
     s.voice_generation++; // invalidate a start still queued behind another cable action
 }
+#ifdef DEVICE_PRO_COMPANION
+static void pro_selection_search_refuse(void)
+{
+    if (s.voice_open && s.voice_search) {
+        if (!s.voice_start_pending) {
+            action_t cancel = {.kind=A_VOICE_ABORT};
+            audio_client_copy_upload_id(cancel.text, sizeof cancel.text);
+            audio_client_abort(); queue(cancel);
+        }
+        voice_close();
+    }
+    // Cancelling search also cancels the host cursor. Only an explicit fresh
+    // selection may restore authority; keep its source for the Retry control.
+    s.selection_owner.id[0] = 0;
+    selection.pending = false; selection.queued = selection.remainder = 0;
+    COPY(selection.error, "Choose the text again.");
+    view(selection.active ? SELECTION : HOME);
+}
+#endif
 static int workspace_index(const char *id)
 {
     if (!id || !*id) return -1;
@@ -2831,7 +2853,11 @@ static action_t make_action(hit_t h)
         a.revision = form.page.revision;
         a.dy = (int)form.page.revision;
         copy(a.text, sizeof form.id, form.id);
-    } else if (s.view == SELECTION && (h.action == A_PET || h.action == A_CARRY || h.action == A_SELECT_FIND)) {
+    } else if (s.view == SELECTION && (h.action == A_PET || h.action == A_CARRY || h.action == A_SELECT_FIND
+#ifdef DEVICE_PRO_COMPANION
+        || h.action == A_SELECT_MATCH || h.action == A_SELECT_EXTEND
+#endif
+        )) {
         COPY(a.id, selection.agent);
         copy(a.text, sizeof selection.id, selection.id);
         a.dy = (int)selection.revision;
@@ -3538,6 +3564,7 @@ static void dispatch(action_t a)
         dispatch(a); break;
     case A_VOICE:
 #ifdef DEVICE_PRO_COMPANION
+        if (a.value == 7 && !pro_selection_owned()) break;
         if (carry.active && s.view != SELECTION && (a.value == 0 || a.value == 1 || a.value == 8)) break;
         if (a.value == 3 && (!pro_carry_available() || !cable_client_supports(CABLE_FEATURE_DRAFT) ||
             find(a.id) < 0 || (int32_t)(ms() - carry.deadline) >= 0)) break;
@@ -3703,8 +3730,24 @@ static void dispatch(action_t a)
         }
         break;
     case A_SELECT_EXTEND:
+#ifdef DEVICE_PRO_COMPANION
+        if (s.view != SELECTION || carry.pending || !pro_selection_owned() || strcmp(a.id, selection.agent) ||
+            strcmp(a.text, selection.id) || (uint32_t)a.dy != selection.revision) break;
+#endif
         ht_selection_extend(&selection, ms()); change();
         break;
+#ifdef DEVICE_PRO_COMPANION
+    case A_SELECT_MATCH:
+        if (s.view == SELECTION && !carry.pending && pro_selection_owned() && ht_selection_ready(&selection) &&
+            selection.query[0] && selection.matches > 0 && (a.value == -1 || a.value == 1) &&
+            !strcmp(a.id, selection.agent) && !strcmp(a.text, selection.id) &&
+            (uint32_t)a.dy == selection.revision) {
+            // A precision tap advances one match, independent of prior drag residue.
+            selection.remainder = 0;
+            ht_selection_move(&selection, a.value * 60, ms()); change();
+        }
+        break;
+#endif
     case A_CARRY:
 #ifdef DEVICE_PRO_COMPANION
         if (!cable_client_supports(CABLE_FEATURE_DRAFT) || !pro_selection_owned()) break;
@@ -4119,6 +4162,11 @@ static void worker(void *unused)
             if (s.connected && s.voice_open && s.voice_start_pending &&
                 a.revision == s.voice_generation) {
 #ifdef DEVICE_PRO_COMPANION
+                if (a.value == 7 && (!pro_selection_owned() || !ht_selection_ready(&selection) ||
+                    strcmp(a.id, selection.agent) || strcmp(a.text, selection.id) ||
+                    a.dy <= 0 || (uint32_t)a.dy != selection.revision)) {
+                    pro_selection_search_refuse(); display_unlock(); break;
+                }
                 if (a.value == 3 && (!pro_carry_available() || !cable_client_supports(CABLE_FEATURE_DRAFT) || find(a.id) < 0 ||
                     strcmp(a.id, s.carry_review.agent) || strcmp(a.text, s.carry_review.id) ||
                     !carry.active || strcmp(a.text, carry.id) || (int32_t)(ms() - carry.deadline) >= 0)) {
@@ -4738,6 +4786,9 @@ void habitat_tick(void)
         change();
     }
     if (ht_selection_tick(&selection, now)) change();
+#ifdef DEVICE_PRO_COMPANION
+    if (s.voice_open && s.voice_search && !pro_selection_owned()) pro_selection_search_refuse();
+#endif
     bool carry_held = s.voice_open && s.voice_carry;
 #ifdef DEVICE_PRO_COMPANION
     carry_held = (carry_held || pro_carry_review_owns(&s.carry_review, &draft.page)) &&
@@ -6541,6 +6592,11 @@ void ui_voice_search(const cJSON *p)
         !cJSON_IsNumber(rows) || rows->valuedouble != rows->valueint || !cJSON_IsString(excerpt) ||
         !selection_search_fields(p,&query,&match,&matches) || !query) return;
     display_lock();
+#ifdef DEVICE_PRO_COMPANION
+    if (s.voice_open && s.voice_waiting && s.voice_search && !pro_selection_owned()) {
+        pro_selection_search_refuse(); display_unlock(); return;
+    }
+#endif
     if (s.voice_open && s.voice_waiting && s.voice_search && s.voice_return == SELECTION &&
         ht_selection_found(&selection,id->valuestring,agent->valuestring,(uint32_t)revision->valueint,
             excerpt->valuestring,rows->valueint,query,match,matches)) {
@@ -6924,6 +6980,10 @@ void ui_voice_error(const char *message)
     }
     voice_close();
     if (s.voice_search && selection.active) {
+#ifdef DEVICE_PRO_COMPANION
+        s.selection_owner.id[0] = 0;
+        selection.pending = false; selection.queued = selection.remainder = 0;
+#endif
         COPY(selection.error, message); view(SELECTION);
     } else if (s.voice_return == DRAFT && draft.page.active) {
         COPY(draft.page.error, message); draft.failed = true; view(DRAFT);

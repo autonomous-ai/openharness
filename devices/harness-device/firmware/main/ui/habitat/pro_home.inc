@@ -127,9 +127,10 @@ static void pro_render_voice(ht_scene_t *f)
     ht_pro_text(f, 44, 496, 632, &ht_pro_42, color(0x263b34), title);
     ht_pro_text(f, 44, 554, 632, &ht_pro_24, color(0x627466),
         recording ? (s.voice_review ? PRO_TR("Tap to review.") : can_review ? PRO_TR("Tap to send. Hold to review first.") : PRO_TR("Tap to finish speaking.")) :
-        PRO_TR("Your words stay with the selected pane."));
+        s.voice_search ? "" : PRO_TR("Your words stay with the selected pane."));
     ht_pro_rect(f, 0, 596, 720, 124, 0, color(0xfbf9ef));
-    pro_control(f, 44, 618, 288, 72, s.voice_waiting && !s.voice_review ? PRO_TR("Stop sending") : PRO_TR("Discard"), A_VOICE_ABORT, 0, true);
+    pro_control(f, 44, 618, 288, 72, s.voice_search ? PRO_TR("Cancel search") :
+        s.voice_waiting && !s.voice_review ? PRO_TR("Stop sending") : PRO_TR("Discard"), A_VOICE_ABORT, 0, true);
     if (can_review) pro_control(f, 388, 618, 288, 72, s.voice_review ? PRO_TR("Review") : PRO_TR("Review first"), A_VOICE_STOP, 1, true);
     else ht_pro_text(f, 388, 642, 288, &ht_pro_24, color(0x627466), recording ? PRO_TR("Tap the creature to finish") : PRO_TR("One moment..."));
     pro_hit(40, 106, 640, 474, A_PET, 0, recording);

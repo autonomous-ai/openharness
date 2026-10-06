@@ -771,20 +771,31 @@ static void pro_selection(ht_scene_t *f)
         pro_control(f, 220, 606, 280, 68, PRO_TR("Try again"), A_SELECT_BEGIN, 0, retry);
         return;
     }
+    bool ready = ht_selection_ready(&selection) && pro_selection_owned();
     char status[72];
-    if (selection.query[0]) snprintf(status, sizeof status, PRO_TR("%d of %d matches"), selection.match, selection.matches);
-    else snprintf(status, sizeof status, PRO_TR("%d line%s selected"), selection.rows, selection.rows == 1 ? "" : PRO_TR("s"));
-    ht_pro_text(f, 48, 190, 624, &ht_pro_24, ACCENT, status);
+    if (selection.query[0]) {
+        if (selection.matches > 0) {
+            snprintf(status, sizeof status, PRO_TR("%d of %d"), selection.match, selection.matches);
+            pro_control(f, 32, 170, 176, 64, PRO_TR("Previous"), A_SELECT_MATCH, -1, ready);
+            pro_control(f, 512, 170, 176, 64, PRO_TR("Next"), A_SELECT_MATCH, 1, ready);
+        } else COPY(status, PRO_TR("No matches"));
+        int width = ht_pro_width(&ht_pro_24, status);
+        ht_pro_text(f, 224 + (272 - width) / 2, 190, 272, &ht_pro_24, ACCENT, status);
+    } else {
+        snprintf(status, sizeof status, PRO_TR("%d line%s selected"), selection.rows, selection.rows == 1 ? "" : PRO_TR("s"));
+        ht_pro_text(f, 48, 190, 624, &ht_pro_24, ACCENT, status);
+    }
     ht_pro_wrap(f, 56, 246, 608, 7, 0, &ht_pro_32, FG, selection.excerpt[0] ? selection.excerpt :
-                selection.pending ? PRO_TR("Finding the text...") : selection.query[0] ? PRO_TR("No matches. Try another phrase.") : PRO_TR("Look at your desktop. Drag here to choose a line."));
-    bool ready = ht_selection_ready(&selection);
-    if (ready && selection.excerpt[0]) pro_hit(40, 226, 640, 322, A_PET, 0, true);
+                selection.pending ? PRO_TR("Finding the text...") : selection.query[0] ? "" : PRO_TR("Look at your desktop. Drag here to choose a line."));
+    if (ready && selection.excerpt[0]) pro_hit(40, 246, 640, 302, A_PET, 0, true);
     pro_control(f, 32, 606, 192, 68, PRO_TR("Find"), A_SELECT_FIND, 0, ready);
     pro_control(f, 240, 606, 224, 68, selection.query[0] ? PRO_TR("By line") : selection.extending ? PRO_TR("Range") : PRO_TR("One line"),
                 A_SELECT_EXTEND, 0, ready && selection.rows > 0);
     pro_control(f, 480, 606, 208, 68, PRO_TR("Carry text"), A_CARRY, 0,
                 ready && selection.excerpt[0] && cable_client_supports(CABLE_FEATURE_DRAFT));
-    pro_note(f, selection.pending ? PRO_TR("Choosing...") : PRO_TR("Tap the passage to talk about it."));
+    pro_note(f, selection.pending ? PRO_TR("Choosing...") : selection.query[0] ?
+        (selection.matches ? PRO_TR("Swipe to choose a match.") : PRO_TR("Try another phrase.")) :
+        PRO_TR("Tap the passage to talk about it."));
 }
 
 static void pro_form(ht_scene_t *f)
