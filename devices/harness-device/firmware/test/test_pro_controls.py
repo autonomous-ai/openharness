@@ -96,7 +96,7 @@ static uint16_t color(unsigned rgb) { return ht_rgb(rgb); }
 #define ERROR color(HT_THEME_ERROR)
 #define SEL color(HT_THEME_SELECTION)
 '''
-for name in ("pro_work_local", "pro_work_visible", "pro_work_block_reason", "pro_work_available", "pro_work_draft_available"):
+for name in ("pro_reader_source", "pro_reader_owner", "pro_reader_matches", "pro_reader_notice_index", "pro_reader_openable", "pro_work_local", "pro_work_visible", "pro_work_block_reason", "pro_work_available", "pro_work_draft_available"):
     code += function(name)
 code += function("settings_item") + function("settings_count")
 code += '#include "pro_controls.inc"\n'
@@ -122,6 +122,9 @@ static void reset(bool stress) {
     }
     COPY(s.work_agent,"agent-0");COPY(s.agents[0].engine,"claude");
     pro_draft_recovery_source(&s.draft_recovery,"host-local");COPY(s.work_host,"host-local");s.work_generation=s.draft_recovery.generation;COPY(s.agents[0].machine_id,"host-local");
+    COPY(s.notice_host,"host-local");COPY(s.reader.host,"host-local");
+    s.reader.captured=true;s.reader.serial=1;COPY(s.reader_agent,s.agents[0].id);
+    COPY(s.reader.name,s.agents[0].name);COPY(s.reader.text,s.agents[0].full);
     COPY(s.selected_tab,"tab-1");ht_tab_carousel_reset(&tab_carousel,s.tab_count,1);
     for(int i=0;i<s.machine_count;i++) {
         snprintf(s.machines[i].id,sizeof s.machines[i].id,"machine-%d",i);
@@ -270,9 +273,42 @@ static void map_checks(const char *dir) {
     inspect(&map,"explicit list");assert(action_count(A_AGENT,true)==4&&action_count(A_AGENT_LAYOUT,true)==1);
     portrait(&map,dir,"map-list");
 }
+static void reader_checks(const char *dir) {
+    ht_scene_t sheet;
+    // The overflow affordance follows measured rows, never a character-count
+    // heuristic; the existing question route remains independent.
+    for(int bytes=1;bytes<240;bytes++)for(int question=0;question<2;question++) {
+        reset(false);s.view=INBOX;s.notice[0].question=question;
+        memset(s.notice[0].summary,'W',(size_t)bytes);s.notice[0].summary[bytes]=0;
+        ht_scene_clear(&sheet,BG);assert(pro_render_controls(&sheet));inspect(&sheet,"summary overflow gate");
+        bool overflow=!question&&ht_pro_text_rows(s.notice[0].summary,&ht_pro_32,624)>7;
+        assert(action_count(A_READER,true)==(unsigned)overflow);
+    }
+    for(int notice=0;notice<2;notice++)for(int state=0;state<6;state++)for(int stress=0;stress<2;stress++) {
+        reset(stress);s.view=READER;s.reader.from_notice=notice;
+        if(notice) {COPY(s.reader.text,s.notice[0].summary);s.reader.notice_revision=s.notice[0].display_revision;}
+        switch(state) {
+        case 1:s.connected=false;break;
+        case 2:COPY(s.notice_host,"another-host");break;
+        case 3:s.active=1;break;
+        case 4:s.count=0;break;
+        case 5:s.result_generation++;break;
+        default:break;
+        }
+        ht_scene_clear(&sheet,BG);assert(pro_render_controls(&sheet));inspect(&sheet,"frozen reader states");
+        assert(has_text(&sheet,"Summary")&&action_count(A_READER_BACK,true)==1);
+        assert(action_count(A_SELECT_BEGIN,false)==(unsigned)!notice);
+        bool openable=state==0||state==3||(notice&&state==4);
+        assert(action_count(A_DESKTOP,true)==(unsigned)openable);
+        assert(action_count(A_SELECT_BEGIN,true)==(unsigned)(!notice&&state==0));
+        if(!notice)assert(has_text(&sheet,"Current output"));
+        if(!stress) {char name[64];snprintf(name,sizeof name,"reader-scope-%d-%d",notice,state);portrait(&sheet,dir,name);}
+    }
+}
 int main(int argc,char **argv) {
     const char *dir=argc>1?argv[1]:NULL;
     map_checks(dir);
+    reader_checks(dir);
     for(int lang=0;lang<2;lang++)for(int stress=0;stress<2;stress++)for(int state=0;state<4;state++) {
         reset(stress);COPY(s.voice_language,lang?"vi":"en");
         carry=(ht_carry_t){.active=true,.rows=4,.id="carry-original",.source="Research",.excerpt="Keep the landscape quiet. Give the creature room to breathe, and let clear words lead when there is something to read."};

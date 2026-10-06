@@ -20,8 +20,10 @@ static void pro_control(ht_scene_t *f, int x, int y, int w, int h, const char *l
     bool pressed = hit >= 0 && hit == s.pressed;
     bool primary = action == A_ANSWER || action == A_DRAFT_SEND || action == A_FORM_MAIN ||
                    action == A_CHOICE || action == A_QUESTION || action == A_CARRY || action == A_APPEAR_USE ||
+                   (action == A_READER && s.view==INBOX) ||
                    (action == A_NOTICE && !(s.view == INBOX && value >= 0 && value < s.notice_count &&
-                       s.notice[value].question && !s.notice[value].question_unavailable && cable_client_supports(CABLE_FEATURE_QUESTIONS))) ||
+                       ((s.notice[value].question && !s.notice[value].question_unavailable && cable_client_supports(CABLE_FEATURE_QUESTIONS)) ||
+                        (!s.notice[value].question && ht_pro_text_rows(s.notice[value].summary,&ht_pro_32,624)>7)))) ||
                    action == A_SAMPLE_PLAY;
     uint16_t fill = enabled && (pressed || primary) ? ACCENT : SEL;
     if (enabled && action == A_STOP_YES) fill = color(0xa44343);
@@ -499,11 +501,14 @@ static void pro_inbox(ht_scene_t *f)
                 n->summary[0] ? n->summary : PRO_TR("No preview available."));
     // Answering is local to this ID. Opening is the separate focus-changing action.
     bool answer = n->question && !n->question_unavailable && cable_client_supports(CABLE_FEATURE_QUESTIONS);
+    bool read = !n->question && ht_pro_text_rows(n->summary,&ht_pro_32,624)>7;
     bool available = s.connected && !visit.pending;
     if (answer)
         pro_control(f, 32, 606, 280, 68, PRO_TR("Answer"), A_QUESTION, s.offset,
                     available && !s.q.pending);
-    pro_control(f, answer ? 328 : 220, 606, answer ? 360 : 280, 68,
+    if (read)
+        pro_control(f,32,606,280,68,PRO_TR("Read"),A_READER,1,true);
+    pro_control(f, answer || read ? 328 : 220, 606, answer || read ? 360 : 280, 68,
                 PRO_TR("Open on desktop"), A_NOTICE, s.offset, available);
     s.notice_frame = n->read_on_dial ? 0 : n->display_revision;
     pro_note(f, s.notice_overflow ? "More in Harness" : PRO_TR("Swipe for other updates. Opening changes your pane."));
@@ -603,22 +608,32 @@ static void pro_read_text(ht_scene_t *f, const char *value, int y, int rows)
 
 static void pro_reader(ht_scene_t *f)
 {
-    pro_heading(f, PRO_TR("Latest result"), A_LAUNCHER);
+    pro_heading(f, PRO_TR("Summary"), A_READER_BACK);
     int recipient = find(s.reader_agent);
-    agent_t *a = recipient >= 0 ? &s.agents[recipient] : !s.reader_agent[0] ? active() : NULL;
+    agent_t *a = recipient >= 0 ? &s.agents[recipient] : NULL;
     bool same_pane = a && active() && !strcmp(a->id, active()->id);
-    bool can_select = s.connected && !s.loading && same_pane && !visit.pending &&
-                      !s.pending_focus[0] && !s.pending_machine[0] &&
+    bool can_select = pro_reader_openable() && !s.reader.from_notice && same_pane &&
                       cable_client_supports(CABLE_FEATURE_SELECTION);
-    ht_pro_text(f, 48, 134, 384, &ht_pro_24, DIM, a ? a->name : PRO_TR("No pane selected"));
-    pro_control(f, 456, 124, 232, 64, PRO_TR("Select output"), A_SELECT_BEGIN, 1, can_select);
-    const char *value = a && a->full[0] ? a->full : PRO_TR("No result to read yet. I'll bring it here when it's ready.");
+    ht_pro_text(f, 48, 134, s.reader.from_notice ? 624 : 384, &ht_pro_24, DIM, s.reader.name);
+    if (!s.reader.from_notice)
+        pro_control(f, 456, 124, 232, 64, PRO_TR("Current output"), A_SELECT_BEGIN, 1, can_select);
+    const char *value = s.reader.text[0] ? s.reader.text : PRO_TR("No saved summary.");
     pro_read_text(f, value, 190, 9);
     pro_control(f, 32, 606, 160, 68, PRO_TR("Earlier"), A_UP, 0, s.offset > 0);
-    pro_control(f, 216, 606, 288, 68, PRO_TR("Open on desktop"), A_DESKTOP, 2, s.connected && a && !visit.pending);
+    pro_control(f, 216, 606, 288, 68, PRO_TR("Open on desktop"), A_DESKTOP, 2, pro_reader_openable());
     int total = ht_pro_text_rows(value, &ht_pro_32, 608);
     pro_control(f, 528, 606, 160, 68, PRO_TR("More"), A_DOWN, 0, s.offset + 9 < total);
-    pro_note(f, a && !same_pane ? PRO_TR("Open this pane to select.") : PRO_TR("Swipe to read this result."));
+    const char *note="More in Harness.";
+    if (!pro_reader_owner()) note=s.reader.host[0] && s.notice_host[0] && strcmp(s.reader.host,s.notice_host) ?
+        "Saved on another computer." : "Saved summary.";
+    else if (!s.connected) note="Saved summary. Computer disconnected.";
+    else if (!s.reader.from_notice && !a) note="Pane unavailable.";
+    else if (s.reader.from_notice && pro_reader_notice_index()<0) {
+        for (int i=0;i<s.notice_count;i++) if (!strcmp(s.notice[i].agent_id,s.reader_agent)) {
+            note="Newer update available."; break;
+        }
+    }
+    pro_note(f,PRO_TR(note));
 }
 
 static void pro_unknown_answer(ht_scene_t *f)

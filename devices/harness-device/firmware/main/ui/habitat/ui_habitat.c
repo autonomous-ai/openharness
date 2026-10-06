@@ -110,6 +110,9 @@ typedef enum {
     A_AGENTS,
     A_AGENT,
     A_READER,
+#ifdef DEVICE_PRO_COMPANION
+    A_READER_BACK,
+#endif
     A_QUESTION,
     A_CHOICE,
     A_ANSWER, A_QUESTION_READ, A_QUESTION_CHOICES, A_QUESTION_REVIEW, A_QUESTION_BACK, A_QUESTION_SAY,
@@ -236,6 +239,13 @@ static EXT_RAM_BSS_ATTR struct {
     char work_agent[ID_MAX];
     char work_host[ID_MAX];
     char reader_agent[ID_MAX];
+    struct {
+        char host[ID_MAX], name[CABLE_NAME_MAX], text[PANE_RESULT_BYTES], token[CABLE_READ_TOKEN_MAX];
+        uint32_t serial, notice_revision, source_generation;
+        int entry, origin, row;
+        bool captured, from_notice, failed;
+    } reader;
+    uint32_t result_generation;
     uint32_t work_revision, work_generation;
     uint32_t work_roster_after;
     bool work_roster_pending;
@@ -582,6 +592,102 @@ static void pane_memory_apply(agent_t *a, pane_memory_t *m)
     a->recap_ready = a->has_event && !m->dismissed && !m->awaiting_result && !m->busy;
 }
 #ifdef DEVICE_PRO_COMPANION
+static bool pro_reader_source(void)
+{
+    return s.reader.captured && s.reader.source_generation==s.result_generation &&
+        !strcmp(s.reader.host,s.notice_host);
+}
+static bool pro_reader_owner(void)
+{
+    return s.reader.host[0] && pro_reader_source();
+}
+static bool pro_reader_matches(const cable_notif_t *n)
+{
+    if (!s.reader.from_notice || !pro_reader_source() || n->question ||
+        strcmp(n->agent_id,s.reader_agent) || strcmp(n->summary,s.reader.text) || n->failed!=s.reader.failed)
+        return false;
+    // Tokenless legacy cards have only a local occurrence. Equal words do not
+    // associate them with a later callback, or with the separate summary cache.
+    return s.reader.token[0] ? !strcmp(n->read_token,s.reader.token) :
+        !n->read_token[0] && n->display_revision==s.reader.notice_revision;
+}
+static int pro_reader_notice_index(void)
+{
+    for (int i=0;i<s.notice_count;i++) if (pro_reader_matches(&s.notice[i])) return i;
+    return -1;
+}
+static bool pro_reader_openable(void)
+{
+    return pro_reader_owner() && s.connected && !s.loading && !visit.pending &&
+        !s.pending_focus[0] && !s.pending_machine[0] &&
+        (s.reader.from_notice || find(s.reader_agent)>=0);
+}
+static void pro_reader_copy(char *dst, size_t cap, const char *src)
+{
+    if (!cap) return;
+    copy(dst,cap,src);
+    // Older cache writes may end part-way through a UTF-8 character. Preserve
+    // line breaks and every complete character without displaying a broken tail.
+    size_t len=strlen(dst), start=len;
+    while (start && ((unsigned char)dst[start-1]&0xc0)==0x80) start--;
+    if (start) start--;
+    unsigned char lead=(unsigned char)dst[start];
+    size_t bytes=lead>=0xc2 && lead<=0xdf ? 2 : lead>=0xe0 && lead<=0xef ? 3 :
+                 lead>=0xf0 && lead<=0xf4 ? 4 : 1;
+    if (len-start<bytes) dst[start]=0;
+}
+static void pro_reader_begin(action_t a)
+{
+    if (strcmp(a.text,s.notice_host) || (uint32_t)a.dy!=s.result_generation) return;
+    cable_notif_t *n=NULL;
+    const agent_t *agent=NULL;
+    if (a.value==1) {
+        if (s.view!=INBOX) return;
+        for (int i=0;i<s.notice_count;i++) if (!s.notice[i].question &&
+            s.notice[i].display_revision==a.revision && !strcmp(s.notice[i].agent_id,a.id)) {
+            n=&s.notice[i]; break;
+        }
+        if (!n || ht_pro_text_rows(n->summary,&ht_pro_32,624)<=7) return;
+    } else {
+        if (s.view!=LAUNCHER && s.view!=HOME && s.view!=AGENT) return;
+        int i=find(a.id);
+        if (i<0) return;
+        agent=&s.agents[i];
+    }
+    bool same=n ? pro_reader_matches(n) : pro_reader_source() && !s.reader.from_notice &&
+        !strcmp(a.id,s.reader_agent) && !strcmp(agent->full,s.reader.text);
+    int row=same ? s.reader.row : 0;
+    uint32_t serial=s.reader.serial+1;
+    if (!serial) serial=1;
+    memset(&s.reader,0,sizeof s.reader);
+    s.reader.serial=serial; s.reader.captured=true; s.reader.from_notice=n!=NULL;
+    s.reader.source_generation=s.result_generation;
+    s.reader.entry=s.view; s.reader.origin=s.offset; s.reader.row=row;
+    COPY(s.reader_agent,a.id); COPY(s.reader.host,s.notice_host);
+    COPY(s.reader.name,n ? n->name : agent->name);
+    pro_reader_copy(s.reader.text,sizeof s.reader.text,n ? n->summary : agent->full);
+    if (n) {
+        COPY(s.reader.token,n->read_token); s.reader.notice_revision=n->display_revision;
+        s.reader.failed=n->failed;
+        // An explicit Read can beat the display-complete callback. Record the
+        // exact card now so its later ACK/empty unread snapshot keeps our place.
+        notice_mark_read(n);
+    }
+    view(READER);
+    if (s.view==READER) s.offset=row;
+}
+static void pro_reader_back(action_t a)
+{
+    if (s.view!=READER || a.revision!=s.reader.serial || strcmp(a.id,s.reader_agent)) return;
+    s.reader.row=s.offset;
+    if (s.reader.from_notice) {
+        int at=pro_reader_notice_index();
+        if (at<0 && pro_reader_source()) for (int i=0;i<s.notice_count;i++)
+            if (!strcmp(s.notice[i].agent_id,s.reader_agent)) { at=i; break; }
+        if (at<0) at=s.reader.origin<s.notice_count ? s.reader.origin : s.notice_count-1;
+        view(INBOX); s.offset=at>=0 ? at : 0;
+    } else view(s.reader.entry==AGENT ? AGENT : s.reader.entry==HOME ? HOME : LAUNCHER);
+}
 static void pro_send_feedback_clear(void)
 {
     memset(&s.send_feedback, 0, sizeof s.send_feedback);
@@ -774,6 +880,7 @@ static void view(view_t v)
     if (s.voice_open && v != VOICE)
         return;
 #ifdef DEVICE_PRO_COMPANION
+    if (s.view==READER && v!=READER) s.reader.row=s.offset;
     if (v != VOICE_SAMPLES && v != VOICE_PARAMS) pro_voice_sample_stop();
     if (v != TODAY) pro_metrics_close(&s.metrics);
 #endif
@@ -2565,6 +2672,19 @@ static action_t make_action(hit_t h)
         COPY(a.id, s.work_agent); a.revision = s.work_revision;
         return a;
     }
+    if (s.view==INBOX && h.action==A_READER && h.value==1 && s.offset>=0 && s.offset<s.notice_count) {
+        COPY(a.id,s.notice[s.offset].agent_id);
+        COPY(a.text,s.notice_host);
+        a.dy=(int)s.result_generation;
+        a.revision=s.notice[s.offset].display_revision;
+        return a;
+    }
+    if (h.action==A_READER) {
+        if (active()) COPY(a.id,active()->id);
+        COPY(a.text,s.notice_host);
+        a.dy=(int)s.result_generation;
+        return a;
+    }
     if (s.view == INBOX && (h.action == A_NOTICE || h.action == A_QUESTION) &&
         h.value >= 0 && h.value < s.notice_count) {
         COPY(a.id, s.notice[h.value].agent_id);
@@ -2575,9 +2695,10 @@ static action_t make_action(hit_t h)
         COPY(a.id,s.q.agent);
         return a;
     }
-    if (s.view == READER && ((h.action == A_DESKTOP && h.value == 2) ||
-                            (h.action == A_SELECT_BEGIN && h.value == 1))) {
+    if (s.view == READER) {
         COPY(a.id, s.reader_agent);
+        a.revision=s.reader.serial;
+        if (h.action==A_UP || h.action==A_DOWN) a.value=1;
         return a;
     }
     if (s.view == SELECTION && h.action == A_SELECT_BEGIN) {
@@ -3047,10 +3168,13 @@ static void dispatch(action_t a)
     }
     case A_READER:
 #ifdef DEVICE_PRO_COMPANION
-        if (find(a.id) < 0) break;
-        COPY(s.reader_agent,a.id);
-#endif
+        pro_reader_begin(a);
+        break;
+    case A_READER_BACK:
+        pro_reader_back(a);
+#else
         view(READER);
+#endif
         break;
     case A_QUESTION:
 #ifdef DEVICE_PRO_COMPANION
@@ -3401,7 +3525,8 @@ static void dispatch(action_t a)
             // from fresh host output for the captured source, never today's active
             // pane substituted for a reader or retry action captured earlier.
             if (visit.pending || s.pending_focus[0] || s.pending_machine[0] || strcmp(a.id, active()->id)) break;
-            if (a.value == 1 && (s.view != READER || strcmp(a.id, s.reader_agent))) break;
+            if (a.value == 1 && (s.view != READER || strcmp(a.id, s.reader_agent) ||
+                a.revision!=s.reader.serial || s.reader.from_notice || !pro_reader_owner())) break;
             if (s.view == SELECTION && (strcmp(a.id, selection.agent) ||
                 strcmp(a.text, selection.id) || (uint32_t)a.dy != selection.revision)) break;
             if (a.value != 1 && s.view != SETTINGS && s.view != SELECTION) break;
@@ -3561,7 +3686,8 @@ static void dispatch(action_t a)
     case A_DESKTOP:
 #ifdef DEVICE_PRO_COMPANION
         if (a.value==2) {
-            if (s.view==READER && a.id[0] && !strcmp(a.id,s.reader_agent) && find(a.id)>=0)
+            if (s.view==READER && a.id[0] && !strcmp(a.id,s.reader_agent) &&
+                a.revision==s.reader.serial && pro_reader_openable())
                 pro_open_in_app(a.id);
             break;
         }
@@ -3575,12 +3701,20 @@ static void dispatch(action_t a)
             queue(a);
         break;
     case A_UP:
+#ifdef DEVICE_PRO_COMPANION
+        if (a.value==1 && s.view!=READER) break;
+        if (s.view==READER && (a.revision!=s.reader.serial || strcmp(a.id,s.reader_agent))) break;
+#endif
         s.offset -= s.view == READER ? 5 : 3;
         if (s.offset < 0)
             s.offset = 0;
         change();
         break;
     case A_DOWN:
+#ifdef DEVICE_PRO_COMPANION
+        if (a.value==1 && s.view!=READER) break;
+        if (s.view==READER && (a.revision!=s.reader.serial || strcmp(a.id,s.reader_agent))) break;
+#endif
         if (s.view == INBOX)
             s.offset = s.notice_count ? (s.offset + 1) % s.notice_count : 0;
         else s.offset += s.view == READER ? 5 : 3;
@@ -4129,13 +4263,21 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
             } else if (s.view == CARRY_PREVIEW) {
                 s.offset += dy < 0 ? 3 : -3;
                 if (s.offset < 0) s.offset = 0;
+            } else if (s.view == READER) {
+                if (pressed_action.revision==s.reader.serial && !strcmp(pressed_action.id,s.reader_agent)) {
+                    int next=s.offset+(dy<0 ? 5 : -5);
+                    s.offset=next<0 ? 0 : next;
+                }
 #endif
             } else if (s.start_y >= HT_HEIGHT - 66 && dy < 0)
                 view(HOME);
+#ifndef DEVICE_PRO_COMPANION
             else if (s.view == READER) {
                 int next = s.offset + (dy < 0 ? 5 : -5);
                 s.offset = next < 0 ? 0 : next;
-            } else if (s.view == INBOX && s.notice_count)
+            }
+#endif
+            else if (s.view == INBOX && s.notice_count)
                 s.offset = (s.offset + (dy < 0 ? 1 : s.notice_count - 1)) % s.notice_count;
             else {
                 int count = s.view == AGENTS     ? s.count
@@ -4172,7 +4314,13 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
                     view(s.view==ANSWER_REVIEW ? CHOICE : s.view==CHOICE ? QUESTION : HOME);
 #endif
                 }
-            } else if (s.view == INBOX && s.notice_count)
+            }
+#ifdef DEVICE_PRO_COMPANION
+            else if (s.view==READER) {
+                if (dx>0) { action_t back=pressed_action; back.kind=A_READER_BACK; dispatch(back); }
+            }
+#endif
+            else if (s.view == INBOX && s.notice_count)
                 s.offset = (s.offset + (dx < 0 ? 1 : s.notice_count - 1)) % s.notice_count;
             else if (surface && s.count && s.connected && !s.loading) {
                 int i = s.active < 0 ? 0 : (s.active + (dx < 0 ? 1 : s.count - 1)) % s.count;
@@ -4494,17 +4642,37 @@ void ui_set_brightness(uint8_t level)
 
 // Protocol-facing adapter. The cable reader never waits for rendering or a DMA transaction.
 #ifdef DEVICE_PRO_COMPANION
+static void pro_result_source_reset(void)
+{
+    if (!++s.result_generation) ++s.result_generation;
+    s.notice_count=0;
+    memset(s.notice_reads,0,sizeof s.notice_reads);
+    s.notice_read_next=0;
+    memset(s.memory,0,sizeof s.memory);
+    s.memory_serial=0;
+    for (int i=0;i<s.count;i++) {
+        s.agents[i].preview[0]=s.agents[i].full[0]=0;
+        s.agents[i].has_event=s.agents[i].recap_ready=false;
+    }
+}
 static void pro_notice_source(const char *host)
 {
     const char *next=host && host[0] && strnlen(host,ID_MAX)<ID_MAX ? host : "";
     if (next[0] && !strcmp(next,s.notice_host)) return;
-    // Unread snapshots cannot establish question ownership. A different or
-    // unidentified cable host must not inherit another host's pending cards.
-    for (int i=s.notice_count-1; i>=0; i--) if (s.notice[i].question) {
-        memmove(&s.notice[i],&s.notice[i+1],(size_t)(s.notice_count-i-1)*sizeof s.notice[0]);
-        s.notice_count--;
+    // Agent IDs and unread tokens are scoped to the cable owner. A repeated
+    // legacy welcome without an identity is not another computer, but cannot
+    // establish question ownership or enable the reader's desktop actions.
+    if (strcmp(next,s.notice_host)) pro_result_source_reset();
+    else {
+        for (int i=s.notice_count-1;i>=0;i--) if (s.notice[i].question) {
+            memmove(&s.notice[i],&s.notice[i+1],(size_t)(s.notice_count-i-1)*sizeof s.notice[0]);
+            s.notice_count--;
+        }
+        for (int i=0;i<NOTICES;i++) if (s.notice_reads[i].question)
+            memset(&s.notice_reads[i],0,sizeof s.notice_reads[i]);
     }
-    for (int i=0; i<NOTICES; i++) if (s.notice_reads[i].question) memset(&s.notice_reads[i],0,sizeof s.notice_reads[i]);
+    // An open reader keeps its frozen words and original owner, read-only.
+    input_cancel();
     COPY(s.notice_host,next);s.notice_overflow=false;
     if (!s.q.pending) {
         s.q.valid=s.q.loading=false; s.q.revision++;
@@ -4514,6 +4682,7 @@ static void pro_notice_source(const char *host)
         COPY(s.q.error,"No answer receipt. Check the terminal before trying again.");
     }
     notice_sync_view();
+    change();
 }
 #endif
 void ui_set_connected(bool value)
@@ -4532,7 +4701,11 @@ void ui_set_connected(bool value)
 #ifdef DEVICE_PRO_COMPANION
         pro_send_feedback_clear();
         for (int i = 0; i < s.notice_count; i++) s.notice[i].question_current = false;
-        if (!s.notice_host[0]) pro_notice_source(NULL);
+        if (!s.notice_host[0]) {
+            // An unidentified host cannot prove ownership after a new link.
+            pro_result_source_reset();
+            pro_notice_source(NULL);
+        }
         pro_busy_reset();
         pro_metrics_source(&s.metrics,NULL,false);
         pro_draft_recovery_disconnect(&s.draft_recovery);
@@ -5225,6 +5398,9 @@ static void notice_sync_view(void)
 }
 static void notice_selection(char *id, size_t capacity)
 {
+#ifdef DEVICE_PRO_COMPANION
+    if (s.view==READER && pro_reader_notice_index()>=0) { copy(id,capacity,s.reader_agent); return; }
+#endif
     copy(id, capacity, s.view == INBOX && s.offset >= 0 && s.offset < s.notice_count
         ? s.notice[s.offset].agent_id : "");
 }
@@ -5321,7 +5497,12 @@ void ui_notif_seen(const char *id)
     bool opened = id && s.opening_notice[0] && !strcmp(s.opening_notice, id);
     for (int i = 0; id && i < s.notice_count; i++)
         if (!strcmp(s.notice[i].agent_id, id)) notice_mark_read(&s.notice[i]);
+#ifdef DEVICE_PRO_COMPANION
+    int held=s.view==READER ? pro_reader_notice_index() : -1;
+    if (opened || held<0 || !id || strcmp(id,s.notice[held].agent_id)) notice_remove(id,false);
+#else
     notice_remove(id, false);
+#endif
     notice_sync_view();
     change();
     display_unlock();
@@ -5343,7 +5524,8 @@ void ui_notif_read(const char *id, const char *token)
         n->read_on_dial = true;
         opened = !strcmp(s.opening_notice, id);
 #ifdef DEVICE_PRO_COMPANION
-        if (!n->question && (s.view != INBOX || i != s.offset || opened)) {
+        if (!n->question && (opened || ((s.view!=INBOX || i!=s.offset) &&
+            (s.view!=READER || !pro_reader_matches(n))))) {
 #else
         if (s.view != INBOX || i != s.offset || opened) {
 #endif
@@ -5395,7 +5577,10 @@ static void pro_notice_replace(const cable_notif_t *rows, int count, const char 
     _Static_assert(NOTICES <= INT8_MAX, "notification plan indices must fit");
     cable_notif_t card;
     int old_count=s.notice_count, used=0, cursor=s.offset, held=-1;
-    if (selected[0] && s.notice[s.offset].read_on_dial && s.notice[s.offset].read_token[0]) held=s.offset;
+    int selected_index=s.view==READER ? pro_reader_notice_index() : s.view==INBOX ? s.offset : -1;
+    if (selected[0] && selected_index>=0 && selected_index<old_count &&
+        s.notice[selected_index].read_on_dial &&
+        (s.notice[selected_index].read_token[0] || s.view==READER)) held=selected_index;
     // Mirror notice_add's ordering and revisions without overwriting sources.
     for (int i=count-1;i>=0;i--) {
         const cable_notif_t *row=&rows[i];
@@ -6631,7 +6816,7 @@ void habitat_bench_prepare(bool animate)
 void habitat_bench_reader(void)
 {
     display_lock();
-    dispatch((action_t){.kind = A_READER});
+    dispatch(make_action((hit_t){.action = A_READER}));
     display_unlock();
 }
 void habitat_bench_question(const cJSON *questions)

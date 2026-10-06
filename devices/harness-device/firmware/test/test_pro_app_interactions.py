@@ -140,12 +140,13 @@ static uint16_t color(unsigned rgb) { return ht_rgb(rgb); }
 #define ACCENT color(HT_THEME_ACCENT)
 #define SEL color(HT_THEME_SELECTION)
 static void dispatch(action_t a);
+static void notice_mark_read(cable_notif_t *n);
 '''
 code += typedef("pro_notice_plan_t", source=SOURCE)
-for name in ("pro_send_feedback_clear", "pro_work_local", "pro_work_visible", "pro_work_block_reason", "pro_work_capture_pin", "pro_busy_reset", "question_view", "waiting", "recap_preview", "notice_was_read", "notice_forget_read", "notice_flush_reads", "notice_mark_read", "notice_open", "notice_sync_view", "notice_selection", "notice_restore_selection", "notice_remove", "pro_notice_pinned", "notice_add", "pro_notice_plan_source", "pro_notice_plan_card", "pro_notice_replace", "ui_notif_replace",
+for name in ("pro_reader_source", "pro_reader_owner", "pro_reader_matches", "pro_reader_notice_index", "pro_reader_openable", "pro_reader_copy", "pro_reader_begin", "pro_reader_back", "pro_send_feedback_clear", "pro_work_local", "pro_work_visible", "pro_work_block_reason", "pro_work_capture_pin", "pro_busy_reset", "question_view", "waiting", "recap_preview", "notice_was_read", "notice_forget_read", "notice_flush_reads", "notice_mark_read", "notice_open", "notice_sync_view", "notice_selection", "notice_restore_selection", "notice_remove", "pro_notice_pinned", "notice_add", "pro_notice_plan_source", "pro_notice_plan_card", "pro_notice_replace", "ui_notif_replace",
              "visit_emit", "selection_emit", "carry_emit", "make_action", "read_question", "open_question",
              "pro_open_in_app", "question_answer", "question_rows", "question_move", "pro_question_back", "send_answer", "question_load", "pro_question_signature", "ui_question_show",
-             "ui_question_state", "ui_answer_receipt", "ui_question_close", "pro_notice_source", "ui_set_connected",
+             "ui_question_state", "ui_answer_receipt", "ui_question_close", "pro_result_source_reset", "pro_notice_source", "ui_set_connected",
              "ui_focus_project", "ui_notif_read", "ui_visit_state", "ui_voice_question"):
     code += function(name)
 code += "static void dispatch(action_t a) { if(s.locked)return;switch(a.kind) {\n"
@@ -436,7 +437,7 @@ static void everyday_shortcuts(const char *dir) {
     // Moving desktop focus while reading disables selection of the old source.
     // A tap captured just before that change is rejected, never rebound.
     reset();s.view=LAUNCHER;act(A_READER,0);choose=make_action(hit(A_SELECT_BEGIN,1));
-    ui_focus_project("build");render(&scene);assert(!controls(A_SELECT_BEGIN)&&text_has(&scene,"Open this pane to select."));
+    ui_focus_project("build");render(&scene);assert(!controls(A_SELECT_BEGIN)&&text_has(&scene,"More in Harness."));
     portrait(&scene,dir,"reader-source-not-current");before=enqueued;dispatch(choose);
     assert(s.view==READER&&!selection.active&&s.active==1&&enqueued==before&&opens==0);
     COPY(s.reader_agent,"build");dispatch(choose);assert(!selection.active&&enqueued==before);

@@ -172,8 +172,9 @@ static bool scroll_emit(ht_scroll_phase_t phase, int dy, int velocity, void *ctx
     return true;
 }
 static void dispatch(action_t action);
+static void view(view_t v);
 '''
-for name in ("copy", "find", "pane_memory", "pane_memory_apply", "pro_send_feedback_clear", "pro_send_feedback_matches", "pro_send_feedback_begin", "pro_send_feedback_text", "pro_work_local", "pro_work_visible", "pro_work_block_reason", "pro_work_available", "pro_work_capture_pin", "pro_work_capture_available", "pro_work_draft_available", "pro_busy_reset", "ensure", "waiting", "is_question", "pro_speech_allowed", "pro_speech_visible", "pro_speech_emotion",
+for name in ("copy", "find", "pane_memory", "pane_memory_apply", "notice_mark_read", "pro_reader_source", "pro_reader_owner", "pro_reader_matches", "pro_reader_notice_index", "pro_reader_openable", "pro_reader_copy", "pro_reader_begin", "pro_reader_back", "pro_send_feedback_clear", "pro_send_feedback_matches", "pro_send_feedback_begin", "pro_send_feedback_text", "pro_work_local", "pro_work_visible", "pro_work_block_reason", "pro_work_available", "pro_work_capture_pin", "pro_work_capture_available", "pro_work_draft_available", "pro_busy_reset", "ensure", "waiting", "is_question", "pro_speech_allowed", "pro_speech_visible", "pro_speech_emotion",
              "pro_speech_caption", "pro_speech_cancel", "ui_companion_speech_begin", "ui_companion_speech_clear",
              "pro_speech_tick", "pro_busy_elapsed", "pro_surface_mood", "status_wake_ms",
              "question_view", "hit_contains", "home_footer", "pro_written_control",
@@ -182,12 +183,15 @@ for name in ("copy", "find", "pane_memory", "pane_memory_apply", "pro_send_feedb
              "pro_appearance_view", "pro_appearance_open", "pro_appearance_move", "pro_appearance_use",
              "workspace_index", "tabs_open", "workspace_failed", "pro_panes_of",
              "ui_land_after_reload", "ui_workspace_applied", "voice_status", "ui_scroll_reportable", "habitat_next_wake_ms",
-             "voice_close", "power", "notice_sync_view", "pro_notice_source", "ui_set_connected", "ui_draft_source", "ui_focus_project",
+             "voice_close", "power", "notice_sync_view", "pro_result_source_reset", "pro_notice_source", "ui_set_connected", "ui_draft_source", "ui_focus_project",
              "ui_swarms_replace", "ui_tiles_replace", "ui_project_remove", "ui_project_apply_order",
              "ui_project_clear_all", "ui_project_set_name", "ui_project_set_machine", "ui_set_selected_machine",
              "recap_preview", "activity_text", "event", "ui_project_emit", "ui_project_restore_event",
              "ui_prune_stale_busy", "ui_cancel_acked") :
     code += function(name)
+reader_actions = SOURCE.split("    case A_READER:", 1)[1].split("    case A_QUESTION:", 1)[0]
+reader_scroll = SOURCE.split("    case A_UP:", 1)[1].split("    case A_LOCK:", 1)[0]
+code += "static bool reader_action(action_t a) { switch(a.kind) { case A_READER:" + reader_actions + "case A_UP:" + reader_scroll + "default: return false; } return true; }\n"
 agent_layout_actions = SOURCE.split("    case A_AGENTS:", 1)[1].split("    case A_AGENT:", 1)[0]
 code += "static bool agent_layout_action(action_t a) { switch(a.kind) { case A_AGENTS:" + agent_layout_actions + "default: return false; } return true; }\n"
 workspace_actions = SOURCE.split("    case A_TABS:", 1)[1].split("    case A_MACHINE:", 1)[0]
@@ -208,7 +212,7 @@ const char *ht_character_name(ht_character_id_t id) { return pro_daemon_definiti
 static void open_question(void) { view(QUESTION); }
 static void dispatch(action_t action) {
     sent = action;
-    if (language_action(action) || sample_action(action) || metrics_action(action) || agent_layout_action(action) || question_close_action(action)) return;
+    if (reader_action(action) || language_action(action) || sample_action(action) || metrics_action(action) || agent_layout_action(action) || question_close_action(action)) return;
     if (action.kind == A_QUESTION_BACK) { pro_question_back(action); return; }
     if (action.kind == A_DAEMONS) pro_appearance_open(DAEMONS);
     else if (action.kind == A_SCENES) pro_appearance_open(SCENES);
@@ -265,7 +269,7 @@ controls = (NATIVE / "pro_controls.inc").read_text()
 code += function("pro_hit", controls) + function("pro_control", controls) + function("pro_heading", controls) + function("pro_appearance", controls)
 code += function("pro_voice_samples", controls) + function("pro_voice_params", controls) + function("pro_launcher", controls) + function("pro_row", controls) + function("pro_language", controls)
 code += function("pro_note", controls) + function("pro_today", controls)
-code += function("pro_read_text", controls) + function("pro_unknown_answer", controls)
+code += function("pro_read_text", controls) + function("pro_unknown_answer", controls) + function("pro_reader", controls)
 code += (NATIVE / "pro_home.inc").read_text()
 code += function("render_lock") + function("render_brand")
 code += r'''
@@ -485,6 +489,7 @@ static void render_actual(void) {
     else if (s.view==OTA) render_brand(&scene);
     else if (pro_appearance_view()) pro_appearance(&scene);
     else if (s.view==TODAY) pro_today(&scene);
+    else if (s.view==READER) pro_reader(&scene);
     else if (question_view(s.view) && s.q.pending && s.q.uncertain) pro_unknown_answer(&scene);
     else if (s.view==VOICE) pro_render_voice(&scene); else pro_render_home(&scene);
     check_scene();
@@ -492,6 +497,62 @@ static void render_actual(void) {
 static const hit_t *action_hit(action_kind_t action) {
     for (int i=0;i<s.hit_count;i++) if (s.hits[i].action==action) return &s.hits[i];
     return NULL;
+}
+static void reader_fixture(view_t entry) {
+    reset();COPY(s.notice_host,"reader-host");
+    COPY(s.agents[0].full,"One quiet beginning.\nTwo useful details.\nThree visible choices.\nFour careful decisions.\nFive clear words.\nSix simple controls.\nSeven small improvements.\nEight readable lines.\nNine considered steps.\nTen settled questions.\nEleven concise notes.\nTwelve complete sentences.\nThirteen ideas worth keeping.\nFourteen notes for later.\nFifteen last checks.");
+    view(entry);
+    if(entry==INBOX) {
+        s.notice_count=2;s.offset=1;
+        COPY(s.notice[0].agent_id,"other");COPY(s.notice[0].summary,"Another card.");
+        COPY(s.notice[1].agent_id,"remote");COPY(s.notice[1].name,"Research");
+        memset(s.notice[1].summary,'W',sizeof s.notice[1].summary-1);s.notice[1].summary[sizeof s.notice[1].summary-1]=0;
+        s.notice[1].display_revision=9;
+    }
+    dispatch(make_action((hit_t){.action=A_READER,.value=entry==INBOX}));
+    assert(s.view==READER&&s.reader.captured);render_actual();
+}
+static void reader_navigation_parity(void) {
+    const view_t entries[]={HOME,AGENT,LAUNCHER,INBOX};
+    for(unsigned i=0;i<sizeof entries/sizeof *entries;i++)for(int header=0;header<2;header++) {
+        reader_fixture(entries[i]);swipe(360,500,360,300);render_actual();int row=s.offset;assert(row>0);
+        if(header) {const hit_t *back=action_hit(A_READER_BACK);assert(back&&back->enabled);tap(back->rect.x+back->rect.w/2,back->rect.y+back->rect.h/2,90);}
+        else swipe(240,340,520,340);
+        assert(s.view==entries[i]&&s.reader.row==row);
+        if(entries[i]==INBOX)assert(s.offset==1);
+        dispatch(make_action((hit_t){.action=A_READER,.value=entries[i]==INBOX}));render_actual();assert(s.offset==row);
+        assert(!starts&&!stops&&!switches&&!selected&&!queued&&!travel);
+    }
+}
+static void reader_footer_scroll(void) {
+    reader_fixture(LAUNCHER);swipe(360,660,360,400);render_actual();
+    assert(s.view==READER&&s.offset==5&&!selected&&!starts&&!travel);
+    int row=s.offset;swipe(540,340,220,340);assert(s.view==READER&&s.offset==row);
+    const hit_t *earlier=action_hit(A_UP);assert(earlier&&earlier->enabled);
+    tap(earlier->rect.x+20,earlier->rect.y+20,80);render_actual();assert(s.offset==0);
+    const hit_t *more=action_hit(A_DOWN);assert(more&&more->enabled);
+    tap(more->rect.x+20,more->rect.y+20,80);render_actual();assert(s.offset==5);
+    assert(!queued&&!starts&&!stops&&!switches&&!selected&&!down_reports&&!moves&&!ups);
+}
+static void reader_stale_contacts(void) {
+    for(int footer=0;footer<2;footer++)for(int horizontal=0;horizontal<2;horizontal++)for(int identity=0;identity<2;identity++) {
+        reader_fixture(LAUNCHER);int y=footer?660:350;
+        sample(true,360,y,2000);
+        assert(pressed_action.revision==s.reader.serial&&!strcmp(pressed_action.id,s.reader_agent));
+        if(identity)COPY(s.reader_agent,"replacement");else s.reader.serial++;
+        int x1=horizontal?560:360,y1=horizontal?y:y-200;
+        for(int i=1;i<=5;i++)sample(true,360+(x1-360)*i/5,y+(y1-y)*i/5,2000+i*30);
+        sample(false,x1,y1,2200);
+        assert(s.view==READER&&s.offset==0&&!selected&&!starts&&!queued&&!travel);
+    }
+    reader_fixture(LAUNCHER);const hit_t *back=action_hit(A_READER_BACK);assert(back);
+    int x=back->rect.x+20,y=back->rect.y+20;sample(true,x,y,2000);s.reader.serial++;sample(false,x,y,2080);
+    assert(s.view==READER&&!selected&&!starts&&!queued);
+    // A down-captured Read remains inert across an actual owner reset callback.
+    reset();COPY(s.notice_host,"first-host");view(LAUNCHER);s.hit_count=0;hit(A_READER,0,32,200,656,80);
+    COPY(s.agents[0].full,"Original summary.");sample(true,200,240,2000);
+    ui_draft_source("other-host");COPY(s.agents[0].full,"Replacement summary.");
+    sample(false,200,240,2080);assert(!s.reader.captured&&!starts&&!queued&&!travel);
 }
 static void home_render_geometry(void) {
     reset(); render_actual(); assert(!drawn_compact);
@@ -1404,6 +1465,7 @@ static void question_back_immutable(void) {
 
 int main(int argc,char **argv) {
     const struct { const char *name; test_fn run; } tests[]={
+        {"reader_navigation_parity",reader_navigation_parity},{"reader_footer_scroll",reader_footer_scroll},{"reader_stale_contacts",reader_stale_contacts},
         {"question_back_parity",question_back_parity},{"question_back_stale_contact",question_back_stale_contact},{"question_back_immutable",question_back_immutable},
         {"footer_send_feedback",footer_send_feedback},{"work_identity_callbacks",work_identity_callbacks},{"busy_observation",busy_observation},{"busy_connection_loss",busy_connection_loss},{"busy_precedence",busy_precedence},
         {"busy_tick_schedule",busy_tick_schedule},{"busy_render_boundaries",busy_render_boundaries},
@@ -1457,6 +1519,11 @@ with tempfile.TemporaryDirectory(prefix="harness-pro-touch-") as directory:
                str(generated_assets / "pro_fonts.c"), *voice_assets(directory), "-o", str(executable)]
     subprocess.run(command, check=True)
     names = re.findall(r'\{"([a-z_]+)",[a-z_]+\}', code)
+    if os.environ.get("PRO_TOUCH_CASES"):
+        selected = set(os.environ["PRO_TOUCH_CASES"].split(","))
+        assert selected <= set(names), f"Unknown Pro touch cases: {selected - set(names)}"
+        names = [name for name in names if name in selected]
+        assert names, "At least one requested Pro touch case is required"
     failures = []
     for name in names:
         result = subprocess.run([str(executable), name], text=True, capture_output=True)
