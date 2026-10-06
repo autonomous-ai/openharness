@@ -18,11 +18,19 @@ def digest(path):
         return hashlib.file_digest(stream, 'sha256').hexdigest()
 
 
+def require_build_environment():
+    release = platform.freedesktop_os_release()
+    context = {'enabled': os.environ.get('HARNESS_ASAHI_IMAGE_BUILD') == '1',
+               'uid': os.geteuid(), 'architecture': platform.machine(),
+               'kiwi': Path('/.kconfig').is_file(), 'id': release.get('ID'),
+               'release': release.get('VERSION_ID')}
+    if context != {'enabled': True, 'uid': 0, 'architecture': 'aarch64', 'kiwi': True,
+                   'id': 'fedora-asahi-remix', 'release': '44'}:
+        raise RuntimeError('Run only in the native Fedora Asahi KIWI chroot: ' + json.dumps(context))
+
+
 def main():
-    if (os.environ.get('HARNESS_ASAHI_IMAGE_BUILD') != '1' or os.geteuid() != 0 or
-            platform.machine() != 'aarch64' or not Path('/.kconfig').is_file() or
-            platform.freedesktop_os_release().get('ID') != 'fedora'):
-        raise RuntimeError('Run only in the native Fedora KIWI image-build chroot.')
+    require_build_environment()
     identity = json.loads((INPUT / 'image.json').read_text())
     if identity.get('kind') != 'harness-asahi-image-construction' or identity.get('release_ready') is not False:
         raise ValueError('Missing private image construction identity.')

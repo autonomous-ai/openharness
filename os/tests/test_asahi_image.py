@@ -18,6 +18,9 @@ import asahi_image as image
 spec = importlib.util.spec_from_file_location('asahi_image_check', Path(__file__).with_name('asahi_image_check.py'))
 check = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(check)
+hook_spec = importlib.util.spec_from_file_location('asahi_configure', ROOT / 'os/platforms/apple-silicon/configure.py')
+hook = importlib.util.module_from_spec(hook_spec)
+hook_spec.loader.exec_module(hook)
 
 
 class Recipe(unittest.TestCase):
@@ -35,6 +38,21 @@ class Recipe(unittest.TestCase):
             path.write_text(json.dumps(lock))
             with self.assertRaisesRegex(ValueError, 'reviewed'):
                 image.read_lock(path)
+
+    def test_chroot_guard_requires_the_actual_asahi_release_identity(self):
+        with patch.dict(os.environ, {'HARNESS_ASAHI_IMAGE_BUILD': '1'}), \
+                patch.object(hook.os, 'geteuid', return_value=0), \
+                patch.object(hook.platform, 'machine', return_value='aarch64'), \
+                patch.object(hook.Path, 'is_file', return_value=True), \
+                patch.object(hook.platform, 'freedesktop_os_release') as release:
+            release.return_value = {'ID': 'fedora-asahi-remix', 'VERSION_ID': '44', 'ID_LIKE': 'fedora'}
+            hook.require_build_environment()
+            for identity in ({'ID': 'fedora', 'VERSION_ID': '44'},
+                             {'ID': 'fedora-asahi-remix', 'VERSION_ID': '45'},
+                             {'ID': 'ubuntu', 'ID_LIKE': 'fedora', 'VERSION_ID': '44'}):
+                release.return_value = identity
+                with self.subTest(identity=identity), self.assertRaisesRegex(RuntimeError, 'Asahi KIWI'):
+                    hook.require_build_environment()
 
     def test_upstream_tree_cannot_drift_from_pinned_source(self):
         def git(*args):
