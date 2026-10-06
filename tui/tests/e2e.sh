@@ -176,8 +176,8 @@ tmux_ send-keys -t t C-u
 expect "C-u clears the filter, not the mode" "mock-remote"
 screen | grep -q "Search harnesses" && fail "C-u left the machines list"
 tmux_ send-keys -t t Escape
+# (No Esc after it: Esc on the new window's empty New Harness form closes the window.)
 tmux_ send-keys -t t C-b c
-tmux_ send-keys -t t Escape
 expect "C-b c: a new window" "1:"
 wait_eq "the dial hears the new window" 2 dial "d.said.app_swarms?.swarms?.length"
 first=$(dial "d.said.app_swarms.swarms[0].id")
