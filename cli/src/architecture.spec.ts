@@ -193,6 +193,15 @@ const SERVICE_MAY_IMPORT: Record<string, string> = {
  * and the core loads it only to run it in its own process instead (services/inline.ts). With it went the
  * E2EE manager, the backend link, P2P and STUN, the windows' relay pool, the trust group and the device
  * key log. What of lib/e2ee the core still loads is the fleet's lane (R3) and Share's own crypto (step 8).
+ *
+ * Grew by 67 to 95,757 in 420 for the daemon's periodic CPU, measured on harnessd-core 0.3.58/0.3.59: the
+ * dial scan runs `ioreg` (~150 ms of CPU every 2 s, about 7.5% of a core) only when /dev/cu.* changes
+ * (cable/serial.ts, +31, with one confirming scan after each change or phantom port, since devfs and the
+ * IORegistry do not change together); a deleted executable already found by `lsof -d txt` (~18 ms every
+ * 5 s, about 0.4%) is not asked about again every 5 s (lib/tmux.ts and lib/nativeProcessImages.ts,
+ * +32); and an unchanged registry.json is not rewritten every 5 s (about 720 writes an hour) because
+ * its keys were in another order (lib/registry.ts, +4). The dial's part leaves with step 9 (the devices
+ * process).
  */
 //
 // Connected TUI shells added a literal-argv launch port and shell service (#893, 160 loaded lines); moving

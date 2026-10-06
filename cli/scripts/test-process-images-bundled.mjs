@@ -25,13 +25,13 @@ try {
     import { processRows, enrichProcessRows } from ${JSON.stringify(join(cli, 'src/lib/tmux.ts'))};
     env.ADAPTER_RUNTIME_DIR = process.argv[2];
     const native = await nativeProcessImages([process.pid], 3000);
-    assert.equal(realpathSync(native.get(process.pid).path), realpathSync(process.execPath));
+    assert.equal(realpathSync(native.images.get(process.pid).path), realpathSync(process.execPath));
     const rows = await processRows();
     const own = rows.filter(row => row.pid === process.pid);
     assert.equal(own.length, 1);
     const enriched = await enrichProcessRows(own);
     assert.equal(enriched.length, 1);
-    assert.equal(enriched[0].imagePath, native.get(process.pid).path);
+    assert.equal(enriched[0].imagePath, native.images.get(process.pid).path);
     assert.ok(enriched[0].imageFileKey);
     console.log('Bundled native query and discovery passed on ' + process.arch);
   `
