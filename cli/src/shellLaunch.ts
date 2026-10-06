@@ -6,11 +6,11 @@ import type { ProcessEngine } from './engines/types.js'
 import { engineInstallRecipe } from './lib/engineInstall.js'
 import { shellAgentArgv } from './lib/engineLaunch.js'
 import { buildGridEngineLaunch, gridConflictingEnvToClear } from './lib/gridLaunch.js'
-import { parseNewAgentModel, resolveNewAgentModel } from './lib/newAgentModel.js'
+import { parseNewAgentModel, type NewAgentModel } from './lib/newAgentModel.js'
 import type { GridLaunchOverride } from './lib/gridLaunch.js'
 
 export interface ShellLaunchDeps {
-  resolve: typeof resolveNewAgentModel
+  resolve: (selection: NewAgentModel) => Promise<GridLaunchOverride | null>
   run: (binary: string, args: string[], env: NodeJS.ProcessEnv) => Promise<number>
   error: (message: string) => void
 }
@@ -46,7 +46,13 @@ async function run(binary: string, args: string[], env: NodeJS.ProcessEnv): Prom
   })
 }
 
-export async function shellLaunch(args: string[], deps: ShellLaunchDeps = { resolve: resolveNewAgentModel, run, error: console.error }): Promise<number> {
+export async function shellLaunch(args: string[], deps: ShellLaunchDeps = {
+  // The October 6 models extraction moved routing into the service. This standalone shell child
+  // shares its launch resolver; native launches never load grid, and the core gains no imports.
+  resolve: async selection => (await import('./services/models.js')).launchTarget(selection),
+  run,
+  error: console.error,
+}): Promise<number> {
   const [engine, grid, model, separator, ...nativeArgs] = args
   if (PROCESS_ENGINES.includes(engine as ProcessEngine) && grid === '--native' && model === '--') {
     const nativeEngine = engine as ProcessEngine
