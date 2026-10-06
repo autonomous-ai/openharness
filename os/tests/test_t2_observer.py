@@ -48,6 +48,11 @@ class T2Observer(unittest.TestCase):
                     git('commit', '-am', 'Changed input')
                     with self.assertRaisesRegex(ValueError, 'build a new T2 image'):
                         image_source_binding(root, baseline, git('rev-parse', 'HEAD'))
+            git('reset', '--hard', observer)
+            git('mv', 'os/installer.py', 'os/tests/moved-installer.py')
+            git('commit', '-m', 'Move production input into test directory')
+            with self.assertRaisesRegex(ValueError, 'build a new T2 image'):
+                image_source_binding(root, baseline, git('rev-parse', 'HEAD'))
 
 
 if __name__ == '__main__':
