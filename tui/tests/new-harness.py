@@ -339,6 +339,10 @@ try:
     request = state()['created'][-1]
     assert request['engine'] == 'terminal' and 'prompt' not in request and 'command' not in request, request
     count += 1
+    # October 6 Linux CI: the create reply preceded the shell's first paint.
+    # Its wider context footer moves +, so wait for that visible transition
+    # before taking click coordinates from the screen.
+    wait(lambda: ' · Agent default' in screen().splitlines()[-1], 'new terminal paints its context footer')
     new_form(); shows('Improve the New Harness keyboard flow.')
     choose_field('Agent|Harness', 'cursor')
     field('Task'); keys('Enter', 'Enter'); shows('This agent cannot start with a task')
