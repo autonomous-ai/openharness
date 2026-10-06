@@ -239,7 +239,13 @@ const SERVICE_MAY_IMPORT: Record<string, string> = {
 // the core reads a pane with as it writes a team's turn, now lib/teamWriteHold.ts, and what the core keeps of
 // the teams' process (core/teamsLink.ts: which deliveries may be written, the scopes' own questions) and of
 // the account's notices (core/experiments.ts).
-const CORE_CLOSURE_BUDGET = 88_180
+//
+// Then at 87,476 in 387, from 88,083 in 392: Share is an experiment, in a process of its own started only
+// once on (services/sharingProcess.ts), holding no credential: the owner, its stores, its crypto and the
+// identity store it signed with leave. Its welcomes are signed by the gateway (gateway/observerKey.ts), and
+// its observers' terminals are read by the core's read-only stream manager (core/terminalWatch.ts), which
+// stays with what the core keeps of Share (core/sharingLink.ts).
+const CORE_CLOSURE_BUDGET = 87_570
 
 /** What is not the core's, by path: each goes to a service or its own process, in the plan's order. */
 const EDGE: RegExp[] = [
@@ -310,22 +316,15 @@ const CORE_MAY_REACH: Record<string, string> = {
   'lib/autonomous-device/storeContract.ts': 'step 10: the Wi-Fi device, into the devices process over the gateway',
   'lib/autonomous-device/storeRuntime.ts': 'step 10: the Wi-Fi device, into the devices process over the gateway',
   'lib/autonomous-device/stream.ts': 'step 10: the Wi-Fi device, into the devices process over the gateway',
-  'lib/e2ee/core.ts': 'step 8: Share seals its own frames with it',
+  'lib/e2ee/core.ts': 'with lib/e2ee/machinePeers.ts (step 9)',
   'lib/e2ee/machinePeers.ts': 'step 9: the fleet reads which machines are linked (their public keys, no credential), beside the dial',
-  'lib/e2ee/passwordPake.ts': 'with lib/e2ee/store.ts',
-  'lib/e2ee/store.ts': 'step 8: this machine\'s identity, for Share\'s owner',
   'lib/sessionSearch/sessionTurns.ts': 'the handoff (lib/agentHandoff.ts), in the edge host once CoreApi gives it the stopped agents, recaps and discovery it reads',
   'lib/sessionSearch/transcript.ts': 'the readers of other engines\' sessions keep this helper: it moves beside them, out of search\'s folder',
   'lib/sessionSearch/turns.ts': 'the handoff (lib/agentHandoff.ts), in the edge host once CoreApi gives it the stopped agents, recaps and discovery it reads',
   'services/fleet.ts': 'step 9: the fleet, beside the dial',
   'services/fleetRouter.ts': 'step 9: the fleet, beside the dial',
   'services/shell.ts': 'shell setup and launch receipts, in the edge host; only the argv launch stays in the core (#893)',
-  'sharing/collaboration.ts': 'step 8: the experimental host',
-  'sharing/crypto.ts': 'step 8: the experimental host',
-  'sharing/grants.ts': 'step 8: the experimental host',
-  'sharing/owner.ts': 'step 8: the experimental host',
-  'sharing/protocol.ts': 'step 8: the experimental host',
-  'sharing/viewer.ts': 'step 8: the experimental host',
+  'sharing/viewer.ts': 'the windows\' interactive viewers capture with it (lib/interactiveViewer.ts): headless Chrome belongs with the viewers\' process (plan, "Sharing")',
 }
 
 describe('the daemon\'s shape', () => {

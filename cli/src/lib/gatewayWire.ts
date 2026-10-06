@@ -61,4 +61,5 @@ export const GATEWAY_CALLS = {
   devicesRebaseline: 'gateway_devices_rebaseline',
   wifi: 'gateway_wifi',
   lane: 'gateway_lane',
+  observerKey: 'gateway_observer_key',
 } as const

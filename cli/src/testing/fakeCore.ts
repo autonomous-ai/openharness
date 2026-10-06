@@ -11,7 +11,11 @@ type Overrides = { [K in keyof CoreApi]?: CoreApi[K] extends object ? Partial<Co
 export function fakeCore(over: Overrides = {}): CoreApi {
   return {
     dataDir: over.dataDir ?? '/data',
-    terminals: { open: vi.fn(TERMINALS_OFF.open), ...over.terminals },
+    terminals: {
+      open: vi.fn(TERMINALS_OFF.open),
+      watch: { frame: vi.fn(async () => {}), close: vi.fn(async () => {}), onOutput: vi.fn(() => () => {}) },
+      ...over.terminals,
+    },
     agents: {
       all: vi.fn(() => []),
       live: vi.fn(() => []),
@@ -55,10 +59,11 @@ export function fakeCore(over: Overrides = {}): CoreApi {
       privateGridName: vi.fn(async () => null),
       machineName: vi.fn(() => null),
       backend: vi.fn(async () => ({ status: 200, body: {} })),
+      observerKey: { publicKey: vi.fn(async () => 'cHVi'), signWelcome: vi.fn(async () => 'c2ln') },
       onNotice: vi.fn(() => () => {}),
       ...over.account,
     },
-    clients: { viewerChanged: vi.fn(), gridNamed: vi.fn(), gridModelsChanged: vi.fn(), dshInstallStatus: vi.fn(), windows: vi.fn(), ...over.clients },
-    daemon: { command: 'harness', port: 18473, machineId: () => 'machine-1', ...over.daemon },
+    clients: { viewerChanged: vi.fn(), gridNamed: vi.fn(), gridModelsChanged: vi.fn(), dshInstallStatus: vi.fn(), windows: vi.fn(), observer: vi.fn(() => true), ...over.clients },
+    daemon: { command: 'harness', port: 18473, machineId: () => 'machine-1', autonomousEnv: 'prod', ...over.daemon },
   }
 }

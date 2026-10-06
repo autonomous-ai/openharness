@@ -29,14 +29,37 @@ export class ObserverCipher {
 }
 
 export function ownerHandshake(identity: Identity, machineId: string, shareId: string, peer: string) {
+  const { publicKey, ephemeral, context, cipher } = handshakeKeys(machineId, shareId, peer)
+  return { cipher,
+    welcome: { ephemeral: b64e(ephemeral.pub),
+      signature: b64e(welcomeSig(identity.priv, context, publicKey, ephemeral.pub)) } }
+}
+
+/**
+ * The owner's key where its private half is another process's: the gateway's, which holds this machine's
+ * E2EE identity, when Share runs in a process of its own and holds no credential (services/sharing.ts).
+ * It signs a welcome for one observer of one share, and nothing else.
+ */
+export interface OwnerKey {
+  publicKey(): Promise<Uint8Array>
+  signWelcome(machineId: string, shareId: string, peer: Uint8Array, ephemeral: Uint8Array): Promise<Uint8Array>
+}
+
+/** The same handshake, its welcome signed by the owner's key wherever that is held. */
+export async function signedOwnerHandshake(key: OwnerKey, machineId: string, shareId: string, peer: string) {
+  const { publicKey, ephemeral, cipher } = handshakeKeys(machineId, shareId, peer)
+  return { cipher,
+    welcome: { ephemeral: b64e(ephemeral.pub),
+      signature: b64e(await key.signWelcome(machineId, shareId, publicKey, ephemeral.pub)) } }
+}
+
+function handshakeKeys(machineId: string, shareId: string, peer: string) {
   const publicKey = b64d(peer)
   if (publicKey.length !== 32) throw new Error('Invalid observer key')
   const ephemeral = newEphemeral()
   const context = observerContext(machineId, shareId)
   const keys = sessionKeys(ephemeral.priv, publicKey, context, publicKey, ephemeral.pub)
-  return { cipher: new ObserverCipher(keys.s2c, keys.c2s, context),
-    welcome: { ephemeral: b64e(ephemeral.pub),
-      signature: b64e(welcomeSig(identity.priv, context, publicKey, ephemeral.pub)) } }
+  return { publicKey, ephemeral, context, cipher: new ObserverCipher(keys.s2c, keys.c2s, context) }
 }
 
 export function recipientHandshake(ephemeral: Ephemeral, machineId: string, shareId: string,

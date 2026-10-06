@@ -171,6 +171,14 @@ export function createGatewayLink(deps: GatewayLinkDeps) {
     drop: (machineId) => { void lane('drop', { machineId }) },
   }
 
+  /** Share's owner's key, held by the gateway (gateway/observerKey.ts): each a call; none while it is away. */
+  const ownerKey = async (payload: Record<string, unknown>): Promise<string> => {
+    const answer = await deps.call(GATEWAY_CALLS.observerKey, payload, LANE_WAIT_MS)
+    if (typeof answer.key === 'string') return answer.key
+    // Its process down, or its gateway not started yet: no key to sign with.
+    throw new Error(typeof answer.error === 'string' && !answer.error.startsWith('SERVICE_') ? answer.error : 'the gateway holds no key just now: it is not running')
+  }
+
   const ops: GatewayOps = {
     status: async (): Promise<GatewayStatus> => {
       const answer = await deps.call(GATEWAY_CALLS.status, {}, 2_000)
@@ -211,6 +219,10 @@ export function createGatewayLink(deps: GatewayLinkDeps) {
     account: (next) => { send('account', { account: next }) },
     reachable: (machineIds) => { reachable = machineIds; send('reachable', { machineIds }) },
     lane: laneOps,
+    observerKey: {
+      publicKey: () => ownerKey({ op: 'public' }),
+      signWelcome: (machineId, shareId, peer, ephemeral) => ownerKey({ op: 'sign', machineId, shareId, peer, ephemeral }),
+    },
   }
 
   /** A window's session through the gateway: to another of the owner's machines, or to a harness shared

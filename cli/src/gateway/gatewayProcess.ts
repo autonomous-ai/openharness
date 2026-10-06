@@ -242,6 +242,16 @@ export function runGatewayService(options: GatewayServiceOptions): ServiceProces
         default: return { error: 'UNKNOWN_OP' }
       }
     },
+    // Share's owner's key (gateway/observerKey.ts): its public half, or a welcome signed.
+    [GATEWAY_CALLS.observerKey]: async (p: Payload): Promise<Payload> => {
+      const key = ops().observerKey
+      try {
+        if (p.op === 'public') return { key: await key.publicKey() }
+        return { key: await key.signWelcome(text(p.machineId), text(p.shareId), text(p.peer), text(p.ephemeral)) }
+      } catch (error) {
+        return { error: error instanceof Error ? error.message : String(error) }
+      }
+    },
   }
 
   return (options.run ?? runServiceProcess)({

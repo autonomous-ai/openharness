@@ -44,10 +44,27 @@ export interface TerminalOpen {
   cwd: string
 }
 export type TerminalOpenResult = { ok: true; agentId: string } | { ok: false; error: string; detail?: string }
-export interface TerminalsPort { open(request: TerminalOpen): Promise<TerminalOpenResult> }
-/** A service without the core's launch call must refuse, never launch outside the core. */
+/** What a viewer is shown of a terminal it watches: a frame, or a terminal's bytes (base64 of the local binary
+ *  frame, lib/terminalBinary.ts). */
+export type TerminalWatchOutput = { type: string; payload: Record<string, unknown> } | { binary: string }
+/**
+ * A read-only view of agents' terminals for a feature's own viewers (Share's observers, core/terminalWatch.ts):
+ * each viewer's terminal frames in (`terminal_open`, `terminal_ack`, …), what it is shown out. Nothing a
+ * viewer sends ever reaches a pane.
+ */
+export interface TerminalWatch {
+  frame(viewer: string, type: string, payload: Record<string, unknown>): Promise<void>
+  close(viewer: string): Promise<void>
+  onOutput(listener: (viewer: string, output: TerminalWatchOutput) => void): () => void
+}
+export interface TerminalsPort {
+  open(request: TerminalOpen): Promise<TerminalOpenResult>
+  watch: TerminalWatch
+}
+/** A service without the core's launch call must refuse, never launch outside the core; it watches nothing. */
 export const TERMINALS_OFF: TerminalsPort = {
   open: async () => ({ ok: false, error: 'SERVICE_UNAVAILABLE' }),
+  watch: { frame: async () => {}, close: async () => {}, onOutput: () => () => {} },
 }
 
 export interface CoreApi {
@@ -137,6 +154,8 @@ export interface CoreApi {
     /** The fleet's lane to the owner's other machines, sealed by the gateway with this machine's E2EE
      *  identity, which no service holds (`LaneSeal`). */
     lane: LaneSeal
+    /** This machine's E2EE identity as Share's owner signs with it, held by the gateway (`ObserverKey`). */
+    observerKey: ObserverKey
     /** The account's private grid as the backend named it (`machine_meta`), or as grid's set-up just
      *  confirmed it; null before either. Working it out when neither has said is the models service's
      *  (`lib/gridDerive.ts`). */
@@ -164,6 +183,9 @@ export interface CoreApi {
     /** A frame for every window on this computer, as an experiment tells them it changed
      *  (`orchestrator_changed`, `team_changed`); never sent off this computer. */
     windows(frame: { type: string; payload: Record<string, unknown> }): void
+    /** A frame for one of Share's observers, sealed by Share itself, to the relay through the gateway; false
+     *  when it could not be handed over. */
+    observer(connId: string, type: string, payload: Record<string, unknown>): boolean
   }
   /** How an agent's shell reaches this daemon: the command that runs this harness's CLI, the port the daemon
    *  serves and the machine it serves as. An experiment writes them into the prompts of the agents it runs
@@ -188,6 +210,23 @@ export interface DaemonAddress {
   command: string
   port: number
   machineId(): string
+  /** The account's environment (`prod`, `staging`, …), as the links a feature makes name it. */
+  autonomousEnv: string
+}
+
+/**
+ * This machine's E2EE identity as Share's owner uses it (sharing/crypto.ts `OwnerKey`): its public half, and
+ * the signature on a welcome to one observer of one share. The private half is the gateway's alone; a Share in
+ * a process of its own asks for each welcome and holds no credential. Base64 throughout.
+ */
+export interface ObserverKey {
+  publicKey(): Promise<string>
+  signWelcome(machineId: string, shareId: string, peer: string, ephemeral: string): Promise<string>
+}
+/** A process with no key of the core's: it signs nothing. */
+export const OBSERVER_KEY_OFF: ObserverKey = {
+  publicKey: () => Promise.reject(new Error('no key: this process holds no E2EE identity')),
+  signWelcome: () => Promise.reject(new Error('no key: this process holds no E2EE identity')),
 }
 
 /** A service in its own process that acts on no agent: it creates none and reads no harness's frame. */
@@ -196,14 +235,15 @@ export const AGENT_ACTIONS_OFF: Pick<CoreApi['agents'], 'create' | 'dsh'> = {
   dsh: () => null,
 }
 
-/** The account as a service that reads no backend and hears no notice has it. */
-export const ACCOUNT_BACKEND_OFF: Pick<CoreApi['account'], 'backend' | 'onNotice'> = {
+/** The account as a service that reads no backend, hears no notice and signs nothing has it. */
+export const ACCOUNT_BACKEND_OFF: Pick<CoreApi['account'], 'backend' | 'onNotice' | 'observerKey'> = {
   backend: async () => ({ status: 503, body: { error: 'SERVICE_UNAVAILABLE' } }),
   onNotice: () => () => {},
+  observerKey: OBSERVER_KEY_OFF,
 }
 
 /** Where a service that was never told runs this daemon from: the installed CLI, on no port it knows. */
-export const DAEMON_UNKNOWN: DaemonAddress = { command: 'harness', port: 0, machineId: () => '' }
+export const DAEMON_UNKNOWN: DaemonAddress = { command: 'harness', port: 0, machineId: () => '', autonomousEnv: 'prod' }
 
 /** What became of a delivered turn (`turns.deliver`), as the core's input says it: `queued`, written
  *  (`delivered`), its turn `started`, `rejected` with why, or `unknown`. `sessionId` is the agent it was
@@ -308,6 +348,12 @@ export const LONG_ANSWERS: Readonly<Record<string, Readonly<Record<string, numbe
 
 /** The orchestrator (services/orchestrator.ts): its projects, for the apps and for the agents it runs. */
 export const ORCHESTRATOR_REQUESTS = ['orchestrator'] as const
+/** Share (services/sharing.ts): an owner's shares of a harness, their links and their comments. */
+export const SHARE_REQUESTS = [
+  'harness_share_list', 'harness_share_invite', 'harness_share_remove', 'harness_share_link',
+  'harness_share_comments', 'harness_share_comment_post', 'harness_share_comment_remove',
+] as const
+
 /** Tab collaboration and teams (services/collaboration.ts): the teams' own requests, from the apps, from `harness team`
  *  in an agent's shell and from the other machines' teams. */
 export const TEAMS_REQUESTS = ['team', 'team_delivery'] as const
@@ -330,7 +376,21 @@ export const EXPERIMENTS: Readonly<Record<string, { requests: readonly string[];
   // Tab collaboration and teams, beside the prompt scopes in the teams' process (harnessd/services.ts). Its
   // ledgers and mailboxes: a team was made here, or another machine's team delivered to an agent here.
   collaboration: { requests: TEAMS_REQUESTS, state: ['teams'] },
+  // Its invitations and links: a harness was shared from here.
+  sharing: { requests: SHARE_REQUESTS, state: ['harness-shares.json', 'harness-collaboration.json'] },
 }
+
+/** The core's calls into Share: an observer's frame as the relay handed it over, the relay gone (every observer
+ *  with it), and stopping it. */
+export interface SharingPort {
+  observer(connId: string, type: string, payload: Record<string, unknown>): Promise<void> | void
+  linkDown(): void
+  stop(): Promise<void> | void
+}
+
+/** What the core gets when Share fails: an observer's frame goes unanswered, as it would to a daemon without
+ *  Share, and a shutdown goes on. */
+export const SHARING_FALLBACKS: PortFallbacks<SharingPort> = { observer: undefined, linkDown: undefined, stop: undefined }
 
 /** What an agent is to the orchestrator's projects: a specialist (`worker`), or a project's Director, and
  *  whether work is still out under it. */
@@ -803,6 +863,8 @@ export interface GatewayOps {
   reachable(machineIds: string[] | null): void
   /** The fleet's lane's sessions (`core.account.lane`). */
   lane: LaneSeal
+  /** Share's owner's signature on a welcome, with this machine's identity (`core.account.observerKey`). */
+  observerKey: ObserverKey
 }
 
 /** A window on this computer working on another of the owner's machines, through the relay: what the
@@ -842,10 +904,11 @@ export interface CorePorts {
   fleet: FleetPort | null
   monitor: MonitorPort | null
   orchestrator: OrchestratorPort | null
+  sharing: SharingPort | null
 }
 
 export function emptyPorts(): CorePorts {
-  return { search: null, viewers: null, models: null, workspaces: null, teams: null, fleet: null, monitor: null, orchestrator: null }
+  return { search: null, viewers: null, models: null, workspaces: null, teams: null, fleet: null, monitor: null, orchestrator: null, sharing: null }
 }
 
 export interface CoreApiDeps {
@@ -865,6 +928,8 @@ export interface CoreApiDeps {
   mintGridName: CoreApi['account']['mintGridName']
   accessToken: CoreApi['account']['accessToken']
   lane: CoreApi['account']['lane']
+  observerKey: CoreApi['account']['observerKey']
+  observer: CoreApi['clients']['observer']
   privateGridName: CoreApi['account']['privateGridName']
   machineName: CoreApi['account']['machineName']
   backend: CoreApi['account']['backend']
@@ -882,7 +947,7 @@ export interface CoreApiDeps {
 
 export function createCoreApi({
   dataDir, registry, stoppedAgents, databaseHistory, externalSessions, openSessions, syncSession, runtimeModels, viewerChanged,
-  gridNamed, gridModelsChanged, dshInstallStatus, mintGridName, accessToken, lane, privateGridName, machineName, backend, onNotice,
+  gridNamed, gridModelsChanged, dshInstallStatus, mintGridName, accessToken, lane, observerKey, observer, privateGridName, machineName, backend, onNotice,
   runtimeProfile, setRuntime, fork, create, dsh, windows, daemon, turns, questions, terminals = TERMINALS_OFF,
 }: CoreApiDeps): CoreApi {
   return {
@@ -908,8 +973,8 @@ export function createCoreApi({
     questions,
     transcripts: { databaseHistory },
     external: { sessions: externalSessions, open: openSessions },
-    account: { mintGridName, accessToken, lane, privateGridName, machineName, backend, onNotice },
-    clients: { viewerChanged, gridNamed, gridModelsChanged, dshInstallStatus, windows },
+    account: { mintGridName, accessToken, lane, observerKey, privateGridName, machineName, backend, onNotice },
+    clients: { viewerChanged, gridNamed, gridModelsChanged, dshInstallStatus, windows, observer },
     daemon,
   }
 }

@@ -247,6 +247,7 @@ describe('the core API models runs on in its own process', () => {
     api.clients.viewerChanged('a1')
     api.clients.dshInstallStatus({})
     api.clients.windows({ type: 'orchestrator_changed', payload: {} })
+    expect(api.clients.observer('observer:x', 'observer_frame', {})).toBe(false)
     expect(ask).not.toHaveBeenCalled()
   })
 })

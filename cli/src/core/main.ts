@@ -11,10 +11,6 @@
  */
 import { ensureBundledCoreHarnesses } from '../dsh/builtins.js'
 import { createDeviceStore, deviceStoreAgents } from '../lib/autonomous-device/storeRuntime.js'
-import { HarnessShareOwner } from '../sharing/owner.js'
-import { HarnessGrantStore } from '../sharing/grants.js'
-import { HarnessCollaborationStore } from '../sharing/collaboration.js'
-import { SharedViewerPool } from '../sharing/viewer.js'
 import { runningDevicePart, startDevicePart } from '../lib/autonomous-device/parts.js'
 import { readFileSync, writeFileSync, openSync, existsSync, rmSync, statSync } from 'fs'
 import { join } from 'path'
@@ -128,7 +124,7 @@ import { createAgentUpdate } from './agents/update.js'
 import { createEngineHooks, installEngineHooks } from './engines/hooks.js'
 import { createCursorTaskHooks } from './engines/cursorTasks.js'
 import { databaseHistory } from './transcripts/databaseHistory.js'
-import { createCoreApi, emptyPorts, EXPERIMENTS, FLEET_FALLBACKS, LONG_ANSWERS, MODELS_FALLBACKS, MODELS_OFF, MODELS_REQUESTS, MONITOR_FALLBACKS, MONITOR_OFF, MONITOR_REQUESTS, ORCHESTRATOR_FALLBACKS, ORCHESTRATOR_REQUESTS, PROJECTS_REQUESTS, SEARCH_FALLBACKS, SEARCH_REQUESTS, STORE_REQUESTS, TEAMS_FALLBACKS, TEAMS_REQUESTS, USAGE_REQUESTS, VIEWERS_FALLBACKS, WORKSPACES_FALLBACKS, type GatewayAccount, type GatewayOps, type GatewayStatus, type TeamsPort } from './api.js'
+import { createCoreApi, emptyPorts, EXPERIMENTS, FLEET_FALLBACKS, LONG_ANSWERS, MODELS_FALLBACKS, MODELS_OFF, MODELS_REQUESTS, MONITOR_FALLBACKS, MONITOR_OFF, MONITOR_REQUESTS, ORCHESTRATOR_FALLBACKS, ORCHESTRATOR_REQUESTS, SHARE_REQUESTS, SHARING_FALLBACKS, PROJECTS_REQUESTS, SEARCH_FALLBACKS, SEARCH_REQUESTS, STORE_REQUESTS, TEAMS_FALLBACKS, TEAMS_REQUESTS, USAGE_REQUESTS, VIEWERS_FALLBACKS, WORKSPACES_FALLBACKS, type GatewayAccount, type GatewayOps, type GatewayStatus, type TeamsPort } from './api.js'
 import { createServiceHost, testFaults } from './serviceHost.js'
 import { startStalls } from './stall.js'
 import { createServiceLinks, type ServiceLinks } from './serviceLinks.js'
@@ -139,6 +135,8 @@ import { createStoreLink } from './storeLink.js'
 import { createModelsLink } from './modelsLink.js'
 import { answerAgentQuery } from './agentQueries.js'
 import { createDeliveries } from './deliveries.js'
+import { createTerminalWatch } from './terminalWatch.js'
+import { createSharingLink } from './sharingLink.js'
 import { createExperimentHooks, wakeExperiments } from './experiments.js'
 import { answerExperimentQuery, createForExperiment } from './experimentQueries.js'
 import { createOrchestratorLink } from './orchestratorLink.js'
@@ -162,7 +160,6 @@ import { WindowVisit } from '../cable/windowVisit.js'
 import { WindowForm } from '../cable/windowForm.js'
 import { TERMINAL_BINARY_VERSION } from '../lib/terminalBinary.js'
 import { setVoiceRouterDeviceConnected, setVoiceRouterSessions, shutdownVoiceRouter } from '../lib/voiceRouter.js'
-import { E2eeStore } from '../lib/e2ee/store.js'
 import { isLoopbackRequest, loopbackHosts } from '../lib/loopbackRequest.js'
 import { startSelfUpdater, restore as restoreUpdate, DOWNLOAD_LIMITS, type Poller } from '../lib/selfUpdate.js'
 import { managedNodePath } from '../lib/nodeRuntime.js'
@@ -626,6 +623,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // The core's side of the boundary its services stand on, and the ports it reaches them through (core/api.ts).
   // Delivered turns (core/deliveries.ts): text a feature writes into an agent under a delivery id of its
   // own, and what becomes of each, told back to whoever made it, in this process or in its own.
+  // A read-only view of agents' terminals for an experiment's viewers, told to its process (core/terminalWatch.ts).
+  const terminalWatch = createTerminalWatch({ terminals, resolve: (id) => registry.resolve(id), watchers: new Set(Object.keys(EXPERIMENTS)),
+    tell: (service, viewer, output) => serviceLinksRef?.notify(service, { type: 'service_event', payload: { kind: 'watch', viewer, output } }) ?? false })
   const deliveries = createDeliveries({
     submit: (agentId, text, deliveryId) => backendRef?.onMessage?.(agentId, text, deliveryId),
     cancel: (deliveryId) => backendRef?.onCancelOrchestratorMessage?.(deliveryId) ?? false,
@@ -634,7 +634,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     deliverers: new Set(Object.keys(EXPERIMENTS)),
   })
   const coreApi = createCoreApi({
-    terminals: createTerminalOpener({ tmuxBackend, registry, announceSession, blocksFolder: (cwd) => !!backendRef?.purgeAgentService?.blocksFolder(cwd) }),
+    // Agents' terminals: a literal-argv launch, and a read-only view for Share's observers (core/terminalWatch.ts).
+    terminals: { ...createTerminalOpener({ tmuxBackend, registry, announceSession, blocksFolder: (cwd) => !!backendRef?.purgeAgentService?.blocksFolder(cwd) }), watch: terminalWatch.watch },
     dataDir: env.ADAPTER_DATA_DIR,
     registry,
     stoppedAgents,
@@ -678,7 +679,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     create: (request) => createForExperiment(backendRef?.onCreateAgent ?? null, request),
     dsh: (session) => backendRef?.dshFrameProvider?.(session) ?? null,
     windows: (frame) => backendRef?.sendLocal(frame),
-    daemon: { command: daemonCommand(), port: env.PORT, machineId: () => backendRef?.machineId ?? '' },
+    daemon: { command: daemonCommand(), port: env.PORT, machineId: () => backendRef?.machineId ?? '', autonomousEnv: session?.autonomousEnv ?? env.AUTONOMOUS_ENV },
+    // Share: its observers' frames to the relay, and its welcomes signed by the gateway, which holds the identity.
+    observer: (connId, type, payload) => backendRef?.sendObserver(connId, type, payload) ?? false,
+    observerKey: { publicKey: () => gatewayOps.observerKey.publicKey(), signWelcome: (...args) => gatewayOps.observerKey.signWelcome(...args) },
     // The same path the window's `agent_fork` takes.
     fork: async (agentId) => {
       if (!backendRef?.onForkAgent) return { ok: false, error: 'UNSUPPORTED' }
@@ -1127,6 +1131,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     want: (service) => experimentHooks.want(service),
     answer: async (service, query, payload) => deliveries.answer(service, query, payload)
       ?? await answerExperimentQuery(coreApi, experiments, service, query, payload)
+      ?? await terminalWatch.answer(service, query, payload)
       ?? (service === 'orchestrator' ? orchestratorLink.answer(query, payload) : null)
       ?? (service === 'viewers' ? viewersLink.answer(query, payload)
       : service === 'workspaces' ? workspacesLink.answer(query, payload)
@@ -1141,7 +1146,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       if (service === 'gateway') gatewayLink?.connected()
       if (service === 'teams') teamsLink.on()
     },
-    disconnected: (service) => { if (service === 'gateway') gatewayLink?.disconnected() },
+    disconnected: (service) => {
+      if (service === 'gateway') gatewayLink?.disconnected()
+      void terminalWatch.gone(service)
+    },
   })
   serviceLinksRef = serviceLinks
   // A request a service declared goes to it: in its own process, or in this one (core/serviceHost.ts).
@@ -1172,6 +1180,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   if (outOfProcess.has('orchestrator')) ports.orchestrator = orchestratorLink.port
   else serviceHost.start('orchestrator', inline!.startOrchestrator, coreApi, ORCHESTRATOR_FALLBACKS, ORCHESTRATOR_REQUESTS)
   backend.onFrameSent = (frame) => ports.orchestrator?.frame(frame)
+  // Share (services/sharing.ts): in this process, or in its own once it is on (core/sharingLink.ts). Its
+  // observers' frames reach it as the relay hands them over.
+  if (outOfProcess.has('sharing')) ports.sharing = createSharingLink({ call: (type, payload) => serviceLinks.call('sharing', type, payload), notify: (frame) => serviceLinks.notify('sharing', frame) })
+  else serviceHost.start('sharing', inline!.startSharing, coreApi, SHARING_FALLBACKS, SHARE_REQUESTS)
+  backend.observers = { receive: (connId, type, payload) => ports.sharing?.observer(connId, type, payload), closeAll: () => ports.sharing?.linkDown() }
   // Tab collaboration and teams (services/collaboration.ts): in their own process, or in this one behind the
   // service host's guard (a fault there costs no message its write), the prompt scopes the service's own.
   if (teamsOut) ports.teams = teamsLink.scopes
@@ -1429,27 +1442,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     const result = { status: res.status, body: json }
     return result
   }
-
-  // Built HERE rather than beside the cable stack that also uses it (further down), because the hook
-  // server starts long before that point and agent restore can sit between the two. A cache bound late
-  // is a cache that is still null exactly when a cold boot during an outage needs it most.
-  const sharingIdentity = new E2eeStore()
-  sharingIdentity.init()
-  const sharedViewers = new SharedViewerPool((agentId) => {
-    const agent = registry.resolve(agentId)
-    return agent ? backend.dshFrameProvider?.(agent)?.viewerUrl ?? null : null
-  })
-  backend.harnessSharing = new HarnessShareOwner({
-    machineId: () => backend.machineId,
-    identity: sharingIdentity.getIdentity(),
-    grants: new HarnessGrantStore(join(env.ADAPTER_DATA_DIR, 'harness-shares.json')),
-    collaboration: new HarnessCollaborationStore(join(env.ADAPTER_DATA_DIR, 'harness-collaboration.json')),
-    autonomousEnv,
-    terminals, resolveAgent: (id) => registry.resolve(id),
-    send: (id, type, payload) => backend.sendObserver(id, type, payload),
-    publish: (method, path, body) => proxyBackend(method, path, body),
-    watchViewer: (id, send) => sharedViewers.watch(id, send),
-  })
 
   /**
    * The machine list a signed-out daemon answers with: this computer, alone.
@@ -2445,7 +2437,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // The FIXED hook port, released before the successor binds it (no fallback → EADDRINUSE otherwise).
     // Process-owned agents stay in the persisted registry and are revalidated by its first discovery passes.
     ['the hook connections', () => (hookServer as unknown as { closeAllConnections?: () => void }).closeAllConnections?.()],
-    ['the shared viewers', () => sharedViewers.stop()],
+    ['Share', () => ports.sharing?.stop()],
     ['the local websocket', () => localWsServer.close()], ['the hook server', () => hookServer.close()],
     ['the local socket', () => localSocket?.close()], ['Codex activity', () => codexActivity.close()],
     ['the voice router', () => shutdownVoiceRouter()],
@@ -2483,7 +2475,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     normalizers.stopPollers()
     await cursorDiscovery.stop()
     await watcher.stop()
-    sharedViewers.stop()
+    await ports.sharing?.stop()
     // The data folder's socket first: a successor waiting for this core to leave (lib/localSocket.ts) can
     // start as soon as it is gone, whatever the clients below take to close.
     await localSocket?.close()

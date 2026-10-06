@@ -143,6 +143,7 @@ describe('search in its own process', () => {
     api.clients.gridModelsChanged()
     api.clients.dshInstallStatus({ phase: 'clone' })
     api.clients.windows({ type: 'orchestrator_changed', payload: {} })
+    expect(api.clients.observer('observer:x', 'observer_frame', {})).toBe(false)
   })
 
   it('runs as a real service process, over the conversations this machine has, by default', () => {

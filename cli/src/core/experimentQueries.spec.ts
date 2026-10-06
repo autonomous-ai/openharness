@@ -54,8 +54,8 @@ describe('what an experiment in its own process may ask of the core', () => {
   })
 
   it('says how an agent\'s shell reaches this daemon', async () => {
-    const core = fakeCore({ daemon: { command: `'node' 'cli.js'`, port: 18473, machineId: () => 'machine-7' } })
-    expect(await answerExperimentQuery(core, experiments, 'orchestrator', 'daemon', {})).toEqual({ command: `'node' 'cli.js'`, port: 18473, machineId: 'machine-7' })
+    const core = fakeCore({ daemon: { command: `'node' 'cli.js'`, port: 18473, machineId: () => 'machine-7', autonomousEnv: 'staging' } })
+    expect(await answerExperimentQuery(core, experiments, 'orchestrator', 'daemon', {})).toEqual({ command: `'node' 'cli.js'`, port: 18473, machineId: 'machine-7', autonomousEnv: 'staging' })
   })
 
   it('reads and writes the account\'s backend under /api/, signed in by the core, and nothing else', async () => {
@@ -68,6 +68,30 @@ describe('what an experiment in its own process may ask of the core', () => {
       expect(await answerExperimentQuery(core, experiments, 'orchestrator', 'backend', bad)).toEqual({ error: 'INVALID_REQUEST' })
     }
     expect(backend).toHaveBeenCalledOnce()
+  })
+
+  it('has Share\'s welcomes signed by the key the gateway holds, and says why it could not', async () => {
+    const publicKey = vi.fn(async () => 'cHVi')
+    const signWelcome = vi.fn(async () => 'c2ln')
+    const core = fakeCore({ account: { observerKey: { publicKey, signWelcome } } })
+    expect(await answerExperimentQuery(core, experiments, 'orchestrator', 'observer_key', { op: 'public' })).toEqual({ key: 'cHVi' })
+    expect(await answerExperimentQuery(core, experiments, 'orchestrator', 'observer_key', { op: 'sign', machineId: 'm', shareId: 's', peer: 'p', ephemeral: 'e' })).toEqual({ key: 'c2ln' })
+    expect(signWelcome).toHaveBeenCalledWith('m', 's', 'p', 'e')
+    signWelcome.mockRejectedValueOnce(new Error('not a welcome to an observer'))
+    expect(await answerExperimentQuery(core, experiments, 'orchestrator', 'observer_key', {})).toEqual({ error: 'not a welcome to an observer' })
+    publicKey.mockRejectedValueOnce('odd')
+    expect(await answerExperimentQuery(core, experiments, 'orchestrator', 'observer_key', { op: 'public' })).toEqual({ error: 'odd' })
+  })
+
+  it('sends Share\'s sealed frame to one of its observers, and nothing that is not one', async () => {
+    const observer = vi.fn(() => true)
+    const core = fakeCore({ clients: { observer } })
+    expect(await answerExperimentQuery(core, experiments, 'orchestrator', 'observer_send', { connId: 'observer:ken', type: 'observer_frame', payload: { __e2e: {} } })).toEqual({ sent: true })
+    expect(observer).toHaveBeenCalledWith('observer:ken', 'observer_frame', { __e2e: {} })
+    for (const bad of [{ connId: 'remote-1', type: 'observer_frame', payload: {} }, { connId: 'observer:ken', type: 'agents_list', payload: {} }, { connId: 'observer:ken', type: 'observer_frame' }]) {
+      expect(await answerExperimentQuery(core, experiments, 'orchestrator', 'observer_send', bad)).toEqual({ error: 'INVALID_FRAME' })
+    }
+    expect(observer).toHaveBeenCalledOnce()
   })
 
   it('answers none of these for a process that is not an experiment, and leaves other queries to whoever answers them', async () => {

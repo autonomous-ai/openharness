@@ -34,6 +34,7 @@ export const SERVICE_RUNNERS: ReadonlyMap<string, () => Promise<Runner>> = new M
   ['store', async () => (await import('./services/storeProcess.js')).runStoreService],
   ['teams', async () => (await import('./services/teamsProcess.js')).runTeamsService],
   ['collaboration', async () => (await import('./services/collaborationProcess.js')).runCollaborationService],
+  ['sharing', async () => (await import('./services/sharingProcess.js')).runSharingService],
   ['orchestrator', async () => (await import('./services/orchestratorProcess.js')).runOrchestratorService],
   ['gateway', async () => (await import('./gateway/gatewayProcess.js')).runGatewayService],
   ['models', async () => (await import('./services/modelsProcess.js')).runModelsService],
