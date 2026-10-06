@@ -138,6 +138,7 @@ import { createMonitorLink } from './monitorLink.js'
 import { createStoreLink } from './storeLink.js'
 import { createModelsLink } from './modelsLink.js'
 import { answerAgentQuery } from './agentQueries.js'
+import { createDeliveries } from './deliveries.js'
 import { KNOWN_SERVICES, servicesTheMasterRuns } from '../harnessd/services.js'
 import { createTeamsLink } from './teamsLink.js'
 import { startFleet } from '../services/fleet.js'
@@ -620,6 +621,15 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // their tokens from it, so a refresh in flight is shared rather than raced.
   const auth = new AuthSessionManager(backendHttpBase())
   // The core's side of the boundary its services stand on, and the ports it reaches them through (core/api.ts).
+  // Delivered turns (core/deliveries.ts): text a feature writes into an agent under a delivery id of its
+  // own, and what becomes of each, told back to whoever made it, in this process or in its own.
+  const deliveries = createDeliveries({
+    submit: (agentId, text, deliveryId) => backendRef?.onMessage?.(agentId, text, deliveryId),
+    cancel: (deliveryId) => backendRef?.onCancelOrchestratorMessage?.(deliveryId) ?? false,
+    tell: (service, event) => { serviceLinksRef?.notify(service, { type: 'service_event', payload: { kind: 'delivery', event } }, { untilDelivered: true }) },
+    // None yet: the teams and the orchestrator, which deliver turns, still run in this process.
+    deliverers: new Set(),
+  })
   const coreApi = createCoreApi({
     terminals: createTerminalOpener({ tmuxBackend, registry, announceSession, blocksFolder: (cwd) => !!backendRef?.purgeAgentService?.blocksFolder(cwd) }),
     dataDir: env.ADAPTER_DATA_DIR,
@@ -669,6 +679,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       stop: (agentId) => backendRef?.onCancel?.(agentId),
       recent: (agentId, n) => mirror.recent(registry.resolve(agentId)?.sessionId || agentId, n),
       asks: (agentId) => mirror.recentAsks(registry.resolve(agentId)?.sessionId || agentId),
+      ...deliveries.turns,
     },
     questions: {
       // The device's own object, verbatim: rebuilt as `{ [requestId]: optionId }` it was keyed by the
@@ -968,6 +979,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       delivery: (event) => {
         backend.orchestratorDelivery(event)
         backend.teamDelivery(event)
+        deliveries.settled(event)
       },
       canWrite: (deliveryId) => backend.teamCanWrite(deliveryId),
     },
@@ -1086,12 +1098,13 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     token: serviceToken,
     owned: Object.fromEntries([...outOfProcess].map((name) => [name, requestsOf[name] ?? []])),
     waits: LONG_ANSWERS,
-    answer: (service, query, payload) => service === 'viewers' ? viewersLink.answer(query, payload)
+    answer: (service, query, payload) => deliveries.answer(service, query, payload)
+      ?? (service === 'viewers' ? viewersLink.answer(query, payload)
       : service === 'workspaces' ? workspacesLink.answer(query, payload)
       : service === 'store' ? storeLink.answer(query, payload)
       : service === 'models' ? modelsLink.answer(query, payload)
       : service === 'teams' ? teamsLink.answer(query, payload)
-      : service === 'gateway' && gatewayLink ? gatewayLink.answer(query, payload) : answerAgentQuery(coreApi, query),
+      : service === 'gateway' && gatewayLink ? gatewayLink.answer(query, payload) : answerAgentQuery(coreApi, query)),
     // The gateway's own traffic: its remote clients and what they sent, and its comings and goings.
     notice: (service, payload) => { if (service === 'gateway') gatewayLink?.notice(payload) },
     binary: (service, bytes) => { if (service === 'gateway') gatewayLink?.binary(bytes) },
