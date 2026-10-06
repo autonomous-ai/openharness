@@ -14,7 +14,7 @@ afterEach(() => {
   if (root) rmSync(root, { recursive: true, force: true })
 })
 
-it('search discovers homes adopted by the core after its separate process has started', async () => {
+it.each(['claude', 'codex'] as const)('search discovers %s homes adopted by the core after its separate process has started', async engine => {
   root = mkdtempSync(join(tmpdir(), 'external-homes-'))
   resetEngineHomes()
   // Search starts before the core reads the login shell; its first root lookup may find no saved file.
@@ -35,10 +35,24 @@ it('search discovers homes adopted by the core after its separate process has st
   write(join(codexHome, 'session_index.jsonl'), { id: codexId, thread_name: 'Moved Codex thread' })
   write(join(env.ADAPTER_DATA_DIR, 'engine-homes.json'), { claude: [claudeHome], codex: [codexHome] })
   const ctx = scanMemo().context()
-  expect(await providers.find(p => p.engine === 'claude')!.scan(ctx)).toEqual(expect.arrayContaining([
-    expect.objectContaining({ sessionId: claudeId }),
+  expect(await providers.find(p => p.engine === engine)!.scan(ctx)).toEqual(expect.arrayContaining([
+    expect.objectContaining(engine === 'claude' ? { sessionId: claudeId } : { sessionId: codexId, title: 'Moved Codex thread' }),
   ]))
-  expect(await providers.find(p => p.engine === 'codex')!.scan(ctx)).toEqual(expect.arrayContaining([
-    expect.objectContaining({ sessionId: codexId, title: 'Moved Codex thread' }),
-  ]))
+})
+
+it('search recognizes a moved Claude conversation that is still busy in another terminal', async () => {
+  root = mkdtempSync(join(tmpdir(), 'external-homes-'))
+  const home = join(root, 'claude')
+  const record = join(home, 'sessions', '123.json')
+  mkdirSync(join(home, 'sessions'), { recursive: true })
+  writeFileSync(record, JSON.stringify({ pid: 123, sessionId: 'external-conversation', status: 'busy', startedAt: 1000 }))
+  writeFileSync(join(env.ADAPTER_DATA_DIR, 'engine-homes.json'), JSON.stringify({ claude: [home] }))
+  const provider = externalProviders().find(p => p.engine === 'claude')!
+  const claims = await provider.owners!({
+    alive: pid => pid === 123,
+    list: async () => [{ pid: 123, ppid: 1, executable: 'claude', args: 'claude', started: 1000 }],
+    openFiles: async () => new Map(), openFilesOf: async () => new Map(),
+  })
+  expect(claims).toContainEqual({ sessionId: 'external-conversation', pid: 123, record })
+  expect(await provider.busy!(claims[0])).toBe(true)
 })

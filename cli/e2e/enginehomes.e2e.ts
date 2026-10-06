@@ -84,7 +84,10 @@ describe('the person\'s engines keeping their data elsewhere', () => {
       } else if (operation === 'resources') {
         await until('the moved server in Harness Monitor', async () => {
           const answer = await client.request('machine_resources', { harnesses: true })
-          return answer.harnesses?.shared?.some((value: Row) => value.kind === 'codex' && value.agentIds.includes(agent.id) && value.memoryBytes > 0)
+          expect(answer.harnesses?.shared, JSON.stringify(answer)).toEqual(expect.arrayContaining([
+            expect.objectContaining({ kind: 'codex', agentIds: expect.arrayContaining([agent.id]), memoryBytes: expect.any(Number) }),
+          ]))
+          return answer.harnesses.shared.some((value: Row) => value.kind === 'codex' && value.agentIds.includes(agent.id) && value.memoryBytes > 0)
         }, 20_000)
       } else {
         const result = await client.request('agent_close', { agentId: agent.id, sessionId: agent.sessionId, createdAt: agent.createdAt, mode: 'now' }, 90_000)
@@ -170,7 +173,9 @@ describe('the person\'s engines keeping their data elsewhere', () => {
     const records = engine === 'claude' ? [{ type: 'user', entrypoint: 'cli', sessionId, cwd: d.projectsDir,
       timestamp: at, uuid: 'question', message: { role: 'user', content: 'movedhomepangolin' } }] : [
       { type: 'session_meta', timestamp: at, payload: { id: sessionId, cwd: d.projectsDir, source: 'cli' } },
-      { type: 'response_item', timestamp: at, payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'movedhomepangolin' }] } },
+      { type: 'event_msg', timestamp: at, payload: { type: 'task_started', turn_id: 'external-turn' } },
+      { type: 'event_msg', timestamp: at, payload: { type: 'item_completed', turn_id: 'external-turn', item: { type: 'UserMessage', content: [{ type: 'text', text: 'movedhomepangolin' }] } } },
+      { type: 'event_msg', timestamp: at, payload: { type: 'task_complete', turn_id: 'external-turn' } },
     ]
     writeFileSync(join(folder, engine === 'claude' ? `${sessionId}.jsonl` : `rollout-${sessionId}.jsonl`), records.map(record => JSON.stringify(record)).join('\n') + '\n')
     const client = await LocalClient.connect(d)
