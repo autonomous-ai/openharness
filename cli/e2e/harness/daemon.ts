@@ -18,6 +18,7 @@ import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
 import { isolatedTmux, type IsolatedTmux } from '../../src/testing/isolatedTmux.js'
+import { artifactLog, artifactsEnabled } from './artifacts.js'
 
 const exec = promisify(execFile)
 const here = dirname(fileURLToPath(import.meta.url))
@@ -193,6 +194,11 @@ export class IsolatedDaemon {
       projects: join(root, 'projects'),
     }
     for (const dir of Object.values(dirs)) await mkdir(dir, { recursive: true })
+    // A zsh user as most are, with a .zshrc of their own (empty: nothing of anyone's). With none, the zsh
+    // of Debian, Ubuntu and Fedora opens its new-user setup menu in every terminal tile and every shell an
+    // engine leaves behind, and a test typing into one types into the menu. The person with no startup
+    // files at all has their own case (shells.e2e.ts). Appended, never truncated: a test's own stays.
+    await writeFile(join(dirs.home, '.zshrc'), '', { flag: 'a' })
     const config: EngineConfig = {
       port, dataDir: dirs.data, claudeProjectsDir: dirs.claudeProjects, codexHome: dirs.codexHome,
       claudeModel: options.claudeModel, codexModel: options.codexModel,
@@ -299,7 +305,14 @@ export class IsolatedDaemon {
       cwd: CLI_ROOT, env: this.env, stdio: ['ignore', 'pipe', 'pipe'],
     })
     this.child = child
-    const take = (chunk: Buffer) => { this.output += chunk.toString('utf8') }
+    // The whole log, as files, for a failing test's CI artifacts (E2E_ARTIFACTS_DIR, artifacts.ts).
+    const logName = `daemon-${this.port}.log`
+    artifactLog(logName, `---- ${new Date().toISOString()} start (pid ${child.pid}, ${script.at(-1)} ${entry}, data ${this.dataDir})\n`)
+    const take = (chunk: Buffer) => {
+      const text = chunk.toString('utf8')
+      this.output += text
+      artifactLog(logName, text)
+    }
     child.stdout!.on('data', take)
     child.stderr!.on('data', take)
     const exited = new Promise<never>((_, reject) => child.once('exit', (code, signal) => {
@@ -372,14 +385,35 @@ export class IsolatedDaemon {
     return readFileSync(join(this.dataDir, 'hook-credential'), 'utf8').trim()
   }
 
+  /**
+   * What every pane on this daemon's tmux server shows, for a failing test's artifacts: its command, how
+   * it started, and its screen with some history. A pane is the one thing the daemon's log cannot say:
+   * the suite's first Linux run failed on a setup menu zsh drew in every agent's pane, and the logs said
+   * only that no engine ever appeared.
+   */
+  private async keepPanes(): Promise<void> {
+    try {
+      const panes = await this.tmux.run('list-panes', '-a', '-F', '#{pane_id}\t#{session_name}\t#{pane_dead}\t#{pane_current_command}\t#{pane_start_command}')
+      let text = ''
+      for (const line of panes.split('\n').filter(Boolean)) {
+        const screen = await this.tmux.run('capture-pane', '-p', '-J', '-S', '-200', '-t', line.split('\t')[0]).catch((error) => String(error))
+        text += `==== ${line}\n${screen}\n`
+      }
+      artifactLog(`daemon-${this.port}-panes.txt`, text)
+    } catch { /* no server any more: nothing on screen to keep */ }
+  }
+
   async close(): Promise<void> {
     const core = this.options.noMaster ? null : this.corePid()
+    // While the panes are still there: a daemon that stops can take its agents' panes with it.
+    if (artifactsEnabled()) await this.keepPanes()
     await this.stop().catch(() => {})
     // Once the daemon has said all it will, and before the root (and the engines' hook log) is removed.
     let escaped: unknown = null
     try { this.assertHooksStayedInside() } catch (error) { escaped = error }
     // A failed test prints it after this close has removed the root.
     this.closedHookLog = this.hookLog()
+    artifactLog(`daemon-${this.port}-engine-hooks.log`, this.closedHookLog)
     // A core whose master died during the test must not outlive it: 20 such cores, left by a run
     // whose masters crashed, spun on their closed output pipes for the rest of a parallel suite. Only
     // this test's core is killed — its pid, still running this daemon's entry, orphaned or ours.
