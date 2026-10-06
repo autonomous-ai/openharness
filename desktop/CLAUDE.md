@@ -141,8 +141,10 @@ origin-local storage; only the OAuth transaction is in session storage.
 Each relay connection also negotiates a WebRTC data channel to the machine
 (`web/p2p/`, the phone's `../mobile/lib/p2p` on the browser's own
 `RTCPeerConnection` — no `flutter_webrtc`, so native builds gain no plugin);
-terminal frames take it when it is up and fall back to the relay. Keep
-`terminal_p2p_{plugin,link,policy}.dart` in step with the phone's copies.
+terminal frames take it when it is up and fall back to the relay. Those files,
+the transport interface and the E2EE session are copies of the phone's (mobile
+stays a standalone package); `test/p2p/mobile_parity_test.dart` fails until a
+change is carried to both.
 Shared sessions use `ObserverRelayCodec` and `/api/observer-ws`, verifying the
 owner and permitting only observation and authenticated comments. `/s/:id#key=…`
 opens `SharedAgentPage` without restoring the visitor's workspace. Public links
