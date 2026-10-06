@@ -39,9 +39,11 @@ def partition_layout(table, image_bytes):
     partitions = table['partitions']
     if len(partitions) != 3:
         raise ValueError('Expected only EFI, boot and root image partitions.')
+    # Current KIWI assigns the Discoverable Partitions Specification types:
+    # EFI, XBOOTLDR, then the native ARM64 root (not generic Linux data).
     expected_types = ('c12a7328-f81f-11d2-ba4b-00a0c93ec93b',
-                      '0fc63daf-8483-4772-8e79-3d69d8477de4',
-                      '0fc63daf-8483-4772-8e79-3d69d8477de4')
+                      'bc13c2ff-59e6-4262-a352-b275fd6f7172',
+                      'b921b045-1df0-41c3-af44-4c6f280d3fae')
     end = 2
     for row, expected in zip(partitions, expected_types):
         if (row['type'].lower() != expected or type(row['start']) is not int or

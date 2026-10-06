@@ -84,7 +84,9 @@ jobs:
           cp "$RUNNER_TEMP/package-producer.json" os/work/asahi-output/
       - name: Build the private image with signed Fedora and Asahi packages
         run: |
+          # KIWI needs newly created loop partition nodes from this disposable runner.
           sudo podman run --rm --privileged --arch arm64 \
+            --mount type=bind,source=/dev,target=/dev \
             --mount "type=bind,source=$PWD,target=/source,readonly" \
             --mount "type=bind,source=$PWD/os/work/asahi-output,target=/output" \
             -e PACKAGE_SOURCE="$PACKAGE_SOURCE" "$BUILDER_IMAGE" /bin/bash -euo pipefail -c '

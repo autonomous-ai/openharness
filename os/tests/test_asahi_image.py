@@ -106,20 +106,22 @@ class ActualDiskContract(unittest.TestCase):
     def table(self):
         return {'partitiontable': {'label': 'gpt', 'unit': 'sectors', 'sectorsize': 4096, 'partitions': [
             {'start': 256, 'size': 128000, 'type': 'C12A7328-F81F-11D2-BA4B-00A0C93EC93B'},
-            {'start': 128256, 'size': 262144, 'type': '0FC63DAF-8483-4772-8E79-3D69D8477DE4'},
-            {'start': 390400, 'size': 1048576, 'type': '0FC63DAF-8483-4772-8E79-3D69D8477DE4'},
+            {'start': 128256, 'size': 262144, 'type': 'BC13C2FF-59E6-4262-A352-B275FD6F7172'},
+            {'start': 390400, 'size': 1048576, 'type': 'B921B045-1DF0-41C3-AF44-4C6F280D3FAE'},
         ]}}
 
     def test_actual_partition_table_rejects_foreign_overlapping_and_truncated_images(self):
         good = self.table()
         self.assertEqual(len(check.partition_layout(good, 6 * 1024 ** 3)), 3)
-        for label in ('sector', 'foreign', 'overlap', 'extra'):
+        for label in ('sector', 'foreign', 'generic', 'overlap', 'extra'):
             table = self.table()
             part = table['partitiontable']
             if label == 'sector':
                 part['sectorsize'] = 512
             elif label == 'foreign':
                 part['partitions'][2]['type'] = '7C3457EF-0000-11AA-AA11-00306543ECAC'  # APFS
+            elif label == 'generic':
+                part['partitions'][2]['type'] = '0FC63DAF-8483-4772-8E79-3D69D8477DE4'
             elif label == 'overlap':
                 part['partitions'][2]['start'] = 300000
             else:
