@@ -741,8 +741,10 @@ void ht_focus_face(ht_scene_t *s, const ht_character_face_t *f, uint8_t frame, u
     // Claude's block of a body reads larger than the others at the same size (owner, 2026-10-06): it stays at 1.5x
     // resting and over a recap of one to three lines, and 1x over four.
     if (f->engine && !strcmp(f->engine, "claude") && ((has_recap && recap_n <= 3) || empty || retry)) size = 0;
-    // Codex's robot reads small at 1x over a full recap (owner, 2026-10-06): 1.5x over four lines too.
-    if (f->engine && !strcmp(f->engine, "codex") && has_recap && recap_n >= 4) size = 0;
+    // Codex's robot reads small at 1x over a full recap, and 1.5x was too big (owner, 2026-10-06): over four lines it is
+    // 1.25x (the eighths nearest the asked 1.3x), placed like the sizes over a shorter recap.
+    bool codex_full = f->engine && !strcmp(f->engine, "codex") && has_recap && recap_n >= 4;
+    if (codex_full) size = 0;
     int mark_top = TITLE_BOTTOM + (below - TITLE_BOTTOM - MARK_SIZE) / 2;
 
     // The name on the top curve, the octopus's arc; a tap there opens the pane list.
@@ -777,7 +779,7 @@ void ht_focus_face(ht_scene_t *s, const ht_character_face_t *f, uint8_t frame, u
             // first line, its hop scaled with it (zoom in eighths of the drawing: 4 = 1x, 6, 7, 8 = 2x).
             static const uint8_t zooms[4] = {4, 6, 7, 8};
             const ht_cell_frame_t *fr = &pet->cells[p->frame];
-            int z = zooms[size + 1];
+            int z = codex_full ? 5 : zooms[size + 1];
             int pw = (fr->cols * fr->cell * z + 7) / 8, ph = (fr->rows * fr->cell * z + 7) / 8;
             int px = (HT_WIDTH - pw) / 2;
             int py = (size >= 0 ? TITLE_BOTTOM + (below - TITLE_BOTTOM - ph) / 2 : mark_top + (MARK_SIZE - ph) / 2) + p->dy * z / 4;

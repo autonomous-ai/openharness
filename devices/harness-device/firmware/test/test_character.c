@@ -936,8 +936,8 @@ static void focus_face(void)
             int dy0 = pt->loops[HT_PET_IDLE][0].dy * (claude ? 6 : 8) / 4;
             assert(m->y - dy0 == 44 + (cap - 44 - h) / 2);
         }
-        // Codex over a four-line recap is 1.5x, not 1x (owner, 2026-10-06: "it looks tiny"), between the name and the
-        // recap's first line; Muse stays 1x there.
+        // Codex over a four-line recap is 1.25x, not 1x (owner, 2026-10-06: "it looks tiny"; 1.5x "a bit big"), between
+        // the name and the recap's first line; Muse stays 1x there.
         for (int e = 0; e < 2; e++) {
             const char *eng_ = e ? "muse" : "codex";
             ht_character_face_t g = {.recipient = "x", .engine = eng_, .activity = "", .status = "", .hint = "",
@@ -948,7 +948,7 @@ static void focus_face(void)
             int lines = 0;
             for (int i = 3; i < 7; i++) lines += sc.runs[i].text[0] != 0;
             const ht_run_t *m = &sc.runs[1];
-            assert(lines == 4 && m->sprite.cells && m->sprite.zoom == (e ? 4 : 6));
+            assert(lines == 4 && m->sprite.cells && m->sprite.zoom == (e ? 4 : 5));
             assert(m->y >= 44 && m->y + m->sprite.height <= sc.runs[3].y + ht_lv_inter_30.ascent - 22);
         }
         // No pane's engine (no pet, no mark: design 2026-10-06 "No pane"): the resting line alone, its one or two lines
