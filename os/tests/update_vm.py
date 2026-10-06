@@ -42,8 +42,13 @@ def main():
     server = ThreadingHTTPServer(('127.0.0.1', 0), partial(SimpleHTTPRequestHandler, directory=str(served)))
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
-    vm = VM(folder, iso, 'uefi', 2048)
-    receipt = {'status': 'running', 'started_at': time.time(), 'image': image, 'checks': []}
+    # Match the existing session/suspend gate. The pinned kernel's bochs driver
+    # resumes this virtual display; virtio-vga can leave its scanout inactive.
+    video = 'VGA' if session_tools else 'virtio-vga'
+    vm = VM(folder, iso, 'uefi', 2048, video=video)
+    receipt = {'status': 'running', 'started_at': time.time(), 'image': image,
+               'video': video, 'checks': [],
+               'limits': ['Virtual display and ACPI suspend; no physical laptop, panel, or GPU acceptance.']}
     config = dict(disk='/dev/vda', expected_serial='HN_OS_TEST', confirm_erase='/dev/vda',
                   username='me', hostname='harness', password='test-password-123', encrypt=True, serial_console=True)
     try:
