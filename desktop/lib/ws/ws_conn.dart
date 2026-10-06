@@ -138,6 +138,7 @@ class WsConn {
   bool _closing = false;
   bool _connecting = false;
   bool _ready = false;
+  bool _deviceMetricsSupported = false;
   int _attempt = 0;
   Timer? _reconnectTimer;
   Timer? _observerHandshakeTimer;
@@ -150,6 +151,11 @@ class WsConn {
   Future<void> _inboundTail = Future<void>.value();
 
   bool get isReady => _ready && _channel != null;
+
+  /// The exact local socket that negotiated private device usage. A reconnect
+  /// always invalidates this token, including a downgrade to an older daemon.
+  Object? get deviceMetricsSession =>
+      isReady && isLocal && _deviceMetricsSupported ? _channel : null;
 
   /// Wait for this machine's handshake without queuing a request or changing
   /// its timeout. Callers can then start independent RPCs with their own budgets.
@@ -251,6 +257,7 @@ class WsConn {
     if (_closing || _connecting) return;
     _connecting = true;
     _ready = false;
+    _deviceMetricsSupported = false;
     onStatus(
       _attempt == 0
           ? ConnectionStatus.connecting
@@ -402,12 +409,24 @@ class WsConn {
     final payload = (message['payload'] as Map<String, dynamic>?) ?? {};
 
     if (type == 'connected') {
-      if (payload['machineId'] == machineId) _markReady();
+      if (payload['machineId'] == machineId) {
+        if (!_ready) {
+          _deviceMetricsSupported =
+              isLocal && payload['deviceMetricsProtocol'] == 1;
+        }
+        _markReady();
+      }
       return;
     }
+    final metricsSession = type == 'dial_metrics' ? deviceMetricsSession : null;
     final normalized = <String, dynamic>{...message, 'payload': payload};
     _inboundTail = _inboundTail
         .then((_) async {
+          if (type == 'dial_metrics' &&
+              (metricsSession == null ||
+                  !identical(metricsSession, deviceMetricsSession))) {
+            return;
+          }
           final isE2ee =
               type.startsWith('e2e_') ||
               (payload.containsKey('__e2e') && payload['__e2e'] is Map);
@@ -530,6 +549,7 @@ class WsConn {
   void _refusePeer(String reason) {
     _closing = true;
     _ready = false;
+    _deviceMetricsSupported = false;
     _observerHandshakeTimer?.cancel();
     _rejectPending(reason);
     _disposePlugin();
@@ -604,6 +624,9 @@ class WsConn {
     'app_visit_result',
     'dial_form',
     'app_form_result',
+    'dial_metrics',
+    'app_metrics_ready',
+    'app_metrics_result',
     'ping',
     'pong',
   };
@@ -693,6 +716,37 @@ class WsConn {
       requireReady: true,
       openViaPlugin: openViaPlugin,
     );
+  }
+
+  /// These two frames belong only to the local daemon that negotiated them.
+  /// Check inside the outbound FIFO; a scan or earlier send can span a reconnect.
+  /// No relay, transport plugin, or outgoing transformation owns this local data.
+  Future<bool> sendDeviceMetricsFrame(
+    Object session,
+    String type,
+    Map<String, dynamic> payload,
+  ) {
+    if (type != 'app_metrics_ready' && type != 'app_metrics_result') {
+      return Future<bool>.value(false);
+    }
+    final completer = Completer<bool>();
+    _outboundTail = _outboundTail
+        .then((_) {
+          if (!identical(session, deviceMetricsSession)) {
+            completer.complete(false);
+            return;
+          }
+          try {
+            _channel!.sink.add(jsonEncode({'type': type, 'payload': payload}));
+            completer.complete(true);
+          } catch (_) {
+            completer.complete(false);
+          }
+        })
+        .catchError((_) {
+          if (!completer.isCompleted) completer.complete(false);
+        });
+    return completer.future;
   }
 
   Future<bool> sendTerminalBinary(Uint8List bytes) {
@@ -853,6 +907,7 @@ class WsConn {
     _codec = null;
     _disposePlugin();
     _ready = false;
+    _deviceMetricsSupported = false;
     _rejectPending('WS disconnected');
     if (_closing) {
       onStatus(ConnectionStatus.disconnected);
@@ -939,6 +994,7 @@ class WsConn {
     _closing = true;
     _observerHandshakeTimer?.cancel();
     _ready = false;
+    _deviceMetricsSupported = false;
     _codec = null;
     _disposePlugin();
     _reconnectTimer?.cancel();
@@ -974,6 +1030,7 @@ class WsConn {
     _forceRelayReconnect = true;
     _reconnectTimer?.cancel();
     _ready = false;
+    _deviceMetricsSupported = false;
     _codec = null;
     _disposePlugin();
     _rejectPending('forcing relay reconnect');

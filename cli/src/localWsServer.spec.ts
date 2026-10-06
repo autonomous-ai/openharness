@@ -167,6 +167,65 @@ describe('local CLI WebSocket', () => {
     ws.close()
   })
 
+  it.each([false, true])('consumes usage only from local UI windows (tool=%s)', async tool => {
+    const backend = new FakeBackend(), ready = vi.fn(), reply = vi.fn()
+    const ws = new WebSocket(await start(backend, { onMetricsReady: ready, onMetricsReply: reply }))
+    await onceOpen(ws)
+    const connected = onceMessage(ws)
+    ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId, localProtocolVersion: 1, tool } }))
+    const handshake = await connected
+    expect(handshake.payload).toEqual(expect.objectContaining({ machineId }))
+    if (tool) expect(handshake.payload).not.toHaveProperty('deviceMetricsProtocol')
+    else expect(handshake.payload).toHaveProperty('deviceMetricsProtocol', 1)
+    ws.send(JSON.stringify({ type: 'app_metrics_ready', payload: { schema: 1 } }))
+    ws.send(JSON.stringify({ type: 'app_metrics_result', payload: { requestId: 'usage' } }))
+    // The following ordinary frame is a barrier through the socket's queue.
+    ws.send(JSON.stringify({ type: 'metrics_test_barrier', payload: {} }))
+    await vi.waitFor(() => expect(backend.frames.some(f => f.type === 'metrics_test_barrier')).toBe(true))
+    expect(ready).toHaveBeenCalledTimes(tool ? 0 : 1)
+    expect(reply).toHaveBeenCalledTimes(tool ? 0 : 1)
+    expect(backend.frames.filter(f => typeof f.type === 'string' && f.type.startsWith('app_metrics'))).toEqual([])
+    ws.close()
+  })
+
+  it('omits device metrics support when no reader was installed', async () => {
+    const ws = new WebSocket(await start(new FakeBackend()))
+    await onceOpen(ws)
+    const connected = onceMessage(ws)
+    ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId, localProtocolVersion: 1 } }))
+    expect((await connected).payload).not.toHaveProperty('deviceMetricsProtocol')
+    ws.close()
+  })
+
+  it('blocks upstream metrics requests and discards remote metrics without forwarding', async () => {
+    const backend = new FakeBackend(), ready = vi.fn(), reply = vi.fn()
+    const relayed: Frame[] = [], received: Frame[] = []
+    let upstream!: LocalClientSink
+    const relayPool = {
+      acquire: async (_id: string, _env: string, _select: Frame, sink: LocalClientSink) => {
+        upstream = sink
+        sink.sendFrame({ type: 'connected', payload: { machineId: 'remote', e2ee: false } })
+        return { send: async (frame: Frame) => { relayed.push(frame) }, sendBinary: async () => {}, detach: () => {} }
+      },
+    }
+    const ws = new WebSocket(await start(backend, { autonomousEnv: 'test', onMetricsReady: ready, onMetricsReply: reply,
+      relayPool: relayPool as unknown as NonNullable<LocalWsServerOptions['relayPool']> }))
+    await onceOpen(ws)
+    const connected = onceMessage(ws)
+    ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId: 'remote', localProtocolVersion: 1 } }))
+    await connected
+    ws.on('message', raw => received.push(JSON.parse(raw.toString())))
+    upstream.sendFrame({ type: 'dial_metrics', payload: { requestId: 'injected' } })
+    ws.send(JSON.stringify({ type: 'app_metrics_ready', payload: { schema: 1 } }))
+    ws.send(JSON.stringify({ type: 'app_metrics_result', payload: { requestId: 'usage' } }))
+    ws.send(JSON.stringify({ type: 'metrics_test_barrier', payload: {} }))
+    await vi.waitFor(() => expect(relayed.some(f => f.type === 'metrics_test_barrier')).toBe(true))
+    expect(ready).not.toHaveBeenCalled(); expect(reply).not.toHaveBeenCalled()
+    expect(relayed.filter(f => typeof f.type === 'string' && f.type.startsWith('app_metrics'))).toEqual([])
+    expect(received.some(f => f.type === 'dial_metrics')).toBe(false)
+    ws.close()
+  })
+
   it.each(['selection', 'visit', 'form'])('addresses one window for %s and consumes its result locally', async kind => {
     const backend = new FakeBackend(), reply = vi.fn()
     const ws = new WebSocket(await start(backend, { [kind === 'form' ? 'onFormReply' : kind === 'visit' ? 'onVisitReply' : 'onSelectionReply']: reply }))

@@ -1,0 +1,143 @@
+{
+  "note": "Existing Harness character artwork, reused without modification. Hardware preview is derived from the user-supplied Harness_pro9 STEP. Interface shown on it is a proposed Pro experience.",
+  "character_assets": [
+    {
+      "file": "tim_adult_idle_0.png",
+      "source": "desktop/assets/daemon-art/portrait/tim_adult_idle_0.png",
+      "sha256": "4dce4cd99ca5180623aadaf4b02bd242665e97bf45fada68dde430f715e8a644"
+    },
+    {
+      "file": "tim_adult_work_0.png",
+      "source": "desktop/assets/daemon-art/portrait/tim_adult_work_0.png",
+      "sha256": "83ba9fdb7a984e3c7ad5bebf53298e057c6d2753b10a051cee4ce3949618dfb7"
+    },
+    {
+      "file": "tim_adult_need_0.png",
+      "source": "desktop/assets/daemon-art/portrait/tim_adult_need_0.png",
+      "sha256": "50924a5f9f11b0339988f10a6a7cf4385d85a5ca5f828dbaec12248ebc802a1a"
+    },
+    {
+      "file": "tim_adult_done_0.png",
+      "source": "desktop/assets/daemon-art/portrait/tim_adult_done_0.png",
+      "sha256": "89cbe17d94d45241f5e74f278ad2666d13aff6dff310af48dd67a7fdc18afd3f"
+    },
+    {
+      "file": "tim_adult_nap_0.png",
+      "source": "desktop/assets/daemon-art/portrait/tim_adult_nap_0.png",
+      "sha256": "2b4ac0a4334713d16776ce25a4ce756d78101a413958880bef77f9c338027496"
+    },
+    {
+      "file": "lynx_adult_idle_0.png",
+      "source": "desktop/assets/daemon-art/portrait/lynx_adult_idle_0.png",
+      "sha256": "05598a6ec13ca644a60eb7842060111e30b7d4b4fa8f323d1f159f89be737ae5"
+    },
+    {
+      "file": "lynx_adult_work_0.png",
+      "source": "desktop/assets/daemon-art/portrait/lynx_adult_work_0.png",
+      "sha256": "0550841bcab6179d7e5b1b5e51e869bfe236103f39801541d99b0468eba37653"
+    },
+    {
+      "file": "lynx_adult_need_0.png",
+      "source": "desktop/assets/daemon-art/portrait/lynx_adult_need_0.png",
+      "sha256": "f10d272d36dcb81b5900ee8ad24fa03eefef1eb8830e005b31475f207b9db8df"
+    },
+    {
+      "file": "lynx_adult_done_0.png",
+      "source": "desktop/assets/daemon-art/portrait/lynx_adult_done_0.png",
+      "sha256": "3784d80ae298a52e1e702125fe2bfac7f3debd660a0455094702636b1ce08ae0"
+    },
+    {
+      "file": "lynx_adult_nap_0.png",
+      "source": "desktop/assets/daemon-art/portrait/lynx_adult_nap_0.png",
+      "sha256": "43d69fe1ee6a35412712365e1b25623b68540ddd32e4acb08d302ea133faa8ea"
+    },
+    {
+      "file": "tux_adult_idle_0.png",
+      "source": "desktop/assets/daemon-art/portrait/tux_adult_idle_0.png",
+      "sha256": "e14975dcdb1b85a0bd9f3a070991009d4a7259b6ffc05fb0696b86c41e30897a"
+    },
+    {
+      "file": "tux_adult_work_0.png",
+      "source": "desktop/assets/daemon-art/portrait/tux_adult_work_0.png",
+      "sha256": "669439235731b1d86a35e7e8c080d00e79cc3eab5ca23b42044af40ceb888364"
+    },
+    {
+      "file": "tux_adult_need_0.png",
+      "source": "desktop/assets/daemon-art/portrait/tux_adult_need_0.png",
+      "sha256": "902d0ad69c090913a6ef24c4409740e93ca054dbcc62c847febd2db504aa4604"
+    },
+    {
+      "file": "tux_adult_done_0.png",
+      "source": "desktop/assets/daemon-art/portrait/tux_adult_done_0.png",
+      "sha256": "95148c40dee71d676c6cb392c50db7baf13a99ff722c708681e066bdd600776b"
+    },
+    {
+      "file": "tux_adult_nap_0.png",
+      "source": "desktop/assets/daemon-art/portrait/tux_adult_nap_0.png",
+      "sha256": "6aeb6b8cb74f9217d2506df6f0e34cf954383e505f851c667e98627d90008fbb"
+    },
+    {
+      "file": "gopher_adult_idle_0.png",
+      "source": "desktop/assets/daemon-art/portrait/gopher_adult_idle_0.png",
+      "sha256": "256ab0693bbe04ad0d42ad182fd0f37f43a56881515dab1acfa0a588fb9721af"
+    },
+    {
+      "file": "gopher_adult_work_0.png",
+      "source": "desktop/assets/daemon-art/portrait/gopher_adult_work_0.png",
+      "sha256": "c5c8d40a914cbc076bd1e5f8716360e39a3be264564bdd9eed7dfe879e1b9595"
+    },
+    {
+      "file": "gopher_adult_need_0.png",
+      "source": "desktop/assets/daemon-art/portrait/gopher_adult_need_0.png",
+      "sha256": "8d1b31b6dc5d9eae1b932a7fed936bb8874a3365d618daf75b114a50fc897a23"
+    },
+    {
+      "file": "gopher_adult_done_0.png",
+      "source": "desktop/assets/daemon-art/portrait/gopher_adult_done_0.png",
+      "sha256": "80d926cde87f749bf9bf2b990cfe7e707166a61896512b61c1a31e95e238aaa8"
+    },
+    {
+      "file": "gopher_adult_nap_0.png",
+      "source": "desktop/assets/daemon-art/portrait/gopher_adult_nap_0.png",
+      "sha256": "8a37edda6ee72f59e4baac68683088d974b9f400133d491fd175074701b413c5"
+    }
+  ],
+  "repository_revision": "fa8f966c781b59175e98d601954425f6b6be27cf",
+  "hardware": {
+    "source_file": "Harness_pro9.step",
+    "source_sha256": "aa33aa5218e3242deb3a2b5fa28e817e5a6f27f76da17fba977537414b3f6840",
+    "geometry": "The exact user-supplied STEP assembly, exported into 10 world-coordinate STL meshes. No geometry changes.",
+    "renderer": "website/scripts/pro/render-hardware.py",
+    "method": "Orthographic triangle rasterization with per-pixel depth and 2x supersampling. Code-native interface texture applied to the existing display face.",
+    "appearance": "Illustrative warm neutral material and lighting, not manufacturing finish approval.",
+    "assets": [
+      {
+        "file": "harness-pro-hero.webp",
+        "sha256": "d9db3aac0dcf405a472418bf8e1949e7a773f41c112731f7aa57634ecced4c1c"
+      },
+      {
+        "file": "harness-pro-rear.webp",
+        "sha256": "8639625aed7c4a6989e8db156cbd6f0869ec9ee73e9e0ae10a4ee39a9d8a4667"
+      },
+      {
+        "file": "harness-pro-side.webp",
+        "sha256": "99b3703feb5105b6097b7cfbd9d68b66de48e69eeccdec1e5980ac31b3424b1f"
+      },
+      {
+        "file": "screen-preview.webp",
+        "sha256": "104b3cec64ef2d217df9ac6200f90c0e8a7135f7ea5a888bfbcdcdcded868efa"
+      }
+    ],
+    "interface": "Version 3 app-input study: selected work, voice, attention and scoped sample daily estimate. Workspace, decisions, Carry, Return, Goal and Loop are temporary sheets; no Browser mode."
+  },
+  "round_preview": {
+    "file": "round-companion.png",
+    "source": "devices/harness-device/prototype/habitat/images/bridge-codex-working.png",
+    "sha256": "035f02b80898287e36a69936a5a9c82940c62de28f3a1e032b99d7a8897e55df"
+  },
+  "brand": {
+    "file": "harness-mark.svg",
+    "source": "website/public/icon.svg",
+    "sha256": "4325c06e3223b8898f344e6a6ef0c3ec87031bb806ab765134ddccb8fb98e472"
+  }
+}

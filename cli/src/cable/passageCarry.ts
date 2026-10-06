@@ -27,6 +27,7 @@ export class PassageCarry {
   constructor(private readonly wiring: {
     select: (command: SelectionCommand) => Promise<SelectionResult>
     name: (agentId: string) => Promise<string>
+    isAgentAmbiguous?: (agentId: string) => boolean
     now?: () => number
   }) {}
 
@@ -44,6 +45,8 @@ export class PassageCarry {
         !Number.isSafeInteger(command.revision) || command.revision! < 0) {
       return Promise.resolve(this.fail('Choose the text again.'))
     }
+    if (this.wiring.isAgentAmbiguous?.(command.agentId))
+      return Promise.resolve(this.fail('Open this harness in the app.'))
     const key = JSON.stringify([id, command.agentId, command.selectionId, command.revision])
     if (this.pending) return this.pending.key === key ? this.pending.promise
       : Promise.resolve(this.fail('Wait for the selected text.'))
@@ -57,11 +60,13 @@ export class PassageCarry {
       try {
         const selection = await this.wiring.select(command)
         if (generation !== this.generation) return this.fail('Carrying cancelled.')
+        if (this.wiring.isAgentAmbiguous?.(command.agentId)) return this.fail('Open this harness in the app.')
         if (!selection.ok) return this.fail(selection.error)
         if (!selection.text?.trim() || Buffer.byteLength(selection.text, 'utf8') > 4096 ||
             selection.rows < 1 || selection.rows > 16) return this.fail('Choose a shorter passage.')
         const name = await this.wiring.name(command.agentId)
         if (generation !== this.generation) return this.fail('Carrying cancelled.')
+        if (this.wiring.isAgentAmbiguous?.(command.agentId)) return this.fail('Open this harness in the app.')
         this.item = Object.freeze({ id, key, sourceAgentId: command.agentId,
           sourceName: [...name.replace(/[\x00-\x1f\x7f]/g, ' ')].slice(0, 60).join('') || 'Harness',
           text: selection.text, excerpt: selection.excerpt, rows: selection.rows,

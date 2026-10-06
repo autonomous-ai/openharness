@@ -14,6 +14,41 @@ function fixture() {
 }
 
 describe('carried passage', () => {
+  it.each(['before', 'pin', 'name'] as const)('refuses an owner conflict %s source capture without freezing a label', async when => {
+    let blocked = when === 'before', finishPin!: (value: SelectionResult) => void, finishName!: (name: string) => void
+    const select = vi.fn(async (c: SelectionCommand): Promise<SelectionResult> => {
+      if (c.op === 'cancel') return { ok: false, error: 'Closed' }
+      return when === 'pin' ? new Promise(resolve => { finishPin = resolve }) : selected()
+    })
+    const name = vi.fn(async () => when === 'name' ? new Promise<string>(resolve => { finishName = resolve }) : 'Original source')
+    const carry = new PassageCarry({ select, name, isAgentAmbiguous: () => blocked })
+    const pending = carry.prepare('carry-conflict', command)
+    if (when === 'pin') {
+      await vi.waitFor(() => expect(select).toHaveBeenCalledOnce())
+      blocked = true; finishPin(selected())
+    } else if (when === 'name') {
+      await vi.waitFor(() => expect(name).toHaveBeenCalledOnce())
+      blocked = true; finishName('Another computer')
+    }
+    expect(await pending).toEqual({ ok: false, active: false, error: 'Open this harness in the app.' })
+    expect(carry.read('carry-conflict').ok).toBe(false)
+    if (when === 'before') expect(select).not.toHaveBeenCalled()
+    else expect(select).toHaveBeenLastCalledWith({ op: 'cancel', agentId: 'source', selectionId: 'pick-1' })
+  })
+
+  it('keeps an already frozen passage unchanged and permits explicit cancellation after a conflict', async () => {
+    let blocked = false
+    const carry = new PassageCarry({ select: async () => selected(), name: async () => 'Original source',
+      isAgentAmbiguous: () => blocked })
+    await carry.prepare('carry-fixed', command)
+    const before = carry.read('carry-fixed')
+    blocked = true
+    expect(carry.read('carry-fixed')).toEqual(before)
+    expect(await carry.prepare('carry-fixed', command)).toMatchObject({ ok: false })
+    carry.clear('carry-fixed')
+    expect(carry.read('carry-fixed').ok).toBe(false)
+  })
+
   it('freezes exact text, releases its highlight and never exposes full text to the device', async () => {
     const { carry, select } = fixture()
     const reply = await carry.prepare('carry-1', command)

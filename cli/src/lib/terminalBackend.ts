@@ -16,6 +16,9 @@ import type {
   RuntimeValidation,
 } from './terminalTypes.js'
 
+/** Private reviewed-write stages; after Enter a newly open turn may be our own submission. */
+export type ReviewedSubmitPhase = 'before-paste' | 'before-enter' | 'identity'
+
 /** Backend-specific terminal I/O. Process ownership and registry reconciliation deliberately live above it. */
 export interface TerminalBackend<Ref extends TerminalRuntimeRef = TerminalRuntimeRef> {
   readonly name: TerminalBackendName
@@ -27,9 +30,13 @@ export interface TerminalBackend<Ref extends TerminalRuntimeRef = TerminalRuntim
   /** Current user-visible titles keyed by backend-scoped terminal route key. */
   titles(): Promise<TerminalReadResult<Map<string, string>>>
   validate(runtime: Ref, expected: TerminalProcessExpectation): Promise<RuntimeValidation>
+  /** Exact identity only; no upgrade-era process identity allowances. */
+  validateReviewed?(runtime: Ref, expected: TerminalProcessExpectation): Promise<RuntimeValidation>
   capture(runtime: Ref, options?: TerminalCaptureOptions): Promise<TerminalReadResult<string>>
   typeLiteral(runtime: Ref, text: string): Promise<TerminalActionResult>
   submitText(runtime: Ref, text: string): Promise<TerminalActionResult>
+  /** Guard after waits and before paste/Enter. Never retry either operation. */
+  submitReviewed?(runtime: Ref, text: string, current: (phase: ReviewedSubmitPhase) => Promise<boolean>): Promise<TerminalActionResult>
   sendKey(runtime: Ref, key: TerminalLogicalKey): Promise<TerminalActionResult>
   setTitle(runtime: Ref, title: string): Promise<TerminalActionResult>
   notify(runtime: Ref, title: string, body: string): Promise<TerminalActionResult>

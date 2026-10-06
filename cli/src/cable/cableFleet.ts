@@ -5,9 +5,11 @@ import { DialVerdicts } from './dialPortVerdicts.js'
 import { findDialPorts, portInUse, SerialLink, type DialPort } from './serial.js'
 import type { CableSession, CableHost, CablePort, DialStatus, PortOpener } from './cableSession.js'
 import type { DialLog } from './dialLog.js'
+import { VoiceDraftArchives } from './voiceDraft.js'
+import { QuestionInbox } from './questionInbox.js'
 
 type Surface = Pick<CableSession, keyof CableSession>
-type SessionConstructor = new (host: CableHost, log: DialLog, open: PortOpener) => Surface
+type SessionConstructor = new (host: CableHost, log: DialLog, open: PortOpener, drafts?: VoiceDraftArchives, questions?: QuestionInbox) => Surface
 type Entry = { port: DialPort; session: Surface; attached: boolean; status: DialStatus }
 type OpenPort = (path: string, onData: (chunk: Buffer) => void, onClosed: (why: string) => void) => Promise<CablePort>
 export interface CableFleetOptions {
@@ -25,6 +27,12 @@ export interface CableFleetOptions {
 }
 
 export class CableFleet {
+  private readonly draftArchives = new VoiceDraftArchives()
+  private readonly questionInbox = new QuestionInbox()
+  private get questions(): QuestionInbox {
+    this.questionInbox.bindOwner(this.host.localMachine().id)
+    return this.questionInbox
+  }
   private entries = new Map<string, Entry>()
   private timer?: ReturnType<typeof setInterval>
   private scanTask?: Promise<void>
@@ -67,9 +75,12 @@ export class CableFleet {
     await this.scanTask
     await Promise.allSettled([...this.entries.values()].map(e => e.session.stop()))
     this.entries.clear()
+    this.draftArchives.clear()
+    this.questionInbox.clear()
   }
 
   private scan(): Promise<void> {
+    this.draftArchives.expire()
     if (this.stopped) return Promise.resolve()
     if (this.scanTask) return this.scanTask
     this.scanTask = this.reconcile().catch(error => {
@@ -184,7 +195,7 @@ export class CableFleet {
         }
         return opened
       }
-      entry.session = new this.Session(host, new this.Log(join(this.logs, `usb-${id.replace(/[^a-zA-Z0-9_-]/g, '-')}`)), opener)
+      entry.session = new this.Session(host, new this.Log(join(this.logs, `usb-${id.replace(/[^a-zA-Z0-9_-]/g, '-')}`)), opener, this.draftArchives, this.questions)
       this.entries.set(id, entry)
       entry.session.start()
     }
@@ -242,8 +253,16 @@ export class CableFleet {
   followApp(...args: Parameters<Surface['followApp']>) { return this.send('followApp', ...args) }
   replaceNotifications(...args: Parameters<Surface['replaceNotifications']>) { return this.send('replaceNotifications', ...args) }
   agentSeen(...args: Parameters<Surface['agentSeen']>) { return this.send('agentSeen', ...args) }
-  question(...args: Parameters<Surface['question']>) { return this.send('question', ...args) }
-  questionClose(...args: Parameters<Surface['questionClose']>) { return this.send('questionClose', ...args) }
+  question(...args: Parameters<Surface['question']>) {
+    if (this.host.isAgentAmbiguous?.(args[0])) return Promise.resolve()
+    this.questions.set(...args)
+    return this.send('question', ...args)
+  }
+  questionClose(...args: Parameters<Surface['questionClose']>) {
+    if (this.host.isAgentAmbiguous?.(args[0])) return Promise.resolve()
+    if (!this.questions.close(...args)) return Promise.resolve()
+    return this.send('questionClose', ...args)
+  }
   turnStarted(...args: Parameters<Surface['turnStarted']>) { return this.send('turnStarted', ...args) }
   turnDone(...args: Parameters<Surface['turnDone']>) { return this.send('turnDone', ...args) }
   summary(...args: Parameters<Surface['summary']>) { return this.send('summary', ...args) }

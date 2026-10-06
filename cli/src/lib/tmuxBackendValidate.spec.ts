@@ -62,3 +62,23 @@ describe('TmuxBackend.validate and the pre-psEnv start marker', () => {
       .toBe('gone')
   })
 })
+
+describe('TmuxBackend exact reviewed identity', () => {
+  it('requires canonical identity and an exact pane, without the legacy migration allowance', async () => {
+    lookupPaneEngineProcess.mockClear().mockResolvedValue({ ok: true, identity: LIVE })
+    const backend = new TmuxBackend()
+    expect((await backend.validateReviewed(PANE, { engine: 'claude' })).state).toBe('gone')
+    expect((await backend.validateReviewed(PANE, { engine: 'claude', processIdentity: { ...LIVE, startMarker: 'old marker' } })).state).toBe('gone')
+    expect((await backend.validateReviewed({ ...PANE, paneId: '*' }, { engine: 'claude', processIdentity: LIVE })).state).toBe('gone')
+    expect(lookupPaneEngineProcess).not.toHaveBeenCalled()
+  })
+  it('compares PID, start marker and executable, and treats failed probes as unavailable', async () => {
+    const backend = new TmuxBackend()
+    lookupPaneEngineProcess.mockResolvedValue({ ok: true, identity: LIVE })
+    expect((await backend.validateReviewed(PANE, { engine: 'claude', processIdentity: LIVE })).state).toBe('alive')
+    for (const processIdentity of [{ ...LIVE, pid: 99 }, { ...LIVE, startMarker: 'Mon Sep 14 08:00:00 2026' }, { ...LIVE, executable: 'replacement' }])
+      expect((await backend.validateReviewed(PANE, { engine: 'claude', processIdentity })).state).toBe('gone')
+    lookupPaneEngineProcess.mockRejectedValueOnce(new Error('ps failed'))
+    expect((await backend.validateReviewed(PANE, { engine: 'claude', processIdentity: LIVE })).state).toBe('unknown')
+  })
+})

@@ -24,6 +24,8 @@ import type { WindowRoute } from './windowRoute.js'
 import type { SelectionCommand, SelectionResult } from './windowSelection.js'
 import type { VisitCommand, VisitResult } from './windowVisit.js'
 import type { FormCommand, FormResult } from './windowForm.js'
+import type { MetricsResult } from './windowMetrics.js'
+import type { PreparedReview, ReviewedIntent } from '../lib/reviewedInput.js'
 import { FleetError, type FleetMachine, type MachineFleet } from './machineFleet.js'
 import type { ReviewedAnswer, AnswerReceipt } from './questionInbox.js'
 
@@ -54,6 +56,7 @@ export interface CableHostWiring {
   signedIn?: () => boolean
   /** Deliver text into an agent. The SAME path the web and the WiFi device use — see cli.ts. */
   sendTurn: (agentId: string, text: string) => void
+  prepareReviewed?: (agentId: string, intent: ReviewedIntent) => Promise<PreparedReview>
   stopTurn: (agentId: string) => void
   answer: (agentId: string, requestId: string, answers: Record<string, string>) => void
   answerReviewed?: (answer: ReviewedAnswer) => Promise<boolean>
@@ -87,9 +90,11 @@ export interface CableHostWiring {
   selectPassage?: (command: SelectionCommand) => Promise<SelectionResult>
   clearSelection?: () => void
   visit?: (command: VisitCommand) => Promise<VisitResult>
+  rejectVisit?: (visitId: string, error: string) => VisitResult
   clearVisit?: () => void
   form?: (command: FormCommand) => Promise<FormResult>
   clearForm?: () => void
+  metrics?: () => Promise<MetricsResult>
   log: (line: string) => void
 }
 
@@ -111,6 +116,7 @@ function placeholderId(computerId: string): string {
 const REMOTE_REFRESH_MS = 5_000
 /** How long a machine's last good list survives failures before its tiles leave the carousel. */
 const REMOTE_GRACE_MS = 30_000
+const AMBIGUOUS_AGENT = 'Open this harness in the app.'
 
 /** Whether an id is that placeholder rather than a machine the backend has heard of. */
 function isPlaceholder(id: string): boolean {
@@ -153,6 +159,12 @@ export class DaemonCableHost implements CableHost {
   private readonly inFlight = new Set<string>()
   /** agentId → machineId, rebuilt from the snapshot last handed to the dial. */
   private agentMachine = new Map<string, string>()
+  // The cable names agents without a machine. Remember every owner observed for
+  // this daemon's lifetime: an old card can outlive a roster, tab or USB session.
+  private readonly agentOwners = new Map<string, string>()
+  private readonly ambiguousAgents = new Set<string>()
+  private readonly reviewedPins = new Map<string, Set<Extract<PreparedReview, { ok: true }>>>()
+  private selectionAgent = ''
 
   /** `undefined` = no lane to any other machine exists; the wheel is the local row and nothing else. */
   constructor(private readonly wiring: CableHostWiring, private readonly fleet?: MachineFleet) {}
@@ -164,6 +176,32 @@ export class DaemonCableHost implements CableHost {
 
   private localId(): string {
     return this.wiring.machineId() || placeholderId(this.wiring.computerId())
+  }
+
+  private rememberOwner(machineId: string, agentId: string): void {
+    if (!machineId || !agentId || this.ambiguousAgents.has(agentId)) return
+    const previous = this.agentOwners.get(agentId)
+    if (!previous) { this.agentOwners.set(agentId, machineId); return }
+    if (previous === machineId) return
+    this.ambiguousAgents.add(agentId)
+    this.agentMachine.delete(agentId)
+    // Cancel the underlying operations too: a prepared submission can already
+    // be waiting inside its own queue or terminal-readiness check.
+    for (const pin of this.reviewedPins.get(agentId) ?? []) pin.cancel()
+    this.reviewedPins.delete(agentId)
+    if (this.selectionAgent === agentId) {
+      this.selectionAgent = ''
+      this.wiring.clearSelection?.()
+    }
+    this.wiring.log(`cable: ambiguous agent ${agentId} — use the app to choose its machine`)
+  }
+
+  isAgentAmbiguous(agentId: string): boolean {
+    // Imported local work may appear between two catalog polls, including after
+    // a remote event arrived. Observe that claim before any agent-only action.
+    if (!this.ambiguousAgents.has(agentId) && registry.advertised().some(s => s.agentId === agentId))
+      this.rememberOwner(this.localId(), agentId)
+    return this.ambiguousAgents.has(agentId)
   }
 
   /** Whether the dial is looking at THIS computer. Everything forks on this one question. */
@@ -279,6 +317,7 @@ export class DaemonCableHost implements CableHost {
    * a screen that is not there.
    */
   onDialGone(): void {
+    this.selectionAgent = ''
     this.wiring.clearSelection?.()
     this.wiring.clearVisit?.()
     this.wiring.clearForm?.()
@@ -300,8 +339,12 @@ export class DaemonCableHost implements CableHost {
     return this.dialStatusNow
   }
 
-  selectPassage(command: SelectionCommand): Promise<SelectionResult> {
-    return this.wiring.selectPassage?.(command) ?? Promise.resolve({ ok: false, error: 'Update Harness to select text.' })
+  async selectPassage(command: SelectionCommand): Promise<SelectionResult> {
+    if (command.op !== 'cancel' && this.isAgentAmbiguous(command.agentId)) return { ok: false, error: AMBIGUOUS_AGENT }
+    if (command.op !== 'cancel') this.selectionAgent = command.agentId
+    const result = await this.wiring.selectPassage?.(command) ?? { ok: false as const, error: 'Update Harness to select text.' }
+    if (command.op !== 'cancel' && this.isAgentAmbiguous(command.agentId)) return { ok: false, error: AMBIGUOUS_AGENT }
+    return result
   }
 
   machineName(): string {
@@ -345,6 +388,7 @@ export class DaemonCableHost implements CableHost {
     sessions.sort((a, b) => a.registeredAt - b.registeredAt || a.agentId.localeCompare(b.agentId))
     const machineId = this.localId()
     const machine = this.wiring.machineName()
+    for (const s of sessions) this.rememberOwner(machineId, s.agentId)
     return sessions.map((s) => ({
       id: s.agentId,
       name: projectDisplayName(s),
@@ -416,20 +460,22 @@ export class DaemonCableHost implements CableHost {
   private unread: UnreadNotification[] = []
 
   setUnread(items: UnreadNotification[]): void {
+    for (const item of items) this.noteAgent(item.machineId ?? '', item.agentId)
     this.unread = items
   }
 
   listUnread(): UnreadNotification[] {
-    return this.unread
+    return this.unread.filter(item => !this.isAgentAmbiguous(item.agentId))
   }
 
   readNotification(agentId: string, readToken: string): void {
     if (!notificationReadToken(readToken)) return
-    const item = this.unread.find(n => n.agentId === agentId && n.readToken === readToken)
-    if (!item?.machineId) return
+    const items = this.unread.filter(n => n.agentId === agentId && n.readToken === readToken)
+    const machines = new Set(items.map(item => item.machineId))
+    if (machines.size !== 1 || !items[0]?.machineId) return
     // Keep it until the window confirms through app_unread. Retrying is safe;
     // the window checks the same identity again, even across remote machines.
-    this.wiring.notificationRead?.(item.machineId, agentId, readToken)
+    this.wiring.notificationRead?.(items[0].machineId, agentId, readToken)
   }
 
   listSwarms(): { selected: string; swarms: CableSwarm[]; tiles: CableTile[] } {
@@ -437,8 +483,8 @@ export class DaemonCableHost implements CableHost {
     if (!app) return { selected: '', swarms: [], tiles: [] }
     return {
       selected: app.active,
-      swarms: app.swarms.map((s) => ({ id: s.id, name: s.name, agents: s.agentIds.length, panes: s.panes })),
-      tiles: app.tiles,
+      swarms: app.swarms.map((s) => ({ id: s.id, name: s.name, agents: s.agentIds.filter(id => !this.isAgentAmbiguous(id)).length, panes: s.panes })),
+      tiles: app.tiles.map(tile => this.isAgentAmbiguous(tile.agentId) ? { ...tile, agentId: '' } : tile),
     }
   }
 
@@ -480,7 +526,7 @@ export class DaemonCableHost implements CableHost {
     const app = this.swarms
     const tab = app?.active ?? ''
     const ids = app?.swarms.find(s => s.id === tab)?.agentIds ?? []
-    const out = ids.map(id => byId.get(id)).filter((a): a is CableAgent => !!a)
+    const out = ids.map(id => byId.get(id)).filter((a): a is CableAgent => !!a && !this.isAgentAmbiguous(a.id))
     // One line per CHANGE. The failure this catches is silent by nature: tiles whose ids this daemon does
     // not know drop out of the list, which looks exactly like the window never having opened them.
     const shape = app === null
@@ -512,6 +558,7 @@ export class DaemonCableHost implements CableHost {
    * with that copy gone, the frame has to say who it is about.
    */
   describe(agentId: string): { name: string; engine: string; machine: string } | undefined {
+    if (this.isAgentAmbiguous(agentId)) return undefined
     const a = this.knownAgents.get(agentId) ?? this.localAgents().find((x) => x.id === agentId)
     if (a) return { name: a.name, engine: a.engine ?? '', machine: a.machine ?? '' }
     // A remote agent whose machine has spoken (a question, a card) before its list was ever read: no
@@ -523,7 +570,8 @@ export class DaemonCableHost implements CableHost {
 
   async activityText(agentId: string): Promise<string | null> {
     if (!this.isLocalAgent(agentId)) return null
-    return await this.wiring.activityText?.(agentId) ?? null
+    const text = await this.wiring.activityText?.(agentId) ?? null
+    return this.isAgentAmbiguous(agentId) ? null : text
   }
 
   /**
@@ -533,7 +581,10 @@ export class DaemonCableHost implements CableHost {
    * this, and without it the open was "ignored for unknown agent" and the tap did nothing.
    */
   noteAgent(machineId: string, agentId: string): void {
-    if (machineId && agentId) this.seenOn.set(agentId, machineId)
+    if (!machineId || !agentId) return
+    this.isAgentAmbiguous(agentId)
+    this.rememberOwner(machineId, agentId)
+    if (!this.ambiguousAgents.has(agentId)) this.seenOn.set(agentId, machineId)
   }
 
   /** agentId → machineId for agents heard from but not (yet) listed — see noteAgent. */
@@ -552,7 +603,7 @@ export class DaemonCableHost implements CableHost {
    * which is a different question with a different right answer.
    */
   async listAgentsFlat(): Promise<CableAgent[]> {
-    const out = this.localAgents()
+    let out = this.localAgents()
     const { machines } = await this.listMachines()
     this.machineNames = new Map(machines.map((m) => [m.id, m.name]))
     for (const m of machines) {
@@ -561,6 +612,8 @@ export class DaemonCableHost implements CableHost {
       if (entry) for (const a of entry.agents) out.push({ ...a, machineId: m.id, machine: m.name })
     }
     void this.refreshRemotes(machines)
+    for (const a of out) this.rememberOwner(a.machineId ?? '', a.id)
+    out = out.filter(a => !this.isAgentAmbiguous(a.id))
     // Rebuilt from the SAME snapshot that is about to be pushed, so the map can never name a machine an
     // agent has already left. Every action the dial can take is routed through it.
     const next = new Map<string, string>()
@@ -575,7 +628,7 @@ export class DaemonCableHost implements CableHost {
     //
     // Gated on being ON THE DESK, and only that: an agent that was deleted, or one simply never
     // opened, must not be resurrected by this memory. The window holding a tile is the whole warrant.
-    const missing = this.desk.filter((id) => !byId.has(id))
+    const missing = this.desk.filter((id) => !byId.has(id) && !this.isAgentAmbiguous(id))
     for (const id of missing) {
       const remembered = this.knownAgents.get(id)
       if (!remembered) continue
@@ -608,6 +661,7 @@ export class DaemonCableHost implements CableHost {
    * turn to a different computer, which is the worst outcome this whole feature can produce.
    */
   private machineOf(agentId: string): string {
+    if (this.isAgentAmbiguous(agentId)) return ''
     return this.agentMachine.get(agentId) ?? this.seenOn.get(agentId) ?? ''
   }
 
@@ -627,9 +681,16 @@ export class DaemonCableHost implements CableHost {
     return this.wiring.form?.(command) ?? Promise.resolve({ ok: false, active: false, error: 'Update Harness for New Harness.' })
   }
 
+  metrics(): Promise<MetricsResult> {
+    return this.wiring.metrics?.() ?? Promise.resolve({ ok: false, error: 'Local usage is unavailable.' })
+  }
+
   visit(command: VisitCommand): Promise<VisitResult> {
     const machineId = command.agentId ? this.machineOf(command.agentId) : undefined
-    if ((command.op === 'open' || command.op === 'latest') && !machineId) return Promise.resolve({ ok: false, active: false, error: 'That harness is no longer available.' })
+    if ((command.op === 'open' || command.op === 'latest') && !machineId) {
+      const error = command.agentId && this.isAgentAmbiguous(command.agentId) ? AMBIGUOUS_AGENT : 'That harness is no longer available.'
+      return Promise.resolve(this.wiring.rejectVisit?.(command.visitId, error) ?? { ok: false, active: false, error })
+    }
     return this.wiring.visit?.({ ...command, machineId }) ??
       Promise.resolve({ ok: false, active: false, error: 'Update Harness to visit an alert.' })
   }
@@ -640,6 +701,7 @@ export class DaemonCableHost implements CableHost {
    * is "this one, again, beside it", and the person's hand is on the dial, not the mouse.
    */
   async forkAgent(agentId: string): Promise<{ ok: true; agentId: string } | { ok: false; error: string; detail?: string }> {
+    if (this.isAgentAmbiguous(agentId)) return { ok: false, error: 'AMBIGUOUS_AGENT', detail: AMBIGUOUS_AGENT }
     const machineId = this.machineOf(agentId)
     if (!machineId) return { ok: false, error: 'AGENT_NOT_FOUND', detail: 'The dial named an agent this daemon has never listed.' }
     let result: { ok: true; agentId: string } | { ok: false; error: string; detail?: string }
@@ -656,7 +718,9 @@ export class DaemonCableHost implements CableHost {
     }
     if (result.ok) {
       this.wiring.log(`cable: fork ${machineId}/${agentId} → ${result.agentId}`)
-      this.seenOn.set(result.agentId, machineId)
+      this.noteAgent(machineId, result.agentId)
+      if (this.isAgentAmbiguous(agentId) || this.isAgentAmbiguous(result.agentId))
+        return { ok: false, error: 'FORK_CREATED_NOT_OPENED', detail: 'Copy created. Open it in Harness.' }
       if (this.wiring.forked) this.wiring.forked(machineId, result.agentId, agentId)
       else this.wiring.opened?.(machineId, result.agentId)
     } else {
@@ -667,11 +731,12 @@ export class DaemonCableHost implements CableHost {
 
   /** Whether this daemon's last list held that agent — see CableHost.knows. */
   knows(agentId: string): boolean {
-    return this.agentMachine.has(agentId)
+    return !this.isAgentAmbiguous(agentId) && this.agentMachine.has(agentId)
   }
 
   /** True when the agent belongs to this computer (or is unknown, which is handled at the call site). */
   private isLocalAgent(agentId: string): boolean {
+    if (this.isAgentAmbiguous(agentId)) return false
     const machineId = this.machineOf(agentId)
     return !machineId || machineId === this.localId()
   }
@@ -719,6 +784,7 @@ export class DaemonCableHost implements CableHost {
       this.remoteAgents.set(m.id, { agents: entry?.agents ?? [], at: entry?.at ?? 0, asked: now })
       void this.fleet.listAgents(m.id)
         .then((agents) => {
+          for (const agent of agents) this.noteAgent(m.id, agent.id)
           const before = this.remoteAgents.get(m.id)
           this.remoteAgents.set(m.id, { agents, at: Date.now(), asked: Date.now() })
           // One line per TRANSITION, not per round: this runs every few seconds forever, and a healthy
@@ -754,6 +820,7 @@ export class DaemonCableHost implements CableHost {
    * Callers that do not care may ignore the result; nothing here changes for them.
    */
   sendTurn(agentId: string, text: string): { ok: true } | { ok: false; machine: string; reason: string } {
+    if (this.isAgentAmbiguous(agentId)) return { ok: false, machine: '', reason: AMBIGUOUS_AGENT }
     if (!this.isLocalAgent(agentId)) {
       const machineId = this.machineOf(agentId)
       const machine = this.knownAgents.get(agentId)?.machine || machineId.slice(0, 8)
@@ -773,6 +840,38 @@ export class DaemonCableHost implements CableHost {
     return { ok: true }
   }
 
+  async prepareReviewed(agentId: string, intent: ReviewedIntent): Promise<PreparedReview> {
+    if (this.isAgentAmbiguous(agentId)) return { ok: false, error: AMBIGUOUS_AGENT }
+    if (!this.knows(agentId) || !this.isLocalAgent(agentId) || !this.wiring.prepareReviewed)
+      return { ok: false, error: 'Reviewed input is only available for a local harness.' }
+    // The prepared operation owns its exact local identity. Never enter sendTurn or fleet fallback.
+    const pin = await this.wiring.prepareReviewed(agentId, intent)
+    if (!pin.ok) return pin
+    if (this.isAgentAmbiguous(agentId)) { pin.cancel(); return { ok: false, error: AMBIGUOUS_AGENT } }
+    const pins = this.reviewedPins.get(agentId) ?? new Set<Extract<PreparedReview, { ok: true }>>()
+    pins.add(pin); this.reviewedPins.set(agentId, pins)
+    const forget = () => {
+      pins.delete(pin)
+      if (!pins.size && this.reviewedPins.get(agentId) === pins) this.reviewedPins.delete(agentId)
+    }
+    const cancel = () => { pin.cancel(); forget() }
+    let receipt: ReturnType<typeof pin.submit> | undefined
+    return { ok: true,
+      current: () => !this.isAgentAmbiguous(agentId) && pin.current(),
+      cancel,
+      submit: text => receipt ??= (async () => {
+        try {
+          if (this.isAgentAmbiguous(agentId)) { cancel(); return { state: 'rejected' as const, error: AMBIGUOUS_AGENT } }
+          const result = await pin.submit(text)
+          // A conflict cannot undo input already dispatched. Retain its actual
+          // receipt, including uncertain outcomes; never invite an unsafe retry.
+          if (result.state === 'submitted') this.spokeTo(agentId)
+          return result
+        } finally { forget() }
+      })(),
+    }
+  }
+
   /**
    * Remember who this person is talking to.
    *
@@ -787,11 +886,12 @@ export class DaemonCableHost implements CableHost {
 
   /** Who the last delivered turn went to, and how long ago — the router's continuity signal. */
   lastRouted(): RouterContinuity | undefined {
-    if (!this.lastTurn) return undefined
+    if (!this.lastTurn || this.isAgentAmbiguous(this.lastTurn.agentId)) return undefined
     return { agentId: this.lastTurn.agentId, agoMs: Date.now() - this.lastTurn.at }
   }
 
   stopTurn(agentId: string): void {
+    if (this.isAgentAmbiguous(agentId)) return
     if (!this.isLocalAgent(agentId)) { this.fleet!.stopTurn(this.machineOf(agentId), agentId); return }
     this.wiring.stopTurn(agentId)
   }
@@ -802,6 +902,7 @@ export class DaemonCableHost implements CableHost {
   }
 
   async answerReviewed(answer: ReviewedAnswer): Promise<AnswerReceipt> {
+    if (this.isAgentAmbiguous(answer.agentId)) return { ok: false, error: AMBIGUOUS_AGENT }
     if (answer.freeTextKeys?.length && !this.canSpeakQuestion(answer.agentId))
       return { ok: false, error: 'Use the terminal to type this answer.' }
     if (!this.isLocalAgent(answer.agentId)) {
@@ -824,6 +925,7 @@ export class DaemonCableHost implements CableHost {
   }
 
   answer(agentId: string, requestId: string, answers: Record<string, string>): void {
+    if (this.isAgentAmbiguous(agentId)) return
     if (!this.isLocalAgent(agentId)) { this.fleet!.answer(this.machineOf(agentId), agentId, requestId, answers); return }
     this.wiring.answer(agentId, requestId, answers)
   }
@@ -866,8 +968,10 @@ export class DaemonCableHost implements CableHost {
     const agentId = at < 0
       ? walk[direction === 'next' ? 0 : walk.length - 1]
       : walk[(at + (direction === 'next' ? 1 : walk.length - 1)) % walk.length]
+    const machineId = this.machineOf(agentId)
+    if (!machineId) return 'no_agents'
     this.focus(agentId)
-    return { machineId: this.machineOf(agentId), agentId }
+    return { machineId, agentId }
   }
 
   scrolled(phase: 'down' | 'move' | 'up', dy: number, velocity: number): void {
@@ -884,15 +988,18 @@ export class DaemonCableHost implements CableHost {
   }
 
   updateAgent(agentId: string, model?: string, effort?: string): void {
+    if (this.isAgentAmbiguous(agentId)) return
     if (!this.isLocalAgent(agentId)) { this.fleet!.updateAgent(this.machineOf(agentId), agentId, model, effort); return }
     this.wiring.updateAgent?.(agentId, model, effort)
   }
 
   /** The last few turns, newest first, in the shape the dial's tile draws: a headline and a body. */
   async recentSummaries(agentId: string): Promise<Array<{ recap: string; text: string; ask: string }>> {
+    if (this.isAgentAmbiguous(agentId)) return []
     const raw = this.isLocalAgent(agentId)
       ? this.wiring.recent(agentId, 3)
       : await this.fleet!.recentSummaries(this.machineOf(agentId), agentId)
+    if (this.isAgentAmbiguous(agentId)) return []
     return raw
       .map((r) => ({ recap: extendShortRecap(r?.recap ?? '', r?.text ?? ''), text: r?.text ?? '', ask: r?.ask ?? '' }))
       .filter((s) => s.recap || s.text || s.ask)
@@ -907,17 +1014,19 @@ export class DaemonCableHost implements CableHost {
    * says where the next one belongs — off the end.
    */
   async recentAsks(agentId: string): Promise<string[]> {
+    if (this.isAgentAmbiguous(agentId)) return []
     const raw = this.isLocalAgent(agentId)
       ? this.wiring.recentAsks(agentId)
       : await this.fleet!.recentAsks(this.machineOf(agentId), agentId)
-    return raw.map((a) => (a || '').replace(/\s+/g, ' ').trim()).filter(Boolean)
+    return this.isAgentAmbiguous(agentId) ? [] : raw.map((a) => (a || '').replace(/\s+/g, ' ').trim()).filter(Boolean)
   }
 
   async listModels(agentId: string): Promise<string[]> {
-    if (!this.isLocalAgent(agentId)) return this.fleet!.listModels(this.machineOf(agentId), agentId)
-
-    const models = (await this.wiring.listModels?.(agentId)) ?? []
-    return models.map((m) => m.id).filter(Boolean)
+    if (this.isAgentAmbiguous(agentId)) return []
+    const models = this.isLocalAgent(agentId)
+      ? ((await this.wiring.listModels?.(agentId)) ?? []).map(m => m.id).filter(Boolean)
+      : await this.fleet!.listModels(this.machineOf(agentId), agentId)
+    return this.isAgentAmbiguous(agentId) ? [] : models
   }
 
   /**
@@ -978,7 +1087,7 @@ export class DaemonCableHost implements CableHost {
     // doing, which is both wrong and completely invisible, because the router always answers with
     // something. The machine name travels too, so two agents with the same name on two computers are
     // distinguishable by the only thing that separates them.
-    const candidates: RouterAgent[] = await Promise.all(agents.map(async (a) => ({
+    const candidates: RouterAgent[] = await Promise.all(agents.filter(a => !this.isAgentAmbiguous(a.id)).map(async (a) => ({
       id: a.id,
       name: a.name,
       engine: a.engine,
@@ -998,7 +1107,8 @@ export class DaemonCableHost implements CableHost {
         .filter(Boolean)
         .join(' · '),
     })))
-    const decision = await routeVoiceTask(transcript, candidates, undefined, undefined, this.lastRouted())
+    const decision = await routeVoiceTask(transcript, candidates.filter(a => !this.isAgentAmbiguous(a.id)), undefined, undefined, this.lastRouted())
+    if (this.isAgentAmbiguous(decision.agentId)) return { agentId: '', confidence: 0, reason: AMBIGUOUS_AGENT }
     return { agentId: decision.agentId, confidence: decision.confidence, reason: decision.reason }
   }
 

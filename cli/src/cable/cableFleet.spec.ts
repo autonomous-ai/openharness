@@ -64,6 +64,183 @@ function fixture() {
 }
 
 describe('USB dial fleet', () => {
+  it('rejects ambiguous question mutations with no devices and suppresses their later replay', async () => {
+    const f = fixture(), blocked = new Set<string>()
+    f.host.isAgentAmbiguous = id => blocked.has(id)
+    const questions = [{ key: 'scope', q: 'Which scope?', options: ['File', 'Project'], multi: false }]
+    try {
+      // This catalog already belongs to the fleet before any USB session exists.
+      await f.fleet.question('a', 'original', questions)
+      const original = f.fleet['questionInbox'].read('a')
+      blocked.add('a')
+      await f.fleet.question('a', 'wrong-owner', questions)
+      await f.fleet.questionClose('a', 'original')
+      blocked.add('never-admitted')
+      await f.fleet.question('never-admitted', 'foreign', questions)
+      expect(f.fleet['questionInbox'].read('a')).toEqual(original)
+      expect(f.fleet['questionInbox'].notifications().map(q => q.id)).toEqual(['original'])
+      expect(f.ports).toEqual([])
+      await f.start(); await f.fleet['scan']()
+      for (const port of f.ports) {
+        port.say({ t: 'question.read', agentId: 'a', requestId: 'blocked-read' })
+        await vi.waitFor(() => expect(port.sent.some(m => m.requestId === 'blocked-read')).toBe(true))
+        expect(port.sent.some(m => m.t === 'question')).toBe(false)
+        expect(port.sent.find(m => m.requestId === 'blocked-read')).toMatchObject({ ok: false, error: 'Open this harness in the app.' })
+      }
+      await f.fleet.question('safe', 'safe-request', questions)
+      for (const port of f.ports) expect(port.sent.at(-1)).toMatchObject({ t: 'question', agentId: 'safe', id: 'safe-request' })
+      expect(f.host.answer).not.toHaveBeenCalled()
+    } finally { await f.fleet.stop() }
+  })
+
+  it('exports actual fleet recovery frames for the native cJSON/UI replay', async () => {
+    const f = fixture(), mac = '28:84:85:90:5F:78'
+    const events: Record<string, unknown>[] = []
+    let serial = 0, path = 0
+    const now = vi.spyOn(performance, 'now').mockReturnValue(100)
+    const words = ('First keep this line.\n\n  Tiếng Việt giữ nguyên. Café.\n').repeat(44).trim()
+    let finish!: (receipt: { state: 'submitted' }) => void
+    const submit = vi.fn(() => new Promise<{ state: 'submitted' }>(resolve => { finish = resolve }))
+    f.host.prepareReviewed = async () => ({ ok: true, current: () => true, cancel: vi.fn(), submit })
+    const greet = async (port: Peer) => {
+      port.say({ t: 'hello', product: 'harness', mac, fw: 'fixture' })
+      await vi.waitFor(() => expect(port.sent.some(m => m.t === 'welcome')).toBe(true))
+      events.push({ event: 'welcome', machine: (port.sent.find(m => m.t === 'welcome')!.machine as { id: string }).id })
+    }
+    const record = async (port: Peer, text: string, mode: 'goal' | 'loop') => {
+      vi.mocked(f.host.transcribe).mockResolvedValueOnce(text)
+      const uploadId = `native-recovery-${++serial}`
+      events.push({ event: 'record', agent: 'a', mode })
+      port.say({ t: 'voice.begin', agentId: 'a', cmd: mode, uploadId }); port.pcm(1)
+      port.say({ t: 'voice.end', uploadId, review: true })
+      await vi.waitFor(() => expect(port.sent.some(m => m.t === 'voice.draft' && m.uploadId === uploadId)).toBe(true))
+      const frame = port.sent.find(m => m.t === 'voice.draft' && m.uploadId === uploadId)!
+      events.push({ event: 'voice.draft', frame }); return frame
+    }
+    const command = async (port: Peer, page: Record<string, unknown>, op: string, delta = 0, wait = true): Promise<Record<string, unknown>> => {
+      const frame = { t: 'draft.command', draftId: page.id, requestId: `draft-${++serial}`, revision: page.revision, op,
+        ...(op === 'move' ? { delta } : {}) }
+      events.push({ event: 'command', frame }); port.say(frame)
+      if (!wait) return frame
+      await vi.waitFor(() => expect(port.sent.some(m => m.requestId === frame.requestId)).toBe(true))
+      const reply = port.sent.find(m => m.requestId === frame.requestId)!
+      events.push({ event: 'draft.state', frame: reply }); return reply
+    }
+    const remove = async () => {
+      events.push({ event: 'disconnect' }); f.setPorts([]); await f.fleet['scan']()
+    }
+    const insert = async () => {
+      const before = f.ports.length
+      f.setPorts([device(`/dev/recovery-${++path}`, 'RECOVERY')]); await f.fleet['scan']()
+      await vi.waitFor(() => expect(f.ports).toHaveLength(before + 1))
+      const port = f.ports.at(-1)!; await greet(port); return port
+    }
+    try {
+      f.setPorts([]); f.fleet.start(); await f.fleet['scan']()
+      let port = await insert()
+      const old = await record(port, words, 'goal')
+      await remove(); port = await insert()
+      let page = await command(port, old, 'state'), joined = ''
+      expect(Number(page.total)).toBeGreaterThanOrEqual(4)
+      for (;;) {
+        joined += page.text
+        if (page.position === page.total) break
+        page = await command(port, page, 'move', 1)
+      }
+      expect(joined).toBe(words)
+      page = await command(port, page, 'move', -1)
+      now.mockReturnValue(100 + 30 * 60_000); await f.fleet['scan']()
+      expect(await command(port, page, 'state')).toMatchObject({ active: false })
+      events.push({ event: 'close' })
+
+      const sentWords = 'Reviewed original words.\n\n  Keep every space.\n'.repeat(22).trim()
+      const sending = await record(port, sentWords, 'loop')
+      const send = await command(port, sending, 'send', 0, false)
+      await vi.waitFor(() => expect(finish).toBeTypeOf('function'))
+      await remove()
+      finish({ state: 'submitted' }); await new Promise(resolve => setTimeout(resolve, 0))
+      port = await insert()
+      page = await command(port, sending, 'state')
+      expect(page).toMatchObject({ active: true, sent: true, locked: true, canSend: false })
+      page = await command(port, page, 'move', 1)
+      expect(page).toMatchObject({ active: true, sent: true, position: 2 })
+      expect(port.sent.some(m => m.requestId === send.requestId)).toBe(false)
+      expect(submit).toHaveBeenCalledExactlyOnceWith(sentWords)
+      expect(f.host.sendTurn).not.toHaveBeenCalled()
+      events.push({ event: 'close' })
+      // Test-derived output only; no production path or payload depends on this environment variable.
+      if (process.env.HARNESS_DRAFT_RECOVERY_FIXTURE)
+        writeFileSync(process.env.HARNESS_DRAFT_RECOVERY_FIXTURE, JSON.stringify({ schema: 1, events }, null, 2) + '\n')
+    } finally { now.mockRestore(); await f.fleet.stop() }
+  })
+
+  it('recovers only original-owner words through real fleet removal, re-enumeration and path replacement', async () => {
+    const f = fixture(), mac = '28:84:85:90:5F:78', otherMac = '28:84:85:90:5F:79'
+    let serial = 0
+    const hello = async (port: Peer, owner: string) => {
+      const before = port.sent.filter(m => m.t === 'welcome').length
+      port.say({ t: 'hello', product: 'harness', mac: owner, fw: 'fixture' })
+      await vi.waitFor(() => expect(port.sent.filter(m => m.t === 'welcome')).toHaveLength(before + 1))
+    }
+    const record = async (port: Peer, value: number) => {
+      const uploadId = `record-${++serial}`
+      port.say({ t: 'voice.begin', agentId: 'a', uploadId }); port.pcm(value)
+      port.say({ t: 'voice.end', uploadId, review: true })
+      await vi.waitFor(() => expect(port.sent.some(m => m.t === 'voice.draft' && m.uploadId === uploadId)).toBe(true))
+      return port.sent.find(m => m.t === 'voice.draft' && m.uploadId === uploadId)!
+    }
+    const state = async (port: Peer, page: Record<string, unknown>) => {
+      const requestId = `state-${++serial}`
+      port.say({ t: 'draft.command', draftId: page.id, revision: page.revision, op: 'state', requestId })
+      await vi.waitFor(() => expect(port.sent.some(m => m.requestId === requestId)).toBe(true))
+      return port.sent.find(m => m.requestId === requestId)!
+    }
+    try {
+      await f.start(); await hello(f.ports[0], mac); await hello(f.ports[1], otherMac)
+      const old = await record(f.ports[0], 17), other = await record(f.ports[1], 34)
+      f.setPorts([device('/dev/tux', 'BB:02')]); await f.fleet['scan']()
+      expect(f.ports[0].isOpen).toBe(false)
+      expect(await state(f.ports[1], old)).toMatchObject({ active: false })
+      expect(await state(f.ports[1], other)).toMatchObject({ active: true, locked: false, text: 'audio-34' })
+
+      f.setPorts([device('/dev/tim-new', 'AA:01'), device('/dev/tux', 'BB:02')]); await f.fleet['scan']()
+      await vi.waitFor(() => expect(f.ports).toHaveLength(3)); await hello(f.ports[2], mac)
+      expect(await state(f.ports[2], old)).toMatchObject({ active: true, locked: true, canSend: false, text: 'audio-17', agentId: 'a' })
+      const fresh = await record(f.ports[2], 51)
+      expect(fresh).toMatchObject({ active: true, locked: false })
+
+      // A path replacement goes directly through stop()+new CableSession(), without an empty discovery.
+      f.setPorts([device('/dev/tim-again', 'AA:01'), device('/dev/tux', 'BB:02')]); await f.fleet['scan']()
+      await vi.waitFor(() => expect(f.ports).toHaveLength(4)); await hello(f.ports[3], mac)
+      expect(await state(f.ports[3], old)).toMatchObject({ active: false })
+      expect(await state(f.ports[3], fresh)).toMatchObject({ active: true, locked: true, canSend: false, text: 'audio-51' })
+      expect(await state(f.ports[1], other)).toMatchObject({ active: true, locked: false, text: 'audio-34' })
+
+      // Whole-daemon/fleet shutdown is the end of retention, even if the same object restarts.
+      await f.fleet.stop(); f.fleet.start(); await f.fleet['scan']()
+      await vi.waitFor(() => expect(f.ports).toHaveLength(6)); await hello(f.ports[4], mac)
+      expect(await state(f.ports[4], fresh)).toMatchObject({ active: false })
+      expect(f.host.sendTurn).not.toHaveBeenCalled()
+    } finally { await f.fleet.stop() }
+  })
+
+  it('expires fleet archives while every USB session is absent', async () => {
+    const f = fixture(), now = vi.spyOn(performance, 'now').mockReturnValue(0)
+    try {
+      await f.start()
+      f.ports[0].say({ t: 'hello', product: 'harness', mac: '28:84:85:90:5F:78', fw: 'fixture' })
+      f.ports[0].say({ t: 'voice.begin', agentId: 'a', uploadId: 'retained' }); f.ports[0].pcm(1)
+      f.ports[0].say({ t: 'voice.end', uploadId: 'retained', review: true })
+      await vi.waitFor(() => expect(f.ports[0].sent.some(m => m.t === 'voice.draft')).toBe(true))
+      const page = f.ports[0].sent.find(m => m.t === 'voice.draft')!
+      f.setPorts([]); await f.fleet['scan']()
+      const owner = { mac: '28:84:85:90:5F:78', machineId: 'local' }
+      expect(f.fleet['draftArchives'].get(String(page.id), owner)).toBeDefined()
+      now.mockReturnValue(30 * 60_000); await f.fleet['scan']()
+      expect(f.fleet['draftArchives'].get(String(page.id), owner)).toBeUndefined()
+    } finally { now.mockRestore(); await f.fleet.stop() }
+  })
+
   it('names every device on the desk, and changes the settings of ONE of them', async () => {
     /*
      * Before this the fleet picked a row and threw the rest away, so the app drew one robot however

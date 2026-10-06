@@ -72,6 +72,44 @@ describe('QuestionInbox', () => {
     expect(inbox.read('agent-0').ok).toBe(false)
     expect(inbox.read('agent-64').ok).toBe(true)
   })
+  it('retains bounded immutable attention notices independently of answerability', () => {
+    const inbox = new QuestionInbox(), source = question()
+    inbox.set('a', 'q1', source)
+    source[0].q = 'Mutated upstream'
+    const first = inbox.notifications()[0]
+    expect(first.questions).toEqual(question())
+    ;(first.questions as ReturnType<typeof question>)[0].q = 'Mutated snapshot'
+    expect(inbox.notifications()[0].questions).toEqual(question())
+    inbox.set('a', 'q2', [{ ...question()[0], q: 'Large '.repeat(2000) }])
+    expect(inbox.notificationCurrent(first)).toBe(false)
+    expect(inbox.read('a').ok).toBe(false)
+    expect(JSON.stringify(inbox.notifications()[0].questions).length).toBeLessThan(250)
+    expect(inbox.close('a', 'q1')).toBe(false)
+    expect(inbox.notifications()[0].id).toBe('q2')
+    for (let i = 0; i < 65; i++) inbox.set(`agent-${i}`, 'q', question())
+    expect(inbox.notifications()).toHaveLength(64)
+    expect(inbox.notifications().some(n => n.agentId === 'agent-0')).toBe(false)
+    inbox.clear()
+    expect(inbox.notifications()).toEqual([])
+    expect(inbox.read('agent-64').ok).toBe(false)
+  })
+  it('revokes old review authority on an unusable replacement identity or changed owner', async () => {
+    const inbox = new QuestionInbox(), send = vi.fn(async () => ({ ok: true as const }))
+    inbox.bindOwner('first-host')
+    for (const id of ['', 'x'.repeat(129)]) {
+      inbox.set('a', 'q1', question()); const token = read(inbox).token
+      inbox.set('a', id, question())
+      expect(inbox.read('a').ok).toBe(false)
+      expect((await inbox.submit('a', token, [1], send)).ok).toBe(false)
+    }
+    inbox.set('a', 'q2', question()); const token = read(inbox).token
+    inbox.bindOwner('first-host')
+    expect(read(inbox).token).toBe(token)
+    inbox.bindOwner('second-host')
+    expect(inbox.notifications()).toEqual([])
+    expect((await inbox.submit('a', token, [1], send)).ok).toBe(false)
+    expect(send).not.toHaveBeenCalled()
+  })
 })
 
 describe('spoken answer drafts', () => {

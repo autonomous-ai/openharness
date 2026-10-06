@@ -20,6 +20,58 @@ const open = { op: 'open' as const, visitId: 'visit-one', machineId: 'remote', a
 afterEach(() => vi.useRealTimers())
 
 describe('attention visit at this desk', () => {
+  it('refuses synchronously without creating a return or completing a pending first open', async () => {
+    const f = fixture()
+    expect(f.visit.refuse(open.visitId, 'Unavailable.')).toEqual({ ok: false, active: false, error: 'Unavailable.' })
+    expect(f.frames).toEqual([])
+    const pending = f.visit.command(open)
+    const finished = vi.fn(); void pending.then(finished)
+    expect(f.visit.refuse(open.visitId, 'Unavailable.')).toEqual({ ok: false, active: false, error: 'Unavailable.' })
+    await Promise.resolve()
+    expect(finished).not.toHaveBeenCalled()
+    expect(f.frames).toHaveLength(1)
+    f.answer(); expect((await pending).ok).toBe(true)
+    f.visit.cancel()
+  })
+
+  it('refuses only the exact acknowledged visit and preserves its original return socket and pane', async () => {
+    const f = fixture()
+    const pending = f.visit.command(open); f.answer(); await pending
+    f.focus({ connId: 'another-window', machineId: 'remote', agentId: 'help' })
+    const count = f.frames.length
+    expect(f.visit.refuse('unrelated-visit', 'Ambiguous owner.')).toEqual({ ok: false, active: false, error: 'Ambiguous owner.' })
+    expect(f.visit.refuse(open.visitId, 'Ambiguous owner.')).toEqual({ ok: false, active: true, label: 'My work', error: 'Ambiguous owner.' })
+    expect(f.frames).toHaveLength(count)
+    const back = f.visit.command({ op: 'back', visitId: open.visitId })
+    expect(f.frames.at(-1)).toMatchObject({ connId: 'first', payload: { op: 'back', visitId: open.visitId } })
+    f.answer()
+    expect(await back).toMatchObject({ ok: true, active: false, agentId: 'origin' })
+    expect(f.visit.refuse(open.visitId, 'Unavailable.').active).toBe(false)
+  })
+
+  it('a refusal does not disturb a pending second open or borrow an unsuccessful reply label', async () => {
+    const f = fixture()
+    const first = f.visit.command(open); f.answer(); await first
+    const second = f.visit.command({ ...open, agentId: 'other-target' })
+    const count = f.frames.length
+    expect(f.visit.refuse(open.visitId, 'Ambiguous owner.')).toMatchObject({ active: true, label: 'My work' })
+    expect(f.frames).toHaveLength(count)
+    f.answer({ ok: false, active: true, error: 'Could not open.', label: 'Not acknowledged' })
+    expect(await second).toMatchObject({ ok: false, active: true })
+    expect(f.visit.refuse(open.visitId, 'Unavailable.')).toMatchObject({ active: true, label: 'My work' })
+    f.visit.cancel()
+    expect(f.visit.refuse(open.visitId, 'Unavailable.').active).toBe(false)
+  })
+
+  it('an unsuccessful first reply cannot manufacture an acknowledged return', async () => {
+    const f = fixture()
+    const pending = f.visit.command(open)
+    f.answer({ ok: false, active: true, error: 'Could not open.', label: 'Never acknowledged' })
+    await pending
+    expect(f.visit.refuse(open.visitId, 'Unavailable.')).toEqual({ ok: false, active: false, error: 'Unavailable.' })
+    f.visit.cancel()
+  })
+
   it('latest output is pinned to the focused pane and keeps the original return socket', async () => {
     const f = fixture()
     const command = { op: 'latest' as const, visitId: 'visit-reading', machineId: 'local', agentId: 'origin' }
@@ -101,6 +153,7 @@ describe('attention visit at this desk', () => {
     expect(await pending).toMatchObject({ ok: false, active: false })
     expect(f.frames.map(f => f.payload.op)).toEqual(['open', 'cancel'])
     f.visit.reply('first', 'local', { ...frame, ok: true, active: true, label: 'late', agentId: 'help' })
+    expect(f.visit.refuse(open.visitId, 'Unavailable.').active).toBe(false)
     expect((await f.visit.command({ op: 'back', visitId: 'visit-one' })).ok).toBe(false)
   })
 
@@ -114,6 +167,8 @@ describe('attention visit at this desk', () => {
     const f = fixture()
     const first = f.visit.command(open); f.answer(); await first
     const next = f.visit.command({ ...open, visitId: 'visit-two' }); f.answer(); await next
+    expect(f.visit.refuse('visit-one', 'Unavailable.').active).toBe(false)
+    expect(f.visit.refuse('visit-two', 'Unavailable.')).toMatchObject({ active: true, label: 'My work' })
     await f.visit.command({ op: 'cancel', visitId: 'visit-one' })
     const back = f.visit.command({ op: 'back', visitId: 'visit-two' }); f.answer()
     expect((await back).ok).toBe(true)

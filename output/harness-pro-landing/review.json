@@ -1,0 +1,66 @@
+{
+  "schema": 1,
+  "purpose": "Review the current Harness Pro software on another computer.",
+  "branches": {
+    "app_and_product_preview": "square-harness",
+    "firmware": "dev/firmware-pro",
+    "firmware_commit": "5c4a5efe571779ce53ec2f105d22e23cf9d04f1e"
+  },
+  "preview": {
+    "commands": [
+      "git fetch origin",
+      "git switch square-harness",
+      "cd website",
+      "npm ci",
+      "npm run dev -- --port 3108"
+    ],
+    "url": "http://localhost:3108/pro",
+    "qualification": "Interactive product study with sample app/voice data; it does not connect to or command an agent."
+  },
+  "firmware_review": {
+    "commands": [
+      "git fetch origin",
+      "git worktree add ../harness-pro-firmware origin/dev/firmware-pro"
+    ],
+    "instructions": "devices/harness-device/prototype/pro-companion/README.md on the firmware branch",
+    "profile": "ESP-IDF5.5.3, ESP32-P4, dock-only Pro companion; see devices/harness-device/development/README.md.",
+    "image_bytes": 8115040,
+    "image_sha256": "24e99ee0657c5b705c51dbe25cf3ff34560dd47b6b4da188088673e56687db72",
+    "image_committed": false
+  },
+  "native_screens": {
+    "source_commit": "5c4a5efe571779ce53ec2f105d22e23cf9d04f1e",
+    "contact_sheet": "output/harness-pro-landing/native-review/contact-sheet.png",
+    "sha256": {
+      "output/harness-pro-landing/native-review/contact-sheet.png": "e70f55c78359fcc36145425bdb4d0745fbf3c647e5ef6adea214fb1bdbadae58",
+      "output/harness-pro-landing/native-review/find-by-line.png": "7a801e7218278e8477667f4b5210b1654cefec7050c61fc3d49520ad9174a7f8",
+      "output/harness-pro-landing/native-review/find-first-match.png": "bed30f28e9a918e821f27d5b92d8ac415e1d3fb28dac450d6481489951040dbc",
+      "output/harness-pro-landing/native-review/find-no-matches.png": "d8240f2a864f995164f93093028ebd345a1c2405b1c288e365cdfef3423cad7a",
+      "output/harness-pro-landing/native-review/find-range.png": "5cda1598acc8e7ca5b7b23f8ec69a7ef26d2278a397dbdc1707e9e23250cc9cb",
+      "output/harness-pro-landing/native-review/find-retry.png": "59ce5f18fd1e9e7efc544ca305eee4ce6f6f58aa849e4db101c134931e609665",
+      "output/harness-pro-landing/native-review/search_listening.png": "c9e599b95de1e05613d89ffcd5d2b82c89087e0f2d50e06063f53e8d794eb674",
+      "output/harness-pro-landing/native-review/search_waiting.png": "734227983340fbecbcc42c710abfd1eb1b3c205ecad8d58b16d302f326789b5e"
+    },
+    "qualification": "Actual native renderer output, not photographs of physical hardware."
+  },
+  "validation": {
+    "fresh_focused_host_tests": 227,
+    "fresh_focused_desktop_tests": 22,
+    "peer_types_and_dart_analysis": "passed",
+    "native_app_socket": "passed with fixed transcript and preserved pane/session/renderer identities",
+    "registered_pro_suite": "all nine registered scripts passed",
+    "p4_build": "passed at exact firmware commit",
+    "prior_full_cli": {
+      "passed": 9195,
+      "skipped": 59,
+      "qualification": "Covers unchanged CLI production; later opt-in app fixture separately checked."
+    },
+    "raw_receipts": "Local .harness/validation and .harness/firmware-pro-* receipts are ignored and are not included in this checkout."
+  },
+  "limitations": [
+    "Prototype not connected; physical touch, microphone, transcription reliability and runtime memory remain unverified.",
+    "Reviewed remote Goal/Loop protocol proposal is deferred by user decision; no issue was posted.",
+    "Spending is an opted-in local transcript estimate.",
+    "This is a branch review snapshot, not a stable release or installation."
+  ]
+}

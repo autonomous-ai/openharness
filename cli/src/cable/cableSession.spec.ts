@@ -11,9 +11,10 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 
-import { CableDecoder, CableType, encodeCableFrame } from './cableFrame.js'
+import { CABLE_MAX_PAYLOAD, CableDecoder, CableType, encodeCableFrame } from './cableFrame.js'
 import { CableSession, type CableAgent, type CableHost, type CableMachine, type CablePort } from './cableSession.js'
 import { DialLog } from './dialLog.js'
+import type { MetricsResult } from './windowMetrics.js'
 
 /** A port whose two ends are both in this process. */
 class LoopbackPort implements CablePort {
@@ -127,7 +128,468 @@ async function connect(host: CableHost = makeHost(), log = tmpLog()) {
 /** Let the microtask queue drain — every send is async. */
 const settle = () => new Promise((r) => setTimeout(r, 0))
 
+describe('ambiguous public agent projections', () => {
+  const questions = [{ key: 'scope', q: 'Which scope?', options: ['File', 'Project'], multi: false }]
+
+  it('refuses live projections and question reads without replacing or closing the retained question', async () => {
+    const blocked = new Set<string>()
+    const { session, port, host } = await connect(makeHost({ isAgentAmbiguous: id => blocked.has(id),
+      readNotification: vi.fn(), activityText: vi.fn(async () => 'Working') }))
+    try {
+      await session.question('a1', 'original', questions)
+      const retained = session['questions'].read('a1')
+      await session.focusAgent('a1')
+      blocked.add('a1'); port.sent.length = 0
+      await session.summary('a1', 'Wrong owner', 'Must not reach the device')
+      await session.turnStarted('a1', 'Wrong work')
+      await session.turnDone('a1')
+      await session.turnError('a1', 'Wrong failure')
+      await session.question('a1', 'replacement', questions)
+      await session.questionClose('a1', 'original')
+      await session.focusAgent('a1')
+      port.say({ t: 'focus', agentId: 'a1' }); await settle()
+      expect(port.sent).toEqual([])
+      expect(session['desiredFocus']).toBe('')
+      expect(session['questions'].read('a1')).toEqual(retained)
+      expect(host.focus).not.toHaveBeenCalled()
+      expect(host.activityText).not.toHaveBeenCalled()
+      port.say({ t: 'question.read', agentId: 'a1', requestId: 'blocked-read' })
+      await vi.waitFor(() => expect(port.sent).toContainEqual({ t: 'question.state', agentId: 'a1',
+        requestId: 'blocked-read', ok: false, error: 'Open this harness in the app.' }))
+      // A receipt already naming an exact unread occurrence is still safe.
+      await session.agentSeen('a1')
+      await session.agentSeen('a1', 'exact-token')
+      port.say({ t: 'notif.read', agentId: 'a1', readToken: 'exact-token' }); await settle()
+      expect(port.sent.filter(m => m.t === 'notif.seen')).toEqual([
+        { t: 'notif.seen', agentId: 'a1', readToken: 'exact-token' },
+      ])
+      expect(host.readNotification).toHaveBeenCalledExactlyOnceWith('a1', 'exact-token')
+      await session.question('a2', 'unaffected', questions)
+      expect(port.sent.at(-1)).toMatchObject({ t: 'question', agentId: 'a2', id: 'unaffected' })
+    } finally { await session.stop() }
+  })
+
+  it('omits ambiguous roster, history, unread and pending-question rows on a full attach push', async () => {
+    const blocked = new Set<string>()
+    const recentSummaries = vi.fn(async () => [{ recap: 'Saved', text: 'Saved words' }])
+    const { session, port } = await connect(makeHost({ isAgentAmbiguous: id => blocked.has(id), recentSummaries,
+      listUnread: () => AGENTS.map(a => ({ agentId: a.id, machineId: 'mac-local', text: 'Unread', question: false })) }))
+    try {
+      for (const a of AGENTS) await session.question(a.id, `q-${a.id}`, questions)
+      blocked.add('a1'); port.sent.length = 0
+      await session.pushAgents()
+      expect(port.sent.filter(m => m.t === 'agent').map(m => m.id)).toEqual(['a2'])
+      expect(port.sent.filter(m => m.agentId === 'a1')).toEqual([])
+      expect(port.sent.find(m => m.t === 'notif.replace')).toMatchObject({ items: [{ agentId: 'a2' }] })
+      expect((port.sent.find(m => m.t === 'notif.replace')!.items as unknown[])).toHaveLength(1)
+      expect(recentSummaries).toHaveBeenCalledExactlyOnceWith('a2')
+      expect(port.sent.some(m => m.t === 'question' && m.agentId === 'a2')).toBe(true)
+    } finally { await session.stop() }
+  })
+
+  it.each(['history', 'notification'] as const)('drops a delayed %s result when ownership becomes ambiguous', async mode => {
+    let blocked = false, finish!: (rows: Array<{ recap: string; text: string }>) => void
+    const recentSummaries = vi.fn(() => new Promise<Array<{ recap: string; text: string }>>(resolve => { finish = resolve }))
+    const { session, port } = await connect(makeHost({ isAgentAmbiguous: () => blocked,
+      listAgents: async () => [AGENTS[0]], recentSummaries }))
+    try {
+      const pending = mode === 'history' ? session.pushRestores() : session.replaceNotifications([
+        { agentId: 'a1', machineId: 'mac-local', question: false, text: '', readToken: 'before-conflict' },
+      ])
+      await vi.waitFor(() => expect(recentSummaries).toHaveBeenCalledOnce())
+      blocked = true; finish([{ recap: 'Wrong owner', text: 'Delayed words' }]); await pending
+      expect(port.sent.filter(m => m.t === 'summary')).toEqual([])
+      if (mode === 'notification') expect(port.sent).toEqual([{ t: 'notif.replace', items: [] }])
+    } finally { await session.stop() }
+  })
+
+  it('answers a delayed model catalog with no choices after ownership becomes ambiguous', async () => {
+    let blocked = false, finish!: (items: string[]) => void
+    const listModels = vi.fn(() => new Promise<string[]>(resolve => { finish = resolve }))
+    const { session, port, host } = await connect(makeHost({ isAgentAmbiguous: id => blocked && id === 'a1', listModels }))
+    try {
+      port.say({ t: 'models.list', agentId: 'a1', request: 17 })
+      await vi.waitFor(() => expect(listModels).toHaveBeenCalledExactlyOnceWith('a1'))
+      blocked = true; finish(['wrong-owner-model'])
+      await vi.waitFor(() => expect(port.types()).toContain('models'))
+      expect(port.sent.find(m => m.t === 'models')).toEqual({ t: 'models', agentId: 'a1', request: 17, items: [] })
+      expect(host.focus).not.toHaveBeenCalled()
+      expect(host.sendTurn).not.toHaveBeenCalled()
+    } finally { await session.stop() }
+  })
+
+  it.each(['begin', 'step', 'extend', 'match', 'lines', 'cancel'] as const)(
+    'rechecks delayed selection %s while preserving explicit cancellation', async op => {
+      let blocked = false, finish!: (result: import('./windowSelection.js').SelectionResult) => void
+      const selectPassage = vi.fn<NonNullable<CableHost['selectPassage']>>(() => new Promise(resolve => { finish = resolve }))
+      const { session, port, host } = await connect(makeHost({ isAgentAmbiguous: id => blocked && id === 'a1', selectPassage }))
+      try {
+        port.say({ t: 'selection', agentId: 'a1', op, selectionId: 'old-selection', revision: 2,
+          delta: 1, extend: true, requestId: 'delayed-selection' })
+        await vi.waitFor(() => expect(selectPassage).toHaveBeenCalledOnce())
+        expect(selectPassage).toHaveBeenCalledWith({ agentId: 'a1', op, selectionId: 'old-selection',
+          revision: 2, delta: 1, extend: true })
+        blocked = true
+        finish(op === 'cancel' ? { ok: false, error: 'Selection closed.' }
+          : { ok: true, selectionId: 'old-selection', revision: 3, rows: 1, extending: false,
+              text: 'Other owner words', excerpt: 'Other owner words' })
+        await vi.waitFor(() => expect(port.types()).toContain('selection.state'))
+        expect(port.sent.find(m => m.t === 'selection.state')).toEqual({ t: 'selection.state',
+          requestId: 'delayed-selection', ok: false,
+          error: op === 'cancel' ? 'Selection closed.' : 'Open this harness in the app.' })
+        expect(host.focus).not.toHaveBeenCalled()
+        expect(host.sendTurn).not.toHaveBeenCalled()
+      } finally { await session.stop() }
+    })
+
+  it('rechecks each streamed row after a preceding write yields', async () => {
+    let blocked = false
+    const { session, port } = await connect(makeHost({ isAgentAmbiguous: id => id === 'a1' && blocked }))
+    const write = port.write.bind(port)
+    vi.spyOn(port, 'write').mockImplementation(async bytes => {
+      await write(bytes)
+      if (port.sent.at(-1)?.t === 'agents.begin') blocked = true
+    })
+    try {
+      await session.syncAgents(true)
+      expect(port.sent.filter(m => m.t === 'agent').map(m => m.id)).toEqual(['a2'])
+      expect(port.types()).toContain('agents.end')
+      expect(port.isOpen).toBe(true)
+    } finally { await session.stop() }
+  })
+
+  it('cannot revive activity or re-anchor an ambiguous previous focus', async () => {
+    let blocked = false, finish!: (text: string) => void
+    const activityText = vi.fn(() => new Promise<string>(resolve => { finish = resolve }))
+    const { session, port } = await connect(makeHost({ isAgentAmbiguous: id => blocked && id === 'a1', activityText }))
+    try {
+      await session.focusAgent('a1')
+      const pending = session.turnStarted('a1', 'Original work')
+      await vi.waitFor(() => expect(activityText).toHaveBeenCalledOnce())
+      blocked = true; port.sent.length = 0; finish('Delayed work'); await pending
+      await session.syncAgents(true)
+      expect(port.sent.some(m => m.agentId === 'a1')).toBe(false)
+      expect(session['desiredFocus']).toBe('')
+    } finally { await session.stop() }
+  })
+
+  it.each(['before', 'during'] as const)('refuses app focus %s an asynchronous machine switch', async when => {
+    let blocked = when === 'before', finish!: () => void
+    const selectMachine = vi.fn(async () => {
+      await new Promise<void>(resolve => { finish = resolve }); return { ok: true as const }
+    })
+    const { session, port } = await connect(makeHost({ isAgentAmbiguous: id => blocked && id === 'a1', selectMachine }))
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+      await vi.waitFor(() => expect(port.types()).toContain('agents.end')); await settle()
+      port.sent.length = 0
+      const pending = session.followApp('other-machine', 'a1')
+      if (when === 'during') {
+        await vi.waitFor(() => expect(selectMachine).toHaveBeenCalledOnce())
+        blocked = true; finish()
+      }
+      await pending
+      if (when === 'before') expect(selectMachine).not.toHaveBeenCalled()
+      expect(port.sent.some(m => m.t === 'focus' && m.agentId === 'a1')).toBe(false)
+      expect(session['desiredFocus']).toBe('')
+    } finally { await session.stop() }
+  })
+
+  it('rechecks Carry ownership after the real session awaits the source label', async () => {
+    let blocked = false, finish!: (agents: CableAgent[]) => void
+    const listAgents = vi.fn(() => new Promise<CableAgent[]>(resolve => { finish = resolve }))
+    const selectPassage = vi.fn<NonNullable<CableHost['selectPassage']>>(async command => command.op === 'pin'
+      ? { ok: true, selectionId: 'source-pick', revision: 2, rows: 1, extending: false,
+          text: 'Original selected words', excerpt: 'Original selected words' }
+      : { ok: false, error: 'Closed' })
+    const { session, port, host } = await connect(makeHost({ isAgentAmbiguous: id => blocked && id === 'a1',
+      listAgents, selectPassage }))
+    try {
+      port.say({ t: 'carry.prepare', carryId: 'source-carry', requestId: 'carry-read',
+        agentId: 'a1', selectionId: 'source-pick', revision: 1 })
+      await vi.waitFor(() => expect(listAgents).toHaveBeenCalledOnce())
+      blocked = true; finish([{ id: 'a1', name: 'Another computer' }])
+      await vi.waitFor(() => expect(port.sent.some(m => m.requestId === 'carry-read')).toBe(true))
+      expect(port.sent.find(m => m.requestId === 'carry-read')).toEqual({ t: 'carry.state',
+        requestId: 'carry-read', carryId: 'source-carry', ok: false, active: false,
+        error: 'Open this harness in the app.' })
+      expect(selectPassage).toHaveBeenLastCalledWith({ op: 'cancel', agentId: 'a1', selectionId: 'source-pick' })
+      expect(host.sendTurn).not.toHaveBeenCalled()
+    } finally { await session.stop() }
+  })
+})
+
+describe('read-only voice recovery across cable ownership changes', () => {
+  const MAC = '28:84:85:90:5F:78', OTHER = '28:84:85:90:5F:79'
+  let serial = 0
+  async function fixture(over: Partial<CableHost> = {}) {
+    const host = makeHost(over), ports: LoopbackPort[] = []
+    const session = new CableSession(host, tmpLog(), async (incoming, closed) => {
+      const p = new LoopbackPort(incoming, closed); ports.push(p); return p
+    })
+    session.start(); await vi.waitFor(() => expect(ports).toHaveLength(1))
+    const greet = async (port = ports.at(-1)!, mac: string | undefined = MAC, fw = 'fixture') => {
+      const before = port.sent.filter(m => m.t === 'welcome').length
+      port.say({ t: 'hello', product: 'harness', mac, fw })
+      await vi.waitFor(() => expect(port.sent.filter(m => m.t === 'welcome')).toHaveLength(before + 1))
+      await settle()
+    }
+    const reopen = async () => {
+      await ports.at(-1)!.close('fixture unplug')
+      session['openAt'] = 0; await session['tryOpen']()
+      return ports.at(-1)!
+    }
+    return { host, ports, session, greet, reopen }
+  }
+  async function record(port: LoopbackPort, fields: Record<string, unknown> = { agentId: 'a1' }) {
+    const uploadId = `recover-${++serial}`
+    port.say({ t: 'voice.begin', uploadId, ...fields }); port.pcm(Buffer.alloc(320))
+    port.say({ t: 'voice.end', uploadId, review: true })
+    await vi.waitFor(() => expect(port.sent.some(m => m.uploadId === uploadId && ['voice.draft', 'voice.error'].includes(m.t as string))).toBe(true))
+    return port.sent.find(m => m.uploadId === uploadId && ['voice.draft', 'voice.error'].includes(m.t as string))!
+  }
+  async function command(port: LoopbackPort, p: Record<string, unknown>, op = 'state', delta = 0) {
+    const frame = { t: 'draft.command', draftId: p.id, requestId: `draft-${++serial}`, revision: p.revision, op,
+      ...(op === 'move' ? { delta } : {}) }
+    port.say(frame)
+    await vi.waitFor(() => expect(port.sent.some(m => m.requestId === frame.requestId)).toBe(true))
+    return port.sent.find(m => m.requestId === frame.requestId)!
+  }
+
+  it('keeps exact archived words readable and discardable after an agent owner conflict', async () => {
+    let blocked = false
+    const f = await fixture({ isAgentAmbiguous: () => blocked,
+      transcribe: async () => 'Keep these original words. '.repeat(50) })
+    try {
+      await f.greet(); const old = await record(f.ports[0])
+      blocked = true
+      const port = await f.reopen(); await f.greet(port)
+      const first = await command(port, old)
+      expect(first).toMatchObject({ active: true, agentId: 'a1', locked: true, canSend: false })
+      const next = await command(port, first, 'move', 1)
+      expect(next).toMatchObject({ active: true, id: old.id, locked: true, canSend: false, position: 2 })
+      expect(await command(port, next, 'discard')).toMatchObject({ active: false })
+      expect(await command(port, next)).toMatchObject({ active: false })
+      expect(f.host.sendTurn).not.toHaveBeenCalled()
+    } finally { await f.session.stop() }
+  })
+
+  it('reads every original UTF-8 part after a fresh hello without blocking a new recording', async () => {
+    const text = '  Tiếng Việt. Preserve this spacing.\n\n'.repeat(100)
+    const transcribe = vi.fn().mockResolvedValueOnce(text).mockResolvedValueOnce('A new task.')
+    const f = await fixture({ transcribe })
+    try {
+      await f.greet(); const old = await record(f.ports[0], { agentId: 'a2' })
+      const port = await f.reopen()
+      expect(await command(port, old)).toMatchObject({ active: false })
+      await f.greet(port)
+      let p = await command(port, old), joined = ''
+      expect(p).toMatchObject({ active: true, agentId: 'a2', locked: true, canSend: false, canUndo: false })
+      for (;;) {
+        joined += p.text
+        if (p.position === p.total) break
+        p = await command(port, p, 'move', 1)
+      }
+      expect(joined).toBe(text.trim())
+      const next = await record(port)
+      expect(next).toMatchObject({ t: 'voice.draft', text: 'A new task.', locked: false })
+      expect(await command(port, old, 'move', 1)).toMatchObject({ id: old.id, ok: false, locked: true })
+      expect((await command(port, p, 'send')).canSend).toBe(false)
+      expect(f.host.sendTurn).not.toHaveBeenCalled()
+    } finally { await f.session.stop() }
+  })
+
+  it.each([OTHER, '', undefined])('does not give an archive to a changed/absent owner %s', async mac => {
+    const f = await fixture()
+    try {
+      await f.greet(); const old = await record(f.ports[0])
+      const port = await f.reopen()
+      // Send directly so undefined really omits the identity, rather than taking the helper default.
+      port.say({ t: 'hello', product: 'harness', mac, fw: 'fixture' }); await settle()
+      expect(await command(port, old)).toMatchObject({ active: false })
+      await f.greet(port)
+      expect(await command(port, old)).toMatchObject({ active: true, canSend: false })
+    } finally { await f.session.stop() }
+  })
+
+  it('requires the full original host id and a new hello after a host identity change', async () => {
+    let machineId = 'original-host'
+    const f = await fixture({ localMachine: () => ({ id: machineId, name: 'Machine' }) })
+    try {
+      await f.greet(); const old = await record(f.ports[0])
+      machineId = 'another-host'
+      expect(await command(f.ports[0], old)).toMatchObject({ active: false })
+      machineId = 'original-host'
+      expect(await command(f.ports[0], old)).toMatchObject({ active: false })
+      await f.greet()
+      expect(await command(f.ports[0], old)).toMatchObject({ active: true, locked: true, canSend: false })
+      const port = await f.reopen(); machineId = 'original-host' + 'x'.repeat(50)
+      await f.greet(port)
+      expect(await command(port, old)).toMatchObject({ active: false })
+    } finally { await f.session.stop() }
+  })
+
+  it('a firmware change revokes live review while a repeated keepalive preserves it', async () => {
+    const f = await fixture()
+    try {
+      await f.greet(); const old = await record(f.ports[0])
+      await f.greet()
+      expect(await command(f.ports[0], old)).toMatchObject({ locked: false, canSend: true })
+      await f.greet(f.ports[0], MAC, 'new-firmware')
+      expect(await command(f.ports[0], old)).toMatchObject({ active: true, locked: true, canSend: false })
+      expect(f.host.sendTurn).not.toHaveBeenCalled()
+    } finally { await f.session.stop() }
+  })
+
+  it('ignores old-port bytes and late close while a new owner has a live draft and an archive', async () => {
+    const f = await fixture({ transcribe: vi.fn().mockResolvedValueOnce('Archived.').mockResolvedValueOnce('Fresh.') })
+    try {
+      await f.greet(); const oldPort = f.ports[0], old = await record(oldPort)
+      const port = await f.reopen(); await f.greet(port)
+      const fresh = await record(port)
+      oldPort.say({ t: 'hello', product: 'harness', mac: OTHER, fw: 'late' })
+      oldPort.say({ t: 'draft.command', draftId: fresh.id, revision: fresh.revision, op: 'discard', requestId: 'stale-discard' })
+      oldPort['onClosed']('late old close'); await settle()
+      expect(f.session.isConnected).toBe(true)
+      expect(await command(port, fresh)).toMatchObject({ active: true, locked: false, text: 'Fresh.' })
+      expect(await command(port, old)).toMatchObject({ active: true, locked: true, text: 'Archived.' })
+      expect(port.sent.some(m => m.requestId === 'stale-discard')).toBe(false)
+    } finally { await f.session.stop() }
+  })
+
+  it.each(['recording', 'edit'])('suppresses a late %s transcript after same-link owner replacement', async mode => {
+    let finish!: (text: string) => void
+    const transcribe = vi.fn().mockResolvedValueOnce('Original.')
+    const f = await fixture({ transcribe })
+    try {
+      await f.greet(); const port = f.ports[0], old = await record(port)
+      transcribe.mockImplementationOnce(() => new Promise<string>(resolve => { finish = resolve }))
+      port.say({ t: 'voice.begin', uploadId: 'stale-owner', ...(mode === 'edit'
+        ? { draftId: old.id, draftRevision: old.revision, draftOp: 'replace' } : { agentId: 'a2' }) })
+      port.pcm(Buffer.alloc(320)); port.say({ t: 'voice.end', uploadId: 'stale-owner', review: true })
+      await vi.waitFor(() => expect(finish).toBeTypeOf('function'))
+      await f.greet(port, OTHER); finish('Private former owner words.'); await settle()
+      expect(port.sent.some(m => m.uploadId === 'stale-owner' && ['voice.draft', 'voice.error', 'voice.transcript'].includes(m.t as string))).toBe(false)
+      expect(await command(port, old)).toMatchObject({ active: false })
+      await f.greet(port)
+      expect(await command(port, old)).toMatchObject({ text: 'Original.', canSend: false })
+      expect(f.host.sendTurn).not.toHaveBeenCalled()
+    } finally { await f.session.stop() }
+  })
+
+  it('suppresses old send receipts on a new same-port hello and never overwrites its new draft', async () => {
+    let finish!: (receipt: { state: 'submitted' }) => void
+    const cancel = vi.fn(), submit = vi.fn(() => new Promise<{ state: 'submitted' }>(resolve => { finish = resolve }))
+    const f = await fixture({ prepareReviewed: async () => ({ ok: true, current: () => true, cancel, submit }) })
+    try {
+      await f.greet(); const port = f.ports[0], old = await record(port, { agentId: 'a1', cmd: 'goal' })
+      port.say({ t: 'draft.command', draftId: old.id, revision: old.revision, requestId: 'former-send', op: 'send' })
+      await vi.waitFor(() => expect(finish).toBeTypeOf('function'))
+      await f.greet(port, OTHER); const next = await record(port)
+      finish({ state: 'submitted' }); await settle()
+      expect(port.sent.some(m => m.requestId === 'former-send')).toBe(false)
+      expect(await command(port, next)).toMatchObject({ id: next.id, active: true, locked: false })
+      expect(await command(port, old)).toMatchObject({ active: false })
+      expect(cancel).toHaveBeenCalledOnce(); expect(submit).toHaveBeenCalledOnce()
+    } finally { await f.session.stop() }
+  })
+
+  it('does not install an older hello after a newer owner won the same-link welcome race', async () => {
+    const f = await fixture()
+    try {
+      const port = f.ports[0], write = port.write.bind(port)
+      let finish!: () => void
+      vi.spyOn(port, 'write').mockImplementationOnce(async bytes => {
+        await write(bytes); await new Promise<void>(resolve => { finish = resolve })
+      })
+      port.say({ t: 'hello', product: 'harness', mac: MAC, fw: 'old' })
+      await vi.waitFor(() => expect(finish).toBeTypeOf('function'))
+      await f.greet(port, OTHER, 'new'); finish(); await settle()
+      expect(f.session['greetedMac']).toBe(OTHER); expect(f.session['greetedFw']).toBe('new')
+    } finally { await f.session.stop(); vi.restoreAllMocks() }
+  })
+
+  it('keeps the first greeting when bytes arrive before the opener resolves', async () => {
+    let port!: LoopbackPort
+    const session = new CableSession(makeHost(), tmpLog(), async (incoming, closed) => {
+      port = new LoopbackPort(incoming, closed)
+      port.say({ t: 'hello', product: 'harness', mac: MAC, fw: 'first' })
+      return port
+    })
+    try {
+      session.start()
+      await vi.waitFor(() => expect(port?.sent.some(m => m.t === 'welcome')).toBe(true))
+      expect(session.isConnected).toBe(true)
+    } finally { await session.stop() }
+  })
+
+  it('does not close a replacement link when an old asynchronous write fails', async () => {
+    const f = await fixture()
+    try {
+      await f.greet()
+      let fail!: (error: Error) => void
+      vi.spyOn(f.ports[0], 'write').mockImplementationOnce(() => new Promise((_resolve, reject) => { fail = reject }))
+      const pending = f.session.setSettings({ brightness: 50 })
+      const port = await f.reopen(); await f.greet(port)
+      const fresh = await record(port)
+      fail(new Error('old link failed')); expect(await pending).toBe(false)
+      expect(port.isOpen).toBe(true); expect(f.session.isConnected).toBe(true)
+      expect(await command(port, fresh)).toMatchObject({ active: true, locked: false })
+    } finally { await f.session.stop(); vi.restoreAllMocks() }
+  })
+
+  it('expires during an idle tick and forgets retention when stopping', async () => {
+    const f = await fixture()
+    const now = vi.spyOn(performance, 'now').mockReturnValue(10)
+    try {
+      await f.greet(); const old = await record(f.ports[0])
+      const port = await f.reopen(); await f.greet(port)
+      now.mockReturnValue(30 * 60_000 + 10)
+      await f.session['tick']()
+      expect(await command(port, old)).toMatchObject({ active: false })
+      const next = await record(port)
+      await f.session.stop()
+      expect(await f.session['voiceDraft'].command(String(next.id), Number(next.revision), 'state', 0,
+        { mac: MAC, machineId: 'mac-local' })).toMatchObject({ active: false })
+    } finally { now.mockRestore(); await f.session.stop() }
+  })
+})
+
 describe('cable session', () => {
+  it('advertises read-only metrics optionally, keeps input responsive, and correlates bounded results', async () => {
+    let finish!: (r: MetricsResult) => void
+    const host = makeHost({ metrics: vi.fn(() => new Promise<MetricsResult>(resolve => { finish = resolve })) })
+    const { session, port } = await connect(host)
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'metrics-device', fw: 'test' })
+      await vi.waitFor(() => expect(port.sent.find(m => m.t === 'welcome')?.features).toContain('metrics.read.v1'))
+      port.say({ t: 'metrics.get', requestId: 'bad/id' })
+      port.say({ t: 'metrics.get', requestId: 'x'.repeat(48) })
+      await settle()
+      expect(host.metrics).not.toHaveBeenCalled()
+      port.say({ t: 'metrics.get', requestId: 'usage-1' })
+      await vi.waitFor(() => expect(host.metrics).toHaveBeenCalledOnce())
+      port.say({ t: 'scroll', phase: 'move', dy: 5, v: 0 })
+      await vi.waitFor(() => expect(host.scrolled).toHaveBeenCalledWith('move', 5, 0))
+      finish({ ok: false, error: '/private/provider/source.jsonl' })
+      await vi.waitFor(() => expect(port.sent).toContainEqual({ t: 'metrics.state', requestId: 'usage-1', schema: 1,
+        ok: false, error: 'Local usage is unavailable.' }))
+      expect(JSON.stringify(port.sent)).not.toContain('/private/provider')
+      port.say({ t: 'metrics.get', requestId: 'usage-2' })
+      await vi.waitFor(() => expect(host.metrics).toHaveBeenCalledTimes(2))
+      await session.stop()
+      finish({ ok: false, error: 'late' })
+      await settle()
+      expect(port.sent.some(m => m.requestId === 'usage-2')).toBe(false)
+    } finally { await session.stop() }
+    const old = await connect()
+    try {
+      old.port.say({ t: 'hello', product: 'harness', mac: 'old-host', fw: 'test' })
+      await vi.waitFor(() => expect(old.port.sent.some(m => m.t === 'welcome')).toBe(true))
+      expect(old.port.sent.find(m => m.t === 'welcome')?.features).not.toContain('metrics.read.v1')
+    } finally { await old.session.stop() }
+  })
+
   const companionSettings = {
     brightness: 40, character: 2, face: 466, muted: true, quiet: false,
     straightTitle: false, focusFace: false, scrollReversed: false, round: true,
@@ -346,6 +808,95 @@ describe('cable session', () => {
       expect(port.sent.at(-1)).toMatchObject({ t: 'summary', recap: 'Yes. The fix is installed.', text: 'Yes. The fix is installed.' })
     } finally { await session.stop() }
   })
+
+  it('keeps supplied occurrence words even when short or repeated and history has advanced', async () => {
+    const recentSummaries = vi.fn(async () => [{ recap: 'A newer result.', text: 'A newer turn changed everything.' }])
+    const { session, port } = await connect(makeHost({ recentSummaries }))
+    try {
+      for (const [index, text] of ['Done.', 'Done.', ' Yes. ', ' ', 'Line one.\nLine two.'].entries()) {
+        const readToken = `turn-${index}`
+        await session.replaceNotifications([{ agentId: 'a1', machineId: 'mac-local', question: false, text, readToken }])
+        expect(port.sent.at(-1)).toMatchObject({ t: 'notif.replace', items: [{ summary: text, readToken }] })
+      }
+      expect(recentSummaries).not.toHaveBeenCalled()
+      await session.agentSeen('a1', 'turn-0')
+      await session.replaceNotifications([{ agentId: 'a1', machineId: 'mac-local', question: false, text: 'Done.', readToken: 'turn-1' }])
+      expect(port.sent.at(-1)).toMatchObject({ t: 'notif.replace', items: [{ summary: 'Done.', readToken: 'turn-1' }] })
+    } finally { await session.stop() }
+  })
+
+  it('uses history only for empty legacy completion words, never for an empty question', async () => {
+    const recentSummaries = vi.fn(async () => [{ recap: 'Legacy recap.', text: 'Unrelated longer history body.' }])
+    const { session, port } = await connect(makeHost({ recentSummaries }))
+    try {
+      await session.replaceNotifications([
+        { agentId: 'a1', machineId: 'mac-local', question: false, text: '' },
+        { agentId: 'a2', machineId: 'mac-local', question: true, text: '', readToken: 'question-1' },
+      ])
+      expect(recentSummaries).toHaveBeenCalledExactlyOnceWith('a1')
+      expect(port.sent.at(-1)).toMatchObject({ t: 'notif.replace', items: [
+        { agentId: 'a1', summary: 'Legacy recap.' },
+        { agentId: 'a2', summary: '', question: true, readToken: 'question-1' },
+      ] })
+    } finally { await session.stop() }
+  })
+
+  it('restores eight escaped previews within the cable frame and native text bounds', async () => {
+    const recentSummaries = vi.fn(async () => [])
+    // Control characters cost six JSON bytes; supplementary characters must not
+    // be split at either the native byte boundary or the serialized row budget.
+    const name = '\u0001'.repeat(39), machine = '\u0002'.repeat(39)
+    const { session, port } = await connect(makeHost({ recentSummaries,
+      describe: () => ({ name, machine, engine: 'codex' }) }))
+    const items = Array.from({ length: 8 }, (_, i) => ({
+      agentId: `${i}${'a'.repeat(46)}`, machineId: 'mac-local', question: i === 7,
+      text: `Result ${i}: ` + '"\\\n\t\u0003😀'.repeat(100),
+      readToken: `turn-${i}-${'t'.repeat(56)}`,
+    }))
+    try {
+      await session.replaceNotifications(items)
+      expect(port.isOpen).toBe(true)
+      expect(port.closedWith).toBeNull()
+      expect(port.sent).toHaveLength(1)
+      const frame = port.sent[0]
+      expect(frame.t).toBe('notif.replace')
+      expect(Buffer.byteLength(JSON.stringify(frame))).toBeLessThanOrEqual(CABLE_MAX_PAYLOAD)
+      expect(Buffer.from(port.frames[0]).readUInt16LE(4)).toBe(Buffer.byteLength(JSON.stringify(frame)))
+      const rows = frame.items as Array<{ agentId: string; name: string; machine: string; summary: string; question: boolean; readToken: string }>
+      expect(rows).toHaveLength(8)
+      rows.forEach((row, i) => {
+        expect(row).toMatchObject({ agentId: items[i].agentId, readToken: items[i].readToken,
+          question: items[i].question, name, machine })
+        expect(row.summary.startsWith(`Result ${i}: `)).toBe(true)
+        expect(items[i].text.startsWith(row.summary)).toBe(true)
+        expect(Buffer.byteLength(row.summary)).toBeLessThanOrEqual(239)
+        expect(Buffer.from(row.summary).toString('utf8')).toBe(row.summary)
+      })
+      expect(recentSummaries).not.toHaveBeenCalled()
+    } finally { await session.stop() }
+  })
+
+  it('clips native strings at whole characters and never clips an unread identity', async () => {
+    const recentSummaries = vi.fn(async () => [])
+    const { session, port } = await connect(makeHost({ recentSummaries,
+      describe: () => ({ name: 'n'.repeat(38) + '😀', machine: 'm'.repeat(37) + '😀', engine: 'codex' }) }))
+    const item = { machineId: 'mac-local', question: false, text: 'x'.repeat(238) + '😀', readToken: 'exact-token' }
+    try {
+      await session.replaceNotifications([
+        { ...item, agentId: 'a'.repeat(48) },
+        { ...item, agentId: 'a1\0other' },
+        { ...item, agentId: 'a1\uD800' },
+        { ...item, agentId: 'a1' },
+      ])
+      expect(port.sent.at(-1)).toMatchObject({ t: 'notif.replace', items: [
+        { agentId: 'a1', name: 'n'.repeat(38), machine: 'm'.repeat(37), summary: 'x'.repeat(238), readToken: 'exact-token' },
+      ] })
+      expect((port.sent.at(-1)!.items as unknown[])).toHaveLength(1)
+      expect(port.isOpen).toBe(true)
+      expect(recentSummaries).not.toHaveBeenCalled()
+    } finally { await session.stop() }
+  })
+
   it('does not restore an old inbox after a newer empty snapshot', async () => {
     let finish!: (value: Array<{ recap: string; text: string }>) => void
     const history = new Promise<Array<{ recap: string; text: string }>>(resolve => { finish = resolve })
@@ -2324,6 +2875,79 @@ describe('task voice draft over the cable', () => {
       expect((await recorded(port,{agentId:'a2',carryId:'quote'})).t).toBe('voice.error')
       expect(host.sendTurn).toHaveBeenCalledTimes(1)
     } finally {await session.stop()}
+  })
+  it('attaches carried text before expiry and preserves it through review, editing and a newer tray', async () => {
+    let source = '  original line\nsecond line'
+    const selectPassage = vi.fn<NonNullable<CableHost['selectPassage']>>(async () => ({
+      ok: true, selectionId: 'sel', revision: 2, text: source,
+      excerpt: source.replace(/\s+/g, ' ').trim(), rows: 2, extending: true,
+    }))
+    const transcribe = vi.fn().mockResolvedValueOnce('Compare this.').mockResolvedValueOnce('Check the original against your tests.').mockResolvedValueOnce('Use the newer passage.')
+    const host = makeHost({ selectPassage, transcribe, route: vi.fn(), routeInWindow: vi.fn() })
+    const { session, port } = await connect(host)
+    let now = Date.now()
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now)
+    try {
+      port.say({ t: 'carry.prepare', carryId: 'original', requestId: 'prepare-original', agentId: 'a1', selectionId: 'sel', revision: 2 })
+      await vi.waitFor(() => expect(port.sent.some(m => m.requestId === 'prepare-original')).toBe(true))
+      port.say({ t: 'voice.begin', uploadId: 'attached', agentId: 'a2', carryId: 'original' })
+      port.pcm(Buffer.alloc(320))
+      now += 5 * 60_000 + 1
+      source = 'A new result arrived while the instruction was being reviewed.'
+      port.say({ t: 'voice.end', uploadId: 'attached', review: true })
+      await vi.waitFor(() => expect(port.sent.some(m => m.t === 'voice.draft' && m.uploadId === 'attached')).toBe(true))
+      let p = port.sent.find(m => m.t === 'voice.draft' && m.uploadId === 'attached')!
+      expect(p).toMatchObject({ agentId: 'a2', text: 'Compare this.', context: 'With text from Fix login screen' })
+      expect(host.sendTurn).not.toHaveBeenCalled()
+
+      port.say({ t: 'carry.prepare', carryId: 'newer', requestId: 'prepare-newer', agentId: 'a1', selectionId: 'sel', revision: 2 })
+      await vi.waitFor(() => expect(port.sent.some(m => m.requestId === 'prepare-newer')).toBe(true))
+      p = await recorded(port, { draftId: p.id, draftRevision: p.revision, draftOp: 'replace' }, false)
+      expect(p).toMatchObject({ agentId: 'a2', text: 'Check the original against your tests.', context: 'With text from Fix login screen' })
+      expect(host.sendTurn).not.toHaveBeenCalled()
+      expect(await command(port, p, 'send')).toMatchObject({ sent: true, carryId: 'original' })
+      expect(await command(port, p, 'send')).toMatchObject({ sent: true, carryId: 'original' })
+      expect(host.sendTurn).toHaveBeenCalledExactlyOnceWith('a2',
+        'Check the original against your tests.\n\nContext I selected from harness "Fix login screen":\n>   original line\n> second line')
+      expect(host.route).not.toHaveBeenCalled()
+      expect(host.routeInWindow).not.toHaveBeenCalled()
+      expect(await recorded(port, { agentId: 'a1', carryId: 'newer' })).toMatchObject({ t: 'voice.draft', agentId: 'a1', text: 'Use the newer passage.' })
+      expect(host.sendTurn).toHaveBeenCalledTimes(1)
+    } finally { clock.mockRestore(); await session.stop() }
+  })
+  it('refuses an expired unused carry before recording can become a reviewed instruction', async () => {
+    const host = makeHost({ transcribe: vi.fn(), selectPassage: async () => ({
+      ok: true, selectionId: 'sel', revision: 2, text: 'source', excerpt: 'source', rows: 1, extending: false,
+    }) })
+    const { session, port } = await connect(host)
+    let now = Date.now()
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now)
+    try {
+      port.say({ t: 'carry.prepare', carryId: 'unused', requestId: 'prepare-unused', agentId: 'a1', selectionId: 'sel', revision: 2 })
+      await vi.waitFor(() => expect(port.types()).toContain('carry.state'))
+      now += 5 * 60_000 + 1
+      expect(await recorded(port, { agentId: 'a2', carryId: 'unused' })).toMatchObject({ t: 'voice.error', message: 'The carried text expired. Choose it again.' })
+      expect(host.transcribe).not.toHaveBeenCalled()
+      expect(host.sendTurn).not.toHaveBeenCalled()
+      expect(port.types()).not.toContain('voice.draft')
+    } finally { clock.mockRestore(); await session.stop() }
+  })
+  it('retains a refused carried draft and returns its receipt without a second submission', async () => {
+    const host = makeHost({ transcribe: async () => 'Keep these words.',
+      sendTurn: vi.fn().mockReturnValue({ ok: false, reason: 'offline' }),
+      selectPassage: async () => ({ ok: true, selectionId: 'sel', revision: 2, text: 'Exact source.', excerpt: 'Exact source.', rows: 1, extending: false }),
+    })
+    const { session, port } = await connect(host)
+    try {
+      port.say({ t: 'carry.prepare', carryId: 'kept', requestId: 'prepare-kept', agentId: 'a1', selectionId: 'sel', revision: 2 })
+      await vi.waitFor(() => expect(port.types()).toContain('carry.state'))
+      const p = await recorded(port, { agentId: 'a2', carryId: 'kept' })
+      expect(host.sendTurn).not.toHaveBeenCalled()
+      expect(await command(port, p, 'send')).toMatchObject({ ok: false, active: true, locked: true, agentId: 'a2', text: 'Keep these words.', context: 'With text from Fix login screen' })
+      expect(await command(port, p, 'state')).toMatchObject({ active: true, text: 'Keep these words.', context: 'With text from Fix login screen' })
+      await command(port, p, 'send')
+      expect(host.sendTurn).toHaveBeenCalledExactlyOnceWith('a2', 'Keep these words.\n\nContext I selected from harness "Fix login screen":\n> Exact source.')
+    } finally { await session.stop() }
   })
   it('preserves the draft when cancelling an edit whose reply already arrived', async () => {
     const host=makeHost({transcribe:vi.fn().mockResolvedValueOnce('Original.').mockResolvedValueOnce('Edited.')}),{session,port}=await connect(host)

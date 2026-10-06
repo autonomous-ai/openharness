@@ -147,6 +147,8 @@ export interface LocalWsServerOptions {
   onSelectionReply?: (connId: string, machineId: string, payload: Record<string, unknown>) => void
   onVisitReply?: (connId: string, machineId: string, payload: Record<string, unknown>) => void
   onFormReply?: (connId: string, machineId: string, payload: Record<string, unknown>) => void
+  onMetricsReady?: (connId: string, machineId: string, payload: Record<string, unknown>) => void
+  onMetricsReply?: (connId: string, machineId: string, payload: Record<string, unknown>) => void
 }
 
 /** The pair brain's frames from a window (pair/protocol.ts DAEMON_IN_TYPES). */
@@ -375,7 +377,7 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
     // event feed cannot manufacture device gestures; only sendToWindow can.
     const terminalSink: LocalClientSink = {
       ...sink,
-      sendFrame: (frame) => frame.type === 'dial_selection' || frame.type === 'dial_visit' || frame.type === 'dial_form' || sink.sendFrame(frame),
+      sendFrame: (frame) => frame.type === 'dial_selection' || frame.type === 'dial_visit' || frame.type === 'dial_form' || frame.type === 'dial_metrics' || sink.sendFrame(frame),
     }
 
     const close = (code: number, reason: string): void => {
@@ -424,6 +426,8 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
             localProtocolVersion: LOCAL_WS_PROTOCOL_VERSION,
             terminalProtocolVersion: TERMINAL_BINARY_VERSION,
             e2ee: false,
+            ...(!tool && options.onMetricsReady && options.onMetricsReply
+              ? { deviceMetricsProtocol: 1 } : {}),
           },
         })
         // Right after, not inside `connected`: the window's handshake parser is shared with the
@@ -477,6 +481,18 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
         // output) and a resize are. A frame that does not parse falls through all of them, as before,
         // to the close at the bottom.
         const parsed = isBinary ? null : jsonFrame(raw)
+
+        // Usage is a local opted-in transcript estimate. A relayed machine or
+        // tool connection cannot register its data, receive it, or forward it.
+        if (parsed?.type === 'app_metrics_ready' || parsed?.type === 'app_metrics_result') {
+          const p = parsed.payload
+          if (!relay && !tool && boundMachineId === options.machineId && windowSinks.has(connId) &&
+              p && typeof p === 'object' && !Array.isArray(p)) {
+            const receive = parsed.type === 'app_metrics_ready' ? options.onMetricsReady : options.onMetricsReply
+            receive?.(connId, boundMachineId, p as Record<string, unknown>)
+          }
+          return
+        }
 
         // Local reading context must never reach a remote daemon/cloud relay.
         if (parsed?.type === 'app_selection_result' || parsed?.type === 'app_visit_result' || parsed?.type === 'app_form_result') {

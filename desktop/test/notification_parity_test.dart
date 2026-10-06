@@ -9,6 +9,7 @@
 // the other one owns (`isSubagentSession`, `alreadyOnScreen`, `deviceIsWatching`
 // in cli/src/cli.ts).
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/core/models.dart';
 import 'package:harness/notify/alert_sounds.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/notification_inbox.dart';
@@ -62,17 +63,145 @@ void main() {
     'payload': {'machineId': machine, 'agentId': agentId, 'readToken': token},
   });
 
-  Future<void> completed(String agentId, {bool? subagent, int turn = 0}) =>
-      app.handleEventForTest('m', {
-        'type': 'turn_summary',
-        'agentId': agentId,
-        'subagent': ?subagent,
-        'payload': <String, dynamic>{
-          'summary': 'A real final answer',
-          if (subagent != true)
-            'notification': {'id': 'result-$agentId-$turn', 'kind': 'done'},
-        },
-      });
+  Future<void> completed(
+    String agentId, {
+    bool? subagent,
+    int turn = 0,
+    String summary = 'A real final answer',
+    String? recap,
+    String? text,
+    String machine = 'm',
+  }) => app.handleEventForTest(machine, {
+    'type': 'turn_summary',
+    'agentId': agentId,
+    'subagent': ?subagent,
+    'payload': <String, dynamic>{
+      'summary': summary,
+      'recap': ?recap,
+      'text': ?text,
+      if (subagent != true)
+        'notification': {'id': 'result-$agentId-$turn', 'kind': 'done'},
+    },
+  });
+
+  test('retains the production summary-only completion words', () async {
+    await completed('a1', summary: 'Done.\n\nThe exact supplied summary.');
+    expect(
+      app.agentUnread.messageFor('m', 'a1'),
+      'Done.\n\nThe exact supplied summary.',
+    );
+    expect(app.agentUnread.readTokenFor('m', 'a1'), isNotNull);
+  });
+
+  test('prefers nonempty recap and text before the saved summary', () async {
+    await completed(
+      'a1',
+      recap: 'Yes.',
+      text: 'Detailed body.',
+      summary: 'Saved summary.',
+    );
+    expect(app.agentUnread.messageFor('m', 'a1'), 'Yes.');
+    await completed(
+      'a1',
+      turn: 1,
+      recap: ' \u001b[0m ',
+      text: 'Detailed body.',
+      summary: 'Saved summary.',
+    );
+    expect(app.agentUnread.messageFor('m', 'a1'), 'Detailed body.');
+    await completed(
+      'a1',
+      turn: 2,
+      recap: ' ',
+      text: '\u0000',
+      summary: 'Saved summary.',
+    );
+    expect(app.agentUnread.messageFor('m', 'a1'), 'Saved summary.');
+  });
+
+  test(
+    'duplicate delivery preserves words and a later occurrence replaces them',
+    () async {
+      await completed('a1', summary: 'First result.');
+      final first = app.agentUnread.readTokenFor('m', 'a1')!;
+      final receivedAt = app.agentUnread.receivedAtFor('m', 'a1');
+      await completed('a1', summary: 'Different words on a duplicate.');
+      expect(app.agentUnread.readTokenFor('m', 'a1'), first);
+      expect(app.agentUnread.receivedAtFor('m', 'a1'), receivedAt);
+      expect(app.agentUnread.messageFor('m', 'a1'), 'First result.');
+
+      await completed('a1', turn: 1, summary: 'Second result.');
+      final second = app.agentUnread.readTokenFor('m', 'a1')!;
+      expect(second, isNot(first));
+      expect(app.agentUnread.messageFor('m', 'a1'), 'Second result.');
+      await readFromDial('a1', first);
+      expect(app.agentUnread.readTokenFor('m', 'a1'), second);
+      expect(app.agentUnread.messageFor('m', 'a1'), 'Second result.');
+
+      await completed('a1', turn: 2, summary: 'Second result.');
+      expect(app.agentUnread.readTokenFor('m', 'a1'), isNot(second));
+      expect(app.agentUnread.messageFor('m', 'a1'), 'Second result.');
+      await completed('a1', turn: 3, summary: '');
+      expect(app.agentUnread.messageFor('m', 'a1'), isNull);
+    },
+  );
+
+  test(
+    'summary fallback keeps punctuation and strips terminal controls',
+    () async {
+      await completed(
+        'a1',
+        summary: '  \u001b[31mDone "quoted" at C:\\work\\notes.\u0000\u001b[0m\nSecond line.  ',
+      );
+      expect(
+        app.agentUnread.messageFor('m', 'a1'),
+        'Done "quoted" at C:\\work\\notes.\nSecond line.',
+      );
+    },
+  );
+
+  test(
+    'the same agent and notification id on another machine keep separate words',
+    () async {
+      app.machineStates['other'] = MachineState(
+        const Machine(
+          machineId: 'other',
+          name: 'Other computer',
+          authMode: MachineAuthMode.remote,
+        ),
+      );
+      await completed('a1', summary: 'This computer result.');
+      await completed(
+        'a1',
+        machine: 'other',
+        summary: 'Other computer result.',
+      );
+      final local = app.agentUnread.readTokenFor('m', 'a1');
+      final other = app.agentUnread.readTokenFor('other', 'a1')!;
+      expect(local, isNot(other));
+      expect(app.agentUnread.messageFor('m', 'a1'), 'This computer result.');
+      expect(
+        app.agentUnread.messageFor('other', 'a1'),
+        'Other computer result.',
+      );
+      await readFromDial('a1', other);
+      expect(app.agentUnread.readTokenFor('m', 'a1'), local);
+      expect(app.agentUnread.readTokenFor('other', 'a1'), other);
+    },
+  );
+
+  for (final prefixLength in [598, 599]) {
+    test(
+      'summary preview preserves emoji boundaries after $prefixLength units',
+      () async {
+        final prefix = List.filled(prefixLength, 'a').join();
+        await completed('a1', summary: '$prefix\u{1F680} More details.');
+        final message = app.agentUnread.messageFor('m', 'a1')!;
+        expect(message.length, lessThanOrEqualTo(600));
+        expect(message, prefixLength == 598 ? '$prefix\u{1F680}' : prefix);
+      },
+    );
+  }
 
   Future<void> question(String agentId) => app.handleEventForTest('m', {
     'type': 'commander_question',

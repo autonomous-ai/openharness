@@ -1,8 +1,9 @@
 import type { RegisteredSession } from './registry.js'
-import type { TerminalBackend } from './terminalBackend.js'
+import type { ReviewedSubmitPhase, TerminalBackend } from './terminalBackend.js'
 import { processIdentityKey, terminalInstanceId, terminalPlacementKey, terminalRouteKey } from './terminalRuntime.js'
 import {
   terminalActionNotStarted,
+  terminalActionPossiblyExecuted,
   type RuntimeValidation,
   type TerminalActionResult,
   type TerminalCaptureOptions,
@@ -134,6 +135,42 @@ export class TerminalBackendCoordinator {
       }
     }
     return { state: 'failed', reason: 'no terminal runtime could be leased' }
+  }
+
+  async acquireReviewedLease(session: RegisteredSession): Promise<TerminalReadResult<TerminalControlLease>> {
+    if (!session.active || !session.processIdentity) return { state: 'failed', reason: 'process identity unavailable' }
+    for (const runtime of this.orderedRuntimes(session)) {
+      const backend = this.backendFor(runtime)!
+      if (!backend.validateReviewed || !backend.submitReviewed) continue
+      if ((await backend.validateReviewed(runtime, { engine: session.engine, processIdentity: session.processIdentity })).state === 'alive')
+        return { state: 'succeeded', value: { agentId: session.agentId, runtime: structuredClone(runtime),
+          placementKey: terminalPlacementKey(runtime), generation: runtimeGeneration(session) } }
+    }
+    return { state: 'failed', reason: 'reviewed input unavailable' }
+  }
+
+  async submitReviewed(session: RegisteredSession, lease: TerminalControlLease, text: string,
+    current: () => boolean, ready: (phase: ReviewedSubmitPhase) => Promise<boolean>): Promise<TerminalActionResult> {
+    const runtime = structuredClone(lease.runtime), backend = this.backendFor(runtime)
+    if (!backend?.validateReviewed || !backend.submitReviewed) return terminalActionNotStarted('reviewed input unavailable')
+    const guard = async (phase: ReviewedSubmitPhase) => {
+      try {
+        return current() && this.backendFor(runtime) === backend &&
+          await ready(phase) && current() && this.backendFor(runtime) === backend &&
+          (await backend.validateReviewed!(runtime, { engine: session.engine, processIdentity: session.processIdentity! })).state === 'alive' &&
+          // Recheck observed busy state after the process probe, without rereading an empty
+          // composer after our own paste or mistaking our newly submitted turn for failure.
+          (phase === 'identity' || await ready('before-enter')) &&
+          current() && this.backendFor(runtime) === backend
+      } catch { return false }
+    }
+    if (!await guard('identity')) return terminalActionNotStarted('reviewed input changed')
+    let result: TerminalActionResult
+    try { result = await backend.submitReviewed(runtime, text, guard) }
+    catch { return terminalActionPossiblyExecuted('submission unconfirmed') }
+    // An observed replacement while the submit receipt was in flight is uncertainty, not success.
+    if (result.state === 'succeeded' && !await guard('identity')) return terminalActionPossiblyExecuted('process changed after submission')
+    return result
   }
 
   leaseIsCurrent(lease: TerminalControlLease, session: RegisteredSession): boolean {

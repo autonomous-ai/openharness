@@ -17,6 +17,8 @@ import {
 import { BYPASS_PERMISSION_FLAGS, PERMISSION_MODES, permissionModeApproves } from './engineLaunch.js'
 import { psEnv } from './childLocale.js'
 import { nativeProcessImages } from './nativeProcessImages.js'
+import type { ReviewedSubmitPhase } from './terminalBackend.js'
+import { TERMINAL_ACTION_SUCCEEDED, terminalActionNotStarted, terminalActionPossiblyExecuted, type TerminalActionResult } from './terminalTypes.js'
 export { captureTmuxPane, tmuxCaptureArgs } from './tmuxCapture.js'
 
 function cleanPaneTitle(title: string): string | null {
@@ -994,9 +996,9 @@ function tmuxEnter(pane: string): Promise<boolean> {
 }
 
 /** Stage text in a NAMED tmux buffer via stdin (avoids arg-length limits + the user's default buffer). */
-function tmuxLoadBuffer(name: string, content: string): Promise<boolean> {
+function tmuxLoadBuffer(name: string, content: string, timeoutMs?: number): Promise<boolean> {
   return new Promise((resolve) => {
-    const c = spawn('tmux', ['load-buffer', '-b', name, '-'])
+    const c = spawn('tmux', ['load-buffer', '-b', name, '-'], timeoutMs ? { timeout: timeoutMs, killSignal: 'SIGKILL' } : {})
     c.on('error', () => resolve(false))
     c.on('close', (code) => resolve(code === 0))
     c.stdin.on('error', () => { /* EPIPE if tmux died first — 'close' still resolves false */ })
@@ -1157,6 +1159,32 @@ export function sendToTmux(pane: string, text: string): Promise<boolean> {
     if (needsSettle) await sleep(Math.min(1500, INJECT_PASTE_DELAY_BASE_MS + Math.floor(content.length / 60)))
     return tmuxEnter(pane)
   })()
+}
+
+/** Reviewed input owns one locator, one paste and one Enter. Guards bound observed changes;
+ * tmux's final process-check/write race is not an atomic process-binding primitive. */
+export async function sendReviewedToTmux(pane: string, text: string, current: (phase: ReviewedSubmitPhase) => Promise<boolean>): Promise<TerminalActionResult> {
+  const content = text.replace(/[\r\n]+$/, '')
+  const buffer = `reviewed-${process.pid}-${++injectBufferSequence}`
+  let attempted = false
+  try {
+    if (!await current('before-paste')) return terminalActionNotStarted('recipient unavailable')
+    if (!await tmuxLoadBuffer(buffer, content, 2000)) return terminalActionNotStarted('buffer unavailable')
+    if (!await current('before-paste')) return terminalActionNotStarted('recipient unavailable before paste')
+    attempted = true
+    const pasted = await new Promise<boolean>(resolve => {
+      execFile('tmux', ['paste-buffer', '-t', pane, '-b', buffer, '-p', '-d'], { timeout: 2000 }, error => resolve(!error))
+    })
+    if (!pasted) return terminalActionPossiblyExecuted('paste unconfirmed')
+    if (content.length > INJECT_FASTPATH_MAXLEN || content.includes('\n'))
+      await sleep(Math.min(1500, INJECT_PASTE_DELAY_BASE_MS + Math.floor(content.length / 60)))
+    if (!await current('before-enter')) return terminalActionPossiblyExecuted('recipient unavailable after paste')
+    if (!await tmuxEnter(pane)) return terminalActionPossiblyExecuted('Enter unconfirmed')
+    if (!await current('identity')) return terminalActionPossiblyExecuted('recipient changed after Enter')
+    return TERMINAL_ACTION_SUCCEEDED
+  } catch {
+    return attempted ? terminalActionPossiblyExecuted('submission unconfirmed') : terminalActionNotStarted('preflight unavailable')
+  } finally { await tmuxDeleteBuffer(buffer) }
 }
 
 /** Send a control key (e.g. 'C-c' to interrupt) to a pane. */

@@ -8,7 +8,7 @@ export interface VisitCommand {
   machineId?: string
 }
 export interface VisitResult { ok: boolean; active: boolean; agentId?: string; label?: string; error?: string; note?: string }
-interface Visit { id: string; connId: string; machineId: string; agentId: string; label: string }
+interface Visit { id: string; connId: string; machineId: string; agentId: string; label: string; acknowledgedLabel?: string }
 interface Pending {
   visit: Visit; requestId: string; agentId: string
   resolve: (result: VisitResult) => void
@@ -25,6 +25,12 @@ export class WindowVisit {
     send: (connId: string, payload: Record<string, unknown>) => boolean
     timeoutMs?: number
   }) {}
+
+  /** Refuse a new target without changing the window's acknowledged return. */
+  refuse(visitId: string, error: string): VisitResult {
+    const label = this.visit?.id === visitId ? this.visit.acknowledgedLabel : undefined
+    return { ok: false, active: !!label, ...(label ? { label } : {}), error }
+  }
 
   async command(command: VisitCommand): Promise<VisitResult> {
     const fail = (error: string): VisitResult => ({ ok: false, active: false, error })
@@ -84,6 +90,7 @@ export class WindowVisit {
     }
     if (typeof payload.label === 'string') p.visit.label = payload.label.slice(0, 192)
     const active = payload.active
+    if (payload.ok && active && typeof payload.label === 'string') p.visit.acknowledgedLabel = payload.label
     this.finish({ ok: payload.ok, active,
       ...(payload.ok ? { agentId: p.agentId } : {}),
       ...(active ? { label: p.visit.label } : {}),

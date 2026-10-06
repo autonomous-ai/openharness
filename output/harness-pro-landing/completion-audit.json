@@ -1,0 +1,331 @@
+{
+  "schema": 1,
+  "updated_at": "2026-10-06T08:29:15.495204+00:00",
+  "goal_status": "in_progress",
+  "scope": "Harness Pro as an app-integrated agent input device. Preserve regular-device value, then earn the larger screen through better review, decisions, context handoff and spatial navigation. Browser pointing and typing are outside this iteration.",
+  "goal_is_not_satisfied_by": [
+    "A polished product page or fixture demo alone",
+    "Passing tests without exercising the intended hardware and application together",
+    "A terminal input receipt presented as completed work or a verified schedule"
+  ],
+  "baseline": {
+    "url": "https://www.autonomous.ai/harness-device",
+    "reviewed_on": "2026-10-06",
+    "note": "Current public product claims are a requirement inventory, not proof of implementation. The repository has retired the page's older herdr backend reference; the supported terminal backend is tmux."
+  },
+  "requirements": [
+    {
+      "id": "PRO-VOICE",
+      "requirement": "Dependable speech to the selected agent, including reviewed instructions",
+      "status": "partially_implemented",
+      "evidence": [
+        "cli/src/cable/voiceDraft.ts",
+        "cli/src/cable/reviewedInput.md",
+        ".harness/validation/harness-pro-continuity-2026-10-06/receipt.json",
+        ".harness/validation/harness-pro-readiness-2026-10-06/receipt.json",
+        ".harness/firmware-pro-readiness-20261006/native-validation.json"
+      ],
+      "remaining": "Read-only full reviewed-word recovery is implemented and tested across USB session replacement, with a metadata-only Pro restart bookmark. The host archive lasts 30 minutes and does not survive daemon restart; an unsaved bookmark cannot survive immediate power loss. Network transcription, microphone quality and physical latency still need a device trial. Language expansion is excluded.",
+      "latest_implementation": "Known capture blockers are explained before speaking; queued recording rechecks pinned machine/session/engine/host/generation. Existing recorded words keep their structural send path."
+    },
+    {
+      "id": "PRO-WORK",
+      "requirement": "Regular Task, Goal and Loop controls with honest availability and outcome",
+      "status": "partially_implemented",
+      "evidence": [
+        "cli/src/cable/reviewedInput.md",
+        ".harness/reviewed-input-20261006/root-integration.json",
+        ".harness/firmware-pro-everyday-20261006/validation.json",
+        ".harness/firmware-pro-acknowledgement-20261006/validation.json",
+        ".harness/validation/harness-pro-vendor-2026-10-06/summary.json",
+        ".harness/validation/harness-pro-readiness-2026-10-06/receipt.json",
+        ".harness/firmware-pro-readiness-20261006/native-validation.json"
+      ],
+      "remaining": "The native checks reject known blockers before speech and retain exact local/recipient guards through queued actions. Authoritative negotiated capability/process readiness remains absent. Installed Claude Goal acceptance and Loop recognition used a scripted localhost provider; Codex acceptance, live inference, Goal lifecycle and Loop scheduling remain unverified. No schedule was created.",
+      "latest_implementation": "Task/Goal/Loop remain visible. Known shell/offline/link/question states block new capture; recent busy state additionally blocks Goal/Loop while Task/Carry remain usable for steering. This is a negative-evidence filter, not a negotiated readiness promise."
+    },
+    {
+      "id": "PRO-FLEET",
+      "requirement": "Browse agents and machines, with explicit desktop visits and a truthful Return path",
+      "status": "implemented_not_physically_verified",
+      "evidence": [
+        "interaction-design.json",
+        ".harness/firmware-pro-carry-20261006/",
+        ".harness/validation/harness-pro-readiness-2026-10-06/receipt.json",
+        ".harness/firmware-pro-readiness-20261006/native-validation.json",
+        ".harness/validation/harness-pro-flow-2026-10-06/receipt.json",
+        ".harness/firmware-pro-flow-20261006/native-validation.json",
+        ".harness/validation/harness-pro-latest-2026-10-06/receipt.json",
+        ".harness/firmware-pro-latest-20261006/native-validation.json",
+        ".harness/validation/harness-pro-carry-journey-2026-10-06/receipt.json",
+        ".harness/firmware-pro-carry-journey-20261006/native-validation.json"
+      ],
+      "remaining": "Exercise local and remote machines with the physical device. Reviewed Goal/Loop currently rejects remote recipients rather than routing through an unverified path.",
+      "latest_implementation": "Current-pane Summary offers Latest output directly; other-pane/legacy Summary keeps Open on desktop. Frozen contact/worker identity refuses stale actions. The actual app preserves original Return across repeated peeks and another alert, restoring the same pane/session/terminal/renderer/controllers and 240.25 reading offset with zero input. Carry now reuses acknowledged visits; choosing the original pane restores its bookmark before ending the visit. Cancellation/current-pane choice preserve a valid Return."
+    },
+    {
+      "id": "PRO-DECISIONS",
+      "requirement": "Read and answer agent questions deliberately, without losing or duplicating uncertain answers",
+      "status": "implemented_not_physically_verified",
+      "evidence": [
+        ".harness/firmware-pro-question-recovery-20261006/",
+        ".harness/validation/harness-pro-recovery-2026-10-06/receipt.json",
+        ".harness/validation/harness-pro-everyday-2026-10-06/attention-reader-final.json",
+        ".harness/firmware-pro-question-attention-20261006/validation.json",
+        ".harness/validation/harness-pro-attention-2026-10-06/receipt.json",
+        ".harness/validation/harness-pro-question-attention-2026-10-06/summary.json",
+        ".harness/validation/harness-pro-readiness-2026-10-06/receipt.json",
+        ".harness/firmware-pro-readiness-20261006/native-validation.json",
+        ".harness/validation/harness-pro-flow-2026-10-06/receipt.json",
+        ".harness/firmware-pro-flow-20261006/native-validation.json",
+        ".harness/validation/harness-pro-update-words-2026-10-06/receipt.json"
+      ],
+      "remaining": "Unanswered questions now survive read acknowledgments, unread refreshes and USB-session replacement. Host catalog/review receipts are bounded to 64 agent IDs and the daemon lifetime. Pro keeps 72 attention cards, protects current reading and retained answers, admits new questions on overflow and points older attention to Harness. While an answer is pending, only Review answer opens it; new Answer shortcuts wait for exact resolution or local Close. Actual native app transport and firmware replay use synthetic questions, not vendor inference or physical USB. Real app-question, physical interruption and runtime-heap trials remain.",
+      "latest_implementation": "Multi-question packets now support local Previous and correction without refetching or losing later choices/spoken answers. Back and right-swipe agree, and only final Send answers transmits the packet. Stale/pending/uncertain guards are replay-tested."
+    },
+    {
+      "id": "PRO-CARRY",
+      "requirement": "Carry a passage to another agent, with pinned source and recipient and readable review",
+      "status": "implemented_not_physically_verified",
+      "evidence": [
+        ".harness/firmware-pro-carry-20261006/",
+        "interaction-design.json",
+        ".harness/validation/harness-pro-everyday-2026-10-06/attention-reader-final.json",
+        ".harness/validation/20261006T024227.422521Z-24973/receipt.json",
+        ".harness/validation/harness-pro-carry-journey-2026-10-06/receipt.json",
+        ".harness/firmware-pro-carry-journey-20261006/native-validation.json",
+        ".harness/validation/harness-pro-spoken-find-2026-10-06/receipt.json",
+        ".harness/firmware-pro-spoken-find-20261006/native-validation.json"
+      ],
+      "remaining": "Physical cable/touch, microphone, transcription reliability, latency and vendor execution remain unverified. The app journey substitutes a fixed transcript and owned dispatch callback. Picker reach is the active tab's known16 pane rows, not fleet search. Full Carry attachment is not restored by draft-page recovery after power loss.",
+      "latest_implementation": "Quiet current-tab recipient picker; cancellation and same-recipient choice preserve the tray and valid Return. Exact tray/host/target/focus pins guard contact and queued work. Actual app complete Carry with reviewed replacement words, one dispatch and exact Return passes."
+    },
+    {
+      "id": "PRO-SPATIAL",
+      "requirement": "Use the bigger screen for pane arrangement, reading, Open/Return and optional gestures",
+      "status": "implemented_not_physically_verified",
+      "evidence": [
+        "interaction-design.json",
+        ".harness/validation/harness-pro-reader-2026-10-06/receipt.json",
+        ".harness/firmware-pro-reader-20261006/native-validation.json",
+        ".harness/validation/harness-pro-update-words-2026-10-06/receipt.json",
+        ".harness/validation/harness-pro-latest-2026-10-06/receipt.json",
+        ".harness/firmware-pro-latest-20261006/native-validation.json",
+        ".harness/validation/harness-pro-carry-journey-2026-10-06/receipt.json",
+        ".harness/firmware-pro-carry-journey-20261006/native-validation.json",
+        ".harness/validation/harness-pro-spoken-find-2026-10-06/receipt.json",
+        ".harness/firmware-pro-spoken-find-20261006/native-validation.json"
+      ],
+      "remaining": "Measure actual touch recognition, hand comfort, reading and accidental activation on the final enclosure. Five-contact driver support does not establish laptop-trackpad quality.",
+      "latest_implementation": "Existing map/list geometry gains a temporary Choose a pane purpose and one frozen-source line. Ten native layouts independently reviewed. Actual app Carry/Return preserves exact fractional offset and six object identities; no additional Home control. Find spoken words in current output, use Previous/Next or swipe to choose a match, switch explicitly to By line then Range, and Carry the exact passage. Old actions are refused after a computer or pane change, including A-to-B-to-A. Cancellation ends search; refusal requires explicit Try again. No-match permits another phrase. No additional Home control or implicit Return bookmark."
+    },
+    {
+      "id": "PRO-STATUS",
+      "requirement": "Useful running status, results, time and daily spending",
+      "status": "partially_implemented",
+      "evidence": [
+        "cli/src/cable/metrics.md",
+        "cli/src/cable/windowMetrics.ts",
+        "desktop/lib/usage/ledger/device_usage.dart",
+        ".harness/firmware-pro-everyday-20261006/validation.json",
+        ".harness/validation/harness-pro-readiness-2026-10-06/receipt.json",
+        ".harness/firmware-pro-readiness-20261006/native-validation.json",
+        ".harness/validation/harness-pro-reader-2026-10-06/receipt.json",
+        ".harness/firmware-pro-reader-20261006/native-validation.json",
+        ".harness/validation/harness-pro-update-words-2026-10-06/receipt.json"
+      ],
+      "remaining": "Observed running-time parity is restored with a quiet native suffix and exact disconnect/host/session/stale reset behavior. This is device-observed wall time, not engine compute time. Spending is still local/partial; physical cable verification remains.",
+      "latest_implementation": "Suppress the elapsed-time suffix when a known capture blocker needs the footer; keep one concise reason visible.",
+      "reader_update": "Desktop captures the actual completion summary with its unread occurrence and sends those retained words through existing app_unread.text. Nonempty result text never borrows newer history; restored previews fit the native 239-byte field and 8,192-byte escaped frame. Empty legacy text still falls back to history; no full-answer retrieval claim."
+    },
+    {
+      "id": "PRO-SOUND",
+      "requirement": "Quiet notification tones with clear notification-only mute",
+      "status": "implemented_not_physically_verified",
+      "evidence": [
+        "https://www.autonomous.ai/harness-device",
+        "desktop/lib/settings/sections/cabled_device_card.dart",
+        "interaction-design.json",
+        ".harness/firmware-pro-acknowledgement-20261006/validation.json"
+      ],
+      "remaining": "Native mute now explicitly says Notifications. Verify actual chime level and mute on the prototype. Spoken replies remain optional, unintegrated branch work; do not claim them as baseline."
+    },
+    {
+      "id": "PRO-PAGE",
+      "requirement": "A continuous product story with all features discoverable through scrolling",
+      "status": "implemented_and_previewed",
+      "evidence": [
+        "website/src/app/pro/",
+        ".harness/validation/harness-pro-recovery-2026-10-06/receipt.json",
+        ".harness/validation/harness-pro-continuity-2026-10-06/web-recovery-review.json"
+      ],
+      "remaining": "Continuous product page remains local, unpublished and fixture-driven. Latest source changes improve native Desktop/cable receipt text; website UI was unchanged. Native app screenshots are transport/reading evidence, not physical-device screenshots."
+    },
+    {
+      "id": "PRO-HARDWARE",
+      "requirement": "Respect the final enclosure and existing display/electronics",
+      "status": "design_respected_hardware_unverified",
+      "evidence": [
+        "output/cad/harness-pro9-2026-10-05/geometry-check.json",
+        ".harness/firmware-pro-question-recovery-20261006/",
+        ".harness/firmware-pro-everyday-20261006/validation.json",
+        ".harness/firmware-pro-acknowledgement-20261006/validation.json",
+        ".harness/firmware-pro-question-attention-20261006/validation.json",
+        ".harness/validation/harness-pro-readiness-2026-10-06/receipt.json",
+        ".harness/firmware-pro-readiness-20261006/native-validation.json",
+        ".harness/validation/harness-pro-flow-2026-10-06/receipt.json",
+        ".harness/firmware-pro-flow-20261006/native-validation.json",
+        ".harness/validation/harness-pro-reader-2026-10-06/receipt.json",
+        ".harness/firmware-pro-reader-20261006/native-validation.json",
+        ".harness/validation/harness-pro-latest-2026-10-06/receipt.json",
+        ".harness/firmware-pro-latest-20261006/native-validation.json",
+        ".harness/validation/harness-pro-carry-journey-2026-10-06/receipt.json",
+        ".harness/firmware-pro-carry-journey-20261006/native-validation.json",
+        ".harness/validation/harness-pro-spoken-find-2026-10-06/receipt.json",
+        ".harness/firmware-pro-spoken-find-20261006/native-validation.json"
+      ],
+      "remaining": "Prototype not connected. Image 8,115,040 bytes leaves 142,496 bytes in the unchanged slot; static BSS 424,392 bytes. Runtime memory, acoustics, touch and comfort remain unverified.",
+      "latest_implementation": "Clean development build 5c4a5efe571779ce53ec2f105d22e23cf9d04f1e; image delta +2,224 bytes and static BSS delta +0 versus eb6e061584. Existing SDK/config retained."
+    }
+  ],
+  "latest_verified_native_source": "5c4a5efe571779ce53ec2f105d22e23cf9d04f1e",
+  "latest_verified_native_image_sha256": "24e99ee0657c5b705c51dbe25cf3ff34560dd47b6b4da188088673e56687db72",
+  "terminal_integration": {
+    "receipt": ".harness/validation/20261006T061627.822940Z-67283/receipt.json",
+    "inventory": ".harness/validation/harness-pro-owner-2026-10-06/real-engine-inventory.json",
+    "passed": 18,
+    "unavailable_rows": 11,
+    "actual_installed_processes": [
+      "Claude",
+      "Codex",
+      "OpenCode",
+      "Grok"
+    ],
+    "scope": "Process discovery, owned lifecycle and private terminal fixtures. No vendor task, Goal or Loop acceptance tested. Versions inventoried after the run; not a per-process launch attestation."
+  },
+  "publication": {
+    "merged": false,
+    "published": false,
+    "flashed": false
+  },
+  "preview": "http://127.0.0.1:3108/pro",
+  "constraints": [
+    "No Vietnamese expansion, per user response to the interface proposal on 2026-10-06. Do not post the prepared interface issue.",
+    "Continue core English interaction and recovery; preserve unrelated existing functionality."
+  ],
+  "latest_iteration_receipt": ".harness/validation/harness-pro-spoken-find-2026-10-06/receipt.json",
+  "optional_explorations": [
+    {
+      "feature": "Spoken replies",
+      "status": "branch_prototype_only",
+      "baseline_required": false,
+      "note": "Do not treat offline voice auditions or native playback as integrated host replies. Default interaction remains quiet voice input and text results."
+    }
+  ],
+  "vendor_command_acceptance": {
+    "receipt": ".harness/validation/harness-pro-vendor-2026-10-06/summary.json",
+    "engine": "Claude Code 2.1.280",
+    "scope": "Goal exact objective accepted; Loop built-in command expansion recognized. Production reviewed cable path, real vendor process, scripted localhost provider. No paid model, scheduler, native app or physical device in these cases."
+  },
+  "native_app_socket": {
+    "receipt": ".harness/validation/20261006T081726.689632Z-21398/receipt.json",
+    "summary": ".harness/validation/harness-pro-spoken-find-2026-10-06/native-app-review.json",
+    "scope": "Find spoken words in current output, use Previous/Next or swipe to choose a match, switch explicitly to By line then Range, and Carry the exact passage. Old actions are refused after a computer or pane change, including A-to-B-to-A. Cancellation ends search; refusal requires explicit Try again. No-match permits another phrase. No additional Home control or implicit Return bookmark.",
+    "qualification": "No prototype connected: no physical touch, microphone, recognition reliability, latency or comfort measurement. App uses a fixed transcript at the existing service boundary and emulated cable. Native production callbacks and actual app/socket tests are separate evidence. Search is literal, case-insensitive and limited to retained output. It does not create a Return bookmark. Static linked memory and flash size are measured; runtime heap, stacks and physical scheduling are unverified. No flash, shared installation, push, merge or publication performed.",
+    "previous_carry_evidence": ".harness/validation/harness-pro-carry-journey-2026-10-06/native-app-review.json"
+  },
+  "latest_validation_status": {
+    "native_scoped": "All nine registered Pro scopes passed in one frozen-source run: 77 touch, controls/app, 31 Visit, 12,144 notice merge, 305 readiness plus four round greetings, 71 reader, 31 Carry and 27 Find cases. Actual Pro voice, both round touch variants, recovery and seven rendered states also passed. 38 captured host frames exercised 16 production JSON/UI callbacks. The expected pre-fix failure and one external replay-adapter compile failure are retained; the first voice invocation covered round, and the corrected --pro invocation supplies Pro evidence.",
+    "native_target_build": "Passed at exact clean source 5c4a5efe571779ce53ec2f105d22e23cf9d04f1e; 223.012 s configure/build.",
+    "host_focused": "227 CLI and 22 Desktop tests, peer TypeScript and Dart analysis passed. Only two opt-in app integration fixtures changed; host production unchanged.",
+    "native_app": "Actual native app Find/no-match/retry/cancel/stale-focus/match/range/Carry passed; same six object identities, zero new Find dispatches and zero terminal input. Normal app artifact restored.",
+    "full_cli": {
+      "status": "passed",
+      "passed": 9195,
+      "failed": 0,
+      "skipped": 59,
+      "files_passed": 514,
+      "files_skipped": 12,
+      "receipt": ".harness/validation/20261006T061627.822940Z-67283/receipt.json",
+      "seconds": 642.958,
+      "prior_failed_run": ".harness/validation/harness-pro-attention-2026-10-06/cli-failure-analysis.json",
+      "qualification": "Prior uninterrupted full-suite pass; all production CLI inputs remain unchanged. This iteration changes only the opt-in peer fixture, separately typechecked and exercised by the fresh native app journey. Do not represent the old whole-CLI fingerprint as the new fixture fingerprint."
+    },
+    "physical_device": "not tested",
+    "boot_memory_audit": {
+      "evidence": ".harness/firmware-pro-spoken-find-20261006/target-measurement.json",
+      "conclusion": "Static BSS 424,392 bytes; delta +0. No runtime memory claim."
+    },
+    "native_independent_verification": {
+      "source_inputs": 373,
+      "artifacts": 157,
+      "receipt": ".harness/validation/harness-pro-spoken-find-2026-10-06/native-bundle-independent-verification.json"
+    },
+    "host_independent_verification": {
+      "source_inputs_at_freeze": 14523,
+      "task_files": 2,
+      "source_manifest": ".harness/validation/harness-pro-spoken-find-2026-10-06/source-freeze.json",
+      "review": ".harness/validation/harness-pro-spoken-find-2026-10-06/source-review.json",
+      "previous_full_suite_production_inputs_unchanged": true
+    }
+  },
+  "latest_compiled_native_source": "5c4a5efe571779ce53ec2f105d22e23cf9d04f1e",
+  "hardware_availability": {
+    "status": "not_connected",
+    "user_instruction": "continue software work",
+    "waiting": false
+  },
+  "native_source_verification": ".harness/validation/harness-pro-spoken-find-2026-10-06/native-bundle-independent-verification.json",
+  "receipt_text_limits": [
+    "Occurrence-bound wording applies to supplied retained text; legacy absent text still uses history.",
+    "Native notices retain 239 UTF-8 bytes, names 39; summaries may be a bounded prefix.",
+    "Cable metadata and native dedupe still use agentId. The daemon now refuses observed duplicate owners for its lifetime; undiscovered collisions and loss of owner history across daemon restart remain limitations.",
+    "Reconnect check covers interrupted app transport within the same running app, not durable unread recovery across app restart."
+  ],
+  "owner_routing": {
+    "status": "implemented and required software checks passed",
+    "scope": "Observed ownership during one daemon lifetime; same wire format.",
+    "refusal": "Open this harness in the app.",
+    "preserved": [
+      "Exact captured words",
+      "Unique machine/token unread acknowledgement",
+      "Previously acknowledged Return",
+      "Actual submitted/uncertain delivery receipt"
+    ],
+    "limitations": [
+      "Cross-restart owner persistence not implemented",
+      "Undiscovered conflicts cannot be inferred from agent-only IDs",
+      "Return can restore an ambiguous original Desktop pane while Pro waits for that omitted pane",
+      "Conflicting ownership remains covered by framed/unit tests; the fresh native app journey exercises uniquely owned panes. Physical behavior unverified."
+    ]
+  },
+  "next_experience_audit": null,
+  "carry_journey": {
+    "recipient_scope": "Current app tab; up to 16 known pane rows; already-open remote panes possible.",
+    "explicit_recording": true,
+    "review_required": true,
+    "valid_return_preserved": true,
+    "actual_app": ".harness/validation/harness-pro-carry-journey-2026-10-06/native-run-1/native-carry.json",
+    "product_review": ".harness/validation/harness-pro-carry-journey-2026-10-06/product-audit.json",
+    "limits": "Fixed transcript at the existing transcription service boundary and one counted host dispatch into owned memory; no microphone, recognition reliability, latency or vendor acceptance claim. Cable is emulated. Firmware callbacks/queued-worker fixtures and 720px renders are separate from this native app test. Carry picker lists the active app tab's known panes, maximum 16, including already-open remote panes; it is not full-fleet search or negotiated capture readiness."
+  },
+  "software_handoff": {
+    "status": "complete_for_this_pass",
+    "new_feature_scope_closed": true,
+    "hardware_pending": true,
+    "broader_goal_claimed_complete": false
+  },
+  "spoken_find": {
+    "behavior": "Find spoken words in current output, use Previous/Next or swipe to choose a match, switch explicitly to By line then Range, and Carry the exact passage. Old actions are refused after a computer or pane change, including A-to-B-to-A. Cancellation ends search; refusal requires explicit Try again. No-match permits another phrase. No additional Home control or implicit Return bookmark.",
+    "actual_app": ".harness/validation/harness-pro-spoken-find-2026-10-06/native-run-1/native-spoken-find.json",
+    "native_replay": ".harness/firmware-pro-spoken-find-20261006/native-validation.json",
+    "screens": ".harness/firmware-pro-spoken-find-20261006/render/contact-sheet.png",
+    "limits": [
+      "No prototype connected: no physical touch, microphone, recognition reliability, latency or comfort measurement.",
+      "App uses a fixed transcript at the existing service boundary and emulated cable. Native production callbacks and actual app/socket tests are separate evidence.",
+      "Search is literal, case-insensitive and limited to retained output. It does not create a Return bookmark.",
+      "Static linked memory and flash size are measured; runtime heap, stacks and physical scheduling are unverified.",
+      "No flash, shared installation, push, merge or publication performed."
+    ]
+  }
+}

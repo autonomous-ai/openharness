@@ -22,17 +22,40 @@ import { readCompanionIdentity, sameCompanion, type CompanionIdentity, type Comp
 //   3. SAY NOTHING WHEN NOTHING CHANGED. That is what keeps the link idle during a long turn, and it is
 //      why rule 2 has to exist at all.
 
-import { CableDecoder, CableType, encodeCableFrame } from './cableFrame.js'
+import { CABLE_MAX_PAYLOAD, CableDecoder, CableType, encodeCableFrame } from './cableFrame.js'
 import { DialLog } from './dialLog.js'
 import { FirmwareTransfer } from './fwPush.js'
 import { SerialLink, findDialPort } from './serial.js'
 import { PassageCarry, withCarriedPassage, type CarryRead } from './passageCarry.js'
-import { VoiceDraft, type DraftPin } from './voiceDraft.js'
+import { VoiceDraft, draftOwner, type VoiceDraftArchives, type DraftOwner, type DraftPin } from './voiceDraft.js'
+import type { PreparedReview, ReviewedIntent } from '../lib/reviewedInput.js'
+import { readDeviceUsage, type MetricsResult } from './windowMetrics.js'
 import { QuestionInbox, type ReviewedAnswer, type AnswerReceipt, type QuestionSpeech } from './questionInbox.js'
 import { notificationReadToken, type UnreadNotification } from './notificationRead.js'
 
 /** Bumped when the VOCABULARY changes. Separate from the frame version, which is the envelope. */
 export const CABLE_PROTO_VERSION = 3   // 3: + question.close (a question answered on another client)
+
+const NOTIFICATION_LIMIT = 8
+// Reserve the envelope and commas before allocating each row. JSON escaping can
+// use six bytes for one character, even when the device's text buffer is small.
+const NOTIFICATION_ROW_BYTES = Math.floor((CABLE_MAX_PAYLOAD
+  - Buffer.byteLength(JSON.stringify({ t: 'notif.replace', items: [] }))
+  - (NOTIFICATION_LIMIT - 1)) / NOTIFICATION_LIMIT)
+
+/** A valid prefix fitting both a native char buffer and the serialized row. */
+function notificationPrefix(text: string, byteCap: number, jsonCap = Infinity): string {
+  let prefix = '', bytes = 0, jsonBytes = 0
+  for (const character of text) {
+    // cJSON strings cannot carry an embedded NUL; never leave a partial scalar.
+    if (character === '\0' || (character.length === 1 && /[\uD800-\uDFFF]/.test(character))) break
+    const size = Buffer.byteLength(character)
+    const encoded = Buffer.byteLength(JSON.stringify(character)) - 2
+    if (bytes + size > byteCap || jsonBytes + encoded > jsonCap) break
+    prefix += character; bytes += size; jsonBytes += encoded
+  }
+  return prefix
+}
 
 const PING_EVERY_MS = 5_000
 /** No bytes of any kind for this long → the handle is dead. Longer than the dial's own 15 s window, so a
@@ -267,6 +290,7 @@ export interface CableHost {
   describe(agentId: string): { name: string; engine: string; machine: string } | undefined
   activityText?(agentId: string): Promise<string | null>
   sendTurn(agentId: string, text: string): void | { ok: true } | { ok: false; machine?: string; reason?: string }
+  prepareReviewed?(agentId: string, intent: ReviewedIntent): Promise<PreparedReview>
   stopTurn(agentId: string): void
   /**
    * The user answered a `question`. `answers` is keyed by the QUESTION keys the daemon itself asked with
@@ -301,6 +325,8 @@ export interface CableHost {
    * that took a morning to explain. Optional, so a host that cannot answer simply says nothing.
    */
   knows?(agentId: string): boolean
+  /** Internal owner conflict, distinct from an off-tab or not-yet-listed agent. */
+  isAgentAmbiguous?(agentId: string): boolean
   /** A finger moving on the dial's glass, on its way to whatever window is open on this computer. */
   scrolled(phase: 'down' | 'move' | 'up', dy: number, velocity: number): void
   updateAgent(agentId: string, model?: string, effort?: string): void
@@ -321,6 +347,7 @@ export interface CableHost {
   selectPassage?(command: SelectionCommand): Promise<SelectionResult>
   visit?(command: VisitCommand): Promise<VisitResult>
   form?(command: FormCommand): Promise<FormResult>
+  metrics?(): Promise<MetricsResult>
   /** The runtime model/effort catalog for one agent, as opaque profile ids the dial groups and shows. */
   listModels(agentId: string): Promise<string[]>
   /** One agent's last turn summaries, newest first — what a reattached dial needs to redraw its tiles. */
@@ -487,6 +514,12 @@ function readSettings(value: unknown): DeviceSettings | undefined {
 
 export class CableSession {
   private link: CablePort | null = null
+  /** Old readers/close callbacks must not mutate a replacement link. */
+  private portToken?: object
+  private helloToken?: object
+  private helloSequence = 0
+  private helloIdentity?: { mac: string; fw: string; machineId: string }
+  private reviewOwner?: DraftOwner
   private decoder = new CableDecoder()
   private timer: NodeJS.Timeout | null = null
   private greetedMac: string | null = null
@@ -574,6 +607,8 @@ export class CableSession {
 
   /** Voice capture in flight: PCM chunks as they arrive, plus what `voice.begin` said about them. */
   private voice: { agentId?: string; cmd?: string; lang: string; rate: number; chunks: Buffer[]; bytes: number;
+    owner?: DraftOwner;
+    reviewed?: Promise<PreparedReview>;
     selectionId?: string; selection?: Promise<SelectionResult>;
     carry?: CarryRead;
     question?: { pin?: QuestionSpeech };
@@ -587,10 +622,12 @@ export class CableSession {
     select: command => this.host.selectPassage?.(command) ??
       Promise.resolve({ ok: false, error: 'Update Harness to carry text.' }),
     name: async id => (await this.host.listAgents()).find(a => a.id === id)?.name ?? 'Harness',
+    isAgentAmbiguous: id => this.isAgentAmbiguous(id),
   })
-  private readonly voiceDraft = new VoiceDraft()
+  private readonly voiceDraft: VoiceDraft
   private voiceDraftCreation?: { uploadId: string; id: string }
-  private readonly questionInbox = new QuestionInbox()
+  private readonly questionInbox: QuestionInbox
+  private readonly ownsQuestions: boolean
   private voiceGeneration = 0
   private voiceUploadId = ''
 
@@ -599,7 +636,32 @@ export class CableSession {
     /** The dial's console, as a file: framed device logs and this side's `cable:` events, one day each. */
     private readonly dialLog: DialLog,
     private readonly openPort: PortOpener = openDialPort,
-  ) {}
+    /** A fleet owns retention across USB re-enumeration; standalone sessions own their own store. */
+    private readonly draftArchives?: VoiceDraftArchives,
+    /** Questions and answer receipts belong to the host, not a disposable USB port. */
+    questions?: QuestionInbox,
+  ) {
+    this.voiceDraft = new VoiceDraft(undefined, draftArchives)
+    this.questionInbox = questions ?? new QuestionInbox()
+    this.ownsQuestions = !questions
+  }
+
+  private get questions(): QuestionInbox {
+    this.questionInbox.bindOwner(this.host.localMachine().id)
+    return this.questionInbox
+  }
+
+  private isAgentAmbiguous(agentId: string): boolean {
+    if (this.host.isAgentAmbiguous?.(agentId) !== true) return false
+    // A public ID with two owners cannot remain a re-anchoring target.
+    if (this.desiredFocus === agentId) this.desiredFocus = ''
+    if (this.expectedAppFocusEcho === agentId) {
+      this.expectedAppFocusEcho = ''
+      this.expectedAppFocusEchoUntil = 0
+    }
+    this.activityReads.delete(agentId)
+    return true
+  }
 
   /**
    * Every `cable:` event goes two ways: to the daemon's console as before, and into the dial's log with a
@@ -625,8 +687,12 @@ export class CableSession {
     this.stopped = true
     if (this.timer) clearInterval(this.timer)
     this.timer = null
+    this.detachVoiceDraft()
     await this.link?.close('daemon stopping')
     this.link = null
+    this.portToken = undefined
+    if (!this.draftArchives) this.voiceDraft.forgetAll()
+    if (this.ownsQuestions) this.questionInbox.clear()
   }
 
   // ── port lifecycle ────────────────────────────────────────────────────────────────────────────────
@@ -637,6 +703,7 @@ export class CableSession {
   }
 
   private async tick(): Promise<void> {
+    this.voiceDraft.expire()
     if (this.stopped) return
     // The firmware beats once a minute; the gap is marked in the dial's own log, where it is read.
     this.dialLog.tick(this.isConnected)
@@ -660,8 +727,9 @@ export class CableSession {
       this.foreignRetryAt = Date.now() + 60_000
       this.log(`cable: ${this.link.path} is not a Harness dial (${this.bytesSinceOpen} B, no frames) — releasing it`)
       this.reportForeign(this.link.path, `${this.bytesSinceOpen} B, no frames`)
-      await this.link.close('not ours')
-      this.link = null
+      const link = this.link
+      await link.close('not ours')
+      if (this.link === link) this.link = null
       return
     }
     // Rule 2. The read never fails on a dead handle, so silence is the only symptom there is.
@@ -673,8 +741,9 @@ export class CableSession {
       this.log('cable: silent, reopening the port')
       // close() runs onClosed, which is where onDialGone fires — one path for "the dial is not there",
       // whether the cable was pulled or the far end simply stopped answering.
-      await this.link.close('silence')
-      this.link = null
+      const link = this.link
+      await link.close('silence')
+      if (this.link === link) this.link = null
       return
     }
     // The cadence is the contract: the dial reads a gap as absence, and the tick that watches for that
@@ -744,14 +813,34 @@ export class CableSession {
     if (Date.now() - this.openAt < REOPEN_EVERY_MS) return
     this.opening = true
     this.openAt = Date.now()
+    // isOpen can become false before its close callback runs. Revoke the old
+    // sender now, including while the replacement opener is pending or times out.
+    this.detachVoiceDraft()
+    this.helloIdentity = undefined
+    this.helloToken = undefined
+    this.reviewOwner = undefined
+    const token = this.portToken = {}
+    // Serial readers may start before the opener's promise resolves. Keep the first
+    // greeting, but never let an uninstalled/abandoned reader act on another link.
+    let installed = false, earlyBytes = 0
+    let early: Buffer[] = []
     let opened: CablePort | null
     try {
       // A late port must not be left running: the attempt we gave up on can still succeed afterwards, and
       // an unowned open port with a live read loop is exactly the stranded reader this guard exists to
       // prevent. So the loser of the race is closed rather than dropped.
       const attempt = this.openPort(
-        (chunk) => this.onBytes(chunk),
-        (why) => this.onClosed(why),
+        (chunk) => {
+          if (this.portToken !== token) return
+          if (installed) this.onBytes(chunk)
+          else if ((earlyBytes += chunk.length) <= 16 * 1024) early.push(Buffer.from(chunk))
+          else early = []
+        },
+        (why) => {
+          if (this.portToken !== token) return
+          if (installed) this.onClosed(why)
+          else this.portToken = undefined
+        },
       )
       let timer: ReturnType<typeof setTimeout> | undefined
       const expiry = new Promise<never>((_, reject) => {
@@ -766,6 +855,7 @@ export class CableSession {
         clearTimeout(timer)
       }
     } catch (err) {
+      if (this.portToken === token) this.portToken = undefined
       // A port that another process holds is the ordinary case, not a fault: esptool, a serial monitor,
       // or a second daemon. Say so and try again on the next tick.
       this.log(`cable: cannot open the dial: ${(err as Error).message}`)
@@ -773,11 +863,13 @@ export class CableSession {
     } finally {
       this.opening = false
     }
-    if (!opened) return   // no dial plugged in — this daemon's resting state
+    if (!opened) { if (this.portToken === token) this.portToken = undefined; return }
+    if (this.portToken !== token || !opened.isOpen) { await opened.close('closed while opening'); return }
     if (this.stopped) { await opened.close('stopped while opening'); return }
     // Nothing reaches this line holding a live port — tick() only calls in when the link is closed — but
     // assigning over one would strand it exactly as above, and the cost of being sure is one branch.
     if (this.link) await this.link.close('replaced')
+    if (this.portToken !== token || !opened.isOpen || this.stopped) { await opened.close('abandoned while replacing'); return }
     // A port that earned the verdict once is presumed foreign until it proves otherwise, but the evidence
     // is gathered fresh every time: a dial that was replaced behind the same path gets a clean hearing.
     if (opened.path !== this.foreignPort) this.foreignPort = null
@@ -789,6 +881,9 @@ export class CableSession {
     this.decoder.reset()
     this.greetedMac = null
     this.greetedFw = null
+    this.helloIdentity = undefined
+    this.helloToken = undefined
+    this.reviewOwner = undefined
     this.companionAttempt = undefined
     this.companionEventSeen = undefined
     this.appFocusGeneration += 1
@@ -809,16 +904,18 @@ export class CableSession {
     this.offered.clear()
     this.lastRx = Date.now()
     this.log(`cable: open on ${opened.path}`)
+    installed = true
+    for (const chunk of early) if (this.portToken === token) this.onBytes(chunk)
+    early = []
   }
 
   private onClosed(why: string): void {
     this.log(`cable: closed (${why})`)
-    this.cancelFormVoice()
-    this.cancelSearchVoice()
-    this.passageCarry.clear()
-    this.voiceDraft.clear()
-    this.voiceDraftCreation = undefined
-    this.voiceCarryId = undefined
+    this.detachVoiceDraft()
+    this.portToken = undefined
+    this.helloToken = undefined
+    this.helloIdentity = undefined
+    this.reviewOwner = undefined
     this.host.onDialGone?.()
     this.activityReads.clear()
     this.activityRefreshAt = 0
@@ -840,19 +937,41 @@ export class CableSession {
     this.expectedAppFocusEchoUntil = 0
     this.lastAgentsKey = ''
     this.lastMachinesKey = ''
-    this.voice = null
-    this.voiceGeneration++
     // The dial keeps its running image; the half-written slot is erased again by the next accepted offer.
     this.transfer?.finish('interrupted by the port closing')
     this.transfer = null
   }
 
+  private detachVoiceDraft(): void {
+    this.cancelFormVoice()
+    this.cancelSearchVoice()
+    this.passageCarry.clear()
+    this.voiceDraft.detach()
+    this.voiceDraftCreation = undefined
+    this.voiceCarryId = undefined
+    void this.voice?.reviewed?.then(prepared => { if (prepared.ok) prepared.cancel() })
+    this.voice = null
+    this.voiceGeneration++
+  }
+
+  private currentDraftOwner(): DraftOwner | undefined {
+    if (this.helloIdentity && this.helloIdentity.machineId !== this.host.localMachine().id) {
+      this.detachVoiceDraft()
+      this.helloIdentity = undefined
+      this.helloToken = undefined
+      this.reviewOwner = undefined
+    }
+    return this.link?.isOpen ? this.reviewOwner : undefined
+  }
+
   // ── inbound ───────────────────────────────────────────────────────────────────────────────────────
 
   private onBytes(chunk: Buffer): void {
+    const token = this.portToken
     this.lastRx = Date.now()
     this.bytesSinceOpen += chunk.length
     this.decoder.feed(chunk, (frame) => {
+      if (this.portToken !== token) return
       this.framesSinceOpen += 1
       if (frame.type === CableType.Json) {
         let msg: Message
@@ -885,6 +1004,7 @@ export class CableSession {
 
     switch (msg.t) {
       case 'hello': {
+        if (!this.link?.isOpen) return
         // ⚠️ A POSITIVE MATCH, AND ABSENCE MEANS NO. The framing magic already stops the sibling product's
         // dial from ever getting this far, so reaching here with the wrong product means something changed
         // that this code cannot see — a re-unified magic, a fork of this firmware, a third product. The
@@ -901,11 +1021,21 @@ export class CableSession {
           this.foreignPort = this.link?.path ?? null
           this.foreignRetryAt = Date.now() + 60_000
           if (this.link) this.reportForeign(this.link.path, `greeted as '${product ?? 'nameless'}'`)
-          await this.link?.close('another product')
-          this.link = null
+          const link = this.link
+          await link?.close('another product')
+          if (this.link === link) this.link = null
           return
         }
         const mac = str('mac') ?? ''
+        const fw = str('fw') ?? '?', machine = this.host.localMachine()
+        const prior = this.helloIdentity
+        if (!prior || prior.mac !== mac || prior.fw !== fw || prior.machineId !== machine.id) {
+          this.detachVoiceDraft()
+          this.helloToken = {}
+          this.helloIdentity = { mac, fw, machineId: machine.id }
+          this.reviewOwner = draftOwner(mac, machine.id)
+        }
+        const link = this.link, port = this.portToken, hello = this.helloToken, sequence = ++this.helloSequence
         // Rule 1: every greeting is answered, but only an unfamiliar dial gets the full state.
         await this.send({
           t: 'welcome',
@@ -913,7 +1043,7 @@ export class CableSession {
           app: this.host.appName(),
           // The CABLED computer's identity — no longer "the one machine". It was the dial's own mac here
           // until proto 2, which was simply wrong: a mac is not a machine id and nothing could select it.
-          machine: this.host.localMachine(),
+          machine,
           // Stated up front so the ✓ is correct from the first frame, before any list arrives — which
           // matters after a dial reboot that lands mid-session on a remote selection.
           selected: this.host.selectedMachine(),
@@ -924,6 +1054,7 @@ export class CableSession {
             'voice.draft',
             'agents.refresh',
             ...(this.host.form ? ['form'] : []),
+            ...(this.host.metrics ? ['metrics.read.v1'] : []),
             ...(this.host.selectPassage ? ['selection'] : []),
             ...(this.host.visit ? ['visit'] : []),
             ...(this.host.answerReviewed ? ['question.review'] : []),
@@ -932,12 +1063,13 @@ export class CableSession {
             'settings',
           ],
         })
+        if (this.link !== link || this.portToken !== port || this.helloToken !== hello ||
+            this.helloSequence !== sequence || this.host.localMachine().id !== machine.id) return
         // Log a dial that is new OR that came back running something else. The version half of that test
         // is not decoration: a dial reboots into its new image after an update and greets with the SAME
         // mac, so keying the line on the mac alone suppresses the one line anybody wants after an OTA —
         // "it came back, and on which version". Losing it left a successful 0.0.37 install unverifiable
         // from the log on 2026-08-24.
-        const fw = str('fw') ?? '?'
         const hw = str('hw')
         this.greetedHw = hw || undefined
         // Read before the change test below, so a device that only changed a setting still corrects the
@@ -962,6 +1094,7 @@ export class CableSession {
           // which is the whole reason the branch exists.
           await this.pushAgents()
         }
+        if (this.link !== link || this.portToken !== port || this.helloToken !== hello || this.helloSequence !== sequence) return
         // Offered on every greeting, but only ONCE per version per session: accepting makes the dial erase
         // a flash slot before it answers, so a cadence of retries would spend erase cycles on the user's
         // hardware every fifteen seconds, and nothing about the next greeting changes what went wrong.
@@ -1010,6 +1143,7 @@ export class CableSession {
         const serial = msg.request
         const request = typeof serial === 'number' && Number.isInteger(serial)
           && serial > 0 && serial <= 0x7fffffff ? serial : undefined
+        if (this.isAgentAmbiguous(agentId)) items = []
         await this.send({
           t: 'models', agentId, ...(request === undefined ? {} : { request }),
           items: items.map((id) => ({ id })),
@@ -1019,6 +1153,7 @@ export class CableSession {
       case 'focus':
         if (str('agentId')) {
           const agentId = str('agentId')!
+          if (this.isAgentAmbiguous(agentId)) return
           const now = Date.now()
           const expectationActive = this.expectedAppFocusEcho !== ''
             && now <= this.expectedAppFocusEchoUntil
@@ -1089,6 +1224,22 @@ export class CableSession {
         this.host.scrolled(phase, dy, v)
         return
       }
+      case 'metrics.get': {
+        const requestId = str('requestId')
+        if (!requestId || !/^[a-zA-Z0-9-]{1,47}$/.test(requestId)) return
+        const link = this.link
+        // A transcript scan must not stall scroll, heartbeat, or voice frames.
+        void Promise.resolve().then(() => this.host.metrics?.() ??
+          { ok: false as const, error: 'Update Harness to read local usage.' }).then(result => {
+          if (this.link !== link) return
+          const usage = result.ok ? readDeviceUsage(result.usage, this.host.localMachine().id) : undefined
+          return this.send({ t: 'metrics.state', requestId, schema: 1,
+            ...(usage ? { ok: true, usage } : { ok: false, error: 'Local usage is unavailable.' }) })
+        }).catch(() => {
+          if (this.link === link) return this.send({ t: 'metrics.state', requestId, schema: 1, ok: false, error: 'Local usage is unavailable.' })
+        })
+        return
+      }
       case 'selection': {
         const agentId = str('agentId')
         const op = str('op')
@@ -1099,7 +1250,11 @@ export class CableSession {
           delta: typeof msg.delta === 'number' ? msg.delta : undefined, extend: typeof msg.extend === 'boolean' ? msg.extend : undefined }
         const link = this.link
         const result = await (this.host.selectPassage?.(command) ?? Promise.resolve({ ok: false as const, error: 'Update Harness to select text.' }))
-        if (this.link === link) await this.send({ t: 'selection.state', requestId, ...result })
+        if (this.link === link) {
+          const reply = op !== 'cancel' && this.isAgentAmbiguous(agentId)
+            ? { ok: false as const, error: 'Open this harness in the app.' } : result
+          await this.send({ t: 'selection.state', requestId, ...reply })
+        }
         return
       }
       case 'carry.prepare': {
@@ -1154,16 +1309,25 @@ export class CableSession {
       case 'draft.command': {
         const id = str('draftId'), requestId = str('requestId'), op = str('op'), revision = msg.revision
         if (!id || !requestId || requestId.length > 64 || !op || !Number.isSafeInteger(revision)) return
-        const link = this.link
+        const owner = this.currentDraftOwner()
+        const link = this.link, port = this.portToken, hello = this.helloToken
         const state = await this.voiceDraft.command(id, revision as number, op,
-          typeof msg.delta === 'number' ? msg.delta : 0)
-        if (this.link === link) await this.send({ t: 'draft.state', requestId, ...state })
+          typeof msg.delta === 'number' ? msg.delta : 0, owner)
+        const currentOwner = this.currentDraftOwner()
+        if (this.link === link && this.portToken === port && this.helloToken === hello &&
+            currentOwner?.machineId === owner?.machineId && currentOwner?.mac === owner?.mac)
+          await this.send({ t: 'draft.state', requestId, ...state })
         return
       }
       case 'question.read': {
         const agentId = str('agentId'), requestId = str('requestId')
         if (!agentId || !requestId || requestId.length > 64) return
-        const state = this.questionInbox.read(agentId)
+        if (this.isAgentAmbiguous(agentId)) {
+          await this.send({ t: 'question.state', agentId, requestId, ok: false,
+            error: 'Open this harness in the app.' })
+          return
+        }
+        const state = this.questions.read(agentId)
         if (state.ok && !this.host.canSpeakQuestion?.(agentId))
           state.questions = state.questions.map(q => ({ ...q, canText: false }))
         await this.send({ t: 'question.state', agentId, requestId, ...this.whoIs(agentId), ...state })
@@ -1172,11 +1336,16 @@ export class CableSession {
       case 'answer.reviewed': {
         const agentId = str('agentId'), token = str('token'), requestId = str('requestId')
         if (!agentId || !token || !requestId || requestId.length > 64) return
-        const link = this.link
-        const receipt = await this.questionInbox.submit(agentId, token, msg.choices,
-          answer => this.host.answerReviewed?.(answer) ?? Promise.resolve({ ok: false,
-            error: 'Update Harness to answer this question.' }), msg.drafts)
-        if (this.link === link) await this.send({ t: 'answer.receipt', agentId, token, requestId, ...receipt })
+        const link = this.link, port = this.portToken, hello = this.helloToken, owner = this.host.localMachine().id
+        const receipt = await this.questions.submit(agentId, token, msg.choices,
+          answer => this.host.localMachine().id !== owner || this.link !== link ||
+              this.portToken !== port || this.helloToken !== hello || this.stopped
+            ? Promise.resolve({ ok: false, error: 'The connection changed. Open the question again.' })
+            : this.host.answerReviewed?.(answer) ?? Promise.resolve({ ok: false,
+              error: 'Update Harness to answer this question.' }), msg.drafts)
+        if (this.link === link && this.portToken === port && this.helloToken === hello &&
+            this.host.localMachine().id === owner)
+          await this.send({ t: 'answer.receipt', agentId, token, requestId, ...receipt })
         return
       }
       case 'answer': {
@@ -1199,6 +1368,7 @@ export class CableSession {
         if (str('agentId')) this.host.updateAgent(str('agentId')!, str('model'), str('effort'))
         return
       case 'voice.begin': {
+        const owner = this.currentDraftOwner()
         this.cancelFormVoice()
         this.cancelSearchVoice()
         this.voiceDraftCreation = undefined
@@ -1230,7 +1400,7 @@ export class CableSession {
             !formVoice && !carryVoice && !draftVoice && !searchVoice && !('cmd' in msg) && !('selectionId' in msg)
             ? { agentId, token, index: index as number } : undefined
           question = { pin: pin && this.host.canSpeakQuestion?.(pin.agentId) &&
-            this.questionInbox.canSpeak(pin) ? pin : undefined }
+            this.questions.canSpeak(pin) ? pin : undefined }
         }
         let form: { command?: FormCommand; pin: Promise<FormResult> } | undefined
         if (formVoice) {
@@ -1258,9 +1428,18 @@ export class CableSession {
             : Promise.resolve({ ok: false, error: 'Choose a passage before searching.' } as const))
             .catch(() => ({ ok: false, error: 'Could not open output search. Try again.' })) }
         }
+        const reviewed = !formVoice && !carryVoice && !questionVoice && !draftVoice && !searchVoice &&
+          (msg.cmd === 'goal' || msg.cmd === 'loop')
+          ? (str('agentId') && this.host.prepareReviewed
+            ? this.host.prepareReviewed(str('agentId')!, msg.cmd)
+            : Promise.resolve({ ok: false as const, error: 'Choose a local harness for this instruction.' }))
+              .catch(() => ({ ok: false as const, error: 'Could not prepare this harness. Try again.' }))
+          : undefined
         this.voice = {
+          owner,
           agentId: str('agentId'),
           cmd: str('cmd'),
+          reviewed,
           lang: str('lang') ?? this.host.voiceLang(),
           // The DIAL's rate, never this side's guess. Describing 8 kHz audio as 16 kHz does not make the
           // speech sound fast — the transcriber is handed a container that lies about itself and answers
@@ -1429,15 +1608,28 @@ export class CableSession {
     const turn = this.voice
     const generation = this.voiceGeneration
     const uploadId = this.voiceUploadId
-    const current = () => generation === this.voiceGeneration
+    const link = this.link, port = this.portToken, hello = this.helloToken, machineId = this.host.localMachine().id
+    let reviewed: PreparedReview | undefined
+    const current = () => {
+      const valid = generation === this.voiceGeneration && this.link === link && this.portToken === port &&
+        this.helloToken === hello && this.host.localMachine().id === machineId
+      if (!valid && reviewed?.ok) reviewed.cancel()
+      return valid
+    }
     const reply = (message: Message) => current()
       ? this.send({ ...message, ...(uploadId ? { uploadId } : {}) })
       : Promise.resolve(false)
     this.voice = null
+    reviewed = review && turn?.reviewed ? await turn.reviewed : undefined
+    if (!current()) { if (reviewed?.ok) reviewed.cancel(); return }
+    if (review && (turn?.cmd === 'goal' || turn?.cmd === 'loop') && (!reviewed?.ok || !reviewed.current())) {
+      if (reviewed?.ok) reviewed.cancel()
+      await reply({ t: 'voice.error', message: reviewed && !reviewed.ok ? reviewed.error : 'That harness changed. Record your instruction again.' }); return
+    }
     if (turn?.draft && (!turn.draft.pin || !this.voiceDraft.current(turn.draft.pin))) {
       await reply({ t: 'voice.error', message: 'That draft changed. Review it again.' }); return
     }
-    if (turn?.question && (!turn.question.pin || !this.questionInbox.canSpeak(turn.question.pin) ||
+    if (turn?.question && (!turn.question.pin || !this.questions.canSpeak(turn.question.pin) ||
         !this.host.canSpeakQuestion?.(turn.question.pin.agentId))) {
       await reply({ t: 'voice.error', message: 'This question changed. Open it again.' })
       return
@@ -1515,7 +1707,7 @@ export class CableSession {
     }
     if (turn.question) {
       const pin = turn.question.pin!
-      const draft = this.host.canSpeakQuestion?.(pin.agentId) ? this.questionInbox.draft(pin, transcript)
+      const draft = this.host.canSpeakQuestion?.(pin.agentId) ? this.questions.draft(pin, transcript)
         : { ok: false as const, error: 'Use the terminal to answer this question.' }
       if (!draft.ok) { await reply({ t: 'voice.error', message: draft.error }); return }
       await reply({ t: 'voice.question', agentId: pin.agentId, token: pin.token,
@@ -1609,11 +1801,24 @@ export class CableSession {
     }
     if (review) {
       const recipient = agentId
+      // Do not capture the turn's PCM buffers in a retained draft submission closure.
+      const command = turn.cmd
+      if (reviewed?.ok && !reviewed.current()) {
+        reviewed.cancel(); await reply({ t: 'voice.error', message: 'That harness changed. Record your instruction again.' }); return
+      }
       const state = this.voiceDraft.create({ agentId: recipient, name: agentName || 'Harness', text: transcript,
+        owner: turn.owner, intent: command,
         context: carried ? `With text from ${carried.sourceName}` : selection?.ok && selection.text ? 'With selected text' : '',
         carryId: carried?.id,
+        cancel: reviewed?.ok ? reviewed.cancel : undefined,
         submit: async words => {
-          const edited = turn.cmd ? `/${turn.cmd} ${words}` : words
+          if (reviewed?.ok) {
+            const body = selection?.ok && selection.text ? withSelectedPassage(words, selection.text) : words
+            const receipt = await reviewed.submit(body)
+            return receipt.state === 'submitted' ? { ok: true, outcome: 'submitted' }
+              : { ok: false, error: receipt.error, outcome: receipt.state }
+          }
+          const edited = command ? `/${command} ${words}` : words
           const text = carried ? withCarriedPassage(edited, carried)
             : selection?.ok && selection.text ? withSelectedPassage(edited, selection.text) : edited
           const result = this.host.sendTurn(recipient, text)
@@ -1721,13 +1926,22 @@ export class CableSession {
   }
 
   private async send(msg: Message): Promise<boolean> {
-    if (!this.link?.isOpen) return false
+    const link = this.link
+    if (!link?.isOpen) return false
+    // Recheck at publication, including streams/history that awaited an earlier
+    // write. Receipts, exact notification ACKs and data-only recovery are not
+    // live agent projections and deliberately remain available.
+    const agentId = msg.t === 'agent' ? msg.id : msg.agentId
+    if (typeof agentId === 'string' &&
+        ['agent', 'summary', 'question', 'question.close', 'turn.started', 'turn.activity',
+          'turn.done', 'turn.error', 'focus'].includes(msg.t as string) &&
+        this.isAgentAmbiguous(agentId)) return false
     try {
-      await this.link.write(encodeCableFrame(CableType.Json, Buffer.from(JSON.stringify(msg), 'utf8')))
+      await link.write(encodeCableFrame(CableType.Json, Buffer.from(JSON.stringify(msg), 'utf8')))
       return true
     } catch (err) {
       this.log(`cable: write failed (${(err as Error).message})`)
-      await this.link.close('write failed')
+      await link.close('write failed')
       return false
     }
   }
@@ -1762,7 +1976,9 @@ export class CableSession {
     const snapshot = this.host.listAgentSnapshot ? await this.host.listAgentSnapshot() : {
       agents: await this.host.listAgents(), tab: this.host.activeSwarm(), total: this.host.agentTotal(),
     }
-    const { agents, tab, total } = snapshot
+    const { tab, total } = snapshot
+    const agents = snapshot.agents.filter(a => !this.isAgentAmbiguous(a.id))
+    if (this.desiredFocus) this.isAgentAmbiguous(this.desiredFocus)
     // WHETHER there is a window is in the key, not WHICH tab: an empty tab after the window shut sends the
     // same zero rows and draws a different screen, so that flip has to push. The tab's id does not — the
     // dial names the tab from the `swarms` frame — and keying on it made every tab switch push twice,
@@ -1854,13 +2070,15 @@ export class CableSession {
     for (const a of await this.host.listAgents()) {
       // Marked as it is ASKED FOR, not as it is sent: the answer is a cloud round trip, and a tick
       // arriving mid-loop would otherwise start a second walk over the same agents.
-      if (this.restored.has(a.id)) continue
+      if (this.isAgentAmbiguous(a.id) || this.restored.has(a.id)) continue
       this.restored.add(a.id)
-      rows.push({ id: a.id, past: await this.host.recentSummaries(a.id) })
+      const past = await this.host.recentSummaries(a.id)
+      if (!this.isAgentAmbiguous(a.id)) rows.push({ id: a.id, past })
     }
     if (!rows.length) return
     return this.queued(async () => {
       for (const row of rows) {
+        if (this.isAgentAmbiguous(row.id)) continue
         // Oldest first, so the newest ends up on top of the tile's stack.
         for (const s of [...row.past].reverse()) {
           if (!s.recap && !s.text) continue
@@ -1887,6 +2105,8 @@ export class CableSession {
 
   /** Attach: tell the dial everything, whether or not any of it looks unchanged from here. */
   async pushAgents(): Promise<void> {
+    const link = this.link, port = this.portToken, hello = this.helloToken, owner = this.host.localMachine().id
+    const questions = this.questions
     // A dial that has just greeted us has no history at all — it rebooted, or the cable was out. This is
     // the one place that says so; everywhere else, [restored] is what keeps the link quiet.
     this.restored.clear()
@@ -1904,6 +2124,16 @@ export class CableSession {
     // …and the drawer, which is the one thing a dial that has just greeted us is KNOWN to have lost:
     // its rows live in RAM. Last, because it names agents the pushes above put on the carousel.
     await this.replaceNotifications(this.host.listUnread())
+    // The unread snapshot deliberately omits questions the person already
+    // read. Reattach the pending catalog independently, without submitting any
+    // answer. A same-question replay retains its token and any prior receipt.
+    for (const question of questions.notifications()) {
+      if (this.link !== link || this.portToken !== port || this.helloToken !== hello ||
+          this.host.localMachine().id !== owner || this.stopped) return
+      if (this.isAgentAmbiguous(question.agentId) || !this.questions.notificationCurrent(question)) continue
+      await this.send({ t: 'question', agentId: question.agentId,
+        ...this.whoIs(question.agentId), id: question.id, questions: question.questions })
+    }
   }
 
   // ── swarms ────────────────────────────────────────────────────────────────────────────────────────
@@ -2030,15 +2260,18 @@ export class CableSession {
    * a turn is live and shows the user nothing that says so.
    */
   async turnStarted(agentId: string, text = ''): Promise<void> {
+    if (this.isAgentAmbiguous(agentId)) return
     this.activityEndedAt.delete(agentId)
     const read = {}
     this.activityReads.set(agentId, read)
     await this.send({ t: 'turn.started', agentId, text })
-    if (!this.link?.isOpen || !this.host.activityText) { this.activityReads.delete(agentId); return }
+    if (!this.link?.isOpen || this.isAgentAmbiguous(agentId) || !this.host.activityText) {
+      this.activityReads.delete(agentId); return
+    }
     let activity: string | null = null
     try { activity = await this.host.activityText(agentId) } catch { /* unavailable is not a status */ }
     // A terminal capture must never revive a completed turn or overwrite a newer heartbeat.
-    if (this.activityReads.get(agentId) !== read) return
+    if (this.isAgentAmbiguous(agentId) || this.activityReads.get(agentId) !== read) return
     this.activityReads.delete(agentId)
     await this.send({ t: 'turn.activity', agentId, text: activity ?? '' })
   }
@@ -2054,7 +2287,7 @@ export class CableSession {
     const agentId = this.desiredFocus
     const link = this.link
     const now = Date.now()
-    if (this.stopped || !this.isConnected || !agentId || !this.host.activityText
+    if (this.stopped || !this.isConnected || !agentId || this.isAgentAmbiguous(agentId) || !this.host.activityText
         || this.activityRefreshPending || this.activityReads.has(agentId)
         || now - (this.activityEndedAt.get(agentId) ?? -Infinity) < 3_000
         || (this.activityRefreshAgent === agentId && now - this.activityRefreshAt < 3_000)) return
@@ -2064,7 +2297,7 @@ export class CableSession {
     const read = {}
     this.activityReads.set(agentId, read)
     const current = () => !this.stopped && this.isConnected && this.link === link
-      && this.desiredFocus === agentId && this.activityReads.get(agentId) === read
+      && !this.isAgentAmbiguous(agentId) && this.desiredFocus === agentId && this.activityReads.get(agentId) === read
     try {
       const activity = await this.host.activityText(agentId)
       if (!current()) return
@@ -2084,6 +2317,7 @@ export class CableSession {
     }
   }
   async turnDone(agentId: string): Promise<void> {
+    if (this.isAgentAmbiguous(agentId)) return
     this.activityReads.delete(agentId)
     this.activityEndedAt.set(agentId, Date.now())
     await this.send({ t: 'turn.done', agentId })
@@ -2099,6 +2333,7 @@ export class CableSession {
    * notifies as it always did instead of losing the recap.
    */
   async summary(agentId: string, recap: string, text: string, quiet = false, silent = false): Promise<void> {
+    if (this.isAgentAmbiguous(agentId)) return
     this.activityReads.delete(agentId)
     this.activityEndedAt.set(agentId, Date.now())
     recap = extendShortRecap(recap, text)
@@ -2125,8 +2360,8 @@ export class CableSession {
    * 17:46:19, the dial came back at 17:46:26, a question arrived at 17:46:28 — and the pill read 1
    * against the window's 2 from then on, with nothing to bring them back together.
    *
-   * The window sends ids and kinds; the name, machine and recap are filled in HERE, from what this
-   * daemon already knows, so those never have a second source that can disagree.
+   * The window retains words with each unread occurrence. Names still come from
+   * the daemon; only older windows with no result text need a history fallback.
    */
   async replaceNotifications(
     items: UnreadNotification[],
@@ -2134,20 +2369,28 @@ export class CableSession {
     const replay = { seen: new Set<string>() }
     this.notificationReplay = replay
     const link = this.link
-    const rows = await Promise.all(items.slice(0, 8).map(async (item) => {
+    // Match the native ID buffer without ever truncating an identity into another.
+    const validItems = items.filter(item => item.agentId && !this.isAgentAmbiguous(item.agentId) && !item.agentId.includes('\0')
+      && Buffer.byteLength(item.agentId) < 48 && Buffer.from(item.agentId).toString('utf8') === item.agentId)
+    const rows = await Promise.all(validItems.slice(0, NOTIFICATION_LIMIT).map(async (item) => {
       const who = this.whoIs(item.agentId)
-      // A QUESTION BRINGS ITS OWN WORDS; a finished turn takes the recap this daemon summarised. The
-      // dial cannot supply either after a reboot, and a row with neither renders as the word its type
-      // used to assume — "done", on a question nobody has answered.
+      // Even "Done." belongs to this receipt. Extending it with recent history
+      // can silently attach a newer turn's words to an older unread occurrence.
       let summary = item.text
-      if (!item.question && summary.trim().length < 20) {
+      if (!item.question && !summary) {
         try {
           const saved = (await this.host.recentSummaries(item.agentId))[0]
-          summary = summary ? extendShortRecap(summary, saved?.text ?? '') : saved?.recap ?? ''
+          summary = saved?.recap ?? ''
         } catch { /* keep the supplied text if history cannot be read */ }
       }
-      return { agentId: item.agentId, name: who.name, machine: who.machine, summary, question: item.question,
+      const row = { agentId: item.agentId, name: notificationPrefix(who.name, 39),
+        machine: notificationPrefix(who.machine, 39), summary: '', question: item.question,
         ...(notificationReadToken(item.readToken) ? { readToken: item.readToken } : {}) }
+      // Native notif.replace stores 239 text bytes. Bound the escaped JSON too,
+      // so eight retained previews cannot close the cable as an oversized frame.
+      row.summary = notificationPrefix(summary, 239,
+        NOTIFICATION_ROW_BYTES - Buffer.byteLength(JSON.stringify(row)))
+      return row
     }))
     if (this.notificationReplay !== replay) return
     this.notificationReplay = undefined
@@ -2155,6 +2398,7 @@ export class CableSession {
     // Reading clears the notice, not the underlying question. Versioned clears
     // cannot eat a newer turn whose history happened to take longer to load.
     await this.send({ t: 'notif.replace', items: rows.filter(row =>
+      !this.isAgentAmbiguous(row.agentId) &&
       (row.question || !replay.seen.has(row.agentId)) && !replay.seen.has(`${row.agentId}\0${row.readToken}`)) })
   }
 
@@ -2171,10 +2415,12 @@ export class CableSession {
   async agentSeen(agentId: string, readToken?: string): Promise<void> {
     if (!agentId) return
     if (readToken !== undefined && !notificationReadToken(readToken)) return
+    if (!readToken && this.isAgentAmbiguous(agentId)) return
     this.notificationReplay?.seen.add(readToken ? `${agentId}\0${readToken}` : agentId)
     await this.send({ t: 'notif.seen', agentId, ...(readToken ? { readToken } : {}) })
   }
   async turnError(agentId: string, message: string): Promise<void> {
+    if (this.isAgentAmbiguous(agentId)) return
     this.activityReads.delete(agentId)
     this.activityEndedAt.set(agentId, Date.now())
     await this.send({ t: 'turn.error', agentId, message })
@@ -2192,7 +2438,8 @@ export class CableSession {
    * came through quiet, no row was ever recorded, and looking away later left nothing behind.
    */
   async question(agentId: string, id: string, questions: unknown): Promise<void> {
-    this.questionInbox.set(agentId, id, questions)
+    if (this.isAgentAmbiguous(agentId)) return
+    this.questions.set(agentId, id, questions)
     await this.send({ t: 'question', agentId, ...this.whoIs(agentId), id, questions })
   }
 
@@ -2204,11 +2451,13 @@ export class CableSession {
    * halfway through giving.
    */
   async questionClose(agentId: string, id: string): Promise<void> {
-    if (!this.questionInbox.close(agentId, id)) return
+    if (this.isAgentAmbiguous(agentId)) return
+    if (!this.questions.close(agentId, id)) return
     await this.send({ t: 'question.close', agentId, id })
   }
 
   async focusAgent(agentId: string): Promise<void> {
+    if (this.isAgentAmbiguous(agentId)) return
     this.desiredFocus = agentId
     await this.send({ t: 'focus', agentId })
   }
@@ -2233,9 +2482,10 @@ export class CableSession {
     if (!agentId) return
 
     const generation = ++this.appFocusGeneration
+    if (this.isAgentAmbiguous(agentId)) return
     const task = this.appFocusTail.then(async () => {
       // A newer desktop selection made this queued one obsolete before it started.
-      if (generation !== this.appFocusGeneration) return
+      if (generation !== this.appFocusGeneration || this.isAgentAmbiguous(agentId)) return
       this.drivingSince = Date.now()
       this.drivingAppFocus = true
       try {
@@ -2247,7 +2497,7 @@ export class CableSession {
         // this older transaction focus after it finishes.
         // Already where the window is: nothing to command. The record is right either way — this is the
         // window FOLLOWING the dial, and the dial's own report wrote it.
-        if (generation !== this.appFocusGeneration || agentId === this.desiredFocus) return
+        if (generation !== this.appFocusGeneration || this.isAgentAmbiguous(agentId) || agentId === this.desiredFocus) return
         // Said before the frame goes out, not after: the frame itself succeeds either way.
         const unknown = this.host.knows?.(agentId) === false
         this.log(`cable: following the app to agent ${agentId}${unknown ? ' — NOT in this daemon\'s list, the dial has no tile for it' : ''}`)
@@ -2268,7 +2518,7 @@ export class CableSession {
         // tile on its way. Cheap when nothing changed: syncAgents returns without sending a frame.
         this.desiredFocus = agentId
         await this.syncAgents()
-        if (generation !== this.appFocusGeneration) return
+        if (generation !== this.appFocusGeneration || this.isAgentAmbiguous(agentId)) return
         await this.focusAgent(agentId)   // writes the record
       } finally {
         this.drivingAppFocus = false

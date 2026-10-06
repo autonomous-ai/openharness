@@ -107,7 +107,11 @@ class _UsageSectionState extends State<UsageSection> {
     // walks every transcript under a real `~/.claude`, and a test run must
     // depend on neither the machine it lands on nor whoever was working on it.
     // A test that wants figures injects a controller already holding them.
-    if (!kUnderTest && !kIsWeb) unawaited(_controller.load());
+    if (!kUnderTest && !kIsWeb) {
+      unawaited(
+        _controller.loaded ? _controller.refresh() : _controller.load(),
+      );
+    }
   }
 
   @override

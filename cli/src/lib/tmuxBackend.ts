@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import type { TerminalBackend } from './terminalBackend.js'
+import type { ReviewedSubmitPhase, TerminalBackend } from './terminalBackend.js'
 import {
   TERMINAL_ACTION_SUCCEEDED,
   terminalActionNotStarted,
@@ -29,6 +29,7 @@ import {
   sendKeyToTmux,
   sendLiteralToTmux,
   sendToTmux,
+  sendReviewedToTmux,
   setPaneMouseOn,
   setPaneWindowStyle,
 } from './tmux.js'
@@ -347,6 +348,22 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
     return captured === null
       ? { state: 'failed', reason: 'tmux capture failed' }
       : { state: 'succeeded', value: captured }
+  }
+
+  async validateReviewed(runtime: TmuxRuntimeRef, expected: TerminalProcessExpectation): Promise<RuntimeValidation> {
+    const identity = expected.processIdentity
+    if (!/^%\d+$/.test(runtime.paneId) || !identity || !LSTART_MARKER_RE.test(identity.startMarker))
+      return { state: 'gone', reason: 'exact process identity unavailable' }
+    try {
+      const found = await lookupPaneEngineProcess(runtime.paneId, expected.engine)
+      if (!found.ok) return { state: found.unknown ? 'unknown' : 'gone', reason: found.reason }
+      return found.identity.pid === identity.pid && found.identity.startMarker === identity.startMarker &&
+        found.identity.executable === identity.executable ? { state: 'alive' } : { state: 'gone', reason: 'process changed' }
+    } catch { return { state: 'unknown', reason: 'process probe failed' } }
+  }
+
+  submitReviewed(runtime: TmuxRuntimeRef, text: string, current: (phase: ReviewedSubmitPhase) => Promise<boolean>): Promise<TerminalActionResult> {
+    return sendReviewedToTmux(runtime.paneId, text, current)
   }
 
   async typeLiteral(runtime: TmuxRuntimeRef, text: string): Promise<TerminalActionResult> {

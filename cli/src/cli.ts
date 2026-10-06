@@ -196,6 +196,7 @@ import {
 } from './lib/tmux.js'
 import { ALL_TERMINAL_BACKENDS } from './config/terminalConfig.js'
 import { TerminalBackendCoordinator } from './lib/terminalBackendCoordinator.js'
+import { ReviewedInput } from './lib/reviewedInput.js'
 import { TerminalStreamManager } from './lib/terminalStreamManager.js'
 import { processIdentityKey, terminalRouteKey, terminalRuntimeLabel } from './lib/terminalRuntime.js'
 import { TerminalAgentReconciler } from './lib/terminalAgentReconciler.js'
@@ -225,6 +226,7 @@ import { createWindowRouter } from './cable/windowRoute.js'
 import { WindowSelection } from './cable/windowSelection.js'
 import { WindowVisit } from './cable/windowVisit.js'
 import { WindowForm } from './cable/windowForm.js'
+import { WindowMetrics } from './cable/windowMetrics.js'
 import { RemoteRelayPool } from './lib/remoteRelay.js'
 import { TERMINAL_BINARY_VERSION } from './lib/terminalBinary.js'
 import { foldTranscript, lastTurnTextFromRawLines, lineToEvents, newTurnState, type LiveEvent, type TurnState } from './lib/normalize.js'
@@ -2849,6 +2851,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       return pane === null || parseEngineQuestionPane(session.engine, pane) !== null
     },
     acquireControl: id => input.acquireControl(id, { forAnswer: true }),
+    acquireReviewedControl: id => {
+      const session = registry.byAgent(id)
+      return session && !sessionTurnOpen(session.sessionId) ? input.acquireControl(id) : null
+    },
     legacySubmit: (id, text, deliveryId) => input.submit(id, text, deliveryId),
     legacyCancel: id => input.cancelDelivery(id),
     onDelivery: event => autonomousDeviceService?.delivery(event),
@@ -5288,16 +5294,22 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     focus: () => appVoiceFocus,
     send: (connId, payload) => localWsServer.sendToWindow(connId, { type: 'dial_visit', payload }),
   })
+  const windowMetrics = new WindowMetrics({
+    send: (connId, payload) => localWsServer.sendToWindow(connId, { type: 'dial_metrics', payload }),
+  })
   const localWsServer = attachLocalWsServer(hookServer, {
     localSocketServer: localSocket?.server ?? null,
     shareRelay,
     onSelectionReply: (connId, machineId, payload) => windowSelection.reply(connId, machineId, payload),
     onVisitReply: (connId, machineId, payload) => windowVisit.reply(connId, machineId, payload),
     onFormReply: (connId, machineId, payload) => windowForm.reply(connId, machineId, payload),
+    onMetricsReady: (connId, machineId, payload) => windowMetrics.ready(connId, machineId, payload),
+    onMetricsReply: (connId, machineId, payload) => windowMetrics.reply(connId, machineId, payload),
     onAppDisconnect: (machineId, connId) => {
       if (appFormWindow?.connId === connId) appFormWindow = undefined
       if (appVoiceFocus?.connId === connId) appVoiceFocus = undefined
       windowForm.disconnected(connId)
+      windowMetrics.disconnected(connId)
       windowSelection.focusChanged()
       autonomousDeviceService?.appFocus(machineId, null, connId)
     },
@@ -5310,14 +5322,23 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       appFormWindow = { machineId, connId }
       if (agentId === null) {
         if (appVoiceFocus?.connId === connId) appVoiceFocus = undefined
-      } else appVoiceFocus = { machineId, agentId, connId }
+      } else {
+        appVoiceFocus = { machineId, agentId, connId }
+        cableHostRef?.noteAgent(machineId, agentId)
+      }
       windowSelection.focusChanged()
       autonomousDeviceService?.appFocus(machineId, agentId, connId)
     },
-    onAppFocus: (machineId, agentId) => { void cableRef?.followApp(machineId, agentId) },
+    onAppFocus: (machineId, agentId) => {
+      cableHostRef?.noteAgent(machineId, agentId)
+      void cableRef?.followApp(machineId, agentId)
+    },
     // Everything the window still has unread. Held rather than acted on: the dial is handed it when a
     // cable attaches, which is the one moment its own drawer is known to be empty.
-    onAppUnread: (items) => { cableHostRef?.setUnread(items); void cableRef?.replaceNotifications(items) },
+    onAppUnread: (items) => {
+      cableHostRef?.setUnread(items)
+      void cableRef?.replaceNotifications(cableHostRef?.listUnread() ?? items)
+    },
     // The window looked at a harness, so the dial's drawer row for it is stale.
     // The dial's own tap already reaches the window (`agent.open`); this is the
     // return leg, and the pair is what keeps the badge and the pill equal.
@@ -5410,7 +5431,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       // Recaps AFTER the cap, and in parallel: a remote agent's recap is an RPC to its machine, so
       // fetching for agents that were never going to be weighed is latency spent on nothing. They are
       // cached per agent on the fleet side, so a second ⌘K costs no round trip at all.
-      const candidates: RouterAgent[] = await Promise.all(ranked.map(async (agent) => ({
+      let candidates: RouterAgent[] = await Promise.all(ranked.map(async (agent) => ({
         id: agent.id,
         name: agent.name,
         engine: agent.engine,
@@ -5439,7 +5460,13 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       // question names no agent and often shares no words with the first one, and the recap of the turn
       // it follows may not even exist yet — the answer is still being written while the next question
       // is being asked.
-      const decision = await routeVoiceTask(text, candidates, undefined, ROUTE_CLASSIFY_APP_MS, host.lastRouted?.())
+      candidates = candidates.filter(agent => !host.isAgentAmbiguous(agent.id))
+      const weighed = candidates.length
+      const machines = new Set(candidates.map(agent => agent.machine).filter(Boolean)).size
+      let decision = await routeVoiceTask(text, candidates, undefined, ROUTE_CLASSIFY_APP_MS, host.lastRouted?.())
+      candidates = candidates.filter(agent => !host.isAgentAmbiguous(agent.id))
+      if (host.isAgentAmbiguous(decision.agentId))
+        decision = { ...decision, agentId: '', confidence: 0, reason: 'Open this harness in the app.' }
       const named = (id: string) => candidates.find((agent) => agent.id === id)
       // The runners-up in the ROUTER's order when it gave one, and the list's own order when it did not.
       // A picker that has to ask "which agent" is showing a ranking either way; this decides whose.
@@ -5472,8 +5499,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
         // while it waits, because the question a person has during those seconds is not "how long" —
         // it is "did it even look at the agent I mean". The cap above can hide agents, and until now
         // the only place that was said was this process's log.
-        weighed: ranked.length,
-        machines: new Set(ranked.map((agent) => agent.machine).filter(Boolean)).size,
+        weighed,
+        machines,
         // 'model' or 'heuristic', coarsened from the router's own label. The two arrive at the same low
         // confidence BY DESIGN — an unsure model and a router that could not run must both stop and ask
         // — and that is exactly why the window has to be able to tell them apart when it explains itself.
@@ -7409,6 +7436,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     log: (line) => console.log(`[device] ${line}`),
   })
 
+  const reviewedInput = new ReviewedInput({
+    session: id => registry.byAgent(id), terminals,
+    acquire: id => deviceInput.acquireReviewed(id),
+    beforeSubmit: (id, text) => backend.swarmPromptScopes.prepare(id, text),
+    isTurnOpen: session => sessionTurnOpen(session.sessionId),
+  })
   let devicesStatusRevision = 0
   const cableHost = new DaemonCableHost({
     // Zoo selection is visual identity; it does not require consent to watch terminal activity.
@@ -7429,6 +7462,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // The SAME handlers the backend socket drives, called directly rather than reimplemented: the
     // slash-command adaptation, the turn bookkeeping and the question plumbing all live in them.
     sendTurn: (agentId, text) => backend.onMessage?.(agentId, text),
+    prepareReviewed: (agentId, intent) => reviewedInput.prepare(agentId, intent),
     stopTurn: (agentId) => backend.onCancel?.(agentId),
     // The dial's own object, forwarded verbatim. It used to be rebuilt here as `{ [requestId]: optionId }`
     // — keyed by the REQUEST id rather than by the question key `onQuestionAnswer` expects, so the answer
@@ -7483,9 +7517,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     selectPassage: command => windowSelection.command(command),
     clearSelection: () => windowSelection.cancel(),
     visit: command => windowVisit.command(command),
+    rejectVisit: (visitId, error) => windowVisit.refuse(visitId, error),
     clearVisit: () => windowVisit.cancel(),
     form: command => windowForm.command(command),
     clearForm: () => windowForm.clear(),
+    metrics: () => windowMetrics.read(),
     log: (line) => console.log(`[cable] ${line}`),
   }, fleet)
   cableHostRef = cableHost
@@ -7499,6 +7535,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // Anything the window said while this was still being built.
   cableHost.setDesk(appPaneAgents)
   cableHost.setSwarms(appSwarmsLatest)
+  if (appVoiceFocus) cableHost.noteAgent(appVoiceFocus.machineId, appVoiceFocus.agentId)
   // The dial's log now lives with the app's, one file a day — see dialLog.ts. The old unbounded
   // `cli/data/dial.log` is cut down to a pointer, for anyone with a bookmark.
   const legacyDialLog = join(env.ADAPTER_DATA_DIR, 'dial.log')
@@ -7580,6 +7617,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // again at each call site: a new event kind reaches the dial the day it reaches the socket.
   backend.onOutboundCommander = (frame) => {
     autonomousDeviceService?.commander(frame as Record<string, unknown>)
+    const localAgentId = (frame as { agentId?: unknown }).agentId
+    if (typeof localAgentId === 'string') {
+      cableHost.noteAgent(cableHost.localMachine().id, localAgentId)
+      if (cableHost.isAgentAmbiguous(localAgentId)) return
+    }
     // THIS COMPUTER'S cards, by definition — and every one of them belongs to a tile that is on the
     // carousel, because the carousel now spans machines. The old guard dropped them whenever the wheel
     // was pointed elsewhere, which would now silence this machine's own agents.
@@ -7618,6 +7660,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // Which machine this agent is on, before its list is necessarily read — what lets a question from it
     // be named and, tapped, opened. See DaemonCableHost.noteAgent.
     cableHost.noteAgent(event.machineId, event.agentId)
+    if (cableHost.isAgentAmbiguous(event.agentId)) return
     // No selection guard. Every machine's agents are on the carousel at once, so a card from a machine
     // the wheel is not pointed at still belongs to a tile the user can see — and dropping it is what a
     // tile that never leaves "Working…" looks like from the outside.

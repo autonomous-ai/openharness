@@ -1,8 +1,14 @@
 // How the wheel's rows are composed: the local row, and the fleet's rows around it.
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { DaemonCableHost, cableEventFor, type CableHostWiring } from './cableHost.js'
 import type { FleetMachine, MachineFleet } from './machineFleet.js'
+import { ReviewedInput } from '../lib/reviewedInput.js'
+import { TerminalBackendCoordinator } from '../lib/terminalBackendCoordinator.js'
+import type { TerminalBackend } from '../lib/terminalBackend.js'
+import type { RegisteredSession } from '../lib/registry.js'
+import { terminalRouteKey } from '../lib/terminalRuntime.js'
+import type { SelectionResult } from './windowSelection.js'
 
 const AGENTS: Array<{ agentId: string; registeredAt: number; active: boolean; terminalAvailable: boolean; engine: string }> = []
 vi.mock('../lib/registry.js', () => ({
@@ -748,5 +754,255 @@ describe('spoken question capability', () => {
     expect((await host.answerReviewed({ ...answer, agentId: 'spoken-remote' })).ok).toBe(false)
     expect(fleet.answer).not.toHaveBeenCalled(); expect(fleet.answerReviewed).not.toHaveBeenCalled()
     expect(answerReviewed).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('strict local reviewed input', () => {
+  it('never substitutes legacy or remote delivery for unavailable preparation', async () => {
+    AGENTS.length = 0
+    AGENTS.push({ agentId: 'local', registeredAt: 1, active: true, terminalAvailable: true, engine: 'claude' })
+    const prepareReviewed = vi.fn(async () => ({ ok: false as const, error: 'Process unavailable' }))
+    const w = wiring({ prepareReviewed }), fleet = fleetOf([REMOTE]), host = new DaemonCableHost(w, fleet)
+    await host.listAgentsFlat()
+    host.noteAgent('mine', 'local'); host.noteAgent('other', 'remote')
+    for (const id of ['remote', 'unknown']) expect(await host.prepareReviewed(id, 'goal')).toMatchObject({ ok: false })
+    expect(prepareReviewed).not.toHaveBeenCalled()
+    expect(await host.prepareReviewed('local', 'goal')).toMatchObject({ ok: false, error: 'Process unavailable' })
+    expect(prepareReviewed).toHaveBeenCalledExactlyOnceWith('local', 'goal')
+    expect(w.sendTurn).not.toHaveBeenCalled(); expect(fleet.sendTurn).not.toHaveBeenCalled()
+    const older = new DaemonCableHost(wiring()); await older.listAgentsFlat()
+    expect(await older.prepareReviewed('local', 'loop')).toMatchObject({ ok: false })
+  })
+})
+
+describe('agent-only cable ownership', () => {
+  beforeEach(() => { AGENTS.length = 0 })
+  afterEach(() => { AGENTS.length = 0 })
+  function local(agentId = 'shared'): void {
+    AGENTS.push({ agentId, registeredAt: 1, active: true, terminalAvailable: true, engine: 'claude' })
+  }
+  function deferred<T>() {
+    let resolve!: (value: T) => void
+    const promise = new Promise<T>(r => { resolve = r })
+    return { promise, resolve }
+  }
+
+  it('keeps repeated claims by the same owner usable', async () => {
+    local()
+    const w = wiring(), host = new DaemonCableHost(w)
+    host.noteAgent('mine', 'shared')
+    host.setUnread([{ agentId: 'shared', machineId: 'mine', text: 'Finished.', question: false, readToken: 'turn-1' }])
+    await host.listAgentsFlat()
+    expect(host.isAgentAmbiguous('shared')).toBe(false)
+    expect(host.knows('shared')).toBe(true)
+    expect(host.listUnread()).toHaveLength(1)
+    expect(host.sendTurn('shared', 'Continue.')).toEqual({ ok: true })
+    expect(w.sendTurn).toHaveBeenCalledExactlyOnceWith('shared', 'Continue.')
+  })
+
+  it('omits conflicting roster IDs without collapsing the app grid or reviving held tiles', async () => {
+    local(); local('unique')
+    const fleet = fleetOf([REMOTE]), host = new DaemonCableHost(wiring(), fleet)
+    const remote = deferred<Array<{ id: string; name: string; engine: string }>>()
+    fleet.listAgents = vi.fn(() => remote.promise)
+    onTab(host, ['shared', 'unique'])
+    await host.listAgentsFlat()
+    expect(host.knows('shared')).toBe(true)
+    remote.resolve([{ id: 'shared', name: 'Other work', engine: 'claude' }])
+    await vi.waitFor(() => expect(host.isAgentAmbiguous('shared')).toBe(true))
+    // The successful RPC establishes the conflict before the next catalog poll.
+    expect(host.knows('shared')).toBe(false)
+    host.setSwarms({ active: 't1', swarms: [{ id: 't1', name: 'Work', agentIds: ['shared', 'unique'], panes: 2 }],
+      tiles: [{ x1: 0, y1: 0, x2: 500, y2: 1000, agentId: 'shared' }, { x1: 500, y1: 0, x2: 1000, y2: 1000, agentId: 'unique' }] })
+    expect((await host.listAgentSnapshot()).agents.map(a => a.id)).toEqual(['unique'])
+    expect(host.agentTotal()).toBe(1)
+    expect(host.listSwarms()).toMatchObject({ swarms: [{ agents: 1, panes: 2 }],
+      tiles: [{ x1: 0, y1: 0, x2: 500, y2: 1000, agentId: '' }, { agentId: 'unique' }] })
+    expect(host.describe('shared')).toBeUndefined()
+    expect(await host.stepFocus('next', 'shared')).toEqual({ machineId: 'mine', agentId: 'unique' })
+  })
+
+  it('remembers an event owner before the first roster and refuses a later imported local ID', () => {
+    const w = wiring(), host = new DaemonCableHost(w)
+    host.noteAgent('other', 'shared')
+    local()
+    expect(host.sendTurn('shared', 'Do not guess.')).toMatchObject({ ok: false })
+    expect(host.isAgentAmbiguous('shared')).toBe(true)
+    expect(w.sendTurn).not.toHaveBeenCalled()
+  })
+
+  it('does not forget a conflict when an owner, tab, unread list or USB session disappears', async () => {
+    const machines = [{ ...REMOTE }], fleet = fleetOf(machines), host = new DaemonCableHost(wiring(), fleet)
+    host.noteAgent('other', 'shared'); host.noteAgent('third', 'shared')
+    machines[0].state = 'offline'
+    host.setUnread([]); host.setDesk([]); host.setSwarms(null); host.onDialGone()
+    await host.listAgentsFlat()
+    host.noteAgent('third', 'shared')
+    expect(host.isAgentAmbiguous('shared')).toBe(true)
+    expect(host.sendTurn('shared', 'Still belongs to the old card.')).toMatchObject({ ok: false })
+    expect(fleet.sendTurn).not.toHaveBeenCalled()
+  })
+
+  it('allows an exact occurrence ACK but refuses a token claimed by both machines', () => {
+    const w = wiring({ notificationRead: vi.fn() }), host = new DaemonCableHost(w)
+    const item = (machineId: string, readToken: string) => ({ machineId, readToken, agentId: 'shared', text: 'Saved words.', question: false })
+    host.setUnread([item('first', 'one'), item('second', 'two')])
+    expect(host.listUnread()).toEqual([])
+    host.readNotification('shared', 'one'); host.readNotification('shared', 'two')
+    expect(w.notificationRead).toHaveBeenNthCalledWith(1, 'first', 'shared', 'one')
+    expect(w.notificationRead).toHaveBeenNthCalledWith(2, 'second', 'shared', 'two')
+    host.setUnread([item('first', 'same'), item('second', 'same')])
+    host.readNotification('shared', 'same')
+    expect(w.notificationRead).toHaveBeenCalledTimes(2)
+  })
+
+  it('refuses every agent-directed mutation and excludes conflicted routing history', async () => {
+    local()
+    const w = wiring({ opened: vi.fn(), focused: vi.fn(), updateAgent: vi.fn(), answerReviewed: vi.fn(),
+      forkAgent: vi.fn(), prepareReviewed: vi.fn(), recent: vi.fn(() => []), recentAsks: vi.fn(() => []),
+      listModels: vi.fn(), activityText: vi.fn(), selectPassage: vi.fn() })
+    const fleet = fleetOf([REMOTE]), host = new DaemonCableHost(w, fleet)
+    await host.listAgentsFlat()
+    host.sendTurn('shared', 'Before the conflict.')
+    vi.mocked(w.sendTurn).mockClear()
+    host.noteAgent('other', 'shared')
+    expect(host.sendTurn('shared', 'After.')).toMatchObject({ ok: false })
+    host.stopTurn('shared'); host.answer('shared', 'q', {}); host.updateAgent('shared', 'model')
+    host.focus('shared'); host.openAgent('shared')
+    expect(await host.answerReviewed({ agentId: 'shared', requestId: 'q', answers: {}, selections: {}, questions: [] })).toMatchObject({ ok: false })
+    expect(await host.forkAgent('shared')).toMatchObject({ ok: false, error: 'AMBIGUOUS_AGENT' })
+    expect(await host.prepareReviewed('shared', 'goal')).toMatchObject({ ok: false })
+    expect(await host.selectPassage({ agentId: 'shared', op: 'begin' })).toMatchObject({ ok: false })
+    expect(await host.recentSummaries('shared')).toEqual([])
+    expect(await host.recentAsks('shared')).toEqual([])
+    expect(await host.listModels('shared')).toEqual([])
+    expect(await host.activityText('shared')).toBeNull()
+    expect(host.lastRouted()).toBeUndefined()
+    expect(await host.route('Continue.', [{ id: 'shared', name: 'Shared', engine: 'claude' }])).toMatchObject({ agentId: '', confidence: 0 })
+    for (const callback of [w.sendTurn, w.stopTurn, w.answer, w.updateAgent, w.focused, w.opened, w.forkAgent,
+      w.answerReviewed, w.prepareReviewed, w.recent, w.recentAsks, w.listModels, w.activityText, w.selectPassage,
+      fleet.sendTurn, fleet.stopTurn, fleet.answer, fleet.updateAgent]) expect(callback).not.toHaveBeenCalled()
+  })
+
+  it('discards remote history and models returned after a conflicting event', async () => {
+    const fleet = fleetOf([REMOTE]), host = new DaemonCableHost(wiring(), fleet)
+    host.noteAgent('other', 'shared')
+    const recaps = deferred<Array<{ recap: string; text: string }>>(), asks = deferred<string[]>(), models = deferred<string[]>()
+    fleet.recentSummaries = () => recaps.promise; fleet.recentAsks = () => asks.promise; fleet.listModels = () => models.promise
+    const reads = [host.recentSummaries('shared'), host.recentAsks('shared'), host.listModels('shared')]
+    host.noteAgent('third', 'shared')
+    recaps.resolve([{ recap: 'Wrong owner', text: 'Late body' }]); asks.resolve(['Late ask']); models.resolve(['late-model'])
+    expect(await Promise.all(reads)).toEqual([[], [], []])
+  })
+
+  it('cancels only the ambiguous passage and discards delayed selection/footer replies', async () => {
+    local()
+    const selected = deferred<SelectionResult>(), footer = deferred<string | null>()
+    const w = wiring({ selectPassage: vi.fn(() => selected.promise), clearSelection: vi.fn(), activityText: () => footer.promise })
+    const host = new DaemonCableHost(w)
+    const reading = host.selectPassage({ agentId: 'shared', op: 'begin' }), activity = host.activityText('shared')
+    host.noteAgent('other', 'unrelated'); host.noteAgent('third', 'unrelated')
+    expect(w.clearSelection).not.toHaveBeenCalled()
+    host.noteAgent('other', 'shared')
+    expect(w.clearSelection).toHaveBeenCalledOnce()
+    selected.resolve({ ok: true, selectionId: 'selection', revision: 1, excerpt: 'Late words', rows: 1, extending: false })
+    footer.resolve('Working')
+    expect(await reading).toEqual({ ok: false, error: 'Open this harness in the app.' })
+    expect(await activity).toBeNull()
+    await host.selectPassage({ agentId: 'shared', op: 'cancel', selectionId: 'selection' })
+    expect(w.selectPassage).toHaveBeenCalledTimes(2) // cancellation remains possible
+  })
+
+  it.each(['source', 'child'] as const)('reports a created fork truthfully when the %s becomes ambiguous during creation', async conflict => {
+    local()
+    const created = deferred<{ ok: true; agentId: string }>()
+    const w = wiring({ forkAgent: vi.fn(() => created.promise), forked: vi.fn(), opened: vi.fn() })
+    const host = new DaemonCableHost(w); await host.listAgentsFlat()
+    const forking = host.forkAgent('shared')
+    host.noteAgent('other', conflict === 'source' ? 'shared' : 'child')
+    created.resolve({ ok: true, agentId: 'child' })
+    expect(await forking).toEqual({ ok: false, error: 'FORK_CREATED_NOT_OPENED', detail: 'Copy created. Open it in Harness.' })
+    expect(w.forkAgent).toHaveBeenCalledExactlyOnceWith('shared')
+    expect(w.forked).not.toHaveBeenCalled(); expect(w.opened).not.toHaveBeenCalled()
+    host.openAgent('child')
+    if (conflict === 'source') expect(w.opened).toHaveBeenCalledExactlyOnceWith('mine', 'child', undefined)
+    else expect(w.opened).not.toHaveBeenCalled()
+  })
+
+  async function reviewedFixture() {
+    local()
+    const runtime = { backend: 'tmux' as const, paneId: '%1' }
+    const row = { agentId: 'shared', sessionId: 's', active: true, engine: 'claude',
+      processIdentity: { pid: 42, executable: 'claude', startMarker: 'original' },
+      runtimes: [runtime], primaryRuntimeKey: terminalRouteKey(runtime) } as RegisteredSession
+    const pasted = vi.fn(), release = vi.fn(), acquire = vi.fn((): (() => void) | null => release)
+    const backend = { name: 'tmux', instanceId: 'tmux:default', validateReviewed: vi.fn(async () => ({ state: 'alive' as const })),
+      capture: vi.fn(async () => ({ state: 'succeeded', value: '────────────\n❯\n────────────\n? for shortcuts' })),
+      submitReviewed: vi.fn(async (_runtime, _text, current) => {
+        if (!await current('before-paste') || !await current('before-enter')) return { state: 'failed', dispatch: 'not_started', reason: 'changed' }
+        pasted(); return { state: 'succeeded', dispatch: 'executed' }
+      }), submitText: vi.fn() } as unknown as TerminalBackend
+    const service = new ReviewedInput({ session: () => row, terminals: new TerminalBackendCoordinator([backend], ['tmux']),
+      acquire, isTurnOpen: () => false, waitMs: 500 })
+    const w = wiring({ prepareReviewed: (id, intent) => service.prepare(id, intent) }), host = new DaemonCableHost(w)
+    await host.listAgentsFlat()
+    return { host, backend, pasted, acquire, release }
+  }
+
+  it('cancels a real reviewed lease that finishes preparation after the conflict', async () => {
+    const f = await reviewedFixture(), acquired = deferred<{ state: 'alive' }>()
+    vi.mocked(f.backend.validateReviewed!).mockImplementationOnce(() => acquired.promise)
+    const preparing = f.host.prepareReviewed('shared', 'goal')
+    await vi.waitFor(() => expect(f.backend.validateReviewed).toHaveBeenCalled())
+    f.host.noteAgent('other', 'shared'); acquired.resolve({ state: 'alive' })
+    expect(await preparing).toMatchObject({ ok: false })
+    expect(f.pasted).not.toHaveBeenCalled()
+  })
+
+  it('cancels the real reviewed operation already waiting inside the input queue', async () => {
+    const f = await reviewedFixture(); f.acquire.mockReturnValue(null)
+    const pin = await f.host.prepareReviewed('shared', 'loop'); if (!pin.ok) throw Error('pin unavailable')
+    const submitting = pin.submit('Every five minutes.')
+    await vi.waitFor(() => expect(f.acquire).toHaveBeenCalled())
+    f.host.noteAgent('other', 'shared'); f.acquire.mockReturnValue(f.release)
+    expect(pin.current()).toBe(false)
+    expect(await submitting).toMatchObject({ state: 'rejected' })
+    expect(f.backend.submitReviewed).not.toHaveBeenCalled(); expect(f.pasted).not.toHaveBeenCalled()
+  })
+
+  it('cancels a real reviewed submission while terminal readiness is being read', async () => {
+    const f = await reviewedFixture(), captured = deferred<{ state: 'succeeded'; value: string }>()
+    vi.mocked(f.backend.capture).mockImplementationOnce(() => captured.promise)
+    const pin = await f.host.prepareReviewed('shared', 'goal'); if (!pin.ok) throw Error('pin unavailable')
+    const submitting = pin.submit('Do not redirect this.')
+    await vi.waitFor(() => expect(f.backend.capture).toHaveBeenCalled())
+    f.host.noteAgent('other', 'shared'); captured.resolve({ state: 'succeeded', value: '❯' })
+    expect(await submitting).toMatchObject({ state: 'rejected' })
+    expect(f.pasted).not.toHaveBeenCalled(); expect(f.release).toHaveBeenCalledOnce()
+  })
+
+  it('retains the coordinator uncertainty when a conflict arrives after dispatch before confirmation', async () => {
+    const f = await reviewedFixture(), submitted = deferred<{ state: 'succeeded'; dispatch: 'executed' }>()
+    vi.mocked(f.backend.submitReviewed!).mockImplementationOnce(async () => { f.pasted(); return submitted.promise })
+    const pin = await f.host.prepareReviewed('shared', 'goal'); if (!pin.ok) throw Error('pin unavailable')
+    const sending = pin.submit('Exactly once.')
+    await vi.waitFor(() => expect(f.pasted).toHaveBeenCalledOnce())
+    f.host.noteAgent('other', 'shared'); submitted.resolve({ state: 'succeeded', dispatch: 'executed' })
+    expect(await sending).toEqual({ state: 'uncertain', error: 'Could not confirm sending. Check the terminal before trying again.' })
+    expect(pin.submit('Do not retry.')).toBe(sending)
+    expect(f.pasted).toHaveBeenCalledOnce(); expect(f.host.lastRouted()).toBeUndefined()
+  })
+
+  it('keeps a completed submitted receipt unchanged after a later conflict', async () => {
+    const f = await reviewedFixture(), pin = await f.host.prepareReviewed('shared', 'goal')
+    if (!pin.ok) throw Error('pin unavailable')
+    const sent = pin.submit('Exactly once.')
+    expect(await sent).toEqual({ state: 'submitted' })
+    f.host.noteAgent('other', 'shared')
+    expect(pin.submit('Do not retry.')).toBe(sent)
+    expect(await sent).toEqual({ state: 'submitted' })
+    expect(f.pasted).toHaveBeenCalledOnce()
+    expect(pin.current()).toBe(false)
+    expect(f.host.lastRouted()).toBeUndefined()
   })
 })

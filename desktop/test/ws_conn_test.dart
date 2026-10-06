@@ -22,6 +22,7 @@ class FakeHub {
   final List<String?> environments = [];
   final Map<String, int> machineSelected = {};
   final List<WebSocket> clients = [];
+  int? deviceMetricsProtocol;
   Map<String, dynamic> closeResponse = {'activity': 'idle'};
 
   FakeHub._(this.server, this.rejectOldToken, this.closeCodeOnSelect);
@@ -66,7 +67,11 @@ class FakeHub {
           ws.add(
             jsonEncode({
               'type': 'connected',
-              'payload': {'machineId': machineId},
+              'payload': {
+                'machineId': machineId,
+                if (hub.deviceMetricsProtocol != null)
+                  'deviceMetricsProtocol': hub.deviceMetricsProtocol,
+              },
             }),
           );
         } else if (frame['type'] == 'agent_create') {
@@ -359,6 +364,133 @@ void main() {
     expect((selectsAfter[1]['payload'] as Map)['forceReconnect'], isTrue);
     expect(conn!.isReady, isTrue);
   });
+
+  test('private device usage negotiates anew and never survives a new-to-old daemon reconnect', () async {
+    hub = await FakeHub.start();
+    hub.deviceMetricsProtocol = 1;
+    final events = <Map<String, dynamic>>[];
+    conn = WsConn(
+      wsBaseUrl: 'wss://unused.example',
+      autonomousEnv: 'prod',
+      machineId: 'm1',
+      accessTokenProvider: (_, _) async => '',
+      onAuthFailure: (_) {},
+      onEvent: events.add,
+      onStatus: (_) {},
+      transportKind: WsTransportKind.localPlaintext,
+      localWsUri: Uri.parse('ws://127.0.0.1:${hub.port}/api/local-ws'),
+    );
+    await conn!.connect();
+    await conn!.waitUntilReady(timeout: const Duration(seconds: 5));
+    final initialSession = conn!.deviceMetricsSession!;
+    expect(
+      await conn!.sendDeviceMetricsFrame(initialSession, 'app_metrics_ready', {
+        'schema': 1,
+      }),
+      true,
+    );
+    await conn!.request('agents_list');
+    expect(
+      hub.frames.where((f) => f['type'] == 'app_metrics_ready'),
+      hasLength(1),
+    );
+
+    hub.deviceMetricsProtocol = null;
+    final reconnect = conn!.forceReconnect();
+    expect(conn!.deviceMetricsSession, isNull);
+    await reconnect;
+    await conn!.waitUntilReady(timeout: const Duration(seconds: 5));
+    expect(conn!.deviceMetricsSession, isNull);
+    expect(
+      await conn!.sendDeviceMetricsFrame(initialSession, 'app_metrics_result', {
+        'costUsd': 1,
+      }),
+      false,
+    );
+
+    // A later frame cannot add a capability absent from this socket's handshake.
+    hub.clients.last.add(
+      jsonEncode({
+        'type': 'connected',
+        'payload': {'machineId': 'm1', 'deviceMetricsProtocol': 1},
+      }),
+    );
+    hub.clients.last.add(
+      jsonEncode({
+        'type': 'dial_metrics',
+        'payload': {'requestId': 'injected'},
+      }),
+    );
+    await conn!.request('agents_list');
+    expect(conn!.deviceMetricsSession, isNull);
+    expect(events.where((f) => f['type'] == 'dial_metrics'), isEmpty);
+    expect(hub.frames.where((f) => f['type'] == 'app_metrics_result'), isEmpty);
+
+    hub.deviceMetricsProtocol = 1;
+    await conn!.forceReconnect();
+    await conn!.waitUntilReady(timeout: const Duration(seconds: 5));
+    expect(conn!.deviceMetricsSession, isNotNull);
+    expect(conn!.deviceMetricsSession, isNot(same(initialSession)));
+    expect(
+      await conn!.sendDeviceMetricsFrame(
+        initialSession,
+        'app_metrics_result',
+        {},
+      ),
+      false,
+    );
+    await conn!.close();
+    expect(conn!.deviceMetricsSession, isNull);
+  });
+
+  test(
+    'private usage waiting in the send FIFO cannot cross a reconnect',
+    () async {
+      hub = await FakeHub.start();
+      hub.deviceMetricsProtocol = 1;
+      conn = WsConn(
+        wsBaseUrl: 'wss://unused.example',
+        autonomousEnv: 'prod',
+        machineId: 'm1',
+        accessTokenProvider: (_, _) async => '',
+        onAuthFailure: (_) {},
+        onEvent: (_) {},
+        onStatus: (_) {},
+        transportKind: WsTransportKind.localPlaintext,
+        localWsUri: Uri.parse('ws://127.0.0.1:${hub.port}/api/local-ws'),
+      );
+      await conn!.connect();
+      await conn!.waitUntilReady(timeout: const Duration(seconds: 5));
+      final session = conn!.deviceMetricsSession!;
+      final blocked = Completer<void>(), release = Completer<void>();
+      conn!.onOutgoing = (type, payload) async {
+        if (type == 'held') {
+          blocked.complete();
+          await release.future;
+        }
+        return payload;
+      };
+      final holding = conn!.sendTerminalFrame('held', {});
+      await blocked.future;
+      final metrics = conn!.sendDeviceMetricsFrame(
+        session,
+        'app_metrics_result',
+        {'costUsd': 1},
+      );
+      final reconnect = conn!.forceReconnect();
+      expect(conn!.deviceMetricsSession, isNull);
+      release.complete();
+      await holding;
+      expect(await metrics, false);
+      await reconnect;
+      await conn!.waitUntilReady(timeout: const Duration(seconds: 5));
+      await conn!.request('agents_list');
+      expect(
+        hub.frames.where((f) => f['type'] == 'app_metrics_result'),
+        isEmpty,
+      );
+    },
+  );
 
   test('blocked encrypted RPC fails immediately and is never sent', () async {
     hub = await FakeHub.start();

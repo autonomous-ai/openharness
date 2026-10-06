@@ -1,0 +1,168 @@
+{
+  "title": "Harness Pro landing page: historical first-pass assessment",
+  "status": "Historical preview assessment, superseded by interaction-design.json and completion-audit.json. The completion entries below describe that earlier local study, not completion of the current product goal. Browser input and three-contact navigation are no longer the current scope.",
+  "current_assessment": "completion-audit.json",
+  "date": "2026-10-05",
+  "route": "/pro",
+  "preview_url": "http://127.0.0.1:3108/pro",
+  "source_scope": {
+    "working_copy_base": "fa8f966c781b59175e98d601954425f6b6be27cf",
+    "round_firmware_local_ref": "488542bdcced3269c3603c57780400e00dca6773",
+    "pro_firmware_local_ref": "a06c78d6ce027cdadfe6c5e84a11083330874851",
+    "note": "Local repository and existing local remote-tracking refs reviewed. No claim of a fresh remote fetch."
+  },
+  "mission": "Manage multiple agents across a laptop, home computer, and server through one dedicated touch companion.",
+  "product_decisions": [
+    {
+      "decision": "Round brings the current agent close; Pro brings the team into view.",
+      "implementation": "Hero, multi-machine overview, agent strip, and round/Pro comparison."
+    },
+    {
+      "decision": "Browsing never steals the desktop.",
+      "implementation": "Selecting or swiping agents changes only the device preview. Open is explicit; Return restores the previously opened agent."
+    },
+    {
+      "decision": "One finger: agents. Two: workspaces. Three: machines.",
+      "implementation": "Pointer contact tracking and matching visible controls, arrow keys, and Shift/Alt shortcuts. Hardware gesture integration remains proposed."
+    },
+    {
+      "decision": "Questions gather in an attention queue and require a deliberate reply.",
+      "implementation": "Choice, review, explicit Send, then a recipient-specific receipt. A different question clears the reviewed answer."
+    },
+    {
+      "decision": "Voice should produce a readable, scoped draft.",
+      "implementation": "Sample voice note, editable text, visible recipient, empty-send protection, and explicit Send. This webpage never records audio."
+    },
+    {
+      "decision": "Carry useful context to the next agent.",
+      "implementation": "Original excerpt, optional direction, chosen recipient, review, and delivery receipt."
+    },
+    {
+      "decision": "Browser use needs pointing and text entry.",
+      "implementation": "Interactive local trackpad moves a monitor pointer, hit-tests a field, and exposes a virtual keyboard after selection. Proposed host/firmware mode."
+    },
+    {
+      "decision": "Reuse the character identity already present in Harness.",
+      "implementation": "Twenty exact repository character assets; four selectable companions and working/attention/done/quiet states, plus reduced-motion CSS."
+    },
+    {
+      "decision": "Respect the final enclosure.",
+      "implementation": "Three views rendered directly from Harness_pro9.step-derived meshes, with the actual wedge profile, rear geometry, and measured proportions."
+    }
+  ],
+  "desktop_feature_inventory": [
+    "Native desktop and browser clients; real agent terminals with persisted panes, swarms, and tabs.",
+    "Multiple engines including Claude Code, Codex, Grok Build, Pi, Hermes, and OpenCode.",
+    "Search/jump to work, needs-input switching, models/profiles, worktrees, files and artifact viewers.",
+    "Linked local and remote machines; end-to-end-encrypted remote connections; processes/files stay on their hosts.",
+    "Daemon-backed sessions continue when the app closes; supported manager resume flows.",
+    "Read-only shares and comments, character roster, moods, quiet behavior, and voice.",
+    "Device integration negotiates optional questions, drafts, selection/carry, visits/return, forms, and settings."
+  ],
+  "source_evidence": [
+    {
+      "paths": [
+        "README.md",
+        "docs/product-direction.md",
+        "docs/engines.md",
+        "docs/terminology.md",
+        "desktop/README.md",
+        "desktop/CLAUDE.md"
+      ],
+      "used_for": "Product mission, existing desktop capabilities, terminology, and engine coverage."
+    },
+    {
+      "paths": [
+        "desktop/lib/state/app_state.dart",
+        "desktop/lib/state/device_visit.dart",
+        "desktop/lib/state/pending_question.dart",
+        "desktop/lib/state/device_form.dart",
+        "desktop/lib/devices/device_hosts.dart"
+      ],
+      "used_for": "Device-to-desktop focus, scoped visits/return, guarded questions/forms, capability and connection revisions."
+    },
+    {
+      "paths": [
+        "devices/harness-device/firmware/main/cable_features.c"
+      ],
+      "used_for": "Negotiated capabilities, including visit, forms, selection, questions, voice drafts, refresh, and settings."
+    },
+    {
+      "ref": "488542bdcced3269c3603c57780400e00dca6773",
+      "paths": [
+        "devices/harness-device/prototype/habitat/README.md",
+        "devices/harness-device/prototype/habitat/DESIGN_SYSTEM.md"
+      ],
+      "used_for": "Round interaction model, charcoal/lilac identity, native recaps, deliberate attention, and reading without desktop focus changes."
+    },
+    {
+      "paths": [
+        "daemons/README.md",
+        "desktop/lib/daemons/illustrated_art.dart",
+        "desktop/lib/daemons/roster.dart",
+        "desktop/assets/daemon-art/portrait"
+      ],
+      "used_for": "Existing character collection and exact artwork."
+    },
+    {
+      "ref": "a06c78d6ce027cdadfe6c5e84a11083330874851",
+      "paths": [
+        "devices/harness-device/prototype/pro-companion/README.md",
+        "devices/harness-device/firmware/main/ui/habitat/touch_habitat.c",
+        "devices/harness-device/firmware/main/ui/touch.c"
+      ],
+      "used_for": "720-square Pro direction and touch implementation boundaries. Habitat reads one contact; the separate standard LVGL path already reads two for pinch. The proposed three-level navigation is not claimed to be integrated."
+    },
+    {
+      "paths": [
+        "output/cad/harness-pro9-2026-10-05/geometry-check.json"
+      ],
+      "used_for": "Final supplied CAD dimensions, tilt, actual geometry, and limits of mechanical validation."
+    }
+  ],
+  "claim_boundaries": [
+    "Landing page is a product preview, not a preorder or a shipment announcement.",
+    "New Pro overview, gesture hierarchy, trackpad, and virtual keyboard are proposed product behavior demonstrated locally.",
+    "The page sends no commands to real agents and requests no microphone access.",
+    "Current voice transcription uses a backend service and needs a network connection.",
+    "USB power is required. No battery, wireless operation, detachable dock, price, or delivery date is promised.",
+    "Physical multi-touch recognition, host pointer integration, keyboard ergonomics, and full mechanical fit are not validated by this webpage."
+  ],
+  "goal_completion_audit": [
+    {
+      "requirement": "Study the desktop app",
+      "status": "complete",
+      "evidence": "Source inventory and feature assessment above."
+    },
+    {
+      "requirement": "Study round-device integration",
+      "status": "complete",
+      "evidence": "Device visits, pending questions, forms, host capabilities, round firmware behavior."
+    },
+    {
+      "requirement": "Use the larger square screen and richer gestures",
+      "status": "complete",
+      "evidence": "Agent grid, attention flows, original context alongside destination, and 1/2/3-contact gesture navigation in the local preview."
+    },
+    {
+      "requirement": "Study and preserve the character design",
+      "status": "complete",
+      "evidence": "Existing round compositor image and 20 byte-identical assets from the current character collection."
+    },
+    {
+      "requirement": "Manage multiple engines across all machines",
+      "status": "complete",
+      "evidence": "Six engines on three sample machines, search, workspace/machine filters, explicit desktop visit and return."
+    },
+    {
+      "requirement": "Build the landing page for the final industrial design",
+      "status": "complete",
+      "evidence": "Repo-native Next.js /pro route, exact CAD-derived views, interactive preview, mobile layouts, production bundle."
+    },
+    {
+      "requirement": "Validate the page",
+      "status": "complete",
+      "evidence": "Passing website tests, affected tests, lint, typechecked production build, desktop/tablet/mobile browser checks."
+    }
+  ]
+}

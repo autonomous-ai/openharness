@@ -103,6 +103,8 @@ import 'session_content_search.dart';
 import 'session_preview.dart';
 import 'session_tail.dart';
 import '../usage/models_menu_controller.dart';
+import '../usage/ledger/device_usage.dart';
+import '../usage/ledger/usage_ledger_controller.dart';
 import '../usage/remote_usage.dart';
 import '../usage/usage_accounts.dart';
 import '../orchestrator/orchestrator_controller.dart';
@@ -2803,6 +2805,7 @@ class AppNotifier extends ChangeNotifier {
     AlertSounds? alerts,
     AgentAlerts? agentAlerts,
     AgentUnread? agentUnread,
+    UsageLedgerController? usageLedger,
     SystemNotifications? systemNotifications,
     this.experimentalSettingsTransport,
   }) : alerts = alerts ?? AlertSounds(store: alertSoundStore),
@@ -2810,6 +2813,8 @@ class AppNotifier extends ChangeNotifier {
        systemNotifications =
            systemNotifications ?? notify_system.systemNotifications,
        agentUnread = agentUnread ?? AgentUnread(),
+       _usageLedger = usageLedger,
+       _ownsUsageLedger = usageLedger == null,
        _paneLayout = paneLayoutStore,
        // Remembers "a dial has been seen here" on the same terms the pane
        // layout is remembered: with a layout store there is a state file, and
@@ -3330,6 +3335,18 @@ class AppNotifier extends ChangeNotifier {
     // A daemon restarted mid-session therefore had nothing to say, and a dial that re-anchored onto
     // the wrong tile stayed there.
     _announceAppFocus();
+    final metricsConnection = _deviceMetricsConnection(machineId);
+    final metricsSession = metricsConnection?.deviceMetricsSession;
+    if (_isOwnDaemonMachine(machineId) && metricsSession != null) {
+      // Capability announcement only: attaching hardware never scans logs.
+      unawaited(
+        metricsConnection!.sendDeviceMetricsFrame(
+          metricsSession,
+          'app_metrics_ready',
+          {'schema': 1},
+        ),
+      );
+    }
     // ...nor what colour its panes are. tmux answers a TUI's "what is my background?"
     // (OSC 10/11 — Codex picks its light or dark diff palette from it) with whichever
     // terminal attached first, unless told; this tells it, for the sessions it owns.
@@ -3453,10 +3470,9 @@ class AppNotifier extends ChangeNotifier {
   ///
   /// Sent on every change rather than asked for: the daemon holds the latest and
   /// can hand it over the moment a cable attaches, without a round trip to a
-  /// window that may be busy. Ids and kinds only — the daemon already knows each
-  /// agent's name, machine and last recap, and re-deriving them here would be a
-  /// second place for them to be wrong. The desktop inbox can retain more than
-  /// the dial's eight rows; sending only that window preserves the wire limit.
+  /// window that may be busy. Result words stay with their unread receipt; the
+  /// daemon's latest recap may already describe another turn. The desktop inbox
+  /// can retain more than the dial's eight rows; send only that window.
   void _announceUnreadToDial() {
     final pool = _pool;
     if (pool == null) return;
@@ -3467,18 +3483,12 @@ class AppNotifier extends ChangeNotifier {
           'machineId': mark.machineId,
           'question': mark.kind == AlertKind.needsYou,
           'readToken': agentUnread.readTokenFor(mark.machineId, mark.agentId),
-          // A QUESTION'S OWN WORDS, because nobody else has them. The daemon
-          // fills in the recap for a finished turn from what it summarised, but
-          // an open question lives here — in `blockedAgents` — and a dial that
-          // rebooted has no memory of having asked it. Without this its drawer
-          // row arrives blank and falls back to the word the row type used to
-          // assume: "done", on a question nobody has answered.
-          if (mark.kind == AlertKind.needsYou)
-            'text':
-                machineStates[mark.machineId]
-                    ?.blockedAgents[mark.agentId]
-                    ?.prompt ??
-                '',
+          'text': mark.kind == AlertKind.needsYou
+              ? machineStates[mark.machineId]
+                        ?.blockedAgents[mark.agentId]
+                        ?.prompt ??
+                    ''
+              : agentUnread.messageFor(mark.machineId, mark.agentId) ?? '',
         },
     ];
     for (final machineId in pool.machineIds) {
@@ -7653,6 +7663,13 @@ class AppNotifier extends ChangeNotifier {
       _modelManager ??= ModelManagerController(this);
 
   ModelsMenuController? _modelsMenu;
+  UsageLedgerController? _usageLedger;
+  final bool _ownsUsageLedger;
+
+  /// One local ledger owner for Settings and read-only cable requests, so a
+  /// switch-off immediately revokes the same in-memory data the device reads.
+  UsageLedgerController get usageLedger =>
+      _usageLedger ??= UsageLedgerController();
 
   /// Subscription readings for the whole window: the Models panel, New Harness and every pane's model
   /// picker read this ONE controller. Each used to own its own, read at a different moment, and the
@@ -14491,6 +14508,91 @@ class AppNotifier extends ChangeNotifier {
   }
 
   DeviceVisit? _deviceVisit;
+  WsConn? _deviceMetricsConnection(String machineId) =>
+      _pool?[machineId] ?? connectionForTest?.call(machineId);
+
+  Future<Map<String, dynamic>?> metricsFromDevice(
+    String connectionMachineId,
+    Map<String, dynamic> command,
+  ) {
+    final connection = _deviceMetricsConnection(connectionMachineId);
+    return _readDeviceMetrics(
+      connectionMachineId,
+      command,
+      connection,
+      connection?.deviceMetricsSession,
+    );
+  }
+
+  Future<Map<String, dynamic>?> _readDeviceMetrics(
+    String connectionMachineId,
+    Map<String, dynamic> command,
+    WsConn? connection,
+    Object? session,
+  ) async {
+    final request = command['requestId'];
+    final expires = command['expiresAt'];
+    if (request is! String ||
+        !RegExp(r'^[a-zA-Z0-9-]{1,47}$').hasMatch(request) ||
+        command['schema'] != 1 ||
+        command['machineId'] != connectionMachineId ||
+        expires is! int) {
+      return null;
+    }
+    final reply = <String, dynamic>{
+      'requestId': request,
+      'machineId': connectionMachineId,
+      'schema': 1,
+    };
+    final machine = stateOf(connectionMachineId);
+    final revision = _authRevision;
+    bool allowed() =>
+        !_disposed &&
+        !signingOut &&
+        status == AppStatus.authenticated &&
+        revision == _authRevision &&
+        connection != null &&
+        session != null &&
+        identical(connection, _deviceMetricsConnection(connectionMachineId)) &&
+        identical(session, connection.deviceMetricsSession) &&
+        _isOwnDaemonMachine(connectionMachineId) &&
+        machine != null &&
+        identical(stateOf(connectionMachineId), machine) &&
+        machine.isLocalMachine &&
+        !machine.machine.isShared &&
+        connectionMachineId.length <= 47 &&
+        DateTime.now().millisecondsSinceEpoch < expires;
+    Map<String, dynamic> unavailable() => {
+      ...reply,
+      'ok': false,
+      'error': 'Local usage is unavailable.',
+    };
+    if (!allowed()) return unavailable();
+    try {
+      final ledger = usageLedger;
+      if (ledger.loaded) {
+        await ledger.refresh();
+      } else {
+        await ledger.load();
+      }
+      if (!allowed()) return unavailable();
+      return {
+        ...reply,
+        'ok': true,
+        'usage': projectDeviceUsage(
+          machineId: connectionMachineId,
+          machineName: machine!.machine.displayName,
+          now: DateTime.now(),
+          ledgers: [for (final store in ledger.stores) store.ledger],
+          states: ledger.scanStates,
+        ),
+      };
+    } catch (_) {
+      // Scanner errors may contain transcript paths. Never send them to cable.
+      return unavailable();
+    }
+  }
+
   bool Function()? deviceNavigationAllowed;
   Future<Map<String, dynamic>> Function(String, Map<String, dynamic>)?
   deviceFormCommand;
@@ -14714,6 +14816,7 @@ class AppNotifier extends ChangeNotifier {
     if (!latest &&
         identical(focusedPane, visit.origin) &&
         activeSwarmId == visit.originSwarm) {
+      final restored = visit.bookmark.restore();
       visit.dispose();
       _deviceVisit = null;
       return {
@@ -14721,6 +14824,8 @@ class AppNotifier extends ChangeNotifier {
         'ok': true,
         'active': false,
         'agentId': focusedPane?.agentId,
+        if (!restored)
+          'note': 'Returned. The earlier text is no longer available.',
       };
     }
     visit.visiting = focusedPane;
@@ -15047,6 +15152,32 @@ class AppNotifier extends ChangeNotifier {
         if (result != null) {
           await _pool?[machineId]?.sendTerminalFrame('app_form_result', result);
         }
+        return;
+      case 'dial_metrics':
+        final connection = _deviceMetricsConnection(machineId);
+        final session = connection?.deviceMetricsSession;
+        if (connection == null || session == null) return;
+        // WsConn dispatches in order. A cold transcript scan must not hold up
+        // terminal output, scroll input, questions, or authentication changes.
+        unawaited(() async {
+          try {
+            final result = await _readDeviceMetrics(
+              machineId,
+              payload,
+              connection,
+              session,
+            );
+            if (result != null) {
+              await connection.sendDeviceMetricsFrame(
+                session,
+                'app_metrics_result',
+                result,
+              );
+            }
+          } catch (_) {
+            // The captured socket may have closed while the scan finished.
+          }
+        }());
         return;
       case 'device_focus':
         unawaited(ensureDeviceFocus(payload));
@@ -15494,14 +15625,22 @@ class AppNotifier extends ChangeNotifier {
         while (_deliveredNotifications.length > 512) {
           _deliveredNotifications.remove(_deliveredNotifications.first);
         }
-        _raiseAlert(
-          machine,
-          agentId,
-          AlertKind.done,
-          message:
-              previewText(payload['recap'], limit: 600) ??
-              previewText(payload['text'], limit: 600),
-        );
+        var message =
+            previewText(payload['recap'], limit: 600) ??
+            previewText(payload['text'], limit: 600) ??
+            previewText(payload['summary'], limit: 600);
+        // AgentUnread keeps 600 UTF-16 units. Do not split a surrogate pair at
+        // that boundary when retaining the exact notification's preview.
+        if (message != null && message.length > 600) {
+          message = message.substring(0, 600);
+        }
+        if (message != null && message.isNotEmpty) {
+          final last = message.codeUnitAt(message.length - 1);
+          if (last >= 0xD800 && last <= 0xDBFF) {
+            message = message.substring(0, message.length - 1);
+          }
+        }
+        _raiseAlert(machine, agentId, AlertKind.done, message: message);
         break;
       case 'turn_ended':
         final agentId = _eventAgentId(machine, event, payload);
@@ -15671,6 +15810,7 @@ class AppNotifier extends ChangeNotifier {
     _modelManager?.dispose();
     harnessMonitor.dispose();
     _modelsMenu?.dispose();
+    if (_ownsUsageLedger) _usageLedger?.dispose();
     for (final controller in _teamControllers.values) {
       controller.dispose();
     }

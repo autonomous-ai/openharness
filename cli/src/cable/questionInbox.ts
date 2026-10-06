@@ -23,19 +23,63 @@ type Entry = {
   drafts: Map<number, Draft>
   submitted?: Promise<AnswerReceipt>
 }
+export interface QuestionNotice {
+  agentId: string; id: string; questions: unknown; revision: number
+}
 
 /** The host owns the pending catalog; the dial holds only the question it is reading.
  * Tokens name immutable contents, not merely the engine's sometimes-reused id. */
 export class QuestionInbox {
   private readonly entries = new Map<string, Entry>()
   private readonly latestIds = new Map<string, string>()
+  private readonly notices = new Map<string, QuestionNotice>()
+  private revision = 0
+  private owner?: string
+
+  bindOwner(owner: string): void {
+    if (this.owner === owner) return
+    this.clear(); this.owner = owner
+  }
+
+  /** Pending work outlives a USB connection and its unread notification. */
+  notifications(): QuestionNotice[] {
+    return [...this.notices.values()].map(notice => structuredClone(notice))
+  }
+
+  notificationCurrent(notice: QuestionNotice): boolean {
+    return this.notices.get(notice.agentId)?.revision === notice.revision
+  }
+
+  clear(): void {
+    this.entries.clear(); this.latestIds.clear(); this.notices.clear()
+  }
 
   set(agentId: string, id: string, raw: unknown): void {
+    // Runtime events normally use UUIDs. Bound the catalog's identity storage
+    // too; an unusable identity cannot become an actionable restored question.
+    if (!agentId || agentId.length > 128) return
+    if (!id || id.length > 128) {
+      this.latestIds.delete(agentId); this.entries.delete(agentId); this.notices.delete(agentId)
+      return
+    }
     if (this.latestIds.size >= 64 && !this.latestIds.has(agentId)) {
       const oldest = this.latestIds.keys().next().value!
-      this.latestIds.delete(oldest); this.entries.delete(oldest)
+      this.latestIds.delete(oldest); this.entries.delete(oldest); this.notices.delete(oldest)
     }
     this.latestIds.set(agentId, id)
+    // Keep unsupported dialogs discoverable too, without fabricating choices
+    // or making them answerable. Oversized/malformed input gets only its title;
+    // read() remains authoritative about whether review is available.
+    let notification: unknown
+    try {
+      const encoded = JSON.stringify(raw)
+      if (encoded && Buffer.byteLength(encoded, 'utf8') <= 6500) notification = JSON.parse(encoded)
+    } catch { /* retain a bounded attention title below */ }
+    if (notification === undefined) {
+      const title = Array.isArray(raw) && typeof raw[0]?.q === 'string' ? raw[0].q : 'Needs your answer'
+      notification = [{ q: Array.from(title).slice(0, 192).join('') }]
+    }
+    this.notices.set(agentId, { agentId, id, questions: notification, revision: ++this.revision })
     const valid = agentId && id && Array.isArray(raw) && raw.length > 0 && raw.length <= 4 &&
       raw.every(q => q && typeof q.key === 'string' && q.key && typeof q.q === 'string' && q.q &&
         Array.isArray(q.options) && q.options.length > 0 && q.options.length <= 6 &&
@@ -56,7 +100,7 @@ export class QuestionInbox {
   close(agentId: string, id: string): boolean {
     const current = this.latestIds.get(agentId)
     if (current !== undefined && current !== id) return false
-    this.latestIds.delete(agentId); this.entries.delete(agentId)
+    this.latestIds.delete(agentId); this.entries.delete(agentId); this.notices.delete(agentId)
     return true
   }
 

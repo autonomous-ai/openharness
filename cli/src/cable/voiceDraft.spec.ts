@@ -115,4 +115,12 @@ describe('voice draft ownership and receipts', () => {
     expect(receipt.id).toBe(old.id)
     expect(await drafts.command(next.id, 1, 'state')).toMatchObject({ text:'New', active:true })
   })
+  it('invalidates a pending prepared operation when the cable clears its draft', async () => {
+    const drafts = new VoiceDraft(), cancel = vi.fn(), submit = vi.fn(async () => ({ ok: true as const }))
+    const page = drafts.create({ agentId: 'a', name: 'A', text: 'Once.', submit, cancel })
+    const pending = drafts.command(page.id, page.revision, 'send')
+    drafts.clear()
+    expect(await pending).toMatchObject({ ok: false, active: false })
+    expect(cancel).toHaveBeenCalledOnce(); expect(submit).not.toHaveBeenCalled()
+  })
 })

@@ -26,6 +26,77 @@ Map<String, dynamic> visit(
 };
 
 void main() {
+  testWidgets(
+    'opening the original pane restores its reading place and ends the visit',
+    (tester) async {
+      final app = createApp(connected: true);
+      final input = <TerminalBinaryFrame>[];
+      final a = terminal('a0', input), b = terminal('a1', input);
+      a.terminal.write(List.generate(160, (i) => 'Source line $i\r\n').join());
+      b.terminal.write('Recipient output\r\n');
+      final origin = app.adoptSessionForTest(a);
+      app.adoptSessionForTest(b);
+      await app.focusAgentFromDevice('m', 'a0');
+      try {
+        await mount(tester, app);
+        final finder = find.byWidgetPredicate(
+          (w) => w is TerminalView && w.terminal == a.terminal,
+        );
+        final renderer = tester.state(finder);
+        final controller = tester.widget<TerminalView>(finder).controller;
+        final scroll = tester.widget<TerminalView>(finder).scrollController!;
+        scroll.jumpTo(240.25);
+        await tester.pump();
+        expect(
+          app.visitFromDevice('m', visit('latest', target: 'a0'))!['active'],
+          isTrue,
+        );
+        await tester.pump();
+        expect(scroll.offset, closeTo(scroll.position.maxScrollExtent, .01));
+        expect(app.visitFromDevice('m', visit('open'))!['active'], isTrue);
+        await tester.pump();
+        a.terminal.write('New source output during recipient choice\r\n');
+        await tester.pump();
+        final text = a.terminal.buffer.getText();
+        final returned = app.visitFromDevice(
+          'm',
+          visit('open', from: 'a1', target: 'a0'),
+        )!;
+        expect(returned, containsPair('ok', true));
+        expect(returned, containsPair('active', false));
+        expect(returned, isNot(contains('note')));
+        await tester.pump();
+        expect(scroll.offset, closeTo(240.25, .01));
+        expect(app.focusedPane, same(origin));
+        expect(origin.session, same(a));
+        expect(tester.state(finder), same(renderer));
+        expect(
+          tester.widget<TerminalView>(finder).controller,
+          same(controller),
+        );
+        expect(a.terminal.buffer.getText(), text);
+        expect(app.visitFromDevice('m', visit('back'))!['ok'], isFalse);
+        // Choosing another recipient now starts a fresh detour from this line.
+        expect(
+          app.visitFromDevice('m', visit('open', id: 'visit-two'))!['active'],
+          isTrue,
+        );
+        await tester.pump();
+        expect(
+          app.visitFromDevice('m', visit('back', id: 'visit-two'))!['ok'],
+          isTrue,
+        );
+        await tester.pump();
+        expect(scroll.offset, closeTo(240.25, .01));
+        expect(input, isEmpty);
+        expect(tester.takeException(), isNull);
+      } finally {
+        await tester.pumpWidget(const SizedBox());
+        app.dispose();
+      }
+    },
+  );
+
   testWidgets('latest output keeps a reading return through repeated peeks', (
     tester,
   ) async {
@@ -400,4 +471,55 @@ void main() {
       }
     },
   );
+
+  for (final invalidation in ['stream replacement', 'pruned text']) {
+    testWidgets(
+      'opening the origin reports unavailable reading after $invalidation',
+      (tester) async {
+        final app = createApp(connected: true);
+        final input = <TerminalBinaryFrame>[];
+        final a = terminal('a0', input);
+        a.terminal.write(
+          List.generate(160, (i) => 'Reading line $i\r\n').join(),
+        );
+        final origin = app.adoptSessionForTest(a);
+        app.adoptSessionForTest(terminal('a1', input));
+        await app.focusAgentFromDevice('m', 'a0');
+        try {
+          await mount(tester, app);
+          final finder = find.byWidgetPredicate(
+            (w) => w is TerminalView && w.terminal == a.terminal,
+          );
+          tester.widget<TerminalView>(finder).scrollController!.jumpTo(240.25);
+          await tester.pump();
+          expect(app.visitFromDevice('m', visit('open'))!['active'], isTrue);
+          await tester.pump();
+          if (invalidation == 'stream replacement') {
+            a.streamId = 'replaced-while-choosing-recipient';
+          } else {
+            a.terminal.write(
+              '\x1b[3J\x1b[H\x1b[2JThe old reading was cleared.',
+            );
+          }
+          final result = app.visitFromDevice(
+            'm',
+            visit('open', from: 'a1', target: 'a0'),
+          )!;
+          expect(result['ok'], isTrue);
+          expect(result['active'], isFalse);
+          expect(
+            result['note'],
+            'Returned. The earlier text is no longer available.',
+          );
+          await tester.pump();
+          expect(app.focusedPane, same(origin));
+          expect(app.visitFromDevice('m', visit('back'))!['ok'], isFalse);
+          expect(input, isEmpty);
+        } finally {
+          await tester.pumpWidget(const SizedBox());
+          app.dispose();
+        }
+      },
+    );
+  }
 }

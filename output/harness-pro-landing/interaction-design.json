@@ -1,0 +1,255 @@
+{
+  "version": 18,
+  "scope": "App-focused Pro interaction study plus separate firmware/desktop integration changes. No browser mode, publication, or flashing.",
+  "reference": "https://www.vitsoe.com/us/about/good-design",
+  "principles_applied": [
+    {
+      "principle": 1,
+      "decision": "Use the larger surface to move context between agents."
+    },
+    {
+      "principle": 2,
+      "decision": "Keep regular-device voice and work controls; add contextual depth."
+    },
+    {
+      "principle": 3,
+      "decision": "Restrained colour and reusable companion artwork."
+    },
+    {
+      "principle": 4,
+      "decision": "Show the selected recipient and one primary action."
+    },
+    {
+      "principle": 5,
+      "decision": "Keep home quiet; open temporary sheets only when needed."
+    },
+    {
+      "principle": 6,
+      "decision": "Distinguish request delivery from execution; show partial estimates honestly."
+    },
+    {
+      "principle": 7,
+      "decision": "Use stable spatial layout and familiar touch controls."
+    },
+    {
+      "principle": 8,
+      "decision": "Preserve reading positions, words and receipt identities."
+    },
+    {
+      "principle": 9,
+      "decision": "Reuse enclosure, electronics and art; no quantified environmental claim."
+    },
+    {
+      "principle": 10,
+      "decision": "Remove repeated instructions and duplicate symbols; enlarge what remains."
+    }
+  ],
+  "baselines": {
+    "regular_device": "https://www.autonomous.ai/harness-device",
+    "pro_firmware": "a06c78d6ce027cdadfe6c5e84a11083330874851",
+    "regular_firmware": "488542bdcced3269c3603c57780400e00dca6773",
+    "desktop": "fa8f966c781b59175e98d601954425f6b6be27cf"
+  },
+  "core_stories": [
+    {
+      "story": "Quick direction",
+      "actions": 2,
+      "behavior": "Tap, speak, tap to send. Optional review. Known blockers are explained before capture; recipient identity is pinned and checked again before queued recording."
+    },
+    {
+      "story": "Decide",
+      "actions": 3,
+      "behavior": "Read without moving the app pane. Choose or speak an answer; Previous returns to earlier answers without losing later work. Final Send answers submits the packet once. Pending or uncertain answers remain read-only until exact resolution or explicit local Close."
+    },
+    {
+      "story": "Carry",
+      "actions": 6,
+      "behavior": "Select text, Carry, choose a pane, explicitly speak, finish and review/send. The quiet chooser keeps Back and same-pane choice local, preserving the tray and valid Return. Other recipients use acknowledged visits. Frozen source and recipient stay attached through review; unused trays expire. Current-tab pane reach is bounded to 16 rows."
+    },
+    {
+      "story": "Return",
+      "actions": 3,
+      "behavior": "Read locally. For the current pane, Latest output visits the live tail; other panes retain Open on desktop. Return restores the original reading position across repeated peeks and explicit alert visits. Manual navigation invalidates the bookmark; missing scrollback is disclosed."
+    },
+    {
+      "story": "Goal and Loop",
+      "actions": "4\u20135",
+      "behavior": "Engine-supported, deliberately reviewed intent. Delivery acknowledgement does not claim goal completion or a verified schedule."
+    },
+    {
+      "story": "Lost receipt",
+      "actions": "0\u20131 after reconnect",
+      "behavior": "Keep a bounded local copy of an unconfirmed answer read-only. Check in Harness, or explicitly Close the local copy to resume questions. Never infer success from an empty inbox or automatically resend."
+    },
+    {
+      "story": "Reviewed message recovery",
+      "actions": "1 to recover, then scroll; 1 to close locally",
+      "behavior": "Retain original intent and recipient through link loss. Pro restores a small identity bookmark after power loss; reconnect to the original computer and explicitly recover read-only parts. Close removes the local recovery bookmark. No automatic sending or restored editing."
+    },
+    {
+      "story": "Find in output",
+      "actions": "Find, speak, finish; optional match/range adjustment and Carry",
+      "behavior": "Find spoken words in current output, use Previous/Next or swipe to choose a match, switch explicitly to By line then Range, and Carry the exact passage. Old actions are refused after a computer or pane change, including A-to-B-to-A. Cancellation ends search; refusal requires explicit Try again. No-match permits another phrase. No additional Home control or implicit Return bookmark."
+    }
+  ],
+  "implemented_in_study": [
+    "Same normalized pane arrangement as the paired app",
+    "Single-touch access to all core actions",
+    "Optional two-contact workspace shortcut",
+    "Question revision and recipient guards",
+    "Frozen reviewed attachment; five-minute expiry for unused trays only; reselection preserves words",
+    "Independent pane reading anchors",
+    "Manual focus invalidates Return",
+    "Partial local USD spending with source and freshness",
+    "Sample host receipts and app forms"
+  ],
+  "implementation_boundaries": [
+    "The website uses fixture voice/app/telemetry and never records or commands a real agent.",
+    "Desktop/CLI optional metrics.read.v1 code is in the main worktree; firmware consumer parser, native touch/render replays and target build passed. Physical cable integration remains untested.",
+    "Goal/Loop lifecycle, scheduler receipts, and negotiated intent capabilities are not represented as implemented host telemetry.",
+    "The Pro GT911 five-contact driver and two-contact workspace gesture are implemented and replay-tested. Physical multi-touch behavior remains unverified.",
+    "No battery, removable dock, haptics, local transcription or beamforming is assumed.",
+    "The repository contains a web interaction study and separate native Pro firmware. Browser fixtures do not command a real agent; native rendering and replay evidence do not establish physical touch, comfort, microphone quality or notification acoustics.",
+    "Strict local reviewed Goal/Loop is integrated in the root CLI worktree from a51cab4749416f9a05c041935614f9087614b031. It pins the recipient process and protects existing terminal drafts, never routes or retries, and reports guarded terminal submission only. It does not claim agent acceptance, Goal completion, or a verified scheduler.",
+    "Strict host Goal/Loop applies to reviewed voice from all cable clients; host ordinary Task routing and unreviewed Goal/Loop retain existing behavior. Native new-capture checks now reject known terminal/offline/link/question blockers and recent busy Goal/Loop states without claiming negotiated host readiness.",
+    "Unconfirmed question answers are volatile bounded local copies. Close clears that copy only, leaving host notifications and delivery status unchanged; a newly loaded already-submitted question may have no local saved answer.",
+    "Firmware work remains isolated on dev/firmware-pro at 5c4a5efe571779ce53ec2f105d22e23cf9d04f1e, the exact clean compiled P4 source. No flash or physical trial.",
+    "The current development image is 8,115,040 bytes, leaving 142,496 bytes in the unchanged 8,257,536-byte slot. Static BSS is 424,392 bytes. Runtime memory remains unverified.",
+    "Reviewed Task, Goal, Loop and Carry words are retained by the host across disposable USB sessions for a fixed 30 minutes. The bounded archive does not survive Harness daemon restart. Recovery permanently revokes sending, spoken editing and undo.",
+    "Pro retains only the visible part and bounded Carry preview in RAM. A 256-byte metadata-only bookmark survives a successful NVS save, permitting explicit same-host recovery after reboot. No words or full Carry attachment are persisted locally.",
+    "Strict local reviewed Goal/Loop and legacy Task receipts retain their distinct meaning. Recovery never upgrades a terminal submission or handoff into confirmed engine acceptance, goal completion or a verified schedule. Tmux cannot atomically bind external human/process activity to a pane-addressed write.",
+    "The user excluded Vietnamese expansion; no review-font capability or language interface issue was introduced. Existing locale behavior is preserved.",
+    "Native capture rejects known blockers before speaking and validates pinned machine/session/engine/host/generation before queued recording. Goal/Loop keep existing exact-locality rules; Task/Carry permit busy-agent steering. Already-recorded drafts retain structural send checks, independent from temporary new-capture blockers. Host Task routing is unchanged.",
+    "Select in app requests fresh host output for the pinned current pane. Latest output separately visits that pane\u2019s live terminal tail. A saved Summary is never treated as live selection coordinates or the historical location of terminal output.",
+    "Reviewed Send gives a brief owner-bound handoff cue only after an exact positive receipt and successful bookmark cleanup. Discard, ambiguous/error or historical receipts never produce the cue. Goal/Loop say Request sent, not running, scheduled or complete.",
+    "Installed Claude Goal acceptance and Loop recognition passed with a scripted localhost provider through the actual reviewed cable path. This is separate from the native app socket test and establishes neither live model usefulness nor scheduler or physical-device behavior.",
+    "A native macOS app test exercised framed cable selection over actual local WebSocket and private tmux streams. It selected three output lines, invalidated stale focus, preserved the renderer and sent zero terminal input. The line emitter and cable endpoint were fixtures.",
+    "Pending-question state is separate from unread notification state. Fleet-owned host catalog and single-attempt answer receipts survive USB session replacement, with exact host/link ownership guards; they remain bounded to 64 agent IDs and the daemon lifetime.",
+    "Pro retains 72 attention cards. Read acknowledgments and empty unread snapshots cannot resolve questions. Overflow retains the current card/exact review/uncertain answer, admits new attention and shows only More in Harness. It never fabricates a close or resolved count.",
+    "A retained answer has one explicit Review answer route. Inbox, Home and Agent Answer shortcuts and queued taps are disabled while it is pending; a newer same-agent question re-enables only after exact resolution or explicit local Close.",
+    "Final native app transport checks preserved question state, pane, renderer and reading position through actual local socket paths; exact captured host frames also passed native firmware replay. These checks used synthetic question metadata and an emulated physical cable.",
+    "Reconnect or an identified host change invalidates recording until a newer complete agent roster arrives. Previous machine/cache/partial-roster state cannot authorize a fresh tap. A same-owner keepalive preserves the current stream; missing identity on two legacy live greetings cannot reveal an invisible owner change.",
+    "The inbox merge retains its compact 648-byte static plan/map and full 72-card capacity. Prior named compiler-frame measurements are historical scoped evidence, not a full task bound or runtime high-water measurement for this build.",
+    "Ten latest Carry chooser/Home/review/Return/refusal states are actual native renders tied to the compiled source. Previous question/readiness and font-comparison scenes retain only their scoped evidence. The local website remains an unchanged fixture-driven study.",
+    "Previous within an editable multi-question packet preserves every local answer and the original host token. Right-swipe follows the visible Back transition; pending/uncertain packets cannot be edited. Final Send answers submits the entire reviewed packet once.",
+    "A failed additional desktop visit may retain only an existing Return. Pending target identity is separate from the acknowledged destination; only matching successful Open/Latest receipts can promote it. The shared wire format is unchanged.",
+    "Lossless font packing preserves all 1,304 glyph masks and font metrics. Two clean generations match; eight actual native scenes match pixel-for-pixel under the comparison source. No artwork, renderer, audio or font repertoire changes.",
+    "Result reading freezes the bounded summary available at entry. An overflowing notice uses its own preview. Desktop now captures the completion event words with its unread token and forwards them through the existing field; nonempty supplied text never borrows newer history. Preview remains bounded to native 239 bytes. Empty legacy fallback and full historical answer retrieval remain outside that guarantee; Select in app requests live selection.",
+    "Actual app reconnect restores the exact newer result words/token while preserving the owning terminal session, renderer, scroll controller, visible text, focus and viewport. An authoritative keyframe intentionally replaces the internal Terminal model. This proves transport recovery in a running app, not persistence across app restart or physical device behavior.",
+    "Agent-only cable actions refuse an ID once conflicting machine owners are observed. The guard persists through USB replacement, tab changes and an owner disappearing, for this daemon lifetime only. Undiscovered collisions and owner memory across daemon restarts remain unresolved. Saved words stay historical; exact occurrence reads and an acknowledged Return remain usable.",
+    "A Summary Latest tap pins reader/source/host/focus through its queued worker. Focus A\u2192B\u2192A, unknown recipients, owner/link changes and reader replacement cancel stale intent without silently turning it into Open. A refused unsent peek preserves Return only while its original source and focus remain valid.",
+    "Fixed transcript at the existing transcription service boundary and one counted host dispatch into owned memory; no microphone, recognition reliability, latency or vendor acceptance claim. Cable is emulated. Firmware callbacks/queued-worker fixtures and 720px renders are separate from this native app test. Carry picker lists the active app tab's known panes, maximum 16, including already-open remote panes; it is not full-fleet search or negotiated capture readiness.",
+    "Software pass closed for handoff at user request; no next feature iteration started. No prototype connected: no physical touch, microphone, recognition reliability, latency or comfort measurement. App uses a fixed transcript at the existing service boundary and emulated cable. Native production callbacks and actual app/socket tests are separate evidence. Search is literal, case-insensitive and limited to retained output. It does not create a Return bookmark. Static linked memory and flash size are measured; runtime heap, stacks and physical scheduling are unverified. No flash, shared installation, push, merge or publication performed."
+  ],
+  "iteration_log": [
+    {
+      "pass": "Engineering/product audit",
+      "changes": "Restored regular-device capability depth and reused real app identity, layout, question, draft, carry and visit contracts."
+    },
+    {
+      "pass": "State review",
+      "changes": "Fixed wrong-recipient question voice path, stale question acceptance, reading loss, retained Return after focus, expiry recovery, and uncertain receipt navigation."
+    },
+    {
+      "pass": "Visual review",
+      "changes": "Enlarged touch regions and secondary type, removed duplicate engine marks/helper copy, pinned decision action, made companion size flexible, collapsed carried-source detail, kept spending scope visible."
+    },
+    {
+      "pass": "Native refinement",
+      "changes": "Reduced workspace type, enlarged the selected pane with measured fallback, simplified idle/result copy, retained exact action rectangles and existing Paper scene choice."
+    },
+    {
+      "pass": "Scroll-led product page",
+      "changes": "Removed feature tabs; created differentiated visual chapters, large final-CAD hero, always-visible companion lineup, inline demos, mobile layouts, readable secondary text and reduced-motion handling."
+    },
+    {
+      "pass": "Native spatial and contact integration",
+      "changes": "Added guarded five-contact input with a two-finger workspace gesture, real app pane map with List fallback, local Updates answers and capability-gated Read/Open/Return."
+    },
+    {
+      "pass": "Reviewed Carry",
+      "changes": "Made review words-first with one scroll region and a fixed Send action; froze recipient and passage before speech; exempted only an attached tray from expiry; labeled the bounded preview; restored reading position; kept retained local words scrollable without suggesting the full attachment survived disconnect."
+    },
+    {
+      "pass": "Reviewed local Goal/Loop delivery",
+      "changes": "Pinned agent/session/engine/process and runtime generation before speech; protected human drafts and busy turns; shared the actual terminal writer; bounded queued writes; one paste and Enter; retained one receipt for repeated Send; cancelled queued delivery on disconnect."
+    },
+    {
+      "pass": "Question recovery",
+      "changes": "Kept uncertain answers reachable through real Updates even after an empty notification refresh. Added local read-only scrolling and an identity-pinned Close that unblocks the inbox without resending, dismissing host notifications or guessing success."
+    },
+    {
+      "pass": "Reviewed-message recovery",
+      "changes": "Moved bounded host retention to the fleet, above changing USB sessions. Added exact owner and async-port guards, a permanent native read-only latch, identity-only NVS reboot recovery, explicit local Close, concise failure screens, actual host-to-native replay and equivalent fixture behavior."
+    },
+    {
+      "pass": "Everyday native interaction",
+      "changes": "Restored quiet observed running time; put unanswered questions and retained answers one tap from Home; added reader-scoped fresh-output selection; made Answer primary; guarded Goal/Loop with exact locality and link identity while preserving Task. Reviewed 16 native states and the question/reader cases, then built the exact committed P4 source."
+    },
+    {
+      "pass": "Precise feedback and actual app transport",
+      "changes": "Brief truthful Send acknowledgment, accurate Options/Back and Notifications labels, retained-word unavailability explanation. Verified installed Claude command parsing through reviewed cable; verified native app passage selection and stale focus refusal through real local transport. Independent nine-screen review and exact P4 build."
+    },
+    {
+      "pass": "Question lifetime and quiet recovery",
+      "changes": "Separated pending questions from unread updates across host, disposable USB sessions and Pro. Preserved current reading and uncertain answers, guarded stale owners/requests, made unavailable questions desktop-only, handled catalog overflow with one quiet hint, and removed misleading pending Answer shortcuts. Independent source/13-screen review, real native app transport, exact captured-frame replay and pinned P4 build passed. Full CLI retains two unchanged-test failures despite passing isolated diagnosis; target memory increase is recorded as internal BSS."
+    },
+    {
+      "pass": "Before-speaking checks and bounded inbox RAM",
+      "changes": "Kept work modes visible, explained known capture blockers in one short line, preserved recorded drafts and Carry context, guarded queued recording and fresh taps across host changes, and reduced internal BSS by 37,800 bytes while retaining 72 attention cards. Independent eight-screen/source review, 305 Pro plus four non-Pro greeting cases, differential inbox and recorded-host replays, selected native checks and pinned P4 build passed. Metrics required a test-only enum correction; compiled-source reuse is explicit. Physical readiness and runtime memory remain unverified."
+    },
+    {
+      "pass": "Correct answers, preserve Return and reclaim flash",
+      "changes": "Added local Previous through mixed question packets, matched swipe Back to the visible action, preserved acknowledged Return after a refused second Open, and packed transparent glyph padding without changing pixels. Final 71 touch, 31 visit, 305 readiness plus 4 round greeting cases, 12,144 inbox callbacks, round touch/soak variants and Pro voice passed. All 1,304 glyph masks and eight native scenes match; independent six-screen review accepted exact compiled source 6b8f22a7b. Image is 124,896 bytes smaller. No physical device was connected."
+    },
+    {
+      "pass": "Keep reading without losing your place",
+      "changes": "Short Updates cards stay quiet; overflowing summaries gain local Read. Reader words/source/row are frozen, Back and right-swipe agree, and read ACK/empty/newer snapshots preserve context without moving the desktop. Owner generations prevent stale actions. 37 reader and 74 touch cases, existing app/visit/merge/readiness, round regressions, voice and exact P4 build pass; 13 native reader images reviewed. No connected hardware."
+    },
+    {
+      "pass": "Keep each update with its own words",
+      "changes": "Capture production summary-only completions; retain words with unread token; publish existing app_unread.text; preserve short supplied text; fit eight escaped previews within cable/native buffers.348 focused CLI and 106 Desktop tests pass. Native actual-pool reconnect preserves exact occurrence and reading context with zero input. Two corrected fixture expectations remain recorded. Firmware source unchanged; no connected hardware."
+    },
+    {
+      "pass": "Keep every action with its original computer",
+      "changes": "Observe ownership from local/remote catalogs, qualified app focus, events and unread receipts. Refuse duplicate public IDs for the daemon lifetime across navigation, live projections and input; cancel underlying pending reviewed operations without rewriting delivery receipts. Preserve captured words, exact unread ACK and acknowledged Return. 475 focused cases, typecheck, full CLI 9,195 passed / 59 skipped, and real tmux 18 passed / 11 unavailable. Existing wire; no firmware edit or hardware trial."
+    },
+    {
+      "pass": "Summary to live output and exact Return",
+      "changes": "Reused the existing footer for current-pane Latest output and clarified selection as Select in app. Preserved saved words/row, exact contact/worker intent and valid Return. The actual native app followed new output, visited another alert, refused stale Latest, and restored 240.25 exactly with identical before/Return PNGs and zero terminal input. Independent six-state review and clean P4 build passed; corrected two fixture failures remain in evidence."
+    },
+    {
+      "pass": "Carry between panes and keep your place",
+      "changes": "Reused the native pane map/list for explicit recipient choice, preserving valid Return on Back and same-pane choice. Pinned tray/host/target/contact/worker identity; explicit recording and mandatory review remain. Fixed Desktop Open-to-origin bookmark restoration. Actual app Carry/edit/send/Return passed with one owned dispatch and no stdin; ten native layouts reviewed and exact P4 build passed. Fixture failures are retained."
+    },
+    {
+      "pass": "Spoken Find and close the software pass",
+      "changes": "Find spoken words in current output, use Previous/Next or swipe to choose a match, switch explicitly to By line then Range, and Carry the exact passage. Old actions are refused after a computer or pane change, including A-to-B-to-A. Cancellation ends search; refusal requires explicit Try again. No-match permits another phrase. No additional Home control or implicit Return bookmark. Actual native app integration, exact captured-frame replay, source/visual review and clean P4 build passed."
+    }
+  ],
+  "preview": "http://127.0.0.1:3108/pro",
+  "verification": "Latest receipt: .harness/validation/harness-pro-spoken-find-2026-10-06/receipt.json. 227 focused CLI and 22 Desktop tests, peer typecheck and Dart analysis passed. Native app journey passed in 68.474 s and normal lib/main.dart artifact was restored. All nine registered Pro scopes passed in one frozen-source run: 77 touch, controls/app, 31 Visit, 12,144 notice merge, 305 readiness plus four round greetings, 71 reader, 31 Carry and 27 Find cases. Actual Pro voice, both round touch variants, recovery and seven rendered states also passed. 38 captured host frames exercised 16 production JSON/UI callbacks. The expected pre-fix failure and one external replay-adapter compile failure are retained; the first voice invocation covered round, and the corrected --pro invocation supplies Pro evidence. Clean compiled source 5c4a5efe571779ce53ec2f105d22e23cf9d04f1e; 373 source inputs and 157 artifact hashes/modes independently verified. Prior 9,195-pass/59-skip CLI evidence covers unchanged production; current fixtures have fresh evidence. Physical behavior remains unverified.",
+  "product_page": {
+    "format": "Continuous vertical story; no marketing feature tabs or hidden companion choices",
+    "chapters": [
+      "Voice",
+      "Navigation",
+      "Decisions",
+      "Carry",
+      "Return",
+      "Goal and Loop",
+      "Today",
+      "Companions",
+      "Hardware"
+    ],
+    "demos": "Eight independent inline examples, named for assistive technology, scenario-specific Reset, viewport-gated clocks, touch page scroll preserved",
+    "references": [
+      "https://discord.com/",
+      "https://cursor.com/",
+      "https://www.apple.com/macbook-pro/"
+    ]
+  },
+  "updated_at": "2026-10-06T08:29:15.495204+00:00",
+  "completion_audit": "output/harness-pro-landing/completion-audit.json",
+  "goal_status": "in_progress"
+}

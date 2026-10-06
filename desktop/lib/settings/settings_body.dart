@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 
 import '../state/app_state.dart';
 import 'experimental_features.dart';
@@ -38,7 +39,9 @@ class SettingsBody extends StatelessWidget {
         notifier: notifier,
       ),
       SettingsSection.profiles => ProfilesSection(notifier: notifier),
-      SettingsSection.usage => const UsageSection(),
+      SettingsSection.usage => UsageSection(
+        controller: kIsWeb ? null : notifier.usageLedger,
+      ),
       SettingsSection.customize => throw StateError(
         'Customization opens over the workspace.',
       ),

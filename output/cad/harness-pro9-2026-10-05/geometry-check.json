@@ -1,0 +1,537 @@
+{
+  "source": "/Users/d/Downloads/Harness_pro9.step",
+  "source_sha256": "aa33aa5218e3242deb3a2b5fa28e817e5a6f27f76da17fba977537414b3f6840",
+  "units": "mm",
+  "assembly_bounds_mm": {
+    "min": [
+      -43.18500047486603,
+      -37.74251656955735,
+      12.206620818257
+    ],
+    "max": [
+      44.1849996276882,
+      45.42373557289398,
+      38.42658867994029
+    ],
+    "size": [
+      87.37000010255423,
+      83.16625214245133,
+      26.219967861683287
+    ]
+  },
+  "solid_count": 10,
+  "valid_brep": true,
+  "display_tilt_deg": 14.996667780063802,
+  "parts": [
+    {
+      "index": 0,
+      "bounds_mm": {
+        "min": [
+          10.49140058499986,
+          -35.152258273840246,
+          13.402575677557682
+        ],
+        "max": [
+          28.33279125399998,
+          -22.05365974838984,
+          16.734977392429588
+        ],
+        "size": [
+          17.84139066900012,
+          13.098598525450406,
+          3.3324017148719065
+        ]
+      },
+      "volume_mm3": 43.18089269526458,
+      "valid_brep": true,
+      "large_planes": []
+    },
+    {
+      "index": 1,
+      "bounds_mm": {
+        "min": [
+          8.499999627999834,
+          -29.52866796315674,
+          13.780443872084533
+        ],
+        "max": [
+          12.499999627999886,
+          -24.150418445831033,
+          16.117827952144985
+        ],
+        "size": [
+          4.0000000000000515,
+          5.378249517325706,
+          2.3373840800604526
+        ]
+      },
+      "volume_mm3": 21.200000009837982,
+      "valid_brep": true,
+      "large_planes": []
+    },
+    {
+      "index": 2,
+      "bounds_mm": {
+        "min": [
+          19.550148025999835,
+          -29.686837636729916,
+          13.738072295393216
+        ],
+        "max": [
+          25.75014802599989,
+          -23.4392413307219,
+          16.308342955847827
+        ],
+        "size": [
+          6.200000000000056,
+          6.247596306008017,
+          2.570270660454611
+        ]
+      },
+      "volume_mm3": 38.439999991854535,
+      "valid_brep": true,
+      "large_planes": []
+    },
+    {
+      "index": 3,
+      "bounds_mm": {
+        "min": [
+          -18.415730819000128,
+          -35.152258273840644,
+          13.402575677558904
+        ],
+        "max": [
+          -16.00000037200002,
+          -27.54503363479313,
+          16.303438036416768
+        ],
+        "size": [
+          2.415730447000108,
+          7.607224639047516,
+          2.9008623588578644
+        ]
+      },
+      "volume_mm3": 5.300689714266588,
+      "valid_brep": true,
+      "large_planes": []
+    },
+    {
+      "index": 4,
+      "bounds_mm": {
+        "min": [
+          -19.90500037200014,
+          -35.15225827384059,
+          13.59576385256636
+        ],
+        "max": [
+          28.332791253999904,
+          4.553122068026883,
+          23.750892899360437
+        ],
+        "size": [
+          48.237791626000046,
+          39.70538034186747,
+          10.155129046794077
+        ]
+      },
+      "volume_mm3": 251.81682394263328,
+      "valid_brep": true,
+      "large_planes": [
+        {
+          "area_mm2": 952.7646050548051,
+          "center": [
+            2.2464043009003305,
+            -19.845162451457966,
+            17.340468641327156
+          ],
+          "normal": [
+            -2.95793839160036e-14,
+            0.2587628681484792,
+            -0.9659408771076896
+          ]
+        },
+        {
+          "area_mm2": 952.764605049012,
+          "center": [
+            2.2464043009839307,
+            -19.896915024713383,
+            17.533656816834956
+          ],
+          "normal": [
+            2.95793839160036e-14,
+            -0.2587628681484792,
+            0.9659408771076896
+          ]
+        }
+      ]
+    },
+    {
+      "index": 5,
+      "bounds_mm": {
+        "min": [
+          -9.310021437000142,
+          -28.17899222125221,
+          14.6249747071271
+        ],
+        "max": [
+          -6.0000003720001205,
+          -26.50146389752013,
+          15.522673355012703
+        ],
+        "size": [
+          3.3100210650000212,
+          1.67752832373208,
+          0.897698647885603
+        ]
+      },
+      "volume_mm3": 2.652542684054074,
+      "valid_brep": true,
+      "large_planes": []
+    },
+    {
+      "index": 6,
+      "bounds_mm": {
+        "min": [
+          -42.18500047200001,
+          -36.91509104242956,
+          15.465383859194603
+        ],
+        "max": [
+          42.18499972799969,
+          44.719856194217684,
+          38.305551313895506
+        ],
+        "size": [
+          84.37000019999971,
+          81.63494723664724,
+          22.840167454700904
+        ]
+      },
+      "volume_mm3": 8638.16531506981,
+      "valid_brep": true,
+      "large_planes": [
+        {
+          "area_mm2": 7101.678133773405,
+          "center": [
+            -3.7200017235626506e-07,
+            3.9716402917937943,
+            26.381295445095258
+          ],
+          "normal": [
+            -2.95793839160036e-14,
+            0.2587628681484792,
+            -0.9659408771076896
+          ]
+        },
+        {
+          "area_mm2": 5173.924900020696,
+          "center": [
+            -3.7200014307153806e-07,
+            5.220773812988797,
+            27.978939162081165
+          ],
+          "normal": [
+            2.95793839160036e-14,
+            -0.2587628681484792,
+            0.9659408771076896
+          ]
+        },
+        {
+          "area_mm2": 1665.8230407972292,
+          "center": [
+            -3.719969315909025e-07,
+            -1.2068679640851911,
+            26.267410991241736
+          ],
+          "normal": [
+            2.95793839160036e-14,
+            -0.2587628681484792,
+            0.9659408771076896
+          ]
+        }
+      ]
+    },
+    {
+      "index": 7,
+      "bounds_mm": {
+        "min": [
+          -37.4650003720004,
+          -34.61286804655941,
+          14.113130915635182
+        ],
+        "max": [
+          37.46499962799999,
+          42.19466816725815,
+          36.48210400979145
+        ],
+        "size": [
+          74.93000000000038,
+          76.80753621381757,
+          22.368973094156267
+        ]
+      },
+      "volume_mm3": 11835.942799796314,
+      "valid_brep": true,
+      "large_planes": [
+        {
+          "area_mm2": 5917.97140000913,
+          "center": [
+            -3.720001710283416e-07,
+            3.532137192242298,
+            26.263558339962454
+          ],
+          "normal": [
+            2.95793839160036e-14,
+            -0.2587628681484792,
+            0.9659408771076896
+          ]
+        },
+        {
+          "area_mm2": 5917.971400007277,
+          "center": [
+            -3.7200022888483897e-07,
+            4.0496629283766135,
+            24.331676585741686
+          ],
+          "normal": [
+            -2.95793839160036e-14,
+            0.2587628681484792,
+            -0.9659408771076896
+          ]
+        }
+      ]
+    },
+    {
+      "index": 8,
+      "bounds_mm": {
+        "min": [
+          -43.18500047486603,
+          -37.74251656955735,
+          12.206620818257
+        ],
+        "max": [
+          43.1849997279622,
+          45.42373557289398,
+          38.42658867994029
+        ],
+        "size": [
+          86.37000020282824,
+          83.16625214245133,
+          26.219967861683287
+        ]
+      },
+      "volume_mm3": 17118.146445210652,
+      "valid_brep": true,
+      "large_planes": [
+        {
+          "area_mm2": 7067.041705609044,
+          "center": [
+            -8.761692263326015e-05,
+            3.4259817012505054,
+            27.23512070075413
+          ],
+          "normal": [
+            2.9595290031744196e-14,
+            -0.25876287017248295,
+            0.9659408765654857
+          ]
+        },
+        {
+          "area_mm2": 6789.981716289214,
+          "center": [
+            -3.853303475742642e-07,
+            2.6812162442825382,
+            26.00034776983603
+          ],
+          "normal": [
+            -2.9595290031744196e-14,
+            0.25876287017248295,
+            -0.9659408765654857
+          ]
+        },
+        {
+          "area_mm2": 5783.660361162514,
+          "center": [
+            -3.7227101165028704e-07,
+            -4.136400080791938,
+            12.206620918257
+          ],
+          "normal": [
+            1.05643629882579e-32,
+            -3.67693249159814e-32,
+            -1.0
+          ]
+        },
+        {
+          "area_mm2": 5525.484307689617,
+          "center": [
+            6.066397622438179e-07,
+            -3.9127455377444518,
+            13.206620918257
+          ],
+          "normal": [
+            -1.05643629882579e-32,
+            3.67693249159814e-32,
+            1.0
+          ]
+        },
+        {
+          "area_mm2": 2144.677831372907,
+          "center": [
+            -4.328251765883806e-07,
+            37.34872942168428,
+            25.009151351392
+          ],
+          "normal": [
+            -4.952275012235813e-17,
+            0.8516424950098814,
+            -0.5241231350487633
+          ]
+        },
+        {
+          "area_mm2": 1916.3135048265372,
+          "center": [
+            -4.358200721421568e-07,
+            36.186468526364685,
+            25.028553721899247
+          ],
+          "normal": [
+            4.952275012235813e-17,
+            -0.8516424950098814,
+            0.5241231350487633
+          ]
+        },
+        {
+          "area_mm2": 870.9730438088461,
+          "center": [
+            -43.18500037212358,
+            6.778456670856053,
+            20.642207602170878
+          ],
+          "normal": [
+            -1.0,
+            5.31656760426383e-13,
+            6.38021610291731e-12
+          ]
+        },
+        {
+          "area_mm2": 851.3380897234238,
+          "center": [
+            43.18499962762721,
+            6.460691956332846,
+            20.51563571010289
+          ],
+          "normal": [
+            1.0,
+            -1.14227613485724e-12,
+            3.32986128913058e-12
+          ]
+        }
+      ]
+    },
+    {
+      "index": 9,
+      "bounds_mm": {
+        "min": [
+          41.1849996276882,
+          17.5561922269804,
+          23.1301487675862
+        ],
+        "max": [
+          44.1849996276882,
+          23.5561922269804,
+          29.1301487675862
+        ],
+        "size": [
+          3.0,
+          6.0,
+          6.0
+        ]
+      },
+      "volume_mm3": 64.46548125166254,
+      "valid_brep": true,
+      "large_planes": []
+    }
+  ],
+  "shell_intersections": [
+    {
+      "parts": [
+        8,
+        4
+      ],
+      "done": true,
+      "common_volume_mm3": 0.0
+    },
+    {
+      "parts": [
+        8,
+        6
+      ],
+      "done": true,
+      "common_volume_mm3": 6654.833752769076
+    },
+    {
+      "parts": [
+        8,
+        7
+      ],
+      "done": true,
+      "common_volume_mm3": 195.82968574728653
+    },
+    {
+      "parts": [
+        8,
+        9
+      ],
+      "done": true,
+      "common_volume_mm3": 0.0
+    }
+  ],
+  "limitations": [
+    "Geometry only. CAD does not prove physical fit, tactile quality, electrical function or production readiness.",
+    "Part indices are import order, not manufacturing part numbers."
+  ],
+  "source_snapshot": "/Users/d/harnesses/worktrees/autonomous-harness/witty-spruce/output/cad/harness-pro9-2026-10-05/Harness_pro9.step",
+  "direct_step_reader_cross_check": {
+    "reader": "OpenCascade STEPControl_Reader",
+    "solid_count": 10,
+    "shell_lcd_common_volume_mm3": {
+      "6": 6654.833752769076,
+      "7": 195.82968574728653
+    },
+    "matched_build123d_import": true
+  },
+  "interpretation": {
+    "part_8": "Component8, continuous enclosure shell",
+    "part_6_and_7": "Two large solids under the LCD assembly hierarchy",
+    "part_9": "Small side protrusion; functional assignment not established by the file",
+    "removable_dock": "No separate dock solid identified",
+    "hardware_fit": "Only modeled components checked; PCB, microphone, speaker, USB alignment and physical operation remain unverified",
+    "overlap": "Nonzero shell/LCD overlap; confirm whether solids are appearance envelopes or resolve mechanical interference before fabrication."
+  },
+  "preview": {
+    "file": "/Users/d/harnesses/worktrees/autonomous-harness/witty-spruce/output/cad/harness-pro9-2026-10-05/cad-inspection.png",
+    "method": "CPU orthographic rasterization of STL triangles exported from the supplied STEP, using per-pixel depth",
+    "visually_inspected": true,
+    "colors": "Illustrative component colors; not approved materials or finish"
+  },
+  "validation_scope": [
+    "STEP import and BREP validity",
+    "Assembly bounds and display-plane angle",
+    "Numerical shell overlap with the two LCD solids",
+    "Independent native STEP reimport reproduces overlap",
+    "Actual-geometry preview inspected",
+    "Original file and preserved snapshot byte-identical"
+  ],
+  "timing": {
+    "first_recorded_at": "2026-10-05T12:38:53+00:00",
+    "completed_at": "2026-10-05T12:49:23.795073+00:00",
+    "elapsed_after_first_timestamp_seconds": 630.8,
+    "initial_request_to_first_timestamp_seconds": null,
+    "note": "Initial file discovery preceded the first clock reading; this duration is a lower bound, not total request elapsed time. Geometry analysis and preview work were not timed separately.",
+    "firmware_or_application_implementation_seconds": 0,
+    "merge_seconds": 0,
+    "publication_seconds": 0,
+    "waiting_for_user_seconds": 0
+  }
+}

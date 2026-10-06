@@ -49,6 +49,8 @@ export interface DeviceInputDeps {
   capture: (id: string) => Promise<string | null>
   isAwaitingUser?: (session: RegisteredSession) => Promise<boolean>
   acquireControl: (id: string) => (() => void) | null
+  /** A new reviewed command must wait for an idle turn; it is not a question answer. */
+  acquireReviewedControl?: (id: string) => (() => void) | null
   legacySubmit: (id: string, text: string, deliveryId: string) => void
   legacyCancel: (deliveryId: string) => boolean
   onDispatch?: (id: string, deliveryId: string, text: string) => void
@@ -95,6 +97,22 @@ export class AutonomousDeviceInput {
     }
     if (!writer.held) return run()
     return new Promise<T>((resolve, reject) => writer.waiters.push(() => { void run().then(resolve, reject) }))
+  }
+  /** Cable reviewed input shares the actual writer barrier, including writes already in flight.
+   * The caller owns a bounded queue and a generation-bound submission; no Device receipt is emitted. */
+  acquireReviewed(id: string): (() => void) | null {
+    const writer = this.writer(id)
+    if (writer.held || writer.legacy) return null
+    const release = this.deps.acquireReviewedControl?.(id)
+    if (!release) return null
+    writer.held = true
+    let released = false
+    return () => {
+      if (released) return
+      released = true; writer.held = false
+      for (const resume of writer.waiters.splice(0)) resume()
+      release()
+    }
   }
   private delivery(id: string, item: Input, state: SessionInputDelivery['state'], reason?: string): void {
     this.deps.onDelivery({ sessionId: id, deliveryId: item.deliveryId, state, ...(reason ? { reason } : {}) })
