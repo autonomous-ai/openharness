@@ -128,6 +128,8 @@ class _ConnectedSemanticsUpdateBuilder implements ui.SemanticsUpdateBuilder {
     );
   }
 
+  // The web engine's dart:ui declares `textDirection` optional and `linkUrl`
+  // as `String?`; accept both shapes so the shared entry point compiles there.
   @override
   void updateNode({
     required int id,
@@ -157,14 +159,14 @@ class _ConnectedSemanticsUpdateBuilder implements ui.SemanticsUpdateBuilder {
     required String hint,
     required List<ui.StringAttribute> hintAttributes,
     required String tooltip,
-    required ui.TextDirection? textDirection,
+    ui.TextDirection? textDirection,
     required Float64List transform,
     required Float64List hitTestTransform,
     required Int32List childrenInTraversalOrder,
     required Int32List childrenInHitTestOrder,
     required Int32List additionalActions,
     int headingLevel = 0,
-    String linkUrl = '',
+    String? linkUrl,
     ui.SemanticsRole role = ui.SemanticsRole.none,
     required List<String>? controlsNodes,
     ui.SemanticsValidationResult validationResult =
@@ -232,7 +234,7 @@ class _ConnectedSemanticsUpdateBuilder implements ui.SemanticsUpdateBuilder {
       ),
       additionalActions: additionalActions,
       headingLevel: headingLevel,
-      linkUrl: linkUrl,
+      linkUrl: linkUrl ?? '',
       role: role,
       controlsNodes: controlsNodes,
       validationResult: validationResult,

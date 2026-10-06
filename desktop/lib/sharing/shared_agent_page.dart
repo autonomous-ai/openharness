@@ -159,8 +159,11 @@ class _SharedAgentPageState extends State<SharedAgentPage> {
                   alignment: WrapAlignment.spaceBetween,
                   crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
+                    // The product page, in a new tab: a visitor keeps the
+                    // harness they were shown open behind it.
                     Link(
-                      uri: Uri.parse('/'),
+                      uri: harnessAppPage,
+                      target: LinkTarget.blank,
                       builder: (context, follow) => DesktopPill(
                         label: 'Harness',
                         quiet: true,
