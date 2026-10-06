@@ -259,6 +259,13 @@ def main():
                                for kind in ['config', 'data', 'cache', 'state']]]
                 assert run('runuser', '-u', 'harness-rpm-probe', '--', 'env', *environment,
                            '/usr/bin/opencode', '--version', timeout=30).stdout.strip() == agent['version']
+                # Exercise the distribution compositor with only the RPM's
+                # declared dependencies. Merely resolving labwc's libraries
+                # misses its mandatory Xwayland executable at startup.
+                run('runuser', '-u', 'harness-rpm-probe', '--', 'env', *environment,
+                    'XDG_RUNTIME_DIR=' + temporary, 'WLR_BACKENDS=headless',
+                    'WLR_RENDERER=pixman', 'labwc', '-C', temporary,
+                    '-S', '/usr/bin/true', timeout=30)
             assert run('rpm', '-qf', '--qf', '%{NAME}', '/usr/bin/opencode').stdout == 'harness-os-session'
             assert run('rpm', '-qf', '--qf', '%{NAME}', '/usr/lib/harness-opencode/opencode').stdout == 'harness-os-session'
             assert '/usr/share/licenses/harness-opencode/LICENSE' in installed
@@ -269,6 +276,7 @@ def main():
             assert run('getent', 'passwd', 'harness-rpm-probe').stdout == account
             assert run('getent', 'passwd', 'me', check=False).returncode != 0, 'Package created a default OS account'
             receipt['checks'].append(f'Native {label}: declared payload owned/verified, existing user and host configuration unchanged')
+            receipt['checks'].append(f'Native {label}: packaged dependencies start the distribution compositor on a headless Wayland backend')
         # A plain RPM erase is intentional: dependency autoremoval is a separate
         # DNF policy and must not disguise removal of this package's own files.
         run('rpm', '-e', 'harness-os-session')
