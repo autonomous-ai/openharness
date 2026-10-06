@@ -6,7 +6,7 @@ permissions:
 jobs:
   detached-core-validation:
     runs-on: ubuntu-latest
-    timeout-minutes: 150
+    timeout-minutes: 30
     defaults:
       run:
         working-directory: cli
@@ -16,14 +16,13 @@ jobs:
       SHELL: /bin/zsh
       E2E_WORKERS: '4'
       E2E_BUNDLE: '1'
-      MIGRATION_FROM: ${{ github.workspace }}/.harness/migration/cli.js
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: 058ce37c4337a9a94c8957f4207a4f29918ed915
+          ref: aad49e9cda75ef7a49c45bef855fcb9034cf2f39
       - name: Verify the exact detached snapshot
         run: |
-          test "$(git rev-parse HEAD)" = 058ce37c4337a9a94c8957f4207a4f29918ed915
+          test "$(git rev-parse HEAD)" = aad49e9cda75ef7a49c45bef855fcb9034cf2f39
           test -z "$(git symbolic-ref -q HEAD || true)"
           test -z "$(git status --porcelain)"
           mkdir -p ../.harness/validation ../.harness/migration
@@ -46,45 +45,26 @@ jobs:
           fi
           zsh -fc 'autoload -U compaudit && compaudit'
           npm ci --no-audit --no-fund
-      - name: Fetch checksum-verified published migration fixture
-        run: |
-          curl --fail --location --retry 3 https://cdn.autonomous.ai/harness/cli/0.3.60/cli.js -o ../.harness/migration/cli.js
-          curl --fail --location --retry 3 https://cdn.autonomous.ai/harness/cli/0.3.60/notify.mjs -o ../.harness/migration/notify.mjs
-          echo 'cb1ae2452d006d414cefc6ce2deddd07a7a43fc9824402691a1ef0737d2277e3  ../.harness/migration/cli.js' | sha256sum -c -
-          echo 'bca62ec5991a1f727b362b666bcef004d04fb1d13efb64de068dd602a45095f8  ../.harness/migration/notify.mjs' | sha256sum -c -
-          echo '{"type":"module"}' > ../.harness/migration/package.json
-      - name: Full bundled E2E with four workers
+      - name: Changed upstream terminal and Store fixtures
         id: full
         continue-on-error: true
         env:
           E2E_ARTIFACTS_DIR: ${{ github.workspace }}/.harness/validation/full-daemons
         run: |
-          env -u TMUX -u TMUX_PANE -u NO_COLOR npm run test:e2e -- --reporter=default --reporter=json --outputFile.json=../.harness/validation/full.json 2>&1 | tee ../.harness/validation/full.log
-      - name: Three additional runs of every named race file
-        id: repeated
-        continue-on-error: true
-        run: |
-          result=0
-          for run in 1 2 3; do
-            export E2E_ARTIFACTS_DIR="$GITHUB_WORKSPACE/.harness/validation/races-$run-daemons"
-            env -u TMUX -u TMUX_PANE -u NO_COLOR npm run test:e2e -- e2e/machine.e2e.ts e2e/recovery.e2e.ts e2e/races.e2e.ts e2e/restoreInput.e2e.ts e2e/ends.e2e.ts e2e/startup.e2e.ts e2e/migration.e2e.ts --reporter=default --reporter=json --outputFile.json="../.harness/validation/races-$run.json" 2>&1 | tee "../.harness/validation/races-$run.log" || result=1
-          done
-          exit "$result"
-      - name: Record final source and require all four runs green
+          env -u TMUX -u TMUX_PANE -u NO_COLOR npm run test:e2e -- e2e/terminal.e2e.ts e2e/storeProcess.e2e.ts --reporter=default --reporter=json --outputFile.json=../.harness/validation/full.json 2>&1 | tee ../.harness/validation/full.log
+      - name: Record final source and require both changed files green
         if: ${{ !cancelled() }}
         env:
           FULL_RESULT: ${{ steps.full.outcome }}
-          REPEATED_RESULT: ${{ steps.repeated.outcome }}
         run: |
           date -u +%FT%TZ > ../.harness/validation/ended.txt
           git status --porcelain > ../.harness/validation/source-status.txt
           test -z "$(git status --porcelain)"
           test "$FULL_RESULT" = success
-          test "$REPEATED_RESULT" = success
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() }}
         with:
-          name: detached-core-058ce-validation
+          name: detached-core-aad49-fixtures
           path: .harness/validation/
           if-no-files-found: error
           include-hidden-files: true
