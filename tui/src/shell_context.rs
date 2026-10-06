@@ -29,6 +29,8 @@ pub struct Context {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct Visit {
+    #[serde(default = "visit_id")]
+    id: String,
     pane: u64,
     machine: String,
     agent: String,
@@ -47,7 +49,16 @@ struct Visit {
     terminal_process: bool,
     #[serde(skip)]
     returning_since: Option<Instant>,
+    #[serde(skip)]
+    checked_at: Option<Instant>,
+    #[serde(skip)]
+    checking: bool,
+    #[serde(skip)]
+    exited: bool,
+    #[serde(skip)]
+    resuming: bool,
 }
+fn visit_id() -> String { uuid::Uuid::new_v4().to_string() }
 #[derive(Clone, Debug)]
 pub struct Request { pub token: String, pub id: String, pub verb: String, pub query: String, pub pane: u64, pub at: Instant }
 #[derive(Clone)]
@@ -208,8 +219,10 @@ fn visit(app: &mut App, source: &(String, String), cwd: Option<String>, machine:
     let source_runtime = original.map(|a| a.tmux_pane.clone()).unwrap_or_default();
     let source_created = original.map(|a| a.created_at_wire.clone()).unwrap_or_default();
     app.shell_context.contexts.get_mut(&token).unwrap().visit = Some(Visit {
+        id: visit_id(),
         pane, machine:machine.into(), agent:agent.into(), source_machine:source.0.clone(), source_agent:source.1.clone(), source_cwd:cwd, started,
         source_runtime, source_created, terminal_process, returning_since:None,
+        checked_at: None, checking: false, exited: false, resuming: false,
     });
     app.shell_context.dirty.insert(token);
     app.shell_context.save();
@@ -236,6 +249,21 @@ pub fn is_session_visit(app: &App, pane: u64) -> bool {
         context.visit.as_ref().is_some_and(|v| v.pane == pane && v.machine == p.machine_id && v.agent == p.agent_id)))
 }
 
+pub fn resuming(app: &mut App, pane: u64) -> Option<String> {
+    let visit = app.shell_context.contexts.values_mut().filter_map(|c| c.visit.as_mut()).find(|v| v.pane == pane)?;
+    visit.id = visit_id(); // Invalidate a probe started for the previous invocation.
+    visit.resuming = true;
+    visit.checking = false;
+    visit.exited = false;
+    Some(visit.id.clone())
+}
+
+pub fn resumed(app: &mut App, id: &str) {
+    if let Some(visit) = app.shell_context.contexts.values_mut().filter_map(|c| c.visit.as_mut()).find(|v| v.id == id) {
+        visit.resuming = false;
+    }
+}
+
 fn return_from_sessions(app: &mut App) {
     let visits: Vec<_> = app.shell_context.contexts.iter().filter_map(|(t,c)| c.visit.clone().map(|v| (t.clone(),v))).collect();
     for (token, visit) in visits {
@@ -257,7 +285,11 @@ fn return_from_sessions(app: &mut App) {
         // A background exit must not steal focus or dismiss an open picker.
         // Its original shell is restored when the person returns to that pane.
         if app.focused() != Some(visit.pane) || app.modal.is_some() { continue }
-        let exited = app.fleet.agent(&visit.machine, &visit.agent).is_some_and(|a| a.status == "stopped" || (!visit.terminal_process && a.engine == "terminal"));
+        // A repeated picker selection asks the core to attach or resume. Do not
+        // mistake the previous invocation's cached exit for that resume's result.
+        if visit.resuming { continue }
+        let exited = visit.exited || app.fleet.agent(&visit.machine, &visit.agent).is_some_and(|a| a.status == "stopped" || (!visit.terminal_process && a.engine == "terminal"));
+        if !exited { check_visit(app, &token, &visit); }
         if !exited || app.link(&visit.source_machine).is_none() { continue }
         let live_source = surviving_source(app, &visit);
         if live_source.is_none() && visit.returning_since.is_none_or(|at| at.elapsed() < Duration::from_secs(2)) {
@@ -284,6 +316,26 @@ fn return_from_sessions(app: &mut App) {
         app.save_sessions();
     }
     if !app.shell_context.dirty.is_empty() { app.shell_context.save(); }
+}
+
+fn check_visit(app: &mut App, token: &str, visit: &Visit) {
+    if visit.terminal_process || visit.checking || visit.checked_at.is_some_and(|at| at.elapsed() < Duration::from_millis(750)) { return }
+    let Some(link) = app.link(&visit.machine) else { return };
+    let generation = link.generation;
+    let epoch = app.account_epoch;
+    let (token, visit) = (token.to_string(), visit.clone());
+    let current = app.shell_context.contexts.get_mut(&token).unwrap().visit.as_mut().unwrap();
+    current.checking = true;
+    current.checked_at = Some(Instant::now());
+    let agent = visit.agent.clone();
+    app.spawn(async move { link.rpc("shell_visit_status", json!({"agentId":agent}), Duration::from_secs(3)).await }, move |app, reply| {
+        let current_connection = app.account_epoch == epoch && app.connection_generation(&visit.machine) == Some(generation);
+        if let Some(current) = app.shell_context.contexts.get_mut(&token).and_then(|c| c.visit.as_mut()).filter(|v| v.id == visit.id) {
+            current.checking = false;
+            // A late reply cannot dismiss a replacement invocation or an account's new view.
+            if current_connection && reply.is_ok_and(|r| r["exited"] == true) { current.exited = true; }
+        }
+    });
 }
 
 /// Keep an incomplete escape, never unbounded program output. No request is
@@ -846,8 +898,26 @@ mod tests {
         bind(&mut app,&token,"local","shell");
         app.shell_context.contexts.get_mut(&token).unwrap().route = Some(Route {grid:"route".into(),model:"model".into(),label:"Saved".into()});
         app.panes.get_mut(&1).unwrap().agent_id = "chosen".into();
+        app.panes.get_mut(&1).unwrap().phase = crate::pane::Phase::Live;
         visiting(&mut app,&("local".into(),"shell".into()),Some("/saved project".into()),"local","chosen");
         (app,token,1)
+    }
+    #[tokio::test]
+    async fn verified_exit_returns_without_waiting_for_discovery_but_not_during_resume() {
+        let (mut app,token,pane) = visit_fixture(false);
+        app.shell_context.contexts.get_mut(&token).unwrap().visit.as_mut().unwrap().exited = true;
+        let old_id = app.shell_context.contexts[&token].visit.as_ref().unwrap().id.clone();
+        let id = resuming(&mut app, pane).unwrap();
+        assert_ne!(old_id, id);
+        assert!(!app.shell_context.contexts[&token].visit.as_ref().unwrap().exited);
+        resumed(&mut app, &old_id);
+        app.shell_context.contexts.get_mut(&token).unwrap().visit.as_mut().unwrap().exited = true;
+        return_from_sessions(&mut app);
+        assert_eq!(app.panes[&pane].agent_id, "chosen");
+        resumed(&mut app, &id);
+        return_from_sessions(&mut app);
+        assert_eq!(app.panes[&app.focused().unwrap()].agent_id, "shell");
+        assert_eq!(app.fleet.agent("local", "chosen").unwrap().status, "active");
     }
     #[tokio::test]
     async fn session_exit_returns_to_original_context_and_survives_persistence() {
