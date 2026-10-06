@@ -293,6 +293,11 @@ def main():
         if observe('13-checkpoint-after-reboot', 'checkpoint', True) != saved:
             raise ValueError('Checkpoint changed across candidate reboot')
         check_graphical_keyboard(vm, '14-candidate-keyboard')
+        # The unchanged client restores shells, not their previous foreground
+        # commands. Live agent preservation was proved before shutdown above;
+        # now prove the bundled agent can start normally on the updated OS.
+        vm.command('hn new-window -n agent-after-update ' + shlex.quote(
+                   'cd "$HOME/projects/public-update-proof" && exec /usr/bin/opencode'))
         vm.command('for n in $(seq 1 90); do pgrep -u 1000 -x opencode >/dev/null && exit 0; sleep .5; done; exit 1', timeout=50)
         vm.command('test ! -e ' + STATE + '/current && test ! -e ' + STATE + '/ready.json')
         # The unchanged user timer finishes the one approved request after boot.
@@ -310,7 +315,7 @@ def main():
                 raise ValueError('Missing actual release-channel request: ' + suffix)
         vm.command('sudo -n journalctl -b --no-pager > /tmp/public-update-final-journal.log')
         (folder / 'final-journal.log').write_bytes(vm.read_file('/tmp/public-update-final-journal.log'))
-        record['checks'].append('Encrypted candidate cold boot accepts real keyboard input, starts the agent, and preserves project bytes/ownership/times and the verified original checkpoint.')
+        record['checks'].append('Encrypted candidate cold boot accepts real keyboard input and an explicitly launched bundled agent, and preserves project bytes/ownership/times and the verified original checkpoint. Foreground command auto-resume is not claimed.')
         shutdown(vm, record, 'acceptance-complete')
         record['status'] = 'passed'
     except Exception as error:
