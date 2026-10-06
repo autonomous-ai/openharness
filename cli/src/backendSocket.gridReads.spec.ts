@@ -23,6 +23,7 @@ import { MODELS_REQUESTS, startModels } from './services/models.js'
 import { fakeCore } from './testing/fakeCore.js'
 
 const OWN = 'mine', OWN_ID = 'net-own'
+const externalFetch = globalThis.fetch.bind(globalThis)
 
 // Grid's set-up, which a move onto a grid model asks the models service for first: the fake grid here is
 // set up already, as on a machine that has used it before.
@@ -131,6 +132,24 @@ afterEach(async () => {
 })
 
 describe('grid_models_list', () => {
+  it('keeps another client probing the port out of the model service request log', async () => {
+    // Found by QA on a quiet machine: local discovery sent /v1/models to this fake relay.
+    const probe = await externalFetch(`${base}/v1/models`)
+    expect(probe.status).toBe(404)
+    await probe.arrayBuffer()
+    const reply = await ask('grid_models_list')
+    expect(reply).toMatchObject({ gridName: OWN, models: [{ id: 'Small-Q4', node: 'mac' }] })
+    expect(seen.map((request) => request.path)).toEqual([`/g/${OWN_ID}${OVERVIEW}`])
+    expectNoCredential()
+  })
+
+  it('still records an unsupported path sent by this test client', async () => {
+    const reply = await fetch(`${base}/v1/models`)
+    expect(reply.status).toBe(404)
+    await reply.arrayBuffer()
+    expect(seen.map((request) => request.path)).toEqual(['/v1/models'])
+  })
+
   it('answers in the old shape with the three new fields, and reads the grid with no credential', async () => {
     const reply = await ask('grid_models_list')
 
