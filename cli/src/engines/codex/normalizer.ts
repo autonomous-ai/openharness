@@ -109,27 +109,19 @@ function messageText(item: JsonObject): string {
   return string(item.message) || textContent(item)
 }
 
-const QUESTION_REPLY = /^\s*<send_user_message_question_reply>\s*([\s\S]*?)\s*(?:<\/send_user_message_question_reply>\s*)?$/
-
 /**
- * What the person said, from a user message. Codex 0.160 asks some questions without stopping
- * (`request_user_input_async`, answered `{"accepted":true}` at once), and the person's answer comes back
- * later as a user message wrapped in `<send_user_message_question_reply>` around a JSON list of
- * `{answer, question, questionItemId}`. Read as typed text, the wrapper and its JSON were the person's
- * message in the live turn, the history, the recap and search (found auditing real 0.160 rollouts). It
- * reads as `question → answer` instead, one to a line.
+ * What the person said. Codex 0.160's answer to a question that does not stop the turn
+ * (`request_user_input_async`) is a user message wrapping JSON `[{answer, question, questionItemId}]` in
+ * `<send_user_message_question_reply>`, and was read as typed, wrapper and all (real 0.160 rollouts).
  */
 function userText(item: JsonObject): string {
   const text = messageText(item)
-  const body = QUESTION_REPLY.exec(text)?.[1]
+  const body = /^\s*<send_user_message_question_reply>\s*([\s\S]*?)\s*(?:<\/send_user_message_question_reply>\s*)?$/.exec(text)?.[1]
   if (body === undefined) return text
   let replies: unknown
   try { replies = JSON.parse(body) } catch { return body }
-  if (!Array.isArray(replies)) return body
-  const lines = replies.flatMap((reply) => {
-    const entry = object(reply)
-    const answer = string(entry?.answer).trim()
-    const question = string(entry?.question).trim()
+  const lines = (Array.isArray(replies) ? replies : []).map(object).flatMap((entry) => {
+    const [answer, question] = [string(entry?.answer).trim(), string(entry?.question).trim()]
     return answer ? [question ? `${question} → ${answer}` : answer] : []
   })
   return lines.join('\n') || body
