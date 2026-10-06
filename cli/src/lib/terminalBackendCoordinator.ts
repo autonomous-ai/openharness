@@ -4,6 +4,7 @@ import { processIdentityKey, terminalInstanceId, terminalPlacementKey, terminalR
 import {
   terminalActionNotStarted,
   type RuntimeValidation,
+  type SubmitOptions,
   type TerminalActionResult,
   type TerminalCaptureOptions,
   type TerminalLogicalKey,
@@ -42,15 +43,72 @@ export function terminalLogicalKey(key: string): TerminalLogicalKey | null {
   return LEGACY_KEYS[key] ?? null
 }
 
+/** How long to wait before asking a runtime again when its validation could not answer: about 8 s in
+ *  all, the longest a held event loop is expected to keep a probe's answer unread (e2e/stall.e2e.ts). */
+export const UNKNOWN_RETRY_MS: readonly number[] = [250, 500, 1_000, 2_000, 4_000]
+
+export interface TerminalBackendCoordinatorOptions {
+  unknownRetryMs?: readonly number[]
+  sleep?: (ms: number) => Promise<void>
+}
+
+const defaultSleep = (ms: number): Promise<void> => new Promise((resolve) => {
+  const timer = setTimeout(resolve, ms)
+  timer.unref?.()
+})
+
 /** Resolves all terminal I/O through validated backend-scoped locators. */
 export class TerminalBackendCoordinator {
   private readonly byInstance = new Map<string, TerminalBackend>()
+  private readonly unknownRetryMs: readonly number[]
+  private readonly sleep: (ms: number) => Promise<void>
+  private changing: (agentId: string) => boolean = () => false
 
   constructor(
     backends: readonly TerminalBackend[],
     private readonly backendOrder: readonly string[],
+    options: TerminalBackendCoordinatorOptions = {},
   ) {
+    this.unknownRetryMs = options.unknownRetryMs ?? UNKNOWN_RETRY_MS
+    this.sleep = options.sleep ?? defaultSleep
     this.replaceBackends(backends)
+  }
+
+  /** Whether a lifecycle operation (restart, retarget, resume) is replacing an agent's engine right now.
+   *  Set by cli.ts once those exist: they are made long after this coordinator. */
+  whileChanging(test: (agentId: string) => boolean): void {
+    this.changing = test
+  }
+
+  /**
+   * One runtime's validation, asked again while it cannot answer yet. Every caller gives up on anything
+   * but `alive`, and three answers are only "not yet":
+   *
+   * - `unknown`, a probe that failed: tmux or `ps` timed out, most often because the core's own event
+   *   loop was held and woke to the deadline before it read the answer (e2e/stall.e2e.ts). A held loop
+   *   used to drop the message it was about to type into an engine that was fine ("This agent process
+   *   is no longer running.") and fail the lease a question's answer was typed through.
+   * - `replaced`, the engine in the pane is not the process the row recorded: what a restart looks like
+   *   between the new engine starting and the restart recording it. A message sent then, by a client
+   *   that saw the agent still active, was dropped the same way (e2e/races.e2e.ts, a restart nobody
+   *   waited for).
+   * - any `gone` while a lifecycle operation is replacing the engine: between the old engine's exit and
+   *   the new one's start there is no engine in the pane at all. Found by QA on a quiet machine:
+   *   restore has the same gap while its launch is `starting`, before the engine process exists.
+   *
+   * The row is read again on every ask: `session` is the registry's own, and a restart records the new
+   * process on it.
+   */
+  private async validateRuntime(backend: TerminalBackend, runtime: TerminalRuntimeRef, session: RegisteredSession): Promise<RuntimeValidation> {
+    const ask = () => backend.validate(runtime, { engine: session.engine, processIdentity: session.processIdentity ?? undefined })
+    let result = await ask()
+    for (const ms of this.unknownRetryMs) {
+      if (result.state === 'alive' || (result.state === 'gone' && !result.replaced
+        && session.launch?.state !== 'starting' && !this.changing(session.agentId))) return result
+      await this.sleep(ms)
+      result = await ask()
+    }
+    return result
   }
 
   replaceBackends(backends: readonly TerminalBackend[]): void {
@@ -102,11 +160,7 @@ export class TerminalBackendCoordinator {
     if (!session.active) return { state: 'gone', reason: 'terminal agent is dormant' }
     let unknown: RuntimeValidation | null = null
     for (const runtime of this.orderedRuntimes(session)) {
-      const backend = this.backendFor(runtime)!
-      const result = await backend.validate(runtime, {
-        engine: session.engine,
-        processIdentity: session.processIdentity ?? undefined,
-      })
+      const result = await this.validateRuntime(this.backendFor(runtime)!, runtime, session)
       if (result.state === 'alive') return result
       if (result.state === 'unknown') unknown = result
     }
@@ -116,11 +170,7 @@ export class TerminalBackendCoordinator {
   async acquireLease(session: RegisteredSession): Promise<TerminalReadResult<TerminalControlLease>> {
     if (!session.active) return { state: 'failed', reason: 'terminal agent is dormant' }
     for (const runtime of this.orderedRuntimes(session)) {
-      const backend = this.backendFor(runtime)!
-      const validation = await backend.validate(runtime, {
-        engine: session.engine,
-        processIdentity: session.processIdentity ?? undefined,
-      })
+      const validation = await this.validateRuntime(this.backendFor(runtime)!, runtime, session)
       if (validation.state === 'alive') {
         return {
           state: 'succeeded',
@@ -148,10 +198,10 @@ export class TerminalBackendCoordinator {
     if (!this.leaseIsCurrent(lease, session)) return false
     const backend = this.backendFor(lease.runtime)
     if (!backend) return false
-    return (await backend.validate(lease.runtime, {
-      engine: session.engine,
-      processIdentity: session.processIdentity ?? undefined,
-    })).state === 'alive'
+    // Asked again after the check: it waits while a restart records its new engine, and then answers
+    // `alive` for THAT engine, which this lease was not taken for. Kept, a question's answer went on
+    // being keyed through it into the new engine's composer.
+    return (await this.validateRuntime(backend, lease.runtime, session)).state === 'alive' && this.leaseIsCurrent(lease, session)
   }
 
   async capture(session: RegisteredSession, options?: TerminalCaptureOptions): Promise<TerminalReadResult<string>> {
@@ -211,10 +261,10 @@ export class TerminalBackendCoordinator {
       : Promise.resolve(terminalActionNotStarted('leased terminal backend is disabled'))
   }
 
-  submitTextLease(lease: TerminalControlLease, text: string): Promise<TerminalActionResult> {
+  submitTextLease(lease: TerminalControlLease, text: string, options?: SubmitOptions): Promise<TerminalActionResult> {
     const backend = this.backendFor(lease.runtime)
     return backend
-      ? backend.submitText(lease.runtime, text)
+      ? backend.submitText(lease.runtime, text, options)
       : Promise.resolve(terminalActionNotStarted('leased terminal backend is disabled'))
   }
 
@@ -223,6 +273,7 @@ export class TerminalBackendCoordinator {
     session: RegisteredSession,
     lease: TerminalControlLease,
     text: string,
+    options?: SubmitOptions,
   ): Promise<TerminalActionResult> {
     if (!this.leaseIsCurrent(lease, session)) return terminalActionNotStarted('terminal control lease changed')
     const ordered = this.orderedRuntimes(session)
@@ -234,12 +285,9 @@ export class TerminalBackendCoordinator {
     for (const runtime of candidates) {
       const backend = this.backendFor(runtime)
       if (!backend) continue
-      const validation = await backend.validate(runtime, {
-        engine: session.engine,
-        processIdentity: session.processIdentity ?? undefined,
-      })
+      const validation = await this.validateRuntime(backend, runtime, session)
       if (validation.state !== 'alive') continue
-      const result = await backend.submitText(runtime, text)
+      const result = await backend.submitText(runtime, text, options)
       if (result.state === 'succeeded') {
         lease.runtime = runtime
         lease.placementKey = terminalPlacementKey(runtime)
@@ -270,10 +318,7 @@ export class TerminalBackendCoordinator {
     let last: TerminalActionResult = terminalActionNotStarted('no configured terminal runtime is available')
     for (const runtime of this.orderedRuntimes(session)) {
       const backend = this.backendFor(runtime)!
-      const validation = await backend.validate(runtime, {
-        engine: session.engine,
-        processIdentity: session.processIdentity ?? undefined,
-      })
+      const validation = await this.validateRuntime(backend, runtime, session)
       if (validation.state !== 'alive') continue
       const result = await action(backend, runtime)
       if (result.state === 'succeeded' || result.dispatch === 'possibly_executed') return result
@@ -284,8 +329,8 @@ export class TerminalBackendCoordinator {
     return last
   }
 
-  submitText(session: RegisteredSession, text: string): Promise<TerminalActionResult> {
-    return this.sideEffect(session, (backend, runtime) => backend.submitText(runtime, text))
+  submitText(session: RegisteredSession, text: string, options?: SubmitOptions): Promise<TerminalActionResult> {
+    return this.sideEffect(session, (backend, runtime) => backend.submitText(runtime, text, options))
   }
 
   typeLiteral(session: RegisteredSession, text: string): Promise<TerminalActionResult> {

@@ -4,6 +4,10 @@
  * template was laid into — there is nothing in it to review, so the daemon records the answer the way
  * Claude Code does: `projects[<path>].hasTrustDialogAccepted` in `~/.claude.json`.
  *
+ * In the config the engine launched there actually reads (lib/engineHomes.ts): `.claude.json` in a moved
+ * CLAUDE_CONFIG_DIR, and `config.toml` in the agent's own Codex profile or a moved CODEX_HOME. Both were
+ * read and written in the default places alone, and such an agent got the trust prompt anyway.
+ *
  * ⚠️ Never for a folder with content the person has not been asked about — a clone, their own repo,
  * a worktree of one: that answer is theirs. The callers decide; see `backendSocket.ts` (project
  * folders) and `cli.ts` (harness templates). A worktree only inherits the answer its source repo
@@ -13,8 +17,8 @@
  * (no `~/.claude.json`), when the file does not parse, or when the entry already says yes.
  */
 import { existsSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs'
-import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { launchClaudeConfigDir, launchCodexHome } from './engineHomes.js'
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -32,7 +36,8 @@ function replaceConfigFile(file: string, text: string): void {
   renameSync(tmp, target)
 }
 
-export function preTrustClaudeProject(cwd: string, home = homedir()): 'trusted' | 'already' | 'skipped' {
+/** `home`: the folder holding the `.claude.json` Claude Code reads (CLAUDE_CONFIG_DIR, else the home folder). */
+export function preTrustClaudeProject(cwd: string, home = launchClaudeConfigDir()): 'trusted' | 'already' | 'skipped' {
   const file = join(home, '.claude.json')
   if (!existsSync(file)) return 'skipped'
   let config: unknown
@@ -57,7 +62,7 @@ export function preTrustClaudeProject(cwd: string, home = homedir()): 'trusted' 
 
 /** Whether Claude Code already trusts `path`: its own entry, or a folder above it, says yes — the
  *  same inheritance Claude Code applies. Unreadable or absent config reads as no. */
-export function claudeTrusts(path: string, home = homedir()): boolean {
+export function claudeTrusts(path: string, home = launchClaudeConfigDir()): boolean {
   const file = join(home, '.claude.json')
   if (!existsSync(file)) return false
   let config: unknown
@@ -82,9 +87,10 @@ function tomlKey(quoted: string): string | null {
   try { return JSON.parse(quoted) as string } catch { return null }
 }
 
-/** Whether Codex already trusts exactly `path` (a `[projects."<path>"]` table saying `trusted`). */
-export function codexTrusts(path: string, home = homedir()): boolean {
-  const file = join(home, '.codex', 'config.toml')
+/** Whether Codex already trusts exactly `path` (a `[projects."<path>"]` table saying `trusted`), in the
+ *  config of the agent's own profile (`codexHome`) or, without one, of the Codex home a launch uses. */
+export function codexTrusts(path: string, codexHome?: string | null): boolean {
+  const file = join(launchCodexHome(codexHome), 'config.toml')
   if (!existsSync(file)) return false
   const text = readFileSync(file, 'utf8')
   for (const match of text.matchAll(CODEX_PROJECT_HEADER_RE)) {
@@ -98,7 +104,7 @@ export function codexTrusts(path: string, home = homedir()): boolean {
 }
 
 /**
- * Codex keeps the same answer in `~/.codex/config.toml` as a `[projects."<path>"]` table with
+ * Codex keeps the same answer in `<CODEX_HOME>/config.toml` as a `[projects."<path>"]` table with
  * `trust_level = "trusted"`. Same rules: only a folder the daemon made empty (or a worktree of one Codex
  * already trusts), only when Codex has a config here, never rewriting what is there — the table is
  * appended at the end.
@@ -107,8 +113,8 @@ export function codexTrusts(path: string, home = homedir()): boolean {
  * or `projects` written as an inline table or dotted keys, would make the appended table a duplicate
  * definition — a config.toml Codex refuses to load. Those are left alone.
  */
-export function preTrustCodexProject(cwd: string, home = homedir()): 'trusted' | 'already' | 'skipped' {
-  const file = join(home, '.codex', 'config.toml')
+export function preTrustCodexProject(cwd: string, codexHome?: string | null): 'trusted' | 'already' | 'skipped' {
+  const file = join(launchCodexHome(codexHome), 'config.toml')
   if (!existsSync(file)) return 'skipped'
   const text = readFileSync(file, 'utf8')
   const keys = [...text.matchAll(CODEX_PROJECT_HEADER_RE)].map((match) => tomlKey(match[1]))

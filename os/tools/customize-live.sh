@@ -34,8 +34,12 @@ mkdir -p /etc/systemd/system/serial-getty@ttyS0.service.d
 printf '[Service]\nExecStart=\nExecStart=-/usr/bin/agetty --autologin root --noclear %%I 115200\n' > /etc/systemd/system/serial-getty@ttyS0.service.d/live.conf
 systemctl enable serial-getty@ttyS0.service
 python3 - <<'PY'
-import hashlib, json
+import hashlib, json, importlib.util
 from pathlib import Path
+spec = importlib.util.spec_from_file_location('harness_boot_profile', '/usr/lib/harness-os/boot_profile.py')
+boot = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(boot)
+profile = boot.selected()
 lock = json.loads(Path('/usr/share/harness-os/lock.json').read_text())
 snapshot = lock['arch_snapshot']
 Path('/etc/pacman.conf').write_text(
@@ -43,13 +47,13 @@ Path('/etc/pacman.conf').write_text(
     ''.join(f'[{repo}]\nServer = https://archive.archlinux.org/repos/{snapshot}/$repo/os/$arch\n' for repo in ['core', 'extra']))
 # archiso removes /boot from SquashFS after placing boot files on the ISO.
 # Keep the exact package-owned kernel location for an offline disk install.
-kernels = [p.parent / 'vmlinuz' for p in Path('/usr/lib/modules').glob('*/pkgbase') if p.read_text().strip() == 'linux-lts']
+kernels = [p.parent / 'vmlinuz' for p in Path('/usr/lib/modules').glob('*/pkgbase') if p.read_text().strip() == profile['kernel']]
 if len(kernels) != 1 or not kernels[0].is_file():
-    raise SystemExit('Expected one package-owned LTS kernel for the installer.')
+    raise SystemExit('Expected one package-owned platform kernel for the installer.')
 kernel = kernels[0]
 with kernel.open('rb') as handle:
     digest = hashlib.file_digest(handle, 'sha256').hexdigest()
-Path('/usr/share/harness-os/kernel.json').write_text(json.dumps({'path': str(kernel.relative_to('/')), 'sha256': digest}) + '\n')
+Path('/usr/share/harness-os/kernel.json').write_text(json.dumps({'path': str(kernel.relative_to('/')), 'sha256': digest, 'platform': profile['id']}) + '\n')
 PY
 pacman -Q > /usr/share/harness-os/packages.txt
 # Archiso removes pacman's sync databases during cleanup. Preserve the two

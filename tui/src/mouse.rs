@@ -157,6 +157,7 @@ fn handle(app: &mut App, mut m: Event, double: bool) {
             let Some(pane) = pane else { return };
             // A pane in the tree: its mode has the event.
             if app.panes.get(&pane).map(|p| p.tree_top()).unwrap_or(false) { return crate::tree::key(app, pane, chord, Some(&m), true) }
+            if app.panes.get(&pane).map(|p| p.files_top()).unwrap_or(false) { return crate::files::key(app, pane, chord, Some(&m)) }
             if in_copy || m.wp != Some(pane) { return }
             input_key_mouse(app, pane, &m);
         }

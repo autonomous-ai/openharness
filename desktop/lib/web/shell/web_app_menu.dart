@@ -100,12 +100,18 @@ class WebAppMenuButton extends StatelessWidget {
     List<List<WebMenuItem>> groups,
     void Function(String?) close,
   ) {
-    Widget row(String id, String label) => paneMenuItem(
+    // Uncoloured on purpose: the row's ink tints it, so it turns with the
+    // label when the row lights up.
+    Widget row(String id, String label, Widget icon) => paneMenuItem(
       onTap: () => close(id),
       child: PaneMenuRow(
         key: ValueKey('web-menu:$id'),
         selected: false,
         title: label,
+        leading: IconTheme.merge(
+          data: const IconThemeData(size: AppIcons.inlineSize),
+          child: icon,
+        ),
       ),
     );
     final rule = Divider(
@@ -117,11 +123,11 @@ class WebAppMenuButton extends StatelessWidget {
     );
     return [
       for (final group in groups) ...[
-        for (final item in group) row(item.command, item.label),
+        for (final item in group) row(item.command, item.label, item.icon),
         rule,
       ],
       if (app.currentUser?.email case final email?) paneMenuEmpty(email),
-      row(_signOut, 'Sign out'),
+      row(_signOut, 'Sign out', const Icon(AppIcons.logOut)),
     ];
   }
 }

@@ -3,7 +3,7 @@
  * source stopped under its fork, and both coming back after a daemon restart. A fork is its own agent
  * with its own conversation from the moment it exists; nothing one does reaches the other.
  */
-import { mkdirSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { LocalClient, type Frame } from './harness/client.js'
@@ -108,6 +108,42 @@ describe('forks at their edges', () => {
     const back = await bound(client, source.id)
     expect(back.sessionId).toBe(source.sessionId)
     await turn(client, source.id, 'the source after its resume')
+    client.close()
+  })
+
+  // A Codex agent moved back off a grid relaunches on the model it had before (the row's
+  // `subscriptionModel`, `-m`) and on its own provider (`-c model_provider=…`), as a restart and a resume
+  // build it (launch.ts `relaunchOverrides`). A fork was launched without either, and came back on Codex's
+  // default model.
+  it('codex: a fork of an agent moved back to its own login runs on that agent\'s model, as its restart does', async () => {
+    const d = await fresh()
+    let client = await LocalClient.connect(d)
+    const source = await create(d, client, 'codex', 'fork-own-login')
+    await turn(client, source.id, 'before the move back')
+    // The model the agent runs, as the frame names it (`runtime-v1:<session>:codex:<model>@<effort>`).
+    const model = async (agentId: string) => /:codex:([^@]+)@/.exec(String((await row(client, agentId))?.selectedModel))?.[1]
+    expect(await model(source.id)).toBe('gpt-6')
+    client.close()
+    await d.stop()
+    // What a move back off a grid leaves on the row (retarget.ts `setSubscriptionModel`): the model to come
+    // back to. No grid is reachable from a test, so the row is given what that move would have written.
+    const file = join(d.dataDir, 'registry.json')
+    const saved = JSON.parse(readFileSync(file, 'utf8')) as Array<Record<string, unknown>>
+    const entry = saved.find((one) => one.agentId === source.id)
+    expect(entry, JSON.stringify(saved)).toBeTruthy()
+    entry!.subscriptionModel = 'gpt-6-mini'
+    writeFileSync(file, JSON.stringify(saved))
+    await d.start()
+    client = await LocalClient.connect(d)
+    await bound(client, source.id)
+    const child = await fork(client, source.id, 'the fork')
+    await turn(client, child.id, 'in the fork')
+    expect(await model(child.id)).toBe('gpt-6-mini')
+    // The same model a restart of the source comes back on.
+    expect((await client.request('agent_restart', { agentId: source.id }, 90_000)).error).toBeUndefined()
+    await bound(client, source.id)
+    await turn(client, source.id, 'after the restart')
+    expect(await model(source.id)).toBe('gpt-6-mini')
     client.close()
   })
 

@@ -18,7 +18,7 @@
  */
 import { execFileSync } from 'node:child_process'
 import { copyFileSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { hostname, tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { LocalClient, type Frame } from './harness/client.js'
@@ -37,6 +37,14 @@ const CHANGED: Record<string, string> = {
   'terminal_info codex': 'answered now; the released build left it unanswered',
   'terminal_info with nothing': 'answered now; the released build left it unanswered',
   'terminal_info for no such agent': 'answered now; the released build left it unanswered',
+  // A permission dialog's question says it is one (#764): `permission` carries the dialog and that the
+  // desktop resolves it, so a device shows a notice rather than a question to answer. A field added,
+  // nothing taken away; a frame's keys are compared as one line, so the addition reads as a change.
+  'frames of a permission on claude[3]': 'commander_question adds permission (#764); every key it had stays',
+  'frames of a permission on codex[2]': 'commander_question adds permission (#764); every key it had stays',
+  // A conversation the daemon keeps as a stopped one reads like a live one (#797, round 24). The released
+  // build said NOT_FOUND, so a conversation the daemon had to leave for a new one could not be read at all.
+  'session_get codex while stopped': 'answered now; the released build said NOT_FOUND for a stopped conversation',
 }
 
 type Engine = 'claude' | 'codex'
@@ -202,27 +210,37 @@ async function scenario(d: IsolatedDaemon): Promise<Answers> {
     await ask(`sessions_list ${engine}`, 'sessions_list', { agentId: agent[engine] })
     await ask(`session_get ${engine}`, 'session_get', { sessionId: session[engine] })
     await ask(`session_get ${engine}, one turn`, 'session_get', { sessionId: session[engine], limit: 1 })
+    // The registry finds an agent by its agent id too; the reply names the id it was asked by.
+    await ask(`session_get ${engine} by its agent id, one turn`, 'session_get', { sessionId: agent[engine], limit: 1 })
     await ask(`agent_recent ${engine}`, 'agent_recent', { agentId: agent[engine] })
     await ask(`terminal_info ${engine}`, 'terminal_info', { agentId: agent[engine] })
     await ask(`agent_read_file ${engine}`, 'agent_read_file', { agentId: agent[engine], path: 'README.md' })
+    await ask(`git_pull_request ${engine}`, 'git_pull_request', { agentId: agent[engine] })
   }
   await ask('models_list', 'models_list')
   await ask('git_project_info', 'git_project_info', { path: cwd('claude') })
   await ask('fs_list_dir', 'fs_list_dir', { path: d.projectsDir })
   await ask('project_preview', 'project_preview', { path: cwd('claude') })
   await ask('codex_profiles_list', 'codex_profiles_list')
+  await ask('api_connections', 'api_connections', { action: 'list' })
   await ask('claude_login_status', 'claude_login_status')
   await ask('agents_cleanup_preview', 'agents_cleanup_preview')
   await ask('harness_devices_list', 'harness_devices_list')
   await ask('theme_set', 'theme_set', { background: '#000000', foreground: '#ffffff' })
   await ask('a request nobody answers', 'compat_unknown_request')
+  await ask('agent_create_status for no such creation', 'agent_create_status', { creationId: 'compat-no-such-creation' })
 
-  // The same requests, malformed: what each refuses with.
+  // The same requests, malformed: what each refuses with. Each core request that takes arguments is here:
+  // #805 moved every one of them out of the socket's switch into the core module that owns it.
   const malformed = ['session_get', 'sessions_list', 'agent_recent', 'terminal_info', 'agent_read_file', 'agent_update', 'agent_fork',
     'agent_restart', 'agent_delete', 'agent_resume', 'agent_purge', 'agent_retarget', 'agent_close', 'cancel', 'question_response',
-    'git_project_info', 'fs_list_dir', 'project_preview', 'session_tail', 'dsh_remove', 'dsh_install', 'dsh_update', 'theme_set']
+    'git_project_info', 'fs_list_dir', 'project_preview', 'session_tail', 'dsh_remove', 'dsh_install', 'dsh_update', 'theme_set',
+    'agent_create', 'agent_create_status', 'agent_handoff_prepare', 'agent_worktree_delete', 'message',
+    // Moved out of the socket's switch into services (docs/design/2026-10-06-core-boundary-next.md, step 4).
+    'git_pull_request', 'codex_profile_link', 'api_connections']
   for (const type of malformed) {
-    const ms = type === 'cancel' ? 5_000 : 60_000
+    // `cancel` and `message` are fire-and-forget: no build answers them, so waiting a minute shows nothing more.
+    const ms = type === 'cancel' || type === 'message' ? 5_000 : 60_000
     await ask(`${type} with nothing`, type, {}, ms)
     await ask(`${type} for no such agent`, type, { agentId: 'compat-no-such-agent', sessionId: 'compat-no-such-session', path: '/compat/no/such/path' }, ms)
   }
@@ -239,7 +257,18 @@ async function scenario(d: IsolatedDaemon): Promise<Answers> {
   }, 60_000, 500)
   await ask('agent_delete (stop)', 'agent_delete', { agentId: agent.codex })
   await ask('agents_list after a stop', 'agents_list', { includeStopped: true })
-  await ask('agent_resume', 'agent_resume', { agentId: agent.codex })
+  // What the apps read of an agent while it is stopped: its conversation, its list and its recaps.
+  await ask('session_get codex while stopped', 'session_get', { sessionId: session.codex, limit: 1 })
+  await ask('sessions_list codex while stopped', 'sessions_list', { agentId: agent.codex })
+  await ask('agent_recent codex while stopped', 'agent_recent', { agentId: agent.codex })
+  // The model a resumed agent runs is what its engine reports once it is back, a race with the reply
+  // on either build: v0.3.58 and this build each answered null in some runs and the model in others.
+  // It is compared settled, in the rows read at the end.
+  const resumed = await ask('agent_resume', 'agent_resume', { agentId: agent.codex })
+  if (resumed.agent) {
+    const { selectedModel: _model, ...settledLater } = resumed.agent
+    answers['agent_resume'] = walk({ ...resumed, agent: settledLater })
+  }
   await until('codex to be back after its resume', async () => {
     const row = (await rows()).find((one) => one.id === agent.codex)
     return row?.sessionId && row.status === 'active' ? row : null
@@ -272,10 +301,17 @@ describe.skipIf(!FROM)('what the apps see, compared with the released build', ()
       ['this', { scriptPath: join(build, 'cli.js'), env: { ADAPTER_CLI_DIR: build } }],
     ] as const) {
       const d = await IsolatedDaemon.create(options)
+      // tmux titles each new pane with the machine's name as it is then, and a daemon refuses that title
+      // as an agent's name. Released builds up to v0.3.58 read the name once, at start, so when a
+      // laptop's network name changed mid-run (`MacBook.lan` to `MacBook.local`) the panes made after
+      // it came out named after the machine, on that side alone: a difference the change made, not
+      // the build. This build reads it at every title sweep and keeps each name (lib/machineNames.ts).
+      const host = hostname()
       try {
         await d.start({ ready: 'port' })
         const version = execFileSync(process.execPath, [options.scriptPath, 'version'], { encoding: 'utf8' }).trim()
         sides[side] = { version, answers: await scenario(d) }
+        if (hostname() !== host) throw new Error(`this machine's name changed from ${host} to ${hostname()} during the ${side} build's run; run it again`)
       } catch (error) {
         console.error(`---- ${side} daemon log\n${d.log().split('\n').slice(-120).join('\n')}`)
         throw error

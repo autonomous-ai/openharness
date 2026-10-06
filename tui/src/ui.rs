@@ -446,6 +446,13 @@ fn window(buf: &mut Buffer, app: &mut App, body: Rect) -> Option<Position> {
             if let Some(pane) = app.panes.get_mut(id) { pane.dirty = false }
             continue;
         }
+        // choose-file's file manager, likewise.
+        if app.panes.get(id).map(|p| p.files_top()).unwrap_or(false) {
+            if let Some(bg) = window.1 { buf.set_style(content, Style::default().bg(bg)) }
+            crate::files::draw(app, *id, buf, content);
+            if let Some(pane) = app.panes.get_mut(id) { pane.dirty = false }
+            continue;
+        }
         if app.panes.get(id).map(|p| p.copy_top()).unwrap_or(false) {
             let (styles, ctx) = (crate::copy::styles(app, *id), crate::copy::ctx(app, *id));
             if let Some(m) = app.panes.get(id).and_then(|p| p.modes.last()) {

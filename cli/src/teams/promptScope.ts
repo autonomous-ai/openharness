@@ -18,6 +18,8 @@ interface State {
   paste: boolean
   submissions: Submission[]
   observedHooks: string[]
+  /** Prompts the transcript started before their hook was heard (see `started`). */
+  observedStarts: string[]
   current: string | null
   question: string | null
   returns: Map<string, { teamId: string | null; question: string | null }>
@@ -34,7 +36,7 @@ export class SwarmPromptScopes {
     let state = this.states.get(agentId)
     if (!state) {
       state = { draft: [], cursor: 0, known: true, decoder: new StringDecoder('utf8'), escape: '', paste: false,
-        submissions: [], observedHooks: [], current: null, question: null, returns: new Map() }
+        submissions: [], observedHooks: [], observedStarts: [], current: null, question: null, returns: new Map() }
       this.states.set(agentId, state)
     }
     state.submissions = state.submissions.filter(s => s.expires > this.now())
@@ -64,15 +66,21 @@ export class SwarmPromptScopes {
   }
 
   /** Native prompt hooks run before tools. Transcript starts are the fallback and acknowledge
-   * already handled hooks without moving scope backwards when the watcher is delayed. */
+   * already handled hooks without moving scope backwards when the watcher is delayed.
+   *
+   * And the other way round: a hook can be heard after the transcript started its prompt. The hook gives
+   * the daemon 500 ms to answer (hook/notify.mjs) and the engine goes on while the daemon is still
+   * matching the hook to its process, so the turn is often on disk first. Taken as a second start of the
+   * same prompt, the hook found its message already taken and read as no team: every message from a tab
+   * lost its team (e2e/teamsProcess.e2e.ts, once the engines ran the real hook). Each start now
+   * acknowledges the other, whichever comes first. */
   started(agentId: string, text: string, source: 'hook' | 'transcript' = 'transcript', engine?: string): void {
     const state = this.state(agentId)
     const hashes = [fingerprint(text)]
     if (engine === 'claude') hashes.push(fingerprint(promptText(text)))
-    if (source === 'transcript') {
-      const acknowledged = state.observedHooks.findIndex(hash => hashes.includes(hash))
-      if (acknowledged >= 0) { state.observedHooks.splice(acknowledged, 1); return }
-    }
+    const heard = source === 'transcript' ? state.observedHooks : state.observedStarts
+    const acknowledged = heard.findIndex(hash => hashes.includes(hash))
+    if (acknowledged >= 0) { heard.splice(acknowledged, 1); return }
     // Prefer the exact text. A user can literally type Claude's paste-wrapper syntax,
     // and another engine does not attach Claude's envelope semantics to that text.
     const hash = hashes.find(hash => state.submissions.some(s => s.hash === hash)) ?? hashes[0]
@@ -93,10 +101,9 @@ export class SwarmPromptScopes {
       } else { state.question = null; state.returns.clear() }
       state.current = submission.teamId
     }
-    if (source === 'hook') {
-      state.observedHooks.push(hash)
-      if (state.observedHooks.length > LIMIT) state.observedHooks.shift()
-    }
+    const observed = source === 'hook' ? state.observedHooks : state.observedStarts
+    observed.push(hash)
+    if (observed.length > LIMIT) observed.shift()
   }
 
   raw(agentId: string, bytes: Uint8Array, tabId?: string, pasted = false): void {

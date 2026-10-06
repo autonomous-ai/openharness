@@ -547,8 +547,12 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
   final _resultsKey = GlobalKey();
   double _rowHeight = 56;
   double _modelHeadingHeight = 28;
+  double _twoLineRowHeight = 56;
   bool _desktopRows = false;
   bool _revealScheduled = false;
+
+  /// The selection and query the list last brought into view.
+  (String?, String)? _revealed;
   bool _createPinned = false;
   int _lastPage = 0;
   (Size, double)? _geometry;
@@ -589,12 +593,15 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
     return items;
   }
 
-  double _modelItemHeight(({int? index, String? heading, String? key}) item) =>
-      !_desktopRows || item.index != null
-      ? _rowHeight
-      : item.heading == null
-      ? 8
-      : _modelHeadingHeight;
+  double _modelItemHeight(({int? index, String? heading, String? key}) item) {
+    if (!_desktopRows) return _rowHeight;
+    final index = item.index;
+    if (index == null) return item.heading == null ? 8 : _modelHeadingHeight;
+    // A shared model's row is two lines: its name, and the machine serving it under it.
+    return search.modelRowNameEnd(search.rows[index]) != null
+        ? _twoLineRowHeight
+        : _rowHeight;
+  }
 
   double _fittedHeight(
     BoxConstraints constraints, {
@@ -638,6 +645,7 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
       }
     });
     search.addListener(_changed);
+    _revealed = (search.selected?.id, search.query);
     terminalFontStore.addListener(_fontChanged);
     _lastPage = search.resultPage.value;
     search.resultPage.addListener(_pageResults);
@@ -658,6 +666,7 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
       _lastPage = search.resultPage.value;
       _announced = null;
       _rowWidgets.clear();
+      _revealed = (search.selected?.id, search.query);
       _revealSelection();
     }
   }
@@ -686,8 +695,15 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
   void _changed() {
     _watchActivity();
     setState(() {});
-    _scrollToSelection();
-    _revealSelection();
+    // Only a new selection or query brings the selection into view. A refresh that leaves both
+    // as they were keeps the list where it was scrolled: the picker re-reads its models every few
+    // seconds, and each read pulled a list scrolled by the wheel back up to the selection.
+    final shown = (search.selected?.id, search.query);
+    if (shown != _revealed) {
+      _revealed = shown;
+      _scrollToSelection();
+      _revealSelection();
+    }
     // Focus stays in the input while the arrows move a highlight the screen
     // reader never visits; say the row it landed on.
     final row = search.selected;
@@ -747,7 +763,9 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
               .take(index)
               .fold(0.0, (height, item) => height + _modelItemHeight(item))
         : index * _rowHeight;
-    final bottom = top + _rowHeight;
+    final bottom =
+        top +
+        (search.isModelMode ? _modelItemHeight(modelRows[index]) : _rowHeight);
     final position = _scroll.position;
     final offset = top < position.pixels
         ? top
@@ -849,11 +867,12 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
           // is still a resource row, and keeps the 44-point target every one of those has — the
           // slot is 4 points taller than the row it holds.
           final oneLine = scale.scale(14) * 1.5 + 16;
+          _twoLineRowHeight = scale.scale(14) * 2.8 + 16;
           _rowHeight = search.isCommandMode
               ? oneLine
               : search.isModelMode
               ? oneLine.clamp(48, double.infinity)
-              : scale.scale(14) * 2.8 + 16;
+              : _twoLineRowHeight;
         }
         _desktopRows = desktop;
         _modelHeadingHeight = scale.scale(12) * 1.45 + 12;
@@ -1761,6 +1780,11 @@ class _SearchRowContentState extends State<_SearchRowContent> {
       final subscription = row.isModel
           ? widget.search.models?.entries[row.modelId]?.subscription
           : null;
+      // A shared model's machine goes on a second line under its name, where it cannot be read as
+      // part of the name: "DeepSeek-V4-Flash · zeus" on one line read as one long model name.
+      final nameEnd = row.isModel && title == row.title
+          ? widget.search.modelRowNameEnd(row)
+          : null;
       final account = '${subscription?['account'] ?? ''}'.trim();
       final subscriptionAccount = subscription != null && account.isNotEmpty
           ? (
@@ -1842,6 +1866,7 @@ class _SearchRowContentState extends State<_SearchRowContent> {
                         )
                       : SearchResultText(
                           title,
+                          to: nameEnd,
                           matches: matches.where((match) => match.title),
                           style: DesktopChrome.text(
                             color: unavailable == null ? ink : muted,
@@ -1884,6 +1909,16 @@ class _SearchRowContentState extends State<_SearchRowContent> {
                 ],
               ],
             ),
+            if (nameEnd != null) ...[
+              const SizedBox(height: 2),
+              SearchResultText(
+                title,
+                key: ValueKey('model-row-machine:${row.id}'),
+                from: nameEnd + modelMachineSeparator.length,
+                matches: matches.where((match) => match.title),
+                style: DesktopChrome.metadata(color: muted),
+              ),
+            ],
             if (!widget.search.isModelMode &&
                 !row.isCommand &&
                 !underApi &&

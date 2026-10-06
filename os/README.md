@@ -71,7 +71,9 @@ payload-location fix.
 but no Mac model family has completed physical validation. Selected Broadcom
 drivers are available offline, and supported SPI keyboard controllers are included
 for encrypted unlock; VM checks do not prove physical Wi-Fi or keyboard support.
-T2 Macs need separate integration. Apple Silicon and Raspberry Pi do not have
+T2 Macs have a separate [experimental image](platforms/apple-t2/README.md) with
+VM-verified installation, firmware preservation and offline recovery; physical
+hardware and automatic T2 kernel upgrades remain unverified. Apple Silicon and Raspberry Pi do not have
 installable Harness images yet. See the [hardware targets](DEVELOPMENT.md#mac-support-targets)
 for requirements and remaining work.
 
@@ -185,7 +187,12 @@ is no connection. Connecting advances automatically to OpenCode on the left and
 two terminal panes on the right. Working Ethernet skips Wi-Fi setup. Later boots
 reconnect to saved Wi-Fi and restore existing work. Super+n starts New Harness,
 Super+t opens a shell directly, Super+m connects a computer, Super+w opens Wi-Fi
-and Super+l locks the session. These require no Shift or prefix. The shared TUI
+and Super+l locks the session behind the same wordmark and "Enter your password"
+as disk unlock. Super+e opens the file manager in its own window, a folder
+tree on the left and the folder on the right; pressing it again returns to hn.
+Print or Super+p captures the screen, Shift+Print or Super+r a
+dragged region; each picture is saved under `~/Pictures/Screenshots` and copied
+to the clipboard. The Super keys require no Shift or prefix. The shared TUI
 shortcuts still work; ordinary hn on macOS and other Linux distributions retains
 its usual UI.
 Recovery remains available through another console or the USB; the owner retains
@@ -205,7 +212,7 @@ is always deliberate. After that reboot, the same update request finishes any
 remaining hn/CLI release against the new OS base. Later background checks return
 to downloading only. See [update development](DEVELOPMENT.md#fast-hn-updates).
 
-Earlier previews retain their existing controls until this update is installed:
+Previews 5 through 11 retain their existing controls until this update is installed:
 **Super+u**, then **s**, then the account password. No new USB flash is needed.
 
 Preview 4 needs the matching bootstrap bundle from the

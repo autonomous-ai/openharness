@@ -11,11 +11,13 @@
  * `require` via the banner so ws's try/catch fallback works without them.
  */
 import * as esbuild from 'esbuild'
-import { readFileSync, copyFileSync, rmSync } from 'fs'
+import { appendFileSync, readFileSync, copyFileSync, rmSync } from 'fs'
 import { readDshRegistry } from './scripts/lib/dshRegistry.mjs'
 import { readBuiltinBundle, readHarnessMonitorBundle, readModelManagerBundle } from './scripts/lib/modelManagerBundle.mjs'
 import { readProcessImageBundle } from './scripts/lib/processImageBundle.mjs'
+import { leanBlock } from './scripts/lib/leanBlock.mjs'
 import { fileURLToPath } from 'node:url'
+import { basename } from 'node:path'
 const modelManagerBundle = JSON.stringify(readModelManagerBundle(fileURLToPath(new URL('../store/agents/autonomous-grid', import.meta.url))))
 const devicesBundle = JSON.stringify(readBuiltinBundle(fileURLToPath(new URL('../store/agents/devices', import.meta.url)), ['harness.json', 'AGENTS.md', 'LICENSE', 'template']))
 const harnessMonitorBundle = JSON.stringify(readHarnessMonitorBundle(fileURLToPath(new URL('../store/agents/harness-monitor', import.meta.url))))
@@ -37,9 +39,7 @@ const outDir = process.env.BUNDLE_OUT_DIR || 'dist'
 // Start clean so no stale per-file `dist/*.js` / sourcemaps leak into the release artifact.
 rmSync(outDir, { recursive: true, force: true })
 
-await esbuild.build({
-  entryPoints: ['src/cli.ts'],
-  outfile: `${outDir}/cli.js`,
+const options = {
   bundle: true,
   platform: 'node',
   format: 'esm',
@@ -65,7 +65,32 @@ await esbuild.build({
   keepNames: true,
   legalComments: 'eof',
   logLevel: 'info',
+}
+
+// harnessd's master and its services, bundled on their own (src/leanEntry.ts): Node parses all of the
+// file a process starts on, and the whole CLI's cost each of them about 45 MiB at idle. Split, so that a
+// process parses only the files its own code is in: the master never the services', search never the
+// viewers'. Carried inside cli.js, at its end, as a comment Node only skims (scripts/lib/leanBlock.mjs).
+const lean = await esbuild.build({
+  ...options,
+  entryPoints: { harnessd: 'src/leanEntry.ts' },
+  outdir: 'lean',
+  splitting: true,
+  chunkNames: '[name]-[hash]',
+  outExtension: { '.js': '.mjs' },
+  write: false,
+  logLevel: 'warning',
 })
+const leanFiles = Object.fromEntries(lean.outputFiles.map((file) => [basename(file.path), file.contents]))
+
+await esbuild.build({
+  ...options,
+  // Still one file, which the self-updater downloads, verifies and swaps whole. Its entry decides what a
+  // process loads (src/entry.ts), and the master starts itself and the services from the lean bundle.
+  entryPoints: ['src/entry.ts'],
+  outfile: `${outDir}/cli.js`,
+})
+appendFileSync(`${outDir}/cli.js`, leanBlock(leanFiles))
 
 copyFileSync('hook/notify.mjs', `${outDir}/notify.mjs`)
 

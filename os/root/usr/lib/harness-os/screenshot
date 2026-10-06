@@ -1,0 +1,25 @@
+#!/bin/sh
+# Print / Super+p: the whole screen. Shift+Print / Super+r: a region dragged out with the pointer.
+# The picture is saved under ~/Pictures/Screenshots and put on the clipboard, so it can be pasted
+# into an agent or the browser at once. There is no notification daemon; hn says where it went.
+set -u
+mode=${1:-full}
+dir=${XDG_PICTURES_DIR:-$HOME/Pictures}/Screenshots
+file=$dir/Screenshot-$(date +%Y-%m-%d_%H-%M-%S).png
+tell() { hn display-message "$1" >/dev/null 2>&1 || true; }
+
+mkdir -p "$dir" || { tell "Screenshot failed: cannot create $dir"; exit 1; }
+case $mode in
+  full) grim "$file" ;;
+  # Escape or a right click cancels the selection; that is not a failure worth a message.
+  region) area=$(slurp) || exit 0; grim -g "$area" "$file" ;;
+  *) echo "usage: screenshot [full|region]" >&2; exit 2 ;;
+esac || { tell "Screenshot failed"; exit 1; }
+
+shown=$(printf '%s' "$file" | sed "s|^$HOME/|~/|")
+# wl-copy stays behind to serve the clipboard; it must not hold the caller's output open.
+if wl-copy --type image/png <"$file" >/dev/null 2>&1; then
+  tell "Screenshot saved to $shown and copied"
+else
+  tell "Screenshot saved to $shown"
+fi

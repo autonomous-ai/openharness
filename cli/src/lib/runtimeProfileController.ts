@@ -12,6 +12,15 @@ import {
   type OpencodePickerRow,
 } from '../engines/opencode/runtimeProfile.js'
 import {
+  chooseCodexRow,
+  codexDigitPressable,
+  codexEffortRows,
+  parseCodexPicker,
+  sameCodexPicker,
+  type CodexCatalogModel,
+  type CodexPicker,
+} from '../engines/codex/modelPicker.js'
+import {
   codexEffortAllowed,
   parseRuntimeProfile,
   supportsNativeRuntimeControl,
@@ -23,6 +32,12 @@ import {
 const COMMAND_CONFIRM_MS = 8_000
 const PICKER_OPEN_MS = 3_000
 const PICKER_STEP_MS = 2_000
+/**
+ * How far apart the two reads of a Codex model list are, which must agree before a digit is pressed on
+ * it (see reachCodexEfforts): long enough for a redraw in flight to land, short beside the seconds a
+ * switch takes to confirm.
+ */
+const CODEX_SETTLE_MS = 250
 /** Hard bound on ladder keystrokes — twice pi's seven levels, so a desynchronised walk still terminates. */
 const PI_LADDER_MAX_STEPS = 14
 /** Hermes' longest picker page is a provider's model list; twice its size still terminates. */
@@ -267,18 +282,6 @@ function allVisibleTextIsMuted(value: string): boolean {
   return sawText
 }
 
-function interactionText(capture: string): string {
-  const lines = capture.split('\n')
-  const promptIndex = lines.findLastIndex((line) => {
-    const visible = stripAnsi(line)
-    const marker = visible.search(/[›❯]/u)
-    if (marker < 0) return false
-    // Picker selection rows also use ›, but numbered rows are not composer prompts.
-    return !/^\s*\d+\.\s/.test(visible.slice(marker + 1))
-  })
-  return (promptIndex >= 0 ? lines.slice(promptIndex) : lines).join('\n')
-}
-
 /**
  * The glyph each CLI puts in front of its composer. They do not share one: cursor uses `→`, devin `❭`
  * (U+276D — close to, but not, claude's `❯` U+276F), and pi draws no marker at all. Getting this wrong is
@@ -298,16 +301,10 @@ export function inspectRuntimePane(engine: RegisteredSession['engine'], capture:
   if (engine === 'grok') return inspectGrokPane(capture)
   const rawLines = capture.split('\n')
   const marks = promptMarker(engine)
-  const promptIndex = rawLines.findLastIndex((line) => {
-    const visible = stripAnsi(line)
-    const marker = visible.search(marks)
-    return marker >= 0 && !/^\s*\d+\.\s/.test(visible.slice(marker + 1))
-  })
+  const promptIndex = latestPromptLine(rawLines, marks)
   const prompt = promptIndex >= 0 ? rawLines[promptIndex] : ''
-  // Old picker/plan text can remain in tmux history. Only UI below the latest prompt belongs to the
-  // current interaction; if no prompt is visible, inspect the whole capture as a conservative fallback.
-  const currentUi = stripAnsi((promptIndex >= 0 ? rawLines.slice(promptIndex) : rawLines).join('\n')).replace(/\u00a0/g, ' ')
-  const dialog = DIALOG_UI.test(currentUi)
+  const currentUi = currentPaneUi(rawLines, promptIndex)
+  const dialog = DIALOG_UI.test(currentUi) || takeoverIn(engine, capture, currentUi) !== null
   const plan = engine === 'codex' ? /\bplan mode\b/i.test(currentUi) : /\bplan mode on\b/i.test(currentUi)
   const marker = stripAnsi(prompt).search(marks)
   let visible = marker >= 0 ? stripAnsi(prompt).slice(marker + 1).replace(/\u00a0/g, ' ').trim() : ''
@@ -319,6 +316,113 @@ export function inspectRuntimePane(engine: RegisteredSession['engine'], capture:
   return { idle: !!prompt && !dialog && !draft, plan, dialog, draft }
 }
 
+/** The latest composer prompt line; picker rows use the same glyphs, but numbered rows are not prompts. */
+function latestPromptLine(rawLines: string[], marks: RegExp): number {
+  return rawLines.findLastIndex((line) => {
+    const visible = stripAnsi(line)
+    const marker = visible.search(marks)
+    return marker >= 0 && !/^\s*\d+\.\s/.test(visible.slice(marker + 1))
+  })
+}
+
+/**
+ * Old picker/plan text can remain in tmux history. Only UI below the latest prompt belongs to the
+ * current interaction; if no prompt is visible, inspect the whole capture as a conservative fallback.
+ */
+function currentPaneUi(rawLines: string[], promptIndex: number): string {
+  return stripAnsi((promptIndex >= 0 ? rawLines.slice(promptIndex) : rawLines).join('\n')).replace(/\u00a0/g, ' ')
+}
+
+/** A screen of Claude Code's or Codex's own that takes its composer's place (see [takeoverIn]). */
+export type PaneTakeover = 'rewind' | 'transcript' | 'search' | 'trust' | 'update' | 'model' | 'sign_in'
+
+/**
+ * The modal over a Claude Code or Codex pane, read for a message about to be typed into it
+ * (messageHold.ts): one of their own screens that takes the composer's place ([takeoverIn]), an
+ * approval prompt, or another menu. Every one of them is a dialog to [inspectRuntimePane], except the
+ * MCP boot notice: Claude Code takes typing while it shows, so a message sent the moment an agent
+ * starts still goes in.
+ */
+export function paneModal(engine: RegisteredSession['engine'], capture: string): PaneTakeover | 'permission' | 'menu' | null {
+  const rawLines = capture.split('\n')
+  const currentUi = currentPaneUi(rawLines, latestPromptLine(rawLines, promptMarker(engine)))
+  const takeover = takeoverIn(engine, capture, currentUi)
+  if (takeover) return takeover
+  // Below the prompt line: that line is the composer, or the echo of the last message, and either can
+  // hold anything a person typed.
+  if (PERMISSION_UI.test(currentUi.slice(currentUi.indexOf('\n') + 1))) return 'permission'
+  return DIALOG_UI.test(currentUi.replace(/Starting MCP servers?/gi, '')) ? 'menu' : null
+}
+
+/**
+ * The screens of Claude Code 2.1.289 and Codex 0.160 that take the composer's place, where a pasted
+ * message and its Enter do something other than send it (read from their code, not run; the screens
+ * are in __fixtures__/rewindPickers.ts and takeoverScreens.ts):
+ *   - rewind: a picker for a point in the conversation to go back to, whose Enter picks one;
+ *   - transcript: Claude Code's transcript view (ctrl+o) and Codex's transcript overlay (ctrl+t, in its
+ *     scrollback mode), which drop the paste and have no Enter: the message is lost;
+ *   - search: a search through the prompt history (ctrl+r), or Codex's find in its transcript (F3),
+ *     which takes the paste as what to search for; Claude Code's Enter then SENDS the earlier prompt it
+ *     found, Codex's puts it in the composer or goes to the next match;
+ *   - trust, update, model, sign_in: the questions Codex asks at startup (trust this folder, update
+ *     now, switch to a new model, how to sign in) and Claude Code's trust and sign-in screens, which
+ *     drop the paste and take the Enter as the highlighted answer: trust the folder (Claude Code's
+ *     highlights `No, exit`, so it quits), run the update, switch the model, start a sign-in.
+ * Each is matched on its own wording and rows, not on a guess at what is missing from the screen.
+ */
+function takeoverIn(engine: RegisteredSession['engine'], capture: string, currentUi: string): PaneTakeover | null {
+  if (engine !== 'claude' && engine !== 'codex') return null
+  const lines = stripAnsi(capture).replace(/\u00a0/g, ' ').split('\n')
+  const bottom = lines.filter((line) => line.trim()).slice(-3)
+  // A startup screen is the last thing on the pane: one with a composer below it was answered.
+  const composer = engine === 'codex'
+    ? lines.findLastIndex((line) => /^\s*›/.test(line) && !/^\s*›\s*\d+\.\s/.test(line))
+    : lines.findLastIndex((line, index) => /^\s*❯/.test(line) && index > 0 && /^\s*[─━]{8,}\s*$/.test(lines[index - 1]))
+  const shown = (...patterns: RegExp[]) => patterns.every((pattern) => lines.findLastIndex((line) => pattern.test(line)) > composer)
+  if (engine === 'codex') {
+    if (CODEX_TRANSCRIPT_BROWSING.test(currentUi)) return 'rewind'
+    if (CODEX_PAGER_HEADER.test(lines.find((line) => line.trim()) ?? '')) return 'transcript'
+    if (bottom.some((line) => CODEX_SEARCH_FOOTER.test(line))) return 'search'
+    if (shown(CODEX_TRUST_QUESTION, CODEX_TRUST_ROW)) return 'trust'
+    if (shown(/^\s*Update available\b/, CODEX_UPDATE_ROW)) return 'update'
+    if (shown(/^\s*[›>]?\s*1\. Try new model\s*$/, /^\s*[›>]?\s*2\. Use existing model\s*$/)) return 'model'
+    if (shown(/^\s*[›>]?\s*1\. Sign in with ChatGPT\s*$/)) return 'sign_in'
+    return null
+  }
+  if (claudeRewindMenuOpen(capture)) return 'rewind'
+  if (bottom.some((line) => CLAUDE_TRANSCRIPT_FOOTER.test(line))) return 'transcript'
+  if (bottom.some((line) => CLAUDE_HISTORY_SEARCH.test(line))) return 'search'
+  if (shown(/Quick safety check: Is this a project you created or one you trust\?/, /^\s*(?:❯\s*)?Yes, I trust this folder\s*$/)) return 'trust'
+  if (shown(/^\s*Select login method:\s*$/, /^\s*(?:❯\s*)?1\. Claude account with subscription\b/)) return 'sign_in'
+  return null
+}
+
+/** The header of Codex's pager over the whole pane, its top row: its transcript (ctrl+t) when it is not
+ *  on the composer's screen (pager_overlay/transcript.rs). Closed with q or ctrl+t; Esc browses prompts. */
+const CODEX_PAGER_HEADER = /^\/ T R A N S C R I P T(?: \/)*\s*$/
+
+/** Codex's search footers: through its prompt history (`reverse-i-search: … enter accept · esc cancel`,
+ *  chat_composer/history_search.rs) and through its transcript (`Find: …`, transcript_view/search.rs). */
+const CODEX_SEARCH_FOOTER = /^\s*(?:reverse-i-search:|Find: )/
+
+/** Codex's trust question, as 0.160 words it (onboarding/trust_directory.rs) and as 0.147 did. */
+const CODEX_TRUST_QUESTION = /Trust this folder\? Codex can read, edit, and run files here|Do you trust the contents of this directory\?/
+const CODEX_TRUST_ROW = /^\s*[›>]?\s*1\. (?:Trust and continue|Yes, continue|Open restricted|Open existing task)\s*$/
+
+/** Codex's update prompt (update_prompt.rs): its first row runs the update. */
+const CODEX_UPDATE_ROW = /^\s*[›>]?\s*1\. Update now \(runs /
+
+/**
+ * Claude Code's transcript view (ctrl+o): the prompt is hidden, and the footer row starts
+ * `Showing detailed transcript · ctrl+o to toggle`, after `dialog waiting · ` when a dialog sits behind
+ * it (2.1.289). It has no Enter, so a message typed there is lost. Esc, q or ctrl+c close it.
+ */
+const CLAUDE_TRANSCRIPT_FOOTER = /^\s*(?:dialog waiting · )?Showing detailed transcript\b/
+
+/** Claude Code's prompt-history search (ctrl+r), under the prompt: `search prompts: <query>`, or
+ *  `no matching prompt: <query>` (2.1.289). */
+const CLAUDE_HISTORY_SEARCH = /^\s*(?:search prompts|no matching prompt): /
+
 /**
  * A modal drawn over the pane — a picker, a permission prompt, an MCP boot notice.
  *
@@ -327,6 +431,52 @@ export function inspectRuntimePane(engine: RegisteredSession['engine'], capture:
  * No `g` flag, so `test` carries no `lastIndex` between callers.
  */
 const DIALOG_UI = /Select Model(?: and Effort)?|Select Reasoning Level|Advanced Reasoning|Available models|Models matching|Edit Parameters|Type to filter.*Tab to edit|Esc to go back|Press enter to confirm|Do you want to proceed|Allow this action|permission required|Starting MCP servers?/i
+
+/** The approval prompts among them. */
+/**
+ * An approval prompt's question. Claude Code asks "Do you want to proceed?", "Do you want to make this
+ * edit to <file>?", "Do you want to allow Claude to fetch this content?", "Do you want to <verb> <target>?"
+ * for the other tools, and "Would you like to proceed?" over a plan (2.1.289); Codex asks "Would you like
+ * to run the following command?" and the like. The rows under it are read too (askQuestion.ts), but a
+ * row wrapped in a narrow pane breaks that reading, and the question alone must still hold a message:
+ * Enter approves the first row. Asked only below the prompt line, so never of what a person typed.
+ */
+const PERMISSION_UI = /\bDo you want to\b|\bWould you like to (?:proceed|run|make|apply|allow)\b|Allow this action|permission required/i
+
+/**
+ * Codex browsing its own transcript: Esc twice on an empty composer, and its footer row reads
+ * `Browsing transcript · ↑↓/jk scroll · ←→/hl prompts · … · ↵ rewind · esc back`, down to a bare
+ * `Browsing` as the pane narrows (0.160, tui/src/app_backtrack/prompt_navigation.rs). In its default
+ * fullscreen mode the composer stays, dimmed whole, placeholder and any draft in it alike, so it read
+ * as empty and idle; in its scrollback mode (`tui.fullscreen_transcript = false`, no alternate screen,
+ * or over SSH) the footer closes a transcript pager drawn over the whole pane. Either way Enter
+ * reverts the conversation to the prompt in view. A paste leaves the fullscreen browser and lands in
+ * the composer, but the scrollback one drops it, and its Enter then rewinds (app.rs and
+ * pager_overlay/transcript.rs).
+ */
+const CODEX_TRANSCRIPT_BROWSING = /^\s*Browsing(?: transcript)?(?:\s+·|\s*$)/m
+
+/**
+ * Claude Code's Rewind menu (Esc twice on an empty prompt, or `/rewind`), which hides the prompt while
+ * it is open. Under its title, `Rewind`, it lists the messages sent so far, `(current)` focused, behind
+ * one of these lines, or asks to confirm one picked (2.1.289, MessageSelector). Enter on a message asks
+ * to confirm it, and Enter again restores the conversation, the code or both to before it (with file
+ * checkpoints off, the first Enter restores the conversation); Enter on `(current)` closes the menu.
+ * A message pasted into it is dropped either way. Its focused row is drawn `❯ (current)` in italics,
+ * which read as an empty, idle prompt.
+ */
+// Their opening words only: a pane narrower than a line wraps the rest onto the next, and the menu went
+// unseen, its Enter picking a message (with checkpoints off, rewinding to it).
+const CLAUDE_REWIND_BODY = /^(?:Restore the code\b|Restore and fork\b|Confirm you want to restore\b|Nothing to rewind to\b)/
+
+function claudeRewindMenuOpen(capture: string): boolean {
+  const lines = stripAnsi(capture).replace(/\u00a0/g, ' ').split('\n').map((line) => line.trim())
+  // The title, with its body a blank line under it, and no rule after it: the prompt the menu hides
+  // comes back between two rules once it closes.
+  return lines.some((line, index) => line === 'Rewind'
+    && lines.slice(index + 1, index + 4).some((next) => CLAUDE_REWIND_BODY.test(next))
+    && !lines.slice(index + 1).some((next) => /[─━]{8,}/u.test(next)))
+}
 
 /** The rule a gutter-box composer is closed with: `╹▀▀▀▀…`. */
 const GUTTER_BOX_RULE = /[─▀▁▔]{8,}/u
@@ -483,91 +633,6 @@ function inspectPiPane(capture: string): PaneInspection {
   return { idle: footer && !dialog && !draft, plan: false, dialog, draft }
 }
 
-interface NumberedRow {
-  number: string
-  label: string
-  raw: string
-}
-
-function numberedRows(capture: string): NumberedRow[] {
-  const rows: NumberedRow[] = []
-  for (const raw of stripAnsi(capture).split('\n')) {
-    const match = /^\s*[›>]?[ ]*(\d+)\.\s+(.+?)\s*$/.exec(raw)
-    if (match) rows.push({ number: match[1], label: match[2], raw })
-  }
-  return rows
-}
-
-export interface CodexModelMenuRows {
-  quickModels: Map<string, string>
-  allModelsRow: string | null
-}
-
-/** Codex 0.145+ adds a quick-mode menu before the existing model and effort pickers. */
-export function parseCodexModelMenuRows(capture: string): CodexModelMenuRows | null {
-  capture = interactionText(capture)
-  const visible = stripAnsi(capture)
-  if (!/Pick a quick auto mode or browse all models/i.test(visible)) return null
-  const quickModels = new Map<string, string>()
-  let allModelsRow: string | null = null
-  for (const row of numberedRows(capture)) {
-    if (/^All models\b/i.test(row.label)) {
-      allModelsRow = row.number
-      continue
-    }
-    const model = /^([a-z0-9][a-z0-9._-]*)(?:\s+\((?:current|default)\))?(?:\s{2,}|$)/i.exec(row.label)?.[1]
-    if (model) quickModels.set(model, row.number)
-  }
-  return { quickModels, allModelsRow }
-}
-
-export function parseCodexModelRows(capture: string): Map<string, string> | null {
-  capture = interactionText(capture)
-  if (!/Select Model and Effort/i.test(stripAnsi(capture))) return null
-  const result = new Map<string, string>()
-  for (const row of numberedRows(capture)) {
-    const model = /^([a-z0-9][a-z0-9._-]*)(?:\s+\((?:current|default)\))?(?:\s{2,}|$)/i.exec(row.label)?.[1]
-    if (model) result.set(model, row.number)
-  }
-  return result
-}
-
-export interface CodexEffortRows {
-  efforts: Map<string, string>
-  defaultRow: string | null
-  advancedRow: string | null
-}
-
-export function parseCodexEffortRows(capture: string): CodexEffortRows | null {
-  capture = interactionText(capture)
-  if (!/Select Reasoning Level for\s+/i.test(stripAnsi(capture))) return null
-  const efforts = new Map<string, string>()
-  let defaultRow: string | null = null
-  let advancedRow: string | null = null
-  for (const row of numberedRows(capture)) {
-    const label = row.label.toLowerCase()
-    if (label.startsWith('low')) efforts.set('low', row.number)
-    else if (label.startsWith('medium')) efforts.set('medium', row.number)
-    else if (label.startsWith('high')) efforts.set('high', row.number)
-    else if (label.startsWith('extra high')) efforts.set('xhigh', row.number)
-    else if (label.startsWith('max')) efforts.set('max', row.number)
-    else if (label.startsWith('more reasoning')) advancedRow = row.number
-    if (/\(default\)/i.test(row.label)) defaultRow = row.number
-  }
-  return { efforts, defaultRow, advancedRow }
-}
-
-export function parseCodexAdvancedRows(capture: string): Map<string, string> | null {
-  capture = interactionText(capture)
-  if (!/Advanced Reasoning/i.test(stripAnsi(capture))) return null
-  const efforts = new Map<string, string>()
-  for (const row of numberedRows(capture)) {
-    if (/^max\b/i.test(row.label)) efforts.set('max', row.number)
-    else if (/^ultra\b/i.test(row.label)) efforts.set('ultra', row.number)
-  }
-  return efforts
-}
-
 export interface CursorParameterRow {
   kind: 'context' | 'reasoning' | 'fast' | 'thinking'
   value: string
@@ -629,6 +694,11 @@ export function parseCursorParameterRows(capture: string): CursorParameterRow[] 
   return rows.length ? rows : null
 }
 
+/** The lists a model is chosen from, as against the reasoning screens that follow them. */
+function isCodexList(picker: CodexPicker): boolean {
+  return picker.kind === 'quick' || picker.kind === 'models' || picker.kind === 'reserve'
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
@@ -655,8 +725,11 @@ export class RuntimeProfileController {
       console.warn(`[runtime-profile] unsupported ${session.engine} CLI version ${session.cliVersion ?? 'unknown'} for ${sessionId.slice(0, 8)}`)
       throw new RuntimeProfileControlError('UNSUPPORTED_CLI_VERSION')
     }
-    if (session.engine === 'codex' && !codexEffortAllowed(target.model, target.effort)) {
-      throw new RuntimeProfileControlError('EFFORT_UNSUPPORTED')
+    // Codex's own catalog: which efforts each model takes, and the names its picker shows them by.
+    const codexCatalog = session.engine === 'codex' ? await this.deps.manager.codexCatalog(session) : []
+    if (session.engine === 'codex') {
+      const listed = codexCatalog.find((entry) => entry.slug === target.model)?.efforts ?? null
+      if (!codexEffortAllowed(target.model, target.effort, listed)) throw new RuntimeProfileControlError('EFFORT_UNSUPPORTED')
     }
     const options = await this.deps.manager.modelsForSession(session)
     if (!options.some((option) => option.id === target.id)) {
@@ -681,7 +754,7 @@ export class RuntimeProfileController {
         await this.setClaude(session, target, current, options)
       } else if (session.engine === 'codex') {
         pickerOpen = true
-        await this.setCodex(session, target)
+        await this.setCodex(session, target, codexCatalog)
         pickerOpen = false
       } else if (session.engine === 'devin') {
         // No picker is ever opened — `/model <id>` is a single command — so there is nothing to Escape out
@@ -718,7 +791,11 @@ export class RuntimeProfileController {
           if (!next || !inspectRuntimePane(session.engine, next).dialog) break
         }
       }
-      if (controlStarted) this.deps.manager.cancelControl(sessionId)
+      // By the engine session, as beginControl keyed it. `sessionId` is whichever id the request named,
+      // and the apps name the agent: cancelling under that left the control in place, and every later
+      // switch of the agent answered BUSY until the daemon restarted (found by e2e/models.e2e.ts, a
+      // refused switch followed by one that should have gone through).
+      if (controlStarted) this.deps.manager.cancelControl(session.sessionId)
       // A failed switch used to leave NOTHING in the log — the picker just flashed open and shut on the
       // user's terminal and the device said nothing useful. Name the session, engine and reason.
       const code = error instanceof RuntimeProfileControlError ? error.code : 'TMUX_FAILED'
@@ -1112,69 +1189,136 @@ export class RuntimeProfileController {
     return !!confirmed
   }
 
-  private async setCodex(session: RegisteredSession, target: RuntimeProfile): Promise<void> {
+  /**
+   * Codex's `/model`: a quick menu of auto presets with an `All models` row (0.145 and later), the full
+   * list (`Select Model and Effort`), then the chosen model's reasoning picker, each row pressed by its
+   * digit, which selects the row and accepts it. How a row is read and chosen, and why, is in
+   * engines/codex/modelPicker.ts. Confirmed, as it always was, by the `thread_settings_applied` record
+   * Codex writes once the choice is applied (RuntimeProfileManager `ingestCodex`).
+   */
+  private async setCodex(session: RegisteredSession, target: RuntimeProfile, catalog: CodexCatalogModel[]): Promise<void> {
     if (!await this.deps.sendText(session.agentId, '/model')) throw new RuntimeProfileControlError('TMUX_FAILED')
-    const isPicker = (value: string): boolean =>
-      !!parseCodexModelMenuRows(value) || !!parseCodexEffortRows(value) || !!parseCodexModelRows(value)
-    let capture = await this.waitPane(session.agentId, isPicker, 900)
-    if (!capture) {
+    let picker = await this.waitCodexPicker(session, () => true, 900)
+    if (!picker) {
       await this.deps.sendKey(session.agentId, 'Enter')
-      capture = await this.waitPane(session.agentId, isPicker, PICKER_OPEN_MS)
+      picker = await this.waitCodexPicker(session, () => true, PICKER_OPEN_MS)
     }
-    if (!capture) throw new RuntimeProfileControlError('UNSUPPORTED_CLI_VERSION')
-
-    let efforts = parseCodexEffortRows(capture)
-    if (efforts) {
-      if (!await this.deps.sendKey(session.agentId, 'Escape')) {
-        throw new RuntimeProfileControlError('UNSUPPORTED_CLI_VERSION')
-      }
-      capture = await this.waitPane(
-        session.agentId,
-        (value) => !!parseCodexModelMenuRows(value) || !!parseCodexModelRows(value),
-        PICKER_STEP_MS,
-      )
-      if (!capture) throw new RuntimeProfileControlError('UNSUPPORTED_CLI_VERSION')
-      efforts = null
+    if (!picker) throw new RuntimeProfileControlError('UNSUPPORTED_CLI_VERSION')
+    if (!isCodexList(picker)) {
+      // Opened on a reasoning screen: back to the list it was opened from, so the model is chosen too.
+      if (!await this.deps.sendKey(session.agentId, 'Escape')) throw new RuntimeProfileControlError('UNSUPPORTED_CLI_VERSION')
+      if (!await this.waitCodexPicker(session, isCodexList, PICKER_STEP_MS)) throw new RuntimeProfileControlError('UNSUPPORTED_CLI_VERSION')
     }
-
-    const menu = parseCodexModelMenuRows(capture)
-    if (menu) {
-      const quickRow = menu.quickModels.get(target.model)
-      const row = quickRow ?? menu.allModelsRow
-      if (!row) throw new RuntimeProfileControlError('MODEL_UNAVAILABLE')
-      if (!await this.deps.sendKey(session.agentId, row)) throw new RuntimeProfileControlError('TMUX_FAILED')
-      capture = await this.waitPane(
-        session.agentId,
-        quickRow
-          ? (value) => !!parseCodexEffortRows(value)
-          : (value) => !!parseCodexModelRows(value),
-        PICKER_STEP_MS,
-      )
-      if (!capture) throw new RuntimeProfileControlError('UNSUPPORTED_CLI_VERSION')
-      efforts = parseCodexEffortRows(capture)
-    }
-
-    if (!efforts) {
-      const models = parseCodexModelRows(capture)
-      const modelRow = models?.get(target.model)
-      if (!modelRow) throw new RuntimeProfileControlError('MODEL_UNAVAILABLE')
-      if (!await this.deps.sendKey(session.agentId, modelRow)) throw new RuntimeProfileControlError('TMUX_FAILED')
-      capture = await this.waitPane(session.agentId, (value) => !!parseCodexEffortRows(value), PICKER_STEP_MS)
-      efforts = capture ? parseCodexEffortRows(capture) : null
-    }
-
-    if (!efforts) throw new RuntimeProfileControlError('UNSUPPORTED_CLI_VERSION')
-    let effortRow = target.effort === 'auto' ? efforts.defaultRow : efforts.efforts.get(target.effort) ?? null
-    if (!effortRow && (target.effort === 'max' || target.effort === 'ultra') && efforts.advancedRow) {
-      if (!await this.deps.sendKey(session.agentId, efforts.advancedRow)) throw new RuntimeProfileControlError('TMUX_FAILED')
-      capture = await this.waitPane(session.agentId, (value) => !!parseCodexAdvancedRows(value), PICKER_STEP_MS)
-      effortRow = capture ? parseCodexAdvancedRows(capture)?.get(target.effort) ?? null : null
-    }
-    if (!effortRow) throw new RuntimeProfileControlError('EFFORT_UNSUPPORTED')
-    if (!await this.deps.sendKey(session.agentId, effortRow)) throw new RuntimeProfileControlError('TMUX_FAILED')
+    const reached = await this.reachCodexEfforts(session, target, catalog)
+    if (reached !== 'applied') await this.pickCodexEffort(session, target, reached)
     if (!await this.deps.manager.waitForProfile(session.sessionId, COMMAND_CONFIRM_MS)) {
       throw new RuntimeProfileControlError('CONFIRM_TIMEOUT')
     }
+  }
+
+  /**
+   * From the list on screen to the target model's reasoning picker, through `All models` when the quick
+   * menu is first; or 'applied' when the model's row applied it at once (a model with one effort).
+   *
+   * Every digit is pressed from a list read twice, CODEX_SETTLE_MS apart, the same both times. Codex
+   * 0.160 draws the list from its cache and redraws it in place when the server answers, and a model
+   * added or reordered then renumbers the rows: a digit read off the first drawing lands on another
+   * model. The reasoning picker that opens names its model in its title, and a title naming any other
+   * model than the row pressed means the list moved anyway, so nothing more is pressed.
+   */
+  private async reachCodexEfforts(
+    session: RegisteredSession,
+    target: RuntimeProfile,
+    catalog: CodexCatalogModel[],
+  ): Promise<CodexPicker | 'applied'> {
+    let reread = false
+    for (let lists = 0; lists < 2; lists++) {
+      const list = await this.settledCodexList(session)
+      if (!list) throw new RuntimeProfileControlError('MODEL_UNAVAILABLE')
+      let choice = chooseCodexRow(list, target, catalog)
+      if ('error' in choice && choice.error === 'MODEL_UNAVAILABLE' && !reread) {
+        // Codex saves the catalog its picker refreshed from to models_cache.json, so a model or a name
+        // that came with the refresh is there to read now.
+        reread = true
+        catalog = await this.deps.manager.codexCatalog(session)
+        choice = chooseCodexRow(list, target, catalog)
+      }
+      if ('error' in choice) throw new RuntimeProfileControlError(choice.error)
+      if (!await this.deps.sendKey(session.agentId, String(choice.row.number))) throw new RuntimeProfileControlError('TMUX_FAILED')
+      if (choice.opens === 'list') {
+        if (!await this.waitCodexPicker(session, (next) => next.kind === 'models', PICKER_STEP_MS)) {
+          throw new RuntimeProfileControlError('UNSUPPORTED_CLI_VERSION')
+        }
+        continue
+      }
+      if (choice.opens === 'applied') return 'applied'
+      const next = await this.waitCodexAfterModelRow(session)
+      if (next === 'closed') return 'applied'
+      if (!next) throw new RuntimeProfileControlError('UNSUPPORTED_CLI_VERSION')
+      if (next.model !== choice.row.name) throw new RuntimeProfileControlError('MODEL_UNAVAILABLE')
+      return next
+    }
+    throw new RuntimeProfileControlError('MODEL_UNAVAILABLE')
+  }
+
+  /** The target's effort in its reasoning picker, through Advanced Reasoning for Max and Ultra. */
+  private async pickCodexEffort(session: RegisteredSession, target: RuntimeProfile, picker: CodexPicker): Promise<void> {
+    const rows = codexEffortRows(picker)
+    let row = target.effort === 'auto' ? rows.defaultRow : rows.efforts.get(target.effort) ?? null
+    if (row === null && (target.effort === 'max' || target.effort === 'ultra') && rows.advancedRow !== null
+      && codexDigitPressable(rows.advancedRow)) {
+      if (!await this.deps.sendKey(session.agentId, String(rows.advancedRow))) throw new RuntimeProfileControlError('TMUX_FAILED')
+      const advanced = await this.waitCodexPicker(session, (next) => next.kind === 'advanced', PICKER_STEP_MS)
+      row = advanced ? codexEffortRows(advanced).efforts.get(target.effort) ?? null : null
+    }
+    if (row === null || !codexDigitPressable(row)) throw new RuntimeProfileControlError('EFFORT_UNSUPPORTED')
+    if (!await this.deps.sendKey(session.agentId, String(row))) throw new RuntimeProfileControlError('TMUX_FAILED')
+  }
+
+  /** The first Codex picker on the pane that `wanted` takes, polled until `timeoutMs`. */
+  private async waitCodexPicker(
+    session: RegisteredSession,
+    wanted: (picker: CodexPicker) => boolean,
+    timeoutMs: number,
+  ): Promise<CodexPicker | null> {
+    const capture = await this.waitPane(session.agentId, (value) => {
+      const picker = parseCodexPicker(value)
+      return !!picker && wanted(picker)
+    }, timeoutMs)
+    return capture ? parseCodexPicker(capture) : null
+  }
+
+  /** A model list that reads the same twice, CODEX_SETTLE_MS apart (see reachCodexEfforts). */
+  private async settledCodexList(session: RegisteredSession): Promise<CodexPicker | null> {
+    let previous: CodexPicker | null = null
+    const deadline = Date.now() + PICKER_STEP_MS
+    while (Date.now() < deadline) {
+      const capture = await this.deps.capture(session.agentId, 100)
+      const picker = capture ? parseCodexPicker(capture) : null
+      const list = picker && isCodexList(picker) ? picker : null
+      if (list && previous && sameCodexPicker(previous, list)) return list
+      previous = list
+      await sleep(CODEX_SETTLE_MS)
+    }
+    return null
+  }
+
+  /**
+   * After a model's row: its reasoning picker, or 'closed' when the picker went away and the composer
+   * is back, which is a model the catalog did not describe applying its one effort at once.
+   */
+  private async waitCodexAfterModelRow(session: RegisteredSession): Promise<CodexPicker | 'closed' | null> {
+    const deadline = Date.now() + PICKER_STEP_MS
+    while (Date.now() < deadline) {
+      const capture = await this.deps.capture(session.agentId, 100)
+      if (capture) {
+        const picker = parseCodexPicker(capture)
+        if (picker?.kind === 'efforts') return picker
+        if (!picker && inspectRuntimePane('codex', capture).idle) return 'closed'
+      }
+      await sleep(100)
+    }
+    return null
   }
 
   private async setCursor(session: RegisteredSession, target: RuntimeProfile): Promise<void> {

@@ -7,6 +7,19 @@ import subprocess
 import sys
 import time
 
+RUNTIME_ID = Path('/usr/share/harness-os/runtime.json')
+
+
+def system_profile():
+    # Older PC packages predate profiles. Fedora packages always declare theirs.
+    return json.loads(RUNTIME_ID.read_text()).get('system_profile', 'arch')
+
+
+def require_pc_system():
+    if system_profile() != 'arch':
+        raise SystemExit('This Fedora integration package does not provide system installation, '
+                         'updates or recovery. Use the Fedora/Asahi system tools.')
+
 
 def capture(*args):
     result = subprocess.run(args, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
@@ -66,7 +79,11 @@ def try_harness():
 def main():
     args = sys.argv[1:]
     command = args.pop(0) if args else 'status'
+    if command == '_require-pc-system':
+        require_pc_system()
+        return
     if command == 'install':
+        require_pc_system()
         os.execv('/usr/bin/python3', ['python3', '/usr/lib/harness-os/install.py', *args])
     if command == 'browser':
         os.execv('/usr/bin/hn-browser', ['hn-browser', *args])
@@ -82,9 +99,11 @@ def main():
     if command == 'hardware':
         os.execv('/usr/bin/python3', ['python3', '/usr/lib/harness-os/hardware.py', 'report', *args])
     if command in ['checkpoint', 'update', 'recover']:
+        require_pc_system()
         os.execv('/usr/bin/python3', ['python3', '/usr/lib/harness-os/system.py', command, *args])
     if command == 'status':
-        print(Path('/usr/share/harness-os/lock.json').read_text())
+        identity = RUNTIME_ID if system_profile() != 'arch' else Path('/usr/share/harness-os/lock.json')
+        print(identity.read_text())
         subprocess.run(['systemctl', '--user', '--no-pager', 'status', 'harness-daemon', 'hn-screen'])
         return
     if command == 'measure':
@@ -103,7 +122,10 @@ def main():
                 'processes_rss_kib_and_lifetime_cpu': capture('ps', '-eo', 'comm,rss,pcpu', '--sort=-rss')}
         print(json.dumps(data, indent=2))
         return
-    raise SystemExit('Usage: hn-os [status | hardware | try | wifi | install | browser [URL] | measure | checkpoint | update [--snapshot YYYY/MM/DD] | recover ROOT_DEVICE [CHECKPOINT]]')
+    commands = 'status | hardware | try | wifi | browser [URL] | measure'
+    if system_profile() == 'arch':
+        commands += ' | install | checkpoint | update [--snapshot YYYY/MM/DD] | recover ROOT_DEVICE [CHECKPOINT]'
+    raise SystemExit('Usage: hn-os [' + commands + ']')
 
 
 if __name__ == '__main__':

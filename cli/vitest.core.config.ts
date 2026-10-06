@@ -12,7 +12,9 @@ export default defineConfig({
       enabled: true,
       provider: 'v8',
       include: ['src/core/**/*.ts', 'src/services/**/*.ts'],
-      exclude: ['src/core/**/*.spec.ts', 'src/services/**/*.spec.ts'],
+      // core/main.ts is the composition root, moved out of cli.ts as it was: wiring only, held to its size by
+      // src/architecture.spec.ts and run by the end-to-end suite as `harness __run`, which no unit test loads.
+      exclude: ['src/core/**/*.spec.ts', 'src/services/**/*.spec.ts', 'src/core/main.ts'],
       reporter: ['text', 'json-summary'],
       reportsDirectory: 'coverage/core',
       thresholds: { perFile: true, statements: 100, branches: 100, functions: 100, lines: 100 },

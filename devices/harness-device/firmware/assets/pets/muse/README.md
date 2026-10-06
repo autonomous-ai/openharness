@@ -7,5 +7,6 @@ headphones, laptop, sound waves and paper plane drawn over them. They are regene
 
 - `work/`, `listen/`: the working and listening scenes, one PNG per step.
 - `send/body/`, `send/fly/` + `send.json`: the sending scene's body frames and the plane overlay with its place.
-- `rest/`: the small pet (24 steps of the waving clip).
+- `rest2x/`: the small pet (24 steps of the waving clip) drawn at twice its size by `mockup/muse_sizes.py`; the dial
+  shows it at 1x, 1.5x, 1.75x or 2x (ht_cell_sprite_zoom). (`muse_jolly.py --export` still writes a 1x `rest/`; unused.)
 - `scenes.json`: each scene's canvas size, where its centre goes on the glass, and its step time.

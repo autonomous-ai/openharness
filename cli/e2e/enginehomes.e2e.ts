@@ -6,7 +6,8 @@
  * engine takes them whatever the daemon's own environment says: the desktop app starts the daemon
  * without the profile. An agent must still bind, take turns and come back after a restart.
  */
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { LocalClient, type Frame } from './harness/client.js'
@@ -19,6 +20,10 @@ const rows = async (client: LocalClient): Promise<Row[]> =>
   (await client.request<{ agents: Row[] }>('agents_list', { includeStopped: true }, 30_000)).agents
 const row = async (client: LocalClient, agentId: string) => (await rows(client)).find((agent) => agent.id === agentId)
 const isTurn = (type: string, agentId: string) => (frame: Frame) => frame.type === type && frame.agentId === agentId
+async function type(d: IsolatedDaemon, pane: string, text: string): Promise<void> {
+  await d.tmux.run('send-keys', '-t', pane, '-l', text)
+  await d.tmux.run('send-keys', '-t', pane, 'Enter')
+}
 async function turn(client: LocalClient, agentId: string, content: string): Promise<void> {
   const started = client.next(isTurn('turn_started', agentId), 45_000, `turn_started (${content})`)
   const ended = client.next(isTurn('turn_ended', agentId), 45_000, `turn_ended (${content})`)
@@ -26,6 +31,22 @@ async function turn(client: LocalClient, agentId: string, content: string): Prom
   expect((await started).payload?.userMessage).toBe(content)
   await ended
 }
+
+/** The one conversation file an engine wrote in a moved home: Claude Code's transcript, Codex's rollout. */
+function conversationIn(engine: Engine, home: string): string | null {
+  const walk = (dir: string): string[] => {
+    let entries
+    try { entries = readdirSync(dir, { withFileTypes: true }) } catch { return [] }
+    return entries.flatMap((entry) => entry.isDirectory() ? walk(join(dir, entry.name)) : entry.name.endsWith('.jsonl') ? [entry.name] : [])
+  }
+  const files = walk(join(home, engine === 'claude' ? 'projects' : 'sessions'))
+  if (files.length !== 1) return null
+  return engine === 'claude' ? files[0].replace(/\.jsonl$/, '') : /-([0-9a-f-]{36})\.jsonl$/.exec(files[0])?.[1] ?? null
+}
+/** The command lines of the fake Codex processes running a conversation, as the process table shows them. */
+const codexCommands = (sessionId: string): string[] =>
+  execFileSync('ps', ['-A', '-o', 'command='], { encoding: 'utf8' }).split('\n')
+    .filter((line) => /^codex\s/.test(line.trim()) && line.includes(sessionId))
 
 describe('the person\'s engines keeping their data elsewhere', () => {
   let daemon: IsolatedDaemon | undefined
@@ -64,6 +85,178 @@ describe('the person\'s engines keeping their data elsewhere', () => {
       return now?.status === 'active' && now.sessionId === agent.sessionId ? now : null
     }, 60_000, 500)
     await turn(client, agent.id, `after the restart, with ${variable} set`)
+    client.close()
+  }, 300_000)
+
+  // A conversation in a moved home, resumed by hand in a terminal tile (`claude --resume <id>`, `codex
+  // resume <id>`). Discovery reads the id off the engine's command line and binds it once it finds the
+  // conversation's file; with no hook to say so (only the other engine's hooks are installed here), that
+  // is all there is. The file was looked for in the default folders alone, and the tile never bound.
+  it.each([
+    ['claude', 'CLAUDE_CONFIG_DIR', 'codex'],
+    ['codex', 'CODEX_HOME', 'claude'],
+  ] as const)('%s with %s: a resume typed into a terminal binds the conversation kept in the moved home', async (engine: Engine, variable, hooked) => {
+    const d = await IsolatedDaemon.create({ env: { HOOK_INSTALL_ENGINES: hooked } })
+    daemon = d
+    onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`) })
+    const home = join(d.root, `${engine}-work`)
+    mkdirSync(home, { recursive: true })
+    writeFileSync(join(d.env.ZDOTDIR!, '.zshrc'), `export ${variable}=${JSON.stringify(home)}\n`)
+    const cwd = join(d.projectsDir, `typed-resume-${engine}`)
+    mkdirSync(cwd, { recursive: true })
+    // The conversation as the engine left it in the moved home, where the engine resumes it from.
+    const sessionId = engine === 'claude' ? 'c1a0de00-0000-4000-8000-000000000001' : '019a0c0d-0000-7000-8000-000000000001'
+    const at = new Date().toISOString()
+    if (engine === 'claude') {
+      const dir = join(home, 'projects', cwd.replace(/[^a-zA-Z0-9]/g, '-'))
+      mkdirSync(dir, { recursive: true })
+      writeFileSync(join(dir, `${sessionId}.jsonl`), `${JSON.stringify({ parentUuid: null, isSidechain: false, userType: 'external', cwd, sessionId,
+        version: '2.1.270', timestamp: at, uuid: 'b0b0b0b0-0000-4000-8000-000000000001', type: 'user', message: { role: 'user', content: 'from before' } })}\n`)
+    } else {
+      const dir = join(home, 'sessions', '2026', '10', '03')
+      mkdirSync(dir, { recursive: true })
+      writeFileSync(join(dir, `rollout-2026-10-03T00-00-00-${sessionId}.jsonl`),
+        `${JSON.stringify({ timestamp: at, type: 'session_meta', payload: { id: sessionId, cli_version: '0.159.0', cwd, source: 'cli' } })}\n`)
+    }
+    await d.start()
+    // The daemon learns a moved home from the login shell, which it reads once it is up.
+    await until('the daemon to read the login shell', () => /\[env\] read \d+ variables from the login shell/.test(d.log()), 30_000)
+    const client = await LocalClient.connect(d)
+    const opened = await client.request('agent_create', { engine: 'terminal', cwd }, 60_000)
+    expect(opened.error, JSON.stringify(opened)).toBeUndefined()
+    const tile = await until('the terminal tile to be up', async () => {
+      const now = await row(client, opened.agent.id)
+      return now?.status === 'active' && now.tmuxPane ? now : null
+    }, 60_000, 250)
+    await type(d, tile.tmuxPane, engine === 'claude' ? `claude --resume ${sessionId}` : `codex resume ${sessionId}`)
+    const back = await until(`the tile to bind the ${engine} conversation kept in ${variable}`, async () => {
+      const now = await row(client, tile.id)
+      return now?.engine === engine && now.sessionId === sessionId ? now : null
+    }, 45_000, 500)
+    expect(back.status).toBe('active')
+    client.close()
+  }, 300_000)
+
+  // A conversation started by hand in a terminal tile (`claude`, `codex`), with no hook to name it: only the
+  // other engine's hooks are installed here, as for a person whose moved home has none of the daemon's yet.
+  // The process repair binds it from what the engine leaves for that in the home it writes in: Claude Code's
+  // process record (`<home>/sessions/<pid>.json`), the rollout Codex holds open. It looked in the default
+  // folders alone (sessionRepair.ts `claudeProcessSession`, `findLiveSession`), and the tile never bound.
+  it.each([
+    ['claude', 'CLAUDE_CONFIG_DIR', 'codex'],
+    ['codex', 'CODEX_HOME', 'claude'],
+  ] as const)('%s with %s: a conversation started by hand in a terminal binds, with no hook to name it', async (engine: Engine, variable, hooked) => {
+    const d = await IsolatedDaemon.create({ env: { HOOK_INSTALL_ENGINES: hooked } })
+    daemon = d
+    onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`) })
+    const home = join(d.root, `${engine}-work`)
+    mkdirSync(home, { recursive: true })
+    writeFileSync(join(d.env.ZDOTDIR!, '.zshrc'), `export ${variable}=${JSON.stringify(home)}\n`)
+    const cwd = join(d.projectsDir, `typed-new-${engine}`)
+    mkdirSync(cwd, { recursive: true })
+    await d.start()
+    await until('the daemon to read the login shell', () => /\[env\] read \d+ variables from the login shell/.test(d.log()), 30_000)
+    const client = await LocalClient.connect(d)
+    const opened = await client.request('agent_create', { engine: 'terminal', cwd }, 60_000)
+    expect(opened.error, JSON.stringify(opened)).toBeUndefined()
+    const tile = await until('the terminal tile to be up', async () => {
+      const now = await row(client, opened.agent.id)
+      return now?.status === 'active' && now.tmuxPane ? now : null
+    }, 60_000, 250)
+    await type(d, tile.tmuxPane, engine)
+    const sessionId = await until(`the ${engine} conversation to be written in ${variable}`, async () => conversationIn(engine, home), 30_000, 250)
+    const back = await until(`the tile to bind the ${engine} conversation it started in ${variable}`, async () => {
+      const now = await row(client, tile.id)
+      return now?.engine === engine && now.sessionId ? now : null
+    }, 45_000, 500)
+    expect(back.sessionId).toBe(sessionId)
+    expect(back.status).toBe('active')
+    client.close()
+  }, 300_000)
+
+  // A Codex agent in a moved CODEX_HOME, restarted, then stopped and opened again. Its rollout was held to the
+  // daemon's own CODEX_HOME before the relaunch (portableHistory.ts) and refused as outside the profile: the
+  // restart failed after Codex had already been stopped, and the reopen said RESUME_PREPARATION_FAILED. And
+  // the relaunch names the person's own provider, the `model_provider` in the moved config.toml: it read the
+  // daemon's ~/.codex/config.toml (ownLoginProvider.ts) and named Codex's default, which outranks the config.
+  it('codex with CODEX_HOME: a restart and a reopen come back on the conversation, on the provider its config names', async () => {
+    const d = await IsolatedDaemon.create()
+    daemon = d
+    onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`) })
+    const home = join(d.root, 'codex-work')
+    mkdirSync(home, { recursive: true })
+    writeFileSync(join(home, 'config.toml'), 'model_provider = "azure"\n')
+    writeFileSync(join(d.env.ZDOTDIR!, '.zshrc'), `export CODEX_HOME=${JSON.stringify(home)}\n`)
+    const cwd = join(d.projectsDir, 'moved-codex-relaunch')
+    mkdirSync(cwd, { recursive: true })
+    await d.start()
+    await until('the daemon to read the login shell', () => /\[env\] read \d+ variables from the login shell/.test(d.log()), 30_000)
+    const client = await LocalClient.connect(d)
+    const created = await client.request('agent_create', { engine: 'codex', cwd, bypassPermission: true }, 90_000)
+    expect(created.error, JSON.stringify(created)).toBeUndefined()
+    const bound = (what: string, sessionId?: string) => until(what, async () => {
+      const now = await row(client, created.agent.id)
+      return now?.sessionId && now.status === 'active' && (!sessionId || now.sessionId === sessionId) ? now : null
+    }, 60_000, 500)
+    const agent = await bound('the codex agent to bind with its data in codex-work')
+    expect(conversationIn('codex', home)).toBe(agent.sessionId)
+    await turn(client, agent.id, 'before the restart')
+
+    const restarted = await client.request('agent_restart', { agentId: agent.id }, 90_000)
+    expect(restarted.error, JSON.stringify(restarted)).toBeUndefined()
+    await bound('the codex agent back on its conversation after the restart', agent.sessionId)
+    await turn(client, agent.id, 'after the restart')
+    const commands = await until('the restarted Codex in the process table', async () => {
+      const found = codexCommands(agent.sessionId)
+      return found.length ? found : null
+    }, 15_000, 250)
+    expect(commands.join('\n')).toContain('model_provider="azure"')
+
+    const stopped = await client.request('agent_delete', { agentId: agent.id }, 60_000)
+    expect(stopped.error, JSON.stringify(stopped)).toBeUndefined()
+    await until('the codex agent to stop', async () => (await row(client, agent.id))?.status === 'stopped' || null, 45_000, 500)
+    const resumed = await client.request('agent_resume', { agentId: agent.id }, 90_000)
+    expect(resumed.error, JSON.stringify(resumed)).toBeUndefined()
+    await bound('the codex agent back on its conversation after the reopen', agent.sessionId)
+    await turn(client, agent.id, 'after the reopen')
+    client.close()
+  }, 300_000)
+
+  // An engine reads whether it trusts a folder from ITS config: Codex from config.toml in its CODEX_HOME
+  // (the one the person moved, or the agent's own profile), Claude Code from .claude.json in
+  // CLAUDE_CONFIG_DIR. The daemon answered for a folder it had just made in ~/.codex/config.toml and
+  // ~/.claude.json alone, so the engine asked anyway and the new agent waited on its question for good.
+  it.each([
+    ['claude', 'CLAUDE_CONFIG_DIR'],
+    ['codex', 'CODEX_HOME'],
+    ['codex', 'its own Codex profile'],
+  ] as const)('%s with %s: a project folder Harness made is trusted where the engine reads it, and the agent starts without asking', async (engine: Engine, where) => {
+    const d = await IsolatedDaemon.create({ trustPrompt: true })
+    daemon = d
+    onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`) })
+    const home = join(d.root, `${engine}-work`)
+    mkdirSync(home, { recursive: true })
+    // The engine has run there before: its config exists, which is when the daemon adds to it.
+    const config = join(home, engine === 'claude' ? '.claude.json' : 'config.toml')
+    writeFileSync(config, engine === 'claude' ? '{}' : 'model = "gpt-6"\n')
+    const profile = where === 'its own Codex profile'
+    if (!profile) writeFileSync(join(d.env.ZDOTDIR!, '.zshrc'), `export ${where}=${JSON.stringify(home)}\n`)
+    await d.start()
+    // The daemon learns a moved home from the login shell, which it reads once it is up.
+    await until('the daemon to read the login shell', () => /\[env\] read \d+ variables from the login shell/.test(d.log()), 30_000)
+    const client = await LocalClient.connect(d)
+    const created = await client.request('agent_create', {
+      engine, projectSource: 'new', creationId: `trust-${engine}-${profile ? 'profile' : 'moved'}-0001`,
+      ...(profile ? { codexHome: home } : {}),
+    }, 90_000)
+    expect(created.state, JSON.stringify(created)).toBe('created')
+    const agent = await until(`the ${engine} agent to start without asking about its folder`, async () => {
+      const now = await row(client, created.agent.id)
+      return now?.sessionId && now.status === 'active' ? now : null
+    }, 60_000, 500)
+    await turn(client, agent.id, 'in a folder Harness made')
+    const folder: string = agent.project?.cwd ?? agent.cwd
+    expect(readFileSync(config, 'utf8')).toContain(engine === 'claude' ? JSON.stringify(folder) : `[projects.${JSON.stringify(folder)}]`)
     client.close()
   }, 300_000)
 })

@@ -3,6 +3,7 @@
 import argparse
 import fcntl
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -66,6 +67,16 @@ def installation_blocker(sysfs=Path('/sys')):
     # and the currently bound driver. The stock image does not ship its stack.
     # https://github.com/t2linux/linux-t2-patches/blob/main/1001-Add-t2bce-driver-stack.patch
     if any(device['id'] == '106b:1801' for device in pci_devices(sysfs)):
+        path = Path(__file__).with_name('boot_profile.py')
+        if path.is_file():
+            spec = importlib.util.spec_from_file_location('harness_boot_profile', path)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            if module.selected()['id'] == 'apple-t2':
+                pkgbase = Path('/usr/lib/modules') / os.uname().release / 'pkgbase'
+                if read(pkgbase) == 'linux-t2':
+                    return None
+                return 'Boot this Mac using the Harness T2 image before installing.'
         return 'This Harness image does not support Apple T2 Macs yet.'
     return None
 
@@ -83,24 +94,41 @@ def needs_broadcom(device):
     return device['driver'] == 'wl' or not any(i['wireless'] for i in device['interfaces'])
 
 
-def report(sysfs=Path('/sys'), proc=Path('/proc')):
-    fields = {}
+def opencode_cpu_supported(proc=Path('/proc')):
+    """Return None when the x86 instruction requirement cannot be determined."""
+    architecture = os.uname().machine
+    if architecture != 'x86_64' and not re.fullmatch(r'i[3-6]86', architecture):
+        return None
+    flags = []
     for line in read(proc / 'cpuinfo').splitlines():
-        if ':' in line:
-            key, value = line.split(':', 1)
-            fields.setdefault(key.strip(), value.strip())
-    flags = fields.get('flags')
+        key, separator, value = line.partition(':')
+        if separator and key.strip() == 'flags':
+            flags.append(value.split())
+    if not flags or any(not features for features in flags):
+        return None
+    return all('sse4_2' in features for features in flags)
+
+
+def report(sysfs=Path('/sys'), proc=Path('/proc')):
     return {'architecture': os.uname().machine, 'kernel': os.uname().release,
             'computer': {'vendor': read(sysfs / 'class/dmi/id/sys_vendor') or None,
                          'model': read(sysfs / 'class/dmi/id/product_name') or None},
             'efi_bits': read(sysfs / 'firmware/efi/fw_platform_size') or None,
             'opencode_cpu': {'required_x86_feature': 'sse4_2',
-                             'available': 'sse4_2' in flags.split() if flags is not None else None},
+                             'available': opencode_cpu_supported(proc)},
             'pci': pci_devices(sysfs),
             'installation_blocker': installation_blocker(sysfs),
             'backlights': [p.name for p in sorted((sysfs / 'class/backlight').glob('*'))],
             'broadcom_bundle_available': (BUNDLE / 'manifest.json').is_file(),
-            'nvidia_bundle_available': (NVIDIA_BUNDLE / 'manifest.json').is_file()}
+            'nvidia_bundle_available': (NVIDIA_BUNDLE / 'manifest.json').is_file(),
+            'gpu_health': gpu_health().cached_report() if Path(__file__).with_name('gpu_health.py').is_file() else None}
+
+
+def gpu_health():
+    spec = importlib.util.spec_from_file_location('harness_gpu_health', Path(__file__).with_name('gpu_health.py'))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def nvidia_bundle_manifest(folder, all_files=False):
@@ -135,7 +163,10 @@ def nvidia_selection(devices, supported):
     # NVIDIA display, or take over a GPU explicitly assigned to passthrough.
     if any(card['id'] not in supported for card in cards):
         return {'status': 'unchanged', 'reason': 'An NVIDIA GPU needs a different driver.'}
-    if any(card['driver'] not in {None, 'nouveau', 'nvidia'} for card in cards):
+    # An unbound GPU can still be reserved for passthrough or explicitly kept
+    # on nouveau. Installing nvidia-utils would blacklist nouveau system-wide.
+    if any(card['driver'] not in {None, 'nouveau', 'nvidia'} or
+           card.get('driver_override') not in {None, '', 'nvidia'} for card in cards):
         return {'status': 'unchanged', 'reason': 'Keep the existing GPU assignment.'}
     return {'status': 'selected', 'devices': [card['id'] for card in cards]}
 
@@ -319,7 +350,8 @@ def configure_install(target, devices=None, bundle=BUNDLE):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest='command')
-    sub.add_parser('report')
+    reporting = sub.add_parser('report')
+    reporting.add_argument('--check-gpu', action='store_true', help='Repeat GPU verification as the current user')
     activation = sub.add_parser('activate')
     activation.add_argument('address')
     installation = sub.add_parser('configure-install')
@@ -339,6 +371,10 @@ def main():
     elif args.command == 'configure-install':
         result = configure_install(args.target)
     else:
+        if getattr(args, 'check_gpu', False):
+            if not Path(__file__).with_name('gpu_health.py').is_file():
+                parser.error('GPU verification is not available in this system profile.')
+            gpu_health().check(force=True)
         result = report()
     print(json.dumps(result, indent=2))
 

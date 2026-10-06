@@ -22,7 +22,7 @@ describe.skipIf(!hasTmux)('real tmux test isolation', () => {
       expect(wrong.stdout.trim()).toBe(parent.socket)
 
       await child.run('new-session', '-d', '-s', 'fixture', 'sleep 600')
-      // TmuxBackend/probeTmuxAgents use bare commands; prove their environment selects the child.
+      // TmuxBackend uses bare commands; prove its environment selects the child.
       const actual = await exec('tmux', ['display-message', '-p', '-t', 'fixture', '#{socket_path}'], {
         env: child.env, timeout: 5_000,
       })

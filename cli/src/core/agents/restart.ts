@@ -4,9 +4,10 @@
  * Moved verbatim out of `runForeground` (the core boundary, step 11: docs/design/2026-10-03-harnessd.md).
  */
 import { homedir } from 'node:os'
-import type { BackendSocket } from '../../backendSocket.js'
-import { isTerminalEngine } from '../../engines/types.js'
-import { buildEngineLaunchArgv } from '../../lib/engineLaunch.js'
+import { isTerminalEngine, type AgentEngine } from '../../engines/types.js'
+import { engineBin, enginePathOverride } from '../../lib/engineBin.js'
+import { engineInstallRecipe } from '../../lib/engineInstall.js'
+import { buildEngineLaunchArgv, commandAvailableInInteractiveShell } from '../../lib/engineLaunch.js'
 import { probeGatewayRuntime } from '../../lib/gatewayRuntime.js'
 import { probeGridAssignment } from '../../lib/gridAssignment.js'
 import { sid } from '../../lib/log.js'
@@ -15,15 +16,34 @@ import { bypassPermissionFor, restartAgent } from '../../lib/restartAgent.js'
 import type { TerminalAgentReconciler } from '../../lib/terminalAgentReconciler.js'
 import { terminalRouteKey } from '../../lib/terminalRuntime.js'
 import type { TmuxRuntimeRef } from '../../lib/terminalTypes.js'
-import { clearPaneRemainOnExit } from '../../lib/tmux.js'
+import { clearPaneRemainOnExit, processArgs } from '../../lib/tmux.js'
 import type { TmuxBackend } from '../../lib/tmuxBackend.js'
 import { workspaceMissing } from '../../lib/workspaceCheck.js'
 import type { createLaunchHelpers } from './launch.js'
+import type { RestartAgent } from './launches.js'
 import type { PaneSwap } from './swap.js'
 
 type LaunchHelpers = ReturnType<typeof createLaunchHelpers>
 
-type RestartAgentHandler = NonNullable<BackendSocket['onRestartAgent']>
+/**
+ * Longer than any shell that answered: `commandAvailableInInteractiveShell` gives up after 5s and then
+ * says no. A no that took that long is a slow rc file, not a missing engine, and must not refuse a
+ * restart that would work — the same rule `commandSupportsFlagInInteractiveShell` keeps for `unknown`.
+ */
+const ENGINE_CHECK_GAVE_UP_MS = 4_500
+
+/**
+ * Whether the engine's command is on this machine, asked as create asks of a pane that died: the same
+ * interactive shell, the same command, the same install recipe. Null when the shell gave up first.
+ */
+async function engineInstalled(engine: AgentEngine): Promise<boolean | null> {
+  const startedAt = Date.now()
+  const installed = await commandAvailableInInteractiveShell(engineBin(engine), undefined,
+    enginePathOverride(engine) ? undefined : engineInstallRecipe(engine))
+  return installed || Date.now() - startedAt < ENGINE_CHECK_GAVE_UP_MS ? installed : null
+}
+
+type RestartAgentHandler = RestartAgent
 
 export interface RestartDeps {
   restartJobs: PaneSwap['restartJobs']
@@ -119,6 +139,17 @@ export function createAgentRestarter({
     }
     if (!session.processIdentity) return { ok: false, error: 'NO_ACTIVE_PROCESS' }
 
+    // The relaunch runs the engine's command again, so an engine uninstalled since the agent started
+    // cannot come back. Asked anyway, the swap killed the working agent and gave up twenty seconds
+    // later with "did not come back up" (updates.e2e.ts, round 24). Asked here, before anything is
+    // touched, the agent goes on running and the person is told why.
+    const installed = await engineInstalled(engine)
+    if (!current()) return changed
+    if (installed === false) {
+      console.warn(`[restart] ${sid(session.agentId)} refused · ${engine} is not installed`)
+      return { ok: false, error: 'ENGINE_NOT_INSTALLED', detail: `${engine} is not installed. Install it, then restart again. Nothing was stopped.` }
+    }
+
     // The replacement is launched WITH what the original was: its grid's env and argv (a bare
     // respawn would inherit the tmux session's variables but never the codex `-c …` / pi `--model`
     // half, and an agent moved here by a retarget has nothing in the session env at all), or its
@@ -148,7 +179,8 @@ export function createAgentRestarter({
       // than left to the next scan, so the announce below already says where the engine came back.
       const [gateway, assignment] = await Promise.all([
         probeGatewayRuntime(outcome.processIdentity),
-        probeGridAssignment(outcome.processIdentity, engine, outcome.processIdentity.executable),
+        // Its command line, which carries a Codex or pi grid's address and model: never its executable.
+        processArgs(outcome.processIdentity).then((args) => probeGridAssignment(outcome.processIdentity, engine, args)),
       ])
       if (!current()) return changed
       registry.updateProcessIdentity(session.agentId, outcome.processIdentity, gateway.kind, assignment)

@@ -2,7 +2,7 @@ import './loadEnv.js'
 import { existsSync, mkdirSync, readdirSync, renameSync, rmSync } from 'fs'
 import { homedir } from 'os'
 import { join } from 'path'
-import { z } from 'zod'
+import { EnvIssue, flag, matching, maybe, maybeNumber, number, oneOf, parseEnv, text, unlessFalse, url, type EnvField, type EnvOf } from './envFields.js'
 import { parseTerminalBackends } from './terminalConfig.js'
 import { adoptComputerId } from '../lib/computerIdentity.js'
 
@@ -115,12 +115,12 @@ function migrateLegacyAdapterState(): void {
 
 migrateLegacyAdapterState()
 
-const envSchema = z.object({
-  NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
+const fields = {
+  NODE_ENV: oneOf(['development', 'production', 'test'], 'development'),
   // Preferred localhost control port, also the stable name of this user's private daemon socket.
   // When another OS user holds it, Unix daemons record a separate TCP port in this user's data dir;
   // engine hooks and CLI commands use that actual port while native clients use the private socket.
-  PORT: z.string().default('18473').transform(Number),
+  PORT: number('18473'),
   // The loopback port `harness login` listens on for the SSO redirect. 0 (the default) takes whatever
   // the OS gives, which is right on a real computer: the browser and the listener are the same
   // loopback, so the port never has to be known in advance.
@@ -129,89 +129,73 @@ const envSchema = z.object({
   // host and the listener is not, so the only way the redirect ever arrives is a published port — and
   // a port cannot be published before it is known. Set this, publish the same number, and the real
   // SSO flow works from a box with no browser of its own. See cli/docker/remote-machine/.
-  ADAPTER_LOGIN_CALLBACK_PORT: z.string().default('0').transform(Number),
+  ADAPTER_LOGIN_CALLBACK_PORT: number('0'),
   // The backend the CLI dials (`/api/adapter-ws`). Local dev: ws://localhost:8090.
-  BACKEND_WS_URL: z.string().default('wss://harness-api.autonomous.ai'),
+  BACKEND_WS_URL: text('wss://harness-api.autonomous.ai'),
   // SSO account plane used by native-loopback login and the adapter WebSocket.
-  AUTONOMOUS_ENV: z.enum(['prod', 'stag']).default('prod'),
+  AUTONOMOUS_ENV: oneOf(['prod', 'stag'], 'prod'),
   // Web app base URL — used to print the agent's chat link on `adapter start`. Local: http://localhost:3000.
-  WEB_URL: z.string().default('https://harness.autonomous.ai'),
+  WEB_URL: text('https://harness.autonomous.ai'),
   // Set to '1' to lift the path fences shared by lib/pathContainment.ts: the New Agent folder browser
   // (fs_list_dir), the project preview, git_project_info, and media previews all stop measuring what
   // they were asked for against the folders they are allowed to read.
   // Off by default so a fat-fingered path or a compromised relay hop can't walk the whole filesystem.
-  HARNESS_FS_BROWSE_UNRESTRICTED: z.string().optional(),
+  HARNESS_FS_BROWSE_UNRESTRICTED: maybe,
   // Where Claude Code writes its per-session JSONL transcripts.
-  CLAUDE_PROJECTS_DIR: z.string().default(join(homedir(), '.claude', 'projects')),
+  CLAUDE_PROJECTS_DIR: text(join(homedir(), '.claude', 'projects')),
   // Codex state root. Only hook-registered rollout files beneath <CODEX_HOME>/sessions are exposed.
-  CODEX_HOME: z.string().default(join(homedir(), '.codex')),
+  CODEX_HOME: text(join(homedir(), '.codex')),
   // Grok state root. Conversation records live below <GROK_HOME>/sessions/<encoded-cwd>/<uuid>/updates.jsonl.
-  GROK_HOME: z.string().default(join(homedir(), '.grok')),
+  GROK_HOME: text(join(homedir(), '.grok')),
   // Antigravity CLI state root. Conversation transcripts live below
   // <AGY_HOME>/brain/<conversationId>/.system_generated/logs/transcript_full.jsonl — the `_full`
   // sibling is the one to read: plain `transcript.jsonl` re-quotes tool arguments and truncates
   // long content. The hook payload names the same path, so this default is only the fallback.
-  AGY_HOME: z.string().default(join(homedir(), '.gemini', 'antigravity-cli')),
+  AGY_HOME: text(join(homedir(), '.gemini', 'antigravity-cli')),
   // Where the Antigravity CLI reads its shared customization root (hooks.json lives here).
-  AGY_CONFIG_DIR: z.string().default(join(homedir(), '.gemini', 'config')),
+  AGY_CONFIG_DIR: text(join(homedir(), '.gemini', 'config')),
   // GitHub Copilot CLI state root. Its per-session event stream lives at
   // <COPILOT_HOME>/session-state/<sessionId>/events.jsonl, and hooks are read from
   // <COPILOT_HOME>/hooks/*.json — a directory, so Harness drops in its own file.
-  COPILOT_HOME: z.string().default(join(homedir(), '.copilot')),
+  COPILOT_HOME: text(join(homedir(), '.copilot')),
   // Legacy Cursor fallback. cursor/home.ts resolves its distinct config (chats/hooks) and data
   // (projects/transcripts) roots using CURSOR_CONFIG_DIR, XDG_CONFIG_HOME and CURSOR_DATA_DIR.
-  CURSOR_HOME: z.string().default(join(homedir(), '.cursor')),
+  CURSOR_HOME: text(join(homedir(), '.cursor')),
   // OpenCode state root — the SQLite store lives at <OPENCODE_DATA_DIR>/opencode.db (honors
   // XDG_DATA_HOME). Sessions are polled from that DB (no per-session transcript file).
-  OPENCODE_DATA_DIR: z
-    .string()
-    .default(join(process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share'), 'opencode')),
+  OPENCODE_DATA_DIR: text(join(process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share'), 'opencode')),
   // OpenCode plugin dir the adapter drops its discovery plugin into (honors XDG_CONFIG_HOME).
-  OPENCODE_PLUGIN_DIR: z
-    .string()
-    .default(join(process.env.XDG_CONFIG_HOME || join(homedir(), '.config'), 'opencode', 'plugin')),
+  OPENCODE_PLUGIN_DIR: text(join(process.env.XDG_CONFIG_HOME || join(homedir(), '.config'), 'opencode', 'plugin')),
   // Kilo state root — the SQLite store lives at <KILO_DATA_DIR>/kilo.db. Kilo is an opencode fork and
   // keeps the same layout, but NOT the same overrides: measured on 7.4.20 via `kilo debug paths`, it
   // honours XDG_DATA_HOME and ignores both `KILO_DATA_DIR` and `OPENCODE_DATA_DIR`. So this variable
   // steers the ADAPTER's reads only; anything that has to move KILO's own writes (the recap one-shot)
   // must set XDG_DATA_HOME on the child instead — see `KiloWorker` in lib/oneshot.ts.
-  KILO_DATA_DIR: z
-    .string()
-    .default(join(process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share'), 'kilo')),
+  KILO_DATA_DIR: text(join(process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share'), 'kilo')),
   // Kilo plugin dir the adapter drops its discovery plugin into (honors XDG_CONFIG_HOME — measured).
-  KILO_PLUGIN_DIR: z
-    .string()
-    .default(join(process.env.XDG_CONFIG_HOME || join(homedir(), '.config'), 'kilo', 'plugin')),
+  KILO_PLUGIN_DIR: text(join(process.env.XDG_CONFIG_HOME || join(homedir(), '.config'), 'kilo', 'plugin')),
   // Pi state root. Session transcripts live under <PI_HOME>/agent/sessions/--<mangled-cwd>--/*.jsonl and
   // the adapter's discovery extension is installed into <PI_HOME>/agent/extensions.
-  PI_HOME: z.string().default(join(homedir(), '.pi')),
+  PI_HOME: text(join(homedir(), '.pi')),
   // Hermes state root — the SQLite store is <HERMES_HOME>/state.db and the shell hooks the adapter
   // installs live in <HERMES_HOME>/config.yaml (+ shell-hooks-allowlist.json).
-  HERMES_HOME: z.string().default(join(homedir(), '.hermes')),
+  HERMES_HOME: text(join(homedir(), '.hermes')),
   // Command Code state root — transcripts live under <COMMANDCODE_HOME>/projects/<cwd-slug>/<id>.jsonl
   // and the adapter installs its shell hooks into <COMMANDCODE_HOME>/settings.json.
-  COMMANDCODE_HOME: z.string().default(join(homedir(), '.commandcode')),
+  COMMANDCODE_HOME: text(join(homedir(), '.commandcode')),
   // Devin CLI state root — history is the SQLite store <DEVIN_HOME>/sessions.db (WAL, no transcript file
   // unless the user passes --export) and <DEVIN_HOME>/session_locks/<id>.lock holds the owning PID.
-  DEVIN_HOME: z
-    .string()
-    .default(join(process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share'), 'devin', 'cli')),
+  DEVIN_HOME: text(join(process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share'), 'devin', 'cli')),
   // Muse Code state root. Transcripts are JSONL but the layout is DATE-SHARDED, not hashed by project
   // path: <MUSE_HOME>/sessions/YYYY/MM/DD/<session-uuid>/session.jsonl, with sub-agents one level deeper
   // under `subagent/<child-uuid>/`. The only link back to a project is `workspace_root`, carried in the
   // FIRST record of each file — which is why this engine is discovered by scanning rather than by a hook.
-  MUSE_HOME: z
-    .string()
-    .default(join(process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share'), 'muse')),
-  MUSE_CONFIG_DIR: z
-    .string()
-    .default(join(process.env.XDG_CONFIG_HOME || join(homedir(), '.config'), 'muse')),
+  MUSE_HOME: text(join(process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share'), 'muse')),
+  MUSE_CONFIG_DIR: text(join(process.env.XDG_CONFIG_HOME || join(homedir(), '.config'), 'muse')),
   // Amp plugin dir the adapter drops its discovery plugin into (honors XDG_CONFIG_HOME). Amp calls these
   // "system plugins" and loads every `*.ts` there for EVERY thread, which is what makes one install cover
   // all projects — the project-local `.amp/plugins/` alternative would need one copy per repo.
-  AMP_PLUGIN_DIR: z
-    .string()
-    .default(join(process.env.XDG_CONFIG_HOME || join(homedir(), '.config'), 'amp', 'plugins')),
+  AMP_PLUGIN_DIR: text(join(process.env.XDG_CONFIG_HOME || join(homedir(), '.config'), 'amp', 'plugins')),
   // Where the Amp plugin writes the transcripts this adapter tails.
   //
   // Amp is the only supported engine that keeps NO conversation on disk: threads live on the server and
@@ -219,186 +203,176 @@ const envSchema = z.object({
   // `session.json`. `amp threads export` can fetch the content, but it costs a ~1.5s network round trip
   // per read and never shows a message before it is complete. So the plugin writes the transcript we tail,
   // and this directory — ours, not Amp's — is the trusted root for it.
-  AMP_SESSIONS_DIR: z.string().default(join(adapterDataDir, 'amp-sessions')),
+  AMP_SESSIONS_DIR: text(join(adapterDataDir, 'amp-sessions')),
   // Amp's own state dir, read-only for us: `session.json` there maps a tmux pane to the thread started in
   // it, which is how a re-attaching daemon re-binds a pane without guessing.
-  AMP_STATE_DIR: z
-    .string()
-    .default(join(process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share'), 'amp')),
+  AMP_STATE_DIR: text(join(process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share'), 'amp')),
   // Devin's user-level config, where the adapter merges its hooks under a "hooks" key. Devin reads
   // Claude's hook schema verbatim, so the installed block is shaped exactly like ~/.claude/settings.json.
-  DEVIN_CONFIG_PATH: z
-    .string()
-    .default(join(process.env.XDG_CONFIG_HOME || join(homedir(), '.config'), 'devin', 'config.json')),
+  DEVIN_CONFIG_PATH: text(join(process.env.XDG_CONFIG_HOME || join(homedir(), '.config'), 'devin', 'config.json')),
   // Where the tmux-session registry and daemon-local state are persisted.
-  ADAPTER_DATA_DIR: z.string().default(adapterDataDir),
+  ADAPTER_DATA_DIR: text(adapterDataDir),
   // Logs meant to be READ and sent — the dial's `dial-YYYYMMDD.log` — beside the desktop app's own
   // `app-*.log`/`cli-*.log`, so one directory holds everything a bug report needs. Not the data dir:
   // `harness.log` there is the daemon's console, and `harness reset` wipes it.
-  HARNESS_LOGS_DIR: z.string().default(join(adapterRootDir, 'logs')),
+  HARNESS_LOGS_DIR: text(join(adapterRootDir, 'logs')),
   // Where domain-specific harnesses are installed (`harness dsh install`): one directory per
   // `<owner>/<name>` plus `installed.json`. Product-root state like the SSO session, not daemon data.
-  DSH_DIR: z.string().default(join(adapterRootDir, 'dsh')),
+  DSH_DIR: text(join(adapterRootDir, 'dsh')),
   // The ref the built-in shelf (`store/*` of the Harness monorepo) installs from, instead of the one
   // its registry entries name (`main`). For trying a store change end to end BEFORE it merges: push
   // the branch, run the daemon with HARNESS_STORE_REF=<branch>, and Get in the store fetches from it.
-  HARNESS_STORE_REF: z.string().regex(/^[A-Za-z0-9._\/-]{1,200}$/).optional().catch(undefined),
-  // Optional catalog mirror. Public HTTPS in production; loopback HTTP supports isolated tests.
-  HARNESS_STORE_CATALOG_URL: z.string().url().refine((value) => {
-    const url = new URL(value)
-    return !url.username && !url.password && (url.protocol === 'https:'
-      || (url.protocol === 'http:' && ['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname)))
-  }).optional().catch(undefined),
+  HARNESS_STORE_REF: matching(/^[A-Za-z0-9._\/-]{1,200}$/),
+  // Optional catalog mirror. Public HTTPS in production; loopback HTTP supports isolated tests. Anything
+  // else is ignored, as if unset (under zod, a value that was not a URL at all threw as env.ts loaded,
+  // and every `harness` command with it).
+  HARNESS_STORE_CATALOG_URL: url((address) => !address.username && !address.password && (address.protocol === 'https:'
+    || (address.protocol === 'http:' && ['127.0.0.1', 'localhost', '[::1]'].includes(address.hostname)))),
   // This computer's stable id, minted once and never regenerated (see computerIdFile above). Pin it
   // explicitly on a box with no durable home — a container or CI job that gets a fresh ~/.harness on
   // every boot would otherwise look like a NEW computer each time and collect a machine per start.
   // Setting this is a pin, not a regeneration: it is never written to disk, so unsetting it returns
   // you to the file's id. Any 16-64 hex (dashes allowed, the backend de-dashes).
-  ADAPTER_COMPUTER_ID: z.string().optional(),
-  ADAPTER_COMPUTER_ID_FILE: z.string().default(computerIdFile),
+  ADAPTER_COMPUTER_ID: maybe,
+  ADAPTER_COMPUTER_ID_FILE: text(computerIdFile),
   // Set to 'true' to skip auto-installing lifecycle hooks for every supported engine.
-  DISABLE_HOOK_INSTALL: z.string().default('false').transform((v) => v === 'true'),
+  DISABLE_HOOK_INSTALL: flag('false'),
   // Install only these engines' hooks (comma-separated, e.g. `claude,codex`); every engine's when unset.
   // For a machine where Harness should leave the other tools' settings alone, and for the end-to-end
   // suite, which installs Claude Code's and Codex's alone, inside its throwaway home.
-  HOOK_INSTALL_ENGINES: z.string().optional().transform((v) => v === undefined
+  HOOK_INSTALL_ENGINES: (raw: string | undefined): Set<string> | null => raw === undefined
     ? null
-    : new Set(v.split(',').map((name) => name.trim()).filter(Boolean))),
+    : new Set(raw.split(',').map((name) => name.trim()).filter(Boolean)),
   // `harness start` and `harness login` install the `grid` CLI when the machine has none (see
   // lib/gridInstall.ts). Off for tests and for a machine whose grid is managed some other way.
-  DISABLE_GRID_INSTALL: z.string().default('false').transform((v) => v === 'true'),
+  DISABLE_GRID_INSTALL: flag('false'),
   // Terminal backends to watch. UNSET MEANS AUTO — every backend usable here, which is tmux. A value
   // pins the set; a retired name still in someone's environment is dropped with a warning.
-  TERMINAL_BACKENDS: z.string().optional().transform((value, context) => {
-    if (value === undefined || value === '') return undefined
-    try { return parseTerminalBackends(value) } catch (error) {
-      context.addIssue({ code: 'custom', message: error instanceof Error ? error.message : 'invalid terminal backends' })
-      return z.NEVER
+  TERMINAL_BACKENDS: (raw: string | undefined): ReturnType<typeof parseTerminalBackends> | undefined => {
+    if (raw === undefined || raw === '') return undefined
+    try { return parseTerminalBackends(raw) } catch (error) {
+      throw new EnvIssue(error instanceof Error ? error.message : 'invalid terminal backends')
     }
-  }),
+  },
   // Neutral discovery interval. The legacy tmux name remains a one-release fallback.
-  TERMINAL_RECONCILE_INTERVAL_MS: z.string().optional().transform((value) => value === undefined ? undefined : Number(value)),
+  TERMINAL_RECONCILE_INTERVAL_MS: maybeNumber,
   // How often (ms) the reaper checks tmux panes and drops dead sessions.
-  TMUX_REAP_INTERVAL_MS: z.string().default('5000').transform(Number),
+  TMUX_REAP_INTERVAL_MS: number('5000'),
   // Path to the `claude` CLI for the device turn-recap one-shot (else resolved from PATH).
-  CLAUDE_PATH: z.string().optional(),
+  CLAUDE_PATH: maybe,
   // Path to the Cursor Agent CLI for recap one-shots (else a verified `agent`/`cursor-agent` is used).
-  CURSOR_PATH: z.string().optional(),
+  CURSOR_PATH: maybe,
   // Path to the `opencode` CLI for OpenCode recap one-shots (else `opencode` is resolved from PATH).
-  OPENCODE_PATH: z.string().optional(),
+  OPENCODE_PATH: maybe,
   // Path to the `pi` CLI for Pi recap one-shots (else `pi` is resolved from PATH).
-  PI_PATH: z.string().optional(),
+  PI_PATH: maybe,
   // Path to the `hermes` CLI for Hermes recap one-shots (else `hermes` is resolved from PATH).
-  HERMES_PATH: z.string().optional(),
+  HERMES_PATH: maybe,
   // Path to the `commandcode` CLI for Command Code recap one-shots (else resolved from PATH).
-  COMMANDCODE_PATH: z.string().optional(),
+  COMMANDCODE_PATH: maybe,
   // Path to the `devin` CLI for Devin recap one-shots (else `devin` is resolved from PATH).
-  DEVIN_PATH: z.string().optional(),
-  MUSE_PATH: z.string().optional(),
+  DEVIN_PATH: maybe,
+  MUSE_PATH: maybe,
   // Path to the `amp` CLI for Amp recap one-shots (else `amp` is resolved from PATH).
-  AMP_PATH: z.string().optional(),
+  AMP_PATH: maybe,
   // Path to the `kilo` CLI for Kilo recap one-shots (else `kilo` is resolved from PATH). `@kilocode/cli`
   // also installs it as `kilocode`; both are the same file.
-  KILO_PATH: z.string().optional(),
+  KILO_PATH: maybe,
   // Path to the xAI Grok CLI for interactive sessions and voice-router one-shots.
-  GROK_PATH: z.string().optional(),
+  GROK_PATH: maybe,
   // Path to the GitHub Copilot CLI. Two builds answer to `copilot` on a typical machine — a compiled
   // binary and the npm loader script — so an override is worth having.
-  COPILOT_PATH: z.string().optional(),
+  COPILOT_PATH: maybe,
   // Path to the Antigravity CLI. Two binaries answer to `agy` on a typical PATH — the CLI itself and
   // the Antigravity IDE launcher — so an override is worth having.
-  AGY_PATH: z.string().optional(),
-  RECAP_WITHOUT_DEVICE: z.string().default('true').transform((v) => v !== 'false'),
+  AGY_PATH: maybe,
+  RECAP_WITHOUT_DEVICE: unlessFalse,
   // Model for the voice router one-shot classifier (Overview voice → pick the agent). Small/fast by default.
-  VOICE_ROUTE_MODEL: z.string().default('haiku'),
+  VOICE_ROUTE_MODEL: text('haiku'),
   // Test override: run the recap even with no device connected (mirrors node isRecapForced()).
-  RECAP_FORCE: z.string().default('false').transform((v) => v === 'true'),
+  RECAP_FORCE: flag('false'),
   // Log one line per backend frame (type + audience + a few opaque ids). OFF by default: it is noisy,
   // and it is the only place frames are visible in the clear — every content-bearing frame is E2EE
   // encrypted on the wire, so a packet capture cannot answer "what did the adapter actually send".
   // Never prints message text, transcripts, tokens or payload bodies.
-  LOG_FRAMES: z.string().default('false').transform((v) => v === 'true'),
+  LOG_FRAMES: flag('false'),
   // TEMPORARY / diagnostic. Forces iceTransportPolicy:'relay', so the ONLY candidate either peer can
   // offer is a Cloudflare TURN allocation — the way to exercise the relay path on a pair that would
   // otherwise always connect directly. Costs money per GB while it is on; never ship it enabled.
-  TERMINAL_P2P_FORCE_RELAY: z.string().default('false').transform((v) => v === 'true'),
+  TERMINAL_P2P_FORCE_RELAY: flag('false'),
 
   // ── OpenRouter gateway agents (`ori claude`, `ori codex`, …) ───────────────────────────────────
   // An agent whose CLI is pointed at OpenRouter has no vendor credential to spend, so its voice route
   // is served by ONE direct chat/completions call instead of a vendor one-shot: spawning a whole coding
   // agent for it would bill an account the user may not even have. A cheap, fast model by default; ''
   // disables that call (the VOICE_ROUTE_MODEL convention) and falls back to the engine path.
-  ORI_VOICE_ROUTE_MODEL: z.string().default('deepseek/deepseek-v4-flash'),
+  ORI_VOICE_ROUTE_MODEL: text('deepseek/deepseek-v4-flash'),
   // Where `ori login` stores the key ({ createdAt, key, userId }). Only read when neither the daemon
   // env nor the agent's own process supplies one.
-  ORI_CREDENTIALS_PATH: z.string().default(join(homedir(), '.ori', 'credentials.json')),
+  ORI_CREDENTIALS_PATH: text(join(homedir(), '.ori', 'credentials.json')),
 
   // ── self-update (the daemon polls a GCS manifest and swaps its own bundle) ──────────────────────
   // Manifest URL (same GCS bucket + metadata.json shape as the device OTA; key = ADAPTER_UPDATE_KEY).
-  ADAPTER_UPDATE_URL: z
-    .string()
-    .default('https://storage.googleapis.com/s3-autonomous-upgrade-3/harness/cli/metadata.json'),
-  ADAPTER_UPDATE_KEY: z.string().default('cli'),
+  ADAPTER_UPDATE_URL: text('https://storage.googleapis.com/s3-autonomous-upgrade-3/harness/cli/metadata.json'),
+  ADAPTER_UPDATE_KEY: text('cli'),
   // How often the daemon checks for a newer build (ms). The poll is a tiny no-cache metadata fetch;
   // the artifact is downloaded only when the manifest version is strictly newer.
-  ADAPTER_UPDATE_CHECK_MS: z.string().default('60000').transform(Number),
+  ADAPTER_UPDATE_CHECK_MS: number('60000'),
   // The wall-clock second each check lands on, when the interval divides a minute. The desktop app
   // spawns `harness start` only around :15 (see desktop/lib/ws/local_cli_discovery.dart `inSpawnSlot`);
   // keeping the update handoff 30s away from that is what stops the two from fighting over the spawn
   // lock. Set to a negative number to keep the plain interval.
-  ADAPTER_UPDATE_SLOT_SEC: z.string().default('45').transform(Number),
+  ADAPTER_UPDATE_SLOT_SEC: number('45'),
+  // How long an update's download may go without a byte, and take in all, before the check gives up and
+  // the next one tries again (lib/selfUpdate.ts `TransferLimits`). The manifest gets at most a minute.
+  ADAPTER_UPDATE_IDLE_MS: number('60000'),
+  ADAPTER_UPDATE_DEADLINE_MS: number('900000'),
   // Set 'true' to disable self-update entirely.
-  ADAPTER_UPDATE_DISABLE: z.string().default('false').transform((v) => v === 'true'),
+  ADAPTER_UPDATE_DISABLE: flag('false'),
   /** How long a daemon whose start-up failed stays up serving nothing but its updater, before it
    *  gives a clean process a turn. ~15 update slots; `0` keeps it up for ever. */
-  ADAPTER_SAFE_MODE_MS: z.string().default('900000').transform(Number),
+  ADAPTER_SAFE_MODE_MS: number('900000'),
   // Install dir holding the packaged cli.js + notify.mjs that the self-updater swaps in place.
-  ADAPTER_CLI_DIR: z.string().default(adapterCliDir),
+  ADAPTER_CLI_DIR: text(adapterCliDir),
   // Where the managed Node runtime lives. Read (never written) by this process: the hook command
   // lines have to name an interpreter by absolute path, because a hook fires in a shell whose PATH
   // we do not control — see managedNodePath() in lib/nodeRuntime.ts.
-  ADAPTER_RUNTIME_DIR: z.string().default(adapterRuntimeDir),
+  ADAPTER_RUNTIME_DIR: text(adapterRuntimeDir),
   // The runtime manifest — a DIFFERENT document from ADAPTER_UPDATE_URL's: keyed by platform
   // (`darwin-arm64`, `linux-x64`, …) with url/sha256/size/archiveRoot per entry. Deliberately the
   // same URL `install.sh` and Desktop Harness read, so all three land on identical bytes.
-  ADAPTER_RUNTIME_METADATA_URL: z
-    .string()
-    .default('https://storage.googleapis.com/s3-autonomous-upgrade-3/harness/runtime/metadata.json'),
+  ADAPTER_RUNTIME_METADATA_URL: text('https://storage.googleapis.com/s3-autonomous-upgrade-3/harness/runtime/metadata.json'),
   // The managed grid's manifest — its own document, as tmux's is (harness/runtime/tmux/metadata.json):
   // install.sh slices a manifest by the FIRST platform key it finds, and Node's already has one. The
   // same entry shape (version/url/sha256/size/archiveRoot), and its version is the PIN: the grid this
   // build of the CLI drives, moved on purpose by a release and never by grid's own updater — see
   // ensureManagedGrid() in lib/runtimeInstall.ts, which follows it on every daemon start.
-  ADAPTER_GRID_RUNTIME_METADATA_URL: z
-    .string()
-    .default('https://storage.googleapis.com/s3-autonomous-upgrade-3/harness/runtime/grid/metadata.json'),
+  ADAPTER_GRID_RUNTIME_METADATA_URL: text('https://storage.googleapis.com/s3-autonomous-upgrade-3/harness/runtime/grid/metadata.json'),
   // Where the `harness` launcher lives. Same name (and default) `scripts/install-cli.sh` uses, so a
   // sandboxed install and this process agree on which launcher they are talking about.
-  HARNESS_BIN_DIR: z.string().default(adapterBinDir),
+  HARNESS_BIN_DIR: text(adapterBinDir),
   // ── the dial on the USB cable ──────────────────────────────────────────────────────────────────
   // Set 'true' to leave the serial port alone entirely. The port is exclusive, so this is what a
   // developer flips before running esptool or a serial monitor against the dial.
-  CABLE_DISABLE: z.string().default('false').transform((v) => v === 'true'),
+  CABLE_DISABLE: flag('false'),
   // Transcription for voice captured on the dial. The device holds no cloud credential and never talks to
   // one; the daemon has an account, and this call is authenticated by the SSO session `harness login`
   // leaves behind — no shared secret, because this repository is public. Path only: the host comes from
   // BACKEND_WS_URL, so a daemon pointed at a local backend transcribes against that one too.
-  CABLE_STT_PATH: z.string().default('/api/voice/stt'),
+  CABLE_STT_PATH: text('/api/voice/stt'),
   // Firmware for the dial: the SAME published manifest the device used to poll before it lost WiFi, so
   // `make upload-circle` remains the only way a release happens — this only changes who downloads.
-  CABLE_FW_MANIFEST_URL: z
-    .string()
-    .default('https://storage.googleapis.com/s3-autonomous-upgrade-3/harness/esp32/ota/metadata.json'),
-  CABLE_FW_DISABLE: z.string().default('false').transform((v) => v === 'true'),
-})
+  CABLE_FW_MANIFEST_URL: text('https://storage.googleapis.com/s3-autonomous-upgrade-3/harness/esp32/ota/metadata.json'),
+  CABLE_FW_DISABLE: flag('false'),
+} satisfies Record<string, EnvField<unknown>>
 
-export type Env = z.infer<typeof envSchema>
+export type Env = EnvOf<typeof fields>
 
 function validateEnv(): Env {
-  const parsed = envSchema.safeParse(process.env)
+  const parsed = parseEnv(fields, process.env)
 
-  if (!parsed.success) {
-    console.error('Invalid environment variables:', parsed.error.flatten().fieldErrors)
+  if (!parsed.ok) {
+    console.error('Invalid environment variables:', parsed.issues)
     process.exit(1)
   }
 

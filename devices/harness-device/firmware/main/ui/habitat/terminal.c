@@ -541,6 +541,19 @@ bool ht_cell_sprite(ht_scene_t *s, int x, int y, const ht_cell_frame_t *f)
                               .palette = f->palette, .cell = f->cell};
     return true;
 }
+bool ht_cell_sprite_zoom(ht_scene_t *s, int x, int y, const ht_cell_frame_t *f, unsigned zoom)
+{
+    if (zoom >= 8) return ht_cell_sprite(s, x, y, f);
+    if (!zoom || !ht_cell_sprite(s, x, y, f)) return false;
+    ht_run_t *r = &s->runs[s->count - 1];
+    r->sprite.src_w = (uint16_t)(f->cols * f->cell);
+    r->sprite.src_h = (uint16_t)(f->rows * f->cell);
+    r->sprite.zoom = (uint8_t)zoom;
+    r->w = (int16_t)((r->sprite.src_w * zoom + 7) / 8);
+    r->sprite.width = (uint16_t)r->w;
+    r->sprite.height = (uint16_t)((r->sprite.src_h * zoom + 7) / 8);
+    return true;
+}
 bool ht_box(ht_scene_t *s, int x, int y, int w, int h, int radius, uint16_t fill, uint16_t border)
 {
     if (s->count >= HT_RUNS || w <= 0 || h <= 0) return false;
@@ -1554,6 +1567,33 @@ static void sprite_raster(const ht_run_t *r, ht_rect_t clip, uint16_t *out)
     if(!s->pixels&&!s->cells)return;
     int left=imax(clip.x,r->x),right=imin(clip.x+clip.w,r->x+s->width);
     int top=imax(clip.y,r->y),bottom=imin(clip.y+clip.h,r->y+s->height);
+    if(s->cells&&s->zoom){
+        // Zoomed: in units where a frame pixel is `zoom` wide and a glass pixel 8, each glass pixel is the mean of the
+        // frame pixels it overlaps, weighted by the overlap (a transparent one counts as the black ground).
+        int cols=s->src_w/s->cell,z=s->zoom;
+        for(int y=top;y<bottom;y++){
+            int v0=(y-r->y)*8,v1=v0+8;
+            uint16_t *dst=out+(y-clip.y)*clip.w+left-clip.x;
+            for(int x=left;x<right;x++,dst++){
+                int u0=(x-r->x)*8,u1=u0+8;
+                unsigned rr=0,gg=0,bb=0,cover=0;
+                for(int sy=v0/z;sy*z<v1&&sy<s->src_h;sy++){
+                    int wy=imin(v1,(sy+1)*z)-imax(v0,sy*z);
+                    const uint8_t *row=s->cells+(size_t)(sy/s->cell)*cols;
+                    for(int sx=u0/z;sx*z<u1&&sx<s->src_w;sx++){
+                        unsigned i=row[sx/s->cell];
+                        if(!i)continue;
+                        unsigned w=(unsigned)(wy*(imin(u1,(sx+1)*z)-imax(u0,sx*z)));
+                        uint16_t c=panel16(s->palette[i]);
+                        rr+=(c>>11)*w;gg+=((c>>5)&63)*w;bb+=(c&31)*w;cover+=w;
+                    }
+                }
+                if(cover*4<64)continue;
+                *dst=panel16((uint16_t)(((rr+32)/64)<<11|((gg+32)/64)<<5|((bb+32)/64)));
+            }
+        }
+        return;
+    }
     if(s->cells){
         // Cells: a run of `cell` px per palette index, 0 leaves the frame as it is.
         int cols=s->width/s->cell;

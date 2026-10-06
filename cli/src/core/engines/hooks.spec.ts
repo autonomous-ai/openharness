@@ -5,7 +5,7 @@ import { processRows } from '../../lib/terminalAgentDiscovery.js'
 import { dirname } from 'node:path'
 import { env } from '../../config/env.js'
 import { adoptEngineHomes, movedEngineHomes } from '../../lib/engineHomes.js'
-import { createEngineHooks, installEngineHooks, type EngineHookDeps } from './hooks.js'
+import { createEngineHooks, installEngineHooks, PROCESS_RECORD_WAIT_MS, type EngineHookDeps } from './hooks.js'
 
 vi.mock('../../lib/engineHomes.js', () => ({
   adoptEngineHomes: vi.fn(() => ({ claude: null, codex: null })),
@@ -38,7 +38,7 @@ const hint = (paneId: string) => ({ backend: 'tmux' as const, paneId })
 function setup(onPane: Record<string, RegisteredSession> = {}, over: Partial<EngineHookDeps> = {}) {
   const deps: EngineHookDeps = {
     tmuxBackend: {},
-    agentReconciler: { triggerHint: vi.fn(async () => {}), trigger: vi.fn(async () => {}) } as unknown as EngineHookDeps['agentReconciler'],
+    agentReconciler: { triggerHint: vi.fn(async () => true), trigger: vi.fn(async () => true) } as unknown as EngineHookDeps['agentReconciler'],
     registry: { byRuntimeEngine: vi.fn((runtime: { paneId: string }) => onPane[runtime.paneId]) } as unknown as EngineHookDeps['registry'],
     ...over,
   }
@@ -59,7 +59,10 @@ describe('which agent a hook belongs to', () => {
     const a1 = agent('a1', 100)
     const { deps, hooks } = setup({ '%1': a1 })
     vi.mocked(processRows).mockResolvedValueOnce(tree([300, 200], [200, 100], [100, 1]) as never)
-    expect(await hooks.resolveHookAgent({ engine: 'claude', runtimeHints: [hint('%1')], callerPid: 300 })).toBe(a1)
+    const onWait = vi.fn()
+    expect(await hooks.resolveHookAgent({ engine: 'claude', runtimeHints: [hint('%1')], callerPid: 300, onWait })).toBe(a1)
+    // Matched at once: nothing to wait for, and the hook is answered with its agent.
+    expect(onWait).not.toHaveBeenCalled()
     expect(deps.agentReconciler.triggerHint).toHaveBeenCalledWith({ backend: 'tmux', paneId: '%1' }, 'claude')
     expect(deps.registry.byRuntimeEngine).toHaveBeenCalledWith({ backend: 'tmux', paneId: '%1' }, 'claude')
     expect(console.log).not.toHaveBeenCalled()
@@ -85,11 +88,19 @@ describe('which agent a hook belongs to', () => {
       + ' · callerPid=300 · caller is not a descendant of that engine process')
   })
 
-  it('none for an agent with no process to descend from, and a process table that loops', async () => {
-    vi.mocked(processRows).mockResolvedValueOnce(tree([300, 400], [400, 300]) as never)
-    const { hooks } = setup({ '%1': agent('no-pid'), '%2': agent('a2', 100) })
-    expect(await hooks.resolveHookAgent({ engine: 'claude', runtimeHints: [hint('%1'), hint('%2')], callerPid: 300 })).toBeNull()
-    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('agentsOnRuntime=2 · callerPid=300 · caller is not a descendant'))
+  it('none for an agent with no process to descend from once the wait for one is over, and a process table that loops', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.mocked(processRows).mockResolvedValue(tree([300, 400], [400, 300], [100, 1]) as never)
+      const { hooks } = setup({ '%1': agent('no-pid'), '%2': agent('a2', 100) })
+      const answer = hooks.resolveHookAgent({ engine: 'claude', runtimeHints: [hint('%1'), hint('%2')], callerPid: 300 })
+      await vi.advanceTimersByTimeAsync(PROCESS_RECORD_WAIT_MS)
+      expect(await answer).toBeNull()
+      expect(console.log).toHaveBeenCalledWith(expect.stringContaining('agentsOnRuntime=2 · callerPid=300 · caller is not a descendant'))
+    } finally {
+      vi.useRealTimers()
+      vi.mocked(processRows).mockReset()
+    }
   })
 
   it('none when two agents could own the hook, saying it is ambiguous', async () => {
@@ -112,6 +123,126 @@ describe('which agent a hook belongs to', () => {
 
     expect(await empty.hooks.resolveHookAgent({ engine: 'claude', runtimeHints: undefined as never, callerPid: 300 })).toBeNull()
     expect(console.log).toHaveBeenLastCalledWith('[hooks] unmatched claude hook · hints=none · resolvedRuntimes=0 · agentsOnRuntime=0 · callerPid=300')
+  })
+
+  describe('a hook that comes in before its agent has recorded the process it came from', () => {
+    afterEach(() => { vi.mocked(processRows).mockReset() })
+    // The new engine is 200 and the hook's process, 300, is its child. Pid 100 was the engine a restart
+    // killed; nothing in the table is it any more.
+    const newEngine = () => tree([300, 200], [200, 1])
+    /** Asks, and says when the hook has started waiting: after it read the process table once. */
+    const ask = (hooks: ReturnType<typeof setup>['hooks'], panes = ['%1'], onWait?: () => void) => {
+      let answer: RegisteredSession | null | undefined
+      const asked = hooks.resolveHookAgent({ engine: 'claude', runtimeHints: panes.map(hint), callerPid: 300, ...(onWait ? { onWait } : {}) }).then((agent) => { answer = agent })
+      const waiting = () => vi.waitFor(() => expect(processRows).toHaveBeenCalledTimes(1))
+      return { asked, waiting, answer: () => answer }
+    }
+
+    it('in a restart, waits while the recorded process is one that is gone, and belongs to the agent once the new one is recorded', async () => {
+      const onPane: Record<string, RegisteredSession> = { '%1': agent('a1', 100) }
+      vi.mocked(processRows).mockResolvedValue(newEngine() as never)
+      const onWait = vi.fn()
+      const hook = ask(setup(onPane).hooks, ['%1', '%9'], onWait)
+      await hook.waiting()
+      await new Promise((resolve) => setTimeout(resolve, 250))
+      expect(hook.answer()).toBeUndefined()
+      // Said before the wait, so the hook is answered then: its client gives up after 500ms and writes
+      // the registry itself (hook/notify.mjs).
+      expect(onWait).toHaveBeenCalledTimes(1)
+      // What restart.ts does once the new process is found and probed.
+      onPane['%1'] = agent('a1', 200)
+      await hook.asked
+      expect(hook.answer()).toEqual(agent('a1', 200))
+      expect(onWait).toHaveBeenCalledTimes(1)
+      expect(console.log).not.toHaveBeenCalled()
+    })
+
+    it('in a resume, waits while the row has no process yet, and belongs to it once the resume records one', async () => {
+      const onPane: Record<string, RegisteredSession> = { '%1': agent('a1') }
+      vi.mocked(processRows).mockResolvedValue(newEngine() as never)
+      const hook = ask(setup(onPane).hooks)
+      await hook.waiting()
+      expect(hook.answer()).toBeUndefined()
+      // What resumeAgentService.ts does once waitForResumedAgent finds the engine in the pane.
+      onPane['%1'] = agent('a1', 200)
+      await hook.asked
+      expect(hook.answer()).toEqual(agent('a1', 200))
+    })
+
+    it('when discovery was too slow to open its agent, waits for the agent to appear on its pane', async () => {
+      // A hook from an engine started by hand in a terminal: only a discovery pass opens its agent, and
+      // the pass outran its deadline (a loaded machine). Nothing is on the pane yet, so nothing waited.
+      const onPane: Record<string, RegisteredSession> = {}
+      vi.mocked(processRows).mockResolvedValue(newEngine() as never)
+      const slow = setup(onPane, { agentReconciler: { triggerHint: vi.fn(async () => false), trigger: vi.fn(async () => false) } as unknown as EngineHookDeps['agentReconciler'] })
+      const onWait = vi.fn()
+      const hook = ask(slow.hooks, ['%1'], onWait)
+      await hook.waiting()
+      await new Promise((resolve) => setTimeout(resolve, 250))
+      expect(hook.answer()).toBeUndefined()
+      expect(onWait).toHaveBeenCalledTimes(1)
+      // The pass, done at last, opens the agent on the pane with the engine the hook came from.
+      onPane['%1'] = agent('a1', 200)
+      await hook.asked
+      expect(hook.answer()).toEqual(agent('a1', 200))
+    })
+
+    it('none when what is recorded is a process it does not come from, or the table cannot be read again', async () => {
+      const onPane: Record<string, RegisteredSession> = { '%1': agent('a1') }
+      vi.mocked(processRows).mockResolvedValue(newEngine() as never)
+      const other = ask(setup(onPane).hooks)
+      await other.waiting()
+      onPane['%1'] = agent('a1', 999)
+      await other.asked
+      expect(other.answer()).toBeNull()
+      expect(console.log).toHaveBeenLastCalledWith('[hooks] unmatched claude hook · hints=tmux:%1 · resolvedRuntimes=1 · agentsOnRuntime=1'
+        + ' · callerPid=300 · caller is not a descendant of that engine process')
+
+      vi.mocked(processRows).mockReset()
+      const pane: Record<string, RegisteredSession> = { '%1': agent('a1') }
+      vi.mocked(processRows).mockResolvedValueOnce(newEngine() as never).mockResolvedValueOnce(null)
+      const unreadable = ask(setup(pane).hooks)
+      await unreadable.waiting()
+      pane['%1'] = agent('a1', 200)
+      await unreadable.asked
+      expect(unreadable.answer()).toBeNull()
+    })
+
+    it('waits no longer than its bound for a record that does not come', async () => {
+      vi.useFakeTimers()
+      try {
+        vi.mocked(processRows).mockResolvedValue(newEngine() as never)
+        const hook = ask(setup({ '%1': agent('a1', 100) }).hooks)
+        await vi.advanceTimersByTimeAsync(PROCESS_RECORD_WAIT_MS - 1)
+        expect(hook.answer()).toBeUndefined()
+        await vi.advanceTimersByTimeAsync(1)
+        await hook.asked
+        expect(hook.answer()).toBeNull()
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('is not cut short by a step of the wall clock, as a wake or an NTP correction makes', async () => {
+      // Round 29 steps the clock under working agents; a deadline on the wall clock ended this wait at
+      // the first poll after a step forward, and the hook was dropped as if its record never came.
+      vi.useFakeTimers()
+      try {
+        const onPane: Record<string, RegisteredSession> = { '%1': agent('a1', 100) }
+        vi.mocked(processRows).mockResolvedValue(newEngine() as never)
+        const hook = ask(setup(onPane).hooks)
+        await vi.advanceTimersByTimeAsync(1_000)
+        vi.setSystemTime(Date.now() + 3 * 3_600_000)
+        await vi.advanceTimersByTimeAsync(1_000)
+        expect(hook.answer()).toBeUndefined()
+        onPane['%1'] = agent('a1', 200)
+        await vi.advanceTimersByTimeAsync(200)
+        await hook.asked
+        expect(hook.answer()).toEqual(agent('a1', 200))
+      } finally {
+        vi.useRealTimers()
+      }
+    })
   })
 
   it('a SessionEnd only asks for a reconcile: discovery decides whether the agent still exists', () => {

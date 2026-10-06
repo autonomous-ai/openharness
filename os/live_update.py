@@ -34,10 +34,29 @@ FEEDS = {
 }
 FILES = ('harness-tui', 'cli.mjs', 'notify.mjs')
 LIMIT = 64 * 1024 * 1024
+DOWNLOAD_CHUNK = 1024 * 1024
 RESTART_REQUIRED = Path('/run/harness-os-restart-required')
 SYSTEM_LOCK = Path('/run/lock/hn-os.lock')
 BOOT_ID = Path('/proc/sys/kernel/random/boot_id')
+PROC = Path('/proc')
+WORKER_BUSY = '{"harness_update_worker":1,"status":"busy"}'
+BUSY_EXIT = 75
 WORDMARK = ('█ █ ▄▀█ █▀█ █▄ █ █▀▀ █▀ █▀', '█▀█ █▀█ █▀▄ █ ▀█ ██▄ ▄█ ▄█')
+
+
+class UpdateBusy(ValueError):
+    """Another operation owns a lock; no part of this attempt has started."""
+
+
+class UpdateIntent:
+    """One active screen's request; ordinary timer checks never consult it."""
+    def __init__(self):
+        self.pending = False
+        self.retry_at = 0
+
+    def clear(self):
+        self.pending = False
+        self.retry_at = 0
 
 
 def version(value):
@@ -78,13 +97,66 @@ def write(path, data):
 
 
 @contextmanager
+def screen_registration():
+    """Publish only an active Updates UI, not the rest of its process lifetime."""
+    token = os.environ.get('HARNESS_UPDATE_INSTANCE', '')
+    if re.fullmatch(r'[0-9a-f]{32}', token):
+        (STATE / 'screens').mkdir(parents=True, exist_ok=True, mode=0o700)
+        start = (PROC / str(os.getpid()) / 'stat').read_text().rsplit(')', 1)[1].split()[19]
+        # Do not acquire open.lock here: the opener can be waiting for this
+        # registration while serializing another simultaneous shortcut.
+        write(STATE / 'screens' / str(os.getpid()), dict(
+            pid=os.getpid(), start=start, token=token, boot_id=BOOT_ID.read_text().strip()))
+    try:
+        yield
+    finally:
+        unregister_screen()
+
+
+def unregister_screen():
+    (STATE / 'screens' / str(os.getpid())).unlink(missing_ok=True)
+
+
+def request_for_screen():
+    request = read(STATE / 'request.json', {})
+    if not isinstance(request, dict) or 'requested_at' not in request:
+        return False
+    target = request.get('target')
+    return target is None or (isinstance(target, str) and re.fullmatch(r'[0-9a-f]{32}', target) is not None
+                              and target == os.environ.get('HARNESS_UPDATE_INSTANCE'))
+
+
+def consume_request():
+    # Match and claim together: another client must not replace the request
+    # between our read and unlink. The opener uses this same handoff lock.
+    with (STATE / 'open.lock').open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if not request_for_screen():
+            return False
+        (STATE / 'request.json').unlink()
+        return True
+
+
+def close_screen():
+    # Serialize the final close decision with Super+u's request and selection.
+    # A request arriving after the last UI poll must be handled, not abandoned
+    # while this Python process is still alive in curses cleanup.
+    with (STATE / 'open.lock').open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if request_for_screen():
+            return False
+        unregister_screen()
+        return True
+
+
+@contextmanager
 def locked():
     STATE.mkdir(parents=True, exist_ok=True, mode=0o700)
     with (STATE / 'lock').open('a') as handle:
         try:
             fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as error:
-            raise ValueError('An update is already in progress.') from error
+            raise UpdateBusy('An update is already in progress.') from error
         # OS package replacement and fast activation cannot run concurrently.
         # The root-owned file is created by tmpfiles before the user session.
         system_lock = SYSTEM_LOCK.open('r') if SYSTEM_LOCK.exists() else None
@@ -93,15 +165,26 @@ def locked():
                 try:
                     fcntl.flock(system_lock, fcntl.LOCK_SH | fcntl.LOCK_NB)
                 except BlockingIOError as error:
-                    raise ValueError('A system update is in progress. Try again when it finishes.') from error
+                    raise UpdateBusy('A system update is in progress. Try again when it finishes.') from error
             yield
         finally:
             if system_lock:
                 system_lock.close()
 
 
+def system_channel():
+    # Fedora supplies its own base-system lifecycle. A stale user cache must not
+    # offer the PC updater, and an absent PC helper is not a failed runtime check.
+    if read(BASE_ID, {}).get('system_profile', 'arch') != 'arch':
+        return {'supported': False, 'available': False}
+    return read(STATE / 'system.json', {})
+
+
 def check_system(force=False):
-    cached = read(STATE / 'system.json', {})
+    cached = system_channel()
+    if cached.get('supported') is False:
+        write(STATE / 'system.json', dict(cached, checked_at=time.time()))
+        return cached
     if not force and time.time() - cached.get('checked_at', 0) < 86400:
         return cached
     try:
@@ -131,17 +214,47 @@ def allowed_url(value):
     return value
 
 
-def fetch(url, limit):
+@contextmanager
+def download_response(url, limit):
     request = Request(allowed_url(url), headers={'User-Agent': 'Harness-Updates/1'})
     with urlopen(request, timeout=20) as response:
         allowed_url(response.url)
         size = response.headers.get('Content-Length')
         if size and (not size.isdigit() or int(size) > limit):
             raise ValueError('Update exceeds its download size limit.')
+        yield response
+
+
+def fetch(url, limit):
+    with download_response(url, limit) as response:
         data = response.read(limit + 1)
         if len(data) > limit:
             raise ValueError('Update exceeds its download size limit.')
         return data
+
+
+def download(ref, destination):
+    """Keep release bytes on disk while the installed workspace remains active."""
+    limit = ref.get('size') or LIMIT
+    size, checksum = 0, hashlib.sha256()
+    created = False
+    try:
+        with download_response(ref['url'], limit) as response, destination.open('xb') as handle:
+            created = True
+            while chunk := response.read(min(DOWNLOAD_CHUNK, limit + 1 - size)):
+                size += len(chunk)
+                if size > limit:
+                    raise ValueError('Update exceeds its download size limit.')
+                checksum.update(chunk)
+                handle.write(chunk)
+        if checksum.hexdigest() != ref['sha256'].lower() or (
+            ref.get('size') is not None and size != ref['size']
+        ):
+            raise ValueError('Download checksum or size does not match the release.')
+    except BaseException:
+        if created:
+            destination.unlink(missing_ok=True)
+        raise
 
 
 def runtime_platform():
@@ -250,7 +363,7 @@ def prepared():
 
 
 def notice(message):
-    # Only OS configuration renders this option. No shared hn welcome/UI change.
+    # Retained for an explicitly customized footer; the OS uses hn's standard bar.
     try:
         run('/usr/bin/hn', 'set-option', '-g', '@harness-update', message)
     except (OSError, subprocess.SubprocessError):
@@ -304,41 +417,36 @@ def check(feeds=None, progress=lambda _: None, force_system=False):
         # Releases whose tagged commits are already ancestors of that source are
         # older, even if their public version number is numerically higher.
         baselines = read(BASE_ID, {}).get('release_baselines', {})
-        changes, target_versions, errors = {}, dict(base_versions), []
+        target_versions, errors = dict(base_versions), []
         ignored = read(STATE / 'ignored.json', {})
-        for component, url in (feeds or FEEDS).items():
-            try:
-                candidate, refs = release(url, component)
-                if ignored.get(component) == candidate:
-                    continue
-                baseline = baselines.get(component, {}).get('version', '0.0.0')
-                if version(candidate) > max(version(base_versions[component]), version(baseline)):
-                    progress('Downloading hn…' if component == 'hn' else 'Downloading Harness…')
-                    component_files = {}
-                    for name, ref in refs.items():
-                        data = fetch(ref['url'], ref.get('size', LIMIT))
-                        if hashlib.sha256(data).hexdigest() != ref['sha256'].lower() or (
-                            ref.get('size') is not None and len(data) != ref['size']
-                        ):
-                            raise ValueError('Download checksum or size does not match the release.')
-                        if name == 'harness-tui':
-                            verify_hn(data)
-                        component_files[name] = data
-                    changes.update(component_files)
-                    target_versions[component] = candidate
-            except (ValueError, OSError, KeyError, TypeError) as error:
-                errors.append(f'{component}: {error}')
-        # Each component is complete before staging; an unavailable CLI release
-        # must not hold up an independent hn fix (or leave only half a CLI pair).
-        if changes:
-            builds = STATE / 'builds'
-            builds.mkdir(exist_ok=True)
-            with tempfile.TemporaryDirectory(prefix='.download-', dir=builds) as temp:
-                folder = Path(temp)
+        builds = STATE / 'builds'
+        builds.mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix='.download-', dir=builds) as temp:
+            folder, changes = Path(temp), set()
+            for component, url in (feeds or FEEDS).items():
+                try:
+                    candidate, refs = release(url, component)
+                    if ignored.get(component) == candidate:
+                        continue
+                    baseline = baselines.get(component, {}).get('version', '0.0.0')
+                    if version(candidate) > max(version(base_versions[component]), version(baseline)):
+                        progress('Downloading hn…' if component == 'hn' else 'Downloading Harness…')
+                        component_files = set()
+                        for name, ref in refs.items():
+                            download(ref, folder / name)
+                            if name == 'harness-tui':
+                                with (folder / name).open('rb') as handle:
+                                    verify_hn(handle.read(64))
+                            component_files.add(name)
+                        changes.update(component_files)
+                        target_versions[component] = candidate
+                except (ValueError, OSError, KeyError, TypeError) as error:
+                    errors.append(f'{component}: {error}')
+            # Publish only complete components. A failed CLI pair is overwritten
+            # from the base before an independent hn update can become ready.
+            if changes:
                 for name in FILES:
-                    if name in changes:
-                        (folder / name).write_bytes(changes[name])
-                    else:
+                    if name not in changes:
                         shutil.copyfile(base / name, folder / name)
                     (folder / name).chmod(0o755 if name == 'harness-tui' else 0o644)
                     with (folder / name).open('rb') as handle:
@@ -559,6 +667,10 @@ def finish_approved_update():
         if read(STATE / 'check.json', {}).get('errors') or read(STATE / 'system.json', {}).get('error'):
             raise ValueError('Some updates could not be checked. Open Updates to try again.')
         (STATE / 'approved.json').unlink(missing_ok=True)
+    except UpdateBusy:
+        # This approval already survived a real reboot and its base check. A
+        # competing check has not attempted activation or invalidated it.
+        return
     except (ValueError, OSError, subprocess.SubprocessError) as error:
         write(STATE / 'approved.json', dict(approval, status='failed', error=str(error)))
         notice('Update needs attention · Super+u')
@@ -569,7 +681,7 @@ def update_all():
     """One user decision; root still verifies its own official release assets."""
     if RESTART_REQUIRED.exists():
         raise ValueError('Restart when ready to finish the update.')
-    if read(STATE / 'system.json', {}).get('available'):
+    if system_channel().get('available'):
         # Do not reconnect an old session using a new OS package. Its included
         # runtime takes effect on reboot; finish any independent public release
         # against that new base afterward, under this same explicit approval.
@@ -583,12 +695,21 @@ def update_all():
     if ready and ready != selected():
         # The unit survives reconnecting the screen. The Updates terminal
         # process waits for its real result and survives with the other panes.
-        run('systemd-run', '--user', '--wait', '--collect', '--unit=harness-apply-update',
-            '/usr/bin/python3', '/usr/lib/harness-os/live_update.py', 'apply', timeout=240)
+        try:
+            run('systemd-run', '--user', '--quiet', '--pipe', '--wait', '--collect', '--unit=harness-apply-update',
+                '/usr/bin/python3', '/usr/lib/harness-os/live_update.py', 'apply', '--worker',
+                stdin=subprocess.DEVNULL, timeout=240)
+        except subprocess.CalledProcessError as error:
+            # --wait propagates the worker's status; --pipe carries its exact
+            # result. A unit startup failure or an arbitrary exit 75 is not Busy.
+            if error.returncode == BUSY_EXIT and error.stdout == WORKER_BUSY + '\n':
+                raise UpdateBusy('An update is already in progress.') from error
+            raise
     (STATE / 'approved.json').unlink(missing_ok=True)
 
 
-def screen(window, message='', refresh=False):
+def screen(window, message='', refresh=False, intent=None):
+    intent = intent if intent is not None else UpdateIntent()
     curses.curs_set(0)
     window.keypad(True)
     window.timeout(500)
@@ -610,16 +731,18 @@ def screen(window, message='', refresh=False):
         window.erase()
         height, width = window.getmaxyx()
         ready = prepared()
-        available = (ready is not None and ready != selected()) or read(STATE / 'system.json', {}).get('available')
+        available = (ready is not None and ready != selected()) or system_channel().get('available')
         checked = read(STATE / 'check.json', {})
         system_state = read(RESTART_REQUIRED, {}).get('status')
-        errors = checked.get('errors') or read(STATE / 'system.json', {}).get('error') or read(STATE / 'approved.json', {}).get('status') == 'failed'
+        errors = checked.get('errors') or system_channel().get('error') or read(STATE / 'approved.json', {}).get('status') == 'failed'
         if system_state == 'failed':
             title, choices = 'The update needs recovery.', [('Restore', 'restore-system'), ('Back', None)]
         elif system_state == 'ready':
             title, choices = 'Updated. Restart when ready.', [('Done', None), ('Restart', 'reboot')]
         elif system_state:
             title, choices = 'The system is updating…', [('Back', None)]
+        elif intent.retry_at:
+            title, choices = 'Waiting for the current update…', [('Back', None)]
         elif available:
             title, choices = 'Update available.', [('Update', 'update')]
         elif errors or message:
@@ -654,45 +777,62 @@ def screen(window, message='', refresh=False):
         if read(STATE / 'approved.json', {}).get('status') == 'failed':
             (STATE / 'approved.json').unlink(missing_ok=True)
 
-    if refresh and not RESTART_REQUIRED.exists():
-        draw('Checking for updates…')
-        try:
-            refresh_releases()
-        except (ValueError, OSError, subprocess.SubprocessError) as error:
-            message = str(error)
     while True:
-        choices = draw()
-        requested = STATE / 'request.json'
-        if requested.exists():
-            requested.unlink(missing_ok=True)
-            if not RESTART_REQUIRED.exists():
-                # The shortcut starts updating. A ready download needs no
-                # further network round trip; otherwise discover it now.
-                if choices[0][1] != 'update' and not refresh:
+        if consume_request():
+            # Acknowledge handoff to this screen, not completion of the update.
+            # Keep the intent through both check and transient-worker contention.
+            intent.pending = True
+        if RESTART_REQUIRED.exists():
+            intent.clear()
+            refresh = False
+        elif (refresh or intent.pending) and time.monotonic() >= intent.retry_at:
+            try:
+                ready = prepared()
+                available = (ready and ready != selected()) or system_channel().get('available')
+                if not (intent.pending and available):
                     draw('Checking for updates…')
-                    try:
-                        refresh_releases()
-                        message = ''
-                    except (ValueError, OSError, subprocess.SubprocessError) as error:
-                        message = str(error)
-                    choices = draw()
-                if choices[0][1] == 'update':
+                    refresh_releases()
+                    ready = prepared()
+                    available = (ready and ready != selected()) or system_channel().get('available')
+                message, refresh = '', False
+                intent.retry_at = 0
+                if intent.pending and available:
+                    # Stay cancellable here instead of launching a failed unit
+                    # every poll during a long download. The worker still owns
+                    # acquisition and reports a race after this advisory probe.
+                    with locked():
+                        pass
                     return 'update'
-        refresh = False
+                intent.clear()
+            except UpdateBusy:
+                intent.retry_at = time.monotonic() + .5
+            except (ValueError, OSError, subprocess.SubprocessError) as error:
+                message, refresh = str(error), False
+                intent.clear()
+        choices = draw()
         key = window.getch()
         if key in (27, ord('q')):
-            return
+            if close_screen():
+                intent.clear()
+                return
         if key in (9, curses.KEY_BTAB, curses.KEY_LEFT, curses.KEY_RIGHT):
             choice = (choice + 1) % len(choices)
         elif key in (10, 13, curses.KEY_ENTER):
-            return choices[choice % len(choices)][1]
+            action = choices[choice % len(choices)][1]
+            if action is not None or close_screen():
+                if action is None:
+                    intent.clear()
+                return action
         elif key == curses.KEY_MOUSE:
             try:
                 _, x, y, _, buttons = curses.getmouse()
                 if buttons & (curses.BUTTON1_CLICKED | curses.BUTTON1_RELEASED):
                     for row, left, right, action in targets:
                         if y == row and left <= x < right:
-                            return action
+                            if action is not None or close_screen():
+                                if action is None:
+                                    intent.clear()
+                                return action
             except curses.error:
                 pass
 
@@ -701,54 +841,89 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('action', choices=['check', 'screen', 'request', 'apply', 'rollback', 'status'], nargs='?', default='screen')
     parser.add_argument('--feeds', type=Path, help='Explicit developer feed map; never used by the installed timer')
+    parser.add_argument('--worker', action='store_true', help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
+    if args.worker and args.action != 'apply':
+        parser.error('--worker is only valid for apply')
     if os.geteuid() == 0 or Path('/etc/harness-live').exists():
         parser.error('Open Updates as your normal user on an installed Harness system.')
     STATE.mkdir(parents=True, exist_ok=True, mode=0o700)
     if args.action == 'request':
-        write(STATE / 'request.json', {'requested_at': time.time()})
+        target = os.environ.get('HARNESS_UPDATE_TARGET')
+        request = {'requested_at': time.time()}
+        if target is not None:
+            if not re.fullmatch(r'[0-9a-f]{32}', target):
+                raise ValueError('Invalid Updates screen target.')
+            # Private opener handoff already holds open.lock while waiting for
+            # this child. Taking it again here would deadlock startup.
+            write(STATE / 'request.json', dict(request, target=target))
+        else:
+            with (STATE / 'open.lock').open('a') as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX)
+                write(STATE / 'request.json', request)
     elif args.action == 'check':
         check(read(args.feeds) if args.feeds else None)
         finish_approved_update()
     elif args.action == 'screen':
-        message = ''
-        # A prepared release can be applied immediately. Otherwise check now
-        # instead of exposing another command or making the user wait for a timer.
-        refresh = not (prepared() or read(STATE / 'system.json', {}).get('available'))
-        while True:
-            action = curses.wrapper(screen, message, refresh)
-            if action is None:
-                break
-            message, refresh = '', action == 'check'
-            try:
-                if action == 'check':
-                    # Retry means finish updating, without another confirmation
-                    # after the connection or release has recovered.
-                    write(STATE / 'request.json', {'requested_at': time.time()})
-                if action == 'reboot':
-                    subprocess.run(['systemctl', 'reboot'], check=True)
-                    break
-                if action == 'update':
-                    print('Updating Harness… Your agents keep running.', flush=True)
-                    update_all()
-                elif action == 'restore-system':
-                    subprocess.run(['sudo', '-n', '/usr/bin/harness', 'rollback'], check=True)
-                    (STATE / 'system.json').unlink(missing_ok=True)
-                    (STATE / 'approved.json').unlink(missing_ok=True)
-            except (ValueError, OSError, subprocess.SubprocessError) as error:
-                write(STATE / 'error.json', {'at': time.time(), 'error': str(error)})
-                message = 'The update did not finish. Try again.'
+        with screen_registration():
+            run_screen()
     elif args.action in ('apply', 'rollback'):
-        apply(rollback=args.action == 'rollback')
+        try:
+            apply(rollback=args.action == 'rollback')
+        except UpdateBusy:
+            if not args.worker:
+                raise
+            print(WORKER_BUSY, flush=True)
+            return BUSY_EXIT
     else:
         print(json.dumps({'runtime': str(selected()), 'versions': versions(selected()),
                           'ready': str(prepared()) if prepared() else None,
                           'restart_required': RESTART_REQUIRED.exists(),
-                          'system': read(STATE / 'system.json'), 'check': read(STATE / 'check.json')}, indent=2))
+                          'system': system_channel(), 'check': read(STATE / 'check.json')}, indent=2))
+
+
+def run_screen():
+    message = ''
+    intent = UpdateIntent()
+    # A prepared release can be applied immediately. Otherwise check now
+    # instead of exposing another command or making the user wait for a timer.
+    refresh = not (prepared() or system_channel().get('available'))
+    while True:
+        action = curses.wrapper(screen, message, refresh, intent)
+        if action is None:
+            break
+        message, refresh = '', action == 'check'
+        try:
+            if action == 'check':
+                # Retry means finish updating, without another confirmation
+                # after the connection or release has recovered.
+                intent.pending = True
+            if action == 'reboot':
+                subprocess.run(['systemctl', 'reboot'], check=True)
+                break
+            if action == 'update':
+                intent.pending = True
+                print('Updating Harness… Your agents keep running.', flush=True)
+                update_all()
+                intent.clear()
+            elif action == 'restore-system':
+                subprocess.run(['sudo', '-n', '/usr/bin/harness', 'rollback'], check=True)
+                (STATE / 'system.json').unlink(missing_ok=True)
+                (STATE / 'approved.json').unlink(missing_ok=True)
+        except UpdateBusy:
+            intent.retry_at = time.monotonic() + .5
+        except (ValueError, OSError, subprocess.SubprocessError) as error:
+            intent.clear()
+            write(STATE / 'error.json', {'at': time.time(), 'error': str(error)})
+            message = 'The update did not finish. Try again.'
+
+
+def entrypoint(argv=None):
+    try:
+        return main(argv)
+    except (ValueError, OSError, subprocess.SubprocessError) as error:
+        raise SystemExit('Harness update: ' + str(error))
 
 
 if __name__ == '__main__':
-    try:
-        main()
-    except (ValueError, OSError, subprocess.SubprocessError) as error:
-        raise SystemExit('Harness update: ' + str(error))
+    raise SystemExit(entrypoint())

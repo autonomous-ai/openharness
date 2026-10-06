@@ -8,7 +8,7 @@
  * process's alone: a crash or a leak in search costs search, and the master starts it again.
  */
 import type { CoreApi } from '../core/api.js'
-import { emptyPorts } from '../core/api.js'
+import { emptyPorts, resolveAgent } from '../core/api.js'
 import { databaseHistory } from '../core/transcripts/databaseHistory.js'
 import { ExternalSessions, OpenSessions } from '../lib/sessionSearch/external.js'
 import { externalProviders } from '../lib/sessionSearch/externals/index.js'
@@ -45,11 +45,18 @@ export function searchCoreApi(
       live: () => agents().filter((agent) => agent.active),
       displayName: (session) => (session as { displayName?: string }).displayName ?? '',
       byAgent: (agentId) => agents().find((agent) => agent.agentId === agentId),
+      resolve: (id) => resolveAgent(agents(), id),
       advertised: () => [],
       terminalAvailable: () => false,
       sync: () => {},
       runtimeModels: async () => [],
+      runtimeProfile: () => null,
+      setRuntime: () => {},
+      fork: async () => ({ ok: false, error: 'UNSUPPORTED' }),
     },
+    // Search drives no agent: these are never asked of it.
+    turns: { send: () => {}, stop: () => {}, recent: () => [], asks: () => [] },
+    questions: { answer: () => {}, answerReviewed: async () => false },
     transcripts: { databaseHistory },
     external: {
       sessions: new ExternalSessions({ providers, excluded: [dataDir], log: console.warn }),
@@ -92,9 +99,10 @@ export function runSearchService(options: SearchServiceOptions): ServiceProcess 
       const sessionId = typeof payload.sessionId === 'string' ? payload.sessionId : ''
       if (!sessionId || !index) return
       // A turn boundary: the agents may have changed (a new one, a new conversation), and this
-      // session has new turns to index.
-      if (payload.kind === 'touch') void refresh().then(() => index.touch(sessionId))
-      else if (payload.kind === 'deleteHistory') index.deleteHistory(sessionId)
+      // session has new turns to index. Returned, so a failure is logged rather than left unhandled,
+      // which would end this process.
+      if (payload.kind === 'touch') return refresh().then(() => index.touch(sessionId))
+      if (payload.kind === 'deleteHistory') index.deleteHistory(sessionId)
     },
     onConnected: (connection) => {
       core = connection

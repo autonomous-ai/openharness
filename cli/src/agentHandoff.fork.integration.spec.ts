@@ -2,7 +2,7 @@
 //  - the fork record as cli.ts builds it at `agent_fork` → registry.openPendingAgent (normalizer) → the stopped
 //    copy (StoppedAgentStore save/get, through strictPersistedRow) → lib/agentHandoff.ts inheritance;
 //  - lib/agentHandoff.ts's transcript gate and lookup wired to the real registry.validTranscriptPath and
-//    sessionRepair.findResumedTranscript, as cli.ts wires them (`backend.handoffProvider`);
+//    sessionRepair.findResumedTranscript, as cli.ts wires them (`backend.handoffRequestProvider`);
 //  - lib/handoffDiscovery.ts (through cli.ts's `handoffProviderDeps`) over the real sessionRepair searches: Claude only
 //    by its per-process record, never a folder scan; ownership checked against the real stopped store, failing closed.
 // The unit specs pin each side with fakes; this one pins that the pieces agree.

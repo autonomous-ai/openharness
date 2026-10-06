@@ -27,8 +27,10 @@ export const QUESTION_FOOTER_RE = /enter to (select|confirm|submit|lock)|enter\s
  *  Command Code `↑/↓ navigate · enter select · ctrl+e explain`. Proximity to the rows is what makes this
  *  a guard and not a search: it must sit within a few lines UNDER them. */
 // Claude's plan review footer changed from Esc/Tab hints to
-// "shift+tab to approve with this feedback" plus ctrl+g.
-export const PERMISSION_FOOTER_RE = /\besc\b|enter\s+select|ctrl\+e|shift\+tab\s+to\s+approve/i
+// "shift+tab to approve with this feedback" plus ctrl+g. Never the spinner of a turn at work, which sits
+// right under its output in every engine (`esc to interrupt`): a numbered list in that output read as a
+// permission prompt, and a message sent mid-turn was held for one that was not there.
+export const PERMISSION_FOOTER_RE = /\besc\b(?! to interrupt)|enter\s+select|ctrl\+e|shift\+tab\s+to\s+approve/i
 
 /** The footers only an engine's own reader anchors on: devin `↵ select` / `↵ confirm`, grok `Enter:submit`
  *  / `1/3:select`, agy and grok `navigate`, muse and amp `↑/↓ to move` / `↑/↓/j/k move`. */

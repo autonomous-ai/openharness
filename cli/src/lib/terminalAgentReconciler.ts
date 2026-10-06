@@ -12,6 +12,33 @@ import type { TerminalRuntimeRef } from './terminalTypes.js'
 
 const MISS_LIMIT = 2
 
+/**
+ * How long one reconcile pass may take before the core stops waiting on it.
+ *
+ * A pass asks tmux and ps (the probe), then applies what they said inside a registry transaction.
+ * Nothing bounded the whole: a probe that never answered, or an apply stuck on an engine's files,
+ * held the pass forever, and with it every hook waiting for a pass to bind its agent, every later
+ * pass (they are serial), and every registry save (a transaction holds them back). Past this, a probe
+ * that has not answered is given up — nothing is applied, every agent kept as it is, and the next pass
+ * probes again — whoever waits for the pass goes on without it, and the registry stops holding saves
+ * back for it. A pass that is merely slow still finishes, and passes stay one at a time.
+ */
+export const RECONCILE_PASS_DEADLINE_MS = 30_000
+
+const GIVEN_UP = Symbol('given up')
+/** [work]'s value, or GIVEN_UP once [ms] have passed without it. A rejection after that is dropped. */
+function withinDeadline<T>(work: Promise<T>, ms: number): Promise<T | typeof GIVEN_UP> {
+  let timer: NodeJS.Timeout | undefined
+  const deadline = new Promise<typeof GIVEN_UP>((resolve) => {
+    timer = setTimeout(() => resolve(GIVEN_UP), ms)
+    timer.unref?.()
+  })
+  return Promise.race([work, deadline]).then((value) => {
+    if (value === GIVEN_UP) work.catch(() => {})
+    return value
+  }).finally(() => clearTimeout(timer))
+}
+
 export interface TerminalAgentReconcilerDeps {
   current: () => RegisteredSession[]
   backends: readonly TerminalBackend[]
@@ -28,6 +55,8 @@ export interface TerminalAgentReconcilerDeps {
   /** Hooks may arrive while reboot restoration is still allocating panes. Keep their hints,
    * but do not scan or retire any saved owners until start() opens discovery. */
   deferUntilStart?: boolean
+  /** [RECONCILE_PASS_DEADLINE_MS], shorter in tests. */
+  passDeadlineMs?: number
 }
 
 function currentProcessKey(session: RegisteredSession): string | null {
@@ -56,18 +85,6 @@ function sharesPlacement(
  */
 function routeEngineMatches(current: Pick<RegisteredSession, 'engine'>, observed: Pick<DiscoveredTerminalAgent, 'engine'>): boolean {
   return current.engine === observed.engine || isTerminalEngine(current.engine)
-}
-
-function unboundRouteOwner(
-  current: readonly RegisteredSession[],
-  observed: DiscoveredTerminalAgent,
-): RegisteredSession | undefined {
-  const matches = current.filter((candidate) => (
-    !candidate.sessionId
-    && routeEngineMatches(candidate, observed)
-    && sharesPlacement(candidate, observed)
-  ))
-  return matches.length === 1 ? matches[0] : undefined
 }
 
 /**
@@ -145,33 +162,10 @@ export class TerminalAgentReconciler {
     this.timer = null
   }
 
-  triggerHint(runtime: TerminalRuntimeRef, engine: AgentEngine): Promise<void> {
+  /** Asks for a pass that knows `engine` is starting in `runtime`'s pane. As [trigger]. */
+  triggerHint(runtime: TerminalRuntimeRef, engine: AgentEngine): Promise<boolean> {
     this.hints.set(terminalRouteKey(runtime), engine)
     return this.trigger()
-  }
-
-  /**
-   * Adopt an engine process that a backend-specific, pane-scoped probe already verified.
-   *
-   * New-agent creation has stronger evidence than the periodic inventory scan: it owns the exact
-   * runtime it just created and resolves the requested engine beneath that runtime. Passing that
-   * observation through the same callbacks used by reconciliation keeps process-agent creation and
-   * later session binding on one path, while avoiding a second best-effort inventory snapshot.
-   */
-  async adoptVerified(observed: DiscoveredTerminalAgent): Promise<RegisteredSession | undefined> {
-    const apply = async (): Promise<RegisteredSession | undefined> => {
-      const key = processIdentityKey(observed.engine, observed.processIdentity)
-      const before = this.deps.current()
-      const current = before.find((candidate) => currentProcessKey(candidate) === key)
-        ?? unboundRouteOwner(before, observed)
-      if (current) await this.deps.onTerminalAvailability?.(current, true)
-      if (current) await this.deps.onObserved(observed, current)
-      else await this.deps.onDiscovered(observed)
-      const after = this.deps.current()
-      return after.find((candidate) => currentProcessKey(candidate) === key)
-        ?? unboundRouteOwner(after, observed)
-    }
-    return this.deps.transaction ? this.deps.transaction(apply) : apply()
   }
 
   /** Hide an explicitly deleted process until an authoritative scan proves that process exited. */
@@ -221,14 +215,31 @@ export class TerminalAgentReconciler {
     })
   }
 
-  trigger(): Promise<void> {
+  /** Asks for a pass, and resolves once it is done: true, or false when the pass outran its deadline
+   *  ([RECONCILE_PASS_DEADLINE_MS]) and the caller goes on without what it would have found. */
+  trigger(): Promise<boolean> {
     this.pending = true
     // Return promptly to startup hooks: waiting for start() here can hold up the very engines
     // restore is trying to launch. The opening pass consumes every retained hint after restore.
-    if (this.waitingForStart) return Promise.resolve()
+    if (this.waitingForStart) return Promise.resolve(true)
     if (!this.inFlight) this.inFlight = this.drain().finally(() => { this.inFlight = null })
-    return this.inFlight
+    return this.waitFor(this.inFlight)
   }
+
+  /** A pass, waited for until the pass deadline and no longer: see [RECONCILE_PASS_DEADLINE_MS]. */
+  private async waitFor(pass: Promise<void>): Promise<boolean> {
+    // Done in time, but on a probe it gave up: it found nothing either.
+    if (await withinDeadline(pass, this.passDeadlineMs) !== GIVEN_UP) return !this.probeGivenUp
+    if (this.overdue !== pass) {
+      this.overdue = pass
+      console.warn(`[discovery] a pass has run for ${this.passDeadlineMs} ms; whoever waits for it goes on without it`)
+    }
+    return false
+  }
+  private overdue: Promise<void> | null = null
+  /** Whether the last pass gave up on its probe. */
+  private probeGivenUp = false
+  private get passDeadlineMs(): number { return this.deps.passDeadlineMs ?? RECONCILE_PASS_DEADLINE_MS }
 
   private async drain(): Promise<void> {
     while (this.pending) {
@@ -253,14 +264,19 @@ export class TerminalAgentReconciler {
     // anything older matters to no probe still to come.
     const probeSeq = this.routeSeq
     for (const [key, seq] of this.routeTouched) if (seq <= probeSeq) this.routeTouched.delete(key)
-    const probe = await (this.deps.probe
+    const probe = await withinDeadline(this.deps.probe
       ? this.deps.probe(hints)
       : probeTerminalAgents(
         this.deps.backends,
         this.deps.backendOrder,
         this.deps.daemonPid ?? process.pid,
         hints,
-      ))
+      ), this.passDeadlineMs)
+    this.probeGivenUp = probe === GIVEN_UP
+    if (probe === GIVEN_UP) {
+      console.warn(`[discovery] the terminal probe has not answered in ${this.passDeadlineMs} ms; this pass is given up, every agent kept as it is`)
+      return
+    }
     const availableTargets = probe.targets.filter((target) => target.result.state === 'available')
     const livePlacements = new Set(availableTargets.flatMap((target) =>
       target.result.state === 'available'

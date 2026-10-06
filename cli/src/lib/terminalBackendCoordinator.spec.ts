@@ -109,7 +109,7 @@ describe('TerminalBackendCoordinator', () => {
     const result = await new TerminalBackendCoordinator([backend('tmux:default', submit)], ['tmux']).submitText(session(), 'hello')
     expect(result).toEqual({ state: 'succeeded', dispatch: 'executed' })
     expect(submit).toHaveBeenCalledTimes(2)
-    expect(submit).toHaveBeenLastCalledWith(second, 'hello')
+    expect(submit).toHaveBeenLastCalledWith(second, 'hello', undefined)
   })
 
   it('never retries a possibly executed side effect', async () => {
@@ -200,7 +200,19 @@ describe('TerminalBackendCoordinator', () => {
       state: 'failed', dispatch: 'rejected',
     })
     expect(submit).toHaveBeenCalledOnce()
-    expect(submit).toHaveBeenCalledWith(tmux, 'hello')
+    expect(submit).toHaveBeenCalledWith(tmux, 'hello', undefined)
+  })
+
+  it('hands the check before the Enter to the backend, on every way a text is submitted', async () => {
+    const submit = submitBy({ state: 'succeeded', dispatch: 'executed' })
+    const coordinator = new TerminalBackendCoordinator([backend('tmux:default', submit)], ['tmux'])
+    const options = { beforeEnter: async () => null }
+    await coordinator.submitText(session(), 'hello', options)
+    const acquired = await coordinator.acquireLease(session())
+    if (acquired.state !== 'succeeded') throw new Error('no lease')
+    await coordinator.submitTextLease(acquired.value, 'hello', options)
+    await coordinator.submitTextForLease(session(), acquired.value, 'hello', options)
+    expect(submit.mock.calls.map((call) => (call as unknown[])[2])).toEqual([options, options, options])
   })
 
   it('keeps an active lease valid when the backends are replaced by the same instance', async () => {
@@ -215,5 +227,112 @@ describe('TerminalBackendCoordinator', () => {
 
     expect(coordinator.leaseIsCurrent(acquired.value, current)).toBe(true)
     await expect(coordinator.validateLease(acquired.value, current)).resolves.toBe(true)
+  })
+
+  describe('a validation that cannot answer yet is asked again', () => {
+    const waits: number[] = []
+    const patient = (validate: TerminalBackend['validate']) => {
+      const tmuxBackend = { ...backend('tmux:default', vi.fn()), validate: vi.fn(validate) }
+      waits.length = 0
+      const coordinator = new TerminalBackendCoordinator([tmuxBackend], ['tmux'], {
+        unknownRetryMs: [10, 20, 30], sleep: async (ms) => { waits.push(ms) },
+      })
+      return { coordinator, tmuxBackend }
+    }
+
+    it('a probe that failed (a held event loop timed it out) is not taken for a dead terminal', async () => {
+      const answers = [{ state: 'unknown' as const, reason: 'tmux runtime probe failed' }, { state: 'alive' as const }]
+      const { coordinator } = patient(async () => answers.shift()!)
+      await expect(coordinator.validate(session())).resolves.toEqual({ state: 'alive' })
+      expect(waits).toEqual([10])
+    })
+
+    it('an engine restarted in place is waited for until the row records it', async () => {
+      // A message sent while a restart is between starting the new engine and recording it: the pane
+      // holds a process the row does not know yet. It used to be dropped as "no longer running".
+      const current = session()
+      const { coordinator, tmuxBackend } = patient(async (_runtime, expected) =>
+        expected.processIdentity?.pid === 43 ? { state: 'alive' } : { state: 'gone', reason: 'process changed under tmux pane', replaced: true })
+      const acquiring = coordinator.acquireLease(current)
+      await Promise.resolve()
+      current.processIdentity = { pid: 43, executable: 'claude', startMarker: 'Sat Aug 15 10:01:00 2026' }
+      await expect(acquiring).resolves.toMatchObject({ state: 'succeeded' })
+      expect(tmuxBackend.validate).toHaveBeenLastCalledWith(tmux, expect.objectContaining({ processIdentity: current.processIdentity }))
+    })
+
+    it('does not hold a lease to an engine a restart replaced while the lease was checked', async () => {
+      const current = session()
+      current.runtimes = [tmux]
+      let live = 42
+      const tmuxBackend = { ...backend('tmux:default', vi.fn()), validate: vi.fn(async (_runtime: TerminalRuntimeRef, expected: { processIdentity?: { pid: number } }) =>
+        expected.processIdentity?.pid === live ? { state: 'alive' as const } : { state: 'gone' as const, reason: 'process changed under tmux pane', replaced: true as const }) }
+      // The restart records its new engine on the row while the check waits.
+      const coordinator = new TerminalBackendCoordinator([tmuxBackend], ['tmux'], {
+        unknownRetryMs: [10], sleep: async () => { current.processIdentity = { pid: 44, executable: 'claude', startMarker: 'Sat Aug 15 10:02:00 2026' } },
+      })
+      const acquired = await coordinator.acquireLease(current)
+      if (acquired.state !== 'succeeded') throw new Error('no lease')
+      live = 44
+      await expect(coordinator.validateLease(acquired.value, current)).resolves.toBe(false)
+    })
+
+    it('waits on a terminal with no engine in it while a restart is replacing that engine', async () => {
+      const answers = [{ state: 'gone' as const, reason: 'no claude process under pane %1' }, { state: 'alive' as const }]
+      const { coordinator } = patient(async () => answers.shift()!)
+      const current = session()
+      current.runtimes = [tmux]
+      coordinator.whileChanging((agentId) => agentId === current.agentId)
+      await expect(coordinator.validate(current)).resolves.toEqual({ state: 'alive' })
+      expect(waits).toEqual([10])
+    })
+
+    it('waits for a restored agent whose launch is starting before an engine process exists', async () => {
+      // Found by QA on a quiet machine: a message after restore was rejected before Codex started.
+      const answers = [{ state: 'gone' as const, reason: 'no codex process under pane %1' }, { state: 'alive' as const }]
+      const { coordinator } = patient(async () => answers.shift()!)
+      const current = session()
+      current.engine = 'codex'
+      current.runtimes = [tmux]
+      current.processIdentity = null
+      current.launch = { state: 'starting' }
+      await expect(coordinator.validate(current)).resolves.toEqual({ state: 'alive' })
+      expect(waits).toEqual([10])
+    })
+
+    it('bounds the wait for a restored engine that never starts', async () => {
+      const { coordinator, tmuxBackend } = patient(async () => ({ state: 'gone', reason: 'no engine process' }))
+      const current = session()
+      current.runtimes = [tmux]
+      current.launch = { state: 'starting' }
+      await expect(coordinator.acquireLease(current)).resolves.toMatchObject({ state: 'failed' })
+      expect(waits).toEqual([10, 20, 30])
+      expect(tmuxBackend.validate).toHaveBeenCalledTimes(4)
+    })
+
+    it('stops waiting when a restored launch fails', async () => {
+      const current = session()
+      current.runtimes = [tmux]
+      current.launch = { state: 'starting' }
+      const { coordinator } = patient(async () => {
+        if (waits.length) current.launch = { state: 'failed', error: 'ENGINE_EXITED' }
+        return { state: 'gone', reason: 'no engine process' }
+      })
+      await expect(coordinator.validate(current)).resolves.toMatchObject({ state: 'gone' })
+      expect(waits).toEqual([10])
+    })
+
+    it('gives the last answer once the waits run out, and never waits on a terminal known to be gone', async () => {
+      const unknown = patient(async () => ({ state: 'unknown' as const, reason: 'still failing' }))
+      const current = session()
+      current.runtimes = [tmux]
+      await expect(unknown.coordinator.validate(current)).resolves.toEqual({ state: 'unknown', reason: 'still failing' })
+      expect(waits).toEqual([10, 20, 30])
+      const lease = { agentId: current.agentId, runtime: tmux, placementKey: 'tmux:default\u0000%1', generation: '' }
+      const gone = patient(async () => ({ state: 'gone' as const, reason: 'tmux has no pane %1' }))
+      await expect(gone.coordinator.validate(current)).resolves.toEqual({ state: 'gone', reason: 'no configured terminal runtime is alive' })
+      await expect(gone.coordinator.validateLease(lease, current)).resolves.toBe(false)
+      await expect(gone.coordinator.submitText(current, 'hello')).resolves.toMatchObject({ dispatch: 'not_started' })
+      expect(waits).toEqual([])
+    })
   })
 })

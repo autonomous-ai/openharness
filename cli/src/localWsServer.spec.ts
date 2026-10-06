@@ -1,9 +1,9 @@
 import http from 'node:http'
-import type { AddressInfo } from 'node:net'
+import net, { type AddressInfo } from 'node:net'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { WebSocket } from 'ws'
 import type { Frame, LocalClientSink } from './backendSocket.js'
-import { attachLocalWsServer, type LocalWsBackend, type LocalWsServer, type LocalWsServerOptions } from './localWsServer.js'
+import { attachLocalWsServer, LOCAL_WS_CLOSE_GRACE_MS, type LocalWsBackend, type LocalWsServer, type LocalWsServerOptions } from './localWsServer.js'
 import { encodeTerminalLocal, TerminalBinaryKind, type TerminalBinaryClear } from './lib/terminalBinary.js'
 import { listenLocalSocket } from './lib/localSocket.js'
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -82,6 +82,23 @@ describe('local CLI WebSocket', () => {
     const port = (server.address() as AddressInfo).port
     return `ws://127.0.0.1:${port}/api/local-ws`
   }
+
+  it('closes within a moment, however long a client takes to answer the close', async () => {
+    // A client that never answers the close frame: a raw socket past the handshake that reads nothing.
+    const url = new URL(await start(new FakeBackend()))
+    const raw = net.connect(Number(url.port), '127.0.0.1')
+    await new Promise<void>((resolve) => raw.once('connect', () => resolve()))
+    raw.write(['GET /api/local-ws HTTP/1.1', `Host: 127.0.0.1:${url.port}`, 'Upgrade: websocket', 'Connection: Upgrade',
+      'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==', 'Sec-WebSocket-Version: 13', '', ''].join('\r\n'))
+    await new Promise<void>((resolve) => raw.once('data', () => resolve()))
+    raw.pause()
+    const started = performance.now()
+    await local!.close()
+    local = null
+    // ws alone waits 30 s for it.
+    expect(performance.now() - started).toBeLessThan(LOCAL_WS_CLOSE_GRACE_MS + 2_000)
+    raw.destroy()
+  })
 
   it('keeps notification identities on the local read and snapshot paths', async () => {
     const backend = new FakeBackend(), seen = vi.fn(), unread = vi.fn()
@@ -1022,6 +1039,42 @@ describe('local CLI WebSocket', () => {
     const ws = new WebSocket(url, ['legacy-client-label'])
     await onceOpen(ws)
     ws.close()
+  })
+
+  it('takes the core\'s own services by their token, whatever machine id they name', async () => {
+    // A signed-in core serves under its account's machine id; its services name this computer's.
+    const accepted: string[] = []
+    const services = {
+      accept: (service: string, token: string) => {
+        if (token !== 'boot-token') return null
+        accepted.push(service)
+        return { receive: vi.fn(), closed: vi.fn() }
+      },
+    }
+    const url = await start(new FakeBackend(), { services })
+    const ws = new WebSocket(url)
+    await onceOpen(ws)
+    const connected = onceMessage(ws)
+    ws.send(JSON.stringify({
+      type: 'machine_select',
+      payload: { machineId: 'this-computer-id', localProtocolVersion: 1, role: 'service', service: 'search', token: 'boot-token' },
+    }))
+    await expect(connected).resolves.toMatchObject({ type: 'connected', payload: { machineId, service: 'search' } })
+    expect(accepted).toEqual(['search'])
+    ws.close()
+
+    // The token is the check: a wrong one is refused, whichever machine id it names.
+    for (const named of [machineId, 'this-computer-id']) {
+      const wrong = new WebSocket(url)
+      await onceOpen(wrong)
+      const closed = new Promise<number>((resolve) => wrong.once('close', resolve))
+      wrong.send(JSON.stringify({
+        type: 'machine_select',
+        payload: { machineId: named, localProtocolVersion: 1, role: 'service', service: 'search', token: 'guessed' },
+      }))
+      await expect(closed).resolves.toBe(4401)
+    }
+    expect(accepted).toEqual(['search'])
   })
 
   it('rejects browser origins and machine-id mismatches', async () => {

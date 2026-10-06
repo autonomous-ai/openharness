@@ -24,11 +24,13 @@ function setup(row: RegisteredSession | null = session()) {
   const tmuxBackend = {
     holdOpen: vi.fn(async () => ({ state: 'succeeded' })),
     respawn: vi.fn(async () => ({ state: 'succeeded' })),
+    respawnRefusal: vi.fn(async (request: { env?: Record<string, string> }) => request.env ? 'too old' : null),
   }
   const deps: PaneSwapDeps = {
     byAgent: vi.fn(() => row ?? undefined),
     tmuxBackend: tmuxBackend as unknown as PaneSwapDeps['tmuxBackend'],
     prepareSessionResume: vi.fn(),
+    keepAbandonedConversation: vi.fn(),
   }
   return { deps, tmuxBackend, swap: createPaneSwap(deps) }
 }
@@ -54,6 +56,11 @@ describe('the pane-process swap', () => {
     const swapDeps = swap.paneSwapDeps(session(), runtime, { env: { GRID_KEY: 'k' } })
     swapDeps.prepareResume?.()
     expect(deps.prepareSessionResume).toHaveBeenCalledWith(session())
+    swapDeps.keepAbandoned?.()
+    expect(deps.keepAbandonedConversation).toHaveBeenCalledWith(session())
+    // Asked of tmux with the relaunch's own environment, before anything is stopped.
+    expect(await swapDeps.respawnRefusal?.()).toBe('too old')
+    expect(await swap.paneSwapDeps(session(), runtime).respawnRefusal?.()).toBeNull()
     expect(await swapDeps.holdOpen()).toEqual({ ok: true })
     tmuxBackend.holdOpen.mockResolvedValueOnce({ state: 'failed', reason: 'pane gone' } as never).mockResolvedValueOnce({ state: 'unknown' } as never)
     expect(await swapDeps.holdOpen()).toEqual({ ok: false, reason: 'pane gone' })

@@ -9,7 +9,7 @@ import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { env } from '../config/env.js'
 import {
-  bundledDshRegistry, HARNESS_MONOREPO, readRegistryDir, readStoreDir, registryEntry, registrySourceUrl,
+  bundledDshRegistry, HARNESS_MONOREPO, readRegistryDir, readStoreDir, registrySourceUrl,
   resetBundledDshRegistry, storeEntry, StoreExampleSchema, StoreFactsSchema,
 } from './registry.js'
 
@@ -177,8 +177,6 @@ describe('bundledDshRegistry, as baked into a release', () => {
     const first = bundledDshRegistry()
     expect(first.map((entry) => `${entry.id} ${entry.name}`)).toEqual(['alpha/one Alpha', 'pane/viewer Pane', 'zeta/one Zeta'])
     expect(bundledDshRegistry()).toBe(first)
-    expect(registryEntry('zeta/one')?.repo).toBe('https://example.com/zeta')
-    expect(registryEntry('nobody/here')).toBeUndefined()
   })
 
   it('a malformed bake is an empty registry, not a crash', () => {

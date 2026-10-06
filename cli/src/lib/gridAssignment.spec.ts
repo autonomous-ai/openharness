@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { assignmentMatches, classifyGridAssignment, probeGridAssignment, readOpencodeGridAssignment, readPiGridAssignment } from './gridAssignment.js'
+import { classifyGridAssignment, probeGridAssignment, readOpencodeGridAssignment, readPiGridAssignment } from './gridAssignment.js'
 import { buildGridEngineLaunch, gridCapableEngines, type GridLaunchOverride } from './gridLaunch.js'
 import type { AgentEngine } from '../engines/types.js'
 import { clearProcessEnvCache, parsePsEnviron } from './processEnv.js'
@@ -77,9 +77,9 @@ describe('classifyGridAssignment', () => {
       .toEqual({ baseUrl: RELAY_V1, model: 'DeepSeek-V4-Flash-0731' })
     // ⚠️ Grok ALWAYS carries `-m`, unlike codex: its grid credential rides on a declared model block,
     // so "let the grid route" is spelled `-m Auto` rather than by omitting the flag. Reporting that id
-    // verbatim would print `Auto` where the app prints its own Auto row from null, and
-    // `assignmentMatches` would compare 'Auto' against null and call every routed agent misplaced,
-    // forever — the same trap opencode's reader documents.
+    // verbatim would print `Auto` where the app prints its own Auto row from null, and a check that the
+    // agent is where the person put it would compare 'Auto' against null and call every routed agent
+    // misplaced, forever — the same trap opencode's reader documents.
     expect(classifyGridAssignment('grok', env, 'grok -m Auto'))
       .toEqual({ baseUrl: RELAY_V1, model: null })
   })
@@ -128,9 +128,6 @@ describe('Pi, whose endpoint lives in a file', () => {
       baseUrl: RELAY_V1,
       model: 'GLM-4.7-Flash',
     })
-    await expect(readPiGridAssignment(env, args)).resolves.toSatisfy(
-      (a: { baseUrl: string; model: string | null }) => assignmentMatches(a, NETWORK_ID, 'GLM-4.7-Flash'),
-    )
   })
 
   it('a config directory that is gone reads as unknown, not as fine', async () => {
@@ -153,33 +150,6 @@ describe('Pi, whose endpoint lives in a file', () => {
     }))
     const env = parsePsEnviron(`${args} PI_CODING_AGENT_DIR=${dir}`)
     await expect(readPiGridAssignment(env, args)).resolves.toBeNull()
-  })
-})
-
-describe('assignmentMatches', () => {
-  const assignment = { baseUrl: RELAY, model: 'GLM-4.7-Flash' }
-
-  it('matches the grid and the model the user picked', () => {
-    expect(assignmentMatches(assignment, NETWORK_ID, 'GLM-4.7-Flash')).toBe(true)
-  })
-
-  it('does not match a different grid, or the same grid on a different model', () => {
-    expect(assignmentMatches(assignment, 'grid-e3b210eacc5b4cdf', 'GLM-4.7-Flash')).toBe(false)
-    expect(assignmentMatches(assignment, NETWORK_ID, 'DeepSeek-V4-Flash-0731')).toBe(false)
-    expect(assignmentMatches(assignment, NETWORK_ID, null)).toBe(false)
-  })
-
-  it('treats an unknown assignment as not matching, never as fine', () => {
-    // The whole point: "we could not tell" must cost a needless move offer, never a silent claim that
-    // an agent is already where the user asked for.
-    expect(assignmentMatches(null, NETWORK_ID, null)).toBe(false)
-    expect(assignmentMatches(undefined, NETWORK_ID, null)).toBe(false)
-  })
-
-  it('matches an unpinned model only against an unpinned choice', () => {
-    const unpinned = { baseUrl: RELAY, model: null }
-    expect(assignmentMatches(unpinned, NETWORK_ID, null)).toBe(true)
-    expect(assignmentMatches(unpinned, NETWORK_ID, 'GLM-4.7-Flash')).toBe(false)
   })
 })
 
@@ -237,8 +207,8 @@ describe('readOpencodeGridAssignment', () => {
   it('reports the router as NO model, the way every other engine does', async () => {
     // OpenCode is the only engine whose provider block must name something, so a launch with no
     // model picked writes the relay's router id there. Letting that id back out would be the app's
-    // own "Auto" under a second name: the header would print the raw id, and `assignmentMatches`
-    // would compare it against null and call every such agent mis-targeted forever.
+    // own "Auto" under a second name: the header would print the raw id, and a check that the agent is
+    // where the person put it would compare it against null and call every such agent mis-targeted forever.
     const path = write(config(RELAY, ['Auto']))
     await expect(readOpencodeGridAssignment({ OPENCODE_CONFIG: path }))
       .resolves.toEqual({ baseUrl: RELAY, model: null })

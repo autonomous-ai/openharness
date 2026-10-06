@@ -13,6 +13,47 @@ display/SSH interaction is still unverified.
 
 ## Next release priorities
 
+### NVIDIA readiness
+
+The installed PC session starts a one-shot user check 15 seconds after the
+workspace starts. It is inert on the installer and on computers without NVIDIA
+GPUs. A per-user lock and boot/kernel/driver/device/probe fingerprint prevent
+screen restarts from repeating it. Each new boot or relevant change rechecks;
+`harness hardware --check-gpu` explicitly repeats it. Reports and the last fully
+working result are atomic local JSON in `~/.local/state/harness-os/gpu/`.
+They are user diagnostics, never privileged authorization or proof for a release.
+
+Each owned card is addressed by PCI bus ID. The CUDA Driver API checks device
+visibility, a 4 KiB memory upload/readback, and 1,024 integer results from a tiny
+PTX kernel. A separate EGL device context renders and reads three colors using
+the NVIDIA renderer. No CUDA toolkit, compiler, model or inference runtime enters
+the image. Normal user permissions apply. Reserved devices are skipped, and
+headless graphics failures remain explicitly unverified rather than labelling
+working compute broken. Offscreen EGL does not establish compositor, browser,
+physical display or suspend behavior; the memory sample is not a stress test.
+
+Each subprocess has a 20-second deadline within a 120-second total budget; hangs,
+crashes, incomplete responses and wrong readbacks are failures with the last
+operation recorded. All contexts are private and released. The check never
+resets a GPU, unloads modules, changes packages, restarts an agent or reboots.
+Only actionable failure gets a short existing Harness status message. Package
+replacement/restart-pending state defers verification until reboot. Existing full
+snapshot updates keep the kernel and driver together and preserve the original
+root/boot checkpoint; failures retain that recovery path, without an automatic
+rollback that might interrupt work. Local-model provisioning remains the TUI's
+responsibility.
+
+The API sources are NVIDIA's [Driver API](https://docs.nvidia.com/cuda/cuda-programming-guide/03-advanced/driver-api.html),
+[stable context ABI](https://docs.nvidia.com/cuda/archive/12.9.1/cuda-driver-api/group__CUDA__CTX.html),
+and Khronos [EGL device displays](https://registry.khronos.org/EGL/extensions/EXT/EGL_EXT_platform_device.txt),
+[render-node mapping](https://registry.khronos.org/EGL/extensions/EXT/EGL_EXT_device_drm_render_node.txt),
+and [CUDA device mapping](https://registry.khronos.org/EGL/extensions/NV/EGL_NV_device_cuda.txt).
+Portable tests include a compiled C ABI fixture with corrupt-memory, wrong-answer,
+async-error and wrong-device cases. Such fixtures establish error handling, not
+physical NVIDIA acceptance. Real cards must still pass these checks and actual
+display, browser, update/recovery and sleep/wake testing before a family is called
+supported.
+
 The next preview improves the complete experience before expanding the interface.
 Keep the existing terminal, agents and optional browser. Hardware integration must
 not introduce a desktop, control panel or extra launcher. Update checks use a
@@ -417,6 +458,27 @@ change, explicitly approved for all platforms. Publishing the ISO did not releas
 these through the general TUI channel. The small updater adds no changes to `tui/`
 or `cli/`.
 
+### Public update acceptance
+
+Run the OS workflow with `checks=public-update` and the candidate's successful
+`image_run_id`. The producer must retain both `programmer-os-x86_64` and
+`harness-os-candidate-inputs`. This check compares every update-package file,
+permission, owner and link with the actual ISO before installing the original
+preview 14 image to a disposable encrypted disk.
+
+The stock updater receives the candidate through its ordinary HTTPS URLs. A
+temporary server and certificate authority exist only in the disposable test
+machine; host trust, public feeds, updater code and sudo policy stay unchanged.
+The test first proves that the guest rejects the untrusted certificate. Its
+private metadata holds the separate hn/CLI channels at the image's baselines.
+
+One real Super+u with cleared sudo credentials must apply the package, preserve
+agent/daemon/terminal processes and keyboard input, retain a verified recovery
+checkpoint, and cold boot into the candidate with project files unchanged. The
+receipt records the image producer and observer separately. This establishes
+the installed public update path with private transport, not CDN publication,
+kernel migration or physical hardware support. The job never publishes.
+
 ## Installation and first-use onboarding
 
 The USB starts `harness-install.service`: foot runs the offline installer directly.
@@ -546,7 +608,7 @@ repositories remain mutable; this is not a claim of an immutable package snapsho
 
 The tracked fixture accounts for Fedora's browser executable and labwc action
 name. It selects shared session files explicitly and excludes the PC installer,
-update timer, pacman configuration and x86 driver hooks. Its empty-password account
+pacman configuration and x86 driver hooks. Its empty-password account
 and root console exist only on the private regular-file disk and local QEMU socket;
 no host block device, SSH service or public listener is exposed. These test settings
 must never enter a hardware image.
@@ -561,7 +623,7 @@ the writable private disk/container are removed. A passing run establishes this 
 only, not hardware installation, GPU acceleration, suspend or Fedora recovery.
 
 ```sh
-python3 os/tests/arm_session.py --runtime os/work/runtime \
+python3 os/tests/arm_session.py --package os/work/fedora-package \
   --output os/test-results/arm-session
 ```
 
@@ -569,6 +631,76 @@ Use a native ARM Linux runner with the tools listed in `os-arm-session.yml`.
 The two recorded hosted ARM runs lacked KVM; the second TCG run reached Wi-Fi and
 accepted real keyboard input, but failed with a blank OpenCode pane. That failure
 is retained and is not graphical acceptance.
+
+Fresh fixtures install the native `harness-os-session` RPM instead of copying an
+unowned overlay. The RPM is a component of the future Fedora/Asahi Harness image:
+it owns the shared session, verified ARM runtime, Fedora guidance and per-user
+update units. It contains no installer, base-system updater, kernel, firmware,
+boot files, `/etc` configuration, account provisioning or service scriptlets.
+Package installation does not start or restart a session. Chromium is optional;
+the private fixture still provisions OpenCode separately and records its npm lock.
+That agent input is not yet a pinned, package-owned image component.
+
+Build in the pinned Fedora aarch64 container from `arm-session.lock.json`, with
+`python3`, `git`, `rpm-build`, `tar` and `gzip` installed from signed Fedora repositories:
+
+```sh
+python3 os/tools/build-fedora-package.py --runtime /path/to/runtime \
+  --runtime-source FULL_RUNTIME_PRODUCER_SHA --output /path/to/fresh-package
+python3 os/tests/arm_session.py --package /path/to/fresh-package \
+  --output os/test-results/arm-session --prepare-only
+```
+
+The package source and explicitly selected runtime producer remain separate in
+the manifest. Both must be clean, with native ARM ELF and runtime hashes checked.
+An older immutable runtime can therefore validate packaging without rebuilding
+unrelated TUI/CLI sources. Payload timestamps, RPM build time and buildhost are
+fixed; compare actual RPM bytes with the same recorded Fedora RPM toolchain.
+These private artifacts are unsigned and unpublished; their manifest checksums
+are checked before fixture installation. This is not a product update channel.
+
+The **Harness OS private Fedora package** workflow takes a successful private
+runtime run and its full producer SHA. It builds release 1 twice and release 2
+once, compares repeated RPM bytes, and installs, upgrades and removes the package
+in a fresh native Fedora container. First it provisions the RPM's declared signed
+Fedora dependencies with their normal presets, retaining package inventories and
+the full `/etc` configuration delta. It then creates an existing account, project,
+personal configuration and explicit user-unit mask before the Harness transactions.
+Those transactions check the original runtime artifact, exact installed versions,
+owned files and strict account/project/configuration preservation. This proves
+preservation on an existing Fedora base; installing missing platform dependencies
+can change Fedora defaults. Only the private local Harness RPMs bypass signature
+checks; repository dependencies still require Fedora signatures.
+
+Use its `first/` and `upgrade/` artifacts with the immutable graphical fixture
+to check the packaged session across an actual VM reboot and user runtime update:
+
+```sh
+python3 os/tests/fedora_package_vm.py \
+  --fixture /path/to/harness-arm-session-fixture \
+  --fixture-source FULL_IMAGE_PRODUCER_SHA \
+  --packages /path/to/harness-fedora-package \
+  --package-source FULL_PACKAGE_PRODUCER_SHA \
+  --updates /path/to/fast-update-fixture \
+  --updates-source FULL_RUNTIME_PRODUCER_SHA \
+  --output os/test-results/fedora-package-vm
+```
+
+Package and update artifacts must declare the same original runtime identity.
+This check preserves a running agent and daemon through both RPM transactions,
+then tests the packaged session's keyboard, platform commands and per-user update
+activation/rollback after reboot. The private user's update timer is masked across
+the reboot and starts only after the verified local feed is ready; no public update is consumed.
+The RPM itself contains the normal timer. Neither this check nor the container
+lifecycle test establishes Apple hardware installation or Fedora base recovery.
+
+The Fedora profile reports runtime provenance through `hn-os status`. The
+`harness install/upgrade/rollback` and `hn-os install/checkpoint/update/recover`
+commands reject this profile before invoking PC helpers. `harness updates` and
+Super+u retain verified per-user updates, while the system channel is explicitly
+unavailable. Fedora/Asahi retains base-system and platform update/recovery
+responsibility. The test-only login, networking policy, empty-password account,
+root console and autologin remain in `arm_session_root.sh`, outside the RPM.
 
 The workflow defaults to `prepare_only=true`, which uploads an unbooted, compressed
 private test disk and kernel with their hashes and exact source identity. Its
@@ -594,6 +726,68 @@ tests that older image, not product changes in the newer test checkout.
 
 Apple firmware provisioning, physical drivers, platform installation and Fedora
 update/recovery integration remain separate work before releasing this port.
+
+### Explicit Fedora login setup
+
+The private session RPM includes `harness-session-setup`, implemented separately
+in `fedora_session.py`. Installing the RPM remains passive. On an existing Fedora
+Asahi Minimal system, an administrator may install Fedora's `greetd` package and
+explicitly select an existing account with `enable --user USER --autologin`.
+The account must already have a usable recovery password and sudo permission to
+disable setup. The helper never creates accounts or edits their homes/profiles.
+
+Fedora's greetd package supplies PAM session setup, logind integration and its
+conditional SELinux policy. Its standard display-manager alias and graphical
+target handle tty1 ordering/conflicts. Harness adds one configuration, one service
+drop-in and one selected-user sudoers rule for the two exact Wi-Fi form commands.
+`visudo` validates that rule before activation. A durable receipt precedes changes;
+failure rolls them back, `disable` restores the exact previous target, and edited
+managed files are preserved for explicit conflict resolution. Enable and disable
+never start, stop or restart the current session; they affect the next boot.
+Other ttys and vendor login configuration remain intact.
+
+The Fedora 44 aarch64 `greetd-0.10.3-6.fc44` RPM has 1,355,071 bytes of regular-file
+payload (443,637 bytes downloaded); its matching SELinux package adds 10,359 bytes
+of payload (20,682 bytes downloaded). This is a PAM login daemon and text greeter,
+without another desktop environment. These measurements exclude already-shared
+Fedora dependencies and filesystem allocation; record the actual dependency
+transaction in native validation. The upstream source RPM and artifact hashes
+belong in the ignored validation receipt. Fedora's normal policy supplies the
+session's authenticated fallback and runtime directory instead of copying the
+VM fixture's empty-password/profile autostart into an existing installation.
+
+Run the focused portable contracts with:
+
+```sh
+python3 -m unittest discover -s os/tests -p 'test_fedora_session.py'
+python3 -m unittest discover -s os/tests -p 'test_fedora_package.py'
+```
+
+These exercise temporary-root transactions, account prerequisites, conflicting
+and edited configuration, interruption recovery and the passive RPM payload.
+They do not establish actual PAM authentication, SELinux enforcement or graphical
+boot. Those require the separate native Fedora VM sequence and ultimately real
+Apple hardware. With an exact-source immutable fixture, the private login driver
+normalizes only its disposable clone, installs signed Fedora login/SELinux
+packages, and requires enforcing policy after a cold boot:
+
+```sh
+python3 os/tests/fedora_session_vm.py \
+  --fixture /path/to/harness-arm-session-fixture \
+  --fixture-source FULL_IMAGE_PRODUCER_SHA \
+  --output os/test-results/fedora-session-login
+```
+
+It records the setup source separately from the image/runtime, tests QMP virtual
+keyboard password login and sudo, next-boot autologin, the two exact Wi-Fi forms,
+authenticated recovery and disable back to the prior console. It does not relax
+SELinux enforcement to pass. The candidate helper is overlaid onto the existing
+RPM fixture; the portable payload check separately covers its package exposure.
+
+The setup does not touch Apple partitioning, ESP/m1n1/U-Boot/GRUB,
+firmware, kernels or Asahi's speaker-safety configuration. Fedora/Asahi remains
+responsible for base-system updates and recovery; Super+u remains the verified
+per-user runtime update path described above.
 
 ### Native runtime updates in the ARM fixture
 

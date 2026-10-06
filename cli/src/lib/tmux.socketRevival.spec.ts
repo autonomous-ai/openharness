@@ -60,6 +60,19 @@ describe('a tmux server whose socket was removed while it ran', () => {
     expect(console.log).toHaveBeenCalledWith('[terminal] tmux\'s socket was removed while its server (pid 4242) still ran — asked it to make a new one')
   })
 
+  it('knows a server by the name Linux gives it as well as by its executable, and never signals a client', async () => {
+    // Linux reports the server as `tmux: server` (tmux sets it with prctl, compat/setproctitle.c); macOS
+    // by its path. Matched on `tmux` alone, no socket was ever made again on Linux.
+    await rememberTmuxServer()
+    tmux.comm = 'tmux: server'
+    expect(await reviveRemovedTmuxSocket()).toBe(true)
+    tmux.comm = '/opt/homebrew/bin/tmux'
+    expect(await reviveRemovedTmuxSocket()).toBe(true)
+    tmux.comm = 'tmux: client'
+    expect(await reviveRemovedTmuxSocket()).toBe(false)
+    expect(signals).toEqual([[4242, 'SIGUSR1'], [4242, 'SIGUSR1']])
+  })
+
   it('signals nothing with no server remembered, one that has exited, or a pid now running something else', async () => {
     expect(await reviveRemovedTmuxSocket()).toBe(false)
     await rememberTmuxServer()

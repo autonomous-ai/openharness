@@ -115,6 +115,8 @@ class _WebStoreBar extends StatelessWidget {
   final VoidCallback onOpen;
   final VoidCallback onDismiss;
 
+  static const _iconSize = 40.0;
+
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
@@ -140,8 +142,20 @@ class _WebStoreBar extends StatelessWidget {
                     onPressed: onDismiss,
                     icon: const Icon(AppIcons.close, size: 16),
                     color: grid.AppPalette.textSecondary,
+                    visualDensity: VisualDensity.compact,
                   ),
                 ),
+                // The app's own icon, as its store page shows it: what makes
+                // this bar read as an app to get, not a line of chrome. The
+                // asset carries its rounded corners, so it is drawn bare.
+                Image.asset(
+                  'assets/app_icon.png',
+                  key: const ValueKey('web-store-banner-icon'),
+                  width: _iconSize,
+                  height: _iconSize,
+                  filterQuality: FilterQuality.medium,
+                ),
+                const SizedBox(width: 10),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -153,11 +167,13 @@ class _WebStoreBar extends StatelessWidget {
                         overflow: TextOverflow.ellipsis,
                         style: AppType.label(
                           color: grid.AppPalette.textPrimary,
+                          fontWeight: FontWeight.w600,
                         ),
                       ),
+                      // Wraps on a narrow phone rather than losing its end.
                       Text(
                         'Run your fleet from your phone',
-                        maxLines: 1,
+                        maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                         style: AppType.caption(
                           color: grid.AppPalette.textSecondary,
@@ -166,10 +182,15 @@ class _WebStoreBar extends StatelessWidget {
                     ],
                   ),
                 ),
-                const SizedBox(width: 12),
+                const SizedBox(width: 8),
                 FilledButton(
                   key: const ValueKey('web-store-banner-open'),
                   onPressed: onOpen,
+                  // Narrower than a form's button: the words beside it need
+                  // the width on a phone.
+                  style: FilledButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                  ),
                   child: const Text('Get the app'),
                 ),
               ],

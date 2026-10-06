@@ -216,6 +216,43 @@ describe('registry remote display names', () => {
     expect(registry.updateTitle('session-host', 'Ship settings page')?.title).toBe('Ship settings page')
   })
 
+  it('refuses every name the machine has had while the daemon ran, not only the one it started with', async () => {
+    // A laptop's name follows its network, and tmux titles each new pane with the name of the moment.
+    // Read once at start, a pane made after the machine was renamed gave its agent the machine's name.
+    const hostFile = join(dataDir, 'hostname')
+    writeFileSync(hostFile, 'laptop-one.lan')
+    process.env.HARNESSD_TEST_HOSTNAME_FILE = hostFile
+    try {
+      const transcriptPath = join(dataDir, 'session-roam.jsonl')
+      writeFileSync(transcriptPath, '{}\n')
+      const { registry, projectDisplayName } = await loadRegistryModule()
+      const { machineNames } = await import('./machineNames.js')
+      registry.load()
+      const registered = registerProcess(registry, {
+        launcherId: 'h8', sessionId: 'session-roam', transcriptPath, tmuxPane: '%8', cwd: '/tmp/demo', title: 'laptop-one.lan',
+      })
+      expect(registered?.entry.title).toBeNull()
+
+      // The machine joins another network; the title sweep reads its name again.
+      writeFileSync(hostFile, 'laptop-two.local')
+      machineNames.observe()
+      expect(registry.updateTitle('session-roam', 'laptop-two.local')?.title).toBeNull()
+      expect(registry.updateTitle('session-roam', 'laptop-two')?.title).toBeNull()
+      // A pane made under the old name keeps it.
+      expect(registry.updateTitle('session-roam', 'laptop-one.lan')?.title).toBeNull()
+      expect(registry.updateTitle('session-roam', 'Ship settings page')?.title).toBe('Ship settings page')
+
+      // A title taken before the machine had that name stops showing once it has it.
+      const retitled = registry.updateTitle('session-roam', 'laptop-three.lan')!
+      expect(projectDisplayName(retitled)).toBe('laptop-three.lan')
+      writeFileSync(hostFile, 'laptop-three.lan')
+      machineNames.observe()
+      expect(projectDisplayName(retitled)).toBe('demo · sess')
+    } finally {
+      delete process.env.HARNESSD_TEST_HOSTNAME_FILE
+    }
+  })
+
   it('only adds or updates agent-names.json entries', async () => {
     const transcriptPath = join(dataDir, 'session-3.jsonl')
     writeFileSync(transcriptPath, '{}\n')
@@ -1485,6 +1522,30 @@ describe('registry across a reboot and pane loss', () => {
     expect(registry.byProcess('claude', processIdentity(4242))?.agentId).toBe('agent-a')
   })
 
+  it('does not take a step of the wall clock for a reboot', async () => {
+    // A boot named by the moment it began moved with the clock: a daemon restarted after an NTP step,
+    // a virtual machine resumed or a long sleep marked every agent dormant (round 29). macOS has a
+    // per-boot id; Linux always used its own.
+    const transcriptPath = join(dataDir, 'session-a.jsonl')
+    writeFileSync(transcriptPath, '{}\n')
+    chmodSync(dataDir, 0o755)
+    writeLegacyStateFile(join(dataDir, 'registry.json'), JSON.stringify([persistedRow(transcriptPath)]))
+    const first = await loadRegistryModule()
+    first.registry.load()
+    expect(first.registry.rebootedSinceLastRun).toBe(false)
+
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      vi.setSystemTime(Date.now() + 3 * 3_600_000)
+      const again = await loadRegistryModule()
+      again.registry.load()
+      expect(again.registry.rebootedSinceLastRun).toBe(false)
+      expect(again.registry.byAgent('agent-a')?.processIdentity).toEqual(processIdentity(4242))
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('keeps the permission mode from agent_create through a bind and a reload', async () => {
     const transcriptPath = join(dataDir, 'session-p.jsonl')
     writeFileSync(transcriptPath, '{}\n')
@@ -1788,6 +1849,37 @@ describe('registry across a reboot and pane loss', () => {
     expect(registry.byAgent(b)?.tmuxPane).toBe('%1')
     const saved = JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf-8')) as Array<Record<string, unknown>>
     expect(saved.map((row) => row.agentId).sort()).toEqual([a, b].sort())
+  })
+
+  it('stops holding saves back for a transaction that outlives its hold, and saves what it has changed', async () => {
+    // A reconcile pass stuck inside its transaction held every save back for as long as it ran.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { registry } = await loadRegistryModule()
+    registry.load()
+    const saved = () => (JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf-8')) as Array<Record<string, unknown>>).map((row) => row.agentId)
+    let finish!: () => void
+    let inside!: string
+    const stuck = registry.transaction(async () => {
+      inside = registry.openProcessAgent({ engine: 'claude', tmuxPane: '%7', processIdentity: processIdentity(71) })!.entry.agentId
+      await new Promise<void>((resolve) => { finish = resolve })
+    }, { holdSavesMs: 50 })
+    expect(existsSync(join(dataDir, 'registry.json')) ? saved() : []).not.toContain(inside)
+    await vi.waitFor(() => expect(saved()).toContain(inside))
+    expect(warn).toHaveBeenCalledWith('[registry] a transaction has held saves back for 50 ms; saving without waiting for it')
+    // Saved as they happen from here on, and the stuck apply finishing changes nothing about that.
+    const after = registry.openProcessAgent({ engine: 'claude', tmuxPane: '%8', processIdentity: processIdentity(72) })!.entry.agentId
+    expect(saved()).toContain(after)
+    finish()
+    await stuck
+    // One that finishes in time holds its saves to the end, as before.
+    let during: string[] = []
+    await registry.transaction(() => {
+      registry.openProcessAgent({ engine: 'claude', tmuxPane: '%9', processIdentity: processIdentity(73) })
+      during = saved() as string[]
+    }, { holdSavesMs: 60_000 })
+    expect(during).toHaveLength(2)
+    expect(saved()).toHaveLength(3)
+    warn.mockRestore()
   })
 
   it('adopts a new process into an agent whose identity was cleared, keeping its id and session', async () => {

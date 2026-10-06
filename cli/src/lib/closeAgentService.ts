@@ -37,8 +37,12 @@ export function inspectCloseActivity(session: CloseSession, screen: string | nul
   if (turnOpen === true) return 'working'
   if (!screen) return 'unknown'
   const footer = stripVTControlCharacters(screen).split('\n').slice(-16).join('\n')
-  // Codex can be between turns of an active goal; Claude can have background tasks.
-  if (/\bgoal\s+active\b|\b[1-9]\d*\s+background\s+(?:tasks?|agents?)\b/i.test(footer)
+  // Codex can be between turns of an active goal, and Claude can have background tasks. Codex has
+  // said an active goal two ways: `◎ /goal active (41m)` in its older footers, and `Pursuing goal (41m)`
+  // on its status line since (0.160, tui/src/bottom_pane/footer.rs), where only the older wording was
+  // known and an agent between the turns of its goal read as idle, for a close to take. Its other goal
+  // states (paused, stalled, unmet, abandoned, achieved) are not work in progress.
+  if (/\bgoal\s+active\b|\bpursuing goal\b|\b[1-9]\d*\s+background\s+(?:tasks?|agents?)\b/i.test(footer)
     || terminalActivity(engine, screen)) return 'working'
   const hold = teamWriteHold(engine, screen)
   if (hold === 'team_waiting_draft') return 'draft'

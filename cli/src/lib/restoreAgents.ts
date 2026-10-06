@@ -31,6 +31,7 @@ import { isTerminalEngine, type AgentEngine } from '../engines/types.js'
 import type { AgentLaunch, ProcessIdentity, RegisteredSession } from './registry.js'
 import type { TerminalRuntimeRef, TmuxRuntimeRef } from './terminalTypes.js'
 import { terminalRouteKey } from './terminalRuntime.js'
+import { resumesConversation } from './resumeCapability.js'
 
 export interface RestoreLaunch {
   argv: string[]
@@ -44,6 +45,8 @@ export const GRID_CREDENTIAL_REQUIRED = 'GRID_CREDENTIAL_REQUIRED'
 
 export interface RestoreAgentsDeps {
   retainStopped?: (entry: RegisteredSession, paneAlive: boolean) => void
+  /** Keeps a conversation the restore had to leave for a new one as a stopped harness (keepAbandonedConversation.ts). */
+  keepAbandoned?: (left: RegisteredSession) => void
 
   registry: {
     list(): RegisteredSession[]
@@ -62,12 +65,14 @@ export interface RestoreAgentsDeps {
    * Whether the row's PANE is still there — a live pane in a session this daemon created. Every
    * pane is a shell with the engine inside it, so a pane can outlive its engine: that is a terminal
    * (a bare one has no engine process to find at all), not a pane to rebuild. Optional so a caller
-   * without tmux inventory (tests) treats a pane with no engine process as gone.
+   * without tmux inventory (tests) treats a pane with no engine process as gone. `'unknown'` when the
+   * inventory could not be read.
    */
-  livePane?: (runtime: TmuxRuntimeRef) => Promise<boolean>
+  livePane?: (runtime: TmuxRuntimeRef) => Promise<boolean | 'unknown'>
   /** The engine process still running in this row's pane, or null when tmux does not know the pane
-   *  at all — including when no tmux server is running — or the pane has become something else. */
-  liveProcess: (entry: RegisteredSession, runtime: TmuxRuntimeRef) => Promise<ProcessIdentity | null>
+   *  at all — including when no tmux server is running — or the pane has become something else.
+   *  `'unknown'` when tmux or `ps` could not be asked. */
+  liveProcess: (entry: RegisteredSession, runtime: TmuxRuntimeRef) => Promise<ProcessIdentity | null | 'unknown'>
   /** The pane's launch — engine argv plus whatever puts it back on its grid / profile. A grid the
    *  machine cannot honour (unsupported engine, tmux too old, config dir unwritable) is a refusal. */
   buildLaunch: (entry: RegisteredSession, opts: { resumeSessionId?: string }) => Promise<RestoreLaunchResult>
@@ -77,11 +82,14 @@ export interface RestoreAgentsDeps {
   >
   /** `tmux respawn-pane` over the restored pane — the resume → fresh fallback. */
   respawn: (runtime: TmuxRuntimeRef, launch: RestoreLaunch) => Promise<{ ok: boolean; reason?: string }>
+  /** A pane was rebuilt on this conversation: its engine is a new one (core/transcripts/relaunch.ts). */
+  engineStarted?: (sessionId: string) => void
   /** One probe of the pane for a recognizable engine process. */
   probeProcess: (runtime: TmuxRuntimeRef, engine: AgentEngine) => Promise<ProcessIdentity | null>
-  /** Null when tmux no longer knows the pane. `engineExit` set: the engine left and the pane is a
-   *  shell now (`ENGINE_EXIT_PANE_OPTION`), which for a restore is the same news as `dead`. */
-  paneState: (runtime: TmuxRuntimeRef) => Promise<{ dead: boolean; engineExit?: number | null } | null>
+  /** `'gone'` when tmux no longer knows the pane, `'unknown'` when it could not be asked (`tmuxPaneState`).
+   *  `engineExit` set: the engine left and the pane is a shell now (`ENGINE_EXIT_PANE_OPTION`), which for
+   *  a restore is the same news as `dead`. */
+  paneState: (runtime: TmuxRuntimeRef) => Promise<{ dead: boolean; engineExit?: number | null } | 'gone' | 'unknown'>
   clearRemainOnExit: (runtime: TmuxRuntimeRef) => Promise<void>
   holdRoute: (routeKey: string, autoReleaseMs: number) => void
   releaseRoute: (routeKey: string) => void
@@ -91,6 +99,8 @@ export interface RestoreAgentsDeps {
   budgetMs?: number
   /** How long the engine must stay up after appearing before the pane is handed over. */
   settleMs?: number
+  /** The waits between asking a survey probe again (`SURVEY_RETRY_MS`). */
+  surveyRetryMs?: readonly number[]
   sleep?: (ms: number) => Promise<void>
 }
 
@@ -99,6 +109,60 @@ export interface RestoreSummary {
   restored: string[]
   skipped: Array<{ agentId: string; reason: string }>
   failed: Array<{ agentId: string; reason: string }>
+  /** Agents left as they were because tmux or `ps` could not say whether their pane or engine lives.
+   *  Discovery must not retire them this boot: a pane restore never looked at is not one that closed. */
+  unsurveyed: string[]
+}
+
+/** The waits between asking again when the survey's probes could not answer: about 8 s in all, the
+ *  longest a held event loop is expected to keep their answers unread (e2e/stall.e2e.ts). */
+export const SURVEY_RETRY_MS: readonly number[] = [250, 500, 1_000, 2_000, 4_000]
+
+class Unsurveyed extends Error {}
+
+/** A probe asked again while it answers `'unknown'`; still unknown after the last wait, the row is left
+ *  alone. Restore is the one place a wrong "gone" is paid for at once: it archives a running agent,
+ *  or opens a second pane resuming the conversation the first is still in. The waits are spent once
+ *  per restore: tmux or `ps` still failing after them is broken, not held, and every row asked after
+ *  that is left alone at once rather than holding the app's "starting" screen for 8 s a row. */
+async function surveyed<T>(deps: RestoreAgentsDeps, patience: { left: boolean }, probe: () => Promise<T | 'unknown'>): Promise<T> {
+  const sleep = deps.sleep ?? defaultSleep
+  let answer = await probe()
+  for (const ms of patience.left ? deps.surveyRetryMs ?? SURVEY_RETRY_MS : []) {
+    if (answer !== 'unknown') return answer
+    await sleep(ms)
+    answer = await probe()
+  }
+  if (answer !== 'unknown') return answer
+  patience.left = false
+  throw new Unsurveyed('tmux or ps could not say whether its pane or engine is alive')
+}
+
+/**
+ * The survey's two questions, asked of tmux: one pane listing for the whole survey, read again only
+ * after a read that failed, and the engine in a pane as `lookupPaneEngineProcess` finds it.
+ */
+export function tmuxSurvey(
+  listPanes: () => Promise<{ ok: true; panes: Array<{ tmuxPane: string }> } | { ok: false }>,
+  lookup: (pane: string, engine: AgentEngine) => Promise<{ ok: true; identity: ProcessIdentity } | { ok: false; unknown: boolean }>,
+): Pick<RestoreAgentsDeps, 'livePane' | 'liveProcess'> {
+  let inventory: ReturnType<typeof listPanes> | null = null
+  return {
+    livePane: async (runtime) => {
+      // One inventory for the whole restore, not one `tmux list-panes` per row: this runs between the
+      // control port binding and the first reconcile pass, i.e. on the app's "starting" screen.
+      inventory ??= listPanes()
+      const read = await inventory
+      if (!read.ok) { inventory = null; return 'unknown' }
+      // Only a harness pane counts (the inventory is already that whitelist): a new tmux server hands
+      // out `%N` from zero again, and a stale id can name somebody's own shell.
+      return read.panes.some((pane) => pane.tmuxPane === runtime.paneId)
+    },
+    liveProcess: async (entry, runtime) => {
+      const found = await lookup(runtime.paneId, entry.engine)
+      return found.ok ? found.identity : found.unknown ? 'unknown' : null
+    },
+  }
 }
 
 const DEFAULT_BUDGET_MS = 10 * 60_000
@@ -118,15 +182,22 @@ function defaultSleep(ms: number): Promise<void> {
   })
 }
 
+/** Whether tmux reported the pane's engine gone: the pane dead or forgotten, or its engine exited. A
+ *  pane tmux could not read is not. */
+function engineGone(state: Awaited<ReturnType<RestoreAgentsDeps['paneState']>>): boolean {
+  if (state === 'unknown') return false
+  return state === 'gone' || state.dead || state.engineExit != null
+}
+
 /** Watch a pane whose engine just appeared: 'settled' once it has stayed up for `settleMs`, 'gone' the
- *  moment tmux reports it dead or forgotten. */
+ *  moment tmux reports it dead or forgotten. A read that could not answer is no news: the relaunch it
+ *  used to set off killed a resumed engine that was working, and started its conversation over. */
 async function waitForSettle(deps: RestoreAgentsDeps, runtime: TmuxRuntimeRef, settleMs: number): Promise<'settled' | 'gone'> {
   const sleep = deps.sleep ?? defaultSleep
   const until = Date.now() + settleMs
   while (Date.now() < until) {
     await sleep(Math.min(SETTLE_POLL_MS, until - Date.now()))
-    const state = await deps.paneState(runtime)
-    if (!state || state.dead || state.engineExit != null) return 'gone'
+    if (engineGone(await deps.paneState(runtime))) return 'gone'
   }
   return 'settled'
 }
@@ -136,7 +207,8 @@ async function waitForSettle(deps: RestoreAgentsDeps, runtime: TmuxRuntimeRef, s
  * background; the summary says which agents that is happening for.
  */
 export async function restoreAgents(deps: RestoreAgentsDeps): Promise<RestoreSummary> {
-  const summary: RestoreSummary = { restored: [], skipped: [], failed: [] }
+  const summary: RestoreSummary = { restored: [], skipped: [], failed: [], unsurveyed: [] }
+  const patience = { left: true }
   const missing: Array<{ entry: RegisteredSession; runtime: TmuxRuntimeRef }> = []
 
   // Per row, because a survey that gives up on the first bad one gives up on every row behind it —
@@ -152,9 +224,9 @@ export async function restoreAgents(deps: RestoreAgentsDeps): Promise<RestoreSum
     // — exactly the exit the reconciler would have caught — and the row is put back to a terminal
     // here rather than a second pane being opened beside the first. A bare terminal has no engine
     // process to look for at all.
-    const paneAlive = await deps.livePane?.(runtime) ?? false
+    const paneAlive = deps.livePane ? await surveyed(deps, patience, () => deps.livePane!(runtime)) : false
     if (paneAlive) {
-      const engineLive = isTerminalEngine(entry.engine) ? null : await deps.liveProcess(entry, runtime)
+      const engineLive = isTerminalEngine(entry.engine) ? null : await surveyed(deps, patience, () => deps.liveProcess(entry, runtime))
       if (engineLive) {
         // Still running. A row that lost its identity without losing its pane (a reboot the boot
         // clock misread; a tmux server that outlived the daemon) is re-identified right here, so the
@@ -180,14 +252,18 @@ export async function restoreAgents(deps: RestoreAgentsDeps): Promise<RestoreSum
       summary.skipped.push({ agentId: entry.agentId, reason: 'saved conversation awaits explicit Open' })
       continue
     }
-    // A terminal whose pane is gone comes back as a terminal — never as the engine that was once
-    // typed into it: that engine's session went with the pane.
-    if (entry.terminalHost) {
+    // A terminal whose pane is gone comes back as a terminal — unless the engine typed into it keeps
+    // its conversation on disk under a recorded id. Then the session did NOT go with the pane, and
+    // the engine comes back resuming it, in a shell pane as before (it drops to that shell on exit).
+    // Measured on Harness OS: OpenCode, which its welcome flow types into a terminal, came back from
+    // every reboot as a bare prompt with the conversation unbound, while Claude came back. A resume
+    // the engine refuses falls back to the shell, never a fresh engine (`relaunchFresh`).
+    if (entry.terminalHost && !resumesConversation(entry.engine, entry.sessionId)) {
       if (!isTerminalEngine(entry.engine)) deps.registry.releaseEngine(entry.agentId)
       missing.push({ entry: deps.registry.byAgent(entry.agentId) ?? entry, runtime })
       continue
     }
-    const live = await deps.liveProcess(entry, runtime)
+    const live = await surveyed(deps, patience, () => deps.liveProcess(entry, runtime))
     if (live) {
       // Still running. A row that lost its identity without losing its pane (a reboot the boot
       // clock misread; a tmux server that outlived the daemon) is re-identified right here, so the
@@ -214,7 +290,8 @@ export async function restoreAgents(deps: RestoreAgentsDeps): Promise<RestoreSum
     missing.push({ entry, runtime })
    } catch (error) {
     const reason = error instanceof Error ? error.message : String(error)
-    summary.failed.push({ agentId: entry.agentId, reason })
+    if (error instanceof Unsurveyed) summary.unsurveyed.push(entry.agentId)
+    else summary.failed.push({ agentId: entry.agentId, reason })
     deps.log(`[restore] ${entry.engine} · agent ${entry.agentId} · could not be surveyed · ${reason}`)
    }
   }
@@ -247,6 +324,8 @@ export async function restoreAgents(deps: RestoreAgentsDeps): Promise<RestoreSum
         deps.log(`[restore] ${entry.engine} · agent ${entry.agentId} · could not open a pane · ${created.reason}`)
         continue
       }
+      // A new engine on the conversation: a turn it left open is over (core/transcripts/relaunch.ts).
+      if (resumeSessionId) deps.engineStarted?.(resumeSessionId)
       const key = terminalRouteKey(created.runtime)
       // A terminal is up the moment its pane is — no engine to wait for, no route to hold.
       if (isTerminalEngine(entry.engine)) {
@@ -299,10 +378,34 @@ async function watchRestoredPane(
       fail('ENGINE_DID_NOT_START', `${engine} exited before its engine process became ready. See the terminal output for details.`)
       return false
     }
+    // A terminal that was resuming an engine typed into it goes back to being that terminal: nobody
+    // asked this pane for a new conversation. The one it held is kept as a stopped harness.
+    if (entry.terminalHost) {
+      mayRetryFresh = false
+      deps.log(`[restore] ${engine} · agent ${agentId} · did not come back up resuming its session — back to the terminal`)
+      deps.keepAbandoned?.({ ...entry })
+      deps.registry.releaseEngine(agentId)
+      const launch = await deps.buildLaunch(deps.registry.byAgent(agentId) ?? { ...entry, engine: 'terminal' }, {})
+      if ('error' in launch) {
+        fail(launch.error, launch.detail)
+        return false
+      }
+      const spawned = await deps.respawn(runtime, launch)
+      if (!spawned.ok) {
+        fail('ENGINE_DID_NOT_START', `The terminal could not be reopened: ${spawned.reason ?? 'unknown reason'}`)
+        return false
+      }
+      deps.registry.setLaunch(agentId, { state: 'ready' })
+      await deps.clearRemainOnExit(runtime)
+      return false
+    }
     // A resume id the engine no longer honours is not worth a dead agent: the row's name comes
     // along to the agent itself, the stale binding goes, and the engine gets one fresh start.
     mayRetryFresh = false
     deps.log(`[restore] ${engine} · agent ${agentId} · did not come back up resuming its session — retrying fresh`)
+    // Unbound below and replaced by the fresh start's own, the conversation the agent was in is kept as
+    // a stopped harness first, to read and to resume once the engine can again.
+    deps.keepAbandoned?.({ ...entry })
     deps.registry.inheritName(entry.sessionId, agentId)
     deps.registry.unbindSession(entry.sessionId)
     const launch = await deps.buildLaunch(entry, {})
@@ -345,11 +448,12 @@ async function watchRestoredPane(
         return
       }
       const state = await deps.paneState(runtime)
-      if (!state) {
+      if (state === 'gone') {
         fail('ENGINE_DID_NOT_START', `${engine}'s restored pane disappeared before its engine process became ready.`)
         return
       }
-      if (state.dead || state.engineExit != null) {
+      // A pane tmux could not read is asked again, like one still starting.
+      if (engineGone(state)) {
         if (!await relaunchFresh()) return
         delayMs = 50
         continue

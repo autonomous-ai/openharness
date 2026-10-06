@@ -41,3 +41,5 @@ void ht_tab_carousel_begin(ht_tab_carousel_t *, int x, uint32_t now);
 bool ht_tab_carousel_move(ht_tab_carousel_t *, int x, uint32_t now);
 bool ht_tab_carousel_end(ht_tab_carousel_t *, int x, bool horizontal, uint32_t now);
 bool ht_tab_carousel_tick(ht_tab_carousel_t *, uint32_t now);
+// Settle on `index` from wherever it is (an arrow's tap), the way a swipe settles.
+void ht_tab_carousel_go(ht_tab_carousel_t *, int index, uint32_t now);

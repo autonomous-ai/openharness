@@ -1,7 +1,8 @@
 /**
  * A conversation's history, for a window that asks for it (`session_get`): the whole thread, or the page
- * before a cursor and the cursor to the page before that. The socket hands the request here and sends
- * back what comes out, so every field of the reply is decided in this file.
+ * before a cursor and the cursor to the page before that; and the conversation an agent holds, with how
+ * many lines it has (`sessions_list`). The socket hands each request here and sends back what comes out,
+ * so every field of the replies is decided in this file.
  *
  * Claude Code and Codex read only the page asked for (lib/transcriptPages.ts), and the other file engines
  * at most the newest 64 MB of their transcripts (lib/transcriptTail.ts), because the whole history of one
@@ -36,6 +37,7 @@ import { opencodeMessagesToEvents, windowOpencodeMessages } from '../../engines/
 import { readOpencodeMessages } from '../../engines/opencode/reader.js'
 import { piMessagesToEvents, windowPiLines } from '../../engines/pi/normalizer.js'
 import { sid } from '../../lib/log.js'
+import { lastActivityAt } from '../../lib/agentFrame.js'
 import { messagesToEvents, SubagentStats, windowRawLines, type SessionEvent } from '../../lib/normalize.js'
 import { projectDisplayName, type RegisteredSession } from '../../lib/registry.js'
 import type { TranscriptPager } from '../../lib/transcriptPages.js'
@@ -44,9 +46,12 @@ import { streamRecords, tailFileCapped, WHOLE_READ_CAP_BYTES } from '../../lib/t
 export interface HistoryDeps {
   /** The registry's lookup, by agent or session id. */
   resolve: (id: string) => RegisteredSession | undefined
-  /** Claude Code's and Codex's pages. The socket's pager, so the line index it keeps for a transcript is
-   *  shared with the line counts `sessions_list` answers, not built twice. */
-  pages: Pick<TranscriptPager, 'claude' | 'codex'>
+  /** The conversations kept as stopped harnesses (lib/stoppedAgents.ts): a stop's, an exited engine's,
+   *  and one a restart, a move or a restore had to leave for a new one. */
+  stopped: () => readonly RegisteredSession[]
+  /** Claude Code's and Codex's pages, and every transcript's line count: one pager, so the line index it
+   *  keeps for a transcript serves both requests and is not built twice. */
+  pages: Pick<TranscriptPager, 'claude' | 'codex' | 'lineCount'>
   /** The database engines' stores. */
   dbs: { opencode: string; kilo: string; devin: string }
   /** Hermes keeps a store per profile: the one this session's lives in. */
@@ -123,7 +128,7 @@ async function enrichSubagentStats(events: SessionEvent[], transcriptPath: strin
 /** What a window asks for: `limit` records before the `before` cursor. No limit asks for all of them. */
 interface PageAsk { limit?: number; before?: string }
 
-/** One database engine's answer to `session_get`. */
+/** One database engine's answer to `session_get`, about `s`, under the id it was asked by. */
 type DatabasePage = (s: RegisteredSession, sessionId: string, ask: PageAsk) => Promise<Record<string, unknown>>
 
 /**
@@ -136,13 +141,13 @@ type DatabasePage = (s: RegisteredSession, sessionId: string, ask: PageAsk) => P
  * rather than silently indexing into the wrong conversation.
  */
 function databasePage<M>(
-  read: (s: RegisteredSession, sessionId: string) => Promise<M[]>,
+  read: (s: RegisteredSession) => Promise<M[]>,
   toEvents: (messages: M[]) => SessionEvent[],
   windowOf: (messages: M[], opts: { limit: number; before?: string }) =>
     { window: M[]; hasMore: boolean; oldestCursor: string | null; staleCursor?: boolean },
 ): DatabasePage {
   return async (s, sessionId, { limit, before }) => {
-    const messages = await read(s, sessionId)
+    const messages = await read(s)
     const timestamp = new Date(s.touchedAt).toISOString()
     if (!limit) {
       return { id: sessionId, title: projectDisplayName(s), events: toEvents(messages), timestamp, engine: s.engine }
@@ -157,25 +162,30 @@ function databasePage<M>(
   }
 }
 
-export function createHistory({ resolve, pages, dbs, hermesDb }: HistoryDeps) {
+export function createHistory({ resolve, stopped, pages, dbs, hermesDb }: HistoryDeps) {
   // Devin, OpenCode and Kilo keep one store on this machine. Hermes keeps one per HOME, so its path is
   // the session's own (`hermesDb`) rather than this machine's default.
   const databases = new Map<string, DatabasePage>([
-    ['devin', databasePage((_s, sessionId) => readDevinMessages(dbs.devin, sessionId), devinMessagesToEvents, windowDevinMessages)],
-    ['hermes', databasePage(async (s, sessionId) => readHermesMessages(await hermesDb(s), sessionId), hermesMessagesToEvents, windowHermesMessages)],
-    ['opencode', databasePage((_s, sessionId) => readOpencodeMessages(dbs.opencode, sessionId), opencodeMessagesToEvents, windowOpencodeMessages)],
-    ['kilo', databasePage((_s, sessionId) => readKiloMessages(dbs.kilo, sessionId), kiloMessagesToEvents, windowKiloMessages)],
+    ['devin', databasePage((s) => readDevinMessages(dbs.devin, s.sessionId), devinMessagesToEvents, windowDevinMessages)],
+    ['hermes', databasePage(async (s) => readHermesMessages(await hermesDb(s), s.sessionId), hermesMessagesToEvents, windowHermesMessages)],
+    ['opencode', databasePage((s) => readOpencodeMessages(dbs.opencode, s.sessionId), opencodeMessagesToEvents, windowOpencodeMessages)],
+    ['kilo', databasePage((s) => readKiloMessages(dbs.kilo, s.sessionId), kiloMessagesToEvents, windowKiloMessages)],
   ])
 
   /** The reply to a `session_get` request, for the socket to send as it is. */
   const sessionGet = async (payload: Record<string, unknown>): Promise<Record<string, unknown>> => {
     const sessionId = payload.sessionId as string | undefined
     if (!sessionId) return { error: 'MISSING_SESSION_ID' }
-    // Only serve transcripts for a REGISTERED tmux session, read from its own trusted
-    // transcriptPath — never resolve an arbitrary request-supplied id to a file (that let a
-    // caller read any *.jsonl on the computer, incl. unshared claude history / traversal).
-    const s = resolve(sessionId)
+    // Only serve transcripts for a session this daemon REGISTERED — live, or kept as a stopped one —
+    // read from its own trusted transcriptPath: never resolve an arbitrary request-supplied id to a
+    // file (that let a caller read any *.jsonl on the computer, incl. unshared claude history /
+    // traversal). A kept conversation used to answer NOT_FOUND, so a conversation the daemon had to
+    // leave for a new one could no longer be read at all (round 24).
+    const s = resolve(sessionId) ?? stopped().find((saved) => saved.sessionId === sessionId)
     if (!s) return { error: 'NOT_FOUND' }
+    // The registry finds an agent by its agent id too, and the reply names the id it was asked by. What
+    // is read is the conversation's own, `s.sessionId`: an engine's store, Amp's export and Cursor's task
+    // links know that id alone, and under the agent id they read nothing.
     // Optional pagination: `limit` = window size; `before` = cursor (the oldest record the
     // client already holds). Absent → full transcript (legacy). Clamp limit defensively.
     const rawLimit = payload.limit
@@ -233,11 +243,11 @@ export function createHistory({ resolve, pages, dbs, hermesDb }: HistoryDeps) {
 
     if (!limit) {
       const fullEvents = s.engine === 'cursor'
-          ? cursorMessagesToEvents(lines, sessionId, await loadCursorReplayTaskLinks(cursorConfigDir(), sessionId, cursorDataDir()))
+          ? cursorMessagesToEvents(lines, s.sessionId, await loadCursorReplayTaskLinks(cursorConfigDir(), s.sessionId, cursorDataDir()))
           : s.engine === 'muse'
             ? museMessagesToEvents(lines)
             : s.engine === 'amp'
-            ? await ampHistory(sessionId, lines)
+            ? await ampHistory(s.sessionId, lines)
             : s.engine === 'grok'
               ? grokHistoryPage(lines, false).events
             : s.engine === 'agy'
@@ -279,7 +289,7 @@ export function createHistory({ resolve, pages, dbs, hermesDb }: HistoryDeps) {
         id: sessionId,
         title: projectDisplayName(s),
         events: s.engine === 'amp'
-          ? await ampHistory(sessionId, lines)
+          ? await ampHistory(s.sessionId, lines)
           : wholePage
             ? wholePage.events
             : museMessagesToEvents(lines),
@@ -303,8 +313,8 @@ export function createHistory({ resolve, pages, dbs, hermesDb }: HistoryDeps) {
     const events = s.engine === 'cursor'
         ? cursorMessagesToEvents(
             w.window,
-            sessionId,
-            await loadCursorReplayTaskLinks(cursorConfigDir(), sessionId, cursorDataDir()),
+            s.sessionId,
+            await loadCursorReplayTaskLinks(cursorConfigDir(), s.sessionId, cursorDataDir()),
             'startIndex' in w && typeof w.startIndex === 'number' ? w.startIndex : 0,
             'initialTodos' in w && Array.isArray(w.initialTodos) ? w.initialTodos : [],
           )
@@ -329,5 +339,28 @@ export function createHistory({ resolve, pages, dbs, hermesDb }: HistoryDeps) {
     }
   }
 
-  return { sessionGet }
+  /** The reply to a `sessions_list` request: the one conversation an agent holds, for the socket to send. */
+  const sessionsList = async (payload: Record<string, unknown>): Promise<Record<string, unknown>> => {
+    const projectId = payload.agentId as string | undefined
+    if (!projectId) return { error: 'MISSING_AGENT_ID' }
+    const s = resolve(projectId)
+    // An agent whose engine has not reported a session yet has no transcript to list. Saying so
+    // plainly beats inventing one: the web then shows the tab with an empty thread until the bind
+    // lands, instead of pinning `currentSessionId` to an id no event will ever carry.
+    if (!s || !s.sessionId) return { sessions: [] }
+    // Counted from an index kept as the file grows (lib/transcriptPages.ts), not by reading it whole.
+    const messageCount = s.transcriptPath ? await pages.lineCount(s.transcriptPath) : 0
+    return {
+      sessions: [{
+        id: s.sessionId,
+        title: projectDisplayName(s),
+        timestamp: new Date(s.registeredAt).toISOString(),
+        messageCount,
+        lastActivity: new Date(await lastActivityAt(s)).toISOString(),
+        participants: [],
+      }],
+    }
+  }
+
+  return { sessionGet, sessionsList }
 }

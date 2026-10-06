@@ -611,3 +611,69 @@ describe('E2eeManager persistent remote-password pairing', () => {
     expect(takeLast('e2e_pw_pair_result').payload).toMatchObject({ ok: false, error: 'NO_REMOTE_PASSWORD' })
   })
 })
+
+describe('a sealed frame for a session this process never had', () => {
+  const sealed = { type: 'message', payload: { __e2e: { v: 1, k: 'p', n: 7, ct: 'AAAA' } } }
+
+  it('tells the client its session is gone, naming the frame, at most once a second per connection', () => {
+    let now = 1_000
+    const mgr = new makeManager({ machineId: AGENT, sendTo: () => {}, isConnected: () => true }, () => now)
+    expect(mgr.sessionGone('conn-old', sealed)).toEqual({ type: 'e2e_session_unknown', payload: { refused: { type: 'message', n: 7 } } })
+    expect(mgr.sessionGone('conn-old', sealed)).toBeNull()
+    now += 999
+    expect(mgr.sessionGone('conn-old', sealed)).toBeNull()
+    now += 1
+    expect(mgr.sessionGone('conn-old', sealed)).not.toBeNull()
+    // Another connection is its own; a frame with no counter to name is named by its type.
+    expect(mgr.sessionGone('conn-other', { type: 'agents_list', payload: { __e2e: { n: 'x' } } })).toEqual({ type: 'e2e_session_unknown', payload: { refused: { type: 'agents_list' } } })
+    expect(mgr.sessionGone('conn-bare', { type: 'agents_list' })).toEqual({ type: 'e2e_session_unknown', payload: { refused: { type: 'agents_list' } } })
+  })
+
+  it('says nothing to a connection that has a session: a frame that does not open there is the relay\'s', () => {
+    const h = machine()
+    const peer = new WebPeer()
+    h.mgr.trustPeer({ pub: C.b64e(peer.identity.pub), label: 'phone' })
+    h.mgr.handleFrame('live', peer.hello())
+    expect(h.mgr.hasSession('live')).toBe(true)
+    expect(h.mgr.sessionGone('live', sealed)).toBeNull()
+  })
+
+  it('remembers a bounded number of the connections it told, the oldest let go first', () => {
+    const mgr = new makeManager({ machineId: AGENT, sendTo: () => {}, isConnected: () => true }, () => 5_000)
+    for (let n = 0; n <= 256; n++) expect(mgr.sessionGone(`conn-${n}`, sealed)).not.toBeNull()
+    // The first was let go, so it is told again at once; the last is still remembered.
+    expect(mgr.sessionGone('conn-0', sealed)).not.toBeNull()
+    expect(mgr.sessionGone('conn-256', sealed)).toBeNull()
+  })
+})
+
+describe('terminal bytes sealed for a session this process never had', () => {
+  const keystrokes = async (counter: number) => {
+    const { sealTerminalBinary } = await import('../terminalBinary.js')
+    return sealTerminalBinary(new Uint8Array(32).fill(9), counter, { kind: 1, streamId: '00112233-4455-6677-8899-aabbccddeeff', seq: 1, bytes: new TextEncoder().encode('ls\r'), compressed: false })!
+  }
+
+  it('tells the client its session is gone, naming the bytes by their clear kind and counter', async () => {
+    const mgr = new makeManager({ machineId: AGENT, sendTo: () => {}, isConnected: () => true }, () => 1_000)
+    expect(mgr.terminalSessionGone('conn-old', await keystrokes(5))).toEqual({ type: 'e2e_session_unknown', payload: { refused: { type: 'terminal_binary', kind: 1, n: 5 } } })
+    // Bytes that are not a terminal frame at all are named by what they claim to be.
+    expect(mgr.terminalSessionGone('conn-garbled', new Uint8Array([1, 2, 3]))).toEqual({ type: 'e2e_session_unknown', payload: { refused: { type: 'terminal_binary' } } })
+  })
+
+  it('shares the once-a-second allowance per connection with sealed frames', async () => {
+    let now = 1_000
+    const mgr = new makeManager({ machineId: AGENT, sendTo: () => {}, isConnected: () => true }, () => now)
+    expect(mgr.sessionGone('conn-old', { type: 'message', payload: { __e2e: { n: 1 } } })).not.toBeNull()
+    expect(mgr.terminalSessionGone('conn-old', await keystrokes(2))).toBeNull()
+    now += 1_000
+    expect(mgr.terminalSessionGone('conn-old', await keystrokes(3))).not.toBeNull()
+  })
+
+  it('says nothing to a connection that has a session', async () => {
+    const h = machine()
+    const peer = new WebPeer()
+    h.mgr.trustPeer({ pub: C.b64e(peer.identity.pub), label: 'phone' })
+    h.mgr.handleFrame('live', peer.hello())
+    expect(h.mgr.terminalSessionGone('live', await keystrokes(4))).toBeNull()
+  })
+})

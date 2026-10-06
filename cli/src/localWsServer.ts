@@ -279,6 +279,9 @@ function withLocalClient(frame: Frame, localClient: LocalWsServerOptions['localC
  * no credential: loopback-only, no Origin header, and the desktop computer-id validation identify the
  * local process without placing SSO credentials on this transport.
  */
+/** How long a closing server waits for its clients to answer the close before it drops them. */
+export const LOCAL_WS_CLOSE_GRACE_MS = 1_000
+
 export function attachLocalWsServer(server: http.Server, options: LocalWsServerOptions): LocalWsServer {
   const wss = new WebSocketServer({
     noServer: true,
@@ -383,8 +386,11 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
         return
       }
       // One of the core's own services, started by harnessd's master: its frames go to its link, and it
-      // never joins the windows' event stream.
-      if (requestedMachineId === options.machineId && payload.role === 'service') {
+      // never joins the windows' event stream. Known by its token, the secret the master gave only it and
+      // the core for this boot, never by the machine id it names: a signed-in core serves under its
+      // account's machine id while a service names this computer's, and matching them refused every
+      // service of every signed-in daemon (found by the release rehearsal, signed in).
+      if (payload.role === 'service') {
         const link = options.services?.accept(String(payload.service ?? ''), String(payload.token ?? ''), sink, close) ?? null
         if (!link) { close(4401, 'service refused'); return }
         serviceLink = link
@@ -774,7 +780,12 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
     close: async () => {
       for (const each of servers) each.off('upgrade', onUpgrade)
       for (const client of wss.clients) client.close(1001, 'server shutting down')
+      // A client that does not answer the close (a suspended `hn`, a window whose process is hung) held
+      // this for ws's own close timeout, 30 s, and with it every shutdown: an update's teardown, and the
+      // core of a master that is gone, whose successor waits for its socket only 20 s.
+      const grace = setTimeout(() => { for (const client of wss.clients) client.terminate() }, LOCAL_WS_CLOSE_GRACE_MS)
       await new Promise<void>((resolve) => wss.close(() => resolve()))
+      clearTimeout(grace)
     },
   }
 }

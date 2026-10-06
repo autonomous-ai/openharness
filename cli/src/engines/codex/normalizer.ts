@@ -109,6 +109,24 @@ function messageText(item: JsonObject): string {
   return string(item.message) || textContent(item)
 }
 
+/**
+ * What the person said. Codex 0.160's answer to a question that does not stop the turn
+ * (`request_user_input_async`) is a user message wrapping JSON `[{answer, question, questionItemId}]` in
+ * `<send_user_message_question_reply>`, and was read as typed, wrapper and all (real 0.160 rollouts).
+ */
+function userText(item: JsonObject): string {
+  const text = messageText(item)
+  const body = /^\s*<send_user_message_question_reply>\s*([\s\S]*?)\s*(?:<\/send_user_message_question_reply>\s*)?$/.exec(text)?.[1]
+  if (body === undefined) return text
+  let replies: unknown
+  try { replies = JSON.parse(body) } catch { return body }
+  const lines = (Array.isArray(replies) ? replies : []).map(object).flatMap((entry) => {
+    const [answer, question] = [string(entry?.answer).trim(), string(entry?.question).trim()]
+    return answer ? [question ? `${question} → ${answer}` : answer] : []
+  })
+  return lines.join('\n') || body
+}
+
 function parseInput(value: unknown): unknown {
   if (typeof value !== 'string') return value ?? {}
   try { return JSON.parse(value) } catch { return value }
@@ -267,6 +285,9 @@ export class CodexNormalizer implements EngineNormalizer {
   private childLaunchers = new Map<string, SpawnState>()
   private pendingChildResults = new Map<string, ChildResult>()
   private completedChildren = new Set<string>()
+  /** Codex 0.160 (multi-agent v2): spawn call id → child, and child path → its last report (subAgentActivity). */
+  private startedChildren = new Map<string, { threadId: string; path: string }>()
+  private childReports = new Map<string, { text: string; final: boolean }>()
   private thinkingCounter = 0
   /** See `TurnState.thinkingPrefix`. */
   thinkingPrefix = 'thinking-codex-'
@@ -319,7 +340,7 @@ export class CodexNormalizer implements EngineNormalizer {
     }
 
     if (USER_TURN_TYPES.has(type)) {
-      const message = messageText(item)
+      const message = userText(item)
       if (!message) return []
       if (this.mode === 'replay') return [{ type: 'user_message', payload: { content: message } }]
       const events: LiveEvent[] = []
@@ -337,6 +358,8 @@ export class CodexNormalizer implements EngineNormalizer {
       const message = messageText(item)
       return message ? [{ type: 'text_delta', payload: { content: message } }] : []
     }
+
+    if (type === 'SubAgentActivity') return this.subAgentActivity(item)
 
     if (type === 'task_complete' || type === 'turn_aborted') {
       this.pendingTask = false
@@ -377,6 +400,8 @@ export class CodexNormalizer implements EngineNormalizer {
       const notification = subagentNotification(item)
       return notification ? this.completeChild(notification.childId, notification.result) : []
     }
+
+    if (type === 'agent_message') { this.noteChildReport(item); return [] }
 
     if (type === 'reasoning') {
       const summary = Array.isArray(item.summary)
@@ -446,9 +471,14 @@ export class CodexNormalizer implements EngineNormalizer {
     if (!spawn) return []
     this.toolNames.delete(id)
     const parsed = parseObject(item.output)
-    const childId = string(parsed?.agent_id) || string(parsed?.thread_id)
+    // Codex 0.160's output is only `{"task_name":"/root/<name>"}`: the child's thread is in the SubAgentActivity
+    // before it, else its path names it. Without them every sub-agent read as failed (real 0.160 rollouts).
+    const started = this.startedChildren.get(id)
+    this.startedChildren.delete(id)
+    const taskName = string(parsed?.task_name)
+    const childId = string(parsed?.agent_id) || string(parsed?.thread_id) || started?.threadId || started?.path || taskName
     if (childId) {
-      const nickname = string(parsed?.nickname) || string(parsed?.name)
+      const nickname = string(parsed?.nickname) || string(parsed?.name) || taskName.split('/').pop() || ''
       if (nickname) spawn.input.name = nickname
       this.pendingSpawns.delete(id)
       this.childLaunchers.set(childId, spawn)
@@ -477,6 +507,28 @@ export class CodexNormalizer implements EngineNormalizer {
         },
       },
     ]
+  }
+
+  /** v2's sub-agent life: `started` (keyed by the spawn's call id) names the child's thread, and `completed` is
+   *  the only sign it finished: v2 writes no `<subagent_notification>`, and `wait_agent` carries no status. */
+  private subAgentActivity(item: JsonObject): LiveEvent[] {
+    const [kind, threadId, path, callId] = [item.kind, item.agent_thread_id, item.agent_path, item.id].map(string)
+    if (kind === 'started' && callId && (threadId || path)) this.startedChildren.set(callId, { threadId, path })
+    if (kind !== 'completed') return []
+    const childId = [threadId, path].find((id) => id && this.childLaunchers.has(id)) || threadId || path
+    const report = this.childReports.get(path)
+    this.childReports.delete(path)
+    return childId ? this.completeChild(childId, { output: report?.text ?? '', isError: false }) : []
+  }
+
+  /** A v2 child's message to its parent (`Message Type: FINAL_ANSWER|MESSAGE`, …, `Payload:` and the text),
+   *  kept by sender as its Task's result; a final answer outranks a later progress message. */
+  private noteChildReport(item: JsonObject): void {
+    const author = string(item.author)
+    const text = textContent(item)
+    const final = /^Message Type:\s*FINAL_ANSWER\b/m.test(text)
+    const body = (/(?:^|\n)Payload:[ \t]*\n?([\s\S]*)$/.exec(text)?.[1] ?? text).trim()
+    if (author && body && !(this.childReports.get(author)?.final && !final)) this.childReports.set(author, { text: body, final })
   }
 
   private completeFromStatus(value: unknown): LiveEvent[] {
@@ -560,6 +612,8 @@ export class CodexNormalizer implements EngineNormalizer {
       this.pendingSpawns.delete(callId)
     }
     this.pendingChildResults.clear()
+    this.startedChildren.clear()
+    this.childReports.clear()
     return events
   }
 }
@@ -584,7 +638,7 @@ export function selectCodexRecapLine(line: string): 'keep' | 'skip' | 'stop' {
   if (raw.type === 'response_item' && string(item.type) === 'message') return goalObjective(item) ? 'stop' : 'skip'
   if (raw.type !== 'event_msg') return 'skip'
   const itemType = string(item.type)
-  if (USER_TURN_TYPES.has(itemType) && messageText(item)) return 'stop'
+  if (USER_TURN_TYPES.has(itemType) && userText(item)) return 'stop'
   return AGENT_TEXT_TYPES.has(itemType) ? 'keep' : 'skip'
 }
 
@@ -599,7 +653,7 @@ export function startsCodexTurn(line: string): boolean {
   const item = payload(raw)
   if (!item) return false
   const type = string(item.type)
-  if (raw.type === 'event_msg') return USER_TURN_TYPES.has(type) && !!messageText(item)
+  if (raw.type === 'event_msg') return USER_TURN_TYPES.has(type) && !!userText(item)
   return raw.type === 'response_item' && type === 'message' && goalObjective(item) !== null
 }
 
@@ -656,7 +710,7 @@ export function lastCodexTurnText(rawLines: string[]): LastTurnText | null {
     if (raw.type !== 'event_msg') continue
     const itemType = string(item.type)
     if (USER_TURN_TYPES.has(itemType)) {
-      const message = messageText(item)
+      const message = userText(item)
       if (message) { userMessage = message; assistantText = ''; finalText = ''; sawPhase = false }
     } else if (AGENT_TEXT_TYPES.has(itemType)) {
       const message = messageText(item)

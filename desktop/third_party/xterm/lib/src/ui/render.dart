@@ -6,16 +6,19 @@ import 'package:flutter/widgets.dart';
 import 'package:xterm/src/core/buffer/cell_offset.dart';
 import 'package:xterm/src/core/buffer/range.dart';
 import 'package:xterm/src/core/buffer/segment.dart';
+import 'package:xterm/src/core/cell.dart';
 import 'package:xterm/src/core/mouse/button.dart';
 import 'package:xterm/src/core/mouse/button_state.dart';
 import 'package:xterm/src/terminal.dart';
 import 'package:xterm/src/ui/controller.dart';
 import 'package:xterm/src/ui/cursor_type.dart';
 import 'package:xterm/src/ui/painter.dart';
+import 'package:xterm/src/ui/prompt_placeholder.dart';
 import 'package:xterm/src/ui/selection_mode.dart';
 import 'package:xterm/src/ui/terminal_size.dart';
 import 'package:xterm/src/ui/terminal_text_style.dart';
 import 'package:xterm/src/ui/terminal_theme.dart';
+import 'package:xterm/src/utils/unicode_v11.dart';
 
 typedef EditableRectCallback = void Function(Rect rect, Rect caretRect);
 
@@ -615,14 +618,14 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
 
     if (_terminal.buffer.absoluteCursorY >= effectFirstLine &&
         _terminal.buffer.absoluteCursorY <= effectLastLine) {
-      if (_isComposingText) {
-        _paintComposingText(canvas, offset + cursorOffset);
-      }
+      final caret = _isComposingText
+          ? _paintComposingText(canvas, offset + cursorOffset)
+          : offset + cursorOffset;
 
       if (_shouldShowCursor) {
         _painter.paintCursor(
           canvas,
-          offset + cursorOffset,
+          caret,
           cursorType: _cursorType,
           hasFocus: _focusNode.hasFocus,
         );
@@ -651,11 +654,14 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
   }
 
   /// Paints the text that is currently being composed in IME to [canvas] at
-  /// [offset]. [offset] is usually the cursor position.
-  void _paintComposingText(Canvas canvas, Offset offset) {
+  /// [offset], usually the cursor position, and returns where the caret
+  /// belongs: after it, as in any text field. Left at the cursor, the block
+  /// covered the preview's first character — a lone Telex `a`, still
+  /// composing until the next key, looked like nothing had been typed.
+  Offset _paintComposingText(Canvas canvas, Offset offset) {
     final composingText = _composingText;
     if (composingText == null) {
-      return;
+      return offset;
     }
 
     var startColumn = _terminal.buffer.cursorX - _composingBacktrackCells;
@@ -664,13 +670,19 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
       startColumn += _terminal.viewWidth;
       startLine--;
     }
+    final lastColumn = _terminal.viewWidth - 1;
+    final firstColumn = startColumn.clamp(0, lastColumn);
     final renderOrigin = offset - cursorOffset;
-    final composingOffset = renderOrigin +
+    Offset cellOffset(int column) =>
+        renderOrigin +
         Offset(
-          startColumn.clamp(0, _terminal.viewWidth - 1).toDouble() *
-              _painter.cellSize.width,
+          column * _painter.cellSize.width,
           startLine * _painter.cellSize.height + _lineOffset,
         );
+    final composingOffset = cellOffset(firstColumn);
+    final caret = cellOffset(
+      (firstColumn + runesCells(composingText.runes)).clamp(0, lastColumn),
+    );
 
     final style = _painter.textStyle.toTextStyle(
       color: _painter.resolveForegroundColor(_terminal.cursor.foreground),
@@ -700,8 +712,29 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     )..layout(
         maxWidth: (size.width - composingOffset.dx).clamp(0.0, size.width));
 
+    _coverPromptPlaceholder(canvas, renderOrigin);
     textPainter.paint(canvas, composingOffset);
     textPainter.dispose();
+    return caret;
+  }
+
+  /// Hides a prompt's dim placeholder behind an input-method preview, as the
+  /// program will once the typed text echoes (see [promptPlaceholderEnd]).
+  void _coverPromptPlaceholder(Canvas canvas, Offset renderOrigin) {
+    final buffer = _terminal.buffer;
+    final lineIndex = buffer.absoluteCursorY;
+    final line = buffer.lines[lineIndex];
+    final end = promptPlaceholderEnd(line, buffer.cursorX);
+    final cell = CellData.empty();
+    final top = lineIndex * _painter.cellSize.height + _lineOffset;
+    for (var column = buffer.cursorX; column < end; column++) {
+      line.getCellData(column, cell);
+      _painter.paintCellCover(
+        canvas,
+        renderOrigin + Offset(column * _painter.cellSize.width, top),
+        cell,
+      );
+    }
   }
 
   void _paintSelection(

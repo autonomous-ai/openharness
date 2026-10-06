@@ -15,6 +15,13 @@ const card = (id = 'org/Small-GGUF') => ({ repo_id: id, runnable: true, task: 't
   versions: [{ version: 'Q4', size_bytes: 64, pull_spec: `${id}:Small-Q4.gguf`, urls: ['https://example.test/Small-Q4.gguf'] }] })
 const ok = (value: unknown = {}) => ({ ok: true, code: 0, stdout: JSON.stringify(value), stderr: '', error: null })
 const response = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } })
+// Found by QA on a quiet machine: secondary instances also keep background scans that write receipts.
+const modelFixtures: LocalModels[] = []
+function modelFixture(options: ConstructorParameters<typeof LocalModels>[0]): LocalModels {
+  const models = new LocalModels(options)
+  modelFixtures.push(models)
+  return models
+}
 let root: string, home: string, stateDir: string, records: string
 let calls: string[][], serving: boolean, catalogCards: ReturnType<typeof card>[], service: LocalModels
 let request: Mock<(url: string | URL, init?: RequestInit) => Promise<Response>>
@@ -91,9 +98,14 @@ beforeEach(async () => {
     if (!answer.ok) return { state: 'unknown', nodes: [], status }
     try { return { state: 'awake', nodes: JSON.parse(answer.stdout), status } } catch { return { state: 'unknown', nodes: [], status } }
   })
-  service = new LocalModels({ stateDir, processEnv: { GRID_HOME: home }, run, request: request as typeof fetch, inventory })
+  service = modelFixture({ stateDir, processEnv: { GRID_HOME: home }, run, request: request as typeof fetch, inventory })
 })
-afterEach(async () => { await service.settled(); vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllEnvs(); vi.unstubAllGlobals(); await rm(root, { recursive: true, force: true }) })
+afterEach(async () => {
+  try { await Promise.all(modelFixtures.splice(0).map(models => models.settled())) } finally {
+    vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllEnvs(); vi.unstubAllGlobals()
+    await rm(root, { recursive: true, force: true })
+  }
+})
 
 describe('local model discovery and lifecycle', () => {
   it('inspects silently and offers only confirmed compatible chat models', async () => {
@@ -237,7 +249,7 @@ describe('local model discovery and lifecycle', () => {
   it('keeps existing local engines visible when the catalog cannot be reached', async () => {
     await service.act('home', 'org/Small-GGUF', 'start'); await service.settled()
     catalogFails = true
-    const fresh = new LocalModels({ stateDir, processEnv: { GRID_HOME: home }, run, request: request as typeof fetch , inventory })
+    const fresh = modelFixture({ stateDir, processEnv: { GRID_HOME: home }, run, request: request as typeof fetch , inventory })
     const snapshot = await fresh.list('home')
     expect(snapshot.models[0]).toMatchObject({ state: 'running', canStop: true })
     expect(snapshot.notice).toContain('unavailable')
@@ -272,7 +284,7 @@ describe('local model discovery and lifecycle', () => {
     const first = await service.list('home')
     expect(first.models[0]).toMatchObject({ id: 'local:Small-Q4.gguf', state: 'running', canStop: true })
     await service.act('home', first.models[0].id, 'stop'); await service.settled()
-    const fresh = new LocalModels({ stateDir, processEnv: { GRID_HOME: home }, run, request: request as typeof fetch , inventory })
+    const fresh = modelFixture({ stateDir, processEnv: { GRID_HOME: home }, run, request: request as typeof fetch , inventory })
     expect((await fresh.list('home')).models[0]).toMatchObject({ state: 'downloaded', canStart: true })
     await fresh.act('home', first.models[0].id, 'start'); await fresh.settled()
     expect(calls.some(args => args[0] === 'pull')).toBe(false)
@@ -295,7 +307,7 @@ describe('local model discovery and lifecycle', () => {
     if (scenario === 'legacy') delete saved[0].aliases
     if (scenario === 'malformed') saved[0].aliases = [42, '', '--invalid', 'invalid\nname']
     await writeFile(path, JSON.stringify(saved))
-    const fresh = new LocalModels({ stateDir, processEnv: { GRID_HOME: home }, run, request: request as typeof fetch , inventory })
+    const fresh = modelFixture({ stateDir, processEnv: { GRID_HOME: home }, run, request: request as typeof fetch , inventory })
     await fresh.act('home', id, 'start'); await fresh.settled()
     const expectedAlias = scenario === 'current' ? 'team/my-model' : scenario === 'legacy' ? 'my-model' : null
     const joined = calls.find(args => args.includes('join'))!
@@ -415,7 +427,7 @@ describe('local model discovery and lifecycle', () => {
 
   it.each([undefined, 'https://alternate.example.test'])('uses the configured or default catalog when the credential store omits it', async base => {
     await writeFile(join(home, 'credentials.toml'), 'session_token = "test-only-token"\n')
-    service = new LocalModels({ stateDir, processEnv: { GRID_HOME: home, GRID_CONTROL_PLANE_URL: base }, run, request: request as typeof fetch , inventory })
+    service = modelFixture({ stateDir, processEnv: { GRID_HOME: home, GRID_CONTROL_PLANE_URL: base }, run, request: request as typeof fetch , inventory })
     await service.list('home')
     expect(String(request.mock.calls[0][0])).toBe(`${base ?? 'https://api-grid.autonomous.ai'}/v1/grid/catalog`)
   })
@@ -735,7 +747,7 @@ describe('local model discovery and lifecycle', () => {
   it.each([false, true])('handles an explicit engine override (available=%s)', async available => {
     const binary = join(root, 'custom-llama')
     if (available) await writeFile(binary, '#!/bin/sh\nexit 0', { mode: 0o700 })
-    service = new LocalModels({ stateDir, processEnv: { GRID_HOME: home, LLAMA_SERVER: binary }, run, request: request as typeof fetch , inventory })
+    service = modelFixture({ stateDir, processEnv: { GRID_HOME: home, LLAMA_SERVER: binary }, run, request: request as typeof fetch , inventory })
     await service.act('home', 'org/Small-GGUF', 'start'); await service.settled()
     const operation = (await service.list('home')).models[0].operation
     expect(operation?.phase).toBe(available ? 'done' : 'failed')
@@ -789,7 +801,7 @@ describe('local model discovery and lifecycle', () => {
     vi.stubEnv('GRID_HOME', home)
     vi.stubGlobal('fetch', request)
     const rpc = vi.spyOn(GridFleetRpc.prototype, 'run').mockImplementation(async (_owner, _id, options, output) => run(options.args, output))
-    service = new LocalModels({ stateDir, inventory })
+    service = modelFixture({ stateDir, inventory })
     await service.act('home', 'org/Small-GGUF', 'start'); await service.settled()
     expect((await service.list('home')).models[0].operation?.phase).toBe('done')
     expect(rpc).toHaveBeenCalledWith('local-models', expect.any(String), expect.objectContaining({ timeoutMs: 30_000, thinking: false }), undefined, 4 * 1024 * 1024)
@@ -1022,7 +1034,7 @@ describe('the Model Manager while its grid sleeps (grid-reads-without-waking iss
 
   it('tells its owner when a start or stop has finished, so the lists are read again', async () => {
     const onChanged = vi.fn()
-    service = new LocalModels({ stateDir, processEnv: { GRID_HOME: home }, run, request: request as typeof fetch, inventory, onChanged })
+    service = modelFixture({ stateDir, processEnv: { GRID_HOME: home }, run, request: request as typeof fetch, inventory, onChanged })
     await service.act('home', 'org/Small-GGUF', 'start'); await service.settled()
     expect(onChanged).toHaveBeenCalledOnce()
   })
@@ -1098,7 +1110,7 @@ describe('a context a coding agent can work in', () => {
     // Unreadable header: unknown is not "too small".
     expect((await service.list('home', true)).models.map(m => m.id)).toEqual([id])
     trainedWindow = 32768
-    const fresh = new LocalModels({ stateDir, processEnv: { GRID_HOME: home }, run, request: request as typeof fetch, inventory })
+    const fresh = modelFixture({ stateDir, processEnv: { GRID_HOME: home }, run, request: request as typeof fetch, inventory })
     expect((await fresh.list('home')).models).toEqual([])
   })
 
@@ -1199,7 +1211,7 @@ describe('stepping down to the context that actually runs', () => {
     const id = (await service.list('home')).models[0].id
     await service.act('home', id, 'stop'); await service.settled()
     trainedWindow = 262144
-    const fresh = new LocalModels({ stateDir, processEnv: { GRID_HOME: home }, run, request: request as typeof fetch, inventory })
+    const fresh = modelFixture({ stateDir, processEnv: { GRID_HOME: home }, run, request: request as typeof fetch, inventory })
     await fresh.act('home', id, 'start'); await fresh.settled()
     expect(joinedAt()).toEqual([262144])
   })
@@ -1211,7 +1223,7 @@ describe("a model is labelled with the machine's name as Harness shows it", () =
   const joined = () => calls.find(args => args.includes('join'))!
 
   it('joins under the Harness name', async () => {
-    const named = new LocalModels({ stateDir, processEnv: { GRID_HOME: home }, run, request: request as typeof fetch, machineName: () => ' M2 ', inventory })
+    const named = modelFixture({ stateDir, processEnv: { GRID_HOME: home }, run, request: request as typeof fetch, machineName: () => ' M2 ', inventory })
     await named.act('home', 'org/Small-GGUF', 'start'); await named.settled()
     expect(joined().slice(joined().indexOf('--name'), joined().indexOf('--name') + 2)).toEqual(['--name', 'M2'])
   })
@@ -1221,7 +1233,7 @@ describe("a model is labelled with the machine's name as Harness shows it", () =
     ['would read as a flag', () => '--all'],
     ['carries a control character', () => 'M2\nevil'],
   ])('leaves --name off when the name %s, rather than pass it', async (_case, machineName) => {
-    const named = new LocalModels({ stateDir, processEnv: { GRID_HOME: home }, run, request: request as typeof fetch, machineName, inventory })
+    const named = modelFixture({ stateDir, processEnv: { GRID_HOME: home }, run, request: request as typeof fetch, machineName, inventory })
     await named.act('home', 'org/Small-GGUF', 'start'); await named.settled()
     expect(joined()).not.toContain('--name')
     expect((await named.list('home', true)).models[0].operation?.phase).toBe('done')
@@ -1298,7 +1310,7 @@ describe('models other apps downloaded, started in their own app', () => {
     })
     inventory.mockImplementation(async () => ({ state: 'awake', status: 'running',
       nodes: [...joinedAliases].map(alias => ({ node_id: 'local-node', online: true, models: [alias] })) }))
-    return new LocalModels({ stateDir, processEnv: { GRID_HOME: home }, run, request: request as typeof fetch, inventory,
+    return modelFixture({ stateDir, processEnv: { GRID_HOME: home }, run, request: request as typeof fetch, inventory,
       appModels: async () => apps, appEngines: ops as unknown as AppEngineOps })
   }
   beforeEach(() => {
@@ -1367,7 +1379,7 @@ describe('models other apps downloaded, started in their own app', () => {
 
   it('answers from the last scan while a slow one runs, and the list after it has the new one', async () => {
     let scans = 0, release!: () => void
-    const models = new LocalModels({ stateDir, processEnv: { GRID_HOME: home }, run, request: request as typeof fetch, inventory,
+    const models = modelFixture({ stateDir, processEnv: { GRID_HOME: home }, run, request: request as typeof fetch, inventory,
       appEngines: ops as unknown as AppEngineOps,
       appModels: async () => {
         if (++scans === 1) return [ollama]
@@ -1388,7 +1400,7 @@ describe('models other apps downloaded, started in their own app', () => {
     let scans = 0
     const appIds = (snapshot: Awaited<ReturnType<LocalModels['list']>>) => snapshot.models.filter(m => m.app && m.app !== 'Grid').map(m => m.id)
     // Started again, with every scan hanging: the saved one answers at once, nothing waits on a scan.
-    const restarted = new LocalModels({ stateDir, processEnv: { GRID_HOME: home }, run, request: request as typeof fetch, inventory,
+    const restarted = modelFixture({ stateDir, processEnv: { GRID_HOME: home }, run, request: request as typeof fetch, inventory,
       appEngines: ops as unknown as AppEngineOps, appScanMs: 50,
       appModels: () => { scans++; return new Promise<AppModel[]>(() => {}) } })
     expect(appIds(await restarted.list('home'))).toEqual([ollama.id, studio.id])
@@ -1418,6 +1430,29 @@ describe('models other apps downloaded, started in their own app', () => {
     expect(row).toMatchObject({ state: 'downloaded', canStart: true })
     expect(ops.stop).toHaveBeenCalledTimes(1)
     expect(joinedAliases.size).toBe(0)
+  })
+
+  it('settles a background app scan and its saved receipt before returning', async () => {
+    // Found by QA on a quiet machine: teardown removed receipts while an app scan was still saving them.
+    let scans = 0
+    let finishScan!: (models: AppModel[]) => void
+    service = modelFixture({ stateDir, processEnv: { GRID_HOME: home }, run, request: request as typeof fetch, inventory,
+      appModels: () => ++scans === 1 ? Promise.resolve([ollama]) : new Promise(resolve => { finishScan = resolve }),
+      appEngines: ops as unknown as AppEngineOps })
+    await service.list('home')
+    await service.list('home', true)
+    const settled = vi.fn()
+    const drained = service.settled().then(settled)
+    try {
+      await new Promise(resolve => setImmediate(resolve))
+      expect(settled).not.toHaveBeenCalled()
+    } finally {
+      finishScan([{ ...ollama, name: 'after the scan' }])
+      await vi.waitFor(async () => {
+        expect(JSON.parse(await readFile(join(stateDir, 'app-models.json'), 'utf8'))[0].name).toBe('after the scan')
+      })
+      await drained
+    }
   })
 
   it('starts nothing that cannot get 64K beside its weights', async () => {
@@ -1479,7 +1514,7 @@ describe('Jev models: Get brings Grid\'s llama.cpp up to a build that serves the
       }
       return response({ choices: [{ message: { content: 'ok' } }] })
     })
-    return new LocalModels({ stateDir, processEnv: { GRID_HOME: home, ...env }, run, request: request as typeof fetch, inventory,
+    return modelFixture({ stateDir, processEnv: { GRID_HOME: home, ...env }, run, request: request as typeof fetch, inventory,
       appModels: async () => [gemma], appEngines: ops as unknown as AppEngineOps })
   }
   const laya = async (models: LocalModels) => (await models.list('home', true)).models.find(m => m.id === LAYA)!

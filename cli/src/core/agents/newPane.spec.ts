@@ -89,10 +89,22 @@ describe('watching a new pane', () => {
 
   it('marks the terminal unavailable when the pane is gone', async () => {
     const { deps, watch } = setup()
-    vi.mocked(tmuxPaneState).mockResolvedValueOnce(null)
+    vi.mocked(tmuxPaneState).mockResolvedValueOnce('gone')
     await watch('claude', pending, spawned, ['claude'], undefined)
     expect(deps.registry.setTerminalAvailable).toHaveBeenCalledWith('a1', false)
     expect(deps.announceSession).toHaveBeenCalledWith(pending)
+  })
+
+  it('asks again when tmux could not say, and finds the engine once it can', async () => {
+    // A read that timed out while the daemon's event loop was held, then the engine it was looking for.
+    const { deps, watch } = setup()
+    vi.mocked(tmuxPaneState).mockResolvedValueOnce('unknown')
+    vi.mocked(resolvePaneEngineProcess).mockResolvedValueOnce(null).mockResolvedValueOnce({ pid: 7, executable: 'claude', startMarker: 'm' })
+    const done = watch('claude', pending, spawned, ['claude'], undefined)
+    await vi.advanceTimersByTimeAsync(50)
+    await done
+    expect(deps.registry.setTerminalAvailable).not.toHaveBeenCalled()
+    expect(deps.registry.setLaunch).toHaveBeenCalledWith('a1', { state: 'ready' })
   })
 
   it('fails a launch whose pane died: not installed, or did not start', async () => {

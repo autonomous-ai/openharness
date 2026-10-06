@@ -540,6 +540,64 @@ describe('session repair — a Codex process names its own rollout', () => {
   })
 })
 
+// A home the person moved in their shell profile (CLAUDE_CONFIG_DIR, CODEX_HOME: lib/engineHomes.ts) is where
+// the engine they start by hand writes: Claude Code its transcript and its process record, Codex its rollout.
+// With no start-up hook to name the conversation (the engine's hooks not installed there yet, or the hook
+// lost to a daemon restart), the process repair is all that binds it, and it looked in the default folders
+// alone: the agent in a moved home stayed without a conversation.
+describe('session repair — homes the person moved', () => {
+  const lines = (...records: object[]) => `${records.map(r => JSON.stringify(r)).join('\n')}\n`
+  async function moved(claudeHome: string, codexHome: string) {
+    // Empty stand-in defaults, so nothing depends on this machine's own ~/.claude or ~/.codex.
+    process.env.CODEX_HOME = tempRoot()
+    const loaded = await load(join(tempRoot(), 'projects'))
+    const homes = await import('./engineHomes.js')
+    homes.adoptEngineHomes({ CLAUDE_CONFIG_DIR: claudeHome, CODEX_HOME: codexHome }, { claudeHome: '/nowhere/.claude', codexHome: '/nowhere/.codex' })
+    return loaded
+  }
+  afterEach(async () => {
+    delete process.env.CODEX_HOME
+    rmSync(join(process.env.ADAPTER_DATA_DIR!, 'engine-homes.json'), { force: true })
+    ;(await import('./engineHomes.js')).resetEngineHomes()
+  })
+
+  it('Claude Code: the process record and the transcript in CLAUDE_CONFIG_DIR', async () => {
+    const claudeHome = tempRoot()
+    const id = '11111111-2222-4333-8444-555555555501'
+    writeTranscript(join(claudeHome, 'projects'), 'project', id, CWD, STARTED_AT + 5_000)
+    mkdirSync(join(claudeHome, 'sessions'))
+    writeFileSync(join(claudeHome, 'sessions', '77.json'), JSON.stringify({ pid: 77, cwd: CWD, sessionId: id, procStart: new Date(STARTED_AT).toUTCString() }))
+    const { claudeProcessSession, findLiveSession } = await moved(claudeHome, tempRoot())
+    const transcriptPath = join(claudeHome, 'projects', 'project', `${id}.jsonl`)
+    await expect(claudeProcessSession(77, CWD, STARTED_AT)).resolves.toEqual({ sessionId: id, transcriptPath })
+    // And by the folder scan, when there is no process record to read.
+    await expect(findLiveSession('claude', CWD, STARTED_AT, { bornOnly: true })).resolves.toEqual({ sessionId: id, transcriptPath })
+  })
+
+  it('Claude Code: a sub-agent\'s transcript in the moved home is still never an agent of its own', async () => {
+    const claudeHome = tempRoot()
+    const file = join(claudeHome, 'projects', 'proj', 'p-sess', 'subagents', 'agent-a1.jsonl')
+    mkdirSync(join(file, '..'), { recursive: true })
+    writeFileSync(file, lines({ type: 'user', cwd: CWD }))
+    utimesSync(file, new Date(STARTED_AT + 60_000), new Date(STARTED_AT + 60_000))
+    const { findLiveSession } = await moved(claudeHome, tempRoot())
+    await expect(findLiveSession('claude', CWD, STARTED_AT, { bornOnly: true })).resolves.toBeNull()
+  })
+
+  it('Codex: the rollout in CODEX_HOME, by the file its process holds open and by the folder scan', async () => {
+    const codexHome = tempRoot()
+    const id = 'a1b2c3d4-1111-4a4a-8a8a-000000000101'
+    const file = writeCodexRollout(codexHome, id, CWD, STARTED_AT + 5_000)
+    const { codexProcessSession, findLiveSession } = await moved(tempRoot(), codexHome)
+    await expect(findLiveSession('codex', CWD, STARTED_AT, { bornOnly: true })).resolves.toEqual({ sessionId: id, transcriptPath: file })
+    const roots = [join(process.env.CODEX_HOME!, 'sessions'), join(codexHome, 'sessions')]
+    await expect(codexProcessSession(42, roots, CWD, async () => [file])).resolves.toEqual({ sessionId: id, transcriptPath: realpathSync(file) })
+    // One conversation in each home for this folder: two agents, and no guess.
+    writeCodexRollout(process.env.CODEX_HOME!, 'a1b2c3d4-1111-4a4a-8a8a-000000000102', CWD, STARTED_AT + 6_000)
+    await expect(findLiveSession('codex', CWD, STARTED_AT, { bornOnly: true })).resolves.toBeNull()
+  })
+})
+
 describe('claudeContinuation', () => {
   it('follows a continued-in marker to the new session file', async () => {
     const dir = tempRoot()
@@ -676,6 +734,30 @@ describe('findResumedTranscript', () => {
     const { findResumedTranscript } = await import('./sessionRepair.js')
 
     await expect(findResumedTranscript('codex', id, { codexHome: profile })).resolves.toBe(file)
+  })
+
+  // A home the person moved in their shell profile (CLAUDE_CONFIG_DIR, CODEX_HOME: lib/engineHomes.ts)
+  // holds the conversations their engine wrote there, and the registry takes them (#779). A resume of one
+  // typed into a pane was looked for in the default folders alone, found nowhere, and never bound.
+  it('finds a conversation in a home the person moved, Claude Code\'s and Codex\'s', async () => {
+    const claudeHome = tempRoot()
+    const codexHome = tempRoot()
+    const claudeId = 'f56f0a36-aa58-4af1-a6e2-a77386122399'
+    const codexId = 'a1b2c3d4-1111-4a4a-8a8a-000000000099'
+    writeTranscript(join(claudeHome, 'projects'), '-w', claudeId, CWD, STARTED_AT)
+    const rollout = writeCodexRollout(codexHome, codexId, CWD, STARTED_AT)
+    const { findResumedTranscript } = await load(tempRoot())
+    const homes = await import('./engineHomes.js')
+    homes.adoptEngineHomes({ CLAUDE_CONFIG_DIR: claudeHome, CODEX_HOME: codexHome }, { claudeHome: '/nowhere/.claude', codexHome: '/nowhere/.codex' })
+    try {
+      await expect(findResumedTranscript('claude', claudeId)).resolves.toBe(join(claudeHome, 'projects', '-w', `${claudeId}.jsonl`))
+      await expect(findResumedTranscript('codex', codexId)).resolves.toBe(rollout)
+      // An agent's own Codex profile is its only home.
+      await expect(findResumedTranscript('codex', codexId, { codexHome: tempRoot() })).resolves.toBeNull()
+    } finally {
+      rmSync(join(process.env.ADAPTER_DATA_DIR!, 'engine-homes.json'), { force: true })
+      homes.resetEngineHomes()
+    }
   })
 
   it('never treats an argv value that is not a session id as one', async () => {
