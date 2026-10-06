@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
@@ -40,6 +40,35 @@ describe('Codex child rollout reader', () => {
       totalTokens: 456,
       totalDurationMs: 3_000,
     })
+  })
+
+  // A person who moved CODEX_HOME in their shell profile runs Codex there, and its sub-agents' rollouts are
+  // written beside the parent's. The default resolver read the daemon's own CODEX_HOME alone, so every Task
+  // card of an agent in a moved home closed with no tools inside it and no totals.
+  it('finds a child rollout in a CODEX_HOME the person moved, for an agent on no profile of its own', async () => {
+    const childId = '019f35c1-8017-7391-beb4-06a01ceda2be'
+    const moved = join(root, 'codex-work')
+    const dir = join(moved, 'sessions', '2026', '10', '05')
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, `rollout-2026-10-05T12-00-00-${childId}.jsonl`), [
+      line('2026-10-05T12:00:00.000Z', 'session_meta', { id: childId, source: { subagent: 'explorer' } }),
+      line('2026-10-05T12:00:03.000Z', 'event_msg', { type: 'token_count', info: { total_token_usage: { total_tokens: 789 } } }),
+    ].join('\n'))
+    vi.resetModules()
+    vi.stubEnv('CODEX_HOME', join(root, 'daemon-codex'))
+    const homes = await import('../../lib/engineHomes.js')
+    homes.adoptEngineHomes({ CODEX_HOME: moved }, { claudeHome: '/nowhere/.claude', codexHome: '/nowhere/.codex' })
+    try {
+      const { codexSubagentResolverFor, resolveCodexSubagent } = await import('./subagent.js')
+      expect(resolveCodexSubagent(childId)?.totalTokens).toBe(789)
+      expect(codexSubagentResolverFor(null)(childId)?.totalTokens).toBe(789)
+      // An agent's own profile is its only home.
+      expect(codexSubagentResolverFor(join(root, 'elsewhere'))(childId)).toBeNull()
+    } finally {
+      vi.unstubAllEnvs()
+      rmSync(join(process.env.ADAPTER_DATA_DIR!, 'engine-homes.json'), { force: true })
+      homes.resetEngineHomes()
+    }
   })
 
   it('rejects unsafe child ids before walking the filesystem', () => {
