@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { existsSync, mkdirSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { homedir, userInfo } from 'node:os'
 import { isAbsolute, basename, dirname, join } from 'node:path'
 import { env } from '../config/env.js'
@@ -440,9 +440,55 @@ export function interactiveEngineShell(shell: string | undefined = undefined): I
 function engineShellArgv(shell: InteractiveEngineShell, args: readonly string[]): string[] {
   if (!isPosixShell(shell.path)) return throughPosixShell(shell, args)
   const prefix = basename(shell.path).toLowerCase() === 'zsh'
-    ? ['/usr/bin/env', 'DISABLE_AUTO_UPDATE=true']
+    ? ['/usr/bin/env', 'DISABLE_AUTO_UPDATE=true', ...zshNewUserGuard()]
     : []
   return [...prefix, shell.path, ...shell.args, ...args]
+}
+
+/** The startup files zsh's new-user module looks for (zshmodules(1), zsh/newuser). */
+const ZSH_STARTUP_FILES = ['.zshenv', '.zprofile', '.zshrc', '.zlogin'] as const
+
+/**
+ * The .zshenv in Harness's own ZDOTDIR (`zshNewUserGuard`): the person's ZDOTDIR back as it was, or
+ * unset, before anything of theirs is read, and their .zshenv if one has appeared since. zsh reads each
+ * later startup file from ZDOTDIR as it is by then, so .zprofile, .zshrc and .zlogin come from theirs.
+ */
+export const ZSH_GUARD_ZSHENV = `# Written by Harness (engineLaunch.ts zshNewUserGuard): keeps zsh's new-user menu out of an agent's pane.
+if (( \${+HARNESS_ZDOTDIR} )); then ZDOTDIR="\$HARNESS_ZDOTDIR"; unset HARNESS_ZDOTDIR; else unset ZDOTDIR; fi
+[[ -r "\${ZDOTDIR:-\$HOME}/.zshenv" ]] && builtin source "\${ZDOTDIR:-\$HOME}/.zshenv"
+`
+
+/**
+ * What an engine's zsh is started with so that zsh's new-user menu never takes its pane.
+ *
+ * Debian, Ubuntu, Fedora and Arch ship zsh with its `zsh/newuser` module: a zsh on a terminal, started
+ * by someone with none of .zshenv, .zprofile, .zshrc or .zlogin in $ZDOTDIR (else $HOME), runs
+ * `zsh-newuser-install` before anything else, a full-screen menu that waits for a key. An agent's pane
+ * is a terminal, so on such a Linux machine every agent's pane showed that menu and its engine never
+ * started: the agent never bound its conversation. Found by the end-to-end suite's first runs on Linux
+ * (2026-10-06); macOS's zsh has no such module, and this never showed there.
+ *
+ * The module looks only for those four files, and only in ZDOTDIR, right after the global zshenv. So
+ * for such a person the launch points ZDOTDIR at a folder of Harness's holding just a .zshenv
+ * (`ZSH_GUARD_ZSHENV`), which puts their ZDOTDIR back (`HARNESS_ZDOTDIR`; absent means it was unset)
+ * before anything of theirs would be read. The global startup files run as before. Anyone with a
+ * startup file of their own gets nothing here: their zsh starts exactly as it did.
+ */
+export function zshNewUserGuard(environment: NodeJS.ProcessEnv = process.env): string[] {
+  const dotdir = environment.ZDOTDIR || environment.HOME
+  if (!dotdir || ZSH_STARTUP_FILES.some((name) => existsSync(join(dotdir, name)))) return []
+  const folder = join(env.ADAPTER_DATA_DIR, 'zsh-startup')
+  try {
+    mkdirSync(folder, { recursive: true, mode: 0o700 })
+    const file = join(folder, '.zshenv')
+    let current: string | null = null
+    try { current = readFileSync(file, 'utf8') } catch { /* not written yet */ }
+    if (current !== ZSH_GUARD_ZSHENV) writeFileSync(file, ZSH_GUARD_ZSHENV, { mode: 0o600 })
+  } catch {
+    // A ZDOTDIR without its .zshenv would leave the person's own ZDOTDIR unrestored: launch as before.
+    return []
+  }
+  return [`ZDOTDIR=${folder}`, ...(environment.ZDOTDIR !== undefined ? [`HARNESS_ZDOTDIR=${environment.ZDOTDIR}`] : [])]
 }
 
 /**

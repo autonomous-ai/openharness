@@ -46,7 +46,9 @@ describe('the person\'s login shell', () => {
       const answer = await client.request('terminal_info', { agentId: created.agent.id }, 10_000)
       return answer.command && !answer.error && answer.command !== 'sh' ? answer : null
     }, 30_000, 500)
-    expect(info.command).toBe(shell.split('/').at(-1))
+    // tmux names the command from argv[0] on Linux, and Debian's tcsh rewrites its own to "-bin/tcsh",
+    // which tmux reads as "bin/tcsh"; macOS's tmux reads the process name. The shell is the same.
+    expect(String(info.command).split('/').at(-1)).toBe(shell.split('/').at(-1))
     expect(realpathSync(info.path)).toBe(realpathSync(cwd))
     client.close()
   }, 120_000)
