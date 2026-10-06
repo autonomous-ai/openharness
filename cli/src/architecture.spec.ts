@@ -222,7 +222,12 @@ const SERVICE_MAY_IMPORT: Record<string, string> = {
 // 97 lines (#888) with it, and the core reaches grid only through its port (core/modelsLink.ts), keeping
 // which `grid` a pane runs (lib/gridBinary.ts), how a frame reads a grid's note (lib/gridAnnotation.ts) and
 // the launchers (lib/launchers.ts).
-const CORE_CLOSURE_BUDGET = 89_730
+//
+// Then at 89,761 in 402 (step 8, its first change), from 89,632 in 401: delivered turns (core/deliveries.ts), the one way the Wi-Fi
+// device, the teams and the orchestrator write a turn and hear of it, which lets the latter two run in
+// processes of their own. Its lines are added here, ahead of the moves that take the teams and the
+// orchestrator out of this process.
+const CORE_CLOSURE_BUDGET = 89_860
 
 /** What is not the core's, by path: each goes to a service or its own process, in the plan's order. */
 const EDGE: RegExp[] = [

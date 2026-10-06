@@ -29,6 +29,8 @@ questions. Everything else is a service ([../services/AGENTS.md](../services/AGE
 - `terminals/`: who controls a pane (the control lease).
 - `engines/`: the engines' hooks.
 - `input.ts`, `questions.ts`: messages into a pane; an agent's question and its answer.
+- `deliveries.ts`: delivered turns, the Wi-Fi device's, a team's and the orchestrator's: text written into an
+  agent under a delivery id of its maker's, and what became of it, told back to that maker in its process.
 - `main.ts`: the core's entry (`harness __run`) and composition root, `runForeground`: it builds these
   modules, starts the services through `serviceHost` and wires the socket. The one core file that imports
   services and the socket, and the one outside the 100% coverage: wiring only, run end to end. The
