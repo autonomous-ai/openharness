@@ -26,7 +26,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: e24811558ee870a4d8edbff5fdaf503cb485914b
+          ref: 808e6530516e1250c96fcba649f756cf8c252662
       - uses: actions/setup-node@v7
         with:
           node-version: '22.23.2'
@@ -105,7 +105,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() }}
         with:
-          name: detached-core-e248-${{ matrix.suite }}
+          name: detached-core-808e-${{ matrix.suite }}
           path: .harness/validation/
           if-no-files-found: error
           include-hidden-files: true
