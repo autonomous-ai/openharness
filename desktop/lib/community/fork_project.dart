@@ -81,7 +81,7 @@ class ForkProjectImporter {
       ..connectionTimeout = const Duration(seconds: 15);
     try {
       final request = await client.getUrl(
-        base.resolve('/explore/${link.harnessId}/snapshot'),
+        base.resolve('/hub/${link.harnessId}/snapshot'),
       );
       request.followRedirects = false;
       final response = await request.close().timeout(
@@ -197,7 +197,7 @@ class ForkProjectImporter {
         await target.parent.create();
         await target.writeAsBytes(files['blender-design.json']!);
       }
-      final source = 'https://harness.autonomous.ai/explore/${link.harnessId}';
+      final source = 'https://harness.autonomous.ai/hub/${link.harnessId}';
       final turns = snapshot['conversation'] as List;
       await File(p.join(workspace.path, 'SESSION.md')).writeAsString(
         '# Published context\n\nSource: $source\n${snapshot['example'] == true ? '\nAuthored example brief, not a recorded session.\n' : ''}\n${turns.map((t) => '## ${t['role']}\n\n${t['text']}').join('\n\n')}\n',

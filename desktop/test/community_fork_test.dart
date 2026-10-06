@@ -259,7 +259,7 @@ void main() {
       var reads = 0;
       server.listen((request) async {
         reads++;
-        expect(request.uri.path, '/explore/${link.harnessId}/snapshot');
+        expect(request.uri.path, '/hub/${link.harnessId}/snapshot');
         request.response.headers.contentType = ContentType.json;
         request.response.write(
           jsonEncode({'version': 1, 'harness': snapshot()}),

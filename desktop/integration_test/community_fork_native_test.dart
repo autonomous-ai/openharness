@@ -7,6 +7,7 @@ import 'package:integration_test/integration_test.dart';
 import 'package:harness/community/fork_inbox.dart';
 import 'package:harness/community/fork_link.dart';
 import 'package:harness/community/fork_project.dart';
+import 'package:harness/community/publish_project.dart';
 
 import '../test/community_fork_test.dart' show MemoryStore;
 
@@ -111,6 +112,17 @@ void main() {
             await File('${fork.folder}/${entry.value}').length(),
             greaterThan(0),
           );
+          final draft = await buildPublicationDraft(
+            folder: fork.folder,
+            title: fork.title,
+            engine: fork.engine,
+            harnessId: fork.dsh,
+          );
+          expect(draft['forkedFrom'], 'starter-${entry.key}');
+          expect(
+            (draft['files'] as List).any((f) => f['path'] == entry.value),
+            isTrue,
+          );
           if (entry.key == 'ribbon-lamp') {
             expect(
               await File('${fork.folder}/.harness/design.json').exists(),
@@ -135,4 +147,53 @@ void main() {
       }
     });
   });
+
+  testWidgets('native publication arrives as a private browser draft', (
+    tester,
+  ) async {
+    const directory = String.fromEnvironment('HARNESS_PUBLISH_REVIEW_DIR');
+    const origin = String.fromEnvironment('HARNESS_COMMUNITY_ORIGIN');
+    await tester.runAsync(() async {
+      final root = await Directory.systemTemp.createTemp('hub-native-publish-');
+      try {
+        await File('${root.path}/preview.html').writeAsString(
+          '<!doctype html><style>body{background:#ede9e2;font:48px Georgia;padding:10vw;color:#233b32}</style><h1>A quieter orbit.</h1><p>Made from an open harness.</p>',
+        );
+        final draft = await buildPublicationDraft(
+          folder: root.path,
+          title: 'A quieter orbit',
+          engine: 'codex',
+          tail: {
+            'rows': [
+              {
+                'ask': 'Make an orbit in warm paper and forest green.',
+                'answer': 'Here is a quieter version.',
+              },
+            ],
+          },
+        );
+        draft['description'] =
+            'A disposable draft for the native-to-web publishing check.';
+        final handoff = await PublicationHandoff.start(draft, origin: origin);
+        try {
+          await Directory(directory).create(recursive: true);
+          await File('$directory/url').writeAsString(handoff.url.toString());
+          final deadline = DateTime.now().add(const Duration(minutes: 4));
+          while (!File('$directory/reviewed').existsSync() &&
+              DateTime.now().isBefore(deadline)) {
+            await Future<void>.delayed(const Duration(milliseconds: 200));
+          }
+          expect(
+            File('$directory/reviewed').existsSync(),
+            isTrue,
+            reason: 'Review the imported draft in the browser.',
+          );
+        } finally {
+          await handoff.close();
+        }
+      } finally {
+        await root.delete(recursive: true);
+      }
+    });
+  }, skip: const String.fromEnvironment('HARNESS_PUBLISH_REVIEW_DIR') == '');
 }

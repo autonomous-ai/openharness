@@ -29,6 +29,11 @@ const db = vi.hoisted(() => {
       findFirst: vi.fn(async (query: Query) => find(query)[0] || null),
       findUnique: vi.fn(async (query: Query) => find(query)[0] || null),
       count: vi.fn(async (query: Query) => find(query).length),
+      groupBy: vi.fn(async (query: Query) => {
+        const counts = new Map<string, number>()
+        for (const row of find(query)) counts.set(row.harnessId as string, (counts.get(row.harnessId as string) || 0) + 1)
+        return [...counts].map(([harnessId, count]) => ({ harnessId, _count: { _all: count } }))
+      }),
       create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => { const row = { id: crypto.randomUUID(), createdAt: new Date(), ...data } as Row; rows.push(row); return row }),
       upsert: vi.fn(async ({ where, create, update }: { where: Record<string, unknown>; create: Record<string, unknown>; update: Record<string, unknown> }) => {
         let row = rows.find(row => matches(row, where));
@@ -72,6 +77,34 @@ beforeEach(async () => {
 afterEach(async () => app.close())
 
 describe('publications and access', () => {
+  it('shows feed engagement and gives the creator a place to find and reply to comments', async () => {
+    const id = await publish()
+    await call('PUT', `harnesses/${id}/like`, 'bob', { liked: true })
+    const comment = (await call('POST', `harnesses/${id}/comments`, 'bob', { body: 'How did you make this?', clientId: crypto.randomUUID() })).json().data.comment
+    const reply = await call('POST', `harnesses/${id}/comments`, 'alice', { body: 'Start from the source and change the colors.', parentId: comment.id, clientId: crypto.randomUUID() })
+    expect(reply.statusCode).toBe(200)
+    expect(reply.json().data.comment).toMatchObject({ creator: true, parentId: comment.id, parentAuthorName: 'Bob' })
+    const feed = (await call('GET', 'harnesses?mine=true', 'alice')).json().data
+    expect(feed.harnesses.map((row: Row) => row.id)).toEqual([id])
+    expect(feed.stats[id]).toEqual({ likes: 1, comments: 2, liked: false })
+    expect((await call('GET', 'harnesses?mine=true', 'bob')).json().data.harnesses).toEqual([])
+    expect((await call('GET', 'harnesses?mine=true')).statusCode).toBe(401)
+  })
+  it('keeps replies inside the same public harness and account environment', async () => {
+    const id = await publish()
+    const comment = (await call('POST', `harnesses/${id}/comments`, 'bob', { body: 'A question', clientId: crypto.randomUUID() })).json().data.comment
+    const payload = { body: 'A reply', clientId: crypto.randomUUID(), parentId: comment.id }
+    expect((await call('POST', `harnesses/${starter}/comments`, 'alice', payload)).statusCode).toBe(404)
+    expect((await call('POST', `harnesses/${starter}/comments`, 'alice', payload, 'stag')).statusCode).toBe(404)
+    await call('DELETE', `harnesses/${id}/comments/${comment.id}`, 'bob')
+    expect((await call('POST', `harnesses/${id}/comments`, 'alice', payload)).statusCode).toBe(404)
+  })
+  it('returns the same publication after a lost-response retry', async () => {
+    const payload = { ...sample, clientId: crypto.randomUUID() }
+    const first = await publish('alice', payload)
+    expect(await publish('alice', payload)).toBe(first)
+    expect(db.communityHarness.rows).toHaveLength(1)
+  })
   it('retains a named harness and binary output through publishing and public reads', async () => {
     const payload = { ...sample, harnessId: 'autonomous/blender', files: [
       ...sample.files,
