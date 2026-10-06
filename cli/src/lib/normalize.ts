@@ -970,6 +970,16 @@ export function lineToEvents(rawLine: string, state: TurnState): LiveEvent[] {
     state.continuedSeq = state.turnSeq
     return [{ type: 'turn_started', payload: { userMessage: continued } }]
   }
+  // Claude Code's own record that its turn is over. A pass a blocking hook continued can end with no
+  // output at all: when the hook refuses again, Claude Code pauses the goal ("A hook blocked…", "Goal
+  // paused · …") and writes only this (real 2.1.283). No end_turn and no further Stop hook follows, so
+  // the pass opened above would stay open until the next prompt. Every other turn is closed as before.
+  if (raw.type === 'system' && raw.subtype === 'turn_duration') {
+    if (!state.turnOpen || state.continuedSeq === undefined || state.continuedSeq !== state.turnSeq) return []
+    state.turnOpen = false
+    state.pendingTools.clear()
+    return [{ type: 'turn_ended', payload: {} }]
+  }
   const msg = transformLine(raw)
   if (!msg?.message) return []
 

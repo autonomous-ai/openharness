@@ -115,6 +115,22 @@ describe('how turns end', () => {
     client.close()
   })
 
+  it('claude: a /goal that pauses after its hook refuses to stop ends its turn, and the agent reads idle', async () => {
+    const d = await fresh()
+    const client = await LocalClient.connect(d)
+    const agent = await create(d, client, 'claude', 'goal-pause')
+    const since = client.frames.length
+    const label = 'Continuing goal: every check passes'
+    client.send('message', { agentId: agent.id, content: '!goalpause every check passes' })
+    const pass = await client.waitFor((frame) => isTurn('turn_started', agent.id)(frame) && frame.payload?.userMessage === label, 45_000, 'the refused stop to continue', since)
+    // Claude Code writes no output and fires no Stop for a pass it pauses: only notices and its own
+    // turn_duration. Nothing else closes the pass that the refusal opened.
+    await client.waitFor(isTurn('turn_ended', agent.id), 20_000, 'the paused pass to end', client.frames.indexOf(pass))
+    await until('the agent to read idle', async () => (await row(client, agent.id))?.activity?.state === 'idle' || null, 15_000, 250)
+    await turn(client, agent.id, 'after the pause')
+    client.close()
+  })
+
   it.each(engines)('%s: Ctrl-C typed in the terminal itself ends the turn, and the agent goes on', async (engine) => {
     const d = await fresh()
     const client = await LocalClient.connect(d)

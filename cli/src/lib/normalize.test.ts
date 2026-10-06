@@ -398,6 +398,33 @@ describe('a Stop hook that blocks', () => {
     expect(open.continuedSeq).toBeUndefined()
   })
 
+  it('closes a pass that ends with no output when the goal pauses, and only such a pass', () => {
+    const informational = (content: string) => line({ type: 'system', subtype: 'informational', content, level: 'notice' })
+    const duration = line({ type: 'system', subtype: 'turn_duration', durationMs: 42_000, messageCount: 12 })
+    const state = newTurnState()
+    lineToEvents(user('/goal every page loads under a second'), state)
+    lineToEvents(answer('made the home page fast'), state)
+    lineToEvents(feedback, state)
+    lineToEvents(goal(false), state)
+    for (const record of [summary, informational('A hook blocked the stop twice — pausing.'), informational('Goal paused · resume with /goal')]) {
+      expect(lineToEvents(record, state)).toEqual([])
+    }
+    expect(lineToEvents(duration, state)).toEqual([{ type: 'turn_ended', payload: {} }])
+    expect(state.turnOpen).toBe(false)
+    expect(lineToEvents(duration, state)).toEqual([])
+    // A turn a prompt opened is left to its end_turn and the Stop hook, as before.
+    const prompted = newTurnState()
+    lineToEvents(user('fix it'), prompted)
+    expect(lineToEvents(duration, prompted)).toEqual([])
+    expect(prompted.turnOpen).toBe(true)
+    lineToEvents(feedback, prompted)
+    lineToEvents(answer('fixed'), prompted)
+    lineToEvents(goal(false), prompted)
+    lineToEvents(user('and the rest'), prompted)
+    expect(lineToEvents(duration, prompted)).toEqual([])
+    expect(lineToEvents(duration, { ...newTurnState(), turnOpen: true })).toEqual([])
+  })
+
   it('shows the continuation in the history once, where the live view started it', () => {
     const contents = messagesToEvents([user('/goal every page loads under a second'), answer('made the home page fast'), feedback, goal(false), blocked('Stop', { blockingError: 'not yet' }), summary, answer('made the rest fast')])
       .filter((e) => e.type === 'user_message' || e.type === 'text_delta').map((e) => (e.payload as { content: string }).content)
