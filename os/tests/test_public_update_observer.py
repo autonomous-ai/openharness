@@ -11,6 +11,18 @@ import public_update_vm as observer
 
 
 class PublicUpdateObserverTests(unittest.TestCase):
+    def test_running_compositor_must_be_the_expected_package_binary(self):
+        expected = {'binary': {'sha256': 'a' * 64}}
+        good = dict(executable='/usr/lib/harness-os/labwc', owner='harness-os', sha256='a' * 64)
+        observer.display_matches(good, expected)
+        for key in good:
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                observer.display_matches(dict(good, **{key: 'wrong'}), expected)
+        original = dict(executable='/usr/bin/labwc', owner='labwc', sha256='b' * 64)
+        observer.display_matches(original, original, restored=True)
+        with self.assertRaises(ValueError):
+            observer.display_matches(good, original, restored=True)
+
     def test_one_replaced_process_or_project_change_cannot_pass(self):
         before = {'agents': [{'pid': 42, 'start': 100}], 'daemon': {'pid': 12, 'start': 1},
                   'terminal': {'pid': 50, 'start': 101}, 'project': {'notes': 'digest'},

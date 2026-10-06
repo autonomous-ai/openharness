@@ -71,6 +71,15 @@ def installed_matches(record, receipt):
             raise ValueError('Installed file differs from the ISO-bound package: ' + name)
 
 
+def display_matches(record, expected, *, restored=False):
+    executable = expected['executable'] if restored else '/usr/lib/harness-os/labwc'
+    owner = expected['owner'] if restored else 'harness-os'
+    checksum = expected['sha256'] if restored else expected['binary']['sha256']
+    if any(record[key] != value for key, value in
+           [('executable', executable), ('owner', owner), ('sha256', checksum)]):
+        raise ValueError('Running compositor differs from the expected package')
+
+
 def shutdown(vm, record, name, root=False):
     # Drain the diagnostic serial socket while waiting for the fresh QMP
     # shutdown event. An unread console can stall QEMU during guest poweroff.
@@ -169,6 +178,7 @@ def main():
         vm.command('test ! -e ' + STATE + '/current && test ! -e ' + STATE + '/ready.json && test ! -e ' + STATE + '/approved.json')
         copy_file(vm, Path(__file__).with_name('public_update_guest.py').read_bytes(), GUEST)
         original = observe('01-original-system', 'system', True)
+        original_display = observe('01-original-display', 'display', True)
         (folder / 'hosts-before.txt').write_bytes(vm.read_file('/etc/hosts'))
         if original['runtime'] != base['harness_inputs'] or original['package_version'] != base['package_version']:
             raise ValueError('Baseline installed runtime differs from the original ISO')
@@ -268,6 +278,8 @@ def main():
         authenticate()
         installed = observe('08-installed-candidate', 'system', True)
         installed_matches(installed, bound)
+        if observe('08-running-display', 'display', True) != original_display:
+            raise ValueError('Updating the package restarted or replaced the running compositor')
         saved = observe('09-checkpoint', 'checkpoint', True)
         if (saved['receipt']['status'] != 'applied' or saved['receipt']['candidate'] != candidate
                 or saved['previous_files'] != original['owned_files']
@@ -286,6 +298,8 @@ def main():
         authenticate()
         rebooted = observe('11-cold-boot-system', 'system', True)
         installed_matches(rebooted, bound)
+        if candidate.get('compositor'):
+            display_matches(observe('11-candidate-display', 'display', True), candidate['compositor'])
         if rebooted['boot_id'] == before['boot_id']:
             raise ValueError('No real cold boot occurred')
         if observe('12-project-after-reboot', 'project') != project:
@@ -335,6 +349,42 @@ def main():
         vm.command('sudo -n journalctl -b --no-pager > /tmp/public-update-final-journal.log')
         (folder / 'final-journal.log').write_bytes(vm.read_file('/tmp/public-update-final-journal.log'))
         record['checks'].append('Encrypted candidate cold boot accepts real keyboard input and an explicitly launched bundled agent, and preserves project bytes/ownership/times and the verified original checkpoint. Foreground command auto-resume is not claimed.')
+        if candidate.get('compositor'):
+            # Use the real retained package and current rollback implementation,
+            # with the network disabled. No staged source or replacement binary.
+            vm.command('systemctl --user stop harness-update.timer harness-update.service')
+            vm.command('rm -f ~/projects/session-probe/pid ~/projects/session-probe/heartbeat && '
+                       "hn new-window -P -F '#{pane_id}' -n rollback-proof 'python3 /home/me/public-update-terminal.py' > /tmp/public-update-terminal-id")
+            vm.command('for n in $(seq 1 60); do test -s ~/projects/session-probe/pid && exit 0; sleep .1; done; exit 1')
+            terminal = vm.read_file('/tmp/public-update-terminal-id').decode().strip()
+            if not re.fullmatch(r'%\d+', terminal):
+                raise ValueError('Invalid rollback probe pane identity')
+            keyboard('before-offline-rollback')
+            before_rollback = observe('19-before-rollback-work', 'work')
+            authenticate()
+            vm.command('sudo -n nmcli networking off')
+            vm.monitor('set_link', name='hnnet', up=False)
+            output, _ = vm.command('sudo -n python3 /usr/lib/harness-os/runtime_update.py rollback', timeout=240)
+            (folder / '20-offline-rollback.log').write_text(output)
+            same_work(before_rollback, observe('21-after-rollback-work', 'work'))
+            keyboard('after-offline-rollback')
+            restored = observe('22-restored-system', 'system', True)
+            for key in ('package_version', 'owned_files', 'runtime', 'lock', 'sudo_policy'):
+                if restored[key] != original[key]:
+                    raise ValueError('Offline rollback did not restore the original system: ' + key)
+            vm.command('test ! -e /usr/lib/harness-os/labwc && test ! -e /usr/share/harness-os/compositor.json')
+            if observe('23-project-after-rollback', 'project') != project:
+                raise ValueError('Offline rollback changed newer project files')
+            shutdown(vm, record, 'offline-rollback')
+            vm.start(live=False)
+            vm.monitor('set_link', name='hnnet', up=False)
+            vm.login_installed(config)
+            authenticate()
+            display_matches(observe('24-restored-display', 'display', True), original_display, restored=True)
+            check_graphical_keyboard(vm, '25-restored-keyboard')
+            if observe('26-project-after-rollback-boot', 'project') != project:
+                raise ValueError('Rollback reboot changed newer project files')
+            record['checks'].append('The packaged compositor activates after cold boot. Offline rollback preserves running work, restores every original package file and privilege rule, removes the private compositor, then boots the original compositor with working keyboard and newer projects intact.')
         shutdown(vm, record, 'acceptance-complete')
         record['status'] = 'passed'
     except Exception as error:
