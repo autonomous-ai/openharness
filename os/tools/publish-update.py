@@ -17,6 +17,13 @@ REPO = 'autonomous-ai/openharness'
 CHANNEL = 'os-preview-updates'
 
 
+def bootstrap_files():
+    spec = importlib.util.spec_from_file_location('harness_runtime_update', Path(__file__).parents[1] / 'runtime_update.py')
+    updater = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(updater)
+    return updater.BOOTSTRAP_FILES
+
+
 def digest(path):
     with path.open('rb') as handle:
         return hashlib.file_digest(handle, 'sha256').hexdigest()
@@ -47,7 +54,7 @@ def validate(bundle, receipt, run):
         raise ValueError('Package, fast runtime and system-channel checks must all pass.')
     if not receipt['system_channel'].get('reboot_keyboard'):
         raise ValueError('The channel update has not passed its actual encrypted reboot and keyboard check.')
-    expected = {manifest['package']['name'], 'package-manifest.json', 'apply-update.py'}
+    expected = {manifest['package']['name'], 'package-manifest.json', *updater.BOOTSTRAP_FILES}
     checksums = {}
     for line in (bundle / 'SHA256SUMS').read_text().splitlines():
         checksum, name = line.split('  ', 1)
@@ -93,7 +100,7 @@ def main():
     bundle_name = 'harness-update-' + manifest['requires_os_version'] + '-' + manifest['source_commit'][:9] + '-x86_64.zip'
     archive = output / bundle_name
     with zipfile.ZipFile(archive, 'w', compression=zipfile.ZIP_DEFLATED) as zipped:
-        for name in [manifest['package']['name'], 'package-manifest.json', 'apply-update.py', 'SHA256SUMS']:
+        for name in [manifest['package']['name'], 'package-manifest.json', *bootstrap_files(), 'SHA256SUMS']:
             entry = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
             entry.external_attr = 0o100644 << 16
             zipped.writestr(entry, (args.bundle / name).read_bytes(), compress_type=zipfile.ZIP_DEFLATED)

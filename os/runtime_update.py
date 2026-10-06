@@ -23,6 +23,8 @@ RUNTIME = Path('/usr/share/harness-os/runtime.json')
 LOCK = Path('/usr/share/harness-os/lock.json')
 PACKAGE_DB = Path('/var/lib/pacman/local')
 RESTART_REQUIRED = Path('/run/harness-os-restart-required')
+BOOTSTRAP_FILES = ('apply-update.py', 'boot_profile.py', 't2_install.py',
+                   't2_firmware.py', 'firmware_names.py')
 
 
 def digest(path):
@@ -229,6 +231,7 @@ def apply(folder, system, base, installation):
     if previous and previous['status'] not in ('applied', 'rolled-back'):
         raise ValueError('The previous Harness update did not finish. Run rollback first; its checkpoint is retained.')
     manifest, source_package = validate_bundle(folder, base)
+    boot = boot_module()
     target_date = system.snapshot_date(manifest['arch_snapshot'])
     if target_date > base['arch_snapshot']:
         dates = set(re.findall(r'https://archive\.archlinux\.org/repos/(\d{4}/\d{2}/\d{2})/', system.PACMAN_CONFIG.read_text()))
@@ -264,7 +267,7 @@ def apply(folder, system, base, installation):
             # installed OS integration. /run clears this only on a real reboot.
             system.write_json(RESTART_REQUIRED, {'status': 'applying', 'package': manifest['package']['version']})
             install_package(incoming / source_package.name, manifest['package']['version'], manifest['runtime'])
-            boot_module().restore_firmware()
+            boot.restore_firmware()
             # Plymouth and other initramfs assets may change without a kernel
             # package transaction, so rebuild them on this path as well.
             system.run('mkinitcpio', '-P')
@@ -294,12 +297,15 @@ def rollback(system, installation):
     if digest(backup) != receipt['backup_sha256']:
         raise ValueError('Rollback package checksum mismatch. Recover the recorded checkpoint from the live USB.')
     inspect_package(backup, receipt['previous_version'], receipt['previous_runtime'])
-    boot_module().validate_update(backup)
+    # A legacy PC rollback removes the new platform helpers from disk. Retain
+    # the loaded helper until this transaction finishes using it.
+    boot = boot_module()
+    boot.validate_update(backup)
     receipt.update(status='rolling-back', rollback_started_at=now())
     system.write_json(folder / 'receipt.json', receipt)
     system.write_json(RESTART_REQUIRED, {'status': 'failed'})
     install_package(backup, receipt['previous_version'], receipt['previous_runtime'])
-    boot_module().restore_firmware()
+    boot.restore_firmware()
     system.run('mkinitcpio', '-P')
     receipt.update(status='rolled-back', rollback_finished_at=now())
     system.write_json(folder / 'receipt.json', receipt)

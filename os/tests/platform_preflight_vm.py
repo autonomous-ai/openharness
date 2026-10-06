@@ -84,7 +84,12 @@ def main():
         receipt['original_image_files'] = {}
         for name, source in candidates.items():
             destination = '/usr/lib/harness-os/' + ('install.py' if name == 'installer' else name + '.py')
-            receipt['original_image_files'][name] = hashlib.sha256(vm.read_file(destination)).hexdigest()
+            _, exists = vm.command('test -f ' + shlex.quote(destination), check=False)
+            if exists:
+                assert exists == 1 and name == 'boot_profile', 'Unexpected missing baseline file: ' + name
+                receipt['original_image_files'][name] = None  # Published PC image predates this helper.
+            else:
+                receipt['original_image_files'][name] = hashlib.sha256(vm.read_file(destination)).hexdigest()
             copy_file(vm, source.read_bytes(), destination)
             actual = hashlib.sha256(vm.read_file(destination)).hexdigest()
             assert actual == receipt['candidates'][name]['sha256']
