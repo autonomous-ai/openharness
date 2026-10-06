@@ -8,6 +8,7 @@ import { ensureBundledCoreHarnesses, ensureBundledDevices, ensureBundledHarnessM
 import { dshListRows } from './wire.js'
 import { installedDsh, invalidateInstalledDsh, readInstalledIndex, upsertInstalledRecord } from './installed.js'
 import { lockDsh } from './lock.js'
+import * as packageLock from './lock.js'
 
 let root: string
 let original: string
@@ -188,4 +189,37 @@ it('ships a complete monitor viewer with byte-identical binary icons and executa
     expect(readFileSync(join(installed.dir, name))).toEqual(readFileSync(new URL(name, source)))
   }
   for (const name of ['viewer.sh', 'toolchain/hps', 'toolchain/init-workspace.sh']) expect(statSync(join(installed.dir, name)).mode & 0o111).not.toBe(0)
+})
+
+
+// Quiet-machine QA found these rollback and failure-isolation paths outside the coverage gate.
+it.each(['invalid JSON', 'a different package'])('refuses a retained revision with %s without replacing the current package', scenario => {
+  ensureBundledModelManager(bundle('one'))
+  const retained = installedDsh(MODEL_MANAGER_ID)!
+  ensureBundledModelManager(bundle('two'))
+  const current = installedDsh(MODEL_MANAGER_ID)!
+  writeFileSync(join(retained.dir, 'harness.json'), scenario === 'invalid JSON' ? '{' :
+    JSON.stringify({ spec: 1, id: 'example/other', name: 'Other package', engine: 'codex' }))
+
+  expect(() => ensureBundledModelManager(bundle('one'))).toThrow('Invalid bundled Model Manager')
+  expect(installedDsh(MODEL_MANAGER_ID)?.dir).toBe(current.dir)
+  expect(readFileSync(join(current.dir, 'AGENTS.md'), 'utf8')).toBe('two')
+  // The failed rollback releases the lock, so the next valid revision can still be installed.
+  expect(ensureBundledModelManager(bundle('three'))).toBe(true)
+  expect(readFileSync(join(installedDsh(MODEL_MANAGER_ID)!.dir, 'AGENTS.md'), 'utf8')).toBe('three')
+})
+
+it('reports a non-Error dependency failure and still prepares the other bundled tools', () => {
+  const log = vi.fn()
+  vi.stubGlobal('__MODEL_MANAGER_BUNDLE__', JSON.stringify(bundle()))
+  vi.stubGlobal('__DEVICES_BUNDLE__', JSON.stringify(coreFiles(DEVICES_HARNESS_ID)))
+  vi.stubGlobal('__HARNESS_MONITOR_BUNDLE__', JSON.stringify(coreFiles(HARNESS_MONITOR_ID)))
+  const failure = vi.spyOn(packageLock, 'lockDsh').mockImplementationOnce(() => { throw 'lock backend unavailable' })
+  try {
+    expect(ensureBundledCoreHarnesses(log)).toBe(false)
+    expect(log).toHaveBeenCalledExactlyOnceWith('[core-harnesses] Could not prepare Model Manager: lock backend unavailable')
+    expect(installedDsh(MODEL_MANAGER_ID)).toBeUndefined()
+    expect(installedDsh(DEVICES_HARNESS_ID)).toBeDefined()
+    expect(installedDsh(HARNESS_MONITOR_ID)).toBeDefined()
+  } finally { failure.mockRestore() }
 })

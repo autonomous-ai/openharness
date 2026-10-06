@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { APP_CONTEXT, appContext, cacheName, scanAppModels } from './appModels.js'
+import { APP_CONTEXT, appContext, cacheName, llamaServerArgs, scanAppModels } from './appModels.js'
 
 const GiB = 1024 ** 3
 const grid = { kind: 'llama.cpp', path: '/home/me/.grid/bin/llama-server', version: 'version: 10369', note: "Grid's own engine" }
@@ -115,5 +115,20 @@ describe('models other apps downloaded', () => {
   it("reads llama.cpp's download names as the file's own", () => {
     expect(cacheName('ggml-org_gemma-4-E2B-it-GGUF_gemma-4-E2B-it-Q4_K_M.gguf')).toBe('gemma-4-E2B-it-Q4_K_M')
     expect(cacheName('plain-model-Q4_K_M')).toBe('plain-model-Q4_K_M')
+  })
+})
+
+describe('llama-server for a model', () => {
+  const model = { ref: '/m/Laya-Q8_0.gguf', name: 'laya-english' }
+
+  it("gives a harness's model one slot and its whole window", () => {
+    const args = llamaServerArgs(model, 131072, 41001)
+    expect(args).toEqual(['-m', '/m/Laya-Q8_0.gguf', '--alias', 'laya-english', '--ctx-size', '131072', '--parallel', '1',
+      '-ngl', '999', '--host', '127.0.0.1', '--port', '41001'])
+  })
+
+  it('shares one window between several slots, so any one request can still use all of it', () => {
+    const args = llamaServerArgs(model, 8192, 41001, 4)
+    expect(args.slice(args.indexOf('--ctx-size'), args.indexOf('-ngl'))).toEqual(['--ctx-size', '8192', '--parallel', '4', '--kv-unified'])
   })
 })

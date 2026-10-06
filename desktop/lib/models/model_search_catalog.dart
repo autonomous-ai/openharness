@@ -14,22 +14,41 @@ import 'model_manager_controller.dart';
 /// Between a shared model's name and the machine serving it, in its row's title.
 const modelMachineSeparator = ' · ';
 
+/// The two kinds of model the picker lists, each under its own heading: chat models, which a harness
+/// runs on, and decision models (Jev, System One), which answer typed questions and run no harness.
+enum ModelSearchGroup {
+  chat('Chat models'),
+  decision('Decision models');
+
+  const ModelSearchGroup(this.label);
+  final String label;
+}
+
 enum ModelSearchSection {
   subscriptions('Subscriptions'),
   apis('APIs'),
   local('Your models'),
 
   /// Models a machine of yours can download: the grid catalog's picks for it. Its heading names the
-  /// machine and its memory ([ModelSearchCatalog.catalogHeading]); this label is its search word.
+  /// machine and its memory ([ModelSearchCatalog.catalogHeadingFor]); this label is its search word.
   catalog('Get models'),
   shared('Shared with you'),
 
-  /// Jev (System One) decision models, from any grid: they answer typed questions and cannot run
-  /// a harness, so they are listed last, apart from every model a harness can use.
-  jev('Jev models');
+  /// Decision models, listed last, apart from every model a harness can use: a machine of yours
+  /// runs or has them, ones it can download (only those it has the memory to start), and the ones
+  /// a grid shared with you serves.
+  jevLocal('Your models', ModelSearchGroup.decision),
+  jevCatalog('Get models', ModelSearchGroup.decision),
+  jevShared('Shared with you', ModelSearchGroup.decision);
 
-  const ModelSearchSection(this.label);
+  const ModelSearchSection(this.label, [this.group = ModelSearchGroup.chat]);
   final String label;
+  final ModelSearchGroup group;
+
+  /// Names the section's heading in the list: its label, which a decision section shares with its
+  /// chat namesake, so that one also names its group.
+  String get key =>
+      group == ModelSearchGroup.chat ? label : '${group.label}: $label';
 }
 
 /// Public model metadata shared by the picker and its preview. Filtering this
@@ -74,7 +93,11 @@ class ModelSearchEntry {
       : api != null
       ? ModelSearchSection.apis
       : isJev
-      ? ModelSearchSection.jev
+      ? isDownload
+            ? ModelSearchSection.jevCatalog
+            : own
+            ? ModelSearchSection.jevLocal
+            : ModelSearchSection.jevShared
       : isDownload
       ? ModelSearchSection.catalog
       : own
@@ -122,6 +145,7 @@ class ModelSearchEntry {
       api?.host,
       api?.name,
       apiModel?.name,
+      if (isJev) ...[ModelSearchGroup.decision.label, 'jev'],
       ...searchAliases,
     ],
   );
@@ -511,15 +535,18 @@ class ModelSearchCatalog extends ChangeNotifier {
         : 'Not downloaded';
   }
 
-  /// The downloads' heading: the machine they are for and its memory, `Get for this Mac · 64 GB`.
-  /// Downloads for more than one machine are headed plainly; each row's preview names its machine.
-  String get catalogHeading {
+  /// The chat downloads' heading ([catalogHeadingFor]).
+  String get catalogHeading => catalogHeadingFor(ModelSearchSection.catalog);
+
+  /// A downloads section's heading — chat models' or decision models' — the machine they are for and its
+  /// memory, `Get for this Mac · 64 GB`. Downloads for more than one machine are headed plainly; each
+  /// row's preview names its machine.
+  String catalogHeadingFor(ModelSearchSection section) {
     final owners = {
       for (final entry in entries.values)
-        if (entry.section == ModelSearchSection.catalog)
-          entry.controller ?? manager,
+        if (entry.section == section) entry.controller ?? manager,
     };
-    if (owners.length != 1) return ModelSearchSection.catalog.label;
+    if (owners.length != 1) return section.label;
     final owner = owners.single;
     final machine = owner.machine;
     final memory = owner.memoryBytes;

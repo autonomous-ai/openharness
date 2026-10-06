@@ -155,8 +155,11 @@ const SERVICE_MAY_IMPORT: Record<string, string> = {
  * end-to-end suite's first Linux runs (#843): zsh's new-user menu kept out of an agent's pane
  * (lib/engineLaunch.ts), a hook's ancestry read as it arrives (core/engines/hooks.ts), and a relaunch
  * that must stay up to count (core/agents/swap.ts).
+ *
+ * Grew by 58 for the turn a blocking Stop hook continues (a Claude /goal loop): it is the turn lifecycle,
+ * which only the core's transcript normalizer and Stop-hook fallback can keep.
  */
-const CORE_CLOSURE_BUDGET = 105_879
+const CORE_CLOSURE_BUDGET = 105_937
 
 /** What is not the core's, by path: each goes to a service or its own process, in the plan's order. */
 const EDGE: RegExp[] = [

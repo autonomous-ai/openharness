@@ -1,14 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
-import { mkdtemp, mkdir, writeFile, readFile, readdir, rm, stat } from 'node:fs/promises'
+import { mkdtemp, mkdir, writeFile, readFile, readdir, rm, stat, statfs, readlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createHash } from 'node:crypto'
 import { rmSync, writeFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
-import { baseModel, compatibleModels, contextLadder, LocalModels, modelBudget, modelFamily, rankForCoding, readRunRecords, type GridInventory } from './localModels.js'
+import { baseModel, compatibleModels, contextLadder, JEV_MODELS, jevMemory, llamaBuild, LocalModels, modelBudget, modelFamily, rankForCoding, readRunRecords, type GridInventory } from './localModels.js'
 import { GridFleetRpc, type GridFleetResult } from './gridFleetRpc.js'
-import type { AppEngineOps, AppEngineRecord, AppModel } from './appModels.js'
+import { AppStartError, type AppEngineOps, type AppEngineRecord, type AppModel } from './appModels.js'
 import { encryptDownFrame, encryptRpcResult } from './e2ee/applicationFrames.js'
+
+// The coverage audit needs real filesystem work with explicit disk/read faults at the I/O boundary.
+vi.mock('node:fs/promises', async (original) => {
+  const fs = await original<typeof import('node:fs/promises')>()
+  return { ...fs, statfs: vi.fn(fs.statfs), readlink: vi.fn(fs.readlink) }
+})
 
 const card = (id = 'org/Small-GGUF') => ({ repo_id: id, runnable: true, task: 'text-generation', format: 'GGUF',
   fit: { version: 'Q4', ctx: 131072, size: 64 },
@@ -42,6 +48,7 @@ let answered: GridInventory['state'] | null
 /** What `gridModels.gridInventory` would hand the Model Manager — read without a credential. */
 let inventory: Mock<(grid: string, force: boolean) => Promise<GridInventory>>
 beforeEach(async () => {
+  vi.mocked(statfs).mockReset(); vi.mocked(readlink).mockReset()
   root = await mkdtemp(join(tmpdir(), 'local-models-'))
   home = join(root, 'grid'); stateDir = join(root, 'receipts'); records = join(home, 'run', 'engines', 'grid-home')
   await mkdir(records, { recursive: true }); await mkdir(join(home, 'models'))
@@ -108,6 +115,22 @@ afterEach(async () => {
 })
 
 describe('local model discovery and lifecycle', () => {
+  it('accepts only catalog fits that carry a finite coding context', () => {
+    // QA's coverage audit: both candidates in a context comparison have passed this catalog validation.
+    for (const ctx of [undefined, null, NaN, Infinity, -1, 0, 32768]) {
+      expect(compatibleModels({ models: [{ ...card(), fit: { version: 'Q4', ctx } }] })).toEqual([])
+    }
+    expect(compatibleModels({ models: [card()] })).toMatchObject([{ context: 131072 }])
+  })
+
+  it('treats an unavailable or silent version executable as an unknown build', async () => {
+    // QA's coverage audit: execFile supplies both output strings even when the process fails to start.
+    const silent = join(root, 'silent-engine')
+    await writeFile(silent, '#!/bin/sh\nexit 1\n', { mode: 0o700 })
+    expect(await llamaBuild(silent)).toBeUndefined()
+    expect(await llamaBuild(join(root, 'missing-engine'))).toBeUndefined()
+  })
+
   it('inspects silently and offers only confirmed compatible chat models', async () => {
     expect(compatibleModels([card()])).toEqual([])
     expect(compatibleModels({ models: [card(), { ...card('no'), runnable: false }, { ...card('image'), task: 'image-generation' }] })).toHaveLength(1)
@@ -140,7 +163,7 @@ describe('local model discovery and lifecycle', () => {
     expect(snapshot.models[0]).toMatchObject({ state: 'running', canStop: true,
       tokensPerSecond: 17.6, requests: 4, windowSeconds: 3600, operation: { phase: 'done', stage: 'verifying' } })
     expect(snapshot.models[0]).not.toHaveProperty('memoryBytes')
-    expect(calls.find(args => args.includes('join'))).toEqual(['--remote', 'join', 'home', '--serve', 'Small-Q4.gguf', '--max-concurrency', '1', '--ctx-size', '131072', '--endpoint-port', expect.stringMatching(/^\d+$/), '--reasoning-budget', '0'])
+    expect(calls.find(args => args.includes('join'))).toEqual(['--remote', 'join', 'home', '--serve', 'Small-Q4.gguf', '--max-concurrency', '5', '--parallel', '1', '--ctx-size', '131072', '--endpoint-port', expect.stringMatching(/^\d+$/), '--reasoning-budget', '0'])
     expect(request.mock.calls.some(([url]) => String(url).includes(RELAY_CHAT))).toBe(true)
     expect(await readFile(join(stateDir, (await readdir(stateDir))[0]), 'utf8')).not.toContain('token')
   })
@@ -289,6 +312,20 @@ describe('local model discovery and lifecycle', () => {
     await fresh.act('home', first.models[0].id, 'start'); await fresh.settled()
     expect(calls.some(args => args[0] === 'pull')).toBe(false)
     expect((await fresh.list('home')).models[0].operation?.phase).toBe('done')
+  })
+
+  it("knows Grid's own engine by its own names when another engine joins beside it", async () => {
+    catalogCards = []
+    await writeFile(join(home, 'models', 'Small-Q4.gguf'), Buffer.alloc(64))
+    // A Jev model joined beside it: each engine carries its own names, the record's flat list all of them.
+    await writeFile(join(records, 'remote.json'), JSON.stringify({ node_id: 'local-node', advertise_as: ['small', 'kev-0.8b'],
+      engines: [{ endpoint_url: null, models: ['Small-Q4.gguf'], advertise_as: ['small'] },
+        { endpoint_url: 'http://127.0.0.1:50872/v1', models: ['kev-0.8b'], advertise_as: ['kev-0.8b'] }] }))
+    await writeFile(join(records, 'remote.heartbeat'), '')
+    inventory.mockImplementation(async () => ({ state: 'awake', status: 'running',
+      nodes: [{ node_id: 'local-node', online: true, models: ['small', 'kev-0.8b'] }] }))
+    expect((await service.list('home')).models.find(m => m.id === 'local:Small-Q4.gguf'))
+      .toMatchObject({ state: 'running', canStop: true })
   })
 
   it.each(['current', 'legacy', 'malformed'])('preserves imported routing names across restart with %s receipts', async scenario => {
@@ -485,6 +522,20 @@ describe('local model discovery and lifecycle', () => {
       'Qwen-35B-A3B-MTP', 'Retrained-35B-A3B', 'Renamed-35B',
     ])
     expect(snapshot.models[0].recommended).toBe(true)
+  })
+
+  it.each(['BF16', 'FP16', 'F16'])('sizes %s weights as sixteen bits when the catalog omits parameter counts', quant => {
+    const candidate = (name: string, quant: string, size: number) => ({ id: name, name, quant, size,
+      pull: `${name}:${name}.gguf`, file: `${name}.gguf`, files: [`${name}.gguf`], estTokS: 30 })
+    expect(rankForCoding([candidate('Full precision', quant, 32e9), candidate('Quantized', 'Q4', 12e9)]).map(model => model.name))
+      .toEqual(['Quantized', 'Full precision'])
+  })
+
+  it('uses IQ overhead and the unknown-quant fallback when ranking models of the same inferred size', () => {
+    const candidate = (name: string, quant: string, size: number) => ({ id: name, name, quant, size,
+      pull: `${name}:${name}.gguf`, file: `${name}.gguf`, files: [`${name}.gguf`], estTokS: 30 })
+    expect(rankForCoding([candidate('IQ model', 'IQ4_XS', 8.6e9), candidate('Unknown quant', '', 9.6e9)]).map(model => model.name))
+      .toEqual(['IQ model', 'Unknown quant'])
   })
 
   it('ranks without regard to where a model was in the catalog once speed or size tells them apart', () => {
@@ -1215,6 +1266,73 @@ describe('stepping down to the context that actually runs', () => {
     await fresh.act('home', id, 'start'); await fresh.settled()
     expect(joinedAt()).toEqual([262144])
   })
+
+  it.each(['request disconnected', 'error body disconnected'])('leaves the final judgement to the relay when a local probe has %s', async scenario => {
+    const original = request.getMockImplementation()!
+    request.mockImplementation(async (url, init) => {
+      if (String(url).includes('127.0.0.1') && String(url).endsWith('/chat/completions')) {
+        if (scenario === 'request disconnected') throw new Error('socket closed')
+        return new Response(new ReadableStream({ start(controller) { controller.error(new Error('body socket closed')) } }), { status: 500 })
+      }
+      return original(url, init)
+    })
+    const result = await service.act('home', 'org/Small-GGUF', 'start'); await service.settled()
+    expect(result.operation?.phase).toBe('done')
+    expect(joinedAt()).toEqual([131072])
+    expect(request.mock.calls.some(([url]) => String(url).includes(RELAY_CHAT))).toBe(true)
+  })
+
+  it('bounds an engine that keeps reporting loading and still lets the relay establish readiness', async () => {
+    const original = request.getMockImplementation()!
+    let attempted!: () => void
+    const firstAttempt = new Promise<void>(resolve => { attempted = resolve })
+    request.mockImplementation(async (url, init) => {
+      if (String(url).includes('127.0.0.1') && String(url).endsWith('/health')) {
+        attempted(); return new Response('loading', { status: 503 })
+      }
+      return original(url, init)
+    })
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout'] })
+    const result = await service.act('home', 'org/Small-GGUF', 'start')
+    await firstAttempt
+    await vi.advanceTimersByTimeAsync(601_000)
+    await service.settled()
+    expect(result.operation?.phase).toBe('done')
+    expect(joinedAt()).toEqual([131072])
+    expect(request.mock.calls.some(([url]) => String(url).includes(RELAY_CHAT))).toBe(true)
+  })
+
+  it.each(['grid sleeps after leave', 'old grid cannot report status'])('restores the grid between context attempts when the %s', async scenario => {
+    catalogCards[0].fit.ctx = 262144
+    gpuHolds(131072)
+    const original = run.getMockImplementation()!
+    run.mockImplementation(async (args, output) => {
+      if (args.includes('leave') && scenario === 'grid sleeps after leave') gridState = 'asleep'
+      if (args.includes('info') && args.includes('--json') && scenario === 'old grid cannot report status') return refused('status unavailable')
+      return original(args, output)
+    })
+    const result = await service.act('home', 'org/Small-GGUF', 'start'); await service.settled()
+    expect(result.operation?.phase).toBe('done')
+    expect(joinedAt()).toEqual([262144, 131072])
+    expect(calls.filter(args => args.join(' ') === '--remote start home')).toHaveLength(scenario === 'grid sleeps after leave' ? 1 : 0)
+  })
+
+  it.each(['unavailable', 'legacy id', 'one unnamed provider', 'several other providers'])('uses only identifiable context evidence when inventory is %s', async scenario => {
+    const original = run.getMockImplementation()!
+    run.mockImplementation(async (args, output) => {
+      if (!args.includes('engines')) return original(args, output)
+      if (scenario === 'unavailable') return refused('inventory unavailable')
+      const capabilities = { 'Small-Q4': { context_length: 16384 } }
+      if (scenario === 'legacy id') return ok([{ id: 'local-node', model_capabilities: capabilities }])
+      if (scenario === 'one unnamed provider') return ok([{ model_capabilities: capabilities }])
+      return ok([{ node_id: 'other-one', model_capabilities: capabilities }, { node_id: 'other-two', model_capabilities: capabilities }])
+    })
+    const result = await service.act('home', 'org/Small-GGUF', 'start'); await service.settled()
+    const identified = scenario === 'legacy id' || scenario === 'one unnamed provider'
+    expect(result.operation?.phase).toBe(identified ? 'failed' : 'done')
+    expect(calls.some(args => args.includes('leave'))).toBe(identified)
+    if (identified) expect(result.operation?.error).toContain('could only get a 16K context')
+  })
 })
 
 describe("a model is labelled with the machine's name as Harness shows it", () => {
@@ -1293,7 +1411,7 @@ describe('models other apps downloaded, started in their own app', () => {
   let ops: { [K in keyof AppEngineOps]: Mock<AppEngineOps[K]> }
 
   /** The grid fake, with a `join --at` that lists the alias rather than writing a `--serve` run record. */
-  const appService = () => {
+  const appService = (over: Partial<ConstructorParameters<typeof LocalModels>[0]> = {}) => {
     const base = run.getMockImplementation()!
     run.mockImplementation(async (args, output) => {
       if (args.includes('join') && args.includes('--at')) {
@@ -1311,7 +1429,7 @@ describe('models other apps downloaded, started in their own app', () => {
     inventory.mockImplementation(async () => ({ state: 'awake', status: 'running',
       nodes: [...joinedAliases].map(alias => ({ node_id: 'local-node', online: true, models: [alias] })) }))
     return modelFixture({ stateDir, processEnv: { GRID_HOME: home }, run, request: request as typeof fetch, inventory,
-      appModels: async () => apps, appEngines: ops as unknown as AppEngineOps })
+      appModels: async () => apps, appEngines: ops as unknown as AppEngineOps, ...over })
   }
   beforeEach(() => {
     apps = [ollama, studio]; up = new Set(); joinedAliases = new Set(); window = 131072
@@ -1347,7 +1465,7 @@ describe('models other apps downloaded, started in their own app', () => {
     await models.act('home', ollama.id, 'start'); await models.settled()
     expect(ops.start).toHaveBeenCalledWith(ollama, 131072, join(stateDir, 'logs'))
     expect(calls.find(args => args.includes('--at'))).toEqual(['--remote', 'join', 'home', '--at', 'http://127.0.0.1:41000/v1',
-      '-m', 'llama3.2:3b', '--advertise-as', 'llama3.2:3b', '--max-concurrency', '1'])
+      '-m', 'llama3.2:3b', '--advertise-as', 'llama3.2:3b', '--max-concurrency', '5'])
     expect(request.mock.calls.some(([url]) => String(url).includes(RELAY_CHAT))).toBe(true)
     let row = (await models.list('home', true)).models.find(m => m.id === ollama.id)!
     expect(row).toMatchObject({ state: 'running', canStart: false, canStop: true, operation: { phase: 'done' } })
@@ -1377,13 +1495,29 @@ describe('models other apps downloaded, started in their own app', () => {
     expect(JSON.parse(await readFile(join(stateDir, 'app-engines.json'), 'utf8'))).toEqual([])
   })
 
+  it('refreshes the picker without rescanning apps until their 30-second cache expires', async () => {
+    // Found by QA's coverage audit: refreshing the picker should not repeatedly probe installed engines.
+    vi.useFakeTimers({ toFake: ['Date'] })
+    const start = Date.now(), scan = vi.fn(async () => apps)
+    service = appService({ appModels: scan })
+    await service.list('home')
+    expect(scan).toHaveBeenCalledTimes(1)
+    vi.setSystemTime(start + 3000)
+    await service.list('home')
+    expect(scan).toHaveBeenCalledTimes(1)
+    vi.setSystemTime(start + 30_000)
+    await service.list('home')
+    expect(scan).toHaveBeenCalledTimes(2)
+  })
+
   it('answers from the last scan while a slow one runs, and the list after it has the new one', async () => {
     let scans = 0, release!: () => void
     const models = modelFixture({ stateDir, processEnv: { GRID_HOME: home }, run, request: request as typeof fetch, inventory,
       appEngines: ops as unknown as AppEngineOps,
       appModels: async () => {
         if (++scans === 1) return [ollama]
-        await new Promise<void>(resolve => { release = resolve })
+        // QA's coverage CI exposed an unending third scan: only the second is deliberately held.
+        if (scans === 2) await new Promise<void>(resolve => { release = resolve })
         return [ollama, studio]
       } })
     expect((await models.list('home')).models.filter(m => m.app && m.app !== 'Grid').map(m => m.id)).toEqual([ollama.id])
@@ -1392,6 +1526,8 @@ describe('models other apps downloaded, started in their own app', () => {
     expect((await models.list('home', true)).models.filter(m => m.app && m.app !== 'Grid').map(m => m.id)).toEqual([ollama.id])
     expect(scans).toBe(2)
     release()
+    // QA's coverage CI let the receipt finish before the next forced read; make that ordering explicit.
+    await models.settled()
     await vi.waitFor(async () => expect((await models.list('home', true)).models.some(m => m.id === studio.id)).toBe(true))
   })
 
@@ -1478,6 +1614,229 @@ describe('models other apps downloaded, started in their own app', () => {
     expect(calls.find(args => args.includes('--serve'))?.slice(0, 5)).toEqual(['--remote', 'join', 'home', '--serve', 'qwen3-8b.gguf'])
     expect(ops.start).not.toHaveBeenCalled()
   })
+
+  // Quiet-machine QA found the app-engine recovery paths had no behavior coverage.
+  it.each([
+    [new AppStartError('Ollama could not reserve memory.'), 'Ollama could not reserve memory.'],
+    [new Error('private engine diagnostic'), 'The model could not start. Try again.'],
+  ])('keeps an app start failure retryable and reports only its public message', async (error, message) => {
+    service = appService()
+    ops.start.mockRejectedValueOnce(error)
+    const failed = await service.act('home', ollama.id, 'start'); await service.settled()
+    expect(failed.operation).toMatchObject({ phase: 'failed', error: message })
+    expect(joinedAliases.size).toBe(0)
+    expect(ops.stop).not.toHaveBeenCalled()
+    const retried = await service.act('home', ollama.id, 'start'); await service.settled()
+    expect(retried.operation?.phase).toBe('done')
+    expect((await service.list('home')).models.find(model => model.id === ollama.id))
+      .toMatchObject({ state: 'running', canStop: true })
+  })
+
+  it.each(['join refused', 'credentials unavailable', 'credentials threw'])('takes an app engine down after %s, retaining another grid\'s record', async scenario => {
+    service = appService()
+    const elsewhere: AppEngineRecord = { spec: 1, modelId: studio.id, grid: 'elsewhere', name: studio.name,
+      engine: 'lm-studio', served: studio.ref, alias: studio.name, port: 41002, binary: studio.binary!, pid: 4243 }
+    await mkdir(stateDir, { recursive: true })
+    await writeFile(join(stateDir, 'app-engines.json'), JSON.stringify([elsewhere]))
+    const original = run.getMockImplementation()!
+    run.mockImplementation(async (args, output) => {
+      if (scenario === 'join refused' && args.includes('--at')) return refused('private join diagnostic')
+      if (scenario !== 'join refused' && args.includes('--env')) {
+        if (scenario === 'credentials threw') throw new Error('private credential diagnostic')
+        return refused('private credential diagnostic')
+      }
+      return original(args, output)
+    })
+    const failed = await service.act('home', ollama.id, 'start'); await service.settled()
+    expect(failed.operation).toMatchObject({ phase: 'failed', error: scenario === 'join refused'
+      ? 'The model could not join your grid. Try again.' : scenario === 'credentials threw'
+        ? 'The model did not answer. Try again.' : 'The model is starting, but could not be checked. Try again shortly.' })
+    expect(ops.stop).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ modelId: ollama.id, grid: 'home' }))
+    expect(up.size).toBe(0)
+    expect(joinedAliases.size).toBe(0)
+    expect(JSON.parse(await readFile(join(stateDir, 'app-engines.json'), 'utf8'))).toEqual([elsewhere])
+  })
+
+  it.each(['asleep', 'stopped', 'status unavailable'] as const)('starts an app engine when the grid is %s', async state => {
+    service = appService({ machineName: () => ' QA machine ' })
+    const original = run.getMockImplementation()!
+    gridState = state === 'status unavailable' ? 'running' : state
+    run.mockImplementation(async (args, output) => state === 'status unavailable' && args.includes('info') && args.includes('--json')
+      ? refused('old grid cannot read status') : original(args, output))
+    const started = await service.act('home', ollama.id, 'start'); await service.settled()
+    expect(started.operation?.phase).toBe('done')
+    expect(calls.filter(args => args.join(' ') === '--remote start home')).toHaveLength(state === 'status unavailable' ? 0 : 1)
+    expect(calls.find(args => args.includes('--at'))).toEqual(expect.arrayContaining(['--name', 'QA machine']))
+  })
+
+  it('does not allocate an app engine when the sleeping grid refuses to start', async () => {
+    service = appService()
+    gridState = 'asleep'
+    const original = run.getMockImplementation()!
+    run.mockImplementation(async (args, output) => args[1] === 'start' ? refused('private start diagnostic') : original(args, output))
+    const result = await service.act('home', ollama.id, 'start'); await service.settled()
+    expect(result.operation).toMatchObject({ phase: 'failed', error: 'Your grid could not start. Try again.' })
+    expect(ops.start).not.toHaveBeenCalled()
+  })
+
+  it('leaves a running Grid engine alone when an app model is requested', async () => {
+    service = appService()
+    await service.act('home', 'org/Small-GGUF', 'start'); await service.settled()
+    const result = await service.act('home', ollama.id, 'start'); await service.settled()
+    expect(result.operation).toMatchObject({ phase: 'failed', error: 'Stop Small-Q4 first to start another local model.' })
+    expect(ops.start).not.toHaveBeenCalled()
+    expect(serving).toBe(true)
+  })
+
+  it.each(['model disappeared', 'engine support unavailable'])('refuses an app start when its %s', async scenario => {
+    service = appService(scenario === 'engine support unavailable' ? { appEngines: undefined } : {})
+    if (scenario === 'model disappeared') apps = []
+    const result = await service.act('home', ollama.id, 'start'); await service.settled()
+    expect(result.operation).toMatchObject({ phase: 'failed', error: 'This model could not be checked. Refresh and try again.' })
+    expect(ops.start).not.toHaveBeenCalled()
+  })
+
+  it('keeps a model stoppable after its app scan loses it, including while the grid sleeps', async () => {
+    service = appService()
+    await service.act('home', ollama.id, 'start'); await service.settled()
+    apps = []
+    await service.list('home', true); await service.settled()
+    inventory.mockResolvedValue({ state: 'asleep', status: 'asleep', nodes: [] })
+    expect((await service.list('home', true)).models.find(model => model.id === ollama.id))
+      .toMatchObject({ state: 'running', app: 'Ollama', gridAsleep: true, canStart: false, canStop: true })
+    const stopped = await service.act('home', ollama.id, 'stop'); await service.settled()
+    expect(stopped.operation?.phase).toBe('done')
+    expect(ops.stop).toHaveBeenCalledOnce()
+    expect((await service.list('home', true)).models.some(model => model.id === ollama.id)).toBe(false)
+  })
+
+  it('does not allocate an app model twice, or download weights its app already owns', async () => {
+    service = appService()
+    window = undefined
+    for (const action of ['download', 'stop', 'start', 'start', 'download'] as const) {
+      const result = await service.act('home', ollama.id, action); await service.settled()
+      expect(result.operation?.phase).toBe('done')
+    }
+    expect(ops.start).toHaveBeenCalledOnce()
+    expect(ops.stop).not.toHaveBeenCalled()
+    expect(calls.some(args => args[0] === 'pull')).toBe(false)
+  })
+
+  it.each(['same link', 'different link', 'ordinary file', 'missing weights'])('protects Grid\'s model filename when there is a %s', async scenario => {
+    const { symlink, readlink } = await import('node:fs/promises')
+    const file = join(root, 'app-weights'), link = join(home, 'models', 'app-model.gguf')
+    const otherFile = join(root, 'other-weights')
+    if (scenario !== 'missing weights') await writeFile(file, Buffer.alloc(64))
+    await writeFile(otherFile, 'a different model')
+    apps = [{ id: 'app:ollama:app-model', name: 'app-model', app: 'ollama', engine: 'grid', ref: file, sizeBytes: 64 }]
+    if (scenario === 'same link') await symlink(file, link)
+    if (scenario === 'different link') await symlink(otherFile, link)
+    if (scenario === 'ordinary file') await writeFile(link, 'a different model')
+    service = appService()
+    const result = await service.act('home', apps[0].id, 'start'); await service.settled()
+    if (scenario === 'same link') {
+      expect(result.operation?.phase).toBe('done')
+      expect(await readlink(link)).toBe(file)
+      expect(calls.find(args => args.includes('--serve'))).toContain('app-model.gguf')
+    } else {
+      expect(result.operation).toMatchObject({ phase: 'failed', error: scenario === 'missing weights'
+        ? 'The downloaded file is no longer available. Open Model Manager to restore it.'
+        : 'A different file has this name in Grid\'s models folder. Open Model Manager to start this model.' })
+      expect(calls.some(args => args.includes('--serve'))).toBe(false)
+      if (scenario === 'different link') expect(await readlink(link)).toBe(otherFile)
+      if (scenario === 'ordinary file') expect(await readFile(link, 'utf8')).toBe('a different model')
+    }
+  })
+
+  it('does not replace a model link whose target cannot be read', async () => {
+    const { symlink } = await import('node:fs/promises')
+    const file = join(root, 'app-weights'), link = join(home, 'models', 'app-model.gguf')
+    await writeFile(file, Buffer.alloc(64)); await symlink(file, link)
+    apps = [{ id: 'app:ollama:app-model', name: 'app-model', app: 'ollama', engine: 'grid', ref: file, sizeBytes: 64 }]
+    service = appService()
+    vi.mocked(readlink).mockRejectedValueOnce(new Error('EACCES'))
+    const result = await service.act('home', apps[0].id, 'start'); await service.settled()
+    expect(result.operation).toMatchObject({ phase: 'failed', error: expect.stringContaining('A different file has this name') })
+    expect(await readlink(link)).toBe(file)
+    expect(calls.some(args => args.includes('--serve'))).toBe(false)
+  })
+
+  it('recovers a first app scan that fails and keeps the catalog usable meanwhile', async () => {
+    const scan = vi.fn<() => Promise<AppModel[]>>().mockRejectedValueOnce(new Error('app unavailable')).mockResolvedValue([ollama])
+    service = appService({ appModels: scan })
+    const first = await service.list('home')
+    expect(first.notice).toBeUndefined()
+    expect(first.models.some(model => model.id === 'org/Small-GGUF')).toBe(true)
+    expect(first.models.some(model => model.id === ollama.id)).toBe(false)
+    expect((await service.list('home', true)).models.find(model => model.id === ollama.id))
+      .toMatchObject({ state: 'downloaded', canStart: true })
+    expect(scan).toHaveBeenCalledTimes(2)
+  })
+
+  it('lists app models even when their scan receipt cannot be saved, then persists the next successful scan', async () => {
+    service = appService()
+    await writeFile(stateDir, 'storage unavailable')
+    expect((await service.list('home')).models.find(model => model.id === ollama.id)).toMatchObject({ state: 'downloaded' })
+    expect(await readFile(stateDir, 'utf8')).toBe('storage unavailable')
+    await rm(stateDir); await mkdir(stateDir)
+    await service.list('home', true)
+    await vi.waitFor(async () => expect(JSON.parse(await readFile(join(stateDir, 'app-models.json'), 'utf8'))).toEqual(apps))
+  })
+
+  it('keeps models visible without inventing free disk space when both filesystem probes fail', async () => {
+    service = appService()
+    vi.mocked(statfs).mockRejectedValueOnce(new Error('models volume unavailable')).mockRejectedValueOnce(new Error('home volume unavailable'))
+    const snapshot = await service.list('home')
+    expect(snapshot).not.toHaveProperty('freeDiskBytes')
+    expect(snapshot.models.find(model => model.id === ollama.id)).toMatchObject({ state: 'downloaded', canStart: true })
+  })
+
+  it.each([true, false])('reads object-shaped model names without assuming every provider has a models array (listed=%s)', async listed => {
+    service = appService()
+    await service.act('home', ollama.id, 'start'); await service.settled()
+    inventory.mockResolvedValue({ state: 'awake', status: 'running', nodes: [
+      { online: false, models: [ollama.name] }, { online: true },
+      { online: true, models: [{ model: listed ? ollama.name : 'someone-elses-model' }] },
+    ] })
+    expect((await service.list('home', true)).models.find(model => model.id === ollama.id))
+      .toMatchObject({ state: listed ? 'running' : 'downloaded', canStop: true })
+  })
+
+  it('unregisters a stale app record even when its engine adapter is unavailable', async () => {
+    await mkdir(stateDir)
+    await writeFile(join(stateDir, 'app-engines.json'), JSON.stringify([{ spec: 1, modelId: ollama.id, grid: 'home', name: ollama.name,
+      engine: 'ollama', served: ollama.ref, alias: ollama.name, port: 41000, binary: ollama.binary, pid: 4242 }]))
+    service = appService({ appEngines: undefined })
+    expect((await service.list('home')).models.find(model => model.id === ollama.id))
+      .toMatchObject({ state: 'downloaded', canStart: false, canStop: true })
+    const result = await service.act('home', ollama.id, 'stop'); await service.settled()
+    expect(result.operation?.phase).toBe('done')
+    expect(calls).toContainEqual(['--remote', 'leave', 'home', '--engine', ollama.name])
+    expect(ops.stop).not.toHaveBeenCalled()
+    expect(JSON.parse(await readFile(join(stateDir, 'app-engines.json'), 'utf8'))).toEqual([])
+  })
+
+  it('preserves the same app model\'s record on another grid through start and stop here', async () => {
+    const elsewhere: AppEngineRecord = { spec: 1, modelId: ollama.id, grid: 'elsewhere', name: ollama.name,
+      engine: 'ollama', served: ollama.ref, alias: ollama.name, port: 41002, binary: ollama.binary!, pid: 4243 }
+    await mkdir(stateDir); await writeFile(join(stateDir, 'app-engines.json'), JSON.stringify([elsewhere]))
+    service = appService()
+    const started = await service.act('home', ollama.id, 'start'); await service.settled()
+    expect(started.operation?.phase).toBe('done')
+    expect(JSON.parse(await readFile(join(stateDir, 'app-engines.json'), 'utf8')))
+      .toEqual([elsewhere, expect.objectContaining({ modelId: ollama.id, grid: 'home' })])
+    const stopped = await service.act('home', ollama.id, 'stop'); await service.settled()
+    expect(stopped.operation?.phase).toBe('done')
+    expect(JSON.parse(await readFile(join(stateDir, 'app-engines.json'), 'utf8'))).toEqual([elsewhere])
+  })
+
+  it.each([undefined, null, '', '--unsafe', 'bad\nname'])('omits an unusable machine name from an app join (%j)', async name => {
+    service = appService({ machineName: () => name })
+    const result = await service.act('home', ollama.id, 'start'); await service.settled()
+    expect(result.operation?.phase).toBe('done')
+    expect(calls.find(args => args.includes('--at'))).not.toContain('--name')
+  })
+
 })
 
 describe('Jev models: Get brings Grid\'s llama.cpp up to a build that serves them', () => {
@@ -1491,13 +1850,17 @@ describe('Jev models: Get brings Grid\'s llama.cpp up to a build that serves the
     await mkdir(join(home, 'bin'), { recursive: true })
     await writeFile(join(home, 'bin', 'llama-server'), `#!/bin/sh\necho "version: ${build}"\n`, { mode: 0o755 })
   }
-  const jevService = (env: NodeJS.ProcessEnv = {}) => {
+  const jevService = (env: NodeJS.ProcessEnv = {}, over: Partial<ConstructorParameters<typeof LocalModels>[0]> = {},
+    device?: Record<string, unknown> | null) => {
     const base = run.getMockImplementation()!
     run.mockImplementation(async (args, output) => {
-      if (args[0] === 'pull' && args[1] === 'ggml-org/Laya-GGUF:Laya-Q8_0.gguf') {
+      if (device !== undefined && args[0] === 'device-info') { calls.push(args); return device ? ok(device) : refused('no device') }
+      const pulled = args[0] === 'pull' ? JEV_MODELS.flatMap(m => m.quants.map(q => ({ ...q, ref: `${m.repo}:${q.file}` })))
+        .find(q => q.ref === args[1]) : undefined
+      if (pulled) {
         calls.push(args); output?.('100%')
-        const file = join(home, 'models', 'Laya-Q8_0.gguf')
-        await writeFile(file, ''); await (await import('node:fs/promises')).truncate(file, LAYA_SIZE)
+        const file = join(home, 'models', pulled.file)
+        await writeFile(file, ''); await (await import('node:fs/promises')).truncate(file, pulled.size)
         return ok()
       }
       if (args[0] === 'engine' && args[1] === 'install') { calls.push(args); await engine(installBuild); return ok() }
@@ -1515,7 +1878,7 @@ describe('Jev models: Get brings Grid\'s llama.cpp up to a build that serves the
       return response({ choices: [{ message: { content: 'ok' } }] })
     })
     return modelFixture({ stateDir, processEnv: { GRID_HOME: home, ...env }, run, request: request as typeof fetch, inventory,
-      appModels: async () => [gemma], appEngines: ops as unknown as AppEngineOps })
+      appModels: async () => [gemma], appEngines: ops as unknown as AppEngineOps, ...over })
   }
   const laya = async (models: LocalModels) => (await models.list('home', true)).models.find(m => m.id === LAYA)!
   beforeEach(() => {
@@ -1556,9 +1919,9 @@ describe('Jev models: Get brings Grid\'s llama.cpp up to a build that serves the
     expect(installed).toBeGreaterThan(pulled)
     expect(stages).toContain('updating')
     expect(ops.start).toHaveBeenLastCalledWith(expect.objectContaining({ id: LAYA, engine: 'llama.cpp', binary: join(home, 'bin', 'llama-server'),
-      ref: join(home, 'models', 'Laya-Q8_0.gguf') }), 8192, join(stateDir, 'logs'))
+      ref: join(home, 'models', 'Laya-Q8_0.gguf') }), 8192, join(stateDir, 'logs'), 4)
     expect(calls.find(args => args.includes('--at') && args.includes('laya-english'))).toEqual(['--remote', 'join', 'home', '--at',
-      'http://127.0.0.1:41001/v1', '-m', 'laya-english', '--advertise-as', 'laya-english', '--max-concurrency', '1'])
+      'http://127.0.0.1:41001/v1', '-m', 'laya-english', '--advertise-as', 'laya-english', '--max-concurrency', '5'])
     expect(decisions).toEqual(['laya-english'])
     expect(await laya(models)).toMatchObject({ kind: 'decision', state: 'running', canStop: true, operation: { phase: 'done' } })
     // And a running Jev model blocks no chat model either.
@@ -1569,6 +1932,68 @@ describe('Jev models: Get brings Grid\'s llama.cpp up to a build that serves the
     expect(calls.some(args => args.join(' ') === '--remote leave home --engine laya-english')).toBe(true)
     expect(ops.stop).toHaveBeenCalledWith(expect.objectContaining({ modelId: LAYA, pid: 4343 }))
     expect(await laya(models)).toMatchObject({ state: 'downloaded', canStart: true, canStop: false })
+  })
+
+  it("takes its grid's one request limit, and never changes it where Grid runs an engine itself", async () => {
+    await engine('0.5.0-dev (build 11378, commit edd6e2bbd)')
+    const limit = () => {
+      const join = calls.filter(args => args.includes('--at') && args.includes('laya-english')).at(-1)!
+      return join.includes('--max-concurrency') ? join[join.indexOf('--max-concurrency') + 1] : 'left as it is'
+    }
+    const models = jevService()
+    // Nothing of Grid's runs here: the limit every join of this computer's sets.
+    await models.act('home', LAYA, 'start'); await models.settled()
+    expect(limit()).toBe('5')
+    await models.act('home', LAYA, 'stop'); await models.settled()
+    // A chat model Grid runs itself — with a slot count of its own or without: a join that changed the limit would
+    // restart the node, and the restart reload that model, so the Jev model's join leaves it.
+    for (const launch of [{ parallel: 1 }, undefined]) {
+      await writeFile(join(records, 'remote.json'), JSON.stringify({ node_id: 'local-node', max_concurrency: 1,
+        engines: [{ endpoint_url: null, models: ['Small-Q4.gguf'], ...(launch ? { launch } : {}) }] }))
+      await models.act('home', LAYA, 'start'); await models.settled()
+      expect(limit()).toBe('left as it is')
+      expect(await laya(models)).toMatchObject({ state: 'running' })
+      await models.act('home', LAYA, 'stop'); await models.settled()
+    }
+  })
+
+  // An NVIDIA card with 10 GiB free: its VRAM is the model's own, all of it the budget.
+  const card10 = { device_class: 'nvidia', backend: 'cuda', usable_bytes: 10 * GiB, memory: { total_gb: 32 } }
+  const offered = async (models: LocalModels) => Object.fromEntries((await models.list('home', true)).models
+    .filter(m => m.kind === 'decision').map(m => [m.name, m.quant]))
+
+  it('offers only the Jev models this computer can start, each at the best quant that fits', async () => {
+    const models = jevService({}, {}, card10)
+    expect(await offered(models)).toEqual({ 'laya-english': 'Q8_0', 'kev-0.8b': 'Q8_0', 'kev-4b': 'Q8_0', lev: 'Q8_0',
+      'kev-9b': 'Q4_K_M', 'nimble-9b': 'Q4_K_M', 'clef-flash': 'Q4_K_M' })
+    // Clef needs 23 GB even at Q4_K_M; Kev 9B's Q8_0 would need 12.
+    expect(jevMemory(JEV_MODELS.find(m => m.name === 'clef')!.quants.at(-1)!.size)).toBeGreaterThan(10 * GiB)
+    // Get downloads the quant it was offered at.
+    await models.act('home', 'jev:ggml-org/Kev-9B-GGUF', 'download'); await models.settled()
+    expect(calls.filter(args => args[0] === 'pull')).toEqual([['pull', 'ggml-org/Kev-9B-GGUF:Kev-9B-Q4_K_M.gguf']])
+  })
+
+  it('offers none it cannot size, but keeps listing the ones already here, at the quant that is here', async () => {
+    await writeFile(join(home, 'models', 'Kev-9B-Q8_0.gguf'), '')
+    await (await import('node:fs/promises')).truncate(join(home, 'models', 'Kev-9B-Q8_0.gguf'), 9_529_735_648)
+    await writeFile(join(home, 'models', 'Clef-Q4_K_M.gguf.part'), 'half')
+    // grid cannot say how much memory there is: nothing new is offered.
+    expect(await offered(jevService({}, {}, null))).toEqual({ 'kev-9b': 'Q8_0', clef: 'Q4_K_M' })
+    // On a card too small for either, they stay too — one downloaded, one to resume, never swapped for a smaller file.
+    const models = jevService({}, {}, card10)
+    expect(await offered(models)).toMatchObject({ 'kev-9b': 'Q8_0', clef: 'Q4_K_M' })
+    await models.act('home', 'jev:ggml-org/Clef-GGUF', 'download'); await models.settled()
+    expect(calls.filter(args => args[0] === 'pull')).toEqual([['pull', 'ggml-org/Clef-GGUF:Clef-Q4_K_M.gguf']])
+  })
+
+  it('updates an engine new enough for Jev models but not for Clef, whose architecture came later', async () => {
+    await engine('0.5.0-dev (build 11365, commit 1a2b3c4d5)')
+    const models = jevService({}, {}, { ...card10, usable_bytes: 48 * GiB })
+    await models.act('home', LAYA, 'start'); await models.settled()
+    expect(calls.some(args => args[0] === 'engine')).toBe(false)
+    await models.act('home', 'jev:ggml-org/Clef-GGUF', 'start'); await models.settled()
+    expect(calls.filter(args => args[0] === 'engine')).toEqual([['engine', 'install', 'llama.cpp']])
+    expect((await models.list('home', true)).models.find(m => m.name === 'clef')).toMatchObject({ state: 'running', quant: 'Q8_0' })
   })
 
   it('leaves an engine new enough alone', async () => {
@@ -1584,7 +2009,7 @@ describe('Jev models: Get brings Grid\'s llama.cpp up to a build that serves the
     installBuild = '10369 (6e62ba538)'
     const models = jevService()
     await models.act('home', LAYA, 'start'); await models.settled()
-    expect((await laya(models)).operation).toMatchObject({ phase: 'failed', error: expect.stringContaining('still too old for Jev models (build 10369') })
+    expect((await laya(models)).operation).toMatchObject({ phase: 'failed', error: expect.stringContaining('still too old for laya-english (build 10369') })
     expect(ops.start).not.toHaveBeenCalled()
   })
 
@@ -1593,7 +2018,238 @@ describe('Jev models: Get brings Grid\'s llama.cpp up to a build that serves the
     await writeFile(custom, '#!/bin/sh\necho "version: 0.5.0 (build 11146, commit 7fe450e19)"\n', { mode: 0o755 })
     const models = jevService({ LLAMA_SERVER: custom })
     await models.act('home', LAYA, 'start'); await models.settled()
-    expect((await laya(models)).operation).toMatchObject({ phase: 'failed', error: 'LLAMA_SERVER is llama.cpp build 11146; Jev models need build 11361 or newer.' })
+    expect((await laya(models)).operation).toMatchObject({ phase: 'failed', error: 'LLAMA_SERVER is llama.cpp build 11146; laya-english needs build 11361 or newer.' })
     expect(calls.some(args => args[0] === 'engine')).toBe(false)
+  })
+
+
+  // Quiet-machine QA's coverage audit found that failures after Jev allocation were untested.
+  it.each(['unknown model', 'engine support unavailable'])('refuses Jev setup with %s before allocating anything', async scenario => {
+    service = jevService({}, scenario === 'engine support unavailable' ? { appEngines: undefined } : {})
+    const result = await service.act('home', scenario === 'unknown model' ? 'jev:missing/model' : LAYA, 'start')
+    await service.settled()
+    expect(result.operation).toMatchObject({ phase: 'failed', error: 'This model could not be checked. Refresh and try again.' })
+    expect(ops.start).not.toHaveBeenCalled()
+    expect(calls.some(args => args[0] === 'pull')).toBe(false)
+  })
+
+  it('treats repeated Jev starts, downloads and stops as the same durable state', async () => {
+    service = jevService()
+    for (const action of ['stop', 'start', 'start', 'download', 'stop', 'stop'] as const) {
+      const result = await service.act('home', LAYA, action); await service.settled()
+      expect(result.operation?.phase).toBe('done')
+    }
+    expect(ops.start).toHaveBeenCalledOnce()
+    expect(ops.stop).toHaveBeenCalledOnce()
+    expect(decisions).toEqual(['laya-english'])
+    expect(calls.filter(args => args[0] === 'pull')).toHaveLength(1)
+    expect(JSON.parse(await readFile(join(stateDir, 'app-engines.json'), 'utf8'))).toEqual([])
+  })
+
+  it.each(['download failed', 'partial file', 'directory instead of weights'])('never starts Jev with %s', async scenario => {
+    service = jevService()
+    const file = join(home, 'models', 'Laya-Q8_0.gguf')
+    if (scenario === 'partial file') await writeFile(file, 'partial')
+    if (scenario === 'directory instead of weights') await mkdir(file)
+    const original = run.getMockImplementation()!
+    run.mockImplementation(async (args, output) => args[0] === 'pull'
+      ? scenario === 'download failed' ? refused('private download diagnostic') : ok() : original(args, output))
+    const result = await service.act('home', LAYA, 'start'); await service.settled()
+    expect(result.operation).toMatchObject({ phase: 'failed', error: scenario === 'download failed'
+      ? 'The download stopped. Start again to resume.' : 'The download is incomplete. Start again to resume.' })
+    expect(ops.start).not.toHaveBeenCalled()
+    expect(calls.some(args => args[0] === 'engine')).toBe(false)
+  })
+
+  it('refuses a Jev download before contacting Grid when the weights volume is full', async () => {
+    vi.mocked(statfs).mockResolvedValueOnce({ bavail: 0, bsize: 4096 } as Awaited<ReturnType<typeof statfs>>)
+    service = jevService()
+    const result = await service.act('home', LAYA, 'download'); await service.settled()
+    expect(result.operation).toMatchObject({ phase: 'failed', error: 'Free up disk space, then start again.' })
+    expect(calls.some(args => args[0] === 'pull')).toBe(false)
+    expect(ops.start).not.toHaveBeenCalled()
+  })
+
+  it.each(['install failed', 'version unavailable'])('leaves Jev stopped when its managed engine has %s', async scenario => {
+    service = jevService()
+    installBuild = 'unreported'
+    const original = run.getMockImplementation()!
+    run.mockImplementation(async (args, output) => scenario === 'install failed' && args[0] === 'engine'
+      ? refused('private installation diagnostic') : original(args, output))
+    const result = await service.act('home', LAYA, 'start'); await service.settled()
+    expect(result.operation).toMatchObject({ phase: 'failed', error: scenario === 'install failed'
+      ? 'The model engine could not be updated. Try again.'
+      : "Grid's model engine is still too old for laya-english (build unknown; it needs 11361 or newer). Update Grid, then try again." })
+    expect(ops.start).not.toHaveBeenCalled()
+  })
+
+  it.each(['11378', 'unreported'])('keeps the explicit Jev engine with reported build %s and checks its actual reply', async build => {
+    const binary = join(root, 'custom-engine')
+    await writeFile(binary, `#!/bin/sh\necho 'version: ${build}' >&2\n`, { mode: 0o700 })
+    service = jevService({ LLAMA_SERVER: binary })
+    const result = await service.act('home', LAYA, 'start'); await service.settled()
+    expect(result.operation?.phase).toBe('done')
+    expect(ops.start).toHaveBeenCalledWith(expect.objectContaining({ binary }), 8192, join(stateDir, 'logs'), 4)
+    expect(calls.some(args => args[0] === 'engine')).toBe(false)
+    expect(decisions).toEqual(['laya-english'])
+  })
+
+  it.each([
+    [new AppStartError('The chosen engine could not load this decision model.'), 'The chosen engine could not load this decision model.'],
+    [new Error('private process diagnostic'), 'The model could not start. Try again.'],
+  ])('reports a Jev launch failure without registering a provider', async (error, message) => {
+    service = jevService()
+    ops.start.mockRejectedValueOnce(error)
+    const result = await service.act('home', LAYA, 'start'); await service.settled()
+    expect(result.operation).toMatchObject({ phase: 'failed', error: message })
+    expect(joined.size).toBe(0)
+    expect(ops.stop).not.toHaveBeenCalled()
+  })
+
+  it.each(['asleep', 'start refused', 'status unavailable'])('handles a Jev start while grid status is %s', async scenario => {
+    service = jevService({}, { machineName: () => ' QA machine ' })
+    gridState = scenario === 'status unavailable' ? 'running' : 'asleep'
+    const original = run.getMockImplementation()!
+    run.mockImplementation(async (args, output) => {
+      if (scenario === 'status unavailable' && args.includes('info') && args.includes('--json')) return refused('status unavailable')
+      if (scenario === 'start refused' && args[1] === 'start') return refused('private start diagnostic')
+      return original(args, output)
+    })
+    const result = await service.act('home', LAYA, 'start'); await service.settled()
+    if (scenario === 'start refused') {
+      expect(result.operation).toMatchObject({ phase: 'failed', error: 'Your grid could not start. Try again.' })
+      expect(ops.start).not.toHaveBeenCalled()
+    } else {
+      expect(result.operation?.phase).toBe('done')
+      expect(calls.find(args => args.includes('--at'))).toEqual(expect.arrayContaining(['--name', 'QA machine']))
+      expect(calls.filter(args => args.join(' ') === '--remote start home')).toHaveLength(scenario === 'asleep' ? 1 : 0)
+    }
+  })
+
+  it.each(['join refused', 'credentials unavailable', 'credentials threw'])('takes down only the Jev provider after %s', async scenario => {
+    service = jevService()
+    await service.act('home', gemma.id, 'start'); await service.settled()
+    const chatRecords = JSON.parse(await readFile(join(stateDir, 'app-engines.json'), 'utf8'))
+    const original = run.getMockImplementation()!
+    run.mockImplementation(async (args, output) => {
+      if (scenario === 'join refused' && args.includes('--at')) return refused('private join diagnostic')
+      if (scenario !== 'join refused' && args.includes('--env')) {
+        if (scenario === 'credentials threw') throw new Error('private credential diagnostic')
+        return refused('private credential diagnostic')
+      }
+      return original(args, output)
+    })
+    const result = await service.act('home', LAYA, 'start'); await service.settled()
+    expect(result.operation).toMatchObject({ phase: 'failed', error: scenario === 'join refused'
+      ? 'The model could not join your grid. Try again.' : scenario === 'credentials threw'
+        ? 'The model did not answer. Try again.' : 'The model is starting, but could not be checked. Try again shortly.' })
+    expect(ops.stop).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ modelId: LAYA }))
+    expect(up).toEqual(new Set([gemma.id]))
+    expect(joined).toEqual(new Set([gemma.name]))
+    expect(JSON.parse(await readFile(join(stateDir, 'app-engines.json'), 'utf8'))).toEqual(chatRecords)
+  })
+
+  it.each(['network error', 'HTTP failure', 'malformed JSON', 'non-numeric answer'])('bounds decision verification for %s and removes the failed provider', async scenario => {
+    service = jevService()
+    const original = request.getMockImplementation()!
+    let attempted!: () => void
+    const firstAttempt = new Promise<void>(resolve => { attempted = resolve })
+    let attempts = 0
+    request.mockImplementation(async (url, init) => {
+      if (!String(url).endsWith('/systemone')) return original(url, init)
+      attempts++; attempted()
+      if (scenario === 'network error') throw new Error('private network diagnostic')
+      if (scenario === 'HTTP failure') return new Response('private relay diagnostic', { status: 503 })
+      if (scenario === 'malformed JSON') return new Response('{')
+      return response({ answers: { refund: { noul: '0.91' } } })
+    })
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout'] })
+    const result = await service.act('home', LAYA, 'start')
+    await firstAttempt
+    await vi.advanceTimersByTimeAsync(182_000)
+    await service.settled()
+    expect(result.operation).toMatchObject({ phase: 'failed', error: 'The model did not answer. Stop it, then start again.' })
+    expect(attempts).toBeGreaterThan(1)
+    expect(ops.stop).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ modelId: LAYA }))
+    expect(up.size).toBe(0)
+    expect(joined.size).toBe(0)
+    expect(JSON.parse(await readFile(join(stateDir, 'app-engines.json'), 'utf8'))).toEqual([])
+  })
+
+  it('keeps a numeric zero decision after a transient registration failure', async () => {
+    service = jevService()
+    const original = request.getMockImplementation()!
+    let attempted!: () => void
+    const firstAttempt = new Promise<void>(resolve => { attempted = resolve })
+    let attempts = 0
+    request.mockImplementation(async (url, init) => {
+      if (!String(url).endsWith('/systemone')) return original(url, init)
+      if (++attempts === 1) { attempted(); throw new Error('registration pending') }
+      return response({ answers: { refund: { noul: 0 } } })
+    })
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout'] })
+    const result = await service.act('home', LAYA, 'start')
+    await firstAttempt
+    await vi.advanceTimersByTimeAsync(1_500)
+    await service.settled()
+    expect(result.operation?.phase).toBe('done')
+    expect(attempts).toBe(2)
+    expect(ops.stop).not.toHaveBeenCalled()
+    expect(up.has(LAYA)).toBe(true)
+  })
+
+  it.each([undefined, null, '', '--unsafe', 'bad\nname'])('omits an unusable machine name from a Jev join (%j)', async name => {
+    service = jevService({}, { machineName: () => name })
+    const result = await service.act('home', LAYA, 'start'); await service.settled()
+    expect(result.operation?.phase).toBe('done')
+    expect(calls.find(args => args.includes('--at'))).not.toContain('--name')
+  })
+
+  it('ignores non-progress and out-of-range output while completing a Jev download', async () => {
+    service = jevService()
+    const original = run.getMockImplementation()!
+    run.mockImplementation(async (args, output) => {
+      if (args[0] === 'pull') {
+        output?.('connecting'); output?.('150%'); output?.('0%'); output?.('2%')
+      }
+      return original(args, output)
+    })
+    const result = await service.act('home', LAYA, 'download'); await service.settled()
+    expect(result.operation).toMatchObject({ phase: 'done' })
+    expect(result.operation).not.toHaveProperty('progress')
+    expect((await stat(join(home, 'models', 'Laya-Q8_0.gguf'))).size).toBe(LAYA_SIZE)
+    expect(ops.start).not.toHaveBeenCalled()
+  })
+
+  it('releases a Jev operation when progress receipts become unwritable and permits retry', async () => {
+    service = jevService()
+    const original = run.getMockImplementation()!
+    run.mockImplementation(async (args, output) => {
+      if (args[0] === 'pull') {
+        rmSync(stateDir, { recursive: true, force: true }); writeFileSync(stateDir, 'storage unavailable')
+        output?.('42%')
+      }
+      return original(args, output)
+    })
+    const failed = await service.act('home', LAYA, 'download'); await service.settled()
+    expect(failed.operation).toMatchObject({ phase: 'failed', error: 'The model could not finish. Start again to retry.' })
+    await rm(stateDir); await mkdir(stateDir)
+    const retried = await service.act('home', LAYA, 'download'); await service.settled()
+    expect(retried.operation?.phase).toBe('done')
+    expect(retried.operation?.id).not.toBe(failed.operation?.id)
+  })
+
+  it('preserves the same decision model\'s record on another grid through start and stop here', async () => {
+    const elsewhere: AppEngineRecord = { spec: 1, modelId: LAYA, grid: 'elsewhere', name: 'laya-english',
+      engine: 'llama.cpp', served: 'laya-english', alias: 'laya-english', port: 41002, binary: '/fixture/llama-server', pid: 4344 }
+    await mkdir(stateDir); await writeFile(join(stateDir, 'app-engines.json'), JSON.stringify([elsewhere]))
+    service = jevService()
+    const started = await service.act('home', LAYA, 'start'); await service.settled()
+    expect(started.operation?.phase).toBe('done')
+    expect(JSON.parse(await readFile(join(stateDir, 'app-engines.json'), 'utf8')))
+      .toEqual([elsewhere, expect.objectContaining({ modelId: LAYA, grid: 'home' })])
+    const stopped = await service.act('home', LAYA, 'stop'); await service.settled()
+    expect(stopped.operation?.phase).toBe('done')
+    expect(JSON.parse(await readFile(join(stateDir, 'app-engines.json'), 'utf8'))).toEqual([elsewhere])
   })
 })
