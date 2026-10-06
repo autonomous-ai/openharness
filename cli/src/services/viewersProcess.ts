@@ -24,7 +24,7 @@
  * core's: when it goes, every stream it carried goes with it.
  */
 import type { CoreApi } from '../core/api.js'
-import { ACCOUNT_BACKEND_OFF, AGENT_ACTIONS_OFF, DAEMON_UNKNOWN, DELIVERIES_OFF, emptyPorts, LANE_OFF, resolveAgent, TERMINALS_OFF } from '../core/api.js'
+import { ACCOUNT_BACKEND_OFF, CONVERSATIONS_OFF, AGENT_ACTIONS_OFF, DAEMON_UNKNOWN, DELIVERIES_OFF, emptyPorts, LANE_OFF, resolveAgent, TERMINALS_OFF } from '../core/api.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcess } from './process.js'
 import { UNASKED } from './processCoreApi.js'
@@ -59,6 +59,7 @@ export function viewersCoreApi(
   const attached = (): RegisteredSession[] => [...sessions.values()]
   return {
     dataDir,
+    conversations: CONVERSATIONS_OFF,
     terminals: TERMINALS_OFF,
     machine: UNASKED.machine,
     agents: {
