@@ -121,6 +121,23 @@ describe('service links', () => {
     expect(stays).not.toHaveBeenCalled()
   })
 
+  it('acknowledges an accepted service before held events and the requests that woke it', () => {
+    // Found by QA on a quiet machine: the first Share request saw no agent when it arrived before connected.
+    const links = make({ owned: { sharing: ['harness_share_link'] }, onDemand: new Set(['sharing']) })
+    links.notify('sharing', { type: 'service_event', payload: { kind: 'linkDown' } }, { untilDelivered: true })
+    const reply = vi.fn()
+    links.route('harness_share_link', { agentId: 'a1' }, ASKER, reply)
+    const sharing = sink()
+    const accepted = vi.fn(() => { sharing.sendFrame({ type: 'connected', payload: {} }) })
+    expect(links.accept('sharing', 'wrong', sharing, vi.fn(), accepted)).toBeNull()
+    expect(accepted).not.toHaveBeenCalled()
+    const link = links.accept('sharing', TOKEN, sharing, vi.fn(), accepted)!
+    expect(sharing.sent.map((frame) => frame.type)).toEqual(['connected', 'service_event', 'harness_share_link'])
+    expect(accepted).toHaveBeenCalledOnce()
+    link.receive({ type: 'harness_share_link_result', payload: { requestId: 'route-1', link: 'ready' } })
+    expect(reply).toHaveBeenCalledWith({ link: 'ready' })
+  })
+
   it('answers SERVICE_UNAVAILABLE for an experiment that does not come in time, or will not take the request', () => {
     const links = make({ owned: { orchestrator: ['orchestrator'], search: ['session_search'] }, onDemand: new Set(['orchestrator']) })
     const late = vi.fn()
