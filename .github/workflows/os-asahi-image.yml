@@ -38,7 +38,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          fetch-depth: 0
+          fetch-depth: 1
       - name: Verify the private package producer
         env:
           GH_TOKEN: ${{ github.token }}

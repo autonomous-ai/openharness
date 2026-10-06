@@ -38,7 +38,7 @@ def read_lock(path=LOCK):
     lock = json.loads(path.read_text())
     upstream = lock.get('upstream', {})
     if (lock.get('schema') != 1 or lock.get('fedora_release') != '44' or
-            upstream.get('repository') != 'https://pagure.io/fedora-asahi/kiwi-descriptions.git' or
+            upstream.get('repository') != 'https://forge.fedoraproject.org/asahi/kiwi-descriptions.git' or
             upstream.get('branch') != 'f44' or
             any(not re.fullmatch(r'[a-f0-9]{40}', str(upstream.get(key))) for key in ('commit', 'tree')) or
             not re.fullmatch(r'registry\.fedoraproject\.org/fedora-minimal@sha256:[a-f0-9]{64}',
