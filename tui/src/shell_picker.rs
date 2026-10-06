@@ -69,6 +69,18 @@ impl Items {
             && self.said==other.said && self.said_query==other.said_query
             && self.catalog_ids==other.catalog_ids && self.said_text==other.said_text
     }
+    fn apply_catalog(&self, picker: &mut Picker, folder: bool) {
+        // A growing folder scan must keep the result position, like a typed
+        // query. Otherwise a weak early match stays selected when the directory
+        // whose name matches arrives (October 6 ARM shell-composer incident).
+        // Explicit fzf tracking still follows the selected item.
+        let selected=if folder && !picker.tracking() {None} else {picker.selected_id.clone()};
+        let cursor=picker.cursor;
+        self.apply(picker);
+        picker.selected_id=selected;
+        picker.cursor=cursor;
+        folder_filter(picker,folder);
+    }
 }
 const MAX_DATA: u64 = 8 * 1024 * 1024;
 
@@ -406,7 +418,7 @@ pub(crate) fn folder_filter(picker:&mut Picker, folder:bool) {
     }
     let search=folder.then(|| format!(":{query}"));
     // Editing keeps the result position, not the intermediate match selected
-    // before basename ranking. Catalog refreshes still keep the selected item.
+    // before basename ranking.
     if folder && picker.search!=search && !picker.tracking() {picker.selected_id=None;}
     picker.search=search;
     picker.refilter();
@@ -504,10 +516,7 @@ pub fn run(args:&[String])->io::Result<i32> {
                     // still supplies the exact id; never associate it with today's cursor.
                     if value.preview_id.is_none() {value.preview_id=requested_preview.clone();}
                     if items.as_ref().is_none_or(|old|!value.same_catalog(old)) {
-                        let selected=picker.selected_id.clone();
-                        value.apply(&mut picker);
-                        picker.selected_id=selected;
-                        folder_filter(&mut picker,composing && kind=="folder");
+                        value.apply_catalog(&mut picker,composing && kind=="folder");
                     }
                     picker.status=value.notice.clone();
                     items=Some(value);dirty=true;
@@ -696,6 +705,34 @@ mod tests {
             picker.query=query.into();compose_scope(&mut picker,"folder");folder_filter(&mut picker,true);
             assert_eq!(picker.rows[picker.visible[0].0].id,"~/code/work/autonomous-harness");
             assert_eq!(picker.current_id().as_deref(),Some("~/code/work/autonomous-harness"));
+        }
+    }
+    #[test]
+    fn folder_scan_keeps_result_position_when_better_matches_arrive() {
+        theme::fzf_reset();
+        let mut picker=Picker::new("","");
+        picker.query=":cd".into();compose_scope(&mut picker,"folder");
+        let root=Item{id:"~/project".into(),label:"~/project".into(),right:"this folder".into(),..Item::default()};
+        let first=Items{rows:vec![root.clone()],..Items::default()};
+        first.apply_catalog(&mut picker,true);
+        assert_eq!(picker.current_id().as_deref(),Some("~/project"));
+        let scanned=Items{rows:vec![root,Item{id:"~/project/code".into(),label:"~/project/code".into(),..Item::default()}],..Items::default()};
+        scanned.apply_catalog(&mut picker,true);
+        assert_eq!(picker.current_id().as_deref(),Some("~/project/code"));
+        assert!(folder_key(&mut picker,None,event::KeyEvent::new(KeyCode::Tab,KeyModifiers::NONE)));
+        assert_eq!(picker.query,":~/project/code/");
+    }
+    #[test]
+    fn folder_scan_respects_tracking_and_nonfolder_catalogs_keep_the_item() {
+        theme::fzf_reset();
+        for folder in [false,true] {
+            let mut picker=Picker::new("","");
+            picker.query=":cd".into();compose_scope(&mut picker,"folder");
+            let root=Item{id:"~/project".into(),label:"~/project".into(),right:"this folder".into(),..Item::default()};
+            Items{rows:vec![root.clone()],..Items::default()}.apply_catalog(&mut picker,true);
+            if folder {picker.track_current=picker.current_id();}
+            Items{rows:vec![root,Item{id:"~/project/code".into(),label:"~/project/code".into(),..Item::default()}],..Items::default()}.apply_catalog(&mut picker,folder);
+            assert_eq!(picker.current_id().as_deref(),Some("~/project"));
         }
     }
     #[test]
