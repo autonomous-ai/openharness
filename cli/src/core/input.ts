@@ -20,8 +20,7 @@ import type { RegisteredSession } from '../lib/registry.js'
 import { SessionInputController, type SessionInputDelivery, type SessionInputDeps } from '../lib/sessionInput.js'
 import { messageHold, passingHold } from '../lib/messageHold.js'
 import { TERMINAL_LEASE_REFUSED, terminalActionNotStarted, type TerminalActionResult } from '../lib/terminalTypes.js'
-import { Id } from '../teams/model.js'
-import { teamWriteHold } from '../teams/preflight.js'
+import { teamWriteHold } from '../lib/teamWriteHold.js'
 import type { TerminalControl } from './terminals/control.js'
 
 type Frame = { type: string; agentId?: string; dbSessionId?: string; payload: Record<string, unknown> }
@@ -32,7 +31,7 @@ export interface InputDeps {
   terminal: Pick<TerminalControl, 'captureTerminal' | 'validateTerminal' | 'submitTerminalAction' | 'keyTerminalAction' | 'pinTerminalControl'>
   /** The teams and orchestrator features. */
   teams: {
-    /** Before a paste: record where the prompt came from (BackendSocket.swarmPromptScopes.prepare). */
+    /** Before a paste: record where the prompt came from (the teams' prompt scopes, `ports.teams`). */
     prepare: (agentId: string, content: string, tabId?: string, deliveryId?: string) => () => void
     /** A delivery settled: the orchestrator hears of it, then the team. */
     delivery: (event: SessionInputDelivery) => void
@@ -219,6 +218,9 @@ export function createInput(deps: InputDeps) {
  *
  * Moved verbatim out of the socket's request switch (docs/design/2026-10-03-harnessd.md).
  */
+/** A tab's id as Tab collaboration takes it (teams/model.ts `Id`): a message from a tab is in its swarm's scope. */
+const TAB_ID = /^[A-Za-z0-9_-]{1,128}$/
+
 export function createMessageRequest(submit: (id: string, content: string, deliveryId?: string, tabId?: string) => void) {
   return (payload: Record<string, unknown>): void => {
     const content = payload.content as string | undefined
@@ -226,8 +228,7 @@ export function createMessageRequest(submit: (id: string, content: string, deliv
     if (!content || !target) return
     // From the relay this is only reached sealed: text typed into an agent is never taken from the relay
     // in the clear.
-    const tabId = Id.safeParse(payload.tabId)
-    if (tabId.success) submit(target, content, undefined, tabId.data)
+    if (typeof payload.tabId === 'string' && TAB_ID.test(payload.tabId)) submit(target, content, undefined, payload.tabId)
     else submit(target, content)
   }
 }

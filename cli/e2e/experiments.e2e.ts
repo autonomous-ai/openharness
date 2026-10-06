@@ -6,7 +6,7 @@
  * costs that process alone: the core never restarts, every agent keeps working, and the window on this
  * computer stays connected and hears every turn.
  */
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { LocalClient, type Frame } from './harness/client.js'
@@ -40,6 +40,7 @@ async function turn(client: LocalClient, agentId: string, content: string): Prom
   await ended
 }
 const projects = (client: LocalClient) => client.request('orchestrator', { action: 'list' }, 40_000)
+const teamsStarts = (d: IsolatedDaemon) => [...d.log().matchAll(/\[harnessd\] service teams started/g)].length
 
 describe('the experiments, each in a process started only when it is on', () => {
   let daemon: IsolatedDaemon | undefined
@@ -143,5 +144,42 @@ describe('the experiments, each in a process started only when it is on', () => 
     await turn(client, agent.id, 'the orchestrator is parked and nothing else cares')
     expect(d.coresStarted()).toBe(1)
     client.close()
+  })
+
+  it('Tab collaboration: off, the teams have no process; a team request starts it, the scopes and the teams beside them', async () => {
+    const d = await fresh()
+    const client = await LocalClient.connect(d)
+    await until('the services to connect', () => d.log().includes('[services] search connected') || null, 30_000, 200)
+    expect(teamsStarts(d), 'an experiment no one asked for').toBe(0)
+    expect(await client.request('team', { action: 'capabilities' }, 40_000)).toMatchObject({ protocol: expect.any(String) })
+    expect(teamsStarts(d)).toBe(1)
+    await until('the scopes and the teams to connect', () => (d.log().includes('[services] teams connected') && d.log().includes('[services] collaboration connected')) || null, 30_000, 200)
+    expect(d.coresStarted()).toBe(1)
+    client.close()
+  })
+
+  it('a team in its own process introduces its members and delivers a question into the other agent, through the core', async () => {
+    const d = await fresh()
+    const client = await LocalClient.connect(d)
+    const [alpha, beta] = [await create(d, client, 'team-alpha'), await create(d, client, 'team-beta', 'codex')]
+    const teamId = '1'.repeat(32), questionId = '2'.repeat(32)
+    const member = (agent: Record<string, any>, name: string) => ({ machineId: d.computerId, agentId: agent.id, name })
+    const created = await client.request('team', { action: 'create', id: teamId, name: 'End to end', members: [member(alpha, 'alpha'), member(beta, 'beta')] }, 40_000)
+    expect(created.error, JSON.stringify(created)).toBeUndefined()
+    const team = async () => (await client.request('team', { action: 'get', teamId }, 40_000)).team as { members: Array<{ name: string; introduction: { state: string } }>; exchanges: Array<{ delivery: { state: string } }> }
+    // Each member is told it is in the team: written into its pane by the core, its turn heard back.
+    await until('both introductions to start their turns', async () => (await team()).members.every((m) => m.introduction.state === 'started') || null, 90_000, 500)
+    const keys = JSON.parse(readFileSync(join(d.dataDir, 'teams', 'ledgers', `${teamId}.json`), 'utf8')).members as Array<{ name: string; key: string }>
+    const asked = await client.request('team', { action: 'ask', teamId, id: questionId, memberKey: keys.find((m) => m.name === 'alpha')!.key, to: 'beta', text: 'Which port does the daemon serve?' }, 40_000)
+    expect(asked.error, JSON.stringify(asked)).toBeUndefined()
+    await until('the question to start beta\'s turn', async () => (await team()).exchanges[0]?.delivery.state === 'started' || null, 90_000, 500)
+    expect(d.coresStarted()).toBe(1)
+    client.close()
+  })
+
+  it('a team\'s saved state turns Tab collaboration on as the daemon starts', async () => {
+    const d = await fresh({}, (daemon) => mkdirSync(join(daemon.dataDir, 'teams', 'ledgers'), { recursive: true }))
+    await until('the teams to start for their saved state', () => d.log().includes('[services] collaboration connected') || null, 30_000, 200)
+    expect(teamsStarts(d)).toBe(1)
   })
 })

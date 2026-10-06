@@ -54,6 +54,8 @@ export function fakeCore(over: Overrides = {}): CoreApi {
       },
       privateGridName: vi.fn(async () => null),
       machineName: vi.fn(() => null),
+      backend: vi.fn(async () => ({ status: 200, body: {} })),
+      onNotice: vi.fn(() => () => {}),
       ...over.account,
     },
     clients: { viewerChanged: vi.fn(), gridNamed: vi.fn(), gridModelsChanged: vi.fn(), dshInstallStatus: vi.fn(), windows: vi.fn(), ...over.clients },

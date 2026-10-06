@@ -8,7 +8,9 @@
  * - `create`: create an agent, as the window's `agent_create` does;
  * - `stop_turn`: stop an agent's turn;
  * - `windows`: a change notice for every window on this computer (`orchestrator_changed`);
- * - `daemon`: how an agent's shell reaches this daemon, for the prompts the experiment writes.
+ * - `daemon`: how an agent's shell reaches this daemon, for the prompts the experiment writes;
+ * - `backend`: a read or write of the account's backend under `/api/`, signed in by the core, which holds the
+ *   sign-in (Tab collaboration's tab channels).
  * The core answers them only for the experiments (core/api.ts `EXPERIMENTS`): creating an agent or
  * telling the windows something is no other process's to ask. The process's side is
  * services/processCoreApi.ts.
@@ -17,9 +19,10 @@ import type { BackendSocket } from '../backendSocket.js'
 import type { AgentCreateRequest, CoreApi } from './api.js'
 
 type Payload = Record<string, unknown>
-type Core = Pick<CoreApi, 'agents' | 'turns' | 'clients' | 'daemon'>
+type Core = Pick<CoreApi, 'agents' | 'turns' | 'clients' | 'daemon' | 'account'>
 
-const QUERIES: ReadonlySet<string> = new Set(['shown', 'create', 'stop_turn', 'windows', 'daemon'])
+const QUERIES: ReadonlySet<string> = new Set(['shown', 'create', 'stop_turn', 'windows', 'daemon', 'backend'])
+const METHODS: ReadonlySet<string> = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE'])
 const text = (value: unknown): string => (typeof value === 'string' ? value : '')
 
 /** The answer to an experiment's query, or null when it is not one of these. */
@@ -57,6 +60,11 @@ export async function answerExperimentQuery(core: Core, experiments: ReadonlySet
       if (!frame || !/^[a-z]+_changed$/.test(text(frame.type)) || !frame.payload || typeof frame.payload !== 'object') return { error: 'INVALID_FRAME' }
       core.clients.windows({ type: text(frame.type), payload: frame.payload as Payload })
       return {}
+    }
+    case 'backend': {
+      const method = text(payload.method), path = text(payload.path)
+      if (!METHODS.has(method) || !path.startsWith('/api/')) return { error: 'INVALID_REQUEST' }
+      return { ...await core.account.backend(method, path, payload.body) }
     }
     default:
       return { command: core.daemon.command, port: core.daemon.port, machineId: core.daemon.machineId() }

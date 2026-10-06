@@ -19,9 +19,10 @@ import { withLean } from './harness/release.js'
 import { readLeanBundle } from '../src/harnessd/leanBundle.js'
 
 type Engine = 'claude' | 'codex'
-/** The processes the master runs the services in, and the services, each on its own link to the core. */
-const PROCESSES = ['search', 'viewers', 'edge', 'teams', 'models']
-const SERVICES = ['search', 'viewers', 'store', 'workspaces', 'usage', 'monitor', 'projects', 'teams', 'models']
+/** The processes the master runs the services in, and the services, each on its own link to the core. The
+ *  experiments' start only once they are on (e2e/experiments.e2e.ts, from the run's bundle). */
+const PROCESSES = ['search', 'viewers', 'edge', 'models']
+const SERVICES = ['search', 'viewers', 'store', 'workspaces', 'usage', 'monitor', 'projects', 'models']
 
 const commandOf = (pid: number): string => execFileSync('ps', ['-o', 'command=', '-p', String(pid)], { encoding: 'utf8' }).trim()
 const rssMiB = (pid: number): number => Number(execFileSync('ps', ['-o', 'rss=', '-p', String(pid)], { encoding: 'utf8' }).trim()) / 1024

@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { TurnDelivery } from './api.js'
-import { createDeliveries, KEPT_DELIVERERS, type DeliveriesDeps } from './deliveries.js'
+import { createDeliveries, HELD_DELIVERIES, KEPT_DELIVERERS, type DeliveriesDeps } from './deliveries.js'
 
-const setup = (over: Partial<Pick<DeliveriesDeps, 'submit' | 'cancel' | 'deliverers'>> = {}) => {
+const setup = (over: Partial<Pick<DeliveriesDeps, 'submit' | 'cancel' | 'deliverers'>> = {}, ready = true) => {
   const deps = {
     submit: over.submit ?? vi.fn(),
     cancel: over.cancel ?? vi.fn(() => true),
@@ -10,7 +10,9 @@ const setup = (over: Partial<Pick<DeliveriesDeps, 'submit' | 'cancel' | 'deliver
     deliverers: over.deliverers ?? new Set(['orchestrator']),
     log: vi.fn(),
   }
-  return { deps, deliveries: createDeliveries(deps) }
+  const deliveries = createDeliveries(deps)
+  if (ready) deliveries.ready()
+  return { deps, deliveries }
 }
 const event = (deliveryId: string, state: TurnDelivery['state'] = 'queued'): TurnDelivery => ({ deliveryId, sessionId: 'agent-1', state })
 
@@ -88,6 +90,45 @@ describe('delivered turns', () => {
     deliveries.settled(event('second'))
     deliveries.settled(event('first'))
     expect(deps.tell.mock.calls).toEqual([['teams', event('first')]])
+  })
+
+  it('holds what is delivered before the core\'s input is wired, writes it in order once it is, and the rest as it comes', () => {
+    const { deps, deliveries } = setup({}, false)
+    deliveries.turns.deliver('agent-1', 'first', 'd1')
+    expect(deliveries.answer('orchestrator', 'deliver', { agentId: 'agent-2', text: 'second', deliveryId: 'd2' })).toEqual({})
+    expect(deps.submit).not.toHaveBeenCalled()
+    deliveries.ready()
+    deliveries.turns.deliver('agent-1', 'third', 'd3')
+    expect(vi.mocked(deps.submit).mock.calls).toEqual([['agent-1', 'first', 'd1'], ['agent-2', 'second', 'd2'], ['agent-1', 'third', 'd3']])
+    // Ready twice holds nothing back and writes nothing twice.
+    deliveries.ready()
+    expect(deps.submit).toHaveBeenCalledTimes(3)
+  })
+
+  it('takes back one still held as the input would a queued one, and asks the input of any other', () => {
+    const { deps, deliveries } = setup({ cancel: vi.fn(() => false) }, false)
+    const heard: TurnDelivery[] = []
+    deliveries.turns.onDelivery((event) => heard.push(event))
+    deliveries.answer('orchestrator', 'deliver', { agentId: 'agent-1', text: 'hello', deliveryId: 'd1' })
+    expect(deliveries.turns.cancelDelivery('d1')).toBe(true)
+    expect(heard).toEqual([{ deliveryId: 'd1', sessionId: 'agent-1', state: 'rejected', reason: 'cancelled' }])
+    expect(deps.tell).toHaveBeenCalledWith('orchestrator', heard[0])
+    expect(deliveries.answer('orchestrator', 'cancel_delivery', { deliveryId: 'd2' })).toEqual({ cancelled: false })
+    expect(deps.cancel).toHaveBeenCalledWith('d2')
+    deliveries.ready()
+    expect(deps.submit).not.toHaveBeenCalled()
+    expect(deliveries.turns.cancelDelivery('d1')).toBe(false)
+  })
+
+  it('refuses the oldest held when too many wait, as a full queue does', () => {
+    const { deps, deliveries } = setup({}, false)
+    const heard: TurnDelivery[] = []
+    deliveries.turns.onDelivery((event) => heard.push(event))
+    for (let i = 0; i <= HELD_DELIVERIES; i++) deliveries.turns.deliver('agent-1', `turn ${i}`, `d${i}`)
+    expect(heard).toEqual([{ deliveryId: 'd0', sessionId: 'agent-1', state: 'rejected', reason: 'queue_full' }])
+    deliveries.ready()
+    expect(deps.submit).toHaveBeenCalledTimes(HELD_DELIVERIES)
+    expect(vi.mocked(deps.submit).mock.calls[0]).toEqual(['agent-1', 'turn 1', 'd1'])
   })
 
   it('logs to the console when given no log of its own', () => {

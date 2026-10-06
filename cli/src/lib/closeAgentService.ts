@@ -1,7 +1,7 @@
 /** User Close is a disk-backed lifecycle operation. Hiding/switching a tab never calls this. */
 import { stripVTControlCharacters } from 'node:util'
 import { randomUUID } from 'node:crypto'
-import { teamWriteHold } from '../teams/preflight.js'
+import { teamWriteHold } from './teamWriteHold.js'
 import { terminalActivity } from '../cable/terminalActivity.js'
 import type { RegisteredSession, registry as liveRegistry } from './registry.js'
 import { terminalRouteKey } from './terminalRuntime.js'

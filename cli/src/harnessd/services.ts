@@ -339,8 +339,10 @@ export const SERVICE_HOSTS: Readonly<Record<string, ServiceHostSpec>> = {
   // saved project or a request (core/api.ts `EXPERIMENTS`). Its projects' files and the frames of their
   // Directors; the agents it runs are the core's.
   orchestrator: { services: ['orchestrator'], heapLimitMiB: 256, rssLimitMiB: 512, onDemand: true },
-  // The prompt scopes hold a few drafts and fingerprints per agent: small, bounded state.
-  teams: { services: ['teams'], heapLimitMiB: 256, rssLimitMiB: 512 },
+  // Tab collaboration and teams, an experiment: the prompt scopes, a few drafts and fingerprints per agent, and
+  // beside them the teams, their mailbox and the tab channels (services/collaborationProcess.ts), each on its
+  // own link to the core. Started only once it is on (core/api.ts `EXPERIMENTS`).
+  teams: { services: ['teams', 'collaboration'], heapLimitMiB: 256, rssLimitMiB: 512, onDemand: true },
   // The relay and its E2EE (gateway/gatewayProcess.ts): the backend link, every remote client's session,
   // the terminals' WebRTC channels and their queues. Network, crypto and pure-JS WebRTC, the attack surface,
   // where a fault costs the remote clients and nothing else (docs/design/2026-10-06-core-boundary-next.md).

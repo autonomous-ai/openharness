@@ -18,7 +18,7 @@
  * no longer restarts every viewer: they stay up here, and the new core hears their URLs at once.
  */
 import type { CoreApi } from '../core/api.js'
-import { AGENT_ACTIONS_OFF, DAEMON_UNKNOWN, DELIVERIES_OFF, emptyPorts, LANE_OFF, resolveAgent, TERMINALS_OFF } from '../core/api.js'
+import { ACCOUNT_BACKEND_OFF, AGENT_ACTIONS_OFF, DAEMON_UNKNOWN, DELIVERIES_OFF, emptyPorts, LANE_OFF, resolveAgent, TERMINALS_OFF } from '../core/api.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcess } from './process.js'
 import { startViewers } from './viewers.js'
@@ -77,6 +77,7 @@ export function viewersCoreApi(dataDir: string, sessions: ReadonlyMap<string, Re
       lane: LANE_OFF,
       privateGridName: async () => null,
       machineName: () => null,
+      ...ACCOUNT_BACKEND_OFF,
     },
     clients: { viewerChanged: tell, gridNamed: () => {}, gridModelsChanged: () => {}, dshInstallStatus: () => {}, windows: () => {} },
     daemon: DAEMON_UNKNOWN,
