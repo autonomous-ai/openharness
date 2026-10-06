@@ -10,6 +10,7 @@ import { statSync } from 'node:fs'
 import { readdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { BackendSocket } from '../../backendSocket.js'
+import type { ModelsPort } from '../api.js'
 import { MODEL_MANAGER_ID } from '../../dsh/builtinIds.js'
 import { installedDsh } from '../../dsh/installed.js'
 import { harnessEnvToClear, type DshAccount } from '../../dsh/launch.js'
@@ -27,7 +28,7 @@ import {
   buildEngineCommandArgv, buildEngineLaunchArgv, namedAgentArgs, permissionModeApproves, permissionModeFlags,
   refusePermissionFlagIfUnsupported, supportsFirstPrompt,
 } from '../../lib/engineLaunch.js'
-import { setUpWithin } from '../../lib/gridAttach.js'
+import { setUpWithin } from '../../lib/setUpWithin.js'
 import { writeGridConfigDir } from '../../lib/gridConfigDir.js'
 import { buildGridEngineLaunch, describeGridLaunch, gridConflictingEnvToClear, type GridLaunchMachine, type GridWebSearchStatus } from '../../lib/gridLaunch.js'
 import { DEFAULT_HARNESS_PERMISSION, freshHarnessEnvironment } from '../../lib/harnessDefaults.js'
@@ -69,8 +70,9 @@ export interface CreateAgentDeps {
   terminalHintMachineName: () => string
   /** Whether a folder is being purged (PurgeAgentService.blocksFolder). */
   blocksFolder: (cwd: string) => boolean | undefined
-  /** Grid set-up, when this daemon can do it (BackendSocket.ensureGrid). */
-  gridSetup: () => BackendSocket['ensureGrid']
+  /** Grid set-up, when this daemon can do it: the models service's (core/api.ts `ModelsPort.ensure`), null
+   *  while it is off. */
+  gridSetup: () => ModelsPort['ensure'] | null
   privateGridName: () => Promise<string | null>
 }
 

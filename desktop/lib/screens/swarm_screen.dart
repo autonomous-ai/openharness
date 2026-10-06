@@ -2378,9 +2378,11 @@ class _SwarmScreenState extends State<SwarmScreen> {
       case 'select':
         if (args['id'] is String) app.selectSwarm(args['id']);
       case 'close':
-        if (args['id'] is String) await app.requestCloseSwarm(args['id']);
+        // Return native keyboard ownership after this frame, including while
+        // a close confirmation or remote stream cleanup is still pending.
+        if (args['id'] is String) unawaited(app.requestCloseSwarm(args['id']));
       case 'closeActive':
-        await app.requestCloseSwarm(app.activeSwarmId);
+        unawaited(app.requestCloseSwarm(app.activeSwarmId));
       case 'rename':
         // Acknowledge after the form opens so the titlebar can hand its native
         // keyboard focus to Flutter while the user edits the name.
@@ -2531,6 +2533,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
         const {
           'select',
           'close',
+          'closeActive',
           'new',
           'rename',
           'renameActive',

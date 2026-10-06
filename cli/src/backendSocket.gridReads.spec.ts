@@ -14,7 +14,7 @@ import { join } from 'node:path'
 import { BackendSocket } from './backendSocket.js'
 import { relaySocket } from './testing/relaySocket.js'
 import { env } from './config/env.js'
-import { emptyPorts, MODELS_FALLBACKS } from './core/api.js'
+import { emptyPorts, MODELS_FALLBACKS, MODELS_OFF } from './core/api.js'
 import { createServiceHost } from './core/serviceHost.js'
 import { fakeGridAnswers, installFakeGrid, type FakeGrid, type FakeGridPlan } from './lib/__fixtures__/fakeGrid.js'
 import { clearGridMcpUrlCache } from './lib/gridMcpUrl.js'
@@ -23,6 +23,13 @@ import { MODELS_REQUESTS, startModels } from './services/models.js'
 import { fakeCore } from './testing/fakeCore.js'
 
 const OWN = 'mine', OWN_ID = 'net-own'
+
+// Grid's set-up, which a move onto a grid model asks the models service for first: the fake grid here is
+// set up already, as on a machine that has used it before.
+vi.mock('./lib/gridAttach.js', async (real) => ({
+  ...await real<object>(),
+  createGridAccess: () => ({ ensure: async () => ({ status: 'converged', name: 'mine', detail: 'set up already' }) }),
+}))
 const OVERVIEW = '/relay/v1/grid/overview'
 
 let server: Server, base: string, seen: Array<{ path: string; headers: IncomingHttpHeaders }>
@@ -95,13 +102,17 @@ beforeEach(async () => {
   grid = installFakeGrid(plan())
   socket = relaySocket('token')
   socket.setHarnessGridName(OWN)
-  const models = createServiceHost(emptyPorts(), { log: () => {} })
+  const ports = emptyPorts()
+  const models = createServiceHost(ports, { log: () => {} })
+  // This test's socket, not the variable's: a change an earlier test's pictures say late must not push here.
+  const here = socket
   models.start('models', startModels, fakeCore({
     dataDir: join(root, 'data'),
-    account: { privateGridName: () => socket.privateGridName(), machineName: () => socket.machineName() },
-    clients: { gridModelsChanged: () => { void socket.pushGridModels() } },
+    account: { privateGridName: async () => here.gridName(), machineName: () => here.machineName() },
+    clients: { gridModelsChanged: () => { void here.pushGridModels() } },
   }), MODELS_FALLBACKS, MODELS_REQUESTS)
   socket.serviceRouter = (type, payload, asker, reply) => models.route(type, payload, asker, reply)
+  socket.models = () => ports.models ?? MODELS_OFF
   frames = []
   socket.registerLocalClient('local:grid-reads', { sendFrame: (frame) => { frames.push(frame as typeof frames[number]); return true }, sendBinary: () => true })
 })

@@ -24,8 +24,8 @@ import {
   AGENT_NAME_RE, FirstPromptUnsupportedError, MAX_FIRST_PROMPT_CHARS, NamedAgentUnsupportedError, permissionModeApproves,
   permissionModeFlags, supportsFirstPrompt, supportsNamedAgent,
 } from '../../lib/engineLaunch.js'
-import { parseGridLaunchOverride } from '../../lib/gridLaunch.js'
-import { parseNewAgentModel, resolveNewAgentModel } from '../../lib/newAgentModel.js'
+import { parseGridLaunchOverride, type GridLaunchOverride } from '../../lib/gridLaunch.js'
+import { parseNewAgentModel, type NewAgentModel } from '../../lib/newAgentModel.js'
 import { parseProjectFolder, prepareProjectFolder, projectsRoot, ProjectFolderError } from '../../lib/projectFolder.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 
@@ -56,11 +56,15 @@ export interface LaunchRequestDeps {
   byAgent: (agentId: string) => RegisteredSession | undefined
   /** An agent's frame, as the socket builds it for every reply. */
   toProject: (s: RegisteredSession) => Promise<AgentFrame>
+  /** Where a new agent on a grid model sends its inference: the models service's to resolve, on this
+   *  machine (core/api.ts `ModelsPort.launchTarget`). Null, or a rejection while models is down, refuses
+   *  the create with GRID_UNAVAILABLE rather than start it anywhere else. */
+  modelTarget: (selection: NewAgentModel) => Promise<GridLaunchOverride | null>
 }
 
 type Reply = (result: Record<string, unknown>) => void
 
-export function createLaunchRequests({ receipts, createAgent, forkAgent, resumeAgent, restartAgent, byAgent, toProject }: LaunchRequestDeps) {
+export function createLaunchRequests({ receipts, createAgent, forkAgent, resumeAgent, restartAgent, byAgent, toProject, modelTarget }: LaunchRequestDeps) {
   /** Recover by stable runtime identity; a deleted agent must never become a fresh launch. */
   const creationStatusPayload = async (status: AgentCreationStatus): Promise<Record<string, unknown>> => {
     if (status.state === 'created') {
@@ -240,7 +244,7 @@ export function createLaunchRequests({ receipts, createAgent, forkAgent, resumeA
       try {
         void receipts.run(creationId, creationFingerprint(projectFolder ? { ...fingerprintInput, projectFolder } : fingerprintInput), async () => {
           if (model.state === 'ok') {
-            const target = await resolveNewAgentModel(model.selection).catch(() => null)
+            const target = await modelTarget(model.selection).catch(() => null)
             if (!target) return { state: 'failed', error: 'GRID_UNAVAILABLE', detail: 'The selected model is unavailable. Choose another model or refresh the list.' }
             input.grid = target
           }
@@ -302,7 +306,7 @@ export function createLaunchRequests({ receipts, createAgent, forkAgent, resumeA
     }
     // Clients predating receipts retain their existing response shape.
     if (model.state === 'ok') {
-      const target = await resolveNewAgentModel(model.selection).catch(() => null)
+      const target = await modelTarget(model.selection).catch(() => null)
       if (!target) { reply({ error: 'GRID_UNAVAILABLE', detail: 'The selected model is unavailable. Choose another model or refresh the list.' }); return }
       input.grid = target
     }

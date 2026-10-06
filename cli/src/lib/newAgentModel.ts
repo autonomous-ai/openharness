@@ -1,8 +1,8 @@
 import type { AgentEngine } from '../engines/types.js'
-import { gridCapableEngines, type GridLaunchOverride } from './gridLaunch.js'
-import { forgetGridModels, listGridModels } from './gridModels.js'
-import { resolveGridTarget } from './gridTarget.js'
+import { gridCapableEngines } from './gridLaunch.js'
 
+/** A model picked for a new agent, and the grid serving it. Where its inference goes is the models
+ * service's to resolve (services/models.ts `launchTarget`), on the machine the agent runs on. */
 export interface NewAgentModel { model: string; grid: string }
 
 /** Model routing is resolved on the agent's machine; the model can live elsewhere.
@@ -22,13 +22,4 @@ export function parseNewAgentModel(engine: AgentEngine, payload: Record<string, 
     return { state: 'invalid', detail: `${engine} cannot use a model on your machines.` }
   }
   return { state: 'ok', selection: { model: payload.gridModel.trim(), grid: payload.gridName.trim() } }
-}
-
-export async function resolveNewAgentModel(selection: NewAgentModel): Promise<GridLaunchOverride | null> {
-  // Refresh at launch: a model stopped after opening the picker must not silently
-  // fall back to a subscription or to the grid's default router.
-  forgetGridModels();
-  const models = await listGridModels(selection.grid);
-  if (!models.some((model) => model.id === selection.model)) return null;
-  return resolveGridTarget(selection.grid, selection.model);
 }

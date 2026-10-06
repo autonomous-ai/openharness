@@ -1,0 +1,140 @@
+name: Harness OS private Apple Silicon image
+
+on:
+  workflow_dispatch:
+    inputs:
+      package_run_id:
+        description: 'Successful private Fedora session package workflow run'
+        type: string
+        required: true
+      package_source:
+        description: 'Exact source commit recorded in that producer run and RPM manifest'
+        type: string
+        required: true
+  push:
+    branches: ['os-polish/asahi-image']
+    paths:
+      - 'os/platforms/apple-silicon/**'
+      - 'os/tools/asahi_image.py'
+      - 'os/tests/asahi_image_check.py'
+      - 'os/tests/test_asahi_image.py'
+      - '.github/workflows/os-asahi-image.yml'
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: harness-asahi-image-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  image:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    env:
+      PACKAGE_RUN: ${{ inputs.package_run_id || '37473135750' }}
+      PACKAGE_SOURCE: ${{ inputs.package_source || '4c554682e6f79f20f267084f066bb0c2ef3bfc5a' }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+      - name: Verify the private package producer
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          [[ "$PACKAGE_RUN" =~ ^[0-9]+$ ]]
+          [[ "$PACKAGE_SOURCE" =~ ^[a-f0-9]{40}$ ]]
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$PACKAGE_RUN" > "$RUNNER_TEMP/package-producer.json"
+          python3 - "$RUNNER_TEMP/package-producer.json" <<'PY'
+          import json, os, sys
+          run = json.load(open(sys.argv[1]))
+          assert run['head_sha'] == os.environ['PACKAGE_SOURCE']
+          assert run['path'] == '.github/workflows/os-fedora-package.yml'
+          assert run['status'] == 'completed' and run['conclusion'] == 'success'
+          assert run['repository']['full_name'] == os.environ['GITHUB_REPOSITORY']
+          PY
+      - uses: actions/download-artifact@v6
+        with:
+          name: harness-fedora-package
+          run-id: ${{ env.PACKAGE_RUN }}
+          github-token: ${{ github.token }}
+          path: os/work/asahi-package-input
+      - name: Portable checks and native builder
+        run: |
+          make -C os check
+          df -h . "$RUNNER_TEMP"
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends podman
+          python3 - <<'PY' >> "$GITHUB_ENV"
+          import json
+          lock = json.load(open('os/platforms/apple-silicon/source.lock.json'))
+          print('BUILDER_IMAGE=' + lock['builder_image'])
+          print('UPSTREAM_REPO=' + lock['upstream']['repository'])
+          print('UPSTREAM_BRANCH=' + lock['upstream']['branch'])
+          print('UPSTREAM_COMMIT=' + lock['upstream']['commit'])
+          PY
+      - name: Fetch the reviewed Fedora Asahi description
+        run: |
+          git clone --branch "$UPSTREAM_BRANCH" "$UPSTREAM_REPO" os/work/asahi-upstream
+          git -C os/work/asahi-upstream checkout --detach "$UPSTREAM_COMMIT"
+          sudo podman pull --arch arm64 "$BUILDER_IMAGE"
+          mkdir -p os/work/asahi-output
+          sudo podman image inspect "$BUILDER_IMAGE" > os/work/asahi-output/builder-image.json
+          cp "$RUNNER_TEMP/package-producer.json" os/work/asahi-output/
+      - name: Build the private image with signed Fedora and Asahi packages
+        run: |
+          # KIWI needs newly created loop partition nodes from this disposable runner.
+          sudo podman run --rm --privileged --arch arm64 \
+            --mount type=bind,source=/dev,target=/dev \
+            --mount "type=bind,source=$PWD,target=/source,readonly" \
+            --mount "type=bind,source=$PWD/os/work/asahi-output,target=/output" \
+            -e PACKAGE_SOURCE="$PACKAGE_SOURCE" "$BUILDER_IMAGE" /bin/bash -euo pipefail -c '
+              manager=$(command -v dnf5 || command -v microdnf)
+              "$manager" install -y --setopt=install_weak_deps=False --setopt=gpgcheck=True \
+                python3 git rpm kiwi kiwi-systemdeps-disk-images distribution-gpg-keys \
+                qemu-img libselinux-utils util-linux zstd
+              python3 /source/os/tools/asahi_image.py \
+                --upstream /source/os/work/asahi-upstream \
+                --package /source/os/work/asahi-package-input/work/fedora-package-output/first \
+                --package-source "$PACKAGE_SOURCE" --output /output/recipe
+              kiwi-ng --debug --type=oem --profile=Harness system build \
+                --description /output/recipe/description --target-dir /output/disk
+              python3 /source/os/tests/asahi_image_check.py \
+                --image /output/disk/Harness-Asahi.aarch64-0.0.0.raw \
+                --identity /output/recipe/image-inputs.json --output /output/inspection
+              zstd -T2 -3 /output/disk/Harness-Asahi.aarch64-0.0.0.raw -o /output/harness-asahi-private.raw.zst
+              cd /output
+              sha256sum harness-asahi-private.raw.zst > SHA256SUMS
+            '
+      - name: Retain image construction evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: harness-asahi-image-evidence
+          path: |
+            os/work/asahi-output/builder-image.json
+            os/work/asahi-output/package-producer.json
+            os/work/asahi-output/recipe/image-inputs.json
+            os/work/asahi-output/recipe/recipe-files.json
+            os/work/asahi-output/recipe/description/COPYING
+            os/work/asahi-output/disk/*.packages
+            os/work/asahi-output/disk/*.changes
+            os/work/asahi-output/disk/kiwi.result.json
+            os/work/asahi-output/disk/build/image-root.log
+            os/work/asahi-output/inspection/
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 6
+      - name: Retain the private disk only after inspection passes
+        if: success()
+        uses: actions/upload-artifact@v6
+        with:
+          name: harness-asahi-private-disk
+          path: |
+            os/work/asahi-output/harness-asahi-private.raw.zst
+            os/work/asahi-output/SHA256SUMS
+            os/work/asahi-output/recipe/image-inputs.json
+          if-no-files-found: error
+          retention-days: 3
+          compression-level: 0

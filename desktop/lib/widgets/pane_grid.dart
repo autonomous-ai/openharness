@@ -1466,8 +1466,12 @@ class _PaneContent extends StatelessWidget {
   Widget build(BuildContext context) {
     TerminalFontScope.watch(context);
     final machine = notifier.stateOf(pane.machineId);
+    final swarmId = notifier.activeSwarmId;
     void close() {
-      notifier.requestClosePane(pane.id);
+      // A tab switch can precede the frame that replaces this callback. Shared
+      // panes keep their identity, so the pane id alone cannot identify its tab.
+      if (notifier.activeSwarmId != swarmId) return;
+      unawaited(notifier.requestClosePane(pane.id));
     }
 
     VoidCallback? split(PaneResizeAxis axis) =>

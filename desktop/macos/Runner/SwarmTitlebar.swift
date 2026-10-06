@@ -2718,6 +2718,7 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
     }
   }
   private var downPoint = NSPoint.zero
+  private var lastSelectionClick: (time: TimeInterval, point: NSPoint)?
   private var hovered = false
   private var hoverTracking: NSTrackingArea?
   override var acceptsFirstResponder: Bool { false }
@@ -2913,8 +2914,20 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
   override func mouseDown(with event: NSEvent) {
     guard actionsEnabled else { return }
     downPoint = event.locationInWindow
-    if event.clickCount == 2 { renameSwarm() }
-    else { emit?("select", ["id": swarmId]) }
+    let first = lastSelectionClick
+    lastSelectionClick = event.clickCount == 1
+      ? (event.timestamp, event.locationInWindow) : nil
+    // AppKit's click count can span different controls, especially after a
+    // close shifts the next tab under the pointer. Rename only when this tab
+    // owned the first press as well.
+    if event.clickCount == 2, let first,
+       event.timestamp - first.time <= NSEvent.doubleClickInterval,
+       hypot(event.locationInWindow.x - first.point.x,
+             event.locationInWindow.y - first.point.y) <= 4 {
+      renameSwarm()
+    } else {
+      emit?("select", ["id": swarmId])
+    }
   }
   // The tab owns the full click sequence, including clicks on its padding.
   // Forwarding mouseUp lets AppKit also treat a rename as a titlebar zoom.

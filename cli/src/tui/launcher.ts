@@ -5,7 +5,7 @@ import { dirname, join, resolve } from 'node:path'
 import { promisify } from 'node:util'
 import { env } from '../config/env.js'
 import { resolveBinaryOnPath } from '../lib/binaryOnPath.js'
-import { ensureHnLauncher } from '../lib/runtimeInstall.js'
+import { ensureHnLauncher } from '../lib/launchers.js'
 import { installedTuiPath } from './paths.js'
 
 const run = promisify(execFile)

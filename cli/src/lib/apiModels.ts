@@ -13,7 +13,7 @@ import { createHash } from 'node:crypto'
 import { ApiConnectionError, type ApiConnections } from './apiConnections.js'
 import { rememberApiBase } from './gridAssignment.js'
 import { API_NETWORK_PREFIX, contextWindowHint, isApiLaunch, type GridLaunchOverride } from './gridLaunch.js'
-import { MIN_CODING_CONTEXT } from './localModels.js'
+import { MIN_CODING_CONTEXT } from './codingContext.js'
 
 export interface ApiModel {
   id: string
