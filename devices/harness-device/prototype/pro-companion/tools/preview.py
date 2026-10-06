@@ -29,6 +29,8 @@ from native_voice import voice_assets  # noqa: E402
 STATES = ("idle", "idle_paper", "working", "summary", "summary_paper", "mail", "needs_answer", "listening",
           "voice_preparing", "voice_sending", "offline", "done", "asleep",
           "carrying", "launcher", "companion", "daemons", "scenes", "updates", "question", "reader", "locked", "updating",
+          "carry_listening", "carry_review", "carry_preview", "carry_rejected", "carry_offline", "carry_preview_offline",
+          "carry_offline_long", "carry_offline_scrolled",
           "panes_map", "panes_list", "panes_dense", "panes_mixed", "panes_waiting",
           "instruction", "goal", "loop", "goal_listening", "loop_listening", "goal_review", "loop_review",
           "today", "today_zero", "today_missing", "today_partial", "today_stale", "today_loading", "today_expired",
@@ -54,6 +56,7 @@ def native_source():
 #include "workspace.h"
 #include "selection.h"
 #include "carry.h"
+#include "pro_carry_review.h"
 #include "visit.h"
 #include "form.h"
 #include "draft.h"
@@ -165,6 +168,24 @@ static void fixture(const char *name) {
     else if(!strcmp(name,"done")){s.pet_pose=3;s.notice_count=1;character.delivery.moving=true;}
     else if(!strcmp(name,"asleep")){s.nap=true;}
     else if(!strcmp(name,"carrying")){carry.active=true;carry.rows=4;COPY(carry.source,"Research");COPY(carry.excerpt,"Keep the landscape quiet. Give the creature room to breathe, and let clear words lead whenever there is something to read.");}
+    else if(!strncmp(name,"carry_",6)){
+        carry=(ht_carry_t){.active=true,.rows=4,.id="carry-original",.source="Research",.excerpt="Keep the landscape quiet. Give the creature room to breathe, and let clear words lead whenever there is something to read."};
+        pro_carry_review_begin(&s.carry_review,&carry,"design","Design");
+        if(!strcmp(name,"carry_listening")) {
+            s.view=VOICE;s.voice_open=s.voice_carry=s.voice_review=recording=true;s.voice_return=HOME;
+        } else {
+            s.view=DRAFT;COPY(s.carry_review.draft,"carry-draft");
+            draft.page=(ht_draft_page_t){.active=true,.can_send=true,.revision=1,.position=1,.total=1,.agent="design",.name="Design",.id="carry-draft"};
+            COPY(draft.page.text,"Use this direction to refine the home screen. Keep the character expressive and the controls quiet.");
+            if(!strcmp(name,"carry_rejected")) {draft.failed=true;COPY(draft.page.error,"Recipient unavailable. Your message is still here.");}
+            if(strstr(name,"offline")) {s.connected=false;s.carry_review.detached=true;draft.failed=draft.page.locked=true;draft.page.can_send=false;COPY(draft.page.error,"Connection ended. Check the desktop before starting again.");}
+            if(!strcmp(name,"carry_offline_long") || !strcmp(name,"carry_offline_scrolled")) {
+                COPY(draft.page.text,"Keep the home screen calm.\nLet the character breathe.\nKeep one tap for speaking.\nMake every gesture deliberate.\nGive the words room to read.\nKeep the recipient visible.\nPreserve the selected passage.\nReview the words before sending.\nKeep the context through edits.\nHold the place while reading.\nMake uncertain delivery clear.\nNever send the message twice.");
+                if(!strcmp(name,"carry_offline_scrolled"))s.offset=6;
+            }
+            if(!strncmp(name,"carry_preview",13))s.view=CARRY_PREVIEW;
+        }
+    }
     else if(!strcmp(name,"launcher")){s.view=LAUNCHER;}
     else if(!strncmp(name,"today",5)){
         s.view=TODAY;s.metrics.phase=PRO_METRICS_READY;s.metrics.received=now;
@@ -335,7 +356,7 @@ def main():
         sheet.paste(Image.open(OUT/(state+".png")).resize((360,360),Image.Resampling.LANCZOS),(x,y))
         draw.text((x+12,y+368),state.replace("_"," "),font=font,fill="#263b34")
     sheet.save(OUT/"contact-sheet.png")
-    inputs=[NATIVE/name for name in ("ui_habitat.c","pro_home.inc","pro_controls.inc","pro_work_intent.h","pro_metrics.h","pro_metrics.c","pro_canvas.c","pro_visual.c","terminal.c")]
+    inputs=[NATIVE/name for name in ("ui_habitat.c","pro_home.inc","pro_controls.inc","pro_work_intent.h","pro_carry_review.h","pro_metrics.h","pro_metrics.c","pro_canvas.c","pro_visual.c","terminal.c")]
     inputs += [GENERATED/"pro_fonts.c",GENERATED/"pro_art.pack"]
     manifest={"description":"Actual production firmware renderer with illustrative state fixtures; RGB565 expanded to PNG.","states":list(states),
               "source_sha256":{str(path.relative_to(DEVICE)):hashlib.sha256(path.read_bytes()).hexdigest() for path in inputs}}

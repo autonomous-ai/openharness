@@ -36,6 +36,7 @@ code = r'''
 #include "workspace.h"
 #include "selection.h"
 #include "carry.h"
+#include "pro_carry_review.h"
 #include "visit.h"
 #include "form.h"
 #include "draft.h"
@@ -267,6 +268,28 @@ static void map_checks(const char *dir) {
 int main(int argc,char **argv) {
     const char *dir=argc>1?argv[1]:NULL;
     map_checks(dir);
+    for(int lang=0;lang<2;lang++)for(int stress=0;stress<2;stress++)for(int state=0;state<4;state++) {
+        reset(stress);COPY(s.voice_language,lang?"vi":"en");
+        carry=(ht_carry_t){.active=true,.rows=4,.id="carry-original",.source="Research",.excerpt="Keep the landscape quiet. Give the creature room to breathe, and let clear words lead when there is something to read."};
+        COPY(draft.page.agent,"agent-0");
+        pro_carry_review_begin(&s.carry_review,&carry,"agent-0",draft.page.name);
+        COPY(s.carry_review.draft,draft.page.id);
+        if(stress) {fill(s.carry_review.source,sizeof s.carry_review.source);fill(s.carry_review.excerpt,sizeof s.carry_review.excerpt);}
+        if(state==1) {draft.failed=true;COPY(draft.page.error,"Recipient unavailable. Your message is still here.");}
+        if(state==2) {draft.failed=draft.page.locked=s.carry_review.detached=true;COPY(draft.page.error,"Connection ended. Check the desktop before starting again.");}
+        if(state==3)draft.pending=true;
+        s.view=DRAFT;ht_scene_t sheet;ht_scene_clear(&sheet,BG);assert(pro_render_controls(&sheet));inspect(&sheet,"carried draft");
+        assert(action_count(A_CARRY_PREVIEW,true)==(unsigned)(state!=3));
+        assert(action_count(A_DRAFT_SEND,true)==(unsigned)(state==0));
+        assert(action_count(A_DRAFT_STATE,true)==(unsigned)(state==1));
+        char name[64];snprintf(name,sizeof name,"carry-review-%s-%d",lang?"vi":"en",state);if(!stress)portrait(&sheet,dir,name);
+        s.view=CARRY_PREVIEW;s.hit_count=0;ht_scene_clear(&sheet,BG);assert(pro_render_controls(&sheet));inspect(&sheet,"passage preview");
+        assert(!action_count(A_DRAFT_SEND,false)&&!action_count(A_DRAFT_EDIT,false));
+        assert(has_text(&sheet,PRO_TR(state==2?"Preview kept here.":"Full passage stays attached.")));
+        assert(action_count(A_DOWN,true)==(unsigned)(stress!=0));
+        snprintf(name,sizeof name,"carry-preview-%s-%d",lang?"vi":"en",state);if(!stress)portrait(&sheet,dir,name);
+        if(stress) {s.offset=999;s.hit_count=0;ht_scene_clear(&sheet,BG);assert(pro_render_controls(&sheet));inspect(&sheet,"last preview rows");assert(action_count(A_UP,true)&&!action_count(A_DOWN,true));}
+    }
     static const struct { view_t view;const char *name; } screens[]={
         {LAUNCHER,"launcher"},{WORK_INTENT,"instruction"},{TODAY,"today-empty"},{LANGUAGE,"language"},{VOICE_SAMPLES,"voice"},{VOICE_PARAMS,"voice-params"},{AGENTS,"panes"},{TABS,"tabs"},{INBOX,"updates"},{MACHINES,"machines"},
         {MODELS,"models"},{SETTINGS,"controls"},{COMPANION,"companion"},{READER,"read"},

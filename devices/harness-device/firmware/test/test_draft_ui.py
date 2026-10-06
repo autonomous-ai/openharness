@@ -16,6 +16,7 @@ code=r'''
 #include "terminal.h"
 #include "draft.h"
 #include "carry.h"
+#include "pro_carry_review.h"
 #include "pro_work_intent.h"
 #include <stdbool.h>
 #include <stdint.h>
@@ -32,7 +33,7 @@ void ht_pro_raster(const ht_run_t *run,ht_rect_t clip,uint16_t *out) {
     (void)run;(void)clip;(void)out;assert(false);
 }
 #endif
-enum {HOME,DRAFT,DRAFT_OPTIONS,VOICE,MESSAGE};
+enum {HOME,DRAFT,DRAFT_OPTIONS,VOICE,MESSAGE,CARRY_PREVIEW};
 typedef struct cJSON {const char *string,*valuestring;int type,valueint;double valuedouble;struct cJSON *child,*next;} cJSON;
 enum {STRING=1,TRUE=2,NUMBER=3};
 static bool cJSON_IsString(const cJSON *v){return v && v->type==STRING;}
@@ -44,7 +45,7 @@ static const cJSON *cJSON_GetObjectItemCaseSensitive(const cJSON *v,const char *
 static cJSON object(cJSON *children,int n){for(int i=0;i<n;i++)children[i].next=i+1<n?&children[i+1]:NULL;return(cJSON){.child=children};}
 static ht_draft_t draft;
 static ht_carry_t carry;
-static struct {bool voice_open,voice_waiting,voice_review;int voice_return,view,offset,work_voice_mode;uint32_t voice_draft_revision;char title[80],message[256],work_agent[64];} s;
+static struct {pro_carry_review_t carry_review;bool voice_carry,voice_open,voice_waiting,voice_review;int voice_return,view,offset,work_voice_mode;uint32_t voice_draft_revision;char title[80],message[256],work_agent[64];} s;
 static int gesture,changes;
 static uint32_t ms(void){return 1000;}
 static void change(void){changes++;}
@@ -104,6 +105,47 @@ int main(void){
     fields[0].valuestring="different";ui_draft_state(&p);assert(draft.pending);
     fields[0].valuestring="draft-one";fields[1].valueint=fields[1].valuedouble=3;ui_draft_state(&p);
     assert(!draft.pending && draft.page.revision==3 && changes>0);
+#ifdef DEVICE_PRO_COMPANION
+    // Carry ownership comes from the initial recording, never from a later tray.
+    for(int receipt=0;receipt<6;receipt++) {
+        memset(&s,0,sizeof s);ht_draft_reset(&draft);
+        carry=(ht_carry_t){.active=true,.rows=3,.id="quote",.source="Research",.excerpt="Keep the original API."};
+        pro_carry_review_begin(&s.carry_review,&carry,"a","Original recipient");
+        s.voice_open=s.voice_waiting=s.voice_review=s.voice_carry=true;s.voice_return=HOME;
+        fields[2].type=TRUE;fields[9].type=TRUE;fields[11].type=TRUE;fields[12].valuestring="quote";
+        fields[4].valuestring="changed-recipient";ui_voice_draft(&p);
+        assert(s.voice_open&&!draft.page.active&&!s.carry_review.draft[0]);
+        fields[4].valuestring="a";ui_voice_draft(&p);
+        assert(!s.voice_open&&pro_carry_review_owns(&s.carry_review,&draft.page));
+        assert(!strcmp(s.carry_review.draft,"draft-one"));
+        COPY(carry.source,"New tray source");COPY(carry.excerpt,"A different passage.");
+        assert(!strcmp(s.carry_review.source,"Research")&&!strcmp(s.carry_review.excerpt,"Keep the original API."));
+
+        assert(ht_draft_command(&draft,receipt==5?HT_DRAFT_DISCARD:HT_DRAFT_SEND,3,0,1000));
+        snprintf(request,sizeof request,"draft-%lu",(unsigned long)draft.request);
+        fields[10].valuestring=request;
+        fields[4].valuestring="changed-recipient";ui_draft_state(&p);assert(draft.pending);
+        fields[4].valuestring="a";
+        if(receipt==0) { // Known active rejection retains the exact words and context.
+            fields[9].type=0;ui_draft_state(&p);
+            assert(draft.page.active&&draft.failed&&!s.carry_review.detached);
+        } else {
+            fields[2].type=0;
+            if(receipt==1)fields[9].type=0; // Host no longer owns the draft.
+            if(receipt==2)fields[12].valuestring="other-quote";
+            if(receipt==3)fields[11].type=0; // No sent receipt, even with ok:true.
+            if(receipt==5)fields[11].type=0; // Explicit discard is allowed to close.
+            ui_draft_state(&p);
+            if(receipt<4) assert(draft.page.active&&draft.failed&&draft.page.locked&&s.carry_review.detached);
+            else assert(!draft.page.active&&!s.carry_review.id[0]&&!carry.active);
+        }
+        if(receipt<4) {
+            assert(!strcmp(draft.page.text,"New exact words.")&&!strcmp(s.carry_review.excerpt,"Keep the original API."));
+            assert(!ht_draft_command(&draft,HT_DRAFT_SEND,3,0,1000));
+        }
+    }
+    puts("Pro Carry receipts: PASS (pinned recipient/draft/context, rejected/expired/ambiguous preservation, no resend, exact send/discard release)");
+#endif
     puts("draft UI: PASS (production validators/callbacks; bounded text, edit revision, voice ownership, receipt correlation and carry ownership)");
 }
 '''

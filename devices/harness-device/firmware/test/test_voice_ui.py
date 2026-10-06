@@ -34,18 +34,19 @@ static uint32_t host_features=31;
 static bool cable_client_supports(uint32_t features) { return (host_features & features)==features; }
 #include "selection.h"
 #include "carry.h"
+#include "pro_carry_review.h"
 #include "visit.h"
 #include "form.h"
 #include "draft.h"
 #include "workspace.h"
 #include "pro_work_intent.h"
 #include "pro_metrics.h"
-enum { HOME, AGENTS, AGENT, COMPANION, VOICE, MESSAGE, SELECTION, FORM, QUESTION, CHOICE, ANSWER_REVIEW, DRAFT, DRAFT_OPTIONS, INBOX, LAUNCHER, WORK_INTENT, TODAY, VOICE_SAMPLES, VOICE_PARAMS };
+enum { HOME, AGENTS, AGENT, COMPANION, VOICE, MESSAGE, SELECTION, FORM, QUESTION, CHOICE, ANSWER_REVIEW, DRAFT, DRAFT_OPTIONS, INBOX, LAUNCHER, WORK_INTENT, TODAY, CARRY_PREVIEW, VOICE_SAMPLES, VOICE_PARAMS };
 enum { A_VOICE, A_VOICE_STOP, A_VOICE_ABORT, A_WORK_INTENT, A_WORK_MODE, A_WORK_RECORD,
-    A_DRAFT_EDIT, A_DRAFT_APPEND, A_DRAFT_UNDO, A_DRAFT_SEND, A_DRAFT_DISCARD, A_DRAFT_STATE, A_DRAFT_OPTIONS, A_DRAFT_BACK };
+    A_DRAFT_EDIT, A_DRAFT_APPEND, A_DRAFT_UNDO, A_DRAFT_SEND, A_DRAFT_DISCARD, A_DRAFT_STATE, A_DRAFT_OPTIONS, A_DRAFT_BACK, A_CARRY_PREVIEW, A_DRAFT_COMMAND };
 enum { VOICE_CMD_NONE, VOICE_CMD_GOAL, VOICE_CMD_LOOP };
 typedef int view_t;
-typedef struct { int kind, value, dy; uint32_t revision; char id[64], text[192]; } action_t;
+typedef struct { int kind, value, dy, velocity; uint32_t revision; char id[64], text[192]; } action_t;
 typedef struct { char name[64], id[64], engine[16]; } agent_t;
 static ht_selection_t selection;
 static ht_carry_t carry;
@@ -61,7 +62,7 @@ static struct {
     int voice_question_index;
     char title[80], message[256], voice_target[64], pending_focus[64], pending_machine[64], opening_notice[48];
     char work_agent[64]; uint32_t work_revision; uint8_t work_mode, work_voice_mode;
-    pro_metrics_t metrics;
+    pro_metrics_t metrics; pro_carry_review_t carry_review;
     struct { bool valid, supported, loading, pending, uncertain; uint32_t revision, deadline; int index; char error[120],speech_error[96],agent[64],name[64],token[48]; struct { bool can_text; } item[4]; } q;
     agent_t agents[1];
     struct { bool live_summary; } memory[PANE_MEMORY_MAX];
@@ -71,6 +72,10 @@ static bool audio_active, recording, abort_requested, queue_full, recipient_miss
 static int starts, stops, aborts, cancels, confirms, scroll, gesture, reviews, last_cmd;
 static char last_recipient[64];
 static action_t queued;
+static int draft_writes;
+static void cable_client_draft(const char *id,const char *op,uint32_t request,uint32_t revision,int delta) {
+    (void)id;(void)op;(void)request;(void)revision;(void)delta;draft_writes++;
+}
 static agent_t *active(void) { return &s.agents[0]; }
 #define COPY(dst, src) snprintf(dst, sizeof(dst), "%s", (src) ? (src) : "")
 #define ESP_LOGI(...) ((void)0)
@@ -127,7 +132,8 @@ intent = source.split('case A_WORK_INTENT:\n', 1)[1].split('case A_LANGUAGE:', 1
 draft_actions = source.split('case A_DRAFT_EDIT:\n', 1)[1].split('case A_HOME:', 1)[0]
 harness += 'static void dispatch(action_t a) { switch (a.kind) {\n#ifdef DEVICE_PRO_COMPANION\ncase A_WORK_INTENT:\n' + intent + '#endif\ncase A_DRAFT_EDIT:\n' + draft_actions + 'case A_VOICE:\n' + dispatch + '} }\n'
 worker = source.split('static void worker(', 1)[1].split('case A_VOICE:\n', 1)[1].split('case A_STOP_YES:', 1)[0]
-harness += 'static void work(action_t a) { switch (a.kind) { case A_VOICE:\n' + worker + '} }\n'
+draft_worker = source.split('static void worker(', 1)[1].split('case A_DRAFT_COMMAND:', 1)[1].split('case A_CARRY_SEND:', 1)[0]
+harness += 'static void work(action_t a) { switch (a.kind) { case A_VOICE:\n' + worker + 'case A_DRAFT_COMMAND:' + draft_worker + '} }\n'
 for name in ['habitat_tick', 'ui_set_connected', 'ui_show_error', 'ui_cable_toast',
              'ui_voice_error', 'ui_voice_routed', 'ui_voice_route_abort']:
     harness += function(name)
@@ -225,10 +231,81 @@ static void test_pro_instructions(void) {
     work(queued); assert(recording && s.work_voice_mode==PRO_WORK_LOOP && s.voice_review);
     puts("Pro instructions: PASS (engine/host gates, pinned recipient/revision, explicit review, queued invalidation, cancellation and duration cap)");
 }
+static void carry_setup(void) {
+    reset(); carry.active=true; carry.rows=3; carry.deadline=now+300000;
+    COPY(carry.id,"carry-test"); COPY(carry.source,"Research"); COPY(carry.excerpt,"Keep the original API.");
+}
+static void carry_start(void) {
+    dispatch((action_t){.kind=A_VOICE,.value=3,.id="agent",.text="carry-test"});
+}
+static void carry_review_fixture(void) {
+    carry_setup(); carry_start(); work(queued); done(); finish_audio();
+    draft.page=(ht_draft_page_t){.active=true,.can_send=true,.revision=3,.id="draft-test",.agent="agent",.text="Use this guidance."};
+    COPY(s.carry_review.draft,"draft-test"); voice_close(); view(DRAFT);
+    draft.emit=draft_command;
+}
+static void test_pro_carry_review(void) {
+    carry_setup();host_features=0;carry_start();assert(!s.voice_open&&!starts);
+    for(int invalid=0;invalid<5;invalid++) {
+        carry_setup();carry_start();action_t start=queued;
+        assert(s.voice_review&&!strcmp(s.carry_review.agent,"agent")&&!strcmp(s.carry_review.source,"Research"));
+        if(invalid==0)host_features=0;
+        if(invalid==1)recipient_missing=true;
+        if(invalid==2)now=carry.deadline;
+        if(invalid==3)COPY(carry.id,"new-tray");
+        if(invalid==4)carry.active=false;
+        work(start);assert(!starts&&!s.voice_open&&!s.carry_review.id[0]);
+    }
+    carry_setup();speak();assert(!starts&&!s.voice_open);
+    carry_start();work(queued);assert(reviews==1&&recording&&s.voice_review);
+    COPY(carry.source,"Changed tray");COPY(carry.excerpt,"Different text.");
+    assert(!strcmp(s.carry_review.source,"Research")&&!strcmp(s.carry_review.excerpt,"Keep the original API."));
+    now=s.voice_started+600001;habitat_tick();assert(s.voice_waiting&&s.voice_review&&stops==1);
+    finish_audio();ui_voice_routed(true,false,"","agent","Agent",1);
+    assert(s.voice_open&&s.voice_review&&carry.active);
+
+    carry_review_fixture();now=carry.deadline+1;habitat_tick();assert(carry.active&&!carry.error[0]);
+    view(HOME);assert(s.view==DRAFT);
+    s.offset=3;
+    action_t preview={.kind=A_CARRY_PREVIEW,.revision=3,.text="draft-test"};
+    dispatch(preview);assert(s.view==CARRY_PREVIEW);
+    dispatch((action_t){.kind=A_DRAFT_BACK,.revision=3,.text="draft-test"});assert(s.view==DRAFT&&s.offset==3);
+    recipient_missing=true;draft_sends=0;
+    dispatch((action_t){.kind=A_DRAFT_SEND,.revision=3,.text="draft-test"});
+    assert(!draft_sends&&!draft.pending&&draft.page.error[0]);
+    recipient_missing=false;
+    COPY(draft.page.name,"Renamed by the host");
+    dispatch((action_t){.kind=A_DRAFT_APPEND,.revision=3,.dy=3,.text="draft-test"});
+    work(queued);assert(recording&&s.voice_review&&!strcmp(s.voice_target,"Agent"));
+    ui_set_connected(false);assert(!s.voice_open&&s.view==DRAFT&&draft.page.active&&s.carry_review.detached);
+    assert(!strcmp(draft.page.text,"Use this guidance.")&&!strcmp(s.carry_review.excerpt,"Keep the original API."));
+    ui_set_connected(true);dispatch((action_t){.kind=A_DRAFT_SEND,.revision=3,.text="draft-test"});
+    assert(!draft_sends&&!draft.pending);
+    dispatch(preview);assert(s.view==CARRY_PREVIEW);
+    dispatch((action_t){.kind=A_DRAFT_DISCARD,.revision=3,.text="draft-test"});
+    assert(!draft.page.active&&!s.carry_review.id[0]&&s.view==HOME);
+
+    carry_review_fixture();COPY(carry.id,"newer-tray");now=carry.deadline+1;habitat_tick();
+    assert(!carry.active&&carry.error[0]&&pro_carry_review_owns(&s.carry_review,&draft.page));
+    assert(!strcmp(s.carry_review.excerpt,"Keep the original API."));
+
+    for(int stale=0;stale<5;stale++) {
+        carry_review_fixture();draft_writes=0;
+        assert(ht_draft_command(&draft,HT_DRAFT_SEND,3,0,now));
+        action_t send={.kind=A_DRAFT_COMMAND,.value=HT_DRAFT_SEND,.revision=draft.request,.dy=3,.id="draft-test"};
+        if(stale==1)ui_set_connected(false);
+        if(stale==2)draft.pending=false;
+        if(stale==3)send.revision++;
+        if(stale==4)COPY(send.id,"other-draft");
+        work(send);assert(draft_writes==(stale==0));
+    }
+    puts("Pro Carry: PASS (mandatory review, host/recipient/expiry gates, frozen preview, attached lifetime, disclosure, disconnect retention and queued-send invalidation)");
+}
 #endif
 int main(void) {
 #ifdef DEVICE_PRO_COMPANION
     test_pro_instructions();
+    test_pro_carry_review();
 #endif
     reset(); host_features=0; begin(); dispatch((action_t){.kind=A_VOICE_STOP,.value=1});
     assert(!reviews && !s.voice_review && s.voice_waiting);
@@ -273,7 +350,11 @@ int main(void) {
     reset(); carry.active=true; strcpy(carry.id,"carry-test"); carry.deadline=now+300000;
     dispatch((action_t){.kind=A_VOICE,.value=3,.id="agent",.text="carry-test"});
     work(queued); done(); finish_audio(); ui_voice_routed(true,false,"","agent","Agent",1);
+#ifdef DEVICE_PRO_COMPANION
+    assert(carry.active && s.voice_carry && s.voice_open && s.voice_review && reviews==1);
+#else
     assert(!carry.active && !s.voice_carry && !s.voice_open);
+#endif
     reset(); strcpy(form.id, "form-test"); speak();
     assert(!s.voice_open && !starts && s.view==FORM);
     memset(&form,0,sizeof form);

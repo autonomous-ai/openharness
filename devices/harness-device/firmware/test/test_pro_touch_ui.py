@@ -37,6 +37,7 @@ code = r'''
 #include "workspace.h"
 #include "selection.h"
 #include "carry.h"
+#include "pro_carry_review.h"
 #include "visit.h"
 #include "form.h"
 #include "draft.h"
@@ -62,7 +63,7 @@ code = r'''
 '''
 code += defines("CABLE_READ_TOKEN_MAX", "ID_MAX", "CABLE_NAME_MAX", "SWARM_ID_MAX", "SWARMS_MAX",
                 "SWARM_TILES_MAX", "CABLE_MAX_AGENTS", "MAX_PROJECTS")
-code += defines("NOTICES", "QUESTION_MAX", "OPTION_MAX", "PANE_MEMORY_MAX", "PANE_RESULT_BYTES", source=SOURCE)
+code += defines("NOTICES", "QUESTION_MAX", "OPTION_MAX", "PANE_MEMORY_MAX", "PANE_RESULT_BYTES", "DRAFT_ROWS", source=SOURCE)
 code += "\n".join(re.findall(r"^#define TAB_\w+ \d+$", SOURCE, re.M)) + "\n"
 for name in ("cable_swarm_t", "cable_notif_t", "cable_tile_t", "model_item_t"):
     code += typedef(name)
@@ -160,7 +161,6 @@ bool ht_character_delivery_tick(ht_character_t *c, uint32_t at, bool pending,
     (void)c; (void)at; (void)pending; (void)sequence; (void)animate; return false;
 }
 static void question_move(int dy) { s.q.drag += dy; }
-static void draft_move(int dy, uint32_t at) { (void)at; s.draft_drag += dy; }
 static bool scroll_emit(ht_scroll_phase_t phase, int dy, int velocity, void *ctx) {
     (void)velocity; (void)ctx;
     if (congested) return false;
@@ -176,6 +176,7 @@ for name in ("copy", "find", "pane_memory", "pane_memory_apply", "ensure", "is_q
              "pro_speech_tick", "pro_surface_mood", "status_wake_ms",
              "question_view", "hit_contains", "home_footer", "pro_written_control",
              "settings_item", "settings_count", "tabs_move", "make_action", "input_cancel", "view",
+             "question_rows", "draft_move",
              "pro_appearance_view", "pro_appearance_open", "pro_appearance_move", "pro_appearance_use",
              "workspace_index", "tabs_open", "workspace_failed", "pro_panes_of",
              "ui_land_after_reload", "voice_status", "ui_scroll_reportable", "habitat_next_wake_ms",
@@ -365,6 +366,29 @@ static void deliberate_written_control(void) {
 static void draft_hold_options(void) {
     reset(); s.view=DRAFT; only_control(A_DRAFT_EDIT);
     tap(100,270,800); assert(sent.kind==A_DRAFT_OPTIONS && !starts && !switches);
+}
+static unsigned retained_transport;
+static bool retained_emit(const ht_draft_command_t *command,void *ctx) {
+    (void)command;(void)ctx;retained_transport++;return true;
+}
+static void carry_retained_reading(void) {
+    reset();s.view=DRAFT;s.hit_count=0;
+    draft.page=(ht_draft_page_t){.active=true,.locked=true,.id="retained",.agent="agent",.revision=3,.position=2,.total=3};
+    COPY(draft.page.text,"One line\nTwo lines\nThree lines\nFour lines\nFive lines\nSix lines\nSeven lines\nEight lines\nNine lines\nTen lines\nEleven lines\nTwelve lines");
+    carry=(ht_carry_t){.active=true,.id="quote",.source="Research",.excerpt="Retained preview"};
+    pro_carry_review_begin(&s.carry_review,&carry,"agent","Original recipient");
+    COPY(s.carry_review.draft,"retained");s.carry_review.detached=draft.failed=true;
+    draft.emit=retained_emit;retained_transport=0;
+    assert(question_rows(draft.page.text)>DRAFT_ROWS);
+    sample(true,300,480,2000);sample(true,300,240,2060);sample(false,300,220,2120);
+    assert(s.offset>0&&!starts&&!moves&&!switches&&!retained_transport);
+    draft_move(4000,2200);assert(s.offset==question_rows(draft.page.text)-DRAFT_ROWS);
+    draft_move(-4000,2250);assert(s.offset==0&&!retained_transport&&!draft.pending);
+    s.view=CARRY_PREVIEW;s.offset=2;s.hit_count=0;
+    sample(true,300,480,3000);sample(true,300,240,3060);sample(false,300,220,3120);
+    assert(s.offset>2&&!starts&&!moves&&!retained_transport);
+    sample(true,220,360,4000);sample(true,480,360,4060);sample(false,500,360,4120);
+    assert(sent.kind==A_DRAFT_BACK&&sent.revision==3&&!strcmp(sent.text,"retained"));
 }
 static void cancellation_matrix(void) {
     const action_kind_t controls[]={A_AGENT,A_HOME,A_NOTICE,A_MACHINE,A_MODEL,A_ANSWER,A_DRAFT_SEND};
@@ -1128,7 +1152,7 @@ int main(int argc,char **argv) {
         {"offline_launcher",offline_launcher},
         {"cancelled_written_control",cancelled_written_control},{"changed_screen_contact",changed_screen_contact},
         {"scroll_return_to_row",scroll_return_to_row},{"deliberate_written_control",deliberate_written_control},
-        {"draft_hold_options",draft_hold_options},{"cancellation_matrix",cancellation_matrix},
+        {"draft_hold_options",draft_hold_options},{"carry_retained_reading",carry_retained_reading},{"cancellation_matrix",cancellation_matrix},
         {"full_width_voice",full_width_voice},{"voice_guard",voice_guard},
         {"discard_is_immediate",discard_is_immediate},{"sensor_cancel_then_next_contact",sensor_cancel_then_next_contact},
         {"no_hidden_home_from_reader",no_hidden_home_from_reader},

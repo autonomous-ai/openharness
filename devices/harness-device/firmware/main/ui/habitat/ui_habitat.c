@@ -20,6 +20,7 @@
 #include "pro_visual.h"
 #include "pro_work_intent.h"
 #include "pro_metrics.h"
+#include "pro_carry_review.h"
 #include "audio_speech.h"
 #include "../companion_speech.h"
 #endif
@@ -64,7 +65,7 @@ static ht_gallery_t gallery;
 typedef enum {
     HOME,
 #ifdef DEVICE_PRO_COMPANION
-    LAUNCHER, WORK_INTENT, TODAY,
+    LAUNCHER, WORK_INTENT, TODAY, CARRY_PREVIEW,
     DAEMONS, SCENES, VOICE_SAMPLES, VOICE_PARAMS, LANGUAGE,
 #endif
     AGENTS,
@@ -95,6 +96,7 @@ typedef enum {
 #ifdef DEVICE_PRO_COMPANION
     A_LAUNCHER, A_WORK_INTENT, A_WORK_MODE, A_WORK_RECORD, A_AGENT_LAYOUT,
     A_TODAY, A_TODAY_REFRESH, A_METRICS_GET,
+    A_CARRY_PREVIEW,
     A_LANGUAGE, A_LANGUAGE_SET,
     A_DAEMONS, A_SCENES, A_APPEAR_PREVIOUS, A_APPEAR_NEXT, A_APPEAR_USE, A_APPEAR_SAVE,
     A_VOICE_SAMPLES, A_SAMPLE_PREVIOUS, A_SAMPLE_NEXT, A_SAMPLE_PLAY,
@@ -227,6 +229,7 @@ static EXT_RAM_BSS_ATTR struct {
     uint32_t work_revision;
     uint8_t work_mode, work_voice_mode;
     pro_metrics_t metrics;
+    pro_carry_review_t carry_review;
     ht_character_t preview_character;
     struct {
         uint32_t id, poll_due;
@@ -601,6 +604,9 @@ static void view(view_t v)
     if (form.id[0] && s.view == FORM && v != FORM &&
         !(v == VOICE && s.voice_open && s.voice_return == FORM)) return;
     if (draft.page.active && v != DRAFT && v != DRAFT_OPTIONS &&
+#ifdef DEVICE_PRO_COMPANION
+        v != CARRY_PREVIEW &&
+#endif
         !(v == VOICE && s.voice_open && s.voice_return == DRAFT)) return;
     if (s.voice_open && v != VOICE)
         return;
@@ -623,6 +629,9 @@ static void voice_close(void)
     s.voice_open = s.voice_start_pending = s.voice_waiting = false;
     s.voice_carry = false;
     s.voice_review = s.voice_review_preview = false;
+#ifdef DEVICE_PRO_COMPANION
+    if (!s.carry_review.draft[0]) memset(&s.carry_review, 0, sizeof s.carry_review);
+#endif
     s.voice_generation++; // invalidate a start still queued behind another cable action
 }
 static int workspace_index(const char *id)
@@ -2094,6 +2103,7 @@ bool habitat_scene_take(ht_scene_t *f)
     case LAUNCHER:
     case WORK_INTENT:
     case TODAY:
+    case CARRY_PREVIEW:
     case DAEMONS:
     case SCENES:
     case VOICE_SAMPLES:
@@ -2283,7 +2293,11 @@ static action_t make_action(hit_t h)
         return a;
     }
 #endif
-    if (s.view == DRAFT || s.view == DRAFT_OPTIONS) {
+    if (s.view == DRAFT || s.view == DRAFT_OPTIONS
+#ifdef DEVICE_PRO_COMPANION
+        || s.view == CARRY_PREVIEW
+#endif
+        ) {
         a.revision = draft.page.revision; a.dy = (int)draft.page.revision;
         copy(a.text, sizeof draft.page.id, draft.page.id);
     } else if (h.action == A_FORM_MAIN || h.action == A_FORM_BACK || h.action == A_FORM_SAY) {
@@ -2419,7 +2433,13 @@ static void send_answer(void)
 }
 static void draft_move(int delta, uint32_t now)
 {
-    if (s.view != DRAFT || draft.pending || draft.failed || draft.page.locked) return;
+    if (s.view != DRAFT || draft.pending) return;
+    bool read_only = draft.failed || draft.page.locked;
+#ifdef DEVICE_PRO_COMPANION
+    if (read_only && !pro_carry_review_owns(&s.carry_review, &draft.page)) return;
+#else
+    if (read_only) return;
+#endif
     s.draft_drag += delta;
     while (s.draft_drag >= 40 || s.draft_drag <= -40) {
         int step = s.draft_drag > 0 ? 1 : -1;
@@ -2428,7 +2448,7 @@ static void draft_move(int delta, uint32_t now)
         if (last < 0) last = 0;
         if (step > 0 && s.offset < last) s.offset++;
         else if (step < 0 && s.offset > 0) s.offset--;
-        else if ((step > 0 && draft.page.position < draft.page.total) || (step < 0 && draft.page.position > 1)) {
+        else if (!read_only && ((step > 0 && draft.page.position < draft.page.total) || (step < 0 && draft.page.position > 1))) {
             ht_draft_command(&draft, HT_DRAFT_MOVE, draft.page.revision, step, now);
             s.draft_drag = 0; change(); return;
         }
@@ -2557,9 +2577,40 @@ static void dispatch(action_t a)
     case A_DRAFT_STATE:
     case A_DRAFT_OPTIONS:
     case A_DRAFT_BACK:
-        if ((s.view != DRAFT && s.view != DRAFT_OPTIONS) || !draft.page.active || draft.pending ||
+#ifdef DEVICE_PRO_COMPANION
+    case A_CARRY_PREVIEW:
+#endif
+        if ((s.view != DRAFT && s.view != DRAFT_OPTIONS
+#ifdef DEVICE_PRO_COMPANION
+             && s.view != CARRY_PREVIEW
+#endif
+             ) || !draft.page.active || draft.pending ||
             a.revision != draft.page.revision || strcmp(a.text, draft.page.id)) break;
 #ifdef DEVICE_PRO_COMPANION
+        if (a.kind == A_CARRY_PREVIEW) {
+            if (pro_carry_review_owns(&s.carry_review, &draft.page)) {
+                s.carry_review.draft_offset = s.offset;
+                s.carry_review.preview_revision = draft.page.revision;
+                view(CARRY_PREVIEW);
+            }
+            break;
+        }
+        if (s.carry_review.detached && pro_carry_review_owns(&s.carry_review, &draft.page)) {
+            if (a.kind == A_DRAFT_DISCARD) {
+                if (!strcmp(s.carry_review.id, carry.id)) ht_carry_close(&carry);
+                ht_draft_reset(&draft);
+                memset(&s.carry_review, 0, sizeof s.carry_review);
+                view(HOME);
+                break;
+            }
+            if (a.kind != A_DRAFT_BACK && a.kind != A_DRAFT_OPTIONS) break;
+        }
+        if (a.kind == A_DRAFT_SEND && s.carry_review.id[0] &&
+            (!s.connected || !pro_carry_review_owns(&s.carry_review, &draft.page) ||
+             find(s.carry_review.agent) < 0 || !cable_client_supports(CABLE_FEATURE_DRAFT))) {
+            COPY(draft.page.error, "Recipient unavailable. Your message is still here.");
+            change(); break;
+        }
         if (a.kind == A_DRAFT_SEND && s.work_voice_mode != PRO_WORK_TASK) {
             int recipient = find(draft.page.agent);
             if (strcmp(draft.page.agent, s.work_agent) || recipient < 0 ||
@@ -2571,7 +2622,16 @@ static void dispatch(action_t a)
         }
 #endif
         if (a.kind == A_DRAFT_OPTIONS) view(DRAFT_OPTIONS);
-        else if (a.kind == A_DRAFT_BACK) view(DRAFT);
+        else if (a.kind == A_DRAFT_BACK) {
+#ifdef DEVICE_PRO_COMPANION
+            int row = s.view == CARRY_PREVIEW && pro_carry_review_owns(&s.carry_review, &draft.page) &&
+                s.carry_review.preview_revision == draft.page.revision ? s.carry_review.draft_offset : 0;
+#endif
+            view(DRAFT);
+#ifdef DEVICE_PRO_COMPANION
+            s.offset = row;
+#endif
+        }
         else if (a.kind == A_DRAFT_EDIT || a.kind == A_DRAFT_APPEND) {
             if (draft.failed || draft.page.locked) break;
             view(DRAFT);
@@ -2802,6 +2862,9 @@ static void dispatch(action_t a)
         dispatch(a); break;
     case A_VOICE:
 #ifdef DEVICE_PRO_COMPANION
+        if (carry.active && s.view != SELECTION && (a.value == 0 || a.value == 1 || a.value == 8)) break;
+        if (a.value == 3 && (!cable_client_supports(CABLE_FEATURE_DRAFT) ||
+            find(a.id) < 0 || (int32_t)(ms() - carry.deadline) >= 0)) break;
         // A question sheet can only record for its explicit reviewed question.
         if (question_view(s.view) && a.value != 4) break;
         // Revalidate the real recipient at dispatch. Never turn an unsupported
@@ -2856,6 +2919,10 @@ static void dispatch(action_t a)
             s.voice_search = a.value == 7;
             s.voice_review = a.value == 5 || a.value == 6;
 #ifdef DEVICE_PRO_COMPANION
+            if (a.value == 3) {
+                pro_carry_review_begin(&s.carry_review, &carry, a.id, s.agents[find(a.id)].name);
+                s.voice_review = true;
+            }
             if (a.value != 5 && a.value != 6) s.work_voice_mode = pro_work_voice_mode(a.value);
             if (a.value == 1 || a.value == 8) {
                 COPY(s.work_agent, a.id);
@@ -2871,7 +2938,13 @@ static void dispatch(action_t a)
                 !strcmp(form.page.title, "Find Harness") ? "Harness" :
                 !strcmp(form.page.title, "New Harness") ? form.page.label : form.page.title);
             else if (a.value == 7) COPY(s.voice_target, PRO_TR("Find in output"));
-            else if (a.value == 5 || a.value == 6) COPY(s.voice_target, draft.page.name);
+            else if (a.value == 5 || a.value == 6) {
+#ifdef DEVICE_PRO_COMPANION
+                if (pro_carry_review_owns(&s.carry_review, &draft.page)) COPY(s.voice_target, s.carry_review.name);
+                else
+#endif
+                COPY(s.voice_target, draft.page.name);
+            }
 #ifdef DEVICE_PRO_COMPANION
             else if (a.value == 4) COPY(s.voice_target, s.q.name);
 #endif
@@ -2924,6 +2997,9 @@ static void dispatch(action_t a)
         ht_selection_extend(&selection, ms()); change();
         break;
     case A_CARRY:
+#ifdef DEVICE_PRO_COMPANION
+        if (!cable_client_supports(CABLE_FEATURE_DRAFT)) break;
+#endif
         if (s.view == SELECTION && !carry.pending && ht_selection_ready(&selection) &&
             selection.excerpt[0] && !strcmp(a.id,selection.agent) &&
             !strcmp(a.text,selection.id) && (uint32_t)a.dy==selection.revision) {
@@ -3140,6 +3216,14 @@ static void worker(void *unused)
 #endif
         case A_DRAFT_COMMAND: {
             static const char *ops[] = {"state", "move", "undo", "discard", "send"};
+#ifdef DEVICE_PRO_COMPANION
+            display_lock();
+            bool current = s.connected && draft.page.active && draft.pending &&
+                !s.carry_review.detached && !strcmp(a.id, draft.page.id) &&
+                a.revision == draft.request && (uint32_t)a.dy == draft.page.revision && a.value == (int)draft.op;
+            display_unlock();
+            if (!current) break;
+#endif
             if (a.value >= 0 && a.value <= HT_DRAFT_SEND)
                 cable_client_draft(a.id, ops[a.value], a.revision, (uint32_t)a.dy, a.velocity);
             break;
@@ -3211,6 +3295,16 @@ static void worker(void *unused)
             if (s.connected && s.voice_open && s.voice_start_pending &&
                 a.revision == s.voice_generation) {
 #ifdef DEVICE_PRO_COMPANION
+                if (a.value == 3 && (!cable_client_supports(CABLE_FEATURE_DRAFT) || find(a.id) < 0 ||
+                    strcmp(a.id, s.carry_review.agent) || strcmp(a.text, s.carry_review.id) ||
+                    !carry.active || strcmp(a.text, carry.id) || (int32_t)(ms() - carry.deadline) >= 0)) {
+                    voice_close();
+                    COPY(s.title, "Carried text");
+                    COPY(s.message, "Carry review is unavailable. Your text was not sent.");
+                    view(MESSAGE);
+                    display_unlock();
+                    break;
+                }
                 if (a.value == 1 || a.value == 8) {
                     int recipient = find(a.id);
                     if (recipient < 0 || !pro_work_supported(s.agents[recipient].engine,
@@ -3239,7 +3333,7 @@ static void worker(void *unused)
 #ifdef DEVICE_PRO_COMPANION
                 // Set before yielding to UI input; every finish path, including
                 // the duration cap, then emits voice.end review=true.
-                if (a.value == 1 || a.value == 8) audio_client_request_review();
+                if (a.value == 1 || a.value == 8 || a.value == 3) audio_client_request_review();
 #endif
                 s.voice_start_pending = false;
                 change();
@@ -3589,6 +3683,11 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
                 // Its bounded reading cursor already consumed this vertical drag.
             } else if (surface) {
                 // A congested scroll queue cannot turn a scroll into navigation or voice.
+#ifdef DEVICE_PRO_COMPANION
+            } else if (s.view == CARRY_PREVIEW) {
+                s.offset += dy < 0 ? 3 : -3;
+                if (s.offset < 0) s.offset = 0;
+#endif
             } else if (s.start_y >= HT_HEIGHT - 66 && dy < 0)
                 view(HOME);
             else if (s.view == READER) {
@@ -3609,7 +3708,11 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
         } else if (gesture.axis == 2 && abs(dx) > 60 && abs(dx) > abs(dy)) {
             if (s.view == TABS) {
                 // The carousel owns horizontal motion, including contacts that began on its footer.
-            } else if (s.view == DRAFT || s.view == DRAFT_OPTIONS) {
+            } else if (s.view == DRAFT || s.view == DRAFT_OPTIONS
+#ifdef DEVICE_PRO_COMPANION
+                       || s.view == CARRY_PREVIEW
+#endif
+                       ) {
                 if (dx > 0) {
                     action_t a = make_action((hit_t){.action = s.view == DRAFT ? A_DRAFT_OPTIONS : A_DRAFT_BACK});
                     dispatch(a);
@@ -3778,7 +3881,12 @@ void habitat_tick(void)
         change();
     }
     if (ht_selection_tick(&selection, now)) change();
-    if (!(s.voice_open && s.voice_carry) && ht_carry_tick(&carry,now)) {
+    bool carry_held = s.voice_open && s.voice_carry;
+#ifdef DEVICE_PRO_COMPANION
+    carry_held = (carry_held || pro_carry_review_owns(&s.carry_review, &draft.page)) &&
+        s.carry_review.id[0] && !strcmp(carry.id, s.carry_review.id);
+#endif
+    if (!carry_held && ht_carry_tick(&carry,now)) {
         if (carry.error[0] && s.view==SELECTION) COPY(selection.error,carry.error);
         change();
     }
@@ -3953,10 +4061,23 @@ void ui_set_connected(bool value)
     }
     s.connected = value;
     if (!value && form.id[0]) { ht_form_reset(&form); view(HOME); }
-    if (!value && draft.page.active) { ht_draft_reset(&draft); view(HOME); }
+    if (!value && draft.page.active) {
+#ifdef DEVICE_PRO_COMPANION
+        if (pro_carry_review_owns(&s.carry_review, &draft.page)) {
+            s.carry_review.detached = true;
+            draft.pending = false; draft.failed = draft.page.locked = true; draft.page.can_send = false;
+            COPY(draft.page.error, "Connection ended. Check the desktop before starting again.");
+        } else
+#endif
+        { ht_draft_reset(&draft); view(HOME); }
+    }
     if (!value && (s.voice_open || audio_client_active())) {
         audio_client_abort();
         voice_close();
+#ifdef DEVICE_PRO_COMPANION
+        if (pro_carry_review_owns(&s.carry_review, &draft.page)) view(DRAFT);
+        else
+#endif
         view(HOME);
     }
     change();
@@ -5141,11 +5262,16 @@ void ui_voice_draft(const cJSON *p)
     if (!s.voice_open || !s.voice_waiting || !s.voice_review ||
 #ifdef DEVICE_PRO_COMPANION
         (s.work_voice_mode != PRO_WORK_TASK && strcmp(page.agent, s.work_agent)) ||
+        (s.carry_review.id[0] && (strcmp(page.agent, s.carry_review.agent) ||
+            (s.carry_review.draft[0] && strcmp(page.id, s.carry_review.draft)))) ||
 #endif
         (s.voice_return == DRAFT && (!draft.page.active || strcmp(page.id, draft.page.id) ||
             draft.page.revision != s.voice_draft_revision || page.revision <= s.voice_draft_revision))) {
         display_unlock(); return;
     }
+#ifdef DEVICE_PRO_COMPANION
+    if (s.voice_carry && s.carry_review.id[0]) COPY(s.carry_review.draft, page.id);
+#endif
     voice_close(); ht_draft_open(&draft, &page, draft_emit, NULL);
     view(DRAFT); ht_gesture_guard(&gesture, ms());
     display_unlock();
@@ -5161,14 +5287,42 @@ void ui_draft_state(const cJSON *p)
     bool ok = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(p, "ok"));
     display_lock();
     ht_draft_op_t op = draft.op; int direction = draft.delta;
+#ifdef DEVICE_PRO_COMPANION
+    bool carried_draft = pro_carry_review_owns(&s.carry_review, &draft.page);
+    if (carried_draft && draft.pending && draft.request == (uint32_t)serial && !strcmp(page.id, draft.page.id)) {
+        if (page.active && strcmp(page.agent, s.carry_review.agent)) { display_unlock(); return; }
+        const cJSON *carried = cJSON_GetObjectItemCaseSensitive(p, "carryId");
+        bool sent = ok && cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(p, "sent")) &&
+            cJSON_IsString(carried) && !strcmp(carried->valuestring, s.carry_review.id);
+        if (!page.active && !sent && !(ok && op == HT_DRAFT_DISCARD)) {
+            // Expired/unknown drafts and uncorrelated delivery receipts must not
+            // erase the person's words or quietly permit a second Send.
+            char error[sizeof page.error]; COPY(error, page.error);
+            page = draft.page; page.locked = true; page.can_send = false;
+            COPY(page.error, error[0] ? error : "Delivery not confirmed. Check the desktop.");
+            s.carry_review.detached = true;
+            ok = false;
+        }
+    }
+#endif
     if (ht_draft_reply(&draft, page.id, (uint32_t)serial, ok, &page)) {
         if (!draft.page.active) {
+#ifdef DEVICE_PRO_COMPANION
+            if (carried_draft) {
+                if (!strcmp(s.carry_review.id, carry.id)) ht_carry_close(&carry);
+                memset(&s.carry_review, 0, sizeof s.carry_review);
+            }
+#endif
             const cJSON *carried = cJSON_GetObjectItemCaseSensitive(p, "carryId");
             if (cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(p, "sent")) &&
                 cJSON_IsString(carried) && !strcmp(carried->valuestring, carry.id)) ht_carry_close(&carry);
             if (!ok) { COPY(s.title, "Draft"); copy(s.message, sizeof page.error, page.error); view(MESSAGE); }
             else view(HOME);
-        } else if (s.view == DRAFT || s.view == DRAFT_OPTIONS) {
+        } else if (s.view == DRAFT || s.view == DRAFT_OPTIONS
+#ifdef DEVICE_PRO_COMPANION
+            || s.view == CARRY_PREVIEW
+#endif
+            ) {
             if (ok && op == HT_DRAFT_MOVE) {
 #ifdef DEVICE_PRO_COMPANION
                 s.offset = direction < 0 ? question_rows(page.text)-DRAFT_ROWS : 0;
@@ -5404,6 +5558,9 @@ void ui_voice_start(void)
     action_t a = {.kind = A_VOICE};
     if ((s.view == HOME || s.view == AGENT) && active())
         COPY(a.id, active()->id);
+#ifdef DEVICE_PRO_COMPANION
+    if (carry.active) { a.value = 3; COPY(a.text, carry.id); }
+#endif
     dispatch(a);
     display_unlock();
 }

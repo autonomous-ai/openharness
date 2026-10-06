@@ -174,7 +174,15 @@ sound and companion preferences. Compatible hosts also expose:
 - **Find Harness** and **New Harness**, controlling the desktop's actual semantic
   picker/form. Voice filters names; a separate action confirms the choice.
 - **Select text** and spoken **Find in output**, with line/range selection.
-- **Carry text**, allowing a selected passage to accompany speech to another pane.
+- **Carry text** requires a draft-capable host and always reviews speech before
+  Send. The recipient, source and passage preview stay pinned through edits.
+  **Passage preview** opens a temporary reading sheet; the host owns the complete
+  selected passage (up to 4096 bytes / 16 lines), while this device shows its
+  shortened excerpt. The five-minute expiry applies only to an unused tray;
+  an attached reviewed message retains its snapshot until Send or Discard.
+  Rejections keep the draft. A lost connection or an unknown delivery receipt
+  retains the visible part and local preview with Send disabled; this is not
+  persistent storage or recovery of the host's full multipart draft.
 - **Latest output** and **Return**, preserving the prior reading place.
 - Voice drafts with re-speaking a part, append, undo, discard and explicit Send.
 - **Instruct** keeps one-shot Task speech available for every engine. With a

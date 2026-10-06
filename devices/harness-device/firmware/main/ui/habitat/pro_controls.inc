@@ -699,7 +699,8 @@ static void pro_selection(ht_scene_t *f)
     pro_control(f, 32, 606, 192, 68, PRO_TR("Find"), A_SELECT_FIND, 0, ready);
     pro_control(f, 240, 606, 224, 68, selection.query[0] ? PRO_TR("By line") : selection.extending ? PRO_TR("Range") : PRO_TR("One line"),
                 A_SELECT_EXTEND, 0, ready && selection.rows > 0);
-    pro_control(f, 480, 606, 208, 68, PRO_TR("Carry text"), A_CARRY, 0, ready && selection.excerpt[0]);
+    pro_control(f, 480, 606, 208, 68, PRO_TR("Carry text"), A_CARRY, 0,
+                ready && selection.excerpt[0] && cable_client_supports(CABLE_FEATURE_DRAFT));
     pro_note(f, selection.pending ? PRO_TR("Choosing...") : PRO_TR("Tap the passage to talk about it."));
 }
 
@@ -731,13 +732,15 @@ static void pro_form(ht_scene_t *f)
 static void pro_draft(ht_scene_t *f)
 {
     const ht_draft_page_t *p = &draft.page;
+    bool carried = pro_carry_review_owns(&s.carry_review, p);
     pro_heading(f, PRO_TR(s.work_voice_mode == PRO_WORK_TASK ? "Your message" : pro_work_label(s.work_voice_mode)), A_DRAFT_OPTIONS);
     char position[64];
     snprintf(position, sizeof position, PRO_TR("Part %d of %d / %s"), p->position, p->total,
         p->locked || draft.failed ? PRO_TR("check delivery") : draft.pending && draft.op == HT_DRAFT_SEND ?
         PRO_TR("sending") : PRO_TR("not sent yet"));
-    ht_pro_text(f, 48, 132, 624, &ht_pro_24, DIM, p->name);
-    ht_pro_text(f, 48, 170, 624, &ht_pro_24, ACCENT, position);
+    ht_pro_text(f, 48, 132, carried ? 356 : 624, &ht_pro_24, DIM, carried ? s.carry_review.name : p->name);
+    ht_pro_text(f, 48, 170, carried ? 356 : 624, &ht_pro_24, ACCENT, position);
+    if (carried) pro_control(f, 432, 122, 256, 80, PRO_TR("Passage preview"), A_CARRY_PREVIEW, 0, !draft.pending);
     pro_read_text(f, p->text, 220, 6);
     bool editable = !draft.pending && !draft.failed && !p->locked;
     pro_hit(40, 210, 640, 300, A_DRAFT_EDIT, 0, editable);
@@ -749,8 +752,24 @@ static void pro_draft(ht_scene_t *f)
     pro_control(f, 32, 606, 264, 68, p->locked ? PRO_TR("Close") : PRO_TR("Discard"), A_DRAFT_DISCARD, 0, !draft.pending);
     bool checking = draft.failed || p->locked;
     pro_control(f, 416, 606, 272, 68, checking ? PRO_TR("Check delivery") : PRO_TR("Send message"),
-                checking ? A_DRAFT_STATE : A_DRAFT_SEND, 0, !draft.pending && (checking || p->can_send));
+                checking ? A_DRAFT_STATE : A_DRAFT_SEND, 0,
+                !draft.pending && (checking || p->can_send) && !(carried && s.carry_review.detached));
     pro_note(f, PRO_TR("Swipe to read. Hold the text for more options."));
+}
+
+static void pro_carry_preview(ht_scene_t *f)
+{
+    pro_heading(f, PRO_TR("Passage preview"), A_DRAFT_BACK);
+    ht_pro_wrap(f, 56, 132, 608, 4, 0, &ht_pro_24, DIM, s.carry_review.source);
+    char rows[64]; snprintf(rows, sizeof rows, PRO_TR("%d line%s selected"),
+        s.carry_review.rows, s.carry_review.rows == 1 ? "" : PRO_TR("s"));
+    ht_pro_text(f, 56, 270, 608, &ht_pro_24, ACCENT, rows);
+    pro_read_text(f, s.carry_review.excerpt, 316, 6);
+    int total = ht_pro_text_rows(s.carry_review.excerpt, &ht_pro_32, 608);
+    pro_control(f, 32, 606, 160, 68, PRO_TR("Earlier"), A_UP, 0, s.offset > 0);
+    pro_control(f, 216, 606, 288, 68, PRO_TR("Your message"), A_DRAFT_BACK, 0, true);
+    pro_control(f, 528, 606, 160, 68, PRO_TR("More"), A_DOWN, 0, s.offset + 6 < total);
+    pro_note(f, s.carry_review.detached ? PRO_TR("Preview kept here.") : PRO_TR("Full passage stays attached."));
 }
 
 static void pro_draft_options(ht_scene_t *f)
@@ -809,6 +828,7 @@ static bool pro_render_controls(ht_scene_t *f)
     case FORM: pro_form(f); return true;
     case DRAFT: pro_draft(f); return true;
     case DRAFT_OPTIONS: pro_draft_options(f); return true;
+    case CARRY_PREVIEW: pro_carry_preview(f); return true;
     case STOP: pro_stop(f); return true;
     case MESSAGE: pro_message(f); return true;
     default: return false;
