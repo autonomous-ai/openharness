@@ -102,7 +102,7 @@ static uint32_t aborted_id;
 static audio_speech_state_t speech_audio;
 static bool drawn_compact;
 static ht_character_mood_t drawn_mood;
-static unsigned drawn_level, drawn_emotion;
+static unsigned drawn_level, drawn_emotion, drawn_living_mood, drawn_living_character;
 static ht_rect_t drawn_portrait;
 static bool native_voice_available = true;
 bool audio_speech_available(void) { return native_voice_available; }
@@ -234,6 +234,8 @@ static void dispatch(action_t action) {
         discards++; s.voice_open = recording = false; view(HOME);
     } else if (action.kind == A_AGENT) {
         switches++; s.active = !strcmp(action.id, "b") ? 1 : 0; view(AGENT);
+    } else if (action.kind == A_INBOX) {
+        selected++;view(INBOX);
     } else if (action.kind == A_LAUNCHER) {
         launches++; view(LAUNCHER);
     } else if (action.kind == A_HOME) {
@@ -264,7 +266,8 @@ void pro_visual_background(ht_scene_t *f, pro_scene_id_t choice, ht_character_id
     ht_pro_rect(f,0,0,720,720,0,ht_rgb(0xd9e8cf));
 }
 void pro_living_image(ht_scene_t *f,unsigned character,unsigned mood,unsigned frame,int x,int y,unsigned size) {
-    (void)character;(void)mood;(void)frame;
+    (void)frame;drawn_living_character=character;drawn_living_mood=mood;
+    drawn_compact=false;drawn_portrait=(ht_rect_t){x,y,(int)size,(int)size};
     ht_pro_rect(f,x,y,(int)size,(int)size,0,ht_rgb(0x9974af));
 }
 void pro_visual_character(ht_scene_t *f, const ht_character_t *c, ht_character_mood_t mood,
@@ -313,6 +316,7 @@ static void sample(bool down, int x, int y, uint32_t at) {
 static void tap(int x, int y, unsigned duration) {
     uint32_t at = now + 1000;
     sample(true,x,y,at); sample(false,x,y,at+duration);
+    if(s.living_tap.pending) {now+=281;surface_tick(now);}
 }
 static void swipe(int x0, int y0, int x1, int y1) {
     sample(true,x0,y0,2000);
@@ -333,7 +337,7 @@ static void deliberate_tap(void) {
     reset(); tap(360,340,450); assert(starts==1 && !launches && !switches);
 }
 static void thumb_drift(void) {
-    reset(); sample(true,360,340,2000); sample(true,375,352,2100); sample(false,375,352,2160);
+    reset(); sample(true,360,340,2000); sample(true,375,352,2100); sample(false,375,352,2160);now=2441;surface_tick(now);
     assert(starts==1 && !moves && !travel);
 }
 static void panes(void) {
@@ -448,21 +452,21 @@ static void full_width_voice(void) {
     assert(stops==1 && !starts && !switches);
 }
 static void voice_guard(void) {
-    reset(); sample(true,360,340,2000); sample(false,360,340,2075); assert(starts==1);
+    reset(); sample(true,360,340,2000); sample(false,360,340,2075);now=2356;surface_tick(now);assert(starts==1);
     s.hit_count=0; hit(A_PET,0,40,106,640,440);
-    sample(true,360,340,2200); sample(false,360,340,2275); assert(!stops);
-    sample(true,360,340,2700); sample(false,360,340,2775); assert(stops==1);
+    sample(true,360,340,2400); sample(false,360,340,2475); assert(!stops);
+    sample(true,360,340,3000); sample(false,360,340,3075); assert(stops==1);
 }
 static void discard_is_immediate(void) {
-    reset(); sample(true,360,340,2000); sample(false,360,340,2075); assert(starts==1);
+    reset(); sample(true,360,340,2000); sample(false,360,340,2075);now=2356;surface_tick(now);assert(starts==1);
     s.hit_count=0; hit(A_VOICE_ABORT,0,56,600,240,80);
-    sample(true,160,640,2200); sample(false,160,640,2275);
+    sample(true,160,640,2400); sample(false,160,640,2475);
     assert(discards==1 && !recording && !s.voice_open && s.view==HOME);
 }
 static void sensor_cancel_then_next_contact(void) {
     reset(); sample(true,360,340,2000); habitat_touch_cancel();
     // The driver swallows the broken contact through its real UP.
-    sample(true,360,340,3000); sample(false,360,340,3075);
+    sample(true,360,340,3000); sample(false,360,340,3075);now=3356;surface_tick(now);
     assert(starts==1 && !switches);
 }
 static void no_hidden_home_from_reader(void) {
@@ -523,7 +527,7 @@ static void reader_fixture(view_t entry) {
         s.notice[1].display_revision=9;
     }
     dispatch(make_action((hit_t){.action=A_READER,.value=entry==INBOX}));
-    assert(s.view==READER&&s.reader.captured);render_actual();
+    assert(s.view==READER&&s.reader.captured);s.reader.controls=true;render_actual();
 }
 static void reader_navigation_parity(void) {
     const view_t entries[]={HOME,AGENT,LAUNCHER,INBOX};
@@ -533,7 +537,7 @@ static void reader_navigation_parity(void) {
         else swipe(240,340,520,340);
         assert(s.view==entries[i]&&s.reader.row==row);
         if(entries[i]==INBOX)assert(s.offset==1);
-        dispatch(make_action((hit_t){.action=A_READER,.value=entries[i]==INBOX}));render_actual();assert(s.offset==row);
+        dispatch(make_action((hit_t){.action=A_READER,.value=entries[i]==INBOX}));s.reader.controls=true;render_actual();assert(s.offset==row);
         assert(!starts&&!stops&&!switches&&!selected&&!queued&&!travel);
     }
 }
@@ -626,37 +630,29 @@ static void carry_chooser_contacts(void) {
     assert(s.view==HOME&&carry.active&&visit.available&&!visit.pending&&!queued&&!starts);
 }
 static void home_render_geometry(void) {
-    reset(); render_actual(); assert(!drawn_compact);
-    const hit_t *pet=action_hit(A_PET); assert(pet && pet->enabled);
-    ht_rect_t home=pet->rect;
-    assert(home.x<=40 && home.x+home.w>=680 && home.y<=106 && home.y+home.h>=580);
-    s.agents[0].recap_ready=true; strcpy(s.agents[0].preview,"A short result.");
-    render_actual(); assert(drawn_compact); ht_rect_t small=drawn_portrait;
-    assert(!memcmp(&home,&action_hit(A_PET)->rect,sizeof home));
-    memset(s.agents[0].preview,'W',sizeof s.agents[0].preview-1);
-    s.agents[0].preview[sizeof s.agents[0].preview-1]=0; unread=3;
-    render_actual(); assert(drawn_compact && !memcmp(&small,&drawn_portrait,sizeof small));
-    assert(!memcmp(&home,&action_hit(A_PET)->rect,sizeof home));
-    tap(630,520,75); assert(starts==1 && !strcmp(sent.id,"a"));
+    reset();render_actual();
+    const hit_t *pet=action_hit(A_PET);assert(pet&&pet->enabled);
+    assert(s.hit_count==1&&pet->rect.x==0&&pet->rect.y==0&&pet->rect.w==720&&pet->rect.h==720);
+    assert(drawn_portrait.x==40&&drawn_portrait.y==40&&drawn_portrait.w==640);
+    s.agents[0].recap_ready=true;strcpy(s.agents[0].preview,"A saved result.");
+    render_actual();assert(!drawn_compact&&scene.count==1);
+    unread=3;render_actual();assert(drawn_living_mood==PRO_LIVING_ATTENTION);
+    tap(630,520,75);assert(starts==1&&!strcmp(sent.id,"a"));
 }
 static void home_state_geometry(void) {
-    for (int state=0;state<9;state++) {
+    for(int state=0;state<9;state++) {
         reset();
-        if (state==0) s.connected=false;
-        if (state==1) s.loading=true;
-        if (state==2) s.agents[0].busy=true;
-        if (state==3) s.nap=true;
-        if (state==4) { carry.active=true; carry.rows=4; strcpy(carry.source,"A long source title"); }
-        if (state==5) strcpy(carry.error,"Selected text expired");
-        if (state==6) visit.available=true;
-        if (state>=7) { s.notice_count=1; s.notice[0].question=true; strcpy(s.notice[0].agent_id,"a"); }
-        if (state==8) {s.q.pending=s.q.uncertain=true;COPY(s.q.agent,"a");}
-        memset(s.agents[0].name,'W',sizeof s.agents[0].name-1);
-        s.agents[0].name[sizeof s.agents[0].name-1]=0;
-        render_actual();
-        assert(action_hit(A_LAUNCHER) && action_hit(A_LAUNCHER)->enabled);
-        if (state==7) assert(action_hit(A_QUESTION) && action_hit(A_QUESTION)->enabled);
-        if (state==8) {assert(action_hit(A_QUESTION)&&!action_hit(A_QUESTION)->enabled);tap(600,650,450);assert(!starts&&!queued&&s.q.pending);}
+        if(state==0)s.connected=false;
+        if(state==1)s.loading=true;
+        if(state==2)s.agents[0].busy=true;
+        if(state==3)s.nap=true;
+        if(state==4){carry.active=true;carry.rows=4;}
+        if(state==5)strcpy(carry.error,"Expired");
+        if(state==6)visit.available=true;
+        if(state>=7){s.notice_count=1;s.notice[0].question=true;strcpy(s.notice[0].agent_id,"a");}
+        if(state==8)s.q.pending=true;
+        render_actual();assert(s.hit_count==1&&action_hit(A_PET)&&scene.count==1);
+        for(unsigned i=0;i<scene.count;i++)assert(scene.runs[i].pro_kind!=1);
     }
 }
 static void actual_home_tabs(void) {
@@ -763,32 +759,25 @@ static void map_contact_invalidation(void) {
     assert(!switches&&!starts&&!queued&&!s.touch_down); // Two fingers cannot click the map.
 }
 static void home_header_drag_cancel(void) {
-    const int delta[][2]={{-190,0},{190,0},{0,-40},{0,200}};
-    for (unsigned i=0;i<sizeof delta/sizeof delta[0];i++) {
-        actual_home_tabs(); const hit_t *header=action_hit(A_TABS); assert(header && header->enabled);
-        assert(header->rect.x==32 && header->rect.y==24 && header->rect.w==248 && header->rect.h==80);
-        int x=header->rect.x+header->rect.w/2, y=header->rect.y+header->rect.h/2;
-        sample(true,x,y,2000);
-        // This is a plain button. It must not arm the invisible legacy workspace preview.
-        assert(!workspace.touching && !workspace.moved);
-        for (int step=1;step<=5;step++)
-            sample(true,x+delta[i][0]*step/5,y+delta[i][1]*step/5,2000+step*30);
-        sample(false,x+delta[i][0],y+delta[i][1],2200);
-        assert(s.view==HOME && s.active==0 && !strcmp(s.selected_tab,"tab-1"));
-        assert(workspace.phase==HT_WORKSPACE_IDLE && !workspace.touching && !workspace.moved);
-        assert(!starts && !stops && !switches && !selected && !launches && !down_reports && !moves && !ups);
-        assert(s.tab_first==0 && !s.loading);
-    }
+    // The previous header is now part of the creature's continuous glass.
+    actual_home_tabs();swipe(140,64,350,64);assert(switches==1&&!starts);
+    actual_home_tabs();swipe(140,64,142,290);assert(moves&&travel>0&&!starts&&!switches);
+    actual_home_tabs();sample(true,360,340,2000);sample(false,360,340,2075);
+    assert(s.living_tap.pending&&!starts);
+    sample(true,360,340,2175);sample(true,365,220,2220);sample(false,365,160,2280);
+    now=2700;surface_tick(now);assert(!starts&&moves&&!s.living_tap.pending);
 }
 static void home_header_tap_tabs(void) {
-    const unsigned durations[]={75,450};
-    for (unsigned i=0;i<sizeof durations/sizeof durations[0];i++) {
-        actual_home_tabs(); const hit_t *header=action_hit(A_TABS); assert(header && header->enabled);
-        tap(header->rect.x+header->rect.w/2,header->rect.y+header->rect.h/2,durations[i]);
-        assert(s.view==TABS && sent.kind==A_TABS && selected==1);
-        assert(!starts && !stops && !switches && !down_reports && !moves && !ups);
-        assert(!strcmp(s.selected_tab,"tab-1") && ht_tab_carousel_index(&tab_carousel)==1);
-    }
+    actual_home_tabs();sample(true,360,340,2000);sample(false,360,340,2075);
+    assert(!starts&&s.living_tap.pending);
+    sample(true,365,345,2180);sample(false,365,345,2245);
+    assert(s.view==INBOX&&!starts&&!stops&&!s.living_tap.pending);
+    now=3000;surface_tick(now);assert(!starts);
+    // A pending tap cannot acquire a different pane or host after the contact.
+    actual_home_tabs();sample(true,360,340,2000);sample(false,360,340,2075);
+    ui_focus_project("b");now=2400;surface_tick(now);assert(!starts&&!s.living_tap.pending);
+    actual_home_tabs();sample(true,360,340,2000);sample(false,360,340,2075);
+    ui_set_connected(false);now=2400;surface_tick(now);assert(!starts);
 }
 static void current_tab_returns_home(void) {
     actual_home_tabs(); s.tabs[1].panes=4; s.tabs[2].panes=6;
@@ -815,16 +804,11 @@ static void changed_tab_stays_on_home(void) {
     assert(workspace.phase==HT_WORKSPACE_IDLE && !starts && !switches);
 }
 static void carried_excerpt_is_readable(void) {
-    reset(); carry.active=true; carry.rows=2;
-    strcpy(carry.source,"Research"); strcpy(carry.excerpt,"Keep the actual selected words.");
-    render_actual(); bool body=false, attribution=false;
-    for (unsigned i=0;i<scene.count;i++) {
-        const ht_run_t *r=&scene.runs[i];
-        if (r->pro_kind!=1) continue;
-        if (r->y>=310 && !strcmp(r->text,carry.excerpt)) body=true;
-        if (strstr(r->text,"2 lines from Research")) attribution=true;
-    }
-    assert(body && attribution && drawn_compact && action_hit(A_CARRY_DROP));
+    reset();carry.active=true;carry.rows=2;
+    strcpy(carry.source,"Research");strcpy(carry.excerpt,"Keep the actual selected words.");
+    render_actual();assert(scene.count==1&&s.hit_count==1);
+    assert(!strcmp(carry.excerpt,"Keep the actual selected words."));
+    tap(360,340,75);assert(starts==1&&sent.value==3&&!strcmp(sent.id,"a"));
 }
 static bool has_text(const char *text) {
     for (unsigned i=0;i<scene.count;i++)
@@ -922,30 +906,20 @@ static void busy_tick_schedule(void) {
     now=2000;surface_tick(now);assert(changes==before+1&&s.pro_busy_second==1&&habitat_next_wake_ms()==1000);
     surface_tick(now);assert(changes==before+1);
     s.nap=true;surface_tick(now);assert(changes==before+2&&!s.pro_busy_visible);
-    surface_tick(now);assert(changes==before+2&&habitat_next_wake_ms()==9000);
+    surface_tick(now);assert(changes==before+2&&habitat_next_wake_ms()==1000);
     s.nap=false;surface_tick(now);assert(s.pro_busy_visible);
     now=26001;surface_tick(now);assert(!s.pro_busy_visible);uint32_t sec;
     assert(!pro_busy_elapsed(active(),now,&sec));
     reset();busy_heartbeat("a","session-a",UINT32_MAX-500);now=499;
-    assert(observed_seconds()==1);render_actual();assert(has_text("1s"));
+    assert(observed_seconds()==1);render_actual();assert(!has_text("1s")&&drawn_living_mood==2);
 }
 static void busy_render_boundaries(void) {
     const unsigned at[]={0,59,60,3599,3600};
-    const char *label[]={"0s","59s","1m 00s","59m 59s","60m 00s"};
-    for(unsigned n=0;n<sizeof at/sizeof at[0];n++)for(int long_label=0;long_label<2;long_label++) {
+    for(unsigned n=0;n<sizeof at/sizeof at[0];n++) {
         reset();busy_heartbeat("a","session-a",0);
         for(now=20000;now<=at[n]*1000;now+=20000)ui_project_emit("a","session-a","processing","Processing",NULL);
-        now=at[n]*1000;ui_project_emit("a","session-a","activity",long_label?
-            "Reviewing the complete interaction contract and every recovery boundary":"Reading the source",NULL);
-        render_actual();assert(has_text(label[n]));
-        const ht_run_t *clock=NULL,*status=NULL;
-        for(unsigned i=0;i<scene.count;i++)if(scene.runs[i].pro_kind==1&&scene.runs[i].y==668) {
-            if(!strcmp(scene.runs[i].text,label[n]))clock=&scene.runs[i];else status=&scene.runs[i];
-        }
-        assert(clock&&status&&clock->pro_font==&ht_pro_24&&status->pro_font==&ht_pro_24);
-        assert(clock->x+clock->w==522&&status->x==44&&status->x+status->w+16<=clock->x);
-        ht_rect_t foot=action_hit(A_AGENTS)->rect;assert(foot.x==32&&foot.y==598&&foot.w==492&&foot.h==104);
-        assert(action_hit(A_PET)->rect.y==106);
+        now=at[n]*1000;render_actual();
+        assert(observed_seconds()==at[n]&&scene.count==1&&drawn_living_mood==2);
     }
 }
 
@@ -973,8 +947,8 @@ static void footer_send_feedback(void) {
     pro_draft_recovery_pin(&s.draft_recovery,"a",PRO_WORK_TASK);
     draft.page=(ht_draft_page_t){.active=true,.id="message",.agent="a"};pro_send_feedback_begin(1);
     s.send_feedback.accepted=true;s.send_feedback.until=now+3000;
-    busy_heartbeat("a","",now);render_actual();assert(has_text("Passed to Harness")&&!has_text("0s"));
-    s.work_voice_mode=PRO_WORK_LOOP;render_actual();assert(has_text("Passed to Harness")); // Frozen original mode.
+    busy_heartbeat("a","",now);render_actual();assert(pro_send_feedback_text(now)&&!has_text("Passed to Harness"));
+    s.work_voice_mode=PRO_WORK_LOOP;render_actual();assert(pro_send_feedback_text(now)); // Frozen original mode.
     s.notice_count=1;s.notice[0].question=true;COPY(s.notice[0].agent_id,"a");render_actual();assert(!has_text("Passed to Harness"));
     s.notice_count=0;ui_focus_project("b");ui_focus_project("a");render_actual();assert(!has_text("Passed to Harness"));
     pro_send_feedback_begin(2);s.send_feedback.accepted=true;s.send_feedback.until=now+3000;
@@ -998,56 +972,27 @@ static void home_recording_blockers(void) {
         default:s.work_roster_pending=true;label="Finding your panes...";break;
         }
         if(carried) {carry.active=true;carry.rows=2;COPY(carry.source,"Research");COPY(carry.excerpt,"Keep these selected words.");}
-        render_actual();assert(has_text(label)&&!has_text("1s"));
-        if(carried)assert(action_hit(A_CARRY_DROP));
-        else if(reason==2)assert(action_hit(A_DESKTOP));
+        render_actual();assert(!has_text(label)&&scene.count==1);
+        assert(pro_work_block_reason(active(),PRO_WORK_TASK));
         assert(!starts&&!queued);
     }
 }
 static void home_hierarchy(void) {
-    for (int language=0;language<2;language++) {
-        reset();strcpy(s.voice_language,language?"vi":"en");render_actual();
-        assert(has_text(PRO_TR("Tap to speak")));
-        ht_rect_t footer=action_hit(A_AGENTS)->rect;
-        assert(footer.x==32&&footer.y==598&&footer.w==492&&footer.h==104);
-        bool name=false,workspace=false;
-        for(unsigned i=0;i<scene.count;i++) {
-            const ht_run_t *r=&scene.runs[i];
-            if(r->pro_kind!=1)continue;
-            if(r->y==604){assert(r->pro_font==&ht_pro_42);name=true;}
-            if(r->x==44&&r->y==36){assert(r->pro_font==&ht_pro_24);workspace=true;}
-            if(r->y==668)assert(r->y+r->pro_height<=footer.y+footer.h);
-        }
-        assert(name&&workspace);
-        memset(s.agents[0].name,'W',sizeof s.agents[0].name-1);
-        s.agents[0].name[sizeof s.agents[0].name-1]=0;render_actual();
-        for(unsigned i=0;i<scene.count;i++)
-            if(scene.runs[i].pro_kind==1&&scene.runs[i].y==604)assert(scene.runs[i].pro_font==&ht_pro_32);
-        assert(!memcmp(&footer,&action_hit(A_AGENTS)->rect,sizeof footer));
-        s.agents[0].recap_ready=true;strcpy(s.agents[0].preview,"A result.");render_actual();
-        assert(has_text(PRO_TR("A result is ready"))&&!has_text(PRO_TR("Tap to speak")));
-        s.agents[0].busy=true;render_actual();assert(has_text(PRO_TR("Working")));
-        s.voice_retry_until=now+1000;render_actual();assert(has_text(PRO_TR("Voice was not sent. Try again.")));
-        s.connected=false;render_actual();assert(has_text(PRO_TR("Connect to your computer")));
+    for(int language=0;language<2;language++)for(unsigned c=0;c<3;c++) {
+        reset();strcpy(s.voice_language,language?"vi":"en");s.living_selected=c;
+        memset(active()->name,'W',sizeof active()->name-1);
+        render_actual();assert(scene.count==1&&drawn_living_character==c&&s.hit_count==1);
+        assert(!has_text(PRO_TR("Tap to speak"))&&!has_text("Menu"));
+        active()->busy=true;render_actual();assert(drawn_living_mood==2);
+        active()->busy=false;unread=1;render_actual();assert(drawn_living_mood==PRO_LIVING_ATTENTION);
     }
 }
 static void docked_connection_policy(void) {
-    reset();
-    for (int connected=0;connected<=1;connected++) {
-        s.connected=connected; render_actual();
-        assert(has_text("Menu") && !has_text("On the go") && !has_text("Connected"));
-        assert(has_text(connected ? "Workspace" : "Connect to Harness"));
-        assert(action_hit(A_TABS)->enabled==(bool)connected);
-        assert(action_hit(A_AGENTS)->enabled==(bool)connected);
-        assert(!drawn_compact && drawn_portrait.x==185 && drawn_portrait.y==164);
-        assert(drawn_portrait.w==350 && drawn_portrait.h==350);
-        bool footer=false;
-        for (unsigned i=0;i<scene.count;i++) {
-            const ht_run_t *r=&scene.runs[i];
-            if (r->pro_kind==2 && r->x==0 && r->y==596 && r->w==720 && r->pro_height==124)
-                footer=true;
-        }
-        assert(footer);
+    reset();for(int connected=0;connected<=1;connected++) {
+        s.connected=connected;render_actual();
+        assert(scene.count==1&&s.hit_count==1&&!has_text("Menu"));
+        assert(drawn_living_mood==(connected?0u:4u));
+        assert(drawn_portrait.x==40&&drawn_portrait.w==640);
     }
 }
 static void home_gesture_consistency(void) {
@@ -1081,28 +1026,18 @@ static void home_gesture_consistency(void) {
     }
 }
 static void voice_render_geometry(void) {
-    reset(); s.view=VOICE; s.voice_open=recording=true; s.voice_return=HOME;
-    copy(s.voice_target,sizeof s.voice_target,"A long pane name for your current project"); render_actual();
-    const hit_t *pet=action_hit(A_PET), *discard=action_hit(A_VOICE_ABORT), *review=action_hit(A_VOICE_STOP);
-    assert(pet && pet->enabled && pet->rect.x+pet->rect.w>=680);
-    assert(discard && discard->enabled && review && review->enabled);
-    assert(discard->rect.h>=64 && review->rect.h>=64);
-    tap(630,350,75); assert(stops==1 && !starts);
-    for(int lang=0;lang<2;lang++) for(int mode=PRO_WORK_GOAL;mode<=PRO_WORK_LOOP;mode++) {
-        reset(); COPY(s.voice_language,lang?"vi":"en");
-        s.view=VOICE; s.voice_open=s.voice_review=recording=true;
-        s.voice_return=WORK_INTENT; s.work_voice_mode=mode;
-        copy(s.voice_target,sizeof s.voice_target,"A long pane name for your current project");
-        render_actual(); assert(has_text(PRO_TR(pro_work_label(mode))) && has_text(PRO_TR("Tap to review.")));
-        assert(!has_text(PRO_TR("Tap to send. Hold to review first.")));
+    for(int language=0;language<2;language++)for(unsigned c=0;c<3;c++) {
+        reset();s.living_selected=c;COPY(s.voice_language,language?"vi":"en");
+        s.view=VOICE;s.voice_open=recording=true;s.voice_return=HOME;render_actual();
+        assert(s.hit_count==1&&scene.count==1&&action_hit(A_PET)->enabled);
+        assert(drawn_living_mood==1&&drawn_living_character==c);
+        tap(630,350,75);assert(stops==1&&!starts);
     }
 }
 static void voice_wait_discard(void) {
-    reset(); s.view=VOICE; s.voice_open=s.voice_waiting=true; recording=false;
-    render_actual(); const hit_t *discard=action_hit(A_VOICE_ABORT);
-    assert(discard && discard->enabled);
-    tap(discard->rect.x+discard->rect.w/2,discard->rect.y+discard->rect.h/2,75);
-    assert(discards==1 && !s.voice_open && !recording && s.view==HOME);
+    reset();s.view=VOICE;s.voice_open=s.voice_waiting=true;recording=false;render_actual();
+    assert(drawn_living_mood==2&&action_hit(A_PET)->enabled);
+    tap(360,350,75);assert(discards==1&&!s.voice_open&&!recording&&s.view==HOME);
 }
 static int lock_x(int i) { return 192+(i%3)*168; }
 static int lock_y(int i) { return 252+(i/3)*168; }
@@ -1249,37 +1184,22 @@ static void speech_input_boundaries(void) {
 }
 static void speech_playback_caption(void) {
     reset();s.agents[0].recap_ready=true;strcpy(s.agents[0].preview,"The original pane summary.");
-    speech_start("happy");render_actual();
-    assert(drawn_compact && drawn_mood==HT_CHARACTER_IDLE && !drawn_level);
-    assert(has_text("One moment...") && !has_text("Speaking. Touch to interrupt."));
-    assert(has_text("Your new layout is ready to review.") && !has_text(s.agents[0].preview));
-    assert(!strcmp(s.agents[0].preview,"The original pane summary.") && s.agents[0].recap_ready);
-    assert(action_hit(A_PET) && action_hit(A_PET)->enabled);
+    speech_start("happy");render_actual();assert(drawn_living_mood==2&&scene.count==1);
+    assert(!strcmp(s.speech.caption,"Your new layout is ready to review."));
     speech_audio.pending=false;speech_audio.playing=true;speech_audio.level=3;
-    surface_tick(now);render_actual();
-    assert(drawn_compact && drawn_mood==HT_CHARACTER_LISTENING && drawn_level==3);
-    assert(has_text("Speaking. Touch to interrupt.") && !has_text("A little voice."));
-    for (unsigned i=0;i<scene.count;i++) assert(!strstr(scene.runs[i].text,"listening"));
-    unsigned snapshots=speech_snapshots,changed=changes;
-    now+=20;surface_tick(now);assert(speech_snapshots==snapshots && changes==changed);
-    assert(habitat_next_wake_ms()==20);
-    now+=20;surface_tick(now);assert(speech_snapshots==snapshots+1 && changes==changed);
-    speech_audio.level=255;now+=40;surface_tick(now);assert(s.speech.level==4 && changes==changed+1);
-    // Host EOF is not audible completion: keep the caption through final DMA.
+    surface_tick(now);render_actual();assert(drawn_living_mood==3&&scene.count==1);
+    unsigned snapshots=speech_snapshots;now+=40;surface_tick(now);assert(speech_snapshots==snapshots+1);
+    speech_audio.level=255;now+=40;surface_tick(now);assert(s.speech.level==4);
     speech_audio.active=false;speech_audio.ended=true;now+=40;surface_tick(now);assert(s.speech.id==23);
     speech_audio.playing=false;now+=40;surface_tick(now);render_actual();
-    assert(!s.speech.id && has_text("The original pane summary.") && s.agents[0].recap_ready);
+    assert(!s.speech.id&&s.agents[0].recap_ready&&!strcmp(s.agents[0].preview,"The original pane summary."));
     assert(!speech_aborts);
-    reset();s.quiet=true;speech_start("warm");speech_audio.playing=true;speech_audio.pending=false;
-    surface_tick(now);changed=changes;
-    speech_audio.level=4;now+=40;surface_tick(now);
-    assert(s.speech.level==4 && changes==changed); // Hidden mouth changes need no repaint.
 }
 static void speech_touch_interrupts(void) {
     reset();speech_start("warm");speech_audio.playing=true;speech_audio.pending=false;surface_tick(now);
     render_actual();sample(true,360,340,2000);
     assert(!s.speech.id && !speech_audio.active && speech_aborts==1 && aborted_id==23 && !starts);
-    sample(false,360,340,2075);assert(starts==1 && s.view==VOICE);
+    sample(false,360,340,2075);now=2356;surface_tick(now);assert(starts==1 && s.view==VOICE);
     // DOWN can arrive after the empty audio session starts but before UI begin.
     reset();empty_speaker();sample(true,360,340,2000);
     assert(!ui_companion_speech_begin(23,"a","Race should be rejected.","warm"));
@@ -1321,17 +1241,16 @@ static void speech_error_and_emotions(void) {
     for (unsigned i=0;i<sizeof emotions/sizeof emotions[0];i++) {
         reset();speech_start(emotions[i]);assert(s.speech.emotion==i);
         speech_audio.playing=true;speech_audio.pending=false;speech_audio.level=i%5;surface_tick(now);
-        render_actual();assert(drawn_compact && drawn_level==i%5 && drawn_emotion==i);
+        render_actual();assert(drawn_living_mood==3&&s.speech.level==i%5&&s.speech.emotion==i);
     }
     reset();s.agents[0].recap_ready=true;strcpy(s.agents[0].preview,"Your summary stays readable.");
     speech_start("warm");speech_audio.active=false;speech_audio.error=AUDIO_SPEECH_ERROR_CODEC;
     surface_tick(now);render_actual();
-    assert(!s.speech.id && has_text(s.agents[0].preview));
-    assert(has_text("Voice unavailable. Text is still here."));
+    assert(!s.speech.id&&s.agents[0].recap_ready&&drawn_living_mood==5);
     now+=5000;surface_tick(now);assert(!s.speech_error_until);
     render_actual();assert(!has_text("Voice unavailable. Text is still here."));
     reset();speech_start("warm");s.notice_count=1;s.notice[0].question=true;strcpy(s.notice[0].agent_id,"a");
-    surface_tick(now);render_actual();assert(!s.speech.id && has_text("Needs your answer"));
+    surface_tick(now);render_actual();assert(!s.speech.id&&drawn_living_mood==PRO_LIVING_ATTENTION);
 }
 static void appearance_browse_is_local(void) {
     for(int page=0;page<2;page++) {
@@ -1388,18 +1307,18 @@ static void living_review_controls(void) {
     reset();s.connected=false;s.view=LAUNCHER;s.hit_count=0;ht_scene_clear(&scene,BG);pro_launcher(&scene);
     const hit_t *entry=action_hit(A_LIVING);assert(entry&&entry->enabled);
     tap(entry->rect.x+30,entry->rect.y+30,80);assert(s.view==LIVING&&!queued);
-    for(unsigned c=0;c<PRO_LIVING_CHARACTERS;c++)for(unsigned m=0;m<PRO_LIVING_MOODS;m++) {
+    for(unsigned c=0;c<PRO_LIVING_CHARACTERS;c++)for(unsigned m=0;m<PRO_LIVING_REVIEW_MOODS;m++) {
         render_actual();tap(90+(int)c*224,130,80);assert(s.living_character==c);
         render_actual();tap(90+(int)(m%3)*224,590+(int)(m/3)*64,80);assert(s.living_mood==m);
         now=s.living_started+PRO_LIVING_STEP_MS;surface_tick(now);assert(s.living_frame==1);
         assert(habitat_next_wake_ms()<=PRO_LIVING_STEP_MS);
         render_actual();tap(610,50,80);assert(s.living_watch);render_actual();assert(s.hit_count==1);
         tap(360,360,80);assert(!s.living_watch);
-        assert(!queued&&!starts&&!switches&&!moves);
+        assert((!queued||queued_action.kind==A_LIVING_SAVE)&&!starts&&!switches&&!moves);
     }
     s.living_started=UINT32_MAX-20;now=60;surface_tick(now);assert(s.living_frame==2);
     s.locked=true;now+=120;surface_tick(now);assert(s.living_frame==2);s.locked=false;
-    render_actual();tap(80,50,80);assert(s.view==LAUNCHER&&!queued);
+    render_actual();tap(80,50,80);assert(s.view==LAUNCHER&&s.living_selected==2);
 }
 typedef void (*test_fn)(void);
 
@@ -1577,6 +1496,29 @@ static void search_match_contacts(void) {
     tap(600,202,80);assert(!starts&&!queued);
 }
 
+static void living_summary_transition(void) {
+    reset();COPY(s.notice_host,"host-a");
+    ui_project_emit("a","session-a","done","A full reply with clear words.","A full reply.");
+    assert(s.living_summary_agent[0]&&s.view==HOME);
+    surface_tick(now);assert(s.view==READER&&s.reader.captured&&s.reader.live);
+    empty_speaker();assert(ui_companion_speech_begin(23,"a","A full reply.","warm"));
+    ui_companion_speech_clear(0);
+    render_actual();assert(has_text("A full reply with clear words.")&&!has_text("Summary")&&!has_text("Back"));
+    assert(!s.reader.controls&&s.hit_count==1);
+    sample(true,360,340,2000);sample(false,360,340,2750);render_actual();
+    assert(s.reader.controls&&action_hit(A_SELECT_BEGIN));
+    for(unsigned i=0;i<scene.count;i++)assert(scene.runs[i].pro_kind!=3);
+    dispatch(make_action((hit_t){.action=A_READER_BACK}));assert(s.view==HOME);
+    now+=1000;surface_tick(now);assert(s.view==HOME);
+    ui_project_emit("b","session-b","done","Other pane result",NULL);
+    surface_tick(now);assert(s.view==HOME);
+    ui_project_restore_event("a","done","Restored result",NULL);surface_tick(now);assert(s.view==HOME);
+    sample(true,360,340,3000);
+    ui_project_emit("a","session-a","done","A reply during contact",NULL);
+    surface_tick(now);assert(s.view==HOME);
+    habitat_touch_cancel();sample(false,360,340,3100);surface_tick(now);assert(s.view==READER&&!starts);
+}
+
 int main(int argc,char **argv) {
     const struct { const char *name; test_fn run; } tests[]={
         {"search_match_contacts",search_match_contacts},{"carry_chooser_contacts",carry_chooser_contacts},{"reader_navigation_parity",reader_navigation_parity},{"reader_footer_scroll",reader_footer_scroll},{"reader_stale_contacts",reader_stale_contacts},{"reader_latest_contact",reader_latest_contact},
@@ -1610,7 +1552,7 @@ int main(int argc,char **argv) {
         {"speech_playback_caption",speech_playback_caption},{"speech_touch_interrupts",speech_touch_interrupts},
         {"speech_context_cancellation",speech_context_cancellation},{"speech_error_and_emotions",speech_error_and_emotions},
         {"appearance_browse_is_local",appearance_browse_is_local},{"appearance_use_and_cancel",appearance_use_and_cancel},
-        {"living_review_controls",living_review_controls},{"appearance_scene_override",appearance_scene_override},{"appearance_interrupted",appearance_interrupted}
+        {"living_summary_transition",living_summary_transition},{"living_review_controls",living_review_controls},{"appearance_scene_override",appearance_scene_override},{"appearance_interrupted",appearance_interrupted}
     };
     for(unsigned i=0;i<sizeof tests/sizeof tests[0];i++)
         if(argc==1 || !strcmp(argv[1],tests[i].name)) { tests[i].run(); printf("PASS %s\n",tests[i].name); }

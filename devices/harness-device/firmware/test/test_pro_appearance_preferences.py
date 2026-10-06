@@ -30,7 +30,9 @@ static bool opened, writable, present, round_present;
 static bool fail_open, fail_get, fail_set, fail_commit;
 static bool appearance_pending, round_pending;
 static uint16_t stored, staged;
-static uint8_t round_stored, round_staged;
+static uint8_t round_stored, round_staged, living_stored, living_staged;
+static bool living_present,living_pending;
+static unsigned living_writes;
 static unsigned opens, closes, reads, writes, round_writes, commits;
 
 static int nvs_open(const char *ns, int mode, nvs_handle_t *handle)
@@ -40,7 +42,7 @@ static int nvs_open(const char *ns, int mode, nvs_handle_t *handle)
     if (fail_open) return -1;
     opens++; opened = true; writable = mode == NVS_READWRITE; *handle = 71;
     staged = stored; round_staged = round_stored;
-    appearance_pending = round_pending = false;
+    appearance_pending = round_pending = living_pending = false; living_staged=living_stored;
     return ESP_OK;
 }
 static int nvs_get_u16(nvs_handle_t handle, const char *key, uint16_t *value)
@@ -66,14 +68,25 @@ static int nvs_set_u16(nvs_handle_t handle, const char *key, uint16_t value)
 }
 static int nvs_get_u8(nvs_handle_t handle, const char *key, uint8_t *value)
 {
-    assert(opened && handle == 71 && !strcmp(key, "habitat_char"));
+    assert(opened && handle == 71);
+    if(!strcmp(key,"pro_living")) {
+        if(fail_get){*value=255;return -1;}
+        if(!living_present)return -1;
+        *value=living_stored;return ESP_OK;
+    }
+    assert(!strcmp(key,"habitat_char"));
     if (!round_present) return -1;
     *value = round_stored;
     return ESP_OK;
 }
 static int nvs_set_u8(nvs_handle_t handle, const char *key, uint8_t value)
 {
-    assert(opened && writable && handle == 71 && !strcmp(key, "habitat_char"));
+    assert(opened && writable && handle == 71);
+    if(!strcmp(key,"pro_living")) {
+        living_writes++;if(fail_set)return -1;
+        living_staged=value;living_pending=true;return ESP_OK;
+    }
+    assert(!strcmp(key,"habitat_char"));
     round_writes++; round_staged = value; round_pending = true;
     return ESP_OK;
 }
@@ -84,6 +97,7 @@ static int nvs_commit(nvs_handle_t handle)
     if (fail_commit) return -1;
     if (appearance_pending) { stored = staged; present = true; }
     if (round_pending) { round_stored = round_staged; round_present = true; }
+    if (living_pending) { living_stored=living_staged;living_present=true; }
     return ESP_OK;
 }
 static void nvs_close(nvs_handle_t handle)
@@ -95,6 +109,7 @@ static void nvs_close(nvs_handle_t handle)
 CODE += "\n".join(function(name) for name in (
     "config_load_pro_appearance", "config_save_pro_appearance",
     "config_load_habitat_character", "config_save_habitat_character",
+    "config_load_pro_living", "config_save_pro_living",
 ))
 CODE += r'''
 
@@ -155,6 +170,22 @@ int main(void)
     assert(config_load_pro_appearance(0) == 0x0207);
     assert(config_load_habitat_character(1) == 0 && round_writes == 2);
     assert(opens == closes && !opened);
+    assert(config_load_pro_living(2)==2&&!living_writes);
+    uint16_t original=stored;uint8_t original_round=round_stored;
+    for(unsigned i=0;i<256;i++) {
+        living_present=true;living_stored=(uint8_t)i;
+        assert(config_load_pro_living(2)==(i<3?i:2));
+        unsigned before=opens;
+        assert(config_save_pro_living((uint8_t)i)==(i<3));
+        if(i>=3)assert(opens==before);
+        assert(stored==original&&round_stored==original_round);
+    }
+    assert(config_save_pro_living(1));fail_set=true;
+    assert(!config_save_pro_living(2)&&living_stored==1);fail_set=false;
+    fail_commit=true;assert(!config_save_pro_living(2)&&living_stored==1);fail_commit=false;
+    fail_open=true;assert(config_load_pro_living(2)==2&&!config_save_pro_living(2));fail_open=false;
+    fail_get=true;assert(config_load_pro_living(2)==2);fail_get=false;
+    assert(!opened&&opens==closes);
     puts("Pro appearance: 65536 uint16 round trips, missing/read errors, round preference isolation, open/set/commit failures and retry PASS");
     return 0;
 }

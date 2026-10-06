@@ -227,6 +227,26 @@ bool config_save_pro_appearance(uint16_t value)
     return ok;
 }
 
+uint8_t config_load_pro_living(uint8_t fallback)
+{
+    if (fallback>=3) fallback=0;
+    nvs_handle_t h;
+    if (nvs_open(NS,NVS_READONLY,&h)!=ESP_OK) return fallback;
+    uint8_t value=fallback;
+    bool ok=nvs_get_u8(h,"pro_living",&value)==ESP_OK;
+    nvs_close(h);
+    return ok && value<3?value:fallback;
+}
+bool config_save_pro_living(uint8_t value)
+{
+    if (value>=3) return false;
+    nvs_handle_t h;
+    if (nvs_open(NS,NVS_READWRITE,&h)!=ESP_OK) return false;
+    bool ok=nvs_set_u8(h,"pro_living",value)==ESP_OK && nvs_commit(h)==ESP_OK;
+    nvs_close(h);
+    return ok;
+}
+
 bool config_select_illustrated_tim_once(void)
 {
     nvs_handle_t h;

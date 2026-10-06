@@ -4,26 +4,34 @@
 #include "miniz.h"
 #include <assert.h>
 #include <string.h>
+#ifdef ESP_PLATFORM
+#include "esp_timer.h"
+#include "esp_log.h"
+#endif
 
 extern const uint8_t living_start[] asm("_binary_pro_living_pack_start");
 extern const uint8_t living_end[] asm("_binary_pro_living_pack_end");
 static const uint8_t living_tag;
-static uint8_t *packed, *poses[2], *output;
-static unsigned loaded[2] = {99,99};
+enum { SIDE=PRO_LIVING_SOURCE, PIXELS=SIDE*SIDE, POSES=9 };
+static uint8_t *packed;
+static uint16_t *poses, *work, *output;
+static unsigned loaded=99, last_mood=99, transition_frame;
+static bool transitioning;
+static uint16_t row_pixels[PRO_LIVING_SOURCE];
 static uint32_t rendered_revision;
 static unsigned rendered_size;
 
-// One fixed working set. No allocations in animation, switching or UI locks.
+// Decode the selected character once. Blinks and mood changes never inflate
+// assets in a frame. These four fixed allocations also own transition history.
 void pro_living_init(void)
 {
     if (output) return;
     packed=heap_caps_malloc(PRO_LIVING_RAW_BYTES,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);
-    for (unsigned i=0;i<2;i++)
-        poses[i]=heap_caps_malloc(PRO_LIVING_SOURCE*PRO_LIVING_SOURCE*3,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);
-    output=heap_caps_malloc(PRO_LIVING_MAX_SIZE*PRO_LIVING_MAX_SIZE*3,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);
-    assert(packed && poses[0] && poses[1] && output);
+    poses=heap_caps_malloc(POSES*PIXELS*2,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);
+    work=heap_caps_malloc(PIXELS*4,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);
+    output=heap_caps_malloc(PRO_LIVING_MAX_SIZE*PRO_LIVING_MAX_SIZE*2,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);
+    assert(packed && poses && work && output);
 }
-
 void pro_living_image(ht_scene_t *scene,unsigned character,unsigned mood,unsigned frame,
                       int x,int y,unsigned size)
 {
@@ -33,26 +41,23 @@ void pro_living_image(ht_scene_t *scene,unsigned character,unsigned mood,unsigne
         .revision=1+frame%PRO_LIVING_FRAMES+PRO_LIVING_FRAMES*(mood+PRO_LIVING_MOODS*character)};
     ht_pro_image(scene,x,y,&bitmap);
 }
-
-static void load_pose(unsigned slot,unsigned index)
+static void load_character(unsigned character)
 {
-    if (loaded[slot]==index) return;
-    const pro_living_asset_t *a=&pro_living_assets[index];
-    size_t bytes=(size_t)(living_end-living_start);
-    assert(a->offset<=bytes && a->length<=bytes-a->offset);
-    size_t got=tinfl_decompress_mem_to_mem(packed,PRO_LIVING_RAW_BYTES,
-        living_start+a->offset,a->length,TINFL_FLAG_PARSE_ZLIB_HEADER);
-    assert(got==PRO_LIVING_RAW_BYTES);
-    const unsigned count=PRO_LIVING_SOURCE*PRO_LIVING_SOURCE;
-    uint16_t *rgb=(uint16_t*)poses[slot];uint8_t *alpha=poses[slot]+count*2;
-    for (unsigned i=0;i<count;i++) {
-        const uint8_t *p=packed+packed[512+i]*2;
-        rgb[i]=(uint16_t)p[0]|((uint16_t)p[1]<<8);alpha[i]=255;
+    if (loaded==character) return;
+    for (unsigned pose=0;pose<POSES;pose++) {
+        const pro_living_asset_t *a=&pro_living_assets[character*POSES+pose];
+        size_t bytes=(size_t)(living_end-living_start);
+        assert(a->offset<=bytes && a->length<=bytes-a->offset);
+        size_t got=tinfl_decompress_mem_to_mem(packed,PRO_LIVING_RAW_BYTES,
+            living_start+a->offset,a->length,TINFL_FLAG_PARSE_ZLIB_HEADER);
+        assert(got==PRO_LIVING_RAW_BYTES);
+        for (unsigned i=0;i<PIXELS;i++) {
+            const uint8_t *p=packed+packed[512+i]*2;
+            poses[pose*PIXELS+i]=(uint16_t)p[0]|((uint16_t)p[1]<<8);
+        }
     }
-    loaded[slot]=index;
+    loaded=character;last_mood=99;transitioning=false;
 }
-
-// A smooth integer sine approximation; bounded +/-256, continuous at wrap.
 static int wave(unsigned phase,unsigned period)
 {
     unsigned p=phase%period;bool neg=p>=period/2;
@@ -61,77 +66,131 @@ static int wave(unsigned phase,unsigned period)
     int value=(int)(4096*product/(5*half*half-4*product));
     return neg?-value:value;
 }
-static uint16_t blend(uint16_t a,uint16_t b,unsigned t)
+// Three RGB565 lanes in one unsigned multiply. Five fractional bits retain
+// subpixel motion without nine channel multiplies for each bilinear sample.
+static uint16_t mix(uint16_t a,uint16_t b,unsigned t)
 {
-    unsigned u=256-t;
-    return (uint16_t)(((((a>>11)*u+(b>>11)*t)>>8)<<11) |
-        (((((a>>5)&63)*u+((b>>5)&63)*t)>>8)<<5) |
-        (((a&31)*u+(b&31)*t)>>8));
+    uint32_t aa=((uint32_t)a|((uint32_t)a<<16))&0x07e0f81f;
+    uint32_t bb=((uint32_t)b|((uint32_t)b<<16))&0x07e0f81f;
+    uint32_t c=(aa+(((bb-aa)*t)>>5))&0x07e0f81f;
+    return (uint16_t)(c|(c>>16));
 }
-
-static uint16_t sample(const uint16_t *pixels,unsigned x,unsigned y,unsigned fx,unsigned fy)
+static uint16_t average(uint16_t a,uint16_t b)
 {
-    unsigned p=y*PRO_LIVING_SOURCE+x;
-    return blend(blend(pixels[p],pixels[p+1],fx),
-                 blend(pixels[p+PRO_LIVING_SOURCE],pixels[p+PRO_LIVING_SOURCE+1],fx),fy);
+    return (uint16_t)((a&b)+(((a^b)&0xf7de)>>1));
 }
-
+static uint16_t sample(const uint16_t *src,unsigned x,unsigned y,unsigned fx,unsigned fy)
+{
+    unsigned p=y*SIDE+x;
+    return mix(mix(src[p],src[p+1],fx),mix(src[p+SIDE],src[p+SIDE+1],fx),fy);
+}
+static void scale(unsigned size)
+{
+    if (size==SIDE) {memcpy(output,work,PIXELS*2);return;}
+    if (size==SIDE*2) {
+        // Exact 2x bilinear reconstruction: only shifts/adds, no divisions or
+        // per-pixel coordinate work on the full-size home surface.
+        for (unsigned y=0;y<SIDE;y++) {
+            const uint16_t *a=work+y*SIDE,*b=y+1<SIDE?a+SIDE:a;
+            uint16_t *top=output+y*2*size,*bottom=top+size;
+            for (unsigned x=0;x<SIDE;x++) {
+                unsigned next=x+1<SIDE?x+1:x;
+                uint16_t ab=average(a[x],a[next]),cd=average(b[x],b[next]);
+                top[x*2]=a[x];top[x*2+1]=ab;
+                bottom[x*2]=average(a[x],b[x]);bottom[x*2+1]=average(ab,cd);
+            }
+        }
+        return;
+    }
+    unsigned step=(SIDE-1)*65536/(size>1?size-1:1);
+    for (unsigned y=0;y<size;y++) {
+        unsigned sy=y*step,iy=sy>>16,fy=(sy>>11)&31;
+        if (iy>=SIDE-1) {iy=SIDE-2;fy=32;}
+        for (unsigned x=0,sx=0;x<size;x++,sx+=step) {
+            unsigned ix=sx>>16,fx=(sx>>11)&31;
+            if (ix>=SIDE-1) {ix=SIDE-2;fx=32;}
+            output[y*size+x]=sample(work,ix,iy,fx,fy);
+        }
+    }
+}
 static void animate(unsigned character,unsigned mood,unsigned frame,unsigned size)
 {
-    static const uint8_t open_pose[6]={0,2,4,6,7,8};
-    unsigned pose=open_pose[mood], blink=0;
-    if (mood<3) {
-        unsigned age=frame==79||frame==183?2:frame==78||frame==80||frame==182||frame==184?1:0;
-        blink=age==2?256:age==1?144:0;
+    static const uint8_t open_pose[PRO_LIVING_MOODS]={0,2,4,6,7,8,6};
+    static const uint8_t eyelid[]={0,4,16,28,32,24,10,2};
+    load_character(character);
+    if (last_mood!=mood) {
+        transitioning=last_mood!=99;
+        if (transitioning) memcpy(work+PIXELS,work,PIXELS*2);
+        transition_frame=frame;last_mood=mood;
     }
-    load_pose(0,character*9+pose);
-    if (blink) load_pose(1,character*9+pose+1);
-    const uint16_t *rgb=(const uint16_t*)poses[0], *closed=(const uint16_t*)poses[1];
-    uint16_t *dst=(uint16_t*)output;uint8_t *mask=output+size*size*2;
-    int breath=wave(frame,mood==4?200:100);
-    int sway=wave(frame+character*7,200);
-    int bounce=mood==3?-((wave(frame,50)+256)*6/256):0;
-    if (mood==5) bounce=-((wave(frame,100)+256)*3/256);
-    int stretch=1024+breath*(mood==4?14:8)/256;
-    int center=128, floor=240;
-    for (unsigned y=0;y<size;y++) {
-        int py=(int)(y*256*256/size);
-        int syq=floor*256+(py-floor*256-bounce*256)*1024/stretch;
-        int sy=syq/256;
-        int head=sy<170?170-sy:0;
-        int bend=sway*head*(mood==1?5:mood==2?3:1)/170;
-        int appendage=sy<90?(90-sy):sy>175?sy-175:0;
-        int limb=wave(frame+(character==0?sy/3:0),50)*appendage/32;
-        int widen=1024-breath*5/256;
-        int source_y=syq*PRO_LIVING_SOURCE/256;
-        if (source_y<0 || source_y>=(PRO_LIVING_SOURCE-1)*256) {
-            memset(mask+y*size,0,size);memset(dst+y*size,0,size*2);continue;
+    unsigned transition=(frame+PRO_LIVING_FRAMES-transition_frame)%PRO_LIVING_FRAMES;
+    if(transition>=8)transitioning=false;
+    unsigned blend_in=transitioning?transition*4:32;
+    unsigned pose=open_pose[mood],blink=0;
+    if (mood<3) {
+        unsigned at=frame>=184?frame-184:frame>=76?frame-76:99;
+        if (at<sizeof eyelid) blink=eyelid[at];
+    }
+    const uint16_t *rgb=poses+pose*PIXELS,*closed=rgb+PIXELS;
+    int breath=wave(frame,mood==4?240:120),sway=wave(frame+character*9,240);
+    int bounce=mood==3?-(wave(frame,80)+256)*384:0;
+    if (mood==5) bounce=-(wave(frame,120)+256)*192;
+    int stretch=65536+breath*(mood==4?5:3),widen=65536-breath*2;
+    int xstep=(int)(((int64_t)65536*65536)/widen);
+    unsigned attention=frame%240;
+    int beckon=mood==PRO_LIVING_ATTENTION && attention<64?wave(attention,32):0;
+    uint16_t background=ht_rgb(0x101019);
+    for (unsigned y=0;y<SIDE;y++) {
+        int syq=300*65536+(int)(((int64_t)((int)y-300)*65536-bounce)*65536/stretch);
+        int sy=syq>>16;
+        if (sy<0 || sy>=SIDE-1) {for(unsigned x=0;x<SIDE;x++)work[y*SIDE+x]=background;continue;}
+        unsigned fy=(unsigned)(syq>>11)&31;
+        int head=sy<212?212-sy:0;
+        int bend=sway*head*(mood==1?10:mood==2?7:3);
+        int appendage=sy<112?112-sy:sy>218?sy-218:0;
+        int limb=wave(frame+(character==0?(unsigned)sy/4:0),120)*appendage*32;
+        int arm=character==1?(sy<122?122-sy:0):(sy>192?sy-192:0);
+        if(arm>64)arm=64;
+        // Vertical interpolation is shared by the entire row and stays in
+        // internal SRAM. Each moving pixel then needs one horizontal blend.
+        const uint16_t *top=rgb+(unsigned)sy*SIDE,*bottom=top+SIDE;
+        for(unsigned x=0;x<SIDE;x++) row_pixels[x]=mix(top[x],bottom[x],fy);
+        if(blink && sy>102 && sy<224) {
+            for(unsigned x=61;x<264;x++) {
+                unsigned edge=x-60;
+                if(264-x<edge)edge=264-x;
+                if((unsigned)(sy-102)<edge)edge=(unsigned)(sy-102);
+                if((unsigned)(224-sy)<edge)edge=(unsigned)(224-sy);
+                unsigned t=blink*(edge<12?edge:12)/12;
+                unsigned index=(unsigned)sy*SIDE+x;
+                row_pixels[x]=mix(row_pixels[x],mix(closed[index],closed[index+SIDE],fy),t);
+            }
         }
-        unsigned iy=(unsigned)source_y/256,fy=(unsigned)source_y%256;
-        for (unsigned x=0;x<size;x++) {
-            int sxq=center*256+((int)(x*256*256/size)-center*256)*1024/widen-bend;
-            int sx=sxq/256;
-            // Ears and tentacle tips move relative to the breathing torso.
-            int side=sx<center?-1:1;
-            if (sx<center-45 || sx>center+45) sxq+=side*limb;
-            unsigned d=y*size+x;
-            int source_x=sxq*PRO_LIVING_SOURCE/256;
-            if (source_x<0 || source_x>=(PRO_LIVING_SOURCE-1)*256) {mask[d]=0;dst[d]=0;continue;}
-            unsigned ix=(unsigned)source_x/256,fx=(unsigned)source_x%256;
-            mask[d]=255;dst[d]=sample(rgb,ix,iy,fx,fy);
-            // A short eyelid gesture, retaining the stable body registration.
-            if (blink && sx>48 && sx<211 && sy>82 && sy<179) {
-                unsigned edge=(unsigned)(sx-48);
-                if ((unsigned)(211-sx)<edge) edge=(unsigned)(211-sx);
-                if ((unsigned)(sy-82)<edge) edge=(unsigned)(sy-82);
-                if ((unsigned)(179-sy)<edge) edge=(unsigned)(179-sy);
-                unsigned t=blink*(edge<10?edge:10)/10;
-                dst[d]=blend(dst[d],sample(closed,ix,iy,fx,fy),t);
+        // Five continuous affine spans give torso and appendages independent
+        // motion without divisions, branching envelopes or warps per pixel.
+        static const unsigned edges[]={0,51,115,205,269,SIDE};
+        int origin=160*65536-160*xstep-bend;
+        int right=limb+beckon*arm*70;
+        for(unsigned span=0;span<5;span++) {
+            unsigned first=edges[span],end=edges[span+1];
+            int step=xstep,shift=0;
+            if(span==0)shift=-limb;
+            if(span==1){step+=limb/64;shift=-limb;}
+            if(span==3)step+=right/64;
+            if(span==4)shift=right;
+            int q=origin+(int)first*xstep+shift;
+            for(unsigned x=first;x<end;x++,q+=step) {
+                int sx=q>>16;
+                uint16_t value=background;
+                if(sx>=0 && sx<SIDE-1)
+                    value=mix(row_pixels[sx],row_pixels[sx+1],(unsigned)(q>>11)&31);
+                unsigned d=y*SIDE+x;
+                work[d]=blend_in<32?mix(work[PIXELS+d],value,blend_in):value;
             }
         }
     }
+    scale(size);
 }
-
 void pro_living_prepare(ht_scene_t *scene)
 {
     for (unsigned i=0;i<scene->count;i++) {
@@ -139,12 +198,26 @@ void pro_living_prepare(ht_scene_t *scene)
         if (b->asset!=&living_tag) continue;
         assert(output && b->width==b->height && b->width<=PRO_LIVING_MAX_SIZE);
         if (rendered_revision!=b->revision || rendered_size!=b->width) {
-            unsigned id=b->revision-1,frame=id%PRO_LIVING_FRAMES;
-            id/=PRO_LIVING_FRAMES;
+            unsigned id=b->revision-1,frame=id%PRO_LIVING_FRAMES;id/=PRO_LIVING_FRAMES;
+#ifdef ESP_PLATFORM
+            int64_t started=esp_timer_get_time();
+            bool cached=loaded==id/PRO_LIVING_MOODS;
+#endif
             animate(id/PRO_LIVING_MOODS,id%PRO_LIVING_MOODS,frame,b->width);
+#ifdef ESP_PLATFORM
+            static uint32_t count,total,maximum;
+            uint32_t elapsed=(uint32_t)(esp_timer_get_time()-started);
+            if (cached) {
+                count++;total+=elapsed;if(elapsed>maximum)maximum=elapsed;
+                if(count==150) {
+                    ESP_LOGI("living","animation frames=%lu mean_us=%lu max_us=%lu size=%u",
+                        (unsigned long)count,(unsigned long)(total/count),(unsigned long)maximum,b->width);
+                    count=total=maximum=0;
+                }
+            }
+#endif
             rendered_revision=b->revision;rendered_size=b->width;
         }
-        b->pixels=(const uint16_t*)output;b->alpha=output+b->width*b->height*2;
-        b->asset=NULL;
+        b->pixels=output;b->alpha=NULL;b->asset=NULL;
     }
 }

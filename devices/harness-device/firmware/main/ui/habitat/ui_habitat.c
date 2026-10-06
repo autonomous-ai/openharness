@@ -104,7 +104,7 @@ typedef enum {
     A_CARRY_PREVIEW, A_CARRY_CHOOSE, A_CARRY_TARGET, A_CARRY_OPEN,
     A_QUESTION_CLOSE, A_DRAFT_STORE,
     A_LANGUAGE, A_LANGUAGE_SET,
-    A_LIVING, A_LIVING_CHARACTER, A_LIVING_MOOD, A_LIVING_WATCH,
+    A_LIVING, A_LIVING_CHARACTER, A_LIVING_MOOD, A_LIVING_WATCH, A_LIVING_SAVE,
     A_DAEMONS, A_SCENES, A_APPEAR_PREVIOUS, A_APPEAR_NEXT, A_APPEAR_USE, A_APPEAR_SAVE,
     A_VOICE_SAMPLES, A_SAMPLE_PREVIOUS, A_SAMPLE_NEXT, A_SAMPLE_PLAY,
     A_SAMPLE_VOLUME, A_SAMPLE_PARAMS,
@@ -251,7 +251,7 @@ static EXT_RAM_BSS_ATTR struct {
         char host[ID_MAX], name[CABLE_NAME_MAX], text[PANE_RESULT_BYTES], token[CABLE_READ_TOKEN_MAX];
         uint32_t serial, notice_revision, source_generation;
         int entry, origin, row;
-        bool captured, from_notice, failed;
+        bool captured, from_notice, failed, controls, live;
     } reader;
     uint32_t result_generation, reader_focus_generation;
     uint32_t work_revision, work_generation;
@@ -283,7 +283,9 @@ static EXT_RAM_BSS_ATTR struct {
         bool accepted;
     } send_feedback;
     ht_character_t preview_character;
-    uint8_t living_character, living_mood, living_frame;
+    uint8_t living_character, living_selected, living_mood, living_frame;
+    struct { bool pending; uint32_t until; int x,y; action_t action; } living_tap;
+    char living_summary_agent[ID_MAX];
     uint32_t living_started;
     bool living_watch;
     struct {
@@ -401,6 +403,7 @@ static action_t pressed_action;
 static ht_rect_t pressed_rect;
 #endif
 static bool queue(action_t a);
+static void dispatch(action_t a);
 static void view(view_t v);
 #ifdef DEVICE_PRO_COMPANION
 static void notice_sync_view(void);
@@ -657,6 +660,7 @@ static void pro_reader_focus(const char *id)
     if (id && !strcmp(id,current)) return;
     // A -> B -> A must not revive a contact or queued Latest for the first A.
     // Repeated echoes of the same focused pane leave the contact alone.
+    s.living_tap.pending=false; s.living_summary_agent[0]=0;
     if (!++s.reader_focus_generation) ++s.reader_focus_generation;
 }
 static bool pro_selection_owned(void)
@@ -933,6 +937,7 @@ static void input_cancel(void)
 {
 #ifdef DEVICE_PRO_COMPANION
     s.workspace_chord = false;
+    s.living_tap.pending = false;
     pro_speech_cancel(true);
 #endif
     ht_gesture_cancel(&gesture);
@@ -1155,7 +1160,8 @@ static int pro_panes_of(const char *id)
 static bool pro_written_control(action_kind_t a)
 {
 #ifdef DEVICE_PRO_COMPANION
-    return a != A_NONE && a != A_PET && a != A_DRAFT_EDIT;
+    return a != A_NONE && a != A_PET && a != A_DRAFT_EDIT &&
+        !(s.view==READER && !s.reader.controls && a==A_READER_BACK);
 #else
     return a == A_VOICE_ABORT || a == A_TAB || a == A_TAB_STRIP_LEFT || a == A_TAB_STRIP_RIGHT ||
            a == A_INBOX || a == A_AGENT || a == A_AGENTS || a == A_NOTICE;
@@ -1271,7 +1277,8 @@ static bool pro_speech_allowed(const char *agent_id)
 {
     const agent_t *a = active();
     return s.ready && s.connected && !s.loading && !s.locked && !display_is_asleep() &&
-        (s.view == HOME || s.view == AGENT) && a && agent_id && !strcmp(a->id, agent_id) &&
+        (s.view == HOME || s.view == AGENT || (s.view==READER && s.reader.live &&
+         pro_reader_owner() && !strcmp(s.reader_agent,agent_id?agent_id:""))) && a && agent_id && !strcmp(a->id, agent_id) &&
         !s.voice_open && !s.voice_start_pending && !s.voice_waiting && !audio_client_active() &&
         !s.touch_down && !s.nap && !s.voice_retry_until && !carry.active &&
         !carry.error[0] && !visit.pending && !is_question(a->id);
@@ -1501,8 +1508,27 @@ static void surface_tick(uint32_t now)
             s.sample_poll_due = now + 20;
         }
     }
-    if (s.view == LIVING && !s.locked && !display_is_asleep()) {
-        unsigned frame = pro_living_frame(now - s.living_started);
+    bool living_home=s.view==HOME || s.view==AGENT;
+    if (s.living_tap.pending && !s.touch_down && (int32_t)(now-s.living_tap.until)>=0) {
+        action_t tap=s.living_tap.action;
+        s.living_tap.pending=false;
+        if (living_home && !s.locked && !display_is_asleep() && s.connected && !s.loading &&
+            active() && !strcmp(active()->id,tap.id)) {
+            ht_gesture_guard(&gesture,now); tap.kind=A_VOICE; dispatch(tap);
+        }
+    }
+    if (s.living_summary_agent[0] && living_home && !s.touch_down && !s.living_tap.pending &&
+        !s.voice_open && !s.locked && !display_is_asleep() && !s.loading && s.connected) {
+        if (active() && !strcmp(active()->id,s.living_summary_agent) && active()->recap_ready) {
+            action_t read={.kind=A_READER,.dy=(int)s.result_generation};
+            COPY(read.id,s.living_summary_agent); COPY(read.text,s.notice_host);
+            s.living_summary_agent[0]=0; pro_reader_begin(read);
+            if(s.view==READER)s.reader.live=true;
+        } else s.living_summary_agent[0]=0;
+    }
+    if ((s.view==LIVING || s.view==HOME || s.view==AGENT || s.view==VOICE) &&
+        !s.locked && !display_is_asleep()) {
+        unsigned frame = s.quiet && s.view!=VOICE ? 0 : pro_living_frame(now-s.living_started);
         if (frame != s.living_frame) { s.living_frame = (uint8_t)frame; change(); }
     }
     pro_speech_tick(now);
@@ -1565,7 +1591,7 @@ static void surface_tick(uint32_t now)
         portrait.motion.reaction.pose.level = s.speech.level;
         portrait.motion.reaction.pose.emotion = s.speech.emotion;
     }
-    if (pro_visible && pro_visual_changed(&portrait, mood, now, s.quiet, main && notice_unread() > 0)) change();
+    (void)portrait; // Living home paints from its continuous frame clock above.
 #else
     if (changed) change();
 #endif
@@ -3199,21 +3225,25 @@ static void dispatch(action_t a)
     case A_LIVING:
         view(LIVING);
         s.living_watch = false;
+        s.living_character = s.living_selected;
         s.living_started = ms(); s.living_frame = 0;
         break;
     case A_LIVING_CHARACTER:
         if (s.view != LIVING || a.value < 0 || a.value >= PRO_LIVING_CHARACTERS) break;
-        s.living_character = (uint8_t)a.value;
+        if (a.value!=s.living_selected && !queue((action_t){.kind=A_LIVING_SAVE,.value=a.value})) break;
+        s.living_character = s.living_selected = (uint8_t)a.value;
         s.living_started = ms(); s.living_frame = 0; change();
         break;
     case A_LIVING_MOOD:
-        if (s.view != LIVING || a.value < 0 || a.value >= PRO_LIVING_MOODS) break;
+        if (s.view != LIVING || a.value < 0 || a.value >= PRO_LIVING_REVIEW_MOODS) break;
         s.living_mood = (uint8_t)a.value;
         s.living_started = ms(); s.living_frame = 0; change();
         break;
     case A_LIVING_WATCH:
         if (s.view == LIVING) { s.living_watch = !s.living_watch; change(); }
         break;
+    case A_LIVING_SAVE:
+        break; // Only the worker writes NVS.
     case A_DAEMONS:
         pro_appearance_open(DAEMONS);
         break;
@@ -4286,6 +4316,10 @@ static void worker(void *unused)
             if (!config_save_pro_appearance((uint16_t)a.value))
                 ui_cable_toast("Appearance changed; saving failed.");
             break;
+        case A_LIVING_SAVE:
+            if (!config_save_pro_living((uint8_t)a.value))
+                ui_cable_toast("Character changed; saving failed.");
+            break;
 #endif
         case A_HABITAT_SAVE:
             if (!config_save_habitat_options((uint8_t)a.value))
@@ -4478,6 +4512,9 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
             if (s.tab_first >= s.tab_count - 1 && s.tab_strip_drag > 90) s.tab_strip_drag = 90;
 #endif
         } else ht_scroll_move(&scroll, x, y, now);
+#ifdef DEVICE_PRO_COMPANION
+        if (gesture.moved) s.living_tap.pending=false;
+#endif
         if (gesture.moved && s.pressed >= 0) {
             s.pressed = -1;
             if ((!surface && s.view != VOICE) || home_footer(pressed_action.kind)) change();
@@ -4512,6 +4549,9 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
         } else
 #endif
         if (scrolled || s.touch_cancelled) {
+#ifdef DEVICE_PRO_COMPANION
+            s.living_tap.pending=false;
+#endif
             // Motion owns this entire contact, even if it returns to its start.
         } else if (tab_contact) {
             int index = pressed_action.value;
@@ -4536,16 +4576,40 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
             change();
         } else if (result == HT_TOUCH_TAP && pressed_action.kind == A_PET &&
                    (surface || s.view == VOICE || s.view == SELECTION)) {
-            ht_gesture_guard(&gesture, now);
+#ifdef DEVICE_PRO_COMPANION
+            if (surface) {
+                bool second=s.living_tap.pending && (int32_t)(now-s.living_tap.until)<=0 &&
+                    abs(x-s.living_tap.x)<110 && abs(y-s.living_tap.y)<110;
+                if (second) {
+                    s.living_tap.pending=false; ht_gesture_guard(&gesture,now);
+                    dispatch((action_t){.kind=A_INBOX,.value=1});
+                } else {
+                    s.living_tap.pending=true; s.living_tap.until=now+280;
+                    s.living_tap.x=x; s.living_tap.y=y; s.living_tap.action=pressed_action;
+                }
+            } else
+#endif
             if (s.view == VOICE) {
+                ht_gesture_guard(&gesture, now);
                 ESP_LOGI("habitat", "gesture tap: finish voice");
+#ifdef DEVICE_PRO_COMPANION
+                dispatch((action_t){.kind = s.voice_waiting || s.voice_start_pending ? A_VOICE_ABORT : A_VOICE_STOP});
+#else
                 dispatch((action_t){.kind = A_VOICE_STOP});
+#endif
             } else if (s.connected && !s.loading && pressed_action.id[0]) {
+                ht_gesture_guard(&gesture,now);
                 ESP_LOGI("habitat", "gesture tap: start voice");
                 pressed_action.kind = A_VOICE;
                 dispatch(pressed_action);
             }
         } else if (result == HT_TOUCH_HOLD) {
+#ifdef DEVICE_PRO_COMPANION
+            if (s.view==READER && !s.reader.controls && pressed_action.kind==A_READER_BACK &&
+                pressed_action.revision==s.reader.serial && !strcmp(pressed_action.id,s.reader_agent)) {
+                s.reader.controls=true; change();
+            } else
+#endif
             if (s.view == VOICE && pressed_action.kind == A_PET && cable_client_supports(CABLE_FEATURE_DRAFT)) {
                 ht_gesture_guard(&gesture, now);
                 dispatch((action_t){.kind = A_VOICE_STOP, .value = 1});
@@ -4731,19 +4795,16 @@ uint32_t habitat_next_wake_ms(void)
         int32_t left = (int32_t)(s.sample_poll_due - now);
         delay = left > 0 ? (uint32_t)left : 1;
     }
-    if (!s.locked && !display_is_asleep() && s.view == LIVING)
-        delay = PRO_LIVING_STEP_MS - (now - s.living_started) % PRO_LIVING_STEP_MS;
-    if (!s.locked && !display_is_asleep() && pro_appearance_view())
-        delay = pro_visual_next_wake_ms(&s.preview_character, HT_CHARACTER_IDLE, now, s.quiet, false);
-    if (!s.locked && !display_is_asleep() && (s.view == HOME || s.view == AGENT || s.view == VOICE)) {
-        ht_character_t portrait = character;
-        if (pro_speech_visible()) {
-            portrait.motion.reaction.pose.level = s.speech.level;
-            portrait.motion.reaction.pose.emotion = s.speech.emotion;
-        }
-        delay = pro_visual_next_wake_ms(&portrait, pro_surface_mood(), now, s.quiet,
-                                        s.view != VOICE && notice_unread() > 0);
+    if (!s.locked && !display_is_asleep() &&
+        (s.view==LIVING || s.view==HOME || s.view==AGENT || s.view==VOICE) && (!s.quiet || s.view==VOICE))
+        delay=PRO_LIVING_STEP_MS-(now-s.living_started)%PRO_LIVING_STEP_MS;
+    if (s.living_tap.pending && !s.touch_down) {
+        int32_t left=(int32_t)(s.living_tap.until-now);
+        uint32_t due=left>0?(uint32_t)left:1;
+        if (due<delay) delay=due;
     }
+    if (!s.locked && !display_is_asleep() && pro_appearance_view())
+        delay=pro_visual_next_wake_ms(&s.preview_character,HT_CHARACTER_IDLE,now,s.quiet,false);
     if (s.speech.id) {
         int32_t left = (int32_t)(s.speech.poll_due - now);
         uint32_t due = left > 0 ? (uint32_t)left : 1;
@@ -4941,6 +5002,9 @@ void ui_init(void)
     s.scene_choice = scene < PRO_SCENE_COUNT ? (pro_scene_id_t)scene : PRO_SCENE_MATCH;
     pro_visual_init();
     pro_living_init();
+    s.living_selected=config_load_pro_living(0);
+    s.living_character=s.living_selected;
+    s.living_started=ms();
 #endif
     ESP_LOGI("habitat", "character %s; shared moods and controls", ht_character_name(character.id));
     uint8_t options = config_load_habitat_options();
@@ -4983,6 +5047,7 @@ void ui_set_brightness(uint8_t level)
 #ifdef DEVICE_PRO_COMPANION
 static void pro_result_source_reset(void)
 {
+    s.living_summary_agent[0]=0; s.living_tap.pending=false;
     if (!++s.result_generation) ++s.result_generation;
     s.notice_count=0;
     memset(s.notice_reads,0,sizeof s.notice_reads);
@@ -5429,6 +5494,10 @@ static void event(const char *id, const char *session, const char *kind, const c
         }
     }
     pane_memory_apply(a, m);
+#ifdef DEVICE_PRO_COMPANION
+    if (!restore && a && i==s.active && a->recap_ready && (has_text || (recap && *recap)))
+        COPY(s.living_summary_agent,id);
+#endif
     // Agent events may belong to an earlier turn. Only the voice result finishes voice UI.
     if (a) change();
     display_unlock();

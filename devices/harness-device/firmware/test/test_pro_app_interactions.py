@@ -143,7 +143,7 @@ static void dispatch(action_t a);
 static void notice_mark_read(cable_notif_t *n);
 '''
 code += typedef("pro_notice_plan_t", source=SOURCE)
-for name in ("pro_reader_source", "pro_reader_owner", "pro_reader_matches", "pro_reader_notice_index", "pro_reader_openable", "pro_reader_latest", "pro_reader_focus", "pro_selection_owned", "pro_carry_route_clear", "pro_carry_owned", "pro_carry_available", "pro_carry_target_matches", "pro_carry_choose", "pro_reader_copy", "pro_reader_begin", "pro_reader_back", "pro_send_feedback_clear", "pro_work_local", "pro_work_visible", "pro_work_block_reason", "pro_work_capture_pin", "pro_busy_reset", "question_view", "waiting", "recap_preview", "notice_was_read", "notice_forget_read", "notice_flush_reads", "notice_mark_read", "notice_open", "notice_sync_view", "notice_selection", "notice_restore_selection", "notice_remove", "pro_notice_pinned", "notice_add", "pro_notice_plan_source", "pro_notice_plan_card", "pro_notice_replace", "ui_notif_replace",
+for name in ("notice_unread", "pro_reader_source", "pro_reader_owner", "pro_reader_matches", "pro_reader_notice_index", "pro_reader_openable", "pro_reader_latest", "pro_reader_focus", "pro_selection_owned", "pro_carry_route_clear", "pro_carry_owned", "pro_carry_available", "pro_carry_target_matches", "pro_carry_choose", "pro_reader_copy", "pro_reader_begin", "pro_reader_back", "pro_send_feedback_clear", "pro_work_local", "pro_work_visible", "pro_work_block_reason", "pro_work_capture_pin", "pro_busy_reset", "question_view", "waiting", "recap_preview", "notice_was_read", "notice_forget_read", "notice_flush_reads", "notice_mark_read", "notice_open", "notice_sync_view", "notice_selection", "notice_restore_selection", "notice_remove", "pro_notice_pinned", "notice_add", "pro_notice_plan_source", "pro_notice_plan_card", "pro_notice_replace", "ui_notif_replace",
              "visit_emit", "selection_emit", "carry_emit", "make_action", "read_question", "open_question",
              "pro_open_in_app", "question_answer", "question_rows", "question_move", "pro_question_back", "send_answer", "question_load", "pro_question_signature", "ui_question_show",
              "ui_question_state", "ui_answer_receipt", "ui_question_close", "pro_result_source_reset", "pro_notice_source", "ui_set_connected",
@@ -163,7 +163,17 @@ code += "        case A_QUESTION_READ:" + worker.split("        case A_QUESTION_
 code += "default:break;} }\n"
 for name in ("pro_hit", "pro_control", "pro_heading", "pro_note", "pro_read_text", "pro_inbox", "pro_reader", "pro_selection", "pro_unknown_answer", "pro_question", "pro_choices", "pro_answer"):
     code += function(name, SHEETS)
-code += function("pro_home_header", HOME)
+code += r'''
+static bool pro_speech_visible(void){return false;}
+static const char *pro_send_feedback_text(uint32_t at){(void)at;return NULL;}
+static bool audio_client_recording(void){return false;}
+static unsigned drawn_living_mood;
+void pro_living_image(ht_scene_t *f,unsigned character,unsigned mood,unsigned frame,int x,int y,unsigned size){
+    (void)character;(void)frame;drawn_living_mood=mood;
+    ht_pro_rect(f,x,y,size,size,0,ht_rgb(0x9974af));
+}
+'''
+code += function("pro_home_living_mood", HOME) + function("pro_render_home", HOME)
 code += r'''
 static void reset(void) {
     memset(&s,0,sizeof s);memset(&visit,0,sizeof visit);memset(&form,0,sizeof form);memset(&draft,0,sizeof draft);
@@ -182,7 +192,7 @@ static bool overlap(ht_rect_t a,ht_rect_t b) {
 }
 static void render(ht_scene_t *f) {
     s.hit_count=0;ht_scene_clear(f,BG);
-    if(s.view==HOME)pro_home_header(f);else if(s.view==INBOX)pro_inbox(f);else if(s.view==READER)pro_reader(f);
+    if(s.view==HOME)pro_render_home(f);else if(s.view==INBOX)pro_inbox(f);else if(s.view==READER){s.reader.controls=true;pro_reader(f);}
     else if(s.view==SELECTION)pro_selection(f);
     else if(s.view==CHOICE)pro_choices(f);else if(s.view==ANSWER_REVIEW)pro_answer(f);else {assert(s.view==QUESTION);pro_question(f);}
     assert(f->count<HT_RUNS);
@@ -395,29 +405,29 @@ static void everyday_shortcuts(const char *dir) {
     reset();notice_add("result","Build","","The build is ready.",false,false);
     cable_notif_t question=s.notice[0];s.notice[0]=s.notice[1];s.notice[1]=question;
     notice_mark_read(&s.notice[1]);view(HOME);render(&scene);
-    assert(waiting()==1&&text_has(&scene,"1 needs you")&&controls(A_INBOX)==1);
+    assert(waiting()==1&&drawn_living_mood==PRO_LIVING_ATTENTION&&controls(A_PET)==1);
     assert(!s.notice[0].read_on_dial&&s.notice[1].read_on_dial);
     unsigned before=enqueued;act(A_INBOX,1);
     assert(s.view==INBOX&&s.offset==1&&s.active==0&&enqueued==before&&opens==0&&voice_commands==0);
     render(&scene);portrait(&scene,dir,"direct-read-question");
-    notice_mark_read(&s.notice[1]);view(HOME);render(&scene);assert(text_has(&scene,"1 needs you"));
+    notice_mark_read(&s.notice[1]);view(HOME);render(&scene);assert(drawn_living_mood==PRO_LIVING_ATTENTION);
 
     // New notices may reorder the inbox; Home acts on today's question without
     // emitting a focus command. It does not acknowledge or answer the card.
     action_t attention=make_action(hit(A_INBOX,1));
     notice_add("other","Other","","A second question.",true,false);
     dispatch(attention);assert(s.view==INBOX&&s.notice[s.offset].question&&waiting()==2&&s.active==0&&opens==0);
-    view(HOME);render(&scene);assert(text_has(&scene,"2 need you"));
+    view(HOME);render(&scene);assert(drawn_living_mood==PRO_LIVING_ATTENTION);
     portrait(&scene,dir,"home-attention-header");
 
     // A retained answer stays one tap away, even with an empty replacement
     // inbox or a different pending question. Label and destination agree.
     s.q.pending=s.q.uncertain=true;COPY(s.q.name,"Research");COPY(s.q.agent,"remote");
-    render(&scene);assert(text_has(&scene,"Review answer"));act(A_INBOX,1);
+    render(&scene);assert(drawn_living_mood==PRO_LIVING_ATTENTION);act(A_INBOX,1);
     assert(s.view==QUESTION&&s.q.pending&&opens==0);
-    ui_notif_replace(NULL,0);view(HOME);render(&scene);assert(text_has(&scene,"Review answer"));
+    ui_notif_replace(NULL,0);view(HOME);render(&scene);assert(drawn_living_mood==PRO_LIVING_ATTENTION);
     act(A_INBOX,1);assert(s.view==QUESTION);
-    s.q.pending=false;s.notice_count=0;view(HOME);render(&scene);assert(text_has(&scene,"Updates")); // Separate fixture: all questions resolved.
+    s.q.pending=false;s.notice_count=0;view(HOME);render(&scene);assert(drawn_living_mood==0); // Separate fixture: all questions resolved.
     act(A_INBOX,1);render(&scene);assert(s.view==INBOX&&text_has(&scene,"All caught up."));
     view(READER);before=enqueued;dispatch(attention);assert(s.view==READER&&enqueued==before);
 

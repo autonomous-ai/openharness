@@ -1,41 +1,30 @@
 # Harness Pro · Take a little company
 
-A connected prototype of the **Field companion** selected from page 06 of the
-[concept gallery](../pro-concepts/README.md): a solid purple octopus living in a
-green landscape. The init collection now adds GNU, Lynx, Mutt, Yak, Gopher,
-Bug, Tux, Auk and Beastie through the same character interface. The Pro uses
-the shared Habitat application and cable
-protocol, with a new square-screen presentation. Its live contents come from
-Harness; this is no longer the swipe-only concept slideshow.
+The square device uses the shared Habitat application and cable protocol with
+three living companions: **Tim**, **Spirit**, and **Moss**. The selected character
+fills the home and voice screens on a quiet dark stage. There are no labels,
+workspace bars, status captions or buttons over the creature. Its breathing,
+blinks, posture and gestures express listening, thinking, rest and attention.
 
-The home screen stays simple: workspace above, creature in the middle, selected
-pane and activity below. A summary or carried passage makes the creature small
-and gives the text a paper surface. Central tap behavior stays the same.
-The workspace is subdued and the selected pane leads at 42 px, falling back to
-32 px when its measured name needs more room. Idle and completed work have
-short status lines. Paper remains an optional saved scene; its preview does
-not change the default or the person's scene preference.
+Hold the creature for Menu. **Characters** applies a choice immediately and
+saves it in its own `pro_living` preference; the previous daemon/round preferences
+remain separate. One tap starts voice after a 280 ms double-tap window. Two taps
+open Updates without starting the microphone. Up/down scrolls the app; left/right
+switches panes. The existing two-finger workspace gesture remains available.
 
-While the selected pane is working, its activity line includes a quiet elapsed
-time. This is time since the device observed the current busy spell, not engine
-compute time or a Goal/Loop duration. Switching panes preserves each live
-observation; connection or host loss, a changed session, cancellation and a
-25-second heartbeat gap end it. Questions, carried text, speech and errors keep
-their status precedence. Resting the display hides the clock without pausing
-work observed from the host.
+A fresh result from the selected pane opens a separate, full-screen speech bubble
+containing only text. Scroll to read, tap or swipe right to return to the creature.
+Hold the bubble to reveal the existing source-pinned reading, selection and app
+controls. Restored history and another pane's results do not interrupt home.
+A summary waits while a finger or a voice operation owns the screen.
 
-Home's Updates control opens the retained answer first, then a question that
-still needs a response. Reading a question does not remove that need. These
-local cards leave desktop focus alone. In the output reader, Select output
-fetches the current terminal selection for the pinned, currently selected pane;
-it never maps old summary text to live terminal lines. If that pane is no longer
-selected, use Open on desktop explicitly before selecting its output.
+Unread updates and pending questions prompt a gentle waving gesture. Reading a
+question never answers it. Double-tap retains the existing update priority and
+never changes app focus or submits a response. Return and carried-text actions
+are available in Menu when relevant.
 
-The Pro is now **strictly dock-only**, by the user's 2026-09-29 decision to
-remove the battery. The workspace footer stays in place whether the app is
-connected or offline. There is no layout switch, portable mode, battery meter
-or runtime estimate. Normal operation needs no connection badge; connection
-guidance appears only when the app is unavailable.
+The device remains dock-only. Disconnection uses a resting creature; Menu and
+saved summaries remain usable without a connection.
 
 ## Language
 
@@ -107,29 +96,27 @@ do not establish those qualities.
 
 | Where | Gesture or action | Result |
 | --- | --- | --- |
-| Home | Tap the creature or central summary area | Start voice for the selected pane |
+| Home | Single tap | Start voice for the selected pane after the 280 ms double-tap window |
+| Home | Double tap | Open notifications without starting voice |
 | Home | Swipe left or right with one finger across the center | Change the selected open agent pane |
 | Home | Swipe horizontally with two fingers together, then release | Change to the adjacent workspace; no wrap at either end |
 | Home | Drag up or down across the center | Scroll the selected desktop terminal; release can continue with inertia |
 | Home, while scrolling coasts | Tap | Stop that scroll; a subsequent deliberate tap starts voice |
-| Home | Hold the creature, or tap Menu | Open Menu |
+| Home | Hold the creature | Open Menu |
 | Menu | Instruct | Choose Task, Goal or Loop for the selected pane, then Speak |
 | Menu | Today, on compatible hosts | Read this computer's local daily usage estimate; Refresh requests a new reading |
-| Home | Tap the workspace name | Open Tabs |
-| Home | Tap the bottom pane/activity area | Open Panes |
+| Menu | Tabs / Panes | Choose the workspace or pane |
 | Panes | Map / List | Switch between the host's pane geometry and a readable list, without moving desktop focus |
 | Panes map | Tap a named, large enough pane | Focus that exact pane; small or unresolved rectangles stay inert |
 | Side button | Tap / hold at least 0.8 seconds | Back or stop / toggle the screen |
 | Listening | Tap the creature | Finish capture and send through the existing voice route |
-| Listening | Hold and release, or tap Review first | Read the transcript before sending, when the host supports drafts |
+| Listening | Hold and release | Read the transcript before sending, when the host supports drafts |
 | Goal or Loop listening | Finish capture | Review the transcript, then explicitly Send |
-| Listening or processing | Discard / Stop sending | Cancel the pending voice operation; cancellation is not an undo for a message already delivered |
+| Voice processing | Tap the creature | Cancel the pending voice operation; cancellation is not an undo for a message already delivered |
 | Speaking | Touch the screen | Stop speech immediately; a deliberate central tap starts voice again |
-| Home with a result | Tap Read | Read more of that result on the Pro |
-| Home with a question | Tap Answer | Read the question, choose or speak an answer, review, then explicitly send |
-| Menu | Panes / Tabs / Updates / Read / Daemon / Scene / Machines / Controls | Open the named sheet |
-| Daemon or Scene | Swipe horizontally, or tap Previous / Next | Preview locally; desktop focus and saved preferences stay unchanged |
-| Daemon or Scene | Use / Back | Save the chosen appearance / cancel the preview |
+| Selected pane completes | Automatic speech bubble | Read the result without a creature or controls in the way |
+| Summary bubble | Tap / vertical swipe / hold | Return to creature / read text / reveal reader actions |
+| Menu | Characters / Panes / Tabs / Updates / Read / Machines / Controls | Open the named sheet |
 | Tabs | Swipe the workspace card, then tap the chosen card | Browse first; the tap switches and returns to that workspace's companion |
 | Updates | Swipe | Browse updates without moving desktop focus |
 | Updates with a question | Answer | Read and answer that question locally; the home recipient and desktop focus stay in place |
@@ -137,7 +124,7 @@ do not establish those qualities.
 | Unconfirmed answer | Swipe / Close | Read the retained answers; Close removes only the local copy and unblocks other questions, without resending or acknowledging the host |
 | Updates or a Summary from another pane | Open on desktop | Open that exact pane; compatible hosts preserve the previous reading place for Return |
 | Summary from the currently focused pane | Latest output, on compatible hosts | Visit the live terminal tail and retain the original reading place for Return; the saved Summary words stay unchanged |
-| Home after a supported visit | Return | Ask the app to restore its saved pane and reading position |
+| Menu after a supported visit | Return | Ask the app to restore its saved pane and reading position |
 | Reading, question or draft sheets | Drag vertically | Read the local text or advance its choices/parts, rather than scrolling the desktop |
 | A list or form | Drag vertically, then tap a choice | Browse and activate the chosen item |
 
@@ -158,12 +145,11 @@ current roster. No synthetic geometry or enlarged overlapping hit targets are
 used.
 
 Rapid repeated taps are guarded across voice transitions. A swipe cannot turn
-into a send or approval when the finger lifts. Every reading sheet has a title
-and Back; it is visually distinct from home.
+into a send or approval when the finger lifts. The default summary bubble is text-only; holding it reveals
+its title, Back and explicit app actions.
 
-The creature holds a letter while updates remain unread. Fresh updates get a
-brief delivery reaction; restoring notification history does not replay that
-reaction. Updates become read only after their content reaches the display.
+The creature makes a periodic attention gesture while unread updates or
+unanswered questions remain. Updates become read only after their content reaches the display.
 Reading is separate from **Open on desktop**, and reading a question never
 answers it. Read acknowledgments and an empty unread snapshot retain unanswered
 Pro question cards. Identical question replays remain read and quiet; a changed
@@ -293,7 +279,8 @@ emotions. Completion and boop are finite; ordinary motion pauses while hidden.
 There are two fixed portrait sizes: **350 px** without text and **160 px** with
 text. No vector renderer or image decompressor runs while the UI lock is held.
 
-Choose **Daemon** or **Scene** directly in Menu. Each picker owns a separate
+The earlier illustrated daemon/scene pickers remain in the source as legacy
+views; the living home uses **Characters**. Each legacy picker owns a separate
 preview character and applies changes only on **Use**. Daemon ID and scene are
 saved in one NVS `u16`; the round dial preference remains separate. **Match
 daemon** is the default, choosing Meadow, Shore, Dusk or Paper from the registry.
@@ -330,11 +317,11 @@ on Home; release before trying another gesture. Check a late second finger,
 three fingers, a lift-and-hold, sleep during contact and a roster refresh: none
 should begin voice or activate a pane. Compare Map and List, including a dense
 layout, and confirm the selected workspace matches the desktop. Drag vertically to check scroll tracking, then tap to
-brake. Compare a voice tap on the full creature with a tap over a summary; both
+brake. Compare a voice tap on the full creature with pane switching and scrolling; these
 must begin the same listening flow. Use Review first for a message you want to
 inspect before sending.
 
-Next read an update, return home, visit Menu and browse Tabs, Daemon, Scene and Controls.
+Next read an update, return home, visit Menu and browse Tabs, Characters and Controls.
 Check the question/review flow only when a real pending question is available.
 Compare the saved brightness presets in your normal lighting and try Quiet
 motion. Disconnect the desktop app while leaving USB power connected: the
@@ -582,26 +569,31 @@ snapshots, and question-close frames. Coverage includes 25/64-card navigation,
 software replays, not physical touch or USB reliability measurements.
 
 
-## Living character animation review
+## Living home and animation review
 
 Hold the home creature to open **Menu → Characters**. Choose **Tim**, **Spirit**,
-or **Moss**, then **At ease**, **Listening**, **Thinking**, **Happy**, **Sleepy**,
-or **Surprised**. **Just watch** (or tapping the portrait) hides the controls;
-tap the glass to restore them. Back returns to Menu. Selection is local review
-state and does not change the saved daemon, send a voice request, or submit work.
+or **Moss** to use it throughout the device. The choice survives reboot. Preview
+**At ease**, **Listening**, **Thinking**, **Happy**, **Sleepy**, or **Surprised**;
+review moods never override live app state on home. **Just watch** hides the
+review controls; tap to restore them. Back returns to Menu.
 
-The device animates at a requested 25 frames per second, using a continuous
-integer body rig: breathing, head bends, independent ear/tentacle sway, happy
-bounce, sleepy breathing, and short eyelid gestures. Actual hardware frame rate
-depends on the display workload. The nine registered poses per character are
-packed at 320 px using a 192-color RGB565 palette on the gallery's fixed dark
-background. The original transparent atlases are retained. These are animated
-2D characters, not a 3D simulation. Normal and fullscreen views use 384/512 px
-portraits with bilinear subpixel movement and fixed renderer-owned caches; no per-frame heap allocation or
-image decoding occurs under the UI model lock.
+Motion requests a 33 ms cadence (about 30 fps). The renderer decodes all nine
+poses once per selected character, blends short eyelid and mood transitions,
+and applies continuous breathing and independent appendage motion. Internal
+scanline interpolation and five affine spans replace per-pixel divisions. The
+640 px home uses a fast 2× bilinear reconstruction of the 320 px source; the
+review uses 384 px. Rendering time is deducted from the next frame's wait.
+Actual hardware timings are emitted every 150 cached animation frames; a requested
+cadence is not a claim that every hardware frame meets it.
 
-`test_pro_living.py` exercises all 18 combinations, blinks, the complete loop,
-cache switching, fullscreen output, and exact full/partial repaint parity under
-sanitizers. Set `PRO_LIVING_PREVIEW_DIR` to an existing directory to export real
-renderer frames. `test_pro_touch_ui.py` exercises menu entry, all character/mood
-controls, fullscreen return, time wrap, lock gating, and absence of host actions.
+The original transparent atlases remain unchanged. The fixed dark stage uses
+192-color RGB565 pose data. Four fixed PSRAM allocations total 3,174,912 bytes,
+plus a 640-byte internal scanline. No per-frame allocation or inflation occurs.
+These are animated 2D creatures with a procedural rig, not a 3D simulation.
+
+`test_pro_living.py` covers all 21 character/mood combinations including attention,
+blinks, loop wrap, full/partial raster parity, fullscreen and fixed-cache switching
+under sanitizers. Touch replays cover single/double taps, both scroll directions,
+pane/workspace swipes, context cancellation, voice stop, summary capture/reading,
+menu selection and preference isolation. The broader Pro suite checks pinned
+recipients, questions, retained answers, notifications, reading and carried text.

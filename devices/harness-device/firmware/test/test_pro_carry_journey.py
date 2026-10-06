@@ -16,6 +16,8 @@ exec(compile(fixture.read_text().split(
     'with tempfile.TemporaryDirectory(prefix="harness-pro-app-interactions-")'
 )[0], str(fixture), "exec"), ns)
 code, function, cases = ns["code"], ns["function"], ns["cases"]
+code = code.replace("static const char *pro_send_feedback_text(uint32_t at){(void)at;return NULL;}", "static const char *pro_send_feedback_text(uint32_t at);")
+code = code.replace("static bool audio_client_recording(void){return false;}", "static bool audio_client_recording(void);")
 NATIVE, FONTS, SOURCE, SHEETS = ns["NATIVE"], ns["FONTS"], ns["SOURCE"], ns["SHEETS"]
 code = code.replace("Build / reading line 42", "Reading Design")
 code = code.replace("The original pane was closed.", "That pane is unavailable.")

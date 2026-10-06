@@ -17,7 +17,7 @@ static void pro_living_review(ht_scene_t *f)
     static const char *moods[]={"At ease","Listening","Thinking","Happy","Sleepy","Surprised"};
     ht_scene_clear(f,color(0x101019));
     if (s.living_watch) {
-        pro_living_image(f,s.living_character,s.living_mood,s.living_frame,104,104,512);
+        pro_living_image(f,s.living_character,s.living_mood,s.living_frame,40,40,640);
         pro_hit(0,0,720,720,A_LIVING_WATCH,0,true);
         return;
     }
@@ -28,7 +28,7 @@ static void pro_living_review(ht_scene_t *f)
         pro_living_button(f,32+(int)i*224,104,208,names[i],A_LIVING_CHARACTER,(int)i,s.living_character==i);
     pro_living_image(f,s.living_character,s.living_mood,s.living_frame,168,172,384);
     pro_hit(168,172,384,384,A_LIVING_WATCH,0,true);
-    for (unsigned i=0;i<PRO_LIVING_MOODS;i++)
+    for (unsigned i=0;i<PRO_LIVING_REVIEW_MOODS;i++)
         pro_living_button(f,32+(int)(i%3)*224,562+(int)(i/3)*64,208,PRO_TR(moods[i]),
                            A_LIVING_MOOD,(int)i,s.living_mood==i);
 }

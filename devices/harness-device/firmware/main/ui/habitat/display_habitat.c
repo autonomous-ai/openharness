@@ -417,6 +417,9 @@ static void render_task(void *arg)
         ht_perf_tag_t tag = octopus_perf_capture(&scenes[front ^ 1], fresh);
 #endif
         display_unlock();
+#ifdef DEVICE_PRO_COMPANION
+        int64_t wake_at=esp_timer_get_time()+(int64_t)wake_ms*1000;
+#endif
         bool on = !display_is_asleep();
         if (on != panel_on) {
             render_progress(RENDER_POWER);
@@ -486,6 +489,12 @@ static void render_task(void *arg)
         heartbeat();
         // Notifications wake immediately; only finite reactions / voice require the short timeout.
         render_progress(RENDER_WAIT);
+#ifdef DEVICE_PRO_COMPANION
+        // Preparation/DMA already used part of this frame's budget. Waiting
+        // the original interval again halves motion cadence on a large portrait.
+        int64_t remaining=(wake_at-esp_timer_get_time()+999)/1000;
+        wake_ms=remaining>0?(uint32_t)remaining:1;
+#endif
         ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(wake_ms > 1000 ? 1000 : wake_ms));
     }
 }

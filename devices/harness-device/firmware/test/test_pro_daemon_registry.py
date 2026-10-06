@@ -24,7 +24,9 @@ code = r'''
 #include <string.h>
 static ht_character_t character;
 static ht_character_caption_t home_caption;
-static struct { pro_scene_id_t scene_choice; } s;
+static struct { pro_scene_id_t scene_choice; uint8_t living_selected,living_character; uint32_t living_started; } s;
+static uint32_t ms(void){return 0;}
+static uint8_t config_load_pro_living(uint8_t fallback){return fallback;}
 static uint8_t legacy;
 static uint16_t appearance;
 static bool stored;

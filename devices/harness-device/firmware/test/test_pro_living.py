@@ -29,10 +29,10 @@ static void save(const char *dir,unsigned c,unsigned m,unsigned f){
 int main(void){
     pro_living_init();assert(allocations==4);pro_living_init();assert(allocations==4);
     ht_scene_t old={0},s;const char *dir=getenv("PRO_LIVING_PREVIEW_DIR");unsigned frames=0;
-    for(unsigned c=0;c<3;c++)for(unsigned m=0;m<6;m++){
+    for(unsigned c=0;c<3;c++)for(unsigned m=0;m<PRO_LIVING_MOODS;m++){
         uint32_t first=0;unsigned changes=0;
-        for(unsigned f=0;f<200;f++){
-            if(f%4 && f!=1 && f!=78 && f!=79 && f!=80 && f!=182 && f!=183 && f!=199)continue;
+        for(unsigned f=0;f<PRO_LIVING_FRAMES;f++){
+            if(f%4 && f!=1 && f!=78 && f!=79 && f!=80 && f!=182 && f!=183 && f!=PRO_LIVING_FRAMES-1)continue;
             size_t before=inflates;
             ht_scene_clear(&s,ht_rgb(0x101019));pro_living_image(&s,c,m,f,168,172,384);
             assert(inflates==before&&allocations==4&&!s.runs[0].bitmap.pixels);
@@ -50,11 +50,11 @@ int main(void){
         }
         assert(changes>35); // Every mood actually moves, including sleep.
     }
-    ht_scene_clear(&s,0);pro_living_image(&s,2,3,80,104,104,512);pro_living_prepare(&s);
+    ht_scene_clear(&s,0);pro_living_image(&s,2,3,80,40,40,640);pro_living_prepare(&s);
     ht_raster(&s,(ht_rect_t){0,0,720,720},pixels);
     assert(allocations==4);
-    assert(pro_living_frame(8000)==0&&pro_living_frame(40)==1);
-    printf("Living renderer: %u real frames, 18 character/mood combinations, damage parity, blink, fullscreen and fixed-cache switching PASS\n",frames);
+    assert(pro_living_frame(PRO_LIVING_FRAMES*PRO_LIVING_STEP_MS)==0&&pro_living_frame(PRO_LIVING_STEP_MS)==1);
+    printf("Living renderer: %u real frames, 21 character/mood combinations, damage parity, blink, fullscreen and fixed-cache switching PASS\n",frames);
 }
 '''
 

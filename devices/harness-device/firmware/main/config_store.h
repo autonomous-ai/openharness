@@ -40,6 +40,8 @@ bool config_select_illustrated_tim_once(void);
 // fallback. This key never changes the round dial's character preference.
 uint16_t config_load_pro_appearance(uint16_t fallback);
 bool config_save_pro_appearance(uint16_t value);
+uint8_t config_load_pro_living(uint8_t fallback);
+bool config_save_pro_living(uint8_t value);
 
 // The voice language the dial captures in. The daemon PROPOSES one from the computer's locale on every
 // `welcome`; once the user has picked here, this wins — the person holding the dial may well speak

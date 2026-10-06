@@ -299,6 +299,10 @@ static void reader_checks(const char *dir) {
         case 5:s.result_generation++;break;
         default:break;
         }
+        ht_scene_clear(&sheet,BG);assert(pro_render_controls(&sheet));inspect(&sheet,"speech bubble states");
+        assert(!has_text(&sheet,"Summary")&&!has_text(&sheet,"Back")&&s.hit_count==1);
+        assert(action_count(A_READER_BACK,true)==1&&!action_count(A_SELECT_BEGIN,false));
+        s.reader.controls=true;s.hit_count=0;
         ht_scene_clear(&sheet,BG);assert(pro_render_controls(&sheet));inspect(&sheet,"frozen reader states");
         assert(has_text(&sheet,"Summary")&&action_count(A_READER_BACK,true)==1);
         assert(action_count(A_SELECT_BEGIN,false)==(unsigned)!notice);

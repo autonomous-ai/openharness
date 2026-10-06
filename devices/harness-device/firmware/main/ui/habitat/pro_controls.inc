@@ -100,12 +100,10 @@ static void pro_launcher(ht_scene_t *f)
         {"Tabs", "Change your workspace", A_TABS},
         {"Updates", "Read what came back", A_INBOX},
         {"Read", "Your latest result", A_READER},
-        {"Daemon", "Choose your company", A_DAEMONS},
-        {"Scene", "Set the backdrop", A_SCENES},
         {"Machines", "Reach another computer", A_MACHINES},
         {"Controls", "Make it yours", A_SETTINGS},
     };
-    for (int i = 0; i < 9; i++) {
+    for (unsigned i = 0; i < sizeof items / sizeof items[0]; i++) {
         int x = 32 + (i % 2) * 336, y = 218 + (i / 2) * 92;
         bool enabled = items[i].action == A_LIVING || items[i].action == A_INBOX || items[i].action == A_SETTINGS ||
                        items[i].action == A_DAEMONS || items[i].action == A_SCENES ||
@@ -116,6 +114,12 @@ static void pro_launcher(ht_scene_t *f)
         ht_pro_text(f, x + 22, y + 2, 276, &ht_pro_32, enabled ? FG : DIM, PRO_TR(items[i].title));
         ht_pro_wrap(f, x + 22, y + 48, 276, 1, 0, &ht_pro_24, DIM, PRO_TR(items[i].detail));
     }
+    if (visit.available)
+        pro_control(f,32,614,208,70,PRO_TR("Return"),A_RETURN,0,s.connected && !visit.pending);
+    if (pro_carry_available())
+        pro_control(f,256,614,208,70,PRO_TR("Panes"),A_CARRY_CHOOSE,0,s.connected && !s.loading);
+    if (carry.active || carry.error[0])
+        pro_control(f,480,614,208,70,PRO_TR("Drop"),A_CARRY_DROP,0,true);
 }
 
 static void pro_work_intent(ht_scene_t *f)
@@ -622,6 +626,20 @@ static void pro_read_text(ht_scene_t *f, const char *value, int y, int rows)
 
 static void pro_reader(ht_scene_t *f)
 {
+    ht_scene_clear(f,color(0x101019));
+    ht_pro_rect(f,12,12,696,684,48,color(0xfff8e9));
+    if (!s.reader.controls) {
+        const char *words=s.reader.text[0]?s.reader.text:PRO_TR("No saved summary.");
+        int total=ht_pro_text_rows(words,&ht_pro_32,608),rows=14;
+        int last=total>rows?total-rows:0;
+        if(s.offset>last)s.offset=last;
+        if(s.offset<0)s.offset=0;
+        int shown=total-s.offset;if(shown>rows)shown=rows;
+        int y=(720-shown*ht_pro_32.height)/2;if(y<44)y=44;
+        ht_pro_wrap(f,56,y,608,rows,s.offset,&ht_pro_32,FG,words);
+        pro_hit(0,0,720,720,A_READER_BACK,0,true);
+        return;
+    }
     pro_heading(f, PRO_TR("Summary"), A_READER_BACK);
     int recipient = find(s.reader_agent);
     agent_t *a = recipient >= 0 ? &s.agents[recipient] : NULL;
