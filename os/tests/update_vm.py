@@ -17,6 +17,22 @@ from vm import VM, check_graphical_keyboard
 import session_update_vm
 
 
+def network_state(vm, name):
+    """Retain the real device state without repairing or reactivating it."""
+    state = {}
+    for command in [
+        'nmcli general status', 'nmcli networking', 'nmcli device show',
+        'nmcli -f NAME,UUID,TYPE,DEVICE,AUTOCONNECT connection show',
+        'ip -details link', 'ip address', 'ip route',
+        'sudo -n cat /var/lib/NetworkManager/NetworkManager.state',
+        'sudo -n journalctl -b -u NetworkManager -u systemd-logind -u systemd-suspend --no-pager',
+        'sudo -n journalctl -b -k --no-pager',
+    ]:
+        output, status = vm.command(command, timeout=15, check=False)
+        state[command] = {'status': status, 'output': output}
+    (vm.folder / (name + '-network.json')).write_text(json.dumps(state, indent=2) + '\n')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--iso', type=Path, required=True)
@@ -108,7 +124,9 @@ def main():
         receipt['checks'].append('Updated encrypted machine reboots to hn, accepts physical-keyboard input and retains the project')
         if session_tools:
             vm.command('printf %s ' + shlex.quote(config['password'] + '\n') + ' | sudo -S -v')
+            network_state(vm, 'before-session')
             session_update_vm.exercise(vm, config, receipt['session_dependencies'])
+            network_state(vm, 'after-session')
         if args.fast_fixture:
             vm.command('printf %s ' + shlex.quote(config['password'] + '\n') + ' | sudo -S -v')
             from fast_update_vm import exercise
@@ -133,6 +151,7 @@ def main():
             # Collect diagnostics after the failed assertion. The actual update
             # test cleared credentials; never block its error path on a prompt.
             vm.command('printf %s ' + shlex.quote(config['password'] + '\n') + ' | sudo -S -v')
+            network_state(vm, 'failure')
             output, _ = vm.command('sudo -n journalctl _UID=1000 --no-pager; '
                 'sudo -n cat /var/lib/harness-os/runtime-updates/*/receipt.json; '
                 'tail -n 100 /var/log/pacman.log; hn capture-pane -p -S -200 -t Updates; '
