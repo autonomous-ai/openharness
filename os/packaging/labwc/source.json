@@ -8,5 +8,5 @@
   "arch_snapshot": "2026/10/01",
   "scope": "PC and Intel Mac compositor owned by the Harness OS package",
   "patch": "session-lock-presentation.patch",
-  "patch_sha256": "ccf65af37b94a067099a8dfb51654fdab7c6f51273d240da84205a0c5a1642b1"
+  "patch_sha256": "e911639c8b7d8eef1a2d75ff623587df3e78455905c5f6a5c1c0b0fcc689e2fb"
 }

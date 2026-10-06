@@ -107,6 +107,23 @@ main(void)
 	present(&f, 1, 5, true);
 	assert(acknowledgements == 1);
 
+	/* A late presentation from before a power change is no longer proof
+	 * that the newly enabled output displays a protected frame. */
+	setup(&f);
+	commit(&f, 1, 5, WLR_OUTPUT_STATE_BUFFER);
+	f.displays[1].enabled = false;
+	commit(&f, 1, 6, WLR_OUTPUT_STATE_ENABLED);
+	f.displays[1].enabled = true;
+	commit(&f, 1, 7, WLR_OUTPUT_STATE_ENABLED);
+	present(&f, 1, 5, true);
+	assert(!f.locks[1].locked_frame_presented);
+	commit(&f, 0, 8, WLR_OUTPUT_STATE_BUFFER);
+	present(&f, 0, 8, true);
+	assert(acknowledgements == 0);
+	commit(&f, 1, 9, WLR_OUTPUT_STATE_BUFFER);
+	present(&f, 1, 9, true);
+	assert(acknowledgements == 1);
+
 	/* Equality remains correct across the 32-bit commit sequence wrap. */
 	setup(&f);
 	f.displays[1].enabled = false;

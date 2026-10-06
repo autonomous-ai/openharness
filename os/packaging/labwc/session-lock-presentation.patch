@@ -70,12 +70,13 @@
  }
  
  static void
-@@ -185,6 +207,28 @@
+@@ -185,6 +207,29 @@
  	if (event->state->committed & require_reconfigure) {
  		lock_output_reconfigure(output);
  	}
 +	if (event->state->committed & WLR_OUTPUT_STATE_ENABLED) {
 +		output->locked_frame_presented = false;
++		output->frame_pending = false;
 +	}
 +	if ((event->state->committed & WLR_OUTPUT_STATE_BUFFER)
 +			&& !output->locked_frame_presented) {
@@ -99,7 +100,7 @@
  }
  
  static void
-@@ -194,14 +238,6 @@
+@@ -194,14 +239,6 @@
  	wlr_output_layout_get_box(server.output_layout,
  		output->wlr_output, &box);
  	wlr_scene_node_set_position(&output->session_lock_tree->node, box.x, box.y);
@@ -114,7 +115,7 @@
  }
  
  void
-@@ -223,17 +259,7 @@
+@@ -223,17 +260,7 @@
  	float black[4] = { 0.f, 0.f, 0.f, 1.f };
  	struct wlr_scene_rect *background = lab_wlr_scene_rect_create(tree, 0, 0, black);
  
@@ -133,7 +134,7 @@
  
  	align_session_lock_tree(output);
  
-@@ -247,6 +273,8 @@
+@@ -247,6 +274,8 @@
  
  	lock_output->commit.notify = handle_output_commit;
  	wl_signal_add(&output->wlr_output->events.commit, &lock_output->commit);
@@ -142,7 +143,7 @@
  
  	lock_output_reconfigure(lock_output);
  
-@@ -256,6 +284,7 @@
+@@ -256,6 +285,7 @@
  static void
  session_lock_destroy(struct session_lock_manager *manager)
  {
@@ -150,7 +151,7 @@
  	struct session_lock_output *lock_output, *next;
  	wl_list_for_each_safe(lock_output, next, &manager->lock_outputs, link) {
  		wlr_scene_node_destroy(&lock_output->tree->node);
-@@ -301,6 +330,7 @@
+@@ -301,6 +331,7 @@
  	wl_list_remove(&manager->lock_unlock.link);
  	wl_list_remove(&manager->lock_new_surface.link);
  	manager->lock = NULL;
@@ -158,7 +159,7 @@
  }
  
  static void
-@@ -342,7 +372,8 @@
+@@ -342,7 +373,8 @@
  
  	manager->locked = true;
  	manager->lock = lock;
