@@ -71,7 +71,7 @@ export function attachTeams<T extends BackendSocket>(socket: T): T & TeamFixture
       },
     },
     clients: {
-      viewerChanged: () => {}, gridNamed: () => {}, gridModelsChanged: () => {}, dshInstallStatus: () => {},
+      viewerChanged: () => {}, viewerFrame: () => false, gridNamed: () => {}, gridModelsChanged: () => {}, dshInstallStatus: () => {},
       windows: (frame) => socket.sendLocal(frame),
       observer: () => false,
       ...UNASKED.clients,

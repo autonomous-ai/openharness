@@ -245,6 +245,7 @@ describe('the core API models runs on in its own process', () => {
     expect(api.external.open.known()).toEqual(new Map())
     expect(await api.external.open.fresh()).toEqual(new Map())
     api.clients.viewerChanged('a1')
+    expect(api.clients.viewerFrame('c1', 'viewer_data', {})).toBe(false)
     api.clients.dshInstallStatus({})
     api.clients.windows({ type: 'orchestrator_changed', payload: {} })
     expect(api.clients.observer('observer:x', 'observer_frame', {})).toBe(false)

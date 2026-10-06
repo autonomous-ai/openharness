@@ -69,7 +69,7 @@ export function fakeCore(over: Overrides = {}): CoreApi {
       ...over.account,
     },
     clients: {
-      viewerChanged: vi.fn(), gridNamed: vi.fn(), gridModelsChanged: vi.fn(), dshInstallStatus: vi.fn(), windows: vi.fn(), observer: vi.fn(() => true),
+      viewerChanged: vi.fn(), viewerFrame: vi.fn(() => false), gridNamed: vi.fn(), gridModelsChanged: vi.fn(), dshInstallStatus: vi.fn(), windows: vi.fn(), observer: vi.fn(() => true),
       sendLocal: vi.fn(), sendToWindow: vi.fn(() => true), hasWindow: vi.fn(() => true), devicesChanged: vi.fn(), dialWatching: vi.fn(),
       ...over.clients,
     },

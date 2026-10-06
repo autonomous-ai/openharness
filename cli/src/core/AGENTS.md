@@ -40,7 +40,8 @@ questions. Everything else is a service ([../services/AGENTS.md](../services/AGE
   `../services/inline.ts`, and only when one runs in this process instead.
 - `api.ts`: the contract with services, their ports, fallbacks and requests. `serviceHost.ts`: services
   in this process. `serviceLinks.ts`: services in their own processes. `viewersLink.ts`: what the core
-  keeps of the viewers when they run in theirs. `workspacesLink.ts`: what the core tells workspaces in
+  keeps of the viewers when they run in theirs. `viewerStreams.ts`: a client's viewer stream and rendered
+  frames, handed to the viewers, and refused at once while they are down. `workspacesLink.ts`: what the core tells workspaces in
   theirs. `teamsLink.ts`: every change to the teams' prompt scopes, kept until their process has it once Tab
   collaboration is on, which of its deliveries may be written, and the scopes' own two questions.
   `monitorLink.ts`: the monitor's port, asked of its process. `storeLink.ts`: what the Store in its

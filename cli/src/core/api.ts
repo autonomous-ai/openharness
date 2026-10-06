@@ -33,6 +33,7 @@ import type { ExternalSessions, OpenSessions } from '../lib/sessionSearch/extern
 import type { SessionSearchIndex } from '../lib/sessionSearch/indexer.js'
 import type { StoppedAgentStore } from '../lib/stoppedAgents.js'
 import type { TerminalBinaryClear } from '../lib/terminalBinary.js'
+import { VIEWER_UP_TYPES } from '../lib/viewerFrames.js'
 import type { RouteAnswer } from '../localWsServer.js'
 import type { SwarmPromptScopes } from '../teams/promptScope.js'
 import type { DeviceInputStatus } from './deviceInput.js'
@@ -197,6 +198,10 @@ export interface CoreApi {
   clients: {
     /** An agent's viewer moved: the windows' viewer panes forward to the new one. */
     viewerChanged(agentId: string): void
+    /** A frame of a viewer stream for the one connection that opened it (`viewer_response`, `viewer_data`,
+     *  `viewer_ack`, `viewer_end`, `viewer_close`): false when it cannot reach that connection. Only those
+     *  types; the core drops any other. */
+    viewerFrame(connId: string, type: string, payload: Record<string, unknown>): boolean
     /** The account's grid has a name: the models picker answers with it at once. */
     gridNamed(name: string): void
     /** What the models picker lists may have changed (a local model started or stopped, grid set up):
@@ -527,12 +532,26 @@ export interface ViewersPort {
   forwardingUrl(agentId: string): string | null
   /** Stop every viewer and watch, for a restart or a shutdown. */
   stop(): Promise<void>
+  /** A client's frame of a viewer stream (`viewer_request`, `viewer_data`, …), from the connection `connId`:
+   *  how a client that cannot reach this machine's loopback (a phone, another machine's window) is served
+   *  a viewer. False when the viewers did not take it. */
+  stream(connId: string, type: string, payload: Record<string, unknown>): boolean
+  /** A client's `viewer_surface`: a frame of a viewer rendered for it by a headless browser, or why not. */
+  surface(connId: string, payload: Record<string, unknown>): Promise<Record<string, unknown>>
+  /** A client's connection ended (`connId`), or every one did (none: the link went down, or the socket is
+   *  stopping): its viewer streams and surfaces close. */
+  closed(connId?: string): void
 }
 
+/** What a client is told for a surface the viewers cannot render while they are off or failing. */
+export const VIEWERS_UNAVAILABLE = { error: 'SERVICE_UNAVAILABLE', service: 'viewers', retryable: true }
+
 /** What the core gets when the viewers fail: agents' frames carry no DSH context and the windows
- *  no viewer, and a restart or shutdown goes on. */
+ *  no viewer, a client's viewer stream is refused at once (core/viewerStreams.ts) and its surface
+ *  answered unavailable, and a restart or shutdown goes on. */
 export const VIEWERS_FALLBACKS: PortFallbacks<ViewersPort> = {
   attach: undefined, detach: undefined, frameContext: null, forwardingUrl: null, stop: later(undefined),
+  stream: false, surface: later(VIEWERS_UNAVAILABLE), closed: undefined,
 }
 
 /**
@@ -1131,6 +1150,7 @@ export interface CoreApiDeps {
   syncSession: CoreApi['agents']['sync']
   runtimeModels: CoreApi['agents']['runtimeModels']
   viewerChanged: CoreApi['clients']['viewerChanged']
+  viewerFrame: CoreApi['clients']['viewerFrame']
   gridNamed: CoreApi['clients']['gridNamed']
   gridModelsChanged: CoreApi['clients']['gridModelsChanged']
   dshInstallStatus: CoreApi['clients']['dshInstallStatus']
@@ -1172,7 +1192,7 @@ export interface CoreApiDeps {
 export function createCoreApi({
   dataDir, registry, stoppedAgents, databaseHistory, externalSessions, openSessions, syncSession, runtimeModels, viewerChanged,
   gridNamed, gridModelsChanged, dshInstallStatus, mintGridName, accessToken, lane, observerKey, observer, privateGridName, machineName, backend, onNotice,
-  runtimeProfile, setRuntime, fork, create, dsh, windows, daemon, turns, questions, terminals = TERMINALS_OFF, machine, activityText,
+  runtimeProfile, setRuntime, fork, create, dsh, windows, daemon, turns, questions, terminals = TERMINALS_OFF, viewerFrame, machine, activityText,
   signedIn, environment, machines, sendLocal, sendToWindow, hasWindow, devicesChanged, dialWatching, wifi, log = (line) => console.warn(line),
 }: CoreApiDeps): CoreApi {
   // The devices reach the windows through these alone, and only with their own frames: a devices process
@@ -1208,6 +1228,9 @@ export function createCoreApi({
     account: { mintGridName, accessToken, lane, observerKey, privateGridName, machineName, backend, onNotice, signedIn, environment, machines },
     clients: {
       viewerChanged, gridNamed, gridModelsChanged, dshInstallStatus, windows, observer, hasWindow, devicesChanged, dialWatching,
+      // A viewers process speaks to the core as a service: what it may send a client is a viewer stream's
+      // frame, decided here, never whatever it names.
+      viewerFrame: (connId, type, payload) => VIEWER_UP_TYPES.has(type) && viewerFrame(connId, type, payload),
       sendLocal: (frame) => {
         if (windowFrames.has(frame?.type)) sendLocal(frame)
         else refused(frame?.type)
