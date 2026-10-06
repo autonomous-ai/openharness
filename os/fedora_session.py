@@ -179,7 +179,10 @@ class Setup:
 
     def preflight(self, user):
         release = self.path('etc/os-release').read_text()
-        if (platform.machine() != 'aarch64' or not re.search(r'^ID=[\"\']?fedora[\"\']?$', release, re.MULTILINE) or
+        # The maintained Asahi image identifies itself as fedora-asahi-remix.
+        # Accept these two explicit identities, not every ID_LIKE=fedora system.
+        fedora = re.search(r'''^ID=(["']?)(fedora|fedora-asahi-remix)\1$''', release, re.MULTILINE)
+        if (platform.machine() != 'aarch64' or not fedora or
                 json.loads(self.path('usr/share/harness-os/runtime.json').read_text()).get('system_profile') != 'fedora'):
             raise SetupError('This setup is only for the native Fedora ARM session package.')
         for binary in ('usr/bin/greetd', 'usr/bin/agreety', 'usr/bin/harness-session', 'usr/sbin/visudo'):
