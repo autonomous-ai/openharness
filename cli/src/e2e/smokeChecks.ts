@@ -1,7 +1,7 @@
 /**
  * smokeChecks — the scenario: what a person does with a coding tool, on its own account and then on
- * a grid model in the same session: read a file, create one, edit one, delete one, use an MCP
- * server. Five plain requests per side — worded the way a person types them, no reply formats.
+ * a grid model in the same session: read a file, create one, edit one, use an MCP server. Four
+ * plain requests per side — worded the way a person types them, no reply formats.
  *
  * Every step is proven by something the model cannot produce by talking:
  *
@@ -10,8 +10,7 @@
  *           pane after the question means the file was read; nobody guesses `kiwi-4821-tulip`
  *   write   the file exists on disk with exactly the requested text
  *   edit    the file on disk changed the requested word, and only that
- *   delete  the file is gone from disk
- *   mcp     own account: the workspace's MCP server logs the call for EXACTLY these numbers
+ *   mcp    own account: the workspace's MCP server logs the call for EXACTLY these numbers
  *           (.e2e/calc-mcp.log)
  *   web     grid: the web search the harness gives every agent on a grid (`mcp__harness__web_search`,
  *           gridWebMcp.ts) was called and came back with results — read from the engine's session
@@ -24,6 +23,10 @@
  * No shell step (dropped 2026-10-06): the file steps already go through the engine's shell where the
  * engine works that way (codex reads and writes through `exec_command`), and a script of our own
  * proved nothing a person's file work does not.
+ *
+ * No delete step either (dropped the same day it was added): codex counts `rm -f` as dangerous and
+ * asks for approval (codex-rs shell-command is_dangerous_command.rs), so the step passed or failed on
+ * whether the model happened to type `-f`, not on the switch.
  *
  * Memory across the switch is deliberately not a step (dropped 2026-09-24): its only honest proof
  * would be a fact that exists nowhere but the conversation, and the question is whether the tools
@@ -38,7 +41,7 @@ export const LEGS: readonly Leg[] = ['subscription', 'grid']
 /** Which log a step must leave a line in: the MCP server's (`workspace.ts`). */
 export type LogKind = 'mcp'
 
-export type CheckId = 'read' | 'write' | 'edit' | 'delete' | 'mcp' | 'web'
+export type CheckId = 'read' | 'write' | 'edit' | 'mcp' | 'web'
 
 /** The harness's web search on a grid, as the engines name it (`harnessWebTools.ts`). */
 export const WEB_SEARCH_TOOL = 'mcp__harness__web_search'
@@ -52,8 +55,8 @@ export interface SmokeCheck {
   logPattern?: string
   /** read: a workspace file whose (per-run, random) content must show up after the prompt. */
   answerFromFile?: string
-  /** write / edit / delete: what the workspace file must look like when the step is done. */
-  file?: { path: string; equals?: string; contains?: string; lacks?: string; absent?: true }
+  /** write / edit: what the workspace file must look like when the step is done. */
+  file?: { path: string; equals?: string; contains?: string; lacks?: string }
   /** web: the engine's tool that must have been called for this step and come back with results. */
   sessionTool?: string
   /** What a miss usually means — the watchdog's first hypothesis, not its conclusion. */
@@ -64,14 +67,13 @@ const MISS = {
   read: 'the file was not read: the read tool (or the shell read) fails on this leg — the answer never showed the file\'s token',
   write: 'the file was not created with the requested text: the write tool fails on this leg (codex: apply_patch Add File; claude: Write)',
   edit: 'the file was not changed as asked: the edit tool fails on this leg (codex: apply_patch Update File; claude: Edit)',
-  delete: 'the file is still there: the shell (codex: exec_command rm; claude: Bash rm) fails on this leg, or it said it deleted without doing it',
   mcp: 'the MCP server was not called: the respawn dropped the MCP config, the resumed session did not reload servers, or it answered without calling it (no log line)',
   web: 'the web search was not called, or came back without results: the harness web MCP was not given to the engine on the grid, the engine could not read the tool (a namespace tool on llama.cpp / LM Studio), or it answered from its head',
 }
 
 /**
  * Plain requests, the way a person types them, and the same for every engine. A step passes on its
- * RESULT — the file really read, written, edited, deleted; the MCP server really called — never on
+ * RESULT — the file really read, written, edited; the MCP server really called — never on
  * which of the engine's file tools got it there. Which tools it used (claude `Read` or
  * `Bash cat`, codex `apply_patch` or a shell write) is read back from the session file and REPORTED
  * (sessionTools.ts, the message's Tools line), never judged: an engine is free to reach a result its
@@ -86,11 +88,10 @@ const files = (n: 1 | 2): SmokeCheck[] => [
   { id: 'read', prompt: `Read notes/info-${n}.txt and tell me what it says.`, answerFromFile: `notes/info-${n}.txt`, onMiss: MISS.read },
   { id: 'write', prompt: `Create the file out/hello-${n}.txt with this text: hello from step ${n}`, file: { path: `out/hello-${n}.txt`, equals: `hello from step ${n}` }, onMiss: MISS.write },
   { id: 'edit', prompt: `In notes/todo-${n}.txt, change pending to done.`, file: { path: `notes/todo-${n}.txt`, contains: 'status: done', lacks: 'pending' }, onMiss: MISS.edit },
-  { id: 'delete', prompt: `Delete the file notes/old-${n}.txt.`, file: { path: `notes/old-${n}.txt`, absent: true }, onMiss: MISS.delete },
 ]
 
 /**
- * The four file requests on each side (own files per side, so nothing carries over), then an MCP
+ * The three file requests on each side (own files per side, so nothing carries over), then an MCP
  * call: the workspace's own server on the tool's account, the harness's web search on the grid —
  * the MCP a person on a grid actually has, and the one codex 0.160's namespace tools broke on
  * llama.cpp (autonomous-grid-cli#41). The own account has no harness web MCP (it is given only on a

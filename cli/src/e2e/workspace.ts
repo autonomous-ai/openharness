@@ -1,12 +1,11 @@
 /**
  * workspace — the folder the test agent is created in, laid out like a person's real project:
- * the notes the file steps read, edit and delete, an MCP server registered for the engine
+ * the notes the file steps read and edit, an MCP server registered for the engine
  * (`e2e_calc`), and the log it writes to. The scenario (`smokeChecks.ts`) names them; the probe
  * reads the files and the log.
  *
  *   <cwd>/notes/info-N.txt           read: a token made fresh for this run
  *   <cwd>/notes/todo-N.txt           edit: `status: pending`
- *   <cwd>/notes/old-N.txt            delete
  *   <cwd>/tools/calc-mcp.mjs         the MCP server
  *   <cwd>/.mcp.json                  claude: project-level MCP server
  *   ~/.codex/config.toml             codex: registered with `codex mcp add` — see below
@@ -102,7 +101,7 @@ export const CALC_MCP_TOOLS = ['add', 'sub'] as const
 
 /**
  * What a person using claude in this project has long since answered "Yes, and don't ask again"
- * to: the file tools, reading and deleting a file through the shell, the project's MCP server and
+ * to: the file tools, reading a file through the shell, the project's MCP server and
  * the harness's web search on a grid — kept by claude in the project's `.claude/settings.json`
  * (`permissions.allow`), with the `.mcp.json` server approved in the same file
  * (`enabledMcpjsonServers`). Measured on claude 2.1.274 + Haiku in `auto`: without it a shell step
@@ -114,7 +113,7 @@ export function allowClaudeProjectTools(cwd: string): void {
     permissions: {
       allow: [
         'Read', 'Write', 'Edit',
-        'Bash(cat:*)', 'Bash(rm:*)',
+        'Bash(cat:*)',
         `mcp__${MCP_SERVER_NAME}`,
         'mcp__harness',
       ],
@@ -198,7 +197,7 @@ export function prepareWorkspace(cwd: string, engine: string, opts: { codexBin?:
   mkdirSync(join(cwd, '.e2e'), { recursive: true })
   writeFileSync(logPath(cwd, 'mcp'), '', { flag: 'a' })
 
-  // read / write / edit / delete (smokeChecks.ts): one set of files per side, so the grid side can never pass
+  // read / write / edit (smokeChecks.ts): one set of files per side, so the grid side can never pass
   // (named `info-N.txt`, not `secret-N.txt`: gpt-6-luna refused outright to read a file called
   // "secret" — "I can't provide the contents of a file named notes/secret-1.txt" — and a test that
   // provokes a refusal measures the refusal, not the switch)
@@ -209,7 +208,6 @@ export function prepareWorkspace(cwd: string, engine: string, opts: { codexBin?:
   for (const n of [1, 2]) {
     writeFileSync(join(cwd, 'notes', `info-${n}.txt`), `${freshToken()}\n`)
     writeFileSync(join(cwd, 'notes', `todo-${n}.txt`), `# todo ${n}\nstatus: pending\n`)
-    writeFileSync(join(cwd, 'notes', `old-${n}.txt`), `# old notes ${n}, no longer needed\n`)
   }
 
   // The MCP server runs from the workspace too, so the engine's config points at a path that exists

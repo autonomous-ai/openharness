@@ -193,12 +193,12 @@ describe('matrix entry (dry run)', () => {
 })
 
 describe('scenario (what a person does, on each side of the switch)', () => {
-  it('five plain requests on each side — read, write, edit, delete, then MCP — with nothing shared', () => {
+  it('four plain requests on each side — read, write, edit, then MCP — with nothing shared', () => {
     expect(LEGS).toEqual(['subscription', 'grid'])
     // The own account calls the workspace's MCP server; the grid, the harness's web search.
-    expect(SCENARIO.subscription.map((c) => c.id)).toEqual(['read', 'write', 'edit', 'delete', 'mcp'])
-    expect(SCENARIO.grid.map((c) => c.id)).toEqual(['read', 'write', 'edit', 'delete', 'web'])
-    expect(SCENARIO.grid[4].sessionTool).toBe('mcp__harness__web_search')
+    expect(SCENARIO.subscription.map((c) => c.id)).toEqual(['read', 'write', 'edit', 'mcp'])
+    expect(SCENARIO.grid.map((c) => c.id)).toEqual(['read', 'write', 'edit', 'web'])
+    expect(SCENARIO.grid[3].sessionTool).toBe('mcp__harness__web_search')
     // Nothing the first side leaves behind can pass the second: its own numbers and its own files.
     const patterns = SMOKE_CHECKS.filter((c) => c.logPattern).map((c) => c.logPattern)
     expect(new Set(patterns).size).toBe(patterns.length)
@@ -266,7 +266,7 @@ function fakeLogs() {
 
 /**
  * A fake coding tool on a fake machine: it does what each request asks — reads the file, writes
- * it, edits it, deletes it, calls the MCP server (a log line), searches the web (a result in its
+ * it, edits it, calls the MCP server (a log line), searches the web (a result in its
  * session, as `toolResult` would read it). With `lie`, it only SAYS it did those steps, which is the
  * case the proofs exist for; with `empty`, its web search comes back with nothing.
  */
@@ -274,7 +274,6 @@ function fakeAgent(opts: { lie?: CheckId[]; empty?: boolean } = {}) {
   const files: Record<string, string> = {
     'notes/info-1.txt': 'kiwi-4821-tulip\n', 'notes/info-2.txt': 'otter-1234-ember\n',
     'notes/todo-1.txt': '# todo 1\nstatus: pending\n', 'notes/todo-2.txt': '# todo 2\nstatus: pending\n',
-    'notes/old-1.txt': '# old notes 1\n', 'notes/old-2.txt': '# old notes 2\n',
   }
   const logs = fakeLogs()
   const searched: Record<string, string> = {}
@@ -282,10 +281,6 @@ function fakeAgent(opts: { lie?: CheckId[]; empty?: boolean } = {}) {
   const reply = (p: string): string | null => {
     let m: RegExpMatchArray | null
     if ((m = p.match(/Read (notes\/info-\d\.txt)/))) return lie.has('read') ? 'It says hello.' : `It says: ${files[m[1]].trim()}`
-    if ((m = p.match(/Delete the file (\S+)\. \(ref-/))) {
-      if (!lie.has('delete')) delete files[m[1]]
-      return 'Deleted.'
-    }
     if ((m = p.match(/Search the web .*\((ref-[0-9a-z]{6})\)/))) {
       if (!lie.has('web')) searched[m[1]] = opts.empty ? 'No results.' : 'Node.js 24.11.0 — https://nodejs.org/en/download'
       return 'The latest stable Node.js is 24.11.0.'
@@ -314,21 +309,19 @@ function fakeAgent(opts: { lie?: CheckId[]; empty?: boolean } = {}) {
 }
 
 const READ_STEP = SCENARIO.subscription[0]
-const MCP_STEP = SCENARIO.subscription[4]
-const WEB_STEP = SCENARIO.grid[4]
+const MCP_STEP = SCENARIO.subscription[3]
+const WEB_STEP = SCENARIO.grid[3]
 
 describe('pane probe (live steps on a tmux pane)', () => {
-  it('a tool that really does the five requests passes both sides, and each proof is recorded', async () => {
+  it('a tool that really does the four requests passes both sides, and each proof is recorded', async () => {
     const { pane, probe, files } = fakeAgent()
     const own = await probeLeg(pane, '%1', 'subscription', probe)
     const grid = await probeLeg(pane, '%1', 'grid', probe)
-    expect(own.checks.map((c) => `${c.id}=${c.status}`)).toEqual(['read=ok', 'write=ok', 'edit=ok', 'delete=ok', 'mcp=ok'])
-    expect(grid.checks.map((c) => `${c.id}=${c.status}`)).toEqual(['read=ok', 'write=ok', 'edit=ok', 'delete=ok', 'web=ok'])
-    expect(own.checks[4].logLines).toEqual(['t add 30 12 = 42'])
+    expect(own.checks.map((c) => `${c.id}=${c.status}`)).toEqual(['read=ok', 'write=ok', 'edit=ok', 'mcp=ok'])
+    expect(grid.checks.map((c) => `${c.id}=${c.status}`)).toEqual(['read=ok', 'write=ok', 'edit=ok', 'web=ok'])
+    expect(own.checks[3].logLines).toEqual(['t add 30 12 = 42'])
     expect(files['out/hello-2.txt']).toBe('hello from step 2\n')
     expect(files['notes/todo-1.txt']).toContain('status: done')
-    expect(files['notes/old-1.txt']).toBeUndefined()
-    expect(files['notes/old-2.txt']).toBeUndefined()
     // Every step carries the tag its prompt was typed with — how its tools are found afterwards.
     expect([...own.checks, ...grid.checks].every((c) => /^ref-[0-9a-z]{6}$/.test(c.ref ?? ''))).toBe(true)
   })
@@ -338,7 +331,6 @@ describe('pane probe (live steps on a tmux pane)', () => {
       read: /notes\/info-1\.txt's token never appeared/,
       write: /out\/hello-1\.txt does not exist/,
       edit: /notes\/todo-1\.txt is "# todo 1\\nstatus: pending"/,
-      delete: /notes\/old-1\.txt still exists/,
       mcp: /no mcp log line for "add 30 12 = 42"/,
       web: /mcp__harness__web_search was never called/,
     }
@@ -410,7 +402,7 @@ describe('pane probe (live steps on a tmux pane)', () => {
   it('out of usage ends the leg: nothing more is typed into an account that cannot answer', async () => {
     const pane = fakePane(() => "You've hit your usage limit. try again at 6:02 PM.")
     const leg = await probeLeg(pane, '%1', 'subscription', { settleMs: 1, pollMs: 1, readFile: () => 'kiwi-4821-tulip\n' })
-    expect(leg.checks.map((c) => `${c.id}=${c.status}`)).toEqual(['read=no-quota', 'write=not-run', 'edit=not-run', 'delete=not-run', 'mcp=not-run'])
+    expect(leg.checks.map((c) => `${c.id}=${c.status}`)).toEqual(['read=no-quota', 'write=not-run', 'edit=not-run', 'mcp=not-run'])
     expect(pane.typed).toHaveLength(1)
     expect(quotaHit([leg])).toEqual({ leg: 'subscription', check: 'read', resets: 'try again at 6:02 PM' })
   })
@@ -454,7 +446,7 @@ describe('pane probe (live steps on a tmux pane)', () => {
   it('a step that is not proven stops the leg there: nothing more is typed after it', async () => {
     const { pane, probe } = fakeAgent({ lie: ['write'] })
     const leg = await probeLeg(pane, '%1', 'subscription', { ...probe, checkTimeoutMs: 5 })
-    expect(leg.checks.map((c) => `${c.id}=${c.status}`)).toEqual(['read=ok', 'write=stuck', 'edit=not-run', 'delete=not-run', 'mcp=not-run'])
+    expect(leg.checks.map((c) => `${c.id}=${c.status}`)).toEqual(['read=ok', 'write=stuck', 'edit=not-run', 'mcp=not-run'])
     expect(pane.typed).toHaveLength(2)
   })
 
@@ -618,12 +610,11 @@ describe('workspace (the person\'s project the agent is created in)', () => {
       const codexConfig = join(cwd, 'codex-config.toml')
       writeFileSync(codexConfig, 'model = "gpt-6-luna"\n')
       const laid = prepareWorkspace(cwd, 'codex', { codexBin, codexConfig })
-      // The file steps' files: a fresh unguessable secret per side, a todo to edit, a note to delete.
+      // The file steps' files: a fresh unguessable secret per side, a todo to edit.
       const secrets = [1, 2].map((n) => readWorkspaceFile(cwd, `notes/info-${n}.txt`)?.trim() ?? '')
       for (const t of secrets) expect(t).toMatch(/^[a-z]+-\d{4}-[a-z]+$/)
       expect(secrets[0]).not.toBe(secrets[1])
       expect(readWorkspaceFile(cwd, 'notes/todo-1.txt')).toContain('status: pending')
-      for (const n of [1, 2]) expect(readWorkspaceFile(cwd, `notes/old-${n}.txt`)).not.toBeNull()
       expect(existsSync(join(cwd, 'out'))).toBe(true)
       expect(readWorkspaceFile(cwd, 'out/hello-1.txt')).toBeNull() // written by the step, never by us
       // Fresh per run: two workspaces never share a secret.
@@ -664,7 +655,7 @@ describe('workspace (the person\'s project the agent is created in)', () => {
       expect(claude.mcpConfig).toBe(join(cwd, '.mcp.json'))
       // …and the project settings a person who said "don't ask again" has: the steps' tools allowed.
       const settings = JSON.parse(readFileSync(join(cwd, '.claude', 'settings.json'), 'utf8'))
-      expect(settings.permissions.allow).toEqual(expect.arrayContaining(['Write', 'Edit', 'Bash(rm:*)', 'mcp__e2e_calc', 'mcp__harness']))
+      expect(settings.permissions.allow).toEqual(expect.arrayContaining(['Write', 'Edit', 'mcp__e2e_calc', 'mcp__harness']))
       expect(settings.enabledMcpjsonServers).toEqual(['e2e_calc'])
     } finally {
       rmSync(cwd, { recursive: true, force: true })
