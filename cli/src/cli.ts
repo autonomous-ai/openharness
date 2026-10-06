@@ -2505,6 +2505,9 @@ switch (cmd) {
       error: (line) => console.error(line),
     }).then((code) => { process.exitCode = code }).catch(onError)
     break
+  case 'shell-launch':
+    import('./shellLaunch.js').then(({ shellLaunch }) => shellLaunch(rest)).then((code) => { process.exitCode = code }).catch(onError)
+    break
   case 'tui':
     tuiCommand(rest, { port: env.PORT, dataDir: env.ADAPTER_DATA_DIR, identity: wantedDaemonIdentity }).then((code) => { process.exitCode = code }).catch(onError)
     break

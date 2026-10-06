@@ -4,7 +4,7 @@ import { emptyPorts, type CoreApi } from '../core/api.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import type { SessionSearchIndexOptions } from '../lib/sessionSearch/indexer.js'
 import { fakeCore } from '../testing/fakeCore.js'
-import { SessionSearchStore, SESSION_SEARCH_FILE } from '../lib/sessionSearch/store.js'
+import { SESSION_SEARCH_FILE, SessionSearchStore } from '../lib/sessionSearch/store.js'
 import { SEARCH_REQUESTS, searchRequests, startSearch } from './search.js'
 
 vi.mock('../lib/sessionSearch/store.js', () => ({ SESSION_SEARCH_FILE: 'session-search.db', SessionSearchStore: { open: vi.fn() } }))
@@ -83,6 +83,23 @@ describe('the session search service', () => {
     })
   })
 
+  it('catalog metadata includes earlier native sessions, aliases, and current Harness titles and folders', () => {
+    const { index } = setup([
+      row({ sessionId: 'owned', cwd: '/work', title: 'My work' }),
+      row({ agentId: 'a2', sessionId: 'untitled', cwd: null, title: null }),
+      row({ sessionId: '' }),
+    ], [
+      { sessionId: 'native', aliases: ['alias'], title: 'Native work', cwd: '/native', origin: 'codex' },
+      { sessionId: 'owned', title: 'Old title', cwd: '/old', origin: 'codex' },
+    ])
+    expect([...index.opts.catalogMetadata!()]).toEqual([
+      ['native', { title: 'Native work', cwd: '/native', origin: 'codex' }],
+      ['alias', { title: 'Native work', cwd: '/native', origin: 'codex' }],
+      ['owned', { title: 'My work', cwd: '/work', origin: 'harness' }],
+      ['untitled', { title: 'name of a2', cwd: '', origin: 'harness' }],
+    ])
+  })
+
   describe('the requests it answers', () => {
     const index = () => {
       const searched: Array<[string, unknown]> = []
@@ -110,6 +127,19 @@ describe('the session search service', () => {
         ['x'.repeat(500), { limit: undefined, from: undefined, to: undefined }],
         ['', { limit: undefined, from: undefined, to: undefined }],
       ])
+    })
+
+    it('session_search: pages a bounded catalog cursor and identifies catalog replies', () => {
+      const { index: idx, searched } = index()
+      const requests = searchRequests(idx as never)
+      for (const cursor of ['', 'older-session']) {
+        expect(requests.session_search({ catalogAfter: cursor }, ASKER)).toMatchObject({ catalog: true })
+        expect(searched.at(-1)).toEqual(['', { limit: undefined, from: undefined, to: undefined, catalogAfter: cursor }])
+      }
+      for (const cursor of [false, 'x'.repeat(257)]) {
+        expect(requests.session_search({ catalogAfter: cursor }, ASKER)).not.toHaveProperty('catalog')
+        expect(searched.at(-1)?.[1]).not.toHaveProperty('catalogAfter')
+      }
     })
 
     it('session_tail: a session\'s rows, paged by whole numbers only, and says what it cannot', async () => {
