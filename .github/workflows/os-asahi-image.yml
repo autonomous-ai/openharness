@@ -87,7 +87,7 @@ jobs:
           sudo podman run --rm --privileged --arch arm64 \
             --mount "type=bind,source=$PWD,target=/source,readonly" \
             --mount "type=bind,source=$PWD/os/work/asahi-output,target=/output" \
-            -e PACKAGE_SOURCE "$BUILDER_IMAGE" /bin/bash -euo pipefail -c '
+            -e PACKAGE_SOURCE="$PACKAGE_SOURCE" "$BUILDER_IMAGE" /bin/bash -euo pipefail -c '
               manager=$(command -v dnf5 || command -v microdnf)
               "$manager" install -y --setopt=install_weak_deps=False --setopt=gpgcheck=True \
                 python3 git rpm kiwi kiwi-systemdeps-disk-images distribution-gpg-keys \
