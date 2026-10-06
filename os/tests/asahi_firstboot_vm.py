@@ -8,9 +8,11 @@ import argparse
 import json
 from pathlib import Path
 import platform
+import select
 import shutil
 import subprocess
 import sys
+import threading
 import time
 
 from arm_boot import digest
@@ -42,13 +44,39 @@ class ImageVM(SessionVM):
         (self.folder / 'command.json').write_text(json.dumps(command, indent=2) + '\n')
         self.process = subprocess.Popen(command, stdout=self.stderr, stderr=self.stderr)
         self.serial = self.connect('serial.sock')
+        # Firmware and kernel console writes can block QEMU's main loop if the
+        # observer only takes screenshots. Drain boot output while no login
+        # command is using the console, retaining all bytes in serial.log.
+        self.drain_stop = threading.Event()
+        def drain():
+            while not self.drain_stop.is_set():
+                if select.select([self.serial], [], [], .1)[0]:
+                    data = self.serial.recv(65536)
+                    if not data:
+                        return
+                    self.log.write(data)
+        self.drain_thread = threading.Thread(target=drain, daemon=True)
+        self.drain_thread.start()
         self.qmp = self.connect('qmp.sock')
         self.qmp.settimeout(10)
         self.qmp_file = self.qmp.makefile('rb', buffering=0)
         json.loads(self.qmp_file.readline())
         self.monitor('qmp_capabilities')
 
+    def stop_drain(self):
+        if hasattr(self, 'drain_stop'):
+            self.drain_stop.set()
+            self.drain_thread.join(timeout=2)
+            if self.drain_thread.is_alive():
+                raise RuntimeError('The boot console observer did not stop.')
+
+    def close(self):
+        self.stop_drain()
+        super().close()
+
     def authenticate(self):
+        self.stop_drain()
+        self.send('\n')  # Ask the existing getty to repeat its consumed prompt.
         self.wait('login:', timeout=120)
         self.send('me\n')
         self.wait('Password:', timeout=30)
