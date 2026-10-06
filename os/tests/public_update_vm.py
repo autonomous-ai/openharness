@@ -305,7 +305,7 @@ def main():
         # Its two-minute startup delay also has up to 30 seconds of random delay
         # and systemd's default one-minute timer accuracy window. Retain the
         # actual scheduling evidence; a three-minute wait can expire too early.
-        output, _ = vm.command('systemctl --user show harness-update.timer harness-update.service', check=False)
+        output, _ = vm.command('systemctl --user --no-pager show harness-update.timer harness-update.service', check=False)
         (folder / '15-update-units-before-wait.log').write_text(output)
         output, status = vm.command('for n in $(seq 1 600); do test ! -e ' + STATE +
                                    '/approved.json && exit 0; sleep .5; done; exit 1', timeout=305, check=False)
@@ -315,7 +315,7 @@ def main():
                       'for n in ["approved.json","check.json","system.json"]},indent=2))')
         output, _ = vm.command('python3 -c ' + shlex.quote(diagnostic))
         (folder / '17-update-completion-state.log').write_text(output)
-        output, _ = vm.command('systemctl --user show harness-update.timer harness-update.service', check=False)
+        output, _ = vm.command('systemctl --user --no-pager show harness-update.timer harness-update.service', check=False)
         (folder / '18-update-units-after-wait.log').write_text(output)
         if status:
             authenticate()
