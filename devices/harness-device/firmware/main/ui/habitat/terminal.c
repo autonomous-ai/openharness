@@ -538,8 +538,29 @@ bool ht_cell_sprite(ht_scene_t *s, int x, int y, const ht_cell_frame_t *f)
     memset(r, 0, sizeof *r);
     r->x = x; r->y = y; r->w = f->cols * f->cell; r->font = &ht_mono_16;
     r->sprite = (ht_sprite_t){.width = r->w, .height = f->rows * f->cell, .cells = f->cells,
-                              .palette = f->palette, .cell = f->cell};
+                              .palette = f->palette, .row_at = f->row_at, .cell = f->cell};
     return true;
+}
+// A frame's row `sy` (in cells) as `cols` palette indices: the plain grid's own row, or a packed row unpacked
+// into `buf`.
+static const uint8_t *cell_row(const uint8_t *cells, const uint16_t *row_at, int cols, int sy, uint8_t *buf)
+{
+    if (!row_at) return cells + (size_t)sy * cols;
+    const uint8_t *p = cells + row_at[sy];
+    for (int x = 0; x < cols;) {
+        int skip = *p++, n = *p++;
+        memset(buf + x, 0, (size_t)skip);
+        x += skip;
+        memcpy(buf + x, p, (size_t)n);
+        p += n; x += n;
+    }
+    return buf;
+}
+uint8_t ht_cell_at(const ht_cell_frame_t *f, int col, int row)
+{
+    uint8_t buf[256];
+    if (!f || col < 0 || row < 0 || col >= f->cols || row >= f->rows) return 0;
+    return cell_row(f->cells, f->row_at, f->cols, row, buf)[col];
 }
 bool ht_cell_sprite_zoom(ht_scene_t *s, int x, int y, const ht_cell_frame_t *f, unsigned zoom)
 {
@@ -1571,15 +1592,19 @@ static void sprite_raster(const ht_run_t *r, ht_rect_t clip, uint16_t *out)
         // Zoomed: in units where a frame pixel is `zoom` wide and a glass pixel 8, each glass pixel is the mean of the
         // frame pixels it overlaps, weighted by the overlap (a transparent one counts as the black ground).
         int cols=s->src_w/s->cell,z=s->zoom;
+        static uint8_t unpacked[9][256];   // the frame rows one glass row covers (8 / zoom + 1 at most)
         for(int y=top;y<bottom;y++){
             int v0=(y-r->y)*8,v1=v0+8;
             uint16_t *dst=out+(y-clip.y)*clip.w+left-clip.x;
+            const uint8_t *rows[9];
+            for(int sy=v0/z,k=0;sy*z<v1&&sy<s->src_h&&k<9;sy++,k++)
+                rows[k]=cell_row(s->cells,s->row_at,cols,sy/s->cell,unpacked[k]);
             for(int x=left;x<right;x++,dst++){
                 int u0=(x-r->x)*8,u1=u0+8;
                 unsigned rr=0,gg=0,bb=0,cover=0;
                 for(int sy=v0/z;sy*z<v1&&sy<s->src_h;sy++){
                     int wy=imin(v1,(sy+1)*z)-imax(v0,sy*z);
-                    const uint8_t *row=s->cells+(size_t)(sy/s->cell)*cols;
+                    const uint8_t *row=rows[sy-v0/z];
                     for(int sx=u0/z;sx*z<u1&&sx<s->src_w;sx++){
                         unsigned i=row[sx/s->cell];
                         if(!i)continue;
@@ -1597,8 +1622,9 @@ static void sprite_raster(const ht_run_t *r, ht_rect_t clip, uint16_t *out)
     if(s->cells){
         // Cells: a run of `cell` px per palette index, 0 leaves the frame as it is.
         int cols=s->width/s->cell;
+        static uint8_t unpacked[256];
         for(int y=top;y<bottom;y++){
-            const uint8_t *row=s->cells+(size_t)((y-r->y)/s->cell)*cols;
+            const uint8_t *row=cell_row(s->cells,s->row_at,cols,(y-r->y)/s->cell,unpacked);
             uint16_t *dst=out+(y-clip.y)*clip.w+left-clip.x;
             for(int x=left;x<right;){
                 int c=(x-r->x)/s->cell,end=imin(right,r->x+(c+1)*s->cell),n=end-x;

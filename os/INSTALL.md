@@ -145,6 +145,7 @@ the next key. A capital letter in a prefix binding means Shift + letter.
 | Super+w | Connect to Wi-Fi |
 | Super+b | Open/focus Chromium, or return to Harness |
 | Super+e | Open/focus the file manager, or return to Harness |
+| Super+o | Open a folder (in the file manager) or a text file (in its editor) |
 | Super+Enter | Focus Harness |
 | Super+l | Lock; unlock with the account password |
 | Print or Super+p | Screenshot the whole screen |

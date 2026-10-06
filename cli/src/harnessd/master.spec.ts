@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawn, type ChildProcess } from 'node:child_process'
@@ -203,6 +203,27 @@ describe('coreHandle', () => {
     }
   })
 
+  it('keeps the real update exit when an IPC send fails as the core is leaving', async () => {
+    // Found by QA after a quiet-machine run: CI rolled back a core exiting for an update when a
+    // status send lost its IPC channel. Node reports that send error on the child without a callback.
+    const child = fake()
+    child.send = (_message: unknown, callback?: (error: Error | null) => void) => {
+      queueMicrotask(() => {
+        const error = Object.assign(new Error('Channel closed'), { code: 'ERR_IPC_CHANNEL_CLOSED' })
+        if (callback) callback(error)
+        else child.emit('error', error)
+      })
+    }
+    const handle = coreHandle(child as unknown as ChildProcess)
+    const exits: unknown[] = []
+    handle.onExit((code, signal) => exits.push([code, signal]))
+    handle.send({ type: 'harnessd:status', status: {} as never })
+    await Promise.resolve()
+    expect(exits).toEqual([])
+    child.emit('exit', 75, null)
+    expect(exits).toEqual([[75, null]])
+  })
+
   it('passes messages and signals through, and swallows them for a child that is gone', () => {
     const child = fake()
     const handle = coreHandle(child as unknown as ChildProcess)
@@ -254,8 +275,10 @@ describe('a log that cannot grow', () => {
 
 describe('runMaster', () => {
   let dir: string
+  // runMaster titles the process it runs in: here, the test worker.
+  const title = process.title
   beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'harnessd-master-')) })
-  afterEach(() => rmSync(dir, { recursive: true, force: true }))
+  afterEach(() => { rmSync(dir, { recursive: true, force: true }); process.title = title })
 
   const until = async (what: string, test: () => boolean, ms = 10_000) => {
     const deadline = Date.now() + ms
@@ -264,6 +287,37 @@ describe('runMaster', () => {
       await new Promise((resolve) => setTimeout(resolve, 20))
     }
   }
+
+  it('starts the core through a link named after it, so Activity Monitor tells it from node', async () => {
+    const runtime = join(dir, 'runtime')
+    const bin = join(runtime, 'node-v1', 'bin')
+    mkdirSync(bin, { recursive: true })
+    const node = join(bin, 'node')
+    linkSync(process.execPath, node)
+    const ran = join(dir, 'ran')
+    const core = join(dir, 'core.cjs')
+    writeFileSync(core, `
+      // The services run this script too (as \`__service <name>\`); each records its own.
+      require('node:fs').writeFileSync(${JSON.stringify(ran)} + (process.argv[3] ?? ''), process.execPath)
+      process.send({ type: 'harnessd:bound', protocol: 2, port: 1 })
+      process.send({ type: 'harnessd:ready' })
+      setInterval(() => process.send({ type: 'harnessd:heartbeat', rssBytes: 1, heapUsedBytes: 1, loopDelayMs: 0 }), 50)
+      process.on('SIGTERM', () => process.exit(0))
+    `)
+    const exits: number[] = []
+    const signals = new Map<string, () => void>()
+    const supervisor = runMaster({
+      nodePath: node, runtimeDir: runtime, execArgv: [], scriptPath: core, pidFile: join(dir, 'adapter.pid'),
+      restoreUpdate: () => {}, confirmUpdate: () => {},
+      exit: (code) => exits.push(code), onSignal: (signal, listener) => signals.set(signal, listener),
+    })
+    await until('the core and a service to be running', () => supervisor.status().state === 'running' && existsSync(ran) && existsSync(`${ran}search`))
+    const libexec = join(realpathSync(runtime), 'node-v1', 'libexec', 'harnessd')
+    expect(readFileSync(ran, 'utf8')).toBe(join(libexec, 'harnessd-core'))
+    expect(readFileSync(`${ran}search`, 'utf8')).toBe(join(libexec, 'harnessd-search'))
+    signals.get('SIGTERM')!()
+    await until('the master to finish', () => exits.length > 0)
+  })
 
   it('starts the core, claims the pid file when it binds, restarts it after a crash, and stops it on a signal', async () => {
     const pidFile = join(dir, 'adapter.pid')

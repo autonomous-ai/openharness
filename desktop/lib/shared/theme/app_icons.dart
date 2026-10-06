@@ -157,6 +157,7 @@ abstract final class AppIcons {
   static const squarePlus = LucideIcons.squarePlus400;
   static const squareTerminal = LucideIcons.squareTerminal400;
   static const star = LucideIcons.star400;
+  static const store = LucideIcons.store400;
   static const starHalf = LucideIcons.starHalf400;
   static const sun = LucideIcons.sun400;
   static const terminal = LucideIcons.terminal400;

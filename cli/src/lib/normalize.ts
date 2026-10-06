@@ -408,8 +408,11 @@ function userTextRaw(msg: NormalizedMessage): string | null {
  * then the text block is empty and there is nothing left to parse.
  */
 function taskNotificationEvent(raw: Record<string, unknown>): LiveEvent | null {
-  if (raw.type !== 'user') return null
-  const content = (raw.message as { content?: unknown } | undefined)?.content ?? raw.content
+  // One that finishes while its parent still works comes as a `queued_command` attachment, the more common
+  // delivery (real 2.1.270–2.1.287). Read from user records alone, it never finished on the dial.
+  const attachment = raw.type === 'attachment' ? raw.attachment as { type?: unknown; prompt?: unknown } | undefined : undefined
+  if (raw.type !== 'user' && attachment?.type !== 'queued_command') return null
+  const content = attachment ? attachment.prompt : (raw.message as { content?: unknown } | undefined)?.content ?? raw.content
   let text = ''
   if (typeof content === 'string') text = content
   else if (Array.isArray(content)) {
@@ -690,6 +693,7 @@ export function messagesToEvents(rawLines: string[]): SessionEvent[] {
   const toolIdToName = new Map<string, string>()
   let thinkingCounter = 0
   let inAutoFixSequence = false
+  let continuedAt = -1
 
   for (const line of rawLines) {
     if (!line.trim()) continue
@@ -699,6 +703,13 @@ export function messagesToEvents(rawLines: string[]): SessionEvent[] {
     if (compact) { events.push(...compact); continue } // compact boundary → indicator; summary/meta → suppressed
     const queued = queuedHumanPrompt(raw)
     if (queued) { events.push({ type: 'user_message', payload: { content: queued } }); continue }
+    // A pass a blocking Stop hook continued, as the live view starts it (lineToEvents), once per pass.
+    const continued = stopHookContinuation(raw)
+    if (continued !== null) {
+      if (continuedAt !== events.length - 1) events.push({ type: 'user_message', payload: { content: continued } })
+      continuedAt = events.length - 1
+      continue
+    }
     const msg = transformLine(raw)
     if (!msg?.message) continue
 
@@ -810,6 +821,33 @@ export interface TurnState {
   /** Before the counter in a live thinking id. A fold that starts mid-transcript names its window here
    *  (lib/attachTranscript.ts), so its ids cannot repeat ones another fold of the same session sent. */
   thinkingPrefix?: string
+  /** The open turn is one a blocking Stop hook continued (`stopHookContinuation`), not a prompt's. */
+  continued?: boolean
+}
+
+/**
+ * The turn a Stop hook that blocked keeps going, or null. `/goal` is built on such a hook, and people write
+ * their own. Claude Code writes the hook's feedback as a hidden `isMeta` user line, then one of these, then
+ * works on in the SAME turn with no prompt line between (real 2.1.282/2.1.283):
+ *   {"type":"attachment","attachment":{"type":"goal_status","met":false,"condition":"…","reason":"…"}}
+ *   {"type":"attachment","attachment":{"type":"hook_blocking_error","hookEvent":"Stop","blockingError":{"blockingError":"…"}}}
+ * The pass's end_turn had closed the turn, so the rest ran with none open: no turn_ended, no recap, and
+ * idle whenever a tool outlasted the work lease. A `sentinel` goal_status restates an active goal at start.
+ * The label matches the Codex normalizer's goal continuations.
+ */
+export function stopHookContinuation(raw: Record<string, unknown>): string | null {
+  if (raw.type !== 'attachment') return null
+  const attachment = raw.attachment as Record<string, unknown> | undefined
+  if (attachment?.type === 'goal_status' && attachment.met === false && attachment.sentinel !== true) {
+    const condition = typeof attachment.condition === 'string' ? attachment.condition.trim() : ''
+    return condition ? `Continuing goal: ${condition}` : 'Continuing goal'
+  }
+  if (attachment?.type === 'hook_blocking_error' && attachment.hookEvent === 'Stop') {
+    const blocking = attachment.blockingError as { blockingError?: unknown } | undefined
+    const reason = typeof blocking?.blockingError === 'string' ? blocking.blockingError.trim().split('\n')[0].trim() : ''
+    return reason ? `Continuing: ${reason.length > 200 ? `${reason.slice(0, 197)}...` : reason}` : 'Continuing'
+  }
+  return null
 }
 
 export function newTurnState(): TurnState {
@@ -907,6 +945,24 @@ export function lineToEvents(rawLine: string, state: TurnState): LiveEvent[] {
   // launch ack, and this record is not a prompt.
   const finished = taskNotificationEvent(raw)
   if (finished) return [finished]
+  // A Stop hook that blocked: the pass's end_turn closed the turn Claude Code works on in. Open it again.
+  const continued = stopHookContinuation(raw)
+  if (continued !== null) {
+    if (state.turnOpen) return []
+    state.turnOpen = true
+    state.pendingTools.clear()
+    state.continued = true
+    return [{ type: 'turn_started', payload: { userMessage: continued } }]
+  }
+  // Claude Code's own record that its turn is over. A continued pass can end with no output: when the hook
+  // refuses again, Claude Code pauses the goal and writes only notices and this (real 2.1.283), with no
+  // end_turn or Stop to close what was opened above. Every other turn is closed as before.
+  if (raw.type === 'system' && raw.subtype === 'turn_duration') {
+    if (!state.turnOpen || !state.continued) return []
+    state.turnOpen = false
+    state.pendingTools.clear()
+    return [{ type: 'turn_ended', payload: {} }]
+  }
   const msg = transformLine(raw)
   if (!msg?.message) return []
 
@@ -927,6 +983,7 @@ export function lineToEvents(rawLine: string, state: TurnState): LiveEvent[] {
       if (state.turnOpen) events.push({ type: 'turn_ended', payload: {} })
       state.turnOpen = true
       state.pendingTools.clear()
+      state.continued = false
       events.push({ type: 'turn_started', payload: { userMessage: userText } })
       return events
     }

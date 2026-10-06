@@ -19,6 +19,7 @@ import time
 from footprint_vm import copy_file
 from hardware_update_vm import graceful_stop
 from session_vm import screen_text
+from session_update_vm import required as session_tools_required
 from t2_install_vm import guest_result
 from test_t2_firmware import firmware, source_fixture
 from vm import VM, check_graphical_keyboard
@@ -144,6 +145,16 @@ def main():
             if file.is_file():
                 vm.command('curl -fsS --retry 3 --max-time 90 ' + shlex.quote(url + '/' + file.name) +
                            ' -o ' + shlex.quote(guest + '/' + file.name), timeout=100)
+        if session_tools_required(args.bundle):
+            # A newer package may add session dependencies absent from the
+            # historical image. Cache them online without changing that image;
+            # the actual baseline/kernel transactions below stay offline.
+            output, _ = vm.command('sudo -n pacman --noconfirm -U --downloadonly '
+                                   + shlex.quote(guest + '/' + before['package']['filename']) + ' '
+                                   + shlex.quote(guest + '/' + baseline.name), timeout=180)
+            (folder / 'session-dependency-download.log').write_text(output)
+            vm.command('test "$(pacman -Q harness-os)" = ' + shlex.quote('harness-os ' + image['package_version']))
+            record['checks'].append('New session dependencies are verified and cached before disconnecting; baseline package remains unchanged until the offline transaction')
         vm.command('sudo -n nmcli networking off')
         vm.monitor('set_link', name='hnnet', up=False)
         probe('baseline')

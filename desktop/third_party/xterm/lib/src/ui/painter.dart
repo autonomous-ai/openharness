@@ -556,22 +556,37 @@ class TerminalPainter {
   /// [offset].
   @pragma('vm:prefer-inline')
   void paintCellBackground(Canvas canvas, Offset offset, CellData cellData) {
-    late Color color;
-    final colorType = cellData.background & CellColor.typeMask;
+    final color = _cellBackgroundColor(cellData);
+    if (color == null) return;
+    _fillCell(canvas, offset, cellData, color);
+  }
 
+  /// Paints over a cell, glyph and all, with the background it sits on.
+  void paintCellCover(Canvas canvas, Offset offset, CellData cellData) {
+    _fillCell(
+      canvas,
+      offset,
+      cellData,
+      _cellBackgroundColor(cellData) ?? _theme.background,
+    );
+  }
+
+  /// Null for the default background, which the terminal already shows.
+  Color? _cellBackgroundColor(CellData cellData) {
     if (cellData.flags & CellFlags.inverse != 0) {
-      color = resolveForegroundColor(cellData.foreground);
-    } else if (colorType == CellColor.normal) {
-      return;
-    } else {
-      color = resolveBackgroundColor(cellData.background);
+      return resolveForegroundColor(cellData.foreground);
     }
+    if (cellData.background & CellColor.typeMask == CellColor.normal) {
+      return null;
+    }
+    return resolveBackgroundColor(cellData.background);
+  }
 
-    final paint = Paint()..color = color;
+  void _fillCell(Canvas canvas, Offset offset, CellData cellData, Color color) {
     final doubleWidth = cellData.content >> CellContent.widthShift == 2;
     final widthScale = doubleWidth ? 2 : 1;
     final size = Size(_cellSize.width * widthScale + 1, _cellSize.height);
-    canvas.drawRect(offset & size, paint);
+    canvas.drawRect(offset & size, Paint()..color = color);
   }
 
   /// Get the effective foreground color for a cell from information encoded in

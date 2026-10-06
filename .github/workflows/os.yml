@@ -47,11 +47,11 @@ on:
         default: false
         type: boolean
       checks:
-        description: 'Image journey, browser focus, lock/suspend, recovery, Wi-Fi/audio, hardware, private zram, or changed-kernel recovery acceptance'
+        description: 'Image journey, browser focus, lock/suspend, recovery, Wi-Fi/audio, Ethernet recovery, hardware, private zram, or changed-kernel recovery acceptance'
         required: false
         default: image
         type: choice
-        options: [image, browser, browser-suspend, session, recovery, essentials, hardware, zram, hardware-update, public-update]
+        options: [image, browser, browser-suspend, session, recovery, essentials, network-recovery, hardware, zram, hardware-update, public-update]
       browser_memory:
         description: 'With checks=browser, diagnose memory in the UEFI VM only; retain ordinary workload and deadlines'
         required: false
@@ -66,12 +66,12 @@ permissions:
   actions: read
 
 concurrency:
-  group: programmer-os-${{ github.ref }}-${{ inputs.memory_mib || '2048' }}-${{ inputs.live_transport || 'cdrom' }}-${{ inputs.development_update && 'update' || inputs.checks == 'public-update' && 'public-update' || inputs.checks == 'browser-suspend' && 'browser-suspend' || inputs.checks == 'browser' && 'browser' || inputs.checks == 'session' && 'session' || inputs.checks == 'recovery' && 'recovery' || inputs.checks == 'essentials' && 'essentials' || inputs.checks == 'hardware' && 'hardware' || inputs.checks == 'hardware-update' && 'hardware-update' || inputs.dsh && 'dsh' || inputs.workloads && 'workloads' || 'image' }}
+  group: programmer-os-${{ github.ref }}-${{ inputs.memory_mib || '2048' }}-${{ inputs.live_transport || 'cdrom' }}-${{ inputs.development_update && 'update' || inputs.checks == 'public-update' && 'public-update' || inputs.checks == 'browser-suspend' && 'browser-suspend' || inputs.checks == 'browser' && 'browser' || inputs.checks == 'session' && 'session' || inputs.checks == 'recovery' && 'recovery' || inputs.checks == 'essentials' && 'essentials' || inputs.checks == 'network-recovery' && 'network-recovery' || inputs.checks == 'hardware' && 'hardware' || inputs.checks == 'hardware-update' && 'hardware-update' || inputs.dsh && 'dsh' || inputs.workloads && 'workloads' || 'image' }}
   cancel-in-progress: false
 
 jobs:
   image:
-    if: ${{ !inputs.image_run_id && !inputs.publish_run_id && !inputs.development_update && inputs.checks != 'zram' && inputs.checks != 'hardware-update' && inputs.checks != 'browser-suspend' && inputs.checks != 'public-update' }}
+    if: ${{ !inputs.image_run_id && !inputs.publish_run_id && !inputs.development_update && inputs.checks != 'zram' && inputs.checks != 'hardware-update' && inputs.checks != 'browser-suspend' && inputs.checks != 'public-update' && inputs.checks != 'network-recovery' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 50
     steps:
@@ -159,7 +159,7 @@ jobs:
 
   machine:
     needs: image
-    if: ${{ always() && !inputs.publish_run_id && !inputs.development_update && inputs.checks != 'essentials' && inputs.checks != 'hardware' && inputs.checks != 'zram' && inputs.checks != 'hardware-update' && inputs.checks != 'public-update' && (needs.image.result == 'success' || inputs.image_run_id != '' || inputs.checks == 'browser-suspend') && !cancelled() }}
+    if: ${{ always() && !inputs.publish_run_id && !inputs.development_update && inputs.checks != 'essentials' && inputs.checks != 'hardware' && inputs.checks != 'zram' && inputs.checks != 'hardware-update' && inputs.checks != 'public-update' && inputs.checks != 'network-recovery' && (needs.image.result == 'success' || inputs.image_run_id != '' || inputs.checks == 'browser-suspend') && !cancelled() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 65
     strategy:
@@ -467,6 +467,47 @@ jobs:
             os/test-results/essentials/*.log
             os/test-results/essentials/*.png
             os/test-results/essentials/*.wav
+          retention-days: 14
+
+  network-recovery:
+    if: ${{ inputs.checks == 'network-recovery' && !inputs.publish_run_id && !inputs.development_update }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [automatic, saved]
+    steps:
+      - uses: actions/checkout@v7
+      - name: Require an existing baseline image
+        env:
+          OS_IMAGE_RUN: ${{ inputs.image_run_id }}
+        run: test -n "$OS_IMAGE_RUN"
+      - uses: actions/download-artifact@v6
+        with:
+          name: programmer-os-x86_64
+          path: os/dist
+          run-id: ${{ inputs.image_run_id }}
+          github-token: ${{ github.token }}
+      - name: Validate source and prepare native tools
+        run: |
+          make -C os check
+          go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/os.yml
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils ovmf python3-pil tesseract-ocr
+          sudo chmod a+rw /dev/kvm
+      - name: Recover Ethernet through the real network page after sleep
+        run: python3 os/tests/network_recovery_vm.py --iso os/dist/*.iso --network-script os/network.py --profile ${{ matrix.profile }}
+      - name: Retain network recovery evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: harness-os-network-recovery-${{ matrix.profile }}
+          path: |
+            os/test-results/network-recovery/*.json
+            os/test-results/network-recovery/*.txt
+            os/test-results/network-recovery/*.log
+            os/test-results/network-recovery/*.png
           retention-days: 14
 
   development-update:

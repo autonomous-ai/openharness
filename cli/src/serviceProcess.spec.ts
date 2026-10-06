@@ -30,7 +30,7 @@ describe('a service in its own process', () => {
       expect(await startServiceProcess('search', { runners })).toBe(handle)
     } finally { delete process.env.HARNESSD_SERVICE_TOKEN }
     expect(loaded).toEqual(['search'])
-    expect(process.title).toBe('harnessd search')
+    expect(process.title).toBe('harnessd-search')
     // Its lines are stamped like the core's and the master's in the log they share.
     expect(stamped.times).toBe(1)
     expect(seen).toEqual([{ dataDir: expect.any(String), socketPath: '/data/daemon-18473.sock', machineId: expect.any(String), token: 'token' }])

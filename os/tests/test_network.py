@@ -40,6 +40,52 @@ class Network(unittest.TestCase):
             network.nmcli('general')
         self.assertEqual(run.call_args.args[0][0], '/usr/bin/nmcli')
 
+    def test_unavailable_ethernet_remains_selectable_for_explicit_reconnection(self):
+        devices = ('lo:loopback:connected (externally)\nens5:ethernet:unavailable\n'
+                   'eth1:ethernet:disconnected\nwlan0:wifi:unavailable\n')
+        with patch.object(network, 'nmcli', return_value=result(output=devices)):
+            self.assertEqual(network.wired_devices(), [
+                ['ens5', 'ethernet', 'unavailable'], ['eth1', 'ethernet', 'disconnected']])
+
+    def test_ethernet_waits_for_availability_before_selecting_a_profile(self):
+        with patch.object(network.subprocess, 'run', return_value=result()) as link, \
+             patch.object(network, 'nmcli', side_effect=[result(output='20 (unavailable)'),
+                 result(output='30 (disconnected)'), result()]) as command, \
+             patch.object(network.time, 'sleep'):
+            self.assertTrue(network.connect_wired('ens5', 'unavailable'))
+        self.assertEqual(link.call_args.args[0], ['/usr/bin/ip', 'link', 'set', 'dev', 'ens5', 'up'])
+        self.assertEqual([call.args for call in command.call_args_list], [
+            ('-g', 'GENERAL.STATE', 'device', 'show', 'ens5'),
+            ('-g', 'GENERAL.STATE', 'device', 'show', 'ens5'),
+            ('device', 'connect', 'ens5')])
+
+    def test_ethernet_does_not_interrupt_automatic_reconnection(self):
+        with patch.object(network.subprocess, 'run', return_value=result()), \
+             patch.object(network, 'nmcli', side_effect=[result(output='70 (connecting)'),
+                 result(output='100 (connected)')]) as command, patch.object(network.time, 'sleep'):
+            self.assertTrue(network.connect_wired('ens5', 'unavailable'))
+        self.assertFalse(any(call.args[:2] == ('device', 'connect') for call in command.call_args_list))
+
+    def test_ethernet_does_not_create_a_profile_when_the_link_stays_unavailable(self):
+        with patch.object(network.subprocess, 'run', return_value=result()), \
+             patch.object(network, 'nmcli', return_value=result(output='20 (unavailable)')) as command, \
+             patch.object(network.time, 'monotonic', side_effect=[0, 11]):
+            self.assertFalse(network.connect_wired('ens5', 'unavailable'))
+        command.assert_called_once_with('-g', 'GENERAL.STATE', 'device', 'show', 'ens5', wait=2)
+
+    def test_ethernet_link_failure_stops_before_activation(self):
+        with patch.object(network.subprocess, 'run', return_value=result(1)), \
+             patch.object(network, 'nmcli') as command:
+            self.assertFalse(network.connect_wired('ens5', 'unavailable'))
+        command.assert_not_called()
+
+    def test_disconnected_ethernet_keeps_normal_networkmanager_selection(self):
+        with patch.object(network.subprocess, 'run') as link, \
+             patch.object(network, 'nmcli', return_value=result()) as command:
+            self.assertTrue(network.connect_wired('ens5', 'disconnected'))
+        link.assert_not_called()
+        command.assert_called_once_with('device', 'connect', 'ens5', wait=30)
+
     def test_scans_escape_ssids_and_deduplicate_radios_without_hiding_open_networks(self):
         rows = 'a\\:network:60:WPA2:wlan0:aa\\:bb:\nopen:90:--:wlan0:bb\\:cc:\na\\:network:88:WPA2:wlan0:cc\\:dd:*\n:80:WPA2:wlan0:dd\\:ee:\n'
         with patch.object(network, 'nmcli', return_value=result(output=rows)):
@@ -209,6 +255,17 @@ class Network(unittest.TestCase):
              patch.object(network, 'nmcli', return_value=result()) as command:
             self.assertEqual(page.run(), 0)
         self.assertEqual(command.call_args.args, ('device', 'connect', 'eth0'))
+
+    def test_failed_ethernet_reconnection_keeps_the_network_page_open(self):
+        screen, page = self.page([curses.KEY_DOWN, '\n', '\x1b'], first_use=False)
+        with patch.object(network, 'scan', return_value=[]), \
+             patch.object(network, 'wired_devices', return_value=[['ens5', 'ethernet', 'unavailable']]), \
+             patch.object(network, 'connect_wired', return_value=False) as connect, \
+             patch.object(network, 'nmcli') as command:
+            self.assertEqual(page.run(), 1)
+        connect.assert_called_once_with('ens5', 'unavailable')
+        self.assertIn('Could not connect Ethernet.', '\n'.join(text for _, text in screen.lines))
+        self.assertFalse(any(call.args[:2] == ('connection', 'delete') for call in command.call_args_list))
 
     def test_wide_and_control_characters_fit_the_terminal(self):
         self.assertEqual(network.fit('網路123', 5), '網路1')

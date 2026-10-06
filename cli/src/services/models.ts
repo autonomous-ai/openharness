@@ -9,6 +9,7 @@
  * reaches it only through `ports.models`, and the apps through the requests it answers.
  */
 import { join } from 'node:path'
+import { baseNode } from '../harnessd/baseNode.js'
 import type { CoreApi, CorePorts, ModelsPort, ServiceRequest, ServiceRequests } from '../core/api.js'
 import { MODEL_MANAGER_ID } from '../dsh/builtins.js'
 import { installedDsh } from '../dsh/installed.js'
@@ -145,7 +146,7 @@ function modelsRequests(core: CoreApi, grid: Pick<ModelsPort, 'ensure' | 'setUp'
     onChanged: () => { forgetGridModels(); core.clients.gridModelsChanged() },
     // Models Ollama, LM Studio and llama.cpp downloaded here, found by the Model Manager's own scan (the
     // bundled harness), so the picker and that harness agree on what is here and what starts it.
-    appModels: () => scanAppModels({ node: process.execPath, packageDir: installedDsh(MODEL_MANAGER_ID)?.realDir ?? null, env: process.env }),
+    appModels: () => scanAppModels({ node: baseNode(process.execPath), packageDir: installedDsh(MODEL_MANAGER_ID)?.realDir ?? null, env: process.env }),
     appEngines: appEngineOps(process.env),
   })
   /** The grid listing currently out, shared by every `grid_models_list` for the same own grid that lands

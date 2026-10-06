@@ -93,7 +93,8 @@ export class TerminalBackendCoordinator {
    *   that saw the agent still active, was dropped the same way (e2e/races.e2e.ts, a restart nobody
    *   waited for).
    * - any `gone` while a lifecycle operation is replacing the engine: between the old engine's exit and
-   *   the new one's start there is no engine in the pane at all.
+   *   the new one's start there is no engine in the pane at all. Found by QA on a quiet machine:
+   *   restore has the same gap while its launch is `starting`, before the engine process exists.
    *
    * The row is read again on every ask: `session` is the registry's own, and a restart records the new
    * process on it.
@@ -102,7 +103,8 @@ export class TerminalBackendCoordinator {
     const ask = () => backend.validate(runtime, { engine: session.engine, processIdentity: session.processIdentity ?? undefined })
     let result = await ask()
     for (const ms of this.unknownRetryMs) {
-      if (result.state === 'alive' || (result.state === 'gone' && !result.replaced && !this.changing(session.agentId))) return result
+      if (result.state === 'alive' || (result.state === 'gone' && !result.replaced
+        && session.launch?.state !== 'starting' && !this.changing(session.agentId))) return result
       await this.sleep(ms)
       result = await ask()
     }

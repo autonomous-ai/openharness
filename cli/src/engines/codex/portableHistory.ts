@@ -1,7 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { closeSync, constants, fsyncSync, fstatSync, lstatSync, openSync, readSync, realpathSync, renameSync, rmSync, writeSync, type Stats } from 'node:fs'
-import { homedir } from 'node:os'
 import { isAbsolute, join, relative } from 'node:path'
+import { env } from '../../config/env.js'
+import { codexHomeRoots } from '../../lib/engineHomes.js'
 import { resolveCodexRollout } from './rollout.js'
 
 type JsonObject = Record<string, unknown>
@@ -149,20 +150,29 @@ export interface CodexResumeSource {
  * for a truncation and replay in full. */
 export function prepareCodexResume(source: CodexResumeSource): { repairedItems: number; repairedBytes?: number; backupPath?: string } {
   if (source.engine !== 'codex' || !source.sessionId) return { repairedItems: 0 }
-  const sessions = join(source.codexHome || process.env.CODEX_HOME || join(homedir(), '.codex'), 'sessions')
-  let file = source.transcriptPath || resolveCodexRollout(source.sessionId, sessions)
+  // The agent's own profile, else every home the person moved too (lib/engineHomes.ts): a rollout in a moved
+  // CODEX_HOME was refused as outside the profile, so a restart or reopen failed after Codex had stopped.
+  const sessionRoots = (source.codexHome ? [source.codexHome] : codexHomeRoots(env.CODEX_HOME)).map((home) => join(home, 'sessions'))
+  const byId = () => sessionRoots.reduce<string | null>((found, sessions) => found ?? resolveCodexRollout(source.sessionId, sessions), null)
+  let file = source.transcriptPath || byId()
   // A missing history still follows the engine's existing resume/fresh fallback.
   if (!file) return { repairedItems: 0 }
   let before: ReturnType<typeof lstatSync>
   try { before = lstatSync(file) } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
     // The registry may still point at a rollout that was moved; Codex resolves the session by id.
-    file = resolveCodexRollout(source.sessionId, sessions)
+    file = byId()
     if (!file) return { repairedItems: 0 }
     before = lstatSync(file)
   }
-  const rel = relative(realpathSync(sessions), realpathSync(file))
-  if (!before.isFile() || before.isSymbolicLink() || isAbsolute(rel) || rel === '..' || rel.startsWith('../')
+  const real = realpathSync(file)
+  const inside = sessionRoots.some((sessions) => {
+    let root: string
+    try { root = realpathSync(sessions) } catch { return false }
+    const rel = relative(root, real)
+    return !isAbsolute(rel) && rel !== '..' && !rel.startsWith('../')
+  })
+  if (!before.isFile() || before.isSymbolicLink() || !inside
     || (typeof process.getuid === 'function' && before.uid !== process.getuid())) {
     throw new Error('Codex rollout is outside the session profile or is not an owned regular file')
   }

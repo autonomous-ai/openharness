@@ -850,9 +850,10 @@ static void center(ht_scene_t *f, int y, const char *t, uint16_t c)
 static void render_brand(ht_scene_t *f)
 {
     if (character.id == HT_CHARACTER_FOCUS) {
-        const ht_font_t *font = &ht_lv_inter_36.base;
-        int w = ht_measure(font, "Harness");
-        ht_text(f, (HT_WIDTH - w) / 2, (HT_HEIGHT - font->height) / 2, w, font, FG, BG, "Harness");
+        // The wordmark in Inter Bold 48 on a 50 px line at y 208 (design 2026-10-06, focus-project.html "Connecting").
+        const ht_font_t *font = &ht_lv_inter_bold_48.base;
+        int w = ht_measure(font, "Harness"), base = 208 + 50 / 2 + 48 * 93 / 256;
+        ht_text(f, (HT_WIDTH - w) / 2, base - ht_pfont(font)->ascent, w, font, FG, BG, "Harness");
         return;
     }
     center(f, (466 - UI_FONT->height) / 2, "Harness", FG);
@@ -1347,18 +1348,9 @@ static void focus_clipped(ht_scene_t *f, int x, int y, const ht_font_t *font, ui
  */
 static void focus_header(ht_scene_t *f, const char *title)
 {
-    enum { CLOSE_X = 203, CLOSE_Y = 16, CLOSE_W = 60, CLOSE_H = 32, TITLE_Y = 62 };
-    const ht_font_t *small = &ht_lv_inter_20.base, *cross = &ht_lv_montserrat_22.base;
-    uint16_t fg = color(0xeaeaf0), close = color(0x171718);
-    // make_close_pill: COL_FG at 10 % over black, the cross centred in it.
-    {   // on TABS too (design 2026-10-06), where it closes as Done does
-        int cw = ht_measure(cross, HT_LV_CROSS);
-        ht_box(f, CLOSE_X, CLOSE_Y, CLOSE_W, CLOSE_H, CLOSE_H / 2, close, close);
-        ht_text(f, CLOSE_X + (CLOSE_W - cw) / 2, CLOSE_Y + (CLOSE_H - cross->height) / 2, cw, cross, fg,
-                close, HT_LV_CROSS);
-        s.hits[s.hit_count++] = (hit_t){{CLOSE_X - 40, 0, CLOSE_W + 80, CLOSE_Y + CLOSE_H + 12},
-            s.view == TABS ? A_TAB_DONE : A_HOME, 0, true};
-    }
+    // No close pill (owner, 2026-10-06: one too many): Done, or a tap on the chosen name, leaves.
+    enum { TITLE_Y = 62 };
+    const ht_font_t *small = &ht_lv_inter_20.base;
     // A letter to a run, which is how the spacing is drawn.
     int tw = 0;
     for (const char *c = title; *c; c++) { char one[2] = {*c, 0}; tw += ht_measure(small, one) + 2; }
@@ -1812,9 +1804,9 @@ static void render_notice(ht_scene_t *f)
  * peeks in: a faint ‹ / › (Inter 44, #8a8a99 at 45 %) on a side that has another notice, and a tap on that side pages
  * to it. While a finger drags, the pages slide and fade with their distance from the middle. "1/2" under it (Inter 20,
  * #8a8a99, at y 400). Empty: "No notification", Inter 25, #ada6ad, on the middle. The page on the glass is s.offset
- * (every update keeps using it): the pages follow it at rest, and it follows them while they move. Showing a page
- * sends no read receipt: a tap on the page opens that agent, and that reads it. The cross goes back. No age: the
- * cable carries no time for a notice.
+ * (the read receipt and every update keep using it): the pages follow it at rest, and it follows them while they
+ * move. One notice shows at a time, so the one on the glass is read once it is presented. A tap on the page opens
+ * that agent; the cross goes back. No age: the cable carries no time for a notice.
  */
 static int css_line(const ht_font_t *font, int size, int top, int line)
 {
@@ -1925,8 +1917,9 @@ static void render_focus_inbox(ht_scene_t *f)
     snprintf(count, sizeof count, "%d/%d", current + 1, s.notice_count);
     int w = ht_measure(small, count);
     ht_text(f, (HT_WIDTH - w) / 2, css_line(small, 20, 400, 28), w, small, muted, BG, count);
-    // Paging past a notice does not read it (owner, 2026-10-06): only the tap that opens its agent does.
-    s.notice_frame = 0;
+    // The page on the glass is the one being read (owner, 2026-10-06: one notice at a time, so viewing it reads it).
+    const cable_notif_t *top = &s.notice[current];
+    s.notice_frame = top->read_on_dial ? 0 : top->display_revision;
 }
 static void render_list(ht_scene_t *f)
 {
@@ -3116,7 +3109,11 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
         } else if (tab_contact) {
             int index = pressed_action.value;
             if (tab_tap && result == HT_TOUCH_TAP && pressed_action.kind == A_TAB && index >= 0 &&
-                index < s.tab_count && !strcmp(pressed_action.id, s.tabs[index].id)) dispatch(pressed_action);
+                index < s.tab_count && !strcmp(pressed_action.id, s.tabs[index].id)) {
+                dispatch(pressed_action);
+                // On Focus a tap on a name is the check too (owner, 2026-10-06), as on the panes.
+                if (character.id == HT_CHARACTER_FOCUS && s.view == TABS) dispatch((action_t){.kind = A_TAB_DONE});
+            }
             tabs_sync();
             change();
         } else if (notice_contact) {

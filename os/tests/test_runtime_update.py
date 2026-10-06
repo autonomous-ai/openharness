@@ -4,11 +4,12 @@ import importlib.util
 import io
 import json
 from pathlib import Path
+import subprocess
 import tarfile
 import tempfile
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 
 spec = importlib.util.spec_from_file_location('runtime_update', Path(__file__).parents[1] / 'runtime_update.py')
@@ -84,6 +85,41 @@ class BundleGuards(unittest.TestCase):
             update.install_package(self.package, self.version, self.runtime, [kernel])
         run.assert_called_once()
         self.assertEqual(run.call_args.args[0], ['pacman', '--noconfirm', '-U', str(kernel), str(self.package)])
+
+    def test_dependency_prefetch_includes_kernel_without_installing(self):
+        kernel = self.root / 'linux-t2.pkg.tar.zst'
+        with patch.object(update.subprocess, 'run') as run:
+            update.prepare_packages(self.package, [kernel])
+        run.assert_called_once_with(['pacman', '--noconfirm', '-U', '--downloadonly',
+                                    str(kernel), str(self.package)], check=True)
+
+    def test_missing_dependency_download_leaves_receipt_and_checkpoint_untouched(self):
+        state = self.root / 'state'
+        state.mkdir()
+        previous = state / 'latest.json'
+        previous.write_text('{"id":"previous-good-update"}')
+        checkpoints = self.root / 'checkpoints'
+        checkpoints.mkdir()
+        runtime = self.root / 'runtime.json'
+        runtime.write_text(json.dumps(self.runtime))
+        restart = self.root / 'restart.json'
+        system = SimpleNamespace(CHECKPOINTS=checkpoints, snapshot_date=lambda x: x,
+                                 write_json=lambda path, value: path.write_text(json.dumps(value)),
+                                 checkpoint=Mock(side_effect=AssertionError('No checkpoint before downloads')))
+        boot = SimpleNamespace(prepare_update=lambda *args: None)
+        with patch.object(update, 'STATE', state), patch.object(update, 'RUNTIME', runtime), \
+                patch.object(update, 'RESTART_REQUIRED', restart), \
+                patch.object(update, 'latest', return_value={'status': 'applied'}), \
+                patch.object(update, 'boot_module', return_value=boot), \
+                patch.object(update, 'validate_bundle', return_value=(self.manifest, self.package)), \
+                patch.object(update, 'installed_version', return_value='older-1'), \
+                patch.object(update.subprocess, 'run', side_effect=subprocess.CalledProcessError(1, 'pacman')):
+            with self.assertRaises(subprocess.CalledProcessError):
+                update.apply(self.root, system, self.base, {'root_uuid': 'test-root'})
+        system.checkpoint.assert_not_called()
+        self.assertEqual(previous.read_text(), '{"id":"previous-good-update"}')
+        self.assertEqual(list(checkpoints.iterdir()), [])
+        self.assertFalse(restart.exists())
 
     def test_legacy_rollback_completes_after_package_removes_platform_helper(self):
         folder = self.root / 'installed'

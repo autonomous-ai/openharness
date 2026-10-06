@@ -1,8 +1,9 @@
 import { execFile } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { existsSync, mkdirSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { homedir, userInfo } from 'node:os'
 import { isAbsolute, basename, dirname, join } from 'node:path'
+import { baseNode } from '../harnessd/baseNode.js'
 import { env } from '../config/env.js'
 import { isTerminalEngine, type AgentEngine } from '../engines/types.js'
 import { isOpencodeV2 } from '../engines/opencode/version.js'
@@ -440,9 +441,45 @@ export function interactiveEngineShell(shell: string | undefined = undefined): I
 function engineShellArgv(shell: InteractiveEngineShell, args: readonly string[]): string[] {
   if (!isPosixShell(shell.path)) return throughPosixShell(shell, args)
   const prefix = basename(shell.path).toLowerCase() === 'zsh'
-    ? ['/usr/bin/env', 'DISABLE_AUTO_UPDATE=true']
+    ? ['/usr/bin/env', 'DISABLE_AUTO_UPDATE=true', ...zshNewUserGuard()]
     : []
   return [...prefix, shell.path, ...shell.args, ...args]
+}
+
+/** The startup files zsh's new-user module looks for (zshmodules(1), zsh/newuser). */
+const ZSH_STARTUP_FILES = ['.zshenv', '.zprofile', '.zshrc', '.zlogin'] as const
+
+/** The .zshenv in Harness's own ZDOTDIR (`zshNewUserGuard`): the person's ZDOTDIR back as it was, or unset,
+ *  before anything of theirs is read; zsh then reads .zprofile, .zshrc and .zlogin from theirs. */
+export const ZSH_GUARD_ZSHENV = `# Written by Harness (engineLaunch.ts zshNewUserGuard): keeps zsh's new-user menu out of an agent's pane.
+if (( \${+HARNESS_ZDOTDIR} )); then ZDOTDIR="\$HARNESS_ZDOTDIR"; unset HARNESS_ZDOTDIR; else unset ZDOTDIR; fi
+[[ -r "\${ZDOTDIR:-\$HOME}/.zshenv" ]] && builtin source "\${ZDOTDIR:-\$HOME}/.zshenv"
+`
+
+/**
+ * Keeps zsh's new-user menu out of an engine's pane. Debian, Ubuntu, Fedora and Arch ship zsh's
+ * `zsh/newuser` module: on a terminal, for someone with none of the four startup files in $ZDOTDIR (else
+ * $HOME), it runs a full-screen menu that waits for a key, so every agent's pane showed it and no engine
+ * started (the end-to-end suite's first Linux runs, 2026-10-06; macOS's zsh has no such module). The
+ * module looks only there, right after the global zshenv: for such a person ZDOTDIR points at a folder of
+ * Harness's whose .zshenv puts theirs back (`HARNESS_ZDOTDIR`; absent means unset). Anyone with a startup
+ * file of their own starts exactly as before.
+ */
+export function zshNewUserGuard(environment: NodeJS.ProcessEnv = process.env): string[] {
+  const dotdir = environment.ZDOTDIR || environment.HOME
+  if (!dotdir || ZSH_STARTUP_FILES.some((name) => existsSync(join(dotdir, name)))) return []
+  const folder = join(env.ADAPTER_DATA_DIR, 'zsh-startup')
+  try {
+    mkdirSync(folder, { recursive: true, mode: 0o700 })
+    const file = join(folder, '.zshenv')
+    let current: string | null = null
+    try { current = readFileSync(file, 'utf8') } catch { /* not written yet */ }
+    if (current !== ZSH_GUARD_ZSHENV) writeFileSync(file, ZSH_GUARD_ZSHENV, { mode: 0o600 })
+  } catch {
+    // A ZDOTDIR without its .zshenv would leave the person's own ZDOTDIR unrestored: launch as before.
+    return []
+  }
+  return [`ZDOTDIR=${folder}`, ...(environment.ZDOTDIR !== undefined ? [`HARNESS_ZDOTDIR=${environment.ZDOTDIR}`] : [])]
 }
 
 /**
@@ -819,7 +856,7 @@ function codexStartupRetryScript(tmuxBinary: string): string {
   const probe = 'harness_codex_check'
   const tmux = shellSingleQuote(tmuxBinary)
   return 'harness_codex_check() {\n'
-    + `  ${shellSingleQuote(process.execPath)} -e ${shellSingleQuote(CODEX_STARTUP_RETRY_PROBE)} "$@"\n`
+    + `  ${shellSingleQuote(baseNode(process.execPath))} -e ${shellSingleQuote(CODEX_STARTUP_RETRY_PROBE)} "$@"\n`
     + '}\n'
     + 'harness_codex_start() {\n'
     + '  [ "$harness_codex_go" = 1 ] || return 0\n'
@@ -866,7 +903,7 @@ function codexOwnedLaunchPrelude(): string {
   const probe = `const {execFileSync}=require('node:child_process');try { const h=execFileSync(process.argv[1],['--help'],{timeout:5000,maxBuffer:1048576,encoding:'utf8',stdio:['ignore','pipe','pipe']});process.exit(/--no-daemon(?:[^A-Za-z0-9-]|$)/.test(h)?0:64); } catch { process.exit(2); }`
   return 'harness_codex_probe() {\n'
     + '  harness_codex_mode=0\n'
-    + `  harness_codex_seen=$(${shellSingleQuote(process.execPath)} -e ${shellSingleQuote(probe)} "$1") || harness_codex_mode=$?\n`
+    + `  harness_codex_seen=$(${shellSingleQuote(baseNode(process.execPath))} -e ${shellSingleQuote(probe)} "$1") || harness_codex_mode=$?\n`
     + '  case "$harness_codex_mode" in\n'
     + '    0) harness_codex_no_daemon=1 ;;\n'
     + '    64) harness_codex_no_daemon= ;;\n'
@@ -1041,7 +1078,7 @@ export function shellSingleQuote(value: string): string {
  */
 function npmRuntimePrelude(recipe: EngineInstallRecipe, runtimeNode: string): string {
   if (!recipe.executable.npmGlobal) return ''
-  const bins = [...new Set([dirname(runtimeNode), dirname(process.execPath)])]
+  const bins = [...new Set([dirname(runtimeNode), dirname(baseNode(process.execPath))])]
     .map(shellSingleQuote)
     .join(' ')
   return [

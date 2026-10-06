@@ -94,7 +94,7 @@ export const NODE_CONCURRENCY = 1 + JEV_SLOTS
 export function llamaBuild(binary: string, env: NodeJS.ProcessEnv = process.env): Promise<number | undefined> {
   return new Promise(resolve => {
     execFile(binary, ['--version'], { env, timeout: 30_000 }, (_error, stdout, stderr) => {
-      const text = `${stdout ?? ''}${stderr ?? ''}`
+      const text = `${stdout}${stderr}`
       const build = /\(build (\d+)/.exec(text)?.[1] ?? /version:\s*(\d+)\b/.exec(text)?.[1]
       resolve(build ? Number(build) : undefined)
     })
@@ -681,8 +681,8 @@ export class LocalModels {
     if (!this.options.appModels) return []
     // A daemon just started answers from the scan it saved last time: a first scan while a llama-server
     // was busy kept the picker without these models, and held a Stop two minutes [run].
-    this.appsRead ??= await this.savedApps()
-    if (force || !this.appsRead || Date.now() - this.appsRead.at >= 30_000) void this.scanApps()
+    if (!this.appsRead) this.appsRead = await this.savedApps()
+    if (force || !this.appsRead || Date.now() - this.appsRead.at >= 30_000) { void this.scanApps() }
     return this.appsRead?.value ?? this.scanApps()
   }
 
@@ -888,7 +888,12 @@ export class LocalModels {
     return { operation }
   }
 
-  async settled(): Promise<void> { await this.active?.done }
+  async settled(): Promise<void> {
+    // Found by QA on a quiet machine: a background app scan was still saving after fixture teardown began.
+    await this.active?.done
+    await this.listPending
+    await this.appsPending
+  }
 
   private async perform(grid: string, operation: ModelOperation): Promise<void> {
     const change = async (stage: ModelOperation['stage']) => {
@@ -936,7 +941,7 @@ export class LocalModels {
           if (candidate.pull) {
             const current = compatibleModels(await this.catalog({ ...currentDevice, usable_bytes: Math.max(0, budget) })).find(c => c.id === candidate.id)
             if (!current || current.size < candidate.size) throw new ModelError('Stop a running model to make room, then try again.')
-            candidate.context = Math.min(candidate.context ?? Infinity, current.context ?? Infinity)
+            candidate.context = Math.min(candidate.context!, current.context!)
           } else if (candidate.size * 1.25 + 2 * GiB > budget) {
             throw new ModelError('Stop a running model to make room, then try again.')
           }

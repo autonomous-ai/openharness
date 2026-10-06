@@ -114,9 +114,12 @@ describe('the folders agents work in', () => {
     rmSync(join(d.projectsDir, 'gone-by-morning'), { recursive: true, force: true })
     await d.start()
     client = await LocalClient.connect(d)
+    // Back means its engine is up again, not only its row: a restore lists the agent, on its conversation,
+    // from the moment it starts relaunching it, and a message sent before the engine is there is refused
+    // (on Linux the relaunch was still under way when the row first read as active).
     await until('the agent whose folder is still there to come back', async () => {
       const now = await row(client, kept.id)
-      return now?.status === 'active' && now.sessionId === kept.sessionId ? now : null
+      return now?.status === 'active' && now.sessionId === kept.sessionId && now.launch?.state !== 'starting' ? now : null
     }, 60_000, 500)
     await turn(client, kept.id, 'restored beside one that could not be')
     // The one whose folder is gone is not shown as active, and the daemon did not restart over it.
