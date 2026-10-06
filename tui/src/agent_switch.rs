@@ -84,7 +84,7 @@ fn placement_views(app: &App, placement: &Placement) -> Vec<(String, u64)> {
 }
 
 pub fn retain_placement(app: &mut App, machine: &str, agent: &str, ops: &[Value]) {
-    if app.desk_mode != crate::app::DeskMode::Sync || !app.session_desk || ops.is_empty() { return }
+    if !app.desk_syncs() || !app.session_desk || ops.is_empty() { return }
     let views = app.tabs.iter().filter(|t| t.on_desk).flat_map(|t| t.panes().into_iter().map(move |p| (t.id.clone(), p)))
         .filter(|(_, id)| app.panes.get(id).is_some_and(|p| p.machine_id == machine && p.agent_id == agent)).collect::<Vec<_>>();
     if views.is_empty() { return }
@@ -131,7 +131,9 @@ pub fn merge_saved_placements(app: &App, doc: &Value, leave: bool) -> Value {
 /// Called while the session file is locked. Another live client keeps its pending writes;
 /// the first client restoring an orphan claims it without issuing any create/stop RPC.
 pub fn restore_placements(app: &mut App, doc: &Value) {
-    if app.desk_mode != crate::app::DeskMode::Sync { return }
+    // Account mode restores its journal before the live sign-in check. The
+    // journal's owner is verified below; writes still require desk_syncs().
+    if !matches!(app.desk_mode, crate::app::DeskMode::Sync | crate::app::DeskMode::Account) { return }
     let identity = app.saved_identity();
     let Some(owner) = identity["machine"].as_str() else { return };
     let me = crate::ipc::here().map(|p| p.display().to_string());
@@ -639,8 +641,10 @@ mod tests {
 
     #[tokio::test]
     async fn replacement_keeps_its_view_until_workspace_ack_and_retry_does_not_launch_again() {
+        for mode in [DeskMode::Sync, DeskMode::Account] {
         let mut app = app();
-        app.desk_mode = DeskMode::Sync;
+        app.desk_mode = mode;
+        app.signed_in = true;
         app.tabs[0].on_desk = true;
         let tab = app.tabs[0].id.clone();
         let layout = app.tab().root.as_ref().unwrap().to_tmux();
@@ -665,6 +669,7 @@ mod tests {
         let mut closed = peer; closed["revision"] = json!(4);
         app.apply_desk(&closed);
         assert!(!app.panes.contains_key(&1), "an explicit peer close after acknowledgement is respected");
+        }
     }
 
     #[tokio::test]
