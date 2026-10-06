@@ -1,9 +1,9 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { env } from '../config/env.js'
-import { adoptEngineHomes, claudeProjectsRoots, codexHomeRoots, launchClaudeConfigDir, launchCodexHome, movedEngineHomes, resetEngineHomes, sessionCodexHome } from './engineHomes.js'
+import { adoptEngineHomes, claudeProjectsRoots, codexHomeRoots, launchClaudeConfigDir, launchCodexHome, movedEngineHomes, resetEngineHomes, sessionClaudeHome, sessionCodexHome } from './engineHomes.js'
 
 // The login shell's environment, as the daemon captured it at start-up: none, unless a test says so.
 const shell = vi.hoisted(() => ({ env: {} as NodeJS.ProcessEnv }))
@@ -103,6 +103,21 @@ describe('the homes the person moved', () => {
       expect(sessionCodexHome({ transcriptPath: join(home, '..', 'elsewhere', 'thread.jsonl') })).toBe(current)
       shell.env = {}
       expect(sessionCodexHome({ transcriptPath: join(home, 'sessions', 'thread.jsonl') })).toBe(home)
+    } finally { shell.env = {} }
+  })
+
+  it('Claude settings follow the bound home or current shell, with the settings default separate from folder trust', () => {
+    const previous = join(root, 'previous-claude'), current = join(root, 'current-claude')
+    adoptEngineHomes({ CLAUDE_CONFIG_DIR: previous }, defaults)
+    shell.env = { CLAUDE_CONFIG_DIR: current }
+    try {
+      expect(sessionClaudeHome({})).toBe(current)
+      expect(sessionClaudeHome({ transcriptPath: join(previous, 'projects', 'workspace', 'thread.jsonl') })).toBe(previous)
+      expect(sessionClaudeHome({ transcriptPath: join(previous, 'projects-other', 'thread.jsonl') })).toBe(current)
+      expect(sessionClaudeHome({ transcriptPath: join(previous, 'projects', '..', '..', 'thread.jsonl') })).toBe(current)
+      shell.env = {}
+      expect(sessionClaudeHome({ transcriptPath: join(previous, 'projects', 'workspace', 'thread.jsonl') })).toBe(previous)
+      expect(sessionClaudeHome({})).toBe(dirname(env.CLAUDE_PROJECTS_DIR))
     } finally { shell.env = {} }
   })
 })
