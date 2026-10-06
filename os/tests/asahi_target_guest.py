@@ -83,7 +83,7 @@ def initialize():
     run('sgdisk', '--zap-all', DISK)
     run('sgdisk', '--clear',
         f'--new=1:{MiB}:{33 * MiB - 1}', f'--typecode=1:{APFS}', '--change-name=1:macOS fixture',
-        f'--new=2:{64 * MiB}:{320 * MiB - 1}', f'--typecode=2:{target.EFI}', f'--partition-guid=2:{ESP}', '--change-name=2:Asahi',
+        f'--new=2:{64 * MiB}:{576 * MiB - 1}', f'--typecode=2:{target.EFI}', f'--partition-guid=2:{ESP}', '--change-name=2:Asahi',
         f'--new=3:{20 * GiB}:{20 * GiB + 32 * MiB - 1}', f'--typecode=3:{RECOVERY}', '--change-name=3:Recovery fixture',
         f'--new=4:{22 * GiB}:{22 * GiB + 64 * MiB - 1}', f'--typecode=4:{target.EFI}', '--change-name=4:Other OS fixture', DISK)
     run('udevadm', 'settle', '--timeout=10')
@@ -94,7 +94,9 @@ def initialize():
             os.pwrite(handle.fileno(), bytes([number]) * 65536, 0)
             os.pwrite(handle.fileno(), bytes([number + 32]) * 65536, size - 65536)
             os.fsync(handle.fileno())
-    run('mkfs.vfat', '-F', '32', '-n', 'ASAHI_TEST', DISK + '2')
+    # FAT32 needs at least 65525 clusters. A 256 MiB/4 KiB fixture
+    # mounts in Linux but is undersized for FAT32 and rejected by UEFI.
+    run('mkfs.vfat', '-F', '32', '-s', '1', '-n', 'ASAHI_TEST', DISK + '2')
     mount()
     for name in FILES:
         path = ROOT / name

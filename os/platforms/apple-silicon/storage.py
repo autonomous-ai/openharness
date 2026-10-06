@@ -170,7 +170,7 @@ class Payload:
         validate_identity(image_sha256, source_commit)
         self.device = str(device)
         self.sha256, self.source_commit = image_sha256, source_commit
-        self.root = self.home = self.boot = None
+        self.root = self.home = self.boot = self.esp = None
 
     @contextmanager
     def open(self):
@@ -194,12 +194,13 @@ class Payload:
         with work_directory() as root, ExitStack() as mounts:
             top = mounts.enter_context(mounted(parts[2], root / 'top', 'ro,rescue=nologreplay,subvolid=5'))
             boot = mounts.enter_context(mounted(parts[1], root / 'boot', 'ro,noload'))
+            self.esp = mounts.enter_context(mounted(parts[0], root / 'esp', 'ro'))
             self.root, self.home, self.boot = top / 'root', top / 'home', boot
             try:
                 self.verify_pristine()
                 yield self
             finally:
-                self.root = self.home = self.boot = None
+                self.root = self.home = self.boot = self.esp = None
 
     def verify_pristine(self):
         image = json.loads((self.root / 'usr/share/harness-os/image.json').read_text())
