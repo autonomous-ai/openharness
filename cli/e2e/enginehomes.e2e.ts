@@ -52,6 +52,90 @@ describe('the person\'s engines keeping their data elsewhere', () => {
   let daemon: IsolatedDaemon | undefined
   afterEach(async () => { await daemon?.close(); daemon = undefined })
 
+  it('a moved Codex home supplies the thread name shown on its agent', async () => {
+    const d = await IsolatedDaemon.create(); daemon = d
+    onTestFailed(() => console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`))
+    const home = join(d.root, 'codex-names')
+    mkdirSync(home)
+    writeFileSync(join(d.env.ZDOTDIR!, '.zshrc'), `export CODEX_HOME=${JSON.stringify(home)}\n`)
+    await d.start()
+    await until('the daemon to read the login shell', () => /\[env\] read \d+ variables/.test(d.log()))
+    const client = await LocalClient.connect(d)
+    const created = await client.request('agent_create', { engine: 'codex', cwd: d.projectsDir, bypassPermission: true }, 90_000)
+    expect(created.error, JSON.stringify(created)).toBeUndefined()
+    const agent = await until('the named agent to bind', async () => {
+      const now = await row(client, created.agent.id); return now?.sessionId ? now : null
+    }, 30_000)
+    // Codex can rename a thread from another client; the index changes without this pane's title changing.
+    for (const [folder, thread_name] of [[d.env.CODEX_HOME!, 'Wrong login name'], [home, 'Moved home conversation']]) {
+      writeFileSync(join(folder, 'session_index.jsonl'), JSON.stringify({ id: agent.sessionId, thread_name }) + '\n')
+    }
+    await until('the moved-home name on the agent', async () => (await row(client, agent.id))?.title === 'Moved home conversation', 20_000)
+    client.close()
+  })
+
+  it('a moved Codex home repairs a parent overwritten by its child when the daemon restarts', async () => {
+    const d = await IsolatedDaemon.create(); daemon = d
+    onTestFailed(() => console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`))
+    const home = join(d.root, 'codex-parent')
+    mkdirSync(home)
+    writeFileSync(join(d.env.ZDOTDIR!, '.zshrc'), `export CODEX_HOME=${JSON.stringify(home)}\n`)
+    await d.start()
+    const client = await LocalClient.connect(d)
+    const created = await client.request('agent_create', { engine: 'codex', cwd: d.projectsDir, bypassPermission: true }, 90_000)
+    const agent = await until('the parent to bind', async () => {
+      const now = await row(client, created.agent.id); return now?.sessionId ? now : null
+    }, 30_000)
+    await turn(client, agent.id, '!spawn scout')
+    client.close()
+    await d.stop()
+    const registryFile = join(d.dataDir, 'registry.json')
+    const saved = JSON.parse(readFileSync(registryFile, 'utf8')) as Row[]
+    const parent = saved.find(record => record.sessionId === agent.sessionId)!
+    const parentPath = parent.transcriptPath
+    const folder = join(home, 'sessions', '2026', '10', '03')
+    const child = readdirSync(folder).find(file => file.endsWith('.jsonl') && !file.includes(agent.sessionId))!
+    // Reproduce the on-disk damage an older hook left; current hooks already reject child bindings.
+    parent.transcriptPath = join(folder, child)
+    writeFileSync(registryFile, JSON.stringify(saved), { mode: 0o600 })
+    await d.start()
+    expect(d.log()).toContain(`[registry] repaired Codex parent ${agent.sessionId.slice(0, 8)}`)
+    const repaired = (JSON.parse(readFileSync(registryFile, 'utf8')) as Row[]).find(record => record.sessionId === agent.sessionId)
+    expect(repaired?.transcriptPath).toBe(parentPath)
+    const again = await LocalClient.connect(d)
+    await turn(again, agent.id, 'the parent keeps its own conversation')
+    again.close()
+  })
+
+  it.each(['claude', 'codex'] as const)('search finds external %s conversations in the moved home after startup', async engine => {
+    const d = await IsolatedDaemon.create(); daemon = d
+    onTestFailed(() => console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`))
+    const home = join(d.root, `${engine}-search`)
+    mkdirSync(home)
+    const variable = engine === 'claude' ? 'CLAUDE_CONFIG_DIR' : 'CODEX_HOME'
+    writeFileSync(join(d.env.ZDOTDIR!, '.zshrc'), `export ${variable}=${JSON.stringify(home)}\n`)
+    await d.start()
+    await until('the core to adopt the moved home', () => /\[env\] read \d+ variables/.test(d.log()))
+    const sessionId = '11111111-1111-4111-8111-111111111111', at = new Date().toISOString()
+    const folder = join(home, engine === 'claude' ? 'projects/project' : 'sessions/2026/10/06')
+    mkdirSync(folder, { recursive: true })
+    // Native records from a separate terminal, never registered as a Harness agent.
+    const records = engine === 'claude' ? [{ type: 'user', entrypoint: 'cli', sessionId, cwd: d.projectsDir,
+      timestamp: at, uuid: 'question', message: { role: 'user', content: 'movedhomepangolin' } }] : [
+      { type: 'session_meta', timestamp: at, payload: { id: sessionId, cwd: d.projectsDir, source: 'cli' } },
+      { type: 'response_item', timestamp: at, payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'movedhomepangolin' }] } },
+    ]
+    writeFileSync(join(folder, engine === 'claude' ? `${sessionId}.jsonl` : `rollout-${sessionId}.jsonl`), records.map(record => JSON.stringify(record)).join('\n') + '\n')
+    const client = await LocalClient.connect(d)
+    await until('search to return the external moved-home conversation', async () => {
+      const answer = await client.request('session_search', { query: 'movedhomepangolin' }, 30_000)
+      expect(answer.error, JSON.stringify(answer)).toBeUndefined()
+      return JSON.stringify(answer).includes(sessionId)
+    }, 45_000, 1000)
+    expect(await rows(client)).toEqual([])
+    client.close()
+  })
+
   it.each([
     ['claude', 'CLAUDE_CONFIG_DIR', 'claude-work'],
     ['codex', 'CODEX_HOME', 'codex-work'],
