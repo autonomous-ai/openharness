@@ -135,6 +135,12 @@ const LOCAL_ONLY_COMMANDS = new Set([
   'upgrade', 'vim',
 ])
 
+/** A whole prompt that is one of LOCAL_ONLY_COMMANDS, typed plainly: `/compact`, `/model opus`. */
+function isLocalOnlyCommandLine(text: string): boolean {
+  const name = /^\/([A-Za-z][\w-]*)(?:\s|$)/.exec(text.trim())?.[1]
+  return name !== undefined && LOCAL_ONLY_COMMANDS.has(name.toLowerCase())
+}
+
 /**
  * `<command-name>/goal</command-name>…<command-args>x</command-args>` → `/goal x`.
  *
@@ -430,6 +436,11 @@ function isInterruptLine(msg: NormalizedMessage): boolean {
 function realUserText(msg: NormalizedMessage): string | null {
   const text = userTextRaw(msg)
   if (text === null || INTERRUPT_MARKER.test(text)) return null
+  // Claude Code 2.1.290 also writes a built-in command it runs itself as a plain user line ("/compact"),
+  // ahead of the tagged record `commandPromptText` already keeps out. Taken as a prompt, it opened a turn
+  // nothing ever closed: after a /compact the agent read working, then unknown, until the next message
+  // (found by daemon QA). The same list decides both forms.
+  if (isLocalOnlyCommandLine(text)) return null
   // A `!command` line is not a prompt — skip it so the turn (and its recap) stays anchored to the last
   // real ask. Only when nothing but bash blocks remain: a message that also carries prose still counts.
   if (!stripBashModeBlocks(text)) return null
