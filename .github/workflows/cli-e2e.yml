@@ -78,6 +78,11 @@ jobs:
               }
               return original.call(this, file, args, ...rest);
             };
+            // Node's custom promisify returns {stdout, stderr}, not just stdout.
+            // Preserve that contract for every unrelated subprocess consumer.
+            for (const key of Object.getOwnPropertySymbols(original)) {
+              Object.defineProperty(cp.execFile, key, Object.getOwnPropertyDescriptor(original, key));
+            }
             require('node:module').syncBuiltinESMExports();
           }
           JS
