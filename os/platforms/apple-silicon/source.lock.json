@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "fedora_release": "44",
+  "upstream": {
+    "repository": "https://forge.fedoraproject.org/asahi/kiwi-descriptions.git",
+    "branch": "f44",
+    "commit": "bf502c9e39d99e7be58f60b976d09b1e7ef711c4",
+    "tree": "72e09071b813d70f5e81244e4e32ba2685a0e845"
+  },
+  "builder_image": "registry.fedoraproject.org/fedora-minimal@sha256:481d1f308c3d4c0dc98b9b58613163be04271a137ffeae3d398a8c029c46b259"
+}
