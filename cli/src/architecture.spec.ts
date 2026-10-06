@@ -143,12 +143,16 @@ const WALK_TIMEOUT_MS = 60_000
  * modules: binding each of them is the wiring this function is for. backendSocket.ts lost 615 lines in
  * those moves, and runForeground gained 28. Down to 2,380 on 6 October (step 11), at 2,346: a core on its
  * own hands an update to a master, which judges it, and no longer spawns, judges and rolls back a core.
+ *
+ * BACKEND_SOCKET_BUDGET came down again on 6 October (step 7): the Model Manager's grid commands, the grid
+ * name it worked out and the model lists it built moved to the models service, 1,457 → 1,391 lines.
  */
 const RUN_FOREGROUND_BUDGET = 2_380
 /** Lowered from 2,180 when the relay and its E2EE left the socket for the gateway (step 10, R1: 1,440).
  *  The Wi-Fi device's relay came back to it in R2, beside the device service it answers for, over the
- *  gateway's sessions (lib/autonomous-device/overGateway.ts): 1,460. */
-const BACKEND_SOCKET_BUDGET = 1_460
+ *  gateway's sessions (lib/autonomous-device/overGateway.ts): 1,460. Models' grid commands, grid name and
+ *  lists left it for the models service (step 7): 1,391. */
+const BACKEND_SOCKET_BUDGET = 1_400
 
 /** Exceptions, each with its reason. Keep this short. */
 const SERVICE_MAY_IMPORT: Record<string, string> = {
@@ -175,9 +179,6 @@ const SERVICE_MAY_IMPORT: Record<string, string> = {
  *
  * Grew by 58 for the turn a blocking Stop hook continues (a Claude /goal loop): it is the turn lifecycle,
  * which only the core's transcript normalizer and Stop-hook fallback can keep.
- *
- * Grew by 97 for the Jev catalog (#888, lib/localModels.ts and appModels.ts): the models service's own
- * code, in the core's process only until step 7 runs models in a process of its own and takes it out.
  *
  * Then at 102,019 in 430 with #893's shell launch (step 5), from 106,006 in 451: search, the viewers, workspaces, usage, the
  * monitor and the project readers run in processes of their own, and their code is loaded into the
@@ -216,7 +217,12 @@ const SERVICE_MAY_IMPORT: Record<string, string> = {
 // Then at 95,374 in 417 (step 11), from 95,380: a core on its own hands an update to a master on the new
 // build, which judges it, instead of spawning a core and judging it itself. Not the 180 lines the plan
 // counted on: a core still runs without a master when an older release's own handoff started it.
-const CORE_CLOSURE_BUDGET = 95_420
+//
+// Then at 89,632 in 401 (step 7), from 95,374 in 417: models runs in a process of its own, the Jev catalog's
+// 97 lines (#888) with it, and the core reaches grid only through its port (core/modelsLink.ts), keeping
+// which `grid` a pane runs (lib/gridBinary.ts), how a frame reads a grid's note (lib/gridAnnotation.ts) and
+// the launchers (lib/launchers.ts).
+const CORE_CLOSURE_BUDGET = 89_730
 
 /** What is not the core's, by path: each goes to a service or its own process, in the plan's order. */
 const EDGE: RegExp[] = [
@@ -291,23 +297,6 @@ const CORE_MAY_REACH: Record<string, string> = {
   'lib/e2ee/machinePeers.ts': 'step 9: the fleet reads which machines are linked (their public keys, no credential), beside the dial',
   'lib/e2ee/passwordPake.ts': 'with lib/e2ee/store.ts',
   'lib/e2ee/store.ts': 'step 8: this machine\'s identity, for Share\'s owner',
-  'lib/gridAttach.ts': 'step 7: models, in its own process',
-  'lib/gridCredentials.ts': 'step 7: models, in its own process',
-  'lib/gridDerive.ts': 'step 7: models, in its own process',
-  'lib/gridEnsure.ts': 'step 7: models, in its own process',
-  'lib/gridExec.ts': 'step 7: models, in its own process',
-  'lib/gridFleetRpc.ts': 'step 7: models, in its own process',
-  'lib/gridHandoff.ts': 'step 7: models, in its own process',
-  'lib/gridInstall.ts': 'step 7: models, in its own process',
-  'lib/gridMcpUrl.ts': 'step 7: models, in its own process',
-  'lib/gridModels.ts': 'step 7: models, in its own process',
-  'lib/gridModelsPayload.ts': 'step 7: models, in its own process',
-  'lib/gridPicture.ts': 'step 7: models, in its own process',
-  'lib/gridPresence.ts': 'step 7: models, in its own process',
-  'lib/gridReader.ts': 'step 7: models, in its own process',
-  'lib/gridTarget.ts': 'step 7: models, in its own process',
-  'lib/gridWake.ts': 'step 7: models, in its own process',
-  'lib/localModels.ts': 'step 7: models, in its own process',
   'lib/sessionSearch/sessionTurns.ts': 'the handoff (lib/agentHandoff.ts), in the edge host once CoreApi gives it the stopped agents, recaps and discovery it reads',
   'lib/sessionSearch/transcript.ts': 'the readers of other engines\' sessions keep this helper: it moves beside them, out of search\'s folder',
   'lib/sessionSearch/turns.ts': 'the handoff (lib/agentHandoff.ts), in the edge host once CoreApi gives it the stopped agents, recaps and discovery it reads',
@@ -318,9 +307,7 @@ const CORE_MAY_REACH: Record<string, string> = {
   'orchestrator/wire.ts': 'step 8: the experimental host',
   'services/fleet.ts': 'step 9: the fleet, beside the dial',
   'services/fleetRouter.ts': 'step 9: the fleet, beside the dial',
-  'services/models.ts': 'step 7: models, in its own process',
   'services/shell.ts': 'shell setup and launch receipts, in the edge host; only the argv launch stays in the core (#893)',
-  'services/requestErrors.ts': 'step 7: with the last service that uses it, models, out of the core\'s process',
   'sharing/collaboration.ts': 'step 8: the experimental host',
   'sharing/crypto.ts': 'step 8: the experimental host',
   'sharing/grants.ts': 'step 8: the experimental host',

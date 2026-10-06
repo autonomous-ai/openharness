@@ -1,7 +1,7 @@
 import { mkdtemp, rm, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { agentFrame } from './agentFrame.js'
 import type { RegisteredSession } from './registry.js'
 
@@ -33,6 +33,18 @@ describe('agentFrame', () => {
   it('carries the grid assignment, so a push cannot erase what a list reported', async () => {
     expect(await agentFrame(session(assignment), { selectedModel: null, terminalAvailable: true }))
       .toMatchObject({ grid: assignment })
+  })
+
+  it('carries what models says of the agent\'s grid, asked of the grid it is on, and nothing when it has nothing to say', async () => {
+    const said = vi.fn(() => ({ state: 'asleep' as const, note: { reason: 'offline' as const, model: assignment.model, machine: 'Studio' } }))
+    expect((await agentFrame(session(assignment), { selectedModel: null, terminalAvailable: true, gridAnnotation: said })).grid)
+      .toEqual({ ...assignment, state: 'asleep', note: { reason: 'offline', model: assignment.model, machine: 'Studio' } })
+    expect(said).toHaveBeenCalledWith(assignment)
+    expect((await agentFrame(session(assignment), { selectedModel: null, terminalAvailable: true, gridAnnotation: () => null })).grid).toEqual(assignment)
+    // An agent on no grid is asked about none.
+    said.mockClear()
+    await agentFrame(session(null), { selectedModel: null, terminalAvailable: true, gridAnnotation: said })
+    expect(said).not.toHaveBeenCalled()
   })
 
   it('never carries the grid launch — the key stays in the registry', async () => {

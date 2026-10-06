@@ -148,6 +148,37 @@ describe('service links', () => {
     expect(reply).toHaveBeenCalledWith({ error: 'SERVICE_UNAVAILABLE', service: 'search', retryable: true })
   })
 
+  it('waits longer for the answers that take longer, by service and type, and the usual half minute for the rest', async () => {
+    const links = make({
+      owned: { search: ['session_search', 'session_tail'], models: ['grid_fleet_run'] },
+      waits: { models: { grid_fleet_run: 60_000, ensure: 30_000 }, search: { session_tail: 10_000 } },
+    })
+    links.accept('models', TOKEN, sink(), vi.fn())
+    links.accept('search', TOKEN, sink(), vi.fn())
+    const run = vi.fn()
+    const ensure = vi.fn()
+    const search = vi.fn()
+    const tail = vi.fn()
+    links.route('grid_fleet_run', {}, ASKER, run)
+    void links.call('models', 'ensure', {}).then(ensure)
+    links.route('session_search', {}, ASKER, search)
+    links.route('session_tail', {}, ASKER, tail)
+    vi.advanceTimersByTime(5_000)
+    expect(search).toHaveBeenCalledWith({ error: 'SERVICE_UNAVAILABLE', service: 'search', retryable: true })
+    expect(tail).not.toHaveBeenCalled()
+    vi.advanceTimersByTime(5_000)
+    expect(tail).toHaveBeenCalled()
+    vi.advanceTimersByTime(20_000)
+    await Promise.resolve()
+    expect(ensure).toHaveBeenCalledWith({ error: 'SERVICE_UNAVAILABLE', service: 'models', retryable: true })
+    expect(run).not.toHaveBeenCalled()
+    vi.advanceTimersByTime(30_000)
+    expect(run).toHaveBeenCalledWith({ error: 'SERVICE_UNAVAILABLE', service: 'models', retryable: true })
+    // A type the waits only inherit from Object's prototype waits as any other does.
+    links.route('session_search', {}, ASKER, vi.fn())
+    expect(links.call('models', 'toString', {})).toBeInstanceOf(Promise)
+  })
+
   it('answers what was waiting on a service that goes, and lets a newer connection replace an older one', () => {
     const links = make({ owned: { search: ['session_search'], devices: ['harness_devices_list'] } })
     links.accept('devices', TOKEN, sink(), vi.fn())

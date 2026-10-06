@@ -20,8 +20,8 @@ import { readLeanBundle } from '../src/harnessd/leanBundle.js'
 
 type Engine = 'claude' | 'codex'
 /** The processes the master runs the services in, and the services, each on its own link to the core. */
-const PROCESSES = ['search', 'viewers', 'edge', 'teams']
-const SERVICES = ['search', 'viewers', 'store', 'workspaces', 'usage', 'monitor', 'projects', 'teams']
+const PROCESSES = ['search', 'viewers', 'edge', 'teams', 'models']
+const SERVICES = ['search', 'viewers', 'store', 'workspaces', 'usage', 'monitor', 'projects', 'teams', 'models']
 
 const commandOf = (pid: number): string => execFileSync('ps', ['-o', 'command=', '-p', String(pid)], { encoding: 'utf8' }).trim()
 const rssMiB = (pid: number): number => Number(execFileSync('ps', ['-o', 'rss=', '-p', String(pid)], { encoding: 'utf8' }).trim()) / 1024

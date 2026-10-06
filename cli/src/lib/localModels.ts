@@ -12,7 +12,11 @@ import { processExists } from './processLiveness.js'
 import type { LocalRecord, PictureState } from './gridPicture.js'
 import { displayModelName } from './gridReader.js'
 import { readEnvExports } from './gridWake.js'
+import { MIN_CODING_CONTEXT } from './codingContext.js'
 import { APP_LABEL, AppStartError, GRID_LABEL, appContext, readAppRecords, writeAppRecords, type AppEngine, type AppEngineOps, type AppEngineRecord, type AppModel } from './appModels.js'
+
+// Its own module, so the API launches the core keeps need not load this one (codingContext.ts).
+export { MIN_CODING_CONTEXT }
 
 const GiB = 1024 ** 3
 const obj = (v: unknown): Record<string, any> => v && typeof v === 'object' && !Array.isArray(v) ? v : {}
@@ -27,11 +31,6 @@ const validArg = (v: string): boolean => !!v && !v.startsWith('-') && !/[\x00-\x
 /** `grid info` statuses of a grid that is not up. Grid refuses `engines` and `join` on one, and
  * names `grid start` as the way back. Anything else unknown stays unknown rather than "down". */
 const DOWN = new Set(['stopped', 'asleep'])
-/** The smallest context a coding agent can work in. Codex, Claude Code and OpenCode each open a
- * session with a system prompt and tool list of several thousand tokens and grow from there; Ollama's
- * own guides for all three put the floor at 64K, and below it a session survives a few turns and then
- * fails. Every model offered here is one this machine can give at least this much. */
-export const MIN_CODING_CONTEXT = 64 * 1024
 /** Where a start begins for a file whose header could not be read: the size a 64 GB Mac was seen
  * to hold for a 35B model, one step above the floor. */
 const UNREAD_CONTEXT = 128 * 1024
