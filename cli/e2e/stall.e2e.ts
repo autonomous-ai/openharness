@@ -63,7 +63,7 @@ async function turn(client: LocalClient, agentId: string, content: string, durin
 }
 
 /** The engine processes in each tmux pane, by pid, from tmux's own pane list and the process table. The
- *  fake engines take their engine's name as their process title. */
+ *  fake engines' process title is their engine's name, then their arguments, as a CLI's is. */
 async function enginePids(d: IsolatedDaemon): Promise<Map<string, number[]>> {
   const panes = (await d.tmux.run('list-panes', '-a', '-F', '#{pane_id} #{pane_pid}')).trim().split('\n')
     .map((line) => line.split(' ')).map(([id, pid]) => ({ id, pid: Number(pid) }))
@@ -75,7 +75,7 @@ async function enginePids(d: IsolatedDaemon): Promise<Map<string, number[]>> {
   for (const pane of panes) {
     const tree = new Set<number>([pane.pid])
     for (const pid of tree) for (const child of children.get(pid) ?? []) tree.add(child)
-    result.set(pane.id, table.filter(([, pid, , command]) => tree.has(Number(pid)) && /^(claude|codex)$/.test(command.trim()))
+    result.set(pane.id, table.filter(([, pid, , command]) => tree.has(Number(pid)) && /^(claude|codex)(?:\s|$)/.test(command.trim()))
       .map(([, pid]) => Number(pid)))
   }
   return result

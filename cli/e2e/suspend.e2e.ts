@@ -61,9 +61,11 @@ const processTable = () => execFileSync('ps', ['-A', '-o', 'pid=,ppid=,command='
  *  names its process `codex` as the real binary's reads in ps. */
 function enginePid(d: IsolatedDaemon, root: number, engine: Engine, native = false): number | null {
   const table = processTable()
-  const job = table.find((p) => p.ppid === root && (p.command === engine || p.command.includes(join(d.root, 'bin', engine))))
+  // A fake engine's process title is its name, then its arguments, as a CLI's command line is.
+  const titled = (command: string) => command === engine || command.startsWith(`${engine} `)
+  const job = table.find((p) => p.ppid === root && (titled(p.command) || p.command.includes(join(d.root, 'bin', engine))))
   if (!job || !native) return job?.pid ?? null
-  return table.find((p) => p.ppid === job.pid && p.command === engine)?.pid ?? null
+  return table.find((p) => p.ppid === job.pid && titled(p.command))?.pid ?? null
 }
 /** Whether the pane's terminal is in line mode rather than raw, as an engine keeps it. */
 async function lineMode(d: IsolatedDaemon, pane: string): Promise<boolean> {
