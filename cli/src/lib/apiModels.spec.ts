@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { BackendSocket } from '../backendSocket.js'
+import { dispatchDown, gatewayOf, relaySocket } from '../testing/relaySocket.js'
 import { ApiConnections } from './apiConnections.js'
 import { apiModelsRequest, chatModels, forgetApiModels, listApiModels, refreshApiLaunch, resolveApiTarget } from './apiModels.js'
 import { classifyGridAssignment } from './gridAssignment.js'
@@ -133,11 +134,11 @@ describe('an API as a model source', () => {
 
 describe('agent_retarget onto an API model', () => {
   function retarget(socket: BackendSocket, payload: Record<string, unknown>, connId = 'local:apis') {
-    return (socket as any).dispatchDown({ type: 'agent_retarget', payload: { requestId: 'r', agentId: 'agent-1', ...payload } }, connId, connId === 'remote' ? 'relay' : 'local')
+    return dispatchDown(socket, { type: 'agent_retarget', payload: { requestId: 'r', agentId: 'agent-1', ...payload } }, connId, connId === 'remote' ? 'relay' : 'local')
   }
 
   it('resolves the endpoint and key on this computer and hands the engine launch that override', async () => {
-    const socket = new BackendSocket('fixture')
+    const socket = relaySocket('fixture')
     const reply = vi.spyOn(socket as any, 'emitReply').mockImplementation(() => {})
     const saved = store.save({ provider: 'openrouter', apiKey: secret })
     const access = vi.spyOn(ApiConnections.prototype, 'modelAccess').mockImplementation(() => ({
@@ -165,15 +166,15 @@ describe('agent_retarget onto an API model', () => {
   })
 
   it('refuses a session that is not the owner\'s, and a frame naming an API with anything else', async () => {
-    const socket = new BackendSocket('fixture')
+    const socket = relaySocket('fixture')
     const reply = vi.spyOn(socket as any, 'emitReply').mockImplementation(() => {})
     const moved = vi.fn(async () => ({ ok: true as const }))
     socket.onRetargetAgent = moved
     // Encrypted, but not the owner's paired session: refused, as managing these APIs would be.
-    vi.spyOn((socket as any).e2ee, 'unwrapDown').mockReturnValueOnce({
+    vi.spyOn(gatewayOf(socket).e2ee, 'unwrapDown').mockReturnValueOnce({
       type: 'agent_retarget', payload: { requestId: 'r', agentId: 'agent-1', apiConnection: 'openrouter', apiModel: 'z-ai/glm-5' },
     })
-    await (socket as any).dispatchDown({ type: 'agent_retarget', payload: { __e2e: { v: 1, k: 'p', n: 1, ct: 'fixture' } } }, 'remote')
+    await dispatchDown(socket, { type: 'agent_retarget', payload: { __e2e: { v: 1, k: 'p', n: 1, ct: 'fixture' } } }, 'remote')
     expect(reply).toHaveBeenLastCalledWith('remote', 'agent_retarget', 'r', { error: 'OWNER_REQUIRED' })
     await retarget(socket, { apiConnection: 'openrouter', apiModel: 'z-ai/glm-5', gridModel: 'Qwen' })
     expect(reply).toHaveBeenLastCalledWith('local:apis', 'agent_retarget', 'r', expect.objectContaining({ error: 'INVALID_GRID' }))
@@ -184,25 +185,25 @@ describe('agent_retarget onto an API model', () => {
   })
 
   it('lets the owner\'s paired session use the API, as it may manage it', async () => {
-    const socket = new BackendSocket('fixture')
+    const socket = relaySocket('fixture')
     const reply = vi.spyOn(socket as any, 'emitReply').mockImplementation(() => {})
     const saved = store.save({ provider: 'openrouter', apiKey: secret })
     vi.spyOn(ApiConnections.prototype, 'modelAccess').mockImplementation(() => ({ connection: saved, apiKey: secret }))
     vi.spyOn(globalThis, 'fetch').mockImplementation(answering(listing))
-    vi.spyOn((socket as any).e2ee, 'sessionRole').mockReturnValue('web')
-    vi.spyOn((socket as any).e2ee, 'unwrapDown').mockReturnValueOnce({
+    vi.spyOn(gatewayOf(socket).e2ee, 'sessionRole').mockReturnValue('web')
+    vi.spyOn(gatewayOf(socket).e2ee, 'unwrapDown').mockReturnValueOnce({
       type: 'agent_retarget', payload: { requestId: 'r', agentId: 'agent-1', apiConnection: 'openrouter', apiModel: 'z-ai/glm-5' },
     })
     const moved = vi.fn(async () => ({ ok: true as const }))
     socket.onRetargetAgent = moved
-    await (socket as any).dispatchDown({ type: 'agent_retarget', payload: { __e2e: { v: 1, k: 'p', n: 1, ct: 'fixture' } } }, 'owner')
+    await dispatchDown(socket, { type: 'agent_retarget', payload: { __e2e: { v: 1, k: 'p', n: 1, ct: 'fixture' } } }, 'owner')
     expect(moved).toHaveBeenCalledWith(expect.objectContaining({ grid: expect.objectContaining({ networkId: 'api:openrouter', model: 'z-ai/glm-5' }) }))
     expect(reply).toHaveBeenLastCalledWith('owner', 'agent_retarget', 'r', { retargeted: true })
     await socket.stop()
   })
 
   it('answers why an API cannot be used, without touching the pane', async () => {
-    const socket = new BackendSocket('fixture')
+    const socket = relaySocket('fixture')
     const reply = vi.spyOn(socket as any, 'emitReply').mockImplementation(() => {})
     const moved = vi.fn(async () => ({ ok: true as const }))
     socket.onRetargetAgent = moved

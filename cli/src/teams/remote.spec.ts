@@ -6,6 +6,7 @@ import type { AddressInfo } from 'node:net'
 import { WebSocket, WebSocketServer } from 'ws'
 import { expect, it, vi } from 'vitest'
 import { BackendSocket, type Frame } from '../backendSocket.js'
+import { gatewayOf, relaySocket } from '../testing/relaySocket.js'
 import { attachLocalWsServer } from '../localWsServer.js'
 import { env } from '../config/env.js'
 import { registry } from '../lib/registry.js'
@@ -20,7 +21,7 @@ import { channelTeamId } from './service.js'
 for (const channel of [false, true]) it(`routes ${channel ? 'tab channel' : 'team'} questions and replies through paired encrypted relays`, async () => {
   const root = mkdtempSync(join(tmpdir(), 'team-remote-'))
   const originalPort = env.PORT
-  const hosts = [new BackendSocket('team-owner'), new BackendSocket('team-peer')]
+  const hosts = [relaySocket('team-owner'), relaySocket('team-peer')]
   const machineIds = ['team-owner', 'team-peer']
   const servers = hosts.map(() => createServer((_req, res) => { res.statusCode = 404; res.end() }))
   const localServers: ReturnType<typeof attachLocalWsServer>[] = []
@@ -43,9 +44,11 @@ for (const channel of [false, true]) it(`routes ${channel ? 'tab channel' : 'tea
     }
     // The fixture substitutes only the cloud's opaque envelope routing and terminal engines.
     // RPC authorization, persistence, input receipts, relay pools, pairing and crypto are real.
-    const sendTo = host.sendTo.bind(host)
-    vi.spyOn(host, 'isConnected').mockReturnValue(true)
-    vi.spyOn(host, 'sendTo').mockImplementation((connId, frame) => {
+    // The relay's side is the gateway's: what it sends one relayed connection, and whether its link is up.
+    const gateway = gatewayOf(host) as unknown as { sendTo(connId: string, frame: Frame): void; connected(): boolean }
+    const sendTo = gateway.sendTo.bind(gateway)
+    vi.spyOn(gateway, 'connected').mockReturnValue(true)
+    vi.spyOn(gateway, 'sendTo').mockImplementation((connId, frame) => {
       const socket = sockets.get(connId)
       if (!socket) { sendTo(connId, frame); return }
       wire.push(frame)
@@ -59,7 +62,7 @@ for (const channel of [false, true]) it(`routes ${channel ? 'tab channel' : 'tea
     const connId = `team-relay-${++nextConnection}`
     sockets.set(connId, socket)
     let target: BackendSocket | undefined
-    socket.on('close', () => { sockets.delete(connId); target?.e2ee.dropSession(connId) })
+    socket.on('close', () => { sockets.delete(connId); (target ? gatewayOf(target) : undefined)?.e2ee.dropSession(connId) })
     socket.on('message', raw => {
       const frame = JSON.parse(raw.toString()) as Frame
       if (frame.type === 'machine_select') {
@@ -69,8 +72,8 @@ for (const channel of [false, true]) it(`routes ${channel ? 'tab channel' : 'tea
         socket.send(JSON.stringify({ type: 'connected', payload: { machineId: machineIds[index] } }))
       } else if (target) {
         wire.push(frame)
-        // The same remote dispatch entry point used by the adapter's cloud socket.
-        ;(target as unknown as { enqueueDown(frame: Frame, connId: string): void }).enqueueDown(frame, connId)
+        // The same remote dispatch entry point the gateway's backend link uses.
+        ;(gatewayOf(target) as unknown as { enqueueDown(frame: Frame, connId: string, transport: string): void }).enqueueDown(frame, connId, 'relay')
       }
     })
   })
@@ -81,7 +84,7 @@ for (const channel of [false, true]) it(`routes ${channel ? 'tab channel' : 'tea
     for (let i = 0; i < 2; i++) {
       const identity = newIdentity()
       const remote = 1 - i
-      await hosts[remote].setRemotePassword(password)
+      await gatewayOf(hosts[remote]).setRemotePassword(password)
       const paired = await connectWithPassword({ targetMachineId: machineIds[remote], password, selfIdentity: identity,
         accessToken: 'synthetic-test-token', backendWsBase: base, autonomousEnv: 'prod', timeoutMs: 5000 })
       expect(paired.ok).toBe(true)

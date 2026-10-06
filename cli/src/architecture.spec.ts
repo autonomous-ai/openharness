@@ -144,7 +144,8 @@ const WALK_TIMEOUT_MS = 60_000
  * those moves, and runForeground gained 28.
  */
 const RUN_FOREGROUND_BUDGET = 2_600
-const BACKEND_SOCKET_BUDGET = 2_180
+/** Lowered from 2,180 when the relay and its E2EE left the socket for the gateway (step 10, R1). */
+const BACKEND_SOCKET_BUDGET = 1_440
 
 /** Exceptions, each with its reason. Keep this short. */
 const SERVICE_MAY_IMPORT: Record<string, string> = {
@@ -179,15 +180,21 @@ const SERVICE_MAY_IMPORT: Record<string, string> = {
  * monitor and the project readers run in processes of their own, and their code is loaded into the
  * core's only when they run there instead (services/inline.ts). Then at 101,896 in 430 (step 6): the
  * Store runs beside the viewers.
+ *
+ * Grew to 102,524 in 433 (step 10, R1), from 101,896 in 430: the relay and its E2EE left the socket for
+ * the gateway (gateway/gateway.ts, gateway/upstream.ts) behind the two interfaces it speaks to the core
+ * through (`GatewayPort`, `GatewayEvents` in core/api.ts), still in the core's process. The socket lost
+ * 742 lines; the gateway's 1,193 and the interfaces' 110 are loaded until R2 runs the gateway in a process
+ * of its own, which takes them, the E2EE manager and the P2P channels out of the core's process.
  */
 //
 // Connected TUI shells added a literal-argv launch port and shell service (#893, 160 loaded lines); moving
 // the search filename out of its CLI command removed 188, so that change lowered the closure by 28.
-const CORE_CLOSURE_BUDGET = 101_990
+const CORE_CLOSURE_BUDGET = 102_600
 
 /** What is not the core's, by path: each goes to a service or its own process, in the plan's order. */
 const EDGE: RegExp[] = [
-  /^lib\/e2ee\//, /^cable\//, /^device\//, /^lib\/autonomous-device\//, /^sharing\//, /^teams\//, /^orchestrator\//, /^services\//,
+  /^gateway\//, /^lib\/e2ee\//, /^cable\//, /^device\//, /^lib\/autonomous-device\//, /^sharing\//, /^teams\//, /^orchestrator\//, /^services\//,
   /^lib\/grid(Attach|Credentials|Derive|Ensure|Exec|FleetRpc|Handoff|Install|McpUrl|Models|ModelsPayload|Picture|Presence|Reader|Target|Wake)\.ts$/,
   /^lib\/localModels\.ts$/,
   // The Store's and the viewers' parts of dsh; the launch path (installed, manifest, launch, runtime, …) is the core's.
@@ -237,6 +244,8 @@ const CORE_MAY_REACH: Record<string, string> = {
   'dsh/service.ts': STORE_BYPASS,
   'dsh/update.ts': STORE_BYPASS,
   'dsh/updates.ts': STORE_BYPASS,
+  'gateway/gateway.ts': 'step 10, R2: the gateway, in a process of its own',
+  'gateway/upstream.ts': 'step 10, R2: the gateway, in a process of its own',
   'lib/autonomous-device/direct.ts': 'step 10: the Wi-Fi device, into the devices process over the gateway',
   'lib/autonomous-device/discovery.ts': 'step 10: the Wi-Fi device, into the devices process over the gateway',
   'lib/autonomous-device/dump.ts': 'step 10: the Wi-Fi device, into the devices process over the gateway',
@@ -336,6 +345,18 @@ describe('the daemon\'s shape', () => {
         : /(^|\/)services\//.test(from) || (/(^|\/)(cli|backendSocket|localWsServer)\.js$/.test(from) && !typeOnly)))
       .map(({ file, from }) => `${file} imports ${from}`)
     expect(wrong, 'The core calls services only through CorePorts, and is handed the socket\'s pieces as dependencies (src/core/AGENTS.md).').toEqual([])
+  })
+
+  it('the gateway reaches the core only through core/api.ts: never a core module, the registry, cli.ts or the socket', () => {
+    // It speaks to the core through GatewayPort and GatewayEvents alone, so that it can run in a process of
+    // its own (step 10, R2) without taking any of the core with it.
+    const wrong = importsIn('gateway').filter(({ from, typeOnly }) => {
+      if (/(^|\/)core\//.test(from)) return from !== '../core/api.js' || !typeOnly
+      if (/(^|\/)(cli|backendSocket|localWsServer)\.js$/.test(from)) return true
+      return /(^|\/)lib\/registry\.js$/.test(from)
+    }).map(({ file, from }) => `${file} imports ${from}`)
+    expect(wrong, 'The gateway is the relay, not the core: what it needs of the core is an event in GatewayEvents (src/core/api.ts).').toEqual([])
+    expect(importsIn('gateway').some(({ from, typeOnly }) => from === '../core/api.js' && typeOnly)).toBe(true)
   })
 
   it('the master holds no feature code: Node itself, its own folder, and the log trimmer', () => {

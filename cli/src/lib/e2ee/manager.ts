@@ -118,6 +118,9 @@ export interface E2eeManagerDeps {
   onIdentityRevoked?: (identityPub: string) => void
   /** Release connection-scoped resources on revoke, eviction, replacement and disconnect. */
   onSessionDropped?: (connId: string) => void
+  /** A connection proved a paired identity with its hello: its session is open, under that identity's
+   *  role. The gateway registers it with the core from this (gateway/gateway.ts). */
+  onSessionOpened?: (connId: string, role: C.PairRole, identityPub: string) => void
   /** A peer just proved this machine's remote password (it is already trusted here as a client). A
    *  machine joiner carries its machineId so the caller can pin it back and sync the trust group. */
   onPeerLinked?: (peer: LinkedPeer) => void
@@ -839,6 +842,7 @@ export class E2eeManager {
       terminalS2cCounter: 0,
       terminalC2sRecv: new ReplayWindow(),
     })
+    this.deps.onSessionOpened?.(connId, role, identityPub)
     const id = this.store.getIdentity()
     const enc = C.aeadSeal(keys.s2c, 0, C.utf8('e2e-welcome'), C.utf8(JSON.stringify({
       groupKey: C.b64e(this.groupKey),

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { BackendSocket } from './backendSocket.js'
+import { relaySocket } from './testing/relaySocket.js'
 import { bindCancelRequest } from './testing/socketCore.js'
 
 /** The request gate: a daemon that is still starting answers nothing, and then everything, in order. */
@@ -12,7 +13,7 @@ describe('BackendSocket request gate', () => {
   }
 
   it('answers at once when nothing holds it — the way every socket but the daemon\'s is built', async () => {
-    const socket = new BackendSocket('fixture')
+    const socket = relaySocket('fixture')
     const cancelled: string[] = []
     bindCancelRequest(socket, (target) => { cancelled.push(target) })
     client(socket, 'local:open')
@@ -22,7 +23,7 @@ describe('BackendSocket request gate', () => {
   })
 
   it('holds requests until it is opened, then dispatches them in the order they came', async () => {
-    const socket = new BackendSocket('fixture')
+    const socket = relaySocket('fixture')
     socket.holdRequests()
     socket.holdRequests()
     const cancelled: string[] = []
@@ -45,7 +46,7 @@ describe('BackendSocket request gate', () => {
   it('closes a local client that floods a daemon still starting, and keeps the others', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     try {
-      const socket = new BackendSocket('fixture')
+      const socket = relaySocket('fixture')
       socket.holdRequests()
       const cancelled: string[] = []
       bindCancelRequest(socket, (target) => { cancelled.push(target) })
