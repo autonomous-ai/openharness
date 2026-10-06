@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { homedir, userInfo } from 'node:os'
 import { isAbsolute, basename, dirname, join } from 'node:path'
+import { baseNode } from '../harnessd/baseNode.js'
 import { env } from '../config/env.js'
 import { isTerminalEngine, type AgentEngine } from '../engines/types.js'
 import { isOpencodeV2 } from '../engines/opencode/version.js'
@@ -855,7 +856,7 @@ function codexStartupRetryScript(tmuxBinary: string): string {
   const probe = 'harness_codex_check'
   const tmux = shellSingleQuote(tmuxBinary)
   return 'harness_codex_check() {\n'
-    + `  ${shellSingleQuote(process.execPath)} -e ${shellSingleQuote(CODEX_STARTUP_RETRY_PROBE)} "$@"\n`
+    + `  ${shellSingleQuote(baseNode(process.execPath))} -e ${shellSingleQuote(CODEX_STARTUP_RETRY_PROBE)} "$@"\n`
     + '}\n'
     + 'harness_codex_start() {\n'
     + '  [ "$harness_codex_go" = 1 ] || return 0\n'
@@ -902,7 +903,7 @@ function codexOwnedLaunchPrelude(): string {
   const probe = `const {execFileSync}=require('node:child_process');try { const h=execFileSync(process.argv[1],['--help'],{timeout:5000,maxBuffer:1048576,encoding:'utf8',stdio:['ignore','pipe','pipe']});process.exit(/--no-daemon(?:[^A-Za-z0-9-]|$)/.test(h)?0:64); } catch { process.exit(2); }`
   return 'harness_codex_probe() {\n'
     + '  harness_codex_mode=0\n'
-    + `  harness_codex_seen=$(${shellSingleQuote(process.execPath)} -e ${shellSingleQuote(probe)} "$1") || harness_codex_mode=$?\n`
+    + `  harness_codex_seen=$(${shellSingleQuote(baseNode(process.execPath))} -e ${shellSingleQuote(probe)} "$1") || harness_codex_mode=$?\n`
     + '  case "$harness_codex_mode" in\n'
     + '    0) harness_codex_no_daemon=1 ;;\n'
     + '    64) harness_codex_no_daemon= ;;\n'
@@ -1077,7 +1078,7 @@ export function shellSingleQuote(value: string): string {
  */
 function npmRuntimePrelude(recipe: EngineInstallRecipe, runtimeNode: string): string {
   if (!recipe.executable.npmGlobal) return ''
-  const bins = [...new Set([dirname(runtimeNode), dirname(process.execPath)])]
+  const bins = [...new Set([dirname(runtimeNode), dirname(baseNode(process.execPath))])]
     .map(shellSingleQuote)
     .join(' ')
   return [

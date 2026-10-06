@@ -45,7 +45,8 @@ export async function startServiceProcess(name: string | undefined, deps: Servic
     console.error(`[service] ${name ?? '(none)'}: ${socketPath ? 'no such service in this build' : 'the core has no local socket to reach'}`)
     return exit(2)
   }
-  process.title = `harnessd ${name}`
+  // The same name as the hard link it was exec'd through (harnessd/processName.ts): one name in ps and Activity Monitor.
+  process.title = `harnessd-${name}`
   // Its lines share the daemon's log with the master's: a write a full disk refuses is dropped, not fatal.
   ignoreLogWriteErrors()
   // As every daemon process did at load: a service that runs `ps` or `git` must not get mangled output.

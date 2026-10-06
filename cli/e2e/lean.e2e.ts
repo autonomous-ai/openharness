@@ -84,7 +84,7 @@ describe('harnessd\'s master and services lean', () => {
     const master = d.pid!
     expect(commandOf(master)).toBe('harnessd')
     expect(commandOf(d.corePid()!)).toContain(`${bundle} __run`)
-    for (const [name, pid] of servicePids(d)) expect(commandOf(pid), name).toBe(`harnessd ${name}`)
+    for (const [name, pid] of servicePids(d)) expect(commandOf(pid), name).toBe(`harnessd-${name}`)
     // Lean: under the cost of parsing the whole CLI, which every one of them paid before (at idle,
     // 115 to 160 MiB each), and a long way under it at that (55 to 80).
     for (const [name, pid] of [['master', master], ...servicePids(d)] as Array<[string, number]>) {

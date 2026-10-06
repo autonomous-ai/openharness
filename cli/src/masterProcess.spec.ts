@@ -48,6 +48,17 @@ describe('a master started on cli.js', () => {
     expect(calls.logs).toEqual([])
   })
 
+  it('re-executes through the node it is given — the managed one, named harnessd — and checks it is there first', () => {
+    const named = '/rt/node-v1/libexec/harnessd/harnessd'
+    const { given, calls } = deps({ node: () => named })
+    startMasterFromBundle('/cli/cli.js', given)
+    expect(calls.execs.map(({ file, args }) => [file, args[0]])).toEqual([[named, named]])
+    const gone = deps({ node: () => named, exists: (path) => path !== named })
+    startMasterFromBundle('/cli/cli.js', gone.given)
+    expect(gone.calls.execs).toEqual([])
+    expect(gone.calls.logs).toEqual([expect.stringContaining(`${named} is not there to re-execute on`)])
+  })
+
   it('runs from cli.js, with the services still from the lean bundle, where this Node cannot re-execute', () => {
     const { given, calls } = deps({ execve: null })
     startMasterFromBundle('/cli/cli.js', given)

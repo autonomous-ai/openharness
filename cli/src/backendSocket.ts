@@ -1,4 +1,5 @@
 import type { PurgeAgentService } from './lib/purgeAgentService.js'
+import { baseNode } from './harnessd/baseNode.js'
 import type { Asker, PromptScopes } from './core/api.js'
 import { ServiceUnavailableError } from './core/serviceHost.js'
 import type { ActivityFrame } from './lib/turnActivity.js'
@@ -386,7 +387,7 @@ export class BackendSocket {
           'team_delivery', { action: 'prompt_replied', agentId: address.agentId, teamId, questionId })
       },
       command: address => address.machineId === this.machineId
-        ? this.teamCommand ?? `${[process.execPath, ...process.execArgv, process.argv[1]].map(shellQuote).join(' ')} team --port ${env.PORT}`
+        ? this.teamCommand ?? `${[baseNode(process.execPath), ...process.execArgv, process.argv[1]].map(shellQuote).join(' ')} team --port ${env.PORT}`
         : 'harness team',
       runtime: async address => {
         Address.parse(address)
@@ -424,7 +425,7 @@ export class BackendSocket {
     return this.orchestratorService ??= new OrchestratorService({
       stateDir: join(env.ADAPTER_DATA_DIR, 'orchestrator'),
       workspaceDir: join(homedir(), 'harnesses', 'orchestrated'),
-      command: this.orchestratorCommand ?? `${[process.execPath, ...process.execArgv, process.argv[1]].map(shellQuote).join(' ')} orchestrator --port ${env.PORT} --machine ${shellQuote(this.machineId)}`,
+      command: this.orchestratorCommand ?? `${[baseNode(process.execPath), ...process.execArgv, process.argv[1]].map(shellQuote).join(' ')} orchestrator --port ${env.PORT} --machine ${shellQuote(this.machineId)}`,
       catalog: () => listInstalledDsh().filter(d => d.manifest.kind !== 'viewer' && !isHiddenBuiltin(d) && !!d.manifest.engine && supportsFirstPrompt(d.manifest.engine)).map(d => ({
         id: d.id, name: d.manifest.name, description: d.manifest.description ?? '', engine: d.manifest.engine!, viewer: !!d.manifest.viewer,
       })),

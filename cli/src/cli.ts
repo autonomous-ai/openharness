@@ -63,6 +63,7 @@ import { newCommand } from './lib/newCommand.js'
 import { gridSetupCommand } from './lib/gridSetupCommand.js'
 import { WebSocket as NewCommandSocket } from 'ws'
 import { describeMasterStatus, readStatusFile } from './harnessd/master.js'
+import { namedNode } from './harnessd/processName.js'
 import { probeThisMaster, startMaster } from './masterProcess.js'
 import { startServiceProcess } from './serviceProcess.js'
 import { isLocalSocketName } from './lib/localSocket.js'
@@ -1336,7 +1337,8 @@ async function spawnDaemon(session: AuthSession | null, runtimeNode: string | nu
   // harnessd: a master that keeps the daemon's core running (harnessd/supervisor.ts). HARNESS_NO_MASTER=1
   // starts the core on its own, as before, for a machine where the master itself is in question.
   const entry = process.env.HARNESS_NO_MASTER === '1' ? '__run' : '__harnessd'
-  const child = spawn(runtimeNode ?? process.execPath, [SCRIPT_PATH, entry], {
+  // Under its own name in Activity Monitor (harnessd/processName.ts) rather than `node`.
+  const child = spawn(namedNode(runtimeNode ?? process.execPath, entry === '__run' ? 'harnessd-core' : 'harnessd', env.ADAPTER_RUNTIME_DIR), [SCRIPT_PATH, entry], {
     detached: true,
     env: { ...process.env },
     stdio: ['ignore', logFd, logFd],
