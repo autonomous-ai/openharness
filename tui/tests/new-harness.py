@@ -157,6 +157,10 @@ def end_new_terminal(previous_agents, previous_placement):
     with urllib.request.urlopen(request, timeout=2) as response:
         assert json.load(response)['data']['ok']
     wait(lambda: placement() == previous_placement, 'exited terminal removes its pane')
+    # The model loses the pane before its next terminal frame is painted. The
+    # shell footer is wider, so taking + coordinates from it clicks empty space
+    # after the agent footer returns (October 6 ARM native-fixture failure).
+    wait(lambda: ' · Agent default' not in screen().splitlines()[-1], 'exited terminal repaints the agent footer')
     assert 'The terminal closed' not in screen(), 'an ordinary shell must not leave an agent error card'
 def submit(count):
     # Git discovery is asynchronous. Wait for its answer before accepting the visible draft.
