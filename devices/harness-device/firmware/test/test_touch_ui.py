@@ -106,6 +106,7 @@ static ht_draft_t draft;
 static ht_workspace_t workspace;
 static ht_tab_carousel_t tab_carousel;
 static ht_tab_carousel_t pane_carousel;
+static ht_tab_carousel_t inbox_carousel;
 static int tab_switches;
 static char tab_target[64];
 static action_t tab_queued;
@@ -210,7 +211,7 @@ for name in ['copy', 'recap_preview', 'notice_unread', 'notice_was_read', 'notic
     code += function(name)
 code += function('render_settings') + function('ui_visit_state')
 code += function('ui_project_known') + function('ui_focus_project') + function('ui_apply_pending_focus')
-code += function('focus_centred') + function('focus_header') + function('focus_clipped') + function('tabs_move') + function('tab_name') + function('tab_split') + function('tab_fade') + function('tab_neighbour') + function('focus_carousel') + function('tab_label') + function('render_focus_tabs') + function('pane_label') + function('render_focus_panes') + function('render_agents') + function('render_tabs') + function('page_controls') + function('render_notice') + function('render_focus_inbox') + function('render_list')
+code += function('focus_centred') + function('focus_header') + function('focus_clipped') + function('tabs_move') + function('tab_name') + function('tab_split') + function('tab_fade') + function('tab_neighbour') + function('focus_carousel') + function('tab_label') + function('render_focus_tabs') + function('pane_label') + function('render_focus_panes') + function('render_agents') + function('render_tabs') + function('page_controls') + function('render_notice') + function('css_line') + function('inbox_line') + function('inbox_page') + function('render_focus_inbox') + function('render_list')
 for name in ['notice_remove', 'notice_sync_view', 'notice_selection', 'notice_restore_selection', 'notice_add', 'ui_notify_task_done', 'ui_notif_seen', 'ui_notif_read', 'ui_notif_replace', 'ui_notif_open', 'ui_question_close', 'ui_answer_receipt']:
     code += function(name)
 for name in ['event', 'ui_project_emit', 'ui_project_restore_event', 'ui_project_clear_event', 'ui_project_set_name', 'ui_project_remove', 'ui_project_clear_all', 'ui_project_apply_order']:
@@ -298,7 +299,7 @@ static void scene_take(void) {
 static void reset(void) {
     host_features=31; fake_ms=0; fake_asleep=false; present_scene=true;
     memset(&visit,0,sizeof visit); visit_sends=visit_wire=returns=0; question_pending=false;
-    memset(&tab_carousel,0,sizeof tab_carousel); memset(&pane_carousel,0,sizeof pane_carousel);
+    memset(&tab_carousel,0,sizeof tab_carousel); memset(&pane_carousel,0,sizeof pane_carousel); memset(&inbox_carousel,0,sizeof inbox_carousel);
     memset(&workspace,0,sizeof workspace); tab_switches=0; tab_target[0]=0;
     memset(&selection,0,sizeof(selection)); selections=0;
     memset(&carry,0,sizeof(carry)); carry_prepares=carry_drops=0; voice_context[0]=0;
@@ -2226,18 +2227,61 @@ int main(int argc, char **argv) {
         #undef VOICE_SCENE
         #undef VOICE_BARS
     }
-    // THE FOCUS INBOX: the close pill, then a column of cards — machine, mark or dot + agent, message.
+    // THE FOCUS INBOX (design 2026-10-06; owner, 2026-10-06: four lines and arrows): the close pill, then the notices
+    // paged like the tabs. A notice is a block centred on the glass — machine (Inter 25, muted), mark + name (Inter 25,
+    // green), the message in the recap's Inter 30 on up to four lines — with a faint › on the side that has more, and
+    // "1/2" at y 400. Showing it reads nothing. A swipe pages (s.offset follows), a tap on an arrow's side pages back,
+    // a tap on the page opens that agent, the cross goes back; the run count holds while the finger drags.
     reset(); ht_character_select(&character, HT_CHARACTER_FOCUS); strcpy(s.agents[0].engine, "claude");
     {
-        cable_notif_t rows[2]={{.agent_id="a",.name="Payments refactor",.machine="MacBook",.summary="Retry queue shipped."},
+        cable_notif_t rows[2]={{.agent_id="a",.name="Payments refactor",.machine="MacBook",
+                                .summary="Shipped the retry queue, moved the parser tests to new fixtures and fixed the flaky upload check on CI so the nightly build is green again."},
                                {.agent_id="b",.name="Landing page",.machine="Studio Mac",.summary="Hero and pricing are in."}};
         ui_notif_replace(rows,2); ui_notif_open(); scene_take(); portrait_focus(dir,"focus-inbox");
         assert(s.view == INBOX && scene.background == BG);   // black, like the face
-        int cards = 0;
-        for (int i = 0; i < s.hit_count; i++) cards += s.hits[i].action == A_NOTICE;
-        assert(cards == 2);
-        tap(1000, 233, 190); assert(desktop_opens == 1 && !strcmp(opened_agent, "a"));   // a card opens its agent
-        ui_notif_open(); scene_take(); tap(2000, 233, 32); assert(s.view == HOME);        // the cross goes back
+        assert(habitat_scene_receipt() == 0 && !s.notice[0].read_on_dial);   // shown is not read: only a tap reads
+        bool machine=false, name=false, right=false, left=false; int lines = 0, last = 0, name_y = -1, first_y = 999;
+        for (int i = 0; i < scene.count; i++) {
+            const ht_run_t *r = &scene.runs[i];
+            if (!strcmp(r->text,"MacBook")) machine = r->font == &ht_lv_inter_25.base && r->fg == color(0x8a8a99) && abs(r->x + r->w/2 - 233) <= 1;
+            if (!strcmp(r->text,"Payments refactor")) { name = r->font == &ht_lv_inter_25.base && r->fg == color(0x04fe08); name_y = r->y; }
+            if (r->font == &ht_lv_inter_30.base && r->text[0]) {
+                assert(r->fg == color(0xd6d6d2) && abs(r->x + r->w/2 - 233) <= 1 && r->x >= 60 && r->x + r->w <= 406);
+                lines++; last = i; if (r->y < first_y) first_y = r->y;
+            }
+            right |= !strcmp(r->text,"\xe2\x80\xba") && r->x > 400;
+            left |= !strcmp(r->text,"\xe2\x80\xb9");
+            assert(!strstr(r->text,"Studio") && !strstr(r->text,"Landing"));   // no neighbour peeks in
+        }
+        assert(machine && name && right && !left && lines == 4 && name_y < first_y);
+        assert(strstr(scene.runs[last].text, "..."));                         // the fourth line is cut
+        int runs = scene.count;
+        for (int d = -200; d <= 200; d += 40) {
+            int keep = inbox_carousel.position; inbox_carousel.position = keep + d;
+            ht_scene_t dragged; ht_scene_clear(&dragged, BG); s.hit_count = 0; render_list(&dragged);
+            assert(dragged.count == runs);
+            for (int i = 0; i < dragged.count; i++) { ht_rect_t b = ht_run_bounds(&dragged.runs[i]); assert(b.x >= 0 && b.x + b.w <= HT_WIDTH); }
+            inbox_carousel.position = keep;
+        }
+        scene_take();
+        habitat_touch(true,300,233,1000);
+        for (int k=1;k<=5;k++) habitat_touch(true,300-k*12,233,1000+k*40);
+        habitat_touch(false,240,233,1260);
+        for (uint32_t t=1260;t<=1900;t+=16) surface_tick(t);
+        scene_take();
+        assert(s.view == INBOX && s.offset == 1 && !desktop_opens);
+        bool two=false, back=false, more=false;
+        for (int i = 0; i < scene.count; i++) {
+            two |= !strcmp(scene.runs[i].text,"2/2");
+            back |= !strcmp(scene.runs[i].text,"\xe2\x80\xb9") && scene.runs[i].x < 60;
+            more |= !strcmp(scene.runs[i].text,"\xe2\x80\xba");
+        }
+        assert(two && back && !more);
+        tap(2000, 20, 233);                                                         // the left arrow's side pages back
+        for (uint32_t t=2100;t<=2600;t+=16) surface_tick(t);
+        scene_take(); assert(s.view == INBOX && s.offset == 0 && !desktop_opens);
+        tap(3000, 233, 233); assert(desktop_opens == 1 && !strcmp(opened_agent, "a"));   // a tap on the page opens it
+        ui_notif_open(); scene_take(); tap(3500, 233, 32); assert(s.view == HOME);        // the cross goes back
     }
     // An open question on Focus: shown on the home face, in the recap's place, and nowhere else.
     reset(); ht_character_select(&character, HT_CHARACTER_FOCUS); strcpy(s.agents[0].engine, "claude");
@@ -2615,11 +2659,12 @@ int main(int argc, char **argv) {
         assert(action_enabled(A_INBOX));
         s.offset = 3; FOCUS_PAGE("lit-controls-scrolled");
         s.offset = 0; s.pressed = 1; FOCUS_PAGE("lit-controls-pressed");
-        // The empty inbox ("All caught up.") and the machines list.
+        // The empty inbox ("No notification", design 2026-10-06) and the machines list.
         reset(); ht_character_select(&character, HT_CHARACTER_FOCUS); view(INBOX); s.notice_count = 0; FOCUS_PAGE("lit-inbox-empty");
         {
             bool caught = false;
-            for (int i = 0; i < scene.count; i++) caught |= !strcmp(scene.runs[i].text, "All caught up.") && focus_inter(scene.runs[i].font);
+            for (int i = 0; i < scene.count; i++) caught |= !strcmp(scene.runs[i].text, "No notification") && scene.runs[i].font == &ht_lv_inter_25.base &&
+                                                      scene.runs[i].fg == color(0xada6ad);
             assert(caught);
         }
         reset(); ht_character_select(&character, HT_CHARACTER_FOCUS); view(MACHINES); s.machine_count = 2;
