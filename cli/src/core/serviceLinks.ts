@@ -142,8 +142,9 @@ export function createServiceLinks(options: ServiceLinksOptions) {
   }
 
   return {
-    /** A service connecting. Null — and the socket closes it — unless the master started it. */
-    accept(service: string, token: string, sink: ServiceSink, close: (code: number, reason: string) => void): ServiceLink | null {
+    /** A service connecting. Null — and the socket closes it — unless the master started it.
+     *  `accepted` acknowledges the authenticated connection before its queued traffic is delivered. */
+    accept(service: string, token: string, sink: ServiceSink, close: (code: number, reason: string) => void, accepted?: () => void): ServiceLink | null {
       if (!Object.hasOwn(options.owned, service) || !tokenMatches(token)) {
         log(`[services] a connection as service "${service.slice(0, 40)}" was refused`)
         return null
@@ -154,6 +155,9 @@ export function createServiceLinks(options: ServiceLinksOptions) {
       links.set(service, connected)
       seen.add(service)
       log(`[services] ${service} connected`)
+      // Found by QA on a quiet machine: a cold Share received its request before `connected`, so it
+      // read agents without a core connection and answered HARNESS_NOT_FOUND. Welcome it first.
+      accepted?.()
       const owed = held.get(service) ?? []
       held.delete(service)
       for (const frame of owed) sink.sendFrame(frame)
