@@ -14,7 +14,8 @@
 // A prompt can carry directives that script the turn: `!slow <ms>` holds the answer back,
 // `!tool <command>` runs a tool call first, `!grow <MiB>` appends that much compaction history
 // before answering (the transcripts that crashed the daemon on 2026-10-03), `!hold` leaves the turn
-// open until the next prompt, `!ask` asks the person which drink they would like in the engine's own
+// open until the next prompt, `!holdtool <command>` leaves it open with that tool still running (an
+// interrupt then writes the tool's aborted output before the turn's end, as the CLIs do), `!ask` asks the person which drink they would like in the engine's own
 // dialog and answers with their choice, `!permit <command>` asks permission to run a command the way
 // the engine does and runs it only if allowed, `!flood <KiB>` prints that much to the terminal, in
 // numbered lines, the way a build log or a long diff does, `!clear` starts a new conversation in the
@@ -528,6 +529,8 @@ export async function run(engine, config = {}, { native = false } = {}) {
 
   let turn = 0
   let open = null
+  // The tool `!holdtool` left running: an interrupt flushes its output, marked aborted, before the turn ends.
+  let runningTool = null
   // The question dialog `!ask` draws, as the real CLIs draw theirs (the parser's fixtures,
   // src/lib/__fixtures__/question-single.txt and question-codex.txt). Claude takes a digit as the
   // choice; Codex moves its cursor on a digit and takes Enter; Esc cancels either.
@@ -955,6 +958,7 @@ export async function run(engine, config = {}, { native = false } = {}) {
       await runHooks('SessionStart', { source: 'clear' })
       return
     }
+    runningTool = null
     if (open) await finish('(interrupted by a new prompt)')
     // Both CLIs run their UserPromptSubmit hooks on every prompt, before the prompt is taken: notify.mjs
     // sends it through the same door as SessionStart, the catch hook that re-registers a session whose
@@ -1018,6 +1022,15 @@ export async function run(engine, config = {}, { native = false } = {}) {
       await new Promise((resolve) => setTimeout(resolve, 300))
     }
     if (directive?.[1] === 'hold') return
+    if (directive?.[1] === 'holdtool') {
+      // A tool still running when the person interrupts. Both CLIs write its output, marked aborted, only
+      // AFTER the interrupt and just before the turn's end: what a real Codex 0.160 did in daemon QA.
+      const id = `call_${turn}`
+      if (engine === 'claude') claude({ type: 'assistant', message: { id: `msg_${turn}_u`, role: 'assistant', model: config.claudeModel ?? 'claude-opus-5-5', content: [{ type: 'tool_use', id, name: 'Bash', input: { command: directive[2] } }], stop_reason: 'tool_use' } })
+      else codex('response_item', { type: 'function_call', call_id: id, name: 'exec_command', arguments: JSON.stringify({ cmd: directive[2] }) })
+      runningTool = id
+      return
+    }
     if (directive?.[1] === 'permitnext') {
       // The turn goes on; its request arrives with the next paste, between it and its Enter.
       armed = { command: directive[2] || 'printf hi', turn }
@@ -1273,6 +1286,11 @@ export async function run(engine, config = {}, { native = false } = {}) {
         // Ctrl-C ends a running turn, and empties the composer either way.
         buffer = ''
         if (open) {
+          if (runningTool) {
+            if (engine === 'claude') claude({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: runningTool, content: '[Request interrupted by user for tool use]', is_error: true }] } })
+            else codex('response_item', { type: 'function_call_output', call_id: runningTool, output: 'aborted by user' })
+            runningTool = null
+          }
           if (engine === 'claude') claude({ type: 'user', message: { role: 'user', content: [{ type: 'text', text: '[Request interrupted by user]' }] } })
           else codex('event_msg', { type: 'turn_aborted', turn_id: open })
           open = null
