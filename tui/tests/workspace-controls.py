@@ -114,6 +114,7 @@ def screen():
 
 
 last_mouse_target = None
+recent_mouse_targets = []
 
 
 def wait(fn, label, seconds=8):
@@ -122,7 +123,8 @@ def wait(fn, label, seconds=8):
         if fn():
             return
         time.sleep(.05)
-    raise AssertionError(label + '\n' + screen() + '\nLast mouse target: ' + str(last_mouse_target))
+    raise AssertionError(label + '\n' + screen() + '\nLast mouse target: ' + str(last_mouse_target)
+                         + '\nRecent mouse targets: ' + str(recent_mouse_targets))
 
 
 def shown(text, seconds=8):
@@ -164,7 +166,26 @@ def click_text(text, occurrence=0, button=0, row=None, before=None):
         last_mouse_target = {'text': text, 'hits': hits, 'occurrence': occurrence, 'screen': captured}
         return hits
     wait(lambda: len(locate()) > occurrence, 'mouse target ' + text)
-    click(*locate()[occurrence], button=button)
+    target = locate()[occurrence]
+    recent_mouse_targets.append(last_mouse_target)
+    del recent_mouse_targets[:-3]
+    click(*target, button=button)
+
+
+def painted_workspace(alpha, beta):
+    # A layout/window command is acknowledged before its next frame is drawn.
+    # Read mouse coordinates only after both titles occupy their current panes;
+    # an old full-width Alpha title can otherwise land on Beta's new controls.
+    positions = [(name, tuple(map(int, value('#{pane_left} #{pane_top} #{pane_width}', pane).split())))
+                 for pane, name in [(alpha, 'Alpha task'), (beta, 'Beta task')]]
+    lines = screen().splitlines()
+    return all(0 < y < len(lines) and name in lines[y - 1][x:x + w]
+               for name, (x, y, w) in positions)
+
+
+def alpha_agent_picker():
+    wait(lambda: any('Change agent' in line and 'Alpha task' in line for line in screen().splitlines()),
+         'the visible agent picker belongs to Alpha')
 
 
 def requests(kind):
@@ -379,6 +400,7 @@ def title_drag_journey(alpha, beta):
         hn('set', '-gu', '@hn-border')
     hn('select-pane', '-t', alpha)
     wait(lambda: value('#{window_layout}') == original, 'restore layout after title drag')
+    wait(lambda: painted_workspace(alpha, beta), 'restored layout paints both pane titles')
     print('PASS workspace: plain title divider drags retain tmux resize behavior', flush=True)
 
 
@@ -446,7 +468,7 @@ try:
     # The right header labels act on the captured pane even if external focus changes.
     x, y = map(int, value('#{pane_left} #{pane_top}', alpha).split())
     click_text('Codex', row=y - 1)
-    shown('Change agent')
+    alpha_agent_picker()
     keys('Escape')
     click_text('GPT-6 Astra', row=y - 1)
     shown('Fixture local model')
@@ -599,8 +621,10 @@ try:
     keys('Escape')
     keys('C-b', 'n')
     wait(lambda: value('#{window_name}') == 'Remote', 'tmux next-window is unchanged')
+    shown('Gamma remote task terminal')
     keys('C-b', 'p')
     wait(lambda: value('#{window_id}') == workspace, 'tmux previous-window is unchanged')
+    wait(lambda: painted_workspace(alpha, beta), 'previous window paints both pane titles before a header click')
     print('PASS workspace: program mouse input and tmux next/previous bindings remain intact', flush=True)
 
     # A peer prunes the stopped source before its close reply arrives. A failed desk write then
@@ -608,7 +632,7 @@ try:
     api({'action': 'config', 'patch': {'closeFailure': None, 'pruneOnClose': True, 'closeDelay': 350, 'deskFailures': 1}})
     original_layout = value('#{window_layout}')
     click_text('Codex', row=y - 1)
-    shown('Change agent')
+    alpha_agent_picker()
     tmux('send-keys', '-l', '-t', 'test', 'Claude')
     shown('› Claude')
     click_text('Claude Code', before=85)
