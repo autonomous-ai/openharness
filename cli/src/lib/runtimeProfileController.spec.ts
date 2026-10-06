@@ -923,6 +923,24 @@ describe('RuntimeProfileController', () => {
       expect(keys).toEqual(['Escape'])
     })
 
+    it('takes the next switch after a refused one, when the app names the agent', async () => {
+      // The apps address an agent by its agent id ('h1'), not by the engine session ('s1').
+      const held = agent('gpt-reserve', 'medium')
+      const refused = drive(held.manager, held.value, CODEX_0160_RESERVE, () => { throw new Error('no row may be pressed') })
+      await expect(refused.controller.setProfile('h1', encodeRuntimeProfile({ sessionId: 'h1', engine: 'codex', model: 'gpt-6-luna', effort: 'high' })))
+        .rejects.toMatchObject({ code: 'MODEL_UNAVAILABLE' })
+
+      const high = encodeRuntimeProfile({ sessionId: 'h1', engine: 'codex', model: 'gpt-reserve', effort: 'high' })
+      vi.spyOn(held.manager, 'modelsForSession').mockResolvedValue([{ id: high, displayName: 'Luna Reserve / High' }])
+      const { controller } = drive(held.manager, held.value, CODEX_0160_RESERVE, (screen, key) => {
+        if (screen === CODEX_0160_RESERVE && key === '1') return CODEX_0160_RESERVE_REASONING
+        if (screen === CODEX_0160_RESERVE_REASONING && key === '3') { applied(held.manager, held.value, 'gpt-reserve', 'high'); return CODEX_0160_COMPOSER }
+        throw new Error(`unexpected ${key}`)
+      })
+      await controller.setProfile('h1', high)
+      expect(held.manager.selectedModel(held.value)).toBe(high)
+    })
+
     it('confirms a model the catalog does not describe that applied its one effort at once', async () => {
       const { value, manager } = agent('gpt-5.5', 'high', await codexHome([]))
       const target = encodeRuntimeProfile({ sessionId: 'h1', engine: 'codex', model: 'gpt-6-luna', effort: 'auto' })

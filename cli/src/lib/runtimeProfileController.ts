@@ -787,7 +787,11 @@ export class RuntimeProfileController {
           if (!next || !inspectRuntimePane(session.engine, next).dialog) break
         }
       }
-      if (controlStarted) this.deps.manager.cancelControl(sessionId)
+      // By the engine session, as beginControl keyed it. `sessionId` is whichever id the request named,
+      // and the apps name the agent: cancelling under that left the control in place, and every later
+      // switch of the agent answered BUSY until the daemon restarted (found by e2e/models.e2e.ts, a
+      // refused switch followed by one that should have gone through).
+      if (controlStarted) this.deps.manager.cancelControl(session.sessionId)
       // A failed switch used to leave NOTHING in the log — the picker just flashed open and shut on the
       // user's terminal and the device said nothing useful. Name the session, engine and reason.
       const code = error instanceof RuntimeProfileControlError ? error.code : 'TMUX_FAILED'
