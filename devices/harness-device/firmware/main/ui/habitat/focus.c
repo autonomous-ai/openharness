@@ -186,7 +186,9 @@ static void scene_origin(const ht_pet_scene_t *sc, int bias, int *x, int *y);
 /*
  * THE ALERT (owner, 2026-10-05: no bell on the working face; the pet tells you, then a blue dot at 12 o'clock): a
  * notice that arrives while the working scene shows plays the pet's alert scene ONCE from f->notice_ms, in the
- * working scene's place, its bubble the overlay. NULL when there is none to play now.
+ * working scene's place, its bubble the overlay. An alert with no frames of its own (Claude's, owner 2026-10-06:
+ * "bubble only") leaves the working scene playing and pops its bubble over it, placed from the working scene's
+ * origin, in the run after the working scene's overlay. NULL when there is none to play now.
  */
 static const ht_pet_scene_t *alert_scene(const ht_character_face_t *f, const char *recap, uint32_t *step)
 {
@@ -215,7 +217,7 @@ void ht_focus_alert_from(const ht_character_face_t *f, int *x, int *y)
     unsigned last = a->steps - 1;
     const ht_cell_frame_t *b = &a->overlay->frames[a->overlay->loop[last]];
     int ox, oy;
-    scene_origin(a, 4, &ox, &oy);
+    scene_origin(a->frames || !pet->working_scene ? a : pet->working_scene, 4, &ox, &oy);
     *x = ox + a->overlay->at[last][0] + b->cols * b->cell / 2;
     *y = oy + a->overlay->at[last][1] + b->rows * b->cell / 2;
 }
@@ -385,8 +387,11 @@ uint32_t ht_focus_pet_next_ms(const ht_character_face_t *f, const char *recap)
     }
     uint32_t alert_step;
     const ht_pet_scene_t *alert = alert_scene(f, recap, &alert_step);
-    if (alert) return f->notice_ms + (alert_step + 1) * alert->step_ms;   // its next step, or the work again after the last
     const ht_pet_scene_t *sc = working_scene(f, recap);
+    if (alert) {   // its next step, or the work again after the last; under a bubble only, the work's next frame too
+        uint32_t next = f->notice_ms + (alert_step + 1) * alert->step_ms, work = scene_next_ms(sc, 0, f->clock_ms);
+        return !alert->frames && work && work < next ? work : next;
+    }
     if (sc) return scene_next_ms(sc, 0, f->clock_ms);
     ht_pet_state_t state = pet_state(f, recap);
     uint32_t each = pet->step_ms[state], now = f->clock_ms / each;
@@ -748,7 +753,7 @@ void ht_focus_face(ht_scene_t *s, const ht_character_face_t *f, uint8_t frame, u
     const ht_pet_scene_t *scene = working_scene(f, recap);
     uint32_t alert_step = 0;
     const ht_pet_scene_t *alert = alert_scene(f, recap, &alert_step);
-    if (alert) {
+    if (alert && alert->frames) {
         // A notice just came: the pet's alert in the working scene's place, once.
         int sx, sy;
         scene_origin(alert, 4, &sx, &sy);
@@ -788,12 +793,14 @@ void ht_focus_face(ht_scene_t *s, const ht_character_face_t *f, uint8_t frame, u
                               s->background);
     else for (int n = 0; n < RECAP_LINES; n++) {
         // The scene's overlay (Codex's sandboxes) takes the first line's slot, empty without a recap.
-        if (n == 0 && alert) {   // the alert's bubble, in the overlay's slot
+        // The alert's bubble: in the overlay's slot, or the next one when the working scene plays on under it.
+        if (alert && n == (alert->frames ? 0 : 1)) {
             int sx, sy;
-            scene_origin(alert, 4, &sx, &sy);
+            scene_origin(alert->frames ? alert : scene, 4, &sx, &sy);
             ht_cell_sprite(s, sx + alert->overlay->at[alert_step][0], sy + alert->overlay->at[alert_step][1],
                            &alert->overlay->frames[alert->overlay->loop[alert_step]]);
-        } else if (n == 0 && scene && scene->overlay) scene_overlay(s, scene, 4, 0, f->clock_ms, rf);
+        } else if (n == 0 && scene && scene->overlay && !(alert && alert->frames))
+            scene_overlay(s, scene, 4, 0, f->clock_ms, rf);
         else no_text(s, rf);
     }
 

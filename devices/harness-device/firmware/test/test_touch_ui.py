@@ -2081,7 +2081,7 @@ int main(int argc, char **argv) {
         #undef XBARS
     }
     // THE WORKING SCENE and a notice (owner, 2026-10-05): no bell pill. For each engine with a scene the pet plays its
-    // alert once (its steps, its bubble in the overlay slot), then a blue dot flies up round the rim, a
+    // alert once (its steps, its bubble in the overlay slot; Claude's is a bubble over the working scene), then a blue dot flies up round the rim, a
     // ring goes out once, and the 12 px dot stays at 12 o'clock; a tap there opens the inbox, and a second notice
     // plays the alert again. The run count never changes while it does.
     {
@@ -2096,6 +2096,11 @@ int main(int argc, char **argv) {
             #define HAS_SPRITE(sc_) ({ bool f_ = false; for (int i_ = 0; i_ < scene.count; i_++) \
                 f_ |= scene.runs[i_].sprite.cells && scene.runs[i_].sprite.width == (sc_)->w && \
                       scene.runs[i_].sprite.height == (sc_)->h; f_; })
+            // The alert on the glass at a step: its own frames, or (Claude: a bubble only) the working scene under the
+            // step's bubble frame.
+            #define ALERT_AT(k_) ({ bool g_ = false; const ht_cell_frame_t *b_ = &al->overlay->frames[al->overlay->loop[k_]]; \
+                for (int i_ = 0; i_ < scene.count; i_++) g_ |= scene.runs[i_].sprite.cells == b_->cells; \
+                al->frames ? HAS_SPRITE(al) && g_ : HAS_SPRITE(wk) && g_; })
             #define BLUE_BOX() ({ int f_ = -1; for (int i_ = 0; i_ < scene.count; i_++) if (scene.runs[i_].box.h && \
                 scene.runs[i_].box.fill == color(0x006fff)) f_ = i_; f_; })
             reset(); ht_character_select(&character, HT_CHARACTER_FOCUS); strcpy(s.agents[0].engine, engines[e]);
@@ -2107,14 +2112,16 @@ int main(int argc, char **argv) {
             ui_notif_replace(&note,1);
             fake_ms = 2000; scene_take();
             uint32_t from = s.notice_ms;
-            assert(from && HAS_SPRITE(al) && BLUE_BOX() < 0);                      // the pet tells, no dot yet
+            assert(from && ALERT_AT(0) && BLUE_BOX() < 0);                         // the pet tells, no dot yet
             for (int i = 0; i < scene.count; i++) {
                 assert(scene.runs[i].font != &ht_lv_montserrat_14.base || !scene.runs[i].text[0]);   // no bell
                 if (scene.runs[i].arc == 2 && scene.runs[i].text[0]) assert(scene.runs[i].fg == ht_rgb(0x00ff2f));
             }
-            assert(s.pet_next_ms == from + S);                                      // its next step
+            // its next step (under a bubble only, or the working scene's next frame if that comes first)
+            assert(al->frames ? s.pet_next_ms == from + S : s.pet_next_ms > from && s.pet_next_ms <= from + S);
             fake_ms = from + 5 * S + 3; scene_take();
-            assert(HAS_SPRITE(al) && s.pet_next_ms == from + 6 * S);
+            assert(ALERT_AT(5) && (al->frames ? s.pet_next_ms == from + 6 * S :
+                                   s.pet_next_ms > fake_ms && s.pet_next_ms <= from + 6 * S));
             fake_ms = from + A + 100; scene_take();                          // flying
             int b = BLUE_BOX(); assert(b >= 0 && scene.runs[b].box.h > 12 && scene.runs[b].box.h < 28);
             assert(HAS_SPRITE(wk) && s.pet_next_ms && s.pet_next_ms - fake_ms <= 40);
@@ -2139,11 +2146,12 @@ int main(int argc, char **argv) {
             // A second notice: the alert again, the dot hidden while it plays.
             cable_notif_t two[2] = {note, {.agent_id="c",.name="Third",.summary="Done"}};
             fake_ms += 1000; ui_notif_replace(two,2); scene_take();
-            assert(s.notice_ms == (fake_ms | 1) && HAS_SPRITE(al) && BLUE_BOX() < 0);
+            assert(s.notice_ms == (fake_ms | 1) && ALERT_AT(0) && BLUE_BOX() < 0);
             // The dot opens the inbox, the name still the panes.
             fake_ms += 3000; scene_take(); assert(BLUE_BOX() >= 0);
             tap(fake_ms + 10, 233, 10); assert(s.view == INBOX);
             #undef HAS_SPRITE
+            #undef ALERT_AT
             #undef BLUE_BOX
         }
         cable_notif_t note={.agent_id="b",.name="Other",.summary="Done"};

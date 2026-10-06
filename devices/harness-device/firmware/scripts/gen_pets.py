@@ -6,8 +6,9 @@
 
 Claude Code: Clawd, drawn at the glass's 1 px with anti-aliased edges (assets/pets/claude, exported by
 mockup/clawd_v3.py; the look is mockup/clawd-v3.html): the small pet is the rest loop (24 steps of 120 ms, cell
-frames like Muse's), and four scenes — working 26 steps of 55 ms, listening 56 of 60 (its sound arcs drawn by
-focus.c), sending 40 of 60, the alert 20 of 65 — each a few body poses moved by a per-step dy, and a props sprite.
+frames like Muse's), three scenes — working 26 steps of 55 ms, listening 56 of 60 (its sound arcs drawn by
+focus.c), sending 40 of 60 — each a few body poses moved by a per-step dy, and a props sprite; and the alert, 20
+steps of 65 ms of a "!" bubble over the working scene (CLAUDE_BUBBLE_AT).
 Codex: its small pet is the robot pack's idle, review and waiting loops drawn at 2x (mockup/codex-rest.html), and
 its three scenes come from the same pack (assets/pets/codex; mockup/codex_options.py W2 / L1 / S2):
 the pack's 192 x 208 robot frames at one byte per pixel (cell 1) and an overlay sprite (the sandbox bubble, the
@@ -737,6 +738,49 @@ def generate_alert_scene(prefix, engine):
     return out, n + on, nbytes + obytes + (len(palette) + len(opal)) * 2
 
 
+# Claude's alert is a bubble only (owner, 2026-10-06, mockup/claude_alert_options.py "E"): the working scene plays
+# on and the "!" bubble pops up beside the chef's hat. The bubble is the top of each alert props picture (the pan at
+# its foot is the working scene's own); a step's (px, py) plus CLAUDE_BUBBLE_AT is its place from the working
+# body's top-left. The alert body poses are not stored (they cost 157 KB; the whole alert was 269 KB).
+CLAUDE_BUBBLE_AT = (-205, -115)
+
+
+def bubble_top(p):
+    """The props picture down to its first empty row (the bubble without the pan), cut to its ink: (picture, its
+    top-left in the props picture), or None when the picture is the pan alone."""
+    a = p.getchannel('A')
+    rows = [y for y in range(p.height) if a.crop((0, y, p.width, y + 1)).getbbox()]
+    gap = next((y for y in range(rows[0], rows[-1]) if y not in rows), None)
+    if not gap:
+        return None
+    box = a.crop((0, 0, p.width, gap)).getbbox()
+    return p.crop(box), (box[0], box[1])
+
+
+def generate_claude_bubble(prefix):
+    meta = CLAUDE_SCENES['alert']
+    steps = meta['steps']
+    tops = [bubble_top(p) for p in claude_frames('alert/props')]
+    used = sorted({st[1] for st in steps if tops[st[1]] is not None})
+    pieces = [tops[i][0] for i in used]
+    grids, opal = quantise_pieces(pieces)
+    ov = prefix + '_ov'
+    out = [f'static const uint16_t {ov}_pal[{len(opal)}] = {{' + ','.join(str(0 if k == 0 else rgb565_panel(c)) for k, c in enumerate(opal)) + '};\n']
+    shapes = [(p.width, p.height, g) for p, g in zip(pieces, grids)] + [(1, 1, [0])]   # the last: "nothing now"
+    code, order, n, nbytes = cell_frames(ov, shapes, f'{ov}_pal')
+    out += code
+    none = order[-1]
+    loop = [order[used.index(st[1])] if tops[st[1]] is not None else none for st in steps]
+    at = [(st[2] + tops[st[1]][1][0] + CLAUDE_BUBBLE_AT[0], st[3] + tops[st[1]][1][1] + CLAUDE_BUBBLE_AT[1])
+          if tops[st[1]] is not None else (0, 0) for st in steps]
+    out.append(f'static const uint8_t {ov}_loop[{len(loop)}] = {{' + ','.join(map(str, loop)) + '};\n')
+    out.append(f'static const int16_t {ov}_at[{len(at)}][2] = {{' + ','.join(f'{{{x},{y}}}' for x, y in at) + '};\n')
+    out.append(f'static const ht_pet_overlay_t {ov} = {{{ov}_frames,{ov}_loop,{ov}_at}};\n')
+    # No frames of its own: focus.c plays the working scene under it.
+    out.append(f'static const ht_pet_scene_t {prefix} = {{0,0,NULL,NULL,{len(steps)},{meta["step_ms"]},&{ov},0,0,NULL,NULL,NULL}};\n')
+    return out, n, nbytes + len(opal) * 2
+
+
 # engine -> (working scene, listening scene, sending scene): prefix, loop, size in cells, step_ms, steps; levels
 # (Codex's: prefix and kind, generate_pack_scene)
 SCENES = {
@@ -779,7 +823,7 @@ def generate():
             scene_stats.append((sprefix, n, nbytes))
             refs_to.append('&' + sprefix)
         if engine == 'claude':
-            code, n, nbytes = generate_claude_scene('claude_alert', 'alert', 1, ALERT_BIAS)
+            code, n, nbytes = generate_claude_bubble('claude_alert')
         else:
             code, n, nbytes = generate_alert_scene(f'{engine}_alert', engine)
         out += code
