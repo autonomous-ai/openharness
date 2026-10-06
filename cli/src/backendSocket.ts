@@ -254,11 +254,6 @@ export class BackendSocket {
   /** Answers `sessions_list` with the whole reply: the conversation an agent holds and how many lines it
    *  has (cli.ts binds core/transcripts/history.ts). Null answers UNSUPPORTED. */
   sessionsProvider: ((payload: Record<string, unknown>) => Promise<Record<string, unknown>>) | null = null
-  /** Answers `agent_handoff_prepare` through its last argument, for the owner alone: the structured handoff
-   *  file for an agent whose engine is about to change, written where it says, never text for the next
-   *  engine (cli.ts binds core/agents/handoff.ts over lib/agentHandoff.ts). Null answers UNSUPPORTED. */
-  handoffRequestProvider: ((payload: Record<string, unknown>, asker: { local: boolean; owner: boolean },
-    reply: (result: Record<string, unknown>) => void) => void) | null = null
   /** How each agent's last turn ended, from the turn frames this socket sends: the monitor's activity
    *  once a turn is over (`agents_list`, core/agents/list.ts). */
   readonly monitorCompletions = new MonitorCompletions()
@@ -968,12 +963,6 @@ export class BackendSocket {
         // An agent's last turn summaries and questions, for a device's tiles (core/turns/recaps.ts, bound by cli.ts).
         case 'agent_recent':
           reply(type, requestId, this.agentRecentProvider ? this.agentRecentProvider(payload) : { error: 'UNSUPPORTED' })
-          return
-
-        // "Change agent": what the old engine did, written for the new one (core/agents/handoff.ts, bound by cli.ts).
-        case 'agent_handoff_prepare':
-          if (this.handoffRequestProvider) this.handoffRequestProvider(payload, asker, answer)
-          else answer({ error: 'UNSUPPORTED' })
           return
 
         // A rename, a model and effort, or an app opening the agent (core/agents/update.ts, bound by cli.ts).

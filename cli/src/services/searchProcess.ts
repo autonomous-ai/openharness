@@ -8,8 +8,8 @@
  * process's alone: a crash or a leak in search costs search, and the master starts it again.
  */
 import type { CoreApi } from '../core/api.js'
-import { ACCOUNT_BACKEND_OFF, AGENT_ACTIONS_OFF, DAEMON_UNKNOWN, DELIVERIES_OFF, emptyPorts, LANE_OFF, resolveAgent, TERMINALS_OFF } from '../core/api.js'
-import { databaseHistory } from '../core/transcripts/databaseHistory.js'
+import { ACCOUNT_BACKEND_OFF, CONVERSATIONS_OFF, AGENT_ACTIONS_OFF, DAEMON_UNKNOWN, DELIVERIES_OFF, emptyPorts, LANE_OFF, resolveAgent, TERMINALS_OFF } from '../core/api.js'
+import { databaseHistory } from '../lib/databaseHistory.js'
 import { ExternalSessions, OpenSessions } from '../lib/sessionSearch/external.js'
 import { externalProviders } from '../lib/sessionSearch/externals/index.js'
 import type { RegisteredSession } from '../lib/registry.js'
@@ -41,6 +41,7 @@ export function searchCoreApi(
 ): CoreApi {
   return {
     dataDir,
+    conversations: CONVERSATIONS_OFF,
     terminals: TERMINALS_OFF,
     machine: UNASKED.machine,
     agents: {

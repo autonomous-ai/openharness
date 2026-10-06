@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { createHandoffRequest, type Handoff } from './handoff.js'
+import { createHandoffRequest, type Handoff } from './handoffRequest.js'
 
 /**
- * `agent_handoff_prepare`, answered by the core: the owner's alone, checked before anything is written,
+ * `agent_handoff_prepare`, answered by the handoff service: the owner's alone, checked before anything is written,
  * written outside the connection's line, and answered with fixed fields and code-shaped errors only.
  */
 const CHANGE = '0123456789abcdef0123456789abcdef'

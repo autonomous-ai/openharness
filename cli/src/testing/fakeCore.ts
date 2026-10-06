@@ -4,13 +4,14 @@
  * one (docs/design/2026-10-03-harnessd.md, the core boundary).
  */
 import { vi } from 'vitest'
-import { TERMINALS_OFF, type CoreApi } from '../core/api.js'
+import { CONVERSATIONS_OFF, TERMINALS_OFF, type CoreApi } from '../core/api.js'
 
 type Overrides = { [K in keyof CoreApi]?: CoreApi[K] extends object ? Partial<CoreApi[K]> : CoreApi[K] }
 
 export function fakeCore(over: Overrides = {}): CoreApi {
   return {
     dataDir: over.dataDir ?? '/data',
+    conversations: { ...CONVERSATIONS_OFF, ...over.conversations },
     terminals: {
       open: vi.fn(TERMINALS_OFF.open),
       watch: { frame: vi.fn(async () => {}), close: vi.fn(async () => {}), onOutput: vi.fn(() => () => {}) },

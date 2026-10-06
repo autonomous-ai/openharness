@@ -3,7 +3,8 @@
 // read-only: it never binds anything, and it answers only when the answer is certain — a Change agent
 // must not guess whose conversation it hands over. Consumed by lib/agentHandoff.ts.
 import type { AgentEngine } from '../engines/types.js'
-import { isSubagentTranscript, type HandoffDeps } from './agentHandoff.js'
+import type { HandoffDeps } from './agentHandoff.js'
+import { isSubagentTranscript } from './subagentTranscript.js'
 import type { CommanderMirror } from './commander.js'
 import type { RegisteredSession } from './registry.js'
 import type { RepairedSession } from './sessionRepair.js'
