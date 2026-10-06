@@ -199,6 +199,27 @@ class FedoraSession(unittest.TestCase):
             self.setup.enable('owner')
         self.assert_original()
 
+    def test_valid_password_with_aging_disabled_is_preserved(self):
+        for last_change in ('', '-1'):
+            for maximum in ('', '1', '99999'):
+                with self.subTest(last_change=last_change, maximum=maximum):
+                    self.put('etc/shadow', f'owner:$y$j9T$existing-password-hash:{last_change}:0:{maximum}:7:::\n', 0o600)
+                    self.protected = self.snapshot_protected()
+                    self.setup.enable('owner')
+                    self.assertEqual(self.snapshot_protected(), self.protected)
+                    self.setup.disable()
+                    self.assert_original()
+
+    def test_forced_password_change_and_expired_accounts_are_still_rejected(self):
+        for last_change, maximum, expires in (('0', '99999', ''), ('1', '1', ''),
+                                               ('', '99999', '1'), ('-1', '', '1')):
+            with self.subTest(last_change=last_change, maximum=maximum, expires=expires):
+                self.put('etc/shadow', f'owner:$y$j9T$existing-password-hash:{last_change}:0:{maximum}:7::{expires}:\n', 0o600)
+                self.protected = self.snapshot_protected()
+                with self.assertRaisesRegex(session.SetupError, 'usable, unexpired password'):
+                    self.setup.enable('owner')
+                self.assert_original()
+
     def test_conflicting_configuration_is_never_overwritten(self):
         for name in (session.CONFIG, session.DROPIN, session.SUDOERS, session.ALIAS):
             self.put(name, 'existing admin configuration\n')
