@@ -8,7 +8,8 @@ Claude Code: Clawd, drawn at the glass's 1 px with anti-aliased edges (assets/pe
 mockup/clawd_v3.py; the look is mockup/clawd-v3.html): the small pet is the rest loop (24 steps of 120 ms, cell
 frames like Muse's), and four scenes — working 26 steps of 55 ms, listening 56 of 60 (its sound arcs drawn by
 focus.c), sending 40 of 60, the alert 20 of 65 — each a few body poses moved by a per-step dy, and a props sprite.
-Codex's three come from the owner's robot pack (assets/pets/codex; mockup/codex_options.py W2 / L1 / S2):
+Codex: its small pet is the robot pack's idle, review and waiting loops drawn at 2x (mockup/codex-rest.html), and
+its three scenes come from the same pack (assets/pets/codex; mockup/codex_options.py W2 / L1 / S2):
 the pack's 192 x 208 robot frames at one byte per pixel (cell 1) and an overlay sprite (the sandbox bubble, the
 equalizer bubble, the paper plane) drawn after them: 28 steps of 120 ms, 15 steps of 80 ms for each mic level
 0..4, and 15 steps of 140 ms. The listening bubble is stored once, empty; its three bars are not stored at all:
@@ -43,118 +44,46 @@ from PIL import Image, ImageColor, ImageDraw
 root = Path(__file__).resolve().parents[1]
 STEPS = 24
 
-# ---- Codex ----
-XCELL = 4
-XW = XH = 14 * XCELL
-XSTEP_MS = (150, 90, 55, 140)
-HI = (138, 162, 255)      # cloud highlight
-BLUE = (92, 124, 240)     # cloud / body
-SHADE = (63, 91, 208)     # underside
-SCREEN = (27, 34, 68)     # the face's screen
-GLOW = (127, 240, 230)    # terminal glyphs
-
-# The head: a cloud with three bumps on top, rows 0-7.
-HEAD = [
-    "....HHH.HHH...",
-    "..HHBBBHBBBH..",
-    ".HBBBBBBBBBBH.",
-    "HBBBBBBBBBBBBH",
-    "HBBBBBBBBBBBBB",
-    "BBBBBBBBBBBBBB",
-    "SBBBBBBBBBBBBS",
-    ".SSBBBBBBBBSS.",
-]
-# The screen sits on the face, rows 2-6, cols 3-10 (8 x 5 cells).
-SX, SY, SW, SH = 3, 2, 8, 5
+# ---- Codex: the small pet, from the owner's robot pack (owner, 2026-10-06: the 14 x 14 grid stair-stepped) ----
+# The pack's idle (it blinks), review (a happy hop: done) and waiting (hand on chin: asking) loops, assets/pets/codex,
+# cropped to one box for all three, drawn once at 2x (112 px tall) and shown at 1x, 1.5x, 1.75x or 2x by
+# ht_cell_sprite_zoom (mockup/codex-rest.html). Each state is 24 steps over the pack's own loop and frame times.
+CODEX = root / 'assets/pets/codex'
+CODEX_H2X = 112
+CODEX_LOOPS = {'idle': (280, 110, 110, 140, 140, 320), 'review': (150, 150, 150, 150, 150, 280),
+               'waiting': (150, 150, 150, 150, 150, 260)}
+CODEX_STATE_LOOPS = ('idle', 'idle', 'review', 'waiting')            # idle, working, done, asking
 
 
-def xbase(arms=0, legs=(1, 1)):
-    cells = {}
-    pal = {'H': HI, 'B': BLUE, 'S': SHADE}
-    for r, row in enumerate(HEAD):
-        for c, ch in enumerate(row):
-            if ch in pal:
-                cells[(c, r)] = pal[ch]
-    for r in range(SY, SY + SH):
-        for c in range(SX, SX + SW):
-            cells[(c, r)] = SCREEN
-    # Body rows 8-11, cols 4-9; a tiny ">-" on the chest.
-    for r in range(8, 12):
-        for c in range(4, 10):
-            cells[(c, r)] = BLUE if r < 11 else SHADE
-    cells[(5, 9)] = GLOW
-    cells[(7, 9)] = GLOW
-    cells[(8, 9)] = GLOW
-    # Arms: one cell each side, rows 9-10, raised one row when arms = -1.
-    for r in (9 + arms, 10 + arms):
-        cells[(3, r)] = BLUE
-        cells[(10, r)] = BLUE
-    # Legs: cols 5 and 8, rows 12.. (1 or 2 rows).
-    for c, n in zip((5, 8), legs):
-        for r in range(12, 12 + n):
-            cells[(c, r)] = SHADE
-    return cells
+def codex_pet_states():
+    names = list(CODEX_LOOPS)
+    raw = [Image.open(CODEX / st / f'{k:02d}.png').convert('RGBA') for st in names for k in range(6)]
+    box = union_box(raw)
+    images = []
+    for f in raw:
+        f = f.crop(box)
+        f = f.resize((round(f.width * CODEX_H2X / f.height), CODEX_H2X), Image.LANCZOS)
+        a = f.getchannel('A').point(lambda v: 255 if v >= 128 else 0)
+        im = Image.alpha_composite(Image.new('RGBA', f.size, (0, 0, 0, 255)), f)
+        im.putalpha(a)
+        images.append(im)
+    states, step_ms = [], []
+    for st in CODEX_STATE_LOOPS:
+        times = CODEX_LOOPS[st]
+        each = round(sum(times) / STEPS)
+        loop = []
+        for i in range(STEPS):
+            t, k = i * each, 0
+            while k < 5 and t >= sum(times[:k + 1]):
+                k += 1
+            loop.append(({'i': names.index(st) * 6 + k}, 0))
+        states.append(lambda loop=loop: loop)
+        step_ms.append(each)
+    return tuple(states), images, tuple(step_ms)
 
 
-def glyphs(cells, marks):
-    for c, r in marks:
-        cells[(SX + c, SY + r)] = GLOW
-    return cells
-
-
-PROMPT = [(1, 1), (2, 2), (1, 3)]               # ">"
-CHECK = [(1, 2), (2, 3), (3, 2), (4, 1), (5, 0)]  # a tick
-QUESTION = [(3, 0), (4, 0), (5, 1), (4, 2), (4, 4)]
-HAPPY = [(1, 2), (2, 1), (3, 2), (5, 2), (6, 1), (7, 2)]  # ^ ^
-
-
-def xface(prompt=True, cursor=True, typed=0, extra=()):
-    marks = list(PROMPT) if prompt else []
-    for i in range(typed):                       # dots typed before the cursor
-        marks.append((4 + i, 3))
-    if cursor:
-        marks += [(4 + typed, 3), (5 + typed, 3)] if 5 + typed < SW else []
-    return marks + list(extra)
-
-
-def xidle():
-    out = []
-    for i in range(STEPS):
-        on = (i // 4) % 2 == 0                   # the cursor blinks
-        out.append((glyphs(xbase(), xface(cursor=on)), 1 if i % 12 >= 6 else 0))
-    return out
-
-
-def xworking():
-    out = []
-    for i in range(STEPS):
-        typed = (0, 1, 2, 1)[(i // 3) % 4]       # dots run across and back
-        legs = [(1, 2), (1, 1), (2, 1), (1, 1)][(i // 3) % 4]
-        out.append((glyphs(xbase(0, legs), xface(typed=typed)), 0 if (i // 3) % 2 else -1))
-    return out
-
-
-def xdone():
-    hop = (0, -1, -2, -3, -4, -4, -3, -2, -1, 0, 0, 0)
-    out = []
-    for i in range(STEPS):
-        if i < 12:
-            out.append((glyphs(xbase(-1 if hop[i] < -1 else 0), HAPPY), hop[i] * XCELL // 2))
-        else:
-            out.append((glyphs(xbase(), CHECK), 0))
-    return out
-
-
-def xasking():
-    return [(glyphs(xbase(-1 if (i // 4) % 2 == 0 else 0), QUESTION), 0) for i in range(STEPS)]
-
-
-def xgrid(cells):
-    """The robot's 14 x 14 grid, one px a cell: stored with 8 px cells (CELL_PETS), shown at 4 (1x) up to 8 (2x)."""
-    im = Image.new('RGBA', (XW // XCELL, XH // XCELL), (0, 0, 0, 0))
-    for (c, r), col in cells.items():
-        im.putpixel((c, r), col + (255,))
-    return im
+def codex_render(cells):
+    return CODEX_IMAGES[cells['i']]
 
 
 def half_size(size):
@@ -667,16 +596,16 @@ def emit(name, img):
 
 
 # engine, prefix, frame size, the four states, renderer, step_ms
+CODEX_STATES, CODEX_IMAGES, CODEX_STEP_MS = codex_pet_states()
 PETS = (
     ('claude', 'claude', half_size(CLAUDE_IMAGES[0].size), CLAUDE_STATES, claude_render, (CLAUDE_SCENES['rest']['step_ms'],) * 4),
-    ('codex', 'codex', (XW, XH), (xidle, xworking, xdone, xasking), xgrid, XSTEP_MS),
+    ('codex', 'codex', half_size(CODEX_IMAGES[0].size), CODEX_STATES, codex_render, CODEX_STEP_MS),
     ('muse', 'muse', half_size(MUSE_SIZE), MUSE_STATES, muse_render, (MUSE_REST_MS,) * 4),
 )
 # Pets whose small self is palette-indexed cell frames (ht_pet_t.cells) rather than RGB565 + alpha8 (frames).
-# Every small pet is cell frames drawn at TWICE its size (claude, muse: 1 px cells of a 2x picture; codex: its 14 x 14
-# grid at 8 px a cell), which focus.c shows at 1x, 1.5x, 1.75x or 2x with ht_cell_sprite_zoom: one good drawing, every
+# Every small pet is cell frames drawn at TWICE its size (1 px cells of a 2x picture), which focus.c shows at 1x, 1.5x, 1.75x or 2x with ht_cell_sprite_zoom: one good drawing, every
 # size a clean reduction of it (owner, 2026-10-05). The value is the frames' cell; ht_pet_t.w, h are the 1x size.
-CELL_PETS = {'claude': 1, 'codex': 8, 'muse': 1}
+CELL_PETS = {'claude': 1, 'codex': 1, 'muse': 1}
 
 
 def generate_pet(prefix, states, draw, size, cells_out=False, cell=1):
