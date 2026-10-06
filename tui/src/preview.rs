@@ -15,12 +15,21 @@ fn bold(text: impl Into<String>) -> Span<'static> { Span::styled(text.into(), St
 fn kv(k: &str, v: impl Into<String>) -> Line<'static> { Line::from(vec![dim(format!("{k:<9}")), Span::raw(v.into())]) }
 
 pub fn lines(app: &App, kind: &PickerKind, id: &str) -> Vec<Line<'static>> {
+    lines_with_actions(app, kind, id, true)
+}
+
+/// The same conversation preview without workspace-only action shortcuts.
+pub fn shell_lines(app: &App, kind: &PickerKind, id: &str) -> Vec<Line<'static>> {
+    lines_with_actions(app, kind, id, false)
+}
+
+fn lines_with_actions(app: &App, kind: &PickerKind, id: &str, actions: bool) -> Vec<Line<'static>> {
     match kind {
         PickerKind::Open { .. } if id.starts_with("session:") => session(app, id),
-        PickerKind::Open { .. } if id.starts_with("external:") => external(app, id),
+        PickerKind::Open { .. } if id.starts_with("external:") => external(app, id, actions),
         PickerKind::Open { .. } | PickerKind::Inbox | PickerKind::Route { .. } => {
             let key = id.split('#').next().unwrap_or(id);
-            match key.split_once(':') { Some((m, a)) => harness(app, m, a), None => vec![] }
+            match key.split_once(':') { Some((m, a)) => harness(app, m, a, actions), None => vec![] }
         }
         PickerKind::Machines => machine(app, id),
         PickerKind::Projects => project(app, id),
@@ -33,11 +42,15 @@ pub fn lines(app: &App, kind: &PickerKind, id: &str) -> Vec<Line<'static>> {
         PickerKind::Models => vec![Line::raw(id.rsplit(':').next().unwrap_or(id).to_string()), Line::raw(""), Line::raw("Enter switches this harness to it.")],
         // ── machines & devices ──
         PickerKind::Devices(view) => crate::devices::preview(app, *view, id),
+        PickerKind::Account => crate::account::preview(app, id),
+        PickerKind::AgentSwitch => crate::agent_switch::preview(app, id),
+        PickerKind::Hardware => crate::hardware::preview(app, id),
+        PickerKind::ShellContext => vec![],
         _ => vec![],
     }
 }
 
-fn harness(app: &App, machine_id: &str, agent_id: &str) -> Vec<Line<'static>> {
+fn harness(app: &App, machine_id: &str, agent_id: &str, actions: bool) -> Vec<Line<'static>> {
     let Some(a) = app.fleet.agent(machine_id, agent_id) else { return vec![dim("(gone)").into()] };
     let state = app.fleet.state_of(a);
     let (word, color) = match state {
@@ -53,7 +66,7 @@ fn harness(app: &App, machine_id: &str, agent_id: &str) -> Vec<Line<'static>> {
     if !a.viewer_url.is_empty() || !a.viewer_name.is_empty() || !a.viewer_error.is_empty() {
         let label = if a.viewer_name.is_empty() { "Viewer" } else { &a.viewer_name };
         let state = if !a.viewer_error.is_empty() { a.viewer_error.as_str() } else if a.viewer_url.is_empty() { "starting" } else { "ready" };
-        out.push(dim(format!("{label}: {state} · :view opens · :view -c copies link")).into());
+        out.push(dim(format!("{label}: {state}{}", if actions { " · :view opens · :view -c copies link" } else { "" })).into());
     }
     // Its latest turns, when its session's index has them: as its terminal shows them, the newest
     // at the bottom (where the preview starts), what it asks you below them.
@@ -76,9 +89,10 @@ fn harness(app: &App, machine_id: &str, agent_id: &str) -> Vec<Line<'static>> {
         if let Some(q) = &a.question {
             out.push(Line::raw(""));
             out.push(Line::from(vec![Span::styled("? ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)), bold(q.prompt.clone())]));
-            for (i, o) in q.options.iter().enumerate() { out.push(Line::from(vec![Span::styled(format!("  M-{} ", i + 1), Style::default().fg(theme::fzf().hl)), Span::raw(o.clone())])) }
-            out.push(dim(if q.multi { "  M-a several (1,3) or your own words" } else { "  M-a your own words" }).into());
+            for (i, o) in q.options.iter().enumerate() { out.push(Line::from(vec![Span::styled(format!("  {}{} ", if actions { "M-" } else { "" }, i + 1), Style::default().fg(theme::fzf().hl)), Span::raw(o.clone())])) }
+            if actions { out.push(dim(if q.multi { "  M-a several (1,3) or your own words" } else { "  M-a your own words" }).into()); }
         }
+        if !actions { return out }
         out.push(Line::raw(""));
         let place = app.find_pane_anywhere(machine_id, agent_id).map(|(sid, n, _)| if sid == app.session_id { format!("in window {n} — enter goes to it") } else {
             let name = app.session_list().into_iter().find(|(i, _)| *i == sid).map(|(_, n)| n).unwrap_or_default();
@@ -91,8 +105,8 @@ fn harness(app: &App, machine_id: &str, agent_id: &str) -> Vec<Line<'static>> {
     if let Some(q) = &a.question {
         out.push(Line::raw(""));
         out.push(Line::from(vec![Span::styled("? ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)), bold(q.prompt.clone())]));
-        for (i, o) in q.options.iter().enumerate() { out.push(Line::from(vec![Span::styled(format!("  M-{} ", i + 1), Style::default().fg(theme::fzf().hl)), Span::raw(o.clone())])) }
-        out.push(dim(if q.multi { "  M-a several (1,3) or your own words" } else { "  M-a your own words" }).into());
+        for (i, o) in q.options.iter().enumerate() { out.push(Line::from(vec![Span::styled(format!("  {}{} ", if actions { "M-" } else { "" }, i + 1), Style::default().fg(theme::fzf().hl)), Span::raw(o.clone())])) }
+        if actions { out.push(dim(if q.multi { "  M-a several (1,3) or your own words" } else { "  M-a your own words" }).into()); }
     }
     if state == State::Failed && !a.launch_error.is_empty() { out.push(Line::raw("")); out.push(Line::from(vec![Span::styled("✗ ", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)), Span::raw(a.launch_error.clone())])) }
     // What its last turn came to — the recap, then its final message whole (to read it here) —
@@ -148,6 +162,7 @@ fn harness(app: &App, machine_id: &str, agent_id: &str) -> Vec<Line<'static>> {
     }
     out.push(Line::raw(""));
     // Where it is open, if it is: the window (another session's by name), Enter going there.
+    if !actions { return out }
     let place = app.find_pane_anywhere(machine_id, agent_id).map(|(sid, n, _)| if sid == app.session_id { format!("in window {n} — enter goes to it") } else {
         let name = app.session_list().into_iter().find(|(i, _)| *i == sid).map(|(_, n)| n).unwrap_or_default();
         format!("in {name}:{n} — enter goes to it")
@@ -253,13 +268,13 @@ fn marked(snippet: &str) -> Vec<Span<'static>> {
 
 /// A conversation Harness did not start: what it is, where it ran, its latest turns (the newest
 /// at the bottom), and what Enter does with it.
-fn external(app: &App, id: &str) -> Vec<Line<'static>> {
+fn external(app: &App, id: &str, actions: bool) -> Vec<Line<'static>> {
     let Some((m, s)) = id.strip_prefix("external:").and_then(|r| r.split_once(':')) else { return vec![] };
-    let Some(x) = app.said.iter().filter_map(|h| h.external.as_ref()).find(|x| x.machine == m && x.session_id == s) else { return vec![dim("(gone)").into()] };
+    let Some(x) = app.said.iter().chain(app.shell_context.catalog.iter()).filter_map(|h| h.external.as_ref()).find(|x| x.machine == m && x.session_id == s) else { return vec![dim("(gone)").into()] };
     let home = app.homes.get(m).cloned().unwrap_or_else(|| std::env::var("HOME").unwrap_or_default());
     let cwd = if !home.is_empty() && x.cwd.starts_with(&home) { format!("~{}", &x.cwd[home.len()..]) } else { x.cwd.clone() };
     let mut out = vec![
-        Line::from(vec![Span::styled("not in Harness", Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD)), dim(format!("  {}", ago(x.last_at)))]),
+        Line::from(vec![Span::styled("saved conversation", Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD)), dim(format!("  {}", ago(x.last_at)))]),
         dim([theme::engine_label(&x.engine).to_string(), app.fleet.machine_name(m), cwd].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" · ")).into(),
         Line::raw(""),
     ];
@@ -267,6 +282,7 @@ fn external(app: &App, id: &str) -> Vec<Line<'static>> {
         Some(tail) => out.extend(turns(app, s, tail)),
         None => out.push(dim("…").into()),
     }
+    if !x.open && !actions { return out }
     out.push(Line::raw(""));
     out.push(if x.open { Line::styled("Open in another terminal or app — close it there to open it here", Style::default().fg(Color::Yellow)) }
         else { dim("enter resumes it as a pane here · C-t new window · C-v beside · C-x below · M-enter here — without permission prompts, as the desktop resumes it").into() });

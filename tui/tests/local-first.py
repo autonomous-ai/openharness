@@ -3,6 +3,7 @@
 
 Build cli/dist/cli.js with `cd cli && node build-bundle.mjs` first.
 HN_LOCAL_FIRST_BINARY selects the native hn build (default: tui/target/release/harness-tui).
+HN_LOCAL_FIRST_CLI selects a packaged CLI entry point, for testing an installed release.
 Only disposable homes, owned daemon processes, and explicitly named tmux servers are used.
 """
 import http.client
@@ -21,10 +22,11 @@ BASE = Path(tempfile.mkdtemp(prefix='hnown-', dir='/tmp')).resolve()
 NODE = shutil.which('node')
 TMUX = shutil.which('tmux')
 HN = os.environ.get('HN_LOCAL_FIRST_BINARY', str(REPO / 'tui/target/release/harness-tui'))
+CLI_ENTRY = Path(os.environ.get('HN_LOCAL_FIRST_CLI', REPO / 'cli/dist/cli.js')).resolve()
 assert NODE and TMUX, 'node and tmux are required'
-assert Path(HN).is_file() and (REPO / 'cli/dist/cli.js').is_file(), 'build hn and bundle the CLI first'
+assert Path(HN).is_file() and CLI_ENTRY.is_file(), 'build hn and bundle the CLI first, or select a packaged release'
 PREFIX = f'hn-owners-{os.getpid()}'
-CLI = [NODE, str(REPO / 'cli/dist/cli.js')]
+CLI = [NODE, str(CLI_ENTRY)]
 children = []
 environments = []
 logs = []

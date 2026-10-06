@@ -1129,6 +1129,15 @@ export function gridPanePrelude(binary: string): string {
  * source-owned candidate paths below bridge that one-shell gap without sourcing arbitrary profile
  * files a second time. npm installs also get their active global prefix as a fallback.
  */
+/** Install if needed, then run an exact native argv from an existing interactive prompt.
+ * The parent shell keeps its helpers and environment when the agent exits. */
+export function shellAgentArgv(binary: string, args: string[], recipe: EngineInstallRecipe,
+  runtimeNode: string = managedNodePath()): string[] {
+  return ['/bin/sh', '-c', RAISE_OPEN_FILES_SH + STOP_PROOF_FUNCTIONS
+    + installIfMissingScript(recipe, runtimeNode) + 'shift\nexec "$harness_engine_bin" "$@"\n',
+    'harness-shell-agent', binary, ...args]
+}
+
 function installIfMissingScript(recipe: EngineInstallRecipe, runtimeNode: string): string {
   const install = recipe.command
   const names = recipe.executable.names.map(shellSingleQuote).join(' ')

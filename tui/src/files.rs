@@ -2197,7 +2197,7 @@ mod tests {
         // This computer, its link never connecting (a current-thread test never yields to it).
         app.daemon_down = false;
         app.fleet.local_id = "test-peer".into();
-        app.fleet.machines.push(crate::fleet::Machine { id: "test-peer".into(), name: "Peer".into(), local: true, status: "running".into(), reach: crate::fleet::Reach::Ready });
+        app.fleet.machines.push(crate::fleet::Machine { shared: false, id: "test-peer".into(), name: "Peer".into(), local: true, status: "running".into(), reach: crate::fleet::Reach::Ready });
         app.connect("test-peer");
         app.fleet.machine_mut("test-peer").unwrap().reach = crate::fleet::Reach::Ready;
         app.open_agent("test-peer", "agent", Placement::Auto(None));
@@ -2218,8 +2218,8 @@ mod tests {
         // Enter on the file: a terminal on its way beside the pane, with the editor in it.
         key(&mut app, pane, Chord::normal(KeyCode::Right, KeyModifiers::NONE), None);
         key(&mut app, pane, Chord::normal(KeyCode::Enter, KeyModifiers::NONE), None);
-        let typed = app.starting_shell.as_ref().map(|s| String::from_utf8_lossy(&s.lock().unwrap().concat()).into_owned()).unwrap_or_default();
-        assert!(typed.contains("EDITOR:-vi") && typed.contains("notes.txt"), "{typed:?}");
+        let pending = app.starting_shell.as_ref().expect("the editor's shell is being opened");
+        assert!(pending.lock().unwrap().is_empty(), "the command travels as argv, never typed into shell input");
         assert!(app.panes[&pane].files.is_some(), "the file manager stays");
         key(&mut app, pane, Chord::normal(KeyCode::Char('q'), KeyModifiers::NONE), None);
         assert!(!app.panes[&pane].in_mode());

@@ -8,6 +8,7 @@ use std::collections::HashMap;
 
 use ratatui::text::Span;
 
+#[derive(Clone)]
 pub struct Row {
     pub id: String,
     /// The part drawn bold and highlighted where the query matched.
@@ -99,6 +100,8 @@ pub struct Picker {
     /// this so a machine's real name stays searchable when the label says "local".
     pub search_extra: bool,
     pub rows: Vec<Row>,
+    /// Full remote catalog size when only matching candidates fit in a reply.
+    pub total_rows: Option<usize>,
     /// (row index, label char indices matched)
     pub visible: Vec<(usize, Vec<u32>)>,
     pub cursor: usize,
@@ -124,6 +127,8 @@ pub struct Picker {
     /// Where the terminal cursor goes: the end of the query.
     /// The query starts with a mode character (`>` `@` `#` `:` `*` `?`) that is not part of the match.
     pub prefixed: bool,
+    /// An inline composer can use a scope character not used by the app launcher.
+    pub scope_prefix: Option<char>,
     /// Screen row → visible index, from the last draw (for clicks).
     pub row_at: Vec<(u16, usize)>,
     /// A row whose action needs a second Enter (a big download).
@@ -212,6 +217,8 @@ pub struct Picker {
     /// C-b s: the rows its query found by what was said in them (best first), and that query.
     pub said: Vec<String>,
     pub said_query: String,
+    /// Saved metadata pages may be fuzzy-matched before a transcript query returns.
+    pub catalog_ids: std::collections::HashSet<String>,
     pub said_text: HashMap<String, String>,
     /// change-header: the header row's text instead of the keys' hints.
     pub header_text: Option<String>,
@@ -261,6 +268,7 @@ impl Picker {
             query: String::new(),
             search_extra: false,
             rows: Vec::new(),
+            total_rows: None,
             visible: Vec::new(),
             cursor: 0,
             selected_id: None,
@@ -276,6 +284,7 @@ impl Picker {
             empty: String::new(),
             scroll: 0,
             prefixed: false,
+            scope_prefix: None,
             row_at: Vec::new(),
             armed: None,
             qcursor: 0,
@@ -308,6 +317,7 @@ impl Picker {
             landed: None,
             said: Vec::new(),
             said_query: String::new(),
+            catalog_ids: Default::default(),
             said_text: HashMap::new(),
             unbound: Default::default(),
             multi_override: None,
@@ -363,7 +373,7 @@ impl Picker {
         // (`pane\ ` keeps its escaped space).
         let owned = self.search.clone();
         let mut query = owned.as_deref().unwrap_or(self.query.as_str());
-        if self.prefixed && scope_of(query).is_some() { query = &query.trim_start()[1..] }
+        if self.prefixed && (scope_of(query).is_some() || self.scope_prefix.is_some_and(|c|query.starts_with(c))) { query = &query.trim_start()[1..] }
         // fzf sorts only when a term asks for something (`!x` alone keeps the input order).
         let mut sorted = false;
         // A conversation Harness did not start is listed only for the query that found it — or,
@@ -371,7 +381,7 @@ impl Picker {
         // the machines answer the new one (no row blinking out on every key).
         let found_now = !self.said_query.is_empty() && !query.trim().is_empty()
             && (self.said_query == query || query.starts_with(&self.said_query) || self.said_query.starts_with(query));
-        let offered = |r: &Row| !r.id.starts_with("external:") || (found_now && self.said.contains(&r.id));
+        let offered = |r: &Row| !r.id.starts_with("external:") || self.catalog_ids.contains(&r.id) || (found_now && self.said.contains(&r.id));
         if query.trim().is_empty() {
             self.visible = self.rows.iter().enumerate().filter(|(_, r)| !self.excluded.contains(&r.id) && offered(r)).map(|(i, _)| (i, Vec::new())).collect();
         } else {
@@ -589,7 +599,7 @@ impl Picker {
 
     /// Where editing starts: after the mode character (`>` `@` `#` `:` `*` `?`), which reads as
     /// part of the prompt — C-u, C-w, C-a and the arrows stop at it, as at fzf's prompt.
-    fn floor(&self) -> usize { usize::from(self.prefixed && scope_of(&self.query).is_some()) }
+    fn floor(&self) -> usize { usize::from(self.prefixed && (scope_of(&self.query).is_some() || self.scope_prefix.is_some_and(|c|self.query.starts_with(c)))) }
     fn qlen(&self) -> usize { self.query.chars().count() }
 
     pub fn type_char(&mut self, c: char) {
@@ -598,6 +608,15 @@ impl Picker {
         let at = self.byte_at(self.qcursor);
         self.query.insert(at, c);
         self.qcursor += 1;
+        self.changed(&before);
+    }
+
+    /// A paste is one edit and one match pass, including when it contains Unicode.
+    pub fn type_text(&mut self, text: &str) {
+        let before = self.query.clone();
+        self.qcursor = self.qcursor.min(self.qlen());
+        self.query.insert_str(self.byte_at(self.qcursor), text);
+        self.qcursor += text.chars().count();
         self.changed(&before);
     }
 
