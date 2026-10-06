@@ -33,6 +33,16 @@ def network_state(vm, name):
         (vm.folder / (name + '-network.json')).write_text(json.dumps(state, indent=2) + '\n')
 
 
+def network_roundtrip(vm, url, expected):
+    """Require an actual connection and exact HTTP payload, not just NM state."""
+    vm.command('nm-online -q --timeout=30', timeout=35)
+    vm.command('curl --fail --silent --show-error --max-time 15 ' +
+               shlex.quote(url + '/package-manifest.json') +
+               ' -o /tmp/harness-update-network.json', timeout=20)
+    assert vm.read_file('/tmp/harness-update-network.json') == expected, 'Network payload differs'
+    return {'bytes': len(expected), 'sha256': hashlib.sha256(expected).hexdigest()}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--iso', type=Path, required=True)
@@ -102,6 +112,13 @@ def main():
         result = json.loads(next(line.split(marker, 1)[1] for line in output.splitlines() if line.startswith(marker)))
         receipt['update'] = result
         vm.screenshot('updated-surviving-terminal')
+        if session_tools:
+            # The transactions above finish offline. Restore the ordinary
+            # connected session before the separate reboot/suspend checks.
+            vm.command('printf %s ' + shlex.quote(config['password'] + '\n') + ' | sudo -S -v')
+            vm.command('sudo -n nmcli networking on')
+            network_payload = (bundle / 'package-manifest.json').read_bytes()
+            receipt['network'] = {'after_offline_transactions': network_roundtrip(vm, url, network_payload)}
         vm.command('sync')
         vm.stop()
         vm.start(live=False)
@@ -124,8 +141,10 @@ def main():
         receipt['checks'].append('Updated encrypted machine reboots to hn, accepts physical-keyboard input and retains the project')
         if session_tools:
             vm.command('printf %s ' + shlex.quote(config['password'] + '\n') + ' | sudo -S -v')
+            receipt['network']['before_suspend'] = network_roundtrip(vm, url, network_payload)
             network_state(vm, 'before-session')
             session_update_vm.exercise(vm, config, receipt['session_dependencies'])
+            receipt['network']['after_suspend'] = network_roundtrip(vm, url, network_payload)
             network_state(vm, 'after-session')
         if args.fast_fixture:
             vm.command('printf %s ' + shlex.quote(config['password'] + '\n') + ' | sudo -S -v')
