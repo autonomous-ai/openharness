@@ -590,19 +590,25 @@ describe('runMaster', () => {
 
   it('leaves a pid file that is not its own alone', async () => {
     const pidFile = join(dir, 'adapter.pid')
+    const servicesFile = join(dir, 'services')
     const core = join(dir, 'core.cjs')
     writeFileSync(core, `
+      if (process.argv[2] === '__run') require('node:fs').writeFileSync(${JSON.stringify(servicesFile)}, process.env.HARNESSD_SERVICE_PROCESSES)
       process.send({ type: 'harnessd:bound', protocol: 1, port: 1 })
       setTimeout(() => { require('node:fs').writeFileSync(${JSON.stringify(pidFile)}, '1\\n'); process.exit(0) }, 50)
     `)
     const exits: number[] = []
     runMaster({
       nodePath: process.execPath, execArgv: [], scriptPath: core, pidFile,
+      // Found by QA on a quiet machine: each default service ran this same writer. A service stopped
+      // between truncate and write left an empty pid file, so this cleanup check raced its fixture.
+      env: { ...process.env, HARNESSD_SERVICES: 'none' },
       restoreUpdate: () => {}, confirmUpdate: () => {},
       exit: (code) => exits.push(code), onSignal: () => {},
     })
     await until('the master to finish', () => exits.length > 0)
     expect(readFileSync(pidFile, 'utf8')).toBe('1\n')
+    expect(readFileSync(servicesFile, 'utf8')).toBe('')
   })
 
   // The defaults act on the process itself, so they are exercised in a real one: a master on its own,
