@@ -4,109 +4,89 @@ on:
 permissions:
   contents: read
 jobs:
-  detached-core-final:
+  diagnose:
     strategy:
       fail-fast: false
       matrix:
-        suite: [full, races-1, races-2, races-3]
+        include:
+          - label: main
+            source: db89229a5c18e154afd82748eb83e44917b12ba6
+          - label: candidate
+            source: 808e6530516e1250c96fcba649f756cf8c252662
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: cli
         shell: bash
     env:
-      LANG: C.UTF-8
-      SHELL: /bin/zsh
-      TEST_SUITE: ${{ matrix.suite }}
       E2E_WORKERS: '4'
       E2E_BUNDLE: '1'
-      MIGRATION_FROM: ${{ github.workspace }}/.harness/migration/cli.js
+      LANG: C.UTF-8
+      SHELL: /bin/zsh
       E2E_ARTIFACTS_DIR: ${{ github.workspace }}/.harness/validation/daemons
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: 808e6530516e1250c96fcba649f756cf8c252662
+          ref: ${{ matrix.source }}
       - uses: actions/setup-node@v7
         with:
           node-version: '22.23.2'
           cache: npm
           cache-dependency-path: cli/package-lock.json
-      - name: Prepare private test prerequisites
+      - name: Private prerequisites and crash evidence
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y -q --no-install-recommends tmux zsh tcsh dash lsof
+          sudo apt-get install -y -q --no-install-recommends tmux zsh tcsh dash lsof gdb
           sudo sysctl -w fs.inotify.max_user_instances=1024 fs.inotify.max_user_watches=524288
-          insecure=$(zsh -fc 'autoload -U compaudit && compaudit' 2>/dev/null | grep '^/' | sort -u || true)
-          if [ -n "$insecure" ]; then
-            echo "$insecure" | xargs sudo chown root:root
-            echo "$insecure" | xargs sudo chmod g-w,o-w
-          fi
           npm ci --no-audit --no-fund
-          mkdir -p ../.harness/validation
-          test -z "$(git symbolic-ref -q HEAD || true)"
-          test -z "$(git status --porcelain)"
+          mkdir -p ../.harness/validation ../.harness/cores
           git rev-parse HEAD HEAD^{tree} > ../.harness/validation/source.txt
-          date -u +%FT%TZ > ../.harness/validation/started.txt
-      - name: Fetch verified published migration fixture
+          tmux -V > ../.harness/validation/tmux-version.txt
+          dpkg-query -W tmux >> ../.harness/validation/tmux-version.txt
+          sudo sysctl -w "kernel.core_pattern=$GITHUB_WORKSPACE/.harness/cores/core.%e.%p"
+      - name: Observe the failing assertion's snapshots without changing its inputs
         run: |
-          mkdir -p ../.harness/migration
-          curl --fail --location --retry 3 https://cdn.autonomous.ai/harness/cli/0.3.60/cli.js -o ../.harness/migration/cli.js
-          curl --fail --location --retry 3 https://cdn.autonomous.ai/harness/cli/0.3.60/notify.mjs -o ../.harness/migration/notify.mjs
-          echo 'cb1ae2452d006d414cefc6ce2deddd07a7a43fc9824402691a1ef0737d2277e3  ../.harness/migration/cli.js' | sha256sum -c -
-          echo 'bca62ec5991a1f727b362b666bcef004d04fb1d13efb64de068dd602a45095f8  ../.harness/migration/notify.mjs' | sha256sum -c -
-          echo '{"type":"module"}' > ../.harness/migration/package.json
-      - name: Capture failing tmux metadata without changing behavior
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('e2e/races.e2e.ts');s=p.read_text()
+          before='    expect(new Set(bound.map((agent) => agent.sessionId)).size).toBe(4)'
+          assert s.count(before)==1
+          s=s.replace(before,'    console.log("parallel-create evidence", JSON.stringify({bound, current: await rows(client)}))\n'+before)
+          p.write_text(s)
+          PY
+          git diff > ../.harness/validation/diagnostic-only.diff
+      - name: Bounded reproduction, never acceptance evidence
         run: |
-          cat > ../.harness/metadata-trace.cjs <<'JS'
-          if (process.argv.includes('__run')) {
-            const cp = require('node:child_process');
-            const fs = require('node:fs');
-            const original = cp.execFile;
-            cp.execFile = function(file, args, ...rest) {
-              if (file === 'tmux' && args[0] === 'display-message' && args.some(v => v.includes('#{window_panes}'))) {
-                const callback = rest.pop();
-                const started = performance.now();
-                rest.push(function(error, stdout, stderr) {
-                  const text = String(stdout || '');
-                  const fields = text.trim().split('|');
-                  if (error || fields.length !== 16 || !/^\$\d+$/.test(fields[0]) || !/^@\d+$/.test(fields[1])) {
-                    fs.appendFileSync(process.env.E2E_TMUX_TRACE, JSON.stringify({ at:new Date().toISOString(), pid:process.pid, args, durationMs:performance.now()-started, error:error && {message:error.message, code:error.code, signal:error.signal, killed:error.killed}, stdout:text, stderr:String(stderr || '') })+'\n');
-                  }
-                  return callback.apply(this, arguments);
-                });
-              }
-              return original.call(this, file, args, ...rest);
-            };
-            // Node's custom promisify returns {stdout, stderr}, not just stdout.
-            // Preserve that contract for every unrelated subprocess consumer.
-            for (const key of Object.getOwnPropertySymbols(original)) {
-              Object.defineProperty(cp.execFile, key, Object.getOwnPropertyDescriptor(original, key));
-            }
-            require('node:module').syncBuiltinESMExports();
-          }
-          JS
-      - name: Complete assigned suite with four workers and diagnostic logging
-        env:
-          NODE_OPTIONS: --require ${{ github.workspace }}/.harness/metadata-trace.cjs
-          E2E_TMUX_TRACE: ${{ github.workspace }}/.harness/validation/tmux-metadata.jsonl
-        run: |
-          args=()
-          if [ "$TEST_SUITE" != full ]; then
-            args=(e2e/machine.e2e.ts e2e/recovery.e2e.ts e2e/races.e2e.ts e2e/restoreInput.e2e.ts e2e/ends.e2e.ts e2e/startup.e2e.ts e2e/migration.e2e.ts)
-          fi
-          env -u TMUX -u TMUX_PANE -u NO_COLOR npm run test:e2e -- "${args[@]}" --reporter=default --reporter=json --outputFile.json="../.harness/validation/$TEST_SUITE.json" 2>&1 | tee "../.harness/validation/$TEST_SUITE.log"
-      - name: Record final source
+          ulimit -c unlimited
+          for round in 1 2 3 4 5 6; do
+            export E2E_ARTIFACTS_DIR="$GITHUB_WORKSPACE/.harness/validation/daemons-$round"
+            if env -u TMUX -u TMUX_PANE -u NO_COLOR npm run test:e2e -- e2e/races.e2e.ts e2e/windows.e2e.ts -t 'two agents created in one folder at once|windows that open a terminal and go, round after round' --reporter=default --reporter=json --outputFile.json="../.harness/validation/round-$round.json" > "../.harness/validation/round-$round.log" 2>&1; then
+              echo "round $round: no reproduction" >> ../.harness/validation/outcome.txt
+            else
+              echo "round $round: reproduced; inspect assertion and crash evidence" >> ../.harness/validation/outcome.txt
+              exit 1
+            fi
+          done
+      - name: Inspect private tmux core dumps
         if: ${{ !cancelled() }}
+        env:
+          DEBUGINFOD_URLS: https://debuginfod.ubuntu.com
         run: |
-          date -u +%FT%TZ > ../.harness/validation/ended.txt
-          git status --porcelain > ../.harness/validation/source-status.txt
-          test -z "$(git status --porcelain)"
+          python3 - <<'PY'
+          from pathlib import Path
+          import subprocess
+          for core in Path('../.harness/cores').glob('core.*'):
+            out=Path('../.harness/validation')/(core.name+'.backtrace.txt')
+            with out.open('w') as f:
+              try: subprocess.run(['gdb','-batch','-ex','set debuginfod enabled on','-ex','thread apply all bt full','/usr/bin/tmux',str(core)],stdout=f,stderr=subprocess.STDOUT,timeout=60,check=False)
+              except subprocess.TimeoutExpired: f.write('\nGDB diagnostic deadline reached\n')
+          PY
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() }}
         with:
-          name: detached-core-808e-${{ matrix.suite }}
+          name: core-failure-diagnosis-${{ matrix.label }}
           path: .harness/validation/
-          if-no-files-found: error
           include-hidden-files: true
+          if-no-files-found: error
           retention-days: 7
