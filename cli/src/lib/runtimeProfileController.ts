@@ -17,6 +17,7 @@ import {
   codexEffortRows,
   parseCodexPicker,
   sameCodexPicker,
+  type CodexCatalogModel,
   type CodexPicker,
 } from '../engines/codex/modelPicker.js'
 import {
@@ -724,8 +725,11 @@ export class RuntimeProfileController {
       console.warn(`[runtime-profile] unsupported ${session.engine} CLI version ${session.cliVersion ?? 'unknown'} for ${sessionId.slice(0, 8)}`)
       throw new RuntimeProfileControlError('UNSUPPORTED_CLI_VERSION')
     }
-    if (session.engine === 'codex' && !codexEffortAllowed(target.model, target.effort)) {
-      throw new RuntimeProfileControlError('EFFORT_UNSUPPORTED')
+    // Codex's own catalog: which efforts each model takes, and the names its picker shows them by.
+    const codexCatalog = session.engine === 'codex' ? await this.deps.manager.codexCatalog(session) : []
+    if (session.engine === 'codex') {
+      const listed = codexCatalog.find((entry) => entry.slug === target.model)?.efforts ?? null
+      if (!codexEffortAllowed(target.model, target.effort, listed)) throw new RuntimeProfileControlError('EFFORT_UNSUPPORTED')
     }
     const options = await this.deps.manager.modelsForSession(session)
     if (!options.some((option) => option.id === target.id)) {
@@ -750,7 +754,7 @@ export class RuntimeProfileController {
         await this.setClaude(session, target, current, options)
       } else if (session.engine === 'codex') {
         pickerOpen = true
-        await this.setCodex(session, target)
+        await this.setCodex(session, target, codexCatalog)
         pickerOpen = false
       } else if (session.engine === 'devin') {
         // No picker is ever opened — `/model <id>` is a single command — so there is nothing to Escape out
@@ -1192,7 +1196,7 @@ export class RuntimeProfileController {
    * engines/codex/modelPicker.ts. Confirmed, as it always was, by the `thread_settings_applied` record
    * Codex writes once the choice is applied (RuntimeProfileManager `ingestCodex`).
    */
-  private async setCodex(session: RegisteredSession, target: RuntimeProfile): Promise<void> {
+  private async setCodex(session: RegisteredSession, target: RuntimeProfile, catalog: CodexCatalogModel[]): Promise<void> {
     if (!await this.deps.sendText(session.agentId, '/model')) throw new RuntimeProfileControlError('TMUX_FAILED')
     let picker = await this.waitCodexPicker(session, () => true, 900)
     if (!picker) {
@@ -1205,7 +1209,7 @@ export class RuntimeProfileController {
       if (!await this.deps.sendKey(session.agentId, 'Escape')) throw new RuntimeProfileControlError('UNSUPPORTED_CLI_VERSION')
       if (!await this.waitCodexPicker(session, isCodexList, PICKER_STEP_MS)) throw new RuntimeProfileControlError('UNSUPPORTED_CLI_VERSION')
     }
-    const reached = await this.reachCodexEfforts(session, target)
+    const reached = await this.reachCodexEfforts(session, target, catalog)
     if (reached !== 'applied') await this.pickCodexEffort(session, target, reached)
     if (!await this.deps.manager.waitForProfile(session.sessionId, COMMAND_CONFIRM_MS)) {
       throw new RuntimeProfileControlError('CONFIRM_TIMEOUT')
@@ -1222,8 +1226,11 @@ export class RuntimeProfileController {
    * model. The reasoning picker that opens names its model in its title, and a title naming any other
    * model than the row pressed means the list moved anyway, so nothing more is pressed.
    */
-  private async reachCodexEfforts(session: RegisteredSession, target: RuntimeProfile): Promise<CodexPicker | 'applied'> {
-    let catalog = await this.deps.manager.codexCatalog(session)
+  private async reachCodexEfforts(
+    session: RegisteredSession,
+    target: RuntimeProfile,
+    catalog: CodexCatalogModel[],
+  ): Promise<CodexPicker | 'applied'> {
     let reread = false
     for (let lists = 0; lists < 2; lists++) {
       const list = await this.settledCodexList(session)

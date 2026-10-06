@@ -55,7 +55,26 @@ describe('RuntimeProfileManager', () => {
     })
   })
 
-  it('limits Codex Max and Ultra to GPT-5.6 models', () => {
+  it('takes Codex Max and Ultra where its catalog lists them', async () => {
+    // 0.160's catalog lists them for the GPT-6 models the old slug list left out, and leaves Ultra off GPT-6-Luna.
+    expect(codexEffortAllowed('gpt-6.1-sol', 'ultra', ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'])).toBe(true)
+    expect(codexEffortAllowed('gpt-6-luna', 'ultra', ['low', 'medium', 'high', 'xhigh', 'max'])).toBe(false)
+    // The catalog outranks the slug list both ways.
+    expect(codexEffortAllowed('gpt-5.6-sol', 'max', ['low', 'high'])).toBe(false)
+    expect(codexEffortAllowed('gpt-5.4', 'xhigh', [])).toBe(true)
+    expect(codexEffortAllowed('gpt-6.1-sol', 'turbo', ['turbo'])).toBe(false)
+
+    const manager = new RuntimeProfileManager()
+    const value = { ...session('codex'), codexHome: join(import.meta.dirname, '__fixtures__', 'codex-home-0.160') }
+    manager.hydrate(value, [JSON.stringify({ type: 'turn_context', payload: { model: 'gpt-6.1-sol', reasoning_effort: 'ultra' } })])
+    const offered = (await manager.modelsForSession(value)).map((option) => parseRuntimeProfile(option.id))
+      .map((profile) => `${profile?.model}@${profile?.effort}`)
+    expect(offered).toEqual(expect.arrayContaining(['gpt-6.1-sol@max', 'gpt-6.1-sol@ultra', 'gpt-6-astra@ultra', 'gpt-6-luna@max']))
+    expect(offered).not.toContain('gpt-6-luna@ultra')
+    expect(offered).not.toContain('gpt-5.5@max')
+  })
+
+  it('limits Codex Max and Ultra to GPT-5.6 models when there is no catalog to ask', () => {
     expect(codexEffortAllowed('gpt-5.6-sol', 'max')).toBe(true)
     expect(codexEffortAllowed('gpt-5.6-terra', 'ultra')).toBe(true)
     expect(codexEffortAllowed('codex-auto-review', 'ultra')).toBe(true)

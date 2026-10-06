@@ -912,6 +912,27 @@ describe('RuntimeProfileController', () => {
       expect(manager.selectedModel(value)).toBe(target)
     })
 
+    it('reaches Ultra on a GPT-6 model, as Codex catalog lists it there, and refuses Max where it does not', async () => {
+      const { value, manager } = agent('gpt-5.5', 'high')
+      const ultra = encodeRuntimeProfile({ sessionId: 'h1', engine: 'codex', model: 'gpt-6.1-sol', effort: 'ultra' })
+      const reasoning = reasoningFor('GPT-6.1-Sol')
+      const { controller, keys } = drive(manager, value, CODEX_0160_ALL_MODELS, (screen, key) => {
+        if (screen === CODEX_0160_ALL_MODELS && key === '1') return reasoning
+        if (screen === reasoning && key === '6') return CODEX_0160_ADVANCED
+        if (screen === CODEX_0160_ADVANCED && key === '2') { applied(manager, value, 'gpt-6.1-sol', 'ultra'); return CODEX_0160_COMPOSER }
+        throw new Error(`unexpected ${key}`)
+      })
+      await controller.setProfile('s1', ultra)
+      expect(keys).toEqual(['1', '6', '2'])
+      expect(manager.selectedModel(value)).toBe(ultra)
+
+      // gpt-5.5 lists no Max: refused before `/model` is typed.
+      const refused = drive(manager, value, CODEX_0160_ALL_MODELS, () => { throw new Error('no key may be pressed') })
+      await expect(refused.controller.setProfile('s1', encodeRuntimeProfile({ sessionId: 'h1', engine: 'codex', model: 'gpt-5.5', effort: 'max' })))
+        .rejects.toMatchObject({ code: 'EFFORT_UNSUPPORTED' })
+      expect(refused.keys).toEqual([])
+    })
+
     it('presses nothing on a list that never reads the same twice', async () => {
       const { value, manager } = agent('gpt-5.5', 'high')
       const target = encodeRuntimeProfile({ sessionId: 'h1', engine: 'codex', model: 'gpt-6-luna', effort: 'high' })

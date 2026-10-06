@@ -280,9 +280,19 @@ export function supportsNativeRuntimeControl(session: RegisteredSession): boolea
   return versionAtLeast(session.cliVersion, CODEX_CONTROL_MIN_VERSION)
 }
 
-export function codexEffortAllowed(model: string, effort: string): boolean {
+/**
+ * Whether Codex can be asked for this effort on this model. `listed` is what Codex's own catalog
+ * (`models_cache.json`) gives the model, or null when the catalog cannot be read or does not have it.
+ *
+ * Max and Ultra follow the catalog: Codex offers them in its picker exactly where the catalog lists them
+ * (model_popups.rs), and 0.160's lists them for gpt-6-astra, gpt-6.1-sol and gpt-6-sol, which the slug
+ * list below left out of reach (owner, 2026-10-05). The slug list is what was known from 0.145, kept for
+ * when there is no catalog to ask.
+ */
+export function codexEffortAllowed(model: string, effort: string, listed: readonly string[] | null = null): boolean {
   if (!CODEX_EFFORTS.has(effort)) return false
   if (effort !== 'max' && effort !== 'ultra') return true
+  if (listed) return listed.includes(effort)
   return /^gpt-5\.6(?:-|$)/i.test(model) || model.toLowerCase() === 'codex-auto-review'
 }
 
@@ -1376,22 +1386,22 @@ export class RuntimeProfileManager {
     const output: RuntimeModelOption[] = []
     const seen = new Set<string>()
     const cache = await this.readCodexCache(session)
+    const catalog = parseCodexCatalog(cache)
     for (const item of Array.isArray(cache.models) ? cache.models : []) {
       const model = text(item.slug)
       if (!model || item.visibility === 'hide') continue
       const label = text(item.display_name) || runtimeModelLabel(model)
       addOption(output, seen, session, model, 'auto', label)
-      for (const level of Array.isArray(item.supported_reasoning_levels) ? item.supported_reasoning_levels : []) {
-        const effort = text(level.effort).toLowerCase()
-        if (CODEX_EFFORTS.has(effort) && effort !== 'auto' && codexEffortAllowed(model, effort)) {
-          addOption(output, seen, session, model, effort, label)
-        }
+      const listed = catalog.find((entry) => entry.slug === model)?.efforts ?? []
+      for (const effort of listed) {
+        if (effort !== 'auto' && codexEffortAllowed(model, effort, listed)) addOption(output, seen, session, model, effort, label)
       }
     }
     const state = this.states.get(session.sessionId)
     if (state?.model) {
       addOption(output, seen, session, state.model, 'auto')
-      if (state.effort && codexEffortAllowed(state.model, state.effort)) {
+      const listed = catalog.find((entry) => entry.slug === state.model)?.efforts ?? null
+      if (state.effort && codexEffortAllowed(state.model, state.effort, listed)) {
         addOption(output, seen, session, state.model, state.effort)
       }
     }
