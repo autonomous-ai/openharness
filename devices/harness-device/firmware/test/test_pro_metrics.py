@@ -51,7 +51,7 @@ bridge = r'''
 #include <math.h>
 #define COPY(dst,src) snprintf(dst,sizeof dst,"%s",(src)?(src):"")
 enum {HOME,TODAY,LAUNCHER};
-enum {A_TODAY,A_TODAY_REFRESH,A_METRICS_GET};
+enum {A_TODAY,A_TODAY_REFRESH,A_METRICS_GET,A_DRAFT_STORE};
 typedef struct {int kind;uint32_t revision;char id[128],text[192];} action_t;
 static struct {bool connected;int view;pro_metrics_t metrics;} s;
 static bool s_session,queue_full,send_ok=true,allocation_fail;
