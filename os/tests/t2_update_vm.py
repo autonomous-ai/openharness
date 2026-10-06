@@ -136,7 +136,9 @@ def main():
         graceful_stop(vm, False)
         installed('image', after)
         vm.monitor('set_link', name='hnnet', up=True)
-        vm.command('sudo -n nmcli networking on; mkdir -p ' + guest)
+        vm.command('sudo -n nmcli networking on')
+        vm.command('nm-online --quiet --timeout=30', timeout=40)
+        vm.command('mkdir -p ' + guest)
         url = f'http://10.0.2.2:{server.server_port}'
         for file in served.iterdir():
             if file.is_file():
