@@ -38,5 +38,5 @@ questions. Everything else is a service ([../services/AGENTS.md](../services/AGE
   in this process. `serviceLinks.ts`: services in their own processes. `viewersLink.ts`: what the core
   keeps of the viewers when they run in theirs. `workspacesLink.ts`: what the core tells workspaces in
   theirs. `teamsLink.ts`: every change to the teams' prompt scopes, kept until their process has it.
-  `monitorLink.ts`: the monitor's port, asked of its process. `agentQueries.ts`: what a service in its
-  own process may ask of the agents.
+  `monitorLink.ts`: the monitor's port, asked of its process. `storeLink.ts`: what the Store in its
+  process tells the core. `agentQueries.ts`: what a service in its own process may ask of the agents.

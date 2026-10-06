@@ -53,14 +53,14 @@ const IN_THE_CORE = { HARNESSD_SERVICES: 'none' }
 const QUICK_TO_PARK = { HARNESSD_SERVICE_PARK_CRASHES: '3', HARNESSD_SERVICE_INITIAL_BACKOFF_MS: '200', HARNESSD_SERVICE_MAX_BACKOFF_MS: '1000' }
 /** The processes the services run in by default, and what makes every one of them fail as it starts. */
 const SERVICE_PROCESSES = ['search', 'viewers', 'edge', 'teams'] as const
-const EVERY_PROCESS_FAILING = 'search,viewers,workspaces,usage,monitor,projects,teams'
+const EVERY_PROCESS_FAILING = 'search,viewers,store,workspaces,usage,monitor,projects,teams'
 
 describe('a failing service never takes the core down', () => {
   let daemon: IsolatedDaemon | undefined
   afterEach(async () => { await daemon?.close(); daemon = undefined })
 
   it('with every service failing to start, in its own process or in the core, the core starts, runs an agent through turns and a restart, and says each one is unavailable', async () => {
-    daemon = await IsolatedDaemon.create({ env: { HARNESSD_TEST_FAULTS: `${EVERY_PROCESS_FAILING},models,store`, ...QUICK_TO_PARK } })
+    daemon = await IsolatedDaemon.create({ env: { HARNESSD_TEST_FAULTS: `${EVERY_PROCESS_FAILING},models`, ...QUICK_TO_PARK } })
     const d = daemon
     onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-120).join('\n')}`) })
     await d.start()
@@ -68,14 +68,12 @@ describe('a failing service never takes the core down', () => {
     for (const service of SERVICE_PROCESSES) {
       await until(`the master to park ${service}`, () => d.log().includes(`[harnessd] service ${service} ended 3 times`) || null, 60_000, 250)
     }
-    for (const service of ['models', 'store']) {
-      expect(d.log()).toContain(`[services] ${service} did not start · injected fault: ${service} · the core runs without it`)
-    }
+    expect(d.log()).toContain('[services] models did not start · injected fault: models · the core runs without it')
     const client = await LocalClient.connect(d)
     const agentId = await boundAgent(d, client, 'no-service-processes')
     await turn(client, agentId, 'first, with every service down')
     expect(await client.request('session_search', { query: 'first' })).toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'search' })
-    expect(await client.request('dsh_list', {})).toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'store' })
+    expect(await client.request('dsh_list', {})).toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'store', retryable: true })
     expect(await client.request('fs_list_dir', { path: d.projectsDir })).toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'projects', retryable: true })
     expect(await client.request('machine_resources', {})).toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'monitor', retryable: true })
     // With the monitor's process parked, the Monitor's list is still the list: its rows, without readings.
@@ -238,8 +236,11 @@ describe('a failing service never takes the core down', () => {
 
   it('the store answers from its own service; one of its requests failing leaves its others and the core alone', async () => {
     daemon = await IsolatedDaemon.create({ env: { HARNESSD_TEST_FAULTS: 'store.dsh_list' } })
-    onTestFailed(() => { console.log(`---- daemon log\n${daemon?.log().split('\n').slice(-80).join('\n')}`) })
-    await daemon.start()
+    const d = daemon
+    onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-80).join('\n')}`) })
+    await d.start()
+    // In the viewers' process: asked before it has connected, it is answered SERVICE_UNAVAILABLE, retryable.
+    await until('the store to connect', () => d.log().includes('[services] store connected') || null, 30_000, 200)
     const client = await LocalClient.connect(daemon)
     expect(await client.request('dsh_list', {})).toMatchObject({ error: 'SERVICE_FAILED', service: 'store' })
     // Its other requests are still the store's own answers, refusals included.
@@ -352,7 +353,9 @@ describe('a failing service never takes the core down', () => {
 
   it('the store lists what is installed here and what the registry offers', async () => {
     daemon = await IsolatedDaemon.create()
-    await daemon.start()
+    const d = daemon
+    await d.start()
+    await until('the store to connect', () => d.log().includes('[services] store connected') || null, 30_000, 200)
     const client = await LocalClient.connect(daemon)
     const listed = await client.request('dsh_list', {}, 60_000)
     expect(listed.error, JSON.stringify(listed).slice(0, 400)).toBeUndefined()

@@ -307,8 +307,9 @@ export type ServiceHostSpec = Omit<ServiceSpec, 'name'>
 export const SERVICE_HOSTS: Readonly<Record<string, ServiceHostSpec>> = {
   search: { services: ['search'], heapLimitMiB: 1_024, rssLimitMiB: 2_048 },
   // Its file watches on every harness's workspace; the viewer servers it starts are processes of their
-  // own, outside this budget.
-  viewers: { services: ['viewers'], heapLimitMiB: 512, rssLimitMiB: 1_024 },
+  // own, outside this budget. The Store beside them: its installs run git and the harnesses' toolchains
+  // in their own processes too, and take minutes, which is what it must not spend in the core.
+  viewers: { services: ['viewers', 'store'], heapLimitMiB: 512, rssLimitMiB: 1_024 },
   // The git work (workspaces, the project readers) runs in git's own processes, and the monitor's
   // samples in ps's and ioreg's; what it holds is the agents the core sent it and one parsed sample.
   // The monitor parses up to 8 MB of ioreg output per Monitor poll on a Mac with a GPU, hence more
@@ -377,8 +378,10 @@ export function servicesTheMasterRuns(env: NodeJS.ProcessEnv, known: readonly st
  * names a subset, by service (`search,workspaces`) or by process (`edge`, every service it hosts); `none`
  * (or empty) runs them all inside the core's process, for debugging or a quick way back. Isolation is
  * the point of the split (one service failing costs only its process), so it is the default, not an
- * opt-in. Each process hosts the services named of its own, and is not started for none.
- * `HARNESSD_SERVICE_HEAP_LIMIT_MIB` gives every one the same heap limit instead (tests, support).
+ * opt-in. Each process hosts the services named of its own, and is not started for none. A process
+ * named as one of its services is named whole: `viewers` runs the viewers' process, the Store beside
+ * them, as it ran the viewers' before the Store joined it. `HARNESSD_SERVICE_HEAP_LIMIT_MIB` gives every
+ * one the same heap limit instead (tests, support).
  */
 export function serviceSpecs(env: NodeJS.ProcessEnv, hosts: Readonly<Record<string, ServiceHostSpec>>): ServiceSpec[] {
   const named = env.HARNESSD_SERVICES === undefined ? null

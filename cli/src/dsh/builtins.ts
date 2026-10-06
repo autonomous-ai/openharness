@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+import { DEVICES_BUILTIN_SOURCE, DEVICES_HARNESS_ID, HARNESS_MONITOR_BUILTIN_SOURCE, HARNESS_MONITOR_ID, MODEL_MANAGER_ID } from './builtinIds.js'
 import { dshRootDir, isBrokenDsh, readInstalledIndex, resolveInstalled, upsertInstalledRecord } from './installed.js'
 import { lockDsh } from './lock.js'
 import { readDshManifest } from './manifest.js'
@@ -10,11 +11,9 @@ import { samePackageSource } from './updates.js'
 declare const __MODEL_MANAGER_BUNDLE__: string
 declare const __DEVICES_BUNDLE__: string
 declare const __HARNESS_MONITOR_BUNDLE__: string
-export const MODEL_MANAGER_ID = 'autonomous/autonomous-grid'
-export const DEVICES_HARNESS_ID = 'autonomous/devices'
-export const DEVICES_BUILTIN_SOURCE = 'builtin:devices'
-export const HARNESS_MONITOR_ID = 'autonomous/harness-monitor'
-export const HARNESS_MONITOR_BUILTIN_SOURCE = 'builtin:harness-monitor'
+export {
+  DEVICES_BUILTIN_SOURCE, DEVICES_HARNESS_ID, HARNESS_MONITOR_BUILTIN_SOURCE, HARNESS_MONITOR_ID, isHiddenBuiltin, MODEL_MANAGER_ID,
+} from './builtinIds.js'
 export type BundledFiles = Record<string, { content: string; executable: boolean; encoding?: 'base64' }>
 
 /** Install the trusted, release-bundled harness. Runtime provisioning remains
@@ -54,11 +53,6 @@ export function ensureBundledCoreHarnesses(log: (line: string) => void = console
     }
   }
   return ready
-}
-
-/** Built-ins opened through their own product entry points, absent from the public picker. */
-export function isHiddenBuiltin(record: { source?: string | null }): boolean {
-  return record.source === 'builtin:pair' || record.source === DEVICES_BUILTIN_SOURCE
 }
 
 /** Materialize `files` under `.bundled/<folder>/<revision>` and point the index at it. Idempotent per revision. */
