@@ -492,8 +492,8 @@ def generate_muse_scene(prefix, kind):
 # ---- Claude Code's Clawd: PNG frames (assets/pets/claude, exported by mockup/clawd_v3.py) ----
 # Drawn at the glass's 1 px with every edge anti-aliased into opaque colour over black (the dial keeps on/off
 # alpha), at 55-65 ms a step. Each scene is a body (a few stored poses; a hop or a nod is the step's dy, not a new
-# pose) and per step a props sprite (the pan and food, the rocket and its smoke, the alert's bubble) placed per px;
-# the sending scene's tall sprites (smoke, the rocket in flight) are stored at 2 px cells. Listening's sound arcs
+# pose) and per step a props sprite (the pan and food, the letter and the post box's flag, the alert's bubble) placed
+# per px; a scene's `cell2` sprites, if any, are stored at 2 px cells. Listening's sound arcs
 # are drawn by focus.c (ht_pet_waves_t, one set at each cup). The small pet is the rest loop, 24 steps.
 CLAUDE = root / 'assets/pets/claude'
 CLAUDE_SCENES = json.loads((CLAUDE / 'scenes.json').read_text())

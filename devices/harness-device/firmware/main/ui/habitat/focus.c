@@ -478,7 +478,7 @@ static void voice_face(ht_scene_t *s, const ht_character_face_t *f, uint8_t fram
     // A pet with a listening scene (Claude's headphones Clawd) draws it, nodding with the mic level,
     // in place of the seven bars; its step follows the face's clock (140 ms), 0 when there is none.
     const ht_pet_scene_t *scene = listening ? listening_scene(f) : NULL;
-    // Sending with one (Claude's rocket Clawd) takes the same slot, centred, and the sparkles go empty.
+    // Sending with one (Claude's Clawd posting a letter) takes the same slot, centred, and the sparkles go empty.
     const ht_pet_scene_t *launch = listening ? NULL : sending_scene(f);
 
     /*

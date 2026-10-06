@@ -1017,10 +1017,10 @@ static void focus_face(void)
         ht_scene_clear(&scene, 0); ht_character_face(&scene, &c, &sending, 0xffff, "");
         assert(scene.count == 11);
         for (int i = 0; i < scene.count; i++) assert(scene.runs[i].sprite.width != ls->w);   // the sending scene, not this one
-        // Sending: Claude draws the rocket scene, centred, with no sparkle runs; the frame follows the clock.
+        // Sending: Claude draws the post box scene, centred, with no sparkle runs; the frame follows the clock.
         {
             const ht_pet_scene_t *ss = cp->sending_scene;
-            assert(ss && ss->w == 158 && ss->h == 129 && ss->steps == 40 && ss->step_ms == 60 && ss->overlay);
+            assert(ss && ss->w == 192 && ss->h == 109 && ss->steps == 40 && ss->step_ms == 60 && ss->overlay);
             const uint8_t *seen[40];
             for (unsigned step = 0; step < ss->steps; step++) {
                 ht_character_face_t v = sending; v.clock_ms = step * ss->step_ms + 1;
@@ -1052,7 +1052,7 @@ static void focus_face(void)
                 for (unsigned b = 0; b < a; b++) fresh &= seen[b] != seen[a];
                 poses += fresh;
             }
-            assert(poses >= 3);
+            assert(poses == 4);   // eyes open, and ^ ^ with an arm up at three hop heights; the letter and flag are props
             // A held clock (quiet, asleep) draws no scene: the sparkles.
             ht_character_face_t h = sending; h.clock_ms = 0;
             ht_scene_clear(&scene, 0); ht_character_face(&scene, &c, &h, 0xffff, "");
@@ -1518,7 +1518,7 @@ static void focus_face(void)
         ht_character_face_t v = {.recipient = "", .tab = "", .engine = "claude", .activity = "", .status = "",
             .hint = "", .detail = "", .voice = true, .mood = HT_CHARACTER_LISTENING, .clock_ms = 1};
         v.clock_ms = 0; assert(!ht_focus_pet_next_ms(&v, ""));
-        // Sending: the next frame change of the rocket scene; held or without a scene, nothing.
+        // Sending: the next frame change of the post box scene; held or without a scene, nothing.
         const ht_pet_scene_t *ss = pet_of("claude")->sending_scene;
         v.mood = HT_CHARACTER_WORKING;
         for (unsigned step = 0; step < ss->steps; step++) {

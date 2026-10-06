@@ -2213,14 +2213,14 @@ int main(int argc, char **argv) {
         reset(); ht_character_select(&character, HT_CHARACTER_FOCUS); strcpy(s.agents[0].engine, "claude");
         fake_ms = 1200; dispatch((action_t){.kind = A_VOICE, .id = "a", .value = 7}); scene_take();
         assert(s.view == VOICE && !s.voice_engine[0] && !VOICE_SCENE() && VOICE_BARS() == 7 && !s.pet_next_ms);
-        // Sending to Claude: the rocket scene animates on its own 120 ms step; quiet holds it.
+        // Sending to Claude: the post box scene animates on its own step; quiet holds it.
         const ht_pet_scene_t *ss = ht_pets[0].sending_scene;
         assert(ss);
         reset(); ht_character_select(&character, HT_CHARACTER_FOCUS); strcpy(s.agents[0].engine, "claude");
         fake_ms = 1200; dispatch((action_t){.kind = A_VOICE, .id = "a"}); s.voice_waiting = true; scene_take();
         assert(s.view == VOICE && !strcmp(s.voice_engine, "claude") && !VOICE_BARS());
-        bool rocket = false; for (int i = 0; i < scene.count; i++) rocket |= scene.runs[i].sprite.width == ss->w && scene.runs[i].sprite.cells;
-        assert(rocket && s.pet_next_ms);
+        bool post = false; for (int i = 0; i < scene.count; i++) post |= scene.runs[i].sprite.width == ss->w && scene.runs[i].sprite.cells;
+        assert(post && s.pet_next_ms);
         portrait_focus(dir,"focus-voice-sending");
         due = s.pet_next_ms; assert(due > 1200 && due <= 1201 + ss->step_ms * ss->steps);
         changes = 0; surface_tick(due - 1); assert(s.pet_next_ms == due);
