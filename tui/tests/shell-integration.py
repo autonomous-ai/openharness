@@ -195,8 +195,9 @@ with tempfile.TemporaryDirectory(prefix='hn-shell-test-') as tmp:
                 match = REQUEST.search(s.read_until(REQUEST))
                 s.send("printf 'TYPEAHEAD_%s\\n' OK\r")
                 s.reply(match)
-                result = s.read_until(b'TYPEAHEAD_OK')
-                if not result.endswith(b'READY> '): s.read_until(b'READY> ')
+                # Zsh may enable bracketed paste after drawing PS1. Check the
+                # result line and its following prompt, not the buffer suffix.
+                s.result(b'TYPEAHEAD_OK')
                 s.request('cm default','model-inline','Using defaults.\n')
                 # A reattach may drop the initial output event. Retrying keeps the
                 # same id, leaves typeahead alone, and cleans up the response FIFO.

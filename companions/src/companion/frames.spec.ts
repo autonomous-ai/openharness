@@ -12,24 +12,26 @@ import { RelaySessionCrypto } from '../../../cli/src/lib/e2ee/relayClient.js'
 import {
   admitRelayedPairFrame, encryptDownFrame, encryptRpcResult, PAIR_PUSHES, PAIR_REQUESTS, PAIR_RESULTS, PLATE_REQUEST, PLATE_RESULT,
 } from '../../../cli/src/lib/e2ee/applicationFrames.js'
-import { BackendSocket } from '../../../cli/src/backendSocket.js'
+import type { BackendSocket } from '../../../cli/src/backendSocket.js'
+import { gatewayOf, relaySocket, upstreamOf } from '../../../cli/src/testing/relaySocket.js'
 import type { PairEvent, PairService, PairSnapshot } from './protocol.js'
 
 type Frame = Record<string, unknown>
 
 /** A paired peer (another machine's brain) with a live session on `socket`'s daemon. */
 function pairedPeer(socket: BackendSocket, connId: string) {
-  const e2ee = socket.e2ee as unknown as { store: { addPaired: (pub: string, label: string, at: number, role: 'web') => void; getIdentity: () => C.Identity } }
+  const e2ee = gatewayOf(socket).e2ee
+  const store = (e2ee as unknown as { store: { addPaired: (pub: string, label: string, at: number, role: 'web') => void; getIdentity: () => C.Identity } }).store
   const identity = C.newIdentity()
-  e2ee.store.addPaired(C.b64e(identity.pub), 'peer brain', Date.now(), 'web')
-  const sent: Array<{ connId: string; frame: Frame }> = []
-  vi.spyOn(socket, 'sendTo').mockImplementation((to: string, frame: Frame) => { sent.push({ connId: to, frame }) })
-  const crypto = new RelaySessionCrypto({ machineId: socket.machineId, selfIdentity: identity, peerPub: e2ee.store.getIdentity().pub })
-  socket.e2ee.handleFrame(connId, crypto.helloFrame())
-  const welcome = sent.pop()!
+  store.addPaired(C.b64e(identity.pub), 'peer brain', Date.now(), 'web')
+  const crypto = new RelaySessionCrypto({ machineId: socket.machineId, selfIdentity: identity, peerPub: store.getIdentity().pub })
+  e2ee.handleFrame(connId, crypto.helloFrame())
+  // The gateway now owns sealing and the upstream link; the core socket holds no keys.
+  const welcome = upstreamOf(socket).queue.map(item => item.msg as { targetConnId: string; frame: Frame })
+    .find(message => message.targetConnId === connId && message.frame?.type === 'e2e_welcome')!
   expect(welcome.frame.type).toBe('e2e_welcome')
   expect(crypto.handleWelcome(welcome.frame.payload as Frame)).toBe(true)
-  return { crypto, sent }
+  return { crypto }
 }
 
 const SNAPSHOT: PairSnapshot = {
@@ -72,28 +74,28 @@ describe('pair frames are sealed application frames', () => {
   })
 
   it('seals every pair request end to end; the relay sees only the type', async () => {
-    const socket = new BackendSocket('token')
+    const socket = relaySocket('token')
     const { crypto } = pairedPeer(socket, 'peer-1')
     for (const type of PAIR_REQUESTS) {
       const request = { requestId: `${type}-1`, agentId: 'a1', question: 'Run the migration?' }
       const sealed = crypto.wrapOutgoing({ type, payload: request })
       expect(JSON.stringify(sealed)).not.toContain('migration')
       expect(sealed.payload).not.toHaveProperty('agentId')
-      expect(socket.e2ee.unwrapDown('peer-1', sealed)?.payload).toEqual(request)
+      expect(gatewayOf(socket).e2ee.unwrapDown('peer-1', sealed)?.payload).toEqual(request)
     }
     await socket.stop()
   })
 
   it('pair_event pushed with wrapTarget opens on the watching machine, and only there', async () => {
-    const socket = new BackendSocket('token')
+    const socket = relaySocket('token')
     const { crypto } = pairedPeer(socket, 'peer-1')
     const event: PairEvent = { machineId: 'machine-a', rev: 8, agentId: 'a1', harness: SNAPSHOT.harnesses[0] }
-    const sealed = socket.e2ee.wrapTarget('peer-1', 'pair_event', event as unknown as Frame)!
+    const sealed = gatewayOf(socket).e2ee.wrapTarget('peer-1', 'pair_event', event as unknown as Frame)!
     expect(JSON.stringify(sealed)).not.toContain('migration')
     expect(admitRelayedPairFrame(sealed)).toBe(true)
     expect(crypto.unwrapIncoming(sealed)?.payload).toEqual(event)
     // A connection with no session gets nothing at all rather than a plaintext push.
-    expect(socket.e2ee.wrapTarget('stranger', 'pair_event', event as unknown as Frame)).toBeNull()
+    expect(gatewayOf(socket).e2ee.wrapTarget('stranger', 'pair_event', event as unknown as Frame)).toBeNull()
     await socket.stop()
   })
 

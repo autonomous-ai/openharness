@@ -71,6 +71,9 @@ describe('opening connected shells', () => {
     const w = world
     const d = w.machine.daemon
     onTestFailed(() => console.log(d.log().split('\n').slice(-100).join('\n')))
+    // Core readiness precedes the extracted gateway's connection to the relay.
+    // A hello sent before that connection exists is deliberately not queued.
+    await until('the shell machine gateway to register', () => w.backend.nodeUp(w.machine.machineId))
     const options = { backend: w.backend, machineId: w.machine.machineId, machinePub: w.machine.identity.pub, ...w.phone }
     const phone = new RelayPhone(options); clients.push(phone); await phone.open()
     const witness = new RelayPhone(options); clients.push(witness); await witness.open()
