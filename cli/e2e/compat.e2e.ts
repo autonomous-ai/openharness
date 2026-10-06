@@ -12,7 +12,8 @@
  * the desktop app, `hn` and the phone were written against the released daemon's answers.
  *
  * Skipped unless COMPAT_FROM names a released bundle, so CI does not build old releases. Before a
- * release: use the current published bundle (0.3.60 or later), or build the last released tag's bundle (`node build-bundle.mjs` in a checkout of it) and run
+ * release: use the current published bundle (0.3.60 or later), or build the last released tag's bundle
+ * (`node build-bundle.mjs` in a checkout of it) and run
  * `COMPAT_FROM=<that>/dist/cli.js npm run test:e2e -- compat`. `COMPAT_REPORT=<file>` writes both
  * sides' answers and every difference, for reading one by one.
  */
@@ -63,6 +64,10 @@ function comparable(d: IsolatedDaemon, known: Map<string, string>) {
   const walk = (value: unknown, key = ''): unknown => {
     if (typeof value === 'string') {
       if (VOLATILE.has(key)) return '<v>'
+      // Found by QA on a quiet machine: once both builds answer terminal_info, their independently
+      // allocated PTYs differ under parallel e2e. Only valid macOS/Linux device identities compare
+      // alike; an absent tty, a changed type or a malformed path still differs.
+      if (key === 'tty' && /^\/dev\/(?:ttys\d+|pts\/\d+)$/.test(value)) return '<tty>'
       let text = value
       for (const root of roots) text = text.split(root).join('<root>')
       return text.replace(UUID, name).replace(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z/g, '<iso>')
