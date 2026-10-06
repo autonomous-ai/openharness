@@ -135,10 +135,18 @@ class SearchResultText extends StatelessWidget {
     required this.style,
     this.inlineIcon,
     this.iconOffset = 0,
+    this.from = 0,
+    this.to,
   });
   final String text;
   final Iterable<SearchFieldMatch> matches;
   final TextStyle style;
+
+  /// Draw only `text[from, to)`, emphasised as the matches emphasise the whole [text]: one label
+  /// shown in parts, such as a shared model's name over the machine that serves it, keeps the
+  /// emphasis of a match that spans both. [iconOffset] counts from [from].
+  final int from;
+  final int? to;
 
   /// Insert a decorative mark without changing searchable text or match offsets.
   final Widget? inlineIcon;
@@ -146,12 +154,33 @@ class SearchResultText extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final runs = searchTextRuns(text, matches);
+    final end = (to ?? text.length).clamp(0, text.length);
+    final start = from.clamp(0, end);
+    final shown = text.substring(start, end);
+    var runs = searchTextRuns(text, matches);
+    if (start > 0 || end < text.length) {
+      final clipped = <SearchTextRun>[];
+      var at = 0;
+      for (final run in runs) {
+        final after = at + run.text.length;
+        if (after > start && at < end) {
+          clipped.add((
+            text: text.substring(
+              at < start ? start : at,
+              after > end ? end : after,
+            ),
+            matched: run.matched,
+          ));
+        }
+        at = after;
+      }
+      runs = clipped;
+    }
     final insertIcon =
-        inlineIcon != null && iconOffset >= 0 && iconOffset < text.length;
+        inlineIcon != null && iconOffset >= 0 && iconOffset < shown.length;
     if (!insertIcon && !runs.any((run) => run.matched)) {
       return Text(
-        text,
+        shown,
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
         style: style,
@@ -191,7 +220,7 @@ class SearchResultText extends StatelessWidget {
     }
     return Text.rich(
       TextSpan(children: spans),
-      semanticsLabel: insertIcon ? text : null,
+      semanticsLabel: insertIcon ? shown : null,
       maxLines: 1,
       overflow: TextOverflow.ellipsis,
       style: style,
