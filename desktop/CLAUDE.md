@@ -138,6 +138,11 @@ PKCE transaction; conditional adapters handle storage and native-only services.
 `platform_auth_web.dart` serializes shared login/refresh/logout with Web Locks
 and reloads other tabs when the account changes. Auth and E2EE keys persist in
 origin-local storage; only the OAuth transaction is in session storage.
+Each relay connection also negotiates a WebRTC data channel to the machine
+(`web/p2p/`, the phone's `../mobile/lib/p2p` on the browser's own
+`RTCPeerConnection` — no `flutter_webrtc`, so native builds gain no plugin);
+terminal frames take it when it is up and fall back to the relay. Keep
+`terminal_p2p_{plugin,link,policy}.dart` in step with the phone's copies.
 Shared sessions use `ObserverRelayCodec` and `/api/observer-ws`, verifying the
 owner and permitting only observation and authenticated comments. `/s/:id#key=…`
 opens `SharedAgentPage` without restoring the visitor's workspace. Public links
