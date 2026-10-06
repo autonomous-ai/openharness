@@ -1,0 +1,22 @@
+{
+  "schema": 1,
+  "source": "Local end-to-end runs on a 12-core Mac, 2026-10-05: each file's own time in a run that did not filter its tests. Replace with the durations_ms of a passing cli-e2e-summary artifact.",
+  "description": "Scheduling hints only, for the end-to-end CI shards (vitest.e2e.ci.config.ts). Files without a hint cost the default. Discovery always determines the complete test set.",
+  "defaultDurationMs": 60000,
+  "durationMs": {
+    "e2e/bounded.e2e.ts": 115300,
+    "e2e/chaos.e2e.ts": 148400,
+    "e2e/compaction.e2e.ts": 50000,
+    "e2e/core.e2e.ts": 121200,
+    "e2e/enginehomes.e2e.ts": 131900,
+    "e2e/history.e2e.ts": 113000,
+    "e2e/races.e2e.ts": 264300,
+    "e2e/recovery.e2e.ts": 28700,
+    "e2e/shells.e2e.ts": 130400,
+    "e2e/soak.e2e.ts": 180100,
+    "e2e/startup.e2e.ts": 19700,
+    "e2e/terminal.e2e.ts": 155900,
+    "e2e/tmuxconf.e2e.ts": 74500,
+    "e2e/updateHostile.e2e.ts": 392800
+  }
+}

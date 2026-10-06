@@ -22,7 +22,7 @@ Ctrl+b is a prefix: release it before the next key. Verify customized keys with
 `hn list-keys`. Closing a pane and stopping an agent are different actions.
 
 The OS keys are in `labwc/rc.xml`: Super+n opens New Harness, Super+t a terminal,
-Super+m the connection flow, Super+w Wi-Fi, Super+b the browser, Super+e the file manager, Super+Enter hn,
+Super+m the connection flow, Super+w Wi-Fi, Super+b the browser, Super+e the file manager, Super+o opens a folder or file, Super+Enter hn,
 and Super+l the lock screen. Print or Super+p saves a screenshot, Shift+Print or
 Super+r a region, to `~/Pictures/Screenshots` and the clipboard. Super is Command
 on a Mac keyboard running Linux.

@@ -238,6 +238,14 @@ def install_package(package, version, runtime, additional=()):
     verify_runtime(runtime)
 
 
+def prepare_packages(package, additional=()):
+    # Resolve and verify the entire transaction while the old installation is
+    # still intact. Pacman retains signatures/dependency checks, and uses its
+    # cache when offline. Missing downloads must not create a failed checkpoint.
+    subprocess.run(['pacman', '--noconfirm', '-U', '--downloadonly',
+                    *map(str, additional), str(package)], check=True)
+
+
 def apply(folder, system, base, installation):
     previous = latest()
     if previous and previous['status'] not in ('applied', 'rolled-back'):
@@ -266,6 +274,8 @@ def apply(folder, system, base, installation):
         validate_bundle(incoming, base)
         kernel_change = boot.prepare_update(incoming / source_package.name, folder, incoming)
         kernel = boot.module('t2_update') if kernel_change else None
+        additional = [incoming / kernel_change['candidate']['package']['filename']] if kernel_change else []
+        prepare_packages(incoming / source_package.name, additional)
         checkpoint = system.checkpoint('before-harness-update')
         identity = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ-') + uuid.uuid4().hex[:8]
         saved = STATE / identity
@@ -288,7 +298,6 @@ def apply(folder, system, base, installation):
             # The fast user updater must not mix a running old session with newly
             # installed OS integration. /run clears this only on a real reboot.
             system.write_json(RESTART_REQUIRED, {'status': 'applying', 'package': manifest['package']['version']})
-            additional = [incoming / kernel_change['candidate']['package']['filename']] if kernel_change else []
             install_package(incoming / source_package.name, manifest['package']['version'], manifest['runtime'], additional)
             boot.restore_firmware()
             # Plymouth and other initramfs assets may change without a kernel

@@ -5,7 +5,7 @@ import { buildEngineLaunchArgv } from '../../lib/engineLaunch.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { processRows } from '../../lib/terminalAgentDiscovery.js'
 import { bypassPermissionActive, resolvePaneEngineProcess } from '../../lib/tmux.js'
-import { createPaneSwap, type PaneSwapDeps } from './swap.js'
+import { createPaneSwap, SWAP_SETTLE_MS, type PaneSwapDeps } from './swap.js'
 
 vi.mock('../../lib/deleteAgentFallback.js', async (real) => ({ ...await real<object>(), terminateDeletedAgent: vi.fn(async () => ({ ok: true })) }))
 vi.mock('../../lib/engineLaunch.js', async (real) => ({ ...await real<object>(), buildEngineLaunchArgv: vi.fn(() => ['zsh', '-lc', 'claude']) }))
@@ -94,13 +94,39 @@ describe('the pane-process swap', () => {
     vi.useFakeTimers()
     const { swap } = setup()
     const found = { pid: 99, startMarker: 'now' }
-    vi.mocked(resolvePaneEngineProcess).mockResolvedValueOnce(null).mockResolvedValueOnce(found as never)
+    vi.mocked(resolvePaneEngineProcess).mockResolvedValueOnce(null).mockResolvedValueOnce(found as never).mockResolvedValueOnce({ ...found } as never)
     const waiting = swap.paneSwapDeps(session(), runtime).waitForProcess()
-    await vi.advanceTimersByTimeAsync(150 + 300)
+    await vi.advanceTimersByTimeAsync(150 + 300 + SWAP_SETTLE_MS)
     expect(await waiting).toEqual(found)
     const never = swap.paneSwapDeps(session(), runtime).waitForProcess()
     // 150, 300, 600, then 750 ms at a time: the budget is spent on the look that crosses 8 s.
     await vi.advanceTimersByTimeAsync(9_000)
+    expect(await never).toBeNull()
+  })
+
+  // A launch the engine refuses (`codex resume` after an update dropped it) runs for an instant: seen in
+  // that instant, a restart called the conversation resumed and never fell back to a fresh start.
+  it('counts a process as come up only when it is still the pane\'s engine a moment later', async () => {
+    vi.useFakeTimers()
+    const { swap } = setup()
+    const refused = { pid: 98, startMarker: 'then' }
+    const lasting = { pid: 99, startMarker: 'now' }
+    vi.mocked(resolvePaneEngineProcess)
+      .mockResolvedValueOnce(refused as never).mockResolvedValueOnce(null)
+      // Another process in its place by the second look is not the one seen: it is looked at afresh.
+      .mockResolvedValueOnce(lasting as never).mockResolvedValueOnce({ pid: 99, startMarker: 'later' } as never)
+      .mockResolvedValueOnce(lasting as never).mockResolvedValueOnce({ ...lasting } as never)
+    const waiting = swap.paneSwapDeps(session(), runtime).waitForProcess()
+    await vi.advanceTimersByTimeAsync(150 + SWAP_SETTLE_MS + 300 + SWAP_SETTLE_MS + 600 + SWAP_SETTLE_MS)
+    expect(await waiting).toEqual(lasting)
+    expect(resolvePaneEngineProcess).toHaveBeenCalledTimes(6)
+    // One that never stays up is no engine: the wait ends as one that found none.
+    vi.mocked(resolvePaneEngineProcess).mockReset().mockImplementation(async () => {
+      refused.pid++
+      return { ...refused } as never
+    })
+    const never = swap.paneSwapDeps(session(), runtime).waitForProcess()
+    await vi.advanceTimersByTimeAsync(12_000)
     expect(await never).toBeNull()
   })
 

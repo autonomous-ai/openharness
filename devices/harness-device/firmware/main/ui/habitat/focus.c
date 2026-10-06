@@ -186,7 +186,9 @@ static void scene_origin(const ht_pet_scene_t *sc, int bias, int *x, int *y);
 /*
  * THE ALERT (owner, 2026-10-05: no bell on the working face; the pet tells you, then a blue dot at 12 o'clock): a
  * notice that arrives while the working scene shows plays the pet's alert scene ONCE from f->notice_ms, in the
- * working scene's place, its bubble the overlay. NULL when there is none to play now.
+ * working scene's place, its bubble the overlay. An alert with no frames of its own (Claude's, owner 2026-10-06:
+ * "bubble only") leaves the working scene playing and pops its bubble over it, placed from the working scene's
+ * origin, in the run after the working scene's overlay. NULL when there is none to play now.
  */
 static const ht_pet_scene_t *alert_scene(const ht_character_face_t *f, const char *recap, uint32_t *step)
 {
@@ -215,7 +217,7 @@ void ht_focus_alert_from(const ht_character_face_t *f, int *x, int *y)
     unsigned last = a->steps - 1;
     const ht_cell_frame_t *b = &a->overlay->frames[a->overlay->loop[last]];
     int ox, oy;
-    scene_origin(a, 4, &ox, &oy);
+    scene_origin(a->frames || !pet->working_scene ? a : pet->working_scene, 4, &ox, &oy);
     *x = ox + a->overlay->at[last][0] + b->cols * b->cell / 2;
     *y = oy + a->overlay->at[last][1] + b->rows * b->cell / 2;
 }
@@ -385,14 +387,18 @@ uint32_t ht_focus_pet_next_ms(const ht_character_face_t *f, const char *recap)
     }
     uint32_t alert_step;
     const ht_pet_scene_t *alert = alert_scene(f, recap, &alert_step);
-    if (alert) return f->notice_ms + (alert_step + 1) * alert->step_ms;   // its next step, or the work again after the last
     const ht_pet_scene_t *sc = working_scene(f, recap);
+    if (alert) {   // its next step, or the work again after the last; under a bubble only, the work's next frame too
+        uint32_t next = f->notice_ms + (alert_step + 1) * alert->step_ms, work = scene_next_ms(sc, 0, f->clock_ms);
+        return !alert->frames && work && work < next ? work : next;
+    }
     if (sc) return scene_next_ms(sc, 0, f->clock_ms);
     ht_pet_state_t state = pet_state(f, recap);
     uint32_t each = pet->step_ms[state], now = f->clock_ms / each;
-    const ht_pet_step_t *cur = &pet->loops[state][now % HT_PET_STEPS];
-    for (unsigned i = 1; i <= HT_PET_STEPS; i++) {
-        const ht_pet_step_t *p = &pet->loops[state][(now + i) % HT_PET_STEPS];
+    unsigned steps = ht_pet_steps(pet);
+    const ht_pet_step_t *cur = &pet->loops[state][now % steps];
+    for (unsigned i = 1; i <= steps; i++) {
+        const ht_pet_step_t *p = &pet->loops[state][(now + i) % steps];
         if (p->frame != cur->frame || p->dy != cur->dy) return (now + i) * each;
     }
     return 0;
@@ -735,6 +741,10 @@ void ht_focus_face(ht_scene_t *s, const ht_character_face_t *f, uint8_t frame, u
     // Claude's block of a body reads larger than the others at the same size (owner, 2026-10-06): it stays at 1.5x
     // resting and over a recap of one to three lines, and 1x over four.
     if (f->engine && !strcmp(f->engine, "claude") && ((has_recap && recap_n <= 3) || empty || retry)) size = 0;
+    // Codex's robot reads small at 1x over a full recap, and 1.5x was too big (owner, 2026-10-06): over four lines it is
+    // 1.25x (the eighths nearest the asked 1.3x), placed like the sizes over a shorter recap.
+    bool codex_full = f->engine && !strcmp(f->engine, "codex") && has_recap && recap_n >= 4;
+    if (codex_full) size = 0;
     int mark_top = TITLE_BOTTOM + (below - TITLE_BOTTOM - MARK_SIZE) / 2;
 
     // The name on the top curve, the octopus's arc; a tap there opens the pane list.
@@ -748,7 +758,7 @@ void ht_focus_face(ht_scene_t *s, const ht_character_face_t *f, uint8_t frame, u
     const ht_pet_scene_t *scene = working_scene(f, recap);
     uint32_t alert_step = 0;
     const ht_pet_scene_t *alert = alert_scene(f, recap, &alert_step);
-    if (alert) {
+    if (alert && alert->frames) {
         // A notice just came: the pet's alert in the working scene's place, once.
         int sx, sy;
         scene_origin(alert, 4, &sx, &sy);
@@ -762,14 +772,14 @@ void ht_focus_face(ht_scene_t *s, const ht_character_face_t *f, uint8_t frame, u
         // The engine's pet, centred in the mark's box, lifted by its step's hop.
         bool hold = pet_holds(f);
         ht_pet_state_t state = hold ? HT_PET_IDLE : pet_state(f, recap);
-        unsigned step = hold ? 0 : (f->clock_ms / pet->step_ms[state]) % HT_PET_STEPS;
+        unsigned step = hold ? 0 : (f->clock_ms / pet->step_ms[state]) % ht_pet_steps(pet);
         const ht_pet_step_t *p = &pet->loops[state][step];
         if (pet->cells) {
             // One 2x drawing, shown at 1x — or larger over a short recap, centred between the name and the recap's
             // first line, its hop scaled with it (zoom in eighths of the drawing: 4 = 1x, 6, 7, 8 = 2x).
             static const uint8_t zooms[4] = {4, 6, 7, 8};
             const ht_cell_frame_t *fr = &pet->cells[p->frame];
-            int z = zooms[size + 1];
+            int z = codex_full ? 5 : zooms[size + 1];
             int pw = (fr->cols * fr->cell * z + 7) / 8, ph = (fr->rows * fr->cell * z + 7) / 8;
             int px = (HT_WIDTH - pw) / 2;
             int py = (size >= 0 ? TITLE_BOTTOM + (below - TITLE_BOTTOM - ph) / 2 : mark_top + (MARK_SIZE - ph) / 2) + p->dy * z / 4;
@@ -788,12 +798,14 @@ void ht_focus_face(ht_scene_t *s, const ht_character_face_t *f, uint8_t frame, u
                               s->background);
     else for (int n = 0; n < RECAP_LINES; n++) {
         // The scene's overlay (Codex's sandboxes) takes the first line's slot, empty without a recap.
-        if (n == 0 && alert) {   // the alert's bubble, in the overlay's slot
+        // The alert's bubble: in the overlay's slot, or the next one when the working scene plays on under it.
+        if (alert && n == (alert->frames ? 0 : 1)) {
             int sx, sy;
-            scene_origin(alert, 4, &sx, &sy);
+            scene_origin(alert->frames ? alert : scene, 4, &sx, &sy);
             ht_cell_sprite(s, sx + alert->overlay->at[alert_step][0], sy + alert->overlay->at[alert_step][1],
                            &alert->overlay->frames[alert->overlay->loop[alert_step]]);
-        } else if (n == 0 && scene && scene->overlay) scene_overlay(s, scene, 4, 0, f->clock_ms, rf);
+        } else if (n == 0 && scene && scene->overlay && !(alert && alert->frames))
+            scene_overlay(s, scene, 4, 0, f->clock_ms, rf);
         else no_text(s, rf);
     }
 

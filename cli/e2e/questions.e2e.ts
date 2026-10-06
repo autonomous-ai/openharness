@@ -201,4 +201,24 @@ describe('an agent asks a question', () => {
     await sent
     client.close()
   })
+
+  it('codex: the answer to a question Codex 0.160 asks without stopping reads as the answer, not its wrapper, live and in the history', async () => {
+    const d = await fresh()
+    const client = await LocalClient.connect(d)
+    const agent = await create(d, client, 'codex', 'askasync-codex')
+    // The answer comes back as a user message wrapped in <send_user_message_question_reply> around JSON,
+    // and was the person's words exactly so: in the live turn, the history, the recap and search.
+    const readable = 'Which database should the service use? → SQLite'
+    const since = client.frames.length
+    client.send('message', { agentId: agent.id, content: '!askasync SQLite' })
+    const started = await client.waitFor((frame) => isTurn('turn_started', agent.id)(frame) && frame.payload?.userMessage !== '!askasync SQLite', 45_000, 'the answer\'s turn', since)
+    expect(started.payload?.userMessage).toBe(readable)
+    await client.waitFor(isTurn('turn_ended', agent.id), 45_000, 'the answer\'s turn to end', client.frames.indexOf(started) + 1)
+    const page = await client.request<{ events?: Array<{ type: string; payload: Record<string, any> }>; error?: string }>(
+      'session_get', { sessionId: agent.sessionId, limit: 200 }, 30_000)
+    expect(page.error).toBeUndefined()
+    const said = (page.events ?? []).filter((event) => event.type === 'user_message').map((event) => event.payload.content)
+    expect(said).toEqual(['!askasync SQLite', readable])
+    client.close()
+  })
 })

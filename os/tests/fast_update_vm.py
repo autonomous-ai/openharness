@@ -60,10 +60,12 @@ def exercise(vm, fixture, host_url):
     vm.command('test ! -e ~/.local/state/harness-os/updates/ready.json && test ! -e ~/.local/state/harness-os/updates/current')
     # The radio/network can remain off: only the loopback test release is used.
     vm.command('sudo nmcli networking off')
-    put(vm, '/tmp/update-session-probe.py', PROBE)
+    # The lock/suspend gate may have already used session-probe in this guest.
+    # Keep its files intact and wait for this probe's own newly written PID.
+    put(vm, '/tmp/update-session-probe.py', PROBE.replace('projects/session-probe', 'projects/fast-update-probe'))
     vm.command('hn new-window -n update-probe ' + shlex.quote('python3 /tmp/update-session-probe.py'))
-    vm.command('for n in $(seq 1 40); do test -s ~/projects/session-probe/pid && exit 0; sleep .25; done; exit 1')
-    vm.command('cp ~/projects/session-probe/pid /tmp/fast-original-pid; cat /proc/$(cat /tmp/fast-original-pid)/stat > /tmp/fast-original-stat')
+    vm.command('for n in $(seq 1 40); do test -s ~/projects/fast-update-probe/pid && exit 0; sleep .25; done; exit 1')
+    vm.command('cp ~/projects/fast-update-probe/pid /tmp/fast-original-pid; cat /proc/$(cat /tmp/fast-original-pid)/stat > /tmp/fast-original-stat')
     vm.command('systemctl --user show harness-daemon -p MainPID --value > /tmp/fast-original-daemon')
     vm.command('hn new-window -n live-agent opencode')
     vm.command('for n in $(seq 1 80); do pgrep -u 1000 -x opencode > /tmp/fast-original-agent && exit 0; sleep .25; done; exit 1')
@@ -104,7 +106,7 @@ def exercise(vm, fixture, host_url):
 import time
 pid = Path('/tmp/fast-original-pid').read_text().strip()
 assert Path('/proc/'+pid+'/stat').read_text().split()[21] == Path('/tmp/fast-original-stat').read_text().split()[21]
-root = Path.home() / 'projects/session-probe'
+root = Path.home() / 'projects/fast-update-probe'
 before = (root/'heartbeat').stat().st_mtime_ns
 time.sleep(.6)
 assert (root/'heartbeat').stat().st_mtime_ns != before
@@ -140,7 +142,7 @@ Path('/tmp/fast-screen-client.json').write_text(json.dumps(dict(target=str(targe
         vm.type_probe(name)
         vm.keys('ret')
         vm.command('for n in $(seq 1 30); do grep -Fx ' + shlex.quote(name) +
-                   ' ~/projects/session-probe/input && exit 0; sleep .1; done; exit 1')
+                   ' ~/projects/fast-update-probe/input && exit 0; sleep .1; done; exit 1')
         vm.screenshot(name + '-accepted-input')
 
     def activate(expect_failure=False, mouse=False):

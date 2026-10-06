@@ -3753,8 +3753,9 @@ impl App {
         // swaps the theme's own colours — its background the terminal's foreground, its text the
         // terminal's background — so the bar is the theme's text colour with the theme's
         // background as its lettering (an ivory bar with dark text on a dark terminal), not a
-        // transparent one, and not tmux's stock green.
-        if !own && !self.options.pane_look() && !self.options.tmux_look() {
+        // transparent one, and not tmux's stock green. (Whichever focus style: blurred panes keep
+        // the same bar as border ones.)
+        if !own && !self.options.tmux_look() {
             let (bg, fg, _) = crate::theme::palette();
             s = s.bg(fg).fg(bg);
         }
@@ -5224,16 +5225,47 @@ impl App {
             }
             "border_style" => ("@hn-border", format!("border style: {value}")),
             "dim" => ("@hn-dim", format!("dim other panes: {value}")),
+            // ── status bar tabs ──
+            // The two tab options decide the window-status-* format and current-tab style; set the
+            // remembered choice now, then reconcile those derived options the way `[look]` would
+            // at boot, so a live change and a restart agree.
+            "window_active" | "window_name" => {
+                let opt = if knob == "window_active" { "@hn-window-active" } else { "@hn-window-name" };
+                let _ = self.options.set(opt, Some(value), &global, "", 0);
+                self.sync_window_status();
+                (opt, if knob == "window_active" { format!("current tab: {value}") } else { format!("tab name: {value}") })
+            }
             _ => return format!("unknown: {value}"),
         };
         let _ = self.options.set(name, Some(value), &global, "", 0);
         self.sync_accent();
         // (The bar and the frames change the panes' room: every program is told its size.)
-        if matches!(knob, "status_bar" | "border_style") { self.redraw_all = true; self.fit_panes() }
+        if matches!(knob, "status_bar" | "border_style" | "window_active" | "window_name") { self.redraw_all = true }
+        if matches!(knob, "status_bar" | "border_style") { self.fit_panes() }
         let i = self.active;
         self.view_layout_changed(i);
         self.persist_look();
         message
+    }
+
+    /// Recompute the status bar's `window-status-*` overrides from `@hn-window-name` and
+    /// `@hn-window-active` (which together decide them), the same pair `[look]` emits at boot.
+    fn sync_window_status(&mut self) {
+        let name = self.options.get("@hn-window-name", "", None).unwrap_or_else(|| "tmux".into());
+        let active = self.options.get("@hn-window-active", "", None).unwrap_or_else(|| "star".into());
+        let overrides = crate::options::window_status_overrides(&name, &active);
+        let global = crate::options::SetFlags { global: true, ..Default::default() };
+        let unset = crate::options::SetFlags { global: true, unset: true, ..Default::default() };
+        let mut present = std::collections::HashSet::new();
+        for (opt, val) in overrides {
+            let _ = self.options.set(&opt, Some(&val), &global, "", 0);
+            present.insert(opt);
+        }
+        for opt in ["window-status-format", "window-status-current-format", "window-status-current-style"] {
+            if !present.contains(opt) {
+                let _ = self.options.set(opt, None, &unset, "", 0);
+            }
+        }
     }
 
     /// Write the current look (as the options hold it) to tui.toml's `[look]`, best-effort.
@@ -5252,6 +5284,8 @@ impl App {
         look.border_style = self.options.get("@hn-border", "", None);
         look.status_bar_width = self.options.get("@hn-status-bar-width", "", None);
         look.dim = self.options.get("@hn-dim", "", None);
+        look.window_active = self.options.get("@hn-window-active", "", None);
+        look.window_name = self.options.get("@hn-window-name", "", None);
         if let Err(e) = crate::config::write_look(&look) { self.say(format!("could not write tui.toml: {e}"), crate::theme::DANGER) }
     }
 

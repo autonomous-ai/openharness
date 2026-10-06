@@ -150,8 +150,13 @@ const SERVICE_MAY_IMPORT: Record<string, string> = {
  *
  * Measured at 105,714 lines in 450 files on 6 October, when runForeground moved out of cli.ts (step 1),
  * against 114,622 in 488 walked from cli.ts: the CLI's own commands left the core's process.
+ *
+ * Grew by 54 the same day for three Linux bugs in the core's own launch and hook paths, found by the
+ * end-to-end suite's first Linux runs (#843): zsh's new-user menu kept out of an agent's pane
+ * (lib/engineLaunch.ts), a hook's ancestry read as it arrives (core/engines/hooks.ts), and a relaunch
+ * that must stay up to count (core/agents/swap.ts).
  */
-const CORE_CLOSURE_BUDGET = 105_825
+const CORE_CLOSURE_BUDGET = 105_879
 
 /** What is not the core's, by path: each goes to a service or its own process, in the plan's order. */
 const EDGE: RegExp[] = [

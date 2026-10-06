@@ -16,6 +16,7 @@ import {
 import { sid } from '../../lib/log.js'
 import type { registry, RegisteredSession } from '../../lib/registry.js'
 import { processRows } from '../../lib/terminalAgentDiscovery.js'
+import type { ProcessRow } from '../../lib/tmux.js'
 import type { TerminalAgentReconciler } from '../../lib/terminalAgentReconciler.js'
 import type { TerminalRuntimeRef } from '../../lib/terminalTypes.js'
 
@@ -50,26 +51,19 @@ export function createEngineHooks({ tmuxBackend, agentReconciler, registry }: En
   /**
    * The agents on the hinted panes: those whose recorded process the caller descends from, the rest,
    * and of the rest those with no live process recorded at all (none yet, or one that has exited).
+   * `ancestry` is the hook's own process and those it descends from, read as the hook arrived
+   * (`resolveHookAgent`); `table`, the process table to judge the recorded processes by, else a new read.
    */
-  const matchCaller = async (resolved: TerminalRuntimeRef[], engine: HookQuery['engine'], callerPid: number) => {
-    const rows = await processRows()
+  const matchCaller = async (resolved: TerminalRuntimeRef[], engine: HookQuery['engine'], ancestry: ReadonlySet<number>, table?: ProcessRow[]) => {
+    const rows = table ?? await processRows()
     if (!rows) return null
-    const byPid = new Map(rows.map((row) => [row.pid, row.parentPid]))
     const recordedAlive = (session: RegisteredSession): boolean => {
       const recorded = session.processIdentity
       return !!recorded && rows.some((row) => row.pid === recorded.pid && row.startMarker === recorded.startMarker)
     }
     const callerBelongsTo = (session: RegisteredSession): boolean => {
       const expectedPid = session.processIdentity?.pid
-      if (!expectedPid) return false
-      let pid = callerPid
-      const visited = new Set<number>()
-      while (pid > 0 && !visited.has(pid)) {
-        if (pid === expectedPid) return true
-        visited.add(pid)
-        pid = byPid.get(pid) ?? 0
-      }
-      return false
+      return !!expectedPid && ancestry.has(expectedPid)
     }
     const candidates = new Map<string, RegisteredSession>()
     /**
@@ -113,6 +107,11 @@ export function createEngineHooks({ tmuxBackend, agentReconciler, registry }: En
 
   const resolveHookAgent: ResolveHookAgent = async ({ engine, runtimeHints, callerPid, onWait }) => {
     if (!callerPid) return null
+    // Who the hook came from, read as it arrives. On Linux dash keeps its `sh -c` as the hook's parent, a
+    // shell that exits with the hook (its 500ms, or `onWait`'s answer); read after the reconcile pass or
+    // the wait, the ancestry stopped at a pid already gone and a restart's new conversation was never
+    // bound (e2e/updates.e2e.ts). macOS's /bin/sh is a bash that execs the hook: never seen there.
+    const arrival = processRows()
     const resolved: TerminalRuntimeRef[] = []
     for (const hint of runtimeHints ?? []) {
       if (tmuxBackend) resolved.push({ backend: 'tmux', paneId: hint.paneId })
@@ -121,8 +120,15 @@ export function createEngineHooks({ tmuxBackend, agentReconciler, registry }: En
     let overdue = false
     for (const runtime of resolved) if (!await agentReconciler.triggerHint(runtime, engine)) overdue = true
 
-    let found = await matchCaller(resolved, engine, callerPid)
-    if (!found) return null
+    let table = await arrival
+    // A `ps` already running (processRows shares it) may predate the hook's process; the next read has it.
+    if (table && !table.some((row) => row.pid === callerPid)) table = await processRows()
+    if (!table) return null
+    const parents = new Map(table.map((row) => [row.pid, row.parentPid]))
+    const ancestry = new Set<number>()
+    for (let pid = callerPid; pid > 0 && !ancestry.has(pid); pid = parents.get(pid) ?? 0) ancestry.add(pid)
+
+    let found = (await matchCaller(resolved, engine, ancestry, table))!
     let choice = chooseHookAgent([...found.candidates.values()], [...found.onHintedRuntime.values()], engine)
     // Every relaunch starts its engine before it records the new process — create, fork, resume, a
     // restart and the new conversation it falls back to, a retarget — so a SessionStart in between came
@@ -135,8 +141,9 @@ export function createEngineHooks({ tmuxBackend, agentReconciler, registry }: En
     if (!choice.agent && choice.reason === 'none' && (found.unrecorded.length || overdue)) {
       onWait?.()
       await recordChanged(resolved, engine)
-      found = await matchCaller(resolved, engine, callerPid)
-      if (!found) return null
+      const again = await matchCaller(resolved, engine, ancestry)
+      if (!again) return null
+      found = again
       choice = chooseHookAgent([...found.candidates.values()], [...found.onHintedRuntime.values()], engine)
     }
     const { candidates } = found
