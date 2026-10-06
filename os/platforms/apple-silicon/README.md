@@ -70,3 +70,38 @@ existing agent workspace. Subsequent boots enter Harness directly.
 This step does not encrypt the disk. It keeps the maintained Fedora/Asahi boot,
 swap, extras, authentication and SELinux configuration. The stock account wizard
 remains installed but is disabled in the Harness image.
+
+## Private encrypted-root acceptance
+
+`os/tests/asahi_encryption_vm.py` tests LUKS2 around a disposable copy of the
+produced image on an Apple Silicon host. It requires that image's full source
+commit and SHA-256, plus a verified native ARM maintenance fixture. It never
+opens a host disk. The maintenance VM sees only its own root and the cloned
+image, identified by a test-only device serial.
+
+```sh
+python3 os/tests/asahi_encryption_vm.py \
+  --image /path/to/harness-asahi-private.raw --sha256 IMAGE_SHA256 \
+  --image-source FULL_IMAGE_COMMIT \
+  --fixture /path/to/verified-arm-fixture --fixture-source FULL_FIXTURE_COMMIT \
+  --output os/test-results/asahi-encryption
+```
+
+The test shrinks the pristine Btrfs root and encrypts it with Fedora cryptsetup,
+checks that every decrypted filesystem byte matches its baseline, and regenerates
+the Fedora initramfs and boot entries. Mounts stay in a private namespace so
+background services cannot retain the target after cleanup. The partition table,
+EFI partition, Harness payload and Asahi keyboard modules must remain intact.
+Only the clone gains QEMU console arguments and its virtio keyboard driver.
+
+Acceptance covers graphical wrong/correct password entry, first account setup,
+the initial OpenCode and two terminal panes, subsequent unlock, and offline
+read-only recovery of a project. Each boot must have enforcing SELinux and no
+failed system services. Receipts retain input hashes, screenshots, boot journals,
+clean shutdown events, and a final check that the original image is unchanged.
+
+This establishes encrypted-root compatibility, not an installation or encryption
+enrollment flow. The test uses a public fixture password: **never publish its disk
+copies**. A user installer still needs to create a unique encryption key, preserve
+macOS and recovery, and handle interruption before it can offer encrypted installs.
+Physical Apple keyboard, storage and recovery acceptance remain separate.
