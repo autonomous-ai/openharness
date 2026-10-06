@@ -400,6 +400,9 @@ class _TerminalKeyBarState extends State<TerminalKeyBar>
       _key(
         label: '▾',
         semanticLabel: 'Hide keyboard',
+        // ⚠️ `▾` is a SMALL triangle: at the row's size it read as a speck in
+        // the corner, on the key reached for most after typing.
+        scale: 1.6,
         alwaysEnabled: true,
         onTap: widget.onDismissKeyboard,
       ),
@@ -604,6 +607,7 @@ class _TerminalKeyBarState extends State<TerminalKeyBar>
     bool alwaysEnabled = false,
     bool armed = false,
     bool wide = false,
+    double scale = 1,
     required VoidCallback onTap,
   }) {
     assert((label == null) != (icon == null), 'a key carries one of the two');
@@ -617,6 +621,7 @@ class _TerminalKeyBarState extends State<TerminalKeyBar>
         child: _KeyCap(
           label: label,
           icon: icon,
+          scale: scale,
           live: live,
           armed: armed,
           onTap: alwaysEnabled ? onTap : () => _send(onTap),
@@ -647,6 +652,7 @@ class _KeyCap extends StatefulWidget {
     this.label,
     this.icon,
     this.hint,
+    this.scale = 1,
     required this.live,
     required this.armed,
     required this.onTap,
@@ -660,6 +666,10 @@ class _KeyCap extends StatefulWidget {
 
   final String? label;
   final IconData? icon;
+
+  /// The [label]'s size against the terminal's — for a glyph drawn small by
+  /// its font. Still shrinks to fit the key, like every label.
+  final double scale;
 
   /// One of the pane's own keys — see [TerminalKeyBar.hints]. As wide as its
   /// words, rather than one of the row's equal cells.
@@ -729,7 +739,10 @@ class _KeyCapState extends State<_KeyCap> {
                   child: Text(
                     widget.label ?? '',
                     maxLines: 1,
-                    style: tty.style(color: foreground),
+                    style: tty.style(
+                      color: foreground,
+                      size: tty.fontSize * widget.scale,
+                    ),
                   ),
                 ),
               ),
