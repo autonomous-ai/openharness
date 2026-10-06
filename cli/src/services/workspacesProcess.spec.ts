@@ -179,6 +179,7 @@ describe('workspaces in their own process', () => {
     await expect(api.questions.answerReviewed({} as never)).resolves.toBe(false)
     api.clients.gridModelsChanged()
     api.clients.viewerChanged('a1')
+    expect(api.clients.viewerFrame('c1', 'viewer_data', {})).toBe(false)
     api.clients.gridNamed('grid')
     api.clients.dshInstallStatus({ phase: 'clone' })
     api.clients.windows({ type: 'orchestrator_changed', payload: {} })

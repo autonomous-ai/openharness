@@ -420,7 +420,8 @@ describe('viewer forwarding authentication', () => {
   it('allows interactive viewers only on a sealed owner web connection or trusted loopback', async () => {
     const socket = relaySocket('token')
     const internals = socket as any
-    const request = vi.spyOn(socket.interactiveViewers, 'request').mockResolvedValue({ data: 'jpeg' })
+    const request = vi.fn(async () => ({ data: 'jpeg' }))
+    socket.viewerStreams = { frame: vi.fn(), surface: request, closed: vi.fn(), closedAll: vi.fn() }
     vi.spyOn(gatewayOf(socket).e2ee, 'hasSession').mockReturnValue(true)
     const role = vi.spyOn(gatewayOf(socket).e2ee, 'sessionRole').mockReturnValue('web')
     const clear = { type: 'viewer_surface', payload: { requestId: 'one', surfaceId: 'surface', agentId: 'a', op: 'frame' } }
@@ -439,14 +440,46 @@ describe('viewer forwarding authentication', () => {
     socket.registerLocalClient('local:viewer', { sendFrame: () => true, sendBinary: () => true })
     await dispatchDown(socket, clear, 'local:viewer')
     expect(request).toHaveBeenCalledWith('local:viewer', clear.payload)
+    // With nothing to render it, the surface is answered unavailable rather than left unanswered.
+    const local = vi.fn(() => true)
+    socket.registerLocalClient('local:none', { sendFrame: local, sendBinary: () => true })
+    socket.viewerStreams = null
+    await dispatchDown(socket, { ...clear, payload: { ...clear.payload, requestId: 'two' } }, 'local:none')
+    await vi.waitFor(() => expect(local).toHaveBeenCalledWith({ type: 'viewer_surface_result', payload: { requestId: 'two', error: 'VIEWER_UNAVAILABLE' } }))
     await socket.unregisterLocalClient('local:viewer')
     await socket.stop()
+  })
+
+  it('hands a viewer stream\'s answers to the one connection that opened it, and ends its streams as connections go', async () => {
+    const socket = relaySocket('token')
+    const streams = { frame: vi.fn(), surface: vi.fn(), closed: vi.fn(), closedAll: vi.fn() }
+    socket.viewerStreams = streams
+    const local = vi.fn(() => true)
+    socket.registerLocalClient('local:viewer', { sendFrame: local, sendBinary: () => true })
+    expect(socket.sendViewerFrame('local:viewer', 'viewer_response', { streamId: 's1', status: 200 })).toBe(true)
+    expect(local).toHaveBeenCalledWith({ type: 'viewer_response', payload: { streamId: 's1', status: 200 } })
+    // A remote connection's go through the gateway, which says whether it could take them.
+    const target = vi.spyOn(gatewayOf(socket), 'target').mockReturnValue(false)
+    expect(socket.sendViewerFrame('remote', 'viewer_data', { streamId: 's1', data: 'AA==' })).toBe(false)
+    expect(target).toHaveBeenCalledWith('remote', 'viewer_data', { streamId: 's1', data: 'AA==' })
+    await socket.unregisterLocalClient('local:viewer')
+    expect(streams.closed).toHaveBeenCalledWith('local:viewer')
+    socket.fromGateway.client('r1', { role: 'web', label: null, identity: 'PUB', direct: false })
+    socket.fromGateway.client('r1', null)
+    expect(streams.closed).toHaveBeenCalledWith('r1')
+    await socket.fromGateway.disconnected('r2')
+    expect(streams.closed).toHaveBeenCalledWith('r2')
+    socket.fromGateway.linkDown()
+    expect(streams.closedAll).toHaveBeenCalledTimes(1)
+    await socket.stop()
+    expect(streams.closedAll).toHaveBeenCalledTimes(2)
   })
 
   it('requires encryption and a web-role session remotely, while permitting trusted local clients', async () => {
     const socket = relaySocket('token')
     const internals = socket as any
-    const handle = vi.spyOn(socket.viewerForwarder, 'handle').mockImplementation(() => {})
+    const handle = vi.fn()
+    socket.viewerStreams = { frame: handle, surface: vi.fn(), closed: vi.fn(), closedAll: vi.fn() }
     const role = vi.spyOn(gatewayOf(socket).e2ee, 'sessionRole').mockReturnValue('web')
     const frame = { type: 'viewer_request', payload: { streamId: 'v', agentId: 'a' } }
     const unwrap = vi.spyOn(gatewayOf(socket).e2ee, 'unwrapDown').mockReturnValue(frame)

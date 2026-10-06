@@ -148,7 +148,7 @@ export function processCoreApi(dataDir: string, service: string, view: AgentsVie
       ...UNASKED.account,
     },
     clients: {
-      viewerChanged: () => {}, gridNamed: () => {}, gridModelsChanged: () => {}, dshInstallStatus: () => {},
+      viewerChanged: () => {}, viewerFrame: () => false, gridNamed: () => {}, gridModelsChanged: () => {}, dshInstallStatus: () => {},
       windows: (frame) => { void ask?.('windows', { frame }).catch(() => {}) },
       // Handed to the core in order; whether the relay took it is the core's to know, and a lost observer's
       // close follows.

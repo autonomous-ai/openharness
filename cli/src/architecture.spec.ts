@@ -159,8 +159,10 @@ const RUN_FOREGROUND_BUDGET = 2_230
  *  gateway's sessions (lib/autonomous-device/overGateway.ts): 1,460. Models' grid commands, grid name and
  *  lists left it for the models service (step 7): 1,391. Then 1,200 when the Devices tab's requests
  *  became the devices' own (step 9, D1), 1,207 → 1,194. Then 1,195 when the Wi-Fi device's relay left
- *  it for the devices' process (step 9, D3): the socket hands its sessions' events on (core/wifi.ts). */
-const BACKEND_SOCKET_BUDGET = 1_195
+ *  it for the devices' process (step 9, D3): the socket hands its sessions' events on (core/wifi.ts). Then
+ *  1,182 when the viewer forwarder and the interactive viewers it held left for the viewers
+ *  (core/viewerStreams.ts). */
+const BACKEND_SOCKET_BUDGET = 1_185
 
 /** Exceptions, each with its reason. Keep this short. */
 const SERVICE_MAY_IMPORT: Record<string, string> = {
@@ -279,7 +281,13 @@ const SERVICE_MAY_IMPORT: Record<string, string> = {
 // (core/serviceHost.ts, core/serviceLinks.ts, the socket's close paths), held requests for an experiment
 // still starting included: what lets a service keep work per connection and stop it when its asker goes,
 // which held the command bar's two doors in the core (step 4).
-const CORE_CLOSURE_BUDGET = 75_590
+//
+// Then at 74,974 in 342, from 75,493 in 344: what serves this machine's viewers to a client over its
+// connection (lib/viewerForwarder.ts, lib/interactiveViewer.ts and the stream they run on, lib/viewerWire.ts)
+// runs in the viewers' process, beside the viewer servers it forwards to (services/viewers.ts), and with it
+// the headless browser capture the surfaces render with (sharing/viewer.ts), Share's other user. The core
+// keeps the frame types it gates (lib/viewerFrames.ts) and hands each frame on (core/viewerStreams.ts).
+const CORE_CLOSURE_BUDGET = 75_070
 
 /** What is not the core's, by path: each goes to a service or its own process, in the plan's order. */
 const EDGE: RegExp[] = [
@@ -289,6 +297,8 @@ const EDGE: RegExp[] = [
   // The relay's own parts, the gateway's alone: the windows' sessions to other machines, P2P and STUN, the
   // remote viewers' proxy, and the shaping of what goes up the link.
   /^lib\/(remoteRelay|terminalP2p|stunSelect|remoteViewerProxy|deviceRecentTrim|commanderReplay)\.ts$/,
+  // The viewers' own: a viewer served to a client over its connection, and the stream it runs on.
+  /^lib\/(viewerForwarder|interactiveViewer|viewerWire)\.ts$/,
   // The Store's and the viewers' parts of dsh; the launch path (installed, manifest, launch, runtime, …) is the core's.
   /^dsh\/(catalog|install|update|updates|registry|wire|service|lock|builtins|viewer|viewerLedger|verdict|artifacts)\.ts$/,
   // Search's index; the readers of other engines' sessions (external.ts, externals/) are the core's, for adoption.
@@ -310,7 +320,6 @@ const CORE_MAY_REACH: Record<string, string> = {
   'lib/sessionSearch/transcript.ts': 'the readers of other engines\' sessions keep this helper: it moves beside them, out of search\'s folder',
   'lib/sessionSearch/turns.ts': 'the handoff (lib/agentHandoff.ts), in the edge host once CoreApi gives it the stopped agents, recaps and discovery it reads',
   'services/shell.ts': 'shell setup and launch receipts, in the edge host; only the argv launch stays in the core (#893)',
-  'sharing/viewer.ts': 'the windows\' interactive viewers capture with it (lib/interactiveViewer.ts): headless Chrome belongs with the viewers\' process (plan, "Sharing")',
 }
 
 describe('the daemon\'s shape', () => {

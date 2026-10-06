@@ -123,6 +123,7 @@ import { createCoreApi, DEVICES_FALLBACKS, DEVICES_REQUESTS, emptyPorts, EXPERIM
 import { createServiceHost, testFaults } from './serviceHost.js'
 import { startStalls } from './stall.js'
 import { createServiceLinks, type ServiceLinks } from './serviceLinks.js'
+import { createViewerStreams } from './viewerStreams.js'
 import { createViewersLink } from './viewersLink.js'
 import { createWorkspacesLink } from './workspacesLink.js'
 import { createMonitorLink } from './monitorLink.js'
@@ -662,10 +663,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     openSessions,
     syncSession,
     runtimeModels,
-    viewerChanged: (agentId) => {
-      backendRef?.viewerForwarder.refresh(agentId)
-      backendRef?.interactiveViewers.refresh(agentId)
-    },
+    viewerChanged: () => {}, // nothing in the core forwards to a viewer: the viewers follow their own (services/viewers.ts)
+    viewerFrame: (connId, type, payload) => backendRef?.sendViewerFrame(connId, type, payload) ?? false,
     gridNamed: (name) => backendRef?.setHarnessGridName(name),
     gridModelsChanged: () => { void backendRef?.pushGridModels() },
     privateGridName: async () => backendRef?.gridName() ?? null,
@@ -851,7 +850,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     forget: (agentId) => ports.teams?.forget(agentId),
     canWrite: (deliveryId) => ports.teams?.canWrite(deliveryId) ?? false,
   }
-  backend.viewerTargetProvider = (agentId) => ports.viewers?.forwardingUrl(agentId) ?? null
+  // This machine's viewers, served to a client over its connection by the viewers (core/viewerStreams.ts).
+  backend.viewerStreams = createViewerStreams(() => ports.viewers, (connId, type, payload) => backend.sendViewerFrame(connId, type, payload))
 
   // The harnesses the release bundles (the Model Manager, Devices, the Harness Monitor), before restore
   // relaunches an agent on one. Here and not in the Store's process: its lean bundle would carry a second
@@ -1149,7 +1149,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // Directors' (core/orchestratorLink.ts).
   const orchestratorLink = createOrchestratorLink((frame) => serviceLinks.notify('orchestrator', frame))
   // What the core keeps of the viewers in their own process, for the frames it builds (core/viewersLink.ts).
-  const viewersLink = createViewersLink(coreApi, (frame, opts) => serviceLinks.notify('viewers', frame, opts))
+  const viewersLink = createViewersLink(coreApi, (frame, opts) => serviceLinks.notify('viewers', frame, opts),
+    { call: (type, payload, waitMs) => serviceLinks.call('viewers', type, payload, waitMs), buffered: () => serviceLinks.buffered('viewers') })
   // How the core tells workspaces in their own process what to do, and answers them (core/workspacesLink.ts).
   const workspacesLink = createWorkspacesLink(coreApi, (frame) => serviceLinks.notify('workspaces', frame), forgetAgentProject)
   // Tab collaboration and teams, an experiment: the prompt scopes and the teams beside them, both in its process
@@ -1203,8 +1204,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       : service === 'wifi' ? wifiLink.answer(query, payload)
       : service === 'gateway' && gatewayLink ? gatewayLink.answer(query, payload) : answerAgentQuery(coreApi, query)),
     // The gateway's own traffic: its remote clients and what they sent, and its comings and goings; and what
-    // the devices tell the core (a turn, a frame for the windows, a dial on the wire).
-    notice: (service, payload) => { if (service === 'gateway') gatewayLink?.notice(payload); else if (service === 'devices') devicesLink.notice(payload); else if (service === 'wifi') wifiLink.notice(payload) },
+    // the devices tell the core (a turn, a frame for the windows, a dial on the wire); a viewer stream's answers.
+    notice: (service, payload) => { if (service === 'gateway') gatewayLink?.notice(payload); else if (service === 'devices') devicesLink.notice(payload); else if (service === 'wifi') wifiLink.notice(payload); else if (service === 'viewers') viewersLink.notice(payload) },
     binary: (service, bytes) => { if (service === 'gateway') gatewayLink?.binary(bytes) },
     connected: (service) => {
       if (service === 'gateway') gatewayLink?.connected()

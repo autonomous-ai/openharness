@@ -22,7 +22,10 @@ const SEARCH = {
 const testPort = (h: { ports: CorePorts }): TestPort => h.ports.search as unknown as TestPort
 const VIEWERS: PortFallbacks<ViewersPort> = {
   attach: undefined, detach: undefined, frameContext: null, forwardingUrl: null, stop: later(undefined),
+  stream: false, surface: later({}), closed: undefined,
 }
+/** The viewer streams' members, which these tests never call. */
+const STREAMS = { stream: vi.fn(() => true), surface: vi.fn(async () => ({})), closed: vi.fn() }
 
 function host(options: Parameters<typeof createServiceHost>[1] = {}) {
   const ports = emptyPorts()
@@ -118,7 +121,7 @@ describe('hosting services so one that fails cannot take the core down', () => {
       const h = host()
       let viewersStop: () => Promise<void> = async () => { throw new Error('viewer hung') }
       h.services.start('viewers', (_core, ports) => {
-        ports.viewers = { attach: vi.fn(), detach: vi.fn(), frameContext: vi.fn(() => null), forwardingUrl: vi.fn(() => null), stop: () => viewersStop() }
+        ports.viewers = { attach: vi.fn(), detach: vi.fn(), frameContext: vi.fn(() => null), forwardingUrl: vi.fn(() => null), stop: () => viewersStop(), ...STREAMS }
       }, fakeCore(), VIEWERS)
       await expect(h.ports.viewers!.stop()).resolves.toBeUndefined()
       viewersStop = () => { throw new Error('sync throw in async member') }
@@ -129,7 +132,7 @@ describe('hosting services so one that fails cannot take the core down', () => {
     it('passes a promise that resolves straight through', async () => {
       const h = host()
       h.services.start('viewers', (_core, ports) => {
-        ports.viewers = { attach: vi.fn(), detach: vi.fn(), frameContext: vi.fn(() => null), forwardingUrl: vi.fn(() => 'http://v'), stop: async () => {} }
+        ports.viewers = { attach: vi.fn(), detach: vi.fn(), frameContext: vi.fn(() => null), forwardingUrl: vi.fn(() => 'http://v'), stop: async () => {}, ...STREAMS }
       }, fakeCore(), VIEWERS)
       expect(h.ports.viewers!.forwardingUrl('a1')).toBe('http://v')
       await expect(h.ports.viewers!.stop()).resolves.toBeUndefined()
@@ -192,7 +195,7 @@ describe('hosting services so one that fails cannot take the core down', () => {
 
       const async = host({ maxFailures: 1 })
       async.services.start('viewers', (_core, ports) => {
-        ports.viewers = { attach: () => { throw new Error('x') }, detach: vi.fn(), frameContext: vi.fn(() => null), forwardingUrl: vi.fn(() => null), stop: async () => { throw new Error('viewer stuck') } }
+        ports.viewers = { attach: () => { throw new Error('x') }, detach: vi.fn(), frameContext: vi.fn(() => null), forwardingUrl: vi.fn(() => null), stop: async () => { throw new Error('viewer stuck') }, ...STREAMS }
       }, fakeCore(), VIEWERS)
       async.ports.viewers!.attach({} as never)
       await new Promise((resolve) => setImmediate(resolve))

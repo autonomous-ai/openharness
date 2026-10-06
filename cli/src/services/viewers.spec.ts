@@ -8,7 +8,27 @@ import type { RegisteredSession } from '../lib/registry.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { startViewers } from './viewers.js'
 
-const built = vi.hoisted(() => ({ ledger: [] as any[], viewers: [] as any[], verdicts: [] as any[], order: [] as string[] }))
+const built = vi.hoisted(() => ({ ledger: [] as any[], viewers: [] as any[], verdicts: [] as any[], order: [] as string[], forwarders: [] as any[], surfaces: [] as any[] }))
+// The streams and the rendered surfaces are tested where they live (lib/viewerForwarder.spec.ts,
+// lib/interactiveViewer.spec.ts); here, only that the service hands them what it holds.
+vi.mock('../lib/viewerForwarder.js', () => ({
+  ViewerForwarder: class {
+    handle = vi.fn()
+    refresh = vi.fn()
+    closeConnection = vi.fn()
+    closeAll = vi.fn()
+    constructor(readonly deps: any) { built.forwarders.push(this) }
+  },
+}))
+vi.mock('../lib/interactiveViewer.js', () => ({
+  InteractiveViewers: class {
+    request = vi.fn(async () => ({ data: 'jpeg' }))
+    refresh = vi.fn()
+    closeConnection = vi.fn()
+    closeAll = vi.fn()
+    constructor(readonly target: (agentId: string) => string | null) { built.surfaces.push(this) }
+  },
+}))
 vi.mock('../dsh/installed.js', () => ({ installedDsh: vi.fn() }))
 vi.mock('../dsh/catalog.js', () => ({ catalogEntry: vi.fn() }))
 vi.mock('../dsh/manifest.js', () => ({ dshVerdictPath: vi.fn(() => '.harness/verdict.json'), dshViewerName: vi.fn(() => 'Blender view') }))
@@ -42,13 +62,13 @@ const agent = (over: Partial<RegisteredSession> = {}) =>
   ({ agentId: 'a1', sessionId: 's1', engine: 'claude', dsh: 'blender', cwd: '/work/scene', ...over }) as RegisteredSession
 
 function setup(live: RegisteredSession | null = agent(), terminalAvailable = true) {
-  built.ledger.length = 0; built.viewers.length = 0; built.verdicts.length = 0; built.order.length = 0
+  built.ledger.length = 0; built.viewers.length = 0; built.verdicts.length = 0; built.order.length = 0; built.forwarders.length = 0; built.surfaces.length = 0
   const core = fakeCore({
     agents: { byAgent: vi.fn(() => live ?? undefined), terminalAvailable: vi.fn(() => terminalAvailable), sync: vi.fn() },
   })
   const ports = emptyPorts()
   startViewers(core, ports)
-  return { core, port: ports.viewers as ViewersPort, ledger: built.ledger[0], viewers: built.viewers[0], verdicts: built.verdicts[0] }
+  return { core, port: ports.viewers as ViewersPort, ledger: built.ledger[0], viewers: built.viewers[0], verdicts: built.verdicts[0], forwarder: built.forwarders[0], surfaces: built.surfaces[0] }
 }
 
 describe('the DSH viewers service', () => {
@@ -178,10 +198,51 @@ describe('the DSH viewers service', () => {
   })
 
   it('forwards the windows to the viewer, and stops every viewer and then every watch', async () => {
-    const { port, viewers } = setup()
+    const { port, viewers, forwarder, surfaces } = setup()
     expect(port.forwardingUrl('a1')).toBe('http://127.0.0.1:9/a1')
     expect(viewers.forwardingUrl).toHaveBeenCalledWith('a1')
     await port.stop()
     expect(built.order.slice(-2)).toEqual(['viewers stopped', 'verdicts stopped'])
+    // No client is left streaming from a viewer that is going.
+    expect(forwarder.closeAll).toHaveBeenCalled()
+    expect(surfaces.closeAll).toHaveBeenCalled()
+  })
+
+  describe('a viewer served to a client over its connection', () => {
+    it('streams from the agent\'s viewer, and answers the one connection that asked through the core', () => {
+      const { core, port, forwarder } = setup()
+      expect(port.stream('c1', 'viewer_request', { streamId: 's1' })).toBe(true)
+      expect(forwarder.handle).toHaveBeenCalledWith('c1', 'viewer_request', { streamId: 's1' })
+      // Only the viewer this service allocated, as the windows' pane forwards to it.
+      expect(forwarder.deps.target('a1')).toBe('http://127.0.0.1:9/a1')
+      vi.mocked(core.clients.viewerFrame).mockReturnValueOnce(true)
+      expect(forwarder.deps.send('c1', 'viewer_response', { streamId: 's1' })).toBe(true)
+      expect(core.clients.viewerFrame).toHaveBeenCalledWith('c1', 'viewer_response', { streamId: 's1' })
+    })
+
+    it('renders a frame of it for a client, from the same viewer', async () => {
+      const { port, surfaces } = setup()
+      await expect(port.surface('c1', { surfaceId: 'v' })).resolves.toEqual({ data: 'jpeg' })
+      expect(surfaces.request).toHaveBeenCalledWith('c1', { surfaceId: 'v' })
+      expect(surfaces.target('a1')).toBe('http://127.0.0.1:9/a1')
+    })
+
+    it('closes a connection\'s streams and surfaces when it goes, and every one when the link does', () => {
+      const { port, forwarder, surfaces } = setup()
+      port.closed('c1')
+      expect(forwarder.closeConnection).toHaveBeenCalledWith('c1')
+      expect(surfaces.closeConnection).toHaveBeenCalledWith('c1')
+      expect(forwarder.closeAll).not.toHaveBeenCalled()
+      port.closed()
+      expect(forwarder.closeAll).toHaveBeenCalled()
+      expect(surfaces.closeAll).toHaveBeenCalled()
+    })
+
+    it('stops forwarding to a viewer that moved or stopped, before another process can take its port', () => {
+      const { viewers, forwarder, surfaces } = setup()
+      viewers.deps.onUrl('a1', null)
+      expect(forwarder.refresh).toHaveBeenCalledWith('a1')
+      expect(surfaces.refresh).toHaveBeenCalledWith('a1')
+    })
   })
 })

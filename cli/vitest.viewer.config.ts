@@ -15,7 +15,7 @@ export default defineConfig({
     coverage: {
       enabled: true,
       provider: 'v8',
-      include: ['src/lib/viewerWire.ts', 'src/lib/viewerForwarder.ts', 'src/lib/remoteViewerProxy.ts'],
+      include: ['src/lib/viewerFrames.ts', 'src/lib/viewerWire.ts', 'src/lib/viewerForwarder.ts', 'src/lib/remoteViewerProxy.ts'],
       reporter: ['text', 'json-summary', 'json', 'html'],
       reportsDirectory: 'coverage/remote-viewers',
       thresholds: { perFile: true, statements: 100, branches: 100, functions: 100, lines: 100 },

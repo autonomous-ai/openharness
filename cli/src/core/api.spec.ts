@@ -46,6 +46,7 @@ describe('the core API services stand on', () => {
       syncSession: vi.fn(),
       runtimeModels: vi.fn(async () => []),
       viewerChanged: vi.fn(),
+      viewerFrame: vi.fn(() => true),
       gridNamed: vi.fn(),
       gridModelsChanged: vi.fn(),
       dshInstallStatus: vi.fn(),
@@ -102,6 +103,11 @@ describe('the core API services stand on', () => {
     expect(core.agents.sync).toBe(deps.syncSession)
     expect(core.agents.runtimeModels).toBe(deps.runtimeModels)
     expect(core.clients.viewerChanged).toBe(deps.viewerChanged)
+    // A viewer stream's frames reach a client; nothing else a viewers process names does.
+    expect(core.clients.viewerFrame('c1', 'viewer_data', { streamId: 's' })).toBe(true)
+    expect(deps.viewerFrame).toHaveBeenCalledWith('c1', 'viewer_data', { streamId: 's' })
+    expect(core.clients.viewerFrame('c1', 'agent_synced', {})).toBe(false)
+    expect(deps.viewerFrame).toHaveBeenCalledTimes(1)
     expect(core.clients.dshInstallStatus).toBe(deps.dshInstallStatus)
     expect(core.agents.advertised().map((s) => s.agentId)).toEqual(['live'])
     expect(core.clients.gridNamed).toBe(deps.gridNamed)

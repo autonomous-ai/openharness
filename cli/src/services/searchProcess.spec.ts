@@ -139,6 +139,7 @@ describe('search in its own process', () => {
     await expect(api.account.privateGridName()).resolves.toBeNull()
     expect(api.account.machineName()).toBeNull()
     api.clients.viewerChanged('live')
+    expect(api.clients.viewerFrame('c1', 'viewer_data', {})).toBe(false)
     api.clients.gridNamed('grid')
     api.clients.gridModelsChanged()
     api.clients.dshInstallStatus({ phase: 'clone' })

@@ -1,6 +1,7 @@
 import type { PurgeAgentService } from './lib/purgeAgentService.js'
 import { SHARE_REQUESTS, TEAMS_REQUESTS, type Asker, type BackendNotice, type GatewayEvents, type GatewayPort, type ModelsPort, type RemoteClient, type RemoteRole, type RemoteTransport } from './core/api.js'
 import { ServiceUnavailableError } from './core/serviceHost.js'
+import type { ViewerStreams } from './core/viewerStreams.js'
 import type { ActivityFrame } from './lib/turnActivity.js'
 import { MonitorCompletions } from './lib/harnessMonitor.js'
 import type { WifiCore } from './core/wifi.js'
@@ -32,10 +33,8 @@ import { engineInstallRecipe } from './lib/engineInstall.js'
 import { agentFrame, type AgentDshContext, type AgentFrame } from './lib/agentFrame.js'
 import { agentTokenUsage } from './lib/agentTokenUsage.js'
 import { terminalHandoffRequest } from './lib/terminalHandoff.js'
-import { ViewerForwarder } from './lib/viewerForwarder.js'
-import { InteractiveViewers } from './lib/interactiveViewer.js'
 import { OwnerCommands, OWNER_COMMAND_TYPES } from './lib/ownerCommands.js'
-import { VIEWER_DOWN_TYPES } from './lib/viewerWire.js'
+import { VIEWER_DOWN_TYPES } from './lib/viewerFrames.js'
 import type { TerminalStreamManager } from './lib/terminalStreamManager.js'
 import { encodeTerminalLocal, type TerminalBinaryClear } from './lib/terminalBinary.js'
 import { BACKEND_ONLY_DOWN_TYPES, GATEWAY_REQUEST_TYPES, isLocalClientId, logSafeType, PAIR_REQUESTS, PLATE_REQUEST, rpcResultType, type DownTransport } from './lib/relayFrames.js'
@@ -170,15 +169,13 @@ export class BackendSocket {
   /** What the daemon knows about an agent's DSH companions (viewer URL, verdict); null when nothing. */
   activityFrameProvider: ((session: RegisteredSession) => ActivityFrame | null) | null = null
   dshFrameProvider: ((session: RegisteredSession) => AgentDshContext | null) | null = null
-  viewerTargetProvider: ((agentId: string) => string | null) | null = null
-  readonly interactiveViewers = new InteractiveViewers(agentId => this.viewerTargetProvider?.(agentId) ?? null)
-  readonly viewerForwarder = new ViewerForwarder({
-    target: (agentId) => this.viewerTargetProvider?.(agentId) ?? null,
-    send: (connId, type, payload) => {
-      if (this.localClients.has(connId)) { this.sendTo(connId, { type, payload }); return true }
-      return this.throughGateway('viewer', (gateway) => gateway.target(connId, type, payload), false)
-    },
-  })
+  /** This machine's viewers, served to a client over its connection: the viewers' (core/viewerStreams.ts). */
+  viewerStreams: ViewerStreams | null = null
+  /** A viewer stream's frame to the one connection that opened it: false when it cannot reach it. */
+  sendViewerFrame(connId: string, type: string, payload: Record<string, unknown>): boolean {
+    if (this.localClients.has(connId)) { this.sendTo(connId, { type, payload }); return true }
+    return this.throughGateway('viewer', (gateway) => gateway.target(connId, type, payload), false)
+  }
   /** Injectable for queue-isolation tests; production uses the machine-local probe. */
   engineProbeProvider: typeof probeEngines = probeEngines
   readonly ownerCommands = new OwnerCommands()
@@ -341,13 +338,12 @@ export class BackendSocket {
       this.wifi?.session(connId, client)
       if (client) { this.remoteClients.set(connId, client); return }
       if (!this.remoteClients.delete(connId)) return
-      this.viewerForwarder.closeConnection(connId); this.interactiveViewers.closeConnection(connId); this.ownerCommands.closeConnection(connId); this.onConnectionClosed?.(connId)
+      this.viewerStreams?.closed(connId); this.ownerCommands.closeConnection(connId); this.onConnectionClosed?.(connId)
     },
     disconnected: async (connId) => {
       this.wifi?.dropped(connId)
       this.remoteClients.delete(connId)
-      this.viewerForwarder.closeConnection(connId)
-      this.interactiveViewers.closeConnection(connId); this.ownerCommands.closeConnection(connId); this.onConnectionClosed?.(connId)
+      this.viewerStreams?.closed(connId); this.ownerCommands.closeConnection(connId); this.onConnectionClosed?.(connId)
       await this.terminalStreams?.closeConnection(
         connId,
         'client connection closed',
@@ -365,8 +361,7 @@ export class BackendSocket {
     },
     linkDown: () => {
       this.observers?.closeAll()
-      this.viewerForwarder.closeAll()
-      this.interactiveViewers.closeAll(); this.ownerCommands.closeAll(); for (const connId of this.remoteClients.keys()) this.onConnectionClosed?.(connId)
+      this.viewerStreams?.closedAll(); this.ownerCommands.closeAll(); for (const connId of this.remoteClients.keys()) this.onConnectionClosed?.(connId)
       void this.terminalStreams?.closeConnectionsWhere(
         (connId) => !isLocalClientId(connId),
         'backend disconnected',
@@ -459,8 +454,7 @@ export class BackendSocket {
   async stop(): Promise<void> {
     this.closed = true
     this.closeAgentService?.dispose()
-    this.viewerForwarder.closeAll()
-    this.interactiveViewers.closeAll(); this.ownerCommands.closeAll()
+    this.viewerStreams?.closedAll(); this.ownerCommands.closeAll()
     await this.terminalStreams?.stop()
     await this.gatewayPort?.stop()
   }
@@ -633,8 +627,7 @@ export class BackendSocket {
     if (!this.localClients.delete(connId)) return
     if (!this.toolClients.delete(connId)) this.onLocalClient?.(connId, false)
     this.rowStateWindows.delete(connId)
-    this.viewerForwarder.closeConnection(connId)
-    this.interactiveViewers.closeConnection(connId); this.ownerCommands.closeConnection(connId); this.onConnectionClosed?.(connId)
+    this.viewerStreams?.closed(connId); this.ownerCommands.closeConnection(connId); this.onConnectionClosed?.(connId)
     // The last one leaving before any link could hear it attach: nothing happened, as far as the backend
     // is concerned, and the gateway does not tell a later link otherwise.
     this.gatewayPort?.localClients(this.localClients.size)
@@ -835,7 +828,7 @@ export class BackendSocket {
     if (type === 'viewer_surface') {
       if (!owner) return
       // Rendering and input never hold up terminal traffic on the ordered machine queue.
-      void this.interactiveViewers.request(connId, payload)
+      void (this.viewerStreams?.surface(connId, payload) ?? Promise.reject(new Error('no viewers')))
         .then(result => reply(type, requestId, result))
         .catch(() => reply(type, requestId, { error: 'VIEWER_UNAVAILABLE' }))
       return
@@ -849,9 +842,7 @@ export class BackendSocket {
     }
 
     if (type.startsWith('viewer_')) {
-      if (VIEWER_DOWN_TYPES.has(type) && owner) {
-        this.viewerForwarder.handle(connId, type, payload)
-      }
+      if (VIEWER_DOWN_TYPES.has(type) && owner) this.viewerStreams?.frame(connId, type, payload)
       return
     }
 
