@@ -250,7 +250,7 @@ impl App {
     /// Join the signed-in desk only after reading its baseline. Local tabs keep their
     /// window/pane identities and geometry, and do not overwrite the account's other tabs.
     pub(super) fn sync_local_tabs_after_sign_in(&mut self) {
-        if self.local_tabs_to_sync.is_empty() || self.desk_mode != DeskMode::Sync || !self.session_desk { return }
+        if self.local_tabs_to_sync.is_empty() || !self.desk_syncs() || !self.session_desk { return }
         let ids = std::mem::take(&mut self.local_tabs_to_sync);
         let mut ops = Vec::new(); let mut agents = HashSet::new();
         for (index, tab) in self.tabs.iter_mut().enumerate().filter(|(_, t)| ids.contains(&t.id)) {
