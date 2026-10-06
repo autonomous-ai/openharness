@@ -746,6 +746,30 @@ describe('prepareAgentHandoff: no repository', () => {
 describe('prepareAgentHandoff: refusals and limits', () => {
   beforeEach(writeTranscript)
 
+  it('awaits the retained agent and recap reads across the service boundary', async () => {
+    const d = depsFor([], {
+      resolve: (async () => session({ transcriptPath: null })) as never,
+      recentAsks: (async () => ['the retained request']) as never,
+      lastFullText: (async () => 'the retained full answer') as never,
+      recaps: (async () => ['the retained recap']) as never,
+    })
+    const result = await prepareAgentHandoff(d, request())
+    expect(result.degraded).toEqual(['transcript', 'git'])
+    const text = readFileSync(mdOf(), 'utf8')
+    expect(text).toContain('the retained request')
+    expect(text).toContain('the retained full answer')
+    expect(readFileSync(mdOf().replace(/\.md$/, '.transcript.md'), 'utf8')).toContain('the retained recap')
+  })
+
+  it('counts waiting for the core against the deadline and never writes after a late answer', async () => {
+    let resolve!: (value: RegisteredSession) => void
+    const d = depsFor([], { deadlineMs: 30, resolve: (() => new Promise<RegisteredSession>(done => { resolve = done })) as never })
+    await expect(prepareAgentHandoff(d, request())).rejects.toMatchObject({ code: 'TIMEOUT' })
+    resolve(session())
+    await new Promise(done => setTimeout(done, 20))
+    expect(existsSync(join(ws, '.harness'))).toBe(false)
+  })
+
   it('names what is wrong with the request', async () => {
     const d = depsFor([session(), session({ agentId: 'nowhere', cwd: null }), session({ agentId: 'relative', cwd: 'rel/dir' })])
     await expect(prepareAgentHandoff(d, request(C, 'ghost'))).rejects.toMatchObject({ name: 'HandoffError', code: 'UNKNOWN_AGENT' })

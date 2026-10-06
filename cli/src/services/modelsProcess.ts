@@ -15,7 +15,7 @@
  * it asks for (`service_query`), each time it needs it: a service keeps no credential.
  */
 import type { CoreApi, ServiceRequests } from '../core/api.js'
-import { ACCOUNT_BACKEND_OFF, AGENT_ACTIONS_OFF, DAEMON_UNKNOWN, DELIVERIES_OFF, emptyPorts, LANE_OFF, TERMINALS_OFF } from '../core/api.js'
+import { ACCOUNT_BACKEND_OFF, CONVERSATIONS_OFF, AGENT_ACTIONS_OFF, DAEMON_UNKNOWN, DELIVERIES_OFF, emptyPorts, LANE_OFF, TERMINALS_OFF } from '../core/api.js'
 import type { AgentGridTarget, GridGlance } from '../lib/gridAnnotation.js'
 import { parseGridLaunchOverride } from '../lib/gridLaunch.js'
 import { gridGlances, onGridModelsChanged } from '../lib/gridModels.js'
@@ -55,6 +55,7 @@ export function modelsCoreApi(dataDir: string, ask: (query: string, payload?: Pa
   const told = (query: string, payload: Payload = {}): void => { void ask(query, payload).catch(() => {}) }
   return {
     dataDir,
+    conversations: CONVERSATIONS_OFF,
     // Models opens no terminal.
     terminals: TERMINALS_OFF,
     machine: UNASKED.machine,
