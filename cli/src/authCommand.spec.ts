@@ -31,7 +31,7 @@ function tempRoot(): string {
   return root
 }
 
-function seedSession(root: string, opts: { expiresInMs?: number } = {}): void {
+function seedSession(root: string, opts: { expiresInMs?: number; overrides?: Record<string, unknown> } = {}): void {
   const authDir = join(root, 'auth')
   mkdirSync(authDir, { recursive: true })
   writeFileSync(join(authDir, 'session.json'), JSON.stringify({
@@ -43,6 +43,7 @@ function seedSession(root: string, opts: { expiresInMs?: number } = {}): void {
     computerId: 'a'.repeat(32),
     machineId: 'm_seeded',
     updatedAt: Date.now(),
+    ...opts.overrides,
   }))
 }
 
@@ -230,6 +231,19 @@ describe('harness auth status --json', () => {
     const result = runSync(root, ['auth', 'status'])
     expect(result.status).toBe(0)
     expect(result.stdout).toContain('Not signed in')
+  })
+
+  it('tells a computer signed in by QR that billing still needs a Google or Apple sign-in, and grid does not', () => {
+    // A Harness-issued sign-in now goes to grid like any other (autonomous-grid ADR 0046), so naming
+    // grid here would send the person to sign in again for nothing. Billing's Autonomous service
+    // still cannot take one.
+    const root = tempRoot()
+    seedSession(root, { overrides: { accessToken: `hna_${'Q'.repeat(43)}`, method: 'qr' } })
+    const result = runSync(root, ['auth', 'status'], 'http://127.0.0.1:1')
+    expect(result.status).toBe(0)
+    expect(result.stdout).toContain('by your phone')
+    expect(result.stdout).toContain('Billing needs a Google or Apple sign-in: harness login --force')
+    expect(result.stdout).not.toMatch(/grid/i)
   })
 
   it('reports loggedIn:true from a saved, non-expiring session without a network round trip', () => {

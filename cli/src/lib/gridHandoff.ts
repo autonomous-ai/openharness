@@ -1,5 +1,15 @@
 /**
- * Hand an Autonomous account token to the `grid` CLI, so signing in to a grid needs no second browser.
+ * Hand this computer's Harness access token to the `grid` CLI, so signing in to a grid needs no
+ * second browser.
+ *
+ * **Every kind of sign-in goes to `grid`, and `grid` alone says no.** A browser sign-in holds an
+ * Autonomous token; a computer signed in by QR holds a Harness-issued sign-in, whose token starts
+ * `hna_`. This module used to refuse the second before `grid` was asked, because the control plane
+ * could only read Autonomous tokens and a QR-signed computer was told to sign in again with Google or
+ * Apple. The control plane now asks the Harness backend who holds either kind (autonomous-grid ADR
+ * 0046), and a sign-in it cannot take — one that has lapsed, or an account whose Google identity
+ * Harness has not yet learned — comes back as `grid`'s own refusal, which names its own way forward.
+ * A check here would only be a second copy of that rule to fall out of step with it.
  *
  * The seam is a child process and nothing else: `grid login --harness` reads the token off its own
  * standard input, exchanges it at the control plane, and owns everything after that. This module's
@@ -29,7 +39,7 @@ export const GRID_HANDOFF_FLAG = '--harness'
  */
 const ARGPARSE_USAGE_EXIT = 2
 
-export type GridHandoffCode = 'OK' | 'GRID_CLI_MISSING' | 'GRID_CLI_OUTDATED' | 'GRID_LOGIN_FAILED' | 'GRID_NEEDS_SSO'
+export type GridHandoffCode = 'OK' | 'GRID_CLI_MISSING' | 'GRID_CLI_OUTDATED' | 'GRID_LOGIN_FAILED'
 
 export interface GridHandoffResult {
   code: GridHandoffCode
@@ -105,11 +115,6 @@ export async function handOffToGrid(
   // installing one, not a spawn error the caller has to recognise — and a present-but-unrunnable
   // one (EACCES, never ENOENT) is caught too. Resolved off this process's own environment, which is
   // the one place the override and the runtime dir are read from.
-  // A computer a phone signed in by QR holds a session Harness issued itself; grid signs in with the
-  // Autonomous account, which does not know it. Say what to do rather than let `grid` refuse it.
-  if (token.startsWith('hna_')) {
-    return { code: 'GRID_NEEDS_SSO', exitCode: 1, message: 'Grid needs a Google or Apple sign-in on this computer: harness login --force', stdout: '', stderr: '' }
-  }
   const binary = gridBinaryPath()
   if (!binaryOnPath(binary)) {
     return { code: 'GRID_CLI_MISSING', exitCode: 1, message: MISSING_MESSAGE, stdout: '', stderr: '' }

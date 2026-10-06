@@ -303,9 +303,11 @@ async function authStatusCommand(json: boolean): Promise<void> {
   if (json) console.log(JSON.stringify(payload))
   else {
     console.log(`\n  ${payload.loggedIn ? '✓ Signed in' : '✗ Not signed in'}${payload.machineId ? ` (machine ${payload.machineId})` : ''}${payload.loggedIn && payload.method === 'qr' ? ' — by your phone' : ''}\n`)
-    // A session a phone approved is Harness's own: the Autonomous services behind billing and grid
-    // do not take it. Say so where the person looks, not only when one of them refuses.
-    if (payload.loggedIn && payload.method === 'qr') console.log('  Billing and grid need a Google or Apple sign-in: harness login --force\n')
+    // A session a phone approved is Harness's own, and billing's Autonomous service does not take it.
+    // Say so where the person looks, not only when billing refuses. Grid is not named: it learns who
+    // holds a Harness-issued sign-in from the Harness backend (autonomous-grid ADR 0046), and naming
+    // it sent people to sign in again with Google or Apple for nothing.
+    if (payload.loggedIn && payload.method === 'qr') console.log('  Billing needs a Google or Apple sign-in: harness login --force\n')
   }
 }
 

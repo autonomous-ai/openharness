@@ -343,6 +343,50 @@ describe('harness grid login — an already-signed-in computer', () => {
   }, 20_000)
 })
 
+/**
+ * A computer signed in by QR holds a Harness-issued sign-in (`method: 'qr'`, a token starting
+ * `hna_`). The hand-off used to refuse it before `grid` was asked; the control plane now learns who
+ * holds one from the Harness backend (autonomous-grid ADR 0046), so it goes to `grid` like any other
+ * sign-in and whatever `grid` answers is the answer.
+ */
+describe('harness grid login — a computer signed in by QR', () => {
+  const HARNESS_ISSUED = `hna_${'Q'.repeat(43)}`
+  const seedQrSession = (root: string): void => seedSession(root, { accessToken: HARNESS_ISSUED, method: 'qr' })
+
+  it('hands its Harness-issued sign-in to grid on standard input, as it does an Autonomous token', async () => {
+    const root = tempRoot()
+    seedQrSession(root)
+    const { base } = await signedInBackend()
+
+    const result = await run(root, ['grid', 'login', '--json'], base)
+
+    expect(result.status).toBe(0)
+    expect(ndjson(result.stdout)).toEqual([{ type: 'result', status: 'success', alreadySignedIn: true }])
+    const record = readRecord(root)
+    expect(record.args).toEqual(['login', '--harness', '--json'])
+    expect(record.stdin).toBe(`${HARNESS_ISSUED}\n`)
+  }, 20_000)
+
+  it('reports grid\'s own refusal as grid\'s, after grid was handed the token', async () => {
+    const root = tempRoot()
+    seedQrSession(root)
+    const { base } = await signedInBackend()
+    // What the control plane says while the Harness backend has not yet learned the account's Google
+    // identity (ADR 0046): the refusal that matters for this sign-in, and `grid`'s to word.
+    const refusal = 'Harness hasn\'t confirmed this account\'s Google identity yet, so nothing was changed.\n'
+
+    // 7, not 1: the hand-off's own fallback is 1, so only another code proves grid's is the one carried.
+    const result = await run(root, ['grid', 'login', '--json'], base,
+      { FAKE_GRID_EXIT: '7', FAKE_GRID_STDERR: refusal })
+
+    expect(result.status).toBe(7)
+    const [line] = ndjson(result.stdout)
+    expect(line).toMatchObject({ type: 'result', status: 'error', code: 'GRID_LOGIN_FAILED', detail: refusal.trim() })
+    expect(String(line.message)).not.toContain('harness login --force')
+    expect(readRecord(root).stdin).toBe(`${HARNESS_ISSUED}\n`)
+  }, 20_000)
+})
+
 describe('harness grid login — a signed-out computer', () => {
   it('runs the whole loopback sign-in first, then hands the new token over', async () => {
     const root = tempRoot()

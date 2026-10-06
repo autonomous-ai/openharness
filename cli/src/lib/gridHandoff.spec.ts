@@ -5,7 +5,8 @@
  * resolves to (`gridExec.ts`): the developer override, then the managed runtime, then PATH. A
  * hand-off that asked PATH on its own would sign in with one `grid` while models ran on another —
  * two versions writing one `~/.grid`. The token seam itself (stdin, never argv) is covered end to end
- * in `gridCommand.spec.ts`; this file is only about WHICH child gets it.
+ * in `gridCommand.spec.ts`; this file is about WHICH child gets it, and that every kind of sign-in
+ * reaches it.
  */
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -82,17 +83,6 @@ describe('handOffToGrid — which grid it runs', () => {
     expect(updateCheckSeenBy('override')).toBe('1')
   })
 
-  it('does not hand grid a session a phone approved: grid signs in with the Autonomous account', async () => {
-    const override = fakeGrid(join(root, 'elsewhere'), 'override')
-    process.env.HARNESS_GRID_BIN = override
-    const { handOffToGrid } = await load()
-
-    const result = await handOffToGrid('hna_' + 'x'.repeat(43), { json: true })
-
-    expect(result).toMatchObject({ code: 'GRID_NEEDS_SSO', exitCode: 1 })
-    expect(result.message).toContain('harness login --force')
-  })
-
   it('prefers the managed runtime over a grid on PATH', async () => {
     fakeGrid(join(root, 'path-bin'), 'path')
     process.env.PATH = join(root, 'path-bin')
@@ -114,6 +104,30 @@ describe('handOffToGrid — which grid it runs', () => {
 
     expect(result).toMatchObject({ code: 'GRID_CLI_MISSING', exitCode: 1 })
     expect(result.message).toContain('grid')
+  })
+})
+
+/**
+ * A computer signed in by QR holds a Harness-issued sign-in. The hand-off used to refuse one before
+ * `grid` was ever asked, because the control plane could only read Autonomous tokens. It now asks the
+ * Harness backend who holds one (autonomous-grid ADR 0046), so accepting or refusing it is `grid`'s
+ * answer to give, and this module passes the token on like any other.
+ */
+describe('handOffToGrid — a Harness-issued sign-in', () => {
+  /** The shape the Harness backend issues (`backend/src/lib/harnessTokenFormat.ts`): `hna_` and 43
+   *  base64url characters. The removed refusal matched on the prefix alone. */
+  const HARNESS_ISSUED = `hna_${'Q'.repeat(43)}`
+
+  it('hands it to grid on standard input, exactly as it does an Autonomous token', async () => {
+    fakeGrid(join(root, 'path-bin'), 'path')
+    process.env.PATH = join(root, 'path-bin')
+    const { handOffToGrid } = await load()
+
+    const result = await handOffToGrid(HARNESS_ISSUED, { json: true })
+
+    expect(result).toMatchObject({ code: 'OK', exitCode: 0, message: '' })
+    expect(argsOf('path')).toEqual(['login', '--harness', '--json'])
+    expect(readFileSync(join(root, 'path.stdin'), 'utf8')).toBe(`${HARNESS_ISSUED}\n`)
   })
 })
 

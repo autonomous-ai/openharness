@@ -11,8 +11,9 @@ export interface AuthSession {
   autonomousEnv: 'prod' | 'stag'
   computerId: string
   machineId?: string
-  /** How this computer signed in: `qr` — a phone scanned its QR (a Harness-issued session, which
-   *  the Autonomous services behind billing and grid do not take); absent or `sso` — the browser. */
+  /** How this computer signed in: `qr` — a phone scanned its QR (a Harness-issued sign-in, which
+   *  billing's Autonomous service does not take; grid does, through the Harness backend —
+   *  autonomous-grid ADR 0046); absent or `sso` — the browser. */
   method?: 'sso' | 'qr'
   /** The auth-service client these tokens were issued to, as the backend's exchange reported it.
    *  A refresh has to name the same one. Absent is the backend's configured client. */
