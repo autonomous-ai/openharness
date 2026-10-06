@@ -4,12 +4,13 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { env } from '../config/env.js'
 import type { RegisteredSession } from './registry.js'
+import { adoptEngineHomes, resetEngineHomes } from './engineHomes.js'
 import { parseRuntimeProfile, RuntimeProfileManager } from './runtimeProfile.js'
 
 const shell = vi.hoisted(() => ({ environment: {} as NodeJS.ProcessEnv }))
 vi.mock('./loginShellEnv.js', () => ({ loginShellEnvironment: () => shell.environment }))
 let root: string
-const defaults = { codex: env.CODEX_HOME, claude: env.CLAUDE_PROJECTS_DIR }
+const defaults = { codex: env.CODEX_HOME, claude: env.CLAUDE_PROJECTS_DIR, data: env.ADAPTER_DATA_DIR }
 const write = (folder: string, file: string, value: unknown): void => {
   mkdirSync(folder, { recursive: true })
   writeFileSync(join(folder, file), JSON.stringify(value))
@@ -22,12 +23,16 @@ beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), 'profile-homes-'))
   env.CODEX_HOME = join(root, 'daemon-codex')
   env.CLAUDE_PROJECTS_DIR = join(root, 'daemon-claude', 'projects')
+  env.ADAPTER_DATA_DIR = join(root, 'data')
+  resetEngineHomes()
   shell.environment = { CODEX_HOME: join(root, 'shell-codex'), CLAUDE_CONFIG_DIR: join(root, 'shell-claude') }
 })
 afterEach(() => {
   shell.environment = {}
   env.CODEX_HOME = defaults.codex
   env.CLAUDE_PROJECTS_DIR = defaults.claude
+  env.ADAPTER_DATA_DIR = defaults.data
+  resetEngineHomes()
   rmSync(root, { recursive: true, force: true })
 })
 
@@ -58,4 +63,21 @@ it('reads Claude effort from its moved settings, keeping the project override la
   write(join(agent.cwd!, '.claude'), 'settings.local.json', { effortLevel: 'medium' })
   await manager.ingestConfig(agent, true)
   expect(manager.getState(agent.sessionId).effort).toBe('medium')
+})
+
+it.each(['claude', 'codex'] as const)('a bound %s conversation keeps its original settings after the shell changes homes', async engine => {
+  const previous = join(root, 'previous-login'), agent = session(engine)
+  adoptEngineHomes(engine === 'claude' ? { CLAUDE_CONFIG_DIR: previous } : { CODEX_HOME: previous },
+    { claudeHome: join(root, 'daemon-claude'), codexHome: env.CODEX_HOME })
+  agent.transcriptPath = join(previous, engine === 'claude' ? 'projects/workspace' : 'sessions', 'conversation.jsonl')
+  if (engine === 'claude') {
+    write(previous, 'settings.json', { availableModels: ['sonnet'] })
+    write(shell.environment.CLAUDE_CONFIG_DIR!, 'settings.json', { availableModels: ['haiku'] })
+  } else {
+    write(previous, 'models_cache.json', { models: [{ slug: 'previous-model', visibility: 'list' }] })
+    write(shell.environment.CODEX_HOME!, 'models_cache.json', { models: [{ slug: 'current-model', visibility: 'list' }] })
+  }
+  const models = (await new RuntimeProfileManager().modelsForSession(agent)).map(model => parseRuntimeProfile(model.id)?.model)
+  expect(models).toContain(engine === 'claude' ? 'sonnet' : 'previous-model')
+  expect(models).not.toContain(engine === 'claude' ? 'haiku' : 'current-model')
 })
