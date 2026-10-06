@@ -71,8 +71,10 @@ def wired_devices():
     result = nmcli('-t', '-e', 'yes', '-f', 'DEVICE,TYPE,STATE', 'device', 'status', wait=3)
     if result.returncode:
         return []
+    # An unavailable Ethernet device can still recover through explicit
+    # activation, including after networking was disabled across suspend.
     return [row for line in result.stdout.splitlines()
-            if len(row := fields(line)) == 3 and row[1] == 'ethernet' and row[2] != 'unavailable']
+            if len(row := fields(line)) == 3 and row[1] == 'ethernet']
 
 
 def still_connected(network):

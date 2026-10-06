@@ -40,6 +40,13 @@ class Network(unittest.TestCase):
             network.nmcli('general')
         self.assertEqual(run.call_args.args[0][0], '/usr/bin/nmcli')
 
+    def test_unavailable_ethernet_remains_selectable_for_explicit_reconnection(self):
+        devices = ('lo:loopback:connected (externally)\nens5:ethernet:unavailable\n'
+                   'eth1:ethernet:disconnected\nwlan0:wifi:unavailable\n')
+        with patch.object(network, 'nmcli', return_value=result(output=devices)):
+            self.assertEqual(network.wired_devices(), [
+                ['ens5', 'ethernet', 'unavailable'], ['eth1', 'ethernet', 'disconnected']])
+
     def test_scans_escape_ssids_and_deduplicate_radios_without_hiding_open_networks(self):
         rows = 'a\\:network:60:WPA2:wlan0:aa\\:bb:\nopen:90:--:wlan0:bb\\:cc:\na\\:network:88:WPA2:wlan0:cc\\:dd:*\n:80:WPA2:wlan0:dd\\:ee:\n'
         with patch.object(network, 'nmcli', return_value=result(output=rows)):
@@ -209,6 +216,16 @@ class Network(unittest.TestCase):
              patch.object(network, 'nmcli', return_value=result()) as command:
             self.assertEqual(page.run(), 0)
         self.assertEqual(command.call_args.args, ('device', 'connect', 'eth0'))
+
+    def test_failed_ethernet_reconnection_keeps_the_network_page_open(self):
+        screen, page = self.page([curses.KEY_DOWN, '\n', '\x1b'], first_use=False)
+        with patch.object(network, 'scan', return_value=[]), \
+             patch.object(network, 'wired_devices', return_value=[['ens5', 'ethernet', 'unavailable']]), \
+             patch.object(network, 'nmcli', return_value=result(4)) as command:
+            self.assertEqual(page.run(), 1)
+        self.assertEqual(command.call_args.args, ('device', 'connect', 'ens5'))
+        self.assertIn('Could not connect Ethernet.', '\n'.join(text for _, text in screen.lines))
+        self.assertFalse(any(call.args[:2] == ('connection', 'delete') for call in command.call_args_list))
 
     def test_wide_and_control_characters_fit_the_terminal(self):
         self.assertEqual(network.fit('網路123', 5), '網路1')
