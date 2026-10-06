@@ -191,11 +191,9 @@ export function createTurnHooks({
       return
     }
     if (session.engine !== 'claude') return
-    // A Stop hook that BLOCKS (a /goal loop) makes Claude Code work on, in a pass the transcript opens as a
-    // turn of its own (lib/normalize.ts `stopHookContinuation`). The Stop of the pass before it can reach
-    // the daemon after that pass has started: measured end to end under load, 520 ms after it, which
-    // force-closed the running pass after the grace. A continued pass is closed by the transcript, by its
-    // end_turn or Claude Code's turn_duration, so only a StopFailure still closes one here.
+    // A pass a blocking Stop hook continued (a /goal loop) is the transcript's to close, by its end_turn or
+    // turn_duration: the Stop of the pass before it reached the daemon 520 ms after it began (end to end,
+    // under load) and force-closed it while it ran. Only a StopFailure still closes one here.
     const leftToTranscript = (st: TurnState): boolean => st.continued === true && status !== 'error'
     void (async () => {
       await drain(sessionId)

@@ -703,11 +703,9 @@ export function messagesToEvents(rawLines: string[]): SessionEvent[] {
     if (compact) { events.push(...compact); continue } // compact boundary → indicator; summary/meta → suppressed
     const queued = queuedHumanPrompt(raw)
     if (queued) { events.push({ type: 'user_message', payload: { content: queued } }); continue }
-    // The turn a blocking Stop hook continued, as the live view shows it (lineToEvents), so a reopened
-    // goal does not run its iterations together under the one prompt.
+    // A pass a blocking Stop hook continued, as the live view starts it (lineToEvents), once per pass.
     const continued = stopHookContinuation(raw)
     if (continued !== null) {
-      // One continuation, however many of its records follow the feedback line.
       if (continuedAt !== events.length - 1) events.push({ type: 'user_message', payload: { content: continued } })
       continuedAt = events.length - 1
       continue
@@ -823,30 +821,19 @@ export interface TurnState {
   /** Before the counter in a live thinking id. A fold that starts mid-transcript names its window here
    *  (lib/attachTranscript.ts), so its ids cannot repeat ones another fold of the same session sent. */
   thinkingPrefix?: string
-  /** The open turn is one a blocking Stop hook continued (`stopHookContinuation`), not a prompt's. Its
-   *  end is the transcript's to say: its end_turn, or Claude Code's turn_duration (core/turns/turnHooks.ts). */
+  /** The open turn is one a blocking Stop hook continued (`stopHookContinuation`), not a prompt's. */
   continued?: boolean
 }
 
 /**
- * The turn a Stop hook that blocked keeps going, or null for any other record.
- *
- * A Stop hook can refuse to let Claude Code stop: `/goal` is built on one, and people write their own
- * ("run the tests before you finish"). Claude Code then writes the hook's feedback as an `isMeta` user
- * line, which says nothing a person typed and stays hidden, and goes on working in the SAME turn: the
- * next assistant output follows with no prompt line and no `turn_duration` between. The record after the
- * feedback says which kind it was (measured on real 2.1.282/2.1.283 transcripts):
- *
+ * The turn a Stop hook that blocked keeps going, or null. `/goal` is built on such a hook, and people write
+ * their own. Claude Code writes the hook's feedback as a hidden `isMeta` user line, then one of these, then
+ * works on in the SAME turn with no prompt line between (real 2.1.282/2.1.283):
  *   {"type":"attachment","attachment":{"type":"goal_status","met":false,"condition":"…","reason":"…"}}
- *   {"type":"attachment","attachment":{"type":"hook_blocking_error","hookEvent":"Stop",
- *     "blockingError":{"blockingError":"…","command":"…"}}}
- *
- * The iteration's own `end_turn` had already closed the turn, so the continuation streamed with none
- * open: the device showed the first iteration's recap while the goal ran on, the agent flickered idle
- * whenever a tool ran past the 30 s work lease, and the end of the goal produced no turn_ended and no
- * recap at all. A `goal_status` marked `sentinel` is Claude Code restating an active goal when a session
- * starts, not a continuation, and one that is met ends nothing more than the `end_turn` before it did.
- * The label matches the Codex normalizer's for its own goal continuations.
+ *   {"type":"attachment","attachment":{"type":"hook_blocking_error","hookEvent":"Stop","blockingError":{"blockingError":"…"}}}
+ * The pass's end_turn had closed the turn, so the rest ran with none open: no turn_ended, no recap, and
+ * idle whenever a tool outlasted the work lease. A `sentinel` goal_status restates an active goal at start.
+ * The label matches the Codex normalizer's goal continuations.
  */
 export function stopHookContinuation(raw: Record<string, unknown>): string | null {
   if (raw.type !== 'attachment') return null
@@ -958,8 +945,7 @@ export function lineToEvents(rawLine: string, state: TurnState): LiveEvent[] {
   // launch ack, and this record is not a prompt.
   const finished = taskNotificationEvent(raw)
   if (finished) return [finished]
-  // A Stop hook that blocked: Claude Code works on in the same turn, which the iteration's `end_turn`
-  // already closed. Open it again; one still open (the end_turn not read yet) needs nothing.
+  // A Stop hook that blocked: the pass's end_turn closed the turn Claude Code works on in. Open it again.
   const continued = stopHookContinuation(raw)
   if (continued !== null) {
     if (state.turnOpen) return []
@@ -968,10 +954,9 @@ export function lineToEvents(rawLine: string, state: TurnState): LiveEvent[] {
     state.continued = true
     return [{ type: 'turn_started', payload: { userMessage: continued } }]
   }
-  // Claude Code's own record that its turn is over. A pass a blocking hook continued can end with no
-  // output at all: when the hook refuses again, Claude Code pauses the goal ("A hook blocked…", "Goal
-  // paused · …") and writes only this (real 2.1.283). No end_turn and no further Stop hook follows, so
-  // the pass opened above would stay open until the next prompt. Every other turn is closed as before.
+  // Claude Code's own record that its turn is over. A continued pass can end with no output: when the hook
+  // refuses again, Claude Code pauses the goal and writes only notices and this (real 2.1.283), with no
+  // end_turn or Stop to close what was opened above. Every other turn is closed as before.
   if (raw.type === 'system' && raw.subtype === 'turn_duration') {
     if (!state.turnOpen || !state.continued) return []
     state.turnOpen = false
