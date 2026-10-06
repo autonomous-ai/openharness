@@ -538,9 +538,8 @@ pub struct App {
     pub tails_asked: HashSet<String>,
     pub desk_mode: DeskMode,
     /// The daemon on this computer is signed in (its `/api/status`): with DeskMode::Account, the
-    /// desk is in front, and this computer's own sessions are put aside in [parked] until sign-out.
+    /// desk is in front, with this computer's windows joined to it.
     pub signed_in: bool,
-    parked: Vec<Stash>,
     pub desk_revision: i64,
     /// The desk session's windows' own state as the last client left it (their options, zoom,
     /// pane titles), put back as the desk's tabs come.
@@ -1009,7 +1008,6 @@ impl App {
             tails_asked: HashSet::new(),
             desk_mode,
             signed_in: false,
-            parked: Vec::new(),
             desk_revision: -1,
             desk_windows_saved: HashMap::new(),
             desk_active_saved: None,
@@ -3173,9 +3171,7 @@ impl App {
         let mut ours = Vec::new();
         let mut names = HashSet::new();
         let mut desk = None;
-        // (This computer's own sessions put aside while signed in are kept as they were.)
-        let stashed = self.sessions.iter().chain(self.parked.iter());
-        for (s, tabs, nums, lastw, front) in std::iter::once((&here, &self.tabs, &self.nums, &self.lastw, true)).chain(stashed.map(|s| (s, &s.tabs, &s.nums, &s.lastw, false))) {
+        for (s, tabs, nums, lastw, front) in std::iter::once((&here, &self.tabs, &self.nums, &self.lastw, true)).chain(self.sessions.iter().map(|s| (s, &s.tabs, &s.nums, &s.lastw, false))) {
             // The desk's session is every client's: its windows are the desk's tabs.
             // (Its windows are the desk's; what is the session's own — its options, environment,
             // group, folder — and its windows' own state are kept here, as any session's are.)
@@ -5399,10 +5395,10 @@ impl App {
         self.desk_mode == DeskMode::Sync || self.desk_mode == DeskMode::Account && self.signed_in
     }
 
-    /// Account: the daemon on this computer signed in or out. Signed in, the desk comes to
-    /// the front, as the desktop app shows it on any computer of the account, and this
-    /// computer's own sessions wait aside; signed out, they are back as they were, and the
-    /// account's windows go with the account.
+    /// Account: the daemon on this computer signed in or out. Signed in, this computer's windows
+    /// join the account's shared tabs, as the desktop app's do at sign-in, and those tabs are in
+    /// front. Signed out, what runs on this computer stays, in its windows, and the account's
+    /// other harnesses go with the account.
     pub(crate) fn follow_account(&mut self, signed_in: bool) {
         let was = std::mem::replace(&mut self.signed_in, signed_in);
         if self.desk_mode != DeskMode::Account || (was == signed_in && self.session_desk == signed_in) { return }
@@ -5411,21 +5407,32 @@ impl App {
 
     fn enter_desk(&mut self) {
         if !self.session_desk {
-            let id = match self.sessions.iter().find(|s| s.desk) {
-                Some(s) => s.id,
-                None => {
-                    let id = crate::ids::desk(crate::ids::Kind::Session, "desk") as u32;
-                    self.sessions.push(Stash { id, used: use_order(), mirror: None, alias: None, desk: true, tabs: Vec::new(), active: 0, lastw: Vec::new(), nums: HashMap::new(),
-                        created: epoch_secs(), activity: epoch_secs(), last_attached: 0, options: Default::default(), env: Default::default(), path: None, group: None });
-                    id
+            // The session in front becomes the desk's, with every other one of this client's
+            // windows, so each of them is published to the account below.
+            for desk in self.sessions.iter().filter(|s| s.desk).flat_map(|s| s.tabs.iter().flat_map(|t| t.panes())).collect::<Vec<_>>() { self.drop_pane(desk) }
+            self.sessions.retain(|s| !s.desk);
+            let (others, kept): (Vec<Stash>, Vec<Stash>) = std::mem::take(&mut self.sessions).into_iter().partition(|s| s.mirror.is_none());
+            self.sessions = kept;
+            for stash in others {
+                for tab in stash.tabs.into_iter().filter(|t| t.root.is_some()) {
+                    let num = self.nums.values().max().map_or(self.base_index(), |n| n + 1);
+                    self.nums.insert(tab.id.clone(), num);
+                    self.tabs.push(tab);
                 }
-            };
-            self.switch_session(id);
+            }
+            self.tabs.retain(|t| t.root.is_some());
+            if self.tabs.is_empty() { self.tabs.push(Tab::home()) }
+            self.active = self.active.min(self.tabs.len() - 1);
+            self.session_desk = true;
+            self.session_id = crate::ids::desk(crate::ids::Kind::Session, "desk") as u32;
+            self.session_alias = None;
+            let windows: Vec<(String, Vec<(String, String)>)> = self.tabs.iter().filter(|t| t.root.is_some())
+                .map(|t| (t.id.clone(), t.panes().iter().filter_map(|p| self.panes.get(p)).map(|p| (p.machine_id.clone(), p.agent_id.clone())).collect())).collect();
+            for (tab, panes) in windows {
+                for (machine, agent) in panes { self.desk_pane_added(&tab, &machine, &agent) }
+            }
         }
-        let (parked, kept): (Vec<Stash>, Vec<Stash>) = std::mem::take(&mut self.sessions).into_iter().partition(|s| !s.desk && s.mirror.is_none());
-        self.parked.extend(parked);
-        self.sessions = kept;
-        // Read afresh: the link's Connected loads it (or now, when it is already up).
+        // Read afresh, after what was just published: the link's Connected loads it (or now).
         self.desk_revision = 0;
         self.desk_loaded = false;
         if self.link(&self.fleet.local_id).is_some() { self.load_desk() }
@@ -5433,16 +5440,33 @@ impl App {
     }
 
     fn leave_desk(&mut self) {
-        self.sessions.append(&mut self.parked);
-        let own = self.sessions.iter().filter(|s| !s.desk && s.mirror.is_none() && s.tabs.iter().any(|t| t.root.is_some())).max_by_key(|s| (s.activity, s.used)).map(|s| s.id);
-        match own {
-            Some(id) => self.switch_session(id),
-            None => { if let Err(e) = self.new_session(None, None, None, None, false) { self.error(e) } }
-        }
-        if self.session_desk { return }
         if let Some(i) = self.sessions.iter().position(|s| s.desk) {
             let desk = self.sessions.remove(i);
             for pane in desk.tabs.iter().flat_map(|t| t.panes()) { self.drop_pane(pane) }
+        }
+        if self.session_desk {
+            // Only this computer's harnesses stay: another machine's need the account to reach.
+            let here = self.fleet.local_id.clone();
+            for i in 0..self.tabs.len() {
+                for pid in self.tabs[i].panes() {
+                    if self.panes.get(&pid).is_some_and(|p| p.machine_id == here || crate::local::is_local(&p.machine_id)) { continue }
+                    let tab = &mut self.tabs[i];
+                    tab.root = tab.root.take().and_then(|r| r.remove(pid));
+                    tab.order.retain(|p| *p != pid);
+                    self.drop_pane(pid);
+                }
+                let tab = &mut self.tabs[i];
+                let left = tab.panes();
+                if tab.focus.is_some_and(|f| !left.contains(&f)) { tab.focus = left.first().copied() }
+            }
+            let gone: Vec<String> = self.tabs.iter().filter(|t| t.root.is_none()).map(|t| t.id.clone()).collect();
+            self.tabs.retain(|t| t.root.is_some());
+            for id in gone { self.nums.remove(&id); }
+            if self.tabs.is_empty() { self.tabs.push(Tab::home()) }
+            self.active = self.active.min(self.tabs.len() - 1);
+            self.keep_local_shell_session();
+            self.fit_panes();
+            self.redraw_all = true;
         }
         self.desk_revision = 0;
         self.desk_windows_saved.clear();
@@ -5535,7 +5559,9 @@ impl App {
             if id.is_empty() || panes.is_empty() { continue }
             seen.push(id.clone());
             let name = row.get("name").and_then(Value::as_str).unwrap_or("tab").to_string();
-            let named = row.get("nameIsCustom").and_then(Value::as_bool).unwrap_or(false);
+            // On Harness OS a tab is called what the desktop app calls it, not what its window runs:
+            // the same tabs side by side on two computers read the same.
+            let named = row.get("nameIsCustom").and_then(Value::as_bool).unwrap_or(false) || self.desk_mode == DeskMode::Account;
             let layout_doc = row.get("layout").cloned().unwrap_or(json!({}));
             match self.tabs.iter().position(|t| t.id == id) {
                 Some(index) => {
@@ -6333,13 +6359,14 @@ mod recovery_tests {
         assert!(!app.daemon_down);
     }
 
-    /// Account (Harness OS): signed in, the account's desk is in front and this computer's own
-    /// windows wait aside, out of every list but still saved; signed out, they come back and the
-    /// account's windows go.
+    /// Account (Harness OS), as the desktop app: at sign-in this computer's windows join the
+    /// account's shared tabs; at sign-out what runs on this computer stays in its windows, and a
+    /// harness on another machine goes with the account.
     #[tokio::test]
-    async fn the_os_shows_the_desk_while_signed_in_and_its_own_windows_after() {
+    async fn the_os_joins_its_windows_to_the_account_and_keeps_its_own_harnesses_after() {
         let mut app = fixture();
         app.desk_mode = DeskMode::Account;
+        app.fleet.local_id = "test-peer".into();
         app.session_desk = false;
         // An ordinary session's number, as Account starts with (the fixture began on the desk's).
         app.session_id = app.alloc_session_id();
@@ -6349,27 +6376,36 @@ mod recovery_tests {
         tab.focus = Some(1);
         app.tabs = vec![tab];
         app.active = 0;
-        let own = app.session_id;
 
         app.follow_account(true);
-        assert!(app.session_desk && app.signed_in);
-        assert!(app.desk_on());
-        assert!(!app.tabs.iter().any(|t| t.name == "own work"), "the desk is in front");
-        assert!(app.sessions.iter().all(|s| s.desk || s.mirror.is_some()), "own sessions are out of the lists");
-        assert!(app.parked.iter().any(|s| s.id == own && s.tabs.iter().any(|t| t.name == "own work")));
-        // A desk window arrives as on any computer of the account.
-        let mut desk_tab = Tab::with_wid("from the Mac", 2);
-        desk_tab.root = Some(Node::new(2, 80, 23));
-        desk_tab.on_desk = true;
-        app.tabs = vec![desk_tab];
+        assert!(app.session_desk && app.signed_in && app.desk_on());
+        assert!(app.tabs.iter().any(|t| t.name == "own work" && t.on_desk), "this computer's window joins the account's tabs");
+        assert!(!app.sessions.iter().any(|s| !s.desk && s.mirror.is_none()));
+
+        // A tab from the account: this computer's harness beside another machine's.
+        let mut mixed = Tab::with_wid("discussion", 2);
+        let mut root = Node::new(3, 80, 23);
+        root.split(3, 4, Dir::Horizontal);
+        mixed.root = Some(root);
+        mixed.focus = Some(4);
+        mixed.on_desk = true;
+        let mut remote = Tab::with_wid("bubu", 3);
+        remote.root = Some(Node::new(2, 80, 23));
+        remote.on_desk = true;
+        app.panes.get_mut(&2).unwrap().machine_id = "other-peer".into();
+        app.tabs.push(mixed);
+        app.tabs.push(remote);
 
         app.follow_account(false);
         assert!(!app.session_desk && !app.signed_in && !app.desk_on());
-        assert_eq!(app.session_id, own);
-        assert!(app.tabs.iter().any(|t| t.name == "own work"));
-        assert!(app.parked.is_empty());
-        assert!(!app.sessions.iter().any(|s| s.desk), "the account's windows go with it");
-        assert!(!app.panes.contains_key(&2));
+        let names: Vec<&str> = app.tabs.iter().map(|t| t.name.as_str()).collect();
+        assert_eq!(names, ["own work", "discussion"], "a tab with nothing of this computer's goes");
+        let kept = &app.tabs[1];
+        assert_eq!(kept.panes(), vec![3], "the local harness stays, the remote one goes");
+        assert_eq!(kept.focus, Some(3));
+        assert!(app.panes.contains_key(&1) && app.panes.contains_key(&3));
+        assert!(!app.panes.contains_key(&4) && !app.panes.contains_key(&2));
+        assert!(app.tabs.iter().all(|t| !t.on_desk));
     }
 
     /// Windows saved before the sign-in name the computer id; hn started after it moves them to the

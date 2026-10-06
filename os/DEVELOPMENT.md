@@ -346,9 +346,10 @@ are prepared under the user's state directory. The OS-owned copy remains an
 offline fallback. Neither downloading nor checking restarts working processes.
 Signed out, OS windows use hn's local session storage (`HARNESS_TUI_DESK=off`),
 so their layout and pane references survive reconnects without a cloud account.
-Signed in (`HARNESS_TUI_DESK_SIGNED_IN=sync`), the account's shared tabs are in
-front, as the desktop app shows them; this computer's own windows wait aside and
-return on sign-out. An older hn reads `off` alone. These settings are confined to
+Signed in (`HARNESS_TUI_DESK_SIGNED_IN=sync`), this computer's windows join the
+account's shared tabs, as the desktop app's do at sign-in, under the names the
+app shows. On sign-out the harnesses running on this computer stay in their
+windows; another machine's go with the account. An older hn reads `off` alone. These settings are confined to
 the OS launcher; ordinary hn installs are unchanged.
 
 The installed system keeps hn's standard status bar. Super+u records an update
