@@ -51,6 +51,9 @@ export interface DevicesDeps {
   log?: (line: string) => void
   /** How the voice router's worker is stopped when the process exits: an engine process of its own. */
   onExit?: (run: () => void) => void
+  /** Read this computer's agents again before a list is built from them: in their own process the devices
+   *  keep a copy, asked of the core as the dial's tick or ⌘K needs it (services/devicesProcess.ts). */
+  refresh?: () => Promise<void>
   /** For this service's tests: the dial's session, and how dials are found and opened. */
   Session?: ConstructorParameters<typeof CableFleet>[0]
   cable?: Partial<CableFleetOptions>
@@ -87,7 +90,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   // the trust group read; this copy writes no file of its own, so `machines.json` has one writer.
   const machines = new MachineListCache(() => core.account.machines(), () => core.machine.computerId(),
     (line) => log(`[cable] ${line}`), core.dataDir, () => null, false)
-  const fleet: Fleet | null = part.start('fleet', () => startFleet(core, { machines, desk: () => desk }).fleet, FLEET_FALLBACKS)
+  const fleet: Fleet | null = part.start('fleet', () => startFleet(core, { machines, desk: () => desk, refresh: deps.refresh }).fleet, FLEET_FALLBACKS)
 
   // ── the window bridges ─────────────────────────────────────────────────────────────────────────────
   //
@@ -127,6 +130,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   let revision = 0
   const cableHost = new DaemonCableHost({
     sessions: () => core.agents.advertised(),
+    refresh: deps.refresh,
     displayName: (session) => core.agents.displayName(session),
     activityText: (agentId) => core.agents.activityText(agentId),
     machineName: () => core.machine.name(),
@@ -191,6 +195,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   const cable = new CableFleet(deps.Session ?? CableSession, cableHost, deps.logsDir, DialLog, {
     serials: deps.dialSerials,
     verdicts: new DialVerdicts(join(core.dataDir, 'dial-ports.json')),
+    faults: deps.faults,
     ...testDialDiscovery(deps.testDialPort),
     ...deps.cable,
   })

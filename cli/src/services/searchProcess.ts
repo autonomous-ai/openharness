@@ -60,7 +60,7 @@ export function searchCoreApi(
       activityText: UNASKED.activityText,
     },
     // Search drives no agent: these are never asked of it.
-    turns: { send: () => {}, stop: () => {}, recent: () => [], asks: () => [], ...DELIVERIES_OFF },
+    turns: { send: () => {}, stop: () => {}, recent: async () => [], asks: async () => [], ...DELIVERIES_OFF },
     questions: { answer: () => {}, answerReviewed: async () => false },
     transcripts: { databaseHistory },
     external: {

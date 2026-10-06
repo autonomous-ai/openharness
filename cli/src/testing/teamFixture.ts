@@ -50,7 +50,7 @@ export function attachTeams<T extends BackendSocket>(socket: T): T & TeamFixture
       activityText: UNASKED.activityText,
     },
     turns: {
-      send: () => {}, stop: () => {}, recent: () => [], asks: () => [],
+      send: () => {}, stop: () => {}, recent: async () => [], asks: async () => [],
       ...DELIVERIES_OFF,
       deliver: (agentId, text, deliveryId) => socket.onMessage?.(agentId, text, deliveryId),
       cancelDelivery: (deliveryId) => socket.onCancelOrchestratorMessage?.(deliveryId) ?? false,

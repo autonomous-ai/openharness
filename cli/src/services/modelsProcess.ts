@@ -78,7 +78,7 @@ export function modelsCoreApi(dataDir: string, ask: (query: string, payload?: Pa
       ...AGENT_ACTIONS_OFF,
       activityText: UNASKED.activityText,
     },
-    turns: { send: () => {}, stop: () => {}, recent: () => [], asks: () => [], ...DELIVERIES_OFF },
+    turns: { send: () => {}, stop: () => {}, recent: async () => [], asks: async () => [], ...DELIVERIES_OFF },
     questions: { answer: () => {}, answerReviewed: async () => false },
     transcripts: { databaseHistory: () => undefined },
     external: {

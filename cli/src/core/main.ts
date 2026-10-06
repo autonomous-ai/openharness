@@ -22,7 +22,7 @@ import { VERSION } from '../version.js'
 import { sqlitePreflightMessage } from '../lib/sqliteAvailability.js'
 import { warmLoginShellEnvironment } from '../lib/loginShellEnv.js'
 import type { AppSwarms } from '../cable/cableSession.js'
-import type { UnreadNotification } from '../cable/notificationRead.js'
+import type { UnreadNotification } from '../lib/notificationRead.js'
 import { terminalActivity } from '../lib/terminalActivity.js'
 import { MachineListCache, withStaleMarker } from '../device/machineList.js'
 import { registry, projectDisplayName, validTranscriptPath, type RegisteredSession } from '../lib/registry.js'
@@ -140,7 +140,7 @@ import { createOrchestratorLink } from './orchestratorLink.js'
 import { daemonCommand } from '../lib/daemonCommand.js'
 import { KNOWN_SERVICES, servicesTheMasterRuns } from '../harnessd/services.js'
 import { createTeamsLink, teamsOutOfProcess } from './teamsLink.js'
-import { startDevices } from '../services/devices.js'
+import { createDevicesLink } from './devicesLink.js'
 import { CORE_EXIT_STOP, CORE_EXIT_UPDATE, PROBE_COMMAND, PROBE_TIMEOUT_MS } from '../harnessd/protocol.js'
 import { localSocketPath, refuseServedDataFolder, type LocalSocketServer } from '../lib/localSocket.js'
 import { saveDaemonPort } from '../lib/daemonEndpoint.js'
@@ -688,7 +688,14 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     sendToWindow: (connId, frame) => localWsServerRef?.sendToWindow(connId, frame) ?? false,
     hasWindow: () => backendRef?.hasLocalClient() ?? false,
     devicesChanged: (payload) => backendRef?.send({ type: 'harness_devices_changed', payload }),
-    dialWatching: (watching) => { dialWatching = watching },
+    dialWatching: (watching) => {
+      const attached = watching && !dialWatching
+      dialWatching = watching
+      // A dial attaching is shown what is still being asked and what is still working, as a device joining
+      // through the backend is (onCommanderJoin): one whose devices' process restarted comes back to tiles
+      // mid-turn, and to a question nobody has answered yet.
+      if (attached) for (const frame of [...openQuestions.values(), ...mirror.liveCards()]) ports.devices?.card(frame)
+    },
     // What a device or another machine asks of an agent here: the SAME handlers the backend socket
     // drives, called directly — the slash-command adaptation and the turn and question plumbing live there.
     runtimeProfile: (session) => runtimeProfiles.selectedModel(session),
@@ -714,8 +721,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     turns: {
       send: (agentId, text) => backendRef?.onMessage?.(agentId, text),
       stop: (agentId) => backendRef?.onCancel?.(agentId),
-      recent: (agentId, n) => mirror.recent(registry.resolve(agentId)?.sessionId || agentId, n),
-      asks: (agentId) => mirror.recentAsks(registry.resolve(agentId)?.sessionId || agentId),
+      recent: async (agentId, n) => mirror.recent(registry.resolve(agentId)?.sessionId || agentId, n),
+      asks: async (agentId) => mirror.recentAsks(registry.resolve(agentId)?.sessionId || agentId),
       ...deliveries.turns,
     },
     questions: {
@@ -1112,6 +1119,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // The requests each service that can run in its own process answers, as core/api.ts declares them.
   const requestsOf: Record<string, readonly string[]> = {
     search: SEARCH_REQUESTS, store: STORE_REQUESTS, usage: USAGE_REQUESTS, monitor: MONITOR_REQUESTS, projects: PROJECTS_REQUESTS, models: MODELS_REQUESTS,
+    devices: DEVICES_REQUESTS,
     ...Object.fromEntries(Object.entries(EXPERIMENTS).map(([name, experiment]) => [name, experiment.requests])),
   }
   // The experiments (core/api.ts `EXPERIMENTS`): each may act on the core through the hooks an experiment has.
@@ -1135,6 +1143,15 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const storeLink = createStoreLink(coreApi, invalidateInstalledDsh)
   // What the core keeps of models in its own process for frames and keystrokes, and how it asks it the rest (core/modelsLink.ts).
   const modelsLink = createModelsLink(coreApi, (type, payload) => serviceLinks.call('models', type, payload), (frame) => serviceLinks.notify('models', frame))
+  // The devices in their own process (core/devicesLink.ts): told what the windows say, asked ⌘K, and told it
+  // all again whenever they connect, from what the core keeps.
+  const devicesLink = createDevicesLink({
+    core: coreApi,
+    notify: (frame) => serviceLinks.notify('devices', frame),
+    call: (type, payload, waitMs) => serviceLinks.call('devices', type, payload, waitMs),
+    state: () => ({ desk: appPaneAgents, foreground: appWindowForeground, swarms: appSwarmsLatest, unread: appUnreadLatest,
+      focus: windowFocus(), engines: registry.active().map((agent) => agent.engine), commanders: backend.hasCommander() }),
+  })
   const serviceLinks = createServiceLinks({
     token: serviceToken,
     owned: Object.fromEntries([...outOfProcess].map((name) => [name, requestsOf[name] ?? []])),
@@ -1151,16 +1168,20 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       : service === 'store' ? storeLink.answer(query, payload)
       : service === 'models' ? modelsLink.answer(query, payload)
       : service === 'teams' || service === 'collaboration' ? teamsLink.answer(query, payload)
+      : service === 'devices' ? devicesLink.answer(query, payload)
       : service === 'gateway' && gatewayLink ? gatewayLink.answer(query, payload) : answerAgentQuery(coreApi, query)),
-    // The gateway's own traffic: its remote clients and what they sent, and its comings and goings.
-    notice: (service, payload) => { if (service === 'gateway') gatewayLink?.notice(payload) },
+    // The gateway's own traffic: its remote clients and what they sent, and its comings and goings; and what
+    // the devices tell the core (a turn, a frame for the windows, a dial on the wire).
+    notice: (service, payload) => { if (service === 'gateway') gatewayLink?.notice(payload); else if (service === 'devices') devicesLink.notice(payload) },
     binary: (service, bytes) => { if (service === 'gateway') gatewayLink?.binary(bytes) },
     connected: (service) => {
       if (service === 'gateway') gatewayLink?.connected()
       if (service === 'teams') teamsLink.on()
+      if (service === 'devices') devicesLink.connected()
     },
     disconnected: (service) => {
       if (service === 'gateway') gatewayLink?.disconnected()
+      if (service === 'devices') devicesLink.disconnected()
       void terminalWatch.gone(service)
     },
   })
@@ -2492,20 +2513,18 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // (⌘K's too) with the lane to the owner's other machines, the voice router and the Devices tab. Behind
   // their port: a device that fails costs the devices, never a session. Deliberately not fatal and not
   // blocking: an unplugged cable is this daemon's ordinary state.
-  serviceHost.start('devices', (core, started) => startDevices(core, started, {
-    logsDir: env.HARNESS_LOGS_DIR,
-    dialSerials: process.env.HARNESS_DIAL_SERIALS?.split(',').map((serial) => serial.trim()).filter(Boolean),
-    testDialPort: process.env.HARNESSD_TEST_DIAL_PORT,
-    cableDisabled: env.CABLE_DISABLE,
-    faults: testFaults(process.env.HARNESSD_TEST_FAULTS),
-  }), coreApi, DEVICES_FALLBACKS, DEVICES_REQUESTS)
-  // Everything the windows said while the devices were being built, and what the machine runs.
-  ports.devices?.desk(appPaneAgents, appWindowForeground)
-  ports.devices?.swarms(appSwarmsLatest)
-  ports.devices?.unread(appUnreadLatest)
-  ports.devices?.windowFocus(windowFocus())
-  ports.devices?.engines(registry.active().map((agent) => agent.engine))
-  ports.devices?.commanders(backend.hasCommander())
+  // In their own process they are told everything the windows said as they connect (core/devicesLink.ts):
+  // said here too, it reached a dial still opening its port, before its greeting.
+  if (outOfProcess.has('devices')) ports.devices = devicesLink.port
+  else {
+    serviceHost.start('devices', (core, started) => inline!.startDevices(core, started, {
+      logsDir: env.HARNESS_LOGS_DIR, testDialPort: process.env.HARNESSD_TEST_DIAL_PORT,
+      dialSerials: process.env.HARNESS_DIAL_SERIALS?.split(',').map((serial) => serial.trim()).filter(Boolean),
+      cableDisabled: env.CABLE_DISABLE, faults: testFaults(process.env.HARNESSD_TEST_FAULTS),
+    }), coreApi, DEVICES_FALLBACKS, DEVICES_REQUESTS)
+    // Everything the windows said while the devices were being built, and what the machine runs.
+    if (ports.devices) devicesLink.started(ports.devices)
+  }
 
   const deviceStore = createDeviceStore({ dataDir: env.ADAPTER_DATA_DIR, machineId: backend.machineId,
     create: input => backend.onCreateAgent!(input),

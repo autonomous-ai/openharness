@@ -236,7 +236,7 @@ describe('the core API models runs on in its own process', () => {
     expect(await api.agents.fork('a1')).toEqual({ ok: false, error: 'UNSUPPORTED' })
     api.turns.send('a1', 'x')
     api.turns.stop('a1')
-    expect([api.turns.recent('a1', 1), api.turns.asks('a1')]).toEqual([[], []])
+    expect(await Promise.all([api.turns.recent('a1', 1), api.turns.asks('a1')])).toEqual([[], []])
     api.questions.answer('a1', 'r', {})
     expect(await api.questions.answerReviewed({} as never)).toBe(false)
     expect(api.transcripts.databaseHistory({} as never)).toBeUndefined()

@@ -29,7 +29,7 @@ import { SerialLink, findDialPort } from './serial.js'
 import { PassageCarry, withCarriedPassage, type CarryRead } from './passageCarry.js'
 import { VoiceDraft, type DraftPin } from './voiceDraft.js'
 import { QuestionInbox, type ReviewedAnswer, type AnswerReceipt, type QuestionSpeech } from './questionInbox.js'
-import { notificationReadToken, type UnreadNotification } from './notificationRead.js'
+import { notificationReadToken, type UnreadNotification } from '../lib/notificationRead.js'
 
 /** Bumped when the VOCABULARY changes. Separate from the frame version, which is the envelope. */
 export const CABLE_PROTO_VERSION = 3   // 3: + question.close (a question answered on another client)
@@ -345,6 +345,13 @@ export interface CableHost {
    */
   onForeignPort?(path: string, why: string): void
   /**
+   * Something this session does threw, or the far end is flooding the port with what no dial sends. Told
+   * every time, so whoever owns the session can drop this dial alone, and look at its port again later,
+   * rather than let one device's fault reach every other one in the process. A dial is hardware speaking
+   * whatever its firmware says: a fault here is expected to happen, and to be this dial's alone.
+   */
+  onFault?(error: unknown, hostile?: boolean): void
+  /**
    * The dial as a window would draw it: there or not, on which firmware, and whether an update is
    * going over the cable right now. Fired on every change and never on a keepalive — the window
    * shows this in its rail, and a rail that redraws four times a minute to say "still here" is a rail
@@ -611,8 +618,8 @@ export class CableSession {
 
   start(): void {
     this.stopped = false
-    this.timer = setInterval(() => void this.tick(), 1_000)
-    void this.tick()
+    this.timer = setInterval(() => this.ticked(), 1_000)
+    this.ticked()
   }
 
   async stop(): Promise<void> {
@@ -621,6 +628,17 @@ export class CableSession {
     this.timer = null
     await this.link?.close('daemon stopping')
     this.link = null
+  }
+
+  /** One tick, its failure this dial's: a rejection left unhandled would end the whole devices process. */
+  private ticked(): void {
+    void this.tick().catch((error: unknown) => this.fault(error))
+  }
+
+  /** This dial's fault, told to whoever owns the session (CableHost.onFault). */
+  private fault(error: unknown, hostile = false): void {
+    this.log(`cable: ${hostile ? 'flooded' : 'fault'} · ${error instanceof Error ? error.message : String(error)}`)
+    this.host.onFault?.(error, hostile)
   }
 
   // ── port lifecycle ────────────────────────────────────────────────────────────────────────────────
@@ -840,10 +858,46 @@ export class CableSession {
 
   // ── inbound ───────────────────────────────────────────────────────────────────────────────────────
 
+  /**
+   * What a dial may send in a second before it reads as hostile: a byte stream that is mostly not frames, a
+   * flood of frames, or bytes that take the decoder longer than it may spend. A dial sends a few dozen
+   * frames a second at most (voice is 16-bit PCM at 16 kHz, about 32 KB/s in frames of up to 8 KB), and its
+   * boot noise is a few hundred bytes; the decoder's worst case is a CRC over 8 KB for every eight bytes of
+   * a crafted stream, which at USB speed would hold the event loop for seconds at a time.
+   */
+  static readonly BUDGET = { garbageBytes: 64 * 1024, frames: 2_000, decodeMs: 500 }
+  private budget = { since: 0, garbage: 0, frames: 0, ms: 0 }
+
   private onBytes(chunk: Buffer): void {
+    const started = performance.now()
+    const discarded = this.decoder.discardedBytes
+    let frames = 0
+    try {
+      this.decode(chunk, () => { frames++ })
+    } catch (error) {
+      // A throw inside the decoder's callback (the console log's write, the voice buffer) is this dial's
+      // fault: thrown out of the port's `data` event it would end the whole devices process.
+      this.fault(error)
+    }
+    const now = Date.now()
+    if (now - this.budget.since >= 1_000) this.budget = { since: now, garbage: 0, frames: 0, ms: 0 }
+    this.budget.garbage += this.decoder.discardedBytes - discarded
+    this.budget.frames += frames
+    this.budget.ms += performance.now() - started
+    const over = this.budget.garbage > CableSession.BUDGET.garbageBytes ? `${this.budget.garbage} B that are no frames`
+      : this.budget.frames > CableSession.BUDGET.frames ? `${this.budget.frames} frames`
+      : this.budget.ms > CableSession.BUDGET.decodeMs ? `${Math.round(this.budget.ms)} ms of decoding` : ''
+    if (over) {
+      this.budget = { since: now, garbage: 0, frames: 0, ms: 0 }
+      this.fault(new Error(`${over} in a second, more than a dial sends`), true)
+    }
+  }
+
+  private decode(chunk: Buffer, counted: () => void): void {
     this.lastRx = Date.now()
     this.bytesSinceOpen += chunk.length
     this.decoder.feed(chunk, (frame) => {
+      counted()
       this.framesSinceOpen += 1
       if (frame.type === CableType.Json) {
         let msg: Message
@@ -852,7 +906,8 @@ export class CableSession {
         } catch {
           return // unreadable payloads are counted by the decoder, never fatal
         }
-        void this.onMessage(msg)
+        // Its failure is this dial's: a rejection left unhandled would end the whole devices process.
+        void this.onMessage(msg).catch((error: unknown) => this.fault(error))
         return
       }
       if (frame.type === CableType.Log) {
