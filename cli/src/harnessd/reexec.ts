@@ -27,15 +27,14 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { PROBE_ANSWER, PROBE_COMMAND, PROBE_TIMEOUT_MS } from './protocol.js'
 import type { ExitReason, ReexecOutcome, ResumeState } from './supervisor.js'
 
 /** The environment variable that hands a master's state to the one it re-executes as. */
 export const RESUME_ENV = 'HARNESSD_RESUME'
-/** The command a bundle's master answers its probe on, and what it answers. */
-export const PROBE_COMMAND = '__harnessd-probe'
-export const PROBE_ANSWER = 'harnessd-probe ok'
-/** How long a probe may take: the updater gives its canary as long. */
-export const PROBE_TIMEOUT_MS = 15_000
+/** Asked by a core on its own too, before it hands an update to a master (core/updateHandoff.ts): in
+ *  ./protocol.ts, which the core's process loads anyway, where this module it does not need is not. */
+export { PROBE_ANSWER, PROBE_COMMAND, PROBE_TIMEOUT_MS } from './protocol.js'
 /**
  * This many re-executions in a row without a core coming up, and the master keeps its code: each new
  * master found yet another bundle before it could start one, and following them would be a loop. An

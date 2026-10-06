@@ -78,7 +78,7 @@ harness login         # asks how to sign in (Google, Apple, or a QR your phone s
 harness login --google # or --apple: straight to that account in the browser, without asking
 harness login --force # stop the daemon and sign in as a different SSO account
 harness start         # starts the local adapter; uses a saved SSO session if present
-harness start -f      # foreground mode for a supervisor; logs to stdout
+harness start -f      # foreground mode for a supervisor (harnessd's master and its core); logs to stdout
 harness status     # is it running? shows pid + the chat link
 harness stop       # stop the background adapter
 harness version    # print the installed version

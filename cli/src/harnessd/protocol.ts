@@ -15,6 +15,12 @@ import type { SupervisorStatus } from './supervisor.js'
 /** 2: `ready`, the event-loop delay on the heartbeat, and the exit-code contract below. */
 export const HARNESSD_PROTOCOL = 2
 
+/** The command a bundle's master answers its probe on, and what it answers. */
+export const PROBE_COMMAND = '__harnessd-probe'
+export const PROBE_ANSWER = 'harnessd-probe ok'
+/** How long a probe may take: the updater gives its canary as long. */
+export const PROBE_TIMEOUT_MS = 15_000
+
 /** The exit code a core uses to be restarted at once on the bundle now on disk (a staged update). */
 export const CORE_EXIT_UPDATE = 75
 

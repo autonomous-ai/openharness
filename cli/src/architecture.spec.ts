@@ -141,9 +141,10 @@ const WALK_TIMEOUT_MS = 60_000
  *
  * RUN_FOREGROUND_BUDGET went up from 2,572 on 5 October, when the socket's request cases moved into core
  * modules: binding each of them is the wiring this function is for. backendSocket.ts lost 615 lines in
- * those moves, and runForeground gained 28.
+ * those moves, and runForeground gained 28. Down to 2,380 on 6 October (step 11), at 2,346: a core on its
+ * own hands an update to a master, which judges it, and no longer spawns, judges and rolls back a core.
  */
-const RUN_FOREGROUND_BUDGET = 2_600
+const RUN_FOREGROUND_BUDGET = 2_380
 /** Lowered from 2,180 when the relay and its E2EE left the socket for the gateway (step 10, R1: 1,440).
  *  The Wi-Fi device's relay came back to it in R2, beside the device service it answers for, over the
  *  gateway's sessions (lib/autonomous-device/overGateway.ts): 1,460. */
@@ -211,7 +212,11 @@ const SERVICE_MAY_IMPORT: Record<string, string> = {
 // the session crypto it ran in the core's process (lib/e2ee/relayClient.ts and what it loads) is the
 // gateway's alone, and the Share relay (sharing/relay.ts) runs in the gateway with the relay's other sockets.
 // What a service in its own process may ask of the account (core/accountQueries.ts) is the 41 lines added.
-const CORE_CLOSURE_BUDGET = 95_440
+//
+// Then at 95,374 in 417 (step 11), from 95,380: a core on its own hands an update to a master on the new
+// build, which judges it, instead of spawning a core and judging it itself. Not the 180 lines the plan
+// counted on: a core still runs without a master when an older release's own handoff started it.
+const CORE_CLOSURE_BUDGET = 95_420
 
 /** What is not the core's, by path: each goes to a service or its own process, in the plan's order. */
 const EDGE: RegExp[] = [

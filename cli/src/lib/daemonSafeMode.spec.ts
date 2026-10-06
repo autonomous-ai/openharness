@@ -84,24 +84,31 @@ describe('the safe-mode marker', () => {
 describe('runBootHandoff', () => {
   function harness(over: Partial<BootHandoffDeps> = {}) {
     const calls: string[] = []
-    let env: Record<string, string> = {}
     let exited: number | null = null
     const deps: BootHandoffDeps = {
       closeServer: () => calls.push('close'),
-      removePidFile: () => calls.push('removePid'),
-      spawn: (extra) => { calls.push('spawn'); env = extra; return { pid: 999, unref: () => calls.push('unref') } },
+      probeMaster: () => { calls.push('probe'); return null },
+      rollBack: () => calls.push('roll back'),
+      startMaster: () => calls.push('start the master'),
       exit: ((code: number) => { calls.push(`exit:${code}`); exited = code; return undefined as never }),
       log: () => {},
       ...over,
     }
-    return { deps, calls, env: () => env, exited: () => exited }
+    return { deps, calls, exited: () => exited }
   }
 
-  it('releases the port, then the pid file, then spawns the successor and leaves', () => {
+  it('probes the new build\'s master, releases the port, then starts the master on the new build, and leaves', () => {
     const h = harness()
     runBootHandoff('0.3.5', '0.3.6', h.deps)
-    expect(h.calls).toEqual(['close', 'removePid', 'spawn', 'unref', 'exit:0'])
-    expect(h.env()).toEqual({ ADAPTER_UPDATED_TO: '0.3.6' })
+    expect(h.calls).toEqual(['probe', 'close', 'start the master', 'exit:0'])
+  })
+
+  it('rolls a build whose master does not answer back, and starts this build\'s master instead', () => {
+    const lines: string[] = []
+    const h = harness({ probeMaster: () => 'harnessd-probe failed: a bad build', log: (m) => lines.push(m) })
+    runBootHandoff('0.3.5', '0.3.6', h.deps)
+    expect(h.calls).toEqual(['roll back', 'close', 'start the master', 'exit:0'])
+    expect(lines[1]).toBe('[update] 0.3.6\'s master did not answer its probe (harnessd-probe failed: a bad build) — rolled back; 0.3.5 goes on under a master of its own')
   })
 
   it('has already exited by the time it returns — the property that makes two daemons impossible', () => {
@@ -112,17 +119,11 @@ describe('runBootHandoff', () => {
     expect(h.exited()).toBe(0)   // no await, no tick: true immediately after the call returns
   })
 
-  it('a start-up that never bound or claimed anything still hands off', () => {
-    const h = harness({ closeServer: () => {}, removePidFile: () => {} })
-    runBootHandoff('0.3.5', '0.3.6', h.deps)
-    expect(h.calls).toEqual(['spawn', 'unref', 'exit:0'])
-  })
-
-  it('says which pid took over, so the log names the successor', () => {
+  it('says what it hands over, and to whom', () => {
     const lines: string[] = []
     const h = harness({ log: (m) => lines.push(m) })
     runBootHandoff('0.3.5', '0.3.6', h.deps)
     expect(lines[0]).toContain('0.3.5 → 0.3.6')
-    expect(lines[1]).toContain('pid 999')
+    expect(lines[0]).toContain('harnessd\'s master')
   })
 })

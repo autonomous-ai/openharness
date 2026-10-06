@@ -11,7 +11,7 @@ const leanBundle = vi.hoisted(() => ({ read: vi.fn((_bundle: Buffer): LeanBundle
 vi.mock('./harnessd/leanBundle.js', async (real) => ({ ...await real<object>(), readLeanBundle: (bundle: Buffer) => leanBundle.read(bundle) }))
 
 const {
-  BUNDLE_ENV, BUNDLE_SHA256_ENV, LEAN_DIR, LEAN_FINGERPRINT_ENV, LEAN_OFF_FILE, probeLean, probeThisMaster, processBundleDeps, startMaster, startMasterFromBundle,
+  BUNDLE_ENV, BUNDLE_SHA256_ENV, LEAN_DIR, LEAN_FINGERPRINT_ENV, LEAN_OFF_FILE, probeLean, probeThisMaster, processBundleDeps, startMaster, startMasterFromBundle, startMasterInForeground,
 } = await import('./masterProcess.js')
 type Deps = Parameters<typeof startMasterFromBundle>[1] & object
 
@@ -195,6 +195,18 @@ describe('starting the master', () => {
       expect(processExit).toHaveBeenCalledWith(4)
       processExit.mockRestore()
     } finally { rmSync(folder, { recursive: true, force: true }) }
+  })
+
+  it('runs in the foreground as launchd runs it: a bundle as one, the sources as cli.ts runs them', () => {
+    const calls: unknown[] = []
+    const start = { fromBundle: (bundle: string) => { calls.push(['bundle', bundle]) }, fromSources: (given: unknown) => { calls.push(['sources', given]) } }
+    startMasterInForeground('/cli/cli.js', start)
+    startMasterInForeground('/checkout/cli/src/cli.ts', start)
+    expect(calls).toEqual([['bundle', '/cli/cli.js'], ['sources', { scriptPath: '/checkout/cli/src/cli.ts' }]])
+    // By default, the two ways a master starts: from the bundle (entry.ts's `__harnessd`), or as cli.ts runs it.
+    runMaster.mockClear()
+    startMasterInForeground('/checkout/cli/src/cli.ts')
+    expect(runMaster.mock.calls[0][0]).toMatchObject({ scriptPath: '/checkout/cli/src/cli.ts' })
   })
 
   it('answers the probe a re-executing master asks', () => {
