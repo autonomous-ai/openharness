@@ -299,3 +299,34 @@ describe('slash-command prompts', () => {
     })
   })
 })
+
+describe('a message typed while Claude Code worked', () => {
+  const queued = (prompt: unknown, kind: string, commandMode = 'prompt') => line({
+    type: 'attachment', uuid: `q-${kind}`, attachment: { type: 'queued_command', prompt, commandMode, origin: { kind } },
+  })
+  const prompt = line({ type: 'user', uuid: 'u1', message: { role: 'user', content: 'run sleep 8, then say three' } })
+  const answer = line({ type: 'assistant', uuid: 'a1', message: { role: 'assistant', content: [{ type: 'text', text: 'three\nfour' }], stop_reason: 'end_turn' } })
+
+  it('is in the history where it was delivered, but only the person\'s own words', () => {
+    const events = messagesToEvents([
+      prompt,
+      queued('and then say four', 'human'),
+      queued([{ type: 'text', text: 'blocks too' }], 'human'),
+      queued('Goal set: ship it', 'auto-continuation'),
+      queued('a sub-agent hands back', 'task-notification'),
+      queued('/model opus', 'human', 'bash'),
+      queued('   ', 'human'),
+      answer,
+    ])
+    expect(events.filter((e) => e.type === 'user_message').map((e) => (e.payload as { content: string }).content))
+      .toEqual(['run sleep 8, then say three', 'and then say four', 'blocks too'])
+  })
+
+  it('still opens no live turn', () => {
+    const state = newTurnState()
+    lineToEvents(prompt, state)
+    expect(lineToEvents(queued('and then say four', 'human'), state)).toEqual([])
+    expect(state.turnOpen).toBe(true)
+  })
+})
+
