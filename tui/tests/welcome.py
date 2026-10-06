@@ -19,6 +19,7 @@ ROOT = Path(__file__).resolve().parents[1]
 PORT = int(os.environ.get('HN_WELCOME_TEST_PORT', '19787'))
 assert 19780 <= PORT <= 19789
 PREFIX = f'hn-welcome-{os.getpid()}'
+OUTER_GENERATION = 0
 BASE = Path(tempfile.mkdtemp(prefix='hn-welcome-', dir='/tmp')).resolve()
 PROJECT = BASE / 'autonomous-harness'
 PROJECT.mkdir()
@@ -43,7 +44,7 @@ def hn(*args, ok=True):
 
 
 def tmux(*args, ok=True):
-    result = subprocess.run([TMUX, '-L', PREFIX + '-outer', *args], env=ENV, cwd=PROJECT,
+    result = subprocess.run([TMUX, '-L', f'{PREFIX}-outer-{OUTER_GENERATION}', *args], env=ENV, cwd=PROJECT,
                             text=True, capture_output=True, timeout=10)
     if ok: assert result.returncode == 0, (args, result.stderr)
     return result.stdout
@@ -138,6 +139,10 @@ def resize(width, height):
 
 
 def launch():
+    global OUTER_GENERATION
+    # kill-server acknowledges before tmux has finished shutting down. Give each
+    # outer terminal its own socket; hn still restarts on the same tested socket.
+    OUTER_GENERATION += 1
     command = shlex.join(['env', '-u', 'TMUX', '-u', 'TMUX_PANE', '-u', 'HN_SOCKET',
                           *[f'{k}={v}' for k, v in ENV.items()], str(HN), '-L', PREFIX,
                           '--port', str(PORT), '-f', '/dev/null'])
