@@ -36,7 +36,14 @@ fn cells(tile: Rect, canvas: Rect, inner: Rect, status: Status, touch: bool) -> 
     // space between them (the same reason a stacked pane's title fills the row above it).
     if tile.right() < canvas.right() { outer.width += 1 }
     if touch {
-        if status == Status::Off && tile.bottom() < canvas.bottom() { outer.height += 1 }
+        // A box takes the divider after it (its right or bottom line) and the one before it too
+        // — an empty divider column when side by side, and, titles off, an empty divider row —
+        // so adjacent boxes share the single divider cell and their contents are a cell apart,
+        // never two. (With a title the lower pane's title row is itself the boundary, so it needs
+        // no row claimed above it.)
+        if tile.bottom() < canvas.bottom() { outer.height += 1 }
+        if tile.x > canvas.x { outer.x -= 1; outer.width += 1 }
+        if status == Status::Off && tile.y > canvas.y { outer.y -= 1; outer.height += 1 }
     } else {
         // The pane-border-status row is already part of the tile handed in (the layout reserves
         // it for a non-top pane), so a surface keeps every row: a stacked pane sits flush
@@ -81,16 +88,18 @@ mod tests {
             let mut tiles = Vec::new();
             n.rects(canvas, &mut tiles);
             let boxes: Vec<Frame> = tiles.iter().map(|(_, t)| boxed(*t, canvas, status)).collect();
-            for (i, b) in boxes.iter().enumerate() {
+            for b in boxes.iter() {
                 assert_eq!(b.surface.intersection(canvas), b.surface, "{status:?}: inside the window");
                 assert_eq!(b.content, Rect::new(b.surface.x + 1, b.surface.y + 1, b.surface.width - 2, b.surface.height - 2));
                 match status { Status::Off => assert!(b.title.is_none()), Status::Top => assert_eq!(b.title.unwrap().y, b.surface.y), Status::Bottom => assert_eq!(b.title.unwrap().y, b.surface.bottom() - 1) }
-                for other in &boxes[i + 1..] { assert_eq!(b.surface.intersection(other.surface).area(), 0, "{status:?}: frames never share a cell") }
             }
-            // Side by side and stacked, the frames touch; the window's edges are the outer
-            // frames' edges.
-            assert_eq!(boxes[1].surface.x, boxes[0].surface.right(), "{status:?}");
-            assert_eq!(boxes[2].surface.y, boxes[1].surface.bottom(), "{status:?}");
+            // Two boxes side by side, or stacked, share the divider — the contents are a cell
+            // apart, never two, and each frame takes the shared boundary for its own line.
+            assert_eq!(boxes[1].content.x - boxes[0].content.right(), 1, "{status:?}: side-by-side contents a cell apart");
+            assert_eq!(boxes[2].content.y - boxes[1].content.bottom(), 1, "{status:?}: stacked contents a cell apart");
+            assert_eq!(boxes[1].surface.x, boxes[0].surface.right() - 1, "{status:?}: share the divider column");
+            assert_eq!(boxes[2].surface.y, boxes[1].surface.bottom() - 1, "{status:?}: share the divider row");
+            // The window's edges are the outer frames' edges.
             assert_eq!((boxes[0].surface.x, boxes[0].surface.y, boxes[0].surface.bottom()), (canvas.x, canvas.y, canvas.bottom()));
             assert_eq!((boxes[1].surface.right(), boxes[2].surface.bottom()), (canvas.right(), canvas.bottom()));
         }
