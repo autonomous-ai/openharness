@@ -3319,7 +3319,7 @@ mod theme_render_tests {
         assert!(matches!(kind, PickerKind::Commands));
         assert_eq!(picker.current_id().as_deref(), Some("cmd:keybinds"));
         // Alt-k on a command in the list: the same — a key in use is named first.
-        if let Some(Modal::Picker { picker, .. }) = &mut app.modal { picker.select("cmd:split-down") }
+        if let Some(Modal::Picker { picker, .. }) = &mut app.modal { picker.select("cmd:tab") }
         crate::input::modal_key(&mut app, KeyEvent::new(KeyCode::Char('k'), KeyModifiers::ALT));
         assert!(app.capturing.is_some());
         key(&mut app, KeyCode::Char('n'));
