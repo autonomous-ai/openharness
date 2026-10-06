@@ -73,6 +73,17 @@ class BundleGuards(unittest.TestCase):
         helper = standalone.boot_module().module('t2_install').helper()
         helper.check_model('MacBookAir9,1')
         self.assertEqual(Path(helper.__file__).parent, folder)
+        kernel = standalone.boot_module().module('t2_update').KERNEL
+        self.assertEqual(Path(kernel.__file__).parent, folder)
+
+    def test_kernel_and_harness_use_one_pacman_transaction(self):
+        kernel = self.root / 'linux-t2.pkg.tar.zst'
+        with patch.object(update.subprocess, 'run') as run, \
+                patch.object(update, 'installed_version', return_value=self.version), \
+                patch.object(update, 'verify_runtime'):
+            update.install_package(self.package, self.version, self.runtime, [kernel])
+        run.assert_called_once()
+        self.assertEqual(run.call_args.args[0], ['pacman', '--noconfirm', '-U', str(kernel), str(self.package)])
 
     def test_legacy_rollback_completes_after_package_removes_platform_helper(self):
         folder = self.root / 'installed'

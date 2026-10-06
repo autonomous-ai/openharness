@@ -27,13 +27,15 @@ def exercise(vm, manifest, config):
                '/usr/lib/harness-os/runtime_update.py /usr/lib/harness-os/system.py /usr/lib/harness-os/live_update.py '
                '/usr/lib/harness-os/boot_profile.py /usr/lib/harness-os/t2_install.py '
                '/usr/lib/harness-os/t2_firmware.py /usr/lib/harness-os/firmware_names.py '
+               '/usr/lib/harness-os/t2_update.py /usr/lib/harness-os/t2_kernel.py '
                '/usr/lib/harness-os/open-updates /tmp/system-channel/; '
                'sudo cat /etc/sudoers.d/30-harness-updates > /tmp/system-channel/30-harness-updates')
     source = Path(__file__).resolve().parents[1]
     helper_hashes = {}
     helpers = {name: name for name in ['system.py', 'release_update.py', 'runtime_update.py',
-                                      'live_update.py', 'boot_profile.py', 't2_install.py']}
+                                      'live_update.py', 'boot_profile.py', 't2_install.py', 't2_update.py']}
     helpers.update({'t2_firmware.py': 'tools/prepare-t2-firmware.py',
+                    't2_kernel.py': 'tools/prepare-t2-kernel.py',
                     'firmware_names.py': 'platforms/apple-t2/firmware_names.py'})
     for name, relative in helpers.items():
         expected = hashlib.sha256((source / relative).read_bytes()).hexdigest()
@@ -109,7 +111,8 @@ metadata = dict(schema=1, channel='preview', architecture='x86_64',
     match = re.search(r'HN_UPDATE_BOOTSTRAP=(/tmp/harness-update-bootstrap\.[A-Za-z0-9]+)', output)
     assert match, 'The private root bootstrap directory was not created'
     bootstrap = match[1]
-    for name in ['boot_profile.py', 't2_install.py', 't2_firmware.py', 'firmware_names.py']:
+    for name in ['boot_profile.py', 't2_install.py', 't2_firmware.py', 'firmware_names.py',
+                 't2_update.py', 't2_kernel.py']:
         vm.command('sudo install -m 644 ' + shlex.quote('/tmp/system-channel/' + name) + ' ' + shlex.quote(bootstrap + '/' + name))
     system_helper = relocate_boot_loader(vm.read_file('/tmp/system-channel/system.py').decode(), bootstrap)
     put(vm, '/tmp/system-channel/test-system-helper.py', system_helper)

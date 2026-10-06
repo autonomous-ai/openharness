@@ -135,6 +135,7 @@ class ReleaseChannel(unittest.TestCase):
             self.assertEqual(folder.stat().st_mode & 0o777, 0o700)
             self.events.append(('harness', folder))
         return SimpleNamespace(system_module=lambda: system, validate_bundle=Mock(),
+            prepare_kernel_bundle=Mock(),
             validate_base=update.load_runtime_updater().validate_base, latest=lambda: None, apply=apply)
 
     def test_root_download_is_private_and_full_base_upgrade_precedes_package_application(self):
@@ -154,6 +155,14 @@ class ReleaseChannel(unittest.TestCase):
                 update.apply(self.url + '/metadata.json')
         self.assertEqual(self.events, [])
         updater.validate_bundle.assert_not_called()
+
+    def test_kernel_preparation_failure_leaves_arch_and_harness_unchanged(self):
+        updater = self.fake_updater()
+        updater.prepare_kernel_bundle.side_effect = ValueError('T2 kernel download failed verification')
+        with patch.object(update.os, 'geteuid', return_value=0), patch.object(update, 'load_runtime_updater', return_value=updater):
+            with self.assertRaisesRegex(ValueError, 'T2 kernel download'):
+                update.apply(self.url + '/metadata.json')
+        self.assertEqual(self.events, [])
 
     def test_public_base_upgrade_completes_without_terminal_input(self):
         updater = self.fake_updater()
