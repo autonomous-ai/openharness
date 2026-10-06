@@ -59,7 +59,7 @@ bind -x '"\\C-x\\C-b": _test_snapshot'
             os.chdir(root)
             env = dict(HOME=str(root), SHELL=shell, PATH='/usr/bin:/bin:/usr/sbin:/sbin',
                        TERM='xterm-256color', COLORTERM='truecolor', LANG='en_US.UTF-8',
-                       TMPDIR=str(root), _HN_CONTEXT=TOKEN, _HN_PICKER=str(wrapper))
+                       TMPDIR=str(root), _HN_CONTEXT=TOKEN, _HN_PICKER=str(wrapper), skip_global_compinit='1')
             os.execve('/bin/sh', ['/bin/sh', '-c', bootstrap], env)
         fcntl.ioctl(self.fd, termios.TIOCSWINSZ, struct.pack('HHHH', 34, 120, 0, 0))
         self.wait(lambda: b'READY> ' in self.data, 'shell startup')

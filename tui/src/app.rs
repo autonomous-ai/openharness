@@ -2055,12 +2055,21 @@ impl App {
         let agent_id = pane.agent_id.clone();
         let machine_id = pane.machine_id.clone();
         let close_key = self.keymap.hint("confirm-before -p \"kill-pane #P? (y/n)\" kill-pane").unwrap_or_else(|| "C-b x".into());
-        self.spawn(async move { link.rpc("agent_resume", json!({ "agentId": agent_id }), Duration::from_secs(120)).await }, move |app, reply| match reply {
+        let visit = crate::shell_context::resuming(self, pane_id);
+        let epoch = self.account_epoch;
+        let generation = link.generation;
+        let expected_agent = agent_id.clone();
+        self.spawn(async move { link.rpc("agent_resume", json!({ "agentId": agent_id }), Duration::from_secs(120)).await }, move |app, reply| {
+            if let Some(visit) = visit { crate::shell_context::resumed(app, &visit); }
+            if app.account_epoch != epoch || app.connection_generation(&machine_id) != Some(generation)
+                || app.panes.get(&pane_id).is_none_or(|p| p.agent_id != expected_agent || p.machine_id != machine_id) { return }
+            match reply {
             Ok(_) => { app.relist(&machine_id); app.open_stream(pane_id, true) }
             Err(error) => {
                 if let Some(pane) = app.panes.get_mut(&pane_id) {
                     pane.phase = Phase::Card { title: "Could not resume".into(), detail: error.to_string(), keys: vec![("enter".into(), "try again".into()), (close_key, "close pane".into())] };
                 }
+            }
             }
         });
     }
