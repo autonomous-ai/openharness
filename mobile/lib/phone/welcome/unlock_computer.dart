@@ -134,7 +134,9 @@ class _UnlockComputerState extends State<UnlockComputer> {
     final pairCode = code.pairCode;
     if (code.machineId == null || pairCode == null) {
       setState(
-        () => _error = "That code can't unlock a computer. Scan the one in Harness ▸ Add Phone….",
+        () => _error =
+            'That isn’t an Add Phone code. Open Add Phone… on '
+            '${machine.displayName} and scan its code.',
       );
       return;
     }
@@ -180,8 +182,10 @@ class _UnlockComputerState extends State<UnlockComputer> {
         ),
         const SizedBox(height: 12),
         Text(
-          // Not "Harness ▸ Add Phone…": that menu is the Mac's; on Linux it is the command palette.
-          'In Harness on $name, open Add Phone…, then scan the QR code.',
+          // Where Add Phone is, not only its name: the Harness menu is the Mac's; on Linux it is
+          // the command palette's, which the scan page's own hint says.
+          'In Harness on $name, open Add Phone…, then scan the QR code. On a '
+          'Mac, it’s in the Harness menu.',
           style: tty.style(size: TtySize.row, color: tty.faint),
         ),
         const SizedBox(height: 18),

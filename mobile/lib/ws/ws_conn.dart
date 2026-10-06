@@ -244,7 +244,7 @@ class WsConn {
       // (and may go to the network to refresh), while the codec comes off disk
       // and mints an ephemeral key — neither has ever needed the other's result.
       // In series they were two waits stacked in front of the dial, on the
-      // stretch the phone shows as "Connecting to your machine…", and every
+      // stretch the phone shows as "Connecting to your computer…", and every
       // reconnect paid it again.
       final codecs = relayCodecs;
       final pendingToken = StartupTrace.time(
@@ -1183,7 +1183,7 @@ class WsConn {
   /// sending `machine_select`, and the second never sent one either because
   /// `connect()`'s own `_connecting` guard had turned it away. The socket was
   /// open, the relay was waiting to be told which machine, and neither side ever
-  /// spoke: the launch hung on "Connecting to your machine…" indefinitely.
+  /// spoke: the launch hung on "Connecting to your computer…" indefinitely.
   ///
   /// Reachable on every launch, not just on a real resume: the phone's shell
   /// calls `handleAppResumed` as it mounts, which is a few hundred milliseconds

@@ -96,7 +96,7 @@ class DirectLink implements PeerLinkClient {
           error: switch (code) {
             'CODE_MISMATCH' =>
               'That code didn’t match. Scan the new one on $name.',
-            'TIMEOUT' => 'Keep “Add phone” open on $name, then scan again.',
+            'TIMEOUT' => 'Keep “Add Phone” open on $name, then scan again.',
             'PAIRING_BUSY' =>
               '$name is pairing with something else. Try again.',
             _ => 'Couldn’t connect to $name ($code).',

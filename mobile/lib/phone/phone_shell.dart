@@ -142,7 +142,7 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
   /// given. Spent here whatever the answer — a code is one computer's sign-in, once.
   ///
   /// From this shell's context and not a page's: the home page under it is still settling (the
-  /// machines loading, "Waiting for your computer…" swapping with "Looking for your machines…") and
+  /// machines loading, "Waiting for your computer…" swapping with "Looking for your computers…") and
   /// a page swapped out mid-answer would drop it. The dialog stands on the root navigator either way.
   void _approveHeldComputerSignIn() {
     final code = widget.notifier.pendingComputerSignIn;

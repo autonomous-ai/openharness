@@ -25,7 +25,10 @@ import 'set_up_computer.dart';
 ///
 /// Send it to your computer:   (the download menu)
 /// …
-/// Then open it, sign in with Google or Apple, and scan the code in Add Phone….
+/// Then, on your computer:
+/// 1  Install Harness, and open it.
+/// 2  Sign in with Google or Apple, as ada@… — the account on this phone.
+/// 3  Open Add Phone… and scan its code. On a Mac, it’s in the Harness menu.
 /// Scan to connect ›
 /// See how it works ▶
 /// Try the sample while you wait
@@ -112,7 +115,8 @@ class _ConnectComputerPageState extends State<ConnectComputerPage> {
     final machineId = code.machineId, pairCode = code.pairCode;
     if (machineId == null || pairCode == null) {
       _say(
-        "That code can't pair a computer. Scan the one in Harness ▸ Add Phone….",
+        'That isn’t an Add Phone code. Open Add Phone… on the computer and '
+        'scan its code.',
         failed: true,
       );
       return;
@@ -173,6 +177,8 @@ class _ConnectComputerPageState extends State<ConnectComputerPage> {
           onBack: widget.onBack,
           onScan: () => unawaited(_scanToPair()),
           loadDownloads: widget.loadDownloads,
+          // The computer has to join this account, so the steps name it.
+          account: widget.signedIn ? email : null,
           status: widget.signedIn || scanned != null
               ? Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,

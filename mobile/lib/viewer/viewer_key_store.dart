@@ -68,7 +68,7 @@ class ViewerKeyStore {
   /// for the peer before it opens a socket (`viewerRelayCodecs`). Uncached, a
   /// phone waking to four machines that each redial takes four exclusive locks
   /// on `state.json` and four full parses of it — in series, because the store
-  /// queues them — while the screen says "Connecting to your machine…".
+  /// queues them — while the screen says "Connecting to your computer…".
   ///
   /// Every write goes through [_write], which replaces this, so the cache cannot
   /// outlive a link or an unlink. It is per-instance and the app builds one
