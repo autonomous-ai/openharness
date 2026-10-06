@@ -186,8 +186,8 @@ describe('what the daemon survives', () => {
     client.close()
   })
 
-  it('the dial, the window bridges and the device service failing on every call never disconnect the desktop', async () => {
-    const d = await fresh({ env: { HARNESSD_TEST_FAULTS: 'dial,window,devices' } })
+  it('the dial, the window bridges and the Wi-Fi device service failing on every call never disconnect the desktop', async () => {
+    const d = await fresh({ env: { HARNESSD_TEST_FAULTS: 'dial,window,wifi' } })
     await d.start()
     // The handshake itself asks the dial for its status.
     const desktop = await LocalClient.connect(d)
@@ -207,7 +207,7 @@ describe('what the daemon survives', () => {
     expect(desktop.closed).toBe(false)
     expect(d.log()).toContain('[devices] dial failed · injected fault: dial')
     expect(d.log()).toContain('[devices] window failed · injected fault: window')
-    expect(d.log()).toContain('[devices] devices failed · injected fault: devices')
+    expect(d.log()).toContain('[devices] wifi failed · injected fault: wifi')
     expect(d.log()).not.toContain('local dispatch failed')
     expect(d.coresStarted()).toBe(1)
     desktop.close()

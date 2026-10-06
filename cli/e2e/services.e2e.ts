@@ -338,8 +338,8 @@ describe('a failing service never takes the core down', () => {
 
   it('with the fleet not starting, or failing on every call, ⌘K says so and the core runs its agents on', async () => {
     for (const [faults, reason, said] of [
-      ['fleet', 'no agent list yet', '[services] fleet did not start · injected fault: fleet · the core runs without it'],
-      ['fleet.routeTask,fleet.routeSend', 'the fleet service is unavailable', '[services] fleet.routeSend failed · injected fault: fleet.routeSend'],
+      ['fleet', 'no agent list yet', '[devices] fleet did not start · injected fault: fleet · the devices run without it'],
+      ['fleet.routeTask,fleet.routeSend', 'the fleet service is unavailable', '[devices] fleet.routeSend failed · injected fault: fleet.routeSend'],
     ]) {
       daemon = await IsolatedDaemon.create({ env: { HARNESSD_TEST_FAULTS: faults } })
       const d = daemon
@@ -349,6 +349,37 @@ describe('a failing service never takes the core down', () => {
       const agentId = await boundAgent(d, client, `fleet-${faults.length}`)
       expect(await routeTask(client, 'fix the parser')).toMatchObject({ agentId: '', reason, candidates: [] })
       expect(await client.request('route_send', { agentId, text: 'not delivered' })).toMatchObject({ ok: false, machine: '', reason })
+      await turn(client, agentId, `the core runs on (${faults})`)
+      expect(d.log()).toContain(said)
+      expect(d.coresStarted()).toBe(1)
+      client.close()
+      await d.close()
+      daemon = undefined
+    }
+  })
+
+  it('with the devices not starting, or the Devices tab failing, the dial, ⌘K and the tab say so and the core runs on', async () => {
+    for (const [faults, said] of [
+      ['devices', '[services] devices did not start · injected fault: devices · the core runs without it'],
+      ['devices.harness_devices_list', '[services] devices.harness_devices_list failed · injected fault: devices.harness_devices_list'],
+    ]) {
+      daemon = await IsolatedDaemon.create({ env: { HARNESSD_TEST_FAULTS: faults } })
+      const d = daemon
+      onTestFailed(() => { console.log(`---- daemon log (${faults})\n${d.log().split('\n').slice(-80).join('\n')}`) })
+      await d.start()
+      const client = await LocalClient.connect(d)
+      const agentId = await boundAgent(d, client, `devices-${faults.length}`)
+      if (faults === 'devices') {
+        // ⌘K has no router without the devices: it says so, and sends nothing.
+        expect(await routeTask(client, 'fix the parser')).toMatchObject({ agentId: '', reason: 'the devices service is unavailable', candidates: [] })
+        expect(await client.request('route_send', { agentId, text: 'not delivered' })).toMatchObject({ ok: false, reason: 'the devices service is unavailable' })
+        expect(await client.request('harness_devices_list', {})).toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'devices' })
+      } else {
+        expect(await client.request('harness_devices_list', {})).toMatchObject({ error: 'SERVICE_FAILED', service: 'devices' })
+        // Its other request, and ⌘K, are the devices' own answers still.
+        expect(await client.request('harness_device_settings', { id: 'dial-1', patch: { brightness: 3 } })).toMatchObject({ error: 'DEVICE_OFFLINE' })
+        expect(await routeTask(client, 'fix the parser')).toMatchObject({ agentId, confidence: 1 })
+      }
       await turn(client, agentId, `the core runs on (${faults})`)
       expect(d.log()).toContain(said)
       expect(d.coresStarted()).toBe(1)

@@ -97,6 +97,9 @@ export class MachineListCache {
     /** The machine row this session belongs to. A machine row is per (user, computer), so it is the one
      *  local fact that tells two ACCOUNTS on this computer apart — see `lastResponse`. */
     private readonly owner: () => string | null = () => null,
+    /** Whether it writes `machines.json`. The core's list does; the devices' own copy reads the file at
+     *  start, to draw the wheel offline, and leaves writing it to the core, so one file has one writer. */
+    private readonly persist = true,
   ) {
     this.path = machineListCachePath(dataDir)
     this.loadCache()
@@ -148,17 +151,19 @@ export class MachineListCache {
    * one on the other end of the cable — so an outage downgrades `source` and keeps the last known rows
    * rather than emptying the wheel.
    */
-  async refresh(): Promise<void> {
+  async refresh(): Promise<{ status: number; body: Record<string, unknown> } | null> {
     let res: { status: number; body: Record<string, unknown> }
     try {
       res = await this.fetchMachines()
     } catch (err) {
       this.degrade(`unreachable (${(err as Error).message})`)
-      return
+      return null
     }
-    if (res.status === 401 || res.status === 403) { this.signedOut(); return }
-    if (res.status >= 400) { this.degrade(`HTTP ${res.status}`); return }
-    if (!this.adopt(res.body)) this.degrade('no machines in the response')
+    if (res.status === 401 || res.status === 403) this.signedOut()
+    else if (res.status >= 400) this.degrade(`HTTP ${res.status}`)
+    else if (!this.adopt(res.body)) this.degrade('no machines in the response')
+    // What was read, as it was read: the devices' own copy of the list reads it from the core's.
+    return res
   }
 
   /**
@@ -272,6 +277,7 @@ export class MachineListCache {
   }
 
   private saveCache(): void {
+    if (!this.persist) return
     // `adopt` now runs on every local `/api/machines` too, not just the 60s poll, and this is a
     // synchronous write on the event loop of a daemon that is streaming terminals. An unchanged list is
     // the common case, so skip those. `fetchedAt` is deliberately NOT part of the comparison — it moves

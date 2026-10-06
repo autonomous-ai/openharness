@@ -52,6 +52,17 @@ describe('the core API a light service runs on in its own process', () => {
     api.clients.gridNamed('grid')
     api.clients.gridModelsChanged()
     api.clients.dshInstallStatus({ phase: 'clone' })
+    // What only the devices ask (services/devices.ts): nothing, from every other service.
+    expect([api.machine.id(), api.machine.computerId(), api.machine.name()]).toEqual(['', '', ''])
+    await expect(api.agents.activityText('a1')).resolves.toBeNull()
+    expect(api.account.signedIn()).toBe(false)
+    expect(api.account.environment()).toBe('')
+    await expect(api.account.machines()).resolves.toEqual({ status: 503, body: {} })
+    api.clients.sendLocal({ type: 'dial_focus', payload: {} })
+    expect(api.clients.sendToWindow('w1', { type: 'dial_form', payload: {} })).toBe(false)
+    expect(api.clients.hasWindow()).toBe(false)
+    api.clients.devicesChanged({})
+    api.clients.dialWatching(true)
     // With no way to ask the core, it acts on nothing: no agent made, no turn, no window told.
     await expect(api.agents.create({ engine: 'claude', cwd: '/w', dsh: null, prompt: 'p', name: 'n', bypassPermission: false }))
       .resolves.toEqual({ ok: false, error: 'SERVICE_UNAVAILABLE' })

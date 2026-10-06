@@ -27,7 +27,7 @@ export class OwnerCommands {
       const agentId = payload.agentId
       if (typeof agentId !== 'string' || !agentId.length || agentId.length > 160) return { error: 'INVALID_REQUEST' }
       if (!this.onRouteSend) return { error: 'UNSUPPORTED' }
-      return this.onRouteSend(agentId, text)
+      return await this.onRouteSend(agentId, text)
     } catch (error) {
       return error instanceof CommandBarError
         ? { error: error.code, detail: error.message }

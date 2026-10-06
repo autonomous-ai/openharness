@@ -1,12 +1,12 @@
-import { CodexNormalizer } from '../../engines/codex/normalizer.js'
-import { lineToEvents, newTurnState, type LiveEvent } from '../normalize.js'
+import { CodexNormalizer } from '../engines/codex/normalizer.js'
+import { lineToEvents, newTurnState, type LiveEvent } from '../lib/normalize.js'
 import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { AutonomousDeviceInput, isDeviceInputBoundary, type DeviceInputDeps } from './input.js'
-import { SessionInputController } from '../sessionInput.js'
-import { AutonomousDeviceService } from './service.js'
-import type { RegisteredSession } from '../registry.js'
-import type { TerminalActionResult } from '../terminalTypes.js'
+import { AutonomousDeviceInput, isDeviceInputBoundary, type DeviceInputDeps } from './deviceInput.js'
+import { SessionInputController } from '../lib/sessionInput.js'
+import { AutonomousDeviceService } from '../lib/autonomous-device/service.js'
+import type { RegisteredSession } from '../lib/registry.js'
+import type { TerminalActionResult } from '../lib/terminalTypes.js'
 
 function makeDevice(overrides: Partial<DeviceInputDeps>): AutonomousDeviceInput {
   return new AutonomousDeviceInput({

@@ -9,10 +9,10 @@
  * in. The two controllers' dependencies are built by `sessionInputDeps` and `deviceInputDeps`, each given
  * the other controller lazily: each one calls into the other.
  */
-import { AutonomousDeviceInput, type DeviceInputDeps } from '../lib/autonomous-device/input.js'
+import { AutonomousDeviceInput, type DeviceInputDeps } from './deviceInput.js'
 import type { AutonomousDeviceService } from '../lib/autonomous-device/service.js'
 import type { CommandCodeNormalizer } from '../engines/commandcode/normalizer.js'
-import { deviceErrorText } from '../lib/deviceErrors.js'
+import { deviceErrorText } from './cardText.js'
 import { adaptSlashCommand } from '../lib/goalCommand.js'
 import { sid } from '../lib/log.js'
 import type { LiveEvent } from '../lib/normalize.js'

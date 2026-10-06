@@ -8,7 +8,7 @@
 import { removeCursorPendingTasks } from '../../engines/cursor/pendingTasks.js'
 import type { CursorTranscriptDiscovery } from '../../engines/cursor/discovery.js'
 import type { CursorSubagentManager } from '../../engines/cursor/subagent.js'
-import type { AutonomousDeviceInput } from '../../lib/autonomous-device/input.js'
+import type { AutonomousDeviceInput } from '../deviceInput.js'
 import type { CommanderMirror } from '../../lib/commander.js'
 import { sid } from '../../lib/log.js'
 import type { registry } from '../../lib/registry.js'

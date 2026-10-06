@@ -146,13 +146,17 @@ const WALK_TIMEOUT_MS = 60_000
  *
  * BACKEND_SOCKET_BUDGET came down again on 6 October (step 7): the Model Manager's grid commands, the grid
  * name it worked out and the model lists it built moved to the models service, 1,457 → 1,391 lines.
+ *
+ * Lowered to 2,230 the same day (step 9, D1): the dial's host, its window bridges and the fleet left
+ * runForeground for the devices' own service (services/devices.ts), 2,375 lines to 2,213.
  */
-const RUN_FOREGROUND_BUDGET = 2_380
+const RUN_FOREGROUND_BUDGET = 2_230
 /** Lowered from 2,180 when the relay and its E2EE left the socket for the gateway (step 10, R1: 1,440).
  *  The Wi-Fi device's relay came back to it in R2, beside the device service it answers for, over the
  *  gateway's sessions (lib/autonomous-device/overGateway.ts): 1,460. Models' grid commands, grid name and
- *  lists left it for the models service (step 7): 1,391. */
-const BACKEND_SOCKET_BUDGET = 1_400
+ *  lists left it for the models service (step 7): 1,391. Then 1,200 when the Devices tab's requests
+ *  became the devices' own (step 9, D1), 1,207 → 1,194. */
+const BACKEND_SOCKET_BUDGET = 1_200
 
 /** Exceptions, each with its reason. Keep this short. */
 const SERVICE_MAY_IMPORT: Record<string, string> = {
@@ -245,7 +249,13 @@ const SERVICE_MAY_IMPORT: Record<string, string> = {
 // identity store it signed with leave. Its welcomes are signed by the gateway (gateway/observerKey.ts), and
 // its observers' terminals are read by the core's read-only stream manager (core/terminalWatch.ts), which
 // stays with what the core keeps of Share (core/sharingLink.ts).
-const CORE_CLOSURE_BUDGET = 87_570
+//
+// Grew to 87,941 in 389 (step 9, D1), from 87,476 in 387: the devices behind a port of their own, still in
+// the core's process (services/devices.ts, services/devicesGuard.ts, the port and its `CoreApi` members in
+// core/api.ts). runForeground lost their wiring and the pane writer lock came into the core
+// (core/deviceInput.ts). D2 runs the devices in a process of their own, which takes them out: the dial,
+// the window bridges, the fleet's router and lane, and the voice router, about 10,000 lines.
+const CORE_CLOSURE_BUDGET = 88_040
 
 /** What is not the core's, by path: each goes to a service or its own process, in the plan's order. */
 const EDGE: RegExp[] = [
@@ -270,30 +280,33 @@ const EDGE: RegExp[] = [
  *  can carry an install's progress back to it, or it leaves with the device (step 10). */
 const STORE_BYPASS = 'step 10: the Wi-Fi device\'s own way into the Store, until it goes through the Store\'s process'
 
+/** The devices run behind their port in the core's process (step 9, D1): their own process takes them out
+ *  (D2), the dial, its window bridges and the fleet's router and lane with them. */
+const D2 = 'step 9, D2: the devices (the dial, the window bridges, the fleet), in a process of their own'
+
 const CORE_MAY_REACH: Record<string, string> = {
-  'cable/cableFleet.ts': 'step 9: the dial, in the devices process',
-  'cable/cableFrame.ts': 'step 9: the dial, in the devices process',
-  'cable/cableHost.ts': 'step 9: the dial, in the devices process',
-  'cable/cableSession.ts': 'step 9: the dial, in the devices process',
-  'cable/companionProtocol.ts': 'step 9: the dial, in the devices process',
-  'cable/dialLog.ts': 'step 9: the dial, in the devices process',
-  'cable/dialPortVerdicts.ts': 'step 9: the dial, in the devices process',
-  'cable/fwPush.ts': 'step 9: the dial, in the devices process',
-  'cable/machineFleet.ts': 'step 9: the dial, in the devices process',
-  'cable/notificationRead.ts': 'step 9: the dial, in the devices process',
-  'cable/passageCarry.ts': 'step 9: the dial, in the devices process',
-  'cable/questionInbox.ts': 'step 9: the dial, in the devices process',
-  'cable/serial.ts': 'step 9: the dial, in the devices process',
-  'cable/terminalActivity.ts': 'step 9: the dial, in the devices process',
-  'cable/usbConsoleUser.ts': 'step 9: the dial, in the devices process',
-  'cable/voiceDraft.ts': 'step 9: the dial, in the devices process',
-  'cable/windowForm.ts': 'step 9: the dial, in the devices process',
-  'cable/windowRoute.ts': 'step 9: the dial, in the devices process',
-  'cable/windowSelection.ts': 'step 9: the dial, in the devices process',
-  'cable/windowVisit.ts': 'step 9: the dial, in the devices process',
-  'device/deviceFleet.ts': 'step 9: the fleet, beside the dial',
-  'device/deviceLink.ts': 'step 9: the fleet, beside the dial',
-  'device/machineList.ts': 'step 9: the dial, in the devices process',
+  'cable/cableFleet.ts': D2,
+  'cable/cableFrame.ts': D2,
+  'cable/cableHost.ts': D2,
+  'cable/cableSession.ts': D2,
+  'cable/companionProtocol.ts': D2,
+  'cable/dialLog.ts': D2,
+  'cable/dialPortVerdicts.ts': D2,
+  'cable/fwPush.ts': D2,
+  'cable/machineFleet.ts': D2,
+  'cable/notificationRead.ts': D2,
+  'cable/passageCarry.ts': D2,
+  'cable/questionInbox.ts': D2,
+  'cable/serial.ts': D2,
+  'cable/usbConsoleUser.ts': D2,
+  'cable/voiceDraft.ts': D2,
+  'cable/windowForm.ts': D2,
+  'cable/windowRoute.ts': D2,
+  'cable/windowSelection.ts': D2,
+  'cable/windowVisit.ts': D2,
+  'device/deviceFleet.ts': D2,
+  'device/deviceLink.ts': D2,
+  'device/machineList.ts': 'the account\'s machine list, which /api/machines answers from and the trust group reads: with the account proxies (step 10)',
   'dsh/builtins.ts': 'the bundled harnesses are put in place by the core\'s start, which cli.js carries them for anyway; in the Store\'s lean process they cost a second copy (core/main.ts)',
   'dsh/catalog.ts': STORE_BYPASS,
   'dsh/install.ts': STORE_BYPASS,
@@ -303,7 +316,6 @@ const CORE_MAY_REACH: Record<string, string> = {
   'dsh/update.ts': STORE_BYPASS,
   'dsh/updates.ts': STORE_BYPASS,
   'lib/autonomous-device/dump.ts': 'step 10: the Wi-Fi device, into the devices process over the gateway',
-  'lib/autonomous-device/input.ts': 'step 9: the pane writer lock, into core/input.ts',
   'lib/autonomous-device/localApi.ts': 'step 10: the Wi-Fi device, into the devices process over the gateway',
   'lib/autonomous-device/overGateway.ts': 'step 10: the Wi-Fi device, into the devices process over the gateway',
   'lib/autonomous-device/parts.ts': 'step 10: the Wi-Fi device, into the devices process over the gateway',
@@ -321,8 +333,10 @@ const CORE_MAY_REACH: Record<string, string> = {
   'lib/sessionSearch/sessionTurns.ts': 'the handoff (lib/agentHandoff.ts), in the edge host once CoreApi gives it the stopped agents, recaps and discovery it reads',
   'lib/sessionSearch/transcript.ts': 'the readers of other engines\' sessions keep this helper: it moves beside them, out of search\'s folder',
   'lib/sessionSearch/turns.ts': 'the handoff (lib/agentHandoff.ts), in the edge host once CoreApi gives it the stopped agents, recaps and discovery it reads',
-  'services/fleet.ts': 'step 9: the fleet, beside the dial',
-  'services/fleetRouter.ts': 'step 9: the fleet, beside the dial',
+  'services/devices.ts': D2,
+  'services/devicesGuard.ts': D2,
+  'services/fleet.ts': D2,
+  'services/fleetRouter.ts': D2,
   'services/shell.ts': 'shell setup and launch receipts, in the edge host; only the argv launch stays in the core (#893)',
   'sharing/viewer.ts': 'the windows\' interactive viewers capture with it (lib/interactiveViewer.ts): headless Chrome belongs with the viewers\' process (plan, "Sharing")',
 }

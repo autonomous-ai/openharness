@@ -16,6 +16,7 @@ import type { CoreApi } from '../core/api.js'
 import { ACCOUNT_BACKEND_OFF, AGENT_ACTIONS_OFF, DAEMON_UNKNOWN, DELIVERIES_OFF, emptyPorts, LANE_OFF, resolveAgent, TERMINALS_OFF } from '../core/api.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcess } from './process.js'
+import { UNASKED } from './processCoreApi.js'
 import { startWorkspaces } from './workspaces.js'
 
 export interface WorkspacesServiceOptions {
@@ -46,6 +47,7 @@ export function workspacesCoreApi(
   return {
     dataDir,
     terminals: TERMINALS_OFF,
+    machine: UNASKED.machine,
     agents: {
       all: () => {
         const agents = view.inUse()
@@ -64,6 +66,7 @@ export function workspacesCoreApi(
       setRuntime: () => {},
       fork: async () => ({ ok: false, error: 'UNSUPPORTED' }),
       ...AGENT_ACTIONS_OFF,
+      activityText: UNASKED.activityText,
     },
     // The workspaces drive no agent: these are never asked of them.
     turns: { send: () => {}, stop: () => {}, recent: () => [], asks: () => [], ...DELIVERIES_OFF },
@@ -80,8 +83,9 @@ export function workspacesCoreApi(
       privateGridName: async () => null,
       machineName: () => null,
       ...ACCOUNT_BACKEND_OFF,
+      ...UNASKED.account,
     },
-    clients: { viewerChanged: () => {}, gridNamed: () => {}, gridModelsChanged: () => {}, dshInstallStatus: () => {}, windows: () => {}, observer: () => false },
+    clients: { viewerChanged: () => {}, gridNamed: () => {}, gridModelsChanged: () => {}, dshInstallStatus: () => {}, windows: () => {}, observer: () => false, ...UNASKED.clients },
     daemon: DAEMON_UNKNOWN,
   }
 }

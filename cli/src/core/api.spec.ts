@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { projectDisplayName, type RegisteredSession } from '../lib/registry.js'
-import { ACCOUNT_BACKEND_OFF, AGENT_ACTIONS_OFF, createCoreApi, DAEMON_UNKNOWN, DELIVERIES_OFF, emptyPorts, FLEET_FALLBACKS, LANE_OFF, LONG_ANSWERS, MODELS_OFF, MODELS_REQUESTS, MONITOR_OFF, OBSERVER_KEY_OFF, ORCHESTRATOR_FALLBACKS, resolveAgent, SHARING_FALLBACKS, TEAMS_FALLBACKS, TERMINALS_OFF, type CoreApiDeps } from './api.js'
-import { FAIL } from './serviceHost.js'
+import { ACCOUNT_BACKEND_OFF, AGENT_ACTIONS_OFF, createCoreApi, DAEMON_UNKNOWN, DELIVERIES_OFF, DEVICES_FALLBACKS, emptyPorts, LANE_OFF, LONG_ANSWERS, MODELS_OFF, MODELS_REQUESTS, MONITOR_OFF, OBSERVER_KEY_OFF, ORCHESTRATOR_FALLBACKS, resolveAgent, SHARING_FALLBACKS, TEAMS_FALLBACKS, TERMINALS_OFF, type CoreApiDeps } from './api.js'
+import { FAIL, readFallback } from './serviceHost.js'
 
 const row = (agentId: string) => ({ agentId, sessionId: `s-${agentId}`, engine: 'claude', cwd: '/work/app' }) as RegisteredSession
 
@@ -29,8 +29,8 @@ describe('the core API services stand on', () => {
     expect(resolveAgent(agents, 'nobody')).toBeUndefined()
   })
 
-  it('lists every agent, live then stopped, and names them as the apps do', async () => {
-    const deps: CoreApiDeps = {
+  /** The core's own pieces, as `createCoreApi` is handed them. */
+  const coreDeps = (): CoreApiDeps => ({
       dataDir: '/data',
       registry: {
         list: vi.fn(() => [row('live')]),
@@ -67,7 +67,21 @@ describe('the core API services stand on', () => {
       observer: vi.fn(() => true),
       turns: { send: vi.fn(), stop: vi.fn(), recent: vi.fn(() => []), asks: vi.fn(() => []), deliver: vi.fn(), cancelDelivery: vi.fn(() => true), onDelivery: vi.fn(() => () => {}) },
       questions: { answer: vi.fn(), answerReviewed: vi.fn(async () => true) },
-    }
+      machine: { id: vi.fn(() => 'machine-1'), computerId: vi.fn(() => 'computer-1'), name: vi.fn(() => 'Studio') },
+      activityText: vi.fn(async () => 'Reading 3 files'),
+      signedIn: vi.fn(() => true),
+      environment: vi.fn(() => 'prod'),
+      machines: vi.fn(async () => ({ status: 200, body: {} })),
+      sendLocal: vi.fn(),
+      sendToWindow: vi.fn(() => true),
+      hasWindow: vi.fn(() => true),
+      devicesChanged: vi.fn(),
+      dialWatching: vi.fn(),
+      log: vi.fn(),
+    })
+
+  it('lists every agent, live then stopped, and names them as the apps do', async () => {
+    const deps = coreDeps()
     const core = createCoreApi(deps)
     expect(core.dataDir).toBe('/data')
     expect(await core.terminals.open({ argv: ['/bin/zsh'], cwd: '/work' })).toEqual({ ok: false, error: 'SERVICE_UNAVAILABLE' })
@@ -111,21 +125,50 @@ describe('the core API services stand on', () => {
     expect(core.daemon).toBe(deps.daemon)
     expect(core.turns).toBe(deps.turns)
     expect(core.questions).toBe(deps.questions)
+    // What the devices ask of the core: this computer, the sign-in, a pane's footer, the windows.
+    expect(core.machine).toBe(deps.machine)
+    expect(core.agents.activityText).toBe(deps.activityText)
+    expect(core.account.signedIn).toBe(deps.signedIn)
+    expect(core.account.environment).toBe(deps.environment)
+    expect(core.account.machines).toBe(deps.machines)
+    expect(core.clients.hasWindow).toBe(deps.hasWindow)
+    expect(core.clients.devicesChanged).toBe(deps.devicesChanged)
+    expect(core.clients.dialWatching).toBe(deps.dialWatching)
   })
 
-  it('answers ⌘K, when the fleet fails, with no agent picked and nothing sent, saying why', () => {
-    expect(FLEET_FALLBACKS.routeSend).toEqual({ ok: false, machine: '', reason: 'the fleet service is unavailable' })
-    expect(FLEET_FALLBACKS.stop).toBeUndefined()
-    // No cards, and nothing to stop hearing.
-    expect((FLEET_FALLBACKS.onEvent as () => void)()).toBeUndefined()
+  it('lets the devices put their own frames in front of the windows, and no other', () => {
+    const deps = coreDeps()
+    const core = createCoreApi(deps)
+    core.clients.sendLocal({ type: 'dial_focus', payload: { agentId: 'a' } })
+    expect(deps.sendLocal).toHaveBeenCalledWith({ type: 'dial_focus', payload: { agentId: 'a' } })
+    expect(core.clients.sendToWindow('window-1', { type: 'dial_form', payload: {} })).toBe(true)
+    expect(deps.sendToWindow).toHaveBeenCalledWith('window-1', { type: 'dial_form', payload: {} })
+    // A devices process speaks as a service: what it may show a person is decided here, frame by frame.
+    core.clients.sendLocal({ type: 'agent_deleted', payload: {} } as unknown as Parameters<typeof core.clients.sendLocal>[0])
+    expect(core.clients.sendToWindow('window-1', { type: 'dial_focus', payload: {} } as unknown as Parameters<typeof core.clients.sendToWindow>[1])).toBe(false)
+    core.clients.sendLocal(null as unknown as Parameters<typeof core.clients.sendLocal>[0])
+    expect(deps.sendLocal).toHaveBeenCalledTimes(1)
+    expect(deps.sendToWindow).toHaveBeenCalledTimes(1)
+    expect(deps.log).toHaveBeenCalledWith('[services] the devices sent a window agent_deleted, which is not theirs to send')
+    expect(deps.log).toHaveBeenCalledWith('[services] the devices sent a window dial_focus, which is not theirs to send')
+    // Said to the console when the core gives no log of its own.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    createCoreApi({ ...deps, log: undefined }).clients.sendLocal({ type: 'nothing' } as unknown as Parameters<typeof core.clients.sendLocal>[0])
+    expect(warn).toHaveBeenCalledWith('[services] the devices sent a window nothing, which is not theirs to send')
+    warn.mockRestore()
   })
 
-  it('fails the dial\'s routing, when the fleet fails, rather than making an answer up', () => {
-    // The dial routes this computer by itself then (cable/cableHost.ts): a made-up answer read as the
-    // fleet's would send a turn nowhere and say it went.
-    for (const member of ['agentTotal', 'describe', 'machineOf', 'knows', 'isLocalAgent', 'sendTurn', 'hasLane', 'release'] as const) {
-      expect(FLEET_FALLBACKS[member], member).toBe(FAIL)
+  it('answers ⌘K, when the devices fail, with no agent picked and nothing sent, saying why', async () => {
+    const reason = 'the devices service is unavailable'
+    expect(await (readFallback(DEVICES_FALLBACKS.routeTask).value)).toMatchObject({ agentId: '', reason, candidates: [] })
+    expect(readFallback(DEVICES_FALLBACKS.routeSend)).toEqual({ deferred: true, value: { ok: false, machine: '', reason } })
+    // The Wi-Fi device finds no desk to walk; the dial and the window bridges hear nothing.
+    expect(readFallback(DEVICES_FALLBACKS.stepFocus).value).toBe('no_agents')
+    for (const member of ['card', 'desk', 'swarms', 'unread', 'appFocus', 'seen', 'settings', 'windowFocus', 'windowReply', 'voiceReply', 'windowGone', 'scroll', 'engines', 'commanders'] as const) {
+      expect(DEVICES_FALLBACKS[member], member).toBeUndefined()
     }
+    expect(readFallback(DEVICES_FALLBACKS.stop)).toEqual({ deferred: true, value: undefined })
+    expect(FAIL).toBeTypeOf('symbol')
   })
 
   it('falls back, when the teams fail, to an undo that has nothing to undo, and holds no pane for a team', () => {
@@ -135,7 +178,7 @@ describe('the core API services stand on', () => {
   })
 
   it('starts with every port empty: a service fills its own when it starts', () => {
-    expect(emptyPorts()).toEqual({ search: null, viewers: null, models: null, workspaces: null, teams: null, fleet: null, monitor: null, orchestrator: null, sharing: null })
+    expect(emptyPorts()).toEqual({ search: null, viewers: null, models: null, workspaces: null, teams: null, devices: null, monitor: null, orchestrator: null, sharing: null })
     expect(emptyPorts()).not.toBe(emptyPorts())
   })
 

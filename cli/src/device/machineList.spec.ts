@@ -3,7 +3,7 @@
 // `local` is derived, not declared, and getting it wrong is invisible: every machine — including this
 // computer's own — silently reads as remote, so the dial's own row goes missing and the daemon opens a
 // cloud socket to reach agents that are in this very process.
-import { mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
@@ -130,8 +130,20 @@ describe('MachineListCache', () => {
   it('does not reject when the response is nonsense', async () => {
     const log = vi.fn()
     const cache = new MachineListCache(async () => ({ status: 200, body: { nope: true } }), () => 'z', log, DIR())
-    await expect(cache.refresh()).resolves.toBeUndefined()
+    // It says what it read, as it read it (the devices' copy reads the core's this way), and keeps its rows.
+    await expect(cache.refresh()).resolves.toEqual({ status: 200, body: { nope: true } })
     expect(cache.list().source).toBe('local')
+    // A read that threw has nothing to say.
+    const down = new MachineListCache(async () => { throw new Error('offline') }, () => 'z', log, DIR())
+    await expect(down.refresh()).resolves.toBeNull()
+  })
+
+  it('writes no file when it is a copy of another list', async () => {
+    const dir = DIR()
+    const copy = new MachineListCache(async () => ({ status: 200, body: { machines: [{ machineId: 'm1', name: 'Mine' }] } }), () => 'z', vi.fn(), dir, () => null, false)
+    await copy.refresh()
+    expect(copy.list().machines).toHaveLength(1)
+    expect(existsSync(join(dir, 'machines.json'))).toBe(false)
   })
 })
 

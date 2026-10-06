@@ -34,6 +34,14 @@ export function later<T>(value: T): Later<T> {
   return { [LATER]: value }
 }
 
+/** A fallback read: whether its member returns a promise (`later`), and what it answers. A service that
+ *  guards parts of its own the way this host guards services reads its fallbacks with this
+ *  (services/devicesGuard.ts). */
+export function readFallback(fallback: unknown): { deferred: boolean; value: unknown } {
+  const deferred = typeof fallback === 'object' && fallback !== null && LATER in fallback
+  return { deferred, value: deferred ? (fallback as Later<unknown>)[LATER] : fallback }
+}
+
 /** For every member of a port, what the core gets when that member fails or its service is off. */
 export type PortFallbacks<P> = {
   [K in keyof P]-?: P[K] extends (...args: never[]) => infer R
@@ -112,8 +120,7 @@ export function createServiceHost(ports: CorePorts, options: ServiceHostOptions 
   const guard = <K extends PortName>(name: K, port: Port<K>, fallbacks: PortFallbacks<Port<K>>): Port<K> => {
     const guarded: Record<string, Member> = {}
     for (const [member, fallback] of Object.entries(fallbacks) as Array<[string, unknown]>) {
-      const deferred = typeof fallback === 'object' && fallback !== null && LATER in fallback
-      const value = deferred ? (fallback as Later<unknown>)[LATER] : fallback
+      const { deferred, value } = readFallback(fallback)
       const answer = (cause?: unknown): unknown => {
         if (value === FAIL) {
           const error = new ServiceUnavailableError(name, cause)

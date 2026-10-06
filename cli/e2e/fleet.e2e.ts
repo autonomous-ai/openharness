@@ -188,7 +188,7 @@ describe('two machines in one fleet', () => {
     const started = onA.next(isTurn('turn_started', onlyA), 30_000, 'turn_started on A')
     dial.send({ t: 'turn.send', agentId: onlyA, text: 'from the dial on a' })
     expect((await started).payload?.userMessage).toBe('from the dial on a')
-    expect(a.daemon.log()).toContain('[services] fleet.sendTurn failed · injected fault: fleet.sendTurn')
+    expect(a.daemon.log()).toContain('[devices] fleet.sendTurn failed · injected fault: fleet.sendTurn')
     // ⌘K's own send is another member, and B is still reached through it.
     const startedB = onB.next(isTurn('turn_started', agentId), 30_000, 'turn_started on B')
     expect(await routeSend(onA, agentId, 'cmd-k still reaches b')).toMatchObject({ ok: true })
@@ -225,7 +225,7 @@ describe('two machines in one fleet', () => {
       const startedB = onB.next(isTurn('turn_started', onlyB), 30_000, 'turn_started on B')
       onB.send('message', { agentId: onlyB, content: 'b runs on' })
       expect((await startedB).payload?.userMessage).toBe('b runs on')
-      expect(a.daemon.log()).toContain(faults === 'fleet' ? '[services] fleet did not start · injected fault: fleet' : '[services] fleet.routeSend failed · injected fault: fleet.routeSend')
+      expect(a.daemon.log()).toContain(faults === 'fleet' ? '[devices] fleet did not start · injected fault: fleet' : '[devices] fleet.routeSend failed · injected fault: fleet.routeSend')
       expect(a.daemon.coresStarted()).toBe(1)
       onA.close()
       onB.close()
