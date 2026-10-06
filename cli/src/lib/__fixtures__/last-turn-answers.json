@@ -1,0 +1,42 @@
+{
+  "claude": {
+    "userMessage": "Chạy 3 sub-agent SONG SONG (launch cả 3 cùng một lượt), mỗi agent một việc độc lập rồi báo cáo lại:\n- Agent 1: Report giá coin BTC\n- Agent 2: Report giá coin ETH\n- Agent 3: Report giá coin BNB",
+    "assistantText": "Đã spawn 3 sub-agent song song cho BTC, ETH, BNB. Sẽ báo kết quả khi cả ba hoàn thành.\n\nSub-agent ETH xong: **~$1,860–$1,870** (~$225.36 tỷ vốn hóa). Đang chờ BTC, BNB.\n\nSub-agent BNB xong: **~$590.04** (+0.72% 24h). Chỉ còn chờ BTC.\n\nCả 3 sub-agent đã hoàn thành. Tổng hợp giá coin:\n\n| Coin | Giá (USD) | Thay đổi 24h | Vốn hóa thị trường |\n|---|---|---|---|\n| **BTC** | ~$63,500–$63,900 | +2.1% | ~$1,281 tỷ (#1) |\n| **ETH** | ~$1,860–$1,870 | ~+0.5–1.2% (chênh lệch giữa sàn) | ~$225.36 tỷ (#2) |\n| **BNB** | ~$590.04 | +0.72% | ~$78.57 tỷ (#4) |"
+  },
+  "codex": {
+    "userMessage": "what changed?",
+    "assistantText": "Two files changed."
+  },
+  "cursor": {
+    "userMessage": "hi",
+    "assistantText": "Hi, what next?"
+  },
+  "pi": {
+    "userMessage": "list the files here",
+    "assistantText": "DONE"
+  },
+  "commandcode": {
+    "userMessage": "list the files",
+    "assistantText": "a.txt and b.txt"
+  },
+  "agy": {
+    "userMessage": "Run three sub-agents in parallel (launching all three simultaneously), with each agent performing an independent task and reporting back: Agent 1: Report BTC price, Agent 2: Report ETH price,,Agent 3: Report BNB price",
+    "assistantText": "I have launched all three sub-agents in parallel:\n\n1. **BTC Price Reporter** (`477d6fe5-adf9-44b4-9388-14a8aea07fe7`): Fetching Bitcoin (BTC) price.\n2. **ETH Price Reporter** (`370a6593-c986-4d83-aa58-963937d78396`): Fetching Ethereum (ETH) price.\n3. **BNB Price Reporter** (`8bf2b1a6-a22e-4af9-ae5d-0af8c209b296`): Fetching Binance Coin (BNB) price.\n\nI will compile and present their reports as soon as they complete.\n\nAgent 1 has reported back. Waiting for Agent 2 (ETH) and Agent 3 (BNB) to finish...\n\nAgent 2 has reported back. Waiting for Agent 3 (BNB) to finish...\n\nAll three sub-agents have completed their tasks and reported back with the latest market prices:\n\n| Asset | Sub-Agent | Current Price (USD) | Additional Details |\n| :--- | :--- | :--- | :--- |\n| **Bitcoin (BTC)** | [Agent 1](conversation://477d6fe5-adf9-44b4-9388-14a8aea07fe7) | **~$64,100 – $64,300** | Range across major exchanges (CoinMarketCap, TradingView, Kraken) |\n| **Ethereum (ETH)** | [Agent 2](conversation://370a6593-c986-4d83-aa58-963937d78396) | **~$1,896** | 24h range ~$1,895 – $1,900; Market cap ~$228B |\n| **Binance Coin (BNB)** | [Agent 3](conversation://8bf2b1a6-a22e-4af9-ae5d-0af8c209b296) | **~$603.00** | 24h range ~$599 – $605; Market cap ~$80B |"
+  },
+  "amp": {
+    "userMessage": "cat a.txt",
+    "assistantText": "```\nhello\n```"
+  },
+  "copilot": {
+    "userMessage": "Make a todo list with 3 items for tidying this folder using your todo tool, then read note.txt and tell me what it says.",
+    "assistantText": "Inserting three tidy todos into the session todo DB and reading /private/tmp/copilot-e2e/note.txt to report its contents. Running both operations in parallel.\n\nTodos added:\n- tidy-1: Sort files (pending)\n- tidy-2: Clean tmp files (pending)\n- tidy-3: Organize notes (pending)\n\nContents of note.txt:\n\"1. DONE\""
+  },
+  "grok": {
+    "userMessage": "Use the todo tool to create exactly two items: inspect colors and report result. Mark inspect colors in progress. Then spawn exactly one explore subagent to read /workspace/colors.txt and report its line count. Wait for that subagent to finish. Mark both todos complete, then answer with the line count and the exact tools you used.",
+    "assistantText": "I'll create the two todos, start the inspect item, then spawn an explore subagent to count lines in `colors.txt`.\n\n**Line count:** 3\n\n**Tools used:**\n1. `todo_write` — created the two todos and marked “inspect colors” in progress  \n2. `spawn_subagent` — launched one explore subagent to read `colors.txt`  \n3. `get_command_or_subagent_output` — waited for the subagent to finish  \n4. `todo_write` — marked both todos complete"
+  },
+  "muse": {
+    "userMessage": "Dùng todo list để lên kế hoạch rồi thực hiện: Report giá coin BTC, ETH, BNB. Cập nhật trạng thái từng task khi làm.",
+    "assistantText": "Đã dùng todo list và hoàn thành từng task — cập nhật trạng thái real-time:\n\n* ✅ Lập kế hoạch report giá BTC, ETH, BNB\n* ✅ Report giá BTC hôm nay\n* ✅ Report giá ETH hôm nay\n* ✅ Report giá BNB hôm nay\n* ✅ Tổng hợp báo cáo 3 coin\n\n### Báo cáo giá coin hôm nay — 06/08/2026\n\n| Coin | Giá hiện tại (USD) | Biến động | Nguồn | Thời gian cập nhật |\n|---|---|---|---|---|\n| **BTC** | **$62,837 - $64,476** <br> • StatMuse: **$62,837.40** (latest), August avg $62,813.67 (H $63,714 / L $62,233) <br> • Walletinvestor: **$64,476.27** / BTC (04:02 GMT 06/08) | YTD -27.5% , volume ~29B (Aug) | [StatMuse](https://www.statmuse.com/money/ask/bitcoin-price-history-2026-by-month) + [Walletinvestor](https://walletinvestor.com/converter/bitcoin/usd/2026) | 06/08/2026 04:02 GMT |\n| **ETH** | **$1,909.70** (CoinGecko $1,905.70) | +2.00% 24h, -0.67% 7d, Vol 8.76B, ATH $4,946 (-61.4%), Cap 230B | [Altrady](https://www.altrady.com/cryptocurrencies/eth-price-usd) + [CoinGecko](https://coingecko.com/en/coins/ethereum/prediction) | 06/08/2026 |\n| **BNB** | **$592.92** (Walletinvestor $595.70) | -1.80% 24h, +3.00% 7d, Vol 639M, ATH $1,369 (-56.7%), Cap 78.9B, Supply 133M/200M | [Altrady](https://www.altrady.com/cryptocurrencies/bnb-price-usd) + [Walletinvestor](https://walletinvestor.com/converter/usd/bnb/2026) | 06/08/2026 |\n\n**Nhận định nhanh:**\n* BTC quanh **$63k** — thấp hơn đỉnh năm ($73k-82k tháng 5-6), sideway đầu tháng 8\n* ETH quanh **$1.91k** — đang hồi +2% trong ngày\n* BNB quanh **$593** — giảm nhẹ trong ngày nhưng +3% tuần\n\n> Giá biến động real-time, check trực tiếp trên Binance / CoinGecko / CoinMarketCap để khớp lệnh."
+  }
+}
