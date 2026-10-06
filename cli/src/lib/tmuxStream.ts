@@ -1,6 +1,7 @@
 import { execFile, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { patientDeadline } from './patientExec.js'
 import { pasteRawIntoTmux } from './tmux.js'
+import { enterTmuxRoom, inTmuxRoom, needsControlGate } from './tmuxControlGate.js'
 import { tmuxFeatures, tmuxFeaturesOf, type TmuxFeatures } from './tmuxVersion.js'
 import {
   TERMINAL_ACTION_SUCCEEDED,
@@ -23,6 +24,12 @@ const MAX_ROWS = 120
 // line built from 8192 such bytes and rejects 16384 with `%error`, so this leaves a 4x margin.
 const INPUT_CHUNK_BYTES = 2 * 1024
 const CONTROL_COMMAND_TIMEOUT_MS = 3_000
+/** The longest a control client keeps every other one and every paste waiting while it attaches, on a
+ *  tmux before 3.7 (tmuxControlGate.ts): tmux answers an attach in milliseconds, and one that has not in
+ *  this long has its first command time out and its stream closed anyway. */
+const ATTACH_HOLD_MAX_MS = CONTROL_COMMAND_TIMEOUT_MS
+/** How long a going control client gets to exit, after `detach-client` and again after SIGTERM. */
+const CLOSE_EXIT_WAIT_MS = 500
 const SNAPSHOT_BUFFER_MAX_BYTES = 2 * 1024 * 1024
 const SNAPSHOT_QUIET_MS = 8
 const SNAPSHOT_QUIET_MAX_MS = 40
@@ -510,6 +517,13 @@ export class TmuxControlStream implements TerminalStreamHandle<TmuxRuntimeRef> {
   private snapshotPostCutBytes = 0
   private snapshotLastOutputAt = 0
   private lastTuiScrollAt = 0
+  private settleAttach: () => void = () => {}
+  /**
+   * Settles once tmux has answered this client's attach (its first `%end`), or the client is gone. From
+   * then on the server holds the state it writes this client's notifications into: on a tmux before 3.7
+   * one sent before then crashed the server (tmuxControlGate.ts).
+   */
+  readonly attached: Promise<void> = new Promise((resolve) => { this.settleAttach = resolve })
 
   private constructor(
     paneId: string,
@@ -554,6 +568,9 @@ export class TmuxControlStream implements TerminalStreamHandle<TmuxRuntimeRef> {
     // the flag was a usage error, the client exited at once, and no terminal opened on 3.1 or older.
     // Nothing is lost there: a control client that never sets its own size counts for none (`resize`).
     const flags = features.clientFlags ? ['-f', 'ignore-size'] : []
+    // On a tmux before 3.7, nothing tmux tells every control client may happen while this one attaches:
+    // it crashed the server, and every agent with it (tmuxControlGate.ts).
+    const leave = await enterTmuxRoom('attach', features)
     const child = spawn('tmux', ['-C', 'attach-session', ...flags, '-t', paneId], {
       stdio: ['pipe', 'pipe', 'pipe'],
     })
@@ -562,8 +579,17 @@ export class TmuxControlStream implements TerminalStreamHandle<TmuxRuntimeRef> {
       child.once('spawn', () => { if (!settled) { settled = true; resolve(true) } })
       child.once('error', () => { if (!settled) { settled = true; resolve(false) } })
     })
-    if (!spawned) return { state: 'failed', reason: 'tmux control client could not start' }
+    if (!spawned) {
+      leave()
+      return { state: 'failed', reason: 'tmux control client could not start' }
+    }
     const stream = new TmuxControlStream(paneId, child, sink, readOnly, features)
+    const held = setTimeout(leave, ATTACH_HOLD_MAX_MS)
+    held.unref()
+    void stream.attached.then(() => {
+      clearTimeout(held)
+      leave()
+    })
     const resized = readOnly ? TERMINAL_ACTION_SUCCEEDED : await stream.resize(size)
     if (resized.state !== 'succeeded') {
       await stream.close()
@@ -600,6 +626,7 @@ export class TmuxControlStream implements TerminalStreamHandle<TmuxRuntimeRef> {
     if (completed) {
       if (!this.commands.isReady && this.commands.idle) {
         this.commands.markReady()
+        this.settleAttach()
         return
       }
       this.commands.handleCompleted(completed[1] === 'end' ? 'end' : 'error', completed[2])
@@ -656,6 +683,7 @@ export class TmuxControlStream implements TerminalStreamHandle<TmuxRuntimeRef> {
   }
 
   private notifyClose(reason: string): void {
+    this.settleAttach()
     if (this.closeNotified) return
     this.closeNotified = true
     this.failControlCommands()
@@ -879,14 +907,29 @@ export class TmuxControlStream implements TerminalStreamHandle<TmuxRuntimeRef> {
     // makes agent switching shrink and immediately re-expand the pane; TUIs
     // such as Grok preserve those intermediate repaint fragments in the live
     // screen. The next controller will resize only if its grid truly differs.
-    if (this.child.stdin.writable) {
-      try { this.child.stdin.write('detach-client\n') } catch { /* ignore */ }
-    }
-    const exited = await new Promise<boolean>((resolve) => {
+    //
+    // A control client going is a notification to every other (`%client-detached`), so on a tmux before
+    // 3.7 it goes in the gate's other room from one that is attaching (tmuxControlGate.ts).
+    await inTmuxRoom('notify', async () => {
+      if (this.child.stdin.writable) {
+        try { this.child.stdin.write('detach-client\n') } catch { /* ignore */ }
+      }
+      if (!(await this.exited())) {
+        this.child.kill('SIGTERM')
+        await this.exited()
+      }
+      // tmux tells the others when it reads this client's socket close, which comes after the client
+      // has exited. A command another client sends after that is answered only once tmux has read it,
+      // so the room is not left while that notification may still be on its way.
+      if (needsControlGate(this.features)) await execTmux(['display-message', '-p', '#{pid}'])
+    }, this.features)
+  }
+
+  private exited(): Promise<boolean> {
+    return new Promise<boolean>((resolve) => {
       if (this.child.exitCode != null || this.child.signalCode != null) { resolve(true); return }
-      const timer = setTimeout(() => resolve(false), 500)
+      const timer = setTimeout(() => resolve(false), CLOSE_EXIT_WAIT_MS)
       this.child.once('close', () => { clearTimeout(timer); resolve(true) })
     })
-    if (!exited) this.child.kill('SIGTERM')
   }
 }

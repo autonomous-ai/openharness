@@ -19,6 +19,7 @@ import { psEnv } from './childLocale.js'
 import { nativeProcessImages } from './nativeProcessImages.js'
 import { neutralizePasteControls } from './pasteText.js'
 import { patientExec } from './patientExec.js'
+import { inTmuxRoom } from './tmuxControlGate.js'
 import { tmuxFeatures, type TmuxFeatures } from './tmuxVersion.js'
 export { captureTmuxPane, tmuxCaptureArgs } from './tmuxCapture.js'
 
@@ -1337,8 +1338,15 @@ function tmuxDeleteBuffer(name: string): Promise<void> {
 
 /** Paste text from a uniquely named stdin-loaded buffer so its bytes never enter argv or errors. A
  *  bracketed paste carries text and nothing else (pasteText.ts), not even its own end marker; an
- *  unbracketed one is typing, and is typed as it was given. */
-async function tmuxPasteText(pane: string, content: string, bracketed: boolean): Promise<boolean> {
+ *  unbracketed one is typing, and is typed as it was given.
+ *
+ *  A buffer set and deleted is a notification to every control client, which on a tmux before 3.7
+ *  crashed the server while one was attaching: the paste waits for none to be (tmuxControlGate.ts). */
+function tmuxPasteText(pane: string, content: string, bracketed: boolean): Promise<boolean> {
+  return inTmuxRoom('notify', () => pasteThroughBuffer(pane, content, bracketed))
+}
+
+async function pasteThroughBuffer(pane: string, content: string, bracketed: boolean): Promise<boolean> {
   const bufferName = `machinemsg-${process.pid}-${++injectBufferSequence}`
   if (!(await tmuxLoadBuffer(bufferName, bracketed ? neutralizePasteControls(content) : content))) {
     await tmuxDeleteBuffer(bufferName)
