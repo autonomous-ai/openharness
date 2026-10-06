@@ -403,7 +403,8 @@ On a clean x86 Linux checkout, build a bundle with:
 
 ```sh
 make -C os runtime
-python3 os/tools/build-package.py --runtime os/work/runtime --output os/work/my-update --development
+make -C os compositor
+python3 os/tools/build-package.py --runtime os/work/runtime --compositor os/work/compositor --output os/work/my-update --development
 ```
 
 The bundle identifies the source commit, architecture, required base image and
