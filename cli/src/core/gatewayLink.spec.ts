@@ -53,7 +53,6 @@ describe('the gateway in its own process, as the core sees it', () => {
     link.port.connect()
     link.port.holdRequests()
     link.port.localClients(2)
-    link.ops.dashboardPort(41000)
     link.ops.wifiService(true)
     link.ops.account({ machineId: 'm1', signIn: null })
     link.ops.reachable(['m2'])
@@ -62,7 +61,7 @@ describe('the gateway in its own process, as the core sees it', () => {
     expect(kinds()).toEqual(['start'])
     expect(sent[0]).toEqual({
       kind: 'start', machineId: 'm1', computerId: 'c1', autonomousEnv: 'prod', signedIn: true,
-      requestsOpen: false, dial: 'connect', localClients: 2, dashboardPort: 41000, wifiService: true, reachable: ['m2'],
+      requestsOpen: false, dial: 'connect', localClients: 2, wifiService: true, reachable: ['m2'],
     })
     link.port.openRequests()
     link.port.serveThisComputerOnly()

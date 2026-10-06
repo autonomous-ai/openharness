@@ -270,7 +270,11 @@ const SERVICE_MAY_IMPORT: Record<string, string> = {
 // receipts and streams and its Store preparations run with the dials (services/wifi.ts, in the devices'
 // process; the core's side is core/wifi.ts and core/wifiLink.ts), and with them went the Store's installs
 // and catalog, which only the device's preparations reached from the core.
-const CORE_CLOSURE_BUDGET = 75_850
+//
+// Then at 75,456 in 344, from 75,746 in 345: the web dashboard (webui.ts, `GET /`, its log tail and stop
+// button, and its port in `e2e_status`) is deleted. Nothing opened it: no app, website, script or the
+// backend, and the web client that linked to it retired with the browser setup links (#348).
+const CORE_CLOSURE_BUDGET = 75_560
 
 /** What is not the core's, by path: each goes to a service or its own process, in the plan's order. */
 const EDGE: RegExp[] = [

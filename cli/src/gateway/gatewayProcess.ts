@@ -101,7 +101,6 @@ export function runGatewayService(options: GatewayServiceOptions): ServiceProces
     // Held first, so that nothing the link brings in is answered before the core is ready.
     if (payload.requestsOpen === false) started.port.holdRequests()
     started.port.localClients(Number(payload.localClients) || 0)
-    if (typeof payload.dashboardPort === 'number') started.ops.dashboardPort(payload.dashboardPort)
     if (Array.isArray(payload.reachable)) started.ops.reachable(payload.reachable as string[])
     if (payload.wifiService === true) started.ops.wifiService(true)
     if (payload.dial === 'connect') started.port.connect()
@@ -174,7 +173,6 @@ export function runGatewayService(options: GatewayServiceOptions): ServiceProces
       case 'localFrame': void port.local(connId, record(payload.frame)); return
       case 'device': port.device(connId, text(payload.type), record(payload.payload)); return
       case 'deviceClient': port.deviceClient(connId, typeof payload.identity === 'string' ? payload.identity : null); return
-      case 'dashboardPort': ops.dashboardPort(Number(payload.port)); return
       case 'wifiService': ops.wifiService(payload.on === true); return
       case 'revokeIdentity': ops.revokeIdentity(text(payload.identity)); return
       case 'account': ops.account(payload.account as GatewayAccount); return

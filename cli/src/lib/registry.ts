@@ -2027,8 +2027,8 @@ class Registry {
    * the caller — a phone and a laptop whose clocks disagree would otherwise order the same agents
    * differently, which is the one thing this field exists to prevent.
    *
-   * `updatedAt` is left alone on purpose. That is the row's bookkeeping (the webui's "when" column,
-   * `session_get`'s timestamp), and looking at an agent changes nothing about the agent. The save
+   * `updatedAt` is left alone on purpose. That is the row's bookkeeping (`session_get`'s timestamp),
+   * and looking at an agent changes nothing about the agent. The save
    * still happens: a row is written whenever its bytes differ from the last write, whichever field
    * moved.
    */

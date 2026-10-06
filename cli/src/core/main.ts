@@ -1610,9 +1610,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   }
 
 
-  // Local dashboard (GET /api/status): adapter health + computer fingerprint + local pairings. It
-  // deliberately does NOT expose chat/transcripts — those live in the cloud web (WEB_URL/commander). The
-  // fingerprint and the pairings are the gateway's, asked for each time (bounded: core/gatewayLink.ts).
+  // The daemon's status (GET /api/status, read by `harness status`, the desktop's discovery and scripts):
+  // health, the computer's fingerprint and its local pairings. It deliberately does NOT expose chat or
+  // transcripts. The fingerprint and the pairings are the gateway's, asked for each time (bounded:
+  // core/gatewayLink.ts).
   const statusBody = async (relay: GatewayStatus): Promise<Record<string, unknown>> => ({
       machineId: backend.machineId,
       computerId: computerId(),
@@ -1759,10 +1760,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     onDevicesDismiss: (body) => gatewayOps.devicesDismiss(body),
     onDevicesRebaseline: (confirm, head) => gatewayOps.devicesRebaseline(confirm, head),
     onStatus: async () => statusBody(await gatewayOps.status()),
-    onLogs: () => {
-      try { return readFileSync(LOG_FILE, 'utf-8').split('\n').slice(-120).join('\n') } catch { return '' }
-    },
-    onStop: () => { setTimeout(() => process.kill(process.pid, 'SIGTERM'), 50) }, // let the 200 flush first
     onMachinesList: () => machinesListWithFallback(),
     onMachineRename: (machineId, name) => proxyBackend('PATCH', `/api/machines/${encodeURIComponent(machineId)}`, { name }),
     onMachineDelete: (machineId) => proxyBackend('DELETE', `/api/machines/${encodeURIComponent(machineId)}`),
@@ -1921,8 +1918,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   localWsServerRef = localWsServer
   // Every engine's hooks, pointed at the port the local server actually bound (core/engines/hooks.ts).
   if (!env.DISABLE_HOOK_INSTALL) installEngineHooks(hookPort, { only: env.HOOK_INSTALL_ENGINES, loginShell: loginShellEnvPromise })
-  gatewayOps.dashboardPort(hookPort) // surfaced to the web (e2e_status) so it can link here to approve
-  console.log(`[cli] local dashboard → http://127.0.0.1:${hookPort}`)
 
   // Each transcript line, through its engine's normalizer, into the funnel (core/transcripts/ingest.ts).
   const ingest = createIngest({

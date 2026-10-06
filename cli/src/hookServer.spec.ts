@@ -444,42 +444,52 @@ describe('requests must name this server', () => {
 
   it('refuses every route, reads included, when Host is not a loopback name for this port', async () => {
     const onStatus = vi.fn(() => ({ ok: true }))
-    const onLogs = vi.fn(() => 'secret log')
-    const { base } = await start({ onStatus, onLogs })
+    const { base } = await start({ onStatus })
     const evil = { host: 'rebind.evil.example:' + new URL(base).port }
     for (const [method, path, extra] of [
-      ['GET', '/api/status', {}], ['GET', '/api/logs', {}], ['GET', '/', {}], ['GET', '/api/machines', {}],
-      ['POST', '/api/remote-password/set', { 'x-adapter-local': '1' }], ['POST', '/api/stop', { 'x-adapter-local': '1' }],
+      ['GET', '/api/status', {}], ['GET', '/', {}], ['GET', '/api/machines', {}],
+      ['POST', '/api/remote-password/set', { 'x-adapter-local': '1' }], ['POST', '/api/group/sync', { 'x-adapter-local': '1' }],
     ] as const) {
       expect(await send(base, method, path, { ...evil, ...extra }), `${method} ${path}`).toBe(403)
     }
     expect(onStatus).not.toHaveBeenCalled()
-    expect(onLogs).not.toHaveBeenCalled()
+  })
+
+  it('serves no web dashboard: its page, log tail and stop button are gone', async () => {
+    // Nothing opened the page (no app, website, script or the backend), and the web client that linked to
+    // it retired with the browser setup links (#348). `harness stop` stops the daemon by its pid.
+    const { base } = await start({ onStatus: () => ({ ok: true }) })
+    for (const [method, path] of [['GET', '/'], ['GET', '/index.html'], ['GET', '/api/logs'], ['POST', '/api/stop']] as const) {
+      expect(await send(base, method, path, { 'x-adapter-local': '1' }), `${method} ${path}`).toBe(404)
+    }
   })
 
   it('answers every request even when its handler throws, instead of leaving the caller waiting', async () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
-    const onStop = vi.fn(() => { throw new Error('stop failed after the answer') })
-    const { base } = await start({
-      onStatus: async () => { throw new Error('status read failed') },
-      onLogs: () => { throw 'log file gone' },
-      onStop,
+    let failing: 'read' | 'body' = 'read'
+    const { base, headers } = await start({
+      // A status that cannot be read, then one that cannot be written once its headers went out.
+      onStatus: async () => { if (failing === 'read') throw new Error('status read failed'); return { n: 1n } },
+      // A hook told "pending" before its resolution failed.
+      resolveHookAgent: async ({ onWait }) => { onWait?.(); throw 'resolution failed after the answer' },
     })
     // Before the answer: a 500 the caller can act on, at once.
     const status = await fetch(`${base}/api/status`)
     expect(status.status).toBe(500)
     expect(await status.json()).toEqual({ error: 'INTERNAL' })
     // After the headers went out: the response is ended, not left open.
-    const logs = await fetch(`${base}/api/logs`)
-    expect(logs.status).toBe(200)
-    expect(await logs.text()).toBe('')
+    failing = 'body'
+    const unwritable = await fetch(`${base}/api/status`)
+    expect(unwritable.status).toBe(200)
+    expect(await unwritable.text()).toBe('')
     // After the response ended: nothing more to send, and nothing breaks.
-    const stop = await fetch(`${base}/api/stop`, { method: 'POST', headers: { 'x-adapter-local': '1' } })
-    expect(await stop.json()).toEqual({ ok: true })
-    await vi.waitFor(() => expect(onStop).toHaveBeenCalled())
+    const hook = await fetch(`${base}/api/hook/session-start`, {
+      method: 'POST', headers, body: JSON.stringify({ engine: 'codex', tmuxPane: '%41', sessionId: '019fea92-e31a-7692-9c35-f616e9d458b7' }),
+    })
+    expect(await hook.json()).toEqual({ pending: true })
     expect(error).toHaveBeenCalledWith('[hooks] GET /api/status failed:', 'status read failed')
-    expect(error).toHaveBeenCalledWith('[hooks] GET /api/logs failed:', 'log file gone')
-    await vi.waitFor(() => expect(error).toHaveBeenCalledWith('[hooks] POST /api/stop failed:', 'stop failed after the answer'))
+    expect(error).toHaveBeenCalledWith('[hooks] GET /api/status failed:', expect.stringContaining('BigInt'))
+    await vi.waitFor(() => expect(error).toHaveBeenCalledWith('[hooks] POST /api/hook/session-start failed:', 'resolution failed after the answer'))
     error.mockRestore()
   })
 
@@ -491,7 +501,7 @@ describe('requests must name this server', () => {
     expect(await res.json()).toEqual({ sessions: [{ id: 'a', updatedAt: 42 }] })
   })
 
-  it('still serves loopback names, and the dashboard from its own origin', async () => {
+  it('still serves loopback names, and a page from the daemon\'s own origin', async () => {
     const { base } = await start({ onStatus: () => ({ ok: true }) })
     const port = new URL(base).port
     for (const host of [`127.0.0.1:${port}`, `localhost:${port}`, `[::1]:${port}`]) {
@@ -562,7 +572,7 @@ describe('the daemon socket', () => {
       expect(await viaSocket(socketPath, 'GET', '/api/command-bar/status', { 'x-adapter-local': '1' })).toBe(200)
       expect(await viaSocket(socketPath, 'GET', '/api/command-bar/status')).toBe(403)
       // Mutations still need the CSRF header, hooks still need their credential.
-      expect(await viaSocket(socketPath, 'POST', '/api/stop')).toBe(403)
+      expect(await viaSocket(socketPath, 'POST', '/api/group/sync')).toBe(403)
       expect(await viaSocket(socketPath, 'POST', '/api/hook/session-start')).not.toBe(200)
       // The TCP port is untouched: a foreign Host is still refused there.
       const port = (started.server.address() as { port: number }).port
