@@ -678,6 +678,30 @@ describe('findResumedTranscript', () => {
     await expect(findResumedTranscript('codex', id, { codexHome: profile })).resolves.toBe(file)
   })
 
+  // A home the person moved in their shell profile (CLAUDE_CONFIG_DIR, CODEX_HOME: lib/engineHomes.ts)
+  // holds the conversations their engine wrote there, and the registry takes them (#779). A resume of one
+  // typed into a pane was looked for in the default folders alone, found nowhere, and never bound.
+  it('finds a conversation in a home the person moved, Claude Code\'s and Codex\'s', async () => {
+    const claudeHome = tempRoot()
+    const codexHome = tempRoot()
+    const claudeId = 'f56f0a36-aa58-4af1-a6e2-a77386122399'
+    const codexId = 'a1b2c3d4-1111-4a4a-8a8a-000000000099'
+    writeTranscript(join(claudeHome, 'projects'), '-w', claudeId, CWD, STARTED_AT)
+    const rollout = writeCodexRollout(codexHome, codexId, CWD, STARTED_AT)
+    const { findResumedTranscript } = await load(tempRoot())
+    const homes = await import('./engineHomes.js')
+    homes.adoptEngineHomes({ CLAUDE_CONFIG_DIR: claudeHome, CODEX_HOME: codexHome }, { claudeHome: '/nowhere/.claude', codexHome: '/nowhere/.codex' })
+    try {
+      await expect(findResumedTranscript('claude', claudeId)).resolves.toBe(join(claudeHome, 'projects', '-w', `${claudeId}.jsonl`))
+      await expect(findResumedTranscript('codex', codexId)).resolves.toBe(rollout)
+      // An agent's own Codex profile is its only home.
+      await expect(findResumedTranscript('codex', codexId, { codexHome: tempRoot() })).resolves.toBeNull()
+    } finally {
+      rmSync(join(process.env.ADAPTER_DATA_DIR!, 'engine-homes.json'), { force: true })
+      homes.resetEngineHomes()
+    }
+  })
+
   it('never treats an argv value that is not a session id as one', async () => {
     const root = tempRoot()
     const { findResumedTranscript } = await load(root)

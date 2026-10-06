@@ -255,8 +255,9 @@ export function createLaunchRequests({ receipts, createAgent, forkAgent, resumeA
             // the person's own repo is theirs to answer for (lib/claudeTrust.ts); a worktree gets only
             // the answer its source repo already has. `branch` IS the source folder: nothing to record.
             try {
-              const engineTrust = input.engine === 'claude' ? { trusts: claudeTrusts, record: preTrustClaudeProject }
-                : input.engine === 'codex' ? { trusts: codexTrusts, record: preTrustCodexProject } : null
+              // A Codex agent on its own profile reads its trust from that profile's config.toml, not ~/.codex.
+              const engineTrust = input.engine === 'claude' ? { trusts: (path: string) => claudeTrusts(path), record: (path: string) => preTrustClaudeProject(path) }
+                : input.engine === 'codex' ? { trusts: (path: string) => codexTrusts(path, input.codexHome), record: (path: string) => preTrustCodexProject(path, input.codexHome) } : null
               if (engineTrust && (projectFolder.source === 'new'
                 || (projectFolder.source === 'worktree' && engineTrust.trusts(projectFolder.gitSource)))) {
                 engineTrust.record(preparedFolder)
@@ -281,7 +282,7 @@ export function createLaunchRequests({ receipts, createAgent, forkAgent, resumeA
               const empty = await readdir(input.cwd).then((names) => names.length === 0, () => false)
               if (empty) {
                 if (input.engine === 'claude') preTrustClaudeProject(input.cwd)
-                if (input.engine === 'codex') preTrustCodexProject(input.cwd)
+                if (input.engine === 'codex') preTrustCodexProject(input.cwd, input.codexHome)
               }
             } catch (error) { console.warn(`[agent] pre-trust ${input.cwd} · ${error instanceof Error ? error.message : error}`) }
           }
