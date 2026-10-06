@@ -35,16 +35,34 @@ class WebFirstMachine extends StatefulWidget {
   /// How the download page opens; tests pass a recorder.
   final Future<bool> Function(Uri uri) openPage;
 
+  /// How often the page asks for the machine list while it waits. A computer
+  /// signing in is announced to the account's other windows over their
+  /// connections to its machines — and this one has none yet, so nothing
+  /// would tell it before the five-minute safety net.
+  static const watchEvery = Duration(seconds: 4);
+
   @override
   State<WebFirstMachine> createState() => _WebFirstMachineState();
 }
 
 class _WebFirstMachineState extends State<WebFirstMachine> {
+
   String? _copied;
   Timer? _copiedReset;
+  late final Timer _watch;
+
+  @override
+  void initState() {
+    super.initState();
+    _watch = Timer.periodic(
+      WebFirstMachine.watchEvery,
+      (_) => unawaited(widget.app.rereadMachines()),
+    );
+  }
 
   @override
   void dispose() {
+    _watch.cancel();
     _copiedReset?.cancel();
     super.dispose();
   }

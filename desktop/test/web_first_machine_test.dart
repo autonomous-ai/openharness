@@ -28,6 +28,17 @@ class _Linking extends AppNotifier {
   String? machineLinkStage(String machineId) => 'deriving_key';
 }
 
+/// Counts the quiet machine-list reads the page makes while it waits.
+class _Watching extends AppNotifier {
+  _Watching()
+    : super(config: AppConfig.dev, authSession: AuthSession(), configStore: null);
+
+  var reads = 0;
+
+  @override
+  Future<void> rereadMachines() async => reads++;
+}
+
 /// Dialing with no password: [trusted] says how the computer answers.
 class _Dialing extends AppNotifier {
   _Dialing({required this.trusted})
@@ -165,6 +176,21 @@ void main() {
     // The row follows the form: no second Connect beside the form's own.
     expect(find.widgetWithText(FilledButton, 'Connect'), findsNothing);
     expect(find.textContaining("hasn't trusted this browser"), findsOneWidget);
+  });
+
+  testWidgets('keeps asking for the machine list while it waits', (
+    tester,
+  ) async {
+    app.dispose();
+    app = _Watching();
+    await mount(tester);
+
+    await tester.pump(WebFirstMachine.watchEvery * 3);
+
+    expect((app as _Watching).reads, 3);
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump(WebFirstMachine.watchEvery * 2);
+    expect((app as _Watching).reads, 3, reason: 'stops with the page');
   });
 
   testWidgets('an offline computer says what to do on it', (tester) async {

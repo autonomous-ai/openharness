@@ -6160,6 +6160,13 @@ class AppNotifier extends ChangeNotifier {
   /// exactly one more follows it. A bulk rename pushes once per machine;
   /// without this each push would be its own pair of requests. A timer tick
   /// that finds a read open has nothing to add and is dropped.
+  /// Read the machine list again quietly — no loading state, the rows on
+  /// screen stay — as a missed `machines_changed` push would. For a screen
+  /// waiting on a computer this window has no connection to hear that push
+  /// through: an account with none connected yet (the browser's connect page).
+  Future<void> rereadMachines() =>
+      _rereadMachinesInBackground(pushed: false);
+
   Future<void> _rereadMachinesInBackground({required bool pushed}) async {
     if (_disposed || status != AppStatus.authenticated) return;
     if (_sharingDiscoveryBusy) {
