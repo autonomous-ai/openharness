@@ -220,12 +220,15 @@ function agentAliasCandidate(row: Pick<ProcessRow, 'executable' | 'args'>): bool
 export function parseProcessRow(line: string): ProcessRow | null {
   const match = /^\s*(\d+)\s+(\d+)\s+(.+?)\s+(\S+\s+\S+\s+\d{1,2}\s+\d{1,2}:\d{2}:\d{2}\s+\d{4})\s*(.*)$/.exec(line)
   if (!match) return null
+  // Found by QA on a quiet machine: saved identities held 13.8 MiB of old ps tables through
+  // V8's capture substrings. The deleted-image memo keeps args too. Own each field's storage;
+  // UTF-16 preserves the exact command text instead of changing an engine's identity.
   return {
     pid: Number(match[1]),
     parentPid: Number(match[2]),
-    executable: match[3],
-    startMarker: match[4],
-    args: match[5],
+    executable: Buffer.from(match[3], 'utf16le').toString('utf16le'),
+    startMarker: Buffer.from(match[4], 'utf16le').toString('utf16le'),
+    args: Buffer.from(match[5], 'utf16le').toString('utf16le'),
   }
 }
 

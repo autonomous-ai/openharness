@@ -67,6 +67,8 @@ export interface CoreLink {
   /** Start-up is done and requests are served — or it gave way to safe mode, and why: the master stops
    *  waiting for it either way, and rolls back an update whose first core ends up in safe mode. */
   ready(safeMode?: string): void
+  /** Ask the master to start the experiment's process that runs [service]: it is on (protocol 3). */
+  want(service: string): void
   /** Tell the master, every `heartbeatInterval`, that this core is alive and how big it is. */
   startHeartbeat(): void
   /** The master is gone. A core without one stops, so nothing is left holding the port. */
@@ -123,6 +125,7 @@ export function connectToMaster(
     masterPid: supervised ? channel.parentPid : null,
     bound: (port) => send({ type: 'harnessd:bound', protocol: HARNESSD_PROTOCOL, port }),
     ready: (safeMode) => send(safeMode === undefined ? { type: 'harnessd:ready' } : { type: 'harnessd:ready', safeMode }),
+    want: (service) => send({ type: 'harnessd:want', service }),
     startHeartbeat: () => {
       if (!supervised || heartbeat) return
       delay = loopDelay()

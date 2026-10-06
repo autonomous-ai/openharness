@@ -14,7 +14,9 @@
  */
 export { startGateway } from '../gateway/start.js'
 export { startModels } from './models.js'
+export { startTeamsInCore } from './collaboration.js'
 export { startMonitor } from './monitor.js'
+export { startOrchestrator } from './orchestrator.js'
 export { startProjects } from './projects.js'
 export { startSearch } from './search.js'
 export { startStore } from './store.js'

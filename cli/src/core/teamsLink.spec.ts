@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { TeamsEvent } from './api.js'
-import { createTeamsLink, KEPT_BYTES, KEPT_EVENTS } from './teamsLink.js'
+import { createTeamsLink, KEPT_BYTES, KEPT_EVENTS, teamsOutOfProcess } from './teamsLink.js'
 
 const TEAM_A = 'a'.repeat(32)
 const TEAM_B = 'b'.repeat(32)
@@ -167,6 +167,63 @@ describe('the teams\' prompt scopes in their own process, as the core keeps them
     expect(hello({ core: 'core-1', applied: 2 })).toMatchObject({ reset: false, events: [] })
   })
 
+  it('keeps nothing for a process no one asked for, and everything from the moment teams is on', () => {
+    const { link, scopes, sent, hello } = setup({ off: true })
+    const undo = scopes.prepare('agent-1', 'typed while teams was off', 'tab-1')
+    undo()
+    scopes.started('agent-1', 'typed while teams was off', 'hook')
+    expect(sent).toEqual([])
+    expect(hello({ core: null }).events).toEqual([])
+    link.on()
+    scopes.forget('agent-1')
+    expect(sent.map((event) => [event.seq, event.kind])).toEqual([[1, 'forget']])
+  })
+
+  it('says a team\'s delivery may be written only while the process last said so, and not past when it said', () => {
+    const { link, scopes, tick } = setup()
+    expect(scopes.canWrite('team:d1')).toBe(false)
+    expect(link.answer('writable', { deliveries: { 'team:d1': 1_000 + 3_000, 'team:d2': 'soon' } })).toEqual({})
+    expect(scopes.canWrite('team:d1')).toBe(true)
+    expect(scopes.canWrite('team:d2')).toBe(false)
+    tick(3_000)
+    expect(scopes.canWrite('team:d1')).toBe(false)
+    link.answer('writable', { deliveries: { 'team:d1': 99_999 } })
+    expect(scopes.canWrite('team:d1')).toBe(true)
+    // A report replaces the last whole.
+    link.answer('writable', {})
+    expect(scopes.canWrite('team:d1')).toBe(false)
+  })
+
+  it('answers the scopes\' own questions, from the apps and from the teams beside them, as it did while they were away', () => {
+    const { link, scopes, ack, sent } = setup()
+    scopes.prepare('agent-1', 'hello team', 'tab-1')
+    scopes.started('agent-1', 'hello team', 'hook')
+    ack(2, { 'agent-1': TEAM_A })
+    const replies: Array<Record<string, unknown>> = []
+    const owner = { owner: true }
+    expect(link.route('team_delivery', { action: 'prompt_scope', agentId: 'agent-1' }, owner, (r) => replies.push(r))).toBe(true)
+    expect(link.route('team_delivery', { action: 'prompt_replied', agentId: 'agent-1', teamId: TEAM_A, questionId: TEAM_B }, owner, (r) => replies.push(r))).toBe(true)
+    expect(link.route('team_delivery', { action: 'prompt_scope', agentId: 'agent-1' }, { owner: false }, (r) => replies.push(r))).toBe(true)
+    expect(link.route('team_delivery', { action: 'prompt_scope', agentId: '../x' }, owner, (r) => replies.push(r))).toBe(true)
+    expect(link.route('team_delivery', { action: 'prompt_replied', agentId: 'agent-1', teamId: 'nope', questionId: TEAM_B }, owner, (r) => replies.push(r))).toBe(true)
+    expect(link.route('team_delivery', { action: 'prompt_replied', agentId: 'agent-1', teamId: TEAM_A }, owner, (r) => replies.push(r))).toBe(true)
+    expect(replies).toEqual([
+      { teamId: TEAM_A },
+      { ok: true },
+      { error: 'OWNER_REQUIRED', detail: 'Team communication requires an owner connection.' },
+      { error: 'INVALID_REQUEST', detail: 'agentId: Invalid' },
+      { error: 'INVALID_REQUEST', detail: 'teamId: Invalid' },
+      { error: 'INVALID_REQUEST', detail: 'questionId: Invalid' },
+    ])
+    expect(sent.at(-1)).toMatchObject({ kind: 'replied', teamId: TEAM_A, questionId: TEAM_B })
+    // Every other request goes on to the teams.
+    expect(link.route('team_delivery', { action: 'send' }, owner, (r) => replies.push(r))).toBe(false)
+    expect(link.route('team', { action: 'prompt_scope' }, owner, (r) => replies.push(r))).toBe(false)
+    // The same two, asked by the teams beside the scopes.
+    expect(link.answer('team_scope', { agentId: 'agent-2' })).toEqual({ teamId: null })
+    expect(link.answer('team_replied', { agentId: 'agent-1', teamId: TEAM_A, questionId: TEAM_B })).toEqual({ ok: true })
+  })
+
   it('refuses a question it does not know', () => {
     expect(setup().link.answer('agents', {})).toEqual({ error: 'UNKNOWN_QUERY' })
   })
@@ -182,5 +239,19 @@ describe('the teams\' prompt scopes in their own process, as the core keeps them
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('[teams] kept 1 events'))
     expect(KEPT_EVENTS).toBe(10_000)
     expect(KEPT_BYTES).toBe(16 * 1024 * 1024)
+  })
+
+  it('runs the scopes and the teams beside them in one process or both in the core\'s, and says so when named apart', () => {
+    const log = vi.fn()
+    expect(teamsOutOfProcess(new Set(['search', 'teams', 'collaboration']), log)).toBe(true)
+    expect(teamsOutOfProcess(new Set(['search']), log)).toBe(false)
+    expect(log).not.toHaveBeenCalled()
+    const apart = new Set(['search', 'collaboration'])
+    expect(teamsOutOfProcess(apart, log)).toBe(false)
+    expect([...apart]).toEqual(['search'])
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('one process or none'))
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    expect(teamsOutOfProcess(new Set(['teams']))).toBe(false)
+    expect(warn).toHaveBeenCalledOnce()
   })
 })

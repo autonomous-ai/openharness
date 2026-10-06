@@ -227,7 +227,19 @@ const SERVICE_MAY_IMPORT: Record<string, string> = {
 // device, the teams and the orchestrator write a turn and hear of it, which lets the latter two run in
 // processes of their own. Its lines are added here, ahead of the moves that take the teams and the
 // orchestrator out of this process.
-const CORE_CLOSURE_BUDGET = 89_860
+//
+// Then at 89,443 in 402, from 89,796 in 402: the orchestrator is an experiment, in a process of its own
+// started only once it is on (services/orchestratorProcess.ts); its 640 lines leave. What stays is what any
+// experiment acts on the core through (core/experiments.ts, core/experimentQueries.ts) and what the core
+// keeps of the orchestrator (core/orchestratorLink.ts): 290 lines.
+//
+// Then at 88,080 in 392, from 89,443 in 402: Tab collaboration and teams are an experiment, in the teams'
+// process beside the prompt scopes (services/collaborationProcess.ts), started only once on; the team
+// service, its mailbox, the tab channels and their wire (1,700 lines) leave. What stays: the team write hold
+// the core reads a pane with as it writes a team's turn, now lib/teamWriteHold.ts, and what the core keeps of
+// the teams' process (core/teamsLink.ts: which deliveries may be written, the scopes' own questions) and of
+// the account's notices (core/experiments.ts).
+const CORE_CLOSURE_BUDGET = 88_180
 
 /** What is not the core's, by path: each goes to a service or its own process, in the plan's order. */
 const EDGE: RegExp[] = [
@@ -305,11 +317,6 @@ const CORE_MAY_REACH: Record<string, string> = {
   'lib/sessionSearch/sessionTurns.ts': 'the handoff (lib/agentHandoff.ts), in the edge host once CoreApi gives it the stopped agents, recaps and discovery it reads',
   'lib/sessionSearch/transcript.ts': 'the readers of other engines\' sessions keep this helper: it moves beside them, out of search\'s folder',
   'lib/sessionSearch/turns.ts': 'the handoff (lib/agentHandoff.ts), in the edge host once CoreApi gives it the stopped agents, recaps and discovery it reads',
-  'orchestrator/artifacts.ts': 'step 8: the experimental host',
-  'orchestrator/model.ts': 'step 8: the experimental host',
-  'orchestrator/prompts.ts': 'step 8: the experimental host',
-  'orchestrator/service.ts': 'step 8: the experimental host',
-  'orchestrator/wire.ts': 'step 8: the experimental host',
   'services/fleet.ts': 'step 9: the fleet, beside the dial',
   'services/fleetRouter.ts': 'step 9: the fleet, beside the dial',
   'services/shell.ts': 'shell setup and launch receipts, in the edge host; only the argv launch stays in the core (#893)',
@@ -319,16 +326,6 @@ const CORE_MAY_REACH: Record<string, string> = {
   'sharing/owner.ts': 'step 8: the experimental host',
   'sharing/protocol.ts': 'step 8: the experimental host',
   'sharing/viewer.ts': 'step 8: the experimental host',
-  'teams/channels.ts': 'step 8: the experimental host',
-  'teams/client.ts': 'step 8: the experimental host',
-  'teams/mailbox.ts': 'step 8: the experimental host',
-  'teams/model.ts': 'step 8: the experimental host',
-  'teams/preflight.ts': 'step 8: the experimental host',
-  'teams/promptScope.ts': 'step 8: the experimental host',
-  'teams/prompts.ts': 'step 8: the experimental host',
-  'teams/service.ts': 'step 8: the experimental host',
-  'teams/store.ts': 'step 8: the experimental host',
-  'teams/wire.ts': 'step 8: the experimental host',
 }
 
 describe('the daemon\'s shape', () => {

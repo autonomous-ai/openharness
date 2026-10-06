@@ -675,64 +675,13 @@ describe('BackendSocket outbound queue', () => {
     // A full disk: reading the orchestrator's state makes its folder, and that threw out of every send,
     // so a turn's end never reached a window (e2e/diskfull.e2e.ts).
     const socket = relaySocket('token')
-    ;(socket as unknown as { orchestratorService: { ingest(): void; stop(): void } }).orchestratorService = {
-      ingest: () => { throw new Error('ENOSPC: no space left on device, mkdir') }, stop: () => {},
-    }
+    socket.onFrameSent = () => { throw new Error('ENOSPC: no space left on device, mkdir') }
     socket.connect()
     const ws = wsMock.instances[0]
     ws.open()
     socket.send({ type: 'turn_ended', dbSessionId: 's1', payload: { sessionId: 's1' } })
     expect(parseSent(ws).map((sent) => (sent.frame as { type?: string }).type)).toContain('turn_ended')
     await socket.stop()
-  })
-
-  it('answers a turn end "no role" without building the orchestrator on a machine that has no project', async () => {
-    // Asked at every turn's end. Building the service makes its folder and parses every saved run on
-    // the core's event loop, and from then on every frame sent is handed to it.
-    const stateDir = join(process.env.ADAPTER_DATA_DIR!, 'orchestrator')
-    rmSync(stateDir, { recursive: true, force: true })
-    const socket = relaySocket('token')
-    try {
-      expect(socket.orchestratorRoleOf('agent-1')).toBeNull()
-      expect(socket.orchestratorRoleOf('agent-2')).toBeNull()
-      expect(existsSync(stateDir)).toBe(false)
-      expect((socket as unknown as { orchestratorService: unknown }).orchestratorService).toBeNull()
-    } finally { await socket.stop() }
-  })
-
-  it('answers a turn end from a project an earlier run of the daemon saved', async () => {
-    const stateDir = join(process.env.ADAPTER_DATA_DIR!, 'orchestrator')
-    rmSync(stateDir, { recursive: true, force: true })
-    mkdirSync(stateDir, { recursive: true, mode: 0o700 })
-    const id = 'a'.repeat(32)
-    const task = { id: 'part', title: 'Part', harness: 'cad', prompt: 'Draw the part', dependsOn: [], state: 'running', attempt: 1, agentId: 'agent-worker', cwd: stateDir, summary: '', error: null, uncertain: false, artifacts: [], inputs: {} }
-    writeFileSync(join(stateDir, `${id}.json`), JSON.stringify({
-      version: 1, id, fingerprint: 'f', prompt: 'Build the robot', engine: 'claude', bypassPermission: false, parallelism: 3,
-      root: stateDir, directorId: 'agent-director', directorWorking: false, state: 'active', error: null,
-      tasks: [task], messages: [], revision: 1, createdAt: 1, updatedAt: 1,
-    }), { mode: 0o600 })
-    const socket = relaySocket('token')
-    try {
-      expect(socket.orchestratorRoleOf('agent-worker')).toEqual({ role: 'worker' })
-      expect(socket.orchestratorRoleOf('agent-director')).toEqual({ role: 'director', busy: true })
-      expect(socket.orchestratorRoleOf('agent-other')).toBeNull()
-    } finally {
-      await socket.stop()
-      rmSync(stateDir, { recursive: true, force: true })
-    }
-  })
-
-  it('leaves an orchestrator folder it cannot list to the service to report, as before', async () => {
-    const stateDir = join(process.env.ADAPTER_DATA_DIR!, 'orchestrator')
-    rmSync(stateDir, { recursive: true, force: true })
-    writeFileSync(stateDir, 'not a folder')
-    const socket = relaySocket('token')
-    try {
-      expect(() => socket.orchestratorRoleOf('agent-1')).toThrow()
-    } finally {
-      await socket.stop()
-      rmSync(stateDir, { force: true })
-    }
   })
 
   it('signed out, seals and queues nothing for a cloud link that never opens, and still serves its windows', async () => {

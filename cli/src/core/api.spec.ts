@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { projectDisplayName, type RegisteredSession } from '../lib/registry.js'
-import { createCoreApi, DELIVERIES_OFF, emptyPorts, FLEET_FALLBACKS, LANE_OFF, LONG_ANSWERS, MODELS_OFF, MODELS_REQUESTS, MONITOR_OFF, resolveAgent, TEAMS_FALLBACKS, type CoreApiDeps } from './api.js'
+import { ACCOUNT_BACKEND_OFF, AGENT_ACTIONS_OFF, createCoreApi, DAEMON_UNKNOWN, DELIVERIES_OFF, emptyPorts, FLEET_FALLBACKS, LANE_OFF, LONG_ANSWERS, MODELS_OFF, MODELS_REQUESTS, MONITOR_OFF, ORCHESTRATOR_FALLBACKS, resolveAgent, TEAMS_FALLBACKS, type CoreApiDeps } from './api.js'
 import { FAIL } from './serviceHost.js'
 
 const row = (agentId: string) => ({ agentId, sessionId: `s-${agentId}`, engine: 'claude', cwd: '/work/app' }) as RegisteredSession
@@ -54,9 +54,15 @@ describe('the core API services stand on', () => {
       lane: LANE_OFF,
       privateGridName: vi.fn(async () => 'grid-1'),
       machineName: vi.fn(() => 'Studio'),
+      backend: vi.fn(async () => ({ status: 200, body: {} })),
+      onNotice: vi.fn(() => () => {}),
       runtimeProfile: vi.fn(() => null),
       setRuntime: vi.fn(),
       fork: vi.fn(async () => ({ ok: true as const, agentId: 'fork' })),
+      create: vi.fn(async () => ({ ok: true as const, agentId: 'made' })),
+      dsh: vi.fn(() => null),
+      windows: vi.fn(),
+      daemon: { command: 'harness', port: 18473, machineId: () => 'machine-1' },
       turns: { send: vi.fn(), stop: vi.fn(), recent: vi.fn(() => []), asks: vi.fn(() => []), deliver: vi.fn(), cancelDelivery: vi.fn(() => true), onDelivery: vi.fn(() => () => {}) },
       questions: { answer: vi.fn(), answerReviewed: vi.fn(async () => true) },
     }
@@ -88,10 +94,17 @@ describe('the core API services stand on', () => {
     expect(core.account.lane).toBe(deps.lane)
     expect(core.account.privateGridName).toBe(deps.privateGridName)
     expect(core.account.machineName).toBe(deps.machineName)
+    expect(core.account.backend).toBe(deps.backend)
+    expect(core.account.onNotice).toBe(deps.onNotice)
     // What a device or another machine asks of an agent here: the core's own handlers, as they are.
     expect(core.agents.runtimeProfile).toBe(deps.runtimeProfile)
     expect(core.agents.setRuntime).toBe(deps.setRuntime)
     expect(core.agents.fork).toBe(deps.fork)
+    // What an experiment acts on the core through.
+    expect(core.agents.create).toBe(deps.create)
+    expect(core.agents.dsh).toBe(deps.dsh)
+    expect(core.clients.windows).toBe(deps.windows)
+    expect(core.daemon).toBe(deps.daemon)
     expect(core.turns).toBe(deps.turns)
     expect(core.questions).toBe(deps.questions)
   })
@@ -111,13 +124,14 @@ describe('the core API services stand on', () => {
     }
   })
 
-  it('falls back, when the teams fail, to an undo that has nothing to undo', () => {
+  it('falls back, when the teams fail, to an undo that has nothing to undo, and holds no pane for a team', () => {
     const undo = TEAMS_FALLBACKS.prepare as () => void
     expect(undo()).toBeUndefined()
+    expect(TEAMS_FALLBACKS.canWrite).toBe(false)
   })
 
   it('starts with every port empty: a service fills its own when it starts', () => {
-    expect(emptyPorts()).toEqual({ search: null, viewers: null, models: null, workspaces: null, teams: null, fleet: null, monitor: null })
+    expect(emptyPorts()).toEqual({ search: null, viewers: null, models: null, workspaces: null, teams: null, fleet: null, monitor: null, orchestrator: null })
     expect(emptyPorts()).not.toBe(emptyPorts())
   })
 
@@ -139,6 +153,22 @@ describe('the core API services stand on', () => {
     }
     // A grid command may run half an hour, and is waited for longer than that.
     expect(LONG_ANSWERS.models!.grid_fleet_run).toBeGreaterThan(30 * 60_000)
+  })
+
+  it('gives a service that acts on no agent nothing to create and no harness to read, and a daemon it was never told of', async () => {
+    expect(await AGENT_ACTIONS_OFF.create({ engine: 'claude', cwd: '/w', dsh: null, prompt: 'p', name: 'n', bypassPermission: false }))
+      .toEqual({ ok: false, error: 'SERVICE_UNAVAILABLE' })
+    expect(AGENT_ACTIONS_OFF.dsh(row('a'))).toBeNull()
+    expect(DAEMON_UNKNOWN.machineId()).toBe('')
+  })
+
+  it('gives a service that reads no backend an unavailable answer, and no notice to hear', async () => {
+    expect(await ACCOUNT_BACKEND_OFF.backend('GET', '/api/tab-channels')).toEqual({ status: 503, body: { error: 'SERVICE_UNAVAILABLE' } })
+    expect(ACCOUNT_BACKEND_OFF.onNotice(() => {})()).toBeUndefined()
+  })
+
+  it('answers no role and reads no frame while the orchestrator is off', () => {
+    expect(ORCHESTRATOR_FALLBACKS).toEqual({ roleOf: null, frame: undefined, stop: undefined })
   })
 
   it('answers the monitor\'s fallbacks while it is off: no readings, nothing measured to forget', async () => {

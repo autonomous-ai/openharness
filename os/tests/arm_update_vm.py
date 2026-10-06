@@ -104,6 +104,7 @@ def prepare_updates(machine):
     files = {
         'os/live_update.py': '/usr/lib/harness-os/live_update.py',
         'os/root/usr/lib/harness-os/open-updates': '/usr/lib/harness-os/open-updates',
+        'os/root/usr/lib/harness-os/screen-action': '/usr/lib/harness-os/screen-action',
         'os/root/usr/lib/systemd/user/harness-update.service': '/usr/lib/systemd/user/harness-update.service',
         'os/root/usr/lib/systemd/user/harness-update.timer': '/usr/lib/systemd/user/harness-update.timer',
     }
