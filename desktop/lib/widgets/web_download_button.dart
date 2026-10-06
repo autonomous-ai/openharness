@@ -35,6 +35,17 @@ class WebDownloadButton extends StatelessWidget {
   );
   static const _text = 'Download app';
 
+  /// Filled like Share when [prominent], a step brighter under the pointer;
+  /// otherwise bare, with the bar's recessed well under the pointer.
+  static Color backgroundFor({required bool prominent, required bool hovered}) {
+    if (prominent) {
+      return hovered
+          ? grid.AppPalette.accentHover
+          : WorkspaceShareButton.backgroundFor(true);
+    }
+    return hovered ? grid.AppSurface.recessHover : Colors.transparent;
+  }
+
   static double widthOf(BuildContext context) =>
       workspaceBarTextSizeOf(context, _text).width +
       workspaceBarCellSizeOf(context).width * 2;
@@ -48,10 +59,10 @@ class WebDownloadButton extends StatelessWidget {
       child: WorkspaceBarControl(
         label: 'Download app',
         onPressed: () => open(uri),
-        builder: (context, emphasized) => ColoredBox(
-          color: prominent
-              ? WorkspaceShareButton.backgroundFor(true)
-              : Colors.transparent,
+        // Hover lifts the fill; the label keeps its weight. Turning bold under
+        // the pointer reflowed the word and read as a glitch, not a response.
+        builder: (context, hovered) => ColoredBox(
+          color: backgroundFor(prominent: prominent, hovered: hovered),
           child: SizedBox(
             width: widthOf(context),
             height: workspaceBarControlHeight(context),
@@ -62,7 +73,7 @@ class WebDownloadButton extends StatelessWidget {
                   color: prominent
                       ? WorkspaceShareButton.foregroundFor(true)
                       : grid.AppPalette.textPrimary,
-                  emphasized: emphasized,
+                  emphasized: prominent,
                 ),
               ),
             ),
