@@ -166,9 +166,6 @@ const BACKEND_SOCKET_BUDGET = 1_185
 
 /** Exceptions, each with its reason. Keep this short. */
 const SERVICE_MAY_IMPORT: Record<string, string> = {
-  // The search process builds, in its own process, the core API search runs on; this reader is a pure
-  // function of a session row, the same one the core hands search through CoreApi.
-  'services/searchProcess.ts → ../core/transcripts/databaseHistory.js': 'the core API search runs on, built in its own process',
   // A pure function of a session row. Move it out of registry.ts when workspaces leaves the core's process.
   'services/workspaces.ts → ../lib/registry.js': 'sessionDisplayTitle, a pure helper',
 }
@@ -287,13 +284,18 @@ const SERVICE_MAY_IMPORT: Record<string, string> = {
 // runs in the viewers' process, beside the viewer servers it forwards to (services/viewers.ts), and with it
 // the headless browser capture the surfaces render with (sharing/viewer.ts), Share's other user. The core
 // keeps the frame types it gates (lib/viewerFrames.ts) and hands each frame on (core/viewerStreams.ts).
-const CORE_CLOSURE_BUDGET = 75_070
+//
+// Quiet-machine QA moves handoff history folding, redaction and file writes to the edge host;
+// the core keeps narrow conversation reads: 73,370 lines in 338 files after viewer forwarding and service welcome ordering.
+const CORE_CLOSURE_BUDGET = 73_460
 
 /** What is not the core's, by path: each goes to a service or its own process, in the plan's order. */
 const EDGE: RegExp[] = [
   /^gateway\//, /^lib\/e2ee\//, /^cable\//, /^device\//, /^lib\/autonomous-device\//, /^sharing\//, /^teams\//, /^orchestrator\//, /^services\//,
   /^lib\/grid(Attach|Credentials|Derive|Ensure|Exec|FleetRpc|Handoff|Install|McpUrl|Models|ModelsPayload|Picture|Presence|Reader|Target|Wake)\.ts$/,
   /^lib\/localModels\.ts$/,
+  // The change-agent handoff reads and redacts history and runs git: the edge host owns that work.
+  /^lib\/agentHandoff\.ts$/,
   // The relay's own parts, the gateway's alone: the windows' sessions to other machines, P2P and STUN, the
   // remote viewers' proxy, and the shaping of what goes up the link.
   /^lib\/(remoteRelay|terminalP2p|stunSelect|remoteViewerProxy|deviceRecentTrim|commanderReplay)\.ts$/,
@@ -316,9 +318,7 @@ const CORE_MAY_REACH: Record<string, string> = {
   'dsh/registry.ts': 'with dsh/builtins.ts, which checks the bundled harnesses against the catalog\'s entries',
   'dsh/updates.ts': 'with dsh/builtins.ts',
   'lib/autonomous-device/localApi.ts': 'the hook server\'s routes for `harness device`, which the core serves: the pairings they answer are the gateway\'s, the receipts the Wi-Fi device\'s service\'s',
-  'lib/sessionSearch/sessionTurns.ts': 'the handoff (lib/agentHandoff.ts), in the edge host once CoreApi gives it the stopped agents, recaps and discovery it reads',
   'lib/sessionSearch/transcript.ts': 'the readers of other engines\' sessions keep this helper: it moves beside them, out of search\'s folder',
-  'lib/sessionSearch/turns.ts': 'the handoff (lib/agentHandoff.ts), in the edge host once CoreApi gives it the stopped agents, recaps and discovery it reads',
   'services/shell.ts': 'shell setup and launch receipts, in the edge host; only the argv launch stays in the core (#893)',
 }
 

@@ -105,6 +105,7 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
   const account = accountLink((query, payload) => ask(query, payload))
   const api: CoreApi = {
     dataDir: options.dataDir,
+    conversations: unasked.conversations,
     // Terminals are launched by the core alone (#893).
     terminals: TERMINALS_OFF,
     machine: { id: () => view.machine.id, computerId: () => view.machine.computerId, name: () => view.machine.name },

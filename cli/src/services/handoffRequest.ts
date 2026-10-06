@@ -4,9 +4,9 @@
  * folder and runs git there, so only the owner may ask: the loopback window, or a sealed `web` session.
  * A `device` (the dial) and a shared viewer never do.
  *
- * Moved verbatim out of the socket's request switch (docs/design/2026-10-03-harnessd.md).
+ * Same owner guards and reply contract after the quiet-machine QA move into the edge host.
  */
-import { ENGINES } from '../../engines/types.js'
+import { ENGINES } from '../engines/types.js'
 
 /** What the handoff is asked for, and what it answers (lib/agentHandoff.ts). */
 export type HandoffRequest = { agentId: string; changeId: string; targetEngine: string }
