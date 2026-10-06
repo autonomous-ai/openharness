@@ -6,6 +6,7 @@ mod activity;
 mod app;
 mod capture;
 mod tree;
+mod files;
 mod borders;
 mod cli;
 mod clipboard;

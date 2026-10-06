@@ -85,6 +85,9 @@ pub async fn run(args: &[String], explicit_port: Option<u16>, socket: Option<&st
     let name = name.map(str::to_string);
     let cmd = args.first()?.as_str();
     match cmd {
+        // Harness OS's file manager in this terminal, a program of its own: nothing to connect to.
+        // (`files` in hn's own prompt is choose-file's alias, the file manager over a pane.)
+        "files" => Some(crate::files::standalone(&args[1..])),
         "os-action" => Some(crate::ipc::call(args, socket.as_deref(), name.as_deref()).await),
         "view" | "open-viewer" => Some(crate::viewer::cli(port, &args[1..], socket.as_deref(), name.as_deref()).await),
         // Every harness on every machine (hn's; `ls` is tmux's list-sessions).

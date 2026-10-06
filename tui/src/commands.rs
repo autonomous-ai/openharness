@@ -450,7 +450,7 @@ fn menu_position(app: &App, args: &crate::cmd::Args, target: Option<(usize, u64)
 
 
 pub fn is_command_name(name: &str) -> bool {
-    name == "os-action" || COMMANDS.iter().any(|(full, alias, _)| *full == name || *alias == name)
+    name == "os-action" || is_os_files(name) || COMMANDS.iter().any(|(full, alias, _)| *full == name || *alias == name)
         || matches!(name, "display" | "send" | "neww" | "splitw" | "killp" | "killw" | "selectw" | "selectp" | "lsw" | "lsp" | "ls" | "capturep" | "showw" | "show" | "set" | "bind" | "unbind" | "source" | "run" | "if"
             | "run-shell" | "if-shell" | "wait-for" | "wait" | "pipe-pane" | "pipep" | "set-hook" | "show-hooks" | "resize-window" | "resizew" | "kill-session" | "send-prefix" | "display-menu" | "menu"
             | "set-option" | "set-window-option" | "setw" | "bind-key" | "unbind-key" | "source-file" | "kill-server" | "detach-client" | "detach"
@@ -1202,9 +1202,13 @@ fn rest(words: &Words) -> String {
     out.join(" ")
 }
 
+/// Harness OS's file manager (choose-file, alias files): like os-action, private to the OS and
+/// absent from ordinary hn's command lists.
+fn is_os_files(name: &str) -> bool { matches!(name, "choose-file" | "files") }
+
 /// hn's own commands, and the tmux names hn gives its own meaning (checked before tmux's table).
 pub fn hn_owned(name: &str) -> bool {
-    name == "os-action" || COMMANDS.iter().any(|(full, alias, _)| (*full == name || *alias == name) && crate::cmd::find(full).map(|e| e.name != *full).unwrap_or(true))
+    name == "os-action" || is_os_files(name) || COMMANDS.iter().any(|(full, alias, _)| (*full == name || *alias == name) && crate::cmd::find(full).map(|e| e.name != *full).unwrap_or(true))
 }
 
 /// A command that names another session (`-t work:2`, `has-session -t work`, a pane's `%12`)
@@ -2191,7 +2195,7 @@ fn run_words_in(app: &mut App, words: &[String]) {
             } else {
                 match target_pane(app, words) { Some((_, p)) => p, None => return }
             };
-            if flag(words, "-q") { crate::copy::exit_all(app, pane); crate::tree::exit(app, pane); return app.sync_copy_modal() }
+            if flag(words, "-q") { crate::copy::exit_all(app, pane); crate::tree::exit(app, pane); crate::files::exit(app, pane); return app.sync_copy_modal() }
             let source = match opt(words, "-s") {
                 Some(s) => match pane_target(app, &s) { Some((_, p)) => p, None => return app.say(format!("can't find pane: {s}"), theme::WARN) },
                 None => pane,
@@ -3241,6 +3245,11 @@ fn run_words_in(app: &mut App, words: &[String]) {
                     if let Some(k) = m.key { crate::tree::key(app, pane, k, Some(&m), true) }
                     return;
                 }
+                // The file manager, likewise.
+                if app.panes.get(&pane).map(|p| p.files_top()).unwrap_or(false) {
+                    if let Some(k) = m.key { crate::files::key(app, pane, k, Some(&m)) }
+                    return;
+                }
                 if app.panes.get(&pane).map(|p| p.in_mode()).unwrap_or(false) || m.wp != Some(pane) { return }
                 return crate::mouse::input_key_mouse(app, pane, &m);
             }
@@ -3494,6 +3503,13 @@ fn run_words_in(app: &mut App, words: &[String]) {
         }
         "new-harness" => { if words.len() < 2 { input::run(app, "new") } else { input::new_harness_words(app, &words[1..]) } }
         "new-terminal" => input::run(app, "terminal"),
+        // Harness OS's file manager over the pane (files.rs): [folder] (~ home, a relative one from
+        // where the pane is), else where the pane is on this computer, else home.
+        "choose-file" | "files" => {
+            let Some((_, p)) = target_pane(app, words) else { return };
+            let dir = positional(words).first().map(|d| expand(app, d));
+            crate::files::choose(app, p, dir.as_deref())
+        }
         "choose-command" => input::run(app, "commands"),
         "take-control" => app.take_control(),
         // A harness's verbs, on -t's harness (the hook's in a harness-* hook), else the focused
