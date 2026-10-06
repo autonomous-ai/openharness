@@ -94,7 +94,8 @@ void main() {
               engine: 'codex',
               sessionId: 'conversation-$i',
               closeSupported: true,
-              terminalAvailable: true,
+              terminalAvailable: i != 3,
+              status: i == 3 ? 'stopped' : 'active',
               createdAt: DateTime.utc(2026, 10, 6),
             ),
         ];
@@ -112,7 +113,7 @@ void main() {
         var reviewed = 0;
         app.reviewSessionClose = (targets, {tabName}) async {
           reviewed++;
-          expect(targets, hasLength(4));
+          expect(targets, hasLength(3));
           for (var i = 0; i < targets.length; i++) {
             final (machineId, agent) = targets[i];
             await app.handleEventForTest(machineId, {
@@ -137,7 +138,7 @@ void main() {
             expect(work.paneSizes['4:manual']!.tiles, shape.tiles);
             expect(app.swarms, contains(work));
             expect(app.deskSyncForTest.pending, isEmpty);
-            expect(api.doc!.tabs.expand((t) => t.panes).length, 3 - i);
+            expect(api.doc!.tabs.expand((t) => t.panes).length, i < targets.length - 1 ? 3 - i : 0);
           }
           return confirm;
         };

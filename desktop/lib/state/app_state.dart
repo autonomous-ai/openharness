@@ -2164,8 +2164,14 @@ class AppNotifier extends ChangeNotifier {
       targets.add((pane.machineId, agent));
     }
     final revision = _authRevision;
-    for (final (machine, agent) in targets) {
-      final target = (machine, agent.id);
+    // The whole captured view belongs to Close, including sessions already
+    // stopped or served by an older CLI. Peer pruning must not trim its undo.
+    final held = {
+      for (final pane in closing)
+        if (pane.agentId ?? pane.ownerAgentId case final String id)
+          (pane.machineId, id),
+    };
+    for (final target in held) {
       _closingViewAgents[target] = (_closingViewAgents[target] ?? 0) + 1;
     }
     final completion = Completer<void>();
@@ -2208,8 +2214,7 @@ class AppNotifier extends ChangeNotifier {
             notifyListeners();
           }
         } finally {
-          for (final (machine, agent) in targets) {
-            final target = (machine, agent.id);
+          for (final target in held) {
             final remaining = (_closingViewAgents[target] ?? 1) - 1;
             if (remaining == 0) {
               _closingViewAgents.remove(target);
