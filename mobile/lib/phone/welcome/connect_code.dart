@@ -26,8 +26,9 @@ class ConnectCode {
   final String? pairCode;
 
   /// The one-time code that signs the phone in with no emailed code — minted
-  /// for this QR by the computer's own sign-in, good for about a minute, and
-  /// spent by the first phone to redeem it (`AppNotifier.signInWithScan`).
+  /// for this QR by the computer's own sign-in, good for 90 seconds (the QR
+  /// renews it every minute), and spent by the first phone to redeem it
+  /// (`AppNotifier.signInWithScan`).
   final String? signIn;
 
   static const host = 'harness.autonomous.ai';

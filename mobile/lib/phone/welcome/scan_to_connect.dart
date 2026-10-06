@@ -24,7 +24,7 @@ import 'connect_code.dart';
 ///   │    [ camera view ]   │
 ///   └──────────────────────┘
 /// Scan the code on your computer
-/// On your Mac: Harness ▸ Add Phone…
+/// In Harness on your computer: Add Phone…
 ///
 ///           Use email instead
 /// ```
@@ -45,7 +45,9 @@ class ScanToConnectPage extends StatefulWidget {
     this.onSignInCode,
     this.acceptConnectCodes = true,
     this.title = 'Scan the code on your computer',
-    this.hint = 'On your Mac: Harness ▸ Add Phone…',
+    // Not "On your Mac: Harness ▸ Add Phone…": the desktop app runs on Linux too, where Add Phone
+    // is in the command palette rather than a Harness menu.
+    this.hint = 'In Harness on your computer: Add Phone…',
     this.note,
   });
 

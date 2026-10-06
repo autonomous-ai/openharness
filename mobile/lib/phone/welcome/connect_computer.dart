@@ -76,8 +76,11 @@ class _ConnectComputerPageState extends State<ConnectComputerPage> {
     super.initState();
     if (widget.signedIn) {
       // Nothing pushes a new machine to the phone: ask again every few seconds while this is up.
+      // A request that fails (offline for a moment) is simply asked again on the next tick — and
+      // caught here, where it used to reach the zone as an unhandled error every 5 seconds.
       _watch = Timer.periodic(const Duration(seconds: 5), (_) {
-        if (mounted) unawaited(widget.notifier.refreshMachines());
+        if (!mounted) return;
+        unawaited(widget.notifier.refreshMachines().catchError((Object _) {}));
       });
     }
   }

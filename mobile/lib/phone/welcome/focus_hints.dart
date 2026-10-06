@@ -167,21 +167,42 @@ class _FocusHintsState extends State<FocusHints> {
                   right: 16,
                   top: 0,
                   bottom: 0,
-                  child: Row(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      Expanded(
-                        child: hint('→ swipe right', 'all your harnesses'),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: hint('→ swipe right', 'all your harnesses'),
+                          ),
+                          Expanded(
+                            child: Align(
+                              alignment: Alignment.centerRight,
+                              child: hint(
+                                'swipe left ←',
+                                'start a new one',
+                                align: TextAlign.right,
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
-                      Expanded(
-                        child: Align(
-                          alignment: Alignment.centerRight,
-                          child: hint(
-                            'swipe left ←',
-                            'start a new one',
-                            align: TextAlign.right,
+                      // ⚠️ What [FocusHints.onDone] asks for next — the notification permission —
+                      // said before the OS asks it: the prompt used to come out of nowhere, the
+                      // moment the tips were touched away. Worded as what notices are for, not as
+                      // a promise of a prompt, which an OS that already has the answer never shows.
+                      if (widget.onDone != null) ...[
+                        const SizedBox(height: 28),
+                        Text(
+                          'Notifications tell you when a harness needs you, '
+                          'and when a new device joins your account.',
+                          textAlign: TextAlign.center,
+                          style: tty.style(
+                            size: TtySize.meta,
+                            color: tty.faint,
                           ),
                         ),
-                      ),
+                      ],
                     ],
                   ),
                 ),

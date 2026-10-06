@@ -145,6 +145,18 @@ class _AgentHomeState extends State<AgentHome> {
   bool _gaveUpWaiting = false;
   Timer? _loadingDeadline;
 
+  /// The launch's wait is over — the screen has something other than a loading message to show —
+  /// so [_loadingTimeout] has nothing left to guard, and must not fire into a screen that has
+  /// stopped waiting: it would hold back every loading message after it.
+  ///
+  /// Called from [build], on each way out of the loading screen; only the first does anything.
+  void _endLaunchWait() {
+    final deadline = _loadingDeadline;
+    if (deadline == null) return;
+    _loadingDeadline = null;
+    deadline.cancel();
+  }
+
   @override
   void initState() {
     super.initState();
@@ -238,9 +250,9 @@ class _AgentHomeState extends State<AgentHome> {
     if (tabId != null && widget.notifier.activeDeskTabId == null) {
       widget.notifier.noteDeskTab(tabId);
     }
-    // The deadline has done its job either way once this lands, and a timer left running would fire
-    // into a screen that is no longer waiting.
-    _loadingDeadline?.cancel();
+    // ⚠️ The deadline is NOT ended here. This read takes milliseconds, and ending it here left the
+    // waits it exists for — an agent list that never arrives, after the machine is up — with no end
+    // at all. It ends when the screen stops waiting ([_endLaunchWait]).
     setState(() {
       _readingLast = false;
       // ⚠️ Not applied if a pager is already up, which only happens when this read came back AFTER
@@ -693,6 +705,7 @@ class _AgentHomeState extends State<AgentHome> {
       if (widget.notifier.pendingPairing case final pending?) {
         final machine = widget.notifier.machineStates[pending.machineId];
         if (machine != null && machine.needsLink) {
+          _endLaunchWait();
           return PairingWithCode(
             key: ValueKey('pairing-${pending.machineId}'),
             notifier: widget.notifier,
@@ -721,6 +734,7 @@ class _AgentHomeState extends State<AgentHome> {
         final loading = _loadingMessage() ?? _restoreMessage();
         _traceLoading(loading);
         if (loading != null) return _AgentHomeLoading(message: loading);
+        _endLaunchWait();
         // ⚠️ **No machine is open → this is a MACHINE problem, so the machine screen is what the
         // person gets.** An "Agents" header over "No machines are open yet" named the thing that is
         // missing rather than the thing to do about it, and the only route to a password form was
@@ -761,6 +775,7 @@ class _AgentHomeState extends State<AgentHome> {
         _openNewAgentAfterLastOneWent();
         return _AgentHomeEmpty(notifier: widget.notifier);
       }
+      _endLaunchWait();
       // Nothing remembered, nothing picked: the sessions, each a tap from its terminal.
       if (_welcome && _neighboursFor == null && _requestedAgent == null) {
         return PickUpPage(notifier: widget.notifier);

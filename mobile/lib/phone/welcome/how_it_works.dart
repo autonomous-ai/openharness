@@ -26,11 +26,13 @@ class HowItWorksPage extends StatelessWidget {
           'context. You can run several harnesses with the same agent. '
           'They keep going when you close the app.',
     ),
+    // "Tab", not "Swarm": the naming system's word for a group of harnesses
+    // (`docs/naming-system.md`), and the desktop's setting is Tab collaboration now.
     (
-      'Swarm',
+      'Tab',
       'A group of harnesses, shown together in the workspace. Add a harness to '
-          'include it. With Swarm collaboration enabled in Experimental settings, '
-          'their agents can consult peers in the same swarm.',
+          'include it. With Settings ▸ Experimental ▸ Tab collaboration turned on '
+          'in the desktop app, their agents can consult peers in the same tab.',
     ),
     (
       'Project',
@@ -41,7 +43,8 @@ class HowItWorksPage extends StatelessWidget {
       'Phone password',
       'For a computer with no Harness app to show a code (a server): unlocks '
           'it from this phone, once, over an end-to-end encrypted link. It never '
-          'leaves your devices. A Mac shows a code to scan instead.',
+          'leaves your devices. A computer with the Harness app shows a code to '
+          'scan instead.',
     ),
   ];
 

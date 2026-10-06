@@ -66,6 +66,16 @@ class SilentSystemNotices implements SystemNotices {
   Future<void> showAccountNotice({required String key, required String title, required String body}) async {}
 }
 
+/// Whether the OS lets this app post notices right now — Settings ▸ Notifications reads it. Null
+/// where nothing can say: a stand-in centre (tests, the sample), or a platform call that failed.
+///
+/// Not on [SystemNotices] itself: every stand-in would have to answer it, and only the real centre
+/// knows.
+Future<bool?> noticesEnabled(SystemNotices notices) =>
+    notices is LocalSystemNotices
+    ? notices.enabled()
+    : Future<bool?>.value(null);
+
 /// What a device notice's payload starts with; the device's key follows. An agent notice's payload
 /// is `machine\nagent`, so the two never read as each other.
 const _devicePayload = 'device:';
@@ -161,6 +171,27 @@ class LocalSystemNotices implements SystemNotices {
     } catch (error) {
       appLog.warn('notify', 'permission request failed', error: error);
     }
+  }
+
+  /// Whether notices are allowed now — see [noticesEnabled]. iOS cannot tell "never asked" from
+  /// "refused" here: both read false, and asking ([requestPermission]) is what tells them apart.
+  Future<bool?> enabled() async {
+    try {
+      await _init();
+      final ios = _plugin
+          .resolvePlatformSpecificImplementation<
+            IOSFlutterLocalNotificationsPlugin
+          >();
+      if (ios != null) return (await ios.checkPermissions())?.isEnabled;
+      final android = _plugin
+          .resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin
+          >();
+      if (android != null) return await android.areNotificationsEnabled();
+    } catch (error) {
+      appLog.warn('notify', 'permission check failed', error: error);
+    }
+    return null;
   }
 
   @override

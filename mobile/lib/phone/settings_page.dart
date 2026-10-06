@@ -4,10 +4,12 @@ import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
+import 'package:harness_mobile/core/app_settings.dart';
 import 'package:harness_mobile/core/app_version.dart';
 import 'package:harness_mobile/demo/sample_mode.dart'
     show SampleMode, SampleSession, openSampleMode;
 import 'package:harness_mobile/core/device_name.dart';
+import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/shared/widgets/app_dialog.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/theme/appearance_prefs_store.dart';
@@ -200,6 +202,9 @@ class _Body extends StatelessWidget {
               phoneRoute((_) => DevicesPage(notifier: notifier)),
             ),
           ),
+          // Under Your devices: a new device on the account is one of the two things a notice says.
+          // Not in the sample, whose notices go nowhere.
+          if (_sample(context) == null) _NotificationsRow(notifier: notifier),
           // The name those computers show when this phone takes a harness over — which makes it a
           // fact about the account's computers, not about how the terminal looks.
           _PhoneNameRow(notifier: notifier),
@@ -377,6 +382,94 @@ class _VoiceLanguageRow extends StatelessWidget {
       );
     },
   );
+}
+
+/// Whether this phone may notify — a harness asking something while the app is away, a new device
+/// on the account — and the way to turn it on.
+///
+/// ⚠️ **The way back.** The OS asks once by itself, as the first terminal's tips go
+/// (`terminal_page.dart`). A "Don't Allow" there had no way back from inside the app, and the device
+/// notices went with it — the one warning that a key nobody recognises joined the account.
+///
+/// Off, a tap asks the OS: the prompt where it still has one to show, and where it does not (iOS
+/// asks once; Android stops after a refusal or two) the answer is still no, so the way to the
+/// phone's own switch is offered. On, a tap goes straight to that switch. Read again on the way back
+/// from Settings. No value at all where the answer cannot be read (a stand-in notice centre).
+class _NotificationsRow extends StatefulWidget {
+  const _NotificationsRow({required this.notifier});
+
+  final AppNotifier notifier;
+
+  @override
+  State<_NotificationsRow> createState() => _NotificationsRowState();
+}
+
+class _NotificationsRowState extends State<_NotificationsRow>
+    with WidgetsBindingObserver {
+  bool? _on;
+
+  SystemNotices get _notices => widget.notifier.agentNotices.system;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    unawaited(_read());
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  /// Back from the phone's Settings, where the switch is — or from anywhere else it could change.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) unawaited(_read());
+  }
+
+  Future<void> _read() async {
+    final on = await noticesEnabled(_notices);
+    if (mounted && on != _on) setState(() => _on = on);
+  }
+
+  Future<void> _tap() async {
+    if (_on == true) {
+      await openAppSettings();
+      return;
+    }
+    await _notices.requestPermission();
+    await _read();
+    if (!mounted || _on != false) return;
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+      SnackBar(
+        content: const Text(
+          'Notifications are off for Harness. Turn them on in the phone’s Settings.',
+        ),
+        action: SnackBarAction(
+          label: 'Open Settings',
+          onPressed: () => unawaited(openAppSettings()),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    AppTheme.watch(context);
+    return SettingsRow(
+      key: const ValueKey('settings-notifications'),
+      title: 'Notifications',
+      detail: 'When a harness needs you, or a new device joins your account.',
+      value: switch (_on) {
+        true => 'On',
+        false => 'Off',
+        null => null,
+      },
+      onTap: () => unawaited(_tap()),
+    );
+  }
 }
 
 /// What this phone is called on another screen's "took control" banner —

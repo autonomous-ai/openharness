@@ -100,6 +100,10 @@ class _PhoneWelcomeState extends State<PhoneWelcome> {
   /// Between a scan and the session it signs in: the scan page says so.
   bool _signingInWithScan = false;
 
+  /// The code step was reached from a scan that could not sign the phone in by itself
+  /// ([_emailCodeFromScan]): the step says why an email is in the way. Kept on the code step only.
+  bool _codeFromScan = false;
+
   /// Under the scan page's hint. A desktop app opens signed out (its guest mode), and its Add Phone
   /// then shows no code, only "Sign in to add your phone." — with no way to sign in from there.
   static const _signInThereFirst =
@@ -153,7 +157,30 @@ class _PhoneWelcomeState extends State<PhoneWelcome> {
       }
       if (!mounted) return;
     }
-    unawaited(_sendCode());
+    unawaited(_emailCodeFromScan());
+  }
+
+  /// The scan could not sign the phone in by itself — an older computer's QR has no sign-in code,
+  /// and one that has may be spent or expired — so the email in it is sent a code instead.
+  ///
+  /// Said on the code step ([_codeFromScan]): somebody who pointed the camera at a computer and
+  /// landed on "Check your email" was never told why. And when even the email cannot go — the
+  /// address in the QR does not pass, the network is down — the email step takes over, with the
+  /// reason under its field and the address there to correct. ⚠️ Left on the scan page, as it used
+  /// to be, the failure was said nowhere (that page shows no errors) and its camera, which stops
+  /// reading after one code, read nothing more: a screen that looked alive and did nothing.
+  Future<void> _emailCodeFromScan() async {
+    // Gone from the camera while the scan's own sign-in was tried: the person chose another way.
+    if (_step != _Step.scan) return;
+    _codeFromScan = true;
+    // The scan page goes on saying "Signing in…" while the code is sent — it is the same sign-in,
+    // and the page's own title back for that second read as the scan having been dropped.
+    setState(() => _signingInWithScan = true);
+    final sent = await _sendCode();
+    if (!mounted) return;
+    setState(() => _signingInWithScan = false);
+    if (sent) return;
+    _go(_Step.email, error: _error);
   }
 
   /// "Continue with Google / Apple": the account's own sign-in page, in the app. Its failure is
@@ -169,7 +196,9 @@ class _PhoneWelcomeState extends State<PhoneWelcome> {
     }
   }
 
-  void _go(_Step step) {
+  /// To [step], with nothing said on it unless [error] is: a step's failure belongs to the step
+  /// it happened on.
+  void _go(_Step step, {String? error}) {
     // Leaving for another way in takes the account's page with it: whatever it came back with
     // would sign the phone in behind the step the person chose instead. Any step that is left — two
     // of them offer the accounts now, the first screen and [_SignInFirst].
@@ -182,27 +211,31 @@ class _PhoneWelcomeState extends State<PhoneWelcome> {
     }
     setState(() {
       _step = step;
-      _error = null;
+      _error = error;
+      if (step != _Step.code) _codeFromScan = false;
     });
     if (step == _Step.email) _emailFocus.requestFocus();
     if (step == _Step.code) _codeFocus.requestFocus();
     if (step == _Step.hello) FocusManager.instance.primaryFocus?.unfocus();
   }
 
-  Future<void> _sendCode() async {
+  /// Emails a code to the address in the field and moves on to it. False when it did not go, with
+  /// the reason in [_error].
+  Future<bool> _sendCode() async {
     final email = _email.text.trim();
     if (!email.contains('@') || !email.contains('.')) {
       setState(() => _error = 'That doesn’t look like an email address.');
-      return;
+      return false;
     }
     final ok = await _run(
       () => (widget.sendCode ?? widget.notifier.sendLoginCode)(email),
     );
-    if (!ok || !mounted) return;
+    if (!ok || !mounted) return false;
     _sentTo = email;
     _code.clear();
     _startResend();
     _go(_Step.code);
+    return true;
   }
 
   Future<void> _signIn() async {
@@ -370,7 +403,10 @@ class _PhoneWelcomeState extends State<PhoneWelcome> {
               onBack: () => _go(_Step.email),
               title: 'Check your email',
               lines: [
-                'We sent a $_codeLength-digit code to ${_sentTo ?? 'your email'}.',
+                _codeFromScan
+                    ? 'The code you scanned couldn’t sign this phone in by itself, so we sent a '
+                          '$_codeLength-digit code to ${_sentTo ?? 'your email'}.'
+                    : 'We sent a $_codeLength-digit code to ${_sentTo ?? 'your email'}.',
               ],
               field: _CodeField(
                 controller: _code,

@@ -1584,6 +1584,12 @@ class AppNotifier extends ChangeNotifier {
     if (status == AppStatus.unauthenticated) {
       return; // idempotent: several sources can race here
     }
+    // ⚠️ A Sign out by hand is under way ([_leftByHand]): it clears the saved session before it
+    // closes the sockets, and one dialling in between finds the session gone and says so. That is
+    // the sign-out in progress, not news — answered here, it invalidated the auth work under that
+    // sign-out, which then stopped halfway, and put "You were signed out" in front of the person
+    // who had just pressed Sign out. The sign-out finishes the job itself.
+    if (_leftByHand) return;
     _invalidateAuthWork();
     currentUser = null;
     signingIn = false;
@@ -1996,16 +2002,30 @@ class AppNotifier extends ChangeNotifier {
   /// machines", which an empty list alone cannot say.
   bool machinesLoading = false;
 
+  /// The sign-in ([_authRevision]) whose machine list has been asked for at least once — answered
+  /// or failed. From then on the list is what the account HAS, empty included.
+  ///
+  /// ⚠️ **"The first fetch", and not "a fetch over an empty list".** An account with no computer
+  /// yet has an empty list after every fetch, so every refresh used to raise [machinesLoading] —
+  /// and the phone's "Waiting for your computer…" page (`phone/welcome/connect_computer.dart`),
+  /// which refreshes every 5 seconds, was swapped for "Looking for your machines…" by the home
+  /// screen each time and built again from scratch: a flash every 5 seconds, a scan's result
+  /// dropped with the page that started it. Keyed to the sign-in, so the next one starts over.
+  int? _machinesFetchedFor;
+
   Future<void> refreshMachines() async {
     final revision = _authRevision;
     if (!_authWorkCurrent(revision)) return;
-    if (machines.isEmpty && !machinesLoading) {
+    if (machines.isEmpty &&
+        !machinesLoading &&
+        _machinesFetchedFor != revision) {
       machinesLoading = true;
       notifyListeners();
     }
     try {
       await _refreshMachines(revision);
     } finally {
+      if (_authWorkCurrent(revision)) _machinesFetchedFor = revision;
       // Said out loud: the list's own notify fires before this, so a flag
       // dropped silently here would leave the rail on its placeholders.
       if (_authWorkCurrent(revision) && machinesLoading) {

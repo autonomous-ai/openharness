@@ -17,16 +17,21 @@ import 'scan_to_connect.dart';
 ///
 /// ```
 /// Unlock M2
-/// On M2, open Harness ▸ Add Phone…, then scan the QR code.
+/// In Harness on M2, open Add Phone…, then scan the QR code.
 /// [          Scan its code           ]
 ///
 /// or enter its Harness phone password
+/// For a server, or a computer without the Harness app open.
 /// [ ••••••••                          Show ]
 ///                                   Unlock
 ///
-/// Forgot it, or never set one? On M2, run
+/// Forgot it, or never set one? In Harness on M2, open Machines (⌘M on a Mac), choose M2, then Password.
+/// On a server, run this on M2:
 /// $ harness remote-password set          Copy
 /// ```
+///
+/// ⚠️ Nothing on a [Machine] says whether a desktop app runs there, so the page does not guess which
+/// way comes first: the scan stays the button, and the password says plainly who it is for.
 ///
 /// What the link is doing while it works is said in words ("Checking the password…"), never as the
 /// CLI's stage names.
@@ -168,10 +173,15 @@ class _UnlockComputerState extends State<UnlockComputer> {
     return ListView(
       padding: const EdgeInsets.fromLTRB(Tty.origin, 12, Tty.origin, 24),
       children: [
-        TtyText('Unlock $name', size: 24, weight: FontWeight.w600),
+        // A Text, not a one-line TtyText: a long computer name wraps instead of being cut off.
+        Text(
+          'Unlock $name',
+          style: tty.style(size: 24, weight: FontWeight.w600),
+        ),
         const SizedBox(height: 12),
         Text(
-          'On $name, open Harness ▸ Add Phone…, then scan the QR code.',
+          // Not "Harness ▸ Add Phone…": that menu is the Mac's; on Linux it is the command palette.
+          'In Harness on $name, open Add Phone…, then scan the QR code.',
           style: tty.style(size: TtySize.row, color: tty.faint),
         ),
         const SizedBox(height: 18),
@@ -185,6 +195,13 @@ class _UnlockComputerState extends State<UnlockComputer> {
         const SizedBox(height: 28),
         Text(
           'or enter its Harness phone password',
+          style: tty.style(size: TtySize.meta, color: tty.faint),
+        ),
+        const SizedBox(height: 2),
+        // Who the password is for: a server has no Add Phone to scan, and with the scan as the one
+        // filled button, somebody unlocking one had no word telling them this was their way.
+        Text(
+          'For a server, or a computer without the Harness app open.',
           style: tty.style(size: TtySize.meta, color: tty.faint),
         ),
         const SizedBox(height: 8),
@@ -214,13 +231,16 @@ class _UnlockComputerState extends State<UnlockComputer> {
           ),
         ),
         const SizedBox(height: 32),
+        // ⚠️ Where the desktop app keeps it now: Open Machines (⌘M) lists the computers, and this
+        // one's row has Password. "Machines ▸ … ▸ Set password" named the old Machines panel.
         Text(
-          'Forgot it? In Harness on $name, choose Machines ▸ $name ▸ Set password.',
+          'Forgot it, or never set one? In Harness on $name, open Machines '
+          '(⌘M on a Mac), choose $name, then Password.',
           style: tty.style(size: TtySize.meta, color: tty.faint),
         ),
         const SizedBox(height: 8),
         Text(
-          'Using the CLI? Run this on $name:',
+          'On a server, run this on $name:',
           style: tty.style(size: TtySize.meta, color: tty.faint),
         ),
         const SizedBox(height: 8),

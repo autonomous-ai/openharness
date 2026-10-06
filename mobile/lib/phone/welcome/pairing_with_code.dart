@@ -14,7 +14,7 @@ import '../tty_controls.dart';
 ///
 /// ```
 /// Connecting to MacBook Pro…
-/// Keep “Add phone” open on your Mac.
+/// Keep “Add Phone” open on MacBook Pro.
 /// ```
 ///
 /// On success the computer unlocks and the home screen moves on by itself. On failure the code is
@@ -96,10 +96,15 @@ class _PairingWithCodeState extends State<PairingWithCode> {
                             .copyWith(height: 34 / 28, letterSpacing: -0.6),
                       ),
                       const SizedBox(height: 12),
-                      TtyText(
-                        error ?? 'Keep “Add phone” open on your Mac.',
-                        color: error == null ? tty.faint : tty.red,
-                        size: TtySize.row,
+                      // A Text that wraps, not a one-line TtyText: the error here is a sentence, and
+                      // cut at the screen's edge it lost the half that says what to do. Named for the
+                      // computer, not "your Mac" — Add Phone is on Linux too.
+                      Text(
+                        error ?? 'Keep “Add Phone” open on $name.',
+                        style: tty.style(
+                          size: TtySize.row,
+                          color: error == null ? tty.faint : tty.red,
+                        ),
                       ),
                       const Spacer(),
                       if (error != null)
