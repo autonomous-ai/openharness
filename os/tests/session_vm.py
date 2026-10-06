@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Observe locking, suspend or compositor recovery on a disposable installed machine."""
+"""Observe locking, screenshots, suspend or recovery on a disposable installed machine."""
 import argparse
 import base64
 import hashlib
@@ -309,7 +309,7 @@ def main():
     config = dict(disk='/dev/vda', expected_serial='HN_OS_TEST', confirm_erase='/dev/vda',
                   username='me', hostname='harness', password='test-password-123',
                   encrypt=args.firmware == 'uefi', serial_console=True)
-    result = {'status': 'running', 'scope': ('password lock, input isolation and virtual ACPI suspend/resume'
+    result = {'status': 'running', 'scope': ('password lock, input isolation, full/region screenshots and virtual ACPI suspend/resume'
               if args.check == 'lock' else 'installed compositor crash, console fallback and graphical recovery'),
               'firmware': args.firmware, 'encrypted': config['encrypt'], 'memory_mib': 2048,
               'video': args.video,
@@ -380,6 +380,11 @@ def main():
             installed_recovery(vm, config, result)
         else:
             installed_session(vm, config, result)
+            # Use the same physical shortcuts, region drag and byte-for-byte
+            # clipboard check as the package-migration fixture. These run on
+            # the freshly installed image, without staging session files.
+            from session_update_vm import screenshots
+            screenshots(vm, result)
         assert 'live_lock_error' not in result, 'The unconfigured live session could not be unlocked'
         result['status'] = 'passed'
     except BaseException as error:

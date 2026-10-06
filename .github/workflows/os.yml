@@ -277,9 +277,9 @@ jobs:
             esac
           fi
           python3 os/tests/vm.py --iso os/dist/*.iso --memory "$OS_MEMORY_MIB" --live-transport "$OS_LIVE_TRANSPORT" "${live_mode[@]}" --firmware '${{ matrix.firmware }}' ${{ matrix.encryption }} ${{ matrix.agents }} ${{ matrix.cpu }} ${{ (inputs.workloads || inputs.workload_seed_run_id != '') && matrix.firmware == 'bios' && '--workloads' || '' }} ${{ inputs.dsh && matrix.firmware == 'bios' && '--dsh' || '' }} ${{ inputs.workload_seed_run_id != '' && matrix.firmware == 'bios' && '--workload-seed os/work/workload-seed' || '' }} ${{ inputs.workloads && inputs.workload_seed_run_id != '' && matrix.firmware == 'bios' && '--workload-repair-game' || '' }}
-      - name: Exercise password lock and actual suspend/resume
+      - name: Exercise installed password lock, screenshots and actual suspend/resume
         if: ${{ inputs.checks == 'session' }}
-        run: python3 os/tests/session_vm.py --iso os/dist/*.iso --firmware '${{ matrix.firmware }}' --session-file os/root/usr/lib/harness-os/session --theme-directory os/root/usr/share/plymouth/themes/harness
+        run: python3 os/tests/session_vm.py --iso os/dist/*.iso --firmware '${{ matrix.firmware }}'
       - name: Exercise installed compositor crash and recovery
         if: ${{ inputs.checks == 'recovery' }}
         run: python3 os/tests/session_vm.py --iso os/dist/*.iso --firmware '${{ matrix.firmware }}' --check recovery
