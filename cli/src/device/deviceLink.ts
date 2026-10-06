@@ -18,7 +18,9 @@
 //
 //   2. NEVER CLEAR THE AUTH SESSION. `BackendSocket.onRevoked` owns that decision. Two sockets racing to
 //      wipe a session on the same 401 is a bug waiting for a bad afternoon; a dead DeviceLink must
-//      degrade to "other machines unavailable" and leave the cabled machine working.
+//      degrade to "other machines unavailable" and leave the cabled machine working. It holds no session
+//      either: its tokens come from the core's (`core.account.accessToken`), and its E2EE sessions are the
+//      gateway's, which holds this machine's identity (`core.account.lane`, gateway/lane.ts).
 //
 //   3. LOG EVERY ERROR AND EVERY DROPPED FRAME. This feature's characteristic bug is SILENT EMPTINESS —
 //      an RPC answered with an error nobody printed, a card arriving in a shape nobody recognised. All of
@@ -28,10 +30,9 @@ import { randomUUID } from 'node:crypto'
 
 import WebSocket from 'ws'
 
-import type { AuthSessionManager } from '../lib/authSession.js'
-import { b64d, type Identity } from '../lib/e2ee/core.js'
-import { RelaySessionCrypto } from '../lib/e2ee/relayClient.js'
+import type { LaneSeal } from '../core/api.js'
 import type { MachinePeer } from '../lib/e2ee/machinePeers.js'
+import { isWrapped } from '../lib/relayFrames.js'
 import { VERSION } from '../version.js'
 
 /** One frame on the wire. The backend's own vocabulary, unchanged. */
@@ -51,12 +52,17 @@ const MAX_DELAY_MS = 30_000
 export type DeviceLinkStatus = 'idle' | 'connecting' | 'ready' | 'error'
 
 export interface DeviceLinkOpts {
-  auth: AuthSessionManager
+  /** The account's tokens, from the core (`core.account.accessToken`): one forced refresh after a 401. */
+  auth: { accessToken(options?: { force?: boolean; failedToken?: string }): Promise<string> }
   backendWsBase: string
   computerId: string
   autonomousEnv: string
-  /** This daemon's own E2EE identity — the same one `harness remote-password set`/`link connect` signs with. */
-  identity: Identity
+  /**
+   * The E2EE session with each linked machine, held by the gateway under this daemon's own identity — the
+   * same one `harness remote-password set`/`link connect` signs with (`core.account.lane`). The lane keeps
+   * only whether each session is up.
+   */
+  seal: LaneSeal
   /** The pinned key for a machine, read FRESH: `harness link connect` runs as a separate process. */
   peer: (machineId: string) => MachinePeer | null
   /**
@@ -70,6 +76,9 @@ export interface DeviceLinkOpts {
 
   log: (line: string) => void
 }
+
+/** The lane's side of a machine's E2EE session: whether it is up. Its keys are the gateway's. */
+interface LaneSession { ready: boolean }
 
 export class DeviceLink {
   private ws: WebSocket | null = null
@@ -98,10 +107,17 @@ export class DeviceLink {
    * can be encrypted or read — which is exactly what the backend's outer `machineId` tag is for
    * (hub.ts deliverUpLocal tags every commander frame with it).
    */
-  private readonly sessions = new Map<string, RelaySessionCrypto>()
+  private readonly sessions = new Map<string, LaneSession>()
   private readonly cryptoWaiters = new Map<string, { resolve: () => void; reject: (e: Error) => void; timer: NodeJS.Timeout }>()
   /** In-flight handshakes, so N concurrent callers for one machine send exactly ONE hello. */
   private readonly handshakes = new Map<string, Promise<void>>()
+  /**
+   * What goes out and what comes in, each in the order it came. Sealing and opening are a round trip to the
+   * gateway, and a frame that needs none must not overtake one that does: a turn's cards, or a reply and
+   * the frame after it, would arrive out of order.
+   */
+  private outbound: Promise<void> = Promise.resolve()
+  private inbound: Promise<void> = Promise.resolve()
 
 
 
@@ -162,17 +178,24 @@ export class DeviceLink {
     if (inflight) return inflight
     const peer = this.opts.peer(machineId)
     if (!peer) return   // a cloud machine, or one whose RPCs the backend answers itself
-    const crypto = new RelaySessionCrypto({ machineId, selfIdentity: this.opts.identity, peerPub: b64d(peer.pub) })
-    this.sessions.set(machineId, crypto)
+    const session: LaneSession = { ready: false }
+    this.sessions.set(machineId, session)
     const handshake = new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.cryptoWaiters.delete(machineId)
         reject(new Error('the machine did not answer the E2EE hello'))
       }, RPC_TIMEOUT_MS)
       this.cryptoWaiters.set(machineId, { resolve, reject, timer })
-      // The hello goes in clear AND tagged: the backend routes a device frame by its outer machineId, so
-      // without the tag the handshake for a background machine would be delivered to the active one.
-      this.send({ ...(crypto.helloFrame() as DeviceFrame), machineId })
+      // The gateway starts the session and words the hello. It goes in clear AND tagged: the backend routes
+      // a device frame by its outer machineId, so without the tag the handshake for a background machine
+      // would be delivered to the active one. A session given up meanwhile (the socket closed, a reset)
+      // sends nothing, and a gateway that cannot start one fails only this one.
+      this.opts.seal.hello(machineId, peer.pub).then(
+        (hello) => { if (this.sessions.get(machineId) === session) this.send({ ...(hello as DeviceFrame), machineId }) },
+        (err: unknown) => {
+          if (this.sessions.get(machineId) === session) this.failCrypto(machineId, err instanceof Error ? err : new Error(String(err)))
+        },
+      )
     }).finally(() => { this.handshakes.delete(machineId) })
     this.handshakes.set(machineId, handshake)
     await handshake
@@ -205,6 +228,7 @@ export class DeviceLink {
     if (!machineId || this.handshakes.has(machineId)) return false
     if (!this.sessions.has(machineId)) return false
     this.sessions.delete(machineId)
+    this.opts.seal.drop(machineId)
     return true
   }
 
@@ -226,7 +250,8 @@ export class DeviceLink {
 
   /** Fire-and-forget. Dropped with a line rather than thrown: a turn is not worth an unhandled rejection. */
   send(frame: DeviceFrame): void {
-    if (this.ws?.readyState !== WebSocket.OPEN) {
+    const ws = this.ws
+    if (ws?.readyState !== WebSocket.OPEN) {
       this.opts.log(`device: dropped ${frame.type ?? '?'} — no link`)
       return
     }
@@ -236,14 +261,38 @@ export class DeviceLink {
     // The key is picked by the frame's own `machineId`, falling back to the attached machine for the
     // frames that predate multi-machine (machine_select, ping). Encrypting with the wrong machine's key
     // is the one failure here that looks like nothing at all: the far end drops it silently.
-    const session = this.sessions.get(frame.machineId || this.attached)
-    const out = session?.ready && !String(frame.type ?? '').startsWith('e2e_')
-      ? (session.wrapOutgoing(frame as Record<string, unknown>) as DeviceFrame)
-      : frame
+    //
+    // Decided now, as the frame is handed over; sealed by the gateway in turn, and sent in the order handed.
+    const machineId = frame.machineId || this.attached
+    const session = this.sessions.get(machineId)
+    const sealing = !!session?.ready && !String(frame.type ?? '').startsWith('e2e_')
+    this.outbound = this.outbound.then(async () => {
+      let out = frame
+      if (sealing) {
+        const sealed = await this.opts.seal.seal(machineId, frame as Record<string, unknown>).catch((): { lost: true } => ({ lost: true }))
+        // Never the frame as it came: the gateway restarted under this session (or is not there), so the
+        // frame goes nowhere and the next call to that machine starts a session again.
+        if ('lost' in sealed) {
+          this.forget(machineId, session)
+          this.opts.log(`device: dropped ${frame.type ?? '?'} for ${machineId} — its E2EE session is gone`)
+          return
+        }
+        out = sealed.frame as DeviceFrame
+      }
+      // The socket it was handed for: one closed meanwhile takes it with it, never the next connection.
+      if (ws.readyState !== WebSocket.OPEN) {
+        this.opts.log(`device: dropped ${frame.type ?? '?'} — no link`)
+        return
+      }
+      try { ws.send(JSON.stringify(out)) } catch (err) {
+        this.opts.log(`device: send ${frame.type ?? '?'} failed (${(err as Error).message})`)
+      }
+    })
+  }
 
-    try { this.ws.send(JSON.stringify(out)) } catch (err) {
-      this.opts.log(`device: send ${frame.type ?? '?'} failed (${(err as Error).message})`)
-    }
+  /** A session the gateway no longer holds (it restarted): forgotten here too, so the next call starts one. */
+  private forget(machineId: string, session: LaneSession | undefined): void {
+    if (session && this.sessions.get(machineId) === session && !this.handshakes.has(machineId)) this.sessions.delete(machineId)
   }
 
   /**
@@ -323,8 +372,8 @@ export class DeviceLink {
         cleanup()
         this.attempts = 0
         this.state = 'ready'
-        // `e2ee_data` says this side can decrypt an encrypted `*_result` — which it can, via
-        // RelaySessionCrypto below. Advertising it before that was true would turn a clean
+        // `e2ee_data` says this side can decrypt an encrypted `*_result` — which it can, through the
+        // gateway's session (gateway/lane.ts). Advertising it before that was true would turn a clean
         // E2EE_REQUIRED error into a hang, which is why it went in only once the session did.
         //
         // `multi_machine` is what makes the dial's carousel span machines: the backend then holds a
@@ -350,7 +399,11 @@ export class DeviceLink {
       }
       ws.once('error', onError)
       ws.once('open', onOpen)
-      ws.on('message', (raw) => this.onMessage(raw))
+      ws.on('message', (raw) => {
+        this.inbound = this.inbound.then(() => this.onMessage(raw)).catch((err: unknown) => {
+          this.opts.log(`device: a frame could not be read (${err instanceof Error ? err.message : String(err)})`)
+        })
+      })
       ws.on('close', (code) => this.onClose(code))
     })
   }
@@ -375,16 +428,20 @@ export class DeviceLink {
     })
   }
 
-  private onWelcome(machineId: string, payload: Record<string, unknown>): void {
-    const crypto = this.sessions.get(machineId)
-    if (!crypto) return
-    if (!crypto.handleWelcome(payload)) { this.failCrypto(machineId, new Error('E2EE_HANDSHAKE_FAILED')); return }
+  private async onWelcome(machineId: string, payload: Record<string, unknown>): Promise<void> {
+    const session = this.sessions.get(machineId)
+    if (!session) return
+    const welcomed = await this.opts.seal.welcome(machineId, payload).catch(() => false)
+    // Given up while the gateway read it (the socket closed, a reset): a newer session is not this one's.
+    if (this.sessions.get(machineId) !== session) return
+    if (!welcomed) { this.failCrypto(machineId, new Error('E2EE_HANDSHAKE_FAILED')); return }
+    session.ready = true
     const waiter = this.cryptoWaiters.get(machineId)
     if (waiter) { clearTimeout(waiter.timer); this.cryptoWaiters.delete(machineId); waiter.resolve() }
   }
 
   private failCrypto(machineId: string, err: Error): void {
-    this.sessions.delete(machineId)
+    if (this.sessions.delete(machineId)) this.opts.seal.drop(machineId)
     const waiter = this.cryptoWaiters.get(machineId)
     if (waiter) { clearTimeout(waiter.timer); this.cryptoWaiters.delete(machineId); waiter.reject(err) }
   }
@@ -439,7 +496,7 @@ export class DeviceLink {
     }, delay)
   }
 
-  private onMessage(raw: WebSocket.RawData): void {
+  private async onMessage(raw: WebSocket.RawData): Promise<void> {
     let frame: DeviceFrame
     try { frame = JSON.parse(raw.toString()) as DeviceFrame } catch { return }
 
@@ -455,8 +512,11 @@ export class DeviceLink {
     if (from && from === this.opts.localMachineId() && !String(frame.type ?? '').endsWith('_result')) return
 
 
-    if (frame.type === 'e2e_welcome') { this.onWelcome(from, (frame.payload ?? {}) as Record<string, unknown>); return }
-    if (frame.type === 'e2e_rekey') { this.sessions.get(from)?.handleRekey((frame.payload ?? {}) as Record<string, unknown>); return }
+    if (frame.type === 'e2e_welcome') { await this.onWelcome(from, (frame.payload ?? {}) as Record<string, unknown>); return }
+    if (frame.type === 'e2e_rekey') {
+      if (this.sessions.has(from)) await this.opts.seal.rekey(from, (frame.payload ?? {}) as Record<string, unknown>).catch(() => undefined)
+      return
+    }
     if (frame.type === 'e2e_denied') {
       // The far end knows this daemon's key and rejected it — the pin is stale, not merely missing.
       this.opts.log(`device: e2e denied ${from} — the remote password may have changed or this machine's link was revoked, re-run \`harness link connect ${from}\``)
@@ -465,16 +525,22 @@ export class DeviceLink {
     }
 
     const session = this.sessions.get(from)
-    if (session?.ready) {
-      const plain = session.unwrapIncoming(frame as Record<string, unknown>)
-
-      if (!plain) {
+    // A frame that was never sealed (a control frame) is read as it is, as the session itself would read it
+    // (lib/e2ee/relayClient.ts `unwrapIncoming`): only a sealed one goes to the gateway to be opened.
+    if (session?.ready && isWrapped(frame.payload)) {
+      const opened = await this.opts.seal.open(from, frame as Record<string, unknown>).catch((): { lost: true } => ({ lost: true }))
+      if ('lost' in opened) {
+        this.forget(from, session)
+        this.opts.log(`device: could not decrypt ${frame.type ?? '?'} — the E2EE session with ${from} is gone, dropped`)
+        return
+      }
+      if ('unreadable' in opened) {
         // The single most misleading failure this lane has: an undecryptable card is indistinguishable
         // from no card at all, and the dial just sits through a whole turn showing nothing.
         this.opts.log(`device: could not decrypt ${frame.type ?? '?'} — dropped`)
         return
       }
-      frame = plain as DeviceFrame
+      frame = opened.frame as DeviceFrame
     }
     const type = frame.type ?? ''
     const payload = (frame.payload ?? {}) as Record<string, unknown>

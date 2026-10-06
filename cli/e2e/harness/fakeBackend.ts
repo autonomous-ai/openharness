@@ -79,6 +79,8 @@ export class FakeBackend {
   readonly webSent = new Map<string, Frame[]>()
   /** What reached each web client from its machine, as relayed (sealed), by connection id. */
   readonly webReceived = new Map<string, Frame[]>()
+  /** What each device socket (a daemon's lane to its other machines) sent towards a machine, as sent. */
+  readonly deviceSent: Frame[] = []
 
   private constructor(private readonly server: Server, readonly port: number) {}
 
@@ -399,6 +401,7 @@ export class FakeBackend {
     // here: a node that is not connected leaves it unanswered, as the real hub does.
     const machineId = frame.machineId && device.conns.has(frame.machineId) ? frame.machineId : device.selected
     const connId = device.conns.get(machineId)
+    this.deviceSent.push(frame)
     if (connId) this.sendNode(machineId, connId, frame)
   }
 

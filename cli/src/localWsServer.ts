@@ -1,4 +1,3 @@
-import { SharingEndedError, type HarnessShareRelay } from './sharing/relay.js'
 import { randomUUID } from 'node:crypto'
 import type { AppSwarms } from './cable/cableSession.js'
 import { notificationReadToken, type UnreadNotification } from './cable/notificationRead.js'
@@ -51,9 +50,9 @@ export interface LocalWsServerOptions {
   /** The daemon's Unix-socket server (lib/localSocket.ts), served the same endpoint beside TCP. */
   localSocketServer?: http.Server | null
   /** Serves a `machine_select` for any OTHER machine this signed-in user owns, by relaying to
-   *  backend's `/api/web-ws` — see lib/remoteRelay.ts. Omit to keep today's own-machine-only behavior. */
+   *  backend's `/api/web-ws` — see lib/remoteRelay.ts — and one for a harness shared with this account
+   *  (`shareId`, sharing/relay.ts). Both are the gateway's. Omit to keep today's own-machine-only behavior. */
   relayPool?: WindowRelay
-  shareRelay?: HarnessShareRelay
   autonomousEnv?: string
   /**
    * Who a window on this computer is, for a `terminal_open` it relays to another machine without
@@ -375,14 +374,16 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
         close(4403, 'machine mismatch')
         return
       }
+      // A harness someone shared with this account, watched read-only through the gateway, which holds the
+      // Share relay's socket (sharing/relay.ts): 4403 when the share ended, 1013 when it is out of reach.
       if (typeof payload.shareId === 'string') {
-        if (!options.shareRelay) { close(4403, 'Sharing is unavailable'); return }
+        if (!options.relayPool?.acquireShare) { close(4403, 'Sharing is unavailable'); return }
         try {
-          relay = await options.shareRelay.acquire(requestedMachineId, payload.shareId, terminalSink, close)
+          relay = await options.relayPool.acquireShare(requestedMachineId, payload.shareId, terminalSink, close)
           if (ws.readyState !== WebSocket.OPEN) { relay.detach(); return }
           selected = true
         } catch (error) {
-          close(error instanceof SharingEndedError ? 4403 : 1013,
+          close(error instanceof RelayConnectError && error.closeCode ? error.closeCode : 1013,
             error instanceof Error ? error.message.slice(0, 120) : 'Sharing unavailable')
         }
         return

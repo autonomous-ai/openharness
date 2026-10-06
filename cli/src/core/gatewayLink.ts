@@ -19,8 +19,10 @@
 import { RelayConnectError } from '../lib/relayFrames.js'
 import { decodeGatewayBinary, encodeGatewayBinary, GatewayBinary, GATEWAY_CALLS } from '../lib/gatewayWire.js'
 import { decodeTerminalLocal, encodeTerminalLocal } from '../lib/terminalBinary.js'
+import { answerAccountQuery } from './accountQueries.js'
+import { LANE_OFF } from './api.js'
 import type {
-  BackendNotice, GatewayEvents, GatewayOps, GatewayPort, GatewayRefusal, GatewayStatus, HttpAnswer,
+  BackendNotice, GatewayEvents, GatewayOps, GatewayPort, GatewayRefusal, GatewayStatus, HttpAnswer, LaneSeal,
   RemoteClient, RemoteRole, RemoteTransport, WindowRelay, WindowRelaySession, WindowRelaySink,
 } from './api.js'
 import type { ServiceFrame } from './serviceLinks.js'
@@ -54,6 +56,10 @@ export const PAIR_WAIT_MS = 120_000
 
 /** The close a window on another machine gets when the gateway it went through is gone: try again shortly. */
 export const WINDOW_GATEWAY_GONE = 1013
+
+/** How long the fleet's lane waits on the gateway to seal or open a frame. The frames behind it wait too,
+ *  in order; a gateway that has not answered in this long is hung, and the master ends it soon after. */
+export const LANE_WAIT_MS = 5_000
 
 const UNAVAILABLE: HttpAnswer = { status: 503, body: { error: 'GATEWAY_UNAVAILABLE' } }
 
@@ -139,6 +145,32 @@ export function createGatewayLink(deps: GatewayLinkDeps) {
     return typeof answer.status === 'number' ? { status: answer.status, body: record(answer.body) } : UNAVAILABLE
   }
 
+  /**
+   * The fleet's lane's sessions, in the gateway (gateway/lane.ts). Every one of them is a call, the lane's
+   * drop too, so the gateway takes them in the order the lane made them. A gateway that is not there
+   * starts no session and seals nothing: the lane hears `lost`, never its frame back as it was.
+   */
+  const lane = (op: string, payload: Record<string, unknown> = {}) => deps.call(GATEWAY_CALLS.lane, { ...payload, op }, LANE_WAIT_MS)
+  const laneOps: LaneSeal = {
+    hello: async (machineId, peerPub) => {
+      const answer = await lane('hello', { machineId, peerPub })
+      if (answer.frame && typeof answer.frame === 'object') return record(answer.frame)
+      throw new Error('the gateway could not start an E2EE session: it is not running')
+    },
+    welcome: async (machineId, payload) => (await lane('welcome', { machineId, payload })).ok === true,
+    rekey: async (machineId, payload) => { await lane('rekey', { machineId, payload }) },
+    seal: async (machineId, frame) => {
+      const answer = await lane('seal', { machineId, frame })
+      return answer.frame && typeof answer.frame === 'object' ? { frame: record(answer.frame) } : { lost: true }
+    },
+    open: async (machineId, frame) => {
+      const answer = await lane('open', { machineId, frame })
+      if (answer.frame && typeof answer.frame === 'object') return { frame: record(answer.frame) }
+      return answer.unreadable === true ? { unreadable: true } : { lost: true }
+    },
+    drop: (machineId) => { void lane('drop', { machineId }) },
+  }
+
   const ops: GatewayOps = {
     status: async (): Promise<GatewayStatus> => {
       const answer = await deps.call(GATEWAY_CALLS.status, {}, 2_000)
@@ -178,16 +210,21 @@ export function createGatewayLink(deps: GatewayLinkDeps) {
     revokeIdentity: (identity) => { send('revokeIdentity', { identity }) },
     account: (next) => { send('account', { account: next }) },
     reachable: (machineIds) => { reachable = machineIds; send('reachable', { machineIds }) },
+    lane: laneOps,
   }
 
-  const open = (isolated: boolean) => (machineId: string, autonomousEnv: string, selectFrame: Record<string, unknown>,
-    sink: WindowRelaySink, onClosed: (code: number, reason: string) => void): Promise<WindowRelaySession> =>
+  /** A window's session through the gateway: to another of the owner's machines, or to a harness shared
+   *  with this account (`share`). */
+  const openWindow = (open: Record<string, unknown>, sink: WindowRelaySink, onClosed: (code: number, reason: string) => void): Promise<WindowRelaySession> =>
     new Promise((resolve, reject) => {
       if (!up) { reject(new RelayConnectError('the relay is restarting', WINDOW_GATEWAY_GONE)); return }
       const id = newId()
       windows.set(id, { sink, onClosed, opening: { resolve, reject } })
-      send('windowOpen', { id, machineId, autonomousEnv, frame: selectFrame, isolated })
+      send('windowOpen', { ...open, id })
     })
+  const open = (isolated: boolean) => (machineId: string, autonomousEnv: string, selectFrame: Record<string, unknown>,
+    sink: WindowRelaySink, onClosed: (code: number, reason: string) => void): Promise<WindowRelaySession> =>
+    openWindow({ machineId, autonomousEnv, frame: selectFrame, isolated }, sink, onClosed)
   const sessionOf = (id: string): WindowRelaySession => ({
     send: async (frame) => { send('windowSend', { id, frame }) },
     sendBinary: async (clear) => {
@@ -202,6 +239,7 @@ export function createGatewayLink(deps: GatewayLinkDeps) {
     acquireIsolated: open(true),
     invalidate: (machineId) => { send('windowInvalidate', { machineId, isolated: false }) },
     invalidateIsolated: (machineId) => { send('windowInvalidate', { machineId, isolated: true }) },
+    acquireShare: (machineId, shareId, sink, onClosed) => openWindow({ machineId, share: shareId }, sink, onClosed),
   }
 
   /** A window's connection ended, from the gateway's side or because the gateway went. */
@@ -302,20 +340,16 @@ export function createGatewayLink(deps: GatewayLinkDeps) {
   }
 
   /**
-   * What the gateway asks the core (`service_query`): a token to dial with, and the device key log's reads
-   * of the backend. Nothing else: the gateway is the relay, and the core's own REST reads are not its to
+   * What the gateway asks the core (`service_query`): a token to dial with, the device key log's reads of
+   * the backend, and the harnesses shared with this account (the Share relay finds a share among them
+   * before it dials). Nothing else: the gateway is the relay, and the core's own REST reads are not its to
    * make. A refused token comes back as the session's own error, so the gateway can tell a session that
    * is over (stop for good) from one that could not be refreshed just now (try again).
    */
   const answer = async (query: string, payload: Record<string, unknown>): Promise<Record<string, unknown>> => {
-    if (query === 'access_token') {
-      try {
-        return { token: await deps.tokens.accessToken({ force: payload.force === true, ...(typeof payload.failedToken === 'string' ? { failedToken: payload.failedToken } : {}) }) }
-      } catch (error) {
-        return { code: text((error as { code?: unknown }).code) || 'UNAVAILABLE', message: error instanceof Error ? error.message : String(error) }
-      }
-    }
-    if (query === 'backend' && payload.method === 'GET' && text(payload.path).startsWith('/api/device-keys')) {
+    // The gateway is the lane's seal, never a lane of its own: it is answered tokens, and no lane step.
+    if (query === 'access_token') return (await answerAccountQuery({ accessToken: (options) => deps.tokens.accessToken(options), lane: LANE_OFF }, query, payload))!
+    if (query === 'backend' && payload.method === 'GET' && (text(payload.path).startsWith('/api/device-keys') || payload.path === '/api/harness-shares')) {
       return { ...await deps.backend('GET', text(payload.path)) }
     }
     return { error: 'UNKNOWN_QUERY' }
@@ -354,3 +388,16 @@ export function createGatewayLink(deps: GatewayLinkDeps) {
 }
 
 export type GatewayLink = ReturnType<typeof createGatewayLink>
+
+/** The lane's sessions as the core hands them to its services (`core.account.lane`): read from the gateway
+ *  each time, because the core's API is built before the gateway is started. */
+export function laneOf(gateway: () => LaneSeal): LaneSeal {
+  return {
+    hello: (machineId, peerPub) => gateway().hello(machineId, peerPub),
+    welcome: (machineId, payload) => gateway().welcome(machineId, payload),
+    rekey: (machineId, payload) => gateway().rekey(machineId, payload),
+    seal: (machineId, frame) => gateway().seal(machineId, frame),
+    open: (machineId, frame) => gateway().open(machineId, frame),
+    drop: (machineId) => gateway().drop(machineId),
+  }
+}

@@ -18,7 +18,7 @@
  * no longer restarts every viewer: they stay up here, and the new core hears their URLs at once.
  */
 import type { CoreApi } from '../core/api.js'
-import { emptyPorts, resolveAgent, TERMINALS_OFF } from '../core/api.js'
+import { emptyPorts, LANE_OFF, resolveAgent, TERMINALS_OFF } from '../core/api.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcess } from './process.js'
 import { startViewers } from './viewers.js'
@@ -73,6 +73,7 @@ export function viewersCoreApi(dataDir: string, sessions: ReadonlyMap<string, Re
     account: {
       mintGridName: async () => null,
       accessToken: () => Promise.reject(new Error('the viewers hold no credential')),
+      lane: LANE_OFF,
       privateGridName: async () => null,
       machineName: () => null,
     },

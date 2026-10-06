@@ -5,8 +5,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { env } from '../config/env.js'
 import type { DeviceLinkOpts } from '../device/deviceLink.js'
 import type { MachineListCache } from '../device/machineList.js'
-import type { AuthSessionManager } from '../lib/authSession.js'
-import type { Identity } from '../lib/e2ee/core.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { routeVoiceTask, type RouteDecision, type RouterAgent } from '../lib/voiceRouter.js'
 import { fakeCore } from '../testing/fakeCore.js'
@@ -72,9 +70,7 @@ function setup(over: Partial<FleetDeps> = {}, core = fakeCore()) {
     machineId: () => 'mine',
     machineName: () => 'MacbookPro.local',
     desk: () => [],
-    auth: { accessToken: vi.fn() } as unknown as AuthSessionManager,
     autonomousEnv: 'test-env',
-    identity: { pub: new Uint8Array(32), priv: new Uint8Array(32) } as unknown as Identity,
     ...over,
   }
   const ports: CorePorts = emptyPorts()
@@ -118,11 +114,16 @@ describe('the machine list', () => {
 })
 
 describe('the lane to the other machines', () => {
-  it('signs in and seals as this daemon, reading the pinned keys and this machine’s id fresh', async () => {
+  it('signs in and seals through the core, holding no credential, reading the pinned keys and this machine’s id fresh', async () => {
     let machineId = ''
-    const { deps, router } = setup({ machineId: () => machineId })
+    const { router, core } = setup({ machineId: () => machineId })
     const opts = lane.opts!
-    expect(opts).toMatchObject({ auth: deps.auth, backendWsBase: env.BACKEND_WS_URL, computerId: 'computer-1', autonomousEnv: 'test-env', identity: deps.identity })
+    expect(opts).toMatchObject({ backendWsBase: env.BACKEND_WS_URL, computerId: 'computer-1', autonomousEnv: 'test-env' })
+    // Its tokens are the core's session's, a forced refresh included; its sessions the gateway's.
+    expect(await opts.auth.accessToken({ force: true, failedToken: 'old' })).toBe('token')
+    expect(core.account.accessToken).toHaveBeenCalledWith({ force: true, failedToken: 'old' })
+    expect(opts.seal).toBe(core.account.lane)
+    expect(Object.keys(opts)).not.toContain('identity')
     expect(opts.peer('other')).toEqual({ pub: 'pinned' })
     expect(opts.peer('third')).toBeNull()
     lane.peers.set('third', { pub: 'later' })

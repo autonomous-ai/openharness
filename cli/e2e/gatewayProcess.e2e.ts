@@ -9,6 +9,7 @@
  * Nothing here reaches beyond this machine: the daemon's every server setting is the fake backend's.
  */
 import { execFileSync } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
@@ -30,6 +31,15 @@ function gatewayPids(d: IsolatedDaemon): number[] {
   return table.map((line) => line.trim().match(/^(\d+)\s+(.*)$/)).filter((match): match is RegExpMatchArray => !!match)
     .filter(([, pid, command]) => command.trim() === 'harnessd-gateway' && ours.has(Number(pid))).map(([, pid]) => Number(pid))
 }
+/** ⌘K on a machine: its pick for a task (`route_task`), and its send to an agent anywhere (`route_send`). */
+async function routeTask(client: LocalClient, text: string): Promise<Record<string, any>> {
+  const requestId = randomUUID()
+  const answered = client.next((frame) => frame.type === 'route_result' && frame.payload?.requestId === requestId, 30_000, 'route_result')
+  client.send('route_task', { requestId, text })
+  return (await answered).payload as Record<string, any>
+}
+const routeSend = (client: LocalClient, agentId: string, text: string) => client.request('route_send', { agentId, text }, 30_000)
+
 const restarts = (d: IsolatedDaemon) => d.log().split('\n').filter((line) => /\[harnessd\] service gateway started .* restart \d+/.test(line)).length
 const connections = (d: IsolatedDaemon) => d.log().split('[services] gateway connected').length - 1
 
@@ -154,6 +164,65 @@ describe('the gateway in its own process', () => {
     expect(pairs.ok).toBe(true)
     expect(((await pairs.json()) as Record<string, any>).pairs).toEqual([])
     expect(machine.daemon.coresStarted()).toBe(1)
+  })
+
+  describe('the fleet\'s lane from A to B, sealed by A\'s gateway', () => {
+    let fleet: Fleet | undefined
+    const clients: LocalClient[] = []
+    afterEach(async () => {
+      for (const client of clients.splice(0)) client.close()
+      await fleet?.close()
+      fleet = undefined
+    })
+
+    it('the relay never reads it; A\'s gateway killed costs the lane its sessions and nothing else, and they open again', async () => {
+      const f = await startFleet({ dialOnA: true, envA: { HARNESSD_SERVICES: 'gateway', HARNESSD_SERVICE_INITIAL_BACKOFF_MS: '200', HARNESSD_SERVICE_MAX_BACKOFF_MS: '1000' } })
+      fleet = f
+      onTestFailed(() => {
+        console.log(`---- daemon A log\n${f.a.daemon.log().split('\n').slice(-120).join('\n')}`)
+        console.log(`---- daemon B log\n${f.b.daemon.log().split('\n').slice(-60).join('\n')}`)
+      })
+      await until('both machines connected to the backend', () => f.backend.nodeUp(f.a.machineId) && f.backend.nodeUp(f.b.machineId), 30_000)
+      const onB = await LocalClient.connect(f.b.daemon, { machineId: f.b.machineId })
+      const onA = await LocalClient.connect(f.a.daemon, { machineId: f.a.machineId })
+      clients.push(onB, onA)
+      const cwd = join(f.b.daemon.projectsDir, 'lane-b')
+      mkdirSync(cwd, { recursive: true })
+      const created = await onB.request('agent_create', { engine: 'claude', cwd, bypassPermission: true }, 60_000)
+      expect(created.error, JSON.stringify(created)).toBeUndefined()
+      const agentId: string = created.agent.id
+      await until('the agent on B to bind', async () => (await row(onB, agentId))?.sessionId || null, 45_000, 500)
+      // The dial on A opens A's lane; its session with B is the gateway's, under A's identity.
+      await f.dial!.greet()
+      await until('A to list the agent on B', async () => (await routeTask(onA, 'anything')).agentId === agentId || null, 60_000, 1_000)
+      expect(f.a.daemon.log()).toContain(`[device] device: e2e session ready ${f.b.machineId}`)
+      const started = onB.next(isTurn('turn_started', agentId), 30_000, 'turn_started on B')
+      expect(await routeSend(onA, agentId, 'sealed by the gateway')).toMatchObject({ ok: true })
+      expect((await started).payload?.userMessage).toBe('sealed by the gateway')
+      // What A's lane sent B went sealed: the relay saw sealed frames, and never the turn.
+      const toB = () => f.backend.deviceSent.filter((frame) => frame.machineId === f.b.machineId && !String(frame.type).startsWith('e2e_'))
+      expect(toB().some((frame) => (frame.payload as any)?.__e2e)).toBe(true)
+      expect(JSON.stringify(f.backend.deviceSent)).not.toContain('sealed by the gateway')
+
+      // A's gateway killed: the lane's sessions went with it. A's own window and agents never notice.
+      const before = gatewayPids(f.a.daemon)
+      expect(before).toHaveLength(1)
+      for (const pid of before) process.kill(pid, 'SIGKILL')
+      expect((await onA.request('agents_list', {}, 30_000)).error).toBeUndefined()
+      await until('A\'s gateway to connect again', () => connections(f.a.daemon) >= 2 || null, 30_000, 200)
+      // The lane starts a session with B again, through the new gateway, and delivers.
+      const delivered = await until('A to deliver to B again', async () => {
+        if ((await routeTask(onA, 'anything')).agentId !== agentId) return null
+        const again = onB.next(isTurn('turn_started', agentId), 10_000, 'turn_started on B')
+        const sent = await routeSend(onA, agentId, 'after the gateway came back')
+        if (!sent.ok) { again.catch(() => {}); return null }
+        return (await again.catch(() => null))?.payload?.userMessage === 'after the gateway came back' ? sent : null
+      }, 120_000, 1_000)
+      expect(delivered).toMatchObject({ ok: true })
+      expect(f.a.daemon.log().split(`[device] device: e2e session ready ${f.b.machineId}`).length - 1).toBeGreaterThanOrEqual(2)
+      expect(JSON.stringify(f.backend.deviceSent)).not.toContain('after the gateway came back')
+      expect(f.a.daemon.coresStarted()).toBe(1)
+    })
   })
 
   describe('a window on this computer working on another machine, through the gateway', () => {

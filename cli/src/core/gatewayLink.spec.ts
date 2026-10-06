@@ -2,8 +2,8 @@ import { describe, expect, it, vi } from 'vitest'
 import { decodeGatewayBinary, encodeGatewayBinary, GatewayBinary, GATEWAY_CALLS } from '../lib/gatewayWire.js'
 import { RelayConnectError } from '../lib/relayFrames.js'
 import { decodeTerminalLocal, encodeTerminalLocal, TerminalBinaryKind, type TerminalBinaryClear } from '../lib/terminalBinary.js'
-import type { GatewayEvents } from './api.js'
-import { createGatewayLink, GATEWAY_BUFFER_LIMIT, PAIR_WAIT_MS, WINDOW_GATEWAY_GONE } from './gatewayLink.js'
+import type { GatewayEvents, LaneSeal } from './api.js'
+import { createGatewayLink, GATEWAY_BUFFER_LIMIT, LANE_WAIT_MS, laneOf, PAIR_WAIT_MS, WINDOW_GATEWAY_GONE } from './gatewayLink.js'
 
 const STREAM = '00000000-0000-4000-8000-000000000001'
 const bytesOf = (text: string): TerminalBinaryClear => ({ kind: TerminalBinaryKind.output, streamId: STREAM, seq: 1, compressed: false, bytes: new TextEncoder().encode(text) })
@@ -251,6 +251,55 @@ describe('the gateway in its own process, as the core sees it', () => {
     expect(await link.ops.wifi({ op: 'revoke', id: 'x' })).toMatchObject({ refused: { code: 'UNAVAILABLE' } })
   })
 
+  it('carries the fleet\'s lane to the gateway\'s sessions, every step a call in order, and never a frame back unsealed', async () => {
+    let answer: Record<string, unknown> = {}
+    const { link, call } = setup({ call: async () => answer })
+    const lane = link.ops.lane
+    answer = { frame: { type: 'e2e_hello', payload: { identityPub: 'P' } } }
+    expect(await lane.hello('m2', 'PEER')).toEqual({ type: 'e2e_hello', payload: { identityPub: 'P' } })
+    expect(call).toHaveBeenLastCalledWith(GATEWAY_CALLS.lane, { op: 'hello', machineId: 'm2', peerPub: 'PEER' }, LANE_WAIT_MS)
+    answer = { ok: true }
+    expect(await lane.welcome('m2', { ephPub: 'E' })).toBe(true)
+    expect(call).toHaveBeenLastCalledWith(GATEWAY_CALLS.lane, { op: 'welcome', machineId: 'm2', payload: { ephPub: 'E' } }, LANE_WAIT_MS)
+    await lane.rekey('m2', { epoch: 'x' })
+    expect(call).toHaveBeenLastCalledWith(GATEWAY_CALLS.lane, { op: 'rekey', machineId: 'm2', payload: { epoch: 'x' } }, LANE_WAIT_MS)
+    answer = { frame: { type: 'message', payload: { __e2e: {} } } }
+    expect(await lane.seal('m2', { type: 'message', payload: { content: 'hi' } })).toEqual({ frame: { type: 'message', payload: { __e2e: {} } } })
+    expect(call).toHaveBeenLastCalledWith(GATEWAY_CALLS.lane, { op: 'seal', machineId: 'm2', frame: { type: 'message', payload: { content: 'hi' } } }, LANE_WAIT_MS)
+    answer = { frame: { type: 'agents_list_result', payload: {} } }
+    expect(await lane.open('m2', { type: 'agents_list_result' })).toEqual({ frame: { type: 'agents_list_result', payload: {} } })
+    answer = { unreadable: true }
+    expect(await lane.open('m2', { type: 'agents_list_result' })).toEqual({ unreadable: true })
+    lane.drop('m2')
+    expect(call).toHaveBeenLastCalledWith(GATEWAY_CALLS.lane, { op: 'drop', machineId: 'm2' }, LANE_WAIT_MS)
+    // The gateway not there (or failed): no session is started, nothing is sealed or opened.
+    answer = { error: 'SERVICE_UNAVAILABLE' }
+    await expect(lane.hello('m2', 'PEER')).rejects.toThrow(/not running/)
+    expect(await lane.welcome('m2', {})).toBe(false)
+    expect(await lane.seal('m2', { type: 'message', payload: { content: 'hi' } })).toEqual({ lost: true })
+    expect(await lane.open('m2', { type: 'agents_list_result' })).toEqual({ lost: true })
+  })
+
+  it('hands the core\'s services the gateway\'s lane as it is when each is called', async () => {
+    const one = { hello: vi.fn(async () => ({ type: 'e2e_hello' })), welcome: vi.fn(async () => true), rekey: vi.fn(async () => {}),
+      seal: vi.fn(async () => ({ lost: true as const })), open: vi.fn(async () => ({ unreadable: true as const })), drop: vi.fn() } satisfies LaneSeal
+    let current: LaneSeal = one
+    const lane = laneOf(() => current)
+    expect(await lane.hello('m', 'P')).toEqual({ type: 'e2e_hello' })
+    expect(await lane.welcome('m', { a: 1 })).toBe(true)
+    await lane.rekey('m', { b: 2 })
+    expect(await lane.seal('m', { type: 't' })).toEqual({ lost: true })
+    expect(await lane.open('m', { type: 't' })).toEqual({ unreadable: true })
+    lane.drop('m')
+    expect(one.hello).toHaveBeenCalledWith('m', 'P')
+    expect(one.welcome).toHaveBeenCalledWith('m', { a: 1 })
+    expect(one.rekey).toHaveBeenCalledWith('m', { b: 2 })
+    expect(one.drop).toHaveBeenCalledWith('m')
+    const two = { ...one, seal: vi.fn(async (_m: string, frame: Record<string, unknown>) => ({ frame })) }
+    current = two
+    expect(await lane.seal('m', { type: 'later' })).toEqual({ frame: { type: 'later' } })
+  })
+
   it('tells the gateway what the core learns for it', () => {
     const { link, sent } = setup()
     link.connected()
@@ -272,10 +321,14 @@ describe('the gateway in its own process, as the core sees it', () => {
     // The device key log's reads of the backend, and nothing else the core's session could reach.
     expect(await link.answer('backend', { method: 'GET', path: '/api/device-keys?since=4' })).toEqual({ status: 200, body: { data: { seen: {} } } })
     expect(backend).toHaveBeenCalledWith('GET', '/api/device-keys?since=4')
+    // The harnesses shared with this account, which the Share relay looks a share up in before it dials.
+    expect(await link.answer('backend', { method: 'GET', path: '/api/harness-shares' })).toEqual({ status: 200, body: { data: { seen: {} } } })
+    expect(backend).toHaveBeenLastCalledWith('GET', '/api/harness-shares')
+    expect(await link.answer('backend', { method: 'GET', path: '/api/harness-shares/x' })).toEqual({ error: 'UNKNOWN_QUERY' })
     expect(await link.answer('backend', { method: 'GET', path: '/api/machines' })).toEqual({ error: 'UNKNOWN_QUERY' })
     expect(await link.answer('backend', { method: 'POST', path: '/api/device-keys' })).toEqual({ error: 'UNKNOWN_QUERY' })
     expect(await link.answer('agents', {})).toEqual({ error: 'UNKNOWN_QUERY' })
-    expect(backend).toHaveBeenCalledTimes(1)
+    expect(backend).toHaveBeenCalledTimes(2)
   })
 })
 
@@ -342,6 +395,23 @@ describe('a window here working on another machine, through the gateway', () => 
     const refused = link.windowRelay.acquire('m2', 'prod', select, sink(), vi.fn())
     link.notice({ kind: 'windowFailed', id: 'window-3', code: 4403 })
     await expect(refused).rejects.toMatchObject({ closeCode: 4403, message: 'relay failed' })
+  })
+
+  it('watches a harness shared with this account through the gateway, and is told 4403 when the share ended', async () => {
+    const { link, sent } = setup()
+    // The gateway not there: out of reach just now, as the Share relay said when it could not dial.
+    await expect(link.windowRelay.acquireShare!('owner', 'share-1', sink(), vi.fn())).rejects.toMatchObject({ closeCode: WINDOW_GATEWAY_GONE })
+    link.connected()
+    const window = sink()
+    const watching = link.windowRelay.acquireShare!('owner', 'share-1', window, vi.fn())
+    expect(sent.at(-1)).toEqual({ kind: 'windowOpen', id: 'window-1', machineId: 'owner', share: 'share-1' })
+    link.notice({ kind: 'windowOpened', id: 'window-1' })
+    await watching
+    link.notice({ kind: 'windowFrame', id: 'window-1', frame: { type: 'connected', payload: { readOnly: true } } })
+    expect(window.sendFrame).toHaveBeenCalledWith({ type: 'connected', payload: { readOnly: true } })
+    const ended = link.windowRelay.acquireShare!('owner', 'share-2', sink(), vi.fn())
+    link.notice({ kind: 'windowFailed', id: 'window-2', code: 4403, reason: 'Sharing ended or invitation expired' })
+    await expect(ended).rejects.toEqual(new RelayConnectError('Sharing ended or invitation expired', 4403))
   })
 
   it('the gateway gone: a window waiting to open and one open are both told to try again', async () => {

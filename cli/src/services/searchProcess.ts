@@ -8,7 +8,7 @@
  * process's alone: a crash or a leak in search costs search, and the master starts it again.
  */
 import type { CoreApi } from '../core/api.js'
-import { emptyPorts, resolveAgent, TERMINALS_OFF } from '../core/api.js'
+import { emptyPorts, LANE_OFF, resolveAgent, TERMINALS_OFF } from '../core/api.js'
 import { databaseHistory } from '../core/transcripts/databaseHistory.js'
 import { ExternalSessions, OpenSessions } from '../lib/sessionSearch/external.js'
 import { externalProviders } from '../lib/sessionSearch/externals/index.js'
@@ -67,6 +67,7 @@ export function searchCoreApi(
     account: {
       mintGridName: async () => null,
       accessToken: () => Promise.reject(new Error('search holds no credential')),
+      lane: LANE_OFF,
       privateGridName: async () => null,
       machineName: () => null,
     },
