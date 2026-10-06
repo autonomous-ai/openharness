@@ -64,9 +64,9 @@ const CHANGED_FIELDS: Array<[RegExp, string, { optional?: boolean }?]> = [
   // seen the process, where the released build left it null. Whether that read lands before the last
   // list is timing (3 runs in 4), so it may or may not differ.
   [/^\.agents_list[^.]*\.agents\[\d+\]\.permissionMode$/, 'the permission mode is read back from the engine\'s arguments', { optional: true }],
-  // Whether the search index had finished its first build when the query came is timing; search runs
-  // in its own process now (#829) and is often ready sooner.
-  [/^\.session_search [^.]*\.ready$/, 'the index\'s readiness at the moment of the query is timing', { optional: true }],
+  // Whether the search index had finished its first build when the query came, and how many conversations
+  // it still had to read, is timing; search runs in its own process now (#829) and is often ready sooner.
+  [/^\.session_search [^.]*\.(ready|pending)$/, 'the index\'s readiness, and what it still has to read, at the moment of the query is timing', { optional: true }],
 ]
 
 type Engine = 'claude' | 'codex'

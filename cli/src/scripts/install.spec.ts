@@ -40,7 +40,10 @@ describe('installer interrupted downloads', () => {
       expect(code, stderr).toBe(0);
       expect(JSON.parse(stdout)).toEqual({ version: 'verified' });
       expect(readFileSync(join(scratch, 'binary'))).toEqual(bytes);
-      expect(Object.fromEntries(counts)).toEqual({ '/manifest': 3, '/binary': 3 });
+      // Only the two paths the installer asked for. A loopback server is open to every process on the
+      // machine, and on a busy one something probed it with GET /v1/models mid-test (release check,
+      // 2026-10-06), which is not the installer's doing.
+      expect({ '/manifest': counts.get('/manifest'), '/binary': counts.get('/binary') }).toEqual({ '/manifest': 3, '/binary': 3 });
     } finally {
       server.closeAllConnections();
       await new Promise<void>(resolve => server.close(() => resolve()));
