@@ -23,6 +23,8 @@ RUNTIME = Path('/usr/share/harness-os/runtime.json')
 LOCK = Path('/usr/share/harness-os/lock.json')
 PACKAGE_DB = Path('/var/lib/pacman/local')
 RESTART_REQUIRED = Path('/run/harness-os-restart-required')
+BOOTSTRAP_FILES = ('apply-update.py', 'boot_profile.py', 't2_install.py',
+                   't2_firmware.py', 'firmware_names.py')
 
 
 def digest(path):
@@ -42,6 +44,13 @@ def system_module():
     # The standalone bootstrap runs on preview 4 before this module is installed.
     path = Path('/usr/lib/harness-os/system.py')
     spec = importlib.util.spec_from_file_location('harness_os_system', path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def boot_module():
+    spec = importlib.util.spec_from_file_location('harness_boot_profile', Path(__file__).with_name('boot_profile.py'))
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -139,6 +148,7 @@ def validate_bundle(folder, base):
     if path.is_symlink() or not path.is_file() or package.get('bytes') != path.stat().st_size or digest(path) != package.get('sha256'):
         raise ValueError('Package checksum or size mismatch; download the complete bundle again.')
     inspect_package(path, version, runtime)
+    boot_module().validate_update(path)
     return manifest, path
 
 
@@ -221,6 +231,7 @@ def apply(folder, system, base, installation):
     if previous and previous['status'] not in ('applied', 'rolled-back'):
         raise ValueError('The previous Harness update did not finish. Run rollback first; its checkpoint is retained.')
     manifest, source_package = validate_bundle(folder, base)
+    boot = boot_module()
     target_date = system.snapshot_date(manifest['arch_snapshot'])
     if target_date > base['arch_snapshot']:
         dates = set(re.findall(r'https://archive\.archlinux\.org/repos/(\d{4}/\d{2}/\d{2})/', system.PACMAN_CONFIG.read_text()))
@@ -256,6 +267,7 @@ def apply(folder, system, base, installation):
             # installed OS integration. /run clears this only on a real reboot.
             system.write_json(RESTART_REQUIRED, {'status': 'applying', 'package': manifest['package']['version']})
             install_package(incoming / source_package.name, manifest['package']['version'], manifest['runtime'])
+            boot.restore_firmware()
             # Plymouth and other initramfs assets may change without a kernel
             # package transaction, so rebuild them on this path as well.
             system.run('mkinitcpio', '-P')
@@ -285,10 +297,15 @@ def rollback(system, installation):
     if digest(backup) != receipt['backup_sha256']:
         raise ValueError('Rollback package checksum mismatch. Recover the recorded checkpoint from the live USB.')
     inspect_package(backup, receipt['previous_version'], receipt['previous_runtime'])
+    # A legacy PC rollback removes the new platform helpers from disk. Retain
+    # the loaded helper until this transaction finishes using it.
+    boot = boot_module()
+    boot.validate_update(backup)
     receipt.update(status='rolling-back', rollback_started_at=now())
     system.write_json(folder / 'receipt.json', receipt)
     system.write_json(RESTART_REQUIRED, {'status': 'failed'})
     install_package(backup, receipt['previous_version'], receipt['previous_runtime'])
+    boot.restore_firmware()
     system.run('mkinitcpio', '-P')
     receipt.update(status='rolled-back', rollback_finished_at=now())
     system.write_json(folder / 'receipt.json', receipt)
