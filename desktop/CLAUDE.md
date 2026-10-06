@@ -149,6 +149,11 @@ and that is fine: sealing plus opening a 4 KiB frame measured 316 µs under
 dart2js `-O4`, 282 µs on the Dart VM and 479 µs as `-O4` WASM (Node 24,
 2026-10-06) — `flutter test --platform chrome` compiles unoptimized and reads
 ~40× slower, so do not judge it there. WASM is not worth adopting for speed.
+System notifications in a browser use its Notification API
+(`web/notify/browser_system_notifier.dart`, picked by `notify/browser_notifier.dart`):
+the same Settings switch, one per agent by `tag`, a click focuses the tab and
+opens the agent. A phone's browser cannot construct one (service workers only),
+which reads as unavailable.
 Shared sessions use `ObserverRelayCodec` and `/api/observer-ws`, verifying the
 owner and permitting only observation and authenticated comments. `/s/:id#key=…`
 opens `SharedAgentPage` without restoring the visitor's workspace. Public links

@@ -85,6 +85,7 @@ class AlertsCard extends StatelessWidget {
               controlSemanticLabel: 'Desktop notifications',
               detail: _systemDetail(
                 clickOpensAgent: system.notifier.clickOpensAgent,
+                deniedAdvice: system.notifier.deniedAdvice,
                 on: system.store.value,
                 permission: system.permission.value,
               ),
@@ -108,6 +109,7 @@ class AlertsCard extends StatelessWidget {
 /// can do nothing has to say why, or it reads as broken.
 String _systemDetail({
   required bool clickOpensAgent,
+  required String deniedAdvice,
   required bool on,
   required NotificationPermission permission,
 }) {
@@ -117,8 +119,7 @@ String _systemDetail({
   if (!on) return base;
   return switch (permission) {
     NotificationPermission.denied =>
-      'Harness is not allowed to post notifications. Allow it in System '
-          'Settings ▸ Notifications ▸ Harness.',
+      'Harness is not allowed to post notifications. $deniedAdvice',
     NotificationPermission.unavailable =>
       'Notifications cannot be posted from this build or this computer. The '
           'on-screen banner still works.',
