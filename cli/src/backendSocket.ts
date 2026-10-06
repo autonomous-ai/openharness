@@ -37,11 +37,10 @@ import type { CloseAgentService } from './lib/closeAgentService.js'
 import { isHiddenBuiltin } from './dsh/builtins.js'
 import { ENGINES, type AgentEngine } from './engines/types.js'
 import { listDir } from './lib/fsBrowse.js'
-import { linkCodexProfile, listCodexProfiles } from './lib/codexProfiles.js'
 import { gridCliPresence } from './lib/gridExec.js'
 import { GridFleetRpc, GRID_FLEET_PROTOCOL, GRID_FLEET_MAX_TIMEOUT_MS, parseGridFleetRequest } from './lib/gridFleetRpc.js'
-import { ApiConnectionError, ApiConnections, apiConnectionsRequest } from './lib/apiConnections.js'
-import { apiModelsRequest, rememberSavedApis, resolveApiTarget } from './lib/apiModels.js'
+import { ApiConnectionError, ApiConnections } from './lib/apiConnections.js'
+import { resolveApiTarget } from './lib/apiModels.js'
 import { isApiLaunch, parseGridLaunchOverride, type GridLaunchOverride } from './lib/gridLaunch.js'
 import { listAllGridModels, onGridModelsChanged, retargetPrewarm } from './lib/gridModels.js'
 import { gridModelsPayload } from './lib/gridModelsPayload.js'
@@ -1757,17 +1756,6 @@ export class BackendSocket {
       return
     }
 
-    if (type === 'api_connections') {
-      if (!local && this.e2ee.sessionRole(connId) !== 'web') { reply(type, requestId, { error: 'OWNER_REQUIRED' }); return }
-      if (payload.action === 'models') {
-        reply(type, requestId, await apiModelsRequest(this.apiConnections, payload))
-        return
-      }
-      reply(type, requestId, apiConnectionsRequest(this.apiConnections, payload))
-      if (payload.action === 'save') rememberSavedApis(this.apiConnections)
-      return
-    }
-
     // A paired owner can run the machine's orchestrator; observers and device sessions cannot.
     // Both requests and replies are encrypted, including project artifacts.
     if (OWNER_COMMAND_TYPES.has(type)) {
@@ -2167,29 +2155,6 @@ export class BackendSocket {
           const result = listDir(path)
           if ('error' in result) { reply(type, requestId, { error: result.error }); return }
           reply(type, requestId, { ...result })
-          return
-        }
-
-        case 'codex_profiles_list': {
-          // Which CODEX_HOME folders THIS machine can offer — answered here, on the machine in
-          // question, for the same reason `engines_probe` is: a Codex profile is a folder on disk,
-          // and a folder on a Mac means nothing on the Docker rig it was asked about instead.
-          const observed = Array.isArray(payload.observedPaths)
-            ? payload.observedPaths.filter((p): p is string => typeof p === 'string')
-            : []
-          try {
-            reply(type, requestId, { profiles: listCodexProfiles(observed) })
-          } catch {
-            reply(type, requestId, { error: 'CODEX_PROFILES_FAILED' })
-          }
-          return
-        }
-
-        case 'codex_profile_link': {
-          const path = typeof payload.path === 'string' ? payload.path : ''
-          const result = linkCodexProfile(path)
-          if ('error' in result) { reply(type, requestId, { error: result.error }); return }
-          reply(type, requestId, { profile: result })
           return
         }
 
