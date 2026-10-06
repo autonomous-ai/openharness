@@ -4308,6 +4308,7 @@ class AppNotifier extends ChangeNotifier {
   Future<void> _finishBootstrapSignedIn() async {
     final revision = _authRevision;
     if (!_authWorkCurrent(revision)) return;
+    _localSeatFollowed = false;
     // Which sign-in this app is under is the device log's to know before anything below can read it
     // (a restored pane, the dial, the pool, a connection's push): synchronous, ahead of the first await.
     // A sign-in by hand just now is `fresh`; a stored session (the app opening) is not.
@@ -4364,11 +4365,6 @@ class AppNotifier extends ChangeNotifier {
     // independent of machine discovery and must not delay work — and a guest
     // has no profile to load.
     if (signedIn) unawaited(_loadProfile());
-    // The desk too: tabs from the other computers appear as intent, like the
-    // restored ones, and attach as their machines answer. It is the ACCOUNT's
-    // desk (`Desk{userId}`), so a guest has none — asking for one would earn a
-    // 401 on every poll for a document that cannot exist.
-    if (signedIn) _deskEnsure(revision);
     // The account's device key log: this app's key joins it (an existing sign-in too, from before
     // the log existed), and every machine it names is trusted with no password.
     if (signedIn) {
@@ -4390,8 +4386,11 @@ class AppNotifier extends ChangeNotifier {
     if (!_authWorkCurrent(revision)) return;
     // The account may have changed while this window was closed — see
     // [_followLocalMachineId]. Done AFTER the list, which is what says which id
-    // this computer is served under now.
-    await _followLocalMachineId(revision);
+    // this computer is served under now. The desk follows it: tabs from the
+    // other computers appear as intent and attach as their machines answer. It
+    // is the ACCOUNT's desk (`Desk{userId}`), so a guest has none — asking for
+    // one would earn a 401 on every poll for a document that cannot exist.
+    await _followLocalMachineIdThenDesk(revision);
     if (_authWorkCurrent(revision)) notifyListeners();
   }
 
@@ -7438,9 +7437,9 @@ class AppNotifier extends ChangeNotifier {
     }
     if (signedIn && currentUser == null) unawaited(_loadProfile());
     // A boot that found the daemon still connecting finishes THROUGH here (see
-    // `_loadProfile`), so the desk is joined here as well — once.
+    // `_loadProfile`), so the local id is followed and the desk joined here as
+    // well — once, after the list, as the boot does.
     if (signedIn) {
-      _deskEnsure(revision);
       // The first boot's read may have found nothing to say yet (or been dropped); read again —
       // until one has succeeded.
       if (!_pendingBootReadDone) unawaited(_syncPendingDevices());
@@ -7448,6 +7447,8 @@ class AppNotifier extends ChangeNotifier {
     try {
       if (!await refreshMachines() || !_authWorkCurrent(revision)) return;
       if (!automatic) _lastError = null;
+      if (!_localSeatFollowed) await _followLocalMachineIdThenDesk(revision);
+      if (signedIn) _deskEnsure(revision);
     } catch (error) {
       if (!_authWorkCurrent(revision)) return;
       _reportMachineLoadError(error, automatic: automatic);
@@ -13834,8 +13835,26 @@ class AppNotifier extends ChangeNotifier {
   /// answered the first read with an error, not with a desk.
   void _deskEnsure(int authRevision) {
     if (workspaceEnabled?.call() == false) return;
+    if (!_localSeatFollowed) return;
     if (_desk.enabled || _deskJoining != null) return;
     unawaited(_deskStart(authRevision));
+  }
+
+  /// Whether this sign-in has followed this computer's machine id
+  /// ([_followLocalMachineId]) — re-seated the tiles this window made while
+  /// signed out, which sit on the computer's own id. The desk is not joined
+  /// before: its seed is every local tab it lacks, and a tab still on that id
+  /// landed on the ACCOUNT's desk naming a machine nothing serves, opening on
+  /// every window of it as "This machine isn't available" — a new user's first
+  /// sign-in on the desktop did exactly that.
+  bool _localSeatFollowed = false;
+
+  /// [_followLocalMachineId], then the desk it was holding back.
+  Future<void> _followLocalMachineIdThenDesk(int revision) async {
+    await _followLocalMachineId(revision);
+    if (!_authWorkCurrent(revision)) return;
+    _localSeatFollowed = true;
+    if (signedIn) _deskEnsure(revision);
   }
 
   Future<void> _deskJoin(int authRevision) async {
