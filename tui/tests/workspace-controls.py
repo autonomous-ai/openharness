@@ -754,7 +754,9 @@ try:
     saved['sessions'].append(stale)
     sessions_file.write_text(json.dumps(saved))
     tmux('respawn-pane', '-k', '-t', 'test', command)
-    wait(lambda: value('#{window_name}') == 'Other account', 'cold start switches to the current account desk', seconds=12)
+    # The private control socket is absent briefly while the new client starts.
+    wait(lambda: hn('display-message', '-p', '#{window_name}', ok=False) == 'Other account',
+         'cold start switches to the current account desk', seconds=12)
     shown('Other account task')
     assert 'Private old account task' not in hn('list-windows', '-a', '-F', '#{window_name}')
     assert 'old-account-session' not in hn('list-sessions', '-F', '#{session_name}')

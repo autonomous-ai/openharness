@@ -337,8 +337,8 @@ try:
     wait(lambda: hn('display', '-p', '#{window_panes}', ok=False) == '1', 'normal startup after OS test')
     print('PASS welcome: USB startup and concurrent terminal creation stay in their own windows in both reply orders', flush=True)
 
-    # A disconnected remote pane still owns the next window's project. Never carry
-    # its absolute folder across to the local machine merely because it is online.
+    # A deliberate remote selection survives disconnecting. Never carry its
+    # absolute folder across to the local machine merely because it is online.
     new_tab()
     choose('Agent', 'codex')
     choose('Machine', 'mock-remote')
@@ -350,12 +350,18 @@ try:
     assert hn('display', '-p', '#{pane_machine}') == 'mock-remote'
     remote_pane = hn('display', '-p', '#{pane_id}')
     remote = 'mock0000000000000000000000000002'
+    new_tab()
+    choose('Machine', 'mock-remote')
+    choose('Project', 'open folder'); shows('Use this folder')
+    keys('C-l', 'C-a', 'C-k'); type_text('/srv/remote-project'); keys('Enter')
+    shows('Use this folder'); keys('Enter'); shows('[ remote-project ▾ ]'); shows('[x]')
     state('reconnect', {'action': 'offline', 'machine': remote})
     wait(lambda: hn('display', '-p', '-t', remote_pane, '#{pane_agent_state}') == 'offline', 'remote disconnect reaches the client')
     count = len(state().get('created', []))
-    new_tab(); shows('[ remote-project ▾ ]'); shows('[ mock-remote ▾ ]')
+    shows('[ remote-project ▾ ]'); shows('[ mock-remote ▾ ]')
+    click('Task')
     type_text('Keep this task on the remote machine')
-    keys('Enter', 'Enter'); shows('That machine is not connected.')
+    keys('Enter', 'Enter'); shows('That machine is not connected')
     assert len(state().get('created', [])) == count, 'offline creation must not fall back locally'
     click('New Terminal')
     assert len(state().get('created', [])) == count, 'offline terminal must not fall back locally'
