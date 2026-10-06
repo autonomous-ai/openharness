@@ -182,6 +182,7 @@ import { KNOWN_SERVICES, servicesTheMasterRuns } from './harnessd/services.js'
 import { createTeamsLink } from './core/teamsLink.js'
 import { SEARCH_REQUESTS, startSearch } from './services/search.js'
 import { STORE_REQUESTS, startStore } from './services/store.js'
+import { USAGE_REQUESTS, startUsage } from './services/usage.js'
 import { startViewers } from './services/viewers.js'
 import { MODELS_REQUESTS, startModels } from './services/models.js'
 import { startWorkspaces } from './services/workspaces.js'
@@ -2360,6 +2361,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   else serviceHost.start('teams', (_core, started) => { started.teams = backend.swarmPromptScopes }, coreApi, TEAMS_FALLBACKS)
   // The harnesses installed here, and installing, updating and removing one (services/store.ts).
   serviceHost.serve('store', startStore, coreApi, STORE_REQUESTS)
+  // This machine's Claude and Codex rate limits, read with its own credentials (services/usage.ts).
+  serviceHost.serve('usage', startUsage, coreApi, USAGE_REQUESTS)
 
   const runtimeController = new RuntimeProfileController({
     manager: runtimeProfiles,

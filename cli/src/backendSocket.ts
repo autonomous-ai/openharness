@@ -48,7 +48,6 @@ import { resolveGridTarget } from './lib/gridTarget.js'
 import type { GridAttachResult } from './lib/gridAttach.js'
 import { deriveHarnessGridName } from './lib/gridDerive.js'
 import { supportsFirstPrompt } from './lib/engineLaunch.js'
-import { readAccountUsage, type AccountUsageReading } from './lib/accountUsage.js'
 import { probeEngines } from './lib/engineProbe.js'
 import { readMachineResources } from './lib/machineResources.js'
 import { harnessDevicesRequest, type HarnessDevicesService } from './lib/harnessDevices.js'
@@ -533,9 +532,6 @@ export class BackendSocket {
   /** How each agent's last turn ended, from the turn frames this socket sends: the monitor's activity
    *  once a turn is over (`agents_list`, core/agents/list.ts). */
   readonly monitorCompletions = new MonitorCompletions()
-  /** Answers `usage_read` — this machine's own agent-account usage (lib/accountUsage.ts). A field
-   *  rather than a direct call so a spec answers it without a real home, Keychain or network. */
-  accountUsageReader: () => Promise<AccountUsageReading[]> = readAccountUsage
   harnessResourcesReader = createHarnessResourcesReader(() => registry.advertised())
   harnessStorageReader = createHarnessStorageReader()
   /** The windows on this computer that draw row state (`grid_models_list` with `rowState: true`) and so
@@ -2197,20 +2193,6 @@ export class BackendSocket {
         case 'question_response':
           this.questionProvider?.(payload, answer)
           return
-
-        // This machine's Claude/Codex rate limits, read with ITS OWN credentials. The desktop reads the
-        // account on the computer it runs on directly; this is how it reads one on a machine it does
-        // not — which may be signed in to a different subscription entirely. The vendor's answer goes
-        // back as it came: see lib/accountUsage.ts for why the parsing stays on the client.
-        case 'usage_read': {
-          // Two vendor round trips (up to 8s each, lib/accountUsage.ts) — detached from the ordered
-          // chain for the same reason as `grid_models_list`: it is asked on connect beside the RPCs
-          // the terminal needs, and with no network it held them past the app's timeout.
-          void this.accountUsageReader()
-            .then((providers) => reply(type, requestId, { providers }))
-            .catch(() => reply(type, requestId, { error: 'USAGE_READ_FAILED' }))
-          return
-        }
 
         // Physical devices belong to this machine; only its owner or loopback tools may manage them.
         case 'harness_devices_list':

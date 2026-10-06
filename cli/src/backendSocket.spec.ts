@@ -13,6 +13,7 @@ import { bindAgentList, bindAgentUpdate, bindCancelRequest, bindLaunchRequests, 
 import { emptyPorts, MODELS_FALLBACKS } from './core/api.js'
 import { createServiceHost, ServiceUnavailableError } from './core/serviceHost.js'
 import { MODELS_REQUESTS, startModels } from './services/models.js'
+import { USAGE_REQUESTS, startUsage } from './services/usage.js'
 import { fakeCore } from './testing/fakeCore.js'
 import { AuthSessionError, type AuthSessionManager } from './lib/authSession.js'
 import { WS_IDLE_DEADLINE_MS as IDLE_DEADLINE_MS } from './lib/wsLiveness.js'
@@ -591,6 +592,14 @@ function serveModels(socket: BackendSocket, over: Parameters<typeof fakeCore>[0]
     clients: { gridModelsChanged: () => { void socket.pushGridModels() }, ...over.clients },
   })
   host.start('models', startModels, core, MODELS_FALLBACKS, MODELS_REQUESTS)
+  socket.serviceRouter = (type, payload, asker, reply) => host.route(type, payload, asker, reply)
+  return host
+}
+
+/** A socket whose service requests go to the services `serve` starts in a host of their own. */
+function serveOn(socket: BackendSocket, serve: (host: ReturnType<typeof createServiceHost>) => void) {
+  const host = createServiceHost(emptyPorts(), { log: () => {} })
+  serve(host)
   socket.serviceRouter = (type, payload, asker, reply) => host.route(type, payload, asker, reply)
   return host
 }
@@ -1196,7 +1205,8 @@ describe('BackendSocket outbound queue', () => {
 
   it('answers usage_read with this machine\'s own readings, wrapped for the requester', async () => {
     // What goes back names what the person spends and on whose account, so it must leave encrypted.
-    // The reader is the socket's own field: this never touches a real home, Keychain or network.
+    // The usage service answers it (services/usage.ts), with a reader that never touches a real home,
+    // Keychain or network.
     const socket = new BackendSocket('token')
     const readings = [
       {
@@ -1207,7 +1217,7 @@ describe('BackendSocket outbound queue', () => {
         body: { seven_day: { utilization: 42 } },
       },
     ]
-    socket.accountUsageReader = async () => readings
+    serveOn(socket, (host) => host.serve('usage', (core) => startUsage(core, { read: async () => readings }), fakeCore(), USAGE_REQUESTS))
     socket.connect()
     const ws = wsMock.instances[0]
     ws.open()
@@ -3178,8 +3188,8 @@ describe('the connect burst with no network', () => {
     const socket = new BackendSocket('token')
     bindAgentList(socket)
     socket.deriveGridName = () => new Promise<null>(() => {}) // a grid read that never lands
-    socket.accountUsageReader = () => new Promise(() => {})   // a vendor that never answers
-    serveModels(socket)
+    // A vendor that never answers, asked of the usage service beside models.
+    serveModels(socket).serve('usage', (core) => startUsage(core, { read: () => new Promise(() => {}) }), fakeCore(), USAGE_REQUESTS)
     const frames: Array<Record<string, unknown>> = []
     socket.registerLocalClient('local:burst', { sendFrame: (frame) => { frames.push(frame); return true }, sendBinary: () => true })
 
