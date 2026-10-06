@@ -24,6 +24,9 @@ export interface PaneSwapDeps {
   keepAbandonedConversation: (left: RegisteredSession) => void
 }
 
+/** How long a relaunched engine must stay running before a restart counts it as come up (`waitForProcess`). */
+export const SWAP_SETTLE_MS = 500
+
 export function createPaneSwap({ byAgent, tmuxBackend, prepareSessionResume, keepAbandonedConversation }: PaneSwapDeps) {
   /**
    * The dependencies a pane-process swap needs, for both callers that do one.
@@ -85,7 +88,17 @@ export function createPaneSwap({ byAgent, tmuxBackend, prepareSessionResume, kee
         await new Promise((resolve) => setTimeout(resolve, delayMs))
         waited += delayMs
         const found = await resolvePaneEngineProcess(runtime.paneId, session.engine)
-        if (found) return found
+        if (found) {
+          // Up means still up a moment later. A launch the engine refuses (a flag or subcommand an update
+          // dropped: `codex resume` after Codex lost it) runs for an instant and exits; seen in that
+          // instant, the restart reported the conversation resumed, and never fell back to the fresh
+          // start that was the only way the agent could work again (e2e/updates.e2e.ts, on Linux, whose
+          // faster process start put the refused process in the first look).
+          await new Promise((resolve) => setTimeout(resolve, SWAP_SETTLE_MS))
+          waited += SWAP_SETTLE_MS
+          const still = await resolvePaneEngineProcess(runtime.paneId, session.engine)
+          if (still && still.pid === found.pid && still.startMarker === found.startMarker) return found
+        }
         delayMs = Math.min(delayMs * 2, 750)
       }
       return null
