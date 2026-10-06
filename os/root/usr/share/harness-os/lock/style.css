@@ -1,0 +1,39 @@
+/* The disk unlock screen's colours (plymouth/themes/harness/harness.script): a yellow wordmark,
+   light grey text, monospace. The background stays black: the session checks require a lock that
+   shows nothing of the desk, down to its corner pixels. */
+window {
+  background-color: #000000;
+  background-image: none;
+}
+#wordmark, #input-label, #input-field, #error-label, #warning-label {
+  font-family: "DejaVu Sans Mono", monospace;
+  font-size: 16pt;
+}
+#wordmark {
+  color: #d9c71a;
+  margin-bottom: 40px;
+}
+#input-label {
+  color: #dbdbdb;
+}
+#input-field {
+  color: #dbdbdb;
+  caret-color: #d9c71a;
+  background-color: #000000;
+  background-image: none;
+  border: 1px solid #5a5a5a;
+  border-radius: 0;
+  box-shadow: none;
+  padding: 8px 12px;
+}
+#input-field:focus {
+  border-color: #d9c71a;
+}
+#error-label {
+  color: #e05555;
+  font-size: 13pt;
+}
+#warning-label {
+  color: #d9c71a;
+  font-size: 13pt;
+}
