@@ -158,8 +158,11 @@ const SERVICE_MAY_IMPORT: Record<string, string> = {
  *
  * Grew by 58 for the turn a blocking Stop hook continues (a Claude /goal loop): it is the turn lifecycle,
  * which only the core's transcript normalizer and Stop-hook fallback can keep.
+ *
+ * Grew by 97 for the Jev catalog (#888, lib/localModels.ts and appModels.ts): the models service's own
+ * code, in the core's process only until step 7 runs models in a process of its own and takes it out.
  */
-const CORE_CLOSURE_BUDGET = 105_937
+const CORE_CLOSURE_BUDGET = 106_034
 
 /** What is not the core's, by path: each goes to a service or its own process, in the plan's order. */
 const EDGE: RegExp[] = [
