@@ -112,13 +112,38 @@ way back).
   under an id of its own through `core.turns.deliver`, hears what became of it through `onDelivery`, and
   takes one back with `cancelDelivery` (core/deliveries.ts). In its own process `services/turnsLink.ts`
   asks the core over its link, in order, and hears only its own deliveries; the core lets a process deliver
-  only when `core/main.ts` names it a deliverer.
+  only when it is an experiment (below).
 - State built from every change must get every change exactly once. The teams show how
   (`src/services/teamsProcess.ts`, `src/core/teamsLink.ts`): the core numbers each change and keeps it
   until the process acknowledges it; on each connection the process says what it applied and gets
   what it lacks, or starts over. A value the core reads back synchronously is answered from what the
   process last reported, and is "unknown" (the fallback) while a change to it is on its way.
   `e2e/teamsProcess.e2e.ts` proves it.
+
+## Experiments
+
+An experiment (the orchestrator; Tab collaboration and Share next) is a service that costs nothing until it is
+on: its own process, which the master starts only when the core asks for it (`want`), when one of its
+requests arrives or, as the core starts, when its saved state is in the data folder. Off, nothing of it runs or
+is loaded anywhere; one failing costs its own process and nothing else. `e2e/experiments.e2e.ts` proves it:
+off, on by request, on by saved state, killed, hung and crashing on every start.
+
+To add one:
+
+1. Its service, `start<Name>(core, ports)` in `src/services/<name>.ts`, returning its requests' handlers, and
+   its process's runner (`src/services/<name>Process.ts`, `run<Name>Service`; copy
+   `src/services/orchestratorProcess.ts`). Its `CoreApi` in its process is `processCoreApi` with `ask`, which
+   gives it what an experiment acts on the core through (`src/core/experimentQueries.ts`): the agents as the
+   apps are shown them, creating an agent, stopping a turn, delivering turns (`services/turnsLink.ts`), a
+   change notice for the windows (`<name>_changed`) and how an agent's shell reaches this daemon.
+2. Its entry in `EXPERIMENTS` (`src/core/api.ts`): its requests and its saved state.
+3. Its process in `SERVICE_HOSTS` (`src/harnessd/services.ts`) with `onDemand: true`, and its runner in
+   `SERVICE_RUNNERS` (`src/serviceProcess.ts`).
+4. Its start for the core's own process, in `services/inline.ts`, and one line in `core/main.ts` that starts
+   it there when `HARNESSD_SERVICES` keeps it in (`serviceHost.serve`, or `start` with a port).
+
+Removing one is deleting those. A port the core calls in line (the orchestrator's `roleOf`) is answered
+from what the process last reported (`src/core/orchestratorLink.ts`), as the viewers' are.
 
 ## Do not
 

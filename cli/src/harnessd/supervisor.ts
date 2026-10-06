@@ -63,6 +63,12 @@ export interface SupervisorDeps {
    * since it started. Left out, such an exit is the update failing, as it was before.
    */
   bundle?(): string | null
+  /**
+   * Start the experiment's process that runs [service] (./services.ts `ServiceSupervisor.want`): the core
+   * asked for it. Null for every experiment: a core from before `want` (protocol 2 or less) never asks,
+   * and expects each service it routes to run, as every one did.
+   */
+  want?(service: string | null): void
 }
 
 /**
@@ -365,6 +371,7 @@ export class Supervisor {
         this.clearTimer('bindTimer')
         if (!this.claimed) { this.deps.claimPidFile(); this.claimed = true }
         this.deps.log(`[harnessd] core bound (pid ${core.pid ?? '?'}, protocol ${message.protocol})`)
+        if (message.protocol < 3) this.deps.want?.(null)
         this.watchHeartbeat()
         // A core from before `ready` is running once bound, and its update is judged from there.
         const readiness = message.protocol >= 2
@@ -397,6 +404,9 @@ export class Supervisor {
         this.deps.log(`[harnessd] core ready (pid ${core.pid ?? '?'})${message.safeMode === undefined ? '' : ` · in safe mode: ${message.safeMode}`}`)
         this.setState('running')
         this.up()
+        return
+      case 'harnessd:want':
+        if (this.bound) this.deps.want?.(message.service)
         return
       case 'harnessd:heartbeat': {
         if (!this.bound) return

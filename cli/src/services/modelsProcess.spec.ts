@@ -246,6 +246,7 @@ describe('the core API models runs on in its own process', () => {
     expect(await api.external.open.fresh()).toEqual(new Map())
     api.clients.viewerChanged('a1')
     api.clients.dshInstallStatus({})
+    api.clients.windows({ type: 'orchestrator_changed', payload: {} })
     expect(ask).not.toHaveBeenCalled()
   })
 })

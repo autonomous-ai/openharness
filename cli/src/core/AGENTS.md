@@ -44,6 +44,8 @@ questions. Everything else is a service ([../services/AGENTS.md](../services/AGE
   process tells the core. `modelsLink.ts`: what the core keeps of models in its process for frames and
   keystrokes, and how it asks it the rest. `agentQueries.ts`: what a service in its own process may ask of the agents;
   `accountQueries.ts`: of the account (a token, and the fleet's lane's sealing), so it holds no credential.
+  `experimentQueries.ts`: what an experiment acts on the core through; `experiments.ts`: which are on as the
+  core starts; `orchestratorLink.ts`: what the core keeps of the orchestrator in its own process.
   `gatewayLink.ts`: the relay and its E2EE in their own process (src/gateway/), as the core sees them:
   the link's state and the remote clients it reads in line, the frames it hands over in the clear, a
   window's sessions to another machine or a shared harness, and the fleet's lane's sealing

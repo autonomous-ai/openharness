@@ -12,8 +12,8 @@
  */
 import type { SupervisorStatus } from './supervisor.js'
 
-/** 2: `ready`, the event-loop delay on the heartbeat, and the exit-code contract below. */
-export const HARNESSD_PROTOCOL = 2
+/** 2: `ready`, the event-loop delay on the heartbeat, and the exit-code contract below. 3: `want`. */
+export const HARNESSD_PROTOCOL = 3
 
 /** The command a bundle's master answers its probe on, and what it answers. */
 export const PROBE_COMMAND = '__harnessd-probe'
@@ -51,6 +51,9 @@ export type CoreMessage =
   /** Sent every few seconds; a core that stops sending is hung. `loopDelayMs`: the longest the event
    *  loop was held since the last one (protocol 2). */
   | { type: 'harnessd:heartbeat'; rssBytes: number; heapUsedBytes: number; loopDelayMs?: number }
+  /** Start the experiment's process that runs this service (harnessd/services.ts `onDemand`): it is on now
+   *  (protocol 3). A master from before ignores it, having started every service at once. */
+  | { type: 'harnessd:want'; service: string }
 
 export type MasterMessage =
   | { type: 'harnessd:status'; status: SupervisorStatus }
@@ -66,6 +69,8 @@ export function isCoreMessage(value: unknown): value is CoreMessage {
     case 'harnessd:heartbeat':
       return typeof message.rssBytes === 'number' && typeof message.heapUsedBytes === 'number'
         && (message.loopDelayMs === undefined || typeof message.loopDelayMs === 'number')
+    case 'harnessd:want':
+      return typeof message.service === 'string' && message.service.length > 0
     default:
       return false
   }

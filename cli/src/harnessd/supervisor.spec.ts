@@ -116,6 +116,23 @@ describe('Supervisor', () => {
     expect(statuses).toHaveLength(3)
   })
 
+  it('starts the experiment a bound core asks for, and every experiment for a core too old to ask', () => {
+    const wanted: Array<string | null> = []
+    make({}, { want: (service) => wanted.push(service) }).start()
+    core().say({ type: 'harnessd:want', service: 'orchestrator' })
+    expect(wanted).toEqual([])
+    core().bind()
+    core().say({ type: 'harnessd:want', service: 'orchestrator' })
+    expect(wanted).toEqual(['orchestrator'])
+    crash()
+    core().bind(2)
+    expect(wanted).toEqual(['orchestrator', null])
+    // A master with no services to start ignores both.
+    make().start()
+    core().bind(2)
+    core().say({ type: 'harnessd:want', service: 'orchestrator' })
+  })
+
   it('ignores what is not a core message, and anything but a bind before the bind', () => {
     const supervisor = make()
     supervisor.start()

@@ -7,6 +7,7 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
+import { HARNESSD_PROTOCOL } from '../src/harnessd/protocol.js'
 import { LocalClient, type Frame } from './harness/client.js'
 import { IsolatedDaemon, until } from './harness/daemon.js'
 
@@ -169,7 +170,7 @@ describe('harnessd', () => {
     const statusFile = join(d.dataDir, 'harnessd-status.json')
     const read = () => JSON.parse(readFileSync(statusFile, 'utf8'))
     await until('the status file to say running', () => existsSync(statusFile) && read().state === 'running', 10_000)
-    expect(read()).toMatchObject({ masterPid: d.pid, corePid: d.corePid(), restarts: 0, safeMode: null, protocol: 2 })
+    expect(read()).toMatchObject({ masterPid: d.pid, corePid: d.corePid(), restarts: 0, safeMode: null, protocol: HARNESSD_PROTOCOL })
     const core = d.corePid()!
     process.kill(core, 'SIGKILL')
     await until('the status file to name the crash', () => read().restarts === 1 && read().lastExitReason === 'crashed', 10_000)

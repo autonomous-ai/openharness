@@ -1,6 +1,7 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from '../lib/registry.js'
-import { agentsIn, isSession, processCoreApi } from './processCoreApi.js'
+import { agentsIn, daemonIn, isSession, processCoreApi, type ShownAgent } from './processCoreApi.js'
+import { turnsLink } from './turnsLink.js'
 
 const agent = (agentId: string, over: Partial<RegisteredSession> = {}) => ({ agentId, sessionId: `s-${agentId}`, engine: 'claude', cwd: `/work/${agentId}`, ...over }) as RegisteredSession
 
@@ -51,6 +52,68 @@ describe('the core API a light service runs on in its own process', () => {
     api.clients.gridNamed('grid')
     api.clients.gridModelsChanged()
     api.clients.dshInstallStatus({ phase: 'clone' })
+    // With no way to ask the core, it acts on nothing: no agent made, no turn, no window told.
+    await expect(api.agents.create({ engine: 'claude', cwd: '/w', dsh: null, prompt: 'p', name: 'n', bypassPermission: false }))
+      .resolves.toEqual({ ok: false, error: 'SERVICE_UNAVAILABLE' })
+    expect(api.agents.dsh(agent('a1'))).toBeNull()
+    api.clients.windows({ type: 'orchestrator_changed', payload: {} })
+    api.turns.deliver('a1', 'text', 'd1')
+    expect(api.turns.cancelDelivery('d1')).toBe(false)
+    expect(api.daemon).toMatchObject({ command: 'harness', port: 0 })
+    expect(api.daemon.machineId()).toBe('')
+  })
+
+  it('acts on the core for an experiment: agents made, turns stopped and delivered, windows told, each asked', async () => {
+    const answers: Record<string, Record<string, unknown> | Error> = {
+      create: { ok: true, agentId: 'made' }, stop_turn: {}, windows: {}, deliver: {}, cancel_delivery: { cancelled: true },
+    }
+    const ask = vi.fn(async (query: string) => {
+      const answer = answers[query]
+      if (answer instanceof Error) throw answer
+      return answer
+    })
+    const shown = { ...agent('a1'), displayName: 'Planner', terminalAvailable: true, dshContext: { viewerUrl: 'http://127.0.0.1:1/', viewerName: 'CAD' } } as unknown as ShownAgent
+    const api = processCoreApi('/data', 'orchestrator', {
+      live: () => [shown, agent('a2')], ask, deliveries: turnsLink(ask),
+      daemon: () => ({ command: `'node' 'cli.js'`, port: 18473, machineId: () => 'm' }),
+    })
+    const request = { engine: 'claude' as const, cwd: '/w', dsh: null, prompt: 'p', name: 'n', bypassPermission: false }
+    expect(await api.agents.create(request)).toEqual({ ok: true, agentId: 'made' })
+    expect(ask).toHaveBeenCalledWith('create', request)
+    answers.create = { ok: false, error: 'ENGINE_NOT_INSTALLED', detail: 'not here' }
+    expect(await api.agents.create(request)).toEqual({ ok: false, error: 'ENGINE_NOT_INSTALLED', detail: 'not here' })
+    answers.create = {}
+    expect(await api.agents.create(request)).toEqual({ ok: false, error: 'CREATE_FAILED' })
+    answers.create = new Error('the link went')
+    expect(await api.agents.create(request)).toEqual({ ok: false, error: 'SERVICE_UNAVAILABLE' })
+    expect(api.agents.displayName(shown)).toBe('Planner')
+    expect(api.agents.terminalAvailable('a1')).toBe(true)
+    expect(api.agents.terminalAvailable('a2')).toBe(false)
+    expect(api.agents.dsh(shown)).toEqual({ viewerUrl: 'http://127.0.0.1:1/', viewerName: 'CAD' })
+    api.turns.stop('a1')
+    api.clients.windows({ type: 'orchestrator_changed', payload: { id: 'p' } })
+    answers.stop_turn = new Error('gone')
+    answers.windows = new Error('gone')
+    api.turns.stop('a1')
+    api.clients.windows({ type: 'orchestrator_changed', payload: { id: 'p' } })
+    api.turns.deliver('a1', 'go', 'd1')
+    await new Promise((settle) => setTimeout(settle, 0))
+    expect(ask).toHaveBeenCalledWith('stop_turn', { agentId: 'a1' })
+    expect(ask).toHaveBeenCalledWith('windows', { frame: { type: 'orchestrator_changed', payload: { id: 'p' } } })
+    expect(ask).toHaveBeenCalledWith('deliver', { agentId: 'a1', text: 'go', deliveryId: 'd1' })
+    expect(api.daemon.command).toBe(`'node' 'cli.js'`)
+    expect(api.daemon.port).toBe(18473)
+    expect(api.daemon.machineId()).toBe('m')
+  })
+
+  it('reads the daemon\'s address out of the core\'s answer, and nothing out of anything else', () => {
+    const address = daemonIn({ command: 'harness', port: 18473, machineId: 'm' })!
+    expect(address).toMatchObject({ command: 'harness', port: 18473 })
+    expect(address.machineId()).toBe('m')
+    expect(daemonIn({ command: 'harness', port: '18473', machineId: 'm' })).toBeNull()
+    expect(daemonIn({ command: 'harness', port: 18473 })).toBeNull()
+    expect(daemonIn({ error: 'NOT_AN_EXPERIMENT' })).toBeNull()
+    expect(daemonIn(null)).toBeNull()
   })
 
   it('reads the agents out of the core\'s answer, and nothing out of anything else', () => {

@@ -55,6 +55,12 @@ export interface ServiceLinksOptions {
   /** Longer waits for the answers that take longer, by service and then by type (core/api.ts
    *  `LONG_ANSWERS`): a grid command, grid's set-up, a harness's install. */
   waits?: Readonly<Record<string, Readonly<Record<string, number>>>>
+  /** The experiments: services whose process runs only once it is on (core/api.ts `EXPERIMENTS`). A request
+   *  for one that has not connected yet asks for it (`want`) and waits for it to connect, within the same
+   *  time. One that has connected and is down again is answered as any service is, at once. */
+  onDemand?: ReadonlySet<string>
+  /** Ask the master for an experiment's process (harnessd/coreLink.ts `want`). */
+  want?(service: string): void
   log?: (line: string) => void
   newId?: () => string
   setTimer?: (run: () => void, ms: number) => unknown
@@ -71,6 +77,8 @@ interface Waiting {
   type: string
   reply: (result: Record<string, unknown>) => void
   timer: unknown
+  /** Sent once its service connects: an experiment's request that woke it. */
+  frame?: ServiceFrame
 }
 
 /** The most notifications held for one service while it is down. */
@@ -88,6 +96,8 @@ export function createServiceLinks(options: ServiceLinksOptions) {
   const ownerOf = new Map<string, string>()
   for (const [service, types] of Object.entries(options.owned)) for (const type of types) ownerOf.set(type, service)
   const links = new Map<string, Connected>()
+  /** The services that have connected in this core's life: an experiment among them is on, not off. */
+  const seen = new Set<string>()
   const waiting = new Map<string, Waiting>()
   /** What a service must hear even if it is down when it is said (a purge's forgetting), delivered on
    *  its next connection; bounded, the oldest dropped first. */
@@ -113,16 +123,20 @@ export function createServiceLinks(options: ServiceLinksOptions) {
     return waits && Object.hasOwn(waits, type) ? waits[type] : timeoutMs
   }
 
-  /** Send `type` to `service`, its answer to `reply`, whatever becomes of the service. */
+  /** Send `type` to `service`, its answer to `reply`, whatever becomes of the service. An experiment that is
+   *  not connected is asked for, and the request goes once it connects: off, it costs nothing until asked. */
   const ask = (service: string, type: string, payload: Record<string, unknown>, asker: Asker, reply: (result: Record<string, unknown>) => void, waitMs?: number): void => {
     const link = links.get(service)
-    if (!link) { reply(unavailable(service)); return }
+    const starting = !link && !!options.onDemand?.has(service) && !seen.has(service)
+    if (!link && !starting) { reply(unavailable(service)); return }
     const id = newId()
-    const entry: Waiting = { service, type, reply, timer: null }
+    const frame: ServiceFrame = { type, payload: { ...payload, requestId: id }, asker }
+    const entry: Waiting = { service, type, reply, timer: null, ...(starting ? { frame } : {}) }
     // Cleared whenever the entry is settled, so it only ever fires for one still waiting.
     entry.timer = setTimer(() => settle(id, entry, unavailable(service)), waitMs ?? waitFor(service, type))
     waiting.set(id, entry)
-    if (!link.sink.sendFrame({ type, payload: { ...payload, requestId: id }, asker })) settle(id, entry, unavailable(service))
+    if (starting) { options.want?.(service); return }
+    if (!link!.sink.sendFrame(frame)) settle(id, entry, unavailable(service))
   }
 
   return {
@@ -136,10 +150,18 @@ export function createServiceLinks(options: ServiceLinksOptions) {
       links.get(service)?.close(4409, 'replaced by a newer connection')
       const connected: Connected = { sink, close }
       links.set(service, connected)
+      seen.add(service)
       log(`[services] ${service} connected`)
       const owed = held.get(service) ?? []
       held.delete(service)
       for (const frame of owed) sink.sendFrame(frame)
+      // The requests that woke an experiment, in the order they came.
+      for (const [id, entry] of waiting) {
+        if (entry.service !== service || !entry.frame) continue
+        const frame = entry.frame
+        delete entry.frame
+        if (!sink.sendFrame(frame)) settle(id, entry, unavailable(service))
+      }
       options.connected?.(service)
       return {
         receive: (frame) => {
