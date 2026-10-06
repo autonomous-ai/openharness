@@ -49,10 +49,7 @@ import type { GridAttachResult } from './lib/gridAttach.js'
 import { deriveHarnessGridName } from './lib/gridDerive.js'
 import { supportsFirstPrompt } from './lib/engineLaunch.js'
 import { probeEngines } from './lib/engineProbe.js'
-import { readMachineResources } from './lib/machineResources.js'
 import { harnessDevicesRequest, type HarnessDevicesService } from './lib/harnessDevices.js'
-import { createHarnessResourcesReader } from './lib/harnessResources.js'
-import { createHarnessStorageReader } from './lib/harnessTelemetry.js'
 import { engineInstallRecipe } from './lib/engineInstall.js'
 import { projectPreview } from './lib/projectPreview.js'
 import { readGitProject } from './lib/gitProject.js'
@@ -532,8 +529,6 @@ export class BackendSocket {
   /** How each agent's last turn ended, from the turn frames this socket sends: the monitor's activity
    *  once a turn is over (`agents_list`, core/agents/list.ts). */
   readonly monitorCompletions = new MonitorCompletions()
-  harnessResourcesReader = createHarnessResourcesReader(() => registry.advertised())
-  harnessStorageReader = createHarnessStorageReader()
   /** The windows on this computer that draw row state (`grid_models_list` with `rowState: true`) and so
    *  are pushed labels as `unavailable` rather than in the node text. Kept here, by connection: the
    *  models service answers the list, and a request reaches it without its connection. */
@@ -1824,18 +1819,6 @@ export class BackendSocket {
 
     try {
       switch (type) {
-        case 'machine_resources':
-          // Sampling CPU must not hold up typing or other machine requests.
-          void (payload.harnesses === true
-            ? this.harnessResourcesReader().then(async harnesses => {
-              if (payload.storage !== true) return { harnesses }
-              const storage = await this.harnessStorageReader(registry.advertised())
-              return { harnesses: { ...harnesses, agents: harnesses.agents.map(row => ({ ...row, ...storage.get(row.agentId) })) } }
-            })
-            : readMachineResources())
-            .then(resources => reply(type, requestId, { ...resources }))
-            .catch(() => reply(type, requestId, { error: 'UNAVAILABLE' }))
-          return
         // The Model Manager's grid commands stay here while the rest of models answers from its service
         // (services/models.ts). A command is a job of the connection that started it, keyed by that
         // connection, and a cancel stops only that connection's own (lib/gridFleetRpc.ts); a request the

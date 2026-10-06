@@ -172,7 +172,7 @@ import { createAgentUpdate } from './core/agents/update.js'
 import { createEngineHooks, installEngineHooks } from './core/engines/hooks.js'
 import { createCursorTaskHooks } from './core/engines/cursorTasks.js'
 import { databaseHistory } from './core/transcripts/databaseHistory.js'
-import { createCoreApi, emptyPorts, FLEET_FALLBACKS, MODELS_FALLBACKS, SEARCH_FALLBACKS, TEAMS_FALLBACKS, VIEWERS_FALLBACKS, WORKSPACES_FALLBACKS, type TeamsPort } from './core/api.js'
+import { createCoreApi, emptyPorts, FLEET_FALLBACKS, MODELS_FALLBACKS, MONITOR_FALLBACKS, MONITOR_OFF, SEARCH_FALLBACKS, TEAMS_FALLBACKS, VIEWERS_FALLBACKS, WORKSPACES_FALLBACKS, type TeamsPort } from './core/api.js'
 import { createServiceHost, testFaults } from './core/serviceHost.js'
 import { startStalls } from './core/stall.js'
 import { createServiceLinks } from './core/serviceLinks.js'
@@ -183,6 +183,7 @@ import { createTeamsLink } from './core/teamsLink.js'
 import { SEARCH_REQUESTS, startSearch } from './services/search.js'
 import { STORE_REQUESTS, startStore } from './services/store.js'
 import { USAGE_REQUESTS, startUsage } from './services/usage.js'
+import { MONITOR_REQUESTS, startMonitor } from './services/monitor.js'
 import { startViewers } from './services/viewers.js'
 import { MODELS_REQUESTS, startModels } from './services/models.js'
 import { startWorkspaces } from './services/workspaces.js'
@@ -2254,7 +2255,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   backend.agentsProvider = createAgentList({
     registry, stoppedAgents, monitorActivityProvider: asking.monitorActivity, monitorCompletions: backend.monitorCompletions,
     toProject: (s) => backend.toProject(s), toStoppedProject: (s) => backend.toStoppedProject(s),
-    harnessResourcesReader: () => backend.harnessResourcesReader(), harnessStorageReader: (agents, invalidate) => backend.harnessStorageReader(agents, invalidate),
+    // The monitor's readings, through its port (services/monitor.ts): none while it is off.
+    harnessResourcesReader: () => (ports.monitor ?? MONITOR_OFF).resources(), harnessStorageReader: (agents, invalidate) => (ports.monitor ?? MONITOR_OFF).storage(agents, invalidate),
   }).agentsList
   const agentNotifications = asking.agentNotifications
   const questionWatcher = asking.questionWatcher
@@ -2363,6 +2365,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   serviceHost.serve('store', startStore, coreApi, STORE_REQUESTS)
   // This machine's Claude and Codex rate limits, read with its own credentials (services/usage.ts).
   serviceHost.serve('usage', startUsage, coreApi, USAGE_REQUESTS)
+  // This machine's and each agent's resources, for the Monitor and the list's readings (services/monitor.ts).
+  serviceHost.start('monitor', startMonitor, coreApi, MONITOR_FALLBACKS, MONITOR_REQUESTS)
 
   const runtimeController = new RuntimeProfileController({
     manager: runtimeProfiles,
@@ -3693,7 +3697,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const stopAgent = lifecycle.stopAgent
   backend.stopProvider = createStopRequest({ byAgent: (id) => registry.byAgent(id), stop: stopAgent })
   backend.purgeAgentService = lifecycle.purgeAgentService
-  backend.purgeProvider = createPurgeRequest({ purgeAgentService: () => lifecycle.purgeAgentService, invalidateStorage: () => { void backend.harnessStorageReader([], true) } })
+  backend.purgeProvider = createPurgeRequest({ purgeAgentService: () => lifecycle.purgeAgentService, invalidateStorage: () => { void (ports.monitor ?? MONITOR_OFF).storage([], true) } })
   // Closing agents no window shows, and the cleanup preview (core/agents/close.ts).
   const closing = createAgentClosing({
     registry,

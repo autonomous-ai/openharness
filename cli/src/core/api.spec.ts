@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { projectDisplayName, type RegisteredSession } from '../lib/registry.js'
-import { createCoreApi, emptyPorts, FLEET_FALLBACKS, resolveAgent, TEAMS_FALLBACKS, type CoreApiDeps } from './api.js'
+import { createCoreApi, emptyPorts, FLEET_FALLBACKS, MONITOR_OFF, resolveAgent, TEAMS_FALLBACKS, type CoreApiDeps } from './api.js'
 import { FAIL } from './serviceHost.js'
 
 const row = (agentId: string) => ({ agentId, sessionId: `s-${agentId}`, engine: 'claude', cwd: '/work/app' }) as RegisteredSession
@@ -97,7 +97,12 @@ describe('the core API services stand on', () => {
   })
 
   it('starts with every port empty: a service fills its own when it starts', () => {
-    expect(emptyPorts()).toEqual({ search: null, viewers: null, models: null, workspaces: null, teams: null, fleet: null })
+    expect(emptyPorts()).toEqual({ search: null, viewers: null, models: null, workspaces: null, teams: null, fleet: null, monitor: null })
     expect(emptyPorts()).not.toBe(emptyPorts())
+  })
+
+  it('answers the monitor\'s fallbacks while it is off: no readings, nothing measured to forget', async () => {
+    await expect(MONITOR_OFF.resources()).rejects.toThrow('the monitor service is unavailable')
+    expect(await MONITOR_OFF.storage([], true)).toEqual(new Map())
   })
 })

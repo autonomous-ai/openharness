@@ -16,6 +16,8 @@ import type { FleetEvent } from '../cable/machineFleet.js'
 import type { AnswerReceipt, ReviewedAnswer } from '../cable/questionInbox.js'
 import type { AgentDshContext } from '../lib/agentFrame.js'
 import type { GridAccess } from '../lib/gridAttach.js'
+import type { createHarnessResourcesReader } from '../lib/harnessResources.js'
+import type { createHarnessStorageReader } from '../lib/harnessTelemetry.js'
 import type { AgentGridTarget } from '../lib/gridModels.js'
 import type { LiveEvent } from '../lib/normalize.js'
 import { projectDisplayName, type registry, type RegisteredSession } from '../lib/registry.js'
@@ -26,7 +28,7 @@ import type { SessionSearchIndex } from '../lib/sessionSearch/indexer.js'
 import type { StoppedAgentStore } from '../lib/stoppedAgents.js'
 import type { RouteAnswer } from '../localWsServer.js'
 import type { SwarmPromptScopes } from '../teams/promptScope.js'
-import { FAIL, later, type PortFallbacks } from './serviceHost.js'
+import { FAIL, later, ServiceUnavailableError, type PortFallbacks } from './serviceHost.js'
 
 export type { RouteAnswer }
 
@@ -188,6 +190,27 @@ export const MODELS_FALLBACKS: PortFallbacks<ModelsPort> = {
   ensure: later(FAIL), setUp: false, prewarm: undefined, signedOut: undefined,
 }
 
+/** The core's calls into the machine monitor: the readings `agents_list` adds to its rows when a window
+ *  asks for the monitor, and forgetting what a purged agent's workspace held. The same readers answer the
+ *  monitor's own request (`machine_resources`), so the two share one sample and one cache. */
+export interface MonitorPort {
+  /** Each live agent's processes, and the shared ones (lib/harnessResources.ts). */
+  resources: ReturnType<typeof createHarnessResourcesReader>
+  /** What each agent's workspace and transcript hold on disk; `invalidate` drops what was measured
+   *  (lib/harnessTelemetry.ts). */
+  storage: ReturnType<typeof createHarnessStorageReader>
+}
+
+/** What the core gets when the monitor fails: the list's rows without readings (core/agents/list.ts
+ *  answers a failed sample as none), and nothing measured to forget. */
+export const MONITOR_FALLBACKS: PortFallbacks<MonitorPort> = { resources: later(FAIL), storage: later(new Map()) }
+
+/** What the core calls while `ports.monitor` is null (the monitor is off): its fallbacks' answers. */
+export const MONITOR_OFF: MonitorPort = {
+  resources: () => Promise.reject(new ServiceUnavailableError('monitor')),
+  storage: async () => new Map(),
+}
+
 /** The core's calls into workspaces: name made-up worktree branches after their sessions, on each
  *  terminal-title pass, and sweep the worktrees nothing uses, when the core says it is time. */
 export interface WorkspacesPort {
@@ -306,10 +329,11 @@ export interface CorePorts {
   workspaces: WorkspacesPort | null
   teams: TeamsPort | null
   fleet: FleetPort | null
+  monitor: MonitorPort | null
 }
 
 export function emptyPorts(): CorePorts {
-  return { search: null, viewers: null, models: null, workspaces: null, teams: null, fleet: null }
+  return { search: null, viewers: null, models: null, workspaces: null, teams: null, fleet: null, monitor: null }
 }
 
 export interface CoreApiDeps {

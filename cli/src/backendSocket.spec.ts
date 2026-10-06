@@ -10,10 +10,13 @@ import { AGENT_OPENED_THROTTLE_MS } from './core/agents/update.js'
 import { deviceAgentListItem, deviceAgentRow } from './core/agents/list.js'
 import { grokHistoryPage } from './core/transcripts/history.js'
 import { bindAgentList, bindAgentUpdate, bindCancelRequest, bindLaunchRequests, bindCloseRequests, bindMessageRequest, bindPurgeRequest, bindQuestionResponse, bindStopRequest, bindTerminalRequests } from './testing/socketCore.js'
-import { emptyPorts, MODELS_FALLBACKS } from './core/api.js'
+import { emptyPorts, MODELS_FALLBACKS, MONITOR_FALLBACKS } from './core/api.js'
 import { createServiceHost, ServiceUnavailableError } from './core/serviceHost.js'
 import { MODELS_REQUESTS, startModels } from './services/models.js'
 import { USAGE_REQUESTS, startUsage } from './services/usage.js'
+import { MONITOR_REQUESTS, startMonitor, type MonitorDeps } from './services/monitor.js'
+import { createHarnessResourcesReader } from './lib/harnessResources.js'
+import { createHarnessStorageReader } from './lib/harnessTelemetry.js'
 import { fakeCore } from './testing/fakeCore.js'
 import { AuthSessionError, type AuthSessionManager } from './lib/authSession.js'
 import { WS_IDLE_DEADLINE_MS as IDLE_DEADLINE_MS } from './lib/wsLiveness.js'
@@ -593,6 +596,18 @@ function serveModels(socket: BackendSocket, over: Parameters<typeof fakeCore>[0]
   })
   host.start('models', startModels, core, MODELS_FALLBACKS, MODELS_REQUESTS)
   socket.serviceRouter = (type, payload, asker, reply) => host.route(type, payload, asker, reply)
+  return host
+}
+
+/** The machine monitor (services/monitor.ts) in `host`, reading this machine as the daemon does unless a
+ *  spec says otherwise; its totals through the module, so a spy on it is what answers. */
+function serveMonitor(host: ReturnType<typeof createServiceHost>, over: Partial<MonitorDeps> = {}) {
+  host.start('monitor', (core, ports) => startMonitor(core, ports, {
+    machine: () => machineResources.readMachineResources(),
+    resources: createHarnessResourcesReader(() => registry.advertised()),
+    storage: createHarnessStorageReader(),
+    ...over,
+  }), fakeCore(), MONITOR_FALLBACKS, MONITOR_REQUESTS)
   return host
 }
 
@@ -1576,7 +1591,7 @@ describe('BackendSocket outbound queue', () => {
       () => new Promise(resolve => { finish = resolve }),
     )
     const socket = new BackendSocket('token')
-    serveModels(socket)
+    serveMonitor(serveModels(socket))
     const frames: Array<Record<string, unknown>> = []
     socket.registerLocalClient('local:stats', {
       sendFrame: frame => { frames.push(frame); return true }, sendBinary: () => true,
@@ -1606,6 +1621,7 @@ describe('BackendSocket outbound queue', () => {
     const reading = { cpuPercent: 18, memoryUsedBytes: 10, memoryTotalBytes: 32 }
     vi.spyOn(machineResources, 'readMachineResources').mockResolvedValue(reading)
     const socket = new BackendSocket('token')
+    serveOn(socket, (host) => serveMonitor(host))
     socket.connect()
     const ws = wsMock.instances[0]
     ws.open()
@@ -1629,8 +1645,7 @@ describe('BackendSocket outbound queue', () => {
     const system = vi.spyOn(machineResources, 'readMachineResources')
     const socket = new BackendSocket('token')
     let finish!: (value: { sampledAt: string; agents: [] }) => void
-    socket.harnessResourcesReader = vi.fn(() => new Promise<{ sampledAt: string; agents: [] }>(resolve => { finish = resolve }))
-    serveModels(socket)
+    serveMonitor(serveModels(socket), { resources: vi.fn(() => new Promise<{ sampledAt: string; agents: [] }>(resolve => { finish = resolve })) })
     const frames: Array<Record<string, unknown>> = []
     socket.registerLocalClient('local:monitor', {
       sendFrame: frame => { frames.push(frame); return true }, sendBinary: () => true,
@@ -2603,8 +2618,8 @@ describe('agent_restart RPC', () => {
     vi.spyOn(registry, 'advertised').mockReturnValue([BASE_SESSION])
     vi.spyOn(registry, 'list').mockReturnValue([BASE_SESSION])
     vi.spyOn(stoppedAgents, 'available').mockReturnValue([{ ...BASE_SESSION, agentId: 'stopped' }])
-    socket.harnessResourcesReader = vi.fn(async () => ({ sampledAt: new Date().toISOString(), agents: [{ agentId: 'agent-1', memoryBytes: 123, cpuPercent: 2, processCount: 1 }] }))
-    bindAgentList(socket, { monitorActivityProvider: sessionId => sessionId === BASE_SESSION.sessionId ? 'needsInput' : 'idle' })
+    const resources = vi.fn(async () => ({ sampledAt: new Date().toISOString(), agents: [{ agentId: 'agent-1', memoryBytes: 123, cpuPercent: 2, processCount: 1 }] }))
+    bindAgentList(socket, { harnessResourcesReader: resources, monitorActivityProvider: sessionId => sessionId === BASE_SESSION.sessionId ? 'needsInput' : 'idle' })
     for (const [requestId, monitor] of [['plain', false], ['monitor', true]] as const) {
       socket.handleLocalFrame('local:restart', { type: 'agents_list', payload: { requestId, monitor, includeStopped: true } })
     }
@@ -2613,7 +2628,7 @@ describe('agent_restart RPC', () => {
     expect(response('plain').every((agent: any) => agent.monitor === undefined)).toBe(true)
     expect(response('monitor').find((a: any) => a.id === 'agent-1').monitor).toMatchObject({ activity: 'needsInput', activityKnown: true, rssBytes: 123, cpu: 2, pid: BASE_SESSION.processIdentity?.pid ?? null })
     expect(response('monitor').find((a: any) => a.id === 'stopped').monitor).toMatchObject({ rssBytes: 0, cpu: 0, pid: null })
-    expect(socket.harnessResourcesReader).toHaveBeenCalledOnce()
+    expect(resources).toHaveBeenCalledOnce()
     await socket.unregisterLocalClient('local:restart'); await socket.stop()
   })
 
