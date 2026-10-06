@@ -14,7 +14,7 @@ describe('the core API services stand on', () => {
     expect(resolveAgent(agents, 'nobody')).toBeUndefined()
   })
 
-  it('lists every agent, live then stopped, and names them as the apps do', () => {
+  it('lists every agent, live then stopped, and names them as the apps do', async () => {
     const deps: CoreApiDeps = {
       dataDir: '/data',
       registry: {
@@ -46,6 +46,9 @@ describe('the core API services stand on', () => {
     }
     const core = createCoreApi(deps)
     expect(core.dataDir).toBe('/data')
+    expect(await core.terminals.open({ argv: ['/bin/zsh'], cwd: '/work' })).toEqual({ ok: false, error: 'SERVICE_UNAVAILABLE' })
+    const terminals = { open: vi.fn(async () => ({ ok: true as const, agentId: 'shell' })) }
+    expect(createCoreApi({ ...deps, terminals }).terminals).toBe(terminals)
     expect(core.agents.all().map((s) => s.agentId)).toEqual(['live', 'stopped'])
     expect(core.agents.live().map((s) => s.agentId)).toEqual(['live'])
     expect(core.agents.displayName).toBe(projectDisplayName)

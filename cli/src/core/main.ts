@@ -90,6 +90,8 @@ import { RECONCILE_PASS_DEADLINE_MS, TerminalAgentReconciler } from '../lib/term
 import { Watcher } from '../watcher/watcher.js'
 import { startHookServer } from '../hookServer.js'
 import { connectToMaster } from '../harnessd/coreLink.js'
+import { createTerminalOpener } from './terminals/open.js'
+import { SHELL_REQUESTS, startShell } from '../services/shell.js'
 import { createTerminalControl } from './terminals/control.js'
 import { createTerminalRequests } from './terminals/requests.js'
 import { createAgentEvents } from './agents/events.js'
@@ -684,6 +686,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const openSessions = new OpenSessions({ providers: externalEngines, log: (line) => console.warn(line) })
   // The core's side of the boundary its services stand on, and the ports it reaches them through (core/api.ts).
   const coreApi = createCoreApi({
+    terminals: createTerminalOpener({ tmuxBackend, registry, announceSession, blocksFolder: (cwd) => !!backendRef?.purgeAgentService?.blocksFolder(cwd) }),
     dataDir: env.ADAPTER_DATA_DIR,
     registry,
     stoppedAgents,
@@ -1174,6 +1177,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // An agent's branch and pull request, a project's repository and preview, a folder's subfolders and a
   // media file from an agent's project (services/projects.ts).
   serviceHost.serve('projects', startProjects, coreApi, PROJECTS_REQUESTS)
+  serviceHost.serve('shell', startShell, coreApi, SHELL_REQUESTS)
 
   const runtimeController = new RuntimeProfileController({
     manager: runtimeProfiles,

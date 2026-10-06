@@ -5,10 +5,10 @@
 
 import { join } from 'node:path'
 
-import { MARK_CLOSE, MARK_OPEN, SessionSearchStore } from './store.js'
+import { MARK_CLOSE, MARK_OPEN, SessionSearchStore, SESSION_SEARCH_FILE } from './store.js'
 import { parseSearchWhen } from './when.js'
 
-export const SESSION_SEARCH_FILE = 'session-search.db'
+export { SESSION_SEARCH_FILE } from './store.js'
 
 export interface SearchCommandOptions {
   argv: string[]

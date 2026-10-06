@@ -32,9 +32,22 @@ import { FAIL, later, ServiceUnavailableError, type PortFallbacks } from './serv
 
 export type { RouteAnswer }
 
+/** A service may open a terminal with a literal argv, never shell source. */
+export interface TerminalOpen {
+  argv: string[]
+  cwd: string
+}
+export type TerminalOpenResult = { ok: true; agentId: string } | { ok: false; error: string; detail?: string }
+export interface TerminalsPort { open(request: TerminalOpen): Promise<TerminalOpenResult> }
+/** A service without the core's launch call must refuse, never launch outside the core. */
+export const TERMINALS_OFF: TerminalsPort = {
+  open: async () => ({ ok: false, error: 'SERVICE_UNAVAILABLE' }),
+}
+
 export interface CoreApi {
   /** The daemon's data folder; a service keeps its own files in it. */
   dataDir: string
+  terminals: TerminalsPort
   agents: {
     /** Every agent on this machine: the live ones, then the stopped ones. */
     all(): RegisteredSession[]
@@ -337,6 +350,7 @@ export function emptyPorts(): CorePorts {
 }
 
 export interface CoreApiDeps {
+  terminals?: TerminalsPort
   dataDir: string
   registry: Pick<typeof registry, 'list' | 'byAgent' | 'resolve' | 'advertised' | 'terminalAvailable'>
   stoppedAgents: Pick<StoppedAgentStore, 'list'>
@@ -363,10 +377,11 @@ export interface CoreApiDeps {
 export function createCoreApi({
   dataDir, registry, stoppedAgents, databaseHistory, externalSessions, openSessions, syncSession, runtimeModels, viewerChanged,
   gridNamed, gridModelsChanged, dshInstallStatus, mintGridName, accessToken, privateGridName, machineName,
-  runtimeProfile, setRuntime, fork, turns, questions,
+  runtimeProfile, setRuntime, fork, turns, questions, terminals = TERMINALS_OFF,
 }: CoreApiDeps): CoreApi {
   return {
     dataDir,
+    terminals,
     agents: {
       all: () => [...registry.list(), ...stoppedAgents.list()],
       live: () => registry.list(),
