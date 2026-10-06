@@ -621,7 +621,11 @@ class AppNotifier extends ChangeNotifier {
   final _agentPauses = <(String, String), Future<String?>>{};
 
   /// The workspace supplies presentation; the model owns target identity and completion.
-  Future<bool> Function(List<(String, Agent)>, {String? tabName})?
+  Future<bool> Function(
+    List<(String, Agent)>, {
+    String? tabName,
+    bool Function(String machineId, String agentId)? canStop,
+  })?
   reviewSessionClose;
   final _viewCloseRequests = <String, Future<void>>{};
   final _closingViewAgents = <(String, String), int>{};
@@ -2100,19 +2104,26 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
-  /// Explicit user Close. The reusable Harness Monitor dismisses its views;
-  /// ordinary sessions are saved and stopped before their views close.
+  /// Close removes these views. A session stops only when this removes its
+  /// last view across all tabs; shared views keep their live terminal.
   Future<void> requestCloseSwarm(String id) {
     final tab = swarms.where((s) => s.id == id).firstOrNull;
     if (tab == null) return Future.value();
     final captured = tab.panes.toList();
-    return _requestViewClose('tab:$id', tab, captured, () async {
-      if (tab.panes.length != captured.length ||
-          !captured.every(tab.panes.contains)) {
-        return;
-      }
-      await closeSwarm(id);
-    }, tabName: tab.name);
+    return _requestViewClose(
+      'tab:$id',
+      tab,
+      captured,
+      () async {
+        if (tab.panes.length != captured.length ||
+            !captured.every(tab.panes.contains)) {
+          return;
+        }
+        await closeSwarm(id);
+      },
+      tabName: tab.name,
+      wholeTab: true,
+    );
   }
 
   Future<void> requestClosePane(int paneId) {
@@ -2141,14 +2152,44 @@ class AppNotifier extends ChangeNotifier {
     List<TerminalPane> closing,
     Future<void> Function() finish, {
     String? tabName,
+    bool wholeTab = false,
   }) {
     if (_disposed) return Future.value();
     if (_viewCloseRequests[key] case final pending?) return pending;
+    bool canStop(String machineId, String agentId) {
+      if (!swarms.contains(tab) ||
+          (wholeTab &&
+              (tab.panes.length != closing.length ||
+                  !closing.every(tab.panes.contains)))) {
+        return false;
+      }
+      bool showsAgent(TerminalPane pane) =>
+          pane.machineId == machineId &&
+          (pane.agentId ?? pane.ownerAgentId) == agentId;
+      if (!closing.any(
+        (pane) => showsAgent(pane) && tab.panes.contains(pane),
+      )) {
+        return false;
+      }
+      return !swarms.any(
+        (other) => other.panes.any(
+          (pane) =>
+              showsAgent(pane) &&
+              !(identical(other, tab) && closing.contains(pane)),
+        ),
+      );
+    }
+
     final targets = <(String, Agent)>[];
     final seen = <(String, String)>{};
     for (final pane in closing) {
       final id = pane.agentId;
-      if (pane.isWeb || id == null || !seen.add((pane.machineId, id))) continue;
+      if (pane.isWeb ||
+          id == null ||
+          !seen.add((pane.machineId, id)) ||
+          !canStop(pane.machineId, id)) {
+        continue;
+      }
       final machine = stateOf(pane.machineId);
       final agent = machine?.agents.where((a) => a.id == id).firstOrNull;
       if (machine?.machine.isShared == true ||
@@ -2182,31 +2223,15 @@ class AppNotifier extends ChangeNotifier {
         try {
           if (targets.isNotEmpty &&
               (reviewSessionClose == null ||
-                  !await reviewSessionClose!(targets, tabName: tabName))) {
+                  !await reviewSessionClose!(
+                    targets,
+                    tabName: tabName,
+                    canStop: canStop,
+                  ))) {
             return;
           }
           if (!_authWorkCurrent(revision) || !swarms.contains(tab)) return;
           await finish();
-          // Close is global: the acknowledged session also leaves any other
-          // tab holding it. Preserve each layout through the normal close path.
-          for (final (machineId, agent) in targets) {
-            final current = stateOf(machineId)?.agents
-                .where((candidate) => candidate.id == agent.id)
-                .firstOrNull;
-            if (current?.isStopped != true ||
-                current?.createdAt != agent.createdAt ||
-                current?.sessionId != agent.sessionId) {
-              continue;
-            }
-            for (final other in swarms.toList()) {
-              for (final pane in other.panes.toList()) {
-                if (!_authWorkCurrent(revision)) return;
-                if (pane.machineId == machineId && pane.agentId == agent.id) {
-                  await closePane(pane.id, swarmId: other.id);
-                }
-              }
-            }
-          }
         } catch (_) {
           if (_authWorkCurrent(revision)) {
             _lastError = 'Could not close this session safely. Check its state and try again.';

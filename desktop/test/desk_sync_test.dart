@@ -111,7 +111,7 @@ void main() {
         final original = work.panes.toList();
         final paneIds = original.map((p) => p.agentId).toList();
         var reviewed = 0;
-        app.reviewSessionClose = (targets, {tabName}) async {
+        app.reviewSessionClose = (targets, {tabName, canStop}) async {
           reviewed++;
           expect(targets, hasLength(3));
           for (var i = 0; i < targets.length; i++) {
