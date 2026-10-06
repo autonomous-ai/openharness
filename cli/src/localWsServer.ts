@@ -118,7 +118,7 @@ export interface LocalWsServerOptions {
   /** The core's end of its out-of-process services (core/serviceLinks.ts): a `machine_select` with
    *  `role: "service"` is handed here, and the connection is the service's from then on. */
   services?: {
-    accept(service: string, token: string, sink: LocalClientSink & { buffered(): number }, close: (code: number, reason: string) => void):
+    accept(service: string, token: string, sink: LocalClientSink & { buffered(): number }, close: (code: number, reason: string) => void, accepted: () => void):
       { receive(frame: Frame): void; receiveBinary(bytes: Uint8Array): void; closed(): void } | null
   }
   /**
@@ -397,11 +397,12 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
       // account's machine id while a service names this computer's, and matching them refused every
       // service of every signed-in daemon (found by the release rehearsal, signed in).
       if (payload.role === 'service') {
-        const link = options.services?.accept(String(payload.service ?? ''), String(payload.token ?? ''), { ...sink, buffered: () => ws.bufferedAmount }, close) ?? null
+        const link = options.services?.accept(String(payload.service ?? ''), String(payload.token ?? ''), { ...sink, buffered: () => ws.bufferedAmount }, close, () => {
+          sink.sendFrame({ type: 'connected', payload: { machineId: options.machineId, transport: 'local', localProtocolVersion: LOCAL_WS_PROTOCOL_VERSION, service: payload.service } })
+        }) ?? null
         if (!link) { close(4401, 'service refused'); return }
         serviceLink = link
         selected = true
-        sink.sendFrame({ type: 'connected', payload: { machineId: options.machineId, transport: 'local', localProtocolVersion: LOCAL_WS_PROTOCOL_VERSION, service: payload.service } })
         return
       }
       if (requestedMachineId === options.machineId) {

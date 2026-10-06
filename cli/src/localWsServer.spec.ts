@@ -1106,10 +1106,11 @@ describe('local CLI WebSocket', () => {
     const receiveBinary = vi.fn()
     let buffered: (() => number) | undefined
     const services = {
-      accept: (service: string, token: string, sink: { buffered(): number }) => {
+      accept: (service: string, token: string, sink: { buffered(): number }, _close: (code: number, reason: string) => void, welcome: () => void) => {
         if (token !== 'boot-token') return null
         accepted.push(service)
         buffered = sink.buffered
+        welcome()
         return { receive: vi.fn(), receiveBinary, closed: vi.fn() }
       },
     }
