@@ -9,3 +9,7 @@ CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
 
 # Observe every GT911 contact; extra fingers must cancel, never be truncated.
 CONFIG_ESP_LCD_TOUCH_MAX_POINTS=5
+
+# Keep the large Habitat model/scenes in PSRAM, leaving internal RAM for
+# the two DMA strip buffers and the display task stack on a clean build.
+CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y
