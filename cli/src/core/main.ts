@@ -119,7 +119,7 @@ import { createAgentUpdate } from './agents/update.js'
 import { createEngineHooks, installEngineHooks } from './engines/hooks.js'
 import { createCursorTaskHooks } from './engines/cursorTasks.js'
 import { databaseHistory } from './transcripts/databaseHistory.js'
-import { createCoreApi, DEVICES_FALLBACKS, DEVICES_REQUESTS, emptyPorts, EXPERIMENTS, LONG_ANSWERS, MODELS_FALLBACKS, MODELS_OFF, MODELS_REQUESTS, MONITOR_FALLBACKS, MONITOR_OFF, MONITOR_REQUESTS, ORCHESTRATOR_FALLBACKS, ORCHESTRATOR_REQUESTS, SHARE_REQUESTS, SHARING_FALLBACKS, PROJECTS_REQUESTS, SEARCH_FALLBACKS, SEARCH_REQUESTS, STORE_REQUESTS, TEAMS_FALLBACKS, TEAMS_REQUESTS, USAGE_REQUESTS, VIEWERS_FALLBACKS, WIFI_FALLBACKS, WORKSPACES_FALLBACKS, type GatewayAccount, type GatewayOps, type GatewayStatus, type RouteAnswer, type TeamsPort, type WindowFocus } from './api.js'
+import { COMMAND_BAR_REQUESTS, createCoreApi, DEVICES_FALLBACKS, DEVICES_REQUESTS, emptyPorts, EXPERIMENTS, LONG_ANSWERS, MODELS_FALLBACKS, MODELS_OFF, MODELS_REQUESTS, MONITOR_FALLBACKS, MONITOR_OFF, MONITOR_REQUESTS, ORCHESTRATOR_FALLBACKS, ORCHESTRATOR_REQUESTS, SHARE_REQUESTS, SHARING_FALLBACKS, PROJECTS_REQUESTS, SEARCH_FALLBACKS, SEARCH_REQUESTS, STORE_REQUESTS, TEAMS_FALLBACKS, TEAMS_REQUESTS, USAGE_REQUESTS, VIEWERS_FALLBACKS, WIFI_FALLBACKS, WORKSPACES_FALLBACKS, type GatewayAccount, type GatewayOps, type GatewayStatus, type RouteAnswer, type TeamsPort, type WindowFocus } from './api.js'
 import { createServiceHost, testFaults } from './serviceHost.js'
 import { startStalls } from './stall.js'
 import { createServiceLinks, type ServiceLinks } from './serviceLinks.js'
@@ -144,7 +144,7 @@ import { CORE_EXIT_STOP, CORE_EXIT_UPDATE, PROBE_COMMAND, PROBE_TIMEOUT_MS } fro
 import { localSocketPath, refuseServedDataFolder, type LocalSocketServer } from '../lib/localSocket.js'
 import { saveDaemonPort } from '../lib/daemonEndpoint.js'
 import { publishHookRoute } from '../lib/hookRoutes.js'
-import { commandBarService } from '../lib/commandBar.js'
+import { routedCommandBar } from '../lib/commandBarHttp.js'
 import { BackendSocket, isLocalClientId } from '../backendSocket.js'
 import { createGatewayLink, laneOf } from './gatewayLink.js'
 import { createWifiCore } from './wifi.js'
@@ -1273,6 +1273,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // An agent's branch and pull request, a project's repository and preview, a folder's subfolders and a
   // media file from an agent's project (services/projects.ts): in this process, or in the edge host.
   if (!outOfProcess.has('projects')) serviceHost.serve('projects', inline!.startProjects, coreApi, PROJECTS_REQUESTS)
+  if (!outOfProcess.has('commandBar')) serviceHost.serve('commandBar', inline!.startCommandBar, coreApi, COMMAND_BAR_REQUESTS)
   serviceHost.serve('shell', startShell, coreApi, SHELL_REQUESTS)
   // Models: grid access and its pin, the model pictures on agents' frames, the keystroke prewarm, where an
   // agent on a grid model sends its inference, and the models requests the apps send (services/models.ts):
@@ -1709,7 +1710,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // Which agent a hook belongs to, and what a SessionEnd means (core/engines/hooks.ts).
   const engineHooks = createEngineHooks({ tmuxBackend, agentReconciler, registry })
   const { server: hookServer, port: hookPort, localSocket } = await startHookServer(daemonPort(), {
-    onCommandBar: commandBarService,
+    onCommandBar: routedCommandBar(backend),
     onAutonomousDeviceRequest: async (method, target, body) => {
       // Until the pieces below are built; after, a piece that could not be is refused by the requests
       // that need it, and the rest (list, status, revoke) answer from the pairings.

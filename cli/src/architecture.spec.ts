@@ -287,7 +287,13 @@ const SERVICE_MAY_IMPORT: Record<string, string> = {
 // runs in the viewers' process, beside the viewer servers it forwards to (services/viewers.ts), and with it
 // the headless browser capture the surfaces render with (sharing/viewer.ts), Share's other user. The core
 // keeps the frame types it gates (lib/viewerFrames.ts) and hands each frame on (core/viewerStreams.ts).
-const CORE_CLOSURE_BUDGET = 75_070
+//
+// Then at 74,629 in 340, from 74,974 in 342: the command bar is an experiment, in a process of its own
+// from its first request (services/commandBar.ts); its JEV decisions with their zod schemas
+// (lib/commandBar.ts) and the OpenRouter key reader only it still loaded here (lib/openrouter.ts) leave.
+// Its HTTP door stays, forwarding to it (lib/commandBarHttp.ts), and so does ⌘K's task delivery, the
+// devices'.
+const CORE_CLOSURE_BUDGET = 74_730
 
 /** What is not the core's, by path: each goes to a service or its own process, in the plan's order. */
 const EDGE: RegExp[] = [
