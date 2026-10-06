@@ -2,6 +2,8 @@
 
 `gone`: the slave is held open here (as a daemon still holding its port would), the master closed, and then
 the worker opens the slave: it must refuse at once, not wait in open() for a master that is not coming.
+`raced`: the same, with the worker's probe read told "nothing yet", as when the master goes just after it:
+the port must open without waiting, and close on the far end's end.
 `early`: the master writes before the worker opens the slave, and then more: the worker gets both, in order.
 """
 import os
@@ -13,7 +15,7 @@ import time
 node, worker, mode = sys.argv[1:]
 master, slave = pty.openpty()
 path = os.ttyname(slave)
-if mode == 'gone':
+if mode in ('gone', 'raced'):
     os.close(master)
 else:
     os.write(master, b'before ')
