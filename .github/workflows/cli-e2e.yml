@@ -84,7 +84,7 @@ jobs:
           for core in Path('../.harness/cores').glob('core.*'):
             out=Path('../.harness/validation')/(re.sub(r'[^a-zA-Z0-9._-]', '_', core.name)+'.backtrace.txt')
             with out.open('w') as f:
-              try: subprocess.run(['gdb','-batch','-ex','set debuginfod enabled on','-ex','thread apply all bt full','/usr/bin/tmux',str(core)],stdout=f,stderr=subprocess.STDOUT,timeout=60,check=False)
+              try: subprocess.run(['gdb','-batch','-iex','set debuginfod enabled on','-ex','info files','-ex','info registers','-ex','x/12i $pc-16','-ex','thread apply all bt full','/usr/bin/tmux',str(core)],stdout=f,stderr=subprocess.STDOUT,timeout=60,check=False)
               except subprocess.TimeoutExpired: f.write('\nGDB diagnostic deadline reached\n')
             print(out.name, out.read_text()[:40000])
           for log in Path('../.harness/validation').glob('round-*.log'):
