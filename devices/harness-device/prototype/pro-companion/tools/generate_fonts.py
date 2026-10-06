@@ -33,8 +33,13 @@ for size in (24, 32, 42, 56):
         packed = bytes((a[i] << 4) | a[i+1] for i in range(0,len(a),2))
         key = (width, advance, packed)
         if key not in masks:
-            masks[key] = len(data)
-            data.extend(packed)
+            # Glyphs address complete masks by offset, so transparent boundary
+            # bytes can be shared without changing any pixels or font metrics.
+            leading = len(packed) - len(packed.lstrip(b'\0'))
+            trailing = len(data) - len(data.rstrip(b'\0'))
+            overlap = min(leading, trailing)
+            masks[key] = len(data) - overlap
+            data.extend(packed[overlap:])
         glyphs.append((masks[key], width, advance))
     source.append(f'static const uint8_t alpha_{size}[]={{\n')
     source.extend(','.join(str(v) for v in data[i:i+96])+',\n' for i in range(0,len(data),96))

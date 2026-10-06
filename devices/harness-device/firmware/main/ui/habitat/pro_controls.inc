@@ -40,7 +40,9 @@ static void pro_heading(ht_scene_t *f, const char *title, action_kind_t back)
     bool enabled = !(back == A_QUESTION_BACK && s.q.pending) &&
                    !((back == A_DRAFT_OPTIONS || back == A_DRAFT_BACK) && draft.pending) &&
                    !(back == A_FORM_BACK && form.pending && strncmp(form.id, "find-", 5));
-    pro_control(f, 28, 28, 136, 64, back == A_DRAFT_OPTIONS ? "Options" : PRO_TR("Back"), back, 0, enabled);
+    const char *label = back == A_DRAFT_OPTIONS ? "Options" :
+        back == A_QUESTION_BACK && s.view == QUESTION ? PRO_TR("Previous") : PRO_TR("Back");
+    pro_control(f, 28, 28, 136, 64, label, back, 0, enabled);
     const ht_pro_font_t *font = ht_pro_width(&ht_pro_42, title) <= 500 ? &ht_pro_42 : &ht_pro_32;
     ht_pro_text(f, 188, 39, 500, font, FG, title);
     ht_pro_rect(f, 32, 113, 656, 2, 0, SEL);
@@ -643,7 +645,9 @@ static void pro_unknown_answer(ht_scene_t *f)
 static void pro_question(ht_scene_t *f)
 {
     if (s.q.pending && s.q.uncertain) { pro_unknown_answer(f); return; }
-    pro_heading(f, PRO_TR("A question for you"), A_HOME);
+    bool previous = s.q.valid && s.q.supported && !s.q.loading && !s.q.pending &&
+                    !s.q.error[0] && s.q.index > 0 && s.q.index < s.q.count;
+    pro_heading(f, PRO_TR("A question for you"), previous ? A_QUESTION_BACK : A_HOME);
     ht_pro_text(f, 48, 132, 624, &ht_pro_24, DIM, s.q.name);
     if (s.q.loading) {
         ht_pro_center(f, 288, &ht_pro_32, DIM, PRO_TR("Reading the question..."));
@@ -712,9 +716,10 @@ static void pro_answer(ht_scene_t *f)
     }
     pro_control(f, 32, 606, 184, 68, PRO_TR("Back"), A_QUESTION_BACK, 0, true);
     if (q->draft[0]) pro_control(f, 232, 606, 224, 68, PRO_TR("Say it again"), A_QUESTION_SAY, 0, true);
-    pro_control(f, 472, 606, 216, 68, s.q.index + 1 < s.q.count ? PRO_TR("Next answer") : PRO_TR("Send answer"),
+    pro_control(f, 472, 606, 216, 68, s.q.index + 1 < s.q.count ? PRO_TR("Next answer") :
+                s.q.count > 1 ? PRO_TR("Send answers") : PRO_TR("Send answer"),
                 A_ANSWER, 0, s.connected && (q->selected || q->draft[0]));
-    pro_note(f, PRO_TR("Your answer goes only to this question."));
+    pro_note(f, s.q.count > 1 ? PRO_TR("All answers are sent together.") : PRO_TR("Your answer goes only to this question."));
 }
 
 static void pro_selection(ht_scene_t *f)

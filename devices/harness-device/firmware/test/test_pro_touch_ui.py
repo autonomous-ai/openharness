@@ -178,7 +178,7 @@ for name in ("copy", "find", "pane_memory", "pane_memory_apply", "pro_send_feedb
              "pro_speech_tick", "pro_busy_elapsed", "pro_surface_mood", "status_wake_ms",
              "question_view", "hit_contains", "home_footer", "pro_written_control",
              "settings_item", "settings_count", "tabs_move", "make_action", "input_cancel", "view",
-             "question_rows", "question_move", "draft_move",
+             "question_rows", "question_move", "pro_question_back", "draft_move",
              "pro_appearance_view", "pro_appearance_open", "pro_appearance_move", "pro_appearance_use",
              "workspace_index", "tabs_open", "workspace_failed", "pro_panes_of",
              "ui_land_after_reload", "ui_workspace_applied", "voice_status", "ui_scroll_reportable", "habitat_next_wake_ms",
@@ -209,6 +209,7 @@ static void open_question(void) { view(QUESTION); }
 static void dispatch(action_t action) {
     sent = action;
     if (language_action(action) || sample_action(action) || metrics_action(action) || agent_layout_action(action) || question_close_action(action)) return;
+    if (action.kind == A_QUESTION_BACK) { pro_question_back(action); return; }
     if (action.kind == A_DAEMONS) pro_appearance_open(DAEMONS);
     else if (action.kind == A_SCENES) pro_appearance_open(SCENES);
     else if (action.kind == A_APPEAR_PREVIOUS) pro_appearance_move(-1);
@@ -1342,8 +1343,68 @@ static void today_refresh_contact(void) {
     assert(!starts&&!switches&&!travel&&!down_reports);
 }
 
+static void question_back_fixture(view_t screen, bool spoken) {
+    reset();s.view=screen;s.hit_count=0;s.q.valid=s.q.supported=true;s.q.count=3;s.q.index=1;s.q.revision=17;
+    COPY(s.q.agent,"remote-question");COPY(s.q.request,"packet");COPY(s.q.token,"token");
+    for(int i=0;i<3;i++) {
+        s.q.item[i].count=2;s.q.item[i].selected=2;
+        COPY(s.q.item[i].prompt,"Choose a direction.");COPY(s.q.item[i].answer,"The selected answer.");
+    }
+    if(spoken) { COPY(s.q.item[1].draft,"spoken");COPY(s.q.item[1].answer,"Keep the explanation brief."); }
+    hit(A_QUESTION_BACK,0,28,28,136,64);
+    hit(A_HOME,0,32,606,184,68);
+}
+static void question_back_parity(void) {
+    for(int screen=0;screen<3;screen++)for(int spoken=0;spoken<2;spoken++)for(int gesture_path=0;gesture_path<3;gesture_path++) {
+        view_t from=screen==0?QUESTION:screen==1?CHOICE:ANSWER_REVIEW;
+        question_back_fixture(from,spoken);
+        question_item_t before[QUESTION_MAX];memcpy(before,s.q.item,sizeof before);
+        if(gesture_path==0)tap(85,55,400);
+        else if(gesture_path==1)swipe(260,320,440,320);
+        else swipe(60,630,200,630); // A Later contact still pins this question, not the active desktop pane.
+        assert(s.q.index==(from==QUESTION?0:1));
+        assert(s.view==(from==QUESTION?ANSWER_REVIEW:from==CHOICE||spoken?QUESTION:CHOICE));
+        assert(!memcmp(before,s.q.item,sizeof before)&&s.q.revision==17&&!strcmp(s.q.token,"token"));
+        assert(!starts&&!stops&&!queued&&!switches&&!travel&&!down_reports);
+    }
+    question_back_fixture(QUESTION,false);s.q.index=0;
+    swipe(260,320,440,320);assert(s.view==HOME&&s.q.index==0);
+}
+static void question_back_stale_contact(void) {
+    for(int state=0;state<5;state++) {
+        question_back_fixture(QUESTION,true);
+        sample(true,260,320,2000);sample(true,320,320,2060);
+        if(state==0)s.q.revision++;
+        else if(state==1)s.q.index=2;
+        else if(state==2)COPY(s.q.agent,"replacement");
+        else if(state==3)s.q.pending=true;
+        else { s.q.pending=s.q.uncertain=true; }
+        question_t before=s.q;
+        sample(true,380,320,2120);sample(false,440,320,2200);
+        assert(s.view==QUESTION&&!memcmp(&before,&s.q,sizeof before)&&!starts&&!queued&&!switches);
+    }
+    question_back_fixture(ANSWER_REVIEW,true);
+    sample(true,260,320,2000);habitat_touch_cancel();
+    sample(false,440,320,2200);assert(s.view==ANSWER_REVIEW&&s.q.index==1&&!queued);
+}
+static void question_back_immutable(void) {
+    for(int state=0;state<4;state++) {
+        question_back_fixture(ANSWER_REVIEW,true);
+        if(state<2) { s.q.pending=true;s.q.uncertain=state==1; }
+        else if(state==2)s.q.supported=false;
+        else s.q.loading=true;
+        question_t before=s.q;
+        tap(85,55,400);assert(s.view==ANSWER_REVIEW&&!memcmp(&before,&s.q,sizeof before));
+        swipe(260,320,440,320);assert(s.view==ANSWER_REVIEW&&!memcmp(&before,&s.q,sizeof before));
+        assert(!starts&&!queued&&!switches);
+    }
+    question_back_fixture(QUESTION,false);s.q.loading=true;
+    swipe(260,320,440,320);assert(s.view==HOME); // Existing loading/error escape stays available.
+}
+
 int main(int argc,char **argv) {
     const struct { const char *name; test_fn run; } tests[]={
+        {"question_back_parity",question_back_parity},{"question_back_stale_contact",question_back_stale_contact},{"question_back_immutable",question_back_immutable},
         {"footer_send_feedback",footer_send_feedback},{"work_identity_callbacks",work_identity_callbacks},{"busy_observation",busy_observation},{"busy_connection_loss",busy_connection_loss},{"busy_precedence",busy_precedence},
         {"busy_tick_schedule",busy_tick_schedule},{"busy_render_boundaries",busy_render_boundaries},
         {"today_read_only",today_read_only},{"today_refresh_contact",today_refresh_contact},{"home_hierarchy",home_hierarchy},

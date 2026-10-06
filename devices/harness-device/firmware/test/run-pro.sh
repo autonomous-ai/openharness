@@ -13,5 +13,6 @@ done
 python3 "$here/test_pro_touch_ui.py"
 python3 "$here/test_pro_controls.py"
 python3 "$here/test_pro_app_interactions.py"
+python3 "$here/test_pro_visit_identity.py"
 python3 "$here/test_pro_notice_merge.py"
 python3 "$here/test_pro_input_readiness.py"

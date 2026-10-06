@@ -4,7 +4,8 @@
 
 static bool send(ht_visit_t *s, ht_visit_op_t op, uint32_t now)
 {
-    ht_visit_command_t c = {op, s->id, s->agent, ++s->serial};
+    const char *agent = op == HT_VISIT_OPEN || op == HT_VISIT_LATEST ? s->pending_agent : s->agent;
+    ht_visit_command_t c = {op, s->id, agent, ++s->serial};
     if (!s->emit || !s->emit(&c, s->ctx)) return false;
     s->request = c.request;
     s->op = op;
@@ -27,13 +28,11 @@ static bool begin(ht_visit_t *s, const char *id, const char *agent, uint32_t now
 {
     if (s->pending || !id || !*id || !agent || !*agent || strlen(id) >= sizeof s->id || strlen(agent) >= sizeof s->agent) return false;
     if (strcmp(id, s->id)) ht_visit_close(s);
-    char previous_agent[sizeof s->agent];
-    memcpy(previous_agent, s->agent, sizeof previous_agent);
     snprintf(s->id, sizeof s->id, "%s", id);
-    snprintf(s->agent, sizeof s->agent, "%s", agent);
+    snprintf(s->pending_agent, sizeof s->pending_agent, "%s", agent);
     s->emit = emit; s->ctx = ctx;
     if (send(s, op, now)) return true;
-    memcpy(s->agent, previous_agent, sizeof s->agent);
+    s->pending_agent[0] = 0;
     return false;
 }
 bool ht_visit_open(ht_visit_t *s, const char *id, const char *agent, uint32_t now, ht_visit_emit_t emit, void *ctx)
@@ -48,12 +47,19 @@ bool ht_visit_back(ht_visit_t *s, uint32_t now)
 {
     return s->available && !s->pending && send(s, HT_VISIT_BACK, now);
 }
-bool ht_visit_reply(ht_visit_t *s, const char *id, uint32_t request, bool available, const char *label)
+bool ht_visit_reply(ht_visit_t *s, const char *id, uint32_t request, bool ok, bool available, const char *label)
 {
     if (!s->pending || !id || strcmp(id, s->id) || request != s->request) return false;
-    s->pending = false; s->available = available;
-    snprintf(s->label, sizeof s->label, "%s", label ? label : "");
-    if (!available) { s->id[0] = 0; s->agent[0] = 0; }
+    // Failure can retain an existing bookmark, but cannot create one. Keep its
+    // committed destination and label until a successful correlated reply.
+    s->available = available && (ok || s->available);
+    if (ok) {
+        if (s->op == HT_VISIT_OPEN || s->op == HT_VISIT_LATEST)
+            snprintf(s->agent, sizeof s->agent, "%s", s->pending_agent);
+        snprintf(s->label, sizeof s->label, "%s", label ? label : "");
+    }
+    s->pending = false; s->pending_agent[0] = 0;
+    if (!s->available) { s->id[0] = 0; s->agent[0] = 0; s->label[0] = 0; }
     return true;
 }
 bool ht_visit_tick(ht_visit_t *s, uint32_t now)

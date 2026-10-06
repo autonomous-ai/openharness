@@ -366,7 +366,7 @@ static void portrait(const char *dir, const char *name) {
 static void carry_return_setup(bool with_text) {
     reset();
     assert(ht_visit_latest(&visit,"reading-return","a",100,visit_emit,NULL));
-    assert(ht_visit_reply(&visit,visit.id,visit.request,true,"Your reading"));
+    assert(ht_visit_reply(&visit,visit.id,visit.request,true,true,"Your reading"));
     if(with_text) {
         ht_carry_open(&carry,"carried-passage","a","pick-test",1,200,carry_emit,NULL);
         assert(ht_carry_reply(&carry,carry.id,carry.request,true,"Research helper","Keep this paragraph",3,300000,NULL,250));
@@ -1225,7 +1225,7 @@ int main(int argc, char **argv) {
     carry_return_setup(true); habitat_touch(true,173,410,1000);
     ht_visit_close(&visit);
     assert(ht_visit_latest(&visit,"new-reading","b",1100,visit_emit,NULL));
-    assert(ht_visit_reply(&visit,visit.id,visit.request,true,"Different reading"));
+    assert(ht_visit_reply(&visit,visit.id,visit.request,true,true,"Different reading"));
     int sends=visit_sends; habitat_touch(false,173,410,1150);
     assert(!visit.pending && visit.available && visit_sends==sends && carry.active);
     reset(); s.view=SETTINGS; s.offset=6; scene_take(); assert(action_enabled(A_LATEST)); portrait(dir,"reading-controls");

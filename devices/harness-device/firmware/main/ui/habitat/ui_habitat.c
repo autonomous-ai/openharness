@@ -2623,7 +2623,11 @@ static action_t make_action(hit_t h)
     else if (h.action == A_MODEL && h.value < s.model_count) {
         COPY(a.id, s.model_agent);
         COPY(a.text, s.models[h.value].id);
-    } else if (question_view(s.view) && h.action != A_HOME) {
+    } else if (question_view(s.view)
+#ifndef DEVICE_PRO_COMPANION
+               && h.action != A_HOME
+#endif
+               ) {
         COPY(a.id,s.q.agent); a.dy=s.q.index;
     } else if (h.action == A_DESKTOP && h.value == 1)
         COPY(a.id, s.q.agent);
@@ -2737,6 +2741,27 @@ static void question_move(int delta)
         change();
     }
 }
+#ifdef DEVICE_PRO_COMPANION
+static void pro_question_back(action_t a)
+{
+    if (!question_view(s.view) || a.revision != s.q.revision || a.dy != s.q.index ||
+        strcmp(a.id, s.q.agent) || !s.q.valid || !s.q.supported || s.q.loading ||
+        s.q.pending || s.q.error[0] || s.q.index < 0 || s.q.index >= s.q.count) return;
+    if (s.view == QUESTION) {
+        if (!s.q.index) { view(HOME); return; }
+        // This is local review of the same packet, never a fresh read. Keep
+        // every answer, the recipient and the host's submission token intact.
+        question_item_t *q = &s.q.item[--s.q.index];
+        s.q.choice = 0;
+        if (q->selected) for (int i = 0; i < q->count; i++)
+            if (q->selected & (1u << i)) { s.q.choice = i; break; }
+        s.q.speech_error[0] = 0;
+        view(q->answer[0] ? ANSWER_REVIEW : QUESTION);
+    } else {
+        view(s.view == ANSWER_REVIEW && !s.q.item[s.q.index].draft[0] ? CHOICE : QUESTION);
+    }
+}
+#endif
 static void send_answer(void)
 {
     if (!s.connected || s.view!=ANSWER_REVIEW || !s.q.valid || s.q.pending ||
@@ -3076,7 +3101,13 @@ static void dispatch(action_t a)
             a.kind=A_VOICE; a.value=4; copy(a.text,sizeof s.q.token,s.q.token);
             ht_gesture_guard(&gesture,ms()); dispatch(a);
         } else if (a.kind==A_QUESTION_CHOICES && s.view==QUESTION) view(CHOICE);
-        else if (a.kind==A_QUESTION_BACK) view(s.view==ANSWER_REVIEW && !s.q.item[s.q.index].draft[0] ? CHOICE : QUESTION);
+        else if (a.kind==A_QUESTION_BACK) {
+#ifdef DEVICE_PRO_COMPANION
+            pro_question_back(a);
+#else
+            view(s.view==ANSWER_REVIEW && !s.q.item[s.q.index].draft[0] ? CHOICE : QUESTION);
+#endif
+        }
         else if (a.kind==A_CHOICE && s.view==CHOICE && a.value>=0 && a.value<s.q.item[s.q.index].count) {
             question_item_t *q=&s.q.item[s.q.index];
             q->draft[0]=q->answer[0]=0; s.q.speech_error[0]=0;
@@ -4131,7 +4162,16 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
             } else if (s.view == FORM) {
                 if (dx > 0) dispatch((action_t){.kind = A_FORM_BACK, .revision = form.page.revision});
             } else if (question_view(s.view)) {
-                if (dx>0 && !s.q.pending) view(s.view==ANSWER_REVIEW ? CHOICE : s.view==CHOICE ? QUESTION : HOME);
+                if (dx>0 && !s.q.pending) {
+#ifdef DEVICE_PRO_COMPANION
+                    action_t back = pressed_action;
+                    back.kind = s.view == QUESTION && (s.q.loading || !s.q.valid ||
+                        !s.q.supported || s.q.error[0]) ? A_HOME : A_QUESTION_BACK;
+                    dispatch(back);
+#else
+                    view(s.view==ANSWER_REVIEW ? CHOICE : s.view==CHOICE ? QUESTION : HOME);
+#endif
+                }
             } else if (s.view == INBOX && s.notice_count)
                 s.offset = (s.offset + (dx < 0 ? 1 : s.notice_count - 1)) % s.notice_count;
             else if (surface && s.count && s.connected && !s.loading) {
@@ -6328,7 +6368,11 @@ void ui_visit_state(const cJSON *p)
     bool inspect=visit.op==HT_VISIT_OPEN;
 #endif
     bool latest=visit.op==HT_VISIT_LATEST;
+    if (ok && (visit.op==HT_VISIT_OPEN || latest) && strcmp(visit.pending_agent,agent->valuestring)) {
+        display_unlock(); return;
+    }
     if (ht_visit_reply(&visit, id->valuestring, (uint32_t)serial,
+            ok,
             cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(p, "active")),
             cJSON_IsString(label) ? label->valuestring : "")) {
         s.pending_focus[0] = 0;

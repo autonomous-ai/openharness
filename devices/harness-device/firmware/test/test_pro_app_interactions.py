@@ -144,7 +144,7 @@ static void dispatch(action_t a);
 code += typedef("pro_notice_plan_t", source=SOURCE)
 for name in ("pro_send_feedback_clear", "pro_work_local", "pro_work_visible", "pro_work_block_reason", "pro_work_capture_pin", "pro_busy_reset", "question_view", "waiting", "recap_preview", "notice_was_read", "notice_forget_read", "notice_flush_reads", "notice_mark_read", "notice_open", "notice_sync_view", "notice_selection", "notice_restore_selection", "notice_remove", "pro_notice_pinned", "notice_add", "pro_notice_plan_source", "pro_notice_plan_card", "pro_notice_replace", "ui_notif_replace",
              "visit_emit", "selection_emit", "carry_emit", "make_action", "read_question", "open_question",
-             "pro_open_in_app", "question_answer", "question_rows", "question_move", "send_answer", "question_load", "pro_question_signature", "ui_question_show",
+             "pro_open_in_app", "question_answer", "question_rows", "question_move", "pro_question_back", "send_answer", "question_load", "pro_question_signature", "ui_question_show",
              "ui_question_state", "ui_answer_receipt", "ui_question_close", "pro_notice_source", "ui_set_connected",
              "ui_focus_project", "ui_notif_read", "ui_visit_state", "ui_voice_question"):
     code += function(name)
@@ -159,7 +159,7 @@ code += "static void work(action_t a) { switch(a.kind) {\n"
 code += cases("A_SELECT_SEND", "A_SCROLL", worker, "        ")
 code += "        case A_QUESTION_READ:" + worker.split("        case A_QUESTION_READ:", 1)[1].split("        default:", 1)[0]
 code += "default:break;} }\n"
-for name in ("pro_hit", "pro_control", "pro_heading", "pro_note", "pro_read_text", "pro_inbox", "pro_reader", "pro_selection", "pro_unknown_answer", "pro_question", "pro_answer"):
+for name in ("pro_hit", "pro_control", "pro_heading", "pro_note", "pro_read_text", "pro_inbox", "pro_reader", "pro_selection", "pro_unknown_answer", "pro_question", "pro_choices", "pro_answer"):
     code += function(name, SHEETS)
 code += function("pro_home_header", HOME)
 code += r'''
@@ -182,7 +182,7 @@ static void render(ht_scene_t *f) {
     s.hit_count=0;ht_scene_clear(f,BG);
     if(s.view==HOME)pro_home_header(f);else if(s.view==INBOX)pro_inbox(f);else if(s.view==READER)pro_reader(f);
     else if(s.view==SELECTION)pro_selection(f);
-    else if(s.view==ANSWER_REVIEW)pro_answer(f);else {assert(s.view==QUESTION);pro_question(f);}
+    else if(s.view==CHOICE)pro_choices(f);else if(s.view==ANSWER_REVIEW)pro_answer(f);else {assert(s.view==QUESTION);pro_question(f);}
     assert(f->count<HT_RUNS);
     for(int i=0;i<f->count;i++) {
         ht_rect_t r=ht_run_bounds(&f->runs[i]);assert(r.x>=0&&r.y>=0&&r.x+r.w<=720&&r.y+r.h<=720);
@@ -226,12 +226,39 @@ static void question_state_reply(bool supported,bool submitted,const char *id,co
     cJSON root=object(reply,8);ui_question_state(&root);
 }
 static void question_state(bool supported) { question_state_reply(supported,false,"question-remote","token-remote"); }
-static void voice_reply(const char *token) {
+static void voice_reply_at(unsigned index,const char *token,const char *draft_id,const char *text) {
     cJSON reply[]={{.string="agentId",.type=JSTRING,.valuestring="remote"},
-        {.string="token",.type=JSTRING,.valuestring=token},{.string="questionIndex",.type=JNUMBER,.valuedouble=0},
-        {.string="draftId",.type=JSTRING,.valuestring="spoken-answer"},
-        {.string="text",.type=JSTRING,.valuestring="Only change the selected file."}};
+        {.string="token",.type=JSTRING,.valuestring=token},{.string="questionIndex",.type=JNUMBER,.valuedouble=index},
+        {.string="draftId",.type=JSTRING,.valuestring=draft_id},
+        {.string="text",.type=JSTRING,.valuestring=text}};
     cJSON root=object(reply,5);ui_voice_question(&root);
+}
+static void voice_reply(const char *token) {
+    voice_reply_at(0,token,"spoken-answer","Only change the selected file.");
+}
+static void multi_question_state(void) {
+    const char *keys[]={"scope","style","checks"};
+    const char *prompts[]={"Which scope should we use?","How should I explain the result?","Which checks should I run?"};
+    const char *labels[][2]={{"This file only","The whole project"},{"A short summary","A full explanation"},{"Run the tests","Review the changes"}};
+    cJSON options[3][2],fields[3][5],questions[3];
+    for(int i=0;i<3;i++) {
+        for(int j=0;j<2;j++)options[i][j]=(cJSON){.type=JSTRING,.valuestring=labels[i][j]};
+        cJSON array=object(options[i],2);
+        fields[i][0]=(cJSON){.string="key",.type=JSTRING,.valuestring=keys[i]};
+        fields[i][1]=(cJSON){.string="q",.type=JSTRING,.valuestring=prompts[i]};
+        fields[i][2]=(cJSON){.string="options",.type=JARRAY,.child=array.child};
+        fields[i][3]=(cJSON){.string="canText",.type=i<2?JTRUE:0};
+        fields[i][4]=(cJSON){.string="multi",.type=i==2?JTRUE:0};
+        questions[i]=object(fields[i],5);
+    }
+    cJSON list=object(questions,3);
+    cJSON reply[]={{.string="agentId",.type=JSTRING,.valuestring=s.q.agent},
+        {.string="requestId",.type=JSTRING,.valuestring=s.q.fetch},
+        {.string="id",.type=JSTRING,.valuestring="question-packet"},
+        {.string="token",.type=JSTRING,.valuestring="packet-token"},
+        {.string="name",.type=JSTRING,.valuestring="Research"},
+        {.string="ok",.type=JTRUE},{.string="questions",.type=JARRAY,.child=list.child}};
+    cJSON root=object(reply,7);ui_question_state(&root);
 }
 static void receipt_frame(const char *agent,const char *fetch,const char *token,bool ok,bool pending) {
     cJSON reply[]={{.string="agentId",.type=JSTRING,.valuestring=agent},
@@ -438,10 +465,89 @@ static void everyday_shortcuts(const char *dir) {
     COPY(selection.id,retry.text);act(A_SELECT_BEGIN,0);assert(selection.pending&&!strcmp(selection.agent,"design"));
     puts("Everyday shortcuts: PASS (read questions remain actionable, retained-answer priority, empty Updates, no implicit focus or voice, source-pinned fresh selection, stale/remote-focus guards, Carry revision and 720 px bounds)");
 }
+static void correct_earlier_answers(const char *dir) {
+    ht_scene_t scene;reset();act(A_QUESTION,0);work(sent);multi_question_state();
+    assert(s.q.count==3&&s.q.valid&&s.q.supported&&reads==1);
+    uint32_t revision=s.q.revision;
+    char request[48],token[48];COPY(request,s.q.request);COPY(token,s.q.token);
+    render(&scene);assert(!text_has(&scene,"Previous"));
+    act(A_QUESTION_CHOICES,0);act(A_CHOICE,1);act(A_QUESTION_REVIEW,0);act(A_ANSWER,0);
+    assert(s.view==QUESTION&&s.q.index==1&&answers==0&&!s.q.pending);
+    render(&scene);assert(text_has(&scene,"Previous")&&controls(A_QUESTION_BACK)==1);
+    portrait(&scene,dir,"question-second-previous");
+    act(A_QUESTION_SAY,0);s.voice_waiting=true;
+    voice_reply_at(1,token,"spoken-style","Keep the explanation short.");
+    assert(s.view==ANSWER_REVIEW&&s.q.index==1);act(A_ANSWER,0);
+    assert(s.view==QUESTION&&s.q.index==2&&!answers);
+    act(A_QUESTION_CHOICES,0);act(A_CHOICE,0);act(A_CHOICE,1);act(A_QUESTION_REVIEW,0);
+    assert(s.q.item[2].selected==3&&strstr(s.q.item[2].answer,"Run the tests"));
+    act(A_QUESTION_BACK,0);assert(s.view==CHOICE&&s.q.index==2);
+    act(A_QUESTION_BACK,0);assert(s.view==QUESTION&&s.q.index==2);
+    action_t stale_previous=make_action(hit(A_QUESTION_BACK,0));
+    unsigned queued=enqueued;act(A_QUESTION_BACK,0);
+    assert(s.view==ANSWER_REVIEW&&s.q.index==1&&enqueued==queued&&reads==1&&opens==0);
+    assert(!strcmp(s.q.item[1].answer,"Keep the explanation short.")&&s.q.item[2].selected==3);
+    render(&scene);portrait(&scene,dir,"previous-spoken-answer");
+    dispatch(stale_previous);assert(s.view==ANSWER_REVIEW&&s.q.index==1);
+    act(A_QUESTION_BACK,0);assert(s.view==QUESTION&&s.q.index==1);
+    act(A_QUESTION_SAY,0);s.voice_waiting=true;
+    voice_reply_at(1,token,"revised-style","Keep the summary brief and include the checks.");
+    act(A_QUESTION_BACK,0);assert(s.view==QUESTION&&s.q.index==1);
+    queued=enqueued;act(A_QUESTION_BACK,0);
+    assert(s.view==ANSWER_REVIEW&&s.q.index==0&&s.q.choice==1&&enqueued==queued);
+    assert(s.q.item[0].selected==2&&!strcmp(s.q.item[1].draft,"revised-style")&&s.q.item[2].selected==3);
+    act(A_QUESTION_BACK,0);assert(s.view==CHOICE&&s.q.index==0&&s.q.choice==1);
+    act(A_CHOICE,0);act(A_QUESTION_REVIEW,0);
+    assert(!strcmp(s.q.item[0].answer,"This file only"));
+    render(&scene);portrait(&scene,dir,"corrected-first-answer");
+    act(A_ANSWER,0);assert(s.view==QUESTION&&s.q.index==1);
+    act(A_QUESTION_REVIEW,0);assert(s.view==ANSWER_REVIEW);
+    act(A_ANSWER,0);assert(s.view==QUESTION&&s.q.index==2);
+    act(A_QUESTION_CHOICES,0);act(A_QUESTION_REVIEW,0);
+    assert(!strcmp(s.q.request,request)&&!strcmp(s.q.token,token)&&s.q.revision==revision);
+    assert(!strcmp(s.q.agent,"remote")&&s.active==0&&reads==1&&opens==0&&voice_commands==2&&answers==0);
+    render(&scene);assert(text_has(&scene,"Send answers")&&text_has(&scene,"All answers are sent together."));
+    portrait(&scene,dir,"all-answers-final-confirmation");
+    act(A_ANSWER,0);assert(s.q.pending);action_t submission=sent;queued=enqueued;
+    act(A_QUESTION_BACK,0);dispatch(stale_previous);act(A_ANSWER,0);
+    assert(s.q.pending&&s.q.index==2&&enqueued==queued);
+    work(submission);assert(answers==1&&packet.count==3&&packet.choices[0]==1&&packet.choices[2]==3);
+    assert(!strcmp(packet.drafts[1],"revised-style")&&!strcmp(packet.agent,"remote")&&!strcmp(packet.token,token));
+    render(&scene);assert(!controls(A_QUESTION_BACK)&&!text_has(&scene,"Previous"));
+    portrait(&scene,dir,"answers-confirming");
+    ui_set_connected(false);dispatch(stale_previous);
+    assert(s.q.pending&&s.q.uncertain&&s.q.index==2&&answers==1);
+    render(&scene);assert(!controls(A_QUESTION_BACK)&&controls(A_QUESTION_CLOSE));
+
+    // A previously drawn navigation target has no authority over a new packet,
+    // item, owner or immutable submission, even if the label is unchanged.
+    for(int state=0;state<9;state++) {
+        reset();act(A_QUESTION,0);multi_question_state();
+        s.q.item[0].selected=1;assert(question_answer());s.q.index=1;
+        action_t previous=make_action(hit(A_QUESTION_BACK,0));
+        switch(state) {
+            case 0:s.q.revision++;break;
+            case 1:s.q.index=2;break;
+            case 2:COPY(s.q.agent,"another-agent");break;
+            case 3:s.q.pending=true;break;
+            case 4:s.q.pending=s.q.uncertain=true;break;
+            case 5:s.q.loading=true;break;
+            case 6:s.q.supported=false;break;
+            case 7:COPY(s.q.error,"The question changed.");break;
+            default:pro_notice_source("another-host");break;
+        }
+        question_t before=s.q;view_t screen=s.view;queued=enqueued;
+        dispatch(previous);
+        assert(!memcmp(&before,&s.q,sizeof before)&&s.view==screen&&enqueued==queued&&answers==0);
+    }
+    puts("Question correction: PASS (three actual mixed question items, retained earlier/later answers, local Previous, changed voice/choice, exact single final packet, stale/pending/owner guards)");
+}
+
 int main(int argc,char **argv) {
     const char *dir=argc>1?argv[1]:NULL;ht_scene_t scene;
     everyday_shortcuts(dir);
     unknown_answer_recovery(dir);
+    correct_earlier_answers(dir);
 
     // Reading is pinned even when the app selects another pane meanwhile.
     reset();s.view=LAUNCHER;act(A_READER,0);assert(s.view==READER&&!strcmp(s.reader_agent,"design"));
@@ -520,10 +626,10 @@ int main(int argc,char **argv) {
     assert(s.view==AGENT&&s.active==2&&visit.available); // Opening never auto-enters Answer.
 
     // Return invalidation and degraded origins never masquerade as exact restoration.
-    reset();act(A_NOTICE,0);visit_reply("build",true,true,NULL);ui_focus_project("design");assert(!visit.available);
-    reset();act(A_NOTICE,0);visit_reply("build",true,true,NULL);act(A_RETURN,0);visit_reply("design",true,false,"The original lines are no longer available.");
+    reset();act(A_NOTICE,0);visit_reply("remote",true,true,NULL);ui_focus_project("build");assert(!visit.available);
+    reset();act(A_NOTICE,0);visit_reply("remote",true,true,NULL);act(A_RETURN,0);visit_reply("design",true,false,"The original lines are no longer available.");
     assert(s.view==MESSAGE&&strstr(s.message,"no longer available")&&!visit.available);
-    reset();act(A_NOTICE,0);visit_reply("build",true,true,NULL);act(A_RETURN,0);visit_reply("design",false,false,NULL);
+    reset();act(A_NOTICE,0);visit_reply("remote",true,true,NULL);act(A_RETURN,0);visit_reply("design",false,false,NULL);
     assert(s.view==MESSAGE&&strstr(s.message,"closed")&&!visit.available);
     reset();act(A_NOTICE,0);ui_set_connected(false);assert(!visit.available&&!visit.pending);
     reset();act(A_NOTICE,0);assert(ht_visit_tick(&visit,visit.deadline));assert(!visit.available&&!visit.pending);
