@@ -1,5 +1,6 @@
 import '../../state/app_state.dart';
 import '../../state/workspace_chrome.dart';
+import '../onboarding/web_first_machine.dart';
 import '../footer/web_footer_bar.dart';
 import '../tabs/web_tab_switcher.dart';
 import 'web_app_menu.dart';
@@ -24,4 +25,5 @@ WorkspaceChrome webWorkspaceChrome(AppNotifier app) => WorkspaceChrome(
       WebTabSwitcher(app: app, commands: commands),
   compactFooter: (context, footer) => WebFooterBar(footer: footer),
   compactBelow: kWebCompactBelow,
+  firstMachine: (context) => WebFirstMachine(app: app),
 );

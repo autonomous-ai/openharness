@@ -17,6 +17,7 @@ import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/grid_pictures.dart';
 import 'package:harness/terminal/terminal_font_store.dart';
+import 'package:harness/web/shell/web_chrome.dart';
 import 'package:harness/widgets/web_download_button.dart';
 import 'package:harness/widgets/swarm_switcher.dart';
 import 'package:web/web.dart' as web;
@@ -54,7 +55,11 @@ MachineState _startupMachine(
   return state;
 }
 
-Future<void> _mountStartup(WidgetTester tester, _StartupApp app) async {
+Future<void> _mountStartup(
+  WidgetTester tester,
+  _StartupApp app, {
+  bool web = false,
+}) async {
   app.currentUser = const CurrentUserProfile(email: 'browser@example.test');
   final selected = app.selectedMachineId;
   app.newSwarm(newTabPage: true);
@@ -65,7 +70,10 @@ Future<void> _mountStartup(WidgetTester tester, _StartupApp app) async {
   await tester.pumpWidget(
     MaterialApp(
       theme: grid.buildAppTheme(brightness: Brightness.dark),
-      home: SwarmScreen(notifier: app),
+      home: SwarmScreen(
+        notifier: app,
+        chrome: web ? webWorkspaceChrome(app) : null,
+      ),
     ),
   );
   await tester.pump(const Duration(milliseconds: 200));
@@ -150,6 +158,47 @@ void main() {
       app.dispose();
     });
   }
+
+  group('a browser with no computer connected', () {
+    Future<void> settle(WidgetTester tester, _StartupApp app) async {
+      app.inventoryLoaded = true;
+      app.notifyListeners();
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pump();
+    }
+
+    Future<void> unmount(WidgetTester tester, _StartupApp app) async {
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+      app.dispose();
+    }
+
+    testWidgets('says how to connect one, not a search box', (tester) async {
+      final app = _StartupApp();
+      await _mountStartup(tester, app, web: true);
+      await settle(tester, app);
+
+      expect(find.byType(SwarmSearchResults), findsNothing);
+      expect(find.text('Connect a computer'), findsOneWidget);
+      expect(find.text('Download app'), findsWidgets);
+      expect(find.text('harness login'), findsOneWidget);
+      await unmount(tester, app);
+    });
+
+    testWidgets('one waiting to be linked connects from the same page', (
+      tester,
+    ) async {
+      final app = _StartupApp();
+      _startupMachine(app, 'server', needsLink: true);
+      await _mountStartup(tester, app, web: true);
+      await settle(tester, app);
+
+      expect(find.byType(SwarmSearchResults), findsNothing);
+      expect(find.text('Connect your computer'), findsOneWidget);
+      expect(find.widgetWithText(FilledButton, 'Connect'), findsOneWidget);
+      await unmount(tester, app);
+    });
+  });
 
   testWidgets('first visit offers machines once after discovery is complete', (
     tester,
