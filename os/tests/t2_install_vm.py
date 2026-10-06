@@ -31,7 +31,7 @@ def image_source_binding(root, image_source, observer_source):
         return subprocess.check_output(['git', '-C', str(root), *args], text=True).strip()
     if not re.fullmatch(r'[a-f0-9]{40}', image_source):
         raise ValueError('Invalid image source identity.')
-    changed = git('diff', '--name-only', image_source, observer_source).splitlines()
+    changed = git('diff', '--no-renames', '--name-only', image_source, observer_source).splitlines()
     workflow = '.github/workflows/os-t2.yml'
     if any(not name.startswith('os/tests/') and name != workflow for name in changed):
         raise ValueError('Image build or runtime inputs changed; build a new T2 image.')
