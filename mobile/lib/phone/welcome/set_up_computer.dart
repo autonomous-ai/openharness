@@ -34,15 +34,22 @@ typedef DesktopPlatform = ({
   IconData icon,
 });
 
-/// The website's download menu (autonomous.ai/harness-app), row for row.
+/// The website's download menu (autonomous.ai/harness-app), row for row — with a word more on
+/// the two Macs, for somebody who never had to know which theirs is: Apple Silicon is every
+/// M-series Mac.
 const kDesktopPlatforms = <DesktopPlatform>[
   (
     key: 'desktop-macos-arm64-dmg',
     label: 'macOS',
-    note: 'Apple Silicon',
+    note: 'Apple Silicon · M1 or later',
     icon: Icons.apple,
   ),
-  (key: 'desktop-macos-dmg', label: 'macOS', note: 'Intel', icon: Icons.apple),
+  (
+    key: 'desktop-macos-dmg',
+    label: 'macOS',
+    note: 'Intel · older Macs',
+    icon: Icons.apple,
+  ),
   (
     key: 'desktop-linux-x64',
     label: 'Linux',
@@ -96,19 +103,22 @@ Future<Map<String, String>> loadDesktopDownloads({Dio? dio}) async {
 /// Send it to your computer:
 /// ┌──────────────────────────────────────┐
 /// │  macOS                           ⇪  │
-/// │  Apple Silicon                       │
+/// │  Apple Silicon · M1 or later         │
 /// │  macOS                           ⇪  │
-/// │  Intel                               │
+/// │  Intel · older Macs                  │
 /// │  Linux                           ⇪  │
 /// │  Intel/AMD · Ubuntu, Omarchy and more│
 /// │  Linux                           ⇪  │
 /// │  ARM · Raspberry Pi, ARM servers     │
-/// │  CLI                             ⧉  │
+/// │  Command line                    ⧉  │
 /// │  curl -fsSL …/install.sh | bash      │
 /// └──────────────────────────────────────┘
 /// or open harness.autonomous.ai/desktop there.
 ///
-/// Then open it, sign in with Google or Apple, and scan the code in Add Phone….
+/// Then, on your computer:
+/// 1  Install Harness, and open it.
+/// 2  Sign in with Google or Apple.
+/// 3  Open Add Phone… and scan its code. On a Mac, it’s in the Harness menu.
 /// Scan to connect ›
 /// ```
 class SetUpComputerPage extends StatefulWidget {
@@ -120,7 +130,13 @@ class SetUpComputerPage extends StatefulWidget {
     this.status,
     this.trailing = const [],
     this.loadDownloads,
+    this.account,
   });
+
+  /// The account this phone is signed in to, when it is: the computer has to sign in to the same
+  /// one, and the steps say so by name. Null for a phone not signed in yet — its scan signs it in
+  /// to whichever account the computer chose.
+  final String? account;
 
   /// Back to the first screen's other answer, once the app is on the computer — or, signed in,
   /// the scan that pairs this phone with the computer just set up.
@@ -185,6 +201,19 @@ class _SetUpComputerPageState extends State<SetUpComputerPage> {
       if (mounted) setState(() => _copied = false);
     });
   }
+
+  /// What to do on the computer once the file is there. Signed in, the account is named: a
+  /// computer signed in to another one never shows up here, and nothing else on the page says so.
+  List<String> get _steps => [
+    'Install Harness, and open it.',
+    switch (widget.account) {
+      final account? =>
+        'Sign in with Google or Apple, as $account — the account on this '
+            'phone.',
+      null => 'Sign in with Google or Apple.',
+    },
+    'Open Add Phone… and scan its code. On a Mac, it’s in the Harness menu.',
+  ];
 
   @override
   Widget build(BuildContext context) {
@@ -259,7 +288,8 @@ class _SetUpComputerPageState extends State<SetUpComputerPage> {
                         ),
                       _DownloadRow(
                         icon: LucideIcons.squareTerminal300,
-                        label: 'CLI',
+                        // Not "CLI": the one row a newcomer would have to look up.
+                        label: 'Command line',
                         note: _copied
                             ? 'copied'
                             : 'curl -fsSL …/install.sh | bash',
@@ -291,11 +321,15 @@ class _SetUpComputerPageState extends State<SetUpComputerPage> {
               // code until it is signed in — "Then open it, and scan the code it shows" sent people to
               // an Add Phone that only said "Sign in to add your phone.". Google or Apple by name: its
               // third way, "Scan with your phone", needs a phone that is already signed in.
-              Text(
-                'Then open it, sign in with Google or Apple, and scan the code in Add Phone….',
-                style: faint,
-              ),
-              const SizedBox(height: 4),
+              //
+              // Three numbered steps in the page's own ink, not one faint sentence: they are what the
+              // person does next, and folded into a line under the download menu they read as a
+              // footnote to it.
+              Text('Then, on your computer:', style: faint),
+              const SizedBox(height: 10),
+              for (final (index, step) in _steps.indexed)
+                _SetUpStep(number: index + 1, text: step),
+              const SizedBox(height: 2),
               Align(
                 alignment: Alignment.centerLeft,
                 child: Transform.translate(
@@ -329,6 +363,40 @@ class _SetUpComputerPageState extends State<SetUpComputerPage> {
           ),
         ),
       ],
+    );
+  }
+}
+
+/// One numbered step: the number in the terminal's green in a column of its own, the words beside
+/// it wrapping under themselves rather than under the number.
+class _SetUpStep extends StatelessWidget {
+  const _SetUpStep({required this.number, required this.text});
+
+  final int number;
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    final tty = Tty.of(context);
+    final style = tty.style(size: TtySize.row);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // One digit in a monospace face: every number is the same width, so the steps' words
+          // line up without a column of fixed width that a larger text size would outgrow.
+          Text(
+            '$number',
+            style: style.copyWith(
+              color: tty.green,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(child: Text(text, style: style)),
+        ],
+      ),
     );
   }
 }

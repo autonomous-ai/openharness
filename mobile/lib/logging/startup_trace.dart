@@ -8,7 +8,7 @@ import 'app_log.dart';
 /// of it, and only then the agent list. Every one of those is a plausible
 /// suspect for a slow start, and until each is timed separately the only honest
 /// answer to "why is it slow" is a guess. The screen says
-/// "Connecting to your machine…" for all of them at once (see
+/// "Connecting to your computer…" for all of them at once (see
 /// `phone/phone_status.dart`), so the UI cannot be read as a progress bar
 /// either.
 ///

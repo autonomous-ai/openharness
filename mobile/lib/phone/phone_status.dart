@@ -44,7 +44,7 @@ PhoneMachineStatus phoneMachineStatusOf(MachineState machine) {
 /// ⚠️ **The second half is what keeps a terminal on screen through a dropped socket.** Backgrounding
 /// the app drops it every time, and a machine counted only while [PhoneMachineStatus.ready] took its
 /// agents out of the list for the length of the redial — the pager, whose pages ARE that list, was
-/// thrown away and the screen fell back to "Connecting to your machine…" on every return to the app.
+/// thrown away and the screen fell back to "Connecting to your computer…" on every return to the app.
 /// A first connect has no list yet, so it still waits like one.
 /// ⚠️ **Agents restored from the last run count too, and that is the whole
 /// point of restoring them.** A warm-started machine is `connecting` (its socket

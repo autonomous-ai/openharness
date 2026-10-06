@@ -161,8 +161,8 @@ class _ApproveDialog extends StatelessWidget {
               const SizedBox(height: 14),
               Text(
                 computer
-                    ? 'A computer, to your account — it will run your agents and reach your machines.'
-                    : 'An app, to your account — it will reach your machines.',
+                    ? 'A computer, to your account — it will run your agents and reach your other computers.'
+                    : 'An app, to your account — it will reach your computers.',
                 style: text,
               ),
               const SizedBox(height: 10),

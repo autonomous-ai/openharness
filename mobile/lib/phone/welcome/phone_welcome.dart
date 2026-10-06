@@ -105,10 +105,12 @@ class _PhoneWelcomeState extends State<PhoneWelcome> {
   bool _codeFromScan = false;
 
   /// Under the scan page's hint. A desktop app opens signed out (its guest mode), and its Add Phone
-  /// then shows no code, only "Sign in to add your phone." — with no way to sign in from there.
+  /// then shows no code, only "Sign in to add your phone." — with a Sign in… button beside it in
+  /// a current desktop app, and none in an older one, where Settings ▸ Account is the way.
   static const _signInThereFirst =
-      'Does it say “Sign in to add your phone”? Sign in on the computer first '
-      '(Settings ▸ Account, with Google or Apple), then open Add Phone… again.';
+      'Does it say “Sign in to add your phone”? Sign in on the computer with '
+      'Google or Apple (Sign in… right there, or Settings ▸ Account), then '
+      'scan its code.';
 
   String? _error;
   int _resendIn = 0;

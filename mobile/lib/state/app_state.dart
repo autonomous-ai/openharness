@@ -1475,7 +1475,7 @@ class AppNotifier extends ChangeNotifier {
     // last thing started, behind several exclusive locks on one state file. The
     // request now overlaps that disk work instead of queueing behind it, which
     // takes a whole HTTP round-trip off the stretch the phone spends saying
-    // "Connecting to your machine…".
+    // "Connecting to your computer…".
     //
     // ⚠️ The pool is built BEFORE the fetch is started, not after the restore
     // below. A returning list dials each machine through `_conn`, which reads
@@ -2009,7 +2009,7 @@ class AppNotifier extends ChangeNotifier {
   /// ⚠️ **"The first fetch", and not "a fetch over an empty list".** An account with no computer
   /// yet has an empty list after every fetch, so every refresh used to raise [machinesLoading] —
   /// and the phone's "Waiting for your computer…" page (`phone/welcome/connect_computer.dart`),
-  /// which refreshes every 5 seconds, was swapped for "Looking for your machines…" by the home
+  /// which refreshes every 5 seconds, was swapped for "Looking for your computers…" by the home
   /// screen each time and built again from scratch: a flash every 5 seconds, a scan's result
   /// dropped with the page that started it. Keyed to the sign-in, so the next one starts over.
   int? _machinesFetchedFor;

@@ -357,7 +357,7 @@ class _AgentHomeState extends State<AgentHome> {
   bool _waitingForRestore = false;
 
   /// Whether that wait is for the agent's own terminal rather than for its machine — see
-  /// [_terminalStillComing]. Only the message differs; saying "Connecting to your machine…" over a
+  /// [_terminalStillComing]. Only the message differs; saying "Connecting to your computer…" over a
   /// machine that has already answered names the wrong thing to be patient with.
   bool _waitingForTerminal = false;
 
@@ -369,8 +369,8 @@ class _AgentHomeState extends State<AgentHome> {
     if (_waitingForTerminal) return 'Reopening your harness…';
     // Every other machine may be up and loaded while the one holding the remembered agent is still
     // dialling — without this the wait would draw as "No agents yet".
-    if (_waitingForRestore) return 'Connecting to your machine…';
-    if (_waitingForDesk) return 'Opening your swarms…';
+    if (_waitingForRestore) return 'Connecting to your computer…';
+    if (_waitingForDesk) return 'Opening your tabs…';
     return null;
   }
 
@@ -534,7 +534,7 @@ class _AgentHomeState extends State<AgentHome> {
   /// This is the wait as the PERSON experiences it, which is the only timeline
   /// that settles whether a launch is slow: everything else in the log measures
   /// one operation, while this measures how long the phone showed a given
-  /// sentence. "Connecting to your machine…" covers a dial, an E2EE handshake
+  /// sentence. "Connecting to your computer…" covers a dial, an E2EE handshake
   /// and an agent list (see `phone_status.dart`), so the gap between this line
   /// and the next is the only place that stretch appears as a number at all.
   ///
@@ -569,7 +569,7 @@ class _AgentHomeState extends State<AgentHome> {
     final notifier = widget.notifier;
     // Then the account's machines, over the network.
     if (notifier.machines.isEmpty) {
-      return notifier.machinesLoading ? 'Looking for your machines…' : null;
+      return notifier.machinesLoading ? 'Looking for your computers…' : null;
     }
     final machines = filterableMachines(notifier);
     // ⚠️ **The first machine to answer ends the wait; the others catch up behind
@@ -602,7 +602,7 @@ class _AgentHomeState extends State<AgentHome> {
         PhoneMachineStatus.ready || PhoneMachineStatus.offline => false,
       },
     )) {
-      return 'Connecting to your machine…';
+      return 'Connecting to your computer…';
     }
     // And finally the agent list a connected machine still owes. ⚠️ Only from machines that are
     // READY: an offline one is left at whatever `agentLoadStatus` it had when it dropped, and

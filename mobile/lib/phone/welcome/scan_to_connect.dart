@@ -14,6 +14,13 @@ import '../tty.dart';
 import '../tty_controls.dart';
 import 'connect_code.dart';
 
+/// Where Add Phone… is on the computer, for somebody who has never opened it. The Mac keeps it in
+/// the Harness menu; the desktop app's Linux menu strip has no row for it, so there it is the
+/// command palette's (`navigation.commands`, Ctrl+Shift+P, finds the "Add phone" command).
+const kAddPhoneWhere =
+    'On a Mac: Harness menu ▸ Add Phone…\n'
+    'On Linux: Ctrl+Shift+P, then “add phone”';
+
 /// **Yes — scan to connect**: the camera, reading the code the desktop app shows under
 /// Harness ▸ Add Phone… ([ConnectCode]). The scan signs the phone in; [signingIn] says so while it
 /// does.
@@ -24,7 +31,8 @@ import 'connect_code.dart';
 ///   │    [ camera view ]   │
 ///   └──────────────────────┘
 /// Scan the code on your computer
-/// In Harness on your computer: Add Phone…
+/// On a Mac: Harness menu ▸ Add Phone…
+/// On Linux: Ctrl+Shift+P, then “add phone”
 ///
 ///           Use email instead
 /// ```
@@ -45,9 +53,10 @@ class ScanToConnectPage extends StatefulWidget {
     this.onSignInCode,
     this.acceptConnectCodes = true,
     this.title = 'Scan the code on your computer',
-    // Not "On your Mac: Harness ▸ Add Phone…": the desktop app runs on Linux too, where Add Phone
-    // is in the command palette rather than a Harness menu.
-    this.hint = 'In Harness on your computer: Add Phone…',
+    // Where it is on each, not "In Harness on your computer: Add Phone…": someone who has never
+    // opened the desktop app does not know where Add Phone lives, and it is not in the same place
+    // on a Mac and on Linux.
+    this.hint = kAddPhoneWhere,
     this.note,
   });
 
@@ -229,21 +238,22 @@ class _ScanToConnectPageState extends State<ScanToConnectPage>
           ),
         ),
         const SizedBox(height: 24),
+        // Texts that wrap, not one-line TtyTexts: at a narrow phone's width the title and the
+        // hint's second half were cut off at the screen's edge — the half that says where to look.
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: Tty.origin),
-          child: TtyText(
+          child: Text(
             widget.signingIn ? 'Signing in…' : widget.title,
-            size: TtySize.title,
-            weight: FontWeight.w600,
+            style: tty.style(size: TtySize.title, weight: FontWeight.w600),
           ),
         ),
         const SizedBox(height: 6),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: Tty.origin),
-          child: TtyText(
+          child: Text(
             widget.hint,
-            color: tty.faint,
-            size: TtySize.meta,
+            key: const ValueKey('scan-hint'),
+            style: tty.style(size: TtySize.meta, color: tty.faint),
           ),
         ),
         const SizedBox(height: 10),
@@ -252,14 +262,17 @@ class _ScanToConnectPageState extends State<ScanToConnectPage>
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: Tty.origin),
           child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Icon(LucideIcons.lock300, size: 13, color: tty.faint),
+              Padding(
+                padding: const EdgeInsets.only(top: 2),
+                child: Icon(LucideIcons.lock300, size: 13, color: tty.faint),
+              ),
               const SizedBox(width: 6),
               Expanded(
-                child: TtyText(
+                child: Text(
                   'End-to-end encrypted, phone to computer.',
-                  color: tty.faint,
-                  size: TtySize.meta,
+                  style: tty.style(size: TtySize.meta, color: tty.faint),
                 ),
               ),
             ],
