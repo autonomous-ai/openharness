@@ -26,13 +26,13 @@ sys.path.insert(0, str(DEVICE / "firmware/test"))
 from native_shapes import defines, typedef  # noqa: E402
 from native_voice import voice_assets  # noqa: E402
 
-STATES = ("idle", "idle_paper", "working", "summary", "summary_paper", "mail", "needs_answer", "listening",
+STATES = ("idle", "idle_paper", "working", "working_start", "working_59", "working_60", "working_long", "working_hour", "working_paper", "summary", "summary_paper", "mail", "needs_answer", "listening",
           "voice_preparing", "voice_sending", "offline", "done", "asleep",
           "carrying", "launcher", "companion", "daemons", "scenes", "updates", "question", "reader", "locked", "updating",
           "carry_listening", "carry_review", "carry_preview", "carry_rejected", "carry_offline", "carry_preview_offline",
           "carry_offline_long", "carry_offline_scrolled",
           "panes_map", "panes_list", "panes_dense", "panes_mixed", "panes_waiting",
-          "instruction", "goal", "loop", "goal_listening", "loop_listening", "goal_review", "loop_review",
+          "instruction", "goal", "loop", "instruction_remote", "instruction_unknown", "goal_remote", "goal_stale", "goal_review_remote", "goal_listening", "loop_listening", "goal_review", "loop_review",
           "today", "today_zero", "today_missing", "today_partial", "today_stale", "today_loading", "today_expired",
           "speech_pending", "speaking_warm",
           "speaking_happy", "speaking_excited", "speaking_gentle", "speaking_sad",
@@ -64,6 +64,7 @@ def native_source():
 #include "character.h"
 #include "pro_canvas.h"
 #include "pro_metrics.h"
+#include "pro_work_intent.h"
 #include "../../pro_voice_samples.h"
 #include "../../audio_speech.h"
 #include "pro_visual.h"
@@ -109,8 +110,8 @@ static bool display_is_asleep(void) { return false; }
 static bool cable_client_supports(uint32_t feature) { (void)feature; return true; }
 '''
     for name in ("find", "active", "waiting", "working", "is_question", "notice_unread", "color",
-                 "character_mood", "question_view", "settings_item", "settings_count",
-                 "pro_speech_allowed", "pro_speech_visible", "pro_speech_emotion", "pro_surface_mood"):
+                 "pro_work_local", "pro_work_available", "pro_work_capture_available", "pro_work_draft_available", "character_mood", "question_view", "settings_item", "settings_count",
+                 "pro_speech_allowed", "pro_speech_visible", "pro_speech_emotion", "pro_busy_elapsed", "pro_surface_mood"):
         code += function(name, source)
     code += r'''
 #define BG color(HT_THEME_CANVAS)
@@ -127,10 +128,11 @@ static bool cable_client_supports(uint32_t feature) { (void)feature; return true
 static ht_scene_t scene;
 static uint16_t pixels[720*720];
 static void reset(void) {
-    memset(&s,0,sizeof s); memset(&character,0,sizeof character); recording=false;
+    memset(&s,0,sizeof s); memset(&character,0,sizeof character); recording=false;now=1000;
     s.ready=s.connected=true;s.view=HOME;s.count=3;s.active=0;s.pressed=-1;s.brightness=86;
     COPY(s.agents[0].id,"design");COPY(s.agents[0].name,"Design");
     COPY(s.agents[0].engine,"claude");COPY(s.work_agent,"design");
+    pro_draft_recovery_source(&s.draft_recovery,"local");COPY(s.work_host,"local");s.work_generation=s.draft_recovery.generation;COPY(s.agents[0].machine_id,"local");
     s.metrics.supported=true;COPY(s.metrics.machine,"local");
     COPY(s.agents[1].id,"build");COPY(s.agents[1].name,"Build");
     COPY(s.agents[2].id,"research");COPY(s.agents[2].name,"Research");
@@ -151,7 +153,17 @@ static void fixture(const char *name) {
     reset();
     if(!strcmp(name,"idle_paper")){s.scene_choice=PRO_SCENE_PAPER;}
     else if(!strcmp(name,"summary_paper")){s.scene_choice=PRO_SCENE_PAPER;s.agents[0].recap_ready=true;}
-    else if(!strcmp(name,"working")){s.agents[0].busy=true;COPY(s.agents[0].tool,"Refining your next idea");}
+    else if(!strncmp(name,"working",7)){
+        s.agents[0].busy=true;s.agents[0].busy_ms=1000;now=35000;
+        if(!strcmp(name,"working_start"))now=1000;
+        if(!strcmp(name,"working_59"))now=60000;
+        if(!strcmp(name,"working_60")||!strcmp(name,"working_long"))now=61000;
+        if(!strcmp(name,"working_hour"))now=3601000;
+        if(!strcmp(name,"working_paper"))s.scene_choice=PRO_SCENE_PAPER;
+        s.agents[0].last_busy=now;
+        COPY(s.agents[0].tool,!strcmp(name,"working_long")?
+            "Reviewing the complete interaction contract and every recovery boundary":"Refining your next idea");
+    }
     else if(!strcmp(name,"summary")){s.agents[0].recap_ready=true;}
     else if(!strcmp(name,"mail")){s.notice_count=1;}
     else if(!strcmp(name,"needs_answer")){s.notice_count=1;s.notice[0].question=true;}
@@ -201,6 +213,11 @@ static void fixture(const char *name) {
         if(!strcmp(name,"today_loading"))s.metrics.phase=PRO_METRICS_WAIT;
         if(!strcmp(name,"today_expired"))s.metrics.phase=PRO_METRICS_EXPIRED;
     }
+    else if(!strcmp(name,"instruction_remote") || !strcmp(name,"instruction_unknown") || !strcmp(name,"goal_remote") || !strcmp(name,"goal_stale")){
+        s.view=WORK_INTENT;s.work_mode=!strncmp(name,"goal",4)?PRO_WORK_GOAL:PRO_WORK_TASK;
+        COPY(s.agents[0].machine_id,!strcmp(name,"instruction_unknown")?"":"remote");
+        if(!strcmp(name,"goal_stale")){COPY(s.agents[0].machine_id,"local");s.work_generation--;}
+    }
     else if(!strcmp(name,"instruction") || !strcmp(name,"goal") || !strcmp(name,"loop")){
         s.view=WORK_INTENT;s.work_mode=!strcmp(name,"goal")?PRO_WORK_GOAL:!strcmp(name,"loop")?PRO_WORK_LOOP:PRO_WORK_TASK;
     }
@@ -208,9 +225,11 @@ static void fixture(const char *name) {
         s.view=VOICE;s.voice_open=s.voice_review=recording=true;s.voice_return=WORK_INTENT;
         s.work_voice_mode=!strcmp(name,"goal_listening")?PRO_WORK_GOAL:PRO_WORK_LOOP;
     }
-    else if(!strcmp(name,"goal_review") || !strcmp(name,"loop_review")){
-        s.view=DRAFT;s.work_voice_mode=!strcmp(name,"goal_review")?PRO_WORK_GOAL:PRO_WORK_LOOP;
+    else if(!strcmp(name,"goal_review") || !strcmp(name,"loop_review") || !strcmp(name,"goal_review_remote")){
+        s.view=DRAFT;s.work_voice_mode=strcmp(name,"loop_review")?PRO_WORK_GOAL:PRO_WORK_LOOP;
         draft.page=(ht_draft_page_t){.active=true,.can_send=true,.revision=1,.position=1,.total=1,.agent="design",.name="Design",.id="example"};
+        COPY(draft.page.agent,"design");pro_draft_recovery_pin(&s.draft_recovery,"design",s.work_voice_mode);
+        if(!strcmp(name,"goal_review_remote"))COPY(s.agents[0].machine_id,"remote");
         COPY(draft.page.text,s.work_voice_mode==PRO_WORK_GOAL?
             "Make the new layout readable and accessible. Keep working until the contrast and touch checks pass.":
             "Every 30 minutes, check the build and tell me if a new failure needs my attention.");

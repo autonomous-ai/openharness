@@ -226,12 +226,15 @@ static EXT_RAM_BSS_ATTR struct {
     pro_scene_id_t scene_choice, preview_scene;
     uint8_t pro_agent_layout;
     char work_agent[ID_MAX];
+    char work_host[ID_MAX];
     char reader_agent[ID_MAX];
-    uint32_t work_revision;
+    uint32_t work_revision, work_generation;
     uint8_t work_mode, work_voice_mode;
     pro_metrics_t metrics;
     pro_carry_review_t carry_review;
     pro_draft_recovery_t draft_recovery;
+    uint32_t pro_busy_second;
+    bool pro_busy_visible;
     ht_character_t preview_character;
     struct {
         uint32_t id, poll_due;
@@ -552,6 +555,52 @@ static void pane_memory_apply(agent_t *a, pane_memory_t *m)
     a->has_event = m->preview[0] != 0;
     a->recap_ready = a->has_event && !m->dismissed && !m->awaiting_result && !m->busy;
 }
+#ifdef DEVICE_PRO_COMPANION
+static bool pro_work_local(const agent_t *a)
+{
+    // current_host came from the complete welcome identity, not the legacy
+    // truncated cable_client_machine_id() buffer or selected remote machine.
+    return a && a->machine_id[0] && s.draft_recovery.current_host[0] &&
+        !strcmp(a->machine_id, s.draft_recovery.current_host);
+}
+static bool pro_work_available(const agent_t *a, int mode)
+{
+    if (mode == PRO_WORK_TASK) return true;
+    return s.connected && !s.loading && pro_work_local(a) &&
+        pro_work_supported(a->engine, mode, cable_client_supports(CABLE_FEATURE_DRAFT));
+}
+static bool pro_work_capture_available(const char *agent, int mode)
+{
+    if (mode == PRO_WORK_TASK) return true;
+    int recipient = find(agent);
+    return recipient >= 0 && pro_work_available(&s.agents[recipient], mode) &&
+        !strcmp(agent, s.draft_recovery.recipient) && mode == s.draft_recovery.mode &&
+        s.draft_recovery.capture_generation == s.draft_recovery.generation &&
+        pro_draft_recovery_same_host(&s.draft_recovery);
+}
+static bool pro_work_draft_available(void)
+{
+    return s.work_voice_mode == PRO_WORK_TASK ||
+        (!strcmp(draft.page.agent, s.work_agent) &&
+         pro_work_capture_available(draft.page.agent, s.work_voice_mode));
+}
+static void pro_busy_reset(void)
+{
+    // These anchors describe this device's uninterrupted observation, not
+    // engine runtime. Invalidate off-roster memory too before a reload.
+    for (int i = 0; i < PANE_MEMORY_MAX; i++) {
+        s.memory[i].busy = false;
+        s.memory[i].busy_ms = s.memory[i].last_busy = 0;
+        s.memory[i].activity[0] = 0;
+    }
+    for (int i = 0; i < s.count; i++) {
+        s.agents[i].busy = false;
+        s.agents[i].busy_ms = s.agents[i].last_busy = 0;
+        s.agents[i].tool[0] = 0;
+    }
+    s.pro_busy_visible = false;
+}
+#endif
 static void dismiss_result(const char *id)
 {
     pane_memory_t *m = pane_memory(id, true);
@@ -1046,6 +1095,16 @@ static ht_character_mood_t character_mood(void)
     return HT_CHARACTER_IDLE;
 }
 #ifdef DEVICE_PRO_COMPANION
+static bool pro_busy_elapsed(const agent_t *a, uint32_t now, uint32_t *seconds)
+{
+    if ((s.view != HOME && s.view != AGENT) || !a || !a->busy || !s.connected ||
+        s.loading || s.nap || s.locked || display_is_asleep() || s.voice_open ||
+        s.voice_retry_until || s.speech_error_until || pro_speech_visible() ||
+        carry.active || carry.error[0] || is_question(a->id) || now - a->last_busy > 25000)
+        return false;
+    *seconds = (now - a->busy_ms) / 1000;
+    return true;
+}
 static ht_character_mood_t pro_surface_mood(void)
 {
     if (s.view == VOICE) return !s.voice_start_pending && !s.voice_waiting && audio_client_recording() ?
@@ -1093,6 +1152,14 @@ static uint32_t status_wake_ms(uint32_t now)
 static void surface_tick(uint32_t now)
 {
 #ifdef DEVICE_PRO_COMPANION
+    uint32_t busy_second = 0;
+    bool busy_visible = pro_busy_elapsed(active(), now, &busy_second);
+    if (busy_visible != s.pro_busy_visible ||
+        (busy_visible && busy_second != s.pro_busy_second)) {
+        s.pro_busy_visible = busy_visible;
+        s.pro_busy_second = busy_second;
+        change();
+    }
     if (s.view == TODAY && pro_metrics_tick(&s.metrics,now)) change();
     if (s.view == VOICE_SAMPLES || s.view == VOICE_PARAMS) {
         if (s.locked || display_is_asleep()) pro_voice_sample_stop();
@@ -2249,6 +2316,7 @@ static bool draft_emit(const ht_draft_command_t *c, void *ctx)
         .dy = (int)c->revision, .velocity = c->delta};
     COPY(a.id, c->id);
 #ifdef DEVICE_PRO_COMPANION
+    if (c->op == HT_DRAFT_SEND && !pro_work_draft_available()) return false;
     if (draft.read_only) {
         if (!s.connected || !cable_client_supports(CABLE_FEATURE_DRAFT) ||
             !pro_draft_recovery_same_host(&s.draft_recovery) ||
@@ -2381,8 +2449,15 @@ static action_t make_action(hit_t h)
         COPY(a.id,s.q.agent);
         return a;
     }
-    if (s.view == READER && h.action == A_DESKTOP && h.value == 2) {
+    if (s.view == READER && ((h.action == A_DESKTOP && h.value == 2) ||
+                            (h.action == A_SELECT_BEGIN && h.value == 1))) {
         COPY(a.id, s.reader_agent);
+        return a;
+    }
+    if (s.view == SELECTION && h.action == A_SELECT_BEGIN) {
+        COPY(a.id, selection.agent);
+        copy(a.text, sizeof selection.id, selection.id);
+        a.dy = (int)selection.revision;
         return a;
     }
 #endif
@@ -2595,6 +2670,8 @@ static void dispatch(action_t a)
     case A_WORK_INTENT:
         if (!s.connected || s.loading || !active() || s.voice_open || carry.active || carry.error[0]) break;
         COPY(s.work_agent, active()->id);
+        COPY(s.work_host, s.draft_recovery.current_host);
+        s.work_generation = s.draft_recovery.generation;
         s.work_mode = PRO_WORK_TASK;
         s.work_revision++;
         view(WORK_INTENT);
@@ -2606,8 +2683,9 @@ static void dispatch(action_t a)
         int recipient = find(s.work_agent);
         if (recipient < 0) break;
         int mode = a.kind == A_WORK_MODE ? a.value : s.work_mode;
-        if (!pro_work_supported(s.agents[recipient].engine, mode,
-                                cable_client_supports(CABLE_FEATURE_DRAFT))) break;
+        if (!pro_work_available(&s.agents[recipient], mode) ||
+            (mode != PRO_WORK_TASK && (s.work_generation != s.draft_recovery.generation ||
+                                      strcmp(s.work_host, s.draft_recovery.current_host)))) break;
         if (a.kind == A_WORK_MODE) { s.work_mode = (uint8_t)mode; change(); break; }
         a.kind = A_VOICE; a.value = pro_work_voice_value(mode);
         a.text[0] = 0; a.dy = 0;
@@ -2735,10 +2813,7 @@ static void dispatch(action_t a)
             change(); break;
         }
         if (a.kind == A_DRAFT_SEND && s.work_voice_mode != PRO_WORK_TASK) {
-            int recipient = find(draft.page.agent);
-            if (strcmp(draft.page.agent, s.work_agent) || recipient < 0 ||
-                !pro_work_supported(s.agents[recipient].engine, s.work_voice_mode,
-                                                     cable_client_supports(CABLE_FEATURE_DRAFT))) {
+            if (!pro_work_draft_available()) {
                 COPY(draft.page.error, "Choose the pane and instruction again.");
                 change(); break;
             }
@@ -2872,6 +2947,18 @@ static void dispatch(action_t a)
         else if (a.kind==A_ANSWER) send_answer();
         break;
     case A_INBOX:
+#ifdef DEVICE_PRO_COMPANION
+        if (a.value == 1) {
+            if (s.view != HOME && s.view != AGENT) break;
+            if (s.q.pending) { view(QUESTION); break; }
+            view(INBOX);
+            for (int i = 0; i < s.notice_count; i++)
+                if (s.notice[i].question) { s.offset = i; break; }
+            if (!waiting()) for (int i = 0; i < s.notice_count; i++)
+                if (!s.notice[i].read_on_dial) { s.offset = i; break; }
+            break;
+        }
+#endif
         notice_open();
         break;
     case A_NOTICE: {
@@ -3002,12 +3089,11 @@ static void dispatch(action_t a)
             find(a.id) < 0 || (int32_t)(ms() - carry.deadline) >= 0)) break;
         // A question sheet can only record for its explicit reviewed question.
         if (question_view(s.view) && a.value != 4) break;
-        // Revalidate the real recipient at dispatch. Never turn an unsupported
-        // Goal/Loop into an ordinary task through the host's legacy fallback.
+        // Reject known engine/recipient mismatches before recording. Existing
+        // voice.draft support does not attest a host's strict intent handling.
         if (a.value == 1 || a.value == 8) {
             int recipient = find(a.id);
-            if (recipient < 0 || !pro_work_supported(s.agents[recipient].engine,
-                    pro_work_voice_mode(a.value), cable_client_supports(CABLE_FEATURE_DRAFT))) break;
+            if (recipient < 0 || !pro_work_available(&s.agents[recipient], pro_work_voice_mode(a.value))) break;
         }
         pro_speech_cancel(true);
 #endif
@@ -3124,6 +3210,16 @@ static void dispatch(action_t a)
         break;
     case A_SELECT_BEGIN:
         if (cable_client_supports(CABLE_FEATURE_SELECTION) && s.connected && !s.loading && active()) {
+#ifdef DEVICE_PRO_COMPANION
+            // A cached result can outlive desktop focus. Selection always starts
+            // from fresh host output for the captured source, never today's active
+            // pane substituted for a reader or retry action captured earlier.
+            if (visit.pending || s.pending_focus[0] || s.pending_machine[0] || strcmp(a.id, active()->id)) break;
+            if (a.value == 1 && (s.view != READER || strcmp(a.id, s.reader_agent))) break;
+            if (s.view == SELECTION && (strcmp(a.id, selection.agent) ||
+                strcmp(a.text, selection.id) || (uint32_t)a.dy != selection.revision)) break;
+            if (a.value != 1 && s.view != SETTINGS && s.view != SELECTION) break;
+#endif
             ht_carry_close(&carry);
             char id[48]; snprintf(id, sizeof(id), "pick-%08lx%08lx", (unsigned long)esp_random(), (unsigned long)esp_random());
             view(SELECTION);
@@ -3368,6 +3464,13 @@ static void worker(void *unused)
                 !strcmp(a.text, s.draft_recovery.original_host) &&
                 (a.value == HT_DRAFT_STATE || (a.value == HT_DRAFT_MOVE && s.draft_recovery.ready));
             else current = current && !s.carry_review.detached;
+            if (current && a.value == HT_DRAFT_SEND && !pro_work_draft_available()) {
+                // No bytes left this worker: retain the reviewed words without
+                // claiming a terminal receipt or leaving a false pending send.
+                draft.pending = false;
+                COPY(draft.page.error, "Choose the pane and instruction again.");
+                change(); current = false;
+            }
             display_unlock();
             if (!current) break;
 #endif
@@ -3453,9 +3556,7 @@ static void worker(void *unused)
                     break;
                 }
                 if (a.value == 1 || a.value == 8) {
-                    int recipient = find(a.id);
-                    if (recipient < 0 || !pro_work_supported(s.agents[recipient].engine,
-                            pro_work_voice_mode(a.value), cable_client_supports(CABLE_FEATURE_DRAFT))) {
+                    if (!pro_work_capture_available(a.id, pro_work_voice_mode(a.value))) {
                         voice_close();
                         COPY(s.title, "Instruction unavailable");
                         COPY(s.message, "Choose the pane and instruction again.");
@@ -3968,6 +4069,11 @@ uint32_t habitat_next_wake_ms(void)
         uint32_t due = left > 0 ? (uint32_t)left : 1;
         if (due < delay) delay = due;
     }
+    uint32_t busy_second;
+    if (pro_busy_elapsed(active(), now, &busy_second)) {
+        uint32_t due = 1000 - (now - active()->busy_ms) % 1000;
+        if (due < delay) delay = due;
+    }
 #endif
     if (s.voice_open && delay > 125)
         delay = 125;
@@ -4188,6 +4294,7 @@ void ui_set_connected(bool value)
     display_lock();
     if (!value) {
 #ifdef DEVICE_PRO_COMPANION
+        pro_busy_reset();
         pro_metrics_source(&s.metrics,NULL,false);
         pro_draft_recovery_disconnect(&s.draft_recovery);
 #endif
@@ -4246,6 +4353,7 @@ void ui_draft_source(const char *machine)
 {
     display_lock();
     if (pro_draft_recovery_source(&s.draft_recovery, s.connected ? machine : NULL)) {
+        pro_busy_reset();
         input_cancel();
         if (draft.page.active) {
             ht_draft_detach(&draft);
@@ -4310,6 +4418,10 @@ void ui_project_set_machine(const char *id, const char *machine_id, const char *
     display_lock();
     int i = find(id);
     if (i >= 0) {
+#ifdef DEVICE_PRO_COMPANION
+        // Never turn an oversized opaque identity into a matching prefix.
+        if (!machine_id || strnlen(machine_id, ID_MAX) >= ID_MAX) machine_id = "";
+#endif
         COPY(s.agents[i].machine_id, machine_id);
         COPY(s.agents[i].machine, name);
         change();
@@ -4453,6 +4565,20 @@ static void event(const char *id, const char *session, const char *kind, const c
     if (!m) { display_unlock(); return; }
     int i = find(id);
     agent_t *a = i >= 0 ? &s.agents[i] : NULL;
+#ifdef DEVICE_PRO_COMPANION
+    if (!restore && session && *session && strcmp(m->session, session)) {
+        m->busy = false;
+        m->busy_ms = m->last_busy = 0;
+        m->activity[0] = 0;
+        if (a) {
+            a->busy = false;
+            a->busy_ms = a->last_busy = 0;
+            a->tool[0] = 0;
+            COPY(a->session, session);
+            change();
+        }
+    }
+#endif
     if (session && *session)
         COPY(m->session, session);
     if (kind && !strcmp(kind, "activity")) {
@@ -4465,7 +4591,15 @@ static void event(const char *id, const char *session, const char *kind, const c
         display_unlock(); return;
     }
     if (kind && (!strcmp(kind, "processing") || !strcmp(kind, "summarizing"))) {
-        if (!restore) {
+        if (!restore
+#ifdef DEVICE_PRO_COMPANION
+            && s.connected
+#endif
+        ) {
+#ifdef DEVICE_PRO_COMPANION
+            // A heartbeat can arrive before the periodic stale-state prune.
+            if (m->busy && ms() - m->last_busy > 25000) m->busy = false;
+#endif
             if (!m->busy) {
                 m->busy_ms = ms();
                 m->activity[0] = 0;
@@ -4612,6 +4746,11 @@ int ui_prune_stale_busy(void)
 void ui_cancel_acked(const char *session)
 {
     display_lock();
+#ifdef DEVICE_PRO_COMPANION
+    for (int i = 0; i < PANE_MEMORY_MAX; i++)
+        if (session && *session && !strcmp(s.memory[i].session, session))
+            s.memory[i].busy = false;
+#endif
     for (int i = 0; i < s.count; i++)
         if (session && !strcmp(s.agents[i].session, session)) {
             s.agents[i].busy = false;

@@ -95,7 +95,7 @@ static void config_load_voicelang(char *out,size_t n) {snprintf(out,n,"%s",saved
 static unsigned starts, stops, discards, switches, launches, selected, down_reports, moves, ups, queued;
 static int travel;
 static action_t sent, queued_action;
-static uint32_t now;
+static uint32_t now, visual_wake=1000;
 static unsigned unread, lock_checks;
 static unsigned changes, speech_aborts, speech_snapshots;
 static uint32_t aborted_id;
@@ -148,7 +148,7 @@ bool pro_visual_changed(const ht_character_t *c,ht_character_mood_t mood,uint32_
     (void)c;(void)mood;(void)at;(void)quiet;(void)mail;return false;
 }
 uint32_t pro_visual_next_wake_ms(const ht_character_t *c,ht_character_mood_t mood,uint32_t at,bool quiet,bool mail) {
-    (void)c;(void)mood;(void)at;(void)quiet;(void)mail;return 1000;
+    (void)c;(void)mood;(void)at;(void)quiet;(void)mail;return visual_wake;
 }
 static bool config_lock_enabled(void) { return true; }
 static void open_question(void);
@@ -171,18 +171,20 @@ static bool scroll_emit(ht_scroll_phase_t phase, int dy, int velocity, void *ctx
 }
 static void dispatch(action_t action);
 '''
-for name in ("copy", "find", "pane_memory", "pane_memory_apply", "ensure", "is_question", "pro_speech_allowed", "pro_speech_visible", "pro_speech_emotion",
+for name in ("copy", "find", "pane_memory", "pane_memory_apply", "pro_work_local", "pro_work_available", "pro_work_capture_available", "pro_work_draft_available", "pro_busy_reset", "ensure", "waiting", "is_question", "pro_speech_allowed", "pro_speech_visible", "pro_speech_emotion",
              "pro_speech_caption", "pro_speech_cancel", "ui_companion_speech_begin", "ui_companion_speech_clear",
-             "pro_speech_tick", "pro_surface_mood", "status_wake_ms",
+             "pro_speech_tick", "pro_busy_elapsed", "pro_surface_mood", "status_wake_ms",
              "question_view", "hit_contains", "home_footer", "pro_written_control",
              "settings_item", "settings_count", "tabs_move", "make_action", "input_cancel", "view",
              "question_rows", "question_move", "draft_move",
              "pro_appearance_view", "pro_appearance_open", "pro_appearance_move", "pro_appearance_use",
              "workspace_index", "tabs_open", "workspace_failed", "pro_panes_of",
              "ui_land_after_reload", "voice_status", "ui_scroll_reportable", "habitat_next_wake_ms",
-             "voice_close", "power", "ui_set_connected", "ui_focus_project",
+             "voice_close", "power", "ui_set_connected", "ui_draft_source", "ui_focus_project",
              "ui_swarms_replace", "ui_tiles_replace", "ui_project_remove", "ui_project_apply_order",
-             "ui_project_clear_all", "ui_project_set_name", "ui_set_selected_machine") :
+             "ui_project_clear_all", "ui_project_set_name", "ui_project_set_machine", "ui_set_selected_machine",
+             "recap_preview", "activity_text", "event", "ui_project_emit", "ui_project_restore_event",
+             "ui_prune_stale_busy", "ui_cancel_acked") :
     code += function(name)
 agent_layout_actions = SOURCE.split("    case A_AGENTS:", 1)[1].split("    case A_AGENT:", 1)[0]
 code += "static bool agent_layout_action(action_t a) { switch(a.kind) { case A_AGENTS:" + agent_layout_actions + "default: return false; } return true; }\n"
@@ -283,7 +285,7 @@ static void reset(void) {
     strcpy(s.agents[1].id,"b"); strcpy(s.agents[1].name,"Code");
     recording = asleep = congested = scroll_reversed = false;
     starts = stops = discards = switches = launches = selected = down_reports = moves = ups = queued = 0;
-    travel = 0; now = 1000; unread=lock_checks=0;
+    travel = 0; now = 1000; visual_wake=1000; unread=lock_checks=0;
     hit(A_PET,0,40,106,640,474);
 }
 static void sample(bool down, int x, int y, uint32_t at) {
@@ -627,7 +629,7 @@ static void home_header_drag_cancel(void) {
     const int delta[][2]={{-190,0},{190,0},{0,-40},{0,200}};
     for (unsigned i=0;i<sizeof delta/sizeof delta[0];i++) {
         actual_home_tabs(); const hit_t *header=action_hit(A_TABS); assert(header && header->enabled);
-        assert(header->rect.x==32 && header->rect.y==24 && header->rect.w==496 && header->rect.h==80);
+        assert(header->rect.x==32 && header->rect.y==24 && header->rect.w==248 && header->rect.h==80);
         int x=header->rect.x+header->rect.w/2, y=header->rect.y+header->rect.h/2;
         sample(true,x,y,2000);
         // This is a plain button. It must not arm the invisible legacy workspace preview.
@@ -692,6 +694,141 @@ static bool has_text(const char *text) {
         if (scene.runs[i].pro_kind==1 && !strcmp(scene.runs[i].text,text)) return true;
     return false;
 }
+
+static unsigned observed_seconds(void) {
+    uint32_t seconds=UINT32_MAX;
+    assert(pro_busy_elapsed(active(),now,&seconds));return seconds;
+}
+static void busy_heartbeat(const char *id,const char *session,uint32_t at) {
+    now=at;ui_project_emit(id,session,"processing","Processing",NULL);
+}
+static void busy_observation(void) {
+    reset();ui_draft_source("host-a");
+    busy_heartbeat("a","session-a",1000);assert(observed_seconds()==0);
+    ui_project_emit("a","session-a","activity","Reading the source...",NULL);
+    assert(!strcmp(active()->tool,"Reading the source"));
+    busy_heartbeat("a","session-a",20000);assert(observed_seconds()==19);
+    busy_heartbeat("b","session-b",22000);ui_focus_project("b");assert(observed_seconds()==0);
+    now=23000;ui_focus_project("a");assert(observed_seconds()==22);
+    // Roster replacement reuses only the same still-live pane's anchor.
+    ui_project_clear_all();ui_project_set_name("b","Code");ui_project_set_name("a","Design");
+    ui_focus_project("a");assert(observed_seconds()==22);
+    const char *order[]={"a","b"};ui_project_apply_order(order,2);assert(observed_seconds()==22);
+    ui_project_restore_event("a","processing","Past work",NULL);assert(observed_seconds()==22);
+    // A missed periodic prune may never turn a fresh heartbeat into old runtime.
+    busy_heartbeat("a","session-a",50001);assert(observed_seconds()==0&&!active()->tool[0]);
+    busy_heartbeat("a","new-session",54001);assert(observed_seconds()==0);
+    ui_project_emit("a","newer-session","activity","Late old activity",NULL);
+    uint32_t ignored;assert(!pro_busy_elapsed(active(),now,&ignored)&&!active()->busy);
+    busy_heartbeat("a","newer-session",55000);now=81000;assert(ui_prune_stale_busy()==2);
+    assert(!pro_busy_elapsed(active(),now,&ignored));
+    busy_heartbeat("a","newer-session",82000);ui_project_emit("a","newer-session","done","Result",NULL);
+    assert(!active()->busy);busy_heartbeat("a","newer-session",84000);assert(observed_seconds()==0);
+    ui_cancel_acked("different-session");assert(active()->busy);
+    ui_cancel_acked("newer-session");assert(!active()->busy);
+    // Cancellation also reaches a pane hidden by a workspace roster change.
+    busy_heartbeat("b","session-b",85000);ui_project_remove("b");ui_cancel_acked("session-b");
+    ui_project_set_name("b","Code");assert(!s.agents[find("b")].busy);
+    assert(!queued&&!starts&&!stops);
+}
+static void busy_connection_loss(void) {
+    reset();ui_draft_source("host-a");busy_heartbeat("a","session-a",1000);
+    busy_heartbeat("b","session-b",2000);ui_project_remove("b");
+    ui_set_connected(false);assert(!active()->busy&&!pane_memory("b",false)->busy);
+    busy_heartbeat("a","session-a",2100);assert(!active()->busy); // Late offline event.
+    ui_set_connected(true);ui_draft_source("host-a");
+    ui_project_clear_all();ui_project_set_name("a","Design");ui_project_set_name("b","Code");ui_focus_project("a");
+    ui_project_restore_event("a","processing","Restored history",NULL);
+    assert(!active()->busy&&!s.agents[find("b")].busy);
+    busy_heartbeat("a","session-a",3000);assert(observed_seconds()==0);
+    now=4000;ui_draft_source("host-a");assert(observed_seconds()==1); // Same welcome is not a reset.
+    ui_draft_source("host-b");assert(!active()->busy);
+    busy_heartbeat("a","session-a",5000);assert(observed_seconds()==0);
+    ui_draft_source(NULL);assert(!active()->busy);
+    assert(!queued&&!starts&&!stops);
+}
+static void busy_precedence(void) {
+    for(int reason=0;reason<16;reason++) {
+        reset();busy_heartbeat("a","session-a",1000);now=2000;uint32_t seconds;
+        switch(reason) {
+        case 0:s.connected=false;break;
+        case 1:s.loading=true;break;
+        case 2:s.nap=true;break;
+        case 3:s.voice_retry_until=3000;break;
+        case 4:s.notice_count=1;s.notice[0].question=true;COPY(s.notice[0].agent_id,"a");break;
+        case 5:s.speech_error_until=3000;break;
+        case 6:s.speech.id=1;s.speech.pending=true;COPY(s.speech.agent,"a");break;
+        case 7:s.speech.id=1;s.speech.playing=true;COPY(s.speech.agent,"a");break;
+        case 8:carry.active=true;break;
+        case 9:COPY(carry.error,"Expired");break;
+        case 10:s.locked=true;break;
+        case 11:asleep=true;break;
+        case 12:s.voice_open=true;break;
+        case 13:s.view=VOICE;break;
+        case 14:s.view=WORK_INTENT;s.work_mode=PRO_WORK_GOAL;break;
+        case 15:s.view=DRAFT;s.work_voice_mode=PRO_WORK_LOOP;break;
+        }
+        assert(!pro_busy_elapsed(active(),now,&seconds));render_actual();assert(!has_text("1s"));
+    }
+    reset();busy_heartbeat("a","session-a",1000);s.quiet=true;s.nap=true;
+    busy_heartbeat("a","session-a",10000);s.nap=false;assert(observed_seconds()==9);
+    // Rest hides, never turns wall-clock observation into accumulated compute time.
+    power(false);busy_heartbeat("a","session-a",15000);power(true);s.locked=false;
+    assert(observed_seconds()==14);
+    s.notice_count=1;s.notice[0].question=true;COPY(s.notice[0].agent_id,"b");
+    assert(observed_seconds()==14); // Another pane's question doesn't relabel this work.
+}
+static void busy_tick_schedule(void) {
+    reset();s.quiet=true;visual_wake=9000;busy_heartbeat("a","session-a",1000);
+    surface_tick(now);unsigned before=changes;assert(s.pro_busy_visible&&!s.pro_busy_second);
+    now=1999;surface_tick(now);assert(changes==before&&habitat_next_wake_ms()==1);
+    now=2000;surface_tick(now);assert(changes==before+1&&s.pro_busy_second==1&&habitat_next_wake_ms()==1000);
+    surface_tick(now);assert(changes==before+1);
+    s.nap=true;surface_tick(now);assert(changes==before+2&&!s.pro_busy_visible);
+    surface_tick(now);assert(changes==before+2&&habitat_next_wake_ms()==9000);
+    s.nap=false;surface_tick(now);assert(s.pro_busy_visible);
+    now=26001;surface_tick(now);assert(!s.pro_busy_visible);uint32_t sec;
+    assert(!pro_busy_elapsed(active(),now,&sec));
+    reset();busy_heartbeat("a","session-a",UINT32_MAX-500);now=499;
+    assert(observed_seconds()==1);render_actual();assert(has_text("1s"));
+}
+static void busy_render_boundaries(void) {
+    const unsigned at[]={0,59,60,3599,3600};
+    const char *label[]={"0s","59s","1m 00s","59m 59s","60m 00s"};
+    for(unsigned n=0;n<sizeof at/sizeof at[0];n++)for(int long_label=0;long_label<2;long_label++) {
+        reset();busy_heartbeat("a","session-a",0);
+        for(now=20000;now<=at[n]*1000;now+=20000)ui_project_emit("a","session-a","processing","Processing",NULL);
+        now=at[n]*1000;ui_project_emit("a","session-a","activity",long_label?
+            "Reviewing the complete interaction contract and every recovery boundary":"Reading the source",NULL);
+        render_actual();assert(has_text(label[n]));
+        const ht_run_t *clock=NULL,*status=NULL;
+        for(unsigned i=0;i<scene.count;i++)if(scene.runs[i].pro_kind==1&&scene.runs[i].y==668) {
+            if(!strcmp(scene.runs[i].text,label[n]))clock=&scene.runs[i];else status=&scene.runs[i];
+        }
+        assert(clock&&status&&clock->pro_font==&ht_pro_24&&status->pro_font==&ht_pro_24);
+        assert(clock->x+clock->w==522&&status->x==44&&status->x+status->w+16<=clock->x);
+        ht_rect_t foot=action_hit(A_AGENTS)->rect;assert(foot.x==32&&foot.y==598&&foot.w==492&&foot.h==104);
+        assert(action_hit(A_PET)->rect.y==106);
+    }
+}
+
+
+static void work_identity_callbacks(void) {
+    reset();ui_draft_source("host-a");ui_project_set_machine("a","host-a","Cable host");
+    assert(pro_work_local(active())&&pro_work_available(active(),PRO_WORK_TASK));
+    COPY(active()->engine,"claude");assert(pro_work_available(active(),PRO_WORK_GOAL)&&pro_work_available(active(),PRO_WORK_LOOP));
+    ui_project_set_machine("a","remote","Other host");assert(!pro_work_local(active())&&!pro_work_available(active(),PRO_WORK_GOAL));
+    assert(pro_work_available(active(),PRO_WORK_TASK));
+    ui_project_set_machine("a",NULL,"Missing");assert(!active()->machine_id[0]&&!pro_work_local(active()));
+    char exact[48],longer[49];memset(exact,'h',47);exact[47]=0;snprintf(longer,sizeof longer,"%sx",exact);
+    ui_draft_source(exact);ui_project_set_machine("a",exact,"Complete identity");assert(pro_work_local(active()));
+    ui_project_set_machine("a",longer,"Must not alias");assert(!active()->machine_id[0]&&!pro_work_local(active()));
+    ui_project_set_machine("a",exact,"Complete identity");ui_draft_source(longer);assert(!pro_work_local(active()));
+    ui_draft_source(exact);assert(pro_work_local(active()));ui_set_connected(false);assert(!pro_work_local(active()));
+    ui_set_connected(true);ui_draft_source(exact);ui_project_clear_all();ui_project_set_name("a","Design");ui_focus_project("a");
+    assert(!pro_work_local(active()));ui_project_set_machine("a",exact,"Complete identity");assert(pro_work_local(active()));
+}
+
 static void home_hierarchy(void) {
     for (int language=0;language<2;language++) {
         reset();strcpy(s.voice_language,language?"vi":"en");render_actual();
@@ -1165,6 +1302,8 @@ static void today_refresh_contact(void) {
 
 int main(int argc,char **argv) {
     const struct { const char *name; test_fn run; } tests[]={
+        {"work_identity_callbacks",work_identity_callbacks},{"busy_observation",busy_observation},{"busy_connection_loss",busy_connection_loss},{"busy_precedence",busy_precedence},
+        {"busy_tick_schedule",busy_tick_schedule},{"busy_render_boundaries",busy_render_boundaries},
         {"today_read_only",today_read_only},{"today_refresh_contact",today_refresh_contact},{"home_hierarchy",home_hierarchy},
         {"language_controls",language_controls},{"voice_sample_controls",voice_sample_controls},{"center_voice",center_voice},{"summary_voice",summary_voice},{"deliberate_tap",deliberate_tap},
         {"thumb_drift",thumb_drift},{"panes",panes},{"pane_after_diagonal_start",pane_after_diagonal_start},

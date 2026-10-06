@@ -48,7 +48,8 @@ enum { A_VOICE, A_VOICE_STOP, A_VOICE_ABORT, A_WORK_INTENT, A_WORK_MODE, A_WORK_
 enum { VOICE_CMD_NONE, VOICE_CMD_GOAL, VOICE_CMD_LOOP };
 typedef int view_t;
 typedef struct { int kind, value, dy, velocity; uint32_t revision; char id[64], text[192]; } action_t;
-typedef struct { char name[64], id[64], engine[16]; } agent_t;
+#define ID_MAX 48
+typedef struct { char name[64], id[64], engine[16], machine_id[48], machine[64]; } agent_t;
 static ht_selection_t selection;
 static ht_carry_t carry;
 static ht_visit_t visit;
@@ -62,7 +63,7 @@ static struct {
     uint32_t pet_until, nap_until, voice_retry_until, voice_started, voice_wait_until, voice_generation, voice_question_revision, voice_draft_revision;
     int voice_question_index;
     char title[80], message[256], voice_target[64], pending_focus[64], pending_machine[64], opening_notice[48];
-    char work_agent[64]; uint32_t work_revision; uint8_t work_mode, work_voice_mode;
+    char work_agent[64], work_host[48]; uint32_t work_revision, work_generation; uint8_t work_mode, work_voice_mode;
     pro_metrics_t metrics; pro_carry_review_t carry_review; pro_draft_recovery_t draft_recovery;
     struct { bool valid, supported, loading, pending, uncertain; uint32_t revision, deadline; int index; char error[120],speech_error[96],agent[64],name[64],token[48]; struct { bool can_text; } item[4]; } q;
     agent_t agents[1];
@@ -87,6 +88,8 @@ void display_lock(void) {}
 void display_unlock(void) {}
 void display_bump_activity(void) {}
 #ifdef DEVICE_PRO_COMPANION
+// Busy observation uses the full model in test_pro_touch_ui; this is the audio boundary.
+static void pro_busy_reset(void) {}
 static void pro_speech_cancel(bool any) { (void)any; }
 static void pro_voice_sample_stop(void) {}
 #endif
@@ -127,6 +130,11 @@ bool is_question(const char *id) { (void)id; return false; }
 void open_question(void) { assert(false); }
 bool queue(action_t action) { if (queue_full) return false; queued = action; return true; }
 '''
+harness += '#ifdef DEVICE_PRO_COMPANION\n'
+for name in ('pro_work_local','pro_work_available','pro_work_capture_available','pro_work_draft_available'):
+    harness += function(name)
+harness += '#endif\n'
+harness += function('ui_project_set_machine')
 harness += function('question_view') + function('copy') + function('input_cancel') + function('view') + function('voice_close') + function('workspace_failed')
 harness += r'''
 #ifdef DEVICE_PRO_COMPANION
@@ -156,7 +164,7 @@ static void reset(void) {
     strcpy(s.agents[0].name, "Agent");
     strcpy(s.agents[0].id,"agent"); strcpy(s.agents[0].engine,"claude");
     audio_active = recording = abort_requested = queue_full = false;
-    recipient_missing=false; last_cmd=-1; last_recipient[0]=0;
+    recipient_missing=false;ui_project_set_machine("agent","local-host","Cable host");pro_draft_recovery_source(&s.draft_recovery,"local-host"); last_cmd=-1; last_recipient[0]=0;
     starts = stops = aborts = cancels = confirms = 0;
 }
 static void speak(void) { dispatch((action_t){.kind = A_VOICE, .id = "agent"}); }
@@ -225,6 +233,7 @@ static void test_pro_instructions(void) {
     work(queued); now=601000; habitat_tick(); assert(stops==1 && s.voice_waiting && reviews==1 && s.voice_review);
     for(int invalidation=0;invalidation<5;invalidation++) {
         reset(); s.work_voice_mode=PRO_WORK_LOOP; COPY(s.work_agent,"agent"); s.view=DRAFT; draft_sends=0;
+        pro_draft_recovery_pin(&s.draft_recovery,"agent",PRO_WORK_LOOP);
         ht_draft_page_t page={.active=true,.can_send=true,.revision=3,.agent="agent",.id="draft-test"};
         ht_draft_open(&draft,&page,draft_command,NULL);
         if(invalidation==1) COPY(s.agents[0].engine,"codex");
@@ -239,6 +248,57 @@ static void test_pro_instructions(void) {
     draft.page=(ht_draft_page_t){.active=true,.revision=3,.id="draft-test",.agent="agent"};
     dispatch((action_t){.kind=A_DRAFT_APPEND,.revision=3,.dy=3,.text="draft-test"});
     work(queued); assert(recording && s.work_voice_mode==PRO_WORK_LOOP && s.voice_review);
+
+    for(int mode=PRO_WORK_GOAL;mode<=PRO_WORK_LOOP;mode++)for(int invalidation=0;invalidation<9;invalidation++) {
+        reset();choose_instruction(mode);action_t instruction=instruction_action(A_WORK_RECORD,0);
+        if(invalidation==0)ui_project_set_machine("agent","remote","Remote");
+        else if(invalidation==1)ui_project_set_machine("agent",NULL,"Unknown");
+        else if(invalidation==2) {char long_id[49];memset(long_id,'h',48);long_id[48]=0;ui_project_set_machine("agent",long_id,"Invalid");}
+        else if(invalidation==3)pro_draft_recovery_source(&s.draft_recovery,NULL);
+        else if(invalidation==4) {pro_draft_recovery_source(&s.draft_recovery,"new-host");ui_project_set_machine("agent","new-host","New host");}
+        else if(invalidation==5)s.loading=true;
+        else if(invalidation==6)recipient_missing=true;
+        else if(invalidation==7)ui_set_connected(false);
+        else {ui_set_connected(false);ui_set_connected(true);pro_draft_recovery_source(&s.draft_recovery,"local-host");}
+        dispatch(instruction);assert(!s.voice_open&&!starts);
+        dispatch((action_t){.kind=A_VOICE,.value=pro_work_voice_value(mode),.id="agent"});
+        // A fresh direct request to a known new local host is allowed; the old sheet is not.
+        assert(s.voice_open==(invalidation==4||invalidation==8));if(s.voice_open) {work(queued);assert(starts==1);}
+        else assert(!starts);
+    }
+    for(int mode=PRO_WORK_GOAL;mode<=PRO_WORK_LOOP;mode++)for(int invalidation=0;invalidation<7;invalidation++) {
+        reset();choose_instruction(mode);dispatch(instruction_action(A_WORK_RECORD,0));action_t queued_start=queued;
+        if(invalidation==0)ui_project_set_machine("agent","remote","Remote");
+        else if(invalidation==1)ui_project_set_machine("agent","","Unknown");
+        else if(invalidation==2)pro_draft_recovery_source(&s.draft_recovery,"new-host");
+        else if(invalidation==3)s.draft_recovery.generation++;
+        else if(invalidation==4)COPY(s.draft_recovery.recipient,"other");
+        else if(invalidation==5)s.draft_recovery.mode=PRO_WORK_TASK;
+        else {ui_set_connected(false);ui_set_connected(true);}
+        work(queued_start);assert(!starts&&!s.voice_open);
+    }
+    for(int mode=PRO_WORK_GOAL;mode<=PRO_WORK_LOOP;mode++)for(int invalidation=0;invalidation<7;invalidation++) {
+        reset();s.work_voice_mode=mode;COPY(s.work_agent,"agent");s.view=DRAFT;draft_sends=0;
+        pro_draft_recovery_pin(&s.draft_recovery,"agent",(uint8_t)mode);
+        ht_draft_page_t page={.active=true,.can_send=true,.revision=3,.agent="agent",.id="draft-test",.text="Keep these exact words."};
+        ht_draft_open(&draft,&page,draft_command,NULL);
+        if(invalidation==0)ui_project_set_machine("agent","remote","Remote");
+        else if(invalidation==1)ui_project_set_machine("agent",NULL,"Unknown");
+        else if(invalidation==2)pro_draft_recovery_source(&s.draft_recovery,"different-host");
+        else if(invalidation==3)s.draft_recovery.generation++;
+        else if(invalidation==4)COPY(s.draft_recovery.recipient,"other");
+        else if(invalidation==5)s.draft_recovery.mode=PRO_WORK_TASK;
+        else s.connected=false;
+        dispatch((action_t){.kind=A_DRAFT_SEND,.revision=3,.text="draft-test"});
+        assert(!draft_sends&&!draft.pending&&draft.page.active&&!strcmp(draft.page.text,"Keep these exact words."));
+        // Revalidate a queued request after the same changes, without a send or timeout claim.
+        draft.pending=true;draft.request=8;draft.op=HT_DRAFT_SEND;draft_writes=0;
+        work((action_t){.kind=A_DRAFT_COMMAND,.id="draft-test",.value=HT_DRAFT_SEND,.revision=8,.dy=3});
+        assert(!draft_writes&&draft.page.active);
+        if(invalidation!=6)assert(!draft.pending&&!draft.failed&&draft.page.error[0]);
+    }
+    reset();ui_project_set_machine("agent","remote","Remote");begin();assert(starts==1&&last_cmd==VOICE_CMD_NONE);
+
     puts("Pro instructions: PASS (engine/host gates, pinned recipient/revision, explicit review, queued invalidation, cancellation and duration cap)");
 }
 static void carry_setup(void) {

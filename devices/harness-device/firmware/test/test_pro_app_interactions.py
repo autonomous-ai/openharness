@@ -16,6 +16,7 @@ HERE = Path(__file__).resolve().parent
 NATIVE = (HERE / "../main/ui/habitat").resolve()
 SOURCE = (NATIVE / "ui_habitat.c").read_text()
 SHEETS = (NATIVE / "pro_controls.inc").read_text()
+HOME = (NATIVE / "pro_home.inc").read_text()
 FONTS = HERE / "../../prototype/pro-companion/generated/pro_fonts.c"
 
 
@@ -116,7 +117,6 @@ static int actions=1;
 #define pdPASS 1
 static unsigned uxQueueSpacesAvailable(int q) { (void)q;return congested?0:20; }
 static int xQueueSend(int q,const action_t *a,int wait) { (void)q;(void)wait;return queue(*a); }
-static void notice_mark_read(cable_notif_t *n) { n->read_on_dial=true; }
 static bool notice_was_read(const cable_notif_t *n) { return n->read_on_dial; }
 static void notice_forget_read(const char *id) { (void)id; }
 static void notice_add(const char *id,const char *name,const char *machine,const char *text,bool question,bool failed) {
@@ -138,6 +138,13 @@ static bool cable_client_answer_reviewed(const char *id,const char *fetch,const 
     assert(fetch[0]&&token[0]&&n>0&&n<=QUESTION_MAX);assert(choices[0]||drafts[0][0]);
     answers++;transport=(action_t){.kind=A_ANSWER};COPY(transport.id,id);COPY(transport.text,token);return transport_ok;
 }
+static unsigned selections;
+static void cable_client_select_text(const char *agent,const char *id,uint32_t request,uint32_t revision,
+                                     const char *op,int delta,bool extend) {
+    assert(!strcmp(op,"begin")||!strcmp(op,"cancel"));(void)delta;(void)extend;
+    selections++;transport=(action_t){.kind=A_SELECT_SEND,.revision=revision,.velocity=(int)request};
+    COPY(transport.id,agent);COPY(transport.text,id);
+}
 static uint16_t color(unsigned rgb) { return ht_rgb(rgb); }
 #define BG color(HT_THEME_CANVAS)
 #define FG color(HT_THEME_TEXT)
@@ -146,8 +153,8 @@ static uint16_t color(unsigned rgb) { return ht_rgb(rgb); }
 #define SEL color(HT_THEME_SELECTION)
 static void dispatch(action_t a);
 '''
-for name in ("question_view", "notice_open", "notice_sync_view", "notice_selection", "notice_restore_selection", "ui_notif_replace",
-             "visit_emit", "make_action", "read_question", "open_question",
+for name in ("pro_work_local", "pro_work_available", "pro_busy_reset", "question_view", "waiting", "notice_flush_reads", "notice_mark_read", "notice_open", "notice_sync_view", "notice_selection", "notice_restore_selection", "ui_notif_replace",
+             "visit_emit", "selection_emit", "carry_emit", "make_action", "read_question", "open_question",
              "pro_open_in_app", "question_answer", "question_rows", "question_move", "send_answer", "question_load", "ui_question_show",
              "ui_question_state", "ui_answer_receipt", "ui_question_close", "ui_set_connected",
              "ui_focus_project", "ui_visit_state", "ui_voice_question"):
@@ -156,18 +163,21 @@ code += "static void dispatch(action_t a) { if(s.locked)return;switch(a.kind) {\
 code += cases("A_READER", "A_TABS")
 code += cases("A_DESKTOP", "A_UP")
 code += cases("A_VOICE", "A_VOICE_STOP")
+code += cases("A_SELECT_BEGIN", "A_COMPANION")
 code += "default:break;} }\n"
 worker = SOURCE.split("static void worker(", 1)[1]
 code += "static void work(action_t a) { switch(a.kind) {\n"
+code += cases("A_SELECT_SEND", "A_SCROLL", worker, "        ")
 code += "        case A_QUESTION_READ:" + worker.split("        case A_QUESTION_READ:", 1)[1].split("        default:", 1)[0]
 code += "default:break;} }\n"
-for name in ("pro_hit", "pro_control", "pro_heading", "pro_note", "pro_read_text", "pro_inbox", "pro_reader", "pro_unknown_answer", "pro_question", "pro_answer"):
+for name in ("pro_hit", "pro_control", "pro_heading", "pro_note", "pro_read_text", "pro_inbox", "pro_reader", "pro_selection", "pro_unknown_answer", "pro_question", "pro_answer"):
     code += function(name, SHEETS)
+code += function("pro_home_header", HOME)
 code += r'''
 static void reset(void) {
     memset(&s,0,sizeof s);memset(&visit,0,sizeof visit);memset(&form,0,sizeof form);memset(&draft,0,sizeof draft);
     memset(&selection,0,sizeof selection);memset(&carry,0,sizeof carry);memset(&workspace,0,sizeof workspace);
-    enqueued=answers=reads=opens=voice_commands=removed=0;features=~0u;congested=false;transport_ok=true;
+    enqueued=answers=reads=opens=voice_commands=removed=selections=0;features=~0u;congested=false;transport_ok=true;
     s.connected=s.ready=true;s.active=0;s.count=2;s.pressed=-1;
     COPY(s.agents[0].id,"design");COPY(s.agents[0].name,"Design");COPY(s.agents[0].full,"The design is ready to review.");
     COPY(s.agents[1].id,"build");COPY(s.agents[1].name,"Build");COPY(s.agents[1].full,"The build passed its checks.");
@@ -181,7 +191,8 @@ static bool overlap(ht_rect_t a,ht_rect_t b) {
 }
 static void render(ht_scene_t *f) {
     s.hit_count=0;ht_scene_clear(f,BG);
-    if(s.view==INBOX)pro_inbox(f);else if(s.view==READER)pro_reader(f);
+    if(s.view==HOME)pro_home_header(f);else if(s.view==INBOX)pro_inbox(f);else if(s.view==READER)pro_reader(f);
+    else if(s.view==SELECTION)pro_selection(f);
     else if(s.view==ANSWER_REVIEW)pro_answer(f);else {assert(s.view==QUESTION);pro_question(f);}
     assert(f->count<HT_RUNS);
     for(int i=0;i<f->count;i++) {
@@ -357,8 +368,87 @@ static void unknown_answer_recovery(const char *dir) {
     assert(controls(A_QUESTION_CLOSE)&&!controls(A_DESKTOP)&&!controls(A_QUESTION_SAY));
     puts("Unknown answer recovery: PASS (real empty notif.replace reachability, local Close, queued-send invalidation, exact stale agent/request/revision/index guards, four-answer read-only scrolling, authoritative receipts, no-copy state)");
 }
+static void everyday_shortcuts(const char *dir) {
+    ht_scene_t scene;
+    // Questions retain their count after reading, ahead of unread results.
+    reset();notice_add("result","Build","","The build is ready.",false,false);
+    cable_notif_t question=s.notice[0];s.notice[0]=s.notice[1];s.notice[1]=question;
+    notice_mark_read(&s.notice[1]);view(HOME);render(&scene);
+    assert(waiting()==1&&text_has(&scene,"1 needs you")&&controls(A_INBOX)==1);
+    assert(!s.notice[0].read_on_dial&&s.notice[1].read_on_dial);
+    unsigned before=enqueued;act(A_INBOX,1);
+    assert(s.view==INBOX&&s.offset==1&&s.active==0&&enqueued==before&&opens==0&&voice_commands==0);
+    render(&scene);portrait(&scene,dir,"direct-read-question");
+    notice_mark_read(&s.notice[1]);view(HOME);render(&scene);assert(text_has(&scene,"1 needs you"));
+
+    // New notices may reorder the inbox; Home acts on today's question without
+    // emitting a focus command. It does not acknowledge or answer the card.
+    action_t attention=make_action(hit(A_INBOX,1));
+    notice_add("other","Other","","A second question.",true,false);
+    dispatch(attention);assert(s.view==INBOX&&s.notice[s.offset].question&&waiting()==2&&s.active==0&&opens==0);
+    view(HOME);render(&scene);assert(text_has(&scene,"2 need you"));
+    portrait(&scene,dir,"home-attention-header");
+
+    // A retained answer stays one tap away, even with an empty replacement
+    // inbox or a different pending question. Label and destination agree.
+    s.q.pending=s.q.uncertain=true;COPY(s.q.name,"Research");COPY(s.q.agent,"remote");
+    render(&scene);assert(text_has(&scene,"Review answer"));act(A_INBOX,1);
+    assert(s.view==QUESTION&&s.q.pending&&opens==0);
+    ui_notif_replace(NULL,0);view(HOME);render(&scene);assert(text_has(&scene,"Review answer"));
+    act(A_INBOX,1);assert(s.view==QUESTION);
+    s.q.pending=false;view(HOME);render(&scene);assert(text_has(&scene,"Updates"));
+    act(A_INBOX,1);render(&scene);assert(s.view==INBOX&&text_has(&scene,"All caught up."));
+    view(READER);before=enqueued;dispatch(attention);assert(s.view==READER&&enqueued==before);
+
+    // A result is a cached recap. Select asks the host for fresh output from
+    // exactly that source; no recap bytes become a terminal selection.
+    reset();s.view=LAUNCHER;act(A_READER,0);render(&scene);
+    assert(controls(A_SELECT_BEGIN)==1);portrait(&scene,dir,"reader-select-output");
+    action_t choose=make_action(hit(A_SELECT_BEGIN,1));assert(!strcmp(choose.id,"design"));
+    dispatch(choose);assert(s.view==SELECTION&&selection.pending&&!selection.excerpt[0]);
+    assert(!strcmp(selection.agent,"design")&&sent.kind==A_SELECT_SEND&&sent.value==HT_SELECT_BEGIN);
+    work(sent);assert(selections==1&&!strcmp(transport.id,"design")&&!strcmp(transport.text,selection.id));
+    assert(ht_selection_reply(&selection,selection.request,selection.id,true,1,"Fresh terminal output.",1,false,NULL,now));
+    render(&scene);assert(text_has(&scene,"Current output")&&text_has(&scene,"Design")&&text_has(&scene,"Fresh terminal"));
+    assert(!text_has(&scene,"The design is ready"));portrait(&scene,dir,"reader-current-output");
+    action_t picked=make_action(hit(A_CARRY,0));dispatch(picked);
+    assert(carry.pending&&sent.kind==A_CARRY_SEND&&!strcmp(sent.id,"design")&&!strcmp(sent.text+48,selection.id)&&sent.revision==1);
+
+    // Moving desktop focus while reading disables selection of the old source.
+    // A tap captured just before that change is rejected, never rebound.
+    reset();s.view=LAUNCHER;act(A_READER,0);choose=make_action(hit(A_SELECT_BEGIN,1));
+    ui_focus_project("build");render(&scene);assert(!controls(A_SELECT_BEGIN)&&text_has(&scene,"Open this pane to select."));
+    portrait(&scene,dir,"reader-source-not-current");before=enqueued;dispatch(choose);
+    assert(s.view==READER&&!selection.active&&s.active==1&&enqueued==before&&opens==0);
+    COPY(s.reader_agent,"build");dispatch(choose);assert(!selection.active&&enqueued==before);
+
+    // Known unavailable states are gated both on glass and at dispatch.
+    for(int unavailable=0;unavailable<7;unavailable++) {
+        reset();s.view=LAUNCHER;act(A_READER,0);choose=make_action(hit(A_SELECT_BEGIN,1));
+        if(unavailable==0)s.connected=false;
+        if(unavailable==1)s.loading=true;
+        if(unavailable==2)features&=~CABLE_FEATURE_SELECTION;
+        if(unavailable==3)s.count=0;
+        if(unavailable==4)visit.pending=true;
+        if(unavailable==5)COPY(s.pending_focus,"build");
+        if(unavailable==6)COPY(s.pending_machine,"another-machine");
+        render(&scene);assert(!controls(A_SELECT_BEGIN));before=enqueued;dispatch(choose);
+        assert(!selection.active&&enqueued==before&&opens==0);
+    }
+
+    // Selection failure remains visible for the pinned source, with a guarded
+    // retry. A stale retry or Carry cannot use a replaced selection revision.
+    reset();s.view=LAUNCHER;act(A_READER,0);act(A_SELECT_BEGIN,1);
+    assert(ht_selection_reply(&selection,selection.request,selection.id,false,0,NULL,0,false,"Select that pane in Harness first.",now));
+    render(&scene);assert(text_has(&scene,"Select that pane")&&controls(A_SELECT_BEGIN)==1);
+    action_t retry=make_action(hit(A_SELECT_BEGIN,0));COPY(selection.id,"replacement");
+    before=enqueued;dispatch(retry);dispatch(picked);assert(enqueued==before&&!carry.pending);
+    COPY(selection.id,retry.text);act(A_SELECT_BEGIN,0);assert(selection.pending&&!strcmp(selection.agent,"design"));
+    puts("Everyday shortcuts: PASS (read questions remain actionable, retained-answer priority, empty Updates, no implicit focus or voice, source-pinned fresh selection, stale/remote-focus guards, Carry revision and 720 px bounds)");
+}
 int main(int argc,char **argv) {
     const char *dir=argc>1?argv[1]:NULL;ht_scene_t scene;
+    everyday_shortcuts(dir);
     unknown_answer_recovery(dir);
 
     // Reading is pinned even when the app selects another pane meanwhile.

@@ -29,6 +29,7 @@ code = r'''
 #include "runtime.h"
 #include "pro_canvas.h"
 #include "pro_metrics.h"
+#include "pro_work_intent.h"
 #include "../../pro_voice_samples.h"
 #include "pro_visual.h"
 #include "../../cable_features.h"
@@ -95,6 +96,8 @@ static uint16_t color(unsigned rgb) { return ht_rgb(rgb); }
 #define ERROR color(HT_THEME_ERROR)
 #define SEL color(HT_THEME_SELECTION)
 '''
+for name in ("pro_work_local", "pro_work_available", "pro_work_capture_available", "pro_work_draft_available"):
+    code += function(name)
 code += function("settings_item") + function("settings_count")
 code += '#include "pro_controls.inc"\n'
 code += r'''
@@ -118,6 +121,7 @@ static void reset(bool stress) {
         if(stress) fill(s.tabs[i].name,sizeof s.tabs[i].name);
     }
     COPY(s.work_agent,"agent-0");COPY(s.agents[0].engine,"claude");
+    pro_draft_recovery_source(&s.draft_recovery,"host-local");COPY(s.work_host,"host-local");s.work_generation=s.draft_recovery.generation;COPY(s.agents[0].machine_id,"host-local");
     COPY(s.selected_tab,"tab-1");ht_tab_carousel_reset(&tab_carousel,s.tab_count,1);
     for(int i=0;i<s.machine_count;i++) {
         snprintf(s.machines[i].id,sizeof s.machines[i].id,"machine-%d",i);
@@ -352,8 +356,39 @@ int main(int argc,char **argv) {
     assert(pro_render_controls(&missing));inspect(&missing,"instruction changed engine");assert(!action_count(A_WORK_RECORD,true));
     reset(false);s.view=WORK_INTENT;s.work_mode=PRO_WORK_GOAL;ht_scene_clear(&missing,BG);
     assert(pro_render_controls(&missing));portrait(&missing,dir,"instruction-goal");
-    s.view=DRAFT;s.work_voice_mode=PRO_WORK_GOAL;ht_scene_clear(&missing,BG);
+    s.view=DRAFT;s.work_voice_mode=PRO_WORK_GOAL;COPY(draft.page.agent,"agent-0");
+    pro_draft_recovery_pin(&s.draft_recovery,"agent-0",PRO_WORK_GOAL);ht_scene_clear(&missing,BG);
     assert(pro_render_controls(&missing));inspect(&missing,"goal draft");portrait(&missing,dir,"goal-draft");
+
+    for(int identity=0;identity<6;identity++) {
+        reset(false);s.view=WORK_INTENT;
+        switch(identity) {
+        case 0:COPY(s.agents[0].machine_id,"remote");break;
+        case 1:s.agents[0].machine_id[0]=0;break;
+        case 2:pro_draft_recovery_source(&s.draft_recovery,NULL);break;
+        case 3:pro_draft_recovery_source(&s.draft_recovery,"different-host");COPY(s.agents[0].machine_id,"different-host");break;
+        case 4:s.work_mode=PRO_WORK_GOAL;COPY(s.agents[0].machine_id,"remote");break;
+        case 5:pro_draft_recovery_disconnect(&s.draft_recovery);pro_draft_recovery_source(&s.draft_recovery,"host-local");break;
+        }
+        ht_scene_clear(&missing,BG);s.hit_count=0;assert(pro_render_controls(&missing));inspect(&missing,"exact local instructions");
+        assert(action_count(A_WORK_MODE,true)==1&&action_count(A_WORK_RECORD,true)==(unsigned)(identity!=4));
+        if(identity!=3&&identity!=5)assert(has_text(&missing,"Goal and Loop need a local pane."));
+        if(identity==0)portrait(&missing,dir,"instruction-remote");
+        if(identity==1)portrait(&missing,dir,"instruction-missing-machine");
+        s.view=DRAFT;s.work_voice_mode=PRO_WORK_GOAL;COPY(draft.page.agent,"agent-0");
+        pro_draft_recovery_pin(&s.draft_recovery,"agent-0",PRO_WORK_GOAL);
+        if(identity==3)COPY(s.draft_recovery.original_host,"old-host");
+        if(identity==5)s.draft_recovery.capture_generation--;
+        ht_scene_clear(&missing,BG);s.hit_count=0;assert(pro_render_controls(&missing));inspect(&missing,"local draft unavailable");
+        assert(!action_count(A_DRAFT_SEND,true));
+        if(identity==0)portrait(&missing,dir,"goal-draft-remote");
+    }
+
+    reset(false);s.view=WORK_INTENT;COPY(s.agents[0].machine_id,"remote");COPY(s.agents[0].engine,"codex");
+    s.hit_count=0;ht_scene_clear(&missing,BG);assert(pro_render_controls(&missing));
+    assert(action_count(A_WORK_RECORD,true)==1&&has_text(&missing,"Goal needs a local pane."));
+    COPY(s.agents[0].engine,"opencode");s.hit_count=0;ht_scene_clear(&missing,BG);assert(pro_render_controls(&missing));
+    assert(action_count(A_WORK_RECORD,true)==1&&has_text(&missing,PRO_TR("Speak to this pane.")));
     reset(false);s.view=SETTINGS;s.offset=7;ht_scene_t scene;ht_scene_clear(&scene,BG);
     assert(pro_render_controls(&scene));inspect(&scene,"controls-more");portrait(&scene,dir,"controls-more");
     for(int connected=0;connected<2;connected++) {

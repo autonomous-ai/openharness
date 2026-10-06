@@ -111,7 +111,7 @@ static bool config_save_pro_recovery(const pro_recovery_bookmark_t *b) {
 }
 static bool config_clear_pro_recovery(void) {clear_calls++;if(fail_clear)return false;stored_present=false;return true;}
 '''
-for name in ("question_view", "question_rows", "voice_close", "draft_emit", "pro_draft_forget", "pro_draft_store_queue", "pro_draft_store_work", "pro_draft_restore", "make_action", "draft_move",
+for name in ("pro_work_local", "pro_work_available", "pro_work_capture_available", "pro_work_draft_available", "pro_busy_reset", "ui_project_set_machine", "question_view", "question_rows", "voice_close", "draft_emit", "pro_draft_forget", "pro_draft_store_queue", "pro_draft_store_work", "pro_draft_restore", "make_action", "draft_move",
              "ui_set_connected", "ui_draft_source", "draft_page", "ui_voice_draft", "ui_draft_state"):
     code += function(name)
 code += "static void dispatch(action_t a) { switch(a.kind) {\n"
@@ -144,7 +144,7 @@ static void reset(void) {
     enqueued=wires=mutations=0;features=~0u;congested=recording=false;
     stored_present=fail_save=fail_clear=false;save_calls=clear_calls=0;save_hook=NULL;
     s.connected=s.ready=true;s.active=0;s.count=1;s.pressed=-1;COPY(s.agents[0].id,"original");COPY(s.agents[0].engine,"claude");
-    COPY(s.voice_language,"en");ui_draft_source("original-host");
+    COPY(s.voice_language,"en");ui_draft_source("original-host");ui_project_set_machine("original","original-host","Original host");
 }
 static cJSON *page(const char *id,const char *agent,unsigned rev,int position,int total,const char *text,bool active_) {
     cJSON *p=cJSON_CreateObject();assert(p);
@@ -369,7 +369,10 @@ static void transcript(const char *path) {
         const char *type=jstr(event,"event");const cJSON *frame=cJSON_GetObjectItemCaseSensitive(event,"frame");
         if(!strcmp(type,"welcome"))reconnect(jstr(event,"machine"));
         else if(!strcmp(type,"record")) {
-            const char *mode=jstr(event,"mode");record(jstr(event,"agent"),!strcmp(mode,"goal")?PRO_WORK_GOAL:!strcmp(mode,"loop")?PRO_WORK_LOOP:PRO_WORK_TASK);
+            const char *mode=jstr(event,"mode");
+            // The host transcript exports draft frames; its known local recipient is fixture roster state.
+            COPY(s.agents[0].id,jstr(event,"agent"));
+            ui_project_set_machine(jstr(event,"agent"),s.draft_recovery.current_host,"Fixture cable host");record(jstr(event,"agent"),!strcmp(mode,"goal")?PRO_WORK_GOAL:!strcmp(mode,"loop")?PRO_WORK_LOOP:PRO_WORK_TASK);
             const cJSON *carried=cJSON_GetObjectItemCaseSensitive(event,"carry");
             if(carried) {COPY(s.carry_review.id,jstr(carried,"id"));COPY(s.carry_review.agent,jstr(event,"agent"));COPY(s.carry_review.name,jstr(carried,"name"));
                 COPY(s.carry_review.source,jstr(carried,"source"));COPY(s.carry_review.excerpt,jstr(carried,"excerpt"));s.carry_review.rows=cJSON_GetObjectItemCaseSensitive(carried,"rows")->valueint;s.voice_carry=true;}

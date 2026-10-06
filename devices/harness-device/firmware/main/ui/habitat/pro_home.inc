@@ -7,10 +7,19 @@ static void pro_home_header(ht_scene_t *f)
     const char *tab = PRO_TR("Workspace");
     for (int i = 0; i < s.tab_count; i++)
         if (!strcmp(s.tabs[i].id, s.selected_tab)) { tab = s.tabs[i].name; break; }
-    ht_pro_text(f, 44, 36, 480, &ht_pro_24, ink,
+    ht_pro_text(f, 44, 36, 224, &ht_pro_24, ink,
         !s.connected ? PRO_TR("Connect to Harness") :
         s.loading ? PRO_TR("Finding your workspace...") : tab);
-    pro_hit(32, 24, 496, 80, A_TABS, 0, s.connected && !s.loading);
+    pro_hit(32, 24, 248, 80, A_TABS, 0, s.connected && !s.loading);
+    char updates[40];
+    int questions = waiting();
+    if (s.q.pending) COPY(updates, PRO_TR("Review answer"));
+    else if (questions) snprintf(updates, sizeof updates,
+        questions == 1 ? PRO_TR("%d needs you") : PRO_TR("%d need you"), questions);
+    else COPY(updates, PRO_TR("Updates"));
+    // Reading a question never clears its need for an answer. Keep this target
+    // in one place, away from the central voice surface, including an empty inbox.
+    pro_control(f, 296, 24, 236, 64, updates, A_INBOX, 1, true);
 }
 static void pro_home_footer(ht_scene_t *f, agent_t *a, bool recap)
 {
@@ -31,7 +40,18 @@ static void pro_home_footer(ht_scene_t *f, agent_t *a, bool recap)
     snprintf(carrying, sizeof carrying, PRO_TR("%d line%s from %s"), carry.rows, carry.rows == 1 ? "" : PRO_TR("s"), carry.source);
     if (carry.active) status = carrying;
     else if (carry.error[0]) status = PRO_TR("Selected text expired");
-    ht_pro_text(f, 44, 668, 478, &ht_pro_24, dim, status);
+    uint32_t seconds;
+    int status_width = 478;
+    if (pro_busy_elapsed(a, ms(), &seconds)) {
+        char elapsed[24];
+        if (seconds < 60) snprintf(elapsed, sizeof elapsed, "%lus", (unsigned long)seconds);
+        else snprintf(elapsed, sizeof elapsed, "%lum %02lus",
+                      (unsigned long)(seconds / 60), (unsigned long)(seconds % 60));
+        int width = ht_pro_width(&ht_pro_24, elapsed);
+        status_width -= width + 16;
+        ht_pro_text(f, 522 - width, 668, width, &ht_pro_24, dim, elapsed);
+    }
+    ht_pro_text(f, 44, 668, status_width, &ht_pro_24, dim, status);
     pro_hit(32, 598, 492, 104, A_AGENTS, 0, s.connected && !s.loading);
     if (carry.active || carry.error[0])
         pro_control(f, 548, 622, 128, 64, PRO_TR("Drop"), A_CARRY_DROP, 0, true);

@@ -19,7 +19,9 @@ static void pro_control(ht_scene_t *f, int x, int y, int w, int h, const char *l
     int hit = pro_hit(x, y, w, h, action, value, enabled);
     bool pressed = hit >= 0 && hit == s.pressed;
     bool primary = action == A_ANSWER || action == A_DRAFT_SEND || action == A_FORM_MAIN ||
-                   action == A_CHOICE || action == A_NOTICE || action == A_CARRY || action == A_APPEAR_USE ||
+                   action == A_CHOICE || action == A_QUESTION || action == A_CARRY || action == A_APPEAR_USE ||
+                   (action == A_NOTICE && !(s.view == INBOX && value >= 0 && value < s.notice_count &&
+                       s.notice[value].question && cable_client_supports(CABLE_FEATURE_QUESTIONS))) ||
                    action == A_SAMPLE_PLAY;
     uint16_t fill = enabled && (pressed || primary) ? ACCENT : SEL;
     if (enabled && action == A_STOP_YES) fill = color(0xa44343);
@@ -116,19 +118,26 @@ static void pro_work_intent(ht_scene_t *f)
     pro_heading(f, PRO_TR("New instruction"), A_LAUNCHER);
     int recipient = find(s.work_agent);
     agent_t *a = recipient >= 0 ? &s.agents[recipient] : NULL;
-    bool review = cable_client_supports(CABLE_FEATURE_DRAFT);
     bool ready = s.connected && !s.loading && a;
     ht_pro_text(f, 48, 132, 624, &ht_pro_24, DIM, a ? a->name : PRO_TR("Choose a pane"));
     static const char *details[] = {"One request", "Work toward an objective", "Say a task and an interval"};
     int row = 0;
     for (int mode = PRO_WORK_TASK; mode <= PRO_WORK_LOOP; mode++) {
-        if (!pro_work_supported(a ? a->engine : NULL, mode, review)) continue;
+        if (!pro_work_available(a, mode) ||
+            (mode != PRO_WORK_TASK && (s.work_generation != s.draft_recovery.generation ||
+                                      strcmp(s.work_host, s.draft_recovery.current_host)))) continue;
         pro_row(f, 188 + row++ * 118, PRO_TR(pro_work_label(mode)), PRO_TR(details[mode]),
                 A_WORK_MODE, mode, ready, s.work_mode == mode);
     }
-    bool supported = ready && pro_work_supported(a->engine, s.work_mode, review);
+    bool supported = ready && pro_work_available(a, s.work_mode) &&
+        (s.work_mode == PRO_WORK_TASK || (s.work_generation == s.draft_recovery.generation &&
+                                        !strcmp(s.work_host, s.draft_recovery.current_host)));
     pro_control(f, 216, 606, 288, 68, PRO_TR("Speak"), A_WORK_RECORD, 0, supported);
-    pro_note(f, !supported ? PRO_TR("Choose the pane and instruction again.") :
+    bool needs_local = ready && !pro_work_local(a) &&
+        pro_work_supported(a->engine, PRO_WORK_GOAL, cable_client_supports(CABLE_FEATURE_DRAFT));
+    pro_note(f, needs_local ? (!strcmp(a->engine, "claude") ?
+                            "Goal and Loop need a local pane." : "Goal needs a local pane.") :
+                !supported ? PRO_TR("Choose the pane and instruction again.") :
                 s.work_mode == PRO_WORK_TASK ? PRO_TR("Speak to this pane.") : PRO_TR("Review before sending."));
 }
 
@@ -589,14 +598,19 @@ static void pro_reader(ht_scene_t *f)
     pro_heading(f, PRO_TR("Latest result"), A_LAUNCHER);
     int recipient = find(s.reader_agent);
     agent_t *a = recipient >= 0 ? &s.agents[recipient] : !s.reader_agent[0] ? active() : NULL;
-    ht_pro_text(f, 48, 134, 624, &ht_pro_24, DIM, a ? a->name : PRO_TR("No pane selected"));
+    bool same_pane = a && active() && !strcmp(a->id, active()->id);
+    bool can_select = s.connected && !s.loading && same_pane && !visit.pending &&
+                      !s.pending_focus[0] && !s.pending_machine[0] &&
+                      cable_client_supports(CABLE_FEATURE_SELECTION);
+    ht_pro_text(f, 48, 134, 384, &ht_pro_24, DIM, a ? a->name : PRO_TR("No pane selected"));
+    pro_control(f, 456, 124, 232, 64, PRO_TR("Select output"), A_SELECT_BEGIN, 1, can_select);
     const char *value = a && a->full[0] ? a->full : PRO_TR("No result to read yet. I'll bring it here when it's ready.");
     pro_read_text(f, value, 190, 9);
     pro_control(f, 32, 606, 160, 68, PRO_TR("Earlier"), A_UP, 0, s.offset > 0);
     pro_control(f, 216, 606, 288, 68, PRO_TR("Open on desktop"), A_DESKTOP, 2, s.connected && a && !visit.pending);
     int total = ht_pro_text_rows(value, &ht_pro_32, 608);
     pro_control(f, 528, 606, 160, 68, PRO_TR("More"), A_DOWN, 0, s.offset + 9 < total);
-    pro_note(f, PRO_TR("Swipe to read this result."));
+    pro_note(f, a && !same_pane ? PRO_TR("Open this pane to select.") : PRO_TR("Swipe to read this result."));
 }
 
 static void pro_unknown_answer(ht_scene_t *f)
@@ -699,8 +713,9 @@ static void pro_answer(ht_scene_t *f)
 
 static void pro_selection(ht_scene_t *f)
 {
-    pro_heading(f, selection.query[0] ? PRO_TR("Find in output") : PRO_TR("Select text"), A_LAUNCHER);
-    agent_t *a = active();
+    pro_heading(f, selection.query[0] ? PRO_TR("Find in output") : PRO_TR("Current output"), A_LAUNCHER);
+    int source = find(selection.agent);
+    agent_t *a = source >= 0 ? &s.agents[source] : NULL;
     ht_pro_text(f, 48, 134, 624, &ht_pro_24, DIM, selection.query[0] ? selection.query : a ? a->name : "Harness");
     if (carry.pending) {
         ht_pro_center(f, 273, &ht_pro_32, FG, PRO_TR("Picking up your text..."));
@@ -709,7 +724,10 @@ static void pro_selection(ht_scene_t *f)
     }
     if (selection.error[0]) {
         ht_pro_wrap(f, 56, 221, 608, 7, 0, &ht_pro_32, FG, PRO_TR(selection.error));
-        pro_control(f, 220, 606, 280, 68, PRO_TR("Try again"), A_SELECT_BEGIN, 0, s.connected);
+        bool retry = s.connected && !s.loading && a && active() && !strcmp(a->id, active()->id) &&
+                     !visit.pending && !s.pending_focus[0] && !s.pending_machine[0] &&
+                     cable_client_supports(CABLE_FEATURE_SELECTION);
+        pro_control(f, 220, 606, 280, 68, PRO_TR("Try again"), A_SELECT_BEGIN, 0, retry);
         return;
     }
     char status[72];
@@ -804,6 +822,8 @@ static void pro_draft(ht_scene_t *f)
         ht_pro_wrap(f, 56, 514, 608, 2, 0, &ht_pro_24, DIM,
             PRO_TR(s.draft_recovery.store == PRO_RECOVERY_SAVING ? "Preparing recovery..." : "Recovery unavailable after power loss."));
     else if (p->error[0]) ht_pro_wrap(f, 56, 514, 608, 2, 0, &ht_pro_24, color(0xa44343), PRO_TR(p->error));
+    else if (!pro_work_draft_available()) ht_pro_text(f, 56, 522, 608, &ht_pro_24, DIM,
+                                                    PRO_TR("Choose the pane and instruction again."));
     else if (!p->can_send) ht_pro_wrap(f, 56, 514, 608, 2, 0, &ht_pro_24, DIM,
                                     PRO_TR("Some characters can't be shown. Say this part again."));
     else ht_pro_text(f, 56, 522, 608, &ht_pro_24, DIM, draft.pending ?
@@ -812,7 +832,7 @@ static void pro_draft(ht_scene_t *f)
     bool checking = draft.failed || p->locked;
     pro_control(f, 416, 606, 272, 68, checking ? PRO_TR("Check delivery") : PRO_TR("Send message"),
                 checking ? A_DRAFT_STATE : A_DRAFT_SEND, 0,
-                !draft.pending && (checking || p->can_send) && !(carried && s.carry_review.detached));
+                !draft.pending && (checking || (p->can_send && pro_work_draft_available())) && !(carried && s.carry_review.detached));
     pro_note(f, PRO_TR("Swipe to read. Hold the text for more options."));
 }
 

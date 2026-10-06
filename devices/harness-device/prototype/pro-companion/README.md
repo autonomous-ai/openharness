@@ -16,6 +16,21 @@ The workspace is subdued and the selected pane leads at 42 px, falling back to
 short status lines. Paper remains an optional saved scene; its preview does
 not change the default or the person's scene preference.
 
+While the selected pane is working, its activity line includes a quiet elapsed
+time. This is time since the device observed the current busy spell, not engine
+compute time or a Goal/Loop duration. Switching panes preserves each live
+observation; connection or host loss, a changed session, cancellation and a
+25-second heartbeat gap end it. Questions, carried text, speech and errors keep
+their status precedence. Resting the display hides the clock without pausing
+work observed from the host.
+
+Home's Updates control opens the retained answer first, then a question that
+still needs a response. Reading a question does not remove that need. These
+local cards leave desktop focus alone. In the output reader, Select output
+fetches the current terminal selection for the pinned, currently selected pane;
+it never maps old summary text to live terminal lines. If that pane is no longer
+selected, use Open on desktop explicitly before selecting its output.
+
 The Pro is now **strictly dock-only**, by the user's 2026-09-29 decision to
 remove the battery. The workspace footer stays in place whether the app is
 connected or offline. There is no layout switch, portable mode, battery meter
@@ -193,8 +208,9 @@ sound and companion preferences. Compatible hosts also expose:
 - **Latest output** and **Return**, preserving the prior reading place.
 - Voice drafts with re-speaking a part, append, undo, discard and explicit Send.
 - **Instruct** keeps one-shot Task speech available for every engine. With a
-  draft-capable host, Claude exposes Goal and Loop; Codex exposes Goal. Unknown
-  engines expose Task only. A Loop's task and interval are spoken together.
+  draft-capable host and an exactly identified local pane, Claude exposes Goal
+  and Loop; Codex exposes Goal. Unknown or remote machine identities leave Task
+  available. Unknown engines expose Task only. A Loop's task and interval are spoken together.
   Goal and Loop always open transcript review, preserving their mode while
   re-speaking or appending. The pane is pinned when Instruct opens and checked
   again before recording and Send; stale touches cannot change its recipient.
@@ -203,8 +219,12 @@ sound and companion preferences. Compatible hosts also expose:
 - Questions with single or multiple choices, spoken answers where supported,
   answer review and delivery receipts.
 
-Goal/Loop availability currently follows the host's known engine IDs and
-`voice.draft` feature. The protocol has no per-pane command capability, engine
+Goal/Loop availability checks the complete cable-host and pane machine IDs,
+the known engine IDs and `voice.draft` feature. The sheet pins its original
+host/link generation; capture and reviewed Send recheck the original recipient
+and host. Missing or oversized identities never match a shortened prefix.
+These checks reject known mismatches, but do not prove strict host intent
+support. The protocol has no per-pane command capability, engine
 generation precondition on Send, or goal/loop lifecycle and schedule receipt.
 The device cannot prove a loop was scheduled or show its next run. Atomic host
 validation is still needed to reject an engine change after the device's final
