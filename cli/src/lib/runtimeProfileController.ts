@@ -12,6 +12,14 @@ import {
   type OpencodePickerRow,
 } from '../engines/opencode/runtimeProfile.js'
 import {
+  chooseCodexRow,
+  codexDigitPressable,
+  codexEffortRows,
+  parseCodexPicker,
+  sameCodexPicker,
+  type CodexPicker,
+} from '../engines/codex/modelPicker.js'
+import {
   codexEffortAllowed,
   parseRuntimeProfile,
   supportsNativeRuntimeControl,
@@ -23,6 +31,12 @@ import {
 const COMMAND_CONFIRM_MS = 8_000
 const PICKER_OPEN_MS = 3_000
 const PICKER_STEP_MS = 2_000
+/**
+ * How far apart the two reads of a Codex model list are, which must agree before a digit is pressed on
+ * it (see reachCodexEfforts): long enough for a redraw in flight to land, short beside the seconds a
+ * switch takes to confirm.
+ */
+const CODEX_SETTLE_MS = 250
 /** Hard bound on ladder keystrokes — twice pi's seven levels, so a desynchronised walk still terminates. */
 const PI_LADDER_MAX_STEPS = 14
 /** Hermes' longest picker page is a provider's model list; twice its size still terminates. */
@@ -265,18 +279,6 @@ function allVisibleTextIsMuted(value: string): boolean {
   }
   if (!segment(value.slice(cursor))) return false
   return sawText
-}
-
-function interactionText(capture: string): string {
-  const lines = capture.split('\n')
-  const promptIndex = lines.findLastIndex((line) => {
-    const visible = stripAnsi(line)
-    const marker = visible.search(/[›❯]/u)
-    if (marker < 0) return false
-    // Picker selection rows also use ›, but numbered rows are not composer prompts.
-    return !/^\s*\d+\.\s/.test(visible.slice(marker + 1))
-  })
-  return (promptIndex >= 0 ? lines.slice(promptIndex) : lines).join('\n')
 }
 
 /**
@@ -630,91 +632,6 @@ function inspectPiPane(capture: string): PaneInspection {
   return { idle: footer && !dialog && !draft, plan: false, dialog, draft }
 }
 
-interface NumberedRow {
-  number: string
-  label: string
-  raw: string
-}
-
-function numberedRows(capture: string): NumberedRow[] {
-  const rows: NumberedRow[] = []
-  for (const raw of stripAnsi(capture).split('\n')) {
-    const match = /^\s*[›>]?[ ]*(\d+)\.\s+(.+?)\s*$/.exec(raw)
-    if (match) rows.push({ number: match[1], label: match[2], raw })
-  }
-  return rows
-}
-
-export interface CodexModelMenuRows {
-  quickModels: Map<string, string>
-  allModelsRow: string | null
-}
-
-/** Codex 0.145+ adds a quick-mode menu before the existing model and effort pickers. */
-export function parseCodexModelMenuRows(capture: string): CodexModelMenuRows | null {
-  capture = interactionText(capture)
-  const visible = stripAnsi(capture)
-  if (!/Pick a quick auto mode or browse all models/i.test(visible)) return null
-  const quickModels = new Map<string, string>()
-  let allModelsRow: string | null = null
-  for (const row of numberedRows(capture)) {
-    if (/^All models\b/i.test(row.label)) {
-      allModelsRow = row.number
-      continue
-    }
-    const model = /^([a-z0-9][a-z0-9._-]*)(?:\s+\((?:current|default)\))?(?:\s{2,}|$)/i.exec(row.label)?.[1]
-    if (model) quickModels.set(model, row.number)
-  }
-  return { quickModels, allModelsRow }
-}
-
-export function parseCodexModelRows(capture: string): Map<string, string> | null {
-  capture = interactionText(capture)
-  if (!/Select Model and Effort/i.test(stripAnsi(capture))) return null
-  const result = new Map<string, string>()
-  for (const row of numberedRows(capture)) {
-    const model = /^([a-z0-9][a-z0-9._-]*)(?:\s+\((?:current|default)\))?(?:\s{2,}|$)/i.exec(row.label)?.[1]
-    if (model) result.set(model, row.number)
-  }
-  return result
-}
-
-export interface CodexEffortRows {
-  efforts: Map<string, string>
-  defaultRow: string | null
-  advancedRow: string | null
-}
-
-export function parseCodexEffortRows(capture: string): CodexEffortRows | null {
-  capture = interactionText(capture)
-  if (!/Select Reasoning Level for\s+/i.test(stripAnsi(capture))) return null
-  const efforts = new Map<string, string>()
-  let defaultRow: string | null = null
-  let advancedRow: string | null = null
-  for (const row of numberedRows(capture)) {
-    const label = row.label.toLowerCase()
-    if (label.startsWith('low')) efforts.set('low', row.number)
-    else if (label.startsWith('medium')) efforts.set('medium', row.number)
-    else if (label.startsWith('high')) efforts.set('high', row.number)
-    else if (label.startsWith('extra high')) efforts.set('xhigh', row.number)
-    else if (label.startsWith('max')) efforts.set('max', row.number)
-    else if (label.startsWith('more reasoning')) advancedRow = row.number
-    if (/\(default\)/i.test(row.label)) defaultRow = row.number
-  }
-  return { efforts, defaultRow, advancedRow }
-}
-
-export function parseCodexAdvancedRows(capture: string): Map<string, string> | null {
-  capture = interactionText(capture)
-  if (!/Advanced Reasoning/i.test(stripAnsi(capture))) return null
-  const efforts = new Map<string, string>()
-  for (const row of numberedRows(capture)) {
-    if (/^max\b/i.test(row.label)) efforts.set('max', row.number)
-    else if (/^ultra\b/i.test(row.label)) efforts.set('ultra', row.number)
-  }
-  return efforts
-}
-
 export interface CursorParameterRow {
   kind: 'context' | 'reasoning' | 'fast' | 'thinking'
   value: string
@@ -774,6 +691,11 @@ export function parseCursorParameterRows(capture: string): CursorParameterRow[] 
     })
   }
   return rows.length ? rows : null
+}
+
+/** The lists a model is chosen from, as against the reasoning screens that follow them. */
+function isCodexList(picker: CodexPicker): boolean {
+  return picker.kind === 'quick' || picker.kind === 'models' || picker.kind === 'reserve'
 }
 
 function sleep(ms: number): Promise<void> {
@@ -1259,69 +1181,133 @@ export class RuntimeProfileController {
     return !!confirmed
   }
 
+  /**
+   * Codex's `/model`: a quick menu of auto presets with an `All models` row (0.145 and later), the full
+   * list (`Select Model and Effort`), then the chosen model's reasoning picker, each row pressed by its
+   * digit, which selects the row and accepts it. How a row is read and chosen, and why, is in
+   * engines/codex/modelPicker.ts. Confirmed, as it always was, by the `thread_settings_applied` record
+   * Codex writes once the choice is applied (RuntimeProfileManager `ingestCodex`).
+   */
   private async setCodex(session: RegisteredSession, target: RuntimeProfile): Promise<void> {
     if (!await this.deps.sendText(session.agentId, '/model')) throw new RuntimeProfileControlError('TMUX_FAILED')
-    const isPicker = (value: string): boolean =>
-      !!parseCodexModelMenuRows(value) || !!parseCodexEffortRows(value) || !!parseCodexModelRows(value)
-    let capture = await this.waitPane(session.agentId, isPicker, 900)
-    if (!capture) {
+    let picker = await this.waitCodexPicker(session, () => true, 900)
+    if (!picker) {
       await this.deps.sendKey(session.agentId, 'Enter')
-      capture = await this.waitPane(session.agentId, isPicker, PICKER_OPEN_MS)
+      picker = await this.waitCodexPicker(session, () => true, PICKER_OPEN_MS)
     }
-    if (!capture) throw new RuntimeProfileControlError('UNSUPPORTED_CLI_VERSION')
-
-    let efforts = parseCodexEffortRows(capture)
-    if (efforts) {
-      if (!await this.deps.sendKey(session.agentId, 'Escape')) {
-        throw new RuntimeProfileControlError('UNSUPPORTED_CLI_VERSION')
-      }
-      capture = await this.waitPane(
-        session.agentId,
-        (value) => !!parseCodexModelMenuRows(value) || !!parseCodexModelRows(value),
-        PICKER_STEP_MS,
-      )
-      if (!capture) throw new RuntimeProfileControlError('UNSUPPORTED_CLI_VERSION')
-      efforts = null
+    if (!picker) throw new RuntimeProfileControlError('UNSUPPORTED_CLI_VERSION')
+    if (!isCodexList(picker)) {
+      // Opened on a reasoning screen: back to the list it was opened from, so the model is chosen too.
+      if (!await this.deps.sendKey(session.agentId, 'Escape')) throw new RuntimeProfileControlError('UNSUPPORTED_CLI_VERSION')
+      if (!await this.waitCodexPicker(session, isCodexList, PICKER_STEP_MS)) throw new RuntimeProfileControlError('UNSUPPORTED_CLI_VERSION')
     }
-
-    const menu = parseCodexModelMenuRows(capture)
-    if (menu) {
-      const quickRow = menu.quickModels.get(target.model)
-      const row = quickRow ?? menu.allModelsRow
-      if (!row) throw new RuntimeProfileControlError('MODEL_UNAVAILABLE')
-      if (!await this.deps.sendKey(session.agentId, row)) throw new RuntimeProfileControlError('TMUX_FAILED')
-      capture = await this.waitPane(
-        session.agentId,
-        quickRow
-          ? (value) => !!parseCodexEffortRows(value)
-          : (value) => !!parseCodexModelRows(value),
-        PICKER_STEP_MS,
-      )
-      if (!capture) throw new RuntimeProfileControlError('UNSUPPORTED_CLI_VERSION')
-      efforts = parseCodexEffortRows(capture)
-    }
-
-    if (!efforts) {
-      const models = parseCodexModelRows(capture)
-      const modelRow = models?.get(target.model)
-      if (!modelRow) throw new RuntimeProfileControlError('MODEL_UNAVAILABLE')
-      if (!await this.deps.sendKey(session.agentId, modelRow)) throw new RuntimeProfileControlError('TMUX_FAILED')
-      capture = await this.waitPane(session.agentId, (value) => !!parseCodexEffortRows(value), PICKER_STEP_MS)
-      efforts = capture ? parseCodexEffortRows(capture) : null
-    }
-
-    if (!efforts) throw new RuntimeProfileControlError('UNSUPPORTED_CLI_VERSION')
-    let effortRow = target.effort === 'auto' ? efforts.defaultRow : efforts.efforts.get(target.effort) ?? null
-    if (!effortRow && (target.effort === 'max' || target.effort === 'ultra') && efforts.advancedRow) {
-      if (!await this.deps.sendKey(session.agentId, efforts.advancedRow)) throw new RuntimeProfileControlError('TMUX_FAILED')
-      capture = await this.waitPane(session.agentId, (value) => !!parseCodexAdvancedRows(value), PICKER_STEP_MS)
-      effortRow = capture ? parseCodexAdvancedRows(capture)?.get(target.effort) ?? null : null
-    }
-    if (!effortRow) throw new RuntimeProfileControlError('EFFORT_UNSUPPORTED')
-    if (!await this.deps.sendKey(session.agentId, effortRow)) throw new RuntimeProfileControlError('TMUX_FAILED')
+    const reached = await this.reachCodexEfforts(session, target)
+    if (reached !== 'applied') await this.pickCodexEffort(session, target, reached)
     if (!await this.deps.manager.waitForProfile(session.sessionId, COMMAND_CONFIRM_MS)) {
       throw new RuntimeProfileControlError('CONFIRM_TIMEOUT')
     }
+  }
+
+  /**
+   * From the list on screen to the target model's reasoning picker, through `All models` when the quick
+   * menu is first; or 'applied' when the model's row applied it at once (a model with one effort).
+   *
+   * Every digit is pressed from a list read twice, CODEX_SETTLE_MS apart, the same both times. Codex
+   * 0.160 draws the list from its cache and redraws it in place when the server answers, and a model
+   * added or reordered then renumbers the rows: a digit read off the first drawing lands on another
+   * model. The reasoning picker that opens names its model in its title, and a title naming any other
+   * model than the row pressed means the list moved anyway, so nothing more is pressed.
+   */
+  private async reachCodexEfforts(session: RegisteredSession, target: RuntimeProfile): Promise<CodexPicker | 'applied'> {
+    let catalog = await this.deps.manager.codexCatalog(session)
+    let reread = false
+    for (let lists = 0; lists < 2; lists++) {
+      const list = await this.settledCodexList(session)
+      if (!list) throw new RuntimeProfileControlError('MODEL_UNAVAILABLE')
+      let choice = chooseCodexRow(list, target, catalog)
+      if ('error' in choice && choice.error === 'MODEL_UNAVAILABLE' && !reread) {
+        // Codex saves the catalog its picker refreshed from to models_cache.json, so a model or a name
+        // that came with the refresh is there to read now.
+        reread = true
+        catalog = await this.deps.manager.codexCatalog(session)
+        choice = chooseCodexRow(list, target, catalog)
+      }
+      if ('error' in choice) throw new RuntimeProfileControlError(choice.error)
+      if (!await this.deps.sendKey(session.agentId, String(choice.row.number))) throw new RuntimeProfileControlError('TMUX_FAILED')
+      if (choice.opens === 'list') {
+        if (!await this.waitCodexPicker(session, (next) => next.kind === 'models', PICKER_STEP_MS)) {
+          throw new RuntimeProfileControlError('UNSUPPORTED_CLI_VERSION')
+        }
+        continue
+      }
+      if (choice.opens === 'applied') return 'applied'
+      const next = await this.waitCodexAfterModelRow(session)
+      if (next === 'closed') return 'applied'
+      if (!next) throw new RuntimeProfileControlError('UNSUPPORTED_CLI_VERSION')
+      if (next.model !== choice.row.name) throw new RuntimeProfileControlError('MODEL_UNAVAILABLE')
+      return next
+    }
+    throw new RuntimeProfileControlError('MODEL_UNAVAILABLE')
+  }
+
+  /** The target's effort in its reasoning picker, through Advanced Reasoning for Max and Ultra. */
+  private async pickCodexEffort(session: RegisteredSession, target: RuntimeProfile, picker: CodexPicker): Promise<void> {
+    const rows = codexEffortRows(picker)
+    let row = target.effort === 'auto' ? rows.defaultRow : rows.efforts.get(target.effort) ?? null
+    if (row === null && (target.effort === 'max' || target.effort === 'ultra') && rows.advancedRow !== null
+      && codexDigitPressable(rows.advancedRow)) {
+      if (!await this.deps.sendKey(session.agentId, String(rows.advancedRow))) throw new RuntimeProfileControlError('TMUX_FAILED')
+      const advanced = await this.waitCodexPicker(session, (next) => next.kind === 'advanced', PICKER_STEP_MS)
+      row = advanced ? codexEffortRows(advanced).efforts.get(target.effort) ?? null : null
+    }
+    if (row === null || !codexDigitPressable(row)) throw new RuntimeProfileControlError('EFFORT_UNSUPPORTED')
+    if (!await this.deps.sendKey(session.agentId, String(row))) throw new RuntimeProfileControlError('TMUX_FAILED')
+  }
+
+  /** The first Codex picker on the pane that `wanted` takes, polled until `timeoutMs`. */
+  private async waitCodexPicker(
+    session: RegisteredSession,
+    wanted: (picker: CodexPicker) => boolean,
+    timeoutMs: number,
+  ): Promise<CodexPicker | null> {
+    const capture = await this.waitPane(session.agentId, (value) => {
+      const picker = parseCodexPicker(value)
+      return !!picker && wanted(picker)
+    }, timeoutMs)
+    return capture ? parseCodexPicker(capture) : null
+  }
+
+  /** A model list that reads the same twice, CODEX_SETTLE_MS apart (see reachCodexEfforts). */
+  private async settledCodexList(session: RegisteredSession): Promise<CodexPicker | null> {
+    let previous: CodexPicker | null = null
+    const deadline = Date.now() + PICKER_STEP_MS
+    while (Date.now() < deadline) {
+      const capture = await this.deps.capture(session.agentId, 100)
+      const picker = capture ? parseCodexPicker(capture) : null
+      const list = picker && isCodexList(picker) ? picker : null
+      if (list && previous && sameCodexPicker(previous, list)) return list
+      previous = list
+      await sleep(CODEX_SETTLE_MS)
+    }
+    return null
+  }
+
+  /**
+   * After a model's row: its reasoning picker, or 'closed' when the picker went away and the composer
+   * is back, which is a model the catalog did not describe applying its one effort at once.
+   */
+  private async waitCodexAfterModelRow(session: RegisteredSession): Promise<CodexPicker | 'closed' | null> {
+    const deadline = Date.now() + PICKER_STEP_MS
+    while (Date.now() < deadline) {
+      const capture = await this.deps.capture(session.agentId, 100)
+      if (capture) {
+        const picker = parseCodexPicker(capture)
+        if (picker?.kind === 'efforts') return picker
+        if (!picker && inspectRuntimePane('codex', capture).idle) return 'closed'
+      }
+      await sleep(100)
+    }
+    return null
   }
 
   private async setCursor(session: RegisteredSession, target: RuntimeProfile): Promise<void> {
