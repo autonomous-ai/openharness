@@ -150,14 +150,17 @@ const WALK_TIMEOUT_MS = 60_000
  * Lowered to 2,230 the same day (step 9, D1): the dial's host, its window bridges and the fleet left
  * runForeground for the devices' own service (services/devices.ts), 2,375 lines to 2,213. Then 2,240 (step 9,
  * D2): the devices' link to their own process and its routes, as every service there has, 2,213 to 2,232.
+ * Then 2,230 (step 9, D3): the Wi-Fi device's wiring went with them (core/wifi.ts, core/wifiAgents.ts),
+ * 2,232 lines to 2,227, though its link to the devices' process came in.
  */
-const RUN_FOREGROUND_BUDGET = 2_240
+const RUN_FOREGROUND_BUDGET = 2_230
 /** Lowered from 2,180 when the relay and its E2EE left the socket for the gateway (step 10, R1: 1,440).
  *  The Wi-Fi device's relay came back to it in R2, beside the device service it answers for, over the
  *  gateway's sessions (lib/autonomous-device/overGateway.ts): 1,460. Models' grid commands, grid name and
  *  lists left it for the models service (step 7): 1,391. Then 1,200 when the Devices tab's requests
- *  became the devices' own (step 9, D1), 1,207 → 1,194. */
-const BACKEND_SOCKET_BUDGET = 1_200
+ *  became the devices' own (step 9, D1), 1,207 → 1,194. Then 1,195 when the Wi-Fi device's relay left
+ *  it for the devices' process (step 9, D3): the socket hands its sessions' events on (core/wifi.ts). */
+const BACKEND_SOCKET_BUDGET = 1_195
 
 /** Exceptions, each with its reason. Keep this short. */
 const SERVICE_MAY_IMPORT: Record<string, string> = {
@@ -262,7 +265,12 @@ const SERVICE_MAY_IMPORT: Record<string, string> = {
 // to run them in its process instead (services/inline.ts). With them went the dial (cable/), the window
 // bridges, the fleet's router and its lane to the owner's other machines, and the voice router with its
 // engine worker pool, and the E2EE code the fleet read the linked machines with (lib/e2ee/machinePeers.ts).
-const CORE_CLOSURE_BUDGET = 77_800
+//
+// Then at 75,746 in 345 (step 9, D3), from 77,669 in 358: the Wi-Fi device's service, its relay, its
+// receipts and streams and its Store preparations run with the dials (services/wifi.ts, in the devices'
+// process; the core's side is core/wifi.ts and core/wifiLink.ts), and with them went the Store's installs
+// and catalog, which only the device's preparations reached from the core.
+const CORE_CLOSURE_BUDGET = 75_850
 
 /** What is not the core's, by path: each goes to a service or its own process, in the plan's order. */
 const EDGE: RegExp[] = [
@@ -282,34 +290,13 @@ const EDGE: RegExp[] = [
  * The edge files the core's process still loads, each with the step of the plan that takes it out. The
  * list only shrinks: an entry no longer reached fails the test, so remove it with the move that ends it.
  */
-/** The Wi-Fi device lists, installs and checks harnesses with the Store's code, in the core's process
- *  (lib/autonomous-device/storeRuntime.ts). It reaches the Store through the Store's process once a port
- *  can carry an install's progress back to it, or it leaves with the device (step 10). */
-const STORE_BYPASS = 'step 10: the Wi-Fi device\'s own way into the Store, until it goes through the Store\'s process'
-
 const CORE_MAY_REACH: Record<string, string> = {
   'device/machineList.ts': 'the account\'s machine list, which /api/machines answers from and the trust group reads: with the account proxies (step 10)',
   'dsh/builtins.ts': 'the bundled harnesses are put in place by the core\'s start, which cli.js carries them for anyway; in the Store\'s lean process they cost a second copy (core/main.ts)',
-  'dsh/catalog.ts': STORE_BYPASS,
-  'dsh/install.ts': STORE_BYPASS,
-  'dsh/lock.ts': STORE_BYPASS,
-  'dsh/registry.ts': STORE_BYPASS,
-  'dsh/service.ts': STORE_BYPASS,
-  'dsh/update.ts': STORE_BYPASS,
-  'dsh/updates.ts': STORE_BYPASS,
-  'lib/autonomous-device/dump.ts': 'step 10: the Wi-Fi device, into the devices process over the gateway',
-  'lib/autonomous-device/localApi.ts': 'step 10: the Wi-Fi device, into the devices process over the gateway',
-  'lib/autonomous-device/overGateway.ts': 'step 10: the Wi-Fi device, into the devices process over the gateway',
-  'lib/autonomous-device/parts.ts': 'step 10: the Wi-Fi device, into the devices process over the gateway',
-  'lib/autonomous-device/relay.ts': 'step 10: the Wi-Fi device, into the devices process over the gateway',
-  'lib/autonomous-device/resultContract.ts': 'step 10: the Wi-Fi device, into the devices process over the gateway',
-  'lib/autonomous-device/resultEvidence.ts': 'step 10: the Wi-Fi device, into the devices process over the gateway',
-  'lib/autonomous-device/resultJournal.ts': 'step 10: the Wi-Fi device, into the devices process over the gateway',
-  'lib/autonomous-device/service.ts': 'step 10: the Wi-Fi device, into the devices process over the gateway',
-  'lib/autonomous-device/store.ts': 'step 10: the Wi-Fi device, into the devices process over the gateway',
-  'lib/autonomous-device/storeContract.ts': 'step 10: the Wi-Fi device, into the devices process over the gateway',
-  'lib/autonomous-device/storeRuntime.ts': 'step 10: the Wi-Fi device, into the devices process over the gateway',
-  'lib/autonomous-device/stream.ts': 'step 10: the Wi-Fi device, into the devices process over the gateway',
+  'dsh/lock.ts': 'with dsh/builtins.ts',
+  'dsh/registry.ts': 'with dsh/builtins.ts, which checks the bundled harnesses against the catalog\'s entries',
+  'dsh/updates.ts': 'with dsh/builtins.ts',
+  'lib/autonomous-device/localApi.ts': 'the hook server\'s routes for `harness device`, which the core serves: the pairings they answer are the gateway\'s, the receipts the Wi-Fi device\'s service\'s',
   'lib/sessionSearch/sessionTurns.ts': 'the handoff (lib/agentHandoff.ts), in the edge host once CoreApi gives it the stopped agents, recaps and discovery it reads',
   'lib/sessionSearch/transcript.ts': 'the readers of other engines\' sessions keep this helper: it moves beside them, out of search\'s folder',
   'lib/sessionSearch/turns.ts': 'the handoff (lib/agentHandoff.ts), in the edge host once CoreApi gives it the stopped agents, recaps and discovery it reads',

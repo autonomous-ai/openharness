@@ -13,7 +13,7 @@
 import { correlateAgentEvent } from '../../lib/agentEvent.js'
 import type { AutonomousDeviceInput } from '../deviceInput.js'
 import { isDeviceInputBoundary } from '../deviceInput.js'
-import type { AutonomousDeviceService } from '../../lib/autonomous-device/service.js'
+import type { WifiFeed } from '../wifi.js'
 import type { CommanderMirror } from '../../lib/commander.js'
 import { deviceErrorText } from '../cardText.js'
 import { preview, sid } from '../../lib/log.js'
@@ -48,7 +48,7 @@ export interface FunnelDeps {
   input: Pick<SessionInputController, 'onTurnStarted' | 'onTurnEnded'>
   teams: Pick<SwarmPromptScopes, 'started'>
   deviceInput: Pick<AutonomousDeviceInput, 'onTurnStarted' | 'onTurnEnded'>
-  device: () => Pick<AutonomousDeviceService, 'turnStarted' | 'turnEnded' | 'stream'> | undefined
+  device: () => Pick<WifiFeed, 'turnStarted' | 'turnEnded' | 'stream'> | undefined
   startHeartbeat: (sessionId: string) => void
   questionWatcher: Pick<QuestionWatcher, 'start' | 'noteTurnStart' | 'stop'>
   mirror: Pick<CommanderMirror, 'ingest'>

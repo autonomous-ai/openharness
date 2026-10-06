@@ -87,6 +87,7 @@ export function workspacesCoreApi(
     },
     clients: { viewerChanged: () => {}, gridNamed: () => {}, gridModelsChanged: () => {}, dshInstallStatus: () => {}, windows: () => {}, observer: () => false, ...UNASKED.clients },
     daemon: DAEMON_UNKNOWN,
+    wifi: UNASKED.wifi,
   }
 }
 

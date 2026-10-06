@@ -74,5 +74,15 @@ export function fakeCore(over: Overrides = {}): CoreApi {
       ...over.clients,
     },
     daemon: { command: 'harness', port: 18473, machineId: () => 'machine-1', autonomousEnv: 'prod', ...over.daemon },
+    wifi: {
+      view: vi.fn(async () => ({ agents: [], store: [], hasWindow: true })),
+      submit: vi.fn(async () => {}), cancel: vi.fn(), started: vi.fn(),
+      stop: vi.fn(async () => true), answer: vi.fn(async () => true),
+      create: vi.fn(async () => ({ ok: false as const, error: 'UNSUPPORTED' })),
+      stepFocus: vi.fn(async () => 'no_agents' as const), scroll: vi.fn(() => true), focusApp: vi.fn(() => true), reveal: vi.fn(),
+      send: vi.fn(), hello: vi.fn(), joined: vi.fn(), ready: vi.fn(), unpaired: vi.fn(), focus: vi.fn(),
+      transcripts: vi.fn(), watching: vi.fn(), streams: vi.fn(),
+      ...over.wifi,
+    },
   }
 }

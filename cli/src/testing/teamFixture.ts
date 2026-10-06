@@ -77,6 +77,7 @@ export function attachTeams<T extends BackendSocket>(socket: T): T & TeamFixture
       ...UNASKED.clients,
     },
     daemon: { command: 'harness', port: env.PORT, machineId: () => socket.machineId, autonomousEnv: 'prod' },
+    wifi: UNASKED.wifi,
   })
   /** Built at its first use, from what the spec set by then. */
   const collaboration = (): Teams => teams ??= startCollaboration(core(), {

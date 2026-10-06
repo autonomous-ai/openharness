@@ -15,6 +15,8 @@ import type { ReviewedAnswer } from '../cable/questionInbox.js'
 import type { AgentEngine } from '../engines/types.js'
 import type { AppSwarms } from '../cable/cableSession.js'
 import type { UnreadNotification } from '../lib/notificationRead.js'
+import type { AutonomousDeviceAgent, AutonomousDeviceDelivery, AutonomousDeviceReceipt } from '../lib/autonomous-device/service.js'
+import type { StoreAgent } from '../lib/autonomous-device/store.js'
 import type { AgentDshContext } from '../lib/agentFrame.js'
 import type { GridAccess } from '../lib/gridAttach.js'
 import type { createHarnessResourcesReader } from '../lib/harnessResources.js'
@@ -33,6 +35,7 @@ import type { StoppedAgentStore } from '../lib/stoppedAgents.js'
 import type { TerminalBinaryClear } from '../lib/terminalBinary.js'
 import type { RouteAnswer } from '../localWsServer.js'
 import type { SwarmPromptScopes } from '../teams/promptScope.js'
+import type { DeviceInputStatus } from './deviceInput.js'
 import { FAIL, later, readFallback, ServiceUnavailableError, type PortFallbacks } from './serviceHost.js'
 
 export type { RouteAnswer }
@@ -227,6 +230,53 @@ export interface CoreApi {
    *  serves and the machine it serves as. An experiment writes them into the prompts of the agents it runs
    *  (`… orchestrator --port 18473 --machine …`). */
   daemon: DaemonAddress
+  /** The Wi-Fi device's doors into the core (services/wifi.ts): each one call it made when it ran here. */
+  wifi: {
+    /** What it lists and reads in line (`WifiView`), asked again before each request it answers. */
+    view(): Promise<WifiView>
+    /** A device's prompt into a live agent, through the pane's write lock, as delivery `deliveryId`. Settles
+     *  once the lock has taken it: what it said of the prompt meanwhile is the reply's to carry. */
+    submit(agentId: string, text: string, deliveryId: string): Promise<void>
+    /** A queued delivery the device no longer stands behind (it was unpaired). */
+    cancel(deliveryId: string): void
+    /** The agent's transcript shows the device's prompt began its turn: the pane's lock moves on. */
+    started(agentId: string, text: string): void
+    /** Stop a live agent's turn; resolves whether it stopped. */
+    stop(agentId: string): Promise<boolean>
+    /** Answer a live agent's question, never a permission dialog; resolves whether the terminal took it. */
+    answer(agentId: string, requestId: string, answers: Record<string, string>): Promise<boolean>
+    /** Start an agent for an installed Store harness in `cwd`, with the device's fixed, safe launch
+     *  arguments; refused when another agent works there. */
+    create(packageId: string, engine: string, cwd: string): Promise<ForkResult>
+    /** Move the window's focus one agent along the desk, the dial's way; 'no_app' without a window. */
+    stepFocus(direction: 'next' | 'previous', currentAgentId?: string): Promise<{ machineId: string; agentId: string } | 'no_agents' | 'no_app'>
+    /** A stroke on the device's glass for the window's terminal; false without a window. */
+    scroll(phase: 'down' | 'move' | 'up', dy: number, velocity: number): boolean
+    /** Ask the window to select an agent (`device_focus`); false without a window. */
+    focusApp(agentId: string, expiresAt: number, focusRevision: string): boolean
+    /** Ask the window to open the agent a Store preparation made (`device_prepare_open`). */
+    reveal(operationId: string, agentId: string): void
+    /** An answer or event for one device session, sealed to it by the gateway, if the session is still
+     *  that identity's device. */
+    send(connId: string, identity: string, type: string, payload: Record<string, unknown>): void
+    /** Which identity's app said hello on a session (null: it left): the core counts it as watching. */
+    hello(connId: string, identity: string | null): void
+    /** A device said hello: what the agents are doing is sent again for it. */
+    joined(): void
+    /** It is built and serving: the gateway may connect the devices' direct links, which a service that
+     *  could not be built would leave unanswered. */
+    ready(): void
+    /** A device asked to be unpaired, over its session: its pairing goes. */
+    unpaired(identity: string): void
+    /** The focus revision, as it changes: a window's stale selection is refused against it. */
+    focus(revision: string): void
+    /** It no longer reads this agent's transcript, as of the `seen`th prompt the core told it of. */
+    transcripts(agentId: string, seen: number): void
+    /** The agents whose transcripts it reads, said as it starts. */
+    watching(agentIds: string[]): void
+    /** The agents a device subscribed to: their tools' events are sent too, not only the answer's text. */
+    streams(agentIds: string[]): void
+  }
 }
 
 /** An agent to create, as an experiment asks for one (the orchestrator's Director and specialists). */
@@ -667,7 +717,7 @@ export interface DevicesPort {
   routeTask(text: string): Promise<RouteAnswer>
   /** ⌘K's send: the turn delivered on the agent's own machine, or refused with why. */
   routeSend(agentId: string, text: string): Promise<SendResult>
-  /** The Wi-Fi device borrowing the dial's walk along the desk (until it joins the devices: step 10). */
+  /** The Wi-Fi device borrowing the dial's walk along the desk, through the core (`CoreApi.wifi.stepFocus`). */
   stepFocus(direction: 'next' | 'previous', currentAgentId?: string): Promise<{ machineId: string; agentId: string } | 'no_agents'>
   /** The Wi-Fi device borrowing the dial's stroke for the window's terminal. */
   scroll(phase: 'down' | 'move' | 'up', dy: number, velocity: number): void
@@ -691,6 +741,96 @@ export const DEVICES_FALLBACKS: PortFallbacks<DevicesPort> = {
   routeTask: later({ agentId: '', machineId: '', name: '', confidence: 0, reason: DEVICES_UNAVAILABLE, candidates: [], weighed: 0, machines: 0, via: '' }),
   routeSend: later({ ok: false, machine: '', reason: DEVICES_UNAVAILABLE }),
   stepFocus: later('no_agents'), scroll: undefined, engines: undefined, commanders: undefined, stop: later(undefined),
+}
+
+/*
+ * The Wi-Fi device (services/wifi.ts, lib/autonomous-device/): a paired device that speaks its own
+ * protocol (docs/autonomous-device-integration.md) over an E2EE session the gateway holds, on its direct
+ * link or the relay. It runs beside the dials, in the devices' process (step 9, D3): the core tells it
+ * what the agents do and the requests its sessions bring, and it answers them through the core, which
+ * checks that each answer goes to the session it came from.
+ */
+
+/** What the core holds for the Wi-Fi device's service, said again each time it starts: every device
+ *  session the gateway holds, which of them said their app's hello (served on, told to resync, as after a
+ *  daemon restart), and the window that has the person's attention. */
+export interface WifiResume {
+  sessions: Array<{ connId: string; client: RemoteClient }>
+  helloed: Array<{ connId: string; identity: string }>
+  focus: { machineId: string; agentId: string; connId: string } | null
+}
+
+/** A receipt the device asked for by `harness device receipt`, or the service is not there to say. */
+export type WifiReceipt = { receipt: AutonomousDeviceReceipt | null } | { unavailable: true }
+
+/** What the core lists for the Wi-Fi device, read in line while it answers a request: the agents as it
+ *  shows them, the Store's evidence on each, and whether a window is attached to show one. */
+export interface WifiView {
+  agents: AutonomousDeviceAgent[]
+  store: StoreAgent[]
+  hasWindow: boolean
+}
+
+/**
+ * The core's calls into the Wi-Fi device: its sessions and their requests, as the gateway hands them on,
+ * and what the agents do that it follows (cards, turns, live text, its own deliveries into the panes and
+ * the transcript lines that prove them). All notices but `receipt`, which a person asked for.
+ */
+export interface WifiPort {
+  /** A device session the gateway holds, as it changes (null: it lost its session). */
+  session(connId: string, client: RemoteClient | null): void
+  /** A device's request, as it arrived sealed and as its session opened it (null: it would not open).
+   *  Settles once the service has taken it: what the core says after it is heard after it. */
+  request(connId: string, frame: Record<string, unknown>, opened: Record<string, unknown> | null): Promise<void>
+  /** A device's connection closed. */
+  dropped(connId: string): void
+  /** The owner unpaired a device here; its sessions are gone. */
+  revoked(identity: string): void
+  /** What the core holds for it (`WifiResume`), as it starts. Settles once the sessions are served again. */
+  resume(state: WifiResume): Promise<void>
+  /** A frame bound for the devices, as it is sent, with the turn's whole answer for a summary. */
+  card(frame: Record<string, unknown>, fullText?: string): void
+  turnStarted(agentId: string): void
+  turnEnded(agentId: string, aborted: boolean): void
+  /** An agent's live events, for the devices that subscribed to it. */
+  stream(agentId: string, events: readonly LiveEvent[]): void
+  /** A transcript line of an agent the device sent a prompt to, which proves what its turn did. */
+  transcript(agentId: string, sessionId: string, engine: string, line: string): void
+  /** Its own deliveries into the panes, as the pane's write lock moves them on (core/deviceInput.ts). */
+  delivery(event: AutonomousDeviceDelivery): void
+  dispatched(agentId: string, deliveryId: string, text: string, sessionId?: string): void
+  inputStatus(event: DeviceInputStatus): void
+  agentGone(agentId: string): void
+  /** A window moved to an agent (null: it left one), by its connection. Settles once it is applied. */
+  appFocus(machineId: string, agentId: string | null, connId: string): Promise<void>
+  /** A window opened the agent a device's Store preparation made. */
+  revealed(operationId: string, agentId: string): void
+  /** `harness device receipt`: what became of one of a device's requests. */
+  receipt(deviceId: string, idempotencyKey: string): Promise<WifiReceipt>
+  stop(): Promise<void>
+}
+
+/** The Wi-Fi device's doors, for a service that is not it: nothing is listed, sent, made or moved. */
+export const WIFI_OFF: CoreApi['wifi'] = {
+  view: async () => ({ agents: [], store: [], hasWindow: false }),
+  submit: async () => {}, cancel: () => {}, started: () => {},
+  stop: async () => false, answer: async () => false,
+  create: async () => ({ ok: false, error: 'UNSUPPORTED' }),
+  stepFocus: async () => 'no_app', scroll: () => false, focusApp: () => false, reveal: () => {},
+  send: () => {}, hello: () => {}, joined: () => {}, ready: () => {}, unpaired: () => {}, focus: () => {},
+  transcripts: () => {}, watching: () => {}, streams: () => {},
+}
+
+/**
+ * What the core gets when the Wi-Fi device's service is off: its devices hear nothing (a request they sent
+ * is unanswered, which they retry with the same key, as after a lost frame) and `harness device receipt`
+ * says it is not running.
+ */
+export const WIFI_FALLBACKS: PortFallbacks<WifiPort> = {
+  session: undefined, request: later(undefined), dropped: undefined, revoked: undefined, resume: later(undefined), card: undefined,
+  turnStarted: undefined, turnEnded: undefined, stream: undefined, transcript: undefined, delivery: undefined,
+  dispatched: undefined, inputStatus: undefined, agentGone: undefined, appFocus: later(undefined), revealed: undefined,
+  receipt: later({ unavailable: true }), stop: later(undefined),
 }
 
 /*
@@ -963,13 +1103,14 @@ export interface CorePorts {
   workspaces: WorkspacesPort | null
   teams: TeamsPort | null
   devices: DevicesPort | null
+  wifi: WifiPort | null
   monitor: MonitorPort | null
   orchestrator: OrchestratorPort | null
   sharing: SharingPort | null
 }
 
 export function emptyPorts(): CorePorts {
-  return { search: null, viewers: null, models: null, workspaces: null, teams: null, devices: null, monitor: null, orchestrator: null, sharing: null }
+  return { search: null, viewers: null, models: null, workspaces: null, teams: null, devices: null, wifi: null, monitor: null, orchestrator: null, sharing: null }
 }
 
 export interface CoreApiDeps {
@@ -1016,6 +1157,8 @@ export interface CoreApiDeps {
   hasWindow: CoreApi['clients']['hasWindow']
   devicesChanged: CoreApi['clients']['devicesChanged']
   dialWatching: CoreApi['clients']['dialWatching']
+  /** The Wi-Fi device's doors (core/wifi.ts). */
+  wifi: CoreApi['wifi']
   log?: (line: string) => void
 }
 
@@ -1023,7 +1166,7 @@ export function createCoreApi({
   dataDir, registry, stoppedAgents, databaseHistory, externalSessions, openSessions, syncSession, runtimeModels, viewerChanged,
   gridNamed, gridModelsChanged, dshInstallStatus, mintGridName, accessToken, lane, observerKey, observer, privateGridName, machineName, backend, onNotice,
   runtimeProfile, setRuntime, fork, create, dsh, windows, daemon, turns, questions, terminals = TERMINALS_OFF, machine, activityText,
-  signedIn, environment, machines, sendLocal, sendToWindow, hasWindow, devicesChanged, dialWatching, log = (line) => console.warn(line),
+  signedIn, environment, machines, sendLocal, sendToWindow, hasWindow, devicesChanged, dialWatching, wifi, log = (line) => console.warn(line),
 }: CoreApiDeps): CoreApi {
   // The devices reach the windows through these alone, and only with their own frames: a devices process
   // speaks to the core as a service, and what it may put in front of a person is decided here, not there.
@@ -1069,5 +1212,6 @@ export function createCoreApi({
       },
     },
     daemon,
+    wifi,
   }
 }

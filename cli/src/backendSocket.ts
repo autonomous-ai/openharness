@@ -3,8 +3,7 @@ import { SHARE_REQUESTS, TEAMS_REQUESTS, type Asker, type BackendNotice, type Ga
 import { ServiceUnavailableError } from './core/serviceHost.js'
 import type { ActivityFrame } from './lib/turnActivity.js'
 import { MonitorCompletions } from './lib/harnessMonitor.js'
-import { deviceRelayOverGateway, type DeviceRelayOverGateway } from './lib/autonomous-device/overGateway.js'
-import type { AutonomousDeviceService, AutonomousDeviceFrame } from './lib/autonomous-device/service.js'
+import type { WifiCore } from './core/wifi.js'
 /**
  * BackendSocket — the clients' hub and the request dispatch: the windows and tools on this computer
  * (localWsServer.ts), and the remote clients the gateway hands on (gateway/gateway.ts), each in its own
@@ -339,12 +338,13 @@ export class BackendSocket {
     frame: (connId, frame, transport, role) => this.enqueueDown(frame, connId, transport, role),
     binary: (connId, clear) => this.enqueueTerminalBinary(connId, clear),
     client: (connId, client) => {
+      this.wifi?.session(connId, client)
       if (client) { this.remoteClients.set(connId, client); return }
       if (!this.remoteClients.delete(connId)) return
       this.viewerForwarder.closeConnection(connId); this.interactiveViewers.closeConnection(connId); this.ownerCommands.closeConnection(connId)
     },
     disconnected: async (connId) => {
-      this.autonomousDeviceRelay?.drop(connId)
+      this.wifi?.dropped(connId)
       this.remoteClients.delete(connId)
       this.viewerForwarder.closeConnection(connId)
       this.interactiveViewers.closeConnection(connId); this.ownerCommands.closeConnection(connId)
@@ -394,26 +394,21 @@ export class BackendSocket {
     },
     revoked: () => this.onRevoked?.(),
     busy: () => this.onBusy?.(),
-    device: async (connId, frame, opened) => { await this.autonomousDeviceRelay?.handle(connId, frame, opened) },
-    deviceRevoked: (identity) => this.autonomousDeviceRelay?.revoke(identity),
+    device: (connId, frame, opened) => this.wifi?.request(connId, frame, opened),
+    deviceRevoked: (identity) => this.wifi?.revoked(identity),
     toWindows: (frame) => this.sendLocal(frame),
   }
 
-  /** The Wi-Fi device's application protocol, beside the device service it answers for, over the
-   *  gateway's sessions (lib/autonomous-device/overGateway.ts). */
-  private autonomousDeviceRelay?: DeviceRelayOverGateway
-  setAutonomousDeviceService(service: AutonomousDeviceService, onRemoteRevoke: (identity: string) => void): void {
-    this.autonomousDeviceRelay = deviceRelayOverGateway({
-      client: (connId) => this.remoteClients.get(connId),
-      send: (connId, type, payload) => { this.throughGateway('device', (gateway) => gateway.device(connId, type, payload), false) },
-      service, machineId: this.machineId, onReady: () => this.onCommanderJoin?.(), onRemoteRevoke,
-      onClient: (connId, identity) => this.gatewayPort?.deviceClient(connId, identity),
-    })
+  /** The Wi-Fi device's sessions and requests, as the gateway hands them on, for its service with the
+   *  devices (core/wifi.ts, services/wifi.ts). */
+  private wifi?: WifiCore['fromGateway']
+  useWifi(wifi: WifiCore['fromGateway']): void { this.wifi = wifi }
+  /** The Wi-Fi device's answers and events, sealed to one session; and which identity's app said hello on
+   *  one. Through the gateway, guarded as every frame of the core's is. */
+  deviceFrame(connId: string, type: string, payload: Record<string, unknown>): void {
+    this.throughGateway('device', (gateway) => gateway.device(connId, type, payload), false)
   }
-  /** Wi-Fi device sessions on a direct link that said hello to the device service. */
-  directAutonomousDeviceSessions(): number { return this.autonomousDeviceRelay?.directSessions() ?? 0 }
-  autonomousDeviceConnected(): boolean { return this.autonomousDeviceRelay?.connected() ?? false }
-  emitAutonomousDeviceEvent(frame: AutonomousDeviceFrame, deviceId?: string): void { this.autonomousDeviceRelay?.emit(frame, deviceId) }
+  deviceClient(connId: string, identity: string | null): void { this.toGateway('device', (gateway) => gateway.deviceClient(connId, identity)) }
 
   setTerminalStreamManager(manager: TerminalStreamManager): void {
     this.terminalStreams = manager
