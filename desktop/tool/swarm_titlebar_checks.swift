@@ -98,7 +98,7 @@ private extension SwarmTabStrip {
     }
     let states: [(String, String)] = [("⠋", "Working"), ("?", "Needs your input"),
       ("✗", "Failed"), ("✓", "Finished · unread"), ("", "Idle"),
-      ("◌", "Starting"), ("||", "Paused"), ("⊘", "Offline")]
+      ("◌", "Starting"), ("■", "Stopped"), ("⊘", "Offline")]
     update(["enabled": true, "activeId": "activity", "tabs": [
       ["id": "activity", "name": "desktop", "label": "1:desktop", "activity": payload("⠋", "Working", working: true)]
     ]])

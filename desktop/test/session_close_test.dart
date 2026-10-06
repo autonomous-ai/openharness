@@ -7,6 +7,7 @@ import 'package:harness/core/models.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/harness_monitor_controller.dart';
 import 'package:harness/ws/ws_conn.dart';
+import 'package:harness/widgets/desktop_prompt_surface.dart';
 
 import 'swarm_screen_test.dart' show mount, terminal;
 import 'swarm_state_test.dart' show createApp;
@@ -581,7 +582,10 @@ void main() {
     await tester.tap(find.text('Stop'));
     await tester.pumpAndSettle();
     expect(find.text('Not enough free disk space.'), findsOneWidget);
-    expect(find.text('Stopped'), findsOneWidget);
+    expect(
+      find.descendant(of: find.byType(DesktopPromptSurface), matching: find.text('Stopped')),
+      findsOneWidget,
+    );
     expect(find.text('Stop not confirmed'), findsOneWidget);
     expect(
       find.text('You can close this tab. Some sessions may still be running.'),
@@ -621,7 +625,10 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.text('Stop'));
       await tester.pumpAndSettle();
-      expect(find.text('Stopped'), findsOneWidget);
+      expect(
+      find.descendant(of: find.byType(DesktopPromptSurface), matching: find.text('Stopped')),
+      findsOneWidget,
+    );
       expect(find.text('Stop not confirmed'), findsOneWidget);
       final sent = List.of(connection.closes);
       await tester.tap(find.text('Close Tab'));
