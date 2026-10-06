@@ -27,7 +27,11 @@ export function fakeCore(over: Overrides = {}): CoreApi {
       fork: vi.fn(async () => ({ ok: false as const, error: 'UNSUPPORTED' })),
       ...over.agents,
     },
-    turns: { send: vi.fn(), stop: vi.fn(), recent: vi.fn(() => []), asks: vi.fn(() => []), ...over.turns },
+    turns: {
+      send: vi.fn(), stop: vi.fn(), recent: vi.fn(() => []), asks: vi.fn(() => []),
+      deliver: vi.fn(), cancelDelivery: vi.fn(() => false), onDelivery: vi.fn(() => () => {}),
+      ...over.turns,
+    },
     questions: { answer: vi.fn(), answerReviewed: vi.fn(async () => false), ...over.questions },
     transcripts: { databaseHistory: vi.fn(() => undefined), ...over.transcripts },
     external: {

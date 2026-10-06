@@ -18,7 +18,7 @@
  * no longer restarts every viewer: they stay up here, and the new core hears their URLs at once.
  */
 import type { CoreApi } from '../core/api.js'
-import { emptyPorts, LANE_OFF, resolveAgent, TERMINALS_OFF } from '../core/api.js'
+import { DELIVERIES_OFF, emptyPorts, LANE_OFF, resolveAgent, TERMINALS_OFF } from '../core/api.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcess } from './process.js'
 import { startViewers } from './viewers.js'
@@ -63,7 +63,7 @@ export function viewersCoreApi(dataDir: string, sessions: ReadonlyMap<string, Re
       fork: async () => ({ ok: false, error: 'UNSUPPORTED' }),
     },
     // The viewers drive no agent: these are never asked of them.
-    turns: { send: () => {}, stop: () => {}, recent: () => [], asks: () => [] },
+    turns: { send: () => {}, stop: () => {}, recent: () => [], asks: () => [], ...DELIVERIES_OFF },
     questions: { answer: () => {}, answerReviewed: async () => false },
     transcripts: { databaseHistory: () => undefined },
     external: {

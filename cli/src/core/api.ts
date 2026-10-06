@@ -23,6 +23,7 @@ import { GRID_FLEET_MAX_TIMEOUT_MS } from '../lib/gridFleetProtocol.js'
 import type { GridLaunchOverride } from '../lib/gridLaunch.js'
 import type { NewAgentModel } from '../lib/newAgentModel.js'
 import type { LiveEvent } from '../lib/normalize.js'
+import type { SessionInputDelivery } from '../lib/sessionInput.js'
 import { projectDisplayName, type registry, type RegisteredSession } from '../lib/registry.js'
 import type { RuntimeModelOption } from '../lib/runtimeProfile.js'
 import type { RouterContinuity } from '../lib/voiceRouter.js'
@@ -89,6 +90,18 @@ export interface CoreApi {
     recent(agentId: string, n: number): RecentTurn[]
     /** The person's own last questions to a live agent, newest first. */
     asks(agentId: string): string[]
+    /** Deliver text into a live agent under a delivery id of the caller's own, as the Wi-Fi device, a team
+     *  and the orchestrator deliver their turns: one path for the three. What becomes of it is heard through
+     *  `onDelivery`, under the same id. */
+    deliver(agentId: string, text: string, deliveryId: string): void
+    /** Take back a delivery not yet being written: true when it was, and it never will be; false for one
+     *  the agent's pane is already taking. Answered at once, as the teams and the orchestrator read it in
+     *  line: in a service's own process the core is asked and the answer cannot wait, so it is false there,
+     *  and a delivery the core did take back is then heard `rejected` (`cancelled`). */
+    cancelDelivery(deliveryId: string): boolean
+    /** Hear what becomes of each delivery: queued, written, its turn started, refused and why, or past
+     *  knowing. Returns how to stop hearing. */
+    onDelivery(listener: (event: TurnDelivery) => void): () => void
   }
   questions: {
     /** Answer a live agent's question, keyed by the question keys it asked with. */
@@ -138,6 +151,19 @@ export interface CoreApi {
      *  create dialog. */
     dshInstallStatus(status: Record<string, unknown>): void
   }
+}
+
+/** What became of a delivered turn (`turns.deliver`), as the core's input says it: `queued`, written
+ *  (`delivered`), its turn `started`, `rejected` with why, or `unknown`. `sessionId` is the agent it was
+ *  delivered to, as the delivery named it. */
+export type TurnDelivery = SessionInputDelivery
+
+/** The delivery members of a core that delivers nothing for this service: nothing is written, nothing is
+ *  taken back, and nothing is heard. */
+export const DELIVERIES_OFF: Pick<CoreApi['turns'], 'deliver' | 'cancelDelivery' | 'onDelivery'> = {
+  deliver: () => {},
+  cancelDelivery: () => false,
+  onDelivery: () => () => {},
 }
 
 /** `agents.resolve` over a service process's own copy of the agents, as the registry answers it: by agent

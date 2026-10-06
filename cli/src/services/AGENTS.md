@@ -108,6 +108,11 @@ way back).
   (`service_notice`) and carries terminal bytes as binary frames on its link. The core drops what would
   pile up on a gateway that reads nothing, and the gateway gone is the relay gone: every remote client
   with it, never a window on this computer. `e2e/gatewayProcess.e2e.ts` proves it, with a phone.
+- A service that writes turns into agents (a team's question, the orchestrator's guidance) delivers each
+  under an id of its own through `core.turns.deliver`, hears what became of it through `onDelivery`, and
+  takes one back with `cancelDelivery` (core/deliveries.ts). In its own process `services/turnsLink.ts`
+  asks the core over its link, in order, and hears only its own deliveries; the core lets a process deliver
+  only when `core/main.ts` names it a deliverer.
 - State built from every change must get every change exactly once. The teams show how
   (`src/services/teamsProcess.ts`, `src/core/teamsLink.ts`): the core numbers each change and keeps it
   until the process acknowledges it; on each connection the process says what it applied and gets
