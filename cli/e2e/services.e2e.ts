@@ -1,10 +1,11 @@
 /**
  * A failing service never takes the core down, proven on the real daemon: every service made to fail as
  * it starts, and services made to fail on every call, while a client starts an agent, the agent binds,
- * messages become turns that start and end, and the daemon restarts. Both ways a service runs: in its
- * own process (the default for search, the viewers, workspaces and the teams, harnessd/services.ts),
- * and inside the core's process (`HARNESSD_SERVICES=none`, and always for models, the Store and the
- * fleet), where the core's host guards it (core/serviceHost.ts).
+ * messages become turns that start and end, and the daemon restarts. Both ways a service runs: in a
+ * process of its own (the default for search, the viewers, the teams and the edge host's workspaces,
+ * usage, monitor and project readers, harnessd/services.ts), and inside the core's process
+ * (`HARNESSD_SERVICES=none`, and always for models, the Store and the fleet), where the core's host
+ * guards it (core/serviceHost.ts).
  */
 import { randomUUID } from 'node:crypto'
 import { mkdirSync } from 'node:fs'
@@ -50,19 +51,21 @@ async function turn(client: LocalClient, agentId: string, content: string): Prom
 const IN_THE_CORE = { HARNESSD_SERVICES: 'none' }
 /** A master quick to give up on a service that keeps failing as it starts. */
 const QUICK_TO_PARK = { HARNESSD_SERVICE_PARK_CRASHES: '3', HARNESSD_SERVICE_INITIAL_BACKOFF_MS: '200', HARNESSD_SERVICE_MAX_BACKOFF_MS: '1000' }
-const PROCESS_SERVICES = ['search', 'viewers', 'workspaces', 'teams'] as const
+/** The processes the services run in by default, and what makes every one of them fail as it starts. */
+const SERVICE_PROCESSES = ['search', 'viewers', 'edge', 'teams'] as const
+const EVERY_PROCESS_FAILING = 'search,viewers,workspaces,usage,monitor,projects,teams'
 
 describe('a failing service never takes the core down', () => {
   let daemon: IsolatedDaemon | undefined
   afterEach(async () => { await daemon?.close(); daemon = undefined })
 
   it('with every service failing to start, in its own process or in the core, the core starts, runs an agent through turns and a restart, and says each one is unavailable', async () => {
-    daemon = await IsolatedDaemon.create({ env: { HARNESSD_TEST_FAULTS: 'search,viewers,workspaces,teams,models,store', ...QUICK_TO_PARK } })
+    daemon = await IsolatedDaemon.create({ env: { HARNESSD_TEST_FAULTS: `${EVERY_PROCESS_FAILING},models,store`, ...QUICK_TO_PARK } })
     const d = daemon
     onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-120).join('\n')}`) })
     await d.start()
     // Each process fails as it starts, again and again, until the master parks it; the core never waits for one.
-    for (const service of PROCESS_SERVICES) {
+    for (const service of SERVICE_PROCESSES) {
       await until(`the master to park ${service}`, () => d.log().includes(`[harnessd] service ${service} ended 3 times`) || null, 60_000, 250)
     }
     for (const service of ['models', 'store']) {
@@ -73,6 +76,11 @@ describe('a failing service never takes the core down', () => {
     await turn(client, agentId, 'first, with every service down')
     expect(await client.request('session_search', { query: 'first' })).toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'search' })
     expect(await client.request('dsh_list', {})).toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'store' })
+    expect(await client.request('fs_list_dir', { path: d.projectsDir })).toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'projects', retryable: true })
+    expect(await client.request('machine_resources', {})).toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'monitor', retryable: true })
+    // With the monitor's process parked, the Monitor's list is still the list: its rows, without readings.
+    const monitored = (await client.request('agents_list', { monitor: true })).agents.find((agent: Record<string, any>) => agent.id === agentId)
+    expect(monitored.monitor).toMatchObject({ rssBytes: null, cpu: null, processes: [], sampledAt: null })
     expect(d.coresStarted()).toBe(1)
 
     await d.restart()
@@ -87,7 +95,7 @@ describe('a failing service never takes the core down', () => {
   })
 
   it('with services in their own processes failing on every request and event, each request is answered failed, every turn reaches the client, and nothing restarts', async () => {
-    daemon = await IsolatedDaemon.create({ env: { HARNESSD_TEST_FAULTS: 'search.touch,search.session_search,workspaces.nameBranches,workspaces.sweep' } })
+    daemon = await IsolatedDaemon.create({ env: { HARNESSD_TEST_FAULTS: 'search.touch,search.session_search,workspaces.nameBranches,workspaces.sweep,monitor.resources,projects.fs_list_dir' } })
     const d = daemon
     onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-120).join('\n')}`) })
     await d.start()
@@ -99,7 +107,14 @@ describe('a failing service never takes the core down', () => {
     // request is answered for itself, as often as it is asked.
     for (let i = 0; i < 6; i++) {
       expect(await client.request('session_search', { query: `ask ${i}` }), `ask ${i}`).toMatchObject({ error: 'SERVICE_FAILED', service: 'search' })
+      expect(await client.request('fs_list_dir', { path: d.projectsDir }), `list ${i}`).toMatchObject({ error: 'SERVICE_FAILED', service: 'projects' })
+      // The core's own call into the monitor's process fails each time, and the list is its rows without readings.
+      const monitored = (await client.request('agents_list', { monitor: true })).agents.find((agent: Record<string, any>) => agent.id === agentId)
+      expect(monitored.monitor, `monitor ${i}`).toMatchObject({ rssBytes: null, cpu: null, processes: [], sampledAt: null })
     }
+    // The edge host's other answers are its own: one reader failing costs that reader.
+    expect(await client.request('project_preview', { path: '/no/such/folder' })).not.toHaveProperty('service')
+    expect(await client.request('machine_resources', {})).not.toHaveProperty('error')
     for (const line of [
       '[service search] touch failed · injected fault: search.touch',
       '[service search] session_search failed · injected fault: search.session_search',
@@ -236,8 +251,30 @@ describe('a failing service never takes the core down', () => {
     client.close()
   })
 
-  it('the monitor\'s readings failing on every call leave the list its rows, then switch the monitor off; the core runs on', async () => {
-    daemon = await IsolatedDaemon.create({ env: { HARNESSD_TEST_FAULTS: 'monitor.resources,projects.fs_list_dir' } })
+  it('one service of the edge host failing to start leaves the others in it running, and the core', async () => {
+    daemon = await IsolatedDaemon.create({ env: { HARNESSD_TEST_FAULTS: 'workspaces' } })
+    const d = daemon
+    onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-80).join('\n')}`) })
+    await d.start()
+    for (const service of ['usage', 'monitor', 'projects']) {
+      await until(`${service} to connect`, () => d.log().includes(`[services] ${service} connected`) || null, 30_000, 200)
+    }
+    expect(d.log()).toContain('[service workspaces] did not start · injected fault: workspaces')
+    const client = await LocalClient.connect(d)
+    const agentId = await boundAgent(d, client, 'edge-without-workspaces')
+    expect((await client.request('fs_list_dir', {})).error).toBeUndefined()
+    expect(await client.request('machine_resources', {})).not.toHaveProperty('error')
+    // The core's own call into the monitor's process: the Monitor's rows carry their sample.
+    const monitored = (await client.request('agents_list', { monitor: true })).agents.find((agent: Record<string, any>) => agent.id === agentId)
+    expect(monitored.monitor.sampledAt).toEqual(expect.any(String))
+    await turn(client, agentId, 'with workspaces off in the edge host')
+    expect(d.log()).not.toMatch(/\[harnessd\] service edge (exited|ended)/)
+    expect(d.coresStarted()).toBe(1)
+    client.close()
+  })
+
+  it('the monitor\'s readings failing on every call in the core leave the list its rows, then switch the monitor off; the core runs on', async () => {
+    daemon = await IsolatedDaemon.create({ env: { HARNESSD_TEST_FAULTS: 'monitor.resources,projects.fs_list_dir', ...IN_THE_CORE } })
     onTestFailed(() => { console.log(`---- daemon log\n${daemon?.log().split('\n').slice(-80).join('\n')}`) })
     await daemon.start()
     const client = await LocalClient.connect(daemon)

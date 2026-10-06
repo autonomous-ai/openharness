@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
-  DEFAULT_SERVICE_OPTIONS, KNOWN_SERVICES, SERVICE_PROCESSES_ENV, ServiceSupervisor, serviceOptions, serviceProcessesEnv, serviceSpecs, servicesTheMasterRuns,
+  DEFAULT_SERVICE_OPTIONS, KNOWN_SERVICES, SERVICE_HOSTS, SERVICE_PROCESSES_ENV, ServiceSupervisor, serviceOptions, serviceProcessesEnv, serviceSpecs, servicesTheMasterRuns,
   type ServiceSpec, type ServiceSupervisorOptions,
 } from './services.js'
 import type { CoreHandle } from './supervisor.js'
@@ -33,8 +33,8 @@ const options: ServiceSupervisorOptions = {
   parkWindowMs: 60_000,
   parkRetryMs: 120_000,
 }
-const search: ServiceSpec = { name: 'search', heapLimitMiB: 512, rssLimitMiB: 1_024 }
-const devices: ServiceSpec = { name: 'devices', heapLimitMiB: 256, rssLimitMiB: 0 }
+const search: ServiceSpec = { name: 'search', services: ['search'], heapLimitMiB: 512, rssLimitMiB: 1_024 }
+const devices: ServiceSpec = { name: 'devices', services: ['devices'], heapLimitMiB: 256, rssLimitMiB: 0 }
 
 describe('ServiceSupervisor', () => {
   let children: FakeService[]
@@ -293,8 +293,8 @@ describe('ServiceSupervisor', () => {
   })
 
   it('reads the services to run from the environment, keeping only known ones, once each', () => {
-    const known = { search: { heapLimitMiB: 512, rssLimitMiB: 1_024 }, devices: { heapLimitMiB: 256, rssLimitMiB: 0 } }
-    expect(serviceSpecs({ HARNESSD_SERVICES: ' search, nope ,devices,search,' }, known)).toEqual([search, devices])
+    const known = { search: { services: ['search'], heapLimitMiB: 512, rssLimitMiB: 1_024 }, devices: { services: ['devices'], heapLimitMiB: 256, rssLimitMiB: 0 } }
+    expect(serviceSpecs({ HARNESSD_SERVICES: ' devices, nope ,search,devices,' }, known)).toEqual([search, devices])
     // Every service in its own process unless told otherwise: isolation is the default.
     expect(serviceSpecs({}, known)).toEqual([search, devices])
     expect(serviceSpecs({ HARNESSD_SERVICES: 'none' }, known)).toEqual([])
@@ -305,15 +305,35 @@ describe('ServiceSupervisor', () => {
     expect(serviceSpecs({ HARNESSD_SERVICES: 'search', HARNESSD_SERVICE_HEAP_LIMIT_MIB: '96' }, known)).toEqual([{ ...search, heapLimitMiB: 96 }])
     expect(serviceSpecs({ HARNESSD_SERVICES: 'search', HARNESSD_SERVICE_HEAP_LIMIT_MIB: 'lots' }, known)).toEqual([search])
   })
+
+  it('runs the services a host shares in one process: those named of them, or all of them by its name', () => {
+    const edge = { services: ['workspaces', 'usage', 'monitor'], heapLimitMiB: 256, rssLimitMiB: 512 }
+    const hosts = { search: { services: ['search'], heapLimitMiB: 512, rssLimitMiB: 1_024 }, edge }
+    expect(serviceSpecs({}, hosts)).toEqual([search, { name: 'edge', ...edge }])
+    expect(serviceSpecs({ HARNESSD_SERVICES: 'monitor,workspaces' }, hosts)).toEqual([{ name: 'edge', ...edge, services: ['workspaces', 'monitor'] }])
+    expect(serviceSpecs({ HARNESSD_SERVICES: 'edge,search' }, hosts)).toEqual([search, { name: 'edge', ...edge }])
+    expect(serviceSpecs({ HARNESSD_SERVICES: 'usage' }, hosts)).toEqual([{ name: 'edge', ...edge, services: ['usage'] }])
+  })
+
+  it('knows every service each process this build runs hosts, and each in one process only', () => {
+    const hosted = Object.values(SERVICE_HOSTS).flatMap((host) => host.services)
+    expect(KNOWN_SERVICES).toEqual(hosted)
+    expect(new Set(hosted).size).toBe(hosted.length)
+    expect(SERVICE_HOSTS.edge.services).toEqual(['workspaces', 'usage', 'monitor', 'projects'])
+  })
 })
 
 describe('which services the core leaves to its master', () => {
-  const known = { search: {}, viewers: {}, workspaces: {}, teams: {} }
+  const known = ['search', 'viewers', 'workspaces', 'teams']
   const supervised = { HARNESSD_SUPERVISED: '1', HARNESSD_SERVICE_TOKEN: 'token' }
 
   it('is what the master says it runs, told in a form a core from before the list reads too', () => {
-    const specs = serviceSpecs({ HARNESSD_SERVICES: 'search,viewers' }, KNOWN_SERVICES)
+    const specs = serviceSpecs({ HARNESSD_SERVICES: 'search,viewers' }, SERVICE_HOSTS)
     expect(serviceProcessesEnv(specs)).toEqual({ [SERVICE_PROCESSES_ENV]: 'search,viewers', HARNESSD_SERVICES: 'search,viewers' })
+    // By service, not by process: a core from before the edge host routes the services it knows of it.
+    const hosted = serviceSpecs({ HARNESSD_SERVICES: 'edge' }, SERVICE_HOSTS)
+    expect(serviceProcessesEnv(hosted)).toEqual({ [SERVICE_PROCESSES_ENV]: 'workspaces,usage,monitor,projects', HARNESSD_SERVICES: 'workspaces,usage,monitor,projects' })
+    expect([...servicesTheMasterRuns({ ...supervised, ...serviceProcessesEnv(hosted) }, known)]).toEqual(['workspaces'])
     expect(serviceProcessesEnv([])).toEqual({ [SERVICE_PROCESSES_ENV]: '', HARNESSD_SERVICES: 'none' })
     expect([...servicesTheMasterRuns({ ...supervised, ...serviceProcessesEnv(specs) }, known)]).toEqual(['search', 'viewers'])
     expect([...servicesTheMasterRuns({ ...supervised, ...serviceProcessesEnv([]) }, known)]).toEqual([])

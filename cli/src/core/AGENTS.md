@@ -31,8 +31,12 @@ questions. Everything else is a service ([../services/AGENTS.md](../services/AGE
 - `input.ts`, `questions.ts`: messages into a pane; an agent's question and its answer.
 - `main.ts`: the core's entry (`harness __run`) and composition root, `runForeground`: it builds these
   modules, starts the services through `serviceHost` and wires the socket. The one core file that imports
-  services and the socket, and the one outside the 100% coverage: wiring only, run end to end.
-- `api.ts`: the contract with services. `serviceHost.ts`: services in this process.
-  `serviceLinks.ts`: services in their own processes. `viewersLink.ts`: what the core keeps of the
-  viewers when they run in theirs. `workspacesLink.ts`: what the core tells workspaces in theirs.
-  `teamsLink.ts`: every change to the teams' prompt scopes, kept until their process has it.
+  services and the socket, and the one outside the 100% coverage: wiring only, run end to end. The
+  services that run in their own processes by default it imports only dynamically, through
+  `../services/inline.ts`, and only when one runs in this process instead.
+- `api.ts`: the contract with services, their ports, fallbacks and requests. `serviceHost.ts`: services
+  in this process. `serviceLinks.ts`: services in their own processes. `viewersLink.ts`: what the core
+  keeps of the viewers when they run in theirs. `workspacesLink.ts`: what the core tells workspaces in
+  theirs. `teamsLink.ts`: every change to the teams' prompt scopes, kept until their process has it.
+  `monitorLink.ts`: the monitor's port, asked of its process. `agentQueries.ts`: what a service in its
+  own process may ask of the agents.

@@ -131,22 +131,18 @@ import { createAgentUpdate } from './agents/update.js'
 import { createEngineHooks, installEngineHooks } from './engines/hooks.js'
 import { createCursorTaskHooks } from './engines/cursorTasks.js'
 import { databaseHistory } from './transcripts/databaseHistory.js'
-import { createCoreApi, emptyPorts, FLEET_FALLBACKS, MODELS_FALLBACKS, MONITOR_FALLBACKS, MONITOR_OFF, SEARCH_FALLBACKS, TEAMS_FALLBACKS, VIEWERS_FALLBACKS, WORKSPACES_FALLBACKS, type TeamsPort } from './api.js'
+import { createCoreApi, emptyPorts, FLEET_FALLBACKS, MODELS_FALLBACKS, MODELS_REQUESTS, MONITOR_FALLBACKS, MONITOR_OFF, MONITOR_REQUESTS, PROJECTS_REQUESTS, SEARCH_FALLBACKS, SEARCH_REQUESTS, STORE_REQUESTS, TEAMS_FALLBACKS, USAGE_REQUESTS, VIEWERS_FALLBACKS, WORKSPACES_FALLBACKS, type TeamsPort } from './api.js'
 import { createServiceHost, testFaults } from './serviceHost.js'
 import { startStalls } from './stall.js'
 import { createServiceLinks } from './serviceLinks.js'
 import { createViewersLink } from './viewersLink.js'
 import { createWorkspacesLink } from './workspacesLink.js'
+import { createMonitorLink } from './monitorLink.js'
+import { answerAgentQuery } from './agentQueries.js'
 import { KNOWN_SERVICES, servicesTheMasterRuns } from '../harnessd/services.js'
 import { createTeamsLink } from './teamsLink.js'
-import { SEARCH_REQUESTS, startSearch } from '../services/search.js'
-import { STORE_REQUESTS, startStore } from '../services/store.js'
-import { USAGE_REQUESTS, startUsage } from '../services/usage.js'
-import { MONITOR_REQUESTS, startMonitor } from '../services/monitor.js'
-import { PROJECTS_REQUESTS, startProjects } from '../services/projects.js'
-import { startViewers } from '../services/viewers.js'
-import { MODELS_REQUESTS, startModels } from '../services/models.js'
-import { startWorkspaces } from '../services/workspaces.js'
+import { startStore } from '../services/store.js'
+import { startModels } from '../services/models.js'
 import { startFleet } from '../services/fleet.js'
 import { CORE_EXIT_STOP, CORE_EXIT_UPDATE } from '../harnessd/protocol.js'
 import { localSocketPath, refuseServedDataFolder, type LocalSocketServer } from '../lib/localSocket.js'
@@ -1123,8 +1119,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // routed to them, and answered SERVICE_UNAVAILABLE while they are down (core/serviceLinks.ts).
   const serviceToken = process.env.HARNESSD_SUPERVISED === '1' ? process.env.HARNESSD_SERVICE_TOKEN : undefined
   const outOfProcess = servicesTheMasterRuns(process.env, KNOWN_SERVICES)
-  // The requests each service that can run in its own process answers (its own module declares them).
-  const requestsOf: Record<string, readonly string[]> = { search: SEARCH_REQUESTS }
+  // The requests each service that can run in its own process answers, as core/api.ts declares them.
+  const requestsOf: Record<string, readonly string[]> = { search: SEARCH_REQUESTS, usage: USAGE_REQUESTS, monitor: MONITOR_REQUESTS, projects: PROJECTS_REQUESTS }
   // What the core keeps of the viewers in their own process, for the frames it builds (core/viewersLink.ts).
   const viewersLink = createViewersLink(coreApi, (frame, opts) => serviceLinks.notify('viewers', frame, opts))
   // How the core tells workspaces in their own process what to do, and answers them (core/workspacesLink.ts).
@@ -1134,16 +1130,16 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const serviceLinks = createServiceLinks({
     token: serviceToken,
     owned: Object.fromEntries([...outOfProcess].map((name) => [name, requestsOf[name] ?? []])),
-    // Search asks for every agent, live then stopped, with the name the apps show for it: what it indexes.
     answer: (service, query, payload) => service === 'viewers' ? viewersLink.answer(query, payload)
       : service === 'workspaces' ? workspacesLink.answer(query, payload)
-      : service === 'teams' ? teamsLink.answer(query, payload) : query === 'agents'
-      ? { agents: coreApi.agents.all().map((session) => ({ ...session, displayName: coreApi.agents.displayName(session) })) }
-      : { error: 'UNKNOWN_QUERY' },
+      : service === 'teams' ? teamsLink.answer(query, payload) : answerAgentQuery(coreApi, query),
   })
   // A request a service declared goes to it: in its own process, or in this one (core/serviceHost.ts).
   backend.serviceRouter = (type, payload, asker, reply) =>
     serviceLinks.route(type, payload, asker, reply) || serviceHost.route(type, payload, asker, reply)
+  // The services' own code, for those that run in this process (services/inline.ts): loaded only then, so
+  // one in its own process, as each is by default, is never loaded here.
+  const inline = KNOWN_SERVICES.some((name) => !outOfProcess.has(name)) ? await import('../services/inline.js') : null
 
   // Session search (services/search.ts): in this process, or in its own (services/searchProcess.ts),
   // where the core tells it what changed. A purge's forgetting waits for it if it is down.
@@ -1155,28 +1151,31 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       stop: () => {},
     }
   } else {
-    serviceHost.start('search', startSearch, coreApi, SEARCH_FALLBACKS, SEARCH_REQUESTS)
+    serviceHost.start('search', inline!.startSearch, coreApi, SEARCH_FALLBACKS, SEARCH_REQUESTS)
   }
   // What the core calls search through: guarded, so it answers its fallbacks once search is switched off.
   const sessionSearch = ports.search
   // The DSH viewers: in this process, or in its own (services/viewersProcess.ts), told of each agent.
   if (outOfProcess.has('viewers')) ports.viewers = viewersLink.port
-  else serviceHost.start('viewers', startViewers, coreApi, VIEWERS_FALLBACKS)
-  // Workspaces: in this process, or in its own (services/workspacesProcess.ts), told what to do and when.
+  else serviceHost.start('viewers', inline!.startViewers, coreApi, VIEWERS_FALLBACKS)
+  // Workspaces: in this process, or in the edge host (services/workspacesProcess.ts), told what to do and when.
   if (outOfProcess.has('workspaces')) ports.workspaces = workspacesLink.port
-  else serviceHost.start('workspaces', startWorkspaces, coreApi, WORKSPACES_FALLBACKS)
+  else serviceHost.start('workspaces', inline!.startWorkspaces, coreApi, WORKSPACES_FALLBACKS)
   // The prompt scopes, behind the service host's guard (a fault there costs no message its write) or in their own process.
   if (outOfProcess.has('teams')) ports.teams = backend.swarmPromptScopes = teamsLink.scopes
   else serviceHost.start('teams', (_core, started) => { started.teams = backend.swarmPromptScopes }, coreApi, TEAMS_FALLBACKS)
   // The harnesses installed here, and installing, updating and removing one (services/store.ts).
   serviceHost.serve('store', startStore, coreApi, STORE_REQUESTS)
-  // This machine's Claude and Codex rate limits, read with its own credentials (services/usage.ts).
-  serviceHost.serve('usage', startUsage, coreApi, USAGE_REQUESTS)
-  // This machine's and each agent's resources, for the Monitor and the list's readings (services/monitor.ts).
-  serviceHost.start('monitor', startMonitor, coreApi, MONITOR_FALLBACKS, MONITOR_REQUESTS)
+  // This machine's Claude and Codex rate limits, read with its own credentials (services/usage.ts): in this
+  // process, or in the edge host (services/usageProcess.ts).
+  if (!outOfProcess.has('usage')) serviceHost.serve('usage', inline!.startUsage, coreApi, USAGE_REQUESTS)
+  // This machine's and each agent's resources, for the Monitor and the list's readings (services/monitor.ts):
+  // in this process, or in the edge host (services/monitorProcess.ts), asked through its port (core/monitorLink.ts).
+  if (outOfProcess.has('monitor')) ports.monitor = createMonitorLink((type, payload) => serviceLinks.call('monitor', type, payload))
+  else serviceHost.start('monitor', inline!.startMonitor, coreApi, MONITOR_FALLBACKS, MONITOR_REQUESTS)
   // An agent's branch and pull request, a project's repository and preview, a folder's subfolders and a
-  // media file from an agent's project (services/projects.ts).
-  serviceHost.serve('projects', startProjects, coreApi, PROJECTS_REQUESTS)
+  // media file from an agent's project (services/projects.ts): in this process, or in the edge host.
+  if (!outOfProcess.has('projects')) serviceHost.serve('projects', inline!.startProjects, coreApi, PROJECTS_REQUESTS)
   serviceHost.serve('shell', startShell, coreApi, SHELL_REQUESTS)
 
   const runtimeController = new RuntimeProfileController({

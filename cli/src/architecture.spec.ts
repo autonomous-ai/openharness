@@ -58,7 +58,12 @@ function runForegroundLines(): number {
 
 /** The relative modules a source imports for its values: static, re-exported, bare and dynamic; never `import type`. */
 function valueImports(path: string, text: string): string[] {
-  const found: string[] = []
+  return importsFor(path, text).map(({ from }) => from)
+}
+
+/** `valueImports`, saying which are dynamic (`import('…')`). */
+function importsFor(path: string, text: string): Array<{ from: string; dynamic: boolean }> {
+  const found: Array<{ from: string; dynamic: boolean }> = []
   const visit = (node: ts.Node): void => {
     if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) && node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier)) {
       let typeOnly: boolean
@@ -69,21 +74,28 @@ function valueImports(path: string, text: string): string[] {
       } else {
         typeOnly = node.isTypeOnly
       }
-      if (!typeOnly) found.push(node.moduleSpecifier.text)
+      if (!typeOnly) found.push({ from: node.moduleSpecifier.text, dynamic: false })
     } else if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword && node.arguments[0] && ts.isStringLiteralLike(node.arguments[0])) {
-      found.push(node.arguments[0].text)
+      found.push({ from: node.arguments[0].text, dynamic: true })
     }
     ts.forEachChild(node, visit)
   }
   visit(ts.createSourceFile(path, text, ts.ScriptTarget.Latest, true))
-  return found.filter((specifier) => specifier.startsWith('.'))
+  return found.filter(({ from }) => from.startsWith('.'))
 }
+
+/**
+ * The one import the core's walk does not follow: the services that run in a process of their own by
+ * default, loaded into the core's only when they run there instead (services/inline.ts). Only a dynamic
+ * import of it is passed over; a static one would load it in every core, and is walked.
+ */
+const IN_PROCESS_ONLY = 'services/inline.ts'
 
 /**
  * The code a process started on `entry` runs: every file its imports reach, as each file's lines
  * (docs/design/2026-10-06-core-boundary-next.md, "The target, and its test"). It follows static and
  * dynamic imports under src, `.js` to `.ts` and folders to their index, and leaves out `import type`
- * (types cost nothing at run time) and tests.
+ * (types cost nothing at run time), tests, and a dynamic import of `IN_PROCESS_ONLY`.
  */
 function closureOf(entry: string): Map<string, number> {
   const lines = new Map<string, number>()
@@ -107,10 +119,11 @@ function parsedFile(path: string): { lines: number; imports: string[] } {
   const isFile = (candidate: string): boolean => { try { return statSync(candidate).isFile() } catch { return false } }
   const text = readFileSync(path, 'utf8')
   const imports: string[] = []
-  for (const specifier of valueImports(path, text)) {
-    const base = resolve(dirname(path), specifier)
+  for (const { from, dynamic } of importsFor(path, text)) {
+    const base = resolve(dirname(path), from)
     const target = [base.replace(/\.js$/, '.ts'), base, `${base}.ts`, join(base, 'index.ts')].find(isFile)
     if (!target || !target.startsWith(SRC + '/') || !target.endsWith('.ts') || /\.(spec|test|e2e)\.ts$/.test(target)) continue
+    if (dynamic && relative(SRC, target) === IN_PROCESS_ONLY) continue
     imports.push(target)
   }
   const result = { lines: text.split('\n').length, imports }
@@ -161,11 +174,15 @@ const SERVICE_MAY_IMPORT: Record<string, string> = {
  *
  * Grew by 97 for the Jev catalog (#888, lib/localModels.ts and appModels.ts): the models service's own
  * code, in the core's process only until step 7 runs models in a process of its own and takes it out.
+ *
+ * Then at 102,019 in 430 with #893's shell launch (step 5), from 106,006 in 451: search, the viewers, workspaces, usage, the
+ * monitor and the project readers run in processes of their own, and their code is loaded into the
+ * core's only when they run there instead (services/inline.ts).
  */
-// Connected TUI shells add a literal-argv launch port and shell service (160 loaded lines).
-// Moving the search filename out of its CLI command removes 188 loaded lines, so this lowers
-// the measured closure by 28. Shell policy stays in the service; the core only launches argv.
-const CORE_CLOSURE_BUDGET = 106_006
+//
+// Connected TUI shells added a literal-argv launch port and shell service (#893, 160 loaded lines); moving
+// the search filename out of its CLI command removed 188, so that change lowered the closure by 28.
+const CORE_CLOSURE_BUDGET = 102_110
 
 /** What is not the core's, by path: each goes to a service or its own process, in the plan's order. */
 const EDGE: RegExp[] = [
@@ -206,7 +223,6 @@ const CORE_MAY_REACH: Record<string, string> = {
   'device/deviceFleet.ts': 'step 9: the fleet, beside the dial',
   'device/deviceLink.ts': 'step 9: the fleet, beside the dial',
   'device/machineList.ts': 'step 9: the dial, in the devices process',
-  'dsh/artifacts.ts': 'step 5: the viewers\' in-process start, into services/inline.ts',
   'dsh/builtins.ts': 'step 6: the Store, in the viewers\' process',
   'dsh/catalog.ts': 'step 6: the Store, in the viewers\' process',
   'dsh/install.ts': 'step 6: the Store, in the viewers\' process',
@@ -215,9 +231,6 @@ const CORE_MAY_REACH: Record<string, string> = {
   'dsh/service.ts': 'step 6: the Store, in the viewers\' process',
   'dsh/update.ts': 'step 6: the Store, in the viewers\' process',
   'dsh/updates.ts': 'step 6: the Store, in the viewers\' process',
-  'dsh/verdict.ts': 'step 5: the viewers\' in-process start, into services/inline.ts',
-  'dsh/viewer.ts': 'step 5: the viewers\' in-process start, into services/inline.ts',
-  'dsh/viewerLedger.ts': 'step 5: the viewers\' in-process start, into services/inline.ts',
   'dsh/wire.ts': 'step 6: the Store, in the viewers\' process',
   'lib/autonomous-device/direct.ts': 'step 10: the Wi-Fi device, into the devices process over the gateway',
   'lib/autonomous-device/discovery.ts': 'step 10: the Wi-Fi device, into the devices process over the gateway',
@@ -265,11 +278,9 @@ const CORE_MAY_REACH: Record<string, string> = {
   'lib/gridTarget.ts': 'step 7: models, in its own process',
   'lib/gridWake.ts': 'step 7: models, in its own process',
   'lib/localModels.ts': 'step 7: models, in its own process',
-  'lib/sessionSearch/indexer.ts': 'step 5: search\'s in-process start, into services/inline.ts',
-  'lib/sessionSearch/sessionTurns.ts': 'step 5: the handoff (lib/agentHandoff.ts), in the edge host',
-  'lib/sessionSearch/store.ts': 'step 5: search\'s in-process start, into services/inline.ts',
-  'lib/sessionSearch/transcript.ts': 'step 5: search\'s in-process start, into services/inline.ts; the readers keep this helper, beside them',
-  'lib/sessionSearch/turns.ts': 'step 5: the handoff (lib/agentHandoff.ts), in the edge host',
+  'lib/sessionSearch/sessionTurns.ts': 'the handoff (lib/agentHandoff.ts), in the edge host once CoreApi gives it the stopped agents, recaps and discovery it reads',
+  'lib/sessionSearch/transcript.ts': 'the readers of other engines\' sessions keep this helper: it moves beside them, out of search\'s folder',
+  'lib/sessionSearch/turns.ts': 'the handoff (lib/agentHandoff.ts), in the edge host once CoreApi gives it the stopped agents, recaps and discovery it reads',
   'orchestrator/artifacts.ts': 'step 8: the experimental host',
   'orchestrator/model.ts': 'step 8: the experimental host',
   'orchestrator/prompts.ts': 'step 8: the experimental host',
@@ -278,15 +289,9 @@ const CORE_MAY_REACH: Record<string, string> = {
   'services/fleet.ts': 'step 9: the fleet, beside the dial',
   'services/fleetRouter.ts': 'step 9: the fleet, beside the dial',
   'services/models.ts': 'step 7: models, in its own process',
-  'services/monitor.ts': 'step 5: the machine monitor, in the edge host',
-  'services/shell.ts': 'step 5: shell setup and launch receipts, in the edge host; only the argv launch stays in the core',
-  'services/projects.ts': 'step 5: the project and folder readers, in the edge host',
+  'services/shell.ts': 'shell setup and launch receipts, in the edge host; only the argv launch stays in the core (#893)',
   'services/requestErrors.ts': 'step 7: with the last service that uses it, models, out of the core\'s process',
-  'services/search.ts': 'step 5: search\'s in-process start, into services/inline.ts',
   'services/store.ts': 'step 6: the Store, in the viewers\' process',
-  'services/usage.ts': 'step 5: account usage, in the edge host',
-  'services/viewers.ts': 'step 5: the viewers\' in-process start, into services/inline.ts',
-  'services/workspaces.ts': 'step 5: workspaces, in the edge host',
   'sharing/collaboration.ts': 'step 8: the experimental host',
   'sharing/crypto.ts': 'step 8: the experimental host',
   'sharing/grants.ts': 'step 8: the experimental host',
@@ -369,6 +374,12 @@ describe('the daemon\'s shape', () => {
     expect(closureOf('entry.ts').has('cli.ts')).toBe(true)
     expect(closureOf('core/main.ts').has('core/api.ts')).toBe(true)
     expect(closureOf('core/main.ts').has('cli.ts')).toBe(false)
+    // The core loads the services' own code only when they run in its process: imported dynamically, and
+    // only from its entry, the import is not followed. Any other import of it is.
+    const main = importsFor('core/main.ts', readFileSync(join(SRC, 'core', 'main.ts'), 'utf8')).filter(({ from }) => from === '../services/inline.js')
+    expect(main).toEqual([{ from: '../services/inline.js', dynamic: true }])
+    expect(closureOf('core/main.ts').has(IN_PROCESS_ONLY)).toBe(false)
+    expect(importsFor('example.ts', "import { startSearch } from './services/inline.js'")).toEqual([{ from: './services/inline.js', dynamic: false }])
     for (const exception of Object.keys(SERVICE_MAY_IMPORT)) {
       const [file, from] = exception.split(' → ')
       expect(services.some((found) => found.file === file && found.from === from), `${exception} is no longer needed: remove it`).toBe(true)

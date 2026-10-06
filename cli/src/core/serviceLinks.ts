@@ -59,6 +59,9 @@ interface Waiting {
 /** The most notifications held for one service while it is down. */
 export const HELD_MAX = 1_000
 
+/** Who asks when the core itself asks a service (`call`): this machine's owner, on this machine. */
+const THE_CORE: Asker = { local: true, owner: true }
+
 export function createServiceLinks(options: ServiceLinksOptions) {
   const timeoutMs = options.timeoutMs ?? 30_000
   const log = options.log ?? ((line: string) => console.warn(line))
@@ -85,6 +88,18 @@ export function createServiceLinks(options: ServiceLinksOptions) {
     waiting.delete(id)
     clearTimer(entry.timer)
     entry.reply(result)
+  }
+
+  /** Send `type` to `service`, its answer to `reply`, whatever becomes of the service. */
+  const ask = (service: string, type: string, payload: Record<string, unknown>, asker: Asker, reply: (result: Record<string, unknown>) => void): void => {
+    const link = links.get(service)
+    if (!link) { reply(unavailable(service)); return }
+    const id = newId()
+    const entry: Waiting = { service, type, reply, timer: null }
+    // Cleared whenever the entry is settled, so it only ever fires for one still waiting.
+    entry.timer = setTimer(() => settle(id, entry, unavailable(service)), timeoutMs)
+    waiting.set(id, entry)
+    if (!link.sink.sendFrame({ type, payload: { ...payload, requestId: id }, asker })) settle(id, entry, unavailable(service))
   }
 
   return {
@@ -135,15 +150,15 @@ export function createServiceLinks(options: ServiceLinksOptions) {
     route(type: string, payload: Record<string, unknown>, asker: Asker, reply: (result: Record<string, unknown>) => void): boolean {
       const service = ownerOf.get(type)
       if (!service) return false
-      const link = links.get(service)
-      if (!link) { reply(unavailable(service)); return true }
-      const id = newId()
-      const entry: Waiting = { service, type, reply, timer: null }
-      // Cleared whenever the entry is settled, so it only ever fires for one still waiting.
-      entry.timer = setTimer(() => settle(id, entry, unavailable(service)), timeoutMs)
-      waiting.set(id, entry)
-      if (!link.sink.sendFrame({ type, payload: { ...payload, requestId: id }, asker })) settle(id, entry, unavailable(service))
+      ask(service, type, payload, asker, reply)
       return true
+    },
+
+    /** Ask a service what the core itself needs (a port's call, core/monitorLink.ts): answered by its
+     *  handler for `type` in its process, or SERVICE_UNAVAILABLE as a routed request is, while it is down
+     *  or slow. Never rejects. The types it asks are no client's to route: only the core sends them. */
+    call(service: string, type: string, payload: Record<string, unknown>): Promise<Record<string, unknown>> {
+      return new Promise((resolve) => { ask(service, type, payload, THE_CORE, resolve) })
     },
 
     /** Tell a service something it needs to know; false when it is not connected to hear it. With
