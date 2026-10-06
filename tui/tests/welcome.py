@@ -402,7 +402,7 @@ try:
         elif cancel == 'paste': paste(' more')
         elif cancel == 'mouse': click('Agent')
         else: keys('C-b', 'p')
-        if cancel == 'another-window':
+        if cancel in ('escape', 'another-window'):
             time.sleep(2)
             keys('C-b', 'l')
         shows('[x]')
@@ -428,7 +428,6 @@ try:
     launch()
     initial_gui()
     shows('New Harness')
-    shows('Run `harness start` to connect agents.')
     type_text('Preserve this offline task')
     keys('Enter', 'Enter')
     shows('task stays here.')

@@ -316,7 +316,7 @@ tmux_ has-session -t t 2>/dev/null && screen | grep -q "Mock" && fail "C-b d did
 echo "✓ C-b d detaches"
 # The last window closed ends hn, as the session's end ends tmux's client.
 tmux_ new-session -d -s u -x 120 -y 32 "env -u TMUX -u TMUX_PANE -u HN_SOCKET HN_SOCKET_NAME=$client-2 HOME=$home PORT=$port HARNESS_TUI_DESK=off HARNESS_TUI_NOTIFY=off HN_DESKTOP=off '$bin' -L '$client-2' --port '$port'; sleep 5"
-waited=0; until tmux_ capture-pane -p -t u | grep -qF "New Window"; do sleep 0.05; waited=$((waited + 50)); [ "$waited" -ge 5000 ] && fail "a second hn showed no new-window form"; done
+waited=0; until tmux_ capture-pane -p -t u | grep -qF "Mock terminal (mock)"; do sleep 0.05; waited=$((waited + 50)); [ "$waited" -ge 5000 ] && { tmux_ capture-pane -p -t u; fail "a second hn showed no interactive shell"; }; done
 tmux_ send-keys -t u C-b '&'
 sleep 0.3
 tmux_ send-keys -t u y
