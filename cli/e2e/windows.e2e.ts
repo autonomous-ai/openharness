@@ -425,7 +425,12 @@ describe('many windows at once', () => {
             return
           }
           const answer = await openTerminal(window, agentId, { takeover: false })
-          expect(answer.type, JSON.stringify(answer)).toBe('terminal_ready')
+          // Found by QA on a quiet machine: a churning window reported a vanished pane. Record the
+          // pane's identity and liveness to distinguish that from a failed control-client command.
+          const pane = agentId === claude.id ? claude.tmuxPane : codex.tmuxPane
+          const livePane = answer.type === 'terminal_ready' ? undefined
+            : await d.tmux.run('display-message', '-p', '-t', pane, '#{pane_id}|#{pane_pid}|#{pane_dead}').catch(String)
+          expect(answer.type, JSON.stringify({ cycle: n, window: k, agentId, livePane, answer })).toBe('terminal_ready')
           // Watching the desk's terminal never takes it. (The codex one may open either way: another
           // window of the batch can still be holding it for the moment it takes that window to go.)
           if (agentId === claude.id) expect(answer.payload?.readOnly).toBe(true)
