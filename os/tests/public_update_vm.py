@@ -306,9 +306,10 @@ def main():
             raise ValueError('Home/project files changed across update reboot')
         if observe('13-checkpoint-after-reboot', 'checkpoint', True) != saved:
             raise ValueError('Checkpoint changed across candidate reboot')
-        check_graphical_keyboard(vm, '14-candidate-keyboard')
-        # The unchanged client restores shells, not their previous foreground
-        # commands. Live agent preservation was proved before shutdown above;
+        check_graphical_keyboard(vm, '14-candidate-keyboard', allow_welcome=True)
+        # The unchanged client may show its welcome or saved shells after boot;
+        # it does not resume their previous foreground commands. Live agent
+        # preservation was proved before shutdown above;
         # now prove the bundled agent can start normally on the updated OS.
         vm.command('hn new-window -n agent-after-update ' + shlex.quote(
                    'cd "$HOME/projects/public-update-proof" && exec /usr/bin/opencode'))
@@ -381,7 +382,7 @@ def main():
             vm.login_installed(config)
             authenticate()
             display_matches(observe('24-restored-display', 'display', True), original_display, restored=True)
-            check_graphical_keyboard(vm, '25-restored-keyboard')
+            check_graphical_keyboard(vm, '25-restored-keyboard', allow_welcome=True)
             if observe('26-project-after-rollback-boot', 'project') != project:
                 raise ValueError('Rollback reboot changed newer project files')
             record['checks'].append('The packaged compositor activates after cold boot. Offline rollback preserves running work, restores every original package file and privilege rule, removes the private compositor, then boots the original compositor with working keyboard and newer projects intact.')
