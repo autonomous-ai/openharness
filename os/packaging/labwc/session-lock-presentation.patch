@@ -1,0 +1,171 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# Blank immediately and acknowledge a session lock only after every active output presents it.
+--- a/include/session-lock.h
++++ b/include/session-lock.h
+@@ -19,6 +19,7 @@
+ 	 */
+ 	struct wlr_session_lock_v1 *lock;
+ 	bool locked;
++	bool ack_pending;
+ 
+ 	struct wl_list lock_outputs;
+ 
+--- a/src/session-lock.c
++++ b/src/session-lock.c
+@@ -17,15 +17,35 @@
+ 	struct session_lock_manager *manager;
+ 	struct output *output;
+ 	struct wlr_session_lock_surface_v1 *surface;
+-	struct wl_event_source *blank_timer;
++	bool locked_frame_presented;
++	bool frame_pending;
++	uint32_t frame_commit_seq;
+ 
+ 	struct wl_list link; /* session_lock_manager.lock_outputs */
+ 
+ 	struct wl_listener destroy;
+ 	struct wl_listener commit;
++	struct wl_listener present;
+ 	struct wl_listener surface_destroy;
+ 	struct wl_listener surface_map;
+ };
++
++static void
++send_locked_when_presented(struct session_lock_manager *manager)
++{
++	if (!manager->lock || !manager->ack_pending) {
++		return;
++	}
++	struct session_lock_output *output;
++	wl_list_for_each(output, &manager->lock_outputs, link) {
++		if (output->output->wlr_output->enabled
++				&& !output->locked_frame_presented) {
++			return;
++		}
++	}
++	manager->ack_pending = false;
++	wlr_session_lock_v1_send_locked(manager->lock);
++}
+ 
+ static void
+ focus_surface(struct session_lock_manager *manager, struct wlr_surface *focused)
+@@ -162,9 +182,9 @@
+ 		wl_list_remove(&output->surface_map.link);
+ 	}
+ 	wl_list_remove(&output->commit.link);
++	wl_list_remove(&output->present.link);
+ 	wl_list_remove(&output->destroy.link);
+ 	wl_list_remove(&output->link);
+-	wl_event_source_remove(output->blank_timer);
+ 	free(output);
+ }
+ 
+@@ -172,7 +192,9 @@
+ handle_output_destroy(struct wl_listener *listener, void *data)
+ {
+ 	struct session_lock_output *output = wl_container_of(listener, output, destroy);
++	struct session_lock_manager *manager = output->manager;
+ 	session_lock_output_destroy(output);
++	send_locked_when_presented(manager);
+ }
+ 
+ static void
+@@ -185,6 +207,29 @@
+ 	if (event->state->committed & require_reconfigure) {
+ 		lock_output_reconfigure(output);
+ 	}
++	if (event->state->committed & WLR_OUTPUT_STATE_ENABLED) {
++		output->locked_frame_presented = false;
++		output->frame_pending = false;
++	}
++	if ((event->state->committed & WLR_OUTPUT_STATE_BUFFER)
++			&& !output->locked_frame_presented) {
++		output->frame_pending = true;
++		output->frame_commit_seq = event->output->commit_seq;
++	}
++	send_locked_when_presented(output->manager);
++}
++
++static void
++handle_output_present(struct wl_listener *listener, void *data)
++{
++	struct wlr_output_event_present *event = data;
++	struct session_lock_output *output = wl_container_of(listener, output, present);
++	if (output->frame_pending && event->presented
++			&& event->commit_seq == output->frame_commit_seq) {
++		output->locked_frame_presented = true;
++		output->frame_pending = false;
++		send_locked_when_presented(output->manager);
++	}
+ }
+ 
+ static void
+@@ -194,14 +239,6 @@
+ 	wlr_output_layout_get_box(server.output_layout,
+ 		output->wlr_output, &box);
+ 	wlr_scene_node_set_position(&output->session_lock_tree->node, box.x, box.y);
+-}
+-
+-static int
+-handle_output_blank_timeout(void *data)
+-{
+-	struct session_lock_output *lock_output = data;
+-	wlr_scene_node_set_enabled(&lock_output->background->node, true);
+-	return 0;
+ }
+ 
+ void
+@@ -223,17 +260,7 @@
+ 	float black[4] = { 0.f, 0.f, 0.f, 1.f };
+ 	struct wlr_scene_rect *background = lab_wlr_scene_rect_create(tree, 0, 0, black);
+ 
+-	/*
+-	 * Delay blanking output by 100ms to prevent flicker. If the session is
+-	 * already locked, blank immediately.
+-	 */
+-	lock_output->blank_timer =
+-		wl_event_loop_add_timer(server.wl_event_loop,
+-			handle_output_blank_timeout, lock_output);
+-	if (!manager->locked) {
+-		wlr_scene_node_set_enabled(&background->node, false);
+-		wl_event_source_timer_update(lock_output->blank_timer, 100);
+-	}
++	/* Hide normal content immediately; acknowledge only after presentation. */
+ 
+ 	align_session_lock_tree(output);
+ 
+@@ -247,6 +274,8 @@
+ 
+ 	lock_output->commit.notify = handle_output_commit;
+ 	wl_signal_add(&output->wlr_output->events.commit, &lock_output->commit);
++	lock_output->present.notify = handle_output_present;
++	wl_signal_add(&output->wlr_output->events.present, &lock_output->present);
+ 
+ 	lock_output_reconfigure(lock_output);
+ 
+@@ -256,6 +285,7 @@
+ static void
+ session_lock_destroy(struct session_lock_manager *manager)
+ {
++	manager->ack_pending = false;
+ 	struct session_lock_output *lock_output, *next;
+ 	wl_list_for_each_safe(lock_output, next, &manager->lock_outputs, link) {
+ 		wlr_scene_node_destroy(&lock_output->tree->node);
+@@ -301,6 +331,7 @@
+ 	wl_list_remove(&manager->lock_unlock.link);
+ 	wl_list_remove(&manager->lock_new_surface.link);
+ 	manager->lock = NULL;
++	manager->ack_pending = false;
+ }
+ 
+ static void
+@@ -342,7 +373,8 @@
+ 
+ 	manager->locked = true;
+ 	manager->lock = lock;
+-	wlr_session_lock_v1_send_locked(lock);
++	manager->ack_pending = true;
++	send_locked_when_presented(manager);
+ }
+ 
+ static void

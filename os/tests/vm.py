@@ -377,7 +377,13 @@ class VM:
         self.serial = self.qmp_file = self.qmp = None
 
 
-def check_graphical_keyboard(vm, name):
+def workspace_text_visible(text, *, allow_welcome=False):
+    compact = re.sub(r'\s+', '', text).lower()
+    return 'me@harness' in compact or (allow_welcome and all(
+        label in compact for label in ('startopencode', 'newterminal', 'connecttowi-fi')))
+
+
+def check_graphical_keyboard(vm, name, *, allow_welcome=False):
     """Prove the installed graphical surface accepts input and renders output."""
     started = time.monotonic()
     vm.command('pgrep -x labwc >/dev/null && pgrep -x foot >/dev/null')
@@ -390,7 +396,7 @@ def check_graphical_keyboard(vm, name):
         visible = subprocess.check_output(
             ['tesseract', str(vm.folder / (name + '-ready.png')), 'stdout', '--psm', '11'],
             text=True, stderr=subprocess.DEVNULL, timeout=10)
-        if 'me@harness' in re.sub(r'\s+', '', visible):
+        if workspace_text_visible(visible, allow_welcome=allow_welcome):
             break
         time.sleep(.25)
     else:
