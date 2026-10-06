@@ -143,7 +143,7 @@ export function createAttach({
     const initialEvents: LiveEvent[] = []
     // Folding the transcript in below is deliberately silent — old turns must never replay live. But
     // when the history ENDS mid-turn the turn is still running, and dropping its `turn_started` costs
-    // the whole turn: CommanderMirror.onTurnEnded returns early while turnOpen is false, so the close
+    // the whole turn: the recaps' mirror (lib/commander.ts onTurnEnded) returns early while turnOpen is false, so the close
     // that follows produces no recap and no `done`. Keep the last start and replay exactly that one.
     //
     // The exception is a transcript BORN AFTER its agent — the file is then the live first turn rather

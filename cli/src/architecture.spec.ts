@@ -311,7 +311,13 @@ const SERVICE_MAY_IMPORT: Record<string, string> = {
 // Then at 72,134 in 333, from 73,411 in 338: the updater left the core for a process the master runs
 // (services/updaterProcess.ts), and the core never downloads a build. The CLI's and hn's updaters
 // (lib/selfUpdate.ts, tui/update.ts, tui/install.ts) went, with the spawn lock they staged under.
-const CORE_CLOSURE_BUDGET = 72_230
+//
+// Then at 71,244 in 332, from 72,134 in 333: the recaps (each turn's recap, the devices' turn cards and the
+// notification a finished turn rings: lib/commander.ts and lib/agentNotifications.ts) run as a service, in
+// the edge host by default (services/recaps.ts). The core keeps the turn lifecycle it tells them, a port
+// that never waits (core/turns/recaps.ts, core/recapsLink.ts) and the reads of what they hold
+// (lib/recapReads.ts).
+const CORE_CLOSURE_BUDGET = 71_350
 
 /** What is not the core's, by path: each goes to a service or its own process, in the plan's order. */
 const EDGE: RegExp[] = [
@@ -325,6 +331,9 @@ const EDGE: RegExp[] = [
   /^lib\/(remoteRelay|terminalP2p|stunSelect|remoteViewerProxy|deviceRecentTrim|commanderReplay)\.ts$/,
   // The viewers' own: a viewer served to a client over its connection, and the stream it runs on.
   /^lib\/(viewerForwarder|interactiveViewer|viewerWire)\.ts$/,
+  // The recaps' own parts: the mirror that cuts each turn's recap and card, and the notification policy it
+  // shares with the questions the core tells it of (services/recaps.ts).
+  /^lib\/(commander|agentNotifications)\.ts$/,
   // The Store's and the viewers' parts of dsh; the launch path (installed, manifest, launch, runtime, …) is the core's.
   /^dsh\/(catalog|install|update|updates|registry|wire|service|lock|builtins|viewer|viewerLedger|verdict|artifacts)\.ts$/,
   // Search's index; the readers of other engines' sessions (external.ts, externals/) are the core's, for adoption.

@@ -159,6 +159,7 @@ describe('workspaces in their own process', () => {
     api.agents.sync(agent('a1'))
     expect(renamed).toHaveBeenCalledWith('a1')
     expect(api.transcripts.databaseHistory(agent())).toBeUndefined()
+    expect(await api.transcripts.lastTurn('s1')).toBeNull()
     expect(api.external.sessions.list()).toEqual([])
     await expect(api.external.sessions.scan()).resolves.toEqual([])
     expect(api.external.open.known().size).toBe(0)
@@ -184,6 +185,8 @@ describe('workspaces in their own process', () => {
     api.clients.dshInstallStatus({ phase: 'clone' })
     api.clients.windows({ type: 'orchestrator_changed', payload: {} })
     expect(api.clients.observer('observer:x', 'observer_frame', {})).toBe(false)
+    api.clients.turnCard({ type: 'commander_event', agentId: 'a', dbSessionId: 's', payload: {} })
+    api.clients.turnSummary({ type: 'turn_summary' })
   })
 
   it('runs as a real service process, with the real workspaces, by default', () => {

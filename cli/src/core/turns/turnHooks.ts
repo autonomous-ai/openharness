@@ -10,7 +10,7 @@
 import { removeCursorPendingTasks } from '../../engines/cursor/pendingTasks.js'
 import type { CursorSubagentManager } from '../../engines/cursor/subagent.js'
 import type { CursorTaskHookQueue } from '../../engines/cursor/taskHookQueue.js'
-import type { CommanderMirror } from '../../lib/commander.js'
+import type { TurnRecaps } from './recaps.js'
 import { sid } from '../../lib/log.js'
 import type { LiveEvent, TurnState } from '../../lib/normalize.js'
 import type { RegisteredSession } from '../../lib/registry.js'
@@ -35,7 +35,7 @@ export interface TurnHookDeps {
   announceTurnAborted: (sessionId: string, engine: string, message: string) => void
   armAgyIdleWatch: (sessionId: string) => void
   clearAgyIdleWatch: (sessionId: string) => void
-  mirror: Pick<CommanderMirror, 'noteEngineStopped'>
+  mirror: Pick<TurnRecaps, 'noteEngineStopped'>
   dataDir: string
 }
 

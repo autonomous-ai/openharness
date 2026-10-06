@@ -72,7 +72,7 @@ export function workspacesCoreApi(
     // The workspaces drive no agent: these are never asked of them.
     turns: { send: () => {}, stop: () => {}, recent: async () => [], asks: async () => [], ...DELIVERIES_OFF },
     questions: { answer: () => {}, answerReviewed: async () => false },
-    transcripts: { databaseHistory: () => undefined },
+    transcripts: { databaseHistory: () => undefined, lastTurn: UNASKED.lastTurn },
     external: {
       sessions: { list: () => [], scan: async () => [] },
       open: { known: () => new Map(), fresh: async () => new Map() },

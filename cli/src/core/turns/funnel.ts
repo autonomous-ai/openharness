@@ -14,7 +14,7 @@ import { correlateAgentEvent } from '../../lib/agentEvent.js'
 import type { AutonomousDeviceInput } from '../deviceInput.js'
 import { isDeviceInputBoundary } from '../deviceInput.js'
 import type { WifiFeed } from '../wifi.js'
-import type { CommanderMirror } from '../../lib/commander.js'
+import type { TurnRecaps } from './recaps.js'
 import { deviceErrorText } from '../cardText.js'
 import { preview, sid } from '../../lib/log.js'
 import type { CursorNormalizer } from '../../engines/cursor/normalizer.js'
@@ -51,7 +51,7 @@ export interface FunnelDeps {
   device: () => Pick<WifiFeed, 'turnStarted' | 'turnEnded' | 'stream'> | undefined
   startHeartbeat: (sessionId: string) => void
   questionWatcher: Pick<QuestionWatcher, 'start' | 'noteTurnStart' | 'stop'>
-  mirror: Pick<CommanderMirror, 'ingest'>
+  mirror: Pick<TurnRecaps, 'ingest'>
   /** How a consumer outside the core is called ([outsideConsumers]). */
   outside?: OutsideConsumers
 }
@@ -160,9 +160,9 @@ export function funnelFor({
         // terminal sitting on a question the device never showed. Its watcher runs off the session, not
         // the turn — see the attach path — so leave it alone.
         if (bySession(sessionId)?.engine !== 'commandcode') questionWatcher.stop(sessionId)
-        // Do NOT stop the heartbeat here: the turn is closed but the device summarize is just starting
-        // (mirror sets summarizing=true in the mirror.ingest below). The timer keeps fanning "Summarizing…"
-        // to the device and self-cancels once mirror.heartbeat() reports idle (summary done).
+        // Do NOT stop the heartbeat here: the turn is closed but its recap is just being cut (the recaps
+        // hear the batch below and say its card is busy). The timer keeps beating for the device's card and
+        // stops once mirror.heartbeat() reads it idle, which is at once while the recaps are off.
       }
     }
     mirror.ingest(events, sessionId, { replay: !!(opts?.resumed || opts?.replay) })

@@ -9,6 +9,7 @@ import { startTeamsInCore } from './collaboration.js'
 import { startMonitor } from './monitor.js'
 import { startOrchestrator } from './orchestrator.js'
 import { startProjects } from './projects.js'
+import { startRecaps } from './recaps.js'
 import { startSearch } from './search.js'
 import { startSharing } from './sharing.js'
 import { startStore } from './store.js'
@@ -19,6 +20,6 @@ import { startWorkspaces } from './workspaces.js'
 
 describe('the services the core runs in its own process only when they do not run in theirs', () => {
   it('are their own starts, unchanged: the same services either way', () => {
-    expect({ ...inline }).toEqual({ startCommandBar, startDevices, startHandoff, startGateway, startModels, startMonitor, startOrchestrator, startProjects, startSearch, startSharing, startStore, startTeamsInCore, startUsage, startViewers, startWifi, startWorkspaces })
+    expect({ ...inline }).toEqual({ startCommandBar, startDevices, startHandoff, startGateway, startModels, startMonitor, startOrchestrator, startProjects, startRecaps, startSearch, startSharing, startStore, startTeamsInCore, startUsage, startViewers, startWifi, startWorkspaces })
   })
 })

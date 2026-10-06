@@ -70,14 +70,17 @@ export const UNASKED = {
   machine: { id: () => '', computerId: () => '', name: () => '' },
   activityText: async (): Promise<string | null> => null,
   account: { signedIn: () => false, environment: () => '', machines: async () => ({ status: 503, body: {} }) },
-  clients: { sendLocal: () => {}, sendToWindow: () => false, hasWindow: () => false, devicesChanged: () => {}, dialWatching: () => {} },
+  clients: { sendLocal: () => {}, sendToWindow: () => false, hasWindow: () => false, devicesChanged: () => {}, dialWatching: () => {}, turnCard: () => {}, turnSummary: () => {} },
   wifi: WIFI_OFF,
+  /** What only the recaps ask (services/recapsProcess.ts): a turn's final answer. */
+  lastTurn: async () => null,
 } satisfies {
   machine: CoreApi['machine']
   activityText: CoreApi['agents']['activityText']
   account: Pick<CoreApi['account'], 'signedIn' | 'environment' | 'machines'>
-  clients: Pick<CoreApi['clients'], 'sendLocal' | 'sendToWindow' | 'hasWindow' | 'devicesChanged' | 'dialWatching'>
+  clients: Pick<CoreApi['clients'], 'sendLocal' | 'sendToWindow' | 'hasWindow' | 'devicesChanged' | 'dialWatching' | 'turnCard' | 'turnSummary'>
   wifi: CoreApi['wifi']
+  lastTurn: CoreApi['transcripts']['lastTurn']
 }
 
 export function processCoreApi(dataDir: string, service: string, view: AgentsView = {}): CoreApi {
@@ -122,7 +125,7 @@ export function processCoreApi(dataDir: string, service: string, view: AgentsVie
       ...(view.deliveries?.turns ?? DELIVERIES_OFF),
     },
     questions: { answer: () => {}, answerReviewed: async () => false },
-    transcripts: { databaseHistory: () => undefined },
+    transcripts: { databaseHistory: () => undefined, lastTurn: UNASKED.lastTurn },
     external: {
       sessions: { list: () => [], scan: async () => [] },
       open: { known: () => new Map(), fresh: async () => new Map() },

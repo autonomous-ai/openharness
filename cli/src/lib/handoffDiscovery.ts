@@ -5,7 +5,7 @@
 import type { AgentEngine } from '../engines/types.js'
 import type { HandoffDeps } from './agentHandoff.js'
 import { isSubagentTranscript } from './subagentTranscript.js'
-import type { CommanderMirror } from './commander.js'
+import type { RecentRecap } from './recapReads.js'
 import type { RegisteredSession } from './registry.js'
 import type { RepairedSession } from './sessionRepair.js'
 import type { TurnSource } from './sessionSearch/sessionTurns.js'
@@ -99,7 +99,12 @@ export interface HandoffWiring {
     bySession(sessionId: string): { agentId: string } | null | undefined
   }
   stopped: { get(id: string): RegisteredSession | null; ids(): string[] }
-  mirror: Pick<CommanderMirror, 'recentAsks' | 'lastFullText' | 'recent'>
+  /** The recaps, as the core reads them back (core/turns/recaps.ts). */
+  mirror: {
+    recentAsks(sessionId: string, n?: number): string[]
+    lastFullText(sessionId: string): string | undefined
+    recent(sessionId: string, n?: number): RecentRecap[]
+  }
   databaseHistory: HandoffDeps['readHistory']
   findLiveSession: DiscoveryDeps['findLiveSession']
   claudeProcessSession: DiscoveryDeps['claudeProcessSession']

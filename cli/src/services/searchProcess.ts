@@ -63,7 +63,7 @@ export function searchCoreApi(
     // Search drives no agent: these are never asked of it.
     turns: { send: () => {}, stop: () => {}, recent: async () => [], asks: async () => [], ...DELIVERIES_OFF },
     questions: { answer: () => {}, answerReviewed: async () => false },
-    transcripts: { databaseHistory },
+    transcripts: { databaseHistory, lastTurn: UNASKED.lastTurn },
     external: {
       sessions: new ExternalSessions({ providers, excluded: [dataDir], log: console.warn }),
       open: new OpenSessions({ providers, log: console.warn }),
