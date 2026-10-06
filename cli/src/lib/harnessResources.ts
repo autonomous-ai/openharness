@@ -1,14 +1,14 @@
 import { execFile } from 'node:child_process'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { env } from '../config/env.js'
+import { sessionCodexHome } from './engineHomes.js'
 import { promisify } from 'node:util'
 import type { ProcessIdentity } from './terminalTypes.js'
 import { readProcessTelemetry, type ProcessTelemetry } from './harnessTelemetry.js'
 import { macProcessGpuPercent } from './macosProcessGpu.js'
 
 const exec = promisify(execFile)
-type Agent = { agentId: string; processIdentity?: ProcessIdentity | null; engine?: string; codexHome?: string | null }
+type Agent = { agentId: string; processIdentity?: ProcessIdentity | null; engine?: string; codexHome?: string | null; transcriptPath?: string | null }
 export type SharedResourceRoot = { pid: number; start: string; agentIds: string[] }
 export interface ResourceProcess {
   pid: number
@@ -69,7 +69,7 @@ async function sharedCodexRoots(agents: readonly Agent[]): Promise<SharedResourc
   const profiles = new Map<string, string[]>()
   for (const agent of agents) {
     if (agent.engine !== 'codex' || !agent.processIdentity) continue
-    const home = agent.codexHome || env.CODEX_HOME
+    const home = sessionCodexHome(agent)
     profiles.set(home, [...profiles.get(home) ?? [], agent.agentId])
   }
   const roots: SharedResourceRoot[] = []

@@ -3,7 +3,7 @@ import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { env } from '../config/env.js'
-import { adoptEngineHomes, claudeProjectsRoots, codexHomeRoots, launchClaudeConfigDir, launchCodexHome, movedEngineHomes, resetEngineHomes } from './engineHomes.js'
+import { adoptEngineHomes, claudeProjectsRoots, codexHomeRoots, launchClaudeConfigDir, launchCodexHome, movedEngineHomes, resetEngineHomes, sessionCodexHome } from './engineHomes.js'
 
 // The login shell's environment, as the daemon captured it at start-up: none, unless a test says so.
 const shell = vi.hoisted(() => ({ env: {} as NodeJS.ProcessEnv }))
@@ -65,6 +65,15 @@ describe('the homes the person moved', () => {
     expect(movedEngineHomes()).toEqual({ claude: [], codex: [] })
   })
 
+  it('refreshes a previously read home list when another process adopts a new login', () => {
+    writeFileSync(saved(), JSON.stringify({ codex: [join(root, 'previous')] }))
+    expect(codexHomeRoots('/default')).toEqual(['/default', join(root, 'previous')])
+    writeFileSync(saved(), JSON.stringify({ codex: [join(root, 'previous'), join(root, 'new-login')] }))
+    expect(codexHomeRoots('/default')).toEqual(['/default', join(root, 'previous'), join(root, 'new-login')])
+    rmSync(saved())
+    expect(codexHomeRoots('/default')).toEqual(['/default', join(root, 'previous'), join(root, 'new-login')])
+  })
+
   it('still adopts when the data folder cannot be written; the next boot adopts again', () => {
     const blocked = join(root, 'blocked')
     writeFileSync(blocked, 'a file where the folder should be')
@@ -78,6 +87,23 @@ describe('the homes the person moved', () => {
       env.ADAPTER_DATA_DIR = before
     }
     mkdirSync(root, { recursive: true })
+  })
+
+  it('a bound conversation stays in its known home even when the current shell changes or a service has no shell cache', () => {
+    const home = join(root, 'previous-login'), current = join(root, 'current-login')
+    adoptEngineHomes({ CODEX_HOME: home }, defaults)
+    shell.env = { CODEX_HOME: current }
+    try {
+      for (const folder of ['sessions', 'archived_sessions']) {
+        const transcriptPath = join(home, folder, 'thread.jsonl')
+        expect(sessionCodexHome({ transcriptPath })).toBe(home)
+        expect(sessionCodexHome({ transcriptPath, codexHome: '/explicit-profile' })).toBe('/explicit-profile')
+      }
+      expect(sessionCodexHome({ transcriptPath: join(home, 'sessions-other', 'thread.jsonl') })).toBe(current)
+      expect(sessionCodexHome({ transcriptPath: join(home, '..', 'elsewhere', 'thread.jsonl') })).toBe(current)
+      shell.env = {}
+      expect(sessionCodexHome({ transcriptPath: join(home, 'sessions', 'thread.jsonl') })).toBe(home)
+    } finally { shell.env = {} }
   })
 })
 
