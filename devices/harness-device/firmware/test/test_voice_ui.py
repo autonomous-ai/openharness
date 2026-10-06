@@ -135,7 +135,7 @@ worker = source.split('static void worker(', 1)[1].split('case A_VOICE:\n', 1)[1
 draft_worker = source.split('static void worker(', 1)[1].split('case A_DRAFT_COMMAND:', 1)[1].split('case A_CARRY_SEND:', 1)[0]
 harness += 'static void work(action_t a) { switch (a.kind) { case A_VOICE:\n' + worker + 'case A_DRAFT_COMMAND:' + draft_worker + '} }\n'
 for name in ['habitat_tick', 'ui_set_connected', 'ui_show_error', 'ui_cable_toast',
-             'ui_voice_error', 'ui_voice_routed', 'ui_voice_route_abort']:
+             'ui_voice_error', 'ui_voice_routed', 'ui_voice_route_abort', 'ui_voice_start']:
     harness += function(name)
 harness += r'''
 static void reset(void) {
@@ -245,6 +245,8 @@ static void carry_review_fixture(void) {
     draft.emit=draft_command;
 }
 static void test_pro_carry_review(void) {
+    carry_setup();ui_voice_start();work(queued);
+    assert(recording&&s.voice_carry&&s.voice_review&&reviews==1&&!strcmp(last_recipient,"agent"));
     carry_setup();host_features=0;carry_start();assert(!s.voice_open&&!starts);
     for(int invalid=0;invalid<5;invalid++) {
         carry_setup();carry_start();action_t start=queued;

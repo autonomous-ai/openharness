@@ -5559,7 +5559,7 @@ void ui_voice_start(void)
     if ((s.view == HOME || s.view == AGENT) && active())
         COPY(a.id, active()->id);
 #ifdef DEVICE_PRO_COMPANION
-    if (carry.active) { a.value = 3; COPY(a.text, carry.id); }
+    if (carry.active) { a.value = 3; copy(a.text, sizeof carry.id, carry.id); }
 #endif
     dispatch(a);
     display_unlock();
