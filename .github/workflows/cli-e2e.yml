@@ -39,6 +39,11 @@ jobs:
           sudo apt-get update -q
           sudo apt-get install -y -q --no-install-recommends tmux zsh tcsh dash lsof gdb
           sudo sysctl -w fs.inotify.max_user_instances=1024 fs.inotify.max_user_watches=524288
+          insecure=$(zsh -fc 'autoload -U compaudit && compaudit' 2>/dev/null | grep '^/' | sort -u || true)
+          if [ -n "$insecure" ]; then
+            echo "$insecure" | xargs sudo chown root:root
+            echo "$insecure" | xargs sudo chmod g-w,o-w
+          fi
           npm ci --no-audit --no-fund
           mkdir -p ../.harness/validation ../.harness/cores
           git rev-parse HEAD HEAD^{tree} > ../.harness/validation/source.txt
