@@ -581,8 +581,10 @@ Motion requests a 33 ms cadence (about 30 fps). The renderer decodes all nine
 poses once per selected character, blends short eyelid and mood transitions,
 and applies continuous breathing and independent appendage motion. Internal
 scanline interpolation and five affine spans replace per-pixel divisions. The
-640 px home uses a fast 2× bilinear reconstruction of the 320 px source; the
-review uses 384 px. Rendering time is deducted from the next frame's wait.
+640 px home uses the P4's PPA for 2× bilinear reconstruction of the 320 px source,
+with aligned output, a blocking DMA fence and a four-color readback check at
+startup. Software interpolation remains the fallback. The review uses 384 px.
+Rendering time is deducted from the next frame's wait.
 Actual hardware timings are emitted every 150 cached animation frames; a requested
 cadence is not a claim that every hardware frame meets it.
 

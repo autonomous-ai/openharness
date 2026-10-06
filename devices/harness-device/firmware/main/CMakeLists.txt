@@ -61,6 +61,7 @@ if(IDF_TARGET STREQUAL "esp32p4")
         esp_driver_i2c
         esp_driver_gpio
         esp_driver_ledc
+        esp_driver_ppa
         esp_lcd
         esp_lcd_touch
         esp_timer

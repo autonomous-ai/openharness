@@ -7,6 +7,7 @@
 #ifdef ESP_PLATFORM
 #include "esp_timer.h"
 #include "esp_log.h"
+#include "driver/ppa.h"
 #endif
 
 extern const uint8_t living_start[] asm("_binary_pro_living_pack_start");
@@ -20,6 +21,11 @@ static bool transitioning;
 static uint16_t row_pixels[PRO_LIVING_SOURCE];
 static uint32_t rendered_revision;
 static unsigned rendered_size;
+#ifdef ESP_PLATFORM
+static ppa_client_handle_t scaler;
+static uint32_t scale_us;
+static void init_scaler(void);
+#endif
 
 // Decode the selected character once. Blinks and mood changes never inflate
 // assets in a frame. These four fixed allocations also own transition history.
@@ -29,8 +35,13 @@ void pro_living_init(void)
     packed=heap_caps_malloc(PRO_LIVING_RAW_BYTES,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);
     poses=heap_caps_malloc(POSES*PIXELS*2,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);
     work=heap_caps_malloc(PIXELS*4,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);
-    output=heap_caps_malloc(PRO_LIVING_MAX_SIZE*PRO_LIVING_MAX_SIZE*2,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);
+    // PPA owns complete cache lines while writing this output. The other
+    // buffers are CPU inputs; the pinned driver writes them back before DMA.
+    output=heap_caps_aligned_alloc(64,PRO_LIVING_MAX_SIZE*PRO_LIVING_MAX_SIZE*2,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);
     assert(packed && poses && work && output);
+#ifdef ESP_PLATFORM
+    init_scaler();
+#endif
 }
 void pro_living_image(ht_scene_t *scene,unsigned character,unsigned mood,unsigned frame,
                       int x,int y,unsigned size)
@@ -84,10 +95,52 @@ static uint16_t sample(const uint16_t *src,unsigned x,unsigned y,unsigned fx,uns
     unsigned p=y*SIDE+x;
     return mix(mix(src[p],src[p+1],fx),mix(src[p+SIDE],src[p+SIDE+1],fx),fy);
 }
+#ifdef ESP_PLATFORM
+static bool scale_hardware(void)
+{
+    if (!scaler) return false;
+    ppa_srm_oper_config_t job={
+        .in={.buffer=work,.pic_w=SIDE,.pic_h=SIDE,.block_w=SIDE,.block_h=SIDE,
+             .srm_cm=PPA_SRM_COLOR_MODE_RGB565},
+        .out={.buffer=output,.buffer_size=PRO_LIVING_MAX_SIZE*PRO_LIVING_MAX_SIZE*2,
+              .pic_w=SIDE*2,.pic_h=SIDE*2,.srm_cm=PPA_SRM_COLOR_MODE_RGB565},
+        .scale_x=2,.scale_y=2,.mode=PPA_TRANS_MODE_BLOCKING
+    };
+    // The blocking fence includes cache synchronization in ESP-IDF. Neither
+    // work nor output is reused by the renderer until the DMA has completed.
+    esp_err_t result=ppa_do_scale_rotate_mirror(scaler,&job);
+    if(result==ESP_OK)return true;
+    ESP_LOGW("living","PPA unavailable (%d); using software interpolation",result);
+    ppa_unregister_client(scaler);scaler=NULL;
+    return false;
+}
+static void init_scaler(void)
+{
+    ppa_client_config_t config={.oper_type=PPA_OPERATION_SRM,.max_pending_trans_num=1};
+    if(ppa_register_client(&config,&scaler)!=ESP_OK){scaler=NULL;return;}
+    // Read back four constant color regions before displaying hardware output.
+    // This catches byte order, scaling, alignment and cache coherency failures
+    // on the actual board without drawing a diagnostic on the screen.
+    const uint16_t colors[]={0x1019,0xf800,0x07e0,0x001f};
+    for(unsigned y=0;y<SIDE;y++)for(unsigned x=0;x<SIDE;x++)
+        work[y*SIDE+x]=colors[(y>=SIDE/2)*2+(x>=SIDE/2)];
+    if(!scale_hardware())return;
+    for(unsigned y=0;y<2;y++)for(unsigned x=0;x<2;x++) {
+        if(output[(y*SIDE+SIDE/2)*SIDE*2+x*SIDE+SIDE/2]!=colors[y*2+x]) {
+            ESP_LOGW("living","PPA readback failed; using software interpolation");
+            ppa_unregister_client(scaler);scaler=NULL;return;
+        }
+    }
+    ESP_LOGI("living","PPA 2x bilinear scaling verified");
+}
+#endif
 static void scale(unsigned size)
 {
     if (size==SIDE) {memcpy(output,work,PIXELS*2);return;}
     if (size==SIDE*2) {
+#ifdef ESP_PLATFORM
+        if(scale_hardware())return;
+#endif
         // Exact 2x bilinear reconstruction: only shifts/adds, no divisions or
         // per-pixel coordinate work on the full-size home surface.
         for (unsigned y=0;y<SIDE;y++) {
@@ -189,7 +242,13 @@ static void animate(unsigned character,unsigned mood,unsigned frame,unsigned siz
             }
         }
     }
+#ifdef ESP_PLATFORM
+    int64_t scaling_started=esp_timer_get_time();
+#endif
     scale(size);
+#ifdef ESP_PLATFORM
+    scale_us=(uint32_t)(esp_timer_get_time()-scaling_started);
+#endif
 }
 void pro_living_prepare(ht_scene_t *scene)
 {
@@ -205,14 +264,15 @@ void pro_living_prepare(ht_scene_t *scene)
 #endif
             animate(id/PRO_LIVING_MOODS,id%PRO_LIVING_MOODS,frame,b->width);
 #ifdef ESP_PLATFORM
-            static uint32_t count,total,maximum;
+            static uint32_t count,total,maximum,scaling;
             uint32_t elapsed=(uint32_t)(esp_timer_get_time()-started);
             if (cached) {
-                count++;total+=elapsed;if(elapsed>maximum)maximum=elapsed;
+                count++;total+=elapsed;scaling+=scale_us;if(elapsed>maximum)maximum=elapsed;
                 if(count==150) {
-                    ESP_LOGI("living","animation frames=%lu mean_us=%lu max_us=%lu size=%u",
-                        (unsigned long)count,(unsigned long)(total/count),(unsigned long)maximum,b->width);
-                    count=total=maximum=0;
+                    ESP_LOGI("living","animation frames=%lu mean_us=%lu max_us=%lu scale_us=%lu size=%u",
+                        (unsigned long)count,(unsigned long)(total/count),(unsigned long)maximum,
+                        (unsigned long)(scaling/count),b->width);
+                    count=total=maximum=scaling=0;
                 }
             }
 #endif

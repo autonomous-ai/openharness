@@ -15,6 +15,7 @@ CODE = r'''
 #include <zlib.h>
 size_t allocations, inflates;
 void *test_allocate(size_t n){allocations++;return malloc(n);}
+void *test_aligned(size_t alignment,size_t n){allocations++;return aligned_alloc(alignment,n);}
 size_t test_inflate(void *dst,size_t cap,const void *src,size_t n){uLongf got=cap;inflates++;return uncompress(dst,&got,src,n)==Z_OK?got:(size_t)-1;}
 static uint16_t pixels[720*720], incremental[720*720], strip[720*720];
 static uint32_t hash(const uint16_t *p,unsigned n){uint32_t h=2166136261;for(unsigned i=0;i<n;i++)h=(h^p[i])*16777619;return h;}
@@ -62,7 +63,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix="harness-pro-visual-") as directory:
         out=Path(directory)
         (out/"test.c").write_text(CODE)
-        (out/"esp_heap_caps.h").write_text("#pragma once\n#include <stddef.h>\n#define MALLOC_CAP_SPIRAM 1\n#define MALLOC_CAP_8BIT 2\nvoid *test_allocate(size_t);\nstatic inline void *heap_caps_malloc(size_t n,unsigned flags){(void)flags;return test_allocate(n);}\n")
+        (out/"esp_heap_caps.h").write_text("#pragma once\n#include <stddef.h>\n#define MALLOC_CAP_SPIRAM 1\n#define MALLOC_CAP_8BIT 2\nvoid *test_allocate(size_t);\nvoid *test_aligned(size_t,size_t);\nstatic inline void *heap_caps_malloc(size_t n,unsigned flags){(void)flags;return test_allocate(n);}\nstatic inline void *heap_caps_aligned_alloc(size_t a,size_t n,unsigned flags){(void)flags;return test_aligned(a,n);}\n")
         (out/"esp_log.h").write_text("#pragma once\n#define ESP_LOGI(...) ((void)0)\n")
         (out/"miniz.h").write_text("#pragma once\n#include <stddef.h>\n#define TINFL_FLAG_PARSE_ZLIB_HEADER 1\nsize_t test_inflate(void*,size_t,const void*,size_t);\nstatic inline size_t tinfl_decompress_mem_to_mem(void *d,size_t c,const void *s,size_t n,int f){(void)f;return test_inflate(d,c,s,n);}\n")
         pack=str((GENERATED/"pro_living.pack").resolve()).replace("\\","\\\\").replace('"','\\"')
