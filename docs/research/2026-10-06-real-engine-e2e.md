@@ -20,7 +20,7 @@ Select `REAL_ENGINE=claude`, `codex`, or `all` (default). Provide credentials th
 - Codex: `CODEX_API_KEY` or `OPENAI_API_KEY`, forwarded as an environment variable referenced by a fresh custom provider's `env_key`. Never run `codex login` or write `auth.json`.
 - Pin models for reproducibility with `REAL_CLAUDE_MODEL` / `REAL_CODEX_MODEL`; record the selected model and installed CLI versions, not credentials.
 
-Missing selected credentials are an unavailable preflight result with a nonzero exit, before an engine, tmux server or daemon is started. Never copy a real home, auth file, CLI settings, shell profile, plugin or MCP configuration. Never call `/login`, `/logout`, credential helpers or a keychain command. Environment values are not placed in shell argv, configuration text or diagnostics.
+Missing selected credentials are an unavailable preflight result with a nonzero exit, before an engine, tmux server or daemon is started. Never copy a real home, auth file, CLI settings, shell profile, plugin or MCP configuration. Never call `/login`, `/logout`, credential helpers or a keychain command. Credential values are not placed in shell argv, configuration text or diagnostics.
 
 A sanitized launcher starts the test worker with a new HOME, XDG folders, TMPDIR, ZDOTDIR, CLAUDE_CONFIG_DIR, CODEX_HOME, daemon data/runtime/auth and npm cache. It clears inherited TMUX/TMUX_PANE and creates TMUX_TMPDIR. Every case gets its own IsolatedDaemon/private socket/free port; hook containment is checked before start and on cleanup. Replace the fixture's fake-engine launchers with references to resolved real binaries; refuse fallback to a fake. Model tools operate only on tiny synthetic project files.
 
@@ -40,7 +40,7 @@ Claude documents OAuth environment authentication and per-config-directory crede
 
 ## Failure and resource policy
 
-One worker, bounded startup/turn/teardown waits, one attempt per case, and a whole-run deadline. Prompts are short, tools bounded and local, and compaction input has a fixed size. The runner does not switch models or increase retries after a rate-limit, billing, authentication or provider error. Those are reported separately from daemon assertion failures. Running the opt-in suite uses the selected accounts' inference quota.
+One worker, bounded startup/turn/teardown waits, one attempt per case, and a whole-run deadline. Prompts are short, tools bounded and local, and compaction input has a fixed size. The runner does not switch models or increase retries after a rate-limit, billing, authentication or provider error. Those must be diagnosed separately from daemon assertion failures. Running the opt-in suite uses the selected accounts' inference quota.
 
 The first prototype stops at the first failed case. Each case has a five-minute deadline, the local hold command expires after 90 seconds, and the whole run expires after 45 minutes. It does not yet classify provider failures automatically; the retained redacted pane and daemon log are the evidence for that diagnosis. UI selectors and native-record assertions are provisional until a credentialed run verifies them against the installed versions. In particular, a different trust/onboarding screen, a model refusing to spawn a child, or no actual compaction fails the case rather than weakening its assertion.
 

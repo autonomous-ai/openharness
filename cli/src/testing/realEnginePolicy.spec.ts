@@ -50,7 +50,7 @@ describe('real-engine opt-in boundary', () => {
     for (const key of ['HOME', 'CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'ZDOTDIR', 'TMPDIR', 'TMUX_TMPDIR',
       'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME', 'XDG_STATE_HOME', 'ADAPTER_DATA_DIR',
       'ADAPTER_RUNTIME_DIR', 'HARNESS_AUTH_DIR', 'DSH_DIR', 'npm_config_cache']) {
-      expect(child[key], key).toMatch(/^\/tmp\/real-engine-test\//)
+      expect(child[key]?.replaceAll('\\', '/'), key).toMatch(/^\/tmp\/real-engine-test\//)
     }
     for (const key of ['TMUX', 'TMUX_PANE', 'BASH_ENV', 'ENV', 'NODE_OPTIONS', 'ANTHROPIC_API_KEY',
       'ANTHROPIC_BASE_URL', 'OPENAI_BASE_URL', 'E2E_ARTIFACTS_DIR', 'E2E_BUNDLE_PATH', 'CLAUDE_PATH', 'CODEX_PATH']) {
