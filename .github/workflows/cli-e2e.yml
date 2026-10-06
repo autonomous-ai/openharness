@@ -71,9 +71,17 @@ jobs:
           # starts dozens of daemons one after another; the runner's default instance limit is 128.
           sudo sysctl -w fs.inotify.max_user_instances=1024 fs.inotify.max_user_watches=524288
           tmux -V && zsh --version && tcsh --version && command -v dash
-          # The completion folders zsh's global zshrc would audit (compinit asks before it uses any
-          # others can write); printed for the record, as the panes of a failing test are kept too.
-          zsh -fc 'autoload -U compaudit && compaudit' || true
+          # Ubuntu's global zshrc runs compinit, which stops at "insecure directories ... continue [y]
+          # or abort compinit [n]?" when a completion folder is writable by others or owned by someone
+          # else, and the runner image ships /usr/share/zsh and its vendor-completions that way: every
+          # zsh agent's pane waited at that question and no engine started. A person's machine has
+          # none, or they fix it as zsh says, which is this. Fails here if any is left.
+          insecure=$(zsh -fc 'autoload -U compaudit && compaudit' 2>/dev/null | grep '^/' | sort -u || true)
+          if [ -n "$insecure" ]; then
+            echo "$insecure" | xargs sudo chown root:root
+            echo "$insecure" | xargs sudo chmod g-w,o-w
+          fi
+          zsh -fc 'autoload -U compaudit && compaudit'
       - run: npm ci --no-audit --no-fund
       # The complete file list, before sharding: the summary requires each file exactly once.
       - name: Discover the complete end-to-end inventory
