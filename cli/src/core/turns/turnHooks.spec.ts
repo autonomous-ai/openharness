@@ -101,6 +101,32 @@ describe('turn hooks', () => {
       expect(run.deps.emit).toHaveBeenCalledTimes(1)
     })
 
+    // A /goal loop: a pass a blocking Stop hook continued is the transcript's to close. The Stop of the pass
+    // before it reached the daemon 520 ms after the next pass had started (end to end, under load), and
+    // force-closed that pass after the grace while it ran.
+    it('leaves a pass a blocking Stop hook continued to the transcript, unless the Stop is a failure', async () => {
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+      const run = setup('claude')
+      const state = { turnOpen: true, pendingTools: new Map(), continued: true } as unknown as TurnState
+      run.normalizers.turnStates.set('s1', state)
+      run.hooks.onTurnStop({ sessionId: 's1' })
+      await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS)
+      expect(run.deps.mirror.noteEngineStopped).toHaveBeenCalledWith('s1')
+      // The same, when the drain after the grace reads the pass's start.
+      state.continued = false
+      vi.mocked(run.deps.drain).mockImplementationOnce(async () => {}).mockImplementationOnce(async () => { state.continued = true })
+      run.hooks.onTurnStop({ sessionId: 's1' })
+      await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS)
+      expect(state.turnOpen).toBe(true)
+      expect(run.deps.emit).not.toHaveBeenCalled()
+      // A StopFailure is the API failing in the pass itself: closed, as any wedged turn is.
+      run.hooks.onTurnStop({ sessionId: 's1', status: 'error' })
+      await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS)
+      expect(state.turnOpen).toBe(false)
+      expect(run.deps.emit).toHaveBeenCalledWith('s1', END)
+      expect(String(log.mock.calls[0][0])).toContain('force-closed by StopFailure hook')
+    })
+
     it('says Stop for a clean stop', async () => {
       const log = vi.spyOn(console, 'log').mockImplementation(() => {})
       const run = setup('claude')

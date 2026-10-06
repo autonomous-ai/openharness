@@ -20,7 +20,9 @@
 // the engine does and runs it only if allowed, `!flood <KiB>` prints that much to the terminal, in
 // numbered lines, the way a build log or a long diff does, `!clear` starts a new conversation in the
 // same pane as Claude Code's `/clear` and Codex's `/new` do, `!compact` compacts the conversation as
-// `/compact` does (a real `/compact` (Claude Code) is written exactly as Claude Code writes it, with no turn) (and Claude Code then announces the same session again), `!compactmid` compacts in the
+// `/compact` does (a real `/compact` (Claude Code) is written exactly as Claude Code writes it, with no turn) (and Claude Code then announces the same session again), `!goalloop <condition>`
+// (Claude Code) works on after its first stop because the /goal hook refused it (`!goalpause <condition>`:
+// refused, and the goal paused with no further output), `!compactmid` compacts in the
 // middle of a turn as an automatic compaction does, `!version` answers with the version this
 // process is, `!goal` and `!goal done` (Codex) start and achieve a goal the way Codex 0.160 shows one
 // under its composer, `!browse` (Codex) leaves Codex browsing its transcript in its default fullscreen
@@ -1211,6 +1213,52 @@ export async function run(engine, config = {}, { native = false } = {}) {
       const answer = `<send_user_message_question_reply>\n${JSON.stringify([{ answer: directive[2] || 'Postgres', question, questionItemId: JSON.stringify([id]) }])}\n</send_user_message_question_reply>`
       codex('response_item', { type: 'message', role: 'user', content: [{ type: 'input_text', text: answer }] })
       codex('event_msg', { type: 'item_completed', turn_id: open, item: { type: 'UserMessage', id: `${id}-reply`, content: [{ type: 'text', text: answer, text_elements: [] }] } })
+    }
+    if (engine === 'claude' && directive?.[1] === 'goalpause') {
+      // The same refusal, after which Claude Code pauses the goal instead of working on (real 2.1.283): two
+      // notices and its turn_duration, with no output and no further Stop hook.
+      const condition = directive[2] || 'the work is done'
+      claude({ type: 'assistant', message: { id: `msg_${turn}_p1`, role: 'assistant', model: config.claudeModel ?? 'claude-opus-5-5', content: [{ type: 'text', text: `first pass at: ${condition}` }], stop_reason: 'end_turn' } })
+      say(`\r\nfirst pass at: ${condition}\r\n`)
+      await runHooks('Stop', { stop_hook_active: false })
+      claude({ type: 'user', isMeta: true, promptId: randomUUID(), message: { role: 'user', content: `Stop hook feedback:\n[goal]: not met yet: ${condition}` } })
+      claude({ type: 'attachment', attachment: { type: 'goal_status', met: false, condition, reason: 'one check still fails' } })
+      claude({ type: 'system', subtype: 'stop_hook_summary', hookCount: 1, hookInfos: [], hookErrors: [], preventedContinuation: false, stopReason: '', hasOutput: false, level: 'suggestion' })
+      claude({ type: 'system', subtype: 'informational', content: 'A hook blocked the stop again — pausing the goal.', level: 'notice' })
+      claude({ type: 'system', subtype: 'informational', content: 'Goal paused · /goal to resume', level: 'notice' })
+      claude({ type: 'system', subtype: 'turn_duration', durationMs: 5_000, messageCount: 6 })
+      say('Goal paused\r\n')
+      open = null
+      return
+    }
+    if (engine === 'claude' && directive?.[1] === 'goalloop') {
+      // Claude Code's /goal, its condition not met at the first stop, as 2.1.283 writes it: the answer and
+      // its Stop hooks, then the goal hook's refusal (a hidden feedback line, the goal's status and the
+      // hooks' summary) and the next pass in the SAME turn, with no prompt line between; a tool runs in it.
+      // The daemon closed the turn at the first stop and read the next pass as no turn at all.
+      //
+      // The first pass's Stop reaches the daemon only once the next pass is on disk, as a loaded daemon took
+      // it in a full end-to-end run (520 ms after that pass started): the CLI waits for its hook commands,
+      // but the hook's request can be read after it has gone on. So the hooks run once the pass has begun.
+      const condition = directive[2] || 'the work is done'
+      const model = config.claudeModel ?? 'claude-opus-5-5'
+      const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+      claude({ type: 'assistant', message: { id: `msg_${turn}_g1`, role: 'assistant', model, content: [{ type: 'text', text: `first pass at: ${condition}` }], stop_reason: 'end_turn' } })
+      say(`\r\nfirst pass at: ${condition}\r\n`)
+      claude({ type: 'user', isMeta: true, promptId: randomUUID(), message: { role: 'user', content: `Stop hook feedback:\n[goal]: not met yet: ${condition}` } })
+      claude({ type: 'attachment', attachment: { type: 'goal_status', met: false, condition, reason: 'one check still fails' } })
+      claude({ type: 'system', subtype: 'stop_hook_summary', hookCount: 1, hookInfos: [], hookErrors: [], preventedContinuation: false, stopReason: '', hasOutput: false, level: 'suggestion' })
+      const id = `call_${turn}_g`
+      claude({ type: 'assistant', message: { id: `msg_${turn}_g2`, role: 'assistant', model, content: [{ type: 'tool_use', id, name: 'Bash', input: { command: 'make check' } }], stop_reason: 'tool_use' } })
+      await pause(600)
+      const lateStop = runHooks('Stop', { stop_hook_active: false })
+      await pause(Number(config.goalPassMs) || 4_000)
+      await lateStop
+      claude({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: 'all checks pass' }] } })
+      await finish(`goal met: ${condition}`)
+      claude({ type: 'attachment', attachment: { type: 'goal_status', met: true, condition, reason: 'all checks pass' } })
+      claude({ type: 'system', subtype: 'turn_duration', durationMs: 6_000, messageCount: 8 })
+      return
     }
     if (directive?.[1] === 'version') { await finish(versionLine); return }
     if (engine === 'codex' && directive?.[1] === 'goal') {
