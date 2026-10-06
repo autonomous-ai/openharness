@@ -47,9 +47,12 @@ class Terminal {
 
   /** Opens it, or rejects with the `terminal_error` code the daemon answered. */
   static async open(client: LocalClient, agentId: string, options: Record<string, unknown> = {}): Promise<Terminal> {
+    // Found by QA on a quiet machine: ws can deliver the keyframe alongside terminal_ready,
+    // before this await continues. Keep every frame from the request onward.
+    const since = client.binaries.length
     const answer = await Terminal.answer(client, { agentId, cols: 100, rows: 30, ...options })
     if (answer.type !== 'terminal_ready') throw new Error(String(answer.payload?.code))
-    return new Terminal(client, agentId, answer.payload!, client.binaries.length)
+    return new Terminal(client, agentId, answer.payload!, since)
   }
 
   /** The frame `terminal_open` is answered with: `terminal_ready`, or `terminal_error` naming why. */
