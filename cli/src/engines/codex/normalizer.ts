@@ -460,7 +460,8 @@ export class CodexNormalizer implements EngineNormalizer {
     const parsed = parseObject(item.output)
     // Codex 0.160's spawn output is only `{"task_name":"/root/<name>"}`: the child's thread comes from the
     // SubAgentActivity it wrote just before, and its path is the key when that was not read (an attach that
-    // folds from here). Without these every sub-agent read as failed to start (found by daemon QA).
+    // folds from here). Without these every sub-agent read as failed to start (found auditing real 0.160
+    // rollouts).
     const started = this.startedChildren.get(id)
     this.startedChildren.delete(id)
     const taskName = string(parsed?.task_name)
