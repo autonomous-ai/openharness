@@ -13,8 +13,10 @@ describe the actual running version. Preserve the user's existing instructions.
 
 Help the user accomplish their task directly. Create projects under `~/projects`.
 Agents use their normal model selection and authentication; do not promise free
-model access or change providers without a task reason. The full image supplies
-the default agent independently of the session RPM.
+model access or change providers without a task reason. The session RPM includes
+OpenCode and its upstream license. Its pinned binary and package checksums are
+recorded in `/usr/share/harness-os/opencode.json`; no agent download is needed to
+open the first pane. Conversations with remote models still need a connection.
 
 Use New Harness for another agent and New terminal for an immediate shell.
 Ctrl+b, then Shift+n opens New Harness; Ctrl+b, then Shift+t opens a terminal.
@@ -50,8 +52,8 @@ Keep macOS and Apple recovery available; do not use the PC installer on this pat
 Install the verified private session RPM, then install Fedora's `greetd` package
 with `sudo dnf install greetd`. Fedora supplies its PAM configuration and, on a
 system with the targeted SELinux policy, its matching `greetd-selinux` dependency.
-Keep those policies enabled and unchanged. Chromium and the default agent remain
-separate prerequisites for their respective session features.
+Keep those policies enabled and unchanged. OpenCode is included; Chromium is a
+separate prerequisite for the optional browser.
 
 Choose an existing local account with a usable password and existing permission
 to run setup through sudo. First verify its password login and sudo from another

@@ -203,6 +203,15 @@ def exercise(vm, result):
     vm.frame('02-agent', ['OpenCode', 'Ask anything'])
     output, _ = vm.command('pgrep -u 1000 -x opencode | head -1')
     pid = re.search(r'(?m)^\d+\r?$', output)[0].strip()
+    if result.get('package', {}).get('agent'):
+        agent = result['package']['agent']
+        vm.command('rpm -V harness-os-session')
+        vm.command('test "$(readlink /proc/' + pid + '/exe)" = /usr/lib/harness-opencode/opencode')
+        vm.command('test "$(rpm -qf --qf ' + shlex.quote('%{NAME}') +
+                   ' /usr/lib/harness-opencode/opencode)" = harness-os-session')
+        vm.command('printf %s ' + shlex.quote(agent['files']['opencode']['sha256'] +
+                   '  /usr/lib/harness-opencode/opencode\n') + ' | sha256sum -c -')
+        result['checks'].append('The actual first agent executes the RPM-owned, checksum-pinned ARM binary on the 16 KiB kernel')
     output, _ = vm.command('readlink /proc/' + pid + '/cwd')
     match = re.search(r'/home/me/projects/[a-zA-Z0-9._-]+', output)
     if not match:
@@ -460,7 +469,7 @@ def main():
         print('Build a fresh signed Fedora session without a desktop', flush=True)
         run(['docker', 'run', '--name', container, '--platform', 'linux/arm64', '--memory=4g', '--cpus=2', '--pids-limit=1024',
              '--mount', f'type=bind,source={inputs},target=/inputs,readonly', graphical['root_image'], 'bash', '/inputs/provision'], timeout=1200)
-        for source_path, name in [('/harness-packages.tsv', 'packages.tsv'), ('/opt/harness-agent/package-lock.json', 'agent-lock.json')]:
+        for source_path, name in [('/harness-packages.tsv', 'packages.tsv'), ('/usr/share/harness-os/opencode.json', 'agent-lock.json')]:
             run(['docker', 'cp', container + ':' + source_path, output / name])
         archive, root, disk = work / 'root.tar', work / 'root', work / 'guest.raw'
         root.mkdir()

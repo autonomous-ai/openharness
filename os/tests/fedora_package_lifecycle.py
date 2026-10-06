@@ -247,6 +247,12 @@ def main():
                 assert digest(Path('/') / relative) == sha256, 'Installed bytes differ: ' + relative
             for relative, target in metadata['symlinks'].items():
                 assert os.readlink(Path('/') / relative) == target
+            agent = metadata['agent']
+            assert agent == json.loads(Path('/usr/share/harness-os/opencode.json').read_text())
+            assert run('runuser', '-u', 'harness-rpm-probe', '--', '/usr/bin/opencode', '--version').stdout.strip() == agent['version']
+            assert run('rpm', '-qf', '--qf', '%{NAME}', '/usr/bin/opencode').stdout == 'harness-os-session'
+            assert run('rpm', '-qf', '--qf', '%{NAME}', '/usr/lib/harness-opencode/opencode').stdout == 'harness-os-session'
+            assert '/usr/share/licenses/harness-opencode/LICENSE' in installed
             owners = run('rpm', '-q', '--qf', '[%{FILEUSERNAME}\t%{FILEGROUPNAME}\n]', 'harness-os-session').stdout
             assert all(line == 'root\troot' for line in owners.splitlines())
             after = preservation_snapshot('after-' + label, before, preserved)
