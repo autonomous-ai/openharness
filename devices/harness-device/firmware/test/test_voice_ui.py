@@ -43,7 +43,7 @@ static bool cable_client_supports(uint32_t features) { return (host_features & f
 #include "workspace.h"
 #include "pro_work_intent.h"
 #include "pro_metrics.h"
-enum { HOME, AGENTS, AGENT, COMPANION, VOICE, MESSAGE, SELECTION, FORM, QUESTION, CHOICE, ANSWER_REVIEW, DRAFT, DRAFT_OPTIONS, INBOX, LAUNCHER, WORK_INTENT, TODAY, CARRY_PREVIEW, VOICE_SAMPLES, VOICE_PARAMS };
+enum { HOME, AGENTS, AGENT, COMPANION, VOICE, MESSAGE, SELECTION, FORM, QUESTION, CHOICE, ANSWER_REVIEW, DRAFT, DRAFT_OPTIONS, INBOX, LAUNCHER, WORK_INTENT, TODAY, CARRY_PREVIEW, VOICE_SAMPLES, VOICE_PARAMS, READER };
 enum { A_VOICE, A_VOICE_STOP, A_VOICE_ABORT, A_WORK_INTENT, A_WORK_MODE, A_WORK_RECORD,
     A_DRAFT_EDIT, A_DRAFT_APPEND, A_DRAFT_UNDO, A_DRAFT_SEND, A_DRAFT_DISCARD, A_DRAFT_STATE, A_DRAFT_OPTIONS, A_DRAFT_BACK, A_CARRY_PREVIEW, A_DRAFT_COMMAND };
 enum { VOICE_CMD_NONE, VOICE_CMD_GOAL, VOICE_CMD_LOOP };
@@ -66,6 +66,7 @@ static struct {
     int voice_question_index;
     char title[80], message[256], voice_target[64], pending_focus[64], pending_machine[64], opening_notice[48];
     char notice_host[48], selected_tab[48];
+    struct { int row; } reader;
     char work_agent[64], work_host[48]; uint32_t work_revision, work_generation, work_roster_after; bool work_roster_pending; uint8_t work_mode, work_voice_mode;
     struct { char machine[48], session[80], engine[12]; } work_capture;
     cable_machine_t machines[2]; int machine_count;
@@ -152,6 +153,8 @@ harness += r'''
 #ifdef DEVICE_PRO_COMPANION
 // Notification lifetime is exercised with real callbacks in test_pro_question_lifetime.py.
 static void pro_notice_source(const char *host) { (void)host; }
+// Full cache/owner resets are covered by the production reader replay.
+static void pro_result_source_reset(void) {}
 static bool pro_draft_store_queue(bool clear) {
     if(clear){ht_draft_reset(&draft);memset(&s.carry_review,0,sizeof s.carry_review);pro_draft_recovery_close(&s.draft_recovery);view(HOME);}
     else s.draft_recovery.store=PRO_RECOVERY_SAVED;

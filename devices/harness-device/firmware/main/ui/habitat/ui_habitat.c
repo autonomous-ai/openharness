@@ -2674,14 +2674,14 @@ static action_t make_action(hit_t h)
     }
     if (s.view==INBOX && h.action==A_READER && h.value==1 && s.offset>=0 && s.offset<s.notice_count) {
         COPY(a.id,s.notice[s.offset].agent_id);
-        COPY(a.text,s.notice_host);
+        copy(a.text,sizeof s.notice_host,s.notice_host);
         a.dy=(int)s.result_generation;
         a.revision=s.notice[s.offset].display_revision;
         return a;
     }
     if (h.action==A_READER) {
         if (active()) COPY(a.id,active()->id);
-        COPY(a.text,s.notice_host);
+        copy(a.text,sizeof s.notice_host,s.notice_host);
         a.dy=(int)s.result_generation;
         return a;
     }
