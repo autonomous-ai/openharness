@@ -1420,6 +1420,29 @@ describe('models other apps downloaded, started in their own app', () => {
     expect(joinedAliases.size).toBe(0)
   })
 
+  it('settles a background app scan and its saved receipt before returning', async () => {
+    // Found by QA on a quiet machine: teardown removed receipts while an app scan was still saving them.
+    let scans = 0
+    let finishScan!: (models: AppModel[]) => void
+    service = new LocalModels({ stateDir, processEnv: { GRID_HOME: home }, run, request: request as typeof fetch, inventory,
+      appModels: () => ++scans === 1 ? Promise.resolve([ollama]) : new Promise(resolve => { finishScan = resolve }),
+      appEngines: ops as unknown as AppEngineOps })
+    await service.list('home')
+    await service.list('home', true)
+    const settled = vi.fn()
+    const drained = service.settled().then(settled)
+    try {
+      await new Promise(resolve => setImmediate(resolve))
+      expect(settled).not.toHaveBeenCalled()
+    } finally {
+      finishScan([{ ...ollama, name: 'after the scan' }])
+      await vi.waitFor(async () => {
+        expect(JSON.parse(await readFile(join(stateDir, 'app-models.json'), 'utf8'))[0].name).toBe('after the scan')
+      })
+      await drained
+    }
+  })
+
   it('starts nothing that cannot get 64K beside its weights', async () => {
     apps = [{ ...ollama, sizeBytes: 60 * GiB }]
     const models = appService()
