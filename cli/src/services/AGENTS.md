@@ -108,5 +108,7 @@ all inside the core's process (for debugging or a quick way back).
 ## Do not
 
 - Do not keep state the core needs. If the core would break without your data, it is not a service.
-- Do not hold credentials. Ask `core.account`.
+- Do not hold credentials. Ask `core.account`: a token (`accessToken`, with one forced refresh after a
+  401) or, to seal for one of the owner's other machines, the gateway's session with it (`lane`, as the
+  fleet's lane does: `src/device/deviceLink.ts`). This machine's E2EE identity is the gateway's alone.
 - Do not write to tmux, the registry or another service's files.

@@ -17,8 +17,6 @@ import type { CoreApi, CorePorts, RouteAnswer } from '../core/api.js'
 import { DeviceFleet } from '../device/deviceFleet.js'
 import { DeviceLink } from '../device/deviceLink.js'
 import type { MachineListCache } from '../device/machineList.js'
-import type { AuthSessionManager } from '../lib/authSession.js'
-import type { Identity } from '../lib/e2ee/core.js'
 import { MachinePeerStore } from '../lib/e2ee/machinePeers.js'
 import { routeVoiceTask, type RouterAgent } from '../lib/voiceRouter.js'
 import { FleetRouter } from './fleetRouter.js'
@@ -54,15 +52,9 @@ export interface FleetDeps {
   machineName(): string
   /** The window's tiles on its active tab, in tile order, as it last reported them. */
   desk(): string[]
-  /**
-   * What the lane signs in and seals with, until it moves with the relay (step D3): the daemon's own
-   * session manager, which shares a refresh in flight with the backend socket; the account's
-   * environment; and this machine's E2EE identity, the one `harness link connect` proves knowledge
-   * against.
-   */
-  auth: AuthSessionManager
+  /** The account's environment, which the lane names when it dials. Its tokens and its seal are the
+   *  core's to give (`core.account`): this service holds no credential. */
   autonomousEnv: string
-  identity: Identity
 }
 
 /** Start the fleet: its port, through which ⌘K and the dial reach the router. The router itself is
@@ -85,13 +77,15 @@ export function startFleet(core: CoreApi, ports: CorePorts, deps: FleetDeps): Fl
 
   const peers = new MachinePeerStore()
   const link = new DeviceLink({
-    auth: deps.auth,
+    // Signed in and sealed through the core (step 10, R3): its tokens are the core's session's, which
+    // shares a refresh in flight with the backend link, and its E2EE sessions are the gateway's, under the
+    // SAME identity `harness remote-password set` publishes and `harness link connect` proves knowledge
+    // against, so one link ceremony covers the desktop app's relay and the dial's lane alike.
+    auth: { accessToken: (options) => core.account.accessToken(options) },
     backendWsBase: env.BACKEND_WS_URL,
     computerId: deps.computerId(),
     autonomousEnv: deps.autonomousEnv,
-    // The SAME identity `harness remote-password set` publishes and `harness link connect` proves
-    // knowledge against, so one link ceremony covers the desktop app's relay and the dial's lane alike.
-    identity: deps.identity,
+    seal: core.account.lane,
     // Read FRESH on every attach: `harness link connect` runs as a separate process, so a value captured
     // at daemon start would keep answering "not linked" until the next restart.
     peer: (machineId) => peers.get(machineId),

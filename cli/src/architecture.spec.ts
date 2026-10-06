@@ -206,7 +206,12 @@ const SERVICE_MAY_IMPORT: Record<string, string> = {
 //
 // Connected TUI shells added a literal-argv launch port and shell service (#893, 160 loaded lines); moving
 // the search filename out of its CLI command removed 188, so that change lowered the closure by 28.
-const CORE_CLOSURE_BUDGET = 95_800
+//
+// Then at 95,340 in 416 (step 10, R3), from 95,757 in 420: the fleet's lane seals through the gateway, so
+// the session crypto it ran in the core's process (lib/e2ee/relayClient.ts and what it loads) is the
+// gateway's alone, and the Share relay (sharing/relay.ts) runs in the gateway with the relay's other sockets.
+// What a service in its own process may ask of the account (core/accountQueries.ts) is the 41 lines added.
+const CORE_CLOSURE_BUDGET = 95_440
 
 /** What is not the core's, by path: each goes to a service or its own process, in the plan's order. */
 const EDGE: RegExp[] = [
@@ -277,14 +282,10 @@ const CORE_MAY_REACH: Record<string, string> = {
   'lib/autonomous-device/storeContract.ts': 'step 10: the Wi-Fi device, into the devices process over the gateway',
   'lib/autonomous-device/storeRuntime.ts': 'step 10: the Wi-Fi device, into the devices process over the gateway',
   'lib/autonomous-device/stream.ts': 'step 10: the Wi-Fi device, into the devices process over the gateway',
-  'lib/e2ee/applicationFrames.ts': 'step 10, R3: the fleet\'s lane, signed and sealed through the gateway',
-  'lib/e2ee/core.ts': 'step 8: Share seals its own frames with it (and R3: the fleet\'s lane)',
-  'lib/e2ee/machinePeers.ts': 'step 10, R3: the fleet\'s lane, signed and sealed through the gateway',
+  'lib/e2ee/core.ts': 'step 8: Share seals its own frames with it',
+  'lib/e2ee/machinePeers.ts': 'step 9: the fleet reads which machines are linked (their public keys, no credential), beside the dial',
   'lib/e2ee/passwordPake.ts': 'with lib/e2ee/store.ts',
-  'lib/e2ee/relayClient.ts': 'step 10, R3: the fleet\'s lane, signed and sealed through the gateway',
-  'lib/e2ee/replayWindow.ts': 'step 10, R3: the fleet\'s lane, signed and sealed through the gateway',
-  'lib/e2ee/store.ts': 'step 8 and R3: this machine\'s identity, for Share and the fleet\'s lane',
-  'lib/e2ee/terminalSeal.ts': 'step 10, R3: the fleet\'s lane, signed and sealed through the gateway',
+  'lib/e2ee/store.ts': 'step 8: this machine\'s identity, for Share\'s owner',
   'lib/gridAttach.ts': 'step 7: models, in its own process',
   'lib/gridCredentials.ts': 'step 7: models, in its own process',
   'lib/gridDerive.ts': 'step 7: models, in its own process',
@@ -320,7 +321,6 @@ const CORE_MAY_REACH: Record<string, string> = {
   'sharing/grants.ts': 'step 8: the experimental host',
   'sharing/owner.ts': 'step 8: the experimental host',
   'sharing/protocol.ts': 'step 8: the experimental host',
-  'sharing/relay.ts': 'step 8: the experimental host',
   'sharing/viewer.ts': 'step 8: the experimental host',
   'teams/channels.ts': 'step 8: the experimental host',
   'teams/client.ts': 'step 8: the experimental host',

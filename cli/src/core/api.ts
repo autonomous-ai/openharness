@@ -108,8 +108,13 @@ export interface CoreApi {
     /** The account's private grid name, minted and remembered by the backend; null when an older
      *  backend issues none. Bounded in time. */
     mintGridName(): Promise<string | null>
-    /** This machine's harness access token, for handing a sign-in to grid. Rejects when signed out. */
-    accessToken(): Promise<string>
+    /** This machine's harness access token, for handing a sign-in to grid or dialling the fleet's lane.
+     *  Rejects when signed out. `force` refreshes it (once, after a 401 for `failedToken`): the core's one
+     *  session manager shares a refresh in flight with the backend link. */
+    accessToken(options?: { force?: boolean; failedToken?: string }): Promise<string>
+    /** The fleet's lane to the owner's other machines, sealed by the gateway with this machine's E2EE
+     *  identity, which no service holds (`LaneSeal`). */
+    lane: LaneSeal
     /** The account's private grid: the backend's word when it gave one, else what this machine works
      *  out (`lib/gridDerive.ts`); null when it has none. */
     privateGridName(): Promise<string | null>
@@ -494,6 +499,41 @@ export interface GatewayEvents {
   toWindows(frame: Record<string, unknown>): void
 }
 
+/**
+ * The fleet's lane to the owner's other machines (device/deviceLink.ts), sealed by the gateway, which holds
+ * this machine's E2EE identity (the one `harness link connect` proves knowledge against). The lane keeps
+ * which machines have a session; the session itself, its keys and its counters, is the gateway's, one per
+ * machine. A gateway that restarted holds none and says so (`lost`): the lane then starts one again, and
+ * sends nothing for that machine in the clear meanwhile.
+ */
+export interface LaneSeal {
+  /** Start a session with a linked machine, pinned to the key `harness link connect` left for it (`peerPub`,
+   *  base64): the hello to send it, in the clear. Replaces any session that machine had. Rejects when the
+   *  gateway cannot start one (it is not running). */
+  hello(machineId: string, peerPub: string): Promise<Record<string, unknown>>
+  /** The machine's welcome to that hello: true once the session is up. */
+  welcome(machineId: string, payload: Record<string, unknown>): Promise<boolean>
+  /** The machine's new keys, for a session that is up. */
+  rekey(machineId: string, payload: Record<string, unknown>): Promise<void>
+  /** A frame for the machine, sealed as its session seals that type (a type it does not seal goes as it is). */
+  seal(machineId: string, frame: Record<string, unknown>): Promise<LaneSealed>
+  /** A sealed frame from the machine, opened; `unreadable` when it does not open (stale, forged, garbled). */
+  open(machineId: string, frame: Record<string, unknown>): Promise<LaneOpened>
+  /** The lane is done with the machine's session. */
+  drop(machineId: string): void
+}
+export type LaneSealed = { frame: Record<string, unknown> } | { lost: true }
+export type LaneOpened = { frame: Record<string, unknown> } | { unreadable: true } | { lost: true }
+/** A service with no lane of the core's: it starts no session and seals nothing, never sends in the clear. */
+export const LANE_OFF: LaneSeal = {
+  hello: () => Promise.reject(new Error('no lane: this process holds no E2EE identity')),
+  welcome: async () => false,
+  rekey: async () => {},
+  seal: async () => ({ lost: true }),
+  open: async () => ({ lost: true }),
+  drop: () => {},
+}
+
 /** An HTTP answer for the daemon's own routes (`harness pair`, `harness devices`, …), as the hook server sends it. */
 export interface HttpAnswer {
   status: number
@@ -561,6 +601,8 @@ export interface GatewayOps {
   /** The owner's machines the backend last said were online, for the trust group's exchanges; null when
    *  the list is not the backend's. */
   reachable(machineIds: string[] | null): void
+  /** The fleet's lane's sessions (`core.account.lane`). */
+  lane: LaneSeal
 }
 
 /** A window on this computer working on another of the owner's machines, through the relay: what the
@@ -581,6 +623,12 @@ export interface WindowRelay {
     onClosed: (code: number, reason: string) => void): Promise<WindowRelaySession>
   invalidate(machineId: string): void
   invalidateIsolated(machineId: string): void
+  /** A window here watching, read-only, a harness someone shared with this account (sharing/relay.ts, the
+   *  Share relay's own socket, `/api/observer-ws`). Fails with the close the window gets: 4403 when the
+   *  share ended or was never there, 1013 when it could not be reached just now. The gateway's has it; a
+   *  bare pool of sessions to other machines (lib/remoteRelay.ts) does not, and shares nothing. */
+  acquireShare?(machineId: string, shareId: string, sink: WindowRelaySink,
+    onClosed: (code: number, reason: string) => void): Promise<WindowRelaySession>
 }
 
 /** Each port is filled by the service that owns it when that service starts, and is null while the
@@ -615,6 +663,7 @@ export interface CoreApiDeps {
   dshInstallStatus: CoreApi['clients']['dshInstallStatus']
   mintGridName: CoreApi['account']['mintGridName']
   accessToken: CoreApi['account']['accessToken']
+  lane: CoreApi['account']['lane']
   privateGridName: CoreApi['account']['privateGridName']
   machineName: CoreApi['account']['machineName']
   runtimeProfile: CoreApi['agents']['runtimeProfile']
@@ -626,7 +675,7 @@ export interface CoreApiDeps {
 
 export function createCoreApi({
   dataDir, registry, stoppedAgents, databaseHistory, externalSessions, openSessions, syncSession, runtimeModels, viewerChanged,
-  gridNamed, gridModelsChanged, dshInstallStatus, mintGridName, accessToken, privateGridName, machineName,
+  gridNamed, gridModelsChanged, dshInstallStatus, mintGridName, accessToken, lane, privateGridName, machineName,
   runtimeProfile, setRuntime, fork, turns, questions, terminals = TERMINALS_OFF,
 }: CoreApiDeps): CoreApi {
   return {
@@ -650,7 +699,7 @@ export function createCoreApi({
     questions,
     transcripts: { databaseHistory },
     external: { sessions: externalSessions, open: openSessions },
-    account: { mintGridName, accessToken, privateGridName, machineName },
+    account: { mintGridName, accessToken, lane, privateGridName, machineName },
     clients: { viewerChanged, gridNamed, gridModelsChanged, dshInstallStatus },
   }
 }

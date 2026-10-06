@@ -13,7 +13,6 @@ import { createDeviceStore, deviceStoreAgents } from '../lib/autonomous-device/s
 import { HarnessShareOwner } from '../sharing/owner.js'
 import { HarnessGrantStore } from '../sharing/grants.js'
 import { HarnessCollaborationStore } from '../sharing/collaboration.js'
-import { HarnessShareRelay, type SharedMachineReference } from '../sharing/relay.js'
 import { SharedViewerPool } from '../sharing/viewer.js'
 import { runningDevicePart, startDevicePart } from '../lib/autonomous-device/parts.js'
 import { readFileSync, writeFileSync, openSync, existsSync, rmSync, statSync } from 'fs'
@@ -148,7 +147,7 @@ import { saveDaemonPort } from '../lib/daemonEndpoint.js'
 import { publishHookRoute } from '../lib/hookRoutes.js'
 import { commandBarService } from '../lib/commandBar.js'
 import { BackendSocket, isLocalClientId } from '../backendSocket.js'
-import { createGatewayLink } from './gatewayLink.js'
+import { createGatewayLink, laneOf } from './gatewayLink.js'
 import { AutonomousDeviceService } from '../lib/autonomous-device/service.js'
 import { autonomousDeviceLocalRequest } from '../lib/autonomous-device/localApi.js'
 import { attachLocalWsServer, LOCAL_WS_PATH, LOCAL_WS_PROTOCOL_VERSION } from '../localWsServer.js'
@@ -673,6 +672,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const externalEngines = externalProviders()
   const externalSessions = new ExternalSessions({ providers: externalEngines, excluded: [env.ADAPTER_DATA_DIR], log: (line) => console.warn(line) })
   const openSessions = new OpenSessions({ providers: externalEngines, log: (line) => console.warn(line) })
+  // The core's one session manager: the backend link, the gateway's dials and the fleet's lane all take
+  // their tokens from it, so a refresh in flight is shared rather than raced.
+  const auth = new AuthSessionManager(backendHttpBase())
   // The core's side of the boundary its services stand on, and the ports it reaches them through (core/api.ts).
   const coreApi = createCoreApi({
     terminals: createTerminalOpener({ tmuxBackend, registry, announceSession, blocksFolder: (cwd) => !!backendRef?.purgeAgentService?.blocksFolder(cwd) }),
@@ -700,7 +702,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       const { headers } = await controlPlaneAuth()
       return (await postJson<{ gridName?: string }>('/api/grid/name', {}, headers, AbortSignal.timeout(GRID_MINT_TIMEOUT_MS))).gridName ?? null
     },
-    accessToken: () => new AuthSessionManager(backendHttpBase()).accessToken(),
+    accessToken: (options) => auth.accessToken(options),
+    // The fleet's lane's sessions are the gateway's, which holds this machine's E2EE identity; it starts
+    // below, before the fleet that seals through it.
+    lane: laneOf(() => gatewayOps.lane),
     // What a device or another machine asks of an agent here: the SAME handlers the backend socket
     // drives, called directly — the slash-command adaptation and the turn and question plumbing live there.
     runtimeProfile: (session) => runtimeProfiles.selectedModel(session),
@@ -772,7 +777,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
    *  control plane is reachable again, which is precisely what an earlier attempt may have lacked. */
   let fullReconcile: (announceDevice?: boolean) => Promise<void> = async () => {}
 
-  const auth = new AuthSessionManager(backendHttpBase())
   // The account's machine id when this computer is signed in; its own durable computer id when it is
   // not. Both are just "the id this daemon serves under" to everything downstream — the local
   // websocket binds clients to it, the app selects by it — and the backend binds a machine to the
@@ -1446,11 +1450,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     publish: (method, path, body) => proxyBackend(method, path, body),
     watchViewer: (id, send) => sharedViewers.watch(id, send),
   })
-  const shareRelay = new HarnessShareRelay(auth, env.BACKEND_WS_URL, autonomousEnv, async () => {
-    const result = await proxyBackend('GET', '/api/harness-shares')
-    if (result.status !== 200) throw new Error('Shared harnesses are temporarily unavailable.')
-    return ((result.body as { data?: { machines?: SharedMachineReference[] } }).data?.machines ?? [])
-  })
 
   /**
    * The machine list a signed-out daemon answers with: this computer, alone.
@@ -1729,10 +1728,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   daemonBoot.hookServer = hookServer
   daemonBoot.localSocket = localSocket
   console.log(`[cli] daemon pid ${process.pid} · v${VERSION}${process.env.ADAPTER_UPDATED_TO ? ' · updated' : ''} · listening on 127.0.0.1:${hookPort}`)
-  // The fleet's lane signs and seals as this machine, with the same on-disk identity `harness link connect`
-  // proves knowledge against (services/fleet.ts). Until it goes through the gateway (step 10, R3).
-  const relayIdentityStore = new E2eeStore()
-  relayIdentityStore.init()
   // The device key log records which sign-in this machine is under: a session from before sign-in epochs
   // gets one first, adopted so it never starts the log over, and the gateway registers with it then.
   if (session?.machineId) void ensureSignInEpoch().catch(() => null).then(() => gatewayOps.account(account()))
@@ -1773,7 +1768,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   })
   const localWsServer = attachLocalWsServer(hookServer, {
     localSocketServer: localSocket?.server ?? null,
-    shareRelay,
     services: serviceLinks,
     onSelectionReply: (connId, machineId, payload) => devices('window', () => windowSelection.reply(connId, machineId, payload)),
     onVisitReply: (connId, machineId, payload) => devices('window', () => windowVisit.reply(connId, machineId, payload)),
@@ -2455,7 +2449,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // The FIXED hook port, released before the successor binds it (no fallback → EADDRINUSE otherwise).
     // Process-owned agents stay in the persisted registry and are revalidated by its first discovery passes.
     ['the hook connections', () => (hookServer as unknown as { closeAllConnections?: () => void }).closeAllConnections?.()],
-    ['the share relay', () => shareRelay.close()], ['the shared viewers', () => sharedViewers.stop()],
+    ['the shared viewers', () => sharedViewers.stop()],
     ['the local websocket', () => localWsServer.close()], ['the hook server', () => hookServer.close()],
     ['the local socket', () => localSocket?.close()], ['Codex activity', () => codexActivity.close()],
     ['the voice router', () => shutdownVoiceRouter()],
@@ -2504,7 +2498,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     normalizers.stopPollers()
     await cursorDiscovery.stop()
     await watcher.stop()
-    shareRelay.close()
     sharedViewers.stop()
     // The data folder's socket first: a successor waiting for this core to leave (lib/localSocket.ts) can
     // start as soon as it is gone, whatever the clients below take to close.
@@ -2561,8 +2554,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   serviceHost.start('fleet', (core, started) => {
     startFleet(core, started, {
       machines: machineListCache, guestMachines: guestMachinesBody, computerId, machineId: () => backend.machineId,
-      machineName: dialMachineName, desk: () => appPaneAgents, auth,
-      autonomousEnv: readAuthSession()?.autonomousEnv ?? env.AUTONOMOUS_ENV, identity: relayIdentityStore.getIdentity(),
+      machineName: dialMachineName, desk: () => appPaneAgents,
+      autonomousEnv: readAuthSession()?.autonomousEnv ?? env.AUTONOMOUS_ENV,
     })
   }, coreApi, FLEET_FALLBACKS)
 

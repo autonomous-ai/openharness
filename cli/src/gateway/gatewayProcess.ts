@@ -11,10 +11,10 @@
  * that kept its socket opens a new session, as it did when both ran in one process.
  */
 import type { GatewayAccount, GatewayEvents, WindowRelaySession } from '../core/api.js'
-import { AuthSessionError } from '../lib/authSession.js'
 import { decodeGatewayBinary, encodeGatewayBinary, GatewayBinary, GATEWAY_CALLS } from '../lib/gatewayWire.js'
 import { RelayConnectError } from '../lib/relayFrames.js'
 import { decodeTerminalLocal, encodeTerminalLocal } from '../lib/terminalBinary.js'
+import { accountLink } from '../services/accountLink.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcess } from '../services/process.js'
 import { startGateway, type StartedGateway } from './start.js'
 
@@ -33,7 +33,6 @@ export interface GatewayServiceOptions {
 
 const text = (value: unknown): string => (typeof value === 'string' ? value : '')
 const record = (value: unknown): Payload => (value && typeof value === 'object' && !Array.isArray(value) ? value as Payload : {})
-const SESSION_CODES = new Set(['MISSING', 'INVALID_REFRESH', 'UNAVAILABLE'])
 
 export function runGatewayService(options: GatewayServiceOptions): ServiceProcess {
   let core: CoreConnection | null = null
@@ -66,14 +65,9 @@ export function runGatewayService(options: GatewayServiceOptions): ServiceProces
     toWindows: (frame) => notice('toWindows', { frame }),
   }
 
-  /** The account's tokens, from the core (`core.account`): a refusal comes back as the session's own error. */
-  const accessToken = async (opts: { force?: boolean; failedToken?: string } = {}): Promise<string> => {
-    if (!core) throw new AuthSessionError('not connected to the core', 'UNAVAILABLE')
-    const answer = await core.query('access_token', opts)
-    if (typeof answer.token === 'string') return answer.token
-    const code = SESSION_CODES.has(text(answer.code)) ? text(answer.code) as 'MISSING' | 'INVALID_REFRESH' | 'UNAVAILABLE' : 'UNAVAILABLE'
-    throw new AuthSessionError(text(answer.message) || 'the core could not hand out a token', code)
-  }
+  /** The account's tokens, from the core (`core.account`, services/accountLink.ts): a refusal comes back as
+   *  the session's own error. */
+  const { accessToken } = accountLink((query, payload) => (core ? core.query(query, payload) : Promise.reject(new Error('not connected to the core'))))
 
   /** The gateway stopped: its link closed, its windows' sessions let go. Not waited on: what comes after it
    *  on the link (a new `start`) must not wait for the old link's goodbye. */
@@ -119,17 +113,22 @@ export function runGatewayService(options: GatewayServiceOptions): ServiceProces
     const pool = running?.windowRelay
     try {
       if (!pool) throw new RelayConnectError('the relay is restarting', 1013)
-      const acquire = payload.isolated === true ? pool.acquireIsolated.bind(pool) : pool.acquire.bind(pool)
-      const session = await acquire(text(payload.machineId), text(payload.autonomousEnv), record(payload.frame), {
-        sendFrame: (frame) => { notice('windowFrame', { id, frame }); return true },
-        sendBinary: (bytes) => {
+      const sink = {
+        sendFrame: (frame: Payload) => { notice('windowFrame', { id, frame }); return true },
+        sendBinary: (bytes: Uint8Array) => {
           const framed = encodeGatewayBinary(GatewayBinary.window, id, bytes)
           return !!framed && !!core?.sendBinary?.(framed)
         },
-      }, (code, reason) => {
+      }
+      const onClosed = (code: number, reason: string): void => {
         windows.delete(id)
         notice('windowClosed', { id, code, reason })
-      })
+      }
+      const machineId = text(payload.machineId)
+      const acquire = typeof payload.share === 'string' ? () => pool.acquireShare(machineId, text(payload.share), sink, onClosed)
+        : payload.isolated === true ? () => pool.acquireIsolated(machineId, text(payload.autonomousEnv), record(payload.frame), sink, onClosed)
+        : () => pool.acquire(machineId, text(payload.autonomousEnv), record(payload.frame), sink, onClosed)
+      const session = await acquire()
       windows.set(id, session)
       notice('windowOpened', { id })
     } catch (error) {
@@ -228,6 +227,21 @@ export function runGatewayService(options: GatewayServiceOptions): ServiceProces
     [GATEWAY_CALLS.wifi]: async (p: Payload) => ({
       ...await ops().wifi({ op: text(p.op) as 'discover' | 'pair' | 'pairStatus' | 'list' | 'revoke', device: text(p.device), code: text(p.code), id: text(p.id) }),
     }),
+    // The fleet's lane's sessions (gateway/lane.ts). Each is answered from what it holds at once, so they
+    // are taken in the order the core sent them.
+    [GATEWAY_CALLS.lane]: async (p: Payload): Promise<Payload> => {
+      const lane = ops().lane
+      const machineId = text(p.machineId)
+      switch (p.op) {
+        case 'hello': return { frame: await lane.hello(machineId, text(p.peerPub)) }
+        case 'welcome': return { ok: await lane.welcome(machineId, record(p.payload)) }
+        case 'rekey': await lane.rekey(machineId, record(p.payload)); return {}
+        case 'seal': return { ...await lane.seal(machineId, record(p.frame)) }
+        case 'open': return { ...await lane.open(machineId, record(p.frame)) }
+        case 'drop': lane.drop(machineId); return {}
+        default: return { error: 'UNKNOWN_OP' }
+      }
+    },
   }
 
   return (options.run ?? runServiceProcess)({

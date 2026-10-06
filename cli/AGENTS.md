@@ -22,7 +22,11 @@ together. It is the core's own entry (`harness __run`); `src/cli.ts` is the CLI,
 remote client may send and how what it is sent is sealed. It runs in a process of its own
 (`src/gateway/gatewayProcess.ts`; the core's side is `src/core/gatewayLink.ts`), or in the core's with
 `HARNESSD_SERVICES=none` (`src/gateway/start.ts`). The socket speaks to it in the clear through
-`GatewayPort` and hears it through `GatewayEvents` (`src/core/api.ts`), and never holds a key.
+`GatewayPort` and hears it through `GatewayEvents` (`src/core/api.ts`), and never holds a key. The
+gateway also holds the other sockets that sign in to the backend for this machine's sake: the windows'
+sessions to the owner's other machines, the Share relay for a harness shared with this account
+(`WindowRelay`), and the fleet's lane's E2EE sessions, which the lane asks it to seal and open through
+`core.account.lane` (`src/gateway/lane.ts`).
 
 ## Where new code goes
 

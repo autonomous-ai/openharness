@@ -6,6 +6,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { GatewayEvents, GatewayOps, GatewayPort, WindowRelay } from '../core/api.js'
 import { createGatewayLink } from '../core/gatewayLink.js'
+import { GATEWAY_CALLS } from '../lib/gatewayWire.js'
 import { RelayConnectError } from '../lib/relayFrames.js'
 import { TerminalBinaryKind, type TerminalBinaryClear } from '../lib/terminalBinary.js'
 import type { CoreConnection, ServiceProcessOptions } from '../services/process.js'
@@ -32,12 +33,23 @@ function stubGateway() {
     devicesHistory: vi.fn(async () => answer), devicesDismiss: vi.fn(async () => answer), devicesRebaseline: vi.fn(async () => answer),
     wifi: vi.fn(async () => ({ result: { devices: [] } })), dashboardPort: vi.fn(), wifiService: vi.fn(), revokeIdentity: vi.fn(),
     account: vi.fn(), reachable: vi.fn(),
+    lane: {
+      hello: vi.fn(async (machineId: string) => ({ type: 'e2e_hello', machineId })), welcome: vi.fn(async () => true),
+      rekey: vi.fn(async () => {}), seal: vi.fn(async (_m: string, frame: Record<string, unknown>) => ({ frame: { ...frame, sealed: true } })),
+      open: vi.fn(async () => ({ unreadable: true as const })), drop: vi.fn(),
+    },
   } satisfies GatewayOps
   const sessions: Array<{ send: ReturnType<typeof vi.fn>; sendBinary: ReturnType<typeof vi.fn>; detach: ReturnType<typeof vi.fn> }> = []
   const windowRelay = {
     acquire: vi.fn(async () => { const session = { send: vi.fn(async () => {}), sendBinary: vi.fn(async () => {}), detach: vi.fn() }; sessions.push(session); return session }),
     acquireIsolated: vi.fn(async () => { throw new RelayConnectError('NO_PEER_LINK') }),
     invalidate: vi.fn(), invalidateIsolated: vi.fn(),
+    acquireShare: vi.fn(async (_machineId: string, shareId: string) => {
+      if (shareId === 'ended') throw new RelayConnectError('Sharing ended or invitation expired', 4403)
+      const session = { send: vi.fn(async () => {}), sendBinary: vi.fn(async () => {}), detach: vi.fn() }
+      sessions.push(session)
+      return session
+    }),
   } satisfies WindowRelay
   return { port, ops, windowRelay, sessions, stop: vi.fn(async () => {}) }
 }
@@ -248,6 +260,29 @@ describe('the gateway\'s process, spoken to by the core', () => {
     expect(ops.wifi).toHaveBeenCalledWith({ op: 'pair', device: 'dev', code: 'C', id: '' })
   })
 
+  it('runs the fleet\'s lane\'s sessions in the gateway it runs, and seals nothing with none running', async () => {
+    const w = wire()
+    const lane = w.link.ops.lane
+    // Not started: the lane gets no session and no frame back as it was.
+    await expect(lane.hello('m2', 'PEER')).rejects.toThrow(/not running/)
+    w.connect()
+    expect(await lane.hello('m2', 'PEER')).toEqual({ type: 'e2e_hello', machineId: 'm2' })
+    expect(await lane.welcome('m2', { ephPub: 'E' })).toBe(true)
+    await lane.rekey('m2', { epoch: 'x' })
+    expect(await lane.seal('m2', { type: 'message' })).toEqual({ frame: { type: 'message', sealed: true } })
+    expect(await lane.open('m2', { type: 'message' })).toEqual({ unreadable: true })
+    lane.drop('m2')
+    await Promise.resolve()
+    const { ops } = w.gateways[0]
+    expect(ops.lane.hello).toHaveBeenCalledWith('m2', 'PEER')
+    expect(ops.lane.welcome).toHaveBeenCalledWith('m2', { ephPub: 'E' })
+    expect(ops.lane.rekey).toHaveBeenCalledWith('m2', { epoch: 'x' })
+    expect(ops.lane.drop).toHaveBeenCalledWith('m2')
+    expect(await w.options().requests[GATEWAY_CALLS.lane]({ op: 'nothing' }, { local: true, owner: true })).toEqual({ error: 'UNKNOWN_OP' })
+    w.disconnect()
+    expect(await lane.seal('m2', { type: 'message' })).toEqual({ lost: true })
+  })
+
   it('opens a window\'s session on another machine, carries it both ways, and fails it as the pool did', async () => {
     const w = wire()
     w.connect()
@@ -281,6 +316,18 @@ describe('the gateway\'s process, spoken to by the core', () => {
     await w.link.windowRelay.acquire('m5', 'prod', {}, sink, vi.fn())
     w.disconnect()
     expect(sessions[2].detach).toHaveBeenCalled()
+  })
+
+  it('watches a shared harness through the Share relay it runs, and fails as the Share relay did', async () => {
+    const w = wire()
+    w.connect()
+    const { windowRelay, sessions } = w.gateways[0]
+    const sink = { sendFrame: vi.fn(() => true), sendBinary: vi.fn(() => true) }
+    const session = await w.link.windowRelay.acquireShare!('owner', 'share-1', sink, vi.fn())
+    expect(windowRelay.acquireShare).toHaveBeenCalledWith('owner', 'share-1', expect.anything(), expect.any(Function))
+    await session.send({ type: 'terminal_open', payload: {} })
+    expect(sessions[0].send).toHaveBeenCalledWith({ type: 'terminal_open', payload: {} })
+    await expect(w.link.windowRelay.acquireShare!('owner', 'ended', sink, vi.fn())).rejects.toMatchObject({ message: 'Sharing ended or invitation expired', closeCode: 4403 })
   })
 
   it('refuses a window while it has not started, and drops what it cannot read', async () => {

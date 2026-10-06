@@ -94,6 +94,9 @@ describe('two machines in one fleet', () => {
     expect(await routeSend(onA, agentId, 'sent from machine a')).toMatchObject({ ok: true })
     expect((await started).payload?.userMessage).toBe('sent from machine a')
     await ended
+    // Sealed by A's gateway, which holds A's identity: the relay never read the turn.
+    expect(backend.deviceSent.some((frame) => frame.machineId === b.machineId && (frame.payload as Record<string, unknown> | undefined)?.__e2e)).toBe(true)
+    expect(JSON.stringify(backend.deviceSent)).not.toContain('sent from machine a')
     // Nothing tried to reach anywhere but the fake backend, and both daemons are the cores they started as.
     for (const machine of [a, b]) {
       expect(machine.daemon.log()).not.toMatch(/getaddrinfo|ENOTFOUND|autonomous\.ai/)

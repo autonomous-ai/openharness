@@ -19,7 +19,7 @@ export class SharingEndedError extends Error {}
 /** One invitation per connection. Never promoted into a full machine link or a shared connection pool. */
 export class HarnessShareRelay {
   private sessions = new Set<() => void>()
-  constructor(private readonly auth: AuthSessionManager, private readonly backendWsBase: string,
+  constructor(private readonly auth: Pick<AuthSessionManager, 'accessToken'>, private readonly backendWsBase: string,
     private readonly environment: string, private readonly discover: () => Promise<SharedMachineReference[]>) {}
   async acquire(machineId: string, shareId: string, sink: LocalClientSink,
     onClosed: (code: number, reason: string) => void): Promise<RelaySession> {

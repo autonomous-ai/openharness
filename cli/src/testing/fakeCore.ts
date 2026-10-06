@@ -38,6 +38,14 @@ export function fakeCore(over: Overrides = {}): CoreApi {
     account: {
       mintGridName: vi.fn(async () => null),
       accessToken: vi.fn(async () => 'token'),
+      lane: {
+        hello: vi.fn(async () => ({ type: 'e2e_hello', payload: {} })),
+        welcome: vi.fn(async () => true),
+        rekey: vi.fn(async () => {}),
+        seal: vi.fn(async (_machineId: string, frame: Record<string, unknown>) => ({ frame })),
+        open: vi.fn(async (_machineId: string, frame: Record<string, unknown>) => ({ frame })),
+        drop: vi.fn(),
+      },
       privateGridName: vi.fn(async () => null),
       machineName: vi.fn(() => null),
       ...over.account,

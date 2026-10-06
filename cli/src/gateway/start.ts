@@ -31,7 +31,10 @@ import { MachinePeerStore } from '../lib/e2ee/machinePeers.js'
 import { E2eeStore } from '../lib/e2ee/store.js'
 import { TrustGroupStore, type GroupMember } from '../lib/e2ee/trustGroup.js'
 import { RemoteRelayPool } from '../lib/remoteRelay.js'
+import { HarnessShareRelay, type SharedMachineReference } from '../sharing/relay.js'
 import { RelayGateway } from './gateway.js'
+import { LaneSessions } from './lane.js'
+import { shareWindows } from './share.js'
 
 /** What the gateway needs of the core, in whichever process it runs. */
 export interface GatewayHost {
@@ -53,7 +56,7 @@ export interface GatewayHost {
 export interface StartedGateway {
   port: RelayGateway
   ops: GatewayOps
-  windowRelay: WindowRelay
+  windowRelay: Required<WindowRelay>
   stop(): Promise<void>
 }
 
@@ -123,6 +126,8 @@ export function startGateway(host: GatewayHost): StartedGateway {
   const relayIdentityStore = new E2eeStore()
   relayIdentityStore.init()
   const relayPeers = new MachinePeerStore()
+  // The fleet's lane's sessions, sealed with the same identity (gateway/lane.ts).
+  const lane = new LaneSessions(() => relayIdentityStore.getIdentity())
   // The trust group and the device key log are built below; the pool's callbacks reach them through these.
   let groupSyncer: GroupSyncer | null = null
   let devLogSyncer: DeviceLogSyncer | null = null
@@ -143,6 +148,21 @@ export function startGateway(host: GatewayHost): StartedGateway {
       },
     },
   )
+  // The Share relay: a window here watching a harness someone shared with this account, over its own
+  // socket to the backend (`/api/observer-ws`), signed in with the account's token. It finds the share
+  // among those the backend lists for this account first.
+  const shareRelay = new HarnessShareRelay(host.tokens, env.BACKEND_WS_URL, host.autonomousEnv, async () => {
+    const result = await host.backend('GET', '/api/harness-shares')
+    if (result.status !== 200) throw new Error('Shared harnesses are temporarily unavailable.')
+    return ((result.body as { data?: { machines?: SharedMachineReference[] } }).data?.machines ?? [])
+  })
+  const windowRelay: Required<WindowRelay> = {
+    acquire: (...args) => relayPool.acquire(...args),
+    acquireIsolated: (...args) => relayPool.acquireIsolated(...args),
+    invalidate: (machineId) => relayPool.invalidate(machineId),
+    invalidateIsolated: (machineId) => relayPool.invalidateIsolated(machineId),
+    acquireShare: shareWindows(shareRelay),
+  }
   /** This machine as its trust group knows it — see groupSyncer.ts's SELF_STAMP for the stamp. */
   const groupSelf = (): GroupMember => {
     const machineId = account.machineId
@@ -400,17 +420,20 @@ export function startGateway(host: GatewayHost): StartedGateway {
       void devlog.register()
     },
     reachable: (machineIds) => { reachable = machineIds ? new Set(machineIds) : null },
+    lane,
   }
 
   return {
     port: gateway,
     ops,
-    windowRelay: relayPool,
+    windowRelay,
     stop: async () => {
       clearInterval(devlogTimer)
       syncer.stop()
       direct?.stop()
       relayPool.close()
+      shareRelay.close()
+      lane.clear()
       await gateway.stop()
     },
   }
