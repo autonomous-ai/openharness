@@ -398,6 +398,24 @@ class TerminalSession extends ChangeNotifier {
   int _generation = 0;
   bool _remoteCursorVisible = true;
   bool _cursorBlinkPhaseVisible = true;
+
+  /// Whether the cursor is hidden until the program draws again, because where the screen has it
+  /// is not where the program put it.
+  ///
+  /// ⚠️ **A pane made shorter loses the rows under its cursor.** tmux shrinks a pane by deleting
+  /// rows from the bottom up to the cursor before it pushes any into the history (`screen_resize_y`),
+  /// and it never asks whether they were empty. A shell's are; Claude Code's classic screen parks
+  /// the cursor on its prompt with four rows of its own under it (a border, two status lines, a
+  /// blank). The keyboard coming up shrinks the pane and those rows go. When Claude Code's redraw
+  /// for the resize follows the keyframe, it puts the cursor back on the prompt within milliseconds
+  /// — but when it did not (seen 2026-10-06), the cursor stayed at the bottom row, under the status
+  /// lines and against the key bar, until the first key typed made Claude Code draw again. So the
+  /// cursor is not shown until the program's next output, whichever of the two that is.
+  bool _cursorAwaitsProgram = false;
+
+  /// The pane height whose shrinking cut rows drawn under the cursor ([_noteCutUnderCursor]), spent
+  /// on the keyframe that answers it.
+  int? _cutUnderCursorFrom;
   List<int> _utf8Tail = const [];
   final List<int> _inputBytes = [];
   Timer? _heartbeat;
@@ -528,6 +546,8 @@ class TerminalSession extends ChangeNotifier {
     _utf8Tail = const [];
     _remoteCursorVisible = true;
     _cursorBlinkPhaseVisible = true;
+    _cursorAwaitsProgram = false;
+    _cutUnderCursorFrom = null;
     _resyncRequested = false;
     _resyncAttempts = 0;
     _openSentAt = null;
@@ -1174,13 +1194,44 @@ class TerminalSession extends ChangeNotifier {
     terminal.setCursorVisibleMode(_remoteCursorVisible);
     terminal.write(text);
     _remoteCursorVisible = terminal.cursorVisibleMode;
+    if (_cursorAwaitsProgram) {
+      _cursorAwaitsProgram = false;
+      if (kTypingTrace) typingEvent('cursor: shown — the program drew again');
+    }
     _applyCursorVisibility();
   }
 
   void _applyCursorVisibility() {
     terminal.setCursorVisibleMode(
-      _remoteCursorVisible && _cursorBlinkPhaseVisible,
+      _remoteCursorVisible && _cursorBlinkPhaseVisible && !_cursorAwaitsProgram,
     );
+  }
+
+  /// Notes whether making the pane [nextRows] high cuts rows drawn under the cursor, for the
+  /// keyframe that answers it ([_cutUnderCursorFrom]). Read only while the emulator still has the
+  /// pane's height — the emulator's own shrink deletes the same rows tmux will. Only ever set here,
+  /// never cleared: a later step of the same shrink reads an emulator that has lost them already.
+  void _noteCutUnderCursor(int nextRows) {
+    if (nextRows < rows &&
+        terminal.viewHeight == rows &&
+        !_showingKeptScreen &&
+        !terminal.isUsingAltBuffer &&
+        _drawnUnderCursor()) {
+      _cutUnderCursorFrom = rows;
+    }
+  }
+
+  /// Whether a row under the cursor has anything drawn on it — what tmux deletes first when the
+  /// pane is made shorter. See [_cursorAwaitsProgram].
+  bool _drawnUnderCursor() {
+    final buffer = terminal.buffer;
+    final top = buffer.scrollBack;
+    for (var y = buffer.cursorY + 1; y < terminal.viewHeight; y++) {
+      final index = top + y;
+      if (index < 0 || index >= buffer.lines.length) break;
+      if (buffer.lines[index].getText().trim().isNotEmpty) return true;
+    }
+    return false;
   }
 
   bool _writeBytes(List<int> bytes) {
@@ -1232,6 +1283,21 @@ class TerminalSession extends ChangeNotifier {
       // the stream on owns what is shown now, and this screen is dropped.
       return;
     }
+    final cutFrom = _cutUnderCursorFrom;
+    if (cutFrom != null && _clampRows(nextRows) < cutFrom) {
+      // The answer to the shrink that cut rows under the cursor. A keyframe at the old size, sent
+      // before the resize landed, leaves it for the one that is.
+      _cutUnderCursorFrom = null;
+      if (!replacement.isUsingAltBuffer && !_cursorAwaitsProgram) {
+        _cursorAwaitsProgram = true;
+        if (kTypingTrace) {
+          typingEvent(
+            'cursor: hidden — the pane shrank from $cutFrom rows through rows'
+            ' drawn under it, so it waits for the program to draw again',
+          );
+        }
+      }
+    }
     _bindTerminal(replacement);
     terminal = replacement;
     _showingKeptScreen = false;
@@ -1240,6 +1306,8 @@ class TerminalSession extends ChangeNotifier {
     _utf8Tail = decoded.tail;
     _remoteCursorVisible = terminal.cursorVisibleMode;
     _cursorBlinkPhaseVisible = true;
+    // A keyframe is the program's screen, not a redraw by it: a cursor held stays held through it.
+    _applyCursorVisibility();
     _expectedSeq = frame.seq + 1;
     _staleInARow = 0;
     _lastRenderedSeq = frame.seq;
@@ -1800,6 +1868,8 @@ class TerminalSession extends ChangeNotifier {
   static const _resizeCoalesceWindow = Duration(milliseconds: 50);
 
   void resize(int width, int height) {
+    // [Terminal.resize] asks here before it shrinks itself, so this still reads the pane's height.
+    _noteCutUnderCursor(_clampRows(height));
     _pendingCols = _clampCols(width);
     _pendingRows = _clampRows(height);
     final last = _lastResizeFlushAt;
@@ -1828,8 +1898,15 @@ class TerminalSession extends ChangeNotifier {
     final nextRows = _pendingRows!;
     _pendingCols = null;
     _pendingRows = null;
+    final cutFrom = _cutUnderCursorFrom;
+    if (cutFrom != null && nextRows >= cutFrom) {
+      // The shrink was taken back before it was asked for — the keyboard went down again.
+      _cutUnderCursorFrom = null;
+    }
     if (nextCols == cols && nextRows == rows) return;
     if (_resizeStillComing(nextCols, nextRows)) return;
+    // A keyframe's own resize to the measured size comes straight here, not through [resize].
+    _noteCutUnderCursor(nextRows);
     cols = nextCols;
     rows = nextRows;
     _lastResizeFlushAt = DateTime.now();

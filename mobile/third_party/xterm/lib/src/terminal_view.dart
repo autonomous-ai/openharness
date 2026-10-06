@@ -65,6 +65,7 @@ class TerminalView extends StatefulWidget {
     this.altBufferScrollPaced = false,
     this.altBufferScrollAnimated = false,
     this.onAltBufferScrollShift,
+    this.altBufferScrollMirror = false,
     this.keepsInputAcrossTerminals = false,
     this.predictsEcho = false,
   });
@@ -220,6 +221,14 @@ class TerminalView extends StatefulWidget {
   /// as a scroll and jumped. For measuring; nothing depends on it.
   final void Function(int rows)? onAltBufferScrollShift;
 
+  /// AUTONOMOUS PATCH: a full-screen program's scroll is moved by the finger on
+  /// the phone and only filled in by the program — the scrolling rows drawn from
+  /// rows already seen, the program kept a few rows ahead, and brought back to
+  /// the row on screen when the scroll is over. See `RemoteScrollMirror`. Takes
+  /// the place of [altBufferScrollAnimated]'s slide. False leaves the screen to
+  /// follow the program's redraws.
+  final bool altBufferScrollMirror;
+
   /// AUTONOMOUS PATCH: the keyboard's buffer — and what it is composing — is
   /// kept when [terminal] is replaced, for an embedder that replaces it only
   /// with the next screen of the SAME stream (a keyframe), and gives another
@@ -296,6 +305,23 @@ class TerminalViewState extends State<TerminalView> {
     final render = _viewportKey.currentContext?.findRenderObject();
     if (render is RenderTerminal) render.expectRemoteScroll(lines);
   }
+
+  /// AUTONOMOUS PATCH: what [TerminalView.altBufferScrollMirror] asks the
+  /// program to scroll through — the scroll handler's own pacing.
+  final _remoteScrollLink = RemoteScrollLink();
+
+  RenderTerminal? get _renderOrNull {
+    final render = _viewportKey.currentContext?.findRenderObject();
+    return render is RenderTerminal ? render : null;
+  }
+
+  void _mirrorScrollStart(double pixels) =>
+      _renderOrNull?.mirrorScrollStart(pixels);
+
+  bool _mirrorScrollTo(double pixels) =>
+      _renderOrNull?.mirrorScrollTo(pixels) ?? false;
+
+  void _mirrorScrollEnd() => _renderOrNull?.mirrorScrollEnd();
 
   @override
   void initState() {
@@ -399,6 +425,8 @@ class TerminalViewState extends State<TerminalView> {
           composingBacktrackCells: _composingBacktrackCells,
           animateRemoteScroll: widget.altBufferScrollAnimated,
           onRemoteScrollShift: widget.onAltBufferScrollShift,
+          mirrorRemoteScroll: widget.altBufferScrollMirror,
+          remoteScrollLink: _remoteScrollLink,
         );
       },
     );
@@ -411,6 +439,10 @@ class TerminalViewState extends State<TerminalView> {
       paced: widget.altBufferScrollPaced,
       onWheelsSent:
           widget.altBufferScrollAnimated ? _expectAltBufferScroll : null,
+      link: widget.altBufferScrollMirror ? _remoteScrollLink : null,
+      onScrollPosition: widget.altBufferScrollMirror ? _mirrorScrollTo : null,
+      onScrollStart: widget.altBufferScrollMirror ? _mirrorScrollStart : null,
+      onScrollEnd: widget.altBufferScrollMirror ? _mirrorScrollEnd : null,
       getCellOffset: (offset) => renderTerminal.getCellOffset(offset),
       getLineHeight: () => renderTerminal.lineHeight,
       child: child,
@@ -964,6 +996,8 @@ class _TerminalView extends LeafRenderObjectWidget {
     this.composingBacktrackCells = 0,
     this.animateRemoteScroll = false,
     this.onRemoteScrollShift,
+    this.mirrorRemoteScroll = false,
+    this.remoteScrollLink,
   });
 
   final Terminal terminal;
@@ -1002,6 +1036,10 @@ class _TerminalView extends LeafRenderObjectWidget {
 
   final void Function(int rows)? onRemoteScrollShift;
 
+  final bool mirrorRemoteScroll;
+
+  final RemoteScrollLink? remoteScrollLink;
+
   @override
   RenderTerminal createRenderObject(BuildContext context) {
     return RenderTerminal(
@@ -1025,6 +1063,8 @@ class _TerminalView extends LeafRenderObjectWidget {
       devicePixelRatio: MediaQuery.maybeDevicePixelRatioOf(context) ?? 1.0,
       animateRemoteScroll: animateRemoteScroll,
       onRemoteScrollShift: onRemoteScrollShift,
+      mirrorRemoteScroll: mirrorRemoteScroll,
+      remoteScrollLink: remoteScrollLink,
     );
   }
 
@@ -1050,6 +1090,8 @@ class _TerminalView extends LeafRenderObjectWidget {
       ..composingBacktrackCells = composingBacktrackCells
       ..devicePixelRatio = MediaQuery.maybeDevicePixelRatioOf(context) ?? 1.0
       ..animateRemoteScroll = animateRemoteScroll
-      ..onRemoteScrollShift = onRemoteScrollShift;
+      ..onRemoteScrollShift = onRemoteScrollShift
+      ..mirrorRemoteScroll = mirrorRemoteScroll
+      ..remoteScrollLink = remoteScrollLink;
   }
 }

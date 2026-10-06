@@ -12,6 +12,8 @@ import 'package:xterm/src/ui/controller.dart';
 import 'package:xterm/src/ui/cursor_type.dart';
 import 'package:xterm/src/ui/painter.dart';
 import 'package:xterm/src/ui/remote_scroll_animator.dart';
+import 'package:xterm/src/ui/remote_scroll_mirror.dart';
+import 'package:xterm/src/ui/scroll_handler.dart';
 import 'package:xterm/src/ui/selection_mode.dart';
 import 'package:xterm/src/ui/terminal_size.dart';
 import 'package:xterm/src/ui/terminal_text_style.dart';
@@ -42,7 +44,11 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     double devicePixelRatio = 1.0,
     bool animateRemoteScroll = false,
     void Function(int rows)? onRemoteScrollShift,
+    bool mirrorRemoteScroll = false,
+    RemoteScrollLink? remoteScrollLink,
   })  : _terminal = terminal,
+        _mirrorRemoteScroll = mirrorRemoteScroll,
+        _remoteScrollLink = remoteScrollLink,
         _devicePixelRatio = devicePixelRatio,
         _animateRemoteScroll = animateRemoteScroll,
         _onRemoteScrollShift = onRemoteScrollShift,
@@ -77,6 +83,7 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     // The recorded lines are the old emulator's: none of them is drawn again.
     _painter.clearLinePictures();
     _remoteScroll?.reset();
+    _mirror?.reset();
     if (attached && _renderingEnabled) _terminal.addListener(_onTerminalChange);
     _resizeTerminalIfNeeded();
     markNeedsLayout();
@@ -127,6 +134,7 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     if (value == _renderingEnabled) return;
     _renderingEnabled = value;
     _remoteScroll?.reset();
+    _mirror?.reset();
     if (attached) {
       if (value) {
         _terminal.addListener(_onTerminalChange);
@@ -143,6 +151,7 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     if (value == _painter.textStyle) return;
     _painter.textStyle = value;
     _remoteScroll?.reset();
+    _mirror?.reset();
     markNeedsLayout();
   }
 
@@ -150,6 +159,7 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     if (value == _painter.textScaler) return;
     _painter.textScaler = value;
     _remoteScroll?.reset();
+    _mirror?.reset();
     markNeedsLayout();
   }
 
@@ -157,6 +167,7 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     if (value == _painter.theme) return;
     _painter.theme = value;
     _remoteScroll?.reset();
+    _mirror?.reset();
     markNeedsPaint();
   }
 
@@ -256,7 +267,8 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
   /// for up. Its next redraw may be that scroll's answer, and then slides into
   /// place instead of jumping — see [RemoteScrollAnimator].
   void expectRemoteScroll(int lines) {
-    if (!_animateRemoteScroll ||
+    if (_mirrorRemoteScroll ||
+        !_animateRemoteScroll ||
         !_renderingEnabled ||
         !attached ||
         !_isWholeAltScreen) {
@@ -274,6 +286,69 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
       _painter.cellSize.height,
     );
   }
+
+  /// AUTONOMOUS PATCH: whether a full-screen program's scroll is moved by the
+  /// finger here and filled in by the program — `TerminalView.altBufferScrollMirror`,
+  /// see [RemoteScrollMirror]. In its place, [expectRemoteScroll]'s slide.
+  bool _mirrorRemoteScroll;
+  set mirrorRemoteScroll(bool value) {
+    if (value == _mirrorRemoteScroll) return;
+    _mirrorRemoteScroll = value;
+    _mirror?.dispose();
+    _mirror = null;
+    markNeedsPaint();
+  }
+
+  /// Where the mirror asks the program to scroll — the scroll handler's pacing.
+  RemoteScrollLink? _remoteScrollLink;
+  set remoteScrollLink(RemoteScrollLink? value) => _remoteScrollLink = value;
+
+  RemoteScrollMirror? _mirror;
+
+  RemoteScrollMirror get _mirrorNow => _mirror ??= RemoteScrollMirror(
+        onFrame: markNeedsPaint,
+        requestLines: (lines) => _remoteScrollLink?.send(lines),
+        requestsIdle: () => _remoteScrollLink?.idle ?? true,
+      );
+
+  bool get _canMirror =>
+      _mirrorRemoteScroll &&
+      _renderingEnabled &&
+      attached &&
+      hasSize &&
+      _painter.cellSize.height > 0 &&
+      _isWholeAltScreen;
+
+  /// AUTONOMOUS PATCH: a scroll began on the alternate screen, the scrollable at
+  /// [pixels].
+  void mirrorScrollStart(double pixels) {
+    if (!_canMirror) return;
+    _mirrorNow.begin(
+      pixels,
+      _terminal.buffer.lines,
+      _terminal.viewHeight,
+      _painter.cellSize.height,
+    );
+  }
+
+  /// AUTONOMOUS PATCH: the scrollable is at [pixels]. False when it cannot be
+  /// mirrored now — then the scroll goes out as plain wheel events.
+  bool mirrorScrollTo(double pixels) {
+    if (!_canMirror) {
+      _mirror?.reset();
+      return false;
+    }
+    _mirrorNow.scrollTo(
+      pixels,
+      _terminal.buffer.lines,
+      _terminal.viewHeight,
+      _painter.cellSize.height,
+    );
+    return true;
+  }
+
+  /// AUTONOMOUS PATCH: the scroll is over — the finger up, any fling run out.
+  void mirrorScrollEnd() => _mirror?.end();
 
   /// AUTONOMOUS PATCH: a frame of the slide — drawn, unless a redraw is still
   /// arriving.
@@ -296,6 +371,18 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
 
   /// The screen was laid out again: a slide starts, carries on or ends here.
   void _updateRemoteScroll() {
+    final mirror = _mirror;
+    if (mirror != null) {
+      if (!_isWholeAltScreen) {
+        mirror.reset();
+      } else {
+        mirror.frame(
+          _terminal.buffer.lines,
+          _terminal.viewHeight,
+          _painter.cellSize.height,
+        );
+      }
+    }
     final animator = _remoteScroll;
     if (animator == null) return;
     if (!_isWholeAltScreen) {
@@ -372,6 +459,7 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     _controller.removeListener(_onControllerUpdate);
     _focusNode.removeListener(_onFocusChange);
     _remoteScroll?.reset();
+    _mirror?.reset();
   }
 
   @override
@@ -389,6 +477,8 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
   void dispose() {
     _remoteScroll?.dispose();
     _remoteScroll = null;
+    _mirror?.dispose();
+    _mirror = null;
     _painter.clearLinePictures();
     super.dispose();
   }
@@ -686,12 +776,20 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     final effectFirstLine = firstLine.clamp(0, lines.length - 1);
     final effectLastLine = lastLine.clamp(0, lines.length - 1);
 
-    // AUTONOMOUS PATCH: a full-screen program's scroll, still sliding into
-    // place — its rows are drawn by [_paintSlide], the rest as ever.
-    final slide = _remoteScroll?.isSliding == true ? _remoteScroll : null;
+    // AUTONOMOUS PATCH: a full-screen program's scroll, its scrolling rows drawn
+    // where the finger has them ([_paintMirror]) or still sliding into place
+    // ([_paintSlide]) — the rest as ever.
+    final mirror =
+        _mirror?.isActive == true && _isWholeAltScreen ? _mirror : null;
+    final slide = mirror == null && _remoteScroll?.isSliding == true
+        ? _remoteScroll
+        : null;
+    final movingTop = mirror?.top ?? slide?.top;
+    final movingBottom = mirror?.bottom ?? slide?.bottom;
+    final movedBy = mirror?.offset ?? slide?.offset ?? 0.0;
 
     for (var i = effectFirstLine; i <= effectLastLine; i++) {
-      if (slide != null && i >= slide.top && i <= slide.bottom) continue;
+      if (movingTop != null && i >= movingTop && i <= movingBottom!) continue;
       _painter.paintLineCached(
         canvas,
         offset.translate(0, _snapLineTop(i * charHeight + _lineOffset)),
@@ -699,18 +797,19 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
       );
     }
 
-    if (slide != null) {
+    if (mirror != null) {
+      _paintMirror(canvas, offset, mirror);
+    } else if (slide != null) {
       _paintSlide(canvas, offset, slide, effectFirstLine, effectLastLine);
     }
 
     final cursorY = _terminal.buffer.absoluteCursorY;
     if (cursorY >= effectFirstLine && cursorY <= effectLastLine) {
-      // A cursor inside the sliding rows moves with them.
-      final cursorAt = slide != null &&
-              cursorY >= slide.top &&
-              cursorY <= slide.bottom
-          ? offset + cursorOffset.translate(0, slide.offset)
-          : offset + cursorOffset;
+      // A cursor inside the moving rows moves with them.
+      final cursorAt =
+          movingTop != null && cursorY >= movingTop && cursorY <= movingBottom!
+              ? offset + cursorOffset.translate(0, movedBy)
+              : offset + cursorOffset;
 
       final predicting = !_isComposingText && _predictedText.isNotEmpty;
       if (_isComposingText) {
@@ -753,6 +852,37 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
       );
     }
 
+    canvas.restore();
+  }
+
+  /// AUTONOMOUS PATCH: the scrolling rows as the finger has them — each document
+  /// row of [RemoteScrollMirror] at its place relative to [RemoteScrollMirror.display],
+  /// clipped to the rows that scroll so the program's fixed rows stay put. A row
+  /// never seen is left as background.
+  void _paintMirror(Canvas canvas, Offset offset, RemoteScrollMirror mirror) {
+    final lineHeight = _painter.cellSize.height;
+    final top = offset.dy + _snapLineTop(mirror.top * lineHeight + _lineOffset);
+    final bottom = offset.dy +
+        _snapLineTop((mirror.bottom + 1) * lineHeight + _lineOffset);
+    canvas.save();
+    canvas.clipRect(
+      Rect.fromLTRB(offset.dx, top, offset.dx + size.width, bottom),
+    );
+    final display = mirror.display;
+    final first = (display + mirror.top).floor();
+    final last = (display + mirror.bottom).ceil();
+    for (var row = first; row <= last; row++) {
+      final line = mirror.rowAt(row);
+      if (line == null) continue;
+      _painter.paintLineCached(
+        canvas,
+        offset.translate(
+          0,
+          _snapLineTop((row - display) * lineHeight + _lineOffset),
+        ),
+        line,
+      );
+    }
     canvas.restore();
   }
 
