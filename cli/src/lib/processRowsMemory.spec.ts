@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { expect, it } from 'vitest'
 
-it('keeps small process identities without retaining an entire old process table', () => {
+it('keeps process identities and deleted-image entries without retaining an entire old process table', () => {
   // Found by QA on a quiet machine: 25 agents retained 26 complete ps snapshots (13.8 MiB)
   // through their startMarker/executable substrings. Measure real V8 backing strings, not RSS noise.
   const module = new URL('./tmux.ts', import.meta.url).href
@@ -10,18 +10,23 @@ it('keeps small process identities without retaining an entire old process table
     import { getHeapSnapshot } from 'node:v8';
     import { setImmediate } from 'node:timers/promises';
     import assert from 'node:assert/strict';
-    const { parseProcessRow } = await import(${JSON.stringify(module)});
+    const { parseProcessRow, createDeletedImageMemo } = await import(${JSON.stringify(module)});
+    globalThis.deletedImages = createDeletedImageMemo({ exists: () => false });
     function identity() {
       const output = 'QA_PROCESS_SNAPSHOT_BEGIN ' + 'x'.repeat(8 * 1024 * 1024)
         + '\\n321 1 qa-owned-engine-executable Tue Oct  6 12:00:00 2026 qa-owned-engine-executable --qa\\n'
         + 'y'.repeat(8 * 1024 * 1024);
       const row = parseProcessRow(output.split('\\n')[1]);
+      globalThis.deletedImages.remember(row, '/qa/deleted-engine');
       return { pid: row.pid, executable: row.executable, startMarker: row.startMarker };
     }
     globalThis.retainedIdentity = identity();
     assert.deepEqual(globalThis.retainedIdentity, {
       pid: 321, executable: 'qa-owned-engine-executable', startMarker: 'Tue Oct  6 12:00:00 2026',
     });
+    assert.equal(globalThis.deletedImages.recall({
+      ...globalThis.retainedIdentity, args: 'qa-owned-engine-executable --qa',
+    }), '/qa/deleted-engine');
     // V8's last successful RegExp also retains its input: discard that unrelated reference.
     /cleared/.exec('cleared');
     for (let i = 0; i < 3; i++) { await setImmediate(); globalThis.gc(); }
