@@ -47,6 +47,13 @@ def system_module():
     return module
 
 
+def boot_module():
+    spec = importlib.util.spec_from_file_location('harness_boot_profile', Path(__file__).with_name('boot_profile.py'))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def relative_path(value):
     path = PurePosixPath(value)
     if path.is_absolute() or '..' in path.parts or not path.parts or str(path) != value.rstrip('/'):
@@ -139,6 +146,7 @@ def validate_bundle(folder, base):
     if path.is_symlink() or not path.is_file() or package.get('bytes') != path.stat().st_size or digest(path) != package.get('sha256'):
         raise ValueError('Package checksum or size mismatch; download the complete bundle again.')
     inspect_package(path, version, runtime)
+    boot_module().validate_update(path)
     return manifest, path
 
 
@@ -256,6 +264,7 @@ def apply(folder, system, base, installation):
             # installed OS integration. /run clears this only on a real reboot.
             system.write_json(RESTART_REQUIRED, {'status': 'applying', 'package': manifest['package']['version']})
             install_package(incoming / source_package.name, manifest['package']['version'], manifest['runtime'])
+            boot_module().restore_firmware()
             # Plymouth and other initramfs assets may change without a kernel
             # package transaction, so rebuild them on this path as well.
             system.run('mkinitcpio', '-P')
@@ -285,10 +294,12 @@ def rollback(system, installation):
     if digest(backup) != receipt['backup_sha256']:
         raise ValueError('Rollback package checksum mismatch. Recover the recorded checkpoint from the live USB.')
     inspect_package(backup, receipt['previous_version'], receipt['previous_runtime'])
+    boot_module().validate_update(backup)
     receipt.update(status='rolling-back', rollback_started_at=now())
     system.write_json(folder / 'receipt.json', receipt)
     system.write_json(RESTART_REQUIRED, {'status': 'failed'})
     install_package(backup, receipt['previous_version'], receipt['previous_runtime'])
+    boot_module().restore_firmware()
     system.run('mkinitcpio', '-P')
     receipt.update(status='rolled-back', rollback_finished_at=now())
     system.write_json(folder / 'receipt.json', receipt)
