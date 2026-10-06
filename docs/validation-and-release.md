@@ -69,6 +69,20 @@ shuffling, is unchanged. Use `--config vitest.ci.config.ts --shard=N/4` to repro
 the CI assignment locally. The aggregate still requires every discovered file
 exactly once, independent of these estimates.
 
+The CLI's end-to-end suite (`cli/e2e`) runs in its own workflow, **CLI end to end**
+(`.github/workflows/cli-e2e.yml`), on every pull request that touches `cli/` and on demand.
+Eight Linux runners each take a shard, planned from `cli/ci-e2e-durations.json` the same
+way (`--config vitest.e2e.ci.config.ts --shard=N/8` reproduces one locally). Each shard
+installs tmux, zsh, tcsh and dash, starts every daemon from one bundle (`E2E_BUNDLE=1`) and
+runs its files one at a time. The full-disk tests, which need macOS disk images, run on one
+macOS runner with `DISKFULL=1`. `e2e-summary` applies the default suite's rule: every
+discovered file exactly once, every shard passing. Its summary records each file's duration
+for refreshing the hints. A failing test's complete daemon logs and engine hook logs are
+uploaded as `cli-e2e-daemon-logs-N`, by file and test (`E2E_ARTIFACTS_DIR`, which works
+locally too). The workflow is advisory for now: the suite had only run on macOS before, and
+`make merge-pr` collects evidence from `ci.yml` alone. Read its result in review. Once it
+has stayed green, make `e2e-summary` required and add it to the evidence collector.
+
 For repository process tooling only, `scope=process` runs its Python regression
 tests without installing or building unrelated components. It does not validate
 application changes. Workflow edits also need `actionlint` and a run exercising

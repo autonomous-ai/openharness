@@ -18,6 +18,7 @@ import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
 import { isolatedTmux, type IsolatedTmux } from '../../src/testing/isolatedTmux.js'
+import { artifactLog } from './artifacts.js'
 
 const exec = promisify(execFile)
 const here = dirname(fileURLToPath(import.meta.url))
@@ -299,7 +300,14 @@ export class IsolatedDaemon {
       cwd: CLI_ROOT, env: this.env, stdio: ['ignore', 'pipe', 'pipe'],
     })
     this.child = child
-    const take = (chunk: Buffer) => { this.output += chunk.toString('utf8') }
+    // The whole log, as files, for a failing test's CI artifacts (E2E_ARTIFACTS_DIR, artifacts.ts).
+    const logName = `daemon-${this.port}.log`
+    artifactLog(logName, `---- ${new Date().toISOString()} start (pid ${child.pid}, ${script.at(-1)} ${entry}, data ${this.dataDir})\n`)
+    const take = (chunk: Buffer) => {
+      const text = chunk.toString('utf8')
+      this.output += text
+      artifactLog(logName, text)
+    }
     child.stdout!.on('data', take)
     child.stderr!.on('data', take)
     const exited = new Promise<never>((_, reject) => child.once('exit', (code, signal) => {
@@ -380,6 +388,7 @@ export class IsolatedDaemon {
     try { this.assertHooksStayedInside() } catch (error) { escaped = error }
     // A failed test prints it after this close has removed the root.
     this.closedHookLog = this.hookLog()
+    artifactLog(`daemon-${this.port}-engine-hooks.log`, this.closedHookLog)
     // A core whose master died during the test must not outlive it: 20 such cores, left by a run
     // whose masters crashed, spun on their closed output pipes for the rest of a parallel suite. Only
     // this test's core is killed — its pid, still running this daemon's entry, orphaned or ours.

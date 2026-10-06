@@ -12,13 +12,16 @@ import { defineConfig } from 'vitest/config'
  *
  * `E2E_BUNDLE=1` starts every daemon from one bundle built for the run (e2e/harness/bundle.ts):
  * less CPU per start, the code frozen as the run began, and the build that ships under test.
+ *
+ * `E2E_ARTIFACTS_DIR=<folder>` keeps the whole log of every daemon a failing test ran there, as files
+ * (e2e/harness/artifacts.ts); CI uploads them.
  */
 const workers = Math.max(1, Number(process.env.E2E_WORKERS ?? 1) || 1)
 
 export default defineConfig({
   test: {
     environment: 'node',
-    setupFiles: ['./vitest.setup.ts'],
+    setupFiles: ['./vitest.setup.ts', './e2e/harness/artifacts.ts'],
     globalSetup: ['./e2e/harness/bundle.ts'],
     include: ['e2e/**/*.e2e.ts'],
     testTimeout: 180_000,
