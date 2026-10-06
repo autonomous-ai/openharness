@@ -194,6 +194,9 @@ describe('what the daemon survives', () => {
     // The handshake itself asks the dial for its status.
     const desktop = await LocalClient.connect(d)
     const agent = await boundAgent(d, desktop, 'devices-failing')
+    // No device here: the Devices tab's request starts their process (core/devicesWake.ts), whatever it answers.
+    await desktop.request('harness_devices_list', {}, 30_000)
+    await until('the Wi-Fi device\'s service to connect', () => d.log().includes('[services] wifi connected') || null, 30_000, 100)
     // What a desktop sends on every pane change, focus, read and spoken reply — each one reaching the dial,
     // a window bridge or the WiFi device service.
     for (let i = 0; i < 3; i++) {
@@ -232,13 +235,14 @@ describe('what the daemon survives', () => {
     writeFileSync(join(d.dataDir, 'autonomous-device-connections.json'), '{"not": "a list"}', { mode: 0o600 })
     writeFileSync(join(d.dataDir, 'device-results.json'), '{"version": 1, "entries": [', { mode: 0o600 })
     await d.start()
-    await until('the device service to be left out', () => /the Wi-Fi device service could not be started/.test(d.log()), 30_000)
     // The requests that need no device piece still answer; the ones that need one say it is not running,
     // not that it is still starting.
     const credential = readFileSync(join(d.dataDir, 'hook-credential'), 'utf8').trim()
     const device = (path: string) => fetch(`http://127.0.0.1:${d.port}/api/autonomous-device/${path}`, { headers: { authorization: `Bearer ${credential}` } })
     await until('the device requests to answer', async () => (await device('list')).status === 200, 30_000, 250)
+    // A discovery starts the devices' process (core/devicesWake.ts), which leaves out what it cannot read.
     expect(await (await device('discover')).json()).toMatchObject({ error: { code: 'UNAVAILABLE', message: expect.stringContaining('is not running on this computer') } })
+    await until('the device service to be left out', () => /the Wi-Fi device service could not be started/.test(d.log()), 30_000)
     const client = await LocalClient.connect(d)
     expect(Array.isArray((await client.request('agents_list', { includeStopped: true })).agents)).toBe(true)
     const agent = await boundAgent(d, client, 'after-the-corruption')

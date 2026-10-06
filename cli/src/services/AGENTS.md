@@ -131,6 +131,9 @@ way back).
   their requests on in order and checks where each answer goes, and keeps what it reads in line of the
   service (who said hello, which transcripts and streams it follows, the focus revision) from what the
   service tells it (src/core/wifi.ts). `e2e/wifiDevice.e2e.ts` proves it, with a fake device on the relay.
+  Their process runs only once there is a device (`onDemand`, asked for since protocol 4): a dial's port in
+  /dev, a paired Wi-Fi device or its session, or a request for them (src/core/devicesWake.ts);
+  what a Wi-Fi device sends while it starts is held by the core. `e2e/devicesOnDemand.e2e.ts` proves it.
 - State built from every change must get every change exactly once. The teams show how
   (`src/services/teamsProcess.ts`, `src/core/teamsLink.ts`): the core numbers each change and keeps it
   until the process acknowledges it; on each connection the process says what it applied and gets

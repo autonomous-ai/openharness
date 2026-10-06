@@ -272,13 +272,23 @@ describe('ServiceSupervisor', () => {
     expect(lines.filter((line) => line.includes('service experiments started'))).toHaveLength(2)
   })
 
-  it('starts every experiment for a core that never asks, and stops one never started at once', () => {
+  it('starts every process on demand a core too old to ask for it would never ask for, and stops one never started at once', () => {
     const experiment: ServiceSpec = { name: 'orchestrator', services: ['orchestrator'], heapLimitMiB: 256, rssLimitMiB: 512, onDemand: true }
+    const devices: ServiceSpec = { name: 'devices', services: ['devices', 'wifi'], heapLimitMiB: 256, rssLimitMiB: 512, onDemand: true, askedSince: 4 }
     const idle: ServiceSpec = { ...experiment, name: 'teams', services: ['teams'] }
-    const supervisor = make([experiment])
+    // A core of protocol 3 asks for the experiments, not for the devices: theirs starts as it binds.
+    const three = make([search, experiment, devices])
+    three.start()
+    three.unasked(3)
+    expect(children.map((child) => child.spec.name)).toEqual(['search', 'devices'])
+    three.unasked(4)
+    expect(children).toHaveLength(2)
+    // A core from before `want` asks for none.
+    children.length = 0
+    const supervisor = make([experiment, devices])
     supervisor.start()
-    supervisor.want(null)
-    expect(children.map((child) => child.spec.name)).toEqual(['orchestrator'])
+    supervisor.unasked(2)
+    expect(children.map((child) => child.spec.name)).toEqual(['orchestrator', 'devices'])
     const never = make([idle])
     never.start()
     const done = vi.fn()
@@ -358,6 +368,14 @@ describe('ServiceSupervisor', () => {
     expect(serviceSpecs({ HARNESSD_SERVICES: 'search,orchestrator' }, hosts))
       .toEqual([search, { name: 'orchestrator', services: ['orchestrator'], heapLimitMiB: 256, rssLimitMiB: 512 }])
     expect(serviceSpecs({ HARNESSD_SERVICES: 'search' }, hosts)).toEqual([search])
+  })
+
+  it('runs the devices only once there is one, asked for by a core of protocol 4, and from the start when named (tests)', () => {
+    const [devices] = serviceSpecs({}, SERVICE_HOSTS).filter((spec) => spec.name === 'devices')
+    expect(devices).toMatchObject({ services: ['devices', 'wifi'], onDemand: true, askedSince: 4 })
+    const [named] = serviceSpecs({ HARNESSD_SERVICES: 'devices' }, SERVICE_HOSTS)
+    expect(named.services).toEqual(['devices', 'wifi'])
+    expect(named.onDemand).toBeUndefined()
   })
 
   it('knows every service each process this build runs hosts, and each in one process only', () => {

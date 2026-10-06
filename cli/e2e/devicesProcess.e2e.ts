@@ -72,7 +72,7 @@ describe('the devices in their own process', () => {
     const theDesk = desk
     onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-200).join('\n')}`) })
     await d.start()
-    await until('the devices to connect to the core', () => connections(d) >= 1 || null, 30_000, 200)
+    // No process until there is a device (core/devicesWake.ts): each test plugs its dials in, or asks for them.
     return { d, desk: theDesk }
   }
   /** A window with a tab holding these agents, as the desktop says it on every change. */
@@ -168,9 +168,10 @@ describe('the devices in their own process', () => {
   })
 
   it('leaking: restarted at its memory budget, before it can hurt anything else', async () => {
-    const { d } = await fresh({ HARNESSD_TEST_FAULTS: 'devices.leak', HARNESSD_SERVICE_HEAP_LIMIT_MIB: '128' })
+    const { d, desk } = await fresh({ HARNESSD_TEST_FAULTS: 'devices.leak', HARNESSD_SERVICE_HEAP_LIMIT_MIB: '128' })
     const window = await LocalClient.connect(d)
     const agentId = await create(d, window, 'devices-leaking')
+    await desk.plug('E2E-A', 'e2:e0:00:00:00:0a')
     await until('the master to restart the devices for memory', () => /\[harnessd\] service devices: (its heap is at|it is using)/.test(d.log()) || null, 60_000, 250)
     await until('the devices to be started again', () => restarts(d) >= 1 || null, 30_000, 200)
     await turn(window, agentId, 'the leak was the devices\' alone')
@@ -178,7 +179,7 @@ describe('the devices in their own process', () => {
     window.close()
   })
 
-  it('crashing on every start: parked, its requests say so, and the agents go on', async () => {
+  it('crashing on every start: parked, its requests say so at once, and the agents go on', async () => {
     const d = await IsolatedDaemon.create({ env: { CABLE_DISABLE: 'false', HARNESSD_TEST_FAULTS: 'devices.crash', HARNESSD_SERVICE_PARK_CRASHES: '3',
       HARNESSD_SERVICE_INITIAL_BACKOFF_MS: '200', HARNESSD_SERVICE_MAX_BACKOFF_MS: '1000' } })
     daemon = d
@@ -186,9 +187,14 @@ describe('the devices in their own process', () => {
     await d.start()
     const window = await LocalClient.connect(d)
     const agentId = await create(d, window, 'devices-crash-loop')
+    // The Devices tab's first request starts them; whatever it is answered, it is an answer.
+    await window.request('harness_devices_list', {}, 45_000)
     await until('the master to park the devices', () => d.log().includes('[harnessd] service devices ended 3 times') || null, 60_000, 250)
+    // Down now: each request is answered at once, ⌘K's too, not after its own 25 s.
+    const asked = Date.now()
     expect(await window.request('harness_devices_list', {}, 10_000)).toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'devices', retryable: true })
     expect(await routeTask(window, 'fix the parser')).toMatchObject({ agentId: '', reason: 'the devices service is unavailable' })
+    expect(Date.now() - asked).toBeLessThan(5_000)
     await turn(window, agentId, 'the devices are parked and nothing else cares')
     expect(d.coresStarted()).toBe(1)
     window.close()

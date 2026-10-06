@@ -18,6 +18,9 @@
  *   none while it is off, so a selection is refused then, as it was with no service.
  * - **Each answer goes to the session it came from:** the core seals it to a session only while that
  *   session is still the same identity's device.
+ * - **What a device sends while its service is not there** (its process starting at the first device, or
+ *   starting again) is held, in order, and handed on once the service has been resumed; a session, a
+ *   request or a pairing asks for the process (core/devicesWake.ts).
  */
 import type { LiveEvent } from '../lib/normalize.js'
 import type { DeviceInputStatus } from './deviceInput.js'
@@ -60,6 +63,9 @@ export interface WifiCoreDeps {
   joined(): void
   /** The service is built and serving: the gateway's direct links may connect devices to it. */
   ready(): void
+  /** Ask for the service's process: a device needs it (core/devicesWake.ts). False when there is none to ask
+   *  for: the service runs in the core's process, and is there or failed as the core started. */
+  want(): boolean
   /** The doors that are one call each into the core's own modules. */
   doors: Pick<CoreApi['wifi'], 'view' | 'submit' | 'cancel' | 'started' | 'stop' | 'answer' | 'create' | 'stepFocus' | 'scroll' | 'focusApp' | 'reveal'>
 }
@@ -70,6 +76,13 @@ const PROVEN_BY_TRANSCRIPT = new Set(['claude', 'codex'])
  *  always, and a tool's start and end, for an agent a device subscribed to. */
 const ALWAYS_STREAMED = new Set(['turn_started', 'text_delta', 'turn_ended'])
 const TOOL_EVENTS = new Set(['tool_start', 'tool_end'])
+/** A device's requests held while its service is not there: the most, and how old one may be when handed on.
+ *  The device retries a request it had no answer to by the same key, so one older than this has been sent
+ *  again, or given up on; the process starts in about a second. */
+export const WIFI_HELD_MAX = 256
+export const WIFI_HELD_MS = 30_000
+/** How long a pairing waits for the service to serve: its process starts in about a second, more under load. */
+export const WIFI_START_MS = 15_000
 
 export function createWifiCore(deps: WifiCoreDeps) {
   const { port, gateway, remoteClient } = deps
@@ -84,6 +97,19 @@ export function createWifiCore(deps: WifiCoreDeps) {
   let streamed = new Set<string>()
   let revision: string | undefined
   let up = false
+  /** Whether the service said it serves, since it was last there; and who waits for that (a pairing). */
+  let serves = false
+  const servingWaiters = new Set<() => void>()
+  /** A device's requests while the service is not there, or before what it was handed has gone first. */
+  const held: Array<{ connId: string; frame: Record<string, unknown>; opened: Record<string, unknown> | null; at: number }> = []
+  let holding = true
+  const release = (): void => {
+    const service = port()
+    if (!up || !service) return
+    const now = Date.now()
+    for (const each of held.splice(0)) if (now - each.at <= WIFI_HELD_MS) void service.request(each.connId, each.frame, each.opened)
+    holding = false
+  }
 
   /** A session that is still the identity's device it said hello as. */
   const serving = (connId: string, identity: string): boolean => {
@@ -113,7 +139,12 @@ export function createWifiCore(deps: WifiCoreDeps) {
       gateway.deviceClient(connId, identity)
     },
     joined: () => deps.joined(),
-    ready: () => deps.ready(),
+    // The gateway told first, so a pairing waiting on this finds the direct links started.
+    ready: () => {
+      serves = true
+      deps.ready()
+      for (const served of [...servingWaiters]) served()
+    },
     unpaired: (identity) => gateway.revokeIdentity(identity),
     focus: (next) => { revision = next },
     transcripts: (agentId, seen) => { if ((dispatched.get(agentId) ?? 0) <= seen) watched.delete(agentId) },
@@ -155,9 +186,16 @@ export function createWifiCore(deps: WifiCoreDeps) {
       session: (connId: string, client: RemoteClient | null): void => {
         if (client?.role === 'device') sessions.set(connId, client)
         else if (!sessions.delete(connId)) return
+        if (!up && client?.role === 'device') deps.want()
         port()?.session(connId, client?.role === 'device' ? client : null)
       },
       request: (connId: string, frame: Record<string, unknown>, opened: Record<string, unknown> | null): void => {
+        if (holding) {
+          held.push({ connId, frame, opened, at: Date.now() })
+          if (held.length > WIFI_HELD_MAX) held.shift()
+          if (!up) deps.want()
+          return
+        }
         port()?.request(connId, frame, opened)
       },
       dropped: (connId: string): void => {
@@ -186,7 +224,8 @@ export function createWifiCore(deps: WifiCoreDeps) {
     directSessions: (): number => servingCount((client) => client.direct),
     /** The focus revision, as the service last said; none while it is off. */
     focusRevision: (): string | undefined => (up ? revision : undefined),
-    /** The service is there (it started here, or its process connected): it is handed what the core holds. */
+    /** The service is there (it started here, or its process connected): it is handed what the core holds,
+     *  and then what its devices sent meanwhile, in order, before anything they send from now on. */
     started: (focus: WifiResume['focus']): void => {
       up = true
       watched.clear()
@@ -194,16 +233,31 @@ export function createWifiCore(deps: WifiCoreDeps) {
       streamed = new Set()
       revision = undefined
       for (const [connId, identity] of [...helloed]) if (!serving(connId, identity)) forget(connId)
-      port()?.resume({
+      const resumed = port()?.resume({
         sessions: [...sessions].map(([connId, client]) => ({ connId, client })),
         helloed: [...helloed].map(([connId, identity]) => ({ connId, identity })),
         focus,
       })
+      void Promise.resolve(resumed).catch(() => {}).then(release)
     },
-    /** The service went away: nothing it watched is sent, and no device is served until it is back. */
+    /** The service went away: nothing it watched is sent, and no device is served until it is back; what its
+     *  devices send meanwhile is held for it. */
     stopped: (): void => {
       up = false
+      serves = false
+      holding = true
       revision = undefined
+    },
+    /** Ask for the service and wait, at most `waitMs`, until it serves: a device's discovery and pairing go through
+     *  the gateway's direct links, which start only then. False when it did not in time. */
+    serving: (waitMs: number): Promise<boolean> => {
+      if (up && serves) return Promise.resolve(true)
+      if (!deps.want()) return Promise.resolve(false)
+      return new Promise((resolve) => {
+        const served = (): void => { servingWaiters.delete(served); clearTimeout(timer); resolve(true) }
+        const timer = setTimeout(() => { servingWaiters.delete(served); resolve(false) }, waitMs)
+        servingWaiters.add(served)
+      })
     },
   }
 }

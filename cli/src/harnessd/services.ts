@@ -24,9 +24,12 @@ export interface ServiceSpec {
   heapLimitMiB: number
   /** Resident memory past which it is restarted, MiB; 0: off. */
   rssLimitMiB: number
-  /** An experiment's process: not started with the others, only once the core asks for one of its
-   *  services (`want`), and then kept running like any other. */
+  /** A process on demand (an experiment's, the devices'): not started with the others, only once the core
+   *  asks for one of its services (`want`), and then kept running like any other. */
   onDemand?: boolean
+  /** The core protocol (./protocol.ts) from which a core asks for this process on demand; 3, the experiments',
+   *  when unset. A core that speaks an older one never asks for it, and it is started as that core binds. */
+  askedSince?: number
 }
 
 export interface ServiceSupervisorDeps {
@@ -151,8 +154,8 @@ class Service {
     this.watchHeartbeat(child)
   }
 
-  /** Start an experiment's process the core asked for: once, while it is off. One already started is
-   *  the master's to keep running, parked included. */
+  /** Start a process on demand the core asked for: once, while it is off. One already started is the
+   *  master's to keep running, parked included. */
   want(): void {
     if (this.state === 'off') this.start()
   }
@@ -283,18 +286,23 @@ export class ServiceSupervisor {
     this.services = specs.map((spec) => new Service(spec, deps, options, env))
   }
 
-  /** Start every service but the experiments; none waits on another, or on the core. */
+  /** Start every service but those on demand; none waits on another, or on the core. */
   start(): void {
     for (const service of this.services) if (!service.spec.onDemand) service.start()
   }
 
+  /** Start the process on demand that hosts [service], if it is not running yet: the core asked for it (`harnessd:want`). */
+  want(service: string): void {
+    for (const each of this.services) if (each.spec.services.includes(service)) each.want()
+  }
+
   /**
-   * Start the experiment's process that hosts [service], if it is not running yet: the core asked for it
-   * (`harnessd:want`). With null, every experiment's: a core from before `want` never asks, and ran them
-   * all as it ran every other service.
+   * A core bound that speaks [protocol], older than this master's: every process that became on demand after it
+   * starts now, since that core never asks for one and ran it as it ran every other service. A core from before
+   * `want` (2) asks for none; one from before the devices were on demand (3) never asks for theirs.
    */
-  want(service: string | null): void {
-    for (const each of this.services) if (service === null || each.spec.services.includes(service)) each.want()
+  unasked(protocol: number): void {
+    for (const each of this.services) if (each.spec.onDemand && (each.spec.askedSince ?? 3) > protocol) each.want()
   }
 
   /** Stop every service; `done` once all are gone. */
@@ -360,8 +368,10 @@ export const SERVICE_HOSTS: Readonly<Record<string, ServiceHostSpec>> = {
   // is bounded per dial), the window bridges, the fleet's router and its lane, the voice router's engine
   // worker (a process of its own, outside this budget). Hardware that speaks whatever its firmware says:
   // what it costs, it costs here, never a session. The Wi-Fi device beside them (services/wifiProcess.ts),
-  // on a link of its own: its receipts, its streams and its Store preparations.
-  devices: { services: ['devices', 'wifi'], heapLimitMiB: 256, rssLimitMiB: 512 },
+  // on a link of its own: its receipts, its streams and its Store preparations. Started only once there is
+  // a device, or a request for one (core/devicesWake.ts): about 72 MiB at idle, which a computer with none
+  // never pays.
+  devices: { services: ['devices', 'wifi'], heapLimitMiB: 256, rssLimitMiB: 512, onDemand: true, askedSince: 4 },
 }
 
 /** Every service this build can run outside the core's process: what `HARNESSD_SERVICES` names. */
@@ -426,8 +436,8 @@ export function servicesTheMasterRuns(env: NodeJS.ProcessEnv, known: readonly st
  * opt-in. Each process hosts the services named of its own, and is not started for none. A process
  * named as one of its services is named whole: `viewers` runs the viewers' process, the Store beside
  * them, as it ran the viewers' before the Store joined it. `HARNESSD_SERVICE_HEAP_LIMIT_MIB` gives every
- * one the same heap limit instead (tests, support). An experiment's process (`onDemand`) waits for the core
- * to ask for it; named in `HARNESSD_SERVICES`, it starts with the others.
+ * one the same heap limit instead (tests, support). A process on demand (`onDemand`: an experiment's, the
+ * devices') waits for the core to ask for it; named in `HARNESSD_SERVICES`, it starts with the others.
  */
 export function serviceSpecs(env: NodeJS.ProcessEnv, hosts: Readonly<Record<string, ServiceHostSpec>>): ServiceSpec[] {
   const named = env.HARNESSD_SERVICES === undefined ? null
@@ -435,7 +445,7 @@ export function serviceSpecs(env: NodeJS.ProcessEnv, hosts: Readonly<Record<stri
   const heap = Number(env.HARNESSD_SERVICE_HEAP_LIMIT_MIB)
   return Object.entries(hosts).flatMap(([name, host]) => {
     const services = host.services.filter((service) => !named || named.has(service) || named.has(name))
-    // An experiment named outright runs from the start, as every service named does (a test, support).
+    // A process on demand named outright runs from the start, as every service named does (a test, support).
     const onDemand = host.onDemand && !named ? { onDemand: true } : {}
     const { onDemand: _given, ...rest } = host
     return services.length ? [{ name, ...rest, services, ...onDemand, ...(Number.isInteger(heap) && heap > 0 ? { heapLimitMiB: heap } : {}) }] : []

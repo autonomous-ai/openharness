@@ -138,16 +138,27 @@ describe('service links', () => {
     expect(reply).toHaveBeenCalledWith({ link: 'ready' })
   })
 
-  it('answers SERVICE_UNAVAILABLE for an experiment that does not come in time, or will not take the request', () => {
-    const links = make({ owned: { orchestrator: ['orchestrator'], search: ['session_search'] }, onDemand: new Set(['orchestrator']) })
+  it('answers SERVICE_UNAVAILABLE for one on demand that does not come in time, then at once until it comes, or will not take the request', () => {
+    const want = vi.fn()
+    const links = make({ owned: { orchestrator: ['orchestrator'], devices: ['harness_devices_list'], search: ['session_search'] }, onDemand: new Set(['orchestrator', 'devices']), want })
     const late = vi.fn()
     links.route('orchestrator', { action: 'list' }, ASKER, late)
     vi.advanceTimersByTime(5_000)
     expect(late).toHaveBeenCalledWith({ error: 'SERVICE_UNAVAILABLE', service: 'orchestrator', retryable: true })
+    // Its master could not start it: the next request does not wait the whole wait again, nor ask again.
+    const again = vi.fn()
+    links.route('orchestrator', { action: 'list' }, ASKER, again)
+    expect(again).toHaveBeenCalledWith({ error: 'SERVICE_UNAVAILABLE', service: 'orchestrator', retryable: true })
+    expect(want).toHaveBeenCalledTimes(1)
+    // Once it comes, it is served as any other.
+    const served = sink()
+    links.accept('orchestrator', TOKEN, served, vi.fn())
+    links.route('orchestrator', { action: 'list' }, ASKER, vi.fn())
+    expect(served.sent).toHaveLength(1)
     const refused = vi.fn()
-    links.route('orchestrator', { action: 'list' }, ASKER, refused)
-    links.accept('orchestrator', TOKEN, sink(false), vi.fn())
-    expect(refused).toHaveBeenCalledWith({ error: 'SERVICE_UNAVAILABLE', service: 'orchestrator', retryable: true })
+    links.route('harness_devices_list', {}, ASKER, refused)
+    links.accept('devices', TOKEN, sink(false), vi.fn())
+    expect(refused).toHaveBeenCalledWith({ error: 'SERVICE_UNAVAILABLE', service: 'devices', retryable: true })
     // A service that is not an experiment is never waited for.
     const search = vi.fn()
     links.route('session_search', {}, ASKER, search)

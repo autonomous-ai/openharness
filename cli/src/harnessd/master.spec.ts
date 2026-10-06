@@ -304,8 +304,10 @@ describe('runMaster', { timeout: 60_000 }, () => {
     writeFileSync(core, `
       // The services run this script too (as \`__service <name>\`); each records its own.
       require('node:fs').writeFileSync(${JSON.stringify(ran)} + (process.argv[3] ?? ''), process.execPath)
-      process.send({ type: 'harnessd:bound', protocol: 2, port: 1 })
+      process.send({ type: 'harnessd:bound', protocol: ${HARNESSD_PROTOCOL}, port: 1 })
       process.send({ type: 'harnessd:ready' })
+      // A device: the core asks for the devices' process, which runs only on demand.
+      if (process.argv[2] === '__run') process.send({ type: 'harnessd:want', service: 'wifi' })
       setInterval(() => process.send({ type: 'harnessd:heartbeat', rssBytes: 1, heapUsedBytes: 1, loopDelayMs: 0 }), 50)
       process.on('SIGTERM', () => process.exit(0))
     `)
@@ -317,9 +319,11 @@ describe('runMaster', { timeout: 60_000 }, () => {
       exit: (code) => exits.push(code), onSignal: (signal, listener) => signals.set(signal, listener),
     })
     await until('the core and a service to be running', () => supervisor.status().state === 'running' && existsSync(ran) && existsSync(`${ran}search`))
+    await until('the devices\' process the core asked for', () => existsSync(`${ran}devices,wifi`))
     const libexec = join(realpathSync(runtime), 'node-v1', 'libexec', 'harnessd')
     expect(readFileSync(ran, 'utf8')).toBe(join(libexec, 'harnessd-core'))
     expect(readFileSync(`${ran}search`, 'utf8')).toBe(join(libexec, 'harnessd-search'))
+    expect(readFileSync(`${ran}devices,wifi`, 'utf8')).toBe(join(libexec, 'harnessd-devices'))
     signals.get('SIGTERM')!()
     await until('the master to finish', () => exits.length > 0)
   })

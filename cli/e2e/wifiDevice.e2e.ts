@@ -10,7 +10,9 @@
  * - two dials and a Wi-Fi device are three devices: each hears its own, the desk's turn reaches all three,
  *   and a dial unplugged costs the other two nothing;
  * - its service failing to start costs it alone: the dials and the agents go on, and
- *   `harness device receipt` says it is not running.
+ *   `harness device receipt` says it is not running;
+ * - paired, it starts the devices' process with the daemon, with no dial (core/devicesWake.ts), and what it
+ *   sends while that process starts again is held by the core and answered.
  */
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -161,6 +163,24 @@ describe('the Wi-Fi device with the dials', () => {
     expect((await device.ask('agents.list')).agents).toEqual([expect.objectContaining({ agentId })])
     expect((await device.ask('receipt.get', { idempotencyKey: 'before' })).receipt).toMatchObject({ idempotencyKey: 'before', agentId })
     await deviceTurn(device, machine.machineId, agentId, 'after', 'after the kill')
+    expect(machine.daemon.coresStarted()).toBe(1)
+  })
+
+  it('paired, it starts the devices\' process with the daemon, and a hello it sends once while that process starts again is held and answered', async () => {
+    const { machine, agentId, device } = await fresh()
+    const log = () => machine.daemon.log()
+    // No dial here: its pairing asks for the process (core/devicesWake.ts).
+    await until('the Wi-Fi device\'s service to connect', () => wifiConnections(world!) >= 1 || null, 30_000, 200)
+    expect(log()).toContain('[devices] a paired Wi-Fi device: asking for the devices\' process')
+    await connect(device)
+    for (const pid of devicesPids(machine.daemon)) process.kill(pid, 'SIGKILL')
+    await until('the core to see the service go', () => log().includes('[services] wifi disconnected') || null, 15_000, 50)
+    // One hello, no retry: held by the core while the process starts, handed on once its service is resumed.
+    const hello = await device.hello()
+    expect(hello).toMatchObject({ type: 'hello_result', proto: 1, machineId: machine.machineId })
+    expect(wifiConnections(world!)).toBe(2)
+    expect((await device.ask('agents.list')).agents).toEqual([expect.objectContaining({ agentId })])
+    await deviceTurn(device, machine.machineId, agentId, 'held', 'the first prompt after the start')
     expect(machine.daemon.coresStarted()).toBe(1)
   })
 

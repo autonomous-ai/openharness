@@ -345,8 +345,9 @@ export function runMaster(config: MasterConfig): Supervisor {
     confirmUpdate: config.confirmUpdate,
     bundle,
     log,
-    // An experiment's process, started once the core says it is on (./services.ts `onDemand`).
+    // A process on demand, started once the core asks (./services.ts `onDemand`), or as a core too old to ask binds.
     want: (service) => services.want(service),
+    unasked: (protocol) => services.unasked(protocol),
     // The services go with the master, after the core: none is left holding the core's socket.
     exit: (code) => {
       stopping = true
