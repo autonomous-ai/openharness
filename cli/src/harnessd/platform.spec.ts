@@ -159,7 +159,12 @@ describe('the systemd unit', () => {
   })
 })
 
-describe('the default dependencies', () => {
+// Each command the code under test runs here is a fake launchctl, systemctl or loginctl: a Node process
+// (../testing/fakePlatform.ts) that starts in about 50 ms on a quiet machine and takes over half a
+// second at a load of 50 to 60. A test runs up to 22 of them in a row, past vitest's 5 s for a test.
+const FAKE_COMMANDS_TIMEOUT_MS = 60_000
+
+describe('the default dependencies', { timeout: FAKE_COMMANDS_TIMEOUT_MS }, () => {
   let dir: string
   let fake: FakePlatform
   beforeEach(() => {
@@ -202,7 +207,7 @@ describe('the default dependencies', () => {
   })
 })
 
-describe('PlatformService over fake launchctl', () => {
+describe('PlatformService over fake launchctl', { timeout: FAKE_COMMANDS_TIMEOUT_MS }, () => {
   let dir: string
   let home: string
   let fake: FakePlatform
@@ -286,7 +291,7 @@ describe('PlatformService over fake launchctl', () => {
   })
 })
 
-describe('PlatformService over fake systemctl', () => {
+describe('PlatformService over fake systemctl', { timeout: FAKE_COMMANDS_TIMEOUT_MS }, () => {
   let dir: string
   let home: string
   let fake: FakePlatform
