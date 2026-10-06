@@ -299,12 +299,12 @@ export class BackendSocket {
     return this.localClients.size > this.toolClients.size
   }
 
-  /** True after a paired device has completed the E2EE hello/welcome session (the local dashboard's dot). */
+  /** True after a paired device has completed the E2EE hello/welcome session (`/api/status`). */
   deviceE2eeConnected(): boolean {
     return [...this.remoteClients.values()].some((client) => client.role === 'device')
   }
 
-  /** Live backend link state (local dashboard), as the gateway last said. */
+  /** Live backend link state (`/api/status`), as the gateway last said. */
   isConnected(): boolean {
     return this.linkUp
   }

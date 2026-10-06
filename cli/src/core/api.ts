@@ -1050,8 +1050,6 @@ export interface GatewayOps {
    *  answer (`{ refused }`), as the device's local API words it. */
   wifi(request: { op: 'discover' | 'pair' | 'pairStatus' | 'list' | 'revoke'; device?: string; code?: string; id?: string }):
     Promise<{ result: Record<string, unknown> } | { refused: GatewayRefusal }>
-  /** The local dashboard's port, said to the web in `e2e_status` so it can link there to approve a pairing. */
-  dashboardPort(port: number): void
   /** The Wi-Fi device service is up (its direct links start) or gone (they stop). */
   wifiService(on: boolean): void
   /** A Wi-Fi device asked to be unpaired, over its own authenticated session. */

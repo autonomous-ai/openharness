@@ -31,7 +31,7 @@ function stubGateway() {
     trustLinkedPeer: vi.fn(async () => answer), groupList: vi.fn(async () => answer), groupSync: vi.fn(async () => answer),
     groupRemove: vi.fn(async () => answer), devicesList: vi.fn(async () => answer), devicesRemove: vi.fn(async () => answer),
     devicesHistory: vi.fn(async () => answer), devicesDismiss: vi.fn(async () => answer), devicesRebaseline: vi.fn(async () => answer),
-    wifi: vi.fn(async () => ({ result: { devices: [] } })), dashboardPort: vi.fn(), wifiService: vi.fn(), revokeIdentity: vi.fn(),
+    wifi: vi.fn(async () => ({ result: { devices: [] } })), wifiService: vi.fn(), revokeIdentity: vi.fn(),
     account: vi.fn(), reachable: vi.fn(),
     lane: {
       hello: vi.fn(async (machineId: string) => ({ type: 'e2e_hello', machineId })), welcome: vi.fn(async () => true),
@@ -101,7 +101,6 @@ describe('the gateway\'s process, spoken to by the core', () => {
     w.link.port.holdRequests()
     w.link.port.connect()
     w.link.port.localClients(1)
-    w.link.ops.dashboardPort(41000)
     w.link.ops.reachable(['m2'])
     w.link.ops.wifiService(true)
     expect(w.gateways).toHaveLength(0)
@@ -111,7 +110,6 @@ describe('the gateway\'s process, spoken to by the core', () => {
     expect(w.hosts[0]).toMatchObject({ machineId: 'machine-1', computerId: 'computer-1', autonomousEnv: 'prod', signedIn: true, account: { machineId: 'machine-1', signIn: null } })
     expect(gateway.port.holdRequests).toHaveBeenCalled()
     expect(gateway.port.localClients).toHaveBeenCalledWith(1)
-    expect(gateway.ops.dashboardPort).toHaveBeenCalledWith(41000)
     expect(gateway.ops.reachable).toHaveBeenCalledWith(['m2'])
     expect(gateway.ops.wifiService).toHaveBeenCalledWith(true)
     expect(gateway.port.connect).toHaveBeenCalled()

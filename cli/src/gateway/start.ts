@@ -410,7 +410,6 @@ export function startGateway(host: GatewayHost): StartedGateway {
         return { result: { revoked: 1 } }
       } catch (error) { return refusal(error) }
     },
-    dashboardPort: (port) => gateway.setDashboardPort(port),
     wifiService: (on) => {
       if (on) { startDirect(); return }
       direct?.stop()

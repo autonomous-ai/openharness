@@ -83,7 +83,7 @@ this request remains `offline`, rather than being treated as a revoke, so transi
 not unpair the device.
 
 Revoke is bidirectional. When the app removes the device (`harness unpair`, `harness unpair --all`,
-`harness autonomous-device revoke`, or the dashboard) while the device's direct session is open, the
+or `harness autonomous-device revoke`) while the device's direct session is open, the
 CLI seals `{type:"pair.revoke",machineId:<this computer's machineId>}` as an `autonomous_device_event`
 over that same E2EE session, then closes the socket gracefully and deletes local trust. It is
 best-effort: a send failure never blocks local removal. A device that is offline at that moment

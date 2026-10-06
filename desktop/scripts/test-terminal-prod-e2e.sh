@@ -151,8 +151,9 @@ if [[ "$harness_status" != *"$E2E_MACHINE_NAME"* ]]; then
   echo "REFUSED: joined machine does not match E2E_MACHINE_NAME" >&2
   exit 65
 fi
-dashboard_url="$(printf '%s\n' "$harness_status" | sed -nE 's/^[[:space:]]*dashboard[[:space:]]+(http[^[:space:]]+).*$/\1/p' | head -1)"
-[[ -n "$dashboard_url" ]] || { echo "REFUSED: Harness status did not expose its local dashboard" >&2; exit 65; }
+# The daemon's loopback API: `local api` since the web dashboard went, `dashboard` before.
+dashboard_url="$(printf '%s\n' "$harness_status" | sed -nE 's/^[[:space:]]*(local api|dashboard)[[:space:]]+(http[^[:space:]]+).*$/\2/p' | head -1)"
+[[ -n "$dashboard_url" ]] || { echo "REFUSED: Harness status did not expose its local API" >&2; exit 65; }
 
 mkdir -p "$RUN_ROOT/bin" "$RUN_ROOT/work-a" "$RUN_ROOT/work-b"
 ln -s "$AUTONOMOUS_CODE_ROOT/scripts/fixtures/terminal-e2e-agent.mjs" "$RUN_ROOT/bin/codex"
