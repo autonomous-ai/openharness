@@ -3,7 +3,7 @@ import type { EventEmitter } from 'node:events'
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { DshVerdictWatcher, parseVerdict, readVerdictFile, type DshVerdict } from './verdict.js'
+import { DshVerdictWatcher, parseVerdict, type DshVerdict } from './verdict.js'
 
 describe('parseVerdict', () => {
   it('reduces a spec-1 verdict to the wire shape', () => {
@@ -113,16 +113,10 @@ describe('DshVerdictWatcher', () => {
   })
 })
 
-describe('readVerdictFile and the edges of parseVerdict', () => {
-  it('reads a verdict off disk, or null when there is no file', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'dsh-verdict-file-'))
-    try {
-      writeFileSync(join(dir, 'verdict.json'), JSON.stringify({ spec: 1, ready: true, summary: '   ', findings: 'none', artifact: '' }))
-      expect(readVerdictFile(join(dir, 'verdict.json'))).toEqual({ ready: true, summary: null, errors: 0, warnings: 0, artifact: null, phases: [], updatedAt: null })
-      expect(readVerdictFile(join(dir, 'missing.json'))).toBeNull()
-    } finally {
-      rmSync(dir, { recursive: true, force: true })
-    }
+describe('the edges of parseVerdict', () => {
+  it('reads a blank summary, no findings and an empty artifact as nothing', () => {
+    expect(parseVerdict(JSON.stringify({ spec: 1, ready: true, summary: '   ', findings: 'none', artifact: '' })))
+      .toEqual({ ready: true, summary: null, errors: 0, warnings: 0, artifact: null, phases: [], updatedAt: null })
   })
 
   it('caps the summary, refuses an overlong artifact, and skips a phase that is a list', () => {

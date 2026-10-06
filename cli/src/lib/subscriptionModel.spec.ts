@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { subscriptionModelLaunch, subscriptionModelEngines } from './subscriptionModel.js'
+import { ENGINES } from './engineBin.js'
+import { subscriptionModelLaunch } from './subscriptionModel.js'
 
 /**
  * The point of this module is that coming back from a grid returns a person to the model they were
@@ -59,6 +60,8 @@ describe('subscriptionModelLaunch', () => {
   })
 
   it('only claims engines it can actually steer', () => {
-    expect(subscriptionModelEngines().sort()).toEqual(['claude', 'codex', 'hermes', 'opencode'])
+    // A `provider/model` any of them could take: only an engine with a cited mechanism says how.
+    expect(ENGINES.filter((engine) => subscriptionModelLaunch(engine, 'acme/some-model') !== null).sort())
+      .toEqual(['claude', 'codex', 'hermes', 'opencode'])
   })
 })

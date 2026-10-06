@@ -6,9 +6,9 @@ import type { TerminalRootObservation, TerminalRuntimeRef } from './terminalType
 /**
  * The gateway flag has to ride the LIVE discovery path, not just the tmux-only one it was born on.
  *
- * This is the regression that a backend refactor produces for free: `probeTmuxAgents` keeps its probe
- * and its tests keep passing, while the reconciler has quietly moved to `probeTerminalAgents` and every
- * agent arrives with `gateway: undefined`. Nothing goes red — an `ori claude` pane just starts offering
+ * This is the regression a backend refactor produced for free: `probeTmuxAgents` (since deleted) kept
+ * its probe and its tests kept passing, while the reconciler had quietly moved to `probeTerminalAgents`
+ * and every agent arrived with `gateway: undefined`. Nothing goes red — an `ori claude` pane just starts offering
  * the native Claude catalog again, accepts `/model` it cannot honour, and loses its recap. So the wiring
  * is pinned here, on both backends, rather than the classifier (which `gatewayRuntime.spec.ts` covers).
  */

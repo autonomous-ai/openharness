@@ -74,7 +74,6 @@ import { Address, Id, OperationId, Receipt, TeamError, type MemberRuntime } from
 import { shellQuote } from './orchestrator/prompts.js'
 import type { SessionInputDelivery } from './lib/sessionInput.js'
 import { terminalHandoffRequest } from './lib/terminalHandoff.js'
-import { routeVoiceTask } from './lib/voiceRouter.js'
 import { MediaPreviewError, readMediaPreviewChunk } from './lib/mediaPreview.js'
 import { ViewerForwarder } from './lib/viewerForwarder.js'
 import { InteractiveViewers } from './lib/interactiveViewer.js'
@@ -102,10 +101,6 @@ import {
   type TerminalP2pData,
   type TerminalP2pSignal,
 } from './lib/terminalP2p.js'
-
-/** Answers the device `project_recent` RPC — set by cli.ts to the CommanderMirror's `recent`. */
-export type RecentProvider = (sessionId: string, n: number) => Array<{ kind: string; text: string; recap?: string }>
-
 
 const APP_PING_MS = 15_000
 // Floor between two `app_presence` up-frames while a window is attached. Rides the 15s app-ping
@@ -517,8 +512,6 @@ export class BackendSocket {
   /** Called when this machine is already connected from ANOTHER computer (HTTP 409 on the upgrade) — the
    *  SSO session is valid, so CLI keeps it and stops without a retry loop. */
   onBusy: (() => void) | null = null
-  /** An agent's last turn summaries, which `voice_route` routes by (cli.ts wires this to the recaps). */
-  recentProvider: RecentProvider | null = null
   /** Answers `agent_recent` with the whole reply: an agent's last turn summaries and the person's last
    *  questions, for a device's tiles (cli.ts binds core/turns/recaps.ts). Null answers UNSUPPORTED. */
   agentRecentProvider: ((payload: Record<string, unknown>) => Record<string, unknown>) | null = null
@@ -1988,34 +1981,6 @@ export class BackendSocket {
           else answer({ error: 'UNSUPPORTED' })
           return
 
-        case 'voice_route': {
-          // Voice router (REMOTE machine): pick the best-fit agent for a transcribed Overview voice task,
-          // using each agent's name + recent-turn recap. Once asked plaintext by the backend's legacy
-          // device-ws voice path; that path no longer reaches a harness machine, and the relay gate now
-          // refuses it unsealed like any other RPC.
-          const transcript = typeof payload.transcript === 'string' ? payload.transcript : ''
-          if (!transcript.trim()) {
-            console.log('[voice-route] backend sent an empty transcript — nothing to route')
-            reply(type, requestId, { error: 'MISSING_TRANSCRIPT' })
-            return
-          }
-          const projects = (await Promise.all(registry.advertised().map((s) => this.toProject(s)))).slice(0, 24) // cap the router prompt (mirror the hosted runtime path)
-          const agents = projects.map((p) => {
-            // Use the last 3 turns' recaps (not just 1) — a single turn can misrepresent what the agent is
-            // actually working on; 3 gives the router a more stable picture.
-            const recents = this.recentProvider?.(p.id, 3) ?? []
-            const recentSummary = recents.map((r) => r?.recap || r?.text || '').filter(Boolean).join(' · ')
-            // engine: the router classifies with a CLI the machine actually runs (a live agent proves it is
-            // installed and logged in), so it has to travel with the agent.
-            const session = registry.resolve(p.id)
-            return { id: p.id, name: p.name, recentSummary, engine: session?.engine, gateway: session?.gateway }
-          })
-          const decision = await routeVoiceTask(transcript, agents)   // logs the task, candidates and pick
-          const chosen = projects.find((p) => p.id === decision.agentId)
-          reply(type, requestId, { ...decision, agentName: chosen?.name ?? '' })
-          return
-        }
-
         // A rename, a model and effort, or an app opening the agent (core/agents/update.ts, bound by cli.ts).
         case 'agent_update':
           if (this.agentUpdateProvider) await this.agentUpdateProvider(payload, answer)
@@ -2262,22 +2227,6 @@ export class BackendSocket {
 
         // A person interrupting an agent's turn (core/turns/cancel.ts, bound by cli.ts).
         case 'cancel': this.cancelProvider?.(payload); return
-
-        case 'speaking': {
-          // A device is capturing a voice instruction. Mirror the hosted runtime: re-broadcast the presence
-          // signal to the web (indicator) + other devices. Ephemeral, no requestId.
-          const p = payload as { speaking?: boolean; agentId?: string; sessionId?: string }
-          const sessionId = p.sessionId ?? p.agentId
-          const projectId = p.agentId ?? p.sessionId ?? null
-          const on = p.speaking !== false
-          // Echo the canonical agent id, whichever id the sender used to address it.
-          const speaker = projectId ? registry.resolve(projectId) : undefined
-          const speakerAgentId = speaker?.agentId ?? projectId
-          const evt = { type: 'speaking', dbSessionId: speaker?.sessionId ?? sessionId, agentId: speakerAgentId, payload: { speaking: on, agentId: speakerAgentId, sessionId: speaker?.sessionId ?? sessionId } }
-          this.send(evt) // web
-          this.sendCommander(evt) // other devices (firmware ignores its own echo; matches node forwardToCommander)
-          return
-        }
 
         // A person's answer to an agent's question, keyed into its dialog (core/questions.ts, bound by cli.ts).
         case 'question_response':
