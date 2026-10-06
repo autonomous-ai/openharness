@@ -153,7 +153,7 @@ static uint16_t color(unsigned rgb) { return ht_rgb(rgb); }
 #define SEL color(HT_THEME_SELECTION)
 static void dispatch(action_t a);
 '''
-for name in ("pro_work_local", "pro_work_available", "pro_busy_reset", "question_view", "waiting", "notice_flush_reads", "notice_mark_read", "notice_open", "notice_sync_view", "notice_selection", "notice_restore_selection", "ui_notif_replace",
+for name in ("pro_send_feedback_clear", "pro_work_local", "pro_work_available", "pro_busy_reset", "question_view", "waiting", "notice_flush_reads", "notice_mark_read", "notice_open", "notice_sync_view", "notice_selection", "notice_restore_selection", "ui_notif_replace",
              "visit_emit", "selection_emit", "carry_emit", "make_action", "read_question", "open_question",
              "pro_open_in_app", "question_answer", "question_rows", "question_move", "send_answer", "question_load", "ui_question_show",
              "ui_question_state", "ui_answer_receipt", "ui_question_close", "ui_set_connected",

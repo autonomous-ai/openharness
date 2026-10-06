@@ -235,6 +235,12 @@ static EXT_RAM_BSS_ATTR struct {
     pro_draft_recovery_t draft_recovery;
     uint32_t pro_busy_second;
     bool pro_busy_visible;
+    struct {
+        char draft[48], agent[ID_MAX], host[ID_MAX], machine[ID_MAX], session[80];
+        uint32_t request, until;
+        uint8_t mode;
+        bool accepted;
+    } send_feedback;
     ht_character_t preview_character;
     struct {
         uint32_t id, poll_due;
@@ -556,6 +562,38 @@ static void pane_memory_apply(agent_t *a, pane_memory_t *m)
     a->recap_ready = a->has_event && !m->dismissed && !m->awaiting_result && !m->busy;
 }
 #ifdef DEVICE_PRO_COMPANION
+static void pro_send_feedback_clear(void)
+{
+    memset(&s.send_feedback, 0, sizeof s.send_feedback);
+}
+static bool pro_send_feedback_matches(void)
+{
+    const agent_t *a = active();
+    return s.connected && s.send_feedback.agent[0] && a &&
+        !strcmp(a->id, s.send_feedback.agent) &&
+        !strcmp(a->machine_id, s.send_feedback.machine) &&
+        !strcmp(a->session, s.send_feedback.session) &&
+        !strcmp(s.draft_recovery.current_host, s.send_feedback.host);
+}
+static void pro_send_feedback_begin(uint32_t request)
+{
+    pro_send_feedback_clear();
+    int i = find(draft.page.agent);
+    if (i < 0 || !s.connected || !pro_draft_recovery_same_host(&s.draft_recovery)) return;
+    COPY(s.send_feedback.draft, draft.page.id);
+    COPY(s.send_feedback.agent, draft.page.agent);
+    COPY(s.send_feedback.host, s.draft_recovery.current_host);
+    COPY(s.send_feedback.machine, s.agents[i].machine_id);
+    COPY(s.send_feedback.session, s.agents[i].session);
+    s.send_feedback.request = request;
+    s.send_feedback.mode = s.work_voice_mode;
+}
+static const char *pro_send_feedback_text(uint32_t now)
+{
+    if (!s.send_feedback.accepted || !s.send_feedback.until ||
+        (int32_t)(now - s.send_feedback.until) >= 0 || !pro_send_feedback_matches()) return NULL;
+    return s.send_feedback.mode == PRO_WORK_TASK ? "Passed to Harness" : "Request sent";
+}
 static bool pro_work_local(const agent_t *a)
 {
     // current_host came from the complete welcome identity, not the legacy
@@ -1100,6 +1138,7 @@ static bool pro_busy_elapsed(const agent_t *a, uint32_t now, uint32_t *seconds)
     if ((s.view != HOME && s.view != AGENT) || !a || !a->busy || !s.connected ||
         s.loading || s.nap || s.locked || display_is_asleep() || s.voice_open ||
         s.voice_retry_until || s.speech_error_until || pro_speech_visible() ||
+        pro_send_feedback_text(now) ||
         carry.active || carry.error[0] || is_question(a->id) || now - a->last_busy > 25000)
         return false;
     *seconds = (now - a->busy_ms) / 1000;
@@ -1152,6 +1191,11 @@ static uint32_t status_wake_ms(uint32_t now)
 static void surface_tick(uint32_t now)
 {
 #ifdef DEVICE_PRO_COMPANION
+    if (s.send_feedback.agent[0] && (!pro_send_feedback_matches() ||
+        (!s.send_feedback.accepted && !draft.pending) ||
+        (s.send_feedback.until && (int32_t)(now - s.send_feedback.until) >= 0))) {
+        pro_send_feedback_clear(); change();
+    }
     uint32_t busy_second = 0;
     bool busy_visible = pro_busy_elapsed(active(), now, &busy_second);
     if (busy_visible != s.pro_busy_visible ||
@@ -2331,6 +2375,10 @@ static bool draft_emit(const ht_draft_command_t *c, void *ctx)
 #ifdef DEVICE_PRO_COMPANION
 static void pro_draft_forget(void)
 {
+    if (s.send_feedback.accepted && pro_send_feedback_matches()) {
+        s.send_feedback.until = ms() + 3000;
+        if (!s.send_feedback.until) s.send_feedback.until = 1;
+    } else pro_send_feedback_clear();
     if (pro_carry_review_owns(&s.carry_review, &draft.page)) {
         if (!strcmp(s.carry_review.id, carry.id)) ht_carry_close(&carry);
         memset(&s.carry_review, 0, sizeof s.carry_review);
@@ -2780,6 +2828,7 @@ static void dispatch(action_t a)
 #endif
             ) || a.revision != draft.page.revision || strcmp(a.text, draft.page.id)) break;
 #ifdef DEVICE_PRO_COMPANION
+        if (a.kind == A_DRAFT_DISCARD) pro_send_feedback_clear();
         if (draft.read_only) {
             if ((uint32_t)a.velocity != s.draft_recovery.generation) break;
             if (a.kind == A_DRAFT_DISCARD) {
@@ -2814,7 +2863,7 @@ static void dispatch(action_t a)
         }
         if (a.kind == A_DRAFT_SEND && s.work_voice_mode != PRO_WORK_TASK) {
             if (!pro_work_draft_available()) {
-                COPY(draft.page.error, "Choose the pane and instruction again.");
+                COPY(draft.page.error, "Instruction unavailable. Your words are still here.");
                 change(); break;
             }
         }
@@ -2875,6 +2924,9 @@ static void dispatch(action_t a)
         if (i < 0)
             break;
         if (visit.available && strcmp(visit.agent, a.id)) ht_visit_close(&visit);
+#ifdef DEVICE_PRO_COMPANION
+        if (s.active != i) pro_send_feedback_clear();
+#endif
         s.active = i;
         view(AGENT);
         if (s.connected)
@@ -3136,6 +3188,9 @@ static void dispatch(action_t a)
             if (!queue(a))
                 break;
             s.voice_open = s.voice_start_pending = true;
+#ifdef DEVICE_PRO_COMPANION
+            pro_send_feedback_clear();
+#endif
             s.voice_carry = a.value == 3;
             s.voice_search = a.value == 7;
             s.voice_review = a.value == 5 || a.value == 6;
@@ -3468,9 +3523,11 @@ static void worker(void *unused)
                 // No bytes left this worker: retain the reviewed words without
                 // claiming a terminal receipt or leaving a false pending send.
                 draft.pending = false;
-                COPY(draft.page.error, "Choose the pane and instruction again.");
+                COPY(draft.page.error, "Instruction unavailable. Your words are still here.");
                 change(); current = false;
             }
+            if (current && a.value == HT_DRAFT_SEND) pro_send_feedback_begin(a.revision);
+            else if (current && a.value == HT_DRAFT_DISCARD) pro_send_feedback_clear();
             display_unlock();
             if (!current) break;
 #endif
@@ -4100,6 +4157,7 @@ uint32_t habitat_next_wake_ms(void)
     uint32_t deadlines[] = {
 #ifdef DEVICE_PRO_COMPANION
                             s.speech_error_until,
+                            s.send_feedback.until,
 #endif
                             s.pet_pose ? s.pet_until : 0, s.nap ? s.nap_until : 0,
                             s.voice_retry_until};
@@ -4294,6 +4352,7 @@ void ui_set_connected(bool value)
     display_lock();
     if (!value) {
 #ifdef DEVICE_PRO_COMPANION
+        pro_send_feedback_clear();
         pro_busy_reset();
         pro_metrics_source(&s.metrics,NULL,false);
         pro_draft_recovery_disconnect(&s.draft_recovery);
@@ -4353,6 +4412,7 @@ void ui_draft_source(const char *machine)
 {
     display_lock();
     if (pro_draft_recovery_source(&s.draft_recovery, s.connected ? machine : NULL)) {
+        pro_send_feedback_clear();
         pro_busy_reset();
         input_cancel();
         if (draft.page.active) {
@@ -4421,6 +4481,8 @@ void ui_project_set_machine(const char *id, const char *machine_id, const char *
 #ifdef DEVICE_PRO_COMPANION
         // Never turn an oversized opaque identity into a matching prefix.
         if (!machine_id || strnlen(machine_id, ID_MAX) >= ID_MAX) machine_id = "";
+        if (!strcmp(s.send_feedback.agent, id) && strcmp(s.agents[i].machine_id, machine_id))
+            pro_send_feedback_clear();
 #endif
         COPY(s.agents[i].machine_id, machine_id);
         COPY(s.agents[i].machine, name);
@@ -4468,6 +4530,9 @@ void ui_projects_bulk_end(void)
 void ui_project_remove(const char *id)
 {
     display_lock();
+#ifdef DEVICE_PRO_COMPANION
+    if (id && !strcmp(id, s.send_feedback.agent)) pro_send_feedback_clear();
+#endif
     int i = find(id);
     if (i >= 0) {
         if (s.active == i
@@ -4490,6 +4555,9 @@ void ui_project_remove(const char *id)
 void ui_project_clear_all(void)
 {
     display_lock();
+#ifdef DEVICE_PRO_COMPANION
+    pro_send_feedback_clear();
+#endif
     input_cancel();
     s.count = 0;
     s.active = -1;
@@ -4566,6 +4634,8 @@ static void event(const char *id, const char *session, const char *kind, const c
     int i = find(id);
     agent_t *a = i >= 0 ? &s.agents[i] : NULL;
 #ifdef DEVICE_PRO_COMPANION
+    if (session && *session && !strcmp(s.send_feedback.agent, id) &&
+        strcmp(s.send_feedback.session, session)) pro_send_feedback_clear();
     if (!restore && session && *session && strcmp(m->session, session)) {
         m->busy = false;
         m->busy_ms = m->last_busy = 0;
@@ -4783,6 +4853,9 @@ void ui_focus_project(const char *id)
     bool opened = s.opening_notice[0] && !strcmp(s.opening_notice, id);
     if (opened) s.opening_notice[0] = 0;
     if (s.active != i) {
+#ifdef DEVICE_PRO_COMPANION
+        pro_send_feedback_clear();
+#endif
         input_cancel();
     }
     s.active = i;
@@ -5649,6 +5722,10 @@ void ui_draft_state(const cJSON *p)
             bool sent = ok && cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(p, "sent")) &&
                 (!carried_draft || (cJSON_IsString(carried) && !strcmp(carried->valuestring, s.carry_review.id)));
             if (sent || (ok && op == HT_DRAFT_DISCARD)) {
+                if (sent && op == HT_DRAFT_SEND && pro_send_feedback_matches() &&
+                    s.send_feedback.request == (uint32_t)serial && !strcmp(s.send_feedback.draft, page.id))
+                    s.send_feedback.accepted = true;
+                else pro_send_feedback_clear();
                 pro_draft_store_queue(true);
                 if (draft.page.active) view(DRAFT);
                 display_unlock(); return;
@@ -5662,6 +5739,7 @@ void ui_draft_state(const cJSON *p)
             draft.read_only = true; pro_draft_recovery_advance(&s.draft_recovery);
             ok = false;
         }
+        if (op == HT_DRAFT_SEND) pro_send_feedback_clear();
     }
 #endif
     if (ht_draft_reply(&draft, page.id, (uint32_t)serial, ok, &page)) {

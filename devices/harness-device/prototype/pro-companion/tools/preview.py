@@ -26,7 +26,7 @@ sys.path.insert(0, str(DEVICE / "firmware/test"))
 from native_shapes import defines, typedef  # noqa: E402
 from native_voice import voice_assets  # noqa: E402
 
-STATES = ("idle", "idle_paper", "working", "working_start", "working_59", "working_60", "working_long", "working_hour", "working_paper", "summary", "summary_paper", "mail", "needs_answer", "listening",
+STATES = ("idle", "passed_task", "sent_goal", "sent_loop", "message_options", "notifications", "notifications_muted", "idle_paper", "working", "working_start", "working_59", "working_60", "working_long", "working_hour", "working_paper", "summary", "summary_paper", "mail", "needs_answer", "listening",
           "voice_preparing", "voice_sending", "offline", "done", "asleep",
           "carrying", "launcher", "companion", "daemons", "scenes", "updates", "question", "reader", "locked", "updating",
           "carry_listening", "carry_review", "carry_preview", "carry_rejected", "carry_offline", "carry_preview_offline",
@@ -110,7 +110,7 @@ static bool display_is_asleep(void) { return false; }
 static bool cable_client_supports(uint32_t feature) { (void)feature; return true; }
 '''
     for name in ("find", "active", "waiting", "working", "is_question", "notice_unread", "color",
-                 "pro_work_local", "pro_work_available", "pro_work_capture_available", "pro_work_draft_available", "character_mood", "question_view", "settings_item", "settings_count",
+                 "pro_send_feedback_clear", "pro_send_feedback_matches", "pro_send_feedback_begin", "pro_send_feedback_text", "pro_work_local", "pro_work_available", "pro_work_capture_available", "pro_work_draft_available", "character_mood", "question_view", "settings_item", "settings_count",
                  "pro_speech_allowed", "pro_speech_visible", "pro_speech_emotion", "pro_busy_elapsed", "pro_surface_mood"):
         code += function(name, source)
     code += r'''
@@ -151,7 +151,13 @@ static void reset(void) {
 }
 static void fixture(const char *name) {
     reset();
-    if(!strcmp(name,"idle_paper")){s.scene_choice=PRO_SCENE_PAPER;}
+    if(!strcmp(name,"passed_task")||!strcmp(name,"sent_goal")||!strcmp(name,"sent_loop")){
+        s.send_feedback.accepted=true;s.send_feedback.until=now+3000;s.send_feedback.mode=!strcmp(name,"passed_task")?PRO_WORK_TASK:!strcmp(name,"sent_goal")?PRO_WORK_GOAL:PRO_WORK_LOOP;
+        COPY(s.send_feedback.agent,"design");COPY(s.send_feedback.host,"local");COPY(s.send_feedback.machine,"local");
+    }
+    else if(!strcmp(name,"message_options")){s.view=DRAFT_OPTIONS;draft.page.active=true;}
+    else if(!strcmp(name,"notifications")||!strcmp(name,"notifications_muted")){s.view=SETTINGS;s.offset=4;s.muted=!strcmp(name,"notifications_muted");}
+    else if(!strcmp(name,"idle_paper")){s.scene_choice=PRO_SCENE_PAPER;}
     else if(!strcmp(name,"summary_paper")){s.scene_choice=PRO_SCENE_PAPER;s.agents[0].recap_ready=true;}
     else if(!strncmp(name,"working",7)){
         s.agents[0].busy=true;s.agents[0].busy_ms=1000;now=35000;

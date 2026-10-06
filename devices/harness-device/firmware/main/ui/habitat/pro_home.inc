@@ -29,11 +29,13 @@ static void pro_home_footer(ht_scene_t *f, agent_t *a, bool recap)
     const char *name = a ? a->name : PRO_TR("Choose a pane");
     const ht_pro_font_t *font = ht_pro_width(&ht_pro_42, name) <= 468 ? &ht_pro_42 : &ht_pro_32;
     ht_pro_text(f, 44, 604, 468, font, ink, name);
+    const char *feedback = pro_send_feedback_text(ms());
     const char *status = !s.connected ? PRO_TR("Connect to your computer") :
         s.loading ? PRO_TR("One moment...") : s.voice_retry_until ? PRO_TR("Voice was not sent. Try again.") :
         s.nap ? PRO_TR("Taking a little rest") : a && is_question(a->id) ? PRO_TR("Needs your answer") :
         s.speech_error_until ? PRO_TR("Voice unavailable. Text is still here.") :
         pro_speech_visible() ? (s.speech.playing ? PRO_TR("Speaking. Touch to interrupt.") : PRO_TR("One moment...")) :
+        feedback ? feedback :
         a && a->busy ? (a->tool[0] ? a->tool : PRO_TR("Working")) :
         recap ? PRO_TR("A result is ready") : PRO_TR("Ready when you are");
     char carrying[128];

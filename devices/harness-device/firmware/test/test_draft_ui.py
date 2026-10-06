@@ -46,7 +46,7 @@ static const cJSON *cJSON_GetObjectItemCaseSensitive(const cJSON *v,const char *
 static cJSON object(cJSON *children,int n){for(int i=0;i<n;i++)children[i].next=i+1<n?&children[i+1]:NULL;return(cJSON){.child=children};}
 static ht_draft_t draft;
 static ht_carry_t carry;
-static struct {pro_carry_review_t carry_review;pro_draft_recovery_t draft_recovery;bool connected, voice_carry,voice_open,voice_waiting,voice_review;int voice_return,view,offset,work_voice_mode;uint32_t voice_draft_revision;char title[80],message[256],work_agent[64];} s;
+static struct {struct {char draft[48];uint32_t request;bool accepted;} send_feedback;pro_carry_review_t carry_review;pro_draft_recovery_t draft_recovery;bool connected, voice_carry,voice_open,voice_waiting,voice_review;int voice_return,view,offset,work_voice_mode;uint32_t voice_draft_revision;char title[80],message[256],work_agent[64];} s;
 static int gesture,changes;
 static uint32_t ms(void){return 1000;}
 static void change(void){changes++;}
@@ -57,6 +57,9 @@ static void voice_close(void){s.voice_open=s.voice_waiting=s.voice_review=false;
 static void view(int v){s.view=v;s.offset=0;}
 static void ht_gesture_guard(int *g,uint32_t t){(void)g;(void)t;}
 #ifdef DEVICE_PRO_COMPANION
+// Feedback integration is exercised with real roster/host/worker state in test_pro_draft_recovery.
+static void pro_send_feedback_clear(void){memset(&s.send_feedback,0,sizeof s.send_feedback);}
+static bool pro_send_feedback_matches(void){return false;}
 static bool pro_draft_store_queue(bool clear) {
     if(clear) {if(pro_carry_review_owns(&s.carry_review,&draft.page)&&!strcmp(carry.id,s.carry_review.id))ht_carry_close(&carry);ht_draft_reset(&draft);memset(&s.carry_review,0,sizeof s.carry_review);pro_draft_recovery_close(&s.draft_recovery);view(HOME);}
     else s.draft_recovery.store=PRO_RECOVERY_SAVED;

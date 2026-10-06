@@ -49,7 +49,7 @@ enum { VOICE_CMD_NONE, VOICE_CMD_GOAL, VOICE_CMD_LOOP };
 typedef int view_t;
 typedef struct { int kind, value, dy, velocity; uint32_t revision; char id[64], text[192]; } action_t;
 #define ID_MAX 48
-typedef struct { char name[64], id[64], engine[16], machine_id[48], machine[64]; } agent_t;
+typedef struct { char name[64], id[64], engine[16], machine_id[48], machine[64], session[80]; } agent_t;
 static ht_selection_t selection;
 static ht_carry_t carry;
 static ht_visit_t visit;
@@ -64,6 +64,7 @@ static struct {
     int voice_question_index;
     char title[80], message[256], voice_target[64], pending_focus[64], pending_machine[64], opening_notice[48];
     char work_agent[64], work_host[48]; uint32_t work_revision, work_generation; uint8_t work_mode, work_voice_mode;
+    struct {char draft[48],agent[48],host[48],machine[48],session[80];uint32_t request,until;uint8_t mode;bool accepted;} send_feedback;
     pro_metrics_t metrics; pro_carry_review_t carry_review; pro_draft_recovery_t draft_recovery;
     struct { bool valid, supported, loading, pending, uncertain; uint32_t revision, deadline; int index; char error[120],speech_error[96],agent[64],name[64],token[48]; struct { bool can_text; } item[4]; } q;
     agent_t agents[1];
@@ -131,7 +132,7 @@ void open_question(void) { assert(false); }
 bool queue(action_t action) { if (queue_full) return false; queued = action; return true; }
 '''
 harness += '#ifdef DEVICE_PRO_COMPANION\n'
-for name in ('pro_work_local','pro_work_available','pro_work_capture_available','pro_work_draft_available'):
+for name in ('pro_send_feedback_clear','pro_send_feedback_matches','pro_send_feedback_begin','pro_send_feedback_text','pro_work_local','pro_work_available','pro_work_capture_available','pro_work_draft_available'):
     harness += function(name)
 harness += '#endif\n'
 harness += function('ui_project_set_machine')
@@ -377,6 +378,7 @@ static void test_pro_carry_review(void) {
 #endif
 int main(void) {
 #ifdef DEVICE_PRO_COMPANION
+    assert(!pro_send_feedback_text(now));
     test_pro_instructions();
     test_pro_carry_review();
 #endif

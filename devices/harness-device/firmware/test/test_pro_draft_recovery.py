@@ -111,7 +111,7 @@ static bool config_save_pro_recovery(const pro_recovery_bookmark_t *b) {
 }
 static bool config_clear_pro_recovery(void) {clear_calls++;if(fail_clear)return false;stored_present=false;return true;}
 '''
-for name in ("pro_work_local", "pro_work_available", "pro_work_capture_available", "pro_work_draft_available", "pro_busy_reset", "ui_project_set_machine", "question_view", "question_rows", "voice_close", "draft_emit", "pro_draft_forget", "pro_draft_store_queue", "pro_draft_store_work", "pro_draft_restore", "make_action", "draft_move",
+for name in ("pro_send_feedback_clear", "pro_send_feedback_matches", "pro_send_feedback_begin", "pro_send_feedback_text", "pro_work_local", "pro_work_available", "pro_work_capture_available", "pro_work_draft_available", "pro_busy_reset", "ui_project_set_machine", "question_view", "question_rows", "voice_close", "draft_emit", "pro_draft_forget", "pro_draft_store_queue", "pro_draft_store_work", "pro_draft_restore", "make_action", "draft_move",
              "ui_set_connected", "ui_draft_source", "draft_page", "ui_voice_draft", "ui_draft_state"):
     code += function(name)
 code += "static void dispatch(action_t a) { switch(a.kind) {\n"
@@ -359,6 +359,47 @@ static void test_persistence(const char *dir) {
     restart_device();snapshot(&scene,dir,"restart-empty-bookmark");
     act(A_DRAFT_DISCARD);assert(!stored_present&&mutations==0);
 }
+
+static void send_feedback_checks(void) {
+    for(unsigned mode=0;mode<3;mode++)for(int outcome=0;outcome<12;outcome++) {
+        open_draft(mode,false);COPY(s.agents[0].session,"session-original");
+        if(outcome==1)act(A_DRAFT_DISCARD);else act(A_DRAFT_SEND);
+        action_t command=sent;work(command);
+        if(outcome==1)assert(!s.send_feedback.agent[0]);else assert(s.send_feedback.request==draft.request);
+        unsigned wire_count=wires;
+        if(outcome==4)COPY(s.agents[0].session,"replacement-session");
+        if(outcome==5)COPY(s.agents[0].id,"replacement-recipient");
+        if(outcome==6)ui_draft_source("replacement-host");
+        if(outcome==7)ui_project_set_machine("original","remote","Moved");
+        if(outcome==8)ui_set_connected(false);
+        cJSON *p=reply(8,1,1,"",false);
+        if(outcome!=1&&outcome!=2)cJSON_AddBoolToObject(p,"sent",true);
+        if(outcome==3)cJSON_ReplaceItemInObjectCaseSensitive(p,"ok",cJSON_CreateBool(false));
+        ui_draft_state(p);cJSON_Delete(p);
+        assert(!pro_send_feedback_text(now)); // Not Home until durable erase commits.
+        if(outcome==9)COPY(s.agents[0].session,"changed-during-erase");
+        if(outcome==10)ui_draft_source("changed-during-erase");
+        if(outcome==11)ui_set_connected(false);
+        if(s.draft_recovery.store==PRO_RECOVERY_CLEARING)work(sent);
+        assert(wires==wire_count); // Erase/feedback never sends another command.
+        const char *text=pro_send_feedback_text(now);
+        assert((text!=NULL)==(outcome==0));
+        if(text)assert(!strcmp(text,mode==PRO_WORK_TASK?"Passed to Harness":"Request sent"));
+        now+=3000;assert(!pro_send_feedback_text(now));
+    }
+    // Known success cannot erase a newer bookmark or label a later local Close.
+    open_draft(PRO_WORK_GOAL,false);act(A_DRAFT_SEND);work(sent);
+    cJSON *p=reply(8,1,1,"",false);cJSON_AddBoolToObject(p,"sent",true);ui_draft_state(p);cJSON_Delete(p);
+    action_t clear=sent;fail_clear=true;work(clear);assert(s.send_feedback.accepted&&!pro_send_feedback_text(now));
+    fail_clear=false;act(A_DRAFT_DISCARD);assert(!s.send_feedback.accepted&&!pro_send_feedback_text(now));
+    open_draft(PRO_WORK_TASK,false);work(clear);assert(draft.page.active&&!pro_send_feedback_text(now));
+    // A status reconciliation may clear the old draft; it is not a Send acknowledgement.
+    open_draft(PRO_WORK_TASK,false);act(A_DRAFT_STATE);work(sent);
+    p=reply(8,1,1,"",false);cJSON_AddBoolToObject(p,"sent",true);ui_draft_state(p);cJSON_Delete(p);work(sent);
+    assert(!pro_send_feedback_text(now));
+    puts("Send feedback: PASS (exact positive Task/Goal/Loop receipt, async clear, discard/error/unknown, stale owner/session/machine, failed erase, stale clear, historical sent)");
+}
+
 static const char *jstr(const cJSON *p,const char *key) {const cJSON *v=cJSON_GetObjectItemCaseSensitive(p,key);assert(cJSON_IsString(v));return v->valuestring;}
 static void transcript(const char *path) {
     if(!path)return;FILE *f=fopen(path,"rb");assert(f);assert(fseek(f,0,SEEK_END)==0);long size=ftell(f);assert(size>0&&size<1024*1024);rewind(f);
@@ -398,7 +439,7 @@ static void transcript(const char *path) {
 }
 int main(int argc,char **argv) {
     test_recovery(argc>1&&argv[1][0]?argv[1]:NULL);test_failures(argc>1&&argv[1][0]?argv[1]:NULL);
-    test_persistence(argc>1&&argv[1][0]?argv[1]:NULL);
+    test_persistence(argc>1&&argv[1][0]?argv[1]:NULL);send_feedback_checks();
     transcript(argc>2?argv[2]:NULL);
     printf("Pro recovery: PASS (actual source identity, callbacks, command worker, irreversible readonly, Task/Goal/Loop/Carry, five parts, stale/foreign/missing frames, local Close, native English, unchanged Unicode gate); recovery=%zu draft=%zu\n",sizeof(pro_draft_recovery_t),sizeof draft);
 }

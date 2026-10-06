@@ -40,7 +40,7 @@ static void pro_heading(ht_scene_t *f, const char *title, action_kind_t back)
     bool enabled = !(back == A_QUESTION_BACK && s.q.pending) &&
                    !((back == A_DRAFT_OPTIONS || back == A_DRAFT_BACK) && draft.pending) &&
                    !(back == A_FORM_BACK && form.pending && strncmp(form.id, "find-", 5));
-    pro_control(f, 28, 28, 136, 64, PRO_TR("Back"), back, 0, enabled);
+    pro_control(f, 28, 28, 136, 64, back == A_DRAFT_OPTIONS ? "Options" : PRO_TR("Back"), back, 0, enabled);
     const ht_pro_font_t *font = ht_pro_width(&ht_pro_42, title) <= 500 ? &ht_pro_42 : &ht_pro_32;
     ht_pro_text(f, 188, 39, 500, font, FG, title);
     ht_pro_rect(f, 32, 113, 656, 2, 0, SEL);
@@ -555,7 +555,7 @@ static void pro_settings(ht_scene_t *f)
             snprintf(dynamic, sizeof dynamic, PRO_TR("Brightness / %d%%"), s.brightness);
             label = dynamic; detail = PRO_TR("Tap to change the backlight");
         } else if (action == A_MUTE) {
-            label = s.muted ? PRO_TR("Sound / muted") : PRO_TR("Sound / on");
+            label = s.muted ? "Notifications / muted" : "Notifications / on";
             detail = PRO_TR("Notification sounds");
         } else if (action == A_COMPANION) { label = PRO_TR("Companion"); detail = PRO_TR("Motion, rest and brightness"); }
         else if (action == A_FIND) detail = PRO_TR("Find an existing Harness by voice");
@@ -823,7 +823,7 @@ static void pro_draft(ht_scene_t *f)
             PRO_TR(s.draft_recovery.store == PRO_RECOVERY_SAVING ? "Preparing recovery..." : "Recovery unavailable after power loss."));
     else if (p->error[0]) ht_pro_wrap(f, 56, 514, 608, 2, 0, &ht_pro_24, color(0xa44343), PRO_TR(p->error));
     else if (!pro_work_draft_available()) ht_pro_text(f, 56, 522, 608, &ht_pro_24, DIM,
-                                                    PRO_TR("Choose the pane and instruction again."));
+                                                    "Instruction unavailable. Your words are still here.");
     else if (!p->can_send) ht_pro_wrap(f, 56, 514, 608, 2, 0, &ht_pro_24, DIM,
                                     PRO_TR("Some characters can't be shown. Say this part again."));
     else ht_pro_text(f, 56, 522, 608, &ht_pro_24, DIM, draft.pending ?

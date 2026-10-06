@@ -171,7 +171,7 @@ static bool scroll_emit(ht_scroll_phase_t phase, int dy, int velocity, void *ctx
 }
 static void dispatch(action_t action);
 '''
-for name in ("copy", "find", "pane_memory", "pane_memory_apply", "pro_work_local", "pro_work_available", "pro_work_capture_available", "pro_work_draft_available", "pro_busy_reset", "ensure", "waiting", "is_question", "pro_speech_allowed", "pro_speech_visible", "pro_speech_emotion",
+for name in ("copy", "find", "pane_memory", "pane_memory_apply", "pro_send_feedback_clear", "pro_send_feedback_matches", "pro_send_feedback_begin", "pro_send_feedback_text", "pro_work_local", "pro_work_available", "pro_work_capture_available", "pro_work_draft_available", "pro_busy_reset", "ensure", "waiting", "is_question", "pro_speech_allowed", "pro_speech_visible", "pro_speech_emotion",
              "pro_speech_caption", "pro_speech_cancel", "ui_companion_speech_begin", "ui_companion_speech_clear",
              "pro_speech_tick", "pro_busy_elapsed", "pro_surface_mood", "status_wake_ms",
              "question_view", "hit_contains", "home_footer", "pro_written_control",
@@ -829,6 +829,24 @@ static void work_identity_callbacks(void) {
     assert(!pro_work_local(active()));ui_project_set_machine("a",exact,"Complete identity");assert(pro_work_local(active()));
 }
 
+
+static void footer_send_feedback(void) {
+    reset();ui_draft_source("host-a");ui_project_set_machine("a","host-a","Host");
+    pro_draft_recovery_pin(&s.draft_recovery,"a",PRO_WORK_TASK);
+    draft.page=(ht_draft_page_t){.active=true,.id="message",.agent="a"};pro_send_feedback_begin(1);
+    s.send_feedback.accepted=true;s.send_feedback.until=now+3000;
+    busy_heartbeat("a","",now);render_actual();assert(has_text("Passed to Harness")&&!has_text("0s"));
+    s.work_voice_mode=PRO_WORK_LOOP;render_actual();assert(has_text("Passed to Harness")); // Frozen original mode.
+    s.notice_count=1;s.notice[0].question=true;COPY(s.notice[0].agent_id,"a");render_actual();assert(!has_text("Passed to Harness"));
+    s.notice_count=0;ui_focus_project("b");ui_focus_project("a");render_actual();assert(!has_text("Passed to Harness"));
+    pro_send_feedback_begin(2);s.send_feedback.accepted=true;s.send_feedback.until=now+3000;
+    busy_heartbeat("a","new-session",now);assert(!s.send_feedback.agent[0]);
+    pro_send_feedback_begin(3);s.send_feedback.accepted=true;s.send_feedback.until=now+3000;
+    now+=3000;surface_tick(now);assert(!s.send_feedback.agent[0]);
+    pro_send_feedback_begin(4);s.send_feedback.accepted=true;s.send_feedback.until=now+3000;
+    ui_project_remove("a");assert(!s.send_feedback.agent[0]);
+}
+
 static void home_hierarchy(void) {
     for (int language=0;language<2;language++) {
         reset();strcpy(s.voice_language,language?"vi":"en");render_actual();
@@ -1302,7 +1320,7 @@ static void today_refresh_contact(void) {
 
 int main(int argc,char **argv) {
     const struct { const char *name; test_fn run; } tests[]={
-        {"work_identity_callbacks",work_identity_callbacks},{"busy_observation",busy_observation},{"busy_connection_loss",busy_connection_loss},{"busy_precedence",busy_precedence},
+        {"footer_send_feedback",footer_send_feedback},{"work_identity_callbacks",work_identity_callbacks},{"busy_observation",busy_observation},{"busy_connection_loss",busy_connection_loss},{"busy_precedence",busy_precedence},
         {"busy_tick_schedule",busy_tick_schedule},{"busy_render_boundaries",busy_render_boundaries},
         {"today_read_only",today_read_only},{"today_refresh_contact",today_refresh_contact},{"home_hierarchy",home_hierarchy},
         {"language_controls",language_controls},{"voice_sample_controls",voice_sample_controls},{"center_voice",center_voice},{"summary_voice",summary_voice},{"deliberate_tap",deliberate_tap},
