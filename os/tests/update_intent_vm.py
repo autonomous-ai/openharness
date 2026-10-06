@@ -37,6 +37,7 @@ BUSY = '{"harness_update_worker":1,"status":"busy"}\n'
 OWNERSHIP_SOURCE = '0de712afa23cb10bf9ab096dec933a9828767fe3'
 INPUTS = [
     'os/live_update.py', 'os/root/usr/bin/harness', 'os/root/usr/lib/harness-os/open-updates',
+    'os/root/usr/lib/harness-os/screen-action',
     'os/root/usr/lib/systemd/user/harness-update.service',
     'os/root/usr/lib/systemd/user/harness-update.timer', 'os/root/usr/share/harness-os/labwc/rc.xml',
     'os/tests/update_intent_vm.py', 'os/tests/update_intent_guest.py', 'os/tests/update_intent_observer.py',
