@@ -19,10 +19,15 @@ import 'package:harness/widgets/web_download_button.dart';
 /// A password link under way, at its first stage.
 class _Linking extends AppNotifier {
   _Linking()
-    : super(config: AppConfig.dev, authSession: AuthSession(), configStore: null);
+    : super(
+        config: AppConfig.dev,
+        authSession: AuthSession(),
+        configStore: null,
+      );
 
   @override
-  Future<String?>? pendingMachineLink(String machineId) => Completer<String?>().future;
+  Future<String?>? pendingMachineLink(String machineId) =>
+      Completer<String?>().future;
 
   @override
   String? machineLinkStage(String machineId) => 'deriving_key';
@@ -31,7 +36,11 @@ class _Linking extends AppNotifier {
 /// Counts the quiet machine-list reads the page makes while it waits.
 class _Watching extends AppNotifier {
   _Watching()
-    : super(config: AppConfig.dev, authSession: AuthSession(), configStore: null);
+    : super(
+        config: AppConfig.dev,
+        authSession: AuthSession(),
+        configStore: null,
+      );
 
   var reads = 0;
 
@@ -42,7 +51,11 @@ class _Watching extends AppNotifier {
 /// Dialing with no password: [trusted] says how the computer answers.
 class _Dialing extends AppNotifier {
   _Dialing({required this.trusted})
-    : super(config: AppConfig.dev, authSession: AuthSession(), configStore: null);
+    : super(
+        config: AppConfig.dev,
+        authSession: AuthSession(),
+        configStore: null,
+      );
 
   final bool trusted;
   final dialed = <String>[];
@@ -161,7 +174,7 @@ void main() {
     expect(find.byType(MachinePickerForm), findsNothing);
   });
 
-  testWidgets('one that refuses asks for its password, and says why', (
+  testWidgets('one that does not answer says so and offers another try', (
     tester,
   ) async {
     app.dispose();
@@ -172,10 +185,11 @@ void main() {
     await tester.tap(find.widgetWithText(FilledButton, 'Connect'));
     await tester.pump();
 
-    expect(find.byType(MachinePickerForm), findsOneWidget);
-    // The row follows the form: no second Connect beside the form's own.
-    expect(find.widgetWithText(FilledButton, 'Connect'), findsNothing);
-    expect(find.textContaining("hasn't trusted this browser"), findsOneWidget);
+    expect(find.byType(MachinePickerForm), findsNothing, reason: 'no password');
+    expect(find.textContaining("Couldn't connect"), findsOneWidget);
+    await tester.tap(find.widgetWithText(FilledButton, 'Try again'));
+    await tester.pump();
+    expect((app as _Dialing).dialed, ['mac', 'mac']);
   });
 
   testWidgets('keeps asking for the machine list while it waits', (
@@ -222,7 +236,7 @@ void main() {
       ..needsLink = true;
 
     expect(
-      computerLinkState(linking, state, formOpen: true),
+      computerLinkState(linking, state, failed: true),
       ComputerLinkState.linking,
     );
     app.dispose();
