@@ -51,6 +51,8 @@ def stage(source, runtime, destination, commit):
         'os/live_update.py': 'usr/lib/harness-os/live_update.py',
         'os/release_update.py': 'usr/lib/harness-os/release_update.py',
         'os/hardware.py': 'usr/lib/harness-os/hardware.py',
+        'os/gpu_health.py': 'usr/lib/harness-os/gpu_health.py',
+        'os/gpu_probe.py': 'usr/lib/harness-os/gpu_probe.py',
         'os/tools/hn-os': 'usr/bin/hn-os',
         'os/lock.json': 'usr/share/harness-os/lock.json',
         'tui/README.md': 'usr/share/harness-os/guide/tui.md',

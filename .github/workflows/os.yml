@@ -51,7 +51,7 @@ on:
         required: false
         default: image
         type: choice
-        options: [image, browser, browser-suspend, session, recovery, essentials, hardware, zram, hardware-update]
+        options: [image, browser, browser-suspend, session, recovery, essentials, hardware, zram, hardware-update, public-update]
       browser_memory:
         description: 'With checks=browser, diagnose memory in the UEFI VM only; retain ordinary workload and deadlines'
         required: false
@@ -66,12 +66,12 @@ permissions:
   actions: read
 
 concurrency:
-  group: programmer-os-${{ github.ref }}-${{ inputs.memory_mib || '2048' }}-${{ inputs.live_transport || 'cdrom' }}-${{ inputs.development_update && 'update' || inputs.checks == 'browser-suspend' && 'browser-suspend' || inputs.checks == 'browser' && 'browser' || inputs.checks == 'session' && 'session' || inputs.checks == 'recovery' && 'recovery' || inputs.checks == 'essentials' && 'essentials' || inputs.checks == 'hardware' && 'hardware' || inputs.checks == 'hardware-update' && 'hardware-update' || inputs.dsh && 'dsh' || inputs.workloads && 'workloads' || 'image' }}
+  group: programmer-os-${{ github.ref }}-${{ inputs.memory_mib || '2048' }}-${{ inputs.live_transport || 'cdrom' }}-${{ inputs.development_update && 'update' || inputs.checks == 'public-update' && 'public-update' || inputs.checks == 'browser-suspend' && 'browser-suspend' || inputs.checks == 'browser' && 'browser' || inputs.checks == 'session' && 'session' || inputs.checks == 'recovery' && 'recovery' || inputs.checks == 'essentials' && 'essentials' || inputs.checks == 'hardware' && 'hardware' || inputs.checks == 'hardware-update' && 'hardware-update' || inputs.dsh && 'dsh' || inputs.workloads && 'workloads' || 'image' }}
   cancel-in-progress: false
 
 jobs:
   image:
-    if: ${{ !inputs.image_run_id && !inputs.publish_run_id && !inputs.development_update && inputs.checks != 'zram' && inputs.checks != 'hardware-update' && inputs.checks != 'browser-suspend' }}
+    if: ${{ !inputs.image_run_id && !inputs.publish_run_id && !inputs.development_update && inputs.checks != 'zram' && inputs.checks != 'hardware-update' && inputs.checks != 'browser-suspend' && inputs.checks != 'public-update' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 50
     env:
@@ -139,7 +139,7 @@ jobs:
               path = pathlib.Path(out('rustup', 'which', 'rustc') if name == 'rustc' else shutil.which(args[0])).resolve()
               tools[name] = {'version': out(*args), 'path': str(path),
                              'sha256': hashlib.sha256(path.read_bytes()).hexdigest()}
-          record = {'source_commit': source, 'os_source': 'fae0843dffb3b3c518d801bf90a4a55967caa13b',
+          record = {'source_commit': source, 'os_source': '1826cdef72c34861a5a2d156b58f408484046cba',
                     'runtime_input_source': 'b6cbaf3e3090f43106ad1ee47606349bd1a0ae89',
                     'runtime_trees': frozen, 'release_baselines': baselines, 'tools': tools, 'musl': musl,
                     'runner': {key: os.environ.get(key) for key in ('ImageOS', 'ImageVersion', 'RUNNER_OS', 'RUNNER_ARCH')}}
@@ -213,7 +213,7 @@ jobs:
 
   machine:
     needs: image
-    if: ${{ always() && !inputs.publish_run_id && !inputs.development_update && inputs.checks != 'essentials' && inputs.checks != 'hardware' && inputs.checks != 'zram' && inputs.checks != 'hardware-update' && (needs.image.result == 'success' || inputs.image_run_id != '' || inputs.checks == 'browser-suspend') && !cancelled() }}
+    if: ${{ always() && !inputs.publish_run_id && !inputs.development_update && inputs.checks != 'essentials' && inputs.checks != 'hardware' && inputs.checks != 'zram' && inputs.checks != 'hardware-update' && inputs.checks != 'public-update' && (needs.image.result == 'success' || inputs.image_run_id != '' || inputs.checks == 'browser-suspend') && !cancelled() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 65
     strategy:
@@ -524,7 +524,7 @@ jobs:
           retention-days: 14
 
   development-update:
-    if: ${{ inputs.development_update && !inputs.publish_run_id && inputs.checks != 'hardware-update' }}
+    if: ${{ inputs.development_update && !inputs.publish_run_id && inputs.checks != 'hardware-update' && inputs.checks != 'public-update' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -588,8 +588,100 @@ jobs:
           retention-days: 14
           compression-level: 0
 
+  public-update:
+    if: ${{ inputs.checks == 'public-update' && !inputs.publish_run_id && !inputs.development_update }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Require an exact successful candidate producer
+        env:
+          CANDIDATE_RUN: ${{ inputs.image_run_id }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          [[ "$CANDIDATE_RUN" =~ ^[0-9]+$ ]]
+          mkdir -p os/test-results/public-update-source
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$CANDIDATE_RUN" > os/test-results/public-update-source/candidate-run.json
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$CANDIDATE_RUN/artifacts" > os/test-results/public-update-source/candidate-artifacts.json
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/37257481538" > os/test-results/public-update-source/baseline-run.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          folder = Path('os/test-results/public-update-source')
+          for name in ('candidate', 'baseline'):
+              run = json.loads((folder / (name + '-run.json')).read_text())
+              assert run['repository']['full_name'] == 'autonomous-ai/openharness'
+              assert run['path'] == '.github/workflows/os.yml'
+              assert run['status'] == 'completed' and run['conclusion'] == 'success'
+          assert json.loads((folder / 'baseline-run.json').read_text())['head_sha'] == 'b6cbaf3e3090f43106ad1ee47606349bd1a0ae89'
+          PY
+      - uses: actions/download-artifact@v6
+        with:
+          name: programmer-os-x86_64
+          path: os/work/public-update-baseline
+          run-id: '37257481538'
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v6
+        with:
+          name: programmer-os-x86_64
+          path: os/work/public-update-candidate
+          run-id: ${{ inputs.image_run_id }}
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v6
+        with:
+          name: harness-os-candidate-inputs
+          path: os/work/public-update-inputs
+          run-id: ${{ inputs.image_run_id }}
+          github-token: ${{ github.token }}
+      - name: Validate observer and install native tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils ovmf python3-pil tesseract-ocr openssl xorriso squashfs-tools
+          sudo chmod a+rw /dev/kvm
+          python3 -m unittest discover -s os/tests -p 'test_package_image_binding.py' -v
+          python3 -m unittest discover -s os/tests -p 'test_public_update_*.py' -v
+          go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/os.yml
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          run = json.loads(Path('os/test-results/public-update-source/candidate-run.json').read_text())
+          image = json.loads(Path('os/work/public-update-candidate/manifest.json').read_text())
+          assert image['source_commit'] == run['head_sha']
+          PY
+      - name: Compare every update package file with the actual candidate ISO
+        run: |
+          python3 os/tests/package_image_binding.py \
+            --iso os/work/public-update-candidate/*.iso \
+            --bundle os/work/public-update-inputs/repo \
+            --output os/test-results/public-update-source/package-image-binding.json
+      - name: Update untouched preview 14 with one public shortcut and cold boot
+        run: |
+          python3 os/tests/public_update_vm.py \
+            --iso os/work/public-update-baseline/*.iso \
+            --bundle os/work/public-update-inputs/repo \
+            --candidate-image-manifest os/work/public-update-candidate/manifest.json \
+            --candidate-image-binding os/test-results/public-update-source/package-image-binding.json \
+            --output os/test-results/public-update
+      - name: Retain binding, transport and machine evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: harness-os-public-update
+          path: |
+            os/test-results/public-update-source/
+            os/test-results/public-update/
+            !os/test-results/public-update/*.qcow2
+            !os/test-results/public-update/OVMF_VARS.fd
+            !os/test-results/public-update/https/*.key
+            !os/test-results/public-update/https/*.pkg.tar.gz
+            !os/test-results/public-update/transfer/
+          retention-days: 14
+          compression-level: 0
+
   publish:
-    if: ${{ inputs.publish_run_id != '' && inputs.checks != 'hardware-update' }}
+    if: ${{ inputs.publish_run_id != '' && inputs.checks != 'hardware-update' && inputs.checks != 'public-update' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     concurrency:

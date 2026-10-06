@@ -3,6 +3,7 @@
 import argparse
 import fcntl
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -109,7 +110,15 @@ def report(sysfs=Path('/sys'), proc=Path('/proc')):
             'installation_blocker': installation_blocker(sysfs),
             'backlights': [p.name for p in sorted((sysfs / 'class/backlight').glob('*'))],
             'broadcom_bundle_available': (BUNDLE / 'manifest.json').is_file(),
-            'nvidia_bundle_available': (NVIDIA_BUNDLE / 'manifest.json').is_file()}
+            'nvidia_bundle_available': (NVIDIA_BUNDLE / 'manifest.json').is_file(),
+            'gpu_health': gpu_health().cached_report() if Path(__file__).with_name('gpu_health.py').is_file() else None}
+
+
+def gpu_health():
+    spec = importlib.util.spec_from_file_location('harness_gpu_health', Path(__file__).with_name('gpu_health.py'))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def nvidia_bundle_manifest(folder, all_files=False):
@@ -331,7 +340,8 @@ def configure_install(target, devices=None, bundle=BUNDLE):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest='command')
-    sub.add_parser('report')
+    reporting = sub.add_parser('report')
+    reporting.add_argument('--check-gpu', action='store_true', help='Repeat GPU verification as the current user')
     activation = sub.add_parser('activate')
     activation.add_argument('address')
     installation = sub.add_parser('configure-install')
@@ -351,6 +361,10 @@ def main():
     elif args.command == 'configure-install':
         result = configure_install(args.target)
     else:
+        if getattr(args, 'check_gpu', False):
+            if not Path(__file__).with_name('gpu_health.py').is_file():
+                parser.error('GPU verification is not available in this system profile.')
+            gpu_health().check(force=True)
         result = report()
     print(json.dumps(result, indent=2))
 

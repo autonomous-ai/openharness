@@ -46,6 +46,9 @@ if [ -f /etc/harness-live ]; then
     exec sudo /usr/bin/python3 /usr/lib/harness-os/install.py --boot
 fi
 systemctl --user start harness-daemon.service || true
+if [ -f /usr/lib/harness-os/gpu_health.py ]; then
+    systemctl --user start harness-gpu-check.timer || true
+fi
 printf '%s\n' 'Graphics unavailable; continuing in hn on the console.'
 cd "$HOME/projects"
 while :; do
