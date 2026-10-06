@@ -3,6 +3,7 @@
 import argparse
 import gzip
 import hashlib
+import importlib.util
 import json
 from pathlib import Path
 import re
@@ -119,6 +120,21 @@ def archive_package(root, output, pkginfo, timestamp):
         partial.unlink(missing_ok=True)
 
 
+def bootstrap(source, folder):
+    """Ship every helper needed before the first platform-aware OS package."""
+    files = {'apply-update.py': 'runtime_update.py', 'boot_profile.py': 'boot_profile.py',
+             't2_install.py': 't2_install.py', 't2_firmware.py': 'tools/prepare-t2-firmware.py',
+             'firmware_names.py': 'platforms/apple-t2/firmware_names.py'}
+    spec = importlib.util.spec_from_file_location('bootstrap_runtime', source / 'os/runtime_update.py')
+    updater = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(updater)
+    if set(files) != set(updater.BOOTSTRAP_FILES):
+        raise ValueError('Incomplete standalone updater helpers.')
+    for name, relative in files.items():
+        shutil.copyfile(source / 'os' / relative, folder / name)
+    return [folder / name for name in files]
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--runtime', type=Path, required=True)
@@ -165,10 +181,9 @@ def main():
     (folder / 'package-manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
     (folder / (package.name + '.sha256')).write_text(f'{manifest["package"]["sha256"]}  {package.name}\n')
     # A preview 4 installation can bootstrap the updater from this same bundle.
-    bootstrap = folder / 'apply-update.py'
-    shutil.copyfile(source / 'os/runtime_update.py', bootstrap)
+    standalone = bootstrap(source, folder)
     (folder / 'SHA256SUMS').write_text(''.join(f'{digest(path)}  {path.name}\n' for path in
-                                            [package, folder / 'package-manifest.json', bootstrap]))
+                                            [package, folder / 'package-manifest.json', *standalone]))
     print(json.dumps(manifest, indent=2))
 
 
