@@ -144,6 +144,11 @@ class TerminalSession extends ChangeNotifier {
   final String agentId;
   String agentName;
   final String? engineId;
+
+  /// What the view's scroll mirror knows of this agent's rows — kept by the app
+  /// for the agent, not the session, so it outlives every keyframe and every
+  /// reopen of it. See [RemoteScrollMemory]. Null keeps it in the view only.
+  final RemoteScrollMemory? scrollMemory;
   final TerminalFrameSender send;
   final TerminalBinarySender sendBinary;
 
@@ -187,6 +192,7 @@ class TerminalSession extends ChangeNotifier {
     this.lastHeardFromMachine,
     this.resyncTimeout = const Duration(seconds: 4),
     this.takeover = true,
+    this.scrollMemory,
   }) {
     terminal = _newTerminal();
   }

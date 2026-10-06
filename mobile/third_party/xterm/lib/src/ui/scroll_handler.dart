@@ -11,19 +11,39 @@ import 'package:xterm/src/ui/infinite_scroll_view.dart';
 class RemoteScrollLink {
   void Function(int lines)? _send;
   bool Function()? _idle;
+  int Function()? _cancel;
+  bool Function(int direction)? _page;
   Object? _owner;
 
   /// Scroll the program [lines] rows, positive towards newer ones. Dropped when
   /// no scroll handler is listening: the program is not on its alternate screen.
   void send(int lines) => _send?.call(lines);
 
+  /// Press Page Down ([direction] positive) or Page Up once — only when nothing
+  /// else asked is still on its way. False when it was not sent: something is,
+  /// or nobody is listening, or the program is scrolled another way.
+  bool sendPage(int direction) => _page?.call(direction) ?? false;
+
   /// Whether every row asked for has gone out and been answered.
   bool get idle => _idle?.call() ?? true;
 
-  void _attach(Object owner, void Function(int) send, bool Function() idle) {
+  /// Rows asked for and not yet sent are not sent — how many, negative for up,
+  /// so whoever asked can take them off its books. What is already on its way
+  /// still lands.
+  int cancel() => _cancel?.call() ?? 0;
+
+  void _attach(
+    Object owner,
+    void Function(int) send,
+    bool Function() idle,
+    int Function() cancel,
+    bool Function(int direction) page,
+  ) {
     _owner = owner;
     _send = send;
     _idle = idle;
+    _cancel = cancel;
+    _page = page;
   }
 
   void _detach(Object owner) {
@@ -31,6 +51,8 @@ class RemoteScrollLink {
     _owner = null;
     _send = null;
     _idle = null;
+    _cancel = null;
+    _page = null;
   }
 }
 
@@ -143,11 +165,60 @@ class _TerminalScrollGestureHandlerState
 
   static const _answerWaitLimit = Duration(milliseconds: 120);
 
+  /// The most wheel events in one batch of the finger's own scroll; the rest go
+  /// in the next.
+  ///
+  /// ⚠️ **A batch arrives all at once, and Claude Code speeds up wheel events
+  /// that come close together** — see [_exactBurst]. 41 wheels sent as one
+  /// batch scrolled it ~200 rows instead of 41, past anything the screen could
+  /// be matched with (measured on a phone, 2026-10-06).
+  static const _maxBatchLines = 12;
+
+  /// The most wheel events in one batch from the mirror: as many as are sure to
+  /// scroll Claude Code one row each.
+  ///
+  /// Its fullscreen renderer (2.1.290, `wheelScrollAccelerationEnabled` on by
+  /// default) scrolls the first wheel event after a pause of over 40ms one row,
+  /// and each one closer than 40ms to the last 0.3 of a row more, up to 6 —
+  /// floored, so the first four are one row each (read from its code; changing
+  /// its settings is not an option, as they reach every app showing the agent).
+  ///
+  /// ⚠️ **Not more, even to catch up with a fling.** Bigger batches, counted by
+  /// that ramp (12 wheels for 26 rows), moved the program 15–30 rows between two
+  /// frames and often more than a screen — and a frame with no row in common
+  /// with the last cannot be placed: 39 of 59 frames lost (measured on a phone,
+  /// 2026-10-06). At four a batch the program moves ~80 rows a second at most,
+  /// and a fling faster than that waits at the edge of what is known.
+  static const _exactBurst = 4;
+
+  /// The least time between two batches from the mirror, so the first wheel of
+  /// each comes after a pause and scrolls one row — see [_exactBurst].
+  static const _burstGap = Duration(milliseconds: 50);
+
+  /// Since the last batch of wheel events went out.
+  final _sinceBatch = Stopwatch();
+
+  /// Sends a batch from the mirror once [_burstGap] has passed.
+  Timer? _gapWait;
+
+  /// Whether [_unsentLines] were asked for through [RemoteScrollLink] — by the
+  /// mirror, which keeps its own books of every row it asked for.
+  var _unsentFromLink = false;
+
+  /// The direction of the last wheel events sent: -1 up, 1 down, 0 none yet.
+  var _lastSentSign = 0;
+
   @override
   void initState() {
     widget.terminal.addListener(_onTerminalUpdated);
     isAltBuffer = widget.terminal.isUsingAltBuffer;
-    widget.link?._attach(this, _queueLines, _pacingIdle);
+    widget.link?._attach(
+      this,
+      _queueLinkLines,
+      _pacingIdle,
+      _cancelLinkLines,
+      _sendLinkPage,
+    );
     super.initState();
   }
 
@@ -173,7 +244,13 @@ class _TerminalScrollGestureHandlerState
     }
     if (!identical(oldWidget.link, widget.link)) {
       oldWidget.link?._detach(this);
-      widget.link?._attach(this, _queueLines, _pacingIdle);
+      widget.link?._attach(
+        this,
+        _queueLinkLines,
+        _pacingIdle,
+        _cancelLinkLines,
+        _sendLinkPage,
+      );
     }
     super.didUpdateWidget(oldWidget);
   }
@@ -239,7 +316,13 @@ class _TerminalScrollGestureHandlerState
     if (widget.paced) {
       _queueLines(delta);
     } else {
-      if (delta != 0) widget.onWheelsSent?.call(delta);
+      if (delta != 0) {
+        widget.onWheelsSent?.call(delta);
+        _lastSentSign = delta.sign;
+        _sinceBatch
+          ..reset()
+          ..start();
+      }
       for (var i = 0; i < delta.abs(); i++) {
         _sendScrollEvent(delta < 0);
       }
@@ -253,6 +336,7 @@ class _TerminalScrollGestureHandlerState
   /// batch, together with the lines scrolled while it caught up.
   void _queueLines(int delta) {
     if (delta == 0) return;
+    _unsentFromLink = false;
     // Turned back: what still waits would carry the screen away from the finger.
     if (_unsentLines != 0 && (_unsentLines < 0) != (delta < 0)) {
       _unsentLines = 0;
@@ -264,16 +348,80 @@ class _TerminalScrollGestureHandlerState
     _sendUnsentLines();
   }
 
+  /// AUTONOMOUS PATCH: [lines] more from [RemoteScrollLink]. The mirror counts
+  /// every row it asks for, so none is dropped here, as [_queueLines] drops them
+  /// for the finger: a turn back nets against what still waits, and there is no
+  /// cap of a screen — the mirror bounds what it asks for itself.
+  void _queueLinkLines(int lines) {
+    if (lines == 0) return;
+    // What the finger left waiting is not the mirror's to send.
+    if (!_unsentFromLink) _unsentLines = 0;
+    _unsentFromLink = true;
+    _unsentLines += lines;
+    _sendUnsentLines();
+  }
+
+  /// AUTONOMOUS PATCH: [RemoteScrollLink.cancel] — the mirror's rows still
+  /// waiting are dropped, and how many is returned. Left to go out, they
+  /// scrolled the program on for seconds after the finger let go: the screen
+  /// moved by itself (reported on a phone, 2026-10-06).
+  int _cancelLinkLines() {
+    if (!_unsentFromLink) return 0;
+    final dropped = _unsentLines;
+    _unsentLines = 0;
+    _gapWait?.cancel();
+    _gapWait = null;
+    return dropped;
+  }
+
+  /// AUTONOMOUS PATCH: [RemoteScrollLink.sendPage] — Page Up or Page Down,
+  /// alone: nothing waiting and nothing unanswered, so the program draws this
+  /// page by itself, never two at once. Answered like a batch of wheel events
+  /// (any write from the program), and paced with them.
+  bool _sendLinkPage(int direction) {
+    if (direction == 0 || _unsentLines != 0 || _batchesInFlight > 0) {
+      return false;
+    }
+    // A program scrolled by other means than its keys.
+    if (widget.onAltBufferScroll != null) return false;
+    _batchesInFlight++;
+    _answerWait?.cancel();
+    _answerWait = Timer(_answerWaitLimit, _onAnswerWaitOver);
+    widget.terminal.keyInput(
+      direction < 0 ? TerminalKey.pageUp : TerminalKey.pageDown,
+    );
+    return true;
+  }
+
   void _sendUnsentLines() {
     if (_unsentLines == 0 || _batchesInFlight >= _maxBatchesInFlight) return;
-    final lines = _unsentLines;
-    _unsentLines = 0;
+    final fromLink = _unsentFromLink;
+    if (fromLink && _sinceBatch.isRunning && _sinceBatch.elapsed < _burstGap) {
+      _gapWait ??= Timer(_burstGap - _sinceBatch.elapsed, () {
+        _gapWait = null;
+        _sendUnsentLines();
+      });
+      return;
+    }
+    final most = fromLink ? _exactBurst : _maxBatchLines;
+    final lines = _unsentLines.clamp(-most, most);
+    final sign = lines.sign;
+    _unsentLines -= lines;
     _batchesInFlight++;
     _answerWait?.cancel();
     _answerWait = Timer(_answerWaitLimit, _onAnswerWaitOver);
     widget.onWheelsSent?.call(lines);
-    for (var i = 0; i < lines.abs(); i++) {
-      _sendScrollEvent(lines < 0);
+    var sent = lines.abs();
+    // Claude Code drops the first wheel event after a turn (it takes a lone one
+    // for a trackpad's bounce). The mirror counts rows, so it is sent one more
+    // to drop; the finger's own scroll just moves a row less, as it always has.
+    if (fromLink && _lastSentSign != 0 && sign != _lastSentSign) sent++;
+    _lastSentSign = sign;
+    _sinceBatch
+      ..reset()
+      ..start();
+    for (var i = 0; i < sent; i++) {
+      _sendScrollEvent(sign < 0);
     }
   }
 
@@ -286,7 +434,10 @@ class _TerminalScrollGestureHandlerState
   void _resetPacing() {
     _answerWait?.cancel();
     _answerWait = null;
+    _gapWait?.cancel();
+    _gapWait = null;
     _unsentLines = 0;
+    _unsentFromLink = false;
     _batchesInFlight = 0;
   }
 

@@ -8,3 +8,4 @@ export 'src/ui/shortcut/shortcuts.dart';
 export 'src/ui/terminal_text_style.dart';
 export 'src/ui/terminal_theme.dart';
 export 'src/ui/themes.dart';
+export 'src/ui/remote_scroll_mirror.dart' show RemoteScrollMemory;

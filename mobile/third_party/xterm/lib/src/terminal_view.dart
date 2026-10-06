@@ -15,6 +15,7 @@ import 'package:xterm/src/ui/input_map.dart';
 import 'package:xterm/src/ui/keyboard_listener.dart';
 import 'package:xterm/src/ui/keyboard_visibility.dart';
 import 'package:xterm/src/ui/render.dart';
+import 'package:xterm/src/ui/remote_scroll_mirror.dart' show RemoteScrollMemory;
 import 'package:xterm/src/ui/scroll_handler.dart';
 import 'package:xterm/src/ui/shortcut/actions.dart';
 import 'package:xterm/src/ui/shortcut/shortcuts.dart';
@@ -66,6 +67,8 @@ class TerminalView extends StatefulWidget {
     this.altBufferScrollAnimated = false,
     this.onAltBufferScrollShift,
     this.altBufferScrollMirror = false,
+    this.altBufferScrollPageKeys = false,
+    this.altBufferScrollMemory,
     this.keepsInputAcrossTerminals = false,
     this.predictsEcho = false,
   });
@@ -228,6 +231,19 @@ class TerminalView extends StatefulWidget {
   /// the place of [altBufferScrollAnimated]'s slide. False leaves the screen to
   /// follow the program's redraws.
   final bool altBufferScrollMirror;
+
+  /// AUTONOMOUS PATCH: with [altBufferScrollMirror], whether the program may be
+  /// scrolled a page at a time with its Page Up and Page Down keys while the
+  /// finger is far ahead of it — for a program known to take them as half a
+  /// screen of its transcript (Claude Code), and only while it shows its
+  /// prompt. See `RemoteScrollMirror._sendPage`.
+  final bool altBufferScrollPageKeys;
+
+  /// AUTONOMOUS PATCH: with [altBufferScrollMirror], what is known of this
+  /// program's rows, kept by the embedder for the program (an agent) across
+  /// the emulators a keyframe replaces and the views opened on it — see
+  /// [RemoteScrollMemory]. Null keeps it in the view only.
+  final RemoteScrollMemory? altBufferScrollMemory;
 
   /// AUTONOMOUS PATCH: the keyboard's buffer — and what it is composing — is
   /// kept when [terminal] is replaced, for an embedder that replaces it only
@@ -426,6 +442,8 @@ class TerminalViewState extends State<TerminalView> {
           animateRemoteScroll: widget.altBufferScrollAnimated,
           onRemoteScrollShift: widget.onAltBufferScrollShift,
           mirrorRemoteScroll: widget.altBufferScrollMirror,
+          mirrorPageKeys: widget.altBufferScrollPageKeys,
+          remoteScrollMemory: widget.altBufferScrollMemory,
           remoteScrollLink: _remoteScrollLink,
         );
       },
@@ -997,6 +1015,8 @@ class _TerminalView extends LeafRenderObjectWidget {
     this.animateRemoteScroll = false,
     this.onRemoteScrollShift,
     this.mirrorRemoteScroll = false,
+    this.mirrorPageKeys = false,
+    this.remoteScrollMemory,
     this.remoteScrollLink,
   });
 
@@ -1038,6 +1058,10 @@ class _TerminalView extends LeafRenderObjectWidget {
 
   final bool mirrorRemoteScroll;
 
+  final bool mirrorPageKeys;
+
+  final RemoteScrollMemory? remoteScrollMemory;
+
   final RemoteScrollLink? remoteScrollLink;
 
   @override
@@ -1064,6 +1088,8 @@ class _TerminalView extends LeafRenderObjectWidget {
       animateRemoteScroll: animateRemoteScroll,
       onRemoteScrollShift: onRemoteScrollShift,
       mirrorRemoteScroll: mirrorRemoteScroll,
+      mirrorPageKeys: mirrorPageKeys,
+      remoteScrollMemory: remoteScrollMemory,
       remoteScrollLink: remoteScrollLink,
     );
   }
@@ -1092,6 +1118,8 @@ class _TerminalView extends LeafRenderObjectWidget {
       ..animateRemoteScroll = animateRemoteScroll
       ..onRemoteScrollShift = onRemoteScrollShift
       ..mirrorRemoteScroll = mirrorRemoteScroll
+      ..mirrorPageKeys = mirrorPageKeys
+      ..remoteScrollMemory = remoteScrollMemory
       ..remoteScrollLink = remoteScrollLink;
   }
 }

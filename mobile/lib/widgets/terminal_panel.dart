@@ -1698,6 +1698,13 @@ class _TerminalPanelState extends State<TerminalPanel>
                         // it in — `RemoteScrollMirror`. The slide above is
                         // what is left when it is off.
                         altBufferScrollMirror: true,
+                        // Claude Code takes Page Up/Down as half a screen of its
+                        // transcript at once, past its wheel's ~150 rows a
+                        // second; another program may take them otherwise.
+                        altBufferScrollPageKeys: session.engineId == 'claude',
+                        // What the mirror knew of this agent's rows, kept by the
+                        // app across keyframes and reopens.
+                        altBufferScrollMemory: session.scrollMemory,
                         // How many redraws slid and how many jumped — the
                         // scroll's smoothness, for the trace.
                         onAltBufferScrollShift: kTypingTrace

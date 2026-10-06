@@ -45,9 +45,13 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     bool animateRemoteScroll = false,
     void Function(int rows)? onRemoteScrollShift,
     bool mirrorRemoteScroll = false,
+    bool mirrorPageKeys = false,
     RemoteScrollLink? remoteScrollLink,
+    RemoteScrollMemory? remoteScrollMemory,
   })  : _terminal = terminal,
         _mirrorRemoteScroll = mirrorRemoteScroll,
+        _mirrorPageKeys = mirrorPageKeys,
+        _remoteScrollMemory = remoteScrollMemory,
         _remoteScrollLink = remoteScrollLink,
         _devicePixelRatio = devicePixelRatio,
         _animateRemoteScroll = animateRemoteScroll,
@@ -303,13 +307,45 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
   RemoteScrollLink? _remoteScrollLink;
   set remoteScrollLink(RemoteScrollLink? value) => _remoteScrollLink = value;
 
+  /// AUTONOMOUS PATCH: whether the mirror may scroll the program a page at a
+  /// time with its Page Up and Page Down keys — `TerminalView.altBufferScrollPageKeys`.
+  bool _mirrorPageKeys;
+  set mirrorPageKeys(bool value) => _mirrorPageKeys = value;
+
+  /// AUTONOMOUS PATCH: what the mirror knew of this program's rows, kept by the
+  /// embedder across emulators and views — `TerminalView.altBufferScrollMemory`.
+  RemoteScrollMemory? _remoteScrollMemory;
+  set remoteScrollMemory(RemoteScrollMemory? value) {
+    if (identical(value, _remoteScrollMemory)) return;
+    _remoteScrollMemory = value;
+    _mirror?.memory = value;
+  }
+
   RemoteScrollMirror? _mirror;
 
-  RemoteScrollMirror get _mirrorNow => _mirror ??= RemoteScrollMirror(
+  /// The screen for the mirror to fetch ahead from, when it can be read whole.
+  RemoteScreen? _mirrorScreen() {
+    if (!_canMirror || _terminal.synchronizedOutputHeld) return null;
+    return (
+      lines: _terminal.buffer.lines,
+      rowCount: _terminal.viewHeight,
+      lineHeight: _painter.cellSize.height,
+    );
+  }
+
+  RemoteScrollMirror get _mirrorNow => _mirror ??= _newMirror();
+
+  RemoteScrollMirror _newMirror() => RemoteScrollMirror(
         onFrame: markNeedsPaint,
         requestLines: (lines) => _remoteScrollLink?.send(lines),
         requestsIdle: () => _remoteScrollLink?.idle ?? true,
-      );
+        cancelRequests: () => _remoteScrollLink?.cancel() ?? 0,
+        pageKeysEnabled: () => _mirrorPageKeys,
+        requestPage: (direction) =>
+            _mirrorPageKeys &&
+            (_remoteScrollLink?.sendPage(direction) ?? false),
+        readScreen: _mirrorScreen,
+      )..memory = _remoteScrollMemory;
 
   bool get _canMirror =>
       _mirrorRemoteScroll &&
@@ -328,6 +364,7 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
       _terminal.buffer.lines,
       _terminal.viewHeight,
       _painter.cellSize.height,
+      screenWhole: !_terminal.synchronizedOutputHeld,
     );
   }
 
@@ -343,6 +380,7 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
       _terminal.buffer.lines,
       _terminal.viewHeight,
       _painter.cellSize.height,
+      screenWhole: !_terminal.synchronizedOutputHeld,
     );
     return true;
   }
@@ -371,11 +409,24 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
 
   /// The screen was laid out again: a slide starts, carries on or ends here.
   void _updateRemoteScroll() {
+    // A program whose scrolling rows are remembered gets its mirror before the
+    // first scroll: it fetches ahead from the start.
+    if (_mirror == null &&
+        _mirrorRemoteScroll &&
+        _mirrorPageKeys &&
+        _remoteScrollMemory?.knowsScrollingRows == true &&
+        _canMirror) {
+      _mirrorNow;
+    }
     final mirror = _mirror;
     if (mirror != null) {
       if (!_isWholeAltScreen) {
         mirror.reset();
-      } else {
+      } else if (!_terminal.synchronizedOutputHeld) {
+        // ⚠️ Never a frame still arriving: part old, part new, it was matched
+        // and written into the mirror's document as one, and rows came out of
+        // order (reported on a phone, 2026-10-06). Its end lays the screen out
+        // again, whole.
         mirror.frame(
           _terminal.buffer.lines,
           _terminal.viewHeight,
@@ -793,7 +844,8 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
       _painter.paintLineCached(
         canvas,
         offset.translate(0, _snapLineTop(i * charHeight + _lineOffset)),
-        lines[i],
+        // The program's own rows as they were, while the mirror fetches ahead.
+        mirror?.heldRow(i) ?? lines[i],
       );
     }
 

@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:math' show Random;
 
 import 'package:dio/dio.dart';
-import 'package:xterm/xterm.dart' show Terminal;
+import 'package:xterm/xterm.dart' show RemoteScrollMemory, Terminal;
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -1603,6 +1603,7 @@ class AppNotifier extends ChangeNotifier {
     _forgetLaunchHold();
     // Signed out from elsewhere: the kept screens go as on a sign-out here (see [logout]).
     _keptScreens.clear();
+    _forgetScrollMemories();
     _keptScreenStore?.clear();
     unawaited(_pool?.closeAll());
     _pool = null;
@@ -4553,6 +4554,7 @@ class AppNotifier extends ChangeNotifier {
     sessionPreviews.removeAgent(machine.machine.machineId, agentId);
     _keptScreens.remove('${machine.machine.machineId}/$agentId');
     _keptScreenStore?.remove('${machine.machine.machineId}/$agentId');
+    _scrollMemories.remove('${machine.machine.machineId}/$agentId')?.clear();
     agentNotices.forgetAgent((
       machineId: machine.machine.machineId,
       agentId: agentId,
@@ -6712,6 +6714,7 @@ class AppNotifier extends ChangeNotifier {
       agentId: agent.id,
       agentName: agent.name,
       engineId: agent.engine,
+      scrollMemory: _scrollMemoryFor('${pane.machineId}/${agent.id}'),
       client: phoneClientDescriptor(),
       send: (type, payload) =>
           _sendTerminalFrame(pane.machineId, type, payload),
@@ -6877,6 +6880,36 @@ class AppNotifier extends ChangeNotifier {
   final _keptScreens = <String, Terminal>{};
   static const _keptScreenLimit = 3;
 
+  /// What the terminal view's scroll mirror knew of each agent opened most
+  /// recently in this run — its rows, which of them scroll — so that a reopen,
+  /// or a keyframe, does not fetch them again ([RemoteScrollMemory]). In memory
+  /// only, as [_keptScreens] are, and cleared with them.
+  final _scrollMemories = <String, RemoteScrollMemory>{};
+
+  /// A few, not all — each holds up to two grids of 1,500 rows, about a
+  /// kilobyte a row. Eight: the pager attaches the agents either side of the
+  /// one on screen, and at four, going back to an agent a few swipes away
+  /// found its rows already let go.
+  static const _scrollMemoryLimit = 8;
+
+  /// Every agent's scroll memory forgotten — this account's terminals' rows.
+  void _forgetScrollMemories() {
+    for (final memory in _scrollMemories.values) {
+      memory.clear();
+    }
+    _scrollMemories.clear();
+  }
+
+  /// [key]'s scroll memory — `machineId/agentId` — made the most recent.
+  RemoteScrollMemory _scrollMemoryFor(String key) {
+    final memory = _scrollMemories.remove(key) ?? RemoteScrollMemory();
+    _scrollMemories[key] = memory;
+    while (_scrollMemories.length > _scrollMemoryLimit) {
+      _scrollMemories.remove(_scrollMemories.keys.first)?.clear();
+    }
+    return memory;
+  }
+
   /// The visible screens of the agents opened most recently in this run, in memory only — see
   /// [KeptScreenStore]. Where [_keptScreens] has no exact terminal for an agent (it holds three),
   /// this has the screen it showed. Null in tests that do not hand one over.
@@ -6951,6 +6984,7 @@ class AppNotifier extends ChangeNotifier {
     // Everything closing at once is a sign-out or a reset: nothing of it is kept
     // ([_detachSession]'s `keepScreen`).
     _keptScreens.clear();
+    _forgetScrollMemories();
     final open = allPanes.toList();
     for (final swarm in swarms) {
       swarm.panes.clear();
