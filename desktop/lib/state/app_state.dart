@@ -4329,6 +4329,7 @@ class AppNotifier extends ChangeNotifier {
     // Every exit below clears the message: a boot superseded by a sign-out/sign-in mid-way (the
     // `_authWorkCurrent` returns) used to leave "Starting local service…" on a screen nothing would
     // ever repaint.
+    await _identifyBeforeLayout(revision);
     await _restorePaneLayout(claimOnAttach: true);
     _armLaunchClaimExpiry();
     if (!_authWorkCurrent(revision)) {
@@ -4661,6 +4662,23 @@ class AppNotifier extends ChangeNotifier {
     });
     _profileInFlight = load;
     return load;
+  }
+
+  /// Who signed in, before the saved tabs are restored (see
+  /// [PaneLayoutStore.restorableFor]). A browser is the window anyone may sign
+  /// in on, and it has no daemon to wait for, so this costs one request there;
+  /// a native build reaches the profile through its daemon and keeps restoring
+  /// first. Unknown — the request failed — restores as before.
+  Future<void> _identifyBeforeLayout(int revision) async {
+    if (viewer == null || !signedIn) return;
+    try {
+      final me = await api.me();
+      if (me != null && _authWorkCurrent(revision)) {
+        currentUser = CurrentUserProfile.fromMe(me);
+      }
+    } catch (_) {
+      /* Unknown: the profile load after boot tries again. */
+    }
   }
 
   Future<void> _readProfile(int revision) async {
@@ -14254,6 +14272,7 @@ class AppNotifier extends ChangeNotifier {
             ? savedActive!
             : saved.last.id,
         monitorHarnesses: _monitorHarnesses,
+        owner: currentUser?.id,
       ),
     );
   }
@@ -14290,8 +14309,16 @@ class AppNotifier extends ChangeNotifier {
     final revision = _layoutRevision;
     final authRevision = _authRevision;
     final savedProfile = await store.loadMachineProfile();
-    final saved = await store.loadSwarms();
-    final known = await store.loadMonitorHarnesses(saved);
+    final loaded = await store.loadSwarms();
+    // Another account's tabs and history — a browser someone else signed in
+    // on — are not this one's to see: start from an empty desk instead.
+    final foreign =
+        loaded != null &&
+        !PaneLayoutStore.restorableFor(loaded, currentUser?.id);
+    final saved = foreign ? null : loaded;
+    final known = foreign
+        ? const <(String, String)>[]
+        : await store.loadMonitorHarnesses(saved);
     if (!_authWorkCurrent(authRevision)) return;
     // This window's own choice, never the desk's. No saved choice — a window
     // that never picked one — is All machines.
