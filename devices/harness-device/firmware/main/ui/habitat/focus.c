@@ -395,9 +395,10 @@ uint32_t ht_focus_pet_next_ms(const ht_character_face_t *f, const char *recap)
     if (sc) return scene_next_ms(sc, 0, f->clock_ms);
     ht_pet_state_t state = pet_state(f, recap);
     uint32_t each = pet->step_ms[state], now = f->clock_ms / each;
-    const ht_pet_step_t *cur = &pet->loops[state][now % HT_PET_STEPS];
-    for (unsigned i = 1; i <= HT_PET_STEPS; i++) {
-        const ht_pet_step_t *p = &pet->loops[state][(now + i) % HT_PET_STEPS];
+    unsigned steps = ht_pet_steps(pet);
+    const ht_pet_step_t *cur = &pet->loops[state][now % steps];
+    for (unsigned i = 1; i <= steps; i++) {
+        const ht_pet_step_t *p = &pet->loops[state][(now + i) % steps];
         if (p->frame != cur->frame || p->dy != cur->dy) return (now + i) * each;
     }
     return 0;
@@ -740,6 +741,8 @@ void ht_focus_face(ht_scene_t *s, const ht_character_face_t *f, uint8_t frame, u
     // Claude's block of a body reads larger than the others at the same size (owner, 2026-10-06): it stays at 1.5x
     // resting and over a recap of one to three lines, and 1x over four.
     if (f->engine && !strcmp(f->engine, "claude") && ((has_recap && recap_n <= 3) || empty || retry)) size = 0;
+    // Codex's robot reads small at 1x over a full recap (owner, 2026-10-06): 1.5x over four lines too.
+    if (f->engine && !strcmp(f->engine, "codex") && has_recap && recap_n >= 4) size = 0;
     int mark_top = TITLE_BOTTOM + (below - TITLE_BOTTOM - MARK_SIZE) / 2;
 
     // The name on the top curve, the octopus's arc; a tap there opens the pane list.
@@ -767,7 +770,7 @@ void ht_focus_face(ht_scene_t *s, const ht_character_face_t *f, uint8_t frame, u
         // The engine's pet, centred in the mark's box, lifted by its step's hop.
         bool hold = pet_holds(f);
         ht_pet_state_t state = hold ? HT_PET_IDLE : pet_state(f, recap);
-        unsigned step = hold ? 0 : (f->clock_ms / pet->step_ms[state]) % HT_PET_STEPS;
+        unsigned step = hold ? 0 : (f->clock_ms / pet->step_ms[state]) % ht_pet_steps(pet);
         const ht_pet_step_t *p = &pet->loops[state][step];
         if (pet->cells) {
             // One 2x drawing, shown at 1x — or larger over a short recap, centred between the name and the recap's

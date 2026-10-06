@@ -7,7 +7,7 @@
  */
 typedef enum { HT_PET_IDLE, HT_PET_WORKING, HT_PET_DONE, HT_PET_ASKING, HT_PET_STATES } ht_pet_state_t;
 typedef struct { uint8_t frame; int8_t dy; } ht_pet_step_t;
-enum { HT_PET_STEPS = 24 };
+enum { HT_PET_STEPS = 24 };   // the loops' room; a pet's own length is ht_pet_steps()
 
 /*
  * A large scene a pet can play in place of its small self (Claude, Codex): `loop` indexes `frames` (cell
@@ -82,6 +82,9 @@ typedef struct {
                                                  // 1x (w x h), 1.5x, 1.75x or 2x; `frames` is NULL then (every pet now)
     const ht_pet_scene_t *alert_scene;           // played once, in the working scene's place, when a notice arrives while
                                                  // it works (gen_pets.py THE ALERT SCENES); its overlay is the bubble
+    uint8_t steps;                               // the loops' length, <= HT_PET_STEPS; 0 = HT_PET_STEPS (Muse's is 18)
 } ht_pet_t;
+// A pet's loop length.
+static inline unsigned ht_pet_steps(const ht_pet_t *pet) { return pet->steps ? pet->steps : HT_PET_STEPS; }
 extern const ht_pet_t ht_pets[];
 extern const unsigned ht_pet_count;
