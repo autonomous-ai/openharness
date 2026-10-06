@@ -527,6 +527,8 @@ jobs:
     if: ${{ inputs.development_update && !inputs.publish_run_id && inputs.checks != 'hardware-update' && inputs.checks != 'public-update' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    env:
+      CARGO_INCREMENTAL: '0'
     steps:
       - uses: actions/checkout@v7
         with:
@@ -547,12 +549,8 @@ jobs:
           cache-dependency-path: cli/package-lock.json
       - uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: '1.99.0'
           targets: x86_64-unknown-linux-musl
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
-        with:
-          workspaces: tui
-          shared-key: tui-x86_64-unknown-linux-musl
-          cache-bin: false
       - uses: actions/download-artifact@v6
         with:
           name: programmer-os-x86_64
@@ -562,9 +560,23 @@ jobs:
       - name: Build the small package from this source
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y musl-tools qemu-system-x86 qemu-utils ovmf python3-pil tesseract-ocr
+          sudo apt-get install -y musl=1.2.4-2 musl-dev=1.2.4-2 musl-tools=1.2.4-2 qemu-system-x86 qemu-utils ovmf python3-pil tesseract-ocr
           if test -e /dev/kvm; then sudo chmod a+rw /dev/kvm; fi
           make -C os runtime
+          python3 - <<'PYVERIFY'
+          import hashlib, subprocess
+          from pathlib import Path
+          trees = {'tui': '1ec2af97a8695bdcc8429ddc498747bd86eada08',
+                   'cli': '27f50e77fa9bdc8de75a64c9e9166c932c559a8b',
+                   'store': 'ea5589e2d8db518a85453fa3c9efc60d29a16085'}
+          for name, digest in trees.items():
+              assert subprocess.check_output(['git', 'rev-parse', 'HEAD:' + name], text=True).strip() == digest, name
+          files = {'harness-tui': 'bd221059a24d7f7ca8ce69bb3b6d69c2fb66cb655aae6658627c278a548a8fa8',
+                   'cli.js': '23b46a7c498fd1ef8ff5936aeb431f1de08b959b957141fa732d2cede870d147',
+                   'notify.mjs': '5690159e964f9ce022bdb2a5e4bc9d853e595e822f254478df241e1386dde68e'}
+          for name, digest in files.items():
+              assert hashlib.sha256((Path('os/work/runtime') / name).read_bytes()).hexdigest() == digest, name
+          PYVERIFY
           python3 os/tools/build-package.py --runtime os/work/runtime --output os/work/development-update --development
           python3 os/tests/build-update-fixture.py
       - name: Exercise apply, rollback, running work and encrypted reboot
