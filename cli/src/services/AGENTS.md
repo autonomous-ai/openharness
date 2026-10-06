@@ -93,6 +93,11 @@ all inside the core's process (for debugging or a quick way back).
   when to sweep. A command that destroys something is never held or replayed, and what it must know
   (the folders in use) is asked for when it starts, never sent ahead where it could go stale.
   `e2e/workspacesProcess.e2e.ts` proves it.
+- A service that is transport rather than requests: the gateway (src/gateway/gatewayProcess.ts,
+  src/core/gatewayLink.ts) carries every remote client's traffic, so it tells the core without asking
+  (`service_notice`) and carries terminal bytes as binary frames on its link. The core drops what would
+  pile up on a gateway that reads nothing, and the gateway gone is the relay gone: every remote client
+  with it, never a window on this computer. `e2e/gatewayProcess.e2e.ts` proves it, with a phone.
 - State built from every change must get every change exactly once. The teams show how
   (`src/services/teamsProcess.ts`, `src/core/teamsLink.ts`): the core numbers each change and keeps it
   until the process acknowledges it; on each connection the process says what it applied and gets

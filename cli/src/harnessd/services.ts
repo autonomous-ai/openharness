@@ -317,6 +317,10 @@ export const SERVICE_HOSTS: Readonly<Record<string, ServiceHostSpec>> = {
   edge: { services: ['workspaces', 'usage', 'monitor', 'projects'], heapLimitMiB: 384, rssLimitMiB: 768 },
   // The prompt scopes hold a few drafts and fingerprints per agent: small, bounded state.
   teams: { services: ['teams'], heapLimitMiB: 256, rssLimitMiB: 512 },
+  // The relay and its E2EE (gateway/gatewayProcess.ts): the backend link, every remote client's session,
+  // the terminals' WebRTC channels and their queues. Network, crypto and pure-JS WebRTC, the attack surface,
+  // where a fault costs the remote clients and nothing else (docs/design/2026-10-06-core-boundary-next.md).
+  gateway: { services: ['gateway'], heapLimitMiB: 512, rssLimitMiB: 1_024 },
 }
 
 /** Every service this build can run outside the core's process: what `HARNESSD_SERVICES` names. */

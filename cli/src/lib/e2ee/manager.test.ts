@@ -649,7 +649,7 @@ describe('a sealed frame for a session this process never had', () => {
 
 describe('terminal bytes sealed for a session this process never had', () => {
   const keystrokes = async (counter: number) => {
-    const { sealTerminalBinary } = await import('../terminalBinary.js')
+    const { sealTerminalBinary } = await import('./terminalSeal.js')
     return sealTerminalBinary(new Uint8Array(32).fill(9), counter, { kind: 1, streamId: '00112233-4455-6677-8899-aabbccddeeff', seq: 1, bytes: new TextEncoder().encode('ls\r'), compressed: false })!
   }
 

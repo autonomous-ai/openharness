@@ -33,6 +33,7 @@ export const SERVICE_RUNNERS: ReadonlyMap<string, () => Promise<Runner>> = new M
   ['projects', async () => (await import('./services/projectsProcess.js')).runProjectsService],
   ['store', async () => (await import('./services/storeProcess.js')).runStoreService],
   ['teams', async () => (await import('./services/teamsProcess.js')).runTeamsService],
+  ['gateway', async () => (await import('./gateway/gatewayProcess.js')).runGatewayService],
 ])
 
 export interface ServiceProcessDeps {

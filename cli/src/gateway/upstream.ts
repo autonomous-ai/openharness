@@ -79,7 +79,7 @@ export interface UpstreamEvents {
 export interface UpstreamOptions {
   machineId: string
   /** The daemon's session; without one (isolated unit tests only), `machineId` is the token. */
-  auth?: AuthSessionManager
+  auth?: Pick<AuthSessionManager, 'accessToken'>
   computerId?: string
   autonomousEnv?: string
   events: UpstreamEvents
@@ -90,7 +90,7 @@ export class UpstreamLink {
   private connecting = false
   /** A 401 on the upgrade is being answered with a token refresh; that refresh owns the next connect. */
   private retryingAuth = false
-  private readonly auth: AuthSessionManager
+  private readonly auth: Pick<AuthSessionManager, 'accessToken'>
   /** Constructor-without-auth is retained for isolated unit tests only. */
   private readonly testToken?: string
   private readonly url: string

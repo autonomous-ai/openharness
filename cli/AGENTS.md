@@ -19,7 +19,9 @@ SERVICES src/services/     everything else: search, viewers, models, workspaces,
 together. It is the core's own entry (`harness __run`); `src/cli.ts` is the CLI, and calls in for
 `__run` and `start -f`. `src/backendSocket.ts` is the transport: it receives frames and dispatches them.
 `src/gateway/` is the relay: the backend link, the E2EE sessions and keys, and every rule about what a
-remote client may send and how what it is sent is sealed. The socket speaks to it in the clear through
+remote client may send and how what it is sent is sealed. It runs in a process of its own
+(`src/gateway/gatewayProcess.ts`; the core's side is `src/core/gatewayLink.ts`), or in the core's with
+`HARNESSD_SERVICES=none` (`src/gateway/start.ts`). The socket speaks to it in the clear through
 `GatewayPort` and hears it through `GatewayEvents` (`src/core/api.ts`), and never holds a key.
 
 ## Where new code goes

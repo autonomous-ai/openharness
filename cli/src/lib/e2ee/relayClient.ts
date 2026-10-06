@@ -12,7 +12,8 @@
 import { WebSocket } from 'ws'
 import * as C from './core.js'
 import { encryptDownFrameFor } from './applicationFrames.js'
-import { deriveTerminalBinaryKey, openTerminalBinary, sealTerminalBinary, type TerminalBinaryClear } from '../terminalBinary.js'
+import type { TerminalBinaryClear } from '../terminalBinary.js'
+import { deriveTerminalBinaryKey, openTerminalBinary, sealTerminalBinary } from './terminalSeal.js'
 import { pwCpaceGenerator, pwContext, stretchPassword } from './passwordPake.js'
 import { ReplayWindow } from './replayWindow.js'
 

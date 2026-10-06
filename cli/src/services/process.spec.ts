@@ -8,11 +8,13 @@ import { hostServices, LEAVE_GRACE_MS, REFUSED, runServiceProcess, serviceFaults
 class FakeSocket extends EventEmitter {
   readyState: number = WebSocket.CONNECTING
   readonly sent: Array<{ type: string; payload: Record<string, unknown> }> = []
+  readonly binary: Uint8Array[] = []
   closed = false
   constructor(readonly url: string, private readonly failSend = false) { super() }
-  send(data: string): void {
+  send(data: string | Uint8Array): void {
     if (this.failSend) throw new Error('gone')
-    this.sent.push(JSON.parse(data))
+    if (typeof data === 'string') this.sent.push(JSON.parse(data))
+    else this.binary.push(data)
   }
   close(): void { this.closed = true }
   open(): void { this.readyState = WebSocket.OPEN; this.emit('open') }
@@ -230,6 +232,60 @@ describe('a service in its own process', () => {
     socket().drop()
     await expect(pending).rejects.toThrow('the core went away')
     await expect(core!.query('agents')).rejects.toThrow('not connected to the core')
+  })
+
+  it('tells the core without asking, carries bytes both ways, and hears when the core goes (the gateway)', () => {
+    const onBinary = vi.fn()
+    const onDisconnected = vi.fn()
+    let core: Parameters<NonNullable<ServiceProcessOptions['onConnected']>>[0] | null = null
+    run({ onBinary, onDisconnected, onConnected: (connection) => { core = connection } })
+    // A socket that never got as far as the core taking it: its end is not a disconnection.
+    socket().drop()
+    expect(onDisconnected).not.toHaveBeenCalled()
+    vi.advanceTimersByTime(100)
+    socket().open()
+    socket().say({ type: 'connected', payload: { service: 'gateway' } })
+    core!.notice!('status', { connected: true })
+    core!.notice!('linkDown')
+    expect(socket().sent.slice(1)).toEqual([
+      { type: 'service_notice', payload: { connected: true, kind: 'status' } },
+      { type: 'service_notice', payload: { kind: 'linkDown' } },
+    ])
+    expect(core!.sendBinary!(Uint8Array.of(1, 2))).toBe(true)
+    expect(socket().binary).toEqual([Uint8Array.of(1, 2)])
+    socket().emit('message', Buffer.from([3, 4]), true)
+    socket().emit('message', [Buffer.from([5]), Buffer.from([6])], true)
+    expect(onBinary.mock.calls).toEqual([[new Uint8Array([3, 4])], [new Uint8Array([5, 6])]])
+    // A binary frame its handler cannot take is logged, and the link goes on.
+    onBinary.mockImplementationOnce(() => { throw new Error('bad bytes') })
+    socket().emit('message', Buffer.from([7]), true)
+    expect(lines).toContain('[service search] binary frame failed · bad bytes')
+    socket().drop()
+    expect(onDisconnected).toHaveBeenCalledOnce()
+    // Gone: bytes cannot be sent, and a notice is dropped rather than thrown.
+    expect(core!.sendBinary!(Uint8Array.of(9))).toBe(false)
+    core!.notice!('linkDown')
+    // A disconnection its handler cannot take is logged too.
+    onDisconnected.mockImplementationOnce(() => { throw new Error('stuck') })
+    vi.advanceTimersByTime(200)
+    socket().open()
+    socket().say({ type: 'connected', payload: {} })
+    socket().drop()
+    expect(lines).toContain('[service search] disconnect failed · stuck')
+    // A socket that refuses the bytes as they are written: not sent.
+    vi.advanceTimersByTime(400)
+    const failing = new FakeSocket('x', true)
+    Object.assign(socket(), { send: failing.send.bind(failing) })
+    socket().open()
+    socket().say({ type: 'connected', payload: {} })
+    expect(core!.sendBinary!(Uint8Array.of(1))).toBe(false)
+  })
+
+  it('a binary frame with nobody to hear it is dropped', () => {
+    run()
+    socket().open()
+    socket().emit('message', Buffer.from([1]), true)
+    expect(lines).toEqual([])
   })
 
   it('reconnects with a backoff that doubles and caps while the core is away, and resets once connected', () => {

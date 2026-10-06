@@ -381,11 +381,15 @@ export const FLEET_FALLBACKS: PortFallbacks<FleetPort> = {
 /** What a remote client proved with its E2EE session: an owner's app or browser, or a device. */
 export type RemoteRole = 'web' | 'device'
 
-/** A remote client the gateway holds a session with, as the core may know it: its role, and the label
- *  its identity was paired under (null for none), for naming it to the person. */
+/** A remote client the gateway holds a session with, as the core may know it: its role, the label its
+ *  identity was paired under (null for none) for naming it to the person, its identity's public key (the
+ *  Wi-Fi device's requests are kept apart by it), and whether it is on a device's direct link rather than
+ *  the relay. Nothing here is a secret. */
 export interface RemoteClient {
   role: RemoteRole
   label: string | null
+  identity: string
+  direct: boolean
 }
 
 /** How a remote client's frame arrived: the backend's relay, or a paired client's own P2P channel. */
@@ -436,6 +440,12 @@ export interface GatewayPort {
   /** A local connection's request the gateway answers (the E2EE pairings), answered back to it through
    *  `GatewayEvents.toLocal`. */
   local(connId: string, frame: Record<string, unknown>): Promise<void>
+  /** The Wi-Fi device's answer or event for one of its sessions, sealed to it, over its direct link or the
+   *  relay; false when that session is gone. */
+  device(connId: string, type: string, payload: Record<string, unknown>): boolean
+  /** Which identity's app said hello on a Wi-Fi device session (null: it left), so that the gateway can
+   *  tell the device it was unpaired while its session still stands. */
+  deviceClient(connId: string, identity: string | null): void
   stop(): Promise<void>
 }
 
@@ -475,6 +485,102 @@ export interface GatewayEvents {
   revoked(): void
   /** Another computer holds this machine: stop for good, keeping the session. */
   busy(): void
+  /** A Wi-Fi device's request (`autonomous_device_request`), as it arrived sealed and as the session that
+   *  sealed it opened it (null when it could not be opened, or was not the device's to send). */
+  device(connId: string, frame: Record<string, unknown>, opened: Record<string, unknown> | null): Promise<void> | void
+  /** A paired identity was unpaired: the Wi-Fi device service forgets it. */
+  deviceRevoked(identity: string): void
+  /** Something the windows on this computer show of the account's devices (the device key log's notices). */
+  toWindows(frame: Record<string, unknown>): void
+}
+
+/** An HTTP answer for the daemon's own routes (`harness pair`, `harness devices`, …), as the hook server sends it. */
+export interface HttpAnswer {
+  status: number
+  body: Record<string, unknown>
+}
+
+/** What the core's status reads of the relay: the machine's E2EE fingerprint, its pairings and the one
+ *  waiting to pair. */
+export interface GatewayStatus {
+  fingerprint: string | null
+  pairs: Array<Record<string, unknown>>
+  pending: Record<string, unknown> | null
+}
+
+/** The account's sign-in as the gateway's device key log reads it: no credential, only which sign-in. */
+export interface GatewayAccount {
+  /** The machine id the backend gave this sign-in; null signed out. */
+  machineId: string | null
+  /** Which sign-in by hand this is (lib/authSession.ts `signInOf`), or null. */
+  signIn: { epoch: string; adopted: boolean; at: number | null } | null
+}
+
+/** A Wi-Fi device operation refused, with the code the device's local API answers it under. */
+export interface GatewayRefusal {
+  code: string
+  message: string
+}
+
+/**
+ * The daemon's own commands about the keys, which the gateway holds: `harness pair`, `unpair`,
+ * `remote-password`, `link connect`, `group`, `devices`, and the Wi-Fi device's pairing. Each answers as
+ * the hook server's route does; while the gateway is down, a 503.
+ */
+export interface GatewayOps {
+  status(): Promise<GatewayStatus>
+  pair(code: string): Promise<HttpAnswer>
+  listPairs(): Promise<HttpAnswer>
+  revoke(id: string): Promise<HttpAnswer>
+  revokeAll(): Promise<HttpAnswer>
+  setRemotePassword(password: string): Promise<HttpAnswer>
+  clearRemotePassword(): Promise<HttpAnswer>
+  remotePasswordStatus(): Promise<HttpAnswer>
+  trustLinkedPeer(peer: { pub: string; machineId: string; label: string }): Promise<HttpAnswer>
+  groupList(): Promise<HttpAnswer>
+  groupSync(): Promise<HttpAnswer>
+  groupRemove(selector: string): Promise<HttpAnswer>
+  devicesList(): Promise<HttpAnswer>
+  devicesRemove(pub: string): Promise<HttpAnswer>
+  devicesHistory(): Promise<HttpAnswer>
+  devicesDismiss(body: { pub?: string; pubs?: string[]; baseline?: boolean }): Promise<HttpAnswer>
+  devicesRebaseline(confirm: boolean, head?: { seq: number; hash: string }): Promise<HttpAnswer>
+  /** The Wi-Fi device's direct links: discovered devices, pairing one, and its pairings. A refusal is an
+   *  answer (`{ refused }`), as the device's local API words it. */
+  wifi(request: { op: 'discover' | 'pair' | 'pairStatus' | 'list' | 'revoke'; device?: string; code?: string; id?: string }):
+    Promise<{ result: Record<string, unknown> } | { refused: GatewayRefusal }>
+  /** The local dashboard's port, said to the web in `e2e_status` so it can link there to approve a pairing. */
+  dashboardPort(port: number): void
+  /** The Wi-Fi device service is up (its direct links start) or gone (they stop). */
+  wifiService(on: boolean): void
+  /** A Wi-Fi device asked to be unpaired, over its own authenticated session. */
+  revokeIdentity(identity: string): void
+  /** The account's sign-in, as it is now (after start-up recorded which sign-in it is); the device key log
+   *  registers this machine with it. */
+  account(account: GatewayAccount): void
+  /** The owner's machines the backend last said were online, for the trust group's exchanges; null when
+   *  the list is not the backend's. */
+  reachable(machineIds: string[] | null): void
+}
+
+/** A window on this computer working on another of the owner's machines, through the relay: what the
+ *  local socket asks of the gateway for it (lib/remoteRelay.ts `RemoteRelayPool`, or its link). */
+export interface WindowRelaySession {
+  send(frame: Record<string, unknown>): Promise<void>
+  sendBinary(clear: TerminalBinaryClear): Promise<void>
+  detach(): void
+}
+export interface WindowRelaySink {
+  sendFrame(frame: Record<string, unknown>): boolean
+  sendBinary(frame: Uint8Array): boolean
+}
+export interface WindowRelay {
+  acquire(machineId: string, autonomousEnv: string, selectFrame: Record<string, unknown>, sink: WindowRelaySink,
+    onClosed: (code: number, reason: string) => void): Promise<WindowRelaySession>
+  acquireIsolated(machineId: string, autonomousEnv: string, selectFrame: Record<string, unknown>, sink: WindowRelaySink,
+    onClosed: (code: number, reason: string) => void): Promise<WindowRelaySession>
+  invalidate(machineId: string): void
+  invalidateIsolated(machineId: string): void
 }
 
 /** Each port is filled by the service that owns it when that service starts, and is null while the

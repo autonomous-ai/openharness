@@ -52,3 +52,37 @@ export function logSafeType(type: string): string {
  * client's directly, a window's on this computer when the core hands it over (`GatewayPort.local`).
  */
 export const GATEWAY_REQUEST_TYPES = new Set(['device_e2ee_pair', 'phone_pair', 'e2ee_pairings_list', 'e2ee_pairing_unpair', 'e2ee_pairings_unpair_all'])
+
+/** A window's connection to another machine could not be made: why, and the close code to tell it. Here and
+ *  not with the relay pool, so the local socket can tell one apart without loading the pool. */
+export class RelayConnectError extends Error {
+  constructor(message: string, readonly closeCode?: number) {
+    super(message)
+    this.name = 'RelayConnectError'
+  }
+}
+
+/**
+ * Frames only THIS machine's own daemon says to its own windows (the device key log's notices). A
+ * remote machine is not that daemon: if its frame reached the local app as-is, the app would show a
+ * "new device" / "removed by" band as though this machine had verified it. Dropped on the way in,
+ * sealed or not.
+ */
+export const DAEMON_LOCAL_ONLY_TYPES: ReadonlySet<string> = new Set(['device_key_added', 'device_key_removed', 'device_conflict', 'device_keys_changed'])
+
+/** The owner's commands from the window's command bar and ⌘K, sealed and the owner's only (lib/ownerCommands.ts). */
+export const OWNER_COMMAND_TYPES = new Set(['command_bar', 'route_task', 'route_send'])
+/** The pair brain, machine to machine (daemons/BRAIN.md): retired, and refused (lib/e2ee/applicationFrames.ts). */
+export const PAIR_REQUESTS = new Set(['pair_watch', 'pair_journal', 'pair_read', 'pair_list',
+  'pair_answer', 'pair_send', 'pair_stop', 'pair_start', 'pair_pause', 'pair_resume'])
+/** An individual's art for the phone: retired, and refused. Its reply is `pair_plate`, not `pair_plate_get_result`. */
+export const PLATE_REQUEST = 'pair_plate_get'
+export const PLATE_RESULT = 'pair_plate'
+/** The reply's type for a request: `<type>_result`, except the plate's `pair_plate`. */
+export const rpcResultType = (type: string): string => type === PLATE_REQUEST ? PLATE_RESULT : `${type}_result`
+
+/** Whether a payload is a sealed envelope (`{ __e2e }`): the same test as lib/e2ee/core.ts `isWrapped`, which
+ *  must stay byte-identical with the browser's copy and brings the ciphers with it. */
+export function isWrapped(payload: unknown): payload is { __e2e: Record<string, unknown> } {
+  return !!payload && typeof payload === 'object' && '__e2e' in (payload as Record<string, unknown>)
+}
