@@ -41,6 +41,10 @@ struct Visit {
     source_created: String,
     #[serde(default)]
     started: bool,
+    /// A shell_open invocation starts as a terminal before engine discovery. Its
+    /// terminal label is not an agent exit; only its stopped process is one.
+    #[serde(default)]
+    terminal_process: bool,
     #[serde(skip)]
     returning_since: Option<Instant>,
 }
@@ -181,16 +185,20 @@ pub fn bind(app: &mut App, token: &str, machine: &str, agent: &str) {
 /// Called after a shell picker replaced its source view with an agent. Do not
 /// attach this lifecycle to ordinary workspace navigation or plain terminals.
 pub fn visiting(app: &mut App, source: &(String, String), cwd: Option<String>, machine: &str, agent: &str) {
-    visit(app, source, cwd, machine, agent, false);
+    visit(app, source, cwd, machine, agent, false, false);
 }
 
 /// A successful create/resume receipt proves this invocation was attempted,
 /// even if it exited before the client observed its running state.
 pub fn visiting_created(app: &mut App, source: &(String, String), cwd: Option<String>, machine: &str, agent: &str) {
-    visit(app, source, cwd, machine, agent, true);
+    visit(app, source, cwd, machine, agent, true, false);
 }
 
-fn visit(app: &mut App, source: &(String, String), cwd: Option<String>, machine: &str, agent: &str, created: bool) {
+pub fn visiting_shell_launch(app: &mut App, source: &(String, String), cwd: Option<String>, machine: &str, agent: &str) {
+    visit(app, source, cwd, machine, agent, true, true);
+}
+
+fn visit(app: &mut App, source: &(String, String), cwd: Option<String>, machine: &str, agent: &str, created: bool, terminal_process: bool) {
     let Some(token) = app.shell_context.token_for(&source.0, &source.1) else { return };
     if source.0 == machine && source.1 == agent { return }
     let Some(target) = app.fleet.agent(machine, agent).filter(|a| created || a.engine != "terminal") else { return };
@@ -201,7 +209,7 @@ fn visit(app: &mut App, source: &(String, String), cwd: Option<String>, machine:
     let source_created = original.map(|a| a.created_at_wire.clone()).unwrap_or_default();
     app.shell_context.contexts.get_mut(&token).unwrap().visit = Some(Visit {
         pane, machine:machine.into(), agent:agent.into(), source_machine:source.0.clone(), source_agent:source.1.clone(), source_cwd:cwd, started,
-        source_runtime, source_created, returning_since:None,
+        source_runtime, source_created, terminal_process, returning_since:None,
     });
     app.shell_context.dirty.insert(token);
     app.shell_context.save();
@@ -249,7 +257,7 @@ fn return_from_sessions(app: &mut App) {
         // A background exit must not steal focus or dismiss an open picker.
         // Its original shell is restored when the person returns to that pane.
         if app.focused() != Some(visit.pane) || app.modal.is_some() { continue }
-        let exited = app.fleet.agent(&visit.machine, &visit.agent).is_some_and(|a| a.engine == "terminal" || a.status == "stopped");
+        let exited = app.fleet.agent(&visit.machine, &visit.agent).is_some_and(|a| a.status == "stopped" || (!visit.terminal_process && a.engine == "terminal"));
         if !exited || app.link(&visit.source_machine).is_none() { continue }
         let live_source = surviving_source(app, &visit);
         if live_source.is_none() && visit.returning_since.is_none_or(|at| at.elapsed() < Duration::from_secs(2)) {
@@ -782,10 +790,12 @@ pub fn tick(app: &mut App) {
     }
     app.shell_context.parsers.retain(|p, _| app.panes.contains_key(p));
     if app.shell_context.inline.as_ref().is_some_and(|i| i.at.elapsed() > Duration::from_secs(5) || !app.panes.contains_key(&i.pane)) { app.shell_context.inline = None; }
-    if app.shell_context.pending.as_ref().is_some_and(|r| !r.verb.ends_with("-inline")) && !matches!(app.modal, Some(Modal::Picker { kind:PickerKind::ShellContext, .. })) {
+    // Composed launches wait for folder/capability checks and the remote creation
+    // receipt at the shell prompt. They never open the legacy context modal.
+    if app.shell_context.pending.as_ref().is_some_and(|r| r.verb != "compose-launch" && !r.verb.ends_with("-inline")) && !matches!(app.modal, Some(Modal::Picker { kind:PickerKind::ShellContext, .. })) {
         cancel(app);
     }
-    if app.shell_context.pending.as_ref().is_some_and(|r| r.at.elapsed() > Duration::from_secs(100)) {
+    if app.shell_context.pending.as_ref().is_some_and(|r| r.at.elapsed() > Duration::from_secs(if r.verb == "compose-launch" { 180 } else { 100 })) {
         finish(app, 1, "The request timed out. Your shell is unchanged.");
     }
 }
@@ -923,6 +933,27 @@ mod tests {
             agent.engine=engine.into();agent.status=status.into();
             visiting_created(&mut app,&("local".into(),"shell".into()),Some("/original".into()),"local","chosen");
             assert!(app.shell_context.contexts[&token].visit.as_ref().unwrap().started);
+            return_from_sessions(&mut app);
+            assert_eq!(app.panes[&app.focused().unwrap()].agent_id,"shell");
+            assert!(app.shell_context.contexts[&token].visit.is_none());
+        }
+    }
+    #[tokio::test]
+    async fn composed_terminal_waits_for_process_exit_even_before_engine_discovery() {
+        for discovered in [false, true] {
+            let (mut app,token,_) = visit_fixture(false);
+            app.fleet.agents.get_mut(&("local".into(),"chosen".into())).unwrap().engine="terminal".into();
+            visiting_shell_launch(&mut app,&("local".into(),"shell".into()),Some("/original".into()),"local","chosen");
+            let saved=serde_json::to_vec(&app.shell_context.contexts).unwrap();
+            app.shell_context.contexts=serde_json::from_slice(&saved).unwrap();
+            return_from_sessions(&mut app);
+            assert_eq!(app.panes[&app.focused().unwrap()].agent_id,"chosen", "the launch receipt precedes engine discovery");
+            if discovered {
+                app.fleet.agents.get_mut(&("local".into(),"chosen".into())).unwrap().engine="claude".into();
+                return_from_sessions(&mut app);
+                assert_eq!(app.panes[&app.focused().unwrap()].agent_id,"chosen");
+            }
+            app.fleet.agents.get_mut(&("local".into(),"chosen".into())).unwrap().status="stopped".into();
             return_from_sessions(&mut app);
             assert_eq!(app.panes[&app.focused().unwrap()].agent_id,"shell");
             assert!(app.shell_context.contexts[&token].visit.is_none());
@@ -1189,6 +1220,20 @@ mod tests {
         assert!(app.shell_context.contexts[&token].route.is_none());
         assert!(app.modal.is_none());
     }
+    #[tokio::test]
+    async fn a_composed_remote_launch_stays_pending_without_a_modal_until_cancelled() {
+        let mut app=app();
+        let token=prepare(&mut app,None,false);bind(&mut app,&token,"local","shell");
+        let id=uuid::Uuid::new_v4().to_string();
+        app.shell_context.pending=Some(Request{token:token.clone(),id:id.clone(),pane:1,verb:"compose-launch".into(),query:"{}".into(),at:Instant::now()});
+        tick(&mut app);
+        assert!(app.shell_context.pending.is_some(), "remote RPCs must finish before replying to the shell");
+        assert!(app.shell_context.replies.is_empty());
+        output(&mut app,1,format!("\x1b]633;hn;{token};{id};cancel;\x07").as_bytes());
+        assert!(app.shell_context.pending.is_none());
+        assert_eq!(app.shell_context.replies.back().unwrap().code,1);
+    }
+
     #[tokio::test]
     async fn inline_cancel_and_invalid_session_return_to_the_same_shell() {
         let mut app=app();
