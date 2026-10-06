@@ -10,6 +10,8 @@
 //! are shown. A file opened goes to $EDITOR in a terminal split beside the pane. `hn files` is the
 //! same view filling a terminal of its own (standalone, at the end), the editor in that terminal.
 
+mod dialog;
+mod editor;
 mod ops;
 
 use std::collections::{HashMap, HashSet};
@@ -119,9 +121,27 @@ impl Target {
     }
 }
 
+/// The explorer title's buttons, as VS Code's: New File, New Folder, Refresh, Collapse All.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Head { NewFile, NewFolder, Refresh, Collapse }
+
+impl Head {
+    const ALL: [Head; 4] = [Head::NewFile, Head::NewFolder, Head::Refresh, Head::Collapse];
+    /// Its icon: a Nerd Font codicon (nf-cod-new_file, new_folder, refresh, collapse_all), else letters.
+    fn icon(self, nerd: bool) -> &'static str {
+        match (self, nerd) {
+            (Head::NewFile, true) => "\u{ea7f}", (Head::NewFolder, true) => "\u{ea80}", (Head::Refresh, true) => "\u{eb37}", (Head::Collapse, true) => "\u{eac5}",
+            (Head::NewFile, false) => "+F", (Head::NewFolder, false) => "+D", (Head::Refresh, false) => "R", (Head::Collapse, false) => "-",
+        }
+    }
+    fn tip(self) -> &'static str {
+        match self { Head::NewFile => "New File…", Head::NewFolder => "New Folder…", Head::Refresh => "Refresh (C-r, F5)", Head::Collapse => "Collapse Folders in Explorer" }
+    }
+}
+
 /// The context menu's actions.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Act { Open, NewFile, NewFolder, Terminal, Cut, Copy, Paste, Duplicate, CopyPath, CopyRelative, Rename, Delete, Hidden, View }
+enum Act { Open, External, NewFile, NewFolder, Terminal, Cut, Copy, Paste, Duplicate, CopyPath, CopyRelative, Rename, Delete, Hidden, View }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Item { label: String, key: &'static str, act: Act, on: bool }
@@ -249,6 +269,16 @@ pub struct Files {
     confirm: Option<Confirm>,
     /// Where deleted things go: the home Trash.
     trash: PathBuf,
+    /// Files open in the built-in editor (`hn files`), filling the view while one is; else (a
+    /// pane's mode) in $EDITOR beside it.
+    builtin: bool,
+    editor: Option<Box<editor::Editor>>,
+    /// `hn files --edit`: the editor alone, the program ending with it.
+    exit_on_close: bool,
+    /// The explorer's title button under the mouse: lit, and what it does said in the footer.
+    head_hover: Option<Head>,
+    /// `hn files --root` (what the Open dialog opens a folder in): kept inside its root.
+    bounded: bool,
 }
 
 impl Files {
@@ -257,7 +287,7 @@ impl Files {
             root: dir.clone(), cwd: dir.clone(), hidden: false, nerd, view: View::Gallery, listing: Listing::default(), counts: HashMap::new(),
             selected: 0, scroll: 0, focus: Focus::Grid, expanded: HashSet::new(), rows: Vec::new(), tree_sel: 0, tree_scroll: 0,
             follow: true, tree_follow: true, standalone: false, message: None, clip: None, menu: None, prompt: None, confirm: None,
-            trash: ops::trash_home(),
+            trash: ops::trash_home(), builtin: false, editor: None, exit_on_close: false, head_hover: None, bounded: false,
         };
         f.go(dir, None);
         f
@@ -271,7 +301,7 @@ impl Files {
         self.selected = select.and_then(|n| self.listing.entries.iter().position(|e| e.name == n)).unwrap_or(0);
         self.scroll = 0;
         self.follow = true;
-        if !dir.starts_with(&self.root) { self.root = dir.clone() }
+        if !dir.starts_with(&self.root) && !self.bounded { self.root = dir.clone() }
         let mut up = Some(dir.as_path());
         while let Some(p) = up {
             self.expanded.insert(p.to_path_buf());
@@ -315,6 +345,7 @@ impl Files {
     }
 
     fn up(&mut self) {
+        if self.bounded && self.cwd == self.root { self.message = Some(format!("This is the top of '{}'", name_of(&self.root))); return }
         let from = name_of(&self.cwd);
         if let Some(parent) = self.cwd.parent().map(Path::to_path_buf) { self.go(parent, Some(&from)) }
     }
@@ -323,7 +354,32 @@ impl Files {
     fn open_selected(&mut self) -> Outcome {
         let Some(e) = self.listing.entries.get(self.selected) else { return Outcome::None };
         let path = self.cwd.join(&e.name);
-        if e.dir { self.go(path, None); Outcome::None } else { Outcome::Edit(path) }
+        if e.dir { self.go(path, None); Outcome::None } else { self.open_file(path) }
+    }
+
+    /// A file opened: in the built-in editor when it is text (else the footer says why not), or
+    /// in $EDITOR beside a pane's view.
+    fn open_file(&mut self, path: PathBuf) -> Outcome {
+        if !self.builtin { return Outcome::Edit(path) }
+        let name = name_of(&path);
+        let title = path.strip_prefix(&self.root).ok().filter(|r| !r.as_os_str().is_empty()).map(|r| r.to_string_lossy().into_owned()).unwrap_or_else(|| path.to_string_lossy().into_owned());
+        match editor::Editor::open(&path, title) {
+            Ok(e) => self.editor = Some(Box::new(e)),
+            Err(editor::Refusal::NotText) => self.message = Some(format!("Can't open '{name}': not a text file")),
+            Err(editor::Refusal::TooLarge) => self.message = Some(format!("Can't open '{name}': too large to open here (e opens it in $EDITOR)")),
+            Err(editor::Refusal::Unreadable(e)) => self.message = Some(format!("Can't open '{name}': {e}")),
+        }
+        Outcome::None
+    }
+
+    /// The editor's key, click or wheel done; closed, the folder read again.
+    fn edited(&mut self, out: editor::EdOut) -> Outcome {
+        match out {
+            editor::EdOut::None => Outcome::None,
+            editor::EdOut::Clipboard(t) => Outcome::Clipboard(t),
+            editor::EdOut::Close if self.exit_on_close => Outcome::Exit,
+            editor::EdOut::Close => { self.editor = None; self.reload(); Outcome::None }
+        }
     }
 
     /// What the keys act on: the explorer's folder with it in focus, else the grid's entry — the
@@ -379,6 +435,7 @@ impl Files {
     /// A key: to the confirmation, the name prompt or the menu while one is up, else the view's.
     fn press(&mut self, k: Chord, g: Geom) -> Outcome {
         self.message = None;
+        if let Some(e) = self.editor.as_mut() { let out = e.key(k); return self.edited(out) }
         let out = if self.confirm.is_some() { self.confirm_key(k) }
             else if self.prompt.is_some() { self.prompt_key(k) }
             else if self.menu.is_some() { self.menu_key(k) }
@@ -392,6 +449,7 @@ impl Files {
         let item = matches!(self.key_target(), Target::Item { .. });
         match () {
             _ if is_char(&k, 'q') || k.code == KeyCode::Esc || ctrl('g') => Outcome::Exit,
+            _ if is_char(&k, 'e') && matches!(self.key_target(), Target::Item { dir: false, .. }) => self.act(Act::External, self.key_target()),
             _ if k.code == KeyCode::Tab || k.code == KeyCode::BackTab => {
                 self.focus = if self.focus == Focus::Grid { Focus::Tree } else { Focus::Grid };
                 self.tree_follow = true;
@@ -409,6 +467,7 @@ impl Files {
             _ if ctrl('x') && item => self.act(Act::Cut, self.key_target()),
             _ if ctrl('d') && item => self.act(Act::Duplicate, self.key_target()),
             // (Pasted into the folder on show; with the explorer's keys, into its folder.)
+            _ if ctrl('r') || k.code == KeyCode::F(5) => { self.head(Head::Refresh); Outcome::None }
             _ if ctrl('v') => {
                 let t = if self.focus == Focus::Tree { self.key_target() } else { Target::Space(self.cwd.clone()) };
                 self.act(Act::Paste, t)
@@ -478,9 +537,10 @@ impl Files {
         let item = match &t { Target::Item { path, dir } => Some((path.clone(), *dir)), Target::Space(_) => None };
         match act {
             Act::Open => match t {
-                Target::Item { path, dir: false } => return Outcome::Edit(path),
+                Target::Item { path, dir: false } => return self.open_file(path),
                 Target::Item { path, .. } | Target::Space(path) => self.go(path, None),
             },
+            Act::External => { if let Some((path, false)) = item { return Outcome::Edit(path) } }
             Act::NewFile | Act::NewFolder => {
                 let ask = if act == Act::NewFile { Ask::NewFile } else { Ask::NewFolder };
                 self.prompt = Some(Prompt { ask, dir: t.folder(), text: Vec::new(), cursor: 0, mark: None });
@@ -570,10 +630,12 @@ impl Files {
         let it = |label: &str, key: &'static str, act: Act, on: bool| Some(Item { label: label.into(), key, act, on });
         let paste = self.clip.is_some();
         // (The root of the disk has no folder to be renamed or deleted from.)
-        let movable = matches!(t, Target::Item { path, .. } if path.parent().is_some());
-        match t {
+        let movable = matches!(t, Target::Item { path, .. } if path.parent().is_some() && !(self.bounded && *path == self.root));
+        // (Open in Editor is Open itself where files open in $EDITOR.)
+        let items = match t {
             Target::Item { dir: false, .. } => vec![
-                it("Open", "Enter", Act::Open, true), it("Open in Terminal", "t", Act::Terminal, true), None,
+                it("Open", "Enter", Act::Open, true), it("Open in Editor ($EDITOR)", "e", Act::External, true),
+                it("Open in Terminal", "t", Act::Terminal, true), None,
                 it("Cut", "C-x", Act::Cut, true), it("Copy", "C-c", Act::Copy, true), it("Paste", "C-v", Act::Paste, paste), it("Duplicate", "C-d", Act::Duplicate, true), None,
                 it("Copy Path", "y", Act::CopyPath, true), it("Copy Relative Path", "", Act::CopyRelative, true), None,
                 it("Rename…", "F2", Act::Rename, movable), it("Delete", "Del", Act::Delete, movable),
@@ -591,7 +653,8 @@ impl Files {
                 it(if self.hidden { "Hide Hidden Files" } else { "Show Hidden Files" }, ".", Act::Hidden, true),
                 it(if self.view == View::Gallery { "View as List" } else { "View as Gallery" }, "v", Act::View, true),
             ],
-        }
+        };
+        items.into_iter().filter(|i| self.builtin || i.as_ref().is_none_or(|i| i.act != Act::External)).collect()
     }
 
     /// The menu for [t] with its corner at (x, y), kept inside the view; [keys]: its first item
@@ -645,8 +708,49 @@ impl Files {
         (x > r.x && x + 1 < r.x + r.width && y > r.y && y + 1 < r.y + r.height).then(|| (y - r.y - 1) as usize)
     }
 
+    /// The explorer title's buttons at its right: each one's columns and what it is — none when
+    /// the explorer is too narrow for them (the title gives way to them first).
+    fn heads(&self, g: Geom) -> Vec<(u16, u16, Head)> {
+        let t = g.tree;
+        let widths: Vec<u16> = Head::ALL.iter().map(|h| h.icon(self.nerd).width() as u16).collect();
+        let total = widths.iter().sum::<u16>() + widths.len() as u16 - 1;
+        if t.width < total + 2 { return Vec::new() }
+        let mut x = t.x + t.width - 1 - total;
+        Head::ALL.iter().zip(widths).map(|(h, w)| { let b = (x, x + w, *h); x += w + 1; b }).collect()
+    }
+
+    /// A title button: New File and New Folder ask for a name in the explorer's selected folder
+    /// (with it in focus), else the folder on show; Refresh reads everything shown again; Collapse
+    /// All closes every folder but the root.
+    fn head(&mut self, h: Head) {
+        let t = if self.focus == Focus::Tree { self.key_target() } else { Target::Space(self.cwd.clone()) };
+        match h {
+            Head::NewFile => { self.act(Act::NewFile, t); }
+            Head::NewFolder => { self.act(Act::NewFolder, t); }
+            Head::Refresh => {
+                let keep = self.rows.get(self.tree_sel).map(|r| r.path.clone());
+                self.reload();
+                if let Some(i) = keep.and_then(|p| self.rows.iter().position(|r| !r.note && r.path == p)) { self.tree_sel = i }
+                self.message = Some("Refreshed".into());
+            }
+            Head::Collapse => {
+                let root = self.root.clone();
+                self.expanded.retain(|p| *p == root);
+                self.build_tree();
+                (self.tree_sel, self.tree_scroll, self.tree_follow) = (0, 0, false);
+            }
+        }
+    }
+
+    /// A drag with the button down: in the editor, a selection.
+    fn drag(&mut self, x: u16, y: u16) { if let Some(e) = self.editor.as_mut() { e.click(x, y, true) } }
+
     /// The mouse over the menu: the item under it lit (none on a rule or a dimmed one).
-    fn hover(&mut self, x: u16, y: u16) {
+    fn hover(&mut self, x: u16, y: u16, g: Geom) {
+        self.head_hover = None;
+        if self.menu.is_none() && self.editor.is_none() && y == 0 {
+            self.head_hover = self.heads(g).into_iter().find(|(a, z, _)| x >= *a && x < *z).map(|(.., h)| h);
+        }
         let at = self.menu_at(x, y);
         if let Some(m) = self.menu.as_mut() { m.sel = at.filter(|i| m.items.get(*i).is_some_and(|it| it.as_ref().is_some_and(|it| it.on))) }
     }
@@ -738,6 +842,7 @@ impl Files {
     /// folder is shown and opened or closed (its chevron only that).
     fn click(&mut self, x: u16, y: u16, double: bool, g: Geom) -> Outcome {
         self.message = None;
+        if let Some(e) = self.editor.as_mut() { e.click(x, y, false); return Outcome::None }
         let g = geom(g.size.0, g.size.1, self.view);
         let out = self.click_at(x, y, double, g);
         self.fit(g);
@@ -756,6 +861,10 @@ impl Files {
         }
         if self.menu.is_some() {
             return match self.menu_at(x, y) { Some(i) => self.choose(i), None => { if !self.menu.as_ref().is_some_and(|m| contains(menu_box(m), x, y)) { self.menu = None } Outcome::None } };
+        }
+        if y == 0 && g.in_tree(x) && let Some((.., h)) = self.heads(g).into_iter().find(|(a, z, _)| x >= *a && x < *z) {
+            if !double { self.head(h) }
+            return Outcome::None;
         }
         if g.in_tree(x) {
             self.focus = Focus::Tree;
@@ -792,7 +901,7 @@ impl Files {
     /// folder, an entry, else the folder's empty space (the explorer's: its root).
     fn right_click(&mut self, x: u16, y: u16, g: Geom) {
         self.message = None;
-        if self.confirm.is_some() || self.prompt.is_some() { return }
+        if self.editor.is_some() || self.confirm.is_some() || self.prompt.is_some() { return }
         self.menu = None;
         let g = geom(g.size.0, g.size.1, self.view);
         let t = if g.in_tree(x) {
@@ -831,6 +940,7 @@ impl Files {
     /// The wheel: the explorer's rows three at a time under the mouse there, else the grid's (the
     /// list's three). A menu up closes.
     fn wheel(&mut self, x: u16, down: bool, g: Geom) {
+        if let Some(e) = self.editor.as_mut() { return e.wheel(down) }
         if self.confirm.is_some() || self.prompt.is_some() { return }
         self.menu = None;
         let step = if g.in_tree(x) || self.view == View::List { 3 } else { 1 };
@@ -857,7 +967,9 @@ impl Files {
         let switch = self.switch(g).first().map(|(a, ..)| g.grid.x + g.grid.width - a + 1).unwrap_or(0);
         let width = g.grid.width.saturating_sub(switch);
         let home = home();
-        let (mut at, mut parts) = if home != Path::new("/") && self.cwd.starts_with(&home) { (home.clone(), vec![("~".to_string(), home)]) }
+        // (A bounded explorer's from its root, nothing above it.)
+        let (mut at, mut parts) = if self.bounded { (self.root.clone(), vec![(name_of(&self.root), self.root.clone())]) }
+            else if home != Path::new("/") && self.cwd.starts_with(&home) { (home.clone(), vec![("~".to_string(), home)]) }
             else { (PathBuf::from("/"), vec![("/".to_string(), PathBuf::from("/"))]) };
         let rest = self.cwd.strip_prefix(&at).map(Path::to_path_buf).unwrap_or_default();
         for c in rest.components() { at.push(c); parts.push((c.as_os_str().to_string_lossy().into_owned(), at.clone())) }
@@ -877,6 +989,7 @@ impl Files {
     }
 
     fn draw(&mut self, buf: &mut Buffer, area: Rect, look: &Look) {
+        if let Some(e) = self.editor.as_mut() { return e.draw(buf, area, look) }
         let g = geom(area.width, area.height, self.view);
         self.fit(g);
         for y in area.top()..area.bottom() { for x in area.left()..area.right() { if let Some(c) = buf.cell_mut((x, y)) { c.set_symbol(" "); } } }
@@ -894,8 +1007,9 @@ impl Files {
         }
         for (a, z, v, s) in self.switch(g) { put(buf, ox + a, oy, z - a, s, if v == self.view { look.mode } else { look.muted }); }
         let harness = if self.standalone { "" } else { " · n harness" };
+        let edit = if self.builtin { " · e $EDITOR" } else { "" };
         let hint = match self.focus {
-            Focus::Grid => format!("Enter open · Backspace up · Tab explorer · v view · . hidden{harness} · t terminal · F2 rename · Del trash · C-c C-x C-v · right-click for more · q close"),
+            Focus::Grid => format!("Enter open{edit} · Backspace up · Tab explorer · v view · . hidden{harness} · t terminal · F2 rename · Del trash · C-c C-x C-v · right-click for more · q close"),
             Focus::Tree => format!("Enter show · ←→ close/open · Tab grid · v view · . hidden{harness} · t terminal · F2 rename · Del trash · right-click for more · q close"),
         };
         put(buf, ox + gx + 1, oy + 1, gw.saturating_sub(2), &fit(&hint, gw.saturating_sub(2) as usize), look.muted);
@@ -932,19 +1046,7 @@ impl Files {
     /// short as `shorten` does); all of it lit when it is the grid's selection (only its name
     /// marked while the explorer has the keys).
     fn draw_tile(&self, buf: &mut Buffer, x: u16, y: u16, e: &Entry, selected: bool, look: &Look) {
-        let w = TILE_W - 2;
-        let st = if e.dir { look.accent } else { file_style(&e.name, look) };
-        for (dy, line) in art(e).iter().enumerate() {
-            put(buf, x + w.saturating_sub(line.width() as u16) / 2, y + dy as u16, w, line, st);
-        }
-        let name = shorten(&e.name, e.dir, w as usize);
-        let name_st = if selected && self.focus == Focus::Tree { look.text.add_modifier(Modifier::BOLD | Modifier::UNDERLINED) } else { look.text };
-        put(buf, x + (w.saturating_sub(name.width() as u16)) / 2, y + 4, w, &name, name_st);
-        if selected && self.focus == Focus::Grid {
-            // (The picture keeps its colour on the selection's background; the name takes both.)
-            let bg = look.mode.bg.map(|b| Style::default().bg(b)).unwrap_or(look.mode);
-            for dy in 0..TILE_H - 1 { for dx in 0..w { if let Some(c) = buf.cell_mut((x + dx, y + dy)) { c.set_style(if dy < 4 { bg } else { look.mode }); } } }
-        }
+        tile(buf, x, y, e, selected && self.focus == Focus::Grid, selected && self.focus == Focus::Tree, look)
     }
 
     /// The list: a header, then a row each — icon, name, size (a folder's items), when it was
@@ -1002,7 +1104,7 @@ impl Files {
         if self.hidden { text.push_str(" · hidden shown") }
         if let Some((paths, cut)) = &self.clip { text.push_str(&format!(" · {} {} to paste", paths.len(), if *cut { "cut" } else { "copied" })) }
         let st = if self.message.is_some() { look.accent } else { look.muted };
-        if let Some(m) = &self.message { text = m.clone() }
+        if let Some(m) = &self.message { text = m.clone() } else if let Some(h) = self.head_hover { text = h.tip().to_string() }
         let (x, y, w) = (area.x + r.x + 1, area.y + g.footer, r.width.saturating_sub(2));
         let used = put(buf, x, y, w, &fit(&text, w as usize), st);
         if self.listing.more > 0 && self.message.is_none() {
@@ -1017,7 +1119,10 @@ impl Files {
         if t.width == 0 { return }
         let (ox, oy) = (area.x, area.y);
         for y in 0..t.height { put(buf, ox + t.x + t.width, oy + y, 1, "│", look.muted); }
-        put(buf, ox + t.x + 1, oy, t.width.saturating_sub(2), "EXPLORER", look.muted.add_modifier(Modifier::BOLD));
+        let heads = self.heads(g);
+        let title_room = heads.first().map(|(a, ..)| a.saturating_sub(t.x + 2)).unwrap_or(t.width.saturating_sub(2));
+        if title_room >= 8 { put(buf, ox + t.x + 1, oy, title_room, "EXPLORER", look.muted.add_modifier(Modifier::BOLD)); }
+        for (a, z, h) in heads { put(buf, ox + a, oy, z - a, h.icon(self.nerd), if self.head_hover == Some(h) { look.mode } else { look.text }); }
         let shown = t.height.saturating_sub(1) as usize;
         for (k, row) in self.rows.iter().enumerate().skip(self.tree_scroll).take(shown) {
             let y = oy + 1 + (k - self.tree_scroll) as u16;
@@ -1138,6 +1243,23 @@ impl Target {
     /// The folder an item is in (a space's: itself).
     fn folder_of_item(&self) -> PathBuf {
         match self { Target::Item { path, .. } => path.parent().map(Path::to_path_buf).unwrap_or_else(|| path.clone()), Target::Space(p) => p.clone() }
+    }
+}
+
+/// A tile at (x, y): its picture over its name; all of it lit when [lit] (the picture keeping its
+/// colour on the selection's background), only its name marked when [marked].
+fn tile(buf: &mut Buffer, x: u16, y: u16, e: &Entry, lit: bool, marked: bool, look: &Look) {
+    let w = TILE_W - 2;
+    let st = if e.dir { look.accent } else { file_style(&e.name, look) };
+    for (dy, line) in art(e).iter().enumerate() {
+        put(buf, x + w.saturating_sub(line.width() as u16) / 2, y + dy as u16, w, line, st);
+    }
+    let name = shorten(&e.name, e.dir, w as usize);
+    let name_st = if marked { look.text.add_modifier(Modifier::BOLD | Modifier::UNDERLINED) } else { look.text };
+    put(buf, x + (w.saturating_sub(name.width() as u16)) / 2, y + 4, w, &name, name_st);
+    if lit {
+        let bg = look.mode.bg.map(|b| Style::default().bg(b)).unwrap_or(look.mode);
+        for dy in 0..TILE_H - 1 { for dx in 0..w { if let Some(c) = buf.cell_mut((x + dx, y + dy)) { c.set_style(if dy < 4 { bg } else { look.mode }); } } }
     }
 }
 
@@ -1329,7 +1451,7 @@ pub fn key(app: &mut App, pane: u64, chord: Chord, m: Option<&crate::mouse::Even
         // (The root table's MouseDown3Pane sends a right click on to a pane in a mode other than
         // copy mode: it is this menu's, not the pane menu's.)
         (Some((MouseKind::Down, 3, _)), Some((x, y))) => { f.right_click(x, y, g); Outcome::None }
-        (Some((MouseKind::Move, ..)), Some((x, y))) => { f.hover(x, y); Outcome::None }
+        (Some((MouseKind::Move, ..)), Some((x, y))) => { f.hover(x, y, g); Outcome::None }
         (Some((MouseKind::WheelUp, ..)), at) => { f.wheel(at.map(|a| a.0).unwrap_or(0), false, g); Outcome::None }
         (Some((MouseKind::WheelDown, ..)), at) => { f.wheel(at.map(|a| a.0).unwrap_or(0), true, g); Outcome::None }
         (Some(_), _) => Outcome::None,
@@ -1389,19 +1511,124 @@ impl Drop for Screen { fn drop(&mut self) { Screen::give_back() } }
 
 /// `hn files [DIR]`: the file manager filling this terminal, a program of its own — no daemon,
 /// no hn client or server needed (the OS's Super+E runs it in a window of its own). DIR: `~`
-/// home, a relative one from here; home without one. Its exit code.
+/// home, a relative one from here; home without one. And its other ways, each in a window of
+/// its own: `--open [DIR]` the Open dialog (Super+O), `--root DIR` an explorer kept inside DIR
+/// (what the dialog opens a folder in), `--edit FILE` the editor on FILE alone. Its exit code.
 pub fn standalone(args: &[String]) -> i32 {
     if !on_the_os(std::env::var("HARNESS_OS").ok().as_deref()) { eprintln!("hn files: available on the Harness operating system only."); return 2 }
-    let dir = match args.first() { None => Ok(home()), Some(d) => folder(Path::new(d), std::env::current_dir().ok()) };
-    let dir = match dir { Ok(d) => d, Err(e) => { eprintln!("hn files: {e}"); return 1 } };
+    let mode = args.first().map(String::as_str).filter(|a| matches!(*a, "--open" | "--root" | "--edit"));
+    let rest = if mode.is_some() { &args[1..] } else { args };
+    let here = std::env::current_dir().ok();
     // Nerd Font icons: $HN_NERD_FONT on or off, else on in Harness OS (its terminal's font has them).
     let nerd = match std::env::var("HN_NERD_FONT") {
         Ok(v) if !v.is_empty() => matches!(v.as_str(), "on" | "1" | "yes" | "true"),
         _ => std::env::var("HARNESS_OS").is_ok_and(|v| v == "1"),
     };
-    let mut f = Files::new(dir, nerd);
+    let fail = |e: String| { eprintln!("hn files: {e}"); 1 };
+    let start = if mode == Some("--edit") {
+        let Some(file) = rest.first() else { return fail("--edit needs a file".into()) };
+        let file = clean(&here.clone().unwrap_or_else(home).join(match Path::new(file).strip_prefix("~") { Ok(r) => home().join(r), Err(_) => PathBuf::from(file) }));
+        Start::Edit(file)
+    } else {
+        let dir = match rest.first() { None => Ok(home()), Some(d) => folder(Path::new(d), here) };
+        match dir { Ok(d) if mode == Some("--open") => Start::Open(d), Ok(d) if mode == Some("--root") => Start::Root(d), Ok(d) => Start::Explore(d), Err(e) => return fail(e) }
+    };
+    let launcher = std::env::var("HARNESS_FILES_LAUNCH").ok();
+    match run_start(start, nerd, launcher.as_deref(), &mut launch) { Ok(()) => 0, Err(e) => fail(e) }
+}
+
+/// What `hn files` starts as.
+#[derive(Debug, PartialEq, Eq)]
+enum Start { Explore(PathBuf), Open(PathBuf), Root(PathBuf), Edit(PathBuf) }
+
+/// The file manager for [start]: an explorer (kept inside its root with `--root`), the editor
+/// alone, or the Open dialog and then what it opened.
+fn run_start(start: Start, nerd: bool, launcher: Option<&str>, spawn: &mut dyn FnMut(&str, &[String]) -> std::io::Result<()>) -> Result<(), String> {
+    let io = |e: std::io::Error| e.to_string();
+    let next = match start {
+        Start::Open(dir) => {
+            let mut d = dialog::Dialog::new(dir, nerd, dialog::recent_home());
+            match run_dialog(&mut d).map_err(io)? {
+                None => return Ok(()),
+                Some((path, folder)) => match opened(path, folder, launcher, spawn)? { None => return Ok(()), Some(s) => s },
+            }
+        }
+        s => s,
+    };
+    let mut f = match next {
+        Start::Explore(dir) => Files::new(dir, nerd),
+        Start::Root(dir) => { let mut f = Files::new(dir, nerd); f.bounded = true; f }
+        Start::Edit(file) => {
+            let mut f = Files::new(file.parent().map(Path::to_path_buf).unwrap_or_else(home), nerd);
+            f.builtin = true;
+            f.open_file(file);
+            if f.editor.is_none() { return Err(f.message.unwrap_or_else(|| "nothing to edit".into())) }
+            f.exit_on_close = true;
+            f
+        }
+        Start::Open(_) => unreachable!(),
+    };
     f.standalone = true;
-    match run_standalone(&mut f) { Ok(()) => 0, Err(e) => { eprintln!("hn files: {e}"); 1 } }
+    f.builtin = true;
+    run_standalone(&mut f).map_err(io)
+}
+
+/// What the Open dialog chose, opened: in a window of its own through $HARNESS_FILES_LAUNCH
+/// (`--root DIR`, `--edit FILE`), this one then done (None); without it, in this window.
+fn opened(path: PathBuf, folder: bool, launcher: Option<&str>, spawn: &mut dyn FnMut(&str, &[String]) -> std::io::Result<()>) -> Result<Option<Start>, String> {
+    match launcher.map(str::trim).filter(|l| !l.is_empty()) {
+        Some(l) => {
+            let args = vec![if folder { "--root" } else { "--edit" }.to_string(), path.to_string_lossy().into_owned()];
+            spawn(l, &args).map(|_| None).map_err(|e| format!("couldn't open {}: {e}", path.display()))
+        }
+        None => Ok(Some(if folder { Start::Root(path) } else { Start::Edit(path) })),
+    }
+}
+
+/// [program] started on its own (its own session, nothing of this terminal's), not waited for.
+fn launch(program: &str, args: &[String]) -> std::io::Result<()> {
+    use std::os::unix::process::CommandExt;
+    use std::process::{Command, Stdio};
+    let mut words = program.split_whitespace();
+    let mut c = Command::new(words.next().unwrap_or(program));
+    c.args(words).args(args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    // SAFETY: setsid only, between fork and exec.
+    unsafe { c.pre_exec(|| { libc::setsid(); Ok(()) }); }
+    c.spawn().map(|_| ())
+}
+
+/// The Open dialog in this terminal until it is cancelled (None) or opens something.
+fn run_dialog(d: &mut dialog::Dialog) -> std::io::Result<Option<(PathBuf, bool)>> {
+    use crossterm::event::{Event, KeyEventKind, MouseButton, MouseEventKind};
+    let look = Look::default();
+    let hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| { Screen::give_back(); hook(info) }));
+    Screen::take()?;
+    let _screen = Screen;
+    let mut term = ratatui::Terminal::new(ratatui::backend::CrosstermBackend::new(std::io::stdout()))?;
+    let mut last_click: Option<(std::time::Instant, u16, u16)> = None;
+    loop {
+        term.draw(|frame| { let area = frame.area(); d.draw(frame.buffer_mut(), area, &look) })?;
+        let out = match crossterm::event::read()? {
+            Event::Key(k) if k.kind != KeyEventKind::Release => d.key(keys::of(&k)),
+            Event::Mouse(m) => match m.kind {
+                MouseEventKind::Down(MouseButton::Left) => {
+                    let double = last_click.is_some_and(|(at, x, y)| at.elapsed() < DOUBLE_CLICK && (x, y) == (m.column, m.row));
+                    last_click = (!double).then(|| (std::time::Instant::now(), m.column, m.row));
+                    d.click(m.column, m.row, double)
+                }
+                MouseEventKind::ScrollUp => { d.wheel(m.column, false); dialog::DOut::None }
+                MouseEventKind::ScrollDown => { d.wheel(m.column, true); dialog::DOut::None }
+                _ => dialog::DOut::None,
+            },
+            _ => dialog::DOut::None,
+        };
+        match out {
+            dialog::DOut::None => {}
+            dialog::DOut::Cancel => return Ok(None),
+            dialog::DOut::Open(p, folder) => return Ok(Some((p, folder))),
+        }
+    }
 }
 
 /// Whether `hn files` runs: on Harness OS ($HARNESS_OS=1), as hn's OS session is decided.
@@ -1431,7 +1658,8 @@ fn run_standalone(f: &mut Files) -> std::io::Result<()> {
                     f.click(m.column, m.row, double, g)
                 }
                 MouseEventKind::Down(MouseButton::Right) => { f.right_click(m.column, m.row, g); Outcome::None }
-                MouseEventKind::Moved => { f.hover(m.column, m.row); Outcome::None }
+                MouseEventKind::Drag(MouseButton::Left) => { f.drag(m.column, m.row); Outcome::None }
+                MouseEventKind::Moved => { f.hover(m.column, m.row, g); Outcome::None }
                 MouseEventKind::ScrollUp => { f.wheel(m.column, false, g); Outcome::None }
                 MouseEventKind::ScrollDown => { f.wheel(m.column, true, g); Outcome::None }
                 _ => Outcome::None,
@@ -1661,6 +1889,88 @@ mod tests {
         let name_row = text.lines().nth(g.items_y as usize + 4).unwrap();
         assert!(name_row.contains("an-equally-long-fol…") && name_row.contains("a-very-l…-version.md"), "{name_row}");
         assert!(!text.lines().nth(g.items_y as usize + 5).unwrap().contains("version"), "no second line");
+    }
+
+    #[test]
+    fn the_explorer_title_has_new_file_new_folder_refresh_and_collapse_buttons() {
+        let s = Scratch::new(&["a/b/", "c/"]);
+        let mut f = files(&s);
+        let g = gal(120, 40);
+        let area = Rect::new(0, 0, 120, 40);
+        let mut buf = Buffer::empty(area);
+        f.draw(&mut buf, area, &Look::default());
+        let top = contents(&buf).lines().next().unwrap().to_string();
+        assert!(top.starts_with(" EXPLORER") && top[..top.find('│').unwrap()].trim_end().ends_with("+F +D R -"), "{top}");
+        let heads = f.heads(g);
+        let at = |h: Head| heads.iter().find(|b| b.2 == h).map(|b| b.0).unwrap();
+        // New File with the grid's keys: in the folder on show.
+        f.click(at(Head::NewFile), 0, false, g);
+        assert_eq!(f.prompt.as_ref().map(|p| (p.ask.clone(), p.dir.clone())), Some((Ask::NewFile, s.0.clone())));
+        press(&mut f, KeyCode::Esc);
+        // New Folder with the explorer's: in its selected folder, then selected there, its parent open.
+        press(&mut f, KeyCode::Tab);
+        f.tree_sel = f.rows.iter().position(|r| r.path == s.0.join("c")).unwrap();
+        f.click(at(Head::NewFolder), 0, false, g);
+        assert_eq!(f.prompt.as_ref().map(|p| p.dir.clone()), Some(s.0.join("c")));
+        for ch in "new".chars() { press(&mut f, KeyCode::Char(ch)); }
+        press(&mut f, KeyCode::Enter);
+        assert!(s.0.join("c/new").is_dir() && f.expanded.contains(&s.0.join("c")));
+        assert_eq!(names(&f)[f.selected], "new");
+        // Refresh: what was made meanwhile is there, the selection kept.
+        std::fs::write(s.0.join("c/later.txt"), "").unwrap();
+        f.tree_sel = 0;
+        f.click(at(Head::Refresh), 0, false, g);
+        assert!(names(&f).contains(&"later.txt") && f.tree_sel == 0);
+        f.go(s.0.join("a/b"), None);
+        f.press(Chord::normal(KeyCode::F(5), KeyModifiers::NONE), g);
+        assert_eq!(f.message.as_deref(), Some("Refreshed"));
+        // Collapse All: only the root open, the grid where it was.
+        f.click(at(Head::Collapse), 0, false, g);
+        assert_eq!(f.expanded.iter().collect::<Vec<_>>(), [&s.0]);
+        assert_eq!((f.cwd.clone(), f.tree_scroll), (s.0.join("a/b"), 0));
+        // Narrow: the title gives way, then the buttons.
+        assert!(f.heads(geom(60, 30, View::Gallery)).len() == 4 && f.heads(geom(45, 30, View::Gallery)).len() == 4);
+        assert!(f.heads(geom(30, 30, View::Gallery)).is_empty());
+    }
+
+    #[test]
+    fn what_the_open_dialog_chose_opens_in_its_own_window_or_in_this_one() {
+        let mut spawned: Vec<(String, Vec<String>)> = Vec::new();
+        let mut spawn = |p: &str, a: &[String]| -> std::io::Result<()> { spawned.push((p.to_string(), a.to_vec())); Ok(()) };
+        assert_eq!(opened(PathBuf::from("/w/app"), true, Some("/usr/lib/harness-os/files"), &mut spawn), Ok(None));
+        assert_eq!(opened(PathBuf::from("/w/a.md"), false, Some("/usr/lib/harness-os/files"), &mut spawn), Ok(None));
+        assert_eq!(spawned, [("/usr/lib/harness-os/files".to_string(), vec!["--root".to_string(), "/w/app".to_string()]), ("/usr/lib/harness-os/files".to_string(), vec!["--edit".to_string(), "/w/a.md".to_string()])]);
+        let mut none = |_: &str, _: &[String]| -> std::io::Result<()> { panic!("no launcher: nothing started") };
+        assert_eq!(opened(PathBuf::from("/w/app"), true, None, &mut none), Ok(Some(Start::Root(PathBuf::from("/w/app")))));
+        assert_eq!(opened(PathBuf::from("/w/a.md"), false, Some(" "), &mut none), Ok(Some(Start::Edit(PathBuf::from("/w/a.md")))));
+    }
+
+    #[test]
+    fn root_keeps_the_explorer_inside_its_folder_and_edit_is_the_editor_alone() {
+        let s = Scratch::new(&["me/app/src/main.py"]);
+        let app = s.0.join("me/app");
+        let mut f = Files::new(app.clone(), false);
+        f.bounded = true;
+        let g = gal(120, 40);
+        assert_eq!(f.rows[0].name, "app");
+        assert_eq!(f.crumbs(g).1.iter().map(|c| c.3.as_str()).collect::<Vec<_>>(), ["app"]);
+        press(&mut f, KeyCode::Backspace);
+        assert_eq!((f.cwd.clone(), f.message.as_deref()), (app.clone(), Some("This is the top of 'app'")));
+        press(&mut f, KeyCode::Enter);
+        assert_eq!(f.crumbs(g).1.iter().map(|c| c.3.as_str()).collect::<Vec<_>>(), ["app", "src"]);
+        assert_eq!(f.act(Act::CopyRelative, Target::Item { path: app.join("src/main.py"), dir: false }), Outcome::Clipboard("src/main.py".into()));
+        press(&mut f, KeyCode::Backspace);
+        press(&mut f, KeyCode::Backspace);
+        assert_eq!(f.cwd, app, "up to its root, no further");
+        // --edit: the editor at once; closed, the program ends.
+        let mut e = Files::new(app.join("src"), false);
+        (e.builtin, e.exit_on_close) = (true, true);
+        e.open_file(app.join("src/main.py"));
+        assert!(e.editor.is_some());
+        assert_eq!(press(&mut e, KeyCode::Esc), Outcome::Exit);
+        // A picture is no text: --edit says so.
+        std::fs::write(app.join("x.png"), b"PNG").unwrap();
+        assert_eq!(run_start(Start::Edit(app.join("x.png")), false, None, &mut |_: &str, _: &[String]| Ok(())), Err("Can't open 'x.png': not a text file".into()));
     }
 
     #[test]
