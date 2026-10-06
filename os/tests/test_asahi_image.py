@@ -147,6 +147,22 @@ class ActualDiskContract(unittest.TestCase):
             self.assertEqual(calls[-2:], [('umount', Path(temporary) / 'esp'), ('losetup', '--detach', '/dev/loop7')])
             self.assertIn('--read-only', calls[0])
 
+    def test_inspection_mounts_prevent_journal_replay_and_release_owned_devices(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            calls = []
+            def run(*args):
+                calls.append(args)
+                return '/dev/loop7\n' if args[0] == 'losetup' and '--find' in args else ''
+            with check.mounted_image(Path('/image.raw'), Path(temporary), run) as mounts:
+                self.assertEqual(set(mounts), {'esp', 'boot', 'root'})
+                options = {args[-1].name: args[2] for args in calls if args[0] == 'mount'}
+                self.assertEqual(options['boot'], 'ro,noload')
+                self.assertEqual(options['root'], 'ro,rescue=nologreplay,subvol=root')
+                self.assertIn('--read-only', calls[0])
+            self.assertEqual(calls[-4:], [('umount', Path(temporary) / label)
+                                         for label in ('root', 'boot', 'esp')] +
+                                        [('losetup', '--detach', '/dev/loop7')])
+
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)

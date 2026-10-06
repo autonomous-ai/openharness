@@ -106,7 +106,7 @@ def mounted_image(raw, temporary, run):
     try:
         folders = {}
         for label, number, options in [('esp', 1, 'ro'), ('boot', 2, 'ro,noload'),
-                                        ('root', 3, 'ro,nologreplay,subvol=root')]:
+                                        ('root', 3, 'ro,rescue=nologreplay,subvol=root')]:
             folder = temporary / label
             folder.mkdir()
             run('mount', '-o', options, loop + 'p' + str(number), folder)
