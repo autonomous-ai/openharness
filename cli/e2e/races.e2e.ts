@@ -50,7 +50,9 @@ function install(d: IsolatedDaemon, engine: Engine, extra: Record<string, unknow
   writeFileSync(`${wrapper}.new`, `#!${process.execPath}\nimport(${JSON.stringify(module)}).then((m) => m.run(${JSON.stringify(engine)}, ${JSON.stringify(config)}))\n`, { mode: 0o755 })
   renameSync(`${wrapper}.new`, wrapper)
 }
-/** Engine processes in a pane: a pane must never end with two of them, or none while the agent is active. */
+/** Engines in a pane: a pane must never end with two of them, or none while the agent is active. npm's Codex
+ *  is a Node wrapper with the engine as its child (fakeEngine.mjs), one engine in two processes, so a match
+ *  whose parent matched too is the same engine. */
 async function engineProcesses(daemon: IsolatedDaemon, pane: string): Promise<number> {
   const panePid = Number(await daemon.tmux.run('display-message', '-p', '-t', pane, '#{pane_pid}').catch(() => '0'))
   if (!panePid) return 0
@@ -61,7 +63,9 @@ async function engineProcesses(daemon: IsolatedDaemon, pane: string): Promise<nu
   for (const [, pid, ppid] of table) children.set(Number(ppid), [...(children.get(Number(ppid)) ?? []), Number(pid)])
   const tree = new Set<number>([panePid])
   for (const pid of tree) for (const child of children.get(pid) ?? []) tree.add(child)
-  return table.filter(([, pid, , command]) => tree.has(Number(pid)) && /\b(claude|codex)\b/.test(command) && !/\bzsh\b|\bbash\b|\bsh -c\b/.test(command)).length
+  const engines = table.filter(([, pid, , command]) => tree.has(Number(pid)) && /\b(claude|codex)\b/.test(command) && !/\bzsh\b|\bbash\b|\bsh -c\b/.test(command))
+  const matched = new Set(engines.map(([, pid]) => Number(pid)))
+  return engines.filter(([, , ppid]) => !matched.has(Number(ppid))).length
 }
 
 describe('lifecycle requests that race', () => {
