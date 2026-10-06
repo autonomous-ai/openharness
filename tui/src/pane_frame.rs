@@ -8,9 +8,9 @@ use crate::layout::Status;
 pub struct Frame { pub surface: Rect, pub content: Rect, pub title: Option<Rect> }
 
 /// A pane as a blurred surface: the surface filled, its edge cell padding, the title in its top
-/// (or bottom) row. The cell tmux keeps between panes — its divider, or a lower pane's title row
-/// — is left empty, so two surfaces of one colour never run together: one cell between them, never
-/// each pane's own padding added to its neighbour's.
+/// (or bottom) row. A pane takes the cell tmux keeps between panes as its edge — a box draws its
+/// line there, a blurred surface lets that edge cell be the gap — so two panes sit flush and
+/// never leave a blank column (or, with a title, a blank row) of space between them.
 pub fn frame(tile: Rect, canvas: Rect, inner: Rect, status: Status) -> Frame { cells(tile, canvas, inner, status, false) }
 
 // ── box panes ──
@@ -28,12 +28,14 @@ pub fn boxed(tile: Rect, canvas: Rect, status: Status) -> Frame { boxed_in(tile,
 pub fn boxed_in(tile: Rect, canvas: Rect, inner: Rect, status: Status) -> Frame { cells(tile, canvas, inner, status, true) }
 
 /// A pane's surface, content and title: [touch] for boxes (the divider after a pane is its
-/// line), else a surface a cell apart from the next.
+/// line), else a blurred surface — the cell after the pane is its edge, so the two touch.
 fn cells(tile: Rect, canvas: Rect, inner: Rect, status: Status, touch: bool) -> Frame {
     let mut outer = tile;
+    // A pane takes the divider column after it — a box draws its line there, a blurred surface
+    // lets its edge cell be the gap — so two side by side sit flush, never a blank column of
+    // space between them (the same reason a stacked pane's title fills the row above it).
+    if tile.right() < canvas.right() { outer.width += 1 }
     if touch {
-        // The divider column after a pane, and (titles off) the divider row below it.
-        if tile.right() < canvas.right() { outer.width += 1 }
         if status == Status::Off && tile.bottom() < canvas.bottom() { outer.height += 1 }
     } else {
         // The pane-border-status row is already part of the tile handed in (the layout reserves
@@ -53,12 +55,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn blurred_surfaces_are_a_cell_apart() {
+    fn blurred_surfaces_touch_and_the_gap_is_each_edge_cell() {
         let canvas = Rect::new(0, 0, 120, 40);
         for status in [Status::Off, Status::Top, Status::Bottom] {
             let (left, right) = (frame(Rect::new(0, 0, 59, 40), canvas, canvas, status), frame(Rect::new(60, 0, 60, 40), canvas, canvas, status));
-            assert_eq!(right.surface.x - left.surface.right(), 1, "{status:?}: one cell between two surfaces");
-            assert_eq!(right.content.x - left.content.right(), 3, "{status:?}: each surface's edge cell, then the gap");
+            assert_eq!(right.surface.x, left.surface.right(), "{status:?}: the surfaces touch, no blank column between");
+            // Each surface's edge cell is the gap (= box panes' `border`), so the contents are two
+            // cells apart, never three.
+            assert_eq!(right.content.x - left.content.right(), 2, "{status:?}: each surface's edge cell is the gap");
         }
     }
 
@@ -93,6 +97,24 @@ mod tests {
         // A pane too small for a frame keeps every cell for its program.
         let tiny = boxed(Rect::new(30, 5, 2, 5), canvas, Status::Off);
         assert_eq!(tiny.content, Rect::new(30, 5, 2, 5));
+    }
+
+    #[test]
+    fn side_by_side_surfaces_touch_and_the_gap_is_two_edge_cells() {
+        use crate::layout::{Dir, Node};
+        let canvas = Rect::new(0, 0, 120, 40);
+        for status in [Status::Off, Status::Top, Status::Bottom] {
+            let mut n = Node::new(1, canvas.width, canvas.height);
+            n.status = status;
+            n.split(1, 2, Dir::Horizontal);
+            let mut tiles = Vec::new();
+            n.rects(canvas, &mut tiles);
+            let f: Vec<Frame> = tiles.iter().map(|(_, t)| frame(*t, canvas, canvas, status)).collect();
+            assert_eq!(f[1].surface.x, f[0].surface.right(), "{status:?}: side-by-side surfaces touch");
+            // Each surface's edge cell is the gap (as a box's border is), so their contents are
+            // two cells apart — the same as two stacked panes with a title.
+            assert_eq!(f[1].content.x - f[0].content.right(), 2, "{status:?}: contents two cells apart");
+        }
     }
 
     #[test]

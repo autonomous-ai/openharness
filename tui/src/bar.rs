@@ -873,10 +873,11 @@ mod tests {
                 let r = app.rects.iter().find(|(p, _)| p == id).unwrap().1;
                 if boxes { crate::pane_frame::boxed_in(r, canvas, inner, status).surface } else { crate::pane_frame::frame(r, canvas, inner, status).surface }
             }).collect();
-            // Boxes always touch. A blur is a cell apart across; down it is a cell apart too, but a
-            // padding row already reserves the divider — otherwise a pane title fills that row and
-            // the surfaces meet (a blank row above the title is the gap the report was about).
-            let gap_across = if boxes { 0 } else { 1 };
+            // Boxes and blurred surfaces both touch — a pane takes the divider column and, for a
+            // title, the pane-border-status row — so side by side never has a blank column of
+            // space. Down, with a title the surfaces meet too; only titles-off keeps a blurred
+            // surface one cell apart (its divider row) where a box still touches.
+            let gap_across = 0;
             let gap_down = if boxes { 0 } else if status == crate::layout::Status::Off { 1 } else { 0 };
             let at = format!("{focus}, {side}, titles {titles}:\n{s}");
             // Across: the left edge (the bar's blank column when it is on the left), between, the right edge.
