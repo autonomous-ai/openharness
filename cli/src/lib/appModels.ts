@@ -143,9 +143,18 @@ function freePort(): Promise<number> {
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
+/** llama-server's arguments for [model] on loopback [port]. Several slots share one window (`--kv-unified`),
+ *  as llama-server's own default does, so any one request can still use all of it. */
+export function llamaServerArgs(model: Pick<AppModel, 'ref' | 'name'>, ctx: number, port: number, slots = 1): string[] {
+  return ['-m', model.ref, '--alias', model.name, '--ctx-size', String(ctx), '--parallel', String(slots),
+    ...(slots > 1 ? ['--kv-unified'] : []), '-ngl', '999', '--host', '127.0.0.1', '--port', String(port)]
+}
+
 /** Starting, checking and stopping the engines, injected so the lifecycle can be tested without them. */
 export interface AppEngineOps {
-  start(model: AppModel, ctx: number, logDir: string): Promise<Omit<AppEngineRecord, 'spec' | 'modelId' | 'grid' | 'name'>>
+  /** `slots`: how many requests the engine works on at once. A harness's model has one, so its whole window
+   *  is one conversation's; a Jev model's questions are short and many, and each is its own request. */
+  start(model: AppModel, ctx: number, logDir: string, slots?: number): Promise<Omit<AppEngineRecord, 'spec' | 'modelId' | 'grid' | 'name'>>
   alive(record: AppEngineRecord): Promise<boolean>
   /** The window the engine says it loaded, after a first request; undefined when it does not say. */
   loadedContext(record: AppEngineRecord): Promise<number | undefined>
@@ -192,21 +201,20 @@ export function appEngineOps(env: NodeJS.ProcessEnv, request: typeof fetch = fet
   }
 
   return {
-    async start(model, ctx, logDir) {
+    async start(model, ctx, logDir, slots = 1) {
       const binary = model.binary!
       if (model.engine === 'ollama') {
         // Its own server beside the person's Ollama app, never on the app's 11434: the window is a server
         // setting, and theirs ran every model at 16K [run]. Same model store, so nothing is copied.
         const port = await freePort()
         const pid = await background(binary, ['serve'], { OLLAMA_HOST: `127.0.0.1:${port}`, OLLAMA_CONTEXT_LENGTH: String(ctx),
-          OLLAMA_NUM_PARALLEL: '1', OLLAMA_KEEP_ALIVE: '-1' }, logDir, `ollama-${port}.log`)
+          OLLAMA_NUM_PARALLEL: String(slots), OLLAMA_KEEP_ALIVE: '-1' }, logDir, `ollama-${port}.log`)
         if (!await ready(`http://127.0.0.1:${port}/api/version`, 60_000, pid)) throw new AppStartError('Ollama could not start. Try again.')
         return { engine: 'ollama', served: model.ref, alias: model.name, port, binary, pid }
       }
       if (model.engine === 'llama.cpp') {
         const port = await freePort()
-        const pid = await background(binary, ['-m', model.ref, '--alias', model.name, '--ctx-size', String(ctx), '--parallel', '1',
-          '-ngl', '999', '--host', '127.0.0.1', '--port', String(port)], {}, logDir, `llama-${port}.log`)
+        const pid = await background(binary, llamaServerArgs(model, ctx, port, slots), {}, logDir, `llama-${port}.log`)
         if (!await ready(`http://127.0.0.1:${port}/health`, 10 * 60_000, pid)) {
           try { process.kill(-pid, 'SIGTERM') } catch { /* gone */ }
           throw new AppStartError('llama.cpp could not load the model. Try again.')
@@ -224,7 +232,7 @@ export function appEngineOps(env: NodeJS.ProcessEnv, request: typeof fetch = fet
       }
       const port = typeof status.port === 'number' ? status.port : 0
       if (!port) throw new AppStartError('LM Studio could not start its server. Open LM Studio and try again.')
-      const loaded = await run(binary, ['load', model.ref, '--context-length', String(ctx), '--gpu', 'max', '--parallel', '1',
+      const loaded = await run(binary, ['load', model.ref, '--context-length', String(ctx), '--gpu', 'max', '--parallel', String(slots),
         '--identifier', model.name, '-y'], { env, timeout: 10 * 60_000 })
       if (!loaded.ok) {
         if (startedServer) await run(binary, ['server', 'stop'], { env, timeout: 30_000 })
