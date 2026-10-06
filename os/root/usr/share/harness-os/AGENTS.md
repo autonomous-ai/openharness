@@ -105,7 +105,8 @@ is required.
   install scripts for Claude Code, Codex and OpenCode. When another package needs
   an install script, approve that package explicitly; keep npm's other defaults.
 - `Super+b` opens/focuses Chromium or returns to hn; `Super+e` does the same for
-  the file manager window (`hn files DIR`); `Super+Enter` focuses hn;
+  the file manager window (`hn files DIR`); `Super+o` asks for a folder or text
+  file to open there; `Super+Enter` focuses hn;
   `Super+l` locks the screen. `sudo systemctl poweroff` shuts down cleanly.
 - Print/`Super+p` saves a full screenshot and Shift+Print/`Super+r` a region to
   `~/Pictures/Screenshots`, also copied to the clipboard. When the user mentions
