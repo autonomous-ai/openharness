@@ -53,6 +53,8 @@
         </else>
       </action>
     </keybind>
+    <!-- Super+o asks for a folder or a file in a new file manager window. -->
+    <keybind key="W-o"><action name="Execute" command="/usr/lib/harness-os/files --open" /></keybind>
     <keybind key="W-m">
       <action name="Execute" command="hn os-action connect" />
       <action name="ForEach"><query identifier="hn" /><then><action name="Raise" /><action name="Focus" /></then></action>
@@ -75,6 +77,8 @@
   <windowRules>
     <windowRule identifier="hn" serverDecoration="no" />
     <windowRule identifier="harness-files" serverDecoration="no" />
+    <!-- The Open dialog draws its own frame; labwc centres a new window by default. -->
+    <windowRule identifier="harness-open" serverDecoration="no" />
     <windowRule identifier="chromium*" type="normal" serverDecoration="no"><action name="Maximize" /></windowRule>
   </windowRules>
 </labwc_config>
