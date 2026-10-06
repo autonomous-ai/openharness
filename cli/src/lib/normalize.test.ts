@@ -330,3 +330,16 @@ describe('a message typed while Claude Code worked', () => {
   })
 })
 
+describe('a built-in command Claude Code runs itself, typed plainly', () => {
+  const user = (content: string) => line({ type: 'user', uuid: content, message: { role: 'user', content } })
+  it.each(['/compact', '/compact keep the plan', '/model opus', '/Clear'])('%s opens no live turn', (prompt) => {
+    const state = newTurnState()
+    expect(lineToEvents(user(prompt), state)).toEqual([])
+    expect(state.turnOpen).toBe(false)
+  })
+  it.each(['/goal ship it', '/review', '/compactor', 'run /compact later'])('%s is still a prompt', (prompt) => {
+    const state = newTurnState()
+    expect(lineToEvents(user(prompt), state)).toEqual([{ type: 'turn_started', payload: { userMessage: prompt } }])
+  })
+})
+
