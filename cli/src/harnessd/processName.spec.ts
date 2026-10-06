@@ -1,4 +1,4 @@
-import { linkSync, mkdirSync, mkdtempSync, rmSync, statSync } from 'node:fs'
+import { linkSync, mkdirSync, mkdtempSync, rmSync, statSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -12,6 +12,7 @@ const libexec = `${runtime}/node-v22/libexec/harnessd`
 function memFs(files: Record<string, { dev: number; ino: number }>, fail: Partial<Record<keyof NamedNodeFs, Error>> = {}) {
   const calls: string[] = []
   const fs: NamedNodeFs = {
+    realpath: (path) => { if (fail.realpath) throw fail.realpath; return path },
     identity: (path) => files[path] ?? null,
     mkdir: (path) => { calls.push(`mkdir ${path}`); if (fail.mkdir) throw fail.mkdir },
     link: (from, to) => { calls.push(`link ${to}`); if (fail.link) throw fail.link; files[to] = files[from] },
@@ -48,6 +49,22 @@ describe('namedNode', () => {
     expect(calls).toEqual([])
   })
 
+  it('resolves runtime aliases too, and refuses a path resolving to the runtime root', () => {
+    const { fs, calls } = memFs({ [node]: { dev: 1, ino: 7 } })
+    fs.realpath = path => path.replace(runtime, '/resolved/runtime')
+    expect(namedNode(node, 'harnessd', runtime, { fs, platform: 'darwin' })).toBe(`${libexec}/harnessd`)
+    calls.length = 0
+    fs.realpath = () => '/resolved/runtime'
+    expect(namedNode(node, 'harnessd', runtime, { fs, platform: 'darwin' })).toBe(node)
+    expect(calls).toEqual([])
+  })
+
+  it('leaves the executable alone when resolving its path fails', () => {
+    const { fs, calls } = memFs({ [node]: { dev: 1, ino: 7 } }, { realpath: new Error('EACCES') })
+    expect(namedNode(node, 'harnessd', runtime, { fs, platform: 'darwin' })).toBe(node)
+    expect(calls).toEqual([])
+  })
+
   it('runs as node when the link cannot be made, and says why once per name', () => {
     const log = vi.fn()
     const missing = memFs({})
@@ -67,6 +84,19 @@ describe('namedNode', () => {
     const { fs, files } = memFs({ [node]: { dev: 1, ino: 7 } }, { rename: new Error('EPERM') })
     expect(namedNode(node, 'harnessd-viewers', runtime, { fs, pid: 4, platform: 'darwin' })).toBe(node)
     expect(Object.keys(files)).toEqual([node])
+  })
+
+  it('keeps a managed symlink to an external Node at its original executable path', () => {
+    // Found by QA on a quiet machine: naming this symlink hard-linked Homebrew Node itself on macOS,
+    // and dyld aborted it because its relative libnode dependency was no longer beside the executable.
+    const dir = mkdtempSync(join(tmpdir(), 'harnessd-node-symlink-'))
+    try {
+      const bin = join(dir, 'node-v1', 'bin')
+      mkdirSync(bin, { recursive: true })
+      const externalNode = join(bin, 'node')
+      symlinkSync(process.execPath, externalNode)
+      expect(namedNode(externalNode, 'harnessd', dir)).toBe(externalNode)
+    } finally { rmSync(dir, { recursive: true, force: true }) }
   })
 
   it('makes a real hard link the kernel names the process by', () => {
