@@ -19,12 +19,14 @@ import { join } from 'node:path'
  * start at all, twice in a row, until they removed the registry). So the order is asserted here, on
  * the source, rather than left to whoever next adds a helper below the restore block.
  */
-const SOURCE = readFileSync(join(import.meta.dirname, 'cli.ts'), 'utf-8')
+const SOURCE = readFileSync(join(import.meta.dirname, 'core', 'main.ts'), 'utf-8')
+/** The CLI, which starts the core for `harness __run` (core/main.ts `runCore`). */
+const CLI_SOURCE = readFileSync(join(import.meta.dirname, 'cli.ts'), 'utf-8')
 
 /** `runForeground`'s own body. Other functions are indented the same way; their locals are not ours. */
 function runForegroundBody(source: string): { text: string; from: number } {
   const from = source.indexOf('async function runForeground(')
-  expect(from, 'cli.ts still defines runForeground').toBeGreaterThan(-1)
+  expect(from, 'core/main.ts still defines runForeground').toBeGreaterThan(-1)
   const end = source.indexOf('\n}\n', from)
   return { text: source.slice(from, end < 0 ? source.length : end), from }
 }
@@ -58,7 +60,7 @@ function code(text: string): string {
 /** The object literal passed to `call`, by brace balance. */
 function callArgument(source: string, call: string): { body: string; at: number } {
   const at = source.indexOf(call)
-  expect(at, `cli.ts still contains \`${call}\``).toBeGreaterThan(-1)
+  expect(at, `core/main.ts still contains \`${call}\``).toBeGreaterThan(-1)
   let depth = 0
   for (let i = source.indexOf('{', at); i < source.length; i++) {
     if (source[i] === '{') depth++
@@ -70,7 +72,7 @@ function callArgument(source: string, call: string): { body: string; at: number 
 /** A call and its arguments, by parenthesis balance: what it is handed, whatever brackets they use. */
 function callArguments(source: string, call: string): { text: string; at: number } {
   const at = source.indexOf(call)
-  expect(at, `cli.ts still contains \`${call}\``).toBeGreaterThan(-1)
+  expect(at, `core/main.ts still contains \`${call}\``).toBeGreaterThan(-1)
   let depth = 0
   for (let i = at + call.length - 1; i < source.length; i++) {
     if (source[i] === '(') depth++
@@ -89,7 +91,7 @@ const PROLOGUE_CALLS = new Set([
 ])
 const KEYWORDS = new Set(['if', 'for', 'while', 'switch', 'catch', 'return', 'typeof', 'new', 'await', 'function'])
 
-describe('cli.ts start-up order', () => {
+describe('the core\'s start-up order (core/main.ts)', () => {
   it.each(STARTUP_CALLS)('every local `%s` reaches is initialised before it runs', (name) => {
     const source = code(SOURCE)
     const { body, at } = callArgument(source, name)
@@ -106,7 +108,7 @@ describe('cli.ts start-up order', () => {
   it('starts the updater before anything that can throw or hang', () => {
     const source = code(SOURCE)
     const updater = source.indexOf('startSelfUpdater({')
-    expect(updater, 'cli.ts still starts the self-updater').toBeGreaterThan(-1)
+    expect(updater, 'core/main.ts still starts the self-updater').toBeGreaterThan(-1)
     for (const risky of [
       'startTuiUpdater(',          // optional hn download must never precede CLI recovery
       'requireTmuxAvailable(',      // throws outright when tmux is missing
@@ -145,7 +147,7 @@ describe('cli.ts start-up order', () => {
     // only be armed after every one of them is built.
     const source = code(SOURCE)
     const flip = source.indexOf('daemonBoot.applyStagedUpdate = ')
-    expect(flip, 'the handoff handler is still swapped in cli.ts').toBeGreaterThan(-1)
+    expect(flip, 'the handoff handler is still swapped in core/main.ts').toBeGreaterThan(-1)
     const body = callArguments(source, 'updateHandoff.restartForUpdate(')
     expect(body.at, 'the handler is the one it swaps in').toBeGreaterThan(flip)
     const declaredAt = localsOf(source)
@@ -156,12 +158,18 @@ describe('cli.ts start-up order', () => {
   })
 
   it('the daemon arm survives its own start-up failure', () => {
-    const source = code(SOURCE)
     // The whole arm, to its break: a fixed window read past it as the arm grew a line (the stall fault).
-    const start = source.indexOf("case '__run'")
-    const arm = source.slice(start, source.indexOf('break', start))
-    expect(arm).toContain('catch(enterSafeMode)')
+    const cli = code(CLI_SOURCE)
+    const start = cli.indexOf("case '__run'")
+    const arm = cli.slice(start, cli.indexOf('break', start))
+    expect(arm, 'cli.ts starts the core through its entry').toContain('runCore(')
     expect(arm, 'a daemon that exits here can never be updated').not.toContain('catch(onError)')
+    // The entry it calls: what the arm did before the core had one of its own.
+    const source = code(SOURCE)
+    const from = source.indexOf('export function runCore(')
+    const entry = source.slice(from, source.indexOf('\n}\n', from))
+    expect(entry).toContain('catch(enterSafeMode)')
+    expect(entry, 'a daemon that exits here can never be updated').not.toContain('catch(onError)')
   })
 })
 
@@ -176,7 +184,7 @@ const BINDING = /\bbackend\.(?:ownerCommands\.)?(?:[A-Za-z_$][\w$]*\s*=(?!=)|set
 /** The test-only hold the end-to-end harness uses for a start-up that hangs after binding. */
 const TEST_HOLD = "if (process.env.HARNESSD_TEST_HOLD_READY === '1') await new Promise<never>(() => {})"
 
-describe('cli.ts request gate', () => {
+describe('the core\'s request gate (core/main.ts)', () => {
   const source = code(SOURCE)
   const { text, from } = runForegroundBody(source)
   const at = (needle: string, after = from): number => {
