@@ -22,6 +22,7 @@ import { afterAll, beforeAll, describe, expect, it, onTestFailed } from 'vitest'
 import { LocalClient, type Frame } from './harness/client.js'
 import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
 import { atVersion } from './harness/release.js'
+import { PROBE_COMMAND, runProbe } from '../src/harnessd/reexec.js'
 
 const FIRST = '42.0.1'
 const sha = (bytes: Buffer): string => createHash('sha256').update(bytes).digest('hex')
@@ -245,12 +246,13 @@ describe('the master re-executing itself on an update', () => {
 
 /**
  * A released master and this one, each over the other's core (protocol.ts only grows). Run when
- * MIGRATION_FROM names a released bundle, as e2e/migration.e2e.ts is: one from before re-execution.
+ * MIGRATION_FROM names a released bundle, as in e2e/migration.e2e.ts.
  *
  * An older master cannot re-execute: after an update it supervises the newer core until it is
  * restarted, as every machine will once this ships. A newer master that finds the older bundle back on
  * disk does not re-execute on it either: the older bundle does not know the probe, and is never run as
- * a master to find out. Its core runs under the newer master.
+ * a master to find out. Its core runs under the newer master. A release that answers the probe must
+ * re-execute in both directions, with the same pid and the version of the bundle now on disk.
  */
 const RELEASED = process.env.MIGRATION_FROM
 describe.skipIf(!RELEASED)('a released master and this one, each over the other\'s core', () => {
@@ -260,6 +262,7 @@ describe.skipIf(!RELEASED)('a released master and this one, each over the other\
   let daemon: IsolatedDaemon | undefined
   let offered: 'released' | 'next' = 'released'
   let releasedVersion = ''
+  let releasedCanReexec = false
   const bundles = new Map<'released' | 'next', { cli: Buffer; notify: Buffer; version: string }>()
   const cliDir = () => join(scratch, 'cli')
   const status = async (): Promise<Record<string, any> | null> =>
@@ -303,6 +306,12 @@ describe.skipIf(!RELEASED)('a released master and this one, each over the other\
         ADAPTER_GRID_RUNTIME_METADATA_URL: `${local}/grid/metadata.json`,
       },
     })
+    // Found by QA on a quiet machine: 0.3.60 re-executes, but this fixture assumed every published
+    // release predated it. Probe the actual bundle; a timeout or broken probe must not select the old
+    // expectations and hide a regression. Old releases explicitly reject the private command.
+    const probe = await runProbe(process.execPath, [join(cliDir(), 'cli.js'), PROBE_COMMAND], daemon.env).result
+    if (!probe.ok) expect(probe.detail).toBe(`Unknown command: ${PROBE_COMMAND}`)
+    releasedCanReexec = probe.ok
     await daemon.start()
   })
 
@@ -312,7 +321,7 @@ describe.skipIf(!RELEASED)('a released master and this one, each over the other\
     if (scratch) rmSync(scratch, { recursive: true, force: true })
   })
 
-  it('an older master supervises the newer core an update brings, until it restarts; then this master runs', async () => {
+  it('a released master adopts the update, re-executing when supported, and restarts on the new build', async () => {
     onTestFailed(() => { console.log(`---- daemon log\n${daemon?.log().split('\n').slice(-120).join('\n')}`) })
     const master = daemon!.pid
     expect((await status())?.version).toBe(releasedVersion)
@@ -322,14 +331,19 @@ describe.skipIf(!RELEASED)('a released master and this one, each over the other\
       return current?.version === NEXT ? current : null
     }, 90_000, 250)
     expect(now.harnessd.masterPid).toBe(master)
-    expect(now.harnessd.masterVersion).toBeUndefined()
-    expect(daemon!.log()).not.toContain('re-executing')
+    if (releasedCanReexec) {
+      expect(now.harnessd).toMatchObject({ masterVersion: NEXT, reexecs: 1 })
+      expect(daemon!.log()).toContain(`now v${NEXT}`)
+    } else {
+      expect(now.harnessd.masterVersion).toBeUndefined()
+      expect(daemon!.log()).not.toContain('re-executing')
+    }
     await until('the released master to keep the update', () => daemon!.log().includes('the update stayed up — keeping it'), 30_000)
     await daemon!.restart()
     expect((await status())?.harnessd).toMatchObject({ masterVersion: NEXT, masterPid: daemon!.pid })
   })
 
-  it('this master runs the older bundle\'s core when it finds it back on disk, without re-executing on it', async () => {
+  it('this master returns to the released bundle, re-executing only when it answers the probe', async () => {
     onTestFailed(() => { console.log(`---- daemon log\n${daemon?.log().split('\n').slice(-120).join('\n')}`) })
     offered = 'released'   // not newer: the older core's updater leaves it alone
     const master = daemon!.pid
@@ -340,7 +354,13 @@ describe.skipIf(!RELEASED)('a released master and this one, each over the other\
       const current = await status()
       return current?.version === releasedVersion ? current : null
     }, 60_000, 250)
-    expect(now.harnessd).toMatchObject({ masterVersion: NEXT, masterPid: master, reexecs: 0 })
-    expect(daemon!.log().slice(from)).toContain('did not answer its probe (Unknown command: __harnessd-probe) — keeping this master')
+    expect(now.harnessd).toMatchObject({
+      masterVersion: releasedCanReexec ? releasedVersion : NEXT,
+      masterPid: master,
+      reexecs: releasedCanReexec ? 1 : 0,
+    })
+    expect(daemon!.log().slice(from)).toContain(releasedCanReexec
+      ? `now v${releasedVersion}`
+      : 'did not answer its probe (Unknown command: __harnessd-probe) — keeping this master')
   })
 })
