@@ -1818,6 +1818,23 @@ mod tests {
         assert_eq!(super::expand(&app, "#{window_name}/#{window_active}/#{pane_id}", 1, Some(2), false), "Project 1/1/%1");
     }
 
+    /// What the status line renders when the current window is `filled` and the tab name is `pane`.
+    #[test]
+    fn window_status_overrides_reach_the_status_line() {
+        let mut app = status_fixture(2, 2);
+        let global = crate::options::SetFlags { global: true, ..Default::default() };
+        let overrides = crate::options::window_status_overrides("pane", "filled");
+        for (o, v) in &overrides { let _ = app.options.set(o, Some(v), &global, "", 0); }
+        let fmt = app.options.get("status-format[0]", &app.tabs[0].id, None).unwrap();
+        let out = super::expand(&app, &fmt, 0, Some(1), true);
+        // The current window is marked filled: no `*`, its cell takes the swapped status-line
+        // colours (the theme's background on the theme's foreground), and in `pane` mode it is
+        // named for its active pane — not the window's auto-renamed name.
+        assert!(!out.contains('*'), "no star marker: {out}");
+        assert!(out.contains("list=focus") && out.contains("bg="), "the current window is filled: {out}");
+        assert!(out.contains("Review project 0") && !out.contains("0:Project 0"), "the pane's title, not the window's: {out}");
+    }
+
     #[test]
     fn loop_alternatives_keep_nested_commas_and_only_expand_the_selected_branch() {
         let mut app = status_fixture(2, 2);
