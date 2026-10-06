@@ -22,7 +22,7 @@
     </keybind>
     <keybind key="W-Return"><action name="ForEach"><query identifier="hn" /><then><action name="Raise" /><action name="Focus" /></then></action></keybind>
     <keybind key="A-Tab"><action name="NextWindowImmediate" /></keybind>
-    <keybind key="W-l"><action name="Execute" command="swaylock -f -c 000000" /></keybind>
+    <keybind key="W-l"><action name="Execute" command="/usr/lib/harness-os/lock" /></keybind>
     <keybind key="W-u">
       <action name="Execute" command="/usr/lib/harness-os/open-updates" />
       <action name="ForEach"><query identifier="hn" /><then><action name="Raise" /><action name="Focus" /></then></action>
@@ -47,6 +47,12 @@
       <action name="Execute" command="hn os-action connect" />
       <action name="ForEach"><query identifier="hn" /><then><action name="Raise" /><action name="Focus" /></then></action>
     </keybind>
+    <!-- Screenshots go to ~/Pictures/Screenshots and the clipboard. Super+p/r stand in for Print
+         on keyboards without one. Focus stays where it is: raising hn would capture hn instead. -->
+    <keybind key="Print"><action name="Execute" command="/usr/lib/harness-os/screenshot full" /></keybind>
+    <keybind key="S-Print"><action name="Execute" command="/usr/lib/harness-os/screenshot region" /></keybind>
+    <keybind key="W-p"><action name="Execute" command="/usr/lib/harness-os/screenshot full" /></keybind>
+    <keybind key="W-r"><action name="Execute" command="/usr/lib/harness-os/screenshot region" /></keybind>
     <keybind key="XF86MonBrightnessUp"><action name="Execute" command="brightnessctl --class=backlight --min-value=1 set +5%" /></keybind>
     <keybind key="XF86MonBrightnessDown"><action name="Execute" command="brightnessctl --class=backlight --min-value=1 set 5%-" /></keybind>
     <keybind key="XF86KbdBrightnessUp"><action name="Execute" command="brightnessctl --class=leds --device='*::kbd_backlight' set +10%" /></keybind>

@@ -58,7 +58,7 @@ def main():
         if args.candidate_bundle:
             source = Path(__file__).resolve().parents[1]
             receipt['candidate_sha256'] = {}
-            for local, guest in [('hardware.py', 'hardware.py'), ('installer.py', 'install.py')]:
+            for local, guest in [('hardware.py', 'hardware.py'), ('installer.py', 'install.py'), ('boot_profile.py', 'boot_profile.py')]:
                 copy_file(vm, (source / local).read_bytes(), '/usr/lib/harness-os/' + guest)
                 receipt['candidate_sha256'][local] = digest(source / local)
             # Stream once into the writable overlay; never store a second 325 MiB copy.

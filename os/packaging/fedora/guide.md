@@ -23,7 +23,9 @@ Ctrl+b is a prefix: release it before the next key. Verify customized keys with
 
 The OS keys are in `labwc/rc.xml`: Super+n opens New Harness, Super+t a terminal,
 Super+m the connection flow, Super+w Wi-Fi, Super+b the browser, Super+Enter hn,
-and Super+l the lock screen. Super is Command on a Mac keyboard running Linux.
+and Super+l the lock screen. Print or Super+p saves a screenshot, Shift+Print or
+Super+r a region, to `~/Pictures/Screenshots` and the clipboard. Super is Command
+on a Mac keyboard running Linux.
 Brightness and audio keys operate supported hardware. These are Linux session
 bindings, not macOS shortcuts.
 

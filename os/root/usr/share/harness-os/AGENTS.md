@@ -18,7 +18,11 @@ is required.
   deferred until the user chooses it; Done keeps working processes alive.
   Do not replace `/usr/lib/harness` manually or enable the CLI's independent
   daemon handoff updater: this OS supervises activation with systemd.
-- This is Arch Linux with systemd, the LTS kernel, labwc, foot and Chromium.
+- This is Arch Linux with systemd, labwc, foot and Chromium. Read
+  `/etc/harness-platform.json` before choosing kernel or driver packages: `pc`
+  uses `linux-lts`; the experimental `apple-t2` image uses the pinned `linux-t2`.
+  Older PC installations have no platform file. Confirm the running kernel with
+  `uname -r` and `/usr/lib/modules/$(uname -r)/pkgbase`.
 - Use the ordinary package manager; no private package ecosystem is required.
   On the live USB, `sudo systemctl start harness-keyring` waits for its one-time
   key setup before the first package installation. Installed systems finish that
@@ -70,13 +74,31 @@ is required.
 - `harness hardware` reports the model, CPU baseline, PCI devices, bound drivers
   and backlights. It does not collect serial numbers, Wi-Fi names, MAC addresses
   or passwords. Use actual device IDs when diagnosing hardware.
-- The USB carries a prebuilt wl module and signed offline packages for selected
+- The PC USB carries a prebuilt wl module and signed offline packages for selected
   BCM4331/BCM4360 radios. The installer adds DKMS and matching LTS headers only
   where needed, so future kernel upgrades can rebuild the driver. Other Broadcom
   families keep their native drivers. Do not apply a blanket Broadcom blacklist.
   Driver build/load checks are not evidence of physical radio or suspend support.
+- The experimental T2 image uses its own kernel and early input modules. Do not
+  replace them with `linux-lts`, `broadcom-wl-dkms` or PC kernel modules. Its
+  required kernel and module identities are in
+  `/usr/share/harness-os/apple-t2/kernel.json`; actual installed packages and
+  `modinfo` must agree. A VM boot does not establish physical Mac support.
+- T2 Wi-Fi and Bluetooth need that Mac's Apple firmware. Installation preserves
+  a verified local export before erasing the disk and stops if it cannot do so.
+  The private copy is `/var/lib/harness-os/apple-firmware.tar`, with its model
+  and checksum in `/var/lib/harness-os/install.json`; the reinstall copy is
+  `/boot/harness-apple-firmware.tar`. Firmware package hooks restore this data
+  automatically. Retain both copies; never upload them as diagnostic attachments.
+  Use the T2 USB for offline recovery. The current T2 kernel stays pinned during
+  ordinary Arch updates. Harness updates that change the pin stage and verify
+  both kernel archives before mutation and retain the old one for offline
+  rollback. The update receipt records both identities and the checkpoint.
+  Older updaters refuse a changed pin and first need an update with the same
+  pin that adds this capability. Do not bypass these checks or add a moving
+  kernel repository to work around a refused update.
 - Ethernet uses NetworkManager automatically. For Wi-Fi, use
-  `hn-os wifi`, which opens NetworkManager’s keyboard interface.
+  `Super+w` or `hn-os wifi`, which opens the Harness Wi-Fi form.
   Keep passwords out of shell arguments and transcripts.
 - Audio uses PipeWire. Clipboard uses `wl-copy` and `wl-paste`.
 - npm installs into `~/.local`. The initial npm configuration permits the vendor
@@ -84,8 +106,11 @@ is required.
   an install script, approve that package explicitly; keep npm's other defaults.
 - `Super+b` opens/focuses Chromium or returns to hn; `Super+Enter` focuses hn;
   `Super+l` locks the screen. `sudo systemctl poweroff` shuts down cleanly.
-- On supported NVIDIA Turing and newer GPUs, including RTX 4090/5090 and RTX 6000
-  generations, the LTS-kernel packages are `nvidia-open-lts nvidia-utils`.
+- Print/`Super+p` saves a full screenshot and Shift+Print/`Super+r` a region to
+  `~/Pictures/Screenshots`, also copied to the clipboard. When the user mentions
+  "the screenshot", read the newest file there. `grim` and `slurp` are installed.
+- On the PC image, the packages for supported NVIDIA Turing and newer GPUs are
+  `nvidia-open-lts nvidia-utils`, including RTX 4090/5090 and RTX 6000 generations.
   New USB images carrying the NVIDIA bundle install them offline when the exact
   GPU IDs match the bundled support table. Check `pacman -Q` and
   `/var/lib/harness-os/hardware.json` before installing anything. Other machines

@@ -71,8 +71,36 @@ def wired_devices():
     result = nmcli('-t', '-e', 'yes', '-f', 'DEVICE,TYPE,STATE', 'device', 'status', wait=3)
     if result.returncode:
         return []
+    # An unavailable Ethernet device can still recover through explicit
+    # activation, including after networking was disabled across suspend.
     return [row for line in result.stdout.splitlines()
-            if len(row := fields(line)) == 3 and row[1] == 'ethernet' and row[2] != 'unavailable']
+            if len(row := fields(line)) == 3 and row[1] == 'ethernet']
+
+
+def connect_wired(device, state):
+    if state == 'unavailable':
+        # After a disabled boot and sleep, NM can leave the link down and its
+        # available-profile list empty. Connecting then creates a new DHCP
+        # profile, ignoring saved settings. Raise only the selected link and
+        # let NM discover its profiles before requesting ordinary activation.
+        link = subprocess.run(['/usr/bin/ip', 'link', 'set', 'dev', device, 'up'],
+                              capture_output=True, text=True, timeout=3)
+        if link.returncode:
+            return False
+        deadline = time.monotonic() + 10
+        while True:
+            status = nmcli('-g', 'GENERAL.STATE', 'device', 'show', device, wait=2)
+            if status.returncode:
+                return False
+            value = status.stdout.strip().split(' ', 1)[0]
+            if value == '100':
+                return True
+            if value == '30':
+                break
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(.2)
+    return nmcli('device', 'connect', device, wait=30).returncode == 0
 
 
 def still_connected(network):
@@ -325,7 +353,7 @@ class NetworkPage:
                 self.busy(value['ssid'] if kind == 'wifi' else 'Ethernet')
                 try:
                     if kind == 'wired':
-                        if nmcli('device', 'connect', value[0], wait=30).returncode == 0:
+                        if connect_wired(value[0], value[2]):
                             return 0
                         self.message = 'Could not connect Ethernet. Check the cable and try again.'
                     elif (value['active'] and still_connected(value)) or connect(value):
