@@ -170,7 +170,14 @@ class ActualDiskContract(unittest.TestCase):
         self.root, self.boot, self.esp = (self.folder / name for name in ('root', 'boot', 'esp'))
         for folder in (self.root, self.boot, self.esp):
             folder.mkdir()
-        self.identity = {'session_package': {'files': {}, 'symlinks': {}}}
+        self.identity = {'session_package': {'files': {}, 'symlinks': {}}, 'first_boot': {'files': {}}}
+        for name, (local, mode) in image.FIRST_BOOT_FILES.items():
+            path = self.put(self.root, name, (ROOT / 'os/platforms/apple-silicon' / local).read_text())
+            path.chmod(mode)
+            self.identity['first_boot']['files'][name] = {'sha256': image.digest(path), 'mode': mode}
+        enabled = self.root / 'etc/systemd/system/multi-user.target.wants/harness-firstboot.service'
+        enabled.parent.mkdir(parents=True)
+        enabled.symlink_to('/usr/lib/systemd/system/harness-firstboot.service')
         files = {
             'usr/share/harness-os/image.json': json.dumps(self.identity),
             'etc/passwd': 'root:x:0:0:root:/root:/bin/bash\nnobody:x:65534:65534:Nobody:/:/sbin/nologin\n',
@@ -191,12 +198,27 @@ class ActualDiskContract(unittest.TestCase):
         return path
 
     def inspect(self):
-        return check.inspect_root(self.root, self.boot, self.esp, self.identity)
+        return check.inspect_root(self.root, self.boot, self.esp, self.identity, owner_uid=os.geteuid())
 
     def test_actual_root_boot_provenance_and_pristine_identity(self):
         evidence = self.inspect()
         self.assertIn('esp/m1n1/boot.bin', evidence)
         self.assertEqual(evidence['boot/vmlinuz-test']['bytes'], 4096)
+
+    def test_reject_firstboot_tampering_or_already_provisioned_image(self):
+        path = self.root / 'usr/lib/harness-os/firstboot.py'
+        original = path.read_bytes()
+        path.write_text('changed')
+        with self.assertRaisesRegex(ValueError, 'first-boot payload'):
+            self.inspect()
+        path.write_bytes(original)
+        done = self.put(self.root, 'var/lib/harness-os/firstboot.done', 'me@harness\n')
+        with self.assertRaisesRegex(ValueError, 'already entered'):
+            self.inspect()
+        done.unlink()
+        self.put(self.root, 'etc/systemd/system/multi-user.target.wants/initial-setup.service', 'conflict')
+        with self.assertRaisesRegex(ValueError, 'competing'):
+            self.inspect()
 
     def test_reject_known_password_fixture_or_fixed_machine_secrets(self):
         mutations = [

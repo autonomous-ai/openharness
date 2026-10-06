@@ -7,6 +7,7 @@ from pathlib import Path
 import platform
 import re
 import shutil
+import stat
 import subprocess
 
 
@@ -56,8 +57,23 @@ def main():
             raise ValueError('Installed session link differs: ' + name)
     Path('/etc/hostname').write_text('harness\n')
     Path('/usr/share/harness-os/image.json').write_text(json.dumps(identity, indent=2) + '\n')
-    # No known-password fixture users, autologin or broad privilege grants.
-    # Fedora's stock initial-setup remains until Harness first boot is integrated.
+    # Only the dedicated image configures first boot; the general session RPM
+    # still has no account-creation or automatic login side effects.
+    first_boot = identity['first_boot']['files']
+    if set(first_boot) != {'usr/lib/harness-os/firstboot.py',
+                          'usr/lib/systemd/system/harness-firstboot.service',
+                          'usr/lib/systemd/system-preset/01-harness-firstboot.preset'}:
+        raise ValueError('Incomplete first-boot payload declaration.')
+    for name, expected in first_boot.items():
+        path = Path('/') / name
+        if (path.is_symlink() or digest(path) != expected['sha256'] or
+                stat.S_IMODE(path.stat().st_mode) != expected['mode']):
+            raise ValueError('First-boot payload differs: ' + name)
+    subprocess.run(['systemctl', 'disable', 'initial-setup.service',
+                    'initial-setup-reconfiguration.service'], check=True)
+    Path('/etc/reconfigSys').unlink(missing_ok=True)
+    subprocess.run(['systemctl', 'enable', 'harness-firstboot.service'], check=True)
+    # No account, known password, or enabled Harness autologin is baked in.
     accounts = [row.split(':') for row in Path('/etc/passwd').read_text().splitlines()]
     if any(1000 <= int(row[2]) < 65534 for row in accounts):
         raise RuntimeError('An image must not contain a pre-provisioned login account.')
