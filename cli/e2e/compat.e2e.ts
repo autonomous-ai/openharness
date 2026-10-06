@@ -12,7 +12,7 @@
  * the desktop app, `hn` and the phone were written against the released daemon's answers.
  *
  * Skipped unless COMPAT_FROM names a released bundle, so CI does not build old releases. Before a
- * release: build the last released tag's bundle (`node build-bundle.mjs` in a checkout of it) and run
+ * release: use the current published bundle (0.3.60 or later), or build the last released tag's bundle (`node build-bundle.mjs` in a checkout of it) and run
  * `COMPAT_FROM=<that>/dist/cli.js npm run test:e2e -- compat`. `COMPAT_REPORT=<file>` writes both
  * sides' answers and every difference, for reading one by one.
  */
@@ -30,40 +30,16 @@ const FROM = process.env.COMPAT_FROM
  * Differences on purpose, by the path that differs (a prefix covers everything under it), each with
  * why. Keep this honest: a difference nobody can explain is a regression until shown otherwise.
  */
-const CHANGED: Record<string, string> = {
-  // The terminal streams passed `terminal_info` over and nothing answered it, so hn waited out its
-  // three seconds each time. It is answered now: what the pane runs and where, or why not.
-  'terminal_info claude': 'answered now; the released build left it unanswered',
-  'terminal_info codex': 'answered now; the released build left it unanswered',
-  'terminal_info with nothing': 'answered now; the released build left it unanswered',
-  'terminal_info for no such agent': 'answered now; the released build left it unanswered',
-  // A permission dialog's question says it is one (#764): `permission` carries the dialog and that the
-  // desktop resolves it, so a device shows a notice rather than a question to answer. A field added,
-  // nothing taken away; a frame's keys are compared as one line, so the addition reads as a change.
-  'frames of a permission on claude[3]': 'commander_question adds permission (#764); every key it had stays',
-  'frames of a permission on codex[2]': 'commander_question adds permission (#764); every key it had stays',
-  // A conversation the daemon keeps as a stopped one reads like a live one (#797, round 24). The released
-  // build said NOT_FOUND, so a conversation the daemon had to leave for a new one could not be read at all.
-  'session_get codex while stopped': 'answered now; the released build said NOT_FOUND for a stopped conversation',
-}
+// Found by QA on a quiet machine: 0.3.60 already ships terminal_info, permission frames, stopped
+// conversations and retained names. Requiring the old differences rejected 125 identical replies.
+// Remove shipped allowances instead of making the stale-explanation guard optional.
+const CHANGED: Record<string, string> = {}
 
 /**
  * Changes made on purpose that show in the same field under many steps, by its path. Each must still
  * match a difference, like CHANGED.
  */
 const CHANGED_FIELDS: Array<[RegExp, string, { optional?: boolean }?]> = [
-  // An agent keeps the name it was given ("Codex harness 10-6 4:12", lib/agentNames.ts) once it binds.
-  // The released build showed the project fallback ("compat-codex · 7da6") instead, and a fork of a
-  // renamed agent is called after it ("Renamed in compat - fork").
-  [/^\.(agents_list[^.]*\.agents\[\d+\]|agent_(restart|resume)\.agent)\.name$/, 'the agent keeps its given name after it binds; the released build showed the project fallback'],
-  [/^\.(session_get [^.]*|sessions_list [^.]*\.sessions\[\d+\])\.title$/, 'the conversation\'s title is the agent\'s name, which it now keeps'],
-  // The Codex agent's model as Harness chose it, from Codex 0.160's catalog (#848). Added, nothing taken
-  // away; it is read in the background, so whether it is there by the last list is timing.
-  [/^\.agents_list[^.]*\.agents\[\d+\]\.selectedModel$/, 'the selected model is read for Codex 0.160 (#848)', { optional: true }],
-  // A resumed Codex agent's permission mode is read back from its engine's arguments once discovery has
-  // seen the process, where the released build left it null. Whether that read lands before the last
-  // list is timing (3 runs in 4), so it may or may not differ.
-  [/^\.agents_list[^.]*\.agents\[\d+\]\.permissionMode$/, 'the permission mode is read back from the engine\'s arguments', { optional: true }],
   // Whether the search index had finished its first build when the query came, and how many conversations
   // it still had to read, is timing; search runs in its own process now (#829) and is often ready sooner.
   [/^\.session_search [^.]*\.(ready|pending)$/, 'the index\'s readiness, and what it still has to read, at the moment of the query is timing', { optional: true }],
@@ -314,7 +290,7 @@ describe.skipIf(!FROM)('what the apps see, compared with the released build', ()
     // This checkout as it ships: its bundle, under harnessd's master.
     const build = join(scratch, 'this')
     execFileSync(process.execPath, ['build-bundle.mjs'], { cwd: CLI_ROOT, env: { ...process.env, BUNDLE_OUT_DIR: build }, stdio: 'pipe' })
-    // The released build as it runs: its bundle, its core on its own (it has no master).
+    // The released build as it runs: 0.3.60 and later have a master too.
     const released = join(scratch, 'released')
     mkdirSync(released)
     copyFileSync(FROM!, join(released, 'cli.js'))
@@ -322,7 +298,7 @@ describe.skipIf(!FROM)('what the apps see, compared with the released build', ()
     for (const dir of [build, released]) writeFileSync(join(dir, 'package.json'), '{"type":"module"}\n')
 
     for (const [side, options] of [
-      ['released', { scriptPath: join(released, 'cli.js'), noMaster: true, env: { ADAPTER_CLI_DIR: released } }],
+      ['released', { scriptPath: join(released, 'cli.js'), env: { ADAPTER_CLI_DIR: released } }],
       ['this', { scriptPath: join(build, 'cli.js'), env: { ADAPTER_CLI_DIR: build } }],
     ] as const) {
       const d = await IsolatedDaemon.create(options)
