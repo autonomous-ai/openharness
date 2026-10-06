@@ -1334,13 +1334,19 @@ async function tmuxPasteText(pane: string, content: string, bracketed: boolean):
  * Short single-line input is submitted immediately after that explicit paste boundary.
  *
  * Long/multiline input is allowed to settle before Enter. (Verified: reliably submits up to ~28 KB.)
+ *
+ * `beforeEnter` is asked once the text is in, right before the Enter: a reason it gives keeps the Enter
+ * from being pressed, and comes back as `{ withheld }`, the text left typed. An engine can open a dialog
+ * in that gap, mid-turn, and the Enter would answer it.
  */
-export function sendToTmux(pane: string, text: string): Promise<boolean> {
+export function sendToTmux(pane: string, text: string, beforeEnter?: () => Promise<string | null>): Promise<boolean | { withheld: string }> {
   const content = text.replace(/[\r\n]+$/, '') // strip trailing newlines so the submit Enter isn't doubled
   return (async () => {
     const needsSettle = content.length > INJECT_FASTPATH_MAXLEN || /[\r\n]/.test(content)
     if (!(await tmuxPasteText(pane, content, true))) return false
     if (needsSettle) await sleep(Math.min(1500, INJECT_PASTE_DELAY_BASE_MS + Math.floor(content.length / 60)))
+    const withheld = beforeEnter ? await beforeEnter() : null
+    if (withheld) return { withheld }
     return tmuxEnter(pane)
   })()
 }

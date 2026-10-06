@@ -116,14 +116,17 @@ describe('the session input controller\'s dependencies', () => {
     expect(await wired.inject('cc', 'hello')).toEqual({ state: 'failed', dispatch: 'not_started', reason: 'permission_open' })
     // Nothing written, each read inside the lock.
     expect(run.calls).toEqual(['lock a1', 'lock a1', 'lock cx', 'lock cc'])
-    // A pane that cannot be read is written as before, and so is a ready one; an agent that is not there is
-    // not written to at all.
+    // Claude Code's and Codex's panes are typed into only when read and their composer is on screen; another
+    // engine's pane that cannot be read is written as before; an agent that is not there, not at all.
     run.setPane(null)
-    expect(await wired.inject('cx', 'hi')).toBe(ok)
+    expect(await wired.inject('cx', 'hi')).toEqual({ state: 'failed', dispatch: 'not_started', reason: 'screen_unreadable' })
+    expect(await wired.inject('cc', 'hi')).toBe(ok)
+    run.setPane('✻ Welcome to Claude Code')
+    expect(await wired.inject('a1', 'hi')).toEqual({ state: 'failed', dispatch: 'not_started', reason: 'prompt_hidden' })
     run.setPane(READY_PANE)
     expect(await wired.inject('a1', 'hi')).toBe(ok)
     expect(await wired.inject('nobody', 'hi')).toEqual({ state: 'failed', dispatch: 'not_started', reason: 'terminal agent is unavailable' })
-    expect(run.calls.filter((call) => call.startsWith('submit'))).toEqual(['submit cx hi', 'submit a1 hi'])
+    expect(run.calls.filter((call) => call.startsWith('submit'))).toEqual(['submit cc hi', 'submit a1 hi'])
   })
 
   it('reads the pane after its engine has answered, so a dialog opened during the wait is seen', async () => {
@@ -142,6 +145,59 @@ describe('the session input controller\'s dependencies', () => {
     expect(await wired.inject('a1', 'hello')).toEqual({ state: 'failed', dispatch: 'not_started', reason: TERMINAL_LEASE_REFUSED })
     expect(order).toEqual([])
     expect(run.calls.filter((call) => call.startsWith('submit'))).toEqual([])
+  })
+
+  it('reads the pane again right before the Enter, and gives the reason not to press it, a popup of the message\'s own aside', async () => {
+    const screens = [READY_PANE, CLAUDE_PERMISSION, READY_PANE, null, READY_PANE, READY_PANE, `────────────\n❯ /mo\n────────────\n  /model   Set the AI model`]
+    const answers: Array<string | null> = []
+    const write = messageWriter({
+      resolve: (id) => agents.get(id),
+      terminal: {
+        validateTerminal: vi.fn(async () => true),
+        captureTerminal: vi.fn(async () => screens.shift() ?? null),
+        submitTerminalAction: vi.fn(async (_id: string, _text: string, options?: { beforeEnter?: () => Promise<string | null> }) => {
+          answers.push(await options!.beforeEnter!())
+          return ok
+        }),
+      } as unknown as InputDeps['terminal'],
+    })
+    vi.useFakeTimers()
+    try {
+      for (let i = 0; i < 3; i++) {
+        const written = write('a1', 'hello')
+        await vi.advanceTimersByTimeAsync(1_000)
+        await written
+      }
+    } finally { vi.useRealTimers() }
+    // A permission prompt opened between the paste and the Enter; the pane unread once, then the composer;
+    // the message's own `/mo`.
+    expect(answers).toEqual(['permission_open', null, null])
+  })
+
+  it('holds the Enter back when the pane cannot be read for three seconds, or shows no composer that long', async () => {
+    for (const screen of [null, '✻ Welcome to Claude Code']) {
+      let reads = 0
+      const answers: Array<string | null> = []
+      const write = messageWriter({
+        resolve: (id) => agents.get(id),
+        terminal: {
+          validateTerminal: vi.fn(async () => true),
+          captureTerminal: vi.fn(async () => (reads++ === 0 ? READY_PANE : screen)),
+          submitTerminalAction: vi.fn(async (_id: string, _text: string, options?: { beforeEnter?: () => Promise<string | null> }) => {
+            answers.push(await options!.beforeEnter!())
+            return ok
+          }),
+        } as unknown as InputDeps['terminal'],
+      })
+      vi.useFakeTimers()
+      try {
+        const written = write('a1', 'hello')
+        await vi.advanceTimersByTimeAsync(5_000)
+        await written
+      } finally { vi.useRealTimers() }
+      expect(answers).toEqual([screen === null ? 'screen_unreadable' : 'prompt_hidden'])
+      expect(reads).toBe(13)
+    }
   })
 
   it('writes a team turn only into a ready pane whose delivery still holds control', async () => {

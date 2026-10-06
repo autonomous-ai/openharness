@@ -9,7 +9,7 @@
  */
 import type { RegisteredSession } from '../../lib/registry.js'
 import type { TerminalBackendCoordinator } from '../../lib/terminalBackendCoordinator.js'
-import { TERMINAL_LEASE_REFUSED, terminalActionNotStarted, type TerminalActionResult } from '../../lib/terminalTypes.js'
+import { TERMINAL_LEASE_REFUSED, terminalActionNotStarted, type SubmitOptions, type TerminalActionResult } from '../../lib/terminalTypes.js'
 
 export type TerminalControlBackend = Pick<TerminalBackendCoordinator,
   'acquireLease' | 'validateLease' | 'capture' | 'captureLease' | 'submitText' | 'submitTextLease'
@@ -81,14 +81,14 @@ export function createTerminalControl({ resolve, terminals }: TerminalControlDep
   }
   const terminalActionSucceeded = (result: Awaited<ReturnType<typeof terminals.submitText>>): boolean =>
     result.state === 'succeeded'
-  const submitTerminalAction = async (target: string, text: string): Promise<TerminalActionResult> => {
+  const submitTerminalAction = async (target: string, text: string, options?: SubmitOptions): Promise<TerminalActionResult> => {
     const session = terminalSession(target)
     if (!session) return terminalActionNotStarted('terminal agent is unavailable')
     const lease = await leasedTerminal(session)
     if (!lease) return terminalActionNotStarted(TERMINAL_LEASE_REFUSED)
     const result = pinnedControls.has(session.agentId)
-      ? await terminals.submitTextLease(lease.value, text)
-      : await terminals.submitTextForLease(session, lease.value, text)
+      ? await terminals.submitTextLease(lease.value, text, options)
+      : await terminals.submitTextForLease(session, lease.value, text, options)
     if (result.state !== 'succeeded' && pinnedControls.has(session.agentId)) invalidateTerminalControl(session.agentId)
     return result
   }

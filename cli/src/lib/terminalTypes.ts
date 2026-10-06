@@ -198,6 +198,24 @@ export function terminalActionRejected(reason: string): {
   return { state: 'failed', dispatch: 'rejected', reason }
 }
 
+/**
+ * What a submit checks right before its Enter, the text already typed: a reason not to press it. The
+ * engine can open a dialog between a paste and its Enter (a long or multi-line one waits up to 1.5 s for
+ * the engine to take it in, tmux.ts), and that Enter would answer the dialog.
+ */
+export interface SubmitOptions { beforeEnter?: () => Promise<string | null> }
+
+/** The text was typed and its Enter not pressed, for `reason`: it waits in the composer, unsent. */
+export function terminalEnterWithheld(reason: string): { state: 'unknown'; dispatch: 'possibly_executed'; reason: string } {
+  return { state: 'unknown', dispatch: 'possibly_executed', reason: `enter_withheld:${reason}` }
+}
+
+/** Why a submit's Enter was not pressed, or null when it was, or the submit did not get that far. */
+export function enterWithheldReason(result: boolean | TerminalActionResult): string | null {
+  return typeof result !== 'boolean' && result.state === 'unknown' && result.reason.startsWith('enter_withheld:')
+    ? result.reason.slice('enter_withheld:'.length) : null
+}
+
 export function terminalActionPossiblyExecuted(reason: string): {
   state: 'unknown'; dispatch: 'possibly_executed'; reason: string
 } {

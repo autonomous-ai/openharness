@@ -169,4 +169,36 @@ describe('an agent asks a question', () => {
     expect(await d.capture(agent.tmuxPane)).not.toContain('notes:')
     client.close()
   })
+
+  it.each(engines)('%s: a request that opens between a message\'s paste and its Enter gets no Enter: the message waits unsent, and the person is told', async (engine) => {
+    const name = engine === 'claude' ? 'Claude Code' : 'Codex'
+    const d = await fresh()
+    const client = await LocalClient.connect(d)
+    const agent = await create(d, client, engine, `between-${engine}`)
+    // A turn that asks permission the moment a message is pasted: a request arriving mid-turn, in the gap
+    // the daemon leaves for the engine to take a long or multi-line paste in before its Enter.
+    const started = client.next(isTurn('turn_started', agent.id), 45_000, 'turn_started')
+    client.send('message', { agentId: agent.id, content: '!permitnext printf hi' })
+    await started
+    const asked = client.next((frame) => frame.type === 'commander_question' && frame.agentId === agent.id, 30_000, 'commander_question')
+    const refused = client.next((frame) => frame.type === 'error' && frame.agentId === agent.id, 30_000, 'the refusal')
+    client.send('message', { agentId: agent.id, content: 'first line\nsecond line' })
+    expect(String((await refused).payload?.message)).toBe(`${name} asked for permission just as your message was typed, so it was not sent; it waits in ${name}'s prompt. Answer the request in the app or in its terminal, then press Enter in its terminal to send the message, or clear it there.`)
+    expect(await d.capture(agent.tmuxPane)).not.toContain('ran printf hi')
+    // Still asking, and answered through its own path: No.
+    const question = await asked
+    const shaped = question.payload?.questions?.[0]
+    const ended = client.next(isTurn('turn_ended', agent.id), 45_000, 'turn_ended')
+    expect((await answer(client, agent.id, String(question.payload?.requestId), { [shaped.q]: shaped.options[2] })).error).toBeUndefined()
+    await ended
+    expect(await d.capture(agent.tmuxPane)).toContain('did not run printf hi')
+    // The message waits in the composer, unsent, and the daemon presses nothing; Enter in the terminal sends it.
+    await until('the message to wait in the composer', async () => (await d.capture(agent.tmuxPane)).includes('second line') || null, 15_000, 250)
+    await new Promise((resolve) => setTimeout(resolve, 5_000))
+    expect(client.frames.some((frame) => isTurn('turn_started', agent.id)(frame) && String(frame.payload?.userMessage).includes('second line'))).toBe(false)
+    const sent = client.next((frame) => isTurn('turn_started', agent.id)(frame) && String(frame.payload?.userMessage).includes('second line'), 30_000, 'the message sent')
+    await d.tmux.run('send-keys', '-t', agent.tmuxPane, 'Enter')
+    await sent
+    client.close()
+  })
 })

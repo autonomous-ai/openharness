@@ -23,19 +23,37 @@
  * So none of them is typed into. A question is answered through its own path (`question_response`),
  * never by a message.
  *
+ * For Claude Code and Codex the screens above are named, to say what is open; anything else is typed
+ * into only when the engine's own composer is on screen (composerScreen.ts), so a screen never seen
+ * before is refused, never typed into. Other engines are read for their questions and permission
+ * prompts only.
+ *
  * One function for every route a message takes to a pane, so that none can skip it (core/input.ts).
  */
 import { engineLabel } from './agentNames.js'
 import { isApprovalDialog, parseEngineQuestionPane } from './askQuestion.js'
 import type { RegisteredSession } from './registry.js'
+import { COMPOSER_ENGINES, composerState } from './composerScreen.js'
 import { paneModal } from './runtimeProfileController.js'
 
 /** Why a message was not typed, as the reason its delivery is refused with. */
 export type MessageHold = 'permission_open' | 'question_open' | 'menu_open' | 'rewind_picker_open' | 'transcript_open'
-  | 'search_open' | 'trust_open' | 'update_prompt_open' | 'model_prompt_open' | 'sign_in_open'
+  | 'search_open' | 'trust_open' | 'update_prompt_open' | 'model_prompt_open' | 'sign_in_open' | 'popup_open'
+  | 'prompt_hidden' | 'screen_unreadable'
 
 const HOLDS: ReadonlySet<string> = new Set<MessageHold>(['permission_open', 'question_open', 'menu_open', 'rewind_picker_open',
-  'transcript_open', 'search_open', 'trust_open', 'update_prompt_open', 'model_prompt_open', 'sign_in_open'])
+  'transcript_open', 'search_open', 'trust_open', 'update_prompt_open', 'model_prompt_open', 'sign_in_open', 'popup_open',
+  'prompt_hidden', 'screen_unreadable'])
+
+/**
+ * The holds that can be passing: an engine still starting draws nothing yet, a redraw can be caught
+ * between frames, a capture can fail once. A message waits a little for these to clear before it is
+ * refused (sessionInput.ts), as it does for the pane's control lease.
+ */
+const PASSING: ReadonlySet<string> = new Set<MessageHold>(['prompt_hidden', 'screen_unreadable'])
+export function passingHold(reason: string): boolean {
+  return PASSING.has(reason)
+}
 
 /** The hold for each of the engines' own screens and modals (runtimeProfileController.ts `paneModal`). */
 const MODAL_HOLDS: Record<NonNullable<ReturnType<typeof paneModal>>, MessageHold> = {
@@ -43,17 +61,17 @@ const MODAL_HOLDS: Record<NonNullable<ReturnType<typeof paneModal>>, MessageHold
   update: 'update_prompt_open', model: 'model_prompt_open', sign_in: 'sign_in_open', permission: 'permission_open', menu: 'menu_open',
 }
 
-/** The engines whose screens are read for more than a question: the menus, rewind pickers and views. */
-const MODAL_ENGINES: ReadonlySet<string> = new Set(['claude', 'codex'])
-
 /** What the pane shows that a message must not be typed into, or null when it can be typed. */
 export function messageHold(engine: RegisteredSession['engine'], capture: string | null): MessageHold | null {
-  if (!capture) return null
+  const allowlisted = COMPOSER_ENGINES.has(engine)
+  if (capture === null) return allowlisted ? 'screen_unreadable' : null
   const view = parseEngineQuestionPane(engine, capture)
   if (view) return view.kind === 'question' && isApprovalDialog(view) ? 'permission_open' : 'question_open'
-  if (!MODAL_ENGINES.has(engine)) return null
+  if (!allowlisted) return null
   const modal = paneModal(engine, capture)
-  return modal ? MODAL_HOLDS[modal] : null
+  if (modal) return MODAL_HOLDS[modal]
+  const composer = composerState(engine, capture)
+  return composer === 'ready' ? null : composer === 'popup' ? 'popup_open' : 'prompt_hidden'
 }
 
 export function isMessageHold(reason: string): reason is MessageHold {
@@ -62,6 +80,18 @@ export function isMessageHold(reason: string): reason is MessageHold {
 
 function engineName(engine: string): string {
   return engine === 'claude' ? 'Claude Code' : engineLabel(engine)
+}
+
+/**
+ * What the person is told when their message was typed but its Enter not pressed: the engine opened
+ * something between the two, which the Enter would have answered. The text waits in the composer.
+ */
+export function messageWithheldText(engine: string, hold: string): string {
+  const name = engineName(engine)
+  const [what, then] = hold === 'permission_open' ? ['asked for permission', 'Answer the request in the app or in its terminal']
+    : hold === 'question_open' ? ['asked you a question', 'Answer the question in the app or in its terminal']
+      : ['opened another screen', 'Finish what\'s on its screen in its terminal']
+  return `${name} ${what} just as your message was typed, so it was not sent; it waits in ${name}'s prompt. ${then}, then press Enter in its terminal to send the message, or clear it there.`
 }
 
 /** What the person is told: why their message was not typed, and what lets it through. */
@@ -94,5 +124,11 @@ export function messageHoldText(engine: string, hold: MessageHold): string {
       return `${name} is asking whether to switch to a new model. Answer it in its terminal, then send the message again.`
     case 'sign_in_open':
       return `${name} is asking how to sign in. Sign in in its terminal, then send the message again.`
+    case 'popup_open':
+      return `${name} has a list of suggestions open in its prompt, where Enter would pick one. Close it with Esc in its terminal, then send the message again.`
+    case 'prompt_hidden':
+      return `${name} isn't showing its prompt; finish what's on its screen in its terminal, then send the message again.`
+    case 'screen_unreadable':
+      return `${name}'s screen could not be read, so the message was not typed. Send it again in a moment.`
   }
 }
