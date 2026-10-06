@@ -713,6 +713,7 @@ describe('a build that fails on its own merits (e2e/updateHostile.e2e.ts)', () =
     })
     try {
       await vi.waitFor(() => expect(state.downloads).toBe(1), { timeout: 5_000 })
+      await vi.waitFor(() => expect(errors).toEqual([expect.stringContaining(`[update] 9.9.9 ${why}`)]), { timeout: 5_000 })
       await ticks(5)
       expect(state.downloads).toBe(1)
       expect(errors).toEqual([expect.stringContaining(`[update] 9.9.9 ${why}`)])
