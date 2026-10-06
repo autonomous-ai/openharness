@@ -34,6 +34,7 @@ class MainFlutterWindow: NSWindow {
     self.setFrame(windowFrame, display: true)
 
     RegisterGeneratedPlugins(registry: flutterViewController)
+    AppDelegate.installCommunityLinks(messenger: flutterViewController.engine.binaryMessenger)
 
     menuChannel = FlutterMethodChannel(
       name: kMenuChannel,

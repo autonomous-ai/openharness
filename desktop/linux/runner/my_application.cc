@@ -11,9 +11,28 @@
 struct _MyApplication {
   GtkApplication parent_instance;
   char** dart_entrypoint_arguments;
+  FlMethodChannel* community_channel;
+  FlValue* pending_links;
+  gboolean links_ready;
 };
 
 G_DEFINE_TYPE(MyApplication, my_application, GTK_TYPE_APPLICATION)
+
+// Buffer cold-start links until Dart has installed its receiver.
+static void community_method_call_cb(FlMethodChannel* channel,
+                                    FlMethodCall* call, gpointer user_data) {
+  MyApplication* self = MY_APPLICATION(user_data);
+  if (g_strcmp0(fl_method_call_get_name(call), "ready") != 0) {
+    g_autoptr(FlMethodResponse) response = FL_METHOD_RESPONSE(fl_method_not_implemented_response_new());
+    fl_method_call_respond(call, response, nullptr);
+    return;
+  }
+  self->links_ready = TRUE;
+  g_autoptr(FlMethodResponse) response = FL_METHOD_RESPONSE(fl_method_success_response_new(self->pending_links));
+  fl_method_call_respond(call, response, nullptr);
+  fl_value_unref(self->pending_links);
+  self->pending_links = fl_value_new_list();
+}
 
 // Called when first Flutter frame received.
 static void first_frame_cb(MyApplication* self, FlView* view) {
@@ -175,6 +194,8 @@ static gboolean is_tiling_session() {
 // Implements GApplication::activate.
 static void my_application_activate(GApplication* application) {
   MyApplication* self = MY_APPLICATION(application);
+  GtkWindow* existing = gtk_application_get_active_window(GTK_APPLICATION(application));
+  if (existing != nullptr) { gtk_window_present(existing); return; }
 
   // Harness Desktop is dark-only. Left alone, GTK's header bar and chrome
   // follow whatever theme preference the desktop environment has configured;
@@ -261,8 +282,32 @@ static void my_application_activate(GApplication* application) {
 
   fl_register_plugins(FL_PLUGIN_REGISTRY(view));
   install_clipboard_image_channel(view);
+  g_autoptr(FlStandardMethodCodec) codec = fl_standard_method_codec_new();
+  self->community_channel = fl_method_channel_new(
+      fl_engine_get_binary_messenger(fl_view_get_engine(view)), "harness/community_links",
+      FL_METHOD_CODEC(codec));
+  fl_method_channel_set_method_call_handler(self->community_channel,
+      community_method_call_cb, self, nullptr);
 
   gtk_widget_grab_focus(GTK_WIDGET(view));
+}
+
+// GApplication forwards this to the primary instance over the session bus.
+static void my_application_open(GApplication* application, GFile** files,
+                                gint count, const gchar* hint) {
+  MyApplication* self = MY_APPLICATION(application);
+  for (gint i = 0; i < count; i++) {
+    g_autofree gchar* uri = g_file_get_uri(files[i]);
+    if (!g_str_has_prefix(uri, "harness://") || strlen(uri) > 240) continue;
+    if (self->links_ready && self->community_channel != nullptr) {
+      g_autoptr(FlValue) value = fl_value_new_string(uri);
+      fl_method_channel_invoke_method(self->community_channel, "open", value,
+                                     nullptr, nullptr, nullptr);
+    } else if (fl_value_get_length(self->pending_links) < 20) {
+      fl_value_append_take(self->pending_links, fl_value_new_string(uri));
+    }
+  }
+  g_application_activate(application);
 }
 
 // Implements GApplication::local_command_line.
@@ -280,7 +325,16 @@ static gboolean my_application_local_command_line(GApplication* application,
     return TRUE;
   }
 
-  g_application_activate(application);
+  gboolean opened = FALSE;
+  for (gchar** arg = *arguments + 1; *arg != nullptr; arg++) {
+    if (g_str_has_prefix(*arg, "harness://") && strlen(*arg) <= 240) {
+      g_autoptr(GFile) file = g_file_new_for_uri(*arg);
+      GFile* files[] = {file};
+      g_application_open(application, files, 1, "");
+      opened = TRUE;
+    }
+  }
+  if (!opened) g_application_activate(application);
   *exit_status = 0;
 
   return TRUE;
@@ -308,11 +362,14 @@ static void my_application_shutdown(GApplication* application) {
 static void my_application_dispose(GObject* object) {
   MyApplication* self = MY_APPLICATION(object);
   g_clear_pointer(&self->dart_entrypoint_arguments, g_strfreev);
+  g_clear_pointer(&self->pending_links, fl_value_unref);
+  g_clear_object(&self->community_channel);
   G_OBJECT_CLASS(my_application_parent_class)->dispose(object);
 }
 
 static void my_application_class_init(MyApplicationClass* klass) {
   G_APPLICATION_CLASS(klass)->activate = my_application_activate;
+  G_APPLICATION_CLASS(klass)->open = my_application_open;
   G_APPLICATION_CLASS(klass)->local_command_line =
       my_application_local_command_line;
   G_APPLICATION_CLASS(klass)->startup = my_application_startup;
@@ -320,7 +377,7 @@ static void my_application_class_init(MyApplicationClass* klass) {
   G_OBJECT_CLASS(klass)->dispose = my_application_dispose;
 }
 
-static void my_application_init(MyApplication* self) {}
+static void my_application_init(MyApplication* self) { self->pending_links = fl_value_new_list(); }
 
 MyApplication* my_application_new() {
   // Set the program name to the application ID, which helps various systems
@@ -331,5 +388,5 @@ MyApplication* my_application_new() {
 
   return MY_APPLICATION(g_object_new(my_application_get_type(),
                                      "application-id", APPLICATION_ID, "flags",
-                                     G_APPLICATION_NON_UNIQUE, nullptr));
+                                     G_APPLICATION_HANDLES_OPEN, nullptr));
 }

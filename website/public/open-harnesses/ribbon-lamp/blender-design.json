@@ -1,0 +1,70 @@
+{
+  "spec": 1,
+  "kind": "blender-parameters",
+  "title": "Light, shaped by you",
+  "entry": "scenes/hello.py",
+  "sources": [
+    "scenes",
+    "assets"
+  ],
+  "output": "out/model.glb",
+  "controls": [
+    {
+      "id": "height",
+      "type": "number",
+      "label": "Height",
+      "description": "",
+      "unit": "mm",
+      "default": 260,
+      "min": 180,
+      "max": 380,
+      "step": 5
+    },
+    {
+      "id": "diameter",
+      "type": "number",
+      "label": "Diameter",
+      "description": "",
+      "unit": "mm",
+      "default": 130,
+      "min": 90,
+      "max": 180,
+      "step": 5
+    },
+    {
+      "id": "ribs",
+      "type": "integer",
+      "label": "Ribbons",
+      "description": "",
+      "unit": "",
+      "default": 24,
+      "min": 12,
+      "max": 48,
+      "step": 1
+    },
+    {
+      "id": "twist",
+      "type": "number",
+      "label": "Twist",
+      "description": "",
+      "unit": "\u00b0",
+      "default": 35,
+      "min": -75,
+      "max": 75,
+      "step": 1
+    },
+    {
+      "id": "finish",
+      "type": "choice",
+      "label": "Finish",
+      "description": "",
+      "unit": "",
+      "default": "Ivory",
+      "options": [
+        "Ivory",
+        "Terracotta",
+        "Ocean"
+      ]
+    }
+  ]
+}

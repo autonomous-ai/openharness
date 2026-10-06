@@ -1,0 +1,590 @@
+{
+ "spec": "rdkit-molecule/1",
+ "name": "phenethyl-acetate",
+ "smiles": "CC(=O)OCCc1ccccc1",
+ "inchi": "InChI=1S/C10H12O2/c1-9(11)12-8-7-10-5-3-2-4-6-10/h2-6H,7-8H2,1H3",
+ "inchikey": "MDHYEMXUFSJLGV-UHFFFAOYSA-N",
+ "formula": "C10H12O2",
+ "sdf": "phenethyl-acetate.sdf",
+ "svg": "phenethyl-acetate.svg",
+ "properties": {
+  "formula": "C10H12O2",
+  "smiles": "CC(=O)OCCc1ccccc1",
+  "mw": 164.2,
+  "logp": 1.79,
+  "tpsa": 26.3,
+  "hbd": 0,
+  "hba": 2,
+  "rotatable_bonds": 3,
+  "rings": 1,
+  "heavy_atoms": 12,
+  "qed": 0.637,
+  "aromatic_rings": 1,
+  "formal_charge": 0,
+  "fsp3": 0.3,
+  "mr": 46.78,
+  "exact_mass": 164.0837,
+  "stereocenters": 0,
+  "unspecified_stereocenters": 0,
+  "lipinski_violations": 0,
+  "lipinski": [],
+  "veber_violations": 0,
+  "veber": []
+ },
+ "rules": {
+  "lipinski": {
+   "pass": true,
+   "violations": []
+  },
+  "veber": {
+   "pass": true,
+   "violations": []
+  }
+ },
+ "flags": [
+  {
+   "level": "good",
+   "text": "Passes Lipinski's rule of five (MW \u2264 500, cLogP \u2264 5, HBD \u2264 5, HBA \u2264 10)."
+  },
+  {
+   "level": "good",
+   "text": "Passes Veber (\u2264 10 rotatable bonds, TPSA \u2264 140 \u00c5\u00b2)."
+  },
+  {
+   "level": "good",
+   "text": "cLogP 1.79 sits in the 0\u20133 range most oral drugs occupy."
+  },
+  {
+   "level": "good",
+   "text": "TPSA 26.3 \u00c5\u00b2 is under 90 \u2014 compatible with brain penetration as well as oral absorption."
+  }
+ ],
+ "stereocentres": [],
+ "groups": [
+  {
+   "name": "Ester",
+   "atoms": [
+    1,
+    2,
+    3
+   ]
+  },
+  {
+   "name": "Benzene ring",
+   "atoms": [
+    6,
+    7,
+    8,
+    9,
+    10,
+    11
+   ]
+  }
+ ],
+ "alerts": [],
+ "atoms": [
+  {
+   "i": 0,
+   "el": "C",
+   "q": 0.0339,
+   "logp": 0.144,
+   "tpsa": 0,
+   "hyb": "sp3",
+   "arom": false,
+   "ring": false,
+   "fc": 0,
+   "h": 3,
+   "on": null,
+   "cip": null
+  },
+  {
+   "i": 1,
+   "el": "C",
+   "q": 0.3021,
+   "logp": -0.278,
+   "tpsa": 0,
+   "hyb": "sp2",
+   "arom": false,
+   "ring": false,
+   "fc": 0,
+   "h": 0,
+   "on": null,
+   "cip": null
+  },
+  {
+   "i": 2,
+   "el": "O",
+   "q": -0.2526,
+   "logp": -0.153,
+   "tpsa": 17.07,
+   "hyb": "sp2",
+   "arom": false,
+   "ring": false,
+   "fc": 0,
+   "h": 0,
+   "on": null,
+   "cip": null
+  },
+  {
+   "i": 3,
+   "el": "O",
+   "q": -0.4655,
+   "logp": -0.068,
+   "tpsa": 9.23,
+   "hyb": "sp2",
+   "arom": false,
+   "ring": false,
+   "fc": 0,
+   "h": 0,
+   "on": null,
+   "cip": null
+  },
+  {
+   "i": 4,
+   "el": "C",
+   "q": 0.0953,
+   "logp": -0.203,
+   "tpsa": 0,
+   "hyb": "sp3",
+   "arom": false,
+   "ring": false,
+   "fc": 0,
+   "h": 2,
+   "on": null,
+   "cip": null
+  },
+  {
+   "i": 5,
+   "el": "C",
+   "q": 0.0067,
+   "logp": -0.052,
+   "tpsa": 0,
+   "hyb": "sp3",
+   "arom": false,
+   "ring": false,
+   "fc": 0,
+   "h": 2,
+   "on": null,
+   "cip": null
+  },
+  {
+   "i": 6,
+   "el": "C",
+   "q": -0.0446,
+   "logp": 0.136,
+   "tpsa": 0,
+   "hyb": "sp2",
+   "arom": true,
+   "ring": true,
+   "fc": 0,
+   "h": 0,
+   "on": null,
+   "cip": null
+  },
+  {
+   "i": 7,
+   "el": "C",
+   "q": -0.0589,
+   "logp": 0.158,
+   "tpsa": 0,
+   "hyb": "sp2",
+   "arom": true,
+   "ring": true,
+   "fc": 0,
+   "h": 1,
+   "on": null,
+   "cip": null
+  },
+  {
+   "i": 8,
+   "el": "C",
+   "q": -0.062,
+   "logp": 0.158,
+   "tpsa": 0,
+   "hyb": "sp2",
+   "arom": true,
+   "ring": true,
+   "fc": 0,
+   "h": 1,
+   "on": null,
+   "cip": null
+  },
+  {
+   "i": 9,
+   "el": "C",
+   "q": -0.0622,
+   "logp": 0.158,
+   "tpsa": 0,
+   "hyb": "sp2",
+   "arom": true,
+   "ring": true,
+   "fc": 0,
+   "h": 1,
+   "on": null,
+   "cip": null
+  },
+  {
+   "i": 10,
+   "el": "C",
+   "q": -0.062,
+   "logp": 0.158,
+   "tpsa": 0,
+   "hyb": "sp2",
+   "arom": true,
+   "ring": true,
+   "fc": 0,
+   "h": 1,
+   "on": null,
+   "cip": null
+  },
+  {
+   "i": 11,
+   "el": "C",
+   "q": -0.0589,
+   "logp": 0.158,
+   "tpsa": 0,
+   "hyb": "sp2",
+   "arom": true,
+   "ring": true,
+   "fc": 0,
+   "h": 1,
+   "on": null,
+   "cip": null
+  },
+  {
+   "i": 12,
+   "el": "H",
+   "q": 0.0349,
+   "logp": 0.123,
+   "tpsa": 0,
+   "hyb": null,
+   "arom": false,
+   "ring": false,
+   "fc": 0,
+   "h": 0,
+   "on": 0,
+   "cip": null
+  },
+  {
+   "i": 13,
+   "el": "H",
+   "q": 0.0349,
+   "logp": 0.123,
+   "tpsa": 0,
+   "hyb": null,
+   "arom": false,
+   "ring": false,
+   "fc": 0,
+   "h": 0,
+   "on": 0,
+   "cip": null
+  },
+  {
+   "i": 14,
+   "el": "H",
+   "q": 0.0349,
+   "logp": 0.123,
+   "tpsa": 0,
+   "hyb": null,
+   "arom": false,
+   "ring": false,
+   "fc": 0,
+   "h": 0,
+   "on": 0,
+   "cip": null
+  },
+  {
+   "i": 15,
+   "el": "H",
+   "q": 0.071,
+   "logp": 0.123,
+   "tpsa": 0,
+   "hyb": null,
+   "arom": false,
+   "ring": false,
+   "fc": 0,
+   "h": 0,
+   "on": 4,
+   "cip": null
+  },
+  {
+   "i": 16,
+   "el": "H",
+   "q": 0.071,
+   "logp": 0.123,
+   "tpsa": 0,
+   "hyb": null,
+   "arom": false,
+   "ring": false,
+   "fc": 0,
+   "h": 0,
+   "on": 4,
+   "cip": null
+  },
+  {
+   "i": 17,
+   "el": "H",
+   "q": 0.0351,
+   "logp": 0.123,
+   "tpsa": 0,
+   "hyb": null,
+   "arom": false,
+   "ring": false,
+   "fc": 0,
+   "h": 0,
+   "on": 5,
+   "cip": null
+  },
+  {
+   "i": 18,
+   "el": "H",
+   "q": 0.0351,
+   "logp": 0.123,
+   "tpsa": 0,
+   "hyb": null,
+   "arom": false,
+   "ring": false,
+   "fc": 0,
+   "h": 0,
+   "on": 5,
+   "cip": null
+  },
+  {
+   "i": 19,
+   "el": "H",
+   "q": 0.0626,
+   "logp": 0.123,
+   "tpsa": 0,
+   "hyb": null,
+   "arom": false,
+   "ring": false,
+   "fc": 0,
+   "h": 0,
+   "on": 7,
+   "cip": null
+  },
+  {
+   "i": 20,
+   "el": "H",
+   "q": 0.0623,
+   "logp": 0.123,
+   "tpsa": 0,
+   "hyb": null,
+   "arom": false,
+   "ring": false,
+   "fc": 0,
+   "h": 0,
+   "on": 8,
+   "cip": null
+  },
+  {
+   "i": 21,
+   "el": "H",
+   "q": 0.0623,
+   "logp": 0.123,
+   "tpsa": 0,
+   "hyb": null,
+   "arom": false,
+   "ring": false,
+   "fc": 0,
+   "h": 0,
+   "on": 9,
+   "cip": null
+  },
+  {
+   "i": 22,
+   "el": "H",
+   "q": 0.0623,
+   "logp": 0.123,
+   "tpsa": 0,
+   "hyb": null,
+   "arom": false,
+   "ring": false,
+   "fc": 0,
+   "h": 0,
+   "on": 10,
+   "cip": null
+  },
+  {
+   "i": 23,
+   "el": "H",
+   "q": 0.0626,
+   "logp": 0.123,
+   "tpsa": 0,
+   "hyb": null,
+   "arom": false,
+   "ring": false,
+   "fc": 0,
+   "h": 0,
+   "on": 11,
+   "cip": null
+  }
+ ],
+ "depiction": {
+  "width": 217,
+  "height": 80,
+  "aligned_to_parent": false,
+  "atoms": [
+   [
+    0,
+    13.1,
+    68.1,
+    -3.3893,
+    -0.7205
+   ],
+   [
+    1,
+    40.2,
+    52.3,
+    -2.5251,
+    -0.2173
+   ],
+   [
+    2,
+    40.0,
+    21.0,
+    -2.5287,
+    0.7827
+   ],
+   [
+    3,
+    67.3,
+    67.9,
+    -1.6573,
+    -0.7144
+   ],
+   [
+    4,
+    94.4,
+    52.1,
+    -0.7931,
+    -0.2111
+   ],
+   [
+    5,
+    121.6,
+    67.7,
+    0.0747,
+    -0.7082
+   ],
+   [
+    6,
+    148.7,
+    51.9,
+    0.9389,
+    -0.205
+   ],
+   [
+    7,
+    175.9,
+    67.5,
+    1.8067,
+    -0.7019
+   ],
+   [
+    8,
+    203.0,
+    51.7,
+    2.6709,
+    -0.1988
+   ],
+   [
+    9,
+    202.9,
+    20.4,
+    2.6675,
+    0.8012
+   ],
+   [
+    10,
+    175.7,
+    4.8,
+    1.7995,
+    1.2982
+   ],
+   [
+    11,
+    148.6,
+    20.6,
+    0.9355,
+    0.795
+   ]
+  ],
+  "bonds": [
+   [
+    0,
+    1
+   ],
+   [
+    1,
+    2
+   ],
+   [
+    1,
+    3
+   ],
+   [
+    3,
+    4
+   ],
+   [
+    4,
+    5
+   ],
+   [
+    5,
+    6
+   ],
+   [
+    6,
+    7
+   ],
+   [
+    7,
+    8
+   ],
+   [
+    8,
+    9
+   ],
+   [
+    9,
+    10
+   ],
+   [
+    10,
+    11
+   ],
+   [
+    11,
+    6
+   ]
+  ]
+ },
+ "conformers": {
+  "count": 7,
+  "forcefield": "MMFF94",
+  "energies": [
+   15.278,
+   15.278,
+   15.282,
+   15.282,
+   15.332,
+   15.332,
+   15.758
+  ],
+  "delta": [
+   0.0,
+   0.0,
+   0.004,
+   0.004,
+   0.054,
+   0.054,
+   0.48
+  ],
+  "file": "phenethyl-acetate.conformers.sdf"
+ },
+ "parent": null,
+ "updatedAt": "2026-10-05T08:55:27Z",
+ "sdfSha1": "e23f41af8d62e3df0211905bae576988ca57b976"
+}
