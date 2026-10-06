@@ -36,10 +36,10 @@ it('lists the stopped conversation before the native engine is launched', async 
 
 it('dispatches resume and preserves the creation receipt across fixture handler changes', async () => {
   const creationId = randomUUID()
-  expect(await rpc('agent_resume', { agentId: 'saved', creationId })).toMatchObject({ state: 'failed', error: 'FIXTURE_REFUSED' })
+  expect(await rpc('agent_resume', { agentId: 'saved', creationId })).toMatchObject({ state: 'failed', failure: { code: 'FIXTURE_REFUSED' } })
   const next = vi.fn(async () => ({ ok: false as const, error: 'SECOND_FIXTURE_REFUSAL' }))
   requests.resume = next
-  expect(await rpc('agent_create_status', { creationId })).toMatchObject({ state: 'failed', error: 'FIXTURE_REFUSED' })
+  expect(await rpc('agent_create_status', { creationId })).toMatchObject({ state: 'failed', failure: { code: 'FIXTURE_REFUSED' } })
   expect(await rpc('agent_resume', { agentId: 'saved', permissionMode: 'auto' })).toMatchObject({ error: 'SECOND_FIXTURE_REFUSAL' })
   expect(next).toHaveBeenCalledExactlyOnceWith('saved', 'auto')
 })
