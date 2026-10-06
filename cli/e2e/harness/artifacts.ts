@@ -36,6 +36,11 @@ function fileFolder(path = expect.getState().testPath): string | null {
 
 let current: string | null = null
 
+/** Whether this run keeps artifacts at all: callers skip work whose only use is an artifact. */
+export function artifactsEnabled(): boolean {
+  return ROOT !== null
+}
+
 /** Append [text] to `<the running test's folder>/<name>`. A no-op unless E2E_ARTIFACTS_DIR is set. */
 export function artifactLog(name: string, text: string): void {
   const folder = current ?? (fileFolder() && join(fileFolder()!, 'outside-tests'))

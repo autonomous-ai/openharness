@@ -18,7 +18,7 @@ import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
 import { isolatedTmux, type IsolatedTmux } from '../../src/testing/isolatedTmux.js'
-import { artifactLog } from './artifacts.js'
+import { artifactLog, artifactsEnabled } from './artifacts.js'
 
 const exec = promisify(execFile)
 const here = dirname(fileURLToPath(import.meta.url))
@@ -385,8 +385,28 @@ export class IsolatedDaemon {
     return readFileSync(join(this.dataDir, 'hook-credential'), 'utf8').trim()
   }
 
+  /**
+   * What every pane on this daemon's tmux server shows, for a failing test's artifacts: its command, how
+   * it started, and its screen with some history. A pane is the one thing the daemon's log cannot say:
+   * the suite's first Linux run failed on a setup menu zsh drew in every agent's pane, and the logs said
+   * only that no engine ever appeared.
+   */
+  private async keepPanes(): Promise<void> {
+    try {
+      const panes = await this.tmux.run('list-panes', '-a', '-F', '#{pane_id}\t#{session_name}\t#{pane_dead}\t#{pane_current_command}\t#{pane_start_command}')
+      let text = ''
+      for (const line of panes.split('\n').filter(Boolean)) {
+        const screen = await this.tmux.run('capture-pane', '-p', '-J', '-S', '-200', '-t', line.split('\t')[0]).catch((error) => String(error))
+        text += `==== ${line}\n${screen}\n`
+      }
+      artifactLog(`daemon-${this.port}-panes.txt`, text)
+    } catch { /* no server any more: nothing on screen to keep */ }
+  }
+
   async close(): Promise<void> {
     const core = this.options.noMaster ? null : this.corePid()
+    // While the panes are still there: a daemon that stops can take its agents' panes with it.
+    if (artifactsEnabled()) await this.keepPanes()
     await this.stop().catch(() => {})
     // Once the daemon has said all it will, and before the root (and the engines' hook log) is removed.
     let escaped: unknown = null
