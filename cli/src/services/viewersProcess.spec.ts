@@ -70,6 +70,7 @@ describe('the viewers in their own process', () => {
     options.onEvent!({ kind: 'attach', session: agent() })
     expect(viewers.port.attach).toHaveBeenCalledWith(agent())
     expect(api.agents.byAgent('a1')).toEqual(agent())
+    expect(api.agents.resolve('a1')).toEqual(agent())
     expect(core.told()).toEqual([{ agentId: 'a1', context: viewers.contexts.get('a1'), forwardingUrl: null }])
     options.onEvent!({ kind: 'detach', agentId: 'a1' })
     expect(viewers.port.detach).toHaveBeenCalledWith('a1')

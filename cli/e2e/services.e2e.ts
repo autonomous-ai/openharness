@@ -116,10 +116,10 @@ describe('a failing service never takes the core down', () => {
   })
 
   it('with every service in the core failing to start, the core starts, runs an agent through turns and a restart, and says each service is off', async () => {
-    daemon = await IsolatedDaemon.create({ env: { HARNESSD_TEST_FAULTS: 'search,viewers,models,workspaces,store', ...IN_THE_CORE } })
+    daemon = await IsolatedDaemon.create({ env: { HARNESSD_TEST_FAULTS: 'search,viewers,models,workspaces,store,usage,monitor,projects', ...IN_THE_CORE } })
     onTestFailed(() => { console.log(`---- daemon log\n${daemon?.log().split('\n').slice(-80).join('\n')}`) })
     await daemon.start()
-    for (const service of ['search', 'viewers', 'models', 'workspaces', 'store']) {
+    for (const service of ['search', 'viewers', 'models', 'workspaces', 'store', 'usage', 'monitor', 'projects']) {
       expect(daemon.log()).toContain(`[services] ${service} did not start · injected fault: ${service} · the core runs without it`)
     }
     const client = await LocalClient.connect(daemon)
@@ -130,9 +130,20 @@ describe('a failing service never takes the core down', () => {
     for (const type of ['dsh_list', 'dsh_install', 'dsh_update', 'dsh_remove']) {
       expect(await client.request(type, { id: 'acme/thing' }), type).toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'store', retryable: false })
     }
-    for (const type of ['grid_models_list', 'models_list', 'grid_fleet_models_list', 'grid_fleet_model_download', 'grid_fleet_model_start', 'grid_fleet_model_stop']) {
+    for (const type of ['grid_models_list', 'models_list', 'grid_fleet_models_list', 'grid_fleet_model_download', 'grid_fleet_model_start', 'grid_fleet_model_stop',
+      'api_connections', 'codex_profiles_list', 'codex_profile_link']) {
       expect(await client.request(type, { modelId: 'org/Model-GGUF' }), type).toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'models', retryable: false })
     }
+    // The services that came out of the socket's switch (docs/design/2026-10-06-core-boundary-next.md, step 4).
+    // usage_read is asked only here, with its service off: on, it reads the vendors' credentials.
+    expect(await client.request('usage_read', {})).toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'usage', retryable: false })
+    expect(await client.request('machine_resources', {})).toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'monitor', retryable: false })
+    for (const type of ['git_pull_request', 'git_project_info', 'project_preview', 'fs_list_dir', 'agent_read_file']) {
+      expect(await client.request(type, { agentId, path: daemon.projectsDir }), type).toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'projects', retryable: false })
+    }
+    // With the monitor off, the Monitor's list is still the list: its rows, without readings.
+    const monitored = (await client.request('agents_list', { monitor: true })).agents.find((agent: Record<string, any>) => agent.id === agentId)
+    expect(monitored.monitor).toMatchObject({ rssBytes: null, cpu: null, processes: [] })
     // The Model Manager's grid commands are still the socket's, and so is their handshake: models being
     // off does not tell the Grid harness to update Harness.
     expect(await client.request('grid_fleet_capabilities', {})).toMatchObject({ protocol: 1, thinkingControl: true })
@@ -221,6 +232,27 @@ describe('a failing service never takes the core down', () => {
     expect(await client.request('dsh_install', { url: 'https://example.com/\n' })).toMatchObject({ error: 'INVALID_DSH' })
     const agentId = await boundAgent(daemon, client, 'store-failing')
     await turn(client, agentId, 'with the store failing')
+    expect(daemon.coresStarted()).toBe(1)
+    client.close()
+  })
+
+  it('the monitor\'s readings failing on every call leave the list its rows, then switch the monitor off; the core runs on', async () => {
+    daemon = await IsolatedDaemon.create({ env: { HARNESSD_TEST_FAULTS: 'monitor.resources,projects.fs_list_dir' } })
+    onTestFailed(() => { console.log(`---- daemon log\n${daemon?.log().split('\n').slice(-80).join('\n')}`) })
+    await daemon.start()
+    const client = await LocalClient.connect(daemon)
+    const agentId = await boundAgent(daemon, client, 'monitor-failing')
+    // Each failed sample is a row without readings, as a failed `ps` always was; five in a minute switch it off.
+    for (let i = 0; i < 6; i++) {
+      const listed = (await client.request('agents_list', { monitor: true })).agents.find((agent: Record<string, any>) => agent.id === agentId)
+      expect(listed.monitor).toMatchObject({ rssBytes: null, cpu: null, processes: [] })
+    }
+    expect(daemon.log()).toContain('[services] monitor switched off after 5 failures')
+    expect(await client.request('machine_resources', {})).toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'monitor' })
+    // One of the project readers failing leaves the others their own answers.
+    expect(await client.request('fs_list_dir', {})).toMatchObject({ error: 'SERVICE_FAILED', service: 'projects' })
+    expect(await client.request('project_preview', { path: '/no/such/folder' })).not.toHaveProperty('service')
+    await turn(client, agentId, 'with the monitor off')
     expect(daemon.coresStarted()).toBe(1)
     client.close()
   })

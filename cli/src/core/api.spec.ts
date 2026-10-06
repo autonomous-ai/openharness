@@ -1,17 +1,26 @@
 import { describe, expect, it, vi } from 'vitest'
 import { projectDisplayName, type RegisteredSession } from '../lib/registry.js'
-import { createCoreApi, emptyPorts, FLEET_FALLBACKS, TEAMS_FALLBACKS, type CoreApiDeps } from './api.js'
+import { createCoreApi, emptyPorts, FLEET_FALLBACKS, MONITOR_OFF, resolveAgent, TEAMS_FALLBACKS, type CoreApiDeps } from './api.js'
 import { FAIL } from './serviceHost.js'
 
 const row = (agentId: string) => ({ agentId, sessionId: `s-${agentId}`, engine: 'claude', cwd: '/work/app' }) as RegisteredSession
 
 describe('the core API services stand on', () => {
+  it('resolves an agent in a service\'s own copy as the registry does: by agent id, then session id', () => {
+    const agents = [{ ...row('a'), sessionId: '' }, row('b')]
+    expect(resolveAgent(agents, 'b')?.agentId).toBe('b')
+    expect(resolveAgent(agents, 's-b')?.agentId).toBe('b')
+    expect(resolveAgent(agents, '')).toBeUndefined()
+    expect(resolveAgent(agents, 'nobody')).toBeUndefined()
+  })
+
   it('lists every agent, live then stopped, and names them as the apps do', () => {
     const deps: CoreApiDeps = {
       dataDir: '/data',
       registry: {
         list: vi.fn(() => [row('live')]),
         byAgent: vi.fn((agentId: string) => (agentId === 'live' ? row('live') : undefined)),
+        resolve: vi.fn((id: string) => (id === 'live' || id === 's-live' ? row('live') : undefined)),
         advertised: vi.fn(() => [row('live')]),
         terminalAvailable: vi.fn((agentId: string) => agentId === 'live'),
       } as unknown as CoreApiDeps['registry'],
@@ -45,6 +54,8 @@ describe('the core API services stand on', () => {
     expect(core.external.open).toBe(deps.openSessions)
     expect(core.agents.byAgent('live')?.agentId).toBe('live')
     expect(core.agents.byAgent('gone')).toBeUndefined()
+    expect(core.agents.resolve('s-live')?.agentId).toBe('live')
+    expect(core.agents.resolve('gone')).toBeUndefined()
     expect(core.agents.terminalAvailable('live')).toBe(true)
     expect(core.agents.sync).toBe(deps.syncSession)
     expect(core.agents.runtimeModels).toBe(deps.runtimeModels)
@@ -86,7 +97,12 @@ describe('the core API services stand on', () => {
   })
 
   it('starts with every port empty: a service fills its own when it starts', () => {
-    expect(emptyPorts()).toEqual({ search: null, viewers: null, models: null, workspaces: null, teams: null, fleet: null })
+    expect(emptyPorts()).toEqual({ search: null, viewers: null, models: null, workspaces: null, teams: null, fleet: null, monitor: null })
     expect(emptyPorts()).not.toBe(emptyPorts())
+  })
+
+  it('answers the monitor\'s fallbacks while it is off: no readings, nothing measured to forget', async () => {
+    await expect(MONITOR_OFF.resources()).rejects.toThrow('the monitor service is unavailable')
+    expect(await MONITOR_OFF.storage([], true)).toEqual(new Map())
   })
 })

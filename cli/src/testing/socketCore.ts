@@ -19,6 +19,8 @@ import { createHistory } from '../core/transcripts/history.js'
 import { createTerminalRequests, type TerminalRequestDeps } from '../core/terminals/requests.js'
 import { createCancelRequest } from '../core/turns/cancel.js'
 import { AgentCreationReceipts } from '../lib/agentCreationReceipt.js'
+import { createHarnessResourcesReader } from '../lib/harnessResources.js'
+import { createHarnessStorageReader } from '../lib/harnessTelemetry.js'
 import { hermesDbForSession } from '../lib/hermesHome.js'
 import { registry } from '../lib/registry.js'
 import { stoppedAgents } from '../lib/stoppedAgents.js'
@@ -39,6 +41,18 @@ export function bindHistory(socket: BackendSocket): void {
   socket.sessionsProvider = history.sessionsList
 }
 
+const monitors = new WeakMap<BackendSocket, Pick<AgentListDeps, 'harnessResourcesReader' | 'harnessStorageReader'>>()
+/** The monitor's readers for a socket, one of each as the daemon's monitor service holds them
+ *  (services/monitor.ts): the list's readings and a purge's forgetting share them. */
+function monitorOf(socket: BackendSocket): Pick<AgentListDeps, 'harnessResourcesReader' | 'harnessStorageReader'> {
+  let monitor = monitors.get(socket)
+  if (!monitor) {
+    monitor = { harnessResourcesReader: createHarnessResourcesReader(() => registry.advertised()), harnessStorageReader: createHarnessStorageReader() }
+    monitors.set(socket, monitor)
+  }
+  return monitor
+}
+
 /** `agents_list` (core/agents/list.ts). The daemon knows each agent's activity; a bare socket does not,
  *  unless a spec says what it is. */
 export function bindAgentList(socket: BackendSocket, over: Partial<AgentListDeps> = {}): void {
@@ -47,8 +61,7 @@ export function bindAgentList(socket: BackendSocket, over: Partial<AgentListDeps
     stoppedAgents,
     toProject: (s) => socket.toProject(s),
     toStoppedProject: (s) => socket.toStoppedProject(s),
-    harnessResourcesReader: () => socket.harnessResourcesReader(),
-    harnessStorageReader: (agents, invalidate) => socket.harnessStorageReader(agents, invalidate),
+    ...monitorOf(socket),
     monitorActivityProvider: null,
     monitorCompletions: socket.monitorCompletions,
     ...over,
@@ -93,7 +106,7 @@ export function bindCloseRequests(socket: BackendSocket, cleanupPreview: () => P
 
 /** `agent_purge` and `agent_worktree_delete` (core/agents/lifecycle.ts), through the socket's own purge service. */
 export function bindPurgeRequest(socket: BackendSocket): void {
-  socket.purgeProvider = createPurgeRequest({ purgeAgentService: () => socket.purgeAgentService, invalidateStorage: () => { void socket.harnessStorageReader([], true) } })
+  socket.purgeProvider = createPurgeRequest({ purgeAgentService: () => socket.purgeAgentService, invalidateStorage: () => { void monitorOf(socket).harnessStorageReader([], true) } })
 }
 
 /** `agent_update` (core/agents/update.ts). A bare socket moves no agent to another model and titles no pane. */
