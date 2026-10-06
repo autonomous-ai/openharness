@@ -135,6 +135,22 @@ describe('binding a registered session to its agent', () => {
     expect(run.deps.syncRecapPool).not.toHaveBeenCalled()
   })
 
+  it('keeps the binding of an agent a stop or a restart owns: its pane reads as gone only because of it', async () => {
+    // The old engine's late SessionStart, registered as a stop or a restart ended that engine. Unbound,
+    // the stop gave up with its engine already signalled, and a queued restart found nothing to resume.
+    const run = setup({ attachSession: vi.fn(async () => false) })
+    const changing = vi.fn((agentId: string) => agentId === 'a1')
+    run.binding.whileChanging(changing)
+    const entry = agent()
+    await run.binding.handleRegistered(entry, meta())
+    expect(changing).toHaveBeenCalledWith('a1')
+    expect(run.deps.registry.unbindSession).not.toHaveBeenCalled()
+    expect(run.deps.announceSession).toHaveBeenCalledWith(entry)
+    // An agent nothing owns is unbound as before.
+    await run.binding.handleRegistered(agent({ agentId: 'a2', sessionId: 's2' }), meta())
+    expect(run.deps.registry.unbindSession).toHaveBeenCalledWith('s2')
+  })
+
   it('hands a rebound agent its name and recap, and lets the stale session go', async () => {
     const run = setup()
     await run.binding.handleRegistered(agent({ sessionId: 's2' }), meta({ rebound: 's1' }))

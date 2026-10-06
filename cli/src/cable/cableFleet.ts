@@ -27,6 +27,16 @@ export interface CableFleetOptions {
   watchEveryMs?: number
 }
 
+/**
+ * Discovery for the end-to-end suite's dial, a pseudo-terminal (e2e/harness/fakeDial.ts) named by
+ * `HARNESSD_TEST_DIAL_PORT`: it is not on the USB bus that discovery reads, and it is the only port then
+ * looked at. Nothing otherwise: a real daemon finds its dials on USB.
+ */
+export function testDialDiscovery(path: string | undefined): Pick<CableFleetOptions, 'discover'> {
+  if (!path) return {}
+  return { discover: async () => [{ path, vendorId: 0x303a, productId: 0x1001, serialNumber: 'E2E-DIAL' }] }
+}
+
 export class CableFleet {
   private entries = new Map<string, Entry>()
   private timer?: ReturnType<typeof setInterval>

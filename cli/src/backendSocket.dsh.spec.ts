@@ -6,6 +6,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { BackendSocket } from './backendSocket.js'
+import { bindLaunchRequests } from './testing/socketCore.js'
 import { env } from './config/env.js'
 import { emptyPorts } from './core/api.js'
 import { createServiceHost } from './core/serviceHost.js'
@@ -37,6 +38,7 @@ describe('the DSH requests on the local socket', () => {
     env.DSH_DIR = join(root, 'dsh')
     invalidateInstalledDsh()
     socket = new BackendSocket('token')
+    bindLaunchRequests(socket)
     frames = []
     socket.registerLocalClient('local:store', { sendFrame: (frame) => { frames.push(frame as (typeof frames)[number]); return true }, sendBinary: () => true })
     mutate = vi.fn(async () => ({ ok: true as const, id: 'acme/thing' }))

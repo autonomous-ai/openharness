@@ -205,7 +205,7 @@ is always deliberate. After that reboot, the same update request finishes any
 remaining hn/CLI release against the new OS base. Later background checks return
 to downloading only. See [update development](DEVELOPMENT.md#fast-hn-updates).
 
-Earlier previews retain their existing controls until this update is installed:
+Previews 5 through 11 retain their existing controls until this update is installed:
 **Super+u**, then **s**, then the account password. No new USB flash is needed.
 
 Preview 4 needs the matching bootstrap bundle from the

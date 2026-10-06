@@ -15,6 +15,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it, onTestFailed } from 'vitest'
 import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
+import { atVersion } from './harness/release.js'
 
 const FIRST = '41.0.1'
 const sha = (bytes: Buffer): string => createHash('sha256').update(bytes).digest('hex')
@@ -49,7 +50,7 @@ describe('a self-update under harnessd', () => {
     // The version is baked in at build time; the others are the same bytes with it swapped.
     expect(count(first, FIRST)).toBeGreaterThanOrEqual(2)
     const release = (version: string, crashesOnStart = false): void => {
-      let source = first.replaceAll(FIRST, version)
+      let source = atVersion(first, FIRST, version)
       // Passes the updater's canary (`cli.js version`), then dies on every start as a core.
       if (crashesOnStart) source = source.replace('\n', '\nif(process.argv[2]==="__run")process.exit(3);\n')
       const file = join(out, `cli-${version}.js`)

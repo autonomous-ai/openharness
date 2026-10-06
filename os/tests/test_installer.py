@@ -90,6 +90,62 @@ class DiskSafety(unittest.TestCase):
                 installer.validate_config(dict(good, **change))
 
 
+class PlatformSafety(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.sysfs = self.root / 'sys'
+        device = self.sysfs / 'bus/pci/devices/0000:03:00.0'
+        device.mkdir(parents=True)
+        (device / 'vendor').write_text('0x106b\n')
+        (device / 'device').write_text('0x1801\n')
+        (device / 'class').write_text('0x088000\n')
+
+    def test_t2_is_rejected_before_the_form_or_payload_read(self):
+        check = installer.require_install_platform
+        with patch.object(installer.os, 'geteuid', return_value=0), \
+             patch.object(installer, 'require_install_platform', side_effect=lambda: check(self.sysfs)), \
+             patch.object(installer, 'live_payload') as payload, \
+             patch.object(installer, 'interactive') as form, \
+             patch.object(installer, 'install') as install:
+            with self.assertRaisesRegex(ValueError, 'does not support Apple T2 Macs yet'):
+                installer.main(installer.argparse.Namespace(config=None))
+        payload.assert_not_called()
+        form.assert_not_called()
+        install.assert_not_called()
+
+    def test_backend_rejects_t2_before_target_inspection_or_disk_commands(self):
+        config = dict(username='me', hostname='harness', password='test-password', encrypt=True,
+                      disk='/dev/vda', confirm_erase='/dev/vda')
+        check = installer.require_install_platform
+        with patch.object(installer, 'require_install_platform', side_effect=lambda: check(self.sysfs)), \
+             patch.object(installer, 'selected_disk') as selected, \
+             patch.object(installer, 'preflight') as preflight, \
+             patch.object(installer, 'run') as commands:
+            with self.assertRaisesRegex(ValueError, 'does not support Apple T2 Macs yet'):
+                installer.install(config, self.root / 'payload.sfs', self.root / 'target')
+        selected.assert_not_called()
+        preflight.assert_not_called()
+        commands.assert_not_called()
+        self.assertFalse((self.root / 'target').exists())
+
+    def test_missing_sysfs_does_not_classify_an_ordinary_computer_as_t2(self):
+        installer.require_install_platform(self.root / 'missing-sysfs')
+
+
+class CpuNotice(unittest.TestCase):
+    def test_notice_is_only_for_a_known_missing_instruction(self):
+        hardware = installer.hardware_module()
+        for supported in [False, True, None]:
+            with self.subTest(supported=supported), \
+                 patch.object(installer, 'hardware_module', return_value=hardware), \
+                 patch.object(hardware, 'opencode_cpu_supported', return_value=supported):
+                self.assertEqual(installer.installation_notice(),
+                                 'This CPU cannot run bundled OpenCode (SSE4.2 required).'
+                                 if supported is False else '')
+
+
 class LivePayload(unittest.TestCase):
     def test_usb_ram_copy_and_mounted_media_are_both_supported(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -429,6 +485,7 @@ class InteractiveInstall(unittest.TestCase):
         context.enter_context(patch.object(installer.sys.stdin, 'isatty', return_value=True))
         context.enter_context(patch.object(self.output, 'isatty', return_value=True))
         self.install = context.enter_context(patch.object(installer, 'install'))
+        self.cpu_notice = context.enter_context(patch.object(installer, 'installation_notice', return_value=''))
         self.payload = context.enter_context(patch.object(installer, 'live_payload', return_value=Path('/test-live.sfs')))
         self.secret = 'test-password-123'
 
@@ -459,6 +516,32 @@ class InteractiveInstall(unittest.TestCase):
             self.assertTrue(any(row.startswith(f'{label:18}') for row in first.splitlines()))
         for frame in self.screen.frames:
             self.assertNotIn(self.secret, frame)
+            self.assertNotIn('SSE4.2', frame)
+
+    def test_cpu_notice_is_visible_before_install_without_an_extra_step(self):
+        self.cpu_notice.return_value = 'This CPU cannot run bundled OpenCode (SSE4.2 required).'
+        self.fill_passwords()
+        self.confirm()
+        installer.main()
+        self.assertIn(self.cpu_notice.return_value, self.screen.frames[0])
+        self.install.assert_called_once()
+        self.assertEqual(self.install.call_args.args[0]['password'], self.secret)
+        self.cpu_notice.assert_called_once()
+
+    def test_cpu_notice_wraps_above_fields_in_the_smallest_form(self):
+        self.screen.size = (18, 54)
+        self.cpu_notice.return_value = 'This CPU cannot run bundled OpenCode (SSE4.2 required).'
+        self.screen.keys.append('\x1b')
+        with self.assertRaises(KeyboardInterrupt):
+            installer.main()
+        first = self.screen.frames[0]
+        self.assertIn(self.cpu_notice.return_value, ' '.join(first.splitlines()))
+        for row, _, text, _ in self.screen.attributes:
+            if 'This CPU' in text or 'required).' in text:
+                self.assertLess(row, 4)
+        for label in ('Disk', 'Encryption', 'Password', 'Repeat password'):
+            self.assertIn(label, first)
+        self.install.assert_not_called()
 
     def test_short_password_is_accepted_but_empty_password_is_not(self):
         self.secret = 'a'

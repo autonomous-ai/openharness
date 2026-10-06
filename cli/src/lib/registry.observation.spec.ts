@@ -262,6 +262,41 @@ describe('unchanged discovery observations', () => {
     expect(readRows()[0].closePlan).toEqual(plan)
   })
 
+  // Each of these is another process's write this view has not read: a hook's, a second daemon's, a
+  // command's. CI's registry-observation contract lost the first one when a process was starved.
+  it('a cancellation from a view that never saw another process\'s close plan removes it', () => {
+    const [row] = readRows()
+    writeFileSync(file, JSON.stringify([{ ...row, closePlan: plan }], null, 2))
+    registry.setClosePlan(input.agentId, null)
+    expect(readRows()[0].closePlan).toBeUndefined()
+    expect(registry.byAgent(input.agentId)?.closePlan).toBeUndefined()
+  })
+
+  it('a close retried over another process\'s cancellation is written again', () => {
+    registry.setClosePlan(input.agentId, plan)
+    const [row] = readRows()
+    delete row.closePlan
+    writeFileSync(file, JSON.stringify([row], null, 2))
+    registry.setClosePlan(input.agentId, { ...plan })
+    expect(readRows()[0].closePlan).toEqual(plan)
+  })
+
+  it('a cancellation never brings back a row another process removed', () => {
+    writeFileSync(file, JSON.stringify([], null, 2))
+    registry.setClosePlan(input.agentId, null)
+    expect(readRows()).toEqual([])
+    expect(registry.byAgent(input.agentId)).toBeUndefined()
+  })
+
+  it('a cancellation whose save failed is not written by a later save', async () => {
+    const [row] = readRows()
+    writeFileSync(file, JSON.stringify([{ ...row, closePlan: plan }], null, 2))
+    vi.mocked(fsyncSync).mockImplementationOnce(() => { throw new Error('fixture disk failure') })
+    expect(() => registry.setClosePlan(input.agentId, null)).toThrow('fixture disk failure')
+    await observe()
+    expect(readRows()[0].closePlan).toEqual(plan)
+  })
+
   it('never acknowledges a close intent within an uncommitted transaction', async () => {
     await expect(registry.transaction(() => registry.setClosePlan(input.agentId, plan)))
       .rejects.toThrow('uncommitted registry transaction')

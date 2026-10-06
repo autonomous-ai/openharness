@@ -1,8 +1,9 @@
 import { createHash } from 'node:crypto'
 import type { RegisteredSession } from '../registry.js'
 import type { SessionInputDelivery } from '../sessionInput.js'
-import type { TerminalActionResult } from '../terminalTypes.js'
 import type { LiveEvent } from '../normalize.js'
+import { isMessageHold } from '../messageHold.js'
+import { enterWithheldReason, type TerminalActionResult } from '../terminalTypes.js'
 
 const NATIVE = new Set(['claude', 'codex'])
 const VERIFY_MS = 1500
@@ -192,9 +193,16 @@ export class AutonomousDeviceInput {
       const result = await this.deps.inject(session.agentId, item.content)
       if (this.states.get(id) !== state) return
       if (item.started) { this.finishWrite(id, state, item); return }
+      if (enterWithheldReason(result)) {
+        // Typed, its Enter not pressed: something opened before it, and the Enter is never pressed later.
+        state.pending = state.pending.filter(next => next !== item)
+        this.delivery(id, item, 'rejected', 'enter_withheld'); this.finishWrite(id, state, item); return
+      }
       if (rejected(result)) {
         state.pending = state.pending.filter(next => next !== item)
-        this.delivery(id, item, 'rejected', 'paste_failed'); this.finishWrite(id, state, item); return
+        // A dialog that opened between the look for one and the write: refused unwritten, and why.
+        const reason = typeof result !== 'boolean' && result.state === 'failed' && isMessageHold(result.reason) ? result.reason : 'paste_failed'
+        this.delivery(id, item, 'rejected', reason); this.finishWrite(id, state, item); return
       }
       item.retry = executed(result)
       this.status(id, item, 'submitted')
@@ -223,7 +231,13 @@ export class AutonomousDeviceInput {
       if (allowRetry && evidence === 'pending' && item.retry && item.retries < 2 && !state.userAction) {
         state.writing = true
         const session = this.deps.getSession(id)
-        if (!session || !await this.deps.validateRuntime(session)) { this.delivery(id, item, 'unknown', 'runtime_gone_post_paste'); return }
+        // The write is over either way: left active, it held every message behind it until a turn began
+        // or ended, and an agent that had gone, or could not be checked, never gave one.
+        if (!session || !await this.deps.validateRuntime(session)) {
+          this.delivery(id, item, 'unknown', 'runtime_gone_post_paste')
+          this.finishWrite(id, state, item)
+          return
+        }
         const blocked = await this.deps.isAwaitingUser?.(session)
         if (this.states.get(id) !== state || state.active !== item || item.started) return
         if (!blocked) {

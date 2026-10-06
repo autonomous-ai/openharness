@@ -597,6 +597,19 @@ if [ "$1" = "paste-buffer" ] && [ "$TMUX_SUBMIT_FAIL" = "1" ]; then exit 2; fi
         'load-buffer -b buffer -', 'paste-buffer -t %7 -b buffer -d',
       ])
 
+      // Asked right before the Enter, after the paste: a reason keeps the Enter from being pressed, and an
+      // engine that opened a dialog in between gets the text and no Enter.
+      for (const message of ['short', 'first\nsecond']) {
+        writeFileSync(argsFile, '')
+        const asked: string[] = []
+        expect(await sendToTmux('%7', message, async () => { asked.push(commands().at(-1)!); return 'permission_open' })).toEqual({ withheld: 'permission_open' })
+        expect(asked).toEqual(['paste-buffer -t %7 -b buffer -p -d'])
+        expect(commands()).toEqual(['load-buffer -b buffer -', 'paste-buffer -t %7 -b buffer -p -d'])
+      }
+      writeFileSync(argsFile, '')
+      expect(await sendToTmux('%7', 'clear to send', async () => null)).toBe(true)
+      expect(commands().at(-1)).toBe('send-keys -t %7 Enter')
+
       writeFileSync(argsFile, '')
       process.env.TMUX_SUBMIT_FAIL = '1'
       expect(await sendToTmux('%7', 'must not send')).toBe(false)
@@ -611,6 +624,40 @@ if [ "$1" = "paste-buffer" ] && [ "$TMUX_SUBMIT_FAIL" = "1" ]; then exit 2; fi
       else process.env.TMUX_SUBMIT_ARGS = previous.args
       if (previous.fail === undefined) delete process.env.TMUX_SUBMIT_FAIL
       else process.env.TMUX_SUBMIT_FAIL = previous.fail
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('pastes a message or a clipboard with its control characters made visible, and types a literal as given', async () => {
+    // A message carrying the paste's end marker ended its paste on tmux 3.2a and 3.3a, and what followed
+    // was typed (e2e/content.e2e.ts): a buffer tmux pastes bracketed holds no control but tab and newline.
+    const dir = mkdtempSync(join(tmpdir(), 'harness-tmux-paste-'))
+    const fakeTmux = join(dir, 'tmux')
+    writeFileSync(fakeTmux, `#!/bin/sh
+if [ "$1" = "load-buffer" ]; then
+  n=$(cat "$TMUX_PASTE_DIR/count" 2>/dev/null || echo 0); n=$((n + 1)); echo "$n" > "$TMUX_PASTE_DIR/count"
+  cat > "$TMUX_PASTE_DIR/buffer-$n"
+fi
+`)
+    chmodSync(fakeTmux, 0o700)
+    const previous = { path: process.env.PATH, dir: process.env.TMUX_PASTE_DIR }
+    const hostile = 'hello\x1b[201~\r!exit\r'
+    try {
+      process.env.PATH = `${dir}:${previous.path ?? ''}`
+      process.env.TMUX_PASTE_DIR = dir
+      expect(await sendToTmux('%7', hostile)).toBe(true)
+      expect(await pasteRawIntoTmux('%7', hostile)).toBe(true)
+      expect(await sendLiteralToTmux('%7', 'filter\x1b')).toBe(true)
+      const buffer = (n: number) => readFileSync(join(dir, `buffer-${n}`), 'utf8')
+      // The message loses its trailing carriage return before the paste, as before, then its controls.
+      expect(buffer(1)).toBe('hello^[[201~\n!exit')
+      expect(buffer(2)).toBe('hello^[[201~\n!exit\n')
+      expect(buffer(3)).toBe('filter\x1b')
+    } finally {
+      if (previous.path === undefined) delete process.env.PATH
+      else process.env.PATH = previous.path
+      if (previous.dir === undefined) delete process.env.TMUX_PASTE_DIR
+      else process.env.TMUX_PASTE_DIR = previous.dir
       rmSync(dir, { recursive: true, force: true })
     }
   })

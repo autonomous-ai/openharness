@@ -12,14 +12,15 @@
 import { AutonomousDeviceInput, type DeviceInputDeps } from '../lib/autonomous-device/input.js'
 import type { AutonomousDeviceService } from '../lib/autonomous-device/service.js'
 import type { CommandCodeNormalizer } from '../engines/commandcode/normalizer.js'
-import { parseEngineQuestionPane } from '../lib/askQuestion.js'
 import { deviceErrorText } from '../lib/deviceErrors.js'
 import { adaptSlashCommand } from '../lib/goalCommand.js'
 import { sid } from '../lib/log.js'
 import type { LiveEvent } from '../lib/normalize.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { SessionInputController, type SessionInputDelivery, type SessionInputDeps } from '../lib/sessionInput.js'
-import { terminalActionNotStarted } from '../lib/terminalTypes.js'
+import { messageHold, passingHold } from '../lib/messageHold.js'
+import { TERMINAL_LEASE_REFUSED, terminalActionNotStarted, type TerminalActionResult } from '../lib/terminalTypes.js'
+import { Id } from '../teams/model.js'
 import { teamWriteHold } from '../teams/preflight.js'
 import type { TerminalControl } from './terminals/control.js'
 
@@ -48,12 +49,60 @@ export interface InputDeps {
   emit: (sessionId: string, events: LiveEvent[]) => void
 }
 
+/**
+ * The one way a message reaches an agent's pane: a person's from the app or the phone (the relay hands
+ * the phone's over as the same `message` frame), the orchestrator's, a team's, and the Device's alike.
+ * The pane is read right before the paste, by the caller that holds the pane's write lock, and nothing
+ * is typed into a dialog, a menu or a view a message does not belong in (messageHold.ts): the reason
+ * comes back instead, with nothing written. `hold` adds a caller's own check of the same reading (a
+ * team's, which waits for a draft too). The pane is read again once the text is in, right before its
+ * Enter: a dialog opened in between (a long or multi-line paste waits up to 1.5 s for the engine to take
+ * it, mid-turn) keeps the Enter from being pressed, which would answer it, and the text waits in the
+ * composer, unsent (sessionInput.ts says so). A list of suggestions opened by the message itself is no
+ * reason. `submitTerminalAction` is called here and nowhere else in this file, and input.spec.ts keeps
+ * it so.
+ */
+export function messageWriter({ resolve, terminal: { captureTerminal, validateTerminal, submitTerminalAction } }: Pick<InputDeps, 'resolve' | 'terminal'>) {
+  return async (id: string, text: string, hold?: (session: RegisteredSession, capture: string | null) => string | null): Promise<TerminalActionResult> => {
+    const session = resolve(id)
+    if (!session) return terminalActionNotStarted('terminal agent is unavailable')
+    // The engine first, then its screen. A check of the engine can wait, seconds, for an answer: a probe
+    // a held event loop timed out, a restart still recording its new engine (TerminalBackendCoordinator
+    // validateRuntime). Read before that wait, the screen was judged as it was then, and a permission
+    // prompt opened meanwhile, or a new engine's first screen, took the paste and its Enter. An engine
+    // not there is refused as a lease is, which the caller asks again.
+    if (!await validateTerminal(session)) return terminalActionNotStarted(TERMINAL_LEASE_REFUSED)
+    const capture = await captureTerminal(id)
+    const reason = hold?.(session, capture) ?? messageHold(session.engine, capture)
+    if (reason) return terminalActionNotStarted(reason)
+    return submitTerminalAction(id, text, {
+      beforeEnter: async () => {
+        // A read that came back empty, or a composer caught between frames, is asked again for a moment
+        // (a re-attach can blank one capture): only what is on screen holds the Enter back, never a
+        // read that failed once. Still not read after that, it is held, as nothing says it is safe.
+        for (let tries = 1; ; tries++) {
+          const before = messageHold(session.engine, await captureTerminal(id))
+          if (before === 'popup_open') return null
+          if (!before || !passingHold(before) || tries >= ENTER_CHECK_TRIES) return before
+          await new Promise((settle) => setTimeout(settle, ENTER_CHECK_RETRY_MS))
+        }
+      },
+    })
+  }
+}
+
+/** How long the check before a message's Enter asks again after a read that says nothing: 3 s. */
+const ENTER_CHECK_TRIES = 12
+const ENTER_CHECK_RETRY_MS = 250
+
 /** What `SessionInputController` is given: every write takes the device's pane lock first. */
 export function sessionInputDeps(
-  { resolve, terminal, teams, device, clients, agentIdFor, commandcode, emit }: InputDeps,
+  deps: InputDeps,
   deviceInput: () => Pick<AutonomousDeviceInput, 'legacyWrite'>,
 ): SessionInputDeps {
-  const { captureTerminal, validateTerminal, submitTerminalAction, keyTerminalAction } = terminal
+  const { resolve, terminal, teams, device, clients, agentIdFor, commandcode, emit } = deps
+  const { captureTerminal, validateTerminal, keyTerminalAction } = terminal
+  const writeMessage = messageWriter(deps)
   return {
     beforeSubmit: (id, text, tabId, deliveryId) => teams.prepare(id, text, tabId, deliveryId),
     getSession: (id) => resolve(id),
@@ -66,13 +115,13 @@ export function sessionInputDeps(
       return teamWriteHold(session.engine, capture)
     },
     validateRuntime: validateTerminal,
-    inject: (id, text) => deviceInput().legacyWrite(id, () => submitTerminalAction(id, text)),
+    // Typed into the pane as it stands, a draft or a running turn included, under the pane's write lock.
+    inject: (id, text) => deviceInput().legacyWrite(id, () => writeMessage(id, text)),
+    // A team's turn waits for a ready composer, and for its delivery to still hold the pane.
     injectTeam: (id, text, deliveryId) => deviceInput().legacyWrite(id, async () => {
-      const session = resolve(id)
-      const reason = session ? teamWriteHold(session.engine, await captureTerminal(id)) : 'team_waiting_unavailable'
-      if (reason) return { state: 'failed', dispatch: 'not_started', reason }
-      if (!teams.canWrite(deliveryId)) return terminalActionNotStarted('team_waiting_control')
-      return submitTerminalAction(id, text)
+      if (!resolve(id)) return terminalActionNotStarted('team_waiting_unavailable')
+      return writeMessage(id, text, (session, capture) => teamWriteHold(session.engine, capture)
+        ?? (teams.canWrite(deliveryId) ? null : 'team_waiting_control'))
     }),
     sendKey: (id, key) => deviceInput().legacyWrite(id, () => keyTerminalAction(id, key)),
     capture: captureTerminal,
@@ -99,19 +148,22 @@ export function sessionInputDeps(
 
 /** What `AutonomousDeviceInput` is given: the terminal directly, and the controller for queued input. */
 export function deviceInputDeps(
-  { resolve, byAgent, terminal, device }: InputDeps,
+  deps: InputDeps,
   input: () => Pick<SessionInputController, 'acquireControl' | 'submit' | 'cancelDelivery'>,
 ): DeviceInputDeps {
-  const { captureTerminal, validateTerminal, submitTerminalAction, keyTerminalAction } = terminal
+  const { resolve, byAgent, terminal, device } = deps
+  const { captureTerminal, validateTerminal, keyTerminalAction } = terminal
   return {
     getSession: id => resolve(id),
     validateRuntime: validateTerminal,
-    inject: submitTerminalAction,
+    // The Device holds the pane's write lock itself while it writes.
+    inject: messageWriter(deps),
     sendKey: keyTerminalAction,
     capture: captureTerminal,
+    // Whatever a message is not typed into, the Device's waits for it to close, rather than be refused.
     isAwaitingUser: async session => {
       const pane = await captureTerminal(session.agentId)
-      return pane === null || parseEngineQuestionPane(session.engine, pane) !== null
+      return pane === null || messageHold(session.engine, pane) !== null
     },
     acquireControl: id => input().acquireControl(id, { forAnswer: true }),
     legacySubmit: (id, text, deliveryId) => input().submit(id, text, deliveryId),
@@ -156,7 +208,28 @@ export function createInput(deps: InputDeps) {
     console.log(`[msg] ${sid(sessionId)} recv · engine=${engine} · bytes=${Buffer.byteLength(adapted, 'utf8')}`)
     input.submit(record?.agentId ?? sessionId, adapted, deliveryId, tabId)
   }
-  return { input, deviceInput, acquireTerminalControl, submitAgent }
+  const messageRequest = createMessageRequest(submitAgent)
+  return { input, deviceInput, acquireTerminalControl, submitAgent, messageRequest }
+}
+
+/**
+ * Takes a `message` frame: text a person typed for an agent, into its pane, in the tab's scope when the
+ * frame names one. Nothing is answered: the transcript lines the text produces drive the turn back to
+ * every window (mirror-all), with no synthetic events here.
+ *
+ * Moved verbatim out of the socket's request switch (docs/design/2026-10-03-harnessd.md).
+ */
+export function createMessageRequest(submit: (id: string, content: string, deliveryId?: string, tabId?: string) => void) {
+  return (payload: Record<string, unknown>): void => {
+    const content = payload.content as string | undefined
+    const target = (payload.agentId as string | undefined) || (payload.sessionId as string | undefined)
+    if (!content || !target) return
+    // From the relay this is only reached sealed: text typed into an agent is never taken from the relay
+    // in the clear.
+    const tabId = Id.safeParse(payload.tabId)
+    if (tabId.success) submit(target, content, undefined, tabId.data)
+    else submit(target, content)
+  }
 }
 
 export type Input = ReturnType<typeof createInput>

@@ -27,7 +27,7 @@ import { inspectRuntimePane } from '../../lib/runtimeProfileController.js'
 import type { TerminalAgentReconciler } from '../../lib/terminalAgentReconciler.js'
 import { terminalRouteKey } from '../../lib/terminalRuntime.js'
 import type { TmuxRuntimeRef } from '../../lib/terminalTypes.js'
-import { clearPaneRemainOnExit } from '../../lib/tmux.js'
+import { clearPaneRemainOnExit, processArgs } from '../../lib/tmux.js'
 import type { TmuxBackend } from '../../lib/tmuxBackend.js'
 import { workspaceMissing } from '../../lib/workspaceCheck.js'
 import type { createLaunchHelpers } from './launch.js'
@@ -230,10 +230,11 @@ export function createAgentRetargeter({
         console.warn(`[grid] retarget ${sid(session.agentId)} failed · ${outcome.detail}`)
         return { ok: false, error: 'RESPAWN_FAILED', detail: outcome.detail }
       }
-      // Both are read from the one cached environment of the new pid, so this costs no extra `ps`.
+      // Both are read off the new pid: its cached environment, and for the grid its command line too.
       const [gateway, assignment] = await Promise.all([
         probeGatewayRuntime(outcome.processIdentity),
-        probeGridAssignment(outcome.processIdentity, session.engine, outcome.processIdentity.executable),
+        // Its command line, which carries a Codex or pi grid's address and model: never its executable.
+        processArgs(outcome.processIdentity).then((args) => probeGridAssignment(outcome.processIdentity, session.engine, args)),
       ])
       registry.updateProcessIdentity(session.agentId, outcome.processIdentity, gateway.kind, assignment)
       // The launch that just worked is the one a restart or a post-reboot restore must repeat — and

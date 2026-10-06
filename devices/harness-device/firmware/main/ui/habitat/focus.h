@@ -42,5 +42,9 @@ int ht_focus_engine_index(const char *engine);
  */
 uint32_t ht_focus_pet_next_ms(const ht_character_face_t *f, const char *recap);
 
-// True when the face plays the pet's working scene; the bell pill is raised clear of its lower-arc status.
+// True when the face plays the pet's working scene (ui_habitat.c then shows a dot at 12 o'clock, not the bell pill).
 bool ht_focus_scene_shown(const ht_character_face_t *f, const char *recap);
+// A notice that arrived while the working scene shows: how long the pet's alert scene plays (ms, 0 = this pet has
+// none or the face is held), and where its bubble ends on the glass (the dot flies up from there).
+uint32_t ht_focus_alert_ms(const ht_character_face_t *f, const char *recap);
+void ht_focus_alert_from(const ht_character_face_t *f, int *x, int *y);

@@ -13,6 +13,9 @@ on:
       - 'os/tests/arm_session*'
       - 'os/tests/test_arm_session.py'
       - 'os/tests/arm-session.lock.json'
+      - 'os/tools/fedora_payload.py'
+      - 'os/tools/build-fedora-package.py'
+      - 'os/packaging/fedora/**'
       - '.github/workflows/os-arm-session.yml'
 
 permissions:
@@ -53,13 +56,20 @@ jobs:
           make -C os check
       - name: Build the exact native Harness runtime
         run: bash os/tools/build-runtime.sh
+      - name: Build the Fedora session RPM with declared native inputs
+        run: |
+          image=$(python3 -c 'import json; print(json.load(open("os/tests/arm-session.lock.json"))["root_image"])')
+          docker run --rm --platform linux/arm64 --memory=4g --cpus=2 --pids-limit=1024 \
+            --mount "type=bind,source=$PWD,target=/source" --workdir /source "$image" \
+            bash -c 'manager=$(command -v dnf5 || command -v microdnf); "$manager" install -y --setopt=install_weak_deps=False --setopt=gpgcheck=True python3 git rpm-build && python3 os/tools/build-fedora-package.py --runtime os/work/runtime --runtime-source "$(git -c safe.directory=/source rev-parse HEAD)" --output os/work/fedora-package'
+          sudo chown -R "$USER:$(id -gn)" os/work/fedora-package
       - name: Prepare the fresh fixture or exercise the full graphical session
         env:
           PREPARE_ONLY: ${{ github.event_name == 'push' || inputs.prepare_only }}
         run: |
           args=()
           if [[ "$PREPARE_ONLY" == true ]]; then args+=(--prepare-only); fi
-          python3 os/tests/arm_session.py --runtime os/work/runtime \
+          python3 os/tests/arm_session.py --package os/work/fedora-package \
             --output os/test-results/arm-session "${args[@]}"
       - name: Retain graphical session evidence only
         if: always()
@@ -68,6 +78,7 @@ jobs:
           name: harness-arm-graphical-session
           path: |
             os/work/runtime/source.json
+            os/work/fedora-package/
             os/test-results/arm-session/receipt.json
             os/test-results/arm-session/host.log
             os/test-results/arm-session/packages.tsv

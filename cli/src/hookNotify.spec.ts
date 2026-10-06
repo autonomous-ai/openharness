@@ -6,6 +6,8 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { fileURLToPath } from 'url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { ENGINES } from './engines/types.js'
+import { HARNESS_OWNER_OPTION, HARNESS_SESSION_PREFIX, harnessPaneOwner, ownerCommand, paneOwnerFormat } from './lib/harnessSessionLabel.js'
 
 // Every case here spawns the real hook as a child process, and several spawn shell shims for tmux, ps
 // and sqlite3 on top of that. On a loaded machine — this file runs alongside 88 others — that chain
@@ -14,6 +16,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 vi.setConfig({ testTimeout: 30_000, hookTimeout: 30_000 })
 
 const HOOK = fileURLToPath(new URL('../hook/notify.mjs', import.meta.url))
+/** A preload that moves `Date` by the milliseconds in a file (e2e/harness/clockShift.mjs). */
+const CLOCK_SHIFT = fileURLToPath(new URL('../e2e/harness/clockShift.mjs', import.meta.url))
 const servers: ReturnType<typeof createServer>[] = []
 const netServers: ReturnType<typeof createNetServer>[] = []
 const tmpDirs: string[] = []
@@ -36,6 +40,9 @@ interface RunHookOpts {
   launcherId?: string | null
   /** Install deterministic tmux/ps fixtures so an offline fallback can prove process ownership. */
   processEngine?: 'claude' | 'codex' | 'cursor' | 'hermes' | 'devin' | 'commandcode' | 'grok'
+  /** The tmux session the pane is in, and the daemon tag on it (`@harness_daemon`). */
+  paneSession?: string
+  paneOwner?: string
   /** Override the fixture's ps `comm` and full argv to exercise install-root-independent matching. */
   processExecutable?: string
   processArgs?: string
@@ -74,8 +81,11 @@ function runHook(opts: RunHookOpts): Promise<string> {
       tmpDirs.push(binDir)
       const executable = opts.processExecutable ?? (opts.processEngine === 'cursor' ? 'agent' : opts.processEngine)
       const processArgs = opts.processArgs ?? executable
-      writeFileSync(join(binDir, 'tmux'), '#!/bin/sh\necho 7000\n', { mode: 0o755 })
       const shellQuote = (value: string) => "'" + value.replace(/'/g, "'\\''") + "'"
+      // The pane as tmux describes it: its root process, and the session and tag that say whose agent it
+      // is (a Harness session, untagged, unless the test says otherwise).
+      const paneFacts = `${opts.paneSession ?? 'harness-claude-1790000000000'}|${opts.paneOwner ?? ''}`
+      writeFileSync(join(binDir, 'tmux'), `#!/bin/sh\nprintf '%s\\n' ${shellQuote(`7000|${paneFacts}`)}\n`, { mode: 0o755 })
       writeFileSync(join(binDir, 'ps'), `#!/bin/sh\nprintf '%s\\n' '7000 1 zsh Mon Aug 10 10:00:00 2026 -zsh' ${shellQuote(`7001 7000 ${executable} Mon Aug 10 10:00:01 2026 ${processArgs}`)} '${process.pid} 7001 node Mon Aug 10 10:00:02 2026 hook-parent'\n`, { mode: 0o755 })
       if (opts.processEngine === 'cursor') {
         const target = join(binDir, 'cursor-agent-target')
@@ -308,6 +318,30 @@ describe('hook notify terminal scope', () => {
       '/api/hook/turn-stop',
     ])
     expect(() => readFileSync(join(dataDir, 'cursor-pending-tasks.json'), 'utf8')).toThrow()
+  })
+
+  it('keeps a Cursor session\'s tasks when its end was not answered in time', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'adapter-hook-cursor-late-'))
+    tmpDirs.push(dir)
+    const dataDir = join(dir, 'data')
+    const cursorHome = join(dir, 'cursor')
+    let slow = false
+    const server = createServer((req, res) => {
+      if (slow) { setTimeout(() => { try { res.end('{}') } catch { /* the hook has gone */ } }, 2_000).unref(); return }
+      req.resume()
+      req.on('end', () => res.end('{}'))
+    })
+    servers.push(server)
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()))
+    const address = server.address()
+    if (!address || typeof address === 'string') throw new Error('test server did not bind a TCP port')
+    const hook = (input: Record<string, unknown>) => runHook({ port: address.port, tmuxPane: '%21', engine: 'cursor', dataDir, cursorHome, input })
+    await hook({ hook_event_name: 'preToolUse', session_id: 'cursor-session', tool_name: 'Task', tool_use_id: 'call-1', tool_input: { description: 'Inspect', prompt: 'Read code' } })
+    const tasks = () => JSON.parse(readFileSync(join(dataDir, 'cursor-pending-tasks.json'), 'utf8')) as unknown[]
+    expect(tasks()).toHaveLength(1)
+    slow = true
+    await hook({ hook_event_name: 'sessionEnd', session_id: 'cursor-session', reason: 'logout' })
+    expect(tasks()).toHaveLength(1)
   })
 
   it('ignores Cursor background agents without leaking them into the registry', async () => {
@@ -713,6 +747,44 @@ describe('hook notify terminal scope', () => {
     expect(() => readFileSync(join(dataDir, 'registry.json'), 'utf-8')).toThrow()
   })
 
+  it('does not fall back when the daemon took the event but answers late, as a held daemon does', async () => {
+    // A daemon whose event loop is held, or one slow to answer a session-start: the request is in its
+    // socket and it handles it once it gets to it. A registry row written behind its back meanwhile was
+    // merged over the row the daemon kept, without its name, launch or close plan (e2e/stall.e2e.ts).
+    const dir = mkdtempSync(join(tmpdir(), 'adapter-hook-late-'))
+    tmpDirs.push(dir)
+    const claudeProjectsDir = join(dir, 'claude-projects')
+    const dataDir = join(dir, 'data')
+    const transcriptPath = join(claudeProjectsDir, 'demo', 'session-late.jsonl')
+    mkdirSync(join(claudeProjectsDir, 'demo'), { recursive: true })
+    mkdirSync(dataDir, { recursive: true })
+    chmodSync(dataDir, 0o755)
+    writeLegacyStateFile(join(dataDir, 'registry.json'), '[]')
+    writeFileSync(transcriptPath, '{}\n')
+    const received: string[] = []
+    // Takes every request and answers none of them in time.
+    const server = createServer((req, res) => {
+      received.push(req.url ?? '')
+      setTimeout(() => { try { res.end('{}') } catch { /* the hook has gone */ } }, 2_000).unref()
+    })
+    servers.push(server)
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()))
+    const address = server.address()
+    if (!address || typeof address === 'string') throw new Error('test server did not bind a TCP port')
+
+    await runHook({
+      port: address.port,
+      tmuxPane: '%7',
+      processEngine: 'claude',
+      dataDir,
+      claudeProjectsDir,
+      input: { hook_event_name: 'SessionStart', session_id: 'session-late', transcript_path: transcriptPath, cwd: '/tmp/demo' },
+    })
+
+    expect(received).toContain('/api/hook/session-start')
+    expect(JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf-8'))).toEqual([])
+  })
+
   it('does not write fallback registry entries outside tmux or outside the transcript root', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'adapter-hook-invalid-'))
     tmpDirs.push(dir)
@@ -792,6 +864,14 @@ describe('hook notify terminal scope', () => {
     expect(JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf-8'))).toEqual([{ sessionId: 'maybe-alive' }])
   })
 
+  /** What the daemon chose for an agent and keeps on its row, beyond what the process shows (registry.ts
+   *  `register()` carries every one): a hook while the daemon is down must not be the write that drops it. */
+  const CHOSEN = {
+    dsh: 'cad-designer', dshRuntime: '/tmp/dsh/cad-designer/1.2.0', agent: 'reviewer', permissionMode: 'plan',
+    subscriptionModel: 'opus', defaultName: 'Claude Code 3', gridWebSearch: true,
+    closePlan: { id: 'plan-1', requestedAt: 1_790_000_000_001, identity: 'claude\u0000agent-created', state: 'waiting' },
+  }
+
   it('carries what the daemon chose at launch through an offline re-register', async () => {
     // A hook arriving while the daemon is down rebuilds the row. The grid launch (key included), the
     // Codex profile, the bypass flag and the observed grid are not on the process or in the hook body
@@ -838,6 +918,7 @@ describe('hook notify terminal scope', () => {
       // When an app last opened it — every app's "last used" order reads this, so a hook that lands
       // while the daemon is down must not be the write that forgets it.
       lastOpenedAt: 1_790_000_000_000,
+      ...CHOSEN,
     }]))
 
     await runHook({
@@ -858,8 +939,209 @@ describe('hook notify terminal scope', () => {
       gridLaunch,
       bypassPermission: true,
       lastOpenedAt: 1_790_000_000_000,
+      ...CHOSEN,
     })
     expect(registry[0]).not.toHaveProperty('launch')
+
+    // A row whose launch was a resume only: as the daemon has it, a hook ends that launch.
+    const rows = JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf-8'))
+    rows[0] = { ...rows[0], resumeOnly: true, launch: { state: 'starting' } }
+    writeLegacyStateFile(join(dataDir, 'registry.json'), JSON.stringify(rows))
+    await runHook({
+      port: 9, tmuxPane: '%7', processEngine: 'claude', dataDir, claudeProjectsDir,
+      input: { hook_event_name: 'UserPromptSubmit', session_id: 'session-1', transcript_path: transcriptPath, cwd: '/tmp/demo', prompt: 'next' },
+    })
+    expect(JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf-8'))[0]).toMatchObject({ resumeOnly: true, launch: { state: 'ready' }, ...CHOSEN })
+  })
+
+  it('reads every engine the daemon can write a row for: its list is the daemon\'s', () => {
+    // The hook cannot import the daemon's list (it runs without the adapter's modules), so it keeps a copy,
+    // and a copy drifts: `terminal` was missing from it, and one terminal tile made the hook read the whole
+    // registry as damaged and register nothing while the daemon was down.
+    const source = readFileSync(HOOK, 'utf8')
+    const literal = /const REGISTRY_ENGINES = new Set\(\[([^\]]*)\]\)/.exec(source)?.[1]
+    expect(literal, 'REGISTRY_ENGINES in hook/notify.mjs').toBeDefined()
+    const listed = [...literal!.matchAll(/'([^']+)'/g)].map((match) => match[1])
+    expect([...listed].sort()).toEqual([...ENGINES].sort())
+    expect(new Set(listed).size).toBe(listed.length)
+  })
+
+  it('registers an agent offline beside a terminal tile, and leaves the tile as it was', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'adapter-hook-terminal-'))
+    tmpDirs.push(dir)
+    const claudeProjectsDir = join(dir, 'claude-projects')
+    const dataDir = join(dir, 'data')
+    const transcriptPath = join(claudeProjectsDir, 'demo', 'session-new.jsonl')
+    mkdirSync(join(claudeProjectsDir, 'demo'), { recursive: true })
+    mkdirSync(dataDir, { recursive: true })
+    chmodSync(dataDir, 0o755)
+    writeFileSync(transcriptPath, '{}\n')
+    // A terminal tile as the daemon saves one: no conversation and, until a scan sees its shell, no process.
+    const tile = {
+      schemaVersion: 2, active: true, defaultName: 'Terminal', agentId: 'agent-terminal', sessionId: '', boundAt: null,
+      engine: 'terminal', terminalHost: true, gateway: null, grid: null, codexHome: null, transcriptPath: null,
+      projectDir: 'demo', cwd: '/tmp/demo', runtimes: [{ backend: 'tmux', paneId: '%3' }], primaryRuntimeKey: 'tmux\u0000%3',
+      tmuxPane: '%3', source: null, title: null, model: null, cliVersion: null, processIdentity: null,
+      registeredAt: 1, touchedAt: 1, lastHookAt: 0, lastTranscriptAt: 1,
+    }
+    writeLegacyStateFile(join(dataDir, 'registry.json'), JSON.stringify([tile]))
+
+    await runHook({
+      port: 9, tmuxPane: '%7', processEngine: 'claude', dataDir, claudeProjectsDir,
+      input: { hook_event_name: 'SessionStart', session_id: 'session-new', transcript_path: transcriptPath, cwd: '/tmp/demo', source: 'startup' },
+    })
+
+    const rows = JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf-8'))
+    expect(rows).toHaveLength(2)
+    expect(rows[0]).toEqual(tile)
+    expect(rows[1]).toMatchObject({ engine: 'claude', sessionId: 'session-new', tmuxPane: '%7', processIdentity: { pid: 7001 } })
+  })
+
+  it('names a daemon\'s panes as the daemon does', () => {
+    const source = readFileSync(HOOK, 'utf8')
+    expect(/const HARNESS_OWNER_OPTION = '([^']+)'/.exec(source)?.[1]).toBe(HARNESS_OWNER_OPTION)
+    expect(/const HARNESS_SESSION_PREFIX = '([^']+)'/.exec(source)?.[1]).toBe(HARNESS_SESSION_PREFIX)
+    // The tag in a pane's start command, before tmux 3.0, read with the format the daemon reads it with.
+    const prefix = /const OWNER_COMMAND_PREFIX = '([^']+)'/.exec(source)?.[1]
+    expect(`${ownerCommand('0123456789abcdef', ['zsh']).slice(0, 2).join(' ')} zsh`.startsWith(`${prefix}0123456789abcdef`)).toBe(true)
+    const format = `#{?#{m:${prefix}*,#{pane_start_command}},#{=${prefix!.length + 16}:pane_start_command},`
+      + `#{?#{m:${HARNESS_SESSION_PREFIX}*,#{session_name}},#{${HARNESS_OWNER_OPTION}},}}`
+    expect(format).toBe(paneOwnerFormat(false))
+    // And the hook's own, read out of its source, are the daemon's: the old tmux one with the session check,
+    // and from 3.0 the pane's own option.
+    expect(source).toContain('#{?#{m:${HARNESS_SESSION_PREFIX}*,#{session_name}},#{${HARNESS_OWNER_OPTION}},}}')
+    expect(source).toContain('const PANE_OWNER_FORMAT = `#{${HARNESS_OWNER_OPTION}}`')
+    expect(paneOwnerFormat(true)).toBe(`#{${HARNESS_OWNER_OPTION}}`)
+  })
+
+  it('registers offline only a pane its daemon takes for an agent: never a session opened by hand or another daemon\'s', async () => {
+    // With the daemon up, the hook of an engine in such a pane is turned away (discovery reads only the
+    // daemon's own panes). Offline, the hook wrote a row for it anyway, and the daemon came back with an
+    // agent it would never have made, offline for good.
+    const dir = mkdtempSync(join(tmpdir(), 'adapter-hook-owned-'))
+    tmpDirs.push(dir)
+    const claudeProjectsDir = join(dir, 'claude-projects')
+    mkdirSync(join(claudeProjectsDir, 'demo'), { recursive: true })
+    const register = async (name: string, pane: { paneSession: string; paneOwner?: string }, rows?: unknown[]) => {
+      const dataDir = join(dir, name)
+      mkdirSync(dataDir, { recursive: true, mode: 0o700 })
+      if (rows) writeFileSync(join(dataDir, 'registry.json'), JSON.stringify(rows), { mode: 0o600 })
+      const transcriptPath = join(claudeProjectsDir, 'demo', `${name}.jsonl`)
+      writeFileSync(transcriptPath, '{}\n')
+      await runHook({
+        port: 9, tmuxPane: '%7', processEngine: 'claude', dataDir, claudeProjectsDir, ...pane,
+        input: { hook_event_name: 'SessionStart', session_id: name, transcript_path: transcriptPath, cwd: '/tmp/demo', source: 'startup' },
+      })
+      try { return (JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf8')) as Array<{ sessionId: string }>).map((row) => row.sessionId) } catch { return null }
+    }
+    expect(await register('by-hand', { paneSession: 'mine' })).toBeNull()
+    expect(await register('another-daemon', { paneSession: 'harness-claude-1790000000000', paneOwner: 'abcdef0123456789' })).toBeNull()
+    // Its own pane, wherever the person moved it, and an untagged one in a session Harness named.
+    expect(await register('moved', { paneSession: 'mine', paneOwner: harnessPaneOwner(join(dir, 'moved')) })).toEqual(['moved'])
+    expect(await register('untagged', { paneSession: 'harness-claude-1790000000000' })).toEqual(['untagged'])
+    // Before tmux 3.0 the tag rides in the pane's start command, cut to its prefix and the tag.
+    const startCommand = (dataDir: string) => ownerCommand(harnessPaneOwner(dataDir), []).join(' ')
+    expect(await register('old-tmux', { paneSession: 'mine', paneOwner: startCommand(join(dir, 'old-tmux')) })).toEqual(['old-tmux'])
+    expect(await register('old-tmux-other', { paneSession: 'harness-claude-1790000000000', paneOwner: startCommand(join(dir, 'elsewhere')) })).toBeNull()
+    // A session an older build named, only while the registry holds an agent on that pane.
+    expect(await register('legacy-new', { paneSession: 'claude-1790000000000' })).toBeNull()
+    const held = {
+      schemaVersion: 2, active: true, agentId: 'agent-legacy', sessionId: 'before', boundAt: 1, engine: 'claude',
+      gateway: null, grid: null, codexHome: null, transcriptPath: null, projectDir: 'demo', cwd: '/tmp/demo',
+      runtimes: [{ backend: 'tmux', paneId: '%7' }], primaryRuntimeKey: 'tmux\u0000%7', tmuxPane: '%7',
+      source: null, title: null, model: null, cliVersion: null,
+      processIdentity: { pid: 7001, executable: 'claude', startMarker: 'Mon Aug 10 10:00:01 2026' },
+      registeredAt: 1, touchedAt: 1, lastHookAt: 1, lastTranscriptAt: 1,
+    }
+    expect(await register('legacy-held', { paneSession: 'claude-1790000000000' }, [held])).toEqual(['legacy-held'])
+  })
+
+  it('takes an engine typed into a terminal tile for that tile, as the daemon does', async () => {
+    // The daemon adopts the tile (registry.adoptEngine): the same agent and name, now the engine's, and a
+    // terminal again when the engine exits. The hook dropped the tile's row for a new agent instead.
+    const dir = mkdtempSync(join(tmpdir(), 'adapter-hook-terminal-adopt-'))
+    tmpDirs.push(dir)
+    const claudeProjectsDir = join(dir, 'claude-projects')
+    const dataDir = join(dir, 'data')
+    const transcriptPath = join(claudeProjectsDir, 'demo', 'session-typed.jsonl')
+    mkdirSync(join(claudeProjectsDir, 'demo'), { recursive: true })
+    mkdirSync(dataDir, { recursive: true })
+    chmodSync(dataDir, 0o755)
+    writeFileSync(transcriptPath, '{}\n')
+    writeLegacyStateFile(join(dataDir, 'registry.json'), JSON.stringify([{
+      schemaVersion: 2, active: true, defaultName: 'Terminal 10-5 9:41', agentId: 'agent-terminal', sessionId: '', boundAt: null,
+      engine: 'terminal', gateway: null, grid: null, codexHome: null, transcriptPath: null,
+      projectDir: 'demo', cwd: '/tmp/demo', runtimes: [{ backend: 'tmux', paneId: '%7' }], primaryRuntimeKey: 'tmux\u0000%7',
+      tmuxPane: '%7', source: null, title: null, model: null, cliVersion: null,
+      processIdentity: { pid: 7000, executable: 'zsh', startMarker: 'Mon Aug 10 10:00:00 2026' },
+      registeredAt: 1, touchedAt: 1, lastHookAt: 0, lastTranscriptAt: 1,
+    }]))
+
+    await runHook({
+      port: 9, tmuxPane: '%7', processEngine: 'claude', dataDir, claudeProjectsDir,
+      input: { hook_event_name: 'SessionStart', session_id: 'session-typed', transcript_path: transcriptPath, cwd: '/tmp/demo', source: 'startup' },
+    })
+
+    const rows = JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf-8'))
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({
+      agentId: 'agent-terminal', defaultName: 'Terminal 10-5 9:41', engine: 'claude', terminalHost: true,
+      sessionId: 'session-typed', tmuxPane: '%7', processIdentity: { pid: 7001 },
+    })
+  })
+
+  it('keeps everything else the daemon kept on the row through an offline re-register, a new conversation included', async () => {
+    // The hook rebuilt the row from the fields it named, and the daemon, back, loaded that as its own:
+    // the agent came back under another name and relaunched out of the mode it was made in, its harness,
+    // named agent and close plan gone (e2e/hookclient.e2e.ts, the daemon down while a conversation began).
+    const dir = mkdtempSync(join(tmpdir(), 'adapter-hook-kept-'))
+    tmpDirs.push(dir)
+    const claudeProjectsDir = join(dir, 'claude-projects')
+    const dataDir = join(dir, 'data')
+    mkdirSync(join(claudeProjectsDir, 'demo'), { recursive: true })
+    mkdirSync(dataDir, { recursive: true })
+    chmodSync(dataDir, 0o755)
+    const transcript = (sessionId: string) => {
+      const path = join(claudeProjectsDir, 'demo', `${sessionId}.jsonl`)
+      writeFileSync(path, '{}\n')
+      return path
+    }
+    const kept = {
+      defaultName: 'release notes',
+      permissionMode: 'plan',
+      dsh: 'acme/reviewer',
+      dshRuntime: 'harness-runtime-1',
+      agent: 'reviewer',
+      terminalHost: true,
+      resumeOnly: true,
+      subscriptionModel: 'claude-opus-5-5',
+      gridWebSearch: 'on',
+      closePlan: { id: 'close-1', requestedAt: 1_790_000_000_000, identity: 'session-1', state: 'waiting' },
+      forkedFrom: { agentId: 'agent-source', name: 'source', sessionId: 'session-0' },
+    }
+    writeLegacyStateFile(join(dataDir, 'registry.json'), JSON.stringify([{
+      schemaVersion: 2, active: true, launch: { state: 'starting' }, agentId: 'agent-kept', sessionId: 'session-1', boundAt: 1,
+      engine: 'claude', gateway: null, grid: null, codexHome: null, transcriptPath: transcript('session-1'), projectDir: 'demo',
+      cwd: '/tmp/demo', runtimes: [{ backend: 'tmux', paneId: '%7' }], primaryRuntimeKey: 'tmux\u0000%7', tmuxPane: '%7',
+      source: null, title: null, model: null, cliVersion: null,
+      processIdentity: { pid: 7001, executable: 'claude', startMarker: 'Mon Aug 10 10:00:01 2026' },
+      registeredAt: 1, touchedAt: 1, lastHookAt: 1, lastTranscriptAt: 1,
+      ...kept,
+    }]))
+
+    for (const [event, sessionId, source] of [['UserPromptSubmit', 'session-1', undefined], ['SessionStart', 'session-2', 'clear']] as const) {
+      await runHook({
+        port: 9, tmuxPane: '%7', processEngine: 'claude', dataDir, claudeProjectsDir,
+        input: { hook_event_name: event, session_id: sessionId, transcript_path: transcript(sessionId), cwd: '/tmp/demo', ...(source ? { source } : {}) },
+      })
+      const rows = JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf-8'))
+      expect(rows).toHaveLength(1)
+      expect(rows[0]).toMatchObject({ agentId: 'agent-kept', sessionId, ...kept })
+      // A hook means the engine is up, whatever the launch was: over, as `register()` has it, which on a
+      // row that may only be resumed reads `ready`.
+      expect(rows[0].launch).toEqual({ state: 'ready' })
+      expect(rows[0].touchedAt).toBeGreaterThan(1)
+    }
   })
 
   it('an offline re-register of the session a row already holds keeps the row\'s folder', async () => {
@@ -929,6 +1211,46 @@ describe('hook notify terminal scope', () => {
     expect(JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf-8'))).toMatchObject([
       { sessionId: 'fresh', tmuxPane: '%12' },
     ])
+  })
+
+  it('does not take a step of the wall clock for a reboot, and keeps every other agent', async () => {
+    // A boot named by the moment it began moved with the clock, and a hook that fell back to the
+    // registry hours after a laptop slept, or after an NTP step, took it for a reboot and wrote a
+    // registry of its one agent (round 29).
+    const dir = mkdtempSync(join(tmpdir(), 'adapter-hook-clock-'))
+    tmpDirs.push(dir)
+    const claudeProjectsDir = join(dir, 'claude-projects')
+    const dataDir = join(dir, 'data')
+    mkdirSync(join(claudeProjectsDir, 'demo'), { recursive: true })
+    mkdirSync(dataDir, { recursive: true })
+    chmodSync(dataDir, 0o755)
+    const otherTranscript = join(claudeProjectsDir, 'demo', 'other.jsonl')
+    writeFileSync(otherTranscript, '{}\n')
+    writeLegacyStateFile(join(dataDir, 'registry.json'), JSON.stringify([{
+      schemaVersion: 2, active: true, agentId: 'agent-other', sessionId: 'other', boundAt: 1, engine: 'claude',
+      gateway: null, grid: null, codexHome: null, transcriptPath: otherTranscript, projectDir: 'demo', cwd: '/tmp/demo',
+      runtimes: [{ backend: 'tmux', paneId: '%1' }], primaryRuntimeKey: 'tmux\u0000%1', tmuxPane: '%1',
+      source: null, title: null, model: null, cliVersion: null,
+      processIdentity: { pid: 5001, executable: 'claude', startMarker: 'Mon Aug 10 09:00:00 2026' },
+      registeredAt: 1, updatedAt: 1, lastHookAt: 1, lastTranscriptAt: 1,
+    }]))
+    const register = (sessionId: string, env?: Record<string, string>) => {
+      const transcriptPath = join(claudeProjectsDir, 'demo', `${sessionId}.jsonl`)
+      writeFileSync(transcriptPath, '{}\n')
+      return runHook({
+        port: 9, tmuxPane: '%12', processEngine: 'claude', dataDir, claudeProjectsDir, env,
+        input: { hook_event_name: 'SessionStart', session_id: sessionId, transcript_path: transcriptPath },
+      })
+    }
+    // This boot's mark is written by the first offline write; then the clock moves three hours on, in
+    // the hook as in the engine that runs it.
+    await register('before')
+    expect(statSync(join(dataDir, 'registry-boot')).isFile()).toBe(true)
+    const shift = join(dir, 'shift')
+    writeFileSync(shift, String(3 * 3_600_000))
+    await register('after', { NODE_OPTIONS: `--import ${CLOCK_SHIFT}`, E2E_CLOCK_SHIFT_FILE: shift })
+    const rows = JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf-8')) as Array<{ sessionId: string }>
+    expect(rows.map((row) => row.sessionId).sort()).toEqual(['after', 'other'])
   })
 })
 

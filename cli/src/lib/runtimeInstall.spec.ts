@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -23,12 +23,12 @@ async function load() {
 
 /** A real gzipped tarball laid out the way every managed runtime ships — `<name>-<version>-<key>/bin/<name>`
  *  (nodejs.org's own shape, which tmux and grid copy) — with a runnable binary inside. */
-function buildArchive(version: string, key: string, name: string = 'node'): { bytes: Buffer; root: string } {
+function buildArchive(version: string, key: string, name: string = 'node', script: string = '#!/bin/sh\nexit 0\n'): { bytes: Buffer; root: string } {
   const archiveRoot = `${name}-${version}-${key}`
   const source = join(root, 'src', archiveRoot)
   rmSync(source, { recursive: true, force: true })
   mkdirSync(join(source, archiveRoot, 'bin'), { recursive: true })
-  writeFileSync(join(source, archiveRoot, 'bin', name), '#!/bin/sh\nexit 0\n', { mode: 0o755 })
+  writeFileSync(join(source, archiveRoot, 'bin', name), script, { mode: 0o755 })
   const archive = join(root, `${archiveRoot}.tar.gz`)
   execFileSync('/usr/bin/tar', ['-czf', archive, '-C', source, archiveRoot])
   return { bytes: readFileSync(archive), root: archiveRoot }
@@ -137,6 +137,53 @@ describe('ensureManagedRuntime', () => {
     expect(readdirSync(runtimeDir).filter((n) => n.startsWith('.node-staging-'))).toEqual([])
   })
 
+  it('keeps the event loop it shares with every session turning while a new runtime answers --version', async () => {
+    // The core asks this on every start and, for grid, every ten minutes while it runs. Asked
+    // synchronously, a slow first run — a onefile grid unpacking itself takes most of a minute —
+    // held up every client, heartbeat and transcript for as long as it took.
+    const key = currentPlatformKey()
+    const { bytes, root: archiveRoot } = buildArchive('v22.23.4', key, 'node', '#!/bin/sh\nsleep 1\nexit 0\n')
+    stubFetch(manifestFor('node', key, 'v22.23.4', bytes, archiveRoot), bytes)
+    const { ensureManagedRuntime } = await load()
+
+    let ticks = 0
+    const ticker = setInterval(() => { ticks += 1 }, 20)
+    try {
+      expect(await ensureManagedRuntime()).toBe(join(runtimeDir, `node-v22.23.4-${key}`, 'bin', 'node'))
+    } finally { clearInterval(ticker) }
+    // A second of --version is fifty ticks of 20 ms; held synchronously it is none.
+    expect(ticks).toBeGreaterThan(10)
+  })
+
+  it('keeps what it has when the archive does not unpack, and leaves no staging behind', async () => {
+    const key = currentPlatformKey()
+    const bytes = Buffer.from('not a gzipped tarball')
+    stubFetch(manifestFor('node', key, 'v22.23.5', bytes, `node-v22.23.5-${key}`), bytes)
+    const { ensureManagedRuntime } = await load()
+
+    expect(await ensureManagedRuntime()).toBeNull()
+    expect(existsSync(join(runtimeDir, 'current-node'))).toBe(false)
+    expect(readdirSync(runtimeDir).filter((n) => n.startsWith('.node-staging-'))).toEqual([])
+  })
+
+  it('downloads a runtime with no deadline, only a silence of five minutes: a slow link must be able to finish it', async () => {
+    // The bundle's own limits (a quarter of an hour in all) would cut a runtime of tens of MB off on a
+    // slow link, and every daemon runs on it (lib/selfUpdate.ts RUNTIME_DOWNLOAD_LIMITS).
+    const key = currentPlatformKey()
+    const { bytes, root: archiveRoot } = buildArchive('v22.23.3', key)
+    stubFetch({ node: { [key]: { version: 'v22.23.3', url: 'https://example.test/runtime/node.tar.gz', sha256: createHash('sha256').update(bytes).digest('hex'), size: bytes.length, archiveRoot } } }, bytes)
+    const limits: unknown[] = []
+    vi.doMock('./selfUpdate.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('./selfUpdate.js')>()
+      return { ...actual, downloadVerified: (ref: Parameters<typeof actual.downloadVerified>[0], given?: Parameters<typeof actual.downloadVerified>[1]) => { limits.push(given); return actual.downloadVerified(ref, given) } }
+    })
+    try {
+      const { ensureManagedRuntime } = await load()
+      expect(await ensureManagedRuntime()).toBe(join(runtimeDir, `node-v22.23.3-${key}`, 'bin', 'node'))
+      expect(limits).toEqual([{ idleMs: 300_000, deadlineMs: Number.POSITIVE_INFINITY }])
+    } finally { vi.doUnmock('./selfUpdate.js') }
+  })
+
   it('refuses an archive whose bytes do not match the manifest', async () => {
     const key = currentPlatformKey()
     const { bytes, root: archiveRoot } = buildArchive('v22.23.2', key)
@@ -197,6 +244,36 @@ describe('ensureManagedRuntime', () => {
  * that already has an older one. Everything else — the archive shape, the staging, the pointer —
  * is the runtime convention Node and tmux already use.
  */
+describe('finishesCleanly', () => {
+  it('says whether a child exits 0, without holding up the event loop while it runs', async () => {
+    const { finishesCleanly } = await import('./runtimeInstall.js')
+    let ticks = 0
+    const ticker = setInterval(() => { ticks += 1 }, 20)
+    try {
+      expect(await finishesCleanly('/bin/sh', ['-c', 'sleep 0.6; exit 0'], 10_000)).toBe(true)
+    } finally { clearInterval(ticker) }
+    expect(ticks).toBeGreaterThan(5)
+    expect(await finishesCleanly('/bin/sh', ['-c', 'exit 3'], 10_000)).toBe(false)
+    // Neither a missing executable nor one spawn refuses outright is an exception for its caller.
+    expect(await finishesCleanly(join(tmpdir(), 'no-such-runtime-binary'), [], 10_000)).toBe(false)
+    expect(await finishesCleanly('/bin/sh\0', [], 10_000)).toBe(false)
+  })
+
+  it('gives up on a child at its deadline, and SIGKILLs one that ignores the SIGTERM', async () => {
+    const { finishesCleanly } = await import('./runtimeInstall.js')
+    let started = performance.now()
+    // A child that exits 0 after its deadline is still a no: the deadline is the answer.
+    expect(await finishesCleanly('/bin/sh', ['-c', 'sleep 30'], 200)).toBe(false)
+    expect(performance.now() - started).toBeLessThan(10_000)
+    started = performance.now()
+    expect(await finishesCleanly('/bin/sh', ['-c', 'trap "" TERM; exec sleep 30'], 200)).toBe(false)
+    const took = performance.now() - started
+    // The SIGTERM is ignored; the SIGKILL two seconds on is not.
+    expect(took).toBeGreaterThan(2_000)
+    expect(took).toBeLessThan(15_000)
+  }, 30_000)
+})
+
 describe('ensureManagedGrid', () => {
   const key = currentPlatformKey()
 
@@ -312,6 +389,25 @@ describe('ensureManagedGrid', () => {
     expect(await ensureManagedGrid()).toBeNull()
     expect(fetchSpy).not.toHaveBeenCalled()
     expect(existsSync(join(runtimeDir, 'current-grid'))).toBe(false)
+  })
+
+  it('clears the staging a process that is gone left behind, and leaves a running one\'s', async () => {
+    // A core that exited mid-unpack (an update's handoff) left its staging, archive and partial tree.
+    const gone = spawnSync('/usr/bin/true').pid!
+    const left = join(runtimeDir, `.grid-staging-${gone}-1790000000000`)
+    const running = join(runtimeDir, `.grid-staging-${process.pid}-1790000000001`)
+    const other = join(runtimeDir, `.node-staging-${gone}-1790000000002`)
+    for (const dir of [left, running, other]) {
+      mkdirSync(join(dir, 'grid-0.3.47', 'bin'), { recursive: true })
+      writeFileSync(join(dir, 'grid.tar.gz'), 'partial')
+    }
+    stubFetch(null)
+    const { ensureManagedGrid } = await load()
+    await ensureManagedGrid()
+    expect(existsSync(left)).toBe(false)
+    expect(existsSync(running)).toBe(true)
+    // Each runtime sweeps its own.
+    expect(existsSync(other)).toBe(true)
   })
 
   it('keeps the grid it has when the manifest is unreachable, and has nothing when it has nothing', async () => {

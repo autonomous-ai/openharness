@@ -4,7 +4,7 @@ import type { DiscoveredTerminalAgent } from '../../lib/terminalAgentDiscovery.j
 import { bypassPermissionActive, permissionModeFromArgv, tmuxPaneState } from '../../lib/tmux.js'
 import { createDiscoveryHandlers, type DiscoveryDeps } from './discovery.js'
 
-vi.mock('../../lib/tmux.js', async (real) => ({ ...await real<object>(), tmuxPaneState: vi.fn(async () => null) }))
+vi.mock('../../lib/tmux.js', async (real) => ({ ...await real<object>(), tmuxPaneState: vi.fn(async () => 'gone') }))
 
 const row = (over: Partial<RegisteredSession> = {}): RegisteredSession =>
   ({ agentId: 'a1', sessionId: 's1', engine: 'claude', active: true, ...over }) as RegisteredSession
@@ -20,7 +20,7 @@ const seen = (over: Partial<DiscoveredTerminalAgent> = {}): DiscoveredTerminalAg
 
 function setup(over: Partial<DiscoveryDeps> = {}) {
   const rows = new Map<string, RegisteredSession>()
-  let restoreDegraded = false
+  let restoreDegraded: (agentId: string) => boolean = () => false
   const deps: DiscoveryDeps = {
     registry: {
       byRuntimeEngine: vi.fn(() => undefined),
@@ -53,10 +53,10 @@ function setup(over: Partial<DiscoveryDeps> = {}) {
     stopHeartbeat: vi.fn(),
     retainExitedSession: vi.fn(),
     stoppedAgents: { finishResume: vi.fn() },
-    restoreDegraded: () => restoreDegraded,
+    restoreDegraded: (agentId) => restoreDegraded(agentId),
     ...over,
   }
-  return { deps, rows, handlers: createDiscoveryHandlers(deps), degrade: () => { restoreDegraded = true } }
+  return { deps, rows, handlers: createDiscoveryHandlers(deps), degrade: (only?: string) => { restoreDegraded = (agentId) => only === undefined || agentId === only } }
 }
 
 const settle = () => new Promise((done) => setTimeout(done, 0))
@@ -65,7 +65,7 @@ const grid = (name: string) => ({ grid: name, baseUrl: `http://${name}.local`, m
 describe('discovery', () => {
   beforeEach(() => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
-    vi.mocked(tmuxPaneState).mockReset().mockResolvedValue(null)
+    vi.mocked(tmuxPaneState).mockReset().mockResolvedValue('gone')
   })
   afterEach(() => vi.restoreAllMocks())
 
@@ -233,7 +233,10 @@ describe('discovery', () => {
     it('holds a failed resume while its pane may still be about to launch the engine', async () => {
       const run = setup()
       const failed = row({ resumeOnly: true, tmuxPane: '%0', launch: { state: 'failed' } } as Partial<RegisteredSession>)
-      await run.handlers.onDormant(failed, 'x') // no pane state at all
+      await run.handlers.onDormant(failed, 'x') // the pane is gone: the reconciler's to remove
+      // tmux could not be asked, as when the daemon's event loop was held: no news either way.
+      vi.mocked(tmuxPaneState).mockResolvedValueOnce('unknown')
+      await run.handlers.onDormant(failed, 'x')
       vi.mocked(tmuxPaneState).mockResolvedValueOnce({ dead: false, engineExit: null } as never)
       await run.handlers.onDormant(failed, 'x') // a live shell, no engine exit
       expect(run.deps.retainExitedSession).not.toHaveBeenCalled()
@@ -254,6 +257,18 @@ describe('discovery', () => {
     expect(run.deps.forgetSession).toHaveBeenCalledTimes(1)
     expect(run.deps.registry.setActive).toHaveBeenCalledWith('a1', false)
     expect(run.deps.announceSession).toHaveBeenCalled()
+  })
+
+  it('keeps only the rows restore could not look at, and retires any other whose pane is gone', () => {
+    // One row restore could not survey (a `ps` that timed out at boot) used to stop every pane closed
+    // outside the app from being retired, for as long as the core ran.
+    const run = setup()
+    run.degrade('a2')
+    run.handlers.onRemoved(row(), 'pane gone')
+    expect(run.deps.forgetSession).toHaveBeenCalledWith('a1', { force: true })
+    run.handlers.onRemoved({ ...row(), agentId: 'a2' }, 'pane gone')
+    expect(run.deps.forgetSession).toHaveBeenCalledTimes(1)
+    expect(run.deps.registry.setActive).toHaveBeenCalledWith('a2', false)
   })
 
   it('records whether a row\'s terminal is available, announcing it when it becomes so', () => {

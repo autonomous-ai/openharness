@@ -125,6 +125,13 @@ def main():
                 'sudo -n cat /var/lib/harness-os/runtime-updates/*/receipt.json; '
                 'tail -n 100 /var/log/pacman.log; hn capture-pane -p -S -200 -t Updates; '
                 'cat ~/.local/state/harness-os/updates/*.json; hn list-windows -a; hn list-panes -a; '
+                'systemctl --user show hn-screen.service harness-apply-update.service '
+                '-p Id -p LoadState -p ActiveState -p SubState -p MainPID -p ExecMainStatus; '
+                'hn hn-list-clients -F "#{client_pid} #{session_id} #{client_tty}"; '
+                'for hn_update_pid in $(pgrep -u 1000 -x "hn|harness-tui|foot"); do '
+                'echo "client process $hn_update_pid"; '
+                'readlink /proc/$hn_update_pid/exe /proc/$hn_update_pid/fd/0; '
+                'cat /proc/$hn_update_pid/cgroup; done; '
                 'ps -u 1000 -o pid,ppid,args --width 200', timeout=30, check=False)
             (folder / 'update-diagnostics.log').write_text(output)
         except Exception:

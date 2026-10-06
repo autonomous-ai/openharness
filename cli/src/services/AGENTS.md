@@ -31,7 +31,8 @@ let several people build features at once without touching the core or each othe
 5. **Test it to 100%** with `fakeCore()` (`src/testing/fakeCore.ts`); `npm run test:core` covers this
    folder. Prove failure isolation end to end with `HARNESSD_TEST_FAULTS=<name>` (its start fails),
    `<name>.<member>` (one port call fails) and `<name>.<request type>` (one request fails); see
-   `e2e/services.e2e.ts`.
+   `e2e/services.e2e.ts`. The same names work in a service's own process, where `<name>.<event kind>`
+   fails an event; `<name>.crash` and `<name>.leak` exist only there (`src/services/process.ts`).
 
 `store.ts` (the Harness Store: no port, four requests) is the example to copy for a feature;
 `search.ts` for a service the core also calls.
@@ -39,11 +40,25 @@ let several people build features at once without touching the core or each othe
 ## Running in its own process
 
 A service that can crash natively, hang or leak should run in its own process, where it costs only
-itself. Search, the viewers and workspaces do: `HARNESSD_SERVICES=search,viewers,workspaces` (any of
-them alone, too).
+itself. Search, the viewers, workspaces and the teams' prompt scopes do, by default: every service in
+`KNOWN_SERVICES` runs in its own process unless `HARNESSD_SERVICES` names a subset
+(`search,viewers`), and `HARNESSD_SERVICES=none` runs them all inside the core's process (for debugging
+or a quick way back).
 
 - `src/harnessd/services.ts` runs it (`KNOWN_SERVICES`, with its memory budget). The core routes the
   requests it declared (its `<NAME>_REQUESTS`) to its process, and the same handlers answer them there.
+- `src/serviceProcess.ts` starts it (`SERVICE_RUNNERS`, which must name every service in
+  `KNOWN_SERVICES`): a process imports only the runner it is named. From a release, it runs on the lean
+  bundle cli.js carries for the master and the services (`src/harnessd/leanBundle.ts`), split so that a
+  service loads its own code and nothing else: 61 to 77 MiB resident at idle (20 to 35 MiB physical
+  footprint), against 118 to 131 (54 to 90) when each started on cli.js (2026-10-05). It is only an
+  optimisation: the master starts a service from cli.js whenever the lean bundle cannot be used
+  (`src/harnessd/leanServices.ts`), and the release script refuses one that does not load
+  (`scripts/check-lean-bundle.mjs`).
+- **What a service imports is what its process costs.** Import from small modules: one schema module
+  pulled in for a constant brought zod to search and workspaces, 8 MiB each (`src/dsh/id.ts`). A
+  failing import fails the service's start, loudly, and the master parks it. `src/leanEntry.spec.ts`
+  holds each process to its own code, and the master, search and workspaces to no zod.
 - `src/services/process.ts` is the process's side: heartbeats to the master, the connection to the
   core with the master's token, reconnecting after core restarts.
 - `src/core/serviceLinks.ts` is the core's side: it routes those requests to the process, answers
@@ -61,6 +76,12 @@ them alone, too).
   when to sweep. A command that destroys something is never held or replayed, and what it must know
   (the folders in use) is asked for when it starts, never sent ahead where it could go stale.
   `e2e/workspacesProcess.e2e.ts` proves it.
+- State built from every change must get every change exactly once. The teams show how
+  (`src/services/teamsProcess.ts`, `src/core/teamsLink.ts`): the core numbers each change and keeps it
+  until the process acknowledges it; on each connection the process says what it applied and gets
+  what it lacks, or starts over. A value the core reads back synchronously is answered from what the
+  process last reported, and is "unknown" (the fallback) while a change to it is on its way.
+  `e2e/teamsProcess.e2e.ts` proves it.
 
 ## Do not
 

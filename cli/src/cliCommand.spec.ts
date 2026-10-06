@@ -99,7 +99,9 @@ function seedRunningDaemon(root: string): { pid: number; exited: Promise<void> }
 async function daemonStatusServer(root: string, machineId: string): Promise<number> {
   const handler: RequestListener = (_req, res) => {
     res.setHeader('content-type', 'application/json')
-    res.end(JSON.stringify({ machineId, version: '0.0.0-test', sessions: [] }))
+    // A daemon says its pid (and, under a master, the master's), as every release with the socket has:
+    // start-up tells a live daemon from the core of a master that is gone by it (lib/localSocket.ts).
+    res.end(JSON.stringify({ machineId, version: '0.0.0-test', sessions: [], pid: process.pid, corePid: process.pid }))
   }
   const server = createServer(handler)
   servers.push(server)

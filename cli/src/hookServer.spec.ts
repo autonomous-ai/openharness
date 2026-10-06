@@ -81,6 +81,7 @@ describe('process-owned hook server', () => {
     expect(await response.json()).toEqual({ ignored: true, reason: 'no_matching_engine_process' })
     expect(resolveHookAgent).toHaveBeenCalledWith({
       engine: 'codex', tmuxPane: '%41', runtimeHints: [{ backend: 'tmux', paneId: '%41' }], callerPid: undefined,
+      onWait: expect.any(Function),
     })
     expect(handlers.onRegistered).not.toHaveBeenCalled()
   })
@@ -105,7 +106,37 @@ describe('process-owned hook server', () => {
     expect(response.status).toBe(200)
     expect(resolveHookAgent).toHaveBeenCalledWith({
       engine: 'codex', tmuxPane: '%41', runtimeHints: [{ backend: 'tmux', paneId: '%41' }], callerPid: undefined,
+      onWait: expect.any(Function),
     })
+  })
+
+  it('answers a hook whose agent has yet to record its process before the wait, and only logs what the wait finds', async () => {
+    // The engine's hook command gives up on a reply after 500ms and then writes the registry itself, as for
+    // a daemon that is down (hook/notify.mjs, fallbackRegister): held for the wait, its own row took the
+    // agent's place under the running daemon. Answered first, it writes nothing.
+    let found!: (agent: RegisteredSession | null) => void
+    const resolveHookAgent = vi.fn(({ onWait }: { onWait?: () => void }) => {
+      onWait?.()
+      return new Promise<RegisteredSession | null>((resolve) => { found = resolve })
+    })
+    const { handlers, base, headers } = await start({ resolveHookAgent: resolveHookAgent as HookServerHandlers['resolveHookAgent'] })
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    try {
+      const reply = await Promise.race([
+        fetch(`${base}/api/hook/session-start`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ engine: 'claude', tmuxPane: '%7', sessionId: 'session-7', callerPid: 4242 }),
+        }),
+        new Promise<'held'>((resolve) => setTimeout(() => resolve('held'), 2_000)),
+      ])
+      expect(reply).not.toBe('held')
+      expect(await (reply as Response).json()).toEqual({ pending: true })
+      // The wait ends with no agent for it: said in the log, and nothing is answered twice.
+      found(null)
+      await vi.waitFor(() => expect(log).toHaveBeenCalledWith('[hooks] session- session-start ignored · no_matching_engine_process'))
+      expect(handlers.onRegistered).not.toHaveBeenCalled()
+    } finally { log.mockRestore() }
   })
 
   it('ignores a hook whose only terminal is a Herdr pane', async () => {

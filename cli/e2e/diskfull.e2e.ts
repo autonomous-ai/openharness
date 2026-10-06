@@ -9,7 +9,7 @@
  * `DISKFULL=1 npm run test:e2e -- diskfull`.
  */
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, openSync, closeSync, rmSync, writeFileSync, writeSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, openSync, closeSync, rmSync, writeFileSync, writeSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, afterEach, beforeAll, describe, expect, it, onTestFailed } from 'vitest'
@@ -141,4 +141,37 @@ describe.skipIf(!ON)('a full disk', () => {
     if (process.env.DISKFULL_LOG) writeFileSync(process.env.DISKFULL_LOG, d.log())
     client.close()
   }, 600_000)
+
+  it('the first turn on a data folder that never ran a project ends, though the disk is full', async () => {
+    // A turn's end asks the orchestrator whether its agent is a specialist, and reading makes the
+    // orchestrator's folder: on a full disk the mkdir threw out of the transcript's line handler, and the
+    // turn never ended for the windows (found by e2e/updateHostile.e2e.ts, round 40). The turn's end no
+    // longer depends on it (core/turns/recaps.ts); the orchestrator itself is left as it is for now.
+    const data = join(volume, 'd2')
+    mkdirSync(data, { recursive: true })
+    const d = await IsolatedDaemon.create({ dataDir: data })
+    daemon = d
+    onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`) })
+    await d.start()
+    const client = await LocalClient.connect(d)
+    const cwd = join(d.projectsDir, 'first-turn-full')
+    mkdirSync(cwd, { recursive: true })
+    const created = await client.request('agent_create', { engine: 'claude', cwd, bypassPermission: true }, 90_000)
+    expect(created.error, JSON.stringify(created)).toBeUndefined()
+    const agent = await until('the agent to bind', async () => {
+      const now = await row(client, created.agent.id)
+      return now?.sessionId && now.status === 'active' ? now : null
+    }, 60_000, 500)
+    expect(existsSync(join(data, 'orchestrator')), 'no turn has asked the orchestrator yet').toBe(false)
+    const filler = fill(volume)
+    try {
+      await turn(client, agent.id, 'the first turn, on a full disk')
+      expect(d.log()).not.toContain('line handler error')
+    } finally {
+      rmSync(filler, { force: true })
+      rmSync(join(volume, 'filler-tail'), { force: true })
+    }
+    expect(d.coresStarted()).toBe(1)
+    client.close()
+  }, 300_000)
 })

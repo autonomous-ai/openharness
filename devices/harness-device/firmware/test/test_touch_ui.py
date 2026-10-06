@@ -40,6 +40,7 @@ code = r'''
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <math.h>
 '''
 # Keep real protocol capacities: a larger fake buffer can hide target truncation.
 code += defines('CABLE_READ_TOKEN_MAX','ID_MAX','CABLE_NAME_MAX','SWARM_ID_MAX','SWARMS_MAX','CABLE_MAX_AGENTS','MAX_PROJECTS')
@@ -62,6 +63,8 @@ static struct {
     uint32_t touch_started, coast_until, character_activity, pet_until, nap_until, last_celebration;
     uint32_t notice_sequence, voice_retry_until;
     uint8_t status_phase;
+    unsigned bell_unread;
+    uint32_t notice_ms;
     uint32_t pet_next_ms;
     cable_swarm_t tabs[SWARMS_MAX];
     struct { char id[64], name[96], state[16]; bool local; } machines[2];
@@ -202,7 +205,7 @@ static bool scroll_emit(ht_scroll_phase_t phase, int dy, int velocity, void *ctx
 code += function('color')
 code += function('settings_item') + function('settings_count') + function('hit_contains')
 code += function('find')
-for name in ['copy', 'recap_preview', 'notice_unread', 'notice_was_read', 'notice_forget_read', 'notice_flush_reads', 'notice_mark_read', 'habitat_scene_receipt', 'habitat_scene_presented', 'pane_memory', 'pane_memory_apply', 'dismiss_result', 'activity_text', 'ensure', 'input_cancel', 'view', 'notice_open', 'workspace_index', 'tabs_open', 'workspace_failed', 'tab_request', 'tabs_sync', 'ui_scroll_reportable', 'focus_skin', 'focus_face_for', 'focus_chord', 'focus_put', 'focus_span', 'focus_take', 'focus_rows', 'ui_rows', 'ui_can_display', 'ui_wrap', 'text_in', 'control', 'home_footer', 'footer_control', 'text', 'center', 'render_brand', 'heading', 'question_view', 'question_rows', 'question_move', 'question_text', 'render_question', 'render_choices', 'render_answer_review', 'question_answer', 'send_answer', 'make_action', 'character_mood', 'voice_status', 'home_caption_rotates', 'home_caption_tick', 'status_animated', 'status_speed', 'status_wake_ms', 'surface_tick', 'command_face', 'render_workspace_preview', 'question_prompt', 'focus_bell', 'render_home', 'render_voice', 'render_selection', 'render_form', 'draft_move', 'render_draft', 'render_draft_options', 'ui_swarms_replace', 'ui_workspace_applied', 'ui_land_after_reload']:
+for name in ['copy', 'recap_preview', 'notice_unread', 'notice_was_read', 'notice_forget_read', 'notice_flush_reads', 'notice_mark_read', 'habitat_scene_receipt', 'habitat_scene_presented', 'pane_memory', 'pane_memory_apply', 'dismiss_result', 'activity_text', 'ensure', 'input_cancel', 'view', 'notice_open', 'workspace_index', 'tabs_open', 'workspace_failed', 'tab_request', 'tabs_sync', 'ui_scroll_reportable', 'focus_skin', 'focus_face_for', 'focus_chord', 'focus_put', 'focus_span', 'focus_take', 'focus_rows', 'ui_rows', 'ui_can_display', 'ui_wrap', 'text_in', 'control', 'home_footer', 'footer_control', 'text', 'center', 'render_brand', 'heading', 'question_view', 'question_rows', 'question_move', 'question_text', 'render_question', 'render_choices', 'render_answer_review', 'question_answer', 'send_answer', 'make_action', 'character_mood', 'voice_status', 'home_caption_rotates', 'home_caption_tick', 'status_animated', 'status_speed', 'status_wake_ms', 'surface_tick', 'command_face', 'render_workspace_preview', 'question_prompt', 'focus_bell', 'focus_dot', 'render_home', 'render_voice', 'render_selection', 'render_form', 'draft_move', 'render_draft', 'render_draft_options', 'ui_swarms_replace', 'ui_workspace_applied', 'ui_land_after_reload']:
     code += function(name)
 code += function('render_settings') + function('ui_visit_state')
 code += function('ui_project_known') + function('ui_focus_project') + function('ui_apply_pending_focus')
@@ -380,6 +383,55 @@ static void portrait_focus(const char *dir, const char *name) {
     focus_only_inter();
     portrait(dir, name);
 }
+// The design export (mockup/focus_design.py): every run of the portrait as JSON beside it — kind, place, face,
+// colours in panel order, text — and the touch targets, so a designer reads the exact numbers, not a guess.
+static const char *spec_font(const ht_font_t *f) {
+    static const struct { const ht_font_t *f; const char *name; } names[] = {
+        {&ht_lv_inter_20.base,"inter_20"},{&ht_lv_inter_25.base,"inter_25"},{&ht_lv_inter_med_26.base,"inter_med_26"},
+        {&ht_lv_inter_30.base,"inter_30"},{&ht_lv_inter_36.base,"inter_36"},{&ht_lv_montserrat_14.base,"montserrat_14"},
+        {&ht_lv_montserrat_22.base,"montserrat_22"},{&ht_done_28,"done_28"},{&ht_wave,"wave"},{&ht_spark,"spark"},
+        {&ht_mono_16,"mono_16"},{&ht_mono_20,"mono_20"},{&ht_mono_24,"mono_24"},{&ht_mono_28,"mono_28"}};
+    for (unsigned i = 0; i < sizeof names / sizeof names[0]; i++) if (names[i].f == f) return names[i].name;
+    return "other";
+}
+static void spec_string(FILE *fp, const char *t) {
+    fputc('"', fp);
+    for (; *t; t++) {
+        unsigned char c = (unsigned char)*t;
+        if (c == '"' || c == '\\') fprintf(fp, "\\%c", c);
+        else if (c < 0x20) fprintf(fp, "\\u%04x", c);
+        else fputc(c, fp);
+    }
+    fputc('"', fp);
+}
+static void portrait_spec(const char *dir, const char *name) {
+    char path[1024]; snprintf(path, sizeof(path), "%s/%s.json", dir, name);
+    FILE *fp = fopen(path, "wb"); assert(fp);
+    fprintf(fp, "{\"background\":%u,\"runs\":[", scene.background);
+    for (int i = 0; i < scene.count; i++) {
+        const ht_run_t *r = &scene.runs[i];
+        ht_rect_t b = ht_run_bounds(r);
+        const char *kind = r->ring.set ? "ring" : r->sprite.width ? "sprite" : r->box.h ? "box" : r->arc ? "arc" : "text";
+        fprintf(fp, "%s{\"kind\":\"%s\",\"x\":%d,\"y\":%d,\"w\":%d,\"bounds\":[%d,%d,%d,%d],\"fg\":%u,\"bg\":%u,\"font\":\"%s\",\"text\":",
+                i ? "," : "", kind, r->x, r->y, r->w, b.x, b.y, b.w, b.h, r->fg, r->bg, spec_font(r->font));
+        spec_string(fp, r->text);
+        fprintf(fp, ",\"line\":%d,\"measure\":%d,\"arc\":%d,\"arc_mid\":%d,\"gained\":%d",
+                r->font->height, r->text[0] && !r->box.h && !r->ring.set && !r->sprite.width ? ht_measure(r->font, r->text) : 0,
+                r->arc, r->arc_mid, r->gained);
+        if (r->box.h) fprintf(fp, ",\"box\":{\"h\":%u,\"radius\":%u,\"fill\":%u,\"border\":%u}", r->box.h, r->box.radius, r->box.fill, r->box.border);
+        if (r->sprite.width) fprintf(fp, ",\"sprite\":{\"w\":%u,\"h\":%u,\"cell\":%u,\"cells\":%d,\"icon\":%d}",
+                                     r->sprite.width, r->sprite.height, r->sprite.cell, r->sprite.cells != NULL, r->sprite.lvgl);
+        if (r->ring.set) fprintf(fp, ",\"ring\":{\"cx16\":%d,\"cy16\":%d,\"r16\":%u,\"w16\":%u,\"colour\":%u,\"ux\":%d,\"uy\":%d,\"cosh\":%d}",
+                                 r->ring.cx16, r->ring.cy16, r->ring.r16, r->ring.w16, r->ring.colour, r->ring.ux, r->ring.uy, r->ring.cosh);
+        fputc('}', fp);
+    }
+    fprintf(fp, "],\"hits\":[");
+    for (int i = 0; i < s.hit_count; i++)
+        fprintf(fp, "%s{\"rect\":[%d,%d,%d,%d],\"action\":%d,\"enabled\":%d}", i ? "," : "",
+                s.hits[i].rect.x, s.hits[i].rect.y, s.hits[i].rect.w, s.hits[i].rect.h, (int)s.hits[i].action, s.hits[i].enabled);
+    fprintf(fp, "]}\n");
+    fclose(fp);
+}
 static void portrait(const char *dir, const char *name) {
     if (!dir) return;
     char path[1024]; snprintf(path, sizeof(path), "%s/%s.ppm", dir, name);
@@ -397,6 +449,7 @@ static void portrait(const char *dir, const char *name) {
         }
     }
     fclose(fp);
+    portrait_spec(dir, name);
 }
 static void focus_inside(void) {
     for (int i = 0; i < scene.count; i++) {
@@ -1938,15 +1991,23 @@ int main(int argc, char **argv) {
         s.touch_down = false;
         s.view = HOME;
     }
-    // THE WORKING SCENE (claude): a busy agent's face is the large cooking Clawd, which changes every
-    // 110 ms, so s.pet_next_ms is the next step and surface_tick redraws then and not before.
+    // THE WORKING SCENE (claude): a busy agent's face is the large cooking Clawd, which changes on its step
+    // clock, so s.pet_next_ms is its next change and surface_tick redraws then and not before.
     {
         const ht_pet_scene_t *ws = ht_pets[0].working_scene;
         assert(!strcmp(ht_pets[0].engine, "claude") && ws);
         reset(); ht_character_select(&character, HT_CHARACTER_FOCUS); strcpy(s.agents[0].engine, "claude");
         s.agents[0].busy = true; strcpy(s.agents[0].tool, "Running firmware checks");
         fake_ms = 1200; scene_take();
-        uint32_t due = (1201 / ws->step_ms + 1) * ws->step_ms;
+        // the next step that draws differently (the pan's still steps draw the same)
+        unsigned now = 1201 / ws->step_ms, nx = now + 1;
+        const ht_pet_overlay_t *o = ws->overlay;
+        for (; nx < now + ws->steps; nx++) {
+            unsigned a = nx % ws->steps, b = now % ws->steps;
+            if (ws->loop[a] != ws->loop[b] || (ws->step_dy && ws->step_dy[a] != ws->step_dy[b]) ||
+                (o && (o->loop[a] != o->loop[b] || o->at[a][0] != o->at[b][0] || o->at[a][1] != o->at[b][1]))) break;
+        }
+        uint32_t due = nx * ws->step_ms;
         assert(s.pet_next_ms == due);
         bool scene_run = false, lower_arc = false;
         for (int i = 0; i < scene.count; i++) {
@@ -2010,44 +2071,74 @@ int main(int argc, char **argv) {
         #undef XRUN
         #undef XBARS
     }
-    // THE WORKING SCENE beside the bell: its status stays on the lower arc and the pill steps up to 376..408
-    // (the arc's glyphs start ~y 422). A footer control has the bottom band, so there the status is a straight line.
+    // THE WORKING SCENE and a notice (owner, 2026-10-05): no bell pill. For each engine with a scene the pet plays its
+    // alert once (its steps, its bubble in the overlay slot), then a blue dot flies up round the rim, a
+    // ring goes out once, and the 12 px dot stays at 12 o'clock; a tap there opens the inbox, and a second notice
+    // plays the alert again. The run count never changes while it does.
     {
         const ht_pet_scene_t *ws = ht_pets[0].working_scene;
-        reset(); ht_character_select(&character, HT_CHARACTER_FOCUS); strcpy(s.agents[0].engine, "claude");
-        s.agents[0].busy = true; strcpy(s.agents[0].tool, "Running firmware checks");
+        static const char *engines[3] = {"claude", "codex", "muse"};
+        for (int e = 0; e < 3; e++) {
+            const ht_pet_t *pet = NULL;
+            for (unsigned i = 0; i < ht_pet_count; i++) if (!strcmp(ht_pets[i].engine, engines[e])) pet = &ht_pets[i];
+            assert(pet && pet->alert_scene && pet->alert_scene->overlay && pet->alert_scene->steps >= 10);
+            const ht_pet_scene_t *al = pet->alert_scene, *wk = pet->working_scene;
+            const uint32_t A = (uint32_t)al->steps * al->step_ms, S = al->step_ms;
+            #define HAS_SPRITE(sc_) ({ bool f_ = false; for (int i_ = 0; i_ < scene.count; i_++) \
+                f_ |= scene.runs[i_].sprite.cells && scene.runs[i_].sprite.width == (sc_)->w && \
+                      scene.runs[i_].sprite.height == (sc_)->h; f_; })
+            #define BLUE_BOX() ({ int f_ = -1; for (int i_ = 0; i_ < scene.count; i_++) if (scene.runs[i_].box.h && \
+                scene.runs[i_].box.fill == color(0x006fff)) f_ = i_; f_; })
+            reset(); ht_character_select(&character, HT_CHARACTER_FOCUS); strcpy(s.agents[0].engine, engines[e]);
+            s.agents[0].busy = true; strcpy(s.agents[0].tool, "Running firmware checks");
+            fake_ms = 1200; scene_take();
+            assert(HAS_SPRITE(wk) && BLUE_BOX() < 0 && !action_enabled(A_INBOX));
+            int runs = scene.count;
+            cable_notif_t note={.agent_id="b",.name="Other",.summary="Done"};
+            ui_notif_replace(&note,1);
+            fake_ms = 2000; scene_take();
+            uint32_t from = s.notice_ms;
+            assert(from && HAS_SPRITE(al) && BLUE_BOX() < 0);                      // the pet tells, no dot yet
+            for (int i = 0; i < scene.count; i++) {
+                assert(scene.runs[i].font != &ht_lv_montserrat_14.base || !scene.runs[i].text[0]);   // no bell
+                if (scene.runs[i].arc == 2 && scene.runs[i].text[0]) assert(scene.runs[i].fg == ht_rgb(0x00ff2f));
+            }
+            assert(s.pet_next_ms == from + S);                                      // its next step
+            fake_ms = from + 5 * S + 3; scene_take();
+            assert(HAS_SPRITE(al) && s.pet_next_ms == from + 6 * S);
+            fake_ms = from + A + 100; scene_take();                          // flying
+            int b = BLUE_BOX(); assert(b >= 0 && scene.runs[b].box.h > 12 && scene.runs[b].box.h < 28);
+            assert(HAS_SPRITE(wk) && s.pet_next_ms && s.pet_next_ms - fake_ms <= 40);
+            fake_ms = from + A + 550 + 100; scene_take();                    // landed, the ring going out
+            b = BLUE_BOX(); assert(b >= 0 && scene.runs[b].box.h == 12 && scene.runs[b].x == 227 && scene.runs[b].y == 6);
+            bool ring = false; for (int i = 0; i < scene.count; i++) ring |= scene.runs[i].ring.set && scene.runs[i].ring.w16;
+            assert(ring);
+            fake_ms = from + A + 550 + 500; scene_take();                    // settled
+            b = BLUE_BOX(); assert(b >= 0 && scene.runs[b].box.h == 12 && scene.runs[b].y == 6);
+            ring = false; for (int i = 0; i < scene.count; i++) ring |= scene.runs[i].ring.set && scene.runs[i].ring.w16;
+            assert(!ring && scene.count == runs + 2 && action_enabled(A_INBOX));
+            // The dot (ink inside r 230) is clear of the name's ink.
+            static uint16_t px[HT_WIDTH * HT_HEIGHT];
+            ht_raster(&scene, (ht_rect_t){0, 0, HT_WIDTH, HT_HEIGHT}, px);
+            for (int y = 0; y < 26; y++) for (int x = 200; x < 266; x++) {
+                uint16_t v = px[y * HT_WIDTH + x];
+                bool blue = (uint16_t)((v >> 8) | (v << 8)) == color(0x006fff);   // panel order back
+                int dx = x - 233, dy = y - 12;
+                if (dx * dx + dy * dy > 8 * 8) assert(!blue);
+                if (dx * dx + dy * dy <= 4 * 4) assert(blue);
+            }
+            // A second notice: the alert again, the dot hidden while it plays.
+            cable_notif_t two[2] = {note, {.agent_id="c",.name="Third",.summary="Done"}};
+            fake_ms += 1000; ui_notif_replace(two,2); scene_take();
+            assert(s.notice_ms == (fake_ms | 1) && HAS_SPRITE(al) && BLUE_BOX() < 0);
+            // The dot opens the inbox, the name still the panes.
+            fake_ms += 3000; scene_take(); assert(BLUE_BOX() >= 0);
+            tap(fake_ms + 10, 233, 10); assert(s.view == INBOX);
+            #undef HAS_SPRITE
+            #undef BLUE_BOX
+        }
         cable_notif_t note={.agent_id="b",.name="Other",.summary="Done"};
-        ui_notif_replace(&note,1);
-        fake_ms = 1200; scene_take();
-        assert(action_enabled(A_INBOX));
-        bool bell = false, scene_run = false, raised_arc = false, box = false;
-        for (int i = 0; i < scene.count; i++) {
-            bell |= scene.runs[i].font == &ht_lv_montserrat_14.base && !strcmp(scene.runs[i].text, HT_LV_BELL);
-            scene_run |= scene.runs[i].sprite.width == ws->w;
-            if (scene.runs[i].arc == 2 && scene.runs[i].text[0]) { raised_arc = true; assert(scene.runs[i].fg == ht_rgb(0x00ff2f)); }
-            if (scene.runs[i].box.h == 32) { box = true; assert(scene.runs[i].y == 376); }
-            assert(scene.runs[i].font != &ht_lv_inter_30.base || !scene.runs[i].text[0]);
-        }
-        assert(bell && scene_run && raised_arc && box);
-        // Ink: the pill is rows 376..407; the arc's green text, under the pill's columns, starts below it
-        // (further out the arc rises past those rows, but beside the pill, not under it).
-        static uint16_t px[HT_WIDTH * HT_HEIGHT];
-        ht_raster(&scene, (ht_rect_t){0, 0, HT_WIDTH, HT_HEIGHT}, px);
-        uint16_t bg = px[0];
-        int green_top = 999, green_bottom = -1, blue_top = 999, blue_bottom = -1, px0 = 0, px1 = 0;
-        for (int i = 0; i < scene.count; i++) if (scene.runs[i].box.h == 32) { px0 = scene.runs[i].x; px1 = px0 + scene.runs[i].w; }
-        for (int y = 0; y < HT_HEIGHT; y++) for (int x = 0; x < HT_WIDTH; x++) {
-            uint16_t v = px[y * HT_WIDTH + x];
-            if (v == bg) continue;
-            uint16_t p = (uint16_t)((v >> 8) | (v << 8));   // panel order back to RGB565
-            bool green = (p >> 5 & 63) > 40 && (p >> 11) < 8 && (p & 31) < 12;
-            bool blue = (p & 31) > 20 && (p >> 11) < 4;
-            if (green && y > 326 && x >= px0 - 4 && x < px1 + 4) { if (y < green_top) green_top = y; if (y > green_bottom) green_bottom = y; }
-            if (blue && y >= 340) { if (y < blue_top) blue_top = y; if (y > blue_bottom) blue_bottom = y; }
-        }
-        assert(blue_top >= 376 && blue_bottom <= 407 && green_bottom >= green_top && green_top > blue_bottom);   // no ink overlap
-        // Tapping the raised bell opens the inbox.
-        tap(1500, 233, 392); assert(s.view == INBOX);
+        bool box = false, scene_run = false;
         // A recap or no scene (idle): the bell keeps 400.
         reset(); ht_character_select(&character, HT_CHARACTER_FOCUS); strcpy(s.agents[0].engine, "claude");
         ui_notif_replace(&note,1); fake_ms = 1200; scene_take();
@@ -2088,8 +2179,9 @@ int main(int argc, char **argv) {
         fake_ms = 1200; dispatch((action_t){.kind = A_VOICE, .id = "b"}); scene_take();
         assert(s.view == VOICE && !strcmp(s.voice_engine, "claude") && VOICE_SCENE() && !VOICE_BARS());
         portrait_focus(dir,"focus-voice-listening");   // the Listening word on the lower arc, the scene in the middle
-        uint32_t due = (1201 / ls->step_ms + 1) * ls->step_ms;
-        assert(s.pet_next_ms == due);
+        // The next step, or sooner: Claude's sound arcs glide on a 50 ms tick.
+        uint32_t due = s.pet_next_ms;
+        assert(due > 1200 && due <= (1201 / ls->step_ms + 1) * ls->step_ms);
         s.touch_down = true; changes = 0;
         surface_tick(due - 1); assert(s.pet_next_ms == due);
         surface_tick(due); assert(!s.pet_next_ms && changes >= 1);
@@ -2493,6 +2585,40 @@ int main(int argc, char **argv) {
             s.view=DRAFT_OPTIONS; FOCUS_PAGE("lit-draft-options");
         }
     }
+    // THE DESIGN EXPORT (mockup/focus_design.py): the Focus home and voice states once per engine with a scene, so
+    // Claude and Codex are both on the sheet. Pictures only; the checks above cover these states.
+    if (dir) {
+        static const char *engines[2] = {"claude", "codex"};
+        for (int e = 0; e < 2; e++) {
+            char name[64];
+            #define DESIGN(state) do { snprintf(name, sizeof name, "design-%s-%s", engines[e], state); portrait(dir, name); } while (0)
+            #define DESIGN_HOME() do { reset(); ht_character_select(&character, HT_CHARACTER_FOCUS); \
+                strcpy(s.agents[0].engine, engines[e]); strcpy(s.agents[1].engine, engines[e]); \
+                strcpy(s.agents[0].name, "Payments refactor"); strcpy(s.agents[1].name, "Landing page"); } while (0)
+            DESIGN_HOME(); fake_ms = 1200; scene_take(); DESIGN("rest");
+            DESIGN_HOME();
+            ui_project_emit("a", "sess", "summary", "Shipped the retry queue and moved the parser tests to the new fixtures. All 44 checks pass.",
+                            "Shipped the retry queue and moved the parser tests to the new fixtures. All 44 checks pass.");
+            fake_ms = 1200; scene_take(); DESIGN("recap");
+            DESIGN_HOME(); s.agents[0].busy = true; strcpy(s.agents[0].tool, "Coalescing");
+            fake_ms = 1200; scene_take(); s.agents[0].busy_ms = 1; fake_ms = 34000 + 1200; scene_take(); DESIGN("working");
+            {
+                cable_notif_t note = {.agent_id = "b", .name = "Landing page", .machine = "MacBook", .summary = "Hero and pricing are in."};
+                ui_notif_replace(&note, 1);
+                fake_ms = 35000; scene_take(); DESIGN("working-notice");
+            }
+            DESIGN_HOME();
+            {
+                cable_notif_t asked = {.agent_id = "a", .name = "Payments refactor", .question = true,
+                                       .summary = "Which database should the retry queue use?"};
+                ui_notif_replace(&asked, 1); fake_ms = 1200; scene_take(); DESIGN("question");
+            }
+            DESIGN_HOME(); fake_ms = 1200; dispatch((action_t){.kind = A_VOICE, .id = "a"}); scene_take(); DESIGN("voice-listening");
+            DESIGN_HOME(); fake_ms = 1200; dispatch((action_t){.kind = A_VOICE, .id = "a"}); s.voice_waiting = true; scene_take(); DESIGN("voice-sending");
+            #undef DESIGN_HOME
+            #undef DESIGN
+        }
+    }
     // Every advertised optional control is present, none appear for a legacy host.
     reset(); host_features=0; view(SETTINGS); scene_take();
     assert(settings_count()==5 && !action_enabled(A_FORM) && !action_enabled(A_LATEST));
@@ -2528,7 +2654,7 @@ with tempfile.TemporaryDirectory(prefix='harness-touch-ui-') as d:
                     '-fsanitize='+os.environ.get('SANITIZERS','undefined,bounds'),
                     *extra_includes, '-I',str(native),str(out/'touch_ui.c'), *extra_sources, str(native/'gestures.c'),
                     str(native/'form.c'),str(native/'visit.c'),str(native/'draft.c'), str(native/'scroll.c'),str(native/'selection.c'),str(native/'carry.c'),str(native/'tim.c'),str(native/'character_motion.c'),str(native/'character_layout.c'),str(native/'character.c'),str(native/'illustrated.c'),str(native/'tux.c'),str(native/'focus.c'),str(native/'lvgl_fonts.c'),str(native/'lvgl_icons.c'),str(native/'focus_marks.c'),str(native/'focus_faces.c'),str(native/'pets.c'),str(native/'terminal.c'),
-                    str(native/'fonts.c'),str(native/'octopus.c'),str(native/'ascii_clip.c'),str(native/'octopus_font.c'),str(native/'workspace.c'),str(native/'command_face.c'),'-o',str(out/'touch_ui')],check=True)
+                    str(native/'fonts.c'),str(native/'octopus.c'),str(native/'ascii_clip.c'),str(native/'octopus_font.c'),str(native/'workspace.c'),str(native/'command_face.c'),'-o',str(out/'touch_ui'),'-lm'],check=True)
     args=[str(out/'touch_ui')]
     if os.environ.get('HABITAT_PREVIEW_DIR'):
         dest=Path(os.environ['HABITAT_PREVIEW_DIR']);dest.mkdir(parents=True,exist_ok=True)

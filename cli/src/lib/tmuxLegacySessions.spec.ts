@@ -64,7 +64,7 @@ describe('adoptLegacyHarnessSessions', () => {
       { from: 'codex-1787549944131', to: 'harness-codex-1800000000001', paneId: '%1' },
     ])
     expect(readFileSync(calls, 'utf8').trim().split('\n')).toEqual([
-      'list-panes -a -F #{pane_id}|#{pane_pid}|#{session_name}|#{pane_current_path}',
+      'list-panes -a -F #{pane_id}|#{pane_pid}|#{session_name}|#{pane_current_path}|#{@harness_daemon}',
       'rename-session -t =claude-1787912296587 harness-claude-1800000000000',
       'rename-session -t =codex-1787549944131 harness-codex-1800000000001',
     ])

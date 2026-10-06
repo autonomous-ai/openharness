@@ -83,6 +83,9 @@ export interface RestartAgentDeps {
   terminate: (checkAfterMs?: number) => Promise<TerminateOutcome>
   /** `tmux respawn-pane` (or equivalent) with a fully-built argv. */
   respawn: (argv: string[]) => Promise<{ ok: boolean; reason?: string }>
+  /** Why `respawn` would be refused here (a tmux too old for what the relaunch needs), asked before
+   *  anything is stopped; null when it would try. Left out, never refused. */
+  respawnRefusal?: () => Promise<string | null>
   /** Poll the pane for a recognizable engine process, up to an internal budget. Null on timeout. */
   waitForProcess: () => Promise<ProcessIdentity | null>
   /** Prepare persisted history only once the old writer is confirmed stopped. A failure must
@@ -90,6 +93,8 @@ export interface RestartAgentDeps {
   prepareResume?: () => void | Promise<void>
   buildArgv: (opts: { bypassPermission: boolean; resumeSessionId?: string }) => string[]
   log: (message: string) => void
+  /** Keeps the conversation the fresh fallback left as a stopped harness (keepAbandonedConversation.ts). */
+  keepAbandoned?: () => void
 }
 
 /** Outcomes that mean the old process is confirmed gone — safe to respawn over the pane. `not-ours` and
@@ -103,6 +108,10 @@ export async function restartAgent(
 ): Promise<RestartOutcome> {
   const changed = { ok: false, detail: 'the harness changed or stopped during restart' } as const
   const current = () => deps.isCurrent?.() !== false
+  if (!current()) return changed
+  // Before anything is stopped: refused after the kill, the agent was left with no engine at all.
+  const refused = await deps.respawnRefusal?.()
+  if (refused) return { ok: false, detail: `${refused} Nothing was stopped.` }
   if (!current()) return changed
   const armed = await deps.holdOpen()
   if (!current()) return changed
@@ -156,5 +165,8 @@ export async function restartAgent(
   if (!identity) {
     return { ok: false, detail: `${session.engine} did not come back up after restart` }
   }
+  // The agent works on in a new conversation; the one it was in, which the engine could not reopen, is
+  // kept as a stopped harness to read and to resume once it can (round 24). A /clear keeps nothing.
+  if (resumeSessionId && !resumed) deps.keepAbandoned?.()
   return { ok: true, processIdentity: identity, resumed }
 }

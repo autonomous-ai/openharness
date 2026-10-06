@@ -112,8 +112,29 @@ assert (root/'heartbeat').stat().st_mtime_ns != before
         vm.command('python3 -c ' + shlex.quote(expression))
         vm.command('while read -r pid; do kill -0 "$pid" || exit 1; done < /tmp/fast-original-agent; '
                    'cmp /tmp/fast-original-boot /proc/sys/kernel/random/boot_id')
-        vm.command('hn hn-list-clients -F "#{session_id}" > /tmp/fast-restored-session; '
-                   'cmp /tmp/fast-visible-session /tmp/fast-restored-session')
+        vm.command('for n in $(seq 1 80); do hn hn-list-clients -F "#{session_id}" > /tmp/fast-restored-session && '
+                   'test -s /tmp/fast-restored-session && cmp -s /tmp/fast-visible-session /tmp/fast-restored-session && exit 0; '
+                   'sleep .25; done; cmp /tmp/fast-visible-session /tmp/fast-restored-session; exit 1', timeout=30)
+        # A live rendering client must belong to the actual terminal service and
+        # execute the selected binary with its input still attached to a PTY.
+        expression = '''from pathlib import Path
+import json, re, subprocess
+target = Path.home() / '.local/state/harness-os/updates/current'
+target = target.resolve() if target.exists() else Path('/usr/lib/harness')
+clients = []
+for pid in subprocess.check_output(['hn', 'hn-list-clients', '-F', '#{client_pid}'], text=True, timeout=3).splitlines():
+    assert pid.isdigit(), pid
+    process = Path('/proc') / pid
+    executable, stdin = process / 'exe', process / 'fd/0'
+    assert executable.samefile(target / 'harness-tui'), str(executable.resolve())
+    assert any(line.split(':', 2)[-1].endswith('/hn-screen.service') for line in (process / 'cgroup').read_text().splitlines())
+    assert re.fullmatch(r'/dev/pts/\\d+', str(stdin.resolve())) and stdin.is_char_device(), str(stdin.resolve())
+    clients.append(dict(pid=int(pid), executable=str(executable.resolve()), stdin=str(stdin.resolve())))
+assert clients, 'No attached rendering client'
+Path('/tmp/fast-screen-client.json').write_text(json.dumps(dict(target=str(target), clients=clients)))
+'''
+        vm.command('python3 -c ' + shlex.quote(expression))
+        (vm.folder / (name + '-client.json')).write_bytes(vm.read_file('/tmp/fast-screen-client.json'))
         vm.command('for n in $(seq 1 80); do hn select-window -t update-probe && exit 0; sleep .25; done; exit 1')
         wait_text(vm, 'visible lock probe', name + '-restored')
         vm.type_probe(name)
@@ -131,8 +152,14 @@ assert (root/'heartbeat').stat().st_mtime_ns != before
             vm.keys('meta_l', 'u')
         condition = ('grep -q ' + shlex.quote('"status": "failed"') + ' ' + state + '/transaction.json' if expect_failure else
                      'test ! -e ' + state + '/ready.json && test -s ' + state + '/applied.json')
+        # A failed receipt precedes restoration of the old screen. Type=exec
+        # also makes foot active before hn has reattached. Observe completion
+        # of the apply operation before checking its real client and workspace.
+        settled = ('(hn_update_unit_state=$(systemctl --user show harness-apply-update.service -p ActiveState --value); '
+                   'test "$hn_update_unit_state" = inactive || test "$hn_update_unit_state" = failed)')
         try:
-            vm.command('for n in $(seq 1 120); do ' + condition + ' && systemctl --user is-active --quiet hn-screen && exit 0; sleep .5; done; '
+            vm.command('for n in $(seq 1 120); do ' + condition + ' && ' + settled +
+                       ' && systemctl --user is-active --quiet hn-screen && exit 0; sleep .5; done; '
                        'sudo journalctl _UID=1000 --no-pager; exit 1', timeout=90)
         finally:
             if mouse:

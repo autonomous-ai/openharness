@@ -79,6 +79,9 @@ export interface HookServerHandlers {
     tmuxPane?: string
     runtimeHints: HookTerminalHint[]
     callerPid?: number
+    /** Called once the resolution has to wait for the agent to record its process
+     *  (core/engines/hooks.ts): the hook is answered then, before the wait. */
+    onWait?: () => void
   }) => Promise<RegisteredSession | null>
   /** A turn is now running (Command Code's PreToolUse — its only live turn-open signal). Idempotent:
    *  it fires once per tool call, and every call after the first in a turn must be a no-op. */
@@ -488,9 +491,16 @@ export function startHookServer(
         // Every rejection below says WHY, out loud. They used to be silent, and a hook that arrives and
         // is dropped looks exactly like a hook that never fired — which is precisely the confusion behind
         // "the agent is running in my terminal but the list does not show it".
+        // Answered once: a hook answered before its resolution waited is only logged after it.
+        let answered = false
+        const answer = (code: number, reply: unknown): void => {
+          if (answered) return
+          answered = true
+          json(code, reply)
+        }
         const ignore = (reason: string): void => {
           console.log(`[hooks] ${sid(body.sessionId ?? '?')} ${body.hookEvent ?? 'session-start'} ignored · ${reason}`)
-          json(200, { ignored: true, reason })
+          answer(200, { ignored: true, reason })
         }
         const runtimeHints = normalizedRuntimeHints(body)
         if (!runtimeHints.length) { ignore('not_in_terminal'); return }
@@ -512,6 +522,13 @@ export function startHookServer(
             tmuxPane: body.tmuxPane,
             runtimeHints,
             callerPid: Number.isSafeInteger(body.callerPid) && body.callerPid! > 0 ? body.callerPid : undefined,
+            // A relaunch records its engine's process a moment after the engine starts, and a hook in that
+            // moment waits for the record, up to 20s. Its client does not: the engine's hook command gives
+            // up on a reply after 500ms and then writes the registry itself, as for a daemon that is down
+            // (hook/notify.mjs, fallbackRegister), with a row of its own in place of the agent's, which
+            // the running daemon's next save took in. Told the registration is pending, it writes nothing,
+            // as for a transcript not yet written below, and the wait goes on here.
+            onWait: () => answer(200, { pending: true }),
           })
           : body.tmuxPane ? registry.byPaneEngine(body.tmuxPane, engine) ?? null : null
         if (!processAgent || processAgent.engine !== engine) { ignore('no_matching_engine_process'); return }
@@ -534,7 +551,7 @@ export function startHookServer(
           // Settled off the HTTP path entirely: the answer needs a SQLite read, and the row may not even
           // be written yet (measured: a child's hook beat its own INSERT by 110ms). Registering
           // optimistically would hand the parent's pane to a sub-agent.
-          json(200, { pending: true })
+          answer(200, { pending: true })
           void awaitHermesKind(body, handlers)
           return
         }
@@ -548,18 +565,18 @@ export function startHookServer(
           // is only accepted with a real file behind it) and the agent stayed off the list until something
           // else noticed it. Wait for the file instead of dropping the announcement — in the background,
           // because a SessionStart hook blocks the CLI that is waiting on this reply.
-          json(200, { pending: true })
+          answer(200, { pending: true })
           void awaitTranscript(body, handlers)
           return
         }
         if (!result) {
           console.warn(`[hooks] ${sid(body.sessionId ?? '?')} REJECTED · engine=${body.engine} pane=${body.tmuxPane}`)
-          json(400, { error: 'invalid session registration' })
+          answer(400, { error: 'invalid session registration' })
           return
         }
         console.log(`[hooks] ${sid(result.entry.sessionId)} ${body.hookEvent ?? 'session-start'} · engine=${result.entry.engine} · isNew=${result.isNew}`)
         handlers.onRegistered(result.entry, { isNew: result.isNew, evicted: result.evicted, rebound: result.rebound, orphaned: result.orphaned, hookEvent: body.hookEvent })
-        json(200, { ok: true })
+        answer(200, { ok: true })
         return
       }
 

@@ -13,6 +13,7 @@ import { readHermesMessages } from '../../engines/hermes/reader.js'
 import { readKiloMessages } from '../../engines/kilo/reader.js'
 import { readOpencodeMessages } from '../../engines/opencode/reader.js'
 import { piMessagesToEvents } from '../../engines/pi/normalizer.js'
+import { lastActivityAt } from '../../lib/agentFrame.js'
 import { sid } from '../../lib/log.js'
 import { messagesToEvents, windowRawLines } from '../../lib/normalize.js'
 import type { RegisteredSession } from '../../lib/registry.js'
@@ -71,6 +72,7 @@ vi.mock('../../engines/cursor/home.js', async (real) => ({ ...await real<object>
 vi.mock('../../engines/codex/normalizer.js', async (real) => ({ ...await real<object>(), codexMessagesToEvents: vi.fn((lines: unknown[]) => fake.replay('codex')(lines)) }))
 vi.mock('../../engines/codex/subagent.js', async (real) => ({ ...await real<object>(), codexSubagentResolverFor: vi.fn(() => fake.resolver) }))
 vi.mock('../../lib/normalize.js', async (real) => ({ ...await real<object>(), messagesToEvents: vi.fn(fake.replay('claude')), windowRawLines: vi.fn(fake.windowOf('raw')) }))
+vi.mock('../../lib/agentFrame.js', async (real) => ({ ...await real<object>(), lastActivityAt: vi.fn(async () => Date.parse('2026-10-05T08:45:00.000Z')) }))
 vi.mock('../../lib/transcriptTail.js', async (real) => {
   const actual = await real<typeof import('../../lib/transcriptTail.js')>()
   return { ...actual, tailFileCapped: vi.fn(actual.tailFileCapped) }
@@ -106,13 +108,15 @@ function transcript(lines: string[], name = 'session.jsonl'): string {
   return file
 }
 
-function setup(s?: RegisteredSession) {
+function setup(s?: RegisteredSession, kept: RegisteredSession[] = []) {
   const pages = {
     claude: vi.fn(async (_path: string, _opts: { limit?: number; before?: string }) => page([], false, null)),
     codex: vi.fn(async (_path: string, _opts: { limit?: number; before?: string }) => page([], false, null)),
+    lineCount: vi.fn(async (_path: string) => 0),
   }
   const deps = {
     resolve: vi.fn((id: string) => (s && (id === s.sessionId || id === s.agentId) ? s : undefined)),
+    stopped: vi.fn(() => kept),
     pages,
     dbs: { opencode: '/stores/opencode.db', kilo: '/stores/kilo.db', devin: '/stores/sessions.db' },
     hermesDb: vi.fn(async () => '/profiles/work/state.db'),
@@ -142,6 +146,19 @@ describe('what cannot be served', () => {
     expect(reply).toStrictEqual({ ...about(s, TOUCHED), events: [], hasMore: false, oldestCursor: null })
     expect(Object.keys(reply)).toEqual(['id', 'title', 'events', 'timestamp', 'engine', 'hasMore', 'oldestCursor'])
     expect(pages.claude).not.toHaveBeenCalled()
+  })
+
+  it('a conversation kept as a stopped harness, once nothing live holds it, but never by its harness\'s id', async () => {
+    const live = session('claude')
+    const kept = { ...session('claude'), agentId: 'kept-agent', sessionId: 'kept-session' } as RegisteredSession
+    const { sessionGet, deps } = setup(live, [kept])
+    expect(await sessionGet({ sessionId: 'kept-session', limit: 50 })).toMatchObject({ id: 'kept-session', engine: 'claude', events: [] })
+    expect(deps.resolve).toHaveBeenCalledWith('kept-session')
+    // What is live is answered from the registry, without reading the saved ones.
+    deps.stopped.mockClear()
+    expect(await sessionGet({ sessionId: live.sessionId, limit: 50 })).toMatchObject({ id: live.sessionId })
+    expect(deps.stopped).not.toHaveBeenCalled()
+    expect(await sessionGet({ sessionId: 'kept-agent', limit: 50 })).toStrictEqual({ error: 'NOT_FOUND' })
   })
 
   it('found by agent id too, and still answers with the id it was asked for', async () => {
@@ -457,5 +474,72 @@ describe('the replays with no windower answer both shapes', () => {
   it.each([['grok', grokHistoryPage], ['agy', agyHistoryPage], ['copilot', copilotHistoryPage]] as const)('%s', (engine, historyPage) => {
     expect(historyPage(['l0'], false)).toStrictEqual({ events: replayed(engine, ['l0']) })
     expect(historyPage(['l0'], true)).toStrictEqual({ events: replayed(engine, ['l0']), hasMore: false, oldestCursor: null })
+  })
+})
+
+describe('the conversation an agent holds (sessions_list)', () => {
+  it('asks for an agent, and lists nothing for one it does not know or one whose engine has not bound a conversation', async () => {
+    const pending = session('claude', { sessionId: '' })
+    const { sessionsList, pages } = setup(pending)
+    expect(await sessionsList({})).toStrictEqual({ error: 'MISSING_AGENT_ID' })
+    expect(await sessionsList({ agentId: 'nobody' })).toStrictEqual({ sessions: [] })
+    expect(await sessionsList({ agentId: pending.agentId })).toStrictEqual({ sessions: [] })
+    expect(pages.lineCount).not.toHaveBeenCalled()
+  })
+
+  it('the one conversation, its lines counted by the pager rather than read whole, in the fields it always had', async () => {
+    const file = transcript(['c1', 'c2'])
+    const s = session('codex', { transcriptPath: file, registeredAt: Date.parse('2026-10-05T07:00:00.000Z') })
+    const { sessionsList, pages } = setup(s)
+    pages.lineCount.mockResolvedValueOnce(42)
+    const reply = await sessionsList({ agentId: s.agentId }) as { sessions: Array<Record<string, unknown>> }
+    expect(reply).toStrictEqual({ sessions: [{
+      id: s.sessionId, title: 'Release notes', timestamp: '2026-10-05T07:00:00.000Z', messageCount: 42,
+      lastActivity: '2026-10-05T08:45:00.000Z', participants: [],
+    }] })
+    expect(Object.keys(reply)).toEqual(['sessions'])
+    expect(Object.keys(reply.sessions[0])).toEqual(['id', 'title', 'timestamp', 'messageCount', 'lastActivity', 'participants'])
+    expect(pages.lineCount).toHaveBeenCalledWith(file)
+    expect(lastActivityAt).toHaveBeenCalledWith(s)
+  })
+
+  it('a conversation kept in a database has no file to count', async () => {
+    const s = session('opencode', { registeredAt: Date.parse('2026-10-05T07:00:00.000Z') })
+    const { sessionsList, pages } = setup(s)
+    expect(await sessionsList({ agentId: s.agentId })).toMatchObject({ sessions: [{ id: s.sessionId, messageCount: 0 }] })
+    expect(pages.lineCount).not.toHaveBeenCalled()
+  })
+})
+
+describe('asked by agent id', () => {
+  // The registry finds an agent by its agent id as well as by its session id, and the reply still names
+  // the id it was asked for. What is read must be the conversation's own, though: an engine's store, its
+  // export and its task links know the session id alone, and with the agent id read nothing at all.
+  it('reads a database engine\'s store under the session id', async () => {
+    const s = session('opencode')
+    const { sessionGet } = setup(s)
+    expect(await sessionGet({ sessionId: s.agentId, limit: 2 })).toMatchObject({ id: s.agentId, events: replayed('opencode', ['o2', 'o3']) })
+    expect(readOpencodeMessages).toHaveBeenCalledWith('/stores/opencode.db', s.sessionId)
+  })
+
+  it('reads Cursor\'s task links, and replays its tasks, under the session id', async () => {
+    const s = session('cursor', { transcriptPath: transcript(['l0', 'l1']) })
+    const { sessionGet } = setup(s)
+    await sessionGet({ sessionId: s.agentId })
+    await sessionGet({ sessionId: s.agentId, limit: 1 })
+    expect(loadCursorReplayTaskLinks).toHaveBeenNthCalledWith(1, '/cursor/config', s.sessionId, '/cursor/data')
+    expect(loadCursorReplayTaskLinks).toHaveBeenNthCalledWith(2, '/cursor/config', s.sessionId, '/cursor/data')
+    expect(cursorMessagesToEvents).toHaveBeenNthCalledWith(1, ['l0', 'l1'], s.sessionId, ['a task link'])
+    expect(cursorMessagesToEvents).toHaveBeenNthCalledWith(2, ['l1'], s.sessionId, ['a task link'], 7, ['a todo carried in'])
+  })
+
+  it('exports an Amp thread under the session id', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const s = session('amp', { sessionId: 'T-0123456789abcdef', transcriptPath: transcript(['l0']) })
+    const { sessionGet } = setup(s)
+    await sessionGet({ sessionId: s.agentId })
+    await sessionGet({ sessionId: s.agentId, limit: 5 })
+    expect(readAmpThread).toHaveBeenNthCalledWith(1, 'T-0123456789abcdef')
+    expect(readAmpThread).toHaveBeenNthCalledWith(2, 'T-0123456789abcdef')
   })
 })

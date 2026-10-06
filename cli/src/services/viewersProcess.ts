@@ -59,7 +59,13 @@ export function viewersCoreApi(dataDir: string, sessions: ReadonlyMap<string, Re
       terminalAvailable: () => true,
       sync: (session) => tell(session.agentId),
       runtimeModels: async () => [],
+      runtimeProfile: () => null,
+      setRuntime: () => {},
+      fork: async () => ({ ok: false, error: 'UNSUPPORTED' }),
     },
+    // The viewers drive no agent: these are never asked of them.
+    turns: { send: () => {}, stop: () => {}, recent: () => [], asks: () => [] },
+    questions: { answer: () => {}, answerReviewed: async () => false },
     transcripts: { databaseHistory: () => undefined },
     external: {
       sessions: { list: () => [], scan: async () => [] },
