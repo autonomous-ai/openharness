@@ -1,8 +1,9 @@
-# Apple T2 platform preparation
+# Apple T2 experimental image
 
-This directory pins the maintained T2 kernel and its required modules. It is
-preparation for a separate Intel Mac boot profile, not a supported T2 installer.
-The ordinary image still refuses T2 installation before any disk write.
+This directory pins the maintained T2 kernel and its required modules. A separate
+`apple-t2` build profile uses that kernel for both USB and installed boot. It is
+not yet a physically validated Mac release. The ordinary PC image still refuses
+T2 installation before any disk write.
 
 `kernel.json` records the upstream recipe, patch commit and exact release archive.
 `prepare-t2-kernel.py` verifies its checksum, package identity, kernel release and
@@ -17,10 +18,12 @@ kernel compatibility, then cold boots and types through the graphical unlock and
 Harness. Source, package hashes, boot output and screenshots are retained. A VM
 cannot establish that physical T2 devices work.
 
-Before enabling T2 installation, integrate the same kernel into both USB and
-installed boot, preserve model-specific Apple wireless firmware before erasing
-macOS, and make updates/recovery preserve the selected platform. Then validate
-built-in input, Wi-Fi, audio, graphics and suspend on real Macs. In particular,
+The experimental installer preserves model-specific Apple wireless firmware in
+RAM before erasing macOS, restores it with the installed image, and retains it
+in root checkpoints. A pacman hook restores this board data after firmware
+package updates. Kernel files, early input modules and GRUB parameters follow
+the platform through offline recovery. Physical built-in input, Wi-Fi, audio,
+graphics and suspend still require validation on real Macs. In particular,
 iMac Pro firmware needs the macOS export route. Never add a moving unsigned
 repository or copy Apple firmware into the public ISO as a shortcut.
 
@@ -29,7 +32,8 @@ repository or copy Apple firmware into the public ISO as a shortcut.
 `os/tools/prepare-t2-firmware.py` is a separate preparation tool. It reads the
 Intel Mac's own `/usr/share/firmware` while macOS is running and creates a local
 archive. It does not install Harness, mount or change a disk, or enable the T2
-installer. It is not added to the generic PC image.
+installer. The small validation helpers are also packaged for OS updates; no
+Apple firmware or T2 kernel is added to the generic PC image.
 
 From a checkout on the Intel Mac, with Python 3.10 or later already available:
 
@@ -44,15 +48,21 @@ collected. An iMac Pro export also reads its calibration filenames from IORegist
 it stops if those files cannot be identified. Three BCM4377 models additionally
 require the Bluetooth firmware available in macOS Monterey or later.
 
-The future T2 installer can validate the archive against the detected model and
-stage it in a fresh RAM-backed directory before erasing the source disk. The
+The experimental T2 installer validates the archive against the detected model
+and stages it in a fresh RAM-backed directory before erasing the source disk. The
 tool's `verify` and `stage` commands implement that data boundary; `--model` is
 explicit for development, not an installer override. Archive checks reject links,
 special files, unexpected paths, duplicate entries, excessive sizes and altered
 inventories. Every staged file has a size and SHA-256 in the retained manifest.
 These checks establish local copy integrity, not a signature from Apple or proof
-that a physical radio works. Restoring into the installed system and preserving
-the firmware through updates/recovery remain part of the T2 installer integration.
+that a physical radio works. The archive is retained privately under
+`/var/lib/harness-os/apple-firmware.tar`, and the installation receipt records its
+model and checksum. A second verified copy is written to the newly formatted
+boot partition before encryption or root extraction, so a reinstall can recover
+it after macOS is gone. A failed installation also retains its verified RAM copy
+for the rest of the live session. Checkpoint creation and recovery recheck the
+retained identity. The firmware itself is board data, not user credentials; the
+boot partition copy is unencrypted, like the kernel and initramfs.
 
 The naming rules derive from the MIT-licensed upstream conversion script at
 `t2linux/wiki@11fc0a8d8cfb61affd0cb9d1ac245c1b6c16d3cd`; its full SHA-256 is
@@ -60,8 +70,36 @@ The naming rules derive from the MIT-licensed upstream conversion script at
 The **Harness OS Apple firmware preservation** workflow checks local CLI round
 trips and malformed-input refusal on Linux and macOS, then compares filenames and
 bytes with that pinned converter. Fixtures contain invented bytes only. No
-physical Mac's firmware is stored in CI. The existing T2 installation refusal
-remains in place until the USB kernel, installer and recovery path are complete.
+physical Mac's firmware is stored in CI. The ordinary PC image keeps its T2
+installation refusal; only the separate profile running its T2 kernel can proceed.
+
+## Private image acceptance
+
+The **Harness OS T2 image** workflow builds only private artifacts. Its initial
+candidate requires the exact public preview 14 `tui/`, `cli/` and `store/` source
+trees while shared products are being refactored. The image checksum and full
+payload are inspected before a native KVM journey. Synthetic Mac DMI and invented
+firmware exercise refusal before erasure, an encrypted offline install, the real
+firmware package hook, graphical unlock, keyboard input and offline checkpoint
+recovery. These fixtures do not emulate T2 hardware or establish Mac support.
+
+On the target Mac, an export named `harness-apple-firmware.tar` can be placed at
+the root of its EFI partition before booting the experimental image. The installer
+only mounts that partition read-only. Alternatively, it searches read-only APFS
+volumes for the Mac's own `/usr/share/firmware`; FileVault or an inaccessible
+volume may prevent this route. An iMac Pro requires the explicit macOS export.
+Missing or invalid firmware stops installation before partitioning.
+
+Build with `HARNESS_OS_PLATFORM=apple-t2` and `HARNESS_OS_T2_BUNDLE` pointing to a
+fresh verified bundle from `prepare-t2-kernel.py`. The output is named
+`harness-t2-<version>-x86_64.iso`. The default PC build and its NVIDIA/Broadcom
+bundle selection are unchanged.
+
+The initial image retains its pinned T2 kernel during ordinary Arch updates.
+An OS update must retain the T2 helpers and the identical kernel pin; older PC
+packages and a changed pin are refused before mutation. Automatic T2 kernel
+upgrades need a separately validated download/transaction path before this image
+can become a supported release. Do not add a moving unsigned repository.
 
 Upstream references: [maintained kernel](https://github.com/NoaHimesaka1873/linux-t2-arch),
 [early input and kernel parameters](https://wiki.t2linux.org/guides/postinstall/),
