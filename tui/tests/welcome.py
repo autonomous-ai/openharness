@@ -215,14 +215,15 @@ try:
         shows(text)
     snapshot('new-window-80x24')
     click('Project'); shows('Search projects'); snapshot('new-window-picker-narrow')
-    keys('Escape', 'Escape'); shows('second window draft')
+    # One Esc closes the picker. A second would close this empty window's form, and the window (#877).
+    keys('Escape'); shows('second window draft')
     for width, height in [(45, 14), (22, 5), (1, 1), (150, 42)]: resize(width, height)
     shows('second window draft')
     anchor = position('Task')
     click('Project'); shows('Search projects')
     assert position('Task') == anchor
     snapshot('new-window-picker-right')
-    keys('Escape', 'Escape')
+    keys('Escape'); shows('second window draft')
     raw('\x1b]10;rgb:2020/2020/2020\x1b\\\x1b]11;rgb:ffff/ffff/ffff\x1b\\')
     snapshot('new-window-light')
     print('PASS welcome: modal separation, keyboard ownership, wide/narrow/light rendering and resize', flush=True)
