@@ -44,7 +44,9 @@ it.runIf(binary)('keeps connected local shells interactive and composes a remote
   hn = async (...args) => (await exec(binary!, ['-L', 'shell-e2e', '--port', String(a.daemon.port), '-f', '/dev/null', ...args],
     { env, cwd: a.daemon.projectsDir, timeout: 15_000 })).stdout.trim()
   const client = hn
-  const screen = () => client('capture-pane', '-p', '-S', '-')
+  // Paths in the private HOME can exceed one terminal row. Join soft wraps so
+  // the shell's output is checked independently of the headless pane's width.
+  const screen = () => client('capture-pane', '-p', '-J', '-S', '-')
   const send = async (line: string) => { await client('send-keys', '-l', line); await client('send-keys', 'Enter') }
   const ready = () => until('interactive shell', async () => (await screen()).trimEnd().endsWith('SHELL_READY>'), 20_000)
   await client('new-session', '-d', '-s', 'shells', '-c', a.daemon.projectsDir)
@@ -52,6 +54,7 @@ it.runIf(binary)('keeps connected local shells interactive and composes a remote
   await send('export COMPOSER_KEEP=yes; printf "ORIGINAL_PID=%s\\n" "$$"')
   const pid = await until('the original shell PID', async () => /^ORIGINAL_PID=(\d+)$/m.exec(await screen())?.[1])
   const original = await client('display', '-p', '#{pane_id}')
+  const originalPosition = await client('display', '-p', '#{window_id}:#{pane_index}:#{window_panes}')
   await client('new-window', '-c', a.daemon.projectsDir)
   await ready()
   await send('printf "NEW_WINDOW_%s\\n" OK')
@@ -92,5 +95,9 @@ process.stdin.on('data', data => { if (data.includes(3)) process.exit(130); });
   await ready()
   await send('printf "RETURN=%s:%s:%s\\n" "$$" "$COMPOSER_KEEP" "$PWD"')
   await until('same shell after remote exit', async () => (await screen()).includes(`RETURN=${pid}:yes:${a.daemon.projectsDir}`))
-  expect(await client('display', '-p', '#{pane_id}')).toBe(original)
+  // Replacing an attached view allocates a new view id; its logical position
+  // and the underlying shell process must both remain the same.
+  expect(await client('display', '-p', '#{window_id}:#{pane_index}:#{window_panes}')).toBe(originalPosition)
+  expect(await client('display', '-p', '#{pane_machine}')).toBe('machine-a')
+  expect(readdirSync(join(a.daemon.dataDir, 'shell-creations')).filter(n => n.endsWith('.json'))).toHaveLength(3)
 })

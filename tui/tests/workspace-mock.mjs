@@ -74,7 +74,9 @@ const server = http.createServer(async (req, res) => {
       if (update.publish) broadcast(state.currentLocal,'agent_synced',{agent:owner})
     } else if (update.action === 'composer-exit' && sessionCatalog) {
       const target = agents[REMOTE].find(a => a.id === update.agent)
-      if (target) { target.engine = 'terminal'; broadcast(REMOTE, 'agent_synced', { agent: target }) }
+      // shell_open runs a process directly, so its exit stops the terminal;
+      // the initial terminal label alone is not evidence that it has exited.
+      if (target) { target.status = 'stopped'; target.terminal.available = false; broadcast(REMOTE, 'agent_synced', { agent: target }) }
     } else if (update.action === 'machines') {
       state.visibleMachines = update.remote ? [state.currentLocal, REMOTE] : [state.currentLocal]
       state.machinesStale = update.stale === true
