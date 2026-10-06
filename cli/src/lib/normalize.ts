@@ -408,8 +408,14 @@ function userTextRaw(msg: NormalizedMessage): string | null {
  * then the text block is empty and there is nothing left to parse.
  */
 function taskNotificationEvent(raw: Record<string, unknown>): LiveEvent | null {
-  if (raw.type !== 'user') return null
-  const content = (raw.message as { content?: unknown } | undefined)?.content ?? raw.content
+  // A sub-agent that finishes while its parent is still working is handed back into that turn as a
+  // `queued_command` attachment (commandMode `task-notification`) carrying the same block, and that is the
+  // more common delivery (about 800 against 370 user records across real 2.1.270–2.1.287 transcripts).
+  // Read from user records alone, it never finished: its row stayed running on the dial and the parent's
+  // recap was held until the backstop gave up on it.
+  const attachment = raw.type === 'attachment' ? raw.attachment as { type?: unknown; prompt?: unknown } | undefined : undefined
+  if (raw.type !== 'user' && attachment?.type !== 'queued_command') return null
+  const content = attachment ? attachment.prompt : (raw.message as { content?: unknown } | undefined)?.content ?? raw.content
   let text = ''
   if (typeof content === 'string') text = content
   else if (Array.isArray(content)) {

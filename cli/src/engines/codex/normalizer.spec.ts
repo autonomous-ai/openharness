@@ -644,3 +644,115 @@ describe('Codex rollout normalizer — the 0.147 TUI vocabulary', () => {
     expect(windowed.hasMore).toBe(true)
   })
 })
+
+/**
+ * Codex 0.160 runs sub-agents as "multi-agent v2" (`multi_agent_version: "v2"` in turn_context), and records
+ * them in a vocabulary the Task tree never read (shapes measured on real 0.160.0 rollouts; text invented):
+ *
+ *   function_call        spawn_agent (namespace "collaboration"), args { task_name, agent_type, message }
+ *   item_completed       SubAgentActivity { id: <spawn call id>, kind: "started", agent_thread_id, agent_path }
+ *   function_call_output { "task_name": "/root/<name>" }  — no agent_id, no thread_id, no nickname
+ *   agent_message        { author: "/root/<name>", recipient: "/root", content: [input_text "Message Type: …\n…Payload:\n<text>"] }
+ *   item_completed       SubAgentActivity { kind: "completed", agent_thread_id, agent_path }
+ *
+ * and never the `<subagent_notification>` the v1 vocabulary closed a Task on. Read with v1's rules, the spawn's
+ * output named no child, so every sub-agent Codex started closed at once as "Task failed: {"task_name":…}".
+ */
+describe('Codex sub-agents — the 0.160 multi-agent v2 vocabulary', () => {
+  const childThread = '01a20000-1111-7222-8333-944445555666'
+  const spawnCall = 'call_spawnScout0001'
+  const message = (text: string, kind = 'FINAL_ANSWER') => line('response_item', {
+    type: 'agent_message',
+    author: '/root/scout',
+    recipient: '/root',
+    content: [
+      { type: 'input_text', text: `Message Type: ${kind}\nTask name: /root\nSender: /root/scout\nPayload:\n${text}` },
+      { type: 'encrypted_content', encrypted_content: 'gAAAA-invented' },
+    ],
+  })
+  const spawned = [
+    line('event_msg', { type: 'task_started', turn_id: 'turn-1' }),
+    line('event_msg', { type: 'item_completed', item: { type: 'UserMessage', id: 'u1', content: [{ type: 'text', text: 'Send a scout to count the fixtures' }] } }),
+    line('response_item', {
+      type: 'function_call',
+      namespace: 'collaboration',
+      name: 'spawn_agent',
+      call_id: spawnCall,
+      arguments: JSON.stringify({ task_name: 'scout', agent_type: 'explorer', message: 'Count the fixtures under test/. Report the number.' }),
+    }),
+    line('event_msg', { type: 'item_completed', item: { type: 'SubAgentActivity', id: spawnCall, kind: 'started', agent_thread_id: childThread, agent_path: '/root/scout' } }),
+    line('response_item', { type: 'function_call_output', call_id: spawnCall, output: JSON.stringify({ task_name: '/root/scout' }) }),
+  ]
+  const finished = [
+    line('inter_agent_communication_metadata', { trigger_turn: false }),
+    message('There are 12 fixtures.'),
+    line('event_msg', { type: 'item_completed', item: { type: 'SubAgentActivity', id: 'subagent-completed-01a2', kind: 'completed', agent_thread_id: childThread, agent_path: '/root/scout' } }),
+    line('event_msg', { type: 'item_completed', item: { type: 'AgentMessage', content: [{ type: 'Text', text: 'The scout counted 12.' }], phase: 'final_answer' } }),
+    line('event_msg', { type: 'task_complete', turn_id: 'turn-1' }),
+  ]
+  // The parent writing to its child mid-task: hidden like the other orchestration calls, and no result.
+  const followUp = [
+    line('response_item', { type: 'function_call', namespace: 'collaboration', name: 'send_message', call_id: 'call_nudge01', arguments: JSON.stringify({ target: 'scout', message: 'Include the snapshots.' }) }),
+    line('event_msg', { type: 'item_completed', item: { type: 'SubAgentActivity', id: 'call_nudge01', kind: 'interacted', agent_thread_id: childThread, agent_path: '/root/scout' } }),
+    line('response_item', { type: 'function_call_output', call_id: 'call_nudge01', output: '' }),
+  ]
+  const resolver: CodexSubagentResolver = () => ({ events: [], agentType: 'Goodall', totalToolUseCount: 2, totalTokens: 900, totalDurationMs: 4_000 })
+
+  it('opens the Task when Codex starts the sub-agent, not a failure', () => {
+    const normalizer = new CodexNormalizer('live', resolver)
+    const events = spawned.flatMap((raw) => normalizer.ingest(raw))
+
+    expect(events.map((event) => event.type)).toEqual(['turn_started', 'tool_start'])
+    expect(events[1]).toEqual({
+      type: 'tool_start',
+      payload: {
+        id: spawnCall,
+        tool: 'Task',
+        input: { subagent_type: 'explorer', name: 'scout', title: 'Count the fixtures under test/', description: 'Count the fixtures under test/. Report the number.' },
+      },
+    })
+  })
+
+  it('closes the Task when the sub-agent completes, with what it reported, keyed by its thread', () => {
+    const resolveSubagent = vi.fn(resolver)
+    const normalizer = new CodexNormalizer('live', resolveSubagent)
+    const events = [...spawned, ...followUp, ...finished].flatMap((raw) => normalizer.ingest(raw))
+
+    expect(events.map((event) => event.type)).toEqual(['turn_started', 'tool_start', 'tool_end', 'text_delta', 'turn_ended'])
+    expect(events[2].payload).toMatchObject({
+      id: spawnCall,
+      tool: 'Task',
+      isError: false,
+      output: 'There are 12 fixtures.',
+      subagent: { agentId: childThread, agentType: 'Goodall', totalToolUseCount: 2, totalTokens: 900, totalDurationMs: 4_000 },
+    })
+    expect(resolveSubagent).toHaveBeenCalledWith(childThread)
+  })
+
+  it('reports a final answer over a later progress message, and says completed when the child sent none', () => {
+    const answered = new CodexNormalizer('live', resolver)
+    const late = [...spawned, message('Final count: 12.'), message('Anything else?', 'MESSAGE'), ...finished.slice(2)]
+      .flatMap((raw) => answered.ingest(raw))
+    expect(late.find((event) => event.type === 'tool_end')?.payload).toMatchObject({ output: 'Final count: 12.', isError: false })
+
+    const silent = new CodexNormalizer('live', resolver)
+    const quiet = [...spawned, ...finished.slice(2)].flatMap((raw) => silent.ingest(raw))
+    expect(quiet.find((event) => event.type === 'tool_end')?.payload).toMatchObject({ output: 'Subagent completed', isError: false })
+  })
+
+  it('replays the same Task to history', () => {
+    const events = codexMessagesToEvents([...spawned, ...finished], resolver)
+    const task = events.filter((event) => (event.type === 'tool_start' || event.type === 'tool_end') && event.payload.tool === 'Task')
+    expect(task.map((event) => event.type)).toEqual(['tool_start', 'tool_end'])
+    expect(task[1].payload).toMatchObject({ isError: false, output: 'There are 12 fixtures.', subagent: { agentId: childThread } })
+  })
+
+  it('still closes a Task by the child\'s path when its start was never read', () => {
+    // An attach can fold from the spawn's output alone. The output names the child by its path, and the
+    // completion carries the same path beside the thread id.
+    const normalizer = new CodexNormalizer('live', resolver)
+    const events = [spawned[2], spawned[4], ...finished.slice(0, 3)].flatMap((raw) => normalizer.ingest(raw))
+    expect(events.map((event) => event.type)).toEqual(['tool_start', 'tool_end'])
+    expect(events[1].payload).toMatchObject({ id: spawnCall, isError: false, output: 'There are 12 fixtures.', subagent: { agentId: '/root/scout' } })
+  })
+})

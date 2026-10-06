@@ -267,6 +267,11 @@ export class CodexNormalizer implements EngineNormalizer {
   private childLaunchers = new Map<string, SpawnState>()
   private pendingChildResults = new Map<string, ChildResult>()
   private completedChildren = new Set<string>()
+  /** Codex 0.160 (multi-agent v2): a spawn's call id → the child it started, from the SubAgentActivity
+   *  written before the spawn's output, which names the child only by its path. */
+  private startedChildren = new Map<string, { threadId: string; path: string }>()
+  /** v2: what each child last told its parent, by the child's path — its result when it completes. */
+  private childReports = new Map<string, { text: string; final: boolean }>()
   private thinkingCounter = 0
   /** See `TurnState.thinkingPrefix`. */
   thinkingPrefix = 'thinking-codex-'
@@ -338,6 +343,8 @@ export class CodexNormalizer implements EngineNormalizer {
       return message ? [{ type: 'text_delta', payload: { content: message } }] : []
     }
 
+    if (type === 'SubAgentActivity') return this.subAgentActivity(item)
+
     if (type === 'task_complete' || type === 'turn_aborted') {
       this.pendingTask = false
       const events = this.completeOutstanding(type === 'turn_aborted')
@@ -376,6 +383,11 @@ export class CodexNormalizer implements EngineNormalizer {
       if (objective) return this.goalTurn(objective)
       const notification = subagentNotification(item)
       return notification ? this.completeChild(notification.childId, notification.result) : []
+    }
+
+    if (type === 'agent_message') {
+      this.noteChildReport(item)
+      return []
     }
 
     if (type === 'reasoning') {
@@ -446,9 +458,15 @@ export class CodexNormalizer implements EngineNormalizer {
     if (!spawn) return []
     this.toolNames.delete(id)
     const parsed = parseObject(item.output)
-    const childId = string(parsed?.agent_id) || string(parsed?.thread_id)
+    // Codex 0.160's spawn output is only `{"task_name":"/root/<name>"}`: the child's thread comes from the
+    // SubAgentActivity it wrote just before, and its path is the key when that was not read (an attach that
+    // folds from here). Without these every sub-agent read as failed to start (found by daemon QA).
+    const started = this.startedChildren.get(id)
+    this.startedChildren.delete(id)
+    const taskName = string(parsed?.task_name)
+    const childId = string(parsed?.agent_id) || string(parsed?.thread_id) || started?.threadId || started?.path || taskName
     if (childId) {
-      const nickname = string(parsed?.nickname) || string(parsed?.name)
+      const nickname = string(parsed?.nickname) || string(parsed?.name) || taskName.split('/').pop() || ''
       if (nickname) spawn.input.name = nickname
       this.pendingSpawns.delete(id)
       this.childLaunchers.set(childId, spawn)
@@ -477,6 +495,43 @@ export class CodexNormalizer implements EngineNormalizer {
         },
       },
     ]
+  }
+
+  /**
+   * Codex 0.160's record of a sub-agent's life (multi-agent v2). `started` arrives with the spawn's call id
+   * before the spawn's output and names the child's thread; `completed` is the only record that the child
+   * finished: v2 writes no `<subagent_notification>`, and its `wait_agent` output carries no status.
+   */
+  private subAgentActivity(item: JsonObject): LiveEvent[] {
+    const kind = string(item.kind)
+    const threadId = string(item.agent_thread_id)
+    const path = string(item.agent_path)
+    if (kind === 'started') {
+      const callId = string(item.id)
+      if (callId && (threadId || path)) this.startedChildren.set(callId, { threadId, path })
+      return []
+    }
+    if (kind !== 'completed') return []
+    const childId = [threadId, path].find((id) => id && this.childLaunchers.has(id)) || threadId || path
+    if (!childId) return []
+    const report = this.childReports.get(path)
+    this.childReports.delete(path)
+    return this.completeChild(childId, { output: report?.text ?? '', isError: false })
+  }
+
+  /**
+   * A v2 child's message to its parent: `Message Type: FINAL_ANSWER|MESSAGE`, its task and sender, then
+   * `Payload:` and the text. Kept by sender as the result its Task closes with; a final answer outranks a
+   * progress message sent after it.
+   */
+  private noteChildReport(item: JsonObject): void {
+    const author = string(item.author)
+    const text = textContent(item)
+    if (!author || !text) return
+    const final = /^Message Type:\s*FINAL_ANSWER\b/m.test(text)
+    const body = (/(?:^|\n)Payload:[ \t]*\n?([\s\S]*)$/.exec(text)?.[1] ?? text).trim()
+    if (!body || (this.childReports.get(author)?.final && !final)) return
+    this.childReports.set(author, { text: body, final })
   }
 
   private completeFromStatus(value: unknown): LiveEvent[] {
@@ -560,6 +615,8 @@ export class CodexNormalizer implements EngineNormalizer {
       this.pendingSpawns.delete(callId)
     }
     this.pendingChildResults.clear()
+    this.startedChildren.clear()
+    this.childReports.clear()
     return events
   }
 }
