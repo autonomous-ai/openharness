@@ -263,8 +263,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
   final _shellFocus = FocusNode(debugLabel: 'Tab shell');
 
   /// Where the keyboard waits after the active tab closes
-  /// ([AppNotifier.tabStripFocused]): the strip drawn here, or the native one
-  /// in the title bar, which draws its selected tab as focused.
+  /// ([AppNotifier.tabStripFocused]). This passive hold has no focus outline;
+  /// tab controls show one when explicitly reached by keyboard navigation.
   final _tabStripFocus = FocusNode(
     debugLabel: 'Tab strip',
     skipTraversal: true,
@@ -1848,7 +1848,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       'searchTooltip': _commandTooltip('Open Harness', 'harnesses.list'),
       'storeTooltip': _commandTooltip('Explore Harness Store', 'app.store'),
       'devicesVisible': app.devicesEnabled,
-      // The selected tab is drawn with keyboard focus: ⏎ goes into it.
+      // Native accessibility explains that ⏎ enters the selected tab.
       'tabsFocused': app.tabStripFocused && _tabStripFocus.hasPrimaryFocus,
       // Only once the slot is shown: until then (and whenever daemons are
       // off) native lays out the bar it had before daemons existed.
@@ -2599,11 +2599,22 @@ class _SwarmScreenState extends State<SwarmScreen> {
   Future<bool> _reviewSessionClose(
     List<(String, Agent)> targets, {
     String? tabName,
+    bool Function(String machineId, String agentId)? canStop,
   }) async {
     final requests = [
       for (final (machine, agent) in targets)
         app.prepareSessionClose(machine, agent),
     ];
+    // This gate belongs to closing views. The session stop protocol and its
+    // activity checks remain unchanged, including terminal and DSH handling.
+    Future<Map<String, dynamic>> request(int index, String mode) {
+      final target = targets[index];
+      if (canStop?.call(target.$1, target.$2.id) == false) {
+        return Future.value({'keptRunning': true, 'activity': 'idle'});
+      }
+      return requests[index](mode);
+    }
+
     final activities = List.filled(targets.length, 'unknown');
     final showMachines = targets.map((target) => target.$1).toSet().length > 1;
     Future<String?> choose({String? error}) async {
@@ -2613,14 +2624,15 @@ class _SwarmScreenState extends State<SwarmScreen> {
           context,
           [
             for (var i = 0; i < targets.length; i++)
-              SessionCloseItem(
-                name: targets[i].$2.displayName,
-                activity: activities[i],
-                machineName: showMachines
-                    ? app.stateOf(targets[i].$1)?.machine.displayName ??
-                          targets[i].$1
-                    : null,
-              ),
+              if (activities[i] != 'kept_running')
+                SessionCloseItem(
+                  name: targets[i].$2.displayName,
+                  activity: activities[i],
+                  machineName: showMachines
+                      ? app.stateOf(targets[i].$1)?.machine.displayName ??
+                            targets[i].$1
+                      : null,
+                ),
           ],
           tabName: tabName,
           keymap: _keymap,
@@ -2648,13 +2660,17 @@ class _SwarmScreenState extends State<SwarmScreen> {
     Future<String?> inspectFrom(int start) async {
       for (var i = start; i < requests.length; i++) {
         if (!mounted) return null;
-        final state = await requests[i]('inspect');
+        final state = await request(i, 'inspect');
         if (!mounted) return null;
         if (state['error'] != null) {
           return state['detail'] as String? ??
               'Could not check ${targets[i].$2.displayName}. Nothing else will be stopped.';
         }
-        activities[i] = state['activity'] as String? ?? 'unknown';
+        activities[i] =
+            state['keptRunning'] == true ||
+                canStop?.call(targets[i].$1, targets[i].$2.id) == false
+            ? 'kept_running'
+            : state['activity'] as String? ?? 'unknown';
       }
       return null;
     }
@@ -2665,12 +2681,18 @@ class _SwarmScreenState extends State<SwarmScreen> {
     final inspectionError = await inspectFrom(0);
     if (!mounted) return false;
     if (inspectionError != null) return closeAfterError(inspectionError);
-    var stopNow = activities.any((activity) => activity != 'idle');
+    var stopNow = activities.any(
+      (activity) => activity != 'idle' && activity != 'kept_running',
+    );
     if (stopNow && await choose() != 'now') return false;
     for (var i = 0; i < requests.length; i++) {
       if (!mounted) return false;
-      var result = await requests[i](stopNow ? 'now' : 'idle');
+      var result = await request(i, stopNow ? 'now' : 'idle');
       if (!mounted) return false;
+      if (result['keptRunning'] == true) {
+        activities[i] = 'kept_running';
+        continue;
+      }
       // An idle-only close may race with new work. Review every remaining
       // session together, and disclose any sessions that already stopped.
       if (result['error'] == 'SESSION_NOT_IDLE') {
@@ -2680,9 +2702,13 @@ class _SwarmScreenState extends State<SwarmScreen> {
         if (inspectionError != null) return closeAfterError(inspectionError);
         if (await choose() != 'now') return false;
         stopNow = true;
-        result = await requests[i]('now');
+        result = await request(i, 'now');
       }
       if (!mounted) return false;
+      if (result['keptRunning'] == true) {
+        activities[i] = 'kept_running';
+        continue;
+      }
       if (result['closed'] != true && result['deferred'] != true) {
         activities[i] = 'unconfirmed';
         return closeAfterError(
@@ -7767,10 +7793,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
                             ),
                             tooltip: tabHint.isEmpty ? null : tabHint,
                             activityLabel: activity?.label,
-                            highlighted:
-                                selected &&
-                                app.tabStripFocused &&
-                                _tabStripFocus.hasPrimaryFocus,
                             onSelect: _shortcutsEnabled
                                 ? () => app.selectSwarm(swarm.id)
                                 : null,

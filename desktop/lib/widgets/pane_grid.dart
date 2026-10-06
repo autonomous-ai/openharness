@@ -1609,6 +1609,19 @@ class _PaneContent extends StatelessWidget {
           detail:
               '${machine.machine.displayName} is offline. Retained output is read only.',
         );
+      } else if (agent?.isStopped == true) {
+        final opening = notifier.pendingAgentRestart(
+          pane.machineId,
+          wantedAgentId!,
+        );
+        notice = terminalNotice(
+          label: opening?.busy == true ? 'Opening' : 'Stopped',
+          icon: AppIcons.terminal,
+          detail: opening?.result?.error ?? 'Open to continue your saved conversation. Retained output is read only.',
+          actionLabel: opening?.busy == true ? null : 'Open',
+          onAction: () => notifier.openSavedPane(pane.id).ignore(),
+          banner: true,
+        );
       } else if (agent == null || !agent.terminalAvailable) {
         notice = terminalNotice(
           label: 'Unavailable',
@@ -1811,6 +1824,24 @@ class _PaneContent extends StatelessWidget {
         icon: AppIcons.circleHelp,
         message: 'This harness is no longer on ${machine.machine.displayName}.',
         onClose: close,
+      );
+    }
+    if (agent?.isStopped == true) {
+      final opening = notifier.pendingAgentRestart(
+        pane.machineId,
+        wantedAgentId,
+      );
+      return _PaneStatus(
+        activity: activityMark,
+        title: agentName,
+        icon: AppIcons.terminal,
+        message: opening?.busy == true
+            ? 'Opening saved conversation…'
+            : opening?.result?.error ?? 'This harness is stopped. Open it to continue your saved conversation.',
+        onClose: close,
+        busy: opening?.busy == true,
+        actionLabel: opening?.busy == true ? null : 'Open',
+        onAction: () => notifier.openSavedPane(pane.id).ignore(),
       );
     }
     if (agent != null && !agent.terminalAvailable) {
