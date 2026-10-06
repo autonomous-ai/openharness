@@ -1,5 +1,6 @@
 """Real dependency migration and session tools on the disposable update VM."""
 import hashlib
+import io
 import json
 from pathlib import Path
 import re
@@ -71,21 +72,34 @@ def screenshots(vm, result):
 
     def saved(before, name):
         deadline = time.monotonic() + 10
-        while not (added := files() - before):
+        raw = b''
+        while True:
+            added = files() - before
+            assert len(added) <= 1, added
+            if added:
+                path = next(iter(added))
+                raw = vm.read_file(path)
+                # grim creates the file before rendering/encoding it. Existence
+                # alone can return zero bytes or a partially written PNG.
+                if raw.endswith(b'\x00\x00\x00\x00IEND\xaeB`\x82'):
+                    break
             if time.monotonic() >= deadline:
-                raise TimeoutError('Screenshot was not saved: ' + name)
+                raise TimeoutError(f'Screenshot did not finish: {name}; files={added}; bytes={len(raw)}')
             time.sleep(.2)
-        assert len(added) == 1
-        path = added.pop()
-        raw = vm.read_file(path)
         assert raw[:8] == b'\x89PNG\r\n\x1a\n'
+        with Image.open(io.BytesIO(raw)) as capture:
+            capture.verify()
         (vm.folder / (name + '.png')).write_bytes(raw)
         # Read the real Wayland clipboard from a real pane, whose environment
         # was inherited from the session; no fabricated DISPLAY value.
         target = '/tmp/' + name + '-clipboard.png'
-        command = 'wl-paste --type image/png > ' + target + ' && touch ' + target + '.done'
+        # Clipboard ownership is established after encoding; await that too,
+        # without re-triggering capture or accepting the previous selection.
+        command = ('for n in $(seq 1 50); do wl-paste --type image/png > ' + target + ' 2>/dev/null && '
+                   'cmp -s ' + shlex.quote(path) + ' ' + target + ' && touch ' + target + '.done && exit 0; '
+                   'sleep .1; done; exit 1')
         vm.command('hn new-window -n clipboard-check ' + shlex.quote(command))
-        vm.command('for n in $(seq 1 40); do test -e ' + target + '.done && exit 0; sleep .1; done; exit 1')
+        vm.command('for n in $(seq 1 60); do test -e ' + target + '.done && exit 0; sleep .1; done; exit 1')
         assert vm.read_file(target) == raw, 'Clipboard differs from the saved PNG'
         return struct.unpack('>II', raw[16:24])
 
