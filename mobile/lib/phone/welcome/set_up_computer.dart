@@ -108,7 +108,7 @@ Future<Map<String, String>> loadDesktopDownloads({Dio? dio}) async {
 /// └──────────────────────────────────────┘
 /// or open harness.autonomous.ai/desktop there.
 ///
-/// Then open it, and scan the code it shows.
+/// Then open it, sign in with Google or Apple, and scan the code in Add Phone….
 /// Scan to connect ›
 /// ```
 class SetUpComputerPage extends StatefulWidget {
@@ -287,7 +287,14 @@ class _SetUpComputerPageState extends State<SetUpComputerPage> {
                 style: faint,
               ),
               const SizedBox(height: 28),
-              Text('Then open it, and scan the code it shows.', style: faint),
+              // ⚠️ **Sign in, and with which buttons.** The desktop app opens signed out, and shows no
+              // code until it is signed in — "Then open it, and scan the code it shows" sent people to
+              // an Add Phone that only said "Sign in to add your phone.". Google or Apple by name: its
+              // third way, "Scan with your phone", needs a phone that is already signed in.
+              Text(
+                'Then open it, sign in with Google or Apple, and scan the code in Add Phone….',
+                style: faint,
+              ),
               const SizedBox(height: 4),
               Align(
                 alignment: Alignment.centerLeft,

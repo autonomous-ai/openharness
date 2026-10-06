@@ -1112,6 +1112,23 @@ class AppNotifier extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Why this phone was signed out while it was in use — its session ended for good, or another
+  /// device removed it from the account — for the welcome screen to say. Without it the phone lands
+  /// on the first-run welcome as if it had never been signed in. Null after a Sign out by hand, and
+  /// cleared the moment a sign-in starts.
+  String? signedOutReason;
+
+  /// A Sign out by hand is under way or done, until the next sign-in. ⚠️ That sign-out takes this
+  /// phone's key out of the device log, and the log reading its own removal back calls
+  /// [ViewerDeviceLog.onSignedOut] — the very call a removal from another device makes. This is what
+  /// tells the two apart, so the person who pressed Sign out is not told the phone was removed.
+  bool _leftByHand = false;
+
+  static const _signedOutEnded =
+      'You were signed out. Sign in again to reach your computers.';
+  static const _signedOutRemoved =
+      'This phone was removed from your account on another device. Sign in again to use it here.';
+
   String get autonomousEnv => _autonomousEnv;
 
   static const offlineRetryInterval = Duration(seconds: 5);
@@ -1417,6 +1434,10 @@ class AppNotifier extends ChangeNotifier {
     // end in a read of the device log, which must be judged by THIS sign-in (a hand sign-in mints its
     // id here), not the previous account's. Synchronous: no await may come first.
     _beginDeviceLogSignIn(revision);
+    // Signed in again: a removal the log reads from here on was made by another device. Not before
+    // this line — the last Sign out by hand may still be reading its own removal back until the log
+    // knows about this sign-in, which the line above just told it.
+    _leftByHand = false;
     // Stays on the pre-navigation `bootstrapping` screen (main.dart) until the local state is
     // restored. A phone has no local service to start — the desktop's "Starting local service…"
     // was a sentence about somebody else's computer shown while this one read its own disk.
@@ -1578,8 +1599,14 @@ class AppNotifier extends ChangeNotifier {
     _keptScreenStore?.clear();
     unawaited(_pool?.closeAll());
     _pool = null;
+    // ⚠️ The saved session goes too. The socket that said so (a refresh refused, 4403) is the only
+    // judge of it, and a session left on disk signed the NEXT launch straight back in — only to be
+    // refused again, with the person never told why. Best effort, as [logout]'s own: a store that
+    // cannot be written to must not surface as an unhandled error on the way out.
+    unawaited(cliLogin.logout().catchError((Object _) {}));
     _lastError = message;
     _lastErrorRetryable = true;
+    signedOutReason = _signedOutEnded;
     status = AppStatus.unauthenticated;
     notifyListeners();
   }
@@ -1612,6 +1639,7 @@ class AppNotifier extends ChangeNotifier {
     final revision = _invalidateAuthWork();
     _closedHistory.clear();
     _lastError = null;
+    signedOutReason = null;
     signingIn = true;
     notifyListeners();
     try {
@@ -1642,6 +1670,7 @@ class AppNotifier extends ChangeNotifier {
     final revision = _invalidateAuthWork();
     _closedHistory.clear();
     _lastError = null;
+    signedOutReason = null;
     signingIn = true;
     notifyListeners();
     try {
@@ -1675,6 +1704,7 @@ class AppNotifier extends ChangeNotifier {
     final revision = _invalidateAuthWork();
     _closedHistory.clear();
     _lastError = null;
+    signedOutReason = null;
     signingIn = true;
     signInProvider = provider;
     notifyListeners();
@@ -1733,7 +1763,16 @@ class AppNotifier extends ChangeNotifier {
     viewer.login.cancel();
   }
 
-  Future<void> logout() async {
+  /// Sign out by hand — Settings ▸ account ▸ Sign out. The welcome screen it lands on says nothing:
+  /// the person knows why they are there.
+  Future<void> logout() {
+    _leftByHand = true;
+    return _endSession();
+  }
+
+  /// Everything a sign-out does, whoever asked for it. [reason] is what the welcome screen says
+  /// ([signedOutReason]): null when the person chose it.
+  Future<void> _endSession({String? reason}) async {
     // Signing out takes this phone's key out of the account's devices, while the sign-in still works
     // to say so. Best effort, and brief.
     if (_deviceLog case final log?) {
@@ -1801,6 +1840,7 @@ class AppNotifier extends ChangeNotifier {
     _clearDeviceNotices();
     expandedMachines.clear();
     selectedMachineId = null;
+    signedOutReason = reason;
     status = AppStatus.unauthenticated;
     notifyListeners();
   }
@@ -2518,7 +2558,10 @@ class AppNotifier extends ChangeNotifier {
       onRemoved: (n) => _whenSignedIn(() => announceDeviceRemoval(n)),
       onSignedOut: () async {
         // Sign out first: it takes this phone's key out of the log, which needs the key it is about.
-        await logout();
+        // After a Sign out by hand this is that sign-out reading its own removal back — nothing to
+        // tell anyone ([_leftByHand]). Otherwise another device removed this phone, and the welcome
+        // screen it lands on says so.
+        await _endSession(reason: _leftByHand ? null : _signedOutRemoved);
         await viewer.keys.forgetIdentity();
       },
       onChanged: () {

@@ -1,4 +1,5 @@
 import '../approve_sign_in.dart';
+
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -24,7 +25,7 @@ import 'set_up_computer.dart';
 ///
 /// Send it to your computer:   (the download menu)
 /// …
-/// Then open it, and scan the code it shows.
+/// Then open it, sign in with Google or Apple, and scan the code in Add Phone….
 /// Scan to connect ›
 /// See how it works ▶
 /// Try the sample while you wait
