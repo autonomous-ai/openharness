@@ -13,7 +13,7 @@
  * each asked of the core over its link (`ask`). The agents it reads come as the apps are shown them (`service_query shown`): each with its
  * name, whether its terminal is there and its harness's viewer.
  */
-import { DAEMON_UNKNOWN, DELIVERIES_OFF, LANE_OFF, OBSERVER_KEY_OFF, resolveAgent, TERMINALS_OFF, type CoreApi, type DaemonAddress, type TerminalWatch } from '../core/api.js'
+import { DAEMON_UNKNOWN, DELIVERIES_OFF, LANE_OFF, OBSERVER_KEY_OFF, resolveAgent, TERMINALS_OFF, WIFI_OFF, type CoreApi, type DaemonAddress, type TerminalWatch } from '../core/api.js'
 import type { AgentDshContext } from '../lib/agentFrame.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import type { turnsLink } from './turnsLink.js'
@@ -63,19 +63,21 @@ function keyAnswer(answer: Payload): string {
 }
 
 /**
- * What only the devices ask of the core (services/devices.ts), as every other service in its own process
- * answers it: nothing. Shared, so that a member added for the devices is added once for the others.
+ * What only the devices ask of the core (services/devices.ts, services/wifi.ts), as every other service in
+ * its own process answers it: nothing. Shared, so that a member added for the devices is added once for the others.
  */
 export const UNASKED = {
   machine: { id: () => '', computerId: () => '', name: () => '' },
   activityText: async (): Promise<string | null> => null,
   account: { signedIn: () => false, environment: () => '', machines: async () => ({ status: 503, body: {} }) },
   clients: { sendLocal: () => {}, sendToWindow: () => false, hasWindow: () => false, devicesChanged: () => {}, dialWatching: () => {} },
+  wifi: WIFI_OFF,
 } satisfies {
   machine: CoreApi['machine']
   activityText: CoreApi['agents']['activityText']
   account: Pick<CoreApi['account'], 'signedIn' | 'environment' | 'machines'>
   clients: Pick<CoreApi['clients'], 'sendLocal' | 'sendToWindow' | 'hasWindow' | 'devicesChanged' | 'dialWatching'>
+  wifi: CoreApi['wifi']
 }
 
 export function processCoreApi(dataDir: string, service: string, view: AgentsView = {}): CoreApi {
@@ -163,5 +165,6 @@ export function processCoreApi(dataDir: string, service: string, view: AgentsVie
       machineId: () => daemon().machineId(),
       get autonomousEnv() { return daemon().autonomousEnv },
     },
+    wifi: UNASKED.wifi,
   }
 }

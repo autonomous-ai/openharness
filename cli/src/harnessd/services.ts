@@ -356,8 +356,9 @@ export const SERVICE_HOSTS: Readonly<Record<string, ServiceHostSpec>> = {
   // The devices (services/devicesProcess.ts): the dials on USB (pure-JS serial, a frame decoder whose buffer
   // is bounded per dial), the window bridges, the fleet's router and its lane, the voice router's engine
   // worker (a process of its own, outside this budget). Hardware that speaks whatever its firmware says:
-  // what it costs, it costs here, never a session.
-  devices: { services: ['devices'], heapLimitMiB: 256, rssLimitMiB: 512 },
+  // what it costs, it costs here, never a session. The Wi-Fi device beside them (services/wifiProcess.ts),
+  // on a link of its own: its receipts, its streams and its Store preparations.
+  devices: { services: ['devices', 'wifi'], heapLimitMiB: 256, rssLimitMiB: 512 },
 }
 
 /** Every service this build can run outside the core's process: what `HARNESSD_SERVICES` names. */

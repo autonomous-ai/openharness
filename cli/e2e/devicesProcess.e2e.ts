@@ -9,15 +9,14 @@
  * - a dial unplugged and plugged in again and again, a dial whose session throws on every call, and a dial
  *   flooding its port with what no dial sends are each dropped alone, and come back.
  */
-import { execFileSync } from 'node:child_process'
 import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { LocalClient, type Frame } from './harness/client.js'
 import { IsolatedDaemon, until } from './harness/daemon.js'
-import { FakeDial, type DialMessage } from './harness/fakeDial.js'
+import { Desk, devicesPids } from './harness/desk.js'
+import type { DialMessage, FakeDial } from './harness/fakeDial.js'
 
-const SETTINGS = { brightness: 60, character: 0, face: 466, muted: false, quiet: false, straightTitle: false, focusFace: false, scrollReversed: false, round: true, voiceLang: 'en' }
 
 const row = async (client: LocalClient, agentId: string) =>
   ((await client.request<{ agents: Array<Record<string, any>> }>('agents_list', { includeStopped: true }, 30_000)).agents)
@@ -39,14 +38,6 @@ async function turn(client: LocalClient, agentId: string, content: string): Prom
   client.send('message', { agentId, content })
   await ended
 }
-/** This daemon's devices processes, by the pids its master logged: `harnessd-devices` alone would match every
- *  daemon's on the machine, another file's in a parallel run. */
-function devicesPids(d: IsolatedDaemon): number[] {
-  const ours = new Set([...d.log().matchAll(/\[harnessd\] service devices started \(pid (\d+)\)/g)].map((match) => Number(match[1])))
-  const table = execFileSync('ps', ['-A', '-o', 'pid=,command=']).toString().trim().split('\n')
-  return table.map((line) => line.trim().match(/^(\d+)\s+(.*)$/)).filter((match): match is RegExpMatchArray => !!match)
-    .filter(([, pid, command]) => command.trim() === 'harnessd-devices' && ours.has(Number(pid))).map(([, pid]) => Number(pid))
-}
 const restarts = (d: IsolatedDaemon) => d.log().split('\n').filter((line) => /\[harnessd\] service devices started .* restart \d+/.test(line)).length
 const connections = (d: IsolatedDaemon) => d.log().split('\n').filter((line) => line.includes('[services] devices connected')).length
 /** ⌘K's pick for a typed task: `route_task` answers as `route_result`, under the asker's request id. */
@@ -55,30 +46,6 @@ async function routeTask(client: LocalClient, text: string): Promise<Record<stri
   const answered = client.next((frame) => frame.type === 'route_result' && frame.payload?.requestId === requestId, 40_000, 'route_result')
   client.send('route_task', { requestId, text })
   return (await answered).payload as Record<string, any>
-}
-
-/** The dials this daemon finds, written where its discovery reads them at every scan. */
-class Desk {
-  constructor(readonly file: string, private readonly plugged = new Map<string, FakeDial>()) {}
-  async plug(serial: string, mac: string): Promise<FakeDial> {
-    const dial = await FakeDial.open({ mac, settings: SETTINGS })
-    this.plugged.set(serial, dial)
-    this.write()
-    dial.keepGreeting()
-    return dial
-  }
-  async unplug(serial: string): Promise<void> {
-    const dial = this.plugged.get(serial)
-    this.plugged.delete(serial)
-    this.write()
-    await dial?.close()
-  }
-  async close(): Promise<void> {
-    for (const serial of [...this.plugged.keys()]) await this.unplug(serial)
-  }
-  private write(): void {
-    writeFileSync(this.file, JSON.stringify([...this.plugged].map(([serial, dial]) => ({ serial, path: dial.path }))))
-  }
 }
 
 describe('the devices in their own process', () => {

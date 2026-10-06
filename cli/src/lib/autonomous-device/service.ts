@@ -39,11 +39,13 @@ export interface AutonomousDeviceServiceOptions {
    * window is connected to scroll.
    */
   scroll?: (phase: 'down' | 'move' | 'up', dy: number, velocity: number) => boolean
-  submit: (agentId: string, text: string, deliveryId: string) => void
+  /** Settles once the pane's lock has taken the prompt: the reply carries what it said of it meanwhile. */
+  submit: (agentId: string, text: string, deliveryId: string) => void | Promise<void>
   cancelDelivery: (deliveryId: string) => boolean
   stop: (agentId: string) => Promise<boolean>
   answer: (agentId: string, questionRequestId: string, answers: Record<string, string>) => Promise<boolean>
-  recent: (agentId: string, n: number) => unknown[]
+  /** A promise when the turns are asked of the core from another process (services/wifi.ts). */
+  recent: (agentId: string, n: number) => unknown[] | Promise<unknown[]>
   /**
    * The newest turn's COMPLETE final answer for an agent, or undefined.
    *
@@ -122,6 +124,10 @@ export class AutonomousDeviceService {
     }
     return false
   }
+  /** Whether it still reads this agent's transcript: the core sends its lines only while it does (core/wifi.ts). */
+  watchesTranscript(agentId: string): boolean { return this.transcriptAgents.has(agentId) }
+  /** The agents whose transcripts it reads. */
+  transcriptWatches(): string[] { return [...this.transcriptAgents] }
   observeTranscript(agentId: string, sessionId: string, engine: string, line: string): void {
     if (!this.needsTranscript(agentId, sessionId, engine)) return
     if (this.transcriptSessions.get(agentId) !== sessionId) {
@@ -352,6 +358,8 @@ export class AutonomousDeviceService {
   private readonly streams: AgentStreams
   /** Live events of one agent, for its subscribers only. Never recorded in the replay log. */
   stream(agentId: string, events: readonly LiveEvent[]): void { this.streams.ingest(agentId, events) }
+  /** The agents a device subscribed to: the core sends their tools' events too (core/wifi.ts). */
+  streamedAgents(): string[] { return this.streams.agents() }
   /** The device's last link closed: its subscriptions end with it, and a reconnect subscribes again. */
   deviceOffline(deviceId: string): void { this.streams.dropDevice(deviceId) }
 
@@ -380,8 +388,8 @@ export class AutonomousDeviceService {
   }
   private key(deviceId: string, key: string): string { return `${deviceId}:${key}` }
   /** The newest `recap` turn's headline for an agent, or undefined when no turn has been summarised. */
-  private latestRecap(agentId: string): string | undefined {
-    const first = this.options.recent(agentId, 1)[0]
+  private async latestRecap(agentId: string): Promise<string | undefined> {
+    const first = (await this.options.recent(agentId, 1))[0]
     const recap = object(first) && typeof first.recap === 'string' ? first.recap.replace(/\s+/g, ' ').trim() : ''
     return recap ? recap.slice(0, AGENT_RECAP_MAX_CHARS) : undefined
   }
@@ -576,10 +584,10 @@ export class AutonomousDeviceService {
       if (type === 'scroll') { this.scroll(req); return response({}) }
       if ('focusRevision' in req && (typeof req.focusRevision !== 'string' || !req.focusRevision)) fail('INVALID_REQUEST', 'focusRevision must be a nonempty string')
       if (type === 'agents.list') {
-        return response({ machineId: this.options.machineId, agents: this.options.agents().map(a => {
-          const recap = this.latestRecap(a.agentId)
+        return response({ machineId: this.options.machineId, agents: await Promise.all(this.options.agents().map(async a => {
+          const recap = await this.latestRecap(a.agentId)
           return { ...a, machineId: this.options.machineId, ...(recap ? { recap } : {}) }
-        }) })
+        })) })
       }
       if (typeof req.agentId !== 'string' || !req.agentId || typeof req.machineId !== 'string') fail('MISSING_TARGET', 'machineId and agentId are required')
       if (req.machineId !== this.options.machineId) fail('MACHINE_MISMATCH', 'Only the paired machine is available')
@@ -609,7 +617,7 @@ export class AutonomousDeviceService {
       if (type === 'recap') {
         const n = req.n ?? 3
         if (!Number.isInteger(n) || Number(n) < 1 || Number(n) > 5) fail('INVALID_REQUEST', 'n must be from 1 to 5')
-        return response({ machineId: this.options.machineId, agentId, turns: this.options.recent(agentId, Number(n)) })
+        return response({ machineId: this.options.machineId, agentId, turns: await this.options.recent(agentId, Number(n)) })
       }
       if (type === 'question.answer' && this.questions.get(agentId)?.requestId !== req.questionRequestId) fail('QUESTION_STALE', 'Question is no longer open')
       this.reserveCapacity()
@@ -618,7 +626,7 @@ export class AutonomousDeviceService {
       this.entries.set(key, entry); this.deliveries.set(entry.receipt.deliveryId, entry); reserved = entry
       this.persist() // durable reservation MUST precede any engine write
       try {
-        if (type === 'turn.send') this.options.submit(agentId, String(req.text), entry.receipt.deliveryId)
+        if (type === 'turn.send') await this.options.submit(agentId, String(req.text), entry.receipt.deliveryId)
         else {
           const ok = type === 'turn.stop' ? await this.options.stop(agentId) : await this.options.answer(agentId, String(req.questionRequestId), req.answers as Record<string, string>)
           if (this.entries.get(key) !== entry) {

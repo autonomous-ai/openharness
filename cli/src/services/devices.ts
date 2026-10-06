@@ -13,7 +13,8 @@
  * windows on this computer say, as it hears it, and every card it sends the devices; the window's desk,
  * tabs, unread rows and focus it keeps, and says again whenever the devices start.
  *
- * The Wi-Fi device is not here yet: it rides the gateway's sessions and joins the devices next (step 10).
+ * The Wi-Fi device is a service of its own beside these (services/wifi.ts), in the same process, on a link
+ * of its own: it rides the gateway's sessions, and borrows the dial's walk and stroke through the core.
  */
 import { existsSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'

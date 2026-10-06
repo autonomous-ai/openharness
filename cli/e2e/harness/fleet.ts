@@ -86,8 +86,8 @@ async function writeE2ee(daemon: IsolatedDaemon, files: Record<string, unknown>)
 }
 
 /** A daemon for one machine of the account, signed in to the fake backend and nothing else. */
-async function signedInDaemon(backend: FakeBackend, spec: FakeMachine, env: Record<string, string> = {}): Promise<IsolatedDaemon> {
-  const daemon = await IsolatedDaemon.create({ env: { ...remoteSettings(backend), ADAPTER_COMPUTER_ID: spec.computerId, ...env } })
+async function signedInDaemon(backend: FakeBackend, spec: FakeMachine, env: Record<string, string> = {}, scriptPath?: string): Promise<IsolatedDaemon> {
+  const daemon = await IsolatedDaemon.create({ ...(scriptPath ? { scriptPath } : {}), env: { ...remoteSettings(backend), ADAPTER_COMPUTER_ID: spec.computerId, ...env } })
   // The daemon inherits the runner's environment, where a registry or a proxy may be named. None of
   // them is anywhere a fleet daemon may go.
   for (const [key, value] of Object.entries(daemon.env)) {
@@ -104,28 +104,36 @@ export interface PhoneMachine {
   machine: FleetMachine
   /** A phone of the account, paired with the machine: its key is trusted there as a web client. */
   phone: { identity: Identity; token: string }
+  /** A Wi-Fi device paired with the machine (`wifiDevice`): its key is trusted there as a device, and it
+   *  reaches the machine through the relay as a phone does (harness/fakeWifiDevice.ts). */
+  wifi: { identity: Identity; token: string }
   close(): Promise<void>
 }
 
 /** One signed-in machine and a phone paired with it, on the fake backend: what a phone reaches the
  *  machine through, end to end encrypted and relayed. */
-export async function startPhoneMachine(options: { env?: Record<string, string> } = {}): Promise<PhoneMachine> {
+export async function startPhoneMachine(options: { env?: Record<string, string>; wifiDevice?: boolean; scriptPath?: string } = {}): Promise<PhoneMachine> {
   const backend = await FakeBackend.start()
   const spec = { machineId: 'a1'.repeat(16), computerId: 'e2e-computer-0000-0000-00000000000a', name: 'machine-a', token: 'e2e-token-machine-a', identity: newIdentity() }
   backend.addMachine(spec)
   const phone = { identity: newIdentity(), token: 'e2e-token-phone' }
   backend.addUser(phone.token)
+  const wifi = { identity: newIdentity(), token: 'e2e-token-wifi-device' }
+  backend.addUser(wifi.token)
   let daemon: IsolatedDaemon | null = null
   try {
-    daemon = await signedInDaemon(backend, spec, options.env)
+    daemon = await signedInDaemon(backend, spec, options.env, options.scriptPath)
     await writeE2ee(daemon, {
       'identity.json': { priv: b64e(spec.identity.priv), pub: b64e(spec.identity.pub) },
-      'paired.json': [{ identityPub: b64e(phone.identity.pub), label: 'phone', pairedAt: Date.now(), role: 'web' }],
+      'paired.json': [
+        { identityPub: b64e(phone.identity.pub), label: 'phone', pairedAt: Date.now(), role: 'web' },
+        ...(options.wifiDevice ? [{ identityPub: b64e(wifi.identity.pub), label: 'Wi-Fi device', pairedAt: Date.now(), role: 'device' }] : []),
+      ],
     })
     await daemon.start()
     const started = daemon
     return {
-      backend, machine: { ...spec, daemon: started }, phone,
+      backend, machine: { ...spec, daemon: started }, phone, wifi,
       async close() {
         await started.close().catch(() => {})
         await backend.close()

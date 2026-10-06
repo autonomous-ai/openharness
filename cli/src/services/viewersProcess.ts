@@ -85,6 +85,7 @@ export function viewersCoreApi(dataDir: string, sessions: ReadonlyMap<string, Re
     },
     clients: { viewerChanged: tell, gridNamed: () => {}, gridModelsChanged: () => {}, dshInstallStatus: () => {}, windows: () => {}, observer: () => false, ...UNASKED.clients },
     daemon: DAEMON_UNKNOWN,
+    wifi: UNASKED.wifi,
   }
 }
 

@@ -12,6 +12,12 @@
  * ids, times and counters are made comparable. A type or a key on one side and not the other is a
  * difference; one listed in CHANGED is on purpose, with why.
  *
+ * The Wi-Fi device too (harness/fakeWifiDevice.ts): paired with a signed-in machine and reaching it through
+ * the fake relay, it says hello, lists its agents, follows the window's focus, sends a prompt and reads its
+ * receipt, subscribes to an agent's live text, answers a question, scrolls the window's terminal, steps
+ * along the desk and lists the Store. Every answer and event it heard, and the window's frames it caused,
+ * are compared the same way.
+ *
  * Skipped unless COMPAT_FROM names a bundle, as e2e/compat.e2e.ts is. `COMPAT_REPORT=<file>` writes both
  * sides, for reading.
  */
@@ -21,6 +27,8 @@ import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { LocalClient, type Frame } from './harness/client.js'
 import { IsolatedDaemon, until } from './harness/daemon.js'
 import { FakeDial, type DialMessage } from './harness/fakeDial.js'
+import { FakeWifiDevice } from './harness/fakeWifiDevice.js'
+import { startPhoneMachine } from './harness/fleet.js'
 
 const FROM = process.env.COMPAT_FROM
 
@@ -155,6 +163,117 @@ async function scenario(scriptPath: string | undefined, label: string): Promise<
   }
 }
 
+/** Types the Wi-Fi device may hear in one run and not the other, by timing alone, each with why. */
+const WIFI_TIMING: Record<string, string> = {
+  // A summary's recap or a tool's card reaches the device as the core's mirror writes it; how many of a
+  // fast fake turn's land before the scenario moves on is timing.
+  'event turn.tool': 'a tool card of a fast fake turn, which lands or not before the scenario moves on',
+  // The answer's text is flushed every few hundred milliseconds or at a size; a short fake answer may go in
+  // one flush or in none before the final.
+  'event stream.text': 'flushed on a timer or at a size: a short fake answer may land only in the final',
+  'event stream.tool': 'the fake turn the subscription watched may call no tool',
+}
+
+/** One build's signed-in machine, a window and a Wi-Fi device through the scenario; what both heard. */
+async function wifiScenario(scriptPath: string | undefined, label: string): Promise<Heard> {
+  const world = await startPhoneMachine({ wifiDevice: true, ...(scriptPath ? { scriptPath } : {}) })
+  const { backend, machine } = world
+  const device = new FakeWifiDevice({ backend, machineId: machine.machineId, identity: world.wifi.identity, machinePub: machine.identity.pub, token: world.wifi.token })
+  onTestFailed(() => { console.log(`---- ${label} daemon log\n${machine.daemon.log().split('\n').slice(-120).join('\n')}\n---- the device heard\n${JSON.stringify(device.events().slice(-30))}`) })
+  const heard: Heard = { shapes: new Map(), values: {}, order: [] }
+  try {
+    const window = await LocalClient.connect(machine.daemon, { machineId: machine.machineId })
+    const cwd = join(machine.daemon.projectsDir, 'wifi-compat')
+    mkdirSync(cwd, { recursive: true })
+    const created = await window.request('agent_create', { engine: 'claude', cwd, bypassPermission: true }, 60_000)
+    const agentId: string = created.agent.id
+    await until('the agent to bind', async () => ((await window.request('agents_list', {})).agents as Array<Record<string, unknown>>)
+      .find((agent) => agent.id === agentId)?.sessionId || null, 45_000, 500)
+    window.send('app_swarms', { active: 't1', swarms: [{ id: 't1', name: 'Tab', agentIds: [agentId], panes: 1 }], tiles: [] })
+    window.send('app_panes', { agentIds: [agentId], foreground: true })
+    await until('the machine to be on the relay', () => backend.nodeUp(machine.machineId) || null, 30_000)
+    await until('the device to open a session', async () => { await device.open(10_000); return true }, 60_000, 500)
+    const answers: Array<Record<string, any>> = []
+    const ask = async (type: string, fields: Record<string, unknown> = {}) => {
+      const answer = await device.ask(type, fields)
+      answers.push(answer)
+      return answer
+    }
+    const hello = await until('the hello to be answered', async () => (await device.ask('hello', { proto: 1 }).catch(() => null)) ?? null, 60_000, 500)
+    answers.push(hello)
+    const target = { machineId: machine.machineId, agentId }
+    await ask('agents.list')
+    await ask('status', target)
+    await ask('recap', { ...target, n: 1 })
+    // The window moves to the agent: the device's focus follows.
+    let since = device.mark()
+    window.send('app_focus', { agentId })
+    await device.nextEvent((e) => e.kind === 'focus.changed' && e.payload?.focus?.agentId === agentId, 'focus.changed', since)
+    const focus = await ask('focus.get')
+    // A prompt from the device, its turn, and its receipt.
+    since = device.mark()
+    await ask('turn.send', { ...target, idempotencyKey: 'prompt-1', text: 'from the wifi device' })
+    await device.nextEvent((e) => e.kind === 'turn.done' && e.agentId === agentId, 'the prompt\'s turn ending', since)
+    await new Promise((resolve) => setTimeout(resolve, 1_000))
+    await ask('receipt.get', { idempotencyKey: 'prompt-1' })
+    // Its live text, while subscribed.
+    const subscribed = await ask('agent.subscribe', { ...target, ttlSec: 60 })
+    since = device.mark()
+    window.send('message', { agentId, content: 'streamed to the device' })
+    await device.nextEvent((e) => e.kind === 'stream.final' && e.agentId === agentId, 'stream.final', since)
+    await ask('agent.unsubscribe', { subscriptionId: subscribed.subscriptionId })
+    // A question, answered from the device.
+    since = device.mark()
+    window.send('message', { agentId, content: '!ask' })
+    const open = await device.nextEvent((e) => e.kind === 'question.open' && e.agentId === agentId, 'question.open', since)
+    const first = (open.payload.questions as Array<Record<string, any>>)[0]
+    await ask('question.answer', { ...target, idempotencyKey: 'answer-1', questionRequestId: open.payload.questionRequestId,
+      answers: { [first.question ?? first.q ?? first.header]: 'Coffee' } })
+    await device.nextEvent((e) => e.kind === 'question.close' && e.agentId === agentId, 'question.close', since)
+    // A stroke for the window's terminal, and a step along the desk.
+    await ask('scroll', { phase: 'down', dy: 0, velocity: 0 })
+    await ask('scroll', { phase: 'up', dy: 0, velocity: 0 })
+    await window.waitFor((f) => f.type === 'dial_scroll' && f.payload?.phase === 'up', 15_000, 'dial_scroll')
+    await ask('focus.step', { direction: 'next', idempotencyKey: 'step-1', focusRevision: focus.focusRevision })
+    await ask('store.list')
+    await new Promise((resolve) => setTimeout(resolve, 1_500))
+    for (const answer of answers) hear(heard, `result ${answer.type}`, answer)
+    for (const event of device.events()) {
+      const key = `event ${event.kind ?? event.type}`
+      hear(heard, key, event)
+      heard.order.push(`${key} ${JSON.stringify(event).slice(0, 160)}`)
+    }
+    for (const frame of window.frames as Frame[]) {
+      if (!frame.type.startsWith('dial_') && !frame.type.startsWith('device_')) continue
+      hear(heard, `window ${frame.type}`, frame)
+    }
+    heard.values.hello = { proto: hello.proto, capabilities: [...(hello.capabilities as string[])].sort() }
+    heard.values.agents = (answers[1].agents as Array<Record<string, unknown>>).map((agent) => ({ engine: agent.engine, state: agent.state, runtime: agent.runtime }))
+    heard.values.focus = { agent: focus.focus?.agentId === agentId }
+    window.close()
+    return heard
+  } finally {
+    device.close()
+    await world.close()
+  }
+}
+
+/** What two runs heard that differs, but for what is listed as changed or timing. */
+function differ(before: Heard, after: Heard, timing: Record<string, string>): string[] {
+  const differences: string[] = []
+  for (const key of new Set([...before.shapes.keys(), ...after.shapes.keys()])) {
+    if (CHANGED[key] || timing[key]) continue
+    const was = before.shapes.get(key)
+    const is = after.shapes.get(key)
+    if (!was) { differences.push(`${key}: only in this build`); continue }
+    if (!is) { differences.push(`${key}: not in this build`); continue }
+    const lost = [...was].filter((s) => !is.has(s))
+    const added = [...is].filter((s) => !was.has(s))
+    if (lost.length || added.length) differences.push(`${key}: shapes ${JSON.stringify({ lost, added })}`)
+  }
+  return differences
+}
+
 describe.skipIf(!FROM)('the devices\' frames, against another build\'s', () => {
   afterEach(() => {})
 
@@ -165,18 +284,18 @@ describe.skipIf(!FROM)('the devices\' frames, against another build\'s', () => {
       const side = (heard: Heard) => ({ shapes: Object.fromEntries([...heard.shapes].map(([key, set]) => [key, [...set].map((s) => JSON.parse(s))])), values: heard.values, order: heard.order })
       writeFileSync(process.env.COMPAT_REPORT, JSON.stringify({ before: side(before), after: side(after) }, null, 2))
     }
-    const differences: string[] = []
-    for (const key of new Set([...before.shapes.keys(), ...after.shapes.keys()])) {
-      if (CHANGED[key] || TIMING[key]) continue
-      const was = before.shapes.get(key)
-      const is = after.shapes.get(key)
-      if (!was) { differences.push(`${key}: only in this build`); continue }
-      if (!is) { differences.push(`${key}: not in this build`); continue }
-      const lost = [...was].filter((s) => !is.has(s))
-      const added = [...is].filter((s) => !was.has(s))
-      if (lost.length || added.length) differences.push(`${key}: shapes ${JSON.stringify({ lost, added })}`)
+    expect(differ(before, after, TIMING)).toEqual([])
+    expect(after.values).toEqual(before.values)
+  })
+
+  it('the Wi-Fi device and the windows hear the same answers and events, in the same shapes', async () => {
+    const before = await wifiScenario(FROM, 'released')
+    const after = await wifiScenario(process.env.E2E_BUNDLE_PATH, 'this build')
+    if (process.env.COMPAT_REPORT) {
+      const side = (heard: Heard) => ({ shapes: Object.fromEntries([...heard.shapes].map(([key, set]) => [key, [...set].map((s) => JSON.parse(s))])), values: heard.values, order: heard.order })
+      writeFileSync(`${process.env.COMPAT_REPORT}.wifi.json`, JSON.stringify({ before: side(before), after: side(after) }, null, 2))
     }
-    expect(differences).toEqual([])
+    expect(differ(before, after, WIFI_TIMING)).toEqual([])
     expect(after.values).toEqual(before.values)
   })
 })

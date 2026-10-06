@@ -10,7 +10,7 @@
  * the other controller lazily: each one calls into the other.
  */
 import { AutonomousDeviceInput, type DeviceInputDeps } from './deviceInput.js'
-import type { AutonomousDeviceService } from '../lib/autonomous-device/service.js'
+import type { WifiFeed } from './wifi.js'
 import type { CommandCodeNormalizer } from '../engines/commandcode/normalizer.js'
 import { deviceErrorText } from './cardText.js'
 import { adaptSlashCommand } from '../lib/goalCommand.js'
@@ -38,8 +38,8 @@ export interface InputDeps {
     /** Whether a team delivery still holds control of its pane. */
     canWrite: (deliveryId: string) => boolean
   }
-  /** The Harness device service, once it exists. */
-  device: () => Pick<AutonomousDeviceService, 'delivery' | 'inputDispatched' | 'inputStatus' | 'agentGone'> | undefined
+  /** The Wi-Fi device's service, wherever it runs (core/wifi.ts). */
+  device: () => Pick<WifiFeed, 'delivery' | 'inputDispatched' | 'inputStatus' | 'agentGone'> | undefined
   /** The app (`send`) and the dial (`sendCommander`). */
   clients: { send(frame: Frame): void; sendCommander(frame: Frame): void }
   agentIdFor: (sessionId: string) => string

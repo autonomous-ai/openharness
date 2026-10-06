@@ -10,8 +10,6 @@
  * the core with `__run`.
  */
 import { ensureBundledCoreHarnesses } from '../dsh/builtins.js'
-import { createDeviceStore, deviceStoreAgents } from '../lib/autonomous-device/storeRuntime.js'
-import { runningDevicePart, startDevicePart } from '../lib/autonomous-device/parts.js'
 import { readFileSync, writeFileSync, openSync, existsSync, rmSync, statSync } from 'fs'
 import { join } from 'path'
 import { execFile, spawn, spawnSync } from 'child_process'
@@ -93,7 +91,7 @@ import { createLastTurnReader } from './transcripts/lastTurn.js'
 import { createRecaps } from './turns/recaps.js'
 import { createUpdateHandoff, probeStagedMaster, probeVerdict } from './updateHandoff.js'
 import { createHeartbeats } from './turns/heartbeats.js'
-import { createEventFunnel, outsideConsumers } from './turns/funnel.js'
+import { createEventFunnel } from './turns/funnel.js'
 import { createAgyBackstop } from './turns/agyBackstop.js'
 import { createIngest } from './transcripts/ingest.js'
 import { createTurnHooks } from './turns/turnHooks.js'
@@ -121,7 +119,7 @@ import { createAgentUpdate } from './agents/update.js'
 import { createEngineHooks, installEngineHooks } from './engines/hooks.js'
 import { createCursorTaskHooks } from './engines/cursorTasks.js'
 import { databaseHistory } from './transcripts/databaseHistory.js'
-import { createCoreApi, DEVICES_FALLBACKS, DEVICES_REQUESTS, emptyPorts, EXPERIMENTS, LONG_ANSWERS, MODELS_FALLBACKS, MODELS_OFF, MODELS_REQUESTS, MONITOR_FALLBACKS, MONITOR_OFF, MONITOR_REQUESTS, ORCHESTRATOR_FALLBACKS, ORCHESTRATOR_REQUESTS, SHARE_REQUESTS, SHARING_FALLBACKS, PROJECTS_REQUESTS, SEARCH_FALLBACKS, SEARCH_REQUESTS, STORE_REQUESTS, TEAMS_FALLBACKS, TEAMS_REQUESTS, USAGE_REQUESTS, VIEWERS_FALLBACKS, WORKSPACES_FALLBACKS, type GatewayAccount, type GatewayOps, type GatewayStatus, type RouteAnswer, type TeamsPort, type WindowFocus } from './api.js'
+import { createCoreApi, DEVICES_FALLBACKS, DEVICES_REQUESTS, emptyPorts, EXPERIMENTS, LONG_ANSWERS, MODELS_FALLBACKS, MODELS_OFF, MODELS_REQUESTS, MONITOR_FALLBACKS, MONITOR_OFF, MONITOR_REQUESTS, ORCHESTRATOR_FALLBACKS, ORCHESTRATOR_REQUESTS, SHARE_REQUESTS, SHARING_FALLBACKS, PROJECTS_REQUESTS, SEARCH_FALLBACKS, SEARCH_REQUESTS, STORE_REQUESTS, TEAMS_FALLBACKS, TEAMS_REQUESTS, USAGE_REQUESTS, VIEWERS_FALLBACKS, WIFI_FALLBACKS, WORKSPACES_FALLBACKS, type GatewayAccount, type GatewayOps, type GatewayStatus, type RouteAnswer, type TeamsPort, type WindowFocus } from './api.js'
 import { createServiceHost, testFaults } from './serviceHost.js'
 import { startStalls } from './stall.js'
 import { createServiceLinks, type ServiceLinks } from './serviceLinks.js'
@@ -148,7 +146,9 @@ import { publishHookRoute } from '../lib/hookRoutes.js'
 import { commandBarService } from '../lib/commandBar.js'
 import { BackendSocket, isLocalClientId } from '../backendSocket.js'
 import { createGatewayLink, laneOf } from './gatewayLink.js'
-import { AutonomousDeviceService } from '../lib/autonomous-device/service.js'
+import { createWifiCore } from './wifi.js'
+import { createWifiLink } from './wifiLink.js'
+import { wifiDoors } from './wifiAgents.js'
 import { autonomousDeviceLocalRequest } from '../lib/autonomous-device/localApi.js'
 import { attachLocalWsServer, LOCAL_WS_PATH, LOCAL_WS_PROTOCOL_VERSION } from '../localWsServer.js'
 import { TERMINAL_BINARY_VERSION } from '../lib/terminalBinary.js'
@@ -167,8 +167,6 @@ import { AgentCreationReceipts } from '../lib/agentCreationReceipt.js'
 import { agentFrame, lastActivityAt, type AgentFrame } from '../lib/agentFrame.js'
 import { forgetAgentProject } from '../lib/agentProject.js'
 import { agentTokenUsage } from '../lib/agentTokenUsage.js'
-import { DeviceResultJournal } from '../lib/autonomous-device/resultJournal.js'
-import { adaptSlashCommand } from '../lib/goalCommand.js'
 import { RuntimeProfileManager, type RuntimeModelOption } from '../lib/runtimeProfile.js'
 import { RuntimeProfileController } from '../lib/runtimeProfileController.js'
 import { installTimestampedConsole, sid, prepareLogFile, trimLogFile, LOG_CHECK_INTERVAL_MS } from '../lib/log.js'
@@ -629,6 +627,30 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // The experiments: the orchestrator's turns, and those of the experiments after it.
     deliverers: new Set(Object.keys(EXPERIMENTS)),
   })
+  const ports = emptyPorts()
+  // The Wi-Fi device's service runs with the dials (services/wifi.ts); what the core reads in line of it
+  // (who is watching, which transcripts and streams it follows, the focus revision) and the check on every
+  // answer it sends a device are here (core/wifi.ts). Its doors are the calls it made when it ran here.
+  const machineIdNow = (): string => backendRef?.machineId ?? ''
+  const wifiCore = createWifiCore({
+    port: () => ports.wifi,
+    gateway: {
+      device: (connId, type, payload) => backendRef?.deviceFrame(connId, type, payload),
+      deviceClient: (connId, identity) => backendRef?.deviceClient(connId, identity),
+      revokeIdentity: (identity) => gatewayOps.revokeIdentity(identity),
+    },
+    remoteClient: (connId) => backendRef?.remoteClient(connId) ?? null,
+    fullText: (agentId) => mirror.lastFullText(registry.byAgent(agentId)?.sessionId ?? agentId),
+    joined: () => backendRef?.onCommanderJoin?.(),
+    // Its direct links are the gateway's, started only once it serves: a device they connected to a service
+    // that could not be built would be answered by nothing.
+    ready: () => gatewayOps.wifiService(true),
+    doors: wifiDoors({
+      registry, machineId: machineIdNow, displayName: projectDisplayName, running: (sessionId) => turnStartedAt.has(sessionId),
+      socket: () => backendRef ?? null, deviceInput: () => deviceInput, answer: (request) => questions.answer(request),
+      stop: (agentId) => cancelAgent(agentId, true), devices: () => ports.devices,
+    }),
+  })
   const coreApi = createCoreApi({
     // Agents' terminals: a literal-argv launch, and a read-only view for Share's observers (core/terminalWatch.ts).
     terminals: { ...createTerminalOpener({ tmuxBackend, registry, announceSession, blocksFolder: (cwd) => !!backendRef?.purgeAgentService?.blocksFolder(cwd) }), watch: terminalWatch.watch },
@@ -688,6 +710,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     sendToWindow: (connId, frame) => localWsServerRef?.sendToWindow(connId, frame) ?? false,
     hasWindow: () => backendRef?.hasLocalClient() ?? false,
     devicesChanged: (payload) => backendRef?.send({ type: 'harness_devices_changed', payload }),
+    wifi: wifiCore.api,
     dialWatching: (watching) => {
       const attached = watching && !dialWatching
       dialWatching = watching
@@ -733,7 +756,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
         answers: answer.answers, expectedQuestions: answer.questions, selectedLabels: answer.selections, freeTextKeys: answer.freeTextKeys })).ok,
     },
   })
-  const ports = emptyPorts()
   // Each service starts and is called through the host, so one that fails is logged and left off and
   // the core carries on without it (core/serviceHost.ts).
   const serviceHost = createServiceHost(ports, { faults: testFaults(process.env.HARNESSD_TEST_FAULTS) })
@@ -768,8 +790,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       }
     }
   }
-  let deviceStoreRef: ReturnType<typeof createDeviceStore> | undefined
-  let autonomousDeviceService: AutonomousDeviceService | undefined
   let devicePartsBuilt = false
   let appFormWindow: { machineId: string; connId: string } | undefined
   let appVoiceFocus: { machineId: string; agentId: string; connId: string } | undefined
@@ -821,6 +841,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     signedIn: !!session?.machineId, tokens: auth, backend: (method, path) => proxyBackend(method, path), account: account(),
   })
   backend.useGateway(gateway.port)
+  backend.useWifi(wifiCore.fromGateway)
   const gatewayOps = gateway.ops
   daemonBoot.openRequests = () => backend.openRequests()
   const teams: TeamsPort = {
@@ -866,7 +887,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
    *  the cards are made for it in line, without asking the devices, which may be in another process. */
   const cableWatchingLocal = (): boolean => dialWatching
 
-  const deviceIsWatching = (): boolean => backend.hasCommander() || cableWatchingLocal() || backend.autonomousDeviceConnected()
+  const deviceIsWatching = (): boolean => backend.hasCommander() || cableWatchingLocal() || wifiCore.connected()
   /** Anyone who can DRAW a question: a device, a cabled dial, or a desktop window on this computer. */
   const someoneCanAnswer = (): boolean => deviceIsWatching() || backend.hasLocalClient()
   const terminalStreams = new TerminalStreamManager({
@@ -981,7 +1002,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     normalizers,
     watcher,
     cursorDiscovery,
-    device: () => autonomousDeviceService,
+    device: () => wifiCore.feed,
     runtimeProfiles,
     captureTerminal,
     emit: (sessionId, events, opts) => emitSessionEvents(sessionId, events, opts),
@@ -1017,7 +1038,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       },
       canWrite: (deliveryId) => teams.canWrite(deliveryId),
     },
-    device: () => autonomousDeviceService,
+    device: () => wifiCore.feed,
     clients: backend,
     // Declared further down: read when an error is reported, never now.
     agentIdFor: (sessionId) => agentIdFor(sessionId),
@@ -1152,6 +1173,16 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     state: () => ({ desk: appPaneAgents, foreground: appWindowForeground, swarms: appSwarmsLatest, unread: appUnreadLatest,
       focus: windowFocus(), engines: registry.active().map((agent) => agent.engine), commanders: backend.hasCommander() }),
   })
+  // The Wi-Fi device in the devices' process (core/wifiLink.ts): its sessions' requests and what the agents do,
+  // in order; on each connection, what the core holds for it (core/wifi.ts).
+  const wifiLink = createWifiLink({
+    core: coreApi,
+    notify: (frame) => serviceLinks.notify('wifi', frame),
+    call: (type, payload, waitMs) => serviceLinks.call('wifi', type, payload, waitMs),
+  })
+  // Its port from the start: its process connects as soon as the socket answers, before the rest of the
+  // core is wired, and is resumed through this port then (core/wifi.ts `started`).
+  if (outOfProcess.has('wifi')) ports.wifi = wifiLink.port
   const serviceLinks = createServiceLinks({
     token: serviceToken,
     owned: Object.fromEntries([...outOfProcess].map((name) => [name, requestsOf[name] ?? []])),
@@ -1169,19 +1200,22 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       : service === 'models' ? modelsLink.answer(query, payload)
       : service === 'teams' || service === 'collaboration' ? teamsLink.answer(query, payload)
       : service === 'devices' ? devicesLink.answer(query, payload)
+      : service === 'wifi' ? wifiLink.answer(query, payload)
       : service === 'gateway' && gatewayLink ? gatewayLink.answer(query, payload) : answerAgentQuery(coreApi, query)),
     // The gateway's own traffic: its remote clients and what they sent, and its comings and goings; and what
     // the devices tell the core (a turn, a frame for the windows, a dial on the wire).
-    notice: (service, payload) => { if (service === 'gateway') gatewayLink?.notice(payload); else if (service === 'devices') devicesLink.notice(payload) },
+    notice: (service, payload) => { if (service === 'gateway') gatewayLink?.notice(payload); else if (service === 'devices') devicesLink.notice(payload); else if (service === 'wifi') wifiLink.notice(payload) },
     binary: (service, bytes) => { if (service === 'gateway') gatewayLink?.binary(bytes) },
     connected: (service) => {
       if (service === 'gateway') gatewayLink?.connected()
       if (service === 'teams') teamsLink.on()
       if (service === 'devices') devicesLink.connected()
+      if (service === 'wifi') wifiCore.started(appVoiceFocus ?? null)
     },
     disconnected: (service) => {
       if (service === 'gateway') gatewayLink?.disconnected()
       if (service === 'devices') devicesLink.disconnected()
+      if (service === 'wifi') wifiCore.stopped()
       void terminalWatch.gone(service)
     },
   })
@@ -1308,7 +1342,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     input,
     teams,
     deviceInput,
-    device: () => autonomousDeviceService,
+    device: () => wifiCore.feed,
     startHeartbeat,
     questionWatcher,
     mirror,
@@ -1676,8 +1710,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       // Until the pieces below are built; after, a piece that could not be is refused by the requests
       // that need it, and the rest (list, status, revoke) answer from the pairings.
       if (!devicePartsBuilt) return { status: 503, body: { error: { code: 'UNAVAILABLE', message: 'Autonomous device service is starting' } } }
-      // The Wi-Fi device's pairings and direct links are the gateway's (gateway/start.ts); its receipts the
-      // device service's, here.
+      // The Wi-Fi device's pairings and direct links are the gateway's (gateway/start.ts); its receipts its
+      // service's, with the dials (services/wifi.ts).
       const viaGateway = async (request: Parameters<GatewayOps['wifi']>[0]): Promise<Record<string, unknown>> => {
         const answer = await gatewayOps.wifi(request)
         if ('refused' in answer) throw Object.assign(new Error(answer.refused.message), { code: answer.refused.code })
@@ -1688,10 +1722,14 @@ async function runForeground(session: AuthSession | null): Promise<void> {
         pairStart: ({ code, device }) => viaGateway({ op: 'pair', code, device }),
         pairStatus: () => viaGateway({ op: 'pairStatus' }),
         list: () => viaGateway({ op: 'list' }),
-        status: async () => ({ transport: 'direct', connected: backend.directAutonomousDeviceSessions() > 0,
-          paired: ((await viaGateway({ op: 'list' })).devices as unknown[]).length, sessions: backend.directAutonomousDeviceSessions(), proto: 1 }),
+        status: async () => ({ transport: 'direct', connected: wifiCore.directSessions() > 0,
+          paired: ((await viaGateway({ op: 'list' })).devices as unknown[]).length, sessions: wifiCore.directSessions(), proto: 1 }),
         revoke: ({ id }) => viaGateway({ op: 'revoke', id }),
-        receipt: target => ({ receipt: runningDevicePart(autonomousDeviceService, 'Wi-Fi device service').receipt(target.deviceId, target.idempotencyKey) }),
+        receipt: async (target) => {
+          const answer = await (ports.wifi?.receipt(target.deviceId, target.idempotencyKey) ?? { unavailable: true as const })
+          if ('unavailable' in answer) throw Object.assign(new Error('The Wi-Fi device service is not running on this computer. See the daemon\'s log.'), { code: 'UNAVAILABLE' })
+          return { receipt: answer.receipt }
+        },
       }, method, target, body)
     },
     resolveHookAgent: engineHooks.resolveHookAgent,
@@ -1774,11 +1812,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // The device key log records which sign-in this machine is under: a session from before sign-in epochs
   // gets one first, adopted so it never starts the log over, and the gateway registers with it then.
   if (session?.machineId) void ensureSignInEpoch().catch(() => null).then(() => gatewayOps.account(account()))
-  // The Wi-Fi device answers for itself. A throw in it is logged — at most once a minute, with a count of
-  // the rest (core/turns/funnel.ts) — and goes no further: the local socket closes a connection whose frame
-  // handler throws, so a device fault left unguarded here would disconnect the desktop, again on every pane
-  // change. The dial and the window bridges are the devices' (services/devices.ts), behind their port.
-  const wifi = outsideConsumers({ prefix: 'devices', faults: testFaults(process.env.HARNESSD_TEST_FAULTS) })
+  // The dial, the window bridges and the Wi-Fi device are the devices' (services/devices.ts, services/wifi.ts),
+  // behind their ports, guarded there: the local socket closes a connection whose frame handler throws, so a
+  // device fault reaching here would disconnect the desktop, again on every pane change.
   /** Which window has the person's attention, as the devices are told it. */
   const windowFocus = (): WindowFocus => ({ voice: appVoiceFocus ?? null, form: appFormWindow ?? null })
   /** ⌘K's answer with no devices to route through. */
@@ -1797,23 +1833,21 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       if (appVoiceFocus?.connId === connId) appVoiceFocus = undefined
       ports.devices?.windowFocus(windowFocus())
       ports.devices?.windowGone(connId)
-      wifi('wifi', () => autonomousDeviceService?.appFocus(machineId, null, connId))
+      void ports.wifi?.appFocus(machineId, null, connId)
     },
     // The window and the dial are one desk: opening an agent in the app brings the dial to it, switching
     // the dial's machine first when the app moved to another one.
-    onDevicePrepareOpened: (operationId, agentId) => wifi('wifi', () => deviceStoreRef?.acknowledgeReveal(operationId, agentId)),
+    onDevicePrepareOpened: (operationId, agentId) => ports.wifi?.revealed(operationId, agentId),
     onAppFocusState: (machineId, agentId, connId, expectedRevision) => {
       // A delayed automatic selection cannot replace a newer explicit user choice. A device service
       // that cannot say which choice is newest is one with no choice to protect: refused, as without one.
-      let focusRevision: unknown
-      wifi('wifi', () => { focusRevision = autonomousDeviceService?.focusSnapshot().focusRevision })
-      if (expectedRevision && focusRevision !== expectedRevision) return false
+      if (expectedRevision && wifiCore.focusRevision() !== expectedRevision) return false
       appFormWindow = { machineId, connId }
       if (agentId === null) {
         if (appVoiceFocus?.connId === connId) appVoiceFocus = undefined
       } else appVoiceFocus = { machineId, agentId, connId }
       ports.devices?.windowFocus(windowFocus())
-      wifi('wifi', () => autonomousDeviceService?.appFocus(machineId, agentId, connId))
+      void ports.wifi?.appFocus(machineId, agentId, connId)
     },
     onAppFocus: (machineId, agentId) => ports.devices?.appFocus(machineId, agentId),
     // Everything the window still has unread. Held rather than acted on: the dial is handed it when a
@@ -1895,7 +1929,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     has: (sessionId) => registry.has(sessionId),
     bySession: (sessionId) => registry.bySession(sessionId),
     tokenUsage: agentTokenUsage,
-    device: () => autonomousDeviceService,
+    device: () => wifiCore.feed,
     runtimeProfiles,
     normalizers,
     announceTurnAborted,
@@ -2186,7 +2220,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     normalizers,
     cursorSubagents,
     input,
-    device: () => autonomousDeviceService,
+    device: () => wifiCore.feed,
     stopHeartbeat,
     questionWatcher,
     mirror,
@@ -2526,52 +2560,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     if (ports.devices) devicesLink.started(ports.devices)
   }
 
-  const deviceStore = createDeviceStore({ dataDir: env.ADAPTER_DATA_DIR, machineId: backend.machineId,
-    create: input => backend.onCreateAgent!(input),
-    reveal: (operationId, agentId) => { backend.sendFirstLocal({ type: 'device_prepare_open', payload: { operationId, machineId: backend.machineId, agentId } }) },
-  })
-  deviceStoreRef = deviceStore
-  deviceStore.startUiDelivery()
-  autonomousDeviceService = startDevicePart('Wi-Fi device service', () => new AutonomousDeviceService({
-    store: deviceStore,
-    resultJournal: new DeviceResultJournal(join(env.ADAPTER_DATA_DIR, 'device-results.json')),
-    inputConsumed: (id, text) => deviceInput.onTurnStarted(id, text),
-    machineId: backend.machineId,
-    requestAppFocus: (agentId, expiresAt, focusRevision) => backend.sendFirstLocal({
-      type: 'device_focus', payload: { machineId: backend.machineId, agentId, expiresAt, focusRevision },
-    }),
-    // The dial's own carousel tick, borrowed from the devices: ring order and wrap from the dial's host,
-    // `dial_focus` to the window, `app_focus` back. Without a window the forward is a no-op, so say so up
-    // front; without the devices there is no desk to walk.
-    stepFocus: (direction, currentAgentId) => !backend.hasLocalClient() ? Promise.resolve('no_app')
-      : ports.devices ? ports.devices.stepFocus(direction, currentAgentId) : Promise.resolve('no_agents'),
-    // The dial's touchpad stroke, borrowed the same way: `dial_scroll` to the window's focused terminal.
-    scroll: (phase, dy, velocity) => { if (!backend.hasLocalClient()) return false; ports.devices?.scroll(phase, dy, velocity); return true },
-    agents: () => {
-      const evidence = new Map(deviceStoreAgents(backend.machineId).map(a => [a.agentId, a]))
-      return registry.advertised().map(s => ({ agentId: s.agentId, name: projectDisplayName(s), engine: s.engine,
-        packageId: evidence.get(s.agentId)?.packageId ?? null, workspace: evidence.get(s.agentId)?.workspace ?? s.cwd,
-        runtime: evidence.get(s.agentId)?.runtime ?? 'unavailable',
-        state: turnStartedAt.has(s.sessionId) ? 'running' : 'idle' }))
-    },
-    submit: (id, text, deliveryId) => {
-      const session = registry.resolve(id)
-      deviceInput.submit(session?.agentId ?? id, adaptSlashCommand(text, session?.engine ?? 'claude'), deliveryId)
-    },
-    cancelDelivery: id => deviceInput.cancelDelivery(id),
-    stop: id => cancelAgent(id, true),
-    answer: async (agentId, requestId, answers) => (await questions.answer({ agentId, requestId, answers, allowPermissions: false })).ok,
-    recent: (id, n) => mirror.recent(registry.byAgent(id)?.sessionId ?? id, n),
-    fullText: id => mirror.lastFullText(registry.byAgent(id)?.sessionId ?? id),
-    emit: (frame, deviceId) => backend.emitAutonomousDeviceEvent(frame, deviceId),
-  }))
-  if (appVoiceFocus) autonomousDeviceService?.appFocus(appVoiceFocus.machineId, appVoiceFocus.agentId, appVoiceFocus.connId)
-  // The device's requests reach the service through its relay in the socket; its sessions and its direct
-  // links are the gateway's, which starts the links only with the service up: a device it connected would
-  // be answered by nothing.
-  if (autonomousDeviceService) {
-    backend.setAutonomousDeviceService(autonomousDeviceService, (identity) => gatewayOps.revokeIdentity(identity))
-    gatewayOps.wifiService(true)
+  // The Wi-Fi device (services/wifi.ts), with the dials: in their process by default (core/wifiLink.ts,
+  // resumed there as its link connects), or here.
+  if (!outOfProcess.has('wifi')) {
+    serviceHost.start('wifi', inline!.startWifi, coreApi, WIFI_FALLBACKS)
+    if (ports.wifi) wifiCore.started(appVoiceFocus ?? null)
   }
   devicePartsBuilt = true
 
@@ -2588,7 +2581,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // is queued for the Wi-Fi device (BackendSocket.sendCommander): a device fault here must cost neither
   // that frame nor whoever is sending it, which the guards and the devices' port see to.
   backend.onOutboundCommander = (frame) => {
-    wifi('wifi', () => autonomousDeviceService?.commander(frame as Record<string, unknown>))
+    wifiCore.card(frame as Record<string, unknown>)
     ports.devices?.card(frame as Record<string, unknown>)
   }
 

@@ -45,7 +45,7 @@ A service that can crash natively, hang or leak should run in a process of its o
 that process. A process per risk, not per feature: search (native `node:sqlite`), the viewers (their
 servers) with the Store (its minutes-long installs), each experiment (below), models (grid's installs,
 downloads and commands), the devices (the dials' serial ports, the fleet's lane, the voice router's
-worker), and the edge host, one process for the light services that only answer requests
+worker, and the Wi-Fi device), and the edge host, one process for the light services that only answer requests
 (workspaces, usage, the monitor, the project readers). A fault in one of the edge host's services can
 cost the others in it, never the core. Every service in `KNOWN_SERVICES` runs out of the core's process
 by default, unless `HARNESSD_SERVICES` names a subset, by service (`search,usage`) or by process
@@ -121,7 +121,11 @@ way back).
   the process connects, and a dial attaching is shown the open questions and the working tiles. Inside,
   one device failing is that device's alone: its session's faults and a flood on its port drop it, and
   its port is looked at again later (src/cable/cableFleet.ts). `e2e/devicesProcess.e2e.ts` proves it,
-  with fake dials on pseudo-terminals.
+  with fake dials on pseudo-terminals. The Wi-Fi device runs beside them on a link of its own
+  (src/services/wifiProcess.ts, src/core/wifiLink.ts): its sessions are the gateway's, so the core hands
+  their requests on in order and checks where each answer goes, and keeps what it reads in line of the
+  service (who said hello, which transcripts and streams it follows, the focus revision) from what the
+  service tells it (src/core/wifi.ts). `e2e/wifiDevice.e2e.ts` proves it, with a fake device on the relay.
 - State built from every change must get every change exactly once. The teams show how
   (`src/services/teamsProcess.ts`, `src/core/teamsLink.ts`): the core numbers each change and keeps it
   until the process acknowledges it; on each connection the process says what it applied and gets

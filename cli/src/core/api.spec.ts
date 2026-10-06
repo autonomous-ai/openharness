@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { projectDisplayName, type RegisteredSession } from '../lib/registry.js'
-import { ACCOUNT_BACKEND_OFF, AGENT_ACTIONS_OFF, createCoreApi, DAEMON_UNKNOWN, DELIVERIES_OFF, DEVICES_FALLBACKS, emptyPorts, LANE_OFF, LONG_ANSWERS, MODELS_OFF, MODELS_REQUESTS, MONITOR_OFF, OBSERVER_KEY_OFF, ORCHESTRATOR_FALLBACKS, resolveAgent, SHARING_FALLBACKS, TEAMS_FALLBACKS, TERMINALS_OFF, type CoreApiDeps } from './api.js'
+import { ACCOUNT_BACKEND_OFF, AGENT_ACTIONS_OFF, createCoreApi, DAEMON_UNKNOWN, DELIVERIES_OFF, DEVICES_FALLBACKS, emptyPorts, LANE_OFF, LONG_ANSWERS, MODELS_OFF, MODELS_REQUESTS, MONITOR_OFF, OBSERVER_KEY_OFF, ORCHESTRATOR_FALLBACKS, resolveAgent, SHARING_FALLBACKS, TEAMS_FALLBACKS, TERMINALS_OFF, WIFI_FALLBACKS, WIFI_OFF, type CoreApiDeps } from './api.js'
 import { FAIL, readFallback } from './serviceHost.js'
 
 const row = (agentId: string) => ({ agentId, sessionId: `s-${agentId}`, engine: 'claude', cwd: '/work/app' }) as RegisteredSession
@@ -77,6 +77,7 @@ describe('the core API services stand on', () => {
       hasWindow: vi.fn(() => true),
       devicesChanged: vi.fn(),
       dialWatching: vi.fn(),
+      wifi: WIFI_OFF,
       log: vi.fn(),
     })
 
@@ -171,6 +172,32 @@ describe('the core API services stand on', () => {
     expect(FAIL).toBeTypeOf('symbol')
   })
 
+  it('answers, when the Wi-Fi device\'s service is off, nothing to its devices and "not running" to a receipt', () => {
+    expect(readFallback(WIFI_FALLBACKS.receipt)).toEqual({ deferred: true, value: { unavailable: true } })
+    for (const member of ['request', 'resume', 'appFocus', 'stop'] as const) {
+      expect(readFallback(WIFI_FALLBACKS[member]), member).toEqual({ deferred: true, value: undefined })
+    }
+    for (const member of ['session', 'dropped', 'revoked', 'card', 'turnStarted', 'turnEnded', 'stream', 'transcript', 'delivery',
+      'dispatched', 'inputStatus', 'agentGone', 'revealed'] as const) {
+      expect(WIFI_FALLBACKS[member], member).toBeUndefined()
+    }
+  })
+
+  it('gives a service that is not the Wi-Fi device\'s doors that list, send, make and move nothing', async () => {
+    expect(await WIFI_OFF.view()).toEqual({ agents: [], store: [], hasWindow: false })
+    expect(await WIFI_OFF.stop('a')).toBe(false)
+    expect(await WIFI_OFF.answer('a', 'r', {})).toBe(false)
+    expect(await WIFI_OFF.create('p', 'claude', '/w')).toEqual({ ok: false, error: 'UNSUPPORTED' })
+    expect(await WIFI_OFF.stepFocus('next')).toBe('no_app')
+    expect(WIFI_OFF.scroll('down', 0, 0)).toBe(false)
+    expect(WIFI_OFF.focusApp('a', 0, 'r')).toBe(false)
+    await expect(WIFI_OFF.submit('a', 't', 'd')).resolves.toBeUndefined()
+    for (const call of [() => WIFI_OFF.cancel('d'), () => WIFI_OFF.started('a', 't'),
+      () => WIFI_OFF.reveal('o', 'a'), () => WIFI_OFF.send('c', 'i', 't', {}), () => WIFI_OFF.hello('c', null), () => WIFI_OFF.joined(), () => WIFI_OFF.ready(),
+      () => WIFI_OFF.unpaired('i'), () => WIFI_OFF.focus('r'), () => WIFI_OFF.transcripts('a', 0), () => WIFI_OFF.watching([]),
+      () => WIFI_OFF.streams([])]) expect(call()).toBeUndefined()
+  })
+
   it('falls back, when the teams fail, to an undo that has nothing to undo, and holds no pane for a team', () => {
     const undo = TEAMS_FALLBACKS.prepare as () => void
     expect(undo()).toBeUndefined()
@@ -178,7 +205,7 @@ describe('the core API services stand on', () => {
   })
 
   it('starts with every port empty: a service fills its own when it starts', () => {
-    expect(emptyPorts()).toEqual({ search: null, viewers: null, models: null, workspaces: null, teams: null, devices: null, monitor: null, orchestrator: null, sharing: null })
+    expect(emptyPorts()).toEqual({ search: null, viewers: null, models: null, workspaces: null, teams: null, devices: null, wifi: null, monitor: null, orchestrator: null, sharing: null })
     expect(emptyPorts()).not.toBe(emptyPorts())
   })
 

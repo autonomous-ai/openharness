@@ -17,6 +17,10 @@ export interface DeviceRelayOverGateway {
   handle(connId: string, frame: Record<string, unknown>, opened: Record<string, unknown> | null): Promise<void>
   drop(connId: string): void
   revoke(identity: string): void
+  /** The sessions whose app said hello. */
+  helloed(): string[]
+  /** A session whose app said hello to the service's previous run, served on and told to resync. */
+  restore(connId: string, identity: string): void
   /** Sessions on a direct link that said hello. */
   directSessions(): number
   connected(): boolean
@@ -51,6 +55,8 @@ export function deviceRelayOverGateway(deps: {
     },
     drop: (connId) => relay.drop(connId),
     revoke: (identity) => relay.revoke(identity),
+    helloed: () => relay.helloed(),
+    restore: (connId, identity) => relay.restore(connId, identity),
     directSessions: () => relay.count((connId) => deps.client(connId)?.direct === true),
     connected: () => relay.connected(),
     emit: (frame, deviceId) => relay.emit(frame, deviceId),

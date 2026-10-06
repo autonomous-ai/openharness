@@ -168,6 +168,8 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
       windows: () => {},
     },
     daemon: DAEMON_UNKNOWN,
+    // The Wi-Fi device beside the dials has a link of its own (services/wifiProcess.ts).
+    wifi: unasked.wifi,
   }
 
   const ports: CorePorts = emptyPorts()

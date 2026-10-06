@@ -56,4 +56,7 @@ questions. Everything else is a service ([../services/AGENTS.md](../services/AGE
   window's sessions to another machine or a shared harness, and the fleet's lane's sealing
   (`core.account.lane`). `devicesLink.ts`: the devices in their own process (the dials, the window
   bridges, the fleet): what the core tells them, what it asks with a deadline and a fallback, and what it
-  answers them.
+  answers them. `wifi.ts`: the Wi-Fi device, as the core keeps it wherever its service runs (who said
+  hello, which transcripts and streams it follows, the focus revision, and the check on every answer it
+  sends a device); `wifiAgents.ts`: its doors into the core (the agents as it lists them, a prompt, an
+  agent made for a Store harness); `wifiLink.ts`: its service in the devices' process.

@@ -13,7 +13,7 @@
  */
 import { randomUUID } from 'node:crypto'
 import { WebSocket } from 'ws'
-import type { Identity } from '../../src/lib/e2ee/core.js'
+import { wrapPayload, type Identity } from '../../src/lib/e2ee/core.js'
 import { RelaySessionCrypto } from '../../src/lib/e2ee/relayClient.js'
 import type { FakeBackend } from './fakeBackend.js'
 
@@ -141,17 +141,25 @@ export class RelayPhone {
     if (ws && ws.readyState === WebSocket.OPEN) ws.close()
   }
 
-  /** A sealed frame with no answer expected (a message). False when there is no session to send it on. */
-  send(type: string, payload: Record<string, unknown>): boolean {
+  /** A sealed frame with no answer expected (a message). False when there is no session to send it on.
+   *  `always`: sealed whatever its type, as a client with a protocol of its own seals every request (the
+   *  Wi-Fi device's firmware; the CLI's client crypto seals only the types its apps send). */
+  send(type: string, payload: Record<string, unknown>, always = false): boolean {
     if (!this.ready) return false
-    const sealed = this.crypto!.wrapOutgoing({ type, payload }) as PhoneFrame
+    const sealed = (always ? this.sealAlways({ type, payload }) : this.crypto!.wrapOutgoing({ type, payload })) as PhoneFrame
     this.sealed.push(sealed)
     this.ws!.send(JSON.stringify(sealed))
     return true
   }
 
+  /** The client crypto's own sealing, for any type: its session key and counter (test code reaches them). */
+  private sealAlways(frame: { type: string; payload: Record<string, unknown> }): PhoneFrame {
+    const crypto = this.crypto as unknown as { c2s: Uint8Array; c2sCounter: number }
+    return { type: frame.type, payload: wrapPayload(crypto.c2s, 'p', crypto.c2sCounter++, frame.type, undefined, frame.payload) as unknown as Record<string, any> }
+  }
+
   /** A sealed request and its sealed answer. Fails at once with no session, or when the session ends. */
-  request(type: string, payload: Record<string, unknown> = {}, ms = 30_000): Promise<Record<string, any>> {
+  request(type: string, payload: Record<string, unknown> = {}, ms = 30_000, always = false): Promise<Record<string, any>> {
     if (!this.ready) return Promise.reject(new Error(`no session to ask ${type} on`))
     const requestId = randomUUID()
     return new Promise((resolve, reject) => {
@@ -163,7 +171,7 @@ export class RelayPhone {
         resolve: (answer) => { clearTimeout(timer); resolve(answer) },
         reject: (error) => { clearTimeout(timer); reject(error) },
       })
-      this.send(type, { ...payload, requestId })
+      this.send(type, { ...payload, requestId }, always)
     })
   }
 
