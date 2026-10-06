@@ -307,6 +307,7 @@ def install(lock, candidate_path):
         installed_system = target / SYSTEM.relative_to('/')
         assert digest(installed_system) == result['image_system_sha256']
         installed_system.write_bytes(candidate_path.read_bytes())
+        installed_system.with_name('boot_profile.py').write_bytes(candidate_path.with_name('boot_profile.py').read_bytes())
         # Apply before the first installed boot; no public feed may replace the
         # frozen runtime. These are private fixture settings in the root snapshot.
         for name in MASKS:

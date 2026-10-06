@@ -71,7 +71,9 @@ payload-location fix.
 but no Mac model family has completed physical validation. Selected Broadcom
 drivers are available offline, and supported SPI keyboard controllers are included
 for encrypted unlock; VM checks do not prove physical Wi-Fi or keyboard support.
-T2 Macs need separate integration. Apple Silicon and Raspberry Pi do not have
+T2 Macs have a separate [experimental image](platforms/apple-t2/README.md) with
+VM-verified installation, firmware preservation and offline recovery; physical
+hardware and automatic T2 kernel upgrades remain unverified. Apple Silicon and Raspberry Pi do not have
 installable Harness images yet. See the [hardware targets](DEVELOPMENT.md#mac-support-targets)
 for requirements and remaining work.
 

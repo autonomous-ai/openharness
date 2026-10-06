@@ -146,6 +146,10 @@ def main():
     manifest = verify_image(args.iso.resolve(), lock)
     candidate = candidate_record(args.candidate_system)
     assert candidate['path'] == 'os/system.py', 'Only the OS update/recovery helper may be overlaid'
+    boot_helper = args.candidate_system.with_name('boot_profile.py')
+    boot_candidate = candidate_record(boot_helper)
+    assert boot_candidate['path'] == 'os/boot_profile.py'
+    assert boot_candidate['source_commit'] == candidate['source_commit']
     sources = {name: candidate_record(Path(__file__).with_name(name)) for name in
                ('hardware_update_vm.py', 'hardware_update_guest.py',
                 'vm.py', 'footprint_vm.py', 'hardware_install_vm.py')}
@@ -160,7 +164,8 @@ def main():
     config = dict(username='me', password='test-password-123', encrypt=True)
     receipt = {'status': 'running', 'started_at': time.time(), 'image_source_commit': manifest['source_commit'],
                'image_run_id': lock['baseline']['image_run_id'], 'iso': lock['baseline']['iso'],
-               'candidate_system': candidate, 'test_sources': sources, 'memory_mib': 2048, 'firmware': 'uefi',
+               'candidate_system': candidate, 'candidate_boot_profile': boot_candidate,
+               'test_sources': sources, 'memory_mib': 2048, 'firmware': 'uefi',
                'limits': ['Full-upgrade API, not public Update UI activation.',
                           'Synthetic PCI selection and real software hooks, no physical radio or GPU.',
                           'Combined driver row does not prove NVIDIA-only dependency footprint.',
@@ -225,12 +230,14 @@ def main():
         vm.command('stty -echo; nmcli networking off')
         transfer(True)
         copy_file(vm, args.candidate_system.read_bytes(), '/run/system-candidate.py')
+        copy_file(vm, boot_helper.read_bytes(), '/run/boot_profile.py')
         receipt['installation'] = guest('install', live=True, extra=('--candidate-system', '/run/system-candidate.py'), seconds=360)
         assert receipt['installation']['candidate_system_sha256'] == candidate['sha256']
         vm.screenshot('01-installed-offline')
         graceful_stop(vm, False)
 
         installed_boot('baseline')
+        assert hashlib.sha256(vm.read_file('/usr/lib/harness-os/boot_profile.py')).hexdigest() == boot_candidate['sha256']
         baseline = guest('baseline')
         assert baseline['system_sha256'] == candidate['sha256']
         live = guest('live-start')
@@ -273,6 +280,8 @@ def main():
         original = hashlib.sha256(vm.read_file(str(Path('/usr/lib/harness-os/system.py')))).hexdigest()
         assert original == receipt['installation']['image_system_sha256']
         copy_file(vm, args.candidate_system.read_bytes(), '/usr/lib/harness-os/system.py')
+        copy_file(vm, boot_helper.read_bytes(), '/usr/lib/harness-os/boot_profile.py')
+        assert hashlib.sha256(vm.read_file('/usr/lib/harness-os/boot_profile.py')).hexdigest() == boot_candidate['sha256']
         receipt['recovery_system_sha256'] = hashlib.sha256(vm.read_file('/usr/lib/harness-os/system.py')).hexdigest()
         assert receipt['recovery_system_sha256'] == candidate['sha256']
         vm.command('printf %s ' + shlex.quote(config['password']) + ' | cryptsetup open --key-file=- /dev/vda3 hn-recovery')

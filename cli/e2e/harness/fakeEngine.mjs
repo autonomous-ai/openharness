@@ -14,7 +14,8 @@
 // A prompt can carry directives that script the turn: `!slow <ms>` holds the answer back,
 // `!tool <command>` runs a tool call first, `!grow <MiB>` appends that much compaction history
 // before answering (the transcripts that crashed the daemon on 2026-10-03), `!hold` leaves the turn
-// open until the next prompt, `!ask` asks the person which drink they would like in the engine's own
+// open until the next prompt, `!holdtool <command>` leaves it open with that tool still running (an
+// interrupt then writes the tool's aborted output before the turn's end, as the CLIs do), `!ask` asks the person which drink they would like in the engine's own
 // dialog and answers with their choice, `!permit <command>` asks permission to run a command the way
 // the engine does and runs it only if allowed, `!flood <KiB>` prints that much to the terminal, in
 // numbered lines, the way a build log or a long diff does, `!clear` starts a new conversation in the
@@ -29,7 +30,9 @@
 // settings and `!center` (Codex) in its agent command center, screens the daemon has no name for,
 // `!permitnext <command>` keeps its turn open and asks permission to run the command the moment a
 // message is pasted, before its Enter (a request arriving mid-turn), `!exit` ends the process.
-// Everything else is echoed as the answer.
+// Everything else is echoed as the answer. Codex's `/model` is not a prompt: it opens 0.160's model
+// picker over the `models_cache.json` in its CODEX_HOME, and a choice in it is applied to the turns
+// that follow (see `openModelPicker`).
 //
 // Which release is installed is the config's business, so a test can update an engine in place by
 // rewriting its wrapper: `version` is what it reports and writes, `without` lists the flags and
@@ -40,11 +43,20 @@
 // loaded machine, while the daemon has already found the engine and its conversation. `root` is the
 // test's throwaway root, the only place whose hooks it will run, and `hookLog` where it notes every hook
 // it ran.
+//
+// Ctrl+Z suspends it, as both CLIs do on Unix (Claude Code 2.1.289: "Claude Code has been suspended.
+// Run `fg` to bring Claude Code back."; Codex 0.160: "`ctrl-z` is reserved for suspending the terminal
+// on Unix"): it gives the terminal back and stops its whole process group with SIGTSTP. Continued from
+// that stop it takes the terminal again; continued from any stop it repaints, and nothing more.
+//
+// Codex runs as npm installs it: a Node wrapper, the command the pane starts, with the engine as its
+// child in the same process group and terminal (`codexWrapper`).
 import { execFileSync, spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 /**
  * The events each CLI fires that the daemon installs hooks for (lib/hooks.ts): Claude Code's session,
@@ -73,9 +85,30 @@ const matcherTakes = (matcher, value) => {
   try { return new RegExp(`^(?:${matcher})$`).test(String(value ?? '')) } catch { return false }
 }
 
-export async function run(engine, config) {
+/** What the npm wrapper hands its child, the Codex engine itself: this module, run as a script. */
+const CODEX_NATIVE = 'HARNESS_FAKE_CODEX_NATIVE'
+
+/**
+ * `@openai/codex`'s bin/codex.js (0.160.0): it starts the native binary as its child with the same
+ * terminal, process group and arguments, forwards SIGINT, SIGTERM and SIGHUP to it, and ends as the
+ * child ended — re-raising a signal the child died of, which ends the wrapper with that signal unless
+ * it is one the wrapper listens for (then the wrapper exits 0).
+ */
+async function codexWrapper(config) {
+  const child = spawn(process.execPath, [fileURLToPath(import.meta.url), ...process.argv.slice(2)], {
+    stdio: 'inherit',
+    env: { ...process.env, [CODEX_NATIVE]: JSON.stringify(config) },
+  })
+  for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(signal, () => { try { child.kill(signal) } catch { /* gone */ } })
+  const ended = await new Promise((resolve) => child.on('exit', (code, signal) => resolve({ code, signal })))
+  if (ended.signal) process.kill(process.pid, ended.signal)
+  else process.exit(ended.code ?? 1)
+}
+
+export async function run(engine, config = {}, { native = false } = {}) {
+  if (engine === 'codex' && !native) return codexWrapper(config)
   const args = process.argv.slice(2)
-  const version = config.version ?? (engine === 'claude' ? '2.1.270' : '0.159.0')
+  const version = config.version ?? (engine === 'claude' ? '2.1.270' : '0.160.0')
   const versionLine = engine === 'claude' ? `${version} (Claude Code)` : `codex-cli ${version}`
   const without = new Set(config.without ?? [])
   if (args.includes('--version') || args.includes('-V')) {
@@ -121,7 +154,7 @@ export async function run(engine, config) {
   // (update_prompt.rs, snapshot `update_prompt_modal`). It drops a paste; Enter takes the highlighted row,
   // `Update now`, runs the update and asks to be restarted; Esc, 2 or ctrl+c skip it.
   if (engine === 'codex' && config.updateAvailable) {
-    process.stdout.write(`\r\n  \x1b[1mUpdate available\x1b[0m\x1b[2m · \x1b[0m${config.version ?? '0.159.0'} → ${config.updateAvailable}\r\n`
+    process.stdout.write(`\r\n  \x1b[1mUpdate available\x1b[0m\x1b[2m · \x1b[0m${version} → ${config.updateAvailable}\r\n`
       + '  \x1b[2mRelease notes: \x1b[0mhttps://github.com/openai/codex/releases/latest\r\n\r\n'
       + '\x1b[36m› 1. Update now (runs `npm install -g @openai/codex`)\x1b[39m\r\n  2. Skip\r\n  3. Skip until next version\r\n\r\n'
       + '  enter\x1b[2m continue · \x1b[0mesc\x1b[2m skip\x1b[0m\r\n')
@@ -231,7 +264,9 @@ export async function run(engine, config) {
     ? (args.includes('--dangerously-skip-permissions') ? 'bypassPermissions'
       : args.includes('--permission-mode') ? args[args.indexOf('--permission-mode') + 1] ?? 'default' : 'default')
     : (args.includes('--dangerously-bypass-approvals-and-sandbox') ? 'bypassPermissions' : 'default')
-  const codexModel = config.codexModel ?? 'gpt-6'
+  // The model and effort the thread runs on: what Codex writes in each turn's context, and what its
+  // `/model` picker changes (below).
+  let current = { model: config.codexModel ?? 'gpt-6', effort: 'high' }
   /**
    * The JSON an event hands its hooks on stdin, in each CLI's own shape: what notify.mjs reads (session,
    * transcript, folder, the event and its source, prompt or reason) and the rest of what the real CLIs
@@ -243,7 +278,7 @@ export async function run(engine, config) {
     transcript_path: transcript,
     cwd,
     hook_event_name: event,
-    ...(engine === 'codex' ? { model: codexModel, permission_mode: permissionMode } : {}),
+    ...(engine === 'codex' ? { model: current.model, permission_mode: permissionMode } : {}),
     ...fields,
   })
   /**
@@ -325,10 +360,13 @@ export async function run(engine, config) {
   // transcript view.
   let bottom = null
   let dialog = null
+  // Codex's `/model` picker while it is open, in the composer's place (see `openModelPicker`).
+  let picker = null
   const columns = () => Math.max(20, process.stdout.columns || 80)
-  // Cut to the pane's width, as Codex fits its status line to one row.
-  const statusLine = () => `  \x1b[2m${`gpt-6 high · ${cwd}`.slice(0, columns() - 3)}\x1b[0m`
-  const goalBottom = (goal) => ({ footer: `  gpt-6 high · ${cwd}   \x1b[35m${goal}\x1b[0m` })
+  // Cut to the pane's width, as Codex fits its status line to one row. It names the model and effort the
+  // thread runs on, which `/model` changes.
+  const statusLine = () => `  \x1b[2m${`${current.model} ${current.effort} · ${cwd}`.slice(0, columns() - 3)}\x1b[0m`
+  const goalBottom = (goal) => ({ footer: `  ${current.model} ${current.effort} · ${cwd}   \x1b[35m${goal}\x1b[0m` })
   const browsingFooter = '\x1b[36mBrowsing transcript\x1b[0m\x1b[2m · \x1b[0m↑↓/jk\x1b[2m scroll · \x1b[0m←→/hl\x1b[2m prompts · \x1b[0m↵\x1b[2m rewind · \x1b[0mesc\x1b[2m back\x1b[0m'
   const browsingBottom = { dim: true, footer: browsingFooter, browsing: true }
   const pagerBottom = (prompt, answer) => ({ browsing: true, pager: `\x1b[?1049h\x1b[H\x1b[2J\x1b[2m/ T R A N S C R I P T ${'/ '.repeat(30)}\x1b[0m`
@@ -453,19 +491,24 @@ export async function run(engine, config) {
   }
   const drawComposer = () => {
     if (bottom?.pager) { process.stdout.write(bottom.pager); composerRows = 0; return }
-    // A dialog takes the composer's place, as the CLIs draw theirs, until it is answered.
-    if (dialog) return
+    // A dialog takes the composer's place, as the CLIs draw theirs, until it is answered; so does Codex's
+    // model picker, until a choice or Esc closes it.
+    if (dialog || picker) return
     const rows = composerLines()
     process.stdout.write(rows.join('\r\n'))
     composerRows = rows.reduce((sum, row) => sum + rowsOf(row), 0)
   }
   const draw = () => { eraseComposer(); drawComposer() }
-  /** The conversation, written above the composer. `text` ends at the start of a line. */
-  const say = (text) => { eraseComposer(); process.stdout.write(text); drawComposer() }
+  /** The conversation, written above the composer, or above Codex's model picker while it is open, as
+   *  its history cells are. `text` ends at the start of a line. */
+  const say = (text) => {
+    if (picker) { erasePicker(); process.stdout.write(text); drawPicker(); return }
+    eraseComposer(); process.stdout.write(text); drawComposer()
+  }
   // A resize redraws the whole frame, as the TUIs do: the composer measured at the old width cannot be
   // taken back row by row.
   process.stdout.on?.('resize', () => {
-    if (bottom?.pager || dialog) return
+    if (bottom?.pager || dialog || picker) return
     process.stdout.write('\x1b[H\x1b[2J')
     composerRows = 0
     drawComposer()
@@ -486,6 +529,8 @@ export async function run(engine, config) {
 
   let turn = 0
   let open = null
+  // The tool `!holdtool` left running: an interrupt flushes its output, marked aborted, before the turn ends.
+  let runningTool = null
   // The question dialog `!ask` draws, as the real CLIs draw theirs (the parser's fixtures,
   // src/lib/__fixtures__/question-single.txt and question-codex.txt). Claude takes a digit as the
   // choice; Codex moves its cursor on a digit and takes Enter; Esc cancels either.
@@ -556,6 +601,270 @@ export async function run(engine, config) {
         else drawDialog()
       }
     }
+  }
+  // Codex 0.160's `/model` picker (tui/src/chatwidget/model_popups.rs, luna_reserve_model.rs,
+  // model_popup_state.rs, bottom_pane/list_selection_view.rs at rust-v0.160.0), drawn as it draws it
+  // and driven by the keys it takes. The quick menu of auto presets with `All models`, or the full list
+  // when there are none; the chosen model's reasoning picker; Advanced Reasoning for Max and Ultra; and,
+  // for a thread on the reserve model, the one-row picker that lends it an ordinary model's efforts.
+  // Rows are the catalog's display names, from `models_cache.json` in this engine's CODEX_HOME. A digit
+  // selects its row and accepts it, arrows move, Enter accepts, `s` takes the row for this session only,
+  // Esc goes back a screen. A choice is applied with Codex's `thread_settings_applied` record.
+  //
+  // The list is redrawn in place when "the server" answers, as 0.160 refreshes it from the models
+  // endpoint once it is open: `fake-models-server.json` beside the cache (`{ delayMs, models }`) is that
+  // answer. Its models replace the cache's, are saved to `models_cache.json`, and renumber an open list,
+  // its highlight kept on the same model, while a reasoning screen open over it stays as it is.
+  const LUNA_RESERVE_MODEL = 'gpt-reserve'
+  const LUNA_MODEL = 'gpt-6-luna'
+  const ADVANCED = new Set(['max', 'ultra'])
+  const EFFORT_LABELS = { none: 'None', minimal: 'Minimal', low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra high', max: 'Max', ultra: 'Ultra', persistent: 'Persistent' }
+  const effortLabel = (effort) => EFFORT_LABELS[effort] ?? effort
+  const MAX_POPUP_ROWS = 8
+  const modelsCacheFile = join(codexHome, 'models_cache.json')
+  const modelsServerFile = join(codexHome, 'fake-models-server.json')
+  const readJson = (file) => { try { return JSON.parse(readFileSync(file, 'utf8')) } catch { return null } }
+  /** The presets the picker lists, as Codex builds them from its catalog (models-manager
+   *  `build_available_models`): by priority, the first listed one the default. */
+  const presetsOf = (models) => {
+    const presets = (Array.isArray(models) ? models : []).filter((model) => model?.slug)
+      .sort((a, b) => (a.priority ?? 0) - (b.priority ?? 0))
+      .map((model) => ({
+        model: model.slug, displayName: model.display_name || model.slug, description: model.description ?? '',
+        defaultEffort: model.default_reasoning_level ?? 'none', listed: model.visibility === 'list', isDefault: false,
+        efforts: (model.supported_reasoning_levels ?? []).map((level) => ({ effort: level.effort, description: level.description ?? '' })),
+      }))
+    const first = presets.find((preset) => preset.listed) ?? presets[0]
+    if (first) first.isDefault = true
+    return presets
+  }
+  const isAuto = (slug) => slug.startsWith('codex-auto-')
+  const autoOrder = (slug) => ({ 'codex-auto-fast': 0, 'codex-auto-balanced': 1, 'codex-auto-thorough': 2 })[slug] ?? 3
+  const requiresAdvanced = (preset) => ADVANCED.has(preset.defaultEffort) || preset.efforts.some((option) => ADVANCED.has(option.effort))
+  /** The effort a full-list row applies at once: its one ordinary effort, or none to choose. */
+  const directEffort = (preset) => {
+    const choices = preset.efforts.length ? preset.efforts.map((option) => option.effort) : [preset.defaultEffort]
+    return choices.length === 1 && !ADVANCED.has(choices[0]) ? choices[0] : null
+  }
+  /** Words to lines of at most `width`, as ratatui wraps them; a word longer than a line is cut. */
+  const wrapWords = (text, width) => {
+    const lines = []
+    let line = ''
+    for (const word of String(text).split(/\s+/).filter(Boolean)) {
+      let next = line ? `${line} ${word}` : word
+      if (line && next.length > width) { lines.push(line); next = word }
+      while (next.length > width) { lines.push(next.slice(0, width)); next = next.slice(width) }
+      line = next
+    }
+    lines.push(line)
+    return lines
+  }
+  /** One screen of the picker, as list_selection_view.rs renders it: header, two blank lines, the rows
+   *  (eight at most, scrolled to the highlight), a blank line and the key hints. */
+  const renderView = (view) => {
+    const cols = Math.max(20, process.stdout.columns || 80)
+    const lines = []
+    for (const { text, style } of view.header) {
+      for (const part of wrapWords(text, cols - 2)) lines.push(`  ${style}${part}${style ? '\x1b[0m' : ''}`)
+    }
+    lines.push('', '')
+    const label = (item) => `${item.name}${item.current ? ' (current)' : item.isDefault ? ' (default)' : ''}`
+    const prefixOf = (index) => `${index === view.selected ? '›' : ' '} ${index + 1}. `
+    const nameWidth = Math.max(...view.items.map((item, index) => prefixOf(index).length + label(item).length))
+    const descriptionColumn = nameWidth + 2
+    // The picker's `HideWhenNarrow`: no descriptions when fewer than 24 columns are left for them.
+    const descriptions = cols - descriptionColumn >= 24
+    if (view.selected < view.top) view.top = view.selected
+    if (view.selected >= view.top + MAX_POPUP_ROWS) view.top = view.selected - MAX_POPUP_ROWS + 1
+    view.items.slice(view.top, view.top + MAX_POPUP_ROWS).forEach((item, offset) => {
+      const index = view.top + offset
+      const prefix = prefixOf(index)
+      const selected = index === view.selected
+      const rows = descriptions && item.description
+        ? wrapWords(item.description, cols - descriptionColumn).map((part, line) => line === 0
+          ? `${prefix}${label(item).padEnd(descriptionColumn - prefix.length)}${selected ? part : `\x1b[2m${part}\x1b[0m`}`
+          : `${' '.repeat(descriptionColumn)}${selected ? part : `\x1b[2m${part}\x1b[0m`}`)
+        : wrapWords(label(item), cols - prefix.length).map((part, line) => `${line === 0 ? prefix : ' '.repeat(prefix.length)}${part}`)
+      for (const row of rows) lines.push(selected ? `\x1b[36m${row}\x1b[39m` : row)
+    })
+    lines.push('')
+    const highlighted = view.items[view.selected]
+    lines.push(highlighted?.secondary
+      ? `  enter\x1b[2m ${highlighted.applies ?? 'default'} · \x1b[0ms\x1b[2m session · \x1b[0mesc\x1b[2m back\x1b[0m`
+      : '  enter\x1b[2m select · \x1b[0mesc\x1b[2m back\x1b[0m')
+    return lines
+  }
+  const erasePicker = () => {
+    if (picker?.drawn) process.stdout.write(`\x1b[${picker.drawn}A\r\x1b[0J`)
+    if (picker) picker.drawn = 0
+  }
+  const drawPicker = () => {
+    erasePicker()
+    const lines = renderView(picker.stack.at(-1))
+    process.stdout.write(`${lines.join('\r\n')}\r\n`)
+    picker.drawn = lines.length
+  }
+  const closePicker = () => { erasePicker(); picker = null; drawComposer() }
+  /** Applies a model and effort to the thread, as Codex does once a choice is accepted: the settings
+   *  update its app server answers with `thread_settings_applied` (protocol.rs `ThreadSettingsAppliedEvent`). */
+  const applyChoice = (model, effort) => {
+    current = { model, effort }
+    codex('event_msg', {
+      type: 'thread_settings_applied',
+      thread_id: sessionId,
+      thread_settings: {
+        model, model_provider_id: 'openai', approval_policy: 'on-request', cwd, runtime_workspace_roots: [cwd],
+        reasoning_effort: effort, collaboration_mode: { mode: 'default', settings: { model, reasoning_effort: effort } },
+      },
+    })
+    closePicker()
+  }
+  const view = (id, header, items, selected = items.findIndex((item) => item.current)) =>
+    ({ id, header, items, selected: Math.max(0, selected), top: 0 })
+  const title = (text) => ({ text, style: '\x1b[1m' })
+  const subtitle = (text) => ({ text, style: '\x1b[2m' })
+  /** The reasoning picker for a preset, or the choice applied at once when it has one ordinary effort. */
+  const openReasoning = (preset) => {
+    const choices = preset.efforts.length ? preset.efforts.map((option) => option.effort) : [preset.defaultEffort]
+    const ordinary = choices.filter((effort) => !ADVANCED.has(effort))
+    const advanced = choices.filter((effort) => ADVANCED.has(effort))
+    if (ordinary.length === 1 && !advanced.length) { applyChoice(preset.model, ordinary[0]); return }
+    const defaultChoice = ordinary.includes(preset.defaultEffort) ? preset.defaultEffort : null
+    const onModel = current.model === preset.model
+    const highlight = onModel ? current.effort : defaultChoice ?? ordinary[0]
+    const describe = (effort) => preset.efforts.find((option) => option.effort === effort)?.description ?? ''
+    const items = ordinary.map((effort) => ({
+      name: `${effortLabel(effort)}${effort === defaultChoice ? ' (default)' : ''}`, description: describe(effort),
+      current: onModel && effort === highlight, accept: () => applyChoice(preset.model, effort),
+      secondary: preset.model === LUNA_RESERVE_MODEL ? null : () => applyChoice(preset.model, effort),
+    }))
+    if (advanced.length) {
+      items.push({
+        name: 'More reasoning…', description: `${advanced.map(effortLabel).join(' and ')} ${advanced.length === 1 ? 'consumes' : 'consume'} usage limits faster`,
+        current: onModel && ADVANCED.has(highlight), accept: () => openAdvanced(preset),
+      })
+    }
+    const selected = items.findIndex((item, index) => index < ordinary.length && ordinary[index] === highlight)
+    picker.stack.push(view('reasoning', [title(`Select Reasoning Level for ${preset.displayName}`)], items, selected))
+    drawPicker()
+  }
+  const openAdvanced = (preset) => {
+    const choices = preset.efforts.map((option) => option.effort).filter((effort) => ADVANCED.has(effort))
+      .sort((a, b) => (a === 'ultra') - (b === 'ultra'))
+    const items = choices.map((effort) => ({
+      name: effortLabel(effort),
+      description: effort === 'max' ? 'For difficult problems when quality matters more than speed · higher usage' : 'For demanding work using multiple agents · highest usage',
+      current: current.model === preset.model && current.effort === effort, applies: effort === 'ultra' ? 'apply' : 'default',
+      accept: () => applyChoice(preset.model, effort), secondary: () => applyChoice(preset.model, effort),
+    }))
+    picker.stack.push(view('advanced', [title('Advanced Reasoning'), { text: '⚠ Consumes usage limits faster', style: '\x1b[36m' }], items))
+    drawPicker()
+  }
+  /** The full list (`Select Model and Effort`), or null when it would be empty. */
+  const allModelsView = (presets, id) => {
+    const listed = presets.filter((preset) => preset.listed && !isAuto(preset.model))
+    if (!listed.length) return null
+    return view(id, [title('Select Model and Effort')], listed.map((preset) => {
+      const effort = directEffort(preset)
+      return {
+        slug: preset.model, name: preset.displayName, description: preset.description, current: preset.model === current.model,
+        isDefault: preset.isDefault, accept: () => openReasoning(preset),
+        secondary: effort === null ? null : () => applyChoice(preset.model, effort),
+      }
+    }))
+  }
+  /** What `/model` opens on: the reserve picker, the quick menu, or the full list when no auto preset is listed. */
+  const firstView = (presets) => {
+    if (current.model === LUNA_RESERVE_MODEL) {
+      const normal = presets.find((preset) => preset.model === LUNA_MODEL)
+      if (!normal) return null
+      const preset = { ...normal, model: LUNA_RESERVE_MODEL }
+      return view('model-selection', [title('Select Model'), subtitle('Other models return when ordinary usage is available again.')],
+        [{ slug: LUNA_RESERVE_MODEL, name: normal.displayName, description: normal.description, current: true, accept: () => openReasoning(preset) }])
+    }
+    const listed = presets.filter((preset) => preset.listed)
+    const autos = listed.filter((preset) => isAuto(preset.model)).sort((a, b) => autoOrder(a.model) - autoOrder(b.model))
+    if (!autos.length) return allModelsView(presets, 'model-selection')
+    const items = autos.map((preset) => ({
+      slug: preset.model, name: preset.displayName, description: preset.description, current: preset.model === current.model,
+      isDefault: preset.isDefault,
+      accept: requiresAdvanced(preset) ? () => openReasoning(preset) : () => applyChoice(preset.model, preset.defaultEffort),
+      secondary: requiresAdvanced(preset) ? null : () => applyChoice(preset.model, preset.defaultEffort),
+    }))
+    if (listed.some((preset) => !isAuto(preset.model))) {
+      const currentLabel = listed.find((preset) => preset.model === current.model)?.displayName ?? current.model
+      items.push({
+        slug: 'All models', name: 'All models', description: `Choose a specific model and reasoning level (current: ${currentLabel})`,
+        current: !items.some((item) => item.current), accept: openAllModels,
+      })
+    }
+    return view('model-selection', [title('Select Model'), subtitle('Pick a quick auto mode or browse all models.')], items)
+  }
+  // `All models` closes the quick menu and opens the full list in its place: Esc from it closes the picker.
+  const openAllModels = () => {
+    const next = allModelsView(picker.presets, 'all-models-selection')
+    if (!next) { closePicker(); say('No additional models are available right now.\r\n'); return }
+    picker.stack = [next]
+    drawPicker()
+  }
+  const openModelPicker = () => {
+    const presets = presetsOf(readJson(modelsCacheFile)?.models)
+    eraseComposer()
+    picker = { stack: [], drawn: 0, presets }
+    const first = firstView(presets)
+    if (!first) {
+      picker = null
+      say(current.model === LUNA_RESERVE_MODEL
+        ? 'Luna model settings are unavailable; please try /model again in a moment.\r\n'
+        : 'No additional models are available right now.\r\n')
+      return
+    }
+    picker.stack = [first]
+    drawPicker()
+    // The server's answer, once it comes, for this opening only (model_popup_state.rs `on_models_loaded`).
+    const server = readJson(modelsServerFile)
+    if (!server || !Array.isArray(server.models)) return
+    const opened = picker
+    setTimeout(() => {
+      writeFileSync(modelsCacheFile, JSON.stringify({ ...readJson(modelsCacheFile), fetched_at: new Date().toISOString(), models: server.models }, null, 2))
+      if (picker !== opened) return
+      const presets = presetsOf(server.models)
+      if (JSON.stringify(presets) === JSON.stringify(picker.presets)) return
+      picker.presets = presets
+      const parent = picker.stack[0]
+      if (parent.id !== 'model-selection' && parent.id !== 'all-models-selection') return
+      const refreshed = parent.id === 'model-selection' ? firstView(presets) : allModelsView(presets, parent.id)
+      if (!refreshed) { closePicker(); return }
+      // The highlight stays on the same model, by slug, wherever its row moved to.
+      const slug = parent.items[parent.selected]?.slug
+      const kept = refreshed.items.findIndex((item) => item.slug === slug)
+      if (kept >= 0) refreshed.selected = kept
+      picker.stack[0] = refreshed
+      if (picker.stack.length === 1) drawPicker()
+    }, Number(server.delayMs) || 0)
+  }
+  /** Keys while the picker is up. Returns what is left once it closes, for the composer. */
+  const pickerKeys = (chunk) => {
+    let rest = ''
+    for (const key of chunk.match(/\x1b\[200~[\s\S]*?(?:\x1b\[201~|$)|\x1b\[[0-9;]*[A-Za-z~]|\x1b|[\s\S]/g) ?? []) {
+      if (!picker) { rest += key; continue }
+      const top = picker.stack.at(-1)
+      if (key === '\x1b' || key === '\x03') {
+        picker.stack.pop()
+        if (picker.stack.length) drawPicker()
+        else closePicker()
+      } else if (key === '\x1b[A' || key === '\x1b[B') {
+        top.selected = (top.selected + (key === '\x1b[A' ? top.items.length - 1 : 1)) % top.items.length
+        drawPicker()
+      } else if (key === '\r' || key === '\n') top.items[top.selected]?.accept()
+      else if (key === 's' && top.items[top.selected]?.secondary) top.items[top.selected].secondary()
+      else if (/^[1-9]$/.test(key) && Number(key) <= top.items.length) {
+        top.selected = Number(key) - 1
+        top.items[top.selected].accept()
+      }
+      // Anything else, a paste included, is dropped: the list is not searchable.
+    }
+    return rest
   }
   const compact = () => {
     if (engine === 'claude') {
@@ -649,6 +958,7 @@ export async function run(engine, config) {
       await runHooks('SessionStart', { source: 'clear' })
       return
     }
+    runningTool = null
     if (open) await finish('(interrupted by a new prompt)')
     // Both CLIs run their UserPromptSubmit hooks on every prompt, before the prompt is taken: notify.mjs
     // sends it through the same door as SessionStart, the catch hook that re-registers a session whose
@@ -664,7 +974,7 @@ export async function run(engine, config) {
       claude({ type: 'assistant', message: { id: `msg_${turn}_t`, role: 'assistant', model: config.claudeModel ?? 'claude-opus-5-5', content: [{ type: 'thinking', thinking: `considering: ${prompt}` }], stop_reason: null } })
     } else {
       codex('event_msg', { type: 'task_started', turn_id: open })
-      codex('turn_context', { turn_id: open, model: config.codexModel ?? 'gpt-6', reasoning_effort: 'high', collaboration_mode: { mode: 'default' } })
+      codex('turn_context', { turn_id: open, model: current.model, reasoning_effort: current.effort, collaboration_mode: { mode: 'default' } })
       codex('event_msg', { type: 'item_completed', turn_id: open, item: { type: 'UserMessage', id: open, content: [{ type: 'text', text: prompt, text_elements: [] }] } })
       codex('response_item', { type: 'reasoning', summary: [{ type: 'summary_text', text: `considering: ${prompt}` }] })
     }
@@ -712,6 +1022,15 @@ export async function run(engine, config) {
       await new Promise((resolve) => setTimeout(resolve, 300))
     }
     if (directive?.[1] === 'hold') return
+    if (directive?.[1] === 'holdtool') {
+      // A tool still running when the person interrupts. Both CLIs write its output, marked aborted, only
+      // AFTER the interrupt and just before the turn's end: what a real Codex 0.160 did in daemon QA.
+      const id = `call_${turn}`
+      if (engine === 'claude') claude({ type: 'assistant', message: { id: `msg_${turn}_u`, role: 'assistant', model: config.claudeModel ?? 'claude-opus-5-5', content: [{ type: 'tool_use', id, name: 'Bash', input: { command: directive[2] } }], stop_reason: 'tool_use' } })
+      else codex('response_item', { type: 'function_call', call_id: id, name: 'exec_command', arguments: JSON.stringify({ cmd: directive[2] }) })
+      runningTool = id
+      return
+    }
     if (directive?.[1] === 'permitnext') {
       // The turn goes on; its request arrives with the next paste, between it and its Enter.
       armed = { command: directive[2] || 'printf hi', turn }
@@ -792,7 +1111,7 @@ export async function run(engine, config) {
     await finish(`answer ${turn}: ${prompt}`)
   }
 
-  // Raw input: bracketed paste brackets the text, Enter (\r) submits, Ctrl-C interrupts.
+  // Raw input: bracketed paste brackets the text, Enter (\r) submits, Ctrl-C interrupts, Ctrl+Z suspends.
   process.stdin.setEncoding('utf8')
   let queue = Promise.resolve()
   // Inside a bracketed paste a carriage return or newline is a newline in the prompt, as Ink and
@@ -816,9 +1135,33 @@ export async function run(engine, config) {
     pastes.clear()
     return text
   }
+  // Ctrl+Z, as the real CLIs do it: give the terminal back, and stop the whole process group (the
+  // npm Codex's wrapper with it) once the terminal is restored; in raw mode the terminal sends no
+  // SIGTSTP of its own. Raw mode comes back only from this stop: Claude Code arms a one-time SIGCONT
+  // handler here, Codex takes the terminal again when its stop returns.
+  const suspend = () => {
+    process.stdout.write('\x1b[?2004l')
+    if (engine === 'claude') process.stdout.write('\r\nClaude Code has been suspended. Run `fg` to bring Claude Code back.\r\n')
+    process.stdin.setRawMode?.(false)
+    process.once('SIGCONT', () => {
+      process.stdin.setRawMode?.(true)
+      process.stdout.write('\x1b[?2004h')
+    })
+    process.kill(0, 'SIGTSTP')
+  }
+  // Continued, whoever stopped it, the renderer repaints, and that is all: after a stop from outside
+  // the terminal is in whatever modes the shell that resumed it left (an interactive bash puts back its
+  // own, line mode), as it is for the real CLIs.
+  process.on('SIGCONT', () => draw())
   process.stdin.on('data', (input) => {
+    // The key, not the byte: a Ctrl+Z inside a paste is pasted text.
+    if (input.includes('\x1a') && !pasting && !input.includes('\x1b[200~')) { suspend(); return }
     if (dialog) { dialogKeys(input); return }
     let chunk = input
+    if (picker) {
+      chunk = pickerKeys(chunk)
+      if (!chunk) return
+    }
     if (bottom?.transcript) {
       // As Claude Code takes input in its transcript view: its Transcript keys only, where Esc, q and ctrl+c
       // close it; it has no Enter and no paste, so a message is lost there. Keys after the one that closes
@@ -922,8 +1265,19 @@ export async function run(engine, config) {
       }
       if (part === '\x7f') { buffer = buffer.slice(0, -1); draw(); continue }
       if ((part === '\r' || part === '\n') && suggestions(buffer)) {
-        // Enter with suggestions open takes the highlighted one into the draft, and sends nothing.
         const popup = suggestions(buffer)
+        // Codex runs the highlighted command on Enter (chat_composer/slash_input.rs), the draft cleared; of
+        // its commands the fake carries out `/model`, whose picker takes the composer's place. The keys
+        // after it in this read are the picker's.
+        if (engine === 'codex' && popup.found[0][0] === '/model' && popup.token.startsWith('/')) {
+          buffer = ''
+          pastes.clear()
+          openModelPicker()
+          const rest = parts.slice(index + 1).join('')
+          if (rest && picker) { const left = pickerKeys(rest); if (left) process.stdin.emit('data', left) }
+          return
+        }
+        // Otherwise Enter with suggestions open takes the highlighted one into the draft, and sends nothing.
         buffer = `${buffer.slice(0, buffer.length - popup.token.length)}${popup.token.startsWith('@') ? '@' : ''}${popup.found[0][0]} `
         draw()
         continue
@@ -932,6 +1286,11 @@ export async function run(engine, config) {
         // Ctrl-C ends a running turn, and empties the composer either way.
         buffer = ''
         if (open) {
+          if (runningTool) {
+            if (engine === 'claude') claude({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: runningTool, content: '[Request interrupted by user for tool use]', is_error: true }] } })
+            else codex('response_item', { type: 'function_call_output', call_id: runningTool, output: 'aborted by user' })
+            runningTool = null
+          }
           if (engine === 'claude') claude({ type: 'user', message: { role: 'user', content: [{ type: 'text', text: '[Request interrupted by user]' }] } })
           else codex('event_msg', { type: 'turn_aborted', turn_id: open })
           open = null
@@ -943,6 +1302,14 @@ export async function run(engine, config) {
         // Taken off the composer at once, whatever the engine is doing: a prompt sent while a turn runs
         // waits its turn out of the composer, as both CLIs queue one.
         draw()
+        // Codex's `/model` is a command, not a prompt: its picker takes the composer's place at once and
+        // nothing is sent. The keys after it in this read are the picker's.
+        if (engine === 'codex' && line.trim() === '/model') {
+          openModelPicker()
+          const rest = parts.slice(index + 1).join('')
+          if (rest && picker) { const left = pickerKeys(rest); if (left) process.stdin.emit('data', left) }
+          return
+        }
         queue = queue.then(() => handle(line))
       } else if (part) {
         buffer += part
@@ -952,4 +1319,12 @@ export async function run(engine, config) {
   })
   process.on('SIGTERM', () => process.exit(0))
   setInterval(() => {}, 60_000)
+}
+
+// The native Codex: this module run as a script by `codexWrapper`. Last, so everything `run` reads at
+// the top level of the module is there when it starts.
+if (process.env[CODEX_NATIVE] && process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  const config = JSON.parse(process.env[CODEX_NATIVE])
+  delete process.env[CODEX_NATIVE]
+  void run('codex', config, { native: true })
 }

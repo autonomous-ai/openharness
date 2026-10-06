@@ -19,8 +19,9 @@ const engines: Engine[] = ['claude', 'codex']
 
 /** A release of the fake engine, as e2e/harness/fakeEngine.mjs reads it from its config. */
 interface Release { version?: string; without?: string[]; startDelayMs?: number; updateAvailable?: string }
-const OLD: Record<Engine, string> = { claude: '2.1.270', codex: '0.159.0' }
-const NEW: Record<Engine, string> = { claude: '2.1.271', codex: '0.160.0' }
+/** OLD is what the fake engines report unless told otherwise (fakeEngine.mjs); NEW is the next release. */
+const OLD: Record<Engine, string> = { claude: '2.1.270', codex: '0.160.0' }
+const NEW: Record<Engine, string> = { claude: '2.1.271', codex: '0.161.0' }
 const versionLine = (engine: Engine, version: string) => engine === 'claude' ? `${version} (Claude Code)` : `codex-cli ${version}`
 const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms))
 
@@ -202,7 +203,7 @@ describe('engines updated in place', () => {
     expect((await row(client, agent.id))?.sessionId).toBe(renewed.sessionId)
 
     // A release that has resume again opens the kept conversation where it was.
-    install(d, 'codex', { version: '0.161.0' })
+    install(d, 'codex', { version: '0.162.0' })
     const reopened = await client.request('agent_resume', { agentId: kept.id }, 90_000)
     expect(reopened.error, JSON.stringify(reopened)).toBeUndefined()
     await bound(client, kept.id, agent.sessionId)

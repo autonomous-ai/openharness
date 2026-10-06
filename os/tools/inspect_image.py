@@ -36,6 +36,11 @@ def inspect(iso):
                       'usr/lib/harness-os/projects.py': source / 'projects.py',
                       'usr/lib/harness-os/trial_projects.py': source / 'trial_projects.py',
                       'usr/lib/harness-os/system.py': source / 'system.py',
+                      'usr/lib/harness-os/boot_profile.py': source / 'boot_profile.py',
+                      'usr/lib/harness-os/t2_install.py': source / 't2_install.py',
+                      'usr/lib/harness-os/t2_firmware.py': source / 'tools/prepare-t2-firmware.py',
+                      'usr/lib/harness-os/firmware_names.py': source / 'platforms/apple-t2/firmware_names.py',
+                      'usr/share/harness-os/apple-t2/kernel.json': source / 'platforms/apple-t2/kernel.json',
                       'usr/lib/harness-os/runtime_update.py': source / 'runtime_update.py',
                       'usr/lib/harness-os/live_update.py': source / 'live_update.py',
                       'usr/lib/harness-os/release_update.py': source / 'release_update.py',
@@ -71,7 +76,12 @@ def inspect(iso):
         kernel = json.loads(read('usr/share/harness-os/kernel.json'))
         assert re.fullmatch(r'usr/lib/modules/[a-zA-Z0-9._+-]+/vmlinuz', kernel['path'])
         assert hashlib.sha256(read(kernel['path'])).hexdigest() == kernel['sha256'], 'Offline install kernel mismatch'
-        assert read(str(Path(kernel['path']).with_name('pkgbase'))).strip() == b'linux-lts'
+        platform = manifest['platform']
+        assert platform in {'pc', 'apple-t2'}
+        assert json.loads(read('etc/harness-platform.json')) == {'schema': 1, 'id': platform}
+        assert kernel['platform'] == platform
+        pkgbase = 'linux-lts' if platform == 'pc' else 'linux-t2'
+        assert read(str(Path(kernel['path']).with_name('pkgbase'))).decode().strip() == pkgbase
         packages = read('usr/share/harness-os/packages.txt').decode()
         assert packages == (iso.parent / 'packages.txt').read_text(), 'Package inventory mismatch'
         inventory = dict(row.split(maxsplit=1) for row in packages.splitlines())
@@ -82,34 +92,47 @@ def inspect(iso):
         expected_version = re.escape(version.replace('-preview.', 'pre')) + r'\.r\d+\.g' + manifest['source_commit'][:10] + '-1'
         assert re.fullmatch(expected_version, package_version), 'OS package version differs from the image source'
         assert package_version == manifest['package_version'], 'OS package version differs from the manifest'
-        assert set(manifest['capabilities']) == {'runtime-updates', 'system-updates', 'single-action-updates', 'broadcom-offline', 'nvidia-offline', 'install-first'}, 'Image capabilities differ from the manifest'
-        hardware_root = 'usr/share/harness-os/hardware/broadcom/'
-        hardware = json.loads(read(hardware_root + 'manifest.json'))
-        assert hardware == manifest['hardware']['broadcom'], 'Hardware manifest differs from the payload'
-        assert hardware['kernel'] == Path(kernel['path']).parent.name, 'Wi-Fi module targets a different kernel'
-        assert hardware['arch_snapshot'] == manifest['arch_snapshot']
-        assert all(inventory.get(name) == version for name, version in hardware['base_packages'].items())
-        assert not names & {'gcc', 'make', 'dkms', 'broadcom-wl-dkms', 'linux-lts-headers'}, 'Optional Wi-Fi build tools entered the default image'
-        for name, expected in hardware['files'].items():
-            assert not Path(name).is_absolute() and '..' not in Path(name).parts
-            path = hardware_root + name
-            data = read(path)
-            assert len(data) == expected['bytes'] and hashlib.sha256(data).hexdigest() == expected['sha256'], f'Hardware bundle mismatch: {name}'
-            assert owners.get(path) == '0/0', f'Hardware file is not root-owned: {name}'
-        nvidia_root = 'usr/share/harness-os/hardware/nvidia/'
-        nvidia = json.loads(read(nvidia_root + 'manifest.json'))
-        assert nvidia == manifest['hardware']['nvidia']
-        assert nvidia['kernel'] == Path(kernel['path']).parent.name
-        assert nvidia['arch_snapshot'] == manifest['arch_snapshot']
-        assert all(inventory.get(name) == version for name, version in nvidia['base_packages'].items())
+        capabilities = {'runtime-updates', 'system-updates', 'single-action-updates', 'install-first'}
+        capabilities |= {'broadcom-offline', 'nvidia-offline'} if platform == 'pc' else {'t2-kernel', 'apple-firmware-preservation'}
+        assert set(manifest['capabilities']) == capabilities, 'Image capabilities differ from the manifest'
+        assert not names & {'gcc', 'make', 'dkms', 'broadcom-wl-dkms', 'linux-lts-headers', 'linux-t2-headers'}, 'Hardware build tools entered the default image'
         assert not names & {'nvidia-utils', 'nvidia-open-lts'}, 'Optional GPU packages entered the generic image'
-        for name, expected in nvidia['files'].items():
-            assert not Path(name).is_absolute() and '..' not in Path(name).parts
-            path = nvidia_root + name
-            data = read(path)
-            assert len(data) == expected['bytes'] and hashlib.sha256(data).hexdigest() == expected['sha256'], f'NVIDIA bundle mismatch: {name}'
-            assert owners.get(path) == '0/0', f'NVIDIA file is not root-owned: {name}'
+        if platform == 'pc':
+            assert set(manifest['hardware']) == {'broadcom', 'nvidia'}
+            for driver in ['broadcom', 'nvidia']:
+                prefix = 'usr/share/harness-os/hardware/' + driver + '/'
+                hardware = json.loads(read(prefix + 'manifest.json'))
+                assert hardware == manifest['hardware'][driver], 'Hardware manifest differs from the payload'
+                assert hardware['kernel'] == Path(kernel['path']).parent.name, 'Driver targets another kernel'
+                assert hardware['arch_snapshot'] == manifest['arch_snapshot']
+                assert all(inventory.get(name) == version for name, version in hardware['base_packages'].items())
+                for name, expected in hardware['files'].items():
+                    assert not Path(name).is_absolute() and '..' not in Path(name).parts
+                    path = prefix + name
+                    data = read(path)
+                    assert len(data) == expected['bytes'] and hashlib.sha256(data).hexdigest() == expected['sha256'], f'Hardware bundle mismatch: {name}'
+                    assert owners.get(path) == '0/0', f'Hardware file is not root-owned: {name}'
+        else:
+            assert set(manifest['hardware']) == {'apple-t2'}
+            hardware = json.loads(read('usr/share/harness-os/apple-t2/manifest.json'))
+            pin = json.loads((source / 'platforms/apple-t2/kernel.json').read_text())
+            assert hardware == manifest['hardware']['apple-t2'] and hardware['kernel'] == pin
+            assert inventory['linux-t2'] == pin['package']['version'] and 'linux-lts' not in names
+            assert Path(kernel['path']).parent.name == pin['kernel_release']
+            assert read('etc/mkinitcpio.conf.d/20-harness-platform.conf').decode() == 'MODULES+=(' + ' '.join(pin['early_modules']) + ')\n'
+            assert read('etc/modules-load.d/harness-t2.conf') == b't2bce_vhci\n'
+            assert b'Exec = /usr/bin/python3 /usr/lib/harness-os/t2_install.py restore' in read('etc/pacman.d/hooks/80-harness-t2-firmware.hook')
+            assert set(hardware['verified_files']) == {'.PKGINFO', 'pkgbase', 'vmlinuz', *pin['required_modules']}
+            for name, expected in hardware['verified_files'].items():
+                if name == '.PKGINFO':
+                    continue  # This is package metadata, not an installed file.
+                assert expected['path'].startswith('usr/lib/modules/' + pin['kernel_release'] + '/')
+                data = read(expected['path'])
+                assert len(data) == expected['bytes'] and hashlib.sha256(data).hexdigest() == expected['sha256']
+            assert not any(path.endswith('harness-apple-firmware.tar') or path.endswith('apple-firmware.tar') for path in owners), 'A private Apple firmware export entered the ISO'
         wanted = {row.strip() for row in (source / 'packages.x86_64').read_text().splitlines() if row.strip() and not row.startswith('#')}
+        if platform == 'apple-t2':
+            wanted = (wanted - {'linux-lts'}) | {'linux-t2'}
         assert wanted.issubset(names), f'Missing packages: {wanted - names}'
         config = read('etc/pacman.conf').decode()
         assert config.count('/' + manifest['arch_snapshot'] + '/') == 2 and '[harness-build]' not in config

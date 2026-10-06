@@ -67,6 +67,7 @@ def main():
             'real_dmi': report['computer'], 'fixture_pci_ids': [device['id'] for device in report['pci']],
             'hardware_sha256': hashlib.sha256(hardware_path.read_bytes()).hexdigest(),
             'installer_sha256': hashlib.sha256(installer_path.read_bytes()).hexdigest(),
+            'boot_profile_sha256': hashlib.sha256(installer_path.with_name('boot_profile.py').read_bytes()).hexdigest(),
             'elapsed_seconds': round(time.monotonic() - started, 3),
         }), flush=True)
 

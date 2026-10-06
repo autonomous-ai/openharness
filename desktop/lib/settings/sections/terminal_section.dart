@@ -9,6 +9,7 @@ import '../../shared/widgets/app_icon_button.dart';
 import '../../shared/widgets/app_select_field.dart';
 import '../../shared/widgets/setting_row.dart';
 import '../../shortcuts/app_shortcuts.dart' show linuxKeyLabels;
+import '../../terminal/installed_fonts.dart';
 import '../../terminal/terminal_font_store.dart';
 import '../../terminal/terminal_theme.dart';
 import '../../terminal/terminal_theme_store.dart';
@@ -69,7 +70,7 @@ class _Controls extends StatelessWidget {
         const SizedBox(height: 10),
         SettingRow(
           title: 'Font',
-          control: _FamilyField(family: terminalFontStore.family),
+          control: _FamilyField(selection: terminalFontStore.selection),
         ),
         const SizedBox(height: 10),
         SettingRow(
@@ -125,34 +126,72 @@ class _SchemeField extends StatelessWidget {
 /// nearly indistinguishable in two glyphs, so it read as a stray mark in front
 /// of every name rather than as a preview. The place a face can actually be
 /// judged is [_Preview], at the size it will really be drawn.
-class _FamilyField extends StatelessWidget {
-  const _FamilyField({required this.family});
+class _FamilyField extends StatefulWidget {
+  const _FamilyField({required this.selection});
 
-  final TerminalFontChoice family;
+  final TerminalFontSelection selection;
+
+  @override
+  State<_FamilyField> createState() => _FamilyFieldState();
+}
+
+class _FamilyFieldState extends State<_FamilyField> {
+  /// The families installed here, monospaced first — empty until the OS has answered, and for good
+  /// on the web, which draws only the face it bundles.
+  List<InstalledFont> _installed = const [];
+
+  @override
+  void initState() {
+    super.initState();
+    // Asked when Settings opens, not at launch: only this picker wants the answer.
+    unawaited(
+      listInstalledFonts().then((fonts) {
+        if (mounted) setState(() => _installed = fonts);
+      }),
+    );
+  }
+
+  /// The presets this OS has first (SF Mono stays the default), then every installed family —
+  /// monospaced before the rest, as [listInstalledFonts] orders them — then the current choice if
+  /// it is none of those. That last part matters: a `state.json` carried over from another computer
+  /// can name a face this one lacks, and [AppSelectField] draws a value it cannot find among its
+  /// options as an EMPTY field — so the user's chosen face would read as no choice at all.
+  List<TerminalFontSelection> _choices() {
+    final presets = [
+      for (final choice in TerminalFontChoice.available) PresetFont(choice),
+    ];
+    // An installed family a preset already offers (Menlo, Monaco…) is that preset, with its
+    // fallback chain — not a second row with the same name.
+    final taken = {
+      for (final preset in presets) ...[
+        preset.label.toLowerCase(),
+        preset.fontFamily.toLowerCase(),
+      ],
+    };
+    return {
+      ...presets,
+      for (final font in _installed)
+        if (!taken.contains(font.family.toLowerCase()))
+          InstalledFontFamily(font.family),
+      widget.selection,
+    }.toList();
+  }
 
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
-    return AppSelectField<TerminalFontChoice>(
+    return AppSelectField<TerminalFontSelection>(
       key: const Key('terminal-font-family-dropdown'),
       semanticLabel: 'Terminal font',
       width: SettingRow.controlWidth,
-      value: family,
-      // The faces this OS actually has, plus whatever is selected. The second
-      // half matters: a `state.json` carried over from a Mac selects a face
-      // Linux does not offer, and [AppSelectField] draws a value it cannot find
-      // among its options as an EMPTY field — so the user's chosen face would
-      // read as no choice at all. Showing it, rather than silently rewriting
-      // what they picked, keeps the pane honest about what is on.
-      //
-      // (Material's `DropdownButton` asserts instead of blanking. This app does
-      // not use it — see [AppSelectField] — but the list has to be right for
-      // the same reason either way.)
+      value: widget.selection,
+      // A few hundred families on a typical Mac: typing narrows the list.
+      filterable: true,
       options: [
-        for (final choice in {...TerminalFontChoice.available, family})
+        for (final choice in _choices())
           SelectOption(value: choice, label: choice.label),
       ],
-      onChanged: (choice) => unawaited(terminalFontStore.setFamily(choice)),
+      onChanged: (choice) => unawaited(terminalFontStore.setSelection(choice)),
     );
   }
 }

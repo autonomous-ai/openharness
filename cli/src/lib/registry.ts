@@ -1748,7 +1748,7 @@ class Registry {
    * The engine in this pane has exited and the pane is a shell now: the row is a terminal.
    *
    * For every agent, not only one that began as a terminal — an engine the app launched runs
-   * inside its pane's shell too (engineLaunch.ts `harness_engine`), and `/exit` or Ctrl-C leaves
+   * inside its pane's shell too (engineLaunch.ts `engineRunScript`), and `/exit` or Ctrl-C leaves
    * that shell at its prompt with the engine's last screen above it.
    *
    * What goes is what described the PROCESS and its session — session id, transcript, pid,

@@ -6,7 +6,8 @@ Writes main/ui/habitat/focus_faces.c and focus_faces.h. Focus sets every word an
 optical size (owner, 2026-10-03: SF Compact's open look-alike; docs/plans/2026-10-03-inter-sf-compact.md), in
 five faces: inter_20 (small labels, the PANES / TABS header, inbox machine and agent, the bell count), inter_25
 (an inbox message, the "Choose a tab" pill), inter_med_26 (the curved name and the lower-arc status and Listening
-sweep), inter_30 (the recap, pane and tab names, the working status) and inter_36 (the resting line).
+sweep), inter_28 / inter_44 (the tabs carousel's neighbours and chosen tab), inter_30 (the recap, pane and tab names,
+the working status) and inter_36 (the resting line).
 Only the two FontAwesome symbols (bell, close cross) stay in lvgl_fonts.c's Montserrat, which
 gen_lvgl_assets.py cuts to them. Each face is converted as the LVGL faces were: lv_font_conv
 (pinned, run through npx) with --bpp 4 --no-compress --no-prefilter, kerning on, over gen_lvgl_assets.py's
@@ -54,7 +55,9 @@ FACES = [
     ('inter_20', 'Inter-Regular20', 20, 'NULL'),   # small labels: PANES / TABS, inbox machine and agent, the bell count
     ('inter_25', 'Inter-Regular25', 25, 'NULL'),   # an inbox message, the "Choose a tab" pill
     ('inter_med_26', 'Inter-Medium26', 26, 'NULL'),   # the curved name, the lower-arc status and the Listening sweep
+    ('inter_28', 'Inter-Regular30', 28, 'NULL'),   # the tabs carousel's neighbours (design 2026-10-06)
     ('inter_30', 'Inter-Regular30', 30, 'NULL'),   # the recap (Kindle dark layout), pane and tab names, the working status
+    ('inter_44', 'Inter-Regular30', 44, 'NULL'),   # the tabs carousel's chosen tab (design 2026-10-06: 1.5x of 28-30)
     ('inter_36', 'Inter-Regular36', 36, 'NULL'),   # the resting line
 ]
 
