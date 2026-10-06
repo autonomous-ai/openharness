@@ -21,6 +21,10 @@
  *
  * Like the real relay it is blind: the machines seal everything between them end to end, and a frame
  * for a machine whose node is not connected is simply never answered, as the real hub's would not be.
+ * - `PUT`/`DELETE /api/harness-links/:id` and `/api/harness-shares/:id`: Share publishing a link or an
+ *   invitation, answered 200; what a node sends to one of Share's observers (`observer:` connections) is
+ *   kept in `targeted`, so a test can open what Share sealed for it.
+ *
  * Everything else is answered 404. Requests are recorded in `seen`, so a test can say what was asked.
  *
  * And it can misbehave, as a relay under stress does: every socket dropped at once, down for a while,
@@ -81,6 +85,8 @@ export class FakeBackend {
   readonly webReceived = new Map<string, Frame[]>()
   /** What each device socket (a daemon's lane to its other machines) sent towards a machine, as sent. */
   readonly deviceSent: Frame[] = []
+  /** What a node sent to a connection that is neither a device's nor a web client's (Share's observers), by id. */
+  readonly targeted = new Map<string, Frame[]>()
 
   private constructor(private readonly server: Server, readonly port: number) {}
 
@@ -98,6 +104,11 @@ export class FakeBackend {
       if (!machine) { res.statusCode = 401; res.end(json({ success: false, error: { code: 'UNAUTHORIZED' } })); return }
       if (req.method === 'GET' && req.url?.split('?')[0] === '/api/machines') {
         res.end(json({ success: true, data: { machines: backend.rows() } }))
+        return
+      }
+      if ((req.method === 'PUT' || req.method === 'DELETE') && /^\/api\/harness-(links|shares)\/[^/?]+$/.test(req.url?.split('?')[0] ?? '')) {
+        req.resume()
+        res.end(json({ success: true, data: {} }))
         return
       }
       res.statusCode = 404
@@ -280,6 +291,7 @@ export class FakeBackend {
       if (owner?.machineId === machineId) this.sendDevice(owner.device, tagged)
       const web = [...this.webClients].find((client) => client.connId === envelope.targetConnId && client.machineId === machineId)
       if (web) this.toWeb(web, envelope.frame)
+      if (!owner && !web) this.targeted.set(envelope.targetConnId, [...(this.targeted.get(envelope.targetConnId) ?? []), envelope.frame])
       return
     }
     if (envelope.commanderEligible) for (const device of this.devices) this.sendDevice(device, tagged)

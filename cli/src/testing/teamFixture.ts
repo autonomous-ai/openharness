@@ -69,8 +69,9 @@ export function attachTeams<T extends BackendSocket>(socket: T): T & TeamFixture
     clients: {
       viewerChanged: () => {}, gridNamed: () => {}, gridModelsChanged: () => {}, dshInstallStatus: () => {},
       windows: (frame) => socket.sendLocal(frame),
+      observer: () => false,
     },
-    daemon: { command: 'harness', port: env.PORT, machineId: () => socket.machineId },
+    daemon: { command: 'harness', port: env.PORT, machineId: () => socket.machineId, autonomousEnv: 'prod' },
   })
   /** Built at its first use, from what the spec set by then. */
   const collaboration = (): Teams => teams ??= startCollaboration(core(), {

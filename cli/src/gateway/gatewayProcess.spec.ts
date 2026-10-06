@@ -38,6 +38,10 @@ function stubGateway() {
       rekey: vi.fn(async () => {}), seal: vi.fn(async (_m: string, frame: Record<string, unknown>) => ({ frame: { ...frame, sealed: true } })),
       open: vi.fn(async () => ({ unreadable: true as const })), drop: vi.fn(),
     },
+    observerKey: {
+      publicKey: vi.fn(async () => 'cHVi'),
+      signWelcome: vi.fn(async (_m: string, shareId: string) => { if (shareId === 'bad') throw new Error('not a welcome to an observer'); return 'c2ln' }),
+    },
   } satisfies GatewayOps
   const sessions: Array<{ send: ReturnType<typeof vi.fn>; sendBinary: ReturnType<typeof vi.fn>; detach: ReturnType<typeof vi.fn> }> = []
   const windowRelay = {
@@ -281,6 +285,19 @@ describe('the gateway\'s process, spoken to by the core', () => {
     expect(await w.options().requests[GATEWAY_CALLS.lane]({ op: 'nothing' }, { local: true, owner: true })).toEqual({ error: 'UNKNOWN_OP' })
     w.disconnect()
     expect(await lane.seal('m2', { type: 'message' })).toEqual({ lost: true })
+  })
+
+  it('signs Share\'s welcomes with the identity it holds, and none while it is not running', async () => {
+    const w = wire()
+    const key = w.link.ops.observerKey
+    await expect(key.publicKey()).rejects.toThrow(/not running/)
+    w.connect()
+    expect(await key.publicKey()).toBe('cHVi')
+    expect(await key.signWelcome('m', 'share-1', 'cA==', 'ZQ==')).toBe('c2ln')
+    expect(w.gateways[0].ops.observerKey.signWelcome).toHaveBeenCalledWith('m', 'share-1', 'cA==', 'ZQ==')
+    await expect(key.signWelcome('m', 'bad', 'cA==', 'ZQ==')).rejects.toThrow('not a welcome to an observer')
+    w.gateways[0].ops.observerKey.publicKey.mockRejectedValueOnce('odd')
+    await expect(key.publicKey()).rejects.toThrow('odd')
   })
 
   it('opens a window\'s session on another machine, carries it both ways, and fails it as the pool did', async () => {

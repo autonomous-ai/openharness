@@ -1,10 +1,8 @@
 import type { PurgeAgentService } from './lib/purgeAgentService.js'
-import { TEAMS_REQUESTS, type Asker, type BackendNotice, type GatewayEvents, type GatewayPort, type ModelsPort, type RemoteClient, type RemoteRole, type RemoteTransport } from './core/api.js'
+import { SHARE_REQUESTS, TEAMS_REQUESTS, type Asker, type BackendNotice, type GatewayEvents, type GatewayPort, type ModelsPort, type RemoteClient, type RemoteRole, type RemoteTransport } from './core/api.js'
 import { ServiceUnavailableError } from './core/serviceHost.js'
 import type { ActivityFrame } from './lib/turnActivity.js'
 import { MonitorCompletions } from './lib/harnessMonitor.js'
-import type { HarnessShareOwner } from './sharing/owner.js'
-import { SHARE_REQUEST_TYPES } from './sharing/protocol.js'
 import { deviceRelayOverGateway, type DeviceRelayOverGateway } from './lib/autonomous-device/overGateway.js'
 import type { AutonomousDeviceService, AutonomousDeviceFrame } from './lib/autonomous-device/service.js'
 /**
@@ -52,6 +50,8 @@ export { isLocalClientId, type DownTransport }
 const MAX_REQUESTS_BEFORE_READY = 256
 /** The teams' requests, which the frame log leaves out: they carry what agents ask each other. */
 const TEAM_REQUESTS: ReadonlySet<string> = new Set(TEAMS_REQUESTS)
+/** Share's requests, which the frame log leaves out as well: they carry who a harness is shared with. */
+const SHARE_REQUEST_TYPES: ReadonlySet<string> = new Set(SHARE_REQUESTS)
 
 export type Frame = Record<string, unknown>
 
@@ -167,8 +167,10 @@ export class BackendSocket {
     Promise<{ ok: true; session: RegisteredSession } | { ok: false; error: string; detail?: string }>) | null = null
   /** Called on `remote_terminal_handoff` — cli.ts names the agent whose tile is that tmux pane, or null. */
   onTerminalHandoff: ((tmuxPane: string) => string | null) | null = null
+  /** Share's observers, as the relay hands their frames over and drops them all with the link (services/sharing.ts,
+   *  through its port). Null answers none, as a daemon without Share did. */
+  observers: { receive(connId: string, type: string, payload: Record<string, unknown>): Promise<void> | void; closeAll(): void } | null = null
   /** What the daemon knows about an agent's DSH companions (viewer URL, verdict); null when nothing. */
-  harnessSharing: HarnessShareOwner | null = null
   activityFrameProvider: ((session: RegisteredSession) => ActivityFrame | null) | null = null
   dshFrameProvider: ((session: RegisteredSession) => AgentDshContext | null) | null = null
   viewerTargetProvider: ((agentId: string) => string | null) | null = null
@@ -354,7 +356,7 @@ export class BackendSocket {
         false,
       )
     },
-    observer: async (connId, type, payload) => { await this.harnessSharing?.receive(connId, type, payload) },
+    observer: async (connId, type, payload) => { await this.observers?.receive(connId, type, payload) },
     toLocal: (connId, frame) => {
       if (connId) { this.sendLocalTo(connId, frame); return }
       for (const [id, sink] of this.localClients) if (!sink.sendFrame(frame)) void this.unregisterLocalClient(id)
@@ -364,7 +366,7 @@ export class BackendSocket {
       this.onStatus(connected)
     },
     linkDown: () => {
-      this.harnessSharing?.closeAll()
+      this.observers?.closeAll()
       this.viewerForwarder.closeAll()
       this.interactiveViewers.closeAll(); this.ownerCommands.closeAll()
       void this.terminalStreams?.closeConnectionsWhere(
@@ -468,7 +470,6 @@ export class BackendSocket {
     this.interactiveViewers.closeAll(); this.ownerCommands.closeAll()
     await this.terminalStreams?.stop()
     await this.gatewayPort?.stop()
-    await this.harnessSharing?.stop()
   }
 
   /** What the gateway does with a frame of the core's, guarded: a throw there (sealing one, say) costs
@@ -814,12 +815,6 @@ export class BackendSocket {
     if (typeof lifecycleTarget === 'string' && this.purgeAgentService?.busy(lifecycleTarget)
       && ['agent_close', 'agent_delete', 'agent_resume', 'agent_restart', 'agent_retarget', 'agent_update'].includes(type)) {
       reply(type, (frame.payload as { requestId?: unknown }).requestId, { error: 'DELETE_IN_PROGRESS' }); return
-    }
-    if (SHARE_REQUEST_TYPES.has(type)) {
-      const p = (frame.payload ?? {}) as Record<string, unknown>
-      const result = await this.harnessSharing?.manage(type, p).catch(() => ({ error: 'SHARING_UNAVAILABLE', detail: 'Sharing is temporarily unavailable. Try again.' }))
-      reply(type, p.requestId, result ?? { error: 'UNSUPPORTED' })
-      return
     }
     const payload = (frame.payload ?? {}) as Record<string, unknown>
     const requestId = payload.requestId

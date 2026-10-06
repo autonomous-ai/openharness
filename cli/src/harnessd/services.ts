@@ -343,6 +343,9 @@ export const SERVICE_HOSTS: Readonly<Record<string, ServiceHostSpec>> = {
   // beside them the teams, their mailbox and the tab channels (services/collaborationProcess.ts), each on its
   // own link to the core. Started only once it is on (core/api.ts `EXPERIMENTS`).
   teams: { services: ['teams', 'collaboration'], heapLimitMiB: 256, rssLimitMiB: 512, onDemand: true },
+  // Share, an experiment (services/sharingProcess.ts): its invitations, its observers' sessions and their
+  // ciphers; the headless Chrome it captures a shared viewer in is a process of its own, outside this budget.
+  sharing: { services: ['sharing'], heapLimitMiB: 256, rssLimitMiB: 512, onDemand: true },
   // The relay and its E2EE (gateway/gatewayProcess.ts): the backend link, every remote client's session,
   // the terminals' WebRTC channels and their queues. Network, crypto and pure-JS WebRTC, the attack surface,
   // where a fault costs the remote clients and nothing else (docs/design/2026-10-06-core-boundary-next.md).

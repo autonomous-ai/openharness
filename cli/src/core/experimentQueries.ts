@@ -10,7 +10,10 @@
  * - `windows`: a change notice for every window on this computer (`orchestrator_changed`);
  * - `daemon`: how an agent's shell reaches this daemon, for the prompts the experiment writes;
  * - `backend`: a read or write of the account's backend under `/api/`, signed in by the core, which holds the
- *   sign-in (Tab collaboration's tab channels).
+ *   sign-in (Tab collaboration's tab channels);
+ * - `observer_key`: this machine's public key, or its signature on a welcome to one observer of one share, by
+ *   the gateway, which holds the identity (Share's owner);
+ * - `observer_send`: a frame Share sealed for one of its observers, to the relay through the gateway.
  * The core answers them only for the experiments (core/api.ts `EXPERIMENTS`): creating an agent or
  * telling the windows something is no other process's to ask. The process's side is
  * services/processCoreApi.ts.
@@ -21,7 +24,7 @@ import type { AgentCreateRequest, CoreApi } from './api.js'
 type Payload = Record<string, unknown>
 type Core = Pick<CoreApi, 'agents' | 'turns' | 'clients' | 'daemon' | 'account'>
 
-const QUERIES: ReadonlySet<string> = new Set(['shown', 'create', 'stop_turn', 'windows', 'daemon', 'backend'])
+const QUERIES: ReadonlySet<string> = new Set(['shown', 'create', 'stop_turn', 'windows', 'daemon', 'backend', 'observer_key', 'observer_send'])
 const METHODS: ReadonlySet<string> = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE'])
 const text = (value: unknown): string => (typeof value === 'string' ? value : '')
 
@@ -66,8 +69,20 @@ export async function answerExperimentQuery(core: Core, experiments: ReadonlySet
       if (!METHODS.has(method) || !path.startsWith('/api/')) return { error: 'INVALID_REQUEST' }
       return { ...await core.account.backend(method, path, payload.body) }
     }
+    case 'observer_key':
+      try {
+        if (payload.op === 'public') return { key: await core.account.observerKey.publicKey() }
+        return { key: await core.account.observerKey.signWelcome(text(payload.machineId), text(payload.shareId), text(payload.peer), text(payload.ephemeral)) }
+      } catch (error) {
+        return { error: error instanceof Error ? error.message : String(error) }
+      }
+    case 'observer_send': {
+      const connId = text(payload.connId), type = text(payload.type)
+      if (!connId.startsWith('observer:') || !type.startsWith('observer_') || !payload.payload || typeof payload.payload !== 'object') return { error: 'INVALID_FRAME' }
+      return { sent: core.clients.observer(connId, type, payload.payload as Payload) }
+    }
     default:
-      return { command: core.daemon.command, port: core.daemon.port, machineId: core.daemon.machineId() }
+      return { command: core.daemon.command, port: core.daemon.port, machineId: core.daemon.machineId(), autonomousEnv: core.daemon.autonomousEnv }
   }
 }
 

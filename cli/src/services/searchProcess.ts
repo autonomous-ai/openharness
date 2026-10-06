@@ -73,7 +73,7 @@ export function searchCoreApi(
       machineName: () => null,
       ...ACCOUNT_BACKEND_OFF,
     },
-    clients: { viewerChanged: () => {}, gridNamed: () => {}, gridModelsChanged: () => {}, dshInstallStatus: () => {}, windows: () => {} },
+    clients: { viewerChanged: () => {}, gridNamed: () => {}, gridModelsChanged: () => {}, dshInstallStatus: () => {}, windows: () => {}, observer: () => false },
     daemon: DAEMON_UNKNOWN,
   }
 }

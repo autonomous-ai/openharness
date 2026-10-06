@@ -110,7 +110,7 @@ export function modelsCoreApi(dataDir: string, ask: (query: string, payload?: Pa
       gridNamed: (name) => told('gridNamed', { name }),
       gridModelsChanged: () => told('gridModelsChanged'),
       dshInstallStatus: () => {},
-      windows: () => {},
+      windows: () => {}, observer: () => false,
     },
     daemon: DAEMON_UNKNOWN,
   }

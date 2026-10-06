@@ -8,11 +8,12 @@
  * credential is refused: a service holds none (services/AGENTS.md).
  *
  * An experiment acts on the core as well (core/experimentQueries.ts): it creates agents, stops a turn,
- * delivers turns (services/turnsLink.ts), reads and writes the account's backend and tells the windows it
- * changed, each asked of the core over its link (`ask`). The agents it reads come as the apps are shown them (`service_query shown`): each with its
+ * delivers turns (services/turnsLink.ts), reads and writes the account's backend, tells the windows it
+ * changed and Share's observers what they are shown, and has Share's welcomes signed with this machine's key,
+ * each asked of the core over its link (`ask`). The agents it reads come as the apps are shown them (`service_query shown`): each with its
  * name, whether its terminal is there and its harness's viewer.
  */
-import { DAEMON_UNKNOWN, DELIVERIES_OFF, LANE_OFF, resolveAgent, TERMINALS_OFF, type CoreApi, type DaemonAddress } from '../core/api.js'
+import { DAEMON_UNKNOWN, DELIVERIES_OFF, LANE_OFF, OBSERVER_KEY_OFF, resolveAgent, TERMINALS_OFF, type CoreApi, type DaemonAddress, type TerminalWatch } from '../core/api.js'
 import type { AgentDshContext } from '../lib/agentFrame.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import type { turnsLink } from './turnsLink.js'
@@ -35,6 +36,8 @@ export interface AgentsView {
   daemon?: () => DaemonAddress | null
   /** The account's notices the core tells it (`service_event` kind `notice`), for whoever listens. */
   onNotice?: CoreApi['account']['onNotice']
+  /** The core's read-only view of terminals, for its own viewers (services/watchLink.ts). */
+  watch?: TerminalWatch
 }
 
 /** Whether what the core sent is an agent. */
@@ -50,7 +53,13 @@ export function agentsIn(answer: Record<string, unknown> | null | undefined): Re
 export function daemonIn(answer: Payload | null | undefined): DaemonAddress | null {
   if (typeof answer?.command !== 'string' || typeof answer.port !== 'number' || typeof answer.machineId !== 'string') return null
   const machineId = answer.machineId
-  return { command: answer.command, port: answer.port, machineId: () => machineId }
+  return { command: answer.command, port: answer.port, machineId: () => machineId, autonomousEnv: typeof answer.autonomousEnv === 'string' ? answer.autonomousEnv : DAEMON_UNKNOWN.autonomousEnv }
+}
+
+/** The key the core answered with, or a refusal a caller can read. */
+function keyAnswer(answer: Payload): string {
+  if (typeof answer.key === 'string') return answer.key
+  throw new Error(typeof answer.error === 'string' ? answer.error : 'the gateway did not answer for this machine\'s key')
 }
 
 export function processCoreApi(dataDir: string, service: string, view: AgentsView = {}): CoreApi {
@@ -61,7 +70,7 @@ export function processCoreApi(dataDir: string, service: string, view: AgentsVie
     dataDir,
     // Terminals are launched by the core alone (the shell service, #893): a service in its own process
     // is refused, never handed a way to start a process outside the core.
-    terminals: TERMINALS_OFF,
+    terminals: { open: TERMINALS_OFF.open, watch: view.watch ?? TERMINALS_OFF.watch },
     agents: {
       // The stopped agents are never sent to these services: none of them reads one.
       all: live,
@@ -101,6 +110,11 @@ export function processCoreApi(dataDir: string, service: string, view: AgentsVie
       mintGridName: async () => null,
       accessToken: () => Promise.reject(new Error(`${service} holds no credential`)),
       lane: LANE_OFF,
+      // Share's owner signs a welcome with this machine's identity, which the gateway holds: asked each time.
+      observerKey: ask ? {
+        publicKey: async () => keyAnswer(await ask('observer_key', { op: 'public' })),
+        signWelcome: async (machineId, shareId, peer, ephemeral) => keyAnswer(await ask('observer_key', { op: 'sign', machineId, shareId, peer, ephemeral })),
+      } : OBSERVER_KEY_OFF,
       privateGridName: async () => null,
       machineName: () => null,
       backend: async (method, path, body) => {
@@ -115,11 +129,19 @@ export function processCoreApi(dataDir: string, service: string, view: AgentsVie
     clients: {
       viewerChanged: () => {}, gridNamed: () => {}, gridModelsChanged: () => {}, dshInstallStatus: () => {},
       windows: (frame) => { void ask?.('windows', { frame }).catch(() => {}) },
+      // Handed to the core in order; whether the relay took it is the core's to know, and a lost observer's
+      // close follows.
+      observer: (connId, type, payload) => {
+        if (!ask) return false
+        void ask('observer_send', { connId, type, payload }).catch(() => {})
+        return true
+      },
     },
     daemon: {
       get command() { return daemon().command },
       get port() { return daemon().port },
       machineId: () => daemon().machineId(),
+      get autonomousEnv() { return daemon().autonomousEnv },
     },
   }
 }

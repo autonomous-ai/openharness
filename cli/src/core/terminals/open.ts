@@ -12,7 +12,7 @@ export interface TerminalOpenerDeps {
   blocksFolder(cwd: string): boolean
 }
 
-export function createTerminalOpener({ tmuxBackend, registry, announceSession, blocksFolder }: TerminalOpenerDeps): TerminalsPort {
+export function createTerminalOpener({ tmuxBackend, registry, announceSession, blocksFolder }: TerminalOpenerDeps): Pick<TerminalsPort, 'open'> {
   return { open: async ({ argv, cwd }) => {
     if (!tmuxBackend) return { ok: false, error: 'TMUX_UNAVAILABLE' }
     if (blocksFolder(cwd)) return { ok: false, error: 'WORKTREE_BUSY' }

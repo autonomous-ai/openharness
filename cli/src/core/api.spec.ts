@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { projectDisplayName, type RegisteredSession } from '../lib/registry.js'
-import { ACCOUNT_BACKEND_OFF, AGENT_ACTIONS_OFF, createCoreApi, DAEMON_UNKNOWN, DELIVERIES_OFF, emptyPorts, FLEET_FALLBACKS, LANE_OFF, LONG_ANSWERS, MODELS_OFF, MODELS_REQUESTS, MONITOR_OFF, ORCHESTRATOR_FALLBACKS, resolveAgent, TEAMS_FALLBACKS, type CoreApiDeps } from './api.js'
+import { ACCOUNT_BACKEND_OFF, AGENT_ACTIONS_OFF, createCoreApi, DAEMON_UNKNOWN, DELIVERIES_OFF, emptyPorts, FLEET_FALLBACKS, LANE_OFF, LONG_ANSWERS, MODELS_OFF, MODELS_REQUESTS, MONITOR_OFF, OBSERVER_KEY_OFF, ORCHESTRATOR_FALLBACKS, resolveAgent, SHARING_FALLBACKS, TEAMS_FALLBACKS, TERMINALS_OFF, type CoreApiDeps } from './api.js'
 import { FAIL } from './serviceHost.js'
 
 const row = (agentId: string) => ({ agentId, sessionId: `s-${agentId}`, engine: 'claude', cwd: '/work/app' }) as RegisteredSession
@@ -62,14 +62,16 @@ describe('the core API services stand on', () => {
       create: vi.fn(async () => ({ ok: true as const, agentId: 'made' })),
       dsh: vi.fn(() => null),
       windows: vi.fn(),
-      daemon: { command: 'harness', port: 18473, machineId: () => 'machine-1' },
+      daemon: { command: 'harness', port: 18473, machineId: () => 'machine-1', autonomousEnv: 'prod' },
+      observerKey: OBSERVER_KEY_OFF,
+      observer: vi.fn(() => true),
       turns: { send: vi.fn(), stop: vi.fn(), recent: vi.fn(() => []), asks: vi.fn(() => []), deliver: vi.fn(), cancelDelivery: vi.fn(() => true), onDelivery: vi.fn(() => () => {}) },
       questions: { answer: vi.fn(), answerReviewed: vi.fn(async () => true) },
     }
     const core = createCoreApi(deps)
     expect(core.dataDir).toBe('/data')
     expect(await core.terminals.open({ argv: ['/bin/zsh'], cwd: '/work' })).toEqual({ ok: false, error: 'SERVICE_UNAVAILABLE' })
-    const terminals = { open: vi.fn(async () => ({ ok: true as const, agentId: 'shell' })) }
+    const terminals = { open: vi.fn(async () => ({ ok: true as const, agentId: 'shell' })), watch: TERMINALS_OFF.watch }
     expect(createCoreApi({ ...deps, terminals }).terminals).toBe(terminals)
     expect(core.agents.all().map((s) => s.agentId)).toEqual(['live', 'stopped'])
     expect(core.agents.live().map((s) => s.agentId)).toEqual(['live'])
@@ -96,6 +98,8 @@ describe('the core API services stand on', () => {
     expect(core.account.machineName).toBe(deps.machineName)
     expect(core.account.backend).toBe(deps.backend)
     expect(core.account.onNotice).toBe(deps.onNotice)
+    expect(core.account.observerKey).toBe(deps.observerKey)
+    expect(core.clients.observer).toBe(deps.observer)
     // What a device or another machine asks of an agent here: the core's own handlers, as they are.
     expect(core.agents.runtimeProfile).toBe(deps.runtimeProfile)
     expect(core.agents.setRuntime).toBe(deps.setRuntime)
@@ -131,7 +135,7 @@ describe('the core API services stand on', () => {
   })
 
   it('starts with every port empty: a service fills its own when it starts', () => {
-    expect(emptyPorts()).toEqual({ search: null, viewers: null, models: null, workspaces: null, teams: null, fleet: null, monitor: null, orchestrator: null })
+    expect(emptyPorts()).toEqual({ search: null, viewers: null, models: null, workspaces: null, teams: null, fleet: null, monitor: null, orchestrator: null, sharing: null })
     expect(emptyPorts()).not.toBe(emptyPorts())
   })
 
@@ -165,6 +169,15 @@ describe('the core API services stand on', () => {
   it('gives a service that reads no backend an unavailable answer, and no notice to hear', async () => {
     expect(await ACCOUNT_BACKEND_OFF.backend('GET', '/api/tab-channels')).toEqual({ status: 503, body: { error: 'SERVICE_UNAVAILABLE' } })
     expect(ACCOUNT_BACKEND_OFF.onNotice(() => {})()).toBeUndefined()
+  })
+
+  it('watches no terminal and signs nothing for a service without the core\'s terminals or key', async () => {
+    await expect(TERMINALS_OFF.watch.frame('observer:x', 'terminal_open', {})).resolves.toBeUndefined()
+    await expect(TERMINALS_OFF.watch.close('observer:x')).resolves.toBeUndefined()
+    expect(TERMINALS_OFF.watch.onOutput(() => {})()).toBeUndefined()
+    await expect(OBSERVER_KEY_OFF.publicKey()).rejects.toThrow('no E2EE identity')
+    await expect(OBSERVER_KEY_OFF.signWelcome('m', 's', 'p', 'e')).rejects.toThrow('no E2EE identity')
+    expect(SHARING_FALLBACKS).toEqual({ observer: undefined, linkDown: undefined, stop: undefined })
   })
 
   it('answers no role and reads no frame while the orchestrator is off', () => {

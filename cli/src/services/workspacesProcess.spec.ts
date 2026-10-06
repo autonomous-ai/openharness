@@ -182,6 +182,7 @@ describe('workspaces in their own process', () => {
     api.clients.gridNamed('grid')
     api.clients.dshInstallStatus({ phase: 'clone' })
     api.clients.windows({ type: 'orchestrator_changed', payload: {} })
+    expect(api.clients.observer('observer:x', 'observer_frame', {})).toBe(false)
   })
 
   it('runs as a real service process, with the real workspaces, by default', () => {

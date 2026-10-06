@@ -122,7 +122,7 @@ way back).
 
 ## Experiments
 
-An experiment (the orchestrator, Tab collaboration; Share next) is a service that costs nothing until it is
+An experiment (the orchestrator, Tab collaboration, Share) is a service that costs nothing until it is
 on: its own process, which the master starts only when the core asks for it (`want`), when one of its
 requests arrives or, as the core starts, when its saved state is in the data folder. Off, nothing of it runs or
 is loaded anywhere; one failing costs its own process and nothing else. `e2e/experiments.e2e.ts` proves it:
@@ -135,7 +135,10 @@ To add one:
    `src/services/orchestratorProcess.ts`). Its `CoreApi` in its process is `processCoreApi` with `ask`, which
    gives it what an experiment acts on the core through (`src/core/experimentQueries.ts`): the agents as the
    apps are shown them, creating an agent, stopping a turn, delivering turns (`services/turnsLink.ts`), a
-   change notice for the windows (`<name>_changed`) and how an agent's shell reaches this daemon.
+   change notice for the windows (`<name>_changed`) and how an agent's shell reaches this daemon; Share
+   also reads the backend as the account (`core.account.backend`) and has its welcomes signed by the gateway
+   (`core.account.observerKey`), so it holds no credential, and watches terminals read-only
+   (`core.terminals.watch`, `services/watchLink.ts`).
 2. Its entry in `EXPERIMENTS` (`src/core/api.ts`): its requests and its saved state.
 3. Its process in `SERVICE_HOSTS` (`src/harnessd/services.ts`) with `onDemand: true`, and its runner in
    `SERVICE_RUNNERS` (`src/serviceProcess.ts`).

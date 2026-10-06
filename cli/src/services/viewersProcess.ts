@@ -79,7 +79,7 @@ export function viewersCoreApi(dataDir: string, sessions: ReadonlyMap<string, Re
       machineName: () => null,
       ...ACCOUNT_BACKEND_OFF,
     },
-    clients: { viewerChanged: tell, gridNamed: () => {}, gridModelsChanged: () => {}, dshInstallStatus: () => {}, windows: () => {} },
+    clients: { viewerChanged: tell, gridNamed: () => {}, gridModelsChanged: () => {}, dshInstallStatus: () => {}, windows: () => {}, observer: () => false },
     daemon: DAEMON_UNKNOWN,
   }
 }
