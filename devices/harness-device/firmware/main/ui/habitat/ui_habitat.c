@@ -96,7 +96,7 @@ typedef enum {
 #ifdef DEVICE_PRO_COMPANION
     A_LAUNCHER, A_WORK_INTENT, A_WORK_MODE, A_WORK_RECORD, A_AGENT_LAYOUT,
     A_TODAY, A_TODAY_REFRESH, A_METRICS_GET,
-    A_CARRY_PREVIEW,
+    A_CARRY_PREVIEW, A_QUESTION_CLOSE,
     A_LANGUAGE, A_LANGUAGE_SET,
     A_DAEMONS, A_SCENES, A_APPEAR_PREVIOUS, A_APPEAR_NEXT, A_APPEAR_USE, A_APPEAR_SAVE,
     A_VOICE_SAMPLES, A_SAMPLE_PREVIOUS, A_SAMPLE_NEXT, A_SAMPLE_PLAY,
@@ -471,7 +471,11 @@ static void notice_mark_read(cable_notif_t *n)
 }
 static void notice_open(void)
 {
+#ifdef DEVICE_PRO_COMPANION
+    view(s.notice_count || s.q.pending ? INBOX : HOME);
+#else
     view(s.notice_count ? INBOX : HOME);
+#endif
     if (s.view == INBOX) for (int i = 0; i < s.notice_count; i++)
         if (!s.notice[i].read_on_dial) { s.offset = i; break; }
 }
@@ -2406,16 +2410,26 @@ static bool question_answer(void)
 }
 static void question_move(int delta)
 {
-    if (!question_view(s.view) || !s.q.valid || !s.q.supported || s.q.loading || s.q.pending || s.q.error[0]) return;
+    bool retained = false;
+#ifdef DEVICE_PRO_COMPANION
+    retained = s.q.pending && s.q.uncertain && s.q.count > 0 && s.q.index >= 0 && s.q.index < s.q.count;
+#endif
+    if (!question_view(s.view) || s.q.loading ||
+        (!retained && (!s.q.valid || !s.q.supported || s.q.pending || s.q.error[0]))) return;
     s.q.drag+=delta;
     while (s.q.drag>=40 || s.q.drag<=-40) {
         int step=s.q.drag>0 ? 1 : -1; s.q.drag-=step*40;
         question_item_t *q=&s.q.item[s.q.index];
-        const char *value=s.view==QUESTION ? q->prompt : s.view==CHOICE ? q->options[s.q.choice] : q->answer;
+        const char *value=retained ? q->answer : s.view==QUESTION ? q->prompt : s.view==CHOICE ? q->options[s.q.choice] : q->answer;
         int last=question_rows(value)-Q_ROWS; if (last<0) last=0;
         if (step>0 && s.offset<last) s.offset++;
         else if (step<0 && s.offset>0) s.offset--;
-        else if (s.view==CHOICE && s.q.choice+step>=0 && s.q.choice+step<q->count) {
+        else if (retained && s.q.index+step>=0 && s.q.index+step<s.q.count) {
+            // The submitted packet is immutable. Only the local reading position
+            // changes, including when its answer receipt was lost offline.
+            s.q.index+=step; s.offset=step>0 ? 0 : question_rows(s.q.item[s.q.index].answer)-Q_ROWS;
+            if (s.offset<0) s.offset=0;
+        } else if (!retained && s.view==CHOICE && s.q.choice+step>=0 && s.q.choice+step<q->count) {
             s.q.choice+=step; s.offset=step>0 ? 0 : question_rows(q->options[s.q.choice])-Q_ROWS;
             if (s.offset<0) s.offset=0;
         }
@@ -2712,6 +2726,18 @@ static void dispatch(action_t a)
         open_question();
 #endif
         break;
+#ifdef DEVICE_PRO_COMPANION
+    case A_QUESTION_CLOSE:
+        if (question_view(s.view) && s.q.pending && s.q.uncertain &&
+            a.revision==s.q.revision && a.dy==s.q.index && !strcmp(a.id,s.q.agent)) {
+            // Close removes this local copy, not the host's question or answer.
+            // Advancing the revision also invalidates an old queued submission.
+            uint32_t revision=s.q.revision+1;
+            memset(&s.q,0,sizeof s.q); s.q.revision=revision;
+            view(INBOX);
+        }
+        break;
+#endif
     case A_QUESTION_CHOICES:
     case A_QUESTION_REVIEW:
     case A_QUESTION_BACK:
@@ -4629,7 +4655,12 @@ static void notice_sync_view(void)
     // Reconcile after the complete mutation, never during remove-then-add.
     // Cancel a finger already down so the new home cannot receive its release.
     input_cancel();
-    if (!s.notice_count) view(HOME);
+    if (!s.notice_count) {
+#ifdef DEVICE_PRO_COMPANION
+        if (s.q.pending) { s.offset=0; return; }
+#endif
+        view(HOME);
+    }
     else if (s.offset >= s.notice_count) s.offset = s.notice_count - 1;
 }
 static void notice_selection(char *id, size_t capacity)

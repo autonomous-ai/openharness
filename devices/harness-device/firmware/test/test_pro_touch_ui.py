@@ -63,7 +63,7 @@ code = r'''
 '''
 code += defines("CABLE_READ_TOKEN_MAX", "ID_MAX", "CABLE_NAME_MAX", "SWARM_ID_MAX", "SWARMS_MAX",
                 "SWARM_TILES_MAX", "CABLE_MAX_AGENTS", "MAX_PROJECTS")
-code += defines("NOTICES", "QUESTION_MAX", "OPTION_MAX", "PANE_MEMORY_MAX", "PANE_RESULT_BYTES", "DRAFT_ROWS", source=SOURCE)
+code += defines("NOTICES", "QUESTION_MAX", "OPTION_MAX", "PANE_MEMORY_MAX", "PANE_RESULT_BYTES", "DRAFT_ROWS", "Q_ROWS", source=SOURCE)
 code += "\n".join(re.findall(r"^#define TAB_\w+ \d+$", SOURCE, re.M)) + "\n"
 for name in ("cable_swarm_t", "cable_notif_t", "cable_tile_t", "model_item_t"):
     code += typedef(name)
@@ -160,7 +160,6 @@ bool ht_character_delivery_tick(ht_character_t *c, uint32_t at, bool pending,
                                 uint32_t sequence, bool animate) {
     (void)c; (void)at; (void)pending; (void)sequence; (void)animate; return false;
 }
-static void question_move(int dy) { s.q.drag += dy; }
 static bool scroll_emit(ht_scroll_phase_t phase, int dy, int velocity, void *ctx) {
     (void)velocity; (void)ctx;
     if (congested) return false;
@@ -176,7 +175,7 @@ for name in ("copy", "find", "pane_memory", "pane_memory_apply", "ensure", "is_q
              "pro_speech_tick", "pro_surface_mood", "status_wake_ms",
              "question_view", "hit_contains", "home_footer", "pro_written_control",
              "settings_item", "settings_count", "tabs_move", "make_action", "input_cancel", "view",
-             "question_rows", "draft_move",
+             "question_rows", "question_move", "draft_move",
              "pro_appearance_view", "pro_appearance_open", "pro_appearance_move", "pro_appearance_use",
              "workspace_index", "tabs_open", "workspace_failed", "pro_panes_of",
              "ui_land_after_reload", "voice_status", "ui_scroll_reportable", "habitat_next_wake_ms",
@@ -196,13 +195,15 @@ sample_actions = SOURCE.split("    case A_VOICE_SAMPLES:", 1)[1].split("    case
 code += "static bool sample_action(action_t a) { switch(a.kind) { case A_VOICE_SAMPLES:" + sample_actions + "default: return false; } return true; }\n"
 metrics_actions = SOURCE.split("    case A_TODAY:", 1)[1].split("    case A_WORK_INTENT:", 1)[0]
 code += "static bool metrics_action(action_t a) { switch(a.kind) { case A_TODAY:" + metrics_actions + "default: return false; } return true; }\n"
+question_close = SOURCE.split("    case A_QUESTION_CLOSE:", 1)[1].split("\n#endif\n    case A_QUESTION_CHOICES:", 1)[0]
+code += "static bool question_close_action(action_t a) { switch(a.kind) { case A_QUESTION_CLOSE:" + question_close + "default: return false; } return true; }\n"
 code += function("ht_character_select", (NATIVE / "character.c").read_text())
 code += r'''
 const char *ht_character_name(ht_character_id_t id) { return pro_daemon_definition(id)->name; }
 static void open_question(void) { view(QUESTION); }
 static void dispatch(action_t action) {
     sent = action;
-    if (language_action(action) || sample_action(action) || metrics_action(action) || agent_layout_action(action)) return;
+    if (language_action(action) || sample_action(action) || metrics_action(action) || agent_layout_action(action) || question_close_action(action)) return;
     if (action.kind == A_DAEMONS) pro_appearance_open(DAEMONS);
     else if (action.kind == A_SCENES) pro_appearance_open(SCENES);
     else if (action.kind == A_APPEAR_PREVIOUS) pro_appearance_move(-1);
@@ -258,6 +259,7 @@ controls = (NATIVE / "pro_controls.inc").read_text()
 code += function("pro_hit", controls) + function("pro_control", controls) + function("pro_heading", controls) + function("pro_appearance", controls)
 code += function("pro_voice_samples", controls) + function("pro_voice_params", controls) + function("pro_launcher", controls) + function("pro_row", controls) + function("pro_language", controls)
 code += function("pro_note", controls) + function("pro_today", controls)
+code += function("pro_read_text", controls) + function("pro_unknown_answer", controls)
 code += (NATIVE / "pro_home.inc").read_text()
 code += function("render_lock") + function("render_brand")
 code += r'''
@@ -390,6 +392,23 @@ static void carry_retained_reading(void) {
     sample(true,220,360,4000);sample(true,480,360,4060);sample(false,500,360,4120);
     assert(sent.kind==A_DRAFT_BACK&&sent.revision==3&&!strcmp(sent.text,"retained"));
 }
+static void render_actual(void);
+static void question_retained_reading(void) {
+    reset();s.view=QUESTION;s.q.pending=s.q.uncertain=true;s.q.valid=false;s.q.count=2;s.q.revision=12;
+    COPY(s.q.agent,"a");COPY(s.q.name,"Design");COPY(s.q.item[0].answer,
+        "One line\nTwo lines\nThree lines\nFour lines\nFive lines\nSix lines\nSeven lines\nEight lines\nNine lines\nTen lines\nEleven lines\nTwelve lines");
+    COPY(s.q.item[1].answer,"The second retained answer.");
+    render_actual();assert(question_rows(s.q.item[0].answer)>Q_ROWS);
+    sample(true,300,480,2000);sample(true,300,240,2060);sample(false,300,220,2120);
+    assert(s.offset>0&&s.q.pending&&!starts&&!moves&&!switches&&!selected);
+    question_move(4000);assert(s.q.index==1&&s.q.pending);
+    render_actual();sample(true,100,630,3000);s.q.revision++;sample(false,100,630,3080);
+    assert(s.q.pending&&!starts&&!moves&&!selected); // Stale down-captured Close.
+    render_actual();sample(true,100,630,4000);sample(true,100,500,4060);sample(false,100,500,4120);
+    assert(s.q.pending&&!starts&&!moves&&!selected); // Reading cannot become Close.
+    render_actual();tap(100,630,450);
+    assert(!s.q.pending&&s.view==INBOX&&!starts&&!moves&&!switches&&!selected);
+}
 static void cancellation_matrix(void) {
     const action_kind_t controls[]={A_AGENT,A_HOME,A_NOTICE,A_MACHINE,A_MODEL,A_ANSWER,A_DRAFT_SEND};
     const unsigned durations[]={25,75,349,450,649,800,1800};
@@ -460,6 +479,7 @@ static void render_actual(void) {
     else if (s.view==OTA) render_brand(&scene);
     else if (pro_appearance_view()) pro_appearance(&scene);
     else if (s.view==TODAY) pro_today(&scene);
+    else if (question_view(s.view) && s.q.pending && s.q.uncertain) pro_unknown_answer(&scene);
     else if (s.view==VOICE) pro_render_voice(&scene); else pro_render_home(&scene);
     check_scene();
 }
@@ -1159,7 +1179,7 @@ int main(int argc,char **argv) {
         {"home_render_geometry",home_render_geometry},{"home_state_geometry",home_state_geometry},
         {"home_header_drag_cancel",home_header_drag_cancel},{"home_header_tap_tabs",home_header_tap_tabs},
         {"current_tab_returns_home",current_tab_returns_home},{"changed_tab_stays_on_home",changed_tab_stays_on_home},
-        {"carried_excerpt_is_readable",carried_excerpt_is_readable},
+        {"carried_excerpt_is_readable",carried_excerpt_is_readable},{"question_retained_reading",question_retained_reading},
         {"docked_connection_policy",docked_connection_policy},{"home_gesture_consistency",home_gesture_consistency},
         {"workspace_chord_navigation",workspace_chord_navigation},{"workspace_chord_gates",workspace_chord_gates},
         {"workspace_chord_context",workspace_chord_context},{"map_contact_invalidation",map_contact_invalidation},{"map_layout_is_local",map_layout_is_local},

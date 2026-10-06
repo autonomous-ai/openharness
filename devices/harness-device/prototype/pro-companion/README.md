@@ -119,6 +119,7 @@ do not establish those qualities.
 | Updates | Swipe | Browse updates without moving desktop focus |
 | Updates with a question | Answer | Read and answer that question locally; the home recipient and desktop focus stay in place |
 | Updates with an unconfirmed answer | Review answer | Reopen the retained answer and delivery state, even if its original alert has disappeared |
+| Unconfirmed answer | Swipe / Close | Read the retained answers; Close removes only the local copy and unblocks other questions, without resending or acknowledging the host |
 | Updates or Read | Open on desktop | Open that exact pane; compatible hosts preserve the previous reading place for Return |
 | Home after a supported visit | Return | Ask the app to restore its saved pane and reading position |
 | Reading, question or draft sheets | Drag vertically | Read the local text or advance its choices/parts, rather than scrolling the desktop |
@@ -152,8 +153,14 @@ answers it.
 
 Question choices and speech stay pinned to the reviewed question's identity and
 token. A disconnect or missing receipt leaves the answer visibly unconfirmed;
-the device does not resend it. Updates retains a local Review answer entry until
-a matching receipt, close event or replacement question settles that record.
+the device does not resend it. Updates retains a local Review answer entry even
+after an empty notification replacement. The read-only view lets you scroll through
+the retained answers, check them in Harness, or explicitly Close the local copy to
+unblock other questions. Close never removes or acknowledges the host's alert, and
+cannot apply to a replacement question. Pending answers without uncertainty remain
+protected. A matching receipt, close event or replacement question keeps its existing
+authoritative behavior. A freshly read, already-submitted question may have no saved
+answer text on the device; the recovery view says so.
 Opening in the app is a separate, deliberate action. Older hosts use a plain
 open without a Return promise. A closed pane, pruned reading position or timed-out
 visit reports the host's limitation instead of claiming exact restoration.

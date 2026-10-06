@@ -374,7 +374,17 @@ int main(int argc,char **argv) {
     assert(pro_render_controls(&scene));inspect(&scene,"form-error");portrait(&scene,dir,"form-error");
     reset(false);s.view=ANSWER_REVIEW;s.q.pending=true;ht_scene_clear(&scene,BG);
     assert(pro_render_controls(&scene));inspect(&scene,"answer-pending");
-    assert(!action_count(A_ANSWER,true)&&!action_count(A_QUESTION_BACK,true));
+    assert(!action_count(A_ANSWER,true)&&!action_count(A_QUESTION_BACK,true)&&!action_count(A_QUESTION_CLOSE,true));
+    for(int language=0;language<2;language++)for(int connected=0;connected<2;connected++)
+    for(int state=0;state<3;state++)for(int view=0;view<2;view++) {
+        reset(true);COPY(s.voice_language,language?"vi":"en");s.connected=connected;
+        s.view=view?ANSWER_REVIEW:QUESTION;s.q.pending=s.q.uncertain=true;s.q.valid=false;
+        if(state==1)s.q.item[0].answer[0]=0;
+        if(state==2)s.q.count=0;
+        ht_scene_clear(&scene,BG);assert(pro_render_controls(&scene));inspect(&scene,"answer-unknown");
+        assert(action_count(A_QUESTION_CLOSE,true)==1&&action_count(A_DESKTOP,true)==(unsigned)connected);
+        assert(!action_count(A_ANSWER,true)&&!action_count(A_QUESTION_SAY,true)&&!action_count(A_CHOICE,true));
+    }
     reset(false);s.view=DRAFT;draft.page.locked=true;ht_scene_clear(&scene,BG);
     assert(pro_render_controls(&scene));inspect(&scene,"draft-uncertain");
     assert(!action_count(A_DRAFT_SEND,true)&&action_count(A_DRAFT_STATE,true)==1);

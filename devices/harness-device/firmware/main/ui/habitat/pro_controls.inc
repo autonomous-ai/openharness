@@ -458,7 +458,8 @@ static void pro_inbox(ht_scene_t *f)
     if (!s.notice_count) {
         if (s.q.pending) {
             ht_pro_text(f,48,164,624,&ht_pro_32,FG,s.q.name);
-            ht_pro_wrap(f,56,244,608,6,0,&ht_pro_32,DIM,PRO_TR(s.q.error[0] ? s.q.error : "Confirming your answer..."));
+            ht_pro_wrap(f,56,244,608,6,0,&ht_pro_32,DIM,
+                        PRO_TR(s.q.uncertain ? "Delivery unconfirmed" : "Confirming your answer..."));
             pro_control(f,220,606,280,68,PRO_TR("Review answer"),A_QUESTION,-1,true);
             return;
         }
@@ -598,8 +599,30 @@ static void pro_reader(ht_scene_t *f)
     pro_note(f, PRO_TR("Swipe to read this result."));
 }
 
+static void pro_unknown_answer(ht_scene_t *f)
+{
+    pro_heading(f, PRO_TR("Delivery unconfirmed"), A_HOME);
+    ht_pro_text(f, 48, 132, 624, &ht_pro_24, DIM, s.q.name);
+    bool item = s.q.count > 0 && s.q.index >= 0 && s.q.index < s.q.count;
+    if (item) {
+        char position[48];
+        snprintf(position,sizeof position,PRO_TR("Answer %d of %d"),s.q.index+1,s.q.count);
+        ht_pro_text(f,48,170,624,&ht_pro_24,ACCENT,position);
+    }
+    const char *answer = item ? s.q.item[s.q.index].answer : "";
+    if (answer[0]) pro_read_text(f,answer,220,6);
+    else ht_pro_text(f,56,220,608,&ht_pro_32,DIM,PRO_TR("No saved answer."));
+    if (s.q.count > 1 || ht_pro_text_rows(answer,&ht_pro_32,608) > 6)
+        ht_pro_text(f,56,532,608,&ht_pro_24,DIM,PRO_TR("Swipe to read."));
+    pro_control(f,32,592,248,80,PRO_TR("Close"),A_QUESTION_CLOSE,0,true);
+    pro_control(f,296,592,392,80,PRO_TR("Check in Harness"),A_DESKTOP,1,
+                s.connected && s.q.agent[0] && !visit.pending);
+    pro_note(f,PRO_TR("Close removes this copy."));
+}
+
 static void pro_question(ht_scene_t *f)
 {
+    if (s.q.pending && s.q.uncertain) { pro_unknown_answer(f); return; }
     pro_heading(f, PRO_TR("A question for you"), A_HOME);
     ht_pro_text(f, 48, 132, 624, &ht_pro_24, DIM, s.q.name);
     if (s.q.loading) {
@@ -650,6 +673,7 @@ static void pro_choices(ht_scene_t *f)
 
 static void pro_answer(ht_scene_t *f)
 {
+    if (s.q.pending && s.q.uncertain) { pro_unknown_answer(f); return; }
     pro_heading(f, PRO_TR("Review your answer"), A_QUESTION_BACK);
     if (s.q.error[0]) {
         ht_pro_wrap(f, 56, 214, 608, 7, 0, &ht_pro_32, FG, PRO_TR(s.q.error));

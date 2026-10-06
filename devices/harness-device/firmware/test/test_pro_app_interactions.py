@@ -57,7 +57,7 @@ code = r'''
 '''
 code += defines("CABLE_READ_TOKEN_MAX", "ID_MAX", "CABLE_NAME_MAX", "SWARM_ID_MAX", "SWARMS_MAX",
                 "SWARM_TILES_MAX", "CABLE_MAX_AGENTS", "MAX_PROJECTS")
-code += defines("NOTICES", "QUESTION_MAX", "OPTION_MAX", "PANE_MEMORY_MAX", "PANE_RESULT_BYTES", "UI_FONT", source=SOURCE)
+code += defines("NOTICES", "QUESTION_MAX", "OPTION_MAX", "PANE_MEMORY_MAX", "PANE_RESULT_BYTES", "UI_FONT", "Q_ROWS", source=SOURCE)
 for name in ("cable_swarm_t", "cable_notif_t", "cable_tile_t", "model_item_t"):
     code += typedef(name)
 code += SOURCE[SOURCE.index("typedef enum {"):SOURCE.index("static QueueHandle_t actions;")]
@@ -116,6 +116,7 @@ static int actions=1;
 static unsigned uxQueueSpacesAvailable(int q) { (void)q;return congested?0:20; }
 static int xQueueSend(int q,const action_t *a,int wait) { (void)q;(void)wait;return queue(*a); }
 static void notice_mark_read(cable_notif_t *n) { n->read_on_dial=true; }
+static bool notice_was_read(const cable_notif_t *n) { return n->read_on_dial; }
 static void notice_forget_read(const char *id) { (void)id; }
 static void notice_add(const char *id,const char *name,const char *machine,const char *text,bool question,bool failed) {
     int i=0;for(;i<s.notice_count;i++)if(!strcmp(id,s.notice[i].agent_id))break;
@@ -144,14 +145,14 @@ static uint16_t color(unsigned rgb) { return ht_rgb(rgb); }
 #define SEL color(HT_THEME_SELECTION)
 static void dispatch(action_t a);
 '''
-for name in ("question_view", "notice_sync_view", "visit_emit", "make_action", "read_question", "open_question",
-             "pro_open_in_app", "question_answer", "send_answer", "question_load", "ui_question_show",
+for name in ("question_view", "notice_open", "notice_sync_view", "notice_selection", "notice_restore_selection", "ui_notif_replace",
+             "visit_emit", "make_action", "read_question", "open_question",
+             "pro_open_in_app", "question_answer", "question_rows", "question_move", "send_answer", "question_load", "ui_question_show",
              "ui_question_state", "ui_answer_receipt", "ui_question_close", "ui_set_connected",
              "ui_focus_project", "ui_visit_state", "ui_voice_question"):
     code += function(name)
 code += "static void dispatch(action_t a) { if(s.locked)return;switch(a.kind) {\n"
-code += cases("A_READER", "A_INBOX")
-code += cases("A_NOTICE", "A_TABS")
+code += cases("A_READER", "A_TABS")
 code += cases("A_DESKTOP", "A_UP")
 code += cases("A_VOICE", "A_VOICE_STOP")
 code += "default:break;} }\n"
@@ -159,7 +160,7 @@ worker = SOURCE.split("static void worker(", 1)[1]
 code += "static void work(action_t a) { switch(a.kind) {\n"
 code += "        case A_QUESTION_READ:" + worker.split("        case A_QUESTION_READ:", 1)[1].split("        default:", 1)[0]
 code += "default:break;} }\n"
-for name in ("pro_hit", "pro_control", "pro_heading", "pro_note", "pro_read_text", "pro_inbox", "pro_reader", "pro_question"):
+for name in ("pro_hit", "pro_control", "pro_heading", "pro_note", "pro_read_text", "pro_inbox", "pro_reader", "pro_unknown_answer", "pro_question", "pro_answer"):
     code += function(name, SHEETS)
 code += r'''
 static void reset(void) {
@@ -179,7 +180,8 @@ static bool overlap(ht_rect_t a,ht_rect_t b) {
 }
 static void render(ht_scene_t *f) {
     s.hit_count=0;ht_scene_clear(f,BG);
-    if(s.view==INBOX)pro_inbox(f);else if(s.view==READER)pro_reader(f);else {assert(s.view==QUESTION);pro_question(f);}
+    if(s.view==INBOX)pro_inbox(f);else if(s.view==READER)pro_reader(f);
+    else if(s.view==ANSWER_REVIEW)pro_answer(f);else {assert(s.view==QUESTION);pro_question(f);}
     assert(f->count<HT_RUNS);
     for(int i=0;i<f->count;i++) {
         ht_rect_t r=ht_run_bounds(&f->runs[i]);assert(r.x>=0&&r.y>=0&&r.x+r.w<=720&&r.y+r.h<=720);
@@ -205,7 +207,7 @@ static void portrait(const ht_scene_t *f,const char *dir,const char *name) {
     for(size_t i=0;i<720*720;i++) {unsigned p=pixels[i];unsigned char rgb[]={(p>>11)*255/31,((p>>5)&63)*255/63,(p&31)*255/31};fwrite(rgb,1,3,out);}
     fclose(out);
 }
-static void question_state(bool supported) {
+static void question_state_reply(bool supported,bool submitted,const char *id,const char *token) {
     cJSON options[]={{.type=JSTRING,.valuestring="This file only"},{.type=JSTRING,.valuestring="The whole project"}};
     cJSON array=object(options,2);
     cJSON fields[]={{.string="key",.type=JSTRING,.valuestring="scope"},
@@ -213,14 +215,16 @@ static void question_state(bool supported) {
         {.string="options",.type=JARRAY,.child=supported?array.child:NULL},
         {.string="canText",.type=JTRUE}};
     cJSON question=object(fields,4);
-    cJSON reply[]={{.string="agentId",.type=JSTRING,.valuestring="remote"},
+    cJSON reply[]={{.string="agentId",.type=JSTRING,.valuestring=s.q.agent},
         {.string="requestId",.type=JSTRING,.valuestring=s.q.fetch},
-        {.string="id",.type=JSTRING,.valuestring="question-remote"},
-        {.string="token",.type=JSTRING,.valuestring="token-remote"},
+        {.string="id",.type=JSTRING,.valuestring=id},
+        {.string="token",.type=JSTRING,.valuestring=token},
         {.string="name",.type=JSTRING,.valuestring="Research"},
-        {.string="ok",.type=JTRUE},{.string="questions",.type=JARRAY,.child=&question}};
-    cJSON root=object(reply,7);ui_question_state(&root);
+        {.string="ok",.type=JTRUE},{.string="questions",.type=JARRAY,.child=&question},
+        {.string="submitted",.type=submitted?JTRUE:0}};
+    cJSON root=object(reply,8);ui_question_state(&root);
 }
+static void question_state(bool supported) { question_state_reply(supported,false,"question-remote","token-remote"); }
 static void voice_reply(const char *token) {
     cJSON reply[]={{.string="agentId",.type=JSTRING,.valuestring="remote"},
         {.string="token",.type=JSTRING,.valuestring=token},{.string="questionIndex",.type=JNUMBER,.valuedouble=0},
@@ -228,13 +232,15 @@ static void voice_reply(const char *token) {
         {.string="text",.type=JSTRING,.valuestring="Only change the selected file."}};
     cJSON root=object(reply,5);ui_voice_question(&root);
 }
-static void receipt(const char *token,bool ok) {
-    cJSON reply[]={{.string="agentId",.type=JSTRING,.valuestring="remote"},
-        {.string="requestId",.type=JSTRING,.valuestring=s.q.fetch},
+static void receipt_frame(const char *agent,const char *fetch,const char *token,bool ok,bool pending) {
+    cJSON reply[]={{.string="agentId",.type=JSTRING,.valuestring=agent},
+        {.string="requestId",.type=JSTRING,.valuestring=fetch},
         {.string="token",.type=JSTRING,.valuestring=token},{.string="ok",.type=ok?JTRUE:0},
-        {.string="error",.type=JSTRING,.valuestring="Could not confirm. Check the terminal."}};
-    cJSON root=object(reply,5);ui_answer_receipt(&root);
+        {.string="error",.type=JSTRING,.valuestring="Could not confirm. Check the terminal."},
+        {.string="pending",.type=pending?JTRUE:0}};
+    cJSON root=object(reply,6);ui_answer_receipt(&root);
 }
+static void receipt(const char *token,bool ok) { receipt_frame("remote",s.q.fetch,token,ok,false); }
 static void visit_reply(const char *agent,bool ok,bool available,const char *note) {
     char request[48],id[48];snprintf(request,sizeof request,"visit-%lu",(unsigned long)visit.request);COPY(id,visit.id);
     cJSON reply[]={{.string="requestId",.type=JSTRING,.valuestring=request},
@@ -245,8 +251,114 @@ static void visit_reply(const char *agent,bool ok,bool available,const char *not
         {.string="note",.type=JSTRING,.valuestring=note?note:""}};
     cJSON root=object(reply,8);ui_visit_state(&root);
 }
+static action_t submit_choice(void) {
+    reset();act(A_QUESTION,0);question_state(true);act(A_QUESTION_CHOICES,0);
+    act(A_CHOICE,0);act(A_QUESTION_REVIEW,0);act(A_ANSWER,0);
+    assert(s.q.pending&&!s.q.uncertain&&s.view==ANSWER_REVIEW);
+    return sent;
+}
+static void unknown_answer_recovery(const char *dir) {
+    ht_scene_t scene;
+    // Pending remains protected until a timeout, rejection or disconnect marks
+    // delivery uncertain. A pending receipt is not a completed acknowledgement.
+    action_t submit=submit_choice();unsigned queued=enqueued;
+    action_t close=make_action(hit(A_QUESTION_CLOSE,0));dispatch(close);
+    receipt_frame("remote",s.q.fetch,"token-remote",true,true);
+    assert(s.q.pending&&!s.q.uncertain&&enqueued==queued);render(&scene);
+    assert(!controls(A_QUESTION_CLOSE)&&!controls(A_ANSWER));
+    work(submit);assert(answers==1);
+    char old_fetch[48];COPY(old_fetch,s.q.fetch);
+
+    // Actual path: submit, disconnect, missed offline close, reconnect, empty
+    // notification replacement. Menu/Updates must expose the retained record.
+    ui_set_connected(false);view(LAUNCHER);act(A_INBOX,0);
+    ui_set_connected(true);ui_notif_replace(NULL,0);
+    assert(s.view==INBOX&&s.q.pending&&s.q.uncertain&&!s.notice_count);
+    render(&scene);portrait(&scene,dir,"unknown-updates-empty");
+    act(A_QUESTION,-1);assert(s.view==QUESTION);render(&scene);
+    assert(controls(A_QUESTION_CLOSE)&&controls(A_DESKTOP));portrait(&scene,dir,"unknown-online");
+    queued=enqueued;unsigned prior_removed=removed;
+    COPY(s.pending_focus,"build");close=make_action(hit(A_QUESTION_CLOSE,0));
+    uint32_t revision=s.q.revision;dispatch(close);work(submit);
+    assert(!s.q.pending&&!s.q.agent[0]&&s.q.revision==revision+1&&s.view==INBOX);
+    assert(answers==1&&enqueued==queued&&removed==prior_removed&&!strcmp(s.pending_focus,"build"));
+    render(&scene);assert(text_has(&scene,"All caught up"));portrait(&scene,dir,"unknown-closed");
+
+    // A different agent is now reachable. A late old receipt and a stale Close
+    // cannot settle or erase this new question or its notification/read token.
+    cable_notif_t next={.question=true};COPY(next.agent_id,"another");COPY(next.name,"Other");
+    COPY(next.summary,"Which project?");COPY(next.read_token,"read-another");ui_notif_replace(&next,1);
+    act(A_QUESTION,0);assert(s.q.loading&&!strcmp(s.q.agent,"another"));
+    question_state_reply(true,false,"question-another","token-another");
+    revision=s.q.revision;queued=enqueued;
+    receipt_frame("remote",old_fetch,"token-remote",true,false);dispatch(close);
+    assert(s.q.valid&&!s.q.pending&&s.q.revision==revision&&!strcmp(s.q.token,"token-another"));
+    assert(s.notice_count==1&&!strcmp(s.notice[0].read_token,"read-another")&&enqueued==queued);
+
+    // Closing a retained record does not remove/read-ack its remaining host
+    // notification. A queued, never-written old answer is invalidated locally.
+    submit=submit_choice();ui_set_connected(false);queued=enqueued;prior_removed=removed;
+    COPY(s.notice[0].read_token,"still-unread");
+    COPY(s.notice_reads[0].id,"elsewhere");COPY(s.notice_reads[0].token,"pending-read");s.notice_reads[0].pending=true;
+    cable_notif_t original=s.notice[0];notice_receipt_t read_record=s.notice_reads[0];
+    act(A_QUESTION_CLOSE,0);work(submit);
+    assert(s.view==INBOX&&!s.q.pending&&answers==0&&enqueued==queued&&removed==prior_removed);
+    assert(s.notice_count==1&&!memcmp(&original,&s.notice[0],sizeof original));
+    assert(!memcmp(&read_record,&s.notice_reads[0],sizeof read_record));
+
+    // A new request for the SAME agent also invalidates a Close captured on the
+    // old answer. The replacement retains its own token and notice revision.
+    submit_choice();ui_set_connected(false);close=make_action(hit(A_QUESTION_CLOSE,0));
+    ui_set_connected(true);ui_question_show("remote","Research","","question-new",NULL);
+    assert(!s.q.pending);act(A_INBOX,0);act(A_QUESTION,0);
+    question_state_reply(true,false,"question-new","token-new");
+    revision=s.q.revision;queued=enqueued;original=s.notice[0];dispatch(close);
+    ui_question_close("remote","question-remote");
+    assert(s.q.valid&&s.q.revision==revision&&!strcmp(s.q.request,"question-new")&&!strcmp(s.q.token,"token-new"));
+    assert(enqueued==queued&&s.notice_count==1&&!memcmp(&original,&s.notice[0],sizeof original));
+
+    // A known rejection while still on answer review uses the same read-only
+    // recovery. Exact authoritative receipt/close semantics stay unchanged.
+    submit_choice();receipt("wrong-token",false);assert(!s.q.uncertain);
+    receipt("token-remote",false);assert(s.q.pending&&s.q.uncertain&&s.view==ANSWER_REVIEW);
+    queued=enqueued;render(&scene);assert(controls(A_QUESTION_CLOSE)&&!controls(A_ANSWER));
+    portrait(&scene,dir,"unknown-rejected");act(A_ANSWER,0);act(A_QUESTION_SAY,0);assert(enqueued==queued);
+    receipt("token-remote",true);assert(!s.q.pending&&s.view==HOME);
+    submit_choice();ui_set_connected(false);ui_question_close("remote","question-remote");
+    assert(!s.q.pending&&s.view==HOME&&!s.notice_count);
+
+    // An already-submitted state from a fresh host read has no device copy.
+    reset();act(A_QUESTION,0);question_state_reply(true,true,"question-remote","token-remote");
+    render(&scene);assert(text_has(&scene,"No saved answer.")&&controls(A_QUESTION_CLOSE));
+    portrait(&scene,dir,"unknown-no-copy");queued=enqueued;act(A_QUESTION_CLOSE,0);
+    assert(!s.q.pending&&enqueued==queued&&s.notice_count==1);
+
+    // Read all four retained answers locally, including long text, while
+    // offline. Index changes invalidate down-captured Close and never edit the
+    // submitted choices/drafts/answer bytes or emit another packet.
+    submit_choice();ui_set_connected(false);s.q.count=4;s.q.index=0;
+    for(int i=1;i<4;i++)s.q.item[i]=s.q.item[0];
+    for(int i=0;i<18;i++)strcat(s.q.item[0].answer," Keep the selected file and its test together.");
+    COPY(s.q.item[1].answer,"Second answer: leave the configuration unchanged.");
+    COPY(s.q.item[2].answer,"Third answer: use the current branch.");
+    COPY(s.q.item[3].answer,"Fourth answer: run the focused checks.");
+    question_item_t retained[QUESTION_MAX];memcpy(retained,s.q.item,sizeof retained);
+    queued=enqueued;unsigned voices=voice_commands;close=make_action(hit(A_QUESTION_CLOSE,0));
+    render(&scene);portrait(&scene,dir,"unknown-long-first");
+    int last=question_rows(s.q.item[0].answer)-Q_ROWS;assert(last>0);
+    question_move(40*last);assert(s.offset==last&&s.q.index==0);
+    render(&scene);portrait(&scene,dir,"unknown-long-last");
+    question_move(40);assert(s.q.index==1&&s.offset==0);dispatch(close);assert(s.q.pending);
+    question_move(80);assert(s.q.index==3);render(&scene);portrait(&scene,dir,"unknown-fourth");
+    question_move(-120);assert(s.q.index==0&&s.offset==last);
+    assert(enqueued==queued&&voice_commands==voices&&!memcmp(retained,s.q.item,sizeof retained));
+    COPY(s.voice_language,"vi");s.offset=0;render(&scene);portrait(&scene,dir,"unknown-vi");
+    assert(controls(A_QUESTION_CLOSE)&&!controls(A_DESKTOP)&&!controls(A_QUESTION_SAY));
+    puts("Unknown answer recovery: PASS (real empty notif.replace reachability, local Close, queued-send invalidation, exact stale agent/request/revision/index guards, four-answer read-only scrolling, authoritative receipts, no-copy state)");
+}
 int main(int argc,char **argv) {
     const char *dir=argc>1?argv[1]:NULL;ht_scene_t scene;
+    unknown_answer_recovery(dir);
 
     // Reading is pinned even when the app selects another pane meanwhile.
     reset();s.view=LAUNCHER;act(A_READER,0);assert(s.view==READER&&!strcmp(s.reader_agent,"design"));
@@ -281,11 +393,11 @@ int main(int argc,char **argv) {
     act(A_ANSWER,0);assert(s.q.pending);action_t submit=sent;work(submit);
     assert(answers==1&&!strcmp(transport.id,"remote")&&!strcmp(transport.text,"token-remote"));
     act(A_ANSWER,0);assert(answers==1&&s.q.pending);
-    view(QUESTION);render(&scene);assert(text_has(&scene,"Confirming")&&!controls(A_QUESTION_SAY));portrait(&scene,dir,"question-pending");
+    view(QUESTION);render(&scene);assert(text_has(&scene,"Confirming")&&!controls(A_QUESTION_SAY)&&!controls(A_QUESTION_CLOSE));portrait(&scene,dir,"question-pending");
     ui_set_connected(false);assert(s.q.pending&&s.q.uncertain&&!s.q.valid&&s.view==QUESTION&&!strcmp(s.q.item[0].answer,"Only change the selected file."));
-    render(&scene);assert(text_has(&scene,"No answer receipt")&&!controls(A_DESKTOP));portrait(&scene,dir,"question-uncertain");
+    render(&scene);assert(text_has(&scene,"Delivery unconfirmed")&&text_has(&scene,"Only change")&&!controls(A_DESKTOP)&&controls(A_QUESTION_CLOSE));portrait(&scene,dir,"question-uncertain");
     // Read notifications may disappear; the retained delivery record stays reachable offline.
-    cable_notif_t pending_notice=s.notice[0];s.notice_count=0;view(INBOX);render(&scene);
+    cable_notif_t pending_notice=s.notice[0];ui_notif_replace(NULL,0);view(LAUNCHER);act(A_INBOX,0);assert(s.view==INBOX);render(&scene);
     assert(controls(A_QUESTION)==1&&!text_has(&scene,"All caught up"));portrait(&scene,dir,"updates-retained-answer");
     action_t pending_review=make_action(hit(A_QUESTION,-1));dispatch(pending_review);assert(s.view==QUESTION);
     s.notice[0]=pending_notice;s.notice_count=1;
