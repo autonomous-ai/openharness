@@ -13,7 +13,7 @@
  * each asked of the core over its link (`ask`). The agents it reads come as the apps are shown them (`service_query shown`): each with its
  * name, whether its terminal is there and its harness's viewer.
  */
-import { DAEMON_UNKNOWN, DELIVERIES_OFF, LANE_OFF, OBSERVER_KEY_OFF, resolveAgent, TERMINALS_OFF, WIFI_OFF, type CoreApi, type DaemonAddress, type TerminalWatch } from '../core/api.js'
+import { CONVERSATIONS_OFF, DAEMON_UNKNOWN, DELIVERIES_OFF, LANE_OFF, OBSERVER_KEY_OFF, resolveAgent, TERMINALS_OFF, WIFI_OFF, type CoreApi, type DaemonAddress, type TerminalWatch } from '../core/api.js'
 import type { AgentDshContext } from '../lib/agentFrame.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import type { turnsLink } from './turnsLink.js'
@@ -86,6 +86,7 @@ export function processCoreApi(dataDir: string, service: string, view: AgentsVie
   const daemon = (): DaemonAddress => view.daemon?.() ?? DAEMON_UNKNOWN
   return {
     dataDir,
+    conversations: CONVERSATIONS_OFF,
     // Terminals are launched by the core alone (the shell service, #893): a service in its own process
     // is refused, never handed a way to start a process outside the core.
     terminals: { open: TERMINALS_OFF.open, watch: view.watch ?? TERMINALS_OFF.watch },

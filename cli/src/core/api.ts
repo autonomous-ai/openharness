@@ -73,6 +73,31 @@ export const TERMINALS_OFF: TerminalsPort = {
   watch: { frame: async () => {}, close: async () => {}, onOutput: () => () => {} },
 }
 
+/** Read-only conversation facts for the handoff in the edge host. Each lookup asks the core now;
+ * a stopped record is never replaced by a stale live-agent list in another process. */
+export interface ConversationReads {
+  /** A live agent by agent/session id, otherwise the stopped record by agent id. */
+  resolve(id: string): Promise<RegisteredSession | null>
+  recentAsks(sessionId: string, n: number): Promise<string[]>
+  lastFullText(sessionId: string): Promise<string | null>
+  recaps(sessionId: string, n: number): Promise<string[]>
+  /** The core verifies process birth, ownership and deletion; discovery never binds the agent. */
+  discover(agentId: string): Promise<{ engine: AgentEngine; sessionId: string; transcriptPath: string | null } | null>
+  findTranscript(engine: AgentEngine, sessionId: string, options: { codexHome?: string }): Promise<string | null>
+  transcriptOk(engine: AgentEngine, path: string, codexHome: string | null): Promise<boolean>
+}
+
+/** No retained record or history, no discovered session and no permission to read a guessed path. */
+export const CONVERSATIONS_OFF: ConversationReads = {
+  resolve: async () => null,
+  recentAsks: async () => [],
+  lastFullText: async () => null,
+  recaps: async () => [],
+  discover: async () => null,
+  findTranscript: async () => null,
+  transcriptOk: async () => false,
+}
+
 export interface CoreApi {
   /** The daemon's data folder; a service keeps its own files in it. */
   dataDir: string
@@ -86,6 +111,7 @@ export interface CoreApi {
     /** Its display name, else "This machine". */
     name(): string
   }
+  conversations: ConversationReads
   agents: {
     /** Every agent on this machine: the live ones, then the stopped ones. */
     all(): RegisteredSession[]
@@ -406,6 +432,8 @@ export const MONITOR_REQUESTS = ['machine_resources'] as const
 export const COMMAND_BAR_REQUESTS = ['command_bar', 'command_bar_http'] as const
 /** The project and folder readers (services/projects.ts). */
 export const PROJECTS_REQUESTS = ['git_pull_request', 'git_project_info', 'project_preview', 'fs_list_dir', 'agent_read_file'] as const
+/** Change agent's handoff file, prepared in the edge host (services/handoff.ts). */
+export const HANDOFF_REQUESTS = ['agent_handoff_prepare'] as const
 /**
  * Models (services/models.ts).
  *
@@ -1146,6 +1174,7 @@ export function emptyPorts(): CorePorts {
 
 export interface CoreApiDeps {
   terminals?: TerminalsPort
+  conversations?: ConversationReads
   dataDir: string
   registry: Pick<typeof registry, 'list' | 'byAgent' | 'resolve' | 'advertised' | 'terminalAvailable'>
   stoppedAgents: Pick<StoppedAgentStore, 'list'>
@@ -1197,7 +1226,7 @@ export interface CoreApiDeps {
 export function createCoreApi({
   dataDir, registry, stoppedAgents, databaseHistory, externalSessions, openSessions, syncSession, runtimeModels, viewerChanged,
   gridNamed, gridModelsChanged, dshInstallStatus, mintGridName, accessToken, lane, observerKey, observer, privateGridName, machineName, backend, onNotice,
-  runtimeProfile, setRuntime, fork, create, dsh, windows, daemon, turns, questions, terminals = TERMINALS_OFF, viewerFrame, machine, activityText,
+  runtimeProfile, setRuntime, fork, create, dsh, windows, daemon, turns, questions, terminals = TERMINALS_OFF, conversations = CONVERSATIONS_OFF, viewerFrame, machine, activityText,
   signedIn, environment, machines, sendLocal, sendToWindow, hasWindow, devicesChanged, dialWatching, wifi, log = (line) => console.warn(line),
 }: CoreApiDeps): CoreApi {
   // The devices reach the windows through these alone, and only with their own frames: a devices process
@@ -1209,6 +1238,7 @@ export function createCoreApi({
     dataDir,
     terminals,
     machine,
+    conversations,
     agents: {
       all: () => [...registry.list(), ...stoppedAgents.list()],
       live: () => registry.list(),

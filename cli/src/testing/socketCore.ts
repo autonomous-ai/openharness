@@ -8,7 +8,7 @@ import { join } from 'node:path'
 import type { BackendSocket } from '../backendSocket.js'
 import { env } from '../config/env.js'
 import { createCloseRequests } from '../core/agents/close.js'
-import { createHandoffRequest, type Handoff, type HandoffRequest } from '../core/agents/handoff.js'
+import { createHandoffRequest, type Handoff, type HandoffRequest } from '../services/handoffRequest.js'
 import { createLaunchRequests, type LaunchRequestDeps, type RestartAgent, type ResumeAgent } from '../core/agents/launches.js'
 import { MODELS_OFF } from '../core/api.js'
 import { createPurgeRequest, createStopRequest } from '../core/agents/lifecycle.js'
@@ -118,9 +118,15 @@ export function bindAgentUpdate(socket: BackendSocket): void {
   }).agentUpdate
 }
 
-/** `agent_handoff_prepare` (core/agents/handoff.ts), written by `prepare`, or by nothing when it is null. */
+/** The handoff service's request through the socket's normal service router. */
 export function bindHandoffRequest(socket: BackendSocket, prepare: ((req: HandoffRequest) => Promise<Handoff>) | null): void {
-  socket.handoffRequestProvider = createHandoffRequest({ prepare })
+  const previous = socket.serviceRouter
+  const answer = createHandoffRequest({ prepare })
+  socket.serviceRouter = (type, payload, asker, reply) => {
+    if (type !== 'agent_handoff_prepare') return previous?.(type, payload, asker, reply) ?? false
+    answer(payload, asker, reply)
+    return true
+  }
 }
 
 type Launcher = { resume: ResumeAgent | null; restart: RestartAgent | null; modelTarget: LaunchRequestDeps['modelTarget'] | null }

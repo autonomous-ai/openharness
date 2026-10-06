@@ -15,6 +15,7 @@
 export { startGateway } from '../gateway/start.js'
 export { startCommandBar } from './commandBar.js'
 export { startDevices } from './devices.js'
+export { startHandoff } from './handoff.js'
 export { startModels } from './models.js'
 export { startTeamsInCore } from './collaboration.js'
 export { startMonitor } from './monitor.js'
