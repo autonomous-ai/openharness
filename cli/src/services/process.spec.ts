@@ -181,6 +181,7 @@ describe('a service in its own process', () => {
     }
     run({ requests })
     socket().open()
+    socket().say({ type: 'connected' })
     socket().say({ type: 'session_search', payload: { query: 'zebra', requestId: 'r1' } })
     socket().say({ type: 'session_tail', payload: { requestId: 'r2' } })
     socket().say({ type: 'session_other', payload: { requestId: 'r3' } })
@@ -199,10 +200,33 @@ describe('a service in its own process', () => {
     expect(lines).toEqual(expect.arrayContaining(['[service search] session_tail failed · index gone', '[service search] session_other failed · not an error']))
   })
 
+  it('waits for connected before handling the request that started the service', async () => {
+    const order: string[] = []
+    run({
+      onConnected: () => { order.push('connected') },
+      onEvent: () => { order.push('event') },
+      onBinary: () => { order.push('binary') },
+      requests: { harness_share_link: () => { order.push('request'); return { link: 'shared' } } },
+    })
+    socket().open()
+    // October 6 Share E2E: accept() flushes a held request before localWsServer sends
+    // connected. The packets can arrive in separate turns of the service's event loop.
+    socket().emit('message', Buffer.from([7]), true)
+    socket().say({ type: 'service_event', payload: { kind: 'initial' } })
+    socket().say({ type: 'harness_share_link', payload: { requestId: 'first' } })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(order).toEqual([])
+    socket().say({ type: 'connected' })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(order).toEqual(['connected', 'binary', 'event', 'request'])
+    expect(socket().sent.at(-1)).toEqual({ type: 'harness_share_link_result', payload: { link: 'shared', requestId: 'first' } })
+  })
+
   it('tells each handler who asked, as the core established it, and the least it could be when that is missing', async () => {
     const asked: unknown[] = []
     run({ requests: { session_search: (_payload: Record<string, unknown>, asker: unknown) => { asked.push(asker); return {} } } })
     socket().open()
+    socket().say({ type: 'connected' })
     socket().say({ type: 'session_search', payload: { requestId: 'r1' }, asker: { local: true, owner: true } })
     socket().say({ type: 'session_search', payload: { requestId: 'r2' }, asker: { local: 'yes', owner: 1 } })
     socket().say({ type: 'session_search', payload: { requestId: 'r3' } })
@@ -216,12 +240,38 @@ describe('a service in its own process', () => {
     ])
   })
 
+  it('does not carry a first request onto another core connection', async () => {
+    const handle = vi.fn(() => ({}))
+    run({ requests: { command: handle } })
+    socket().open()
+    socket().say({ type: 'command', payload: { requestId: 'old' } })
+    socket().drop()
+    await vi.advanceTimersByTimeAsync(100)
+    socket().open()
+    socket().say({ type: 'connected' })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(handle).not.toHaveBeenCalled()
+  })
+
+  it('does not run a first request whose caller closed while the service was connecting', async () => {
+    const handle = vi.fn(() => ({}))
+    run({ requests: { command: handle } })
+    socket().open()
+    socket().say({ type: 'command', payload: { requestId: 'gone' }, asker: { connection: 'window' } })
+    socket().say({ type: 'service_connection_closed', payload: { connection: 'window' } })
+    socket().say({ type: 'connected' })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(handle).not.toHaveBeenCalled()
+    expect(socket().sent.at(-1)).toEqual({ type: 'command_result', payload: { error: 'SERVICE_UNAVAILABLE', service: 'search', requestId: 'gone' } })
+  })
+
   it('tells a handler when the connection that asked closes, and when the core that routed it goes', async () => {
     const asked: Array<{ asker: unknown; closed: AbortSignal; answer: () => void }> = []
     run({ requests: { command: (payload: Record<string, unknown>, asker: unknown, closed?: AbortSignal) => new Promise((resolve) => {
       asked.push({ asker, closed: closed!, answer: () => resolve({ id: payload.id }) })
     }) } })
     socket().open()
+    socket().say({ type: 'connected' })
     const ask = (id: string, connection?: unknown) => socket().say({ type: 'command', payload: { id, requestId: id }, asker: { local: false, owner: true, connection } })
     ask('a1', 'conn-a')
     ask('a2', 'conn-a')
@@ -325,8 +375,9 @@ describe('a service in its own process', () => {
   it('a binary frame with nobody to hear it is dropped', () => {
     run()
     socket().open()
+    socket().say({ type: 'connected' })
     socket().emit('message', Buffer.from([1]), true)
-    expect(lines).toEqual([])
+    expect(lines).toEqual(['[service search] connected to the core'])
   })
 
   it('reconnects with a backoff that doubles and caps while the core is away, and resets once connected', () => {
@@ -395,6 +446,7 @@ describe('a service in its own process', () => {
       connect: (url) => { const next = new FakeSocket(url, true); sockets.push(next); return next as unknown as WebSocket },
     })
     socket().open()
+    socket().say({ type: 'connected' })
     socket().say({ type: 'session_search', payload: { requestId: 'r1' } })
     await vi.advanceTimersByTimeAsync(0)
     expect(socket().sent).toEqual([])
@@ -417,6 +469,7 @@ describe('a service in its own process', () => {
     const requests = { session_search: vi.fn(() => ({ hits: [] })), session_tail: vi.fn(() => ({ tail: [] })) }
     run({ requests, onEvent, env: { HARNESSD_TEST_FAULTS: 'search.session_search,search.touch' } })
     socket().open()
+    socket().say({ type: 'connected' })
     for (const id of ['r1', 'r2']) socket().say({ type: 'session_search', payload: { requestId: id } })
     socket().say({ type: 'session_tail', payload: { requestId: 'r3' } })
     socket().say({ type: 'service_event', payload: { kind: 'touch', sessionId: 's1' } })
@@ -444,6 +497,7 @@ describe('a service in its own process', () => {
       if (payload.kind === undefined) throw 'not an error'
     } })
     socket().open()
+    socket().say({ type: 'connected' })
     for (const kind of ['throws', 'rejects', undefined, 'fine']) socket().say({ type: 'service_event', payload: kind ? { kind } : {} })
     await vi.waitFor(() => expect(lines).toContain('[service search] rejects failed · index closed'))
     expect(heard).toEqual(['throws', 'rejects', undefined, 'fine'])

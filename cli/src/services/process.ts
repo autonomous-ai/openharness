@@ -184,6 +184,9 @@ export function runServiceProcess(options: ServiceProcessOptions): ServiceProces
   let queries = 0
   /** The core took this connection (`connected`): only then does its end mean the service was cut off. */
   let opened = false
+  // October 6 Share incident: the core flushes the request that started an experiment before its
+  // connected acknowledgement. Keep that traffic until onConnected supplies the service's API.
+  const beforeConnected: Array<{ raw: WebSocket.RawData; isBinary: boolean }> = []
   const pending = new Map<string, { resolve: (payload: Payload) => void; reject: (error: Error) => void }>()
   /** The requests being answered, each with the connection that asked (`Asker.connection`): what that
    *  connection closing aborts, and what the core going aborts all of, since nobody is left to answer. */
@@ -209,6 +212,7 @@ export function runServiceProcess(options: ServiceProcessOptions): ServiceProces
 
   const onFrame = (raw: WebSocket.RawData, isBinary = false): void => {
     if (isBinary) {
+      if (!opened) { beforeConnected.push({ raw, isBinary }); return }
       try { options.onBinary?.(raw instanceof Buffer ? new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength) : new Uint8Array(Buffer.concat(raw as Buffer[]))) }
       catch (error) { log(`[service ${options.name}] binary frame failed · ${describe(error)}`) }
       return
@@ -221,8 +225,10 @@ export function runServiceProcess(options: ServiceProcessOptions): ServiceProces
       opened = true
       log(`[service ${options.name}] connected to the core`)
       options.onConnected?.(core)
+      for (const frame of beforeConnected.splice(0)) onFrame(frame.raw, frame.isBinary)
       return
     }
+    if (!opened) { beforeConnected.push({ raw, isBinary }); return }
     if (frame.type === 'service_event') {
       // An event that fails is this service's alone: logged, and the next one handled as usual. Thrown
       // out of the socket's listener it ended the process, and every request in flight with it.
@@ -265,6 +271,7 @@ export function runServiceProcess(options: ServiceProcessOptions): ServiceProces
     // words the core's host uses: what went wrong goes to the log, not to whoever asked.
     void Promise.resolve()
       .then(() => {
+        if (closed.signal.aborted) return { error: 'SERVICE_UNAVAILABLE', service: options.name }
         if (faults.calls.has(type)) throw new Error(`injected fault: ${options.name}.${type}`)
         return handle(payload, asker, closed.signal)
       })
@@ -295,6 +302,7 @@ export function runServiceProcess(options: ServiceProcessOptions): ServiceProces
       const wasOpen = socket === ws && opened
       socket = null
       opened = false
+      beforeConnected.length = 0
       for (const [id, waiting] of pending) { pending.delete(id); waiting.reject(new Error('the core went away')) }
       // The core that asked is gone, and every connection it routed with it: nobody can read these answers.
       for (const closed of answering.keys()) closed.abort()
