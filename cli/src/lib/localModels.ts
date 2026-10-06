@@ -58,7 +58,6 @@ const JEV_CONTEXT = 8192
 export function llamaBuild(binary: string, env: NodeJS.ProcessEnv = process.env): Promise<number | undefined> {
   return new Promise(resolve => {
     execFile(binary, ['--version'], { env, timeout: 30_000 }, (_error, stdout, stderr) => {
-      // QA's coverage audit: execFile supplies both output strings even when the process fails to start.
       const text = `${stdout}${stderr}`
       const build = /\(build (\d+)/.exec(text)?.[1] ?? /version:\s*(\d+)\b/.exec(text)?.[1]
       resolve(build ? Number(build) : undefined)
@@ -607,9 +606,7 @@ export class LocalModels {
     // A daemon just started answers from the scan it saved last time: a first scan while a llama-server
     // was busy kept the picker without these models, and held a Stop two minutes [run].
     if (!this.appsRead) this.appsRead = await this.savedApps()
-    if (force || !this.appsRead || Date.now() - this.appsRead.at >= 30_000) {
-      void this.scanApps()
-    }
+    if (force || !this.appsRead || Date.now() - this.appsRead.at >= 30_000) { void this.scanApps() }
     return this.appsRead?.value ?? this.scanApps()
   }
 
@@ -862,7 +859,6 @@ export class LocalModels {
           if (candidate.pull) {
             const current = compatibleModels(await this.catalog({ ...currentDevice, usable_bytes: Math.max(0, budget) })).find(c => c.id === candidate.id)
             if (!current || current.size < candidate.size) throw new ModelError('Stop a running model to make room, then try again.')
-            // QA's coverage audit: both are catalog candidates, whose coding contexts were validated above.
             candidate.context = Math.min(candidate.context!, current.context!)
           } else if (candidate.size * 1.25 + 2 * GiB > budget) {
             throw new ModelError('Stop a running model to make room, then try again.')

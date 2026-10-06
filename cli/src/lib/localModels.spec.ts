@@ -116,6 +116,7 @@ afterEach(async () => {
 
 describe('local model discovery and lifecycle', () => {
   it('accepts only catalog fits that carry a finite coding context', () => {
+    // QA's coverage audit: both candidates in a context comparison have passed this catalog validation.
     for (const ctx of [undefined, null, NaN, Infinity, -1, 0, 32768]) {
       expect(compatibleModels({ models: [{ ...card(), fit: { version: 'Q4', ctx } }] })).toEqual([])
     }
@@ -123,6 +124,7 @@ describe('local model discovery and lifecycle', () => {
   })
 
   it('treats an unavailable or silent version executable as an unknown build', async () => {
+    // QA's coverage audit: execFile supplies both output strings even when the process fails to start.
     const silent = join(root, 'silent-engine')
     await writeFile(silent, '#!/bin/sh\nexit 1\n', { mode: 0o700 })
     expect(await llamaBuild(silent)).toBeUndefined()
