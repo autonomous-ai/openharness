@@ -135,6 +135,15 @@ bool ht_tab_carousel_move(ht_tab_carousel_t *c, int x, uint32_t now)
     }
     return old != c->position;
 }
+void ht_tab_carousel_go(ht_tab_carousel_t *c, int index, uint32_t now)
+{
+    if (c->touching || c->count <= 0) return;
+    ht_tab_carousel_tick(c, now);
+    c->target = bounded(index, 0, c->count - 1) * HT_TAB_PITCH;
+    c->from = c->position;
+    c->animation_at = now;
+    c->animating = c->position != c->target;
+}
 bool ht_tab_carousel_end(ht_tab_carousel_t *c, int x, bool horizontal, uint32_t now)
 {
     if (!c->touching) return false;

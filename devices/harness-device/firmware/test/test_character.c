@@ -914,6 +914,22 @@ static void focus_face(void)
             assert(ht_focus_pet_next_ms(&f, "") == nx * ws->step_ms);
         }
         assert(distinct == 2);   // two body poses (eyes open, ^ ^ on the flick); a bob moves them
+        // "Try again" (a status of its own, after a failed voice turn): the mark as over a one-line recap — 2x, Claude
+        // 1.5x — centred between the name's foot and the line's capitals (owner, 2026-10-06).
+        for (unsigned pe = 0; pe < ht_pet_count; pe++) {
+            const ht_pet_t *pt = &ht_pets[pe];
+            ht_character_face_t g = {.recipient = "x", .engine = pt->engine, .activity = "", .status = "Try again",
+                .hint = "", .detail = "", .mood = HT_CHARACTER_IDLE, .clock_ms = 0};
+            ht_scene_t sc; ht_scene_clear(&sc, 0); ht_character_face(&sc, &c, &g, 0xffff, "");
+            const ht_run_t *m = &sc.runs[1];
+            bool claude = !strcmp(pt->engine, "claude");
+            const ht_cell_frame_t *fr0 = &pt->cells[pt->loops[HT_PET_IDLE][0].frame];
+            int h = (fr0->rows * fr0->cell * (claude ? 6 : 8) + 7) / 8;
+            assert(m->sprite.cells == fr0->cells && m->sprite.height == h && m->sprite.zoom == (claude ? 6 : 0));
+            int cap = 233 - ht_lv_inter_30.base.height / 2 + ht_lv_inter_30.ascent - 22;
+            int dy0 = pt->loops[HT_PET_IDLE][0].dy * (claude ? 6 : 8) / 4;
+            assert(m->y - dy0 == 44 + (cap - 44 - h) / 2);
+        }
         // Every engine's working mascot (the scene's frames, props apart) is centred on the glass (design 2026-10-06).
         for (unsigned pe = 0; pe < ht_pet_count; pe++) {
             const ht_pet_scene_t *w = ht_pets[pe].working_scene;

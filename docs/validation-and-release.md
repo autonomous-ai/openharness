@@ -27,7 +27,9 @@ two commands each spawning every CPU is not useful parallelism.
 
 Manual **CI → Run workflow** accepts `scope`: `cli`, `tui`, `backend`, `desktop`, or `full`
 (the default). `cli` includes typecheck, all CLI tests, updater coverage, release
-bundle checks, and the serial/login-shell OS/Node matrix. `tui` includes its native
+bundle checks, the serial/login-shell OS/Node matrix, and the per-file 100% coverage
+gates (`test:core`, `test:harnessd`, `test:resume`, `test:orchestrator`, `test:sharing`,
+`test:remote-viewers`, `test:portability`). `tui` includes its native
 CLI integration tests. Select `full` for cross-component changes or uncertain impact.
 The workflow remains on demand; this change does not introduce new required gates.
 

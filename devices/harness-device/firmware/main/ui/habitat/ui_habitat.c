@@ -254,6 +254,7 @@ static ht_selection_t selection;
 static ht_workspace_t workspace;
 static ht_tab_carousel_t tab_carousel;
 static ht_tab_carousel_t pane_carousel;   // Focus's pane picker, the same pages as the tabs (design 2026-10-06)
+static ht_tab_carousel_t inbox_carousel;  // Focus's inbox, paged the same way; it follows s.offset when at rest
 static ht_carry_t carry;
 static ht_visit_t visit;
 static ht_form_t form;
@@ -988,6 +989,11 @@ static void surface_tick(uint32_t now)
     }
     if (s.view == AGENTS && character.id == HT_CHARACTER_FOCUS && !display_is_asleep() &&
         ht_tab_carousel_tick(&pane_carousel, now)) change();
+    if (s.view == INBOX && character.id == HT_CHARACTER_FOCUS && !display_is_asleep() &&
+        ht_tab_carousel_tick(&inbox_carousel, now)) {
+        s.offset = ht_tab_carousel_index(&inbox_carousel);   // the page it settles on, rendered or not
+        change();
+    }
     if (home_caption_tick(now)) change();
     uint8_t phase = status_animated() ? ht_shimmer_phase(now * status_speed()) : 0;
     if (phase != s.status_phase) { s.status_phase = phase; change(); }
@@ -1798,93 +1804,135 @@ static void render_notice(ht_scene_t *f)
         s.pressed == body + 1 ? FG : DIM, BG, "\xe2\x86\x90");
 }
 /*
- * THE FOCUS INBOX — the LVGL drawer (notif_rebuild), from its own numbers, on the face's black (the owner's call; LVGL's was #16161c): the 60 x 32
- * close pill at the top, then a 360 px column of cards from (53, 107), 12 apart, down to y 427. A
- * card is [machine, muted] over [the engine's 20 px mark, or a green dot, and the agent's name in
- * green] over the message in white, wrapped, cut at 100 characters. Only whole cards show; a vertical
- * swipe moves the column a card at a time (habitat_touch). A tap on a card opens that agent as it
- * always has; a tap on the cross goes back. No age: the cable carries no time for a notice.
+ * THE FOCUS INBOX (design 2026-10-06, focus-project.html "Inbox", "Inbox, empty"; owner, 2026-10-06: the message as
+ * long as the recap, arrows for the others): the close pill on top, then the notices paged like the tabs (320 px pages,
+ * the same carousel). A notice is one block centred on the glass, 12 px between its rows: the machine (Inter 25,
+ * #8a8a99), the engine's 20 px mark or a green dot and the agent's name (Inter 25, green), and the message in the
+ * recap's type (Inter 30 on 43 px lines, #d6d6d2, 340 px, up to four lines, the last cut with "..."). No neighbour
+ * peeks in: a faint ‹ / › (Inter 44, #8a8a99 at 45 %) on a side that has another notice, and a tap on that side pages
+ * to it. While a finger drags, the pages slide and fade with their distance from the middle. "1/2" under it (Inter 20,
+ * #8a8a99, at y 400). Empty: "No notification", Inter 25, #ada6ad, on the middle. The page on the glass is s.offset
+ * (every update keeps using it): the pages follow it at rest, and it follows them while they move. Showing a page
+ * sends no read receipt: a tap on the page opens that agent, and that reads it. The cross goes back. No age: the
+ * cable carries no time for a notice.
  */
+static int css_line(const ht_font_t *font, int size, int top, int line)
+{
+    // The y of a run whose baseline sits where a browser puts Inter's: the line box's middle plus 0.363 of the size
+    // ((ascender 0.969 - descender 0.242) / 2), so a design's `top` and `line-height` carry over as they are.
+    return top + line / 2 + size * 93 / 256 - ht_pfont(font)->ascent;
+}
+static void inbox_line(ht_scene_t *f, int x, int y, const ht_font_t *font, uint16_t ink, const char *text)
+{
+    // A line clipped to whole letters inside the glass's band; its run stays, empty, when nothing of it shows.
+    int before = f->count;
+    if (text[0]) focus_clipped(f, x, y, font, ink, text, strlen(text), 8, 458);
+    if (f->count == before) ht_text(f, 0, 0, 1, font, BG, BG, "");
+}
+static void inbox_page(ht_scene_t *f, int i, int cx, uint8_t alpha)
+{
+    enum { LINE_W = 340, MARK = 20, MARK_GAP = 8, DOT = 8, GAP = 12, ROW = 32, PITCH = 43, LINES = 4 };
+    // One notice's block, centred on cx and the glass, every colour darkened to `alpha` (runs carry no alpha). Seven
+    // runs whether or not there is a notice: machine, mark or dot, name, four message lines; the mark is a placeholder
+    // while too faint to show (a sprite cannot fade).
+    const ht_font_t *mid = &ht_lv_inter_25.base, *body = &ht_lv_inter_30.base;
+    const cable_notif_t *n = i >= 0 && i < s.notice_count && alpha >= 8 ? &s.notice[i] : NULL;
+    if (!n) {
+        for (int k = 0; k < 3 + LINES; k++) ht_text(f, 0, 0, 1, mid, BG, BG, "");
+        return;
+    }
+    uint16_t muted = ht_character_caption_ink(color(0x8a8a99), BG, alpha);
+    uint16_t green = ht_character_caption_ink(color(0x04fe08), BG, alpha);
+    uint16_t ink = ht_character_caption_ink(color(s.connected ? 0xd6d6d2 : 0x8a8a99), BG, alpha);
+    const char *msg = n->summary[0] ? n->summary : n->question ? "Waiting for you" : "done";
+    static ht_lv_label_t label;   // 340 B: off the stack
+    ht_lv_label(&label, body, msg, LINE_W, LINES, true);
+    int lines = label.lines < LINES ? label.lines : LINES;
+    char name[HT_TEXT_BYTES], machine[HT_TEXT_BYTES] = "";
+    if (n->machine[0]) ht_fit_width(machine, sizeof machine, n->machine, LINE_W, mid);
+    int a = find(n->agent_id), engine = a >= 0 ? ht_focus_engine_index(s.agents[a].engine) : -1;
+    int lead = engine >= 0 ? MARK : DOT;
+    ht_fit_width(name, sizeof name, n->name[0] ? n->name : n->agent_id, LINE_W - lead - MARK_GAP, mid);
+    int h = (machine[0] ? ROW + GAP : 0) + ROW + GAP + lines * PITCH, top = (HT_HEIGHT - h) / 2;
+    int mw = ht_measure(mid, machine);
+    inbox_line(f, cx - mw / 2, css_line(mid, 24, top, ROW), mid, muted, machine);
+    if (machine[0]) top += ROW + GAP;
+    int nw = ht_measure(mid, name), row = cx - (lead + MARK_GAP + nw) / 2;
+    if (row < 8 || row + lead > 458 || (engine >= 0 && alpha < 128)) ht_text(f, 0, 0, 1, mid, BG, BG, "");
+    else if (engine >= 0) ht_icon(f, row, top + (ROW - MARK) / 2, &ht_icon_engine20[engine]);
+    else ht_box(f, row, top + (ROW - DOT) / 2, DOT, DOT, DOT / 2, green, green);
+    inbox_line(f, row + lead + MARK_GAP, css_line(mid, 24, top, ROW), mid, green, name);
+    top += ROW + GAP;
+    for (int k = 0; k < LINES; k++) {
+        char t[HT_TEXT_BYTES] = "";
+        int x = 0;
+        if (k < lines) {
+            const ht_lv_line_t *ln = &label.line[k];
+            size_t len = ln->len < sizeof t ? ln->len : sizeof t - 1;
+            memcpy(t, label.text + ln->at, len);
+            while (len && (t[len - 1] == '\n' || t[len - 1] == '\r' || t[len - 1] == ' ')) len--;
+            t[len] = 0;
+            x = cx - ht_measure(body, t) / 2;
+        }
+        inbox_line(f, x, css_line(body, 30, top + k * PITCH, PITCH), body, ink, t);
+    }
+}
 static void render_focus_inbox(ht_scene_t *f)
 {
-    enum { LIST_X = 53, LIST_Y = 107, LIST_W = 360, LIST_BOTTOM = 427, LIST_GAP = 12, CARD_R = 26,
-           PAD_H = 16, PAD_V = 14, ROW_GAP = 8, MARK = 20, MARK_GAP = 8, DOT = 8, MSG_GLYPHS = 100,
-           CLOSE_X = 203, CLOSE_Y = 16, CLOSE_W = 60, CLOSE_H = 32 };
-    if (s.offset >= s.notice_count) s.offset = s.notice_count - 1;
-    if (s.offset < 0) s.offset = 0;
-    const ht_font_t *small = &ht_lv_inter_20.base, *body = &ht_lv_inter_25.base,
+    enum { PAGE = 320, ARROW_X = 26, ARROW_W = 60, CLOSE_X = 203, CLOSE_Y = 16, CLOSE_W = 60, CLOSE_H = 32 };
+    const ht_font_t *small = &ht_lv_inter_20.base, *mid = &ht_lv_inter_25.base, *arrow = &ht_lv_inter_44.base,
                     *cross = &ht_lv_montserrat_22.base;
-    uint16_t fg = color(0xeaeaf0);
+    uint16_t fg = color(0xeaeaf0), close = color(0x171718), muted = color(0x8a8a99);
+    uint16_t arrow_ink = ht_character_caption_ink(muted, BG, 115);   // 45 %
     // make_close_pill: COL_FG at 10 % over black, the cross centred in it.
-    uint16_t close = color(0x171718);
     int cw = ht_measure(cross, HT_LV_CROSS);
     ht_box(f, CLOSE_X, CLOSE_Y, CLOSE_W, CLOSE_H, CLOSE_H / 2, close, close);
     ht_text(f, CLOSE_X + (CLOSE_W - cw) / 2, CLOSE_Y + (CLOSE_H - cross->height) / 2, cw, cross, fg,
             close, HT_LV_CROSS);
     s.hits[s.hit_count++] = (hit_t){{CLOSE_X - 40, 0, CLOSE_W + 80, CLOSE_Y + CLOSE_H + 20}, A_HOME, 0, true};
-    uint16_t card = color(0x23252f), rim = color(0x3d3f47), green = color(0x04fe08),
-             muted = color(0x8a8a99), ink = s.connected ? fg : muted;
-    // The default theme's button shadow, 50 % #9e9e9e a couple of pixels under the card, over black.
-    uint16_t shade = color(0x202020);
-    int inner = LIST_W - 2 - 2 * PAD_H, y = LIST_Y;
-    for (int i = s.offset; i < s.notice_count && s.hit_count < 24; i++) {
-        const cable_notif_t *n = &s.notice[i];
-        const char *full = n->summary[0] ? n->summary : n->question ? "Waiting for you" : "done";
-        char msg[HT_TEXT_BYTES * 3];
-        size_t len = 0, glyphs = 0;
-        while (full[len] && glyphs < MSG_GLYPHS && len + 8 < sizeof msg) {
-            len++;
-            while (full[len] && ((uint8_t)full[len] & 0xc0) == 0x80) len++;
-            glyphs++;
-        }
-        memcpy(msg, full, len);
-        msg[len] = 0;
-        if (full[len]) strcat(msg, "\xe2\x80\xa6");
-        ht_lv_label_t m;
-        int lines = ht_lv_label(&m, body, msg, inner, HT_LV_LINES, false);
-        if (lines > HT_LV_LINES) lines = HT_LV_LINES;
-        bool machine = n->machine[0] != 0;
-        int h = 2 + 2 * PAD_V + (machine ? small->height + ROW_GAP : 0) + small->height + ROW_GAP +
-                lines * body->height;
-        if (y + h > LIST_BOTTOM && i > s.offset) break;
-        ht_box(f, LIST_X, y + 2, LIST_W, h, CARD_R, shade, shade);
-        ht_box(f, LIST_X, y, LIST_W, h, CARD_R, card, rim);
-        s.hits[s.hit_count++] = (hit_t){{LIST_X, y, LIST_W, h}, A_NOTICE, i, s.connected};
-        int x = LIST_X + 1 + PAD_H, row = y + 1 + PAD_V;
-        ht_lv_label_t l;
-        if (machine) {
-            ht_lv_label(&l, small, n->machine, inner, 1, true);
-            ht_text(f, x, row, l.w ? l.w : 1, small, muted, card, l.text);
-            row += small->height + ROW_GAP;
-        }
-        // The engine's mark when the roster knows the agent, the green dot when it does not.
-        int a = find(n->agent_id), engine = a >= 0 ? ht_focus_engine_index(s.agents[a].engine) : -1;
-        int lead = engine >= 0 ? MARK : DOT;
-        if (engine >= 0) ht_icon(f, x, row + (small->height - MARK) / 2, &ht_icon_engine20[engine]);
-        else ht_box(f, x, row + (small->height - DOT) / 2, DOT, DOT, DOT / 2, green, green);
-        ht_lv_label(&l, small, n->name[0] ? n->name : n->agent_id, inner - lead - MARK_GAP, 1, true);
-        ht_text(f, x + lead + MARK_GAP, row, l.w ? l.w : 1, small, green, card, l.text);
-        row += small->height + ROW_GAP;
-        for (int k = 0; k < lines; k++) {
-            char text[HT_TEXT_BYTES];
-            size_t n_ = m.line[k].len < sizeof text ? m.line[k].len : sizeof text - 1;
-            memcpy(text, m.text + m.line[k].at, n_);
-            text[n_] = 0;
-            ht_text(f, x, row + k * body->height, m.line[k].w ? m.line[k].w : 1, body, ink, card, text);
-        }
-        y += h + LIST_GAP;
+    if (!s.notice_count) {
+        const char *empty = "No notification";
+        int w = ht_measure(mid, empty);
+        ht_text(f, (HT_WIDTH - w) / 2, css_line(mid, 25, 216, 35), w, mid, color(0xada6ad), BG, empty);
+        s.notice_frame = 0;
+        return;
     }
-    const cable_notif_t *top = &s.notice[s.offset];
-    s.notice_frame = top->read_on_dial ? 0 : top->display_revision;
+    if (s.offset >= s.notice_count) s.offset = s.notice_count - 1;
+    if (s.offset < 0) s.offset = 0;
+    if (inbox_carousel.count != s.notice_count ||
+        (!inbox_carousel.touching && !inbox_carousel.animating && ht_tab_carousel_index(&inbox_carousel) != s.offset))
+        ht_tab_carousel_reset(&inbox_carousel, s.notice_count, s.offset);
+    int current = ht_tab_carousel_index(&inbox_carousel);
+    s.offset = current;
+    for (int i = current - 1; i <= current + 1; i++) {
+        // Each page slides with the finger and fades with its distance from the middle: gone a page away.
+        int cx = 233 + (i * HT_TAB_PITCH - inbox_carousel.position) * PAGE / HT_TAB_PITCH, d = abs(cx - 233);
+        inbox_page(f, i, cx, (uint8_t)(d >= PAGE / 2 ? 0 : 255 - d * 255 / (PAGE / 2)));
+    }
+    s.hits[s.hit_count++] = (hit_t){{ARROW_W, 110, HT_WIDTH - 2 * ARROW_W, 270}, A_NOTICE, current, s.connected};
+    for (int side = -1; side <= 1; side += 2) {
+        // A faint chevron on a side with another notice; that side's strip pages to it (see notice_contact).
+        int i = current + side;
+        bool more = i >= 0 && i < s.notice_count && !inbox_carousel.touching;
+        const char *glyph = side < 0 ? "\xe2\x80\xb9" : "\xe2\x80\xba";
+        int w = ht_measure(arrow, glyph), x = side < 0 ? ARROW_X - w / 2 : HT_WIDTH - ARROW_X - w / 2;
+        ht_text(f, more ? x : 0, more ? 233 - arrow->height / 2 : 0, more ? w : 1, arrow, more ? arrow_ink : BG, BG,
+                more ? glyph : "");
+        if (more) s.hits[s.hit_count++] = (hit_t){{side < 0 ? 0 : HT_WIDTH - ARROW_W, 163, ARROW_W, 140}, A_NOTICE, i,
+                                                  s.connected};
+    }
+    char count[16];
+    snprintf(count, sizeof count, "%d/%d", current + 1, s.notice_count);
+    int w = ht_measure(small, count);
+    ht_text(f, (HT_WIDTH - w) / 2, css_line(small, 20, 400, 28), w, small, muted, BG, count);
+    // Paging past a notice does not read it (owner, 2026-10-06): only the tap that opens its agent does.
+    s.notice_frame = 0;
 }
 static void render_list(ht_scene_t *f)
 {
     if (s.view == TABS) { render_tabs(f); return; }
-    if (s.view == INBOX && s.notice_count) {
-        if (character.id == HT_CHARACTER_FOCUS) render_focus_inbox(f);
-        else render_notice(f);
-        return;
-    }
+    if (s.view == INBOX && character.id == HT_CHARACTER_FOCUS) { render_focus_inbox(f); return; }
+    if (s.view == INBOX && s.notice_count) { render_notice(f); return; }
     const char *title = s.view == MACHINES ? "machines" : "inbox";
     heading(f, title);
     int count = s.view == MACHINES ? s.machine_count : s.notice_count;
@@ -2996,6 +3044,8 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
         if (s.view == TABS && pressed_action.kind == A_TAB) ht_tab_carousel_begin(&tab_carousel, x, now);
         if (s.view == AGENTS && character.id == HT_CHARACTER_FOCUS && pressed_action.kind == A_AGENT)
             ht_tab_carousel_begin(&pane_carousel, x, now);
+        if (s.view == INBOX && character.id == HT_CHARACTER_FOCUS && pressed_action.kind == A_NOTICE)
+            ht_tab_carousel_begin(&inbox_carousel, x, now);
         ht_gesture_begin(&gesture, x, y, now, ((uint32_t)s.view << 8) | pressed_action.kind);
         if (pressed_action.kind != A_PET && pressed_action.kind != A_FORM_MAIN && pressed_action.kind != A_FORM_SAY &&
             pressed_action.kind != A_ANSWER && pressed_action.kind != A_DRAFT_SEND && pressed_action.kind != A_DRAFT_EDIT &&
@@ -3021,6 +3071,8 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
             }
         } else if (s.view == AGENTS && character.id == HT_CHARACTER_FOCUS) {
             if (gesture.axis == 2 && ht_tab_carousel_move(&pane_carousel, x, now)) change();
+        } else if (s.view == INBOX && character.id == HT_CHARACTER_FOCUS && inbox_carousel.touching) {
+            if (gesture.axis == 2 && ht_tab_carousel_move(&inbox_carousel, x, now)) change();
         } else if ((s.view == AGENTS || s.view == SETTINGS) && gesture.axis == 1) {
             tabs_move((s.last_y - y) * (scroll_reversed ? -1 : 1));
         } else if (s.view == DRAFT && gesture.axis == 1) {
@@ -3043,6 +3095,8 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
         ht_touch_result_t result = ht_gesture_end(&gesture, x, y, now);
         bool pane_contact = s.view == AGENTS && character.id == HT_CHARACTER_FOCUS && pane_carousel.touching;
         bool pane_tap = pane_contact && ht_tab_carousel_end(&pane_carousel, x, gesture.axis == 2, now);
+        bool notice_contact = s.view == INBOX && character.id == HT_CHARACTER_FOCUS && inbox_carousel.touching;
+        bool notice_tap = notice_contact && ht_tab_carousel_end(&inbox_carousel, x, gesture.axis == 2, now);
         if (s.view == AGENTS && character.id == HT_CHARACTER_FOCUS) {
             // the pages own the contact (pane_contact, below)
         } else if (!s.touch_cancelled && (s.view == AGENTS || s.view == SETTINGS) && gesture.axis == 1)
@@ -3064,6 +3118,15 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
             if (tab_tap && result == HT_TOUCH_TAP && pressed_action.kind == A_TAB && index >= 0 &&
                 index < s.tab_count && !strcmp(pressed_action.id, s.tabs[index].id)) dispatch(pressed_action);
             tabs_sync();
+            change();
+        } else if (notice_contact) {
+            // Browsing the notices changes nothing but the page (and so s.offset); a tap on the page opens that agent.
+            int index = pressed_action.value;
+            if (notice_tap && result == HT_TOUCH_TAP && pressed_action.kind == A_NOTICE && index >= 0 &&
+                index < s.notice_count && !strcmp(pressed_action.id, s.notice[index].agent_id)) {
+                if (index != ht_tab_carousel_index(&inbox_carousel)) ht_tab_carousel_go(&inbox_carousel, index, now);
+                else dispatch(pressed_action);   // an arrow's side pages; the page opens
+            }
             change();
         } else if (pane_contact) {
             // Browsing the pane pages changes nothing; a tap on a page (or Done) opens that pane.
@@ -3237,6 +3300,7 @@ uint32_t habitat_next_wake_ms(void)
         delay = 125;
     if (s.view == TABS && tab_carousel.animating && !display_is_asleep()) delay = 16;
     if (s.view == AGENTS && pane_carousel.animating && !display_is_asleep()) delay = 16;
+    if (s.view == INBOX && inbox_carousel.animating && !display_is_asleep()) delay = 16;
     if (selection.pending && delay > 100) delay = 100;
     if (visit.pending && delay > 100) delay = 100;
     if (s.view == FORM && delay > 100) delay = 100;
