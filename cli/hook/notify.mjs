@@ -67,7 +67,14 @@ function modelName(value) {
   return typeof value?.id === 'string' ? value.id : null
 }
 
+/**
+ * The daemon this hook reports to, once the pane it came from has named it (`routeToPaneOwner`): its data
+ * folder and port, in place of the `--data-dir` and `--port` the installed command carries.
+ */
+let routed = null
+
 function argPort() {
+  if (routed) return routed.port
   const i = process.argv.indexOf('--port')
   if (i !== -1 && process.argv[i + 1]) return parseInt(process.argv[i + 1], 10)
   return parseInt(process.env.AGENT_ADAPTER_PORT || '18473', 10)
@@ -106,7 +113,7 @@ function argAgyEvent() {
 
 function paths() {
   const cliDir = join(homedir(), '.harness', 'cli')
-  const dataDir = argValue('--data-dir', process.env.ADAPTER_DATA_DIR || join(cliDir, 'data'))
+  const dataDir = routed?.dataDir ?? argValue('--data-dir', process.env.ADAPTER_DATA_DIR || join(cliDir, 'data'))
   const claudeProjectsDir = argValue('--claude-projects-dir', process.env.CLAUDE_PROJECTS_DIR || join(homedir(), '.claude', 'projects'))
   const codexHome = argValue('--codex-home', process.env.CODEX_HOME || join(homedir(), '.codex'))
   const grokHome = argValue('--grok-home', process.env.GROK_HOME || join(homedir(), '.grok'))
@@ -475,16 +482,17 @@ function daemonPaneOwner(dataDir) {
 }
 
 /**
- * The pane, as tmux describes it, in one call: its root process, and whether the daemon this hook writes
- * for takes it for one of its agents at all, by the rule its discovery reads panes with (`ownedHere`):
- * one it tagged, wherever the person moved it; an untagged one only in a session Harness named, or one an
- * older build named (`<engine>-<ms>`) that its registry already holds (`taken: 'if-held'`); another
- * daemon's, never. A session the person opened by hand is not an agent: with the daemon up, its hook is
- * turned away. The offline fallback wrote a row for one all the same, and the daemon came back with an
- * agent it would never have made and could not drive, "offline" for good (e2e/hookclient.e2e.ts).
- * Undefined when tmux could not answer.
+ * The pane, as tmux describes it, in one call: its root process, its session, and the tag of the daemon
+ * that made it (from the pane's option, or before tmux 3.0 from its start command). Read once per hook:
+ * the route to the daemon is chosen from it first, and the offline fallback reads it again. Undefined
+ * when tmux could not answer.
  */
-async function paneFacts(pane, dataDir) {
+const paneDescriptions = new Map()
+function describePane(pane) {
+  if (!paneDescriptions.has(pane)) paneDescriptions.set(pane, readPaneDescription(pane))
+  return paneDescriptions.get(pane)
+}
+async function readPaneDescription(pane) {
   const format = (await tmuxHasPaneOptions()) ? PANE_OWNER_FORMAT : PANE_OWNER_FORMAT_OLD_TMUX
   const stdout = await execFileText('tmux', ['display-message', '-p', '-t', pane, `#{pane_pid}|#{session_name}|${format}`], 2000)
   if (stdout === null) return undefined
@@ -496,10 +504,68 @@ async function paneFacts(pane, dataDir) {
   const session = line.slice(first + 1, last)
   const field = line.slice(last + 1)
   const owner = field.startsWith(OWNER_COMMAND_PREFIX) ? field.slice(OWNER_COMMAND_PREFIX.length).split(' ')[0] : field
+  return { pid: Number.isSafeInteger(pid) && pid > 0 ? pid : null, session, owner }
+}
+
+/**
+ * Whether the daemon this hook writes for takes the pane for one of its agents at all, by the rule its
+ * discovery reads panes with (`ownedHere`): one it tagged, wherever the person moved it; an untagged one
+ * only in a session Harness named, or one an older build named (`<engine>-<ms>`) that its registry
+ * already holds (`taken: 'if-held'`); another daemon's, never. A session the person opened by hand is not
+ * an agent: with the daemon up, its hook is turned away. The offline fallback wrote a row for one all the
+ * same, and the daemon came back with an agent it would never have made and could not drive, "offline"
+ * for good (e2e/hookclient.e2e.ts). Undefined when tmux could not answer.
+ */
+async function paneFacts(pane, dataDir) {
+  const described = await describePane(pane)
+  if (!described) return undefined
+  const { pid, session, owner } = described
   const taken = owner ? (owner === daemonPaneOwner(dataDir) ? 'yes' : 'no')
     : session.startsWith(HARNESS_SESSION_PREFIX) ? 'yes'
     : /^[a-z][a-z0-9]*-\d{13}$/.test(session) ? 'if-held' : 'no'
-  return { pid: Number.isSafeInteger(pid) && pid > 0 ? pid : null, taken }
+  return { pid, taken }
+}
+
+/**
+ * Where every daemon on this computer says it listens, one file per pane tag (src/lib/hookRoutes.ts,
+ * which hookNotify.spec.ts keeps this equal to).
+ */
+function hookRoutesDir() {
+  return process.env.HARNESS_HOOK_ROUTES_DIR || join(homedir(), '.harness', 'hook-routes')
+}
+
+/**
+ * Report to the daemon that made the pane, not to the one whose command this is.
+ *
+ * Claude Code's and Codex's hooks are installed once per computer, in ~/.claude/settings.json and
+ * $CODEX_HOME/hooks.json, and each daemon wrote its own port and data folder into them as it started. With
+ * a dev daemon beside the release one, the last to start owned every hook: the other daemon's agents'
+ * hooks went to it, it turned them away (the pane was not its own), and their turn ends and session
+ * starts were lost. Each daemon now records its data folder and port under the tag it puts on its panes
+ * (`publishHookRoute`), and the hook looks the pane's tag up: a record whose data folder hashes to that tag
+ * routes this hook, its credential, and any offline write to that daemon. A record still names a daemon
+ * that is down: the hook's post fails and its offline write lands in that daemon's own registry, where it
+ * will read it. A pane with no tag, or a tag with no record (a daemon from before the records), keeps the
+ * command's own `--port` and `--data-dir`, as every installed command did.
+ */
+async function routeToPaneOwner(pane) {
+  if (!/^%\d+$/.test(pane || '')) return null
+  const described = await describePane(pane)
+  const tag = described?.owner
+  if (!tag || !/^[0-9a-f]{16}$/.test(tag)) return null
+  try {
+    const dir = hookRoutesDir()
+    secureStateDirectory(dir, false)
+    const record = JSON.parse(readPrivateStateFile(join(dir, `${tag}.json`), 4096))
+    const dataDir = record?.dataDir
+    const port = record?.port
+    if (typeof dataDir !== 'string' || !isAbsolute(dataDir) || !Number.isInteger(port) || port < 1 || port > 65535) return null
+    // The record must be the tag's own, and its folder still there: a folder since removed would be
+    // created again by the offline write, for a daemon that will never read it.
+    if (daemonPaneOwner(dataDir) !== tag || !statSync(dataDir).isDirectory()) return null
+    routed = { dataDir, port }
+    return routed
+  } catch { return null }
 }
 
 function argvTokens(args) {
@@ -1405,7 +1471,7 @@ async function fallbackSessionEnd(sessionId, reason, engine, tmuxPane) {
 }
 
 async function main() {
-  const port = argPort()
+  let port = argPort()
   const engine = argEngine()
   const raw = await readStdin()
   let input = {}
@@ -1418,6 +1484,8 @@ async function main() {
   const event = input.hook_event_name || input.hookEventName
   const tmuxPane = process.env.TMUX_PANE
   if (!tmuxPane) return
+  // Before anything reads the data folder or posts: which daemon this pane is (routeToPaneOwner).
+  if (await routeToPaneOwner(tmuxPane)) port = argPort()
   const mutationFields = { engine, ...terminalHookFields(tmuxPane) }
   if (engine === 'cursor' && input.is_background_agent === true) return
   if (engine === 'codex' && isCodexSubagent(input, paths())) return

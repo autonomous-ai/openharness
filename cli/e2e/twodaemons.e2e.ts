@@ -138,6 +138,71 @@ describe('two daemons on one computer', () => {
     atDev.close()
   })
 
+  it('a dev daemon beside the release one: each daemon\'s agents\' hooks reach that daemon, whichever installed the hooks last', async () => {
+    // A computer has one Claude Code hook entry and one Codex hook entry, and each daemon writes its own
+    // port into them as it starts. The dev daemon, started second, took every hook: the release daemon's
+    // agents' hooks went to it, it turned them away (not its panes), and the release daemon never heard
+    // their session starts, prompts or turn ends. Each daemon now records where it listens under its pane
+    // tag, and the hook goes to the daemon that made its pane (lib/hookRoutes.ts, notify.mjs).
+    const release = await make('release')
+    const dev = await make('dev', { beside: release })
+    await release.start()
+    await dev.start()
+    const installed = () => [join(release.env.HOME!, '.claude', 'settings.json'), join(release.env.CODEX_HOME!, 'hooks.json')]
+      .map((file) => readFileSync(file, 'utf8'))
+    // The precondition of the incident: the entries every engine started from here on runs are the dev daemon's.
+    for (const file of installed()) expect(file).toContain(`--port ${dev.port} `)
+
+    const atRelease = await LocalClient.connect(release)
+    const atDev = await LocalClient.connect(dev)
+    const agents = {
+      release: [await create(release, atRelease, 'claude', 'release-claude'), await create(release, atRelease, 'codex', 'release-codex')],
+      dev: [await create(dev, atDev, 'claude', 'dev-claude'), await create(dev, atDev, 'codex', 'dev-codex')],
+    }
+    await Promise.all([
+      ...agents.release.map((agent) => turn(atRelease, agent.id, 'a release turn')),
+      ...agents.dev.map((agent) => turn(atDev, agent.id, 'a dev turn')),
+    ])
+    const heard = (daemon: IsolatedDaemon, agent: Row, event: string) => daemon.log().includes(`[hooks] ${String(agent.sessionId).slice(0, 8)} ${event}`)
+    const reachedOnlyItsOwn = async (mine: IsolatedDaemon, other: IsolatedDaemon, agent: Row, engine: Engine) => {
+      // Claude Code's prompt and turn-end hooks, Codex's session start and prompt (lib/hooks.ts installs no more).
+      for (const event of engine === 'claude' ? ['UserPromptSubmit', 'turn-stop'] : ['SessionStart', 'UserPromptSubmit']) {
+        await until(`${engine} ${agent.id}'s ${event} hook at its own daemon`, () => heard(mine, agent, event), 20_000, 250)
+      }
+      expect(other.log(), 'the other daemon heard none of its hooks').not.toContain(`[hooks] ${String(agent.sessionId).slice(0, 8)}`)
+      expect(other.log(), 'the other daemon turned none of its hooks away').not.toContain(`hints=tmux:${agent.tmuxPane} `)
+    }
+    for (const [mine, other, [claude, codex]] of [[release, dev, agents.release], [dev, release, agents.dev]] as const) {
+      await reachedOnlyItsOwn(mine, other, claude, 'claude')
+      await reachedOnlyItsOwn(mine, other, codex, 'codex')
+    }
+
+    // And the other way round: restarted, the release daemon owns the entries; a new dev agent reaches dev.
+    atRelease.close()
+    await release.restart()
+    for (const file of installed()) expect(file).toContain(`--port ${release.port} `)
+    const later = await create(dev, atDev, 'claude', 'dev-later')
+    await turn(atDev, later.id, 'a dev turn after the release daemon restarted')
+    await reachedOnlyItsOwn(dev, release, later, 'claude')
+    atDev.close()
+  }, 240_000)
+
+  it('a routes path that is a regular file leaves the daemon serving its own installed hooks', async () => {
+    // Found by QA on a quiet machine: a routing warning must not become a startup failure in cleanup.
+    const d = await make('route-unavailable', { noMaster: true })
+    d.env.HARNESS_HOOK_ROUTES_DIR = join(d.root, 'blocked-routes')
+    writeFileSync(d.env.HARNESS_HOOK_ROUTES_DIR, 'not a folder')
+    await d.start()
+    expect(d.log()).toContain('could not record this daemon\'s hook route')
+    const client = await LocalClient.connect(d)
+    const agent = await create(d, client, 'claude', 'route-unavailable')
+    await turn(client, agent.id, 'the installed command still names this daemon')
+    await until('the hook at the installed command\'s daemon', () =>
+      d.log().includes(`[hooks] ${String(agent.sessionId).slice(0, 8)} UserPromptSubmit`), 20_000)
+    expect(readFileSync(d.env.HARNESS_HOOK_ROUTES_DIR, 'utf8')).toBe('not a folder')
+    client.close()
+  })
+
   it('a second harness start while one runs leaves it alone; a foreground one leaves at once, touching nothing', async () => {
     const daemon = await make('running')
     await daemon.start()
