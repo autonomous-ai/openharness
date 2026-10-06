@@ -131,7 +131,12 @@ def main():
         vm = ImageVM(output / 'second-boot', disk, None)
         vm.start()
         unlock(vm)
+        # Observe the real terminal before sending hn commands. The CLI can
+        # start a headless server itself; probing it before hn-screen starts
+        # changes the startup under test instead of observing restored panes.
+        vm.frame('04-restored-workspace', 'me@harness', seconds=90)
         vm.authenticate()
+        vm.wait_user('systemctl --user is-active --quiet hn-screen')
         receipt['second_boot'] = installed(vm)
         assert evidence(vm, vm.folder) == first_account
         assert vm.read_file('/home/me/projects/startup-check/result.txt') == b'preserved'
@@ -142,6 +147,15 @@ def main():
         print('Fresh installed root unlocks straight into Harness and survives a second boot.', flush=True)
     except BaseException as error:
         receipt.update(status='failed', error=str(error))
+        if vm:
+            try:
+                vm.screenshot('failure')
+                if vm.shell_ready:
+                    logs, _ = vm.command('journalctl -b --no-pager -n 100 _UID=1000; '
+                                         'systemctl --failed --no-pager', check=False, timeout=30)
+                    (vm.folder / 'diagnosis.txt').write_text(logs)
+            except Exception as diagnostic:
+                receipt['diagnostic_error'] = str(diagnostic)
         raise
     finally:
         try:
