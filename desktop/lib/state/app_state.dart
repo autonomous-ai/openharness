@@ -2082,13 +2082,18 @@ class AppNotifier extends ChangeNotifier {
         _tabStripHold = null;
       }
     }
+    selectedMachineId = focusedPane?.machineId;
     if (persist) _persistLayout();
     notifyListeners();
-    selectedMachineId = focusedPane?.machineId;
     _announceAppFocus();
     for (final machine in machineStates.values) {
-      // ⌘W closed a tab; the tiles it revealed are a person's.
-      _attachPendingPanes(machine, intent: AttachIntent.person);
+      // Closing is navigation, just like selecting a tab. Attach newly visible
+      // panes without retrying retained error streams in other tabs.
+      _attachPendingPanes(
+        machine,
+        retryExisting: false,
+        intent: AttachIntent.person,
+      );
     }
     for (final pane in removed.panes) {
       if (!allPanes.contains(pane)) await _detachSession(pane, sendClose: true);

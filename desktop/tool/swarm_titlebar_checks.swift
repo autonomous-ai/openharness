@@ -555,6 +555,28 @@ private extension SwarmTabButton {
     NSGraphicsContext.restoreGraphicsState()
   }
 
+  func checkClickOwnership() throws {
+    let originalEmit = emit
+    var actions: [String] = []
+    emit = { method, _ in actions.append(method) }
+    defer { emit = originalEmit }
+    func click(_ count: Int, time: TimeInterval) -> NSEvent {
+      NSEvent.mouseEvent(with: .leftMouseDown, location: NSPoint(x: 60, y: 20),
+        modifierFlags: [], timestamp: time, windowNumber: 0,
+        context: nil, eventNumber: count, clickCount: count, pressure: 1)!
+    }
+    // AppKit can carry its click count across tabs, including a tab that
+    // moved into the pointer's position after its neighbor was closed.
+    selectButton.mouseDown(with: click(2, time: 10))
+    try checkTitlebar(actions == ["select"],
+      "A second click originating on another tab selects this tab instead of renaming it")
+    actions.removeAll()
+    selectButton.mouseDown(with: click(1, time: 20))
+    selectButton.mouseDown(with: click(2, time: 20.1))
+    try checkTitlebar(actions == ["select", "rename"],
+      "A double-click that starts and ends on this tab still renames it")
+  }
+
   func checkDoubleClickIsolation() throws {
     let parent = nextResponder
     let originalEmit = emit
@@ -1650,6 +1672,7 @@ private extension SwarmTabStrip {
     update(covered)
     try checkTitlebar(contextButton.nextBackground == nil, "A missing PR clears the joined background")
     try checkTitlebar(contextButton.fieldButtons.isEmpty, "Leaving a context clears its former link controls")
+    try SwarmTabButton(id: "click-owner").checkClickOwnership()
     try tabs[0].checkDoubleClickIsolation()
     try checkTitlebar(tabs.count == 24 && newButton.isEnabled, "All overflow tabs and New Tab remain available")
     try checkTitlebar(scroll.frame.maxX <= newButton.frame.minX &&
