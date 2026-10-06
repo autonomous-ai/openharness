@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { describe, expect, it, vi } from 'vitest'
-import { CableFleet as SourceFleet } from './cableFleet.js'
+import { CableFleet as SourceFleet, testDialDiscovery } from './cableFleet.js'
 import { CableSession, type CableHost, type CablePort } from './cableSession.js'
 import { CableDecoder, CableType, encodeCableFrame } from './cableFrame.js'
 import { DialLog } from './dialLog.js'
@@ -63,6 +63,15 @@ function fixture() {
   }
   return { fleet, host, ports, options, logs, start, greet, setPorts: (p: DialPort[]) => { present = p } }
 }
+
+describe('the end-to-end suite\'s dial', () => {
+  it('is found at the pseudo-terminal it names, and nothing is changed without one', async () => {
+    expect(testDialDiscovery(undefined)).toEqual({})
+    expect(testDialDiscovery('')).toEqual({})
+    const { discover } = testDialDiscovery('/dev/ttys042')
+    expect(await discover!()).toEqual([{ path: '/dev/ttys042', vendorId: 0x303a, productId: 0x1001, serialNumber: 'E2E-DIAL' }])
+  })
+})
 
 describe('USB dial fleet', () => {
   it('releases every dial on a macOS user switch and reconnects only when its account returns', async () => {

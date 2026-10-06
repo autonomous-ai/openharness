@@ -86,7 +86,8 @@ export interface ResumeReadinessDeps {
   current: () => boolean
   session: () => RegisteredSession | undefined
   process: () => Promise<ProcessIdentity | null>
-  pane: () => Promise<{ dead: boolean; engineExit?: number | null } | null>
+  /** `'gone'`: tmux has no such pane; `'unknown'`: it could not be asked (`tmuxPaneState`). */
+  pane: () => Promise<{ dead: boolean; engineExit?: number | null } | 'gone' | 'unknown'>
   sleep: (ms: number) => Promise<void>
   now?: () => number
   budgetMs?: number
@@ -114,7 +115,13 @@ export async function waitForResumedAgent(saved: RegisteredSession, deps: Resume
     if (!row) return { ok: false, error: 'RESUME_FAILED', detail: 'The resume runtime disappeared. The saved conversation is still retained.' }
     if (row.sessionId !== saved.sessionId || row.engine !== saved.engine) return resumeChanged
     if (row.launch?.state === 'failed') return { ok: false, error: row.launch.error, detail: row.launch.detail }
-    if (!pane || pane.dead || pane.engineExit != null) {
+    // A pane tmux could not read is asked again: a call that timed out while the daemon's event loop
+    // was held said the harness had exited, and a resume that was coming up was failed for it.
+    if (pane === 'unknown') {
+      await deps.sleep(250)
+      continue
+    }
+    if (pane === 'gone' || pane.dead || pane.engineExit != null) {
       return { ok: false, error: 'RESUME_FAILED', detail: 'The harness exited before confirming the saved conversation. Its terminal output and conversation have been retained.' }
     }
     // ONE proof, for every engine: this row's own engine process, running in this row's own pane,

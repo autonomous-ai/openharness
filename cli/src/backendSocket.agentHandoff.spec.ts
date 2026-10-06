@@ -4,6 +4,7 @@
 // in cli.ts) does the work.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { BackendSocket } from './backendSocket.js'
+import { bindHandoffRequest } from './testing/socketCore.js'
 import { env } from './config/env.js'
 import * as logModule from './lib/log.js'
 import { encryptDownFrame, encryptDownFrameFor, encryptRpcResult } from './lib/e2ee/applicationFrames.js'
@@ -34,7 +35,7 @@ describe('agent_handoff_prepare on the local socket', () => {
     frames = []
     socket.registerLocalClient('local:w', { sendFrame: (frame) => { frames.push(frame as Frame); return true }, sendBinary: () => true })
     provider = vi.fn(async () => OK)
-    socket.handoffProvider = provider
+    bindHandoffRequest(socket, provider)
   })
   afterEach(async () => {
     await socket.unregisterLocalClient('local:w')
@@ -94,7 +95,7 @@ describe('agent_handoff_prepare on the local socket', () => {
   })
 
   it('answers UNSUPPORTED when no provider is wired', async () => {
-    socket.handoffProvider = null
+    bindHandoffRequest(socket, null)
     ask(good())
     expect(await answered()).toEqual([{ requestId: 'r-1', error: 'UNSUPPORTED' }])
   })
@@ -135,7 +136,7 @@ describe('agent_handoff_prepare on the local socket', () => {
 
   it('answers INTERNAL, logging no message, when the provider throws before returning a promise', async () => {
     const log = vi.spyOn(console, 'error').mockImplementation(() => {})
-    socket.handoffProvider = () => { throw new Error('sync /secret/path') }
+    bindHandoffRequest(socket, () => { throw new Error('sync /secret/path') })
     ask(good())
     expect(await answered()).toEqual([{ requestId: 'r-1', error: 'INTERNAL' }])
     expect(JSON.stringify(log.mock.calls)).not.toContain('secret')
@@ -153,7 +154,7 @@ describe('agent_handoff_prepare on the local socket', () => {
     ['changeId before targetEngine', { changeId: 'X', targetEngine: 'nope' }, 'BAD_CHANGE_ID'],
     ['targetEngine before the provider check', { targetEngine: 'nope' }, 'BAD_ENGINE'],
   ])('validates %s', async (_name, over, error) => {
-    socket.handoffProvider = null
+    bindHandoffRequest(socket, null)
     ask(good(over))
     expect(await answered()).toEqual([{ requestId: 'r-1', error }])
   })
@@ -162,7 +163,7 @@ describe('agent_handoff_prepare on the local socket', () => {
     const held = deferred<Result>()
     provider.mockReturnValue(held.promise)
     ask(good())
-    socket.recentProvider = () => []
+    socket.agentRecentProvider = () => ({ agentId: 'a1', events: [], asks: [] })
     socket.handleLocalFrame('local:w', { type: 'agent_recent', payload: { requestId: 'fast', agentId: 'a1' } })
     await vi.waitFor(() => expect(frames.some((f) => f.type === 'agent_recent_result')).toBe(true))
     expect(replies()).toHaveLength(0)
@@ -191,7 +192,7 @@ describe('agent_handoff_prepare through the relay', () => {
   beforeEach(() => {
     socket = new BackendSocket('token')
     provider = vi.fn(async () => OK)
-    socket.handoffProvider = provider
+    bindHandoffRequest(socket, provider)
     vi.spyOn(internals().e2ee, 'hasSession').mockReturnValue(true)
     vi.spyOn(internals().e2ee, 'unwrapDown').mockReturnValue({ type: 'agent_handoff_prepare', payload: good() })
   })
@@ -265,26 +266,28 @@ describe('agent_handoff_prepare through the relay', () => {
 })
 
 describe('agent_handoff_prepare after the client went away', () => {
-  it('never broadcasts the late reply in the clear', async () => {
+  it('drops the late reply: never broadcast in the clear, and never queued for the relay', async () => {
     const socket = new BackendSocket('token')
     const asker: Frame[] = [], other: Frame[] = []
     socket.registerLocalClient('local:w', { sendFrame: (f) => { asker.push(f as Frame); return true }, sendBinary: () => true })
     socket.registerLocalClient('local:other', { sendFrame: (f) => { other.push(f as Frame); return true }, sendBinary: () => true })
     const queued: unknown[] = []
     vi.spyOn(socket as any, 'enqueue').mockImplementation((msg: unknown) => { queued.push(msg) })
+    const replied = vi.spyOn(socket as any, 'emitReply')
     const held = deferred<Result>()
     const provider = vi.fn(() => held.promise)
-    socket.handoffProvider = provider
+    bindHandoffRequest(socket, provider)
     try {
       socket.handleLocalFrame('local:w', { type: 'agent_handoff_prepare', payload: good() })
       // The request must be in flight before the client leaves, or there is no late reply to test.
       await vi.waitFor(() => expect(provider).toHaveBeenCalledTimes(1))
       await socket.unregisterLocalClient('local:w')
       held.resolve({ ...OK, file: '.harness/handoff/SECRETFILE.md' })
-      // ...and the late reply must actually have been emitted (as a bare, targeted refusal).
-      await vi.waitFor(() => expect(queued.some((m) => (m as { frame?: Frame }).frame?.type === 'agent_handoff_prepare_result')).toBe(true))
-      expect(queued.filter((m) => (m as { frame?: Frame }).frame?.type === 'agent_handoff_prepare_result'))
-        .toEqual([{ t: 'up', targetConnId: 'local:w', frame: { type: 'agent_handoff_prepare_result', payload: { requestId: 'r-1', error: 'E2EE_REQUIRED' } } }])
+      // ...and the late reply must actually have been made. The window it was for has gone, so it goes
+      // nowhere: it used to be queued for the relay as a targeted refusal, for a connection the backend
+      // has never heard of (e2e/windows.e2e.ts).
+      await vi.waitFor(() => expect(replied).toHaveBeenCalledWith('local:w', 'agent_handoff_prepare', 'r-1', expect.anything()))
+      expect(queued.filter((m) => (m as { frame?: Frame }).frame?.type === 'agent_handoff_prepare_result')).toEqual([])
       expect(JSON.stringify(other)).not.toContain('SECRETFILE')
       expect(JSON.stringify(queued)).not.toContain('SECRETFILE')
       const seen = [...other, ...queued.map((m) => (m as { frame?: Frame }).frame)]

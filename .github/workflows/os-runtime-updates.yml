@@ -1,0 +1,72 @@
+name: Harness OS private runtime update fixtures
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: harness-runtime-updates-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { architecture: x86_64, runner: ubuntu-24.04 }
+          - { architecture: aarch64, runner: ubuntu-24.04-arm }
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22.23.2
+          cache: npm
+          cache-dependency-path: cli/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.architecture }}-unknown-linux-musl
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: tui
+          shared-key: tui-${{ matrix.architecture }}-unknown-linux-musl
+          cache-bin: false
+      - name: Native build tools and portable OS checks
+        run: |
+          df -h . "$RUNNER_TEMP"
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends musl-tools
+          mkdir -p os/test-results/runtime-updates
+          timeout 180 make -C os check \
+            2>&1 | tee os/test-results/runtime-updates/portable-checks.log
+      - name: Build the exact native baseline runtime
+        run: bash os/tools/build-runtime.sh
+      - name: Compile and verify the private update fixture
+        run: python3 os/tests/build-update-fixture.py
+      # Preparation proves the binaries and manifests, not VM activation or
+      # surviving agent work. These fixtures never enter a product channel.
+      - name: Retain baseline and private update binaries
+        if: success()
+        uses: actions/upload-artifact@v6
+        with:
+          name: harness-runtime-update-fixture-${{ matrix.architecture }}
+          path: |
+            os/work/runtime/
+            os/work/fast-update-fixture/
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+      - name: Retain scoped preparation evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: harness-runtime-update-evidence-${{ matrix.architecture }}
+          path: os/test-results/runtime-updates/
+          if-no-files-found: error
+          retention-days: 14

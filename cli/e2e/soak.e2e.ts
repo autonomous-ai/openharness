@@ -72,5 +72,6 @@ describe('a desk of agents working', () => {
     expect(filesAfter - filesBefore, report).toBeLessThan(16)
     expect(d.coresStarted()).toBe(1)
     client.close()
-  })
+  // A round takes a second or two; the suite's own limit fits only the default 40.
+  }, 120_000 + ROUNDS * 3_000)
 })

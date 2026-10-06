@@ -296,6 +296,26 @@ describe('native input write evidence', () => {
   })
 })
 
+it('lets the next message through once a write could not be checked after its paste', async () => {
+  // The check before pressing Enter again could not see the agent (gone, or a probe that failed): the
+  // first message is unknown, and the one behind it used to wait until a turn began or ended.
+  vi.useFakeTimers()
+  const answers = [true, false]
+  const inject = vi.fn(async (_target: string, _text: string): Promise<TerminalActionResult> => ({ state: 'succeeded', dispatch: 'executed' }))
+  const onDelivery = vi.fn()
+  const device = makeDevice({
+    getSession: () => ({ agentId: 'agent', engine: 'codex', cliVersion: '0.106.0' }) as RegisteredSession,
+    validateRuntime: async () => answers.length ? answers.shift()! : true,
+    inject, capture: async () => '› A', onDelivery,
+  })
+  device.submit('agent', 'A', 'delivery-A')
+  device.submit('agent', 'B', 'delivery-B')
+  await vi.advanceTimersByTimeAsync(5_000)
+  expect(onDelivery).toHaveBeenCalledWith(expect.objectContaining({ deliveryId: 'delivery-A', state: 'unknown', reason: 'runtime_gone_post_paste' }))
+  expect(inject).toHaveBeenLastCalledWith('agent', 'B')
+  device.forget('agent')
+})
+
 it('preserves A/B order if a dialog appears during the first preflight check', async () => {
   vi.useFakeTimers()
   let release!: (blocked: boolean) => void
@@ -370,4 +390,21 @@ it('excludes legacy writes only during Device ownership of the same pane', async
   await local
   expect(writes).toEqual(['local-before', 'device', 'other-pane', 'local-after'])
   controller.forget('agent')
+})
+
+it('says why a write the pane refused was not typed, when a dialog opened after the look for one', async () => {
+  // The look before the write found the composer; the engine opened a permission prompt in between, and the
+  // write refused it unwritten (core/input.ts, messageHold.ts). The refusal carries that reason, not a paste
+  // that failed.
+  const onDelivery = vi.fn()
+  const results: TerminalActionResult[] = [
+    { state: 'failed', dispatch: 'not_started', reason: 'permission_open' },
+    { state: 'failed', dispatch: 'not_started', reason: 'terminal agent is unavailable' },
+  ]
+  const device = makeDevice({ inject: async () => results.shift()!, isAwaitingUser: async () => false, onDelivery })
+  device.submit('agent', 'A', 'delivery-A')
+  await vi.waitFor(() => expect(onDelivery).toHaveBeenCalledWith(expect.objectContaining({ deliveryId: 'delivery-A', state: 'rejected', reason: 'permission_open' })))
+  device.submit('agent', 'B', 'delivery-B')
+  await vi.waitFor(() => expect(onDelivery).toHaveBeenCalledWith(expect.objectContaining({ deliveryId: 'delivery-B', state: 'rejected', reason: 'paste_failed' })))
+  device.forget('agent')
 })

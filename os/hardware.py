@@ -53,30 +53,60 @@ def pci_devices(sysfs=Path('/sys')):
             if (interface / 'device').is_symlink() and (interface / 'device').resolve().is_relative_to(path.resolve()):
                 interfaces.append({'name': interface.name, 'wireless': (interface / 'wireless').is_dir() or (interface / 'phy80211').exists()})
         driver = (path / 'driver').resolve().name if (path / 'driver').is_symlink() else None
+        override = read(path / 'driver_override')
         devices.append({'address': path.name, 'id': vendor + ':' + device,
-                        'class': kind, 'driver': driver, 'interfaces': interfaces})
+                        'class': kind, 'driver': driver,
+                        'driver_override': None if override in {'', '(null)'} else override,
+                        'interfaces': interfaces})
     return devices
 
 
+def installation_blocker(sysfs=Path('/sys')):
+    # The T2 BCE controller identifies this platform independently of DMI names
+    # and the currently bound driver. The stock image does not ship its stack.
+    # https://github.com/t2linux/linux-t2-patches/blob/main/1001-Add-t2bce-driver-stack.patch
+    if any(device['id'] == '106b:1801' for device in pci_devices(sysfs)):
+        return 'This Harness image does not support Apple T2 Macs yet.'
+    return None
+
+
 def needs_broadcom(device):
-    return device['id'] in BROADCOM_IDS and device['class'] == '028000' and (
-        device['driver'] == 'wl' or not any(i['wireless'] for i in device['interfaces']))
+    if device['id'] not in BROADCOM_IDS or device['class'] != '028000':
+        return False
+    # A missing wireless interface does not mean the radio is available: it
+    # may be assigned to a VM or explicitly disabled with driver_override.
+    # Apply the same ownership policy to live activation and offline packages.
+    if device.get('driver_override') not in {None, '', 'wl'}:
+        return False
+    if device['driver'] not in {None, 'wl', 'bcma-pci-bridge', 'ssb'}:
+        return False
+    return device['driver'] == 'wl' or not any(i['wireless'] for i in device['interfaces'])
+
+
+def opencode_cpu_supported(proc=Path('/proc')):
+    """Return None when the x86 instruction requirement cannot be determined."""
+    architecture = os.uname().machine
+    if architecture != 'x86_64' and not re.fullmatch(r'i[3-6]86', architecture):
+        return None
+    flags = []
+    for line in read(proc / 'cpuinfo').splitlines():
+        key, separator, value = line.partition(':')
+        if separator and key.strip() == 'flags':
+            flags.append(value.split())
+    if not flags or any(not features for features in flags):
+        return None
+    return all('sse4_2' in features for features in flags)
 
 
 def report(sysfs=Path('/sys'), proc=Path('/proc')):
-    fields = {}
-    for line in read(proc / 'cpuinfo').splitlines():
-        if ':' in line:
-            key, value = line.split(':', 1)
-            fields.setdefault(key.strip(), value.strip())
-    flags = fields.get('flags')
     return {'architecture': os.uname().machine, 'kernel': os.uname().release,
             'computer': {'vendor': read(sysfs / 'class/dmi/id/sys_vendor') or None,
                          'model': read(sysfs / 'class/dmi/id/product_name') or None},
             'efi_bits': read(sysfs / 'firmware/efi/fw_platform_size') or None,
             'opencode_cpu': {'required_x86_feature': 'sse4_2',
-                             'available': 'sse4_2' in flags.split() if flags is not None else None},
+                             'available': opencode_cpu_supported(proc)},
             'pci': pci_devices(sysfs),
+            'installation_blocker': installation_blocker(sysfs),
             'backlights': [p.name for p in sorted((sysfs / 'class/backlight').glob('*'))],
             'broadcom_bundle_available': (BUNDLE / 'manifest.json').is_file(),
             'nvidia_bundle_available': (NVIDIA_BUNDLE / 'manifest.json').is_file()}
@@ -114,7 +144,10 @@ def nvidia_selection(devices, supported):
     # NVIDIA display, or take over a GPU explicitly assigned to passthrough.
     if any(card['id'] not in supported for card in cards):
         return {'status': 'unchanged', 'reason': 'An NVIDIA GPU needs a different driver.'}
-    if any(card['driver'] not in {None, 'nouveau', 'nvidia'} for card in cards):
+    # An unbound GPU can still be reserved for passthrough or explicitly kept
+    # on nouveau. Installing nvidia-utils would blacklist nouveau system-wide.
+    if any(card['driver'] not in {None, 'nouveau', 'nvidia'} or
+           card.get('driver_override') not in {None, '', 'nvidia'} for card in cards):
         return {'status': 'unchanged', 'reason': 'Keep the existing GPU assignment.'}
     return {'status': 'selected', 'devices': [card['id'] for card in cards]}
 
@@ -199,8 +232,6 @@ def activate(address, sysfs=Path('/sys'), bundle=BUNDLE):
     device = next((d for d in devices if d['address'] == address), None)
     if not device or not needs_broadcom(device) or device['driver'] == 'wl':
         return {'status': 'unchanged', 'address': address}
-    if device['driver'] not in {None, 'bcma-pci-bridge', 'ssb'}:
-        return {'status': 'unchanged', 'address': address, 'reason': 'Keep an existing driver.'}
     # Verify availability before changing a binding. The live image carries only
     # a prebuilt module here; installed machines use the ordinary DKMS package.
     if (bundle / 'manifest.json').is_file():
@@ -233,7 +264,7 @@ def activate(address, sysfs=Path('/sys'), bundle=BUNDLE):
         raise
 
 
-def configure_install(target, devices=None):
+def configure_install(target, devices=None, bundle=BUNDLE):
     target = target.resolve()
     # Only the offline installer's mounted, still-marked image may use this path.
     # It must never install a compiler into the running live overlay by mistake.
@@ -244,7 +275,13 @@ def configure_install(target, devices=None):
     folder = target / BUNDLE.relative_to('/')
     result = {'drivers': [], 'devices': [d['id'] for d in selected]}
     if selected:
-        manifest = bundle_manifest(folder, all_files=True)
+        manifest = bundle_manifest(folder)
+        cache = folder
+        if not (folder / 'packages').exists():
+            if bundle_manifest(bundle) != manifest:
+                raise ValueError('Live Wi-Fi cache and installation image differ.')
+            cache = bundle
+        manifest = bundle_manifest(cache, all_files=True)
         lock = json.loads((target / 'usr/share/harness-os/lock.json').read_text())
         if manifest['arch_snapshot'] != lock['arch_snapshot']:
             raise ValueError('Wi-Fi bundle and installed package snapshot differ.')
@@ -261,11 +298,19 @@ def configure_install(target, devices=None):
         # No repositories: this operation either succeeds from signed local
         # packages or fails. It cannot quietly turn into an online installation.
         with tempfile.TemporaryDirectory(prefix='harness-driver-', dir=target / 'var/tmp') as temporary:
+            packages = Path(temporary) / 'packages'
+            packages.mkdir()
             config = Path(temporary) / 'pacman.conf'
             config.write_text('[options]\nArchitecture = auto\nCheckSpace\nSigLevel = Required\nLocalFileSigLevel = Required\n')
             config.chmod(0o600)
-            run('arch-chroot', target, 'pacman', '--config', '/' + str(config.relative_to(target)),
-                '-U', '--needed', '--noconfirm', *[str(BUNDLE / 'packages' / name) for name in names], timeout=600)
+            run('mount', '--bind', cache / 'packages', packages)
+            try:
+                run('mount', '-o', 'remount,bind,ro', packages)
+                prefix = '/' + str(packages.relative_to(target))
+                run('arch-chroot', target, 'pacman', '--config', '/' + str(config.relative_to(target)),
+                    '-U', '--needed', '--noconfirm', *[prefix + '/' + name for name in names], timeout=600)
+            finally:
+                run('umount', packages)
         run('arch-chroot', target, 'modinfo', '-k', manifest['kernel'], 'wl', capture=True)
         result.update(drivers=['broadcom-wl-dkms'], kernel=manifest['kernel'], packages=manifest['packages'])
     # The USB keeps the offline cache; the installed computer does not. Unrelated

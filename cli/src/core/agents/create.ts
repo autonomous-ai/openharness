@@ -124,8 +124,9 @@ export function createAgentCreator({
     // Harness-created sessions are easy to distinguish from a user's organic tmux sessions while
     // retaining the engine and a collision-resistant creation suffix for diagnostics. Computed
     // before the grid block because a file-configured engine keys its config directory on it.
-    // The `harness-` prefix is also discovery's whitelist (see `isHarnessSession` /
-    // `TmuxBackend.inventory()`) — every pane outside it is invisible to the daemon.
+    // The `harness-` prefix is also discovery's whitelist for a pane nobody tagged (see `ownedHere` /
+    // `TmuxBackend.inventory()`): the panes this daemon creates carry its tag, which goes with them into
+    // any session the person moves them to.
     const label = buildHarnessSessionLabel(engine)
     // Prepare the harness workspace, then bind its session context to the selected engine.
     // Missing packages or invalid runtimes refuse the launch before the agent is started.

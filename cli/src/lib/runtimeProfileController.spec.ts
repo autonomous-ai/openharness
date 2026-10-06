@@ -9,8 +9,14 @@ import {
   parseCodexModelRows,
   parseCursorModelPicker,
   parseCursorParameterRows,
+  paneModal,
   RuntimeProfileController,
 } from './runtimeProfileController.js'
+import {
+  CLAUDE_PROMPT, CLAUDE_REWIND_CONFIRM, CLAUDE_REWIND_EMPTY, CLAUDE_REWIND_LIST, CLAUDE_REWIND_LIST_MESSAGE_FOCUSED,
+  CODEX_BROWSING_FULLSCREEN, CODEX_BROWSING_SCROLLBACK, CODEX_PROMPT,
+} from './__fixtures__/rewindPickers.js'
+import { CLAUDE_HISTORY_SEARCH, CLAUDE_TRUST_PROMPT, CODEX_TRANSCRIPT_FIND, CODEX_TRANSCRIPT_OVERLAY, CODEX_UPDATE_PROMPT } from './__fixtures__/takeoverScreens.js'
 
 // The id inside a `runtime-v1:` string is the AGENT id ('h1' here) — a client only ever echoes back an id
 // the catalog minted, and the catalog is agent-scoped. `setProfile` is still addressed with either id.
@@ -36,6 +42,74 @@ describe('runtime pane parsing', () => {
       'cursor',
       '\u001b[48;2;21;21;21m \u001b[2m→ \u001b[0;7mP\u001b[0;2mlan, search, build anything\u001b[0m',
     )).toMatchObject({ idle: true, draft: false })
+  })
+
+  it('reads Codex browsing its transcript as a modal, at every width, with or without a draft dimmed under it', () => {
+    // As 0.160 draws it (tui/src/app_backtrack/prompt_navigation.rs): the composer dimmed whole, and the
+    // footer row naming the mode, its keys and their actions, cut down as the pane narrows.
+    const composer = '\u001b[2m\u001b[1m›\u001b[0m\u001b[2m \u001b[2mAsk Codex to do anything\u001b[0m'
+    const dot = '\u001b[2m · \u001b[0m'
+    const footers = [
+      `\u001b[36mBrowsing transcript\u001b[0m${dot}↑↓/jk\u001b[2m scroll\u001b[0m${dot}←→/hl\u001b[2m prompts\u001b[0m${dot}ctrl + t\u001b[2m details\u001b[0m${dot}↵\u001b[2m rewind\u001b[0m${dot}esc\u001b[2m back\u001b[0m`,
+      `\u001b[36mBrowsing\u001b[0m${dot}↵\u001b[2m rewind\u001b[0m${dot}esc\u001b[2m back\u001b[0m`,
+      `\u001b[36mBrowsing\u001b[0m${dot}esc`,
+      '\u001b[36mBrowsing\u001b[0m',
+    ]
+    for (const footer of footers) {
+      expect(inspectRuntimePane('codex', `${composer}\n\n${footer}`), footer).toMatchObject({ idle: false, dialog: true })
+    }
+    // A draft is dimmed with everything else in the composer while browsing: still not a pane to type into.
+    expect(inspectRuntimePane('codex', `\u001b[2m› keep this draft\u001b[0m\n\n${footers[0]}`)).toMatchObject({ idle: false, dialog: true })
+    // Other engines, and Codex's own transcript text, are not read for it.
+    expect(inspectRuntimePane('claude', `\u001b[39m❯\u00a0\u001b[2mAsk about the codebase\u001b[0m\n  Browsing · esc`)).toMatchObject({ idle: true, dialog: false })
+    expect(inspectRuntimePane('codex', `  Browsing transcript · as before\n${composer}\n\n  gpt-5.6-sol default · /tmp/project`)).toMatchObject({ dialog: false })
+  })
+
+  it('reads Claude Code\'s Rewind menu as a modal, in each of its views, and as closed once its prompt is back', () => {
+    // Its focused row is `❯ (current)` in italics: read as an empty, idle prompt, where Enter closes the
+    // menu and drops what was pasted, and, on a message, takes it a step from restoring the conversation.
+    for (const [view, screen] of Object.entries({ CLAUDE_REWIND_LIST, CLAUDE_REWIND_LIST_MESSAGE_FOCUSED, CLAUDE_REWIND_CONFIRM, CLAUDE_REWIND_EMPTY })) {
+      expect(inspectRuntimePane('claude', screen), view).toMatchObject({ idle: false, dialog: true })
+      expect(paneModal('claude', screen), view).toBe('rewind')
+    }
+    // Its prompt back between its rules under any leftover of it, it is closed.
+    expect(inspectRuntimePane('claude', `${CLAUDE_REWIND_LIST}\n${CLAUDE_PROMPT}`)).toMatchObject({ idle: true, dialog: false })
+    expect(paneModal('claude', `${CLAUDE_REWIND_LIST}\n${CLAUDE_PROMPT}`)).toBeNull()
+    // A message that reads `Rewind`, in the transcript or the list, is not the menu's title.
+    expect(paneModal('claude', `\u001b[38;5;239m\u001b[48;5;237m❯ \u001b[38;5;231mRewind\u001b[39m\u001b[49m\n\n${CLAUDE_PROMPT}`)).toBeNull()
+    expect(paneModal('claude', CLAUDE_REWIND_LIST.replace('   fix the login bug', '   Rewind'))).toBe('rewind')
+    // Another engine's pane is not read for it.
+    expect(paneModal('cursor', CLAUDE_REWIND_LIST)).toBeNull()
+  })
+
+  it('finds Codex browsing its transcript in both its screen modes', () => {
+    for (const [mode, screen] of Object.entries({ CODEX_BROWSING_FULLSCREEN, CODEX_BROWSING_SCROLLBACK })) {
+      expect(inspectRuntimePane('codex', screen), mode).toMatchObject({ idle: false, dialog: true })
+      expect(paneModal('codex', screen), mode).toBe('rewind')
+    }
+    expect(paneModal('codex', CODEX_PROMPT)).toBeNull()
+    expect(paneModal('claude', '')).toBeNull()
+  })
+
+  it('reads the engines\' own screens that take the composer\'s place as dialogs, so no work is typed into them', () => {
+    // A ready-looking composer stays on screen under Codex's find and Claude Code's history search.
+    expect(inspectRuntimePane('codex', CODEX_TRANSCRIPT_FIND)).toMatchObject({ dialog: true, idle: false })
+    expect(paneModal('codex', CODEX_TRANSCRIPT_FIND)).toBe('search')
+    expect(inspectRuntimePane('claude', CLAUDE_HISTORY_SEARCH)).toMatchObject({ dialog: true, idle: false })
+    expect(paneModal('codex', CODEX_TRANSCRIPT_OVERLAY)).toBe('transcript')
+    expect(paneModal('codex', CODEX_UPDATE_PROMPT)).toBe('update')
+    expect(paneModal('claude', CLAUDE_TRUST_PROMPT)).toBe('trust')
+    // Codex browsing its transcript in its scrollback mode draws the same header: a rewind picker still.
+    expect(paneModal('codex', CODEX_BROWSING_SCROLLBACK)).toBe('rewind')
+  })
+
+  it('tells an approval prompt and a menu from the MCP boot notice, which takes typing and is no modal for a message', () => {
+    expect(paneModal('claude', ' Bash command\n   printf hi\n Do you want to proceed?\n ❯ 1. Yes\n   2. No')).toBe('permission')
+    expect(paneModal('codex', 'Select Model and Effort\n› 1. gpt-5.6-sol (current)')).toBe('menu')
+    const booting = `${CLAUDE_PROMPT}\n  Starting MCP servers (1/3)…`
+    expect(paneModal('claude', booting)).toBeNull()
+    // Still a dialog to every reader that holds work back from a booting pane.
+    expect(inspectRuntimePane('claude', booting)).toMatchObject({ dialog: true })
   })
 
   it('reads hermes, which italicises its placeholder instead of dimming it', () => {

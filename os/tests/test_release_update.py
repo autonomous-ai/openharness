@@ -4,7 +4,10 @@ import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import importlib.util
 import json
+import os
 from pathlib import Path
+import subprocess
+import sys
 import tempfile
 import threading
 from types import SimpleNamespace
@@ -74,6 +77,16 @@ class ReleaseChannel(unittest.TestCase):
         with patch.object(update.subprocess, 'check_output', side_effect=['harness-os 0.1.0pre4.r3-1', '-1']):
             self.assertFalse(update.discover(self.url + '/metadata.json')['available'])
 
+    def test_existing_feed_discovers_an_official_release_without_reconfiguring_the_client(self):
+        self.manifest['requires_os_version'] = '0.1.0'
+        self.manifest['upgrades_from'] = [self.base]
+        self.manifest['package'].update(name='harness-os-0.1.0-1-x86_64.pkg.tar.gz', version='0.1.0-1')
+        self.publish()
+        result = update.discover(self.url + '/metadata.json')
+        self.assertTrue(result['available'])
+        self.assertEqual(result['version'], '0.1.0-1')
+        self.assertEqual(self.metadata['channel'], 'preview')
+
     def test_missing_channel_is_empty_but_invalid_or_truncated_channel_is_an_error(self):
         self.assertIsNone(update.discover(self.url + '/missing'))
         original = copy.deepcopy(self.metadata)
@@ -116,7 +129,7 @@ class ReleaseChannel(unittest.TestCase):
         self.events = []
         system = SimpleNamespace(operation_lock=lambda: nullcontext(), installed=lambda: {'root_uuid': 'fixture'},
             snapshot_date=lambda date: date, PACMAN_CONFIG=config, pending_update=lambda: None,
-            update=lambda date: self.events.append(('system', date)))
+            update=lambda date, **options: self.events.append(('system', date, options)))
         def apply(folder, system, base, installation):
             self.assertEqual((folder / self.manifest['package']['name']).read_bytes(), self.package)
             self.assertEqual(folder.stat().st_mode & 0o777, 0o700)
@@ -128,7 +141,7 @@ class ReleaseChannel(unittest.TestCase):
         updater = self.fake_updater()
         with patch.object(update.os, 'geteuid', return_value=0), patch.object(update, 'load_runtime_updater', return_value=updater):
             update.apply(self.url + '/metadata.json')
-        self.assertEqual(self.events[0], ('system', '2026/10/01'))
+        self.assertEqual(self.events[0], ('system', '2026/10/01', {'noninteractive': True}))
         self.assertEqual(self.events[1][0], 'harness')
         self.assertFalse(self.events[1][1].exists(), 'Root download is removed after the transaction')
         updater.validate_bundle.assert_called_once()
@@ -141,6 +154,48 @@ class ReleaseChannel(unittest.TestCase):
                 update.apply(self.url + '/metadata.json')
         self.assertEqual(self.events, [])
         updater.validate_bundle.assert_not_called()
+
+    def test_public_base_upgrade_completes_without_terminal_input(self):
+        updater = self.fake_updater()
+        public_system = updater.system_module()
+        spec = importlib.util.spec_from_file_location('release_system', Path(update.__file__).with_name('system.py'))
+        system = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(system)
+        system.PACMAN_CONFIG = public_system.PACMAN_CONFIG
+        system.UPDATE_RECEIPT = self.root / 'update.json'
+        system.checkpoint = Mock(return_value='original-checkpoint')
+        public_system.update = system.update
+        prompt = self.root / 'pacman-prompt.py'
+        # Model pacman's documented --noconfirm contract with an actual child
+        # that otherwise waits for stdin, like the inherited Updates terminal.
+        prompt.write_text('''import os, sys
+assert os.environ['HN_OS_UPDATE_CHECKPOINT'] == '1'
+if '--noconfirm' not in sys.argv:
+    print('Proceed with installation? [Y/n]', flush=True)
+    answer = sys.stdin.readline()
+    sys.exit(0 if answer and answer.strip().lower() in ('', 'y', 'yes') else 1)
+assert sys.stdin.read() == '', 'Scripted updates must not consume terminal input'
+''')
+        run = subprocess.run
+        read_fd, write_fd = os.pipe()
+        def pacman(argv, **kwargs):
+            self.assertEqual(argv[:2], ['pacman', '-Syyu'])
+            if kwargs.get('stdin') is None:
+                kwargs['stdin'] = read_fd
+            return run([sys.executable, str(prompt), *argv[1:]],
+                       capture_output=True, text=True, timeout=2, **kwargs)
+        try:
+            with patch.object(update.os, 'geteuid', return_value=0), \
+                    patch.object(update, 'load_runtime_updater', return_value=updater), \
+                    patch.object(system.subprocess, 'run', side_effect=pacman):
+                update.apply(self.url + '/metadata.json')
+        finally:
+            os.close(read_fd)
+            os.close(write_fd)
+        system.checkpoint.assert_called_once_with('before-update')
+        receipt = json.loads(system.UPDATE_RECEIPT.read_text())
+        self.assertEqual((receipt['exit_status'], receipt['checkpoint']), (0, 'original-checkpoint'))
+        self.assertEqual(self.events[0][0], 'harness')
 
     def test_failed_harness_transaction_blocks_advancing_the_arch_base(self):
         updater = self.fake_updater()

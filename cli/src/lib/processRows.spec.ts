@@ -2,7 +2,7 @@ import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { processRows } from './tmux.js'
+import { processArgs, processRows } from './tmux.js'
 
 /**
  * A `ps` on PATH that records every spawn and answers one well-formed row after a short pause — long
@@ -31,6 +31,14 @@ printf '  123     1 claude          Mon Sep 21 10:00:00 2026 claude --resume\\n'
     rmSync(dir, { recursive: true, force: true })
   })
   const spawns = (): number => { try { return readFileSync(calls, 'utf8').split('\n').filter(Boolean).length } catch { return 0 } }
+
+  it('reads one process\'s command line, and none for a process it is not, or when ps fails', async () => {
+    const [row] = (await processRows())!
+    expect(await processArgs(row)).toBe('claude --resume')
+    expect(await processArgs({ ...row, startMarker: 'another start' })).toBe('')
+    writeFileSync(join(dir, 'fail'), '')
+    expect(await processArgs(row)).toBe('')
+  })
 
   // The first reconcile pass after a boot attaches a few agents at once, and each validates its pane
   // against the table; a hook burst does the same. One `ps` for the burst, not one per caller.

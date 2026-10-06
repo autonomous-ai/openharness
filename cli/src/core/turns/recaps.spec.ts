@@ -59,6 +59,12 @@ describe('recaps', () => {
     expect(role).toHaveBeenCalledWith('a1')
   })
 
+  it('takes an agent whose role cannot be read for anyone\'s: the turn keeps its end (e2e/diskfull.e2e.ts)', () => {
+    const { deps, recaps } = setup()
+    vi.mocked(deps.orchestratorRoleOf).mockImplementationOnce(() => { throw new Error('ENOSPC: no space left on device, mkdir') })
+    expect(recaps.isSubagentSession('s1')).toBe(false)
+  })
+
   it('gives the mirror the clients, the device gates and an excerpt for a recap', async () => {
     const { deps, opts } = setup()
     vi.mocked(deps.turnActivity.snapshot).mockReturnValueOnce({ state: 'working' } as ActivityFrame).mockReturnValueOnce({ state: 'idle' } as ActivityFrame)
@@ -120,5 +126,20 @@ describe('recaps', () => {
     recaps.recentAsks('s9', 1)
     expect(recent.mock.calls).toEqual([['s1', 3], ['old-s', 2], ['s9', 1]])
     expect(asks.mock.calls).toEqual([['s1', 5], ['old-s', undefined], ['s9', 1]])
+  })
+
+  it('answers agent_recent with an agent\'s summaries and questions, two of each unless one to five are asked for', () => {
+    const { recaps } = setup()
+    const summary = { kind: 'summary', text: 'body', recap: 'recap' }
+    const recent = vi.spyOn(recaps.mirror, 'recent').mockReturnValue([summary])
+    const asks = vi.spyOn(recaps.mirror, 'recentAsks').mockReturnValue(['which build is this?'])
+    expect(recaps.agentRecent({})).toStrictEqual({ error: 'MISSING_AGENT_ID' })
+    const reply = recaps.agentRecent({ agentId: 'a1' })
+    expect(reply).toStrictEqual({ agentId: 'a1', events: [summary], asks: ['which build is this?'] })
+    expect(Object.keys(reply)).toEqual(['agentId', 'events', 'asks'])
+    for (const n of [0, 'many', 9, -3, 3.5]) recaps.agentRecent({ agentId: 'a1', n })
+    expect(recent.mock.calls.map(([, n]) => n)).toEqual([2, 2, 2, 5, 1, 3.5])
+    expect(asks.mock.calls.map(([, n]) => n)).toEqual([2, 2, 2, 5, 1, 3.5])
+    expect(recent).toHaveBeenCalledWith('s1', 2)
   })
 })

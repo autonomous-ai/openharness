@@ -1,6 +1,7 @@
 import { createHash } from 'crypto'
 import type { RegisteredSession } from './registry.js'
 import { sid } from './log.js'
+import { isMessageHold, messageHold, messageHoldText, type MessageHold } from './messageHold.js'
 import { TERMINAL_LEASE_REFUSED, type TerminalActionResult } from './terminalTypes.js'
 
 const MAX_QUEUE_ITEMS = 8
@@ -127,6 +128,12 @@ export interface SessionInputDeps {
   /** Clock and timer for the lease wait; real ones by default. */
   now?: () => number
   sleep?: (ms: number) => Promise<void>
+}
+
+/** A message not typed because of what the pane showed (messageHold.ts): nothing was written. */
+function heldBack(delivery: boolean | TerminalActionResult): MessageHold | null {
+  return typeof delivery !== 'boolean' && delivery.state === 'failed' && delivery.dispatch === 'not_started'
+    && isMessageHold(delivery.reason) ? delivery.reason : null
 }
 
 /** A write the pane's control lease refused before a byte of it was written. */
@@ -453,6 +460,12 @@ export class SessionInputController {
       : delivery.state === 'succeeded' || delivery.dispatch === 'possibly_executed'
     if (!accepted) {
       forgetScope?.()
+      const held = heldBack(delivery)
+      if (held) {
+        console.warn(`[inject] ${sid(sessionId)} not typed · engine=${session.engine} · ${held}`)
+        this.deps.onError(sessionId, messageHoldText(session.engine, held))
+        return
+      }
       console.warn(`[inject] ${sid(sessionId)} paste failed · engine=${session.engine} · target=${session.agentId}`)
       this.deps.onError(sessionId, 'The message could not be delivered to the agent.')
       return
@@ -520,6 +533,14 @@ export class SessionInputController {
       if (state.cancelled || this.states.get(sessionId) !== state) return
       if (typeof delivery !== 'boolean' && delivery.state === 'failed' && delivery.dispatch === 'not_started' && delivery.reason.startsWith('team_waiting_')) {
         this.finishDelivery(sessionId, state, 'rejected', delivery.reason)
+        return
+      }
+      const held = heldBack(delivery)
+      if (held) {
+        console.warn(`[inject] ${sid(sessionId)} not typed · engine=${session.engine} · ${held}`)
+        this.finishDelivery(sessionId, state, 'rejected', held)
+        // A team's turn is automatic, and its team hears of the refusal; anyone else's is a person's to see.
+        if (!deliveryId.startsWith('team:')) this.deps.onError(sessionId, messageHoldText(session.engine, held))
         return
       }
       const accepted = typeof delivery === 'boolean'
@@ -604,6 +625,7 @@ export class SessionInputController {
     if (session.engine === 'cursor') {
       const capture = await this.deps.capture?.(session.agentId)
       if (!state.awaitingFingerprint || state.turnOpen) return
+      if (this.dialogOverComposer(sessionId, session, state, capture)) return
       const draftPending = !!capture && cursorComposerContains(capture, state.awaitingContent ?? '')
       if (state.ambiguousDispatch && !draftPending) {
         this.failAmbiguousSubmission(sessionId, state)
@@ -642,6 +664,7 @@ export class SessionInputController {
       // claude/codex/commandcode: verify against the terminal before pressing Enter again or declaring failure.
       const capture = await this.deps.capture?.(session.agentId)
       if (!state.awaitingFingerprint || state.turnOpen) return
+      if (this.dialogOverComposer(sessionId, session, state, capture)) return
       // Command Code writes the user line to its transcript only once the model has finished THINKING, so
       // the turn_started this used to wait for can be half a minute late on a real task — and the user
       // watched the terminal accept the message and start working while the device claimed it had been
@@ -723,6 +746,28 @@ export class SessionInputController {
       ? !delivery
       : delivery.dispatch === 'possibly_executed'
     this.armSubmitCheck(sessionId, session, state)
+  }
+
+  /**
+   * A dialog, a menu or a view over the composer, settled without an Enter. The prompt line the retry
+   * reads is then the transcript's echo of this very message, not a draft, and an Enter answers the
+   * dialog: on a permission prompt, "1. Yes", a command nobody approved. A prompt or a question the
+   * agent asks means the message was taken and its turn has reached a tool; anything else leaves it
+   * unknown, as does any delivery with a receipt, which the pane alone cannot settle.
+   */
+  private dialogOverComposer(sessionId: string, session: RegisteredSession, state: InputState, capture: string | null | undefined): boolean {
+    const hold = capture ? messageHold(session.engine, capture) : null
+    if (!hold) return false
+    if (state.deliveryId || (hold !== 'permission_open' && hold !== 'question_open')) {
+      this.failAmbiguousSubmission(sessionId, state)
+      return true
+    }
+    console.log(`[inject] ${sid(sessionId)} accepted (${hold} on screen) · engine=${session.engine}`)
+    state.awaitingFingerprint = null
+    state.awaitingContent = null
+    state.observes = 0
+    state.ambiguousDispatch = false
+    return true
   }
 
   private failAmbiguousSubmission(sessionId: string, state: InputState): void {

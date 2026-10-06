@@ -6,6 +6,7 @@ from contextlib import contextmanager
 import curses
 from datetime import datetime, timezone
 import hashlib
+import importlib.util
 import json
 import os
 import pwd
@@ -26,6 +27,27 @@ WORDMARK = ('█ █ ▄▀█ █▀█ █▄ █ █▀▀ █▀ █▀', '�
 COMMAND_LOG = None
 INSTALL_LOG = Path('/var/log/harness-install.log')
 LAST_LOG = None
+
+
+def hardware_module():
+    # Load the root-owned packaged sibling, never a module from the working
+    # directory.
+    spec = importlib.util.spec_from_file_location('harness_os_hardware', Path(__file__).with_name('hardware.py'))
+    hardware = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(hardware)
+    return hardware
+
+
+def require_install_platform(sysfs=Path('/sys')):
+    blocker = hardware_module().installation_blocker(sysfs)
+    if blocker:
+        raise ValueError(blocker)
+
+
+def installation_notice():
+    if hardware_module().opencode_cpu_supported() is False:
+        return 'This CPU cannot run bundled OpenCode (SSE4.2 required).'
+    return ''
 
 
 def encryption_memory(meminfo=Path('/proc/meminfo')):
@@ -280,16 +302,44 @@ def preserve_trial(trial, target, home):
     return {key: value for key, value in receipt.items() if key != 'entries'}
 
 
-def copy_image(source, target):
-    # Bound extraction memory and skip the optional GPU archive cache entirely.
-    # Selected hardware reads its signed packages directly from the live USB.
-    run('unsquashfs', '-mem', '64M', '-f', '-no-progress', '-excludes', '-d', target, source,
-        'usr/share/harness-os/hardware/nvidia')
+def shared_broadcom_cache(source, bundle):
+    """Use the live cache only when it belongs to this exact selected payload."""
+    try:
+        manifest = json.loads((bundle / 'manifest.json').read_text())
+        embedded = json.loads(run('unsquashfs', '-cat', source,
+                                  'usr/share/harness-os/hardware/broadcom/manifest.json', capture=True))
+        if (not isinstance(manifest, dict) or manifest != embedded or not manifest.get('packages') or
+                not isinstance(manifest.get('files'), dict) or not manifest['files'] or
+                not (bundle / 'packages').is_dir()):
+            return False
+        # Avoid reading the entire archive cache on generic machines. Selected
+        # radios still verify every hash and signature before pacman sees it.
+        for name, expected in manifest['files'].items():
+            path = bundle / name
+            if (Path(name).is_absolute() or '..' in Path(name).parts or
+                    path.is_symlink() or not path.resolve().is_relative_to(bundle.resolve()) or
+                    not path.is_file() or path.stat().st_size != expected['bytes']):
+                return False
+        return True
+    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
+        # An explicit --source can differ from the running USB. Keep its own
+        # cache instead of requiring matching live files for that installation.
+        return False
+
+
+def copy_image(source, target, broadcom=Path('/usr/share/harness-os/hardware/broadcom')):
+    # Bound extraction memory. Keep the Wi-Fi module/manifest from the selected
+    # image; selected radios can read its matching signed archives from the USB.
+    excluded = ['usr/share/harness-os/hardware/nvidia']
+    if shared_broadcom_cache(source, broadcom):
+        excluded.append('usr/share/harness-os/hardware/broadcom/packages')
+    run('unsquashfs', '-mem', '64M', '-f', '-no-progress', '-excludes', '-d', target, source, *excluded)
 
 
 def install(config, source, target, progress=None):
     report = progress or (lambda message: print(message, flush=True))
     validate_config(config)
+    require_install_platform()
     # Inspect again immediately before partitioning, rather than trusting the picker.
     selected_disk(config)
     if not source.is_file():
@@ -496,12 +546,13 @@ def disk_label(disk, width=None):
 
 class InstallForm:
     """Small keyboard form using the Python/ncurses already in the image."""
-    def __init__(self, screen, candidates, username, hostname, encrypt):
+    def __init__(self, screen, candidates, username, hostname, encrypt, notice=''):
         self.screen, self.disks = screen, candidates
         self.username, self.hostname, self.encrypt = username, hostname, encrypt
         self.selected, self.focus = 0, 2
         self.passwords, self.positions = ['', ''], [0, 0]
         self.error = ''
+        self.notice = notice
         self.title = None
         self.cursor_visible = None
         self.top, self.left, self.width = 0, 2, 60
@@ -635,6 +686,8 @@ class InstallForm:
         while True:
             if not self.begin(''):
                 continue
+            for row, line in enumerate(textwrap.wrap(self.notice, self.width)):
+                self.line(1 + row, line, accent=True)
             disk = self.disks[self.selected]
             # Identical models/capacities need a visible discriminator after selection.
             duplicate = sum(disk_label(d) == disk_label(disk) for d in self.disks) > 1
@@ -705,7 +758,8 @@ def interactive(username='me', hostname='harness', encrypt=True):
     if not sys.stdin.isatty() or not sys.stdout.isatty():
         raise ValueError('Interactive installation needs a terminal. Use --config for unattended installation.')
     curses.set_escdelay(25)
-    return curses.wrapper(lambda screen: InstallForm(screen, candidates, username, hostname, encrypt).run())
+    notice = installation_notice()
+    return curses.wrapper(lambda screen: InstallForm(screen, candidates, username, hostname, encrypt, notice).run())
 
 
 def completion(screen, boot=False):
@@ -806,6 +860,7 @@ def main(args=None):
     args = arguments() if args is None else args
     if os.geteuid() != 0:
         raise SystemExit('Run sudo harness install from the live USB.')
+    require_install_platform()
     if args.config:
         if args.username is not None or args.hostname is not None or args.no_encryption:
             raise ValueError('With --config, set account names and encryption in that file instead of command-line overrides.')

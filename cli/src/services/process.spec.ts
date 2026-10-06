@@ -102,9 +102,11 @@ describe('a service in its own process', () => {
     await vi.waitFor(() => expect(socket().sent).toHaveLength(4))
     expect(socket().sent.slice(1)).toEqual(expect.arrayContaining([
       { type: 'session_search_result', payload: { hits: ['zebra'], requestId: 'r1' } },
-      { type: 'session_tail_result', payload: { error: 'SERVICE_FAILED', detail: 'index gone', requestId: 'r2' } },
-      { type: 'session_other_result', payload: { error: 'SERVICE_FAILED', detail: 'not an error', requestId: 'r3' } },
+      { type: 'session_tail_result', payload: { error: 'SERVICE_FAILED', service: 'search', requestId: 'r2' } },
+      { type: 'session_other_result', payload: { error: 'SERVICE_FAILED', service: 'search', requestId: 'r3' } },
     ]))
+    // What went wrong is logged here, as the core's host logs it, and not told to whoever asked.
+    expect(lines).toEqual(expect.arrayContaining(['[service search] session_tail failed · index gone', '[service search] session_other failed · not an error']))
   })
 
   it('tells each handler who asked, as the core established it, and the least it could be when that is missing', async () => {
@@ -190,9 +192,57 @@ describe('a service in its own process', () => {
     expect(socket().sent).toEqual([])
   })
 
-  it('reads its test faults from the environment, its own only', () => {
-    expect([...serviceFaults({ HARNESSD_TEST_FAULTS: 'search.crash, search.hang,search.leak,devices.crash,search.other,search' }, 'search')]).toEqual(['crash', 'leak'])
-    expect(serviceFaults({}, 'search').size).toBe(0)
+  it('reads its test faults from the environment, its own only, in the names the core\'s host takes', () => {
+    expect(serviceFaults({ HARNESSD_TEST_FAULTS: 'search.crash, search.hang,search.leak,devices.crash,search.session_search,search' }, 'search'))
+      .toEqual({ start: true, crash: true, leak: true, calls: new Set(['hang', 'session_search']) })
+    expect(serviceFaults({ HARNESSD_TEST_FAULTS: 'devices,searching' }, 'search')).toEqual({ start: false, crash: false, leak: false, calls: new Set() })
+    expect(serviceFaults({}, 'search')).toEqual({ start: false, crash: false, leak: false, calls: new Set() })
+  })
+
+  it('fails its start when a test asks it to, before it beats or connects, as a service whose start throws', () => {
+    const channel = new FakeChannel()
+    expect(() => run({ channel, env: { HARNESSD_TEST_FAULTS: 'search' } })).toThrow('injected fault: search')
+    expect(channel.beats).toEqual([])
+    expect(sockets).toEqual([])
+  })
+
+  it('fails a request or an event on every call when a test asks it to, and answers and hears the rest', async () => {
+    const onEvent = vi.fn()
+    const requests = { session_search: vi.fn(() => ({ hits: [] })), session_tail: vi.fn(() => ({ tail: [] })) }
+    run({ requests, onEvent, env: { HARNESSD_TEST_FAULTS: 'search.session_search,search.touch' } })
+    socket().open()
+    for (const id of ['r1', 'r2']) socket().say({ type: 'session_search', payload: { requestId: id } })
+    socket().say({ type: 'session_tail', payload: { requestId: 'r3' } })
+    socket().say({ type: 'service_event', payload: { kind: 'touch', sessionId: 's1' } })
+    socket().say({ type: 'service_event', payload: { kind: 'deleteHistory', sessionId: 's1' } })
+    await vi.waitFor(() => expect(socket().sent).toHaveLength(4))
+    expect(socket().sent.slice(1)).toEqual(expect.arrayContaining([
+      { type: 'session_search_result', payload: { error: 'SERVICE_FAILED', service: 'search', requestId: 'r1' } },
+      { type: 'session_search_result', payload: { error: 'SERVICE_FAILED', service: 'search', requestId: 'r2' } },
+      { type: 'session_tail_result', payload: { tail: [], requestId: 'r3' } },
+    ]))
+    expect(requests.session_search).not.toHaveBeenCalled()
+    expect(onEvent.mock.calls).toEqual([[{ kind: 'deleteHistory', sessionId: 's1' }]])
+    expect(lines).toEqual(expect.arrayContaining([
+      '[service search] session_search failed · injected fault: search.session_search',
+      '[service search] touch failed · injected fault: search.touch',
+    ]))
+  })
+
+  it('logs an event that throws or rejects, and goes on to the next one', async () => {
+    const heard: unknown[] = []
+    run({ onEvent: (payload) => {
+      heard.push(payload.kind)
+      if (payload.kind === 'throws') throw new Error('bad row')
+      if (payload.kind === 'rejects') return Promise.reject(new Error('index closed'))
+      if (payload.kind === undefined) throw 'not an error'
+    } })
+    socket().open()
+    for (const kind of ['throws', 'rejects', undefined, 'fine']) socket().say({ type: 'service_event', payload: kind ? { kind } : {} })
+    await vi.waitFor(() => expect(lines).toContain('[service search] rejects failed · index closed'))
+    expect(heard).toEqual(['throws', 'rejects', undefined, 'fine'])
+    expect(lines).toEqual(expect.arrayContaining(['[service search] throws failed · bad row', '[service search] event failed · not an error']))
+    expect(exits).toEqual([])
   })
 
   it('crashes or leaks on purpose when a test asks it to', () => {

@@ -8,8 +8,9 @@ import type { Dirent } from 'node:fs'
 import { open, readdir, readFile, stat } from 'node:fs/promises'
 import { isAbsolute, relative, resolve } from 'node:path'
 
-import { isHarnessSession } from '../../harnessSessionLabel.js'
+import { isHarnessSession, paneOwnerFormat } from '../../harnessSessionLabel.js'
 import { processRows } from '../../tmux.js'
+import { tmuxFeatures } from '../../tmuxVersion.js'
 import { type ProcessView, type RunningProcess, type ScanContext, UNSETTLED } from './types.js'
 
 /** A folder's entries, or none when it is missing or unreadable. */
@@ -248,17 +249,24 @@ const ask: Ask = (command, args, timeout) => new Promise((resolve) => {
 })
 
 /**
- * The terminals of Harness's own panes: tmux sessions named `harness-…`. A process there is one of
- * Harness's agents, whatever its session looks like while the daemon is still binding it. None when
- * no tmux server is running; null when tmux could not be asked (a timeout): then nobody can say.
+ * The terminals of Harness's own panes: the ones a daemon tagged (`HARNESS_OWNER_OPTION`), in whatever
+ * session the person has moved them into, and any in a tmux session named `harness-…`. A process there
+ * is one of Harness's agents — any daemon's — whatever its session looks like while the daemon is still
+ * binding it, and a take-over never stops it. None when no tmux server is running; null when tmux could
+ * not be asked (a timeout): then nobody can say.
  */
-export async function harnessTtys(exec: Ask = ask): Promise<Set<string> | null> {
-  const { stdout, failed, stderr } = await exec('tmux', ['list-panes', '-a', '-F', '#{pane_tty}\t#{session_name}'], 3_000)
+export async function harnessTtys(
+  exec: Ask = ask,
+  // Before tmux 3.0 the tag is not a pane option (`paneOwnerFormat`).
+  paneOptions?: boolean,
+): Promise<Set<string> | null> {
+  const format = `#{pane_tty}\t#{session_name}\t${paneOwnerFormat(paneOptions ?? (await tmuxFeatures()).paneOptions)}`
+  const { stdout, failed, stderr } = await exec('tmux', ['list-panes', '-a', '-F', format], 3_000)
   if (failed && !/no server running|error connecting to/i.test(stderr)) return null
   const ttys = new Set<string>()
   for (const line of stdout.split('\n')) {
-    const [tty, session] = line.split('\t')
-    if (tty && session && isHarnessSession(session)) ttys.add(tty)
+    const [tty, session, tag] = line.split('\t')
+    if (tty && (tag || (session && isHarnessSession(session)))) ttys.add(tty)
   }
   return ttys
 }

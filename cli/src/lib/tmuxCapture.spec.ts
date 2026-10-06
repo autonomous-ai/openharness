@@ -37,8 +37,9 @@ describe('fresh tmux capture batching', () => {
     childProcess.execFile.mockImplementation((_file, _args, _options, done) => done(null, 'default screen\n'))
     expect(await captureTmuxPane('%7', 40, { ansi: false })).toBe('default screen\n')
     expect(childProcess.execFile).toHaveBeenCalledOnce()
+    // Its 2 s deadline is patientExec's own, which a held event loop cannot fool, not Node's `timeout`.
     expect(childProcess.execFile.mock.calls[0].slice(0, 3)).toEqual([
-      'tmux', tmuxCaptureArgs('%7', 40, { ansi: false }), { timeout: 2_000, maxBuffer: 1024 * 1024 },
+      'tmux', tmuxCaptureArgs('%7', 40, { ansi: false }), { maxBuffer: 1024 * 1024, encoding: 'utf8' },
     ])
   })
 

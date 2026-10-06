@@ -10,6 +10,7 @@ import {
   permissionModeFromArgv,
   engineProcessMatch,
   engineProcessMatchScore,
+  isNoTmuxServerError,
   LSTART_MARKER_RE,
   liveProcessRows,
   parseProcessRow,
@@ -27,6 +28,29 @@ const ownership = (cursor: string[] = [], grok: string[] = []): AgentCommandOwne
   agentCandidates: [],
   cursorAgentCandidates: [],
   grokCandidates: [],
+})
+
+describe('telling no tmux server from a tmux that cannot be asked', () => {
+  it('reads both of tmux\'s ways of saying no server is running, as measured on 3.7c', () => {
+    // The socket file is there with nothing listening on it.
+    expect(isNoTmuxServerError('no server running on /tmp/tmux-501/default')).toBe(true)
+    // The socket file is gone: what kill-server, a tmux crash and a reboot leave.
+    expect(isNoTmuxServerError('Command failed: tmux list-panes -a -F #{pane_id}\nerror connecting to /tmp/tmux-501/default (No such file or directory)\n')).toBe(true)
+  })
+
+  it('reads a translated message by the socket file it names, and any other failure as no answer', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'tmux-no-server-'))
+    try {
+      // A localized libc: the words differ, but the socket file is not there.
+      expect(isNoTmuxServerError(`error connecting to ${join(dir, 'default')} (Datei oder Verzeichnis nicht gefunden)`)).toBe(true)
+      // The file is there and tmux could not use it: that says nothing about the panes.
+      expect(isNoTmuxServerError(`error connecting to ${dir} (Permission denied)`)).toBe(false)
+      expect(isNoTmuxServerError('Command failed: tmux list-panes\nserver exited unexpectedly')).toBe(false)
+      expect(isNoTmuxServerError('spawn tmux ENOENT')).toBe(false)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
 })
 
 describe('tmux process primitives', () => {
@@ -587,6 +611,40 @@ if [ "$1" = "paste-buffer" ] && [ "$TMUX_SUBMIT_FAIL" = "1" ]; then exit 2; fi
       else process.env.TMUX_SUBMIT_ARGS = previous.args
       if (previous.fail === undefined) delete process.env.TMUX_SUBMIT_FAIL
       else process.env.TMUX_SUBMIT_FAIL = previous.fail
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('pastes a message or a clipboard with its control characters made visible, and types a literal as given', async () => {
+    // A message carrying the paste's end marker ended its paste on tmux 3.2a and 3.3a, and what followed
+    // was typed (e2e/content.e2e.ts): a buffer tmux pastes bracketed holds no control but tab and newline.
+    const dir = mkdtempSync(join(tmpdir(), 'harness-tmux-paste-'))
+    const fakeTmux = join(dir, 'tmux')
+    writeFileSync(fakeTmux, `#!/bin/sh
+if [ "$1" = "load-buffer" ]; then
+  n=$(cat "$TMUX_PASTE_DIR/count" 2>/dev/null || echo 0); n=$((n + 1)); echo "$n" > "$TMUX_PASTE_DIR/count"
+  cat > "$TMUX_PASTE_DIR/buffer-$n"
+fi
+`)
+    chmodSync(fakeTmux, 0o700)
+    const previous = { path: process.env.PATH, dir: process.env.TMUX_PASTE_DIR }
+    const hostile = 'hello\x1b[201~\r!exit\r'
+    try {
+      process.env.PATH = `${dir}:${previous.path ?? ''}`
+      process.env.TMUX_PASTE_DIR = dir
+      expect(await sendToTmux('%7', hostile)).toBe(true)
+      expect(await pasteRawIntoTmux('%7', hostile)).toBe(true)
+      expect(await sendLiteralToTmux('%7', 'filter\x1b')).toBe(true)
+      const buffer = (n: number) => readFileSync(join(dir, `buffer-${n}`), 'utf8')
+      // The message loses its trailing carriage return before the paste, as before, then its controls.
+      expect(buffer(1)).toBe('hello^[[201~\n!exit')
+      expect(buffer(2)).toBe('hello^[[201~\n!exit\n')
+      expect(buffer(3)).toBe('filter\x1b')
+    } finally {
+      if (previous.path === undefined) delete process.env.PATH
+      else process.env.PATH = previous.path
+      if (previous.dir === undefined) delete process.env.TMUX_PASTE_DIR
+      else process.env.TMUX_PASTE_DIR = previous.dir
       rmSync(dir, { recursive: true, force: true })
     }
   })

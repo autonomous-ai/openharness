@@ -11,6 +11,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { BackendSocket } from './backendSocket.js'
+import { bindHandoffRequest } from './testing/socketCore.js'
 import { prepareAgentHandoff, type HandoffDeps } from './lib/agentHandoff.js'
 import { CommanderMirror } from './lib/commander.js'
 import { handoffProviderDeps, type HandoffWiring } from './lib/handoffDiscovery.js'
@@ -89,7 +90,7 @@ function wire(sessions: RegisteredSession[], over: Partial<HandoffDeps> = {}, fa
     validTranscriptPath: (_engine, path) => existsSync(path),
     ...fakes,
   })
-  socket.handoffProvider = (req) => prepareAgentHandoff({ ...deps, ...over }, req)
+  bindHandoffRequest(socket, (req) => prepareAgentHandoff({ ...deps, ...over }, req))
 }
 
 const ask = (requestId: string, agentId: string, changeId = CHANGE): void =>

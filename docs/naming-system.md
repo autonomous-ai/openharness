@@ -107,7 +107,7 @@ configuration where it affects a decision.
 | Disk unlock prompt | **Enter your password** |
 | USB install action | **Install Harness** |
 | USB startup | Open **Install Harness** directly; no trial choice or network step. |
-| First installed boot | **Connect to Wi-Fi to get started** when disconnected, then the agent workspace. |
+| First installed boot | **Connect to Wi-Fi** when disconnected, then the agent workspace. |
 | USB session label | Omit from the single installation footer. |
 | Connect another execution machine | **Connect a computer** |
 | Installer title | Omit the redundant heading; label the action. |
@@ -115,7 +115,7 @@ configuration where it affects a decision.
 | Installer action | **Install Harness** |
 | Installation completion | **Harness is installed.** |
 | Completion actions | **Shut down**, **Back to Harness** |
-| Defer installed Wi-Fi setup | **Set up later** |
+| Work offline during Wi-Fi setup | **Super+t** opens a terminal; no separate skip action. |
 | Apply available OS/runtime releases | **Update** |
 | Update needs a reboot | **Updated. Restart when ready.** |
 | Update completion actions | **Done**, **Restart** |

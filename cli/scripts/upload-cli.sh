@@ -134,6 +134,7 @@ fi
 head -1 "$CLI" | grep -q '^#!' || { echo "error: dist/cli.js lost its shebang on line 1 (esbuild change?)" >&2; exit 1; }
 [ "$(node "$CLI" version)" = "$VER" ] || { echo "error: bundled version != $VER (ADAPTER_VERSION not injected)" >&2; exit 1; }
 node "$ADAPTER_DIR/scripts/test-core-harness-upgrade.mjs" "$CLI"
+node "$ADAPTER_DIR/scripts/check-lean-bundle.mjs" "$CLI"
 
 # --- Step 3: upload both artifacts + merge the manifest ---
 CLI_GCS="harness/cli/${VER}/cli.js"

@@ -18,7 +18,7 @@
  */
 import { execFileSync } from 'node:child_process'
 import { copyFileSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { hostname, tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { LocalClient, type Frame } from './harness/client.js'
@@ -30,7 +30,22 @@ const FROM = process.env.COMPAT_FROM
  * Differences on purpose, by the path that differs (a prefix covers everything under it), each with
  * why. Keep this honest: a difference nobody can explain is a regression until shown otherwise.
  */
-const CHANGED: Record<string, string> = {}
+const CHANGED: Record<string, string> = {
+  // The terminal streams passed `terminal_info` over and nothing answered it, so hn waited out its
+  // three seconds each time. It is answered now: what the pane runs and where, or why not.
+  'terminal_info claude': 'answered now; the released build left it unanswered',
+  'terminal_info codex': 'answered now; the released build left it unanswered',
+  'terminal_info with nothing': 'answered now; the released build left it unanswered',
+  'terminal_info for no such agent': 'answered now; the released build left it unanswered',
+  // A permission dialog's question says it is one (#764): `permission` carries the dialog and that the
+  // desktop resolves it, so a device shows a notice rather than a question to answer. A field added,
+  // nothing taken away; a frame's keys are compared as one line, so the addition reads as a change.
+  'frames of a permission on claude[3]': 'commander_question adds permission (#764); every key it had stays',
+  'frames of a permission on codex[2]': 'commander_question adds permission (#764); every key it had stays',
+  // A conversation the daemon keeps as a stopped one reads like a live one (#797, round 24). The released
+  // build said NOT_FOUND, so a conversation the daemon had to leave for a new one could not be read at all.
+  'session_get codex while stopped': 'answered now; the released build said NOT_FOUND for a stopped conversation',
+}
 
 type Engine = 'claude' | 'codex'
 type Answers = Record<string, unknown>
@@ -152,12 +167,12 @@ async function scenario(d: IsolatedDaemon): Promise<Answers> {
       const from = client.frames.length
       const asked = client.next((frame) => frame.type === 'commander_question' && frame.agentId === agent[engine], 30_000, `${step} (${engine})`)
       client.send('message', { agentId: agent[engine], content })
-      const question = await asked
-      const shaped = question.payload?.questions?.[0]
-      answers[`${step} on ${engine}`] = walk(question.payload)
+      const question = (await asked).payload ?? {}
+      const shaped = question.questions?.[0]
+      answers[`${step} on ${engine}`] = walk(question)
       const ended = client.next((frame) => frame.type === 'turn_ended' && frame.agentId === agent[engine], 60_000, `turn_ended after ${step}`)
-      const replied = client.next((frame) => frame.type === 'question_response_result' && frame.payload?.requestId === question.payload.requestId, 45_000, `${step} answered`)
-      client.send('question_response', { requestId: question.payload.requestId, agentId: agent[engine], answers: { [shaped.q]: typeof pick === 'number' ? shaped.options[pick] : pick } })
+      const replied = client.next((frame) => frame.type === 'question_response_result' && frame.payload?.requestId === question.requestId, 45_000, `${step} answered`)
+      client.send('question_response', { requestId: question.requestId, agentId: agent[engine], answers: { [shaped.q]: typeof pick === 'number' ? shaped.options[pick] : pick } })
       answers[`${step} answered on ${engine}`] = walk((await replied).payload)
       await ended
       await new Promise((done) => setTimeout(done, 1_000))
@@ -195,6 +210,8 @@ async function scenario(d: IsolatedDaemon): Promise<Answers> {
     await ask(`sessions_list ${engine}`, 'sessions_list', { agentId: agent[engine] })
     await ask(`session_get ${engine}`, 'session_get', { sessionId: session[engine] })
     await ask(`session_get ${engine}, one turn`, 'session_get', { sessionId: session[engine], limit: 1 })
+    // The registry finds an agent by its agent id too; the reply names the id it was asked by.
+    await ask(`session_get ${engine} by its agent id, one turn`, 'session_get', { sessionId: agent[engine], limit: 1 })
     await ask(`agent_recent ${engine}`, 'agent_recent', { agentId: agent[engine] })
     await ask(`terminal_info ${engine}`, 'terminal_info', { agentId: agent[engine] })
     await ask(`agent_read_file ${engine}`, 'agent_read_file', { agentId: agent[engine], path: 'README.md' })
@@ -209,13 +226,17 @@ async function scenario(d: IsolatedDaemon): Promise<Answers> {
   await ask('harness_devices_list', 'harness_devices_list')
   await ask('theme_set', 'theme_set', { background: '#000000', foreground: '#ffffff' })
   await ask('a request nobody answers', 'compat_unknown_request')
+  await ask('agent_create_status for no such creation', 'agent_create_status', { creationId: 'compat-no-such-creation' })
 
-  // The same requests, malformed: what each refuses with.
+  // The same requests, malformed: what each refuses with. Each core request that takes arguments is here:
+  // #805 moved every one of them out of the socket's switch into the core module that owns it.
   const malformed = ['session_get', 'sessions_list', 'agent_recent', 'terminal_info', 'agent_read_file', 'agent_update', 'agent_fork',
     'agent_restart', 'agent_delete', 'agent_resume', 'agent_purge', 'agent_retarget', 'agent_close', 'cancel', 'question_response',
-    'git_project_info', 'fs_list_dir', 'project_preview', 'session_tail', 'dsh_remove', 'dsh_install', 'dsh_update', 'theme_set']
+    'git_project_info', 'fs_list_dir', 'project_preview', 'session_tail', 'dsh_remove', 'dsh_install', 'dsh_update', 'theme_set',
+    'agent_create', 'agent_create_status', 'agent_handoff_prepare', 'agent_worktree_delete', 'message']
   for (const type of malformed) {
-    const ms = type === 'cancel' ? 5_000 : 60_000
+    // `cancel` and `message` are fire-and-forget: no build answers them, so waiting a minute shows nothing more.
+    const ms = type === 'cancel' || type === 'message' ? 5_000 : 60_000
     await ask(`${type} with nothing`, type, {}, ms)
     await ask(`${type} for no such agent`, type, { agentId: 'compat-no-such-agent', sessionId: 'compat-no-such-session', path: '/compat/no/such/path' }, ms)
   }
@@ -232,7 +253,18 @@ async function scenario(d: IsolatedDaemon): Promise<Answers> {
   }, 60_000, 500)
   await ask('agent_delete (stop)', 'agent_delete', { agentId: agent.codex })
   await ask('agents_list after a stop', 'agents_list', { includeStopped: true })
-  await ask('agent_resume', 'agent_resume', { agentId: agent.codex })
+  // What the apps read of an agent while it is stopped: its conversation, its list and its recaps.
+  await ask('session_get codex while stopped', 'session_get', { sessionId: session.codex, limit: 1 })
+  await ask('sessions_list codex while stopped', 'sessions_list', { agentId: agent.codex })
+  await ask('agent_recent codex while stopped', 'agent_recent', { agentId: agent.codex })
+  // The model a resumed agent runs is what its engine reports once it is back, a race with the reply
+  // on either build: v0.3.58 and this build each answered null in some runs and the model in others.
+  // It is compared settled, in the rows read at the end.
+  const resumed = await ask('agent_resume', 'agent_resume', { agentId: agent.codex })
+  if (resumed.agent) {
+    const { selectedModel: _model, ...settledLater } = resumed.agent
+    answers['agent_resume'] = walk({ ...resumed, agent: settledLater })
+  }
   await until('codex to be back after its resume', async () => {
     const row = (await rows()).find((one) => one.id === agent.codex)
     return row?.sessionId && row.status === 'active' ? row : null
@@ -265,10 +297,17 @@ describe.skipIf(!FROM)('what the apps see, compared with the released build', ()
       ['this', { scriptPath: join(build, 'cli.js'), env: { ADAPTER_CLI_DIR: build } }],
     ] as const) {
       const d = await IsolatedDaemon.create(options)
+      // tmux titles each new pane with the machine's name as it is then, and a daemon refuses that title
+      // as an agent's name. Released builds up to v0.3.58 read the name once, at start, so when a
+      // laptop's network name changed mid-run (`MacBook.lan` to `MacBook.local`) the panes made after
+      // it came out named after the machine, on that side alone: a difference the change made, not
+      // the build. This build reads it at every title sweep and keeps each name (lib/machineNames.ts).
+      const host = hostname()
       try {
         await d.start({ ready: 'port' })
         const version = execFileSync(process.execPath, [options.scriptPath, 'version'], { encoding: 'utf8' }).trim()
         sides[side] = { version, answers: await scenario(d) }
+        if (hostname() !== host) throw new Error(`this machine's name changed from ${host} to ${hostname()} during the ${side} build's run; run it again`)
       } catch (error) {
         console.error(`---- ${side} daemon log\n${d.log().split('\n').slice(-120).join('\n')}`)
         throw error
@@ -284,7 +323,11 @@ describe.skipIf(!FROM)('what the apps see, compared with the released build', ()
     const released = sides.released!
     const current = sides.this!
     const found = differences(released.answers, current.answers)
-    const explained = (path: string) => Object.keys(CHANGED).find((prefix) => path === prefix || path.startsWith(`${prefix}.`) || path.startsWith(`${prefix}[`))
+    // Paths read `.<step>.<field>…`; a CHANGED entry names a step, or a path under one.
+    const explained = (path: string) => Object.keys(CHANGED).find((prefix) => {
+      const step = `.${prefix}`
+      return path === step || path.startsWith(`${step}.`) || path.startsWith(`${step}[`)
+    })
     const added = found.filter((difference) => difference.from === undefined)
     const unexplained = found.filter((difference) => difference.from !== undefined && !explained(difference.path))
     if (process.env.COMPAT_REPORT) {

@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { DEFAULT_SERVICE_OPTIONS, ServiceSupervisor, serviceOptions, serviceSpecs, type ServiceSpec, type ServiceSupervisorOptions } from './services.js'
+import {
+  DEFAULT_SERVICE_OPTIONS, KNOWN_SERVICES, SERVICE_PROCESSES_ENV, ServiceSupervisor, serviceOptions, serviceProcessesEnv, serviceSpecs, servicesTheMasterRuns,
+  type ServiceSpec, type ServiceSupervisorOptions,
+} from './services.js'
 import type { CoreHandle } from './supervisor.js'
 
 const MIB = 1024 * 1024
@@ -105,8 +108,10 @@ describe('ServiceSupervisor', () => {
   it('kills a service that stops beating, from its start too, and restarts it as hung', () => {
     const supervisor = make()
     supervisor.start()
-    // Never beat at all: hung from the start.
+    // Never beat at all: hung from the start, once one beat's time more has passed.
     vi.advanceTimersByTime(6_000)
+    expect(latest().kills).toEqual([])
+    vi.advanceTimersByTime(2_000)
     expect(latest().kills).toEqual(['SIGKILL'])
     latest().exit(null, 'SIGKILL')
     expect(supervisor.status()[0]).toMatchObject({ lastExitReason: 'hung', state: 'restarting' })
@@ -114,9 +119,23 @@ describe('ServiceSupervisor', () => {
     const second = latest()
     for (let i = 0; i < 3; i++) { vi.advanceTimersByTime(5_000); second.beat() }
     expect(second.kills).toEqual([])
-    vi.advanceTimersByTime(6_000)
+    vi.advanceTimersByTime(8_000)
     expect(second.kills).toEqual(['SIGKILL'])
-    expect(lines.some((line) => line.includes('sent no heartbeat for 6000 ms — it is hung'))).toBe(true)
+    expect(lines.some((line) => line.includes('sent no heartbeat for 8000 ms — it is hung'))).toBe(true)
+  })
+
+  it('takes no silence it was paused through for a hang: the beat a resumed service sends keeps it', () => {
+    const supervisor = make()
+    supervisor.start()
+    const child = latest()
+    child.beat()
+    // Paused with the master: on resume the silence runs out at once and the overdue beat follows.
+    vi.advanceTimersByTime(6_000)
+    vi.advanceTimersByTime(10)
+    child.beat()
+    for (let i = 0; i < 6; i++) { vi.advanceTimersByTime(5_000); child.beat() }
+    expect(child.kills).toEqual([])
+    expect(supervisor.status()[0]).toMatchObject({ restarts: 0 })
   })
 
   it('restarts a service that outgrows its heap share or its resident budget, and counts it like a crash', () => {
@@ -276,10 +295,41 @@ describe('ServiceSupervisor', () => {
   it('reads the services to run from the environment, keeping only known ones, once each', () => {
     const known = { search: { heapLimitMiB: 512, rssLimitMiB: 1_024 }, devices: { heapLimitMiB: 256, rssLimitMiB: 0 } }
     expect(serviceSpecs({ HARNESSD_SERVICES: ' search, nope ,devices,search,' }, known)).toEqual([search, devices])
-    expect(serviceSpecs({}, known)).toEqual([])
+    // Every service in its own process unless told otherwise: isolation is the default.
+    expect(serviceSpecs({}, known)).toEqual([search, devices])
+    expect(serviceSpecs({ HARNESSD_SERVICES: 'none' }, known)).toEqual([])
+    expect(serviceSpecs({ HARNESSD_SERVICES: '' }, known)).toEqual([])
+    expect(serviceSpecs({ HARNESSD_SERVICES: 'none,search' }, known)).toEqual([search])
     expect(serviceSpecs({ HARNESSD_SERVICES: 'toString,constructor' }, known)).toEqual([])
     // One heap limit for every service, when given as a whole number of MiB.
     expect(serviceSpecs({ HARNESSD_SERVICES: 'search', HARNESSD_SERVICE_HEAP_LIMIT_MIB: '96' }, known)).toEqual([{ ...search, heapLimitMiB: 96 }])
     expect(serviceSpecs({ HARNESSD_SERVICES: 'search', HARNESSD_SERVICE_HEAP_LIMIT_MIB: 'lots' }, known)).toEqual([search])
+  })
+})
+
+describe('which services the core leaves to its master', () => {
+  const known = { search: {}, viewers: {}, workspaces: {}, teams: {} }
+  const supervised = { HARNESSD_SUPERVISED: '1', HARNESSD_SERVICE_TOKEN: 'token' }
+
+  it('is what the master says it runs, told in a form a core from before the list reads too', () => {
+    const specs = serviceSpecs({ HARNESSD_SERVICES: 'search,viewers' }, KNOWN_SERVICES)
+    expect(serviceProcessesEnv(specs)).toEqual({ [SERVICE_PROCESSES_ENV]: 'search,viewers', HARNESSD_SERVICES: 'search,viewers' })
+    expect(serviceProcessesEnv([])).toEqual({ [SERVICE_PROCESSES_ENV]: '', HARNESSD_SERVICES: 'none' })
+    expect([...servicesTheMasterRuns({ ...supervised, ...serviceProcessesEnv(specs) }, known)]).toEqual(['search', 'viewers'])
+    expect([...servicesTheMasterRuns({ ...supervised, ...serviceProcessesEnv([]) }, known)]).toEqual([])
+    // What the master says wins over whatever HARNESSD_SERVICES the core inherited; names it does not know are its own.
+    expect([...servicesTheMasterRuns({ ...supervised, [SERVICE_PROCESSES_ENV]: ' teams, nothing ', HARNESSD_SERVICES: 'search' }, known)]).toEqual(['teams'])
+  })
+
+  it('under a master too old to say, is what HARNESSD_SERVICES names, and nothing when it names none: never every service', () => {
+    // A released master (0.3.58) runs no service process unless HARNESSD_SERVICES names one, and does not
+    // re-execute on an update: the core it starts must not take every service for out of process.
+    expect([...servicesTheMasterRuns(supervised, known)]).toEqual([])
+    expect([...servicesTheMasterRuns({ ...supervised, HARNESSD_SERVICES: 'search' }, known)]).toEqual(['search'])
+  })
+
+  it('is none without a master, or without the token its services would connect with', () => {
+    expect([...servicesTheMasterRuns({ [SERVICE_PROCESSES_ENV]: 'search' }, known)]).toEqual([])
+    expect([...servicesTheMasterRuns({ HARNESSD_SUPERVISED: '1', [SERVICE_PROCESSES_ENV]: 'search' }, known)]).toEqual([])
   })
 })

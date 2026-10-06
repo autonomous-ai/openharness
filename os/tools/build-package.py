@@ -124,8 +124,8 @@ def main():
     commit = git(source, 'rev-parse', 'HEAD')
     timestamp = int(git(source, 'log', '-1', '--format=%ct'))
     lock = json.loads((source / 'os/lock.json').read_text())
-    if lock['architecture'] != 'x86_64' or not re.fullmatch(r'\d+\.\d+\.\d+-preview\.\d+', lock['version']):
-        parser.error('Expected a versioned x86-64 OS preview.')
+    if lock['architecture'] != 'x86_64' or not re.fullmatch(r'\d+\.\d+\.\d+(?:-preview\.\d+)?', lock['version']):
+        parser.error('Expected a versioned x86-64 OS release or numbered preview.')
     version = lock['version'].replace('-preview.', 'pre')
     if args.development:
         # Shallow CI checkouts all have a revision count of one. Use the source

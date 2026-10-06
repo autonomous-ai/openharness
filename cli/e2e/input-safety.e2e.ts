@@ -1,6 +1,8 @@
 /**
  * What a message must never do, for Claude Code and Codex: reach the shell an exited engine leaves in
- * its pane, where it would run as a command. And what a client must never cost the others: one that
+ * its pane, where it would run as a command, a picker for a point to rewind the conversation to, where
+ * its Enter would pick one, or a view where it is lost. (A permission prompt or a question is in
+ * questions.e2e.ts.) And what a client must never cost the others: one that
  * stops reading is cut off, alone, and the daemon's memory stays bounded while it is.
  */
 import { existsSync, mkdirSync } from 'node:fs'
@@ -69,6 +71,114 @@ describe('what a message must never do', () => {
     client.send('message', { agentId: agent.id, content: command(marker) })
     await new Promise((resolve) => setTimeout(resolve, 6_000))
     expect(existsSync(marker), 'the second message ran as a shell command').toBe(false)
+    client.close()
+  })
+
+  it('codex: a message is not typed into its transcript browser, whose Enter rewinds: refused with the reason, it goes through once the browser is closed', async () => {
+    const d = await fresh()
+    const client = await LocalClient.connect(d)
+    const agent = await create(d, client, 'codex', 'browsing-scrollback')
+    // Codex browsing in its scrollback mode: a transcript pager over the pane, which drops a paste, so
+    // the Enter behind it would revert the conversation to the prompt in view.
+    await turn(client, agent.id, '!browse scrollback')
+    await until('the pager to be drawn', async () => (await d.capture(agent.tmuxPane)).includes('Browsing transcript') || null, 15_000, 250)
+    const from = client.frames.length
+    const refused = client.next((frame) => frame.type === 'error' && frame.agentId === agent.id, 15_000, 'the refusal')
+    client.send('message', { agentId: agent.id, content: 'what changed since then?' })
+    expect(String((await refused).payload?.message)).toBe('Codex is browsing its transcript, where Enter would rewind the conversation. Close it with Esc in its terminal, then send the message again.')
+    // Nothing typed: still browsing, nothing rewound, no turn.
+    const pane = await d.capture(agent.tmuxPane)
+    expect(pane).toContain('Browsing transcript')
+    expect(pane).not.toContain('rewound')
+    expect(client.frames.slice(from).some(isTurn('turn_started', agent.id))).toBe(false)
+    // Closed with Esc, as the refusal says, the same message goes through.
+    await d.tmux.run('send-keys', '-t', agent.tmuxPane, 'Escape')
+    await until('the composer to be back', async () => !(await d.capture(agent.tmuxPane)).includes('Browsing transcript') || null, 15_000, 250)
+    await turn(client, agent.id, 'what changed since then?')
+    expect(await d.capture(agent.tmuxPane)).not.toContain('rewound')
+    client.close()
+  })
+
+  it('claude: a message is not lost in its transcript view (ctrl+o): refused with the reason, it goes through once the view is closed', async () => {
+    const d = await fresh()
+    const client = await LocalClient.connect(d)
+    const agent = await create(d, client, 'claude', 'transcript-view')
+    await turn(client, agent.id, '!transcript')
+    await until('the view to be drawn', async () => (await d.capture(agent.tmuxPane)).includes('Showing detailed transcript') || null, 15_000, 250)
+    const from = client.frames.length
+    const refused = client.next((frame) => frame.type === 'error' && frame.agentId === agent.id, 15_000, 'the refusal')
+    client.send('message', { agentId: agent.id, content: 'and the logout bug?' })
+    expect(String((await refused).payload?.message)).toBe('Claude Code is showing its transcript (ctrl+o), where a message is not typed. Close it with Esc in its terminal, then send the message again.')
+    expect(client.frames.slice(from).some(isTurn('turn_started', agent.id))).toBe(false)
+    // Closed with Esc, as the refusal says, the same message goes through.
+    await d.tmux.run('send-keys', '-t', agent.tmuxPane, 'Escape')
+    await until('the prompt to be back', async () => !(await d.capture(agent.tmuxPane)).includes('Showing detailed transcript') || null, 15_000, 250)
+    await turn(client, agent.id, 'and the logout bug?')
+    client.close()
+  })
+
+  it('codex: a message is not lost in its transcript overlay (ctrl+t): refused with the reason, it goes through once the overlay is closed', async () => {
+    const d = await fresh()
+    const client = await LocalClient.connect(d)
+    const agent = await create(d, client, 'codex', 'transcript-overlay')
+    await turn(client, agent.id, '!overlay')
+    await until('the overlay to be drawn', async () => (await d.capture(agent.tmuxPane)).includes('T R A N S C R I P T') || null, 15_000, 250)
+    const from = client.frames.length
+    const refused = client.next((frame) => frame.type === 'error' && frame.agentId === agent.id, 15_000, 'the refusal')
+    client.send('message', { agentId: agent.id, content: 'and the logout bug?' })
+    expect(String((await refused).payload?.message)).toBe('Codex is showing its transcript (ctrl+t), where a message is not typed. Close it with q in its terminal, then send the message again.')
+    expect(client.frames.slice(from).some(isTurn('turn_started', agent.id))).toBe(false)
+    // Closed with q, as the refusal says, the same message goes through.
+    await d.tmux.run('send-keys', '-t', agent.tmuxPane, 'q')
+    await until('the composer to be back', async () => !(await d.capture(agent.tmuxPane)).includes('T R A N S C R I P T') || null, 15_000, 250)
+    await turn(client, agent.id, 'and the logout bug?')
+    client.close()
+  })
+
+  it.each(engines)('%s: a message is not typed into a search of the prompt history (ctrl+r), where it would become the search, and Claude Code\'s Enter would send an earlier prompt', async (engine) => {
+    const d = await fresh()
+    const client = await LocalClient.connect(d)
+    const agent = await create(d, client, engine, `history-search-${engine}`)
+    await turn(client, agent.id, 'fix the login bug please')
+    await turn(client, agent.id, '!search')
+    const footer = engine === 'claude' ? 'search prompts:' : 'reverse-i-search:'
+    await until('the search to be drawn', async () => (await d.capture(agent.tmuxPane)).includes(footer) || null, 15_000, 250)
+    const from = client.frames.length
+    const refused = client.next((frame) => frame.type === 'error' && frame.agentId === agent.id, 15_000, 'the refusal')
+    client.send('message', { agentId: agent.id, content: 'fix the login bug' })
+    expect(String((await refused).payload?.message)).toBe(engine === 'claude'
+      ? 'Claude Code is searching its prompt history (ctrl+r), where Enter would send an earlier prompt. Close it with ctrl+c in its terminal, then send the message again.'
+      : 'Codex has a search open, where a message would become what it searches for. Close it with Esc in its terminal, then send the message again.')
+    expect(client.frames.slice(from).some(isTurn('turn_started', agent.id))).toBe(false)
+    // Closed as the refusal says, the same message goes through, as itself.
+    await d.tmux.run('send-keys', '-t', agent.tmuxPane, engine === 'claude' ? 'C-c' : 'Escape')
+    await until('the search to be closed', async () => !(await d.capture(agent.tmuxPane)).includes(footer) || null, 15_000, 250)
+    const started = client.next(isTurn('turn_started', agent.id), 45_000, 'turn_started')
+    await turn(client, agent.id, 'fix the login bug')
+    expect(JSON.stringify((await started).payload)).toContain('fix the login bug')
+    expect(JSON.stringify((await started).payload)).not.toContain('please')
+    client.close()
+  })
+
+  it.each(engines)('%s: what reached the pane as its engine went down never runs in the shell it leaves', async (engine) => {
+    // An engine on its way out reads no more input: Claude Code runs its SessionEnd hooks first. What was
+    // typed for it then, a message right behind \`/exit\` among them, waits in the terminal, and the shell
+    // the pane becomes must not run it. Typed here once the engine has taken its \`!exit\`.
+    const d = await fresh()
+    const client = await LocalClient.connect(d)
+    const agent = await create(d, client, engine, `went-down-${engine}`)
+    await d.tmux.run('send-keys', '-t', agent.tmuxPane, '-l', '!exit')
+    await d.tmux.run('send-keys', '-t', agent.tmuxPane, 'Enter')
+    await until('the engine to take its exit', async () => (await d.capture(agent.tmuxPane)).includes('> !exit') || null, 15_000, 20)
+    const marker = join(d.root, `pwned-on-the-way-out-${engine}`)
+    await d.tmux.run('send-keys', '-t', agent.tmuxPane, command(marker), 'Enter')
+    await until('the pane to be a shell', async () => (await d.capture(agent.tmuxPane)).includes('This pane is a shell now') || null, 30_000, 100)
+    await new Promise((resolve) => setTimeout(resolve, 3_000))
+    expect(existsSync(marker), 'what was typed for the engine ran in the shell').toBe(false)
+    // The shell is the person's from here: what they type runs.
+    const typed = join(d.root, `typed-in-the-shell-${engine}`)
+    await d.tmux.run('send-keys', '-t', agent.tmuxPane, command(typed), 'Enter')
+    await until('the shell to run what was typed into it', () => existsSync(typed) || null, 10_000, 100)
     client.close()
   })
 

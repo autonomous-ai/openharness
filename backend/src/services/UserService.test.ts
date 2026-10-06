@@ -164,6 +164,88 @@ describe('SSO user identity', () => {
   })
 })
 
+describe('sign-in attribution', () => {
+  const tags = { source: 'newsletter', campaign: 'oct', rid: 'r-123' }
+
+  it('keeps the tags of the sign-in that creates the account as its acquisition', async () => {
+    findUnique.mockResolvedValue(null)
+
+    await userService.upsertFromSso({
+      externalId: 'prod-sub-new',
+      email: 'new@example.com',
+      autonomousEnv: 'prod',
+      signUpAttribution: tags,
+    })
+
+    expect(create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        signUpAttribution: { ...tags, recordedAt: expect.any(Date) },
+      }),
+    })
+  })
+
+  it('creates an untagged account with no acquisition', async () => {
+    findUnique.mockResolvedValue(null)
+
+    await userService.upsertFromSso({ externalId: 'prod-sub-new', email: 'new@example.com', autonomousEnv: 'prod' })
+
+    expect(create.mock.calls[0][0].data).not.toHaveProperty('signUpAttribution')
+  })
+
+  it('never gives an existing account an acquisition from a later tagged sign-in', async () => {
+    findUnique.mockResolvedValue(row())
+
+    await userService.upsertFromSso({
+      externalId: 'prod-sub-1',
+      email: 'a@example.com',
+      autonomousEnv: 'prod',
+      name: 'Renamed',
+      signUpAttribution: tags,
+    })
+
+    expect(update).toHaveBeenCalledWith({ where: { id: 'u1' }, data: { name: 'Renamed' } })
+  })
+
+  it('stays off the write path for a current account even when the sign-in is tagged', async () => {
+    findUnique.mockResolvedValue(row())
+
+    await userService.upsertFromSso({
+      externalId: 'prod-sub-1',
+      email: 'a@example.com',
+      autonomousEnv: 'prod',
+      signUpAttribution: tags,
+    })
+
+    expect(update).not.toHaveBeenCalled()
+  })
+
+  it("keeps the tags of the owner's first sign-in when it claims a device's provisional row", async () => {
+    findUnique.mockResolvedValueOnce(null).mockResolvedValueOnce(row({ email: provisionalEmailForExternalId('prod-sub-1') }))
+
+    await userService.upsertFromSso({
+      externalId: 'prod-sub-1',
+      email: 'owner@example.com',
+      autonomousEnv: 'prod',
+      signUpAttribution: tags,
+    })
+
+    expect(update).toHaveBeenCalledWith({
+      where: { id: 'u1' },
+      data: { email: 'owner@example.com', signUpAttribution: { ...tags, recordedAt: expect.any(Date) } },
+    })
+  })
+
+  it('records a tagged sign-in only as the latest', async () => {
+    await userService.recordSignInAttribution('u1', tags)
+
+    expect(update).toHaveBeenCalledOnce()
+    expect(update).toHaveBeenCalledWith({
+      where: { id: 'u1' },
+      data: { lastAttribution: { ...tags, recordedAt: expect.any(Date) } },
+    })
+  })
+})
+
 describe('provisional identity helpers', () => {
   it('builds a deterministic non-deliverable email', () => {
     expect(provisionalEmailForExternalId('ABC123')).toBe('device-abc123@pending.harness.invalid')

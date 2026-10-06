@@ -186,6 +186,20 @@ describe('authenticated user resolution', () => {
     expect(findByExternal).not.toHaveBeenCalled()
   })
 
+  it('hands the sign-in tags to the user mirror, which keeps them only on a new account', async () => {
+    profileFetch('prod-sub-1', 'new@example.com')
+    findByEmail.mockResolvedValue(null)
+    findByExternal.mockResolvedValue(null)
+    upsertFromSso.mockResolvedValue({ id: 'u-new', email: 'new@example.com', role: 'user' })
+
+    await authenticateAccessToken('a.e30.c', 'prod', { signUpAttribution: { source: 'app', rid: 'r-123' } })
+
+    expect(upsertFromSso).toHaveBeenCalledWith(expect.objectContaining({
+      email: 'new@example.com',
+      signUpAttribution: { source: 'app', rid: 'r-123' },
+    }))
+  })
+
   it('claims a prod provisional row by User.externalId', async () => {
     profileFetch('prod-sub-1', 'owner@example.com')
     findByEmail.mockResolvedValue(null)

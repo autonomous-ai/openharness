@@ -71,10 +71,6 @@ a:focus-visible { outline: 2px solid var(--accent); outline-offset: 5px; }
 .metrics > div { display: flex; justify-content: space-between; gap: 2ch; }
 .metrics dt { color: #a5a59c; }
 .metrics dd { white-space: nowrap; }
-.measurement-note { color: #a5a59c; }
-.measurement-note summary { cursor: pointer; }
-.measurement-note p { margin-top: var(--row); }
-.measurement-note summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 5px; }
 @media (max-width: 900px), (max-height: 650px) {
   .chapter { grid-template-columns: minmax(0, 1fr); }
 }

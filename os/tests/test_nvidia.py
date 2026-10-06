@@ -71,6 +71,75 @@ class NvidiaSelection(unittest.TestCase):
                 hardware.nvidia_bundle_manifest(folder, all_files=True)
 
 
+class NvidiaOwnership(unittest.TestCase):
+    supported = {'10de:2684': ['RTX 4090']}
+    reserved = [(None, 'vfio-pci'), (None, 'pci-stub'), (None, 'none'),
+                (None, 'nouveau'), ('nouveau', 'nouveau'), ('nvidia', 'vfio-pci')]
+
+    def discover(self, root, assignments):
+        sysfs = root / 'sys'
+        for index, (driver, override) in enumerate(assignments):
+            device = sysfs / 'bus/pci/devices' / f'0000:{index + 3:02x}:00.0'
+            device.mkdir(parents=True)
+            for name, value in [('vendor', '0x10de'), ('device', '0x2684'),
+                                ('class', '0x030000'), ('driver_override', override)]:
+                (device / name).write_text(value + '\n')
+            if driver:
+                binding = sysfs / 'bus/pci/drivers' / driver
+                binding.mkdir(parents=True, exist_ok=True)
+                (device / 'driver').symlink_to(binding)
+        return hardware.pci_devices(sysfs)
+
+    def test_explicit_assignment_preserves_single_and_mixed_gpu_sets(self):
+        automatic = ('nouveau', '(null)')
+        for reserved in self.reserved:
+            for assignments in [[reserved], [automatic, reserved], [reserved, automatic]]:
+                with self.subTest(assignments=assignments), tempfile.TemporaryDirectory() as temp:
+                    devices = self.discover(Path(temp), assignments)
+                    self.assertEqual(len(devices), len(assignments))
+                    self.assertEqual(hardware.nvidia_selection(devices, self.supported)['status'], 'unchanged')
+
+    def test_default_and_explicit_nvidia_bindings_remain_eligible(self):
+        assignments = [(None, '(null)'), (None, ''), ('nouveau', '(null)'),
+                       ('nouveau', ''), ('nvidia', '(null)'), (None, 'nvidia'),
+                       ('nouveau', 'nvidia'), ('nvidia', 'nvidia')]
+        with tempfile.TemporaryDirectory() as temp:
+            devices = self.discover(Path(temp), assignments)
+            self.assertEqual([device['driver_override'] for device in devices],
+                             [None, None, None, None, None, 'nvidia', 'nvidia', 'nvidia'])
+            self.assertEqual(hardware.nvidia_selection(devices, self.supported),
+                             {'status': 'selected', 'devices': ['10de:2684'] * len(assignments)})
+
+    def test_reserved_gpu_install_does_not_run_commands_or_change_target(self):
+        for reserved in self.reserved:
+            for existing_config in [False, True]:
+                with self.subTest(reserved=reserved, existing_config=existing_config), \
+                        tempfile.TemporaryDirectory() as temp:
+                    root = Path(temp)
+                    devices = self.discover(root, [('nouveau', '(null)'), reserved])
+                    target, bundle = root / 'target', root / 'bundle'
+                    (target / 'etc/mkinitcpio.conf.d').mkdir(parents=True)
+                    (target / 'etc/harness-live').touch()
+                    if existing_config:
+                        (target / 'etc/mkinitcpio.conf.d/30-harness-nvidia.conf').write_text('# Keep my GPU setup.\n')
+                    (target / 'usr/share/harness-os').mkdir(parents=True)
+                    (target / 'usr/share/harness-os/lock.json').write_text(json.dumps({'arch_snapshot': '2026/10/01'}))
+                    bundle.mkdir()
+                    (bundle / 'manifest.json').write_text(json.dumps({
+                        'schema': 1, 'driver': 'nvidia-open', 'architecture': 'x86_64',
+                        'driver_version': '615.71.09', 'supported_devices': self.supported,
+                        'arch_snapshot': '2026/10/01', 'base_packages': {'linux-lts': '6.18.54-1'}, 'files': {}}))
+                    before = {str(path.relative_to(target)): path.read_bytes() if path.is_file() else None
+                              for path in target.rglob('*')}
+                    with patch.object(hardware.Path, 'is_mount', return_value=True), \
+                            patch.object(hardware, 'run', side_effect=AssertionError('A reserved GPU started privileged setup')) as run:
+                        result = hardware.configure_nvidia_install(target, devices, bundle)
+                    self.assertEqual(result['status'], 'unchanged')
+                    run.assert_not_called()
+                    self.assertEqual({str(path.relative_to(target)): path.read_bytes() if path.is_file() else None
+                                      for path in target.rglob('*')}, before)
+
+
 class NvidiaSupportTable(unittest.TestCase):
     def test_current_table_only_with_subsystem_rows(self):
         contents = '''<table><tr><td>Navigation</td></tr></table>

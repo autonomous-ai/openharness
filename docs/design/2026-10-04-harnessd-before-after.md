@@ -126,7 +126,7 @@ that grows past its budget. Each failure message says where the code belongs.
 
 ## What the end-to-end suite has found
 
-15 real bugs, each fixed with a test that fails without the fix. They include:
+20 real bugs, each fixed with a test that fails without the fix. They include:
 
 - a corrupt registry that blocked every agent create;
 - a pane killed from outside that stayed "active" forever;
@@ -136,7 +136,14 @@ that grows past its budget. Each failure message says where the code belongs.
 - a turn taken just after a resume or restart that no window ever saw;
 - a Stop pressed during start that was refused, and the ghost agent it could leave;
 - a compaction that showed every window its turn starting twice;
-- a Codex fork that never bound its conversation after a daemon restart.
+- a Codex fork that never bound its conversation after a daemon restart;
+- hn's `terminal_info`, which no build had ever answered (found by comparing with v0.3.57);
+- a tmux server that died, after which dead agents showed as active;
+- turns replayed live after a daemon restart;
+- on a full disk: a rename lost to a restart, and a binding the windows never heard of.
+
+Comparing every answer with the released v0.3.57 found no other difference across 90 answers. A
+desk of 50 agents runs in 268 MiB, and all of them are back 8.3 s after a restart.
 
 The full list is in the design doc's "Found while mapping".
 

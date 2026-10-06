@@ -298,16 +298,10 @@ export function inspectRuntimePane(engine: RegisteredSession['engine'], capture:
   if (engine === 'grok') return inspectGrokPane(capture)
   const rawLines = capture.split('\n')
   const marks = promptMarker(engine)
-  const promptIndex = rawLines.findLastIndex((line) => {
-    const visible = stripAnsi(line)
-    const marker = visible.search(marks)
-    return marker >= 0 && !/^\s*\d+\.\s/.test(visible.slice(marker + 1))
-  })
+  const promptIndex = latestPromptLine(rawLines, marks)
   const prompt = promptIndex >= 0 ? rawLines[promptIndex] : ''
-  // Old picker/plan text can remain in tmux history. Only UI below the latest prompt belongs to the
-  // current interaction; if no prompt is visible, inspect the whole capture as a conservative fallback.
-  const currentUi = stripAnsi((promptIndex >= 0 ? rawLines.slice(promptIndex) : rawLines).join('\n')).replace(/\u00a0/g, ' ')
-  const dialog = DIALOG_UI.test(currentUi)
+  const currentUi = currentPaneUi(rawLines, promptIndex)
+  const dialog = DIALOG_UI.test(currentUi) || takeoverIn(engine, capture, currentUi) !== null
   const plan = engine === 'codex' ? /\bplan mode\b/i.test(currentUi) : /\bplan mode on\b/i.test(currentUi)
   const marker = stripAnsi(prompt).search(marks)
   let visible = marker >= 0 ? stripAnsi(prompt).slice(marker + 1).replace(/\u00a0/g, ' ').trim() : ''
@@ -319,6 +313,113 @@ export function inspectRuntimePane(engine: RegisteredSession['engine'], capture:
   return { idle: !!prompt && !dialog && !draft, plan, dialog, draft }
 }
 
+/** The latest composer prompt line; picker rows use the same glyphs, but numbered rows are not prompts. */
+function latestPromptLine(rawLines: string[], marks: RegExp): number {
+  return rawLines.findLastIndex((line) => {
+    const visible = stripAnsi(line)
+    const marker = visible.search(marks)
+    return marker >= 0 && !/^\s*\d+\.\s/.test(visible.slice(marker + 1))
+  })
+}
+
+/**
+ * Old picker/plan text can remain in tmux history. Only UI below the latest prompt belongs to the
+ * current interaction; if no prompt is visible, inspect the whole capture as a conservative fallback.
+ */
+function currentPaneUi(rawLines: string[], promptIndex: number): string {
+  return stripAnsi((promptIndex >= 0 ? rawLines.slice(promptIndex) : rawLines).join('\n')).replace(/\u00a0/g, ' ')
+}
+
+/** A screen of Claude Code's or Codex's own that takes its composer's place (see [takeoverIn]). */
+export type PaneTakeover = 'rewind' | 'transcript' | 'search' | 'trust' | 'update' | 'model' | 'sign_in'
+
+/**
+ * The modal over a Claude Code or Codex pane, read for a message about to be typed into it
+ * (messageHold.ts): one of their own screens that takes the composer's place ([takeoverIn]), an
+ * approval prompt, or another menu. Every one of them is a dialog to [inspectRuntimePane], except the
+ * MCP boot notice: Claude Code takes typing while it shows, so a message sent the moment an agent
+ * starts still goes in.
+ */
+export function paneModal(engine: RegisteredSession['engine'], capture: string): PaneTakeover | 'permission' | 'menu' | null {
+  const rawLines = capture.split('\n')
+  const currentUi = currentPaneUi(rawLines, latestPromptLine(rawLines, promptMarker(engine)))
+  const takeover = takeoverIn(engine, capture, currentUi)
+  if (takeover) return takeover
+  // Below the prompt line: that line is the composer, or the echo of the last message, and either can
+  // hold anything a person typed.
+  if (PERMISSION_UI.test(currentUi.slice(currentUi.indexOf('\n') + 1))) return 'permission'
+  return DIALOG_UI.test(currentUi.replace(/Starting MCP servers?/gi, '')) ? 'menu' : null
+}
+
+/**
+ * The screens of Claude Code 2.1.289 and Codex 0.160 that take the composer's place, where a pasted
+ * message and its Enter do something other than send it (read from their code, not run; the screens
+ * are in __fixtures__/rewindPickers.ts and takeoverScreens.ts):
+ *   - rewind: a picker for a point in the conversation to go back to, whose Enter picks one;
+ *   - transcript: Claude Code's transcript view (ctrl+o) and Codex's transcript overlay (ctrl+t, in its
+ *     scrollback mode), which drop the paste and have no Enter: the message is lost;
+ *   - search: a search through the prompt history (ctrl+r), or Codex's find in its transcript (F3),
+ *     which takes the paste as what to search for; Claude Code's Enter then SENDS the earlier prompt it
+ *     found, Codex's puts it in the composer or goes to the next match;
+ *   - trust, update, model, sign_in: the questions Codex asks at startup (trust this folder, update
+ *     now, switch to a new model, how to sign in) and Claude Code's trust and sign-in screens, which
+ *     drop the paste and take the Enter as the highlighted answer: trust the folder (Claude Code's
+ *     highlights `No, exit`, so it quits), run the update, switch the model, start a sign-in.
+ * Each is matched on its own wording and rows, not on a guess at what is missing from the screen.
+ */
+function takeoverIn(engine: RegisteredSession['engine'], capture: string, currentUi: string): PaneTakeover | null {
+  if (engine !== 'claude' && engine !== 'codex') return null
+  const lines = stripAnsi(capture).replace(/\u00a0/g, ' ').split('\n')
+  const bottom = lines.filter((line) => line.trim()).slice(-3)
+  // A startup screen is the last thing on the pane: one with a composer below it was answered.
+  const composer = engine === 'codex'
+    ? lines.findLastIndex((line) => /^\s*›/.test(line) && !/^\s*›\s*\d+\.\s/.test(line))
+    : lines.findLastIndex((line, index) => /^\s*❯/.test(line) && index > 0 && /^\s*[─━]{8,}\s*$/.test(lines[index - 1]))
+  const shown = (...patterns: RegExp[]) => patterns.every((pattern) => lines.findLastIndex((line) => pattern.test(line)) > composer)
+  if (engine === 'codex') {
+    if (CODEX_TRANSCRIPT_BROWSING.test(currentUi)) return 'rewind'
+    if (CODEX_PAGER_HEADER.test(lines.find((line) => line.trim()) ?? '')) return 'transcript'
+    if (bottom.some((line) => CODEX_SEARCH_FOOTER.test(line))) return 'search'
+    if (shown(CODEX_TRUST_QUESTION, CODEX_TRUST_ROW)) return 'trust'
+    if (shown(/^\s*Update available\b/, CODEX_UPDATE_ROW)) return 'update'
+    if (shown(/^\s*[›>]?\s*1\. Try new model\s*$/, /^\s*[›>]?\s*2\. Use existing model\s*$/)) return 'model'
+    if (shown(/^\s*[›>]?\s*1\. Sign in with ChatGPT\s*$/)) return 'sign_in'
+    return null
+  }
+  if (claudeRewindMenuOpen(capture)) return 'rewind'
+  if (bottom.some((line) => CLAUDE_TRANSCRIPT_FOOTER.test(line))) return 'transcript'
+  if (bottom.some((line) => CLAUDE_HISTORY_SEARCH.test(line))) return 'search'
+  if (shown(/Quick safety check: Is this a project you created or one you trust\?/, /^\s*(?:❯\s*)?Yes, I trust this folder\s*$/)) return 'trust'
+  if (shown(/^\s*Select login method:\s*$/, /^\s*(?:❯\s*)?1\. Claude account with subscription\b/)) return 'sign_in'
+  return null
+}
+
+/** The header of Codex's pager over the whole pane, its top row: its transcript (ctrl+t) when it is not
+ *  on the composer's screen (pager_overlay/transcript.rs). Closed with q or ctrl+t; Esc browses prompts. */
+const CODEX_PAGER_HEADER = /^\/ T R A N S C R I P T(?: \/)*\s*$/
+
+/** Codex's search footers: through its prompt history (`reverse-i-search: … enter accept · esc cancel`,
+ *  chat_composer/history_search.rs) and through its transcript (`Find: …`, transcript_view/search.rs). */
+const CODEX_SEARCH_FOOTER = /^\s*(?:reverse-i-search:|Find: )/
+
+/** Codex's trust question, as 0.160 words it (onboarding/trust_directory.rs) and as 0.147 did. */
+const CODEX_TRUST_QUESTION = /Trust this folder\? Codex can read, edit, and run files here|Do you trust the contents of this directory\?/
+const CODEX_TRUST_ROW = /^\s*[›>]?\s*1\. (?:Trust and continue|Yes, continue|Open restricted|Open existing task)\s*$/
+
+/** Codex's update prompt (update_prompt.rs): its first row runs the update. */
+const CODEX_UPDATE_ROW = /^\s*[›>]?\s*1\. Update now \(runs /
+
+/**
+ * Claude Code's transcript view (ctrl+o): the prompt is hidden, and the footer row starts
+ * `Showing detailed transcript · ctrl+o to toggle`, after `dialog waiting · ` when a dialog sits behind
+ * it (2.1.289). It has no Enter, so a message typed there is lost. Esc, q or ctrl+c close it.
+ */
+const CLAUDE_TRANSCRIPT_FOOTER = /^\s*(?:dialog waiting · )?Showing detailed transcript\b/
+
+/** Claude Code's prompt-history search (ctrl+r), under the prompt: `search prompts: <query>`, or
+ *  `no matching prompt: <query>` (2.1.289). */
+const CLAUDE_HISTORY_SEARCH = /^\s*(?:search prompts|no matching prompt): /
+
 /**
  * A modal drawn over the pane — a picker, a permission prompt, an MCP boot notice.
  *
@@ -327,6 +428,52 @@ export function inspectRuntimePane(engine: RegisteredSession['engine'], capture:
  * No `g` flag, so `test` carries no `lastIndex` between callers.
  */
 const DIALOG_UI = /Select Model(?: and Effort)?|Select Reasoning Level|Advanced Reasoning|Available models|Models matching|Edit Parameters|Type to filter.*Tab to edit|Esc to go back|Press enter to confirm|Do you want to proceed|Allow this action|permission required|Starting MCP servers?/i
+
+/** The approval prompts among them. */
+/**
+ * An approval prompt's question. Claude Code asks "Do you want to proceed?", "Do you want to make this
+ * edit to <file>?", "Do you want to allow Claude to fetch this content?", "Do you want to <verb> <target>?"
+ * for the other tools, and "Would you like to proceed?" over a plan (2.1.289); Codex asks "Would you like
+ * to run the following command?" and the like. The rows under it are read too (askQuestion.ts), but a
+ * row wrapped in a narrow pane breaks that reading, and the question alone must still hold a message:
+ * Enter approves the first row. Asked only below the prompt line, so never of what a person typed.
+ */
+const PERMISSION_UI = /\bDo you want to\b|\bWould you like to (?:proceed|run|make|apply|allow)\b|Allow this action|permission required/i
+
+/**
+ * Codex browsing its own transcript: Esc twice on an empty composer, and its footer row reads
+ * `Browsing transcript · ↑↓/jk scroll · ←→/hl prompts · … · ↵ rewind · esc back`, down to a bare
+ * `Browsing` as the pane narrows (0.160, tui/src/app_backtrack/prompt_navigation.rs). In its default
+ * fullscreen mode the composer stays, dimmed whole, placeholder and any draft in it alike, so it read
+ * as empty and idle; in its scrollback mode (`tui.fullscreen_transcript = false`, no alternate screen,
+ * or over SSH) the footer closes a transcript pager drawn over the whole pane. Either way Enter
+ * reverts the conversation to the prompt in view. A paste leaves the fullscreen browser and lands in
+ * the composer, but the scrollback one drops it, and its Enter then rewinds (app.rs and
+ * pager_overlay/transcript.rs).
+ */
+const CODEX_TRANSCRIPT_BROWSING = /^\s*Browsing(?: transcript)?(?:\s+·|\s*$)/m
+
+/**
+ * Claude Code's Rewind menu (Esc twice on an empty prompt, or `/rewind`), which hides the prompt while
+ * it is open. Under its title, `Rewind`, it lists the messages sent so far, `(current)` focused, behind
+ * one of these lines, or asks to confirm one picked (2.1.289, MessageSelector). Enter on a message asks
+ * to confirm it, and Enter again restores the conversation, the code or both to before it (with file
+ * checkpoints off, the first Enter restores the conversation); Enter on `(current)` closes the menu.
+ * A message pasted into it is dropped either way. Its focused row is drawn `❯ (current)` in italics,
+ * which read as an empty, idle prompt.
+ */
+// Their opening words only: a pane narrower than a line wraps the rest onto the next, and the menu went
+// unseen, its Enter picking a message (with checkpoints off, rewinding to it).
+const CLAUDE_REWIND_BODY = /^(?:Restore the code\b|Restore and fork\b|Confirm you want to restore\b|Nothing to rewind to\b)/
+
+function claudeRewindMenuOpen(capture: string): boolean {
+  const lines = stripAnsi(capture).replace(/\u00a0/g, ' ').split('\n').map((line) => line.trim())
+  // The title, with its body a blank line under it, and no rule after it: the prompt the menu hides
+  // comes back between two rules once it closes.
+  return lines.some((line, index) => line === 'Rewind'
+    && lines.slice(index + 1, index + 4).some((next) => CLAUDE_REWIND_BODY.test(next))
+    && !lines.slice(index + 1).some((next) => /[─━]{8,}/u.test(next)))
+}
 
 /** The rule a gutter-box composer is closed with: `╹▀▀▀▀…`. */
 const GUTTER_BOX_RULE = /[─▀▁▔]{8,}/u

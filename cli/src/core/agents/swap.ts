@@ -20,9 +20,11 @@ export interface PaneSwapDeps {
   /** The tmux backend; a swap only ever runs where there is one. */
   tmuxBackend: TmuxBackend | null
   prepareSessionResume: (session: RegisteredSession) => void
+  /** Keeps a conversation a swap had to leave for a new one as a stopped harness (lib/keepAbandonedConversation.ts). */
+  keepAbandonedConversation: (left: RegisteredSession) => void
 }
 
-export function createPaneSwap({ byAgent, tmuxBackend, prepareSessionResume }: PaneSwapDeps) {
+export function createPaneSwap({ byAgent, tmuxBackend, prepareSessionResume, keepAbandonedConversation }: PaneSwapDeps) {
   /**
    * The dependencies a pane-process swap needs, for both callers that do one.
    *
@@ -48,6 +50,9 @@ export function createPaneSwap({ byAgent, tmuxBackend, prepareSessionResume }: P
     permissionMode: string | null = session.permissionMode ?? null,
   ): RestartAgentDeps => ({
     prepareResume: () => prepareSessionResume(session),
+    // The row as the swap found it: the conversation a fallback to a fresh start leaves behind.
+    keepAbandoned: () => keepAbandonedConversation(session),
+    respawnRefusal: () => tmuxBackend!.respawnRefusal(launch.env ? { env: launch.env } : {}),
     holdOpen: async () => {
       const result = await tmuxBackend!.holdOpen(runtime)
       return result.state === 'succeeded'

@@ -3,12 +3,18 @@
  * data directory, port, private tmux server and fake Claude Code and Codex engines, signed out and with
  * every optional feature that reaches beyond the machine turned off. Nothing it does can touch the
  * person's own daemon, tmux server, transcripts or credentials.
+ *
+ * It installs Claude Code's and Codex's hooks as it does on a person's computer, into the throwaway home
+ * and CODEX_HOME, and the fake engines run them (fakeEngine.mjs): the real `hook/notify.mjs` carries
+ * every hook event to the daemon, with its deadline and its offline registry writes. Before a daemon
+ * starts, every folder it could install hooks into is checked to be inside the test's root
+ * (`assertHooksContained`), and every file it says it wrote is checked again once it is up.
  */
 import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:net'
-import { dirname, join, resolve } from 'node:path'
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
 import { isolatedTmux, type IsolatedTmux } from '../../src/testing/isolatedTmux.js'
@@ -16,6 +22,25 @@ import { isolatedTmux, type IsolatedTmux } from '../../src/testing/isolatedTmux.
 const exec = promisify(execFile)
 const here = dirname(fileURLToPath(import.meta.url))
 export const CLI_ROOT = resolve(here, '../..')
+
+/** What a fake engine's wrapper hands `fakeEngine.mjs` `run()`: where it writes, and which release it is. */
+export interface EngineConfig {
+  port: number
+  dataDir: string
+  claudeProjectsDir: string
+  codexHome: string
+  claudeModel?: string
+  codexModel?: string
+  /** The test's throwaway root: the engine runs no hooks from settings outside it. */
+  root: string
+  /** Where the engine notes each hook it ran. */
+  hookLog: string
+  version?: string
+  without?: string[]
+  startDelayMs?: number
+  firstHookDelayMs?: number
+  updateAvailable?: string
+}
 
 export interface DaemonOptions {
   /** Extra environment for the daemon. */
@@ -29,6 +54,16 @@ export interface DaemonOptions {
   noMaster?: boolean
   /** Run this bundle (an installed `cli.js`) instead of the checkout's source. */
   scriptPath?: string
+  /** Keep the daemon's data folder here instead of under the throwaway root (a test volume). The fake
+   *  engines read their hook credential from it, so it is set for them too. */
+  dataDir?: string
+  /** Run beside this daemon, as a dev daemon runs beside the release one on one computer: its home, its
+   *  tmux server, the engines' transcript folders and the projects, with a data folder, port and engines
+   *  of its own (`dataDir` and `port` can name the other's instead). Closing it leaves the shared tmux
+   *  server to the daemon it runs beside. */
+  beside?: IsolatedDaemon
+  /** Ask for this port instead of a free one: a daemon started on another daemon's port. */
+  port?: number
 }
 
 async function freePort(): Promise<number> {
@@ -38,6 +73,76 @@ async function freePort(): Promise<number> {
   await new Promise<void>((done) => server.close(() => done()))
   if (!address || typeof address === 'string') throw new Error('no free port')
   return address.port
+}
+
+/** Inside `root`, or `root` itself. */
+const inside = (root: string, path: string): boolean => {
+  const rel = relative(resolve(root), resolve(path))
+  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))
+}
+
+/** The engines whose hooks a daemon under test may install: the two the fake engines stand in for. */
+const HOOK_ENGINES = new Set(['claude', 'codex'])
+/** The shell profiles a login shell in a pane reads, where a person moves an engine's home. */
+const PROFILES = { ZDOTDIR: ['.zshenv', '.zprofile', '.zshrc', '.zlogin'], HOME: ['.bash_profile', '.bash_login', '.profile', '.bashrc'] }
+
+/**
+ * Refuse to start a daemon that could install hooks anywhere but inside the test's root. Claude Code's go
+ * into `$HOME/.claude/settings.json` and into every moved home (CLAUDE_CONFIG_DIR, in the daemon's
+ * environment, in the login shell's profile, or remembered in `engine-homes.json`); Codex's into
+ * `$CODEX_HOME/hooks.json` and every moved CODEX_HOME. Any of them outside the root would be the person's
+ * own settings, and their engines would then call a daemon that is gone when the test ends. Throws,
+ * naming the setting.
+ */
+export function assertHooksContained(root: string, env: NodeJS.ProcessEnv): void {
+  if (env.DISABLE_HOOK_INSTALL === 'true') return
+  const engines = (env.HOOK_INSTALL_ENGINES ?? '').split(',').map((name) => name.trim()).filter(Boolean)
+  if (!engines.length || engines.some((name) => !HOOK_ENGINES.has(name))) {
+    throw new Error(`HOOK_INSTALL_ENGINES is ${env.HOOK_INSTALL_ENGINES ?? 'unset'}: a daemon under test installs Claude Code's and Codex's hooks alone (claude,codex)`)
+  }
+  const refuse = (what: string, path: string | undefined): never => {
+    throw new Error(`${what} is ${path ?? 'unset'}: a daemon under test installs hooks only inside ${root}`)
+  }
+  const check = (what: string, path: string | undefined): void => {
+    if (!path || !isAbsolute(path) || !inside(root, path)) refuse(what, path)
+  }
+  check('HOME', env.HOME)
+  check('CODEX_HOME', env.CODEX_HOME)
+  if (env.CLAUDE_CONFIG_DIR !== undefined) check('CLAUDE_CONFIG_DIR', env.CLAUDE_CONFIG_DIR)
+  check('ZDOTDIR', env.ZDOTDIR)
+  for (const [folder, names] of Object.entries(PROFILES) as Array<[keyof typeof PROFILES, string[]]>) {
+    for (const name of names) {
+      const file = join(env[folder]!, name)
+      let text = ''
+      try { text = readFileSync(file, 'utf8') } catch { continue }
+      for (const match of text.matchAll(/(?:^|[\s;])(?:export\s+)?(CLAUDE_CONFIG_DIR|CODEX_HOME)=("([^"]*)"|'([^']*)'|([^\s;]*))/gm)) {
+        const value = match[3] ?? match[4] ?? match[5]
+        // A value built from another variable cannot be checked from here, so it is not allowed.
+        if (value.includes('$') || value.includes('~')) refuse(`${match[1]} in ${file}`, value)
+        check(`${match[1]} in ${file}`, value)
+      }
+    }
+  }
+  try {
+    const remembered = JSON.parse(readFileSync(join(env.ADAPTER_DATA_DIR!, 'engine-homes.json'), 'utf8')) as Record<string, unknown>
+    for (const [engine, homes] of Object.entries(remembered)) {
+      for (const home of Array.isArray(homes) ? homes : []) check(`the ${engine} home remembered in engine-homes.json`, String(home))
+    }
+  } catch { /* none remembered yet */ }
+}
+
+/**
+ * The files a daemon's log says it installed hooks or plugins into, found them already in, or left alone.
+ * The update line names the hook script first and the file it rewrote after ` in `.
+ */
+export function hookFilesNamed(log: string): string[] {
+  const files: string[] = []
+  for (const line of log.split('\n')) {
+    if (!line.includes('[hooks]')) continue
+    const named = line.includes('updated (path/port changed)') ? / in (\/\S+)\s*$/.exec(line) : /(?:→|unchanged:) (\/\S+)/.exec(line)
+    if (named) files.push(named[1])
+  }
+  return files
 }
 
 export const until = async <T>(what: string, probe: () => Promise<T | null | undefined | false> | T | null | undefined | false, ms = 30_000, every = 100): Promise<T> => {
@@ -53,6 +158,9 @@ export const until = async <T>(what: string, probe: () => Promise<T | null | und
   throw new Error(`timed out after ${ms}ms waiting for ${what}${last ? ` (last error: ${String(last)})` : ''}`)
 }
 
+/** How many daemons have been started beside another in this process: each gets its own folder. */
+let besideCount = 0
+
 export class IsolatedDaemon {
   child: ChildProcess | null = null
   private output = ''
@@ -63,21 +171,28 @@ export class IsolatedDaemon {
     readonly port: number,
     readonly env: NodeJS.ProcessEnv,
     readonly options: DaemonOptions,
+    /** What the fake engines' wrappers hand `fakeEngine.mjs` (updates.e2e.ts writes releases with it). */
+    readonly engineConfig: EngineConfig,
   ) {}
 
   static async create(options: DaemonOptions = {}): Promise<IsolatedDaemon> {
-    const tmux = await isolatedTmux()
+    const beside = options.beside
+    const tmux = beside?.tmux ?? await isolatedTmux()
     const root = tmux.root
-    const port = await freePort()
+    const port = options.port ?? await freePort()
+    // What a daemon beside another keeps for itself; everything else is the computer's, and shared. Short
+    // names: the socket lives in the data folder, and a Unix socket's path has room for 96 bytes.
+    const own = beside ? join(root, `b${++besideCount}`) : root
     const dirs = {
-      home: join(root, 'home'), data: join(root, 'data'), runtime: join(root, 'runtime'), auth: join(root, 'auth'),
-      bin: join(root, 'bin'), dsh: join(root, 'dsh'), claudeProjects: join(root, 'claude', 'projects'), codexHome: join(root, 'codex'),
+      home: join(root, 'home'), data: options.dataDir ?? join(own, beside ? 'd' : 'data'), runtime: join(own, 'runtime'), auth: join(own, 'auth'),
+      bin: join(own, 'bin'), dsh: join(own, 'dsh'), claudeProjects: join(root, 'claude', 'projects'), codexHome: join(root, 'codex'),
       projects: join(root, 'projects'),
     }
     for (const dir of Object.values(dirs)) await mkdir(dir, { recursive: true })
-    const config = {
+    const config: EngineConfig = {
       port, dataDir: dirs.data, claudeProjectsDir: dirs.claudeProjects, codexHome: dirs.codexHome,
       claudeModel: options.claudeModel, codexModel: options.codexModel,
+      root, hookLog: join(own, 'fake-engine-hooks.log'),
     }
     const engine = pathToFileURL(join(here, 'fakeEngine.mjs')).href
     for (const name of ['claude', 'codex']) {
@@ -106,7 +221,11 @@ export class IsolatedDaemon {
       // Signed out, and nothing reaches beyond the machine.
       BACKEND_WS_URL: 'ws://127.0.0.1:9',
       WEB_URL: 'http://127.0.0.1:9',
-      DISABLE_HOOK_INSTALL: 'true',
+      // Claude Code's and Codex's hooks, installed as on a person's computer, into this home and CODEX_HOME
+      // (assertHooksContained), and run by the fake engines. Every other engine's installer writes into
+      // folders these tests have no engine for.
+      DISABLE_HOOK_INSTALL: 'false',
+      HOOK_INSTALL_ENGINES: 'claude,codex',
       ADAPTER_UPDATE_DISABLE: 'true',
       ANALYTICS_ENABLED: 'false',
       RECAP_FORCE: 'false',
@@ -118,7 +237,24 @@ export class IsolatedDaemon {
       TERMINAL_RECONCILE_INTERVAL_MS: '5000',
       ...options.env,
     }
-    return new IsolatedDaemon(root, tmux, port, env, options)
+    // A Claude Code home moved in the environment this run was started from is the person's: the daemon
+    // would adopt it and install its hooks there (lib/engineHomes.ts). Only a test may move one.
+    if (!options.env || !('CLAUDE_CONFIG_DIR' in options.env)) delete env.CLAUDE_CONFIG_DIR
+    return new IsolatedDaemon(root, tmux, port, env, options, config)
+  }
+
+  /** What the fake engines noted of every hook they ran (fakeEngine.mjs `hookLog`); kept once the root is gone. */
+  hookLog(): string {
+    try { return readFileSync(this.engineConfig.hookLog, 'utf8') } catch { return this.closedHookLog }
+  }
+  private closedHookLog = ''
+
+  /** Throws when the daemon said it put hooks outside the root, or an engine refused hooks found there. */
+  private assertHooksStayedInside(): void {
+    const outside = hookFilesNamed(this.output).filter((file) => !inside(this.root, file))
+    if (outside.length) throw new Error(`the daemon under test wrote hooks outside ${this.root}: ${[...new Set(outside)].join(', ')}`)
+    const refused = this.hookLog().split('\n').filter((line) => line.includes('REFUSED'))
+    if (refused.length) throw new Error(`a fake engine refused to run hooks (test root ${this.root}):\n${refused.join('\n')}`)
   }
 
   get dataDir(): string { return this.env.ADAPTER_DATA_DIR! }
@@ -145,11 +281,15 @@ export class IsolatedDaemon {
    *  `'none'` as soon as the process is started. */
   async start(options: { ready?: 'none' | 'port' | 'wired' } = {}): Promise<void> {
     if (this.child) throw new Error('already running')
+    // Checked at every start: a test writes a shell profile, or the data folder remembers a home, between them.
+    assertHooksContained(this.root, this.env)
     const heap = this.options.heapMiB ? [`--max-old-space-size=${this.options.heapMiB}`] : []
     const entry = this.options.noMaster ? '__run' : '__harnessd'
     // Readiness is judged from what this start prints, never from an earlier boot's lines.
     const from = this.output.length
-    const script = this.options.scriptPath ? [this.options.scriptPath] : ['--import', 'tsx', 'src/cli.ts']
+    // A test's own bundle (an old release), the run's bundle (`E2E_BUNDLE`, see bundle.ts), or the sources.
+    const bundle = this.options.scriptPath ?? process.env.E2E_BUNDLE_PATH
+    const script = bundle ? [bundle] : ['--import', 'tsx', 'src/cli.ts']
     const child = spawn(process.execPath, [...heap, ...script, entry], {
       cwd: CLI_ROOT, env: this.env, stdio: ['ignore', 'pipe', 'pipe'],
     })
@@ -173,6 +313,8 @@ export class IsolatedDaemon {
       // test); this line is printed once they are.
       if (options.ready !== 'port') {
         await until('the daemon to finish starting', () => /\[cli\] ready/.test(this.output.slice(from)), 60_000, 100)
+        // Its hooks are installed before it says it is ready.
+        this.assertHooksStayedInside()
       }
     })()])
   }
@@ -226,7 +368,25 @@ export class IsolatedDaemon {
   }
 
   async close(): Promise<void> {
+    const core = this.options.noMaster ? null : this.corePid()
     await this.stop().catch(() => {})
-    await this.tmux.close()
+    // Once the daemon has said all it will, and before the root (and the engines' hook log) is removed.
+    let escaped: unknown = null
+    try { this.assertHooksStayedInside() } catch (error) { escaped = error }
+    // A failed test prints it after this close has removed the root.
+    this.closedHookLog = this.hookLog()
+    // A core whose master died during the test must not outlive it: 20 such cores, left by a run
+    // whose masters crashed, spun on their closed output pipes for the rest of a parallel suite. Only
+    // this test's core is killed — its pid, still running this daemon's entry, orphaned or ours.
+    if (core && IsolatedDaemon.alive(core)) {
+      const { stdout } = await exec('ps', ['-o', 'ppid=,command=', '-p', String(core)]).catch(() => ({ stdout: '' }))
+      const [ppid, ...command] = stdout.trim().split(/\s+/)
+      if (command.join(' ').includes('__run') && (ppid === '1' || Number(ppid) === this.pid)) {
+        try { process.kill(core, 'SIGKILL') } catch { /* gone */ }
+      }
+    }
+    // A daemon beside another shares its tmux server: that one closes it.
+    if (!this.options.beside) await this.tmux.close()
+    if (escaped) throw escaped
   }
 }

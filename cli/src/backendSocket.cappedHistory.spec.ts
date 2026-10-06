@@ -28,6 +28,7 @@ vi.mock('./lib/transcriptTail.js', async (importOriginal) => {
 
 import { BackendSocket } from './backendSocket.js'
 import { registry } from './lib/registry.js'
+import { bindHistory } from './testing/socketCore.js'
 
 afterAll(() => rmSync(roots.base, { recursive: true, force: true }))
 
@@ -40,6 +41,7 @@ describe('session_get past the cap, for an engine without pages', () => {
 
   beforeEach(() => {
     socket = new BackendSocket('fixture')
+    bindHistory(socket)
     frames = []
     socket.registerLocalClient('local:capped', { sendFrame: (frame) => { frames.push(frame as never); return true }, sendBinary: () => true })
     vi.spyOn(console, 'warn').mockImplementation(() => {})

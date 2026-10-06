@@ -1,16 +1,23 @@
 import { homedir } from 'node:os'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { buildEngineLaunchArgv } from '../../lib/engineLaunch.js'
+import { engineBin, enginePathOverride } from '../../lib/engineBin.js'
+import { engineInstallRecipe } from '../../lib/engineInstall.js'
+import { buildEngineLaunchArgv, commandAvailableInInteractiveShell } from '../../lib/engineLaunch.js'
 import { probeGatewayRuntime } from '../../lib/gatewayRuntime.js'
 import { probeGridAssignment } from '../../lib/gridAssignment.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { AgentRestartCoordinator, bypassPermissionFor, restartAgent } from '../../lib/restartAgent.js'
 import { terminalRouteKey } from '../../lib/terminalRuntime.js'
-import { clearPaneRemainOnExit } from '../../lib/tmux.js'
+import { clearPaneRemainOnExit, processArgs } from '../../lib/tmux.js'
 import { workspaceMissing } from '../../lib/workspaceCheck.js'
 import { createAgentRestarter, type RestartDeps } from './restart.js'
 
-vi.mock('../../lib/engineLaunch.js', async (real) => ({ ...await real<object>(), buildEngineLaunchArgv: vi.fn(() => ['zsh', '-l']) }))
+vi.mock('../../lib/engineBin.js', async (real) => ({ ...await real<object>(), enginePathOverride: vi.fn(() => undefined) }))
+vi.mock('../../lib/engineLaunch.js', async (real) => ({
+  ...await real<object>(),
+  buildEngineLaunchArgv: vi.fn(() => ['zsh', '-l']),
+  commandAvailableInInteractiveShell: vi.fn(async () => true),
+}))
 vi.mock('../../lib/gatewayRuntime.js', async (real) => ({ ...await real<object>(), probeGatewayRuntime: vi.fn(async () => ({ kind: 'none' })) }))
 vi.mock('../../lib/gridAssignment.js', async (real) => ({ ...await real<object>(), probeGridAssignment: vi.fn(async () => undefined) }))
 vi.mock('../../lib/restartAgent.js', async (real) => ({
@@ -18,7 +25,10 @@ vi.mock('../../lib/restartAgent.js', async (real) => ({
   bypassPermissionFor: vi.fn(async (_s: unknown, live: () => Promise<boolean>) => live()),
   restartAgent: vi.fn(async () => ({ ok: true, resumed: true, processIdentity: { pid: 2, startMarker: 'new', executable: '/bin/claude' } })),
 }))
-vi.mock('../../lib/tmux.js', async (real) => ({ ...await real<object>(), clearPaneRemainOnExit: vi.fn(async () => {}) }))
+vi.mock('../../lib/tmux.js', async (real) => ({
+  ...await real<object>(), clearPaneRemainOnExit: vi.fn(async () => {}),
+  processArgs: vi.fn(async () => '/bin/claude --model opus -c model_provider=grid'),
+}))
 vi.mock('../../lib/workspaceCheck.js', () => ({ workspaceMissing: vi.fn(() => null) }))
 
 const runtime = { backend: 'tmux', paneId: '%4' }
@@ -94,6 +104,43 @@ describe('restarting an agent', () => {
       const run = setup()
       expect(await run.restart('a1')).toEqual({ ok: false, error: 'CWD_NOT_FOUND', detail: 'gone' })
       expect(workspaceMissing).toHaveBeenCalledWith('/work')
+      expect(run.deps.relaunchOverrides).not.toHaveBeenCalled()
+      expect(restartAgent).not.toHaveBeenCalled()
+    })
+
+    it('for an engine uninstalled since the agent started, before anything is touched, and the agent goes on', async () => {
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
+      vi.mocked(commandAvailableInInteractiveShell).mockResolvedValueOnce(false)
+      const run = setup()
+      expect(await run.restart('a1')).toEqual({
+        ok: false, error: 'ENGINE_NOT_INSTALLED', detail: 'claude is not installed. Install it, then restart again. Nothing was stopped.',
+      })
+      // Asked as create asks: the launch's own command, and the install recipe unless a path was set.
+      expect(commandAvailableInInteractiveShell).toHaveBeenCalledWith(engineBin('claude'), undefined, engineInstallRecipe('claude'))
+      expect(console.warn).toHaveBeenCalledWith('[restart] a1 refused · claude is not installed')
+      expect(run.deps.relaunchOverrides).not.toHaveBeenCalled()
+      expect(run.deps.agentReconciler.holdRoute).not.toHaveBeenCalled()
+      expect(restartAgent).not.toHaveBeenCalled()
+
+      vi.mocked(enginePathOverride).mockReturnValueOnce('/opt/claude')
+      vi.mocked(commandAvailableInInteractiveShell).mockResolvedValueOnce(false)
+      expect(await setup().restart('a1')).toMatchObject({ ok: false, error: 'ENGINE_NOT_INSTALLED' })
+      expect(vi.mocked(commandAvailableInInteractiveShell).mock.calls[1][2]).toBeUndefined()
+    })
+
+    it('but not on a no from a shell that gave up: a slow rc file is not a missing engine', async () => {
+      // The check starts at 0, and the shell's no comes at 5s, when the probe gives up waiting for it.
+      const clock = vi.spyOn(Date, 'now').mockReturnValue(0)
+      vi.mocked(commandAvailableInInteractiveShell).mockImplementationOnce(async () => { clock.mockReturnValue(5_000); return false })
+      const run = setup()
+      expect(await run.restart('a1')).toEqual({ ok: true, session: agent(), resumed: true })
+      expect(restartAgent).toHaveBeenCalled()
+    })
+
+    it('and stops, touching nothing, when the operation is overtaken while the engine is looked for', async () => {
+      const run = setup()
+      vi.mocked(commandAvailableInInteractiveShell).mockImplementationOnce(async () => { run.state.live = false; return false })
+      expect(await run.restart('a1')).toEqual(changed)
       expect(run.deps.relaunchOverrides).not.toHaveBeenCalled()
       expect(restartAgent).not.toHaveBeenCalled()
     })
@@ -190,7 +237,9 @@ describe('restarting an agent', () => {
       expect(swapDeps.isCurrent?.()).toBe(true)
       expect(run.deps.refreshGridWebSearch).toHaveBeenCalledWith('a1', { env: { GRID_KEY: 'k' } })
       expect(probeGatewayRuntime).toHaveBeenCalledWith(newProcess)
-      expect(probeGridAssignment).toHaveBeenCalledWith(newProcess, 'claude', '/bin/claude')
+      // Its command line, where a Codex or pi grid's address and model are: never its executable alone.
+      expect(processArgs).toHaveBeenCalledWith(newProcess)
+      expect(probeGridAssignment).toHaveBeenCalledWith(newProcess, 'claude', '/bin/claude --model opus -c model_provider=grid')
       expect(run.deps.registry.updateProcessIdentity).toHaveBeenCalledWith('a1', newProcess, 'none', undefined)
       expect(run.deps.registry.setActive).toHaveBeenCalledWith('a1', true)
       expect(clearPaneRemainOnExit).toHaveBeenCalledWith('%4')

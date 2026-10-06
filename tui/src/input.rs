@@ -3449,7 +3449,7 @@ mod tests {
 
         // Level one: the section list, not the whole flat gallery — sections only, no groups.
         assert!(picker.theme_in.is_none(), "opens on the sections");
-        assert_eq!(picker.rows.first().map(|r| r.id.as_str()), Some("section:status"));
+        assert_eq!(picker.rows.first().map(|r| r.id.as_str()), Some("section:theme"));
         assert!(picker.rows.iter().all(|r| r.id.starts_with("section:")), "level one lists sections only");
 
         // Each section opens onto its options; the theme section lists every bundled theme.
@@ -3478,13 +3478,13 @@ mod tests {
             let Modal::Picker { kind, picker } = app.modal.take().unwrap() else { panic!() };
             assert!(matches!(kind, PickerKind::Theme));
             assert!(picker.theme_in.is_none(), "opens on the sections");
-            assert_eq!(picker.current_id().as_deref(), Some("section:status"));
+            assert_eq!(picker.current_id().as_deref(), Some("section:theme"));
             choose(&mut app, kind, picker, Choice::Enter);
         }
         let Modal::Picker { kind, picker } = app.modal.as_ref().unwrap() else { panic!() };
         assert!(matches!(kind, PickerKind::Theme));
-        assert_eq!(picker.theme_in.as_deref(), Some("status"), "Enter opened the section");
-        assert!(picker.rows.iter().all(|r| r.id.starts_with("border_status:")), "the section's options show");
+        assert_eq!(picker.theme_in.as_deref(), Some("theme"), "Enter opened the section");
+        assert!(picker.rows.iter().all(|r| r.id.starts_with("theme:")), "the section's options show");
         assert!(picker.rows.iter().any(|r| r.lead.iter().any(|s| s.content.as_ref() == "✓ ")), "the current option is marked");
     }
 }

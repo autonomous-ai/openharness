@@ -41,7 +41,9 @@ export class LocalClient {
     ws.on('close', (code) => { this.closed = true; this.closeCode = code })
   }
 
-  static async connect(daemon: IsolatedDaemon, options: { tcp?: boolean; tool?: boolean } = {}): Promise<LocalClient> {
+  /** `machineId`: the machine to select — a signed-in daemon serves under its account's machine id, a
+   *  signed-out one under its computer id (the default). */
+  static async connect(daemon: IsolatedDaemon, options: { tcp?: boolean; tool?: boolean; machineId?: string } = {}): Promise<LocalClient> {
     const url = options.tcp
       ? `ws://127.0.0.1:${daemon.port}/api/local-ws`
       : `ws+unix://${daemon.socketPath}:/api/local-ws`
@@ -51,7 +53,7 @@ export class LocalClient {
       ws.once('error', reject)
     })
     const client = new LocalClient(ws)
-    client.send('machine_select', { machineId: daemon.computerId, localProtocolVersion: 1, ...(options.tool ? { tool: true } : {}) })
+    client.send('machine_select', { machineId: options.machineId ?? daemon.computerId, localProtocolVersion: 1, ...(options.tool ? { tool: true } : {}) })
     await client.waitFor((frame) => frame.type === 'connected', 10_000, 'connected')
     return client
   }

@@ -27,6 +27,8 @@ export interface SafeModeMarker {
 export interface SafeModeDisposition {
   stay: boolean
   reason: string
+  /** Leave so as to be started again: what stands in the way is leaving too (lib/localSocket.ts). */
+  retry?: true
 }
 
 /** Thrown at the top of start-up when harnessd's master asks for safe mode: the core kept crashing. */
@@ -52,6 +54,15 @@ export function safeModeDisposition(
   if (/EADDRINUSE|address already in use/i.test(message)) {
     return { stay: false, reason: 'the control port belongs to another daemon' }
   }
+  // The data folder's socket refusing us (lib/localSocket.ts): another daemon serves it now, whether or
+  // not it has claimed the pid file yet. Read off the code, which the message does not carry: a second
+  // master's core that lost the race before the winner's claim would otherwise stay up in safe mode, and
+  // its master claim the pid file over the daemon that is serving (e2e/twodaemons.e2e.ts).
+  if ((error as { code?: unknown } | null | undefined)?.code === 'EADDRINUSE') return { stay: false, reason: message }
+  // The core of a master that is gone, still leaving once the wait for it was over: this core goes, and is
+  // started again by its master, which by then finds the folder free. Gone for good instead, its master
+  // went with it, cleanly, and launchd and systemd do not start a clean exit again.
+  if ((error as { code?: unknown } | null | undefined)?.code === 'ORPHAN_STILL_SERVING') return { stay: false, reason: message, retry: true }
   const owner = deps.readPid()
   // Under harnessd the pid file names the master that runs this core: that daemon is this one.
   if (owner !== null && owner !== deps.selfPid && owner !== deps.masterPid && deps.isAlive(owner)) {

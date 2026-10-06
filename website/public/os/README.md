@@ -2,7 +2,7 @@
 
 A single-screen hero: Harness, the headline, Install, Open Source, and one
 animated OS illustration, followed by two short sections about the agent interface
-and measured system footprint. Plain HTML/CSS and a small vanilla JavaScript timeline;
+and measured performance. Plain HTML/CSS and a small vanilla JavaScript timeline;
 no framework, analytics, remote fonts, backend, or build step. An actual OS
 screenshot remains the fallback when JavaScript is unavailable.
 
@@ -46,16 +46,22 @@ The additional sections retain the same typography and column edges. The stylesh
 hash so a refresh cannot reuse styling from the previous long page.
 Tiny viewports at extreme text zoom may scroll so content is never inaccessible.
 
-The metrics describe the currently published preview 13, explicitly labeled as
-VM measurements. Run `37255459559` measured an encrypted UEFI, 1 GiB Nehalem VM:
-17.990 seconds from boot to Harness readiness including automated unlock/login,
-660.88 MiB median idle RAM with OpenCode and two terminals (43.95 MiB swap), and
-2,187,739,136 bytes of installed disk usage. The page rounds these to 18 s,
-661 MiB, 44 MiB swap, and 2.04 GiB. This run did not time installation, so the
-page says installation works offline without inventing a duration. Do not
-substitute the smaller terminal-only memory measurement or call these physical
-hardware timings. Image SHA-256:
-`4471d91e456a632952eced4ccb843f3bf47df944f385d677833b53b04ce4899e`.
+The performance section contains only four labeled numbers: installation time,
+boot time, idle RAM, and footprint. No footnote, update instructions, or expanded disclosure.
+The accessible group label identifies the VM measurement and terminal-only idle
+state; full methodology stays here.
+
+[Run 37258641766](https://github.com/autonomous-ai/openharness/actions/runs/37258641766)
+measured preview 14 in an encrypted UEFI, 1 GiB Nehalem VM: 57.133 seconds for the
+installation command, 17.683 seconds from boot to Harness readiness including
+automated unlock/login, and 402.30 MiB median terminal-only idle RAM with OpenCode
+and the browser closed (26.53 MiB swap). Installed root usage including home and
+snapshots is 2,203,791,360 bytes. The page rounds these to 57 s, 18 s, 402 MiB, and
+2.05 GiB. Installation timing excludes entering the form. Ten idle samples follow
+a settling period; the diagnostic login and observer are included. These are VM
+measurements, not physical hardware timings or active-agent memory consumption.
+Image SHA-256:
+`fa4f282644ac81e9e3b7de55276edd7dc08405e50875da544dc7f9fd6d50ba12`.
 Refresh all figures and their evidence links together when the measured image changes.
 
 ## Animation

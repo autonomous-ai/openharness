@@ -14,7 +14,7 @@
   <title>Harness — The operating system built by agents, for agents</title>
   <link rel="icon" href="assets/mark.svg" type="image/svg+xml">
   <link rel="preload" href="assets/geist-mono.woff" as="font" type="font/woff" crossorigin>
-  <link rel="stylesheet" href="style.css?v=6680fc59d052">
+  <link rel="stylesheet" href="style.css?v=655c60ec55d3">
   <script src="demo.js?v=5aa0cbec5e22" defer></script>
 </head>
 <body>
@@ -108,20 +108,14 @@
     </div>
   </section>
   <section class="chapter chapter-metrics" aria-labelledby="speed-heading">
-    <h2 id="speed-heading">Small on disk.<br>Quick to work.</h2>
+    <h2 id="speed-heading">Fast to install.<br>Light to run.</h2>
     <div class="chapter-copy">
-      <dl class="metrics">
-        <div><dt>Install from USB</dt><dd>Offline</dd></div>
-        <div><dt>Boot to Harness</dt><dd>18 s</dd></div>
-        <div><dt>RAM with OpenCode</dt><dd>661 MiB</dd></div>
-        <div><dt>Installed system</dt><dd>2.04 GiB</dd></div>
+      <dl class="metrics" aria-label="Preview 14 performance measured in a 1 GiB virtual machine; idle RAM excludes OpenCode and the browser">
+        <div><dt>Install time</dt><dd>57 s</dd></div>
+        <div><dt>Boot time</dt><dd>18 s</dd></div>
+        <div><dt>Idle RAM</dt><dd>402 MiB</dd></div>
+        <div><dt>Footprint</dt><dd>2.05 GiB</dd></div>
       </dl>
-      <p>Install from USB, even offline. Boot into your workspace. Press Super+u to update without reinstalling.</p>
-      <details class="measurement-note">
-        <summary>Preview 13 · measured in a 1 GiB VM</summary>
-        <p>Encrypted UEFI installation, Nehalem CPU profile. Boot time includes automated disk unlock and login. Disk usage includes OpenCode and the browser. RAM is median idle system usage with OpenCode and two terminals, plus 44 MiB of swap. Hardware and workloads change these numbers.</p>
-        <p><a href="https://github.com/autonomous-ai/openharness/actions/runs/37255459559">Measurements and test conditions ↗</a></p>
-      </details>
     </div>
   </section>
   </main>

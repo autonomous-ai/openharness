@@ -374,8 +374,33 @@ def check_graphical_keyboard(vm, name):
     """Prove the installed graphical surface accepts input and renders output."""
     started = time.monotonic()
     vm.command('pgrep -x labwc >/dev/null && pgrep -x foot >/dev/null')
+    # A running renderer or the daemon's discovery endpoint can precede the
+    # first graphical frame. The saved workspace must actually be visible
+    # before sending its shortcut; otherwise early keystrokes can be lost.
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        vm.screenshot(name + '-ready')
+        visible = subprocess.check_output(
+            ['tesseract', str(vm.folder / (name + '-ready.png')), 'stdout', '--psm', '11'],
+            text=True, stderr=subprocess.DEVNULL, timeout=10)
+        if 'me@harness' in re.sub(r'\s+', '', visible):
+            break
+        time.sleep(.25)
+    else:
+        raise RuntimeError('The graphical workspace did not render before keyboard input.')
+    previous, _ = vm.command('hn display-message -p "HN_PREVIOUS_PANE=#{pane_id}"')
+    previous_pane = re.search(r'HN_PREVIOUS_PANE=(%\d+)', previous)
+    if not previous_pane:
+        raise RuntimeError('Keyboard probe could not identify the original pane.')
     vm.keys('ctrl', 'b')
     vm.keys('shift', 't')
+    # New terminal is asynchronous. Require both a newly focused pane and its
+    # empty shell prompt before typing, rather than sleeping for a guessed time.
+    vm.command('for n in $(seq 1 60); do '
+               'current=$(hn display-message -p "#{pane_id}"); '
+               'if test "$current" != ' + shlex.quote(previous_pane[1]) +
+               ' && hn capture-pane -p | grep -Eq ' + shlex.quote(r'^\[me@harness [^]]*\]\$$') +
+               '; then exit 0; fi; sleep .25; done; exit 1', timeout=25)
     marker = 'keyboard-' + name + '-ready'
     vm.type_probe('echo ' + marker)
     vm.keys('ret')
@@ -466,11 +491,22 @@ def check_first_use(vm, user, folder, installed=False):
     assert defaults.get('update') == 'disable', 'The packaged agent must remain managed by system updates'
     if installed:
         vm.command('test ! -e /etc/harness-live && test "$(id -un)" = me')
-        vm.command('for n in $(seq 1 40); do hn capture-pane -p | grep -q "Connect to Wi-Fi to get started" && exit 0; sleep .5; done; exit 1', timeout=30)
+        vm.command('for n in $(seq 1 40); do hn capture-pane -p | grep -q "Connect to Wi-Fi" && exit 0; sleep .5; done; exit 1', timeout=30)
         vm.screenshot('installed-network-first')
         vm.command('! pgrep -u 1000 -x opencode')
         vm.keys('esc')
-        vm.command('hn capture-pane -p | grep -q "Connect to Wi-Fi to get started"')
+        vm.command('hn capture-pane -p | grep -q "Connect to Wi-Fi"')
+        # Networking must never trap the owner. Use the compositor shortcut,
+        # then prove real keyboard input reaches a shell while still offline.
+        vm.keys('meta_l', 't')
+        # capture-pane trims trailing cells, including the prompt's last space.
+        vm.command("for n in $(seq 1 30); do hn capture-pane -p | grep -Eq '^\\[me@harness [^]]*\\]\\$$' && exit 0; sleep .25; done; exit 1", timeout=15)
+        vm.type_probe('echo offline-terminal-ready')
+        vm.keys('ret')
+        vm.command('for n in $(seq 1 30); do hn capture-pane -p | grep -qx offline-terminal-ready && exit 0; sleep .5; done; exit 1', timeout=20)
+        vm.screenshot('installed-offline-terminal')
+        vm.keys('ctrl', 'd')
+        vm.command('for n in $(seq 1 30); do hn capture-pane -p | grep -q "Connect to Wi-Fi" && exit 0; sleep .5; done; exit 1', timeout=20)
     else:
         vm.command('test "$(uname -n)" = harness && test "$(id -nu 1000)" = me && test -f /etc/harness-live')
         vm.command('nmcli networking off')
@@ -817,12 +853,14 @@ if status:
         vm.screenshot('install-03-ready')
         # Finishing password entry only focuses Install. No disk has changed yet.
         vm.command('test "$(lsblk -n -o TYPE /dev/vda | wc -l)" -eq 1')
+        install_started = time.monotonic()
         vm.keys('ret')
         if progress_status == 0:
             progress = wait_screen('Preparing the disk|Setting up encryption|Copying Harness|Setting up your account', timeout=30)
             assert 'Keep this computer powered on' not in progress and 'Installing Harness' not in progress
             vm.screenshot('install-04-progress')
         output = wait_screen('Harness is installed', timeout=900)
+        install_seconds = round(time.monotonic() - install_started, 3)
         vm.screenshot('install-05-complete')
         if direct:
             assert 'Back to Harness' not in output
@@ -833,6 +871,8 @@ if status:
         output, _ = vm.command('cat /var/log/harness-install.log 2>/dev/null', check=False)
         (folder / 'installer-commands.log').write_text(output)
         assert config['password'] not in output, 'Installation diagnostics must not contain the password'
+    # This includes input delivery and success-screen observation, not form entry.
+    return install_seconds
 
 
 def check_installer_cleanup(vm, folder):
@@ -996,7 +1036,7 @@ def main():
             (folder / 'trial-project.html').write_bytes(vm.read_file(trial_project))
         vm.command(user('sh -c ' + shlex.quote('mkdir -p "$HOME/.config"; printf trial-only > "$HOME/.config/hn-trial-credential"')))
         vm.command('nmcli networking off')
-        install_interactively(vm, config, folder, direct=direct)
+        result['install_action_to_success_seconds'] = install_interactively(vm, config, folder, direct=direct)
         result['checks'].append('Keyboard disk selection, encryption checkbox, masked password entry and a single Install action work on the guest terminal')
         result['checks'].append('Offline installer completed on disposable disk')
         if config['encrypt']:

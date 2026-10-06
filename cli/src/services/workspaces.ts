@@ -37,12 +37,20 @@ export function startWorkspaces(core: CoreApi, ports: CorePorts): void {
   // Worktrees Harness made that no live or stopped harness uses and nothing would miss
   // (lib/worktreeSweep.ts). The core decides when: a few minutes after start, once restored agents
   // are back in the registry, then twice a day.
+  //
+  // One sweep at a time: a sweep still going is never joined by a second over the same folders. In the
+  // core's process its timers are hours apart; in this service's own process, a core that restarted
+  // asks again on its own timer while a long sweep from the last core may still be running.
+  let sweeping = false
   const sweepUnusedWorktrees = () => {
+    if (sweeping) return
     let inUse: Array<string | null>
     try { inUse = core.agents.all().map(s => s.cwd) } catch { return }
+    sweeping = true
     void sweepWorktrees({ root: join(homedir(), 'harnesses'), inUse })
       .then(removed => { if (removed.length) console.log(`[worktrees] removed ${removed.length} unused worktree(s)`) })
       .catch(() => {})
+      .finally(() => { sweeping = false })
   }
   ports.workspaces = { nameBranches: nameSessionBranches, sweepUnused: sweepUnusedWorktrees }
 }
