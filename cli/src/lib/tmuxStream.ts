@@ -880,7 +880,10 @@ export class TmuxControlStream implements TerminalStreamHandle<TmuxRuntimeRef> {
     // such as Grok preserve those intermediate repaint fragments in the live
     // screen. The next controller will resize only if its grid truly differs.
     if (this.child.stdin.writable) {
-      try { this.child.stdin.write('detach-client\n') } catch { /* ignore */ }
+      // Found by QA on a quiet machine: a watcher could close before its attach completed. tmux's
+      // untargeted detach-client then falls back to another attached client, closing the window
+      // still driving the pane. EOF closes only this control client's connection, attached or not.
+      try { this.child.stdin.end() } catch { /* ignore */ }
     }
     const exited = await new Promise<boolean>((resolve) => {
       if (this.child.exitCode != null || this.child.signalCode != null) { resolve(true); return }
