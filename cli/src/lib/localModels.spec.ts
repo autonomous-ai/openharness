@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { createHash } from 'node:crypto'
 import { rmSync, writeFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
-import { baseModel, compatibleModels, contextLadder, LocalModels, modelBudget, modelFamily, rankForCoding, readRunRecords, type GridInventory } from './localModels.js'
+import { baseModel, compatibleModels, contextLadder, JEV_MODELS, jevMemory, LocalModels, modelBudget, modelFamily, rankForCoding, readRunRecords, type GridInventory } from './localModels.js'
 import { GridFleetRpc, type GridFleetResult } from './gridFleetRpc.js'
 import type { AppEngineOps, AppEngineRecord, AppModel } from './appModels.js'
 import { encryptDownFrame, encryptRpcResult } from './e2ee/applicationFrames.js'
@@ -128,7 +128,7 @@ describe('local model discovery and lifecycle', () => {
     expect(snapshot.models[0]).toMatchObject({ state: 'running', canStop: true,
       tokensPerSecond: 17.6, requests: 4, windowSeconds: 3600, operation: { phase: 'done', stage: 'verifying' } })
     expect(snapshot.models[0]).not.toHaveProperty('memoryBytes')
-    expect(calls.find(args => args.includes('join'))).toEqual(['--remote', 'join', 'home', '--serve', 'Small-Q4.gguf', '--max-concurrency', '1', '--ctx-size', '131072', '--endpoint-port', expect.stringMatching(/^\d+$/), '--reasoning-budget', '0'])
+    expect(calls.find(args => args.includes('join'))).toEqual(['--remote', 'join', 'home', '--serve', 'Small-Q4.gguf', '--max-concurrency', '5', '--parallel', '1', '--ctx-size', '131072', '--endpoint-port', expect.stringMatching(/^\d+$/), '--reasoning-budget', '0'])
     expect(request.mock.calls.some(([url]) => String(url).includes(RELAY_CHAT))).toBe(true)
     expect(await readFile(join(stateDir, (await readdir(stateDir))[0]), 'utf8')).not.toContain('token')
   })
@@ -277,6 +277,20 @@ describe('local model discovery and lifecycle', () => {
     await fresh.act('home', first.models[0].id, 'start'); await fresh.settled()
     expect(calls.some(args => args[0] === 'pull')).toBe(false)
     expect((await fresh.list('home')).models[0].operation?.phase).toBe('done')
+  })
+
+  it("knows Grid's own engine by its own names when another engine joins beside it", async () => {
+    catalogCards = []
+    await writeFile(join(home, 'models', 'Small-Q4.gguf'), Buffer.alloc(64))
+    // A Jev model joined beside it: each engine carries its own names, the record's flat list all of them.
+    await writeFile(join(records, 'remote.json'), JSON.stringify({ node_id: 'local-node', advertise_as: ['small', 'kev-0.8b'],
+      engines: [{ endpoint_url: null, models: ['Small-Q4.gguf'], advertise_as: ['small'] },
+        { endpoint_url: 'http://127.0.0.1:50872/v1', models: ['kev-0.8b'], advertise_as: ['kev-0.8b'] }] }))
+    await writeFile(join(records, 'remote.heartbeat'), '')
+    inventory.mockImplementation(async () => ({ state: 'awake', status: 'running',
+      nodes: [{ node_id: 'local-node', online: true, models: ['small', 'kev-0.8b'] }] }))
+    expect((await service.list('home')).models.find(m => m.id === 'local:Small-Q4.gguf'))
+      .toMatchObject({ state: 'running', canStop: true })
   })
 
   it.each(['current', 'legacy', 'malformed'])('preserves imported routing names across restart with %s receipts', async scenario => {
@@ -1335,7 +1349,7 @@ describe('models other apps downloaded, started in their own app', () => {
     await models.act('home', ollama.id, 'start'); await models.settled()
     expect(ops.start).toHaveBeenCalledWith(ollama, 131072, join(stateDir, 'logs'))
     expect(calls.find(args => args.includes('--at'))).toEqual(['--remote', 'join', 'home', '--at', 'http://127.0.0.1:41000/v1',
-      '-m', 'llama3.2:3b', '--advertise-as', 'llama3.2:3b', '--max-concurrency', '1'])
+      '-m', 'llama3.2:3b', '--advertise-as', 'llama3.2:3b', '--max-concurrency', '5'])
     expect(request.mock.calls.some(([url]) => String(url).includes(RELAY_CHAT))).toBe(true)
     let row = (await models.list('home', true)).models.find(m => m.id === ollama.id)!
     expect(row).toMatchObject({ state: 'running', canStart: false, canStop: true, operation: { phase: 'done' } })
@@ -1456,13 +1470,16 @@ describe('Jev models: Get brings Grid\'s llama.cpp up to a build that serves the
     await mkdir(join(home, 'bin'), { recursive: true })
     await writeFile(join(home, 'bin', 'llama-server'), `#!/bin/sh\necho "version: ${build}"\n`, { mode: 0o755 })
   }
-  const jevService = (env: NodeJS.ProcessEnv = {}) => {
+  const jevService = (env: NodeJS.ProcessEnv = {}, device?: Record<string, unknown> | null) => {
     const base = run.getMockImplementation()!
     run.mockImplementation(async (args, output) => {
-      if (args[0] === 'pull' && args[1] === 'ggml-org/Laya-GGUF:Laya-Q8_0.gguf') {
+      if (device !== undefined && args[0] === 'device-info') { calls.push(args); return device ? ok(device) : refused('no device') }
+      const pulled = args[0] === 'pull' ? JEV_MODELS.flatMap(m => m.quants.map(q => ({ ...q, ref: `${m.repo}:${q.file}` })))
+        .find(q => q.ref === args[1]) : undefined
+      if (pulled) {
         calls.push(args); output?.('100%')
-        const file = join(home, 'models', 'Laya-Q8_0.gguf')
-        await writeFile(file, ''); await (await import('node:fs/promises')).truncate(file, LAYA_SIZE)
+        const file = join(home, 'models', pulled.file)
+        await writeFile(file, ''); await (await import('node:fs/promises')).truncate(file, pulled.size)
         return ok()
       }
       if (args[0] === 'engine' && args[1] === 'install') { calls.push(args); await engine(installBuild); return ok() }
@@ -1521,9 +1538,9 @@ describe('Jev models: Get brings Grid\'s llama.cpp up to a build that serves the
     expect(installed).toBeGreaterThan(pulled)
     expect(stages).toContain('updating')
     expect(ops.start).toHaveBeenLastCalledWith(expect.objectContaining({ id: LAYA, engine: 'llama.cpp', binary: join(home, 'bin', 'llama-server'),
-      ref: join(home, 'models', 'Laya-Q8_0.gguf') }), 8192, join(stateDir, 'logs'))
+      ref: join(home, 'models', 'Laya-Q8_0.gguf') }), 8192, join(stateDir, 'logs'), 4)
     expect(calls.find(args => args.includes('--at') && args.includes('laya-english'))).toEqual(['--remote', 'join', 'home', '--at',
-      'http://127.0.0.1:41001/v1', '-m', 'laya-english', '--advertise-as', 'laya-english', '--max-concurrency', '1'])
+      'http://127.0.0.1:41001/v1', '-m', 'laya-english', '--advertise-as', 'laya-english', '--max-concurrency', '5'])
     expect(decisions).toEqual(['laya-english'])
     expect(await laya(models)).toMatchObject({ kind: 'decision', state: 'running', canStop: true, operation: { phase: 'done' } })
     // And a running Jev model blocks no chat model either.
@@ -1534,6 +1551,68 @@ describe('Jev models: Get brings Grid\'s llama.cpp up to a build that serves the
     expect(calls.some(args => args.join(' ') === '--remote leave home --engine laya-english')).toBe(true)
     expect(ops.stop).toHaveBeenCalledWith(expect.objectContaining({ modelId: LAYA, pid: 4343 }))
     expect(await laya(models)).toMatchObject({ state: 'downloaded', canStart: true, canStop: false })
+  })
+
+  it("takes its grid's one request limit, and never changes it where Grid runs an engine itself", async () => {
+    await engine('0.5.0-dev (build 11378, commit edd6e2bbd)')
+    const limit = () => {
+      const join = calls.filter(args => args.includes('--at') && args.includes('laya-english')).at(-1)!
+      return join.includes('--max-concurrency') ? join[join.indexOf('--max-concurrency') + 1] : 'left as it is'
+    }
+    const models = jevService()
+    // Nothing of Grid's runs here: the limit every join of this computer's sets.
+    await models.act('home', LAYA, 'start'); await models.settled()
+    expect(limit()).toBe('5')
+    await models.act('home', LAYA, 'stop'); await models.settled()
+    // A chat model Grid runs itself — with a slot count of its own or without: a join that changed the limit would
+    // restart the node, and the restart reload that model, so the Jev model's join leaves it.
+    for (const launch of [{ parallel: 1 }, undefined]) {
+      await writeFile(join(records, 'remote.json'), JSON.stringify({ node_id: 'local-node', max_concurrency: 1,
+        engines: [{ endpoint_url: null, models: ['Small-Q4.gguf'], ...(launch ? { launch } : {}) }] }))
+      await models.act('home', LAYA, 'start'); await models.settled()
+      expect(limit()).toBe('left as it is')
+      expect(await laya(models)).toMatchObject({ state: 'running' })
+      await models.act('home', LAYA, 'stop'); await models.settled()
+    }
+  })
+
+  // An NVIDIA card with 10 GiB free: its VRAM is the model's own, all of it the budget.
+  const card10 = { device_class: 'nvidia', backend: 'cuda', usable_bytes: 10 * GiB, memory: { total_gb: 32 } }
+  const offered = async (models: LocalModels) => Object.fromEntries((await models.list('home', true)).models
+    .filter(m => m.kind === 'decision').map(m => [m.name, m.quant]))
+
+  it('offers only the Jev models this computer can start, each at the best quant that fits', async () => {
+    const models = jevService({}, card10)
+    expect(await offered(models)).toEqual({ 'laya-english': 'Q8_0', 'kev-0.8b': 'Q8_0', 'kev-4b': 'Q8_0', lev: 'Q8_0',
+      'kev-9b': 'Q4_K_M', 'nimble-9b': 'Q4_K_M', 'clef-flash': 'Q4_K_M' })
+    // Clef needs 23 GB even at Q4_K_M; Kev 9B's Q8_0 would need 12.
+    expect(jevMemory(JEV_MODELS.find(m => m.name === 'clef')!.quants.at(-1)!.size)).toBeGreaterThan(10 * GiB)
+    // Get downloads the quant it was offered at.
+    await models.act('home', 'jev:ggml-org/Kev-9B-GGUF', 'download'); await models.settled()
+    expect(calls.filter(args => args[0] === 'pull')).toEqual([['pull', 'ggml-org/Kev-9B-GGUF:Kev-9B-Q4_K_M.gguf']])
+  })
+
+  it('offers none it cannot size, but keeps listing the ones already here, at the quant that is here', async () => {
+    await writeFile(join(home, 'models', 'Kev-9B-Q8_0.gguf'), '')
+    await (await import('node:fs/promises')).truncate(join(home, 'models', 'Kev-9B-Q8_0.gguf'), 9_529_735_648)
+    await writeFile(join(home, 'models', 'Clef-Q4_K_M.gguf.part'), 'half')
+    // grid cannot say how much memory there is: nothing new is offered.
+    expect(await offered(jevService({}, null))).toEqual({ 'kev-9b': 'Q8_0', clef: 'Q4_K_M' })
+    // On a card too small for either, they stay too — one downloaded, one to resume, never swapped for a smaller file.
+    const models = jevService({}, card10)
+    expect(await offered(models)).toMatchObject({ 'kev-9b': 'Q8_0', clef: 'Q4_K_M' })
+    await models.act('home', 'jev:ggml-org/Clef-GGUF', 'download'); await models.settled()
+    expect(calls.filter(args => args[0] === 'pull')).toEqual([['pull', 'ggml-org/Clef-GGUF:Clef-Q4_K_M.gguf']])
+  })
+
+  it('updates an engine new enough for Jev models but not for Clef, whose architecture came later', async () => {
+    await engine('0.5.0-dev (build 11365, commit 1a2b3c4d5)')
+    const models = jevService({}, { ...card10, usable_bytes: 48 * GiB })
+    await models.act('home', LAYA, 'start'); await models.settled()
+    expect(calls.some(args => args[0] === 'engine')).toBe(false)
+    await models.act('home', 'jev:ggml-org/Clef-GGUF', 'start'); await models.settled()
+    expect(calls.filter(args => args[0] === 'engine')).toEqual([['engine', 'install', 'llama.cpp']])
+    expect((await models.list('home', true)).models.find(m => m.name === 'clef')).toMatchObject({ state: 'running', quant: 'Q8_0' })
   })
 
   it('leaves an engine new enough alone', async () => {
@@ -1549,7 +1628,7 @@ describe('Jev models: Get brings Grid\'s llama.cpp up to a build that serves the
     installBuild = '10369 (6e62ba538)'
     const models = jevService()
     await models.act('home', LAYA, 'start'); await models.settled()
-    expect((await laya(models)).operation).toMatchObject({ phase: 'failed', error: expect.stringContaining('still too old for Jev models (build 10369') })
+    expect((await laya(models)).operation).toMatchObject({ phase: 'failed', error: expect.stringContaining('still too old for laya-english (build 10369') })
     expect(ops.start).not.toHaveBeenCalled()
   })
 
@@ -1558,7 +1637,7 @@ describe('Jev models: Get brings Grid\'s llama.cpp up to a build that serves the
     await writeFile(custom, '#!/bin/sh\necho "version: 0.5.0 (build 11146, commit 7fe450e19)"\n', { mode: 0o755 })
     const models = jevService({ LLAMA_SERVER: custom })
     await models.act('home', LAYA, 'start'); await models.settled()
-    expect((await laya(models)).operation).toMatchObject({ phase: 'failed', error: 'LLAMA_SERVER is llama.cpp build 11146; Jev models need build 11361 or newer.' })
+    expect((await laya(models)).operation).toMatchObject({ phase: 'failed', error: 'LLAMA_SERVER is llama.cpp build 11146; laya-english needs build 11361 or newer.' })
     expect(calls.some(args => args[0] === 'engine')).toBe(false)
   })
 })

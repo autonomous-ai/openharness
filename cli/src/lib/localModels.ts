@@ -42,15 +42,51 @@ const UNREAD_CONTEXT = 128 * 1024
  * with autonomous-grid's catalog (`shared/models/catalog.py`, its `kind="decision"` rows); `size` is the
  * file's own, which is how a finished download is told from a partial one.
  */
-export const JEV_MODELS: ReadonlyArray<{ id: string; name: string; pull: string; file: string; size: number; quant: string }> = [
-  { id: 'jev:ggml-org/Laya-GGUF', name: 'laya-english', pull: 'ggml-org/Laya-GGUF:Laya-Q8_0.gguf', file: 'Laya-Q8_0.gguf', size: 449_397_600, quant: 'Q8_0' },
+/** One file a Jev model is published as. */
+export interface JevQuant { quant: string; file: string; size: number }
+/** A Jev (System One) model: ggml-org's official GGUF for llama.cpp's `/v1/systemone`, which reads the model's
+ *  decision type (Laya, Kev, Lev, Nimble, Clef) from the file. [quants] best first — Q8_0, and Q4_K_M for a
+ *  computer that has no room for it. */
+export interface JevModel {
+  id: string; name: string; repo: string; quants: ReadonlyArray<JevQuant>
+  /** The first llama.cpp build that runs it, when that is later than [MIN_JEV_BUILD]'s. */
+  minBuild?: number
+}
+export const JEV_MODELS: ReadonlyArray<JevModel> = [
+  { id: 'jev:ggml-org/Laya-GGUF', name: 'laya-english', repo: 'ggml-org/Laya-GGUF',
+    quants: [{ quant: 'Q8_0', file: 'Laya-Q8_0.gguf', size: 449_397_600 }] },
+  { id: 'jev:ggml-org/Kev-0.8B-GGUF', name: 'kev-0.8b', repo: 'ggml-org/Kev-0.8B-GGUF',
+    quants: [{ quant: 'Q8_0', file: 'Kev-0.8B-Q8_0.gguf', size: 812_406_304 }] },
+  { id: 'jev:ggml-org/Kev-4B-GGUF', name: 'kev-4b', repo: 'ggml-org/Kev-4B-GGUF', quants: [
+    { quant: 'Q8_0', file: 'Kev-4B-Q8_0.gguf', size: 4_483_801_504 }, { quant: 'Q4_K_M', file: 'Kev-4B-Q4_K_M.gguf', size: 3_033_489_824 }] },
+  { id: 'jev:ggml-org/lev-GGUF', name: 'lev', repo: 'ggml-org/lev-GGUF', quants: [
+    { quant: 'Q8_0', file: 'lev-Q8_0.gguf', size: 4_482_405_280 }, { quant: 'Q4_K_M', file: 'lev-Q4_K_M.gguf', size: 3_011_777_440 }] },
+  { id: 'jev:ggml-org/Kev-9B-GGUF', name: 'kev-9b', repo: 'ggml-org/Kev-9B-GGUF', quants: [
+    { quant: 'Q8_0', file: 'Kev-9B-Q8_0.gguf', size: 9_529_735_648 }, { quant: 'Q4_K_M', file: 'Kev-9B-Q4_K_M.gguf', size: 6_358_923_744 }] },
+  { id: 'jev:ggml-org/Bespoke-Nimble-9B-v3-GGUF', name: 'nimble-9b', repo: 'ggml-org/Bespoke-Nimble-9B-v3-GGUF', quants: [
+    { quant: 'Q8_0', file: 'Bespoke-Nimble-9B-v3-Q8_0.gguf', size: 9_527_503_392 },
+    { quant: 'Q4_K_M', file: 'Bespoke-Nimble-9B-v3-Q4_K_M.gguf', size: 6_324_185_632 }] },
+  // Clef's own architecture came after `/v1/systemone` itself (ggml-org/llama.cpp#29831, b11371).
+  { id: 'jev:ggml-org/Clef-Flash-GGUF', name: 'clef-flash', repo: 'ggml-org/Clef-Flash-GGUF', minBuild: 11371, quants: [
+    { quant: 'Q8_0', file: 'Clef-Flash-Q8_0.gguf', size: 9_657_260_192 }, { quant: 'Q4_K_M', file: 'Clef-Flash-Q4_K_M.gguf', size: 6_486_448_288 }] },
+  { id: 'jev:ggml-org/Clef-GGUF', name: 'clef', repo: 'ggml-org/Clef-GGUF', minBuild: 11371, quants: [
+    { quant: 'Q8_0', file: 'Clef-Q8_0.gguf', size: 28_732_215_360 }, { quant: 'Q4_K_M', file: 'Clef-Q4_K_M.gguf', size: 19_232_219_200 }] },
 ]
+/** The memory a Jev model of [size] bytes takes to start: its weights, the window its slots share and
+ *  llama.cpp's working buffers — 15% over the file, and a GiB. */
+export const jevMemory = (size: number): number => Math.ceil(size * 1.15) + GiB
 const isJev = (id: string): boolean => id.startsWith('jev:')
+const concurrencyArgs = (limit: number | undefined): string[] => limit === undefined ? [] : ['--max-concurrency', String(limit)]
 /** The first llama.cpp build that serves `/v1/systemone` (ggml-org/llama.cpp#29818). An older one
  * cannot even load a decision GGUF, so Get updates Grid's engine below it — and Grid itself refuses. */
 export const MIN_JEV_BUILD = 11361
 /** A decision model's window: its state and options, never a conversation. */
 const JEV_CONTEXT = 8192
+/** Questions a Jev engine answers at once. Each question of a request is its own task in llama.cpp, so a
+ *  request's questions are answered side by side: 8 took 0.11 s on 4 slots against 0.17 s on 1 (Laya, M-series). */
+export const JEV_SLOTS = 4
+/** Requests a node of this computer's takes at once, through Grid: its chat model's one, and a Jev model's slots. */
+export const NODE_CONCURRENCY = 1 + JEV_SLOTS
 
 /** The build a llama-server reports (`version: 0.5.0 (build 11146, …)`, or `version: 10369 (…)` before
  * llama.cpp's semver releases); undefined when it is missing or does not say. 30 s: a binary macOS has
@@ -141,7 +177,9 @@ export interface Candidate {
 }
 /** `live`: its heartbeat sidecar is fresh (the grid is hearing from it). `pidAlive`: the process its run
  *  record names exists — the only liveness that holds while the grid sleeps and the sidecar goes stale. */
-interface Owned { file: string; selector: string; aliases: string[]; nodeId: string; name: string; live: boolean; pidAlive: boolean; siblings: number }
+/** `slotted`: it launches with a slot count of its own (`--parallel`). Grid gives a built-in engine without one a
+ *  slot per request its node takes, each with the engine's whole window. */
+interface Owned { file: string; selector: string; aliases: string[]; nodeId: string; name: string; live: boolean; pidAlive: boolean; siblings: number; slotted: boolean }
 interface Receipt { spec: 1; grid: string; operation?: ModelOperation }
 /** What the grid says is running on it, read WITHOUT waking it (`gridModels.gridInventory`): the
  * overview's node objects while it is awake, nothing while it sleeps — and its owner status (`running`,
@@ -423,8 +461,27 @@ export class LocalModels {
     })().finally(() => { this.catalogPending = undefined })
   }
 
+  /** This computer's profile now — the memory free on an NVIDIA card moves — or the last one read when grid
+   *  does not answer. */
+  private async readDevice(): Promise<Record<string, any>> {
+    try { this.device = obj(await this.json(['device-info', '--json'])) } catch { /* the last read stands */ }
+    return this.device
+  }
+
   private async fileComplete(file: string, size: number): Promise<boolean> {
     return stat(join(this.home, 'models', file)).then(s => s.isFile() && s.size === size, () => false)
+  }
+
+  /** The file of [jev] this computer has or would get: one already here — whole, or a download to resume —
+   *  else the best that fits [budget] ([modelBudget]: an NVIDIA card's free VRAM, half of an Apple Silicon
+   *  Mac's unified memory). Undefined when none fits, or the budget is unknown: only a model that can start
+   *  is offered. */
+  private async jevQuant(jev: JevModel, budget: number | undefined): Promise<JevQuant | undefined> {
+    for (const quant of jev.quants) if (await this.fileComplete(quant.file, quant.size)) return quant
+    for (const quant of jev.quants) {
+      if (await stat(join(this.home, 'models', `${quant.file}.part`)).then(s => s.isFile(), () => false)) return quant
+    }
+    return budget === undefined ? undefined : jev.quants.find(quant => jevMemory(quant.size) <= budget)
   }
 
   private async downloaded(candidate: Candidate): Promise<boolean> {
@@ -455,15 +512,34 @@ export class LocalModels {
         if (spec.endpoint_url || spec.api_kind || !Array.isArray(spec.models) || spec.models.length !== 1) continue
         const file = str(spec.models[0])
         if (!validArg(file) || !file.toLowerCase().endsWith('.gguf')) continue
-        const advertised = Array.isArray(record.advertise_as) && specs.length === 1
-          ? record.advertise_as.filter((v: unknown) => typeof v === 'string' && v.length > 0) : []
+        // Grid's `spec_aliases`: the engine's own names (ADR 0045) — or the record's flat list, which only ever
+        // named a sole engine. With a Jev model joined beside it, the flat list was ignored and the engine was
+        // looked for by its file name, which the grid does not list: a running model read as only downloaded.
+        const named = 'advertise_as' in spec ? spec.advertise_as : specs.length === 1 ? record.advertise_as : undefined
+        const advertised = Array.isArray(named) ? named.filter((v: unknown) => typeof v === 'string' && v.length > 0) : []
         const aliases: string[] = advertised.length ? advertised : [file]
         const pid = recordPid(record)
-        result.push({ file: basename(file), selector: file, aliases, nodeId: str(record.node_id), name: str(record.meta_name), live, pidAlive: pid !== null && processExists(pid), siblings: specs.length + (record.media ? 1 : 0) })
+        // Grid's `builtin_launch`: the spec's own launch settings, or a record written before specs had them.
+        const launch = spec.launch && typeof spec.launch === 'object' ? spec.launch : record
+        result.push({ file: basename(file), selector: file, aliases, nodeId: str(record.node_id), name: str(record.meta_name), live,
+          pidAlive: pid !== null && processExists(pid), siblings: specs.length + (record.media ? 1 : 0), slotted: (num(launch.parallel) ?? 0) > 0 })
         this.blockers.set(grid, `Stop ${cleanName(aliases[0])} first to start another local model.`)
       }
     }
     return result
+  }
+
+  /** The `--max-concurrency` to join [grid]'s node with, or undefined to leave its limit as it is. Grid's limit is
+   *  the node's, shared by every engine on it: [NODE_CONCURRENCY], at one a decision waited for a chat model's whole
+   *  reply. It is one number, the same for every join, because a join that changes it restarts the node, and a
+   *  restart relaunches every engine Grid runs itself — starting a 0.8 GB Kev beside a running Qwen reloaded all
+   *  25 GB of it. So a join that launches none of Grid's ([launches] false: an app's engine, a Jev model) leaves the
+   *  limit alone wherever one of Grid's runs; a launch restarts the node anyway, and sets it. It is one while an engine
+   *  of Grid's without its own slot count runs there: that one takes a slot per request, each its whole window. */
+  private async gridConcurrency(grid: string, launches: boolean): Promise<number | undefined> {
+    const engines = await this.owned(grid)
+    if (!launches && engines.length) return undefined
+    return engines.some(engine => !engine.slotted) ? 1 : NODE_CONCURRENCY
   }
 
   /** Keep models imported from an existing Grid setup after Stop removes its
@@ -765,10 +841,16 @@ export class LocalModels {
     // Jev models: Get downloads one, brings Grid's llama.cpp up to a build that serves it, and runs it on
     // the grid beside whatever else is there; it is listed `running` once the grid lists it. Offered only
     // where this daemon can start an engine of its own, which is how one runs.
+    // Only those that can start here are offered: one this computer has no memory for is listed only once it
+    // is here — running, downloaded, or part way.
+    const jevBudget = modelBudget(this.device)
     for (const jev of this.options.appEngines ? JEV_MODELS : []) {
       const record = jevRecords.find(r => r.modelId === jev.id)
-      const have = await this.fileComplete(jev.file, jev.size)
-      const row = await appRow(jev.id, jev.name, 'llama.cpp', record, { sizeBytes: jev.size, quant: jev.quant, kind: 'decision' })
+      const quant = await this.jevQuant(jev, jevBudget)
+      if (!quant && !record && operation?.modelId !== jev.id) continue
+      const shown = quant ?? jev.quants[0]!
+      const have = await this.fileComplete(shown.file, shown.size)
+      const row = await appRow(jev.id, jev.name, 'llama.cpp', record, { sizeBytes: shown.size, quant: shown.quant, kind: 'decision' })
       models.push({ ...row, app: GRID_LABEL, state: row.state === 'running' ? 'running' : have ? 'downloaded' : 'available' })
     }
     const freeDiskBytes = await statfs(join(this.home, 'models')).catch(() => statfs(this.home))
@@ -912,7 +994,9 @@ export class LocalModels {
           const port = await freePort()
           const joined = await this.run(['--remote', 'join', grid, '--serve', candidate.file,
             ...(machineName ? ['--name', machineName] : []),
-            '--max-concurrency', '1', '--ctx-size', String(ctx), '--endpoint-port', String(port),
+            // One slot, its whole window: a harness's model is one conversation, whatever the node's concurrency.
+            ...concurrencyArgs(await this.gridConcurrency(grid, true)), '--parallel', '1',
+            '--ctx-size', String(ctx), '--endpoint-port', String(port),
             '--reasoning-budget', '0',
             ...(candidate.aliases ?? []).flatMap(alias => ['--advertise-as', alias])], undefined, 30 * 60_000)
           // A join that fails at a size is also stepped down from: an allocation that fails at load
@@ -1011,7 +1095,8 @@ export class LocalModels {
       }
       const named = this.options.machineName?.()?.trim()
       const joined = await this.run(['--remote', 'join', grid, '--at', `http://127.0.0.1:${started.port}/v1`, '-m', started.served,
-        '--advertise-as', started.alias, '--max-concurrency', '1', ...(named && validArg(named) ? ['--name', named] : [])], undefined, 10 * 60_000)
+        '--advertise-as', started.alias, ...concurrencyArgs(await this.gridConcurrency(grid, false)),
+          ...(named && validArg(named) ? ['--name', named] : [])], undefined, 10 * 60_000)
       if (!joined.ok) await failed('The model could not join your grid. Try again.')
       operation.stage = 'verifying'; await this.save(grid, operation)
       try { await this.verify(grid, started.alias) } catch (error) {
@@ -1051,13 +1136,15 @@ export class LocalModels {
     if (operation.action === 'stop') {
       if (record) await takeDown(record)
     } else if (!record) {
-      if (!await this.fileComplete(jev.file, jev.size)) {
+      const quant = await this.jevQuant(jev, modelBudget(await this.readDevice()))
+      if (!quant) throw new ModelError(`This computer does not have the memory to run ${jev.name}. Close some apps, or choose a smaller model.`)
+      if (!await this.fileComplete(quant.file, quant.size)) {
         await mkdir(join(this.home, 'models'), { recursive: true })
         const disk = await statfs(join(this.home, 'models'))
-        if (disk.bavail * disk.bsize < jev.size + GiB) throw new ModelError('Free up disk space, then start again.')
+        if (disk.bavail * disk.bsize < quant.size + GiB) throw new ModelError('Free up disk space, then start again.')
         await change('downloading')
         let last = 0, progressWrites = Promise.resolve()
-        await must(['pull', jev.pull], 'The download stopped. Start again to resume.', chunk => {
+        await must(['pull', `${jev.repo}:${quant.file}`], 'The download stopped. Start again to resume.', chunk => {
           const matches = [...chunk.matchAll(/(\d+(?:\.\d+)?)\s*%/g)]
           const percent = matches.length ? Number(matches.at(-1)![1]) : NaN
           if (Number.isFinite(percent) && percent >= 0 && percent <= 100 && Date.now() - last > 500) {
@@ -1066,23 +1153,24 @@ export class LocalModels {
           }
         })
         await progressWrites
-        if (!await this.fileComplete(jev.file, jev.size)) throw new ModelError('The download is incomplete. Start again to resume.')
+        if (!await this.fileComplete(quant.file, quant.size)) throw new ModelError('The download is incomplete. Start again to resume.')
       }
       if (operation.action === 'start') {
-        const binary = await this.jevEngine(change, must)
+        const binary = await this.jevEngine(jev, change, must)
         await change('starting')
         if (DOWN.has(await this.gridStatus(grid).catch(() => ''))) await must(['--remote', 'start', grid], 'Your grid could not start. Try again.')
-        const model: AppModel = { id: jev.id, name: jev.name, app: 'llama.cpp', engine: 'llama.cpp', ref: join(this.home, 'models', jev.file), binary, sizeBytes: jev.size }
+        const model: AppModel = { id: jev.id, name: jev.name, app: 'llama.cpp', engine: 'llama.cpp', ref: join(this.home, 'models', quant.file), binary, sizeBytes: quant.size }
         let started: AppEngineRecord
         try {
-          started = { spec: 1, modelId: jev.id, grid, name: jev.name, ...await ops.start(model, JEV_CONTEXT, join(this.options.stateDir, 'logs')) }
+          started = { spec: 1, modelId: jev.id, grid, name: jev.name, ...await ops.start(model, JEV_CONTEXT, join(this.options.stateDir, 'logs'), JEV_SLOTS) }
         } catch (error) {
           throw new ModelError(error instanceof AppStartError ? error.message : 'The model could not start. Try again.')
         }
         await writeAppRecords(this.appRecordsFile, [...(await readAppRecords(this.appRecordsFile)).filter(r => !(r.modelId === jev.id && r.grid === grid)), started])
         const named = this.options.machineName?.()?.trim()
         const joined = await this.run(['--remote', 'join', grid, '--at', `http://127.0.0.1:${started.port}/v1`, '-m', started.served,
-          '--advertise-as', started.alias, '--max-concurrency', '1', ...(named && validArg(named) ? ['--name', named] : [])], undefined, 10 * 60_000)
+          '--advertise-as', started.alias, ...concurrencyArgs(await this.gridConcurrency(grid, false)),
+          ...(named && validArg(named) ? ['--name', named] : [])], undefined, 10 * 60_000)
         if (!joined.ok) { await takeDown(started); throw new ModelError('The model could not join your grid. Try again.') }
         await change('verifying')
         try { await this.verifyDecision(grid, started.alias) } catch (error) {
@@ -1096,23 +1184,24 @@ export class LocalModels {
     await this.save(grid, operation)
   }
 
-  /** Grid's llama-server, brought up to a build that serves Jev models first when it is older (or missing). */
-  private async jevEngine(change: (stage: ModelOperation['stage']) => Promise<void>,
+  /** Grid's llama-server, brought up to a build that runs [jev] first when it is older (or missing). */
+  private async jevEngine(jev: JevModel, change: (stage: ModelOperation['stage']) => Promise<void>,
     must: (args: string[], message: string) => Promise<void>): Promise<string> {
+    const needed = Math.max(MIN_JEV_BUILD, jev.minBuild ?? 0)
     const override = this.processEnv.LLAMA_SERVER
     if (override) {
       const build = await llamaBuild(override, this.processEnv)
-      if (build !== undefined && build < MIN_JEV_BUILD) throw new ModelError(`LLAMA_SERVER is llama.cpp build ${build}; Jev models need build ${MIN_JEV_BUILD} or newer.`)
+      if (build !== undefined && build < needed) throw new ModelError(`LLAMA_SERVER is llama.cpp build ${build}; ${jev.name} needs build ${needed} or newer.`)
       return override
     }
     const managed = join(this.home, 'bin', 'llama-server')
     const build = binaryOnPath(managed, this.processEnv) ? await llamaBuild(managed, this.processEnv) : undefined
-    if (build !== undefined && build >= MIN_JEV_BUILD) return managed
+    if (build !== undefined && build >= needed) return managed
     await change('updating')
     await must(['engine', 'install', 'llama.cpp'], 'The model engine could not be updated. Try again.')
     const updated = await llamaBuild(managed, this.processEnv)
-    if (updated === undefined || updated < MIN_JEV_BUILD) {
-      throw new ModelError(`Grid's model engine is still too old for Jev models (build ${updated ?? 'unknown'}; they need ${MIN_JEV_BUILD} or newer). Update Grid, then try again.`)
+    if (updated === undefined || updated < needed) {
+      throw new ModelError(`Grid's model engine is still too old for ${jev.name} (build ${updated ?? 'unknown'}; it needs ${needed} or newer). Update Grid, then try again.`)
     }
     return managed
   }
