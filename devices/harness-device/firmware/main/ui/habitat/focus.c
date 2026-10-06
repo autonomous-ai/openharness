@@ -722,9 +722,13 @@ void ht_focus_face(ht_scene_t *s, const ht_character_face_t *f, uint8_t frame, u
      * THE MARK BETWEEN THE NAME AND THE RECAP (owner, 2026-10-05): a short recap is centred in the four lines' area,
      * so a mark halfway to the AREA's top left a wide gap under it. It is centred between the name and the recap's
      * first line as drawn (its capitals' top), and a pet grows into the room a short recap leaves: 2x over one line,
-     * 1.75x over two, 1.5x over three (one 2x drawing, zoomed: pets.h `cells`). Without a recap, halfway to the line.
+     * 1.75x over two, 1.5x over three (one 2x drawing, zoomed: pets.h `cells`). Without a recap, halfway to the line,
+     * or resting, where a four-line recap puts it.
      */
-    int below = has_recap ? body_y + ht_pfont(rf)->ascent - RECAP_CAP : body_y;
+    // Resting (no recap, no line of status) the mark stands where a full recap's does: the same place on both faces
+    // (design 2026-10-06, focus-project.html "Rest": "same position as Recap").
+    int full_cap = RECAP_AREA_Y + (RECAP_AREA_H - RECAP_LINES * RECAP_PITCH) / 2 + RECAP_BASELINE - RECAP_CAP;
+    int below = has_recap ? body_y + ht_pfont(rf)->ascent - RECAP_CAP : empty ? full_cap : body_y;
     int size = has_recap && recap_n >= 1 && recap_n <= 3 ? 3 - recap_n : -1;    // 0 1.5x, 1 1.75x, 2 2x; -1 1x
     int mark_top = TITLE_BOTTOM + (below - TITLE_BOTTOM - MARK_SIZE) / 2;
 

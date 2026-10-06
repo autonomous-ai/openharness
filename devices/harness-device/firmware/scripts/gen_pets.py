@@ -238,6 +238,13 @@ def exact_overlay(images):
     return out, [(0, 0, 0)] + list(colours)
 
 
+def mascot_centred(w, h, bias):
+    """The working scene's offset that puts its frames' box — the mascot alone: props and bubbles are the overlay,
+    which keeps its place from it — on the glass's centre (233, 233), for every engine (design 2026-10-06,
+    focus-project.html "Working": "mascot centred at (233,233)")."""
+    return (233 - w // 2) - (466 - w) // 2, (233 - h // 2) - (233 - h // 2 + bias)
+
+
 def cell_frames(prefix, items, palette_name, cell=1):
     """C definitions of de-duplicated cell frames; returns (code, index per item, count, bytes)."""
     code, seen, refs, order = [], {}, [], []
@@ -298,6 +305,8 @@ def generate_pack_scene(prefix, kind):
     # The sprite's home-face place is the mockup's: the robot at (RX, RY) in the canvas centred on the glass.
     x0, y0 = (466 - CW) // 2 + RX + box[0], (466 - CH) // 2 + RY + box[1]
     dx, dy = x0 - (466 - w) // 2, y0 - (233 - h // 2 + bias)
+    if kind == 'work':
+        dx, dy = mascot_centred(w, h, bias)
     bars = ',NULL'
     if kind == 'listen':
         # The bars, from the scene's origin (the robot's ink box): x, centre y, 8 px of ink, radius, the swing, fills.
@@ -463,6 +472,8 @@ def generate_muse_scene(prefix, kind):
     x0 = meta['centre'][0] - cw // 2 + box[0]
     y0 = meta['centre'][1] - ch // 2 + box[1]
     dx, dy = x0 - (466 - w) // 2, y0 - (233 - h // 2 + bias)
+    if kind == 'work':
+        dx, dy = mascot_centred(w, h, bias)
     waves = 'NULL'
     if kind == 'listen':
         # L2: the sound waves are drawn by the dial (ht_pet_waves_t), from assets/pets/muse/listen.json; the body
@@ -539,6 +550,8 @@ def generate_claude_scene(prefix, name, levels, bias):
         out.append(f'static const ht_pet_overlay_t {ov} = {{{ov}_frames,{ov}_loop,{ov}_at}};\n')
         ov_ref, obytes = '&' + ov, obytes + len(opal) * 2
     dx, dy = x0 - (466 - w) // 2, y0 - (233 - h // 2 + bias)
+    if name == 'work':
+        dx, dy = mascot_centred(w, h, bias)
     waves = 'NULL'
     if 'waves' in meta:
         wv = meta['waves']

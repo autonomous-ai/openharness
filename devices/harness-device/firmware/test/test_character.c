@@ -7,6 +7,7 @@
 #include <assert.h>
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static uint16_t full[HT_WIDTH * HT_HEIGHT], partial[HT_WIDTH * HT_HEIGHT];
@@ -594,8 +595,11 @@ static void focus_face(void)
                 }
                 assert(known);
                 assert(l1->y == 233 - ht_lv_inter_30.base.height / 2);
+                // The mark stands where a four-line recap's does (design 2026-10-06, "Rest": same position as Recap):
+                // centred between the name and that recap's first capitals.
                 int top = scene.runs[1].y - (56 - pet_of("claude")->h) / 2;
-                int above = top - TITLE_BOTTOM, below = l1->y - (top + 56);
+                int cap = 176 + (200 - 4 * 43) / 2 + 30 - 22;
+                int above = top - TITLE_BOTTOM, below = cap - (top + 56);
                 assert(above > 0 && (below - above == 0 || below - above == 1));
                 if (!again) snprintf(first, sizeof first, "%s", said);
                 else assert(!strcmp(said, first));   // a redraw never swaps it
@@ -905,6 +909,17 @@ static void focus_face(void)
             assert(ht_focus_pet_next_ms(&f, "") == nx * ws->step_ms);
         }
         assert(distinct == 2);   // two body poses (eyes open, ^ ^ on the flick); a bob moves them
+        // Every engine's working mascot (the scene's frames, props apart) is centred on the glass (design 2026-10-06).
+        for (unsigned pe = 0; pe < ht_pet_count; pe++) {
+            const ht_pet_scene_t *w = ht_pets[pe].working_scene;
+            if (!w) continue;
+            ht_character_face_t g = {.recipient = "x", .engine = ht_pets[pe].engine, .activity = "Coalescing", .elapsed = 3,
+                .status = "", .hint = "", .detail = "", .mood = HT_CHARACTER_WORKING, .clock_ms = 1};
+            ht_scene_t sc; ht_scene_clear(&sc, 0); ht_character_face(&sc, &c, &g, 0xffff, "");
+            const ht_run_t *m = &sc.runs[1];
+            assert(m->sprite.width == w->w && abs(m->x + w->w / 2 - 233) <= 1 &&
+                   abs(m->y - (w->step_dy ? w->step_dy[0] : 0) + w->h / 2 - 233) <= 1);
+        }
         // The other states and the recap keep the small pet, the centred line and no lower arc.
         ht_character_face_t g = {.recipient = "x", .engine = "claude", .activity = "Coalescing", .elapsed = 34,
             .status = "", .hint = "", .detail = "", .mood = HT_CHARACTER_WORKING, .clock_ms = 500};
