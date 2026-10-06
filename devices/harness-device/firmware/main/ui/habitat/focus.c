@@ -730,6 +730,9 @@ void ht_focus_face(ht_scene_t *s, const ht_character_face_t *f, uint8_t frame, u
     int full_cap = RECAP_AREA_Y + (RECAP_AREA_H - RECAP_LINES * RECAP_PITCH) / 2 + RECAP_BASELINE - RECAP_CAP;
     int below = has_recap ? body_y + ht_pfont(rf)->ascent - RECAP_CAP : empty ? full_cap : body_y;
     int size = has_recap && recap_n >= 1 && recap_n <= 3 ? 3 - recap_n : -1;    // 0 1.5x, 1 1.75x, 2 2x; -1 1x
+    // Claude's block of a body reads larger than the others at the same size (owner, 2026-10-06): it stays at 1.5x
+    // resting and over a recap of one to three lines, and 1x over four.
+    if (f->engine && !strcmp(f->engine, "claude") && ((has_recap && recap_n <= 3) || empty)) size = 0;
     int mark_top = TITLE_BOTTOM + (below - TITLE_BOTTOM - MARK_SIZE) / 2;
 
     // The name on the top curve, the octopus's arc; a tap there opens the pane list.

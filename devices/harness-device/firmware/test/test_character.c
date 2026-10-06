@@ -500,8 +500,8 @@ static void focus_face(void)
             int cap_top = scene.runs[3].y + lit->ascent - 22, frame = cp->loops[HT_PET_IDLE][0].frame, h;
             assert(pet_frame(cp, &mark->sprite) == frame);
             if (lines < 4) {
-                // the same 2x drawing (99 px tall), zoomed: 2x, 1.75x, 1.5x
-                static const int want_zoom[3] = {0, 7, 6}, want_h[3] = {99, 87, 75};   // 2x is the drawing itself (zoom 0)
+                // the same 2x drawing (99 px tall) at 1.5x over one, two or three lines: Claude stays there (owner, 2026-10-06)
+                static const int want_zoom[3] = {6, 6, 6}, want_h[3] = {75, 75, 75};
                 h = mark->sprite.height;
                 assert(mark->sprite.zoom == want_zoom[lines - 1] && h == want_h[lines - 1]);
                 assert(mark->x == (466 - mark->sprite.width) / 2);
@@ -597,9 +597,11 @@ static void focus_face(void)
                 assert(l1->y == 233 - ht_lv_inter_30.base.height / 2);
                 // The mark stands where a four-line recap's does (design 2026-10-06, "Rest": same position as Recap):
                 // centred between the name and that recap's first capitals.
-                int top = scene.runs[1].y - (56 - pet_of("claude")->h) / 2;
+                // (Claude resting is its 1.5x drawing, centred on its own height.)
+                int top = scene.runs[1].y, h = scene.runs[1].sprite.height;
+                assert(scene.runs[1].sprite.zoom == 6 && h == 75);
                 int cap = 176 + (200 - 4 * 43) / 2 + 30 - 22;
-                int above = top - TITLE_BOTTOM, below = cap - (top + 56);
+                int above = top - TITLE_BOTTOM, below = cap - (top + h);
                 assert(above > 0 && (below - above == 0 || below - above == 1));
                 if (!again) snprintf(first, sizeof first, "%s", said);
                 else assert(!strcmp(said, first));   // a redraw never swaps it
@@ -728,10 +730,12 @@ static void focus_face(void)
                 } else {
                 int frame = pet_frame(pet, &mark->sprite);
                 const ht_pet_step_t *want = &pet->loops[state][step];
-                // Over the one-line "Done." recap the pet is shown at 2x, the same frame; its hop doubles too.
-                bool big = state == HT_PET_DONE;
+                // Over the one-line "Done." recap the pet is shown at 2x, the same frame; its hop grows with it. Claude
+                // stays at 1.5x there and resting (asking, idle: no recap, no status) — owner, 2026-10-06.
+                bool claude = !strcmp(eng, "claude");
+                int z = claude && state != HT_PET_WORKING ? 6 : state == HT_PET_DONE ? 8 : 4;
                 const ht_cell_frame_t *fr_ = &pet->cells[want->frame];
-                int ww = big ? fr_->cols * fr_->cell : pet->w, hh = big ? fr_->rows * fr_->cell : pet->h;
+                int ww = (fr_->cols * fr_->cell * z + 7) / 8, hh = (fr_->rows * fr_->cell * z + 7) / 8;
                 assert(frame == want->frame && mark->sprite.width == ww && mark->sprite.height == hh);
                 assert(mark->x == (466 - ww) / 2);
                 assert(!scene.runs[10].text[0] && !scene.runs[10].arc);   // no lower arc outside the scene
@@ -739,7 +743,7 @@ static void focus_face(void)
                 ht_character_face_t g = f; g.clock_ms = 1;
                 ht_scene_t rest; ht_scene_clear(&rest, 0);
                 ht_character_face(&rest, &c, &g, 0xffff, state == HT_PET_DONE ? "Done." : "");
-                assert(mark->y - rest.runs[1].y == (want->dy - pet->loops[state][0].dy) * (big ? 2 : 1));
+                assert(mark->y - rest.runs[1].y == (want->dy - pet->loops[state][0].dy) * z / 4);
                 frame_at[state][step] = frame;
                 }
                 ht_raster(&scene, (ht_rect_t){0, 0, HT_WIDTH, HT_HEIGHT}, full);
@@ -770,17 +774,18 @@ static void focus_face(void)
             const ht_run_t *cm = &cs.runs[1];
             int fr = pet_frame(pet, &cm->sprite);
             assert(fr == pet->loops[HT_PET_IDLE][0].frame && !cm->sprite.pixels && cm->sprite.cells == pet->cells[fr].cells);
-            assert(cm->sprite.zoom == 4 && cm->sprite.width == pet->w && cm->sprite.height == pet->h);
             assert((pet->cells[fr].cols * pet->cells[fr].cell * 4 + 7) / 8 == pet->w &&
                    (pet->cells[fr].rows * pet->cells[fr].cell * 4 + 7) / 8 == pet->h && !pet->cells[fr].palette[0]);
-            // The place is the icon pets' place: the same mark box (its top is the claude face's, less claude's own
-            // centring and hop), the cell frame centred in it, lifted by its step's hop.
-            const ht_pet_t *cp = pet_of("claude");
-            ht_character_face_t cl = cf; cl.engine = "claude";
-            ht_scene_t cls; ht_scene_clear(&cls, 0);
-            ht_character_face(&cls, &c, &cl, 0xffff, "");
-            int box_top = cls.runs[1].y - (56 - cp->h) / 2 - cp->loops[HT_PET_IDLE][0].dy;
-            assert(cm->x == (466 - pet->w) / 2 && cm->y == box_top + (56 - pet->h) / 2 + pet->loops[HT_PET_IDLE][0].dy);
+            // Resting, the mark stands where a four-line recap's does: centred between the name's foot (44) and that
+            // recap's first capitals (198) — a 1x pet in the 56 px box, Claude's 1.5x drawing on its own height.
+            int dy0 = pet->loops[HT_PET_IDLE][0].dy;
+            if (!strcmp(eng, "claude")) {
+                assert(cm->sprite.zoom == 6 && cm->sprite.height == (pet->cells[fr].rows * pet->cells[fr].cell * 6 + 7) / 8);
+                assert(cm->x == (466 - cm->sprite.width) / 2 && cm->y == 44 + (198 - 44 - cm->sprite.height) / 2 + dy0 * 6 / 4);
+            } else {
+                assert(cm->sprite.zoom == 4 && cm->sprite.width == pet->w && cm->sprite.height == pet->h);
+                assert(cm->x == (466 - pet->w) / 2 && cm->y == 44 + (198 - 44 - 56) / 2 + (56 - pet->h) / 2 + dy0);
+            }
         }
         // The working legs change on the next step: 90 ms later is a different frame.
         // (Muse's Jolly and Claude's Clawd play one rest loop for every state: no legs, no blink at 20.)
@@ -925,8 +930,8 @@ static void focus_face(void)
             .status = "", .hint = "", .detail = "", .mood = HT_CHARACTER_WORKING, .clock_ms = 500};
         ht_scene_t scene; ht_scene_clear(&scene, 0);
         ht_character_face(&scene, &c, &g, 0xffff, "Done.");
-        // (over a one-line recap, its 2x drawing)
-        assert(scene.count == 11 && scene.runs[1].sprite.width == cp->cells[0].cols * cp->cells[0].cell &&
+        // (over a one-line recap, Claude's 1.5x drawing)
+        assert(scene.count == 11 && scene.runs[1].sprite.width == (cp->cells[0].cols * cp->cells[0].cell * 6 + 7) / 8 &&
                !scene.runs[10].text[0]);
         g.asking = true; ht_scene_clear(&scene, 0); ht_character_face(&scene, &c, &g, 0xffff, "");
         assert(scene.count == 11 && scene.runs[1].sprite.width == cp->w && scene.runs[7].text[0] && !scene.runs[10].text[0]);
