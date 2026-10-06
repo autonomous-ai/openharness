@@ -168,6 +168,30 @@ describe('local model discovery and lifecycle', () => {
     expect(await readFile(join(stateDir, (await readdir(stateDir))[0]), 'utf8')).not.toContain('token')
   })
 
+  // The node's limit is read when the model joins, not when Start was clicked: an engine Grid started on this
+  // node while the weights downloaded (from a terminal, say) counts. One without a slot count of its own takes a
+  // slot per request, each its whole window, so the node takes one request at a time; one with its own takes
+  // NODE_CONCURRENCY — from its spec's launch settings, or a record written before specs carried them.
+  it.each([
+    ['no slot count of its own', { engine: {}, record: {} }, '1'],
+    ['a slot count of its own', { engine: { launch: { parallel: 1 } }, record: {} }, '5'],
+    ['a slot count on a record written before engines had launch settings', { engine: {}, record: { parallel: 1 } }, '5'],
+  ])('joins at the limit the engines Grid runs allow: one with %s', async (_kind, other, limit) => {
+    const base = run.getMockImplementation()!
+    run.mockImplementation(async (args, output) => {
+      if (args[0] === 'pull') {
+        await writeFile(join(records, 'other.json'), JSON.stringify({ node_id: 'local-node', ...other.record,
+          engines: [{ endpoint_url: null, models: ['Other-Q4.gguf'], ...other.engine }], advertise_as: [] }))
+      }
+      return base(args, output)
+    })
+    await service.act('home', 'org/Small-GGUF', 'start'); await service.settled()
+    const joined = calls.find(args => args.includes('join'))!
+    expect(joined[joined.indexOf('--max-concurrency') + 1]).toBe(limit)
+    // Whatever the node's limit, a harness's model keeps one slot and its whole window.
+    expect(joined[joined.indexOf('--parallel') + 1]).toBe('1')
+  })
+
   // grid-reads-without-waking issue 03: the reply test is an inference THROUGH the grid, so on a sleeping
   // grid it starts it — and the platform then keeps it up for hours. A stray Start on a model that is
   // already serving has nothing to check.
@@ -326,6 +350,19 @@ describe('local model discovery and lifecycle', () => {
       nodes: [{ node_id: 'local-node', online: true, models: ['small', 'kev-0.8b'] }] }))
     expect((await service.list('home')).models.find(m => m.id === 'local:Small-Q4.gguf'))
       .toMatchObject({ state: 'running', canStop: true })
+  })
+
+  it("never pins a record's flat list of names on one of two engines: each is known by its own file", async () => {
+    catalogCards = []
+    // Written before engines carried their own names: the flat list only ever named a sole engine, and here it
+    // cannot say which of the two it named.
+    await writeFile(join(records, 'remote.json'), JSON.stringify({ node_id: 'local-node', advertise_as: ['team/my-model'],
+      engines: [{ endpoint_url: null, models: ['Small-Q4.gguf'] }, { endpoint_url: null, models: ['Big-Q4.gguf'] }] }))
+    await writeFile(join(records, 'remote.heartbeat'), '')
+    inventory.mockImplementation(async () => ({ state: 'awake', status: 'running',
+      nodes: [{ node_id: 'local-node', online: true, models: ['small-q4', 'big-q4'] }] }))
+    expect((await service.list('home')).models.filter(m => m.id.startsWith('local:')).map(m => [m.id, m.name, m.state]))
+      .toEqual([['local:Small-Q4.gguf', 'Small-Q4', 'running'], ['local:Big-Q4.gguf', 'Big-Q4', 'running']])
   })
 
   it.each(['current', 'legacy', 'malformed'])('preserves imported routing names across restart with %s receipts', async scenario => {
@@ -1984,6 +2021,22 @@ describe('Jev models: Get brings Grid\'s llama.cpp up to a build that serves the
     expect(await offered(models)).toMatchObject({ 'kev-9b': 'Q8_0', clef: 'Q4_K_M' })
     await models.act('home', 'jev:ggml-org/Clef-GGUF', 'download'); await models.settled()
     expect(calls.filter(args => args[0] === 'pull')).toEqual([['pull', 'ggml-org/Clef-GGUF:Clef-Q4_K_M.gguf']])
+  })
+
+  it('re-reads the memory on Get, refuses a model that no longer fits, and keeps its row to say why', async () => {
+    const CLEF = 'jev:ggml-org/Clef-GGUF'
+    // An NVIDIA card's free VRAM moves: 48 GiB free when the list was read, 10 GiB by the time of Get.
+    const gpu = { ...card10, usable_bytes: 48 * GiB }
+    const models = jevService({}, {}, gpu)
+    expect(await offered(models)).toMatchObject({ clef: 'Q8_0' })
+    gpu.usable_bytes = 10 * GiB
+    await models.act('home', CLEF, 'download'); await models.settled()
+    // No longer one this computer can start, yet listed while its Get is the last thing done: at its best file.
+    expect((await models.list('home', true)).models.find(m => m.id === CLEF)).toMatchObject({ kind: 'decision', state: 'available',
+      quant: 'Q8_0', sizeBytes: 28_732_215_360, operation: { phase: 'failed',
+        error: 'This computer does not have the memory to run clef. Close some apps, or choose a smaller model.' } })
+    expect(calls.some(args => args[0] === 'pull')).toBe(false)
+    expect(ops.start).not.toHaveBeenCalled()
   })
 
   it('updates an engine new enough for Jev models but not for Clef, whose architecture came later', async () => {

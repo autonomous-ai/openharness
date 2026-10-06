@@ -1,11 +1,12 @@
 /**
- * harnessd's services, each in its own process, kept running by the master beside the core.
+ * harnessd's services, in processes of their own, kept running by the master beside the core.
  *
  * A service is a feature the core can run without (search, devices, models, …). In the core's process a
  * service's exception is caught (core/serviceHost.ts), but a native crash, a hung event loop or a leak
- * would still take the core with it. Out here a service can only take itself down: the master restarts
- * it with backoff, kills it when it stops beating (hung) or outgrows its memory budget (leaking), parks it
- * when it keeps crashing, and the core answers its requests SERVICE_UNAVAILABLE meanwhile.
+ * would still take the core with it. Out here a service can only take its own process down, and the
+ * services that share it (`SERVICE_HOSTS`): the master restarts it with backoff, kills it when it stops
+ * beating (hung) or outgrows its memory budget (leaking), parks it when it keeps crashing, and the core
+ * answers its services' requests SERVICE_UNAVAILABLE meanwhile.
  *
  * The same shape as ./supervisor.ts, for many children and fewer promises: a service has no port to
  * bind and no update to prove; it beats, or it is restarted. Everything that touches the operating
@@ -15,8 +16,10 @@ import { heartbeatGraceMs, isCoreMessage } from './protocol.js'
 import type { CoreHandle } from './supervisor.js'
 
 export interface ServiceSpec {
-  /** The service's name, as `harness __service <name>` runs it. */
+  /** The process's name: what the master logs it as and the process is titled (`harnessd <name>`). */
   name: string
+  /** The services it runs, as `harness __service <a>,<b>` names them, each on its own link to the core. */
+  services: readonly string[]
   /** The V8 heap limit it runs with, MiB; its budget is a share of it. */
   heapLimitMiB: number
   /** Resident memory past which it is restarted, MiB; 0: off. */
@@ -24,7 +27,7 @@ export interface ServiceSpec {
 }
 
 export interface ServiceSupervisorDeps {
-  /** Start a service's process with these extra environment variables. */
+  /** Start a process with these extra environment variables, running every service its spec names. */
   spawnService(spec: ServiceSpec, env: Record<string, string>): CoreHandle
   /** A monotonic clock, in ms. */
   now(): number
@@ -286,21 +289,38 @@ export class ServiceSupervisor {
   }
 }
 
+/** A process the services run in: the services it hosts, and its memory budget. */
+export type ServiceHostSpec = Omit<ServiceSpec, 'name'>
+
 /**
- * The services this build runs in their own processes, with their memory budgets: every one, unless
+ * The processes this build runs its services in, with their memory budgets: every one, unless
  * `HARNESSD_SERVICES` names a subset (`search,viewers`) or `none` (see `serviceSpecs`). A service that
  * is not out here runs inside the core's process, behind the service host's guard, as before.
+ *
+ * A process per risk, not per feature (docs/design/2026-10-06-core-boundary-next.md, "The target
+ * shape"): native code (search's `node:sqlite`), memory and child-process herds (the viewers' servers)
+ * each get their own, so one feature cannot take another down. The light services are pure JavaScript
+ * answering requests, and share one: a fault in one can cost the others in the edge host, never the
+ * core, and the master restarts the host. Each is one process of about 60 MiB at idle; apart, they
+ * would cost that four times.
  */
-export const KNOWN_SERVICES: Readonly<Record<string, Omit<ServiceSpec, 'name'>>> = {
-  search: { heapLimitMiB: 1_024, rssLimitMiB: 2_048 },
+export const SERVICE_HOSTS: Readonly<Record<string, ServiceHostSpec>> = {
+  search: { services: ['search'], heapLimitMiB: 1_024, rssLimitMiB: 2_048 },
   // Its file watches on every harness's workspace; the viewer servers it starts are processes of their
-  // own, outside this budget.
-  viewers: { heapLimitMiB: 512, rssLimitMiB: 1_024 },
-  // The git work runs in git's own processes; this one only holds the agents the core sent it.
-  workspaces: { heapLimitMiB: 256, rssLimitMiB: 512 },
+  // own, outside this budget. The Store beside them: its installs run git and the harnesses' toolchains
+  // in their own processes too, and take minutes, which is what it must not spend in the core.
+  viewers: { services: ['viewers', 'store'], heapLimitMiB: 512, rssLimitMiB: 1_024 },
+  // The git work (workspaces, the project readers) runs in git's own processes, and the monitor's
+  // samples in ps's and ioreg's; what it holds is the agents the core sent it and one parsed sample.
+  // The monitor parses up to 8 MB of ioreg output per Monitor poll on a Mac with a GPU, hence more
+  // than workspaces alone had.
+  edge: { services: ['workspaces', 'usage', 'monitor', 'projects'], heapLimitMiB: 384, rssLimitMiB: 768 },
   // The prompt scopes hold a few drafts and fingerprints per agent: small, bounded state.
-  teams: { heapLimitMiB: 256, rssLimitMiB: 512 },
+  teams: { services: ['teams'], heapLimitMiB: 256, rssLimitMiB: 512 },
 }
+
+/** Every service this build can run outside the core's process: what `HARNESSD_SERVICES` names. */
+export const KNOWN_SERVICES: readonly string[] = Object.values(SERVICE_HOSTS).flatMap((host) => host.services)
 
 /** Service timings from the environment (for tests and support); anything unset or invalid keeps its default. */
 export function serviceOptions(env: NodeJS.ProcessEnv): ServiceSupervisorOptions {
@@ -333,7 +353,9 @@ export const SERVICE_PROCESSES_ENV = 'HARNESSD_SERVICE_PROCESSES'
  * and runs none of them a second time.
  */
 export function serviceProcessesEnv(specs: readonly ServiceSpec[]): Record<string, string> {
-  const names = specs.map((spec) => spec.name).join(',')
+  // The services, not the processes: a core knows what it routes by service, and one from before the
+  // edge host still finds the services it knows here (workspaces) and runs the rest itself.
+  const names = specs.flatMap((spec) => spec.services).join(',')
   return { [SERVICE_PROCESSES_ENV]: names, HARNESSD_SERVICES: names || 'none' }
 }
 
@@ -345,25 +367,28 @@ export function serviceProcessesEnv(specs: readonly ServiceSpec[]): Record<strin
  * released master that ran none, and answered search, the viewers, workspaces and the teams
  * SERVICE_UNAVAILABLE until the master restarted (e2e/releaseRehearsal.e2e.ts). None without a master.
  */
-export function servicesTheMasterRuns(env: NodeJS.ProcessEnv, known: Readonly<Record<string, unknown>>): Set<string> {
+export function servicesTheMasterRuns(env: NodeJS.ProcessEnv, known: readonly string[]): Set<string> {
   if (env.HARNESSD_SUPERVISED !== '1' || !env.HARNESSD_SERVICE_TOKEN) return new Set()
   const said = env[SERVICE_PROCESSES_ENV] ?? env.HARNESSD_SERVICES ?? ''
-  return new Set(said.split(',').map((name) => name.trim()).filter((name) => name && Object.hasOwn(known, name)))
+  return new Set(said.split(',').map((name) => name.trim()).filter((name) => known.includes(name)))
 }
 
 /**
- * The services to run in their own processes: every one this build knows, unless `HARNESSD_SERVICES`
- * names a subset; `none` (or empty) runs them all inside the core's process, for debugging or a quick
- * way back. Isolation is the point of the split (one service failing costs only itself), so it is the
- * default, not an opt-in. Only names this build knows. `HARNESSD_SERVICE_HEAP_LIMIT_MIB` gives every
+ * The processes to run the services in: every service this build knows, unless `HARNESSD_SERVICES`
+ * names a subset, by service (`search,workspaces`) or by process (`edge`, every service it hosts); `none`
+ * (or empty) runs them all inside the core's process, for debugging or a quick way back. Isolation is
+ * the point of the split (one service failing costs only its process), so it is the default, not an
+ * opt-in. Each process hosts the services named of its own, and is not started for none. A process
+ * named as one of its services is named whole: `viewers` runs the viewers' process, the Store beside
+ * them, as it ran the viewers' before the Store joined it. `HARNESSD_SERVICE_HEAP_LIMIT_MIB` gives every
  * one the same heap limit instead (tests, support).
  */
-export function serviceSpecs(env: NodeJS.ProcessEnv, known: Readonly<Record<string, Omit<ServiceSpec, 'name'>>>): ServiceSpec[] {
-  const names = env.HARNESSD_SERVICES === undefined
-    ? Object.keys(known)
-    : env.HARNESSD_SERVICES.split(',').map((name) => name.trim()).filter((name) => name && name !== 'none')
+export function serviceSpecs(env: NodeJS.ProcessEnv, hosts: Readonly<Record<string, ServiceHostSpec>>): ServiceSpec[] {
+  const named = env.HARNESSD_SERVICES === undefined ? null
+    : new Set(env.HARNESSD_SERVICES.split(',').map((name) => name.trim()).filter((name) => name && name !== 'none'))
   const heap = Number(env.HARNESSD_SERVICE_HEAP_LIMIT_MIB)
-  return [...new Set(names)].filter((name) => Object.hasOwn(known, name)).map((name) => ({
-    name, ...known[name], ...(Number.isInteger(heap) && heap > 0 ? { heapLimitMiB: heap } : {}),
-  }))
+  return Object.entries(hosts).flatMap(([name, host]) => {
+    const services = host.services.filter((service) => !named || named.has(service) || named.has(name))
+    return services.length ? [{ name, ...host, services, ...(Number.isInteger(heap) && heap > 0 ? { heapLimitMiB: heap } : {}) }] : []
+  })
 }

@@ -8,8 +8,8 @@ import type { CoreApi, ServiceRequests } from '../core/api.js'
 import { readAccountUsage, type AccountUsageReading } from '../lib/accountUsage.js'
 import { internalOnThrow } from './requestErrors.js'
 
-/** The request usage answers for the apps. */
-export const USAGE_REQUESTS = ['usage_read'] as const
+/** The request usage answers for the apps, declared in core/api.ts for the core to route. */
+export { USAGE_REQUESTS } from '../core/api.js'
 
 export interface UsageDeps {
   /** The vendors' answers. Injected so a spec reads no real home, Keychain or network. */

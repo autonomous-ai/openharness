@@ -9,12 +9,11 @@
  */
 import { join } from 'node:path'
 import type { CoreApi, CorePorts, ServiceRequests } from '../core/api.js'
-import { SESSION_SEARCH_FILE } from '../lib/sessionSearch/command.js'
 import { SessionSearchIndex, folderWords, type SearchSource } from '../lib/sessionSearch/indexer.js'
-import { SessionSearchStore } from '../lib/sessionSearch/store.js'
+import { SessionSearchStore, SESSION_SEARCH_FILE } from '../lib/sessionSearch/store.js'
 
-/** The requests search answers for the apps. */
-export const SEARCH_REQUESTS = ['session_search', 'session_tail'] as const
+/** The requests search answers for the apps, declared in core/api.ts for the core to route. */
+export { SEARCH_REQUESTS } from '../core/api.js'
 
 const number = (value: unknown) => typeof value === 'number' && Number.isFinite(value) ? value : undefined
 const integer = (value: unknown) => typeof value === 'number' && Number.isInteger(value) ? value : undefined

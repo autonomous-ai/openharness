@@ -459,11 +459,14 @@ describe('runMaster', () => {
     runMaster({
       nodePath: process.execPath, execArgv: [], scriptPath: script, pidFile,
       restoreUpdate: () => {}, confirmUpdate: () => {},
-      env: { ...process.env, HARNESSD_SERVICES: 'search,unknown', HARNESSD_SERVICE_INITIAL_BACKOFF_MS: '10' },
+      env: { ...process.env, HARNESSD_SERVICES: 'search,unknown,monitor,usage', HARNESSD_SERVICE_INITIAL_BACKOFF_MS: '10' },
       exit: (code) => exits.push(code), onSignal: (signal, listener) => signals.set(signal, listener),
     })
     const lines = (): Array<Record<string, any>> => existsSync(seen) ? readFileSync(seen, 'utf8').trim().split('\n').map((line) => JSON.parse(line)) : []
     await until('the crashed service to be restarted', () => lines().filter((line) => line.role === 'service:search').length === 2)
+    // The light services share one process, the edge host, which runs each of those named.
+    await until('the edge host to start', () => lines().some((line) => line.role === 'service:usage,monitor'))
+    expect(lines().find((line) => line.role === 'service:usage,monitor')).toMatchObject({ name: 'edge', flags: ['--max-old-space-size=384'] })
     const core = lines().find((line) => line.role === '__run')!
     const services = lines().filter((line) => line.role === 'service:search')
     expect(services.map((service) => service.restarts)).toEqual(['0', '1'])
@@ -471,7 +474,7 @@ describe('runMaster', () => {
     expect(services[0].token).toMatch(/^[0-9a-f]{48}$/)
     expect(core.token).toBe(services[0].token)
     // The core is told exactly what runs out here, in a form a core from before the list reads too.
-    expect(core).toMatchObject({ processes: 'search', services: 'search' })
+    expect(core).toMatchObject({ processes: 'search,usage,monitor', services: 'search,usage,monitor' })
     expect(lines().some((line) => line.role === 'service:unknown')).toBe(false)
     signals.get('SIGTERM')!()
     await until('the master to finish', () => exits.length > 0)

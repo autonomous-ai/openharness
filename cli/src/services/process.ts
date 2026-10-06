@@ -1,13 +1,15 @@
 /**
- * A service in its own process (`harness __service <name>`), started and watched by harnessd's master
- * (harnessd/services.ts).
+ * Services in a process of their own (`harness __service <a>,<b>`), started and watched by harnessd's
+ * master (harnessd/services.ts): one service, or the several a host shares (the edge host).
  *
- * It tells the master it is alive over the spawn channel, as the core does, and exits when the master
- * goes, so a crash never leaves one behind. It reaches the core the way a window does — the core's local
- * socket — under the service role, with the token the master gave both (core/serviceLinks.ts), and
- * reconnects with backoff whenever the core restarts; the service keeps its own state meanwhile. It
- * answers the requests the core routes to it, hears what the core tells it, and asks the core what it
- * needs to know.
+ * The process (`hostServices`) tells the master it is alive over the spawn channel, as the core does:
+ * one heartbeat, and so one memory budget, for everything it runs. It exits when the master goes, so a
+ * crash never leaves one behind, and stops what it runs first. Each service in it (`runServiceProcess`)
+ * reaches the core on a link of its own, the way a window does (the core's local socket), under the
+ * service role, its own name and the token the master gave the core and this process
+ * (core/serviceLinks.ts). It reconnects with backoff whenever the core restarts, and the service keeps
+ * its own state meanwhile. It answers the requests the core routes to it, hears what the core tells it,
+ * and asks the core what it needs to know.
  */
 import WebSocket from 'ws'
 import type { ServiceRequests } from '../core/api.js'
@@ -34,17 +36,18 @@ export interface ServiceProcessOptions {
   onEvent?: (payload: Payload) => void | Promise<unknown>
   /** Each time it is connected to a core: the first time, and after every core restart. */
   onConnected?: (core: CoreConnection) => void
-  /** The master's spawn channel; this process when absent. */
-  channel?: MasterChannel
   env?: NodeJS.ProcessEnv
   connect?: (url: string) => WebSocket
-  exit?: (code: number) => void
-  loopDelay?: LoopDelay
   log?: (line: string) => void
   /** The reconnect delay starts here and doubles to `maxBackoffMs`. */
   initialBackoffMs?: number
   maxBackoffMs?: number
+  /** The delay after the core refused this service (`REFUSED`). */
+  refusedBackoffMs?: number
 }
+
+/** How the core's local socket closes a service connection it does not take (localWsServer.ts). */
+export const REFUSED = 4401
 
 /** What a test asked this service's process to do wrong. */
 export interface ServiceFaults {
@@ -77,30 +80,49 @@ export function serviceFaults(env: NodeJS.ProcessEnv, name: string): ServiceFaul
 
 const describe = (error: unknown): string => (error instanceof Error ? error.message : String(error))
 
+/** A service running in this process. Its stop may take a moment (the viewers stop their servers). */
 export interface ServiceProcess {
-  stop(): void
+  stop(): void | Promise<void>
 }
 
+export interface ServiceHostOptions {
+  /** The process's name, as its master runs it (`HARNESSD_SERVICE`): `edge`, or its one service's. */
+  name: string
+  /** The services it runs. A crash or a leak a test asks of the process, or of any of them, is the process's. */
+  services: readonly string[]
+  /** The master's spawn channel; this process when absent. */
+  channel?: MasterChannel
+  env?: NodeJS.ProcessEnv
+  exit?: (code: number) => void
+  loopDelay?: LoopDelay
+  /** How the master's stop (SIGTERM) reaches this process; this process's own signal when absent. */
+  onSignal?: (signal: NodeJS.Signals, handler: () => void) => void
+  /** How long its services get to stop before it exits all the same. */
+  leaveGraceMs?: number
+}
 
-export function runServiceProcess(options: ServiceProcessOptions): ServiceProcess {
+export interface ServiceHost {
+  /** A service now running in this process: stopped before the process exits. */
+  add(service: ServiceProcess): void
+  /** Stop every service it runs, then exit with `code`. Only the first call counts. */
+  leave(code: number): void
+}
+
+/** How long a process's services get to stop before it exits without them: the master's own grace for a
+ *  SIGTERM is shorter, and a master that is gone waits for nothing. */
+export const LEAVE_GRACE_MS = 5_000
+
+/** The process the services run in: alive to the master, and gone with it. */
+export function hostServices(options: ServiceHostOptions): ServiceHost {
   const channel: MasterChannel = options.channel ?? (process as unknown as MasterChannel)
   const env = options.env ?? process.env
-  const faults = serviceFaults(env, options.name)
-  // As a service whose start throws: this process ends, and the master decides whether to try again.
-  if (faults.start) throw new Error(`injected fault: ${options.name}`)
-  const connect = options.connect ?? ((url: string) => new WebSocket(url))
   const exit = options.exit ?? ((code: number) => process.exit(code))
-  const log = options.log ?? ((line: string) => console.log(line))
-  const initialBackoffMs = options.initialBackoffMs ?? 250
-  const maxBackoffMs = options.maxBackoffMs ?? 5_000
-  let stopped = false
-  let backoff = initialBackoffMs
-  let socket: WebSocket | null = null
-  let reconnectTimer: ReturnType<typeof setTimeout> | null = null
-  let queries = 0
-  const pending = new Map<string, { resolve: (payload: Payload) => void; reject: (error: Error) => void }>()
+  const faults = [options.name, ...options.services].map((name) => serviceFaults(env, name))
+  const services: ServiceProcess[] = []
+  let leaving = false
 
-  // Alive, to the master: the same beat the core sends, so the same watchdog and budgets apply.
+  // Alive, to the master: the same beat the core sends, so the same watchdog and budgets apply, to the
+  // process as a whole. A host's services share its heap: one leaking costs every one of them a restart.
   const loopDelay = options.loopDelay ?? processLoopDelay()
   const beat = (): void => {
     const memory = channel.memoryUsage()
@@ -109,10 +131,49 @@ export function runServiceProcess(options: ServiceProcessOptions): ServiceProces
   const beating = channel.send ? setInterval(beat, heartbeatInterval(env)) : null
   if (channel.send) beat()
   const leaked: Buffer[] = []
-  if (faults.crash) setTimeout(() => exit(1), 200)
-  const leaking = faults.leak ? setInterval(() => { leaked.push(Buffer.alloc(8 * 1024 * 1024, 1)); leaked.push(Buffer.from(new Array(200_000).fill('x').join(''))) }, 100) : null
-  // The master is gone: so is this service, rather than an orphan holding what it holds.
-  channel.once('disconnect', () => { stop(); exit(0) })
+  const leaking = faults.some((fault) => fault.leak)
+    ? setInterval(() => { leaked.push(Buffer.alloc(8 * 1024 * 1024, 1)); leaked.push(Buffer.from(new Array(200_000).fill('x').join(''))) }, 100)
+    : null
+
+  const leave = (code: number): void => {
+    if (leaving) return
+    leaving = true
+    if (beating) clearInterval(beating)
+    if (leaking) clearInterval(leaking)
+    loopDelay.stop()
+    // Its services stop first, however this process ends (the master's SIGTERM, the master going, a test
+    // fault): the viewers' servers run in process groups of their own, and would otherwise outlive it
+    // holding their ports until the next viewers process reaped them. Bounded, so one that never finishes
+    // stopping cannot keep an orphan alive once its master is gone.
+    const late = setTimeout(() => exit(code), options.leaveGraceMs ?? LEAVE_GRACE_MS)
+    void Promise.allSettled(services.map((service) => Promise.resolve().then(() => service.stop())))
+      .then(() => { clearTimeout(late); exit(code) })
+  }
+  if (faults.some((fault) => fault.crash)) setTimeout(() => leave(1), 200)
+  // The master is gone: so is this process, rather than an orphan holding what it holds.
+  channel.once('disconnect', () => leave(0))
+  ;(options.onSignal ?? ((signal, handler) => { process.once(signal, handler) }))('SIGTERM', () => leave(0))
+  return { add: (service) => { services.push(service) }, leave }
+}
+
+/** One service in its process: its own link to the core, answering what the core routes to it. */
+export function runServiceProcess(options: ServiceProcessOptions): ServiceProcess {
+  const env = options.env ?? process.env
+  const faults = serviceFaults(env, options.name)
+  // As a service whose start throws: it is not run, and, alone in its process, the process ends and the
+  // master decides whether to try again.
+  if (faults.start) throw new Error(`injected fault: ${options.name}`)
+  const connect = options.connect ?? ((url: string) => new WebSocket(url))
+  const log = options.log ?? ((line: string) => console.log(line))
+  const initialBackoffMs = options.initialBackoffMs ?? 250
+  const maxBackoffMs = options.maxBackoffMs ?? 5_000
+  const refusedBackoffMs = options.refusedBackoffMs ?? 60_000
+  let stopped = false
+  let backoff = initialBackoffMs
+  let socket: WebSocket | null = null
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+  let queries = 0
+  const pending = new Map<string, { resolve: (payload: Payload) => void; reject: (error: Error) => void }>()
 
   const send = (frame: { type: string; payload: Payload }): void => {
     try { socket?.send(JSON.stringify(frame)) } catch { /* the socket is going; the core answers for us */ }
@@ -188,12 +249,15 @@ export function runServiceProcess(options: ServiceProcessOptions): ServiceProces
     })
     ws.on('message', onFrame)
     ws.on('error', () => { /* `close` follows, and reconnects */ })
-    ws.on('close', () => {
+    ws.on('close', (code: number) => {
       // A new socket is dialled only after this one closes, so this is always the current one.
       socket = null
       for (const [id, waiting] of pending) { pending.delete(id); waiting.reject(new Error('the core went away')) }
       if (stopped) return
-      const delay = backoff
+      // Refused: this core does not run the service out of its process, as a core from before it did under
+      // a newer master, for as long as the two differ. Asked again every few seconds, it only filled both
+      // logs; once a minute still finds a core that takes it.
+      const delay = code === REFUSED ? Math.max(backoff, refusedBackoffMs) : backoff
       backoff = Math.min(backoff * 2, maxBackoffMs)
       reconnectTimer = setTimeout(() => { reconnectTimer = null; dial() }, delay)
     })
@@ -202,9 +266,6 @@ export function runServiceProcess(options: ServiceProcessOptions): ServiceProces
   const stop = (): void => {
     if (stopped) return
     stopped = true
-    if (beating) clearInterval(beating)
-    if (leaking) clearInterval(leaking)
-    loopDelay.stop()
     if (reconnectTimer) clearTimeout(reconnectTimer)
     try { socket?.close() } catch { /* already closed */ }
   }

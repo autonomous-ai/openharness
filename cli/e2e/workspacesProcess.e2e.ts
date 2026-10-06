@@ -1,6 +1,7 @@
 /**
- * Workspaces in their own process, on the real daemon (`HARNESSD_SERVICES=workspaces`, here also with
- * search and the viewers): the branch Harness made up for a worktree takes its session's name, renamed by the workspaces
+ * Workspaces in their own process, the edge host (harnessd/services.ts `SERVICE_HOSTS`), on the real daemon
+ * (`HARNESSD_SERVICES=workspaces`: the edge host running workspaces alone; here also with search and the
+ * viewers): the branch Harness made up for a worktree takes its session's name, renamed by the workspaces
  * process and shown on the agent's frame by the core; and the worktree sweep runs there, when the core's
  * timer says. Whatever happens to the process costs workspaces alone. Stopped, hung, killed or crashing on
  * every start, the core never restarts, agents keep working, and frames keep their branch names, which
@@ -45,13 +46,13 @@ function idle(d: IsolatedDaemon, path: string): void {
   }
 }
 
-/** The workspaces process the master runs now: the last one it said it started. Read from its log,
- *  never from the process table, where another daemon's services could be. */
+/** The workspaces process the master runs now, the edge host: the last one it said it started. Read from
+ *  its log, never from the process table, where another daemon's services could be. */
 const workspacesPid = (d: IsolatedDaemon): number | null => {
-  const started = [...d.log().matchAll(/\[harnessd\] service workspaces started \(pid (\d+)\)/g)]
+  const started = [...d.log().matchAll(/\[harnessd\] service edge started \(pid (\d+)\)/g)]
   return started.length ? Number(started[started.length - 1][1]) : null
 }
-const restarts = (d: IsolatedDaemon) => [...d.log().matchAll(/\[harnessd\] service workspaces started .* restart \d+/g)].length
+const restarts = (d: IsolatedDaemon) => [...d.log().matchAll(/\[harnessd\] service edge started .* restart \d+/g)].length
 const ready = (d: IsolatedDaemon) => [...d.log().matchAll(/\[cli\] ready/g)].length
 const connected = (d: IsolatedDaemon) => d.log().split('[services] workspaces connected').length - 1
 
@@ -135,7 +136,7 @@ describe('workspaces in their own process', () => {
     const agent = await create(d, client, cwd)
     const first = workspacesPid(d)!
     process.kill(first, 'SIGSTOP')
-    await until('the master to find workspaces hung', () => d.log().includes('[harnessd] service workspaces sent no heartbeat') || null, 30_000, 200)
+    await until('the master to find workspaces hung', () => d.log().includes('[harnessd] service edge sent no heartbeat') || null, 30_000, 200)
     await until('workspaces to be started again', () => restarts(d) >= 1 || null, 30_000, 200)
     expect(workspacesPid(d)).not.toBe(first)
     await turn(client, agent.id, 'the core never waited on workspaces')
@@ -185,7 +186,7 @@ describe('workspaces in their own process', () => {
     const client = await LocalClient.connect(d)
     const cwd = worktree(d, repository(d), 'brave-otter', true)
     const agent = await create(d, client, cwd)
-    await until('the master to park workspaces', () => d.log().includes('[harnessd] service workspaces ended 3 times') || null, 60_000, 250)
+    await until('the master to park workspaces', () => d.log().includes('[harnessd] service edge ended 3 times') || null, 60_000, 250)
     await turn(client, agent.id, 'workspaces is parked and nothing else cares')
     expect(await branchOf(client, agent.id)).toBe('brave-otter')
     expect(d.coresStarted()).toBe(1)
