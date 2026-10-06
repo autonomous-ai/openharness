@@ -216,6 +216,41 @@ describe('a service in its own process', () => {
     ])
   })
 
+  it('tells a handler when the connection that asked closes, and when the core that routed it goes', async () => {
+    const asked: Array<{ asker: unknown; closed: AbortSignal; answer: () => void }> = []
+    run({ requests: { command: (payload: Record<string, unknown>, asker: unknown, closed?: AbortSignal) => new Promise((resolve) => {
+      asked.push({ asker, closed: closed!, answer: () => resolve({ id: payload.id }) })
+    }) } })
+    socket().open()
+    const ask = (id: string, connection?: unknown) => socket().say({ type: 'command', payload: { id, requestId: id }, asker: { local: false, owner: true, connection } })
+    ask('a1', 'conn-a')
+    ask('a2', 'conn-a')
+    ask('b1', 'conn-b')
+    // Not a string: read as no connection, as from a core from before connections were given.
+    ask('none', 7)
+    await vi.waitFor(() => expect(asked).toHaveLength(4))
+    expect(asked.map((one) => one.asker)).toEqual([
+      { local: false, owner: true, connection: 'conn-a' },
+      { local: false, owner: true, connection: 'conn-a' },
+      { local: false, owner: true, connection: 'conn-b' },
+      { local: false, owner: true },
+    ])
+    // A request already answered is forgotten: closing its connection reaches nothing.
+    asked[2].answer()
+    await vi.waitFor(() => expect(socket().sent.at(-1)).toEqual({ type: 'command_result', payload: { id: 'b1', requestId: 'b1' } }))
+    socket().say({ type: 'service_connection_closed', payload: { connection: 'conn-b' } })
+    expect(asked[2].closed.aborted).toBe(false)
+    // Only the connection that closed: its two, not another's, not one with none.
+    socket().say({ type: 'service_connection_closed', payload: { connection: 'conn-a' } })
+    expect(asked.map((one) => one.closed.aborted)).toEqual([true, true, false, false])
+    // Aborted or not, what a handler answers still goes back: the core drops what nobody can read.
+    asked[0].answer()
+    await vi.waitFor(() => expect(socket().sent.at(-1)).toEqual({ type: 'command_result', payload: { id: 'a1', requestId: 'a1' } }))
+    // The core gone: nobody is left to read any answer, so all that is left is aborted.
+    socket().drop()
+    expect(asked[3].closed.aborted).toBe(true)
+  })
+
   it('hears what the core tells it, and asks the core what it needs to know', async () => {
     const onEvent = vi.fn()
     let core: Parameters<NonNullable<ServiceProcessOptions['onConnected']>>[0] | null = null

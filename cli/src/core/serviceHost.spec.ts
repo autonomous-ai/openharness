@@ -238,6 +238,31 @@ describe('hosting services so one that fails cannot take the core down', () => {
       expect(h.services.route('agents_list', {}, ASKER, reply)).toBe(false)
     })
 
+    it('tells a handler when the connection that asked closes, and no other connection\'s', async () => {
+      const h = host()
+      const asked = new Map<string, { closed: AbortSignal; answer: () => void }>()
+      h.services.serve('commands', () => ({
+        command: (payload, _asker, closed) => new Promise((resolve) => {
+          asked.set(String(payload.id), { closed: closed!, answer: () => resolve({ id: payload.id }) })
+        }),
+      }), fakeCore(), ['command'])
+      const { got, reply } = collect()
+      h.services.route('command', { id: 'a1' }, { ...ASKER, connection: 'conn-a' }, reply)
+      h.services.route('command', { id: 'a2' }, { ...ASKER, connection: 'conn-a' }, reply)
+      h.services.route('command', { id: 'b1' }, { ...ASKER, connection: 'conn-b' }, reply)
+      // The core's own asking, with no connection: never closed.
+      h.services.route('command', { id: 'core' }, ASKER, reply)
+      // A request already answered is forgotten: closing its connection reaches nothing.
+      asked.get('b1')!.answer()
+      await vi.waitFor(() => expect(got).toEqual([{ id: 'b1' }]))
+      h.services.closeConnection('conn-b')
+      h.services.closeConnection('conn-a')
+      expect([...asked.values()].map((one) => one.closed.aborted)).toEqual([true, true, false, false])
+      // Aborted or not, what the handler answers is replied: the socket drops what nobody can read.
+      asked.get('a1')!.answer()
+      await vi.waitFor(() => expect(got).toEqual([{ id: 'b1' }, { id: 'a1' }]))
+    })
+
     it('returns at once, and replies when a promised answer comes', async () => {
       const h = host()
       let answer!: (value: Record<string, unknown>) => void

@@ -358,16 +358,25 @@ export interface Asker {
   /** Whether it may act as this machine's owner: a local process, or the owner's paired app over the
    *  relay. A device or an observer may not. */
   owner: boolean
-  /** The connection it came over, as the core names it, and the id it asked under: what a service keys
-   *  work by that belongs to one connection's request (the Model Manager's grid commands, which a cancel
-   *  on the same connection stops). Absent when the core itself asks. */
+  /** The connection it came over (a window's, a remote client's), as the core names it, and the id it
+   *  asked under: what a service keys work by that belongs to one connection (the Model Manager's grid
+   *  commands, which a cancel on the same connection stops; a limit on how many at once per connection).
+   *  The handler hears that connection close through `closed`. Absent when the core itself asks, and from
+   *  a core from before it was given: then the request is its own connection. */
   connection?: string
   requestId?: string
 }
 
-/** A request a service answers for the apps: the reply, or a promise of it. A throw or a rejection is
- *  answered `SERVICE_FAILED` by the host and counted against the service. */
-export type ServiceRequest = (payload: Record<string, unknown>, asker: Asker) => Record<string, unknown> | Promise<Record<string, unknown>>
+/**
+ * A request a service answers for the apps: the reply, or a promise of it. A throw or a rejection is
+ * answered `SERVICE_FAILED` by the host and counted against the service.
+ *
+ * `closed` is aborted when the connection that asked closes (`Asker.connection`), or when the core that
+ * routed it goes: nobody is left to read the answer, so the work for it may stop. A handler that ignores
+ * it runs to the end, as every one did before it was given; one called without it (a spec, a wrapper)
+ * is never told.
+ */
+export type ServiceRequest = (payload: Record<string, unknown>, asker: Asker, closed?: AbortSignal) => Record<string, unknown> | Promise<Record<string, unknown>>
 
 /** The requests a service answers, by frame type: what its start returns. */
 export type ServiceRequests = Readonly<Record<string, ServiceRequest>>

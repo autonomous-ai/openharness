@@ -992,6 +992,25 @@ describe('BackendSocket outbound queue', () => {
     await socket.stop()
   })
 
+  it('tells the services when a connection that may have asked them closes: a window, a remote client, the relay and its clients', async () => {
+    const socket = relaySocket('token')
+    const closed: string[] = []
+    socket.onConnectionClosed = (connId) => { closed.push(connId) }
+    socket.registerLocalClient('local:window', { sendFrame: () => true, sendBinary: () => true })
+    await socket.unregisterLocalClient('local:window')
+    const client = { role: 'web' as const, label: null, identity: 'id', direct: false }
+    for (const connId of ['web-1', 'web-2', 'web-3']) socket.fromGateway.client(connId, client)
+    socket.fromGateway.client('web-1', null)
+    // One the gateway never announced is no connection of the socket's.
+    socket.fromGateway.client('web-unknown', null)
+    await socket.fromGateway.disconnected('web-2')
+    // The relay gone: every remote client it still had went with it, and no window on this computer did.
+    socket.registerLocalClient('local:stays', { sendFrame: () => true, sendBinary: () => true })
+    socket.fromGateway.linkDown()
+    expect(closed).toEqual(['local:window', 'web-1', 'web-2', 'web-3'])
+    await socket.stop()
+  })
+
   it('answers a request whose service is unavailable SERVICE_UNAVAILABLE, retryable, and goes on', async () => {
     const socket = relaySocket('token')
     // A request whose work reaches a service through its port, whose fallback is to fail (core/serviceHost.ts).

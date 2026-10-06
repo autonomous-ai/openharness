@@ -274,7 +274,12 @@ const SERVICE_MAY_IMPORT: Record<string, string> = {
 // Then at 75,456 in 344, from 75,746 in 345: the web dashboard (webui.ts, `GET /`, its log tail and stop
 // button, and its port in `e2e_status`) is deleted. Nothing opened it: no app, website, script or the
 // backend, and the web client that linked to it retired with the browser setup links (#348).
-const CORE_CLOSURE_BUDGET = 75_560
+//
+// Grew by 37 to 75,493 in 344, from 75,456, for the notice that the connection a routed request came over closed
+// (core/serviceHost.ts, core/serviceLinks.ts, the socket's close paths), held requests for an experiment
+// still starting included: what lets a service keep work per connection and stop it when its asker goes,
+// which held the command bar's two doors in the core (step 4).
+const CORE_CLOSURE_BUDGET = 75_590
 
 /** What is not the core's, by path: each goes to a service or its own process, in the plan's order. */
 const EDGE: RegExp[] = [

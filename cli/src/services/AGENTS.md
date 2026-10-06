@@ -20,6 +20,11 @@ let several people build features at once without touching the core or each othe
    - While the service is off, its requests are answered `SERVICE_UNAVAILABLE`, never `UNSUPPORTED`
      (the apps read that as "update the CLI"). That is why the types are declared up front.
    - A handler that throws or rejects is answered `SERVICE_FAILED` and counts against the service.
+   - Work that belongs to the connection that asked (a limit on how many at once per connection, work to
+     stop when the asker goes) is keyed by `asker.connection` and stops on `closed`, the handler's third
+     argument: it is aborted when that connection closes, or when the core that routed it goes, wherever
+     the service runs (`serviceHost.closeConnection`, `serviceLinks.closeConnection`, `process.ts`). A
+     request held while an experiment's process starts is never sent once its connection has closed.
 3. **If the core must call the service, give it a port.** Add `<Name>Port` and its fallbacks
    (`<NAME>_FALLBACKS`) to `src/core/api.ts`. A fallback is what the core does while the service is
    off or failing: `undefined` for nothing, a value, or `FAIL` to answer that one request

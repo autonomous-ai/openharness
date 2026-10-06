@@ -93,6 +93,8 @@ export function createServiceHost(ports: CorePorts, options: ServiceHostOptions 
   const stoppers = new Map<string, () => void>()
   /** The service that answers each request type, and its handler once it has started. */
   const owners = new Map<string, { service: string; answer: ServiceRequest | null }>()
+  /** The requests still being answered, each with the connection that asked: what its closing aborts. */
+  const answering = new Map<AbortController, string | undefined>()
 
   const inject = (target: string): void => {
     if (faults.has(target)) throw new Error(`injected fault: ${target}`)
@@ -245,19 +247,28 @@ export function createServiceHost(ports: CorePorts, options: ServiceHostOptions 
         failed(service, type, error)
         reply({ error: 'SERVICE_FAILED', service })
       }
+      // Aborted when its connection closes (`closeConnection`); a request with none is its own, never closed.
+      const closed = new AbortController()
+      answering.set(closed, asker.connection)
+      const settled = (): void => { answering.delete(closed) }
       let result: ReturnType<ServiceRequest>
       try {
         inject(`${service}.${type}`)
-        result = answer(payload, asker)
+        result = answer(payload, asker, closed.signal)
       } catch (error) {
+        settled()
         failedWith(error)
         return true
       }
       void Promise.resolve(result).then((value) => {
         if (typeof value === 'object' && value !== null) reply(value)
         else failedWith(new Error(`${type} was answered with no reply`))
-      }, failedWith)
+      }, failedWith).finally(settled)
       return true
+    },
+    /** A connection closed: abort what it asked that is still being answered. Its answers go nowhere. */
+    closeConnection(connection: string): void {
+      for (const [closed, asked] of answering) if (asked === connection) closed.abort()
     },
     /** Run `handler` once, when `name` is switched off. */
     onOff(name: string, handler: () => void): void {

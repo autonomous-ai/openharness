@@ -98,6 +98,29 @@ describe('service links', () => {
     expect(want).toHaveBeenCalledTimes(2)
   })
 
+  it('carries the connection through an experiment\'s start, and never sends what a connection that closed meanwhile asked', () => {
+    const links = make({ owned: { orchestrator: ['orchestrator'] }, onDemand: new Set(['orchestrator']), want: vi.fn() })
+    const gone = vi.fn(), stays = vi.fn(), core = vi.fn()
+    links.route('orchestrator', { action: 'list' }, { ...ASKER, connection: 'gone' }, gone)
+    links.route('orchestrator', { action: 'catalog' }, { ...ASKER, connection: 'stays' }, stays)
+    links.route('orchestrator', { action: 'status' }, ASKER, core)
+    links.closeConnection('gone')
+    // Answered where nobody is left to read it, and never sent.
+    expect(gone).toHaveBeenCalledWith({ error: 'SERVICE_UNAVAILABLE', service: 'orchestrator', retryable: true })
+    const orchestrator = sink()
+    links.accept('orchestrator', TOKEN, orchestrator, vi.fn())
+    expect(orchestrator.sent).toEqual([
+      { type: 'orchestrator', payload: { action: 'catalog', requestId: 'route-2' }, asker: { ...ASKER, connection: 'stays' } },
+      { type: 'orchestrator', payload: { action: 'status', requestId: 'route-3' }, asker: ASKER },
+    ])
+    expect(stays).not.toHaveBeenCalled()
+    expect(core).not.toHaveBeenCalled()
+    // Sent, it is the process's to abort when its connection closes.
+    links.closeConnection('stays')
+    expect(orchestrator.sent.at(-1)).toEqual({ type: 'service_connection_closed', payload: { connection: 'stays' } })
+    expect(stays).not.toHaveBeenCalled()
+  })
+
   it('answers SERVICE_UNAVAILABLE for an experiment that does not come in time, or will not take the request', () => {
     const links = make({ owned: { orchestrator: ['orchestrator'], search: ['session_search'] }, onDemand: new Set(['orchestrator']) })
     const late = vi.fn()
@@ -147,6 +170,23 @@ describe('service links', () => {
     expect(reply).toHaveBeenCalledOnce()
     // What no service owns is the core's own.
     expect(links.route('agents_list', {}, ASKER, reply)).toBe(false)
+  })
+
+  it('routes with the connection that asked, and tells every service connected when a connection closes', () => {
+    const links = make({ owned: { search: ['session_search'], store: ['dsh_list'], viewers: [] } })
+    const search = sink(), store = sink()
+    links.accept('search', TOKEN, search, vi.fn())
+    links.accept('store', TOKEN, store, vi.fn())
+    links.route('session_search', { query: 'q' }, { ...ASKER, connection: 'conn-1' }, vi.fn())
+    expect(search.sent).toEqual([{ type: 'session_search', payload: { query: 'q', requestId: 'route-1' }, asker: { local: false, owner: true, connection: 'conn-1' } }])
+    links.closeConnection('conn-1')
+    const closed = { type: 'service_connection_closed', payload: { connection: 'conn-1' } }
+    expect(search.sent.at(-1)).toEqual(closed)
+    expect(store.sent).toEqual([closed])
+    // A service down when it closed is not told later: what it was answering went with it.
+    const viewers = sink()
+    links.accept('viewers', TOKEN, viewers, vi.fn())
+    expect(viewers.sent).toEqual([])
   })
 
   it('asks a service what the core itself needs, as the core, and settles every way a routed request does', async () => {
