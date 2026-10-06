@@ -1198,6 +1198,20 @@ export async function run(engine, config = {}, { native = false } = {}) {
       await finish(`you chose ${choice}${notes ? ` (notes: ${notes})` : ''}`)
       return
     }
+    if (engine === 'codex' && directive?.[1] === 'askasync') {
+      // Codex 0.160's question that does not stop the turn (shape measured on real rollouts): the call, its
+      // `{"accepted":true}` at once, and later the person's answer as a user message wrapped in
+      // `<send_user_message_question_reply>`. Only the transcript is faked: the answer is written as if
+      // given at once, with no dialog drawn, since 0.160's panel for it was not recorded.
+      const id = `call_${turn}_qa`
+      const question = 'Which database should the service use?'
+      codex('response_item', { type: 'function_call', name: 'request_user_input_async', call_id: id, arguments: JSON.stringify({ questions: [{ title: question, options: ['Postgres', 'SQLite'] }] }) })
+      codex('event_msg', { type: 'item_completed', turn_id: open, item: { type: 'AgentMessage', content: [{ type: 'Text', text: 'Asked which database to use.' }], phase: 'commentary' } })
+      codex('response_item', { type: 'function_call_output', call_id: id, output: JSON.stringify({ accepted: true }) })
+      const answer = `<send_user_message_question_reply>\n${JSON.stringify([{ answer: directive[2] || 'Postgres', question, questionItemId: JSON.stringify([id]) }])}\n</send_user_message_question_reply>`
+      codex('response_item', { type: 'message', role: 'user', content: [{ type: 'input_text', text: answer }] })
+      codex('event_msg', { type: 'item_completed', turn_id: open, item: { type: 'UserMessage', id: `${id}-reply`, content: [{ type: 'text', text: answer, text_elements: [] }] } })
+    }
     if (directive?.[1] === 'version') { await finish(versionLine); return }
     if (engine === 'codex' && directive?.[1] === 'goal') {
       bottom = goalBottom(directive[2] === 'done' ? 'Goal achieved (1m)' : 'Pursuing goal (1m)')

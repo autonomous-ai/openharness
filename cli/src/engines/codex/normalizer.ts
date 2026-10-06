@@ -109,6 +109,24 @@ function messageText(item: JsonObject): string {
   return string(item.message) || textContent(item)
 }
 
+/**
+ * What the person said. Codex 0.160's answer to a question that does not stop the turn
+ * (`request_user_input_async`) is a user message wrapping JSON `[{answer, question, questionItemId}]` in
+ * `<send_user_message_question_reply>`, and was read as typed, wrapper and all (real 0.160 rollouts).
+ */
+function userText(item: JsonObject): string {
+  const text = messageText(item)
+  const body = /^\s*<send_user_message_question_reply>\s*([\s\S]*?)\s*(?:<\/send_user_message_question_reply>\s*)?$/.exec(text)?.[1]
+  if (body === undefined) return text
+  let replies: unknown
+  try { replies = JSON.parse(body) } catch { return body }
+  const lines = (Array.isArray(replies) ? replies : []).map(object).flatMap((entry) => {
+    const [answer, question] = [string(entry?.answer).trim(), string(entry?.question).trim()]
+    return answer ? [question ? `${question} → ${answer}` : answer] : []
+  })
+  return lines.join('\n') || body
+}
+
 function parseInput(value: unknown): unknown {
   if (typeof value !== 'string') return value ?? {}
   try { return JSON.parse(value) } catch { return value }
@@ -322,7 +340,7 @@ export class CodexNormalizer implements EngineNormalizer {
     }
 
     if (USER_TURN_TYPES.has(type)) {
-      const message = messageText(item)
+      const message = userText(item)
       if (!message) return []
       if (this.mode === 'replay') return [{ type: 'user_message', payload: { content: message } }]
       const events: LiveEvent[] = []
@@ -620,7 +638,7 @@ export function selectCodexRecapLine(line: string): 'keep' | 'skip' | 'stop' {
   if (raw.type === 'response_item' && string(item.type) === 'message') return goalObjective(item) ? 'stop' : 'skip'
   if (raw.type !== 'event_msg') return 'skip'
   const itemType = string(item.type)
-  if (USER_TURN_TYPES.has(itemType) && messageText(item)) return 'stop'
+  if (USER_TURN_TYPES.has(itemType) && userText(item)) return 'stop'
   return AGENT_TEXT_TYPES.has(itemType) ? 'keep' : 'skip'
 }
 
@@ -635,7 +653,7 @@ export function startsCodexTurn(line: string): boolean {
   const item = payload(raw)
   if (!item) return false
   const type = string(item.type)
-  if (raw.type === 'event_msg') return USER_TURN_TYPES.has(type) && !!messageText(item)
+  if (raw.type === 'event_msg') return USER_TURN_TYPES.has(type) && !!userText(item)
   return raw.type === 'response_item' && type === 'message' && goalObjective(item) !== null
 }
 
@@ -692,7 +710,7 @@ export function lastCodexTurnText(rawLines: string[]): LastTurnText | null {
     if (raw.type !== 'event_msg') continue
     const itemType = string(item.type)
     if (USER_TURN_TYPES.has(itemType)) {
-      const message = messageText(item)
+      const message = userText(item)
       if (message) { userMessage = message; assistantText = ''; finalText = ''; sawPhase = false }
     } else if (AGENT_TEXT_TYPES.has(itemType)) {
       const message = messageText(item)
