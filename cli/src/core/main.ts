@@ -1223,6 +1223,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // A request a service declared goes to it: in its own process, or in this one (core/serviceHost.ts).
   backend.serviceRouter = (type, payload, asker, reply) => (teamsOut && teamsLink.route(type, payload, asker, reply))
     || serviceLinks.route(type, payload, asker, reply) || serviceHost.route(type, payload, asker, reply)
+  // The connection that asked closed: the services abort what it asked, wherever they run.
+  backend.onConnectionClosed = (connId) => { serviceLinks.closeConnection(connId); serviceHost.closeConnection(connId) }
   // Session search (services/search.ts): in this process, or in its own (services/searchProcess.ts),
   // where the core tells it what changed. A purge's forgetting waits for it if it is down.
   if (outOfProcess.has('search')) {

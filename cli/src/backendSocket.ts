@@ -341,13 +341,13 @@ export class BackendSocket {
       this.wifi?.session(connId, client)
       if (client) { this.remoteClients.set(connId, client); return }
       if (!this.remoteClients.delete(connId)) return
-      this.viewerForwarder.closeConnection(connId); this.interactiveViewers.closeConnection(connId); this.ownerCommands.closeConnection(connId)
+      this.viewerForwarder.closeConnection(connId); this.interactiveViewers.closeConnection(connId); this.ownerCommands.closeConnection(connId); this.onConnectionClosed?.(connId)
     },
     disconnected: async (connId) => {
       this.wifi?.dropped(connId)
       this.remoteClients.delete(connId)
       this.viewerForwarder.closeConnection(connId)
-      this.interactiveViewers.closeConnection(connId); this.ownerCommands.closeConnection(connId)
+      this.interactiveViewers.closeConnection(connId); this.ownerCommands.closeConnection(connId); this.onConnectionClosed?.(connId)
       await this.terminalStreams?.closeConnection(
         connId,
         'client connection closed',
@@ -366,7 +366,7 @@ export class BackendSocket {
     linkDown: () => {
       this.observers?.closeAll()
       this.viewerForwarder.closeAll()
-      this.interactiveViewers.closeAll(); this.ownerCommands.closeAll()
+      this.interactiveViewers.closeAll(); this.ownerCommands.closeAll(); for (const connId of this.remoteClients.keys()) this.onConnectionClosed?.(connId)
       void this.terminalStreams?.closeConnectionsWhere(
         (connId) => !isLocalClientId(connId),
         'backend disconnected',
@@ -623,6 +623,8 @@ export class BackendSocket {
   /** Routes a request to the service that answers it, in its own process (core/serviceLinks.ts) or in
    *  this one (core/serviceHost.ts): false when none does and the socket answers it itself. */
   serviceRouter: ((type: string, payload: Record<string, unknown>, asker: Asker, reply: (result: Record<string, unknown>) => void) => boolean) | null = null
+  /** A connection that asked the services something closed: they abort what it asked (`Asker.connection`). */
+  onConnectionClosed: ((connId: string) => void) | null = null
   /** A window (or `hn`) on this computer attached or went away — the pair brain thinks only while one is here. */
   onLocalClient: ((connId: string, attached: boolean) => void) | null = null
 
@@ -632,7 +634,7 @@ export class BackendSocket {
     if (!this.toolClients.delete(connId)) this.onLocalClient?.(connId, false)
     this.rowStateWindows.delete(connId)
     this.viewerForwarder.closeConnection(connId)
-    this.interactiveViewers.closeConnection(connId); this.ownerCommands.closeConnection(connId)
+    this.interactiveViewers.closeConnection(connId); this.ownerCommands.closeConnection(connId); this.onConnectionClosed?.(connId)
     // The last one leaving before any link could hear it attach: nothing happened, as far as the backend
     // is concerned, and the gateway does not tell a later link otherwise.
     this.gatewayPort?.localClients(this.localClients.size)

@@ -6,8 +6,10 @@
  * alike, so no other local process can stand in for one. The core then routes the requests the service
  * answers to it and relays each answer back to the client that asked; a request that finds the service
  * down, or not answering in time, is answered SERVICE_UNAVAILABLE with `retryable: true` — the core never
- * waits on a service in line. The core tells a service what it needs to know with `notify`, and answers
- * the few questions a service may ask it (`service_query`), nothing more.
+ * waits on a service in line. A routed request carries the connection it came over (`Asker.connection`),
+ * and the core says when that connection closes (`closeConnection`). The core tells a service what it
+ * needs to know with `notify`, and answers the few questions a service may ask it (`service_query`),
+ * nothing more.
  */
 import { randomUUID, timingSafeEqual } from 'node:crypto'
 import type { Asker } from './api.js'
@@ -208,6 +210,17 @@ export function createServiceLinks(options: ServiceLinksOptions) {
      *  or slow. Never rejects. The types it asks are no client's to route: only the core sends them. */
     call(service: string, type: string, payload: Record<string, unknown>, waitMs?: number): Promise<Record<string, unknown>> {
       return new Promise((resolve) => { ask(service, type, payload, THE_CORE, resolve, waitMs) })
+    },
+
+    /** A connection closed: every service connected is told (`service_connection_closed`), and aborts what
+     *  that connection asked it that it is still answering (services/process.ts). Not held for a service
+     *  that is down: what it was answering went with it. What it asked of an experiment still starting is
+     *  never sent: nobody is left to read the answer, and the work would run for no one. */
+    closeConnection(connection: string): void {
+      for (const [id, entry] of waiting) {
+        if (entry.frame && (entry.frame.asker as Asker | undefined)?.connection === connection) settle(id, entry, unavailable(entry.service))
+      }
+      for (const link of links.values()) link.sink.sendFrame({ type: 'service_connection_closed', payload: { connection } })
     },
 
     /** Bytes for a service that carries terminals; false when it is not connected or would not take them. */
