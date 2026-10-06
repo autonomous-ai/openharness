@@ -806,7 +806,12 @@ export class LocalModels {
     return { operation }
   }
 
-  async settled(): Promise<void> { await this.active?.done }
+  async settled(): Promise<void> {
+    // Found by QA on a quiet machine: a background app scan was still saving after fixture teardown began.
+    await this.active?.done
+    await this.listPending
+    await this.appsPending
+  }
 
   private async perform(grid: string, operation: ModelOperation): Promise<void> {
     const change = async (stage: ModelOperation['stage']) => {

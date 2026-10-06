@@ -756,3 +756,57 @@ describe('Codex sub-agents — the 0.160 multi-agent v2 vocabulary', () => {
     expect(events[1].payload).toMatchObject({ id: spawnCall, isError: false, output: 'There are 12 fixtures.', subagent: { agentId: '/root/scout' } })
   })
 })
+
+/**
+ * Codex 0.160's non-blocking question (`request_user_input_async`, answered `{"accepted":true}` at once):
+ * the person's answer comes back later as a user message, wrapped (shape measured on real 0.160.0 rollouts;
+ * text invented):
+ *
+ *   <send_user_message_question_reply>
+ *   [{"answer":"…","question":"…","questionItemId":"…"}]
+ *   </send_user_message_question_reply>
+ *
+ * Read as typed text, that wrapper and its JSON were the person's message: in the live turn, the history,
+ * the recap and search.
+ */
+describe('Codex 0.160 — the answer to a non-blocking question', () => {
+  const reply = (answers: Array<Record<string, string>>) =>
+    `<send_user_message_question_reply>\n${JSON.stringify(answers)}\n</send_user_message_question_reply>`
+  const answered = reply([{ answer: 'Postgres', question: 'Which database should the service use?', questionItemId: '["q-1"]' }])
+  const userItem = (text: string) => line('event_msg', { type: 'item_completed', item: { type: 'UserMessage', id: 'u2', client_id: 'c2', content: [{ type: 'text', text, text_elements: [] }] } })
+  const fixture = [
+    line('event_msg', { type: 'task_started', turn_id: 'turn-1' }),
+    userItem('Set up the service'),
+    line('response_item', { type: 'function_call', name: 'request_user_input_async', call_id: 'call_q1', arguments: JSON.stringify({ questions: [{ title: 'Which database should the service use?', options: ['Postgres', 'SQLite'] }] }) }),
+    line('response_item', { type: 'function_call_output', call_id: 'call_q1', output: JSON.stringify({ accepted: true }) }),
+    line('response_item', { type: 'message', role: 'user', content: [{ type: 'input_text', text: answered }] }),
+    userItem(answered),
+    line('event_msg', { type: 'item_completed', item: { type: 'AgentMessage', content: [{ type: 'Text', text: 'Using Postgres.' }], phase: 'final_answer' } }),
+    line('event_msg', { type: 'task_complete', turn_id: 'turn-1' }),
+  ]
+
+  it('reads as the question and the answer, live', () => {
+    const normalizer = new CodexNormalizer('live')
+    const starts = fixture.flatMap((raw) => normalizer.ingest(raw)).filter((event) => event.type === 'turn_started')
+    expect(starts.map((event) => event.payload.userMessage)).toEqual(['Set up the service', 'Which database should the service use? → Postgres'])
+  })
+
+  it('reads the same in the history and the recap', () => {
+    const history = codexMessagesToEvents(fixture).filter((event) => event.type === 'user_message')
+    expect(history.map((event) => event.payload.content)).toEqual(['Set up the service', 'Which database should the service use? → Postgres'])
+    expect(lastCodexTurnText(fixture)).toEqual({ userMessage: 'Which database should the service use? → Postgres', assistantText: 'Using Postgres.' })
+  })
+
+  it('puts several answers one to a line, and an answer without its question as just the answer', () => {
+    const normalizer = new CodexNormalizer('live')
+    const text = reply([{ answer: 'Postgres', question: 'Database?' }, { answer: 'Yes' }, { question: 'Skipped?', answer: ' ' }])
+    expect(normalizer.ingest(userItem(text))).toEqual([{ type: 'turn_started', payload: { userMessage: 'Database? → Postgres\nYes' } }])
+  })
+
+  it('keeps what is inside a wrapper it cannot read, without the wrapper', () => {
+    const normalizer = new CodexNormalizer('live')
+    const text = '<send_user_message_question_reply>\nnot json\n</send_user_message_question_reply>'
+    expect(normalizer.ingest(userItem(text))).toEqual([{ type: 'turn_started', payload: { userMessage: 'not json' } }])
+    expect(new CodexNormalizer('live').ingest(userItem(reply([])))).toEqual([{ type: 'turn_started', payload: { userMessage: '[]' } }])
+  })
+})

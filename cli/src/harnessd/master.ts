@@ -197,7 +197,9 @@ export function coreHandle(child: ChildProcess): CoreHandle {
   child.on('error', () => exit(1, null))
   return {
     pid: child.pid,
-    send: (message: MasterMessage) => { try { child.send(message) } catch { /* the core is going */ } },
+    // Found by QA after a quiet-machine run: CI lost an update exit 75 to a failed status send.
+    // A callback keeps IPC send errors out of the child's spawn-error/exit path.
+    send: (message: MasterMessage) => { try { child.send(message, () => {}) } catch { /* the core is going */ } },
     kill: (signal) => { try { child.kill(signal) } catch { /* already gone */ } },
     onMessage: (listener) => { child.on('message', listener) },
     onExit: (listener) => { exits.push(listener) },

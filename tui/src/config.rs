@@ -142,6 +142,12 @@ pub struct Look {
     pub status_bar_width: Option<String>,
     /// `on`: the panes you are not in, a little quieter (`off` unless chosen).
     pub dim: Option<String>,
+    /// How the current tab (the window) is marked in the status bar: `star` (default: `*` beside
+    /// its name) | `filled` (the tab is inverted — filled — with no `*`).
+    pub window_active: Option<String>,
+    /// How a tab's name is shown in the status bar: `tmux` (default: the window's short name) |
+    /// `pane` (the window's full name).
+    pub window_name: Option<String>,
 }
 
 pub struct Config {
@@ -209,6 +215,16 @@ impl Look {
         if let Some(b) = &self.border_style { out.push(("@hn-border".into(), b.clone())) }
         if let Some(w) = &self.status_bar_width { out.push(("@hn-status-bar-width".into(), w.clone())) }
         if let Some(d) = &self.dim { out.push(("@hn-dim".into(), d.clone())) }
+        // ── status bar tabs ──
+        // Two options shape the window list in the status bar: how the current tab is marked and
+        // how a tab's name is shown. `@hn-window-active`/`@hn-window-name` carry the choice for the
+        // Appearance list; the format/style overrides below are what actually draws it.
+        if let Some(a) = &self.window_active { out.push(("@hn-window-active".into(), a.clone())) }
+        if let Some(n) = &self.window_name { out.push(("@hn-window-name".into(), n.clone())) }
+        // The window-status-* overrides these two options need (empty for the tmux + star defaults).
+        let name = self.window_name.as_deref().unwrap_or("tmux");
+        let active = self.window_active.as_deref().unwrap_or("star");
+        for (o, v) in crate::options::window_status_overrides(name, active) { out.push((o, v)) }
         out
     }
 }
@@ -378,6 +394,8 @@ fn look_of(look: &toml::Table, problems: &mut Vec<String>) -> Look {
     field(look, "border_style", &mut l.border_style);
     field(look, "status_bar_width", &mut l.status_bar_width);
     field(look, "dim", &mut l.dim);
+    field(look, "window_active", &mut l.window_active);
+    field(look, "window_name", &mut l.window_name);
     // (An older file's `tabs` is left alone: the tabs over the panes are gone, the bar lists the windows.)
     l
 }
@@ -414,6 +432,8 @@ fn format_look(look: &Look) -> String {
     push(&look.border_style, "border_style", &mut s);
     push(&look.status_bar_width, "status_bar_width", &mut s);
     push(&look.dim, "dim", &mut s);
+    push(&look.window_active, "window_active", &mut s);
+    push(&look.window_name, "window_name", &mut s);
     s
 }
 
@@ -561,6 +581,46 @@ mod tests {
         assert_eq!(get(&a, "status-position"), None);
         let top = Look { status_bar: Some("top".into()), ..Default::default() }.assignments();
         assert_eq!(get(&top, "status-position").as_deref(), Some("top"));
+    }
+
+    #[test]
+    fn window_status_options_emit_format_and_style_overrides() {
+        let get = |a: &[(String, String)], n: &str| a.iter().find(|(k, _)| k == n).map(|(_, v)| v.clone());
+        // The defaults (tmux + star) put just the two @hn markers; no format/style overrides, so
+        // the tmux defaults draw the bar.
+        let star = Look { window_active: Some("star".into()), window_name: Some("tmux".into()), ..Default::default() }.assignments();
+        assert_eq!(get(&star, "@hn-window-active").as_deref(), Some("star"));
+        assert_eq!(get(&star, "@hn-window-name").as_deref(), Some("tmux"));
+        assert!(get(&star, "window-status-format").is_none(), "default keeps tmux's format");
+        assert!(get(&star, "window-status-current-format").is_none());
+        assert!(get(&star, "window-status-current-style").is_none());
+        // `pane` names the window with its active pane's title; `filled` drops the `*` and the tab
+        // takes the status line's own colours swapped (a solid block, as the preview draws it).
+        let filled = Look { window_active: Some("filled".into()), window_name: Some("pane".into()), ..Default::default() }.assignments();
+        let normal = get(&filled, "window-status-format").unwrap();
+        let current = get(&filled, "window-status-current-format").unwrap();
+        assert!(normal.contains("#{pane_title}"), "pane uses the active pane's title: {normal}");
+        assert!(current.contains("#{pane_title}"));
+        assert!(!current.contains("#{window_active,*"), "filled leaves no `*`: {current}");
+        let style = get(&filled, "window-status-current-style").unwrap();
+        assert!(style.contains("bold"), "{style}");
+        // The filled tab swaps the status line's colours: its background the theme foreground's,
+        // its lettering the theme's background.
+        let (bg, fg, _) = crate::theme::palette();
+        let fg = crate::tmuxconf::colour_name(fg);
+        let bg = crate::tmuxconf::colour_name(bg);
+        assert!(style.contains(&format!("fg={fg}")) && style.contains(&format!("bg={bg}")), "{style}");
+    }
+
+    #[test]
+    fn window_status_options_round_trip_through_tui_toml() {
+        let look = Look { window_active: Some("filled".into()), window_name: Some("pane".into()), ..Default::default() };
+        let text = format_look(&look);
+        assert!(text.contains("window_active = \"filled\"") && text.contains("window_name = \"pane\""), "{text}");
+        let value: toml::Value = text.parse().unwrap();
+        let mut problems = Vec::new();
+        assert_eq!(look_of(value.get("look").and_then(|v| v.as_table()).unwrap(), &mut problems), look);
+        assert!(problems.is_empty());
     }
 
     // ── keys ──

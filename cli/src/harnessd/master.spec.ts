@@ -203,6 +203,27 @@ describe('coreHandle', () => {
     }
   })
 
+  it('keeps the real update exit when an IPC send fails as the core is leaving', async () => {
+    // Found by QA after a quiet-machine run: CI rolled back a core exiting for an update when a
+    // status send lost its IPC channel. Node reports that send error on the child without a callback.
+    const child = fake()
+    child.send = (_message: unknown, callback?: (error: Error | null) => void) => {
+      queueMicrotask(() => {
+        const error = Object.assign(new Error('Channel closed'), { code: 'ERR_IPC_CHANNEL_CLOSED' })
+        if (callback) callback(error)
+        else child.emit('error', error)
+      })
+    }
+    const handle = coreHandle(child as unknown as ChildProcess)
+    const exits: unknown[] = []
+    handle.onExit((code, signal) => exits.push([code, signal]))
+    handle.send({ type: 'harnessd:status', status: {} as never })
+    await Promise.resolve()
+    expect(exits).toEqual([])
+    child.emit('exit', 75, null)
+    expect(exits).toEqual([[75, null]])
+  })
+
   it('passes messages and signals through, and swallows them for a child that is gone', () => {
     const child = fake()
     const handle = coreHandle(child as unknown as ChildProcess)
