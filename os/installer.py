@@ -2,10 +2,11 @@
 """Offline full-disk installer. Nothing is erased until the exact disk is confirmed."""
 from __future__ import annotations
 import argparse
-from contextlib import contextmanager
+from contextlib import contextmanager, ExitStack
 import curses
 from datetime import datetime, timezone
 import hashlib
+import importlib.util
 import json
 import os
 import pwd
@@ -26,6 +27,34 @@ WORDMARK = ('█ █ ▄▀█ █▀█ █▄ █ █▀▀ █▀ █▀', '�
 COMMAND_LOG = None
 INSTALL_LOG = Path('/var/log/harness-install.log')
 LAST_LOG = None
+
+
+def hardware_module():
+    # Load the root-owned packaged sibling, never a module from the working
+    # directory.
+    spec = importlib.util.spec_from_file_location('harness_os_hardware', Path(__file__).with_name('hardware.py'))
+    hardware = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(hardware)
+    return hardware
+
+
+def boot_module():
+    spec = importlib.util.spec_from_file_location('harness_boot_profile', Path(__file__).with_name('boot_profile.py'))
+    value = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(value)
+    return value
+
+
+def require_install_platform(sysfs=Path('/sys')):
+    blocker = hardware_module().installation_blocker(sysfs)
+    if blocker:
+        raise ValueError(blocker)
+
+
+def installation_notice():
+    if hardware_module().opencode_cpu_supported() is False:
+        return 'This CPU cannot run bundled OpenCode (SSE4.2 required).'
+    return ''
 
 
 def encryption_memory(meminfo=Path('/proc/meminfo')):
@@ -225,6 +254,12 @@ def preflight(config, source):
     payload = subprocess.check_output(['unsquashfs', '-cat', str(source), kernel['path']], stderr=COMMAND_LOG)
     if hashlib.sha256(payload).hexdigest() != kernel['sha256']:
         raise ValueError('The installation kernel failed verification. No disk has been erased.')
+    profile = boot_module().selected()
+    if kernel.get('platform', 'pc') != profile['id']:
+        raise ValueError('The installation image uses a different boot platform.')
+    pkgbase = run('unsquashfs', '-cat', source, str(Path(kernel['path']).with_name('pkgbase')), capture=True)
+    if pkgbase.strip() != profile['kernel']:
+        raise ValueError('The installation image has the wrong platform kernel.')
     return kernel
 
 
@@ -280,16 +315,52 @@ def preserve_trial(trial, target, home):
     return {key: value for key, value in receipt.items() if key != 'entries'}
 
 
-def copy_image(source, target):
-    # Bound extraction memory and skip the optional GPU archive cache entirely.
-    # Selected hardware reads its signed packages directly from the live USB.
-    run('unsquashfs', '-mem', '64M', '-f', '-no-progress', '-excludes', '-d', target, source,
-        'usr/share/harness-os/hardware/nvidia')
+def shared_broadcom_cache(source, bundle):
+    """Use the live cache only when it belongs to this exact selected payload."""
+    try:
+        manifest = json.loads((bundle / 'manifest.json').read_text())
+        embedded = json.loads(run('unsquashfs', '-cat', source,
+                                  'usr/share/harness-os/hardware/broadcom/manifest.json', capture=True))
+        if (not isinstance(manifest, dict) or manifest != embedded or not manifest.get('packages') or
+                not isinstance(manifest.get('files'), dict) or not manifest['files'] or
+                not (bundle / 'packages').is_dir()):
+            return False
+        # Avoid reading the entire archive cache on generic machines. Selected
+        # radios still verify every hash and signature before pacman sees it.
+        for name, expected in manifest['files'].items():
+            path = bundle / name
+            if (Path(name).is_absolute() or '..' in Path(name).parts or
+                    path.is_symlink() or not path.resolve().is_relative_to(bundle.resolve()) or
+                    not path.is_file() or path.stat().st_size != expected['bytes']):
+                return False
+        return True
+    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
+        # An explicit --source can differ from the running USB. Keep its own
+        # cache instead of requiring matching live files for that installation.
+        return False
+
+
+def copy_image(source, target, broadcom=Path('/usr/share/harness-os/hardware/broadcom')):
+    # Bound extraction memory. Keep the Wi-Fi module/manifest from the selected
+    # image; selected radios can read its matching signed archives from the USB.
+    excluded = ['usr/share/harness-os/hardware/nvidia']
+    if shared_broadcom_cache(source, broadcom):
+        excluded.append('usr/share/harness-os/hardware/broadcom/packages')
+    run('unsquashfs', '-mem', '64M', '-f', '-no-progress', '-excludes', '-d', target, source, *excluded)
 
 
 def install(config, source, target, progress=None):
+    # All preserved platform data must outlive disk erasure and be released only
+    # after installation/cleanup completes. There is no user-supplied platform
+    # override: the selected image determines its kernel and preservation needs.
+    with ExitStack() as resources:
+        return install_image(config, source, target, progress, resources)
+
+
+def install_image(config, source, target, progress, resources):
     report = progress or (lambda message: print(message, flush=True))
     validate_config(config)
+    require_install_platform()
     # Inspect again immediately before partitioning, rather than trusting the picker.
     selected_disk(config)
     if not source.is_file():
@@ -300,6 +371,11 @@ def install(config, source, target, progress=None):
         raise ValueError('Explicit confirmation of the exact disk is required.')
     report('Checking installation files…')
     kernel = preflight(config, source)
+    platform = boot_module().selected()
+    preserved = None
+    if platform['id'] == 'apple-t2':
+        report('Preserving this Mac’s wireless firmware…')
+        preserved = resources.enter_context(boot_module().module('t2_install').preserve(config['disk']))
     trial = trial_source(config)
     selected_disk(config)
     pbkdf_memory = encryption_memory() if config['encrypt'] else None
@@ -318,6 +394,10 @@ def install(config, source, target, progress=None):
             '-n', '3:0:0', '-t', '3:8309' if config['encrypt'] else '3:8300', '-c', '3:HN ROOT', disk)
         run('udevadm', 'settle')
         run('mkfs.fat', '-F', '32', '-n', 'HNBOOT', boot)
+        if preserved:
+            # Make the validated firmware discoverable on a retry/reinstall,
+            # before encryption or the larger root copy can fail.
+            boot_module().module('t2_install').persist_boot(boot, preserved)
         root_device = root_partition
         luks_uuid = None
         if config['encrypt']:
@@ -361,7 +441,8 @@ def install(config, source, target, progress=None):
         shutil.rmtree(boot_staging)
         # mkarchiso moves the live /boot files out of SquashFS. Regenerate the
         # disk initramfs around this verified, package-owned kernel instead.
-        shutil.copyfile(target / kernel['path'], target / 'boot/vmlinuz-linux-lts')
+        shutil.copyfile(target / kernel['path'], target / ('boot/vmlinuz-' + platform['kernel']))
+        apple_firmware = boot_module().module('t2_install').restore(target, preserved) if preserved else None
         report('Setting up your account…')
         # The live image is immutable. Only projects is transferred explicitly;
         # live account passwords, agent credentials, SSH keys and sessions stay out.
@@ -392,6 +473,9 @@ def install(config, source, target, progress=None):
               'HOOKS=(base systemd autodetect microcode modconf kms keyboard sd-vconsole '
               + ('plymouth ' if config['encrypt'] else '')
               + 'block sd-encrypt filesystems fsck)\nCOMPRESSION="zstd"\n')
+        if platform['modules']:
+            write(target, '/etc/mkinitcpio.conf.d/20-harness-platform.conf',
+                  'MODULES+=(' + ' '.join(platform['modules']) + ')\n')
         write(target, '/etc/vconsole.conf', 'KEYMAP=us\n')
         if config['encrypt']:
             write(target, '/etc/plymouth/plymouthd.conf',
@@ -412,6 +496,8 @@ def install(config, source, target, progress=None):
         # Do not send a person who paused at the prompt into emergency mode.
         root_flags = 'subvol=@' + (',x-systemd.device-timeout=0' if config['encrypt'] else '')
         kernel_args = f'quiet loglevel=3 rootflags={root_flags}'
+        if platform['parameters']:
+            kernel_args += ' ' + ' '.join(platform['parameters'])
         if config.get('serial_console'):
             # Keep the screen as /dev/console, as on an ordinary installation.
             # Making the diagnostic serial port primary can introduce serial-TTY
@@ -437,7 +523,8 @@ def install(config, source, target, progress=None):
         chroot(target, '/usr/lib/harness-os/init-keyring')
         # Keep the live marker through this initial optional package transaction,
         # so recovery hooks do not checkpoint an unfinished installation.
-        run('/usr/bin/python3', '/usr/lib/harness-os/hardware.py', 'configure-install', target)
+        if platform['id'] == 'pc':
+            run('/usr/bin/python3', '/usr/lib/harness-os/hardware.py', 'configure-install', target)
         (target / 'etc/harness-live').unlink()
         chroot(target, 'mkinitcpio', '-P')
         chroot(target, 'grub-install', '--target=i386-pc', '--recheck', disk)
@@ -445,7 +532,10 @@ def install(config, source, target, progress=None):
         chroot(target, 'grub-mkconfig', '-o', '/boot/grub/grub.cfg')
         receipt = {'version': lock['version'], 'installed_at': datetime.now(timezone.utc).isoformat(),
                    'duration_seconds': round(time.monotonic() - started, 3), 'encrypted': config['encrypt'],
-                   'disk_bytes': selected_size(config), 'root_uuid': root_uuid, 'boot_uuid': boot_uuid}
+                   'disk_bytes': selected_size(config), 'root_uuid': root_uuid, 'boot_uuid': boot_uuid,
+                   'platform': platform['id']}
+        if apple_firmware:
+            receipt['apple_firmware'] = apple_firmware
         if pbkdf_memory is not None:
             receipt['pbkdf_memory_limit_kib'] = pbkdf_memory
         if trial_receipt is not None:
@@ -496,12 +586,13 @@ def disk_label(disk, width=None):
 
 class InstallForm:
     """Small keyboard form using the Python/ncurses already in the image."""
-    def __init__(self, screen, candidates, username, hostname, encrypt):
+    def __init__(self, screen, candidates, username, hostname, encrypt, notice=''):
         self.screen, self.disks = screen, candidates
         self.username, self.hostname, self.encrypt = username, hostname, encrypt
         self.selected, self.focus = 0, 2
         self.passwords, self.positions = ['', ''], [0, 0]
         self.error = ''
+        self.notice = notice
         self.title = None
         self.cursor_visible = None
         self.top, self.left, self.width = 0, 2, 60
@@ -635,6 +726,8 @@ class InstallForm:
         while True:
             if not self.begin(''):
                 continue
+            for row, line in enumerate(textwrap.wrap(self.notice, self.width)):
+                self.line(1 + row, line, accent=True)
             disk = self.disks[self.selected]
             # Identical models/capacities need a visible discriminator after selection.
             duplicate = sum(disk_label(d) == disk_label(disk) for d in self.disks) > 1
@@ -705,7 +798,8 @@ def interactive(username='me', hostname='harness', encrypt=True):
     if not sys.stdin.isatty() or not sys.stdout.isatty():
         raise ValueError('Interactive installation needs a terminal. Use --config for unattended installation.')
     curses.set_escdelay(25)
-    return curses.wrapper(lambda screen: InstallForm(screen, candidates, username, hostname, encrypt).run())
+    notice = installation_notice()
+    return curses.wrapper(lambda screen: InstallForm(screen, candidates, username, hostname, encrypt, notice).run())
 
 
 def completion(screen, boot=False):
@@ -806,6 +900,7 @@ def main(args=None):
     args = arguments() if args is None else args
     if os.geteuid() != 0:
         raise SystemExit('Run sudo harness install from the live USB.')
+    require_install_platform()
     if args.config:
         if args.username is not None or args.hostname is not None or args.no_encryption:
             raise ValueError('With --config, set account names and encryption in that file instead of command-line overrides.')

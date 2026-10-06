@@ -66,6 +66,7 @@ class _Api extends DirectAuthApi {
     required String code,
     required String state,
     required String tx,
+    Map<String, String> attribution = const {},
   }) {
     expect(code, 'fixture-code');
     expect(state, 'fixture-state');

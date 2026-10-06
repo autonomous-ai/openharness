@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { appendFileSync, mkdtempSync, rmSync, truncateSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { scanRecordsBackward, streamRecords, tailFile, tailFileUntil } from './transcriptTail.js'
+import { scanRecordsBackward, streamRecords, tailFile, tailFileCapped, tailFileUntil, WHOLE_READ_CAP_BYTES } from './transcriptTail.js'
 
 describe('backward transcript suffix', () => {
   let directory: string, file: string
@@ -190,5 +190,33 @@ describe('tailFile', () => {
     expect(await tailFile(file, -Infinity)).toEqual([])
     expect(await tailFile(file, 0)).toEqual([])
     expect(await tailFile(file, 1.9)).toEqual(['b'])
+  })
+})
+
+describe('tailFileCapped', () => {
+  let directory: string, file: string
+  beforeEach(() => { directory = mkdtempSync(join(tmpdir(), 'tail-capped-')); file = join(directory, 't.jsonl') })
+  afterEach(() => rmSync(directory, { recursive: true, force: true }))
+
+  it('reads a file under the cap whole, as tailFile does, with the same line rules', async () => {
+    writeFileSync(file, '{"a":1}\r\n\n{"b":"é"}\r{"c":3}\n   \n{"d":4}')
+    expect(await tailFileCapped(file)).toEqual({ lines: await tailFile(file, Infinity), truncated: false })
+    expect((await tailFileCapped(file)).lines).toEqual(['{"a":1}', '{"b":"é"}', '{"c":3}', '{"d":4}'])
+    expect(WHOLE_READ_CAP_BYTES).toBe(64 * 1024 * 1024)
+  })
+
+  it('keeps only the newest records that fit, in order, and says older ones were left', async () => {
+    const records = Array.from({ length: 10 }, (_, i) => JSON.stringify({ n: i, pad: 'x'.repeat(90) }))
+    writeFileSync(file, records.join('\n') + '\n')
+    const each = Buffer.byteLength(records[0])
+    expect(await tailFileCapped(file, each * 3)).toEqual({ lines: records.slice(-3), truncated: true })
+    expect(await tailFileCapped(file, each * 3 + 1)).toEqual({ lines: records.slice(-3), truncated: true })
+    expect(await tailFileCapped(file, each * 10)).toEqual({ lines: records, truncated: false })
+    // A newest record bigger than the cap: nothing that fits is newer, so nothing is read.
+    expect(await tailFileCapped(file, each - 1)).toEqual({ lines: [], truncated: true })
+  })
+
+  it('reads nothing of a file that is not there', async () => {
+    expect(await tailFileCapped(join(directory, 'gone.jsonl'))).toEqual({ lines: [], truncated: false })
   })
 })

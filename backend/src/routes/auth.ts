@@ -25,6 +25,16 @@ import {
 import { parseAutonomousEnvironment, type AutonomousEnvironment } from '../lib/autonomousEnvironment.js'
 import { isHarnessRefreshToken } from '../lib/harnessTokenFormat.js'
 import { redeemHandoff, refreshHarnessSession, revokeHarnessSession, startHandoff } from '../lib/harnessSession.js'
+import { normalizeSignInAttribution, type SignInAttribution } from '../lib/signInAttribution.js'
+
+/** Reporting only: a sign-in whose attribution cannot be stored still signs in. */
+async function recordAttribution(userId: string, attribution: SignInAttribution): Promise<void> {
+  try {
+    await userService.recordSignInAttribution(userId, attribution)
+  } catch (e) {
+    logger.error('sign-in attribution not recorded', e, { userId })
+  }
+}
 
 export async function authRoutes(app: FastifyInstance): Promise<void> {
   // 1) Start login (web-driven). The web fetches this (XHR, so the API URL never hits the address
@@ -56,10 +66,12 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
   //    ?code&state + the `tx` it stashed, and POSTs them here (XHR). The BACKEND exchanges the code
   //    then validates the access token through the profile service, mirrors the user and returns that
   //    SAME access token in the body. No backend-owned session JWT is minted.
-  app.post<{ Body: { code?: string; state?: string; tx?: string } }>(
+  //    `attribution` is the `utm_*` + `rid` auth-service carried back onto the callback URL (lib/signInAttribution.ts).
+  app.post<{ Body: { code?: string; state?: string; tx?: string; attribution?: unknown } }>(
     '/api/auth/exchange',
     async (req, reply) => {
       const { code, state, tx: txRaw } = req.body ?? {}
+      const attribution = normalizeSignInAttribution(req.body?.attribution)
       let tx: SsoTx | null = null
       try {
         tx = txRaw ? await consumeTx(txRaw) : null
@@ -73,14 +85,21 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
         const tokens = await exchangeCode(code, tx.verifier, tx.redirectUri, tx.autonomousEnv, tx.clientId)
         const token = tokens.access_token
         if (!token) throw new Error('sso response had no access_token')
-        const user = await authenticateAccessToken(token, tx.autonomousEnv)
+        // A sign-in that creates the account keeps its tags as the acquisition (`signUpAttribution`).
+        const user = await authenticateAccessToken(
+          token,
+          tx.autonomousEnv,
+          attribution ? { signUpAttribution: attribution } : {},
+        )
         logger.info('sso login', {
           userId: user.sub,
           email: user.email || '(empty)',
           autonomousEnv: user.autonomousEnv,
           hasRefreshToken: !!tokens.refresh_token,
           expiresIn: tokens.expires_in,
+          ...(attribution ? { attribution } : {}),
         })
+        if (attribution) await recordAttribution(user.sub, attribution)
         return sendSuccess(reply, {
           token,
           next: tx.next,

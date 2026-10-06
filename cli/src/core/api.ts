@@ -10,16 +10,25 @@
  * The apps reach a service through the requests it answers (`ServiceRequests`), which its start
  * returns. The core routes them to it; a port is only for what the core itself must ask.
  */
+import type { RecentTurn } from '../cable/cableHost.js'
+import type { CableAgent, CableMachine, CableMachineSource } from '../cable/cableSession.js'
+import type { FleetEvent } from '../cable/machineFleet.js'
+import type { AnswerReceipt, ReviewedAnswer } from '../cable/questionInbox.js'
 import type { AgentDshContext } from '../lib/agentFrame.js'
 import type { GridAccess } from '../lib/gridAttach.js'
 import type { AgentGridTarget } from '../lib/gridModels.js'
 import type { LiveEvent } from '../lib/normalize.js'
 import { projectDisplayName, type registry, type RegisteredSession } from '../lib/registry.js'
+import type { RuntimeModelOption } from '../lib/runtimeProfile.js'
+import type { RouterContinuity } from '../lib/voiceRouter.js'
 import type { ExternalSessions, OpenSessions } from '../lib/sessionSearch/external.js'
 import type { SessionSearchIndex } from '../lib/sessionSearch/indexer.js'
 import type { StoppedAgentStore } from '../lib/stoppedAgents.js'
+import type { RouteAnswer } from '../localWsServer.js'
 import type { SwarmPromptScopes } from '../teams/promptScope.js'
 import { FAIL, later, type PortFallbacks } from './serviceHost.js'
+
+export type { RouteAnswer }
 
 export interface CoreApi {
   /** The daemon's data folder; a service keeps its own files in it. */
@@ -39,6 +48,32 @@ export interface CoreApi {
     terminalAvailable(agentId: string): boolean
     /** Send the agent's frame to the apps again. */
     sync(session: RegisteredSession): void
+    /** The Model/Effort choices an agent's engine offers (opaque `runtime-v1` ids): one agent's, or
+     *  every live agent's when none is named. */
+    runtimeModels(agentId?: string): Promise<RuntimeModelOption[]>
+    /** The opaque runtime-v1 profile an agent runs with: its model and effort, for a picker's chips. */
+    runtimeProfile(session: RegisteredSession): string | null
+    /** Switch a live agent's model and effort; nothing without a model. */
+    setRuntime(agentId: string, model?: string, effort?: string): void
+    /** Fork a live agent, as the window's `agent_fork` does: the new agent's id, or the refusal. */
+    fork(agentId: string): Promise<{ ok: true; agentId: string } | { ok: false; error: string; detail?: string }>
+  }
+  /** A device's or another machine's turns for an agent on this one: the doors the web and the hooks use. */
+  turns: {
+    /** Deliver text into a live agent. */
+    send(agentId: string, text: string): void
+    /** Stop a live agent's turn. */
+    stop(agentId: string): void
+    /** A live agent's last `n` completed turns, newest first. */
+    recent(agentId: string, n: number): RecentTurn[]
+    /** The person's own last questions to a live agent, newest first. */
+    asks(agentId: string): string[]
+  }
+  questions: {
+    /** Answer a live agent's question, keyed by the question keys it asked with. */
+    answer(agentId: string, requestId: string, answers: Record<string, string>): void
+    /** Answer it with the selections a device reviewed; resolves whether the terminal confirmed it. */
+    answerReviewed(answer: ReviewedAnswer): Promise<boolean>
   }
   transcripts: {
     /** How to read a conversation its engine keeps in a database instead of a transcript file;
@@ -57,12 +92,21 @@ export interface CoreApi {
     mintGridName(): Promise<string | null>
     /** This machine's harness access token, for handing a sign-in to grid. Rejects when signed out. */
     accessToken(): Promise<string>
+    /** The account's private grid: the backend's word when it gave one, else what this machine works
+     *  out (`lib/gridDerive.ts`); null when it has none. */
+    privateGridName(): Promise<string | null>
+    /** This machine's name as the account's Machines list shows it (the backend's `machine_meta`); null
+     *  until the first one lands. */
+    machineName(): string | null
   }
   clients: {
     /** An agent's viewer moved: the windows' viewer panes forward to the new one. */
     viewerChanged(agentId: string): void
     /** The account's grid has a name: the models picker answers with it at once. */
     gridNamed(name: string): void
+    /** What the models picker lists may have changed (a local model started or stopped, grid set up):
+     *  the windows on this computer are pushed the list again (`grid_models_changed`). */
+    gridModelsChanged(): void
     /** A harness being installed or updated moved on (`dsh_install_status`): the apps show it in the
      *  create dialog. */
     dshInstallStatus(status: Record<string, unknown>): void
@@ -154,6 +198,97 @@ export type TeamsPort = Pick<SwarmPromptScopes, 'prepare' | 'started' | 'raw' | 
 /** What the core gets when the teams fail: the prompt is written with no team recorded for it. */
 export const TEAMS_FALLBACKS: PortFallbacks<TeamsPort> = { prepare: () => {}, started: undefined, raw: undefined, forget: undefined }
 
+/** The prompt scopes whole, as the socket's team features hold them: the core's calls (`TeamsPort`),
+ *  and the team a prompt came from (`current`), which an agent's answer to a team's question moves
+ *  back (`replied`). In the core's process the socket's own; in their own, core/teamsLink.ts. */
+export type PromptScopes = TeamsPort & Pick<SwarmPromptScopes, 'current' | 'replied'>
+
+/** A change to the prompt scopes, as the core tells the teams' own process (core/teamsLink.ts,
+ *  services/teamsProcess.ts): numbered within one core's life, stamped with when it happened, and
+ *  given to the process in order, once. `raw` bytes travel as base64. */
+export type TeamsEvent = { seq: number; core: string; at: number; agentId: string } & (
+  | { kind: 'prepare'; text: string; tabId?: string; deliveryId?: string }
+  | { kind: 'unprepare'; of: number }
+  | { kind: 'started'; text: string; source: 'hook' | 'transcript'; engine?: string }
+  | { kind: 'raw'; bytes: string; tabId?: string; pasted: boolean }
+  | { kind: 'forget' }
+  | { kind: 'replied'; teamId: string; questionId: string }
+)
+
+/** What a delivered turn answers: delivered, or refused with the machine's name and a reason a person can read. */
+export type SendResult = { ok: true } | { ok: false; machine: string; reason: string }
+/** What a fork answers: the new agent's id, or why not. */
+export type ForkResult = { ok: true; agentId: string } | { ok: false; error: string; detail?: string }
+/** A fork and where it was asked: `asked` is false for a refusal made before asking anyone (an agent
+ *  never listed, a daemon or a fleet that cannot fork), which nobody needs to hear about. */
+export interface ForkOutcome { result: ForkResult; machineId: string; asked: boolean }
+/** A machine selected for the dial, or the refusal a person can act on. */
+export type SelectResult = { ok: true } | { ok: false; code: string; message: string }
+
+/**
+ * Which machine an agent is on, and a turn, a stop or an answer reaching it there: the fleet's router
+ * (services/fleetRouter.ts), as the dial asks it. Also the lane to the other machines, which the dial
+ * holds while it is plugged in. A refusal is an answer here, never a throw: through the port, a throw is
+ * a failure of the fleet service, and counts toward switching it off.
+ */
+export interface FleetRouting {
+  listMachines(): Promise<{ machines: CableMachine[]; source: CableMachineSource }>
+  listAgentsFlat(): Promise<CableAgent[]>
+  agentTotal(): number
+  describe(agentId: string): { name: string; engine: string; machine: string } | undefined
+  noteAgent(machineId: string, agentId: string): void
+  machineOf(agentId: string): string
+  knows(agentId: string): boolean
+  isLocalAgent(agentId: string): boolean
+  sendTurn(agentId: string, text: string): SendResult
+  lastRouted(): RouterContinuity | undefined
+  stopTurn(agentId: string): void
+  canSpeakQuestion(agentId: string): boolean
+  answerReviewed(answer: ReviewedAnswer): Promise<AnswerReceipt>
+  answer(agentId: string, requestId: string, answers: Record<string, string>): void
+  updateAgent(agentId: string, model?: string, effort?: string): void
+  recentSummaries(agentId: string): Promise<Array<{ recap: string; text: string; ask: string }>>
+  recentAsks(agentId: string): Promise<string[]>
+  listModels(agentId: string): Promise<string[]>
+  forkAgent(agentId: string): Promise<ForkOutcome>
+  /** Whether a lane to the other machines exists: signed in, with the fleet's own fleet. */
+  hasLane(): boolean
+  /** Hold the lane for a dial, attached to no machine. Resolves with how it went; never rejects. */
+  online(): Promise<{ ok: true } | { ok: false; message: string }>
+  select(machineId: string): Promise<SelectResult>
+  release(immediate?: boolean): void
+}
+
+/** The core's calls into the fleet: ⌘K's two requests — which agent a typed task belongs to, on any of
+ *  the owner's machines, and delivering it to that agent's own machine — the routing the dial asks of
+ *  it, the cards the other machines send, and stopping the lane to them for a shutdown. */
+export interface FleetPort extends FleetRouting {
+  routeTask(text: string): Promise<RouteAnswer>
+  routeSend(agentId: string, text: string): SendResult
+  /** The other machines' cards, for the dial. Returns how to stop hearing them. */
+  onEvent(listener: (event: FleetEvent) => void): () => void
+  stop(): void
+}
+
+const FLEET_UNAVAILABLE = 'the fleet service is unavailable'
+
+/**
+ * What the core gets when the fleet fails. ⌘K says so, picking no agent and sending nothing; a shutdown
+ * goes on; the cards stop. The dial's routing FAILs: the dial routes this computer by itself then, as it
+ * does with the fleet off (cable/cableHost.ts), rather than reading a made-up answer as the fleet's.
+ */
+export const FLEET_FALLBACKS: PortFallbacks<FleetPort> = {
+  routeTask: later({ agentId: '', machineId: '', name: '', confidence: 0, reason: FLEET_UNAVAILABLE, candidates: [], weighed: 0, machines: 0, via: '' }),
+  routeSend: { ok: false, machine: '', reason: FLEET_UNAVAILABLE },
+  onEvent: () => {},
+  stop: undefined,
+  listMachines: later(FAIL), listAgentsFlat: later(FAIL), agentTotal: FAIL, describe: FAIL, noteAgent: FAIL,
+  machineOf: FAIL, knows: FAIL, isLocalAgent: FAIL, sendTurn: FAIL, lastRouted: FAIL, stopTurn: FAIL,
+  canSpeakQuestion: FAIL, answerReviewed: later(FAIL), answer: FAIL, updateAgent: FAIL, recentSummaries: later(FAIL),
+  recentAsks: later(FAIL), listModels: later(FAIL), forkAgent: later(FAIL), hasLane: FAIL, online: later(FAIL),
+  select: later(FAIL), release: FAIL,
+}
+
 /** Each port is filled by the service that owns it when that service starts, and is null while the
  *  service is off: the core never waits on one. */
 export interface CorePorts {
@@ -162,10 +297,11 @@ export interface CorePorts {
   models: ModelsPort | null
   workspaces: WorkspacesPort | null
   teams: TeamsPort | null
+  fleet: FleetPort | null
 }
 
 export function emptyPorts(): CorePorts {
-  return { search: null, viewers: null, models: null, workspaces: null, teams: null }
+  return { search: null, viewers: null, models: null, workspaces: null, teams: null, fleet: null }
 }
 
 export interface CoreApiDeps {
@@ -176,16 +312,26 @@ export interface CoreApiDeps {
   externalSessions: CoreApi['external']['sessions']
   openSessions: CoreApi['external']['open']
   syncSession: CoreApi['agents']['sync']
+  runtimeModels: CoreApi['agents']['runtimeModels']
   viewerChanged: CoreApi['clients']['viewerChanged']
   gridNamed: CoreApi['clients']['gridNamed']
+  gridModelsChanged: CoreApi['clients']['gridModelsChanged']
   dshInstallStatus: CoreApi['clients']['dshInstallStatus']
   mintGridName: CoreApi['account']['mintGridName']
   accessToken: CoreApi['account']['accessToken']
+  privateGridName: CoreApi['account']['privateGridName']
+  machineName: CoreApi['account']['machineName']
+  runtimeProfile: CoreApi['agents']['runtimeProfile']
+  setRuntime: CoreApi['agents']['setRuntime']
+  fork: CoreApi['agents']['fork']
+  turns: CoreApi['turns']
+  questions: CoreApi['questions']
 }
 
 export function createCoreApi({
-  dataDir, registry, stoppedAgents, databaseHistory, externalSessions, openSessions, syncSession, viewerChanged,
-  gridNamed, dshInstallStatus, mintGridName, accessToken,
+  dataDir, registry, stoppedAgents, databaseHistory, externalSessions, openSessions, syncSession, runtimeModels, viewerChanged,
+  gridNamed, gridModelsChanged, dshInstallStatus, mintGridName, accessToken, privateGridName, machineName,
+  runtimeProfile, setRuntime, fork, turns, questions,
 }: CoreApiDeps): CoreApi {
   return {
     dataDir,
@@ -197,10 +343,16 @@ export function createCoreApi({
       advertised: () => registry.advertised(),
       terminalAvailable: (agentId) => registry.terminalAvailable(agentId),
       sync: syncSession,
+      runtimeModels,
+      runtimeProfile,
+      setRuntime,
+      fork,
     },
+    turns,
+    questions,
     transcripts: { databaseHistory },
     external: { sessions: externalSessions, open: openSessions },
-    account: { mintGridName, accessToken },
-    clients: { viewerChanged, gridNamed, dshInstallStatus },
+    account: { mintGridName, accessToken, privateGridName, machineName },
+    clients: { viewerChanged, gridNamed, gridModelsChanged, dshInstallStatus },
   }
 }

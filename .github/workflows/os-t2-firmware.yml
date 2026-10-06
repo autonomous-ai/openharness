@@ -1,0 +1,63 @@
+name: Harness OS Apple firmware preservation
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ['os-polish/t2-firmware']
+    paths:
+      - 'os/platforms/apple-t2/firmware_names.py'
+      - 'os/tools/prepare-t2-firmware.py'
+      - 'os/tests/test_t2_firmware.py'
+      - 'os/tests/t2_firmware_reference.py'
+      - '.github/workflows/os-t2-firmware.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: harness-t2-firmware-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  preservation:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.14.7'
+      - name: Verify local export, archive refusal and private staging
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          folder = Path('.harness/validation')
+          folder.mkdir(parents=True, exist_ok=True)
+          plan = {'reason': 'T2 firmware preservation on the native host; fixture bytes only, no disk, driver or system writes.', 'minimum_free_gib': 1,
+                  'checks': [{'name': 'firmware-contract', 'argv': ['python3', '-m', 'unittest', 'discover', '-s', 'os/tests', '-p', 'test_t2_firmware.py', '-v'], 'timeout_seconds': 60}]}
+          (folder / 't2-firmware.json').write_text(json.dumps(plan))
+          PY
+          python3 scripts/validate-change.py .harness/validation/t2-firmware.json
+      - name: Compare naming and bytes with reviewed upstream conversion
+        run: |
+          mkdir -p os/work/t2-firmware-reference
+          curl --fail --location --proto '=https' --proto-redir '=https' --max-time 45 \
+            https://raw.githubusercontent.com/t2linux/wiki/11fc0a8d8cfb61affd0cb9d1ac245c1b6c16d3cd/docs/tools/firmware.sh \
+            --output os/work/t2-firmware-reference/upstream.sh
+          python3 os/tests/t2_firmware_reference.py \
+            --upstream os/work/t2-firmware-reference/upstream.sh \
+            --output os/test-results/t2-firmware/reference.json
+      - name: Retain source and host evidence without firmware
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: harness-t2-firmware-${{ matrix.os }}
+          path: |
+            .harness/validation/
+            os/test-results/t2-firmware/
+          retention-days: 7

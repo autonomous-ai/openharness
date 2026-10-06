@@ -2,9 +2,11 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   ControlCommandQueue,
   decodeTmuxControlData,
+  literalKeyCommands,
   normalizeTmuxHistoryLines,
   normalizeTmuxCaptureLines,
   parseTmuxControlOutput,
+  quoteForOldTmux,
   synthesizeTmuxSnapshot,
   tuiScrollPageCount,
 } from './tmuxStream.js'
@@ -16,6 +18,51 @@ describe('tuiScrollPageCount', () => {
     expect(tuiScrollPageCount(1)).toBe(1)
     expect(tuiScrollPageCount(12)).toBe(1)
     expect(tuiScrollPageCount(400)).toBe(1)
+  })
+})
+
+// tmux before 3.0 has no `send-keys -H`: keystrokes go as text through its command parser (cmd-string.c),
+// so every byte that parser treats as syntax has to come back out exactly. Proven against real tmux 2.8
+// byte for byte in tmuxStream.real.spec.ts; these pin the encoding.
+describe('keystrokes for a tmux without send-keys -H', () => {
+  it('quotes text so the old parser hands it back as it was', () => {
+    expect(quoteForOldTmux('plain text')).toBe("'plain text'")
+    // Single quotes hold everything but themselves; a `'` goes in double quotes.
+    expect(quoteForOldTmux("it's")).toBe(`'it'"'"'s'`)
+    expect(quoteForOldTmux('$HOME #not ~ "x" \\')).toBe(`'$HOME #not ~ "x" \\'`)
+    // An argument ending in `;` ends the command, unless it ends in `\;`, which comes back as `;`.
+    expect(quoteForOldTmux('a;')).toBe(`'a\\;'`)
+    expect(quoteForOldTmux(';')).toBe(`'\\;'`)
+    expect(quoteForOldTmux("';")).toBe(`''"'"'\\;'`)
+    expect(quoteForOldTmux('a\\;')).toBe(`'a\\\\;'`)
+    expect(quoteForOldTmux('a;b')).toBe("'a;b'")
+  })
+
+  it('sends LF and NUL as the keys that write them, and text after `--`', () => {
+    expect(literalKeyCommands('%3', Buffer.from('-a\nb\0'))).toEqual([
+      "send-keys -t %3 -l -- '-a'",
+      'send-keys -t %3 C-j',
+      "send-keys -t %3 -l -- 'b'",
+      'send-keys -t %3 C-@',
+    ])
+    expect(literalKeyCommands('%3', Buffer.from('\n\n'))).toEqual(['send-keys -t %3 C-j', 'send-keys -t %3 C-j'])
+    expect(literalKeyCommands('%3', Buffer.alloc(0))).toEqual([])
+  })
+
+  it('cuts long text into commands, never inside a UTF-8 character', () => {
+    // 世 is three bytes: a cut after three would land inside the first one, so it moves back before it.
+    expect(literalKeyCommands('%3', Buffer.from('a世世b'), 3)).toEqual([
+      "send-keys -t %3 -l -- 'a'",
+      "send-keys -t %3 -l -- '世'",
+      "send-keys -t %3 -l -- '世'",
+      "send-keys -t %3 -l -- 'b'",
+    ])
+    expect(literalKeyCommands('%3', Buffer.from('a世世b'), 4)).toEqual([
+      "send-keys -t %3 -l -- 'a世'",
+      "send-keys -t %3 -l -- '世b'",
+    ])
+    // A run of bytes that are not UTF-8 at all is still cut, rather than never.
+    expect(literalKeyCommands('%3', Buffer.from([0x61, 0x80, 0x80, 0x80, 0x80]), 2)).toHaveLength(4)
   })
 })
 

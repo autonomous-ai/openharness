@@ -10,6 +10,7 @@ import { HarnessShareRelay, type SharedMachineReference } from './sharing/relay.
 import { SharedViewerPool } from './sharing/viewer.js'
 import { fingerprint as e2eeCoreFingerprint, b64d as e2eeCoreDecode } from './lib/e2ee/core.js'
 import { AutonomousDeviceDirect } from './lib/autonomous-device/direct.js'
+import { runningDevicePart, startDevicePart } from './lib/autonomous-device/parts.js'
 /**
  * machine-adapter CLI (the `harness` command) — connect this computer to a "remote" agent.
  *
@@ -40,18 +41,17 @@ import { ensureUtf8Locale } from './lib/childLocale.js'
 import { DialLog } from './cable/dialLog.js'
 import { buildLogBundle, bundleFileName, redactSecretsInText } from './lib/logBundle.js'
 import { CableSession } from './cable/cableSession.js'
-import { CableFleet } from './cable/cableFleet.js'
+import { CableFleet, testDialDiscovery } from './cable/cableFleet.js'
 import { DialVerdicts } from './cable/dialPortVerdicts.js'
 import { DaemonCableHost, cableEventFor, cableQuestionFor, cableQuestionCloseFor } from './cable/cableHost.js'
 import { terminalActivity } from './cable/terminalActivity.js'
 
 import { MachineListCache, machineListCachePath, withStaleMarker } from './device/machineList.js'
-import { DeviceLink } from './device/deviceLink.js'
-import { DeviceFleet } from './device/deviceFleet.js'
 import { registry, projectDisplayName, validTranscriptPath, type RegisteredSession } from './lib/registry.js'
 import { engineSessionTitle } from './lib/sessionTitle.js'
+import { machineNames } from './lib/machineNames.js'
 import { installCodexHooks } from './lib/hooks.js'
-import { PID_FILE, daemonPort, isAlive, isDaemonRunning, readPid } from './lib/daemonState.js'
+import { DAEMON_LOG_FILE, HARNESSD_REEXEC_FILE, HARNESSD_STATUS_FILE, PID_FILE, daemonPort, isAlive, isDaemonRunning, readPid } from './lib/daemonState.js'
 import { clearSafeModeMarker, readSafeModeMarker, runBootHandoff, safeModeDisposition, safeModeStatusBody, SafeModeRequest, writeSafeModeMarker } from './lib/daemonSafeMode.js'
 import { awakeTimeout } from './lib/sleepAware.js'
 import {
@@ -59,6 +59,8 @@ import {
 } from './lib/daemonLaunch.js'
 import { SpawnLockBusyError, describeSpawnLockBusyPlainly, describeSpawnLockFailure, describeSpawnLockOwner, describeSpawnLockWaitPlainly, withSpawnLock } from './lib/daemonSpawnLock.js'
 import { stopDaemonProcess } from './lib/daemonStop.js'
+import { installedPlatform, serviceDefinition, startUnderPlatform } from './lib/platformDaemon.js'
+import { serviceCommand, serviceCommandDeps } from './lib/serviceCommand.js'
 import { ensureTmuxOnPath } from './lib/tmuxOnPath.js'
 import { flashCommand } from './lib/flash.js'
 import { readOrMintComputerId } from './lib/computerIdentity.js'
@@ -88,8 +90,9 @@ import { claudeProcessSession, findLiveSession, findResumedTranscript } from './
 import { handoffProviderDeps } from './lib/handoffDiscovery.js'
 import { TmuxBackend } from './lib/tmuxBackend.js'
 import { DEFAULT_HOST_THEME, loadHostTheme, saveHostTheme, type HostTheme } from './lib/hostTheme.js'
-import { restoreAgents } from './lib/restoreAgents.js'
+import { restoreAgents, tmuxSurvey } from './lib/restoreAgents.js'
 import { createRetainExitedSession } from './lib/retainExitedSession.js'
+import { createKeepAbandonedConversation } from './lib/keepAbandonedConversation.js'
 import { OpenTabProtection } from './lib/openTabProtection.js'
 import { sessionCheckpoints } from './lib/sessionCheckpoint.js'
 import { repairClaudeCwd } from './lib/cwdRepair.js'
@@ -111,7 +114,9 @@ import { prepareApiInstructions } from './lib/apiInstructions.js'
 import type { AgentDshContext } from './lib/agentFrame.js'
 import {
   clearPaneRemainOnExit,
+  lookupPaneEngineProcess,
   resolvePaneEngineProcess,
+  tmuxPaneInfo,
   tmuxPaneState,
 } from './lib/tmux.js'
 import { ALL_TERMINAL_BACKENDS } from './config/terminalConfig.js'
@@ -119,7 +124,7 @@ import { TerminalBackendCoordinator } from './lib/terminalBackendCoordinator.js'
 import { TerminalStreamManager } from './lib/terminalStreamManager.js'
 import { terminalRouteKey, terminalRuntimeLabel } from './lib/terminalRuntime.js'
 import { probeTerminalAgents } from './lib/terminalAgentDiscovery.js'
-import { TerminalAgentReconciler } from './lib/terminalAgentReconciler.js'
+import { RECONCILE_PASS_DEADLINE_MS, TerminalAgentReconciler } from './lib/terminalAgentReconciler.js'
 import { remoteCommand } from './remoteCommand.js'
 import { tuiCommand } from './tui/index.js'
 import { newCommand } from './lib/newCommand.js'
@@ -129,6 +134,7 @@ import { Watcher } from './watcher/watcher.js'
 import { startHookServer } from './hookServer.js'
 import { connectToMaster } from './harnessd/coreLink.js'
 import { createTerminalControl } from './core/terminals/control.js'
+import { createTerminalRequests } from './core/terminals/requests.js'
 import { createAgentEvents } from './core/agents/events.js'
 import { createSessionNormalizers } from './core/transcripts/normalizers.js'
 import { createInput } from './core/input.js'
@@ -136,18 +142,20 @@ import { createQuestions } from './core/questions.js'
 import { createTurnActivity } from './core/turns/activity.js'
 import { createLastTurnReader } from './core/transcripts/lastTurn.js'
 import { createRecaps } from './core/turns/recaps.js'
+import { createUpdateHandoff, type HandoffChild } from './core/updateHandoff.js'
 import { createHeartbeats } from './core/turns/heartbeats.js'
 import { createEventFunnel, outsideConsumers } from './core/turns/funnel.js'
 import { createAgyBackstop } from './core/turns/agyBackstop.js'
 import { createIngest } from './core/transcripts/ingest.js'
 import { createTurnHooks } from './core/turns/turnHooks.js'
 import { createAttach } from './core/transcripts/attach.js'
+import { createHistory } from './core/transcripts/history.js'
 import { createRelaunchMarks, transcriptSize } from './core/transcripts/relaunch.js'
 import { createForgetSession } from './core/agents/forget.js'
 import { createBinding } from './core/agents/bind.js'
 import { createDiscoveryHandlers } from './core/agents/discovery.js'
 import { createLaunchHelpers } from './core/agents/launch.js'
-import { createCancel } from './core/turns/cancel.js'
+import { createCancel, createCancelRequest } from './core/turns/cancel.js'
 import { createPaneWatcher } from './core/agents/newPane.js'
 import { createAdoption } from './core/agents/adopt.js'
 import { createAgentCreator } from './core/agents/create.js'
@@ -155,24 +163,34 @@ import { createAgentForker } from './core/agents/fork.js'
 import { createPaneSwap } from './core/agents/swap.js'
 import { createAgentRetargeter } from './core/agents/retarget.js'
 import { createAgentRestarter } from './core/agents/restart.js'
-import { createAgentLifecycle } from './core/agents/lifecycle.js'
-import { createAgentClosing } from './core/agents/close.js'
+import { createAgentLifecycle, createPurgeRequest, createStopRequest } from './core/agents/lifecycle.js'
+import { createAgentClosing, createCloseRequests } from './core/agents/close.js'
+import { createHandoffRequest } from './core/agents/handoff.js'
+import { createLaunchRequests } from './core/agents/launches.js'
+import { createAgentList } from './core/agents/list.js'
+import { createAgentUpdate } from './core/agents/update.js'
 import { createEngineHooks, installEngineHooks } from './core/engines/hooks.js'
 import { createCursorTaskHooks } from './core/engines/cursorTasks.js'
 import { databaseHistory } from './core/transcripts/databaseHistory.js'
-import { createCoreApi, emptyPorts, MODELS_FALLBACKS, SEARCH_FALLBACKS, TEAMS_FALLBACKS, VIEWERS_FALLBACKS, WORKSPACES_FALLBACKS, type TeamsPort } from './core/api.js'
+import { createCoreApi, emptyPorts, FLEET_FALLBACKS, MODELS_FALLBACKS, SEARCH_FALLBACKS, TEAMS_FALLBACKS, VIEWERS_FALLBACKS, WORKSPACES_FALLBACKS, type TeamsPort } from './core/api.js'
 import { createServiceHost, testFaults } from './core/serviceHost.js'
+import { startStalls } from './core/stall.js'
 import { createServiceLinks } from './core/serviceLinks.js'
-import { KNOWN_SERVICES, serviceSpecs } from './harnessd/services.js'
-import { runSearchService } from './services/searchProcess.js'
+import { createViewersLink } from './core/viewersLink.js'
+import { createWorkspacesLink } from './core/workspacesLink.js'
+import { KNOWN_SERVICES, servicesTheMasterRuns } from './harnessd/services.js'
+import { createTeamsLink } from './core/teamsLink.js'
 import { SEARCH_REQUESTS, startSearch } from './services/search.js'
 import { STORE_REQUESTS, startStore } from './services/store.js'
 import { startViewers } from './services/viewers.js'
-import { startModels } from './services/models.js'
+import { MODELS_REQUESTS, startModels } from './services/models.js'
 import { startWorkspaces } from './services/workspaces.js'
-import { describeMasterStatus, readStatusFile, runMaster } from './harnessd/master.js'
+import { startFleet } from './services/fleet.js'
+import { describeMasterStatus, readStatusFile } from './harnessd/master.js'
+import { probeThisMaster, startMaster } from './masterProcess.js'
+import { startServiceProcess } from './serviceProcess.js'
 import { CORE_EXIT_STOP, CORE_EXIT_UPDATE } from './harnessd/protocol.js'
-import { isLocalSocketName, localSocketPath, type LocalSocketServer } from './lib/localSocket.js'
+import { isLocalSocketName, localSocketPath, refuseServedDataFolder, type LocalSocketServer } from './lib/localSocket.js'
 import { legacyDaemonStatus, localDaemonStatus, saveDaemonPort } from './lib/daemonEndpoint.js'
 import { commandBarService } from './lib/commandBar.js'
 import { BackendSocket, isLocalClientId } from './backendSocket.js'
@@ -187,7 +205,7 @@ import { WindowForm } from './cable/windowForm.js'
 import { RemoteRelayPool } from './lib/remoteRelay.js'
 import { TERMINAL_BINARY_VERSION } from './lib/terminalBinary.js'
 import { TeamError } from './teams/model.js'
-import { routeVoiceTask, setVoiceRouterDeviceConnected, setVoiceRouterSessions, shutdownVoiceRouter, type RouterAgent } from './lib/voiceRouter.js'
+import { setVoiceRouterDeviceConnected, setVoiceRouterSessions, shutdownVoiceRouter } from './lib/voiceRouter.js'
 import { E2eeStore, identitySpent, peekIdentityPub } from './lib/e2ee/store.js'
 import { confirmsRemoval, deviceRegistration, deviceStatusValue, formatDeviceDetail, formatDeviceHistory, formatDeviceList, logOrder, removeConfirmation } from './lib/e2ee/deviceDisplay.js'
 import { isLoopbackRequest, loopbackHosts } from './lib/loopbackRequest.js'
@@ -201,7 +219,7 @@ import { DeviceLogStore } from './lib/e2ee/deviceLogStore.js'
 import { TrustGroupStore, type GroupMember } from './lib/e2ee/trustGroup.js'
 import {
   startSelfUpdater, restore as restoreUpdate, confirm as confirmUpdate,
-  fetchManifest, downloadVerified, canary, stage, semverGt, isLocalDevBuild,
+  fetchManifest, downloadVerified, canary, stage, semverGt, isLocalDevBuild, DOWNLOAD_LIMITS,
   type Poller, type UpdateEntry,
 } from './lib/selfUpdate.js'
 import { managedNodePath } from './lib/nodeRuntime.js'
@@ -214,11 +232,14 @@ import { cursorDataDir } from './engines/cursor/home.js'
 import { loadCursorPendingTasks } from './engines/cursor/pendingTasks.js'
 import { opencodeMajorVersion } from './engines/opencode/version.js'
 import { hermesDbForSession } from './lib/hermesHome.js'
+import { TranscriptPager } from './lib/transcriptPages.js'
+import { AgentCreationReceipts } from './lib/agentCreationReceipt.js'
 import { agentFrame, lastActivityAt, type AgentFrame } from './lib/agentFrame.js'
+import { forgetAgentProject } from './lib/agentProject.js'
 import { agentTokenUsage } from './lib/agentTokenUsage.js'
 import { DeviceResultJournal } from './lib/autonomous-device/resultJournal.js'
 import { adaptSlashCommand } from './lib/goalCommand.js'
-import { RuntimeProfileManager } from './lib/runtimeProfile.js'
+import { RuntimeProfileManager, type RuntimeModelOption } from './lib/runtimeProfile.js'
 import { RuntimeProfileController } from './lib/runtimeProfileController.js'
 // Before ANY child is spawned: on Linux an absent locale makes tmux and ps mangle their output,
 // which silently costs the daemon every pane it would have discovered. See lib/childLocale.ts.
@@ -233,9 +254,7 @@ import {
 
 
 // Daemon stdout/stderr. Capped at LOG_MAX_BYTES — see prepareLogFile/trimLogFile in lib/log.ts.
-const LOG_FILE = join(env.ADAPTER_DATA_DIR, 'harness.log')
-/** What harnessd's master last said about itself, for `harness status` when no core answers. */
-const HARNESSD_STATUS_FILE = join(env.ADAPTER_DATA_DIR, 'harnessd-status.json')
+const LOG_FILE = DAEMON_LOG_FILE
 // Pre-rename name. Adopted (renamed, keeping the inode) the first time a daemon opens the log, so a
 // machine that updates mid-run keeps its history instead of stranding it in a file nobody tails.
 // The log has had three names; this slot holds the OLDEST. The middle one (`machine.log`) is adopted
@@ -254,6 +273,10 @@ const GENERIC_PAIR_LABELS: ReadonlySet<string> = new Set(['harness link', 'brows
 function terminalHintMachineName(): string {
   try { return readFileSync(MACHINE_NAME_FILE, 'utf-8').trim() || hostname() } catch { return hostname() }
 }
+/** The name the dial's wheel and the fleet give this computer: its display name, else "This machine". */
+function dialMachineName(): string {
+  try { return readFileSync(MACHINE_NAME_FILE, 'utf8').trim() || 'This machine' } catch { return 'This machine' }
+}
 
 // The dial's session, held at module scope for the same reason `backendRef` is: shutdown() is defined
 // before the wiring that creates it, and the port has to be released on the way out.
@@ -261,16 +284,6 @@ let cableRef: CableFleet | null = null
 /** The same object the session holds — module scope so the recap gates can ask which machine is selected
  *  without threading it through every constructor between here and there. */
 let cableHostRef: DaemonCableHost | null = null
-/**
- * How many agents ⌘K weighs at once.
- *
- * A classifier budget, not a UI one: each candidate spends its name, its machine and three recaps inside
- * one prompt, and past a point the window that decides the pick is more crowded than it is informed.
- * Fifteen is the owner's number; the ordering that decides WHICH fifteen is in onRouteTask.
- */
-const ROUTE_MAX_CANDIDATES = 15
-/** What ⌘K gives the classifier before the name matcher answers instead. */
-const ROUTE_CLASSIFY_APP_MS = 20_000
 /**
  * The window's tiles, in tile order, as last reported.
  *
@@ -290,8 +303,6 @@ let appPaneAgents: string[] = []
  * or voice until the window happened to send its tabs again (measured 2026-10-01: 80 s).
  */
 let appSwarmsLatest: Parameters<DaemonCableHost['setSwarms']>[0] = null
-/** Module scope for the same reason cableRef is: shutdown() has to release the socket. */
-let deviceLinkRef: DeviceLink | null = null
 
 // OpenCode's SQLite store — polled per session by OpencodeReader (no per-session transcript file).
 const OPENCODE_DB = join(env.OPENCODE_DATA_DIR, 'opencode.db')
@@ -347,6 +358,10 @@ Machine:
   harness stop                 stop the background adapter (keeps the SSO session)
   harness reset                stop the adapter and clear local CLI state
   harness status               show whether it's running (+ version)
+  harness service install      run the daemon under launchd (macOS) or systemd (Linux): it starts at login
+                               and comes back if it dies; start and stop then go through it (opt-in)
+  harness service uninstall    undo that: the daemon goes back to \`harness start\`
+  harness service status       what launchd or systemd has registered, and whether it runs (--json)
   harness logs export          zip the last 7 days of logs (app, CLI, dial, daemon) to the Desktop
   harness tui                  all of Harness in this terminal: swarms, panes, every machine (⌥O ⌥P ⌥N)
   harness new [agent] [@machine] [folder|name] [-- task]
@@ -425,6 +440,11 @@ no durable home, a container or CI job, pin ADAPTER_COMPUTER_ID instead.
 Env: BACKEND_WS_URL (${env.BACKEND_WS_URL}), WEB_URL (${env.WEB_URL}), ADAPTER_DATA_DIR,
      ADAPTER_COMPUTER_ID, CLAUDE_PROJECTS_DIR, PORT`)
   process.exit(exitCode)
+}
+
+/** The `supervisor` row: who keeps the daemon running when it is not `harness start`. */
+function supervisorRow(platform: string): string {
+  return `${platform} · starts at login, comes back if it dies (harness service status)`
 }
 
 /** Compact a home-relative path with `~` for display. */
@@ -530,6 +550,64 @@ function bootHandoff(version: string): void {
     exit: (code) => process.exit(code),
     log: (message) => console.log(message),
   })
+}
+
+/**
+ * The update handoff of a core run on its own (core/updateHandoff.ts, once the teardown is done): hand
+ * off to a freshly spawned daemon running the just-swapped cli.js, then SUPERVISE it and roll back to the
+ * .prev bytes if it fails to come up. NOT launch() — that refuses while a daemon is alive.
+ *
+ * Runs under the spawn lock for its whole length (the updater's `withLock` wraps the staging and this
+ * together), so no `harness start` can spawn into the seconds where the port is free and the pid file
+ * names nothing. `track` names the child a signal mid-handoff must take down with us, rather than leave
+ * two daemons — see shutdown(); null the moment the handoff is CONFIRMED, when that child is the daemon.
+ */
+async function handOffWithoutMaster(newVersion: string, track: (child: HandoffChild | null) => void): Promise<void> {
+  const sinceOffset = existsSync(LOG_FILE) ? statSync(LOG_FILE).size : 0
+  const child = spawnDaemonChild({ ADAPTER_UPDATED_TO: newVersion })
+  track(child)
+  let childExited = false
+  child.on('exit', () => { childExited = true })
+
+  // Two phases. First the child has to BIND the port — it claims the pid file itself at that
+  // moment, and nothing else writes that file any more. A child that exits or stalls before then
+  // is a bad build (or a port it could not take): roll back at once instead of burning the whole
+  // connect window on it. Then, bound, wait for the backend: KEEP on connected/unreachable/busy
+  // (the new build RAN), ROLL BACK only on `fatal`. unreachable = backend transient, not a bad build.
+  const bind = await waitForBind(child.pid ?? -1, () => childExited, BIND_WAIT_MS, launchDeps)
+  const ready = bind === 'bound' ? await waitForReady(sinceOffset, 30_000, launchDeps) : null
+  if (bind === 'bound' && !childExited && ready?.state !== 'fatal') {
+    // Confirmed: it is the daemon now. Let go of it BEFORE anything else — a SIGTERM landing between
+    // here and the exit below must not take it down with us (see shutdown()).
+    track(null)
+    child.unref()
+    confirmUpdate(env.ADAPTER_CLI_DIR) // drop the .prev backups
+    console.log(`[update] now running ${newVersion} (pid ${child.pid})`)
+    process.exit(0)
+  }
+  console.error(`[update] new build failed to start (${bind !== 'bound' ? bind : childExited ? 'exited' : ready?.state}) — rolling back`)
+  try { if (child.pid) process.kill(child.pid, 'SIGKILL') } catch { /* ignore */ }
+  // A killed child cannot remove its own pid file; do it for it — but only once it is actually
+  // dead (SIGKILL is asynchronous, and a child mid-bind could still write the file after our
+  // removal) and only if it is still ITS file.
+  if (child.pid) {
+    const gone = Date.now() + 2_000
+    while (Date.now() < gone && isAlive(child.pid)) await new Promise((r) => setTimeout(r, 50))
+  }
+  removePidFileIf(child.pid)
+  restoreUpdate(env.ADAPTER_CLI_DIR) // restore .prev → cli.js/notify.mjs
+  const good = spawnDaemonChild({})
+  track(good)
+  let goodExited = false
+  good.on('exit', () => { goodExited = true })
+  // Hold the lock — and this process — until the rollback child has bound too. Exiting the moment it
+  // is spawned would free the lock while the port is still unclaimed, which is the window this whole
+  // arrangement exists to close. Nothing to do if it fails: the .prev bytes were the build that was
+  // running a minute ago, and `harness start` can be tried by hand.
+  const goodBind = await waitForBind(good.pid ?? -1, () => goodExited, BIND_WAIT_MS, launchDeps)
+  if (goodBind !== 'bound') console.error(`[update] rollback build did not come up either (${goodBind}) — run harness start`)
+  good.unref()
+  process.exit(0)
 }
 
 /** This computer's identity — see lib/computerIdentity.ts. Sent on connect so the backend can enforce
@@ -1364,7 +1442,7 @@ const RESOLVE_ON_START_TIMEOUT_MS = 10_000
 async function downloadCanaryStage(entry: UpdateEntry, dir: string, log: (m: string) => void): Promise<boolean> {
   const cliBuf = await downloadVerified(entry.cli)
   const notifyBuf = await downloadVerified(entry.notify)
-  if (!canary(cliBuf, dir)) { log(`  ✗ the new build failed its self-check — keeping v${VERSION}`); return false }
+  if (!await canary(cliBuf, dir, entry.version)) { log(`  ✗ the new build failed its self-check — keeping v${VERSION}`); return false }
   // Asked for by name, so a version this machine once rolled back is installed and no longer rejected.
   stage(dir, cliBuf, notifyBuf, entry.version)
   confirmUpdate(dir) // canary passed + bytes already verified ⇒ drop the .prev backups
@@ -1556,7 +1634,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const startedAt = Date.now()
   // Set when the restore pass could not run. The reconciler reads it at call time (its deps are built
   // long before this is decided) and keeps rows it would otherwise retire — see `onRemoved`.
-  let restoreDegraded = false
+  // Restore did not run this boot (every row), or could not look at these rows (core/agents/discovery.ts).
+  let restoreFailed = false
+  const restoreUnsurveyed = new Set<string>()
   let discoveryReady = false
   let discoveryError: string | null = null
   // How a boot that failed AFTER this server bound turns its own status not-ready: the app reads
@@ -1581,16 +1661,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // there is no supervisor, and the desktop app only re-runs `harness start` on the same broken bytes.
   // Started here, a published fix lands on its own however badly the rest of the boot goes.
   //
-  // `onStaged` is one indirection on purpose: `restartForUpdate` does not exist yet and must not move
+  // `onStaged` is one indirection on purpose: the handoff's teardown does not exist yet and must not move
   // (it tears down two dozen subsystems declared further down). Until it is ready, a staged update is
   // applied by `bootHandoff`, which hands the machine over without finishing start-up.
-  // Update-handoff state, declared here — ahead of the /api/status handler that reads `restarting` —
-  // rather than beside the updater that writes it, so the closure never reaches a `let` in its TDZ.
-  let restarting = false
-  // The child a handoff is supervising, so a signal that lands mid-handoff can take it down with us
-  // rather than leaving two daemons — see shutdown(). Cleared the moment the handoff is CONFIRMED:
-  // from then on that child is the daemon, and a signal must not take it down with the old one.
-  let handoffChild: ReturnType<typeof spawn> | null = null
 
   // Self-update ONLY manages the INSTALLED copy (`~/.harness/cli/cli.js`). A dev/repo run — `tsx`
   // (`npm run dev`) OR `node dist/cli.js` from the checkout — must NEVER self-update: it would swap
@@ -1614,6 +1687,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
         onWaiting: (owner) => console.log(`[update] waiting — the daemon is ${describeSpawnLockOwner(owner)}`),
       }),
       onStaged: (v) => daemonBoot.applyStagedUpdate(v),
+      limits: { idleMs: env.ADAPTER_UPDATE_IDLE_MS, deadlineMs: env.ADAPTER_UPDATE_DEADLINE_MS, floorBytesPerSecond: DOWNLOAD_LIMITS.floorBytesPerSecond },
+      stageWhileJudged: !coreLink.supervised || process.env.HARNESSD_JUDGES_SUPERSEDED === '1',
     })
     const slotted = env.ADAPTER_UPDATE_SLOT_SEC >= 0 && 60_000 % env.ADAPTER_UPDATE_CHECK_MS === 0
     console.log(`[update] self-update on · v${VERSION} · every ${Math.round(env.ADAPTER_UPDATE_CHECK_MS / 1000)}s`
@@ -1630,6 +1705,18 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     intervalMs: env.ADAPTER_UPDATE_CHECK_MS,
     slotSecond: env.ADAPTER_UPDATE_SLOT_SEC,
   })
+  // The update handoff (core/updateHandoff.ts): after the updaters, never above them (startupOrder.spec.ts),
+  // and ahead of the /api/status handler that reads whether it is under way and of shutdown(), which takes
+  // a successor it is judging down with us.
+  const updateHandoff = createUpdateHandoff({
+    version: VERSION, supervised: coreLink.supervised, exitForUpdate: () => process.exit(CORE_EXIT_UPDATE),
+    handOff: handOffWithoutMaster, log: (line) => console.log(line), error: (line) => console.error(line),
+  })
+
+  // Another daemon serves this data folder: leave before reading or writing anything of its — its
+  // registry, its viewers, its panes. Just after the updaters, never before them (startupOrder.spec.ts);
+  // their first check is a slot away, and a daemon that leaves here is gone long before it.
+  await refuseServedDataFolder(localSocketPath(env.ADAPTER_DATA_DIR, env.PORT))
 
   // harnessd's master saw this core crash again and again: start nothing that could do it again. The
   // updaters above keep running, so a published fix still lands (`enterSafeMode`).
@@ -1759,6 +1846,13 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   }
   syncRecapPool()
   const runtimeProfiles = new RuntimeProfileManager()
+  // An agent's Model/Effort choices, or every live agent's: what `models_list` answers (services/models.ts)
+  // and the dial's picker reads, so neither can show a catalog the machine would not honour.
+  const runtimeModels = (agentId?: string): Promise<RuntimeModelOption[]> => {
+    if (!agentId) return runtimeProfiles.modelsForSessions(registry.list())
+    const session = registry.resolve(agentId)
+    return session ? runtimeProfiles.modelsForSession(session) : Promise.resolve([])
+  }
   // NB: hooks are installed AFTER the hook server binds (below), with the port it actually got — the
   // server may fall back to a free port if env.PORT is taken, and the hooks must point at the real one.
 
@@ -1791,11 +1885,15 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     externalSessions,
     openSessions,
     syncSession,
+    runtimeModels,
     viewerChanged: (agentId) => {
       backendRef?.viewerForwarder.refresh(agentId)
       backendRef?.interactiveViewers.refresh(agentId)
     },
     gridNamed: (name) => backendRef?.setHarnessGridName(name),
+    gridModelsChanged: () => { void backendRef?.pushGridModels() },
+    privateGridName: async () => (await backendRef?.privateGridName()) ?? null,
+    machineName: () => backendRef?.machineName() ?? null,
     dshInstallStatus: (status) => backendRef?.send({ type: 'dsh_install_status', payload: status }),
     // The backend mints and remembers the account's grid name; this CLI holds neither the account's
     // email nor its id. An older backend (no route) answers nothing, which the grid reconcile treats as
@@ -1805,22 +1903,49 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       return (await postJson<{ gridName?: string }>('/api/grid/name', {}, headers, AbortSignal.timeout(GRID_MINT_TIMEOUT_MS))).gridName ?? null
     },
     accessToken: () => new AuthSessionManager(backendHttpBase()).accessToken(),
+    // What a device or another machine asks of an agent here: the SAME handlers the backend socket
+    // drives, called directly — the slash-command adaptation and the turn and question plumbing live there.
+    runtimeProfile: (session) => runtimeProfiles.selectedModel(session),
+    setRuntime: (agentId, model, effort) => {
+      const s = registry.resolve(agentId)
+      if (!s || !model) return
+      void runtimeController.setProfile(s.sessionId || agentId, `runtime-v1:${s.sessionId || agentId}:${s.engine}:${model}@${effort || 'auto'}`)
+    },
+    // The same path the window's `agent_fork` takes.
+    fork: async (agentId) => {
+      if (!backendRef?.onForkAgent) return { ok: false, error: 'UNSUPPORTED' }
+      const result = await backendRef.onForkAgent({ agentId, name: null, prompt: null })
+      return result.ok ? { ok: true, agentId: result.session.agentId } : { ok: false, error: result.error, detail: result.detail }
+    },
+    turns: {
+      send: (agentId, text) => backendRef?.onMessage?.(agentId, text),
+      stop: (agentId) => backendRef?.onCancel?.(agentId),
+      recent: (agentId, n) => mirror.recent(registry.resolve(agentId)?.sessionId || agentId, n),
+      asks: (agentId) => mirror.recentAsks(registry.resolve(agentId)?.sessionId || agentId),
+    },
+    questions: {
+      // The device's own object, verbatim: rebuilt as `{ [requestId]: optionId }` it was keyed by the
+      // REQUEST id, not the question key `asking.answer` expects, and named a question that does not exist.
+      answer: (agentId, requestId, answers) => { void asking.answer({ agentId, requestId, answers }) },
+      answerReviewed: async (answer) => (await questions.answer({ agentId: answer.agentId, requestId: answer.requestId,
+        answers: answer.answers, expectedQuestions: answer.questions, selectedLabels: answer.selections, freeTextKeys: answer.freeTextKeys })).ok,
+    },
   })
   const ports = emptyPorts()
   // Each service starts and is called through the host, so one that fails is logged and left off and
   // the core carries on without it (core/serviceHost.ts).
   const serviceHost = createServiceHost(ports, { faults: testFaults(process.env.HARNESSD_TEST_FAULTS) })
-  // The DSH companions: each harness agent's viewer and verdict watch (services/viewers.ts).
-  serviceHost.start('viewers', startViewers, coreApi, VIEWERS_FALLBACKS)
+  // The DSH companions: each harness agent's viewer and verdict watch (services/viewers.ts), started below.
   dshFrameContextRef = (s) => ports.viewers?.frameContext(s) ?? null
   const attachDsh = (s: RegisteredSession): void => ports.viewers?.attach(s)
   const detachDsh = (agentId: string): void => ports.viewers?.detach(agentId)
 
-  // The folders agents work in: branch names and unused worktrees (services/workspaces.ts).
-  serviceHost.start('workspaces', startWorkspaces, coreApi, WORKSPACES_FALLBACKS)
+  // The folders agents work in: branch names and unused worktrees (services/workspaces.ts), started below.
   const syncTerminalTitles = async (): Promise<void> => {
     ports.workspaces?.nameBranches()
     const titles = await terminals.titles()
+    // The machine's name now, beside every name it has had: a title that is one of them is refused.
+    machineNames.observe()
     if (titles.size === 0) return
     for (const session of registry.list()) {
       // Codex's own thread name when it has one; otherwise what the engine put on its terminal.
@@ -1842,6 +1967,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   let autonomousDeviceDirect: AutonomousDeviceDirect | undefined
   let deviceStoreRef: ReturnType<typeof createDeviceStore> | undefined
   let autonomousDeviceService: AutonomousDeviceService | undefined
+  let devicePartsBuilt = false
   let appFormWindow: { machineId: string; connId: string } | undefined
   let appVoiceFocus: { machineId: string; agentId: string; connId: string } | undefined
   let backendRef: BackendSocket | undefined
@@ -1878,10 +2004,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // Nothing is answered until start-up is done (see the end of this function).
   backend.holdRequests()
   daemonBoot.openRequests = () => backend.openRequests()
-  // The team prompt scopes are the socket's, and the core reaches them through the service host's guard
-  // (core/serviceHost.ts): a fault there can no longer cost a message its write, a hook its answer or
-  // an event its turn.
-  serviceHost.start('teams', (_core, started) => { started.teams = backend.swarmPromptScopes }, coreApi, TEAMS_FALLBACKS)
   const teams: TeamsPort = {
     prepare: (...args) => ports.teams?.prepare(...args) ?? (() => {}),
     started: (...args) => ports.teams?.started(...args),
@@ -1892,15 +2014,13 @@ async function runForeground(session: AuthSession | null): Promise<void> {
 
   ensureBundledCoreHarnesses()
 
-  // Models: grid access, the model pictures on agents' frames, the keystroke prewarm (services/models.ts).
-  serviceHost.start('models', startModels, coreApi, MODELS_FALLBACKS)
+  // Models: grid access, the model pictures on agents' frames, the keystroke prewarm, and the models
+  // requests the apps send (services/models.ts).
+  serviceHost.start('models', startModels, coreApi, MODELS_FALLBACKS, MODELS_REQUESTS)
   const models = ports.models
   backend.ensureGrid = models ? (request) => models.ensure(request) : null
-  // Offline, for every list read: is there a `grid` here holding a sign-in? What decides whether the
-  // picker offers local and shared models or a Set up row.
-  backend.gridSetUp = models ? () => models.setUp() : null
   // Models switched off: the socket reads grid as it stands, as it does with no models at all.
-  serviceHost.onOff('models', () => { backend.ensureGrid = null; backend.gridSetUp = null })
+  serviceHost.onOff('models', () => { backend.ensureGrid = null })
 
   /**
    * Is ANY device surface watching this machine?
@@ -1969,17 +2089,22 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     },
   })
   backend.setTerminalStreamManager(terminalStreams)
-  // `agentReconciler` is declared further down; this closure only ever runs for a frame, and no
-  // socket is connected until well after that declaration (backend.connect() is the last thing
-  // this function does).
-  backend.hostThemeSink = (theme) => {
-    if (theme.background === hostTheme.background && theme.foreground === hostTheme.foreground) return
-    hostTheme = theme
-    saveHostTheme(theme)
-    console.log(`[theme] panes now bg=${theme.background} fg=${theme.foreground}`)
-    // Existing sessions pick it up on the next scan (TmuxBackend.inventory restyles); nudge one now.
-    void agentReconciler.trigger()
-  }
+  // What a harness's pane runs and where, and the desktop's pane colours (core/terminals/requests.ts). A
+  // theme is applied only for a frame, well after `agentReconciler` below exists (connect() comes last).
+  const terminalRequests = createTerminalRequests({
+    resolve: (id) => registry.resolve(id),
+    paneInfo: (pane) => tmuxPaneInfo(pane),
+    applyTheme: (theme) => {
+      if (theme.background === hostTheme.background && theme.foreground === hostTheme.foreground) return
+      hostTheme = theme
+      saveHostTheme(theme)
+      console.log(`[theme] panes now bg=${theme.background} fg=${theme.foreground}`)
+      // Existing sessions pick it up on the next scan (TmuxBackend.inventory restyles); nudge one now.
+      void agentReconciler.trigger()
+    },
+  })
+  backend.terminalInfoProvider = terminalRequests.terminalInfo
+  backend.themeProvider = terminalRequests.themeSet
 
   // Each session's engine state, in one table (core/transcripts/normalizers.ts).
   const normalizers = createSessionNormalizers()
@@ -2044,7 +2169,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // Following a session: its history read into its engine's normalizer, then its tail
   // (core/transcripts/attach.ts).
   const attach = createAttach({
-    validateTerminal,
+    terminalGone: terminalControl.terminalGone,
     normalizers,
     watcher,
     cursorDiscovery,
@@ -2066,6 +2191,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const attachSession = attach.attachSession
   const neverFoldedHistory = attach.neverFoldedHistory
   const replayedFirstTurn = attach.replayedFirstTurn
+  // A conversation's history, a page at a time, and how long it is (core/transcripts/history.ts).
+  const history = createHistory({ resolve: (id) => registry.resolve(id), stopped: () => stoppedAgents.list(),
+    pages: new TranscriptPager(), dbs: { opencode: OPENCODE_DB, kilo: KILO_DB, devin: DEVIN_DB },
+    hermesDb: (s) => hermesDbForSession(s) })
+  backend.historyProvider = history.sessionGet
+  backend.sessionsProvider = history.sessionsList
   // Everything the core writes into a pane, and the device's pane lock (core/input.ts).
   const inputs = createInput({
     resolve: (id) => registry.resolve(id),
@@ -2116,9 +2247,14 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     deviceInput,
   })
   const questions = asking.questions
-  backend.onQuestionAnswer = asking.answer
+  backend.questionProvider = asking.questionResponse
   const openQuestions = asking.openQuestions
-  backend.monitorActivityProvider = asking.monitorActivity
+  // The agents on this machine (core/agents/list.ts), in the socket's frames, with its monitor readings.
+  backend.agentsProvider = createAgentList({
+    registry, stoppedAgents, monitorActivityProvider: asking.monitorActivity, monitorCompletions: backend.monitorCompletions,
+    toProject: (s) => backend.toProject(s), toStoppedProject: (s) => backend.toStoppedProject(s),
+    harnessResourcesReader: () => backend.harnessResourcesReader(), harnessStorageReader: (agents, invalidate) => backend.harnessStorageReader(agents, invalidate),
+  }).agentsList
   const agentNotifications = asking.agentNotifications
   const questionWatcher = asking.questionWatcher
 
@@ -2151,7 +2287,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // back under a brand-new agent — but they are ASKED FOR by agent id, which is the only id the device
   // and the voice router know. Resolve across the two, or every tile restores empty.
   backend.recentProvider = recaps.recent
-  backend.recentAsksProvider = recaps.recentAsks
+  backend.agentRecentProvider = recaps.agentRecent
 
   // "Change agent": the desktop asks for the structured handoff file (lib/agentHandoff.ts) before it
   // closes the old engine; the new one is then told to read it.
@@ -2171,20 +2307,28 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     findResumedTranscript,
     validTranscriptPath,
   })
-  backend.handoffProvider = (req) => prepareAgentHandoff(handoffDeps, req)
+  backend.handoffRequestProvider = createHandoffRequest({ prepare: (req) => prepareAgentHandoff(handoffDeps, req) })
 
   // The services harnessd's master runs in their own processes (harnessd/services.ts, `HARNESSD_SERVICES`):
   // only under a master, which is what gives this core the token they connect with. Their requests are
   // routed to them, and answered SERVICE_UNAVAILABLE while they are down (core/serviceLinks.ts).
   const serviceToken = process.env.HARNESSD_SUPERVISED === '1' ? process.env.HARNESSD_SERVICE_TOKEN : undefined
-  const outOfProcess = new Set(serviceToken ? serviceSpecs(process.env, KNOWN_SERVICES).map((spec) => spec.name) : [])
+  const outOfProcess = servicesTheMasterRuns(process.env, KNOWN_SERVICES)
   // The requests each service that can run in its own process answers (its own module declares them).
   const requestsOf: Record<string, readonly string[]> = { search: SEARCH_REQUESTS }
+  // What the core keeps of the viewers in their own process, for the frames it builds (core/viewersLink.ts).
+  const viewersLink = createViewersLink(coreApi, (frame, opts) => serviceLinks.notify('viewers', frame, opts))
+  // How the core tells workspaces in their own process what to do, and answers them (core/workspacesLink.ts).
+  const workspacesLink = createWorkspacesLink(coreApi, (frame) => serviceLinks.notify('workspaces', frame), forgetAgentProject)
+  // Every change to the prompt scopes, kept until their own process has it, and each agent's scope (core/teamsLink.ts).
+  const teamsLink = createTeamsLink({ notify: (frame) => serviceLinks.notify('teams', frame) })
   const serviceLinks = createServiceLinks({
     token: serviceToken,
     owned: Object.fromEntries([...outOfProcess].map((name) => [name, requestsOf[name] ?? []])),
-    // Every agent, live then stopped, with the name the apps show for it: what search indexes.
-    answer: (_service, query) => query === 'agents'
+    // Search asks for every agent, live then stopped, with the name the apps show for it: what it indexes.
+    answer: (service, query, payload) => service === 'viewers' ? viewersLink.answer(query, payload)
+      : service === 'workspaces' ? workspacesLink.answer(query, payload)
+      : service === 'teams' ? teamsLink.answer(query, payload) : query === 'agents'
       ? { agents: coreApi.agents.all().map((session) => ({ ...session, displayName: coreApi.agents.displayName(session) })) }
       : { error: 'UNKNOWN_QUERY' },
   })
@@ -2206,6 +2350,15 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   }
   // What the core calls search through: guarded, so it answers its fallbacks once search is switched off.
   const sessionSearch = ports.search
+  // The DSH viewers: in this process, or in its own (services/viewersProcess.ts), told of each agent.
+  if (outOfProcess.has('viewers')) ports.viewers = viewersLink.port
+  else serviceHost.start('viewers', startViewers, coreApi, VIEWERS_FALLBACKS)
+  // Workspaces: in this process, or in its own (services/workspacesProcess.ts), told what to do and when.
+  if (outOfProcess.has('workspaces')) ports.workspaces = workspacesLink.port
+  else serviceHost.start('workspaces', startWorkspaces, coreApi, WORKSPACES_FALLBACKS)
+  // The prompt scopes, behind the service host's guard (a fault there costs no message its write) or in their own process.
+  if (outOfProcess.has('teams')) ports.teams = backend.swarmPromptScopes = teamsLink.scopes
+  else serviceHost.start('teams', (_core, started) => { started.teams = backend.swarmPromptScopes }, coreApi, TEAMS_FALLBACKS)
   // The harnesses installed here, and installing, updating and removing one (services/store.ts).
   serviceHost.serve('store', startStore, coreApi, STORE_REQUESTS)
 
@@ -2227,19 +2380,18 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const agentIdFor = (sessionId: string): string => registry.bySession(sessionId)?.agentId ?? sessionId
 
 
-  backend.runtimeModelsProvider = (sessionId) => {
-    if (!sessionId) return runtimeProfiles.modelsForSessions(registry.list())
-    const session = registry.resolve(sessionId)
-    return session ? runtimeProfiles.modelsForSession(session) : Promise.resolve([])
-  }
   backend.runtimeProfileProvider = (session) => runtimeProfiles.selectedModel(session)
   backend.dshFrameProvider = (s) => ports.viewers?.frameContext(s) ?? null
   // `harness remote` names the tile it was typed in by its tmux pane; the registry knows whose it is.
   backend.onTerminalHandoff = (tmuxPane) => registry.advertised()
     .find((session) => session.tmuxPane === tmuxPane
       || session.runtimes.some((runtime) => runtime.backend === 'tmux' && runtime.paneId === tmuxPane))?.agentId ?? null
-  backend.onAgentRename = (session, name) => { void terminals.setTitle(session, name) }
-  backend.onRuntimeProfileUpdate = (sessionId, selectedModel) => runtimeController.setProfile(sessionId, selectedModel)
+  // A rename, a model and effort, or an app opening an agent (core/agents/update.ts).
+  backend.agentUpdateProvider = createAgentUpdate({
+    registry, clients: backend, toProject: (s) => backend.toProject(s), closeAgentService: () => backend.closeAgentService,
+    onAgentRename: (session, name) => { void terminals.setTitle(session, name) },
+    onRuntimeProfileUpdate: (sessionId, selectedModel) => runtimeController.setProfile(sessionId, selectedModel),
+  }).agentUpdate
   runtimeProfiles.onChanged = (sessionId) => {
     const session = registry.resolve(sessionId)
     if (session) syncSession(session)
@@ -2321,6 +2473,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     syncRecapPool,
     warn: (message, error) => console.warn(message, error),
   })
+  const keepAbandonedConversation = createKeepAbandonedConversation({ stoppedAgents, publishStoppedAgent: (saved) => backend.publishStoppedAgent(saved) })
 
 
 
@@ -2360,7 +2513,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     stopHeartbeat,
     retainExitedSession,
     stoppedAgents,
-    restoreDegraded: () => restoreDegraded,
+    restoreDegraded: (agentId) => restoreFailed || restoreUnsurveyed.has(agentId),
   })
   // HARNESSD_TEST_SLOW_PROBE_MS holds each discovery probe for up to that long, at random, before it is
   // applied: some scans land at once and some straddle an agent's start, as on a loaded machine. The
@@ -2373,7 +2526,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     current: () => registry.list(),
     backends: terminalBackends,
     backendOrder: terminalConfig.backends,
-    transaction: (apply) => registry.transaction(apply),
+    transaction: (apply) => registry.transaction(apply, { holdSavesMs: RECONCILE_PASS_DEADLINE_MS }),
     ...(slowProbeMs > 0 ? {
       probe: async (hints: Parameters<typeof probeTerminalAgents>[3]) => {
         const probe = await probeTerminalAgents(terminalBackends, terminalConfig.backends, process.pid, hints)
@@ -2566,10 +2719,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const { server: hookServer, port: hookPort, localSocket } = await startHookServer(daemonPort(), {
     onCommandBar: commandBarService,
     onAutonomousDeviceRequest: async (method, target, body) => {
-      if (!autonomousDeviceService) return { status: 503, body: { error: { code: 'UNAVAILABLE', message: 'Autonomous device service is starting' } } }
+      // Until the pieces below are built; after, a piece that could not be is refused by the requests
+      // that need it, and the rest (list, status, revoke) answer from the pairings.
+      if (!devicePartsBuilt) return { status: 503, body: { error: { code: 'UNAVAILABLE', message: 'Autonomous device service is starting' } } }
       return autonomousDeviceLocalRequest({
-        discover: async () => ({ devices: await autonomousDeviceDirect!.discover() }),
-        pairStart: ({ code, device }) => autonomousDeviceDirect!.pair(device, code),
+        discover: async () => ({ devices: await runningDevicePart(autonomousDeviceDirect, 'Wi-Fi device link').discover() }),
+        pairStart: ({ code, device }) => runningDevicePart(autonomousDeviceDirect, 'Wi-Fi device link').pair(device, code),
         pairStatus: () => {
           const pending = backend.pendingPair()
           return pending?.role === 'device' ? { state: pending.active ? 'running' : 'waiting', pairId: pending.pairId, deviceLabel: pending.label, expiresAt: pending.expiresAt } : { state: 'idle' }
@@ -2582,7 +2737,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
           if (!result.ok) throw Object.assign(new Error(result.error), { code: result.error })
           return { revoked: 1 }
         },
-        receipt: target => ({ receipt: autonomousDeviceService!.receipt(target.deviceId, target.idempotencyKey) }),
+        receipt: target => ({ receipt: runningDevicePart(autonomousDeviceService, 'Wi-Fi device service').receipt(target.deviceId, target.idempotencyKey) }),
       }, method, target, body)
     },
     resolveHookAgent: engineHooks.resolveHookAgent,
@@ -2704,7 +2859,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       harnessd: coreLink.supervised ? { masterPid: coreLink.masterPid, ...coreLink.status() } : null,
       // True for the few hundred ms between an update being staged and this server closing for the
       // handoff. Informational: nothing should build readiness on a field the server stops serving.
-      restarting,
+      restarting: updateHandoff.restarting(),
       discoveryReady,
       discoveryError: discoveryError ?? (tmuxUnavailable ? `tmux unavailable: ${tmuxUnavailable}` : null),
       // Present only when start-up failed and this daemon is holding the machine open for its
@@ -3045,142 +3200,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       // Ordered, not set-wise: two tiles swapping places is the same set and a different ring.
       if (deskChanged) devices('dial', () => { void cableRef?.syncAgents() })
     },
-    // ⌘K in the window: a typed task, and which agent it belongs to.
-    //
-    // THE SAME ROUTER THE DIAL USES, given a second caller. routeVoiceTask has never cared that its input
-    // arrived as speech — the transcript is just text by the time it sees it — so this is not a port. What
-    // is new is the answer coming back to something that can SHOW it: the dial had to act on the pick,
-    // the window can ask.
-    //
-    // EVERY AGENT, EVERY MACHINE. The candidate list is the dial's own — this computer first, then each
-    // machine in wheel order — because the agent that fits the words is not always the one on the desk in
-    // front of you, and a router that cannot see the others cannot say so.
-    //
-    // CAPPED AT FIFTEEN, and the cap is about the CLASSIFIER, not about us: every candidate spends its
-    // name and three recaps in one prompt, and a list long enough to crowd that window makes the pick
-    // worse, not slower.
-    //
-    // WHICH fifteen is the rail's own order — this computer's agents, then each other machine's — because
-    // that is the list the person is looking at while they type, and "the first fifteen" has to mean the
-    // first fifteen they can SEE. An earlier cut put open tiles first, on the theory that working on
-    // something is a statement about relevance; it is, but it also made the fifteen unpredictable from
-    // the screen, and predictable beat clever here (owner's call).
-    onRouteTask: backend.ownerCommands.onRouteTask = async (text) => {
-      const host = cableHostRef
-      if (!host) return { agentId: '', machineId: '', name: '', confidence: 0, reason: 'no agent list yet', candidates: [], weighed: 0, machines: 0, via: '' }
-      // Whatever the daemon knows right now. This also kicks a refresh of the remote machines, so a list
-      // that is short because a machine has not been asked yet fills in for the NEXT question rather than
-      // holding this one open.
-      // FLAT, not the dial's ring: listAgents() re-cuts the same snapshot around the window's open
-      // tiles, which is the right answer for a carousel and the wrong one for a list the person reads
-      // top to bottom.
-      const all = await host.listAgentsFlat()
-      const ranked = all.slice(0, ROUTE_MAX_CANDIDATES)
-      if (ranked.length < all.length) {
-        // Never a silent truncation: a route that could not have picked the right agent must not read
-        // like a route that considered it and said no.
-        console.log(`[route] ${all.length} agents · weighing the first ${ranked.length} (open tiles first)`)
-      }
-      // Recaps AFTER the cap, and in parallel: a remote agent's recap is an RPC to its machine, so
-      // fetching for agents that were never going to be weighed is latency spent on nothing. They are
-      // cached per agent on the fleet side, so a second ⌘K costs no round trip at all.
-      const candidates: RouterAgent[] = await Promise.all(ranked.map(async (agent) => ({
-        id: agent.id,
-        name: agent.name,
-        engine: agent.engine,
-        machine: agent.machine,
-        // THE PERSON'S OWN QUESTIONS, AND NOTHING ELSE.
-        //
-        // This used to be `turn.ask || turn.recap || turn.text`, cut to sixty characters and joined
-        // into one blob — under a prompt heading that told the model every word of it was something
-        // the person had asked. For any agent with no recorded question that was false: it was a
-        // summary of what the AGENT REPLIED. Measured on this desk, "which year did the second world
-        // war end" summarised to "1945." — an answer, labelled as a question, handed to a model asked
-        // to recognise a topic. An agent with nothing on record now sends an empty list and is
-        // described honestly in the prompt.
-        //
-        // UNCUT, too. Sixty characters was chosen when fifteen agents each carried three recaps at
-        // full length and the prompt timed out; a real machine has four to eight agents, and cutting
-        // a Vietnamese sentence at sixty takes the object with it — which is the topic. The bound that
-        // matters now lives at the two ends: ASK_MAX_CHARS where the question is recorded, and the
-        // endpoint's own per-prompt ceiling.
-        prompts: await host.recentAsks(agent.id),
-      })))
-      // 20s, not the shared 12s: this path answers a person watching a spinner in their own window, and
-      // it is under nobody else's deadline — the app's rpc waits longer still. The dial and the web keep
-      // the default; overshooting a deadline they DO have would turn a late answer into no answer.
-      // …and WHO THIS PERSON WAS JUST TALKING TO. Nothing else in the prompt can supply it: a follow-up
-      // question names no agent and often shares no words with the first one, and the recap of the turn
-      // it follows may not even exist yet — the answer is still being written while the next question
-      // is being asked.
-      const decision = await routeVoiceTask(text, candidates, undefined, ROUTE_CLASSIFY_APP_MS, host.lastRouted?.())
-      const named = (id: string) => candidates.find((agent) => agent.id === id)
-      // The runners-up in the ROUTER's order when it gave one, and the list's own order when it did not.
-      // A picker that has to ask "which agent" is showing a ranking either way; this decides whose.
-      const ranking = (decision.scores ?? []).filter((score) => score.agentId !== decision.agentId)
-      // EVERY AGENT THAT WAS WEIGHED, not the best two.
-      //
-      // The picker used to offer three rows — the pick and two runners-up — on the theory that a person
-      // who has to be asked wants the shortlist. They do not: when the router is unsure the right agent
-      // is often the one it ranked fourth, and a shortlist that cannot show it turns a question into a
-      // dead end, with no way out but Esc and typing the task again somewhere else.
-      //
-      // Ranked first where the router said something, then everything else it looked at in rail order,
-      // so the list stays the one the person is reading on screen. Nothing is dropped: the cap that
-      // matters is ROUTE_MAX_CANDIDATES above, and `weighed` already says what it did.
-      const rankedOthers = ranking
-        .map((score) => named(score.agentId))
-        .filter((agent): agent is RouterAgent => !!agent)
-      const listed = new Set([decision.agentId, ...rankedOthers.map((agent) => agent.id)])
-      const others = [...rankedOthers, ...candidates.filter((agent) => !listed.has(agent.id))]
-      const fitOf = (id: string) => id === decision.agentId
-        ? decision.confidence
-        : ranking.find((score) => score.agentId === id)?.confidence ?? 0
-      return {
-        agentId: decision.agentId,
-        machineId: all.find((entry) => entry.id === decision.agentId)?.machineId ?? '',
-        name: named(decision.agentId)?.name ?? '',
-        confidence: decision.confidence,
-        reason: decision.reason,
-        // How many agents were actually WEIGHED, and across how many computers. The window says this
-        // while it waits, because the question a person has during those seconds is not "how long" —
-        // it is "did it even look at the agent I mean". The cap above can hide agents, and until now
-        // the only place that was said was this process's log.
-        weighed: ranked.length,
-        machines: new Set(ranked.map((agent) => agent.machine).filter(Boolean)).size,
-        // 'model' or 'heuristic', coarsened from the router's own label. The two arrive at the same low
-        // confidence BY DESIGN — an unsure model and a router that could not run must both stop and ask
-        // — and that is exactly why the window has to be able to tell them apart when it explains itself.
-        via: (decision.via ?? '').startsWith('heuristic') ? 'heuristic' : 'model',
-        candidates: [decision.agentId ? named(decision.agentId) : null, ...others]
-          .filter((agent): agent is RouterAgent => !!agent)
-          .map((agent) => {
-            const listed = all.find((entry) => entry.id === agent.id)
-            return {
-              agentId: agent.id,
-              name: agent.name,
-              // The machine travels twice, and both are needed: the NAME because two agents called "api"
-              // on two computers are otherwise one row twice, and the ID because the window has to open
-              // the pane on the machine the agent actually lives on.
-              machineId: listed?.machineId ?? '',
-              machine: agent.machine ?? '',
-              engine: agent.engine ?? '',
-              recent: (agent.recentSummary ?? '').slice(0, 120),
-              // Drawn as a bar in the picker, never dispatched on. 0 = the router said nothing about
-              // this one, which the window renders as no bar rather than as a zero-length one.
-              confidence: fitOf(agent.id),
-            }
-          }),
-      }
-    },
-    // Committed. Sent through cableHost.sendTurn — the dial's own dispatch — and NOT straight into
-    // backend.onMessage.
-    //
-    // That distinction is the whole of remote support: onMessage resolves the id against THIS computer's
-    // registry, so a remote agent lands as "This harness is no longer available" — an error about an agent
-    // that is alive and answering on another machine. sendTurn is the fork that already knows the
-    // difference (local → the same door the web and the hooks use, remote → the fleet), and it is the
-    // one the dial has been using for every voice turn.
+    // ⌘K in the window: a typed task, and which agent it belongs to, on any of the owner's machines. The
+    // fleet's to answer (services/fleet.ts routeTask), so it answers with the dial absent or off.
+    onRouteTask: backend.ownerCommands.onRouteTask = async (text) => ports.fleet
+      ? ports.fleet.routeTask(text)
+      : { agentId: '', machineId: '', name: '', confidence: 0, reason: 'no agent list yet', candidates: [], weighed: 0, machines: 0, via: '' },
     // A window that connects after the dial did has missed the `dial_status` that announced it.
     dialStatus: () => {
       let status: ReturnType<DaemonCableHost['currentDialStatus']> | undefined
@@ -3202,8 +3226,16 @@ async function runForeground(session: AuthSession | null): Promise<void> {
         })
     }),
     openQuestions: () => [...openQuestions.values()],
+    // Committed. Sent through the fleet's router — the dial's own dispatch — and NOT straight into
+    // backend.onMessage.
+    //
+    // That distinction is the whole of remote support: onMessage resolves the id against THIS computer's
+    // registry, so a remote agent lands as "This harness is no longer available" — an error about an agent
+    // that is alive and answering on another machine. sendTurn is the fork that already knows the
+    // difference (local → the same door the web and the hooks use, remote → the fleet), and it is the
+    // one the dial uses for every voice turn.
     onRouteSend: backend.ownerCommands.onRouteSend = (agentId, text) => {
-      const sent = cableHostRef?.sendTurn(agentId, text) ?? { ok: false as const, machine: '', reason: 'no agent list yet' }
+      const sent = ports.fleet?.routeSend(agentId, text) ?? { ok: false as const, machine: '', reason: 'no agent list yet' }
       console.log(`[route] ⌘K → ${sid(agentId)} · bytes=${Buffer.byteLength(text, 'utf8')}`
         + (sent.ok ? '' : ` · REFUSED: ${sent.reason}${sent.machine ? ` (${sent.machine})` : ''}`))
       return sent
@@ -3219,7 +3251,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     localClient: () => ({ kind: 'desktop', name: terminalHintMachineName().slice(0, 64), machineId: backend.machineId }),
   })
   // Every engine's hooks, pointed at the port the local server actually bound (core/engines/hooks.ts).
-  if (!env.DISABLE_HOOK_INSTALL) installEngineHooks(hookPort)
+  if (!env.DISABLE_HOOK_INSTALL) installEngineHooks(hookPort, { only: env.HOOK_INSTALL_ENGINES, loginShell: loginShellEnvPromise })
   backend.setDashboardPort(hookPort) // surfaced to the web (e2e_status) so it can link here to approve
   console.log(`[cli] local dashboard → http://127.0.0.1:${hookPort}`)
 
@@ -3330,24 +3362,16 @@ async function runForeground(session: AuthSession | null): Promise<void> {
    // restore never got to, so the next daemon can put them back.
    try {
     const backend = tmuxBackend
-    let paneInventory: ReturnType<typeof listTmuxPanes> | null = null
     const summary = await restoreAgents({
       retainStopped: retainExitedSession,
+      keepAbandoned: keepAbandonedConversation,
       registry,
+      engineStarted: (sessionId) => relaunchMarks.engineStarted(sessionId),
       // "Alive" means the pane still runs THIS row's engine — not merely that tmux knows the id.
       // A new tmux server hands out `%N` from zero again, so a stale id can name someone's shell;
       // and a pane that outlived the daemon in a session discovery no longer lists still has its
       // engine, which a second pane resuming the same session would collide with.
-      liveProcess: (entry, runtime) => resolvePaneEngineProcess(runtime.paneId, entry.engine),
-      livePane: async (runtime) => {
-        // One inventory for the whole restore, not one `tmux list-panes` per row: this runs between
-        // the control port binding and the first reconcile pass, i.e. on the app's "starting" screen.
-        paneInventory ??= listTmuxPanes()
-        const inventory = await paneInventory
-        // Only a harness pane counts (the inventory is already that whitelist): a new tmux server
-        // hands out `%N` from zero again, and a stale id can name somebody's own shell.
-        return inventory.ok && inventory.panes.some((pane) => pane.tmuxPane === runtime.paneId)
-      },
+      ...tmuxSurvey(() => listTmuxPanes(), lookupPaneEngineProcess),
       buildLaunch: async (entry, opts) => {
         // A folder that went away with the reboot (an unmounted volume, a workspace deleted while the
         // daemon was down) is a named failure on the tile, not a pane that prints an error and exits.
@@ -3406,15 +3430,17 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       clearRemainOnExit: (runtime) => clearPaneRemainOnExit(runtime.paneId),
       holdRoute: (key, ms) => agentReconciler.holdRoute(key, ms),
       releaseRoute: (key) => agentReconciler.releaseRoute(key),
-      triggerHint: (runtime, engine) => agentReconciler.triggerHint(runtime, engine),
+      triggerHint: async (runtime, engine) => { await agentReconciler.triggerHint(runtime, engine) },
       log: (message) => console.log(message),
     })
+    // A row restore could not look at keeps its pane for discovery to judge, but not to retire this boot.
+    for (const agentId of summary.unsurveyed) restoreUnsurveyed.add(agentId)
     if (summary.restored.length || summary.failed.length || registry.rebootedSinceLastRun) {
       console.log(`[restore] restored ${summary.restored.length} · skipped ${summary.skipped.length} · failed ${summary.failed.length}`
         + (registry.rebootedSinceLastRun ? ' · after reboot' : ''))
     }
    } catch (error) {
-    restoreDegraded = true
+    restoreFailed = true
     console.warn(`[restore] skipped · ${error instanceof Error ? error.message : error}`
       + ' · agents keep their rows and come back on the next start')
    }
@@ -3535,6 +3561,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     clients: backend,
   })
   backend.onCancel = id => { void cancelAgent(id) }
+  backend.cancelProvider = createCancelRequest((id) => { void cancelAgent(id) })
 
   /**
    * Web requested a new agent (`agent_create`): spawn a fresh tmux session running the chosen engine in
@@ -3550,7 +3577,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const watchNewPane = createPaneWatcher({
     registry,
     announceSession,
-    triggerHint: (runtime, engine) => agentReconciler.triggerHint(runtime, engine),
+    triggerHint: async (runtime, engine) => { await agentReconciler.triggerHint(runtime, engine) },
     captureTerminal,
     retainExitedSession,
   })
@@ -3606,8 +3633,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     byAgent: (agentId) => registry.byAgent(agentId),
     tmuxBackend,
     prepareSessionResume,
+    keepAbandonedConversation,
   })
   const restartJobs = paneSwap.restartJobs
+  // A message sent while an engine is being replaced waits for the new one instead of being refused.
+  terminals.whileChanging((agentId) => restartJobs.busy(agentId))
   const sameRestartTarget = paneSwap.sameRestartTarget
   const paneSwapDeps = paneSwap.paneSwapDeps
   const liveBypassPermission = paneSwap.liveBypassPermission
@@ -3652,12 +3682,15 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     prepareSessionResume,
     refreshGridWebSearch,
     attachDsh,
+    attachSession: (session) => attachSession(session),
     relaunchMarks,
   })
   const stopJobs = lifecycle.stopJobs
+  binding.whileChanging((agentId) => restartJobs.busy(agentId) || stopJobs.has(agentId))
   const stopAgent = lifecycle.stopAgent
-  backend.onDeleteAgent = stopAgent
+  backend.stopProvider = createStopRequest({ byAgent: (id) => registry.byAgent(id), stop: stopAgent })
   backend.purgeAgentService = lifecycle.purgeAgentService
+  backend.purgeProvider = createPurgeRequest({ purgeAgentService: () => lifecycle.purgeAgentService, invalidateStorage: () => { void backend.harnessStorageReader([], true) } })
   // Closing agents no window shows, and the cleanup preview (core/agents/close.ts).
   const closing = createAgentClosing({
     registry,
@@ -3673,11 +3706,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   })
   backend.closeAgentService = closing.closeAgentService
   backend.closeAgentService.start()
-  backend.cleanupPreview = closing.cleanupPreview
-  backend.onResumeAgent = lifecycle.resumeAgent
+  const closeRequests = createCloseRequests({ cleanupPreview: closing.cleanupPreview, closeAgentService: () => closing.closeAgentService })
+  backend.cleanupPreviewProvider = closeRequests.preview
+  backend.closeProvider = closeRequests.close
 
   // Restarting an agent in its own pane (core/agents/restart.ts).
-  backend.onRestartAgent = createAgentRestarter({
+  const restartAgent = createAgentRestarter({
     restartJobs,
     registry,
     purgeBusy: (agentId) => backend.purgeAgentService?.busy(agentId),
@@ -3694,9 +3728,22 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     liveBypassPermission,
     paneSwapDeps,
   })
+  // The requests that start an agent's process, and the receipts of those asked with a creationId
+  // (core/agents/launches.ts). The orchestrator and the cable create and fork through the socket's slots.
+  const launches = createLaunchRequests({
+    receipts: new AgentCreationReceipts(join(env.ADAPTER_DATA_DIR, 'agent-creations')),
+    createAgent: () => backend.onCreateAgent, forkAgent: () => backend.onForkAgent,
+    resumeAgent: () => lifecycle.resumeAgent, restartAgent: () => restartAgent,
+    byAgent: (id) => registry.byAgent(id), toProject: (s) => backend.toProject(s),
+  })
+  backend.createProvider = launches.create
+  backend.createStatusProvider = launches.createStatus
+  backend.restartProvider = launches.relaunch
+  backend.forkProvider = launches.fork
 
   const submitAgent = inputs.submitAgent
   backend.onMessage = (id, content, deliveryId, tabId) => submitAgent(id, content, deliveryId, tabId)
+  backend.messageProvider = inputs.messageRequest
   backend.onCancelOrchestratorMessage = id => input.cancelDelivery(id)
   backend.readChannelDesk = async () => {
     const response = await proxyBackend('GET', '/api/tab-channels')
@@ -3728,125 +3775,37 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     backend.connect()
     console.log(`[cli] dialing ${env.BACKEND_WS_URL}/api/adapter-ws · watching registered sessions for ${ENGINES.length} engines`)
   } else {
+    backend.serveThisComputerOnly()
     console.log(`[cli] not signed in — serving this computer only · watching registered sessions for ${ENGINES.length} engines`)
   }
 
-  // ── self-update: poll GCS for a newer bundle → verify+swap → restart IMMEDIATELY (supervised rollback) ──
-  //
-  // The restart used to wait for the computer to go idle. That wait was unbounded, and "idle" is a set of
-  // latches — open turn, settling composer, awaited submit, control lock, recap in flight — so ONE latch
-  // left stuck deferred the restart forever. Seen on 2026-07-31: 0.0.26 staged, then eight minutes of
-  // "deferring restart — sessions still processing" with the daemon otherwise silent. A daemon that
-  // quietly never updates is the exact failure this updater exists to prevent, so the wait is gone
-  // (owner call, 2026-07-31): staged means restart now.
-  //
-  // The cost is real and accepted: a turn streaming at that moment loses the rest of its events, and its
-  // clients see no turn_end for it until the new daemon re-attaches the session and the next turn runs.
-
-  // Hand off to a freshly-spawned daemon running the just-swapped cli.js, then SUPERVISE it and roll
-  // back to the .prev bytes if it fails to come up. NOT launch() — that refuses while a daemon is alive.
-  //
-  // Runs under the spawn lock for its whole length (the updater's `withLock` wraps the staging and
-  // this together), so no `harness start` can spawn into the seconds where the port is free and the
-  // pid file names nothing.
-  const restartForUpdate = async (newVersion: string): Promise<void> => {
-    if (restarting) return
-    restarting = true
-    console.log(`[update] applying ${VERSION} → ${newVersion} — restarting daemon`)
-    registry.flush()
-    daemonBoot.updater?.stop()
-    daemonBoot.tuiUpdater?.stop()
-    agentReconciler.stop()
-    clearInterval(logTrimTimer)
-    clearInterval(runtimeReconcileTimer)
-    clearInterval(paneTitleSyncTimer)
-    questionWatcher.stopAll()
-    for (const t of heartbeats.values()) clearInterval(t)
-    heartbeats.clear()
-    cursorSubagents.stop()
-    normalizers.stopPollers()
-    await cursorDiscovery.stop()
-    await watcher.stop()
-    // Fully release the FIXED hook port BEFORE the child binds (no fallback → EADDRINUSE otherwise).
-    ;(hookServer as unknown as { closeAllConnections?: () => void }).closeAllConnections?.()
-    // Release the fixed hook port before the child binds. Process-owned agents stay in the persisted
-    // registry and are revalidated by the new daemon's first discovery passes.
-    shareRelay.close()
-    sharedViewers.stop()
-    await localWsServer.close()
-    hookServer.close()
-    await localSocket?.close()
-    codexActivity.close()
-    shutdownVoiceRouter()
-    // The new daemon starts its own viewers for the agents it restores; ours must not hold the ports.
-    await ports.viewers?.stop()
-    autonomousDeviceDirect?.stop()
-    await backend.stop() // graceful WS close → releases the Redis machine-owner claim
-    await new Promise((r) => setTimeout(r, 1000)) // grace before the same-machine reclaim
-
-    if (coreLink.supervised) {
-      // Everything above is released; the master starts the new bundle as soon as this exits and
-      // rolls back to the .prev bytes if it does not come up and stay up (harnessd/supervisor.ts).
-      console.log(`[update] handing ${newVersion} to harnessd`)
-      process.exit(CORE_EXIT_UPDATE)
-    }
-    const sinceOffset = existsSync(LOG_FILE) ? statSync(LOG_FILE).size : 0
-    const child = spawnDaemonChild({ ADAPTER_UPDATED_TO: newVersion })
-    handoffChild = child
-    let childExited = false
-    child.on('exit', () => { childExited = true })
-
-    // Two phases. First the child has to BIND the port — it claims the pid file itself at that
-    // moment, and nothing else writes that file any more. A child that exits or stalls before then
-    // is a bad build (or a port it could not take): roll back at once instead of burning the whole
-    // connect window on it. Then, bound, wait for the backend: KEEP on connected/unreachable/busy
-    // (the new build RAN), ROLL BACK only on `fatal`. unreachable = backend transient, not a bad build.
-    const bind = await waitForBind(child.pid ?? -1, () => childExited, BIND_WAIT_MS, launchDeps)
-    const ready = bind === 'bound' ? await waitForReady(sinceOffset, 30_000, launchDeps) : null
-    if (bind === 'bound' && !childExited && ready?.state !== 'fatal') {
-      // Confirmed: it is the daemon now. Let go of it BEFORE anything else — a SIGTERM landing between
-      // here and the exit below must not take it down with us (see shutdown()).
-      handoffChild = null
-      child.unref()
-      confirmUpdate(env.ADAPTER_CLI_DIR) // drop the .prev backups
-      console.log(`[update] now running ${newVersion} (pid ${child.pid})`)
-      process.exit(0)
-    }
-    console.error(`[update] new build failed to start (${bind !== 'bound' ? bind : childExited ? 'exited' : ready?.state}) — rolling back`)
-    try { if (child.pid) process.kill(child.pid, 'SIGKILL') } catch { /* ignore */ }
-    // A killed child cannot remove its own pid file; do it for it — but only once it is actually
-    // dead (SIGKILL is asynchronous, and a child mid-bind could still write the file after our
-    // removal) and only if it is still ITS file.
-    if (child.pid) {
-      const gone = Date.now() + 2_000
-      while (Date.now() < gone && isAlive(child.pid)) await new Promise((r) => setTimeout(r, 50))
-    }
-    removePidFileIf(child.pid)
-    restoreUpdate(env.ADAPTER_CLI_DIR) // restore .prev → cli.js/notify.mjs
-    const good = spawnDaemonChild({})
-    handoffChild = good
-    let goodExited = false
-    good.on('exit', () => { goodExited = true })
-    // Hold the lock — and this process — until the rollback child has bound too. Exiting the moment it
-    // is spawned would free the lock while the port is still unclaimed, which is the window this whole
-    // arrangement exists to close. Nothing to do if it fails: the .prev bytes were the build that was
-    // running a minute ago, and `harness start` can be tried by hand.
-    const goodBind = await waitForBind(good.pid ?? -1, () => goodExited, BIND_WAIT_MS, launchDeps)
-    if (goodBind !== 'bound') console.error(`[update] rollback build did not come up either (${goodBind}) — run harness start`)
-    good.unref()
-    process.exit(0)
-  }
-
-  // The handoff handler stops being `bootHandoff` HERE, and not a line earlier: everything
-  // `restartForUpdate` tears down — the hook server, the reconciler, the three interval timers, the
-  // watcher, the backend socket — exists by now. A straight-line assignment, never a wait: if the
-  // body never reaches this line the handler stays `bootHandoff`, and the fix still lands.
-  daemonBoot.applyStagedUpdate = (v) => restartForUpdate(v).catch((err) => {
-    // If the restart handoff itself throws/rejects (I/O fault during teardown), don't let it become
-    // an unhandledRejection — log, un-latch `restarting`, and stay on the current build.
+  // ── self-update: a staged bundle restarts the daemon IMMEDIATELY (core/updateHandoff.ts, and
+  // handOffWithoutMaster for a core run on its own). The handler stops being `bootHandoff` HERE, and not a
+  // line earlier: everything the teardown releases exists by now. A straight-line assignment, never a
+  // wait: if the body never reaches this line the handler stays `bootHandoff`, and the fix still lands.
+  daemonBoot.applyStagedUpdate = (v) => updateHandoff.restartForUpdate(v, [
+    ['the registry', () => registry.flush()], ['the updaters', () => { daemonBoot.updater?.stop(); daemonBoot.tuiUpdater?.stop() }],
+    ['the reconciler', () => agentReconciler.stop()],
+    ['the timers', () => { clearInterval(logTrimTimer); clearInterval(runtimeReconcileTimer); clearInterval(paneTitleSyncTimer) }],
+    ['the question watchers', () => questionWatcher.stopAll()],
+    ['the turn heartbeats', () => { for (const t of heartbeats.values()) clearInterval(t); heartbeats.clear() }],
+    ['the Cursor sub-agents', () => cursorSubagents.stop()], ['the normalizers', () => normalizers.stopPollers()],
+    ['Cursor discovery', () => cursorDiscovery.stop()], ['the transcript watcher', () => watcher.stop()],
+    // The FIXED hook port, released before the successor binds it (no fallback → EADDRINUSE otherwise).
+    // Process-owned agents stay in the persisted registry and are revalidated by its first discovery passes.
+    ['the hook connections', () => (hookServer as unknown as { closeAllConnections?: () => void }).closeAllConnections?.()],
+    ['the share relay', () => shareRelay.close()], ['the shared viewers', () => sharedViewers.stop()],
+    ['the local websocket', () => localWsServer.close()], ['the hook server', () => hookServer.close()],
+    ['the local socket', () => localSocket?.close()], ['Codex activity', () => codexActivity.close()],
+    ['the voice router', () => shutdownVoiceRouter()],
+    // The successor starts its own viewers for the agents it restores; ours must not hold the ports.
+    ['the viewers', () => ports.viewers?.stop()], ['the device link', () => autonomousDeviceDirect?.stop()],
+    // A graceful close releases the backend's one-machine claim, given a moment before the reclaim.
+    ['the backend', () => backend.stop()], ['a grace', () => new Promise((r) => setTimeout(r, 1000))],
+  ]).catch((err) => {
+    // Only without a master: a step or the successor failed before anything was handed over.
     console.error('[update] restart failed — staying on current build:', err instanceof Error ? err.message : err)
-    restarting = false
-    handoffChild = null
+    updateHandoff.abandon()
   })
 
   /** Stopping for good — removed from the account, or connected from elsewhere: tell harnessd's master,
@@ -3857,8 +3816,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // Mid-handoff everything below has already been torn down once, and the daemon that matters is
     // the child being supervised. Take it down with us and leave — a second teardown of closed servers
     // is noise, and a child left running would be a daemon nothing manages.
-    if (restarting) {
-      const child = handoffChild // null once the handoff was confirmed — that daemon stays up
+    if (updateHandoff.restarting()) {
+      const child = updateHandoff.child() // null once the handoff was confirmed — that daemon stays up
       if (child?.pid) {
         console.log(`[cli] ${signal} during an update handoff — stopping the new daemon (pid ${child.pid}) too`)
         try { process.kill(child.pid, 'SIGTERM') } catch { /* ignore */ }
@@ -3870,7 +3829,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // Release the serial port first. It is exclusive, and a daemon that exits still holding it makes
     // esptool fail in a way that reads exactly like dead hardware.
     void cableRef?.stop()
-    deviceLinkRef?.stop()
+    ports.fleet?.stop()
     daemonBoot.updater?.stop()
     daemonBoot.tuiUpdater?.stop()
     agentReconciler.stop()
@@ -3886,9 +3845,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     await watcher.stop()
     shareRelay.close()
     sharedViewers.stop()
+    // The data folder's socket first: a successor waiting for this core to leave (lib/localSocket.ts) can
+    // start as soon as it is gone, whatever the clients below take to close.
+    await localSocket?.close()
     await localWsServer.close()
     hookServer.close()
-    await localSocket?.close()
     codexActivity.close()
     shutdownVoiceRouter()
     await ports.viewers?.stop()
@@ -3930,6 +3891,20 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     void shutdown('busy')
   }
 
+  // ── the owner's OTHER machines (services/fleet.ts) ──────────────────────────────────────────────────
+  //
+  // The machine list kept fresh, the lane to the other machines, and the router ⌘K, the window's voice
+  // route and the dial send every turn through. The list is the same cache the local `/api/machines`
+  // handler answers from (built up near `proxyBackend`), so the dial's wheel and the desktop's list
+  // cannot disagree — and neither can go stale while the other is fresh.
+  serviceHost.start('fleet', (core, started) => {
+    startFleet(core, started, {
+      machines: machineListCache, guestMachines: guestMachinesBody, computerId, machineId: () => backend.machineId,
+      machineName: dialMachineName, desk: () => appPaneAgents, auth,
+      autonomousEnv: readAuthSession()?.autonomousEnv ?? env.AUTONOMOUS_ENV, identity: relayIdentityStore.getIdentity(),
+    })
+  }, coreApi, FLEET_FALLBACKS)
+
   // ── the dial on the USB cable ────────────────────────────────────────────────────────────────────
   //
   // A second device surface, served entirely over a wire the user physically owns: no backend, no
@@ -3938,54 +3913,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // of any of those is a second set of bugs.
   //
   // Deliberately not fatal and not blocking: an unplugged cable is this daemon's ordinary state.
-  // ── the lane to the owner's OTHER machines ───────────────────────────────────────────────────────
-  //
-  // Three independent things, on purpose. The LIST is a REST read that works while the backend socket is
-  // down; `local` is derived from the computer id and needs no network at all; and the LANE is a device
-  // socket that only exists while the dial is actually looking at another machine.
-  // The same cache the local `/api/machines` handler answers from (built up near `proxyBackend`), so the
-  // dial's wheel and the desktop's list cannot disagree — and neither can go stale while the other is fresh.
-  const machineList = machineListCache
-  // Signed out there is nothing to fetch and a fetch would only earn a 401 that empties the wheel, so
-  // the one row this daemon can speak for is fed in directly — the same body the local handler answers.
-  const refreshMachineList = (): void => {
-    const guest = guestMachinesBody()
-    if (guest) { machineList.adopt(guest); return }
-    void machineList.refresh()
-  }
-  refreshMachineList()
-  const machineListTimer = setInterval(refreshMachineList, 60_000)
-  machineListTimer.unref?.()
-
-  const machinePeers = new MachinePeerStore()
-  const deviceLink = new DeviceLink({
-    auth,
-    backendWsBase: env.BACKEND_WS_URL,
-    computerId: computerId(),
-    autonomousEnv: readAuthSession()?.autonomousEnv ?? env.AUTONOMOUS_ENV,
-    // The SAME identity `harness remote-password set` publishes and `harness link connect` proves
-    // knowledge against, so one link ceremony covers the desktop app's relay and the dial's lane alike.
-    identity: relayIdentityStore.getIdentity(),
-    // Read FRESH on every attach: `harness link connect` runs as a separate process, so a value captured
-    // at daemon start would keep answering "not linked" until the next restart.
-    peer: (machineId) => machinePeers.get(machineId),
-    // Read fresh for the same reason `machineId` above is a thunk: it is '' until the daemon has resolved
-    // this computer's machine, and the echo guard must start working the moment it is not.
-    localMachineId: () => backend.machineId,
-    log: (line) => console.log(`[device] ${line}`),
-  })
-
-  deviceLinkRef = deviceLink
-
-  const fleet = new DeviceFleet({
-    list: machineList,
-    link: deviceLink,
-    // Read FRESH on every call, never cached: `harness link connect` runs as a separate process, so a
-    // cached answer would keep saying "not linked" for as long as this daemon lives.
-    hasPeerLink: (machineId) => machinePeers.get(machineId) !== null,
-    log: (line) => console.log(`[device] ${line}`),
-  })
-
   let devicesStatusRevision = 0
   const cableHost = new DaemonCableHost({
     activityText: async (agentId) => {
@@ -3994,31 +3921,21 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       const screen = await terminals.capture(session, { mode: 'visible', ansi: false })
       return terminalActivity(session.engine, screen.state === 'succeeded' ? screen.value : null)
     },
-    machineName: () => { try { return readFileSync(MACHINE_NAME_FILE, 'utf8').trim() || 'This machine' } catch { return 'This machine' } },
+    machineName: dialMachineName,
     machineId: () => backend.machineId,
     computerId: () => computerId(),
     signedIn: () => readAuthSession() !== null,
-    // The SAME handlers the backend socket drives, called directly rather than reimplemented: the
-    // slash-command adaptation, the turn bookkeeping and the question plumbing all live in them.
-    sendTurn: (agentId, text) => backend.onMessage?.(agentId, text),
-    stopTurn: (agentId) => backend.onCancel?.(agentId),
-    // The dial's own object, forwarded verbatim. It used to be rebuilt here as `{ [requestId]: optionId }`
-    // — keyed by the REQUEST id rather than by the question key `onQuestionAnswer` expects, so the answer
-    // named a question that does not exist.
-    answer: (agentId, requestId, answers) => { void backend.onQuestionAnswer?.({ agentId, requestId, answers }) },
-    answerReviewed: async answer => (await questions.answer({ agentId: answer.agentId, requestId: answer.requestId,
-      answers: answer.answers, expectedQuestions: answer.questions, selectedLabels: answer.selections, freeTextKeys: answer.freeTextKeys })).ok,
-    recent: (id, n) => mirror.recent(registry.resolve(id)?.sessionId || id, n),
-    recentAsks: (id) => mirror.recentAsks(registry.resolve(id)?.sessionId || id),
-    runtimeProfile: (session) => runtimeProfiles.selectedModel(session),
-    updateAgent: (agentId, model, effort) => {
-      const s = registry.resolve(agentId)
-      if (!s || !model) return
-      backend.onRuntimeProfileUpdate?.(s.sessionId || agentId, `runtime-v1:${s.sessionId || agentId}:${s.engine}:${model}@${effort || 'auto'}`)
-    },
-    // The same provider the web and the WiFi device read, so the dial's picker cannot show a different
-    // catalog from the one the machine will actually honour.
-    listModels: async (agentId) => (await backend.runtimeModelsProvider?.(agentId)) ?? [],
+    // The core's own doors for a local agent (core/api.ts). The fleet's router reaches them the same way;
+    // the dial uses these only when it routes by itself, with the fleet service off.
+    sendTurn: coreApi.turns.send,
+    stopTurn: coreApi.turns.stop,
+    answer: coreApi.questions.answer,
+    answerReviewed: coreApi.questions.answerReviewed,
+    recent: coreApi.turns.recent,
+    recentAsks: coreApi.turns.asks,
+    runtimeProfile: coreApi.agents.runtimeProfile,
+    updateAgent: coreApi.agents.setRuntime,
+    listModels: coreApi.agents.runtimeModels,
     // Both of these are LOCAL-ONLY on purpose (backend.sendLocal, not backend.send): they describe a hand
     // at this desk, not a change in what the machine is doing, and the cloud web audience may be sitting
     // at another computer entirely.
@@ -4031,11 +3948,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       backend.sendLocal({ type: 'dial_notification_read', payload: { machineId, agentId, readToken } }),
     forked: (machineId, agentId, sourceAgentId) => backend.sendLocal({ type: 'dial_forked', payload: { machineId, agentId, sourceAgentId } }),
     // The dial's Fork: the same path the window's `agent_fork` takes, then `forked` above lands on it.
-    forkAgent: async (agentId) => {
-      if (!backend.onForkAgent) return { ok: false, error: 'UNSUPPORTED' }
-      const result = await backend.onForkAgent({ agentId, name: null, prompt: null })
-      return result.ok ? { ok: true, agentId: result.session.agentId } : { ok: false, error: result.error, detail: result.detail }
-    },
+    forkAgent: coreApi.agents.fork,
     // No `edge`. It used to ride along for an agent the window had no tile for, naming which end of the
     // desk to replace; the carousel now only walks tiles that exist, so every focus is about one of them.
     focused: (machineId, agentId) =>
@@ -4059,7 +3972,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     form: command => windowForm.command(command),
     clearForm: () => windowForm.clear(),
     log: (line) => console.log(`[cable] ${line}`),
-  }, fleet)
+    // Which machine an agent is on, and getting there: the fleet's router, through its port (D1).
+    fleet: () => ports.fleet,
+  })
   cableHostRef = cableHost
   backend.harnessDevices = {
     status: () => cableHost.currentDialStatus(),
@@ -4079,7 +3994,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   }
   const cable = new CableFleet(CableSession, cableHost, env.HARNESS_LOGS_DIR, DialLog,
     { serials: process.env.HARNESS_DIAL_SERIALS?.split(',').map(s => s.trim()).filter(Boolean),
-      verdicts: new DialVerdicts(join(env.ADAPTER_DATA_DIR, 'dial-ports.json')) })
+      verdicts: new DialVerdicts(join(env.ADAPTER_DATA_DIR, 'dial-ports.json')), ...testDialDiscovery(process.env.HARNESSD_TEST_DIAL_PORT) })
   cableRef = cable
 
   const deviceStore = createDeviceStore({ dataDir: env.ADAPTER_DATA_DIR, machineId: backend.machineId,
@@ -4088,7 +4003,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   })
   deviceStoreRef = deviceStore
   deviceStore.startUiDelivery()
-  autonomousDeviceService = new AutonomousDeviceService({
+  autonomousDeviceService = startDevicePart('Wi-Fi device service', () => new AutonomousDeviceService({
     store: deviceStore,
     resultJournal: new DeviceResultJournal(join(env.ADAPTER_DATA_DIR, 'device-results.json')),
     inputConsumed: (id, text) => deviceInput.onTurnStarted(id, text),
@@ -4118,10 +4033,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     recent: (id, n) => mirror.recent(registry.byAgent(id)?.sessionId ?? id, n),
     fullText: id => mirror.lastFullText(registry.byAgent(id)?.sessionId ?? id),
     emit: (frame, deviceId) => backend.emitAutonomousDeviceEvent(frame, deviceId),
-  })
-  if (appVoiceFocus) autonomousDeviceService.appFocus(appVoiceFocus.machineId, appVoiceFocus.agentId, appVoiceFocus.connId)
-  backend.setAutonomousDeviceService(autonomousDeviceService)
-  autonomousDeviceDirect = new AutonomousDeviceDirect({
+  }))
+  if (appVoiceFocus) autonomousDeviceService?.appFocus(appVoiceFocus.machineId, appVoiceFocus.agentId, appVoiceFocus.connId)
+  if (autonomousDeviceService) backend.setAutonomousDeviceService(autonomousDeviceService)
+  // No link without the service: a device it connected would be answered by nothing.
+  autonomousDeviceDirect = autonomousDeviceService && startDevicePart('Wi-Fi device link', () => new AutonomousDeviceDirect({
     machineId: backend.machineId, label: hostname(),
     receive: (connId, frame, pairing) => backend.receiveDirectDevice(connId, frame, pairing),
     attach: (connId, send) => backend.attachDirectDevice(connId, send),
@@ -4130,14 +4046,15 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     authenticatedFingerprint: connId => { const pub = backend.e2ee.sessionIdentity(connId); return pub ? e2eeCoreFingerprint(e2eeCoreDecode(pub)) : null },
     pairedFingerprint: connId => backend.pairedDirectFingerprint(connId),
     pair: code => backend.pair(code), paired: () => backend.listPairs(),
-  }, env.ADAPTER_DATA_DIR)
+  }, env.ADAPTER_DATA_DIR))
   backend.onDirectDeviceRevoked = fp => autonomousDeviceDirect?.revoked(fp)
-  autonomousDeviceDirect.start()
+  autonomousDeviceDirect?.start()
+  devicePartsBuilt = true
 
   // Worktrees Harness made that no live or stopped harness uses and nothing would miss
   // (services/workspaces.ts): a few minutes after start, once restored agents are back in the
-  // registry, then twice a day.
-  setTimeout(() => ports.workspaces?.sweepUnused(), 5 * 60_000).unref()
+  // registry, then twice a day. Only the end-to-end harness shortens the first wait.
+  setTimeout(() => ports.workspaces?.sweepUnused(), Number(process.env.HARNESSD_TEST_SWEEP_AFTER_MS) || 5 * 60_000).unref()
   setInterval(() => ports.workspaces?.sweepUnused(), 12 * 3600_000).unref()
 
 
@@ -4177,14 +4094,13 @@ async function runForeground(session: AuthSession | null): Promise<void> {
 
   // A remote machine's cards reach the dial through the SAME four calls the local tee uses, so a new
   // event kind lands on both surfaces the day it lands on either.
-  fleet.onEvent((event) => {
+  // The fleet has already noted which machine the agent is on (services/fleet.ts), so a question from it
+  // can be named and, tapped, opened.
+  ports.fleet?.onEvent((event) => {
     // A `state` event is about the WHEEL, not about a turn — live machine presence, which matters
     // whichever machine is selected. Filtering it with the guard below would freeze the dots the moment
     // the dial came back to this computer, which is where it sits most of the time.
     if (event.kind === 'state') { void cable.syncMachines(); return }
-    // Which machine this agent is on, before its list is necessarily read — what lets a question from it
-    // be named and, tapped, opened. See DaemonCableHost.noteAgent.
-    cableHost.noteAgent(event.machineId, event.agentId)
     // No selection guard. Every machine's agents are on the carousel at once, so a card from a machine
     // the wheel is not pointed at still belongs to a tile the user can see — and dropping it is what a
     // tile that never leaves "Working…" looks like from the outside.
@@ -4273,6 +4189,8 @@ function printInfoBlock(opts: {
   status: string; pid: number; machineId?: string; sessions: number; version: string
   /** The `device` row's text (this machine's key code and whether the account holds it); only `status` shows it. */
   device?: string
+  /** Who keeps the daemon running, when launchd or systemd does (`harness service install`). */
+  supervisor?: string
   connection: { backendUrl: string | null; autonomousEnv: string | null; signedIn: boolean; dataDir: string | null; authDir: string | null }
 }): void {
   const row = (k: string, v: string): string => `   ${k.padEnd(10)} ${v}`
@@ -4294,6 +4212,7 @@ function printInfoBlock(opts: {
   if (opts.connection.authDir) console.log(row('auth', tildify(opts.connection.authDir)))
   console.log(row('agents', `${opts.sessions} available`))
   console.log(row('pid', String(opts.pid)))
+  if (opts.supervisor) console.log(row('supervisor', opts.supervisor))
   console.log(row('logs', tildify(LOG_FILE)))
   console.log(row('dial log', tildify(join(env.HARNESS_LOGS_DIR, 'dial-YYYYMMDD.log'))))
   console.log(row('dashboard', `http://127.0.0.1:${daemonPort()}`))
@@ -4374,6 +4293,19 @@ async function spawnDaemon(session: AuthSession | null, runtimeNode: string | nu
   mkdirSync(env.ADAPTER_DATA_DIR, { recursive: true, mode: 0o700 })
   prepareLogFile(LOG_FILE, LEGACY_LOG_FILE) // adopt an older name + enforce the cap before we tail from here
   const logOffset = existsSync(LOG_FILE) ? readFileSync(LOG_FILE).length : 0
+  // Opted in to launchd or systemd (`harness service install`): the platform runs the master, and one
+  // spawned here would be a second supervisor beside it (lib/platformDaemon.ts).
+  const platform = installedPlatform()
+  if (platform) {
+    const started = await startUnderPlatform(serviceDefinition({ logFile: LOG_FILE }))
+    if (!started.ok) {
+      const fail = connectFailure(launchDeps.readLogSlice(logOffset), daemonPort())
+      console.error(`\n✗ ${fail?.detail ?? started.detail}`)
+      console.error(`  logs   ${tildify(LOG_FILE)}   ·   harness service status`)
+      process.exit(1)
+    }
+    return reportStarted(session, started.pid, platform)
+  }
   const logFd = openSync(LOG_FILE, 'a')
   // The daemon starts on the managed runtime straight away rather than inheriting this process's
   // interpreter and waiting for some later restart to adopt it.
@@ -4403,6 +4335,12 @@ async function spawnDaemon(session: AuthSession | null, runtimeNode: string | nu
     process.exit(1)
   }
 
+  return reportStarted(session, child.pid ?? 0)
+}
+
+/** What `harness start` says once the daemon it started is up, and its exit. `supervisor`: launchd or
+ *  systemd started it (`harness service install`). */
+async function reportStarted(session: AuthSession | null, pid: number, supervisor?: string): Promise<never> {
   // Bound is started. What the daemon does next — dial the backend, retry on its own backoff, sign
   // itself out on a 401, step aside on a 409 — is its own business and is logged by it; this command
   // used to sit here for up to ten seconds watching the log for "[backend] connected", and a computer
@@ -4415,7 +4353,8 @@ async function spawnDaemon(session: AuthSession | null, runtimeNode: string | nu
     status: session
       ? '● started · connecting to the backend in the background'
       : '● started · this computer only (not signed in)',
-    pid: child.pid ?? 0,
+    pid,
+    supervisor: supervisor && supervisorRow(supervisor),
     machineId: session?.machineId,
     sessions: daemonStatus?.sessions ?? 0,
     version: daemonStatus?.version ?? VERSION,
@@ -5309,7 +5248,8 @@ async function status(): Promise<void> {
   // in the one line a person reads, rather than leaving it looking like an ordinary slow start.
   const safeMode = alive ? readSafeModeMarker(env.ADAPTER_DATA_DIR, isAlive) : null
   // A core that cannot answer — restarting, starting, crash-looping — is described by its master.
-  const master = alive && daemonStatus == null ? describeMasterStatus(readStatusFile(HARNESSD_STATUS_FILE, pid)) : null
+  const masterStatus = alive ? readStatusFile(HARNESSD_STATUS_FILE, pid) : null
+  const master = daemonStatus == null ? describeMasterStatus(masterStatus) : null
   printInfoBlock({
     // The backend link is the daemon's own business, so `status` is where it is read — `start` no
     // longer waits to see it, and a daemon with no backend is still serving every local agent.
@@ -5329,6 +5269,7 @@ async function status(): Promise<void> {
             ? '● running · backend connected'
             : '● running · backend offline — retrying in the background',
     pid: pid ?? 0,
+    supervisor: masterStatus?.platform && supervisorRow(masterStatus.platform),
     machineId: session?.machineId,
     sessions: daemonStatus?.sessions ?? 0,
     // A stopped daemon answers nothing, so this falls back to the local build — which is what will run.
@@ -5424,12 +5365,12 @@ function withoutFirst(argv: string[], token: string): string[] {
 if (!cmd || cmd === '--help' || cmd === '-h' || cmd === 'help') usage()
 if (cmd === 'version' || cmd === '--version' || cmd === '-v') { console.log(VERSION); process.exit(0) }
 
-const onError = (err: unknown): never => {
+const onError = (err: unknown, code = 1): never => {
   console.error('Failed to start adapter:', err)
   // A daemon that claimed the pid file (port bound) and then failed to finish starting must not leave
   // that file naming a corpse — the next `harness start` would refuse on it. Only ours, though.
   removePidFileIf(process.pid)
-  process.exit(1)
+  process.exit(code)
 }
 
 /**
@@ -5451,7 +5392,10 @@ const enterSafeMode = (err: unknown): void => {
   const disposition = safeModeDisposition(err, { selfPid: process.pid, masterPid: coreLink.masterPid, readPid, isAlive })
   if (!disposition.stay) {
     console.error(`[safe-mode] not staying up — ${disposition.reason}`)
-    onError(err)
+    // Under harnessd, said for good: any other exit, the master restarts, and a core that another daemon
+    // keeps from running was restarted for as long as its master lived (e2e/twodaemons.e2e.ts). Except
+    // what stands in the way is leaving too: then the master starts this core again.
+    onError(err, coreLink.supervised && !disposition.retry ? CORE_EXIT_STOP : 1)
   }
   const detail = err instanceof Error ? (err.stack ?? err.message) : String(err)
   console.error('Failed to start adapter:', err)
@@ -5551,29 +5495,19 @@ switch (cmd) {
   case 'join':
     console.error('`harness join` has been removed. Run `harness login`, then `harness start`.')
     process.exit(1)
+  // The bundle starts these three without loading this file (entry.ts); from the sources they come here.
   case '__harnessd': // internal: the master `harness start` launches; it runs and supervises `__run`
-    runMaster({
-      nodePath: process.execPath,
-      execArgv: process.execArgv,
-      scriptPath: SCRIPT_PATH,
-      pidFile: PID_FILE,
-      statusFile: HARNESSD_STATUS_FILE,
-      logFile: LOG_FILE,
-      restoreUpdate: () => restoreUpdate(env.ADAPTER_CLI_DIR),
-      confirmUpdate: () => confirmUpdate(env.ADAPTER_CLI_DIR),
-    })
+    startMaster({ scriptPath: SCRIPT_PATH })
     break
-  case '__service': { // internal: a service harnessd's master runs in its own process (services/process.ts)
-    const socketPath = localSocketPath(env.ADAPTER_DATA_DIR, env.PORT)
-    if (rest[0] !== 'search' || !socketPath) {
-      console.error(`[service] ${rest[0] ?? '(none)'}: ${socketPath ? 'no such service in this build' : 'the core has no local socket to reach'}`)
-      process.exit(2)
-    }
-    process.title = `harnessd ${rest[0]}`
-    runSearchService({ dataDir: env.ADAPTER_DATA_DIR, socketPath, machineId: computerId(), token: process.env.HARNESSD_SERVICE_TOKEN ?? '' })
+  case '__harnessd-probe': // internal: a master about to re-execute on this bundle asks it first (harnessd/reexec.ts)
+    process.exitCode = probeThisMaster()
     break
-  }
+  case '__service': // internal: a service harnessd's master runs in its own process (serviceProcess.ts)
+    void startServiceProcess(rest[0])
+    break
   case '__run': // internal: the detached daemon child reads the durable SSO session — or runs without one
+    // Inert unless the end-to-end suite asks for its event loop to be held (core/stall.ts).
+    startStalls(testFaults(process.env.HARNESSD_TEST_FAULTS))
     // NOT `onError`: a daemon that dies here can never be updated. See `enterSafeMode`.
     runForeground(readAuthSession()).catch(enterSafeMode)
     break
@@ -5735,6 +5669,10 @@ switch (cmd) {
     break
   case 'stop':
     stop().catch(onError)
+    break
+  case 'service':
+    serviceCommand(rest, serviceCommandDeps({ relaunch: () => launch(false), tildify }))
+      .then((code) => { process.exitCode = code }).catch(onError)
     break
   case 'reset':
     resetCommand().catch(onError)

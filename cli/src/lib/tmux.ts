@@ -1,7 +1,7 @@
 /** tmux process matching, runtime validation, pane capture, and input injection. */
 
 import { execFile, spawn } from 'child_process'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { readlink } from 'node:fs/promises'
 import { platform } from 'node:os'
 import { basename } from 'path'
@@ -17,7 +17,14 @@ import {
 import { BYPASS_PERMISSION_FLAGS, PERMISSION_MODES, permissionModeApproves } from './engineLaunch.js'
 import { psEnv } from './childLocale.js'
 import { nativeProcessImages } from './nativeProcessImages.js'
+import { neutralizePasteControls } from './pasteText.js'
+import { patientExec } from './patientExec.js'
+import { tmuxFeatures, type TmuxFeatures } from './tmuxVersion.js'
 export { captureTmuxPane, tmuxCaptureArgs } from './tmuxCapture.js'
+
+// Every tmux and `ps` call here: a held event loop must not turn a timeout into an empty answer
+// (patientExec.ts).
+const run = patientExec(execFile)
 
 function cleanPaneTitle(title: string): string | null {
   const cleaned = title
@@ -31,7 +38,7 @@ function cleanPaneTitle(title: string): string | null {
 /** Current tmux pane titles keyed by pane id. AI CLIs update this with their live session title. */
 export function listPaneTitles(): Promise<Map<string, string>> {
   return new Promise((resolve) => {
-    execFile('tmux', ['list-panes', '-a', '-F', '#{pane_id}|#{pane_title}'], { timeout: 2000 }, (err, stdout) => {
+    run('tmux', ['list-panes', '-a', '-F', '#{pane_id}|#{pane_title}'], { timeout: 2000 }, (err, stdout) => {
       const titles = new Map<string, string>()
       if (err) { resolve(titles); return }
       for (const line of stdout.split('\n')) {
@@ -287,6 +294,12 @@ function readProcStat(pid: number): string | null {
  */
 let processRowsInFlight: Promise<ProcessRow[] | null> | null = null
 
+/** A running process's command line as the process table shows it; '' once it is not that process. */
+export async function processArgs(identity: ProcessIdentity): Promise<string> {
+  const rows = await processRows()
+  return rows?.find((row) => row.pid === identity.pid && row.startMarker === identity.startMarker)?.args ?? ''
+}
+
 /** The process table, or null when `ps` itself failed — "we could not look" is not "nothing is there". */
 export function processRows(): Promise<ProcessRow[] | null> {
   if (processRowsInFlight) return processRowsInFlight
@@ -296,14 +309,16 @@ export function processRows(): Promise<ProcessRow[] | null> {
 
 async function readProcessRows(): Promise<ProcessRow[] | null> {
   const rows = await new Promise<ProcessRow[] | null>((resolve) => {
-    execFile('ps', ['-axo', 'pid=,ppid=,comm=,lstart=,args='], { timeout: 3000, env: psEnv() }, (err, stdout) => {
+    run('ps', ['-axo', 'pid=,ppid=,comm=,lstart=,args='], { timeout: 3000, env: psEnv() }, (err, stdout) => {
       if (err) { resolve(null); return }
       const rows: ProcessRow[] = []
       for (const line of stdout.split('\n')) {
         const row = parseProcessRow(line)
         if (row) rows.push(row)
       }
-      resolve(rows)
+      // `ps` lists itself at the least: a table with nobody in it is a read that failed, and taken for
+      // an answer it says every engine on the machine has exited.
+      resolve(rows.length ? rows : null)
     })
   })
   return rows ? liveProcessRows(repairMangledRows(rows)) : null
@@ -312,8 +327,11 @@ async function readProcessRows(): Promise<ProcessRow[] | null> {
 function execText(command: string, args: string[], timeout: number): Promise<string | null> {
   return new Promise((resolve) => {
     // `lsof -p pid1,pid2` exits 1 when even one process disappears or is inaccessible, while still
-    // returning complete records for the surviving PIDs. Keep that usable partial snapshot.
-    execFile(command, args, { timeout }, (err, stdout) => resolve(err && !stdout ? null : stdout))
+    // returning complete records for the surviving PIDs. Keep that usable partial snapshot. Node's own
+    // timeout, for a deadline shared across calls: `killed` without an error is that timeout throwing
+    // away an answer that had arrived (patientExec.ts), so it is no answer, not an empty one.
+    let child: { killed?: boolean } | undefined
+    child = execFile(command, args, { timeout }, (err, stdout) => resolve((err && !stdout) || child?.killed ? null : stdout))
   })
 }
 
@@ -454,20 +472,105 @@ export function processTreePids(rows: readonly ProcessRow[], rootPids: readonly 
 
 
 /**
- * The pane's root pid; `'missing'` when tmux answered that it has no such pane; null when tmux could
- * not be asked (a timeout, no server, a socket it cannot reach) — which says nothing about the pane.
- * tmux 3.7 answers `display-message -t` for an unknown pane with an empty line and exit 0; older
- * versions say "can't find pane".
+ * Whether tmux failed because no server is running on its socket: then it has no panes at all, which
+ * is an answer, not a tmux that cannot be asked. tmux says it two ways (measured on 3.7c):
+ *
+ * - "no server running on <socket>": the socket file is there, with nothing listening on it.
+ * - "error connecting to <socket> (No such file or directory)": the file is gone. This is what
+ *   `kill-server`, a tmux crash and a reboot all leave.
+ *
+ * Only the first was recognised. After the server died, every pane read as "tmux unavailable", so no
+ * agent was ever taken off and the apps showed dead agents as active until a new server happened to
+ * start. A fresh machine also published a scary "tmux unavailable" before its first agent
+ * (e2e/machine.e2e.ts). The socket file is checked too, so a translated message still counts. Any
+ * other failure (a timeout, "Permission denied") still says nothing either way.
  */
-function panePidLookup(pane: string): Promise<number | 'missing' | null> {
+export function isNoTmuxServerError(error: string): boolean {
+  if (/no server running on\s+\S+/i.test(error)) return true
+  const connecting = /error connecting to (.+) \(([^)]*)\)\s*$/im.exec(error)
+  if (!connecting) return false
+  return /no such file or directory/i.test(connecting[2]) || !existsSync(connecting[1])
+}
+
+/** The tmux server the last inventory was read from (`rememberTmuxServer`); null until one was. */
+let knownServer: number | null = null
+
+/**
+ * Whether `pid` is a running tmux server: never a pid since reused by something else. macOS names it by
+ * its executable (`/opt/homebrew/bin/tmux`). Linux names it as tmux names itself, `tmux: server`
+ * (`prctl(PR_SET_NAME)` in tmux's compat/setproctitle.c), so a check for `tmux` alone never revived a
+ * socket on Linux, where systemd-tmpfiles is the cleaner that removes it. A client (`tmux: client`) is
+ * not the server.
+ */
+function isTmuxProcess(pid: number): Promise<boolean> {
+  try { process.kill(pid, 0) } catch { return Promise.resolve(false) }
   return new Promise((resolve) => {
-    execFile('tmux', ['display-message', '-p', '-t', pane, '#{pane_pid}'], { timeout: 2000 }, (err, stdout, stderr) => {
+    run('ps', ['-o', 'comm=', '-p', String(pid)], { timeout: 2_000, env: psEnv() }, (err, stdout) => {
+      const name = basename(String(stdout ?? '').trim())
+      resolve(!err && (name === 'tmux' || name === 'tmux: server'))
+    })
+  })
+}
+
+/**
+ * Note which server answered, after an inventory read from it. Asked of tmux only while unknown or
+ * gone, so a steady daemon spends one `kill(pid, 0)` an inventory on it.
+ */
+export async function rememberTmuxServer(): Promise<void> {
+  if (knownServer !== null) {
+    try { process.kill(knownServer, 0); return } catch { knownServer = null }
+  }
+  await new Promise<void>((resolve) => {
+    run('tmux', ['display-message', '-p', '#{pid}'], { timeout: 2_000 }, (err, stdout) => {
+      const pid = Number(String(stdout ?? '').trim())
+      if (!err && Number.isSafeInteger(pid) && pid > 0) knownServer = pid
+      resolve()
+    })
+  })
+}
+
+/**
+ * ⚠️ "No server" is also what tmux says when its socket was removed from under a server that still runs
+ * every agent: a cleaner of /tmp (systemd-tmpfiles ages entries out after ten days) does that to a
+ * daemon that runs for weeks. Taken for a dead server, every live agent read as stopped within 25 s
+ * (e2e/tmuxsocket.e2e.ts), and resuming them would have started each engine a second time beside
+ * itself. tmux makes its socket again on SIGUSR1 (tmux(1)), so the server last read from is asked to,
+ * when it is still a running tmux. True when it was asked: the caller reads again, once.
+ */
+export async function reviveRemovedTmuxSocket(): Promise<boolean> {
+  const pid = knownServer
+  if (pid === null || !(await isTmuxProcess(pid))) return false
+  try { process.kill(pid, 'SIGUSR1') } catch { return false }
+  // tmux makes the socket when it handles the signal, on its next turn of its loop.
+  await new Promise((resolve) => setTimeout(resolve, 200))
+  console.log(`[terminal] tmux's socket was removed while its server (pid ${pid}) still ran — asked it to make a new one`)
+  return true
+}
+
+/** Test seam. */
+export function forgetTmuxServer(): void { knownServer = null }
+
+/**
+ * The pane's root pid; `'missing'` when tmux answered that it has no such pane, or that no server is
+ * running (then no pane is); null when tmux could not be asked (a timeout, a socket it cannot reach),
+ * which says nothing about the pane. tmux 3.7 answers `display-message -t` for an unknown pane with an
+ * empty line and exit 0; older versions say "can't find pane".
+ */
+function panePidLookup(pane: string, revived = false): Promise<number | 'missing' | null> {
+  return new Promise((resolve) => {
+    run('tmux', ['display-message', '-p', '-t', pane, '#{pane_pid}'], { timeout: 2000 }, (err, stdout, stderr) => {
       const text = String(stdout ?? '').trim()
       const pid = Number(text)
       if (!err && Number.isSafeInteger(pid) && pid > 0) resolve(pid)
-      else if (!err && text === '') resolve('missing')
+      // A pane tmux does not know is an empty LINE: tmux always ends its answer with a newline, and no
+      // bytes at all is an answer that was lost (patientExec.ts), never "no such pane".
+      else if (!err && text === '' && String(stdout ?? '') !== '') resolve('missing')
       else if (err && /can't find pane/.test(String(stderr ?? ''))) resolve('missing')
-      else resolve(null)
+      else if (err && isNoTmuxServerError(String(stderr ?? ''))) {
+        // A server whose socket was removed is still running this pane: ask it back, then read again.
+        if (revived) { resolve('missing'); return }
+        void reviveRemovedTmuxSocket().then((asked) => { if (asked) void panePidLookup(pane, true).then(resolve); else resolve('missing') })
+      } else resolve(null)
     })
   })
 }
@@ -1009,7 +1112,7 @@ function sleep(ms: number): Promise<void> {
 
 function tmuxEnter(pane: string): Promise<boolean> {
   return new Promise((resolve) => {
-    execFile('tmux', ['send-keys', '-t', pane, 'Enter'], { timeout: 2000 }, (err) => {
+    run('tmux', ['send-keys', '-t', pane, 'Enter'], { timeout: 2000 }, (err) => {
       if (err) console.error(`[tmux] Enter to ${pane} failed:`, err.message)
       resolve(!err)
     })
@@ -1037,26 +1140,53 @@ function tmuxLoadBuffer(name: string, content: string): Promise<boolean> {
  */
 export function setPaneMouseOn(pane: string): Promise<void> {
   return new Promise((resolve) => {
-    execFile('tmux', ['set-option', '-t', pane, 'mouse', 'on'], { timeout: 2_000 }, () => resolve())
+    run('tmux', ['set-option', '-t', pane, 'mouse', 'on'], { timeout: 2_000 }, () => resolve())
   })
 }
 
 /**
- * The colours tmux reports to a program in the pane that asks (`OSC 10;?`/`OSC 11;?`) — see
- * `hostTheme.ts` for why a TUI's palette depends on it. Window-scoped, never `-g`: the daemon
- * shares the user's default tmux server and must not restyle sessions it did not create.
- * Best-effort and idempotent, like [setPaneMouseOn].
+ * Where an option Harness keeps for one of its panes lives: on the pane, where tmux has pane options
+ * (3.0), so it goes with the pane into any window the person moves it to and touches nothing else
+ * there; on the window before that, which is the agent's own for as long as the person leaves it be.
+ * A window option on a pane the person had joined into a window of their own changed their panes too,
+ * and a `-p` on tmux 2.x is a usage error that, chained into `new-session`, failed every agent create
+ * (PR #789's review). Never `-g`: the daemon shares the person's tmux server.
  */
-export function setPaneWindowStyle(pane: string, style: string): Promise<boolean> {
+export function paneOptionScope(features: Pick<TmuxFeatures, 'paneOptions'>): '-p' | '-w' {
+  return features.paneOptions ? '-p' : '-w'
+}
+
+/**
+ * The tmux command that gives one pane [style] (see `hostTheme.ts`), aimed at [pane] or, without one,
+ * at the pane a command list just made. The pane's own `window-style` from tmux 3.0; before that
+ * `select-pane -P`, the style tmux 2.x kept for each pane. Never the window's: an agent pane the
+ * person had moved into a window of their own repainted their shells there in Harness's colours on
+ * every scan (PR #789's review, e2e/tmuxmoves.e2e.ts).
+ */
+export function paneStyleArgs(features: Pick<TmuxFeatures, 'paneOptions'>, style: string, pane?: string): string[] {
+  const target = pane ? ['-t', pane] : []
+  return features.paneOptions
+    ? ['set-option', '-p', ...target, 'window-style', style]
+    : ['select-pane', ...target, '-P', style]
+}
+
+/**
+ * The colours tmux reports to a program in the pane that asks (`OSC 10;?`/`OSC 11;?`) — see
+ * `hostTheme.ts` for why a TUI's palette depends on it. Pane-scoped (`paneStyleArgs`), never the
+ * window's and never `-g`: the daemon shares the user's default tmux server and must not restyle
+ * panes it did not create. Best-effort and idempotent, like [setPaneMouseOn].
+ */
+export async function setPaneStyle(pane: string, style: string): Promise<boolean> {
+  const features = await tmuxFeatures()
   return new Promise((resolve) => {
-    execFile('tmux', ['set-option', '-w', '-t', pane, 'window-style', style], { timeout: 2_000 }, (error) => resolve(!error))
+    run('tmux', paneStyleArgs(features, style, pane), { timeout: 2_000 }, (error) => resolve(!error))
   })
 }
 
 /** What tmux knows about a pane right now. See `agentCreateDiagnosis.ts` for why this is read. */
 /**
  * The pane option an engine's launch wrapper sets when the engine exits and the pane falls back to
- * a shell (engineLaunch.ts, `harness_engine`): the engine's exit status. Empty/absent while the
+ * a shell (engineLaunch.ts, `harness_after`): the engine's exit status. Empty/absent while the
  * wrapper is still running the engine — and for the whole life of the fallback shell after that,
  * once something reads it, so `respawn` clears it before every new launch in the same pane.
  */
@@ -1072,18 +1202,46 @@ export interface TmuxPaneState {
 }
 
 /**
- * Pane liveness plus, for a pane kept alive by `remain-on-exit`, how its process ended.
+ * What tmux said about a pane: its state, `'gone'`, or `'unknown'`.
  *
- * Returns null when tmux does not know the pane — which is itself the answer: the process exited and
- * took its window (and, for a one-pane session, the session) with it.
+ * `'gone'` when tmux does not know the pane, or no server is running: the process exited and took its
+ * window (and, for a one-pane session, the session) with it. `'unknown'` when tmux could not be asked
+ * (a timeout, a socket it may not use), which says nothing about the pane, and a caller acts on
+ * `'gone'` only. The two used to be one null. A core whose event loop was held for a few seconds wakes
+ * to every timer that came due before it reads the answers that arrived meanwhile, so a call in flight
+ * times out with its answer sitting unread, and the null read as "gone" failed restored agents,
+ * relaunched a resumed engine fresh over its conversation, and stopped a new agent's watcher
+ * (e2e/stall.e2e.ts).
  */
-export function tmuxPaneState(pane: string): Promise<TmuxPaneState | null> {
+export type TmuxPaneRead = TmuxPaneState | 'gone' | 'unknown'
+
+/** Pane liveness plus, for a pane kept alive by `remain-on-exit`, how its process ended (see TmuxPaneRead). */
+export function tmuxPaneState(pane: string): Promise<TmuxPaneRead> {
+  return readPaneState(pane, false)
+}
+
+function readPaneState(pane: string, revived: boolean): Promise<TmuxPaneRead> {
   return new Promise((resolve) => {
     const format = `#{pane_dead}|#{pane_dead_status}|#{${ENGINE_EXIT_PANE_OPTION}}|#{pane_current_command}`
-    execFile('tmux', ['display-message', '-p', '-t', pane, format], { timeout: 2_000 }, (err, stdout) => {
-      if (err) { resolve(null); return }
-      const fields = stdout.trim().split('|')
-      if (fields.length < 4) { resolve(null); return }
+    run('tmux', ['display-message', '-p', '-t', pane, format], { timeout: 2_000 }, (err, stdout, stderr) => {
+      if (err) {
+        const said = String(stderr ?? '')
+        if (/can't find pane/.test(said)) { resolve('gone'); return }
+        if (!isNoTmuxServerError(said)) { resolve('unknown'); return }
+        // A server whose socket was removed is still running this pane: ask it back, then read again.
+        if (revived) { resolve('gone'); return }
+        void reviveRemovedTmuxSocket().then((asked) => {
+          if (asked) void readPaneState(pane, true).then(resolve)
+          else resolve('gone')
+        })
+        return
+      }
+      const fields = String(stdout ?? '').trim().split('|')
+      // Not the four fields asked for (no bytes at all is an answer that was lost): nothing to go on.
+      if (fields.length < 4) { resolve('unknown'); return }
+      // tmux 3.7 answers a pane it does not know with the four fields empty and exit 0; a pane it knows
+      // is dead or not, 1 or 0. Older versions say "can't find pane", above.
+      if (fields[0] === '') { resolve('gone'); return }
       const status = Number(fields[1])
       const engineExit = Number(fields[2])
       resolve({
@@ -1112,7 +1270,7 @@ export function tmuxPaneInfo(pane: string, socket?: string): Promise<TmuxPaneInf
     const format = '#{pane_current_command}\n#{pane_pid}\n#{pane_tty}\n#{pane_current_path}'
     // `socket` names a server outright (tests pass their own); without it, the daemon's server.
     const args = [...(socket ? ['-S', socket] : []), 'display-message', '-p', '-t', pane, format]
-    execFile('tmux', args, { timeout: 2_000 }, (err, stdout) => {
+    run('tmux', args, { timeout: 2_000 }, (err, stdout) => {
       if (err) { resolve(null); return }
       const [command = '', pid = '', tty = '', ...path] = stdout.replace(/\n$/, '').split('\n')
       const n = Number(pid)
@@ -1129,22 +1287,27 @@ export function tmuxPaneInfo(pane: string, socket?: string): Promise<TmuxPaneInf
  * Called as soon as a created pane becomes a real agent: from then on it must vanish when its engine
  * exits, exactly like a pane the user started themselves, rather than lingering as a dead pane.
  */
-export function clearPaneRemainOnExit(pane: string): Promise<void> {
+export async function clearPaneRemainOnExit(pane: string): Promise<void> {
+  // The pane's own option where tmux has one (`paneOptionScope`): restarting an agent the person had
+  // moved into a window of their own must not switch remain-on-exit off for their panes there.
+  const scope = paneOptionScope(await tmuxFeatures())
   return new Promise((resolve) => {
-    execFile('tmux', ['set-option', '-w', '-t', pane, 'remain-on-exit', 'off'], { timeout: 2_000 }, () => resolve())
+    run('tmux', ['set-option', scope, '-t', pane, 'remain-on-exit', 'off'], { timeout: 2_000 }, () => resolve())
   })
 }
 
 function tmuxDeleteBuffer(name: string): Promise<void> {
   return new Promise((resolve) => {
-    execFile('tmux', ['delete-buffer', '-b', name], { timeout: 2_000 }, () => resolve())
+    run('tmux', ['delete-buffer', '-b', name], { timeout: 2_000 }, () => resolve())
   })
 }
 
-/** Paste text from a uniquely named stdin-loaded buffer so its bytes never enter argv or errors. */
+/** Paste text from a uniquely named stdin-loaded buffer so its bytes never enter argv or errors. A
+ *  bracketed paste carries text and nothing else (pasteText.ts), not even its own end marker; an
+ *  unbracketed one is typing, and is typed as it was given. */
 async function tmuxPasteText(pane: string, content: string, bracketed: boolean): Promise<boolean> {
   const bufferName = `machinemsg-${process.pid}-${++injectBufferSequence}`
-  if (!(await tmuxLoadBuffer(bufferName, content))) {
+  if (!(await tmuxLoadBuffer(bufferName, bracketed ? neutralizePasteControls(content) : content))) {
     await tmuxDeleteBuffer(bufferName)
     console.error(`[tmux] load-buffer for ${pane} failed`)
     return false
@@ -1153,7 +1316,7 @@ async function tmuxPasteText(pane: string, content: string, bracketed: boolean):
   if (bracketed) args.push('-p')
   args.push('-d')
   const pasted = await new Promise<boolean>((resolve) => {
-    execFile('tmux', args, { timeout: 2_000 }, (err) => {
+    run('tmux', args, { timeout: 2_000 }, (err) => {
       if (err) console.error(`[tmux] paste-buffer to ${pane} failed:`, err.message)
       resolve(!err)
     })
@@ -1171,13 +1334,19 @@ async function tmuxPasteText(pane: string, content: string, bracketed: boolean):
  * Short single-line input is submitted immediately after that explicit paste boundary.
  *
  * Long/multiline input is allowed to settle before Enter. (Verified: reliably submits up to ~28 KB.)
+ *
+ * `beforeEnter` is asked once the text is in, right before the Enter: a reason it gives keeps the Enter
+ * from being pressed, and comes back as `{ withheld }`, the text left typed. An engine can open a dialog
+ * in that gap, mid-turn, and the Enter would answer it.
  */
-export function sendToTmux(pane: string, text: string): Promise<boolean> {
+export function sendToTmux(pane: string, text: string, beforeEnter?: () => Promise<string | null>): Promise<boolean | { withheld: string }> {
   const content = text.replace(/[\r\n]+$/, '') // strip trailing newlines so the submit Enter isn't doubled
   return (async () => {
-    const needsSettle = content.length > INJECT_FASTPATH_MAXLEN || content.includes('\n')
+    const needsSettle = content.length > INJECT_FASTPATH_MAXLEN || /[\r\n]/.test(content)
     if (!(await tmuxPasteText(pane, content, true))) return false
     if (needsSettle) await sleep(Math.min(1500, INJECT_PASTE_DELAY_BASE_MS + Math.floor(content.length / 60)))
+    const withheld = beforeEnter ? await beforeEnter() : null
+    if (withheld) return { withheld }
     return tmuxEnter(pane)
   })()
 }
@@ -1210,6 +1379,6 @@ export function pasteRawIntoTmux(pane: string, text: string): Promise<boolean> {
 
 export function sendKeyToTmux(pane: string, key: string): Promise<boolean> {
   return new Promise((resolve) => {
-    execFile('tmux', ['send-keys', '-t', pane, key], { timeout: 2000 }, (err) => resolve(!err))
+    run('tmux', ['send-keys', '-t', pane, key], { timeout: 2000 }, (err) => resolve(!err))
   })
 }

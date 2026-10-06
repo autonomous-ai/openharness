@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from '../../lib/registry.js'
-import { createCancel, type CancelDeps } from './cancel.js'
+import { createCancel, createCancelRequest, type CancelDeps } from './cancel.js'
 
 function setup(over: Partial<CancelDeps> = {}) {
   const calls: string[] = []
@@ -70,5 +70,17 @@ describe('cancelling a turn', () => {
     expect(service.turnEnded).toHaveBeenCalledWith('s9', true)
     const none = setup({ device: () => undefined })
     expect(await none.cancelAgent('a1')).toBe(true)
+  })
+})
+
+describe('a cancel frame', () => {
+  it('interrupts the agent it names by agent id, or by session id, and takes a frame naming neither as nothing', () => {
+    const cancel = vi.fn()
+    const request = createCancelRequest(cancel)
+    request({ agentId: 'a1', sessionId: 's1' })
+    request({ sessionId: 's2' })
+    request({ agentId: '' })
+    request({})
+    expect(cancel.mock.calls).toEqual([['a1'], ['s2']])
   })
 })

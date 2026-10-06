@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { inspectCloseActivity, type CloseAgentServiceDeps } from '../../lib/closeAgentService.js'
 import { projectDisplayName, type RegisteredSession } from '../../lib/registry.js'
-import { createAgentClosing, type ClosingDeps } from './close.js'
+import { createAgentClosing, createCloseRequests, type ClosingDeps } from './close.js'
 
 // The real close service, recording what it was built with so its callbacks can be driven directly.
 vi.mock('../../lib/closeAgentService.js', async (real) => {
@@ -106,5 +106,80 @@ describe('closing agents no window shows', () => {
       expect(request).toHaveBeenCalledWith({ agentId: 'changing', sessionId: 's1', createdAt: new Date(0).toISOString(), mode: 'inspect' })
       expect(request).toHaveBeenCalledTimes(3)
     })
+
+    it('a close asked for while the preview is reading the agent is carried out, not answered with the reading', async () => {
+      // The preview inspects every hidden agent; a window's close of one of them arriving meanwhile was
+      // once answered with that inspect's `{ activity }`, and the agent left running (e2e/windows.e2e.ts).
+      const busy = row({ agentId: 'busy', sessionId: 's9', runtimes: [] })
+      const registry = { advertised: vi.fn(() => [busy]), byAgent: vi.fn((id: string) => (id === 'busy' ? busy : undefined)),
+        list: vi.fn(() => [busy]), setClosePlan: vi.fn() }
+      const { deps, closing } = setup({ registry: registry as unknown as ClosingDeps['registry'] })
+      let read!: (screen: string) => void
+      vi.mocked(deps.captureTerminal).mockImplementationOnce(() => new Promise<string | null>((resolve) => { read = resolve }))
+      const preview = closing.cleanupPreview()
+      await vi.waitFor(() => expect(read).toBeTypeOf('function'))
+      const close = closing.closeAgentService.request({ agentId: 'busy', sessionId: 's9', createdAt: new Date(0).toISOString(), mode: 'now' })
+      read('screen')
+      expect((await preview).agents).toEqual([expect.objectContaining({ agentId: 'busy' })])
+      expect(await close).toEqual({ closed: true })
+      expect(deps.stopAgent).toHaveBeenCalledOnce()
+    })
+  })
+})
+
+describe('agents_cleanup_preview', () => {
+  it('answers with the preview once it is read, outside the connection\'s line', async () => {
+    let read!: (preview: Record<string, unknown>) => void
+    const replies: Array<Record<string, unknown>> = []
+    createCloseRequests({ cleanupPreview: () => new Promise((resolve) => { read = resolve }), closeAgentService: () => null }).preview((result) => { replies.push(result) })
+    expect(replies).toEqual([])
+    read({ version: 1, agents: [], kept: 2 })
+    await vi.waitFor(() => expect(replies).toStrictEqual([{ version: 1, agents: [], kept: 2 }]))
+  })
+
+  it('says why a preview could not be read: the failure\'s own code and words, or that the tabs were unavailable', async () => {
+    const replies: Array<Record<string, unknown>> = []
+    const failing = (error: unknown) => createCloseRequests({ cleanupPreview: async () => { throw error }, closeAgentService: () => null }).preview((result) => { replies.push(result) })
+    failing(Object.assign(new Error('The desk could not be read.'), { code: 'DESK_UNAVAILABLE' }))
+    failing(new Error('offline'))
+    failing(undefined)
+    await vi.waitFor(() => expect(replies).toHaveLength(3))
+    expect(replies).toStrictEqual([
+      { error: 'DESK_UNAVAILABLE', detail: 'The desk could not be read.' },
+      { error: 'TABS_UNAVAILABLE', detail: 'offline' },
+      { error: 'TABS_UNAVAILABLE', detail: 'Could not check open tabs.' },
+    ])
+    expect(Object.keys(replies[0])).toEqual(['error', 'detail'])
+  })
+})
+
+describe('agent_close', () => {
+  const target = { agentId: 'a1', sessionId: 's1', createdAt: '2026-10-05T07:00:00.000Z' }
+  const ask = (service: { request: (...args: never[]) => Promise<Record<string, unknown>> } | null, payload: Record<string, unknown>) => {
+    const replies: Array<Record<string, unknown>> = []
+    createCloseRequests({ cleanupPreview: async () => ({}), closeAgentService: () => service as never }).close(payload, (result) => { replies.push(result) })
+    return replies
+  }
+
+  it('asks the close service, in the mode asked for, only when hidden if asked so, and answers once it is done', async () => {
+    let done!: (result: Record<string, unknown>) => void
+    const request = vi.fn(() => new Promise<Record<string, unknown>>((resolve) => { done = resolve }))
+    const replies = ask({ request }, { ...target, mode: 'idle', onlyIfHidden: true, requestId: 'r' })
+    expect(request).toHaveBeenCalledWith({ ...target, mode: 'idle', onlyIfHidden: true })
+    expect(replies).toEqual([])
+    done({ closed: true })
+    await vi.waitFor(() => expect(replies).toStrictEqual([{ closed: true }]))
+    ask({ request: vi.fn(async () => ({})) }, { ...target, mode: 'now', onlyIfHidden: 'yes' })
+  })
+
+  it('refuses a request it cannot read, and says when the close failed or there is no service to ask', async () => {
+    const request = vi.fn(async () => { throw new Error('tmux gone') })
+    for (const wrong of [{ ...target, mode: 'later' }, { ...target, mode: 3 }, { ...target, createdAt: 7, mode: 'now' }, { ...target, sessionId: null, mode: 'now' }, { mode: 'now' }]) {
+      expect(ask({ request }, wrong)).toStrictEqual([{ error: 'INVALID_CLOSE_REQUEST' }])
+    }
+    expect(request).not.toHaveBeenCalled()
+    const failed = ask({ request }, { ...target, mode: 'cancel' })
+    await vi.waitFor(() => expect(failed).toStrictEqual([{ error: 'CLOSE_FAILED' }]))
+    expect(ask(null, { ...target, mode: 'now' })).toStrictEqual([{ error: 'UNSUPPORTED' }])
   })
 })

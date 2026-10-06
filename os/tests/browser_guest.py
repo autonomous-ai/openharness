@@ -11,6 +11,7 @@ label{display:block;margin-bottom:8px}input{font-size:24px;width:70%}</style>
 <h1>Harness browser check</h1><label for="input">Keyboard</label>
 <input id="input" autofocus autocomplete="off">
 <script>
+document.title += ' ' + location.pathname;
 const input = document.querySelector('input');
 let previous = '';
 function report() {
@@ -55,6 +56,11 @@ class Handler(BaseHTTPRequestHandler):
             output.write(json.dumps(data) + '\n')
         (ROOT / 'state.json.tmp').write_text(json.dumps(data))
         (ROOT / 'state.json.tmp').replace(ROOT / 'state.json')
+        states_path = ROOT / 'states.json'
+        states = json.loads(states_path.read_text()) if states_path.exists() else {}
+        states[data['path']] = data
+        (ROOT / 'states.json.tmp').write_text(json.dumps(states))
+        (ROOT / 'states.json.tmp').replace(states_path)
         self.send_response(204)
         self.end_headers()
 

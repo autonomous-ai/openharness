@@ -83,6 +83,28 @@ describe('prompt swarm origin', () => {
     expect(scopes.current(agent)).toBeNull()
   })
 
+  it('keeps the team when the prompt\'s hook is heard after the transcript started it', () => {
+    // The hook gives the daemon 500 ms and the engine goes on, so the turn can be read first. The late hook
+    // used to find its message taken and read as no team (e2e/teamsProcess.e2e.ts with the real hook).
+    const scopes = new SwarmPromptScopes()
+    scopes.prepare(agent, 'hello from the alpha tab', 'swarm-a')
+    scopes.started(agent, 'hello from the alpha tab')
+    scopes.started(agent, 'hello from the alpha tab', 'hook', 'claude')
+    expect(scopes.current(agent)).toBe(a)
+    // Two prompts read before either hook: neither late hook moves the scope.
+    scopes.prepare(agent, 'first', 'swarm-a')
+    scopes.prepare(agent, 'second', 'swarm-b')
+    scopes.started(agent, 'first')
+    scopes.started(agent, 'second')
+    scopes.started(agent, 'first', 'hook')
+    scopes.started(agent, 'second', 'hook')
+    expect(scopes.current(agent)).toBe(b)
+    // Each start is acknowledged once: the same text sent again is a prompt of its own.
+    scopes.prepare(agent, 'first', 'swarm-a')
+    scopes.started(agent, 'first', 'hook')
+    expect(scopes.current(agent)).toBe(a)
+  })
+
   it('matches native accepted text instead of treating permission keys as prompts', () => {
     const scopes = new SwarmPromptScopes()
     scopes.raw(agent, bytes('1\r'), 'swarm-b')

@@ -461,8 +461,11 @@ describe('Watcher.hold and release', () => {
     await appendFile(transcriptPath, '{"n":2}\n')
     await reading
     const hold = (await held)!
-    expect(hold.offset).toBe(8)
-    expect(lines).toEqual(['{"n":1}'])
+    // The read in progress stops at the hold: everything before the hold's offset has been delivered,
+    // and nothing after it. Where that is depends on whether the read had already reached the second
+    // line (on a slow disk it has; CI saw it once), and either way nothing is lost or sent twice.
+    expect([8, 16]).toContain(hold.offset)
+    expect(Buffer.byteLength(lines.map((line) => `${line}\n`).join(''))).toBe(hold.offset)
     hold.release()
     await watcher.pollSession('s1')
     expect(lines).toEqual(['{"n":1}', '{"n":2}'])

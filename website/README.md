@@ -14,6 +14,7 @@ retired; only the host routes below were kept.
 | `/download` (and `/install` → it) | Install page: CLI command and desktop downloads |
 | `/pair` | Phone setup guidance — the mobile app and the desktop "add phone" dialog link here |
 | `/os` | The Harness operating system landing page: plain HTML/CSS, local fonts and screenshots in `public/os/` |
+| `/os/latest` | Redirect to the newest complete published OS release; OS tags only, stable preferred, five-minute server lookup cache |
 | `/desktop` | Desktop download page |
 | `/desktop/download-macos`, `/desktop/download/linux-{x64,arm64}` | Redirect to the latest build in the desktop manifest |
 | `/flash-circle.sh` | The dial firmware flasher script |

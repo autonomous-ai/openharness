@@ -18,7 +18,11 @@ is required.
   deferred until the user chooses it; Done keeps working processes alive.
   Do not replace `/usr/lib/harness` manually or enable the CLI's independent
   daemon handoff updater: this OS supervises activation with systemd.
-- This is Arch Linux with systemd, the LTS kernel, labwc, foot and Chromium.
+- This is Arch Linux with systemd, labwc, foot and Chromium. Read
+  `/etc/harness-platform.json` before choosing kernel or driver packages: `pc`
+  uses `linux-lts`; the experimental `apple-t2` image uses the pinned `linux-t2`.
+  Older PC installations have no platform file. Confirm the running kernel with
+  `uname -r` and `/usr/lib/modules/$(uname -r)/pkgbase`.
 - Use the ordinary package manager; no private package ecosystem is required.
   On the live USB, `sudo systemctl start harness-keyring` waits for its one-time
   key setup before the first package installation. Installed systems finish that
@@ -49,16 +53,49 @@ is required.
 
 ## Network and hardware
 
+- GPU verification runs briefly after the installed workspace starts. Success
+  is quiet. Read `harness hardware` → `gpu_health` before changing NVIDIA drivers;
+  `harness hardware --check-gpu` repeats the checks as the current user. Do not run
+  it with sudo: ordinary session device access is part of the check. Each PCI GPU
+  has separate binding, memory, computation and offscreen graphics results, with
+  the exact failed API and error. `stale: true` means the saved result no longer
+  describes this boot/driver. Unavailable or skipped checks are not passes.
+- These are small readiness checks, not full VRAM, display, browser, sleep or
+  model-workload validation. A headless GPU can pass compute while graphics stays
+  explicitly unverified. Passthrough devices are never touched. Reports stay in
+  `~/.local/state/harness-os/gpu/`; no hardware data is uploaded.
+- Updates retain the original Btrfs root and matching boot checkpoint. GPU
+  diagnostics run again after reboot, never by resetting a GPU used by agents.
+  A failure does not automatically roll back or reboot. Use the reported update
+  checkpoint with the existing offline recovery procedure when appropriate;
+  projects remain in the separate home subvolume. Local models belong to the
+  TUI's existing local-model workflow, not this hardware check.
+
 - `harness hardware` reports the model, CPU baseline, PCI devices, bound drivers
   and backlights. It does not collect serial numbers, Wi-Fi names, MAC addresses
   or passwords. Use actual device IDs when diagnosing hardware.
-- The USB carries a prebuilt wl module and signed offline packages for selected
+- The PC USB carries a prebuilt wl module and signed offline packages for selected
   BCM4331/BCM4360 radios. The installer adds DKMS and matching LTS headers only
   where needed, so future kernel upgrades can rebuild the driver. Other Broadcom
   families keep their native drivers. Do not apply a blanket Broadcom blacklist.
   Driver build/load checks are not evidence of physical radio or suspend support.
+- The experimental T2 image uses its own kernel and early input modules. Do not
+  replace them with `linux-lts`, `broadcom-wl-dkms` or PC kernel modules. Its
+  required kernel and module identities are in
+  `/usr/share/harness-os/apple-t2/kernel.json`; actual installed packages and
+  `modinfo` must agree. A VM boot does not establish physical Mac support.
+- T2 Wi-Fi and Bluetooth need that Mac's Apple firmware. Installation preserves
+  a verified local export before erasing the disk and stops if it cannot do so.
+  The private copy is `/var/lib/harness-os/apple-firmware.tar`, with its model
+  and checksum in `/var/lib/harness-os/install.json`; the reinstall copy is
+  `/boot/harness-apple-firmware.tar`. Firmware package hooks restore this data
+  automatically. Retain both copies; never upload them as diagnostic attachments.
+  Use the T2 USB for offline recovery. The current T2 kernel stays pinned during
+  ordinary Arch updates; a changed kernel pin requires a separately verified
+  upgrade path. Do not bypass the updater's platform checks or add a moving
+  kernel repository to work around a refused update.
 - Ethernet uses NetworkManager automatically. For Wi-Fi, use
-  `hn-os wifi`, which opens NetworkManager’s keyboard interface.
+  `Super+w` or `hn-os wifi`, which opens the Harness Wi-Fi form.
   Keep passwords out of shell arguments and transcripts.
 - Audio uses PipeWire. Clipboard uses `wl-copy` and `wl-paste`.
 - npm installs into `~/.local`. The initial npm configuration permits the vendor
@@ -66,8 +103,8 @@ is required.
   an install script, approve that package explicitly; keep npm's other defaults.
 - `Super+b` opens/focuses Chromium or returns to hn; `Super+Enter` focuses hn;
   `Super+l` locks the screen. `sudo systemctl poweroff` shuts down cleanly.
-- On supported NVIDIA Turing and newer GPUs, including RTX 4090/5090 and RTX 6000
-  generations, the LTS-kernel packages are `nvidia-open-lts nvidia-utils`.
+- On the PC image, the packages for supported NVIDIA Turing and newer GPUs are
+  `nvidia-open-lts nvidia-utils`, including RTX 4090/5090 and RTX 6000 generations.
   New USB images carrying the NVIDIA bundle install them offline when the exact
   GPU IDs match the bundled support table. Check `pacman -Q` and
   `/var/lib/harness-os/hardware.json` before installing anything. Other machines

@@ -1,9 +1,12 @@
 import { execFile } from 'node:child_process'
+import { patientExec } from './patientExec.js'
 import type { TerminalBackend } from './terminalBackend.js'
 import {
   TERMINAL_ACTION_SUCCEEDED,
   terminalActionNotStarted,
   terminalActionPossiblyExecuted,
+  terminalEnterWithheld,
+  type SubmitOptions,
   type TerminalActionResult,
   type TerminalCaptureOptions,
   type TerminalCreateRequest,
@@ -28,13 +31,23 @@ import {
   lookupPaneEngineProcess,
   sendKeyToTmux,
   sendLiteralToTmux,
+  paneOptionScope,
+  paneStyleArgs,
   sendToTmux,
   setPaneMouseOn,
-  setPaneWindowStyle,
+  setPaneStyle,
 } from './tmux.js'
+import { env } from '../config/env.js'
+import { HARNESS_OWNER_OPTION, harnessPaneOwner, ownerCommand } from './harnessSessionLabel.js'
+import { tmuxFeatures, type TmuxFeatures } from './tmuxVersion.js'
 import { DEFAULT_HOST_THEME, windowStyleOf, type HostTheme } from './hostTheme.js'
+import { machineNames } from './machineNames.js'
 import { isNoTmuxServerError, listTmuxPanes } from './tmuxAgentDiscovery.js'
 import { terminalRouteKey } from './terminalRuntime.js'
+
+// Every tmux call here: a held event loop must not turn a timeout into a failure, or into an empty
+// answer that reads as a pane that was never made (patientExec.ts).
+const run = patientExec(execFile)
 
 const TMUX_KEYS: Record<TerminalLogicalKey, string> = {
   enter: 'Enter',
@@ -66,6 +79,11 @@ const TMUX_KEYS: Record<TerminalLogicalKey, string> = {
   '7': '7',
   '8': '8',
   '9': '9',
+}
+
+/** Why a launch with its own environment was refused on this tmux, in words a person can act on. */
+function tmuxTooOldForEnv(version: string, what: string): string {
+  return `this machine's tmux is older than ${version}, the first version that can give ${what} its own environment. Upgrade tmux.`
 }
 
 function legacyActionResult(ok: boolean, operation: string): TerminalActionResult {
@@ -101,35 +119,67 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
   /**
    * [hostTheme] answers with the desktop's current pane colours (see `hostTheme.ts`); read at every
    * use rather than captured, so a theme the app sends later reaches sessions created after it.
+   * [owner] is the tag this daemon's panes carry (`HARNESS_OWNER_OPTION`), read at every create for
+   * the same reason as the theme: the data folder is the daemon's to move.
+   * [observeMachineName] reads the machine's name as tmux titles the new pane with it (lib/machineNames.ts).
    */
-  constructor(private readonly hostTheme: () => HostTheme = () => DEFAULT_HOST_THEME) {}
+  constructor(
+    private readonly hostTheme: () => HostTheme = () => DEFAULT_HOST_THEME,
+    private readonly owner: () => string = () => harnessPaneOwner(env.ADAPTER_DATA_DIR),
+    private readonly observeMachineName: () => void = () => machineNames.observe(),
+    /** What this machine's tmux can do (`tmuxVersion.ts`): a command an older tmux does not know fails
+     *  the whole command list it is chained into, and every agent create with it. */
+    private readonly features: () => Promise<TmuxFeatures> = tmuxFeatures,
+  ) {}
 
   async create(request: TerminalCreateRequest): Promise<TerminalCreateResult<TmuxRuntimeRef>> {
+    // tmux titles the pane it is about to make with the machine's name as it is now, and an engine
+    // that sets no title keeps it. Read here, that name is refused even if the machine has another
+    // by the next title sweep: a name it had only between two sweeps would otherwise never be seen.
+    this.observeMachineName()
+    const features = await this.features()
+    const variables = Object.entries(request.env ?? {})
+    // `-e` (tmux 3.2+) puts these in the SESSION environment rather than the launch argv, so a grid
+    // relay key never lands in `ps` output for the life of the agent. Callers refuse a grid or a
+    // harness on an older tmux by name (`tmuxSupportsSessionEnv()`); whatever else reaches here with
+    // variables on one is refused here, saying why, rather than handed to tmux to answer with its
+    // usage text — and never moved into the argv, where a secret would show.
+    if (variables.length && !features.sessionEnv) return terminalActionNotStarted(tmuxTooOldForEnv('3.2', 'a new session'))
+    const owner = this.owner()
     const args = ['new-session', '-d', '-P', '-F', '#{pane_id}']
     if (request.cwd) args.push('-c', request.cwd)
     if (request.label) args.push('-s', request.label)
-    // `-e` (tmux 3.2+) puts these in the SESSION environment rather than the launch argv, so a grid
-    // relay key never lands in `ps` output for the life of the agent. Callers gate on
-    // `tmuxSupportsSessionEnv()`; an older tmux answers the flag with its usage text.
-    for (const [key, value] of Object.entries(request.env ?? {})) args.push('-e', `${key}=${value}`)
+    for (const [key, value] of variables) args.push('-e', `${key}=${value}`)
     // Trailing args after this point become the session's shell-command. tmux execs them directly
     // (no shell interposed) when given as separate argv elements, so no quoting/escaping is needed.
-    if (request.command?.length) args.push(...request.command)
+    if (request.command?.length) args.push(...this.ownedCommand(features, owner, request.command))
+    // Pane options where tmux has them, so these go with the pane wherever the person moves it and never
+    // change the rest of a window of theirs; the agent's own new window before tmux 3.0.
+    const scope = paneOptionScope(features)
     // Keep the pane when its process dies, so an engine that exits immediately (not logged in, bad
     // config) still has its error text readable afterwards instead of taking the whole session down
     // with it. Chained into THIS tmux invocation on purpose: an engine can exit in under a
     // millisecond, and a second `set-option` call loses that race — measured, the session was
     // already gone before the follow-up command could reach the server.
     // Whoever created the pane owns turning this back off; see `clearPaneRemainOnExit`.
-    args.push(';', 'set-option', '-w', 'remain-on-exit', 'on')
+    args.push(';', 'set-option', scope, 'remain-on-exit', 'on')
+    // An agent's session never has a client attached, so a person's `set -g destroy-unattached on`
+    // (in their ~/.tmux.conf, which this server loads) ended every agent the moment it was made, and
+    // Harness could not run at all on their machine (found end to end, e2e/tmuxconf.e2e.ts). Turned
+    // off for this session only, in this same invocation, before the server can act on it.
+    args.push(';', 'set-option', 'destroy-unattached', 'off')
     // Same invocation, same reason: an engine asks its terminal for its colours (OSC 10/11) in its
     // first milliseconds and never again, so the style has to be there before the engine is.
     const style = windowStyleOf(this.hostTheme())
-    args.push(';', 'set-option', '-w', 'window-style', style)
+    args.push(';', ...paneStyleArgs(features, style))
+    // Whose pane it is, from its first instant: another daemon on this tmux server scanning a moment
+    // later must already see it is not its own. On the pane, which keeps it wherever the person moves
+    // it (see HARNESS_OWNER_OPTION); before tmux 3.0, on the window, and in the start command.
+    args.push(';', 'set-option', scope, HARNESS_OWNER_OPTION, owner)
     // `killed`/`signal` come from execFile's own error shape, which ErrnoException alone does not declare.
     type ExecError = NodeJS.ErrnoException & { killed?: boolean; signal?: NodeJS.Signals | null }
     const result = await new Promise<{ error: ExecError | null; stdout: string; stderr: string }>((resolve) => {
-      execFile('tmux', args, { timeout: 5_000 }, (error, stdout, stderr) => resolve({
+      run('tmux', args, { timeout: 5_000 }, (error, stdout, stderr) => resolve({
         error: error as ExecError | null,
         stdout,
         stderr,
@@ -157,6 +207,16 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
   }
 
   /**
+   * [command] as this daemon starts it. Before tmux 3.0, through `ownerCommand`, so the pane's start
+   * command carries the tag that a window option cannot keep once the person moves the pane. An empty
+   * command is tmux's default shell, and stays that: `/usr/bin/env` with nothing to run would print the
+   * environment and exit.
+   */
+  private ownedCommand(features: TmuxFeatures, owner: string, command: readonly string[] = []): string[] {
+    return features.paneOptions || !command.length ? [...command] : ownerCommand(owner, command)
+  }
+
+  /**
    * Replace the process running in an existing pane, with a different environment.
    *
    * `-k` kills what is there first; without it tmux refuses a live pane. `remain-on-exit` is turned on
@@ -164,19 +224,36 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
    * immediately (a rejected key, a model the grid does not serve) must leave its error on screen
    * instead of taking the pane down with it. Whoever calls this owns turning it back off.
    */
+  /**
+   * Why [respawn] would refuse this request on this machine's tmux, or null when it would try. Asked by a
+   * restart BEFORE it stops the engine it replaces: a respawn refused after the kill left the agent with
+   * a dead pane and no engine.
+   */
+  async respawnRefusal(request: Pick<TerminalRespawnRequest, 'env'>): Promise<string | null> {
+    // `respawn-pane -e` is tmux 3.0; refused before, for the reason `create` gives.
+    return Object.keys(request.env ?? {}).length && !(await this.features()).respawnEnv ? tmuxTooOldForEnv('3.0', 'a respawned pane') : null
+  }
+
   async respawn(runtime: TmuxRuntimeRef, request: TerminalRespawnRequest): Promise<TerminalActionResult> {
+    const refused = await this.respawnRefusal(request)
+    if (refused) return terminalActionNotStarted(refused)
+    const features = await this.features()
+    const variables = Object.entries(request.env ?? {})
+    const scope = paneOptionScope(features)
     // The engine-exit marker is the pane's, and a respawned pane is a new launch: cleared here, in
-    // the same invocation, or the new engine would read as exited the moment it started.
+    // the same invocation, or the new engine would read as exited the moment it started. A `-p` here
+    // before tmux 3.0 failed the whole list, the respawn with it, so no agent could restart there.
     const args = [
-      'set-option', '-w', '-t', runtime.paneId, 'remain-on-exit', 'on', ';',
-      'set-option', '-p', '-t', runtime.paneId, ENGINE_EXIT_PANE_OPTION, '', ';',
+      'set-option', scope, '-t', runtime.paneId, 'remain-on-exit', 'on', ';',
+      'set-option', scope, '-t', runtime.paneId, ENGINE_EXIT_PANE_OPTION, '', ';',
       'respawn-pane', '-k',
     ]
     if (request.cwd) args.push('-c', request.cwd)
-    for (const [key, value] of Object.entries(request.env ?? {})) args.push('-e', `${key}=${value}`)
-    args.push('-t', runtime.paneId, ...request.command)
+    for (const [key, value] of variables) args.push('-e', `${key}=${value}`)
+    // A respawn replaces the pane's start command, which carries its tag before tmux 3.0 (`create`).
+    args.push('-t', runtime.paneId, ...this.ownedCommand(features, this.owner(), request.command))
     const result = await new Promise<{ error: NodeJS.ErrnoException | null; stderr: string }>((resolve) => {
-      execFile('tmux', args, { timeout: 5_000 }, (error, _stdout, stderr) => resolve({
+      run('tmux', args, { timeout: 5_000 }, (error, _stdout, stderr) => resolve({
         error: error as NodeJS.ErrnoException | null,
         stderr,
       }))
@@ -194,7 +271,7 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
     // Discovered harnesses can share a tmux session with unrelated work. The
     // canonical pane id is the entire target; never widen this to kill-session.
     const ok = await new Promise<boolean>((resolve) => {
-      execFile('tmux', ['kill-pane', '-t', runtime.paneId], { timeout: 5_000 }, (error) => resolve(!error))
+      run('tmux', ['kill-pane', '-t', runtime.paneId], { timeout: 5_000 }, (error) => resolve(!error))
     })
     if (ok) return TERMINAL_ACTION_SUCCEEDED
     // The engine may have exited and removed its pane before the parallel PID
@@ -202,10 +279,11 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
     // Use all panes here: discovery deliberately hides sessions that were renamed
     // or created elsewhere, and their absence from discovery is not proof of exit.
     const absent = await new Promise<boolean>(resolve => {
-      execFile('tmux', ['list-panes', '-a', '-F', '#{pane_id}'], { timeout: 2_000 }, (error, stdout) => {
+      run('tmux', ['list-panes', '-a', '-F', '#{pane_id}'], { timeout: 2_000 }, (error, stdout) => {
         if (error) { resolve(isNoTmuxServerError(error.message)); return }
         const ids = stdout.trim().split('\n').filter(Boolean)
-        resolve(ids.every(id => /^%\d+$/.test(id)) && !ids.includes(runtime.paneId))
+        // A running server lists a pane at the least: an empty listing is a read that was lost, not proof.
+        resolve(ids.length > 0 && ids.every(id => /^%\d+$/.test(id)) && !ids.includes(runtime.paneId))
       })
     })
     if (absent) return TERMINAL_ACTION_SUCCEEDED
@@ -224,7 +302,7 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
     const sessionId = await this.resolveSessionId(runtime.paneId)
     if (!sessionId) return terminalActionNotStarted('tmux session could not be resolved from pane')
     const ok = await new Promise<boolean>((resolve) => {
-      execFile('tmux', clearEnvArgs(sessionId, names), { timeout: 5_000 }, (error) => resolve(!error))
+      run('tmux', clearEnvArgs(sessionId, names), { timeout: 5_000 }, (error) => resolve(!error))
     })
     return legacyActionResult(ok, 'tmux clear environment')
   }
@@ -232,7 +310,7 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
   /** The id of the session that owns [paneId], or null when tmux will not say. */
   private resolveSessionId(paneId: string): Promise<string | null> {
     return new Promise((resolve) => {
-      execFile('tmux', ['display-message', '-p', '-t', paneId, '#{session_id}'], { timeout: 2_000 }, (error, stdout) => {
+      run('tmux', ['display-message', '-p', '-t', paneId, '#{session_id}'], { timeout: 2_000 }, (error, stdout) => {
         const value = stdout.trim()
         resolve(!error && /^\$\d+$/.test(value) ? value : null)
       })
@@ -248,8 +326,9 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
    * instant the old process exits.
    */
   async holdOpen(runtime: TmuxRuntimeRef): Promise<TerminalActionResult> {
+    const scope = paneOptionScope(await this.features())
     const ok = await new Promise<boolean>((resolve) => {
-      execFile('tmux', ['set-option', '-w', '-t', runtime.paneId, 'remain-on-exit', 'on'], { timeout: 2_000 }, (error) => {
+      run('tmux', ['set-option', scope, '-t', runtime.paneId, 'remain-on-exit', 'on'], { timeout: 2_000 }, (error) => {
         resolve(!error)
       })
     })
@@ -265,7 +344,7 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
   }
 
   async inventory(): Promise<TerminalInventoryResult> {
-    const result = await listTmuxPanes()
+    const result = await listTmuxPanes(this.owner())
     if (!result.ok) return { state: 'unavailable', reason: result.error }
     this.restyle(result.panes.map((pane) => pane.tmuxPane))
     return {
@@ -282,7 +361,8 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
    * Retroactive, on every scan: a pane from before this build, one that outlived a daemon restart,
    * or every pane after the app changed its palette. Fire-and-forget — a scan that misses one
    * because tmux was briefly slow catches it on the next pass. Panes that are gone are forgotten
-   * so a reused pane id is styled afresh.
+   * so a reused pane id is styled afresh. Each pane on its own (`setPaneStyle`), never its window:
+   * the person may have moved it into a window of theirs.
    */
   private restyle(panes: readonly string[]): void {
     const style = windowStyleOf(this.hostTheme())
@@ -304,7 +384,7 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
     if (style === undefined || this.stylingPanes.has(pane) || this.styledPanes.get(pane) === style) return
     // Serialize writes per pane: scans can overlap a slow tmux command or a theme change.
     this.stylingPanes.add(pane)
-    void setPaneWindowStyle(pane, style).then((applied) => {
+    void setPaneStyle(pane, style).then((applied) => {
       if (applied && this.desiredStyles.has(pane)) this.styledPanes.set(pane, style)
     }).finally(() => {
       this.stylingPanes.delete(pane)
@@ -331,7 +411,7 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
       }
       if (expected.processIdentity
         && (expected.processIdentity.pid !== live.pid || expected.processIdentity.startMarker !== live.startMarker)) {
-        return { state: 'gone', reason: 'process changed under tmux pane' }
+        return { state: 'gone', reason: 'process changed under tmux pane', replaced: true }
       }
       return { state: 'alive' }
     } catch {
@@ -353,8 +433,9 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
     return legacyActionResult(await sendLiteralToTmux(runtime.paneId, text), 'tmux literal input')
   }
 
-  async submitText(runtime: TmuxRuntimeRef, text: string): Promise<TerminalActionResult> {
-    return legacyActionResult(await sendToTmux(runtime.paneId, text), 'tmux submission')
+  async submitText(runtime: TmuxRuntimeRef, text: string, options?: SubmitOptions): Promise<TerminalActionResult> {
+    const sent = await sendToTmux(runtime.paneId, text, options?.beforeEnter)
+    return typeof sent === 'boolean' ? legacyActionResult(sent, 'tmux submission') : terminalEnterWithheld(sent.withheld)
   }
 
   async sendKey(runtime: TmuxRuntimeRef, key: TerminalLogicalKey): Promise<TerminalActionResult> {
@@ -363,7 +444,7 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
 
   async setTitle(runtime: TmuxRuntimeRef, title: string): Promise<TerminalActionResult> {
     const ok = await new Promise<boolean>((resolve) => {
-      execFile('tmux', ['select-pane', '-t', runtime.paneId, '-T', title.slice(0, 200)], { timeout: 2_000 }, (error) => {
+      run('tmux', ['select-pane', '-t', runtime.paneId, '-T', title.slice(0, 200)], { timeout: 2_000 }, (error) => {
         resolve(!error)
       })
     })
@@ -373,7 +454,7 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
   async notify(runtime: TmuxRuntimeRef, title: string, body: string): Promise<TerminalActionResult> {
     const message = `${title.slice(0, 200)}: ${body.slice(0, 1_000)}`
     const ok = await new Promise<boolean>((resolve) => {
-      execFile('tmux', ['display-message', '-t', runtime.paneId, '--', message], { timeout: 2_000 }, (error) => {
+      run('tmux', ['display-message', '-t', runtime.paneId, '--', message], { timeout: 2_000 }, (error) => {
         resolve(!error)
       })
     })

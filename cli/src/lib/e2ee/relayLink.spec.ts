@@ -365,6 +365,31 @@ describe('remote-password link + relay session crypto (interop with the real E2e
     expect(manager.untrustPeer(C.b64e(other.pub))).toBe(false)
   })
 
+  it('replies the daemon now seals to the requester open on the relay client as it has always shipped', async () => {
+    // The relay client opens a sealed payload of any type with its session key, and has since it was
+    // written: a reply type the daemon starts sealing reaches every CLI relaying for a desktop or hn.
+    const frames: Frame[] = []
+    const manager = new E2eeManagerCtor({ machineId: MACHINE_ID, sendTo: (_c, f) => frames.push(f), isConnected: () => true })
+    const client = C.newIdentity()
+    manager.trustPeer({ pub: C.b64e(client.pub), machineId: 'a1b2c3d4e5f60718293a4b5c6d7e8f90', kind: 'machine', label: 'relay' })
+    const { peekIdentityPub } = await import('./store.js')
+    const crypto = new RelaySessionCrypto({ machineId: MACHINE_ID, selfIdentity: client, peerPub: C.b64d(peekIdentityPub()!) })
+    expect(manager.handleFrame('session-conn', crypto.helloFrame())).toBe(true)
+    expect(crypto.handleWelcome(frames.at(-1)!.payload as Record<string, unknown>)).toBe(true)
+    const replies: Array<[string, string, Record<string, unknown>]> = [
+      ['terminal_info_result', '/private/work/app', { requestId: 'info-1', command: 'node', path: '/private/work/app', pid: 4242, tty: '/dev/ttys001' }],
+      ['voice_route_result', 'the login page', { requestId: 'route-1', agentId: 'a1', agentName: 'api', reason: 'asked to fix the login page', confidence: 0.9, needNewAgent: false }],
+    ]
+    for (const type of ['dsh_list', 'dsh_install', 'dsh_update', 'dsh_remove', 'engines_probe', 'grid_models_list', 'claude_login_status', 'agent_retarget', 'remote_terminal_handoff']) {
+      replies.push([`${type}_result`, 'what-the-machine-said', { requestId: `${type}-1`, detail: 'what-the-machine-said' }])
+    }
+    for (const [type, secret, answer] of replies) {
+      const sealed = manager.wrapRpcReply('session-conn', type, answer.requestId, answer)!
+      expect(JSON.stringify(sealed)).not.toContain(secret)
+      expect(crypto.unwrapIncoming(sealed)).toEqual({ type, payload: answer })
+    }
+  })
+
   it('NO_REMOTE_PASSWORD when the target machine never set one', async () => {
     const { manager, wsBase, close } = fakeMachine()
     try {
@@ -828,5 +853,150 @@ describe('RemoteRelayPool closes the upstream socket when the handshake fails', 
     })
     expect((rejection as Error).message).toBe('E2EE_WELCOME_INVALID')
     expect(closeCode).toBe(1000)
+  })
+})
+
+describe('a client\'s sessions with one machine never open the same broadcast twice', () => {
+  let E2eeStore: typeof import('./store.js')['E2eeStore']
+  let GROUP_EPOCHS_KEPT: number
+  const fakeAuth = { accessToken: async () => 'unused-in-this-fake' } as unknown as import('../authSession.js').AuthSessionManager
+  beforeAll(async () => {
+    E2eeStore = (await import('./store.js')).E2eeStore
+    GROUP_EPOCHS_KEPT = (await import('./relayClient.js')).GROUP_EPOCHS_KEPT
+  })
+
+  /** A machine process: its own group key and epoch, trusting `client` as a web client. */
+  const machine = (client: import('./core.js').Identity) => {
+    const inbox: Frame[] = []
+    const manager = new E2eeManagerCtor({ machineId: MACHINE_ID, sendTo: (_connId, frame) => inbox.push(frame), isConnected: () => true })
+    manager.trustPeer({ pub: C.b64e(client.pub), label: 'phone' })
+    return { manager, inbox }
+  }
+  /** One session of `client` with that machine, on `connId`, carrying `groupSeen` over when given. */
+  const session = (m: ReturnType<typeof machine>, client: import('./core.js').Identity, connId: string, groupSeen?: Map<string, number>) => {
+    const crypto = new RelaySessionCrypto({ machineId: MACHINE_ID, selfIdentity: client, peerPub: new E2eeStore().getIdentity().pub, ...(groupSeen ? { groupSeen } : {}) })
+    m.manager.handleFrame(connId, crypto.helloFrame())
+    expect(crypto.handleWelcome(m.inbox.at(-1)!.payload as Record<string, unknown>)).toBe(true)
+    return crypto
+  }
+
+  it('a broadcast the relay replays into the next session is not opened again, and a new one is', () => {
+    const client = C.newIdentity()
+    const m = machine(client)
+    const groupSeen = new Map<string, number>()
+    const first = session(m, client, 'conn-1', groupSeen)
+    const started = m.manager.wrapUp({ type: 'turn_started', agentId: 'a', payload: { userMessage: 'once' } })
+    expect(first.unwrapIncoming(started)?.payload).toEqual({ userMessage: 'once' })
+    const second = session(m, client, 'conn-2', groupSeen)
+    expect(second.unwrapIncoming(started)).toBeNull()
+    const ended = m.manager.wrapUp({ type: 'turn_ended', agentId: 'a', payload: {} })
+    expect(second.unwrapIncoming(ended)?.payload).toEqual({})
+    // A session with no record carried over opens whatever this process has sealed since it started:
+    // why the relay pool carries one from each of its sessions to the next.
+    expect(session(m, client, 'conn-3').unwrapIncoming(started)?.payload).toEqual({ userMessage: 'once' })
+  })
+
+  it('remembers a bounded number of the machine\'s epochs, the first seen let go first', () => {
+    const client = C.newIdentity()
+    const groupSeen = new Map<string, number>()
+    const epochs: string[] = []
+    for (let n = 0; n <= GROUP_EPOCHS_KEPT; n++) {
+      // A new process of the machine each time: a new group key and epoch.
+      const m = machine(client)
+      const sealed = m.manager.wrapUp({ type: 'turn_ended', agentId: 'a', payload: {} })
+      epochs.push((sealed.payload as { __e2e: { epoch: string } }).__e2e.epoch)
+      expect(session(m, client, `conn-${n}`, groupSeen).unwrapIncoming(sealed)).not.toBeNull()
+    }
+    expect(groupSeen.size).toBe(GROUP_EPOCHS_KEPT)
+    expect(groupSeen.has(epochs[0])).toBe(false)
+    expect(groupSeen.has(epochs.at(-1)!)).toBe(true)
+  })
+
+  it('RemoteRelayPool carries the record from a session to its next: a replayed broadcast is not forwarded', async () => {
+    const wss = new WebSocketServer({ port: 0 })
+    const sockets = new Map<string, import('ws').WebSocket>()
+    const client = C.newIdentity()
+    const manager = new E2eeManagerCtor({ machineId: MACHINE_ID, isConnected: () => true, sendTo: (id, frame) => sockets.get(id)?.send(JSON.stringify(frame)) })
+    manager.trustPeer({ pub: C.b64e(client.pub), label: 'desktop' })
+    let connections = 0
+    wss.on('connection', (ws) => {
+      const id = `conn-${++connections}`
+      sockets.set(id, ws)
+      ws.on('message', (raw) => {
+        const frame = JSON.parse(raw.toString()) as Frame
+        if (frame.type === 'machine_select') ws.send(JSON.stringify({ type: 'connected', payload: { machineId: MACHINE_ID } }))
+        else if (String(frame.type).startsWith('e2e_')) manager.handleFrame(id, frame)
+      })
+    })
+    const base = `ws://127.0.0.1:${(wss.address() as AddressInfo).port}`
+    const peers = new MachinePeerStore()
+    peers.pin(MACHINE_ID, C.b64e(new E2eeStore().getIdentity().pub), 'test')
+    const pool = new RemoteRelayPool(fakeAuth, base, client, peers, { p2p: false })
+    const inbox: Frame[] = []
+    const sink = { sendFrame: (frame: Frame) => { inbox.push(frame); return true }, sendBinary: () => true }
+    const select = { type: 'machine_select', payload: { machineId: MACHINE_ID } }
+    const arrived = async (type: string, count: number) => {
+      for (let n = 0; n < 100 && inbox.filter((frame) => frame.type === type).length < count; n++) await new Promise((resolve) => setTimeout(resolve, 20))
+    }
+    try {
+      await pool.acquire(MACHINE_ID, 'prod', select, sink, () => {})
+      const started = manager.wrapUp({ type: 'turn_started', agentId: 'a', payload: { userMessage: 'once' } })
+      sockets.get('conn-1')!.send(JSON.stringify(started))
+      await arrived('turn_started', 1)
+      pool.invalidate(MACHINE_ID)
+      await pool.acquire(MACHINE_ID, 'prod', select, sink, () => {})
+      // The relay replays the old broadcast into the new session, then the machine says something new.
+      sockets.get('conn-2')!.send(JSON.stringify(started))
+      sockets.get('conn-2')!.send(JSON.stringify(manager.wrapUp({ type: 'turn_ended', agentId: 'a', payload: {} })))
+      await arrived('turn_ended', 1)
+      expect(inbox.filter((frame) => frame.type === 'turn_started')).toHaveLength(1)
+      expect(inbox.filter((frame) => frame.type === 'turn_ended')).toHaveLength(1)
+    } finally {
+      pool.invalidate(MACHINE_ID)
+      for (const ws of wss.clients) ws.terminate()
+      await new Promise<void>((resolve) => wss.close(() => resolve()))
+    }
+  })
+})
+
+describe('RemoteRelayPool retires a session the machine no longer has', () => {
+  const fakeAuth = { accessToken: async () => 'unused-in-this-fake' } as unknown as import('../authSession.js').AuthSessionManager
+
+  it('e2e_session_unknown closes the local connection as for node_status offline, keeps the pin, and the next acquire dials a new session', async () => {
+    const E2eeStore = (await import('./store.js')).E2eeStore
+    const wss = new WebSocketServer({ port: 0 })
+    const sockets = new Map<string, import('ws').WebSocket>()
+    const client = C.newIdentity()
+    const manager = new E2eeManagerCtor({ machineId: MACHINE_ID, isConnected: () => true, sendTo: (id, frame) => sockets.get(id)?.send(JSON.stringify(frame)) })
+    manager.trustPeer({ pub: C.b64e(client.pub), label: 'desktop' })
+    let connections = 0
+    wss.on('connection', (ws) => {
+      const id = `conn-${++connections}`
+      sockets.set(id, ws)
+      ws.on('message', (raw) => {
+        const frame = JSON.parse(raw.toString()) as Frame
+        if (frame.type === 'machine_select') ws.send(JSON.stringify({ type: 'connected', payload: { machineId: MACHINE_ID } }))
+        else if (String(frame.type).startsWith('e2e_')) manager.handleFrame(id, frame)
+      })
+    })
+    const peers = new MachinePeerStore()
+    peers.pin(MACHINE_ID, C.b64e(new E2eeStore().getIdentity().pub), 'test')
+    const pool = new RemoteRelayPool(fakeAuth, `ws://127.0.0.1:${(wss.address() as AddressInfo).port}`, client, peers, { p2p: false })
+    const select = { type: 'machine_select', payload: { machineId: MACHINE_ID } }
+    const sink = { sendFrame: () => true, sendBinary: () => true }
+    try {
+      const closed = new Promise<number>((resolve) => { void pool.acquire(MACHINE_ID, 'prod', select, sink, (code) => resolve(code)) })
+      for (let n = 0; n < 100 && !manager.hasSession('conn-1'); n++) await new Promise((resolve) => setTimeout(resolve, 20))
+      sockets.get('conn-1')!.send(JSON.stringify({ type: 'e2e_session_unknown', payload: { refused: { type: 'message', n: 4 } } }))
+      expect(await closed).toBe(1012)
+      expect(peers.get(MACHINE_ID)).toBeDefined()
+      await pool.acquire(MACHINE_ID, 'prod', select, sink, () => {})
+      expect(connections).toBe(2)
+      expect(manager.hasSession('conn-2')).toBe(true)
+    } finally {
+      pool.invalidate(MACHINE_ID)
+      for (const ws of wss.clients) ws.terminate()
+      await new Promise<void>((resolve) => wss.close(() => resolve()))
+    }
   })
 })

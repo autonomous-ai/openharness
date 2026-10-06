@@ -4,7 +4,7 @@
  * reflows it; one window takes a terminal from another, or watches it without taking it; a window that
  * goes, closes, freezes or floods its terminal costs only that stream, never the agent or the daemon.
  */
-import { mkdirSync } from 'node:fs'
+import { mkdirSync, realpathSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { TerminalBinaryKind, type TerminalBinaryClear } from '../src/lib/terminalBinary.js'
@@ -160,6 +160,20 @@ describe('the terminal', () => {
     client.close()
   })
 
+  it.each(engines)('%s: asked what its pane runs and where (terminal_info, as hn asks), it says, from tmux', async (engine) => {
+    const d = await fresh()
+    const client = await LocalClient.connect(d)
+    const agent = await create(d, client, engine, `info-${engine}`)
+    const info = await client.request('terminal_info', { agentId: agent.id }, 10_000)
+    expect(info.error, JSON.stringify(info)).toBeUndefined()
+    expect(realpathSync(info.path)).toBe(realpathSync(join(d.projectsDir, `info-${engine}`)))
+    expect(Number.isSafeInteger(info.pid)).toBe(true)
+    expect(info.tty).toMatch(/^\/dev\//)
+    expect(typeof info.command).toBe('string')
+    expect(await client.request('terminal_info', { agentId: 'no-such-agent' }, 10_000)).toMatchObject({ error: 'AGENT_NOT_FOUND' })
+    client.close()
+  })
+
   it.each(engines)('%s: keystrokes out of order type nothing and say which one was expected; JSON keystrokes are refused', async (engine) => {
     const d = await fresh()
     const client = await LocalClient.connect(d)
@@ -189,7 +203,9 @@ describe('the terminal', () => {
     const words = 'pasted ' + 'words '.repeat(400).trim()
     const started = client.next(isTurn('turn_started', agent.id), 30_000, 'turn_started')
     terminal.paste(words)
-    await until('the paste to reach the composer', async () => (await d.capture(agent.tmuxPane)).includes('words words') || null, 15_000, 100)
+    // Shown in the composer as the engines show a large paste, a placeholder, and sent whole on Enter.
+    const shown = engine === 'claude' ? '[Pasted text #1]' : `[Pasted Content ${words.length} chars]`
+    await until('the paste to reach the composer', async () => (await d.capture(agent.tmuxPane)).includes(shown) || null, 15_000, 100)
     terminal.type('\r')
     expect((await started).payload?.userMessage).toBe(words)
     client.close()

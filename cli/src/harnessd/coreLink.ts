@@ -52,6 +52,8 @@ export interface MasterChannel {
   memoryUsage(): { rss: number; heapUsed: number }
   /** The process that started this one: the master, when it holds the channel. */
   readonly parentPid: number
+  /** False once the channel to the master has closed (`process.connected`). */
+  readonly connected?: boolean
 }
 
 export interface CoreLink {
@@ -81,6 +83,7 @@ export const processChannel: MasterChannel = {
   on: process.on.bind(process),
   memoryUsage: () => process.memoryUsage(),
   parentPid: process.ppid,
+  get connected() { return process.connected },
 }
 
 export function connectToMaster(
@@ -101,6 +104,20 @@ export function connectToMaster(
   if (supervised) {
     channel.on('message', (message) => { if (isMasterMessage(message)) status = message.status })
   }
+  // ⚠️ Listened for from the start and remembered, not from whenever the caller subscribes.
+  // runForeground subscribes some 1,100 lines into start-up, long after this core has bound and begun
+  // to beat, and 'disconnect' fires once, for whoever listens then: a master that died in between —
+  // killed while its core was still starting — went unnoticed, and the core ran on for good, holding
+  // the port the next start needs. Measured: 20 cores whose master died as they bound were all still
+  // running ten minutes later.
+  let masterGone = supervised && channel.connected === false
+  const goneListeners: Array<() => void> = []
+  if (supervised) {
+    channel.once('disconnect', () => {
+      masterGone = true
+      for (const listener of goneListeners.splice(0)) listener()
+    })
+  }
   return {
     supervised,
     masterPid: supervised ? channel.parentPid : null,
@@ -118,7 +135,11 @@ export function connectToMaster(
       heartbeat = setInterval(beat, intervalMs)
       heartbeat.unref()
     },
-    onMasterGone: (listener) => { if (supervised) channel.once('disconnect', listener) },
+    onMasterGone: (listener) => {
+      if (!supervised) return
+      if (masterGone) queueMicrotask(listener)
+      else goneListeners.push(listener)
+    },
     status: () => status,
     close: () => {
       if (heartbeat) clearInterval(heartbeat)

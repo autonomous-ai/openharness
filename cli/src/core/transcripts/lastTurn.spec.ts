@@ -14,7 +14,7 @@ vi.mock('../../engines/devin/reader.js', () => ({ readDevinMessages: vi.fn(async
 vi.mock('../../engines/devin/normalizer.js', () => ({ lastDevinTurnText: vi.fn((rows: string[]) => ({ text: rows[0] })) }))
 vi.mock('../../engines/codex/lastTurn.js', () => ({ readLastCodexTurnText: vi.fn(async (path: string) => ({ text: `codex ${path}` })) }))
 vi.mock('../../lib/transcriptTail.js', () => ({
-  tailFile: vi.fn(async (path: string, n: number) => [`${path} last ${n}`]),
+  tailFileCapped: vi.fn(async (path: string) => ({ lines: [`${path} capped`], truncated: false })),
   tailFileUntil: vi.fn(async (path: string) => [`${path} back to the last turn`]),
 }))
 vi.mock('../../lib/normalize.js', () => ({
@@ -67,9 +67,9 @@ describe('the last turn of each engine', () => {
     expect(await read('claude-s')).toEqual(text('raw: /t/claude.jsonl back to the last turn'))
     expect(await read('codex-s')).toEqual(text('codex /t/codex.jsonl'))
     for (const engine of engines) {
-      expect(await read(`${engine}-s`), engine).toEqual(text(`${engine}: /t/${engine}.jsonl last Infinity`))
+      expect(await read(`${engine}-s`), engine).toEqual(text(`${engine}: /t/${engine}.jsonl capped`))
     }
     // An engine with no reader of its own: its raw lines.
-    expect(await read('terminal-s')).toEqual(text('raw: /t/shell.log last Infinity'))
+    expect(await read('terminal-s')).toEqual(text('raw: /t/shell.log capped'))
   })
 })

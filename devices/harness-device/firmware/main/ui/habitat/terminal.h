@@ -119,6 +119,10 @@ typedef struct {
     const uint8_t *cells;
     const uint16_t *palette;
     uint8_t cell;
+    // A cell sprite drawn smaller (ht_cell_sprite_zoom): width x height is the frame's src_w x src_h px times zoom / 8,
+    // each pixel the area-weighted mean of the frame pixels it covers, over black. 0 = drawn at its own size.
+    uint8_t zoom;
+    uint16_t src_w, src_h;
 } ht_sprite_t;
 typedef struct {
     int16_t x, y, w;
@@ -143,6 +147,10 @@ typedef struct {
     uint8_t gained;
     uint8_t gain[16];
     uint8_t arc_mid;   // a proportional arc label's face's `mid`, copied by ht_arc_*_face (0 = the default)
+    // A RING ARC rather than text when `ring.set`: a band `w16` wide around radius `r16` from the centre
+    // (cx16, cy16), over the angles mid +- half, in sixteenths of a pixel; (ux, uy) is the unit vector of mid
+    // and `cosh` the cosine of half, all Q14 (y up). `w16` 0 draws nothing. ht_ring_arc() makes one.
+    struct { uint8_t set; uint16_t colour, r16, w16; int16_t cx16, cy16, ux, uy, cosh; } ring;
 } ht_run_t;
 typedef struct {
     uint16_t background;
@@ -169,8 +177,19 @@ void ht_center(ht_scene_t *scene, int y, const ht_font_t *font, uint16_t fg, con
 bool ht_icon(ht_scene_t *scene, int x, int y, const ht_icon_t *icon);
 // A cell sprite (ht_cell_frame_t) as one run; its frame pointer is what ht_damage compares.
 bool ht_cell_sprite(ht_scene_t *scene, int x, int y, const ht_cell_frame_t *frame);
+// The frame at zoom / 8 of its size (1..8; 8 = ht_cell_sprite), box-filtered so one picture drawn large reads sharp at
+// every smaller size (the pets: one 2x drawing shown at 1x, 1.5x, 1.75x and 2x). Edges darken toward the black ground,
+// as the art's own anti-aliasing does; a pixel less than a quarter covered is left as it was.
+bool ht_cell_sprite_zoom(ht_scene_t *scene, int x, int y, const ht_cell_frame_t *frame, unsigned zoom);
 // A rounded box — the Focus skin's pills and cards. Colours are already mixed over what they sit on.
 bool ht_box(ht_scene_t *scene, int x, int y, int w, int h, int radius, uint16_t fill, uint16_t border);
+// A RING ARC — a piece of a circle's band, drawn in one colour (already mixed over the ground), anti-aliased
+// across the band, hard at its two ends. The centre, radius and width are in sixteenths of a pixel; the span
+// is `mid_deg` +- `half_deg` whole degrees, counted anticlockwise from 3 o'clock (0 = right, 180 = left).
+// `width16` 0 makes an empty placeholder (nothing drawn, no bounds) that keeps the run's slot: its place
+// (the centre) never depends on the radius, so a ring that comes and goes does not reshape the damage.
+bool ht_ring_arc(ht_scene_t *scene, int cx16, int cy16, int radius16, int width16, int mid_deg, int half_deg,
+                 uint16_t colour);
 // PROPORTIONAL TEXT. The width `text` would take in `font` (mono: glyphs x width). A line of it that
 // fits `width` px, breaking after a word where it can (the cursor moves past the spaces it ends on).
 // And `text` fitted to `width`: whole if it fits, else as much as does and "…"; returns its width.

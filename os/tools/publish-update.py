@@ -12,7 +12,16 @@ from urllib.request import urlopen
 import zipfile
 
 REPO = 'autonomous-ai/openharness'
+# Preserve the installed previews' feed URL/schema so their next update can
+# migrate directly to an official release without reflashing.
 CHANNEL = 'os-preview-updates'
+
+
+def bootstrap_files():
+    spec = importlib.util.spec_from_file_location('harness_runtime_update', Path(__file__).parents[1] / 'runtime_update.py')
+    updater = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(updater)
+    return updater.BOOTSTRAP_FILES
 
 
 def digest(path):
@@ -30,8 +39,8 @@ def validate(bundle, receipt, run):
     spec.loader.exec_module(updater)
     manifest = json.loads((bundle / 'package-manifest.json').read_text())
     updater.validate_bundle(bundle, {'version': manifest['requires_os_version'], 'arch_snapshot': manifest['arch_snapshot']})
-    if not re.fullmatch(r'\d+\.\d+\.\d+-preview\.\d+', manifest['requires_os_version']):
-        raise ValueError('Only explicitly versioned previews can use this channel.')
+    if not re.fullmatch(r'\d+\.\d+\.\d+(?:-preview\.\d+)?', manifest['requires_os_version']):
+        raise ValueError('Only explicit OS releases or numbered previews can use this channel.')
     versions = manifest['runtime'].get('versions', {})
     if set(versions) != {'hn', 'cli'} or any(not isinstance(value, str) or value.startswith('999.') for value in versions.values()):
         raise ValueError('The public package must contain production runtime versions, never private fixtures.')
@@ -45,7 +54,7 @@ def validate(bundle, receipt, run):
         raise ValueError('Package, fast runtime and system-channel checks must all pass.')
     if not receipt['system_channel'].get('reboot_keyboard'):
         raise ValueError('The channel update has not passed its actual encrypted reboot and keyboard check.')
-    expected = {manifest['package']['name'], 'package-manifest.json', 'apply-update.py'}
+    expected = {manifest['package']['name'], 'package-manifest.json', *updater.BOOTSTRAP_FILES}
     checksums = {}
     for line in (bundle / 'SHA256SUMS').read_text().splitlines():
         checksum, name = line.split('  ', 1)
@@ -91,7 +100,7 @@ def main():
     bundle_name = 'harness-update-' + manifest['requires_os_version'] + '-' + manifest['source_commit'][:9] + '-x86_64.zip'
     archive = output / bundle_name
     with zipfile.ZipFile(archive, 'w', compression=zipfile.ZIP_DEFLATED) as zipped:
-        for name in [manifest['package']['name'], 'package-manifest.json', 'apply-update.py', 'SHA256SUMS']:
+        for name in [manifest['package']['name'], 'package-manifest.json', *bootstrap_files(), 'SHA256SUMS']:
             entry = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
             entry.external_attr = 0o100644 << 16
             zipped.writestr(entry, (args.bundle / name).read_bytes(), compress_type=zipfile.ZIP_DEFLATED)
@@ -115,7 +124,7 @@ def main():
     # assets only after that release exists; never replace its ISO or manifest.
     release = json.loads(gh('api', f'repos/{REPO}/releases/tags/{tag}'))
     if release['draft']:
-        raise ValueError('Publish the validated OS preview before advancing its update feed.')
+        raise ValueError('Publish the validated OS release before advancing its update feed.')
     existing = {asset['name']: asset for asset in release['assets']}
     missing = []
     for path in assets:

@@ -55,7 +55,26 @@ describe('RuntimeProfileManager', () => {
     })
   })
 
-  it('limits Codex Max and Ultra to GPT-5.6 models', () => {
+  it('takes Codex Max and Ultra where its catalog lists them', async () => {
+    // 0.160's catalog lists them for the GPT-6 models the old slug list left out, and leaves Ultra off GPT-6-Luna.
+    expect(codexEffortAllowed('gpt-6.1-sol', 'ultra', ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'])).toBe(true)
+    expect(codexEffortAllowed('gpt-6-luna', 'ultra', ['low', 'medium', 'high', 'xhigh', 'max'])).toBe(false)
+    // The catalog outranks the slug list both ways.
+    expect(codexEffortAllowed('gpt-5.6-sol', 'max', ['low', 'high'])).toBe(false)
+    expect(codexEffortAllowed('gpt-5.4', 'xhigh', [])).toBe(true)
+    expect(codexEffortAllowed('gpt-6.1-sol', 'turbo', ['turbo'])).toBe(false)
+
+    const manager = new RuntimeProfileManager()
+    const value = { ...session('codex'), codexHome: join(import.meta.dirname, '__fixtures__', 'codex-home-0.160') }
+    manager.hydrate(value, [JSON.stringify({ type: 'turn_context', payload: { model: 'gpt-6.1-sol', reasoning_effort: 'ultra' } })])
+    const offered = (await manager.modelsForSession(value)).map((option) => parseRuntimeProfile(option.id))
+      .map((profile) => `${profile?.model}@${profile?.effort}`)
+    expect(offered).toEqual(expect.arrayContaining(['gpt-6.1-sol@max', 'gpt-6.1-sol@ultra', 'gpt-6-astra@ultra', 'gpt-6-luna@max']))
+    expect(offered).not.toContain('gpt-6-luna@ultra')
+    expect(offered).not.toContain('gpt-5.5@max')
+  })
+
+  it('limits Codex Max and Ultra to GPT-5.6 models when there is no catalog to ask', () => {
     expect(codexEffortAllowed('gpt-5.6-sol', 'max')).toBe(true)
     expect(codexEffortAllowed('gpt-5.6-terra', 'ultra')).toBe(true)
     expect(codexEffortAllowed('codex-auto-review', 'ultra')).toBe(true)
@@ -153,13 +172,56 @@ describe('RuntimeProfileManager', () => {
     await expect(manager.modelsForSession(native)).resolves.not.toEqual([])
   })
 
-  it('supports both captured Codex picker generations', () => {
+  it('switches Codex from 0.144 upward, not only the two releases first driven by hand', () => {
+    // The gate allowed exactly 0.144 and 0.145, so a Codex kept up to date (0.160) could not be switched.
     const value = session('codex')
-    expect(supportsNativeRuntimeControl(value)).toBe(true)
-    value.cliVersion = '0.145.0'
-    expect(supportsNativeRuntimeControl(value)).toBe(true)
-    value.cliVersion = '0.146.0'
-    expect(supportsNativeRuntimeControl(value)).toBe(false)
+    for (const version of ['0.144.0', '0.144.5', '0.145.0', '0.146.0', '0.160.0', '0.161.2', '1.0.0']) {
+      value.cliVersion = version
+      expect(supportsNativeRuntimeControl(value), version).toBe(true)
+    }
+    for (const version of ['0.143.9', '0.99.0', null, 'not a version']) {
+      value.cliVersion = version
+      expect(supportsNativeRuntimeControl(value), String(version)).toBe(false)
+    }
+  })
+
+  it('knows Codex 0.160 Persistent effort, from the rollout, the pane and the catalog', async () => {
+    const manager = new RuntimeProfileManager()
+    const value = session('codex')
+    manager.hydrate(value, [])
+    manager.ingest(value, JSON.stringify({
+      type: 'event_msg',
+      payload: { type: 'thread_settings_applied', thread_settings: { model: 'gpt-5.5', reasoning_effort: 'persistent' } },
+    }))
+    expect(parseRuntimeProfile(manager.selectedModel(value))).toMatchObject({ model: 'gpt-5.5', effort: 'persistent' })
+    expect(codexEffortAllowed('gpt-5.5', 'persistent')).toBe(true)
+
+    manager.ingestPane(value, '› \ngpt-6-luna high ·', true)
+    manager.ingestPane(value, '› \ngpt-6-luna persistent · Context 100% left', true)
+    expect(parseRuntimeProfile(manager.selectedModel(value))).toMatchObject({ model: 'gpt-6-luna', effort: 'persistent' })
+
+    const home = await mkdtemp(join(tmpdir(), 'codex-home-'))
+    cleanup.push(home)
+    await writeFile(join(home, 'models_cache.json'), JSON.stringify({ models: [{
+      slug: 'gpt-5.5', display_name: 'GPT-5.5', visibility: 'list', default_reasoning_level: 'medium',
+      supported_reasoning_levels: [{ effort: 'medium' }, { effort: 'persistent' }],
+    }] }))
+    const options = await manager.modelsForSession({ ...value, codexHome: home })
+    expect(options).toContainEqual({ id: encodeRuntimeProfile({ sessionId: 'h1', engine: 'codex', model: 'gpt-5.5', effort: 'persistent' }), displayName: 'GPT-5.5 / Persistent' })
+    expect(await manager.codexCatalog({ ...value, codexHome: home })).toEqual([
+      { slug: 'gpt-5.5', displayName: 'GPT-5.5', listed: true, defaultEffort: 'medium', efforts: ['medium', 'persistent'] },
+    ])
+  })
+
+  it('reads no Codex catalog where there is none, or none that parses', async () => {
+    const manager = new RuntimeProfileManager()
+    const home = await mkdtemp(join(tmpdir(), 'codex-home-'))
+    cleanup.push(home)
+    const value = { ...session('codex'), codexHome: home }
+    await expect(manager.codexCatalog(value)).resolves.toEqual([])
+    await writeFile(join(home, 'models_cache.json'), 'null')
+    await expect(manager.codexCatalog(value)).resolves.toEqual([])
+    await expect(manager.modelsForSession(value)).resolves.toEqual([])
   })
 
   it('surfaces a Cursor model from the transcript even before any effort is known', () => {

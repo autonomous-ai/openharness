@@ -7,6 +7,7 @@
  */
 
 import { execFile } from 'node:child_process'
+import { patientExec } from './patientExec.js'
 import {
   agentAliasOwner,
   agentCommandOwnershipSnapshot,
@@ -17,7 +18,11 @@ import type { AgentEngine } from '../engines/types.js'
 import { probeGatewayRuntime } from './gatewayRuntime.js'
 import { probeGridAssignment, type GridAssignment } from './gridAssignment.js'
 import { probeCodexHome } from './codexHomeProbe.js'
-import { buildHarnessSessionLabel, isHarnessSession, isLegacyHarnessSession } from './harnessSessionLabel.js'
+import { env } from '../config/env.js'
+import {
+  buildHarnessSessionLabel, harnessPaneOwner, isLegacyHarnessSession, ownedHere, paneOwnerFormat, paneOwnerOf,
+} from './harnessSessionLabel.js'
+import { tmuxFeatures } from './tmuxVersion.js'
 import { psEnv } from './childLocale.js'
 import type { ProcessIdentity, RegisteredSession } from './registry.js'
 import {
@@ -27,7 +32,10 @@ import {
   liveProcessRows,
   parseProcessRow,
   processTreePids,
+  isNoTmuxServerError,
+  rememberTmuxServer,
   resumeSessionId,
+  reviveRemovedTmuxSocket,
   setPaneMouseOn,
   type ProcessRow,
 } from './tmux.js'
@@ -37,6 +45,8 @@ export interface TmuxPaneSnapshot {
   rootPid: number
   tmuxSessionName: string
   cwd: string
+  /** The daemon that created the pane (`HARNESS_OWNER_OPTION`); empty when no daemon tagged it. */
+  owner?: string
 }
 
 export interface DiscoveredTmuxAgent {
@@ -77,16 +87,11 @@ export interface TmuxAgentDiscoveryDeps {
 
 const MISS_LIMIT = 2
 
-/**
- * `tmux list-panes` exits non-zero before the first server exists. That is an
- * empty inventory, not a missing tmux binary or an unusable backend: the
- * first `tmux new-session` starts the server itself. Keeping the distinction
- * here prevents daemon startup from publishing a scary, and inaccurate,
- * "tmux unavailable" state on a fresh machine.
- */
-export function isNoTmuxServerError(error: string): boolean {
-  return /no server running on\s+\S+/i.test(error)
-}
+// The rule for "no server is running", shared with every other tmux read (lib/tmux.ts).
+export { isNoTmuxServerError } from './tmux.js'
+
+// A held event loop must not turn a timeout into an empty answer (patientExec.ts).
+const run = patientExec(execFile)
 
 function execText(
   command: string,
@@ -95,12 +100,22 @@ function execText(
   env?: NodeJS.ProcessEnv,
 ): Promise<{ ok: true; stdout: string } | { ok: false; error: string }> {
   return new Promise((resolve) => {
-    execFile(command, args, { timeout, ...(env && { env }) }, (err, stdout) => {
+    run(command, args, { timeout, ...(env && { env }) }, (err, stdout) => {
       if (err) { resolve({ ok: false, error: err.message }); return }
       resolve({ ok: true, stdout })
     })
   })
 }
+
+/** What every pane listing asks tmux for. The owner tag goes last: a folder's path can hold `|`, the tag
+ *  never does, so the last `|` is always the one before it. How the tag is read depends on the tmux
+ *  (`paneOwnerFormat`): before 3.0 it is not a pane option. */
+export function paneFormat(paneOptions: boolean): string {
+  return `#{pane_id}|#{pane_pid}|#{session_name}|#{pane_current_path}|${paneOwnerFormat(paneOptions)}`
+}
+
+/** The listing on a tmux with pane options. */
+export const PANE_FORMAT = paneFormat(true)
 
 export function parsePanes(stdout: string): TmuxPaneSnapshot[] {
   const panes: TmuxPaneSnapshot[] = []
@@ -113,11 +128,15 @@ export function parsePanes(stdout: string): TmuxPaneSnapshot[] {
     const pidText = line.slice(first + 1, second)
     const rootPid = Number(pidText)
     if (!/^%\d+$/.test(tmuxPane) || !Number.isSafeInteger(rootPid) || rootPid <= 0) continue
+    // A listing without the owner field (an older format) is a pane nobody tagged.
+    const rest = line.slice(third + 1)
+    const tag = rest.lastIndexOf('|')
     panes.push({
       tmuxPane,
       rootPid,
       tmuxSessionName: line.slice(second + 1, third),
-      cwd: line.slice(third + 1),
+      cwd: tag < 0 ? rest : rest.slice(0, tag),
+      owner: tag < 0 ? '' : paneOwnerOf(rest.slice(tag + 1)),
     })
   }
   return panes
@@ -130,14 +149,21 @@ export type TmuxPaneInventory =
 /**
  * One bounded tmux inventory read, shared by discovery and the neutral backend adapter.
  *
- * Only panes from sessions this daemon itself named via `agent_create` are returned — a session
- * the user opened by hand, or one an agent spawned itself with a nested `tmux new-session`, is
- * invisible to every discovery path (autonomous-harness-desktop#6).
+ * Only this daemon's panes are returned (`ownedHere`): the ones it tagged, in whatever session the
+ * person has since renamed or moved them into, and untagged ones only in sessions Harness named. A
+ * session the user opened by hand, or one an agent spawned itself with a nested `tmux new-session`, is
+ * invisible to every discovery path (autonomous-harness-desktop#6); so is a pane another daemon on this
+ * tmux server created (`HARNESS_OWNER_OPTION`): a dev daemon beside the release one opened an agent for
+ * every one of the release daemon's panes, and could stop them (e2e/twodaemons.e2e.ts).
  */
-export async function listTmuxPanes(): Promise<TmuxPaneInventory> {
-  // Printable delimiters survive tmux's POSIX-locale output sanitiser. Split only the three fixed
-  // separators so a legitimate `|` in pane_current_path remains part of the path.
-  const result = await execText('tmux', ['list-panes', '-a', '-F', '#{pane_id}|#{pane_pid}|#{session_name}|#{pane_current_path}'], 2_000)
+export async function listTmuxPanes(owner: string = harnessPaneOwner(env.ADAPTER_DATA_DIR)): Promise<TmuxPaneInventory> {
+  // Printable delimiters survive tmux's POSIX-locale output sanitiser (see PANE_FORMAT).
+  const format = paneFormat((await tmuxFeatures()).paneOptions)
+  const read = () => execText('tmux', ['list-panes', '-a', '-F', format], 2_000)
+  let result = await read()
+  // A server whose socket was removed still runs its panes: asked back, it is read again, once.
+  if (!result.ok && isNoTmuxServerError(result.error) && await reviveRemovedTmuxSocket()) result = await read()
+  if (result.ok) await rememberTmuxServer()
   if (!result.ok) {
     // A server does not exist until the first Harness agent (or a user) opens
     // a tmux session. Treating this as unavailable made a clean WSL install
@@ -145,7 +171,13 @@ export async function listTmuxPanes(): Promise<TmuxPaneInventory> {
     if (isNoTmuxServerError(result.error)) return { ok: true, panes: [] }
     return result
   }
-  return { ok: true, panes: parsePanes(result.stdout).filter((pane) => isHarnessSession(pane.tmuxSessionName)) }
+  // A running server has a pane at the least (it exits with its last session): a listing with no bytes
+  // in it is one that was lost, and read as an answer it says every agent's pane is gone.
+  if (!result.stdout) return { ok: false, error: 'tmux listed no panes' }
+  return {
+    ok: true,
+    panes: parsePanes(result.stdout).filter((pane) => ownedHere(pane.owner ?? '', pane.tmuxSessionName, owner)),
+  }
 }
 
 export interface AdoptedLegacySession { from: string; to: string; paneId: string }
@@ -166,7 +198,7 @@ export async function adoptLegacyHarnessSessions(
   now: number = Date.now(),
 ): Promise<AdoptedLegacySession[]> {
   if (!ownedPanes.size) return []
-  const result = await execText('tmux', ['list-panes', '-a', '-F', '#{pane_id}|#{pane_pid}|#{session_name}|#{pane_current_path}'], 2_000)
+  const result = await execText('tmux', ['list-panes', '-a', '-F', PANE_FORMAT], 2_000)
   if (!result.ok) return []
   const adopted: AdoptedLegacySession[] = []
   const seen = new Set<string>()

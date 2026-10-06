@@ -83,7 +83,10 @@ export function createQuestions({
         type: 'commander_question',
         agentId: agentIdFor(sessionId),
         dbSessionId: sessionId,
-        payload: { requestId, questions: shaped, notification: agentNotifications.asked(sessionId, requestId) },
+        payload: { requestId, questions: shaped, notification: agentNotifications.asked(sessionId, requestId),
+          // Robot clients need to distinguish a permission notice from an answerable question.
+          ...(detail?.permission ? { permission: { dialog: detail.dialog, resolution: 'desktop' } } : {}),
+        },
       }
       clients.sendCommander(asked)
       // ...and to the window on this computer. `sendCommander` is `webEligible: false`, so until this
@@ -122,7 +125,30 @@ export function createQuestions({
       console.log(`[question] ${sid(sessionId)} answered elsewhere · closing on every client · req=${requestId}`)
     },
   })
-  return { questions, showAwaitingAnswer, answer, openQuestions, monitorActivity, agentNotifications, questionWatcher }
+  const questionResponse = createQuestionResponse(answer)
+  return { questions, showAwaitingAnswer, answer, questionResponse, openQuestions, monitorActivity, agentNotifications, questionWatcher }
+}
+
+/**
+ * Answers `question_response`: a person answered an agent's question on a device or in a window. There
+ * is no control channel into an interactive CLI, so `answer` keys it straight into that session's tmux
+ * dialog, and what became of it goes back through `reply`.
+ *
+ * Moved verbatim out of the socket's request switch (docs/design/2026-10-03-harnessd.md).
+ */
+export function createQuestionResponse(answer: (payload: QuestionAnswerPayload) => Promise<QuestionAnswerResult> | void) {
+  return (payload: Record<string, unknown>, reply: (result: Record<string, unknown>) => void): void => {
+    const p = payload as { requestId?: string; sessionId?: string; agentId?: string; answers?: Record<string, string> }
+    const answered = answer(p)
+    // Detached: driving a dialog takes seconds of keystrokes and repaints. The outcome goes back
+    // under the QUESTION's requestId, so the client that answered can say why nothing happened —
+    // STALE_QUESTION when the dialog changed before the answer arrived and nothing was typed.
+    if (answered) {
+      void answered
+        .then((result) => reply(result.ok ? { ok: true } : { error: result.error, detail: result.detail }))
+        .catch(() => reply({ error: 'ANSWER_FAILED', detail: 'The answer could not be entered.' }))
+    }
+  }
 }
 
 export type Questions = ReturnType<typeof createQuestions>

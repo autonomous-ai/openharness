@@ -48,15 +48,27 @@ export function searchCoreApi(
       advertised: () => [],
       terminalAvailable: () => false,
       sync: () => {},
+      runtimeModels: async () => [],
+      runtimeProfile: () => null,
+      setRuntime: () => {},
+      fork: async () => ({ ok: false, error: 'UNSUPPORTED' }),
     },
+    // Search drives no agent: these are never asked of it.
+    turns: { send: () => {}, stop: () => {}, recent: () => [], asks: () => [] },
+    questions: { answer: () => {}, answerReviewed: async () => false },
     transcripts: { databaseHistory },
     external: {
       sessions: new ExternalSessions({ providers, excluded: [dataDir], log: console.warn }),
       open: new OpenSessions({ providers, log: console.warn }),
     },
-    // Search holds no credential and talks to no window: these are never asked of it.
-    account: { mintGridName: async () => null, accessToken: () => Promise.reject(new Error('search holds no credential')) },
-    clients: { viewerChanged: () => {}, gridNamed: () => {}, dshInstallStatus: () => {} },
+    // Search holds no credential, runs no model and talks to no window: these are never asked of it.
+    account: {
+      mintGridName: async () => null,
+      accessToken: () => Promise.reject(new Error('search holds no credential')),
+      privateGridName: async () => null,
+      machineName: () => null,
+    },
+    clients: { viewerChanged: () => {}, gridNamed: () => {}, gridModelsChanged: () => {}, dshInstallStatus: () => {} },
   }
 }
 
@@ -86,9 +98,10 @@ export function runSearchService(options: SearchServiceOptions): ServiceProcess 
       const sessionId = typeof payload.sessionId === 'string' ? payload.sessionId : ''
       if (!sessionId || !index) return
       // A turn boundary: the agents may have changed (a new one, a new conversation), and this
-      // session has new turns to index.
-      if (payload.kind === 'touch') void refresh().then(() => index.touch(sessionId))
-      else if (payload.kind === 'deleteHistory') index.deleteHistory(sessionId)
+      // session has new turns to index. Returned, so a failure is logged rather than left unhandled,
+      // which would end this process.
+      if (payload.kind === 'touch') return refresh().then(() => index.touch(sessionId))
+      if (payload.kind === 'deleteHistory') index.deleteHistory(sessionId)
     },
     onConnected: (connection) => {
       core = connection

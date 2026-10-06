@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from '../lib/registry.js'
-import { createQuestions, type QuestionDeps } from './questions.js'
+import { createQuestionResponse, createQuestions, type QuestionDeps } from './questions.js'
 
 const agents = new Map<string, RegisteredSession>([
   ['s1', { agentId: 'a1', sessionId: 's1', engine: 'claude' } as RegisteredSession],
@@ -90,6 +90,15 @@ describe('questions', () => {
     expect(log.mock.calls[1][0]).toContain('asking the user · "" · req=r2')
   })
 
+  it.each([true, false])('preserves permission metadata only for approval dialogs (%s)', permission => {
+    const { deps, asking } = setup()
+    given(asking.questionWatcher).onQuestion('s1', 'r1', [], { permission, dialog: 'Run printf hi?' })
+    const frame = vi.mocked(deps.clients.sendCommander).mock.calls[1][0]
+    expect(frame.payload.permission).toEqual(permission ? { dialog: 'Run printf hi?', resolution: 'desktop' } : undefined)
+    expect(deps.clients.sendLocal).toHaveBeenCalledWith(frame)
+    expect(asking.openQuestions.get('s1')).toBe(frame)
+  })
+
   it('closes a question answered elsewhere on every client it was shown on', () => {
     const { deps, asking } = setup()
     const answered = vi.spyOn(asking.agentNotifications, 'answered')
@@ -103,5 +112,40 @@ describe('questions', () => {
     expect(deps.clients.sendLocal).toHaveBeenCalledWith(closed)
     expect(asking.openQuestions.has('s1')).toBe(false)
     expect(log.mock.calls[0][0]).toContain('answered elsewhere · closing on every client · req=r1')
+  })
+})
+
+describe('question_response', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  it('keys the answer through the questions\' own answer, and says what became of it once typed', async () => {
+    const { asking } = setup()
+    const typed = vi.spyOn(asking.questions, 'answer').mockResolvedValue({ ok: true })
+    const replies: Array<Record<string, unknown>> = []
+    asking.questionResponse({ agentId: 'a1', requestId: 'q_1', answers: { q: 'Tea' } }, (result) => { replies.push(result) })
+    expect(typed).toHaveBeenCalledWith({ agentId: 'a1', requestId: 'q_1', answers: { q: 'Tea' } })
+    await vi.waitFor(() => expect(replies).toStrictEqual([{ ok: true }]))
+  })
+
+  it('answers outside the connection\'s line: a refusal, in its fields, or a failure, once the dialog is done', async () => {
+    let finish!: (result: { ok: false; error: 'STALE_QUESTION'; detail: string }) => void
+    const replies: Array<Record<string, unknown>> = []
+    const respond = createQuestionResponse(() => new Promise((resolve) => { finish = resolve }))
+    respond({ agentId: 'a1', requestId: 'q_0badf00d', answers: { q: 'Yes' } }, (result) => { replies.push(result) })
+    expect(replies).toEqual([])
+    finish({ ok: false, error: 'STALE_QUESTION', detail: 'That question changed before your answer arrived.' })
+    await vi.waitFor(() => expect(replies).toHaveLength(1))
+    expect(replies[0]).toStrictEqual({ error: 'STALE_QUESTION', detail: 'That question changed before your answer arrived.' })
+    expect(Object.keys(replies[0])).toEqual(['error', 'detail'])
+    createQuestionResponse(async () => { throw new Error('tmux gone') })({ requestId: 'q_2' }, (result) => { replies.push(result) })
+    await vi.waitFor(() => expect(replies).toHaveLength(2))
+    expect(replies[1]).toStrictEqual({ error: 'ANSWER_FAILED', detail: 'The answer could not be entered.' })
+  })
+
+  it('says nothing for an answer nobody took', async () => {
+    const reply = vi.fn()
+    createQuestionResponse(() => undefined)({ requestId: 'q_3' }, reply)
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(reply).not.toHaveBeenCalled()
   })
 })

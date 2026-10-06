@@ -11,7 +11,13 @@
       <action name="If">
         <query identifier="chromium*" />
         <then><action name="ForEach"><query identifier="hn" /><then><action name="Raise" /><action name="Focus" /></then></action></then>
-        <else><action name="ForEach"><query identifier="chromium*" /><then><action name="Raise" /><action name="Focus" /></then><none><action name="Execute" command="hn-browser" /></none></action></else>
+        <else>
+          <!-- ForEach visits front-to-back. Reverse once without changing focus,
+               then raise/focus back to the original order: the browser window
+               the user left must stay on top, even with several windows open. -->
+          <action name="ForEach"><query identifier="chromium*" /><then><action name="Raise" /></then></action>
+          <action name="ForEach"><query identifier="chromium*" /><then><action name="Raise" /><action name="Focus" /></then><none><action name="Execute" command="hn-browser" /></none></action>
+        </else>
       </action>
     </keybind>
     <keybind key="W-Return"><action name="ForEach"><query identifier="hn" /><then><action name="Raise" /><action name="Focus" /></then></action></keybind>

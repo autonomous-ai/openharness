@@ -1,6 +1,6 @@
 # Install Harness on a ThinkPad
 
-These instructions are for **0.1.0-preview.13**, using a Mac to prepare the USB.
+These instructions are for **0.1.0-preview.14**, using a Mac to prepare the USB.
 The USB opens the installer directly. Installation begins only when you choose **Install Harness**
 in the installer; it erases the entire selected disk.
 
@@ -21,20 +21,20 @@ compute still need testing on the actual hardware.
 
 ## 2. Download and verify on the Mac
 
-From the [preview 13 release](https://github.com/autonomous-ai/openharness/releases/tag/os-v0.1.0-preview.13),
+From the [preview 14 release](https://github.com/autonomous-ai/openharness/releases/tag/os-v0.1.0-preview.14),
 download both files into the same folder:
 
-- `harness-0.1.0-preview.13-x86_64.iso`
-- `harness-0.1.0-preview.13-x86_64.iso.sha256`
+- `harness-0.1.0-preview.14-x86_64.iso`
+- `harness-0.1.0-preview.14-x86_64.iso.sha256`
 
 If they are in Downloads, open Terminal and run:
 
 ```sh
 cd ~/Downloads
-shasum -a 256 -c harness-0.1.0-preview.13-x86_64.iso.sha256
+shasum -a 256 -c harness-0.1.0-preview.14-x86_64.iso.sha256
 ```
 
-The result must say `harness-0.1.0-preview.13-x86_64.iso: OK`.
+The result must say `harness-0.1.0-preview.14-x86_64.iso: OK`.
 If it does not, download the files again before flashing.
 
 ## 3. Flash the USB
@@ -72,7 +72,9 @@ and Password focused. Installation needs no network connection or Harness accoun
 Intel Macs with a 64-bit EFI and no T2 chip are an experimental target. The USB
 includes optional support for selected Broadcom radios, but no physical Mac
 model has passed our complete hardware checks yet. This image is not the
-Apple Silicon or T2 installation path. Core 2 CPUs cannot run bundled OpenCode; this is not a supported bundled-agent target.
+Apple Silicon or T2 installation path. The installer refuses detected Apple T2 Macs
+before collecting passwords or changing the disk; their required driver stack is
+not bundled. Core 2 CPUs cannot run bundled OpenCode; this is not a supported bundled-agent target.
 
 Shut down, insert the USB, then hold **Option (⌥)** while turning on the Mac.
 Choose the external **EFI Boot** entry. Apple's
@@ -119,7 +121,8 @@ disk. Changing the account password later does not change the disk password.
 There is no cloud account that resets the disk password.
 
 First boot opens OpenCode on the left and two terminal panes on the right.
-If disconnected, Wi-Fi opens first; you can connect or choose **Set up later**.
+If disconnected, Wi-Fi opens first. **Super+t** opens a terminal if you need to
+work offline or fix networking.
 Subsequent launches restore your existing work. **Super+w** opens network setup from any
 pane. Ethernet connects automatically when available.
 

@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Validate optional hardware packages on the actual ISO and installed system."""
 import argparse
-import base64
 import hashlib
 import json
 import os
@@ -10,6 +9,7 @@ import re
 import shlex
 import subprocess
 import time
+from footprint_vm import copy_file
 from vm import VM, check_graphical_keyboard
 
 
@@ -18,10 +18,31 @@ def digest(path):
         return hashlib.file_digest(handle, 'sha256').hexdigest()
 
 
+def candidate_record(path):
+    """Record a committed candidate; never label working edits as that commit."""
+    if path.is_symlink():
+        raise ValueError('The candidate must be a regular tracked file.')
+    path = path.resolve()
+    root = Path(subprocess.check_output(
+        ['git', '-C', str(path.parent), 'rev-parse', '--show-toplevel'], text=True).strip())
+    relative = str(path.relative_to(root))
+    source = subprocess.check_output(['git', '-C', str(root), 'rev-parse', 'HEAD'], text=True).strip()
+    committed = subprocess.check_output(['git', '-C', str(root), 'show', source + ':' + relative])
+    data = path.read_bytes()
+    if data != committed:
+        raise ValueError('Commit the candidate before native validation.')
+    return {'source_commit': source, 'path': relative, 'bytes': len(data),
+            'sha256': hashlib.sha256(data).hexdigest()}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--iso', required=True, type=Path)
     parser.add_argument('--output', type=Path, default=Path('os/test-results/hardware-install'))
+    parser.add_argument('--candidate-hardware', type=Path,
+                        help='Test a committed hardware.py over the verified image; retain its hash and source separately')
+    parser.add_argument('--candidate-installer', type=Path,
+                        help='Test a committed installer.py over the verified image; retain its hash and source separately')
     args = parser.parse_args()
     if not os.access('/dev/kvm', os.R_OK | os.W_OK):
         parser.error('Native x86 KVM is required')
@@ -37,6 +58,10 @@ def main():
                    test_source_commit=subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
                    memory_mib=1024, firmware='uefi', live_transport='usb',
                    limitations=['Synthetic PCI selection; physical Wi-Fi association and Mac sleep/wake remain unverified.'])
+    if args.candidate_hardware:
+        receipt['candidate_hardware'] = candidate_record(args.candidate_hardware)
+    if args.candidate_installer:
+        receipt['candidate_installer'] = candidate_record(args.candidate_installer)
     vm = VM(folder, iso, 'uefi', 1024, 'usb')
     try:
         vm.start(live=True)
@@ -44,19 +69,35 @@ def main():
         vm.shell_ready = True
         vm.command('stty -echo; nmcli networking off')
         script = Path(__file__).with_name('hardware_install_guest.py')
-        encoded = base64.b64encode(script.read_bytes()).decode()
-        vm.command('umask 077; : > /run/hardware-test.b64')
-        # Serial canonical mode caps each line; no network is needed to stage it.
-        for offset in range(0, len(encoded), 2400):
-            vm.command('printf %s ' + shlex.quote(encoded[offset:offset + 2400]) + ' >> /run/hardware-test.b64')
-        vm.command('base64 -d /run/hardware-test.b64 > /run/hardware-test.py')
+        # Transfers use the private serial console, with networking still off.
+        vm.command('umask 077')
+        copy_file(vm, script.read_bytes(), '/run/hardware-test.py')
+        command = ['python3', '/run/hardware-test.py']
+        if args.candidate_hardware:
+            candidate = receipt['candidate_hardware']
+            copy_file(vm, args.candidate_hardware.read_bytes(), '/run/hardware-candidate.py')
+            command += ['--candidate-hardware', '/run/hardware-candidate.py',
+                        '--candidate-sha256', candidate['sha256']]
+        if args.candidate_installer:
+            candidate = receipt['candidate_installer']
+            helper = args.candidate_installer.with_name('boot_profile.py')
+            receipt['candidate_boot_profile'] = candidate_record(helper)
+            copy_file(vm, helper.read_bytes(), '/usr/lib/harness-os/boot_profile.py')
+            assert hashlib.sha256(vm.read_file('/usr/lib/harness-os/boot_profile.py')).hexdigest() == receipt['candidate_boot_profile']['sha256']
+            copy_file(vm, args.candidate_installer.read_bytes(), '/run/installer-candidate.py')
+            command += ['--candidate-installer', '/run/installer-candidate.py',
+                        '--installer-sha256', candidate['sha256']]
         receipt['guest_fixture_sha256'] = digest(script)
-        output, _ = vm.command('python3 /run/hardware-test.py', timeout=1200)
+        output, _ = vm.command(shlex.join(command), timeout=1200)
         (folder / 'installation.log').write_text(output)
         match = re.search(r'HN_HARDWARE_RESULT=(\{[^\r\n]+\})', output)
         assert match, 'Offline hardware acceptance receipt is missing'
         receipt['installation'] = json.loads(match.group(1))
         assert receipt['installation']['status'] == 'passed'
+        if args.candidate_hardware:
+            assert receipt['installation']['hardware_sha256'] == receipt['candidate_hardware']['sha256']
+        if args.candidate_installer:
+            assert receipt['installation']['installer_sha256'] == receipt['candidate_installer']['sha256']
         vm.screenshot('01-live-install-complete')
         vm.command('sync')
         vm.stop()
@@ -65,6 +106,12 @@ def main():
         receipt['keyboard'] = check_graphical_keyboard(vm, 'optional-wifi-installed')
         vm.command('printf %s ' + shlex.quote(config['password'] + '\n') + ' | sudo -S true')
         vm.command('sudo nmcli networking off')
+        installed_hardware = vm.read_file('/usr/lib/harness-os/hardware.py')
+        receipt['installed_hardware_sha256'] = hashlib.sha256(installed_hardware).hexdigest()
+        assert receipt['installed_hardware_sha256'] == receipt['installation']['hardware_sha256'], 'Installed hardware policy differs'
+        installed_installer = vm.read_file('/usr/lib/harness-os/install.py')
+        receipt['installed_installer_sha256'] = hashlib.sha256(installed_installer).hexdigest()
+        assert receipt['installed_installer_sha256'] == receipt['installation']['installer_sha256'], 'Installed installer differs'
         vm.command('test ! -e /usr/share/harness-os/hardware/broadcom && test ! -e /etc/harness-live')
         output, _ = vm.command('pacman -Q broadcom-wl-dkms dkms gcc linux-lts-headers; dkms status; harness hardware')
         (folder / 'installed-hardware.txt').write_text(output)

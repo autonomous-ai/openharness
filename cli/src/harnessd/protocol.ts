@@ -26,6 +26,16 @@ export const CORE_EXIT_UPDATE = 75
  */
 export const CORE_EXIT_STOP = 78
 
+/**
+ * How long a master waits for one more beat once a process's silence has run out, counted from then:
+ * a third of the silence, the longest a core or service ever goes between beats
+ * (`coreLink.heartbeatInterval`), so one that was only paused along with its master always lands one.
+ * Why there is a wait at all: `Supervisor.watchHeartbeat`.
+ */
+export function heartbeatGraceMs(timeoutMs: number): number {
+  return Math.ceil(timeoutMs / 3)
+}
+
 export type CoreMessage =
   /** The control port is bound: from here on the daemon answers, though start-up is not done. */
   | { type: 'harnessd:bound'; protocol: number; port: number }

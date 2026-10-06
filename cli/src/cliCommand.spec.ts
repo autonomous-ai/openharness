@@ -1,11 +1,12 @@
 import { spawn, spawnSync, type ChildProcess } from 'child_process'
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { createServer, type RequestListener, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { join } from 'path'
 import { fileURLToPath } from 'url'
 import { afterEach, describe, expect, it } from 'vitest'
 import { listenLocalSocket, localSocketPath } from './lib/localSocket.js'
+import { fakePlatform } from './testing/fakePlatform.js'
 
 const CLI_ROOT = fileURLToPath(new URL('..', import.meta.url))
 const CLI_SOURCE = join(CLI_ROOT, 'src', 'cli.ts')
@@ -98,7 +99,9 @@ function seedRunningDaemon(root: string): { pid: number; exited: Promise<void> }
 async function daemonStatusServer(root: string, machineId: string): Promise<number> {
   const handler: RequestListener = (_req, res) => {
     res.setHeader('content-type', 'application/json')
-    res.end(JSON.stringify({ machineId, version: '0.0.0-test', sessions: [] }))
+    // A daemon says its pid (and, under a master, the master's), as every release with the socket has:
+    // start-up tells a live daemon from the core of a master that is gone by it (lib/localSocket.ts).
+    res.end(JSON.stringify({ machineId, version: '0.0.0-test', sessions: [], pid: process.pid, corePid: process.pid }))
   }
   const server = createServer(handler)
   servers.push(server)
@@ -297,4 +300,67 @@ describe('start beside a daemon that serves another account', () => {
     await expect(Promise.race([daemon.exited.then(() => 'exited'), new Promise((r) => setTimeout(() => r('alive'), 300))]))
       .resolves.toBe('alive')
   }, 20_000)
+})
+
+describe('harness service, through the CLI', () => {
+  // The whole command as a person runs it, on a throwaway home with fake launchctl or systemctl ALONE
+  // on PATH: nothing can reach this machine's launchd or systemd, or the person's daemon.
+  const platform = process.platform === 'darwin' ? 'launchd' : 'systemd'
+  const standIns: number[] = []
+  afterEach(() => { for (const pid of standIns.splice(0)) { try { process.kill(pid, 'SIGKILL') } catch { /* gone */ } } })
+
+  /** A process standing in for the master the platform starts. Not this test's child, so it is reaped
+   *  the moment the fake platform stops it. */
+  function standIn(): number {
+    const spawned = spawnSync(process.execPath, ['-e', `
+      const c = require('node:child_process').spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: true, stdio: 'ignore' })
+      c.unref(); console.log(c.pid)
+    `], { encoding: 'utf8' })
+    const pid = Number(spawned.stdout.trim())
+    standIns.push(pid)
+    return pid
+  }
+
+  it.skipIf(platform === 'systemd' && process.platform !== 'linux')('installs, reports, stops through the platform and uninstalls', async () => {
+    const root = freshRoot()
+    const master = standIn()
+    const fake = fakePlatform(join(root, 'bin'), { pidFile: join(root, 'data', 'adapter.pid'), nextPid: master, killable: [master] })
+    mkdirSync(join(root, 'cli'), { recursive: true })
+    writeFileSync(join(root, 'cli', 'cli.js'), '// the installed bundle\n')
+    const extra = { PATH: fake.bin, XDG_CONFIG_HOME: join(root, '.config') }
+    const file = platform === 'launchd'
+      ? join(root, 'Library', 'LaunchAgents', 'ai.autonomous.harness.harnessd.plist')
+      : join(root, '.config', 'systemd', 'user', 'harnessd.service')
+
+    const before = await runAsync(root, ['service', 'status', '--json'], extra)
+    expect(before.status, before.stderr).toBe(0)
+    expect(JSON.parse(before.stdout)).toMatchObject({ supported: true, platform, file, installed: false, registered: false })
+
+    const install = await runAsync(root, ['service', 'install'], extra)
+    expect(install.status, install.stderr).toBe(0)
+    expect(install.stdout).toContain(`✓ harnessd runs under ${platform} (pid ${master})`)
+    expect(readFileSync(file, 'utf8')).toContain(join(root, 'data', 'harness.log'))
+    expect(readFileSync(file, 'utf8')).toContain(join(root, 'cli', 'cli.js'))
+
+    const status = await runAsync(root, ['service', 'status'], extra)
+    expect(status.stdout).toContain(`● running (pid ${master})`)
+
+    // What the master writes when the platform runs it; `harness status` names its supervisor.
+    writeFileSync(join(root, 'data', 'harnessd-status.json'), JSON.stringify({ state: 'running', masterPid: master, platform }))
+    const machine = await runAsync(root, ['status'], extra)
+    expect(machine.stdout).toMatch(new RegExp(`supervisor +${platform} · starts at login, comes back if it dies`))
+
+    const stop = await runAsync(root, ['stop'], extra)
+    expect(stop.stdout).toContain(`machine stopped (pid ${master})`)
+    expect(fake.calls().map((call) => call.join(' '))).toContainEqual(platform === 'launchd'
+      ? expect.stringMatching(/^launchctl bootout gui\/\d+\/ai\.autonomous\.harness\.harnessd$/)
+      : 'systemctl --user kill --kill-who=main --signal=SIGTERM harnessd.service')
+    expect(fake.state().pid).toBeNull()
+
+    const uninstall = await runAsync(root, ['service', 'uninstall'], extra)
+    expect(uninstall.status, uninstall.stderr).toBe(0)
+    expect(uninstall.stdout).toContain(`no longer runs harnessd`)
+    expect(uninstall.stdout).not.toContain('starting it the usual way')
+    expect(existsSync(file)).toBe(false)
+  }, 60_000)
 })

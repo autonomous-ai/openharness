@@ -64,7 +64,10 @@ export function createRecaps({
   const isSubagentSession = (sessionId: string): boolean => {
     const agentId = bySession(sessionId)?.agentId
     if (!agentId) return false
-    const role = orchestratorRoleOf(agentId)
+    // Asked at every turn's end, from the transcript's line handler. Reading the orchestrator makes its
+    // folder, which throws on a full disk (e2e/diskfull.e2e.ts): announced as anyone's, the turn keeps its end.
+    let role: ReturnType<typeof orchestratorRoleOf>
+    try { role = orchestratorRoleOf(agentId) } catch { return false }
     return role?.role === 'worker' || (role?.role === 'director' && role.busy)
   }
   const mirror = new CommanderMirror({
@@ -104,7 +107,27 @@ export function createRecaps({
   // and the voice router know. Resolve across the two, or every tile restores empty.
   const recent = (id: string, n: number) => mirror.recent(resolve(id)?.sessionId || stopped(id)?.sessionId || id, n)
   const recentAsks = (id: string, n?: number) => mirror.recentAsks(resolve(id)?.sessionId || stopped(id)?.sessionId || id, n)
-  return { mirror, isSubagentSession, recent, recentAsks }
+  /**
+   * The reply to `agent_recent`: an agent's last turn summaries and the person's last questions. Asked
+   * by a device restoring its tiles at boot, so it holds only what was summarized (recap and body),
+   * never a resurrected full-text card, and nothing until a turn was summarized.
+   *
+   * Moved verbatim out of the socket's request switch (docs/design/2026-10-03-harnessd.md).
+   */
+  const agentRecent = (payload: Record<string, unknown>): Record<string, unknown> => {
+    const projectId = payload.agentId as string | undefined
+    if (!projectId) return { error: 'MISSING_AGENT_ID' }
+    const n = Math.max(1, Math.min(5, Number(payload.n) || 2))
+    const events = recent(projectId, n)
+    // ASKS TRAVEL AS THEIR OWN LIST, beside the events rather than inside them. A question exists
+    // the moment it is asked; a recap exists once the turn has been answered and summarised. They
+    // are different lengths on any machine where a turn ended without one, so a reply that folds
+    // the questions into the event rows loses exactly the newest ones — and a REMOTE agent then
+    // reaches the router with nothing but its name.
+    const asks = recentAsks(projectId, n)
+    return { agentId: projectId, events, asks }
+  }
+  return { mirror, isSubagentSession, recent, recentAsks, agentRecent }
 }
 
 export type Recaps = ReturnType<typeof createRecaps>

@@ -1,0 +1,10 @@
+{
+  "schema": 1,
+  "scope": "Disposable Fedora graphical session; not an ARM installer or update package",
+  "root_image": "registry.fedoraproject.org/fedora-minimal@sha256:481d1f308c3d4c0dc98b9b58613163be04271a137ffeae3d398a8c029c46b259",
+  "graphics_modules": {
+    "url": "https://packages.redhat.com/api/pulp-content/public-copr/@asahi/kernel/fedora-44-aarch64/Packages/k/kernel-16k-modules-7.1.13-402.asahi.fc44.aarch64.rpm",
+    "bytes": 63647565,
+    "sha256": "f1ad7d48c66f2d3224d724b2bbff63b2a5da9b1200327d319507725c31ff0b1d"
+  }
+}

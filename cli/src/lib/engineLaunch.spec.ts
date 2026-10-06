@@ -1,8 +1,9 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
-import { tmpdir } from 'node:os'
+import { constants, tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { env } from '../config/env.js'
 import {
   AGENT_NAME_RE,
   BYPASS_PERMISSION_FLAGS,
@@ -12,10 +13,14 @@ import {
   NAMED_AGENT_ARGS,
   NamedAgentUnsupportedError,
   HARNESS_WORDMARK_LINES,
+  MAX_FIRST_PROMPT_CHARS,
   PERMISSION_MODES,
   terminalHintLines,
   buildEngineCommandArgv,
   buildEngineLaunchArgv,
+  buildTerminalLaunchArgv,
+  interactiveEngineShell,
+  isPosixShell,
   commandAvailableInInteractiveShell,
   commandSupportsFlagInInteractiveShell,
   dropPermissionFlagIfUnsupported,
@@ -24,6 +29,7 @@ import {
   refusePermissionFlagIfUnsupported,
   resetCommandFlagSupportCache,
   engineFallbackPrelude,
+  ENGINE_INPUT_DRAIN_SH,
   firstPromptArgs,
   gridPanePrelude,
   harnessNodePrelude,
@@ -34,9 +40,12 @@ import {
 } from './engineLaunch.js'
 import { ENGINES, type AgentEngine } from '../engines/types.js'
 import { engineBin } from './engineBin.js'
-import type { EngineInstallRecipe } from './engineInstall.js'
+import { engineInstallRecipe, type EngineInstallRecipe } from './engineInstall.js'
 import { MIN_OPEN_FILES, RAISE_OPEN_FILES_SH } from './openFiles.js'
 import { DSH_SESSION_ENV, harnessEnvToClear } from '../dsh/launch.js'
+import { launchScriptOf } from '../testing/launchScript.js'
+import { buildGridEngineLaunch, gridConflictingEnvToClear } from './gridLaunch.js'
+import { TmuxBackend } from './tmuxBackend.js'
 
 // The launch script names the `grid` the daemon resolved, and a developer's own HARNESS_GRID_BIN
 // would resolve to THEIR grid. The suite's runtime dir is already a throwaway (vitest.setup.ts), so
@@ -52,6 +61,15 @@ const GRID_PRELUDE = gridPanePrelude('grid')
  *  `engineFallbackPrelude`. `null` tmux: the suite must not depend on what this machine has. */
 const FALLBACK = (engine: AgentEngine, shell: string) => engineFallbackPrelude(engine, shell, null)
 const NO_TMUX = null
+/** How a plain launch ends: job control on, the binary its command names run at the script's top
+ *  level, where a stop is resumed, then the exit handling (`engineRunScript`). */
+const RUN = 'if [ -n "${ZSH_VERSION:-}" ]; then setopt monitor 2>/dev/null || :; else set -m 2>/dev/null || :; fi\n'
+  + 'trap : INT QUIT\n'
+  + 'harness_engine_bin=$1\nshift\nharness_status=0\n"$harness_engine_bin" "$@" || harness_status=$?\nharness_resume\nharness_after'
+/** The engine's own run, in every launch. */
+const RUN_LINE = '"$harness_engine_bin" "$@" || harness_status=$?'
+/** What a POSIX login shell's `-c` is: its launch script, sourced from a one-time file. */
+const SOURCED = /^\. '.+\.sh'$/
 
 describe('buildEngineLaunchArgv', () => {
   it.each(['claude', 'terminal'] as const)('clears inherited harness context before a plain %s session runs', (engine) => {
@@ -67,27 +85,108 @@ describe('buildEngineLaunchArgv', () => {
   })
 
   it('wraps zsh in its interactive login form and execs the resolved binary', () => {
-    expect(buildEngineLaunchArgv('claude', {}, '/bin/zsh', undefined, undefined, NO_TMUX)).toEqual([
-      '/usr/bin/env', 'DISABLE_AUTO_UPDATE=true', '/bin/zsh', '-lic', `${RAISE_OPEN_FILES_SH}${FALLBACK('claude', '/bin/zsh')}${GRID_PRELUDE}harness_engine "$@"`, 'harness-engine', engineBin('claude'),
+    const argv = buildEngineLaunchArgv('claude', {}, '/bin/zsh', undefined, undefined, NO_TMUX)
+    expect(argv).toEqual([
+      '/usr/bin/env', 'DISABLE_AUTO_UPDATE=true', '/bin/zsh', '-lic', expect.stringMatching(SOURCED), 'harness-engine', engineBin('claude'),
     ])
+    expect(launchScriptOf(argv)).toBe(`${RAISE_OPEN_FILES_SH}${FALLBACK('claude', '/bin/zsh')}${GRID_PRELUDE}${RUN}`)
   })
 
   it('uses Ubuntu bash interactive startup files without making it a login shell', () => {
-    expect(buildEngineLaunchArgv('claude', {}, '/bin/bash', undefined, undefined, NO_TMUX)).toEqual([
-      '/bin/bash', '-ic', `${RAISE_OPEN_FILES_SH}${FALLBACK('claude', '/bin/bash')}${GRID_PRELUDE}harness_engine "$@"`, 'harness-engine', engineBin('claude'),
-    ])
+    const argv = buildEngineLaunchArgv('claude', {}, '/bin/bash', undefined, undefined, NO_TMUX)
+    expect(argv).toEqual(['/bin/bash', '-ic', expect.stringMatching(SOURCED), 'harness-engine', engineBin('claude')])
+    expect(launchScriptOf(argv)).toBe(`${RAISE_OPEN_FILES_SH}${FALLBACK('claude', '/bin/bash')}${GRID_PRELUDE}${RUN}`)
+  })
+
+  it('hands the shell its script in a one-time file that removes itself, private to this user', () => {
+    // On the command line the script was most of a launch, and tmux takes the launch as one command of
+    // at most 16KiB: see `launchFile`.
+    const argv = buildEngineLaunchArgv('claude', { cwd: '/work' }, '/bin/zsh', undefined, undefined, NO_TMUX)
+    const file = SOURCED.test(argv[4]) ? argv[4].slice(3, -1) : ''
+    expect(file.startsWith(join(env.ADAPTER_DATA_DIR, 'launch'))).toBe(true)
+    expect(statSync(file).mode & 0o777).toBe(0o600)
+    expect(readFileSync(file, 'utf8').startsWith(`rm -f -- '${file}'\n`)).toBe(true)
+    const run = execFileSync('/bin/sh', ['-c', argv[4], 'harness-engine', '/', '/bin/sh', '-c', 'printf "%s|" "$PWD" "$@"', 'engine', 'a b'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+    expect(run).toBe('/|a b|')
+    expect(existsSync(file)).toBe(false)
+  })
+
+  it('runs Codex under dash, where there is one, when no login shell resolves', () => {
+    // macOS's /bin/sh is bash 3.2, which never sees the engine stop: the engine would wait, stopped, for
+    // good (STOP_PROOF_FUNCTIONS). dash resumes it like the rest.
+    const argv = buildEngineLaunchArgv('codex', {}, 'relative-shell', undefined, undefined, NO_TMUX)
+    expect(argv.slice(0, 2)).toEqual([existsSync('/bin/dash') ? '/bin/dash' : '/bin/sh', '-c'])
+    expect(argv[2]).toMatch(SOURCED)
+    expect(launchScriptOf(argv)).toContain('harness_resume')
+  })
+
+  it('sweeps a launch file that never ran once it is an hour old, and only then', () => {
+    const directory = join(env.ADAPTER_DATA_DIR, 'launch')
+    mkdirSync(directory, { recursive: true })
+    const stale = join(directory, 'never-ran.sh')
+    const fresh = join(directory, 'about-to-run.sh')
+    writeFileSync(stale, 'exit 0\n')
+    writeFileSync(fresh, 'exit 0\n')
+    utimesSync(stale, new Date(Date.now() - 2 * 3600_000), new Date(Date.now() - 2 * 3600_000))
+    buildEngineLaunchArgv('claude', {}, '/bin/zsh', undefined, undefined, NO_TMUX)
+    expect(existsSync(stale)).toBe(false)
+    expect(existsSync(fresh)).toBe(true)
+  })
+
+  it('puts the script on the command line when there is no data folder to write it in', () => {
+    const saved = env.ADAPTER_DATA_DIR
+    env.ADAPTER_DATA_DIR = '/dev/null/no-data-folder'
+    try {
+      const argv = buildEngineLaunchArgv('claude', {}, '/bin/zsh', undefined, undefined, NO_TMUX)
+      expect(argv[4]).toBe(`${RAISE_OPEN_FILES_SH}${FALLBACK('claude', '/bin/zsh')}${GRID_PRELUDE}${RUN}`)
+    } finally { env.ADAPTER_DATA_DIR = saved }
+  })
+
+  it('keeps the longest launch, as the whole tmux command, well inside what tmux takes', async () => {
+    // `tmux new-session` takes a launch as one command, its environment and options included, and
+    // refuses one over 16KiB with "command too long" (measured, tmux 3.7c). The longest a launch gets:
+    // Codex or Claude Code on a grid with its web tools, looked for first, taking over a terminal's
+    // conversation, resuming it, with Harness's Node, and the longest first prompt in three-byte
+    // characters. With the script on the command line Codex's came to 17.9KB; it goes in a file now.
+    const dir = mkdtempSync(join(tmpdir(), 'harness-launch-size-'))
+    const savedPath = process.env.PATH
+    try {
+      writeFileSync(join(dir, 'tmux'), `#!/bin/sh\nfor arg in "$@"; do printf '%s\\000' "$arg"; done > "$(mktemp ${dir}/call.XXXXXX)"\nprintf '%%42\\n'\n`, { mode: 0o755 })
+      process.env.PATH = `${dir}:${savedPath}`
+      const grid = { networkId: 'grid-3378218621364f16', networkName: 'autonomous.ai', baseUrl: 'https://grid.autonomous.ai/grid-3378218621364f16/relay/v1', apiKey: 'gridkey-abc123', model: 'GLM-4.7-Flash', mcpUrl: 'https://api-grid.autonomous.ai/v1/grid/web-mcp/' }
+      for (const engine of ['claude', 'codex'] as const) {
+        for (const call of readdirSync(dir).filter((name) => name.startsWith('call.'))) rmSync(join(dir, call))
+        const built = buildGridEngineLaunch(engine, grid, { hermesSystemManaged: false })
+        if (!built.ok) throw new Error(built.detail)
+        const cwd = '/Users/demo/projects/a project with a fairly long name'
+        const command = buildEngineLaunchArgv(engine, {
+          cwd, firstPrompt: '漢'.repeat(MAX_FIRST_PROMPT_CHARS), resumeSessionId: '019a2b3c-4d5e-7f60-8a9b-0c1d2e3f4a5b',
+          installIfMissing: engineInstallRecipe(engine), waitForPid: { pid: 4242, name: 'Codex' }, bypassPermission: true,
+          extraArgs: built.launch.args, clearEnv: gridConflictingEnvToClear(built.launch), harnessNode: true,
+        }, '/bin/zsh', '/opt/harness/runtime/node/bin/node', '/opt/harness/runtime/grid/grid', '/opt/homebrew/bin/tmux')
+        const created = await new TmuxBackend(undefined, () => 'daemon-0000').create({ cwd, label: `harness-${engine}-1791200000000`, env: built.launch.env, command })
+        expect(created.state, engine).toBe('succeeded')
+        const sizes = readdirSync(dir).filter((name) => name.startsWith('call.')).map((name) => statSync(join(dir, name)).size)
+        expect(Math.max(...sizes), engine).toBeLessThan(15 * 1024)
+      }
+    } finally {
+      process.env.PATH = savedPath
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 
   it('enters the workspace only after interactive startup has completed', () => {
     const argv = buildEngineLaunchArgv('claude', { cwd: '/work/project' }, '/bin/zsh', undefined, undefined, NO_TMUX)
     expect(argv).toEqual([
-      '/usr/bin/env', 'DISABLE_AUTO_UPDATE=true', '/bin/zsh', '-lic',
-      `${RAISE_OPEN_FILES_SH}${FALLBACK('claude', '/bin/zsh')}${GRID_PRELUDE}if ! cd -- "$1"; then printf '%s\\n' 'harness: the selected working directory is unavailable.' >&2; exit 1; fi\n${unreadableCwdGuard(process.platform)}shift\nharness_engine "$@"`,
+      '/usr/bin/env', 'DISABLE_AUTO_UPDATE=true', '/bin/zsh', '-lic', expect.stringMatching(SOURCED),
       'harness-engine', '/work/project', engineBin('claude'),
     ])
+    expect(launchScriptOf(argv)).toBe(
+      `${RAISE_OPEN_FILES_SH}${FALLBACK('claude', '/bin/zsh')}${GRID_PRELUDE}if ! cd -- "$1"; then printf '%s\\n' 'harness: the selected working directory is unavailable.' >&2; exit 1; fi\n${unreadableCwdGuard(process.platform)}shift\n${RUN}`,
+    )
   })
 
-  describe('the engine runs INSIDE the pane shell (`harness_engine`), never exec\'d over it', () => {
+  describe('the engine runs INSIDE the pane shell (`engineRunScript`), never exec\'d over it', () => {
     const run = (argv: string[]) => {
       try {
         return { status: 0, out: execFileSync(argv[0], argv.slice(1), { stdio: ['ignore', 'pipe', 'pipe'] }).toString() }
@@ -136,15 +235,122 @@ describe('buildEngineLaunchArgv', () => {
       const argv = buildEngineLaunchArgv('claude', {}, '/bin/sh', undefined, undefined, NO_TMUX)
       expect(run([argv[0], argv[1], argv[2], 'harness-engine', '/nowhere/claude-that-is-not-here']).status).toBe(127)
     })
+    it.each([
+      ['with pane options (3.0 and later)', '', 'set-option -p -t %5 @harness_engine_exit 3'],
+      // tmux 2.x answers `-p` with its usage text: the mark goes on the pane's window instead.
+      ['before pane options (tmux 2.x)', 'if [ "$2" = -p ]; then echo "set-option: illegal option -- p" >&2; exit 1; fi\n',
+        'set-option -w -t %5 @harness_engine_exit 3'],
+    ])('marks the pane with the engine\'s exit status on a tmux %s', (_tmux, refuse, mark) => {
+      const folder = mkdtempSync(join(tmpdir(), 'harness-exit-mark-'))
+      try {
+        const tmux = join(folder, 'tmux')
+        const calls = join(folder, 'calls')
+        writeFileSync(tmux, `#!/bin/sh\n${refuse}printf '%s\\n' "$*" >> '${calls}'\n`, { mode: 0o755 })
+        const argv = buildEngineLaunchArgv('claude', {}, '/bin/sh', undefined, undefined, tmux)
+        execFileSync(argv[0], [argv[1], argv[2], 'harness-engine', '/bin/sh', '-c', 'exit 3'], {
+          stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, TMUX_PANE: '%5' },
+        }).toString()
+      } catch (error) {
+        expect((error as { status: number }).status).toBe(3)
+      } finally {
+        expect(readFileSync(join(folder, 'calls'), 'utf8').trim()).toBe(mark)
+        rmSync(folder, { recursive: true, force: true })
+      }
+    })
     it('marks the pane with the exit status through the daemon\'s own tmux, and only then hands over a shell', () => {
       const prelude = engineFallbackPrelude('codex', '/bin/bash', '/opt/homebrew/bin/tmux')
-      expect(prelude).toContain(`[ -n "\${TMUX_PANE:-}" ] && '/opt/homebrew/bin/tmux' set-option -p -t "$TMUX_PANE" @harness_engine_exit "$harness_status"`)
+      expect(prelude).toContain(`[ -n "\${TMUX_PANE:-}" ] && { '/opt/homebrew/bin/tmux' set-option -p -t "$TMUX_PANE" @harness_engine_exit "$harness_status"`)
       expect(prelude.indexOf('set-option')).toBeLessThan(prelude.indexOf("exec '/bin/bash'"))
+      // What reached the terminal for the engine is dropped after the mark and before any shell reads it.
+      expect(prelude.indexOf('set-option')).toBeLessThan(prelude.indexOf(ENGINE_INPUT_DRAIN_SH))
+      expect(prelude.indexOf(ENGINE_INPUT_DRAIN_SH)).toBeLessThan(prelude.indexOf("exec '/bin/bash'"))
       expect(prelude).toContain('if [ "$harness_status" -eq 127 ]; then exit 127; fi')
       // zsh is a login shell; bash keeps its interactive rc (same rule as a terminal).
       expect(engineFallbackPrelude('codex', '/bin/zsh', null)).toContain("exec '/bin/zsh' -l\n")
       expect(engineFallbackPrelude('codex', '/bin/bash', null)).toContain("exec '/bin/bash'\n")
       expect(engineFallbackPrelude('codex', '/bin/bash', null)).not.toContain('set-option')
+    })
+  })
+
+  describe('a stop is not an exit: a stopped engine is continued, never left behind', () => {
+    const SHELLS = ['/bin/sh', '/bin/bash', '/bin/zsh', '/bin/dash'].filter(existsSync)
+    const npmRecipe: EngineInstallRecipe = { command: 'npm install -g fixture', source: 'test fixture', executable: { names: ['fixture'], npmGlobal: true } }
+    const launches: Array<[string, () => string[]]> = [
+      ['claude', () => buildEngineLaunchArgv('claude', { cwd: '/work' }, '/bin/zsh', undefined, undefined, '/opt/homebrew/bin/tmux')],
+      ['codex, run again after a failed startup', () => buildEngineLaunchArgv('codex', { cwd: '/work' }, '/bin/bash', undefined, undefined, '/opt/homebrew/bin/tmux')],
+      ['codex without tmux', () => buildEngineLaunchArgv('codex', {}, '/bin/zsh', undefined, undefined, NO_TMUX)],
+      ['an engine installed when missing', () => buildEngineLaunchArgv('claude', { installIfMissing: npmRecipe }, '/bin/zsh', undefined, undefined, '/opt/homebrew/bin/tmux')],
+      ['codex installed when missing, after a take-over', () => buildEngineLaunchArgv('codex', { installIfMissing: { ...npmRecipe, executable: { names: ['codex'] } }, waitForPid: { pid: 2 ** 22 + 7, name: 'Codex' } }, '/bin/zsh', undefined, undefined, '/opt/homebrew/bin/tmux')],
+      ['an engine installed first', () => buildEngineLaunchArgv('opencode', { installFirst: "curl -fsSL 'https://example.invalid/install' | bash" }, '/bin/bash', undefined, undefined, NO_TMUX)],
+    ]
+    const scriptOf = launchScriptOf
+
+    it.each(launches)('%s: parses in every POSIX shell a pane may run it in', (_name, launch) => {
+      const script = scriptOf(launch())
+      for (const shell of SHELLS) expect(() => execFileSync(shell, ['-n', '-c', script], { stdio: ['ignore', 'pipe', 'pipe'] }), shell).not.toThrow()
+    })
+
+    it.each(launches)('%s: runs the engine, and an install, only at the top level of the script', (name, launch) => {
+      // zsh gives up the whole script when a job stops inside a function, an `if`, a loop or an
+      // `eval`, and bash leaves every loop around one: only a top-level run can be resumed. Every
+      // block in these scripts indents its body, so a run in one would not start the line.
+      const lines = scriptOf(launch()).split('\n')
+      const runs = lines.filter((line) => /"\$harness_engine_bin"(?: \$\{harness_codex_no_daemon:\+--no-daemon\})? "\$@" \|\| harness_status=\$\?$/.test(line.trim()))
+      expect(runs.length).toBe(name.startsWith('codex, run again') || name.startsWith('codex installed') ? 4 : 1)
+      for (const run of runs) expect(run).toMatch(/^(?:\[ "\$harness_codex_go" != 1 \] \|\| )?"\$harness_engine_bin"/)
+      for (const install of lines.filter((line) => line.includes('eval '))) expect(install).toMatch(/^(?:\[ -n "\$harness_engine_bin" \] \|\| )?\((?:export npm_config_prefix=.*; )?eval /)
+      // What follows each run is the resume, at the top level too.
+      for (const run of runs) expect(lines[lines.indexOf(run) + 1]).toBe('harness_resume')
+    })
+
+    // The stop signals' numbers differ between macOS and Linux; dash's `kill -l` takes no names, so
+    // these come from Node's table for this platform.
+    const tstp = constants.signals.SIGTSTP
+    const stop = constants.signals.SIGSTOP
+    // `fg` and `jobs` need a terminal; these stand-ins count the stops and report each like the
+    // shell's own would: 128 + TSTP while the engine keeps stopping, then its exit status.
+    const ttou = constants.signals.SIGTTOU
+    const resume = (shell: string, status: number, stops: number, job = true, { again = tstp, before = '' } = {}) => execFileSync(shell, ['-c', `${engineFallbackPrelude('claude', shell, null)}
+stops=${stops}; resumed=0
+jobs() { ${job ? 'return 0' : 'return 1'}; }
+fg() { resumed=$((resumed + 1)); stops=$((stops - 1)); if [ "$stops" -gt 0 ]; then return ${128 + again}; fi; return 7; }
+${before}
+harness_status=${status}
+harness_resume
+printf '%s %s' "$harness_status" "$resumed"`], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+
+    it.each(SHELLS)('%s: continues a stopped engine as often as it stops, and keeps its real exit status', (shell) => {
+      expect(resume(shell, 128 + tstp, 1)).toBe('7 1')
+      expect(resume(shell, 128 + tstp, 3)).toBe('7 3')
+      expect(resume(shell, 128 + stop, 2)).toBe('7 2')
+    })
+
+    it.each(SHELLS)('%s: leaves an engine that exited alone, and a job it did not start', (shell) => {
+      expect(resume(shell, 0, 1)).toBe('0 0')
+      expect(resume(shell, 3, 1)).toBe('3 0')
+      // An engine killed by a signal, or one that exits with a stop's number: not a stop.
+      expect(resume(shell, 128 + 15, 1)).toBe(`${128 + 15} 0`)
+      expect(resume(shell, tstp, 1)).toBe(`${tstp} 0`)
+      // A stop's status with no job to continue (a rc file's job is not the engine): nothing to resume.
+      expect(resume(shell, 128 + tstp, 1, false)).toBe(`${128 + tstp} 0`)
+    })
+
+    it.each(SHELLS)('%s: lets an engine that stops again at once wait a second between resumes, so nothing spins', (shell) => {
+      // Six stops, each within a second of its resume: three resumed at once, the rest after a pause.
+      const started = Date.now()
+      expect(resume(shell, 128 + tstp, 6)).toBe('7 6')
+      expect(Date.now() - started).toBeGreaterThanOrEqual(2_000)
+    }, 20_000)
+
+    it.each(SHELLS)('%s: ends an engine that cannot keep the terminal after five quick tries', (shell) => {
+      // TTOU over and over: the job is never let have the terminal (as when `fg` could not hand it over).
+      expect(resume(shell, 128 + ttou, 50, true, { again: ttou })).toBe('137 5')
+    }, 20_000)
+
+    it.each(SHELLS)('%s: ends an engine at its thousandth stop where the resume calls itself, and only there', (shell) => {
+      // bash and dash recurse once a stop, and overflow some ten thousand deep; zsh loops.
+      const atTheEnd = { before: 'harness_resumes=998' }
+      expect(resume(shell, 128 + tstp, 5, true, atTheEnd)).toBe(shell === '/bin/zsh' ? '7 5' : '137 1')
     })
   })
 
@@ -156,8 +362,8 @@ describe('buildEngineLaunchArgv', () => {
         writeFileSync(binary, '#!/bin/sh\nif [ "$1" = "--help" ]; then\n'
           + (mode === 'failed' ? 'exit 2\n' : `printf '%s\\n' '${mode === 'supported' ? '  --no-daemon  Run locally' : '  --model  Choose a model'}'\nexit 0\n`)
           + 'fi\nprintf "<%s>\\n" "$@"\n', { mode: 0o755 })
-        const prelude = engineFallbackPrelude('codex', '/bin/sh', null)
-        const args = ['-c', `${prelude}harness_engine "$@"`, 'harness-engine', binary, 'resume', 'same-conversation', 'literal $(nothing) `nothing` and spaces']
+        const script = buildEngineLaunchArgv('codex', {}, '/bin/sh', undefined, undefined, NO_TMUX)[2]
+        const args = ['-c', script, 'harness-engine', binary, 'resume', 'same-conversation', 'literal $(nothing) `nothing` and spaces']
         if (mode === 'failed') {
           try { execFileSync('/bin/sh', args, { stdio: ['ignore', 'pipe', 'pipe'] }); expect.fail('launch must refuse an unknown startup mode') }
           catch (error) {
@@ -378,10 +584,10 @@ describe('buildEngineLaunchArgv', () => {
     // On this branch every pane script opens with the open-files raise, the engine-in-a-shell
     // wrapper and the grid prelude; the Node line lands after them, and a launch without
     // `harnessNode` is exactly the baseline above.
-    expect(argv[4]).toBe(`${RAISE_OPEN_FILES_SH}${FALLBACK('claude', '/bin/zsh')}${GRID_PRELUDE}${harnessNodePrelude('/opt/harness runtime/bin/node')}harness_engine "$@"`)
+    expect(launchScriptOf(argv)).toBe(`${RAISE_OPEN_FILES_SH}${FALLBACK('claude', '/bin/zsh')}${GRID_PRELUDE}${harnessNodePrelude('/opt/harness runtime/bin/node')}${RUN}`)
     expect(harnessNodePrelude('/opt/harness runtime/bin/node')).toBe(
       'if ! command -v node >/dev/null 2>&1; then PATH="${PATH:+$PATH:}"\'/opt/harness runtime/bin\'; export PATH; fi\n')
-    expect(buildEngineLaunchArgv('claude', { harnessNode: false }, '/bin/zsh', undefined, undefined, NO_TMUX)[4]).toBe(`${RAISE_OPEN_FILES_SH}${FALLBACK('claude', '/bin/zsh')}${GRID_PRELUDE}harness_engine "$@"`)
+    expect(launchScriptOf(buildEngineLaunchArgv('claude', { harnessNode: false }, '/bin/zsh', undefined, undefined, NO_TMUX))).toBe(`${RAISE_OPEN_FILES_SH}${FALLBACK('claude', '/bin/zsh')}${GRID_PRELUDE}${RUN}`)
   })
 
   it('the DSH prelude, run by a real shell, reaches the engine\'s PATH only when node is missing', () => {
@@ -490,6 +696,60 @@ describe('buildEngineLaunchArgv', () => {
       'muse', 'amp', 'grok', 'agy', 'copilot', 'devin'] as const) {
       expect(LAUNCH_RESUME_FLAG[engine]?.length).toBeGreaterThan(0)
     }
+  })
+})
+
+describe('a login shell that is not POSIX', () => {
+  let dataDir = ''
+  let savedDataDir = ''
+  beforeEach(() => { dataDir = mkdtempSync(join(tmpdir(), 'launch-shell-')); savedDataDir = env.ADAPTER_DATA_DIR; env.ADAPTER_DATA_DIR = dataDir })
+  afterEach(() => { env.ADAPTER_DATA_DIR = savedDataDir; rmSync(dataDir, { recursive: true, force: true }) })
+
+  it('tells the POSIX shells from the rest by name', () => {
+    for (const shell of ['/bin/sh', '/bin/bash', '/bin/zsh', '/usr/bin/dash', '/bin/ksh', '/usr/local/bin/mksh', '/bin/ash', '/usr/bin/yash']) expect(isPosixShell(shell), shell).toBe(true)
+    for (const shell of ['/usr/local/bin/fish', '/bin/tcsh', '/bin/csh', '/opt/homebrew/bin/nu', '/usr/bin/xonsh', '/usr/bin/elvish']) expect(isPosixShell(shell), shell).toBe(false)
+  })
+
+  it('asks each its own way for the person\'s interactive startup files', () => {
+    expect(interactiveEngineShell('/bin/zsh')?.args).toEqual(['-lic'])
+    expect(interactiveEngineShell('/bin/bash')?.args).toEqual(['-ic'])
+    expect(interactiveEngineShell('/usr/bin/dash')?.args).toEqual(['-ic'])
+    expect(interactiveEngineShell('/usr/local/bin/fish')).toMatchObject({ args: ['-i', '-c'], label: 'fish shell' })
+    expect(interactiveEngineShell('/bin/tcsh')?.args).toEqual(['-i', '-c'])
+    expect(interactiveEngineShell('/opt/homebrew/bin/nu')?.args).toEqual(['-c'])
+  })
+
+  it('launches an engine through the shell, which hands a one-time POSIX script to dash, or else /bin/sh', () => {
+    const argv = buildEngineLaunchArgv('claude', { cwd: "/work/it's here" }, '/usr/local/bin/fish', '/opt/node/bin/node', '/opt/grid/bin/grid', '/usr/bin/tmux')
+    expect(argv.slice(0, 3)).toEqual(['/usr/local/bin/fish', '-i', '-c'])
+    expect(argv).toHaveLength(4)
+    // dash, where there is one: run like this it still resumes an engine that stopped (bash as sh does not).
+    expect(argv[3].startsWith(`exec ${existsSync('/bin/dash') ? '/bin/dash' : '/bin/sh'} '`)).toBe(true)
+    const file = /^exec \/bin\/(?:da)?sh '(.+)'$/.exec(argv[3])?.[1]
+    expect(file && file.startsWith(join(dataDir, 'launch'))).toBe(true)
+    const script = readFileSync(file!, 'utf8')
+    // It removes itself first, then takes the arguments a POSIX shell would have been given.
+    expect(script.startsWith(`rm -f -- '${file}'\nset -- '/work/it'"'"'s here' '${engineBin('claude')}'`)).toBe(true)
+    expect(script).toContain(RUN_LINE)
+    // zsh runs its own: it sources the file itself, with the arguments on its command line.
+    const zsh = buildEngineLaunchArgv('claude', { cwd: '/work' }, '/bin/zsh', '/opt/node/bin/node', '/opt/grid/bin/grid', '/usr/bin/tmux')
+    expect(zsh.slice(0, 4)).toEqual(['/usr/bin/env', 'DISABLE_AUTO_UPDATE=true', '/bin/zsh', '-lic'])
+    expect(zsh[4]).toMatch(SOURCED)
+  })
+
+  it.skipIf(!existsSync('/bin/tcsh'))('runs that script for real under tcsh, with its arguments intact and the file gone', () => {
+    const argv = buildEngineLaunchArgv('claude', { cwd: dataDir, installFirst: undefined }, '/bin/tcsh', '/opt/node/bin/node', '/opt/grid/bin/grid', null)
+    const file = /^exec \/bin\/(?:da)?sh '(.+)'$/.exec(argv[argv.length - 1])![1]
+    // Run the file the way tcsh would hand it over, with the engine replaced by printf.
+    writeFileSync(file, readFileSync(file, 'utf8').replace(RUN_LINE, 'printf "%s|" "$PWD" "$harness_engine_bin" "$@"'))
+    const out = execFileSync('/bin/tcsh', ['-i', '-c', argv[argv.length - 1]], { encoding: 'utf8', env: { ...process.env, HOME: dataDir }, stdio: ['ignore', 'pipe', 'ignore'] })
+    expect(out).toContain(`${dataDir}|${engineBin('claude')}|`)
+    expect(existsSync(file)).toBe(false)
+  })
+
+  it('opens a terminal tile with /bin/sh entering the folder, then the person\'s own shell', () => {
+    expect(buildTerminalLaunchArgv({ cwd: '/work' }, '/usr/local/bin/fish')).toEqual(['/bin/sh', '-c', expect.stringContaining('exec "$@"'), 'harness-terminal', '/work', '/usr/local/bin/fish'])
+    expect(buildTerminalLaunchArgv({ cwd: '/work' }, '/bin/zsh').slice(0, 2)).toEqual(['/bin/zsh', '-c'])
   })
 })
 
@@ -828,7 +1088,8 @@ describe('commandSupportsFlagInInteractiveShell', () => {
 
     fakeEngine(binDir, 'opencode', '--auto')
     await expect(commandSupportsFlagInInteractiveShell('opencode', '--auto', shell)).resolves.toBe('supported')
-    // Downgraded underneath us; the cached yes stands until the cache is reset.
+    // Downgraded underneath us where the daemon cannot see the file (only the probe shell's PATH has
+    // it): remembered by name alone, the yes stands until the cache is reset.
     fakeEngine(binDir, 'opencode', '--auto-update')
     await expect(commandSupportsFlagInInteractiveShell('opencode', '--auto', shell)).resolves.toBe('supported')
     resetCommandFlagSupportCache()
@@ -836,6 +1097,52 @@ describe('commandSupportsFlagInInteractiveShell', () => {
     // A refusal is never remembered, so the upgrade is seen at once.
     fakeEngine(binDir, 'opencode', '--auto')
     await expect(commandSupportsFlagInInteractiveShell('opencode', '--auto', shell)).resolves.toBe('supported')
+  })
+
+  // e2e/updates.e2e.ts: remembered by name alone, a yes outlived the update that dropped the flag,
+  // and the engine was launched with a flag it refused at once. A yes is kept for the file it was read from.
+  it('answers an unchanged engine from memory, and asks again once an update has changed its file', async () => {
+    const binDir = mkdtempSync(join(tmpdir(), 'harness-engine-update-'))
+    dirs.push(binDir)
+    process.env.HARNESS_ENGINE_TEST_PATH = binDir
+    const savedPath = process.env.PATH
+    process.env.PATH = `${binDir}:${savedPath ?? ''}`
+    try {
+      const shell = bashProbeShell()
+      const runs = join(binDir, 'runs')
+      const build = (path: string, help: string) => {
+        writeFileSync(path, `#!/bin/sh\necho run >> '${runs}'\nif [ "$1" = "--help" ]; then printf "%s\\n" '${help}'; exit 0; fi\nexit 2\n`)
+        chmodSync(path, 0o700)
+      }
+      const asked = () => existsSync(runs) ? readFileSync(runs, 'utf8').split('\n').filter(Boolean).length : 0
+      const opencode = join(binDir, 'opencode')
+
+      build(opencode, '--auto')
+      await expect(commandSupportsFlagInInteractiveShell('opencode', '--auto', shell)).resolves.toBe('supported')
+      await expect(commandSupportsFlagInInteractiveShell('opencode', '--auto', shell)).resolves.toBe('supported')
+      expect(asked()).toBe(1)
+      // Rewritten in place by an update that dropped the flag: asked again, and refused.
+      build(opencode, '--auto-update')
+      await expect(commandSupportsFlagInInteractiveShell('opencode', '--auto', shell)).resolves.toBe('unsupported')
+      expect(asked()).toBe(2)
+
+      // Installed as versions and linked, the way Homebrew and native installs update: the same size,
+      // and only the link moves.
+      mkdirSync(join(binDir, 'v1')); mkdirSync(join(binDir, 'v2'))
+      build(join(binDir, 'v1', 'opencode'), '--auto')
+      build(join(binDir, 'v2', 'opencode'), '--nope')
+      rmSync(opencode)
+      symlinkSync(join(binDir, 'v1', 'opencode'), opencode)
+      await expect(commandSupportsFlagInInteractiveShell('opencode', '--auto', shell)).resolves.toBe('supported')
+      await expect(commandSupportsFlagInInteractiveShell('opencode', '--auto', shell)).resolves.toBe('supported')
+      expect(asked()).toBe(3)
+      rmSync(opencode)
+      symlinkSync(join(binDir, 'v2', 'opencode'), opencode)
+      await expect(commandSupportsFlagInInteractiveShell('opencode', '--auto', shell)).resolves.toBe('unsupported')
+      expect(asked()).toBe(4)
+    } finally {
+      process.env.PATH = savedPath
+    }
   })
 
   // A shell's own failure exits 1 — as zsh's read-only `status` did — and must not read as a missing
@@ -903,15 +1210,15 @@ describe('buildEngineLaunchArgv — the grid the pane finds', () => {
 
   it('puts the resolved grid first on PATH and turns its update check off, before the engine', () => {
     const managed = '/opt/harness/runtime/grid-0.3.47-darwin-arm64/grid'
-    const script = buildEngineLaunchArgv('claude', {}, '/bin/zsh', undefined, managed)[4]
+    const script = launchScriptOf(buildEngineLaunchArgv('claude', {}, '/bin/zsh', undefined, managed))
 
     expect(script).toContain(`PATH='/opt/harness/runtime/grid-0.3.47-darwin-arm64'"\${PATH:+:$PATH}"\nexport PATH\n`)
     expect(script).toContain('GRID_NO_UPDATE_CHECK=1\nexport GRID_NO_UPDATE_CHECK\n')
-    expect(script.indexOf('export GRID_NO_UPDATE_CHECK')).toBeLessThan(script.indexOf('harness_engine "$@"'))
+    expect(script.indexOf('export GRID_NO_UPDATE_CHECK')).toBeLessThan(script.indexOf(RUN_LINE))
   })
 
   it('leaves PATH alone when grid is only a name on it, but still turns the update check off', () => {
-    const script = buildEngineLaunchArgv('claude', {}, '/bin/zsh', undefined, 'grid')[4]
+    const script = launchScriptOf(buildEngineLaunchArgv('claude', {}, '/bin/zsh', undefined, 'grid'))
 
     expect(script).not.toContain('export PATH')
     expect(script).toContain('GRID_NO_UPDATE_CHECK=1')
@@ -966,7 +1273,7 @@ describe('buildEngineLaunchArgv with installFirst', () => {
     buildEngineLaunchArgv('opencode', { installFirst: install }, '/bin/zsh')[4]
 
   it('leaves the plain launch alone when nothing has to be installed', () => {
-    expect(buildEngineLaunchArgv('opencode', {}, '/bin/zsh', undefined, undefined, NO_TMUX)[4]).toBe(`${RAISE_OPEN_FILES_SH}${FALLBACK('opencode', '/bin/zsh')}${GRID_PRELUDE}harness_engine "$@"`)
+    expect(launchScriptOf(buildEngineLaunchArgv('opencode', {}, '/bin/zsh', undefined, undefined, NO_TMUX))).toBe(`${RAISE_OPEN_FILES_SH}${FALLBACK('opencode', '/bin/zsh')}${GRID_PRELUDE}${RUN}`)
   })
 
   it('keeps the engine argv positional, so the shell never re-parses a path or a flag', () => {
@@ -976,7 +1283,7 @@ describe('buildEngineLaunchArgv with installFirst', () => {
     }, '/bin/zsh')
     expect(argv.slice(0, 4)).toEqual(['/usr/bin/env', 'DISABLE_AUTO_UPDATE=true', '/bin/zsh', '-lic'])
     expect(argv.slice(5)).toEqual(['harness-engine', ...buildEngineCommandArgv('opencode', { bypassPermission: true })])
-    expect(argv[4]).toContain('harness_engine "$@"')
+    expect(launchScriptOf(argv)).toContain(RUN_LINE)
   })
 
   it('runs the engine only when the install succeeded', async () => {
@@ -997,7 +1304,7 @@ describe('buildEngineLaunchArgv with installFirst', () => {
   })
 
   it('prints the command before running it, so a long install is not a hung pane', () => {
-    expect(script('npm install -g opencode-ai')).toContain('npm install -g opencode-ai')
+    expect(launchScriptOf(['-c', script('npm install -g opencode-ai')])).toContain('npm install -g opencode-ai')
   })
 
   it("survives an install line carrying a quote, rather than ending the shell's string", async () => {
@@ -1082,7 +1389,8 @@ if [ "$1" = prefix ]; then exit 0; fi
   })
 
   it('does not add the npm bootstrap to non-npm installers', () => {
-    expect(script(recipe('true'))).not.toContain('managed Node.js/npm')
+    expect(launchScriptOf(['-c', script(recipe('true'))])).toContain('engine is missing')
+    expect(launchScriptOf(['-c', script(recipe('true'))])).not.toContain('managed Node.js/npm')
   })
 })
 

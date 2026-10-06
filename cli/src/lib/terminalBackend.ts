@@ -1,4 +1,5 @@
 import type {
+  SubmitOptions,
   TerminalActionResult,
   TerminalBackendName,
   TerminalCaptureOptions,
@@ -29,7 +30,7 @@ export interface TerminalBackend<Ref extends TerminalRuntimeRef = TerminalRuntim
   validate(runtime: Ref, expected: TerminalProcessExpectation): Promise<RuntimeValidation>
   capture(runtime: Ref, options?: TerminalCaptureOptions): Promise<TerminalReadResult<string>>
   typeLiteral(runtime: Ref, text: string): Promise<TerminalActionResult>
-  submitText(runtime: Ref, text: string): Promise<TerminalActionResult>
+  submitText(runtime: Ref, text: string, options?: SubmitOptions): Promise<TerminalActionResult>
   sendKey(runtime: Ref, key: TerminalLogicalKey): Promise<TerminalActionResult>
   setTitle(runtime: Ref, title: string): Promise<TerminalActionResult>
   notify(runtime: Ref, title: string, body: string): Promise<TerminalActionResult>
