@@ -101,11 +101,12 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
       // else coming. A row left `starting` reads as "Starting" for ever, is made dormant without
       // being retained by discovery's `onExited`, and is refused by the desk's own resume receipt —
       // asking WHICH proof confirmed it got that wrong in both directions, so ask the row instead.
-      const confirmed = registry.byAgent(saved.agentId)
-      const ready = confirmed?.launch?.state === 'ready'
+      // `ownsRoute()` read this row just above, and nothing since has yielded: it is still registered.
+      const confirmed = registry.byAgent(saved.agentId)!
+      const ready = confirmed.launch?.state === 'ready'
         ? confirmed
-        : registry.setLaunch(saved.agentId, { state: 'ready' }) ?? result.session
-      const hooked = (confirmed?.lastHookAt ?? 0) > 0
+        : registry.setLaunch(saved.agentId, { state: 'ready' })!
+      const hooked = confirmed.lastHookAt > 0
       console.log(`[resume] ${sid(saved.agentId)} confirmed · engine=${saved.engine}`
         + ` · hook=${hooked ? 'yes' : 'no'} · ${result.resumed ? 'same conversation' : 'fresh'}`)
       announceSession(ready)

@@ -58,6 +58,16 @@ it('looks up a preallocated Pi session ID in its own project before stopping', a
   vi.mocked(findResumedTranscript).mockResolvedValue('/first-reply.jsonl')
   expect(await captureResumeIdentity(row)).toMatchObject({ sessionId: 'preallocated', transcriptPath: '/first-reply.jsonl' })
 })
+// Pi keeps its sessions by project folder, and a row restored from an older record can have lost its
+// folder. The lookup is asked with no folder rather than a null one, and its refusal ("the Pi conversation
+// location is unavailable", sessionRepair) reaches the caller: Stop is then refused (stopAgentService),
+// rather than killing an engine whose conversation could never be found again.
+it('passes on the lookup\'s refusal for a Pi session whose project folder was not recorded', async () => {
+  Object.assign(row, { engine: 'pi', sessionId: 'preallocated', transcriptPath: null, cwd: null })
+  vi.mocked(findResumedTranscript).mockRejectedValue(new Error('The Pi conversation location is unavailable.'))
+  await expect(captureResumeIdentity(row)).rejects.toThrow('The Pi conversation location is unavailable.')
+  expect(findResumedTranscript).toHaveBeenCalledWith('pi', 'preallocated', { codexHome: undefined, cwd: undefined })
+})
 it.each(['identity', 'cwd', 'unknown', 'gone', 'pid', 'executable', 'start'])('refuses missing or changed process evidence: %s', async mode => {
   if (mode === 'identity') row.processIdentity = null
   if (mode === 'cwd') row.cwd = null
