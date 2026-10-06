@@ -192,6 +192,7 @@ import { startServiceProcess } from './serviceProcess.js'
 import { CORE_EXIT_STOP, CORE_EXIT_UPDATE } from './harnessd/protocol.js'
 import { isLocalSocketName, localSocketPath, refuseServedDataFolder, type LocalSocketServer } from './lib/localSocket.js'
 import { legacyDaemonStatus, localDaemonStatus, saveDaemonPort } from './lib/daemonEndpoint.js'
+import { publishHookRoute } from './lib/hookRoutes.js'
 import { commandBarService } from './lib/commandBar.js'
 import { BackendSocket, isLocalClientId } from './backendSocket.js'
 import { AutonomousDeviceService } from './lib/autonomous-device/service.js'
@@ -2923,6 +2924,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     hookServer.close()
     throw error
   }
+  publishHookRoute(env.ADAPTER_DATA_DIR, hookPort)
   // Claim the pid file for OURSELVES, and only now that the control port is bound. It used to be
   // written by whoever spawned us — so a parent that died mid-handover left a daemon nothing could
   // manage — and then, for a while, by us at the top of this function, before the bind — so a child
