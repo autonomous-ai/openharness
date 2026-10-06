@@ -580,21 +580,16 @@ fn boxes(buf: &mut Buffer, app: &App) {
     let hz = box_set(&lines).4;
     let inner = app.box_inner(tab);
     let frames: Vec<(u64, crate::pane_frame::Frame)> = app.rects.iter().map(|(id, r)| (*id, crate::pane_frame::boxed_in(*r, canvas, inner, status))).filter(|(_, f)| f.content != f.surface).collect();
-    // Every box its own line, in its own colour. Boxes side by side, or stacked, share the divider
-    // between them — each frame takes that one cell, so together the border cells join (`┬`, `┴`,
-    // `├`, `┼`) instead of two separate frames leaving a two-cell gap (`││`). A shared cell keeps
-    // the colour of the box that took it (the box to its left or above, whose right or bottom line
-    // it is).
-    let mut edge: std::collections::HashMap<(u16, u16), Style> = std::collections::HashMap::new();
+    // Each box its own line, in its own colour, never sharing a cell with another (see
+    // `pane_frame::boxed`: `│ │` side by side, touching stacked).
     for (id, f) in &frames {
         let (r, style) = (f.surface, box_style(app, *id));
-        for x in r.x..r.right() { for y in [r.y, r.bottom() - 1] { edge.entry((x, y)).or_insert(style); } }
-        for y in r.y..r.bottom() { for x in [r.x, r.right() - 1] { edge.entry((x, y)).or_insert(style); } }
-    }
-    for (&(x, y), &style) in &edge {
-        let on = |dx: i32, dy: i32| edge.contains_key(&((x as i32 + dx) as u16, (y as i32 + dy) as u16));
-        let g = crate::settings::joint(&lines, y > 0 && on(0, -1), on(0, 1), x > 0 && on(-1, 0), on(1, 0));
-        if let Some(c) = buf.cell_mut((x, y)) { c.set_symbol(g).set_style(style); }
+        let edge: std::collections::HashSet<(u16, u16)> = (r.x..r.right()).flat_map(|x| [(x, r.y), (x, r.bottom() - 1)]).chain((r.y..r.bottom()).flat_map(|y| [(r.x, y), (r.right() - 1, y)])).collect();
+        for &(x, y) in &edge {
+            let on = |dx: i32, dy: i32| edge.contains(&((x as i32 + dx) as u16, (y as i32 + dy) as u16));
+            let g = crate::settings::joint(&lines, y > 0 && on(0, -1), on(0, 1), x > 0 && on(-1, 0), on(1, 0));
+            if let Some(c) = buf.cell_mut((x, y)) { c.set_symbol(g).set_style(style); }
+        }
     }
     for (id, f) in &frames {
         let (id, style) = (*id, box_style(app, *id));

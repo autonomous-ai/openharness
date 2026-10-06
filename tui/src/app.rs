@@ -3753,8 +3753,9 @@ impl App {
         // swaps the theme's own colours — its background the terminal's foreground, its text the
         // terminal's background — so the bar is the theme's text colour with the theme's
         // background as its lettering (an ivory bar with dark text on a dark terminal), not a
-        // transparent one, and not tmux's stock green.
-        if !own && !self.options.pane_look() && !self.options.tmux_look() {
+        // transparent one, and not tmux's stock green. (Whichever focus style: blurred panes keep
+        // the same bar as border ones.)
+        if !own && !self.options.tmux_look() {
             let (bg, fg, _) = crate::theme::palette();
             s = s.bg(fg).fg(bg);
         }

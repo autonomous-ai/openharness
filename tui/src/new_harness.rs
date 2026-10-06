@@ -219,10 +219,11 @@ impl Form {
     }
     fn hint(&self) -> String {
         let page = matches!(self.surface, Surface::Window(_));
-        if self.starting { return if page { "Launch continues if you change windows" } else { "Esc close · launch continues" }.into() }
-        if self.attempt.is_some() { return if page { "Enter check status" } else { "Enter check status · Esc close" }.into() }
+        // The key hints read as every panel's do: `↑↓ move   enter run   esc back`.
+        if self.starting { return if page { "Launch continues if you change windows" } else { "esc close   launch continues" }.into() }
+        if self.attempt.is_some() { return if page { "enter check status" } else { "enter check status   esc close" }.into() }
         if self.focus == Field::Task {
-            return if page { "Enter start · Tab fields · Esc close" } else { "Enter start · Tab fields · Alt-Enter newline · Esc close" }.into();
+            return if page { "tab move   enter start   esc close" } else { "tab move   enter start   alt-enter newline   esc close" }.into();
         }
         if self.focus == Field::Project {
             if let Project::Folder(path) = &self.draft.project {
@@ -230,11 +231,11 @@ impl Form {
             }
         }
         if self.focus == Field::Create {
-            if page { "Enter start · Tab fields · Esc close" } else { "↑/↓ fields · Enter start · Esc close" }.into()
+            if page { "tab move   enter start   esc close" } else { "↑↓ move   enter start   esc close" }.into()
         } else if page && matches!(self.focus, Field::Terminal | Field::Recent(_) | Field::Browse) {
-            "Enter open · Tab fields · Esc close window".into()
+            "tab move   enter open   esc close window".into()
         } else {
-            "↑/↓ fields · Enter choose · Esc back".into()
+            "↑↓ move   enter choose   esc back".into()
         }
     }
     fn describe(&self, field: Field) -> (String, String) {

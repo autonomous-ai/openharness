@@ -189,7 +189,8 @@ pub fn tmux_defaults() -> &'static BTreeMap<String, String> {
     })
 }
 
-/// Explicit user styles win; default surfaces follow the terminal's current theme.
+/// Explicit user styles win; default surfaces follow the terminal's current theme. Only the
+/// panes' own colours: the status bar is the same whichever focus style (blurred or border).
 fn pane_default(name: &str) -> Option<String> {
     let p = crate::theme::pane_palette();
     let pair = |fg, bg| format!("fg={},bg={}", crate::tmuxconf::colour_name(fg), crate::tmuxconf::colour_name(bg));
@@ -198,14 +199,11 @@ fn pane_default(name: &str) -> Option<String> {
         "window-active-style" => pair(p.foreground, p.surface),
         "pane-border-style" => pair(p.border, p.inactive_surface),
         "pane-active-border-style" => pair(p.active_border, p.surface),
-        "status-style" | "window-status-style" => pair(p.status_foreground, p.status),
-        "window-status-current-style" => format!("{},bold", pair(p.status_foreground, p.status)),
-        "window-status-separator" => "  ".into(),
         _ => return None,
     })
 }
 
-const PANE_LOOK: [&str; 8] = ["window-style", "window-active-style", "pane-border-style", "pane-active-border-style", "status-style", "window-status-current-style", "window-status-style", "window-status-separator"];
+const PANE_LOOK: [&str; 4] = ["window-style", "window-active-style", "pane-border-style", "pane-active-border-style"];
 
 /// hn's look, where its defaults differ from tmux's: what `set -g @hn-look tmux` puts back.
 pub const LOOK: [&str; 14] = ["pane-border-status", "pane-border-format", "status-left", "status-right", "status-left-length", "status-right-length", "window-status-format", "window-status-current-format", "set-titles", "set-titles-string", "allow-set-title", "window-status-activity-style", "window-status-bell-style", "status-format[1]"];
@@ -714,7 +712,8 @@ mod tests {
             s.set("@hn-look", Some(look), &g, "", 0).unwrap();
             assert_eq!(s.pane_look(), look == "panes");
             assert_eq!(s.get("window-style", "", None).as_deref(), Some("bg=blue"));
-            if look != "panes" { assert_eq!(s.get("status-style", "", None), defaults().get("status-style").cloned()); }
+            // The status bar is the same whichever focus style — blurred panes do not recolour it.
+            if look != "tmux" { for n in ["status-style", "window-status-style", "window-status-current-style", "window-status-separator"] { assert_eq!(s.get(n, "", None), defaults().get(n).cloned(), "{look}: {n}"); } }
         }
         s.set("window-style", None, &SetFlags { unset: true, ..gw }, "", 0).unwrap();
         assert!(s.get("window-style", "", None).unwrap().starts_with("fg=#"));

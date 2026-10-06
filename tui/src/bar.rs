@@ -836,24 +836,37 @@ mod tests {
         let frame = |id: u64| { let r = app.rects.iter().find(|(p, _)| *p == id).map(|(_, r)| *r).unwrap(); crate::pane_frame::boxed_in(r, app.window_area(app.tab()), app.box_inner(app.tab()), app.pane_status(app.tab())).surface };
         let (left, top_right, below) = (frame(1), frame(2), frame(3));
         let mid = left.y + left.height / 2;
-        // The left box's right edge and the right box's left edge are the same cell — the divider
-        // they share, so the two contents are a cell apart, never two.
+        // Each box is its own frame: the left box's right edge and the right box's left edge touch
+        // (`││`), no blank column between, never two boxes on one line.
         assert_eq!(buf[(left.right() - 1, mid)].symbol(), "│", "{s}");
-        assert_eq!(top_right.x, left.right() - 1, "boxes share the divider:\n{s}");
+        assert_eq!(top_right.x, left.right(), "the boxes touch:\n{s}");
         assert_eq!(buf[(top_right.x, top_right.y + 1)].symbol(), "│", "{s}");
-        // The shared divider joins the two boxes' top lines in a single corner, not two (`┐` `┌`).
-        assert_eq!(buf[(left.right() - 1, left.y)].symbol(), "┬", "the frames join:\n{s}");
+        // Each frame is its own, with its own corners — never joined.
+        assert_eq!(buf[(left.right() - 1, left.y)].symbol(), "┐", "the left box's own corner:\n{s}");
         assert_eq!(buf[(left.x, left.y)].symbol(), "┌");
-        assert_eq!(buf[(top_right.x, top_right.y)].symbol(), "┬", "the right box joins the shared corner:\n{s}");
+        assert_eq!(buf[(top_right.x, top_right.y)].symbol(), "┌", "the right box's own corner:\n{s}");
         let (status_bg, attention) = (theme::paint(app.status_style().bg.unwrap_or(Color::Reset)), theme::paint(theme::ATTENTION));
-        // The divider is the focused pane's own line (the box to the left takes it).
+        // Each box keeps its own colour on its own (unshared) lines.
         assert_eq!(buf[(left.right() - 1, mid)].fg, status_bg, "the focused pane's frame");
-        // The waiting pane is attention on its own (unshared) lines.
         assert_eq!(buf[(top_right.right() - 1, top_right.y + top_right.height / 2)].fg, attention, "the waiting pane's frame");
         assert_ne!(buf[(below.right() - 1, below.y + below.height / 2)].fg, status_bg, "a quiet frame");
         assert_ne!(buf[(below.right() - 1, below.y + below.height / 2)].fg, attention, "a quiet frame");
         // The program is inside its frame.
         assert_eq!(app.content_of(app.tab(), app.rects.iter().find(|(p, _)| *p == 1).unwrap().1), Rect::new(left.x + 1, left.y + 1, left.width - 2, left.height - 2));
+    }
+
+    /// The status bar is the same whichever focus style: blurred panes do not recolour it.
+    #[test]
+    fn the_status_bar_keeps_its_colours_when_panes_are_blurred() {
+        let _colours = crate::term_out::colours_lock();
+        let mut app = app((120, 36), "bottom");
+        let global = crate::options::SetFlags { global: true, ..Default::default() };
+        let mut styles = Vec::new();
+        for focus in ["line", "surface"] {
+            let _ = app.options.set("@hn-focus", Some(focus), &global, "", 0);
+            styles.push((app.status_style(), app.style_of("window-status-current-style", app.active, None)));
+        }
+        assert_eq!(styles[0], styles[1]);
     }
 
     /// Two boxes next to each other touch (`││`); two blurred surfaces have one cell between
@@ -877,11 +890,9 @@ mod tests {
                 let r = app.rects.iter().find(|(p, _)| p == id).unwrap().1;
                 if boxes { crate::pane_frame::boxed_in(r, canvas, inner, status).surface } else { crate::pane_frame::frame(r, canvas, inner, status).surface }
             }).collect();
-            // Boxes side by side (or stacked) share the divider — the contents a cell apart, so
-            // their surfaces overlap that one cell (-1) — while blurred surfaces touch (0) and, a
-            // title off and a pane below, keep its divider row as a one-cell gap (1).
-            let gap_across: i32 = if boxes { -1 } else { 0 };
-            let gap_down: i32 = if boxes { -1 } else if status == crate::layout::Status::Off { 1 } else { 0 };
+            // Boxes and blurred surfaces alike touch both ways (0), as the bottom ones touch the
+            // status line.
+            let (gap_across, gap_down): (i32, i32) = (0, 0);
             let at = format!("{focus}, {side}, titles {titles}:\n{s}");
             // Across: the left edge (the bar's blank column when it is on the left), between, the right edge.
             assert_eq!(f[0].x, canvas.x, "left edge {at}");
