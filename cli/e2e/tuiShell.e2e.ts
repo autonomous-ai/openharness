@@ -32,6 +32,9 @@ it.runIf(binary)('keeps connected local shells interactive and composes a remote
   const shellEnv = { SHELL: '/bin/zsh', skip_global_compinit: '1' }
   world = await startFleet({ envA: shellEnv, envB: shellEnv })
   const { a, b } = world
+  // With the gateway in its own process, core-ready precedes relay registration.
+  // Both computers must be online before this test asks hn to connect to them.
+  await until('both fleet nodes online', () => world!.backend.nodeUp(a.machineId) && world!.backend.nodeUp(b.machineId))
   // These wrappers are the private equivalent of installed harness/hn binaries. They
   // retain each daemon's own environment and never fall through to a user's install.
   for (const machine of [a, b]) {
