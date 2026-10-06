@@ -39,6 +39,8 @@ export interface EngineConfig {
   version?: string
   without?: string[]
   startDelayMs?: number
+  /** Hold startup before the transcript opens until this disposable path's .release file exists. */
+  startupGate?: string
   firstHookDelayMs?: number
   updateAvailable?: string
   /** Ask whether to trust a folder the engine's own config has no answer for, as the real CLIs do. */
