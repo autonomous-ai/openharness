@@ -36,11 +36,9 @@ fn cells(tile: Rect, canvas: Rect, inner: Rect, status: Status, touch: bool) -> 
         if tile.right() < canvas.right() { outer.width += 1 }
         if status == Status::Off && tile.bottom() < canvas.bottom() { outer.height += 1 }
     } else {
-        match status {
-            Status::Top if tile.y != canvas.y => { outer.y += 1; outer.height = outer.height.saturating_sub(1) }
-            Status::Bottom if tile.bottom() != canvas.bottom() => outer.height = outer.height.saturating_sub(1),
-            _ => {}
-        }
+        // The pane-border-status row is already part of the tile handed in (the layout reserves
+        // it for a non-top pane), so a surface keeps every row: a stacked pane sits flush
+        // against the one above, its title filling the gap — never a blank row between surfaces.
     }
     outer = outer.intersection(inner);
     // Too small for a frame with something in it: the program has every cell.
@@ -95,5 +93,26 @@ mod tests {
         // A pane too small for a frame keeps every cell for its program.
         let tiny = boxed(Rect::new(30, 5, 2, 5), canvas, Status::Off);
         assert_eq!(tiny.content, Rect::new(30, 5, 2, 5));
+    }
+
+    #[test]
+    fn stacked_surfaces_have_no_blank_row_between_them() {
+        use crate::layout::{Dir, Node};
+        let canvas = Rect::new(0, 0, 100, 40);
+        for status in [Status::Off, Status::Top, Status::Bottom] {
+            let mut n = Node::new(1, canvas.width, canvas.height);
+            n.status = status;
+            n.split(1, 2, Dir::Vertical);
+            let mut tiles = Vec::new();
+            n.rects(canvas, &mut tiles);
+            let fs: Vec<Frame> = tiles.iter().map(|(_, t)| frame(*t, canvas, canvas, status)).collect();
+            // A stacked pane is flush against the one above; with titles off a single cell
+            // (the divider) separates them, with a title it is the lower pane's title row —
+            // never two blank rows as the reported split-vertical gap.
+            let gap = fs[1].surface.y - fs[0].surface.bottom();
+            assert!(gap <= 1, "{status:?}: stacked surfaces gap {gap} rows");
+            if status == Status::Top { assert_eq!(fs[1].title.unwrap().y, fs[1].surface.y, "{status:?}: lower title on the boundary") }
+            if status == Status::Bottom { assert_eq!(fs[1].title.unwrap().y, fs[1].surface.bottom() - 1, "{status:?}: lower title on the boundary") }
+        }
     }
 }
