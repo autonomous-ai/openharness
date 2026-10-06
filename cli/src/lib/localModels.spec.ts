@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { createHash } from 'node:crypto'
 import { rmSync, writeFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
-import { baseModel, compatibleModels, contextLadder, LocalModels, modelBudget, modelFamily, rankForCoding, readRunRecords, type GridInventory } from './localModels.js'
+import { baseModel, compatibleModels, contextLadder, llamaBuild, LocalModels, modelBudget, modelFamily, rankForCoding, readRunRecords, type GridInventory } from './localModels.js'
 import { GridFleetRpc, type GridFleetResult } from './gridFleetRpc.js'
 import { AppStartError, type AppEngineOps, type AppEngineRecord, type AppModel } from './appModels.js'
 import { encryptDownFrame, encryptRpcResult } from './e2ee/applicationFrames.js'
@@ -115,6 +115,20 @@ afterEach(async () => {
 })
 
 describe('local model discovery and lifecycle', () => {
+  it('accepts only catalog fits that carry a finite coding context', () => {
+    for (const ctx of [undefined, null, NaN, Infinity, -1, 0, 32768]) {
+      expect(compatibleModels({ models: [{ ...card(), fit: { version: 'Q4', ctx } }] })).toEqual([])
+    }
+    expect(compatibleModels({ models: [card()] })).toMatchObject([{ context: 131072 }])
+  })
+
+  it('treats an unavailable or silent version executable as an unknown build', async () => {
+    const silent = join(root, 'silent-engine')
+    await writeFile(silent, '#!/bin/sh\nexit 1\n', { mode: 0o700 })
+    expect(await llamaBuild(silent)).toBeUndefined()
+    expect(await llamaBuild(join(root, 'missing-engine'))).toBeUndefined()
+  })
+
   it('inspects silently and offers only confirmed compatible chat models', async () => {
     expect(compatibleModels([card()])).toEqual([])
     expect(compatibleModels({ models: [card(), { ...card('no'), runnable: false }, { ...card('image'), task: 'image-generation' }] })).toHaveLength(1)
@@ -1768,6 +1782,20 @@ describe('models other apps downloaded, started in their own app', () => {
     expect(JSON.parse(await readFile(join(stateDir, 'app-engines.json'), 'utf8'))).toEqual([])
   })
 
+  it('preserves the same app model\'s record on another grid through start and stop here', async () => {
+    const elsewhere: AppEngineRecord = { spec: 1, modelId: ollama.id, grid: 'elsewhere', name: ollama.name,
+      engine: 'ollama', served: ollama.ref, alias: ollama.name, port: 41002, binary: ollama.binary!, pid: 4243 }
+    await mkdir(stateDir); await writeFile(join(stateDir, 'app-engines.json'), JSON.stringify([elsewhere]))
+    service = appService()
+    const started = await service.act('home', ollama.id, 'start'); await service.settled()
+    expect(started.operation?.phase).toBe('done')
+    expect(JSON.parse(await readFile(join(stateDir, 'app-engines.json'), 'utf8')))
+      .toEqual([elsewhere, expect.objectContaining({ modelId: ollama.id, grid: 'home' })])
+    const stopped = await service.act('home', ollama.id, 'stop'); await service.settled()
+    expect(stopped.operation?.phase).toBe('done')
+    expect(JSON.parse(await readFile(join(stateDir, 'app-engines.json'), 'utf8'))).toEqual([elsewhere])
+  })
+
   it.each([undefined, null, '', '--unsafe', 'bad\nname'])('omits an unusable machine name from an app join (%j)', async name => {
     service = appService({ machineName: () => name })
     const result = await service.act('home', ollama.id, 'start'); await service.settled()
@@ -2109,5 +2137,19 @@ describe('Jev models: Get brings Grid\'s llama.cpp up to a build that serves the
     const retried = await service.act('home', LAYA, 'download'); await service.settled()
     expect(retried.operation?.phase).toBe('done')
     expect(retried.operation?.id).not.toBe(failed.operation?.id)
+  })
+
+  it('preserves the same decision model\'s record on another grid through start and stop here', async () => {
+    const elsewhere: AppEngineRecord = { spec: 1, modelId: LAYA, grid: 'elsewhere', name: 'laya-english',
+      engine: 'llama.cpp', served: 'laya-english', alias: 'laya-english', port: 41002, binary: '/fixture/llama-server', pid: 4344 }
+    await mkdir(stateDir); await writeFile(join(stateDir, 'app-engines.json'), JSON.stringify([elsewhere]))
+    service = jevService()
+    const started = await service.act('home', LAYA, 'start'); await service.settled()
+    expect(started.operation?.phase).toBe('done')
+    expect(JSON.parse(await readFile(join(stateDir, 'app-engines.json'), 'utf8')))
+      .toEqual([elsewhere, expect.objectContaining({ modelId: LAYA, grid: 'home' })])
+    const stopped = await service.act('home', LAYA, 'stop'); await service.settled()
+    expect(stopped.operation?.phase).toBe('done')
+    expect(JSON.parse(await readFile(join(stateDir, 'app-engines.json'), 'utf8'))).toEqual([elsewhere])
   })
 })
