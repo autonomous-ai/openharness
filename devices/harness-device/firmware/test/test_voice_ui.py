@@ -35,6 +35,7 @@ static bool cable_client_supports(uint32_t features) { return (host_features & f
 #include "selection.h"
 #include "carry.h"
 #include "pro_carry_review.h"
+#include "pro_draft_recovery.h"
 #include "visit.h"
 #include "form.h"
 #include "draft.h"
@@ -62,7 +63,7 @@ static struct {
     int voice_question_index;
     char title[80], message[256], voice_target[64], pending_focus[64], pending_machine[64], opening_notice[48];
     char work_agent[64]; uint32_t work_revision; uint8_t work_mode, work_voice_mode;
-    pro_metrics_t metrics; pro_carry_review_t carry_review;
+    pro_metrics_t metrics; pro_carry_review_t carry_review; pro_draft_recovery_t draft_recovery;
     struct { bool valid, supported, loading, pending, uncertain; uint32_t revision, deadline; int index; char error[120],speech_error[96],agent[64],name[64],token[48]; struct { bool can_text; } item[4]; } q;
     agent_t agents[1];
     struct { bool live_summary; } memory[PANE_MEMORY_MAX];
@@ -127,6 +128,15 @@ void open_question(void) { assert(false); }
 bool queue(action_t action) { if (queue_full) return false; queued = action; return true; }
 '''
 harness += function('question_view') + function('copy') + function('input_cancel') + function('view') + function('voice_close') + function('workspace_failed')
+harness += r'''
+#ifdef DEVICE_PRO_COMPANION
+static bool pro_draft_store_queue(bool clear) {
+    if(clear){ht_draft_reset(&draft);memset(&s.carry_review,0,sizeof s.carry_review);pro_draft_recovery_close(&s.draft_recovery);view(HOME);}
+    else s.draft_recovery.store=PRO_RECOVERY_SAVED;
+    return true;
+}
+#endif
+'''
 dispatch = source.split('case A_VOICE:\n', 1)[1].split('case A_PET:', 1)[0]
 intent = source.split('case A_WORK_INTENT:\n', 1)[1].split('case A_LANGUAGE:', 1)[0]
 draft_actions = source.split('case A_DRAFT_EDIT:\n', 1)[1].split('case A_HOME:', 1)[0]
@@ -283,8 +293,9 @@ static void test_pro_carry_review(void) {
     assert(!strcmp(draft.page.text,"Use this guidance.")&&!strcmp(s.carry_review.excerpt,"Keep the original API."));
     ui_set_connected(true);dispatch((action_t){.kind=A_DRAFT_SEND,.revision=3,.text="draft-test"});
     assert(!draft_sends&&!draft.pending);
+    preview.velocity=(int)s.draft_recovery.generation;
     dispatch(preview);assert(s.view==CARRY_PREVIEW);
-    dispatch((action_t){.kind=A_DRAFT_DISCARD,.revision=3,.text="draft-test"});
+    dispatch((action_t){.kind=A_DRAFT_DISCARD,.revision=3,.velocity=(int)s.draft_recovery.generation,.text="draft-test"});
     assert(!draft.page.active&&!s.carry_review.id[0]&&s.view==HOME);
 
     carry_review_fixture();COPY(carry.id,"newer-tray");now=carry.deadline+1;habitat_tick();
@@ -326,7 +337,12 @@ int main(void) {
     assert(s.view==DRAFT && draft.failed && draft.page.error[0]);
     draft.failed=false; dispatch(edit); work(queued); discard(); finish_audio();
     assert(s.view==DRAFT && draft.page.active && !s.voice_open);
-    ui_set_connected(false); assert(s.view==HOME && !draft.page.active);
+    ui_set_connected(false);
+#ifdef DEVICE_PRO_COMPANION
+    assert(s.view==DRAFT && draft.page.active && draft.read_only);
+#else
+    assert(s.view==HOME && !draft.page.active);
+#endif
 
     reset(); s.view=QUESTION; s.q.valid=s.q.supported=s.q.item[0].can_text=true;
     s.q.revision=5; strcpy(s.q.token,"question-token"); strcpy(s.q.agent,"agent");

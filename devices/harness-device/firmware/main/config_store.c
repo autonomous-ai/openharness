@@ -317,3 +317,36 @@ bool config_clear_all(void)
     ESP_LOGW(TAG, "clear_all: %s", ok ? "ok" : "FAILED");
     return ok;
 }
+
+#ifdef DEVICE_PRO_COMPANION
+bool config_load_pro_recovery(pro_recovery_bookmark_t *bookmark)
+{
+    memset(bookmark, 0, sizeof *bookmark);
+    nvs_handle_t h;
+    if (nvs_open(NS, NVS_READONLY, &h) != ESP_OK) return false;
+    size_t size = sizeof *bookmark;
+    bool ok = nvs_get_blob(h, "pro_recover", bookmark, &size) == ESP_OK && size == sizeof *bookmark &&
+              pro_recovery_bookmark_valid(bookmark);
+    nvs_close(h);
+    if (!ok) memset(bookmark, 0, sizeof *bookmark);
+    return ok;
+}
+bool config_save_pro_recovery(const pro_recovery_bookmark_t *bookmark)
+{
+    if (!pro_recovery_bookmark_valid(bookmark)) return false;
+    nvs_handle_t h;
+    if (nvs_open(NS, NVS_READWRITE, &h) != ESP_OK) return false;
+    bool ok = nvs_set_blob(h, "pro_recover", bookmark, sizeof *bookmark) == ESP_OK && nvs_commit(h) == ESP_OK;
+    nvs_close(h);
+    return ok;
+}
+bool config_clear_pro_recovery(void)
+{
+    nvs_handle_t h;
+    if (nvs_open(NS, NVS_READWRITE, &h) != ESP_OK) return false;
+    esp_err_t error = nvs_erase_key(h, "pro_recover");
+    bool ok = (error == ESP_OK || error == ESP_ERR_NVS_NOT_FOUND) && nvs_commit(h) == ESP_OK;
+    nvs_close(h);
+    return ok;
+}
+#endif

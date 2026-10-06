@@ -794,6 +794,7 @@ static void session_up(const cJSON *p)
     ui_set_connected(true);
 #ifdef DEVICE_PRO_COMPANION
     // Use the complete identity, never the legacy truncated machine buffer.
+    ui_draft_source(mid);
     ui_metrics_source(mid, cable_client_supports(CABLE_FEATURE_METRICS));
 #endif
     if (!was) {

@@ -41,5 +41,18 @@ int main(void)
     page.active=true;ht_draft_open(&draft,&page,emit,NULL);
     assert(ht_draft_command(&draft,HT_DRAFT_STATE,2,0,UINT32_MAX-100));
     assert(!ht_draft_tick(&draft,2000));assert(ht_draft_tick(&draft,4900));
+    // Detachment permanently revokes mutations and keeps the last visible part.
+    page.active=true;page.can_send=page.can_undo=true;page.locked=false;
+    ht_draft_open(&draft,&page,emit,NULL);assert(ht_draft_command(&draft,HT_DRAFT_SEND,2,0,100));
+    unsigned interrupted=sent.request;ht_draft_detach(&draft);
+    assert(draft.read_only&&!draft.pending&&draft.page.locked&&!draft.page.can_send&&!draft.page.can_undo);
+    assert(!ht_draft_reply(&draft,"one",interrupted,true,&page));
+    for(int op=HT_DRAFT_UNDO;op<=HT_DRAFT_SEND;op++)assert(!ht_draft_command(&draft,(ht_draft_op_t)op,2,0,100));
+    assert(ht_draft_command(&draft,HT_DRAFT_STATE,2,0,100));page.active=false;
+    assert(ht_draft_reply(&draft,"one",sent.request,true,&page)&&draft.page.active&&draft.read_only);
+    assert(ht_draft_command(&draft,HT_DRAFT_STATE,2,0,100));page.active=true;
+    assert(ht_draft_reply(&draft,"one",sent.request,true,&page)&&draft.read_only&&!draft.page.can_send&&!draft.page.can_undo);
+    assert(ht_draft_command(&draft,HT_DRAFT_MOVE,2,-1,100));assert(ht_draft_tick(&draft,5100));
+    assert(draft.page.active&&draft.read_only&&!strcmp(draft.page.error,"Full message unavailable."));
     printf("draft: PASS (revision/receipt ownership, transport refusal, timeout, recovery, at-most-once send and wraparound); state=%zu bytes\n",sizeof draft);
 }

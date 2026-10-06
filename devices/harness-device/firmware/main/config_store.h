@@ -67,3 +67,11 @@ void config_clear_lock(void);
 
 // Factory reset (BOOT held at power-on, or Settings → Reset): forget all of the above.
 bool config_clear_all(void);
+
+#ifdef DEVICE_PRO_COMPANION
+#include "pro_recovery_bookmark.h"
+// One metadata-only bookmark. No words, source passage or send permission.
+bool config_load_pro_recovery(pro_recovery_bookmark_t *bookmark);
+bool config_save_pro_recovery(const pro_recovery_bookmark_t *bookmark);
+bool config_clear_pro_recovery(void);
+#endif

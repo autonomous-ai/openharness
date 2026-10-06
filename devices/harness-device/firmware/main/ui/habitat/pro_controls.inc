@@ -757,6 +757,38 @@ static void pro_draft(ht_scene_t *f)
 {
     const ht_draft_page_t *p = &draft.page;
     bool carried = pro_carry_review_owns(&s.carry_review, p);
+    if (draft.read_only) {
+        uint8_t mode = s.draft_recovery.mode;
+        pro_heading(f, PRO_TR(mode == PRO_WORK_TASK ? "Your message" : pro_work_label(mode)), A_DRAFT_OPTIONS);
+        char position[80];
+        if (s.draft_recovery.has_words)
+            snprintf(position, sizeof position, PRO_TR("Part %d of %d / %s"), p->position, p->total,
+                s.draft_recovery.ready ? PRO_TR("read only") : PRO_TR("offline copy"));
+        else snprintf(position, sizeof position, "%s", PRO_TR("No local words saved"));
+        ht_pro_text(f, 48, 132, carried ? 356 : 624, &ht_pro_24, DIM, carried ? s.carry_review.name : p->name);
+        ht_pro_text(f, 48, 170, carried ? 356 : 624, &ht_pro_24, ACCENT, position);
+        if (carried) pro_control(f, 432, 122, 256, 80, PRO_TR("Passage preview"), A_CARRY_PREVIEW, 0, !draft.pending);
+        if (s.draft_recovery.has_words) pro_read_text(f, p->text, 220, 6);
+        else if (!s.connected || !pro_draft_recovery_same_host(&s.draft_recovery))
+            ht_pro_wrap(f, 56, 238, 608, 5, 0, &ht_pro_32, FG,
+                        PRO_TR("Connect to the original computer to recover this message."));
+        const char *status = s.draft_recovery.store == PRO_RECOVERY_CLEARING ? "Closing recovery..." :
+            s.draft_recovery.store == PRO_RECOVERY_CLEAR_FAILED ? "Couldn't clear recovery. Try Close again." :
+            s.draft_recovery.store == PRO_RECOVERY_SAVE_FAILED ? "Recovery unavailable after power loss." : draft.pending ? "Recovering message..." : p->error[0] ? p->error :
+            s.draft_recovery.ready ? "Check delivery on the computer." :
+            s.draft_recovery.has_words ? "Only this part is here." : "";
+        if (!strncmp(status, "Read only. ", 11)) status += 11;
+        ht_pro_wrap(f, 56, 514, 608, 2, 0, &ht_pro_24, DIM, PRO_TR(status));
+        pro_control(f, 32, 592, 240, 80, PRO_TR("Close"), A_DRAFT_DISCARD, 0,
+                    s.draft_recovery.store != PRO_RECOVERY_CLEARING);
+        bool available = s.connected && cable_client_supports(CABLE_FEATURE_DRAFT) &&
+            pro_draft_recovery_same_host(&s.draft_recovery) && !draft.pending &&
+            s.draft_recovery.store != PRO_RECOVERY_CLEARING;
+        pro_control(f, 304, 592, 384, 80, PRO_TR("Recover message"), A_DRAFT_STATE, 0, available);
+        pro_note(f, s.draft_recovery.has_words ? PRO_TR("Close removes this copy.") :
+                    PRO_TR("Close removes this recovery bookmark."));
+        return;
+    }
     pro_heading(f, PRO_TR(s.work_voice_mode == PRO_WORK_TASK ? "Your message" : pro_work_label(s.work_voice_mode)), A_DRAFT_OPTIONS);
     char position[64];
     snprintf(position, sizeof position, PRO_TR("Part %d of %d / %s"), p->position, p->total,
@@ -768,7 +800,10 @@ static void pro_draft(ht_scene_t *f)
     pro_read_text(f, p->text, 220, 6);
     bool editable = !draft.pending && !draft.failed && !p->locked;
     pro_hit(40, 210, 640, 300, A_DRAFT_EDIT, 0, editable);
-    if (p->error[0]) ht_pro_wrap(f, 56, 514, 608, 2, 0, &ht_pro_24, color(0xa44343), PRO_TR(p->error));
+    if (s.draft_recovery.store == PRO_RECOVERY_SAVING || s.draft_recovery.store == PRO_RECOVERY_SAVE_FAILED)
+        ht_pro_wrap(f, 56, 514, 608, 2, 0, &ht_pro_24, DIM,
+            PRO_TR(s.draft_recovery.store == PRO_RECOVERY_SAVING ? "Preparing recovery..." : "Recovery unavailable after power loss."));
+    else if (p->error[0]) ht_pro_wrap(f, 56, 514, 608, 2, 0, &ht_pro_24, color(0xa44343), PRO_TR(p->error));
     else if (!p->can_send) ht_pro_wrap(f, 56, 514, 608, 2, 0, &ht_pro_24, DIM,
                                     PRO_TR("Some characters can't be shown. Say this part again."));
     else ht_pro_text(f, 56, 522, 608, &ht_pro_24, DIM, draft.pending ?
@@ -799,6 +834,13 @@ static void pro_carry_preview(ht_scene_t *f)
 static void pro_draft_options(ht_scene_t *f)
 {
     pro_heading(f, PRO_TR("Message options"), A_DRAFT_BACK);
+    if (draft.read_only) {
+        ht_pro_wrap(f, 56, 196, 608, 4, 0, &ht_pro_32, DIM,
+                    PRO_TR("This copy is read only. Recover the full message from the original computer."));
+        pro_row(f, 440, PRO_TR("Back to your message"), PRO_TR("Your original words"), A_DRAFT_BACK, 0, true, false);
+        pro_note(f, PRO_TR("Delivery is checked on the computer."));
+        return;
+    }
     ht_pro_text(f, 48, 135, 624, &ht_pro_24, DIM, draft.page.context);
     bool editable = !draft.pending && !draft.failed && !draft.page.locked;
     pro_row(f, 196, PRO_TR("Add to your message"), PRO_TR("Speak another part"), A_DRAFT_APPEND, 0, editable, false);

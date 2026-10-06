@@ -39,6 +39,7 @@ code = r'''
 #include "selection.h"
 #include "carry.h"
 #include "pro_carry_review.h"
+#include "pro_draft_recovery.h"
 #include "visit.h"
 #include "form.h"
 #include "draft.h"

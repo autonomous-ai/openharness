@@ -10,10 +10,19 @@ void ht_draft_open(ht_draft_t *s,const ht_draft_page_t *page,ht_draft_emit_t emi
 {
     ht_draft_reset(s);s->page=*page;s->emit=emit;s->ctx=ctx;
 }
+void ht_draft_detach(ht_draft_t *s)
+{
+    if (!s->page.active) return;
+    if (!++s->serial) ++s->serial;
+    s->request=0; s->pending=false; s->failed=s->read_only=s->page.locked=true;
+    s->page.can_send=s->page.can_undo=false;
+}
 bool ht_draft_command(ht_draft_t *s,ht_draft_op_t op,uint32_t revision,int delta,uint32_t now)
 {
     if (!s->page.active || !s->page.id[0] || s->pending || revision!=s->page.revision) return false;
-    if (op!=HT_DRAFT_STATE && op!=HT_DRAFT_DISCARD && (s->failed || s->page.locked)) return false;
+    if (s->read_only) {
+        if (op!=HT_DRAFT_STATE && op!=HT_DRAFT_MOVE) return false;
+    } else if (op!=HT_DRAFT_STATE && op!=HT_DRAFT_DISCARD && (s->failed || s->page.locked)) return false;
     if (op==HT_DRAFT_SEND && !s->page.can_send) return false;
     if (op==HT_DRAFT_UNDO && !s->page.can_undo) return false;
     if (op==HT_DRAFT_MOVE && (delta!=1 && delta!=-1)) return false;
@@ -26,16 +35,23 @@ bool ht_draft_reply(ht_draft_t *s,const char *id,uint32_t request,bool ok,const 
 {
     if (!s->pending || !id || strcmp(s->page.id,id) || s->request!=request) return false;
     s->pending=false;
-    if (!page->active) { ht_draft_reset(s);return true; }
+    if (!page->active) {
+        if (s->read_only) {
+            s->failed=true;
+            snprintf(s->page.error,sizeof s->page.error,"Full message unavailable.");
+        } else ht_draft_reset(s);
+        return true;
+    }
     if (strcmp(page->id,s->page.id)) {
         s->failed=true;snprintf(s->page.error,sizeof s->page.error,"Draft unavailable. Check the terminal.");return true;
     }
     s->page=*page;s->failed=!ok;
+    if (s->read_only) { s->page.locked=true; s->page.can_send=s->page.can_undo=false; }
     return true;
 }
 bool ht_draft_tick(ht_draft_t *s,uint32_t now)
 {
     if (!s->pending || (int32_t)(now-s->deadline)<0) return false;
     s->pending=false;s->failed=true;
-    snprintf(s->page.error,sizeof s->page.error,"No reply. Check the draft status.");return true;
+    snprintf(s->page.error,sizeof s->page.error,"%s",s->read_only ? "Full message unavailable." : "No reply. Check the draft status.");return true;
 }

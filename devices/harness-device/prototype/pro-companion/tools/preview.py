@@ -57,6 +57,7 @@ def native_source():
 #include "selection.h"
 #include "carry.h"
 #include "pro_carry_review.h"
+#include "pro_draft_recovery.h"
 #include "visit.h"
 #include "form.h"
 #include "draft.h"
@@ -356,7 +357,7 @@ def main():
         sheet.paste(Image.open(OUT/(state+".png")).resize((360,360),Image.Resampling.LANCZOS),(x,y))
         draw.text((x+12,y+368),state.replace("_"," "),font=font,fill="#263b34")
     sheet.save(OUT/"contact-sheet.png")
-    inputs=[NATIVE/name for name in ("ui_habitat.c","pro_home.inc","pro_controls.inc","pro_work_intent.h","pro_carry_review.h","pro_metrics.h","pro_metrics.c","pro_canvas.c","pro_visual.c","terminal.c")]
+    inputs=[NATIVE/name for name in ("ui_habitat.c","pro_home.inc","pro_controls.inc","pro_work_intent.h","pro_carry_review.h","pro_draft_recovery.h","../../pro_recovery_bookmark.h","pro_metrics.h","pro_metrics.c","pro_canvas.c","pro_visual.c","terminal.c")]
     inputs += [GENERATED/"pro_fonts.c",GENERATED/"pro_art.pack"]
     manifest={"description":"Actual production firmware renderer with illustrative state fixtures; RGB565 expanded to PNG.","states":list(states),
               "source_sha256":{str(path.relative_to(DEVICE)):hashlib.sha256(path.read_bytes()).hexdigest() for path in inputs}}

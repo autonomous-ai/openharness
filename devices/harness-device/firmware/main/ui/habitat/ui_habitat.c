@@ -21,6 +21,7 @@
 #include "pro_work_intent.h"
 #include "pro_metrics.h"
 #include "pro_carry_review.h"
+#include "pro_draft_recovery.h"
 #include "audio_speech.h"
 #include "../companion_speech.h"
 #endif
@@ -96,7 +97,7 @@ typedef enum {
 #ifdef DEVICE_PRO_COMPANION
     A_LAUNCHER, A_WORK_INTENT, A_WORK_MODE, A_WORK_RECORD, A_AGENT_LAYOUT,
     A_TODAY, A_TODAY_REFRESH, A_METRICS_GET,
-    A_CARRY_PREVIEW, A_QUESTION_CLOSE,
+    A_CARRY_PREVIEW, A_QUESTION_CLOSE, A_DRAFT_STORE,
     A_LANGUAGE, A_LANGUAGE_SET,
     A_DAEMONS, A_SCENES, A_APPEAR_PREVIOUS, A_APPEAR_NEXT, A_APPEAR_USE, A_APPEAR_SAVE,
     A_VOICE_SAMPLES, A_SAMPLE_PREVIOUS, A_SAMPLE_NEXT, A_SAMPLE_PLAY,
@@ -230,6 +231,7 @@ static EXT_RAM_BSS_ATTR struct {
     uint8_t work_mode, work_voice_mode;
     pro_metrics_t metrics;
     pro_carry_review_t carry_review;
+    pro_draft_recovery_t draft_recovery;
     ht_character_t preview_character;
     struct {
         uint32_t id, poll_due;
@@ -2246,8 +2248,93 @@ static bool draft_emit(const ht_draft_command_t *c, void *ctx)
     action_t a = {.kind = A_DRAFT_COMMAND, .value = c->op, .revision = c->request,
         .dy = (int)c->revision, .velocity = c->delta};
     COPY(a.id, c->id);
+#ifdef DEVICE_PRO_COMPANION
+    if (draft.read_only) {
+        if (!s.connected || !cable_client_supports(CABLE_FEATURE_DRAFT) ||
+            !pro_draft_recovery_same_host(&s.draft_recovery) ||
+            (c->op != HT_DRAFT_STATE && c->op != HT_DRAFT_MOVE) ||
+            (c->op == HT_DRAFT_MOVE && !s.draft_recovery.ready)) return false;
+        s.draft_recovery.request_generation = s.draft_recovery.generation;
+        COPY(a.text, s.draft_recovery.original_host);
+    }
+#endif
     return xQueueSend(actions, &a, 0) == pdPASS;
 }
+#ifdef DEVICE_PRO_COMPANION
+static void pro_draft_forget(void)
+{
+    if (pro_carry_review_owns(&s.carry_review, &draft.page)) {
+        if (!strcmp(s.carry_review.id, carry.id)) ht_carry_close(&carry);
+        memset(&s.carry_review, 0, sizeof s.carry_review);
+    }
+    ht_draft_reset(&draft); pro_draft_recovery_close(&s.draft_recovery); view(HOME);
+}
+static bool pro_draft_store_queue(bool clear)
+{
+    pro_draft_recovery_t *r = &s.draft_recovery;
+    if (r->store == PRO_RECOVERY_CLEARING) return false;
+    if (!clear && r->store != PRO_RECOVERY_NONE) return false;
+    if (clear) {
+        ht_draft_detach(&draft); pro_draft_recovery_advance(r);
+        if (pro_carry_review_owns(&s.carry_review, &draft.page)) s.carry_review.detached = true;
+    }
+    if (!++r->bookmark_generation) ++r->bookmark_generation;
+    action_t a = {.kind = A_DRAFT_STORE, .value = clear, .revision = r->bookmark_generation};
+    COPY(a.id, draft.page.id);
+    r->store = clear ? PRO_RECOVERY_CLEARING : PRO_RECOVERY_SAVING;
+    if (actions && uxQueueSpacesAvailable(actions) >= 2 && xQueueSend(actions, &a, 0) == pdPASS) {
+        change(); return true;
+    }
+    r->store = clear ? PRO_RECOVERY_CLEAR_FAILED : PRO_RECOVERY_SAVE_FAILED;
+    COPY(draft.page.error, clear ? "Couldn't clear recovery. Try Close again." : "Recovery unavailable after power loss.");
+    change(); return false;
+}
+static void pro_draft_store_work(action_t a)
+{
+    pro_recovery_bookmark_t bookmark = {0};
+    display_lock();
+    pro_draft_recovery_t *r = &s.draft_recovery;
+    bool current = draft.page.active && !strcmp(a.id, draft.page.id) && a.revision == r->bookmark_generation &&
+        r->store == (a.value ? PRO_RECOVERY_CLEARING : PRO_RECOVERY_SAVING);
+    if (current && !a.value) {
+        bookmark.magic = 0x48524431u; bookmark.schema = 1; bookmark.mode = r->mode;
+        bookmark.carried = r->carried; bookmark.revision = draft.page.revision;
+        COPY(bookmark.id, draft.page.id); COPY(bookmark.agent, r->recipient); COPY(bookmark.host, r->original_host);
+        COPY(bookmark.name, pro_carry_review_owns(&s.carry_review, &draft.page) ? s.carry_review.name : draft.page.name);
+        bookmark.checksum = pro_recovery_checksum(&bookmark);
+    }
+    display_unlock();
+    if (!current) return;
+    // Only this FIFO worker writes the bookmark. Close stays visible until its
+    // erase commits; an obsolete save cannot reappear after a successful Close.
+    bool ok = a.value ? config_clear_pro_recovery() : config_save_pro_recovery(&bookmark);
+    display_lock();
+    current = draft.page.active && !strcmp(a.id, draft.page.id) && a.revision == r->bookmark_generation &&
+        r->store == (a.value ? PRO_RECOVERY_CLEARING : PRO_RECOVERY_SAVING);
+    if (current) {
+        if (ok && a.value) pro_draft_forget();
+        else {
+            r->store = ok ? PRO_RECOVERY_SAVED : a.value ? PRO_RECOVERY_CLEAR_FAILED : PRO_RECOVERY_SAVE_FAILED;
+            if (!ok) COPY(draft.page.error, a.value ? "Couldn't clear recovery. Try Close again." : "Recovery unavailable after power loss.");
+            input_cancel(); change();
+        }
+    }
+    display_unlock();
+}
+static void pro_draft_restore(void)
+{
+    pro_recovery_bookmark_t b;
+    if (!config_load_pro_recovery(&b)) return;
+    ht_draft_page_t page = {.active = true, .locked = true, .revision = b.revision};
+    COPY(page.id, b.id); COPY(page.agent, b.agent); COPY(page.name, b.name);
+    ht_draft_open(&draft, &page, draft_emit, NULL); ht_draft_detach(&draft);
+    pro_draft_recovery_t *r = &s.draft_recovery;
+    COPY(r->original_host, b.host); COPY(r->recipient, b.agent); r->mode = b.mode; r->carried = b.carried;
+    r->store = PRO_RECOVERY_SAVED; r->has_words = false;
+    if (!++r->bookmark_generation) ++r->bookmark_generation;
+    pro_draft_recovery_advance(r); s.view = DRAFT;
+}
+#endif
 static bool visit_emit(const ht_visit_command_t *c, void *ctx)
 {
     (void)ctx;
@@ -2304,6 +2391,9 @@ static action_t make_action(hit_t h)
         ) {
         a.revision = draft.page.revision; a.dy = (int)draft.page.revision;
         copy(a.text, sizeof draft.page.id, draft.page.id);
+#ifdef DEVICE_PRO_COMPANION
+        a.velocity = (int)s.draft_recovery.generation;
+#endif
     } else if (h.action == A_FORM_MAIN || h.action == A_FORM_BACK || h.action == A_FORM_SAY) {
         a.revision = form.page.revision;
         a.dy = (int)form.page.revision;
@@ -2450,7 +2540,7 @@ static void draft_move(int delta, uint32_t now)
     if (s.view != DRAFT || draft.pending) return;
     bool read_only = draft.failed || draft.page.locked;
 #ifdef DEVICE_PRO_COMPANION
-    if (read_only && !pro_carry_review_owns(&s.carry_review, &draft.page)) return;
+    if (read_only && !draft.read_only && !pro_carry_review_owns(&s.carry_review, &draft.page)) return;
 #else
     if (read_only) return;
 #endif
@@ -2462,7 +2552,11 @@ static void draft_move(int delta, uint32_t now)
         if (last < 0) last = 0;
         if (step > 0 && s.offset < last) s.offset++;
         else if (step < 0 && s.offset > 0) s.offset--;
-        else if (!read_only && ((step > 0 && draft.page.position < draft.page.total) || (step < 0 && draft.page.position > 1))) {
+        else if ((!read_only
+#ifdef DEVICE_PRO_COMPANION
+                  || (draft.read_only && s.draft_recovery.ready)
+#endif
+                 ) && ((step > 0 && draft.page.position < draft.page.total) || (step < 0 && draft.page.position > 1))) {
             ht_draft_command(&draft, HT_DRAFT_MOVE, draft.page.revision, step, now);
             s.draft_drag = 0; change(); return;
         }
@@ -2494,6 +2588,7 @@ static void dispatch(action_t a)
         change(); break;
     }
     case A_METRICS_GET:
+    case A_DRAFT_STORE:
         break; // Worker-only, never a touch target.
     case A_WORK_INTENT:
         if (!s.connected || s.loading || !active() || s.voice_open || carry.active || carry.error[0]) break;
@@ -2598,9 +2693,23 @@ static void dispatch(action_t a)
 #ifdef DEVICE_PRO_COMPANION
              && s.view != CARRY_PREVIEW
 #endif
-             ) || !draft.page.active || draft.pending ||
-            a.revision != draft.page.revision || strcmp(a.text, draft.page.id)) break;
+             ) || !draft.page.active ||
+            (draft.pending
 #ifdef DEVICE_PRO_COMPANION
+             && !(draft.read_only && a.kind == A_DRAFT_DISCARD)
+#endif
+            ) || a.revision != draft.page.revision || strcmp(a.text, draft.page.id)) break;
+#ifdef DEVICE_PRO_COMPANION
+        if (draft.read_only) {
+            if ((uint32_t)a.velocity != s.draft_recovery.generation) break;
+            if (a.kind == A_DRAFT_DISCARD) {
+                pro_draft_store_queue(true);
+                break; // Local Close never acknowledges or retries delivery.
+            }
+            if (s.draft_recovery.store == PRO_RECOVERY_CLEARING) break;
+            if (a.kind != A_DRAFT_STATE && a.kind != A_CARRY_PREVIEW &&
+                a.kind != A_DRAFT_BACK && a.kind != A_DRAFT_OPTIONS) break;
+        }
         if (a.kind == A_CARRY_PREVIEW) {
             if (pro_carry_review_owns(&s.carry_review, &draft.page)) {
                 s.carry_review.draft_offset = s.offset;
@@ -2609,12 +2718,10 @@ static void dispatch(action_t a)
             }
             break;
         }
-        if (s.carry_review.detached && pro_carry_review_owns(&s.carry_review, &draft.page)) {
+        if (!draft.read_only && s.carry_review.detached && pro_carry_review_owns(&s.carry_review, &draft.page)) {
             if (a.kind == A_DRAFT_DISCARD) {
                 if (!strcmp(s.carry_review.id, carry.id)) ht_carry_close(&carry);
-                ht_draft_reset(&draft);
-                memset(&s.carry_review, 0, sizeof s.carry_review);
-                view(HOME);
+                pro_draft_store_queue(true);
                 break;
             }
             if (a.kind != A_DRAFT_BACK && a.kind != A_DRAFT_OPTIONS) break;
@@ -2949,7 +3056,10 @@ static void dispatch(action_t a)
                 pro_carry_review_begin(&s.carry_review, &carry, a.id, s.agents[find(a.id)].name);
                 s.voice_review = true;
             }
-            if (a.value != 5 && a.value != 6) s.work_voice_mode = pro_work_voice_mode(a.value);
+            if (a.value != 5 && a.value != 6) {
+                s.work_voice_mode = pro_work_voice_mode(a.value);
+                pro_draft_recovery_pin(&s.draft_recovery, a.id, (uint8_t)s.work_voice_mode);
+            }
             if (a.value == 1 || a.value == 8) {
                 COPY(s.work_agent, a.id);
                 s.voice_review = true;
@@ -3224,6 +3334,9 @@ static void worker(void *unused)
     while (xQueueReceive(actions, &a, portMAX_DELAY) == pdTRUE) {
         switch (a.kind) {
 #ifdef DEVICE_PRO_COMPANION
+        case A_DRAFT_STORE:
+            pro_draft_store_work(a);
+            break;
         case A_METRICS_GET: {
             display_lock();
             bool current=s.connected && s.view==TODAY && s.metrics.phase==PRO_METRICS_WAIT &&
@@ -3245,8 +3358,14 @@ static void worker(void *unused)
 #ifdef DEVICE_PRO_COMPANION
             display_lock();
             bool current = s.connected && draft.page.active && draft.pending &&
-                !s.carry_review.detached && !strcmp(a.id, draft.page.id) &&
-                a.revision == draft.request && (uint32_t)a.dy == draft.page.revision && a.value == (int)draft.op;
+                !strcmp(a.id, draft.page.id) && a.revision == draft.request &&
+                (uint32_t)a.dy == draft.page.revision && a.value == (int)draft.op;
+            if (draft.read_only) current = current &&
+                pro_draft_recovery_same_host(&s.draft_recovery) &&
+                s.draft_recovery.request_generation == s.draft_recovery.generation &&
+                !strcmp(a.text, s.draft_recovery.original_host) &&
+                (a.value == HT_DRAFT_STATE || (a.value == HT_DRAFT_MOVE && s.draft_recovery.ready));
+            else current = current && !s.carry_review.detached;
             display_unlock();
             if (!current) break;
 #endif
@@ -3919,7 +4038,12 @@ void habitat_tick(void)
     // A background read must not begin halfway through a person's tap/drag.
     // An already pending request still settles or times out normally.
     if (s.view == FORM && (!s.touch_down || form.pending) && ht_form_tick(&form, now)) change();
-    if (ht_draft_tick(&draft, now)) change();
+    if (ht_draft_tick(&draft, now)) {
+#ifdef DEVICE_PRO_COMPANION
+        if (draft.read_only) s.draft_recovery.ready = false;
+#endif
+        change();
+    }
     if (ht_visit_tick(&visit, now)) {
         s.pending_focus[0] = 0;
         COPY(s.title, "Visit ended");
@@ -4032,6 +4156,9 @@ void ui_init(void)
 #endif
     s.loading = true;
     s.view = HOME;
+#ifdef DEVICE_PRO_COMPANION
+    pro_draft_restore();
+#endif
     s.dirty = true;
     scroll_reversed = config_load_scroll_reversed();
     s.locked = config_lock_enabled();
@@ -4060,6 +4187,7 @@ void ui_set_connected(bool value)
     if (!value) {
 #ifdef DEVICE_PRO_COMPANION
         pro_metrics_source(&s.metrics,NULL,false);
+        pro_draft_recovery_disconnect(&s.draft_recovery);
 #endif
         input_cancel();
         s.voice_retry_until = 0;
@@ -4089,27 +4217,49 @@ void ui_set_connected(bool value)
     if (!value && form.id[0]) { ht_form_reset(&form); view(HOME); }
     if (!value && draft.page.active) {
 #ifdef DEVICE_PRO_COMPANION
-        if (pro_carry_review_owns(&s.carry_review, &draft.page)) {
-            s.carry_review.detached = true;
-            draft.pending = false; draft.failed = draft.page.locked = true; draft.page.can_send = false;
-            COPY(draft.page.error, "Connection ended. Check the desktop before starting again.");
-        } else
+        ht_draft_detach(&draft);
+        if (pro_carry_review_owns(&s.carry_review, &draft.page)) s.carry_review.detached = true;
+        COPY(draft.page.error, "Connection ended. Only this part is here.");
+#else
+        ht_draft_reset(&draft); view(HOME);
 #endif
-        { ht_draft_reset(&draft); view(HOME); }
     }
     if (!value && (s.voice_open || audio_client_active())) {
         audio_client_abort();
         voice_close();
 #ifdef DEVICE_PRO_COMPANION
-        if (pro_carry_review_owns(&s.carry_review, &draft.page)) view(DRAFT);
+        if (draft.page.active) view(DRAFT);
         else
 #endif
         view(HOME);
     }
+#ifdef DEVICE_PRO_COMPANION
+    if (!value && draft.page.active) view(DRAFT);
+#endif
     change();
     display_unlock();
 }
 #ifdef DEVICE_PRO_COMPANION
+void ui_draft_source(const char *machine)
+{
+    display_lock();
+    if (pro_draft_recovery_source(&s.draft_recovery, s.connected ? machine : NULL)) {
+        input_cancel();
+        if (draft.page.active) {
+            ht_draft_detach(&draft);
+            if (pro_carry_review_owns(&s.carry_review, &draft.page)) s.carry_review.detached = true;
+            COPY(draft.page.error, s.draft_recovery.has_words ? "Only this part is here." : "");
+        }
+        // A new welcome cannot accept an edit result captured on the prior link.
+        if (s.voice_open || audio_client_active()) {
+            audio_client_abort(); voice_close();
+            if (!draft.page.active) view(HOME);
+        }
+        if (draft.page.active) view(DRAFT);
+        change();
+    }
+    display_unlock();
+}
 void ui_metrics_source(const char *machine, bool supported)
 {
     display_lock();
@@ -5292,6 +5442,8 @@ void ui_voice_draft(const cJSON *p)
     display_lock();
     if (!s.voice_open || !s.voice_waiting || !s.voice_review ||
 #ifdef DEVICE_PRO_COMPANION
+        draft.read_only || s.draft_recovery.capture_generation != s.draft_recovery.generation ||
+        strcmp(page.agent, s.draft_recovery.recipient) ||
         (s.work_voice_mode != PRO_WORK_TASK && strcmp(page.agent, s.work_agent)) ||
         (s.carry_review.id[0] && (strcmp(page.agent, s.carry_review.agent) ||
             (s.carry_review.draft[0] && strcmp(page.id, s.carry_review.draft)))) ||
@@ -5303,7 +5455,15 @@ void ui_voice_draft(const cJSON *p)
 #ifdef DEVICE_PRO_COMPANION
     if (s.voice_carry && s.carry_review.id[0]) COPY(s.carry_review.draft, page.id);
 #endif
+#ifdef DEVICE_PRO_COMPANION
+    bool first = !draft.page.active;
+#endif
     voice_close(); ht_draft_open(&draft, &page, draft_emit, NULL);
+#ifdef DEVICE_PRO_COMPANION
+    s.draft_recovery.has_words = true;
+    s.draft_recovery.carried = pro_carry_review_owns(&s.carry_review, &draft.page);
+    if (first) { s.draft_recovery.store = PRO_RECOVERY_NONE; pro_draft_store_queue(false); }
+#endif
     view(DRAFT); ht_gesture_guard(&gesture, ms());
     display_unlock();
 }
@@ -5320,18 +5480,45 @@ void ui_draft_state(const cJSON *p)
     ht_draft_op_t op = draft.op; int direction = draft.delta;
 #ifdef DEVICE_PRO_COMPANION
     bool carried_draft = pro_carry_review_owns(&s.carry_review, &draft.page);
-    if (carried_draft && draft.pending && draft.request == (uint32_t)serial && !strcmp(page.id, draft.page.id)) {
-        if (page.active && strcmp(page.agent, s.carry_review.agent)) { display_unlock(); return; }
-        const cJSON *carried = cJSON_GetObjectItemCaseSensitive(p, "carryId");
-        bool sent = ok && cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(p, "sent")) &&
-            cJSON_IsString(carried) && !strcmp(carried->valuestring, s.carry_review.id);
-        if (!page.active && !sent && !(ok && op == HT_DRAFT_DISCARD)) {
-            // Expired/unknown drafts and uncorrelated delivery receipts must not
-            // erase the person's words or quietly permit a second Send.
+    if (draft.read_only) {
+        // A cached part may only be replaced by a current, explicitly requested
+        // page from its original host, draft and recipient. Focus is irrelevant.
+        if (!s.connected || !draft.pending || draft.request != (uint32_t)serial ||
+            strcmp(page.id, draft.page.id) || !pro_draft_recovery_same_host(&s.draft_recovery) ||
+            s.draft_recovery.request_generation != s.draft_recovery.generation ||
+            (op != HT_DRAFT_STATE && op != HT_DRAFT_MOVE)) { display_unlock(); return; }
+        if (page.active && (strcmp(page.agent, s.draft_recovery.recipient) ||
+            page.revision < draft.page.revision ||
+            (op == HT_DRAFT_MOVE && (page.revision != draft.page.revision + 1 ||
+             page.position != draft.page.position + direction || page.total != draft.page.total)))) {
+            display_unlock(); return;
+        }
+        if (page.active) {
+            COPY(page.name, draft.page.name); COPY(page.context, draft.page.context);
+        }
+        // Even older hosts that return mutable flags cannot restore authority.
+        // A historical sent:true never hides recovered words or means completion.
+        s.draft_recovery.ready = page.active;
+        if (page.active) s.draft_recovery.has_words = true;
+    }
+    if (!draft.read_only && draft.pending && draft.request == (uint32_t)serial && !strcmp(page.id, draft.page.id)) {
+        if (page.active && strcmp(page.agent, draft.page.agent)) { display_unlock(); return; }
+        if (!page.active) {
+            const cJSON *carried = cJSON_GetObjectItemCaseSensitive(p, "carryId");
+            bool sent = ok && cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(p, "sent")) &&
+                (!carried_draft || (cJSON_IsString(carried) && !strcmp(carried->valuestring, s.carry_review.id)));
+            if (sent || (ok && op == HT_DRAFT_DISCARD)) {
+                pro_draft_store_queue(true);
+                if (draft.page.active) view(DRAFT);
+                display_unlock(); return;
+            }
+            // Missing records after a fast host restart must preserve every
+            // reviewed instruction, even when no disconnect event was observed.
             char error[sizeof page.error]; COPY(error, page.error);
-            page = draft.page; page.locked = true; page.can_send = false;
+            page = draft.page; page.locked = true; page.can_send = page.can_undo = false;
             COPY(page.error, error[0] ? error : "Delivery not confirmed. Check the desktop.");
-            s.carry_review.detached = true;
+            if (carried_draft) s.carry_review.detached = true;
+            draft.read_only = true; pro_draft_recovery_advance(&s.draft_recovery);
             ok = false;
         }
     }
@@ -5354,7 +5541,7 @@ void ui_draft_state(const cJSON *p)
             || s.view == CARRY_PREVIEW
 #endif
             ) {
-            if (ok && op == HT_DRAFT_MOVE) {
+            if ((ok || draft.read_only) && op == HT_DRAFT_MOVE && page.active) {
 #ifdef DEVICE_PRO_COMPANION
                 s.offset = direction < 0 ? question_rows(page.text)-DRAFT_ROWS : 0;
 #else

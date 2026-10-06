@@ -17,6 +17,7 @@ code=r'''
 #include "draft.h"
 #include "carry.h"
 #include "pro_carry_review.h"
+#include "pro_draft_recovery.h"
 #include "pro_work_intent.h"
 #include <stdbool.h>
 #include <stdint.h>
@@ -45,7 +46,7 @@ static const cJSON *cJSON_GetObjectItemCaseSensitive(const cJSON *v,const char *
 static cJSON object(cJSON *children,int n){for(int i=0;i<n;i++)children[i].next=i+1<n?&children[i+1]:NULL;return(cJSON){.child=children};}
 static ht_draft_t draft;
 static ht_carry_t carry;
-static struct {pro_carry_review_t carry_review;bool voice_carry,voice_open,voice_waiting,voice_review;int voice_return,view,offset,work_voice_mode;uint32_t voice_draft_revision;char title[80],message[256],work_agent[64];} s;
+static struct {pro_carry_review_t carry_review;pro_draft_recovery_t draft_recovery;bool connected, voice_carry,voice_open,voice_waiting,voice_review;int voice_return,view,offset,work_voice_mode;uint32_t voice_draft_revision;char title[80],message[256],work_agent[64];} s;
 static int gesture,changes;
 static uint32_t ms(void){return 1000;}
 static void change(void){changes++;}
@@ -55,6 +56,13 @@ static void display_unlock(void){}
 static void voice_close(void){s.voice_open=s.voice_waiting=s.voice_review=false;}
 static void view(int v){s.view=v;s.offset=0;}
 static void ht_gesture_guard(int *g,uint32_t t){(void)g;(void)t;}
+#ifdef DEVICE_PRO_COMPANION
+static bool pro_draft_store_queue(bool clear) {
+    if(clear) {if(pro_carry_review_owns(&s.carry_review,&draft.page)&&!strcmp(carry.id,s.carry_review.id))ht_carry_close(&carry);ht_draft_reset(&draft);memset(&s.carry_review,0,sizeof s.carry_review);pro_draft_recovery_close(&s.draft_recovery);view(HOME);}
+    else s.draft_recovery.store=PRO_RECOVERY_SAVED;
+    return true;
+}
+#endif
 static bool draft_emit(const ht_draft_command_t *c,void *ctx){(void)c;(void)ctx;return true;}
 #define COPY(dst,src) snprintf(dst,sizeof(dst),"%s",src)
 '''
@@ -77,7 +85,12 @@ int main(void){
     assert(draft_page(&p,&page) && !page.can_send);fields[3].valuestring="Keep the API.";
     s.voice_open=s.voice_waiting=true;s.voice_return=HOME;
     ui_voice_draft(&p);assert(!draft.page.active); // Normal tap-to-send cannot consume a draft reply.
-    s.voice_review=true;ui_voice_draft(&p);
+    s.voice_review=true;
+#ifdef DEVICE_PRO_COMPANION
+    s.connected=true;pro_draft_recovery_source(&s.draft_recovery,"computer");
+    pro_draft_recovery_pin(&s.draft_recovery,"a",PRO_WORK_TASK);
+#endif
+    ui_voice_draft(&p);
     assert(draft.page.active && !s.voice_open && s.view==DRAFT && !strcmp(draft.page.name,"Original recipient"));
 #ifdef DEVICE_PRO_COMPANION
     ht_draft_reset(&draft); s.voice_open=s.voice_waiting=s.voice_review=true;s.work_voice_mode=PRO_WORK_GOAL;
@@ -96,7 +109,11 @@ int main(void){
     fields[2].type=TRUE;assert(draft_page(&p,&page));ht_draft_open(&draft,&page,draft_emit,NULL);
     strcpy(carry.id,"quote");assert(ht_draft_command(&draft,HT_DRAFT_SEND,2,0,1000));
     snprintf(request,sizeof request,"draft-%lu",(unsigned long)draft.request);fields[2].type=0;ui_draft_state(&p);
+#ifdef DEVICE_PRO_COMPANION
+    assert(!draft.page.active && carry.active); // An unrelated tray is not this Task's attachment.
+#else
     assert(!draft.page.active && !carry.active);
+#endif
     fields[2].type=TRUE;assert(draft_page(&p,&page));ht_draft_open(&draft,&page,draft_emit,NULL);
     s.view=DRAFT;assert(ht_draft_command(&draft,HT_DRAFT_MOVE,2,1,1000));
     fields[10].valuestring="draft-0";ui_draft_state(&p);assert(draft.pending);
@@ -111,7 +128,8 @@ int main(void){
         memset(&s,0,sizeof s);ht_draft_reset(&draft);
         carry=(ht_carry_t){.active=true,.rows=3,.id="quote",.source="Research",.excerpt="Keep the original API."};
         pro_carry_review_begin(&s.carry_review,&carry,"a","Original recipient");
-        s.voice_open=s.voice_waiting=s.voice_review=s.voice_carry=true;s.voice_return=HOME;
+        s.voice_open=s.voice_waiting=s.voice_review=s.voice_carry=true;s.voice_return=HOME;s.connected=true;
+        pro_draft_recovery_source(&s.draft_recovery,"computer");pro_draft_recovery_pin(&s.draft_recovery,"a",PRO_WORK_TASK);
         fields[2].type=TRUE;fields[9].type=TRUE;fields[11].type=TRUE;fields[12].valuestring="quote";
         fields[4].valuestring="changed-recipient";ui_voice_draft(&p);
         assert(s.voice_open&&!draft.page.active&&!s.carry_review.draft[0]);

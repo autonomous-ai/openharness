@@ -27,6 +27,7 @@ cc -std=c11 -Wall -Wextra -Werror -O1 -g -fsanitize="${SANITIZERS:-undefined,bou
 "$out/test_character"
 python3 "$here/test_character_preferences.py"
 python3 "$here/test_pro_appearance_preferences.py"
+python3 "$here/test_pro_recovery_store.py"
 python3 "$here/test_pro_language.py"
 python3 "$here/test_pro_daemon_registry.py"
 python3 "$here/test_tim_art_preferences.py"

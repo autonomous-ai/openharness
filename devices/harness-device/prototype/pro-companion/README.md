@@ -473,3 +473,50 @@ The final `.9` image also passed its live USB trial: 120 seconds uptime, 586
 frames, live pane data, zero resets and zero touch-read failures while the radio
 continued retrying the unavailable network. The earlier startup-order failure
 was corrected before this final installation.
+
+
+### Reviewed message recovery
+
+Task, Goal, Loop and Carry reviews become permanently read-only when the link
+ends or the host reports that a reviewed message is unavailable. The current
+part stays in RAM. **Recover message** requests the original draft from the exact
+original cable host; it never changes recipient, restores Send/edit/undo, or
+infers delivery from a reconnect. Recovered parts can be read in either direction.
+A historical submission receipt leaves the words visible until explicit Close.
+Carry's frozen preview remains available only while that RAM state survives;
+recovery never claims to show the full host-owned source passage.
+
+The dock-only device can lose power when USB is unplugged. A single checked,
+256-byte NVS bookmark stores only the original draft/host/recipient identities,
+intent, recipient label and revision. It does not store any words, part, carried
+source name or passage. It is saved once for the first accepted draft UUID;
+edits, part movement and touches do not cause more writes. After a successful
+save, boot restores a read-only **Recover message** entry with **No local words
+saved**. Failed storage is shown as unavailable after power loss. Close erases
+the bookmark before dismissing the entry; a failed erase stays visible for retry.
+The queued writer invalidates stale save/clear actions and never restores send
+authority. Physical free NVS capacity and abrupt-power endurance require a board
+trial; no partition size or battery assumptions changed.
+
+Full recovery requires a matching host that still retains its bounded archive.
+The matching host implementation keeps this data across cable removal/path changes
+for a fixed 30-minute lifetime. A daemon restart, expiration, missing owner or old
+host can make the full message unavailable. The device then keeps only the part
+still in RAM, or only its identity bookmark after reboot. No archive discovery,
+automatic retrieval, retry of delivery, remote retargeting or complete-source
+quote reconstruction is added. The existing glyph send gate is unchanged; new
+recovery interface copy is English.
+
+The SDK-independent NVS fault replay is included in `firmware/test/run.sh`.
+The actual native callback/command/boot/render replay additionally uses the
+pinned ESP-IDF cJSON and generated Pro fonts:
+
+```sh
+IDF_PATH=/path/to/esp-idf-v5.5.3 python3 devices/harness-device/firmware/test/test_pro_draft_recovery.py
+```
+
+`HABITAT_RECOVERY_TRANSCRIPT` can supply exact CableSession frames for the same
+replay, and `HABITAT_PRO_PREVIEW_DIR` records native 720 px PPMs. These checks cover
+identity/revision guards, offline/unknown states, metadata storage failures,
+stale workers, local Close and read-only multi-part navigation. They do not
+establish physical unplug recovery, touch comfort, flash wear or terminal delivery.
