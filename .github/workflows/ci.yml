@@ -522,7 +522,10 @@ jobs:
       - name: Release unit tests
         # Use the shipped target for both commands so Cargo can reuse the
         # dependencies, instead of compiling once for glibc and again for musl.
-        run: cargo test --locked --release --target ${{ matrix.target }}
+        env:
+          TERM: xterm-256color
+          COLORTERM: truecolor
+        run: env -u NO_COLOR cargo test --locked --release --target ${{ matrix.target }}
       - name: Build static Linux binary
         run: cargo build --locked --release --target ${{ matrix.target }}
       - name: Complete native fixtures with bounded parallelism

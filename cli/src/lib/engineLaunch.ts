@@ -1120,15 +1120,6 @@ export function gridPanePrelude(binary: string): string {
   return [...onPath, `${GRID_NO_UPDATE_CHECK_VAR}=1`, `export ${GRID_NO_UPDATE_CHECK_VAR}`, ''].join('\n')
 }
 
-/**
- * Install-if-missing has to resolve twice: before installing, and again after it returns.
- *
- * A `curl | bash` installer cannot export PATH back into its parent shell. Several supported
- * vendors correctly put their binary under ~/.local/bin and update a profile for the NEXT shell,
- * which previously made this very pane print `command not found` after a successful install. The
- * source-owned candidate paths below bridge that one-shell gap without sourcing arbitrary profile
- * files a second time. npm installs also get their active global prefix as a fallback.
- */
 /** Install if needed, then run an exact native argv from an existing interactive prompt.
  * The parent shell keeps its helpers and environment when the agent exits. */
 export function shellAgentArgv(binary: string, args: string[], recipe: EngineInstallRecipe,
@@ -1138,6 +1129,15 @@ export function shellAgentArgv(binary: string, args: string[], recipe: EngineIns
     'harness-shell-agent', binary, ...args]
 }
 
+/**
+ * Install-if-missing has to resolve twice: before installing, and again after it returns.
+ *
+ * A `curl | bash` installer cannot export PATH back into its parent shell. Several supported
+ * vendors correctly put their binary under ~/.local/bin and update a profile for the NEXT shell,
+ * which previously made this very pane print `command not found` after a successful install. The
+ * source-owned candidate paths below bridge that one-shell gap without sourcing arbitrary profile
+ * files a second time. npm installs also get their active global prefix as a fallback.
+ */
 function installIfMissingScript(recipe: EngineInstallRecipe, runtimeNode: string): string {
   const install = recipe.command
   const names = recipe.executable.names.map(shellSingleQuote).join(' ')
