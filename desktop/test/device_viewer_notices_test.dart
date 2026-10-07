@@ -3,6 +3,7 @@
 // removal it reads becomes a band — red when a device nobody has looked at did it.
 import 'dart:async';
 
+import 'package:flutter/widgets.dart' show AppLifecycleState;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/api/api_client.dart';
 import 'package:harness/auth/auth_session.dart';
@@ -169,8 +170,14 @@ class _Api extends ApiClient {
           };
   }
 
+  /// How many times the machine list was read.
+  int machineReads = 0;
+
   @override
-  Future<List<Machine>> machines() async => const [];
+  Future<List<Machine>> machines() async {
+    machineReads++;
+    return const [];
+  }
 }
 
 /// A viewer that is already signed in when it opens.
@@ -291,18 +298,59 @@ void main() {
     return app;
   }
 
+  test('with no machine to hear pushes from, the machine list is read again on its own and on coming back to the tab', () async {
+    final app = AppNotifier(
+      config: AppConfig.dev,
+      authSession: AuthSession(storage: MemoryStore()),
+      configStore: null,
+      cliLogin: _SignedIn(),
+      viewer: ViewerServices(
+        config: AppConfig.dev,
+        session: AuthSession(storage: MemoryStore()),
+        keys: keys,
+      ),
+    )..deafMachineListInterval = const Duration(milliseconds: 40);
+    final api = _Api(backend)..user = 'user-a';
+    app.api = api;
+    addTearDown(app.dispose);
+    await app.bootstrap();
+    await settle();
+    final afterBoot = api.machineReads;
+    expect(afterBoot, greaterThan(0));
+
+    // Nothing connected: no `machines_changed` can reach this tab, so the list is asked for again.
+    await Future<void>.delayed(const Duration(milliseconds: 130));
+    await settle();
+    expect(api.machineReads, greaterThan(afterBoot));
+
+    // Behind other tabs: not asked for at all.
+    app.appLifecycleChanged(AppLifecycleState.hidden);
+    final hidden = api.machineReads;
+    await Future<void>.delayed(const Duration(milliseconds: 130));
+    await settle();
+    expect(api.machineReads, hidden);
+
+    // Back to the tab (the person was signing in their computer): asked for at once.
+    final beforeResume = api.machineReads;
+    app.deafMachineListInterval = const Duration(hours: 1);
+    app.appLifecycleChanged(AppLifecycleState.resumed);
+    await settle();
+    expect(api.machineReads, greaterThan(beforeResume));
+  });
+
   test('signing in by hand as another account starts that account\'s list over', () async {
     // Account A: this browser joined its log.
     await backend.add(box2, 'machine', 'b' * 32, 'box2');
-    await openAs(backend, 'user-a', byHand: true);
+    await openAs(backend, backend.acct, byHand: true);
     final me = b64e((await keys.identity()).pub);
     expect(backend.state.active[me]?.kind, 'viewer');
 
     // Signed in as B in the same browser, by hand: B's log is another account's, and this sign-in is
-    // new — a new list, not a backend that lies. The profile is not waited for.
+    // new — a new list, not a backend that lies. A fresh sign-in's profile names the same account
+    // as its signed log; restored-session profile mismatches are exercised below.
     final other = _Backend('acct-2');
     await other.add(phone, 'viewer', '', 'Phone');
-    final b = await openAs(other, 'user-b', byHand: true);
+    final b = await openAs(other, other.acct, byHand: true);
     final listing = await logOf(b).list();
     expect(
       listing.frozen,
@@ -319,7 +367,7 @@ void main() {
 
   test('a restored session whose /me id differs does not reset the list', () async {
     await backend.add(box2, 'machine', 'b' * 32, 'box2');
-    await openAs(backend, 'user-a', byHand: true);
+    await openAs(backend, backend.acct, byHand: true);
     await backend.add(phone, 'viewer', '', 'Phone');
     final first = await openAs(backend, 'user-a');
     expect(first.newDevices.map((d) => d.label), ['Phone']);
@@ -909,7 +957,7 @@ void main() {
   test('the sign-in is known to the log before the boot reads anything else (a pane restore reads it first)', () async {
     // Account A: this browser joined its log by hand.
     await backend.add(box2, 'machine', 'b' * 32, 'box2');
-    await openAs(backend, 'user-a', byHand: true);
+    await openAs(backend, backend.acct, byHand: true);
     final me = b64e((await keys.identity()).pub);
     // A's sign-in is long past: only a sign-in made just now may start another account's list.
     const old = 'a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0@1000';
@@ -966,5 +1014,128 @@ void main() {
     await settle();
     expect(app.newDevices, isEmpty);
     expect(app.deviceRemovals, isEmpty);
+  });
+
+  // A web app signed in first, then `harness login` on a computer: the machine is new to this app's
+  // copy of the log (or this app to the machine's), and the refusal says nothing more than "early".
+  // It is settled — this app joins the log, reads it, dials again — before a password is asked for.
+  group('a machine that refuses this app for want of trust', () {
+    final mid = 'b' * 32;
+
+    AppNotifier withMachine() {
+      final app = start();
+      addTearDown(app.dispose);
+      const name = 'box2';
+      final machine = Machine(
+        machineId: mid,
+        authMode: MachineAuthMode.remote,
+        name: name,
+      );
+      app.machines = [machine];
+      app.machineStates[mid] = MachineState(machine)..nodeOnline = true;
+      return app;
+    }
+
+    Future<void> until(bool Function() done) async {
+      for (var i = 0; i < 500 && !done(); i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+    }
+
+    test(
+      'the log names it: pinned and dialled again, no password asked',
+      () async {
+        final app = withMachine();
+        await backend.add(box2, 'machine', mid, 'box2');
+        expect(
+          await keys.peer(mid),
+          isNull,
+          reason: 'this app has not read the log since',
+        );
+        final redialled = <String>[];
+        app.onRedialForTest = redialled.add;
+
+        app.localFailureForTest(mid, 4404, 'NO_PEER_LINK');
+        expect(
+          app.stateOf(mid)!.needsLink,
+          isFalse,
+          reason: 'still connecting while it is settled',
+        );
+        await until(() => redialled.isNotEmpty);
+
+        expect(redialled, [mid]);
+        expect(app.stateOf(mid)!.needsLink, isFalse);
+        expect(await keys.peer(mid), isNotNull);
+        final me = b64e((await keys.identity()).pub);
+        expect(
+          backend.state.active[me]?.kind,
+          'viewer',
+          reason: 'this app joined the log on the way',
+        );
+      },
+    );
+
+    test('denied once, then let in: never asks for a password', () async {
+      final app = withMachine()
+        ..trustDeniedWait = const Duration(milliseconds: 10);
+      await keys.pin(mid, box2.pub, label: 'box2');
+      final redialled = <String>[];
+      app.onRedialForTest = redialled.add;
+
+      app.localFailureForTest(mid, 4404, 'E2E_DENIED');
+      await until(() => redialled.isNotEmpty);
+      await settle();
+
+      expect(redialled, [mid]);
+      expect(app.stateOf(mid)!.needsLink, isFalse);
+      expect(
+        app.stateOf(mid)!.agentLoadStatus,
+        isNot(AgentLoadStatus.needsLink),
+      );
+    });
+
+    test('still refused after the grace: the password it is', () async {
+      final app = withMachine()
+        ..trustSettleRound = const Duration(milliseconds: 20);
+      var redials = 0;
+      // Each dial again is refused again: nothing names this machine.
+      app.onRedialForTest = (id) {
+        redials++;
+        scheduleMicrotask(
+          () => app.localFailureForTest(id, 4404, 'NO_PEER_LINK'),
+        );
+      };
+
+      app.localFailureForTest(mid, 4404, 'NO_PEER_LINK');
+      await until(() => app.stateOf(mid)!.needsLink);
+
+      expect(app.stateOf(mid)!.needsLink, isTrue);
+      expect(app.stateOf(mid)!.agentLoadStatus, AgentLoadStatus.needsLink);
+      expect(redials, 2, reason: 'two rounds, then the password');
+    });
+
+    test('a frozen log settles nothing: the password at once, and the list asks for a review', () async {
+      final app = withMachine();
+      await backend.add(box2, 'machine', 'c' * 32, 'box3');
+      await logOf(app).refresh();
+      final file = Map<String, Object?>.from(await keys.deviceLog() as Map);
+      file['frozen'] = {
+        'reason': 'fork',
+        'at': 1,
+        'lastGoodHead': backend.state.head.toJson(),
+      };
+      await keys.writeDeviceLog(file);
+      final redialled = <String>[];
+      app.onRedialForTest = redialled.add;
+
+      app.localFailureForTest(mid, 4404, 'NO_PEER_LINK');
+      await until(
+        () => app.stateOf(mid)!.needsLink && app.deviceListNeedsReview,
+      );
+
+      expect(app.stateOf(mid)!.needsLink, isTrue);
+      expect(app.deviceListNeedsReview, isTrue);
+      expect(redialled, isEmpty);
+    });
   });
 }

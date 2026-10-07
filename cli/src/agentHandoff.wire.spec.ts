@@ -11,6 +11,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { BackendSocket } from './backendSocket.js'
+import { relaySocket } from './testing/relaySocket.js'
 import { bindHandoffRequest } from './testing/socketCore.js'
 import { prepareAgentHandoff, type HandoffDeps } from './lib/agentHandoff.js'
 import { CommanderMirror } from './lib/commander.js'
@@ -33,7 +34,7 @@ beforeEach(() => {
   root = realpathSync(mkdtempSync(join(tmpdir(), 'handoff-wire-')))
   ws = join(root, 'ws')
   mkdirSync(ws)
-  socket = new BackendSocket('token')
+  socket = relaySocket('token')
   frames = []
   socket.registerLocalClient('local:w', { sendFrame: (frame) => { frames.push(frame as Frame); return true }, sendBinary: () => true })
 })

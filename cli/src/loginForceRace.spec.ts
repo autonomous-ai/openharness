@@ -180,6 +180,9 @@ describe('login --force beside a start that lands mid-sign-in', () => {
             return { data: { machine: { machineId: 'm_new' } } }
           }
           return { status: 503, error: 'no daemon in this test' }
+        case '/api/auth/me':
+          // Asked under the token the sign-in just got: the account the new session was made to.
+          return req.headers.authorization === 'Bearer tok_new' ? { data: { user: { id: 'acct_new' } } } : { data: { user: { id: 'acct_old' } } }
         default:
           return { status: 404, error: 'not stubbed' }
       }
@@ -197,8 +200,11 @@ describe('login --force beside a start that lands mid-sign-in', () => {
     await Promise.race([start.exit, start.until((out) => out.includes('waiting for it to finish'))])
     await fetch(`${redirectUri}?code=code_1&state=state_1`)
 
-    expect(await login.exit).toBe(0)
+    // The daemon the login stopped is started again on the new account. Here it cannot listen (the
+    // control port is 1), so the relaunch fails and the login exits with it, after its result line.
+    await login.exit
     await start.exit
+    expect(login.stdout()).toContain('starting the daemon again on this account')
 
     // Nothing acted on the old account once its daemon was stopped: the start resolved its machine
     // with the NEW session or not at all.
@@ -206,10 +212,10 @@ describe('login --force beside a start that lands mid-sign-in', () => {
     expect(resolves.map((call) => call.bearer)).not.toContain('Bearer tok_old')
     expect(start.stdout()).toContain('the daemon is being signed in')
     // The login's pinned contract holds: exactly one result line, and a success.
-    const results = login.stdout().trim().split('\n').map((line) => JSON.parse(line) as { type: string })
-      .filter((line) => line.type === 'result')
+    const results = login.stdout().trim().split('\n').filter((line) => line.startsWith('{'))
+      .map((line) => JSON.parse(line) as { type: string }).filter((line) => line.type === 'result')
     expect(results).toEqual([expect.objectContaining({ type: 'result', status: 'success' })])
     expect(JSON.parse(readFileSync(join(root, 'auth', 'session.json'), 'utf8')))
-      .toMatchObject({ accessToken: 'tok_new', machineId: 'm_new', signInEpoch: expect.stringMatching(/^[0-9a-f]{32}@\d+$/) })
+      .toMatchObject({ accessToken: 'tok_new', machineId: 'm_new', signInEpoch: expect.stringMatching(/^[0-9a-f]{32}@\d+$/), signInAcct: 'acct_new' })
   }, 30_000)
 })

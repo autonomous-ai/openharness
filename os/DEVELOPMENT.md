@@ -344,9 +344,13 @@ The installed OS checks the existing public hn and CLI release channels every
 15 minutes, with a small randomized delay. Complete, checksum-verified runtimes
 are prepared under the user's state directory. The OS-owned copy remains an
 offline fallback. Neither downloading nor checking restarts working processes.
-OS windows use hn's local session storage (`HARNESS_TUI_DESK=off`), so their
-layout and pane references survive reconnects without signing into the cloud.
-This setting is confined to the OS launcher; ordinary hn installs are unchanged.
+Signed out, OS windows use hn's local session storage (`HARNESS_TUI_DESK=off`),
+so their layout and pane references survive reconnects without a cloud account.
+Signed in (`HARNESS_TUI_DESK_SIGNED_IN=sync`), this computer's windows join the
+account's shared tabs, as the desktop app's do at sign-in, under the names the
+app shows. On sign-out the harnesses running on this computer stay in their
+windows; another machine's go with the account. An older hn reads `off` alone. These settings are confined to
+the OS launcher; ordinary hn installs are unchanged.
 
 The installed system keeps hn's standard status bar. Super+u records an update
 request and selects the Updates terminal; the request starts checking/applying
@@ -403,7 +407,8 @@ On a clean x86 Linux checkout, build a bundle with:
 
 ```sh
 make -C os runtime
-python3 os/tools/build-package.py --runtime os/work/runtime --output os/work/my-update --development
+make -C os compositor
+python3 os/tools/build-package.py --runtime os/work/runtime --compositor os/work/compositor --output os/work/my-update --development
 ```
 
 The bundle identifies the source commit, architecture, required base image and
@@ -603,7 +608,7 @@ VM prototype, not an Apple Silicon installer or a supported hardware image.
 `tests/arm-session.lock.json` pins the Fedora container and extra graphical kernel
 modules. The builder verifies kernel package signatures and hashes, checks the
 exact clean ARM runtime, installs signed Fedora packages without weak dependencies,
-and records their versions and the upstream-default OpenCode lockfile. Fedora
+and records their versions and the pinned OpenCode artifact identity. Fedora
 repositories remain mutable; this is not a claim of an immutable package snapshot.
 
 The tracked fixture accounts for Fedora's browser executable and labwc action
@@ -634,19 +639,27 @@ is retained and is not graphical acceptance.
 
 Fresh fixtures install the native `harness-os-session` RPM instead of copying an
 unowned overlay. The RPM is a component of the future Fedora/Asahi Harness image:
-it owns the shared session, verified ARM runtime, Fedora guidance and per-user
+it owns the shared session, verified ARM runtime, OpenCode, Fedora guidance and per-user
 update units. It contains no installer, base-system updater, kernel, firmware,
 boot files, `/etc` configuration, account provisioning or service scriptlets.
-Package installation does not start or restart a session. Chromium is optional;
-the private fixture still provisions OpenCode separately and records its npm lock.
-That agent input is not yet a pinned, package-owned image component.
+Package installation does not start or restart a session. Chromium is optional.
+OpenCode's ARM executable and upstream MIT license are pinned by URL, size and
+SHA-256 in `packaging/fedora/opencode.lock.json`. The preparer checks upstream
+package metadata, ELF architecture and 16 KiB page alignment before staging only
+those files. No npm installation scripts run, and no agent download is needed at
+first boot. The package keeps upstream model defaults and user credentials.
+Update the lock deliberately and repeat the actual 16 KiB first-use/agent test
+before using a newer binary; do not resolve a mutable latest version during builds.
 
 Build in the pinned Fedora aarch64 container from `arm-session.lock.json`, with
 `python3`, `git`, `rpm-build`, `tar` and `gzip` installed from signed Fedora repositories:
 
 ```sh
+python3 os/tools/opencode_payload.py --archives /path/to/agent-archives \
+  --output /path/to/agent-payload
 python3 os/tools/build-fedora-package.py --runtime /path/to/runtime \
-  --runtime-source FULL_RUNTIME_PRODUCER_SHA --output /path/to/fresh-package
+  --runtime-source FULL_RUNTIME_PRODUCER_SHA --agent /path/to/agent-payload \
+  --output /path/to/fresh-package
 python3 os/tests/arm_session.py --package /path/to/fresh-package \
   --output os/test-results/arm-session --prepare-only
 ```
@@ -671,6 +684,10 @@ owned files and strict account/project/configuration preservation. This proves
 preservation on an existing Fedora base; installing missing platform dependencies
 can change Fedora defaults. Only the private local Harness RPMs bypass signature
 checks; repository dependencies still require Fedora signatures.
+The optional `prepare_fixture=true` input builds a fresh graphical disk from
+the same RPM and frozen runtime after the lifecycle checks. Its separate artifact
+is marked prepared, not accepted; run it with HVF/KVM as described below. This
+allows OS packaging changes to be checked without rebuilding hn or the CLI.
 
 Use its `first/` and `upgrade/` artifacts with the immutable graphical fixture
 to check the packaged session across an actual VM reboot and user runtime update:

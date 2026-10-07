@@ -94,6 +94,9 @@ describe('two machines in one fleet', () => {
     expect(await routeSend(onA, agentId, 'sent from machine a')).toMatchObject({ ok: true })
     expect((await started).payload?.userMessage).toBe('sent from machine a')
     await ended
+    // Sealed by A's gateway, which holds A's identity: the relay never read the turn.
+    expect(backend.deviceSent.some((frame) => frame.machineId === b.machineId && (frame.payload as Record<string, unknown> | undefined)?.__e2e)).toBe(true)
+    expect(JSON.stringify(backend.deviceSent)).not.toContain('sent from machine a')
     // Nothing tried to reach anywhere but the fake backend, and both daemons are the cores they started as.
     for (const machine of [a, b]) {
       expect(machine.daemon.log()).not.toMatch(/getaddrinfo|ENOTFOUND|autonomous\.ai/)
@@ -185,7 +188,7 @@ describe('two machines in one fleet', () => {
     const started = onA.next(isTurn('turn_started', onlyA), 30_000, 'turn_started on A')
     dial.send({ t: 'turn.send', agentId: onlyA, text: 'from the dial on a' })
     expect((await started).payload?.userMessage).toBe('from the dial on a')
-    expect(a.daemon.log()).toContain('[services] fleet.sendTurn failed · injected fault: fleet.sendTurn')
+    expect(a.daemon.log()).toContain('[devices] fleet.sendTurn failed · injected fault: fleet.sendTurn')
     // ⌘K's own send is another member, and B is still reached through it.
     const startedB = onB.next(isTurn('turn_started', agentId), 30_000, 'turn_started on B')
     expect(await routeSend(onA, agentId, 'cmd-k still reaches b')).toMatchObject({ ok: true })
@@ -222,7 +225,7 @@ describe('two machines in one fleet', () => {
       const startedB = onB.next(isTurn('turn_started', onlyB), 30_000, 'turn_started on B')
       onB.send('message', { agentId: onlyB, content: 'b runs on' })
       expect((await startedB).payload?.userMessage).toBe('b runs on')
-      expect(a.daemon.log()).toContain(faults === 'fleet' ? '[services] fleet did not start · injected fault: fleet' : '[services] fleet.routeSend failed · injected fault: fleet.routeSend')
+      expect(a.daemon.log()).toContain(faults === 'fleet' ? '[devices] fleet did not start · injected fault: fleet' : '[devices] fleet.routeSend failed · injected fault: fleet.routeSend')
       expect(a.daemon.coresStarted()).toBe(1)
       onA.close()
       onB.close()

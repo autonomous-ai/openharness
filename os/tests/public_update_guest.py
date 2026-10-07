@@ -79,6 +79,16 @@ def work():
             'boot_id': Path('/proc/sys/kernel/random/boot_id').read_text().strip()}
 
 
+def display():
+    pids = subprocess.check_output(['pgrep', '-u', '1000', '-x', 'labwc'], text=True).split()
+    if len(pids) != 1:
+        raise ValueError('Expected one actual graphical compositor')
+    executable = Path('/proc') / pids[0] / 'exe'
+    path = str(executable.resolve(strict=True))
+    return {'process': process(pids[0]), 'executable': path, 'sha256': digest(executable),
+            'owner': subprocess.check_output(['pacman', '-Qqo', path], text=True).strip()}
+
+
 def checkpoint():
     pointer = json.loads((ROOT_STATE / 'latest.json').read_text())['id']
     if not re.fullmatch(r'[0-9TZ-]+-[a-f0-9]{8}', pointer):
@@ -108,8 +118,9 @@ def checkpoint():
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=['system', 'work', 'checkpoint', 'project'])
+    parser.add_argument('action', choices=['system', 'work', 'checkpoint', 'project', 'display'])
     parser.add_argument('output', type=Path)
     args = parser.parse_args()
-    result = {'system': system, 'work': work, 'checkpoint': checkpoint, 'project': project}[args.action]()
+    result = {'system': system, 'work': work, 'checkpoint': checkpoint, 'project': project,
+              'display': display}[args.action]()
     args.output.write_text(json.dumps(result, indent=2) + '\n')

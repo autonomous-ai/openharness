@@ -15,8 +15,8 @@ import { removeDsh } from '../dsh/install.js'
 import { mutateDsh } from '../dsh/service.js'
 import { dshInstallReply, dshInstallRequest, dshInstallStatus, dshListRows, dshRemoveId, dshRemoveReply } from '../dsh/wire.js'
 
-/** The requests the store answers for the apps. */
-export const STORE_REQUESTS = ['dsh_list', 'dsh_install', 'dsh_update', 'dsh_remove'] as const
+/** The requests the store answers for the apps, declared in core/api.ts for the core to route. */
+export { STORE_REQUESTS } from '../core/api.js'
 
 export interface StoreDeps {
   refresh: typeof refreshDshRegistry

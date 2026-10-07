@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { CORE_EXIT_STOP, CORE_EXIT_UPDATE, HARNESSD_PROTOCOL, type MasterMessage } from './protocol.js'
 import {
-  DEFAULT_SUPERVISOR_OPTIONS, Supervisor, namesTheDisk, type CoreHandle, type ReexecOutcome, type ResumeState, type SupervisorDeps, type SupervisorOptions,
+  DEFAULT_SUPERVISOR_OPTIONS, HAND_OVER_GRACE_MS, Supervisor, namesTheDisk, type CoreHandle, type ReexecOutcome, type ResumeState, type SupervisorDeps, type SupervisorOptions,
   type SupervisorStatus,
 } from './supervisor.js'
 
@@ -95,7 +95,7 @@ describe('Supervisor', () => {
     supervisor.start()
     supervisor.start()
     expect(cores).toHaveLength(1)
-    expect(core().env).toEqual({ HARNESSD_SUPERVISED: '1', HARNESSD_RESTARTS: '0', HARNESSD_WATCHDOG_MS: '6000', HARNESSD_JUDGES_SUPERSEDED: '1' })
+    expect(core().env).toEqual({ HARNESSD_SUPERVISED: '1', HARNESSD_RESTARTS: '0', HARNESSD_WATCHDOG_MS: '6000', HARNESSD_JUDGES_SUPERSEDED: '1', HARNESSD_UPDATES: 'master' })
     expect(supervisor.status()).toMatchObject({ state: 'starting', corePid: 1000 })
     core().bind()
     expect(calls).toEqual(['claim'])
@@ -111,9 +111,31 @@ describe('Supervisor', () => {
     expect(lines.at(-1)).toBe('[harnessd] core ready (pid 1000)')
     // Every change is written for `harness status`, and told to the bound core.
     expect(statuses.map((status) => status.state)).toEqual(['starting', 'listening', 'running'])
-    expect(core().sent.map((message) => message.status.state)).toEqual(['listening', 'running'])
+    expect(core().sent.map((message) => message.type === 'harnessd:status' ? message.status.state : message.type)).toEqual(['listening', 'running'])
     core().ready()
     expect(statuses).toHaveLength(3)
+  })
+
+  it('starts the process a core asks for, bound or still starting, and those a core too old to ask for them never would', () => {
+    const wanted: string[] = []
+    const unasked: number[] = []
+    make({}, { want: (service) => wanted.push(service), unasked: (protocol) => unasked.push(protocol) }).start()
+    // The gateway of a core signed in, asked for as it starts: up beside it, not a bind later.
+    core().say({ type: 'harnessd:want', service: 'gateway' })
+    expect(wanted).toEqual(['gateway'])
+    core().bind()
+    core().say({ type: 'harnessd:want', service: 'orchestrator' })
+    expect(wanted).toEqual(['gateway', 'orchestrator'])
+    expect(unasked).toEqual([])
+    crash()
+    core().bind(2)
+    crash()
+    core().bind(3)
+    expect(unasked).toEqual([2, 3])
+    // A master with no services to start ignores both.
+    make().start()
+    core().bind(2)
+    core().say({ type: 'harnessd:want', service: 'orchestrator' })
   })
 
   it('ignores what is not a core message, and anything but a bind before the bind', () => {
@@ -140,7 +162,7 @@ describe('Supervisor', () => {
     expect(cores).toHaveLength(1)
     vi.advanceTimersByTime(1)
     expect(cores).toHaveLength(2)
-    expect(core().env).toEqual({ HARNESSD_SUPERVISED: '1', HARNESSD_RESTARTS: '1', HARNESSD_WATCHDOG_MS: '6000', HARNESSD_JUDGES_SUPERSEDED: '1', HARNESSD_LAST_EXIT: 'signal SIGKILL' })
+    expect(core().env).toEqual({ HARNESSD_SUPERVISED: '1', HARNESSD_RESTARTS: '1', HARNESSD_WATCHDOG_MS: '6000', HARNESSD_JUDGES_SUPERSEDED: '1', HARNESSD_UPDATES: 'master', HARNESSD_LAST_EXIT: 'signal SIGKILL' })
     expect(lines.at(-1)).toBe('[harnessd] core started (pid ?) · restart 1')
     core().bind()
     expect(lines.at(-1)).toBe(`[harnessd] core bound (pid ?, protocol ${HARNESSD_PROTOCOL})`)
@@ -356,6 +378,94 @@ describe('Supervisor', () => {
       crash()
       expect(supervisor.status().safeMode).toBeNull()
       expect(core().env.HARNESSD_SAFE_MODE).toBeUndefined()
+    })
+  })
+
+  describe('an update the updater staged', () => {
+    it('asks the running core to hand over, once, and judges its exit as the update\'s', () => {
+      const supervisor = make()
+      supervisor.start()
+      core().up()
+      supervisor.updateStaged('9.9.9')
+      supervisor.updateStaged('9.9.9')
+      expect(core().sent.filter((message) => message.type === 'harnessd:update')).toEqual([{ type: 'harnessd:update', version: '9.9.9' }])
+      expect(lines.at(-1)).toBe('[harnessd] the updater staged 9.9.9 — asking the core to hand over')
+      core().exit(CORE_EXIT_UPDATE)
+      vi.advanceTimersByTime(0)
+      expect(cores).toHaveLength(2)
+      expect(lines).toContain('[harnessd] core exited (code 75) for an update — restarting')
+      core().up()
+      // The grace it had to hand over in ended with it.
+      live(HAND_OVER_GRACE_MS)
+      expect(core().kills).toEqual([])
+      expect(calls).toContain('confirm')
+    })
+
+    it('stops a core that does not hand over within its grace, and counts that exit as the update\'s', () => {
+      const supervisor = make()
+      supervisor.start()
+      core().up()
+      supervisor.updateStaged('9.9.9')
+      live(HAND_OVER_GRACE_MS - 1_000)
+      expect(core().kills).toEqual([])
+      live(1_000)
+      expect(core().kills).toEqual(['SIGTERM'])
+      expect(lines).toContain('[harnessd] core did not hand over for 9.9.9 within 45000 ms — stopping it')
+      core().exit(0)
+      vi.advanceTimersByTime(0)
+      expect(supervisor.status()).toMatchObject({ lastExitReason: 'update', restarts: 1 })
+      expect(cores).toHaveLength(2)
+      core().up()
+      live(options.updateProbationMs)
+      expect(calls).toContain('confirm')
+    })
+
+    it('with no core running, starts the next one on the new bundle at once, on probation, with a clean slate', () => {
+      const supervisor = make()
+      supervisor.start()
+      // Into safe mode: the crashes a fix would end.
+      for (let i = 0; i < options.crashLoopCrashes; i++) { core().up(); crash() }
+      expect(core().env.HARNESSD_SAFE_MODE).toBe('crash-loop')
+      core().exit(1)
+      expect(supervisor.status().state).toBe('restarting')
+      supervisor.updateStaged('9.9.9')
+      expect(lines.at(-1)).toBe('[harnessd] the updater staged 9.9.9 — the next core starts on it')
+      vi.advanceTimersByTime(0)
+      expect(core().env.HARNESSD_SAFE_MODE).toBeUndefined()
+      core().up()
+      core().exit(1)
+      vi.advanceTimersByTime(0)
+      // On probation: its crash rolls the update back.
+      expect(calls).toContain('restore')
+    })
+
+    it('judges the first core when a build is staged before the master starts one', () => {
+      const supervisor = make()
+      supervisor.updateStaged('9.9.9')
+      expect(cores).toHaveLength(0)
+      supervisor.start()
+      core().up()
+      core().exit(1)
+      expect(calls).toContain('restore')
+    })
+
+    it('leaves a core being started to start on the bundle on disk, and ignores a staging while stopping', () => {
+      const deciding: Array<(outcome: ReexecOutcome) => void> = []
+      const supervisor = make({}, { reexec: (_state, proceed) => { deciding.push(proceed) } })
+      supervisor.start()
+      expect(cores).toHaveLength(0)
+      supervisor.updateStaged('9.9.9')
+      expect(cores).toHaveLength(0)
+      deciding[0]('kept')
+      expect(cores).toHaveLength(1)
+      core().up()
+      core().exit(1)
+      vi.advanceTimersByTime(0)
+      expect(calls).toContain('restore')
+      supervisor.stop('stopping')
+      const before = lines.length
+      supervisor.updateStaged('9.9.10')
+      expect(lines.length).toBe(before)
     })
   })
 

@@ -275,3 +275,46 @@ class DeviceConflictNoticeBand extends StatelessWidget {
     );
   }
 }
+
+/// Settings ▸ Your devices, from a machine that asks for its password while this app's device list is
+/// frozen ([AppNotifier.deviceListNeedsReview]): the list pins no machine again until it is reviewed.
+void showDeviceListReview(BuildContext context, AppNotifier notifier) => unawaited(
+  showSettingsScreen(
+    context,
+    notifier,
+    initialSection: SettingsSection.accountDevices,
+    source: 'needs-link',
+  ),
+);
+
+/// The line under a machine's password prompt while this app's device list is frozen: the password is
+/// one way in, the review the other. Nothing while the list needs no review.
+class DeviceListReviewLine extends StatelessWidget {
+  const DeviceListReviewLine({super.key, required this.notifier, this.center = false});
+
+  final AppNotifier notifier;
+  final bool center;
+
+  @override
+  Widget build(BuildContext context) {
+    grid.AppTheme.watch(context);
+    if (!notifier.deviceListNeedsReview) return const SizedBox.shrink();
+    return Wrap(
+      alignment: center ? WrapAlignment.center : WrapAlignment.start,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      spacing: 4,
+      children: [
+        Text(
+          'Your device list needs a review.',
+          textAlign: center ? TextAlign.center : TextAlign.start,
+          style: grid.AppType.body(color: grid.AppPalette.textSecondary),
+        ),
+        TextButton(
+          key: const Key('device-list-review'),
+          onPressed: () => showDeviceListReview(context, notifier),
+          child: const Text('Your devices'),
+        ),
+      ],
+    );
+  }
+}

@@ -7,6 +7,7 @@ import { isAbsolute, join } from 'node:path'
 
 import { cursorConfigDir, cursorDataDir } from '../../../engines/cursor/home.js'
 import { env } from '../../../config/env.js'
+import { claudeProjectsRoots, codexHomeRoots } from '../../engineHomes.js'
 import { agyProvider } from './agy.js'
 import { claudeProvider } from './claude.js'
 import { codexProvider } from './codex.js'
@@ -72,8 +73,10 @@ export function externalPaths(vars: NodeJS.ProcessEnv = process.env): ExternalPa
 /** One provider per engine that keeps its conversations on this machine's disk. */
 export function externalProviders(paths: ExternalPaths = externalPaths()): ExternalProvider[] {
   return [
-    claudeProvider({ projectsDir: paths.claudeProjectsDir, home: join(paths.claudeProjectsDir, '..') }),
-    codexProvider({ home: paths.codexHome }),
+    // QA found search's separate process started before the core adopted the shell's homes.
+    // Resolve roots on each scan, retaining the default and previously adopted conversations.
+    claudeProvider({ projectsDir: paths.claudeProjectsDir, home: join(paths.claudeProjectsDir, '..'), roots: () => claudeProjectsRoots(paths.claudeProjectsDir) }),
+    codexProvider({ home: paths.codexHome, roots: () => codexHomeRoots(paths.codexHome) }),
     cursorProvider({ configDir: paths.cursorConfigDir, dataDir: paths.cursorDataDir }),
     grokProvider({ home: paths.grokHome }),
     copilotProvider({ home: paths.copilotHome }),

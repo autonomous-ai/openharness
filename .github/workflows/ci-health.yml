@@ -1,0 +1,34 @@
+name: CI health
+
+on:
+  schedule:
+    - cron: '43 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: ci-health
+  cancel-in-progress: false
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: scripts/ci-health.py
+          sparse-checkout-cone-mode: false
+      - name: Measure completed validation and cancelled execution
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/ci-health.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ci-health
+          path: ${{ runner.temp }}/ci-health.json
+          if-no-files-found: error
+          retention-days: 30

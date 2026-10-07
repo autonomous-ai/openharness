@@ -1,0 +1,31 @@
+name: Build reference tmux
+description: Build the pinned tmux used as the native TUI comparison reference
+outputs:
+  bin:
+    description: Directory containing the reference binary
+    value: ${{ steps.build.outputs.bin }}
+runs:
+  using: composite
+  steps:
+    # Ubuntu's tmux 3.4 loses pane_dead_status during live-window respawn.
+    # A tmux-only reproduction failed immediately on 3.4 and passed 40 times on
+    # this release (Actions 37563710329). Keep older-tmux integration checks on
+    # the distribution's binary; only native TUI comparisons use this reference.
+    - uses: actions/checkout@v7
+      with:
+        repository: tmux/tmux
+        ref: e476c1230b958df0cb12977517d24b3dc931375b # 3.7c
+        path: .harness/tmux-reference-source
+        persist-credentials: false
+    - id: build
+      shell: bash
+      working-directory: .harness/tmux-reference-source
+      run: |
+        sudo apt-get install -y --no-install-recommends build-essential autoconf automake bison pkg-config libevent-dev libncurses-dev
+        test "$(git rev-parse HEAD)" = e476c1230b958df0cb12977517d24b3dc931375b
+        sh autogen.sh
+        ./configure --prefix="$GITHUB_WORKSPACE/.harness/tmux-reference" CFLAGS='-O2 -g'
+        make -j2
+        make install
+        "$GITHUB_WORKSPACE/.harness/tmux-reference/bin/tmux" -V
+        echo "bin=$GITHUB_WORKSPACE/.harness/tmux-reference/bin" >> "$GITHUB_OUTPUT"

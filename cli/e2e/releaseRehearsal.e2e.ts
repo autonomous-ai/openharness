@@ -46,6 +46,8 @@ describe.skipIf(!FROM)('a release rehearsal: the update from a published release
   let offered: 'from' | 'next' = 'from'
   let fromVersion = ''
   let fromHasMaster = false
+  /** The master a core with no master handed the machine to, when the release had none. */
+  let handedTo: number | null = null
   const bundles = new Map<'from' | 'next', { cli: Buffer; notify: Buffer; version: string }>()
   const cliDir = () => join(scratch, 'cli')
   const status = async (): Promise<Row | null> =>
@@ -64,7 +66,8 @@ describe.skipIf(!FROM)('a release rehearsal: the update from a published release
   const daemonProcesses = (): Array<{ pid: number; ppid: number; command: string }> =>
     execFileSync('ps', ['-axo', 'pid=,ppid=,command='], { encoding: 'utf8' }).split('\n')
       .map((line) => /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(line))
-      .filter((match): match is RegExpExecArray => !!match && match[3].includes(join(cliDir(), 'cli.js')))
+      // The core and the services from the lean bundle in the data folder, or from cli.js.
+      .filter((match): match is RegExpExecArray => !!match && (match[3].includes(join(cliDir(), 'cli.js')) || (!!daemon && match[3].includes(join(daemon.dataDir, 'lean')))))
       .map((match) => ({ pid: Number(match[1]), ppid: Number(match[2]), command: match[3] }))
   /** The pids answering on the daemon's port: whatever runs it now, a successor nothing started for us included. */
   const listeners = (): number[] => {
@@ -211,6 +214,7 @@ describe.skipIf(!FROM)('a release rehearsal: the update from a published release
 
   afterAll(async () => {
     // Whatever runs the port now, a successor the release spawned on its own included, goes with the test.
+    if (handedTo && IsolatedDaemon.alive(handedTo)) { try { process.kill(handedTo, 'SIGTERM') } catch { /* gone */ } }
     for (const pid of listeners()) { try { process.kill(pid, 'SIGTERM') } catch { /* gone */ } }
     await daemon?.close()
     await backend?.close()
@@ -257,6 +261,14 @@ describe.skipIf(!FROM)('a release rehearsal: the update from a published release
     offered = 'next'
     await until(`the machine to run ${NEXT}`, async () => (await status())?.version === NEXT || null, 150_000, 250)
     client.close()
+    if (!fromHasMaster) {
+      // A release with no master: once it has gone, the core it started hands the machine to a master,
+      // which runs the updater (core/updateHandoff.ts), seconds after the release's own handoff.
+      handedTo = await until('the core to hand the machine to a master', async () => {
+        const pid = (await status())?.harnessd?.masterPid
+        return typeof pid === 'number' && IsolatedDaemon.alive(pid) ? pid : null
+      }, 120_000, 500)
+    }
 
     // The window reconnects, as the desktop app does.
     client = await connect(d)
@@ -291,7 +303,7 @@ describe.skipIf(!FROM)('a release rehearsal: the update from a published release
     for (const file of [files.claude, files.codex]) expect(readFileSync(file, 'utf8')).toContain(join(cliDir(), 'notify.mjs'))
 
     // Every process accounted for: under the release's master, its core on the new bundle as its child;
-    // without one, the successor the release spawned, and nothing of the release left running.
+    // without one, the core of the master the successor handed the machine to, and nothing of the release.
     const status1 = (await status())!
     // A release without a master hands over by spawning the successor and watching it for up to half a
     // minute more (its waitForReady) before it leaves: one core once it has.
@@ -304,7 +316,8 @@ describe.skipIf(!FROM)('a release rehearsal: the update from a published release
       expect(cores[0].ppid).toBe(d.pid)
       await until('the master to keep the update', () => d.log().slice(updateFrom).includes('the update stayed up — keeping it'), 60_000)
     } else {
-      expect(listeners()).toEqual([cores[0].pid])
+      // The master the core handed the machine to serves it, its core its child.
+      expect(cores[0].ppid).toBe(handedTo)
     }
     expect(existsSync(join(cliDir(), 'cli.js.prev')) || existsSync(join(cliDir(), 'update-pending.json'))).toBe(false)
     memory(`after the update from ${fromVersion}`)
@@ -312,6 +325,7 @@ describe.skipIf(!FROM)('a release rehearsal: the update from a published release
 
     // The next `harness start` (a reboot, the desktop app) starts this checkout as harnessd: master and core.
     await d.stop()
+    if (handedTo) process.kill(handedTo, 'SIGTERM')
     for (const pid of listeners()) process.kill(pid, 'SIGTERM')
     await until('the daemon to be down', () => listeners().length === 0 || null, 30_000, 250)
     ;(d.options as { noMaster?: boolean }).noMaster = false

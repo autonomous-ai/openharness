@@ -19,7 +19,7 @@ import { PairBrain, TALK_COST_NOTE, type AnswerResult } from './brain.js'
 import { ARM_MS, ShownLines } from './shown.js'
 import type { DaemonSay, PairEvent, PairQuestion } from './protocol.js'
 import type { Autonomy } from './floor.js'
-import { BackendSocket } from '../../../cli/src/backendSocket.js'
+import { relaySocket, upstreamOf } from '../../../cli/src/testing/relaySocket.js'
 
 type Frame = Record<string, unknown>
 
@@ -653,10 +653,11 @@ describe('the brain', () => {
   })
 
   it('pairing coming on tells the window already on the socket, never a tool client or the cloud', async () => {
-    const socket = new BackendSocket('token')
-    const internals = socket as unknown as { queue: Array<{ data: string }>; enqueue: (m: unknown) => void }
+    const socket = relaySocket('token')
+    // The October 6 gateway extraction moved the cloud queue out of the core socket.
+    const internals = upstreamOf(socket) as ReturnType<typeof upstreamOf> & { enqueue: (m: unknown) => void }
     const enqueued: string[] = []
-    const enqueue = internals.enqueue.bind(socket)
+    const enqueue = internals.enqueue.bind(internals)
     internals.enqueue = (msg: unknown) => { enqueued.push(JSON.stringify(msg)); enqueue(msg) }
     const windowFrames: Frame[] = []
     const toolFrames: Frame[] = []
@@ -694,10 +695,10 @@ describe('the brain', () => {
   })
 
   it('sends daemon_* only through sendLocal: nothing reaches the cloud queue', async () => {
-    const socket = new BackendSocket('token')
-    const internals = socket as unknown as { queue: Array<{ data: string }>; enqueue: (m: unknown) => void }
+    const socket = relaySocket('token')
+    const internals = upstreamOf(socket) as ReturnType<typeof upstreamOf> & { enqueue: (m: unknown) => void }
     const enqueued: string[] = []
-    const enqueue = internals.enqueue.bind(socket)
+    const enqueue = internals.enqueue.bind(internals)
     internals.enqueue = (msg: unknown) => { enqueued.push(JSON.stringify(msg)); enqueue(msg) }
     const windowFrames: Frame[] = []
     socket.registerLocalClient('local:window', { sendFrame: (f) => { windowFrames.push(f); return true }, sendBinary: () => true })
@@ -728,7 +729,7 @@ describe('the brain', () => {
     const types = windowFrames.map((f) => f.type)
     expect(types).toEqual(expect.arrayContaining(['daemon_state', 'daemon_say', 'daemon_unsay', 'daemon_act_result']))
     expect(enqueued.filter((m) => m.includes('daemon_'))).toEqual([])
-    expect(internals.queue.map((q) => q.data).filter((d) => d.includes('daemon_'))).toEqual([])
+    expect(internals.queue.map((q) => JSON.stringify(q.msg)).filter((d) => d.includes('daemon_'))).toEqual([])
     await socket.unregisterLocalClient('local:window')
     await socket.stop()
   })

@@ -203,4 +203,46 @@ void main() {
     expect(find.text('Link…'), findsNothing);
     await finish(tester);
   });
+
+  // A browser whose copy of the device log is frozen pins no machine from it until the list is
+  // reviewed: the password is one way in, the review the other, and the tile offers both.
+  testWidgets('a frozen device list is offered beside the password', (
+    tester,
+  ) async {
+    app = appWith()..deviceListNeedsReviewForTest = true;
+    placeEmptyPane();
+    await pump(tester);
+
+    expect(find.text('Your device list needs a review.'), findsOneWidget);
+    expect(find.byKey(const Key('device-list-review')), findsOneWidget);
+    expect(find.text('Link…'), findsOneWidget, reason: 'the password stays');
+    await finish(tester);
+  });
+
+  testWidgets('…and on a tile still showing its last screen', (tester) async {
+    app = appWith()..deviceListNeedsReviewForTest = true;
+    final session = terminal('a0', <TerminalBinaryFrame>[]);
+    app.adoptSessionForTest(session);
+    app.panes.single.machineId = 'remote-1';
+    await pump(tester);
+
+    expect(
+      find.textContaining('Your device list needs a review.'),
+      findsOneWidget,
+    );
+    expect(find.text('Your devices'), findsOneWidget);
+    expect(find.text('Link…'), findsOneWidget, reason: 'the password stays');
+    await finish(tester);
+  });
+
+  testWidgets('a list that needs no review says nothing about it', (
+    tester,
+  ) async {
+    app = appWith();
+    placeEmptyPane();
+    await pump(tester);
+
+    expect(find.textContaining('device list'), findsNothing);
+    await finish(tester);
+  });
 }

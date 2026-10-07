@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ExecFileException } from 'node:child_process'
 import { TmuxBackend, clearEnvArgs } from './tmuxBackend.js'
 import { clearPaneRemainOnExit, forgetTmuxServer } from './tmux.js'
+import { tmuxControlGate } from './tmuxControlGate.js'
 import { assumeTmuxVersion, resetTmuxVersionCache } from './tmuxVersion.js'
 
 /**
@@ -130,6 +131,39 @@ esac
       'set-option -t %42 mouse on',
       'kill-pane -t %42',
     ])
+  })
+
+  it('on a tmux before 3.7, makes and closes a session only while no terminal is attaching (tmuxControlGate.ts)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'tmux-backend-gate-'))
+    dirs.push(dir)
+    const calls = join(dir, 'calls')
+    writeFileSync(join(dir, 'tmux'), `#!/bin/sh\nprintf '%s\\n' "$1" >> "$TMUX_BACKEND_CALLS"\n[ "$1" = new-session ] && printf '%%42\\n'\nexit 0\n`, { mode: 0o700 })
+    process.env.PATH = `${dir}${delimiter}${originalPath ?? ''}`
+    process.env.TMUX_BACKEND_CALLS = calls
+    assumeTmuxVersion({ major: 3, minor: 4 })
+    const backend = new TmuxBackend(undefined, () => 'daemon-a')
+    const asked = () => existsSync(calls) ? readFileSync(calls, 'utf8').trim().split('\n') : []
+    const wait = () => new Promise((resolve) => setTimeout(resolve, 100))
+
+    let attaching = await tmuxControlGate.enter('attach')
+    const created = backend.create({ cwd: '/tmp/work' })
+    await wait()
+    expect(asked()).toEqual([])
+    attaching()
+    const made = await created
+    expect(made.state).toBe('succeeded')
+    expect(asked()[0]).toBe('new-session')
+    if (made.state !== 'succeeded') return
+    await settled()
+
+    attaching = await tmuxControlGate.enter('attach')
+    const before = asked().length
+    const killed = backend.kill(made.runtime)
+    await wait()
+    expect(asked()).toHaveLength(before)
+    attaching()
+    await expect(killed).resolves.toEqual({ state: 'succeeded', dispatch: 'executed' })
+    expect(asked().at(-1)).toBe('kill-pane')
   })
 
   it('reads the machine\'s name before tmux makes a pane, the name tmux titles it with', async () => {

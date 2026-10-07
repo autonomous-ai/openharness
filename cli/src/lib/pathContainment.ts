@@ -10,7 +10,6 @@
  * a file, `gitProject` and `projectPreview` return a repository's shape — so each names its own set
  * rather than sharing one global allowance.
  */
-import { realpathSync } from 'node:fs'
 import { realpath } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { isAbsolute, relative } from 'node:path'
@@ -39,17 +38,6 @@ export async function withinRoots(target: string, roots: readonly string[]): Pro
   if (env.HARNESS_FS_BROWSE_UNRESTRICTED === '1') return true
   const resolved = await Promise.all(roots.map((root) => realpath(root).catch(() => '')))
   return resolved.some((root) => root && within(root, target))
-}
-
-/**
- * `withinRoots` for the one caller that must stay synchronous: the folder browser is `readdirSync`
- * and `statSync` throughout (lib/fsBrowse.ts), and one more syscall on that thread costs nothing.
- */
-export function withinRootsSync(target: string, roots: readonly string[]): boolean {
-  if (env.HARNESS_FS_BROWSE_UNRESTRICTED === '1') return true
-  return roots.some((root) => {
-    try { return within(realpathSync(root), target) } catch { return false }
-  })
 }
 
 /**

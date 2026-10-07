@@ -7,6 +7,7 @@ import 'package:harness/core/models.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/harness_monitor_controller.dart';
 import 'package:harness/ws/ws_conn.dart';
+import 'package:harness/widgets/desktop_prompt_surface.dart';
 
 import 'swarm_screen_test.dart' show mount, terminal;
 import 'swarm_state_test.dart' show createApp;
@@ -267,8 +268,8 @@ void main() {
           final original = app.activeSwarm;
           app.newSwarm();
           final other = app.activeSwarm;
-          other.panes.add(pane);
-          other.focusedPaneId = pane.id;
+          app.stateOf('m')!.agents.add(agent('a2'));
+          final otherPane = app.adoptSessionForTest(terminal('a2', []));
           app.selectSwarm(original.id);
           await mount(tester, app);
           unawaited(
@@ -300,8 +301,8 @@ void main() {
             app.stateOf('m')!.agents.every((agent) => !agent.isStopped),
             isTrue,
           );
-          expect(other.panes, [pane]);
-          expect(pane.session, isNotNull);
+          expect(other.panes, [otherPane]);
+          expect(otherPane.session, isNotNull);
           if (closeTab) {
             expect(app.swarms, isNot(contains(original)));
           } else {
@@ -436,10 +437,11 @@ void main() {
     },
   );
 
-  testWidgets('Close also removes the session from another hidden tab', (
+  testWidgets('Close preserves another view and only the last view stops', (
     tester,
   ) async {
     final pane = app.adoptSessionForTest(terminal('a0', []));
+    final attached = pane.session;
     final original = app.activeSwarm;
     app.newSwarm();
     app.activeSwarm.panes.add(pane);
@@ -447,15 +449,141 @@ void main() {
     await mount(tester, app);
     await app.requestClosePane(pane.id);
     await tester.pumpAndSettle();
+    expect(modes(), isEmpty);
+    expect(app.swarms, [original]);
+    expect(original.panes, [pane]);
+    expect(pane.session, same(attached));
+    expect(app.closedHistory, hasLength(1));
+    expect(
+      app.stateOf('m')!.agents.firstWhere((a) => a.id == 'a0').isStopped,
+      isFalse,
+    );
+    expect(app.reopenClosed(), isTrue);
+    await tester.pumpAndSettle();
+    expect(app.activeSwarm.panes.single, same(pane));
+    expect(pane.session, same(attached));
+    expect(modes(), isEmpty);
+    await app.requestClosePane(pane.id);
+    await tester.pumpAndSettle();
+    expect(modes(), isEmpty);
+    expect(pane.session, same(attached));
+    await app.requestClosePane(pane.id);
+    await tester.pumpAndSettle();
     expect(modes(), ['inspect', 'idle']);
     expect(app.allPanes, isEmpty);
-    expect(app.swarms, isNot(contains(original)));
     expect(
       app.stateOf('m')!.agents.firstWhere((a) => a.id == 'a0').isStopped,
       isTrue,
     );
     await tester.pumpWidget(const SizedBox());
   });
+
+  testWidgets('tab Close stops only sessions without another view', (
+    tester,
+  ) async {
+    final shared = app.adoptSessionForTest(terminal('a0', []));
+    final attached = shared.session;
+    final retained = app.activeSwarm;
+    app.newSwarm(name: 'Closing');
+    final closing = app.activeSwarm;
+    closing.panes.add(shared);
+    app.adoptSessionForTest(terminal('a1', []));
+    await mount(tester, app);
+    await app.requestCloseSwarm(closing.id);
+    await tester.pumpAndSettle();
+    expect(app.swarms, [retained]);
+    expect(retained.panes, [shared]);
+    expect(shared.session, same(attached));
+    expect(connection.closes.map((r) => (r['agentId'], r['mode'])), [
+      ('a1', 'inspect'),
+      ('a1', 'idle'),
+    ]);
+    expect(
+      app.stateOf('m')!.agents.firstWhere((a) => a.id == 'a0').isStopped,
+      isFalse,
+    );
+    expect(
+      app.stateOf('m')!.agents.firstWhere((a) => a.id == 'a1').isStopped,
+      isTrue,
+    );
+    expect(app.closedSwarms.single.panes.map((p) => p.agentId), ['a0', 'a1']);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  for (final (engine, dsh) in [
+    ('terminal', null),
+    ('codex', 'fixture/dashboard'),
+  ]) {
+    testWidgets(
+      '$engine/$dsh closes shared views before the usual last-view stop',
+      (tester) async {
+        app.stateOf('m')!.agents = [
+          Agent(
+            id: 'a0',
+            name: 'Shared work',
+            engine: engine,
+            dsh: dsh,
+            sessionId: engine == 'terminal' ? null : 'conversation-a0',
+            createdAt: DateTime.utc(2026, 9, 30),
+            closeSupported: true,
+            terminalAvailable: true,
+          ),
+        ];
+        final pane = app.adoptSessionForTest(terminal('a0', []));
+        final retained = app.activeSwarm;
+        app.newSwarm();
+        app.activeSwarm.panes.add(pane);
+        app.activeSwarm.focusedPaneId = pane.id;
+        await mount(tester, app);
+        await app.requestClosePane(pane.id);
+        await tester.pumpAndSettle();
+        expect(modes(), isEmpty);
+        expect(retained.panes, [pane]);
+        expect(pane.session, isNotNull);
+        await app.requestClosePane(pane.id);
+        await tester.pumpAndSettle();
+        expect(modes(), ['inspect', 'idle']);
+        expect(app.allPanes, isEmpty);
+        await tester.pumpWidget(const SizedBox());
+      },
+    );
+  }
+
+  for (final phase in ['inspection', 'confirmation']) {
+    testWidgets('a view opened during close $phase prevents stopping', (
+      tester,
+    ) async {
+      final pane = app.adoptSessionForTest(terminal('a0', []));
+      final attached = pane.session;
+      final closing = app.activeSwarm;
+      connection.activities['a0'] = 'working';
+      if (phase == 'inspection') connection.inspecting = Completer();
+      await mount(tester, app);
+      final close = app.requestClosePane(pane.id);
+      await tester.pumpAndSettle();
+      app.newSwarm(name: 'Keep working');
+      final retained = app.activeSwarm;
+      retained.panes.add(pane);
+      retained.focusedPaneId = pane.id;
+      if (phase == 'inspection') {
+        connection.inspecting!.complete({'activity': 'working'});
+      } else {
+        await tester.tap(find.widgetWithText(FilledButton, 'Stop'));
+      }
+      await tester.pumpAndSettle();
+      await close;
+      expect(modes(), ['inspect']);
+      expect(app.swarms, isNot(contains(closing)));
+      expect(retained.panes, [pane]);
+      expect(pane.session, same(attached));
+      expect(
+        app.stateOf('m')!.agents.firstWhere((a) => a.id == 'a0').isStopped,
+        isFalse,
+      );
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+    });
+  }
 
   for (final stop in [false, true]) {
     testWidgets(
@@ -581,7 +709,13 @@ void main() {
     await tester.tap(find.text('Stop'));
     await tester.pumpAndSettle();
     expect(find.text('Not enough free disk space.'), findsOneWidget);
-    expect(find.text('Stopped'), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byType(DesktopPromptSurface),
+        matching: find.text('Stopped'),
+      ),
+      findsOneWidget,
+    );
     expect(find.text('Stop not confirmed'), findsOneWidget);
     expect(
       find.text('You can close this tab. Some sessions may still be running.'),
@@ -621,7 +755,13 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.text('Stop'));
       await tester.pumpAndSettle();
-      expect(find.text('Stopped'), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byType(DesktopPromptSurface),
+          matching: find.text('Stopped'),
+        ),
+        findsOneWidget,
+      );
       expect(find.text('Stop not confirmed'), findsOneWidget);
       final sent = List.of(connection.closes);
       await tester.tap(find.text('Close Tab'));

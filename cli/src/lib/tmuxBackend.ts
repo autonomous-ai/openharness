@@ -22,6 +22,7 @@ import {
   type TmuxRuntimeRef,
   type RuntimeValidation,
 } from './terminalTypes.js'
+import { inTmuxRoom } from './tmuxControlGate.js'
 import { TmuxControlStream } from './tmuxStream.js'
 import {
   captureTmuxPane,
@@ -178,13 +179,15 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
     args.push(';', 'set-option', scope, HARNESS_OWNER_OPTION, owner)
     // `killed`/`signal` come from execFile's own error shape, which ErrnoException alone does not declare.
     type ExecError = NodeJS.ErrnoException & { killed?: boolean; signal?: NodeJS.Signals | null }
-    const result = await new Promise<{ error: ExecError | null; stdout: string; stderr: string }>((resolve) => {
+    // A new session is a notification to every control client: on a tmux before 3.7, not while one
+    // attaches (tmuxControlGate.ts).
+    const result = await inTmuxRoom('notify', () => new Promise<{ error: ExecError | null; stdout: string; stderr: string }>((resolve) => {
       run('tmux', args, { timeout: 5_000 }, (error, stdout, stderr) => resolve({
         error: error as ExecError | null,
         stdout,
         stderr,
       }))
-    })
+    }), features)
     if (result.error) {
       if (result.error.code === 'ENOENT') return terminalActionNotStarted('tmux is unavailable')
       // tmux says exactly why it refused — "duplicate session", "protocol version mismatch",
@@ -270,9 +273,11 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
     if (!/^%\d+$/.test(runtime.paneId)) return terminalActionNotStarted('invalid tmux pane identity')
     // Discovered harnesses can share a tmux session with unrelated work. The
     // canonical pane id is the entire target; never widen this to kill-session.
-    const ok = await new Promise<boolean>((resolve) => {
+    // The last pane gone closes its session, a notification to every control client: on a tmux before
+    // 3.7, not while one attaches (tmuxControlGate.ts).
+    const ok = await inTmuxRoom('notify', () => new Promise<boolean>((resolve) => {
       run('tmux', ['kill-pane', '-t', runtime.paneId], { timeout: 5_000 }, (error) => resolve(!error))
-    })
+    }))
     if (ok) return TERMINAL_ACTION_SUCCEEDED
     // The engine may have exited and removed its pane before the parallel PID
     // check completed. Only authoritative inventory makes that an idempotent success.

@@ -23,10 +23,10 @@ install -D -m 644 /inputs/browser-policy.json /etc/chromium/policies/managed/har
 install -D -m 644 /inputs/project-AGENTS.md /etc/skel/projects/AGENTS.md
 cp -a --no-preserve=ownership /inputs/modules /usr/lib/
 depmod -a "$(cat /inputs/kernel-release)"
-# Agent provisioning remains separate from the session RPM. Capture its lock
-# below; this mutable test input is not an image release or a bundled-agent RPM.
-npm install --prefix /opt/harness-agent --no-audit --no-fund opencode-ai
-ln -s /opt/harness-agent/node_modules/.bin/opencode /usr/bin/opencode
+# The exact upstream agent and license belong to the session RPM. No untracked
+# npm installation or first-boot download is needed.
+test "$(rpm -qf --qf '%{NAME}' /usr/bin/opencode /usr/lib/harness-opencode/opencode)" = harness-os-sessionharness-os-session
+rpm -V harness-os-session
 opencode --version
 useradd --create-home --uid 1000 --groups wheel --shell /bin/bash me
 # The empty password belongs only to this test disk and its local QEMU console.

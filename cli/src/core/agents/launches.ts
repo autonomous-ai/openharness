@@ -24,9 +24,10 @@ import {
   AGENT_NAME_RE, FirstPromptUnsupportedError, MAX_FIRST_PROMPT_CHARS, NamedAgentUnsupportedError, permissionModeApproves,
   permissionModeFlags, supportsFirstPrompt, supportsNamedAgent,
 } from '../../lib/engineLaunch.js'
-import { parseGridLaunchOverride } from '../../lib/gridLaunch.js'
-import { parseNewAgentModel, resolveNewAgentModel } from '../../lib/newAgentModel.js'
+import { parseGridLaunchOverride, type GridLaunchOverride } from '../../lib/gridLaunch.js'
+import { parseNewAgentModel, type NewAgentModel } from '../../lib/newAgentModel.js'
 import { parseProjectFolder, prepareProjectFolder, projectsRoot, ProjectFolderError } from '../../lib/projectFolder.js'
+import type { ScmLaunchRecord } from '../../scm/types.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 
 /** Creates an agent (core/agents/create.ts). The orchestrator creates through the same one. */
@@ -56,11 +57,15 @@ export interface LaunchRequestDeps {
   byAgent: (agentId: string) => RegisteredSession | undefined
   /** An agent's frame, as the socket builds it for every reply. */
   toProject: (s: RegisteredSession) => Promise<AgentFrame>
+  /** Where a new agent on a grid model sends its inference: the models service's to resolve, on this
+   *  machine (core/api.ts `ModelsPort.launchTarget`). Null, or a rejection while models is down, refuses
+   *  the create with GRID_UNAVAILABLE rather than start it anywhere else. */
+  modelTarget: (selection: NewAgentModel) => Promise<GridLaunchOverride | null>
 }
 
 type Reply = (result: Record<string, unknown>) => void
 
-export function createLaunchRequests({ receipts, createAgent, forkAgent, resumeAgent, restartAgent, byAgent, toProject }: LaunchRequestDeps) {
+export function createLaunchRequests({ receipts, createAgent, forkAgent, resumeAgent, restartAgent, byAgent, toProject, modelTarget }: LaunchRequestDeps) {
   /** Recover by stable runtime identity; a deleted agent must never become a fresh launch. */
   const creationStatusPayload = async (status: AgentCreationStatus): Promise<Record<string, unknown>> => {
     if (status.state === 'created') {
@@ -240,13 +245,17 @@ export function createLaunchRequests({ receipts, createAgent, forkAgent, resumeA
       try {
         void receipts.run(creationId, creationFingerprint(projectFolder ? { ...fingerprintInput, projectFolder } : fingerprintInput), async () => {
           if (model.state === 'ok') {
-            const target = await resolveNewAgentModel(model.selection).catch(() => null)
+            const target = await modelTarget(model.selection).catch(() => null)
             if (!target) return { state: 'failed', error: 'GRID_UNAVAILABLE', detail: 'The selected model is unavailable. Choose another model or refresh the list.' }
             input.grid = target
           }
           let preparedFolder: string | undefined
+          let scmLaunchRecord: ScmLaunchRecord | null = null
           if (projectFolder) {
-            try { preparedFolder = await prepareProjectFolder(projectFolder, { label: (dsh ? installedDsh(dsh)?.manifest.name : null) ?? engineLabel(input.engine) }) }
+            try {
+              preparedFolder = await prepareProjectFolder(projectFolder, { label: (dsh ? installedDsh(dsh)?.manifest.name : null) ?? engineLabel(input.engine),
+                onPrepared: prepared => { scmLaunchRecord = prepared.scmLaunchRecord } })
+            }
             catch (error) {
               return { state: 'failed', error: error instanceof ProjectFolderError ? error.code : 'PROJECT_PREPARATION_FAILED',
                 detail: error instanceof ProjectFolderError ? error.message : 'Could not prepare the project folder.' }
@@ -286,7 +295,7 @@ export function createLaunchRequests({ receipts, createAgent, forkAgent, resumeA
               }
             } catch (error) { console.warn(`[agent] pre-trust ${input.cwd} · ${error instanceof Error ? error.message : error}`) }
           }
-          const result = await create(preparedFolder ? { ...input, cwd: preparedFolder } : input)
+          const result = await create(preparedFolder ? { ...input, cwd: preparedFolder, scmLaunchRecord } : input)
           if (result.ok) return { state: 'created', agentId: result.session.agentId }
           // tmux may have executed before a timeout; registration cleanup is best-effort.
           // Neither can prove that no process started, so never encourage another launch.
@@ -302,7 +311,7 @@ export function createLaunchRequests({ receipts, createAgent, forkAgent, resumeA
     }
     // Clients predating receipts retain their existing response shape.
     if (model.state === 'ok') {
-      const target = await resolveNewAgentModel(model.selection).catch(() => null)
+      const target = await modelTarget(model.selection).catch(() => null)
       if (!target) { reply({ error: 'GRID_UNAVAILABLE', detail: 'The selected model is unavailable. Choose another model or refresh the list.' }); return }
       input.grid = target
     }

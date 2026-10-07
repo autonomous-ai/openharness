@@ -70,6 +70,11 @@ typedef TerminalNotice = ({
   String? actionLabel,
   VoidCallback? onAction,
 
+  /// A second way out, offered on the band only ([banner]) — a machine asking
+  /// for its password while this app's device list waits for a review.
+  String? secondaryLabel,
+  VoidCallback? onSecondary,
+
   /// Whether this one also earns a band above the terminal output.
   /// Startup and failure guidance needs to be read, not hovered.
   /// An offline machine is neither confusing nor rare, and a band on every one
@@ -88,6 +93,8 @@ TerminalNotice terminalNotice({
   required IconData icon,
   String? actionLabel,
   VoidCallback? onAction,
+  String? secondaryLabel,
+  VoidCallback? onSecondary,
   bool banner = false,
 }) => (
   label: label,
@@ -95,6 +102,8 @@ TerminalNotice terminalNotice({
   icon: icon,
   actionLabel: actionLabel,
   onAction: onAction,
+  secondaryLabel: secondaryLabel,
+  onSecondary: onSecondary,
   banner: banner,
 );
 
@@ -3418,7 +3427,7 @@ class _ControlBanner extends StatelessWidget {
                     ],
                   ),
                 );
-                final button = notice != null
+                final primary = notice != null
                     ? (notice!.actionLabel == null
                           ? null
                           : _ControlBannerButton(
@@ -3429,6 +3438,31 @@ class _ControlBanner extends StatelessWidget {
                     : busy
                     ? null
                     : _ControlBannerButton(onPressed: onTakeControl);
+                final secondary = notice?.secondaryLabel;
+                final button = secondary == null
+                    ? primary
+                    : Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        alignment: WrapAlignment.end,
+                        children: [
+                          TextButton(
+                            onPressed: notice!.onSecondary,
+                            style: TextButton.styleFrom(
+                              minimumSize: const Size(0, 28),
+                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                              visualDensity: VisualDensity.compact,
+                            ),
+                            child: Text(
+                              secondary,
+                              style: grid.AppType.mono(
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                          ),
+                          ?primary,
+                        ],
+                      );
                 if (narrow) {
                   return Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,

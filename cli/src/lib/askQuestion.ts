@@ -1047,6 +1047,10 @@ export interface QuestionWatcherDeps {
 }
 
 const POLL_MS = 1500
+/** How long the pane read before a prompt stands for the turn it starts: past this, that turn's own start
+ *  is read instead (a prompt that never became a turn). Turns were seen to start 8 s after their prompt
+ *  under load. */
+const PROMPT_BASELINE_MS = 120_000
 // Consecutive empty polls before a question is declared gone.
 //
 // NOT 1. A capture taken mid-repaint parses as no-dialog, and announcing a close on that would yank a
@@ -1087,6 +1091,8 @@ export class QuestionWatcher {
   private readonly blocked = new Map<string, string>()
   /** sessionId → the dialog that was ALREADY on the pane when this turn began. */
   private readonly preTurn = new Map<string, string>()
+  /** sessionId → the pane as the daemon read it right before typing a prompt: its dialog, if any, and when. */
+  private readonly beforePrompt = new Map<string, { fingerprint: string | null; at: number }>()
 
 
   constructor(private readonly deps: QuestionWatcherDeps) {}
@@ -1113,6 +1119,14 @@ export class QuestionWatcher {
   noteTurnStart(sessionId: string): void {
     this.preTurn.delete(sessionId)
     this.cancelPending(sessionId)
+    // The daemon typed this turn's prompt, and read the pane as it did: what was on it then is the turns
+    // before's, and nothing drawn since is (notePrompt says why).
+    const typed = this.beforePrompt.get(sessionId)
+    this.beforePrompt.delete(sessionId)
+    if (typed && Date.now() - typed.at <= PROMPT_BASELINE_MS) {
+      if (typed.fingerprint) this.preTurn.set(sessionId, typed.fingerprint)
+      return
+    }
     const pending = { cancelled: false }
     this.pendingBaselines.set(sessionId, pending)
     void (async () => {
@@ -1135,6 +1149,27 @@ export class QuestionWatcher {
         if (this.pendingBaselines.get(sessionId) === pending) this.pendingBaselines.delete(sessionId)
       }
     })()
+  }
+
+  /**
+   * The daemon is typing a prompt, and `capture` is the pane as it read it right before (core/input.ts
+   * messageWriter): the honest "before this turn" for the turn that prompt starts.
+   *
+   * A capture taken when the turn is SEEN to start can be too late for that. The turn is seen to start
+   * from the transcript, after the prompt is confirmed typed, and an engine can draw its question before
+   * that: measured in the soak run (e2e/endurance.e2e.ts) under load, Codex took the prompt at 20:42:54.9
+   * (its prompt hook), drew its question a moment later, and the turn was seen to start at 20:43:02.2, 7 s
+   * on. The capture at that start held the turn's own question, recorded it as the turns before's, and it
+   * was never announced: the agent waited on a question no window or device was shown.
+   *
+   * A read that failed supplies nothing: the turn's start reads the pane itself, as before.
+   */
+  notePrompt(sessionId: string, capture: string | null): void {
+    const session = this.deps.getSession(sessionId)
+    if (capture === null || !session || (session.engine && !pollsQuestions(session.engine))) return
+    const view = parseEngineQuestionPane(session.engine ?? 'claude', capture)
+    const dialog = view && view.kind === 'question' && view.question && view.rows.length > 0 ? fingerprintOf(view) : null
+    this.beforePrompt.set(sessionId, { fingerprint: dialog, at: Date.now() })
   }
 
   /** Poll this session's pane while its turn is open (called on turn_started). */
@@ -1184,6 +1219,7 @@ export class QuestionWatcher {
     for (const pending of this.pendingPolls.values()) pending.cancelled = true
     for (const pending of this.pendingBaselines.values()) pending.cancelled = true
     this.preTurn.clear()
+    this.beforePrompt.clear()
     this.blocked.clear()
     this.last.clear()
     this.lastId.clear()

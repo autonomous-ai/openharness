@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { deviceErrorText } from '../../lib/deviceErrors.js'
+import { deviceErrorText } from '../cardText.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { createEventFunnel, funnelFor, outsideConsumers, type FunnelDeps } from './funnel.js'
 

@@ -1,7 +1,6 @@
-import { SharingEndedError, type HarnessShareRelay } from './sharing/relay.js'
 import { randomUUID } from 'node:crypto'
 import type { AppSwarms } from './cable/cableSession.js'
-import { notificationReadToken, type UnreadNotification } from './cable/notificationRead.js'
+import { notificationReadToken, type UnreadNotification } from './lib/notificationRead.js'
 import type http from 'node:http'
 import type { Socket } from 'node:net'
 import { WebSocket, WebSocketServer, type RawData } from 'ws'
@@ -15,7 +14,8 @@ import {
   TERMINAL_LOCAL_PASTE_MAX_PAYLOAD_BYTES,
   type TerminalBinaryClear,
 } from './lib/terminalBinary.js'
-import { RelayConnectError, type RelaySession, type RemoteRelayPool } from './lib/remoteRelay.js'
+import { RelayConnectError } from './lib/relayFrames.js'
+import type { WindowRelay, WindowRelaySession } from './core/api.js'
 // Reserved retired feature frames: transport refusals only, no optional implementation.
 const DAEMON_IN_TYPES = new Set(['daemon_act', 'daemon_presence', 'daemon_talk', 'daemon_open', 'daemon_shown', 'daemon_confirm'])
 const DAEMON_PLATE_GET = 'daemon_plate_get'
@@ -36,7 +36,7 @@ import type { WindowVoiceReply } from './cable/windowRoute.js'
 
 export interface LocalWsBackend {
   /** `tool`: `harness pair` or the harnessd MCP server — answered like any local client, never presence. */
-  registerLocalClient: (connId: string, sink: LocalClientSink, opts?: { tool?: boolean }) => boolean
+  registerLocalClient: (connId: string, sink: LocalClientSink, opts?: { tool?: boolean; surface?: 'tui' }) => boolean
   unregisterLocalClient: (connId: string) => Promise<void>
   handleLocalFrame: (connId: string, frame: Frame) => void
   handleLocalBinary: (connId: string, frame: TerminalBinaryClear) => Promise<void>
@@ -50,9 +50,9 @@ export interface LocalWsServerOptions {
   /** The daemon's Unix-socket server (lib/localSocket.ts), served the same endpoint beside TCP. */
   localSocketServer?: http.Server | null
   /** Serves a `machine_select` for any OTHER machine this signed-in user owns, by relaying to
-   *  backend's `/api/web-ws` — see lib/remoteRelay.ts. Omit to keep today's own-machine-only behavior. */
-  relayPool?: RemoteRelayPool
-  shareRelay?: HarnessShareRelay
+   *  backend's `/api/web-ws` — see lib/remoteRelay.ts — and one for a harness shared with this account
+   *  (`shareId`, sharing/relay.ts). Both are the gateway's. Omit to keep today's own-machine-only behavior. */
+  relayPool?: WindowRelay
   autonomousEnv?: string
   /**
    * Who a window on this computer is, for a `terminal_open` it relays to another machine without
@@ -97,10 +97,13 @@ export interface LocalWsServerOptions {
    * It answers for the same reason `route_task` does. The remote leg carries no ack of its own, so a
    * machine that has gone deaf takes the turn and nothing comes back; with the palette closing silently
    * on a confident route, that is a spoken instruction that vanishes with no mark anywhere.
+   *
+   * Answered when the fleet's router has decided, which is beside the dial in the devices: in a process of
+   * their own that is a hop, so the answer is awaited off this connection's ordered chain.
    */
-  onRouteSend?: (agentId: string, text: string) => { ok: true } | { ok: false; machine: string; reason: string }
+  onRouteSend?: (agentId: string, text: string) => Promise<{ ok: true } | { ok: false; machine: string; reason: string }>
   /** The dial right now, sent to a window the moment it connects — it may have missed the announcement. */
-  dialStatus?: () => { attached: boolean; fw?: string; updating?: string }
+  dialStatus?: () => Record<string, unknown>
   /**
    * A window changed a device's settings. `id` names which device on this desk; the rest of the payload
    * is the patch, and an absent field is a setting the window is not changing.
@@ -115,7 +118,8 @@ export interface LocalWsServerOptions {
   /** The core's end of its out-of-process services (core/serviceLinks.ts): a `machine_select` with
    *  `role: "service"` is handed here, and the connection is the service's from then on. */
   services?: {
-    accept(service: string, token: string, sink: LocalClientSink, close: (code: number, reason: string) => void): { receive(frame: Frame): void; closed(): void } | null
+    accept(service: string, token: string, sink: LocalClientSink & { buffered(): number }, close: (code: number, reason: string) => void, accepted: () => void):
+      { receive(frame: Frame): void; receiveBinary(bytes: Uint8Array): void; closed(): void } | null
   }
   /**
    * The window answering a `voice_route_request` — words spoken into the dial that IT was asked to route.
@@ -330,13 +334,13 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
     // Which machine THIS connection is bound to. The app opens one local socket per machine, so it is
     // fixed for the life of the connection — set once, beside `selected`.
     let boundMachineId: string | null = null
-    let relay: RelaySession | null = null
+    let relay: WindowRelaySession | null = null
     /** Whether this connection ever reported a tile roster — only then is clearing it ours to do. */
     let sentPanes = false
     let sentSwarms = false
     let chain = Promise.resolve()
     /** Set when this connection is one of the core's services, not a window. */
-    let serviceLink: { receive(frame: Frame): void; closed(): void } | null = null
+    let serviceLink: { receive(frame: Frame): void; receiveBinary(bytes: Uint8Array): void; closed(): void } | null = null
 
     const sink: LocalClientSink = {
       sendFrame: (frame) => {
@@ -373,14 +377,16 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
         close(4403, 'machine mismatch')
         return
       }
+      // A harness someone shared with this account, watched read-only through the gateway, which holds the
+      // Share relay's socket (sharing/relay.ts): 4403 when the share ended, 1013 when it is out of reach.
       if (typeof payload.shareId === 'string') {
-        if (!options.shareRelay) { close(4403, 'Sharing is unavailable'); return }
+        if (!options.relayPool?.acquireShare) { close(4403, 'Sharing is unavailable'); return }
         try {
-          relay = await options.shareRelay.acquire(requestedMachineId, payload.shareId, terminalSink, close)
+          relay = await options.relayPool.acquireShare(requestedMachineId, payload.shareId, terminalSink, close)
           if (ws.readyState !== WebSocket.OPEN) { relay.detach(); return }
           selected = true
         } catch (error) {
-          close(error instanceof SharingEndedError ? 4403 : 1013,
+          close(error instanceof RelayConnectError && error.closeCode ? error.closeCode : 1013,
             error instanceof Error ? error.message.slice(0, 120) : 'Sharing unavailable')
         }
         return
@@ -391,16 +397,19 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
       // account's machine id while a service names this computer's, and matching them refused every
       // service of every signed-in daemon (found by the release rehearsal, signed in).
       if (payload.role === 'service') {
-        const link = options.services?.accept(String(payload.service ?? ''), String(payload.token ?? ''), sink, close) ?? null
+        const link = options.services?.accept(String(payload.service ?? ''), String(payload.token ?? ''), { ...sink, buffered: () => ws.bufferedAmount }, close, () => {
+          sink.sendFrame({ type: 'connected', payload: { machineId: options.machineId, transport: 'local', localProtocolVersion: LOCAL_WS_PROTOCOL_VERSION, service: payload.service } })
+        }) ?? null
         if (!link) { close(4401, 'service refused'); return }
         serviceLink = link
         selected = true
-        sink.sendFrame({ type: 'connected', payload: { machineId: options.machineId, transport: 'local', localProtocolVersion: LOCAL_WS_PROTOCOL_VERSION, service: payload.service } })
         return
       }
       if (requestedMachineId === options.machineId) {
         tool = payload.tool === true
-        if (!options.backend.registerLocalClient(connId, terminalSink, tool ? { tool: true } : {})) {
+        // `harness tui` says so; every other window is the desktop app. Each is its own presence.
+        const registration = tool ? { tool: true } : payload.client === 'tui' ? { surface: 'tui' as const } : {}
+        if (!options.backend.registerLocalClient(connId, terminalSink, registration)) {
           close(1011, 'local registration failed')
           return
         }
@@ -462,7 +471,8 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
       chain = chain.then(() => {
         if (!selected) return selectMachine(raw, isBinary)
         if (serviceLink) {
-          const frame = isBinary ? null : jsonFrame(raw)
+          if (isBinary) { serviceLink.receiveBinary(binaryBytes(raw)); return }
+          const frame = jsonFrame(raw)
           if (!frame) { close(4400, 'invalid json frame'); return }
           serviceLink.receive(frame)
           return
@@ -586,10 +596,15 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
         //
         // Consumed here like app_focus: it describes a hand at this desk, not anything the machine could
         // act on.
+        //
+        // Answered OFF this connection's ordered chain, which carries the terminal's keystrokes: the answer
+        // is the devices' (the fleet's router), which may be in a process of their own, and one that hangs
+        // must not hold a window's typing until the request times out. Nothing orders on the answer but its
+        // request id.
         if (!isBinary && (options.onRouteTask || options.onRouteSend || options.onVoiceRouteReply)) {
           if (parsed?.type === 'route_task' && options.onRouteTask) {
             const onRouteTask = options.onRouteTask
-            return (async () => {
+            void (async () => {
               const payload = parsed.payload as Record<string, unknown> | undefined
               const requestId = typeof payload?.requestId === 'string' ? payload.requestId : ''
               const text = typeof payload?.text === 'string' ? payload.text.trim() : ''
@@ -604,8 +619,8 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
                 }
               }
               sink.sendFrame({ type: 'route_result', payload: { requestId, ...answer } })
-              return
             })()
+            return
           }
           if (parsed?.type === 'voice_route_reply' && options.onVoiceRouteReply) {
             const payload = parsed.payload as Record<string, unknown> | undefined
@@ -622,25 +637,28 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
             return
           }
           if (parsed?.type === 'route_send' && options.onRouteSend) {
-            const payload = parsed.payload as Record<string, unknown> | undefined
-            const requestId = typeof payload?.requestId === 'string' ? payload.requestId : ''
-            const agentId = typeof payload?.agentId === 'string' ? payload.agentId : ''
-            const text = typeof payload?.text === 'string' ? payload.text : ''
-            let sent: { ok: true } | { ok: false; machine: string; reason: string } =
-              { ok: false, machine: '', reason: 'nothing to send' }
-            if (agentId && text) {
-              try {
-                sent = options.onRouteSend(agentId, text)
-              } catch (err) {
-                sent = { ok: false, machine: '', reason: (err as Error).message.slice(0, 120) }
+            const onRouteSend = options.onRouteSend
+            void (async () => {
+              const payload = parsed.payload as Record<string, unknown> | undefined
+              const requestId = typeof payload?.requestId === 'string' ? payload.requestId : ''
+              const agentId = typeof payload?.agentId === 'string' ? payload.agentId : ''
+              const text = typeof payload?.text === 'string' ? payload.text : ''
+              let sent: { ok: true } | { ok: false; machine: string; reason: string } =
+                { ok: false, machine: '', reason: 'nothing to send' }
+              if (agentId && text) {
+                try {
+                  sent = await onRouteSend.call(options, agentId, text)
+                } catch (err) {
+                  sent = { ok: false, machine: '', reason: (err as Error).message.slice(0, 120) }
+                }
               }
-            }
-            sink.sendFrame({
-              type: 'route_send_result',
-              payload: sent.ok
-                ? { requestId, ok: true }
-                : { requestId, ok: false, machine: sent.machine, reason: sent.reason },
-            })
+              sink.sendFrame({
+                type: 'route_send_result',
+                payload: sent.ok
+                  ? { requestId, ok: true }
+                  : { requestId, ok: false, machine: sent.machine, reason: sent.reason },
+              })
+            })()
             return
           }
         }

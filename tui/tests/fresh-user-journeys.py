@@ -2,10 +2,12 @@
 
 Run `python3 tui/tests/fresh-user.py run` to install and exercise everything.
 Set HN_FRESH_USER_CLI / HN_FRESH_USER_BINARY to test local release candidates.
-No vendor credentials are copied: success means reaching the real onboarding UI.
+No vendor credentials are copied. The default OpenCode flow uses its free model;
+Codex and Claude success means reaching the real onboarding UI.
 The daemon API is used only to verify state, never to perform a product action.
 """
 from pathlib import Path
+import re
 import subprocess
 
 
@@ -39,13 +41,55 @@ def rejected(u, text, label):
     u.record(label)
 
 
+def default_agent(u):
+    """The first task must work without opening Agent or copying any login."""
+    u.wait('Welcome to Harness', 60)
+    assert not u.status()['signedIn']
+    assert not (u.home / '.local/bin/opencode').exists()
+    assert re.search(r'Agent\s+OpenCode', u.screen()), u.screen()
+    before = {s['id'] for s in u.status()['sessions']}
+    u.text('Reply with exactly HN_DEFAULT_START_OK. Do not use tools or inspect files.')
+    u.keys('Enter')
+    added = u.check(lambda: [s for s in u.status()['sessions'] if s['id'] not in before],
+                    'Default OpenCode first launch', 180)
+    assert len(added) == 1 and added[0]['engine'] == 'opencode', added
+    u.zoom()
+    # Match the standalone response, never the echoed prompt or generated title.
+    u.check(lambda: re.search(r'^\s*[│┃]?\s*HN_DEFAULT_START_OK\s*[│┃]?\s*$', u.screen(), re.M),
+            'The default free model replies through the real terminal', 180)
+    assert not u.status()['signedIn']
+    assert (u.home / '.local/bin/opencode').exists()
+    u.record('default-opencode-auto-install-task-response', engine='opencode', signedIn=False)
+
+    before = {s['id'] for s in u.status()['sessions']}
+    u.keys('C-b', 'T')
+    added = u.check(lambda: [s for s in u.status()['sessions'] if s['id'] not in before],
+                    'Direct terminal shortcut after a real model response', 60)
+    assert len(added) == 1 and added[0]['engine'] == 'terminal', added
+    u.wait('Terminal on', 60)
+    u.text("printf 'HN_%s_OK\\n' SHELL")
+    u.keys('Enter'); u.wait('HN_SHELL_OK')
+    u.record('direct-terminal-after-default-task-response')
+    u.close_view(); u.wait('HN_DEFAULT_START_OK')
+    # Keep an empty window: like tmux, stopping the final pane would exit hn.
+    u.keys('C-b', 'c'); u.wait('New Window')
+    u.keys('C-b', 'p'); u.wait('HN_DEFAULT_START_OK')
+    u.close_view(); u.wait('Task')
+    u.record('default-agent-and-terminal-stop-recovery')
+
+
 def core(u):
-    u.wait('C-b N new', 60)
+    u.wait('Welcome to Harness', 60)
     assert not u.status()['signedIn']
     for name in ['codex', 'claude']:
         assert not (u.home / '.local/bin' / name).exists()
     u.record('signed-out-start')
-    u.form()
+    default_agent(u)
+    vendor_onboarding(u)
+
+
+def vendor_onboarding(u):
+    u.form('codex')
     u.launch('codex', 'codex-auto-install-default-folder')
     assert (u.home / '.local/bin/codex').exists()
 
@@ -55,16 +99,18 @@ def core(u):
     assert session['cwd'] == '~/harnesses/My-First-Claude-Project'
     assert (u.home / '.local/bin/claude').exists()
 
+
+def terminal(u):
     folder = u.home / "Projects/Notes & 'quotes' café"
-    folder.mkdir(parents=True)
+    folder.mkdir(parents=True, exist_ok=True)
     (folder / 'keep-me.txt').write_text('fresh-user folder fixture\n')
-    u.form('terminal')
+    u.keys('C-b', 'c')
+    u.wait('New Window')
     u.project('open folder', str(folder))
     before = {s['id'] for s in u.status()['sessions']}
-    u.keys('Enter')
+    u.field('Open Terminal')
     u.check(lambda: len([s for s in u.status()['sessions'] if s['id'] not in before]) == 1,
-            'Third pane created', 60)
-    # Keep all three splits visible to catch sub-40-column terminal_open regressions.
+            'Terminal created in the selected folder', 60)
     u.wait('Terminal on', 60)
     assert 'TERMINAL_OPEN_INVALID' not in u.screen()
     u.keys('C-c')
@@ -73,7 +119,7 @@ def core(u):
     u.wait('OPEN_FOLDER_OK')
     assert (u.home / 'open-folder-cwd.txt').read_text().strip() == str(folder)
     assert (folder / 'keep-me.txt').read_text() == 'fresh-user folder fixture\n'
-    u.record('open-folder-special-characters-third-pane')
+    u.record('open-folder-special-characters-terminal')
     u.zoom()
     u.close_view()
 
@@ -222,9 +268,11 @@ def git_edges(u):
 
 
 def run(u, names):
-    cases = dict(core=core, folders=folders, clones=clones, worktrees=worktrees,
+    cases = dict(core=core, terminal=terminal, folders=folders, clones=clones, worktrees=worktrees,
                  git_edges=git_edges, narrow=narrow_cancel)
-    for name in names or cases:
+    selected = names or list(cases)
+    cases.update(default=default_agent, vendors=vendor_onboarding)
+    for name in selected:
         print('RUN ' + name, flush=True)
         try:
             cases[name](u)

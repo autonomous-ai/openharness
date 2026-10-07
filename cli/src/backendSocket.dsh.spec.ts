@@ -6,6 +6,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { BackendSocket } from './backendSocket.js'
+import { relaySocket } from './testing/relaySocket.js'
 import { bindLaunchRequests } from './testing/socketCore.js'
 import { env } from './config/env.js'
 import { emptyPorts } from './core/api.js'
@@ -37,7 +38,7 @@ describe('the DSH requests on the local socket', () => {
     savedDshDir = env.DSH_DIR
     env.DSH_DIR = join(root, 'dsh')
     invalidateInstalledDsh()
-    socket = new BackendSocket('token')
+    socket = relaySocket('token')
     bindLaunchRequests(socket)
     frames = []
     socket.registerLocalClient('local:store', { sendFrame: (frame) => { frames.push(frame as (typeof frames)[number]); return true }, sendBinary: () => true })

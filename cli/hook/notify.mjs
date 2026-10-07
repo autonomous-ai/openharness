@@ -47,7 +47,18 @@ const HOOK_STARTED_AT = performance.now()
 // parallel test run, a busy CI box) a cold Node start plus lock retries can eat it before the offline
 // registry fallback is reached, and the fallback then silently does nothing. Tests set it explicitly so
 // they measure behaviour instead of the host's load. Clamped, and never below the shipped default.
-const HOOK_DEADLINE_MS = Math.min(60_000, Math.max(4500, Number(process.env.HARNESS_HOOK_DEADLINE_MS) || 0))
+const SHIPPED_DEADLINE_MS = 4500
+const HOOK_DEADLINE_MS = Math.min(60_000, Math.max(SHIPPED_DEADLINE_MS, Number(process.env.HARNESS_HOOK_DEADLINE_MS) || 0))
+// Each step's own limit (`execFileText`: tmux 2 s, ps and sqlite3 3 s, lsof 1.5 s) is a wall-clock assumption too, and
+// the override has to move them with the budget or it does not do what it says: under a loaded full test
+// run (load 36, six workers) the Hermes fallback's fake tmux, ps and sqlite3 each took longer than their
+// step's limit with 30 s of budget left, the lookup read as no answer, and no registry was written
+// (hookNotify.spec.ts, 3 of 3 Hermes cases). 1 with the shipped budget: a hook as shipped is unchanged.
+const STEP_SCALE = HOOK_DEADLINE_MS / SHIPPED_DEADLINE_MS
+/** A step's limit under the budget in force. Whole milliseconds: child_process refuses a fractional timeout. */
+function stepLimit(ms) {
+  return Math.round(ms * STEP_SCALE)
+}
 const EXIT_RESERVE_MS = 500
 const LOCK_RETRIES = 60
 const LOCK_RETRY_MS = 25
@@ -67,7 +78,14 @@ function modelName(value) {
   return typeof value?.id === 'string' ? value.id : null
 }
 
+/**
+ * The daemon this hook reports to, once the pane it came from has named it (`routeToPaneOwner`): its data
+ * folder and port, in place of the `--data-dir` and `--port` the installed command carries.
+ */
+let routed = null
+
 function argPort() {
+  if (routed) return routed.port
   const i = process.argv.indexOf('--port')
   if (i !== -1 && process.argv[i + 1]) return parseInt(process.argv[i + 1], 10)
   return parseInt(process.env.AGENT_ADAPTER_PORT || '18473', 10)
@@ -106,7 +124,7 @@ function argAgyEvent() {
 
 function paths() {
   const cliDir = join(homedir(), '.harness', 'cli')
-  const dataDir = argValue('--data-dir', process.env.ADAPTER_DATA_DIR || join(cliDir, 'data'))
+  const dataDir = routed?.dataDir ?? argValue('--data-dir', process.env.ADAPTER_DATA_DIR || join(cliDir, 'data'))
   const claudeProjectsDir = argValue('--claude-projects-dir', process.env.CLAUDE_PROJECTS_DIR || join(homedir(), '.claude', 'projects'))
   const codexHome = argValue('--codex-home', process.env.CODEX_HOME || join(homedir(), '.codex'))
   const grokHome = argValue('--grok-home', process.env.GROK_HOME || join(homedir(), '.grok'))
@@ -253,6 +271,9 @@ function boundedPrompt(prompt) {
  * permission mode or close plan the daemon kept, merged over its own at its next save
  * (e2e/stall.e2e.ts).
  */
+/** This process's start, epoch ms: the engine ran the hook then. */
+const FIRED_AT = Date.now() - Math.round(process.uptime() * 1000)
+
 function post(port, path, body, onResponse) {
   return new Promise((resolve) => {
     const payload = JSON.stringify(body)
@@ -269,6 +290,9 @@ function post(port, path, body, onResponse) {
           'Content-Type': 'application/json',
           'Content-Length': Buffer.byteLength(payload),
           'X-Harness-Hook-Token': credential,
+          // When the engine ran this hook: this process's start, not its arrival, which can be seconds later on
+          // a loaded machine, after the engine has moved on to its next prompt (src/hookServer.ts hookFiredAt).
+          'X-Harness-Hook-Fired-At': String(FIRED_AT),
         },
         timeout: Math.max(1, Math.min(500, remainingBudget())),
       },
@@ -386,7 +410,11 @@ function sleep(ms) {
 
 function execFileText(cmd, args, timeout, env) {
   return new Promise((resolve) => {
-    const budget = Math.min(timeout, remainingBudget())
+    // Whole milliseconds. What is left of the budget is a fraction off the whole (performance.now()),
+    // and `execFile` throws ERR_OUT_OF_RANGE on a fractional timeout: once less was left than a step's
+    // own limit, as on the shipped 4.5 s budget after a second of earlier steps on a loaded machine, the
+    // step threw, and the offline registration it was part of was dropped.
+    const budget = Math.floor(Math.min(stepLimit(timeout), remainingBudget()))
     if (budget < 50) { resolve(null); return }
     execFile(cmd, args, { timeout: budget, ...(env && { env }) }, (err, stdout) => {
       resolve(err ? null : stdout)
@@ -475,16 +503,17 @@ function daemonPaneOwner(dataDir) {
 }
 
 /**
- * The pane, as tmux describes it, in one call: its root process, and whether the daemon this hook writes
- * for takes it for one of its agents at all, by the rule its discovery reads panes with (`ownedHere`):
- * one it tagged, wherever the person moved it; an untagged one only in a session Harness named, or one an
- * older build named (`<engine>-<ms>`) that its registry already holds (`taken: 'if-held'`); another
- * daemon's, never. A session the person opened by hand is not an agent: with the daemon up, its hook is
- * turned away. The offline fallback wrote a row for one all the same, and the daemon came back with an
- * agent it would never have made and could not drive, "offline" for good (e2e/hookclient.e2e.ts).
- * Undefined when tmux could not answer.
+ * The pane, as tmux describes it, in one call: its root process, its session, and the tag of the daemon
+ * that made it (from the pane's option, or before tmux 3.0 from its start command). Read once per hook:
+ * the route to the daemon is chosen from it first, and the offline fallback reads it again. Undefined
+ * when tmux could not answer.
  */
-async function paneFacts(pane, dataDir) {
+const paneDescriptions = new Map()
+function describePane(pane) {
+  if (!paneDescriptions.has(pane)) paneDescriptions.set(pane, readPaneDescription(pane))
+  return paneDescriptions.get(pane)
+}
+async function readPaneDescription(pane) {
   const format = (await tmuxHasPaneOptions()) ? PANE_OWNER_FORMAT : PANE_OWNER_FORMAT_OLD_TMUX
   const stdout = await execFileText('tmux', ['display-message', '-p', '-t', pane, `#{pane_pid}|#{session_name}|${format}`], 2000)
   if (stdout === null) return undefined
@@ -496,10 +525,68 @@ async function paneFacts(pane, dataDir) {
   const session = line.slice(first + 1, last)
   const field = line.slice(last + 1)
   const owner = field.startsWith(OWNER_COMMAND_PREFIX) ? field.slice(OWNER_COMMAND_PREFIX.length).split(' ')[0] : field
+  return { pid: Number.isSafeInteger(pid) && pid > 0 ? pid : null, session, owner }
+}
+
+/**
+ * Whether the daemon this hook writes for takes the pane for one of its agents at all, by the rule its
+ * discovery reads panes with (`ownedHere`): one it tagged, wherever the person moved it; an untagged one
+ * only in a session Harness named, or one an older build named (`<engine>-<ms>`) that its registry
+ * already holds (`taken: 'if-held'`); another daemon's, never. A session the person opened by hand is not
+ * an agent: with the daemon up, its hook is turned away. The offline fallback wrote a row for one all the
+ * same, and the daemon came back with an agent it would never have made and could not drive, "offline"
+ * for good (e2e/hookclient.e2e.ts). Undefined when tmux could not answer.
+ */
+async function paneFacts(pane, dataDir) {
+  const described = await describePane(pane)
+  if (!described) return undefined
+  const { pid, session, owner } = described
   const taken = owner ? (owner === daemonPaneOwner(dataDir) ? 'yes' : 'no')
     : session.startsWith(HARNESS_SESSION_PREFIX) ? 'yes'
     : /^[a-z][a-z0-9]*-\d{13}$/.test(session) ? 'if-held' : 'no'
-  return { pid: Number.isSafeInteger(pid) && pid > 0 ? pid : null, taken }
+  return { pid, taken }
+}
+
+/**
+ * Where every daemon on this computer says it listens, one file per pane tag (src/lib/hookRoutes.ts,
+ * which hookNotify.spec.ts keeps this equal to).
+ */
+function hookRoutesDir() {
+  return process.env.HARNESS_HOOK_ROUTES_DIR || join(homedir(), '.harness', 'hook-routes')
+}
+
+/**
+ * Report to the daemon that made the pane, not to the one whose command this is.
+ *
+ * Claude Code's and Codex's hooks are installed once per computer, in ~/.claude/settings.json and
+ * $CODEX_HOME/hooks.json, and each daemon wrote its own port and data folder into them as it started. With
+ * a dev daemon beside the release one, the last to start owned every hook: the other daemon's agents'
+ * hooks went to it, it turned them away (the pane was not its own), and their turn ends and session
+ * starts were lost. Each daemon now records its data folder and port under the tag it puts on its panes
+ * (`publishHookRoute`), and the hook looks the pane's tag up: a record whose data folder hashes to that tag
+ * routes this hook, its credential, and any offline write to that daemon. A record still names a daemon
+ * that is down: the hook's post fails and its offline write lands in that daemon's own registry, where it
+ * will read it. A pane with no tag, or a tag with no record (a daemon from before the records), keeps the
+ * command's own `--port` and `--data-dir`, as every installed command did.
+ */
+async function routeToPaneOwner(pane) {
+  if (!/^%\d+$/.test(pane || '')) return null
+  const described = await describePane(pane)
+  const tag = described?.owner
+  if (!tag || !/^[0-9a-f]{16}$/.test(tag)) return null
+  try {
+    const dir = hookRoutesDir()
+    secureStateDirectory(dir, false)
+    const record = JSON.parse(readPrivateStateFile(join(dir, `${tag}.json`), 4096))
+    const dataDir = record?.dataDir
+    const port = record?.port
+    if (typeof dataDir !== 'string' || !isAbsolute(dataDir) || !Number.isInteger(port) || port < 1 || port > 65535) return null
+    // The record must be the tag's own, and its folder still there: a folder since removed would be
+    // created again by the offline write, for a daemon that will never read it.
+    if (daemonPaneOwner(dataDir) !== tag || !statSync(dataDir).isDirectory()) return null
+    routed = { dataDir, port }
+    return routed
+  } catch { return null }
 }
 
 function argvTokens(args) {
@@ -1405,7 +1492,7 @@ async function fallbackSessionEnd(sessionId, reason, engine, tmuxPane) {
 }
 
 async function main() {
-  const port = argPort()
+  let port = argPort()
   const engine = argEngine()
   const raw = await readStdin()
   let input = {}
@@ -1418,6 +1505,8 @@ async function main() {
   const event = input.hook_event_name || input.hookEventName
   const tmuxPane = process.env.TMUX_PANE
   if (!tmuxPane) return
+  // Before anything reads the data folder or posts: which daemon this pane is (routeToPaneOwner).
+  if (await routeToPaneOwner(tmuxPane)) port = argPort()
   const mutationFields = { engine, ...terminalHookFields(tmuxPane) }
   if (engine === 'cursor' && input.is_background_agent === true) return
   if (engine === 'codex' && isCodexSubagent(input, paths())) return

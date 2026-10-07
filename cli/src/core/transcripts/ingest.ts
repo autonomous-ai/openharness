@@ -18,7 +18,7 @@ import { CursorNormalizer } from '../../engines/cursor/normalizer.js'
 import { GrokNormalizer } from '../../engines/grok/normalizer.js'
 import { MuseNormalizer } from '../../engines/muse/normalizer.js'
 import { PiNormalizer } from '../../engines/pi/normalizer.js'
-import type { AutonomousDeviceService } from '../../lib/autonomous-device/service.js'
+import type { WifiFeed } from '../wifi.js'
 import { sid } from '../../lib/log.js'
 import { lineToEvents, newTurnState, type LiveEvent } from '../../lib/normalize.js'
 import type { RegisteredSession } from '../../lib/registry.js'
@@ -31,8 +31,8 @@ export interface IngestDeps {
   has: (sessionId: string) => boolean
   bySession: (sessionId: string) => RegisteredSession | undefined
   tokenUsage: { changed(session: RegisteredSession): void }
-  /** The Harness device service, once it exists: some subscriptions read the raw transcript. */
-  device: () => Pick<AutonomousDeviceService, 'needsTranscript' | 'observeTranscript'> | undefined
+  /** The Wi-Fi device's service, wherever it runs (core/wifi.ts): it proves its turns by the raw transcript. */
+  device: () => Pick<WifiFeed, 'needsTranscript' | 'observeTranscript'> | undefined
   runtimeProfiles: Pick<RuntimeProfileManager, 'ingest'>
   normalizers: SessionNormalizers
   announceTurnAborted: (sessionId: string, engine: string, message: string, deviceMessage?: string) => void

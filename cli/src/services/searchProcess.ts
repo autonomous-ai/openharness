@@ -8,12 +8,13 @@
  * process's alone: a crash or a leak in search costs search, and the master starts it again.
  */
 import type { CoreApi } from '../core/api.js'
-import { emptyPorts, resolveAgent } from '../core/api.js'
-import { databaseHistory } from '../core/transcripts/databaseHistory.js'
+import { ACCOUNT_BACKEND_OFF, CONVERSATIONS_OFF, AGENT_ACTIONS_OFF, DAEMON_UNKNOWN, DELIVERIES_OFF, emptyPorts, LANE_OFF, resolveAgent, TERMINALS_OFF } from '../core/api.js'
+import { databaseHistory } from '../lib/databaseHistory.js'
 import { ExternalSessions, OpenSessions } from '../lib/sessionSearch/external.js'
 import { externalProviders } from '../lib/sessionSearch/externals/index.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcess } from './process.js'
+import { UNASKED } from './processCoreApi.js'
 import { SEARCH_REQUESTS, startSearch } from './search.js'
 
 export interface SearchServiceOptions {
@@ -40,6 +41,9 @@ export function searchCoreApi(
 ): CoreApi {
   return {
     dataDir,
+    conversations: CONVERSATIONS_OFF,
+    terminals: TERMINALS_OFF,
+    machine: UNASKED.machine,
     agents: {
       all: agents,
       live: () => agents().filter((agent) => agent.active),
@@ -53,11 +57,13 @@ export function searchCoreApi(
       runtimeProfile: () => null,
       setRuntime: () => {},
       fork: async () => ({ ok: false, error: 'UNSUPPORTED' }),
+      ...AGENT_ACTIONS_OFF,
+      activityText: UNASKED.activityText,
     },
     // Search drives no agent: these are never asked of it.
-    turns: { send: () => {}, stop: () => {}, recent: () => [], asks: () => [] },
+    turns: { send: () => {}, stop: () => {}, recent: async () => [], asks: async () => [], ...DELIVERIES_OFF },
     questions: { answer: () => {}, answerReviewed: async () => false },
-    transcripts: { databaseHistory },
+    transcripts: { databaseHistory, lastTurn: UNASKED.lastTurn },
     external: {
       sessions: new ExternalSessions({ providers, excluded: [dataDir], log: console.warn }),
       open: new OpenSessions({ providers, log: console.warn }),
@@ -66,10 +72,15 @@ export function searchCoreApi(
     account: {
       mintGridName: async () => null,
       accessToken: () => Promise.reject(new Error('search holds no credential')),
+      lane: LANE_OFF,
       privateGridName: async () => null,
       machineName: () => null,
+      ...ACCOUNT_BACKEND_OFF,
+      ...UNASKED.account,
     },
-    clients: { viewerChanged: () => {}, gridNamed: () => {}, gridModelsChanged: () => {}, dshInstallStatus: () => {} },
+    clients: { viewerChanged: () => {}, viewerFrame: () => false, gridNamed: () => {}, gridModelsChanged: () => {}, dshInstallStatus: () => {}, windows: () => {}, observer: () => false, ...UNASKED.clients },
+    daemon: DAEMON_UNKNOWN,
+    wifi: UNASKED.wifi,
   }
 }
 

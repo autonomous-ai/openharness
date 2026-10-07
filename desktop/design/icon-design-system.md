@@ -86,7 +86,7 @@ These are content or identities, not a second action-icon library:
   number. Layout thumbnails use the real pane geometry. Connection dots,
   progress indicators and activity marks encode state.
 - Harness activity has one vocabulary in `harness_activity.dart`: `?`, `✗`,
-  `✓`, the ten-frame Braille spinner, `◌`, `||`, `⊘`, and unmarked idle. Native
+  `✓`, the ten-frame Braille spinner, `◌`, `■`, `⊘`, and unmarked idle. Native
   tabs and menu notifications share `HarnessNativeActivity`; Dart pane headers
   share `ActivityMark`. Bridge payloads use `nativeActivityPayload` and the
   same `activityColor`, including the monochrome preference. Do not substitute

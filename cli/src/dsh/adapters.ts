@@ -48,6 +48,16 @@ export const HARNESS_ADAPTERS = {
   copilot: { instructionFiles: ['AGENTS.md'] },
 } satisfies Record<ProcessEngine, HarnessAdapter>
 
+/**
+ * Every project file Harness itself may write into: any adapter's instruction files (the session
+ * bootstrap, `runtime.ts`) and the files the saved-API notes go in (`lib/apiInstructions.ts`). Asked of
+ * the workspace's SCM before those writes (`prepareScmWrite`), for an SCM that holds tracked files
+ * read-only. Not every name exists in a given workspace.
+ */
+export const PROJECT_INSTRUCTION_FILES: readonly string[] = [...new Set([
+  ...Object.values(HARNESS_ADAPTERS).flatMap(adapter => adapter.instructionFiles), 'AGENTS.md', 'CLAUDE.md', 'GEMINI.md',
+])]
+
 /** A terminal has no instruction loader or agent tools. It remains a Coding-only choice. */
 export function harnessAdapter(engine: AgentEngine): HarnessAdapter {
   if (engine === 'terminal') throw new Error('A harness needs an agent engine; Terminal cannot run harness instructions.')

@@ -38,6 +38,9 @@ export const TMUX_FEATURE_MIN = {
   clientFlags: { major: 3, minor: 2 },
   /** `new-session -e`, a session's own environment (3.2). */
   sessionEnv: { major: 3, minor: 2 },
+  /** No notification written to a control client that has not finished attaching (3.7). Before it, one
+   *  crashed the server (tmux issue 4980; tmuxControlGate.ts). */
+  controlNotifyGuard: { major: 3, minor: 7 },
 } as const satisfies Record<string, TmuxVersion>
 
 export type TmuxFeature = keyof typeof TMUX_FEATURE_MIN

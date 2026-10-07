@@ -7,7 +7,7 @@ import { Duplex } from 'node:stream'
 import { readFile, realpath } from 'node:fs/promises'
 import { basename, join } from 'node:path'
 import WebSocket from 'ws'
-import { env } from '../config/env.js'
+import { sessionCodexHome } from './engineHomes.js'
 import { engineBin } from './engineBin.js'
 import { argvTokens, processRows, type ProcessRow } from './tmux.js'
 import type { RegisteredSession } from './registry.js'
@@ -94,7 +94,7 @@ export async function stopSharedCodexSession(session: RegisteredSession, current
   deps: CodexStopDeps = { daemonIdentity, rows: processRows, connect: connectCodexControl },
   confirmUnusedConversation?: (session: RegisteredSession) => Promise<boolean>): Promise<void> {
   if (session.engine !== 'codex') return
-  const home = session.codexHome || env.CODEX_HOME
+  const home = sessionCodexHome(session)
   const rows = await deps.rows()
   if (!rows) throw new Error('Could not verify the Codex server before stopping')
   const guard = () => { if (!current()) throw new Error('The close request was cancelled or the session changed') }

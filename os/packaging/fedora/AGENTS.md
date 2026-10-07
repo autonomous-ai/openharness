@@ -38,8 +38,11 @@ and running agents. Read `guide.md` and the shipped TUI reference before advisin
 - PipeWire owns audio. Clipboard tools are `wl-copy` and `wl-paste`.
 - Chromium is optional and remains sandboxed. Install ordinary task dependencies
   through Fedora's package manager; keep existing security policy enabled.
-- Agents use their normal provider authentication and credential storage. The
-  image supplies its default agent separately from this session RPM.
+- OpenCode is bundled in this RPM with verified upstream bytes and its license.
+  `/usr/share/harness-os/opencode.json` records its exact version and checksums.
+  It uses upstream model defaults and normal provider authentication; preserve
+  the user's credentials and instructions. Update the packaged binary through
+  RPM, not by overwriting `/usr/lib/harness-opencode` or running npm as root.
 - `hn-os status`, `hn-os measure`, and `systemctl --user status hn-screen
   harness-daemon` report session state. Use `journalctl --user -u hn-screen
   -u harness-daemon` for logs. Reconnect a failed screen before restarting agents.

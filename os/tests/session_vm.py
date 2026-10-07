@@ -2,6 +2,7 @@
 """Observe locking, suspend or compositor recovery on a disposable installed machine."""
 import argparse
 import base64
+import gzip
 import hashlib
 import json
 import os
@@ -295,6 +296,8 @@ def main():
                         help='Explicitly test this candidate launcher over the verified base ISO; records its hash and reboots before checking')
     parser.add_argument('--theme-directory', type=Path,
                         help='Explicitly test the candidate Plymouth theme after regenerating the installed initramfs')
+    parser.add_argument('--compositor-file', type=Path,
+                        help='Private labwc proof only: stage a manifest-verified compositor and reboot before testing')
     args = parser.parse_args()
     if not os.access('/dev/kvm', os.R_OK | os.W_OK):
         parser.error('Use native x86 KVM for session acceptance.')
@@ -348,6 +351,20 @@ def main():
         tty_probe = "sudo -n stty -a -F /dev/tty1; ps -u 1000 -o pid,ppid,sid,tpgid,tty,comm --width 200"
         output, _ = vm.command(tty_probe)
         (folder / 'base-console-state.txt').write_text(output)
+        if args.compositor_file:
+            candidate = args.compositor_file.read_bytes()
+            manifest = json.loads(args.compositor_file.with_name('manifest.json').read_text())
+            checksum = hashlib.sha256(candidate).hexdigest()
+            assert manifest['binary']['sha256'] == checksum
+            assert manifest['binary']['bytes'] == len(candidate)
+            assert candidate[:6] == b'\x7fELF\x02\x01' and int.from_bytes(candidate[18:20], 'little') == 62
+            assert manifest['source_commit'] == result['test_source_commit']
+            result['candidate_compositor'] = manifest
+            packed = base64.b64encode(gzip.compress(candidate, mtime=0)).decode()
+            put(vm, '/tmp/lock-compositor.gz.b64', packed)
+            vm.command('base64 -d /tmp/lock-compositor.gz.b64 | gzip -d > /tmp/lock-compositor && '
+                       'test "$(sha256sum /tmp/lock-compositor | cut -d " " -f 1)" = ' + shlex.quote(checksum) + ' && '
+                       'sudo install -o root -g root -m 755 /tmp/lock-compositor /usr/bin/labwc && sync')
         if args.session_file:
             candidate = args.session_file.read_bytes()
             result['candidate_session'] = {'path': str(args.session_file), 'sha256': hashlib.sha256(candidate).hexdigest(),
@@ -366,7 +383,7 @@ def main():
                 vm.command('sudo install -o root -g root -m 644 /tmp/' + name + ' /usr/share/plymouth/themes/harness/' + name)
             output, _ = vm.command('sudo mkinitcpio -P && sudo lsinitcpio -l /boot/initramfs-linux-lts.img | grep -E "Plymouth.*ttf|harness\\.(script|plymouth)"', timeout=180)
             (folder / 'candidate-initramfs.txt').write_text(output)
-        if args.session_file or (args.theme_directory and config['encrypt']):
+        if args.session_file or args.compositor_file or (args.theme_directory and config['encrypt']):
             # VM.stop is a power cut, not an orderly guest shutdown. Flush the
             # rebuilt initramfs before testing that exact candidate at boot.
             vm.command('sync')
@@ -380,6 +397,8 @@ def main():
             installed_recovery(vm, config, result)
         else:
             installed_session(vm, config, result)
+            from session_update_vm import screenshots
+            screenshots(vm, result)
         assert 'live_lock_error' not in result, 'The unconfigured live session could not be unlocked'
         result['status'] = 'passed'
     except BaseException as error:

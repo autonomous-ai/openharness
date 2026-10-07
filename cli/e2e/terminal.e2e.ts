@@ -47,9 +47,12 @@ class Terminal {
 
   /** Opens it, or rejects with the `terminal_error` code the daemon answered. */
   static async open(client: LocalClient, agentId: string, options: Record<string, unknown> = {}): Promise<Terminal> {
+    // Found by QA on a quiet machine: ws can deliver the keyframe alongside terminal_ready,
+    // before this await continues. Keep every frame from the request onward.
+    const since = client.binaries.length
     const answer = await Terminal.answer(client, { agentId, cols: 100, rows: 30, ...options })
     if (answer.type !== 'terminal_ready') throw new Error(String(answer.payload?.code))
-    return new Terminal(client, agentId, answer.payload!, client.binaries.length)
+    return new Terminal(client, agentId, answer.payload!, since)
   }
 
   /** The frame `terminal_open` is answered with: `terminal_ready`, or `terminal_error` naming why. */
@@ -118,6 +121,35 @@ class Terminal {
       && (frame.payload?.streamId === undefined || frame.payload.streamId === this.streamId), ms, `terminal_error ${code}`)
   }
 }
+
+it('keeps the opening screen when terminal_ready and its keyframe arrive together', async () => {
+  const keyframe: TerminalBinaryClear = {
+    kind: TerminalBinaryKind.keyframe, streamId: 'opened', seq: 0, compressed: false,
+    bytes: Buffer.from('the engine is ready'),
+  }
+  const binaries: TerminalBinaryClear[] = [{ ...keyframe, streamId: 'older' }]
+  let accepts!: (frame: Frame) => boolean
+  let answer!: (frame: Frame) => void
+  const client = {
+    binaries,
+    next(test: (frame: Frame) => boolean) {
+      accepts = test
+      return new Promise<Frame>((resolve) => { answer = resolve })
+    },
+    send(_type: string, payload: Record<string, unknown>) {
+      const ready = { type: 'terminal_ready', payload: { requestId: payload.requestId, streamId: 'opened' } }
+      expect(accepts(ready)).toBe(true)
+      // Found by QA on a quiet machine: ws can deliver both frames in one socket callback,
+      // before the await of terminal_ready continues. The test window must keep that screen.
+      answer(ready)
+      binaries.push({ ...keyframe, streamId: 'another-window' }, keyframe)
+    },
+  } as unknown as LocalClient
+
+  const terminal = await Terminal.open(client, 'agent')
+  expect(terminal.frames()).toEqual([keyframe])
+  expect(terminal.screen()).toBe('the engine is ready')
+})
 
 describe('the terminal', () => {
   let daemon: IsolatedDaemon | undefined

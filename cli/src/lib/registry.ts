@@ -40,11 +40,12 @@ import { join, basename, dirname, relative, isAbsolute } from 'path'
 import { machineNames } from './machineNames.js'
 import { cursorDataDir } from '../engines/cursor/home.js'
 import { env } from '../config/env.js'
-import { claudeProjectsRoots, codexHomeRoots } from './engineHomes.js'
+import { claudeProjectsRoots, codexHomeRoots, sessionCodexHome } from './engineHomes.js'
 import { readCodexRolloutMeta, resolveCodexRollout } from '../engines/codex/rollout.js'
 import { ENGINES, isTerminalEngine, type AgentEngine } from '../engines/types.js'
 import type { GridAssignment } from './gridAssignment.js'
 import { parseGridLaunchOverride, type GridLaunchOverride, type GridLaunchRecord, type GridWebSearchStatus } from './gridLaunch.js'
+import { parseScmLaunchRecord, type ScmLaunchRecord } from '../scm/types.js'
 import { commandcodeTranscriptPath } from '../engines/commandcode/transcript.js'
 import { agyTranscriptPath } from '../engines/agy/session.js'
 import { copilotTranscriptPath } from '../engines/copilot/session.js'
@@ -132,6 +133,14 @@ export interface RegisteredSession {
    * built, so there is nothing to say); absent on a row written before this field existed.
    */
   gridWebSearch?: GridWebSearchStatus | null
+  /**
+   * What the workspace's SCM needs re-applied to the pane on every relaunch (scm/types.ts) — the
+   * SCM's half of `gridLaunch`. A git worktree's record only says it is one and asks for nothing.
+   * Written by `agent_create` from what `prepareProjectFolder` made, carried forward like
+   * `gridLaunch`, never re-derived. Absent on a row from before the seam and on a folder no SCM
+   * prepared — absent, not null, so a row that never had one is written exactly as before.
+   */
+  scmLaunch?: ScmLaunchRecord | null
   /**
    * The engine's OWN model this agent was on immediately before it moved to a grid.
    *
@@ -439,8 +448,12 @@ function rowId(row: unknown): string {
     : typeof candidate.launcherId === 'string' ? candidate.launcherId : ''
 }
 
+// Key order carries no meaning but differs between load()'s literal, register(), strictPersistedRow and
+// setters that add keys (`launch`); compared as JSON text it rewrote registry.json (lock, 3 fsyncs, rename)
+// every 5 s on an unchanged row, ~720 writes/hour measured 2026-10-06. Array order still counts.
 function rowFingerprint(row: unknown): string {
-  return JSON.stringify(row)
+  return JSON.stringify(row, (_key, value) => value && typeof value === 'object' && !Array.isArray(value)
+    ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, value[key]])) : value)
 }
 
 export function atomicWriteJson(file: string, value: unknown, exclusive = false): void {
@@ -560,10 +573,13 @@ export function strictPersistedRow(raw: unknown): RegisteredSession | null {
   // Taken out of the spread and put back only when it is a real moment: the spread would otherwise
   // carry a hand-edited string or a negative number straight into the frame's `toISOString()`.
   // `forkedFrom` is out too, so an invalid one is dropped rather than spread back in as-is.
-  const { lastOpenedAt: rawOpenedAt, closePlan: rawClosePlan, forkedFrom: rawForkedFrom, ...rest } = row
+  const { lastOpenedAt: rawOpenedAt, closePlan: rawClosePlan, forkedFrom: rawForkedFrom, scmLaunch: rawScmLaunch, ...rest } = row
   const lastOpenedAt = normalizedOpenedAt(rawOpenedAt)
+  // Out of the spread for the same reason: a half-formed record is dropped, never relaunched with.
+  const scmLaunch = parseScmLaunchRecord(rawScmLaunch)
   return {
     ...rest,
+    ...(scmLaunch ? { scmLaunch } : {}),
     ...(normalizedClosePlan(rawClosePlan) ? { closePlan: normalizedClosePlan(rawClosePlan)! } : {}),
     schemaVersion: 2,
     active,
@@ -715,7 +731,7 @@ function threeWayRow(
     if (!(key in current)) delete merged[key]
   }
   for (const [key, value] of Object.entries(current)) {
-    if (JSON.stringify(value) !== JSON.stringify(baseline[key])) merged[key] = value
+    if (rowFingerprint(value) !== rowFingerprint(baseline[key])) merged[key] = value
   }
   return merged
 }
@@ -988,12 +1004,13 @@ class Registry {
         // see RegisteredSession.codexHome.
         const rawCodexHome = raw?.codexHome ?? undefined
         const rawGridLaunch = normalizedGridLaunch(raw?.gridLaunch)
+        const rawScmLaunch = parseScmLaunchRecord((raw as { scmLaunch?: unknown })?.scmLaunch)
         let repairedCodexTranscript = false
         if (engine === 'codex' && transcriptPath) {
           const meta = readCodexRolloutMeta(transcriptPath)
           if (meta?.isSubagent) {
             const repaired = meta.parentThreadId === rawSessionId
-              ? resolveCodexRollout(rawSessionId, join(rawCodexHome || env.CODEX_HOME, 'sessions'))
+              ? resolveCodexRollout(rawSessionId, join(sessionCodexHome({ codexHome: rawCodexHome, transcriptPath }), 'sessions'))
               : null
             if (!repaired || !validTranscriptPath('codex', repaired, rawCodexHome) || readCodexRolloutMeta(repaired)?.isSubagent) {
               changed = true
@@ -1049,6 +1066,7 @@ class Registry {
           agent: normalizedAgentName((raw as { agent?: unknown }).agent),
           ...(rawGridLaunch !== undefined ? { gridLaunch: rawGridLaunch } : {}),
           ...(rawGridLaunch ? { gridWebSearch: normalizedGridWebSearch(raw?.gridWebSearch) } : {}),
+          ...(rawScmLaunch ? { scmLaunch: rawScmLaunch } : {}),
           // ⚠️ Rehydrated EXPLICITLY, like every field above it. A row is rebuilt from this list on
           // load, so a field added to the type and the setter but not to this list is written to
           // disk and then silently dropped by the next load — which is exactly what happened, and
@@ -1320,6 +1338,8 @@ class Registry {
     grid?: GridAssignment | null
     /** The grid launch this pane was opened with and what it decided — the pair `setGridLaunch` keeps. */
     gridLaunchRecord?: GridLaunchRecord | null
+    /** What the prepared workspace's SCM needs on every relaunch — see RegisteredSession.scmLaunch. */
+    scmLaunchRecord?: ScmLaunchRecord | null
     codexHome?: string | null
     dsh?: string | null
     dshRuntime?: string | null
@@ -1353,6 +1373,7 @@ class Registry {
       grid: input.grid ?? null,
       gridLaunch: input.gridLaunchRecord?.override ?? null,
       gridWebSearch: input.gridLaunchRecord?.webSearch ?? null,
+      ...(input.scmLaunchRecord ? { scmLaunch: input.scmLaunchRecord } : {}),
       codexHome: input.codexHome ?? null,
       // A pane Harness opens starts in the default home; `hermes -p` is the person's own doing, and
       // the row learns it from the session that lands in it. See RegisteredSession.hermesHome.
@@ -1598,6 +1619,9 @@ class Registry {
       gridLaunch: existing?.gridLaunch ?? null,
       // What that launch decided — it travels with the launch, or it is lost at the first hook.
       gridWebSearch: existing?.gridWebSearch ?? null,
+      // The workspace's SCM record, for the same reason: a bind rebuilds the row, and a relaunch
+      // without it would come back without the environment the workspace was created with.
+      ...(existing?.scmLaunch ? { scmLaunch: existing.scmLaunch } : {}),
       // ⚠️ Carried forward for the same reason, and it was missed once: a bind REBUILDS the row from
       // named fields, so a field the rebuild does not name survives on disk and vanishes from
       // memory the moment the engine reports in. The symptom is a move back to the engine's own
@@ -2023,8 +2047,8 @@ class Registry {
    * the caller — a phone and a laptop whose clocks disagree would otherwise order the same agents
    * differently, which is the one thing this field exists to prevent.
    *
-   * `updatedAt` is left alone on purpose. That is the row's bookkeeping (the webui's "when" column,
-   * `session_get`'s timestamp), and looking at an agent changes nothing about the agent. The save
+   * `updatedAt` is left alone on purpose. That is the row's bookkeeping (`session_get`'s timestamp),
+   * and looking at an agent changes nothing about the agent. The save
    * still happens: a row is written whenever its bytes differ from the last write, whichever field
    * moved.
    */

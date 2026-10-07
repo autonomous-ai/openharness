@@ -1,7 +1,9 @@
 import type { FastifyInstance } from 'fastify'
 import { prisma } from '../lib/prisma.js'
-import { sendSuccess } from '../utils/response.js'
+import { sendError, sendSuccess } from '../utils/response.js'
 import { harnessGridName } from '../lib/gridName.js'
+import { answerGridProfile, GRID_PROFILE_PATH } from '../lib/gridProfile.js'
+import { bearerToken } from '../lib/ssoAuth.js'
 
 /**
  * `POST /api/grid/name` — read the account's grid name, minting it on the first ask.
@@ -36,5 +38,31 @@ export async function gridRoutes(app: FastifyInstance): Promise<void> {
     // miss, and returns the same string the winner would have stored anyway.
     const existing = await prisma.user.findUnique({ where: { id: userId }, select: { gridName: true } })
     return sendSuccess(reply, { gridName: existing?.gridName ?? minted })
+  })
+
+  /**
+   * `GET /api/grid/profile` — GRID-ONLY. Who holds this Harness sign-in token, asked by the Grid
+   * control plane (grid-apis `POST /v1/grid/auth/harness`) with the person's token as the bearer.
+   *
+   * ⚠️ **Autonomous-shaped, not Harness-shaped, and that is the contract** (ADR 0046 in the
+   * autonomous-grid repository; `lib/gridProfile.ts`): the success body is `{status: 1, data: {id,
+   * email, full_name, customer_socials}}`, written directly — never through `sendSuccess`. Do not tidy
+   * it. `fixtures/gridProfile.contract.json` pins it, and grid-apis parses a copy of that file.
+   *
+   * No parameter names an account — path, query and body are all ignored; the account is the token's.
+   * The authentication middleware does not stamp the user's country for this path: the caller is a
+   * server acting for the person, not their device.
+   *
+   *   Autonomous token  → a live profile read (Autonomous 401 → 401, unreachable or 5xx → 503)
+   *   computer sign-in  → the stored values; never checked → 409 (and 409 means only that here)
+   *   phone sign-in, staging-plane account, provisional customer id → 403
+   *   more than GRID_PROFILE_LIVE_READS_PER_MINUTE live reads for one account → 429
+   */
+  app.get(GRID_PROFILE_PATH, async (req, reply) => {
+    const answer = await answerGridProfile(req.user!, bearerToken(req.headers['authorization'])!)
+    // A person's email, name and Google subject: nothing between here and the caller may keep it.
+    reply.header('Cache-Control', 'no-store')
+    if (answer.status === 200) return reply.code(200).send(answer.body)
+    return sendError(reply, answer.message, answer.code, answer.status)
   })
 }

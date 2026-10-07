@@ -105,7 +105,7 @@ pub fn defaults() -> &'static BTreeMap<String, String> {
         // One cell at each outer edge aligns status text with the pane surfaces.
         // Two spaces separate the window list from the information on the right.
         m.insert("status-left".into(), " #{?client_prefix,#[bold]›#[nobold] ,}".into());
-        m.insert("status-right".into(), "  #{?daemon_down,#[bold]daemon down#[nobold]  ,}#{?model_progress,#{model_progress}  ,}#{?usage_remaining,#{usage_remaining_mark}  ,}#{?fleet,#{s/ /  /:fleet}  ,}#{?pane_watching,[watching]  ,}\"#{=/21/…:local_machine}\"  %H:%M ".into());
+        m.insert("status-right".into(), "  #{?hn_controls,#{hn_controls}  ,}#{?daemon_down,#[bold]daemon down#[nobold]  ,}#{?model_progress,#{model_progress}  ,}#{?usage_remaining,#{usage_remaining_mark}  ,}#{?fleet,#{s/ /  /:fleet}  ,}#{?pane_watching,[watching]  ,}#{?shell_context,#{=/36/…:shell_context},\"#{=/21/…:local_machine}\"}  %H:%M ".into());
         // Each window's most urgent harness at a glance (the symbol its pane titles show) and its
         // name in a few whole words (#{window_short_name}): a harness is named for its task.
         // Keep tmux's familiar current/previous markers beside the name, then any other
@@ -150,7 +150,8 @@ pub fn status_window_format(name: &str, star: bool) -> String {
     // window's auto-renamed name) — the two can differ, which is the point of the option.
     let name_part = if name == "pane" { "#{pane_title}" } else { "#{window_short_name}" };
     let mark = if star { "#{?window_active,*,#{?window_last_flag,-,}}" } else { "#{?window_last_flag,-,}" };
-    format!("#I:{name_part}{mark}#{{s/[*-]//:window_flags}}#{{?#{{==:#{{window_agent_state}},idle}},,#{{?window_agent_icon, #{{window_agent_icon}},}}")
+    // (Two closing braces: the idle test's and the icon's. With one, the icon never showed.)
+    format!("#I:{name_part}{mark}#{{s/[*-]//:window_flags}}#{{?#{{==:#{{window_agent_state}},idle}},,#{{?window_agent_icon, #{{window_agent_icon}},}}}}")
 }
 
 /// The status bar's `window-status-*` overrides for a tab name source [name] (`tmux`|`pane`) and a
@@ -654,6 +655,18 @@ pub fn unescape(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every `#{` of a tab's status text is closed: one short, and the harness icon after a tab's
+    /// name (working, waiting on you) was never drawn.
+    #[test]
+    fn a_tabs_status_text_closes_every_brace() {
+        for name in ["tmux", "pane"] {
+            for star in [true, false] {
+                let format = status_window_format(name, star);
+                assert_eq!(format.matches("#{").count(), format.matches('}').count(), "{format}");
+            }
+        }
+    }
 
     #[test]
     fn quoting_as_tmux_prints_it() {

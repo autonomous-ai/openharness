@@ -109,6 +109,11 @@ class WsPool {
 
   WsConn? operator [](String machineId) => _conns[machineId];
 
+  /// Holds [conn] as [machineId]'s socket, as if it had been dialled — for a
+  /// test that watches what is sent on which kind of connection
+  /// (`AppNotifier.adoptPoolConnectionForTest`).
+  void adoptForTest(String machineId, WsConn conn) => _conns[machineId] = conn;
+
   /// The machines this pool holds a socket for. A snapshot, so a caller can send
   /// on each without a concurrent connect mutating what it is walking.
   List<String> get machineIds => _conns.keys.toList(growable: false);

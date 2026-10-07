@@ -16,15 +16,15 @@
 // whenever the fleet cannot answer — off, or its call failed — as the dial did before the fleet was a
 // service. Its tests give it a bare fleet to route over by itself.
 import { join } from 'node:path'
-import { notificationReadToken, type UnreadNotification } from './notificationRead.js'
+import { notificationReadToken, type UnreadNotification } from '../lib/notificationRead.js'
 
-import { AuthSessionManager, readAuthSession } from '../lib/authSession.js'
-import { registry, projectDisplayName, type RegisteredSession } from '../lib/registry.js'
+import type { RegisteredSession } from '../lib/registry.js'
 import { fetchRelease, loadImage, otaKeyForBoard, shouldOffer } from './fwPush.js'
 import { routeVoiceTask, type RouterAgent, type RouterContinuity } from '../lib/voiceRouter.js'
 import { env } from '../config/env.js'
 import { FleetRouter } from '../services/fleetRouter.js'
-import type { FleetRouting, ForkResult } from '../core/api.js'
+import type { ForkResult } from '../core/api.js'
+import type { FleetRouting } from '../services/fleet.js'
 import { ServiceUnavailableError } from '../core/serviceHost.js'
 
 import type { AppSwarms, CableAgent, CableHost, CableMachine, CableMachineSource, CableSwarm, CableTile, DialStatus, OpenReason, RouteDecision } from './cableSession.js'
@@ -45,10 +45,16 @@ export interface RecentTurn {
 }
 
 export interface CableHostWiring {
+  /** The live agents the apps are shown, and the name they show for each: the router this host keeps for
+   *  this computer reads them (the core's `agents.advertised` and `agents.displayName`). */
+  sessions: () => RegisteredSession[]
+  displayName: (session: RegisteredSession) => string
   /** Exact live terminal footer for a local agent; absent when no footer is visible. */
   activityText?: (agentId: string) => Promise<string | null>
   /** The person's own last questions to a LOCAL agent, newest first. */
-  recentAsks: (agentId: string) => string[]
+  recentAsks: (agentId: string) => string[] | Promise<string[]>
+  /** Read the agents again before a list is built from them (see FleetLocal.refresh). */
+  refresh?: () => Promise<void>
   machineName: () => string
   /** This computer's machineId, or '' when the daemon has never resolved one (signed out). */
   machineId: () => string
@@ -57,13 +63,21 @@ export interface CableHostWiring {
   /** Whether this computer holds an account. False → the dial serves THIS computer alone: the cloud
    *  lane (the other machines, and voice) is what an account buys, and it is not dialled without one. */
   signedIn?: () => boolean
+  /** The account's sign-in, for the transcriber: the core's (`account.accessToken`), never one of this
+   *  host's own. Absent, voice says to sign in. */
+  accessToken?: (opts?: { force?: boolean; failedToken?: string }) => Promise<string>
+  /** The account's environment, which the transcriber checks the upload against. */
+  environment?: () => string
+  /** A dial is on the wire on this computer, or none is any more: the core streams the turn cards and
+   *  makes the recaps for it, as for a device watching through the backend. */
+  watching?: (on: boolean) => void
   /** Deliver text into an agent. The SAME path the web and the WiFi device use — see cli.ts. */
   sendTurn: (agentId: string, text: string) => void
   stopTurn: (agentId: string) => void
   answer: (agentId: string, requestId: string, answers: Record<string, string>) => void
   answerReviewed?: (answer: ReviewedAnswer) => Promise<boolean>
   /** Recaps of an agent's last `n` completed turns — for routing, and for redrawing a reattached dial. */
-  recent: (agentId: string, n: number) => RecentTurn[]
+  recent: (agentId: string, n: number) => RecentTurn[] | Promise<RecentTurn[]>
   /** The opaque runtime-v1 profile, which is where the dial's Model/Effort chips come from. */
   runtimeProfile?: (session: RegisteredSession) => string | null
   updateAgent?: (agentId: string, model?: string, effort?: string) => void
@@ -136,8 +150,8 @@ export class DaemonCableHost implements CableHost {
     this.local = new FleetRouter({
       ...wiring,
       // The same set `agents_list` answers the apps with — see the router's localAgents.
-      sessions: () => registry.advertised(),
-      displayName: projectDisplayName,
+      sessions: () => wiring.sessions(),
+      displayName: (session) => wiring.displayName(session),
       desk: () => this.desk,
     }, fleet)
   }
@@ -214,6 +228,7 @@ export class DaemonCableHost implements CableHost {
    * it loses the race; a failure marks the machine unreachable rather than pretending it has no agents.
    */
   onDialAttached(): void {
+    this.wiring.watching?.(true)
     if (!this.viaFleet((r) => r.hasLane())) return
     // Signed out there is no lane to open: the socket is authenticated, so dialling it would fail once
     // per plug-in and log a failure for something nobody asked for. The dial still works — it is on the
@@ -260,6 +275,7 @@ export class DaemonCableHost implements CableHost {
    * a screen that is not there.
    */
   onDialGone(): void {
+    this.wiring.watching?.(false)
     this.wiring.clearSelection?.()
     this.wiring.clearVisit?.()
     this.wiring.clearForm?.()
@@ -706,12 +722,12 @@ export class DaemonCableHost implements CableHost {
    * sentence to a clock is the one failure the person cannot work around.
    */
   async transcribe(pcm: Buffer, sampleRate: number, lang: string): Promise<string> {
-    const session = readAuthSession()
     // The text reaches the dial's glass as a toast, so it is addressed to the person holding it, not to
     // a terminal: signing in happens on the computer, and that is the one thing they need to know.
-    if (!session) throw new Error('Sign in on your computer to use voice')
+    const accessToken = this.wiring.accessToken
+    if (!accessToken || this.wiring.signedIn?.() === false) throw new Error('Sign in on your computer to use voice')
+    const autonomousEnv = this.wiring.environment?.() ?? ''
 
-    const auth = new AuthSessionManager(this.backendHttpBase())
     const url = `${this.backendHttpBase()}${env.CABLE_STT_PATH}?lang=${encodeURIComponent(lang)}`
     // The WAV is built ONCE: it is the same bytes on a retry, and re-encoding megabytes to say the same
     // thing twice is time taken out of a person's turn.
@@ -723,20 +739,20 @@ export class DaemonCableHost implements CableHost {
         method: 'POST',
         headers: {
           authorization: `Bearer ${token}`,
-          'x-autonomous-env': session.autonomousEnv,
+          'x-autonomous-env': autonomousEnv,
           'content-type': `multipart/form-data; boundary=${boundary}`,
         },
         body,
       })
 
-    let token = await auth.accessToken()
+    let token = await accessToken()
     let res = await post(token)
     if (res.status === 401) {
       // `failedToken` is what makes this one refresh rather than a loop: the manager only refreshes when
       // the token that failed is still the current one, so two callers racing a stale token do not each
       // burn a refresh.
       await res.body?.cancel()
-      token = await auth.accessToken({ force: true, failedToken: token })
+      token = await accessToken({ force: true, failedToken: token })
       res = await post(token)
     }
     if (!res.ok) {

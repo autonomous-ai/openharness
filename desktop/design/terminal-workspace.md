@@ -18,6 +18,11 @@ monospace elsewhere when it helps readability.
 Do not recreate, resize, or send input to a terminal merely because app chrome
 opens or closes. Preserve terminal ownership, pending streams, viewer-owner
 relationships, and pane state. Closing a pane removes its view immediately.
+When a session is shown in another pane or tab, Close removes only the chosen
+view and keeps the shared terminal alive. Closing the last view saves and stops
+the session, using the existing confirmation when it is working. A tab close
+applies this rule separately to each session. Recheck remaining views after
+any wait for inspection or confirmation, before requesting a stop.
 
 ## Keep the workspace structure
 

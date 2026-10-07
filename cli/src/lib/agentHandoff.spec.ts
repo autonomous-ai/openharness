@@ -71,6 +71,11 @@ const session = (over: Record<string, unknown> = {}): RegisteredSession => ({
 
 function depsFor(sessions: RegisteredSession[], over: Partial<HandoffDeps> = {}): HandoffDeps {
   return {
+    // The 2 s limit on one git command is not what any case here is about, and a loaded run spends it on
+    // starting git: under a full run at load 36 a `rev-parse` went over it, the repository read as unclear,
+    // and "finds the exclude file" and "goes by one clock" answered `gitRepo: false`. The preparation's own
+    // deadline (`deadlineMs`, or the injected clock) still bounds every case.
+    gitTimeoutMs: 30_000,
     resolve: (id) => sessions.find((s) => s.agentId === id) ?? null,
     readHistory: () => undefined,
     recentAsks: () => ['floor ask'],
@@ -506,14 +511,16 @@ describe('prepareAgentHandoff: a repository', () => {
     await expect(prepareAgentHandoff(d, request())).rejects.toMatchObject({ code: 'TIMEOUT' })
     // The git that was already running when the deadline hit logs its call (late: a script's first run is slow);
     // nothing new may start after it, not even when the read finally finishes.
-    for (let waited = 0; !lines().length && waited < 5_000; waited += 50) await new Promise((resolve) => setTimeout(resolve, 50))
+    while (!lines().length) await new Promise((resolve) => setTimeout(resolve, 50))
     const atTimeout = lines().length
     expect(atTimeout).toBe(1)
     await new Promise((resolve) => setTimeout(resolve, 1_200))
     expect(lines()).toHaveLength(atTimeout)
     expect(lines().join('\n')).not.toContain('status')
     expect(existsSync(join(ws, '.harness'))).toBe(false)
-  })
+    // Waits on a real git started through a shell script, and then 1.2 s more: past vitest's 5 s default on
+    // a loaded run (load 36, six workers), where the script took seconds to log its call.
+  }, 30_000)
 
   // The git limits are raised: under a loaded suite a 2 s limit made the repository look "unclear" and nothing was written.
   it('says a git field is not available when its command failed, and "(none)" when it ran and found nothing', async () => {
@@ -745,6 +752,30 @@ describe('prepareAgentHandoff: no repository', () => {
 
 describe('prepareAgentHandoff: refusals and limits', () => {
   beforeEach(writeTranscript)
+
+  it('awaits the retained agent and recap reads across the service boundary', async () => {
+    const d = depsFor([], {
+      resolve: (async () => session({ transcriptPath: null })) as never,
+      recentAsks: (async () => ['the retained request']) as never,
+      lastFullText: (async () => 'the retained full answer') as never,
+      recaps: (async () => ['the retained recap']) as never,
+    })
+    const result = await prepareAgentHandoff(d, request())
+    expect(result.degraded).toEqual(['transcript', 'git'])
+    const text = readFileSync(mdOf(), 'utf8')
+    expect(text).toContain('the retained request')
+    expect(text).toContain('the retained full answer')
+    expect(readFileSync(mdOf().replace(/\.md$/, '.transcript.md'), 'utf8')).toContain('the retained recap')
+  })
+
+  it('counts waiting for the core against the deadline and never writes after a late answer', async () => {
+    let resolve!: (value: RegisteredSession) => void
+    const d = depsFor([], { deadlineMs: 30, resolve: (() => new Promise<RegisteredSession>(done => { resolve = done })) as never })
+    await expect(prepareAgentHandoff(d, request())).rejects.toMatchObject({ code: 'TIMEOUT' })
+    resolve(session())
+    await new Promise(done => setTimeout(done, 20))
+    expect(existsSync(join(ws, '.harness'))).toBe(false)
+  })
 
   it('names what is wrong with the request', async () => {
     const d = depsFor([session(), session({ agentId: 'nowhere', cwd: null }), session({ agentId: 'relative', cwd: 'rel/dir' })])

@@ -69,7 +69,10 @@ class FakeBackend {
 
 /** `signIn`: the sign-in's epoch (one starting ADOPTED_SIGN_IN is adopted), made at `signInAt` (the
  *  clock's 5_000 by default — just now). */
-function setup(opts: { known?: string[]; tombstoned?: string[]; blocked?: string[]; store?: DeviceLogStore; backend?: FakeBackend; signIn?: () => string | null; signInAt?: number | null } = {}) {
+function setup(opts: {
+  known?: string[]; tombstoned?: string[]; blocked?: string[]; store?: DeviceLogStore; backend?: FakeBackend; signIn?: () => string | null; signInAt?: number | null
+  isTrusted?: (pub: string) => boolean; signInAcct?: () => string | null; switchAccount?: (from: string, to: string) => void
+} = {}) {
   const backend = opts.backend ?? new FakeBackend()
   const store = opts.store ?? new DeviceLogStore(join(mkdtempSync(join(tmpdir(), 'devlog-')), 'devlog.json'))
   const calls = {
@@ -84,8 +87,10 @@ function setup(opts: { known?: string[]; tombstoned?: string[]; blocked?: string
     identity: () => me,
     signIn: () => {
       const epoch = opts.signIn?.() ?? null
-      return epoch ? { epoch, adopted: epoch.startsWith(ADOPTED_SIGN_IN), at: opts.signInAt === undefined ? 5_000 : opts.signInAt } : null
+      const acct = opts.signInAcct?.() ?? null
+      return epoch ? { epoch, adopted: epoch.startsWith(ADOPTED_SIGN_IN), at: opts.signInAt === undefined ? 5_000 : opts.signInAt, ...(acct ? { acct } : {}) } : null
     },
+    ...(opts.switchAccount ? { switchAccount: opts.switchAccount } : {}),
     self: () => ({ machineId: MID_ME, label: 'my-mac' }),
     fetch: backend.fetch,
     append: backend.append,
@@ -94,6 +99,7 @@ function setup(opts: { known?: string[]; tombstoned?: string[]; blocked?: string
     trustedNow: () => [...trusted],
     tombstoned: (pub) => tombstoned.has(pub),
     blocked: (pub) => (opts.blocked ?? []).includes(pub),
+    ...(opts.isTrusted ? { isTrusted: opts.isTrusted } : {}),
     announce: calls.announce,
     removed: calls.removed,
     conflict: calls.conflict,
@@ -354,6 +360,118 @@ describe('DeviceLogSyncer', () => {
     t.backend.offline = true
     await t.syncer.register()
     expect(t.store.read().state).toBeNull()
+    expect(t.calls.adopt).not.toHaveBeenCalled()
+  })
+})
+
+describe('DeviceLogSyncer — a key the log has and this machine does not trust', () => {
+  const adopted = (t: ReturnType<typeof setup>): string[] => t.calls.adopt.mock.calls.flat(2).map((m: { pub: string }) => m.pub)
+  it('trustFromLog trusts a key on the log even when the head has not moved since it was read', async () => {
+    const t = setup()
+    t.backend.add(phone, 'viewer', '', 'phone')
+    await t.syncer.register()
+    t.calls.adopt.mockClear()
+    // The head is the one already verified: reading the log adopts nothing, the key is trusted all the same.
+    await t.syncer.refresh()
+    expect(t.calls.adopt).not.toHaveBeenCalled()
+    expect(await t.syncer.trustFromLog(phone.pub)).toBe('trusted')
+    expect(adopted(t)).toEqual([phone.pub])
+    expect(t.calls.announce).not.toHaveBeenCalled()
+    expect(await t.syncer.trustFromLog(me.pub)).toBe('self')
+  })
+
+  it('trustFromLog reads the log first: a key added since the last read is trusted', async () => {
+    const t = setup()
+    await t.syncer.register()
+    t.backend.add(phone, 'viewer', '', 'phone')
+    expect(await t.syncer.trustFromLog(phone.pub)).toBe('trusted')
+    expect(adopted(t)).toContain(phone.pub)
+  })
+
+  it('trustFromLog reads again after a read that was already on its way', async () => {
+    const t = setup()
+    await t.syncer.register()
+    let release: () => void = () => {}
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    const fetch = t.backend.fetch.getMockImplementation()!
+    t.backend.fetch.mockImplementationOnce(async (since) => { const got = await fetch(since); await gate; return got })
+    const earlier = t.syncer.refresh()
+    t.backend.add(phone, 'viewer', '', 'phone')
+    const outcome = t.syncer.trustFromLog(phone.pub)
+    release()
+    await earlier
+    expect(await outcome).toBe('trusted')
+  })
+
+  it('trustFromLog says why a key is not trusted', async () => {
+    const t = setup({ blocked: [box2.pub], tombstoned: [phone.pub] })
+    t.backend.add(box2, 'machine', MID2, 'box2')
+    t.backend.add(phone, 'viewer', '', 'phone')
+    // Read, not registered: with this machine on the log, it would write the tombstone into it.
+    await t.syncer.refresh()
+    t.calls.adopt.mockClear()
+    expect(await t.syncer.trustFromLog(evil.pub)).toBe('absent')
+    expect(await t.syncer.trustFromLog(box2.pub)).toBe('blocked')
+    expect(await t.syncer.trustFromLog(phone.pub)).toBe('tombstoned')
+    t.store.write({ ...t.store.read(), suspended: [phone.pub] })
+    expect(await t.syncer.trustFromLog(phone.pub)).toBe('suspended')
+    expect(t.calls.adopt).not.toHaveBeenCalled()
+  })
+
+  it('trustFromLog trusts nothing from a frozen log, and nothing without one', async () => {
+    const offline = setup()
+    offline.backend.offline = true
+    expect(await offline.syncer.trustFromLog(phone.pub)).toBe('unavailable')
+    const t = setup()
+    t.backend.add(phone, 'viewer', '', 'phone')
+    await t.syncer.register()
+    t.backend.lie = t.backend.entries.slice(0, 1)
+    await t.syncer.refresh()
+    expect(t.store.read().frozen?.reason).toBe('rollback')
+    t.calls.adopt.mockClear()
+    expect(await t.syncer.trustFromLog(phone.pub)).toBe('frozen')
+    expect(t.calls.adopt).not.toHaveBeenCalled()
+  })
+
+  it('every read trusts again an active key this machine does not trust, and announces nothing', async () => {
+    const trusted = new Set<string>()
+    const t = setup({ isTrusted: (pub) => trusted.has(pub) })
+    t.backend.add(box2, 'machine', MID2, 'box2')
+    t.backend.add(phone, 'viewer', '', 'phone')
+    await t.syncer.register()
+    // The adoption trusted box2; phone's was lost (a crash between the head and the trust).
+    trusted.add(box2.pub)
+    t.calls.adopt.mockClear()
+    await t.syncer.refresh()
+    expect(t.calls.adopt).toHaveBeenCalledOnce()
+    expect(adopted(t)).toEqual([phone.pub])
+    expect(t.calls.announce).not.toHaveBeenCalled()
+    trusted.add(phone.pub)
+    t.calls.adopt.mockClear()
+    await t.syncer.refresh()
+    expect(t.calls.adopt).not.toHaveBeenCalled()
+  })
+
+  it('trusts again no key that is blocked, tombstoned or suspended, nor from a frozen log', async () => {
+    const t = setup({ isTrusted: () => false, blocked: [box2.pub], tombstoned: [phone.pub] })
+    const viewer = key(4)
+    t.backend.add(box2, 'machine', MID2, 'box2')
+    t.backend.add(phone, 'viewer', '', 'phone')
+    t.backend.add(evil, 'viewer', '', 'evil')
+    t.backend.add(viewer, 'viewer', '', 'viewer')
+    // Read, not registered: with this machine on the log, it would write the tombstone into it. That this
+    // machine's own key is never trusted again is the test above (it is on the log there).
+    await t.syncer.refresh()
+    t.store.write({ ...t.store.read(), suspended: [evil.pub] })
+    expect(t.store.read().state!.active[phone.pub]).toBeDefined()
+    t.calls.adopt.mockClear()
+    await t.syncer.refresh()
+    expect(adopted(t)).toEqual([viewer.pub])
+    t.backend.lie = t.backend.entries.slice(0, 1)
+    await t.syncer.refresh()
+    expect(t.store.read().frozen).not.toBeNull()
+    t.calls.adopt.mockClear()
+    await t.syncer.refresh()
     expect(t.calls.adopt).not.toHaveBeenCalled()
   })
 })
@@ -1416,6 +1534,127 @@ describe('DeviceLogSyncer — departed keys, sign-ins and kept accounts', () => 
       await s.syncer.refresh() // same account: the file is this sign-in's now
       expect(s.syncer.gossip()).toBeDefined()
       s.syncer.heard(box2.pub, { head: other.state.head, hashes: hashesOf(other.state) })
+      expect(s.store.read().frozen?.reason).toBe('fork')
+    })
+  })
+
+  describe('a sign-in by hand to the account the backend names starts the log over at any time', () => {
+    const OLD = 5_000 - 11 * 60_000
+    /** Signed in by hand to ACCT long ago (box2 on the log); then to `acct` (recorded as `named`), with
+     *  the backend now serving `acct-2`. */
+    const signedInAgain = async (named: string | null, more: Parameters<typeof setup>[0] = {}) => {
+      const who = { user: 'u1', acct: ACCT as string | null }
+      const s = setup({ signIn: () => who.user, signInAcct: () => who.acct, signInAt: OLD, ...more })
+      s.backend.add(box2, 'machine', MID2, 'box2')
+      await s.syncer.register()
+      who.user = 'u2'
+      who.acct = named
+      s.backend.fetch.mockImplementation(FakeBackend.of('acct-2').fetch)
+      await s.syncer.refresh()
+      return { ...s, who }
+    }
+
+    it('long after it was made, when it was made to that account', async () => {
+      const s = await signedInAgain('acct-2')
+      expect(s.store.read()).toMatchObject({ state: { acct: 'acct-2' }, frozen: null, owner: 'u2' })
+    })
+
+    it('made to another account than the backend names, long ago: only freezes', async () => {
+      const s = await signedInAgain('acct-3')
+      expect(s.store.read()).toMatchObject({ state: { acct: ACCT }, frozen: { reason: 'invalid' } })
+    })
+
+    it('made to another account than the backend names, even just now: only freezes', async () => {
+      // The account the sign-in was made to is known: a different one named minutes later is the
+      // backend's word against it, which the window must not let through.
+      const s = await signedInAgain('acct-3', { signInAt: 5_000 - 60_000 })
+      expect(s.store.read()).toMatchObject({ state: { acct: ACCT }, frozen: { reason: 'invalid' } })
+    })
+
+    it('the account is not taken from a sign-in that is not new here', async () => {
+      const who = { acct: ACCT }
+      const s = setup({ signIn: () => 'u1', signInAcct: () => who.acct, signInAt: OLD })
+      await s.syncer.register()
+      who.acct = 'acct-2'
+      s.backend.fetch.mockImplementation(FakeBackend.of('acct-2').fetch)
+      await s.syncer.refresh()
+      expect(s.store.read()).toMatchObject({ state: { acct: ACCT }, frozen: { reason: 'invalid' } })
+    })
+
+    it('swaps the trust stores before the new log is written: what it already trusted is the new account\'s', async () => {
+      const seen: Array<{ from: string; to: string; live: string | undefined; archived: boolean }> = []
+      let t!: ReturnType<typeof setup>
+      const switchAccount = vi.fn((from: string, to: string) => {
+        seen.push({ from, to, live: t.store.read().state?.acct, archived: t.store.archivedFile(from) !== null })
+        // What the stores hold once swapped: the new account's own (nothing of box2).
+        t.trusted.splice(0, t.trusted.length, phone.pub)
+      })
+      const who = { user: 'u1', acct: ACCT }
+      t = setup({ signIn: () => who.user, signInAcct: () => who.acct, signInAt: OLD, switchAccount })
+      t.backend.add(box2, 'machine', MID2, 'box2')
+      await t.syncer.register()
+      t.trusted.push(box2.pub)
+      expect(switchAccount).not.toHaveBeenCalled() // the first read keeps what was trusted before the log
+      who.user = 'u2'
+      who.acct = 'acct-2'
+      const other = FakeBackend.of('acct-2')
+      t.backend.fetch.mockImplementation(other.fetch)
+      await t.syncer.refresh()
+      expect(seen).toEqual([{ from: ACCT, to: 'acct-2', live: ACCT, archived: false }])
+      expect(t.store.read()).toMatchObject({ state: { acct: 'acct-2' }, preLog: [phone.pub] })
+      // And back: the kept log comes back, and so do its stores.
+      who.user = 'u3'
+      who.acct = ACCT
+      t.backend.fetch.mockImplementation(async (since) => ({ acct: ACCT, head: t.backend.state.head, entries: t.backend.entries.filter((e) => e.seq > since) }))
+      await t.syncer.refresh()
+      expect(switchAccount).toHaveBeenLastCalledWith('acct-2', ACCT)
+      expect(t.store.read().state?.acct).toBe(ACCT)
+    })
+
+    it('a review of another account\'s list swaps them too', async () => {
+      const switchAccount = vi.fn()
+      const s = await signedInAgain(null, { switchAccount })
+      expect(s.store.read().frozen?.reason).toBe('invalid')
+      expect(switchAccount).not.toHaveBeenCalled()
+      await s.syncer.rebaseline(false)
+      expect(switchAccount).not.toHaveBeenCalled()
+      await s.syncer.rebaseline(true)
+      expect(switchAccount).toHaveBeenCalledWith(ACCT, 'acct-2')
+      expect(s.store.read()).toMatchObject({ state: { acct: 'acct-2' }, frozen: null })
+    })
+
+    it('the trust group waits until the log is this sign-in\'s and not frozen on another account', async () => {
+      const fresh = setup({ signIn: () => 'u1' })
+      expect(fresh.syncer.current()).toBe(true) // nothing read yet: no account to carry over
+      const who = { user: 'u1', acct: ACCT as string | null }
+      const s = setup({ signIn: () => who.user, signInAcct: () => who.acct, signInAt: OLD })
+      await s.syncer.register()
+      expect(s.syncer.current()).toBe(true)
+      who.user = 'u2'
+      expect(s.syncer.current()).toBe(false)
+      who.acct = 'acct-3'
+      s.backend.fetch.mockImplementation(FakeBackend.of('acct-2').fetch)
+      await s.syncer.refresh()
+      expect(s.store.read().frozen?.reason).toBe('invalid')
+      expect(s.syncer.current()).toBe(false)
+    })
+  })
+
+  describe('gossip names its account', () => {
+    it('says it, and a peer of another account is not heard: nothing frozen, no tail taken', async () => {
+      const s = setup()
+      s.backend.add(box2, 'machine', MID2, 'box2')
+      await s.syncer.register()
+      expect(s.syncer.gossip()).toMatchObject({ acct: ACCT })
+      const other = FakeBackend.of('acct-2')
+      other.add(evil, 'viewer', '', 'evil')
+      other.add(phone, 'viewer', '', 'phone') // as long as this log, and different: a fork, were it this account's
+      const head = s.store.read().state!.head
+      expect(s.syncer.heard(evil.pub, { acct: 'acct-2', head: other.state.head, hashes: hashesOf(other.state), tail: other.entries, frozen: true })).toBeUndefined()
+      expect(s.store.read()).toMatchObject({ frozen: null, state: { head } })
+      expect(s.syncer.list().frozenPeers).toEqual([])
+      // The same log, under this account's name (or none, from an older peer), is a fork.
+      expect(s.syncer.heard(evil.pub, { acct: ACCT, head: other.state.head, hashes: hashesOf(other.state) })).toBeDefined()
       expect(s.store.read().frozen?.reason).toBe('fork')
     })
   })

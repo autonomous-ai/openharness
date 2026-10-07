@@ -11,6 +11,10 @@ on:
         description: 'Exact producer commit recorded in that runtime artifact'
         type: string
         required: true
+      prepare_fixture:
+        description: 'Also prepare a fresh private ARM disk for accelerated graphical acceptance'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -53,6 +57,8 @@ jobs:
           run-id: ${{ env.RUNTIME_RUN }}
           github-token: ${{ github.token }}
           path: os/work/fedora-runtime-input
+      - name: Verify the pinned upstream default agent
+        run: python3 os/tools/opencode_payload.py --archives os/work/opencode-archives --output os/work/opencode-payload
       - name: Build two identical packages and a real RPM upgrade
         run: |
           image=$(python3 -c 'import json; print(json.load(open("os/tests/arm-session.lock.json"))["root_image"])')
@@ -65,9 +71,9 @@ jobs:
             -e RUNTIME_SOURCE "$image" /bin/bash -euo pipefail -c '
               manager=$(command -v dnf5 || command -v microdnf)
               "$manager" install -y --setopt=install_weak_deps=False --setopt=gpgcheck=True --nodocs python3 git rpm-build tar gzip
-              python3 /source/os/tools/build-fedora-package.py --runtime /source/os/work/fedora-runtime-input/runtime --runtime-source "$RUNTIME_SOURCE" --output /output/first --release 1
-              python3 /source/os/tools/build-fedora-package.py --runtime /source/os/work/fedora-runtime-input/runtime --runtime-source "$RUNTIME_SOURCE" --output /output/repeat --release 1
-              python3 /source/os/tools/build-fedora-package.py --runtime /source/os/work/fedora-runtime-input/runtime --runtime-source "$RUNTIME_SOURCE" --output /output/upgrade --release 2
+              python3 /source/os/tools/build-fedora-package.py --runtime /source/os/work/fedora-runtime-input/runtime --runtime-source "$RUNTIME_SOURCE" --agent /source/os/work/opencode-payload --output /output/first --release 1
+              python3 /source/os/tools/build-fedora-package.py --runtime /source/os/work/fedora-runtime-input/runtime --runtime-source "$RUNTIME_SOURCE" --agent /source/os/work/opencode-payload --output /output/repeat --release 1
+              python3 /source/os/tools/build-fedora-package.py --runtime /source/os/work/fedora-runtime-input/runtime --runtime-source "$RUNTIME_SOURCE" --agent /source/os/work/opencode-payload --output /output/upgrade --release 2
             '
       - name: Install, upgrade and remove in a fresh Fedora root
         run: |
@@ -88,6 +94,12 @@ jobs:
                 --runtime /source/os/work/fedora-runtime-input/runtime \
                 --root-image "$ROOT_IMAGE" --output /evidence/lifecycle
             '
+      - name: Prepare a fresh private graphical fixture from the same package
+        if: inputs.prepare_fixture
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends qemu-system-arm e2fsprogs rpm libarchive-tools zstd gnupg python3-pil tesseract-ocr
+          python3 os/tests/arm_session.py --package os/work/fedora-package-output/first --output os/test-results/arm-session --prepare-only
       - name: Retain exact package and lifecycle evidence
         if: always()
         uses: actions/upload-artifact@v6
@@ -98,6 +110,19 @@ jobs:
             os/work/fedora-package-output/first/
             os/work/fedora-package-output/upgrade/
             os/test-results/fedora-package/
+            os/test-results/arm-session/receipt.json
+            os/test-results/arm-session/host.log
+            os/test-results/arm-session/packages.tsv
+            os/test-results/arm-session/agent-lock.json
           if-no-files-found: error
           retention-days: 7
+          compression-level: 0
+      - name: Retain the private fixture for accelerated acceptance
+        if: success() && inputs.prepare_fixture
+        uses: actions/upload-artifact@v6
+        with:
+          name: harness-arm-session-fixture
+          path: os/test-results/arm-session/fixture/
+          if-no-files-found: error
+          retention-days: 3
           compression-level: 0

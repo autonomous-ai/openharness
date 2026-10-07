@@ -16,11 +16,18 @@
  * alone: a crash or a leak costs the viewers, and the master starts them again. A new process stops the
  * viewer servers a crashed one left running before it starts its own (dsh/viewerLedger.ts). A core restart
  * no longer restarts every viewer: they stay up here, and the new core hears their URLs at once.
+ *
+ * A client served a viewer over its connection (services/viewers.ts `serveViewers`) reaches this process
+ * through the core: each frame of its stream is told here (`service_event` `stream`), and what the stream
+ * answers goes back to that connection through the core (`service_notice` `viewer`). A rendered frame
+ * (`viewer_surface`) is the core's question (`surface`), which only the core asks. The connections are the
+ * core's: when it goes, every stream it carried goes with it.
  */
 import type { CoreApi } from '../core/api.js'
-import { emptyPorts, resolveAgent } from '../core/api.js'
+import { ACCOUNT_BACKEND_OFF, CONVERSATIONS_OFF, AGENT_ACTIONS_OFF, DAEMON_UNKNOWN, DELIVERIES_OFF, emptyPorts, LANE_OFF, resolveAgent, TERMINALS_OFF } from '../core/api.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcess } from './process.js'
+import { UNASKED } from './processCoreApi.js'
 import { startViewers } from './viewers.js'
 
 export interface ViewersServiceOptions {
@@ -32,9 +39,6 @@ export interface ViewersServiceOptions {
   run?: typeof runServiceProcess
   /** Swapped in tests for viewers that start no server and watch no file. */
   start?: typeof startViewers
-  /** How the master's stop (SIGTERM) reaches this process; this process's own signal when absent. */
-  onSignal?: (signal: NodeJS.Signals, handler: () => void) => void
-  exit?: (code: number) => void
 }
 
 /** Whether what the core sent is an agent this process can attach. */
@@ -46,10 +50,18 @@ const isSession = (value: unknown): value is RegisteredSession =>
  * what the service would do to the core's windows. Whether an agent's terminal is attached is the core's
  * to judge when it hears; what the viewers never ask (search, sign-in) answers as nothing.
  */
-export function viewersCoreApi(dataDir: string, sessions: ReadonlyMap<string, RegisteredSession>, tell: (agentId: string) => void): CoreApi {
+export function viewersCoreApi(
+  dataDir: string,
+  sessions: ReadonlyMap<string, RegisteredSession>,
+  tell: (agentId: string) => void,
+  viewerFrame: CoreApi['clients']['viewerFrame'] = () => false,
+): CoreApi {
   const attached = (): RegisteredSession[] => [...sessions.values()]
   return {
     dataDir,
+    conversations: CONVERSATIONS_OFF,
+    terminals: TERMINALS_OFF,
+    machine: UNASKED.machine,
     agents: {
       all: attached,
       live: attached,
@@ -63,11 +75,13 @@ export function viewersCoreApi(dataDir: string, sessions: ReadonlyMap<string, Re
       runtimeProfile: () => null,
       setRuntime: () => {},
       fork: async () => ({ ok: false, error: 'UNSUPPORTED' }),
+      ...AGENT_ACTIONS_OFF,
+      activityText: UNASKED.activityText,
     },
     // The viewers drive no agent: these are never asked of them.
-    turns: { send: () => {}, stop: () => {}, recent: () => [], asks: () => [] },
+    turns: { send: () => {}, stop: () => {}, recent: async () => [], asks: async () => [], ...DELIVERIES_OFF },
     questions: { answer: () => {}, answerReviewed: async () => false },
-    transcripts: { databaseHistory: () => undefined },
+    transcripts: { databaseHistory: () => undefined, lastTurn: UNASKED.lastTurn },
     external: {
       sessions: { list: () => [], scan: async () => [] },
       open: { known: () => new Map(), fresh: async () => new Map() },
@@ -75,10 +89,15 @@ export function viewersCoreApi(dataDir: string, sessions: ReadonlyMap<string, Re
     account: {
       mintGridName: async () => null,
       accessToken: () => Promise.reject(new Error('the viewers hold no credential')),
+      lane: LANE_OFF,
       privateGridName: async () => null,
       machineName: () => null,
+      ...ACCOUNT_BACKEND_OFF,
+      ...UNASKED.account,
     },
-    clients: { viewerChanged: tell, gridNamed: () => {}, gridModelsChanged: () => {}, dshInstallStatus: () => {} },
+    clients: { viewerChanged: tell, gridNamed: () => {}, gridModelsChanged: () => {}, dshInstallStatus: () => {}, windows: () => {}, observer: () => false, ...UNASKED.clients, viewerFrame },
+    daemon: DAEMON_UNKNOWN,
+    wifi: UNASKED.wifi,
   }
 }
 
@@ -104,7 +123,13 @@ export function runViewersService(options: ViewersServiceOptions): ServiceProces
     void core.query('context', state).catch(() => {})
   }
 
-  ;(options.start ?? startViewers)(viewersCoreApi(options.dataDir, sessions, tell), ports)
+  /** A stream's frame for one client: through the core, which alone holds the client's connection. */
+  const viewerFrame = (connId: string, type: string, payload: Record<string, unknown>): boolean => {
+    if (!core?.notice) return false
+    core.notice('viewer', { connId, type, payload })
+    return true
+  }
+  ;(options.start ?? startViewers)(viewersCoreApi(options.dataDir, sessions, tell, viewerFrame), ports)
   if (!ports.viewers) throw new Error('the viewers did not start')
   const viewers = ports.viewers
 
@@ -130,7 +155,9 @@ export function runViewersService(options: ViewersServiceOptions): ServiceProces
     for (const agentId of [...sessions.keys()]) if (!listed.has(agentId) && !heard.has(agentId)) detach(agentId)
   }
 
-  const exit = options.exit ?? ((code: number) => process.exit(code))
+  // Its process stops it before it exits, however it ends (services/process.ts `hostServices`): the viewer
+  // servers run in process groups of their own and would otherwise outlive it, holding their ports, until
+  // the next viewers process reaped them. Once, whoever asks.
   let stopping: Promise<void> | null = null
   const stop = (): Promise<void> => {
     stopping ??= Promise.resolve().then(() => {
@@ -139,12 +166,6 @@ export function runViewersService(options: ViewersServiceOptions): ServiceProces
     })
     return stopping
   }
-  // However this process ends (the master's SIGTERM, the master going, a test fault), its viewer servers
-  // are stopped first: they run in process groups of their own and would otherwise outlive it, holding
-  // their ports, until the next viewers process reaped them.
-  const leave = (code: number): void => {
-    void stop().catch(() => {}).then(() => exit(code))
-  }
 
   const run = options.run ?? runServiceProcess
   const service = run({
@@ -152,11 +173,20 @@ export function runViewersService(options: ViewersServiceOptions): ServiceProces
     socketPath: options.socketPath,
     machineId: options.machineId,
     token: options.token,
-    // The apps ask the viewers nothing: only the core does, through the context it keeps.
-    requests: {},
-    exit: leave,
+    // The apps ask the viewers nothing directly. The core asks for a client's rendered frame (`surface`),
+    // under a type no client's request is routed as, with the connection the client asked over.
+    requests: {
+      surface: (payload) => {
+        const { connId, ...asked } = payload
+        return viewers.surface(String(connId), asked)
+      },
+    },
     onEvent: (payload) => {
-      if (payload.kind === 'attach' && isSession(payload.session)) {
+      if (payload.kind === 'stream' && typeof payload.connId === 'string' && typeof payload.type === 'string') {
+        viewers.stream(payload.connId, payload.type, payload.frame && typeof payload.frame === 'object' ? payload.frame as Record<string, unknown> : {})
+      } else if (payload.kind === 'closed') {
+        viewers.closed(typeof payload.connId === 'string' ? payload.connId : undefined)
+      } else if (payload.kind === 'attach' && isSession(payload.session)) {
         heard.add(payload.session.agentId)
         attach(payload.session)
       } else if (payload.kind === 'detach' && typeof payload.agentId === 'string') {
@@ -172,7 +202,11 @@ export function runViewersService(options: ViewersServiceOptions): ServiceProces
       // context: a new core hears everything, and one that only dropped the connection what changed.
       void connection.query('agents').then((answer) => { if (core === connection) catchUp(answer.agents) }, () => {})
     },
+    // Every client's connection was that core's: their streams and surfaces end with it.
+    onDisconnected: () => {
+      core = null
+      viewers.closed()
+    },
   })
-  ;(options.onSignal ?? ((signal, handler) => { process.once(signal, handler) }))('SIGTERM', () => leave(0))
-  return { stop: () => { void stop() } }
+  return { stop }
 }

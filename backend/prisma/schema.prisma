@@ -7,6 +7,73 @@ generator client {
   provider = "prisma-client-js"
 }
 
+/// Explicitly published, portable single-session snapshots. Live shares remain a separate protocol.
+model CommunityHarness {
+  id            String   @id @default(uuid()) @map("_id")
+  autonomousEnv String   @default("prod")
+  authorId      String
+  authorName    String
+  title         String
+  description   String
+  category      String
+  engine        String
+  harnessId     String?
+  viewerPath    String
+  files         Json
+  conversation  Json
+  cover         String?
+  forkedFrom    String?
+  credits       Json     @default("[]")
+  deletedAt     DateTime?
+  createdAt     DateTime @default(now())
+
+  @@index([autonomousEnv, deletedAt, createdAt])
+  @@index([autonomousEnv, authorId])
+  @@map("community_harnesses")
+}
+
+model CommunityLike {
+  id            String   @id @default(auto()) @map("_id") @db.ObjectId
+  autonomousEnv String   @default("prod")
+  harnessId     String
+  userId        String
+  createdAt     DateTime @default(now())
+
+  @@unique([autonomousEnv, harnessId, userId])
+  @@index([autonomousEnv, harnessId])
+  @@map("community_likes")
+}
+
+model CommunityComment {
+  id            String   @id @default(uuid()) @map("_id")
+  autonomousEnv String   @default("prod")
+  harnessId     String
+  userId        String
+  authorName    String
+  body          String
+  clientId      String
+  parentId      String?
+  parentAuthorName String?
+  createdAt     DateTime @default(now())
+
+  @@unique([autonomousEnv, harnessId, userId, clientId])
+  @@index([autonomousEnv, harnessId, createdAt])
+  @@index([autonomousEnv, userId, createdAt])
+  @@map("community_comments")
+}
+
+model CommunityFollow {
+  id            String   @id @default(auto()) @map("_id") @db.ObjectId
+  autonomousEnv String   @default("prod")
+  authorId      String
+  userId        String
+  createdAt     DateTime @default(now())
+
+  @@unique([autonomousEnv, authorId, userId])
+  @@index([autonomousEnv, userId])
+  @@map("community_follows")
+}
+
 /// A thin MIRROR of a product user. Identity is the normalized email authenticated by Autonomous
 /// SSO. The two Autonomous account planes issue different subjects for the same email, so production
 /// and staging subjects are stored separately. Lives in the SAME MongoDB the agent-manager uses, but
@@ -46,6 +113,16 @@ model User {
   // `lastAttribution` is the latest tagged sign-in.
   signUpAttribution SignInAttribution?
   lastAttribution   SignInAttribution?
+  // The account's Google subject as this backend last read it LIVE from the Autonomous profile
+  // (lib/googleSubject.ts, ADR 0046), so `GET /api/grid/profile` can answer for a computer signed in
+  // by QR, whose token Autonomous cannot read. `googleSubCheckedAt` unset means never checked — and on
+  // MongoDB that is ABSENT on every row written before today as well as null, so a filter on
+  // `googleSubCheckedAt: null` alone misses the legacy rows (the trap `Machine.deletedAt` and
+  // routes/grid.ts document); `UserService.recordGoogleSubject` adds `isSet: false`. Once checked, a
+  // null `googleSub` means "this account has no Google identity".
+  // Both are internal: `UserService.toPublic` leaves them out of every user-describing response.
+  googleSub          String?
+  googleSubCheckedAt DateTime?
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
@@ -490,6 +567,30 @@ model UserDailyPresence {
   @@unique([userId, machineId, dayUtc])
   @@index([userId, dayUtc])
   @@map("user_daily_presence")
+}
+
+/// Per-day record of a user on a surface other than the desktop app — `UserDailyPresence` stays the
+/// desktop app's alone. One row per (user, surface, UTC day); DAU is a distinct `userId`.
+/// `surface`: 'tui' (`harness tui`, reported by the local daemon like a desktop window: adapter-ws
+/// `app_presence { surface: 'tui' }`, src/lib/adapterWs.ts), 'mobile' / 'web' (the app's and the
+/// browser's own web-ws sockets, declared with `?client=` — src/lib/webWs.ts; the daemon's relay
+/// socket declares nothing and is never counted). `connections` = sessions opened that day (for
+/// mobile/web one per machine socket); a session spanning midnight gives the next day `0`.
+/// No `machineId`: mobile and web hold a socket per machine they look at, and it is one person.
+model UserDailyClientPresence {
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+  userId      String
+  surface     String
+  dayUtc      DateTime
+  connections Int      @default(0)
+  firstSeenAt DateTime
+  lastSeenAt  DateTime
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([userId, surface, dayUtc])
+  @@index([surface, dayUtc])
+  @@map("user_daily_client_presence")
 }
 
 /// Per-day record of whether a user actually established a remote p2p connection to stream a

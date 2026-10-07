@@ -8,8 +8,8 @@
 import type { CursorSubagentManager } from '../../engines/cursor/subagent.js'
 import { correlateAgentEvent } from '../../lib/agentEvent.js'
 import type { QuestionWatcher } from '../../lib/askQuestion.js'
-import type { AutonomousDeviceService } from '../../lib/autonomous-device/service.js'
-import type { CommanderMirror } from '../../lib/commander.js'
+import type { WifiFeed } from '../wifi.js'
+import type { TurnRecaps } from './recaps.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import type { SessionInputController } from '../../lib/sessionInput.js'
 import type { TurnActivity } from '../../lib/turnActivity.js'
@@ -20,11 +20,11 @@ export interface CancelDeps {
   normalizers: Pick<SessionNormalizers, 'closeTurns'>
   cursorSubagents: Pick<CursorSubagentManager, 'forget'>
   input: Pick<SessionInputController, 'cancel' | 'cancelConfirmed'>
-  /** The Harness device service, once it exists. */
-  device: () => Pick<AutonomousDeviceService, 'turnEnded'> | undefined
+  /** The Wi-Fi device's service, wherever it runs (core/wifi.ts). */
+  device: () => Pick<WifiFeed, 'turnEnded'> | undefined
   stopHeartbeat: (sessionId: string) => void
   questionWatcher: Pick<QuestionWatcher, 'stop'>
-  mirror: Pick<CommanderMirror, 'cancel'>
+  mirror: Pick<TurnRecaps, 'cancel'>
   turnActivity: Pick<TurnActivity, 'observe' | 'snapshot'>
   /** When each open turn started (the heartbeats'): the WiFi device reads an agent as running by it. */
   turnStartedAt: Map<string, number>

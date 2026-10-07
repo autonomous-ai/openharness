@@ -53,19 +53,33 @@ describe('direct Autonomous device endpoint selection', () => {
     await expect(f.direct.pair(f.row.id, 'CODE12')).rejects.toThrow('session did not authenticate')
     expect(f.direct.connected()).toBe(0)
   })
+  // The link's idle deadline runs on a fake clock, moved only here: the sockets and the pings stay real. Against
+  // the real clock, pings every 30 ms missed a 100 ms deadline under load (12 busy loops, load 40), and the
+  // pinged link was torn down as silent.
   it('terminates a silent link and reconnects, while a pinged link stays open', async () => {
     const f = await fixture(); await f.direct.pair(f.row.id, 'CODE12'); f.direct.stop()
     await new Promise(resolve => setTimeout(resolve, 20))
     const sockets: import('ws').WebSocket[] = []
     f.wss.removeAllListeners('connection'); f.wss.on('connection', ws => sockets.push(ws))
+    const settled = async (test: () => boolean) => { while (!test()) await new Promise(resolve => setImmediate(resolve)) }
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] }); clean.push(() => vi.useRealTimers())
     const quiet = new AutonomousDeviceDirect(f.host, f.dir, f.discovery, 100); clean.unshift(() => quiet.stop()); quiet.start()
-    await vi.waitFor(() => expect(sockets).toHaveLength(1))
-    await vi.waitFor(() => expect(sockets[0].readyState).toBe(sockets[0].CLOSED), { timeout: 1000 })
-    expect(quiet.connected()).toBe(0)
+    await settled(() => sockets.length === 1 && quiet.connected() === 1)
+    // Silent: nothing heard for the idle time, and the link is torn down.
+    vi.advanceTimersByTime(99)
+    expect(quiet.connected()).toBe(1)
+    vi.advanceTimersByTime(1)
+    await once(sockets[0], 'close')
+    await settled(() => quiet.connected() === 0)
     ;(quiet as unknown as { reconnect: () => Promise<void> }).reconnect()
-    await vi.waitFor(() => expect(sockets).toHaveLength(2))
-    const ping = setInterval(() => { for (const ws of sockets) if (ws.readyState === ws.OPEN) ws.ping() }, 30); clean.push(() => clearInterval(ping))
-    await new Promise(resolve => setTimeout(resolve, 400))
+    await settled(() => sockets.length === 2 && quiet.connected() === 1)
+    // Pinged: each ping heard (its pong back) before 60 ms pass, ten times over, 600 ms in all; the link stays.
+    for (let n = 0; n < 10; n++) {
+      const pong = once(sockets[1], 'pong')
+      sockets[1].ping()
+      await pong
+      vi.advanceTimersByTime(60)
+    }
     expect(sockets[1].readyState).toBe(sockets[1].OPEN)
     expect(quiet.connected()).toBe(1)
   })

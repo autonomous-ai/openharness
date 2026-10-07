@@ -10,7 +10,7 @@ import { preTrustClaudeProject, preTrustCodexProject } from '../../lib/claudeTru
 import { createAndRegisterPane } from '../../lib/createAgentPane.js'
 import { enginePathOverride } from '../../lib/engineBin.js'
 import { buildEngineLaunchArgv, permissionModeFlags, refusePermissionFlagIfUnsupported, supportsFirstPrompt } from '../../lib/engineLaunch.js'
-import { setUpWithin } from '../../lib/gridAttach.js'
+import { setUpWithin } from '../../lib/setUpWithin.js'
 import { writeGridConfigDir } from '../../lib/gridConfigDir.js'
 import { buildGridEngineLaunch } from '../../lib/gridLaunch.js'
 import { installCodexHooks, installOpencodePlugin } from '../../lib/hooks.js'
@@ -45,7 +45,7 @@ vi.mock('../../lib/engineLaunch.js', async (real) => ({
   refusePermissionFlagIfUnsupported: vi.fn(async () => null),
   supportsFirstPrompt: vi.fn(() => true),
 }))
-vi.mock('../../lib/gridAttach.js', async (real) => ({ ...await real<object>(), setUpWithin: vi.fn(async (run: () => Promise<unknown>) => { await run(); return 'done' }) }))
+vi.mock('../../lib/setUpWithin.js', async (real) => ({ ...await real<object>(), setUpWithin: vi.fn(async (run: () => Promise<unknown>) => { await run(); return 'done' }) }))
 vi.mock('../../lib/gridConfigDir.js', () => ({ writeGridConfigDir: vi.fn(async () => '/config/harness-claude') }))
 vi.mock('../../lib/gridLaunch.js', async (real) => ({
   ...await real<object>(),

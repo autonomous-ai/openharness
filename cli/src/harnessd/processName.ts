@@ -13,7 +13,7 @@
  * not ours to write in. Anything that goes wrong leaves the process running as `node`, as before: a name
  * is never worth a process that does not start.
  */
-import { linkSync, mkdirSync, renameSync, statSync, unlinkSync } from 'node:fs'
+import { linkSync, mkdirSync, realpathSync, renameSync, statSync, unlinkSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join, relative } from 'node:path'
 
 export { baseNode } from './baseNode.js'
@@ -21,6 +21,7 @@ export { baseNode } from './baseNode.js'
 const LINK_DIR = join('libexec', 'harnessd')
 
 export interface NamedNodeFs {
+  realpath(path: string): string
   /** The file's identity, or null when it is not there. */
   identity(path: string): { dev: number; ino: number } | null
   mkdir(path: string): void
@@ -30,6 +31,7 @@ export interface NamedNodeFs {
 }
 
 export const nodeFs: NamedNodeFs = {
+  realpath: realpathSync,
   identity: (path) => {
     const stat = statSync(path, { throwIfNoEntry: false })
     return stat ? { dev: stat.dev, ino: stat.ino } : null
@@ -71,6 +73,11 @@ export function namedNode(node: string, name: string, runtimeDir: string | undef
   const link = join(dir, name)
   const temp = `${link}.${options.pid ?? process.pid}.tmp`
   try {
+    // Found by QA on a quiet machine: a managed symlink to Homebrew Node passed the lexical check.
+    // macOS hard-linked its target, and dyld aborted the relocated executable: libnode was left behind.
+    // Resolve both paths so a symlinked runtime still works, but an external interpreter stays put.
+    const resolved = relative(fs.realpath(runtimeDir!), fs.realpath(node))
+    if (!resolved || resolved.startsWith('..') || isAbsolute(resolved)) return fallBack('node resolves outside the managed runtime')
     const target = fs.identity(node)
     if (!target) return fallBack('no node binary')
     const current = fs.identity(link)

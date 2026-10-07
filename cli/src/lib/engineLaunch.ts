@@ -10,7 +10,7 @@ import { isOpencodeV2 } from '../engines/opencode/version.js'
 import { binaryOnPath, resolveBinaryOnPath } from './binaryOnPath.js'
 import { engineBin } from './engineBin.js'
 import { engineInstallPaths, npmEnginePrefix, type EngineInstallRecipe } from './engineInstall.js'
-import { GRID_NO_UPDATE_CHECK_VAR, gridBinaryPath } from './gridExec.js'
+import { GRID_NO_UPDATE_CHECK_VAR, gridBinaryPath } from './gridBinary.js'
 import { loginShellEnvironment } from './loginShellEnv.js'
 import { managedNodePath } from './nodeRuntime.js'
 import { RAISE_OPEN_FILES_SH } from './openFiles.js'
@@ -1118,6 +1118,15 @@ export function gridPanePrelude(binary: string): string {
     ? [`PATH=${shellSingleQuote(dirname(binary))}"\${PATH:+:$PATH}"`, 'export PATH', 'hash -r 2>/dev/null || true']
     : []
   return [...onPath, `${GRID_NO_UPDATE_CHECK_VAR}=1`, `export ${GRID_NO_UPDATE_CHECK_VAR}`, ''].join('\n')
+}
+
+/** Install if needed, then run an exact native argv from an existing interactive prompt.
+ * The parent shell keeps its helpers and environment when the agent exits. */
+export function shellAgentArgv(binary: string, args: string[], recipe: EngineInstallRecipe,
+  runtimeNode: string = managedNodePath()): string[] {
+  return ['/bin/sh', '-c', RAISE_OPEN_FILES_SH + STOP_PROOF_FUNCTIONS
+    + installIfMissingScript(recipe, runtimeNode) + 'shift\nexec "$harness_engine_bin" "$@"\n',
+    'harness-shell-agent', binary, ...args]
 }
 
 /**

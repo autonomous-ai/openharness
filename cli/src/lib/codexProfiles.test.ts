@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'fs'
 import { homedir, tmpdir } from 'os'
 import { join } from 'path'
 import type * as CodexProfilesModule from './codexProfiles.js'
@@ -18,10 +18,11 @@ const emptyDiscovery = { home: '/nonexistent-empty-home', environment: {} }
 describe('codexProfiles', () => {
   beforeEach(() => {
     dataDir = mkdtempSync(join(tmpdir(), 'codex-profiles-data-'))
-    // Under the real home, not os.tmpdir(): resolveCodexProfilePath realpath-resolves everything it
-    // returns, and macOS's tmpdir sits behind a /var → /private/var symlink that would otherwise
-    // make the resolved path disagree with the literal folder these tests just created.
-    home = mkdtempSync(join(homedir(), '.codex-profiles-test-'))
+    // By its real path: resolveCodexProfilePath realpath-resolves everything it returns, and macOS's
+    // tmpdir sits behind a /var → /private/var symlink that would otherwise make the resolved path
+    // disagree with the literal folder these tests just created. In the suite's own home folder
+    // (vitest.setup.ts): this once made and removed folders in the developer's.
+    home = realpathSync(mkdtempSync(join(homedir(), '.codex-profiles-test-')))
   })
 
   afterEach(() => {

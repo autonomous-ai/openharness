@@ -25,7 +25,7 @@ import {
 import { trackSocketLiveness } from './hub.js'
 import { guardedSend, guardedSendJson } from './wsSend.js'
 import { attachNodeRole, PRESENCE_TTL_SEC } from './nodeRole.js'
-import { presenceWriteDue, recordTurnStarted, touchMachineOnlineDay, touchUserOnlineDay, type PresenceWriteState } from './dailyTracking.js'
+import { presenceTracker, presenceWriteDue, recordTurnStarted, touchClientOnlineDay, touchMachineOnlineDay, touchUserOnlineDay, type PresenceWriteState } from './dailyTracking.js'
 import { countryCodeFromHeaders } from './clientGeo.js'
 import { recordCreatedAgent, recordDeletedAgent } from './agentTracker.js'
 import type { Frame } from './tunnel.js'
@@ -300,22 +300,19 @@ async function attachAdapter(ws: WebSocket, machineId: string, userId: string, c
   // above, `ping` is rate-floored. `userId` is the machine's owner — the only person a desktop app
   // on this computer can be signed in as. The row is keyed by THIS machine too, so the same person
   // on a second computer lands in a second row rather than in this one.
-  const lastUserPresence: PresenceWriteState = { dayKey: null, wroteAt: 0 }
-  let userPresenceInFlight = false
-  let lastUserOpenAt = 0
-  const touchUserPresence = (kind: 'open' | 'ping'): void => {
-    const now = new Date()
-    if (kind === 'ping' && (userPresenceInFlight || !presenceWriteDue(lastUserPresence, now, USER_PRESENCE_WRITE_MS))) return
-    if (kind === 'open') {
-      if (now.getTime() - lastUserOpenAt < USER_PRESENCE_OPEN_MS) return
-      lastUserOpenAt = now.getTime()
-    }
-    userPresenceInFlight = true
-    touchUserOnlineDay(userId, machineId, now, { isNewConnection: kind === 'open' })
-      .then(() => { lastUserPresence.dayKey = utcDayKey(now); lastUserPresence.wroteAt = now.getTime() })
-      .catch((err) => logger.warn('user presence tracking failed', { machineId, userId, kind, error: String(err) }))
-      .finally(() => { userPresenceInFlight = false })
-  }
+  const userPresenceFloors = { pingFloorMs: USER_PRESENCE_WRITE_MS, openFloorMs: USER_PRESENCE_OPEN_MS }
+  const touchUserPresence = presenceTracker(
+    (now, isNewConnection) => touchUserOnlineDay(userId, machineId, now, { isNewConnection }),
+    (kind, err) => logger.warn('user presence tracking failed', { machineId, userId, kind, error: String(err) }),
+    userPresenceFloors,
+  )
+  // `harness tui` on this computer: the daemon reports it like a window but names the surface, and it
+  // is kept out of the desktop app's table (`user_daily_client_presence`, schema.prisma).
+  const touchTuiPresence = presenceTracker(
+    (now, isNewConnection) => touchClientOnlineDay(userId, 'tui', now, { isNewConnection }),
+    (kind, err) => logger.warn('tui presence tracking failed', { machineId, userId, kind, error: String(err) }),
+    userPresenceFloors,
+  )
 
   // The node role — down subscription, presence, `__clients` resync, node_status — is shared with
   // every other backer of a machine and lives in nodeRole.ts. Only the delivery and teardown are
@@ -437,9 +434,11 @@ async function attachAdapter(ws: WebSocket, machineId: string, userId: string, c
       // Bookkeeping only — absorbed here, never published: no client has any use for it and an
       // unknown frame type must not reach the firmware.
       if (app.type === 'app_presence') {
-        const kind = (app.payload as { kind?: unknown } | undefined)?.kind
+        const { kind, surface } = (app.payload ?? {}) as { kind?: unknown; surface?: unknown }
         if (typeof kind !== 'string' || !APP_PRESENCE_KINDS.has(kind)) return
-        touchUserPresence(kind as 'open' | 'ping')
+        // No surface = the desktop app (every daemon before this field, and the desktop window now).
+        if (surface === 'tui') touchTuiPresence(kind as 'open' | 'ping')
+        else touchUserPresence(kind as 'open' | 'ping')
         return
       }
       // The machine appending to its account's device key log (lib/deviceKeyLog.ts): its own key, or a

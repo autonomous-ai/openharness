@@ -3,8 +3,9 @@
  * does when a release ships. A daemon of the released build (`MIGRATION_FROM`, its bundled `cli.js`)
  * runs with agents at work, finds this checkout's build in its update manifest, and hands over to it
  * the way that release hands over: it spawns the new `cli.js __run` and exits. The new core comes up
- * on its own, with no master, keeps every agent and its conversation, and the next start brings up
- * harnessd's master over the same agents.
+ * on its own, with no master, keeps every agent and its conversation, and once that release has gone it
+ * hands the machine to harnessd's master, which runs the updater (core/updateHandoff.ts). Then the next
+ * start brings up the master over the same agents again.
  *
  * Skipped unless MIGRATION_FROM names a bundle, so CI does not build old releases. Before a release:
  * build the last released tag's bundle (`node build-bundle.mjs` in a checkout of it) and run
@@ -103,8 +104,17 @@ describe.skipIf(!FROM)('upgrading a machine from a released build', () => {
     expect((await health())?.version).toBe(fromVersion)
   }, 300_000)
 
+  /** The master the handed-over core started, if it is running: no child of the test's. */
+  const handedTo = async (): Promise<number | null> => {
+    const status = await fetch(`http://127.0.0.1:${daemon!.port}/api/status`).then((response) => response.json() as Promise<Record<string, any>>).catch(() => null)
+    const pid = status?.harnessd?.masterPid
+    return typeof pid === 'number' && pid !== daemon!.pid && IsolatedDaemon.alive(pid) ? pid : null
+  }
+
   afterAll(async () => {
-    // Whatever runs the port now — the detached successor included — goes with the test.
+    // Whatever runs the port now — a master the handed-over core started included — goes with the test.
+    const master = daemon ? await handedTo() : null
+    if (master) { try { process.kill(master, 'SIGTERM') } catch { /* gone */ } }
     for (const pid of listeners()) { try { process.kill(pid, 'SIGTERM') } catch { /* gone */ } }
     await daemon?.close()
     await new Promise<void>((done) => server ? server.close(() => done()) : done())
@@ -135,21 +145,26 @@ describe.skipIf(!FROM)('upgrading a machine from a released build', () => {
     offered = 'next'
     await until(`the machine to run ${NEXT}`, async () => (await health())?.version === NEXT || null, 120_000, 500)
     client.close()
+
+    // Once the released build has gone, the core it left with no master hands the machine to one, which
+    // runs the updater: a second restart, seconds after the first, as any update's is. The agents go on.
+    const master = await until('the handed-over core to hand the machine to a master', () => handedTo(), 120_000, 500)
     client = await LocalClient.connect(d)
     for (const agent of agents) {
-      await until(`${agent.id.slice(0, 8)} back on ${NEXT}`, async () => {
+      await until(`${agent.id.slice(0, 8)} back under the master the core started`, async () => {
         const now = (await rows(client)).find((one) => one.id === agent.id)
         return now?.status === 'active' && now.sessionId === agent.sessionId ? now : null
       }, 60_000, 500)
-      await turn(client, agent.id, `on ${NEXT}, handed over`)
+      await turn(client, agent.id, `on ${NEXT}, under the master the core started`)
     }
     client.close()
 
     // The next `harness start` (a reboot, the desktop app) starts the new build as harnessd: master and core.
     // The released build's own process may still be about, waiting on its successor; it goes first.
     await d.stop()
+    process.kill(master, 'SIGTERM')
     for (const pid of listeners()) process.kill(pid, 'SIGTERM')
-    await until('the handed-over core to stop', () => listeners().length === 0 || null, 30_000, 250)
+    await until('the daemon to stop', () => (listeners().length === 0 && !IsolatedDaemon.alive(master)) || null, 30_000, 250)
     ;(d.options as { noMaster?: boolean }).noMaster = false
     await d.start()
     expect((await health())?.version).toBe(NEXT)

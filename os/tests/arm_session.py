@@ -93,6 +93,16 @@ class SessionVM(VM):
         return self.user('for n in $(seq 1 ' + str(seconds * 2) + '); do if ' + command +
                          '; then exit 0; fi; sleep .5; done; exit 1', timeout=seconds + 10)
 
+    def keys(self, *keys):
+        # QMP send-key releases held keys on a guest timer. Under HVF load that
+        # release can arrive after the compositor starts repeating a character.
+        # Queue actual presses and releases together, leaving normal OS repeat
+        # settings intact and still exercising the graphical keyboard path.
+        events = [{'type': 'key', 'data': {'down': down, 'key': {'type': 'qcode', 'data': key}}}
+                  for down, chord in [(True, keys), (False, reversed(keys))] for key in chord]
+        self.monitor('input-send-event', events=events)
+        time.sleep(.12)
+
     def frame(self, name, text, seconds=60, absent=()):
         from PIL import Image, ImageOps
         deadline = time.monotonic() + seconds
@@ -108,6 +118,13 @@ class SessionVM(VM):
                 ImageOps.expand(readable, border=24, fill=255).save(ocr_frame)
             output = subprocess.check_output(['tesseract', str(ocr_frame), 'stdout', '--psm', '11'],
                                              text=True, stderr=subprocess.DEVNULL, timeout=15)
+            if not frame_contains(output, text, absent):
+                # Sparse-text segmentation can omit a reverse-video button on
+                # the Linux console. Also read the same real frame as a block;
+                # retain both readings, including all forbidden-text checks.
+                output += '\n' + subprocess.check_output(
+                    ['tesseract', str(ocr_frame), 'stdout', '--psm', '6'],
+                    text=True, stderr=subprocess.DEVNULL, timeout=15)
             (self.folder / (name + '.txt')).write_text(output)
             if frame_contains(output, text, absent):
                 return
@@ -131,7 +148,7 @@ class SessionVM(VM):
         self.frame(name, marker)
         self.keys('ctrl', 'd')
 
-    def poweroff(self, timeout=60):
+    def poweroff(self, timeout=60, *, request=True):
         started = time.monotonic()
         report = {'status': 'waiting', 'events': []}
         streams = {self.serial: 'serial', self.qmp: 'qmp'}
@@ -139,7 +156,8 @@ class SessionVM(VM):
         try:
             # The test console may terminate before printing a command result.
             # Require the guest's actual shutdown event and clean QEMU exit.
-            self.send('sync; systemctl poweroff --no-block\n')
+            if request:
+                self.send('sync; systemctl poweroff --no-block\n')
             while True:
                 remaining = timeout - (time.monotonic() - started)
                 exited = self.process.poll() is not None
@@ -203,6 +221,15 @@ def exercise(vm, result):
     vm.frame('02-agent', ['OpenCode', 'Ask anything'])
     output, _ = vm.command('pgrep -u 1000 -x opencode | head -1')
     pid = re.search(r'(?m)^\d+\r?$', output)[0].strip()
+    if result.get('package', {}).get('agent'):
+        agent = result['package']['agent']
+        vm.command('rpm -V harness-os-session')
+        vm.command('test "$(readlink /proc/' + pid + '/exe)" = /usr/lib/harness-opencode/opencode')
+        vm.command('test "$(rpm -qf --qf ' + shlex.quote('%{NAME}') +
+                   ' /usr/lib/harness-opencode/opencode)" = harness-os-session')
+        vm.command('printf %s ' + shlex.quote(agent['files']['opencode']['sha256'] +
+                   '  /usr/lib/harness-opencode/opencode\n') + ' | sha256sum -c -')
+        result['checks'].append('The actual first agent executes the RPM-owned, checksum-pinned ARM binary on the 16 KiB kernel')
     output, _ = vm.command('readlink /proc/' + pid + '/cwd')
     match = re.search(r'/home/me/projects/[a-zA-Z0-9._-]+', output)
     if not match:
@@ -460,7 +487,7 @@ def main():
         print('Build a fresh signed Fedora session without a desktop', flush=True)
         run(['docker', 'run', '--name', container, '--platform', 'linux/arm64', '--memory=4g', '--cpus=2', '--pids-limit=1024',
              '--mount', f'type=bind,source={inputs},target=/inputs,readonly', graphical['root_image'], 'bash', '/inputs/provision'], timeout=1200)
-        for source_path, name in [('/harness-packages.tsv', 'packages.tsv'), ('/opt/harness-agent/package-lock.json', 'agent-lock.json')]:
+        for source_path, name in [('/harness-packages.tsv', 'packages.tsv'), ('/usr/share/harness-os/opencode.json', 'agent-lock.json')]:
             run(['docker', 'cp', container + ':' + source_path, output / name])
         archive, root, disk = work / 'root.tar', work / 'root', work / 'guest.raw'
         root.mkdir()

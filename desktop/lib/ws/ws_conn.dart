@@ -305,6 +305,9 @@ class WsConn {
             'autonomousEnv': autonomousEnv,
             if (_directObserver)
               (observerLink ? 'link' : 'share'): observerShareId!,
+            // The browser counts its person as on the web today (backend
+            // user_daily_client_presence). Not other viewer builds: they are not the web.
+            if (!_directObserver && kIsWeb) 'client': 'web',
           },
         );
       }
@@ -532,6 +535,10 @@ class WsConn {
   /// three — only a link can — so this stops and says so the way the CLI's own relay does, with
   /// 4404.
   void _refusePeer(String reason) {
+    appLog.info(
+      'ws',
+      'refused ${machineId.length > 8 ? machineId.substring(0, 8) : machineId}: $reason',
+    );
     _closing = true;
     _ready = false;
     _observerHandshakeTimer?.cancel();

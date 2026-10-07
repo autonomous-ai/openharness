@@ -43,6 +43,8 @@ import type { RegisteredSession } from './registry.js'
 import { SQLITE_BACKED_ENGINES } from './sqliteAvailability.js'
 import { omitLongRuns, readSessionTurns, SessionTurnsError, type TurnSource } from './sessionSearch/sessionTurns.js'
 import type { IndexedTurn } from './sessionSearch/turns.js'
+import { isSubagentTranscript } from './subagentTranscript.js'
+export { isSubagentTranscript } from './subagentTranscript.js'
 
 export const HANDOFF_DIR = '.harness/handoff'
 const HANDOFF_EXCLUDE = { pattern: '**/.harness/handoff/', comment: 'Harness agent handoffs (untracked)' }
@@ -489,17 +491,19 @@ export class HandoffError extends Error {
   }
 }
 
+type Read<T> = T | Promise<T>
+
 export interface HandoffDeps {
   /** The agent's record, running or stopped; also how a fork's parents are found. */
-  resolve(agentId: string): RegisteredSession | null | undefined
+  resolve(agentId: string): Read<RegisteredSession | null | undefined>
   /** The whole history of a session a database engine keeps (OpenCode, Kilo, Hermes, Devin); undefined for a file engine. */
   readHistory(session: RegisteredSession): (() => Promise<readonly LiveEvent[]>) | undefined
   /** The mirror's newest `n` requests by the person, newest first: the floor's asks when the session can't be read. */
-  recentAsks(sessionId: string, n: number): string[]
+  recentAsks(sessionId: string, n: number): Read<string[]>
   /** The mirror's last full answer: preferred over the transcript's for the Last answer section. */
-  lastFullText(sessionId: string): string | undefined
+  lastFullText(sessionId: string): Read<string | undefined>
   /** The mirror's stored recaps of the session's last turns, newest first: the floor's answers. */
-  recaps?(sessionId: string, n: number): string[]
+  recaps?(sessionId: string, n: number): Read<string[]>
   /** The session an unbound, live, NON-fork agent runs (`handoffDiscovery.ts`), or null. Never called for a fork. */
   discoverSession?(session: RegisteredSession): Promise<TurnSource | null>
   /** Budget for `discoverSession`: 1.5 s by default, and never past the deadline. */
@@ -507,7 +511,7 @@ export interface HandoffDeps {
   /** A transcript by session id (claude and codex only). Absent: none is found. */
   findTranscript?(engine: AgentEngine, sessionId: string, opts: { codexHome?: string }): Promise<string | null>
   /** May this path be read as `engine`'s transcript? Default: an absolute path to a plain file. */
-  transcriptOk?(engine: AgentEngine, path: string, codexHome: string | null): boolean
+  transcriptOk?(engine: AgentEngine, path: string, codexHome: string | null): Read<boolean>
   /** The git binary. Default `git`. */
   git?: string
   /** Limit for each git command, ms. Default 2 s. */
@@ -529,22 +533,23 @@ const inFlight = new Map<string, { changeId: string; promise: Promise<HandoffRes
  * be added, resolves with `file: null` and `file` in `degraded`.
  */
 export function prepareAgentHandoff(deps: HandoffDeps, req: HandoffRequest): Promise<HandoffResult> {
-  // Always a promise, never a throw: the socket chains `.then/.catch` on the call, unguarded.
-  try { return start(deps, req) } catch (error) { return Promise.reject(error) }
-}
-
-function start(deps: HandoffDeps, req: HandoffRequest): Promise<HandoffResult> {
-  if (typeof req.changeId !== 'string' || !CHANGE_ID.test(req.changeId)) return Promise.reject(new HandoffError('BAD_CHANGE_ID'))
-  const session = deps.resolve(req.agentId)
-  if (!session) return Promise.reject(new HandoffError('UNKNOWN_AGENT'))
-  const cwd = session.cwd
-  if (!cwd || !isAbsolute(cwd) || !isDirectory(cwd)) return Promise.reject(new HandoffError('NO_PROJECT'))
-  const key = session.agentId
-  const running = inFlight.get(key)
-  if (running) return running.changeId === req.changeId ? running.promise : Promise.reject(new HandoffError('BUSY'))
-  if (inFlight.size >= MAX_IN_FLIGHT) return Promise.reject(new HandoffError('BUSY'))
-  const promise = withDeadline(deps, (expired) => prepare(deps, session, cwd, req, expired)).finally(() => { inFlight.delete(key) })
-  inFlight.set(key, { changeId: req.changeId, promise })
+  // Found by QA on a quiet machine: a service boundary adds waits before the first file read. They
+  // share the original deadline; a late core answer must never start work after the caller gave up.
+  let key: string | null = null
+  const promise = withDeadline(deps, async (expired) => {
+    if (typeof req.changeId !== 'string' || !CHANGE_ID.test(req.changeId)) throw new HandoffError('BAD_CHANGE_ID')
+    const session = await deps.resolve(req.agentId)
+    if (expired()) throw new HandoffError('TIMEOUT')
+    if (!session) throw new HandoffError('UNKNOWN_AGENT')
+    const cwd = session.cwd
+    if (!cwd || !isAbsolute(cwd) || !isDirectory(cwd)) throw new HandoffError('NO_PROJECT')
+    const running = inFlight.get(session.agentId)
+    if (running) return running.changeId === req.changeId ? running.promise : Promise.reject(new HandoffError('BUSY'))
+    if (inFlight.size >= MAX_IN_FLIGHT) throw new HandoffError('BUSY')
+    key = session.agentId
+    inFlight.set(key, { changeId: req.changeId, promise })
+    return prepare(deps, session, cwd, req, expired)
+  }).finally(() => { if (key && inFlight.get(key)?.promise === promise) inFlight.delete(key) })
   return promise
 }
 
@@ -586,7 +591,8 @@ async function prepare(deps: HandoffDeps, session: RegisteredSession, cwd: strin
   const turns = await secureTurns(pick.turns, tick)
   const asks = turns.filter((turn) => turn.ask).map((turn) => turn.ask).reverse()
   // The mirror speaks only for the session that was read: never for an inherited or discovered history.
-  const mirrored = pick.mirrorSessionId ? deps.lastFullText(pick.mirrorSessionId)?.trim() : ''
+  const mirrored = pick.mirrorSessionId ? (await deps.lastFullText(pick.mirrorSessionId))?.trim() : ''
+  tick()
   const lastAnswer = (mirrored ? secureText(mirrored) : '') || [...turns].reverse().find((turn) => turn.answer)?.answer || null
   if (!asks.length && !lastAnswer) return { file: null, gitRepo, cwd, degraded }
 
@@ -653,9 +659,9 @@ function forkLink(session: RegisteredSession): ForkLink | null {
 }
 
 /** The agent's record, or null: a record that cannot be read is a record that is not there. */
-function safeResolve(deps: HandoffDeps, agentId: string): RegisteredSession | null {
+async function safeResolve(deps: HandoffDeps, agentId: string): Promise<RegisteredSession | null> {
   try {
-    const found = deps.resolve(agentId)
+    const found = await deps.resolve(agentId)
     return found && typeof found === 'object' ? found : null
   } catch { return null }
 }
@@ -665,20 +671,11 @@ function sameFolder(a: unknown, b: unknown): boolean {
   try { return realpathSync(a) === realpathSync(b) } catch { return false }
 }
 
-/**
- * A Claude subagent's transcript: `<session>/subagents/agent-*.jsonl`. Only the file's own folder is checked, so a
- * home or projects root that happens to sit under a folder named `subagents` does not refuse every transcript.
- */
-export function isSubagentTranscript(path: string): boolean {
-  const parts = path.split(/[\\/]/).filter(Boolean)
-  return parts.length >= 2 && parts[parts.length - 2] === 'subagents'
-}
-
 /** May `path` be read as `engine`'s transcript: vouched for, and not a subagent's (`<session>/subagents/agent-*.jsonl`). */
-function gate(deps: HandoffDeps, engine: string, path: string, codexHome: string | null): boolean {
+async function gate(deps: HandoffDeps, engine: string, path: string, codexHome: string | null): Promise<boolean> {
   if (typeof path !== 'string' || !path || isSubagentTranscript(path)) return false
   try {
-    return deps.transcriptOk ? deps.transcriptOk(engine as AgentEngine, path, codexHome) : isAbsolute(path) && isPlainFile(path)
+    return deps.transcriptOk ? await deps.transcriptOk(engine as AgentEngine, path, codexHome) : isAbsolute(path) && isPlainFile(path)
   } catch { return false }
 }
 
@@ -737,13 +734,13 @@ async function pickHistory(deps: HandoffDeps, session: RegisteredSession, cwd: s
     }
     if (!ownEmpty) {
       // The floor: what the mirror remembers (the newest asks, and the recaps of the last turns).
-      const floor = floorTurns(deps.recentAsks(session.sessionId, FLOOR_ASKS), safeRecaps(deps, session.sessionId))
-      if (hasContent(floor) || deps.lastFullText(session.sessionId)?.trim()) return { ...none(), turns: floor, mirrorSessionId: session.sessionId, floor: true, missing: false }
+      const floor = floorTurns(await deps.recentAsks(session.sessionId, FLOOR_ASKS), await safeRecaps(deps, session.sessionId))
+      if (hasContent(floor) || (await deps.lastFullText(session.sessionId))?.trim()) return { ...none(), turns: floor, mirrorSessionId: session.sessionId, floor: true, missing: false }
     }
   } else if (session.forkedFrom == null && deps.discoverSession) {
     const found = await discover(deps, session, remainingMs())
     tick()
-    if (found?.transcriptPath && !DATABASE_ENGINES.has(found.engine) && gate(deps, found.engine, found.transcriptPath, session.codexHome ?? null)) {
+    if (found?.transcriptPath && !DATABASE_ENGINES.has(found.engine) && await gate(deps, found.engine, found.transcriptPath, session.codexHome ?? null)) {
       const turns = await read({ engine: found.engine, sessionId: found.sessionId, transcriptPath: found.transcriptPath })
       if (turns && hasContent(turns)) return { ...none(), turns, sessionId: found.sessionId, missing: false }
     }
@@ -793,7 +790,8 @@ async function inheritHistory(
     const link = forkLink(node)
     if (!link || seen.has(link.agentId)) return null
     seen.add(link.agentId)
-    const parent = safeResolve(deps, link.agentId)
+    const parent = await safeResolve(deps, link.agentId)
+    tick()
     if (!parent || !sameFolder(parent.cwd, cwd)) return null
     if (!link.sessionId && !parent.sessionId) { node = parent; continue }
     if (DATABASE_ENGINES.has(parent.engine)) return null
@@ -803,18 +801,18 @@ async function inheritHistory(
     if (link.sessionId) {
       sessionId = link.sessionId
       for (const candidate of [link.transcriptPath?.includes(sessionId) ? link.transcriptPath : null, parent.sessionId === sessionId ? parent.transcriptPath : null]) {
-        if (candidate && gate(deps, parent.engine, candidate, home)) { path = candidate; break }
+        if (candidate && await gate(deps, parent.engine, candidate, home)) { path = candidate; break }
       }
       if (!path && deps.findTranscript) {
         let found: string | null = null
         try { found = await deps.findTranscript(parent.engine, sessionId, { codexHome: home ?? undefined }) } catch { found = null }
         tick()
-        if (found && gate(deps, parent.engine, found, home)) path = found
+        if (found && await gate(deps, parent.engine, found, home)) path = found
       }
     } else {
       sessionId = parent.sessionId
       const boundAt = parent.boundAt
-      if (typeof boundAt === 'number' && Number.isFinite(boundAt) && boundAt <= cut && parent.transcriptPath && gate(deps, parent.engine, parent.transcriptPath, home)) path = parent.transcriptPath
+      if (typeof boundAt === 'number' && Number.isFinite(boundAt) && boundAt <= cut && parent.transcriptPath && await gate(deps, parent.engine, parent.transcriptPath, home)) path = parent.transcriptPath
     }
     if (!path) return null
     const all = await read({ engine: parent.engine, sessionId, transcriptPath: path })
@@ -825,8 +823,8 @@ async function inheritHistory(
   return null
 }
 
-function safeRecaps(deps: HandoffDeps, sessionId: string): string[] {
-  try { return (deps.recaps?.(sessionId, FLOOR_RECAPS) ?? []).filter((text) => typeof text === 'string' && text.trim()) } catch { return [] }
+async function safeRecaps(deps: HandoffDeps, sessionId: string): Promise<string[]> {
+  try { return ((await deps.recaps?.(sessionId, FLOOR_RECAPS)) ?? []).filter((text) => typeof text === 'string' && text.trim()) } catch { return [] }
 }
 
 /**

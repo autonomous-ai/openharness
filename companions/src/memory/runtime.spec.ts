@@ -319,9 +319,14 @@ it.each(['forgotten', 'corrected'] as const)('withholds a prepared packet when i
       store.correctFromUser(item.id, item.revision, { ...draft, claim: 'Group related coding changes together.' }, access)
     }
   }
-  const result = await runtime.preparePromptRecall('agent', { query: 'coding changes' })
-  expect(result.packet.status).toBe('denied')
-  expect(result.receipt).toBeNull()
+  // October 6 full CI hit the separate recall deadline during SQLite writes. Hold that clock
+  // here so this test reaches the policy recheck after the memory changes.
+  const clock = vi.spyOn(performance, 'now').mockReturnValue(0)
+  try {
+    const result = await runtime.preparePromptRecall('agent', { query: 'coding changes' })
+    expect(result.packet.status).toBe('denied')
+    expect(result.receipt).toBeNull()
+  } finally { clock.mockRestore() }
 })
 
 it('learns explicit personal coding preferences in the collection conversation and recalls them in other projects', async () => {

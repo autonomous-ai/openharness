@@ -198,16 +198,19 @@ try:
     wait(lambda: pane_background(first) == active_bg and pane_background(second) == inactive_bg, 'whole-pane focus contrast')
     assert background_at(149, 0) == inactive_bg, 'panes reach the window edges: no outer margin'
     wait(lambda: pane_edge_background(first, active_bg), 'focused background fills through the pane edges')
-    assert background_at(49, 20) == background_at(99, 20) == 'default', 'pane gaps use the native terminal background'
+    # Blurred panes touch side by side, as boxes do (#877): the divider column is the left pane's edge.
+    assert background_at(49, 20) == active_bg and background_at(99, 20) == inactive_bg, 'side by side panes touch, no gap between them'
     assert pane_edge_background(second, inactive_bg)
     tab = value(hn('show', '-gwv', 'window-status-current-format'))
     label = value('#{window_index}:#{window_short_name}')
-    assert tab.startswith(label + '* '), (tab, label)
-    assert value('#{window_agent_icon}') in tab[len(label):]
+    assert tab.startswith(label + '*'), (tab, label)
+    mark = value('#{window_agent_icon}')
+    if value('#{window_agent_state}') != 'idle': assert mark in tab[len(label):]
+    else: assert tab == label + '*', 'idle tabs have no status mark'
     assert '*' in value('#{window_flags}')
-    selected_bg = hn('show', '-gwv', 'window-status-current-style').split('bg=')[1].split(',')[0]
-    normal_bg = hn('show', '-gwv', 'window-status-style').split('bg=')[1].split(',')[0]
-    assert selected_bg == normal_bg, 'the star identifies the active tab without a second filled highlight'
+    # The tab styles leave the bar's own colour alone (#877: no filled tab by default), whatever it is.
+    assert hn('show', '-gwv', 'window-status-current-style') == hn('show', '-gwv', 'window-status-style'), 'the star identifies the active tab without a second filled highlight'
+    normal_bg = background_at(0, 41)
     current = value('#{window_id}')
     other = next(w for w in hn('list-windows', '-F', '#{window_id}').splitlines() if w != current)
     hn('select-window', '-t', other)
@@ -270,10 +273,13 @@ try:
     wait(lambda: 'Claude 0%  Codex 89%' in tmux('capture-pane', '-p', '-t', 'test').splitlines()[-1], 'all subscription allowances reach the status row, even below the warning threshold')
     assert value('#{usage_remaining}') == 'Claude 0%  Codex 89%', 'accounts shared across fixture machines appear once'
     assert value('#{usage_high}') == 'claude 5h 100%', 'existing custom used-quota format is preserved'
-    row = tmux('capture-pane', '-p', '-t', 'test').splitlines()[-1]
-    assert color_at(row.index('0%'), 41, foreground=True) == '#ff9b8e', 'exhausted allowance uses red text'
-    assert color_at(row.index('89%'), 41, foreground=True) == color_at(row.index('Codex'), 41, foreground=True), 'healthy allowance has no warning styling'
-    assert background_at(row.index('0%'), 41) == background_at(row.index('Codex'), 41), 'subscription text keeps the continuous status background'
+    def quota_colors_ready():
+        row = tmux('capture-pane', '-p', '-t', 'test').splitlines()[-1]
+        if 'Claude 0%  Codex 89%' not in row: return False
+        return (color_at(row.index('0%'), 41, foreground=True) == '#ff9b8e'
+                and color_at(row.index('89%'), 41, foreground=True) == color_at(row.index('Codex'), 41, foreground=True)
+                and background_at(row.index('0%'), 41) == background_at(row.index('Codex'), 41))
+    wait(quota_colors_ready, 'exhausted allowance is red, healthy allowance plain, on one status background after command notices clear')
     hn('set', '-gw', 'pane-border-lines', 'double')
     wait(lambda: not pane_outline(first) and not pane_outline(second), 'border line options do not draw outlines in pane appearance')
     hn('set', '-g', '@hn-look', 'classic')
@@ -297,7 +303,7 @@ try:
     x, y, w = map(int, value('#{pane_left} #{pane_top} #{pane_width}', second).split())
     def waiting_heading():
         return tmux('capture-pane', '-p', '-t', 'test').splitlines()[y - 1][x:x + w].strip()
-    wait(lambda: waiting_heading().endswith('(2) ?'), 'long pane names retain their suffix and waiting indicator')
+    wait(lambda: re.search(r'\(2\) \?\s+Codex\s+(?:default\s+)?…\s+×$', waiting_heading()), 'long pane names retain their suffix and waiting indicator before the mouse controls')
     assert '…' in waiting_heading()
     assert value('#{pane_title}', second) == long_title, 'raw pane title must remain unchanged'
     hn('select-pane', '-t', second, '-T', original_title)
@@ -326,7 +332,11 @@ try:
              'a zoomed pane fills the window, to its edges')
         wait(lambda: background_at(0, 41) == normal_bg, 'status bar keeps its own color after transient completion notices')
         x, y, w = map(int, value('#{pane_left} #{pane_top} #{pane_width}', target).split())
-        wait(lambda: tmux('capture-pane', '-p', '-t', 'test').splitlines()[y - 1][x:x + w].rstrip().endswith(branch_context), 'machine, project, branch and PR align to the right edge')
+        def context_before_controls():
+            heading = tmux('capture-pane', '-p', '-t', 'test').splitlines()[y - 1][x:x + w].rstrip()
+            suffix = heading.partition(branch_context)[2]
+            return branch_context in heading and bool(re.fullmatch(r'\s+(?:Claude Code\s+default\s+)?…\s+×', suffix))
+        wait(context_before_controls, 'machine, project, branch and PR align beside the right-hand controls')
         snapshot('panes-zoomed' if target == first else 'panes-remote-zoomed')
         keys('C-b', 'z')
         wait(lambda: value('#{window_zoomed_flag}') == '0', 'unzoom')
@@ -438,12 +448,13 @@ try:
     wait(lambda: pane_background(first) == '#eeeeee' and pane_background(second) == '#e5e5e5', 'light focus contrast')
     wait(lambda: pane_edge_background(first, '#eeeeee') and pane_title_color(first, foreground=False) == '#eeeeee', 'light surface fills the focused pane through its padding')
     assert background_at(149, 0) in ('#eeeeee', '#e5e5e5'), 'light theme: the panes reach the window edges too'
-    light_status = hn('show', '-gv', 'status-style')
+    # The bar is drawn in the theme's colours (#877), not by rewriting status-style: read it off the screen.
+    light_status = background_at(0, 41)
     assert value('#{window_layout}') == layout_before_theme
     snapshot('panes-light')
     hn('set', '-gw', 'window-style', 'fg=red,bg=blue')
     background('#101010')
-    wait(lambda: hn('show', '-gv', 'status-style') != light_status, 'green status follows the dark theme')
+    wait(lambda: background_at(0, 41) != light_status, 'the status bar follows the dark theme')
     assert hn('show', '-gwv', 'window-style') == 'fg=red,bg=blue'
     assert hn('show', '-gwv', 'window-active-style') == 'default'
     wait(lambda: pane_background(first) == 'colour4' and pane_background(second) == 'colour4', 'custom backgrounds win on active and inactive panes')

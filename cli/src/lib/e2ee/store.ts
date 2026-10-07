@@ -103,12 +103,7 @@ export class E2eeStore {
         this.identity = id
       }
     }
-    try {
-      const arr = JSON.parse(readFileSync(PAIRED_FILE, 'utf-8')) as Array<PairedClient & { role?: PairRole }>
-      for (const p of arr) {
-        if (p?.identityPub) this.paired.set(p.identityPub, { ...p, role: p.role === 'device' ? 'device' : 'web' })
-      }
-    } catch { /* none yet */ }
+    this.reloadPaired()
     try {
       const raw = JSON.parse(readFileSync(REMOTE_PASSWORD_FILE, 'utf-8')) as Partial<RemotePasswordRecord>
       if (raw?.v === 1 && typeof raw.stretched === 'string' && typeof raw.setAt === 'number') {
@@ -123,6 +118,17 @@ export class E2eeStore {
       }
     } catch { /* none yet */ }
     return this.identity
+  }
+
+  /** Read paired.json again, as it is on disk now (accountTrust.ts swaps it when the account changes). */
+  reloadPaired(): void {
+    this.paired.clear()
+    try {
+      const arr = JSON.parse(readFileSync(PAIRED_FILE, 'utf-8')) as Array<PairedClient & { role?: PairRole }>
+      for (const p of arr) {
+        if (p?.identityPub) this.paired.set(p.identityPub, { ...p, role: p.role === 'device' ? 'device' : 'web' })
+      }
+    } catch { /* none yet */ }
   }
 
   getIdentity(): Identity {

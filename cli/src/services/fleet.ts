@@ -5,23 +5,95 @@
  * which machine an agent is on, and a turn, a stop or an answer reaching it there (fleetRouter.ts).
  *
  * It was built inside the dial's wiring, and the router lived in the dial's host, so ⌘K and the
- * window's voice route reached another machine only through the dial. ⌘K, the voice route and the dial
- * all reach it through its port now (`ports.fleet`), and none holds the router itself (steps D0 and D1):
- * a dial that moves into a process of its own asks the same port through the core.
+ * window's voice route reached another machine only through the dial. It is a part of the devices now
+ * (services/devices.ts, step 9), beside its main caller: the dial reads a dozen routing facts while it
+ * builds each frame (which machine an agent is on, whether it is known, who it is), and those reads
+ * stay in line only on the same side of a process boundary as the dial. ⌘K reaches it through the
+ * devices' port.
  *
- * A service on the core boundary: it reads the core only through `CoreApi`, and the core reaches it
- * only through `ports.fleet`.
+ * It reads the core only through `CoreApi`.
  */
 import { env } from '../config/env.js'
-import type { CoreApi, CorePorts, RouteAnswer } from '../core/api.js'
+import { FAIL, later, type CoreApi, type PortFallbacks, type RouteAnswer, type SendResult, type ForkResult } from '../core/api.js'
 import { DeviceFleet } from '../device/deviceFleet.js'
 import { DeviceLink } from '../device/deviceLink.js'
 import type { MachineListCache } from '../device/machineList.js'
-import type { AuthSessionManager } from '../lib/authSession.js'
-import type { Identity } from '../lib/e2ee/core.js'
 import { MachinePeerStore } from '../lib/e2ee/machinePeers.js'
-import { routeVoiceTask, type RouterAgent } from '../lib/voiceRouter.js'
+import { routeVoiceTask, type RouterAgent, type RouterContinuity } from '../lib/voiceRouter.js'
+import type { CableAgent, CableMachine, CableMachineSource } from '../cable/cableSession.js'
+import type { FleetEvent } from '../cable/machineFleet.js'
+import type { AnswerReceipt, ReviewedAnswer } from '../cable/questionInbox.js'
 import { FleetRouter } from './fleetRouter.js'
+
+/** A fork and where it was asked: `asked` is false for a refusal made before asking anyone (an agent
+ *  never listed, a daemon or a fleet that cannot fork), which nobody needs to hear about. */
+export interface ForkOutcome { result: ForkResult; machineId: string; asked: boolean }
+/** A machine selected for the dial, or the refusal a person can act on. */
+export type SelectResult = { ok: true } | { ok: false; code: string; message: string }
+
+/**
+ * Which machine an agent is on, and a turn, a stop or an answer reaching it there: the fleet's router
+ * (services/fleetRouter.ts), as the dial asks it. Also the lane to the other machines, which the dial
+ * holds while it is plugged in. A refusal is an answer here, never a throw: through the devices' guard,
+ * a throw is a failure of the fleet, and counts toward switching it off.
+ */
+export interface FleetRouting {
+  listMachines(): Promise<{ machines: CableMachine[]; source: CableMachineSource }>
+  listAgentsFlat(): Promise<CableAgent[]>
+  agentTotal(): number
+  describe(agentId: string): { name: string; engine: string; machine: string } | undefined
+  noteAgent(machineId: string, agentId: string): void
+  machineOf(agentId: string): string
+  knows(agentId: string): boolean
+  isLocalAgent(agentId: string): boolean
+  sendTurn(agentId: string, text: string): SendResult
+  lastRouted(): RouterContinuity | undefined
+  stopTurn(agentId: string): void
+  canSpeakQuestion(agentId: string): boolean
+  answerReviewed(answer: ReviewedAnswer): Promise<AnswerReceipt>
+  answer(agentId: string, requestId: string, answers: Record<string, string>): void
+  updateAgent(agentId: string, model?: string, effort?: string): void
+  recentSummaries(agentId: string): Promise<Array<{ recap: string; text: string; ask: string }>>
+  recentAsks(agentId: string): Promise<string[]>
+  listModels(agentId: string): Promise<string[]>
+  forkAgent(agentId: string): Promise<ForkOutcome>
+  /** Whether a lane to the other machines exists: signed in, with the fleet's own fleet. */
+  hasLane(): boolean
+  /** Hold the lane for a dial, attached to no machine. Resolves with how it went; never rejects. */
+  online(): Promise<{ ok: true } | { ok: false; message: string }>
+  select(machineId: string): Promise<SelectResult>
+  release(immediate?: boolean): void
+}
+
+/** The fleet as the devices hold it: ⌘K's two requests — which agent a typed task belongs to, on any of
+ *  the owner's machines, and delivering it to that agent's own machine — the routing the dial asks of it,
+ *  the cards the other machines send, and stopping the lane to them. */
+export interface Fleet extends FleetRouting {
+  routeTask(text: string): Promise<RouteAnswer>
+  routeSend(agentId: string, text: string): SendResult
+  /** The other machines' cards, for the dial. Returns how to stop hearing them. */
+  onEvent(listener: (event: FleetEvent) => void): () => void
+  stop(): void
+}
+
+export const FLEET_UNAVAILABLE = 'the fleet service is unavailable'
+
+/**
+ * What the devices get when the fleet fails. ⌘K says so, picking no agent and sending nothing; a shutdown
+ * goes on; the cards stop. The dial's routing FAILs: the dial routes this computer by itself then, as it
+ * does with the fleet off (cable/cableHost.ts), rather than reading a made-up answer as the fleet's.
+ */
+export const FLEET_FALLBACKS: PortFallbacks<Fleet> = {
+  routeTask: later({ agentId: '', machineId: '', name: '', confidence: 0, reason: FLEET_UNAVAILABLE, candidates: [], weighed: 0, machines: 0, via: '' }),
+  routeSend: { ok: false, machine: '', reason: FLEET_UNAVAILABLE },
+  onEvent: () => {},
+  stop: undefined,
+  listMachines: later(FAIL), listAgentsFlat: later(FAIL), agentTotal: FAIL, describe: FAIL, noteAgent: FAIL,
+  machineOf: FAIL, knows: FAIL, isLocalAgent: FAIL, sendTurn: FAIL, lastRouted: FAIL, stopTurn: FAIL,
+  canSpeakQuestion: FAIL, answerReviewed: later(FAIL), answer: FAIL, updateAgent: FAIL, recentSummaries: later(FAIL),
+  recentAsks: later(FAIL), listModels: later(FAIL), forkAgent: later(FAIL), hasLane: FAIL, online: later(FAIL),
+  select: later(FAIL), release: FAIL,
+}
 
 /**
  * How many agents ⌘K weighs at once.
@@ -38,66 +110,46 @@ const MACHINE_LIST_REFRESH_MS = 60_000
 
 /** What the fleet needs that is not the core's to give. */
 export interface FleetDeps {
-  /**
-   * The owner's machines. Built by the core before this service starts, because the local
-   * `/api/machines` answer and the trust group read it too, and a cache bound late is still empty
-   * exactly when a cold boot during an outage needs it. This service keeps it fresh.
-   */
+  /** The owner's machines: the devices' own copy of the list, read from the core (`account.machines`).
+   *  This service keeps it fresh. */
   machines: MachineListCache
-  /** The list a signed-out daemon answers with — this computer alone — or null when signed in. */
-  guestMachines(): Record<string, unknown> | null
-  /** This computer's durable id. */
-  computerId(): string
-  /** This computer's machine id, or '' until the daemon has resolved one. */
-  machineId(): string
-  /** The name the dial and the fleet give this computer. */
-  machineName(): string
   /** The window's tiles on its active tab, in tile order, as it last reported them. */
   desk(): string[]
-  /**
-   * What the lane signs in and seals with, until it moves with the relay (step D3): the daemon's own
-   * session manager, which shares a refresh in flight with the backend socket; the account's
-   * environment; and this machine's E2EE identity, the one `harness link connect` proves knowledge
-   * against.
-   */
-  auth: AuthSessionManager
-  autonomousEnv: string
-  identity: Identity
+  /** Read this computer's agents again before a list is built from them (FleetLocal.refresh). */
+  refresh?: () => Promise<void>
 }
 
-/** Start the fleet: its port, through which ⌘K and the dial reach the router. The router itself is
- *  returned for this service's own tests; nothing else holds it. */
-export function startFleet(core: CoreApi, ports: CorePorts, deps: FleetDeps): FleetRouter {
+/** Start the fleet: what ⌘K and the dial reach it through. The router itself is returned beside it, for
+ *  this service's own tests; nothing else holds it. */
+export function startFleet(core: CoreApi, deps: FleetDeps): { fleet: Fleet; router: FleetRouter } {
   // Three independent things, on purpose. The LIST is a REST read that works while the backend socket is
   // down; `local` is derived from the computer id and needs no network at all; and the LANE is a device
   // socket that only exists while the dial is actually looking at another machine.
   //
-  // Signed out there is nothing to fetch and a fetch would only earn a 401 that empties the wheel, so
-  // the one row this daemon can speak for is fed in directly — the same body the local handler answers.
-  const refreshMachineList = (): void => {
-    const guest = deps.guestMachines()
-    if (guest) { deps.machines.adopt(guest); return }
-    void deps.machines.refresh()
-  }
+  // Signed out there is nothing to fetch and a fetch would only earn a 401 that empties the wheel, so the
+  // core answers with the one row this daemon can speak for (`account.machines`).
+  const refreshMachineList = (): void => { void deps.machines.refresh() }
   refreshMachineList()
   const machineListTimer = setInterval(refreshMachineList, MACHINE_LIST_REFRESH_MS)
   machineListTimer.unref?.()
 
   const peers = new MachinePeerStore()
   const link = new DeviceLink({
-    auth: deps.auth,
+    // Signed in and sealed through the core (step 10, R3): its tokens are the core's session's, which
+    // shares a refresh in flight with the backend link, and its E2EE sessions are the gateway's, under the
+    // SAME identity `harness remote-password set` publishes and `harness link connect` proves knowledge
+    // against, so one link ceremony covers the desktop app's relay and the dial's lane alike.
+    auth: { accessToken: (options) => core.account.accessToken(options) },
     backendWsBase: env.BACKEND_WS_URL,
-    computerId: deps.computerId(),
-    autonomousEnv: deps.autonomousEnv,
-    // The SAME identity `harness remote-password set` publishes and `harness link connect` proves
-    // knowledge against, so one link ceremony covers the desktop app's relay and the dial's lane alike.
-    identity: deps.identity,
+    computerId: core.machine.computerId(),
+    autonomousEnv: core.account.environment(),
+    seal: core.account.lane,
     // Read FRESH on every attach: `harness link connect` runs as a separate process, so a value captured
     // at daemon start would keep answering "not linked" until the next restart.
     peer: (machineId) => peers.get(machineId),
     // Read fresh for the same reason: it is '' until the daemon has resolved this computer's machine, and
     // the echo guard must start working the moment it is not.
-    localMachineId: () => deps.machineId(),
+    localMachineId: () => core.machine.id(),
     log: (line) => console.log(`[device] ${line}`),
   })
   const devices = new DeviceFleet({
@@ -110,10 +162,11 @@ export function startFleet(core: CoreApi, ports: CorePorts, deps: FleetDeps): Fl
   })
   // This computer's side of every route: the core's own doors, the ones the web and the hooks use.
   const router = new FleetRouter({
-    machineName: () => deps.machineName(),
-    machineId: () => deps.machineId(),
-    computerId: () => deps.computerId(),
+    machineName: () => core.machine.name(),
+    machineId: () => core.machine.id(),
+    computerId: () => core.machine.computerId(),
     sessions: () => core.agents.advertised(),
+    refresh: deps.refresh,
     displayName: (session) => core.agents.displayName(session),
     runtimeProfile: (session) => core.agents.runtimeProfile(session),
     desk: () => deps.desk(),
@@ -132,11 +185,11 @@ export function startFleet(core: CoreApi, ports: CorePorts, deps: FleetDeps): Fl
   // Which machine an agent is on, before its list is necessarily read: what lets a question from it be
   // named and, tapped, opened — whichever surface is listening, the dial or none.
   devices.onEvent((event) => { if (event.kind !== 'state') router.noteAgent(event.machineId, event.agentId) })
-  ports.fleet = {
+  const fleet: Fleet = {
     // ⌘K's two requests.
     routeTask: (text) => routeTask(router, text),
     routeSend: (agentId, text) => router.sendTurn(agentId, text),
-    // What the dial asks: the router's own answers, through the core's port (step D1).
+    // What the dial asks: the router's own answers.
     listMachines: () => router.listMachines(),
     listAgentsFlat: () => router.listAgentsFlat(),
     agentTotal: () => router.agentTotal(),
@@ -167,7 +220,7 @@ export function startFleet(core: CoreApi, ports: CorePorts, deps: FleetDeps): Fl
       link.stop()
     },
   }
-  return router
+  return { fleet, router }
 }
 
 /**

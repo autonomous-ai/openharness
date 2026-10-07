@@ -6,14 +6,18 @@ import { randomUUID } from 'node:crypto'
 import type { RegisteredSession } from '../registry.js'
 import type { DshRegistryEntry } from '../../dsh/registry.js'
 const state = vi.hoisted(() => ({ agents: [] as RegisteredSession[], catalog: [] as DshRegistryEntry[] }))
-vi.mock('../registry.js', () => ({ registry: { list: () => state.agents, terminalAvailable: () => true } }))
+// The core's registry, as the core's Wi-Fi doors read it (core/wifiAgents.ts): the Store runs with the device's
+// service, in the devices' process, and reads the agents and makes one through them.
+const registry = { list: () => state.agents, advertised: () => state.agents, terminalAvailable: () => true }
+const deviceStoreAgents = (machineId: string) => storeAgents({ registry, machineId: () => machineId })
 vi.mock('../../dsh/catalog.js', () => ({ refreshDshRegistry: async () => state.catalog, catalogEntry: (id: string) => state.catalog.find(e => e.id === id) }))
 import { env } from '../../config/env.js'
 import * as engineLaunch from '../engineLaunch.js'
 import { installDsh } from '../../dsh/install.js'
 import { installedDsh, invalidateInstalledDsh } from '../../dsh/installed.js'
 import { materializeWorkspace } from '../../dsh/materialize.js'
-import { createDeviceStore, deviceStorePackages, deviceStoreAgents } from './storeRuntime.js'
+import { createDeviceStore, deviceStorePackages } from './storeRuntime.js'
+import { storeAgents, wifiCreate } from '../../core/wifiAgents.js'
 import { DeviceStoreResultSchema } from './storeContract.js'
 import { HARNESS_MONOREPO } from '../../dsh/registry.js'
 
@@ -43,7 +47,8 @@ async function setup() {
     state.agents.push(session)
     return { ok: true as const, session }
   })
-  const store = createDeviceStore({ dataDir: join(root, 'state'), machineId: 'mac', create })
+  const store = createDeviceStore({ dataDir: join(root, 'state'), machineId: 'mac', agents: () => deviceStoreAgents('mac'),
+    create: wifiCreate({ registry, machineId: () => 'mac', createAgent: () => create }) })
   const request = { type: 'agent.prepare', requestId: randomUUID(), machineId: 'mac', packageId: 'test/robot-fixture', workspace: { kind: 'existing', path: cwd }, idempotencyKey: 'prepare' }
   return { source, cwd, create, store, request }
 }

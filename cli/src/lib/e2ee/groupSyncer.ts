@@ -58,6 +58,11 @@ export interface GroupSyncerDeps {
   suspended?: () => ReadonlySet<string>
   /** Machines worth dialing now; null = unknown, try every member. */
   reachable?: () => Set<string> | null
+  /** Whether the roster here is the account's this machine is signed in to (deviceLogSyncer `current`).
+   *  While not, nothing is swapped: a daemon started after a switch of accounts read the new account's
+   *  log only after its first rounds, and handed the roster of the account it left to the new one's
+   *  machines. */
+  ready?: () => boolean
   now?: () => number
   log?: (line: string) => void
 }
@@ -69,6 +74,8 @@ export class GroupSyncer {
   private fanOutTimer: ReturnType<typeof setTimeout> | null = null
   private periodic: ReturnType<typeof setInterval> | null = null
   private retryRound = 0
+  /** Bumped when the account changes: an exchange started before is not merged into the new roster. */
+  private generation = 0
   /** Set once the device key log is wired up; the exchange works without it, as with an older peer. */
   devlog: GroupSyncLogGossip | null = null
   /** A member the GROUP removed (a tombstone that arrived by `group_sync` — from a device that
@@ -97,6 +104,14 @@ export class GroupSyncer {
   }
 
   roster(): Roster { return this.deps.store.read() }
+
+  /** The trust stores were swapped for another account's (accountTrust.ts): who was synced, and what is
+   *  on its way, belong to the one left. */
+  reset(): void {
+    this.generation++
+    this.lastSynced.clear()
+    this.inFlight.clear()
+  }
 
   /** A device just linked to or from this machine over the remote password: it joins the group, and the
    *  rest of the group hears of it. */
@@ -139,7 +154,10 @@ export class GroupSyncer {
   }
 
   /** Keys the device key log holds (deviceLogSyncer.ts): members of the group like any link, stamped
-   *  when they joined the log, so a device that predates the log hears of them through the group. */
+   *  when they joined the log, so a device that predates the log hears of them through the group. A key
+   *  the roster holds already, as it is, is trusted here too if it is not: the merge has nothing new to
+   *  say about it, and when it was all that trusted a key, one roster that outran this machine's trust
+   *  (a crash between the two writes, a peer's roster first) kept that device out for good. */
   adoptFromLog(members: Array<{ pub: string; kind: GroupMember['kind']; machineId: string; label: string; addedAt: number }>): void {
     const now = this.now()
     const parsed = members
@@ -147,7 +165,11 @@ export class GroupSyncer {
       .filter((m): m is GroupMember => m !== null)
     if (!parsed.length) return
     const before = rosterDigest(this.deps.store.read())
-    const result = this.deps.store.merge({ members: parsed, removed: [] }, this.selfPub())
+    const merged = this.deps.store.merge({ members: parsed, removed: [] }, this.selfPub())
+    const paired = new Set(this.deps.paired().map((p) => p.identityPub))
+    const untrusted = merged.roster.members.filter((m) =>
+      !paired.has(m.pub) && parsed.some((p) => p.pub === m.pub) && !merged.upserted.some((u) => u.pub === m.pub))
+    const result = { ...merged, upserted: [...merged.upserted, ...untrusted] }
     this.apply(result)
     if (rosterDigest(result.roster) !== before) this.scheduleFanOut(1_000)
   }
@@ -177,6 +199,10 @@ export class GroupSyncer {
 
   /** Responder side of `group_sync`, for a sealed request from the session identity `peerPub`. */
   handle(peerPub: string, payload: Record<string, unknown>): Record<string, unknown> {
+    if (this.deps.ready?.() === false) {
+      const none: Roster = { members: [], removed: [] }
+      return { ...none, digest: rosterDigest(none) }
+    }
     const now = this.now()
     const incoming = parseRoster(payload, now)
     const self = parseMember(payload.self, now)
@@ -204,6 +230,7 @@ export class GroupSyncer {
 
   /** Every reachable machine member (and every machine pinned outside the roster), one at a time. */
   async syncAll(): Promise<void> {
+    if (this.deps.ready?.() === false) { this.retryLater(); return }
     // Put back any pin the relay dropped. A member can hear of another before that one hears of it,
     // and its first dial is then refused — remoteRelay.ts unlinks a peer that answers e2e_denied. The
     // roster still says they belong together, so they are re-pinned and tried again on this round.
@@ -222,6 +249,10 @@ export class GroupSyncer {
     const members = new Set(this.deps.store.read().members.map((m) => m.machineId))
     const missed = due.some((machineId, i) => !answered[i] && members.has(machineId))
     if (!missed) { this.retryRound = 0; return }
+    this.retryLater()
+  }
+
+  private retryLater(): void {
     const delay = RETRY_MS[this.retryRound]
     if (delay === undefined) return // the periodic round takes over
     this.retryRound++
@@ -230,7 +261,8 @@ export class GroupSyncer {
 
   private async exchange(machineId: string): Promise<boolean> {
     const pin = this.deps.peers.get(machineId)
-    if (!pin) return false
+    if (!pin || this.deps.ready?.() === false) return false
+    const generation = this.generation
     const local = this.deps.store.read()
     const devlog = this.devlog?.gossip()
     const reply = await this.deps.request(machineId, {
@@ -240,7 +272,7 @@ export class GroupSyncer {
         ...(devlog ? { devlog } : {}),
       },
     }, SYNC_TIMEOUT_MS).catch(() => null)
-    if (!reply) return false
+    if (!reply || generation !== this.generation) return false
     this.lastSynced.set(machineId, this.now())
     const payload = (reply.payload ?? {}) as Record<string, unknown>
     if (typeof payload.error === 'string') return false

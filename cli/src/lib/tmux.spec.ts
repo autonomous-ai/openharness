@@ -11,6 +11,7 @@ import {
   engineProcessMatch,
   engineProcessMatchScore,
   isNoTmuxServerError,
+  LOAD_BUFFER_TIMEOUT_MS,
   LSTART_MARKER_RE,
   liveProcessRows,
   parseProcessRow,
@@ -20,6 +21,8 @@ import {
   sendToTmux,
   tmuxCaptureArgs,
 } from './tmux.js'
+import { tmuxControlGate } from './tmuxControlGate.js'
+import { assumeTmuxVersion, resetTmuxVersionCache } from './tmuxVersion.js'
 
 const ownership = (cursor: string[] = [], grok: string[] = []): AgentCommandOwnershipSnapshot => ({
   cursorFileKeys: new Set(cursor),
@@ -506,6 +509,7 @@ describe('tmux process primitives', () => {
   })
 
   it('carries prompt and literal bytes only over stdin, never child argv or diagnostics', async () => {
+    assumeTmuxVersion(null)
     const dir = mkdtempSync(join(tmpdir(), 'harness-tmux-input-'))
     const argsFile = join(dir, 'args')
     const stdinFile = join(dir, 'stdin')
@@ -561,6 +565,8 @@ fi
   })
 
   it('brackets every submitted message and sends one separate Enter only after a successful paste', async () => {
+    // Known up front: a `tmux -V` asked through the fake tmux would land in the commands compared below.
+    assumeTmuxVersion(null)
     const dir = mkdtempSync(join(tmpdir(), 'harness-tmux-submit-'))
     const argsFile = join(dir, 'args')
     const fakeTmux = join(dir, 'tmux')
@@ -661,4 +667,81 @@ fi
       rmSync(dir, { recursive: true, force: true })
     }
   })
+})
+
+describe('a paste on a tmux that crashes when one attaches as a buffer changes (tmuxControlGate.ts)', () => {
+  it('waits for a terminal attaching before it sets its buffer, and goes straight through on tmux 3.7', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'harness-tmux-gate-'))
+    const argsFile = join(dir, 'args')
+    writeFileSync(join(dir, 'tmux'), `#!/bin/sh
+printf '%s\\n' "$1" >> "$TMUX_GATE_ARGS"
+if [ "$1" = "load-buffer" ]; then cat > /dev/null; fi
+`)
+    chmodSync(join(dir, 'tmux'), 0o700)
+    writeFileSync(argsFile, '')
+    const previous = { path: process.env.PATH, args: process.env.TMUX_GATE_ARGS }
+    const asked = () => readFileSync(argsFile, 'utf8').trim().split('\n').filter(Boolean)
+    try {
+      process.env.PATH = `${dir}:${previous.path ?? ''}`
+      process.env.TMUX_GATE_ARGS = argsFile
+      assumeTmuxVersion({ major: 3, minor: 4 })
+      const attaching = await tmuxControlGate.enter('attach')
+      const pasted = pasteRawIntoTmux('%7', 'clipboard')
+      await new Promise((resolve) => setTimeout(resolve, 100))
+      expect(asked()).toEqual([])
+      attaching()
+      expect(await pasted).toBe(true)
+      expect(asked()).toEqual(['load-buffer', 'paste-buffer'])
+
+      writeFileSync(argsFile, '')
+      assumeTmuxVersion({ major: 3, minor: 7 })
+      const held = await tmuxControlGate.enter('attach')
+      try {
+        expect(await pasteRawIntoTmux('%7', 'clipboard')).toBe(true)
+        expect(asked()).toEqual(['load-buffer', 'paste-buffer'])
+      } finally {
+        held()
+      }
+    } finally {
+      resetTmuxVersionCache()
+      if (previous.path === undefined) delete process.env.PATH
+      else process.env.PATH = previous.path
+      if (previous.args === undefined) delete process.env.TMUX_GATE_ARGS
+      else process.env.TMUX_GATE_ARGS = previous.args
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('gives up a paste whose tmux never takes its buffer, so the terminals waiting behind it open', async () => {
+    // A tmux client whose server does not answer waits as long as the server does. Inside the notify room
+    // that held every terminal open, every session made or killed, and every terminal closed with it.
+    const dir = mkdtempSync(join(tmpdir(), 'harness-tmux-hung-'))
+    writeFileSync(join(dir, 'tmux'), `#!/bin/sh
+if [ "$1" = "load-buffer" ]; then exec sleep 30; fi
+`)
+    chmodSync(join(dir, 'tmux'), 0o700)
+    const previous = process.env.PATH
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      process.env.PATH = `${dir}:${previous ?? ''}`
+      assumeTmuxVersion({ major: 3, minor: 4 })
+      const started = performance.now()
+      const pasted = pasteRawIntoTmux('%7', 'clipboard')
+      await new Promise((resolve) => setTimeout(resolve, 100))
+      const opened = await Promise.race([
+        tmuxControlGate.enter('attach').then((leave) => { leave(); return performance.now() - started }),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 12_000)),
+      ])
+      expect(opened, 'a terminal opens behind a paste whose tmux does not answer').not.toBeNull()
+      expect(opened).toBeGreaterThanOrEqual(LOAD_BUFFER_TIMEOUT_MS - 50)
+      expect(await pasted).toBe(false)
+      expect(error).toHaveBeenCalledWith('[tmux] load-buffer for %7 failed')
+    } finally {
+      error.mockRestore()
+      resetTmuxVersionCache()
+      if (previous === undefined) delete process.env.PATH
+      else process.env.PATH = previous
+      rmSync(dir, { recursive: true, force: true })
+    }
+  }, 20_000)
 })

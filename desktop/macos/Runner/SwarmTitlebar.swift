@@ -2229,9 +2229,8 @@ private final class SwarmTabStrip: NSView {
     updateDaemon(state["daemon"] as? [String: Any] ?? [:])
     let rows = state["tabs"] as? [[String: Any]] ?? []
     let nextActiveId = state["activeId"] as? String ?? ""
-    // A closed tab left the keyboard on the strip (Dart's `tabStripFocused`):
-    // the selected tab is drawn focused, and Return goes into it. The keys stay
-    // with Flutter, so every shortcut keeps working while the strip holds them.
+    // A closed tab left the keyboard with Flutter (Dart's `tabStripFocused`).
+    // Expose the Return hint without drawing a focus ring for this passive hold.
     let tabsFocused = state["tabsFocused"] as? Bool == true
     revealActiveAfterLayout = revealActiveAfterLayout || nextActiveId != activeId
     activeId = nextActiveId
@@ -2679,7 +2678,7 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
     return NSRect(x: indicatorRect.midX - Self.activityWidth / 2,
       y: 0, width: Self.activityWidth, height: bounds.height)
   }
-  /// The strip holds the keyboard on this tab; Flutter still owns the keys.
+  /// Flutter holds the keyboard after Close; accessibility explains Return.
   var keyboardFocus = false { didSet { if keyboardFocus != oldValue { needsDisplay = true; updateAccessibility() } } }
   var showsDivider = false { didSet { if showsDivider != oldValue { needsDisplay = true } } }
   var contentCenterY: CGFloat = 20
@@ -2718,6 +2717,7 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
     }
   }
   private var downPoint = NSPoint.zero
+  private var lastSelectionClick: (time: TimeInterval, point: NSPoint)?
   private var hovered = false
   private var hoverTracking: NSTrackingArea?
   override var acceptsFirstResponder: Bool { false }
@@ -2871,7 +2871,7 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
       foreground.withAlphaComponent(0.16).setFill()
       NSRect(x: bounds.maxX - 0.5, y: 10, width: 1, height: max(0, bounds.height - 20)).fill()
     }
-    if actionsEnabled && (keyboardFocus || selectButton.hasKeyboardFocus) {
+    if actionsEnabled && selectButton.hasKeyboardFocus {
       NSColor.controlAccentColor.setStroke()
       let focus = NSBezierPath(roundedRect: NSRect(x: Self.shoulder + 2, y: 3,
         width: max(0, bounds.width - 2 * (Self.shoulder + 2)), height: max(0, bounds.height - Self.topInset - 6)),
@@ -2913,8 +2913,20 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
   override func mouseDown(with event: NSEvent) {
     guard actionsEnabled else { return }
     downPoint = event.locationInWindow
-    if event.clickCount == 2 { renameSwarm() }
-    else { emit?("select", ["id": swarmId]) }
+    let first = lastSelectionClick
+    lastSelectionClick = event.clickCount == 1
+      ? (event.timestamp, event.locationInWindow) : nil
+    // AppKit's click count can span different controls, especially after a
+    // close shifts the next tab under the pointer. Rename only when this tab
+    // owned the first press as well.
+    if event.clickCount == 2, let first,
+       event.timestamp - first.time <= NSEvent.doubleClickInterval,
+       hypot(event.locationInWindow.x - first.point.x,
+             event.locationInWindow.y - first.point.y) <= 4 {
+      renameSwarm()
+    } else {
+      emit?("select", ["id": swarmId])
+    }
   }
   // The tab owns the full click sequence, including clicks on its padding.
   // Forwarding mouseUp lets AppKit also treat a rename as a titlebar zoom.
@@ -2978,6 +2990,11 @@ private class SwarmTabActionButton: SwarmIconButton {
 }
 
 private final class SwarmSelectButton: SwarmTabActionButton {
+  // The parent draws the complete tab, including hover, press and focus.
+  // NSButton can retain an on-state after activation and paint a second
+  // rounded background even though this selection target is borderless.
+  override func draw(_ dirtyRect: NSRect) {}
+
   override func mouseDown(with event: NSEvent) {
     guard isEnabled else { return }
     highlight(true)

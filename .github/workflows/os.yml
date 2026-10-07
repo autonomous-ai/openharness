@@ -51,7 +51,7 @@ on:
         required: false
         default: image
         type: choice
-        options: [image, browser, browser-suspend, session, recovery, essentials, network-recovery, hardware, zram, hardware-update, public-update]
+        options: [image, browser, browser-suspend, session, recovery, essentials, network-recovery, hardware, zram, hardware-update, public-update, lock-presentation]
       browser_memory:
         description: 'With checks=browser, diagnose memory in the UEFI VM only; retain ordinary workload and deadlines'
         required: false
@@ -70,8 +70,63 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  lock-presentation:
+    if: ${{ inputs.checks == 'lock-presentation' && inputs.image_run_id != '' && !inputs.publish_run_id && !inputs.development_update }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - name: Check the private compositor observer
+        run: |
+          python3 -m py_compile os/tools/build-compositor.py os/tests/session_vm.py
+          go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/os.yml
+      - uses: actions/download-artifact@v6
+        with:
+          name: programmer-os-x86_64
+          path: os/dist
+          run-id: ${{ inputs.image_run_id }}
+          github-token: ${{ github.token }}
+      - name: Build only the pinned compositor correction
+        run: |
+          bash os/tools/build-compositor-container.sh os/work/lock-compositor
+      - name: Prepare native VM tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils ovmf python3-pil tesseract-ocr
+          sudo chmod a+rw /dev/kvm
+      - name: Check the real encrypted UEFI lock transition and work preservation
+        run: >-
+          timeout 10m python3 os/tests/session_vm.py --iso os/dist/*.iso --firmware uefi
+          --compositor-file os/work/lock-compositor/labwc
+      - name: Check the real BIOS lock transition and work preservation
+        run: >-
+          timeout 10m python3 os/tests/session_vm.py --iso os/dist/*.iso --firmware bios
+          --compositor-file os/work/lock-compositor/labwc
+      - name: Retain the private correction and every completed check
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: harness-os-lock-presentation
+          path: |
+            os/work/lock-compositor/labwc
+            os/work/lock-compositor/manifest.json
+            os/work/lock-compositor/LICENSE
+            os/work/lock-compositor/source.tar.gz
+            os/work/lock-compositor/source.json
+            os/work/lock-compositor/session-lock-presentation.patch
+            os/work/lock-compositor/build-compositor.py
+            os/work/lock-compositor/rebuild.sh
+            os/work/lock-compositor/lock_presentation_policy.c
+            os/work/lock-compositor/build/meson-logs/*.txt
+            os/test-results/**/*.json
+            os/test-results/**/*.jsonl
+            os/test-results/**/*.png
+            os/test-results/**/*.txt
+            os/test-results/**/*.log
+          retention-days: 14
+
   image:
-    if: ${{ !inputs.image_run_id && !inputs.publish_run_id && !inputs.development_update && inputs.checks != 'zram' && inputs.checks != 'hardware-update' && inputs.checks != 'browser-suspend' && inputs.checks != 'public-update' && inputs.checks != 'network-recovery' }}
+    if: ${{ !inputs.image_run_id && !inputs.publish_run_id && !inputs.development_update && inputs.checks != 'zram' && inputs.checks != 'hardware-update' && inputs.checks != 'browser-suspend' && inputs.checks != 'public-update' && inputs.checks != 'network-recovery' && inputs.checks != 'lock-presentation' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 50
     steps:
@@ -120,6 +175,8 @@ jobs:
           cd ..
           timeout 8m cargo test --manifest-path tui/Cargo.toml --locked --release --target x86_64-unknown-linux-musl
           python3 scripts/validate-tui-native.py tui/target/x86_64-unknown-linux-musl/release/harness-tui
+      - name: Build the pinned OS compositor
+        run: bash os/tools/build-compositor-container.sh os/work/compositor
       - name: Build offline BIOS and UEFI image
         run: |
           docker run --rm --privileged \
@@ -159,7 +216,7 @@ jobs:
 
   machine:
     needs: image
-    if: ${{ always() && !inputs.publish_run_id && !inputs.development_update && inputs.checks != 'essentials' && inputs.checks != 'hardware' && inputs.checks != 'zram' && inputs.checks != 'hardware-update' && inputs.checks != 'public-update' && inputs.checks != 'network-recovery' && (needs.image.result == 'success' || inputs.image_run_id != '' || inputs.checks == 'browser-suspend') && !cancelled() }}
+    if: ${{ always() && !inputs.publish_run_id && !inputs.development_update && inputs.checks != 'essentials' && inputs.checks != 'hardware' && inputs.checks != 'zram' && inputs.checks != 'hardware-update' && inputs.checks != 'public-update' && inputs.checks != 'network-recovery' && inputs.checks != 'lock-presentation' && (needs.image.result == 'success' || inputs.image_run_id != '' || inputs.checks == 'browser-suspend') && !cancelled() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 65
     strategy:
@@ -552,7 +609,8 @@ jobs:
           sudo apt-get install -y musl-tools qemu-system-x86 qemu-utils ovmf python3-pil tesseract-ocr
           if test -e /dev/kvm; then sudo chmod a+rw /dev/kvm; fi
           make -C os runtime
-          python3 os/tools/build-package.py --runtime os/work/runtime --output os/work/development-update --development
+          bash os/tools/build-compositor-container.sh os/work/compositor
+          python3 os/tools/build-package.py --runtime os/work/runtime --compositor os/work/compositor --output os/work/development-update --development
           python3 os/tests/build-update-fixture.py
       - name: Exercise apply, rollback, running work and encrypted reboot
         run: python3 os/tests/update_vm.py --iso os/dist/*.iso --bundle os/work/development-update --fast-fixture os/work/fast-update-fixture

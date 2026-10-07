@@ -3,6 +3,7 @@
 // client (the window) to swap the tile over. Loopback in, loopback out.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { BackendSocket } from './backendSocket.js'
+import { relaySocket } from './testing/relaySocket.js'
 import { terminalHandoffRequest } from './lib/terminalHandoff.js'
 
 describe('remote_terminal_handoff on the local socket', () => {
@@ -10,7 +11,7 @@ describe('remote_terminal_handoff on the local socket', () => {
   let cli: Array<{ type: string; payload: Record<string, unknown> }>
   let window: Array<{ type: string; payload: Record<string, unknown> }>
   beforeEach(() => {
-    socket = new BackendSocket('token')
+    socket = relaySocket('token')
     cli = []
     window = []
     socket.registerLocalClient('local:cli', { sendFrame: (frame) => { cli.push(frame as (typeof cli)[number]); return true }, sendBinary: () => true })

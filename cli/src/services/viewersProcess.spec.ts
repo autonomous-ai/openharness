@@ -21,6 +21,9 @@ function fakeViewers() {
     frameContext: vi.fn((session: RegisteredSession) => contexts.get(session.agentId) ?? null),
     forwardingUrl: vi.fn((agentId: string) => urls.get(agentId) ?? null),
     stop: vi.fn(async () => {}),
+    stream: vi.fn((_connId: string, _type: string, _payload: Record<string, unknown>) => true),
+    surface: vi.fn(async (_connId: string, payload: Record<string, unknown>) => ({ data: 'jpeg', asked: payload })),
+    closed: vi.fn((_connId?: string) => {}),
   } satisfies ViewersPort
   return { port, contexts, urls }
 }
@@ -41,24 +44,63 @@ describe('the viewers in their own process', () => {
     const viewers = fakeViewers()
     let api: CoreApi | null = null
     let options: ServiceProcessOptions | null = null
-    let onSigterm: (() => void) | null = null
     const service = { stop: vi.fn() }
-    const exits: number[] = []
     const handle = runViewersService({
       dataDir: '/data', socketPath: '/data/daemon-1.sock', machineId: 'm', token: 't',
       run: (given) => { options = given; return service },
       start: (core: CoreApi, ports: CorePorts) => { api = core; ports.viewers = viewers.port },
-      onSignal: (signal, handler) => { if (signal === 'SIGTERM') onSigterm = handler },
-      exit: (code) => exits.push(code),
       ...over,
     })
-    return { viewers, api: api!, options: options!, service, handle, exits, sigterm: () => onSigterm!() }
+    return { viewers, api: api!, options: options!, service, handle }
   }
 
   it('reaches the core as `viewers`, through the socket and token it was given, and answers the apps nothing', () => {
     const { options } = setup()
     expect(options).toMatchObject({ name: 'viewers', socketPath: '/data/daemon-1.sock', machineId: 'm', token: 't' })
-    expect(options.requests).toEqual({})
+    // Only the core's own question, which no client's request is routed as (core/viewersLink.ts).
+    expect(Object.keys(options.requests)).toEqual(['surface'])
+  })
+
+  it('serves a client\'s viewer stream through the core: its frames in, its answers out to that connection', async () => {
+    const { viewers, api, options } = setup()
+    // Not connected: an answer has nowhere to go, and the stream ends rather than waiting.
+    expect(api.clients.viewerFrame('c1', 'viewer_response', { streamId: 's1' })).toBe(false)
+    const notice = vi.fn()
+    options.onConnected!({ ...connection().core, notice })
+    options.onEvent!({ kind: 'stream', connId: 'c1', type: 'viewer_request', frame: { streamId: 's1', path: '/' } })
+    expect(viewers.port.stream).toHaveBeenCalledWith('c1', 'viewer_request', { streamId: 's1', path: '/' })
+    options.onEvent!({ kind: 'stream', connId: 'c1', type: 'viewer_end' })
+    expect(viewers.port.stream).toHaveBeenLastCalledWith('c1', 'viewer_end', {})
+    expect(api.clients.viewerFrame('c1', 'viewer_response', { streamId: 's1', status: 200 })).toBe(true)
+    expect(notice).toHaveBeenCalledWith('viewer', { connId: 'c1', type: 'viewer_response', payload: { streamId: 's1', status: 200 } })
+    // A rendered frame, for the connection the core says asked; the connection is not the surface's to read.
+    await expect(options.requests.surface({ connId: 'c1', surfaceId: 'v', op: 'frame' }, { local: true, owner: true }))
+      .resolves.toEqual({ data: 'jpeg', asked: { surfaceId: 'v', op: 'frame' } })
+    expect(viewers.port.surface).toHaveBeenCalledWith('c1', { surfaceId: 'v', op: 'frame' })
+    // A connection gone, then every one: the link went down.
+    options.onEvent!({ kind: 'closed', connId: 'c1' })
+    options.onEvent!({ kind: 'closed' })
+    expect(viewers.port.closed.mock.calls).toEqual([['c1'], [undefined]])
+    // What is not a stream's frame is not passed on.
+    options.onEvent!({ kind: 'stream', connId: 7, type: 'viewer_data' })
+    options.onEvent!({ kind: 'stream', connId: 'c1' })
+    expect(viewers.port.stream).toHaveBeenCalledTimes(2)
+  })
+
+  it('ends every stream and surface when the core goes: their connections were that core\'s', () => {
+    const { viewers, api, options } = setup()
+    const notice = vi.fn()
+    options.onConnected!({ ...connection().core, notice })
+    options.onDisconnected!()
+    expect(viewers.port.closed).toHaveBeenCalledWith()
+    expect(api.clients.viewerFrame('c1', 'viewer_data', { streamId: 's1' })).toBe(false)
+    expect(notice).not.toHaveBeenCalled()
+  })
+
+  it('cannot answer a stream over a connection with no way to say it', () => {
+    const { api, options } = setup()
+    options.onConnected!(connection().core)
+    expect(api.clients.viewerFrame('c1', 'viewer_data', { streamId: 's1' })).toBe(false)
   })
 
   it('attaches what the core attaches, tells the core what the agent\'s frame says, and detaches what it detaches', async () => {
@@ -184,24 +226,20 @@ describe('the viewers in their own process', () => {
     expect(viewers.port.detach).not.toHaveBeenCalled()
   })
 
-  it('stops its viewer servers before it goes, however it ends, and only once', async () => {
-    const { viewers, service, handle, exits, options, sigterm } = setup()
-    sigterm()
-    options.exit!(1)
-    handle.stop()
-    await flush()
+  it('stops its viewer servers when its process stops it, and only once, however often asked', async () => {
+    const { viewers, service, handle } = setup()
+    const first = handle.stop()
+    const second = handle.stop()
+    await Promise.all([first, second])
     expect(service.stop).toHaveBeenCalledOnce()
     expect(viewers.port.stop).toHaveBeenCalledOnce()
-    expect(exits).toEqual([0, 1])
   })
 
-  it('goes all the same when its viewers fail to stop', async () => {
+  it('says so when its viewers fail to stop: its process goes all the same (services/process.ts)', async () => {
     const viewers = fakeViewers()
     viewers.port.stop.mockRejectedValue(new Error('a watch would not close'))
-    const { exits, sigterm } = setup({ start: (_core, ports) => { ports.viewers = viewers.port } })
-    sigterm()
-    await flush()
-    expect(exits).toEqual([0])
+    const { handle } = setup({ start: (_core, ports) => { ports.viewers = viewers.port } })
+    await expect(handle.stop()).rejects.toThrow('a watch would not close')
   })
 
   it('does not run without viewers: the master starts it again, or parks it', () => {
@@ -224,6 +262,7 @@ describe('the viewers in their own process', () => {
     api.clients.viewerChanged('a1')
     expect(tell.mock.calls).toEqual([['a1'], ['a1']])
     expect(api.transcripts.databaseHistory(agent())).toBeUndefined()
+    expect(await api.transcripts.lastTurn('s1')).toBeNull()
     expect(api.external.sessions.list()).toEqual([])
     await expect(api.external.sessions.scan()).resolves.toEqual([])
     expect(api.external.open.known().size).toBe(0)
@@ -238,28 +277,24 @@ describe('the viewers in their own process', () => {
     await expect(api.agents.fork('a1')).resolves.toEqual({ ok: false, error: 'UNSUPPORTED' })
     api.turns.send('a1', 'text')
     api.turns.stop('a1')
-    expect(api.turns.recent('a1', 3)).toEqual([])
-    expect(api.turns.asks('a1')).toEqual([])
+    expect(await api.turns.recent('a1', 3)).toEqual([])
+    expect(await api.turns.asks('a1')).toEqual([])
     api.questions.answer('a1', 'q', {})
     await expect(api.questions.answerReviewed({} as never)).resolves.toBe(false)
     api.clients.gridNamed('grid')
     api.clients.gridModelsChanged()
     api.clients.dshInstallStatus({ phase: 'clone' })
+    api.clients.windows({ type: 'orchestrator_changed', payload: {} })
+    expect(api.clients.observer('observer:x', 'observer_frame', {})).toBe(false)
+    // Built on its own, it reaches no client.
+    expect(api.clients.viewerFrame('c1', 'viewer_data', {})).toBe(false)
+    api.clients.turnCard({ type: 'commander_event', agentId: 'a', dbSessionId: 's', payload: {} })
+    api.clients.turnSummary({ type: 'turn_summary' })
   })
 
-  it('runs as a real service process by default: its viewers, its signal, its exit', async () => {
-    const once = vi.spyOn(process, 'once').mockImplementation(() => process)
-    const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never)
-    try {
-      runViewersService({ dataDir: '/data', socketPath: '/data/daemon-1.sock', machineId: 'm', token: 't' })
-      expect(runServiceProcess).toHaveBeenCalledWith(expect.objectContaining({ name: 'viewers', socketPath: '/data/daemon-1.sock' }))
-      const [signal, handler] = once.mock.calls.at(-1)!
-      expect(signal).toBe('SIGTERM')
-      ;(handler as () => void)()
-      await vi.waitFor(() => expect(exit).toHaveBeenCalledWith(0))
-    } finally {
-      once.mockRestore()
-      exit.mockRestore()
-    }
+  it('runs as a real service by default: its viewers, on its own link to the core', async () => {
+    const handle = runViewersService({ dataDir: '/data', socketPath: '/data/daemon-1.sock', machineId: 'm', token: 't' })
+    expect(runServiceProcess).toHaveBeenCalledWith(expect.objectContaining({ name: 'viewers', socketPath: '/data/daemon-1.sock' }))
+    await handle.stop()
   })
 })

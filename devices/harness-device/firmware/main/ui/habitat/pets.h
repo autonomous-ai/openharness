@@ -67,6 +67,8 @@ typedef struct {
     const ht_pet_waves_t *waves;                 // NULL: none (Muse's and Claude's listening scenes)
     const int8_t *step_dy;                       // per (level, step) like `loop`: the frame's offset in px, down; NULL = 0
                                                  // (Claude: a hop or a nod moves one stored pose instead of storing more)
+    bool covers_overlay;                         // an alert's bubble takes the working scene's overlay's place: the
+                                                 // overlay steps aside while it shows (Codex's sandbox bubble)
 } ht_pet_scene_t;
 
 typedef struct {

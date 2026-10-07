@@ -21,6 +21,10 @@
  *
  * Like the real relay it is blind: the machines seal everything between them end to end, and a frame
  * for a machine whose node is not connected is simply never answered, as the real hub's would not be.
+ * - `PUT`/`DELETE /api/harness-links/:id` and `/api/harness-shares/:id`: Share publishing a link or an
+ *   invitation, answered 200; what a node sends to one of Share's observers (`observer:` connections) is
+ *   kept in `targeted`, so a test can open what Share sealed for it.
+ *
  * Everything else is answered 404. Requests are recorded in `seen`, so a test can say what was asked.
  *
  * And it can misbehave, as a relay under stress does: every socket dropped at once, down for a while,
@@ -32,6 +36,7 @@ import { randomUUID } from 'node:crypto'
 import { createServer, type IncomingMessage, type Server } from 'node:http'
 import type { Duplex } from 'node:stream'
 import { WebSocket, WebSocketServer, type RawData } from 'ws'
+import { decodeTerminalHop, encodeTerminalHop, parseTerminalBinaryEnvelope, TerminalHopDirection } from '../../src/lib/terminalBinary.js'
 
 export interface FakeMachine {
   machineId: string
@@ -58,6 +63,7 @@ interface Device {
 }
 
 const json = (value: unknown): string => JSON.stringify(value)
+const bytes = (raw: RawData): Uint8Array => new Uint8Array(Array.isArray(raw) ? Buffer.concat(raw) : raw instanceof ArrayBuffer ? raw : Buffer.from(raw))
 
 export class FakeBackend {
   readonly seen: string[] = []
@@ -79,6 +85,10 @@ export class FakeBackend {
   readonly webSent = new Map<string, Frame[]>()
   /** What reached each web client from its machine, as relayed (sealed), by connection id. */
   readonly webReceived = new Map<string, Frame[]>()
+  /** What each device socket (a daemon's lane to its other machines) sent towards a machine, as sent. */
+  readonly deviceSent: Frame[] = []
+  /** What a node sent to a connection that is neither a device's nor a web client's (Share's observers), by id. */
+  readonly targeted = new Map<string, Frame[]>()
 
   private constructor(private readonly server: Server, readonly port: number) {}
 
@@ -96,6 +106,11 @@ export class FakeBackend {
       if (!machine) { res.statusCode = 401; res.end(json({ success: false, error: { code: 'UNAUTHORIZED' } })); return }
       if (req.method === 'GET' && req.url?.split('?')[0] === '/api/machines') {
         res.end(json({ success: true, data: { machines: backend.rows() } }))
+        return
+      }
+      if ((req.method === 'PUT' || req.method === 'DELETE') && /^\/api\/harness-(links|shares)\/[^/?]+$/.test(req.url?.split('?')[0] ?? '')) {
+        req.resume()
+        res.end(json({ success: true, data: {} }))
         return
       }
       res.statusCode = 404
@@ -260,7 +275,10 @@ export class FakeBackend {
     this.sendNode(machine.machineId, '', { type: 'machine_meta', payload: { name: machine.name } })
     this.sendClients(machine.machineId)
     this.toWebClients(machine.machineId, { type: 'node_status', payload: { online: true } })
-    ws.on('message', (raw, binary) => { if (!binary) this.fromNode(machine.machineId, raw) })
+    ws.on('message', (raw, binary) => {
+      if (binary) this.fromNodeBinary(machine.machineId, raw)
+      else this.fromNode(machine.machineId, raw)
+    })
     ws.on('close', () => {
       if (this.nodes.get(machine.machineId) !== ws) return
       this.nodes.delete(machine.machineId)
@@ -278,11 +296,23 @@ export class FakeBackend {
       if (owner?.machineId === machineId) this.sendDevice(owner.device, tagged)
       const web = [...this.webClients].find((client) => client.connId === envelope.targetConnId && client.machineId === machineId)
       if (web) this.toWeb(web, envelope.frame)
+      if (!owner && !web) this.targeted.set(envelope.targetConnId, [...(this.targeted.get(envelope.targetConnId) ?? []), envelope.frame])
       return
     }
     if (envelope.commanderEligible) for (const device of this.devices) this.sendDevice(device, tagged)
     // The real hub: web clients get every broadcast that is not device-only.
     if (envelope.webEligible !== false) this.toWebClients(machineId, envelope.frame)
+  }
+
+  /** The real hub strips only the hop header; the terminal body stays sealed.
+   * UUID connection ids matter: the binary hop cannot encode a prefixed test id. */
+  private fromNodeBinary(machineId: string, raw: RawData): void {
+    const hop = decodeTerminalHop(bytes(raw))
+    if (!hop || hop.direction !== TerminalHopDirection.up) return
+    const client = [...this.webClients].find(c => c.connId === hop.connId && c.machineId === machineId)
+    if (client) this.relay(() => {
+      if (client.ws.readyState === WebSocket.OPEN) client.ws.send(hop.clientFrame)
+    })
   }
 
   private sendNode(machineId: string, connId: string, frame: Frame): boolean {
@@ -303,10 +333,13 @@ export class FakeBackend {
   // ── web clients (phones, browsers) ───────────────────────────────────────────────────────────
 
   private attachWeb(ws: WebSocket): void {
-    const client: WebClient = { ws, connId: `web:${randomUUID()}`, machineId: null }
+    const client: WebClient = { ws, connId: randomUUID(), machineId: null }
     this.webClients.add(client)
     ws.send(json({ type: 'connected', payload: { userId: 'e2e-user' } }))
-    ws.on('message', (raw, binary) => { if (!binary) this.fromWeb(client, raw) })
+    ws.on('message', (raw, binary) => {
+      if (binary) this.fromWebBinary(client, raw)
+      else this.fromWeb(client, raw)
+    })
     ws.on('close', () => {
       this.webClients.delete(client)
       const machineId = client.machineId
@@ -338,6 +371,14 @@ export class FakeBackend {
     this.webSent.set(client.connId, sent)
     // Never answered when the node is not there, as the real hub's would not be.
     this.relay(() => this.sendNode(machineId, client.connId, frame))
+  }
+
+  private fromWebBinary(client: WebClient, raw: RawData): void {
+    const frame = bytes(raw)
+    if (!client.machineId || !parseTerminalBinaryEnvelope(frame)) return
+    const packet = encodeTerminalHop(TerminalHopDirection.down, client.connId, frame)
+    const node = this.nodes.get(client.machineId)
+    if (packet) this.relay(() => { if (node?.readyState === WebSocket.OPEN) node.send(packet) })
   }
 
   private toWebClients(machineId: string, frame: Frame): void {
@@ -399,6 +440,7 @@ export class FakeBackend {
     // here: a node that is not connected leaves it unanswered, as the real hub does.
     const machineId = frame.machineId && device.conns.has(frame.machineId) ? frame.machineId : device.selected
     const connId = device.conns.get(machineId)
+    this.deviceSent.push(frame)
     if (connId) this.sendNode(machineId, connId, frame)
   }
 

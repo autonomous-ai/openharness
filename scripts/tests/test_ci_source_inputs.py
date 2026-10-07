@@ -84,15 +84,18 @@ class SourceInputTests(unittest.TestCase):
 
     def test_capture_binds_git_objects_to_the_real_source_run_and_attempt(self):
         self.sparse(inputs.ci.SOURCE_INPUTS["process"])
-        with mock.patch.dict(os.environ, GITHUB_SHA=self.sha, GITHUB_RUN_ID="123", GITHUB_RUN_ATTEMPT="2"):
+        with mock.patch.dict(os.environ, GITHUB_SHA=self.sha, CI_SOURCE_SHA=self.sha,
+                             GITHUB_RUN_ID="123", GITHUB_RUN_ATTEMPT="2"):
             result = inputs.capture(self.root)
             self.assertEqual(result["source_sha"], self.sha)
             self.assertEqual(result["run_attempt"], 2)
             self.assertEqual(set(result["scopes"]), {"process", "desktop"})
             self.assertEqual(result["scopes"]["desktop"], inputs.ci.input_snapshot(self.root, self.sha, "desktop"))
-            with mock.patch.dict(os.environ, GITHUB_SHA="b" * 40):
+            with mock.patch.dict(os.environ, CI_SOURCE_SHA="b" * 40):
                 with self.assertRaisesRegex(ValueError, "differs from the CI source"):
                     inputs.capture(self.root)
+                with mock.patch.dict(os.environ, GITHUB_SHA="b" * 40, CI_SOURCE_SHA=self.sha):
+                    self.assertEqual(inputs.capture(self.root)["source_sha"], self.sha)
 
 
 if __name__ == "__main__":

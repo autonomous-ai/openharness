@@ -7,11 +7,17 @@
  * working, and the master starts them again, which stops the viewer server the dead process left behind
  * and starts a new one whose URL replaces the old. A core that restarts leaves the viewers to their
  * process: the viewer keeps its URL, and the new core answers with it.
+ *
+ * A client that cannot reach this machine's loopback (the phone, another machine's window) is served the
+ * viewer over its own connection (`viewer_request` and the stream after it) by the viewers' process too,
+ * through the core (core/viewerStreams.ts): refused at once while the viewers are down, and served again
+ * once the master has brought them back.
  */
 import { execFileSync } from 'node:child_process'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
+import { randomUUID } from 'node:crypto'
 import { LocalClient, type Frame } from './harness/client.js'
 import { IsolatedDaemon, until } from './harness/daemon.js'
 
@@ -95,6 +101,25 @@ const serves = async (url: string): Promise<string | null> => {
   return response?.ok ? response.text() : null
 }
 
+/** A viewer's page as a client that cannot reach this machine's loopback fetches it: over its connection,
+ *  answered by whoever serves the viewers. Its status and body, or why the stream was closed. */
+async function overConnection(client: LocalClient, agentId: string, url: string): Promise<{ status?: number; body: string; closed?: string }> {
+  const streamId = randomUUID()
+  const mine = (frame: Frame) => frame.payload?.streamId === streamId
+  const since = client.frames.length
+  const ended = client.next((frame) => mine(frame) && (frame.type === 'viewer_end' || frame.type === 'viewer_close'), 15_000, `the end of viewer stream ${streamId}`)
+  client.send('viewer_request', { streamId, agentId, origin: new URL(url).origin, path: '/', method: 'GET', headers: {}, upgrade: false })
+  // A GET has no body: the request's own end, as the window's proxy sends it.
+  client.send('viewer_end', { streamId })
+  const last = await ended
+  const frames = client.frames.slice(since).filter(mine)
+  const body = Buffer.concat(frames.filter((frame) => frame.type === 'viewer_data').map((frame) => Buffer.from(String(frame.payload.data), 'base64'))).toString()
+  const status = frames.find((frame) => frame.type === 'viewer_response')?.payload.status
+  return { status, body, ...(last.type === 'viewer_close' ? { closed: String(last.payload.error) } : {}) }
+}
+const connects = (d: IsolatedDaemon) => [...d.log().matchAll(/\[services\] viewers connected/g)].length
+const disconnects = (d: IsolatedDaemon) => [...d.log().matchAll(/\[services\] viewers disconnected/g)].length
+
 describe('the DSH viewers in their own process', () => {
   let daemon: IsolatedDaemon | undefined
   /** Every daemon a test started, closed by the test or not: none may leave a viewer server behind. */
@@ -108,11 +133,12 @@ describe('the DSH viewers in their own process', () => {
       try { process.kill(pid, 'SIGKILL') } catch { /* gone */ }
     }
   })
-  const fresh = async (services: string) => {
+  const fresh = async (services: string, env: Record<string, string> = {}) => {
     const d = await IsolatedDaemon.create({ env: {
       HARNESSD_SERVICES: services,
       HARNESSD_SERVICE_INITIAL_BACKOFF_MS: '200',
       HARNESSD_SERVICE_MAX_BACKOFF_MS: '1000',
+      ...env,
     } })
     daemon = d
     started.push(d)
@@ -126,10 +152,46 @@ describe('the DSH viewers in their own process', () => {
     const d = await fresh('none')
     const client = await LocalClient.connect(d)
     const sketch = await create(d, client, 'sketch-default', { dsh: HARNESS })
-    const answer = await serves(await viewerUrl(client, sketch.id))
+    const url = await viewerUrl(client, sketch.id)
+    const answer = await serves(url)
     expect(answer).toMatch(/^sketch viewer \d+$/)
     expect(ancestors(Number(answer!.split(' ').pop()))).toContain(d.corePid())
     expect(viewersPid(d)).toBeNull()
+    // Served over a client's connection from the core's process as well.
+    expect(await overConnection(client, sketch.id, url)).toEqual({ status: 200, body: answer })
+    client.close()
+  })
+
+  it('serves a viewer over a client\'s connection from the viewers\' process, refuses it at once while they are down, and serves it again once they are back', async () => {
+    // Long enough a pause before the master starts them again to ask while they are down.
+    const d = await fresh('viewers', { HARNESSD_SERVICE_INITIAL_BACKOFF_MS: '4000', HARNESSD_SERVICE_MAX_BACKOFF_MS: '4000' })
+    const client = await LocalClient.connect(d)
+    const sketch = await create(d, client, 'sketch-streamed', { dsh: HARNESS })
+    const before = await viewerUrl(client, sketch.id)
+    const page = await overConnection(client, sketch.id, before)
+    expect(page).toEqual({ status: 200, body: expect.stringMatching(/^sketch viewer \d+$/) })
+    expect(ancestors(Number(page.body.split(' ').pop()))).toContain(viewersPid(d))
+    // A rendered surface's question reaches the viewers too (closing one needs no browser).
+    expect(await client.request('viewer_surface', { surfaceId: 'e2e', agentId: sketch.id, op: 'close' })).toMatchObject({ closed: true })
+
+    // Killed: until the master starts them again, a stream is refused at once, never left waiting.
+    const gone = disconnects(d)
+    process.kill(viewersPid(d)!, 'SIGKILL')
+    await until('the core to see the viewers go', () => disconnects(d) > gone || null, 10_000, 50)
+    const startedAt = Date.now()
+    expect(await overConnection(client, sketch.id, before)).toEqual({ body: '', closed: 'Viewer is no longer available' })
+    expect(await client.request('viewer_surface', { surfaceId: 'e2e', agentId: sketch.id, op: 'close' }))
+      .toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'viewers' })
+    expect(Date.now() - startedAt).toBeLessThan(2_000)
+    expect(restarts(d)).toBe(0)
+    await turn(client, sketch.id, 'while its viewers were down')
+
+    // Back: a new viewer, served over the connection again.
+    await until('the master to restart the viewers', () => restarts(d) >= 1 || null, 30_000, 200)
+    await until('the viewers to reconnect', () => connects(d) >= 2 || null, 30_000, 200)
+    const after = await viewerUrl(client, sketch.id, before)
+    expect(await overConnection(client, sketch.id, after)).toEqual({ status: 200, body: expect.stringMatching(/^sketch viewer \d+$/) })
+    expect(d.coresStarted()).toBe(1)
     client.close()
   })
 

@@ -8,9 +8,34 @@ import unittest
 
 import package_image_binding as binding
 import public_update_vm as observer
+from vm import workspace_text_visible
 
 
 class PublicUpdateObserverTests(unittest.TestCase):
+    def test_recorded_welcome_is_ready_only_for_explicit_upgrade_checks(self):
+        # The actual rendered frame in run37459029285; the shared client can
+        # return to this welcome after reboot. Real key/output checks follow.
+        welcome = ('HARHESS\nEnter\nStart OpenCode\nt\nNew terminal\nw\nConnect to Wi-Fi\n'
+                   'Super+t terminal\nSuper+w\nWi-Fi\nSuper+b\nbrowser')
+        self.assertTrue(workspace_text_visible(welcome, allow_welcome=True))
+        self.assertFalse(workspace_text_visible(welcome))
+        self.assertTrue(workspace_text_visible('[me@harness ~]$'))
+        for partial in ['', 'harness login:', 'HARNESS', 'New terminal',
+                        'Start OpenCode\nNew terminal', 'Connect to Wi-Fi']:
+            self.assertFalse(workspace_text_visible(partial, allow_welcome=True))
+
+    def test_running_compositor_must_be_the_expected_package_binary(self):
+        expected = {'binary': {'sha256': 'a' * 64}}
+        good = dict(executable='/usr/lib/harness-os/labwc', owner='harness-os', sha256='a' * 64)
+        observer.display_matches(good, expected)
+        for key in good:
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                observer.display_matches(dict(good, **{key: 'wrong'}), expected)
+        original = dict(executable='/usr/bin/labwc', owner='labwc', sha256='b' * 64)
+        observer.display_matches(original, original, restored=True)
+        with self.assertRaises(ValueError):
+            observer.display_matches(good, original, restored=True)
+
     def test_one_replaced_process_or_project_change_cannot_pass(self):
         before = {'agents': [{'pid': 42, 'start': 100}], 'daemon': {'pid': 12, 'start': 1},
                   'terminal': {'pid': 50, 'start': 101}, 'project': {'notes': 'digest'},

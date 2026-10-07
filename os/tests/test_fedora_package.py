@@ -54,6 +54,10 @@ class FedoraPayload(unittest.TestCase):
         self.assertEqual((destination / 'usr/lib/harness/cli.mjs').read_bytes(), b'cli')
         self.assertEqual((destination / 'usr/lib/harness/harness-tui').read_bytes(),
                          (self.runtime / 'harness-tui').read_bytes())
+        session = (destination / 'usr/lib/harness-os/session').read_text()
+        self.assertIn('\nlabwc -C ', session)
+        self.assertNotIn('/usr/lib/harness-os/labwc -C', session)
+        self.assertNotIn('usr/lib/harness-os/labwc', result['files'])
 
     def test_inert_profile_contains_no_base_system_or_fixture_takeover(self):
         destination = self.folder / 'payload'
@@ -63,6 +67,8 @@ class FedoraPayload(unittest.TestCase):
             self.assertNotIn('usr/lib/harness-os/' + name, result['files'])
         self.assertNotIn('usr/share/harness-os/lock.json', result['files'])
         self.assertIn('usr/lib/harness-os/live_update.py', result['files'])
+        self.assertIn('usr/lib/harness-os/screen-action', result['files'])
+        self.assertEqual((destination / 'usr/lib/harness-os/screen-action').stat().st_mode & 0o777, 0o755)
         self.assertIn('usr/lib/systemd/user/harness-update.timer', result['files'])
         self.assertEqual(result['symlinks']['usr/bin/harness-session'], '../lib/harness-os/session')
         self.assertEqual(result['symlinks']['usr/bin/harness-session-setup'], '../lib/harness-os/fedora_session.py')
@@ -70,6 +76,9 @@ class FedoraPayload(unittest.TestCase):
         self.assertIn('W-u', (destination / 'usr/share/harness-os/labwc/rc.xml').read_text())
         self.assertNotIn('W-i', (destination / 'usr/share/harness-os/labwc/rc.xml').read_text())
         self.assertNotIn('harness-install', (destination / 'usr/lib/systemd/user/harness-os.target').read_text())
+        self.assertEqual((destination / 'usr/lib/systemd/user/harness-os.target').read_text(),
+                         (ROOT / 'os/root/usr/lib/systemd/user/harness-os.target').read_text()
+                         .replace(' harness-install.service', '').replace(' harness-gpu-check.timer', ''))
         guide = (destination / 'usr/share/harness-os/AGENTS.md').read_text()
         self.assertIn('Fedora', guide)
         self.assertNotIn('sudo pacman', guide)

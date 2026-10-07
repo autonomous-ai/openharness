@@ -10,7 +10,8 @@ import { statSync } from 'node:fs'
 import { readdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { BackendSocket } from '../../backendSocket.js'
-import { MODEL_MANAGER_ID } from '../../dsh/builtins.js'
+import type { ModelsPort } from '../api.js'
+import { MODEL_MANAGER_ID } from '../../dsh/builtinIds.js'
 import { installedDsh } from '../../dsh/installed.js'
 import { harnessEnvToClear, type DshAccount } from '../../dsh/launch.js'
 import { dshPinnedPermissionMode } from '../../dsh/manifest.js'
@@ -27,7 +28,7 @@ import {
   buildEngineCommandArgv, buildEngineLaunchArgv, namedAgentArgs, permissionModeApproves, permissionModeFlags,
   refusePermissionFlagIfUnsupported, supportsFirstPrompt,
 } from '../../lib/engineLaunch.js'
-import { setUpWithin } from '../../lib/gridAttach.js'
+import { setUpWithin } from '../../lib/setUpWithin.js'
 import { writeGridConfigDir } from '../../lib/gridConfigDir.js'
 import { buildGridEngineLaunch, describeGridLaunch, gridConflictingEnvToClear, type GridLaunchMachine, type GridWebSearchStatus } from '../../lib/gridLaunch.js'
 import { DEFAULT_HARNESS_PERMISSION, freshHarnessEnvironment } from '../../lib/harnessDefaults.js'
@@ -40,6 +41,7 @@ import { clearPaneRemainOnExit } from '../../lib/tmux.js'
 import type { TmuxBackend } from '../../lib/tmuxBackend.js'
 import { TMUX_SESSION_ENV_MIN, tmuxSupportsSessionEnv } from '../../lib/tmuxVersion.js'
 import type { Adoption } from './adopt.js'
+import { prepareInstructionWrites, scmLaunchEnv } from '../../scm/scmProjects.js'
 import { mergedLaunchEnv } from './launchEnv.js'
 import type { createPaneWatcher } from './newPane.js'
 
@@ -69,8 +71,9 @@ export interface CreateAgentDeps {
   terminalHintMachineName: () => string
   /** Whether a folder is being purged (PurgeAgentService.blocksFolder). */
   blocksFolder: (cwd: string) => boolean | undefined
-  /** Grid set-up, when this daemon can do it (BackendSocket.ensureGrid). */
-  gridSetup: () => BackendSocket['ensureGrid']
+  /** Grid set-up, when this daemon can do it: the models service's (core/api.ts `ModelsPort.ensure`), null
+   *  while it is off. */
+  gridSetup: () => ModelsPort['ensure'] | null
   privateGridName: () => Promise<string | null>
 }
 
@@ -79,7 +82,7 @@ export function createAgentCreator({
   prepareApiTools, hookPort, hooksDisabled, gridLaunchMachine, terminalHintMachineName, blocksFolder, gridSetup,
   privateGridName,
 }: CreateAgentDeps) {
-  const createAgent: CreateAgent = async ({ engine, cwd, bypassPermission, permissionMode, grid, codexHome, dsh, prompt, name, agent, resumeSessionId, takeOver }) => {
+  const createAgent: CreateAgent = async ({ engine, cwd, bypassPermission, permissionMode, grid, codexHome, dsh, prompt, name, agent, resumeSessionId, takeOver, scmLaunchRecord }) => {
     if (!tmuxBackend) return { ok: false, error: 'TMUX_UNAVAILABLE' }
     // A conversation Harness did not start opens in its own folder, under its own title — taken over
     // from the terminal that has it, when asked to.
@@ -128,6 +131,7 @@ export function createAgentCreator({
     // `TmuxBackend.inventory()`): the panes this daemon creates carry its tag, which goes with them into
     // any session the person moves them to.
     const label = buildHarnessSessionLabel(engine)
+    await prepareInstructionWrites(cwd)
     // Prepare the harness workspace, then bind its session context to the selected engine.
     // Missing packages or invalid runtimes refuse the launch before the agent is started.
     let dshEnv: Record<string, string> | undefined
@@ -287,10 +291,12 @@ export function createAgentCreator({
       cwd,
       sessionLabel: label,
       argv,
-      env: freshHarnessEnvironment(engine, mergedLaunchEnv(gridLaunch?.env ?? (codexHome ? { CODEX_HOME: codexHome } : undefined), dshEnv), !!grid || !!resumeSessionId,
+      env: freshHarnessEnvironment(engine, mergedLaunchEnv(mergedLaunchEnv(gridLaunch?.env ?? (codexHome ? { CODEX_HOME: codexHome } : undefined), dshEnv),
+        scmLaunchEnv(scmLaunchRecord)), !!grid || !!resumeSessionId,
         permissionMode ?? (bypassPermission ? DEFAULT_HARNESS_PERMISSION : 'ask')),
       grid: grid ? { baseUrl: grid.baseUrl, model: grid.model ?? null } : null,
       gridLaunchRecord: grid && gridLaunch ? { override: grid, webSearch: gridLaunch.webSearch } : null,
+      scmLaunchRecord: scmLaunchRecord ?? null,
       codexHome,
       dsh,
       dshRuntime: dsh ? label : null,

@@ -18,7 +18,8 @@ import { BYPASS_PERMISSION_FLAGS, PERMISSION_MODES, permissionModeApproves } fro
 import { psEnv } from './childLocale.js'
 import { nativeProcessImages } from './nativeProcessImages.js'
 import { neutralizePasteControls } from './pasteText.js'
-import { patientExec } from './patientExec.js'
+import { patientDeadline, patientExec } from './patientExec.js'
+import { inTmuxRoom } from './tmuxControlGate.js'
 import { tmuxFeatures, type TmuxFeatures } from './tmuxVersion.js'
 export { captureTmuxPane, tmuxCaptureArgs } from './tmuxCapture.js'
 
@@ -220,12 +221,15 @@ function agentAliasCandidate(row: Pick<ProcessRow, 'executable' | 'args'>): bool
 export function parseProcessRow(line: string): ProcessRow | null {
   const match = /^\s*(\d+)\s+(\d+)\s+(.+?)\s+(\S+\s+\S+\s+\d{1,2}\s+\d{1,2}:\d{2}:\d{2}\s+\d{4})\s*(.*)$/.exec(line)
   if (!match) return null
+  // Found by QA on a quiet machine: saved identities held 13.8 MiB of old ps tables through
+  // V8's capture substrings. The deleted-image memo keeps args too. Own each field's storage;
+  // UTF-16 preserves the exact command text instead of changing an engine's identity.
   return {
     pid: Number(match[1]),
     parentPid: Number(match[2]),
-    executable: match[3],
-    startMarker: match[4],
-    args: match[5],
+    executable: Buffer.from(match[3], 'utf16le').toString('utf16le'),
+    startMarker: Buffer.from(match[4], 'utf16le').toString('utf16le'),
+    args: Buffer.from(match[5], 'utf16le').toString('utf16le'),
   }
 }
 
@@ -359,9 +363,31 @@ function parseDarwinProcessImages(stdout: string | null): Map<number, string> {
   return images
 }
 
-/** macOS has no /proc. Prefer the bundled read-only kernel image probe; retain
- * both lsof readers for missing paths, inside the same total 3s budget.
- * Never cache by PID: exec can replace an image without changing its birth. */
+export function createDeletedImageMemo({ exists }: { exists: (path: string) => boolean }) {
+  const memo = new Map<number, { startMarker: string; args: string; path: string }>()
+  return {
+    recall(row: ProcessRow): string | undefined {
+      const entry = memo.get(row.pid)
+      return entry && entry.startMarker === row.startMarker && entry.args === row.args && !exists(entry.path) ? entry.path : undefined
+    },
+    remember({ pid, startMarker, args }: ProcessRow, path: string): void {
+      if (exists(path)) memo.delete(pid)
+      else memo.set(pid, { startMarker, args, path })
+    },
+    forget(pid: number): void { memo.delete(pid) },
+    prune(rows: readonly ProcessRow[]): void { for (const pid of memo.keys()) if (!rows.some(row => row.pid === pid)) memo.delete(pid) },
+  }
+}
+const deletedImages = createDeletedImageMemo({ exists: existsSync })
+
+/** macOS has no /proc. Prefer the bundled kernel probe and retain both lsof
+ * fallbacks within the same 3s budget. Never cache by PID alone: exec can replace
+ * an image without changing its birth. Memo safety rests on !exists(path) and
+ * the helper reporting the PID unavailable this same pass; birth and args must match.
+ * We accept an exec into another binary keeping argv and birth, then deletion
+ * before the helper reads it: only the imagePath evidence string can be wrong.
+ * Claude auto-updates left deleted images costing lsof -d txt ~18 ms every
+ * 5 s (~0.4% core), measured 2026-10-06. */
 async function darwinProcessImages(rows: readonly ProcessRow[]): Promise<{
   images: Map<number, string>; stale: Set<number>
 }> {
@@ -374,8 +400,13 @@ async function darwinProcessImages(rows: readonly ProcessRow[]): Promise<{
   const normalizeStart = (marker: string) => marker.trim().split(/\s+/)
     .map((part, index) => index === 2 ? String(Number(part)) : part).join(' ')
   for (const row of rows) {
-    const image = native.get(row.pid)
-    if (!image) continue
+    const image = native.images.get(row.pid)
+    if (!image) {
+      const path = native.unavailable.has(row.pid) && deletedImages.recall(row)
+      if (path) images.set(row.pid, path)
+      continue
+    }
+    deletedImages.forget(row.pid)
     if (normalizeStart(image.startMarker) === normalizeStart(row.startMarker)) images.set(row.pid, image.path)
     // The PID changed owners since ps. Do not combine the new executable with
     // old ancestry/arguments, or let the fallback reintroduce that stale row.
@@ -396,20 +427,23 @@ async function darwinProcessImages(rows: readonly ProcessRow[]): Promise<{
       images.set(pid, path)
     }
   }
+  for (const row of rows) if (native.unavailable.has(row.pid) && images.has(row.pid)) deletedImages.remember(row, images.get(row.pid)!)
   return { images, stale }
 }
 
 /**
  * Attach executable-image and entrypoint identity to selected process rows.
  *
- * Callers pass only descendants of terminal roots (or one saved PID during validation), so native
- * binary ownership is available for every engine without asking lsof to inspect the whole machine.
+ * The rows argument is the whole process table used for memo pruning.
+ * Only selectedPids are probed: terminal descendants or one saved PID during validation.
  */
 export async function enrichProcessRows(
   rows: ProcessRow[],
   selectedPids: ReadonlySet<number> = new Set(rows.map((row) => row.pid)),
 ): Promise<ProcessRow[]> {
   const candidates = rows.filter((row) => selectedPids.has(row.pid))
+  // Prune the full table so one-pane lookups keep other panes' memo (18 ms/pass, 2026-10-06).
+  if (platform() === 'darwin') deletedImages.prune(rows)
   if (!candidates.length) return rows
   const imagePaths = new Map<number, string>()
   const imageIdentities = new Map<number, ReturnType<typeof executableFileIdentity>>()
@@ -1119,12 +1153,33 @@ function tmuxEnter(pane: string): Promise<boolean> {
   })
 }
 
+/**
+ * How long a buffer may take to load before the paste is given up. A tmux client waits as long as its
+ * server does not answer, and this one runs in the gate's notify room (tmuxControlGate.ts): unbounded, it
+ * held every terminal open, session made or killed, and terminal closed behind it for as long. The other
+ * tmux commands here get 2 s; this one also carries the text over stdin.
+ */
+export const LOAD_BUFFER_TIMEOUT_MS = 5_000
+
 /** Stage text in a NAMED tmux buffer via stdin (avoids arg-length limits + the user's default buffer). */
 function tmuxLoadBuffer(name: string, content: string): Promise<boolean> {
   return new Promise((resolve) => {
+    let settled = false
+    let cancel = (): void => {}
+    const settle = (loaded: boolean): void => {
+      if (settled) return
+      settled = true
+      cancel()
+      resolve(loaded)
+    }
     const c = spawn('tmux', ['load-buffer', '-b', name, '-'])
-    c.on('error', () => resolve(false))
-    c.on('close', (code) => resolve(code === 0))
+    // Answered without waiting for its pipes to close: a client killed here may leave one open behind it.
+    cancel = patientDeadline(LOAD_BUFFER_TIMEOUT_MS, () => {
+      c.kill('SIGKILL')
+      settle(false)
+    })
+    c.on('error', () => settle(false))
+    c.on('close', (code) => settle(code === 0))
     c.stdin.on('error', () => { /* EPIPE if tmux died first — 'close' still resolves false */ })
     c.stdin.end(content)
   })
@@ -1304,8 +1359,15 @@ function tmuxDeleteBuffer(name: string): Promise<void> {
 
 /** Paste text from a uniquely named stdin-loaded buffer so its bytes never enter argv or errors. A
  *  bracketed paste carries text and nothing else (pasteText.ts), not even its own end marker; an
- *  unbracketed one is typing, and is typed as it was given. */
-async function tmuxPasteText(pane: string, content: string, bracketed: boolean): Promise<boolean> {
+ *  unbracketed one is typing, and is typed as it was given.
+ *
+ *  A buffer set and deleted is a notification to every control client, which on a tmux before 3.7
+ *  crashed the server while one was attaching: the paste waits for none to be (tmuxControlGate.ts). */
+function tmuxPasteText(pane: string, content: string, bracketed: boolean): Promise<boolean> {
+  return inTmuxRoom('notify', () => pasteThroughBuffer(pane, content, bracketed))
+}
+
+async function pasteThroughBuffer(pane: string, content: string, bracketed: boolean): Promise<boolean> {
   const bufferName = `machinemsg-${process.pid}-${++injectBufferSequence}`
   if (!(await tmuxLoadBuffer(bufferName, bracketed ? neutralizePasteControls(content) : content))) {
     await tmuxDeleteBuffer(bufferName)
