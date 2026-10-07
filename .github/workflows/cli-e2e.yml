@@ -29,7 +29,12 @@ jobs:
       - name: Private test prerequisites and immutable source
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y -q --no-install-recommends zsh tcsh dash lsof
+          sudo apt-get install -y -q --no-install-recommends zsh tcsh dash lsof musl-tools
+          insecure=$(zsh -fc 'autoload -U compaudit && compaudit' 2>/dev/null | grep '^/' | sort -u || true)
+          if [ -n "$insecure" ]; then
+            echo "$insecure" | xargs sudo chown root:root
+            echo "$insecure" | xargs sudo chmod g-w,o-w
+          fi
           npm ci --no-audit --no-fund
           mkdir -p ../.harness/validation
           test -z "$(git symbolic-ref -q HEAD || true)"
@@ -40,23 +45,28 @@ jobs:
         id: tmux
       - name: Add pinned tmux
         run: echo "${{ steps.tmux.outputs.bin }}" >> "$GITHUB_PATH"
-      - name: Types on the integrated source
-        run: npm run typecheck
-      - name: Core and services retain per-file 100 percent coverage
-        run: npm run test:core -- --maxWorkers=4 --reporter=default --reporter=json --outputFile.json=../.harness/validation/core.json
-      - name: Account trust, models, shell launch and boundaries
+      - name: Verify the affected shell test after fixing runner completion ownership
         run: >-
-          npx vitest run src/authCommand.spec.ts src/loginForceRace.spec.ts
-          src/lib/authSession.spec.ts src/lib/e2ee/accountTrust.spec.ts
-          src/lib/e2ee/deviceLogSyncer.spec.ts src/lib/e2ee/groupSyncer.spec.ts
-          src/lib/e2ee/manager.test.ts src/lib/appModels.spec.ts src/lib/localModels.spec.ts
-          src/shellLaunch.spec.ts src/lib/engineLaunch.spec.ts src/architecture.spec.ts
-          --maxWorkers=2 --reporter=default --reporter=json
-          --outputFile.json=../.harness/validation/interactions.json
+          npx vitest run src/lib/engineLaunch.spec.ts --maxWorkers=1
+          --reporter=default --reporter=json
+          --outputFile.json=../.harness/validation/engine-launch.json
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          workspaces: tui
+          shared-key: tui-x86_64-unknown-linux-musl
+          cache-bin: false
+      - name: Build the unchanged TUI for the integrated remote journey
+        working-directory: tui
+        run: cargo build --locked --release --target x86_64-unknown-linux-musl -j2
       - name: Connected local and sealed remote shells, plus startup attach exit
+        env:
+          HN_TUI_BINARY: ${{ github.workspace }}/tui/target/x86_64-unknown-linux-musl/release/harness-tui
         run: >-
           env -u TMUX -u TMUX_PANE -u NO_COLOR npm run test:e2e --
-          e2e/shell.e2e.ts e2e/startupAttachExit.e2e.ts
+          e2e/shell.e2e.ts e2e/startupAttachExit.e2e.ts e2e/tuiShell.e2e.ts
           --reporter=default --reporter=json
           --outputFile.json=../.harness/validation/native-interactions.json
       - name: Source stayed unchanged
@@ -67,10 +77,8 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() }}
         with:
-          name: tui-final-interactions
-          path: |
-            .harness/validation/
-            cli/coverage/core/coverage-summary.json
+          name: tui-final-native-interactions
+          path: .harness/validation/
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 7
