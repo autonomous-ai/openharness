@@ -676,6 +676,57 @@ describe('local CLI WebSocket', () => {
     expect(tabs).toHaveBeenLastCalledWith(backend.connId, null)
   })
 
+  for (const latestCloses of [false, true]) {
+    it(`keeps the device's desk when a ${latestCloses ? 'latest' : 'background'} machine connection closes`, async () => {
+      const backend = new FakeBackend(), panes = vi.fn(), swarms = vi.fn(), tabs = vi.fn()
+      const url = await start(backend, {
+        onAppPanes: panes, onAppSwarms: swarms, onAppTabAgents: tabs,
+        relayPool: {
+          acquire: async (_machine, _env, _select, sink) => {
+            sink.sendFrame({ type: 'connected', payload: { machineId: 'remote' } })
+            return { send: async () => {}, sendBinary: async () => {}, detach: () => {} }
+          },
+          acquireIsolated: vi.fn(),
+          invalidate: () => {}, invalidateIsolated: () => {},
+        } as NonNullable<LocalWsServerOptions['relayPool']>,
+        autonomousEnv: 'prod',
+      })
+      const connect = async (selected: string) => {
+        const ws = new WebSocket(url)
+        await onceOpen(ws)
+        const ready = onceMessage(ws)
+        ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId: selected, localProtocolVersion: 1 } }))
+        await ready
+        return ws
+      }
+      const first = await connect(machineId), second = await connect('remote')
+      const roster = { active: 'tab', swarms: [{ id: 'tab', name: 'Work', agentIds: ['a1'], panes: 1 }], tiles: [] }
+      const announce = async (ws: WebSocket, foreground: boolean) => {
+        const count = panes.mock.calls.length
+        ws.send(JSON.stringify({ type: 'app_panes', payload: { agentIds: ['a1'], foreground } }))
+        ws.send(JSON.stringify({ type: 'app_swarms', payload: roster }))
+        await vi.waitFor(() => {
+          expect(panes).toHaveBeenCalledTimes(count + 1)
+          expect(swarms).toHaveBeenCalledTimes(count + 1)
+        })
+      }
+      await announce(first, false)
+      await announce(second, true)
+      // Reannouncing on an existing socket makes it the newest reporter too.
+      await announce(first, false)
+      const closing = latestCloses ? first : second, surviving = latestCloses ? second : first
+      closing.close()
+      await vi.waitFor(() => expect(tabs).toHaveBeenCalledTimes(4))
+      expect(panes).toHaveBeenLastCalledWith(['a1'], latestCloses)
+      expect(swarms).toHaveBeenLastCalledWith(roster)
+      expect(panes.mock.calls.some(([ids]) => ids.length === 0)).toBe(false)
+      expect(swarms.mock.calls.some(([rows]) => rows === null)).toBe(false)
+      surviving.close()
+      await vi.waitFor(() => expect(panes).toHaveBeenLastCalledWith([], false))
+      expect(swarms).toHaveBeenLastCalledWith(null)
+    })
+  }
+
   it('follows an explicit app_focus, and keeps it off the wire', async () => {
     const backend = new FakeBackend()
     const moves: Array<{ machineId: string; agentId: string }> = []
