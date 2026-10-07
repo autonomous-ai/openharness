@@ -74,33 +74,16 @@ void main() {
     );
     expect((draft['files'] as List).map((f) => f['path']), ['index.html']);
   }, skip: Platform.isWindows);
-  test(
-    'publishes without a preview, never assuming another page is one',
-    () async {
-      await file('code.py', 'print(1)');
-      await file('index.html', '<div id="root"></div>');
-      Future<Map<String, dynamic>> build() => buildPublicationDraft(
-        folder: root.path,
-        title: 'Test',
-        engine: 'codex',
-      );
-      final draft = await build();
-      expect(draft, isNot(contains('viewerPath')));
-      expect((draft['files'] as List).map((f) => f['path']), [
-        'code.py',
-        'index.html',
-      ]);
-      expect(draft['contextNote'], contains('No preview.html'));
-      await file('preview.html', 'x' * 3000001);
-      await expectLater(build(), throwsFormatException);
-    },
-  );
-  test('refuses a folder with nothing portable', () async {
-    await file('notes.bin', 'x');
-    await expectLater(
-      buildPublicationDraft(folder: root.path, title: 'Test', engine: 'codex'),
-      throwsFormatException,
+  test('refuses only a missing or oversized viewer', () async {
+    await file('code.py', 'print(1)');
+    Future<Map<String, dynamic>> build() => buildPublicationDraft(
+      folder: root.path,
+      title: 'Test',
+      engine: 'codex',
     );
+    await expectLater(build(), throwsFormatException);
+    await file('index.html', 'x' * 3000001);
+    await expectLater(build(), throwsFormatException);
   });
   test('leaves out what does not fit and names it, keeping the output and the harness source', () async {
     await file('preview.html', '<p>Ready</p>');

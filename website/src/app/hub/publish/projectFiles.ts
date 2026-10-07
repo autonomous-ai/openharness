@@ -8,7 +8,7 @@ const portable = /\.(html|css|js|mjs|ts|tsx|jsx|json|md|svg|py|typ|strudel|txt|c
 const binary = /\.(png|jpe?g|webp|glb|pdf)$/i;
 const sentNote = 'Images count about a third larger than on disk.';
 
-export type ProjectFolder = { files: SourceFile[]; viewerPath?: string; origin?: Pick<HubDraft, 'forkedFrom' | 'harnessId'> };
+export type ProjectFolder = { files: SourceFile[]; viewerPath: string; origin?: Pick<HubDraft, 'forkedFrom' | 'harnessId'> };
 
 function base64(bytes: Uint8Array): string {
   let raw = '';
@@ -17,7 +17,7 @@ function base64(bytes: Uint8Array): string {
 }
 
 /** A chosen project folder as the Hub stores it: portable files only, measured as they will be sent. */
-export async function readProjectFolder(selected: Iterable<File>, preferredViewer: string | undefined): Promise<ProjectFolder> {
+export async function readProjectFolder(selected: Iterable<File>, preferredViewer: string): Promise<ProjectFolder> {
   const files: SourceFile[] = [];
   let size = 0, origin: ProjectFolder['origin'];
   for (const file of selected) {
@@ -38,10 +38,9 @@ export async function readProjectFolder(selected: Iterable<File>, preferredViewe
     if (size > communityLimits.projectBytes) throw new Error(`Keep the project under 6 MB as sent. ${sentNote}`);
     files.push({ path, content, ...(encoded ? { encoding: 'base64' as const } : {}) });
   }
-  // Only a page made to stand alone is shown by default: any other HTML is offered, not assumed.
-  const viewer = [preferredViewer, 'preview.html'].map(name => files.find(f => f.path === name && !f.encoding)).find(Boolean);
-  if (!files.length) throw new Error('This folder has no portable project files.');
-  return { files, viewerPath: viewer?.path, origin };
+  const viewer = [preferredViewer, 'preview.html'].map(name => files.find(f => f.path === name)).find(Boolean) || files.find(f => f.path.endsWith('.html'));
+  if (!viewer) throw new Error('Include a self-contained preview.html or index.html.');
+  return { files, viewerPath: viewer.path, origin };
 }
 
 /** A cover as the data URL the Hub stores, or an error naming what it accepts. */

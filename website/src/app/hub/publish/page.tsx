@@ -28,7 +28,7 @@ export default function PublishPage() {
   const findingsKey = JSON.stringify(findings), secretsChecked = !findings.length || checkedSecrets === findingsKey;
   const marker = missingMarker(draft.harnessId, draft.files.map(file => file.path));
   const html = draft.files.find(file => file.path === draft.viewerPath)?.content;
-  const ready = !!signedIn && !!draft.files.length && confirmed && !marker && secretsChecked;
+  const ready = !!signedIn && !!html && confirmed && !marker && secretsChecked;
 
   /** A changed project has to be reviewed again before it is published. */
   function replaceProject(patch: Partial<PublishDraft>) { update(patch); setConfirmed(false); setError(''); }
@@ -45,8 +45,8 @@ export default function PublishPage() {
   }, 'Could not read the project files.');
   const importOutput = (file: File) => attempt(async () => {
     if (file.size > 3_000_000) throw new Error('Keep the self-contained HTML output under 3 MB.');
-    const content = await file.text(), path = draft.viewerPath || 'preview.html';
-    replaceProject({ files: [...draft.files.filter(f => f.path !== path), { path, content }], viewerPath: path });
+    const content = await file.text();
+    replaceProject({ files: [...draft.files.filter(f => f.path !== draft.viewerPath), { path: draft.viewerPath, content }] });
   }, 'Could not read the output.');
   const importCover = (file: File) => attempt(async () => { update({ cover: await readCover(file) }); setError(''); }, 'Could not read the image.');
 
@@ -71,7 +71,7 @@ export default function PublishPage() {
         <OutputInputs onOutput={file => void importOutput(file)} onCover={file => void importCover(file)} />
         <ConversationEditor turns={draft.conversation} onChange={conversation => update({ conversation })} />
       </div>
-      <FilesReview files={draft.files} viewerPath={draft.viewerPath} onRemove={path => replaceProject({ files: draft.files.filter(file => file.path !== path), ...(path === draft.viewerPath ? { viewerPath: undefined } : {}) })} onViewer={viewerPath => update({ viewerPath })} />
+      <FilesReview files={draft.files} viewerPath={draft.viewerPath} onRemove={path => replaceProject({ files: draft.files.filter(file => file.path !== path) })} onViewer={viewerPath => update({ viewerPath })} />
       {draft.contextNote && <p className={styles.notice}>{draft.contextNote}</p>}
       {html && <section className={styles.publishPreview}><h2>Review your output</h2><iframe title="Publication preview" sandbox="allow-scripts" referrerPolicy="no-referrer" srcDoc={previewDocument(html)} /></section>}
       {draft.forkedFrom && <p className={styles.notice}>The original harness will stay credited on your publication.</p>}

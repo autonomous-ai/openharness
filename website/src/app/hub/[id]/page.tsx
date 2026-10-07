@@ -17,15 +17,9 @@ const readHarness = cache(async (id: string): Promise<OpenHarness | null> => {
   return getPublicHarness(id).catch(() => null);
 });
 
-/**
- * The page draws the output alone when there is one, so the other files reach a fork through its own
- * routes. Without one it lists the source: text to read, and binary files by name only.
- */
+/** The page draws only the output; the other files reach a fork through its own routes. */
 function forViewer(harness: OpenHarness): OpenHarness {
-  const files = harness.viewerPath
-    ? harness.files.filter(file => file.path === harness.viewerPath)
-    : harness.files.map(file => file.encoding ? { ...file, content: '' } : file);
-  return { ...harness, files };
+  return { ...harness, files: harness.files.filter(file => file.path === harness.viewerPath) };
 }
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {

@@ -191,14 +191,6 @@ describe('publications and access', () => {
       { ...sample, files: [{ path: 'index.html', content: 'x'.repeat(3_000_000) }, { path: 'extra.txt', content: 'x'.repeat(3_000_000) }] },
     ]) expect(publicationSchema.safeParse(value).success).toBe(false)
   })
-  it('publishes a session with nothing to look at, only its source and conversation', async () => {
-    const { viewerPath: _viewer, ...review } = { ...sample, files: [{ path: 'src/app.ts', content: 'export {}' }] }
-    const id = await publish('alice', review as typeof sample)
-    const harness = (await call('GET', `harnesses/${id}`)).json().data.harness
-    expect(harness.files).toEqual(review.files)
-    expect(harness.viewerPath ?? undefined).toBeUndefined()
-    expect(publicationSchema.safeParse({ ...review, viewerPath: 'src/app.ts' }).success).toBe(false)
-  })
 })
 
 describe('persistent social actions', () => {

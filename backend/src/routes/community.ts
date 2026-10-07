@@ -41,8 +41,7 @@ export const publicationSchema = z.object({
   engine: z.enum(communityEngines),
   harnessId: z.enum(communityHarnessIds).optional(),
   files: z.array(file).min(1).max(communityLimits.files),
-  // Absent when the session made nothing to look at (a review, a refactor): readers see the cover or the files.
-  viewerPath: z.string().max(180).optional(),
+  viewerPath: z.string().max(180),
   conversation: z.array(z.object({ role: z.enum(['user', 'assistant', 'tool']), text: z.string().min(1).max(communityLimits.turnChars) }).strict()).min(1).max(communityLimits.turns),
   cover: z.string().max(communityLimits.coverChars).optional().refine(value => !value || !!coverImage(value), 'Use a PNG, JPEG, or WebP cover.'),
   forkedFrom: identifier.optional(),
@@ -57,7 +56,7 @@ export const publicationSchema = z.object({
   }
   if (new Set(value.files.map(f => f.path.toLowerCase())).size !== value.files.length)
     ctx.addIssue({ code: 'custom', message: 'Project paths must be unique.' })
-  if (value.viewerPath !== undefined && (!value.viewerPath.endsWith('.html') || !value.files.some(f => f.path === value.viewerPath && !f.encoding)))
+  if (!value.viewerPath.endsWith('.html') || !value.files.some(f => f.path === value.viewerPath && !f.encoding))
     ctx.addIssue({ code: 'custom', message: 'Choose an included HTML file as the viewer.' })
   const marker = value.harnessId ? communityHarnessMarkers[value.harnessId] : undefined
   if (marker && !value.files.some(file => file.path === marker && !file.encoding)) ctx.addIssue({ code: 'custom', message: 'Include the harness project source.' })

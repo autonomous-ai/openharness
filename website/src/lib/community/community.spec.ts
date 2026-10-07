@@ -34,15 +34,6 @@ describe('portable starter projects', () => {
     const license = files.find(f => f.path.endsWith('/LICENSE'))!.content;
     expect(license).toContain('Copyright (c) 2026 Harness'); expect(license).toContain('Copyright (c) 2026 New creator');
   });
-  it('forks a session with nothing to look at as source and conversation, with no viewer', async () => {
-    const harness = (await getStarter('starter-orbit'))!;
-    const review = { ...harness, viewerPath: undefined, files: [{ path: 'src/app.ts', content: 'export {}' }] };
-    const files = forkFiles(review), manifest = JSON.parse(files.find(f => f.path.endsWith('/harness.json'))!.content);
-    expect(manifest.viewer).toBeUndefined();
-    expect(manifest.workspace.marker).toBe('src/app.ts');
-    expect(files.find(f => f.path.endsWith('/AGENTS.md'))!.content).toContain('This project has no viewer');
-    expect(files.find(f => f.path.endsWith('/README.md'))!.content).not.toContain('directly in a browser');
-  });
   it('places the restrictive CSP before author content', () => {
     const html = '<script>parent.document.body.innerHTML = "bad"</script>';
     const preview = previewDocument(html);

@@ -8,8 +8,7 @@ export type HarnessSnapshot = {
   harnessId?: string;
   harnessName?: string;
   files: SourceFile[];
-  /** The self-contained HTML readers see, when the session made something to look at. */
-  viewerPath?: string;
+  viewerPath: string;
   conversation: ConversationTurn[];
   cover?: string;
   forkedFrom?: string;

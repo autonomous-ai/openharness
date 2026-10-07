@@ -52,21 +52,4 @@ describe('explicit publication', () => {
     fireEvent.click(screen.getByRole('checkbox', { name: /I have permission/ }));
     expect(screen.getByRole('button', { name: 'Publish harness' })).toBeEnabled();
   });
-  it('publishes a session without an output, and never assumes an index.html is one', async () => {
-    mocks.request.mockResolvedValue({ id: 'review-fixture' });
-    render(<PublishPage />); await act(async () => {});
-    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'Code review' } });
-    fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'What changed and why' } });
-    fireEvent.change(screen.getByLabelText('Message 1'), { target: { value: 'Review this.' } });
-    const folder = [['index.html', '<div id="root"></div>'], ['src/app.ts', 'export {}']].map(([path, text]) => Object.assign(new File([text], path.split('/').pop()!), { webkitRelativePath: `project/${path}`, text: async () => text }));
-    fireEvent.change(screen.getByLabelText('Choose project folder'), { target: { files: folder } });
-    await screen.findByText('Review 2 source files');
-    expect(screen.queryByTitle('Publication preview')).not.toBeInTheDocument();
-    expect(screen.getByRole('combobox', { name: /^Output preview/ })).toHaveValue('');
-    fireEvent.click(screen.getByRole('checkbox', { name: /I have permission/ }));
-    fireEvent.click(screen.getByRole('button', { name: 'Publish harness' }));
-    await waitFor(() => expect(mocks.push).toHaveBeenCalledWith('/hub/review-fixture'));
-    expect(mocks.request.mock.calls[0][1].body).not.toHaveProperty('viewerPath');
-    expect(mocks.request.mock.calls[0][1].body.files.map((f: { path: string }) => f.path)).toEqual(['index.html', 'src/app.ts']);
-  });
 });
