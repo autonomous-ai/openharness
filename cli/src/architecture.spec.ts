@@ -170,7 +170,6 @@ const EDGE: RegExp[] = [
  * list only shrinks: an entry no longer reached fails the test, so remove it with the move that ends it.
  */
 const CORE_MAY_REACH: Record<string, string> = {
-  'services/shell.ts': 'shell setup and launch receipts, in the edge host; only the argv launch stays in the core (#893)',
 }
 
 describe('the daemon\'s shape', () => {

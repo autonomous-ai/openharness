@@ -592,3 +592,17 @@ it('rejects a reply when the core changed accounts while the gateway was answeri
     call: async () => { owner = 'b'; return { status: 200, body: { machines: ['a'] } } } })
   expect(await link.ops.machines(true)).toMatchObject({ status: 409, body: { error: { code: 'ACCOUNT_CHANGED' } } })
 })
+
+it('forgets reported presence when accounts change and ignores notices already in flight from the old account', () => {
+  let owner = 'a'
+  const { link, machines } = setup({ start: () => ({ account: { machineId: owner } }) })
+  const body = { machines: [{ machineId: 'private-a' }] }
+  link.notice({ kind: 'machines', owner, body, fetchedAt: 1000 })
+  link.ops.account({ machineId: owner, signIn: null })
+  expect(machines).toHaveBeenCalledTimes(1)
+  owner = 'b'
+  link.ops.account({ machineId: owner, signIn: null })
+  expect(machines).toHaveBeenLastCalledWith({ owner, body: null, fetchedAt: 1_000_000 })
+  link.notice({ kind: 'machines', owner: 'a', body, fetchedAt: 1001 })
+  expect(machines).toHaveBeenCalledTimes(2)
+})

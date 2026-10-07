@@ -1,9 +1,10 @@
 /** Shell requests stay outside the core: authorization, literal argv, and durable launch receipts. */
 import { stat } from 'node:fs/promises'
-import { isAbsolute, join } from 'node:path'
+import { join } from 'node:path'
 import type { CoreApi, ServiceRequests } from '../core/api.js'
 import { AgentCreationReceipts, AgentCreationReceiptError, creationFingerprint, validCreationId, type AgentCreationStatus } from '../lib/agentCreationReceipt.js'
 import { shellContextReply } from '../lib/shellContextReply.js'
+import { terminalOpenError } from '../lib/shellProtocol.js'
 export { SHELL_REQUESTS } from '../lib/shellProtocol.js'
 
 export function startShell(core: CoreApi): ServiceRequests {
@@ -38,18 +39,15 @@ export function startShell(core: CoreApi): ServiceRequests {
       if (!asker.owner) return { error: 'OWNER_REQUIRED' }
       const { argv, cwd, creationId } = payload
       if (!validCreationId(creationId)) return { error: 'INVALID_CREATION_ID' }
-      // Do not turn a string into a program. All arguments, including punctuation and spaces, stay literal.
-      if (payload.command !== undefined || !Array.isArray(argv) || argv.length === 0 || argv.length > 256
-        || argv.some(arg => typeof arg !== 'string' || arg.includes('\0')) || !argv[0]
-        || Buffer.byteLength(JSON.stringify(argv)) > 32 * 1024) return { error: 'INVALID_ARGV' }
-      if (typeof cwd !== 'string' || !isAbsolute(cwd) || cwd.includes('\0') || Buffer.byteLength(cwd) > 4096) return { error: 'INVALID_CWD' }
-      const request = { argv: [...argv] as string[], cwd }
+      const invalid = terminalOpenError(payload)
+      if (invalid) return { error: invalid }
+      const request = { argv: [...argv as string[]], cwd: cwd as string }
       return guarded(async () => {
         const status = await receipts.run(creationId, creationFingerprint(request), async () => {
           // Filesystem providers can stall; a stalled path must not hold a launch indefinitely.
           let timer: ReturnType<typeof setTimeout> | undefined
           const directory = await Promise.race([
-            stat(cwd).then(s => s.isDirectory(), () => false),
+            stat(request.cwd).then(s => s.isDirectory(), () => false),
             new Promise<false>(resolve => { timer = setTimeout(() => resolve(false), 4000) }),
           ]).finally(() => clearTimeout(timer))
           if (!directory) return { state: 'failed', error: 'CWD_NOT_FOUND' }

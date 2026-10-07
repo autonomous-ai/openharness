@@ -279,7 +279,13 @@ export function createGatewayLink(deps: GatewayLinkDeps) {
     },
     wifiService: (on) => { wifiService = on; if (on) need(); send('wifiService', { on }) },
     revokeIdentity: (identity) => { send('revokeIdentity', { identity }) },
-    account: (next) => { send('account', { account: next }) },
+    account: (next) => {
+      if (machines && machines.owner !== next.machineId) {
+        machines = null
+        deps.machines?.({ owner: next.machineId, body: null, fetchedAt: now() })
+      }
+      send('account', { account: next })
+    },
     reachable: (machineIds) => { reachable = machineIds; send('reachable', { machineIds }) },
     lane: laneOps,
     observerKey: {
@@ -373,8 +379,10 @@ export function createGatewayLink(deps: GatewayLinkDeps) {
         events.notice(record(payload.notice) as unknown as BackendNotice)
         return
       case 'machines': {
+        const owner = text(payload.owner) || null
+        if (owner !== (text(record(deps.start().account).machineId) || null)) return
         const body = payload.body && typeof payload.body === 'object' && !Array.isArray(payload.body) ? record(payload.body) : null
-        machines = { owner: typeof payload.owner === 'string' ? payload.owner : null, body,
+        machines = { owner, body,
           fetchedAt: typeof payload.fetchedAt === 'number' && Number.isFinite(payload.fetchedAt) && Math.abs(payload.fetchedAt) <= 8.64e15 ? payload.fetchedAt : now() }
         deps.machines?.(machines)
         return
