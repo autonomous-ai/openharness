@@ -152,8 +152,10 @@ const WALK_TIMEOUT_MS = 60_000
  * D2): the devices' link to their own process and its routes, as every service there has, 2,213 to 2,232.
  * Then 2,230 (step 9, D3): the Wi-Fi device's wiring went with them (core/wifi.ts, core/wifiAgents.ts),
  * 2,232 lines to 2,227, though its link to the devices' process came in.
+ *
+ * Down to 2,215 the same day, at 2,209 from 2,228: the updater left the core for a process the master runs.
  */
-const RUN_FOREGROUND_BUDGET = 2_230
+const RUN_FOREGROUND_BUDGET = 2_215
 /** Lowered from 2,180 when the relay and its E2EE left the socket for the gateway (step 10, R1: 1,440).
  *  The Wi-Fi device's relay came back to it in R2, beside the device service it answers for, over the
  *  gateway's sessions (lib/autonomous-device/overGateway.ts): 1,460. Models' grid commands, grid name and
@@ -305,7 +307,11 @@ const SERVICE_MAY_IMPORT: Record<string, string> = {
 // session create, kill and rename). Before tmux 3.7 the two meeting crashed the tmux server, and every agent
 // with it (windows.e2e.ts, 7 of 27 CI runs on Ubuntu's 3.4). It guards the core's own terminals, so it
 // cannot move to a service. The budget keeps the 101 lines of room it had.
-const CORE_CLOSURE_BUDGET = 73_512
+//
+// Then at 72,134 in 333, from 73,411 in 338: the updater left the core for a process the master runs
+// (services/updaterProcess.ts), and the core never downloads a build. The CLI's and hn's updaters
+// (lib/selfUpdate.ts, tui/update.ts, tui/install.ts) went, with the spawn lock they staged under.
+const CORE_CLOSURE_BUDGET = 72_230
 
 /** What is not the core's, by path: each goes to a service or its own process, in the plan's order. */
 const EDGE: RegExp[] = [
@@ -323,6 +329,9 @@ const EDGE: RegExp[] = [
   /^dsh\/(catalog|install|update|updates|registry|wire|service|lock|builtins|viewer|viewerLedger|verdict|artifacts)\.ts$/,
   // Search's index; the readers of other engines' sessions (external.ts, externals/) are the core's, for adoption.
   /^lib\/sessionSearch\/(?!external\.ts$|externals\/)/,
+  // Downloading builds: the updater's, in a process the master runs (services/updaterProcess.ts). The core
+  // never downloads a build.
+  /^lib\/(selfUpdate|runtimeInstall)\.ts$/, /^tui\/(update|install)\.ts$/,
 ]
 
 /**

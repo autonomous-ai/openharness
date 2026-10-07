@@ -16,9 +16,10 @@ import { PROBE_ANSWER } from './harnessd/reexec.js'
 import { KNOWN_SERVICES, SERVICE_HOSTS } from './harnessd/services.js'
 
 const CLI_ROOT = fileURLToPath(new URL('..', import.meta.url))
-const ROLES = ['master', ...KNOWN_SERVICES]
+// The updater, beside the services the core knows: the master runs it (harnessd/services.ts `UPDATER_HOST`).
+const ROLES = ['master', ...KNOWN_SERVICES, 'updater']
 const RUNNER: Record<string, string> = { master: 'masterProcess' }
-for (const name of KNOWN_SERVICES) RUNNER[name] = `${name}Process`
+for (const name of [...KNOWN_SERVICES, 'updater']) RUNNER[name] = `${name}Process`
 
 describe('the lean bundle a release carries', () => {
   let scratch = ''
@@ -58,10 +59,10 @@ describe('the lean bundle a release carries', () => {
     }
   })
 
-  it('brings no zod to the master, search or the edge host', () => {
+  it('brings no zod to the master, search, the updater or the edge host', () => {
     expect(hasZod(new Set(files.keys())), 'the bundle still holds zod, for the services whose own code uses it').toBe(true)
     // The edge host's services share one process: zod in any of them would be in all of them.
-    for (const role of ['master', 'search', ...SERVICE_HOSTS.edge.services]) expect(hasZod(loads(role)), role).toBe(false)
+    for (const role of ['master', 'search', 'updater', ...SERVICE_HOSTS.edge.services]) expect(hasZod(loads(role)), role).toBe(false)
   })
 
   it('passes the release script\'s check, which a lean bundle that breaks a process does not', async () => {

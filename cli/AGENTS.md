@@ -18,9 +18,12 @@ SERVICES src/services/     everything else: search, viewers, models, workspaces,
 `src/core/main.ts` `runForeground()` is the composition root: it creates the modules and wires them
 together. It is the core's own entry (`harness __run`), which the master starts; `src/cli.ts` is the CLI,
 and calls in for `__run`. `harness start -f` runs the master in the foreground, as launchd and systemd do.
-A core with no master (`HARNESS_NO_MASTER=1`, or one an older release's handoff started) hands each update
-to a master that judges it (`src/core/updateHandoff.ts`). `src/backendSocket.ts` is the transport: it
-receives frames and dispatches them.
+The updater is the master's, in a process of its own (`src/services/updaterProcess.ts`): the core never
+downloads a build. When it stages one, the master has the core hand over (`harnessd:update`) and judges the
+new build. A core with no master gets no updates: one an older release's own handoff started hands itself
+to a master once that release has gone, and one `HARNESS_NO_MASTER=1` asked for runs as it is
+(`src/core/updateHandoff.ts`). `src/backendSocket.ts` is the transport: it receives frames and dispatches
+them.
 `src/gateway/` is the relay: the backend link, the E2EE sessions and keys, and every rule about what a
 remote client may send and how what it is sent is sealed. It runs in a process of its own
 (`src/gateway/gatewayProcess.ts`; the core's side is `src/core/gatewayLink.ts`), or in the core's with

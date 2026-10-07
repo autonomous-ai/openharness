@@ -47,9 +47,13 @@ describe('connectToMaster', () => {
       link.startHeartbeat()
       const gone = vi.fn()
       link.onMasterGone(gone)
+      const update = vi.fn()
+      link.onUpdate(update)
+      channel.say({ type: 'harnessd:update', version: '9.9.9' })
       channel.leave()
       vi.advanceTimersByTime(60_000)
       expect(gone).not.toHaveBeenCalled()
+      expect(update).not.toHaveBeenCalled()
       expect(link.status()).toBeNull()
       link.close()
     }
@@ -105,6 +109,27 @@ describe('connectToMaster', () => {
     const channel = new FakeChannel()
     connectToMaster(channel, supervised).ready('no tmux')
     expect(channel.sent).toEqual([{ type: 'harnessd:ready', safeMode: 'no tmux' }])
+  })
+
+  it('hears an update the master asks for, kept until something listens', async () => {
+    const channel = new FakeChannel()
+    const link = connectToMaster(channel, supervised)
+    // Asked before start-up got as far as listening: not lost.
+    channel.say({ type: 'harnessd:update', version: '9.9.8' })
+    channel.say({ type: 'harnessd:update', version: '9.9.9' })
+    const update = vi.fn()
+    link.onUpdate(update)
+    expect(update).not.toHaveBeenCalled()
+    await Promise.resolve()
+    expect(update.mock.calls).toEqual([['9.9.9']])
+    channel.say({ type: 'harnessd:update', version: '9.9.10' })
+    expect(update.mock.calls).toEqual([['9.9.9'], ['9.9.10']])
+    expect(link.status()).toBeNull()
+    // Nothing kept, nothing said to a listener that comes later.
+    const later = vi.fn()
+    link.onUpdate(later)
+    await Promise.resolve()
+    expect(later).not.toHaveBeenCalled()
   })
 
   it('keeps what the master says about itself, and hears when the master goes', () => {

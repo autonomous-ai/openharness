@@ -3,8 +3,8 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
-  clearSafeModeMarker, readSafeModeMarker, runBootHandoff, safeModeDisposition,
-  safeModeFile, safeModeStatusBody, SafeModeRequest, writeSafeModeMarker, type BootHandoffDeps,
+  clearSafeModeMarker, readSafeModeMarker, safeModeDisposition,
+  safeModeFile, safeModeStatusBody, SafeModeRequest, writeSafeModeMarker,
 } from './daemonSafeMode.js'
 
 let dir = ''
@@ -78,52 +78,5 @@ describe('the safe-mode marker', () => {
     writeFileSync(safeModeFile(dir), '{ not json')
     expect(readSafeModeMarker(dir, () => true)).toBeNull()
     expect(readFileSync(safeModeFile(dir), 'utf-8')).toBe('{ not json')
-  })
-})
-
-describe('runBootHandoff', () => {
-  function harness(over: Partial<BootHandoffDeps> = {}) {
-    const calls: string[] = []
-    let exited: number | null = null
-    const deps: BootHandoffDeps = {
-      closeServer: () => calls.push('close'),
-      probeMaster: () => { calls.push('probe'); return null },
-      rollBack: () => calls.push('roll back'),
-      startMaster: () => calls.push('start the master'),
-      exit: ((code: number) => { calls.push(`exit:${code}`); exited = code; return undefined as never }),
-      log: () => {},
-      ...over,
-    }
-    return { deps, calls, exited: () => exited }
-  }
-
-  it('probes the new build\'s master, releases the port, then starts the master on the new build, and leaves', () => {
-    const h = harness()
-    runBootHandoff('0.3.5', '0.3.6', h.deps)
-    expect(h.calls).toEqual(['probe', 'close', 'start the master', 'exit:0'])
-  })
-
-  it('rolls a build whose master does not answer back, and starts this build\'s master instead', () => {
-    const lines: string[] = []
-    const h = harness({ probeMaster: () => 'harnessd-probe failed: a bad build', log: (m) => lines.push(m) })
-    runBootHandoff('0.3.5', '0.3.6', h.deps)
-    expect(h.calls).toEqual(['roll back', 'close', 'start the master', 'exit:0'])
-    expect(lines[1]).toBe('[update] 0.3.6\'s master did not answer its probe (harnessd-probe failed: a bad build) — rolled back; 0.3.5 goes on under a master of its own')
-  })
-
-  it('has already exited by the time it returns — the property that makes two daemons impossible', () => {
-    // Nothing is awaited, so the half-built boot cannot interleave between closing the port and the
-    // exit, and can never reach the code that would bind the port the successor is taking.
-    const h = harness()
-    runBootHandoff('0.3.5', '0.3.6', h.deps)
-    expect(h.exited()).toBe(0)   // no await, no tick: true immediately after the call returns
-  })
-
-  it('says what it hands over, and to whom', () => {
-    const lines: string[] = []
-    const h = harness({ log: (m) => lines.push(m) })
-    runBootHandoff('0.3.5', '0.3.6', h.deps)
-    expect(lines[0]).toContain('0.3.5 → 0.3.6')
-    expect(lines[0]).toContain('harnessd\'s master')
   })
 })
