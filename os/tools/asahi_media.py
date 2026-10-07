@@ -140,6 +140,7 @@ def live_recipe(description):
     ET.SubElement(selected, 'requires', {'profile': 'BootCore'})
     prefs = ET.SubElement(root, 'preferences', {'profiles': 'HarnessInstall'})
     live = ET.SubElement(prefs, 'type', {'image': 'iso', 'flags': 'overlay', 'filesystem': 'squashfs',
+        'squashfscompression': 'zstd',
         'firmware': 'uefi', 'hybridpersistent': 'false', 'volid': 'HARNESS_INSTALL',
         'kernelcmdline': 'console=tty0 quiet systemd.show_status=false rd.udev.log_level=3 systemd.unit=multi-user.target'})
     ET.SubElement(live, 'bootloader', {'name': 'grub2', 'console': 'none', 'timeout': '0'})
