@@ -104,7 +104,7 @@ class _PhoneWelcomeState extends State<PhoneWelcome> {
   /// ([_emailCodeFromScan]): the step says why an email is in the way. Kept on the code step only.
   bool _codeFromScan = false;
 
-  /// Where the camera was opened from — the first screen's "Yes", or "Scan to connect ›" on the
+  /// Where the camera was opened from — the first screen's "Yes", or "Scan to connect" on the
   /// set-up page — and so where back from it goes ([_backFrom]). Back from the camera always went
   /// to the first screen, and somebody who had stepped over from set-up — the steps they were
   /// following on it — had to find their way back to them.
