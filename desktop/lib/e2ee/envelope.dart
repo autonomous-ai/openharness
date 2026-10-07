@@ -106,9 +106,8 @@ const Set<String> encryptedDownTypes = {
   'p2p_promote',
   // The rest of what the machine requires sealed: its rule is `encryptDownFrame`
   // (cli/src/lib/e2ee/applicationFrames.ts), the set above OR the sets named beside
-  // it. `git_pull_request` went in the clear and every pane's PR badge and history
-  // came back E2EE_REQUIRED; the others are listed before anything sends them.
-  'git_pull_request',
+  // it (`git_pull_request` is above, beside `git_project_info`). These are listed
+  // before anything sends them.
   'agent_purge',
   'agent_worktree_delete',
   'agents_cleanup_preview',

@@ -43,6 +43,14 @@ void main() {
     };
   }
 
+  /// `PLATE_REQUEST` is one type, not a set: `encryptDownFrame` compares it with `===`.
+  String plateRequest(String relay) {
+    final match = RegExp(r"export const PLATE_REQUEST = '([a-z0-9_]+)'")
+        .firstMatch(relay);
+    if (match == null) throw StateError('could not find PLATE_REQUEST');
+    return match[1]!;
+  }
+
   late Set<String> core, machineRequests, unwrapped;
   setUpAll(() {
     core = namesIn(cli('lib/e2ee/core.ts'), 'ENCRYPTED_DOWN_TYPES');
@@ -60,6 +68,7 @@ void main() {
       ...machineRequests,
       ...namesIn(frames, 'FLEET_REQUESTS'),
       ...namesIn(relay, 'PAIR_REQUESTS'),
+      plateRequest(relay),
       ...namesIn(cli('sharing/protocol.ts'), 'SHARE_REQUEST_TYPES'),
       ...namesIn(cli('teams/wire.ts'), 'TEAM_REQUEST_TYPES'),
       ...namesIn(cli('lib/viewerFrames.ts'), 'VIEWER_DOWN_TYPES'),
@@ -81,7 +90,9 @@ void main() {
     final rule = cli('lib/e2ee/applicationFrames.ts');
     final from = rule.indexOf('export const encryptDownFrame');
     final body = rule.substring(from, rule.indexOf('\nexport ', from + 1));
-    final named = RegExp(r'\b([A-Z][A-Z_]+)\b').allMatches(body).map((m) => m[1]);
+    final named = RegExp(r'\b([A-Z][A-Z_]+)\b')
+        .allMatches(body)
+        .map((m) => m[1]);
     expect(named.toSet(), {
       'MACHINE_REQUESTS',
       'FLEET_REQUESTS',
