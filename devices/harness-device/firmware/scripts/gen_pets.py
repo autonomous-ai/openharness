@@ -11,7 +11,7 @@ focus.c), sending 40 of 60 — each a few body poses moved by a per-step dy, and
 Every pet's alert is the same blue bell bubble over its working scene (ALERT_BUBBLES).
 Codex: its small pet is the robot pack's idle, review and waiting loops drawn at 2x (mockup/codex-rest.html), and
 its three scenes come from the same pack (assets/pets/codex; mockup/codex_options.py W2 / L1 / S2):
-the pack's 192 x 208 robot frames at one byte per pixel (cell 1) and an overlay sprite (the sandbox bubble, the
+the pack's 192 x 208 robot frames at one byte per pixel (cell 1) and, listening and sending, an overlay sprite (the
 equalizer bubble, the paper plane) drawn after them: 28 steps of 120 ms, 15 steps of 80 ms for each mic level
 0..4, and 15 steps of 140 ms. The listening bubble is stored once, empty; its three bars are not stored at all:
 the scene's ht_pet_bars_t (x, centre y, size, fills, 1200 ms sine and phase step from the BAR_* constants) lets
@@ -98,7 +98,7 @@ LEVELS = 5                           # pets.h HT_PET_SCENE_LEVELS (a _Static_ass
 
 
 # ---- Codex's scenes: the owner's robot pack (assets/pets/codex, 192 x 208 RGBA frames) ----
-# Working = the pack's "running" laptop loop + a bubble of three sandboxes (mockup/codex_options.py W2),
+# Working = the pack's "running" laptop loop, no bubble (owner, 2026-10-07: the notice bell takes its place),
 # listening = the wave-only keyframes + a bubble of three bars that follow the mic level (L1, encode.py of
 # the pack), sending = the "waving" loop + a paper plane leaving the hand (S2). The robot frames are
 # composited over black and quantised per scene (index 0 transparent, cell = 1); the moving bubble or
@@ -106,7 +106,7 @@ LEVELS = 5                           # pets.h HT_PET_SCENE_LEVELS (a _Static_ass
 PACK = root / 'assets/pets/codex'
 CW, CH = 300, 260                    # the mockup's scene canvas, centred on the glass; the robot sits at RX, RY
 RX, RY = (CW - 192) // 2, (CH - 208) // 2 + 6
-CX_FILL, CX_LINE, CX_BAR, CX_BAR_HI, CX_QUEUED = '#172d63', '#bceeff', '#74d7ff', '#b6f6ff', '#4a5d9a'
+CX_FILL, CX_LINE, CX_BAR, CX_BAR_HI = '#172d63', '#bceeff', '#74d7ff', '#b6f6ff'
 # per scene: pack frames, robot frame per step, step_ms, home-face placement bias (focus.c: working +4, listening -6)
 XWORK_STEPS = ([0, 1, 2, 3, 4, 5, 5]) * 4          # running: 120 ms frames, the last one 220 ms = two steps
 XWORK_MS, XLISTEN_MS, XSEND_MS = 120, 80, 140
@@ -120,37 +120,6 @@ def pack_frames(folder, n):
 
 def canvas():
     return Image.new('RGBA', (CW, CH), (0, 0, 0, 0))
-
-
-def bubble(d, x, y, w, h):
-    d.rounded_rectangle((x, y, x + w, y + h), radius=9, fill=CX_FILL, outline=CX_LINE, width=2)
-    d.polygon([(x + 6, y + h - 2), (x - 3, y + h + 6), (x + 13, y + h)], fill=CX_FILL)
-    d.line([(x + 6, y + h), (x - 3, y + h + 6), (x + 9, y + h + 1)], fill=CX_LINE, width=2)
-
-
-def tick(d, cx, cy, s):
-    d.line([(cx - 7 * s, cy), (cx - 2 * s, cy + 5 * s), (cx + 8 * s, cy - 6 * s)], fill=CX_FILL, width=2)
-
-
-def work_overlay(step):
-    """Cycle k (0..3) per loop: sandboxes < k done, k running (blinking each frame), the rest queued."""
-    cycle, i = divmod(step, 7)
-    i = min(i, 5)                                    # the running frame this step shows
-    im = canvas()
-    d = ImageDraw.Draw(im)
-    bx, by = RX + 158, RY + 22
-    bubble(d, bx, by, 70, 40)
-    for k in range(3):
-        x = bx + 9 + k * 19
-        if k < cycle:
-            d.rounded_rectangle((x, by + 13, x + 14, by + 27), radius=3, fill=CX_BAR)
-            tick(d, x + 7, by + 20, 0.6)
-        elif k == cycle:
-            d.rounded_rectangle((x, by + 13, x + 14, by + 27), radius=3, outline=CX_BAR, width=2,
-                                fill=CX_BAR_HI if i % 2 == 0 else CX_FILL)
-        else:
-            d.rounded_rectangle((x, by + 13, x + 14, by + 27), radius=3, outline=CX_QUEUED, width=2)
-    return im
 
 
 # The listening bubble's three bars are NOT stored: focus.c draws them as rounded boxes (ht_pet_bars_t), from
@@ -294,7 +263,7 @@ def cell_frames(prefix, items, palette_name, cell=1):
 
 
 def generate_pack_scene(prefix, kind):
-    """One Codex scene from the pack: robot frames + overlay, in the ht_pet_scene_t layout (pets.h)."""
+    """One Codex scene from the pack: robot frames + overlay (none while working), in the ht_pet_scene_t layout."""
     if kind == 'work':
         frames, seq, step_ms, levels, bias = pack_frames('running', 6), XWORK_STEPS, XWORK_MS, 1, 4
     elif kind == 'listen':
@@ -315,9 +284,12 @@ def generate_pack_scene(prefix, kind):
     out.append(f'static const uint8_t {prefix}_loop[{len(loop)}] = {{' + ','.join(map(str, loop)) + '};\n')
     out.append(f'_Static_assert(sizeof {prefix}_loop == {steps} * {"HT_PET_SCENE_LEVELS" if levels > 1 else 1}, "{prefix}: steps x levels");\n')
     # The overlay, one image per (level, step) like the loop.
+    x0, y0 = (466 - CW) // 2 + RX + box[0], (466 - CH) // 2 + RY + box[1]
     if kind == 'work':
-        images = [work_overlay(s) for s in range(steps)]
-    elif kind == 'listen':
+        dx, dy = mascot_centred(w, h, bias)
+        out.append(f'static const ht_pet_scene_t {prefix} = {{{w},{h},{prefix}_frames,{prefix}_loop,{steps},{step_ms},NULL,{dx},{dy},NULL,NULL,NULL,NULL}};\n')
+        return out, n, nbytes + len(palette) * 2
+    if kind == 'listen':
         images = [listen_bubble()]               # one frame: the bars are drawn in code, the loop is all zeros
     else:
         images = [send_overlay(s, steps) for s in range(steps)]
@@ -335,10 +307,7 @@ def generate_pack_scene(prefix, kind):
     out.append(f'static const int16_t {ov}_at[{len(at)}][2] = {{' + ','.join(f'{{{x},{y}}}' for x, y in at) + '};\n')
     out.append(f'static const ht_pet_overlay_t {ov} = {{{ov}_frames,{ov}_loop,{ov}_at}};\n')
     # The sprite's home-face place is the mockup's: the robot at (RX, RY) in the canvas centred on the glass.
-    x0, y0 = (466 - CW) // 2 + RX + box[0], (466 - CH) // 2 + RY + box[1]
     dx, dy = x0 - (466 - w) // 2, y0 - (233 - h // 2 + bias)
-    if kind == 'work':
-        dx, dy = mascot_centred(w, h, bias)
     bars = ',NULL'
     if kind == 'listen':
         # The bars, from the scene's origin (the robot's ink box): x, centre y, 8 px of ink, radius, the swing, fills.
@@ -346,7 +315,7 @@ def generate_pack_scene(prefix, kind):
         out.append(f'static const ht_pet_bars_t {prefix}_bars = {{{{{",".join(str(x - box[0]) for x in BAR_X)}}},{BAR_CY - box[1]},'
                    f'{BAR_W + 1},{BAR_RADIUS},{BAR_MIN},{BAR_SWING},{{{fills}}},{BAR_PERIOD_MS},{BAR_PHASE}f}};\n')
         bars = f',&{prefix}_bars'
-    out.append(f'static const ht_pet_scene_t {prefix} = {{{w},{h},{prefix}_frames,{prefix}_loop,{steps},{step_ms},&{ov},{dx},{dy}{bars},NULL,NULL,false}};\n')
+    out.append(f'static const ht_pet_scene_t {prefix} = {{{w},{h},{prefix}_frames,{prefix}_loop,{steps},{step_ms},&{ov},{dx},{dy}{bars},NULL,NULL,NULL}};\n')
     return out, n + on, nbytes + obytes + (len(palette) + len(opal)) * 2
 
 
@@ -521,7 +490,7 @@ def generate_muse_scene(prefix, kind):
                    f'{round(wv["width"] * 16)},{wv["half_angle_deg"]},{wv["count"]},{{{",".join(map(str, wv["colour"]))}}},'
                    f'{wv["period_ms"]},0}};\n')
         waves = f'&{prefix}_waves'
-    out.append(f'static const ht_pet_scene_t {prefix} = {{{w},{h},{prefix}_frames,{prefix}_loop,{steps},{meta["step_ms"]},{ov_ref},{dx},{dy},NULL,{waves},NULL,false}};\n')
+    out.append(f'static const ht_pet_scene_t {prefix} = {{{w},{h},{prefix}_frames,{prefix}_loop,{steps},{meta["step_ms"]},{ov_ref},{dx},{dy},NULL,{waves},NULL,NULL}};\n')
     return out, n + extra, nbytes + obytes + len(palette) * 2
 
 
@@ -598,7 +567,7 @@ def generate_claude_scene(prefix, name, levels, bias):
                    f'{wv["period_ms"]},{round(wv["gap"] * 16)}}};\n')
         waves = f'&{prefix}_waves'
     out.append(f'static const ht_pet_scene_t {prefix} = {{{w},{h},{prefix}_frames,{prefix}_loop,{len(steps)},'
-               f'{meta["step_ms"]},{ov_ref},{dx},{dy},NULL,{waves},{prefix}_dy,false}};\n')
+               f'{meta["step_ms"]},{ov_ref},{dx},{dy},NULL,{waves},{prefix}_dy,NULL}};\n')
     return out, n + on, nbytes + obytes + len(palette) * 2 + len(dys)
 
 
@@ -690,20 +659,23 @@ def generate_pet(prefix, states, draw, size, cells_out=False, cell=1):
 
 
 # ---- THE ALERT: a notice arrives while the agent works (owner, 2026-10-05; one bell bubble for every pet,
-# 2026-10-07, mockup/alert_bell.py "a blue bell everywhere") ----
-# The working scene plays on and a bubble with a blue bell pops up beside the pet for ~5 s: 46 steps of 110 ms,
-# nothing for four, popped in over three (a little overshoot), then bobbing while the bell rings in bursts. Then
-# ui_habitat.c flies a blue dot from the bubble round the rim to 12 o'clock, where it stays until the notice is read.
-# The scene has no frames of its own (focus.c draws the working scene under it); the overlay's `at` is from the
-# working scene's origin. Codex's bubble takes its sandbox bubble's place, which steps aside meanwhile.
+# 2026-10-07, mockup/alert_count.py "keep the bell, the number beside it") ----
+# The working scene plays on and a bubble with a blue bell and room for the count pops up beside the pet: 46 steps
+# of 110 ms, nothing for four, popped in over three (a little overshoot), then bobbing while the bell rings in
+# bursts; the last step is the bubble at rest, which focus.c holds until the notices are read. The count is not
+# stored: focus.c writes it in the bubble, centred on the step's count_at (none while it pops in). The scene has
+# no frames of its own (focus.c draws the working scene under it); `at` and count_at are from the working scene's
+# origin. Claude's sits left of its hat, clear of the pan; Codex's where its sandbox bubble was.
 ALERT_STEPS, ALERT_MS = 46, 110
 ABLUE = (0, 111, 255)
 ALERT_RING = [0, 16, -16, 12, -12, 7, -7, 0, 0, 0, 0, 0]      # the bell's swing, degrees per step, from step 6
-# engine: the bubble's centre on the glass, its fill and edge, whether it takes the working overlay's place
+ALERT_POP = 6                                                # steps before the bubble is whole and the count shows
+ALERT_W, ALERT_H = 68, 44                                    # the bubble: the bell, then a slot for "1".."9+"
+# engine: the bubble's left edge (its tail lower left) or right edge (tail lower right), its centre y, fill, edge
 ALERT_BUBBLES = {
-    'claude': ((313, 160), (246, 242, 238), (246, 242, 238), False),
-    'codex': ((328, 160), CX_FILL, CX_LINE, True),
-    'muse': ((296, 150), (246, 244, 240), (205, 200, 192), False),
+    'claude': ((186, 'right'), 168, (246, 242, 238), (246, 242, 238)),
+    'codex': ((290, 'left'), 160, CX_FILL, CX_LINE),
+    'muse': ((271, 'left'), 150, (246, 244, 240), (205, 200, 192)),
 }
 
 
@@ -714,43 +686,54 @@ def abell(d, cx, cy, s, col):
     d.ellipse([cx - 1.6 * s, cy + 4.5 * s, cx + 1.6 * s, cy + 7 * s], fill=col)
 
 
-def bell_bubble(im, cx, cy, k, fill, edge, angle):
-    """A 50 x 44 bubble, `k` 0..1 popping it in with a little overshoot, its tail at the lower left, the blue bell
-    in its middle swung `angle` degrees about its top. No anti-aliasing (exact_overlay keeps a handful of colours)."""
+def bell_bubble(im, edge_x, cy, k, fill, edge, angle):
+    """The bubble, `k` 0..1 popping it in with a little overshoot from its tail's side, the blue bell at its left
+    swung `angle` degrees about its top. Returns the count slot's centre. No anti-aliasing (exact_overlay keeps a
+    handful of colours)."""
     s = (1.0 + 0.18 * math.sin(k * math.pi) if k < 1 else 1.0) * min(1.0, k * 1.6)
-    w, h = 50 * s, 44 * s
+    w, h = ALERT_W * s, ALERT_H * s
+    x0 = edge_x[0] if edge_x[1] == 'left' else edge_x[0] - w
     d = ImageDraw.Draw(im)
-    tx = cx - w / 2 + 11 * s
-    d.polygon([(tx - 6 * s, cy + h / 2 - 2), (tx + 6 * s, cy + h / 2 - 2), (tx - 10 * s, cy + h / 2 + 11 * s)], fill=edge)
-    d.rounded_rectangle([cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2], radius=13 * s, fill=fill, outline=edge, width=2)
-    d.polygon([(tx - 4 * s, cy + h / 2 - 3), (tx + 4 * s, cy + h / 2 - 3), (tx - 7 * s, cy + h / 2 + 7 * s)], fill=fill)
+    if edge_x[1] == 'left':
+        tx, far = x0 + 11 * s, -1
+    else:
+        tx, far = x0 + w - 11 * s, 1
+    d.polygon([(tx - 6 * s, cy + h / 2 - 2), (tx + 6 * s, cy + h / 2 - 2), (tx + far * 10 * s, cy + h / 2 + 11 * s)], fill=edge)
+    d.rounded_rectangle([x0, cy - h / 2, x0 + w, cy + h / 2], radius=13 * s, fill=fill, outline=edge, width=2)
+    d.polygon([(tx - 4 * s, cy + h / 2 - 3), (tx + 4 * s, cy + h / 2 - 3), (tx + far * 7 * s, cy + h / 2 + 7 * s)], fill=fill)
     bell = Image.new('RGBA', (80, 80), (0, 0, 0, 0))
     abell(ImageDraw.Draw(bell), 40, 40, 1.75 * s, ABLUE)
     bell = bell.rotate(angle, resample=Image.NEAREST, center=(40, 40 - 9 * s))
-    im.alpha_composite(bell, (round(cx - 40), round(cy - 1.5 * s - 40)))
+    im.alpha_composite(bell, (round(x0 + 21 * s - 40), round(cy - 1.5 * s - 40)))
+    return round(x0 + 48 * s), round(cy)
 
 
-def alert_bubbles(at, fill, edge):
-    """The overlay per step, on a glass-sized canvas."""
-    out = []
+def alert_bubbles(edge_x, cy, fill, edge):
+    """The overlay per step, on a glass-sized canvas, and the count slot's centre on the glass (None while popping)."""
+    out, slots = [], []
     for t in range(ALERT_STEPS):
         im = Image.new('RGBA', (466, 466), (0, 0, 0, 0))
         k = min(1.0, (t - 3) / 3)
+        slot = None
         if k > 0:
-            angle = ALERT_RING[(t - 6) % len(ALERT_RING)] if t >= 6 else 0
-            bell_bubble(im, at[0], at[1] - (2 if ((t + 1) // 2) % 2 else 0), k, fill, edge, angle)
+            rest = t == ALERT_STEPS - 1                      # the bubble held after the ring: still, not lifted
+            angle = 0 if rest or t < ALERT_POP else ALERT_RING[(t - ALERT_POP) % len(ALERT_RING)]
+            lift = 0 if rest else (2 if ((t + 1) // 2) % 2 else 0)
+            slot = bell_bubble(im, edge_x, cy - lift, k, fill, edge, angle)
         out.append(im)
-    return out
+        slots.append(slot if t >= ALERT_POP else None)
+    return out, slots
 
 
 def generate_alert(prefix, engine, work_code, work_prefix):
     """The bell bubble over the working scene; `work_code` is the working scene's generated C, read for its origin."""
-    at, fill, edge, covers = ALERT_BUBBLES[engine]
+    edge_x, cy, fill, edge = ALERT_BUBBLES[engine]
     m = re.search(rf'ht_pet_scene_t {work_prefix} = {{(-?\d+),(-?\d+),[^,]*,[^,]*,\d+,\d+,[^,]*,(-?\d+),(-?\d+),', work_code)
     w, h, dx, dy = map(int, m.groups())
     ox, oy = (466 - w) // 2 + dx, 233 - h // 2 + 4 + dy             # focus.c scene_origin, bias 4
-    shapes, opal = exact_overlay(alert_bubbles(at, ImageColor.getrgb(fill) if isinstance(fill, str) else fill,
-                                               ImageColor.getrgb(edge) if isinstance(edge, str) else edge))
+    images, slots = alert_bubbles(edge_x, cy, ImageColor.getrgb(fill) if isinstance(fill, str) else fill,
+                                  ImageColor.getrgb(edge) if isinstance(edge, str) else edge)
+    shapes, opal = exact_overlay(images)
     ov = prefix + '_ov'
     out = [f'static const uint16_t {ov}_pal[{len(opal)}] = {{' + ','.join(str(0 if k == 0 else rgb565_panel(c)) for k, c in enumerate(opal)) + '};\n']
     code, order, n, nbytes = cell_frames(ov, [(c_, r_, g_) for c_, r_, g_, _ in shapes], f'{ov}_pal')
@@ -759,9 +742,13 @@ def generate_alert(prefix, engine, work_code, work_prefix):
     oat = [(x - ox, y - oy) if (x or y) else (0, 0) for *_, (x, y) in shapes]
     out.append(f'static const int16_t {ov}_at[{len(oat)}][2] = {{' + ','.join(f'{{{x},{y}}}' for x, y in oat) + '};\n')
     out.append(f'static const ht_pet_overlay_t {ov} = {{{ov}_frames,{ov}_loop,{ov}_at}};\n')
+    # count_at: the slot's centre from the working scene's origin, {0,0} = no count on that step
+    cat = [(x - ox, y - oy) if c else (0, 0) for c in slots for x, y in [c or (0, 0)]]
+    assert all(c != (0, 0) for c, sl in zip(cat, slots) if sl)
+    out.append(f'static const int16_t {prefix}_count_at[{len(cat)}][2] = {{' + ','.join(f'{{{x},{y}}}' for x, y in cat) + '};\n')
     out.append(f'static const ht_pet_scene_t {prefix} = {{0,0,NULL,NULL,{ALERT_STEPS},{ALERT_MS},&{ov},0,0,NULL,NULL,NULL,'
-               f'{"true" if covers else "false"}}};\n')
-    return out, n, nbytes + len(opal) * 2
+               f'{prefix}_count_at}};\n')
+    return out, n, nbytes + len(opal) * 2 + len(cat) * 4
 
 
 # engine -> (working scene, listening scene, sending scene): prefix, loop, size in cells, step_ms, steps; levels
