@@ -22,11 +22,42 @@ class WebYourComputers extends StatefulWidget {
 
   final AppNotifier app;
 
-  /// The ones to list: the account's own, not those shared with it.
-  static List<MachineState> listed(AppNotifier app) => [
+  /// The ones to list: the account's own, not those shared with it, one per name
+  /// ([newestOfEachName]).
+  static List<MachineState> listed(AppNotifier app) => newestOfEachName([
     for (final state in app.machineStates.values)
       if (!state.machine.isShared) state,
-  ];
+  ], app.removedMachines);
+
+  /// A computer set up again (its Harness data wiped, a reinstall) comes back
+  /// under a new id and leaves the old record behind, offline for good, under
+  /// the same name — and once its key is removed from the account it can never
+  /// come back. So of the machines sharing a name, the removed ones are left
+  /// out while any other is there, and otherwise only the latest removed is
+  /// kept: the one to sign in on again. [removed] is
+  /// [AppNotifier.removedMachines].
+  static List<MachineState> newestOfEachName(
+    List<MachineState> states,
+    Map<String, int> removed,
+  ) {
+    int? removedAt(MachineState s) => removed[s.machine.machineId];
+    final byName = <String, List<MachineState>>{};
+    for (final s in states) {
+      (byName[s.machine.displayName] ??= []).add(s);
+    }
+    bool kept(MachineState s) {
+      final at = removedAt(s);
+      if (at == null) return true;
+      final peers = byName[s.machine.displayName]!;
+      if (peers.any((p) => removedAt(p) == null)) return false;
+      return peers.every((p) => p == s || removedAt(p)! < at);
+    }
+
+    return [
+      for (final s in states)
+        if (kept(s)) s,
+    ];
+  }
 
   @override
   State<WebYourComputers> createState() => _WebYourComputersState();
@@ -72,7 +103,15 @@ class _WebYourComputersState extends State<WebYourComputers> {
 }
 
 /// Where a computer stands with this browser.
-enum ComputerLinkState { offline, linking, connecting, failed, ready, idle }
+enum ComputerLinkState {
+  removed,
+  offline,
+  linking,
+  connecting,
+  failed,
+  ready,
+  idle,
+}
 
 ComputerLinkState computerLinkState(
   AppNotifier app,
@@ -81,6 +120,12 @@ ComputerLinkState computerLinkState(
   bool trying = false,
 }) {
   final id = state.machine.machineId;
+  // Taken out of the account: it was signed out, and opening Harness on it
+  // will not bring it back — only signing in there again will.
+  if (app.removedMachines.containsKey(id) &&
+      state.connectionStatus != ConnectionStatus.connected) {
+    return ComputerLinkState.removed;
+  }
   if (state.nodeOnline == false) return ComputerLinkState.offline;
   if (app.pendingMachineLink(id) != null) return ComputerLinkState.linking;
   if (trying ||
@@ -111,6 +156,8 @@ class _ComputerRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final link = computerLinkState(app, state, failed: failed, trying: trying);
     final status = switch (link) {
+      ComputerLinkState.removed =>
+        'Removed from your account. Sign in to Harness on it to add it back.',
       ComputerLinkState.offline =>
         'Offline. Open Harness on it, or run harness start there.',
       ComputerLinkState.linking => machineLinkProgress(
@@ -135,7 +182,8 @@ class _ComputerRow extends StatelessWidget {
       child: Row(
         children: [
           Icon(
-            link == ComputerLinkState.offline
+            link == ComputerLinkState.offline ||
+                    link == ComputerLinkState.removed
                 ? AppIcons.monitorOff
                 : AppIcons.laptop,
             size: 18,

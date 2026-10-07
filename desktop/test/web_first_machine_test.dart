@@ -207,6 +207,53 @@ void main() {
     expect((app as _Watching).reads, 3, reason: 'stops with the page');
   });
 
+  void addComputer(String id, {bool online = false}) {
+    final machine = Machine(
+      machineId: id,
+      name: 'MacBookPro2021.local',
+      authMode: MachineAuthMode.remote,
+    );
+    app.machines.add(machine);
+    app.machineStates[id] = MachineState(machine)
+      ..nodeOnline = online
+      ..needsLink = online;
+  }
+
+  testWidgets('a computer taken out of the account says to sign in on it', (
+    tester,
+  ) async {
+    addComputer('mac');
+    app.removedMachines = {'mac': 23};
+    await mount(tester);
+
+    expect(find.textContaining('Removed from your account'), findsOneWidget);
+    expect(find.textContaining('Offline'), findsNothing);
+    expect(find.widgetWithText(FilledButton, 'Connect'), findsNothing);
+  });
+
+  testWidgets('a computer set up again shows once, as it is now', (
+    tester,
+  ) async {
+    addComputer('before');
+    addComputer('now', online: true);
+    app.removedMachines = {'before': 20};
+    await mount(tester);
+
+    expect(find.text('MacBookPro2021.local'), findsOneWidget);
+    expect(find.widgetWithText(FilledButton, 'Connect'), findsOneWidget);
+  });
+
+  test('of removed ones sharing a name, only the latest removal is kept', () {
+    addComputer('yesterday');
+    addComputer('today');
+    final listed = WebYourComputers.newestOfEachName(
+      app.machineStates.values.toList(),
+      {'yesterday': 20, 'today': 23},
+    );
+
+    expect([for (final s in listed) s.machine.machineId], ['today']);
+  });
+
   testWidgets('an offline computer says what to do on it', (tester) async {
     const machine = Machine(
       machineId: 'mac',

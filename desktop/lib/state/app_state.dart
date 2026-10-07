@@ -116,6 +116,7 @@ import '../notify/system_notifications.dart' as notify_system;
 import 'account_devices.dart';
 import '../viewer/device_log.dart' show DevLogHead;
 import '../viewer/device_log_sync.dart';
+import '../viewer/removed_machines.dart';
 import '../viewer/device_history.dart' show DeviceLogHistory;
 
 enum AppStatus {
@@ -4371,7 +4372,12 @@ class AppNotifier extends ChangeNotifier {
       if (_deviceLog case final log?) {
         // Which sign-in by hand this log's marks belong to is the log's own (minted at the start of
         // this boot by `beginSignIn`), never the profile's id — nothing to wait for.
-        unawaited(log.register().whenComplete(_syncPendingDevices));
+        unawaited(
+          log.register().whenComplete(() {
+            unawaited(_syncPendingDevices());
+            unawaited(_rereadRemovedMachines());
+          }),
+        );
       } else {
         // A desktop build: the daemon's own copy says which devices are still waiting to be seen.
         unawaited(_syncPendingDevices());
@@ -6597,6 +6603,7 @@ class AppNotifier extends ChangeNotifier {
     newDevices.clear();
     departedDevices.clear();
     deviceRemovals.clear();
+    removedMachines = const {};
     _queuedDeviceNotices.clear();
     deviceConflict = null;
     _dismissedConflict = null;
@@ -6642,10 +6649,30 @@ class AppNotifier extends ChangeNotifier {
       onChanged: () {
         devicesRevision++;
         unawaited(_syncPendingDevices());
+        unawaited(_rereadRemovedMachines());
         if (!_disposed) notifyListeners();
       },
     );
     services.links.deviceLog = log;
+  }
+
+  /// Viewer builds only: machines the account's device key log took out and gave no new key since,
+  /// by the seq of the removal (`viewer/removed_machines.dart`). The connect page says such a machine
+  /// was removed rather than offline — it is signed out, and opening Harness on it will not bring it
+  /// back.
+  Map<String, int> removedMachines = const {};
+
+  Future<void> _rereadRemovedMachines() async {
+    final keys = viewer?.keys;
+    if (keys == null) return;
+    try {
+      final next = removedMachinesOf(await keys.deviceLog());
+      if (_disposed || mapEquals(next, removedMachines)) return;
+      removedMachines = next;
+      notifyListeners();
+    } catch (_) {
+      // Unreadable now; the next change to the log reads it again.
+    }
   }
 
   /// What the device log announced while the app was not yet signed in (starting up): the log has
