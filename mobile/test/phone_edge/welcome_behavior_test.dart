@@ -172,9 +172,13 @@ void main() {
       final (:app, sent: _, scans: _) = await welcome(tester);
       await tester.tap(find.text('Not yet — set it up'));
       await frames(tester);
-      await tapInView(tester, find.text('Scan to connect ›'));
+      await tapInView(tester, find.text('Scan to connect'));
       await frames(tester);
       expect(find.text('Scan the code on your computer'), findsOneWidget);
+      // Back from the camera is the steps it was opened from, and back from those the question.
+      await tester.tap(find.bySemanticsLabel(RegExp('Back')).first);
+      await frames(tester);
+      expect(find.text('Get Harness for\nyour computer'), findsOneWidget);
       await tester.tap(find.bySemanticsLabel(RegExp('Back')).first);
       await frames(tester);
       expect(find.text('Yes — scan to connect'), findsOneWidget);
@@ -300,7 +304,7 @@ void main() {
         ),
       );
       await frames(tester);
-      expect(find.text('Apple Silicon'), findsOneWidget);
+      expect(find.text('Send it to your computer'), findsOneWidget);
       expect(find.text('Email me the setup link'), findsNothing);
       await tapInView(tester, find.text('Try the sample ›'));
       await frames(tester);
@@ -325,10 +329,13 @@ void main() {
       ),
     );
     await frames(tester);
-    await tester.tap(find.text('Apple Silicon'));
+    // The download menu is step 1's sheet.
+    await tester.tap(find.byKey(const ValueKey('set-up-send')));
+    await frames(tester);
+    await tester.tap(find.text('Apple Silicon · M1 or later'));
     await frames(tester);
     expect(platformCalls.where((call) => call.contains('share')), isNotEmpty);
-    await tester.tap(find.text('CLI'));
+    await tester.tap(find.text('Command line'));
     await tester.pump();
     expect(find.text('copied'), findsOneWidget);
     await tester.pump(const Duration(seconds: 3));
@@ -345,7 +352,11 @@ void main() {
       setPhone(tester, largePhone);
       final links = EdgeLinks()..error = refuse;
       final app = edgeApp(links: links, machineName: 'studio');
-      app.stateOf('m')!.needsLink = true;
+      // Locked, so not connected: a socket that is up has passed the machine's welcome, and a
+      // link leaves it alone (`_keepsOpenConnection`).
+      app.stateOf('m')!
+        ..needsLink = true
+        ..connectionStatus = ConnectionStatus.disconnected;
       final unlocked = <int>[];
       await tester.pumpWidget(
         phoneApp(

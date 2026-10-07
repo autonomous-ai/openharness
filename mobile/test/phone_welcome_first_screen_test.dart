@@ -103,7 +103,7 @@ void main() {
   });
 
   testWidgets(
-    'not yet: the website\'s download menu, each row sent to the computer',
+    'not yet: three steps, the website\'s download menu in step 1, each row sent to the computer',
     (tester) async {
       // A phone's height, so the whole page is on screen.
       tester.view.devicePixelRatio = 1;
@@ -113,9 +113,27 @@ void main() {
       await tester.tap(find.text('Not yet — set it up'));
       await tester.pump();
       expect(find.byType(SetUpComputerPage), findsOneWidget);
+      for (final line in [
+        'Install Harness on your computer.',
+        'Open it, and sign in with Google or Apple.',
+        'Open Add Phone… and scan its code.',
+        'Scan to connect',
+      ]) {
+        expect(find.text(line), findsOneWidget, reason: line);
+      }
+      expect(
+        find.textContaining('harness.autonomous.ai/desktop'),
+        findsOneWidget,
+      );
+
+      // Step 1's button opens the menu, row for row.
+      expect(find.text('macOS · Linux · Command line'), findsOneWidget);
+      expect(find.text('curl -fsSL …/install.sh | bash'), findsNothing);
+      await tester.tap(find.byKey(const ValueKey('set-up-send')));
+      await tester.pumpAndSettle();
       for (final row in [
-        'Apple Silicon',
-        'Intel',
+        'Apple Silicon · M1 or later',
+        'Intel · older Macs',
         'Intel/AMD · Ubuntu, Omarchy and more',
         'ARM · Raspberry Pi, ARM servers',
         'curl -fsSL …/install.sh | bash',
@@ -124,10 +142,7 @@ void main() {
       }
       expect(find.text('macOS'), findsNWidgets(2));
       expect(find.text('Linux'), findsNWidgets(2));
-      expect(
-        find.textContaining('harness.autonomous.ai/desktop'),
-        findsOneWidget,
-      );
+      expect(find.text('Command line'), findsOneWidget);
 
       // The CLI row copies the website's command, and says so.
       String? copied;
@@ -156,6 +171,11 @@ void main() {
       expect(find.text('copied'), findsOneWidget);
       await tester.pump(const Duration(seconds: 2));
       expect(find.text('copied'), findsNothing);
+
+      // A tap above the sheet puts it away, onto the steps.
+      await tester.tapAt(const Offset(215, 40));
+      await tester.pumpAndSettle();
+      expect(find.text('curl -fsSL …/install.sh | bash'), findsNothing);
 
       // Back is the first screen.
       await tester.tap(find.bySemanticsLabel('Back'));

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io' show Platform;
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -17,9 +18,11 @@ import 'connect_code.dart';
 /// Where Add Phone… is on the computer, for somebody who has never opened it. The Mac keeps it in
 /// the Harness menu; the desktop app's Linux menu strip has no row for it, so there it is the
 /// command palette's (`navigation.commands`, Ctrl+Shift+P, finds the "Add phone" command).
+///
+/// Under the step that names Add Phone… ([ScanToConnectPage.step]), so each line says only where.
 const kAddPhoneWhere =
-    'On a Mac: Harness menu ▸ Add Phone…\n'
-    'On Linux: Ctrl+Shift+P, then “add phone”';
+    'Mac: Harness menu ▸ Add Phone…\n'
+    'Linux: Ctrl+Shift+P, then “add phone”';
 
 /// **Yes — scan to connect**: the camera, reading the code the desktop app shows under
 /// Harness ▸ Add Phone… ([ConnectCode]). The scan signs the phone in; [signingIn] says so while it
@@ -27,15 +30,27 @@ const kAddPhoneWhere =
 ///
 /// ```
 /// ‹
-///   ┌──────────────────────┐
-///   │    [ camera view ]   │
-///   └──────────────────────┘
+/// ┌──────────────────────────────┐
+/// │        [ camera view ]       │
+/// └──────────────────────────────┘
 /// Scan the code on your computer
-/// On a Mac: Harness menu ▸ Add Phone…
-/// On Linux: Ctrl+Shift+P, then “add phone”
+/// 1  On your computer, sign in to Harness with Google or Apple.   ([firstStep])
+/// 2  Open Add Phone… and point this camera at its code.           ([step])
+///    Mac: Harness menu ▸ Add Phone…                               ([hint])
+///    Linux: Ctrl+Shift+P, then “add phone”
 ///
-///           Use email instead
+///         🔒 End-to-end encrypted, phone to computer.
+///                   Use email instead
 /// ```
+///
+/// With no [firstStep] the one step left goes unnumbered.
+///
+/// ⚠️ **Steps, not notes (owner, 2026-10-07).** Under the camera there were the hint, the line on
+/// encryption and "Computer asks you to sign in? Sign in there…", one after another in the same
+/// faint 13pt: nothing said which to read first, and the sign-in — which has to happen before the
+/// computer shows any code — read as a footnote. It is a step of its own now, ahead of the scan,
+/// and the camera stands at the top rather than centred in the room left, which had put every word
+/// at the foot of the screen under an empty band.
 ///
 /// The camera runs only while this page is up. A code that is not ours is ignored, so a stray QR
 /// in frame does nothing. A camera refused says where to turn it on, with a link to this app's
@@ -53,11 +68,12 @@ class ScanToConnectPage extends StatefulWidget {
     this.onSignInCode,
     this.acceptConnectCodes = true,
     this.title = 'Scan the code on your computer',
+    this.step = 'Open Add Phone… and point this camera at its code.',
     // Where it is on each, not "In Harness on your computer: Add Phone…": someone who has never
     // opened the desktop app does not know where Add Phone lives, and it is not in the same place
     // on a Mac and on Linux.
     this.hint = kAddPhoneWhere,
-    this.note,
+    this.firstStep,
   });
 
   final ValueChanged<ConnectCode> onCode;
@@ -65,15 +81,21 @@ class ScanToConnectPage extends StatefulWidget {
   /// A computer's sign-in QR ([SignInCode]) was read — offered only where the page takes one.
   final ValueChanged<SignInCode>? onSignInCode;
 
-  /// A line or two under the hint, in words that wrap: what to do when the computer cannot show the
-  /// code yet.
-  final String? note;
+  /// What has to be done on the computer before it shows the code — step 1, ahead of [step]. Null
+  /// for a phone already signed in, whose computer is on its account: the scan is the only step.
+  final String? firstStep;
 
   /// Whether an Add Phone QR ([ConnectCode]) is one this page takes.
   final bool acceptConnectCodes;
 
   final String title;
-  final String hint;
+
+  /// The scan's own step: what to open on the computer, and that the camera goes to its code.
+  final String step;
+
+  /// Under [step], quieter: where that is on the computer. Null says nothing more.
+  final String? hint;
+
   final VoidCallback onUseEmail;
   final VoidCallback onBack;
 
@@ -202,6 +224,8 @@ class _ScanToConnectPageState extends State<ScanToConnectPage>
   Widget build(BuildContext context) {
     AppTheme.watch(context);
     final tty = Tty.of(context);
+    final faint = tty.style(size: TtySize.meta, color: tty.faint);
+    final firstStep = widget.firstStep;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -209,96 +233,198 @@ class _ScanToConnectPageState extends State<ScanToConnectPage>
           alignment: Alignment.centerLeft,
           child: TtyBackButton(onPressed: widget.onBack),
         ),
-        const SizedBox(height: 12),
-        // As big a square as fits: the full width on a phone, less on a short screen.
         Expanded(
-          child: Center(
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: Tty.origin),
-              child: AspectRatio(
-                aspectRatio: 1,
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(14),
-                  child: ColoredBox(
-                    color: ttyRaised(tty),
-                    child:
-                        widget.camera ??
-                        MobileScanner(
-                          controller: _scanner,
-                          onDetect: _onDetect,
-                          errorBuilder: (context, error) => _CameraProblem(
-                            code: error.errorCode,
-                            onOpenSettings: () => unawaited(_openSettings()),
+          // ⚠️ **Scrolls when it does not fit.** The spacer holds the way out at the foot where
+          // there is room; on a small phone at a large text size the steps outgrow what the square
+          // leaves them, and the button under them — the way in without a camera — went off the
+          // screen's foot.
+          child: LayoutBuilder(
+            builder: (context, box) {
+              final width = math.max(0.0, box.maxWidth - 2 * Tty.origin);
+              // As big a square as fits: the full width on a phone, less on a short screen, so the
+              // steps under it stay on the first screen — but never too small to read a code in.
+              final side = box.hasBoundedHeight
+                  ? math.min(
+                      width,
+                      math.max(_minSquare, box.maxHeight * _squareShare),
+                    )
+                  : width;
+              return SingleChildScrollView(
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(
+                    minHeight: box.hasBoundedHeight ? box.maxHeight : 0,
+                  ),
+                  child: IntrinsicHeight(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        const SizedBox(height: 4),
+                        Center(
+                          child: SizedBox.square(
+                            dimension: side,
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.circular(14),
+                              child: ColoredBox(
+                                color: ttyRaised(tty),
+                                child:
+                                    widget.camera ??
+                                    MobileScanner(
+                                      controller: _scanner,
+                                      onDetect: _onDetect,
+                                      errorBuilder: (context, error) =>
+                                          _CameraProblem(
+                                            code: error.errorCode,
+                                            onOpenSettings: () =>
+                                                unawaited(_openSettings()),
+                                          ),
+                                    ),
+                              ),
+                            ),
                           ),
                         ),
+                        // Texts that wrap, not one-line TtyTexts: at a narrow phone's width the
+                        // title and the hint's second half were cut off at the screen's edge — the
+                        // half that says where to look.
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(
+                            Tty.origin,
+                            20,
+                            Tty.origin,
+                            0,
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              Text(
+                                widget.signingIn ? 'Signing in…' : widget.title,
+                                style: tty.style(
+                                  size: TtySize.title,
+                                  weight: FontWeight.w600,
+                                ),
+                              ),
+                              const SizedBox(height: 12),
+                              if (firstStep != null) ...[
+                                _ScanStep(
+                                  key: const ValueKey('scan-first-step'),
+                                  number: 1,
+                                  text: firstStep,
+                                ),
+                                const SizedBox(height: 12),
+                              ],
+                              _ScanStep(
+                                number: firstStep == null ? null : 2,
+                                text: widget.step,
+                                detail: widget.hint,
+                              ),
+                            ],
+                          ),
+                        ),
+                        const Spacer(),
+                        const SizedBox(height: 20),
+                        // The one line of trust on the way in: the scan hands a phone the run of a
+                        // computer, and the first-time reviewer's question was what stops anyone
+                        // else reading it. Centred over the way out, the two read as the page's
+                        // foot rather than as more steps.
+                        Center(
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: Tty.origin,
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Padding(
+                                  padding: const EdgeInsets.only(top: 2),
+                                  child: Icon(
+                                    LucideIcons.lock300,
+                                    size: 13,
+                                    color: tty.faint,
+                                  ),
+                                ),
+                                const SizedBox(width: 6),
+                                Flexible(
+                                  child: Text(
+                                    'End-to-end encrypted, phone to computer.',
+                                    textAlign: TextAlign.center,
+                                    style: faint,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Center(
+                          child: TtyTextButton(
+                            label: widget.fallbackLabel,
+                            color: tty.faint,
+                            onPressed: widget.onUseEmail,
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                      ],
+                    ),
                   ),
                 ),
-              ),
-            ),
+              );
+            },
           ),
         ),
-        const SizedBox(height: 24),
-        // Texts that wrap, not one-line TtyTexts: at a narrow phone's width the title and the
-        // hint's second half were cut off at the screen's edge — the half that says where to look.
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: Tty.origin),
-          child: Text(
-            widget.signingIn ? 'Signing in…' : widget.title,
-            style: tty.style(size: TtySize.title, weight: FontWeight.w600),
-          ),
-        ),
-        const SizedBox(height: 6),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: Tty.origin),
-          child: Text(
-            widget.hint,
-            key: const ValueKey('scan-hint'),
-            style: tty.style(size: TtySize.meta, color: tty.faint),
-          ),
-        ),
-        const SizedBox(height: 10),
-        // The one line of trust on the way in: the scan hands a phone the run of a computer, and
-        // the first-time reviewer's question was what stops anyone else reading it.
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: Tty.origin),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Padding(
-                padding: const EdgeInsets.only(top: 2),
-                child: Icon(LucideIcons.lock300, size: 13, color: tty.faint),
-              ),
-              const SizedBox(width: 6),
-              Expanded(
-                child: Text(
-                  'End-to-end encrypted, phone to computer.',
-                  style: tty.style(size: TtySize.meta, color: tty.faint),
-                ),
-              ),
-            ],
-          ),
-        ),
-        if (widget.note case final note?) ...[
-          const SizedBox(height: 12),
+      ],
+    );
+  }
+
+  /// The camera's square, at most this share of the room under the back button — the rest is the
+  /// steps' and the way out's.
+  static const _squareShare = 0.56;
+
+  /// …and never smaller than this, a short screen or not: below it a code across the room is hard
+  /// to hold in frame. The page scrolls instead.
+  static const double _minSquare = 220;
+}
+
+/// One step under the camera: its number in the terminal's green in a column of its own — none
+/// when it is the only step — the words beside it, and [detail] under them, quieter.
+class _ScanStep extends StatelessWidget {
+  const _ScanStep({super.key, required this.text, this.number, this.detail});
+
+  final int? number;
+  final String text;
+  final String? detail;
+
+  @override
+  Widget build(BuildContext context) {
+    final tty = Tty.of(context);
+    final style = tty.style(size: TtySize.row);
+    final words = Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(text, style: style),
+        if (detail case final detail?)
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: Tty.origin),
-            // Wraps, unlike the hint above it: a sentence of what to do, not a label.
+            padding: const EdgeInsets.only(top: 4),
             child: Text(
-              note,
-              key: const ValueKey('scan-note'),
+              detail,
+              key: const ValueKey('scan-hint'),
               style: tty.style(size: TtySize.meta, color: tty.faint),
             ),
           ),
-        ],
-        const SizedBox(height: 16),
-        Center(
-          child: TtyTextButton(
-            label: widget.fallbackLabel,
-            color: tty.faint,
-            onPressed: widget.onUseEmail,
-          ),
+      ],
+    );
+    final number = this.number;
+    if (number == null) return words;
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // One digit in a monospace face: every number is the same width, so the steps' words line
+        // up without a column of fixed width that a larger text size would outgrow.
+        Text(
+          '$number',
+          style: style.copyWith(color: tty.green, fontWeight: FontWeight.w600),
         ),
-        const SizedBox(height: 12),
+        const SizedBox(width: 12),
+        Expanded(child: words),
       ],
     );
   }
@@ -432,7 +558,8 @@ Future<SignInCode?> scanForSignIn(BuildContext context, {Widget? camera}) async 
           child: ScanToConnectPage(
             camera: camera,
             title: 'Scan the code on the computer',
-            hint: 'On the computer: Sign in ▸ Scan with your phone',
+            step: 'On the computer: Sign in ▸ Scan with your phone.',
+            hint: null,
             fallbackLabel: 'Not now',
             acceptConnectCodes: false,
             onCode: (_) {},

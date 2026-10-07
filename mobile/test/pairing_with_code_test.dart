@@ -93,7 +93,9 @@ void main() {
     final app = await pumpHome(tester, links);
 
     expect(find.byType(PairingWithCode), findsOneWidget);
-    expect(find.textContaining('MacBook Pro'), findsOneWidget);
+    // The computer by name, in the title and in what to keep open on it meanwhile.
+    expect(find.text('Connecting to\nMacBook Pro…'), findsOneWidget);
+    expect(find.text('Keep “Add Phone” open on MacBook Pro.'), findsOneWidget);
     links.gate.complete();
     await tester.pump();
     expect(links.codes.single.$1, 'mac');

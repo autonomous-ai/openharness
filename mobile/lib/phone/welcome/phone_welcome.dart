@@ -110,12 +110,13 @@ class _PhoneWelcomeState extends State<PhoneWelcome> {
   /// following on it — had to find their way back to them.
   _Step _scanFrom = _Step.hello;
 
-  /// Under the scan page's hint. A desktop app opens signed out (its guest mode), and its Add Phone
-  /// then shows no code, only "Sign in to add your phone." beside a Sign in… button. Google or
-  /// Apple by name: the sign-in's third way, "Scan with your phone", needs a phone already signed
-  /// in. Two lines at most — it shares the page with the camera.
+  /// The scan page's step 1, ahead of opening Add Phone… — a step, not a note under the hint: a
+  /// desktop app opens signed out (its guest mode), and its Add Phone then shows no code, only
+  /// "Sign in to add your phone." beside a Sign in… button. Google or Apple by name: the sign-in's
+  /// third way, "Scan with your phone", needs a phone already signed in. Two lines at most — it
+  /// shares the page with the camera.
   static const _signInThereFirst =
-      'Computer asks you to sign in? Sign in there with Google or Apple first.';
+      'On your computer, sign in to Harness with Google or Apple.';
 
   String? _error;
   int _resendIn = 0;
@@ -380,7 +381,7 @@ class _PhoneWelcomeState extends State<PhoneWelcome> {
                 widget.notifier.pendingComputerSignIn = code.code;
                 _go(_Step.signInFirst);
               },
-              note: _signInThereFirst,
+              firstStep: _signInThereFirst,
               signingIn: _signingInWithScan,
               onUseEmail: () => _go(_Step.email),
               onBack: () => _go(_backFrom(_Step.scan)),
@@ -855,14 +856,26 @@ class _OrDivider extends StatelessWidget {
   Widget build(BuildContext context) {
     final tty = Tty.of(context);
     final rule = Expanded(child: Container(height: 1, color: tty.dim));
+    // Its own width, and the rules give way around it — up to most of the screen's. ⚠️ Past that
+    // it wraps: one unbreakable line overflowed a small phone at the app's largest text size (2x)
+    // in a face whose letters run wider than SF Mono's. Capped by the screen, not a LayoutBuilder:
+    // the first screen is measured for its height (`IntrinsicHeight`), which a LayoutBuilder
+    // cannot answer.
     return Row(
       children: [
         rule,
-        // Its own width: at the app's largest text size (2x) it is still well inside a 375pt
-        // phone, and the rules give way around it.
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 10),
-          child: TtyText(label, color: tty.faint, size: TtySize.meta),
+        ConstrainedBox(
+          constraints: BoxConstraints(
+            maxWidth: MediaQuery.sizeOf(context).width * 0.7,
+          ),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 10),
+            child: Text(
+              label,
+              textAlign: TextAlign.center,
+              style: tty.style(color: tty.faint, size: TtySize.meta),
+            ),
+          ),
         ),
         rule,
       ],
