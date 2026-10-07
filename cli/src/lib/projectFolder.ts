@@ -4,6 +4,8 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { plausibleBranchName, projectFolderName, projectFolderSlug } from './agentNames.js'
 import { GitProjectError, prepareGitProject, validGitPath } from './gitProject.js'
+import { scmByKind } from '../scm/scmProjects.js'
+import type { ScmLaunchRecord } from '../scm/types.js'
 
 /** `name` on a new project is what the person called it; without one the folder is named after the
  *  harness and the time. `suggested` marks a name the app made up (from the first task — the phone has
@@ -95,18 +97,31 @@ export async function prepareProjectFolder(
     /** Who the harness is ("Codex", "Blender"): a new project folder is named after it and the time. */
     label?: string | null
     now?: () => Date
+    /** Told, before the folder is returned, what the SCM that made an isolated workspace needs on its
+     *  every relaunch (`scmLaunch` on the registry row). A new folder, a clone or the folder itself on a
+     *  branch reports nothing. A callback rather than a wider return so the folder stays the answer
+     *  here, for every caller. */
+    onPrepared?: (prepared: { cwd: string; scmLaunchRecord: ScmLaunchRecord }) => void
   } = {},
 ): Promise<string> {
   const root = options.root ?? projectsRoot()
   let staging: string | undefined
   try {
-    if (project.source === 'worktree' || project.source === 'branch') {
+    if (project.source === 'worktree') {
+      // The isolated-workspace path, through the SCM seam. The git implementation makes exactly the
+      // prepareGitProject call this used to make.
+      const { cwd, launchRecord } = await scmByKind('git')!.prepareIsolated(project.gitSource, {
+        root, base: project.branchRef,
+        ...(project.branchName ? { name: project.branchName, existing: project.existingBranch === true, placeholder: project.placeholder === true } : {}),
+      })
+      options.onPrepared?.({ cwd, scmLaunchRecord: launchRecord })
+      return cwd
+    }
+    if (project.source === 'branch') {
+      // The folder itself, on a branch: git's own in-place mode, not an isolated workspace.
       return await prepareGitProject(project.gitSource, {
-        root, worktree: project.source === 'worktree', ref: project.branchRef,
-        ...(project.source === 'worktree' && project.branchName ? {
-          branchName: project.branchName, existingBranch: project.existingBranch === true, placeholder: project.placeholder === true,
-        } : {}),
-        ...(project.source === 'branch' && project.branchName ? { branchName: project.branchName } : {}),
+        root, worktree: false, ref: project.branchRef,
+        ...(project.branchName ? { branchName: project.branchName } : {}),
       })
     }
     await mkdir(root, { recursive: true })

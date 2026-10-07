@@ -19,7 +19,9 @@ import type { ActivityFrame } from './turnActivity.js'
  * makes the shape testable without a registry, which is the whole reason the drift went unnoticed.
  */
 
-import { agentProject, type AgentProject } from './agentProject.js'
+import { agentProject } from './agentProject.js'
+import { describeScmProject } from '../scm/scmProjects.js'
+import type { ScmDescription } from '../scm/types.js'
 import { sessionGitContext, SessionGitContextReader, type SessionGitContext } from './sessionGitContext.js'
 import { sessionGitHistory } from './sessionGitHistory.js'
 import { transcriptActivityAt } from './transcriptActivity.js'
@@ -83,7 +85,9 @@ export type AgentFrame = {
   selectedModel: string | null
   grid: GridFrameBlock | null
   codexHome: string | null
-  project: AgentProject | null
+  /** The workspace as its SCM describes it, with `kind` (`git`, or `none` for a folder no SCM claims);
+   *  every other field is exactly what `agentProject` reports (scm/types.ts). */
+  project: ScmDescription | null
   /** Additive display context; project/cwd remain the registered launch workspace. */
   gitContext: SessionGitContext
   /** The domain-specific harness this agent was created as, or null for a plain engine. */
@@ -190,6 +194,9 @@ export async function agentFrame(
   s: RegisteredSession,
   { selectedModel, terminalAvailable, dsh, tokenUsage, activity: contextActivity, gridAnnotation }: AgentFrameContext,
 ): Promise<AgentFrame> {
+  // The git context is git's own display projection and keeps reading git directly; the frame's
+  // `project` goes through the SCM seam. Both resolve through agentProject's shared reader, so the
+  // seam adds no Git process.
   const home = agentProject(s.cwd)
   const context = gitContexts.read(JSON.stringify([s.agentId, s.sessionId, s.engine, s.codexHome, s.registeredAt]), async () => {
     const saved = await sessionGitHistory.get(s)
@@ -197,7 +204,7 @@ export async function agentFrame(
     value.history = await sessionGitHistory.observe(s, value)
     return value
   })
-  const [project, updatedAt, gitContext] = await Promise.all([home, lastActivityAt(s), context])
+  const [project, updatedAt, gitContext] = await Promise.all([describeScmProject(s.cwd), lastActivityAt(s), context])
   return {
     id: s.agentId,
     sessionId: s.sessionId,
