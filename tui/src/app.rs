@@ -547,6 +547,8 @@ pub struct App {
     /// Sessions' latest turns (session_tail), by session id: read once each time C-b s opens.
     pub tails: HashMap<String, Value>,
     pub tails_asked: HashSet<String>,
+    /// Auto rename's names and its one ask at a time (`autoname.rs`).
+    pub autoname: crate::autoname::Namer,
     pub desk_mode: DeskMode,
     /// The daemon on this computer is signed in (its `/api/status`): with DeskMode::Account, the
     /// desk is in front, with this computer's windows joined to it.
@@ -1029,6 +1031,7 @@ impl App {
             said: Vec::new(),
             tails: HashMap::new(),
             tails_asked: HashSet::new(),
+            autoname: Default::default(),
             desk_mode,
             signed_in: false,
             desk_revision: -1,
@@ -1509,9 +1512,12 @@ impl App {
         match ty {
             "agent_synced" | "agent_created" | "agent_renamed" => {
                 let row = payload.get("agent").cloned().unwrap_or(payload.clone());
-                let Some(id) = row.get("id").and_then(Value::as_str).map(str::to_string) else { return };
+                // (The daemon's `agent_renamed` is `{agentId, name, engine}`: a name, not a row.)
+                let Some(id) = row.get("id").or_else(|| row.get("agentId")).and_then(Value::as_str).map(str::to_string) else { return };
                 let key = (machine_id.to_string(), id);
-                if ty == "agent_renamed" && row.get("engine").is_none() {
+                if ty == "agent_renamed" && payload.get("agent").is_none() {
+                    // Its name only (a rename, or its engine's new title: `projectDisplayName`) —
+                    // never an agent rebuilt from a partial row.
                     if let (Some(agent), Some(name)) = (self.fleet.agents.get_mut(&key), row.get("name").and_then(Value::as_str)) { agent.name = name.to_string() }
                 } else {
                     let previous = self.fleet.agents.get(&key);
@@ -4643,8 +4649,12 @@ impl App {
     pub fn sync_titles(&mut self) {
         // Harness OS signed in: a desk tab is called what the desktop app calls it.
         let desk_names = if self.desk_mode == DeskMode::Account && self.session_desk { self.desk_tab_names() } else { HashMap::new() };
+        let auto_rename = self.options.auto_rename();
         for index in 0..self.tabs.len() {
             if self.tabs[index].named || self.tabs[index].home { continue }
+            // Auto rename: a window with a repo, for the repo and its work (autoname.rs); until its
+            // name comes, and without a repo, as before.
+            if auto_rename { if let Some(name) = self.auto_name(index) { self.tabs[index].name = name; continue } }
             if let Some(name) = desk_names.get(&self.tabs[index].id) { self.tabs[index].name = name.clone(); continue }
             // tmux's automatic-rename (unless it is off): an unnamed window is called after its
             // active pane — a shell by what runs in it (automatic-rename-format: `zsh`, `vim`,
@@ -5135,8 +5145,19 @@ impl App {
 
     pub fn rename_tab(&mut self, name: &str) { let i = self.active; self.rename_tab_at(i, name) }
 
-    /// rename-window -t: that window.
+    /// rename-window -t: that window. An empty name gives the window back to automatic naming:
+    /// it is called what it would be had nobody named it.
     pub fn rename_tab_at(&mut self, index: usize, name: &str) {
+        if name.trim().is_empty() {
+            let Some(tab) = self.tabs.get_mut(index) else { return };
+            tab.named = false;
+            tab.first_named = false;
+            let (id, on_desk) = (tab.id.clone(), tab.on_desk);
+            if let Some(options) = self.options.windows.get_mut(&id) { options.remove("automatic-rename"); }
+            self.sync_titles();
+            if on_desk { let name = self.tabs[index].name.clone(); self.desk_op(json!({ "op": "tab.rename", "id": id, "name": name, "nameIsCustom": false })) }
+            return;
+        }
         let Some(tab) = self.tabs.get_mut(index) else { return };
         tab.name = name.to_string();
         tab.named = true;
@@ -5484,6 +5505,7 @@ impl App {
             }
             "border_style" => ("@hn-border", format!("border style: {value}")),
             "dim" => ("@hn-dim", format!("dim other panes: {value}")),
+            "auto_rename" => ("@hn-auto-rename", format!("auto rename: {value}")),
             // ── status bar tabs ──
             // The two tab options decide the window-status-* format and current-tab style; set the
             // remembered choice now, then reconcile those derived options the way `[look]` would
@@ -5509,8 +5531,8 @@ impl App {
 
     /// Recompute the status bar's `window-status-*` overrides from `@hn-window-name` and
     /// `@hn-window-active` (which together decide them), the same pair `[look]` emits at boot.
-    fn sync_window_status(&mut self) {
-        let name = self.options.get("@hn-window-name", "", None).unwrap_or_else(|| "tmux".into());
+    pub(crate) fn sync_window_status(&mut self) {
+        let name = self.options.get("@hn-window-name", "", None).unwrap_or_else(|| crate::options::DEFAULT_TAB_NAME.into());
         let active = self.options.get("@hn-window-active", "", None).unwrap_or_else(|| "star".into());
         let overrides = crate::options::window_status_overrides(&name, &active);
         let global = crate::options::SetFlags { global: true, ..Default::default() };
@@ -5525,6 +5547,17 @@ impl App {
                 let _ = self.options.set(opt, None, &unset, "", 0);
             }
         }
+    }
+
+    /// The status bar's `window-status-*` formats derived again by this build, when they are hn's own
+    /// (`status_window_format`'s, whatever build derived them) and not as this build derives them —
+    /// never a format somebody wrote. Whether they changed.
+    pub fn rederive_window_status(&mut self) -> bool {
+        let names = ["window-status-format", "window-status-current-format"];
+        let now: Vec<Option<String>> = names.iter().map(|n| self.options.get(n, "", None)).collect();
+        if !now.iter().flatten().all(|v| crate::options::derived_window_status(v)) { return false }
+        self.sync_window_status();
+        names.iter().map(|n| self.options.get(n, "", None)).collect::<Vec<_>>() != now
     }
 
     /// Write the current look (as the options hold it) to tui.toml's `[look]`, best-effort.
@@ -5545,6 +5578,7 @@ impl App {
         look.dim = self.options.get("@hn-dim", "", None);
         look.window_active = self.options.get("@hn-window-active", "", None);
         look.window_name = self.options.get("@hn-window-name", "", None);
+        look.auto_rename = self.options.get("@hn-auto-rename", "", None);
         if let Err(e) = crate::config::write_look(&look) { self.say(format!("could not write tui.toml: {e}"), crate::theme::DANGER) }
     }
 
@@ -5732,6 +5766,12 @@ impl App {
             let layout_doc = row.get("layout").cloned().unwrap_or(json!({}));
             match self.tabs.iter().position(|t| t.id == id) {
                 Some(index) => {
+                    // A name given elsewhere and cleared there (an empty rename): automatic naming is
+                    // back here too — as `rename_tab_at` leaves it — or the old name would stay.
+                    if !named && self.tabs[index].named {
+                        self.tabs[index].first_named = false;
+                        if let Some(options) = self.options.windows.get_mut(&id) { options.remove("automatic-rename"); }
+                    }
                     let tab = &mut self.tabs[index];
                     // A name given (rename-window) is every terminal's; one automatic-rename gave
                     // stays as automatic-rename gives it here, from what the window runs.
@@ -6683,6 +6723,49 @@ mod recovery_tests {
         assert_eq!(app.tabs[0].name, "discussion");
     }
 
+    /// The daemon's `agent_renamed` as it really is (`cli/src/core/agents/events.ts`: `{agentId,
+    /// name, engine}`): the harness is called that at once, and the rest known about it stays.
+    #[tokio::test]
+    async fn a_real_agent_renamed_renames_the_harness_and_keeps_the_rest() {
+        let mut app = fixture();
+        app.fleet.merge_roster("test-peer", &[json!({"id": "agent-1", "name": "Claude harness 10-7 14:04", "engine": "claude", "project": {"name": "webapp", "branch": "main"}})]);
+        app.on_frame("test-peer", "agent_renamed", json!({"agentId": "agent-1", "name": "Deploy checklist", "engine": "claude"}));
+        let agent = app.fleet.agent("test-peer", "agent-1").unwrap();
+        assert_eq!((agent.name.as_str(), agent.engine.as_str(), agent.project.as_str(), agent.branch.as_str()), ("Deploy checklist", "claude", "webapp", "main"));
+    }
+
+    /// `set -g @hn-window-name …` by hand (or from a config file) changes the tab as Appearance does.
+    #[tokio::test]
+    async fn setting_the_tab_name_source_by_hand_changes_the_tab_at_once() {
+        let mut app = fixture();
+        let format = |app: &App| app.options.get("window-status-format", "", None).unwrap_or_default();
+        crate::commands::execute(&mut app, "set -g @hn-window-name pane");
+        assert!(format(&app).contains("#{pane_title}"), "{}", format(&app));
+        crate::commands::execute(&mut app, "set -g @hn-window-name tmux");
+        assert!(format(&app).contains("#{window_short_name}") && !format(&app).contains("#{pane_title}"), "{}", format(&app));
+    }
+
+    /// Renaming a window to nothing gives it back to automatic naming; a name stays its own.
+    #[tokio::test]
+    async fn an_empty_rename_gives_the_window_back_to_automatic_naming() {
+        let mut app = fixture();
+        app.fleet.merge_roster("test-peer", &[json!({"id": "agent-1", "name": "Fix flaky login test", "engine": "claude", "project": {"name": "webapp"}})]);
+        let mut tab = Tab::with_wid("w", 1);
+        tab.root = Some(Node::new(1, 80, 23));
+        tab.focus = Some(1);
+        app.tabs = vec![tab];
+        app.active = 0;
+        app.rename_tab_at(0, "release");
+        app.sync_titles();
+        assert!(app.tabs[0].named && app.tabs[0].name == "release", "a name you set is never overwritten");
+        let id = app.tabs[0].id.clone();
+        assert_eq!(app.options.windows.get(&id).and_then(|o| o.get("automatic-rename")).map(String::as_str), Some("off"));
+        app.rename_tab_at(0, "  ");
+        assert!(!app.tabs[0].named);
+        assert_eq!(app.tabs[0].name, "Fix flaky login test");
+        assert!(app.options.windows.get(&id).is_none_or(|o| !o.contains_key("automatic-rename")), "tmux's automatic-rename is back on");
+    }
+
     #[tokio::test]
     async fn the_os_joins_its_windows_to_the_account_and_keeps_its_own_harnesses_after() {
         let mut app = fixture();
@@ -6991,6 +7074,27 @@ mod desk_layout_tests {
         update["tabs"][0]["panes"].as_array_mut().unwrap().rotate_right(1);
         app.apply_desk(&update);
         assert_eq!(desk_pane_ids(app.tabs[0].root.as_ref().unwrap()), vec![3, 2, 1]);
+    }
+
+    /// A name given on the desktop is every terminal's; cleared there (an empty rename), the window
+    /// is named automatically here again — not left with the old name.
+    #[test]
+    fn a_name_cleared_on_the_desk_is_automatic_here_again() {
+        let mut app = fixture();
+        app.fleet.merge_roster("layout-peer", &[json!({"id": "agent-1", "name": "Task 1", "engine": "claude", "project": {"name": "webapp"}})]);
+        app.tabs[0].focus = Some(1);
+        let mut named = desk(2, app.tabs[0].layout.clone());
+        named["tabs"][0]["name"] = json!("release");
+        named["tabs"][0]["nameIsCustom"] = json!(true);
+        app.apply_desk(&named);
+        app.sync_titles();
+        assert!(app.tabs[0].named && app.tabs[0].name == "release");
+        let mut cleared = desk(3, app.tabs[0].layout.clone());
+        cleared["tabs"][0]["name"] = json!("New Swarm");
+        app.apply_desk(&cleared);
+        app.sync_titles();
+        assert!(!app.tabs[0].named);
+        assert_eq!(app.tabs[0].name, "Task 1");
     }
 
     #[test]
