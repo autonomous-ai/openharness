@@ -75,6 +75,8 @@ import { Watcher } from '../watcher/watcher.js'
 import { startHookServer } from '../hookServer.js'
 import { connectToMaster } from '../harnessd/coreLink.js'
 import { createTerminalOpener } from './terminals/open.js'
+import { createTerminalSessions } from './terminals/sessions.js'
+import { checkPidRuntime } from '../lib/deleteAgentFallback.js'
 import { SHELL_REQUESTS, startShell } from '../services/shell.js'
 import { createTerminalControl } from './terminals/control.js'
 import { createTerminalRequests } from './terminals/requests.js'
@@ -127,7 +129,7 @@ import { createMonitorLink } from './monitorLink.js'
 import { createStoreLink } from './storeLink.js'
 import { createModelsLink } from './modelsLink.js'
 import { createRecapsLink } from './recapsLink.js'
-import { RECAPS_FALLBACKS } from './api.js'
+import { RECAPS_FALLBACKS, TERMINALS_OFF } from './api.js'
 import { answerAgentQuery } from './agentQueries.js'
 import { createDeliveries } from './deliveries.js'
 import { createTerminalWatch } from './terminalWatch.js'
@@ -606,7 +608,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   })
   const coreApi = createCoreApi({
     // Agents' terminals: a literal-argv launch, and a read-only view for Share's observers (core/terminalWatch.ts).
-    terminals: { ...createTerminalOpener({ tmuxBackend, registry, announceSession, blocksFolder: (cwd) => !!backendRef?.purgeAgentService?.blocksFolder(cwd) }), watch: terminalWatch.watch },
+    terminals: { ...TERMINALS_OFF, ...createTerminalOpener({ tmuxBackend, registry, announceSession, blocksFolder: (cwd) => !!backendRef?.purgeAgentService?.blocksFolder(cwd) }), watch: terminalWatch.watch },
     dataDir: env.ADAPTER_DATA_DIR,
     registry,
     stoppedAgents,
@@ -777,6 +779,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // The relay and its E2EE (gateway/): the backend link, the sessions and the keys, which every remote
   // client's frames go through, held at the same gate. In its own process by default (core/gatewayLink.ts),
   // or here (gateway/start.ts); the socket hears it through `fromGateway` and speaks to it in the clear.
+  Object.assign(coreApi.terminals, createTerminalSessions({ agents: coreApi.agents, paneState: tmuxPaneState, processState: checkPidRuntime }))
   const account = (s = readAuthSession()): GatewayAccount => ({ machineId: s?.machineId ?? null, signIn: signInOf(s?.signInEpoch, s?.signInAcct), autonomousEnv: s?.autonomousEnv ?? env.AUTONOMOUS_ENV })
   let serviceLinksRef: ServiceLinks | null = null
   const gatewayLink = outOfProcess.has('gateway') ? createGatewayLink({

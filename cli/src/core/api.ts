@@ -66,11 +66,17 @@ export interface TerminalWatch {
 }
 export interface TerminalsPort {
   open(request: TerminalOpen): Promise<TerminalOpenResult>
+  /** Fresh registry facts for a shell launch receipt, never a service's cached agent snapshot. */
+  describe(agentId: string): Promise<Record<string, unknown> | null>
+  /** The exact launched engine has exited, with no newer binding replacing the evidence. */
+  visitStatus(agentId: string): Promise<{ exited: boolean }>
   watch: TerminalWatch
 }
 /** A service without the core's launch call must refuse, never launch outside the core; it watches nothing. */
 export const TERMINALS_OFF: TerminalsPort = {
   open: async () => ({ ok: false, error: 'SERVICE_UNAVAILABLE' }),
+  describe: async () => null,
+  visitStatus: async () => ({ exited: false }),
   watch: { frame: async () => {}, close: async () => {}, onOutput: () => () => {} },
 }
 
