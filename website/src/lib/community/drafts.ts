@@ -10,7 +10,7 @@ export function validateDraft(value: unknown): HubDraft {
     if (draft[key] !== undefined && typeof draft[key] !== 'string') throw new Error('Invalid draft metadata.');
   }
   if (draft.version !== 1 || !Array.isArray(draft.files) || draft.files.length > 30 || !draft.files.every(file => typeof file.path === 'string' && typeof file.content === 'string' && file.content.length <= 3_000_000 && (!file.encoding || file.encoding === 'base64')) || !Array.isArray(draft.conversation) || draft.conversation.length > 80 || !draft.conversation.every(turn => ['user', 'assistant', 'tool'].includes(turn.role) && typeof turn.text === 'string' && turn.text.length <= 12000)) throw new Error('Choose the OPEN-HARNESS.json from your harness.');
-  if (typeof draft.viewerPath !== 'string' || !draft.files.some(file => file.path === draft.viewerPath && !file.encoding && file.path.endsWith('.html'))) throw new Error('Include a self-contained HTML preview of your output.');
+  if (draft.viewerPath !== undefined && !draft.files.some(file => file.path === draft.viewerPath && !file.encoding && file.path.endsWith('.html'))) throw new Error('The chosen output preview is not one of the project files.');
   return draft;
 }
 

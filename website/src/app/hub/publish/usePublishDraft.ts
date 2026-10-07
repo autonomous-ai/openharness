@@ -6,7 +6,7 @@ import type { HarnessSnapshot } from '@/lib/community/types';
 
 export type PublishDraft = Omit<HarnessSnapshot, 'harnessName' | 'credits'> & { contextNote: string };
 
-const fresh: PublishDraft = { title: '', description: '', category: 'Apps', engine: 'Codex', files: [], viewerPath: 'index.html', conversation: [{ role: 'user', text: '' }], contextNote: '' };
+const fresh: PublishDraft = { title: '', description: '', category: 'Apps', engine: 'Codex', files: [], conversation: [{ role: 'user', text: '' }], contextNote: '' };
 
 /** A handed-off or imported bundle, kept within what the form can show and the Hub accepts. */
 function fromBundle(bundle: HubDraft): PublishDraft {
@@ -14,7 +14,7 @@ function fromBundle(bundle: HubDraft): PublishDraft {
     title: String(bundle.title || '').slice(0, 100), description: String(bundle.description || '').slice(0, 300),
     category: communityCategories.includes(bundle.category || '') ? bundle.category! : 'Apps',
     engine: communityEngines.includes(bundle.engine || '') ? bundle.engine! : 'Codex',
-    harnessId: bundle.harnessId, files: bundle.files || [], viewerPath: bundle.viewerPath || 'index.html',
+    harnessId: bundle.harnessId, files: bundle.files || [], viewerPath: bundle.viewerPath,
     conversation: bundle.conversation?.length ? bundle.conversation : fresh.conversation,
     forkedFrom: bundle.forkedFrom, cover: bundle.cover, contextNote: bundle.contextNote || '',
   };
@@ -23,7 +23,7 @@ function fromBundle(bundle: HubDraft): PublishDraft {
 /** What the Hub stores: the draft without the note that was only for the person reviewing it. */
 export function toSnapshot(draft: PublishDraft): HarnessSnapshot {
   const { title, description, category, engine, harnessId, files, viewerPath, conversation, cover, forkedFrom } = draft;
-  return { title, description, category, engine, ...(harnessId ? { harnessId } : {}), files, viewerPath, conversation, ...(cover ? { cover } : {}), ...(forkedFrom ? { forkedFrom } : {}) };
+  return { title, description, category, engine, ...(harnessId ? { harnessId } : {}), files, ...(viewerPath ? { viewerPath } : {}), conversation, ...(cover ? { cover } : {}), ...(forkedFrom ? { forkedFrom } : {}) };
 }
 
 /**

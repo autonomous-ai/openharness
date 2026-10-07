@@ -2,7 +2,6 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import { ArrowLeft, GitFork, Heart, MessageCircle, X } from 'lucide-react';
-import { previewDocument } from '@/lib/community/preview';
 import type { OpenHarness } from '@/lib/community/types';
 import { Comments } from './Comments';
 import { ForkButton } from './ForkButton';
@@ -10,15 +9,8 @@ import { HarnessTags } from './HarnessTags';
 import { Header } from './Header';
 import { Transcript } from './Transcript';
 import { useHarnessDetail } from './useHarnessDetail';
+import { Viewer } from './Viewer';
 import styles from '../community.module.css';
-
-/** The output beside its source conversation, or a starter's recorded run. */
-function Viewer({ harness }: { harness: OpenHarness }) {
-  const html = harness.files.find(file => file.path === harness.viewerPath)?.content || '';
-  return <section className={styles.viewer} aria-label="Output viewer">{harness.recording
-    ? <video className={styles.recording} controls playsInline preload="metadata" poster={harness.cover} aria-label={`${harness.title} recorded run`} src={harness.recording} />
-    : <iframe title={`${harness.title} output`} srcDoc={previewDocument(html)} sandbox={harness.example ? 'allow-scripts allow-downloads allow-modals' : 'allow-scripts'} referrerPolicy="no-referrer" />}</section>;
-}
 
 export default function Detail({ id, initial, initialComments = false }: { id: string; initial: OpenHarness | null; initialComments?: boolean }) {
   const [comments, setComments] = useState(initialComments);

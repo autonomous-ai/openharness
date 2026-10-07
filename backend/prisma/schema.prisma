@@ -18,7 +18,7 @@ model CommunityHarness {
   category      String
   engine        String
   harnessId     String?
-  viewerPath    String
+  viewerPath    String?
   files         Json
   conversation  Json
   cover         String?

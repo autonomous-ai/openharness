@@ -237,6 +237,49 @@ void main() {
       throwsFormatException,
     );
   });
+  test('a session with nothing to look at forks without a viewer', () async {
+    final review = snapshot()
+      ..remove('viewerPath')
+      ..['files'] = [
+        {'path': 'src/app.ts', 'content': 'export {}'},
+      ];
+    expect(ForkProjectImporter.validate(review, link).keys, ['src/app.ts']);
+    for (final viewer in ['src/app.ts', 'missing.html', 3]) {
+      expect(
+        () => ForkProjectImporter.validate({
+          ...review,
+          'viewerPath': viewer,
+        }, link),
+        throwsFormatException,
+        reason: '$viewer',
+      );
+    }
+    final root = await Directory.systemTemp.createTemp('community-fork-review');
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    server.listen((request) async {
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({'version': 1, 'harness': review}));
+      await request.response.close();
+    });
+    try {
+      final project = await ForkProjectImporter(
+        root: Directory('${root.path}/metadata'),
+        projectsRoot: Directory('${root.path}/harnesses'),
+        origin: 'http://127.0.0.1:${server.port}',
+      ).prepare(link);
+      final manifest = jsonDecode(
+        await File('${project.package}/harness.json').readAsString(),
+      );
+      expect(manifest, isNot(contains('viewer')));
+      expect(
+        await File('${project.folder}/src/app.ts').readAsString(),
+        'export {}',
+      );
+    } finally {
+      await server.close(force: true);
+      await root.delete(recursive: true);
+    }
+  });
   test('native binary artifacts survive transport', () {
     final data = snapshot();
     (data['files'] as List).add({

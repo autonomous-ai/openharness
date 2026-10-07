@@ -107,6 +107,18 @@ describe('community navigation', () => {
     expect(request.mock.calls.map(call => call[0])).toEqual(['harnesses/starter-orbit/social', 'harnesses/starter-orbit']);
     expect(screen.queryByText('This harness is unavailable.')).not.toBeInTheDocument();
   });
+  it('shows the cover, or else the files, when a session made nothing to look at', async () => {
+    request.mockResolvedValue({ social: emptySocial });
+    const review = { ...sample, example: false, viewerPath: undefined, files: [{ path: 'src/app.ts', content: 'export const reviewed = true' }] };
+    const { unmount } = render(<Detail id={sample.id} initial={{ ...review, cover: '/cover.png' }} />);
+    expect(screen.getByRole('img', { name: 'Orbit cover' })).toHaveAttribute('src', '/cover.png');
+    expect(screen.queryByTitle('Orbit output')).not.toBeInTheDocument();
+    unmount();
+    render(<Detail id={sample.id} initial={review} />);
+    expect(screen.getByText('src/app.ts')).toBeInTheDocument();
+    expect(screen.getByText('export const reviewed = true')).toBeInTheDocument();
+    await waitFor(() => expect(request).toHaveBeenCalled());
+  });
   it('does not pretend a signed-out like succeeded', async () => {
     request.mockResolvedValue({ harness: null, social: emptySocial });
     render(<Detail id={sample.id} initial={sample} />);

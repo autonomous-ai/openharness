@@ -235,11 +235,12 @@ class ForkProjectImporter {
           'author': snapshot['authorName'],
           'engine': engine,
           'agent': {'instructions': 'AGENTS.md'},
-          'viewer': {
-            'use': 'autonomous/web-viewer',
-            'url':
-                'http://127.0.0.1:\${port}/?file=${Uri.encodeComponent(snapshot['viewerPath'] as String)}',
-          },
+          if (snapshot['viewerPath'] is String)
+            'viewer': {
+              'use': 'autonomous/web-viewer',
+              'url':
+                  'http://127.0.0.1:\${port}/?file=${Uri.encodeComponent(snapshot['viewerPath'] as String)}',
+            },
         }),
       );
       final saved = {
@@ -462,16 +463,11 @@ class ForkProjectImporter {
       }
       final path = file['path'] as String;
       final parts = path.split('/');
-      if (!RegExp(r'^[a-zA-Z0-9][a-zA-Z0-9._/-]{0,179}$').hasMatch(path) ||
+      if (!hubPathPattern.hasMatch(path) ||
           parts.any(
             (s) => s.isEmpty || s == '.' || s == '..' || s.startsWith('.'),
           ) ||
-          parts.any(
-            (s) => RegExp(
-              r'^(harness\.json|agents\.md|claude\.md|session\.md|open-harness\.json|license|readme\.md|con|prn|aux|nul|com[1-9]|lpt[1-9])$',
-              caseSensitive: false,
-            ).hasMatch(s),
-          ) ||
+          parts.any(hubReservedName.hasMatch) ||
           !keys.add(path.toLowerCase())) {
         invalid();
       }
@@ -484,22 +480,15 @@ class ForkProjectImporter {
     for (final key in keys) {
       if (keys.any((other) => other.startsWith('$key/'))) invalid();
     }
-    if (data['viewerPath'] is! String ||
-        !(data['viewerPath'] as String).endsWith('.html') ||
-        !files.containsKey(data['viewerPath'])) {
+    // A session that made nothing to look at publishes no viewer; one it names must be a page here.
+    final viewer = data['viewerPath'];
+    if (viewer != null &&
+        (viewer is! String ||
+            !viewer.endsWith('.html') ||
+            !files.containsKey(viewer))) {
       invalid();
     }
-    final marker = {
-      'autonomous/blender': 'scenes/hello.py',
-      'autonomous/marp': 'deck.md',
-      'autonomous/typst': 'main.typ',
-      'autonomous/circuitjs': 'circuit.txt',
-      'autonomous/godogen': 'studio.json',
-      'autonomous/jev-sheets': 'sheet.json',
-      'autonomous/mujoco': 'sim/hello.py',
-      'autonomous/rdkit': 'molecules/hello.py',
-      'autonomous/strudel': 'track.strudel',
-    }[data['harnessId']];
+    final marker = hubHarnessMarkers[data['harnessId']];
     if (marker != null && !files.containsKey(marker)) invalid();
     final conversation = data['conversation'];
     if (conversation is! List ||

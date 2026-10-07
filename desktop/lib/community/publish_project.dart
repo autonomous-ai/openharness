@@ -34,7 +34,7 @@ Future<Map<String, dynamic>> buildPublicationDraft({
     'engine': ?agent,
     if (hasMarker) 'harnessId': harnessId,
     'files': selection.files,
-    'viewerPath': selection.viewerPath,
+    'viewerPath': ?selection.viewerPath,
     'conversation': conversation.isEmpty
         ? [
             {'role': 'user', 'text': ''},
@@ -43,6 +43,7 @@ Future<Map<String, dynamic>> buildPublicationDraft({
     if (previous['forkedFrom'] is String) 'forkedFrom': previous['forkedFrom'],
     'contextNote': [
       _conversationNote(conversation, tail),
+      if (selection.viewerPath == null) 'No preview.html, so readers see your cover, or else the files. Choose an output preview here if one of the pages runs on its own.',
       if (selection.leftOut.isNotEmpty) _leftOutNote(selection.leftOut),
       if (!selection.scannedAll)
         'This folder is larger than one harness, so only part of it was read.',
