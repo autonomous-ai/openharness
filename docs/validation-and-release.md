@@ -178,7 +178,10 @@ Native TUI CI tests and builds the shipped musl target in the same Cargo output
 directory. Dependency caches are keyed by target, Rust toolchain, and Cargo inputs;
 cache hits still run every test. The native TUI fixtures run two at a time,
 using their own homes, socket names, and mock ports. CI retains each fixture's log
-and validation receipt as an artifact. To run the same set locally after building:
+and validation receipt as an artifact. Native comparisons use tmux 3.7c at the pinned
+commit in `.github/actions/reference-tmux`; Ubuntu's 3.4 loses the exit status in the
+live-window respawn comparison. CLI's older-tmux integration checks keep the
+distribution binary. To run the same set locally after building:
 
 ```bash
 python3 scripts/validate-tui-native.py tui/target/release/harness-tui
