@@ -21,12 +21,17 @@ jobs:
       TEST_SUITE: ${{ matrix.suite }}
       E2E_WORKERS: '4'
       E2E_BUNDLE: '1'
+      COMPAT_FROM: ${{ github.workspace }}/.harness/compat-bundle/cli.js
       MIGRATION_FROM: ${{ github.workspace }}/.harness/migration/cli.js
       E2E_ARTIFACTS_DIR: ${{ github.workspace }}/.harness/validation/daemons
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: 6e5c80c514bf93e91eac262d80f0abb16f2fce0a
+          ref: 39b38623398728e445e2ccbc8db438132b99cbc1
+      - uses: actions/checkout@v7
+        with:
+          ref: 08c80d76dd2143f7fa81ee8192923925d694c4a3
+          path: .harness/compat-source
       - uses: actions/checkout@v7
         with:
           repository: tmux/tmux
@@ -53,6 +58,14 @@ jobs:
           test -z "$(git status --porcelain)"
           git rev-parse HEAD HEAD^{tree} > ../.harness/validation/source.txt
           date -u +%FT%TZ > ../.harness/validation/started.txt
+      - name: Build the exact pre-recap main for protocol comparisons
+        run: |
+          test "$(git -C ../.harness/compat-source rev-parse HEAD)" = 08c80d76dd2143f7fa81ee8192923925d694c4a3
+          cmp package-lock.json ../.harness/compat-source/cli/package-lock.json
+          ln -s "$GITHUB_WORKSPACE/cli/node_modules" ../.harness/compat-source/cli/node_modules
+          (cd ../.harness/compat-source/cli && BUNDLE_OUT_DIR="$GITHUB_WORKSPACE/.harness/compat-bundle" node build-bundle.mjs)
+          git -C ../.harness/compat-source rev-parse HEAD HEAD^{tree} > ../.harness/validation/compat-source.txt
+          sha256sum "$COMPAT_FROM" > ../.harness/validation/compat-bundle.sha256
       - name: Build pinned released tmux with the verified upstream initialization fix
         working-directory: .harness/tmux-source
         run: |
@@ -91,7 +104,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() }}
         with:
-          name: detached-core-6e5c80-${{ matrix.suite }}
+          name: detached-core-39b386-${{ matrix.suite }}
           path: .harness/validation/
           if-no-files-found: error
           include-hidden-files: true
