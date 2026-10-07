@@ -449,7 +449,7 @@ before marking it ready. Draft pushes run workflow lint and repository process
 checks; expensive component suites wait for `ready_for_review`. The plan still
 records all affected suites, and `ci/required` stays blocked while the PR is a
 draft. Marking ready runs complete affected validation for that exact head;
-returning to draft cancels its obsolete run. Keep a ready PR stable while CI and
+returning to draft defers component checks on later pushes. Keep a ready PR stable while CI and
 independent review finish. Push again when a correction is needed, rather than
 repeatedly dispatching the same full suite. Merge candidates and explicit runs
 always execute their complete selected scopes.
@@ -501,8 +501,12 @@ approval count instead of inventing a new human-review bottleneck. Preserve main
 delete/force-push guards. Queue jumping invalidates work and is reserved for urgent
 integration. The queue's merge limits do not batch its CI builds.
 
-Only a newer revision of the same PR cancels active automatic CI. Explicit runs
-and distinct candidates have independent concurrency identities. Broad main E2E
+New revisions replace active checks for the same PR, job and matrix row. Cancellation
+locks belong to work jobs, leaving summaries and the always-running final gate independent: an obsolete
+gate waiting for a runner cannot block the next revision. Checks no longer selected
+by the new plan may finish, including when a ready PR returns to draft; they cannot
+validate a newer head. Explicit runs and distinct candidates have independent
+concurrency identities. Broad main E2E
 finishes its active snapshot and retains the newest pending snapshot; nightly and
 explicit E2E requests are separate and preserved. A passing older snapshot does
 not validate newer source. Broad E2E remains advisory until reliable, and missing

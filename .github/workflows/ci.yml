@@ -37,14 +37,17 @@ env:
   CLI_NODE_VERSION: 22.23.2
   CI_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
 
-concurrency:
-  # Only a newer revision of the same PR supersedes active work. Explicit runs
-  # and distinct merge candidates have independent identities.
-  group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+# Supersede individual PR jobs, not the whole workflow: an always-running final
+# gate on an obsolete revision must not hold the next revision's scheduling lock.
+# Every matrix row has its own group. Explicit runs and merge candidates use run
+# IDs, so their requested validation is preserved. Summaries and the final gate
+# have no lock: an older aggregate can finish after newer work without cancelling it.
 
 jobs:
   plan:
+    concurrency:
+      group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-plan
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -90,6 +93,9 @@ jobs:
           retention-days: 14
 
   process-checks:
+    concurrency:
+      group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-process-checks
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     needs: plan
     runs-on: ubuntu-latest
     timeout-minutes: 3
@@ -121,6 +127,9 @@ jobs:
           retention-days: 7
 
   desktop-tests:
+    concurrency:
+      group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-desktop-tests-${{ strategy.job-index }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     needs: plan
     if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.desktop == 'true'
     name: desktop-tests (${{ matrix.os }}, ${{ matrix.shard }})
@@ -214,6 +223,9 @@ jobs:
   # binary backpressure and unplug behavior on both supported OSes and runtimes.
   # These are disposable PTYs; no USB device or existing daemon is touched.
   serial-native:
+    concurrency:
+      group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-serial-native-${{ strategy.job-index }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     needs: plan
     if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.cli == 'true'
     strategy:
@@ -246,6 +258,9 @@ jobs:
   # Build both slices and execute each host architecture. All process/tmux
   # fixtures are private; no installed agent or running session is controlled.
   process-images-native:
+    concurrency:
+      group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-process-images-native-${{ strategy.job-index }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     needs: plan
     if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.cli == 'true'
     strategy:
@@ -283,6 +298,9 @@ jobs:
   # The optional product has its own dependencies, bundle and suites. CLI-only CI
   # deliberately checks core without installing or building this package.
   companion-subsystems:
+    concurrency:
+      group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-companion-subsystems
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     needs: plan
     if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.companions == 'true'
     runs-on: ubuntu-latest
@@ -313,6 +331,9 @@ jobs:
 
   # Typecheck and contract checks run alongside the default suite's four shards.
   cli-contracts:
+    concurrency:
+      group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-cli-contracts
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     needs: plan
     if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.cli == 'true'
     runs-on: ubuntu-latest
@@ -404,6 +425,9 @@ jobs:
   # remembered: test:resume had slipped to 93% of stoppedAgents.ts and test:orchestrator below 100% by
   # 5 October 2026 without anyone noticing. One step per gate, so a red run names the gate.
   cli-coverage-gates:
+    concurrency:
+      group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-cli-coverage-gates
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     needs: plan
     if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.cli == 'true'
     runs-on: ubuntu-latest
@@ -443,6 +467,9 @@ jobs:
           retention-days: 7
 
   cli-tests:
+    concurrency:
+      group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-cli-tests-${{ strategy.job-index }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     needs: plan
     if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.cli == 'true'
     strategy:
@@ -525,6 +552,9 @@ jobs:
   # Native shell lifecycle checks on the Linux platforms used over SSH. This workflow
   # remains on demand; it builds and tests without publishing or installing a release.
   tui-test:
+    concurrency:
+      group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-tui-test-${{ strategy.job-index }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     needs: plan
     if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.tui == 'true'
     strategy:
@@ -601,6 +631,9 @@ jobs:
           retention-days: 14
 
   backend-desk:
+    concurrency:
+      group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-backend-desk
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     needs: plan
     if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.backend == 'true'
     runs-on: ubuntu-latest
@@ -622,31 +655,49 @@ jobs:
         run: npm test -- src/routes/desk.test.ts
 
   website-checks:
+    concurrency:
+      group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-website-checks
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     needs: plan
     if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.website == 'true'
     uses: ./.github/workflows/website-checks.yml
 
   experience-checks:
+    concurrency:
+      group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-experience-checks
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     needs: plan
     if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.experience == 'true'
     uses: ./.github/workflows/experience-checks.yml
 
   authoring-checks:
+    concurrency:
+      group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-authoring-checks
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     needs: plan
     if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.authoring == 'true'
     uses: ./.github/workflows/authoring-browser-checks.yml
 
   home-assistant-checks:
+    concurrency:
+      group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-home-assistant-checks
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     needs: plan
     if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.home-assistant == 'true'
     uses: ./.github/workflows/home-assistant-checks.yml
 
   desktop-logging-checks:
+    concurrency:
+      group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-desktop-logging-checks
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     needs: plan
     if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.desktop-logging == 'true'
     uses: ./.github/workflows/desktop-logging-checks.yml
 
   os-checks:
+    concurrency:
+      group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-os-checks
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     needs: plan
     if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.os == 'true'
     runs-on: ubuntu-24.04
@@ -659,6 +710,9 @@ jobs:
         run: make -C os check
 
   provider-checks:
+    concurrency:
+      group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-provider-checks-${{ strategy.job-index }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     needs: plan
     if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.provider == 'true'
     runs-on: ubuntu-latest
@@ -684,6 +738,9 @@ jobs:
       - run: npm test
 
   firmware-checks:
+    concurrency:
+      group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-firmware-checks
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     needs: plan
     if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.firmware == 'true'
     runs-on: ubuntu-24.04
@@ -730,6 +787,9 @@ jobs:
           PY
 
   mobile-checks:
+    concurrency:
+      group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-mobile-checks
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     needs: plan
     if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.mobile == 'true'
     runs-on: ubuntu-22.04
@@ -754,6 +814,9 @@ jobs:
         working-directory: mobile
 
   daemons-checks:
+    concurrency:
+      group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-daemons-checks
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     needs: plan
     if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.daemons == 'true'
     runs-on: ubuntu-latest
