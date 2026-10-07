@@ -106,6 +106,35 @@ describe('the devices in their own process', () => {
     window.close()
   })
 
+  it('keeps the selected pane on the dial when another desktop connection closes', async () => {
+    const { d, desk } = await fresh()
+    const window = await LocalClient.connect(d)
+    const otherConnection = await LocalClient.connect(d)
+    const agentId = await create(d, window, 'devices-desk-connections')
+    onTab(window, [agentId])
+    onTab(otherConnection, [agentId])
+    const dial = await desk.plug('E2E-A', 'e2:e0:00:00:00:0a')
+    await heard(dial, 'agents.end')
+    let since = dial.messages.length
+    window.send('app_focus', { agentId })
+    await heard(dial, 'focus', since, agentId)
+    since = dial.messages.length
+    otherConnection.close()
+    await until('the extra connection to close', () => otherConnection.closed || null, 5000, 50)
+    // A forced list read passes behind connection cleanup and proves the
+    // devices process still holds the surviving window's tab and selection.
+    dial.send({ t: 'agents.list' })
+    const roster = await heard(dial, 'agents.end', since)
+    expect(roster.tab).toBe('t1')
+    expect(dial.messages.slice(since).filter(m => m.t === 'agent').map(m => m.id)).toEqual([agentId])
+    expect(dial.messages.slice(since).filter(m => m.t === 'agents.end').every(m => m.tab === 't1')).toBe(true)
+    await heard(dial, 'focus', since, agentId)
+    window.close()
+    since = dial.messages.length
+    await heard(dial, 'agents.end', since)
+    await until('the last window to clear the dial', () => dial.messages.slice(since).some(m => m.t === 'agents.end' && m.tab === '') || null, 5000, 50)
+  })
+
   it('killed outright: agents and windows go on, ⌘K says so at once, and the dial comes back to its question and its working tile', async () => {
     const { d, desk } = await fresh()
     const window = await LocalClient.connect(d)
