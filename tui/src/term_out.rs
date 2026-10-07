@@ -175,6 +175,13 @@ impl<W: Write> TmuxBackend<W> {
     /// rewritten in the same write, so a stale cell goes but the screen is never seen blank.
     pub fn soft_clear_next(&mut self) { self.soft = true }
 
+    /// Opens the frame's synchronized update (once); `flush` closes it. A clear belongs inside it,
+    /// so the terminal shows the erase and the redraw together, never the blank between them.
+    fn begin_sync(&mut self) -> io::Result<()> {
+        if self.sync_ok && !self.syncing { self.inner.write_all(b"\x1b[?2026h")?; self.syncing = true }
+        Ok(())
+    }
+
     fn row_risky(&self, y: u16) -> bool { self.shadow.get(y as usize).map(|r| r.iter().any(|c| risky(c.symbol()))).unwrap_or(false) }
 
     fn remember(&mut self, x: u16, y: u16, cell: &Cell) {
@@ -566,7 +573,7 @@ impl<W: Write> Backend for TmuxBackend<W> {
         }
         // A single-cell update fits in the writer's one buffered flush; synchronizing it
         // adds sixteen bytes to an ordinary one-byte echo without hiding any redraw.
-        if self.sync_ok && !self.syncing && (cells.len() > 1 || !whole.is_empty()) { self.inner.write_all(b"\x1b[?2026h")?; self.syncing = true }
+        if cells.len() > 1 || !whole.is_empty() { self.begin_sync()? }
         let (usstyle, links) = frame.map(|f| (f.usstyle, f.links)).unwrap_or((false, false));
         let extra_at = |x: u16, y: u16| frame.and_then(|f| f.extras.get(&(x, y)));
         // CrosstermBackend writes through to its writer.
@@ -622,6 +629,8 @@ impl<W: Write> Backend for TmuxBackend<W> {
     fn clear(&mut self) -> io::Result<()> { self.shadow.clear(); self.extra_shadow.clear(); self.cursor_at = None; self.cursor_shown = None; self.inner.clear() }
     fn clear_region(&mut self, clear_type: ClearType) -> io::Result<()> {
         if matches!(clear_type, ClearType::All) {
+            // Hard or soft, the draw that follows is the same update; `flush` closes it.
+            self.begin_sync()?;
             self.shadow.clear();
             self.extra_shadow.clear();
             // A soft clear forgets what was written but erases nothing: the draw that follows writes
@@ -687,6 +696,45 @@ mod tests {
         assert!(!text.contains("\x1b[2J"), "a soft clear must not erase the screen: {text:?}");
         assert_eq!(pane.term.grid()[Line(0)][Column(0)].c, 'a');
         assert_eq!(pane.term.grid()[Line(0)][Column(5)].c, ' ', "the stale cell was erased by its row being written again");
+    }
+
+    fn two_cells(backend: &mut TmuxBackend<&mut Vec<u8>>) {
+        let (mut a, mut b) = (Cell::default(), Cell::default());
+        a.set_char('a'); b.set_char('b');
+        backend.draw([(0u16, 0u16, &a), (1, 0, &b)].into_iter()).unwrap();
+    }
+
+    #[test]
+    fn a_hard_clear_is_inside_the_frames_synchronized_update() {
+        let mut written = Vec::new();
+        let mut backend = TmuxBackend::with_sync(&mut written);
+        two_cells(&mut backend);
+        Backend::flush(&mut backend).unwrap();
+        // What `Terminal::clear` asks of the backend, then the frame that follows it.
+        Backend::clear_region(&mut backend, ClearType::All).unwrap();
+        two_cells(&mut backend);
+        Backend::flush(&mut backend).unwrap();
+        drop(backend);
+        let s = String::from_utf8_lossy(&written);
+        let clear = s.find("\x1b[2J").expect("a hard clear");
+        let open = s[..clear].rfind("\x1b[?2026h").expect("opened before the clear");
+        assert!(s[..clear].rfind("\x1b[?2026l").map_or(true, |close| close < open), "no close between open and clear: {s:?}");
+        assert!(s[clear..].contains("\x1b[?2026l"), "closed after the redraw: {s:?}");
+        assert_eq!(s.matches("\x1b[?2026h").count(), s.matches("\x1b[?2026l").count(), "balanced: {s:?}");
+        assert_eq!(s[clear..].matches("\x1b[?2026h").count(), 0, "the frame joins the clear's update, it does not open another: {s:?}");
+    }
+
+    #[test]
+    fn a_hard_clear_without_synchronized_output_writes_no_2026() {
+        let mut written = Vec::new();
+        let mut backend = TmuxBackend::with_sync(&mut written);
+        backend.sync_ok = false;
+        Backend::clear_region(&mut backend, ClearType::All).unwrap();
+        two_cells(&mut backend);
+        Backend::flush(&mut backend).unwrap();
+        drop(backend);
+        let s = String::from_utf8_lossy(&written);
+        assert!(s.contains("\x1b[2J") && !s.contains("2026"), "{s:?}");
     }
 
     #[test]
