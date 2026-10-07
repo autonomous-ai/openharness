@@ -620,6 +620,9 @@ export type TurnLifecycle =
   /** A device joined: every session's card is said again. `working`: the sessions whose turn is
    *  verifiably working now, whose busy card is said with it. */
   | { kind: 'rejoined'; working: string[] }
+  /** The session attached with its last turn already over, so its end was read as history: recapped quietly
+   *  if it has none yet (it ended while the daemon was stopped). */
+  | { kind: 'settled'; session: RecapSession }
 
 /** The core's calls into the recaps: the lifecycle, and what they hold of a session, read in line. */
 export interface RecapsPort {
