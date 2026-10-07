@@ -128,9 +128,10 @@ may lack symbolicated stacks until the matching symbols are supplied.
 | `1.0.1 (57)` | 2026-10-06 | TestFlight. Typing in the terminal no longer lags or drops keys: keys echo locally and go out before the IME resets. Remote scroll is smoother, with a native-like fling and a scroll mirror that follows the finger; the stray cursor is hidden; p2p holds when late relay frames arrive. Onboarding explains its sign-in steps and sign-outs, and scanning a computer's sign-in QR signs the phone in first. Uploaded with the Xcode account from the second Mac; Xcode again reported the non-blocking missing WebRTC dSYM. Built from `feat/mobile-ios-android` at `b896acd8` |
 | `1.0.1 (58)` | 2026-10-06 | TestFlight. Remote scroll for Claude Code is faster and steadier: page keys and paced wheels fetch rows, each agent keeps its rows, and rows above are prefetched while idle. The key strip's hide-keyboard key is larger. Onboarding says where Add Phone is and which account to use, offers Scan again after a failed pairing, and shortens the scan page's sign-in hint. Uploaded with the Xcode account (`release-ios.sh`); Xcode again reported the non-blocking missing WebRTC dSYM. Built from `feat/mobile-ios-android` at `8b174045` after merging `main` |
 | `1.0.1 (59)` | 2026-10-07 | TestFlight. Onboarding gets exits and shorter sign-in waits (`fix/mobile-onboarding-exits`), on top of 58. Built from `feat/mobile-ios-android` at `421c54d3` |
+| `1.0.1 (60)` | 2026-10-07 | TestFlight. Onboarding hardened: one pairing at a time, Scan again and a way out of slow waits, sign-out clears the last account's computers; computer set-up in three steps; iOS local network usage description. Uploaded with the Xcode account (`release-ios.sh`); Xcode again reported the non-blocking missing WebRTC dSYM. Built from `feat/mobile-ios-android` at `1d58a94e` |
 
-`pubspec.yaml` is now at `1.0.1+60`, the next build number. Build 59 is the last iOS upload (54 went
-up outside this record) and 53 went to Play only; do not upload any of them again. Check App Store Connect before uploading if another release has happened meanwhile.
+`pubspec.yaml` is now at `1.0.1+61`, the next build number. Build 60 is the last upload, to both
+TestFlight and Play (54 went up outside this record, 53 went to Play only); do not upload any of them again. Check App Store Connect before uploading if another release has happened meanwhile.
 
 ### Why the app is iPhone-only
 
@@ -347,3 +348,4 @@ account (Autonomous Inc.) is exempt — check which kind the account is before p
 | `16` (1.0.0) | 2026-09-18 | Internal testing — the first Play upload |
 | `41` (1.0.0) | 2026-09-24 | Built for resubmission after Play rejected the build under the broken-functionality policy (its browser sign-in redirected to `127.0.0.1`, which timed out on the reviewer's device). Signs in with an emailed code instead; also carries the notices and tab marks of iOS 39–40 |
 | `53` (1.0.1) | 2026-10-01 | Internal testing. Same code as iOS 1.0.1 (52): faster launch, QR sign-in for desktop/web/CLI (#519), tab and Find polish. First Play build from the second Mac, with the upload key copied from the first (`storeFile` rewritten to this Mac's path) |
+| `60` (1.0.1) | 2026-10-07 | Internal testing. Same code as iOS 1.0.1 (60): Google/Apple sign-in, faster launch, terminal typing, paste and scroll fixes, renaming computers and profiles, the hardened onboarding |
