@@ -528,9 +528,14 @@ jobs:
         run: env -u NO_COLOR cargo test --locked --release --target ${{ matrix.target }}
       - name: Build static Linux binary
         run: cargo build --locked --release --target ${{ matrix.target }}
+      - name: Build native comparison reference
+        id: reference-tmux
+        uses: ./.github/actions/reference-tmux
       - name: Complete native fixtures with bounded parallelism
         working-directory: .
-        run: python3 scripts/validate-tui-native.py tui/target/${{ matrix.target }}/release/harness-tui
+        env:
+          REFERENCE_TMUX_BIN: ${{ steps.reference-tmux.outputs.bin }}
+        run: PATH="$REFERENCE_TMUX_BIN:$PATH" python3 scripts/validate-tui-native.py tui/target/${{ matrix.target }}/release/harness-tui
       - name: Connected hn local and remote shells through the real service
         working-directory: cli
         env:
