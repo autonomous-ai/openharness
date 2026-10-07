@@ -570,6 +570,9 @@ impl<W: Write> Backend for TmuxBackend<W> {
         let all = std::mem::take(&mut self.force_whole);
         self.last_cells = cells.len();
         if cells.is_empty() && !all { return Ok(()) }
+        // An input method or the terminal itself may have moved the cursor since the last frame:
+        // the first cell of a frame that writes is placed by a CUP, never assumed.
+        self.cursor_at = None;
         // A row that holds (or held) a cluster the terminal may count otherwise is written again
         // whole from its first column, as fzf writes a line: a cell-by-cell update there would
         // leave a stale character where the two counts part (a Thai vowel beside a keycap).
@@ -842,12 +845,45 @@ mod tests {
         Backend::flush(&mut backend).unwrap();
         drop(backend);
         let bytes = written.as_slice();
-        assert!(bytes.len() <= 7, "one echoed key wrote {} bytes including its initial cursor", bytes.len());
+        assert!(bytes.len() <= 13, "one echoed key wrote {} bytes: its initial cursor, the frame's own CUP and the char", bytes.len());
         let mut pane = crate::pane::Pane::new(1, "m", "a", 20, 4);
         pane.feed(bytes);
         use alacritty_terminal::index::{Column, Line, Point};
         assert_eq!(pane.term.grid()[Line(1)][Column(2)].c, 'x');
         assert_eq!(pane.term.grid().cursor.point, Point::new(Line(1), Column(3)));
+    }
+
+    #[test]
+    fn each_frame_places_the_cursor_itself() {
+        let mut written = Vec::new();
+        let mut backend = TmuxBackend::with_sync(&mut written);
+        let (mut a, mut b, mut c) = (Cell::default(), Cell::default(), Cell::default());
+        a.set_char('a'); b.set_char('b'); c.set_char('c');
+        backend.draw([(0u16, 0u16, &a), (1, 0, &b)].into_iter()).unwrap();
+        Backend::flush(&mut backend).unwrap();
+        // The next frame changes only the cell right after the cursor hn left (column 2).
+        backend.draw(std::iter::once((2u16, 0u16, &c))).unwrap();
+        Backend::flush(&mut backend).unwrap();
+        drop(backend);
+        let s = String::from_utf8_lossy(&written);
+        assert!(s.contains("\x1b[1;3H"), "the second frame moved the cursor first: {s:?}");
+    }
+
+    #[test]
+    fn an_idle_frame_writes_nothing_after_a_frame_with_cells() {
+        let mut a = Cell::default();
+        a.set_char('a');
+        let (mut one, mut two) = (Vec::new(), Vec::new());
+        let mut backend = TmuxBackend::with_sync(&mut one);
+        backend.draw(std::iter::once((0u16, 0u16, &a))).unwrap();
+        Backend::flush(&mut backend).unwrap();
+        drop(backend);
+        let mut backend = TmuxBackend::with_sync(&mut two);
+        backend.draw(std::iter::once((0u16, 0u16, &a))).unwrap();
+        backend.draw(std::iter::empty()).unwrap();
+        Backend::flush(&mut backend).unwrap();
+        drop(backend);
+        assert_eq!(one, two);
     }
 
     #[test]
