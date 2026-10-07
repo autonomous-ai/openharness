@@ -1,12 +1,12 @@
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, utimesSync, writeFileSync, type Dirent } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 
 import { afterEach, describe, expect, it } from 'vitest'
 
 import { builtinSqlite } from '../../sqliteRead.js'
 import { cursorBucket, cursorProvider, cursorSlug, cursorTurnOpen, readChat, type CursorDatabase } from './cursor.js'
-import { scanMemo } from './support.js'
+import { entries, scanMemo } from './support.js'
 import type { ProcessView, RunningProcess, ScanContext } from './types.js'
 
 const dirs: string[] = []
@@ -75,10 +75,21 @@ function fakeDatabase(value: unknown, opened: Array<string | URL> = []): CursorD
 
 const hex = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('hex')
 
+/**
+ * The file system as the walk for a lost folder lists it, with the shared temp folder showing only this
+ * file's own folders. The walk starts at `/`, and on one Mac that folder held 407,422 entries (every run's
+ * leftovers): listing it took the walking cases past 5 s under load. Every other folder is listed as it is.
+ */
+const TMP = realpathSync(tmpdir())
+const listFolder = async (dir: string): Promise<Dirent[]> => dir !== TMP
+  ? entries(dir)
+  // Not listed and filtered: listing it is the cost. This file's folders there are folders, by temp().
+  : dirs.filter((path) => dirname(path) === TMP).map((path) => ({ name: basename(path), isDirectory: () => true }) as Dirent)
+
 function roots() {
   const config = temp()
   const data = temp()
-  return { config, data, provider: (database: CursorDatabase | null = null) => cursorProvider({ configDir: config, dataDir: data, database }) }
+  return { config, data, provider: (database: CursorDatabase | null = null) => cursorProvider({ configDir: config, dataDir: data, database, listFolder }) }
 }
 
 describe('cursor naming', () => {

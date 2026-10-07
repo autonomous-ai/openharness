@@ -41,6 +41,10 @@ describe('hook channel credential', () => {
     expect(() => loadOrCreateHookCredential(dir)).toThrow('unsafe owner, mode, or type')
   })
 
+  // In a child, because a read that blocked on the FIFO would block this worker for good. The child's
+  // start (node and tsx, compiling hookAuth.ts) is not what is measured: a 1.5 s limit on the whole child
+  // timed it out under load (the full unit suite at load 100) while the read itself returned at once. A
+  // blocked read never returns, so any answer is the proof; the limit only ends a child that blocked.
   it('rejects a credential FIFO without blocking', () => {
     const dir = mkdtempSync(join(tmpdir(), 'hook-auth-'))
     dirs.push(dir)
@@ -50,11 +54,11 @@ describe('hook channel credential', () => {
     const result = spawnSync(process.execPath, ['--import', 'tsx', '--eval', script], {
       cwd: process.cwd(),
       encoding: 'utf8',
-      timeout: 1_500,
+      timeout: 60_000,
     })
 
     expect(result.error).toBeUndefined()
     expect(result.status).toBe(0)
     expect(statSync(hookCredentialPath(dir)).isFIFO()).toBe(true)
-  })
+  }, 90_000)
 })
