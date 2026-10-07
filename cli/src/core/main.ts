@@ -1138,7 +1138,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     owned: Object.fromEntries([...outOfProcess].map((name) => [name, requestsOf[name] ?? []])),
     waits: LONG_ANSWERS,
     // An experiment's process runs once on, the devices' once there is one, models' and the gateway's once needed: a request asks.
-    onDemand: new Set([...experiments, ...DEVICES_ON_DEMAND, 'models', 'gateway']),
+    // Shell is in the always-running edge host, but its first request can beat that host's connection.
+    // Hold it through the same bounded startup gate; after any disconnect, fail promptly as before.
+    onDemand: new Set([...experiments, ...DEVICES_ON_DEMAND, 'models', 'gateway', 'shell']),
     want: (service) => experimentHooks.want(service),
     // The gateway's first: its `backend` reads (the device key log) were refused below as NOT_AN_EXPERIMENT.
     answer: async (service, query, payload) => (service === 'gateway' && gatewayLink ? gatewayLink.answer(query, payload) : null) ?? deliveries.answer(service, query, payload)
