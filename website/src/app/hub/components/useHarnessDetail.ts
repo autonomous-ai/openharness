@@ -12,12 +12,25 @@ export function useHarnessDetail(id: string, initial: OpenHarness | null, onSign
   const [error, setError] = useState(''), [busy, setBusy] = useState(false), [ready, setReady] = useState(false), [unavailable, setUnavailable] = useState(false);
   const revision = useRef(0), writing = useRef(false), loaded = useRef(!!initial);
 
+  /**
+   * A publication never changes: once its files are here, a refresh reads only likes, follows and
+   * comments. A backend older than `/social` answers 404 there, so the full read tells that apart
+   * from an unpublished harness.
+   */
+  const read = useCallback(async () => {
+    type Page = { harness?: OpenHarness | null; social: SocialState };
+    if (loaded.current) {
+      try { return await communityRequest<Page>(`harnesses/${id}/social`); } catch (e) {
+        if (!(e instanceof CommunityError && e.status === 404)) throw e;
+      }
+    }
+    return communityRequest<Page>(`harnesses/${id}`);
+  }, [id]);
   const load = useCallback(async () => {
     if (writing.current) return;
     const current = ++revision.current;
     try {
-      // A publication never changes: once its files are here, a refresh reads only likes, follows and comments.
-      const data = await communityRequest<{ harness?: OpenHarness | null; social: SocialState }>(loaded.current ? `harnesses/${id}/social` : `harnesses/${id}`);
+      const data = await read();
       if (current !== revision.current) return;
       if (data.harness) { loaded.current = true; setHarness(data.harness); }
       setSocial(data.social); setReady(true); setError('');
@@ -27,7 +40,7 @@ export function useHarnessDetail(id: string, initial: OpenHarness | null, onSign
       if (e instanceof CommunityError && e.status === 404) setUnavailable(true);
       else if (!initial) setError('This harness could not be loaded. Please try again.');
     }
-  }, [id, initial]);
+  }, [read, initial]);
   useEffect(() => {
     void load();
     const reload = () => { void load(); };

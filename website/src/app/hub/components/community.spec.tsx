@@ -100,6 +100,13 @@ describe('community navigation', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: 'Like harness' })).toHaveTextContent('3'));
     expect(request).toHaveBeenLastCalledWith(`harnesses/${id}/social`);
   });
+  it('still loads beside a backend that has no social route yet', async () => {
+    request.mockRejectedValueOnce(new CommunityError('Not found.', 404)).mockResolvedValueOnce({ harness: null, social: { ...emptySocial, likes: 2 } });
+    render(<Detail id={sample.id} initial={sample} />);
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Like harness' })).toHaveTextContent('2'));
+    expect(request.mock.calls.map(call => call[0])).toEqual(['harnesses/starter-orbit/social', 'harnesses/starter-orbit']);
+    expect(screen.queryByText('This harness is unavailable.')).not.toBeInTheDocument();
+  });
   it('does not pretend a signed-out like succeeded', async () => {
     request.mockResolvedValue({ harness: null, social: emptySocial });
     render(<Detail id={sample.id} initial={sample} />);
