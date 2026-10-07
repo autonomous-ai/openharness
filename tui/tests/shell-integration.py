@@ -139,6 +139,33 @@ with tempfile.TemporaryDirectory(prefix='hn-shell-test-') as tmp:
                     s.read_until(b'READY> ')
                     s.send('M\r')
                     s.result(b'DRAFT_LMRIGHT')
+                # A computer that never answers: the widget says at once what it waits
+                # for, Ctrl-C gives the prompt back with the line unchanged, and the
+                # next pick is served.
+                (root/'picker-choice').write_text('host\nGone\n')
+                s.send("printf 'GONE_%s\\n' LRIGHT")
+                s.send('\x02'*5+'\x10')
+                t0=time.monotonic()
+                seen=s.read_until(REQUEST)
+                first=REQUEST.search(seen)
+                assert first[3]==b'host-inline' and base64.b64decode(first[4])==b'Gone'
+                progress='Opening a shell on Gone… Ctrl-C to cancel'.encode()
+                if progress not in seen: seen+=s.read_until(progress,seconds=1)
+                assert time.monotonic()-t0<1,'the progress line came too late'
+                time.sleep(.3)    # nobody answers: the line must stay as it is meanwhile
+                s.send('\x03')
+                t0=time.monotonic()
+                said=s.read_until(b'READY> ',seconds=1)
+                assert time.monotonic()-t0<1,'Ctrl-C did not give the prompt back within 1 s'
+                assert re.search(rb'633;hn;'+TOKEN.encode()+b';'+re.escape(first[2])+b';cancel;',said),'the request was not cancelled'
+                s.send('M\r')
+                s.result(b'GONE_LMRIGHT')       # the line is exactly what it was
+                # Right after it, another choice is served (the TUI freed the picker).
+                (root/'picker-choice').write_text('host\nlocal\n')
+                s.send('\x10')
+                match=REQUEST.search(s.read_until(REQUEST))
+                assert match[3]==b'host-inline' and match[2]!=first[2]
+                s.reply(match); s.read_until(b'READY> ')
                 (root/'picker-choice').unlink()
                 (root/'picker-choice').write_text('sessions\nexternal:local:missing\n')
                 s.send('\x10')
