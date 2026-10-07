@@ -27,6 +27,7 @@ import {
 import { parseGridLaunchOverride, type GridLaunchOverride } from '../../lib/gridLaunch.js'
 import { parseNewAgentModel, type NewAgentModel } from '../../lib/newAgentModel.js'
 import { parseProjectFolder, prepareProjectFolder, projectsRoot, ProjectFolderError } from '../../lib/projectFolder.js'
+import type { ScmLaunchRecord } from '../../scm/types.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 
 /** Creates an agent (core/agents/create.ts). The orchestrator creates through the same one. */
@@ -249,8 +250,12 @@ export function createLaunchRequests({ receipts, createAgent, forkAgent, resumeA
             input.grid = target
           }
           let preparedFolder: string | undefined
+          let scmLaunchRecord: ScmLaunchRecord | null = null
           if (projectFolder) {
-            try { preparedFolder = await prepareProjectFolder(projectFolder, { label: (dsh ? installedDsh(dsh)?.manifest.name : null) ?? engineLabel(input.engine) }) }
+            try {
+              preparedFolder = await prepareProjectFolder(projectFolder, { label: (dsh ? installedDsh(dsh)?.manifest.name : null) ?? engineLabel(input.engine),
+                onPrepared: prepared => { scmLaunchRecord = prepared.scmLaunchRecord } })
+            }
             catch (error) {
               return { state: 'failed', error: error instanceof ProjectFolderError ? error.code : 'PROJECT_PREPARATION_FAILED',
                 detail: error instanceof ProjectFolderError ? error.message : 'Could not prepare the project folder.' }
@@ -290,7 +295,7 @@ export function createLaunchRequests({ receipts, createAgent, forkAgent, resumeA
               }
             } catch (error) { console.warn(`[agent] pre-trust ${input.cwd} · ${error instanceof Error ? error.message : error}`) }
           }
-          const result = await create(preparedFolder ? { ...input, cwd: preparedFolder } : input)
+          const result = await create(preparedFolder ? { ...input, cwd: preparedFolder, scmLaunchRecord } : input)
           if (result.ok) return { state: 'created', agentId: result.session.agentId }
           // tmux may have executed before a timeout; registration cleanup is best-effort.
           // Neither can prove that no process started, so never encourage another launch.

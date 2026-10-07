@@ -285,6 +285,7 @@ dependencies = [
  "crossterm_winapi",
  "derive_more",
  "document-features",
+ "filedescriptor",
  "mio",
  "parking_lot",
  "rustix",
@@ -653,9 +654,10 @@ dependencies = [
 
 [[package]]
 name = "harness-tui"
-version = "0.1.14"
+version = "0.1.16"
 dependencies = [
  "alacritty_terminal",
+ "base64",
  "crossterm",
  "flate2",
  "futures-util",

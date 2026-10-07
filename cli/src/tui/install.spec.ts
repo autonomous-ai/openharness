@@ -1,8 +1,42 @@
 import { createHash } from 'node:crypto'
-import { closeSync, existsSync, fstatSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { closeSync, existsSync, fstatSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
+import { promisify } from 'node:util'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+/**
+ * The disposable executables these tests write are run in this process, by what their bytes say: a
+ * `#!/bin/sh` of `printf '<text>\n'` and `exit <n>` lines, as sh would run them. Every update writes a
+ * fresh executable and runs it, and on macOS the first run of a freshly written file waits on the
+ * system's check of it: 220 ms at a load of 100, 600 ms with 12 busy loops more, against 16 ms for one
+ * already run (2026-10-06). Six of these tests timed out at 5 s in one loaded unit run. The real
+ * `--version` of a downloaded hn, over HTTP and on disk, is update.integration.spec.ts's.
+ */
+vi.mock('node:child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:child_process')>()
+  const failure = (message: string, fields: Record<string, unknown>) => Object.assign(new Error(message), fields)
+  const run = async (file: string, _args: string[], options: { signal?: AbortSignal } = {}) => {
+    options.signal?.throwIfAborted()
+    let mode: number
+    try { mode = statSync(file).mode } catch (error) { throw failure(`spawn ${file} ENOENT`, { code: (error as NodeJS.ErrnoException).code }) }
+    if (!(mode & 0o111)) throw failure(`spawn ${file} EACCES`, { code: 'EACCES' })
+    const [shebang, ...lines] = readFileSync(file, 'utf8').split('\n')
+    if (shebang !== '#!/bin/sh') throw failure(`spawn ${file} ENOEXEC`, { code: 'ENOEXEC' })
+    let stdout = ''
+    for (const line of lines.filter(Boolean)) {
+      const printed = /^printf (['"])(.*)\\n\1$/.exec(line)
+      const exit = /^exit (\d+)$/.exec(line)
+      if (printed) stdout += `${printed[2]}\n`
+      else if (exit && exit[1] !== '0') throw failure(`Command failed: ${file}`, { code: Number(exit[1]), stdout, stderr: '' })
+      else if (!exit) throw new Error(`the in-process sh does not know: ${line}`)
+      if (exit) break
+    }
+    return { stdout, stderr: '' }
+  }
+  const execFile = Object.assign(vi.fn(), { [promisify.custom]: run })
+  return { ...actual, execFile }
+})
 let installedTuiPath: typeof import('./install.js').installedTuiPath
 let installTui: typeof import('./install.js').installTui
 let platformKey: typeof import('./install.js').platformKey

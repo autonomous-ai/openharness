@@ -10,21 +10,13 @@ name: Website checks
 # bundle harness-web-release.json pins, the same path a local build takes; release-web.yml builds the
 # real image from a freshly built bundle instead.
 
+# Automatic invocations are selected by ci.yml; standalone runs remain available.
 on:
   workflow_dispatch:
-  pull_request:
-    paths: ['website/**', '.github/workflows/website-checks.yml']
-  push:
-    branches: [main]
-    paths: ['website/**', '.github/workflows/website-checks.yml']
+  workflow_call:
 
 permissions:
   contents: read
-
-# New commits replace obsolete checks for the same PR or branch.
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
 
 jobs:
   website:
@@ -35,6 +27,8 @@ jobs:
         working-directory: website
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           # The major Dockerfile.k8s runs on (node:22-bookworm-slim), at the repo's usual pin.
@@ -62,7 +56,7 @@ jobs:
           server_pid=$!
           trap 'kill "$server_pid" 2>/dev/null || true' EXIT
           ready=false
-          for attempt in $(seq 1 30); do
+          for ((attempt=1; attempt<=30; attempt++)); do
             if curl --fail --silent http://127.0.0.1:3000/os > /dev/null; then
               ready=true
               break

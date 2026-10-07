@@ -21,7 +21,7 @@ import { dirname, join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it, onTestFailed } from 'vitest'
 import { LocalClient, type Frame } from './harness/client.js'
 import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
-import { atVersion } from './harness/release.js'
+import { atVersion, withFault } from './harness/release.js'
 import { PROBE_COMMAND, runProbe } from '../src/harnessd/reexec.js'
 
 const FIRST = '42.0.1'
@@ -78,7 +78,8 @@ describe('the master re-executing itself on an update', () => {
   const daemonProcesses = (): Array<{ pid: number; ppid: number; command: string }> =>
     execFileSync('ps', ['-axo', 'pid=,ppid=,command='], { encoding: 'utf8' }).split('\n')
       .map((line) => /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(line))
-      .filter((match): match is RegExpExecArray => !!match && match[3].includes(join(cliDir(), 'cli.js')))
+      // The core and the services from the lean bundle in the data folder, or from cli.js.
+      .filter((match): match is RegExpExecArray => !!match && (match[3].includes(join(cliDir(), 'cli.js')) || (!!daemon && match[3].includes(join(daemon.dataDir, 'lean')))))
       .map((match) => ({ pid: Number(match[1]), ppid: Number(match[2]), command: match[3] }))
   const nothingOrphaned = async (masterPid: number) => {
     // A probe is over within the update; give one a moment to end.
@@ -98,7 +99,7 @@ describe('the master re-executing itself on an update', () => {
     const release = (version: string, inject = ''): void => {
       // The version is baked in at build time; the others are the same bytes with it swapped, and a
       // fault put in at the top where a test needs one.
-      const source = atVersion(first, FIRST, version).replace('\n', `\n${inject}\n`)
+      const source = withFault(atVersion(first, FIRST, version), inject)
       const file = join(out, `cli-${version}.js`)
       writeFileSync(file, source)
       expect(execFileSync(process.execPath, [file, 'version'], { encoding: 'utf8' }).trim()).toBe(version)
@@ -260,10 +261,13 @@ describe.skipIf(!RELEASED)('a released master and this one, each over the other\
   let scratch = ''
   let server: Server | undefined
   let daemon: IsolatedDaemon | undefined
-  let offered: 'released' | 'next' = 'released'
+  let offered: 'released' | 'next' | 'later' = 'released'
   let releasedVersion = ''
   let releasedCanReexec = false
-  const bundles = new Map<'released' | 'next', { cli: Buffer; notify: Buffer; version: string }>()
+  const bundles = new Map<'released' | 'next' | 'later', { cli: Buffer; notify: Buffer; version: string }>()
+  const LATER = '0.99.1'
+  /** The newest build this machine has kept: NEXT, or LATER once a released master's core updated to it. */
+  let newest = NEXT
   const cliDir = () => join(scratch, 'cli')
   const status = async (): Promise<Record<string, any> | null> =>
     fetch(`http://127.0.0.1:${daemon!.port}/api/status`).then((response) => response.json()).catch(() => null)
@@ -273,6 +277,7 @@ describe.skipIf(!RELEASED)('a released master and this one, each over the other\
     const out = join(scratch, 'build')
     execFileSync(process.execPath, ['build-bundle.mjs'], { cwd: CLI_ROOT, env: { ...process.env, ADAPTER_VERSION: NEXT, BUNDLE_OUT_DIR: out }, stdio: 'pipe' })
     bundles.set('next', { cli: readFileSync(join(out, 'cli.js')), notify: readFileSync(join(out, 'notify.mjs')), version: NEXT })
+    bundles.set('later', { cli: Buffer.from(atVersion(readFileSync(join(out, 'cli.js'), 'utf8'), NEXT, LATER)), notify: readFileSync(join(out, 'notify.mjs')), version: LATER })
     releasedVersion = execFileSync(process.execPath, [RELEASED!, 'version'], { encoding: 'utf8' }).trim()
     bundles.set('released', { cli: readFileSync(RELEASED!), notify: readFileSync(join(dirname(RELEASED!), 'notify.mjs')), version: releasedVersion })
     server = createServer((request, response) => {
@@ -339,8 +344,18 @@ describe.skipIf(!RELEASED)('a released master and this one, each over the other\
       expect(daemon!.log()).not.toContain('re-executing')
     }
     await until('the released master to keep the update', () => daemon!.log().includes('the update stayed up — keeping it'), 30_000)
+    if (!releasedCanReexec) {
+      // A master from before the updater left the core runs none, and could not become this build's: the
+      // core runs it beside itself (core/updaterBeside.ts), so the next build still arrives.
+      expect(daemon!.log()).toContain('[update] this core\'s master runs no updater — running it beside this core')
+      offered = 'later'
+      await until(`the released master to run ${LATER}`, async () => (await status())?.version === LATER || null, 90_000, 250)
+      expect((await status())?.harnessd.masterPid).toBe(master)
+      await until('the released master to keep it too', () => daemon!.log().split('the update stayed up — keeping it').length > 2 || null, 30_000)
+      newest = LATER
+    }
     await daemon!.restart()
-    expect((await status())?.harnessd).toMatchObject({ masterVersion: NEXT, masterPid: daemon!.pid })
+    expect((await status())?.harnessd).toMatchObject({ masterVersion: newest, masterPid: daemon!.pid })
   })
 
   it('this master returns to the released bundle, re-executing only when it answers the probe', async () => {
@@ -355,12 +370,18 @@ describe.skipIf(!RELEASED)('a released master and this one, each over the other\
       return current?.version === releasedVersion ? current : null
     }, 60_000, 250)
     expect(now.harnessd).toMatchObject({
-      masterVersion: releasedCanReexec ? releasedVersion : NEXT,
+      masterVersion: releasedCanReexec ? releasedVersion : newest,
       masterPid: master,
       reexecs: releasedCanReexec ? 1 : 0,
     })
     expect(daemon!.log().slice(from)).toContain(releasedCanReexec
       ? `now v${releasedVersion}`
       : 'did not answer its probe (Unknown command: __harnessd-probe) — keeping this master')
+    // This master over a core too old to ask for a process on demand starts each as that core binds
+    // (harnessd/services.ts `unasked`): models, which a core of protocol 4 asks for only once grid is in use,
+    // and the gateway, which it asks for only signed in or with something paired.
+    for (const name of releasedCanReexec ? [] : ['models', 'gateway']) {
+      await until(`this master to start ${name} for the older core`, () => daemon!.log().slice(from).includes(`[harnessd] service ${name} started`) || null, 30_000, 200)
+    }
   })
 })

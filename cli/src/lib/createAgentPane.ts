@@ -14,6 +14,7 @@
 import { homedir } from 'node:os'
 import type { AgentEngine } from '../engines/types.js'
 import type { GridLaunchRecord } from './gridLaunch.js'
+import type { ScmLaunchRecord } from '../scm/types.js'
 import type { ForkOrigin, RegisteredSession } from './registry.js'
 import type { TerminalBackend } from './terminalBackend.js'
 import type { TerminalCreateResult, TmuxRuntimeRef } from './terminalTypes.js'
@@ -30,6 +31,7 @@ export interface CreateAgentPaneDeps {
     cwd?: string | null
     grid?: { baseUrl: string; model: string | null } | null
     gridLaunchRecord?: GridLaunchRecord | null
+    scmLaunchRecord?: ScmLaunchRecord | null
     codexHome?: string | null
     dsh?: string | null
     dshRuntime?: string | null
@@ -59,6 +61,9 @@ export interface CreateAgentPaneDeps {
   /** The grid launch behind `grid` (credential included — what restore/restart relaunch the pane with)
    *  and what building it decided about web search (what the app shows for this agent). */
   gridLaunchRecord?: GridLaunchRecord | null
+  /** What the workspace's SCM needs re-applied on every relaunch (`scmLaunch` on the row); null or
+   *  absent for a folder no SCM prepared. The record, not the launch — `env` already carries it. */
+  scmLaunchRecord?: ScmLaunchRecord | null
   /** The CODEX_HOME folder this agent was launched against, if the caller chose one; codex only. */
   codexHome?: string | null
   /** The domain-specific harness this agent is created as, if any. */
@@ -101,6 +106,7 @@ export async function createAndRegisterPane(deps: CreateAgentPaneDeps): Promise<
       cwd: deps.cwd,
       grid: deps.grid,
       gridLaunchRecord: deps.gridLaunchRecord,
+      scmLaunchRecord: deps.scmLaunchRecord,
       codexHome: deps.codexHome,
       dsh: deps.dsh,
       dshRuntime: deps.dshRuntime,

@@ -14,7 +14,7 @@ import { installedDsh } from '../../dsh/installed.js'
 import { harnessEnvToClear } from '../../dsh/launch.js'
 import { forkRuntimeKey, harnessLaunchOrRefusal, prepareHarnessLaunch } from '../../dsh/runtime.js'
 import { opencodeMajorVersion } from '../../engines/opencode/version.js'
-import type { CommanderMirror } from '../../lib/commander.js'
+import type { TurnRecaps } from '../turns/recaps.js'
 import { createAndRegisterPane } from '../../lib/createAgentPane.js'
 import { enginePathOverride } from '../../lib/engineBin.js'
 import { engineInstallRecipe } from '../../lib/engineInstall.js'
@@ -23,6 +23,7 @@ import { forkName, planFork } from '../../lib/forkAgent.js'
 import { buildHarnessSessionLabel } from '../../lib/harnessSessionLabel.js'
 import { projectDisplayName, type registry, type RegisteredSession } from '../../lib/registry.js'
 import type { TmuxBackend } from '../../lib/tmuxBackend.js'
+import { prepareInstructionWrites, scmLaunchEnv } from '../../scm/scmProjects.js'
 import type { createLaunchHelpers } from './launch.js'
 import { mergedLaunchEnv } from './launchEnv.js'
 import type { createPaneWatcher } from './newPane.js'
@@ -32,7 +33,7 @@ type ForkAgent = NonNullable<BackendSocket['onForkAgent']>
 export interface ForkAgentDeps {
   tmuxBackend: TmuxBackend | null
   registry: typeof registry
-  mirror: Pick<CommanderMirror, 'isBusy' | 'recentAsks' | 'recent' | 'lastFullText'>
+  mirror: Pick<TurnRecaps, 'isBusy' | 'recentAsks' | 'recent' | 'lastFullText'>
   /** Forks whose session has not reported in yet, to the source session whose recap they inherit (bind.ts). */
   pendingForkInherit: Map<string, string>
   watchNewPane: ReturnType<typeof createPaneWatcher>
@@ -75,6 +76,7 @@ export function createAgentForker({
     if (!plan.ok) return { ok: false, error: plan.error, detail: plan.detail }
 
     const label = buildHarnessSessionLabel(engine)
+    await prepareInstructionWrites(source.cwd)
     // Fork the source's saved harness context. Workspace templates and init are not run again.
     let dshEnv: Record<string, string> | undefined
     let dshArgs: string[] = []
@@ -134,9 +136,12 @@ export function createAgentForker({
       cwd: source.cwd,
       sessionLabel: label,
       argv,
-      env: mergedLaunchEnv(Object.keys(built.overrides.env).length ? built.overrides.env : undefined, dshEnv),
+      // The SCM's environment last, after the harness context's, as at create and relaunch.
+      env: mergedLaunchEnv(mergedLaunchEnv(Object.keys(built.overrides.env).length ? built.overrides.env : undefined, dshEnv), scmLaunchEnv(source.scmLaunch)),
       grid: null,
       gridLaunchRecord: null,
+      // Same folder as the source, so the same workspace binding.
+      scmLaunchRecord: source.scmLaunch ?? null,
       codexHome: source.codexHome ?? null,
       dshRuntime: source.dsh ? label : null,
       dsh: source.dsh ?? null,

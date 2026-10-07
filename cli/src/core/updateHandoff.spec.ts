@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { PROBE_ANSWER } from '../harnessd/protocol.js'
-import { TEARDOWN_DEADLINE_MS, createUpdateHandoff, probeStagedMaster, probeVerdict, type TeardownStep, type UpdateHandoffDeps } from './updateHandoff.js'
+import {
+  RELEASED_POLL_MS, TEARDOWN_DEADLINE_MS, createUpdateHandoff, handOverOnceReleased, probeStagedMaster, probeVerdict, type TeardownStep, type UpdateHandoffDeps,
+} from './updateHandoff.js'
 
 describe('the update handoff', () => {
   afterEach(() => { vi.useRealTimers() })
@@ -11,7 +13,6 @@ describe('the update handoff', () => {
       version: '1.0.0', supervised: true,
       exitForUpdate: () => calls.push('exit 75'),
       probeMaster: async () => { calls.push('probe the master'); return null },
-      rollBack: () => calls.push('roll back'),
       handOff: () => calls.push('start a master, exit'),
       log: (line) => calls.push(line),
       error: (line) => calls.push(line),
@@ -68,36 +69,87 @@ describe('the update handoff', () => {
     expect(plain.calls.at(-1)).toBe('exit 75')
   })
 
-  it('without a master, gives the machine to a master on the staged build once its master answers, after the same teardown', async () => {
+  it('without a master, hands this build to one once its master answers, after the same teardown, once', async () => {
     const { handoff, calls } = make({ supervised: false })
-    const done = handoff.restartForUpdate('2.0.0', [step(calls, 'the registry'), step(calls, 'the backend', () => { throw new Error('no') })])
+    const done = handoff.handOver([step(calls, 'the registry'), step(calls, 'the backend', () => { throw new Error('no') })])
     // Asked before anything is let go: the core serves on meanwhile.
     expect(handoff.restarting()).toBe(false)
-    await handoff.restartForUpdate('2.0.0', [])
-    await done
+    expect(await handoff.handOver([])).toBe(false)
+    expect(await done).toBe(true)
     expect(handoff.restarting()).toBe(true)
     expect(calls).toEqual([
-      '[update] applying 1.0.0 → 2.0.0 — restarting daemon', 'probe the master', 'release the registry', 'release the backend',
-      '[update] the backend did not let go (no) — handing over all the same',
-      '[update] handing 2.0.0 to a harnessd master, which judges it — this core is leaving', 'start a master, exit',
+      'probe the master',
+      '[update] handing 1.0.0 to a harnessd master, which runs the updater — this core is leaving',
+      'release the registry', 'release the backend', '[update] the backend did not let go (no) — handing over all the same',
+      'start a master, exit',
     ])
+    // Leaving, it hands nothing else over.
+    await handoff.restartForUpdate('2.0.0', [])
+    expect(calls.at(-1)).toBe('start a master, exit')
   })
 
-  it('without a master, rolls a build whose master does not answer back, and hands this build to a master of its own', async () => {
-    const { handoff, calls } = make({ supervised: false, probeMaster: async () => 'harnessd-probe failed: a bad build' })
-    await handoff.restartForUpdate('2.0.0', [step(calls, 'the registry')])
-    expect(calls).toEqual([
-      '[update] applying 1.0.0 → 2.0.0 — restarting daemon',
-      '[update] 2.0.0\'s master did not answer its probe (harnessd-probe failed: a bad build) — rolled back; this build goes on under a master of its own',
-      'roll back', 'release the registry',
-      '[update] handing 1.0.0 to a harnessd master, which judges it — this core is leaving', 'start a master, exit',
-    ])
+  it('without a master, carries on when its master does not answer, and may try again', async () => {
+    let answers = ['harnessd-probe failed: a bad build', null]
+    const { handoff, calls } = make({ supervised: false, probeMaster: async () => answers.shift() ?? null })
+    expect(await handoff.handOver([step(calls, 'the registry')])).toBe(false)
+    expect(handoff.restarting()).toBe(false)
+    expect(calls).toEqual(['[update] this build\'s master did not answer its probe (harnessd-probe failed: a bad build) — carrying on without one'])
+    expect(await handoff.handOver([step(calls, 'the registry')])).toBe(true)
+    expect(calls.at(-1)).toBe('start a master, exit')
+    answers = []
   })
 
   it('under harnessd, asks no probe: the master asks its own before it re-executes', async () => {
     const { handoff, calls } = make()
     await handoff.restartForUpdate('2.0.0', [])
     expect(calls).not.toContain('probe the master')
+  })
+})
+
+describe('handing over once the release that started this core has gone', () => {
+  const make = (alive: boolean[], parents: number[]) => {
+    let tick: (() => void) | null = null
+    const calls: string[] = []
+    const stop = handOverOnceReleased({
+      startedBy: 77,
+      parent: () => parents.shift() ?? 77,
+      alive: () => alive.shift() ?? true,
+      handOver: () => calls.push('hand over'),
+      setTimer: (run, ms) => { calls.push(`every ${ms}`); tick = run; return 'timer' },
+      clearTimer: (timer) => calls.push(`cleared ${String(timer)}`),
+    })
+    return { tick: () => tick!(), calls, stop }
+  }
+
+  it('waits while the release is there, and hands over once, when its process ends', () => {
+    const m = make([true, true, false], [77, 77, 77])
+    m.tick()
+    m.tick()
+    expect(m.calls).toEqual([`every ${RELEASED_POLL_MS}`])
+    m.tick()
+    expect(m.calls).toEqual([`every ${RELEASED_POLL_MS}`, 'cleared timer', 'hand over'])
+  })
+
+  it('hands over when this core is reparented away from it, and can be stopped before', () => {
+    const m = make([], [1])
+    m.tick()
+    expect(m.calls.slice(-1)).toEqual(['hand over'])
+    const stopped = make([], [])
+    stopped.stop()
+    expect(stopped.calls).toEqual([`every ${RELEASED_POLL_MS}`, 'cleared timer'])
+  })
+
+  it('polls on an interval that keeps no process alive by default', () => {
+    vi.useFakeTimers()
+    const handOver = vi.fn()
+    let gone = false
+    const stop = handOverOnceReleased({ startedBy: 77, parent: () => 77, alive: () => !gone, handOver })
+    vi.advanceTimersByTime(RELEASED_POLL_MS * 3)
+    expect(handOver).not.toHaveBeenCalled()
+    gone = true
+    vi.advanceTimersByTime(RELEASED_POLL_MS * 3)
+    expect(handOver).toHaveBeenCalledOnce()
+    stop()
   })
 })
 

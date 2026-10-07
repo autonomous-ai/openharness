@@ -1,20 +1,21 @@
 /**
- * The core handing the machine to a newer build its updater has just staged (`selfUpdate.ts`
- * `startSelfUpdater`'s `onStaged`), once start-up has finished: release what the next core needs (the
- * fixed ports, the backend's one-machine claim, the watchers and timers), then go.
+ * The core handing the machine to a newer build harnessd's updater has just staged (the master asks:
+ * `harnessd:update`, harnessd/coreLink.ts), once start-up has finished: release what the next core needs
+ * (the fixed ports, the backend's one-machine claim, the watchers and timers), then exit 75. The master
+ * starts the new bundle the moment this core exits, and judges it.
  *
- * Under harnessd the master starts the new bundle the moment this core exits 75, and judges it. A
- * teardown step that threw used to end the handoff where it stood: the core stayed on the old build with
- * its servers half closed, its updater stopped and the new bundle staged but never judged
- * (e2e/updateHostile.e2e.ts, round 40). Now every step is tried, one that fails is said and passed, and
- * the core exits 75 whatever happened; one that hangs is given up on after `TEARDOWN_DEADLINE_MS`.
+ * A teardown step that threw used to end the handoff where it stood: the core stayed on the old build with
+ * its servers half closed and the new bundle staged but never judged (e2e/updateHostile.e2e.ts, round 40).
+ * Now every step is tried, one that fails is said and passed, and the core exits 75 whatever happened; one
+ * that hangs is given up on after `TEARDOWN_DEADLINE_MS`.
  *
- * Without a master (a core an older release's own handoff started, e2e/migration.e2e.ts, or
- * `HARNESS_NO_MASTER=1`) the core gives the machine to one, which judges the build as every update: the
- * staged bundle's master must answer its probe first, as before a re-execution (harnessd/reexec.ts), or the
- * build before goes back, rejected; then the same teardown, and `handOff` starts `__harnessd` and exits.
- * The master finds the pending note and puts its first core on probation (harnessd/supervisor.ts,
- * `unjudgedUpdate`). The core once spawned a core like itself and judged it, which then had no master.
+ * A core with no master gets no update: the updater is the master's (services/updaterProcess.ts), and the
+ * core never downloads a build. One an older release's own handoff started (it spawned `cli.js __run`,
+ * e2e/migration.e2e.ts) would run this build until its next start, so once that release has gone it hands
+ * the machine to a master (`handOver`, `handOverOnceReleased`): its master answers its probe first, as a
+ * master asks before it re-executes on a bundle (harnessd/reexec.ts), then the same teardown, then
+ * `handOff` starts `__harnessd`, names it in the pid file and exits. One `HARNESS_NO_MASTER=1` asked for
+ * runs without updates, as asked.
  *
  * Staged means restart now. The restart once waited for the computer to go idle, and "idle" is a set of
  * latches (an open turn, a settling composer, an awaited submit, the control lock, a recap in flight):
@@ -41,11 +42,9 @@ export interface UpdateHandoffDeps {
   supervised: boolean
   /** Exit for the update (`CORE_EXIT_UPDATE`), to the master that starts the new bundle. */
   exitForUpdate(): void
-  /** Without a master: whether the staged bundle's master answers its probe (`probeStagedMaster`); null when
-   *  it does, why not otherwise. */
+  /** Without a master: whether the master of the bundle on disk answers its probe (`probeStagedMaster`); null
+   *  when it does, why not otherwise. */
   probeMaster(): Promise<string | null>
-  /** Without a master: put the build before back (`selfUpdate.restore`), remembering this one as rejected. */
-  rollBack(): void
   /** Without a master: start harnessd's master on the bundle now on disk, name it in the pid file, exit. */
   handOff(): void
   log(line: string): void
@@ -83,28 +82,36 @@ export function createUpdateHandoff(deps: UpdateHandoffDeps) {
   return {
     /** Between the teardown starting and this core leaving (`/api/status`, and a signal mid-handoff). */
     restarting: (): boolean => restarting,
-    /** Hand over to `newVersion`, releasing `teardown` first. Once: a second call while one is under way does nothing. */
+    /** Hand over to `newVersion`, releasing `teardown` first, and exit for the update. Once: a second call
+     *  while one is under way does nothing. */
     async restartForUpdate(newVersion: string, teardown: readonly TeardownStep[]): Promise<void> {
       if (started) return
       started = true
+      restarting = true
       deps.log(`[update] applying ${deps.version} → ${newVersion} — restarting daemon`)
-      // Asked before anything is let go: the core serves on while it answers.
-      const refused = deps.supervised ? null : await deps.probeMaster()
+      await releaseAll(teardown)
+      // Everything above is released, or said not to be; the master starts the new bundle as soon as this
+      // exits and rolls back to the .prev bytes if it does not come up and stay up.
+      deps.log(`[update] handing ${newVersion} to harnessd`)
+      deps.exitForUpdate()
+    },
+    /** Without a master: give the machine to one on this build, once its master answers; otherwise carry on.
+     *  Resolves whether it handed over. */
+    async handOver(teardown: readonly TeardownStep[]): Promise<boolean> {
+      if (started) return false
+      started = true
+      // Asked before anything is let go: the core serves on while it answers, and on if it does not.
+      const refused = await deps.probeMaster()
       if (refused !== null) {
-        deps.error(`[update] ${newVersion}'s master did not answer its probe (${refused}) — rolled back; this build goes on under a master of its own`)
-        deps.rollBack()
+        deps.error(`[update] this build's master did not answer its probe (${refused}) — carrying on without one`)
+        started = false
+        return false
       }
       restarting = true
+      deps.log(`[update] handing ${deps.version} to a harnessd master, which runs the updater — this core is leaving`)
       await releaseAll(teardown)
-      if (deps.supervised) {
-        // Everything above is released, or said not to be; the master starts the new bundle as soon as
-        // this exits and rolls back to the .prev bytes if it does not come up and stay up.
-        deps.log(`[update] handing ${newVersion} to harnessd`)
-        deps.exitForUpdate()
-        return
-      }
-      deps.log(`[update] handing ${refused === null ? newVersion : deps.version} to a harnessd master, which judges it — this core is leaving`)
       deps.handOff()
+      return true
     },
   }
 }
@@ -133,9 +140,35 @@ export function probeStagedMaster(run: ProbeRun, timeoutMs = PROBE_TIMEOUT_MS, d
   })
 }
 
-/** What a master probe's end says: null when it answered as a master, why not otherwise. Shared by the
- *  boot handoff's synchronous probe (lib/daemonSafeMode.ts `runBootHandoff`). */
+/** What a master probe's end says: null when it answered as a master, why not otherwise. */
 export function probeVerdict(error: Error | null | undefined, stdout: string): string | null {
   if (!error && stdout.includes(PROBE_ANSWER)) return null
   return stdout.trim().split('\n').pop()?.trim() || error?.message || 'no answer'
+}
+
+/** How often a core an older release started looks for it to have gone. */
+export const RELEASED_POLL_MS = 2_000
+
+/**
+ * Hand the machine to a master once the older release that started this core has gone: it spawned this
+ * core detached, judged it by its bind and its connection (up to a minute and a half) and leaves; a core
+ * that left first would be read as the new build failing, and rolled back. Gone is its process ended, or
+ * this core reparented away from it. Returns a stop.
+ */
+export function handOverOnceReleased(deps: {
+  startedBy: number
+  parent(): number
+  alive(pid: number): boolean
+  handOver(): void
+  setTimer?: (run: () => void, ms: number) => unknown
+  clearTimer?: (timer: unknown) => void
+}): () => void {
+  const setTimer = deps.setTimer ?? ((run, ms) => { const timer = setInterval(run, ms); timer.unref?.(); return timer })
+  const clearTimer = deps.clearTimer ?? ((timer) => clearInterval(timer as ReturnType<typeof setInterval>))
+  const timer = setTimer(() => {
+    if (deps.parent() === deps.startedBy && deps.alive(deps.startedBy)) return
+    clearTimer(timer)
+    deps.handOver()
+  }, RELEASED_POLL_MS)
+  return () => clearTimer(timer)
 }

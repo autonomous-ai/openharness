@@ -125,7 +125,7 @@ export function messageHoldText(engine: string, hold: MessageHold): string {
     case 'sign_in_open':
       return `${name} is asking how to sign in. Sign in in its terminal, then send the message again.`
     case 'popup_open':
-      return `${name} has a list of suggestions open in its prompt, where Enter would pick one. Close it with Esc in its terminal, then send the message again.`
+      return `${name} message not sent. Close suggestions with Esc in its terminal, then retry.`
     case 'prompt_hidden':
       return `${name} isn't showing its prompt; finish what's on its screen in its terminal, then send the message again.`
     case 'screen_unreadable':

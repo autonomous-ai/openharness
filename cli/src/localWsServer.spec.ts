@@ -22,11 +22,13 @@ class FakeBackend implements LocalWsBackend {
   unregisters: string[] = []
   focuses: Array<[string, string | null]> = []
   tools: string[] = []
+  surfaces: Array<string | undefined> = []
 
-  registerLocalClient(connId: string, sink: LocalClientSink, opts: { tool?: boolean } = {}): boolean {
+  registerLocalClient(connId: string, sink: LocalClientSink, opts: { tool?: boolean; surface?: 'tui' } = {}): boolean {
     this.connId = connId
     this.sink = sink
     if (opts.tool) this.tools.push(connId)
+    this.surfaces.push(opts.surface)
     return true
   }
   async unregisterLocalClient(connId: string): Promise<void> {
@@ -99,6 +101,21 @@ describe('local CLI WebSocket', () => {
     // ws alone waits 30 s for it.
     expect(performance.now() - started).toBeLessThan(LOCAL_WS_CLOSE_GRACE_MS + 2_000)
     raw.destroy()
+  })
+
+  it('registers `harness tui` as its own surface, and every other window as the desktop app', async () => {
+    for (const [client, surface] of [['tui', 'tui'], [undefined, undefined], ['desktop', undefined]] as const) {
+      const backend = new FakeBackend()
+      const ws = new WebSocket(await start(backend))
+      await onceOpen(ws)
+      const connected = onceMessage(ws)
+      ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId, localProtocolVersion: 1, ...(client ? { client } : {}) } }))
+      await connected
+      expect(backend.surfaces).toEqual([surface])
+      ws.close()
+      await local!.close()
+      local = null
+    }
   })
 
   it('keeps notification identities on the local read and snapshot paths', async () => {
@@ -659,6 +676,57 @@ describe('local CLI WebSocket', () => {
     expect(tabs).toHaveBeenLastCalledWith(backend.connId, null)
   })
 
+  for (const latestCloses of [false, true]) {
+    it(`keeps the device's desk when a ${latestCloses ? 'latest' : 'background'} machine connection closes`, async () => {
+      const backend = new FakeBackend(), panes = vi.fn(), swarms = vi.fn(), tabs = vi.fn()
+      const url = await start(backend, {
+        onAppPanes: panes, onAppSwarms: swarms, onAppTabAgents: tabs,
+        relayPool: {
+          acquire: async (_machine, _env, _select, sink) => {
+            sink.sendFrame({ type: 'connected', payload: { machineId: 'remote' } })
+            return { send: async () => {}, sendBinary: async () => {}, detach: () => {} }
+          },
+          acquireIsolated: vi.fn(),
+          invalidate: () => {}, invalidateIsolated: () => {},
+        } as NonNullable<LocalWsServerOptions['relayPool']>,
+        autonomousEnv: 'prod',
+      })
+      const connect = async (selected: string) => {
+        const ws = new WebSocket(url)
+        await onceOpen(ws)
+        const ready = onceMessage(ws)
+        ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId: selected, localProtocolVersion: 1 } }))
+        await ready
+        return ws
+      }
+      const first = await connect(machineId), second = await connect('remote')
+      const roster = { active: 'tab', swarms: [{ id: 'tab', name: 'Work', agentIds: ['a1'], panes: 1 }], tiles: [] }
+      const announce = async (ws: WebSocket, foreground: boolean) => {
+        const count = panes.mock.calls.length
+        ws.send(JSON.stringify({ type: 'app_panes', payload: { agentIds: ['a1'], foreground } }))
+        ws.send(JSON.stringify({ type: 'app_swarms', payload: roster }))
+        await vi.waitFor(() => {
+          expect(panes).toHaveBeenCalledTimes(count + 1)
+          expect(swarms).toHaveBeenCalledTimes(count + 1)
+        })
+      }
+      await announce(first, false)
+      await announce(second, true)
+      // Reannouncing on an existing socket makes it the newest reporter too.
+      await announce(first, false)
+      const closing = latestCloses ? first : second, surviving = latestCloses ? second : first
+      closing.close()
+      await vi.waitFor(() => expect(tabs).toHaveBeenCalledTimes(4))
+      expect(panes).toHaveBeenLastCalledWith(['a1'], latestCloses)
+      expect(swarms).toHaveBeenLastCalledWith(roster)
+      expect(panes.mock.calls.some(([ids]) => ids.length === 0)).toBe(false)
+      expect(swarms.mock.calls.some(([rows]) => rows === null)).toBe(false)
+      surviving.close()
+      await vi.waitFor(() => expect(panes).toHaveBeenLastCalledWith([], false))
+      expect(swarms).toHaveBeenLastCalledWith(null)
+    })
+  }
+
   it('follows an explicit app_focus, and keeps it off the wire', async () => {
     const backend = new FakeBackend()
     const moves: Array<{ machineId: string; agentId: string }> = []
@@ -1143,6 +1211,46 @@ describe('local CLI WebSocket', () => {
       await expect(closed).resolves.toBe(4401)
     }
     expect(accepted).toEqual(['search'])
+  })
+
+  it('carries a large remote agent list on an authenticated service link without dropping it', async () => {
+    const receive = vi.fn(), closed = vi.fn()
+    const url = await start(new FakeBackend(), { services: {
+      accept: (_service, token, _sink, _close, welcome) => {
+        if (token !== 'boot-token') return null
+        welcome()
+        return { receive, receiveBinary: vi.fn(), closed }
+      },
+    } })
+    const ws = new WebSocket(url)
+    await onceOpen(ws)
+    const connected = onceMessage(ws)
+    ws.send(JSON.stringify({ type: 'machine_select', payload: {
+      machineId, localProtocolVersion: 1, role: 'service', service: 'gateway', token: 'boot-token',
+    } }))
+    await connected
+    const frame = { type: 'service_notice', payload: { kind: 'windowFrame', id: 'remote-window',
+      frame: { type: 'agents_list_result', payload: { agents: [{ id: 'remote-agent', name: 'a'.repeat(1024 * 1024) }] } },
+    } }
+    ws.send(JSON.stringify(frame))
+    await vi.waitFor(() => expect(receive).toHaveBeenCalledWith(frame))
+    ws.send(JSON.stringify({ type: 'service_notice', payload: { kind: 'status', connected: true } }))
+    await vi.waitFor(() => expect(receive).toHaveBeenCalledTimes(2))
+    expect(closed).not.toHaveBeenCalled()
+    ws.close()
+  })
+
+  it('keeps the smaller JSON limit for desktop clients even if a frame claims to be a service', async () => {
+    const backend = new FakeBackend()
+    const ws = new WebSocket(await start(backend))
+    await onceOpen(ws)
+    const connected = onceMessage(ws)
+    ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId, localProtocolVersion: 1 } }))
+    await connected
+    const closed = new Promise<number>((resolve) => ws.once('close', resolve))
+    ws.send(JSON.stringify({ type: 'service_notice', payload: { role: 'service', data: 'a'.repeat(512 * 1024) } }))
+    await expect(closed).resolves.toBe(4400)
+    expect(backend.frames).toEqual([])
   })
 
   it('rejects browser origins and machine-id mismatches', async () => {

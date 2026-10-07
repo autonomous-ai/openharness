@@ -18,6 +18,7 @@
 import { WebSocket } from 'ws'
 import { hostname } from 'os'
 import { env } from '../config/env.js'
+import { WINDOW_SURFACES, type LocalWindows, type WindowSurface } from '../lib/windowSurfaces.js'
 import { AuthSessionError, AuthSessionManager } from '../lib/authSession.js'
 import { BACKEND_IDLE_DEADLINE_MS, watchSocketLiveness, type LivenessWatch } from '../lib/wsLiveness.js'
 import { decodeTerminalHop, TerminalHopDirection } from '../lib/terminalBinary.js'
@@ -71,9 +72,9 @@ export interface UpstreamEvents {
   revoked(): void
   /** Another computer already holds this machine (HTTP 409): keep the session, stop for good. */
   busy(): void
-  /** How many processes on this computer are attached (windows and tools): the window's presence rides
-   *  the app-ping while there are any. */
-  localClients(): number
+  /** The windows attached on this computer, per surface: each one's presence rides the app-ping while
+   *  it has any. */
+  localClients(): LocalWindows
 }
 
 export interface UpstreamOptions {
@@ -102,11 +103,11 @@ export class UpstreamLink {
   private droppedSinceLog = 0
   private heartbeat: LivenessWatch | null = null
   private appPing: NodeJS.Timeout | null = null
-  private lastAppPresenceUpAt = 0
+  private lastAppPresenceUpAt: Record<WindowSurface, number> = { desktop: 0, tui: 0 }
   // A window attached while there was no link to tell (cold start: the app dials this daemon before
   // the daemon has dialed the backend; or a daemon restart under an open window). The session is
   // real and must be counted once, so it is owed to the next link — not turned into a `ping`.
-  private appOpenOwed = false
+  private appOpenOwed: Record<WindowSurface, boolean> = { desktop: false, tui: false }
   private thisComputerOnly = false
   private readonly events: UpstreamEvents
 
@@ -177,11 +178,15 @@ export class UpstreamLink {
 
       // App-level ping refreshes the backend's presence key (TTL 30s). The window's presence rides
       // the same tick — a fresh socket knows nothing about the window, so its first tick goes through.
-      this.lastAppPresenceUpAt = 0
-      if (this.appOpenOwed && this.events.localClients() > 0) this.sendAppPresence('open')
+      const windows = this.events.localClients()
+      for (const surface of WINDOW_SURFACES) {
+        this.lastAppPresenceUpAt[surface] = 0
+        if (this.appOpenOwed[surface] && windows[surface] > 0) this.sendAppPresence('open', surface)
+      }
       this.appPing = setInterval(() => {
         this.sendBestEffort({ t: 'ping' })
-        if (this.events.localClients() > 0) this.sendAppPresence('ping')
+        const open = this.events.localClients()
+        for (const surface of WINDOW_SURFACES) if (open[surface] > 0) this.sendAppPresence('ping', surface)
       }, APP_PING_MS)
     })
 
@@ -283,25 +288,26 @@ export class UpstreamLink {
    * window is attached, at most once per APP_PRESENCE_UP_MS. Best-effort and plaintext on purpose: it
    * is bookkeeping about the person, not data, and a daemon that is signed out (no backend dial) or
    * between reconnects simply drops it rather than queueing a stale "was open" behind real frames.
-   * Returns whether a frame went up.
+   * Returns whether a frame went up. Each surface is its own presence (the TUI is not the desktop app);
+   * the desktop's frame carries no `surface`, exactly as before it existed.
    */
-  sendAppPresence(kind: 'open' | 'ping'): boolean {
+  sendAppPresence(kind: 'open' | 'ping', surface: WindowSurface = 'desktop'): boolean {
     const now = Date.now()
-    if (kind === 'ping' && now - this.lastAppPresenceUpAt < APP_PRESENCE_UP_MS) return false
+    if (kind === 'ping' && now - this.lastAppPresenceUpAt[surface] < APP_PRESENCE_UP_MS) return false
     const sent = this.sendBestEffort({
       t: 'up',
       webEligible: false,
       commanderEligible: false,
-      frame: { type: 'app_presence', payload: { kind } },
+      frame: { type: 'app_presence', payload: surface === 'desktop' ? { kind } : { kind, surface } },
     })
-    if (sent) this.lastAppPresenceUpAt = now
-    if (kind === 'open') this.appOpenOwed = !sent
+    if (sent) this.lastAppPresenceUpAt[surface] = now
+    if (kind === 'open') this.appOpenOwed[surface] = !sent
     return sent
   }
 
-  /** The last window left before any link could hear it attach: nothing happened, as far as the backend
-   *  is concerned, and a later link must not be told otherwise. */
-  noLocalClients(): void { this.appOpenOwed = false }
+  /** The last window of `surface` left before any link could hear it attach: nothing happened, as far
+   *  as the backend is concerned, and a later link must not be told otherwise. */
+  noLocalClients(surface: WindowSurface): void { this.appOpenOwed[surface] = false }
 
   enqueue(msg: OutboundEnvelope): void {
     if (this.thisComputerOnly) return

@@ -12,7 +12,7 @@ import { copilotSessionForPid, findCopilotTranscript } from '../../engines/copil
 import { findCursorTranscript } from '../../engines/cursor/discovery.js'
 import { cursorDataDir } from '../../engines/cursor/home.js'
 import { findGrokTranscript } from '../../engines/grok/session.js'
-import type { CommanderMirror } from '../../lib/commander.js'
+import type { TurnRecaps } from '../turns/recaps.js'
 import type { AutonomousDeviceInput } from '../deviceInput.js'
 import { isRecentlyDeleted } from '../../lib/deletedSessions.js'
 import { transcriptIsFirstTurn } from '../../lib/firstTurnReplay.js'
@@ -53,7 +53,7 @@ export type RegisteredMeta = {
 
 export interface BindDeps {
   registry: Pick<typeof registry, 'inheritName' | 'unbindSession' | 'byAgent' | 'byProcess' | 'register' | 'has' | 'bySession'>
-  mirror: Pick<CommanderMirror, 'inheritSummary'>
+  mirror: Pick<TurnRecaps, 'inheritSummary'>
   forgetSession: (id: string, opts?: { force?: boolean; keepAgent?: boolean; agentId?: string }) => void
   /** The app. */
   clients: { send(frame: { type: string; payload: Record<string, unknown> }): void }
@@ -166,7 +166,10 @@ export function createBinding({
       // engine; and a second restart queued behind a first found no conversation to resume and started a
       // fresh one (e2e/races.e2e.ts). The binding stands while one of them runs: a stop retires it, and a
       // restart's new engine registers it again.
-      if (!changing(entry.agentId)) registry.unbindSession(entry.sessionId)
+      // The October 6 TUI picker exit/resume incident: a verified engine exited while its startup
+      // attach was pending. Unbinding here erased the conversation before discovery retired it, so
+      // Open started a fresh one under the saved title. Keep that verified id for the existing lifecycle.
+      if (!changing(entry.agentId) && !entry.processIdentity) registry.unbindSession(entry.sessionId)
       announceSession(entry)
       return
     }

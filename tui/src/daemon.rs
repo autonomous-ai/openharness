@@ -117,7 +117,8 @@ impl Link {
                 Err(_) => { emit(MachineEvent::Failed(RpcError::new("TIMEOUT", "the daemon did not answer"))); return }
             };
             let (mut write, mut read) = ws.split();
-            let select = json!({ "type": "machine_select", "payload": { "machineId": id, "localProtocolVersion": 1 } });
+            // `client` makes this its own presence, not the desktop app's (cli localWsServer, backend presence).
+            let select = json!({ "type": "machine_select", "payload": { "machineId": id, "localProtocolVersion": 1, "client": "tui" } });
             if write.send(Message::text(select.to_string())).await.is_err() {
                 emit(MachineEvent::Failed(RpcError::new("DISCONNECTED", "")));
                 return;

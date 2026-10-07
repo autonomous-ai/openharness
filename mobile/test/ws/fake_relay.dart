@@ -92,7 +92,11 @@ class FakeRelay {
   static Future<FakeRelay> start(E2eeIdentity machineIdentity) async =>
       FakeRelay._(machineIdentity);
 
+  /// Every URL dialled, in order.
+  final dialledUris = <Uri>[];
+
   MemoryWebSocket connect(Uri uri, {Iterable<String>? protocols}) {
+    dialledUris.add(uri);
     final (client, server) = MemoryWebSocket.pair(
       protocol: protocols?.firstOrNull,
     );

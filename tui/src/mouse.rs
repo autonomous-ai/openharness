@@ -126,6 +126,30 @@ pub fn on_event(app: &mut App, raw: MouseEvent) {
     handle(app, m, false);
 }
 
+/// A click handled by UI chrome ends the terminal's click sequence. Its delayed
+/// double-click must not select or act on a pane after the user has moved on.
+pub fn cancel_clicks(app: &mut App) {
+    let state = &mut app.mouse_state;
+    state.double = false;
+    state.triple = false;
+    state.click_event = None;
+    state.click_gen = state.click_gen.wrapping_add(1);
+}
+
+/// Plain pane titles can overlap tmux's resize border. Their click may focus the pane,
+/// but the original press must still reach the mouse state that owns the ensuing drag.
+pub fn over_resize_border(app: &App, x: u16, y: u16) -> bool {
+    if app.tab().zoomed { return false }
+    let body = app.body();
+    let (Some(x), Some(y)) = (x.checked_sub(body.x), y.checked_sub(body.y)) else { return false };
+    border_pane(&app.visible_layout_geoms(), x as u32, y as u32).is_some()
+}
+
+fn border_pane(geoms: &[(u64, crate::layout::Geom)], x: u32, y: u32) -> Option<u64> {
+    geoms.iter().find(|(_, g)| (g.x + g.w == x && g.y <= 1 + y && g.y + g.h >= y)
+        || (g.y + g.h == y && g.x <= 1 + x && g.x + g.w >= x)).map(|(id, _)| *id)
+}
+
 /// server_client_key_callback, for a mouse key: the table it is in runs it; else the pane under
 /// it has it.
 fn handle(app: &mut App, mut m: Event, double: bool) {
@@ -173,7 +197,7 @@ fn click_timer(app: &mut App, generation: u64) {
     s.triple = false;
     if !triple { return }
     let Some(ev) = s.click_event.clone() else { return };
-    if matches!(app.modal, Some(crate::modal::Modal::Menu { .. })) { return }
+    if app.home_visible() || app.modal.as_ref().is_some_and(|m| !matches!(m, crate::modal::Modal::Copy { .. })) { return }
     handle(app, ev, true);
 }
 
@@ -262,8 +286,8 @@ fn check(app: &mut App, m: &mut Event, double: bool) -> Option<Key> {
         }
         // A border (a zoomed window has none): the column after a pane or the row below it.
         if place.is_none() && !app.tab().zoomed {
-            if let Some((id, _)) = geoms.iter().find(|(_, g)| (g.x + g.w == px && g.y <= 1 + py && g.y + g.h >= py) || (g.y + g.h == py && g.x <= 1 + px && g.x + g.w >= px)) {
-                m.wp = Some(*id);
+            if let Some(id) = border_pane(&geoms, px, py) {
+                m.wp = Some(id);
                 place = Some(keys::BORDER);
             }
         }

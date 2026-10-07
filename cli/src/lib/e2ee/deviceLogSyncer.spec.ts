@@ -8,8 +8,9 @@ import {
   type DevLogEntry, type DevLogState,
 } from './deviceLog.js'
 import { DeviceLogStore } from './deviceLogStore.js'
-import { DeviceLogSyncer, devLogDivergence, type DeviceLogAppendAnswer, type DeviceLogFetched, type DeviceLogRebaseline } from './deviceLogSyncer.js'
+import { DeviceLogSyncer, devLogDivergence, type DeviceKeysSeen, type DeviceLogAppendAnswer, type DeviceLogFetched, type DeviceLogRebaseline } from './deviceLogSyncer.js'
 import { ADOPTED_SIGN_IN } from '../authSession.js'
+import { b64d, fingerprint } from './core.js'
 
 const b64 = (u: Uint8Array): string => Buffer.from(u).toString('base64')
 const key = (n: number) => { const priv = new Uint8Array(32).fill(n); return { priv, pub: b64(ed25519.getPublicKey(priv)) } }
@@ -69,7 +70,11 @@ class FakeBackend {
 
 /** `signIn`: the sign-in's epoch (one starting ADOPTED_SIGN_IN is adopted), made at `signInAt` (the
  *  clock's 5_000 by default — just now). */
-function setup(opts: { known?: string[]; tombstoned?: string[]; blocked?: string[]; store?: DeviceLogStore; backend?: FakeBackend; signIn?: () => string | null; signInAt?: number | null; isTrusted?: (pub: string) => boolean } = {}) {
+function setup(opts: {
+  known?: string[]; tombstoned?: string[]; blocked?: string[]; store?: DeviceLogStore; backend?: FakeBackend; signIn?: () => string | null; signInAt?: number | null
+  isTrusted?: (pub: string) => boolean; signInAcct?: () => string | null; switchAccount?: (from: string, to: string) => void
+  now?: () => number; seen?: () => Promise<DeviceKeysSeen | null>; log?: (line: string) => void
+} = {}) {
   const backend = opts.backend ?? new FakeBackend()
   const store = opts.store ?? new DeviceLogStore(join(mkdtempSync(join(tmpdir(), 'devlog-')), 'devlog.json'))
   const calls = {
@@ -84,8 +89,10 @@ function setup(opts: { known?: string[]; tombstoned?: string[]; blocked?: string
     identity: () => me,
     signIn: () => {
       const epoch = opts.signIn?.() ?? null
-      return epoch ? { epoch, adopted: epoch.startsWith(ADOPTED_SIGN_IN), at: opts.signInAt === undefined ? 5_000 : opts.signInAt } : null
+      const acct = opts.signInAcct?.() ?? null
+      return epoch ? { epoch, adopted: epoch.startsWith(ADOPTED_SIGN_IN), at: opts.signInAt === undefined ? 5_000 : opts.signInAt, ...(acct ? { acct } : {}) } : null
     },
+    ...(opts.switchAccount ? { switchAccount: opts.switchAccount } : {}),
     self: () => ({ machineId: MID_ME, label: 'my-mac' }),
     fetch: backend.fetch,
     append: backend.append,
@@ -102,7 +109,9 @@ function setup(opts: { known?: string[]; tombstoned?: string[]; blocked?: string
     resume: calls.resume,
     signedOut: calls.signedOut,
     changed: calls.changed,
-    now: () => 5_000,
+    ...(opts.seen ? { seen: opts.seen } : {}),
+    ...(opts.log ? { log: opts.log } : {}),
+    now: opts.now ?? (() => 5_000),
     sleep: async () => {},
   })
   return { backend, store, syncer, calls, trusted }
@@ -1533,6 +1542,127 @@ describe('DeviceLogSyncer — departed keys, sign-ins and kept accounts', () => 
     })
   })
 
+  describe('a sign-in by hand to the account the backend names starts the log over at any time', () => {
+    const OLD = 5_000 - 11 * 60_000
+    /** Signed in by hand to ACCT long ago (box2 on the log); then to `acct` (recorded as `named`), with
+     *  the backend now serving `acct-2`. */
+    const signedInAgain = async (named: string | null, more: Parameters<typeof setup>[0] = {}) => {
+      const who = { user: 'u1', acct: ACCT as string | null }
+      const s = setup({ signIn: () => who.user, signInAcct: () => who.acct, signInAt: OLD, ...more })
+      s.backend.add(box2, 'machine', MID2, 'box2')
+      await s.syncer.register()
+      who.user = 'u2'
+      who.acct = named
+      s.backend.fetch.mockImplementation(FakeBackend.of('acct-2').fetch)
+      await s.syncer.refresh()
+      return { ...s, who }
+    }
+
+    it('long after it was made, when it was made to that account', async () => {
+      const s = await signedInAgain('acct-2')
+      expect(s.store.read()).toMatchObject({ state: { acct: 'acct-2' }, frozen: null, owner: 'u2' })
+    })
+
+    it('made to another account than the backend names, long ago: only freezes', async () => {
+      const s = await signedInAgain('acct-3')
+      expect(s.store.read()).toMatchObject({ state: { acct: ACCT }, frozen: { reason: 'invalid' } })
+    })
+
+    it('made to another account than the backend names, even just now: only freezes', async () => {
+      // The account the sign-in was made to is known: a different one named minutes later is the
+      // backend's word against it, which the window must not let through.
+      const s = await signedInAgain('acct-3', { signInAt: 5_000 - 60_000 })
+      expect(s.store.read()).toMatchObject({ state: { acct: ACCT }, frozen: { reason: 'invalid' } })
+    })
+
+    it('the account is not taken from a sign-in that is not new here', async () => {
+      const who = { acct: ACCT }
+      const s = setup({ signIn: () => 'u1', signInAcct: () => who.acct, signInAt: OLD })
+      await s.syncer.register()
+      who.acct = 'acct-2'
+      s.backend.fetch.mockImplementation(FakeBackend.of('acct-2').fetch)
+      await s.syncer.refresh()
+      expect(s.store.read()).toMatchObject({ state: { acct: ACCT }, frozen: { reason: 'invalid' } })
+    })
+
+    it('swaps the trust stores before the new log is written: what it already trusted is the new account\'s', async () => {
+      const seen: Array<{ from: string; to: string; live: string | undefined; archived: boolean }> = []
+      let t!: ReturnType<typeof setup>
+      const switchAccount = vi.fn((from: string, to: string) => {
+        seen.push({ from, to, live: t.store.read().state?.acct, archived: t.store.archivedFile(from) !== null })
+        // What the stores hold once swapped: the new account's own (nothing of box2).
+        t.trusted.splice(0, t.trusted.length, phone.pub)
+      })
+      const who = { user: 'u1', acct: ACCT }
+      t = setup({ signIn: () => who.user, signInAcct: () => who.acct, signInAt: OLD, switchAccount })
+      t.backend.add(box2, 'machine', MID2, 'box2')
+      await t.syncer.register()
+      t.trusted.push(box2.pub)
+      expect(switchAccount).not.toHaveBeenCalled() // the first read keeps what was trusted before the log
+      who.user = 'u2'
+      who.acct = 'acct-2'
+      const other = FakeBackend.of('acct-2')
+      t.backend.fetch.mockImplementation(other.fetch)
+      await t.syncer.refresh()
+      expect(seen).toEqual([{ from: ACCT, to: 'acct-2', live: ACCT, archived: false }])
+      expect(t.store.read()).toMatchObject({ state: { acct: 'acct-2' }, preLog: [phone.pub] })
+      // And back: the kept log comes back, and so do its stores.
+      who.user = 'u3'
+      who.acct = ACCT
+      t.backend.fetch.mockImplementation(async (since) => ({ acct: ACCT, head: t.backend.state.head, entries: t.backend.entries.filter((e) => e.seq > since) }))
+      await t.syncer.refresh()
+      expect(switchAccount).toHaveBeenLastCalledWith('acct-2', ACCT)
+      expect(t.store.read().state?.acct).toBe(ACCT)
+    })
+
+    it('a review of another account\'s list swaps them too', async () => {
+      const switchAccount = vi.fn()
+      const s = await signedInAgain(null, { switchAccount })
+      expect(s.store.read().frozen?.reason).toBe('invalid')
+      expect(switchAccount).not.toHaveBeenCalled()
+      await s.syncer.rebaseline(false)
+      expect(switchAccount).not.toHaveBeenCalled()
+      await s.syncer.rebaseline(true)
+      expect(switchAccount).toHaveBeenCalledWith(ACCT, 'acct-2')
+      expect(s.store.read()).toMatchObject({ state: { acct: 'acct-2' }, frozen: null })
+    })
+
+    it('the trust group waits until the log is this sign-in\'s and not frozen on another account', async () => {
+      const fresh = setup({ signIn: () => 'u1' })
+      expect(fresh.syncer.current()).toBe(true) // nothing read yet: no account to carry over
+      const who = { user: 'u1', acct: ACCT as string | null }
+      const s = setup({ signIn: () => who.user, signInAcct: () => who.acct, signInAt: OLD })
+      await s.syncer.register()
+      expect(s.syncer.current()).toBe(true)
+      who.user = 'u2'
+      expect(s.syncer.current()).toBe(false)
+      who.acct = 'acct-3'
+      s.backend.fetch.mockImplementation(FakeBackend.of('acct-2').fetch)
+      await s.syncer.refresh()
+      expect(s.store.read().frozen?.reason).toBe('invalid')
+      expect(s.syncer.current()).toBe(false)
+    })
+  })
+
+  describe('gossip names its account', () => {
+    it('says it, and a peer of another account is not heard: nothing frozen, no tail taken', async () => {
+      const s = setup()
+      s.backend.add(box2, 'machine', MID2, 'box2')
+      await s.syncer.register()
+      expect(s.syncer.gossip()).toMatchObject({ acct: ACCT })
+      const other = FakeBackend.of('acct-2')
+      other.add(evil, 'viewer', '', 'evil')
+      other.add(phone, 'viewer', '', 'phone') // as long as this log, and different: a fork, were it this account's
+      const head = s.store.read().state!.head
+      expect(s.syncer.heard(evil.pub, { acct: 'acct-2', head: other.state.head, hashes: hashesOf(other.state), tail: other.entries, frozen: true })).toBeUndefined()
+      expect(s.store.read()).toMatchObject({ frozen: null, state: { head } })
+      expect(s.syncer.list().frozenPeers).toEqual([])
+      // The same log, under this account's name (or none, from an older peer), is a fork.
+      expect(s.syncer.heard(evil.pub, { acct: ACCT, head: other.state.head, hashes: hashesOf(other.state) })).toBeDefined()
+      expect(s.store.read().frozen?.reason).toBe('fork')
+    })
+  })
+
   describe('a suspension kept in another account\'s log shows, and lifts, in this one', () => {
     /** Signed in to ACCT, where a fork suspended evil; then signed in by hand to acct-2, whose log has evil. */
     const moved = async () => {
@@ -1903,5 +2033,214 @@ describe('DeviceLogSyncer — a review (rebaseline --yes)', () => {
       await t.syncer.rebaseline(true)
       expect(t.store.read().departed).toEqual([])
     })
+  })
+})
+
+/** Serve the log one entry per page, as a backend may. */
+function onePerPage(backend: FakeBackend): void {
+  const real = backend.fetch.getMockImplementation()!
+  backend.fetch.mockImplementation(async (since) => { const g = await real(since); return g && { ...g, entries: g.entries.slice(0, 1) } })
+}
+
+describe('DeviceLogSyncer — a log longer than a usual read', () => {
+  const many = (n: number) => Array.from({ length: n }, (_, i) => key(10 + i))
+
+  it('a first read goes past the usual page cap, so nothing on the account is announced', async () => {
+    const t = setup()
+    for (const k of many(25)) t.backend.add(k, 'viewer', '', 'app')
+    onePerPage(t.backend)
+    await t.syncer.refresh()
+    expect(t.store.read()).toMatchObject({ joinedSeq: 25, pending: [] })
+    expect(t.store.read().joining).toBeUndefined()
+    expect(t.syncer.list().baseline).toHaveLength(25)
+    expect(t.calls.announce).not.toHaveBeenCalled()
+    // Once joined, a read is back to the usual cap.
+    for (const k of many(50).slice(25)) t.backend.add(k, 'viewer', '', 'app')
+    t.backend.fetch.mockClear()
+    await t.syncer.refresh()
+    expect(t.backend.fetch).toHaveBeenCalledTimes(20)
+    expect(t.store.read().state?.head.seq).toBe(45)
+  })
+
+  it('a review reads a list longer than the usual page cap', async () => {
+    const t = setup()
+    t.backend.add(box2, 'machine', MID2, 'box2')
+    await t.syncer.register()
+    t.backend.lie = t.backend.entries.slice(0, 1)
+    await t.syncer.refresh()
+    expect(t.store.read().frozen).not.toBeNull()
+    t.backend.lie = null
+    for (const k of many(25)) t.backend.add(k, 'viewer', '', 'app')
+    onePerPage(t.backend)
+    const done = await t.syncer.rebaseline(true) as DeviceLogRebaseline
+    expect(done.head).toEqual(t.backend.state.head)
+    expect(t.store.read().frozen).toBeNull()
+    expect(t.store.read().state?.head.seq).toBe(27)
+  })
+})
+
+describe('DeviceLogSyncer.remove asked again from its own drop', () => {
+  it('appends one removal and answers ok to both asks', async () => {
+    // The trust group hands a dropped key straight back (`onDropped` → remove) before the first ask's
+    // first await: that second ask must join the first, not append a removal of its own.
+    const t = setup()
+    t.backend.add(phone, 'viewer', '', 'phone')
+    await t.syncer.register()
+    let again: Promise<unknown> | null = null
+    t.calls.drop.mockImplementation((pub: string) => { again ??= t.syncer.remove(pub) })
+    const first = await t.syncer.remove(phone.pub)
+    expect(first).toEqual({ ok: true })
+    expect(await again).toEqual({ ok: true })
+    expect(t.backend.entries.filter((e) => e.op === 'remove' && e.pub === phone.pub)).toHaveLength(1)
+  })
+})
+
+describe('DeviceLogSyncer — register refusals', () => {
+  it('keeps why the backend refused this machine\'s key, until a register gets through', async () => {
+    const t = setup()
+    t.backend.append.mockImplementationOnce(async () => ({ error: 'TOO_MANY' }))
+    await t.syncer.register()
+    expect(t.syncer.list().registerError).toBe('TOO_MANY')
+    await t.syncer.register()
+    expect(t.backend.state.active[me.pub]).toBeDefined()
+    expect(t.syncer.list().registerError).toBeUndefined()
+  })
+
+  it('a race (STALE_HEAD) is not a refusal', async () => {
+    const t = setup()
+    t.backend.append.mockImplementation(async () => ({ error: 'STALE_HEAD' }))
+    await t.syncer.register()
+    expect(t.syncer.list().registerError).toBeUndefined()
+  })
+})
+
+describe('DeviceLogSyncer.sweepStale', () => {
+  const DAY = 24 * 60 * 60_000
+  const NOW = 400 * DAY
+  /** Machine keys whose public key sorts before / after this machine's. */
+  const pool = Array.from({ length: 40 }, (_, i) => key(100 + i))
+  const smaller = pool.find((k) => k.pub < me.pub)!
+  const larger = pool.find((k) => k.pub > me.pub)!
+  let clock: number
+  let seen: Record<string, number> | null
+  /** Since when the backend's record of last uses runs (null: it does not say). */
+  let since: number | null
+  let lines: string[]
+  let t: ReturnType<typeof setup>
+  beforeEach(() => {
+    clock = NOW
+    seen = {}
+    since = 1_000
+    lines = []
+    t = setup({ now: () => clock, seen: async () => seen && { seen, since }, log: (l) => lines.push(l) })
+  })
+  const active = (pub: string): boolean => !!t.backend.state.active[pub]
+
+  it('removes only app keys added and last used over 180 days ago', async () => {
+    const stale = key(50), usedLately = key(51), young = key(52), suspended = key(53)
+    t.backend.add(larger, 'machine', MID2, 'old-box', 1_000)
+    t.backend.add(stale, 'viewer', '', 'old-browser', 1_000)
+    t.backend.add(usedLately, 'viewer', '', 'phone', 1_000)
+    t.backend.add(young, 'viewer', '', 'new-browser', NOW - 10 * DAY)
+    t.backend.add(suspended, 'viewer', '', 'forked', 1_000)
+    seen = { [usedLately.pub]: NOW - DAY, [larger.pub]: 1_000 }
+    await t.syncer.register()
+    t.store.write({ ...t.store.read(), suspended: [suspended.pub] })
+    await t.syncer.sweepStale()
+    expect(active(stale.pub)).toBe(false)
+    expect([usedLately, young, suspended, larger, me].every((k) => active(k.pub))).toBe(true)
+    expect(t.backend.entries.at(-1)).toMatchObject({ op: 'remove', pub: stale.pub, signer: me.pub })
+    expect(lines).toContain(`[devlog] removed unused device old-browser (${fingerprint(b64d(stale.pub))}), not used since 1970-01-01`)
+  })
+
+  it('a key last used over 180 days ago goes whatever the record says of the others', async () => {
+    const old = key(50)
+    t.backend.add(old, 'viewer', '', 'app', 1_000)
+    seen = { [old.pub]: 2_000 }
+    since = null
+    await t.syncer.register()
+    await t.syncer.sweepStale()
+    expect(active(old.pub)).toBe(false)
+    expect(lines).toContain(`[devlog] removed unused device app (${fingerprint(b64d(old.pub))}), last used 1970-01-01`)
+  })
+
+  it('a key with no last use is unused only when the record has run since before the cutoff', async () => {
+    // A Redis that came back empty (restart, eviction) answers no last use for anyone: that is "not
+    // known", not "not used" — an app opened once a month must not be signed out by it.
+    const app = key(50)
+    t.backend.add(app, 'viewer', '', 'app', NOW - 200 * DAY)
+    seen = { [app.pub]: NOW - 100 * DAY }
+    await t.syncer.register()
+    await t.syncer.sweepStale()
+    expect(active(app.pub)).toBe(true)
+    seen = {}
+    since = null // the record is gone, or a backend that does not say
+    clock += 7 * 60 * 60_000
+    await t.syncer.sweepStale()
+    expect(active(app.pub)).toBe(true)
+    since = clock - 10 * DAY // the record started again 10 days ago
+    clock += 7 * 60 * 60_000
+    await t.syncer.sweepStale()
+    expect(active(app.pub)).toBe(true)
+    since = NOW - 190 * DAY // it has run for longer than the cutoff, and never saw this key
+    clock += 7 * 60 * 60_000
+    await t.syncer.sweepStale()
+    expect(active(app.pub)).toBe(false)
+  })
+
+  it('the machine with the smallest key goes first; the next takes over a day later', async () => {
+    // A machine before this one in key order (its turn first) that never sweeps — a build from before the
+    // sweep, seen on a rollout — must not keep stale keys on the account for good.
+    const stale = key(50)
+    t.backend.add(smaller, 'machine', MID2, 'other-box', 1_000)
+    t.backend.add(stale, 'viewer', '', 'old-browser', NOW - 180 * DAY - DAY / 2)
+    await t.syncer.register()
+    await t.syncer.sweepStale()
+    expect(active(stale.pub)).toBe(true) // stale for the first machine, not yet for the second
+    clock += DAY
+    await t.syncer.sweepStale()
+    expect(active(stale.pub)).toBe(false)
+  })
+
+  it('nothing while the log is frozen, or when last use cannot be asked', async () => {
+    const stale = key(50)
+    t.backend.add(stale, 'viewer', '', 'old-browser', 1_000)
+    await t.syncer.register()
+    seen = null
+    await t.syncer.sweepStale()
+    expect(active(stale.pub)).toBe(true)
+    t.store.write({ ...t.store.read(), frozen: { reason: 'fork', at: NOW, lastGoodHead: t.store.read().state!.head } })
+    seen = {}
+    await t.syncer.sweepStale()
+    expect(active(stale.pub)).toBe(true)
+    // Neither counted as a sweep: the next offer runs.
+    t.store.write({ ...t.store.read(), frozen: null })
+    await t.syncer.sweepStale()
+    expect(active(stale.pub)).toBe(false)
+  })
+
+  it('at most 20 per sweep, and one sweep per 6 hours', async () => {
+    const apps = pool.slice(0, 25)
+    for (const k of apps) t.backend.add(k, 'viewer', '', 'app', 1_000)
+    await t.syncer.register()
+    await t.syncer.sweepStale()
+    expect(apps.filter((k) => active(k.pub))).toHaveLength(5)
+    clock += 5 * 60 * 60_000
+    await t.syncer.sweepStale()
+    expect(apps.filter((k) => active(k.pub))).toHaveLength(5)
+    clock += 60 * 60_000
+    await t.syncer.sweepStale()
+    expect(apps.filter((k) => active(k.pub))).toHaveLength(0)
+  })
+
+  it('stops at the first refusal', async () => {
+    const a = key(50), b = key(51)
+    t.backend.add(a, 'viewer', '', 'a', 1_000)
+    t.backend.add(b, 'viewer', '', 'b', 1_000)
+    await t.syncer.register()
+    t.backend.append.mockImplementationOnce(async () => ({ error: 'RATE_LIMITED' }))
+    await t.syncer.sweepStale()
+    expect(active(a.pub) && active(b.pub)).toBe(true)
+    expect(t.backend.append).toHaveBeenCalledTimes(2) // register + the refused removal
   })
 })

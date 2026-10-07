@@ -3,6 +3,9 @@
 //! are the account's desk, driven with tmux's keys.
 
 mod activity;
+mod account;
+mod agent_handoff;
+mod agent_switch;
 mod app;
 mod capture;
 mod tree;
@@ -25,6 +28,7 @@ mod config;
 mod copy;
 mod daemon;
 mod devices;
+mod hardware;
 mod dial;
 mod draw;
 mod event;
@@ -37,6 +41,14 @@ mod layout;
 mod desk_layout;
 mod local;
 mod modal;
+mod workspace_menu;
+mod workspace_controls;
+mod workspace_events;
+mod workspace_resources;
+mod session_close;
+mod shell_context;
+mod shell_picker;
+mod shell_composer;
 mod new_harness;
 mod mouse;
 mod options;
@@ -58,6 +70,7 @@ mod bar;
 mod bar_more;
 // ── models: the Models view (step 6) ──
 mod models;
+mod autoname;
 
 use std::io::{self, BufWriter, Write};
 use std::time::{Duration, Instant};
@@ -137,6 +150,18 @@ mod notices {
 }
 
 fn main() -> io::Result<()> {
+    let args: Vec<String> = std::env::args().collect();
+    if args.get(1).is_some_and(|s| s == "--shell-init") {
+        return shell_context::initialize(&args[2..]);
+    }
+    if args.get(1).is_some_and(|s| s == "--shell-picker") {
+        let code = match shell_picker::run(&args[2..]) { Ok(code) => code, Err(e) => { eprintln!("{e}"); 1 } };
+        std::process::exit(code);
+    }
+    if args.get(1).is_some_and(|s| s == "--shell-compose-launch") {
+        let code = match shell_composer::run(&args[2..]) { Ok(code) => code, Err(e) => { eprintln!("{e}"); 1 } };
+        std::process::exit(code);
+    }
     // Before any thread exists: the file may set environment switches; and dates are written in
     // your locale's words, as tmux's are (it sets LC_TIME from the environment too).
     let config = config::load();
@@ -311,7 +336,9 @@ async fn run(config: config::Config) -> io::Result<()> {
     // would answer "unknown command", because these are not tmux commands. The client starts and
     // runs it itself, once the launcher is up — as `;`'s chain is (`start_then`). A word the
     // server answers too (take, new, send…) stays the server's.
-    let gui = !f.rest.is_empty() && f.rest.iter().all(|w| crate::input::is_command(w) && !crate::commands::is_command_name(w));
+    let session_browser = f.rest.first().is_some_and(|s| s == "sessions") && std::env::var("HN_SOCKET").is_err()
+        && io::IsTerminal::is_terminal(&io::stdout());
+    let gui = session_browser || (!f.rest.is_empty() && f.rest.iter().all(|w| crate::input::is_command(w) && !crate::commands::is_command_name(w)));
     // hn <command>: answered from here (hn ls) or by the running client (a tmux command).
     if !gui { if let Some(code) = cli::run(&f.rest, explicit, f.socket.as_deref(), f.name.as_deref()).await { std::process::exit(code) } }
     // -L name, starting a client: its socket's name.

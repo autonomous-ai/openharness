@@ -272,12 +272,24 @@ describe('agent_create with a receipt', () => {
     vi.mocked(installedDsh).mockReturnValue({ id: 'acme/notes', manifest: { kind: 'agent', name: 'Notes' } } as never)
     await ask({ engine: 'claude', projectSource: 'new', projectName: 'Docs', creationId: CREATION, dsh: 'acme/notes' })
     await vi.waitFor(() => expect(replies).toHaveLength(1))
-    expect(prepareProjectFolder).toHaveBeenCalledWith({ source: 'new', name: 'Docs' }, { label: 'Notes' })
+    expect(prepareProjectFolder).toHaveBeenCalledWith({ source: 'new', name: 'Docs' }, { label: 'Notes', onPrepared: expect.any(Function) })
     expect(vi.mocked(create!).mock.calls[0][0].cwd).toBe('/projects/prepared')
     vi.mocked(installedDsh).mockReturnValue(undefined)
     await ask({ engine: 'pi', projectSource: 'new', creationId: `${CREATION}-pi` })
     await vi.waitFor(() => expect(replies).toHaveLength(2))
-    expect(prepareProjectFolder).toHaveBeenLastCalledWith({ source: 'new' }, { label: 'Pi' })
+    expect(prepareProjectFolder).toHaveBeenLastCalledWith({ source: 'new' }, { label: 'Pi', onPrepared: expect.any(Function) })
+    expect(vi.mocked(create!).mock.calls[1][0].scmLaunchRecord).toBeNull()
+  })
+
+  it('hands the launch the SCM record the prepared workspace reported (registry `scmLaunch`)', async () => {
+    const { ask, create, replies } = setup()
+    vi.mocked(prepareProjectFolder).mockImplementationOnce(async (_project, options) => {
+      options?.onPrepared?.({ cwd: '/projects/prepared', scmLaunchRecord: { kind: 'git' } })
+      return '/projects/prepared'
+    })
+    await ask({ engine: 'claude', projectSource: 'worktree', gitSource: '/work/repo', branchRef: 'refs/heads/main', creationId: CREATION })
+    await vi.waitFor(() => expect(replies).toHaveLength(1))
+    expect(vi.mocked(create!).mock.calls[0][0]).toMatchObject({ cwd: '/projects/prepared', scmLaunchRecord: { kind: 'git' } })
   })
 
   it('records a folder it could not prepare as failed, in the folder\'s own words when it has them', async () => {

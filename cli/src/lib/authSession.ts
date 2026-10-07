@@ -11,8 +11,9 @@ export interface AuthSession {
   autonomousEnv: 'prod' | 'stag'
   computerId: string
   machineId?: string
-  /** How this computer signed in: `qr` — a phone scanned its QR (a Harness-issued session, which
-   *  the Autonomous services behind billing and grid do not take); absent or `sso` — the browser. */
+  /** How this computer signed in: `qr` — a phone scanned its QR (a Harness-issued sign-in, which
+   *  billing's Autonomous service does not take; grid does, through the Harness backend —
+   *  autonomous-grid ADR 0046); absent or `sso` — the browser. */
   method?: 'sso' | 'qr'
   /** The auth-service client these tokens were issued to, as the backend's exchange reported it.
    *  A refresh has to name the same one. Absent is the backend's configured client. */
@@ -21,6 +22,9 @@ export interface AuthSession {
   /** Which sign-in by hand this session is: minted here when the person signs in, never anything the
    *  backend sends — the device key log keeps its marks per sign-in (deviceLogSyncer `signIn`). */
   signInEpoch?: string
+  /** The account that sign-in by hand was made to (`/api/auth/me`'s user id, the device key log's `acct`),
+   *  asked right after it: the log may then start over for that account any time, not only in 10 minutes. */
+  signInAcct?: string
 }
 
 /**
@@ -70,6 +74,7 @@ function parse(raw: string): AuthSession | null {
       ...(knownSsoClientId(value.clientId) ? { clientId: knownSsoClientId(value.clientId) } : {}),
       updatedAt: typeof value.updatedAt === 'number' ? value.updatedAt : 0,
       ...(typeof value.signInEpoch === 'string' && value.signInEpoch ? { signInEpoch: value.signInEpoch } : {}),
+      ...(typeof value.signInAcct === 'string' && value.signInAcct ? { signInAcct: value.signInAcct } : {}),
     }
   } catch { return null }
 }
@@ -97,11 +102,13 @@ export async function ensureSignInEpoch(): Promise<string | null> {
 }
 
 /** A `signInEpoch` as the device key log reads it (deviceLogSyncer `signIn`): whether it was adopted,
- *  and when it was made — null when it does not say (one from before the time was recorded). */
-export function signInOf(epoch: string | undefined | null): { epoch: string; adopted: boolean; at: number | null } | null {
+ *  when it was made — null when it does not say (one from before the time was recorded) — and the
+ *  account it was made to (`signInAcct`), never for an adopted one: nobody saw that sign-in made. */
+export function signInOf(epoch: string | undefined | null, acct?: string | null): { epoch: string; adopted: boolean; at: number | null; acct?: string } | null {
   if (!epoch) return null
   const at = /@(\d{1,15})$/.exec(epoch)
-  return { epoch, adopted: epoch.startsWith(ADOPTED_SIGN_IN), at: at ? Number(at[1]) : null }
+  const adopted = epoch.startsWith(ADOPTED_SIGN_IN)
+  return { epoch, adopted, at: at ? Number(at[1]) : null, ...(acct && !adopted ? { acct } : {}) }
 }
 
 export function readAuthSession(): AuthSession | null {

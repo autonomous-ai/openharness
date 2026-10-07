@@ -23,9 +23,10 @@ import { AutonomousDeviceDirect } from '../lib/autonomous-device/direct.js'
 import { startDevicePart } from '../lib/autonomous-device/parts.js'
 import type { AuthSessionManager } from '../lib/authSession.js'
 import { thisDeviceLabel } from '../lib/daemonState.js'
+import { switchAccountTrust } from '../lib/e2ee/accountTrust.js'
 import { b64d, b64e, fingerprint } from '../lib/e2ee/core.js'
 import { DeviceLogStore } from '../lib/e2ee/deviceLogStore.js'
-import { DeviceLogSyncer, type DeviceLogFetched, type DeviceLogTrustOutcome } from '../lib/e2ee/deviceLogSyncer.js'
+import { DeviceLogSyncer, type DeviceKeysSeen, type DeviceLogFetched, type DeviceLogTrustOutcome } from '../lib/e2ee/deviceLogSyncer.js'
 import { GroupSyncer, relayRequester, SELF_STAMP } from '../lib/e2ee/groupSyncer.js'
 import { MachinePeerStore } from '../lib/e2ee/machinePeers.js'
 import { E2eeStore } from '../lib/e2ee/store.js'
@@ -185,6 +186,7 @@ export function startGateway(host: GatewayHost): StartedGateway {
     suspended: () => new Set(devLogSyncer?.suspendedKeys() ?? []),
     // Only a list the backend answered says who is offline; otherwise try every member.
     reachable: () => reachable,
+    ready: () => devLogSyncer?.current() ?? false,
     log: (line) => console.log(line),
   })
   groupSyncer = syncer
@@ -204,6 +206,15 @@ export function startGateway(host: GatewayHost): StartedGateway {
     syncer.start()
   }
   if (host.signedIn) { groupStarted = true; syncer.start() }
+  // When each key last opened a session or read the log, from the backend, and since when that record
+  // runs: the Devices list's "last active", and what `sweepStale` judges an unused app key by. null when
+  // it could not be asked; `since` null from a backend that does not say.
+  const deviceKeysSeen = async (): Promise<DeviceKeysSeen | null> => {
+    const r = await host.backend('GET', '/api/device-keys/seen').catch(() => null)
+    const data = r?.status === 200 ? r.body.data as { seen?: unknown; since?: unknown } | undefined : undefined
+    if (!data?.seen || typeof data.seen !== 'object') return null
+    return { seen: data.seen as Record<string, number>, since: Number.isSafeInteger(data.since) ? data.since as number : null }
+  }
   const devlog = new DeviceLogSyncer({
     store: new DeviceLogStore(),
     identity: () => { const id = relayIdentityStore.getIdentity(); return { pub: b64e(id.pub), priv: id.priv } },
@@ -211,8 +222,21 @@ export function startGateway(host: GatewayHost): StartedGateway {
     // Which sign-in by hand this machine is under (minted by `harness login`, never a backend answer —
     // the machine id is one): the device log can start over only when THIS changes.
     signIn: () => account.signIn,
+    switchAccount: (from, to) => {
+      // Run once, whatever it throws: the log goes on to the new account either way, and its devices
+      // come back from that log. Run again, a half-done switch would put away what it already restored.
+      try { switchAccountTrust(from, to) } catch (err) {
+        console.log(`[devlog] could not swap the trust stores to the new account: ${err instanceof Error ? err.message : String(err)}`)
+      }
+      gateway.e2ee.reloadPaired()
+      // Sessions to the old account's machines, and who the group last synced with, are that account's.
+      relayPool.close()
+      syncer.reset()
+    },
     fetch: async (since) => {
-      const r = await host.backend('GET', `/api/device-keys?since=${since}`)
+      // `self`: this read counts as this machine's key being used (a backend from before it ignores it).
+      const self = encodeURIComponent(b64e(relayIdentityStore.getIdentity().pub))
+      const r = await host.backend('GET', `/api/device-keys?since=${since}&self=${self}`)
       const data = r.status === 200 ? r.body.data as Partial<DeviceLogFetched> | undefined : undefined
       const head = data?.head as { seq?: unknown; hash?: unknown } | undefined
       if (!data || typeof data.acct !== 'string' || !Array.isArray(data.entries) || typeof head?.seq !== 'number'
@@ -261,9 +285,13 @@ export function startGateway(host: GatewayHost): StartedGateway {
       spendIdentity()
       host.events.revoked()
     },
+    seen: deviceKeysSeen,
     changed: () => host.events.toWindows({ type: 'device_keys_changed', payload: {} }),
     log: (line) => console.log(line),
   })
+  // Each register is also the offer of a sweep of unused app keys (at most one per 6 hours, on one
+  // machine of the account: deviceLogSyncer `sweepStale`).
+  const registerAndSweep = (): void => { void devlog.register().then(() => devlog.sweepStale()) }
   devLogSyncer = devlog
   syncer.devlog = devlog
   // Removed while online: the backend's `machine_revoked` arrives before this machine reads the log, and
@@ -288,9 +316,9 @@ export function startGateway(host: GatewayHost): StartedGateway {
   // never registered after `harness login` signed it in (register does nothing while signed out).
   gateway.onLinkUp = () => {
     startGroup()
-    void devlog.register()
+    registerAndSweep()
   }
-  const devlogTimer = setInterval(() => { void devlog.register() }, 10 * 60_000)
+  const devlogTimer = setInterval(registerAndSweep, 10 * 60_000)
   devlogTimer.unref()
   // Signed out there is no account, and no device log of one, to find a key on.
   const readForHello = unknownHelloReader(devlog, (line) => console.log(line))
@@ -371,9 +399,7 @@ export function startGateway(host: GatewayHost): StartedGateway {
     devicesList: async () => {
       // When each key last opened a session, from the backend — a hint for removing apps not used in a
       // long while. Without it the list is still the list.
-      const seen = await host.backend('GET', '/api/device-keys/seen').catch(() => null)
-      const lastSeen = seen?.status === 200 ? (seen.body.data as { seen?: unknown } | undefined)?.seen : undefined
-      return { status: 200, body: { ...devlog.list(), lastSeen: lastSeen && typeof lastSeen === 'object' ? lastSeen : {} } }
+      return { status: 200, body: { ...devlog.list(), lastSeen: (await deviceKeysSeen())?.seen ?? {} } }
     },
     devicesRemove: async (pub) => {
       syncer.remove(pub)
@@ -419,7 +445,7 @@ export function startGateway(host: GatewayHost): StartedGateway {
     account: (next) => {
       account = next
       startGroup()
-      void devlog.register()
+      registerAndSweep()
     },
     reachable: (machineIds) => { reachable = machineIds ? new Set(machineIds) : null },
     lane,

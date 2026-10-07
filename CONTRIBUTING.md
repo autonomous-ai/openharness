@@ -173,12 +173,14 @@ Security reports go through [SECURITY.md](SECURITY.md).
    to select checks, bound their runtime, and reuse results. Say exactly what ran and what did not.
 3. **Make it reproducible.** Use the PR template to describe the result, how to try it, and the
    validation. Remove credentials and private project content from logs and recordings.
-4. **Review together.** A maintainer checks the change and may ask you to refine it. CI is
-   currently run manually through **Actions → CI → Run workflow**; a PR does not automatically
-   exercise the app, real engines, or hardware. Report those checks separately.
-5. **Merge and release.** PRs are squash-merged. Rebase on the latest `main` when needed to keep
-   the diff readable. Harness catalog changes publish automatically after merge. App, CLI, and
-   firmware releases have their own schedules.
+4. **Review together.** A maintainer checks the change while automatic CI selects complete
+   component suites from its Git diff. Native, browser, real-engine and hardware acceptance
+   still need the checks relevant to the change; report those separately.
+5. **Merge and release.** After review and required checks pass, squash-merge the reviewed PR
+   with the [merge helper](docs/validation-and-release.md#merge-an-already-reviewed-pr).
+   No merge queue is required. If `main` moved, inspect and integrate its changes, reusing
+   validation where the tested inputs still match. Harness catalog changes publish after
+   merge; app, CLI and firmware releases keep their schedules.
 
 ## Conventions across this repository
 
@@ -197,11 +199,11 @@ while developing. Shared state, authentication, protocols, dependencies, and cha
 with an unclear impact also need the full CLI suite. A passing CI run on the tested
 source satisfies that full-suite check; do not run it again locally before release.
 Manual CI offers `cli`, `tui`, `backend`, `desktop`, and `full` scopes; `full` remains the default.
-CLI scope includes the supported OS/Node shell and serial matrix. Cross-component
-changes need all affected scopes or `full`.
-Desktop scope runs the complete VM suite in four shards on both macOS and Linux,
-with a verified coverage summary. Changed Dart analysis, browser tests and native
-integration checks remain separate requirements when relevant.
+CLI scope runs the typecheck and the default Vitest suite in four Linux shards.
+Desktop scope runs the VM suite in four Linux shards. PR CI runs only the suites of
+the components a PR changes. Coverage gates, serial/PTY specs, macOS Desktop tests and
+end to end are not part of PR CI: run the ones your change touches yourself (see
+[What PR CI does not run](docs/validation-and-release.md#what-pr-ci-does-not-run)).
 
 Two further suites exist and are
 **opt-in**, because they need software the machine may not have — they skip themselves rather than

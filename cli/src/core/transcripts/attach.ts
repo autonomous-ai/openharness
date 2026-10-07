@@ -64,12 +64,14 @@ export interface AttachDeps {
   relaunchMarks?: Pick<RelaunchMarks, 'take'>
   /** The most of a transcript an engine without its own reader from the end folds, from its end. */
   wholeReadCapBytes?: number
+  /** The session attached with its last turn already over (core/turns/recaps.ts `settled`). */
+  settled?: (sessionId: string) => void
 }
 
 export function createAttach({
   terminalGone, normalizers, watcher, cursorDiscovery, device, runtimeProfiles, captureTerminal, emit,
   announceTurnAborted, questionWatcher, terminalLabel, dbs, devinHome, hermesDb, concurrency, relaunchMarks,
-  wholeReadCapBytes = WHOLE_READ_CAP_BYTES,
+  wholeReadCapBytes = WHOLE_READ_CAP_BYTES, settled,
 }: AttachDeps) {
   const {
     turnStates, codexNormalizers, cursorNormalizers, opencodeReaders, kiloReaders, museNormalizers, ampNormalizers,
@@ -143,7 +145,7 @@ export function createAttach({
     const initialEvents: LiveEvent[] = []
     // Folding the transcript in below is deliberately silent — old turns must never replay live. But
     // when the history ENDS mid-turn the turn is still running, and dropping its `turn_started` costs
-    // the whole turn: CommanderMirror.onTurnEnded returns early while turnOpen is false, so the close
+    // the whole turn: the recaps' mirror (lib/commander.ts onTurnEnded) returns early while turnOpen is false, so the close
     // that follows produces no recap and no `done`. Keep the last start and replay exactly that one.
     //
     // The exception is a transcript BORN AFTER its agent — the file is then the live first turn rather
@@ -443,6 +445,14 @@ export function createAttach({
     // asking AFTER the turn ends. The watcher is idempotent, no-ops without a device, and dies with the
     // session, so starting it early costs nothing.
     if (pollsQuestions(session.engine)) questionWatcher.start(session.sessionId)
+    // The last turn was over before this attach read it (it ended while the daemon was stopped: an update, a
+    // restart, a dial being flashed): its end went into history, and nothing recapped it. On 2026-10-07 a
+    // Codex answer landed nine seconds into a restart and the dial showed the agent blank. The recaps recap
+    // such a turn as history, once; one they already hold is left alone.
+    // A fold from the end keeps only the last turn's start as history (lib/normalize.ts TranscriptFold), so a turn
+    // that is no longer open is one that ended; a fold from the start keeps its end too, and says if it was killed.
+    const last = historyEvents.findLast((event) => event.type === 'turn_started' || event.type === 'turn_ended')
+    if (!historyTurnOpen && last && !(last.type === 'turn_ended' && last.payload.aborted)) settled?.(session.sessionId)
     return true
   }
 

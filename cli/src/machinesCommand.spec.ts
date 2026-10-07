@@ -3,13 +3,18 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { fileURLToPath } from 'url'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 const CLI_ROOT = fileURLToPath(new URL('..', import.meta.url))
 const CLI_SOURCE = join(CLI_ROOT, 'src', 'cli.ts')
 const TSX = join(CLI_ROOT, 'node_modules', 'tsx', 'dist', 'cli.mjs')
 const dirs: string[] = []
 const MACHINE_ID = 'a'.repeat(32)
+
+// Each case runs the CLI itself, as a person types it: node, with tsx compiling cli.ts and everything it
+// imports, before the command runs. That start took 1.5 to 2.2 s on a quiet Mac and past vitest's 5 s under
+// 12 busy loops (load 45). cliCommand.spec.ts and loginForceRace.spec.ts give their CLI runs the same room.
+vi.setConfig({ testTimeout: 30_000 })
 
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }) })
 

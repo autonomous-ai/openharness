@@ -119,7 +119,11 @@ class _Backend {
     ],
   );
 
+  /// Every append is refused with this code while set.
+  String? refuse;
+
   Future<DeviceLogAppendAnswer> append(DevLogEntry entry) async {
+    if (refuse case final code?) return (head: null, error: code);
     if (entry.seq != state.head.seq + 1 || entry.prev != state.head.hash) {
       return (head: state.head, error: 'STALE_HEAD');
     }
@@ -139,9 +143,14 @@ class _Api extends ApiClient {
   /// When set, the last-seen request waits on it (the backend can delay it as long as it likes).
   Completer<void>? seenGate;
 
+  /// The `self` every read of the log named.
+  final selves = <String?>[];
+
   @override
-  Future<DeviceLogFetched?> deviceKeys(int since) async =>
-      offline ? null : backend.fetch(since);
+  Future<DeviceLogFetched?> deviceKeys(int since, {String? self}) async {
+    selves.add(self);
+    return offline ? null : backend.fetch(since);
+  }
 
   @override
   Future<DeviceLogAppendAnswer?> appendDeviceKey(DevLogEntry entry) =>
@@ -298,6 +307,24 @@ void main() {
     return app;
   }
 
+  test('every read of the log names this app\'s key; too many devices is said until a register lands', () async {
+    await backend.add(box2, 'machine', 'b' * 32, 'box2');
+    backend.refuse = 'TOO_MANY';
+    final app = await openAs(backend, 'user-a');
+    final me = b64e((await keys.identity()).pub);
+    final api = app.api as _Api;
+    expect(api.selves, isNotEmpty);
+    expect(api.selves.toSet(), {me});
+    expect(app.deviceListTooMany, isTrue);
+    expect((await logOf(app).list()).registerError, 'TOO_MANY');
+
+    backend.refuse = null;
+    await logOf(app).register();
+    await settle();
+    expect(backend.state.active[me], isNotNull);
+    expect(app.deviceListTooMany, isFalse);
+  });
+
   test('with no machine to hear pushes from, the machine list is read again on its own and on coming back to the tab', () async {
     final app = AppNotifier(
       config: AppConfig.dev,
@@ -341,15 +368,16 @@ void main() {
   test('signing in by hand as another account starts that account\'s list over', () async {
     // Account A: this browser joined its log.
     await backend.add(box2, 'machine', 'b' * 32, 'box2');
-    await openAs(backend, 'user-a', byHand: true);
+    await openAs(backend, backend.acct, byHand: true);
     final me = b64e((await keys.identity()).pub);
     expect(backend.state.active[me]?.kind, 'viewer');
 
     // Signed in as B in the same browser, by hand: B's log is another account's, and this sign-in is
-    // new — a new list, not a backend that lies. The profile is not waited for.
+    // new — a new list, not a backend that lies. A fresh sign-in's profile names the same account
+    // as its signed log; restored-session profile mismatches are exercised below.
     final other = _Backend('acct-2');
     await other.add(phone, 'viewer', '', 'Phone');
-    final b = await openAs(other, 'user-b', byHand: true);
+    final b = await openAs(other, other.acct, byHand: true);
     final listing = await logOf(b).list();
     expect(
       listing.frozen,
@@ -366,7 +394,7 @@ void main() {
 
   test('a restored session whose /me id differs does not reset the list', () async {
     await backend.add(box2, 'machine', 'b' * 32, 'box2');
-    await openAs(backend, 'user-a', byHand: true);
+    await openAs(backend, backend.acct, byHand: true);
     await backend.add(phone, 'viewer', '', 'Phone');
     final first = await openAs(backend, 'user-a');
     expect(first.newDevices.map((d) => d.label), ['Phone']);
@@ -956,7 +984,7 @@ void main() {
   test('the sign-in is known to the log before the boot reads anything else (a pane restore reads it first)', () async {
     // Account A: this browser joined its log by hand.
     await backend.add(box2, 'machine', 'b' * 32, 'box2');
-    await openAs(backend, 'user-a', byHand: true);
+    await openAs(backend, backend.acct, byHand: true);
     final me = b64e((await keys.identity()).pub);
     // A's sign-in is long past: only a sign-in made just now may start another account's list.
     const old = 'a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0@1000';

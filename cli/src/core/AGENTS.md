@@ -23,16 +23,22 @@ questions. Everything else is a service ([../services/AGENTS.md](../services/AGE
 
 ## Where things are
 
-- `agents/`: create, fork, restart, retarget, stop, resume, close, discovery, binding.
+- `agents/`: create, fork, restart, retarget, stop, resume, close, discovery, adoption, binding, the list.
 - `transcripts/`: attach (bounded reads from the end), ingest, live tail, relaunch marks, normalizers.
-- `turns/`: working/idle, the event funnel, cancel, recaps, heartbeats, hooks.
-- `terminals/`: who controls a pane (the control lease).
+- `turns/`: working/idle, the event funnel, cancel, heartbeats, hooks, and `recaps.ts`, the core's whole
+  side of the recaps: the turn lifecycle it tells them, and what it reads back.
+- `terminals/`: who controls a pane (the control lease), opening a terminal with a literal argv (`open.ts`),
+  and the requests about a terminal itself (`requests.ts`: `terminal_info`, `theme_set`).
 - `engines/`: the engines' hooks.
 - `input.ts`, `questions.ts`: messages into a pane; an agent's question and its answer.
   `deviceInput.ts`: the pane writer lock every write takes, and a device's queued turns behind it.
   `cardText.ts`: an engine's error, rewritten for a device's card.
 - `deliveries.ts`: delivered turns, the Wi-Fi device's, a team's and the orchestrator's: text written into an
   agent under a delivery id of its maker's, and what became of it, told back to that maker in its process.
+- `updateHandoff.ts`: the core handing over to a build the updater staged (exit 75, when the master asks),
+  and a core with no master handing itself to one. `updaterBeside.ts`: the updater started beside a core whose
+  master is too old to run it, still in its own process.
+- `stall.ts`: a test-only fault that holds the core's event loop still (`HARNESSD_TEST_FAULTS=core.stall:…`).
 - `main.ts`: the core's entry (`harness __run`) and composition root, `runForeground`: it builds these
   modules, starts the services through `serviceHost` and wires the socket. The one core file that imports
   services and the socket, and the one outside the 100% coverage: wiring only, run end to end. The
@@ -44,14 +50,17 @@ questions. Everything else is a service ([../services/AGENTS.md](../services/AGE
   frames, handed to the viewers, and refused at once while they are down. `workspacesLink.ts`: what the core tells workspaces in
   theirs. `teamsLink.ts`: every change to the teams' prompt scopes, kept until their process has it once Tab
   collaboration is on, which of its deliveries may be written, and the scopes' own two questions.
-  `monitorLink.ts`: the monitor's port, asked of its process. `storeLink.ts`: what the Store in its
+  `monitorLink.ts`: the monitor's port, asked of its process. `recapsLink.ts`: the recaps in their process,
+  told each turn's lifecycle and never waited on, and read back from what they last said
+  (`turns/recaps.ts` is the core's whole side of them). `storeLink.ts`: what the Store in its
   process tells the core. `modelsLink.ts`: what the core keeps of models in its process for frames and
   keystrokes, and how it asks it the rest. `agentQueries.ts`: what a service in its own process may ask of the agents;
   `accountQueries.ts`: of the account (a token, and the fleet's lane's sealing), so it holds no credential.
   `experimentQueries.ts`: what an experiment acts on the core through; `experiments.ts`: which are on as the
   core starts; `orchestratorLink.ts`: what the core keeps of the orchestrator in its own process;
   `sharingLink.ts`: Share's observers' frames to its process; `terminalWatch.ts`: a read-only view of the
-  agents' terminals, which Share shows its observers.
+  agents' terminals, which Share shows its observers. `conversationQueries.ts`: the conversation facts the
+  change-agent handoff in the edge host asks for, one at a time.
   `gatewayLink.ts`: the relay and its E2EE in their own process (src/gateway/), as the core sees them:
   the link's state and the remote clients it reads in line, the frames it hands over in the clear, a
   window's sessions to another machine or a shared harness, and the fleet's lane's sealing
@@ -62,3 +71,6 @@ questions. Everything else is a service ([../services/AGENTS.md](../services/AGE
   sends a device); `wifiAgents.ts`: its doors into the core (the agents as it lists them, a prompt, an
   agent made for a Store harness); `wifiLink.ts`: its service in the devices' process. `devicesWake.ts`: when
   that process is asked for, once there is a device (a dial's port in /dev, a paired Wi-Fi device).
+  `modelsWake.ts`: when models' process is asked for as the core starts, once grid is in use here.
+  `gatewayWake.ts`: when the gateway's process is asked for as the core starts, before it binds: signed in, or
+  anything paired here.

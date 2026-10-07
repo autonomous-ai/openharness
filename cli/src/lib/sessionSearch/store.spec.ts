@@ -33,6 +33,25 @@ function turn(index: number, ask: string, answer = '', tools = '', at: number | 
 
 const plain = (snippet: string) => snippet.replaceAll(MARK_OPEN, '[').replaceAll(MARK_CLOSE, ']')
 
+describe('fuzzy picker catalog', () => {
+  it('pages every session by stable identity, including old and empty conversations', () => {
+    const store = open()
+    for (let i = 0; i < 207; i++) {
+      const sid = `s-${String(i).padStart(3, '0')}`
+      store.writeSession({ ...session(sid, `Task ${i} /work/project`, i, ''), title: `Task ${i}`, cwd: '/work/project', origin: 'cli' }, 0, [])
+    }
+    const first = store.search('', { catalogAfter:'', limit:1000 })
+    const second = store.search('', { catalogAfter:first.at(-1)!.sessionId, limit:100 })
+    const third = store.search('', { catalogAfter:second.at(-1)!.sessionId, limit:100 })
+    expect([first.length,second.length,third.length]).toEqual([100,100,7])
+    expect(new Set([...first,...second,...third].map(h=>h.sessionId)).size).toBe(207)
+    expect(first[0]).toMatchObject({turn:-1, external:{title:'Task 0',cwd:'/work/project'}})
+    expect(store.search('',{catalogAfter:third.at(-1)!.sessionId})).toEqual([])
+    expect(store.search('',{catalogAfter:"' OR 1=1 --"})).toHaveLength(100)
+    expect(store.search('')).toEqual([])
+  })
+})
+
 describe('queryTerms', () => {
   it('makes each word a prefix phrase of its parts and drops what cannot mean anything alone', () => {
     expect(queryTerms('swarm_search.dart OH-14')).toEqual(['"swarm search dart"*', '"oh 14"*'])

@@ -31,11 +31,24 @@ def main():
     # The native checks from CI and the welcome journey, with the longest first. Each fixture uses
     # its own HOME, socket prefix, mock port(s), and cleanup. Two workers leave
     # capacity for their PTY children; deadlines and assertions are unchanged.
+    recovery = fixture("workspace-controls", "HN_WORKSPACE_BINARY", "HN_WORKSPACE_PORT", 19921)
+    recovery["name"] = "workspace-recovery"
+    recovery["argv"].append("--placement-restart")
     checks = [
         fixture("reconnect", "HN_RECONNECT_TEST_BINARY", "HN_RECONNECT_TEST_PORT", 19781),
+        fixture("workspace-controls", "HN_WORKSPACE_BINARY", "HN_WORKSPACE_PORT", 19920),
+        recovery,
         fixture("layout-sync", "HN_LAYOUT_TEST_BINARY", "HN_LAYOUT_TEST_PORT", 19801),
         fixture("new-harness", "HN_NEW_UI_BINARY", "HN_NEW_UI_PORT", 19786),
         fixture("welcome", "HN_WELCOME_TEST_BINARY", "HN_WELCOME_TEST_PORT", 19787),
+        fixture("welcome-composer", "HN_WELCOME_TEST_BINARY", "HN_WELCOME_TEST_PORT", 19788),
+        fixture("session-picker", "HN_SESSION_TEST_BINARY", "HN_SESSION_TEST_PORT", 19929),
+        {"name": "shell-integration", "cwd": "tui", "timeout_seconds": 120,
+         "argv": [sys.executable, "-u", "tests/shell-integration.py"]},
+        {"name": "composer-machine", "cwd": "tui", "timeout_seconds": 120,
+         "argv": ["env", f"HN_COMPOSER_TEST_BINARY={binary}",
+                  f"HN_COMPOSER_TEST_BASH={os.environ.get('HN_COMPOSER_TEST_BASH', '/bin/bash')}",
+                  sys.executable, "-u", "tests/composer-machine.py"]},
         fixture("local-shells", "HN_LOCAL_TEST_BINARY", "HN_LOCAL_TEST_PORT", 19441),
         fixture("native-terminal", "HN_NATIVE_TEST_BINARY", "HN_NATIVE_TEST_PORT", 19433),
         fixture("pane-ui", "HN_PANE_UI_BINARY", "HN_PANE_UI_PORT", 19783),

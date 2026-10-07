@@ -5,11 +5,13 @@ import { MediaPreviewError, readMediaPreviewChunk } from '../lib/mediaPreview.js
 import { projectPreview } from '../lib/projectPreview.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { readSessionGitPullRequest } from '../lib/sessionGitPullRequest.js'
+import { detectScmProject } from '../scm/scmProjects.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { PROJECTS_REQUESTS, startProjects } from './projects.js'
 
-vi.mock('../lib/fsBrowse.js', () => ({ listDir: vi.fn(() => ({ path: '/home/me', entries: [], truncated: false })) }))
+vi.mock('../lib/fsBrowse.js', () => ({ listDir: vi.fn(async () => ({ path: '/home/me', entries: [], truncated: false })) }))
 vi.mock('../lib/gitProject.js', () => ({ readGitProject: vi.fn(async () => ({ path: '/work/app', branch: 'main' })) }))
+vi.mock('../scm/scmProjects.js', () => ({ detectScmProject: vi.fn(async () => ({ kind: 'git', git: { isGit: true } })) }))
 vi.mock('../lib/projectPreview.js', () => ({ projectPreview: vi.fn(async () => ({ path: '/work/app', readme: '# app' })) }))
 vi.mock('../lib/sessionGitPullRequest.js', () => ({ readSessionGitPullRequest: vi.fn(async () => ({ status: 'found', number: 12 })) }))
 vi.mock('../lib/mediaPreview.js', async (importOriginal) => ({
@@ -78,11 +80,21 @@ describe('the project and folder readers', () => {
     expect(await ask('project_preview', { path: '/work/app' })).toEqual({ error: 'UNAVAILABLE' })
   })
 
+  it('scm_project_info: the same probe through the SCM seam, with the same fence, and `none` when it fails', async () => {
+    const { ask } = setup()
+    expect(await ask('scm_project_info', { path: '/work/app', refresh: true })).toEqual({ kind: 'git', git: { isGit: true } })
+    expect(detectScmProject).toHaveBeenLastCalledWith('/work/app', { refresh: true, knownRoots: ['/work/app'] })
+    await ask('scm_project_info', { path: 9 })
+    expect(detectScmProject).toHaveBeenLastCalledWith('', { refresh: false, knownRoots: ['/work/app'] })
+    vi.mocked(detectScmProject).mockRejectedValueOnce(new Error('probe failed'))
+    expect(await ask('scm_project_info', { path: '/work/app' })).toEqual({ kind: 'none', error: 'UNAVAILABLE' })
+  })
+
   it('fs_list_dir: one folder\'s subfolders, or why not', async () => {
     const { ask } = setup()
     expect(await ask('fs_list_dir', { path: '/home/me' })).toEqual({ path: '/home/me', entries: [], truncated: false })
     expect(listDir).toHaveBeenLastCalledWith('/home/me')
-    vi.mocked(listDir).mockReturnValueOnce({ error: 'FORBIDDEN' })
+    vi.mocked(listDir).mockResolvedValueOnce({ error: 'FORBIDDEN' })
     expect(await ask('fs_list_dir')).toEqual({ error: 'FORBIDDEN' })
     expect(listDir).toHaveBeenLastCalledWith('')
   })

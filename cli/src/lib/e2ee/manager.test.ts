@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest'
-import { mkdtempSync, readFileSync, rmSync } from 'fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 
@@ -105,6 +105,20 @@ class WebPeer {
   }
 }
 
+/**
+ * A joiner's stretched password, computed once per password for the whole file. `stretchPassword` is
+ * deterministic for a password and machine, and each call is a real scrypt (~0.5-1 s and 128 MB idle;
+ * the cost is a security control, never lowered for a test). Under a loaded full run (load 36, six
+ * workers) "keeps at most two password attempts in flight" spent five of them, one per joiner, and
+ * timed out. The manager's own stretch (`setRemotePassword`) is still real every time.
+ */
+const stretchedPasswords = new Map<string, Promise<Uint8Array>>()
+function stretchedOnce(password: string): Promise<Uint8Array> {
+  let stretched = stretchedPasswords.get(password)
+  if (!stretched) stretchedPasswords.set(password, stretched = stretchPassword(password, AGENT))
+  return stretched
+}
+
 /** A minimal remote-password joiner that runs the CPace 'b' role directly against the manager via
  *  handleFrame — mirrors WebPeer above, but for the persistent remote-password flow: no human "arm"
  *  step (intent() carries the stretched password straight away), and connId-keyed on the manager side
@@ -118,7 +132,7 @@ class PwPeer {
 
   async intent(password: string): Promise<Frame> {
     const sid = C.newPairId()
-    const stretched = await stretchPassword(password, AGENT)
+    const stretched = await stretchedOnce(password)
     this.pr = { sid, sidB64: C.b64e(sid), stretched }
     return { type: 'e2e_pw_pair_intent', payload: { requestId: 'pwr1', sid: this.pr.sidB64 } }
   }
@@ -511,6 +525,27 @@ describe('E2eeManager revoke', () => {
     expect(h.mgr.hasSession('z2')).toBe(false)
   })
 
+  it('reloadPaired: a key another account\'s stores left out loses its session; the rest keep theirs, re-keyed', async () => {
+    const h = machine()
+    const gone = await fullPair(h, 'k1')
+    const kept = await fullPair(h, 'k2')
+    await fullPair(h, 'kd', 'device')
+    // What accountTrust.ts leaves on disk: the account's browsers put away, the Wi-Fi device kept.
+    const file = join(process.env.ADAPTER_DATA_DIR as string, 'e2e', 'paired.json')
+    const pairs = JSON.parse(readFileSync(file, 'utf-8')) as Array<{ identityPub: string }>
+    writeFileSync(file, JSON.stringify(pairs.filter((p) => p.identityPub !== C.b64e(gone.identity.pub))))
+    h.mgr.reloadPaired()
+    expect((h.lastFor('k1', 'e2e_denied')!.payload as Record<string, unknown>).reason).toBe('revoked')
+    expect(h.mgr.hasSession('k1')).toBe(false)
+    expect(h.mgr.hasSession('k2')).toBe(true)
+    expect(h.mgr.hasSession('kd')).toBe(true)
+    expect(h.mgr.listPaired().map((p) => p.role).sort()).toEqual(['device', 'web'])
+    kept.onRekey(h.lastFor('k2', 'e2e_rekey')!)
+    const env = (h.mgr.wrapUp({ type: 'text_delta', dbSessionId: 's', payload: { content: 'b' } }).payload as import('./core.js').WrappedPayload).__e2e
+    expect(C.unwrapPayload(kept.session!.groupKey, env, 'text_delta', 's')).toEqual({ content: 'b' })
+    expect(C.unwrapPayload(gone.session!.groupKey, env, 'text_delta', 's')).toBeNull()
+  })
+
   it('revoke NOT_FOUND for an unknown selector', async () => {
     const h = machine()
     await fullPair(h, 'q1')
@@ -518,7 +553,9 @@ describe('E2eeManager revoke', () => {
   })
 })
 
-describe('E2eeManager persistent remote-password pairing', () => {
+// Every case here runs at least one real scrypt in the manager (`setRemotePassword`) and one for its
+// joiner: PW_SCRYPT_TEST_TIMEOUT_MS, the budget the lockout cases already carried, for all of them.
+describe('E2eeManager persistent remote-password pairing', { timeout: PW_SCRYPT_TEST_TIMEOUT_MS }, () => {
   const PASSWORD = 'correct horse battery staple'
 
   it('NO_REMOTE_PASSWORD when no password has been set', async () => {

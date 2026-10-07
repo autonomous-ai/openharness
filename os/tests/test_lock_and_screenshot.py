@@ -67,6 +67,26 @@ class StatusBar(unittest.TestCase):
         self.assertIn('set -g window-status-bell-style default', conf)
         self.assertIn('set -g window-status-current-style bold', conf)
 
+    def test_tabs_count_from_one_without_gaps_as_the_desktop_app_does(self):
+        conf = (ROOT / 'usr/share/harness-os/tmux.conf').read_text().splitlines()
+        self.assertIn('set -g base-index 1', conf)
+        self.assertIn('set -g renumber-windows on', conf)
+
+
+class HarnessDevice(unittest.TestCase):
+    def test_the_person_at_the_seat_can_open_the_dial(self):
+        rule = (ROOT / 'usr/lib/udev/rules.d/70-harness-device.rules').read_text()
+        line = next(l for l in rule.splitlines() if l and not l.startswith('#'))
+        # The ids the daemon looks for (cli/src/cable/serial.ts), and uaccess before 73-seat-late.
+        serial = (ROOT.parents[1] / 'cli/src/cable/serial.ts').read_text()
+        self.assertIn('DIAL_VENDOR_ID = 0x303a', serial)
+        self.assertIn('DIAL_PRODUCT_ID = 0x1001', serial)
+        self.assertEqual(line, 'SUBSYSTEM=="tty", ATTRS{idVendor}=="303a", ATTRS{idProduct}=="1001", TAG+="uaccess"')
+
+    def test_the_rule_ships_in_the_fedora_session_package_too(self):
+        payload = (ROOT.parents[1] / 'os/tools/fedora_payload.py').read_text()
+        self.assertIn("'usr/lib/udev/rules.d/70-harness-device.rules'", payload)
+
 
 class FileManager(unittest.TestCase):
     def test_super_e_runs_or_raises_its_own_window_like_the_browser(self):

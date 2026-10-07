@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
-  DEFAULT_SERVICE_OPTIONS, KNOWN_SERVICES, SERVICE_HOSTS, SERVICE_PROCESSES_ENV, ServiceSupervisor, serviceOptions, serviceProcessesEnv, serviceSpecs, servicesTheMasterRuns,
+  DEFAULT_SERVICE_OPTIONS, KNOWN_SERVICES, SERVICE_HOSTS, SERVICE_PROCESSES_ENV, ServiceSupervisor, UPDATER_HOST, serviceOptions, serviceProcessesEnv, serviceSpecs, servicesTheMasterRuns,
   type ServiceSpec, type ServiceSupervisorOptions,
 } from './services.js'
 import type { CoreHandle } from './supervisor.js'
@@ -40,8 +40,10 @@ describe('ServiceSupervisor', () => {
   let children: FakeService[]
   let lines: string[]
   const latest = (name = 'search') => children.filter((child) => child.spec.name === name).at(-1)!
-  const make = (specs: ServiceSpec[] = [search], overrides: Partial<ServiceSupervisorOptions> = {}, env: Record<string, string> = {}) =>
+  const staged: string[] = []
+  const make = (specs: ServiceSpec[] = [search], overrides: Partial<ServiceSupervisorOptions> = {}, env: Record<string, string> = {}, tell = true) =>
     new ServiceSupervisor(specs, {
+      ...(tell ? { staged: (version: string) => { staged.push(version) } } : {}),
       spawnService: (spec, extra) => {
         const child = new FakeService(2000 + children.length, spec, extra)
         children.push(child)
@@ -73,6 +75,55 @@ describe('ServiceSupervisor', () => {
     latest().say({ type: 'harnessd:bound', protocol: 2, port: 1 })
     latest().say('noise')
     expect(supervisor.status()[0].state).toBe('running')
+  })
+
+  it('passes on what the updater staged, and starts it again at once when it asks: not a crash', () => {
+    const updater: ServiceSpec = { name: 'updater', ...UPDATER_HOST }
+    staged.length = 0
+    const supervisor = make([updater], { parkCrashes: 2 })
+    supervisor.start()
+    latest('updater').beat()
+    latest('updater').say({ type: 'harnessd:staged', version: '9.9.9' })
+    expect(staged).toEqual(['9.9.9'])
+    expect(lines).toContain('[harnessd] service updater staged 9.9.9')
+    for (let i = 0; i < 3; i++) {
+      latest('updater').exit(75)
+      vi.advanceTimersByTime(0)
+    }
+    expect(children).toHaveLength(4)
+    expect(supervisor.status()[0]).toMatchObject({ state: 'restarting', restarts: 3, lastExit: 'code 75', lastExitReason: 'restart' })
+    expect(lines).toContain('[harnessd] service updater asked to start again (code 75) — restarting')
+    // Killed for hanging, its 75 is no request.
+    latest('updater').beat()
+    vi.advanceTimersByTime(options.heartbeatTimeoutMs * 2)
+    latest('updater').exit(75)
+    expect(supervisor.status()[0].lastExitReason).toBe('hung')
+    // A master that was not told how to pass a staging on only says it.
+    const quiet = make([updater], {}, {}, false)
+    quiet.start()
+    latest('updater').say({ type: 'harnessd:staged', version: '9.9.10' })
+    expect(staged).toEqual(['9.9.9'])
+  })
+
+  it('takes a staged build, or a request to start again at once, from the updater alone', () => {
+    // A staged build restarts the core. From any other service it is a bug or worse: said once, nothing done.
+    staged.length = 0
+    const supervisor = make([search], { parkCrashes: 2 })
+    supervisor.start()
+    latest().beat()
+    latest().say({ type: 'harnessd:staged', version: '6.6.6' })
+    latest().say({ type: 'harnessd:staged', version: '6.6.7' })
+    expect(staged).toEqual([])
+    expect(lines.filter((line) => line.includes('staged'))).toEqual(['[harnessd] service search said it staged 6.6.6, which only the updater may — ignored'])
+    // Its exit 75 is a crash like any other: restarted after the backoff, and parked when it keeps on.
+    latest().exit(75)
+    expect(supervisor.status()[0]).toMatchObject({ state: 'restarting', lastExit: 'code 75', lastExitReason: 'crashed' })
+    vi.advanceTimersByTime(0)
+    expect(children).toHaveLength(1)
+    vi.advanceTimersByTime(options.initialBackoffMs)
+    expect(children).toHaveLength(2)
+    latest().exit(75)
+    expect(supervisor.status()[0].state).toBe('parked')
   })
 
   it('restarts a crashed service with a backoff that doubles, caps, and is forgiven after a long run', () => {
@@ -295,6 +346,16 @@ describe('ServiceSupervisor', () => {
     never.stop(done)
     expect(done).toHaveBeenCalledOnce()
     expect(never.status()[0].state).toBe('stopped')
+    // Started again with the others (a re-execution the new bundle refused): off, and started when asked.
+    never.start()
+    expect(never.status()[0].state).toBe('off')
+    never.unasked(2)
+    expect(children.map((child) => child.spec.name)).toEqual(['orchestrator', 'devices', 'teams'])
+    // One running then is stopped and started with the others, and waits to be asked for again.
+    never.stop(vi.fn())
+    latest('teams').exit(0)
+    never.start()
+    expect(never.status()[0].state).toBe('off')
   })
 
   it('with no services, starting does nothing and stopping is done at once', () => {
@@ -378,11 +439,19 @@ describe('ServiceSupervisor', () => {
     expect(named.onDemand).toBeUndefined()
   })
 
+  it('runs models only once grid is in use or asked for, by a core of protocol 4, and from the start when named', () => {
+    const [models] = serviceSpecs({}, SERVICE_HOSTS).filter((spec) => spec.name === 'models')
+    expect(models).toMatchObject({ services: ['models'], onDemand: true, askedSince: 4 })
+    const [named] = serviceSpecs({ HARNESSD_SERVICES: 'models' }, SERVICE_HOSTS)
+    expect(named.services).toEqual(['models'])
+    expect(named.onDemand).toBeUndefined()
+  })
+
   it('knows every service each process this build runs hosts, and each in one process only', () => {
     const hosted = Object.values(SERVICE_HOSTS).flatMap((host) => host.services)
     expect(KNOWN_SERVICES).toEqual(hosted)
     expect(new Set(hosted).size).toBe(hosted.length)
-    expect(SERVICE_HOSTS.edge.services).toEqual(['workspaces', 'usage', 'monitor', 'projects', 'handoff'])
+    expect(SERVICE_HOSTS.edge.services).toEqual(['workspaces', 'usage', 'monitor', 'projects', 'handoff', 'recaps', 'windowNames'])
   })
 })
 
@@ -398,7 +467,7 @@ describe('which services the core leaves to its master', () => {
     expect(serviceProcessesEnv(serviceSpecs({ HARNESSD_SERVICES: 'store' }, SERVICE_HOSTS))).toMatchObject({ [SERVICE_PROCESSES_ENV]: 'store' })
     // By service, not by process: a core from before the edge host routes the services it knows of it.
     const hosted = serviceSpecs({ HARNESSD_SERVICES: 'edge' }, SERVICE_HOSTS)
-    expect(serviceProcessesEnv(hosted)).toEqual({ [SERVICE_PROCESSES_ENV]: 'workspaces,usage,monitor,projects,handoff', HARNESSD_SERVICES: 'workspaces,usage,monitor,projects,handoff' })
+    expect(serviceProcessesEnv(hosted)).toEqual({ [SERVICE_PROCESSES_ENV]: 'workspaces,usage,monitor,projects,handoff,recaps,windowNames', HARNESSD_SERVICES: 'workspaces,usage,monitor,projects,handoff,recaps,windowNames' })
     expect([...servicesTheMasterRuns({ ...supervised, ...serviceProcessesEnv(hosted) }, known)]).toEqual(['workspaces'])
     expect(serviceProcessesEnv([])).toEqual({ [SERVICE_PROCESSES_ENV]: '', HARNESSD_SERVICES: 'none' })
     expect([...servicesTheMasterRuns({ ...supervised, ...serviceProcessesEnv(specs) }, known)]).toEqual(['search', 'workspaces'])

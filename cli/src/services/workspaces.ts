@@ -9,11 +9,9 @@
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { CoreApi, CorePorts } from '../core/api.js'
-import { forgetAgentProject } from '../lib/agentProject.js'
-import { nameBranchAfterSession } from '../lib/branchNaming.js'
 import { sid } from '../lib/log.js'
 import { sessionDisplayTitle } from '../lib/registry.js'
-import { sweepWorktrees } from '../lib/worktreeSweep.js'
+import { forgetScmProject, renameScmProject, sweepScmProjects } from '../scm/scmProjects.js'
 
 export function startWorkspaces(core: CoreApi, ports: CorePorts): void {
   // A worktree branch Harness made up at Start takes its session's name once it has one
@@ -25,10 +23,10 @@ export function startWorkspaces(core: CoreApi, ports: CorePorts): void {
       if (!title || !session.cwd || branchNamed.has(session.agentId)) continue
       branchNamed.add(session.agentId)
       const cwd = session.cwd
-      void nameBranchAfterSession(cwd, title).then((renamed) => {
+      void renameScmProject(cwd, title).then((renamed) => {
         if (!renamed) return
         console.log(`[worktrees] agent ${sid(session.agentId)} branch named ${renamed}`)
-        forgetAgentProject(cwd)
+        forgetScmProject(cwd)
         const current = core.agents.byAgent(session.agentId)
         if (current) core.agents.sync(current)
       }).catch(() => {})
@@ -47,7 +45,7 @@ export function startWorkspaces(core: CoreApi, ports: CorePorts): void {
     let inUse: Array<string | null>
     try { inUse = core.agents.all().map(s => s.cwd) } catch { return }
     sweeping = true
-    void sweepWorktrees({ root: join(homedir(), 'harnesses'), inUse })
+    void sweepScmProjects({ root: join(homedir(), 'harnesses'), inUse })
       .then(removed => { if (removed.length) console.log(`[worktrees] removed ${removed.length} unused worktree(s)`) })
       .catch(() => {})
       .finally(() => { sweeping = false })

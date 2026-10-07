@@ -36,6 +36,7 @@ import { randomUUID } from 'node:crypto'
 import { createServer, type IncomingMessage, type Server } from 'node:http'
 import type { Duplex } from 'node:stream'
 import { WebSocket, WebSocketServer, type RawData } from 'ws'
+import { decodeTerminalHop, encodeTerminalHop, parseTerminalBinaryEnvelope, TerminalHopDirection } from '../../src/lib/terminalBinary.js'
 
 export interface FakeMachine {
   machineId: string
@@ -62,6 +63,7 @@ interface Device {
 }
 
 const json = (value: unknown): string => JSON.stringify(value)
+const bytes = (raw: RawData): Uint8Array => new Uint8Array(Array.isArray(raw) ? Buffer.concat(raw) : raw instanceof ArrayBuffer ? raw : Buffer.from(raw))
 
 export class FakeBackend {
   readonly seen: string[] = []
@@ -273,7 +275,10 @@ export class FakeBackend {
     this.sendNode(machine.machineId, '', { type: 'machine_meta', payload: { name: machine.name } })
     this.sendClients(machine.machineId)
     this.toWebClients(machine.machineId, { type: 'node_status', payload: { online: true } })
-    ws.on('message', (raw, binary) => { if (!binary) this.fromNode(machine.machineId, raw) })
+    ws.on('message', (raw, binary) => {
+      if (binary) this.fromNodeBinary(machine.machineId, raw)
+      else this.fromNode(machine.machineId, raw)
+    })
     ws.on('close', () => {
       if (this.nodes.get(machine.machineId) !== ws) return
       this.nodes.delete(machine.machineId)
@@ -299,6 +304,17 @@ export class FakeBackend {
     if (envelope.webEligible !== false) this.toWebClients(machineId, envelope.frame)
   }
 
+  /** The real hub strips only the hop header; the terminal body stays sealed.
+   * UUID connection ids matter: the binary hop cannot encode a prefixed test id. */
+  private fromNodeBinary(machineId: string, raw: RawData): void {
+    const hop = decodeTerminalHop(bytes(raw))
+    if (!hop || hop.direction !== TerminalHopDirection.up) return
+    const client = [...this.webClients].find(c => c.connId === hop.connId && c.machineId === machineId)
+    if (client) this.relay(() => {
+      if (client.ws.readyState === WebSocket.OPEN) client.ws.send(hop.clientFrame)
+    })
+  }
+
   private sendNode(machineId: string, connId: string, frame: Frame): boolean {
     const ws = this.nodes.get(machineId)
     if (ws?.readyState !== WebSocket.OPEN) return false
@@ -317,10 +333,13 @@ export class FakeBackend {
   // ── web clients (phones, browsers) ───────────────────────────────────────────────────────────
 
   private attachWeb(ws: WebSocket): void {
-    const client: WebClient = { ws, connId: `web:${randomUUID()}`, machineId: null }
+    const client: WebClient = { ws, connId: randomUUID(), machineId: null }
     this.webClients.add(client)
     ws.send(json({ type: 'connected', payload: { userId: 'e2e-user' } }))
-    ws.on('message', (raw, binary) => { if (!binary) this.fromWeb(client, raw) })
+    ws.on('message', (raw, binary) => {
+      if (binary) this.fromWebBinary(client, raw)
+      else this.fromWeb(client, raw)
+    })
     ws.on('close', () => {
       this.webClients.delete(client)
       const machineId = client.machineId
@@ -352,6 +371,14 @@ export class FakeBackend {
     this.webSent.set(client.connId, sent)
     // Never answered when the node is not there, as the real hub's would not be.
     this.relay(() => this.sendNode(machineId, client.connId, frame))
+  }
+
+  private fromWebBinary(client: WebClient, raw: RawData): void {
+    const frame = bytes(raw)
+    if (!client.machineId || !parseTerminalBinaryEnvelope(frame)) return
+    const packet = encodeTerminalHop(TerminalHopDirection.down, client.connId, frame)
+    const node = this.nodes.get(client.machineId)
+    if (packet) this.relay(() => { if (node?.readyState === WebSocket.OPEN) node.send(packet) })
   }
 
   private toWebClients(machineId: string, frame: Frame): void {

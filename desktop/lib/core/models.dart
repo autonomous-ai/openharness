@@ -1353,6 +1353,14 @@ class GridSection {
     this.lastKnownAge,
     this.wakeOutcome,
   });
+
+  /// The models a harness can run on: [models] without the decision models, which answer only at
+  /// `/v1/systemone` and cannot chat. The New Harness menu listed tev1 and kev-0.8b among the chat
+  /// models, where choosing one started a harness on a model that cannot answer it.
+  List<GridModel> get harnessModels => [
+    for (final model in models)
+      if (!model.decision) model,
+  ];
 }
 
 /// `gridName` is null when the machine has no grid yet — told apart from "a grid with nothing on

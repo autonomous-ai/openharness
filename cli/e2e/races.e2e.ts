@@ -4,12 +4,13 @@
  * message is being written, and two agents created in one folder at once. Whatever order they land in,
  * every request is answered, an agent ends with one engine in one pane, and it takes the next message.
  */
-import { mkdirSync, renameSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { LocalClient, type Frame } from './harness/client.js'
 import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
+import { isolatedTmux } from '../src/testing/isolatedTmux.js'
 
 type Engine = 'claude' | 'codex'
 const engines: Engine[] = ['claude', 'codex']
@@ -196,6 +197,48 @@ describe('lifecycle requests that race', () => {
     // Nothing half-typed is left: no prompt made of the long message's tail and the next one.
     expect(users.some((content) => content !== long && content.includes('with many words') && content.includes('the next message'))).toBe(false)
     client.close()
+  })
+
+  it('codex: a process waiting for its own transcript never adopts a sibling conversation', async () => {
+    const d = await fresh()
+    const client = await LocalClient.connect(d)
+    const cwd = await folder(d, 'pending-codex-transcript')
+    const gate = join(d.root, 'codex-startup')
+    const sibling = await isolatedTmux(d.env)
+    try {
+      install(d, 'codex', { startupGate: gate })
+      const created = await client.request('agent_create', { engine: 'codex', cwd, bypassPermission: true }, 90_000)
+      expect(created.error, JSON.stringify(created)).toBeUndefined()
+      await until('Codex to wait before opening its transcript', () => existsSync(`${gate}.waiting`))
+
+      // A second real process writes into the same profile/folder. Its separate private tmux server
+      // and late startup hook keep it undiscovered, just like a Codex started in another terminal.
+      // Its transcript is born AFTER our waiting process: the old directory fallback picks it.
+      install(d, 'codex', { firstHookDelayMs: 60_000 })
+      await sibling.run('new-session', '-d', '-s', 'sibling', '-c', cwd, join(d.root, 'bin', 'codex'))
+      const siblingId = await until('the sibling to write its conversation', async () =>
+        /session ([\da-f-]{36})/.exec(await sibling.run('capture-pane', '-p', '-t', 'sibling'))?.[1])
+
+      // More than two normal discovery intervals, with the process still held before any hook or
+      // transcript of its own. Check every published observation, including a temporary wrong bind.
+      const untilScanned = Date.now() + 12_000
+      while (Date.now() < untilScanned) {
+        const pending = await row(client, created.agent.id)
+        expect(pending?.sessionId, JSON.stringify(pending)).toBeFalsy()
+        await new Promise((resolve) => setTimeout(resolve, 100))
+      }
+      writeFileSync(`${gate}.release`, '')
+      const own = await active(client, created.agent.id)
+      expect(own.sessionId).not.toBe(siblingId)
+      const screen = await d.capture(own.tmuxPane)
+      expect(screen).toContain(`session ${own.sessionId}`)
+      await turn(client, created.agent.id, 'only my own conversation')
+      expect((await row(client, created.agent.id))?.sessionId).toBe(own.sessionId)
+    } finally {
+      writeFileSync(`${gate}.release`, '')
+      client.close()
+      await sibling.close()
+    }
   })
 
   it('two agents created in one folder at once are two agents, each with its own conversation', async () => {

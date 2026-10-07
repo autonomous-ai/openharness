@@ -1,12 +1,15 @@
 /**
  * Before a release is uploaded (scripts/upload-cli.sh): the lean bundle cli.js carries for harnessd's
- * master and its services (src/harnessd/leanBundle.ts) must start a master and load every service.
+ * master, its services and its core (src/harnessd/leanBundle.ts) must start a master and load every
+ * service's module and the core's.
  *
- * A master started on cli.js runs only a lean bundle that answers its probe, and a service that cannot
- * start from it is started from cli.js, so a broken one costs memory, not the daemon. This keeps a broken
- * one from shipping at all: it writes the files out, asks the master's probe (`harnessd.mjs
- * __harnessd-probe`), and imports the module each process starts on, each in a Node of its own, in a
- * throwaway home and data folder.
+ * A master started on cli.js runs only a lean bundle that answers its probe, and a service or a core that
+ * cannot start from it is started from cli.js, so a broken one costs memory and two restarts, not the
+ * daemon. But the first core of an update is judged as it starts, from the lean bundle: one that cannot
+ * load there rolls a good build back. This keeps a broken one from shipping at all: it writes the files
+ * out, asks the master's probe (`harnessd.mjs __harnessd-probe`), starts the core's entry as no master
+ * would, to see it load and refuse, and imports the module each process starts on, each in a Node of its
+ * own, in a throwaway home and data folder.
  *
  *   node scripts/check-lean-bundle.mjs dist/cli.js
  */
@@ -32,10 +35,18 @@ try {
   let answer
   try { answer = run([join(dir, 'harnessd.mjs'), '__harnessd-probe']) } catch (error) { fail(`its master does not answer its probe: ${String(error.stderr || error.message).trim()}`) }
   if (!answer.includes('harnessd-probe ok')) fail(`its master answered its probe with: ${answer.trim()}`)
-  // Each process's own module: the master's, and every service's (serviceProcess.ts loads the one it is named).
-  const modules = Object.keys(files).filter((name) => /^(masterProcess|serviceProcess|\w+Process)-[A-Z0-9]+\.mjs$/.test(name))
-  if (!modules.some((name) => name.startsWith('masterProcess-')) || !modules.some((name) => name.startsWith('serviceProcess-'))) {
-    fail(`its lean bundle is missing the master's or the services' module (${modules.join(', ') || 'none'})`)
+  // Each process's own module: the master's, every service's (serviceProcess.ts loads the one it is named),
+  // and the core's, built apart from them (src/leanCoreEntry.ts).
+  const modules = Object.keys(files).filter((name) => /^(core-)?\w+Process-[A-Z0-9]+\.mjs$/.test(name))
+  if (!files['harnessd-core.mjs'] || !['masterProcess-', 'serviceProcess-', 'core-coreProcess-'].every((own) => modules.some((name) => name.startsWith(own)))) {
+    fail(`its lean bundle is missing the master's, the services' or the core's module (${modules.join(', ') || 'none'})`)
+  }
+  // Without the cli.js a master names, the core's entry refuses to run: proof it loads, without a core.
+  try {
+    run([join(dir, 'harnessd-core.mjs'), '__run'])
+    fail('its core\'s entry ran a core no master started')
+  } catch (error) {
+    if (error.status !== 2 || !String(error.stderr).includes('runs a core only for the cli.js')) fail(`its core's entry does not load: ${String(error.stderr || error.message).trim()}`)
   }
   for (const name of modules) {
     try { run(['--input-type=module', '-e', `await import(${JSON.stringify(pathToFileURL(join(dir, name)).href)})`]) } catch (error) {

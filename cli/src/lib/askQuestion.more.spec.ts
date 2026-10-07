@@ -761,3 +761,77 @@ describe('QuestionWatcher.noteTurnStart — the edges', () => {
     expect(seen).toEqual([idOf(DRINK), idOf(DRINK)])
   })
 })
+
+describe('QuestionWatcher.notePrompt — the pane before a prompt the daemon typed', () => {
+  const settle = async (): Promise<void> => { for (let i = 0; i < 5; i++) await Promise.resolve() }
+  afterEach(() => { vi.useRealTimers() })
+  const watcher = (session: Partial<RegisteredSession> | undefined, capture: () => string | null) => {
+    const seen: string[] = []
+    const read = vi.fn(async () => capture())
+    const w = new QuestionWatcher({
+      getSession: () => session as RegisteredSession | undefined,
+      capture: read, hasDevice: () => true,
+      onQuestion: (_s, id) => { seen.push(id) },
+    })
+    const tick = (): Promise<void> => (w as unknown as { tick: (s: string) => Promise<void> }).tick('s1')
+    return { w, seen, read, tick }
+  }
+
+  it('announces the question an engine drew before its turn was seen to start, which the start\'s own read took for the turn before\'s', async () => {
+    // The pane, as the turn is seen to start: the turn's own question is already up (the start was late).
+    const late = watcher({ sessionId: 's1', engine: 'claude' }, () => DRINK)
+    late.w.noteTurnStart('s1')
+    await settle()
+    await late.tick()
+    expect(late.seen).toEqual([])
+    // The same, with the pane as the daemon read it right before typing the prompt: no dialog then.
+    const typed = watcher({ sessionId: 's1', engine: 'claude' }, () => DRINK)
+    typed.w.notePrompt('s1', CLOSED)
+    typed.w.noteTurnStart('s1')
+    await settle()
+    expect(typed.read).not.toHaveBeenCalled()
+    await typed.tick()
+    expect(typed.seen).toEqual([idOf(DRINK)])
+  })
+
+  it('still keeps a dialog that was on the pane as the prompt was typed from being announced as the new turn\'s', async () => {
+    const { w, seen, tick } = watcher({ sessionId: 's1', engine: 'claude' }, () => DRINK)
+    w.notePrompt('s1', DRINK)
+    w.noteTurnStart('s1')
+    await tick()
+    expect(seen).toEqual([])
+  })
+
+  it('reads the pane at the turn\'s start as before, for a prompt it did not type, one whose read failed, an engine it does not watch, or one typed long ago', async () => {
+    vi.useFakeTimers()
+    const drawn = watcher({ sessionId: 's1', engine: 'claude' }, () => DRINK)
+    drawn.w.notePrompt('s1', null)
+    drawn.w.noteTurnStart('s1')
+    await settle()
+    expect(drawn.read).toHaveBeenCalledTimes(1)
+    const stale = watcher({ sessionId: 's1', engine: 'claude' }, () => DRINK)
+    stale.w.notePrompt('s1', CLOSED)
+    vi.advanceTimersByTime(120_001)
+    stale.w.noteTurnStart('s1')
+    await settle()
+    expect(stale.read).toHaveBeenCalledTimes(1)
+    // Used once: the turn after reads its own start.
+    const once = watcher({ sessionId: 's1', engine: 'claude' }, () => DRINK)
+    once.w.notePrompt('s1', CLOSED)
+    once.w.noteTurnStart('s1')
+    once.w.noteTurnStart('s1')
+    await settle()
+    expect(once.read).toHaveBeenCalledTimes(1)
+    for (const session of [undefined, { sessionId: 's1', engine: 'gemini' }] as const) {
+      const ignored = watcher(session as Partial<RegisteredSession> | undefined, () => DRINK)
+      ignored.w.notePrompt('s1', CLOSED)
+      expect((ignored.w as unknown as { beforePrompt: Map<string, unknown> }).beforePrompt.size).toBe(0)
+    }
+    // An engine with no name is read as Claude; everything is forgotten when the watcher stops.
+    const nameless = watcher({ sessionId: 's1' }, () => DRINK)
+    nameless.w.notePrompt('s1', DRINK)
+    expect((nameless.w as unknown as { beforePrompt: Map<string, unknown> }).beforePrompt.size).toBe(1)
+    nameless.w.stopAll()
+    expect((nameless.w as unknown as { beforePrompt: Map<string, unknown> }).beforePrompt.size).toBe(0)
+  })
+})

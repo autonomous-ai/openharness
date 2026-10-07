@@ -43,14 +43,14 @@ afterAll(async () => {
 describe('sign-in epoch', () => {
   it('rides along every rewrite of the session — a refresh and a new machine id', async () => {
     const epoch = newSignInEpoch()
-    writeAuthSession({ ...baseSession(), signInEpoch: epoch })
+    writeAuthSession({ ...baseSession(), signInEpoch: epoch, signInAcct: 'acct-1' })
     vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
       success: true, data: { token: 'refreshed-access', refreshToken: 'refreshed-refresh', expiresIn: 3600 },
     }))))
     const manager = new AuthSessionManager('https://api.example.test')
     await manager.accessToken()
     manager.updateMachineId('machine-2')
-    expect(readAuthSession()).toMatchObject({ accessToken: 'refreshed-access', machineId: 'machine-2', signInEpoch: epoch })
+    expect(readAuthSession()).toMatchObject({ accessToken: 'refreshed-access', machineId: 'machine-2', signInEpoch: epoch, signInAcct: 'acct-1' })
     expect(newSignInEpoch()).not.toBe(epoch)
   })
 
@@ -73,6 +73,13 @@ describe('sign-in epoch', () => {
     expect(signInOf('0123456789abcdef0123456789abcdef')).toMatchObject({ adopted: false, at: null })
     expect(signInOf(undefined)).toBeNull()
     expect(signInOf('')).toBeNull()
+  })
+
+  it('says which account a sign-in by hand was made to, never for an adopted one', () => {
+    const epoch = newSignInEpoch(1_234)
+    expect(signInOf(epoch, 'acct-1')).toEqual({ epoch, adopted: false, at: 1_234, acct: 'acct-1' })
+    expect(signInOf(`${ADOPTED_SIGN_IN}${epoch}`, 'acct-1')).toEqual({ epoch: `${ADOPTED_SIGN_IN}${epoch}`, adopted: true, at: 1_234 })
+    expect(signInOf(epoch, '')).toEqual({ epoch, adopted: false, at: 1_234 })
   })
 })
 

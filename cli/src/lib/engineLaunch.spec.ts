@@ -18,6 +18,7 @@ import {
   terminalHintLines,
   buildEngineCommandArgv,
   buildEngineLaunchArgv,
+  shellAgentArgv,
   buildTerminalLaunchArgv,
   interactiveEngineShell,
   isPosixShell,
@@ -48,6 +49,14 @@ import { DSH_SESSION_ENV, harnessEnvToClear } from '../dsh/launch.js'
 import { launchScriptOf } from '../testing/launchScript.js'
 import { buildGridEngineLaunch, gridConflictingEnvToClear } from './gridLaunch.js'
 import { TmuxBackend } from './tmuxBackend.js'
+
+// What these cases test is what real shells make of the scripts this module writes: sh, dash, bash and
+// zsh run each one, and nothing here could be faked without faking the subject. Each run carries its own
+// bound (a probe's 5 s in engineLaunch.ts, the 10 s of the runs below), and vitest's 5 s default sat under
+// them: a slow shell timed the case out instead of answering as its bound says. Under a full run at load
+// 36 (six workers), 11 cases here hit it, one of them on a single probe; under 8 busy and 8 spawning loops
+// the four-probe case took 4.9 s. Room for four probes at their limit, and a margin.
+vi.setConfig({ testTimeout: 30_000 })
 
 // The launch script names the `grid` the daemon resolved, and a developer's own HARNESS_GRID_BIN
 // would resolve to THEIR grid. The suite's runtime dir is already a throwaway (vitest.setup.ts), so
@@ -87,6 +96,24 @@ const RUN_LINE = '"$harness_engine_bin" "$@" || harness_status=$?'
 const SOURCED = /^\. '.+\.sh'$/
 
 describe('buildEngineLaunchArgv', () => {
+  it('runs the exact native command in the current shell environment after a missing-agent install', () => {
+    const dir = mkdtempSync(join(tmpdir(),'hn-shell-install-'))
+    const binary = join(dir,'fake-agent'), source = join(dir,'template'), marker = join(dir,'installed')
+    try {
+      writeFileSync(source,'#!/bin/sh\nprintf "%s\\n" "$@"\nexit 17\n',{mode:0o700})
+      const recipe: EngineInstallRecipe = {command:`cp '${source}' '${binary}'; touch '${marker}'`,source:'test fixture',executable:{names:[binary]}}
+      const argv = shellAgentArgv(binary,['task; $(literal)','--model','mine'],recipe,'/missing-node')
+      try { execFileSync(argv[0],argv.slice(1),{encoding:'utf8'}); throw new Error('expected native exit 17') }
+      catch (error) {
+        expect((error as {status:number}).status).toBe(17)
+        expect(String((error as {stdout:string}).stdout)).toContain('task; $(literal)\n--model\nmine\n')
+      }
+      expect(existsSync(marker)).toBe(true)
+      rmSync(marker)
+      try { execFileSync(argv[0],argv.slice(1),{encoding:'utf8'}) } catch (error) { expect((error as {status:number}).status).toBe(17) }
+      expect(existsSync(marker)).toBe(false)
+    } finally { rmSync(dir,{recursive:true,force:true}) }
+  })
   it.each(['claude', 'terminal'] as const)('clears inherited harness context before a plain %s session runs', (engine) => {
     const argv = buildEngineLaunchArgv(engine, { clearEnv: harnessEnvToClear() }, '/bin/sh', undefined, undefined, NO_TMUX)
     const probe = 'for name in HARNESS_DSH HARNESS_DSH_DIR HARNESS_WORKSPACE HARNESS_CONTEXT_FILE HARNESS_SKILLS_DIR HARNESS_PRIVATE_GRID; do printenv "$name" && exit 9; done; printf "%s" "$KEEP_ME"'

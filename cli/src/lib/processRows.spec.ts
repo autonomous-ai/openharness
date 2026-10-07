@@ -1,8 +1,13 @@
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { processArgs, processRows } from './tmux.js'
+
+// The fake binaries below are /bin/sh scripts; their answers, not their speed, are what is tested
+// (testing/patientExecWithoutDeadline.ts).
+vi.mock('./patientExec.js', async (importOriginal) =>
+  (await import('../testing/patientExecWithoutDeadline.js')).withoutDeadline(await importOriginal()))
 
 /**
  * A `ps` on PATH that records every spawn and answers one well-formed row after a short pause — long

@@ -11,6 +11,7 @@ import '../api/api_client.dart';
 import '../viewer/direct_auth_api.dart';
 import '../viewer/direct_link.dart';
 import '../viewer/group_sync.dart';
+import '../e2ee/bytes.dart' show b64e;
 import '../viewer/viewer_services.dart';
 import '../auth/auth_session.dart';
 import '../auth/peer_link_client.dart';
@@ -1320,6 +1321,9 @@ class AppNotifier extends ChangeNotifier {
     // landed first (a push, a reconnect) would judge a just-signed-in phone by the old sign-in's
     // file, and the log has to know the sign-in is fresh before anything waits.
     _registerDeviceLog(revision);
+    // With no machine connected nothing is pushed to this phone: the machine list is read again now
+    // and then until one is ([_rereadMachinesWhileDeaf]).
+    _startDeafPoll();
     // Signed in. Display-name/avatar metadata is independent of machine
     // discovery and must not delay work.
     unawaited(_loadProfile());
@@ -1365,6 +1369,10 @@ class AppNotifier extends ChangeNotifier {
       }
       if (me != null) {
         currentUser = CurrentUserProfile.fromMe(me);
+        // A sign-in by hand: the device log keeps which account it was made to.
+        if (currentUser?.id case final id?) {
+          unawaited(_deviceLog?.signedInAs(id));
+        }
         notifyListeners();
       }
     } catch (error) {
@@ -1390,6 +1398,7 @@ class AppNotifier extends ChangeNotifier {
     // The code was scanned into the session that just ended — see [logout].
     pendingPairing = null;
     _clearDeviceNotices();
+    _stopAccountTimers();
     _desk.reset();
     zoo.reset();
     unawaited(_pool?.closeAll());
@@ -1502,6 +1511,7 @@ class AppNotifier extends ChangeNotifier {
     unawaited(cliLogin.logout());
     _stopAllOfflineRetries();
     _stopAllAgentSyncTimers();
+    _stopAccountTimers();
     // Tiles go, the saved layout stays: signing out and back in is the same
     // person at the same desk, and the file is only read once machines exist.
     await _closeAllPanes(persist: false);
@@ -1555,14 +1565,49 @@ class AppNotifier extends ChangeNotifier {
     departedDevices.clear();
     deviceRemovals.clear();
     _failedDismissals.clear();
+    _deviceListFrozen = false;
+    _deviceListTooMany = false;
+  }
+
+  /// What an account leaving takes with it: the refusals being settled, the machine list re-read
+  /// while deaf, and when each machine last swapped trust groups (the next account's swap is its own).
+  void _stopAccountTimers() {
+    _forgetAllTrustSettles();
+    _stopDeafPoll();
+    _groupSyncedAt.clear();
   }
 
   void _onLocalFailure(String machineId, int code, String reason) {
     final machine = machineStates[machineId];
     if (machine == null || code != 4404) return;
+    // A refusal for want of trust is usually only early: this phone's key not yet in the account's
+    // device log, or the machine not yet in this phone's copy of it — a computer signed in after the
+    // phone was. That is settled first ([_settleTrust]), while the machine keeps showing as
+    // connecting; only a refusal that outlasts it asks for a password. Not for a machine a scanned
+    // code waits for: its pairing screen is the way in, at once.
+    if (_deviceLog != null &&
+        (reason == 'NO_PEER_LINK' || reason == 'E2E_DENIED') &&
+        pendingPairing?.machineId != machineId) {
+      if ((_trustRounds[machineId] ?? 0) < _trustSettleRounds) {
+        if (_trustSettling.add(machineId)) {
+          unawaited(_settleTrust(machineId, reason));
+        }
+        return;
+      }
+      if (!machine.needsLink) {
+        appLog.info(
+          'link',
+          '${_shortId(machineId)} still refused ($reason) after the device list was checked',
+        );
+      }
+    }
     // A machine the account's device key log names may simply not have read it yet: read it again;
     // a machine it pins is dialled again as soon as it lands.
     if (_deviceLog case final log?) unawaited(log.refresh());
+    _markNeedsLink(machine);
+  }
+
+  void _markNeedsLink(MachineState machine) {
     // The relay found no linked trust for this machine: it waits for this phone's password form (or
     // a scanned code), which reconnects when it lands. Nothing is polled — the desktop retries every
     // few seconds for a `harness link connect` run elsewhere, which a phone's links never come from.
@@ -1580,6 +1625,130 @@ class AppNotifier extends ChangeNotifier {
       'This machine is no longer linked. Link it again to reconnect.',
     );
     notifyListeners();
+  }
+
+  // -- a refusal for want of trust ([_onLocalFailure]) ---------------------------------------------
+
+  /// How many refusals of each machine were settled since it last connected, and the ones under way —
+  /// each with what ends its wait early (a pin landing: [_redialNewlyTrusted]).
+  final Map<String, int> _trustRounds = {};
+  final Set<String> _trustSettling = {};
+  final Map<String, Completer<void>> _trustWakes = {};
+  static const _trustSettleRounds = 2;
+
+  /// How long one settling round waits for the machine's key to land before dialling again: two
+  /// rounds, about fifteen seconds, before a password is asked for.
+  @visibleForTesting
+  Duration trustSettleRound = const Duration(milliseconds: 7500);
+
+  /// How long a machine that denied this phone's key gets to read the account's log again (its CLI
+  /// does on a hello from a key it does not know) before the first hello is said again.
+  @visibleForTesting
+  Duration trustDeniedWait = const Duration(seconds: 1);
+
+  /// Hears every [_redial], for a test with no pool to dial through.
+  @visibleForTesting
+  void Function(String machineId)? onRedialForTest;
+
+  static String _shortId(String id) => id.length > 8 ? id.substring(0, 8) : id;
+
+  /// One round of settling [machineId]'s refusal ([reason]: `NO_PEER_LINK`, no key here for it, or
+  /// `E2E_DENIED`, the machine does not know this phone's): put this phone into the account's device
+  /// log and read it, then dial again — at once when the machine's key just landed, after a moment for
+  /// a machine that has to read the log itself. A frozen log can settle nothing: the password it is.
+  Future<void> _settleTrust(String machineId, String reason) async {
+    final log = _deviceLog;
+    if (log == null) return;
+    final revision = _authRevision;
+    final round = _trustRounds[machineId] = (_trustRounds[machineId] ?? 0) + 1;
+    final wake = _trustWakes[machineId] = Completer<void>();
+    final short = _shortId(machineId);
+    bool current() =>
+        !_disposed &&
+        _authWorkCurrent(revision) &&
+        identical(_trustWakes[machineId], wake) &&
+        machineStates.containsKey(machineId);
+    final started = Stopwatch()..start();
+    try {
+      final registration = await log.ensureRegistered().timeout(
+        trustSettleRound,
+        onTimeout: () => DeviceLogRegistration.missing,
+      );
+      if (!current()) return;
+      if (registration == DeviceLogRegistration.frozen) {
+        appLog.info('link', '$short refused ($reason): the device list is frozen');
+        // The machine's password form says so (deviceListNeedsReview), from the listing.
+        unawaited(_syncPendingDevices());
+        _trustRounds[machineId] = _trustSettleRounds;
+        _endTrustSettle(machineId);
+        final machine = machineStates[machineId]!
+          ..connectionStatus = ConnectionStatus.disconnected;
+        _markNeedsLink(machine);
+        return;
+      }
+      if (registration == DeviceLogRegistration.registered) {
+        appLog.info('link', '$short refused ($reason): this phone joined the device list');
+      }
+      final pinned = await _holdsMachineKey(machineId);
+      if (!current()) return;
+      if (reason == 'E2E_DENIED' || !pinned) {
+        final rest = trustSettleRound - started.elapsed;
+        final wait = reason == 'E2E_DENIED' && round == 1
+            ? trustDeniedWait
+            : rest.isNegative
+            ? Duration.zero
+            : rest;
+        await Future.any([Future<void>.delayed(wait), wake.future]);
+        if (!current()) return;
+      }
+      final now = pinned || await _holdsMachineKey(machineId);
+      if (!current()) return;
+      appLog.info(
+        'link',
+        '$short refused ($reason): ${now ? 'pinned' : 'no key yet'}, dialling again (round $round)',
+      );
+      _endTrustSettle(machineId);
+      _redial(machineId);
+    } finally {
+      // However the round ended, a machine no longer being settled can be settled again.
+      if (identical(_trustWakes[machineId], wake)) _endTrustSettle(machineId);
+    }
+  }
+
+  void _endTrustSettle(String machineId) {
+    _trustSettling.remove(machineId);
+    final wake = _trustWakes.remove(machineId);
+    if (wake != null && !wake.isCompleted) wake.complete();
+  }
+
+  /// [machineId] connected, or the account is left: its refusals start counting again.
+  void _forgetTrustSettle(String machineId) {
+    _trustRounds.remove(machineId);
+    _endTrustSettle(machineId);
+  }
+
+  void _forgetAllTrustSettles() {
+    for (final machineId in [..._trustRounds.keys, ..._trustSettling]) {
+      _forgetTrustSettle(machineId);
+    }
+  }
+
+  Future<bool> _holdsMachineKey(String machineId) async {
+    try {
+      return await viewer.keys.peer(machineId) != null;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Dial [machineId] again from scratch: a refused connection is closed for good, so it is closed
+  /// and replaced.
+  void _redial(String machineId) {
+    final machine = machineStates[machineId];
+    if (machine == null) return;
+    onRedialForTest?.call(machineId);
+    unawaited(_pool?.closeMachine(machineId));
+    _connectMachine(machine);
   }
 
   /// The token a viewer's relay socket dials with.
@@ -1619,10 +1788,17 @@ class AppNotifier extends ChangeNotifier {
   void _onConnectionStatus(String machineId, ConnectionStatus nextStatus) {
     final machine = machineStates[machineId];
     if (machine == null) return;
-    machine.connectionStatus = nextStatus;
+    // A refusal being settled against the device log ([_settleTrust]) is still connecting.
+    final settling =
+        nextStatus == ConnectionStatus.disconnected &&
+        _trustSettling.contains(machineId);
+    machine.connectionStatus = settling
+        ? ConnectionStatus.connecting
+        : nextStatus;
     if (nextStatus == ConnectionStatus.connected) {
       _refreshDeviceLogAfterReconnect();
       machine.needsLink = false;
+      _forgetTrustSettle(machineId);
       // A relay socket reports `connected` only after the machine's welcome
       // proved the link (`WsConn._markReady`), so a code held to pair this
       // machine has nothing left to do. Kept, it would be spent the next time
@@ -1657,7 +1833,7 @@ class AppNotifier extends ChangeNotifier {
       // request still report. Read as offline, every return to the app flashed "Offline" and
       // threw the pager away. The streams on it are dead all the same: told so, and put back once
       // the socket is.
-      if (!machine.needsLink) {
+      if (!machine.needsLink && !settling) {
         _markSessionsUnreachable(machine, 'Connection lost. Reconnecting…');
       }
     }
@@ -2109,6 +2285,28 @@ class AppNotifier extends ChangeNotifier {
 
   ViewerDeviceLog? get deviceLog => _deviceLog;
 
+  /// This phone's copy of the device log is frozen, so it pins no machine from it until someone
+  /// reviews the list (Your devices). A machine asking for its password says so.
+  bool get deviceListNeedsReview => _deviceListFrozen;
+  bool _deviceListFrozen = false;
+
+  @visibleForTesting
+  set deviceListNeedsReviewForTest(bool frozen) {
+    _deviceListFrozen = frozen;
+    notifyListeners();
+  }
+
+  /// The backend refused this phone a place on the account: it has too many devices (`TOO_MANY`).
+  /// A machine asking for its password says so, beside [deviceListNeedsReview].
+  bool get deviceListTooMany => _deviceListTooMany;
+  bool _deviceListTooMany = false;
+
+  @visibleForTesting
+  set deviceListTooManyForTest(bool tooMany) {
+    _deviceListTooMany = tooMany;
+    notifyListeners();
+  }
+
   /// Devices this phone dismissed whose write to the log failed: the banner must not bring them back
   /// on the next read of `pending`. Gone with the sign-in, or when the key is announced afresh.
   final Set<String> _failedDismissals = {};
@@ -2127,7 +2325,11 @@ class AppNotifier extends ChangeNotifier {
   void _initDeviceLog() {
     final log = _deviceLog = ViewerDeviceLog(
       keys: viewer.keys,
-      fetch: (since) => api.deviceKeys(since),
+      // This phone's own key rides each read, so the backend counts it as used (not as abandoned).
+      fetch: (since) async => api.deviceKeys(
+        since,
+        self: await viewer.keys.identity().then<String?>((i) => b64e(i.pub), onError: (Object _) => null),
+      ),
       append: (entry) => api.appendDeviceKey(entry),
       label: () => phoneClientDescriptor().name,
       // The log saves "announced" before it calls back, so a call that found the app still starting
@@ -2203,6 +2405,11 @@ class AppNotifier extends ChangeNotifier {
       return;
     }
     if (_disposed || gen != _pendingSyncGen || status != AppStatus.authenticated) return;
+    final frozen = listing.frozen != null;
+    final tooMany = listing.registerError == 'TOO_MANY';
+    final frozenChanged = frozen != _deviceListFrozen || tooMany != _deviceListTooMany;
+    _deviceListFrozen = frozen;
+    _deviceListTooMany = tooMany;
     final pending = listing.pending.toSet();
     _suspendedNew
       ..clear()
@@ -2224,7 +2431,7 @@ class AppNotifier extends ChangeNotifier {
     final same = listEquals([for (final m in next) m.pub], [for (final m in newDevices) m.pub]);
     final sameDeparted =
         listEquals([for (final d in nextDeparted) d.pub], [for (final d in departedDevices) d.pub]);
-    if (same && sameDeparted) return;
+    if (same && sameDeparted && !frozenChanged) return;
     newDevices
       ..clear()
       ..addAll(next);
@@ -2234,11 +2441,18 @@ class AppNotifier extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// A machine waiting for its password that the device key log now vouches for: dial it again.
+  /// A machine waiting on trust — being settled ([_settleTrust]), or asking for its password — that the
+  /// device key log now vouches for: dial it again, at once.
   Future<void> _redialNewlyTrusted() async {
     for (final state in [...machineStates.values]) {
+      final machineId = state.machine.machineId;
+      if (!state.needsLink && !_trustSettling.contains(machineId)) continue;
+      if (!await _holdsMachineKey(machineId)) continue;
+      if (_trustWakes[machineId] case final wake? when !wake.isCompleted) {
+        wake.complete();
+        continue;
+      }
       if (!state.needsLink) continue;
-      if (await viewer.keys.peer(state.machine.machineId) == null) continue;
       state.needsLink = false;
       state.agentLoadStatus = AgentLoadStatus.idle;
       await _pool?.closeMachine(state.machine.machineId);
@@ -2257,14 +2471,15 @@ class AppNotifier extends ChangeNotifier {
   DateTime? _deviceLogReadAt;
 
   /// A socket came back: a `device_keys_changed` sent while this phone was offline reached nobody, so
-  /// read the log again — at most every half minute, since a reconnect is every machine at once.
+  /// read the log again — and put this phone's key into it if the boot's register could not — at most
+  /// every half minute, since a reconnect is every machine at once.
   void _refreshDeviceLogAfterReconnect() {
     final log = _deviceLog;
     if (log == null) return;
     final now = DateTime.now();
     if (_deviceLogReadAt case final last? when now.difference(last) < const Duration(seconds: 30)) return;
     _deviceLogReadAt = now;
-    unawaited(log.refresh());
+    unawaited(log.ensureRegistered());
   }
 
   /// The devices list was opened: every device announced so far has been seen — the banner's, and
@@ -2392,6 +2607,9 @@ class AppNotifier extends ChangeNotifier {
     final now = DateTime.now();
     final last = _groupSyncedAt[machineId];
     if (!spread && last != null && now.difference(last) < _groupResync) return;
+    // Not stamped while the device log is still the last account's (DirectLink.syncGroup skips it
+    // then): stamped, a machine reached right after an account switch went five minutes unsynced.
+    if (await _deviceLog?.ownsLog() == false) return;
     _groupSyncedAt[machineId] = now;
     // Fire-and-forget from the connection handler: a state file that is locked for a moment must not
     // surface as an unhandled error. The next session retries.
@@ -2529,6 +2747,7 @@ class AppNotifier extends ChangeNotifier {
     if (!visible.contains(selectedMachineId)) {
       selectedMachineId = machines.first.machineId;
     }
+    final dial = <MachineState>[];
     for (final machine in machines) {
       final state = machineStates[machine.machineId]!;
       // ⚠️ **A machine the account says is down is not dialled, and this is the
@@ -2567,26 +2786,66 @@ class AppNotifier extends ChangeNotifier {
         StartupTrace.mark('skipped offline machine ${machine.machineId}');
         continue;
       }
-      _connectMachine(state);
-      // ⚠️ **Only ask a machine that is already answering.** `_connectMachine`
-      // starts a dial; it does not finish one. Asking here regardless meant
-      // `waitUntilReady` sat on a handshake that had not happened yet, spending
-      // the inventory budget on the connection rather than on the request — and
-      // on a first launch it spent ALL of it, which then read as the machine
-      // having gone offline and triggered a `forceReconnect()` that threw the
-      // working socket away and started over.
-      //
-      // A machine that is not ready yet loses nothing: `_onConnectionStatus`
-      // calls this the moment its handshake completes, with `force: true`, which
-      // is the path every reconnect in the app already takes.
-      //
-      // Read off the POOL rather than through `_conn`, which would build a
-      // connection as a side effect of being asked about one — for a machine
-      // `_connectMachine` had just declined to dial, that would be this method
-      // quietly undoing its own decision.
-      if (_connectionReady(machine.machineId)) {
-        unawaited(_loadMachineData(state));
+      dial.add(state);
+    }
+    unawaited(_connectAfterDeviceLog(dial, load: true));
+  }
+
+  /// Dial [states]: at once a machine this phone holds a key for, one already asking for its password
+  /// and one a scanned code waits for. A machine with no key here may only be missing from this
+  /// phone's copy of the device log — a computer signed in after the phone was — so the log is read
+  /// first, briefly, rather than dialling a refusal. [load]: ask a machine that already answers for
+  /// its data ([_dialAndLoad]).
+  Future<void> _connectAfterDeviceLog(
+    List<MachineState> states, {
+    required bool load,
+  }) async {
+    final revision = _authRevision;
+    bool current(MachineState state) =>
+        _authWorkCurrent(revision) &&
+        identical(machineStates[state.machine.machineId], state);
+    final waiting = <MachineState>[];
+    for (final state in states) {
+      final machineId = state.machine.machineId;
+      if (state.needsLink ||
+          pendingPairing?.machineId == machineId ||
+          await _holdsMachineKey(machineId)) {
+        if (current(state)) _dialAndLoad(state, load: load);
+      } else {
+        waiting.add(state);
       }
+    }
+    if (waiting.isEmpty) return;
+    await _deviceLog?.refresh().timeout(
+      const Duration(seconds: 5),
+      onTimeout: () {},
+    );
+    for (final state in waiting) {
+      if (current(state)) _dialAndLoad(state, load: load);
+    }
+  }
+
+  void _dialAndLoad(MachineState state, {required bool load}) {
+    _connectMachine(state);
+    if (!load) return;
+    // ⚠️ **Only ask a machine that is already answering.** `_connectMachine`
+    // starts a dial; it does not finish one. Asking here regardless meant
+    // `waitUntilReady` sat on a handshake that had not happened yet, spending
+    // the inventory budget on the connection rather than on the request — and
+    // on a first launch it spent ALL of it, which then read as the machine
+    // having gone offline and triggered a `forceReconnect()` that threw the
+    // working socket away and started over.
+    //
+    // A machine that is not ready yet loses nothing: `_onConnectionStatus`
+    // calls this the moment its handshake completes, with `force: true`, which
+    // is the path every reconnect in the app already takes.
+    //
+    // Read off the POOL rather than through `_conn`, which would build a
+    // connection as a side effect of being asked about one — for a machine
+    // `_connectMachine` had just declined to dial, that would be this method
+    // quietly undoing its own decision.
+    if (_connectionReady(state.machine.machineId)) {
+      unawaited(_loadMachineData(state));
     }
   }
 
@@ -2793,6 +3052,7 @@ class AppNotifier extends ChangeNotifier {
     var warmed = 0;
     var warmedAgents = 0;
     final warmMachines = <Machine>[];
+    final warmStates = <MachineState>[];
     for (final entry in cached) {
       final machine = entry.machine;
       // A viewer reaches every machine through the relay; a cached entry that
@@ -2862,12 +3122,14 @@ class AppNotifier extends ChangeNotifier {
       // from the cache are already on screen meanwhile. The warm start's job is
       // to have the socket ALREADY OPEN when that happens, which is where its
       // second and a half comes from; the request itself was never the part
-      // worth racing.
-      _connectMachine(state);
+      // worth racing. A machine with no key here reads the device log first
+      // ([_connectAfterDeviceLog]).
+      warmStates.add(state);
       warmMachines.add(machine);
       warmed++;
     }
     if (warmed == 0) return;
+    unawaited(_connectAfterDeviceLog(warmStates, load: false));
     // ⚠️ Published to `machines` as well, because every screen indexes agents
     // through THAT list (`agentIndex`, `filterableMachines`) rather than through
     // `machineStates` — without this the warm start would have opened the
@@ -5717,6 +5979,12 @@ class AppNotifier extends ChangeNotifier {
         // Arrives once per machine socket, like desk_changed; concurrent reads share one.
         unawaited(_deviceLog?.refresh());
         return;
+      case 'machines_changed':
+        // The account's machine list changed somewhere: a machine created, renamed or deleted. The
+        // payload is only a reason; the list itself is read again (once per machine socket it
+        // arrives on: concurrent reads share one).
+        _rereadMachines();
+        return;
       case 'desk_changed':
         // The account's tabs changed — in a window on some computer, or on
         // another phone. The frame carries only the revision; the document
@@ -6059,8 +6327,15 @@ class AppNotifier extends ChangeNotifier {
     // whatever they were when the phone went into a pocket, until something
     // else happened to change them.
     unawaited(_desk.refresh());
-    // The device key log too: a `device_keys_changed` sent while the phone was away reached nobody.
-    if (status == AppStatus.authenticated) unawaited(_deviceLog?.refresh());
+    if (status == AppStatus.authenticated) {
+      // The device key log too: a `device_keys_changed` sent while the phone was away reached nobody
+      // — and this phone's key goes into it if the boot could not put it there.
+      unawaited(_deviceLog?.ensureRegistered());
+      // And the machine list, when no machine is connected to push one: the person most likely just
+      // went to their computer to sign it in.
+      _rereadMachinesWhileDeaf();
+      _startDeafPoll();
+    }
     // The zoo too, for the same reason: a `zoo_changed` sent while the phone
     // was in a pocket reached nobody.
     if (status == AppStatus.authenticated) unawaited(zoo.refresh());
@@ -6069,7 +6344,53 @@ class AppNotifier extends ChangeNotifier {
   /// The app went into a pocket: stop the reads that only make sense in front
   /// of somebody. The sockets are left to the OS, which suspends them anyway —
   /// [handleAppResumed] is what puts both back.
-  void handleAppPaused() => _desk.pause();
+  void handleAppPaused() {
+    _desk.pause();
+    _stopDeafPoll();
+  }
+
+  /// How often a phone with no machine connected reads the machine list again. Every push
+  /// (`machines_changed`, `device_keys_changed`) reaches the phone over a machine's socket; with none
+  /// connected — the person signed in on the phone first and is now running `harness login` on their
+  /// computer — nothing tells it that computer joined.
+  @visibleForTesting
+  Duration deafMachineListInterval = const Duration(seconds: 20);
+
+  Timer? _deafMachineListTimer;
+  Future<void>? _machineReread;
+
+  void _startDeafPoll() {
+    if (_disposed || status != AppStatus.authenticated) return;
+    _deafMachineListTimer ??= Timer.periodic(
+      deafMachineListInterval,
+      (_) => _rereadMachinesWhileDeaf(),
+    );
+  }
+
+  void _stopDeafPoll() {
+    _deafMachineListTimer?.cancel();
+    _deafMachineListTimer = null;
+  }
+
+  /// A phone that hears nothing reads the machine list again: the computer the person is signing in on
+  /// right now appears, and the dial that follows reads the device log for its key first.
+  void _rereadMachinesWhileDeaf() {
+    if (_disposed || status != AppStatus.authenticated) return;
+    if (machineStates.values.any(
+      (m) => m.connectionStatus == ConnectionStatus.connected,
+    )) {
+      return;
+    }
+    _rereadMachines();
+  }
+
+  /// Read the machine list again because something other than the person asked; reads under way are
+  /// shared, and a failure is left to the next one.
+  void _rereadMachines() {
+    _machineReread ??= refreshMachines()
+        .catchError((Object _) {})
+        .whenComplete(() => _machineReread = null);
+  }
 
   /// What the local CLI closing this machine's socket with [code] does to the
   /// model — the `WsPool.onLocalFailure` path, without a socket.
@@ -6094,6 +6415,7 @@ class AppNotifier extends ChangeNotifier {
     _channelControllers.clear();
     _disposed = true;
     _closedHistory.clear();
+    _stopAccountTimers();
     _stopAllOfflineRetries();
     _stopAllAgentSyncTimers();
     _clearAllTurnActivity();

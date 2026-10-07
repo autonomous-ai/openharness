@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { env } from './config/env.js'
 import { PROBE_ANSWER } from './harnessd/reexec.js'
 import { LEAN_ENTRY, leanFingerprint, type LeanBundle } from './harnessd/leanBundle.js'
 
@@ -11,7 +12,7 @@ const leanBundle = vi.hoisted(() => ({ read: vi.fn((_bundle: Buffer): LeanBundle
 vi.mock('./harnessd/leanBundle.js', async (real) => ({ ...await real<object>(), readLeanBundle: (bundle: Buffer) => leanBundle.read(bundle) }))
 
 const {
-  BUNDLE_ENV, BUNDLE_SHA256_ENV, LEAN_DIR, LEAN_FINGERPRINT_ENV, LEAN_OFF_FILE, probeLean, probeThisMaster, processBundleDeps, startMaster, startMasterFromBundle, startMasterInForeground,
+  BUNDLE_ENV, BUNDLE_SHA256_ENV, LEAN_DIR, LEAN_FINGERPRINT_ENV, LEAN_OFF_FILE, masterEnv, probeLean, probeThisMaster, processBundleDeps, startMaster, startMasterFromBundle, startMasterInForeground,
 } = await import('./masterProcess.js')
 type Deps = Parameters<typeof startMasterFromBundle>[1] & object
 
@@ -63,7 +64,7 @@ describe('a master started on cli.js', () => {
     const { given, calls } = deps({ execve: null })
     startMasterFromBundle('/cli/cli.js', given)
     expect(calls.starts).toEqual([{ scriptPath: '/cli/cli.js', serviceScriptPath: '/data/lean/harnessd-aaaa.mjs', leanFingerprint: PRINT }])
-    expect(calls.logs).toEqual(['[harnessd] this Node cannot re-execute the master: it runs from /cli/cli.js, the services from /data/lean/harnessd-aaaa.mjs'])
+    expect(calls.logs).toEqual(['[harnessd] this Node cannot re-execute the master: it runs from /cli/cli.js, the core and the services from /data/lean/harnessd-aaaa.mjs'])
     const failing = deps({ execve: () => { throw new Error('E2BIG') } })
     startMasterFromBundle('/cli/cli.js', failing.given)
     expect(failing.calls.starts).toEqual([{ scriptPath: '/cli/cli.js', serviceScriptPath: '/data/lean/harnessd-aaaa.mjs', leanFingerprint: PRINT }])
@@ -81,7 +82,7 @@ describe('a master started on cli.js', () => {
       startMasterFromBundle('/cli/cli.js', given)
       expect(calls.execs).toEqual([])
       expect(calls.starts).toEqual([{ scriptPath: '/cli/cli.js' }])
-      expect(calls.logs).toEqual([`[harnessd] ${gone} is not there to re-execute on: the master and the services run from /cli/cli.js`])
+      expect(calls.logs).toEqual([`[harnessd] ${gone} is not there to re-execute on: the master, the core and the services run from /cli/cli.js`])
     }
   })
 
@@ -90,7 +91,7 @@ describe('a master started on cli.js', () => {
     startMasterFromBundle('/cli/cli.js', given)
     expect(calls.starts).toEqual([{ scriptPath: '/cli/cli.js' }])
     expect(calls.probes).toEqual([])
-    expect(calls.logs).toEqual([`[harnessd] ${LEAN_OFF_FILE} is there: the master and the services run from /cli/cli.js`])
+    expect(calls.logs).toEqual([`[harnessd] ${LEAN_OFF_FILE} is there: the master, the core and the services run from /cli/cli.js`])
   })
 
   it('runs everything from cli.js when the lean bundle is not there to use, and says why', () => {
@@ -110,7 +111,7 @@ describe('a master started on cli.js', () => {
     const none = deps()
     startMasterFromBundle('/cli/cli.js', none.given)
     expect(none.calls.starts).toEqual([{ scriptPath: '/cli/cli.js' }])
-    expect(none.calls.logs).toEqual(['[harnessd] no lean bundle in /cli/cli.js: the master and the services run from it'])
+    expect(none.calls.logs).toEqual(['[harnessd] no lean bundle in /cli/cli.js: the master, the core and the services run from it'])
   })
 
   it('runs everything from cli.js, quietly, with HARNESSD_LEAN=off', () => {
@@ -167,8 +168,38 @@ describe('starting the master', () => {
     const config = runMaster.mock.calls[0][0] as Record<string, unknown> & { restoreUpdate(): void; confirmUpdate(): void }
     expect(config).toMatchObject({ scriptPath: '/cli/cli.js', serviceScriptPath: '/lean.mjs', bundleFingerprint: 'f', nodePath: process.execPath })
     expect(String(config.reexecMarkerFile)).toMatch(/harnessd-reexec\.json$/)
+    // Not the installed copy: no updater. The installed one runs it.
+    expect(config.updater).toBe(false)
+    runMaster.mockClear()
+    startMaster({ scriptPath: join(env.ADAPTER_CLI_DIR, 'cli.js') })
+    expect((runMaster.mock.calls[0][0] as { updater: boolean }).updater).toBe(true)
     expect(LEAN_DIR).toMatch(/[\\/]lean$/)
     expect(LEAN_OFF_FILE).toMatch(/[\\/]lean-off$/)
+  })
+
+  it('keeps the services in the core when the core will have no local socket for them to reach it by', () => {
+    const given = { HOME: '/home/someone' }
+    const logs: string[] = []
+    // A socket: the master runs on its environment as it is, the services in their own processes.
+    expect(masterEnv(given, '/data/daemon-18473.sock', (line) => logs.push(line))).toBe(given)
+    // None (a data folder too deep for one): every service in the core's process, and the log says why.
+    expect(masterEnv(given, null, (line) => logs.push(line))).toEqual({ HOME: '/home/someone', HARNESSD_SERVICES: 'none' })
+    expect(given).toEqual({ HOME: '/home/someone' })
+    expect(logs).toEqual([expect.stringMatching(/\[harnessd\] this data folder is too deep for the daemon's local socket/)])
+    // Already none: nothing to change or say.
+    const none = { HARNESSD_SERVICES: 'none' }
+    expect(masterEnv(none, null, (line) => logs.push(line))).toBe(none)
+    expect(logs).toHaveLength(1)
+    // Its own log line goes to the master's console, which is the daemon's log.
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    try {
+      masterEnv({}, null)
+      expect(log).toHaveBeenCalledWith(expect.stringMatching(/the services run in the core's process$/))
+    } finally { log.mockRestore() }
+    // startMaster hands runMaster an environment: this one's, or this one's with the services kept in.
+    runMaster.mockClear()
+    startMaster({ scriptPath: '/cli/cli.js' })
+    expect((runMaster.mock.calls[0][0] as { env: NodeJS.ProcessEnv }).env).toMatchObject({ PATH: process.env.PATH })
   })
 
   it('gives up its claim on the lean bundle as it exits cleanly', () => {

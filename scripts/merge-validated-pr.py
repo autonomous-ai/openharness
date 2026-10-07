@@ -18,6 +18,10 @@ spec = importlib.util.spec_from_file_location("ci_evidence", Path(__file__).with
 ci = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(ci)
 
+queue_spec = importlib.util.spec_from_file_location("queue_merge", Path(__file__).with_name("queue-validated-pr.py"))
+queue = importlib.util.module_from_spec(queue_spec)
+queue_spec.loader.exec_module(queue)
+
 
 def git(root, *args):
     return subprocess.check_output(["git", *args], cwd=root, stderr=subprocess.PIPE, timeout=15, text=True).strip()
@@ -79,6 +83,7 @@ def finish(client, root, number, run_id, scope, head, base, output, *, merge=Fal
                   pr=number, run_id=run_id, scope=scope, reviewed_head=head, reviewed_base=base,
                   merge_authorized=merge, started_at=ci.utc_now(), status="not_merged", phases={})
     evidence = None
+    automatic = run_id is None and scope is None
 
     def save():
         temporary = output / "receipt.tmp"
@@ -98,17 +103,32 @@ def finish(client, root, number, run_id, scope, head, base, output, *, merge=Fal
     try:
         client.deadline = time.monotonic() + timeout
         record["reviewed_source"] = phase("preflight", lambda: preflight(client, root, number, head, base))
+        if automatic:
+            run = phase("find_automatic_ci", lambda: queue.pr_run(client, head))
+            record["run_id"] = run_id = run["id"]
         client.deadline = time.monotonic() + wait_timeout
         observed = phase("waiting", lambda: ci.wait_for_run(client, run_id))
         client.deadline = time.monotonic() + timeout
         evidence_dir = output / "ci"
         evidence_dir.mkdir()
-        evidence = phase("collection", lambda: ci.collect(client, root, run_id, scope, head,
-                                                          evidence_dir, number, expected_run=observed))
-        (evidence_dir / "receipt.json").write_text(json.dumps(evidence, indent=2) + "\n")
-        (evidence_dir / "validation.md").write_text(ci.markdown(evidence))
-        if evidence["status"] != "passed":
-            raise ValueError("CI evidence requires source review; no merge requested")
+        if automatic:
+            evidence = phase("collection", lambda: queue.gate_evidence(client, observed, evidence_dir))
+            record["pr_evidence"] = evidence
+            if (evidence["source_sha"] != head
+                    or evidence["source_tree"] != record["reviewed_source"]["tree"]):
+                raise ValueError("automatic CI does not cover the reviewed source")
+            latest = queue.pr_run(client, head)
+            if latest["id"] != run_id or latest["run_attempt"] != observed["run_attempt"]:
+                raise ValueError("automatic PR CI changed during verification; follow the latest run")
+            tested_tree = evidence["source_tree"]
+        else:
+            evidence = phase("collection", lambda: ci.collect(client, root, run_id, scope, head,
+                                                              evidence_dir, number, expected_run=observed))
+            (evidence_dir / "receipt.json").write_text(json.dumps(evidence, indent=2) + "\n")
+            (evidence_dir / "validation.md").write_text(ci.markdown(evidence))
+            if evidence["status"] != "passed":
+                raise ValueError("CI evidence requires source review; no merge requested")
+            tested_tree = evidence["source"]["tested_tree"]
         if phase("final_source_check", lambda: preflight(client, root, number, head, base, ready=True)) != record["reviewed_source"]:
             raise ValueError("reviewed source changed before merge")
         record["status"] = "ready"
@@ -127,8 +147,7 @@ def finish(client, root, number, run_id, scope, head, base, output, *, merge=Fal
             # Inspection gets a fresh bounded budget even if the write timed out.
             client.deadline = time.monotonic() + min(timeout, 30)
             record["merge"] = phase("verification", lambda: confirm_merge(
-                client, number, head, evidence["source"]["target_tree"], response,
-                tested_tree=evidence["source"]["tested_tree"]))
+                client, number, head, record["reviewed_source"]["tree"], response, tested_tree=tested_tree))
             record["status"] = "merged" if record["merge"]["same_reviewed_tree"] else "merged_source_review_required"
     except (OSError, RuntimeError, ValueError, KeyError, TypeError, subprocess.SubprocessError, ci.zipfile.BadZipFile) as error:
         record["error"] = str(error)
@@ -144,7 +163,10 @@ def finish(client, root, number, run_id, scope, head, base, output, *, merge=Fal
         lines.append(f"Merged commit `{result['commit']}`; reviewed target tree matches: `{result['same_reviewed_tree']}`; "
                      f"full tested tree matches: `{result['same_tested_tree']}`.")
     if evidence is not None:
-        lines += ["", ci.markdown(evidence)]
+        if automatic:
+            lines += ["", f"Verified [automatic PR CI]({evidence['url']}) for `{evidence['source_sha']}`."]
+        else:
+            lines += ["", ci.markdown(evidence)]
     (output / "merge.md").write_text("\n".join(lines) + "\n")
     return record
 
@@ -152,8 +174,10 @@ def finish(client, root, number, run_id, scope, head, base, output, *, merge=Fal
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("pr", type=int)
-    parser.add_argument("--run", type=int, required=True)
-    parser.add_argument("--scope", choices=ci.SCOPES, required=True)
+    parser.add_argument("--run", type=int, help="legacy manual-run evidence; normally follows automatic PR CI")
+    parser.add_argument("--scope", choices=ci.SCOPES, help="required only with legacy --run")
+    parser.add_argument("--queue", action="store_true", help="explicitly use an available merge queue; not required for ordinary merges")
+    parser.add_argument("--base-branch", default="main", help="queue target; use a disposable branch for rollout trials")
     parser.add_argument("--reviewed-head", required=True, help="full commit SHA already reviewed, including required non-CI checks")
     parser.add_argument("--reviewed-base", required=True, help="full main SHA included in the reviewed head")
     parser.add_argument("--repo", default="autonomous-ai/openharness")
@@ -162,19 +186,31 @@ def main():
     parser.add_argument("--timeout", type=float, default=90, help="budget for preflight and, separately, post-CI operations")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
-    if (args.pr < 1 or args.run < 1
+    if (args.pr < 1 or (args.run is not None and args.run < 1)
             or any(not re.fullmatch(r"[0-9a-f]{40}", sha) for sha in [args.reviewed_head, args.reviewed_base])
             or any(not 0 < value < float("inf") for value in [args.wait_timeout, args.timeout])
-            or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*", args.repo)):
+            or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*", args.repo)
+            or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_/-]*", args.base_branch)):
         parser.error("supply positive IDs/budgets, full reviewed SHAs, and a valid repository")
     root = Path(git(Path.cwd(), "rev-parse", "--show-toplevel")).resolve()
     output = args.output or root / ".harness/validation" / (datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ") + f"-merge-{args.pr}")
-    record = finish(ci.Client(args.repo, 0), root, args.pr, args.run, args.scope, args.reviewed_head,
-                    args.reviewed_base, output, merge=args.merge, wait_timeout=args.wait_timeout, timeout=args.timeout)
+    client = ci.Client(args.repo, time.monotonic() + args.timeout)
+    # Ordinary merges use automatic PR CI directly. Respect an actual queue
+    # rule without making queue setup a prerequisite for every repository.
+    rules = client.api(f"rules/branches/{args.base_branch}")
+    queued = args.queue or any(rule.get("type") == "merge_queue" for rule in rules)
+    if queued:
+        record = queue.finish(client, root, args.pr, args.reviewed_head, args.reviewed_base, output,
+                              merge=args.merge, wait_timeout=args.wait_timeout, timeout=args.timeout, branch=args.base_branch)
+    else:
+        if (args.run is None) != (args.scope is None) or args.base_branch != "main":
+            parser.error("direct merging targets main; supply --run and --scope together only for legacy manual evidence")
+        record = finish(client, root, args.pr, args.run, args.scope, args.reviewed_head,
+                        args.reviewed_base, output, merge=args.merge, wait_timeout=args.wait_timeout, timeout=args.timeout)
     print(f"{record['status']}: {output / 'merge.md'}")
     if "error" in record:
         print(record["error"], file=sys.stderr)
-    return {"merged": 0, "ready": 0, "merged_source_review_required": 3}.get(record["status"], 1)
+    return {"merged": 0, "ready": 0, "ready_for_queue": 0, "merged_source_review_required": 3}.get(record["status"], 1)
 
 
 if __name__ == "__main__":

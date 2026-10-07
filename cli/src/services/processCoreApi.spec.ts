@@ -39,6 +39,7 @@ describe('the core API a light service runs on in its own process', () => {
     api.questions.answer('a1', 'q', {})
     await expect(api.questions.answerReviewed({} as never)).resolves.toBe(false)
     expect(api.transcripts.databaseHistory(agent('a1'))).toBeUndefined()
+    expect(await api.transcripts.lastTurn('s1')).toBeNull()
     expect(api.external.sessions.list()).toEqual([])
     await expect(api.external.sessions.scan()).resolves.toEqual([])
     expect(api.external.open.known().size).toBe(0)
@@ -64,6 +65,10 @@ describe('the core API a light service runs on in its own process', () => {
     expect(api.clients.hasWindow()).toBe(false)
     api.clients.devicesChanged({})
     api.clients.dialWatching(true)
+    // What only the recaps ask (services/recaps.ts): nothing, from every other service.
+    api.clients.turnCard({ type: 'commander_event', agentId: 'a', dbSessionId: 's', payload: {} })
+    api.clients.turnSummary({ type: 'turn_summary' })
+    expect(await api.transcripts.lastTurn('s1')).toBeNull()
     // With no way to ask the core, it acts on nothing: no agent made, no turn, no window told.
     await expect(api.agents.create({ engine: 'claude', cwd: '/w', dsh: null, prompt: 'p', name: 'n', bypassPermission: false }))
       .resolves.toEqual({ ok: false, error: 'SERVICE_UNAVAILABLE' })

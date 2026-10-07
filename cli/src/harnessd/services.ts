@@ -12,7 +12,7 @@
  * bind and no update to prove; it beats, or it is restarted. Everything that touches the operating
  * system is injected, so every decision here is tested without one.
  */
-import { heartbeatGraceMs, isCoreMessage } from './protocol.js'
+import { SERVICE_EXIT_RESTART, heartbeatGraceMs, isCoreMessage, isUpdaterMessage } from './protocol.js'
 import type { CoreHandle } from './supervisor.js'
 
 export interface ServiceSpec {
@@ -42,6 +42,8 @@ export interface ServiceSupervisorDeps {
   setTimer(run: () => void, ms: number): unknown
   clearTimer(timer: unknown): void
   log(line: string): void
+  /** The updater staged `version` on disk (`harnessd:staged`): the core is to hand over for it. */
+  staged?(version: string): void
 }
 
 export interface ServiceSupervisorOptions {
@@ -77,7 +79,7 @@ export const DEFAULT_SERVICE_OPTIONS: ServiceSupervisorOptions = {
 
 /** `off`: an experiment's process that no one has asked for yet, and so was never started. */
 export type ServiceState = 'off' | 'starting' | 'running' | 'restarting' | 'parked' | 'stopping' | 'stopped'
-export type ServiceExitReason = 'crashed' | 'hung' | 'memory' | 'stopped'
+export type ServiceExitReason = 'crashed' | 'hung' | 'memory' | 'stopped' | 'restart'
 
 export interface ServiceStatus {
   name: string
@@ -112,6 +114,7 @@ class Service {
   private killTimer: unknown = null
   private restartTimer: unknown = null
   private onStopped: Array<() => void> = []
+  private refusedStaged = false
 
   constructor(
     readonly spec: ServiceSpec,
@@ -160,6 +163,12 @@ class Service {
     if (this.state === 'off') this.start()
   }
 
+  /** A process on demand stopped with the others and started again with them: off, for whoever needs it next to
+   *  ask. Left stopped, no `want` started it again for the rest of the master's life. */
+  rest(): void {
+    if (this.state === 'stopped') this.setState('off')
+  }
+
   /** SIGTERM, then SIGKILL after the grace; `done` once it is gone. A parked or waiting one is simply stopped. */
   stop(done: () => void): void {
     if (this.state === 'stopped') { done(); return }
@@ -178,6 +187,13 @@ class Service {
   }
 
   private onMessage(child: CoreHandle, message: unknown): void {
+    if (isUpdaterMessage(message)) {
+      // It restarts the core: from any other service than the updater, a bug or worse, said once and ignored.
+      if (this.spec.name !== UPDATER_PROCESS) { if (!this.refusedStaged) this.deps.log(`[harnessd] service ${this.spec.name} said it staged ${message.version}, which only the updater may — ignored`); this.refusedStaged = true; return }
+      this.deps.log(`[harnessd] service ${this.spec.name} staged ${message.version}`)
+      this.deps.staged?.(message.version)
+      return
+    }
     if (!isCoreMessage(message) || message.type !== 'harnessd:heartbeat') return
     this.watchHeartbeat(child)
     if (this.state === 'starting' || this.state === 'restarting') this.setState('running')
@@ -207,6 +223,17 @@ class Service {
       this.deps.log(`[harnessd] service ${this.spec.name} stopped (${exit})`)
       this.setState('stopped')
       this.stopped()
+      return
+    }
+    if (code === SERVICE_EXIT_RESTART && this.spec.name === UPDATER_PROCESS && !this.killReason) {
+      // Asked for: the updater, once it has staged a build, so that it next runs as that build (a lean bundle
+      // that no longer matches cli.js is not used, ./leanServices.ts). Not a crash, and not delayed; from any
+      // other service, 75 is a crash, or a loop of them would never be parked.
+      this.lastExitReason = 'restart'
+      this.restarts++
+      this.deps.log(`[harnessd] service ${this.spec.name} asked to start again (${exit}) — restarting`)
+      this.setState('restarting')
+      this.armTimer('restartTimer', () => { this.restartTimer = null; this.start() }, 0)
       return
     }
     const reason = this.killReason ?? 'crashed'
@@ -286,9 +313,14 @@ export class ServiceSupervisor {
     this.services = specs.map((spec) => new Service(spec, deps, options, env))
   }
 
-  /** Start every service but those on demand; none waits on another, or on the core. */
+  /** Start every service but those on demand, which wait to be asked for again; none waits on another, or on the
+   *  core. Found end to end (e2e/reexec.e2e.ts): a master whose re-execution was refused stops its services and
+   *  starts them again, and a process on demand stayed stopped, so a core too old to ask never got models. */
   start(): void {
-    for (const service of this.services) if (!service.spec.onDemand) service.start()
+    for (const service of this.services) {
+      if (!service.spec.onDemand) service.start()
+      else service.rest()
+    }
   }
 
   /** Start the process on demand that hosts [service], if it is not running yet: the core asked for it (`harnessd:want`). */
@@ -341,8 +373,10 @@ export const SERVICE_HOSTS: Readonly<Record<string, ServiceHostSpec>> = {
   // The git work (workspaces, the project readers) runs in git's own processes, and the monitor's
   // samples in ps's and ioreg's; what it holds is the agents the core sent it and one parsed sample.
   // The monitor parses up to 8 MB of ioreg output per Monitor poll on a Mac with a GPU, hence more
-  // than workspaces alone had.
-  edge: { services: ['workspaces', 'usage', 'monitor', 'projects', 'handoff'], heapLimitMiB: 384, rssLimitMiB: 768 },
+  // than workspaces alone had. The recaps hold each session's last three recaps, answers (8 KiB each at
+  // most) and asks, as the core did while they ran in it, and a few timers per open turn. The window
+  // names hold at most 400 short names; their model runs in its own process (lib/oneshot.ts).
+  edge: { services: ['workspaces', 'usage', 'monitor', 'projects', 'handoff', 'recaps', 'windowNames'], heapLimitMiB: 384, rssLimitMiB: 768 },
   // The orchestrator (services/orchestratorProcess.ts), an experiment: started only once it is on, for a
   // saved project or a request (core/api.ts `EXPERIMENTS`). Its projects' files and the frames of their
   // Directors; the agents it runs are the core's.
@@ -360,10 +394,15 @@ export const SERVICE_HOSTS: Readonly<Record<string, ServiceHostSpec>> = {
   // The relay and its E2EE (gateway/gatewayProcess.ts): the backend link, every remote client's session,
   // the terminals' WebRTC channels and their queues. Network, crypto and pure-JS WebRTC, the attack surface,
   // where a fault costs the remote clients and nothing else (docs/design/2026-10-06-core-boundary-next.md).
-  gateway: { services: ['gateway'], heapLimitMiB: 512, rssLimitMiB: 1_024 },
+  // Started as the core starts when it is signed in or anything is paired here, and otherwise by the first
+  // thing that needs it (core/gatewayWake.ts): about 75 MiB at idle a computer signed out with nothing
+  // paired never pays.
+  gateway: { services: ['gateway'], heapLimitMiB: 512, rssLimitMiB: 1_024, onDemand: true, askedSince: 4 },
   // Grid's pictures, the Model Manager's catalog and the models found on this machine. Its downloads, model
-  // servers and `grid` commands run in processes of their own, outside this budget.
-  models: { services: ['models'], heapLimitMiB: 512, rssLimitMiB: 1_024 },
+  // servers and `grid` commands run in processes of their own, outside this budget. Started only once grid is
+  // in use here or a request needs it (core/modelsWake.ts): about 70 MiB at idle, which a computer that uses
+  // no grid never pays.
+  models: { services: ['models'], heapLimitMiB: 512, rssLimitMiB: 1_024, onDemand: true, askedSince: 4 },
   // The devices (services/devicesProcess.ts): the dials on USB (pure-JS serial, a frame decoder whose buffer
   // is bounded per dial), the window bridges, the fleet's router and its lane, the voice router's engine
   // worker (a process of its own, outside this budget). Hardware that speaks whatever its firmware says:
@@ -376,6 +415,17 @@ export const SERVICE_HOSTS: Readonly<Record<string, ServiceHostSpec>> = {
 
 /** Every service this build can run outside the core's process: what `HARNESSD_SERVICES` names. */
 export const KNOWN_SERVICES: readonly string[] = Object.values(SERVICE_HOSTS).flatMap((host) => host.services)
+
+/**
+ * The updater's process (services/updaterProcess.ts): checks for a newer build of the CLI and of hn, and
+ * downloads, verifies, canaries and stages it, then tells the master, which has the core hand over. Its own
+ * process and never the core's: the core never downloads a build, and a core that cannot start (safe mode)
+ * or a host whose services keep crashing must not stop the fix from arriving. Not one of `SERVICE_HOSTS`:
+ * the core neither routes to it nor runs it, and `HARNESSD_SERVICES` does not turn it off; the master runs
+ * it when it runs the installed copy with updates on (masterProcess.ts). It holds one download at a time.
+ */
+export const UPDATER_HOST: ServiceHostSpec = { services: ['updater'], heapLimitMiB: 256, rssLimitMiB: 512 }
+export const UPDATER_PROCESS = 'updater' // the name the master runs it under: the one whose staged build counts
 
 /** Service timings from the environment (for tests and support); anything unset or invalid keeps its default. */
 export function serviceOptions(env: NodeJS.ProcessEnv): ServiceSupervisorOptions {

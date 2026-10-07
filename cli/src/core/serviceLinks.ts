@@ -57,11 +57,14 @@ export interface ServiceLinksOptions {
   /** Longer waits for the answers that take longer, by service and then by type (core/api.ts
    *  `LONG_ANSWERS`): a grid command, grid's set-up, a harness's install. */
   waits?: Readonly<Record<string, Readonly<Record<string, number>>>>
-  /** The services whose process runs only once asked for: the experiments (core/api.ts `EXPERIMENTS`) and the
-   *  devices (core/devicesWake.ts). A request for one that has not connected yet asks for it (`want`) and waits
-   *  for it to connect, within the same time. One that has connected and is down again is answered as any
-   *  service is, at once; so is one that did not connect within a request's wait, until it does. */
+  /** The services whose process runs only once asked for: the experiments (core/api.ts `EXPERIMENTS`), the
+   *  devices (core/devicesWake.ts) and models (core/modelsWake.ts). A request for one that has not connected yet
+   *  asks for it (`want`) and waits for it to connect, for its own wait or `startWaitMs`, whichever is shorter,
+   *  and then for its answer, for its own wait. One that has connected and is down again is answered as any
+   *  service is, at once; so is one that did not connect in time, until it does. */
   onDemand?: ReadonlySet<string>
+  /** How long a request waits for its service on demand to connect (`ON_DEMAND_START_MS`). */
+  startWaitMs?: number
   /** Ask the master for a process on demand (harnessd/coreLink.ts `want`). */
   want?(service: string): void
   log?: (line: string) => void
@@ -80,6 +83,8 @@ interface Waiting {
   type: string
   reply: (result: Record<string, unknown>) => void
   timer: unknown
+  /** How long it waits for its answer once it is sent. */
+  wait: number
   /** Sent once its service connects: an experiment's request that woke it. */
   frame?: ServiceFrame
 }
@@ -87,11 +92,18 @@ interface Waiting {
 /** The most notifications held for one service while it is down. */
 export const HELD_MAX = 1_000
 
+/** How long a request waits for its service on demand to start and connect, at most. A process starts in a
+ *  second or two even on a loaded machine; one that has not connected in this long is not starting (it ends as
+ *  it starts, and its master parks it). Models' requests wait up to fifteen minutes for their answers (grid's
+ *  set-up, a download), which a request for a models that cannot start must not wait on its connection. */
+export const ON_DEMAND_START_MS = 20_000
+
 /** Who asks when the core itself asks a service (`call`): this machine's owner, on this machine. */
 const THE_CORE: Asker = { local: true, owner: true }
 
 export function createServiceLinks(options: ServiceLinksOptions) {
   const timeoutMs = options.timeoutMs ?? 30_000
+  const startWaitMs = options.startWaitMs ?? ON_DEMAND_START_MS
   const log = options.log ?? ((line: string) => console.warn(line))
   const newId = options.newId ?? randomUUID
   const setTimer = options.setTimer ?? ((run, ms) => setTimeout(run, ms))
@@ -138,12 +150,13 @@ export function createServiceLinks(options: ServiceLinksOptions) {
     if (!link && !starting) { reply(unavailable(service)); return }
     const id = newId()
     const frame: ServiceFrame = { type, payload: { ...payload, requestId: id }, asker }
-    const entry: Waiting = { service, type, reply, timer: null, ...(starting ? { frame } : {}) }
+    const wait = waitMs ?? waitFor(service, type)
+    const entry: Waiting = { service, type, reply, timer: null, wait, ...(starting ? { frame } : {}) }
     // Cleared whenever the entry is settled, so it only ever fires for one still waiting.
     entry.timer = setTimer(() => {
       if (entry.frame) unstarted.add(service)
       settle(id, entry, unavailable(service))
-    }, waitMs ?? waitFor(service, type))
+    }, starting ? Math.min(wait, startWaitMs) : wait)
     waiting.set(id, entry)
     if (starting) { options.want?.(service); return }
     if (!link!.sink.sendFrame(frame)) settle(id, entry, unavailable(service))
@@ -169,14 +182,19 @@ export function createServiceLinks(options: ServiceLinksOptions) {
       const owed = held.get(service) ?? []
       held.delete(service)
       for (const frame of owed) sink.sendFrame(frame)
+      // What the core tells it as it connects comes before the requests that woke it: the gateway answers
+      // nothing until it is told what to start from (core/gatewayLink.ts `connected`).
+      options.connected?.(service)
       // The requests that woke an experiment, in the order they came.
       for (const [id, entry] of waiting) {
         if (entry.service !== service || !entry.frame) continue
         const frame = entry.frame
         delete entry.frame
-        if (!sink.sendFrame(frame)) settle(id, entry, unavailable(service))
+        if (!sink.sendFrame(frame)) { settle(id, entry, unavailable(service)); continue }
+        // Sent: it waits for its answer for its own wait now, as a request to a service that was up does.
+        clearTimer(entry.timer)
+        entry.timer = setTimer(() => settle(id, entry, unavailable(service)), entry.wait)
       }
-      options.connected?.(service)
       return {
         receive: (frame) => {
           const payload = frame.payload ?? {}

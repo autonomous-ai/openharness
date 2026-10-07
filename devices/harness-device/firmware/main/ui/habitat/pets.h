@@ -67,6 +67,8 @@ typedef struct {
     const ht_pet_waves_t *waves;                 // NULL: none (Muse's and Claude's listening scenes)
     const int8_t *step_dy;                       // per (level, step) like `loop`: the frame's offset in px, down; NULL = 0
                                                  // (Claude: a hop or a nod moves one stored pose instead of storing more)
+    const int16_t (*count_at)[2];                // an alert's: per step, the centre of the bubble's count slot from the
+                                                 // working scene's origin, {0,0} = no count yet; NULL for other scenes
 } ht_pet_scene_t;
 
 typedef struct {
@@ -80,8 +82,9 @@ typedef struct {
     const ht_pet_scene_t *sending_scene;         // NULL: the voice screen's three sparkles
     const ht_cell_frame_t *cells;                // the small pet as cell frames drawn at 2x, shown with ht_cell_sprite_zoom at
                                                  // 1x (w x h), 1.5x, 1.75x or 2x; `frames` is NULL then (every pet now)
-    const ht_pet_scene_t *alert_scene;           // played once, in the working scene's place, when a notice arrives while
-                                                 // it works (gen_pets.py THE ALERT SCENES); its overlay is the bubble
+    const ht_pet_scene_t *alert_scene;           // played once over the working scene when a notice arrives while it
+                                                 // works, its last step held until read (gen_pets.py THE ALERT); its
+                                                 // overlay is the bubble
     uint8_t steps;                               // the loops' length, <= HT_PET_STEPS; 0 = HT_PET_STEPS (Muse's is 18)
 } ht_pet_t;
 // A pet's loop length.

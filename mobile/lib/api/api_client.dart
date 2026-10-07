@@ -95,9 +95,11 @@ class ApiClient {
 
   /// `GET /api/device-keys?since=` — the log from [since]; null when there is none to read (an older
   /// backend, signed out, or unreachable).
-  Future<DeviceLogFetched?> deviceKeys(int since) async {
+  ///
+  /// [self]: this app's own key, which the backend counts as used just now (an older one ignores it).
+  Future<DeviceLogFetched?> deviceKeys(int since, {String? self}) async {
     try {
-      final res = await _dio.get('/api/device-keys', queryParameters: {'since': since});
+      final res = await _dio.get('/api/device-keys', queryParameters: {'since': since, 'self': ?self});
       if (res.statusCode != 200) return null;
       final data = unwrapApiResponse(res);
       if (data is! Map) return null;

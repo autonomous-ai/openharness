@@ -20,6 +20,7 @@ import 'link_another_machine_dialog.dart'
         kLinkServerInstallCommand,
         kLinkServerLoginCommand,
         kLinkServerStartCommand;
+import 'new_device_notice.dart' show DeviceListReviewLine;
 import 'terminal_text_action.dart';
 
 enum MachinePickerFormKind { connect, rename, password, delete, app, cli }
@@ -768,6 +769,12 @@ class MachinePickerFormState extends State<MachinePickerForm> {
                 _confirmation,
                 'remote-password-confirm-field',
               ),
+            ],
+            // Asked for a password because this app's device list is frozen, or the account had no room
+            // for it: the devices list is the other way in, here as under every other password prompt.
+            if (widget.kind != MachinePickerFormKind.rename && !_password) ...[
+              gap,
+              DeviceListReviewLine(notifier: app),
             ],
           ],
           gap,

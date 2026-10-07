@@ -25,7 +25,8 @@ import type { AgentGridTarget, GridAnnotation } from '../lib/gridAnnotation.js'
 import { GRID_FLEET_MAX_TIMEOUT_MS } from '../lib/gridFleetProtocol.js'
 import type { GridLaunchOverride } from '../lib/gridLaunch.js'
 import type { NewAgentModel } from '../lib/newAgentModel.js'
-import type { LiveEvent } from '../lib/normalize.js'
+import type { LastTurnText, LiveEvent } from '../lib/normalize.js'
+import type { SessionRecaps } from '../lib/recapReads.js'
 import type { SessionInputDelivery } from '../lib/sessionInput.js'
 import { projectDisplayName, type registry, type RegisteredSession } from '../lib/registry.js'
 import type { RuntimeModelOption } from '../lib/runtimeProfile.js'
@@ -181,6 +182,9 @@ export interface CoreApi {
     /** How to read a conversation its engine keeps in a database instead of a transcript file;
      *  undefined for every other engine. */
     databaseHistory(session: RegisteredSession): (() => Promise<readonly LiveEvent[]>) | undefined
+    /** A session's last turn as its engine recorded it: what was asked and the final answer; null when
+     *  there is none yet. Read from the end of its transcript, bounded (core/transcripts/lastTurn.ts). */
+    lastTurn(sessionId: string): Promise<LastTurnText | null>
   }
   /** Conversations on this machine that Harness did not start, and which of them a process has open. */
   external: {
@@ -256,6 +260,10 @@ export interface CoreApi {
     /** A dial on this computer is watching it, or no longer is: the core then makes the turn cards and
      *  recaps for it, as for a device watching through the backend. */
     dialWatching(watching: boolean): void
+    /** A turn's card for the devices (`commander_event`): its progress, and its recap once it ends. */
+    turnCard(frame: TurnCardFrame): void
+    /** A turn's recap for the apps (`turn_summary`, or `turn_summary_pending` while one is being cut). */
+    turnSummary(frame: TurnSummaryFrame): void
   }
   /** How an agent's shell reaches this daemon: the command that runs this harness's CLI, the port the daemon
    *  serves and the machine it serves as. An experiment writes them into the prompts of the agents it runs
@@ -375,6 +383,20 @@ export const DELIVERIES_OFF: Pick<CoreApi['turns'], 'deliver' | 'cancelDelivery'
   onDelivery: () => () => {},
 }
 
+/** A turn's card for the devices: the dial's and the Wi-Fi device's tiles and their notifications. */
+export type TurnCardFrame = {
+  type: 'commander_event'
+  agentId: string
+  dbSessionId: string
+  name?: string
+  payload: Record<string, unknown>
+}
+/** A turn's recap for the windows and the phone. */
+export type TurnSummaryFrame = { type: 'turn_summary' | 'turn_summary_pending' } & Record<string, unknown>
+/** The frame types `clients.turnCard` and `clients.turnSummary` carry: the core sends no other for them. */
+export const TURN_CARD_TYPES: ReadonlySet<string> = new Set(['commander_event'])
+export const TURN_SUMMARY_TYPES: ReadonlySet<string> = new Set(['turn_summary', 'turn_summary_pending'])
+
 /** `agents.resolve` over a service process's own copy of the agents, as the registry answers it: by agent
  *  id, then by engine session id (an agent with none yet is never found by an empty one). */
 export function resolveAgent(agents: readonly RegisteredSession[], id: string): RegisteredSession | undefined {
@@ -431,7 +453,9 @@ export const MONITOR_REQUESTS = ['machine_resources'] as const
  *  `/api/command-bar/*`, which it asks as `command_bar_http`. */
 export const COMMAND_BAR_REQUESTS = ['command_bar', 'command_bar_http'] as const
 /** The project and folder readers (services/projects.ts). */
-export const PROJECTS_REQUESTS = ['git_pull_request', 'git_project_info', 'project_preview', 'fs_list_dir', 'agent_read_file'] as const
+export const PROJECTS_REQUESTS = ['git_pull_request', 'git_project_info', 'scm_project_info', 'project_preview', 'fs_list_dir', 'agent_read_file'] as const
+/** A window's name for its repo and its work, by a small model in the background (services/windowNames.ts). */
+export const WINDOW_NAMES_REQUESTS = ['window_name'] as const
 /** Change agent's handoff file, prepared in the edge host (services/handoff.ts). */
 export const HANDOFF_REQUESTS = ['agent_handoff_prepare'] as const
 /**
@@ -551,6 +575,71 @@ export type SearchPort = Pick<SessionSearchIndex, 'touch' | 'deleteHistory' | 's
 export const SEARCH_FALLBACKS: PortFallbacks<SearchPort> = {
   touch: undefined, deleteHistory: undefined, session: undefined, stop: undefined,
 }
+
+/*
+ * Recaps (services/recaps.ts): each turn's recap, the devices' turn cards and the notifications a finished
+ * turn rings, built from the turn's lifecycle. The core tells the recaps that lifecycle as it happens and
+ * never waits on them: a session runs the same without them, and a turn they miss simply has no recap.
+ */
+
+/** A session as the core knows it when it tells the recaps something: what a card is addressed to. */
+export interface RecapSession {
+  sessionId: string
+  /** The agent that owns it: a card is addressed to the agent, stable across a `/clear`. */
+  agentId: string
+  /** Its display name, which a summary card carries for a machine whose tile is not loaded. */
+  name?: string
+  /** Its transcript: a Claude sub-agent writes its own beside it, which a held turn end watches. */
+  transcriptPath?: string
+  /** An Orchestrator specialist's turn, or its director's while specialists are out: nobody's news. Said
+   *  where a turn ends, a cancel or a forget (reading it reads the orchestrator); absent, the recaps keep
+   *  what they were last told. */
+  subagent?: boolean
+}
+
+/** Who watches this machine's turn cards: a device at all (through the backend or on the cable), and one
+ *  rendering this machine right now. */
+export interface RecapWatchers { device: boolean; active: boolean }
+
+/** The turn lifecycle, as the core tells the recaps. */
+export type TurnLifecycle =
+  /** A session's events (a turn started, its text, its tools and sub-agents, its end), as one batch. */
+  | { kind: 'events'; session: RecapSession; events: LiveEvent[]; replay: boolean }
+  /** The core's five-second turn heartbeat, and whether the turn is verifiably working right now. */
+  | { kind: 'beat'; session: RecapSession; working: boolean }
+  /** The turn was cancelled: no turn end comes. */
+  | { kind: 'cancelled'; session: RecapSession }
+  /** The session was unbound, or its agent removed; what is stored for it is kept for a resume. */
+  | { kind: 'forgotten'; session: RecapSession }
+  /** The engine's Stop hook: it stopped writing. */
+  | { kind: 'stopped'; sessionId: string }
+  /** The agent's conversation moved to a new session (a `/clear`, a fork's first turn): its recaps follow. */
+  | { kind: 'rebound'; from: string; to: string }
+  /** The conversation was purged: everything stored for it goes. */
+  | { kind: 'purged'; sessionId: string }
+  /** A question was put to the person, or answered: a turn waiting on one is not announced as done. */
+  | { kind: 'asked' | 'answered'; sessionId: string; requestId: string }
+  /** A device joined: every session's card is said again. `working`: the sessions whose turn is
+   *  verifiably working now, whose busy card is said with it. */
+  | { kind: 'rejoined'; working: string[] }
+  /** The session attached with its last turn already over, so its end was read as history: recapped quietly
+   *  if it has none yet (it ended while the daemon was stopped). */
+  | { kind: 'settled'; session: RecapSession }
+
+/** The core's calls into the recaps: the lifecycle, and what they hold of a session, read in line. */
+export interface RecapsPort {
+  /** Something happened to a turn. A notice: the core never waits for it, and one the recaps miss costs
+   *  that turn its recap, nothing else. */
+  lifecycle(event: TurnLifecycle, watchers: RecapWatchers): void
+  /** A session's last turns and asks, and whether its card is busy; null when they hold nothing. */
+  recaps(sessionId: string): SessionRecaps | null
+  /** The cards of every turn still working or being recapped, for a dial that just attached: asked when it
+   *  attaches and sent when they come, never waited for in line. */
+  liveCards(): Promise<TurnCardFrame[]>
+}
+
+/** What the core gets when the recaps fail: nothing told, no recap, and no live card. */
+export const RECAPS_FALLBACKS: PortFallbacks<RecapsPort> = { lifecycle: undefined, recaps: null, liveCards: later([]) }
 
 /** The core's calls into the DSH viewers: each harness agent's viewer server and verdict watch. */
 export interface ViewersPort {
@@ -930,6 +1019,10 @@ export type BackendNotice =
   | { type: 'machines_changed'; reason: string }
   | { type: 'device_keys_changed' }
 
+/** What a person has open on this computer, per surface (lib/windowSurfaces.ts). */
+export type { LocalWindows, WindowSurface } from '../lib/windowSurfaces.js'
+import type { LocalWindows, WindowSurface } from '../lib/windowSurfaces.js'
+
 /** What the core asks of the gateway: everything bound for a remote client, and the link's state. */
 export interface GatewayPort {
   /** Dial the backend: this daemon is signed in. */
@@ -961,9 +1054,10 @@ export interface GatewayPort {
   observer(connId: string, type: string, payload: Record<string, unknown>): boolean
   /** A window opened on this computer: the backend counts it as the person's session at once, or when
    *  the link next comes up. */
-  windowOpened(): void
-  /** How many processes on this computer are attached, windows and tools. */
-  localClients(count: number): void
+  windowOpened(surface: WindowSurface): void
+  /** The windows attached on this computer, per surface — tools (`harness pair`, the MCP server) are
+   *  not windows and are not counted. */
+  localClients(windows: LocalWindows): void
   /** A local connection's request the gateway answers (the E2EE pairings), answered back to it through
    *  `GatewayEvents.toLocal`. */
   local(connId: string, frame: Record<string, unknown>): Promise<void>
@@ -1074,8 +1168,8 @@ export interface GatewayStatus {
 export interface GatewayAccount {
   /** The machine id the backend gave this sign-in; null signed out. */
   machineId: string | null
-  /** Which sign-in by hand this is (lib/authSession.ts `signInOf`), or null. */
-  signIn: { epoch: string; adopted: boolean; at: number | null } | null
+  /** Which sign-in by hand this is, and the account it was made to (lib/authSession.ts `signInOf`), or null. */
+  signIn: { epoch: string; adopted: boolean; at: number | null; acct?: string } | null
 }
 
 /** A Wi-Fi device operation refused, with the code the device's local API answers it under. */
@@ -1166,10 +1260,11 @@ export interface CorePorts {
   monitor: MonitorPort | null
   orchestrator: OrchestratorPort | null
   sharing: SharingPort | null
+  recaps: RecapsPort | null
 }
 
 export function emptyPorts(): CorePorts {
-  return { search: null, viewers: null, models: null, workspaces: null, teams: null, devices: null, wifi: null, monitor: null, orchestrator: null, sharing: null }
+  return { search: null, viewers: null, models: null, workspaces: null, teams: null, devices: null, wifi: null, monitor: null, orchestrator: null, sharing: null, recaps: null }
 }
 
 export interface CoreApiDeps {
@@ -1220,6 +1315,10 @@ export interface CoreApiDeps {
   dialWatching: CoreApi['clients']['dialWatching']
   /** The Wi-Fi device's doors (core/wifi.ts). */
   wifi: CoreApi['wifi']
+  lastTurn: CoreApi['transcripts']['lastTurn']
+  /** Where a turn's cards and recaps go: the devices, and the apps. Only their own frame types reach these. */
+  turnCard: CoreApi['clients']['turnCard']
+  turnSummary: CoreApi['clients']['turnSummary']
   log?: (line: string) => void
 }
 
@@ -1227,13 +1326,16 @@ export function createCoreApi({
   dataDir, registry, stoppedAgents, databaseHistory, externalSessions, openSessions, syncSession, runtimeModels, viewerChanged,
   gridNamed, gridModelsChanged, dshInstallStatus, mintGridName, accessToken, lane, observerKey, observer, privateGridName, machineName, backend, onNotice,
   runtimeProfile, setRuntime, fork, create, dsh, windows, daemon, turns, questions, terminals = TERMINALS_OFF, conversations = CONVERSATIONS_OFF, viewerFrame, machine, activityText,
-  signedIn, environment, machines, sendLocal, sendToWindow, hasWindow, devicesChanged, dialWatching, wifi, log = (line) => console.warn(line),
+  signedIn, environment, machines, sendLocal, sendToWindow, hasWindow, devicesChanged, dialWatching, wifi, lastTurn, turnCard, turnSummary,
+  log = (line) => console.warn(line),
 }: CoreApiDeps): CoreApi {
   // The devices reach the windows through these alone, and only with their own frames: a devices process
   // speaks to the core as a service, and what it may put in front of a person is decided here, not there.
   const windowFrames = new Set<string>(DEVICE_WINDOW_FRAMES)
   const bridgeFrames = new Set<string>(DEVICE_BRIDGE_FRAMES)
   const refused = (type: unknown): void => log(`[services] the devices sent a window ${String(type).slice(0, 40)}, which is not theirs to send`)
+  // The recaps reach the devices and the apps through their own two doors, and only with their own frames.
+  const refusedRecap = (type: unknown): void => log(`[services] the recaps sent ${String(type).slice(0, 40)}, which is not theirs to send`)
   return {
     dataDir,
     terminals,
@@ -1258,7 +1360,7 @@ export function createCoreApi({
     },
     turns,
     questions,
-    transcripts: { databaseHistory },
+    transcripts: { databaseHistory, lastTurn },
     external: { sessions: externalSessions, open: openSessions },
     account: { mintGridName, accessToken, lane, observerKey, privateGridName, machineName, backend, onNotice, signedIn, environment, machines },
     clients: {
@@ -1275,6 +1377,8 @@ export function createCoreApi({
         refused(frame?.type)
         return false
       },
+      turnCard: (frame) => { if (TURN_CARD_TYPES.has(frame?.type)) turnCard(frame); else refusedRecap(frame?.type) },
+      turnSummary: (frame) => { if (TURN_SUMMARY_TYPES.has(frame?.type)) turnSummary(frame); else refusedRecap(frame?.type) },
     },
     daemon,
     wifi,

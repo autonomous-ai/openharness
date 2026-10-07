@@ -5,6 +5,7 @@ const db = vi.hoisted(() => ({
   machinePresenceUpsert: vi.fn(),
   agentPresenceUpsert: vi.fn(),
   devicePresenceUpsert: vi.fn(),
+  clientPresenceUpsert: vi.fn(),
 }))
 
 vi.mock('./prisma.js', () => ({
@@ -13,10 +14,11 @@ vi.mock('./prisma.js', () => ({
     machineDailyPresence: { upsert: db.machinePresenceUpsert },
     agentDailyPresence: { upsert: db.agentPresenceUpsert },
     userDailyDevicePresence: { upsert: db.devicePresenceUpsert },
+    userDailyClientPresence: { upsert: db.clientPresenceUpsert },
   },
 }))
 
-import { presenceWriteDue, recordTurnStarted, touchDeviceOnlineDay, touchMachineOnlineDay, touchUserOnlineDay } from './dailyTracking.js'
+import { presenceTracker, presenceWriteDue, recordTurnStarted, touchClientOnlineDay, touchDeviceOnlineDay, touchMachineOnlineDay, touchUserOnlineDay } from './dailyTracking.js'
 import { utcDayStart } from '../types/analytics.js'
 
 describe('touchUserOnlineDay', () => {
@@ -48,6 +50,72 @@ describe('touchUserOnlineDay', () => {
     const call = db.userPresenceUpsert.mock.calls[0][0]
     expect(call.update).toEqual({ lastSeenAt: now })
     expect(call.create.connections).toBe(0)
+  })
+})
+
+describe('touchClientOnlineDay', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    db.clientPresenceUpsert.mockResolvedValue({})
+  })
+
+  it('upserts the (user, surface, UTC day) row — no machine — and only an open counts a connection', async () => {
+    const now = new Date('2026-10-07T08:00:00.000Z')
+    await touchClientOnlineDay('user-1', 'mobile', now, { isNewConnection: true })
+    await touchClientOnlineDay('user-1', 'mobile', now, { isNewConnection: false })
+
+    const [open, ping] = db.clientPresenceUpsert.mock.calls.map((c) => c[0])
+    expect(open.where).toEqual({ userId_surface_dayUtc: { userId: 'user-1', surface: 'mobile', dayUtc: utcDayStart(now) } })
+    expect(open.create).toEqual({ userId: 'user-1', surface: 'mobile', dayUtc: utcDayStart(now), connections: 1, firstSeenAt: now, lastSeenAt: now })
+    expect(open.update).toEqual({ lastSeenAt: now, connections: { increment: 1 } })
+    expect(ping.update).toEqual({ lastSeenAt: now })
+    expect(ping.create.connections).toBe(0)
+  })
+})
+
+describe('presenceTracker', () => {
+  const floors = { pingFloorMs: 5 * 60_000, openFloorMs: 10_000 }
+  const flush = () => new Promise((r) => setTimeout(r, 0))
+
+  it('writes an open at once, holds pings to the floor, and never two writes at a time', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-10-07T08:00:00.000Z'))
+    const writes: boolean[] = []
+    let release: () => void = () => {}
+    const write = vi.fn((_now: Date, isNew: boolean) => {
+      writes.push(isNew)
+      return new Promise<void>((r) => { release = r })
+    })
+    const touch = presenceTracker(write, vi.fn(), floors)
+
+    touch('open')
+    touch('ping') // a write is in flight
+    expect(writes).toEqual([true])
+    release(); await flush()
+
+    touch('ping') // within the floor
+    expect(writes).toEqual([true])
+    vi.setSystemTime(new Date('2026-10-07T08:05:00.000Z'))
+    touch('ping')
+    expect(writes).toEqual([true, false])
+    release(); await flush()
+
+    touch('open') // a reconnect storm is not a session per dial
+    vi.setSystemTime(new Date('2026-10-07T08:05:05.000Z'))
+    touch('open')
+    expect(writes).toEqual([true, false, true])
+    vi.useRealTimers()
+  })
+
+  it('hands a failed write to onError, and the next ping is still due', async () => {
+    const onError = vi.fn()
+    const write = vi.fn(async () => { throw new Error('mongo down') })
+    const touch = presenceTracker(write, onError, floors)
+    touch('ping')
+    await flush()
+    expect(onError).toHaveBeenCalledWith('ping', expect.any(Error))
+    touch('ping')
+    expect(write).toHaveBeenCalledTimes(2)
   })
 })
 
