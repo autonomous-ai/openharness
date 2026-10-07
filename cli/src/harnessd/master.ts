@@ -16,7 +16,7 @@ import { LEAN_CORE_SCRIPT_ENV, type MasterMessage } from './protocol.js'
 import {
   PROBE_ANSWER, RESUME_ENV, createReexec, decodeResume, fingerprint, readMarker, recoverFailedReexec, removeMarker, runProbe, writeMarker,
 } from './reexec.js'
-import { SERVICE_HOSTS, ServiceSupervisor, UPDATER_HOST, serviceOptions, serviceProcessesEnv, serviceSpecs } from './services.js'
+import { SERVICE_HOSTS, ServiceSupervisor, UPDATER_HOST, UPDATER_PROCESS, serviceOptions, serviceProcessesEnv, serviceSpecs } from './services.js'
 import {
   DEFAULT_SUPERVISOR_OPTIONS, Supervisor, type CoreHandle, type SupervisorDeps, type SupervisorOptions, type SupervisorStatus,
 } from './supervisor.js'
@@ -298,7 +298,7 @@ export function runMaster(config: MasterConfig): Supervisor {
   })
   const specs = serviceSpecs(env, SERVICE_HOSTS)
   // The updater beside them, whatever HARNESSD_SERVICES says: the core neither routes to it nor runs it.
-  const processes = config.updater ? [...specs, { name: 'updater', ...UPDATER_HOST }] : specs
+  const processes = config.updater ? [...specs, { name: UPDATER_PROCESS, ...UPDATER_HOST }] : specs
   let supervisor: Supervisor | null = null
   const services = new ServiceSupervisor(processes, {
     spawnService: (spec, extra) => {

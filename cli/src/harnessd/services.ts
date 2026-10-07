@@ -114,6 +114,7 @@ class Service {
   private killTimer: unknown = null
   private restartTimer: unknown = null
   private onStopped: Array<() => void> = []
+  private refusedStaged = false
 
   constructor(
     readonly spec: ServiceSpec,
@@ -181,6 +182,8 @@ class Service {
 
   private onMessage(child: CoreHandle, message: unknown): void {
     if (isUpdaterMessage(message)) {
+      // It restarts the core: from any other service than the updater, a bug or worse, said once and ignored.
+      if (this.spec.name !== UPDATER_PROCESS) { if (!this.refusedStaged) this.deps.log(`[harnessd] service ${this.spec.name} said it staged ${message.version}, which only the updater may — ignored`); this.refusedStaged = true; return }
       this.deps.log(`[harnessd] service ${this.spec.name} staged ${message.version}`)
       this.deps.staged?.(message.version)
       return
@@ -216,9 +219,10 @@ class Service {
       this.stopped()
       return
     }
-    if (code === SERVICE_EXIT_RESTART && !this.killReason) {
-      // Asked for: the updater, once it has staged a build, so that it next runs as that build (a lean
-      // bundle that no longer matches cli.js is not used, ./leanServices.ts). Not a crash, and not delayed.
+    if (code === SERVICE_EXIT_RESTART && this.spec.name === UPDATER_PROCESS && !this.killReason) {
+      // Asked for: the updater, once it has staged a build, so that it next runs as that build (a lean bundle
+      // that no longer matches cli.js is not used, ./leanServices.ts). Not a crash, and not delayed; from any
+      // other service, 75 is a crash, or a loop of them would never be parked.
       this.lastExitReason = 'restart'
       this.restarts++
       this.deps.log(`[harnessd] service ${this.spec.name} asked to start again (${exit}) — restarting`)
@@ -404,6 +408,7 @@ export const KNOWN_SERVICES: readonly string[] = Object.values(SERVICE_HOSTS).fl
  * it when it runs the installed copy with updates on (masterProcess.ts). It holds one download at a time.
  */
 export const UPDATER_HOST: ServiceHostSpec = { services: ['updater'], heapLimitMiB: 256, rssLimitMiB: 512 }
+export const UPDATER_PROCESS = 'updater' // the name the master runs it under: the one whose staged build counts
 
 /** Service timings from the environment (for tests and support); anything unset or invalid keeps its default. */
 export function serviceOptions(env: NodeJS.ProcessEnv): ServiceSupervisorOptions {

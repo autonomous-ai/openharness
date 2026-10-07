@@ -41,7 +41,9 @@ It keeps the core and the services running, and nothing else.
 9. **Updates are the master's to run, never the core's.** The updater runs in a process the master starts
    (`UPDATER_HOST`, `../services/updaterProcess.ts`): it downloads, verifies, canaries and stages a build,
    then says so (`harnessd:staged`); the master asks the core to hand over (`harnessd:update`) and judges
-   the new core on probation, as before. The master itself still makes no network call. Every core this
+   the new core on probation, as before. Only the updater's process (`UPDATER_PROCESS`) can start this, or
+   exit 75 to be restarted at once. From any other service, `harnessd:staged` is logged once and ignored,
+   and exit 75 counts as a crash. The master itself still makes no network call. Every core this
    master starts hears `HARNESSD_UPDATES=master`; a core under a master from before that runs the updater
    beside itself, in its own process (`../core/updaterBeside.ts`).
 10. **A process on demand starts only when the core asks** (`onDemand` in `SERVICE_HOSTS`, `services.ts`).

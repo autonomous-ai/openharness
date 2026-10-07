@@ -105,6 +105,27 @@ describe('ServiceSupervisor', () => {
     expect(staged).toEqual(['9.9.9'])
   })
 
+  it('takes a staged build, or a request to start again at once, from the updater alone', () => {
+    // A staged build restarts the core. From any other service it is a bug or worse: said once, nothing done.
+    staged.length = 0
+    const supervisor = make([search], { parkCrashes: 2 })
+    supervisor.start()
+    latest().beat()
+    latest().say({ type: 'harnessd:staged', version: '6.6.6' })
+    latest().say({ type: 'harnessd:staged', version: '6.6.7' })
+    expect(staged).toEqual([])
+    expect(lines.filter((line) => line.includes('staged'))).toEqual(['[harnessd] service search said it staged 6.6.6, which only the updater may — ignored'])
+    // Its exit 75 is a crash like any other: restarted after the backoff, and parked when it keeps on.
+    latest().exit(75)
+    expect(supervisor.status()[0]).toMatchObject({ state: 'restarting', lastExit: 'code 75', lastExitReason: 'crashed' })
+    vi.advanceTimersByTime(0)
+    expect(children).toHaveLength(1)
+    vi.advanceTimersByTime(options.initialBackoffMs)
+    expect(children).toHaveLength(2)
+    latest().exit(75)
+    expect(supervisor.status()[0].state).toBe('parked')
+  })
+
   it('restarts a crashed service with a backoff that doubles, caps, and is forgiven after a long run', () => {
     const supervisor = make([search], { parkCrashes: 99 })
     supervisor.start()
