@@ -49,7 +49,7 @@ const HOOK_STARTED_AT = performance.now()
 // they measure behaviour instead of the host's load. Clamped, and never below the shipped default.
 const SHIPPED_DEADLINE_MS = 4500
 const HOOK_DEADLINE_MS = Math.min(60_000, Math.max(SHIPPED_DEADLINE_MS, Number(process.env.HARNESS_HOOK_DEADLINE_MS) || 0))
-// Each step's own limit (tmux 2 s, ps and sqlite3 3 s, lsof 1.5 s, …) is a wall-clock assumption too, and
+// Each step's own limit (`execFileText`: tmux 2 s, ps and sqlite3 3 s, lsof 1.5 s) is a wall-clock assumption too, and
 // the override has to move them with the budget or it does not do what it says: under a loaded full test
 // run (load 36, six workers) the Hermes fallback's fake tmux, ps and sqlite3 each took longer than their
 // step's limit with 30 s of budget left, the lookup read as no answer, and no registry was written
@@ -915,7 +915,7 @@ function currentBootId() {
   } catch { /* not Linux */ }
   if (process.platform === 'darwin') {
     try {
-      const value = execFileSync('/usr/sbin/sysctl', ['-n', 'kern.bootsessionuuid'], { encoding: 'utf8', timeout: stepLimit(1000) }).trim()
+      const value = execFileSync('/usr/sbin/sysctl', ['-n', 'kern.bootsessionuuid'], { encoding: 'utf8', timeout: 1000 }).trim()
       if (/^[0-9a-f-]{36}$/i.test(value)) return (bootId = `macos:${value}`)
     } catch { /* sysctl unavailable: the moment the boot began, below */ }
   }
@@ -1041,7 +1041,7 @@ function processStartMarker(pid) {
   } catch { /* non-Linux or exited process; use ps below */ }
   try {
     const started = execFileSync('ps', ['-p', String(pid), '-o', 'lstart='], {
-      encoding: 'utf8', timeout: stepLimit(1000), env: { ...psEnv(), TZ: 'UTC' },
+      encoding: 'utf8', timeout: 1000, env: { ...psEnv(), TZ: 'UTC' },
     }).trim()
     return started ? `ps-c:${started}` : null
   } catch { return null }
