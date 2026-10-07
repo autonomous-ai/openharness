@@ -325,9 +325,11 @@ async function authStatusCommand(json: boolean): Promise<void> {
   if (json) console.log(JSON.stringify(payload))
   else {
     console.log(`\n  ${payload.loggedIn ? '✓ Signed in' : '✗ Not signed in'}${payload.machineId ? ` (machine ${payload.machineId})` : ''}${payload.loggedIn && payload.method === 'qr' ? ' — by your phone' : ''}\n`)
-    // A session a phone approved is Harness's own: the Autonomous services behind billing and grid
-    // do not take it. Say so where the person looks, not only when one of them refuses.
-    if (payload.loggedIn && payload.method === 'qr') console.log('  Billing and grid need a Google or Apple sign-in: harness login --force\n')
+    // A session a phone approved is Harness's own, and billing's Autonomous service does not take it.
+    // Say so where the person looks, not only when billing refuses. Grid is not named: it learns who
+    // holds a Harness-issued sign-in from the Harness backend (autonomous-grid ADR 0046), and naming
+    // it sent people to sign in again with Google or Apple for nothing.
+    if (payload.loggedIn && payload.method === 'qr') console.log('  Billing needs a Google or Apple sign-in: harness login --force\n')
   }
 }
 
@@ -806,13 +808,15 @@ async function gridLoginCommand(force: boolean, json: boolean): Promise<void> {
   }))
 }
 
-/** What `grid` itself said, carried out on the result line beside this command's own classification.
+/** What `grid` itself said, carried out on the result line beside `message` — which is already `grid`'s
+ *  own sentence when it refused with its `--json` envelope (`lib/gridHandoff.ts`), else the hand-off's.
  *
  *  `grid`'s answer on success is a JSON document on stdout, so it travels parsed, under `grid`. Its
  *  refusals go to **stderr** — every one of them already names its own way forward — and those
- *  travel verbatim under `detail`, because a client reading NDJSON off stdout would otherwise have
- *  the exit code and no sentence to show anybody. Both are omitted when empty rather than sent as
- *  `null`: an absent key reads as "the child said nothing there", which is what it means. */
+ *  travel verbatim under `detail` (the envelope line included), because a client reading NDJSON off
+ *  stdout would otherwise have the exit code and no sentence to show anybody. Both are omitted when
+ *  empty rather than sent as `null`: an absent key reads as "the child said nothing there", which is
+ *  what it means. */
 function gridSaid(handoff: { stdout: string; stderr: string }): Record<string, unknown> {
   const out = handoff.stdout.trim()
   const err = handoff.stderr.trim()

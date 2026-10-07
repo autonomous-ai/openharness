@@ -22,6 +22,7 @@
  * public `grid` repository finds the two literals by these exact quoted spellings).
  */
 import { VERSION } from '../version.js'
+import { gridEnvelopes } from './gridEnvelope.js'
 import { gridExec, gridJson } from './gridExec.js'
 import { idKey } from './gridPicture.js'
 
@@ -289,16 +290,7 @@ export async function readGridInfo(gridName: string): Promise<GridInfo | null> {
 
 /** The `code` of `grid`'s `--json` refusal envelope (one JSON line on stderr), or null. */
 function envelopeCode(stderr: string): string | null {
-  for (const line of stderr.split('\n')) {
-    const trimmed = line.trim()
-    if (!trimmed.startsWith('{')) continue
-    try {
-      const parsed = JSON.parse(trimmed) as unknown
-      const error = isObject(parsed) && isObject(parsed.error) ? parsed.error : null
-      if (error && typeof error.code === 'string') return error.code
-    } catch { /* not the envelope */ }
-  }
-  return null
+  return gridEnvelopes(stderr).find((envelope) => envelope.code !== null)?.code ?? null
 }
 
 /**
