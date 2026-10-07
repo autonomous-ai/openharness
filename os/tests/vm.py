@@ -308,6 +308,27 @@ class VM:
             time.sleep(2)
         raise TimeoutError('The Harness graphical unlock prompt was not rendered.')
 
+    def screen_shows(self, name, text, timeout=20):
+        """OCR the framebuffer until `text` is shown: hn's dialogs float over the panes, so
+        `hn capture-pane`, which reads a pane, never contains them."""
+        from PIL import Image, ImageOps
+        deadline = time.monotonic() + timeout
+        while True:
+            self.screenshot(name)
+            # Light text on hn's dark dialog reads as click_word reads controls: inverted, doubled.
+            readable = self.folder / (name + '-ocr.png')
+            with Image.open(self.folder / (name + '.png')) as image:
+                inverted = ImageOps.invert(image.convert('L')).resize((image.width * 2, image.height * 2))
+                ImageOps.expand(inverted, border=24, fill=255).save(readable)
+            seen = subprocess.check_output(['tesseract', str(readable), 'stdout', '--psm', '11'],
+                                           text=True, stderr=subprocess.DEVNULL, timeout=15)
+            if text.lower() in seen.lower():
+                return True
+            if time.monotonic() >= deadline:
+                (self.folder / (name + '.txt')).write_text(seen)
+                return False
+            time.sleep(1)
+
     def screenshot(self, name):
         ppm = self.folder / (name + '.ppm')
         self.monitor('screendump', filename=str(ppm))
@@ -500,7 +521,8 @@ def check_first_use(vm, user, folder, installed=False):
     version, _ = vm.command(user('/usr/bin/opencode --version'))
     (folder / 'bundled-opencode-version.txt').write_text(version)
     defaults = json.loads(vm.read_file('/home/me/.config/opencode/opencode.json'))
-    assert not set(defaults) & {'model', 'provider', 'providers'}, 'The image must retain upstream model and provider defaults'
+    assert defaults.get('model') == 'opencode/muse-spark-1.3-contributor-free', 'The image must start on the pinned free model'
+    assert not set(defaults) & {'provider', 'providers'}, 'The image must retain upstream provider defaults'
     assert defaults.get('update') == 'disable', 'The packaged agent must remain managed by system updates'
     if installed:
         vm.command('test ! -e /etc/harness-live && test "$(id -un)" = me')
@@ -666,15 +688,23 @@ def check_first_use(vm, user, folder, installed=False):
     # normal local sign-in flow, with a cancellable return to the trial.
     vm.type_probe('sign in')
     vm.keys('ret')
+    # Sign in opens hn's own account page (#897): Google, Apple, the phone, or keep using locally.
+    # The phone needs no browser in the VM. Its `harness login` is hn's child, and Esc cancels it.
+    assert vm.screen_shows('01d-account', 'with your phone'), 'Sign in must open the account page'
+    vm.keys('down')
+    vm.keys('down')
+    vm.keys('ret')
     login_process = '[/]usr/lib/harness/cli.mjs login'
     vm.command('for n in $(seq 1 20); do pgrep -u 1000 -f ' + shlex.quote(login_process) +
                ' >/dev/null && exit 0; sleep 1; done; exit 1', timeout=30)
     time.sleep(2)
     vm.screenshot('01d-connect-sign-in')
-    vm.keys('ctrl', 'c')
+    vm.keys('esc')
     vm.command('for n in $(seq 1 20); do ! pgrep -u 1000 -f ' + shlex.quote(login_process) +
                ' >/dev/null && exit 0; sleep 1; done; exit 1', timeout=30)
-    vm.keys('ret')
+    # Back to the work it was opened over, whether Esc closed the page or only stopped sign-in.
+    if vm.screen_shows('01d-account-cancelled', 'harness account', timeout=2):
+        vm.keys('esc')
     time.sleep(1)
     if not installed:
         # F10 reaches the dock without consuming the agent's ordinary Tab key.
