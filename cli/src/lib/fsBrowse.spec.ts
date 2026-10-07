@@ -28,9 +28,12 @@ describe('listDir', () => {
     let release!: (value: never[]) => void
     const slow = join(root, 'workspace', 'slow-provider')
     mkdirSync(slow)
+    // The isolated home can use macOS's /var alias. listDir reads the real folder,
+    // while its result preserves the path the browser selected.
+    const realSlow = await fsAsync.realpath(slow)
     const original = (await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')).readdir
     const reader = vi.mocked(fsAsync.readdir).mockImplementation(((path: unknown, options: unknown) =>
-      path === slow ? new Promise<never[]>(resolve => { release = resolve }) : original(path as string, options as any)) as typeof original)
+      path === realSlow ? new Promise<never[]>(resolve => { release = resolve }) : original(path as string, options as any)) as typeof original)
     vi.useFakeTimers()
     const first = listDir(slow)
     try {
@@ -41,7 +44,7 @@ describe('listDir', () => {
       await vi.advanceTimersByTimeAsync(4000)
       expect(await first).toEqual({ error: 'UNAVAILABLE' })
       expect(await second).toEqual({ error: 'UNAVAILABLE' })
-      expect(reader.mock.calls.filter(args => args[0] === slow)).toHaveLength(1)
+      expect(reader.mock.calls.filter(args => args[0] === realSlow)).toHaveLength(1)
     } finally { release?.([]) }
   })
 
