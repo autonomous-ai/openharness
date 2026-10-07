@@ -7,10 +7,8 @@ import { lockDsh } from './lock.js'
 import { readDshManifest } from './manifest.js'
 import { HARNESS_MONOREPO } from './registry.js'
 import { samePackageSource } from './updates.js'
+import { builtinFiles } from './bundledFiles.js'
 
-declare const __MODEL_MANAGER_BUNDLE__: string
-declare const __DEVICES_BUNDLE__: string
-declare const __HARNESS_MONITOR_BUNDLE__: string
 export {
   DEVICES_BUILTIN_SOURCE, DEVICES_HARNESS_ID, HARNESS_MONITOR_BUILTIN_SOURCE, HARNESS_MONITOR_ID, isHiddenBuiltin, MODEL_MANAGER_ID,
 } from './builtinIds.js'
@@ -20,21 +18,21 @@ export type BundledFiles = Record<string, { content: string; executable: boolean
  * owned by the existing managed Grid installer. Versioned package directories
  * keep running managers intact while a newer CLI installs its own resources. */
 export function ensureBundledModelManager(files?: BundledFiles): boolean {
-  files ??= typeof __MODEL_MANAGER_BUNDLE__ === 'string' ? JSON.parse(__MODEL_MANAGER_BUNDLE__) as BundledFiles : undefined
+  files ??= builtinFiles('models')
   if (!files || !files['harness.json']) return false
   return installBuiltin({ id: MODEL_MANAGER_ID, source: 'builtin:model-manager', folder: 'model-manager', files, what: 'Model Manager', legacyPath: 'store/agents/autonomous-grid' })
 }
 
 /** An unlisted first-party DSH. Its viewer is native; its agent uses the same daemon API. */
 export function ensureBundledDevices(files?: BundledFiles): boolean {
-  files ??= typeof __DEVICES_BUNDLE__ === 'string' ? JSON.parse(__DEVICES_BUNDLE__) as BundledFiles : undefined
+  files ??= builtinFiles('devices')
   if (!files?.['harness.json']) return false
   return installBuiltin({ id: DEVICES_HARNESS_ID, source: DEVICES_BUILTIN_SOURCE, folder: 'devices', files, what: 'Devices', legacyPath: 'store/agents/devices' })
 }
 
 /** The footer's monitor follows the CLI release, including existing official Store installations. */
 export function ensureBundledHarnessMonitor(files?: BundledFiles): boolean {
-  files ??= typeof __HARNESS_MONITOR_BUNDLE__ === 'string' ? JSON.parse(__HARNESS_MONITOR_BUNDLE__) as BundledFiles : undefined
+  files ??= builtinFiles('monitor')
   if (!files?.['harness.json']) return false
   return installBuiltin({ id: HARNESS_MONITOR_ID, source: HARNESS_MONITOR_BUILTIN_SOURCE, folder: 'harness-monitor', files,
     what: 'Harness Monitor', legacyPath: 'store/agents/harness-monitor' })

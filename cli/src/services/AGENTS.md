@@ -53,9 +53,9 @@ that process. A process per risk, not per feature (`SERVICE_HOSTS` in `src/harne
 |---|---|---|---|
 | `search` | search | native `node:sqlite`, the index's memory | always |
 | `viewers` | viewers, store | the viewer servers, the remote viewer streams and rendered surfaces, minutes-long installs | always |
-| `edge` | workspaces, usage, monitor, projects, handoff, recaps | light pure-JS services: isolated from the core, not from each other | always |
-| `gateway` | gateway | network, crypto and pure-JS WebRTC: the attack surface | always |
-| `models` | models | grid's installs, downloads and commands | always |
+| `edge` | workspaces, usage, monitor, projects, handoff, recaps, windowNames, shell | light pure-JS services: isolated from the core, not from each other | always |
+| `gateway` | gateway | network, crypto and pure-JS WebRTC: the attack surface | on demand |
+| `models` | models | grid's installs, downloads and commands | on demand |
 | `devices` | devices, wifi | the dials' serial ports, the fleet's lane, the voice router's worker, the Wi-Fi device | on demand |
 | `orchestrator` | orchestrator | an experiment | on demand |
 | `teams` | teams, collaboration | an experiment: Tab collaboration beside the prompt scopes | on demand |
@@ -65,7 +65,7 @@ that process. A process per risk, not per feature (`SERVICE_HOSTS` in `src/harne
 A fault in one of the edge host's services can cost the others in it, never the core. Every service in
 `KNOWN_SERVICES` runs out of the core's process by default, unless `HARNESSD_SERVICES` names a subset, by
 service (`search,usage`) or by process (`edge`). `HARNESSD_SERVICES=none` runs them all inside the core's
-process (for debugging or a quick way back). The shell service always runs in the core's process.
+process (for debugging or a quick way back). The shell service runs in the edge host too.
 
 The updater is not in `SERVICE_HOSTS`: the core neither routes to it nor runs it, and `HARNESSD_SERVICES` does
 not turn it off. The master runs it (`UPDATER_HOST`, `src/services/updaterProcess.ts`) for the installed copy,
@@ -135,6 +135,14 @@ master too old to run it starts it beside itself, still in its own process (`src
   (`service_notice`) and carries terminal bytes as binary frames on its link. The core drops what would
   pile up on a gateway that reads nothing, and the gateway gone is the relay gone: every remote client
   with it, never a window on this computer. `e2e/gatewayProcess.e2e.ts` proves it, with a phone.
+- The shell service (`shellProcess.ts`) owns validation, setup replies and durable creation receipts in
+  the edge host. It asks the core to launch literal argv or read live terminal identity through
+  `core.terminals` (`core/shellQueries.ts`). A lost launch reply leaves an unconfirmed receipt and is
+  never retried as a new launch. `e2e/shell.e2e.ts` keeps an attached terminal working across an edge crash.
+- The gateway owns account/backend HTTP and the single writer of `machines.json` (`gateway/accountHttp.ts`).
+  The core retains its reported list for stale replies during a restart, bound to the current account.
+  The Store prepares bundled harnesses before reporting `prepared`; the core waits at most five seconds
+  before restore. The lean bundle shares one asset file, loaded by the Store and never by the core.
 - A service that writes turns into agents (a team's question, the orchestrator's guidance) delivers each
   under an id of its own through `core.turns.deliver`, hears what became of it through `onDelivery`, and
   takes one back with `cancelDelivery` (core/deliveries.ts). In its own process `services/turnsLink.ts`

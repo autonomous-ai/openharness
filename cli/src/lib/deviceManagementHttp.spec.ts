@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { autonomousDeviceLocalRequest, type AutonomousDeviceManagement } from './localApi.js'
+import { autonomousDeviceLocalRequest, type AutonomousDeviceManagement } from './deviceManagementHttp.js'
 
 const id = Buffer.alloc(32, 255).toString('base64')
 function fixture() {

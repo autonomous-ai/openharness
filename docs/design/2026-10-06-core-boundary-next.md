@@ -31,11 +31,16 @@
 > the orchestrator, the teams with Tab collaboration, Share and the command bar. Each process and what it
 > hosts is in [../../cli/src/services/AGENTS.md](../../cli/src/services/AGENTS.md).
 >
+> **Boundary follow-through, 2026-10-07.** Account/backend HTTP and `machines.json` move to the
+> gateway; the core reads reported state with an account-bound stale fallback. Bundled harness setup
+> moves to the Store; one shared lean asset file avoids duplicating bundled bytes. Shell request policy
+> and receipts move to the edge host; live terminal identity and literal-argv launch remain in the core.
+> The device HTTP adapter and transcript reader are shared helpers under `lib/`, not device/search
+> implementations. `CORE_MAY_REACH` is now empty. The lean core bundle has landed.
+>
 > What is left:
 > - **The engines' own code still loads in the core.** The engine-interface refactor
->   ([2026-10-05-engine-interface.md](2026-10-05-engine-interface.md)) is paused.
-> - **The core's process still parses all of cli.js.** Its memory falls only with a lean core bundle, which
->   is in progress (#955).
+>   ([2026-10-05-engine-interface.md](2026-10-05-engine-interface.md)) has resumed with Claude Code and Codex first, a few engines per batch.
 > - **The core grew where every session needs it.** #950 added a gate for tmux before 3.7, whose server
 >   crashes when a terminal attaches during a notification (`lib/tmuxControlGate.ts`).
 

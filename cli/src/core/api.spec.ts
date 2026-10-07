@@ -93,7 +93,7 @@ describe('the core API services stand on', () => {
     expect(createCoreApi({ ...deps, conversations }).conversations).toBe(conversations)
     expect(core.dataDir).toBe('/data')
     expect(await core.terminals.open({ argv: ['/bin/zsh'], cwd: '/work' })).toEqual({ ok: false, error: 'SERVICE_UNAVAILABLE' })
-    const terminals = { open: vi.fn(async () => ({ ok: true as const, agentId: 'shell' })), watch: TERMINALS_OFF.watch }
+    const terminals = { ...TERMINALS_OFF, open: vi.fn(async () => ({ ok: true as const, agentId: 'shell' })), watch: TERMINALS_OFF.watch }
     expect(createCoreApi({ ...deps, terminals }).terminals).toBe(terminals)
     expect(core.agents.all().map((s) => s.agentId)).toEqual(['live', 'stopped'])
     expect(core.agents.live().map((s) => s.agentId)).toEqual(['live'])
@@ -289,6 +289,8 @@ describe('the core API services stand on', () => {
   })
 
   it('watches no terminal and signs nothing for a service without the core\'s terminals or key', async () => {
+    await expect(TERMINALS_OFF.describe('missing')).resolves.toBeNull()
+    await expect(TERMINALS_OFF.visitStatus('missing')).resolves.toEqual({ exited: false })
     await expect(TERMINALS_OFF.watch.frame('observer:x', 'terminal_open', {})).resolves.toBeUndefined()
     await expect(TERMINALS_OFF.watch.close('observer:x')).resolves.toBeUndefined()
     expect(TERMINALS_OFF.watch.onOutput(() => {})()).toBeUndefined()

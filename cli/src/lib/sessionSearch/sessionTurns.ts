@@ -15,7 +15,7 @@
 import { performance } from 'node:perf_hooks'
 
 import type { LiveEvent } from '../normalize.js'
-import { forEachLine, lineNormalizer, lineTime, skipPredicate } from './transcript.js'
+import { forEachLine, lineNormalizer, lineTime, skipPredicate } from '../transcriptReader.js'
 import { TurnCollector, type IndexedTurn } from './turns.js'
 
 export interface TurnSource {

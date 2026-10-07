@@ -11,6 +11,7 @@ import { checkPidRuntime } from '../lib/deleteAgentFallback.js'
 import { tmuxPaneState } from '../lib/tmux.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { SHELL_REQUESTS, startShell } from './shell.js'
+import { createTerminalSessions } from '../core/terminals/sessions.js'
 
 vi.mock('node:fs/promises', async importOriginal => ({
   ...await importOriginal<typeof import('node:fs/promises')>(), stat: vi.fn(async () => ({ isDirectory: () => true })),
@@ -25,6 +26,7 @@ function setup() {
   const core = fakeCore({ dataDir, terminals: { open: vi.fn(async () => ({ ok: true as const, agentId: 'shell' })) }, agents: {
     byAgent: vi.fn(() => row), displayName: () => 'project', terminalAvailable: () => true,
   } })
+  Object.assign(core.terminals, createTerminalSessions({ agents: core.agents, paneState: tmuxPaneState, processState: checkPidRuntime }))
   const requests = startShell(core)
   const ask = (type: string, payload: Record<string, unknown> = {}, asker = OWNER) => requests[type]!(payload, asker)
   const payload = { creationId: randomUUID(), cwd: '/work/project', argv: ['/bin/zsh', '/work/a script', '$(touch nope)', 'a; b', ''] }

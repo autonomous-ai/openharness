@@ -53,6 +53,11 @@ export function runStoreService(options: StoreServiceOptions): ServiceProcess {
     machineId: options.machineId,
     token: options.token,
     requests,
-    onConnected: (connection) => { core = connection },
+    onConnected: (connection) => {
+      core = connection
+      // startStore has prepared the bundled harnesses before this link opens. A reconnect repeats the
+      // notice so a restarted core refreshes its installed index before restoring those agents.
+      void connection.query('prepared').catch(() => {})
+    },
   })
 }
