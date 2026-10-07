@@ -41,8 +41,9 @@ PR CI is deliberately fast. Each changed component runs only its own Linux suite
 `plan` (actionlint and suite selection), `process-checks` and `ci/required` always
 run; `ci/required` is the only required check. On a draft PR only those three run
 and `ci/required` stays blocked; marking the PR ready runs the component checks.
-Merge-queue runs rerun only the three always-on jobs (about 2 minutes): the PR run
-already tested the change.
+Normal merges directly squash the reviewed head after successful PR CI. If GitHub
+requires a merge queue, its runs rerun only the three always-on jobs (about 2 minutes):
+the PR run already tested the change. Queue setup is not required to merge or release.
 
 The `plan` and `ci/required` jobs run `scripts/ci-plan.py` from the PR head. A branch
 created before #991 still carries the old planner, which expects removed jobs and
@@ -310,7 +311,7 @@ and rerun only validation invalidated by the merge. Native checks absent from CI
 still need their own evidence.
 
 Prepare the PR description and review the diff while CI is running. For a normal
-merge you need nothing more: `make merge-pr --queue` collects and verifies the
+merge you need nothing more: `make merge-pr` collects and verifies the
 `ci/required` receipt itself. The collector below is for manual runs only, and its
 `cli` and `desktop` scopes still expect the job set from before #991, so they fail
 on current runs; `process` still works. To collect a manual run's record:
@@ -449,22 +450,37 @@ until they disappear.
 After independent code review, required non-CI acceptance and merge authorization:
 
 ```bash
-make merge-pr ARGS="PR_NUMBER --queue --reviewed-head HEAD_SHA --reviewed-base REVIEW_BASE_SHA --merge --wait-timeout 1800"
+make merge-pr ARGS="PR_NUMBER --reviewed-head HEAD_SHA --reviewed-base REVIEW_BASE_SHA --merge --wait-timeout 1800"
 ```
 
-The checkout must be clean at the exact reviewed head and include the review-base
-commit. Main may advance after that review. The helper verifies successful automatic
-PR CI, enqueues with GitHub's `expectedHeadOid`, follows the same PR and verifies
-that its merged full tree matches successful `merge_group` CI and its immutable gate
-receipt. It retains source, run, attempt, artifact digest and phase timings under
-`.harness/validation/*-merge-*/`. Omit `--merge` for a read-only queue preview.
+The checkout must be clean at the exact reviewed head and include the reviewed
+`main` commit. The helper follows the latest automatic PR CI for that head, verifies
+its immutable `ci/required` receipt, rechecks the source and GitHub mergeability,
+then directly squash-merges with the exact reviewed head. It verifies that the
+merged full tree matches the reviewed and tested tree. It retains source, run,
+attempt, artifact digest and phase timings under `.harness/validation/*-merge-*/`.
+Omit `--merge` for a read-only preview.
 
-Queue rejection, a changed head/target, missing coverage, failed/skipped required
-jobs or a lost response cannot report success. An uncertain enqueue is inspected
-without replaying the mutation. If the wait budget expires, follow that same queued
-PR; do not start another validation or merge request. GitHub enforces the required
-check and the queue. Do not use `--run/--scope`: that legacy direct mode depends on
-the collector's pre-#991 job lists.
+A merge queue is not a prerequisite for merging or releasing. Do not add `--queue`
+to ordinary commands or stop an authorized merge to request queue setup. If GitHub
+actually enforces a queue, the helper detects its rule and uses it, verifying the
+merged tree against successful candidate CI. Explicit `--queue` is only for an
+intentionally configured queue, such as a disposable integration trial.
+
+If `main` moved before a direct merge, inspect and integrate the new source, then
+supply the updated reviewed head/base. Reuse validation only for unchanged inputs;
+rerun checks affected by the integration. This is routine handling of concurrent
+merges: continue the user's already-authorized merge without asking for permission
+again. A quiet branch takes the direct path immediately after checks and review;
+concurrent changes require only the additional review and validation they affect.
+Do not enable or disable a queue based on the number of open PRs or running jobs.
+
+A changed head/target, missing coverage,
+failed/skipped required jobs or a lost response cannot report success. Inspect an
+uncertain merge or enqueue without replaying the mutation. If a wait expires,
+follow the same run or queued PR; do not start another validation or merge request.
+Do not use `--run/--scope` for normal merges: that legacy manual-evidence mode
+depends on the collector's pre-#991 job lists.
 
 ## Automatic CI and rollout
 
@@ -483,10 +499,10 @@ reads, say so in the PR and run that component's tests locally or with
 **CI → Run workflow** (`scope=desktop`, `tui`, `companions` or `mobile`).
 
 Separate PR groups prevent cross-cancellation, but still share available runner
-capacity. Related branches validate independently; the merge queue validates
-their combined source before integration. Keep PRs small and coordinate edits to
-shared interfaces and frequently changed files. Main background validation may
-coalesce pending snapshots; distinct merge candidates must not share that group.
+capacity. Related branches validate independently. Keep PRs small, inspect changes
+from `main` before direct integration, and coordinate edits to shared interfaces
+and frequently changed files. Main background validation may coalesce pending
+snapshots; any configured queue's distinct candidates must not share that group.
 
 The stable `ci/required` job runs even after an upstream failure. It accepts only
 successful selected jobs. Deliberately inapplicable jobs may be skipped; a required
@@ -494,14 +510,10 @@ skip, cancellation, failure or missing result fails integration. Manual `full`
 selects the five core suites; `all` selects every suite. Manual dispatch is extra
 evidence and cannot substitute for the automatic PR gate.
 
-Enable main's queue only after passing automatic CI and a disposable-branch queue
-trial. Start with three candidate builds, squash, ALLGREEN, a minimum of one PR and
-no batch accumulation delay. Check timeout is 60 minutes to permit required slower
-component work. Required checks are non-strict on the PR branch because the queue
-validates current main. Require PRs and resolved discussions, preserving the existing
-approval count instead of inventing a new human-review bottleneck. Preserve main's
-delete/force-push guards. Queue jumping invalidates work and is reserved for urgent
-integration. The queue's merge limits do not batch its CI builds.
+Do not enable or change repository protection rules as part of an ordinary merge
+or release. Preserve configured PR, discussion, approval, deletion and force-push
+rules. Optional queue rollout is separate repository administration, not a step
+agents must complete before shipping a reviewed change.
 
 New revisions replace active checks for the same PR, job and matrix row. Cancellation
 locks belong to work jobs, leaving summaries and the always-running final gate independent: an obsolete
@@ -526,6 +538,6 @@ time. Investigate/revert confirmed main regressions promptly. Preserve explicit 
 and incomplete-suite reporting; do not retry assertions until they disappear.
 
 Release publication and Desktop prepared-package reuse retain their existing
-source/evidence, signing and artifact contracts. Release admission based on automatic
-candidate receipts is a subsequent rollout step after the queue is stable; no release
-workflow is bypassed by this integration change.
+source/evidence, signing and artifact contracts. They do not depend on a merge
+queue or queue rollout. After the authorized merge, follow the component's normal
+release workflow and verify its published artifacts.
