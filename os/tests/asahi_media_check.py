@@ -126,14 +126,18 @@ def main():
         with tempfile.TemporaryDirectory(prefix='harness-media-inspect-') as tmp, ExitStack() as cleanup:
             iso, root, esp = (Path(tmp) / name for name in ('iso', 'root', 'esp'))
             iso.mkdir(); root.mkdir(); esp.mkdir()
+            # Inspect these sequentially: mount refuses overlapping loop
+            # mappings, and the kernel cannot mount a whole block device and
+            # its partition at the same time even through a single mapping.
+            with ExitStack() as efi_cleanup:
+                options = f'ro,loop,offset={partition["offset"]},sizelimit={partition["bytes"]}'
+                run('mount', '-t', 'vfat', '-o', options, args.iso.resolve(), esp)
+                efi_cleanup.callback(run, 'umount', esp)
+                receipt['uefi'] = {**partition, 'files': inspect_efi(esp)}
             run('mount', '-o', 'ro,loop', args.iso.resolve(), iso)
             cleanup.callback(run, 'umount', iso)
             receipt['iso_efi_paths'] = [str(p.relative_to(iso)) for p in iso.rglob('*')
                                         if p.name.lower() == 'bootaa64.efi']
-            options = f'ro,loop,offset={partition["offset"]},sizelimit={partition["bytes"]}'
-            run('mount', '-t', 'vfat', '-o', options, args.iso.resolve(), esp)
-            cleanup.callback(run, 'umount', esp)
-            receipt['uefi'] = {**partition, 'files': inspect_efi(esp)}
             squash = [p for p in iso.rglob('*') if p.name in ('squashfs.img', 'rootfs.squashfs')]
             if len(squash) != 1:
                 raise ValueError('Expected one compressed live root.')
@@ -148,6 +152,9 @@ def main():
                        'bytes': args.iso.stat().st_size, 'sha256': digest(args.iso)})
     except BaseException as error:
         receipt.update(status='failed', error=str(error))
+        if isinstance(error, subprocess.CalledProcessError):
+            receipt['command_failure'] = {'command': error.cmd, 'returncode': error.returncode,
+                                           'output': error.stdout, 'stderr': error.stderr}
         raise
     finally:
         receipt['completed_at'] = time.time()
