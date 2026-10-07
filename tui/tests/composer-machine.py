@@ -32,7 +32,7 @@ class Shell:
     def __init__(self, root, shell):
         self.root, self.data, self.wire = root, b'', b''
         self.requests, self.answered = [], set()
-        self.delayed, self.launches = [], []
+        self.delayed, self.launches, self.allow_launch = [], [], False
         self.snapshot = root / 'snapshot'
         self.done = root / 'done'
         # Test-only observation/loading widgets preserve the exact Readline/ZLE
@@ -105,9 +105,9 @@ bind -x '"\\C-x\\C-b": _test_snapshot'
             verb = match[3].decode()
             if verb == 'close-picker':
                 continue
-            if verb == 'compose-launch':
+            if verb == 'compose-launch' and self.allow_launch:
                 # Never answered: Enter on a slow computer waits, and nothing starts.
-                self.launches.append(match[2].decode())
+                self.launches.append(json.loads(base64.b64decode(match[4])))
                 continue
             assert verb in ('list-compose', 'list-sessions'), ('completion launched or switched the shell', verb, base64.b64decode(match[4]))
             args = json.loads(base64.b64decode(match[4]))
@@ -235,7 +235,9 @@ def check(shell):
             # Enter on a computer that has not answered says what it waits for, within 1 s.
             # (Both Slow journeys run before failing, so one red run shows both causes.)
             problems = []
+            assert not s.launches, 'an earlier journey started an agent'
             s.load('claude @Slow '); s.data = b''; s.wire = b''
+            s.allow_launch = True    # only this check may reach compose-launch
             s.send('\r')
             end = time.monotonic() + 1
             while time.monotonic() < end and 'Starting on Slow… Ctrl-C to cancel' not in s.data.decode('utf-8', 'ignore'):
@@ -243,7 +245,9 @@ def check(shell):
             if 'Starting on Slow… Ctrl-C to cancel' not in s.data.decode('utf-8', 'ignore'):
                 problems.append(('Enter on claude @Slow drew no "Starting on Slow… Ctrl-C to cancel" within 1 s', s.data[-500:]))
             s.send('\x03'); s.wait(lambda: b'READY> ' in s.data[-200:], 'Ctrl-C after Enter on Slow')
-            assert s.launches, 'Enter never asked the TUI to start the agent'
+            s.allow_launch = False
+            if not (len(s.launches) == 1 and s.launches[0].get('host') == 'Slow'):
+                problems.append(('Enter did not ask for exactly one launch on Slow', s.launches))
 
             # A computer whose folders take 8 s: the spinner keeps turning with no key pressed.
             s.load('codex '); n = s.count(); start = len(s.requests)
