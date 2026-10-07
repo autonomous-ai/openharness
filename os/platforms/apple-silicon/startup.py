@@ -241,7 +241,10 @@ def label_files(root, *paths):
         raise Error('Use the verified image with one installed SELinux policy.')
     policy = str(policies[0].relative_to(root))
     snapshot(root, policy)
-    run('chroot', root, '/usr/sbin/setfiles', '-F', '-c', '/' + policy, '-e', '/boot/efi',
+    # These are explicitly mounted target filesystems. A maintenance kernel can
+    # omit their seclabel mount flag; automatic mount-table exclusions then
+    # silently skip recursive labeling. Keep only our explicit EFI exclusion.
+    run('chroot', root, '/usr/sbin/setfiles', '-m', '-F', '-c', '/' + policy, '-e', '/boot/efi',
         '/etc/selinux/targeted/contexts/files/file_contexts', *paths, timeout=90)
 
 

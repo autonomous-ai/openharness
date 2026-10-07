@@ -82,10 +82,10 @@ spec=importlib.util.spec_from_file_location('ui','/var/tmp/install.py')
 ui=importlib.util.module_from_spec(spec);spec.loader.exec_module(ui)
 storage,startup=ui.storage,ui.startup
 esp=pathlib.Path('/mnt/harness-observer-esp');esp.mkdir()
-with storage.mounted('/dev/vdb2',esp/'mounted','ro') as boot:
+with storage.mounted('/dev/vdb2',esp/'mounted','ro,noatime,uid=0,gid=0,fmask=0177,dmask=0077') as boot:
  plan=ui.target.load_plan(boot/'asahi/harness-install/target.json')
  state=json.loads((boot/'asahi/harness-install/storage.json').read_text())
- with storage.encrypted_root('/dev/vdb6',state,'firstboot-local-42') as mapper:
+ with storage.encrypted_root('/dev/vdb6',state,b'firstboot-local-42') as mapper:
   with storage.mounted(mapper,esp/'root','rw,subvol=root') as root:
    with startup.mount_at('/dev/vdb5',root/'boot','rw,noatime'):
     for name in ('etc/kernel/cmdline','etc/default/grub'):
@@ -97,7 +97,11 @@ with storage.mounted('/dev/vdb2',esp/'mounted','ro') as boot:
      storage.run('chroot',root,'grubby','--update-kernel=ALL','--args=console=ttyAMA0 console=tty0')
      storage.run('chroot',root,'dracut','--regenerate-all','--force','--no-hostonly',timeout=180)
      storage.run('chroot',root,'grub2-mkconfig','-o','/boot/grub2/grub.cfg')
-     startup.label_files(root,'/boot')
+     configs=['/etc/kernel/cmdline','/etc/default/grub','/etc/dracut.conf.d/99-harness-qemu-observer.conf']
+     startup.label_files(root,'/boot',*configs)
+     boot_files=['/boot/grub2/grub.cfg',*('/'+str(p.relative_to(root)) for p in (root/'boot/loader/entries').glob('*.conf')),
+                 *('/'+str(p.relative_to(root)) for p in (root/'boot').glob('initramfs-*.img'))]
+     storage.run('chroot',root,'/usr/sbin/matchpathcon','-V',*configs,*boot_files)
 '''
     put(vm, '/var/tmp/harness-media-observer.py', script)
     vm.command('unshare --mount --propagation private python3 /var/tmp/harness-media-observer.py', timeout=240)

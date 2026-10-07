@@ -35,14 +35,26 @@ def verify_root_labels(source, installed):
                 return None
             raise
     checked = 0
+    policy_unlabeled = []
     for path in source.rglob('*'):
         relative = path.relative_to(source)
         if relative.parts[0] in ('boot', 'home', 'dev', 'proc', 'sys', 'run'):
             continue
         expected, actual = label(path), label(installed / relative)
-        assert actual == expected, f'SELinux label differs for {relative}: {actual!r} != {expected!r}'
+        if expected is None and actual == b'system_u:object_r:unlabeled_t:s0\0':
+            # Enforcing kernels expose an unlabeled inode as this context and
+            # rsync serializes it. Accept that representation only when both
+            # policies explicitly leave the path unlabeled (e.g. rpc_pipefs).
+            # An existing source label becoming unlabeled still fails below.
+            for tree in (source, installed):
+                assert ui.storage.run('chroot', tree, '/usr/sbin/matchpathcon', '-n',
+                                      '/' + str(relative)) == '<<none>>'
+            policy_unlabeled.append(str(relative))
+        else:
+            assert actual == expected, f'SELinux label differs for {relative}: {actual!r} != {expected!r}'
         checked += 1
-    return {'paths': checked, 'observer_selinux': 'Disabled', 'raw_source_labels_preserved': True}
+    return {'paths': checked, 'observer_selinux': 'Disabled',
+            'explicit_source_labels_preserved': True, 'policy_unlabeled': policy_unlabeled}
 
 
 def inspect():
