@@ -47,12 +47,16 @@ import 'tty.dart';
 ///
 /// ⚠️ **The other exception: the pane's own keys — [hints] — join the row, and
 /// only then does it scroll.** They are what Codex offers on this screen and
-/// nowhere else (`ctrl+] skip`, `⌥+↓ main prompt`), so they follow the arrows
-/// on the SAME row, which scrolls sideways while they are there and brings
-/// them into view as they arrive. Never a line of their own: a second row
-/// cost the terminal a line of output, and a strip of buttons floating over
-/// the pane covered the very hints it was read off. The fixed keys keep their
-/// size either way — only how far along the row is scrolled changes.
+/// nowhere else (`shift+← to answer`, `ctrl+] skip`, `⌥+↓ main prompt`), so
+/// they LEAD the same row and push the fixed keys along it, and the row
+/// scrolls sideways while they are there. At the head, not the tail: past a
+/// row the fixed keys already fill, a queued question's `shift+← answer` sat
+/// off the edge with nothing on screen to say it was there. Claude Code's
+/// `shift+tab to cycle` is the one that follows the arrows instead — see
+/// [KeyHint.trails]. Never a line of their own: a second row cost the terminal
+/// a line of output, and a strip of buttons floating over the pane covered the
+/// very hints it was read off. The fixed keys keep their size either way —
+/// only where along the row they sit changes.
 class TerminalKeyBar extends StatefulWidget {
   const TerminalKeyBar({
     super.key,
@@ -85,7 +89,8 @@ class TerminalKeyBar extends StatefulWidget {
   /// The keys the pane's chrome offers and a phone cannot press — see
   /// [parseKeyHints]. Each is drawn as the key and Codex's own word for what
   /// it does, as the pane printed them, in the terminal's face — so it reads
-  /// as the hint it was read off. Empty leaves the row as it always was.
+  /// as the hint it was read off. Drawn before the row's own keys, but for the
+  /// [KeyHint.trails] ones, after them. Empty leaves the row as it always was.
   final List<KeyHint> hints;
 
   /// Called after `tab` or `/` changed the prompt without the software
@@ -478,15 +483,15 @@ class _TerminalKeyBarState extends State<TerminalKeyBar>
   /// How wide [_rule] is — `8 + 1 + 8`, or the single gap in its place.
   double get _ruleWidth => _canSendImage ? 17 : 4;
 
-  /// The row while the pane offers its own keys: the fixed keys, then
-  /// [TerminalKeyBar.hints], scrolling sideways together; the two apart keys
-  /// stay pinned past the rule.
+  /// The row while the pane offers its own keys: [TerminalKeyBar.hints] at its
+  /// head, the fixed keys, then the [KeyHint.trails] ones, scrolling sideways
+  /// together; the two apart keys stay pinned past the rule.
   ///
   /// ⚠️ **Every fixed key keeps exactly the width [_row] gives it.** The part
   /// is worked out the way the `Expanded` row divides [width] — the same keys,
-  /// gaps and rule — so the keys do not shrink or move when a hint arrives:
-  /// they fill the visible part of the row as they always do, and the hints
-  /// start where it ends. [_revealHints] then scrolls them into view.
+  /// gaps and rule — so the keys do not shrink when a hint arrives: the hints
+  /// at the head push them along, and the ones at the tail start where the
+  /// visible part of the row ends. [_revealHints] scrolls to whichever arrived.
   Widget _rowWithHints(List<_Slot> keys, List<_Slot> apart, double width) {
     const gap = 4.0;
     final gaps =
@@ -499,7 +504,7 @@ class _TerminalKeyBarState extends State<TerminalKeyBar>
     if (!part.isFinite || part <= 0) {
       return Row(children: [..._row(keys), ..._rule(), ..._row(apart)]);
     }
-    final hints = widget.hints;
+    final (:lead, :trail) = _split(widget.hints);
     return Row(
       children: [
         Expanded(
@@ -508,16 +513,9 @@ class _TerminalKeyBarState extends State<TerminalKeyBar>
             scrollDirection: Axis.horizontal,
             child: Row(
               children: [
+                if (lead.isNotEmpty) ...[..._hintRun(lead), ..._hintRule()],
                 ..._cells(keys, part),
-                // The pane's keys are not the strip's: a hairline says so,
-                // the way the rule sets the phone's own two apart.
-                const SizedBox(width: 6),
-                Container(width: 1, height: 22, color: AppGlass.hair),
-                const SizedBox(width: 6),
-                for (var i = 0; i < hints.length; i++) ...[
-                  if (i > 0) const SizedBox(width: gap),
-                  _hint(hints[i]),
-                ],
+                if (trail.isNotEmpty) ...[..._hintRule(), ..._hintRun(trail)],
               ],
             ),
           ),
@@ -527,6 +525,37 @@ class _TerminalKeyBarState extends State<TerminalKeyBar>
       ],
     );
   }
+
+  /// [hints] by where the row draws them: before its own keys, and after —
+  /// see [KeyHint.trails]. Each side keeps the order the pane printed them in.
+  static ({List<KeyHint> lead, List<KeyHint> trail}) _split(
+    List<KeyHint> hints,
+  ) => (
+    lead: [
+      for (final hint in hints)
+        if (!hint.trails) hint,
+    ],
+    trail: [
+      for (final hint in hints)
+        if (hint.trails) hint,
+    ],
+  );
+
+  /// A run of the pane's keys, each as wide as its words.
+  List<Widget> _hintRun(List<KeyHint> hints) => [
+    for (var i = 0; i < hints.length; i++) ...[
+      if (i > 0) const SizedBox(width: 4),
+      _hint(hints[i]),
+    ],
+  ];
+
+  /// The pane's keys are not the strip's: a hairline between them says so,
+  /// the way [_rule] sets the phone's own two apart.
+  List<Widget> _hintRule() => [
+    const SizedBox(width: 6),
+    Container(width: 1, height: 22, color: AppGlass.hair),
+    const SizedBox(width: 6),
+  ];
 
   /// A run of keys at a fixed width each, [part] times its [_Slot.parts] —
   /// [_row]'s layout, in a row that scrolls and so cannot divide itself with
@@ -541,17 +570,27 @@ class _TerminalKeyBarState extends State<TerminalKeyBar>
   /// Keeps the fixed keys and the hints on one row.
   final ScrollController _scroll = ScrollController();
 
-  // ⚠️ **Not scrolled to the hints as the strip opens.** It was, and Claude Code
-  // offers `shift+tab to cycle` on every prompt, so every open slid esc and tab
-  // off the left edge — while the pane's own line said "esc to interrupt". The
-  // strip opens on its own keys; hints that ARRIVE while it is open (a question's
-  // keys, say) are scrolled to, and the rest are a sideways swipe away.
+  // ⚠️ **Not scrolled as the strip opens.** It was — to the end, where every
+  // hint then sat — and Claude Code offers `shift+tab to cycle` on every prompt,
+  // so every open slid esc and tab off the left edge while the pane's own line
+  // said "esc to interrupt". It opens at its head, which is where a question's
+  // keys are drawn ([KeyHint.trails]); `cycle` is a sideways swipe away. Hints
+  // that ARRIVE while it is open are scrolled to, wherever they are drawn.
 
   @override
   void didUpdateWidget(TerminalKeyBar oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (widget.hints.isNotEmpty && !listEquals(widget.hints, oldWidget.hints)) {
-      _revealHints();
+      final now = _split(widget.hints), before = _split(oldWidget.hints);
+      if (now.lead.isNotEmpty && !listEquals(now.lead, before.lead)) {
+        _revealHints(atHead: true);
+      } else if (now.lead.isEmpty &&
+          now.trail.isNotEmpty &&
+          !listEquals(now.trail, before.trail)) {
+        // ⚠️ Never away from a question's keys: with one at the head, a
+        // `cycle` arriving at the tail stays a swipe away.
+        _revealHints(atHead: false);
+      }
     }
     // `paste` came or went, or an image stopped (or started) counting.
     final couldSendImage =
@@ -570,19 +609,25 @@ class _TerminalKeyBarState extends State<TerminalKeyBar>
     super.dispose();
   }
 
-  /// Scrolls the row to its end, where the hints are, once they are laid out.
+  /// Scrolls the row to the hints that just arrived, once they are laid out:
+  /// back to its head for the ones that lead it, on to its end for the ones
+  /// that trail it.
   ///
   /// ⚠️ **Brought into view, not left past the edge.** The fixed keys fill the
-  /// visible row by design, so hints that simply joined it would start just
-  /// out of sight and read as no hints at all. Only a new set of hints moves
-  /// the row; the same ones redrawn leave it wherever it was swiped to.
-  void _revealHints() {
+  /// visible row by design, so hints at its end would start just out of sight
+  /// and read as no hints at all — and a row already swiped along would leave
+  /// a new one at its head out of sight the same way. Only a new set of hints
+  /// moves the row; the same ones redrawn leave it wherever it was swiped to.
+  void _revealHints({required bool atHead}) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || !_scroll.hasClients) return;
-      final end = _scroll.position.maxScrollExtent;
-      if (_scroll.offset == end) return;
+      final position = _scroll.position;
+      final target = atHead
+          ? position.minScrollExtent
+          : position.maxScrollExtent;
+      if (position.pixels == target) return;
       _scroll.animateTo(
-        end,
+        target,
         duration: const Duration(milliseconds: 250),
         curve: Curves.easeOut,
       );

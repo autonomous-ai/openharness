@@ -32,6 +32,16 @@ class KeyHint {
   /// `main prompt`.
   final String action;
 
+  /// Whether the key strip draws this one AFTER its own keys rather than
+  /// before them — see `TerminalKeyBar.hints`.
+  ///
+  /// ⚠️ **Only Claude Code's `shift+tab to cycle`.** It is on every prompt, so
+  /// at the head of the strip it would push the arrows off the edge for good;
+  /// at the end it is a swipe away and the strip opens as it always did. Every
+  /// other hint is a key a screen is asking for right now — a queued question's
+  /// `shift+← to answer` — and leads the strip.
+  bool get trails => _trailing.hasMatch(action);
+
   @override
   bool operator ==(Object other) =>
       other is KeyHint &&
@@ -120,6 +130,10 @@ final RegExp _offered = RegExp(
   r'^(answer|skip|main prompt|next question|prev(ious)? question|edit last queued|copy|view transcript|cycle)\b',
   caseSensitive: false,
 );
+
+/// The [_offered] hints drawn after the key strip's own keys — see
+/// [KeyHint.trails].
+final RegExp _trailing = RegExp(r'^cycle\b', caseSensitive: false);
 
 /// Whether a phone can already press [chord] — the software keyboard or the
 /// key strip has it — so a hint for it would only repeat a key on screen.

@@ -162,48 +162,124 @@ void main() {
     expect(dismissals, 1);
   });
 
-  testWidgets(
-    'esc stays in view when the pane already offers keys; new ones are scrolled to',
-    (tester) async {
-      // Claude Code's footer offers a key on every prompt.
-      final cycle = parseKeyHints(['  ⏵⏵ auto mode on (shift+tab to cycle)']);
-      expect(cycle, isNotEmpty);
-      Widget bar(List<KeyHint> hints) => MaterialApp(
-        home: Scaffold(
-          body: Align(
-            alignment: Alignment.bottomCenter,
-            child: SizedBox(
-              width: 360,
-              child: TerminalKeyBar(
-                terminal: terminal,
-                enabled: true,
-                hints: hints,
-                onDismissKeyboard: () => dismissals++,
-                onPromptEdited: () => edits++,
-              ),
-            ),
+  // Claude Code's footer offers it on every prompt.
+  final cycle = parseKeyHints(['  ⏵⏵ auto mode on (shift+tab to cycle)']);
+  // Codex's queue of async questions, over the composer.
+  final queued = parseKeyHints(['  ? 1 question', '    shift+← to answer']);
+  final esc = find.byKey(const ValueKey('terminal-key-esc'));
+  final right = find.byKey(const ValueKey('terminal-key-Right'));
+
+  /// The strip at a phone's width, offering [hints] as the pane would.
+  Widget hintedBar(List<KeyHint> hints) => MaterialApp(
+    home: Scaffold(
+      body: Align(
+        alignment: Alignment.bottomCenter,
+        child: SizedBox(
+          width: 360,
+          child: TerminalKeyBar(
+            terminal: terminal,
+            enabled: true,
+            hints: hints,
+            onDismissKeyboard: () => dismissals++,
+            onPromptEdited: () => edits++,
           ),
         ),
-      );
-      await tester.pumpWidget(bar(cycle));
+      ),
+    ),
+  );
+
+  ScrollController rowScroll(WidgetTester tester) => tester
+      .widget<SingleChildScrollView>(find.byType(SingleChildScrollView).first)
+      .controller!;
+
+  testWidgets(
+    'a queued question\'s key leads the strip as it opens — no swipe to find it',
+    (tester) async {
+      expect(queued.single.action, 'answer');
+      await tester.pumpWidget(hintedBar(queued));
       await tester.pumpAndSettle();
-      final scroll = tester.widget<SingleChildScrollView>(
-        find.byType(SingleChildScrollView).first,
-      );
-      // Opened on its own keys: esc is where the thumb expects it.
-      expect(scroll.controller!.offset, 0);
+
+      expect(rowScroll(tester).offset, 0);
+      expect(find.text('answer').hitTestable(), findsOneWidget);
+      // Ahead of the strip's own keys, which it pushes along rather than hides.
       expect(
-        find.byKey(const ValueKey('terminal-key-esc')).hitTestable(),
-        findsOneWidget,
+        tester.getTopRight(find.text('answer')).dx,
+        lessThan(tester.getTopLeft(esc).dx),
+      );
+      expect(esc.hitTestable(), findsOneWidget);
+
+      await tester.tap(find.text('answer'));
+      await tester.pump();
+      expect(outbound, ['\x1b[1;2D']);
+    },
+  );
+
+  testWidgets(
+    'esc stays in view under cycle, which trails the strip; a question\'s keys '
+    'lead it',
+    (tester) async {
+      expect(cycle.single.action, 'cycle');
+      await tester.pumpWidget(hintedBar(cycle));
+      await tester.pumpAndSettle();
+      // Opened on its own keys: esc is where the thumb expects it, and cycle is
+      // past the arrows.
+      expect(rowScroll(tester).offset, 0);
+      expect(esc.hitTestable(), findsOneWidget);
+      expect(
+        tester.getTopLeft(find.text('cycle')).dx,
+        greaterThan(tester.getTopRight(right).dx),
       );
 
-      // A key the pane starts offering while the strip is up is brought into view.
+      // A question's key the pane starts offering takes the head; cycle keeps
+      // the tail.
       final more = parseKeyHints([
         '  ⏵⏵ auto mode on (shift+tab to cycle) · ctrl+] main prompt',
       ]);
-      await tester.pumpWidget(bar(more));
+      await tester.pumpWidget(hintedBar(more));
       await tester.pumpAndSettle();
-      expect(scroll.controller!.offset, greaterThan(0));
+      expect(rowScroll(tester).offset, 0);
+      expect(find.text('main prompt').hitTestable(), findsOneWidget);
+      expect(
+        tester.getTopRight(find.text('main prompt')).dx,
+        lessThan(tester.getTopLeft(esc).dx),
+      );
+      expect(
+        tester.getTopLeft(find.text('cycle')).dx,
+        greaterThan(tester.getTopRight(right).dx),
+      );
+    },
+  );
+
+  testWidgets(
+    'keys that arrive while the strip is up are scrolled to — a question\'s '
+    'back to the head, cycle on to the end, never away from a question',
+    (tester) async {
+      await tester.pumpWidget(hintedBar(cycle));
+      await tester.pumpAndSettle();
+      final scroll = rowScroll(tester);
+
+      // Swiped along to cycle; then a queued question arrives.
+      scroll.jumpTo(scroll.position.maxScrollExtent);
+      await tester.pump();
+      expect(scroll.offset, greaterThan(0));
+      await tester.pumpWidget(hintedBar(queued));
+      await tester.pumpAndSettle();
+      expect(scroll.offset, 0);
+      expect(find.text('answer').hitTestable(), findsOneWidget);
+
+      // cycle arriving beside it leaves the question's key in view.
+      await tester.pumpWidget(hintedBar([...queued, ...cycle]));
+      await tester.pumpAndSettle();
+      expect(scroll.offset, 0);
+      expect(find.text('answer').hitTestable(), findsOneWidget);
+
+      // With no question on the pane, cycle arriving is brought into view.
+      await tester.pumpWidget(hintedBar(const []));
+      await tester.pumpWidget(hintedBar(cycle));
+      await tester.pumpAndSettle();
+      expect(scroll.offset, greaterThan(0));
+      expect(scroll.offset, scroll.position.maxScrollExtent);
+      expect(find.text('cycle').hitTestable(), findsOneWidget);
     },
   );
 }
