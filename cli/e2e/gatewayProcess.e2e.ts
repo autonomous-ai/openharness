@@ -234,6 +234,40 @@ describe('the gateway in its own process', () => {
       fleet = undefined
     })
 
+    it('keeps a remote pane connected when its agent list exceeds the desktop request limit', async () => {
+      const f = await startFleet({ envA: { HARNESSD_SERVICES: 'gateway' } })
+      fleet = f
+      await until('both machines connected to the backend', () => f.backend.nodeUp(f.a.machineId) && f.backend.nodeUp(f.b.machineId), 30_000)
+      const onB = await LocalClient.connect(f.b.daemon, { machineId: f.b.machineId })
+      clients.push(onB)
+      const agentIds: string[] = []
+      for (const index of [0, 1]) {
+        const cwd = join(f.b.daemon.projectsDir, `large-list-${index}`)
+        mkdirSync(cwd, { recursive: true })
+        const created = await onB.request('agent_create', { engine: 'claude', cwd, bypassPermission: true }, 60_000)
+        expect(created.error, JSON.stringify(created)).toBeUndefined()
+        agentIds.push(created.agent.id)
+        await until('the agent on B to bind', async () => (await row(onB, created.agent.id))?.sessionId || null, 45_000, 500)
+        // Each update fits the desktop request limit; the combined reply does
+        // not, as a real remote machine's larger agent roster did.
+        expect((await onB.request('agent_update', { agentId: created.agent.id, name: `${index}-${'a'.repeat(300 * 1024)}` })).error).toBeUndefined()
+      }
+      const before = connections(f.a.daemon)
+      const viaA = await LocalClient.connect(f.a.daemon, { machineId: f.b.machineId })
+      clients.push(viaA)
+      for (let read = 0; read < 3; read++) {
+        const list = await viaA.request<{ agents: Array<{ id: string }> }>('agents_list', {}, 10_000)
+        expect(Buffer.byteLength(JSON.stringify(list))).toBeGreaterThan(512 * 1024)
+        expect(list.agents.map((agent) => agent.id)).toEqual(expect.arrayContaining(agentIds))
+      }
+      const ended = viaA.next(isTurn('turn_ended', agentIds[0]), 30_000, 'a turn after the large agent list')
+      viaA.send('message', { agentId: agentIds[0], content: 'still connected after the large roster' })
+      await ended
+      expect(viaA.closed).toBe(false)
+      expect(connections(f.a.daemon)).toBe(before)
+      expect(f.a.daemon.coresStarted()).toBe(1)
+    })
+
     it('reaches B through A\'s gateway, sealed by it, and opens again once A\'s gateway is back', async () => {
       const f = await startFleet({ envA: { HARNESSD_SERVICES: 'gateway', HARNESSD_SERVICE_INITIAL_BACKOFF_MS: '200', HARNESSD_SERVICE_MAX_BACKOFF_MS: '1000' } })
       fleet = f

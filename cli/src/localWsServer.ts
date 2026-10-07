@@ -197,7 +197,7 @@ function rejectUpgrade(socket: Socket, status: number, reason: string): void {
   )
 }
 
-function jsonFrame(raw: RawData): Frame | null {
+function jsonFrame(raw: RawData, maxBytes = MAX_JSON_BYTES): Frame | null {
   const bytes = Buffer.isBuffer(raw)
     ? raw
     : raw instanceof ArrayBuffer
@@ -205,7 +205,7 @@ function jsonFrame(raw: RawData): Frame | null {
       : Array.isArray(raw)
         ? Buffer.concat(raw)
         : Buffer.alloc(0)
-  if (!bytes.length || bytes.length > MAX_JSON_BYTES) return null
+  if (!bytes.length || bytes.length > maxBytes) return null
   try {
     const value = JSON.parse(bytes.toString('utf8')) as unknown
     if (!value || typeof value !== 'object' || Array.isArray(value)) return null
@@ -477,7 +477,10 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
         if (!selected) return selectMachine(raw, isBinary)
         if (serviceLink) {
           if (isBinary) { serviceLink.receiveBinary(binaryBytes(raw)); return }
-          const frame = jsonFrame(raw)
+          // Tropic's agent list exceeded the window's 512 KiB limit and kept
+          // dropping the gateway, taking every remote pane with it. Only a
+          // token-authenticated service may use the existing transport ceiling.
+          const frame = jsonFrame(raw, MAX_WS_MESSAGE_BYTES)
           if (!frame) { close(4400, 'invalid json frame'); return }
           serviceLink.receive(frame)
           return

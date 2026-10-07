@@ -1213,6 +1213,46 @@ describe('local CLI WebSocket', () => {
     expect(accepted).toEqual(['search'])
   })
 
+  it('carries a large remote agent list on an authenticated service link without dropping it', async () => {
+    const receive = vi.fn(), closed = vi.fn()
+    const url = await start(new FakeBackend(), { services: {
+      accept: (_service, token, _sink, _close, welcome) => {
+        if (token !== 'boot-token') return null
+        welcome()
+        return { receive, receiveBinary: vi.fn(), closed }
+      },
+    } })
+    const ws = new WebSocket(url)
+    await onceOpen(ws)
+    const connected = onceMessage(ws)
+    ws.send(JSON.stringify({ type: 'machine_select', payload: {
+      machineId, localProtocolVersion: 1, role: 'service', service: 'gateway', token: 'boot-token',
+    } }))
+    await connected
+    const frame = { type: 'service_notice', payload: { kind: 'windowFrame', id: 'remote-window',
+      frame: { type: 'agents_list_result', payload: { agents: [{ id: 'remote-agent', name: 'a'.repeat(1024 * 1024) }] } },
+    } }
+    ws.send(JSON.stringify(frame))
+    await vi.waitFor(() => expect(receive).toHaveBeenCalledWith(frame))
+    ws.send(JSON.stringify({ type: 'service_notice', payload: { kind: 'status', connected: true } }))
+    await vi.waitFor(() => expect(receive).toHaveBeenCalledTimes(2))
+    expect(closed).not.toHaveBeenCalled()
+    ws.close()
+  })
+
+  it('keeps the smaller JSON limit for desktop clients even if a frame claims to be a service', async () => {
+    const backend = new FakeBackend()
+    const ws = new WebSocket(await start(backend))
+    await onceOpen(ws)
+    const connected = onceMessage(ws)
+    ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId, localProtocolVersion: 1 } }))
+    await connected
+    const closed = new Promise<number>((resolve) => ws.once('close', resolve))
+    ws.send(JSON.stringify({ type: 'service_notice', payload: { role: 'service', data: 'a'.repeat(512 * 1024) } }))
+    await expect(closed).resolves.toBe(4400)
+    expect(backend.frames).toEqual([])
+  })
+
   it('rejects browser origins and machine-id mismatches', async () => {
     const url = await start(new FakeBackend())
     const browser = new WebSocket(url, { origin: 'https://example.com' })
