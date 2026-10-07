@@ -66,6 +66,13 @@ pub fn named(app: &App, index: usize) -> bool {
         && ask(app, index).is_some_and(|a| matches!(app.autoname.answers.get(&a.key), Some(Answer::Name(_))))
 }
 
+/// The name auto rename has for window [index], the switch on or off — to tell its name from another.
+pub fn given(app: &App, index: usize) -> Option<String> {
+    if app.autoname.answers.is_empty() { return None }
+    let ask = ask(app, index)?;
+    match app.autoname.answers.get(&ask.key) { Some(Answer::Name(name)) => Some(name.clone()), _ => None }
+}
+
 impl App {
     /// Window [index]'s name by auto rename: the daemon's, else None — asked once (again while the
     /// daemon names it), the window keeping its name meanwhile.
@@ -189,6 +196,27 @@ mod tests {
         assert_eq!(app.tabs[0].name, "Harness TUI LMStudio");
         crate::commands::execute(&mut app, "set -g @hn-auto-rename off");
         assert_ne!(app.tabs[0].name, "Harness TUI LMStudio", "off: as before");
+        // automatic-rename off keeps the name a window found: auto rename's is not one to keep.
+        crate::commands::execute(&mut app, "set -g automatic-rename off");
+        crate::commands::execute(&mut app, "set -g @hn-auto-rename on");
+        assert_eq!(app.tabs[0].name, "Harness TUI LMStudio");
+        crate::commands::execute(&mut app, "set -g @hn-auto-rename off");
+        assert_eq!(app.tabs[0].name, "TUI layout spacing consistency", "its first harness's name, as before");
+    }
+
+    /// `@hn-window-name` / `@hn-window-active` set by hand derive the tab's format again — never over
+    /// one the user wrote.
+    #[tokio::test]
+    async fn the_tab_options_set_by_hand_keep_a_format_the_user_wrote() {
+        let mut app = app();
+        window(&mut app, &[1, 2]);
+        crate::commands::execute(&mut app, "set -g window-status-format '#I #W'");
+        crate::commands::execute(&mut app, "set -g @hn-window-active star");
+        crate::commands::execute(&mut app, "set -g @hn-window-name tmux");
+        assert_eq!(app.options.get("window-status-format", "", None).as_deref(), Some("#I #W"));
+        crate::commands::execute(&mut app, "set -gu window-status-format");
+        crate::commands::execute(&mut app, "set -g @hn-window-name pane");
+        assert!(app.options.get("window-status-format", "", None).is_some_and(|f| crate::options::derived_window_status(&f)));
     }
 
     #[tokio::test]

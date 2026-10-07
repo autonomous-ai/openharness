@@ -4655,6 +4655,12 @@ impl App {
             // Auto rename: a window with a repo, for the repo and its work (autoname.rs); until its
             // name comes, and without a repo, as before.
             if auto_rename { if let Some(name) = self.auto_name(index) { self.tabs[index].name = name; continue } }
+            // Auto rename off, a window still called what it named it: named again as before — also
+            // where automatic-rename is off, which would otherwise keep the name it found.
+            else if crate::autoname::given(self, index).is_some_and(|name| name == self.tabs[index].name) {
+                self.tabs[index].first_named = false;
+                self.name_tab_after_first_at(index);
+            }
             if let Some(name) = desk_names.get(&self.tabs[index].id) { self.tabs[index].name = name.clone(); continue }
             // tmux's automatic-rename (unless it is off): an unnamed window is called after its
             // active pane — a shell by what runs in it (automatic-rename-format: `zsh`, `vim`,
@@ -5523,6 +5529,7 @@ impl App {
         // (The bar and the frames change the panes' room: every program is told its size.)
         if matches!(knob, "status_bar" | "border_style" | "window_active" | "window_name") { self.redraw_all = true }
         if matches!(knob, "status_bar" | "border_style") { self.fit_panes() }
+        if knob == "auto_rename" { self.sync_titles(); self.redraw_all = true }
         let i = self.active;
         self.view_layout_changed(i);
         self.persist_look();
