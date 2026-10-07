@@ -2651,10 +2651,15 @@ class NewHarnessFormState extends State<NewHarnessForm> {
                   ),
                   if (meta?.isNotEmpty == true) ...[
                     const SizedBox(width: 12),
-                    Text(
-                      meta!,
-                      style: DesktopChrome.metadata(color: muted),
-                      maxLines: 1,
+                    // Shares the row with the name rather than pushing past its end: at 390
+                    // points and twice the text size, a fixed "79% remaining" overflowed by 111.
+                    Flexible(
+                      child: Text(
+                        meta!,
+                        style: DesktopChrome.metadata(color: muted),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
                     ),
                   ],
                   if (note?.isNotEmpty == true) ...[
