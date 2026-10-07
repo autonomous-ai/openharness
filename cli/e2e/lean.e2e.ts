@@ -63,6 +63,11 @@ describe('harnessd\'s master and services lean', () => {
     onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-120).join('\n')}`) })
     await d.start()
     await until('every service process', () => PROCESSES.every((name) => new RegExp(`service ${name} started`).test(d.log())) || null, 60_000, 200)
+    // "Started" is logged at spawn, before Node opens the module or sets its
+    // process title. Linux caught both the title assertion and bundle deletion
+    // racing models' initial load. Every case here needs established services.
+    await until('initial services to load', () =>
+      SERVICES.every(name => d.log().includes(`[service ${name}] connected to the core`)) || null, 30_000, 100)
     return d
   }
   async function agentWorks(d: IsolatedDaemon, engine: Engine): Promise<void> {
@@ -130,13 +135,6 @@ describe('harnessd\'s master and services lean', () => {
     // service with MODULE_NOT_FOUND until the master itself restarted. The lean bundle is only ever an
     // optimisation.
     const d = await fresh()
-    // The master logs "started" at spawn, before Node opens its entry file.
-    // Wait for initial services to load before removing the bundle: this case
-    // exercises restarting an established process after its bundle disappears.
-    // Otherwise models can still be opening that file and fail for a different
-    // reason (the Linux full-suite race caught while validating pane sync).
-    await until('initial services to load before bundle removal', () =>
-      SERVICES.every(name => d.log().includes(`[service ${name}] connected to the core`)) || null, 30_000, 100)
     const ours = /\[harnessd\] services run from (\S+), as this master does/.exec(d.log())![1]
     rmSync(dirname(ours), { recursive: true })
     const search = servicePids(d).get('search')!
