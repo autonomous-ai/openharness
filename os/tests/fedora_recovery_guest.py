@@ -264,6 +264,35 @@ def protected():
             'esp_uuid': run('blkid', '-s', 'UUID', '-o', 'value', DISK + '2')}
 
 
+def profile_evidence(root):
+    """Retain the actual factory profile inputs even if a later check refuses."""
+    data = EVIDENCE['profile'] = {}
+    data['os_release'] = (root / 'usr/lib/os-release').read_text()
+    data['runtime_text'] = (root / 'usr/share/harness-os/runtime.json').read_text()
+    data['semanage'] = (root / 'etc/selinux/semanage.conf').read_text()
+    configs = [root / 'etc/dnf/dnf.conf']
+    for directory in ('usr/share/dnf5/libdnf.conf.d', 'etc/dnf/libdnf5.conf.d'):
+        configs += sorted((root / directory).glob('*.conf'))
+    data['dnf'] = {}
+    for path in configs:
+        if path.is_file():
+            data['dnf'][str(path.relative_to(root))] = path.read_text()
+    data['rpm'] = {}
+    for pattern in ('usr/lib/rpm/macros', 'usr/lib/rpm/macros.d/macros.*',
+                    'usr/lib/rpm/platform/*/macros', 'usr/lib/rpm/fileattrs/*.attr',
+                    'usr/lib/rpm/*/macros', 'etc/rpm/macros', 'etc/rpm/macros.*',
+                    'etc/rpm/*/macros', 'root/.config/rpm/macros', 'root/.rpmmacros',
+                    'usr/lib/rpm/rpmrc', 'usr/lib/rpm/*/rpmrc', 'etc/rpmrc',
+                    'root/.rpmrc', 'root/.config/rpm/rpmrc'):
+        for path in sorted(root.glob(pattern)):
+            if path.is_file():
+                data['rpm'][str(path.relative_to(root))] = {
+                    'sha256': digest(path),
+                    'definitions': [line for line in path.read_text().splitlines()
+                                    if any(key in line for key in ('_dbpath', '_usr', 'macrofiles', 'include'))]}
+    return data
+
+
 def checkpoint():
     with target_open():
         before = protected()
@@ -271,6 +300,7 @@ def checkpoint():
         # Only the absent Apple firmware handoff is substituted, after strict VM/device guards.
         recovery.target.platform_esp = lambda: ESP_UUID
         with recovery.installation(PLAN, MAPPER) as engine:
+            profile_evidence(engine.top / 'root')
             result = engine.checkpoint(GENERATION)
         assert protected() == before
         with view() as root:
@@ -279,7 +309,7 @@ def checkpoint():
             assert manifest['phase'] == 'complete'
             save(rooted(root, OUT) / 'protected.json', before)
         save(RESULT, {'status': 'passed', 'phase': 'checkpoint', 'manifest': manifest, 'result': result,
-                      'protected_unchanged': True})
+                      'protected_unchanged': True, 'profile': EVIDENCE['profile']})
 
 
 def damage():
