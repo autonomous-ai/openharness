@@ -85,6 +85,16 @@ GitHub report a PR unstable, which `make merge-pr` refuses to merge. Once it has
 green, run it on pull requests, make `e2e-summary` required and add it to the evidence
 collector.
 
+Before a release, run the CLI's soak and chaos check (`cli/e2e/endurance.e2e.ts`), opt in with
+`SOAK=1`, on a Mac from the bundle: `SOAK=1 E2E_BUNDLE=1 SOAK_OUT=<folder> npx vitest run --config
+vitest.e2e.config.ts e2e/endurance.e2e.ts` in `cli/` (about 95 minutes). For an hour, six agents
+work without a break while windows come and go, terminals open and close, and the services and a
+fake dial are used. Every harnessd process is sampled every 30 s, and memory or open files that keep
+growing fail it. Then, for half an hour, the services' processes are killed, two at once, frozen and
+killed as they start. Each must answer at once while down and come back, the core must never restart,
+and every turn must be seen once, in order. `SOAK_MINUTES` and `CHAOS_MINUTES` shorten it.
+`SOAK_OUT` keeps the samples and the report.
+
 For repository process tooling only, `scope=process` runs its Python regression
 tests without installing or building unrelated components. It does not validate
 application changes. Workflow edits also need `actionlint` and a run exercising
