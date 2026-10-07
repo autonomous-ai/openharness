@@ -218,13 +218,13 @@ export function createGatewayLink(deps: GatewayLinkDeps) {
     backend: (method, path, body) => http(GATEWAY_CALLS.backend, { method, path, ...(body === undefined ? {} : { body }) }, 25_000),
     machines: async (fallback = false) => {
       const state = deps.start()
-      if (state.signedIn === false) {
+      const requestedOwner = text(record(state.account).machineId)
+      if (!requestedOwner) {
         const body = guestMachineList(text(state.computerId), text(state.machineName), text(state.hostname))
         deps.machines?.({ owner: null, body, fetchedAt: now() })
         return { status: 200, body }
       }
       const answer = await http(GATEWAY_CALLS.machines, { fallback }, 25_000)
-      const requestedOwner = text(record(state.account).machineId)
       const currentOwner = text(record(deps.start().account).machineId)
       if (requestedOwner !== currentOwner) return { status: 409, body: { success: false, error: { code: 'ACCOUNT_CHANGED', message: 'The account changed. Refresh and try again.' } } }
       if (answer.status === 401 || answer.status === 403) machines = null

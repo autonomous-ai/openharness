@@ -540,7 +540,7 @@ describe('account HTTP owned by the gateway', () => {
   })
 
   it('answers the guest list without waking a gateway or reading a previous account', async () => {
-    const { link, call, want, machines } = setup({ start: () => ({ signedIn: false, computerId: 'computer', machineName: 'Laptop', hostname: 'host' }) })
+    const { link, call, want, machines } = setup({ start: () => ({ signedIn: true, account: { machineId: null }, computerId: 'computer', machineName: 'Laptop', hostname: 'host' }) })
     expect(await link.ops.machines()).toMatchObject({ status: 200, body: { data: { guest: true, stale: false, machines: [
       { machineId: 'computer', computerId: 'computer', name: 'Laptop', hostname: 'host', status: 'online' },
     ] } } })
@@ -562,7 +562,7 @@ describe('account HTTP owned by the gateway', () => {
     owner = 'account-b'
     expect((await link.ops.machines(true)).status).toBe(503)
     owner = ''
-    expect((await link.ops.machines(true)).status).toBe(503)
+    expect(await link.ops.machines(true)).toMatchObject({ status: 200, body: { data: { guest: true, stale: false } } })
     owner = 'account-a'
     call.mockResolvedValueOnce({ status: 401, body: { error: 'NOT_SIGNED_IN' } })
     expect((await link.ops.machines(true)).status).toBe(401)
@@ -605,4 +605,10 @@ it('forgets reported presence when accounts change and ignores notices already i
   expect(machines).toHaveBeenLastCalledWith({ owner, body: null, fetchedAt: 1_000_000 })
   link.notice({ kind: 'machines', owner: 'a', body, fetchedAt: 1001 })
   expect(machines).toHaveBeenCalledTimes(2)
+})
+
+it('uses fresh account facts rather than the relay startup sign-in flag', async () => {
+  const { link, call } = setup({ start: () => ({ signedIn: false, account: { machineId: 'new-account' } }) })
+  expect(await link.ops.machines()).toEqual({ status: 200, body: { ok: true } })
+  expect(call).toHaveBeenCalledWith(GATEWAY_CALLS.machines, { fallback: false }, 25_000)
 })
