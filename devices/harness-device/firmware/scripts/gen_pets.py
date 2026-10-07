@@ -7,8 +7,8 @@
 Claude Code: Clawd, drawn at the glass's 1 px with anti-aliased edges (assets/pets/claude, exported by
 mockup/clawd_v3.py; the look is mockup/clawd-v3.html): the small pet is the rest loop (24 steps of 120 ms, cell
 frames like Muse's), three scenes — working 26 steps of 55 ms, listening 56 of 60 (its sound arcs drawn by
-focus.c), sending 40 of 60 — each a few body poses moved by a per-step dy, and a props sprite; and the alert, 20
-steps of 65 ms of a "!" bubble over the working scene (CLAUDE_BUBBLE_AT).
+focus.c), sending 40 of 60 — each a few body poses moved by a per-step dy, and a props sprite.
+Every pet's alert is the same blue bell bubble over its working scene (ALERT_BUBBLES).
 Codex: its small pet is the robot pack's idle, review and waiting loops drawn at 2x (mockup/codex-rest.html), and
 its three scenes come from the same pack (assets/pets/codex; mockup/codex_options.py W2 / L1 / S2):
 the pack's 192 x 208 robot frames at one byte per pixel (cell 1) and an overlay sprite (the sandbox bubble, the
@@ -38,6 +38,7 @@ gen_focus_marks.py: RGB565 in panel order plus alpha8 (0 or 255 only).
 """
 import json
 import math
+import re
 import sys
 from pathlib import Path
 
@@ -345,7 +346,7 @@ def generate_pack_scene(prefix, kind):
         out.append(f'static const ht_pet_bars_t {prefix}_bars = {{{{{",".join(str(x - box[0]) for x in BAR_X)}}},{BAR_CY - box[1]},'
                    f'{BAR_W + 1},{BAR_RADIUS},{BAR_MIN},{BAR_SWING},{{{fills}}},{BAR_PERIOD_MS},{BAR_PHASE}f}};\n')
         bars = f',&{prefix}_bars'
-    out.append(f'static const ht_pet_scene_t {prefix} = {{{w},{h},{prefix}_frames,{prefix}_loop,{steps},{step_ms},&{ov},{dx},{dy}{bars},NULL,NULL}};\n')
+    out.append(f'static const ht_pet_scene_t {prefix} = {{{w},{h},{prefix}_frames,{prefix}_loop,{steps},{step_ms},&{ov},{dx},{dy}{bars},NULL,NULL,false}};\n')
     return out, n + on, nbytes + obytes + (len(palette) + len(opal)) * 2
 
 
@@ -520,14 +521,14 @@ def generate_muse_scene(prefix, kind):
                    f'{round(wv["width"] * 16)},{wv["half_angle_deg"]},{wv["count"]},{{{",".join(map(str, wv["colour"]))}}},'
                    f'{wv["period_ms"]},0}};\n')
         waves = f'&{prefix}_waves'
-    out.append(f'static const ht_pet_scene_t {prefix} = {{{w},{h},{prefix}_frames,{prefix}_loop,{steps},{meta["step_ms"]},{ov_ref},{dx},{dy},NULL,{waves},NULL}};\n')
+    out.append(f'static const ht_pet_scene_t {prefix} = {{{w},{h},{prefix}_frames,{prefix}_loop,{steps},{meta["step_ms"]},{ov_ref},{dx},{dy},NULL,{waves},NULL,false}};\n')
     return out, n + extra, nbytes + obytes + len(palette) * 2
 
 
 # ---- Claude Code's Clawd: PNG frames (assets/pets/claude, exported by mockup/clawd_v3.py) ----
 # Drawn at the glass's 1 px with every edge anti-aliased into opaque colour over black (the dial keeps on/off
 # alpha), at 55-65 ms a step. Each scene is a body (a few stored poses; a hop or a nod is the step's dy, not a new
-# pose) and per step a props sprite (the pan and food, the letter and the post box's flag, the alert's bubble) placed
+# pose) and per step a props sprite (the pan and food, the letter and the post box's flag) placed
 # per px; a scene's `cell2` sprites, if any, are stored at 2 px cells. Listening's sound arcs
 # are drawn by focus.c (ht_pet_waves_t, one set at each cup). The small pet is the rest loop, 24 steps.
 CLAUDE = root / 'assets/pets/claude'
@@ -597,7 +598,7 @@ def generate_claude_scene(prefix, name, levels, bias):
                    f'{wv["period_ms"]},{round(wv["gap"] * 16)}}};\n')
         waves = f'&{prefix}_waves'
     out.append(f'static const ht_pet_scene_t {prefix} = {{{w},{h},{prefix}_frames,{prefix}_loop,{len(steps)},'
-               f'{meta["step_ms"]},{ov_ref},{dx},{dy},NULL,{waves},{prefix}_dy}};\n')
+               f'{meta["step_ms"]},{ov_ref},{dx},{dy},NULL,{waves},{prefix}_dy,false}};\n')
     return out, n + on, nbytes + obytes + len(palette) * 2 + len(dys)
 
 
@@ -688,13 +689,22 @@ def generate_pet(prefix, states, draw, size, cells_out=False, cell=1):
     return out, len(refs), loops, len(refs) * size[0] * size[1] * 3, frames
 
 
-# ---- THE ALERT SCENES: a notice arrives while the agent works (owner, 2026-10-05; mockup/notice-pets.html) ----
-# Played once in the working scene's place, 17 steps of 110 ms: the pet reacts (Clawd hops with its arms up, the
-# Codex robot jumps, Jolly waves) and from the fourth step a small bubble with a bell pops up beside it — the
-# scene's overlay. Then ui_habitat.c flies a blue dot from the bubble round the rim to 12 o'clock, where it stays
-# until the notice is read. Each is placed exactly where the mockup put it on the glass.
-ALERT_STEPS, ALERT_MS, ALERT_BIAS = 17, 110, 4      # ALERT_BIAS: focus.c draws it in the working slot (bias 4)
+# ---- THE ALERT: a notice arrives while the agent works (owner, 2026-10-05; one bell bubble for every pet,
+# 2026-10-07, mockup/alert_bell.py "a blue bell everywhere") ----
+# The working scene plays on and a bubble with a blue bell pops up beside the pet for ~5 s: 46 steps of 110 ms,
+# nothing for four, popped in over three (a little overshoot), then bobbing while the bell rings in bursts. Then
+# ui_habitat.c flies a blue dot from the bubble round the rim to 12 o'clock, where it stays until the notice is read.
+# The scene has no frames of its own (focus.c draws the working scene under it); the overlay's `at` is from the
+# working scene's origin. Codex's bubble takes its sandbox bubble's place, which steps aside meanwhile.
+ALERT_STEPS, ALERT_MS = 46, 110
 ABLUE = (0, 111, 255)
+ALERT_RING = [0, 16, -16, 12, -12, 7, -7, 0, 0, 0, 0, 0]      # the bell's swing, degrees per step, from step 6
+# engine: the bubble's centre on the glass, its fill and edge, whether it takes the working overlay's place
+ALERT_BUBBLES = {
+    'claude': ((313, 160), (246, 242, 238), (246, 242, 238), False),
+    'codex': ((328, 160), CX_FILL, CX_LINE, True),
+    'muse': ((296, 150), (246, 244, 240), (205, 200, 192), False),
+}
 
 
 def abell(d, cx, cy, s, col):
@@ -704,114 +714,53 @@ def abell(d, cx, cy, s, col):
     d.ellipse([cx - 1.6 * s, cy + 4.5 * s, cx + 1.6 * s, cy + 7 * s], fill=col)
 
 
-def bubble_round(im, cx, cy, k, fill, edge, ink):
-    """Codex's and Muse's bubble: `k` 0..1 pops it in with a little overshoot; the bell and the blue dot it becomes."""
+def bell_bubble(im, cx, cy, k, fill, edge, angle):
+    """A 50 x 44 bubble, `k` 0..1 popping it in with a little overshoot, its tail at the lower left, the blue bell
+    in its middle swung `angle` degrees about its top. No anti-aliasing (exact_overlay keeps a handful of colours)."""
     s = (1.0 + 0.18 * math.sin(k * math.pi) if k < 1 else 1.0) * min(1.0, k * 1.6)
-    w, h = 54 * s, 40 * s
+    w, h = 50 * s, 44 * s
     d = ImageDraw.Draw(im)
-    tx = cx - w / 2 + 10 * s
+    tx = cx - w / 2 + 11 * s
     d.polygon([(tx - 6 * s, cy + h / 2 - 2), (tx + 6 * s, cy + h / 2 - 2), (tx - 10 * s, cy + h / 2 + 11 * s)], fill=edge)
-    d.rounded_rectangle([cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2], radius=12 * s, fill=fill, outline=edge, width=2)
+    d.rounded_rectangle([cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2], radius=13 * s, fill=fill, outline=edge, width=2)
     d.polygon([(tx - 4 * s, cy + h / 2 - 3), (tx + 4 * s, cy + h / 2 - 3), (tx - 7 * s, cy + h / 2 + 7 * s)], fill=fill)
-    abell(d, cx - 8 * s, cy - 1, 1.15 * s, ink)
-    d.ellipse([cx + 7 * s, cy - 6 * s, cx + 19 * s, cy + 6 * s], fill=ABLUE)
+    bell = Image.new('RGBA', (80, 80), (0, 0, 0, 0))
+    abell(ImageDraw.Draw(bell), 40, 40, 1.75 * s, ABLUE)
+    bell = bell.rotate(angle, resample=Image.NEAREST, center=(40, 40 - 9 * s))
+    im.alpha_composite(bell, (round(cx - 40), round(cy - 1.5 * s - 40)))
 
 
-def alert_bubbles(at, style):
-    """The overlay per step, on a glass-sized canvas: nothing for three steps, popped in over three, then bobbing."""
+def alert_bubbles(at, fill, edge):
+    """The overlay per step, on a glass-sized canvas."""
     out = []
     for t in range(ALERT_STEPS):
         im = Image.new('RGBA', (466, 466), (0, 0, 0, 0))
-        if t >= 3:
-            k = min(1.0, (t - 3) / 3)
-            cx, cy = at[0], at[1] - (2 if ((t + 1) // 2) % 2 else 0)
-            if k > 0:
-                bubble_round(im, cx, cy, k, *style)
+        k = min(1.0, (t - 3) / 3)
+        if k > 0:
+            angle = ALERT_RING[(t - 6) % len(ALERT_RING)] if t >= 6 else 0
+            bell_bubble(im, at[0], at[1] - (2 if ((t + 1) // 2) % 2 else 0), k, fill, edge, angle)
         out.append(im)
     return out
 
 
-def alert_spec(engine):
-    """(frames, cell, where the frames' canvas sits on the glass, frame per step, the bubble's centre and style)."""
-    if engine == 'codex':
-        style = (ImageColor.getrgb(CX_FILL), ImageColor.getrgb(CX_LINE), (200, 224, 255))
-        return pack_frames('jumping', 5), 1, ((466 - CW) // 2 + RX, (466 - CH) // 2 + RY), \
-            [0, 1, 2, 3, 4] * 3 + [0, 0], (318, 148), style
-    spec = json.loads((MUSE / 'alert.json').read_text())
-    return muse_frames('alert'), 1, (spec['x'], spec['y']), spec['seq'], (318, 140), \
-        ((246, 244, 240), (205, 200, 192), (40, 60, 110))
-
-
-def generate_alert_scene(prefix, engine):
-    frames, cell, (gx, gy), seq, at, style = alert_spec(engine)
-    assert len(seq) == ALERT_STEPS
-    box = union_box(frames)
-    crops = [f.crop(box) for f in frames]
-    grids, palette = quantise_pieces(crops)
-    assert len(palette) <= 256
-    cols, rows = box[2] - box[0], box[3] - box[1]
-    w, h = cols * cell, rows * cell
-    out = [f'static const uint16_t {prefix}_pal[{len(palette)}] = {{' + ','.join(str(0 if k == 0 else rgb565_panel(c)) for k, c in enumerate(palette)) + '};\n']
-    code, order, n, nbytes = cell_frames(prefix, [(cols, rows, g) for g in grids], f'{prefix}_pal', cell)
-    out += code
-    loop = [order[i] for i in seq]
-    out.append(f'static const uint8_t {prefix}_loop[{len(loop)}] = {{' + ','.join(map(str, loop)) + '};\n')
-    x0, y0 = gx + box[0] * cell, gy + box[1] * cell
-    shapes, opal = exact_overlay(alert_bubbles(at, style))
-    ov = prefix + '_ov'
-    out.append(f'static const uint16_t {ov}_pal[{len(opal)}] = {{' + ','.join(str(0 if k == 0 else rgb565_panel(c)) for k, c in enumerate(opal)) + '};\n')
-    ocode, oorder, on, obytes = cell_frames(ov, [(c_, r_, g_) for c_, r_, g_, _ in shapes], f'{ov}_pal')
-    out += ocode
-    out.append(f'static const uint8_t {ov}_loop[{len(oorder)}] = {{' + ','.join(map(str, oorder)) + '};\n')
-    oat = [(x - x0, y - y0) if (x or y) else (0, 0) for *_, (x, y) in shapes]
-    out.append(f'static const int16_t {ov}_at[{len(oat)}][2] = {{' + ','.join(f'{{{x},{y}}}' for x, y in oat) + '};\n')
-    out.append(f'static const ht_pet_overlay_t {ov} = {{{ov}_frames,{ov}_loop,{ov}_at}};\n')
-    dx, dy = x0 - (466 - w) // 2, y0 - (233 - h // 2 + ALERT_BIAS)
-    out.append(f'static const ht_pet_scene_t {prefix} = {{{w},{h},{prefix}_frames,{prefix}_loop,{ALERT_STEPS},{ALERT_MS},'
-               f'&{ov},{dx},{dy},NULL,NULL,NULL}};\n')
-    return out, n + on, nbytes + obytes + (len(palette) + len(opal)) * 2
-
-
-# Claude's alert is a bubble only (owner, 2026-10-06, mockup/claude_alert_options.py "E"): the working scene plays
-# on and the "!" bubble pops up beside the chef's hat. The bubble is the top of each alert props picture (the pan at
-# its foot is the working scene's own); a step's (px, py) plus CLAUDE_BUBBLE_AT is its place from the working
-# body's top-left. The alert body poses are not stored (they cost 157 KB; the whole alert was 269 KB).
-CLAUDE_BUBBLE_AT = (-205, -115)
-
-
-def bubble_top(p):
-    """The props picture down to its first empty row (the bubble without the pan), cut to its ink: (picture, its
-    top-left in the props picture), or None when the picture is the pan alone."""
-    a = p.getchannel('A')
-    rows = [y for y in range(p.height) if a.crop((0, y, p.width, y + 1)).getbbox()]
-    gap = next((y for y in range(rows[0], rows[-1]) if y not in rows), None)
-    if not gap:
-        return None
-    box = a.crop((0, 0, p.width, gap)).getbbox()
-    return p.crop(box), (box[0], box[1])
-
-
-def generate_claude_bubble(prefix):
-    meta = CLAUDE_SCENES['alert']
-    steps = meta['steps']
-    tops = [bubble_top(p) for p in claude_frames('alert/props')]
-    used = sorted({st[1] for st in steps if tops[st[1]] is not None})
-    pieces = [tops[i][0] for i in used]
-    grids, opal = quantise_pieces(pieces)
+def generate_alert(prefix, engine, work_code, work_prefix):
+    """The bell bubble over the working scene; `work_code` is the working scene's generated C, read for its origin."""
+    at, fill, edge, covers = ALERT_BUBBLES[engine]
+    m = re.search(rf'ht_pet_scene_t {work_prefix} = {{(-?\d+),(-?\d+),[^,]*,[^,]*,\d+,\d+,[^,]*,(-?\d+),(-?\d+),', work_code)
+    w, h, dx, dy = map(int, m.groups())
+    ox, oy = (466 - w) // 2 + dx, 233 - h // 2 + 4 + dy             # focus.c scene_origin, bias 4
+    shapes, opal = exact_overlay(alert_bubbles(at, ImageColor.getrgb(fill) if isinstance(fill, str) else fill,
+                                               ImageColor.getrgb(edge) if isinstance(edge, str) else edge))
     ov = prefix + '_ov'
     out = [f'static const uint16_t {ov}_pal[{len(opal)}] = {{' + ','.join(str(0 if k == 0 else rgb565_panel(c)) for k, c in enumerate(opal)) + '};\n']
-    shapes = [(p.width, p.height, g) for p, g in zip(pieces, grids)] + [(1, 1, [0])]   # the last: "nothing now"
-    code, order, n, nbytes = cell_frames(ov, shapes, f'{ov}_pal')
+    code, order, n, nbytes = cell_frames(ov, [(c_, r_, g_) for c_, r_, g_, _ in shapes], f'{ov}_pal')
     out += code
-    none = order[-1]
-    loop = [order[used.index(st[1])] if tops[st[1]] is not None else none for st in steps]
-    at = [(st[2] + tops[st[1]][1][0] + CLAUDE_BUBBLE_AT[0], st[3] + tops[st[1]][1][1] + CLAUDE_BUBBLE_AT[1])
-          if tops[st[1]] is not None else (0, 0) for st in steps]
-    out.append(f'static const uint8_t {ov}_loop[{len(loop)}] = {{' + ','.join(map(str, loop)) + '};\n')
-    out.append(f'static const int16_t {ov}_at[{len(at)}][2] = {{' + ','.join(f'{{{x},{y}}}' for x, y in at) + '};\n')
+    out.append(f'static const uint8_t {ov}_loop[{len(order)}] = {{' + ','.join(map(str, order)) + '};\n')
+    oat = [(x - ox, y - oy) if (x or y) else (0, 0) for *_, (x, y) in shapes]
+    out.append(f'static const int16_t {ov}_at[{len(oat)}][2] = {{' + ','.join(f'{{{x},{y}}}' for x, y in oat) + '};\n')
     out.append(f'static const ht_pet_overlay_t {ov} = {{{ov}_frames,{ov}_loop,{ov}_at}};\n')
-    # No frames of its own: focus.c plays the working scene under it.
-    out.append(f'static const ht_pet_scene_t {prefix} = {{0,0,NULL,NULL,{len(steps)},{meta["step_ms"]},&{ov},0,0,NULL,NULL,NULL}};\n')
+    out.append(f'static const ht_pet_scene_t {prefix} = {{0,0,NULL,NULL,{ALERT_STEPS},{ALERT_MS},&{ov},0,0,NULL,NULL,NULL,'
+               f'{"true" if covers else "false"}}};\n')
     return out, n, nbytes + len(opal) * 2
 
 
@@ -859,10 +808,7 @@ def generate():
             out += code
             scene_stats.append((sprefix, n, nbytes))
             refs_to.append('&' + sprefix)
-        if engine == 'claude':
-            code, n, nbytes = generate_claude_bubble('claude_alert')
-        else:
-            code, n, nbytes = generate_alert_scene(f'{engine}_alert', engine)
+        code, n, nbytes = generate_alert(f'{engine}_alert', engine, ''.join(out), SCENES[engine][0][0])
         out += code
         scene_stats.append((f'{engine}_alert', n, nbytes))
         table.append(f'{{"{engine}",{w},{h},{"NULL" if cells_out else prefix + "_frames"},{prefix}_loops,{prefix}_step_ms,{",".join(refs_to)},{prefix + "_frames" if cells_out else "NULL"},&{engine}_alert,{0 if n_steps == STEPS else n_steps}}}')
