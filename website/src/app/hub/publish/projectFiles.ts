@@ -8,7 +8,10 @@ const portable = /\.(html|css|js|mjs|ts|tsx|jsx|json|md|svg|py|typ|strudel|txt|c
 const binary = /\.(png|jpe?g|webp|glb|pdf)$/i;
 const sentNote = 'Images count about a third larger than on disk.';
 
-export type ProjectFolder = { files: SourceFile[]; viewerPath: string; origin?: Pick<HubDraft, 'forkedFrom' | 'harnessId'> };
+export type ProjectFolder = { files: SourceFile[]; viewerPath: string; origin?: Pick<HubDraft, 'forkedFrom' | 'harnessId'> & { output?: string } };
+
+/** A fork bundle's output page as it arrived, to tell a new version from the original. */
+export const originalOutput = (bundle: HubDraft) => bundle.files?.find(file => file.path === bundle.viewerPath)?.content;
 
 function base64(bytes: Uint8Array): string {
   let raw = '';
@@ -26,7 +29,7 @@ export async function readProjectFolder(selected: Iterable<File>, preferredViewe
     if (bundleFiles.test(file.name)) continue;
     if (file.name === 'OPEN-HARNESS.json') {
       const original = validateDraft(JSON.parse(await file.text()));
-      origin = { forkedFrom: original.forkedFrom, harnessId: original.harnessId };
+      origin = { forkedFrom: original.forkedFrom, harnessId: original.harnessId, output: originalOutput(original) };
       continue;
     }
     if (!portable.test(path)) continue;

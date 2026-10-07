@@ -14,7 +14,7 @@ import { DetailsFields } from './components/DetailsFields';
 import { FilesReview } from './components/FilesReview';
 import { OutputInputs, SourceInputs } from './components/ProjectInputs';
 import { PublishChecks } from './components/PublishChecks';
-import { readCover, readProjectFolder } from './projectFiles';
+import { originalOutput, readCover, readProjectFolder } from './projectFiles';
 import { toSnapshot, usePublishDraft, type PublishDraft } from './usePublishDraft';
 import styles from '../community.module.css';
 
@@ -30,7 +30,8 @@ export default function PublishPage() {
   const marker = missingMarker(draft.harnessId, draft.files.map(file => file.path));
   const html = draft.files.find(file => file.path === draft.viewerPath && !file.encoding)?.content;
   const outside = useMemo(() => html ? outsideResources(html) : [], [html]);
-  const ready = !!signedIn && !!html && confirmed && !marker && secretsChecked;
+  const unchanged = html !== undefined && html === draft.originalOutput;
+  const ready = !!signedIn && !!html && !unchanged && confirmed && !marker && secretsChecked;
 
   /** A changed project has to be reviewed again before it is published. */
   function replaceProject(patch: Partial<PublishDraft>) { update(patch); setConfirmed(false); setError(''); }
@@ -39,11 +40,13 @@ export default function PublishPage() {
   }
   const importBundle = (file: File) => attempt(async () => {
     if (file.size > 6_000_000) throw new Error('Keep the project under 6 MB.');
-    applyBundle(validateDraft(JSON.parse(await file.text()))); setConfirmed(false); setError('');
+    const bundle = validateDraft(JSON.parse(await file.text()));
+    applyBundle(bundle); update({ originalOutput: originalOutput(bundle) }); setConfirmed(false); setError('');
   }, 'This bundle could not be read.');
   const importFolder = (files: FileList) => attempt(async () => {
     const folder = await readProjectFolder(Array.from(files), draft.viewerPath);
-    replaceProject({ files: folder.files, viewerPath: folder.viewerPath, ...folder.origin });
+    const { output, ...origin } = folder.origin || {};
+    replaceProject({ files: folder.files, viewerPath: folder.viewerPath, ...origin, ...(folder.origin ? { originalOutput: output } : {}) });
   }, 'Could not read the project files.');
   const importOutput = (file: File) => attempt(async () => {
     if (file.size > 3_000_000) throw new Error('Keep the self-contained HTML output under 3 MB.');
@@ -77,7 +80,7 @@ export default function PublishPage() {
       {draft.contextNote && <p className={styles.notice}>{draft.contextNote}</p>}
       {html && <section className={styles.publishPreview}><h2>Review your output</h2><iframe title="Publication preview" sandbox="allow-scripts" referrerPolicy="no-referrer" srcDoc={previewDocument(html)} /></section>}
       {draft.forkedFrom && <p className={styles.notice}>The original harness will stay credited on your publication.</p>}
-      <PublishChecks noOutput={!!draft.files.length && html === undefined} outside={outside} missingMarker={marker} findings={findings} acknowledged={secretsChecked} onAcknowledge={value => setCheckedSecrets(value ? findingsKey : '')} />
+      <PublishChecks noOutput={!!draft.files.length && html === undefined} unchanged={unchanged ? draft.viewerPath : null} outside={outside} missingMarker={marker} findings={findings} acknowledged={secretsChecked} onAcknowledge={value => setCheckedSecrets(value ? findingsKey : '')} />
       <label className={styles.check}><input required type="checkbox" name="confirmation" checked={confirmed} onChange={event => setConfirmed(event.target.checked)} /><span>I have permission to publish these files and this conversation under the MIT license. I have reviewed them for private information.</span></label>
       {(error || saveError) && <p className={styles.error} role="alert">{error || saveError}</p>}
       <button className={styles.primary} disabled={busy || !ready}>{busy ? 'Publishing…' : 'Publish harness'}</button>

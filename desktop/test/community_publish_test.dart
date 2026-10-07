@@ -115,6 +115,39 @@ void main() {
     expect(draft['viewerPath'], 'index.html');
     expect(draft['forkedFrom'], 'starter-moonlight');
   });
+  test('refuses a fork whose output is still the original', () async {
+    const poster = '<img src="data:image/png;base64,AA==">';
+    await file('preview.html', poster);
+    await file('main.typ', '= My changes');
+    await file(
+      'OPEN-HARNESS.json',
+      jsonEncode({
+        'forkedFrom': 'starter-portable-light',
+        'viewerPath': 'preview.html',
+        'files': [
+          {'path': 'preview.html', 'content': poster},
+          {'path': 'main.typ', 'content': '= Original'},
+        ],
+      }),
+    );
+    Future<Map<String, dynamic>> build() => buildPublicationDraft(
+      folder: root.path,
+      title: 'Mine',
+      engine: 'codex',
+    );
+    await expectLater(
+      build(),
+      throwsA(
+        isA<FormatException>().having(
+          (e) => e.message,
+          'message',
+          contains('preview.html is still the original'),
+        ),
+      ),
+    );
+    await file('preview.html', '<h1>My page</h1>');
+    expect((await build())['viewerPath'], 'preview.html');
+  });
   test('leaves out what does not fit and names it, keeping the output and the harness source', () async {
     await file('preview.html', '<p>Ready</p>');
     await file('sim/hello.py', 'print("marker")');

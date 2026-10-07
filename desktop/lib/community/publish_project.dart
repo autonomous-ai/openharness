@@ -25,6 +25,7 @@ Future<Map<String, dynamic>> buildPublicationDraft({
     marker: marker,
     viewer: previous['viewerPath'] is String ? previous['viewerPath'] : null,
   );
+  _refuseUnchangedOutput(previous, selection);
   final conversation = publicationTurns(tail);
   final hasMarker = selection.files.any((file) => file['path'] == marker);
   final agent = hubEngines[engine];
@@ -56,6 +57,26 @@ Future<Map<String, dynamic>> buildPublicationDraft({
         'The Hub does not list $engine yet. Choose the closest agent.',
     ].join(' '),
   };
+}
+
+/// A fork's output exactly as it arrived shows the original, not this version: a featured
+/// starter's preview.html is only its poster, while the real result lives in the harness's viewer.
+void _refuseUnchangedOutput(
+  Map<String, dynamic> previous,
+  ProjectSelection selection,
+) {
+  final original = (previous['files'] as List? ?? const [])
+      .whereType<Map>()
+      .where((file) => file['path'] == selection.viewerPath)
+      .firstOrNull;
+  final current = selection.files
+      .where((file) => file['path'] == selection.viewerPath)
+      .first;
+  if (original == null || original['content'] != current['content']) return;
+  throw FormatException(
+    '${selection.viewerPath} is still the original\'s and has none of your changes. '
+    'Ask your agent to update it to show the current result, then publish again.',
+  );
 }
 
 String _conversationNote(

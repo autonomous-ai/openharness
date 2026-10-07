@@ -18,10 +18,16 @@ describe('explicit publication', () => {
     expect(screen.getByTitle('Publication preview')).toHaveAttribute('sandbox', 'allow-scripts');
     expect(screen.getByRole('button', { name: 'Publish harness' })).toBeDisabled();
     expect(mocks.request).not.toHaveBeenCalled();
+    expect(screen.getByText(/index.html is still the original/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('checkbox', { name: /I have permission/ }));
+    expect(screen.getByRole('button', { name: 'Publish harness' })).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('Upload HTML output'), { target: { files: [Object.assign(new File(['<h1>My new orbit</h1>'], 'index.html'), { text: async () => '<h1>My new orbit</h1>' })] } });
+    await waitFor(() => expect(screen.queryByText(/still the original/)).not.toBeInTheDocument());
     fireEvent.click(screen.getByRole('checkbox', { name: /I have permission/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Publish harness' }));
     await waitFor(() => expect(mocks.push).toHaveBeenCalledWith('/hub/published-fixture'));
-    expect(mocks.request.mock.calls[0][1].body).toMatchObject({ forkedFrom: 'starter-orbit', confirmed: true, license: 'MIT', files: project.files, conversation: project.conversation });
+    expect(mocks.request.mock.calls[0][1].body).toMatchObject({ forkedFrom: 'starter-orbit', confirmed: true, license: 'MIT', files: [{ path: 'index.html', content: '<h1>My new orbit</h1>' }], conversation: project.conversation });
+    expect(mocks.request.mock.calls[0][1].body).not.toHaveProperty('originalOutput');
   });
   it('keeps a draft after a failed publication and requires sign-in', async () => {
     mocks.headers.mockReturnValue({}); render(<PublishPage />); await act(async () => {});
@@ -49,6 +55,8 @@ describe('explicit publication', () => {
     fireEvent.click(screen.getByRole('checkbox', { name: /None of them is a real credential/ }));
     expect(screen.getByRole('button', { name: 'Publish harness' })).toBeDisabled();
     fireEvent.change(screen.getByLabelText('Harness'), { target: { value: '' } });
+    fireEvent.change(screen.getByLabelText('Upload HTML output'), { target: { files: [Object.assign(new File(['<h1>Mine</h1>'], 'index.html'), { text: async () => '<h1>Mine</h1>' })] } });
+    await waitFor(() => expect(screen.queryByText(/still the original/)).not.toBeInTheDocument());
     fireEvent.click(screen.getByRole('checkbox', { name: /I have permission/ }));
     expect(screen.getByRole('button', { name: 'Publish harness' })).toBeEnabled();
   });

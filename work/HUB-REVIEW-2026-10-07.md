@@ -196,6 +196,11 @@ Steps 1–5 are done on `fix/hub-review`:
   now choose only `preview.html`, or the page a fork was published with. Without one, the desktop
   asks for a preview.html that runs on its own (for a review, a page presenting it). The review page
   asks for one too, and names files or addresses an output loads that the sandbox cannot reach.
+- **A fork's unchanged output is refused.** A featured starter's `preview.html` is only its poster:
+  the real result (a Typst PDF, a Blender model) lives in the harness's own viewer. Republishing a
+  fork would have shown the original's picture. Now the desktop and the review page refuse an
+  output identical to the one the fork arrived with, and ask for a page showing the current result.
+  Showing native outputs (PDF, GLB) on the Hub is still open.
 
 Checks: backend typecheck and the full suite (1153 tests), website `tsc`, the full suite (103) and
 lint (no new findings), desktop `flutter analyze` and the community, fork and share tests (89), and
