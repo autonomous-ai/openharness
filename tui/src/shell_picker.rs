@@ -174,7 +174,18 @@ impl Drop for Request {
 }
 
 fn clean(s: &str) -> String { s.chars().filter(|c| !c.is_control()).collect() }
-pub fn exchange(verb:&str,value:&serde_json::Value)->io::Result<serde_json::Value> {
+fn is_loading(items_loaded:bool,status:&str)->bool { !items_loaded || status.ends_with('…') }
+fn frame_due(loading:bool,last:Instant,now:Instant)->bool { loading && now.duration_since(last)>=Duration::from_millis(120) }
+// A failed list request is retried a few times, then left showing its message.
+fn retry_after(failures:u8)->Option<Duration> { (failures<=3).then(||Duration::from_secs(2)) }
+fn paint_inline(next:&mut Buffer,area:Rect,picker:&mut Picker,loading:bool,lines:Vec<Line<'static>>,bottom:bool)->Position {
+    // `inline_fzf` spins only for a busy picker; mark it for this paint alone.
+    let busy=std::mem::replace(&mut picker.busy,loading.then(||"loading".to_string()));
+    let at=crate::ui::inline_fzf(next,area,picker,loading,lines,bottom);
+    picker.busy=busy;at
+}
+/// `waiting` names the computer; the line turns a spinner until the answer comes.
+pub fn exchange(verb:&str,value:&serde_json::Value,waiting:&str)->io::Result<serde_json::Value> {
     use std::sync::atomic::{AtomicBool,Ordering};
     static INTERRUPTED:AtomicBool=AtomicBool::new(false);
     extern "C" fn interrupted(_:libc::c_int) {INTERRUPTED.store(true,Ordering::Relaxed);}
@@ -184,14 +195,30 @@ pub fn exchange(verb:&str,value:&serde_json::Value)->io::Result<serde_json::Valu
     let _signal=Signal(unsafe{libc::signal(libc::SIGINT,interrupted as *const () as libc::sighandler_t)});
     let mut out=OpenOptions::new().read(true).write(true).open("/dev/tty")?;
     let mut request=Request::new(&mut out,verb,&value.to_string())?;
-    loop {
+    const FRAMES:[&str;10]=["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"];
+    let begun=Instant::now();
+    let mut shown=usize::MAX;
+    let result=loop {
         if INTERRUPTED.load(Ordering::Relaxed) {
-            write!(out,"\x1b]633;hn;{};{};cancel;\x07",request.token,request.id)?;out.flush()?;
-            return Err(io::Error::new(io::ErrorKind::Interrupted,"Launch cancelled."))
+            let cancelled=write!(out,"\x1b]633;hn;{};{};cancel;\x07",request.token,request.id).and_then(|_|out.flush());
+            break cancelled.and_then(|_|Err(io::Error::new(io::ErrorKind::Interrupted,"Launch cancelled.")))
         }
-        if let Some(value)=request.poll_value(&mut out)? { return Ok(value) }
+        match request.poll_value(&mut out) {
+            Ok(Some(value))=>break Ok(value),
+            Ok(None)=>{},
+            Err(e)=>break Err(e),
+        }
+        let frame=(begun.elapsed().as_millis()/100) as usize;
+        if frame!=shown {
+            shown=frame;
+            let _=write!(out,"\r\x1b[2K{} Starting on {}… Ctrl-C to cancel",FRAMES[frame%FRAMES.len()],clean(waiting));
+            let _=out.flush();
+        }
         std::thread::sleep(Duration::from_millis(20));
-    }
+    };
+    // The wait line is gone before the shell prints anything of its own.
+    if shown!=usize::MAX {let _=write!(out,"\r\x1b[2K");let _=out.flush();}
+    result
 }
 fn dimensions(rows: u16, origin: u16, picker: &Picker) -> (u16, u16) {
     let height = crate::ui::fzf_rows(rows, theme::fzf_opts().height.unwrap_or(theme::Height {
@@ -282,12 +309,12 @@ impl Screen {
         let valid=items.filter(|v| v.preview_id.as_deref()==preview_id && preview_id.is_some());
         let lines=valid.map(|v|v.preview.iter().map(|s|Line::raw(clean(s))).collect()).unwrap_or_default();
         let bottom=valid.is_some_and(|v|v.preview_bottom);
-        let loading=items.is_none() || picker.status.ends_with('…');
+        let loading=is_loading(items.is_some(),&picker.status);
         // Loading uses the usual spinner. A failed directory read or catalog
         // warning must remain visible instead of looking like an endless load.
         let previous_empty=std::mem::take(&mut picker.empty);
         if !loading && !picker.status.is_empty() {picker.empty=picker.status.clone();}
-        let cursor=crate::ui::inline_fzf(&mut next,area,picker,loading,lines,bottom);
+        let cursor=paint_inline(&mut next,area,picker,loading,lines,bottom);
         picker.empty=previous_empty;
         let bytes=render_diff(self.previous.as_ref(),&next,cursor)?;
         self.out.write_all(&bytes)?;
@@ -485,6 +512,8 @@ pub fn run(args:&[String])->io::Result<i32> {
     let mut due=Instant::now();
     let mut last_id=None;
     let mut dirty=true;
+    let mut last_draw=Instant::now();
+    let mut failures=0u8;
     loop {
         let current=picker.current_id();
         if current!=last_id {
@@ -493,9 +522,10 @@ pub fn run(args:&[String])->io::Result<i32> {
             // brief settle, so a held arrow doesn't launch a preview for every row.
             if picker.preview {due=Instant::now()+Duration::from_millis(35);}
         }
-        if dirty {
+        // A visible spinner turns on its own; an idle picker draws nothing.
+        if dirty || frame_due(is_loading(items.is_some(),&picker.status),last_draw,Instant::now()) {
             theme::begin_animation_frame(true);
-            screen.draw(&mut picker,items.as_ref(),last_id.as_deref())?;dirty=false;
+            screen.draw(&mut picker,items.as_ref(),last_id.as_deref())?;dirty=false;last_draw=Instant::now();
         }
         if request.is_none() && Instant::now()>=due {
             requested_preview=if picker.preview {picker.current_id()} else {None};
@@ -510,7 +540,17 @@ pub fn run(args:&[String])->io::Result<i32> {
             last_query=picker.query.clone();
         }
         if let Some(r)=&mut request {
-            if let Some(mut value)=r.poll(&mut screen.out)? {
+            let polled=r.poll(&mut screen.out);
+            if let Err(e)=&polled {
+                // "Office is offline", "Harness did not answer": say it in the list
+                // and retry a few times, instead of ending the picker unseen.
+                failures=failures.saturating_add(1);
+                picker.status=e.to_string();
+                if items.is_none() {items=Some(Items::default());}
+                request=None;dirty=true;
+                due=Instant::now()+retry_after(failures).unwrap_or(Duration::from_secs(86400));
+            } else if let Some(mut value)=polled? {
+                if failures>0 {failures=0;if value.unchanged {picker.status.clear();dirty=true;}}
                 if !value.unchanged {
                     // Older preview servers omit this optional field. The request
                     // still supplies the exact id; never associate it with today's cursor.
@@ -556,7 +596,7 @@ pub fn run(args:&[String])->io::Result<i32> {
             }
         }
         if old_query!=picker.query {
-            due=Instant::now()+Duration::from_millis(150);
+            due=Instant::now()+Duration::from_millis(150);failures=0;
             if let Some(action)=crate::input::finder_binding(&mut picker,"change",if theme::fzf().reverse {-1}else{1}) {end=action;}
             if composing && kind=="folder" && folder_parts(old_query.strip_prefix(':').unwrap_or(&old_query)).0!=folder_parts(picker.query.strip_prefix(':').unwrap_or(&picker.query)).0 {
                 // A late reply from the old folder must never be selectable in
@@ -806,6 +846,33 @@ mod tests {
             source.query=query.into();source.refilter();inline.query=query.into();inline.refilter();
             assert_eq!(inline.visible,source.visible,"{query}");
         }
+    }
+    #[test]
+    fn frames_are_due_only_while_loading() {
+        let t=Instant::now();
+        assert!(frame_due(true,t,t+Duration::from_millis(150)));
+        assert!(!frame_due(true,t,t+Duration::from_millis(50)));
+        assert!(!frame_due(false,t,t+Duration::from_secs(5)),"an idle picker draws nothing");
+        assert!(is_loading(false,"") && is_loading(true,"Searching folders…") && !is_loading(true,"Office is offline"));
+    }
+    #[test]
+    fn a_failed_list_request_retries_three_times_then_stays_put() {
+        assert_eq!(retry_after(1),Some(Duration::from_secs(2)));
+        assert_eq!(retry_after(3),Some(Duration::from_secs(2)));
+        assert_eq!(retry_after(4),None,"never an endless retry loop");
+    }
+    #[test]
+    fn a_loading_inline_picker_spins_and_a_loaded_one_does_not() {
+        let area=Rect::new(0,0,60,12);
+        for loading in [true,false,true] {
+            let mut picker=Picker::new("","");configure(&mut picker,false);
+            let mut buf=Buffer::empty(area);
+            theme::begin_animation_frame(true);
+            paint_inline(&mut buf,area,&mut picker,loading,vec![],false);
+            assert_eq!(theme::needs_animation_frame(),loading);
+            assert!(picker.busy.is_none(),"the busy mark is not left on the picker");
+        }
+        theme::fzf_reset();
     }
     #[test]
     fn inline_renderer_survives_tiny_resizes_and_preserves_its_query() {

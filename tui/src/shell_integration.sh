@@ -55,6 +55,7 @@ _hn_request() (
     case "$1" in
         *-inline)
             printf '\033]633;hn;%s;%s;cancel;\007' "$_HN_CONTEXT" "$_hn_id" >&4
+            case "$_hn_who" in -|local) _hn_who='This computer' ;; esac
             printf '%s did not answer. Your line is unchanged; try again.\n' "${_hn_who:-Harness}" >&2 ;;
         *) printf '%s\n' 'Harness did not answer. Your shell is still available; try again.' >&2 ;;
     esac
@@ -249,12 +250,15 @@ _hn_picker_widget() {
     fi
     # Ctrl-C reaches this shell too. _hn_request cancels its own request; the
     # widget must not abort with it, or zsh throws the line away.
-    if [ -n "${ZSH_VERSION-}" ]; then setopt localtraps; trap ':' INT; else trap '' INT; fi
+    # zsh's localtraps puts the user's INT trap back; bash needs it saved by hand.
+    if [ -n "${ZSH_VERSION-}" ]; then setopt localtraps; trap ':' INT; else _hn_saved_int=$(trap -p INT); trap '' INT; fi
     case "$_hn_kind" in
         host|model) _hn_message=$(_hn_request "$_hn_kind-inline" "$_hn_value" 2>&1) || : ;;
         sessions) _hn_message=$(_hn_request session-inline "$_hn_value" 2>&1) || : ;;
     esac
-    if [ -n "${BASH_VERSION-}" ]; then trap - INT; fi
+    if [ -n "${BASH_VERSION-}" ]; then
+        if [ -n "$_hn_saved_int" ]; then eval "$_hn_saved_int"; else trap - INT; fi
+    fi
     if [ -n "$_hn_message" ]; then
         if [ -n "${ZSH_VERSION-}" ]; then
             # The finder moved the physical cursor while ZLE retained its own

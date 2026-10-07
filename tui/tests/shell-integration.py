@@ -166,6 +166,17 @@ with tempfile.TemporaryDirectory(prefix='hn-shell-test-') as tmp:
                 match=REQUEST.search(s.read_until(REQUEST))
                 assert match[3]==b'host-inline' and match[2]!=first[2]
                 s.reply(match); s.read_until(b'READY> ')
+                # The widget's own Ctrl-C guard must not drop the user's INT trap.
+                s.send("trap 'echo MINE' INT\r"); s.read_until(b'READY> ')
+                s.send('\x10')
+                match=REQUEST.search(s.read_until(REQUEST))
+                s.reply(match); s.read_until(b'READY> ')
+                show='trap' if shell.endswith('zsh') else 'trap -p INT'
+                s.send("printf 'TRAP_%s\\n' BEGIN; "+show+"; printf 'TRAP_%s\\n' END\r")
+                kept=s.read_until(re.compile(rb'\nTRAP_END'))
+                assert b'echo MINE' in kept.split(b'TRAP_BEGIN',2)[-1],('the INT trap was lost',kept)
+                s.read_until(b'READY> ')
+                s.send("trap - INT\r"); s.read_until(b'READY> ')
                 (root/'picker-choice').unlink()
                 (root/'picker-choice').write_text('sessions\nexternal:local:missing\n')
                 s.send('\x10')
