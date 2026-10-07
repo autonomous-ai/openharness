@@ -203,6 +203,11 @@ async function signOut(userId: string, kind: string, machineId: string, pubKey: 
 // this is what "seen" means: the key opened an E2EE session (`e2e_hello` carries it in the clear, on
 // its way to a machine). Only a hint for that list — nothing trusts or distrusts a key by it — so a
 // client claiming someone else's key here can at most keep that one off the suggestion.
+//
+// `_since` (in the same hash, so it goes when the hash goes — a TTL, an eviction, a Redis that comes
+// back empty) is when this record began: a key with no time here is unused only if the record is
+// older than the question. Without it, a Redis that lost its data read as "no app used in months",
+// and a machine's sweep (cli deviceLogSyncer `sweepStale`) would have removed every old app key.
 
 const SEEN_TTL_SEC = 400 * 24 * 60 * 60
 /** One write per key per this long, per process: a phone opens a session per machine it shows. */
@@ -211,6 +216,7 @@ const SEEN_MEMORY_MAX = 10_000
 const seenWritten = new Map<string, number>()
 const seenKey = (userId: string): string => `devkeys:seen:${userId}`
 const PUB_RE = /^[A-Za-z0-9+/]{43}=$/
+const SINCE = '_since'
 
 export function touchDeviceKey(userId: string, pubKey: unknown, now = Date.now()): void {
   if (typeof pubKey !== 'string' || !PUB_RE.test(pubKey)) return
@@ -219,17 +225,24 @@ export function touchDeviceKey(userId: string, pubKey: unknown, now = Date.now()
   if (last !== undefined && now - last < SEEN_WRITE_EVERY_MS) return
   if (seenWritten.size >= SEEN_MEMORY_MAX) seenWritten.clear()
   seenWritten.set(memo, now)
-  void pub.multi().hset(seenKey(userId), pubKey, String(now)).expire(seenKey(userId), SEEN_TTL_SEC).exec()
+  void pub.multi().hsetnx(seenKey(userId), SINCE, String(now)).hset(seenKey(userId), pubKey, String(now))
+    .expire(seenKey(userId), SEEN_TTL_SEC).exec()
     .catch(() => { seenWritten.delete(memo) })
 }
 
-/** When each of the account's keys was last seen, by pub (ms). Empty when nothing was recorded. */
-export async function deviceKeysSeen(userId: string): Promise<Record<string, number>> {
+/**
+ * When each of the account's keys was last seen, by pub (ms), and since when that record runs (null when
+ * there is none). Throws when Redis cannot be read: "could not ask" must never read as "nothing seen".
+ */
+export async function deviceKeysSeen(userId: string): Promise<{ seen: Record<string, number>; since: number | null }> {
   const raw = await pub.hgetall(seenKey(userId))
-  const out: Record<string, number> = {}
+  const seen: Record<string, number> = {}
+  let since: number | null = null
   for (const [k, v] of Object.entries(raw ?? {})) {
     const n = Number(v)
-    if (PUB_RE.test(k) && Number.isSafeInteger(n) && n > 0) out[k] = n
+    if (!Number.isSafeInteger(n) || n <= 0) continue
+    if (k === SINCE) since = n
+    else if (PUB_RE.test(k)) seen[k] = n
   }
-  return out
+  return { seen, since }
 }

@@ -26,7 +26,7 @@ import { thisDeviceLabel } from '../lib/daemonState.js'
 import { switchAccountTrust } from '../lib/e2ee/accountTrust.js'
 import { b64d, b64e, fingerprint } from '../lib/e2ee/core.js'
 import { DeviceLogStore } from '../lib/e2ee/deviceLogStore.js'
-import { DeviceLogSyncer, type DeviceLogFetched, type DeviceLogTrustOutcome } from '../lib/e2ee/deviceLogSyncer.js'
+import { DeviceLogSyncer, type DeviceKeysSeen, type DeviceLogFetched, type DeviceLogTrustOutcome } from '../lib/e2ee/deviceLogSyncer.js'
 import { GroupSyncer, relayRequester, SELF_STAMP } from '../lib/e2ee/groupSyncer.js'
 import { MachinePeerStore } from '../lib/e2ee/machinePeers.js'
 import { E2eeStore } from '../lib/e2ee/store.js'
@@ -206,12 +206,14 @@ export function startGateway(host: GatewayHost): StartedGateway {
     syncer.start()
   }
   if (host.signedIn) { groupStarted = true; syncer.start() }
-  // When each key last opened a session or read the log, from the backend: the Devices list's "last
-  // active", and what `sweepStale` judges an unused app key by. null when it could not be asked.
-  const deviceKeysSeen = async (): Promise<Record<string, number> | null> => {
+  // When each key last opened a session or read the log, from the backend, and since when that record
+  // runs: the Devices list's "last active", and what `sweepStale` judges an unused app key by. null when
+  // it could not be asked; `since` null from a backend that does not say.
+  const deviceKeysSeen = async (): Promise<DeviceKeysSeen | null> => {
     const r = await host.backend('GET', '/api/device-keys/seen').catch(() => null)
-    const seen = r?.status === 200 ? (r.body.data as { seen?: unknown } | undefined)?.seen : undefined
-    return seen && typeof seen === 'object' ? seen as Record<string, number> : null
+    const data = r?.status === 200 ? r.body.data as { seen?: unknown; since?: unknown } | undefined : undefined
+    if (!data?.seen || typeof data.seen !== 'object') return null
+    return { seen: data.seen as Record<string, number>, since: Number.isSafeInteger(data.since) ? data.since as number : null }
   }
   const devlog = new DeviceLogSyncer({
     store: new DeviceLogStore(),
@@ -397,7 +399,7 @@ export function startGateway(host: GatewayHost): StartedGateway {
     devicesList: async () => {
       // When each key last opened a session, from the backend — a hint for removing apps not used in a
       // long while. Without it the list is still the list.
-      return { status: 200, body: { ...devlog.list(), lastSeen: await deviceKeysSeen() ?? {} } }
+      return { status: 200, body: { ...devlog.list(), lastSeen: (await deviceKeysSeen())?.seen ?? {} } }
     },
     devicesRemove: async (pub) => {
       syncer.remove(pub)
