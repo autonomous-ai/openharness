@@ -472,8 +472,9 @@ static void focus_face(void)
     }
 
     /*
-     * WHERE THEY STAND: the name on the arc. A recap is a "Kindle dark" page, set in Inter (owner, 2026-10-02, K3): no visible card
-     * (its run stays, an invisible placeholder), up to four lines of inter_30 in 0xd6d6d2, each centred on x 233
+     * WHERE THEY STAND: the name on the arc. A recap is a "Kindle dark" page, set in Inter (owner, 2026-10-02, K3), on a
+     * card again (owner, 2026-10-07): #1c1e26 (the LVGL card's #23252f at 80 %) rimmed #3d3f47, the full 384 px column at x 41, from 21 px over the first
+     * line's capitals to 21 px under the last line's baseline (a line's baseline to the next one's capitals), so it grows with the lines; up to four lines of inter_30 in 0xd6d6d2, each centred on x 233
      * in the 364 px column at x 51, 43 px apart, the block centred in y 176..376 with its first baseline 30 px under the block's top. Working or resting
      * there is no recap and the line is centred on the glass. The mark sits halfway between the foot of the arc's cells
      * (y 44) and the recap's first line as drawn (its capitals' top, 22 px over the baseline): the gap above equals the
@@ -503,11 +504,23 @@ static void focus_face(void)
             // (assets/pets/claude/rest), at its step 0.
             const ht_pet_t *cp = pet_of("claude");
             assert(cp && cp->cells && !cp->frames && cp->w == 73 && cp->h == 50);
-            const ht_run_t *card = &scene.runs[2];   // no card: the placeholder box draws nothing
-            assert(card->box.h == 1 && card->w == 1 && card->box.fill == scene.background && card->box.border == scene.background);
+            const ht_run_t *card = &scene.runs[2];
             int lines = 0;
             for (int i = 3; i < 7; i++) if (scene.runs[i].text[0]) lines++;
             assert(lines >= 1 && lines <= 4 && (k != 0 || lines == 1));
+            {
+                int cap = scene.runs[3].y + lit->ascent - 22;
+                assert(card->box.fill == ht_rgb(0x1c1e26) && card->box.border == ht_rgb(0x3d3f47) && card->box.radius == 24);
+                assert(card->x == 41 && card->w == 384 && card->y == cap - 21 && card->box.h == 22 + (lines - 1) * 43 + 42);
+                for (int i = 3; i < 3 + lines; i++) assert(scene.runs[i].bg == card->box.fill);   // set on the card
+                // inside the glass at four lines too
+                static uint16_t cpx[HT_WIDTH * HT_HEIGHT];
+                ht_scene_t only; ht_scene_clear(&only, 0);
+                only.runs[only.count++] = *card;
+                ht_raster(&only, (ht_rect_t){0, 0, HT_WIDTH, HT_HEIGHT}, cpx);
+                for (int y = 0; y < HT_HEIGHT; y++) for (int x = 0; x < HT_WIDTH; x++)
+                    if (cpx[y * HT_WIDTH + x]) assert((x - 233) * (x - 233) + (y - 233) * (y - 233) < 230 * 230);
+            }
             for (int i = 3; i < 3 + lines; i++)
                 assert(scene.runs[i].font == &lit->base && scene.runs[i].fg == ht_rgb(0xd6d6d2));
             for (int i = 3; i < 3 + lines; i++) {   // each line centred on x 233 (+-1), inside its column

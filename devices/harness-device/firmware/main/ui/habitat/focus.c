@@ -15,8 +15,8 @@
  * the engine's mark stands where the octopus does, 56 px (focus_marks.c) — for an engine with a pet
  * (Claude, Codex: pets.c) it is the animated pet instead, centred in the same box. Under it the recap
  * is set in the "Kindle dark" layout (owner, 2026-10-02, K3: mockup/kindle_options.py), now in Inter, SF Compact's
- * open look-alike (owner, 2026-10-03): no card,
- * soft white Inter 30 (inter_30, focus_faces.c) on the black ground, each line centred
+ * open look-alike (owner, 2026-10-03), soft white Inter 30 (inter_30, focus_faces.c), back in a card (owner, 2026-10-07,
+ * mockup/recap_box.py A, recap_pad.py P1): the LVGL firmware's card at 80 %, rimmed, 384 px wide, as tall as its lines, each line centred
  * on x 233 in a 364 px column at x 51, 43 px apart, up to four lines — as many as the octopus reads — and a longer recap
  * ends in "…". The block is centred vertically in a fixed area (y 176..376), so the mark never moves
  * with its length. A question takes the recap's place and look. With no recap, the working line or a
@@ -32,7 +32,7 @@
  *
  * ht_damage() diffs run index against run index and repaints the whole 466x466 the moment the count
  * or the order changes (terminal.c). So the home face emits the SAME ELEVEN RUNS IN THE SAME ORDER on
- * every frame — name, mark, card (an invisible placeholder since the "Kindle dark" recap, kept so the count and
+ * every frame — name, mark, card (drawn under a recap, an invisible placeholder otherwise, so the count and
  * order never move), recap ×4, status, resting line ×2, lower-arc status — each empty
  * where it has nothing to say. Do not make one conditional. The lower arc is a working scene's
  * status line (arc_status below); every other state, and every other engine, leaves it empty. A scene's
@@ -47,8 +47,12 @@
 enum { MARK_SIZE = 56, TITLE_BOTTOM = HT_ARC_Y + HT_ARC_CELL_HEIGHT, COL_X = 41, COL_W = 384,
        RECAP_X = 51, RECAP_W = 364, RECAP_LINES = 4, RECAP_PITCH = 43, RECAP_BASELINE = 30,
        RECAP_AREA_Y = 176, RECAP_AREA_H = 200, RECAP_CAP = 22, EMPTY_W = 276, EMPTY_CAP = 26,
+       CARD_R = 24,
        SCENE_LINE_Y = 334 };   // the working scene ends at y 325
 #define FOCUS_RECAP   0xd6d6d2u   // the "Kindle dark" layout's soft white
+#define FOCUS_CARD    0x1c1e26u   // the recap's card: the LVGL firmware's #23252f at 80 % (owner, 2026-10-07: a little
+                                  // fainter), and its rim (#a6a6a6 at 20 %)
+#define FOCUS_CARD_RIM 0x3d3f47u
 #define FOCUS_FG      0xeaeaf0u
 #define FOCUS_EMPTY   0x585863u
 #define FOCUS_VOICE   0x00ff2fu
@@ -770,7 +774,13 @@ void ht_focus_face(ht_scene_t *s, const ht_character_face_t *f, uint8_t frame, u
     int rest_cap = body_y + ht_pfont(ef)->ascent - EMPTY_CAP;
     // A status of its own ("Try again" after a failed voice turn) is one line in the middle: the mark sizes and sits
     // as over a one-line recap (owner, 2026-10-06).
-    int below = has_recap || retry ? body_y + ht_pfont(rf)->ascent - RECAP_CAP : empty ? full_cap : body_y;
+    // The recap's card: the full column, as tall as its lines (owner, 2026-10-07: "not fixed at four like before"), with
+    // as much room over the first line's capitals and under the last line's baseline as from one line's baseline to the
+    // next one's capitals (43 - 22 = 21 px; recap_pad.py P1). What stands above it is measured to its top.
+    int card_pad = RECAP_PITCH - RECAP_CAP;
+    int card_top = body_y + ht_pfont(rf)->ascent - RECAP_CAP - card_pad;
+    int card_h = RECAP_CAP + (recap_n - 1) * RECAP_PITCH + 2 * card_pad;
+    int below = has_recap ? card_top : retry ? body_y + ht_pfont(rf)->ascent - RECAP_CAP : empty ? full_cap : body_y;
     int size = retry ? 2 : has_recap && recap_n >= 1 && recap_n <= 3 ? 3 - recap_n : -1;   // 0 1.5x, 1 1.75x, 2 2x; -1 1x
     // Claude's block of a body reads larger than the others at the same size (owner, 2026-10-06): it stays at 1.5x
     // resting and over a recap of one to three lines, and 1x over four.
@@ -829,11 +839,12 @@ void ht_focus_face(ht_scene_t *s, const ht_character_face_t *f, uint8_t frame, u
     } else if (engine >= 0) ht_icon(s, mark_x, mark_top, &ht_icon_engine56[engine]);
     else no_text(s, rf);
 
-    // No card: its run stays, invisible, so the run count and order never change.
-    no_box(s);
+    // The card under a recap; without one its run stays, invisible, so the run count and order never change.
+    if (has_recap) ht_box(s, COL_X, card_top, COL_W, card_h, CARD_R, ht_rgb(FOCUS_CARD), ht_rgb(FOCUS_CARD_RIM));
+    else no_box(s);
 
     if (has_recap) label_runs(s, &body, RECAP_LINES, RECAP_X, body_y, RECAP_PITCH, rf, ht_rgb(FOCUS_RECAP),
-                              s->background);
+                              ht_rgb(FOCUS_CARD));
     else for (int n = 0; n < RECAP_LINES; n++) {
         // The scene's overlay takes the first line's slot, empty without a recap; the alert's bubble the second, its
         // count the third.
