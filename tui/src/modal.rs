@@ -704,7 +704,9 @@ pub fn theme_sections(app: &App) -> Vec<Row> {
         sec("section:boxes", "Borders", "every pane its own box", if border_style_of(app) == "box" { "on" } else { "off" }),
         // ── status bar tabs ──
         sec("section:tab", "Tab", "how the current tab is marked", tab_active_of(app)),
-        sec("section:tabname", "Tab name", "how a tab's name is shown", tab_name_of(app)),
+        // (No "Tab name": a tab shows the selected pane's title, or auto rename's name. `@hn-window-name
+        // tmux` in a tmux.conf or tui.toml still shows the window's name instead.)
+        sec("section:autorename", "Auto rename", "a window named for its repo and its work", if app.options.auto_rename() { "on" } else { "off" }),
         // (Keys are Keybinds', a panel of their own in Commands.)
     ]
 }
@@ -719,9 +721,6 @@ fn border_style_of(app: &App) -> &'static str { app.options.border_style() }
 
 /// How the current tab is marked: `star` (default) | `filled` (`@hn-window-active`).
 fn tab_active_of(app: &App) -> &'static str { if app.options.get("@hn-window-active", "", None).as_deref() == Some("filled") { "filled" } else { "star" } }
-
-/// A tab's name source: `tmux` (default) | `pane` (`@hn-window-name`).
-fn tab_name_of(app: &App) -> &'static str { if app.options.get("@hn-window-name", "", None).as_deref() == Some("pane") { "pane" } else { "tmux" } }
 
 /// The look/theme picker, level two: the options of one section. Enter on one applies it (and the
 /// ▼ moves to it); Left/Esc returns to the section list.
@@ -767,9 +766,10 @@ pub fn theme_options(app: &App, section: &str) -> Vec<Row> {
         "tab" => { let cur = tab_active_of(app);
             [("star", "star", "the current tab is marked *"), ("filled", "filled", "the current tab is filled (inverted)")]
                 .iter().map(|(v, label, hint)| opt(format!("window_active:{v}"), label, cur == *v, hint)).collect() }
-        "tabname" => { let cur = tab_name_of(app);
-            [("tmux", "tmux", "the window's short name"), ("pane", "pane", "the window's full name")]
-                .iter().map(|(v, label, hint)| opt(format!("window_name:{v}"), label, cur == *v, hint)).collect() }
+        "autorename" => { let cur = if o.auto_rename() { "on" } else { "off" };
+            [("on", "a window with a repo is named for it and its work, by a small model, in the background (Harness TUI LMStudio)"),
+             ("off", "windows keep the names they have")]
+                .iter().map(|(v, hint)| opt(format!("auto_rename:{v}"), v, cur == *v, hint)).collect() }
         _ => vec![],
     }
 }
@@ -859,7 +859,7 @@ mod theme_row_tests {
         let ids: Vec<&str> = rows.iter().map(|r| r.id.as_str()).collect();
         assert_eq!(ids, vec!["section:theme", "section:status", "section:focus",
             // ── status bar ──
-            "section:bar", "section:boxes", "section:tab", "section:tabname"]);
+            "section:bar", "section:boxes", "section:tab", "section:autorename"]);
         // Each section shows its current value and opens onto a non-empty option list.
         assert!(rows.iter().all(|r| !r.right.is_empty()), "each section shows a value");
         for r in &rows {
@@ -905,14 +905,11 @@ mod theme_row_tests {
     }
 
     #[test]
-    fn the_tab_and_tab_name_sections_list_their_choices() {
+    fn the_tab_section_lists_its_choices_and_there_is_no_tab_name_section() {
         let a0 = app();
         let tab_rows = theme_options(&a0, "tab");
         let tab_ids: Vec<&str> = tab_rows.iter().map(|r| r.id.as_str()).collect();
         assert_eq!(tab_ids, vec!["window_active:star", "window_active:filled"]);
-        let name_rows = theme_options(&a0, "tabname");
-        let name_ids: Vec<&str> = name_rows.iter().map(|r| r.id.as_str()).collect();
-        assert_eq!(name_ids, vec!["window_name:tmux", "window_name:pane"]);
         // The mark follows the option in use.
         let mut a1 = app();
         let global = crate::options::SetFlags { global: true, ..Default::default() };
@@ -920,10 +917,23 @@ mod theme_row_tests {
         let filled = theme_options(&a1, "tab");
         let idx = filled.iter().position(|r| r.id == "window_active:filled").unwrap();
         assert!(filled[idx].lead.iter().any(|s| s.content.as_ref() == "✓ "));
-        let _ = a1.options.set("@hn-window-name", Some("pane"), &global, "", 0);
-        let pane = theme_options(&a1, "tabname");
-        let idx = pane.iter().position(|r| r.id == "window_name:pane").unwrap();
-        assert!(pane[idx].lead.iter().any(|s| s.content.as_ref() == "✓ "));
+        // No Tab name: a tab shows the selected pane's title, or auto rename's name.
+        assert!(theme_options(&a0, "tabname").is_empty());
+        assert!(!theme_sections(&a0).iter().any(|r| r.id == "section:tabname"));
+    }
+
+    /// Auto rename is a switch of its own in Appearance, off until turned on, and saved to tui.toml.
+    #[test]
+    fn auto_rename_is_a_switch_off_until_turned_on() {
+        let mut app = app();
+        let section = |app: &App| theme_sections(app).into_iter().find(|r| r.id == "section:autorename").map(|r| r.right).unwrap();
+        assert_eq!(section(&app), "off");
+        assert_eq!(theme_options(&app, "autorename").iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), vec!["auto_rename:on", "auto_rename:off"]);
+        assert_eq!(app.set_look("auto_rename", "on"), "auto rename: on");
+        assert!(app.options.auto_rename());
+        assert_eq!(section(&app), "on");
+        let look = crate::config::Look { auto_rename: Some("on".into()), ..Default::default() };
+        assert!(look.assignments().contains(&("@hn-auto-rename".into(), "on".into())), "tui.toml's auto_rename turns it on at start");
     }
 
     // ── keys ──
