@@ -91,6 +91,9 @@ master too old to run it starts it beside itself, still in its own process (`src
   pulled in for a constant brought zod to search and workspaces, 8 MiB each (`src/dsh/id.ts`). A
   failing import fails the service's start, loudly, and the master parks it. `src/leanEntry.spec.ts`
   holds each process to its own code, and the master, search, the updater and the edge host to no zod.
+  It also keeps the native `node:sqlite` binding out of the edge host until a service there reads a store
+  that opencode, kilo, hermes or devin keeps a conversation in. `lib/sqliteRead.ts` imports the binding
+  (`lib/sqliteBuiltin.ts`) only at the first read, so import `sqliteReadAll` and never the binding itself.
 - `src/services/process.ts` is the process's side: `hostServices` beats to the master and stops every
   service before the process exits; `runServiceProcess` is each service's own connection to the core,
   with the master's token, reconnecting after core restarts. `<host>.crash` and `<host>.leak`, or a

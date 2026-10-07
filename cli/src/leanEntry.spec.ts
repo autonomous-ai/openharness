@@ -5,8 +5,9 @@
  * none of the CLI's commands, and the master, search and workspaces no zod (`config/env.ts` and `lib/registry.ts` once brought it to every
  * one of them, 8 to 19 MiB each, measured 2026-10-05).
  */
-import { execFileSync, spawnSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { execFileSync, spawn, spawnSync } from 'node:child_process'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -53,6 +54,19 @@ describe('the lean bundle a release carries', () => {
   }
   const runnerOf = (name: string): string | undefined => Object.entries(RUNNER).find(([, runner]) => name.startsWith(`${runner}-`))?.[0]
   const hasZod = (names: Set<string>): boolean => [...names].some((name) => files.get(name)!.includes('$ZodType'))
+  /** The binding's loader: the module `lib/sqliteBuiltin.ts` asks Node for, a string only that code holds. */
+  const hasSqlite = (names: Set<string>): boolean => [...names].some((name) => files.get(name)!.includes('"node:sqlite"'))
+
+  it('loads the bundled harness assets in the Store alone and shares their bytes across lean builds', () => {
+    const asset = 'harness-builtin-assets.mjs'
+    expect(files.has(asset)).toBe(true)
+    expect(loads('store').has(asset)).toBe(true)
+    for (const role of ['master', 'core', 'search', 'workspaces']) expect(loads(role).has(asset), role).toBe(false)
+    // The bytes occur once in the combined lean files, even though inline mode can load the Store too.
+    const marker = '"builtinFiles")'
+    expect(files.get(asset)?.includes(marker)).toBe(true)
+    expect([...files].filter(([, code]) => code.includes(marker)).map(([name]) => name)).toEqual([asset])
+  })
 
   it('is files of their own for the master, the core and each service, the code it runs and no other role\'s', () => {
     for (const role of ROLES) {
@@ -105,6 +119,50 @@ describe('the lean bundle a release carries', () => {
     // The edge host's services share one process: zod in any of them would be in all of them.
     for (const role of ['master', 'search', 'updater', ...SERVICE_HOSTS.edge.services]) expect(hasZod(loads(role)), role).toBe(false)
   })
+
+  it('brings the edge host no node:sqlite until it reads a store some engines keep a conversation in', () => {
+    // A native binding, synchronous and able to take a process down with it, in the host meant to be light.
+    // The handoff, the monitor and projects read such stores for opencode, kilo, hermes and devin alone, and
+    // `lib/sqliteRead.ts` imports the binding's loader (`lib/sqliteBuiltin.ts`) only at the first read.
+    expect(hasSqlite(loads('search')), 'search, the native-sqlite host, still has it').toBe(true)
+    for (const role of SERVICE_HOSTS.edge.services) expect(hasSqlite(loads(role)), role).toBe(false)
+  })
+
+  it('starts the edge host without node:sqlite, where search, whose index is SQLite, has it', async () => {
+    // Short: the services' socket is `<data>/daemon-<port>.sock`, 96 bytes at most (lib/localSocket.ts).
+    const home = mkdtempSync(join(tmpdir(), 'le-'))
+    // Each service dials the core once it has started: a socket that counts them, then asks what loaded.
+    const loadedOnce = (service: string, names: readonly string[]): Promise<string[]> => new Promise((resolve, reject) => {
+      const data = join(home, service)
+      mkdirSync(join(data, 'tmux'), { recursive: true })
+      let dialled = 0
+      const core = createServer((socket) => {
+        socket.on('error', () => {})
+        if (++dialled === names.length) child.kill('SIGUSR2')
+      }).listen(join(data, 'daemon-18999.sock'))
+      const report = 'data:text/javascript,process.on("SIGUSR2",()=>{process.stdout.write("LOADED="+JSON.stringify(process.moduleLoadList.filter((m)=>/sqlite/.test(m)))+"\\n");process.exit(0)})'
+      // Nothing of this machine's: its own home, data folder and tmux server.
+      const child = spawn(process.execPath, ['--import', report, entry, '__service', names.join(',')], {
+        env: { PATH: process.env.PATH, HOME: data, ADAPTER_DATA_DIR: data, PORT: '18999', TMUX_TMPDIR: join(data, 'tmux'), HARNESSD_SERVICE: service },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      })
+      let out = ''
+      child.stdout.on('data', (chunk: Buffer) => { out += chunk.toString() })
+      child.stderr.on('data', (chunk: Buffer) => { out += chunk.toString() })
+      const timer = setTimeout(() => child.kill('SIGKILL'), 60_000)
+      child.on('close', () => {
+        clearTimeout(timer)
+        core.close()
+        const loaded = /^LOADED=(.*)$/m.exec(out)
+        if (loaded) resolve(JSON.parse(loaded[1]) as string[])
+        else reject(new Error(`${service} ended before it said what it loaded (${dialled} of ${names.length} dialled):\n${out}`))
+      })
+    })
+    try {
+      expect(await loadedOnce('search', ['search']), 'search: what tells a loaded binding apart').toContain('NativeModule sqlite')
+      expect(await loadedOnce('edge', SERVICE_HOSTS.edge.services), 'the edge host').toEqual([])
+    } finally { rmSync(home, { recursive: true, force: true }) }
+  }, 150_000)
 
   it('passes the release script\'s check, which a lean bundle that breaks a process does not', async () => {
     // @ts-expect-error — plain ESM with no declaration file

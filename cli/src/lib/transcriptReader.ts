@@ -1,5 +1,5 @@
 /**
- * Reading a transcript for session search: line by line from a byte offset, through the same
+ * Reading a transcript for search and session discovery: line by line from a byte offset, through the same
  * incremental normalizer each engine uses for its live view.
  *
  * Transcripts are large (a long Codex rollout runs to gigabytes) and nearly all of it is tool output.
@@ -10,18 +10,18 @@
 
 import { open } from 'node:fs/promises'
 
-import type { LiveEvent } from '../normalize.js'
-import { lineToEvents, newTurnState } from '../normalize.js'
-import { AgyNormalizer } from '../../engines/agy/normalizer.js'
-import { AmpNormalizer } from '../../engines/amp/normalizer.js'
-import { CodexNormalizer } from '../../engines/codex/normalizer.js'
-import { epochMs } from './externals/support.js'
-import { CommandCodeNormalizer } from '../../engines/commandcode/normalizer.js'
-import { CopilotNormalizer } from '../../engines/copilot/normalizer.js'
-import { CursorNormalizer } from '../../engines/cursor/normalizer.js'
-import { GrokNormalizer } from '../../engines/grok/normalizer.js'
-import { MuseNormalizer } from '../../engines/muse/normalizer.js'
-import { PiNormalizer } from '../../engines/pi/normalizer.js'
+import type { LiveEvent } from './normalize.js'
+import { lineToEvents, newTurnState } from './normalize.js'
+import { AgyNormalizer } from '../engines/agy/normalizer.js'
+import { AmpNormalizer } from '../engines/amp/normalizer.js'
+import { CodexNormalizer } from '../engines/codex/normalizer.js'
+import { epochMs } from './sessionSearch/externals/support.js'
+import { CommandCodeNormalizer } from '../engines/commandcode/normalizer.js'
+import { CopilotNormalizer } from '../engines/copilot/normalizer.js'
+import { CursorNormalizer } from '../engines/cursor/normalizer.js'
+import { GrokNormalizer } from '../engines/grok/normalizer.js'
+import { MuseNormalizer } from '../engines/muse/normalizer.js'
+import { PiNormalizer } from '../engines/pi/normalizer.js'
 
 export type LineNormalizer = (line: string) => LiveEvent[]
 

@@ -54,6 +54,7 @@ describe('the Store in its own process', () => {
     // A list changes nothing: the core is not told.
     await options.requests.dsh_list!({}, ASKER)
     expect(heard).toEqual([
+      'told prepared',
       'told installStatus {"id":"acme/thing","phase":"clone"}', 'installed', 'told installed',
       'updated', 'told installed', 'removed', 'told installed', 'listed',
     ])
@@ -62,8 +63,8 @@ describe('the Store in its own process', () => {
   it('answers all the same with no core to tell, or one that cannot hear', async () => {
     const { options, heard, query, connect } = setup()
     expect(await options.requests.dsh_install!({ id: 'acme/thing' }, ASKER)).toEqual({ ok: true, id: 'acme/thing' })
-    connect()
     query.mockRejectedValue(new Error('the core went away'))
+    connect()
     expect(await options.requests.dsh_install!({ id: 'acme/thing' }, ASKER)).toEqual({ ok: true, id: 'acme/thing' })
     await Promise.resolve()
     expect(heard).toEqual(['installed', 'installed'])

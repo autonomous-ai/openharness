@@ -66,11 +66,17 @@ export interface TerminalWatch {
 }
 export interface TerminalsPort {
   open(request: TerminalOpen): Promise<TerminalOpenResult>
+  /** Fresh registry facts for a shell launch receipt, never a service's cached agent snapshot. */
+  describe(agentId: string): Promise<Record<string, unknown> | null>
+  /** The exact launched engine has exited, with no newer binding replacing the evidence. */
+  visitStatus(agentId: string): Promise<{ exited: boolean }>
   watch: TerminalWatch
 }
 /** A service without the core's launch call must refuse, never launch outside the core; it watches nothing. */
 export const TERMINALS_OFF: TerminalsPort = {
   open: async () => ({ ok: false, error: 'SERVICE_UNAVAILABLE' }),
+  describe: async () => null,
+  visitStatus: async () => ({ exited: false }),
   watch: { frame: async () => {}, close: async () => {}, onOutput: () => () => {} },
 }
 
@@ -1170,6 +1176,14 @@ export interface GatewayAccount {
   machineId: string | null
   /** Which sign-in by hand this is, and the account it was made to (lib/authSession.ts `signInOf`), or null. */
   signIn: { epoch: string; adopted: boolean; at: number | null; acct?: string } | null
+  autonomousEnv?: string
+}
+
+/** The gateway's last successful machine list, scoped to the account that fetched it. No credentials. */
+export interface GatewayMachines {
+  owner: string | null
+  body: Record<string, unknown> | null
+  fetchedAt: number
 }
 
 /** A Wi-Fi device operation refused, with the code the device's local API answers it under. */
@@ -1184,6 +1198,10 @@ export interface GatewayRefusal {
  * the hook server's route does; while the gateway is down, a 503.
  */
 export interface GatewayOps {
+  /** Account HTTP and its cache live with the network, outside the session core. */
+  backend(method: string, path: string, body?: unknown): Promise<HttpAnswer>
+  machines(fallback?: boolean): Promise<HttpAnswer>
+  mintGridName(): Promise<string | null>
   status(): Promise<GatewayStatus>
   pair(code: string): Promise<HttpAnswer>
   listPairs(): Promise<HttpAnswer>

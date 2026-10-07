@@ -22,6 +22,10 @@ import { join } from 'node:path'
 delete process.env.npm_config_prefix
 delete process.env.NPM_CONFIG_PREFIX
 
+// Coding sessions can themselves run under harnessd. Its token, topology and supervision flags belong
+// to that host, never to a fixture or the Vitest worker. Tests set their own explicit overrides.
+for (const name of Object.keys(process.env)) if (name.startsWith('HARNESSD_')) delete process.env[name]
+
 // The home folder itself is a throwaway one, before any module asks for it. Every engine's home, the Harness
 // folder and the machine's identity default to a folder in it (config/env.ts: ~/.claude, ~/.codex, ~/.cursor,
 // ~/.harness/computer-id, …), and a spec that did not name its own read the developer's. Traced on one Mac,

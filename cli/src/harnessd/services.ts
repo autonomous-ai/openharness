@@ -376,7 +376,7 @@ export const SERVICE_HOSTS: Readonly<Record<string, ServiceHostSpec>> = {
   // than workspaces alone had. The recaps hold each session's last three recaps, answers (8 KiB each at
   // most) and asks, as the core did while they ran in it, and a few timers per open turn. The window
   // names hold at most 400 short names; their model runs in its own process (lib/oneshot.ts).
-  edge: { services: ['workspaces', 'usage', 'monitor', 'projects', 'handoff', 'recaps', 'windowNames'], heapLimitMiB: 384, rssLimitMiB: 768 },
+  edge: { services: ['workspaces', 'usage', 'monitor', 'projects', 'handoff', 'recaps', 'windowNames', 'shell'], heapLimitMiB: 384, rssLimitMiB: 768 },
   // The orchestrator (services/orchestratorProcess.ts), an experiment: started only once it is on, for a
   // saved project or a request (core/api.ts `EXPERIMENTS`). Its projects' files and the frames of their
   // Directors; the agents it runs are the core's.

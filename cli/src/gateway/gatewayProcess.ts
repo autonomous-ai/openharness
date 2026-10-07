@@ -91,11 +91,8 @@ export function runGatewayService(options: GatewayServiceOptions): ServiceProces
       autonomousEnv: text(payload.autonomousEnv) || 'prod',
       signedIn: payload.signedIn === true,
       tokens: { accessToken },
-      backend: async (method, path) => {
-        if (!core) return { status: 502, body: { success: false, error: { code: 'BACKEND_UNREACHABLE', message: 'not connected to the core' } } }
-        const answer = await core.query('backend', { method, path })
-        return { status: typeof answer.status === 'number' ? answer.status : 502, body: record(answer.body) }
-      },
+      machineName: text(payload.machineName), hostname: text(payload.hostname),
+      machines: (state) => notice('machines', { ...state }),
       account: (payload.account as GatewayAccount | null) ?? { machineId: null, signIn: null },
     })
     running = started
@@ -204,6 +201,9 @@ export function runGatewayService(options: GatewayServiceOptions): ServiceProces
     return running.ops
   }
   const requests = {
+    [GATEWAY_CALLS.backend]: async (p: Payload) => ({ ...await ops().backend(text(p.method), text(p.path), p.body) }),
+    [GATEWAY_CALLS.machines]: async (p: Payload) => ({ ...await ops().machines(p.fallback === true) }),
+    [GATEWAY_CALLS.mintGridName]: async () => ({ name: await ops().mintGridName() }),
     [GATEWAY_CALLS.status]: async () => ({ ...await ops().status() }),
     [GATEWAY_CALLS.pair]: async (p: Payload) => ({ ...await ops().pair(text(p.code)) }),
     [GATEWAY_CALLS.listPairs]: async () => ({ ...await ops().listPairs() }),

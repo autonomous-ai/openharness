@@ -19,6 +19,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
 import { isolatedTmux, type IsolatedTmux } from '../../src/testing/isolatedTmux.js'
 import { artifactLog, artifactsEnabled } from './artifacts.js'
+import { daemonEnvironment } from '../../src/testing/daemonEnvironment.js'
 
 const exec = promisify(execFile)
 const here = dirname(fileURLToPath(import.meta.url))
@@ -219,8 +220,7 @@ export class IsolatedDaemon {
         `#!${process.execPath}\nimport(${JSON.stringify(engine)}).then((m) => m.run(${JSON.stringify(name)}, ${JSON.stringify(config)}))\n`,
         { mode: 0o755 })
     }
-    const env: NodeJS.ProcessEnv = {
-      ...tmux.env,
+    const env = daemonEnvironment(tmux.env, {
       NODE_ENV: 'test',
       HOME: dirs.home,
       // A login shell in a pane must not load anyone's zsh configuration.
@@ -258,7 +258,7 @@ export class IsolatedDaemon {
       TMUX_REAP_INTERVAL_MS: '5000',
       TERMINAL_RECONCILE_INTERVAL_MS: '5000',
       ...options.env,
-    }
+    })
     // A Claude Code home moved in the environment this run was started from is the person's: the daemon
     // would adopt it and install its hooks there (lib/engineHomes.ts). Only a test may move one.
     if (!options.env || !('CLAUDE_CONFIG_DIR' in options.env)) delete env.CLAUDE_CONFIG_DIR

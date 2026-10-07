@@ -17,7 +17,7 @@ function events(): { [K in keyof GatewayEvents]: ReturnType<typeof vi.fn> } {
   }
 }
 
-function setup(over: { buffered?: number; call?: (type: string, payload: Record<string, unknown>, waitMs?: number) => Promise<Record<string, unknown>>; startWaitMs?: number } = {}) {
+function setup(over: { buffered?: number; call?: (type: string, payload: Record<string, unknown>, waitMs?: number) => Promise<Record<string, unknown>>; startWaitMs?: number; start?: () => Record<string, unknown> } = {}) {
   const heard = events()
   const sent: Array<Record<string, unknown>> = []
   const binary: Uint8Array[] = []
@@ -28,17 +28,19 @@ function setup(over: { buffered?: number; call?: (type: string, payload: Record<
   const tokens = { accessToken: vi.fn(async () => 'token-1') }
   const backend = vi.fn(async () => ({ status: 200, body: { data: { seen: {} } } }))
   const want = vi.fn()
+  const machines = vi.fn()
   const link = createGatewayLink({
     events: heard as unknown as GatewayEvents,
     notify: (frame) => { sent.push(frame.payload as Record<string, unknown>); return true },
     notifyBinary: (bytes) => { binary.push(bytes); return true },
     buffered: () => buffered,
     call,
-    start: () => ({ machineId: 'm1', computerId: 'c1', autonomousEnv: 'prod', signedIn: true }),
+    start: over.start ?? (() => ({ machineId: 'm1', computerId: 'c1', autonomousEnv: 'prod', signedIn: true })),
+    machines,
     tokens, backend, log, now: () => clock, want, ...(over.startWaitMs ? { startWaitMs: over.startWaitMs } : {}),
   })
   return {
-    link, heard, sent, binary, call, tokens, backend, log, want,
+    link, heard, sent, binary, call, tokens, backend, log, want, machines,
     kinds: () => sent.map((payload) => payload.kind),
     setBuffered: (bytes: number) => { buffered = bytes },
     tick: (ms: number) => { clock += ms },
@@ -520,4 +522,87 @@ describe('a window here working on another machine, through the gateway', () => 
     // Its bytes go nowhere now: the gateway is not there to take them.
     await session.sendBinary(bytesOf('x'))
   })
+})
+
+describe('account HTTP owned by the gateway', () => {
+  it('forwards methods and optional bodies, and bounds the answer', async () => {
+    const { link, call } = setup()
+    expect(await link.ops.backend('GET', '/api/auth/me')).toEqual({ status: 200, body: { ok: true } })
+    expect(call).toHaveBeenLastCalledWith(GATEWAY_CALLS.backend, { method: 'GET', path: '/api/auth/me' }, 25_000)
+    await link.ops.backend('PATCH', '/api/machines/m1', { name: 'Laptop' })
+    expect(call).toHaveBeenLastCalledWith(GATEWAY_CALLS.backend, { method: 'PATCH', path: '/api/machines/m1', body: { name: 'Laptop' } }, 25_000)
+    call.mockResolvedValueOnce({ name: 'private-grid' })
+    expect(await link.ops.mintGridName()).toBe('private-grid')
+    call.mockResolvedValueOnce({})
+    expect(await link.ops.mintGridName()).toBeNull()
+    call.mockResolvedValueOnce({ error: 'SERVICE_UNAVAILABLE' })
+    await expect(link.ops.mintGridName()).rejects.toThrow('SERVICE_UNAVAILABLE')
+  })
+
+  it('answers the guest list without waking a gateway or reading a previous account', async () => {
+    const { link, call, want, machines } = setup({ start: () => ({ signedIn: false, computerId: 'computer', machineName: 'Laptop', hostname: 'host' }) })
+    expect(await link.ops.machines()).toMatchObject({ status: 200, body: { data: { guest: true, stale: false, machines: [
+      { machineId: 'computer', computerId: 'computer', name: 'Laptop', hostname: 'host', status: 'online' },
+    ] } } })
+    expect(call).not.toHaveBeenCalled()
+    expect(want).not.toHaveBeenCalled()
+    expect(machines).toHaveBeenCalledWith(expect.objectContaining({ owner: null }))
+  })
+
+  it('retains reported rows across a crash, but never hides a sign-out or crosses accounts', async () => {
+    let owner = 'account-a'
+    const { link, call, machines } = setup({ start: () => ({ signedIn: true, account: { machineId: owner } }) })
+    const body = { success: true, data: { machines: [{ machineId: 'm2' }] } }
+    link.notice({ kind: 'machines', owner, body, fetchedAt: 1000 })
+    expect(machines).toHaveBeenLastCalledWith({ owner, body, fetchedAt: 1000 })
+    call.mockResolvedValue({ error: 'SERVICE_UNAVAILABLE' })
+    link.disconnected()
+    expect(await link.ops.machines(true)).toEqual({ status: 200, body: { success: true, data: { machines: [{ machineId: 'm2' }], stale: true, staleSince: new Date(1000).toISOString() } } })
+    expect((await link.ops.machines()).status).toBe(503)
+    owner = 'account-b'
+    expect((await link.ops.machines(true)).status).toBe(503)
+    owner = ''
+    expect((await link.ops.machines(true)).status).toBe(503)
+    owner = 'account-a'
+    call.mockResolvedValueOnce({ status: 401, body: { error: 'NOT_SIGNED_IN' } })
+    expect((await link.ops.machines(true)).status).toBe(401)
+    expect((await link.ops.machines(true)).status).toBe(503)
+    link.notice({ kind: 'machines', owner, body, fetchedAt: 1000 })
+    call.mockResolvedValueOnce({ status: 403, body: {} })
+    expect((await link.ops.machines(true)).status).toBe(403)
+    expect((await link.ops.machines(true)).status).toBe(503)
+    link.notice({ kind: 'machines', owner, body: null, fetchedAt: 1000 })
+    expect((await link.ops.machines(true)).status).toBe(503)
+  })
+
+  it('accepts empty notices and bounds malformed timestamps before a stale response uses one', () => {
+    const { link, machines } = setup()
+    for (const fetchedAt of [undefined, Infinity, 1e30]) {
+      link.notice({ kind: 'machines', owner: null, body: [], fetchedAt })
+      expect(machines).toHaveBeenLastCalledWith({ owner: null, body: null, fetchedAt: 1_000_000 })
+    }
+    link.notice({ kind: 'machines' })
+    expect(machines).toHaveBeenLastCalledWith({ owner: null, body: null, fetchedAt: 1_000_000 })
+  })
+})
+
+it('rejects a reply when the core changed accounts while the gateway was answering', async () => {
+  let owner = 'a'
+  const { link } = setup({ start: () => ({ signedIn: true, account: { machineId: owner } }),
+    call: async () => { owner = 'b'; return { status: 200, body: { machines: ['a'] } } } })
+  expect(await link.ops.machines(true)).toMatchObject({ status: 409, body: { error: { code: 'ACCOUNT_CHANGED' } } })
+})
+
+it('forgets reported presence when accounts change and ignores notices already in flight from the old account', () => {
+  let owner = 'a'
+  const { link, machines } = setup({ start: () => ({ account: { machineId: owner } }) })
+  const body = { machines: [{ machineId: 'private-a' }] }
+  link.notice({ kind: 'machines', owner, body, fetchedAt: 1000 })
+  link.ops.account({ machineId: owner, signIn: null })
+  expect(machines).toHaveBeenCalledTimes(1)
+  owner = 'b'
+  link.ops.account({ machineId: owner, signIn: null })
+  expect(machines).toHaveBeenLastCalledWith({ owner, body: null, fetchedAt: 1_000_000 })
+  link.notice({ kind: 'machines', owner: 'a', body, fetchedAt: 1001 })
+  expect(machines).toHaveBeenCalledTimes(2)
 })
