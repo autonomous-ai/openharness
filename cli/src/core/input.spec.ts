@@ -174,6 +174,27 @@ describe('the session input controller\'s dependencies', () => {
     expect(answers).toEqual(['permission_open', null, null])
   })
 
+  it('hands the pane as it read it to the question watcher right before typing a prompt, and not when it holds the prompt', async () => {
+    const order: string[] = []
+    const promptTyped = vi.fn((session: { agentId: string }, capture: string | null) => { order.push(`prompt ${session.agentId} ${capture === READY_PANE}`) })
+    const screens = [READY_PANE, CLAUDE_PERMISSION]
+    const write = messageWriter({
+      resolve: (id) => agents.get(id),
+      terminal: {
+        validateTerminal: vi.fn(async () => true),
+        captureTerminal: vi.fn(async () => screens.shift() ?? READY_PANE),
+        submitTerminalAction: vi.fn(async () => { order.push('submit'); return ok }),
+      } as unknown as InputDeps['terminal'],
+      promptTyped,
+    })
+    expect(await write('a1', 'hello')).toBe(ok)
+    // Before the paste: the turn the prompt starts is seen to start only later.
+    expect(order).toEqual(['prompt a1 true', 'submit'])
+    // A permission prompt on the pane: nothing typed, nothing said.
+    expect(await write('a1', 'hello')).toMatchObject({ dispatch: 'not_started', reason: 'permission_open' })
+    expect(promptTyped).toHaveBeenCalledTimes(1)
+  })
+
   it('holds the Enter back when the pane cannot be read for three seconds, or shows no composer that long', async () => {
     for (const screen of [null, '✻ Welcome to Claude Code']) {
       let reads = 0

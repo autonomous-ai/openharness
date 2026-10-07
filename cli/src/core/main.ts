@@ -1000,6 +1000,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     commandcode: (sessionId) => commandcodeNormalizers.get(sessionId),
     // Reassigned further down (the funnel): always the current one.
     emit: (sessionId, events) => emitSessionEvents(sessionId, events),
+    // Declared further down: read as a prompt is typed, never now.
+    promptTyped: (session, capture) => { if (session.sessionId) questionWatcher.notePrompt(session.sessionId, capture) },
   })
   const input = inputs.input
   const deviceInput = inputs.deviceInput

@@ -46,6 +46,9 @@ export interface InputDeps {
   /** Command Code's normalizer for a session, which opens its turn on our paste. */
   commandcode: (sessionId: string) => CommandCodeNormalizer | undefined
   emit: (sessionId: string, events: LiveEvent[]) => void
+  /** A prompt is about to be typed, and `capture` is the pane as read right before: what is on it belongs
+   *  to the turns before the one it starts (the question watcher's, lib/askQuestion.ts `notePrompt`). */
+  promptTyped?: (session: RegisteredSession, capture: string | null) => void
 }
 
 /**
@@ -61,7 +64,7 @@ export interface InputDeps {
  * reason. `submitTerminalAction` is called here and nowhere else in this file, and input.spec.ts keeps
  * it so.
  */
-export function messageWriter({ resolve, terminal: { captureTerminal, validateTerminal, submitTerminalAction } }: Pick<InputDeps, 'resolve' | 'terminal'>) {
+export function messageWriter({ resolve, terminal: { captureTerminal, validateTerminal, submitTerminalAction }, promptTyped }: Pick<InputDeps, 'resolve' | 'terminal' | 'promptTyped'>) {
   return async (id: string, text: string, hold?: (session: RegisteredSession, capture: string | null) => string | null): Promise<TerminalActionResult> => {
     const session = resolve(id)
     if (!session) return terminalActionNotStarted('terminal agent is unavailable')
@@ -74,6 +77,7 @@ export function messageWriter({ resolve, terminal: { captureTerminal, validateTe
     const capture = await captureTerminal(id)
     const reason = hold?.(session, capture) ?? messageHold(session.engine, capture)
     if (reason) return terminalActionNotStarted(reason)
+    promptTyped?.(session, capture)
     return submitTerminalAction(id, text, {
       beforeEnter: async () => {
         // A read that came back empty, or a composer caught between frames, is asked again for a moment
