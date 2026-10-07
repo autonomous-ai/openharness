@@ -1155,7 +1155,9 @@ export class LocalModels {
     } else if (!record) {
       const jev = JEV_MODELS.find(m => m.id === operation.modelId)
       const model = jev ? await this.getJev(grid, jev, operation, change, must) : await this.appDecision(operation.modelId)
-      if (model && operation.action === 'start') await this.startDecision(grid, model, change, must)
+      await (model && operation.action === 'start'
+        ? this.startDecision(grid, model, change, must)
+        : undefined)
     }
     operation.phase = 'done'
     delete operation.progress

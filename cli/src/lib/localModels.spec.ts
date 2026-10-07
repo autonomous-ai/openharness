@@ -2334,23 +2334,43 @@ describe('Jev models: Get brings Grid\'s llama.cpp up to a build that serves the
       sizeBytes: 4_480_000_000, quant: 'MXFP8', kind: 'decision' }
     const tev = async (models: LocalModels) => (await models.list('home', true)).models.filter(m => m.id === TEV)
 
-    it('keeps a decision engine stoppable after its app no longer lists the model', async () => {
-      let scanned = [tev1]
-      const models = jevService({}, { appModels: async () => scanned })
-      await models.act('home', TEV, 'start'); await models.settled()
-      scanned = []
+    it('restores a decision model without quant metadata from the saved app scan', async () => {
+      const app = { ...tev1, quant: undefined }
+      const models = jevService({}, { appModels: async () => [app] })
+      await models.list('home'); await models.settled()
+      expect(JSON.parse(await readFile(join(stateDir, 'app-models.json'), 'utf8'))).toEqual([expect.objectContaining({ id: TEV })])
+      const restored = jevService({}, { appModels: async () => [app] })
+      expect(await tev(restored)).toEqual([expect.objectContaining({ kind: 'decision', state: 'downloaded', canStart: true })])
+      expect((await tev(restored))[0]).not.toHaveProperty('quant')
+    })
 
-      expect(await tev(models)).toEqual([expect.objectContaining({ name: 'tev1', kind: 'decision',
-        app: 'Ollama', state: 'running', canStart: false, canStop: true })])
-      await models.act('home', TEV, 'stop'); await models.settled()
-      expect(ops.stop).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ modelId: TEV, grid: 'home' }))
-      expect(await tev(models)).toEqual([])
+    it.each([
+      ['dead engine', { state: 'awake', nodes: [] }, true],
+      ['sleeping grid', { state: 'asleep', nodes: [] }, false],
+      ['unread grid', { state: 'unknown', nodes: [] }, false],
+      ['stopped grid', { state: 'unknown', status: 'stopped', nodes: [] }, true],
+      ['offline node', { state: 'awake', nodes: [{ online: false, models: ['tev1'] }] }, true],
+      ['node without models', { state: 'awake', nodes: [{ online: true }] }, true],
+      ['object model', { state: 'awake', nodes: [{ online: true, models: [{ model: 'tev1' }] }] }, false],
+    ] as const)('repeated Start respects a %s', async (scenario, observed, restart) => {
+      const models = jevService({}, { appModels: async () => [tev1] })
+      await models.act('home', TEV, 'start'); await models.settled()
+      if (scenario === 'dead engine') up.delete(TEV)
+      inventory.mockResolvedValue(observed as unknown as GridInventory)
+      await models.act('home', TEV, 'start'); await models.settled()
+      expect(ops.start).toHaveBeenCalledTimes(restart ? 2 : 1)
+      expect(ops.stop).toHaveBeenCalledTimes(restart ? 1 : 0)
+      expect((await tev(models))[0]!.operation?.phase).toBe('done')
     })
 
     it('is listed once, as a decision model in its own app, and started there beside a chat model', async () => {
       const models = jevService({}, { appModels: async () => [gemma, tev1] })
       expect(await tev(models)).toEqual([expect.objectContaining({ name: 'tev1', kind: 'decision', app: 'Ollama', state: 'downloaded',
         sizeBytes: 4_480_000_000, quant: 'MXFP8', canStart: true, canStop: false })])
+      // Download is already satisfied by the app's weights; only Start may allocate an engine.
+      await models.act('home', TEV, 'download'); await models.settled()
+      expect(ops.start).not.toHaveBeenCalled()
+      expect((await tev(models))[0]!.operation?.phase).toBe('done')
       await models.act('home', gemma.id, 'start'); await models.settled()
       await models.act('home', TEV, 'start'); await models.settled()
       // Here already, in the engine that downloaded it: nothing to pull, and Grid's llama.cpp is not asked.
@@ -2386,6 +2406,8 @@ describe('Jev models: Get brings Grid\'s llama.cpp up to a build that serves the
       const models = jevService({}, { appModels: async () => apps })
       await models.act('home', TEV, 'start'); await models.settled()
       apps = []
+      // A forced read starts a background scan; inspect the list after that scan has removed the app.
+      await models.list('home', true); await models.settled()
       expect(await tev(models)).toEqual([expect.objectContaining({ kind: 'decision', state: 'running', canStart: false, canStop: true })])
       await models.act('home', TEV, 'stop'); await models.settled()
       expect(ops.stop).toHaveBeenCalledWith(expect.objectContaining({ modelId: TEV }))

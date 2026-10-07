@@ -2,6 +2,27 @@ import { describe, expect, it, vi } from 'vitest'
 import { projectDisplayName, type RegisteredSession } from '../lib/registry.js'
 import { CONVERSATIONS_OFF, ACCOUNT_BACKEND_OFF, AGENT_ACTIONS_OFF, createCoreApi, DAEMON_UNKNOWN, DELIVERIES_OFF, DEVICES_FALLBACKS, emptyPorts, LANE_OFF, LONG_ANSWERS, MODELS_OFF, MODELS_REQUESTS, MONITOR_OFF, OBSERVER_KEY_OFF, ORCHESTRATOR_FALLBACKS, RECAPS_FALLBACKS, resolveAgent, SHARING_FALLBACKS, TEAMS_FALLBACKS, TERMINALS_OFF, WIFI_FALLBACKS, WIFI_OFF, type CoreApiDeps } from './api.js'
 import { FAIL, readFallback } from './serviceHost.js'
+import { localWindowsOf, windowSurfaceOf, WINDOW_SURFACES } from '../lib/windowPresence.js'
+
+describe('window presence input contract', () => {
+  it('recognizes only the TUI surface explicitly and defaults other values to Desktop', () => {
+    expect(WINDOW_SURFACES).toEqual(['desktop', 'tui'])
+    expect(windowSurfaceOf('tui')).toBe('tui')
+    for (const value of ['desktop', 'web', '', null, undefined, 1, {}]) {
+      expect(windowSurfaceOf(value)).toBe('desktop')
+    }
+  })
+
+  it('normalizes finite positive counts and rejects unreadable counts', () => {
+    expect(localWindowsOf({ desktop: 2.9, tui: 3.1 })).toEqual({ desktop: 2, tui: 3 })
+    for (const value of [undefined, null, {}, 'bad', 12]) {
+      expect(localWindowsOf(value)).toEqual({ desktop: 0, tui: 0 })
+    }
+    for (const count of [0, -1, NaN, Infinity, -Infinity, '2', null, undefined]) {
+      expect(localWindowsOf({ desktop: count, tui: count })).toEqual({ desktop: 0, tui: 0 })
+    }
+  })
+})
 
 const row = (agentId: string) => ({ agentId, sessionId: `s-${agentId}`, engine: 'claude', cwd: '/work/app' }) as RegisteredSession
 

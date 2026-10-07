@@ -14,7 +14,8 @@
  * E2EE_REQUIRED. backendSocket.spec.ts and gateway/gateway.spec.ts hold each of them.
  */
 import { env } from '../config/env.js'
-import { WINDOW_SURFACES, type GatewayEvents, type GatewayPort, type LocalWindows, type RemoteRole, type RemoteTransport, type WindowSurface } from '../core/api.js'
+import type { GatewayEvents, GatewayPort, LocalWindows, RemoteRole, RemoteTransport, WindowSurface } from '../core/api.js'
+import { WINDOW_SURFACES } from '../lib/windowPresence.js'
 import { deviceDump } from '../lib/autonomous-device/dump.js'
 import type { AuthSessionManager } from '../lib/authSession.js'
 import { shouldReplayCommander } from '../lib/commanderReplay.js'
