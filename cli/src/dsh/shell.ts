@@ -38,6 +38,17 @@ export function isShellNoise(line: string): boolean {
 const BASH_NO_TTY = /^(?:\S*\/)?bash: (?:cannot set terminal process group \(-?\d+\): Inappropriate ioctl for device|no job control in this shell)$/
 
 /**
+ * The shell's report of a job of its own that a signal ended (`/bin/sh: line 1: 31849 Terminated: 15  sleep 30`
+ * on macOS, `bash: line 1: 31849 Terminated  sleep 30` on Linux). Once a command has outlived its timeout its
+ * whole group is sent SIGTERM, and a shell that is still in `wait` when its job dies says so before it goes:
+ * that is the stop, told by the shell, not the command's output. Seen under load (a full unit run with 12
+ * busy loops), where the job's death reached the shell before the shell's own SIGTERM did.
+ */
+export function isKilledJobReport(line: string): boolean {
+  return /^(?:\S*\/)?(?:ba)?sh: line \d+: +\d+ (?:Terminated|Killed)(?::\s*\d+)?\s+\S/.test(line)
+}
+
+/**
  * `[path, ...args]` that runs `script` through the user's shell, or `/bin/sh -c` when none is known.
  *
  * AS A LOGIN SHELL, whatever the shell. interactiveEngineShell gives bash `-ic` on purpose for a pane
@@ -103,7 +114,7 @@ export function runDshCommand(script: string, opts: DshCommandOptions): Promise<
       while ((at = carry.rest.indexOf('\n')) >= 0) {
         const line = carry.rest.slice(0, at).replace(/\r$/, '')
         carry.rest = carry.rest.slice(at + 1)
-        if (isShellNoise(line)) continue
+        if (isShellNoise(line) || (timedOut && isKilledJobReport(line))) continue
         lines.push(line)
         opts.onLine?.(line)
       }
@@ -117,7 +128,7 @@ export function runDshCommand(script: string, opts: DshCommandOptions): Promise<
       settled = true
       if (timer) clearTimeout(timer)
       for (const carry of [out, err]) {
-        if (carry.rest) { lines.push(carry.rest); opts.onLine?.(carry.rest) }
+        if (carry.rest && !(timedOut && isKilledJobReport(carry.rest))) { lines.push(carry.rest); opts.onLine?.(carry.rest) }
       }
       resolve({ code, signal, lines, timedOut })
     }
