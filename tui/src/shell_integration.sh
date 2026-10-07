@@ -13,15 +13,27 @@ _hn_request() (
     _hn_fifo="$_hn_dir/$_hn_id"
     mkfifo -- "$_hn_fifo" || exit 1
     trap 'rm -f -- "$_hn_fifo"; rmdir -- "$_hn_dir" 2>/dev/null || true' EXIT
-    trap 'printf "\\033]633;hn;%s;%s;cancel;\\007" "$_HN_CONTEXT" "$_hn_id" >&4; exit 130' INT
+    trap 'printf "\\033]633;hn;%s;%s;cancel;\\007" "$_HN_CONTEXT" "$_hn_id" >&4; printf "Cancelled.\\n" >&2; exit 130' INT
     trap 'printf "\\033]633;hn;%s;%s;cancel;\\007" "$_HN_CONTEXT" "$_hn_id" >&4; exit 143' TERM HUP
     exec 3<>"$_hn_fifo" || exit 1
     _hn_query=$(printf '%s' "${2-}" | base64 | tr -d '\r\n')
     # A freshly reattached stream may miss its first output event. Retry the same
     # request id; the client deduplicates it and never repeats the action.
     _hn_attempt=0
-    _hn_attempts=120
-    [ "$1" != picker-ready ] || _hn_attempts=5
+    case "$1" in
+        *-inline) _hn_attempts=60 ;;   # called from a line-editor widget: say what it waits for, give up after 60 s
+        picker-ready) _hn_attempts=5 ;;
+        *) _hn_attempts=120 ;;
+    esac
+    _hn_who=''
+    case "$1" in
+        host-inline) _hn_who=$(printf '%s' "${2-}" | tr -d '[:cntrl:]'); _hn_what="Opening a shell on ${_hn_who:-the computer}…" ;;
+        model-inline) _hn_what='Switching model…' ;;
+        session-inline) _hn_what='Opening session…' ;;
+        *) _hn_what='' ;;
+    esac
+    # Drawn at once, so a silent computer never looks like a frozen shell.
+    [ -z "$_hn_what" ] || printf '\n%s Ctrl-C to cancel\r\n' "$_hn_what" >&4
     while [ "$_hn_attempt" -lt "$_hn_attempts" ]; do
         _hn_attempt=$((_hn_attempt + 1))
         printf '\033]633;hn;%s;%s;%s;%s\007' "$_HN_CONTEXT" "$_hn_id" "$1" "$_hn_query" >&4
@@ -40,7 +52,12 @@ _hn_request() (
                 ;;
         esac
     done
-    printf '%s\n' 'Harness did not answer. Your shell is still available; try again.' >&2
+    case "$1" in
+        *-inline)
+            printf '\033]633;hn;%s;%s;cancel;\007' "$_HN_CONTEXT" "$_hn_id" >&4
+            printf '%s did not answer. Your line is unchanged; try again.\n' "${_hn_who:-Harness}" >&2 ;;
+        *) printf '%s\n' 'Harness did not answer. Your shell is still available; try again.' >&2 ;;
+    esac
     exit 1
 )
 _hn_pick() {
@@ -230,10 +247,14 @@ _hn_picker_widget() {
         fi
         return 0
     fi
+    # Ctrl-C reaches this shell too. _hn_request cancels its own request; the
+    # widget must not abort with it, or zsh throws the line away.
+    if [ -n "${ZSH_VERSION-}" ]; then setopt localtraps; trap ':' INT; else trap '' INT; fi
     case "$_hn_kind" in
         host|model) _hn_message=$(_hn_request "$_hn_kind-inline" "$_hn_value" 2>&1) || : ;;
         sessions) _hn_message=$(_hn_request session-inline "$_hn_value" 2>&1) || : ;;
     esac
+    if [ -n "${BASH_VERSION-}" ]; then trap - INT; fi
     if [ -n "$_hn_message" ]; then
         if [ -n "${ZSH_VERSION-}" ]; then
             # The finder moved the physical cursor while ZLE retained its own

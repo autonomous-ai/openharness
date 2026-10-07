@@ -847,7 +847,7 @@ pub fn tick(app: &mut App) {
     if app.shell_context.pending.as_ref().is_some_and(|r| r.verb != "compose-launch" && !r.verb.ends_with("-inline")) && !matches!(app.modal, Some(Modal::Picker { kind:PickerKind::ShellContext, .. })) {
         cancel(app);
     }
-    if app.shell_context.pending.as_ref().is_some_and(|r| r.at.elapsed() > Duration::from_secs(if r.verb == "compose-launch" { 180 } else { 100 })) {
+    if app.shell_context.pending.as_ref().is_some_and(|r| r.at.elapsed() > Duration::from_secs(if r.verb == "compose-launch" { 180 } else if r.verb.ends_with("-inline") { 65 } else { 100 })) {
         finish(app, 1, "The request timed out. Your shell is unchanged.");
     }
 }
@@ -1302,6 +1302,30 @@ mod tests {
         output(&mut app,1,format!("\x1b]633;hn;{token};{id};cancel;\x07").as_bytes());
         assert!(app.shell_context.pending.is_none());
         assert_eq!(app.shell_context.replies.back().unwrap().code,1);
+    }
+
+    #[tokio::test]
+    async fn an_inline_request_the_shell_gave_up_on_is_dropped_and_frees_the_picker() {
+        let mut app=app();
+        let token=prepare(&mut app,None,false);bind(&mut app,&token,"local","shell");
+        let id=uuid::Uuid::new_v4().to_string();
+        let pending=|age:u64|Some(Request{token:token.clone(),id:id.clone(),pane:1,verb:"host-inline".into(),query:"Gone".into(),at:Instant::now()-Duration::from_secs(age)});
+        // the shell waits 60 s; the TUI keeps the request a little longer than that
+        app.shell_context.pending=pending(62);
+        tick(&mut app);assert!(app.shell_context.pending.is_some(),"an -inline request outlives the shell's 60 s wait");
+        app.shell_context.pending=pending(66);
+        tick(&mut app);
+        assert!(app.shell_context.pending.is_none(),"an -inline request expires after 65 s");
+        assert_eq!(app.shell_context.replies.back().unwrap().code,1);
+        // a later request is served, not refused with "close the current picker first"
+        output(&mut app,1,&request(&token,"model-inline","default"));
+        assert_eq!(app.shell_context.replies.back().unwrap().code,0);
+        // a cancel for a waiting -inline request frees the picker at once
+        app.shell_context.pending=pending(1);
+        output(&mut app,1,format!("\x1b]633;hn;{token};{id};cancel;\x07").as_bytes());
+        assert!(app.shell_context.pending.is_none());
+        output(&mut app,1,&request(&token,"model-inline","default"));
+        assert_eq!(app.shell_context.replies.back().unwrap().code,0);
     }
 
     #[tokio::test]
