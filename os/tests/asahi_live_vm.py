@@ -101,7 +101,10 @@ with storage.mounted('/dev/vdb2',esp/'mounted','ro,noatime,uid=0,gid=0,fmask=017
      startup.label_files(root,'/boot',*configs)
      boot_files=['/boot/grub2/grub.cfg',*('/'+str(p.relative_to(root)) for p in (root/'boot/loader/entries').glob('*.conf')),
                  *('/'+str(p.relative_to(root)) for p in (root/'boot').glob('initramfs-*.img'))]
-     storage.run('chroot',root,'/usr/sbin/matchpathcon','-V',*configs,*boot_files)
+    # Verify with the installed policy after removing the maintenance kernel's
+    # virtual filesystems. With them mounted, its disabled SELinux can
+    # canonicalize every expected context to the literal "kernel".
+    storage.run('chroot',root,'/usr/sbin/matchpathcon','-V',*configs,*boot_files)
 '''
     put(vm, '/var/tmp/harness-media-observer.py', script)
     vm.command('unshare --mount --propagation private python3 /var/tmp/harness-media-observer.py', timeout=240)
