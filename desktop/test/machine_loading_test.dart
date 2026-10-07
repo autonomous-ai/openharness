@@ -438,6 +438,27 @@ void main() {
     expect(machine.agents.single.viewerName, 'New viewer');
   });
 
+  testWidgets(
+    'inventory retries share one awake deadline and late replies cannot commit',
+    (tester) async {
+      final load = app.reloadMachineData('m');
+      await tester.pump();
+      connection.capabilities.single.complete(_capabilities);
+      await tester.pump(const Duration(seconds: 8));
+      connection.agents.single.complete({'error': 'malformed'});
+      await tester.pump();
+      expect(connection.agents, hasLength(2));
+      await tester.pump(const Duration(seconds: 2));
+      await load;
+      expect(machine.agentsLoadError, contains('offline'));
+      connection.agents.last.complete(_agents);
+      await tester.pump();
+      expect(machine.agents, isEmpty);
+      app.dispose();
+      disposed = true;
+    },
+  );
+
   test('an offline transition invalidates a pending agent inventory', () async {
     final old = app.reloadMachineData('m');
     await _tick();

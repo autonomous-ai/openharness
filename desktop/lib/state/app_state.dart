@@ -6622,18 +6622,24 @@ class AppNotifier extends ChangeNotifier {
     WsConn connection,
     Duration budget,
   ) {
-    final clock = Stopwatch()..start();
-    return machine._agentInventory.read((sync) {
-      final remaining = budget - clock.elapsed;
-      if (remaining <= Duration.zero) {
+    var expired = false;
+    // One awake-time budget spans both attempts. A closed lid must not turn a
+    // retried inventory into an immediate offline transition on wake.
+    return awakeTimeout(
+      machine._agentInventory.read((sync) {
+        if (expired) throw const WsRequestTimeout('agents_list');
+        return connection.request(
+          'agents_list',
+          payload: {'includeStopped': true, 'sync': sync},
+          timeout: budget,
+        );
+      }, observe: () => machine.agents),
+      budget,
+      onTimeout: () {
+        expired = true;
         throw const WsRequestTimeout('agents_list');
-      }
-      return connection.request(
-        'agents_list',
-        payload: {'includeStopped': true, 'sync': sync},
-        timeout: remaining,
-      );
-    }, observe: () => machine.agents);
+      },
+    );
   }
 
   /// Silent safety-net reconciliation, ticked every [agentSyncInterval] while a machine is connected.

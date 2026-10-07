@@ -92,6 +92,16 @@ void main() {
             {'id': ''},
           ],
         },
+        {
+          'agents': [
+            {'id': 'a', 'name': 42},
+          ],
+        },
+        {
+          'agents': [
+            {'id': 'a', 'grid': 'malformed'},
+          ],
+        },
         {'error': 'broken'},
         {
           'agents': [],
