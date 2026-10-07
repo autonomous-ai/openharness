@@ -40,6 +40,23 @@ describe('Codex hook installation', () => {
     vi.unstubAllEnvs()
   })
 
+  it('runs the notify.mjs beside the CLI a core started from the lean bundle runs for, never one beside its own file', async () => {
+    // A core started from the lean bundle in the data folder: its own file has no notify.mjs beside it,
+    // and its script (process.argv[1], leanEntry.ts) is the cli.js it was read from.
+    const cliDir = mkdtempSync(join(tmpdir(), 'adapter-cli-dir-'))
+    writeFileSync(join(cliDir, 'notify.mjs'), '')
+    const script = process.argv[1]
+    process.argv[1] = join(cliDir, 'cli.js')
+    try {
+      const { installCodexHooks } = await loadHooks()
+      installCodexHooks(19473)
+      expect(readFileSync(join(codexHome, 'hooks.json'), 'utf-8')).toContain(join(cliDir, 'notify.mjs'))
+    } finally {
+      process.argv[1] = script
+      rmSync(cliDir, { recursive: true, force: true })
+    }
+  })
+
   it('merges foreign hooks and installs the canonical catch hooks idempotently', async () => {
     const file = join(codexHome, 'hooks.json')
     writeFileSync(file, JSON.stringify({

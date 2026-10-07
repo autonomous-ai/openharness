@@ -17,8 +17,8 @@
  * `COMPAT_FROM=<that>/dist/cli.js npm run test:e2e -- compat`. `COMPAT_REPORT=<file>` writes both
  * sides' answers and every difference, for reading one by one.
  */
-import { execFileSync } from 'node:child_process'
-import { copyFileSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { execFileSync, spawn } from 'node:child_process'
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { hostname, tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -26,6 +26,9 @@ import { LocalClient, type Frame } from './harness/client.js'
 import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
 
 const FROM = process.env.COMPAT_FROM
+/** No `grid` on either side's machine as far as the daemons can tell: never the developer's own, and the
+ *  same answer from both. */
+const NO_GRID = '/nonexistent/harness-compat/grid'
 
 /**
  * Differences on purpose, by the path that differs (a prefix covers everything under it), each with
@@ -44,6 +47,10 @@ const CHANGED_FIELDS: Array<[RegExp, string, { optional?: boolean }?]> = [
   // Whether the search index had finished its first build when the query came, and how many conversations
   // it still had to read, is timing; search runs in its own process now (#829) and is often ready sooner.
   [/^\.session_search [^.]*\.(ready|pending)$/, 'the index\'s readiness, and what it still has to read, at the moment of the query is timing', { optional: true }],
+  // A row created with no mode learns it from the engine's arguments once discovery sees the process
+  // (core/agents/discovery.ts, fill-only), in both builds. Whether that lands before agent_create answers
+  // is timing: the release check of 08548179c met null against "auto" once, and its earlier run met none.
+  [/^\.agent_create [^.]*\.agent\.permissionMode$/, 'the permission mode is read back from the engine\'s arguments, before or after the answer', { optional: true }],
 ]
 
 type Engine = 'claude' | 'codex'
@@ -98,6 +105,9 @@ function shape(frames: Frame[]): string[] {
     // When the activity is announced is timing, not an answer: one run's sequence had an extra
     // agent_activity before turn_started, or after turn_summary, on either build.
     if (frame.type === 'agent_activity') continue
+    // A heartbeat comes every few seconds of an open turn: whether a question's turn lasts long enough for
+    // one is timing too. Under load one run's question had an extra turn_heartbeat, on either build.
+    if (frame.type === 'turn_heartbeat') continue
     const keys = Object.keys(frame.payload ?? {}).sort().join(',')
     const line = `${frame.type} {${keys}}`
     if (out.at(-1) !== line) out.push(line)
@@ -115,6 +125,57 @@ function differences(a: unknown, b: unknown, path = ''): Array<{ path: string; f
   }
   if (Array.isArray(a) && Array.isArray(b) && a.length === b.length) return a.flatMap((item, i) => differences(item, b[i], `${path}[${i}]`))
   return [{ path, from: a, to: b }]
+}
+
+/**
+ * The command bar (services/commandBar.ts; in the core before), at its two doors: the socket's `command_bar`
+ * and the hook server's `/api/command-bar/*`. With no OpenRouter key: what reaches JEV is the same code on
+ * either build, and no test may call it. The key is read from `ORI_CREDENTIALS_PATH`, a FIFO here, so that
+ * a decision waits on it, in flight, for as long as nothing writes: what each door answers beyond its
+ * limits, two at once per connection and two at once in all, is compared too.
+ */
+async function commandBar(d: IsolatedDaemon, answers: Answers, walk: (value: unknown) => unknown, client: LocalClient): Promise<void> {
+  const request = { prompt: 'take me back to the release notes', candidates: [{ id: 'open:notes', kind: 'open', title: 'Release notes', detail: 'Writing the release notes' }] }
+  const http = async (step: string, route: string, init: { method?: string; headers?: Record<string, string>; body?: string } = {}) => {
+    const response = await fetch(`http://127.0.0.1:${d.port}/api/command-bar/${route}`, {
+      method: init.method ?? (route === 'status' ? 'GET' : 'POST'),
+      headers: init.headers ?? { 'x-adapter-local': '1', 'content-type': 'application/json' },
+      ...(init.body === undefined ? {} : { body: init.body }),
+    })
+    answers[step] = walk({ status: response.status, body: await response.json() })
+  }
+  const ask = async (step: string, on: LocalClient, payload: Record<string, unknown>) => {
+    answers[step] = walk(await on.request('command_bar', payload, 60_000).catch(() => ({ '<no reply>': true })))
+  }
+  // Refused before any key is read.
+  await ask('command_bar with nothing', client, {})
+  await ask('command_bar too large', client, { request: { prompt: 'x'.repeat(2_001), candidates: [] } })
+  await http('command bar over HTTP without the native header', 'resolve', { headers: { 'content-type': 'application/json' }, body: '{}' })
+  await http('command bar over HTTP from a browser', 'resolve', { headers: { 'x-adapter-local': '1', origin: 'https://example.com' }, body: '{}' })
+  await http('command bar over HTTP, the wrong method', 'resolve', { method: 'GET' })
+  await http('command bar over HTTP, not JSON', 'resolve', { body: '{' })
+  await http('command bar over HTTP, too large', 'resolve', { body: 'x'.repeat(129_000) })
+  await http('command bar over HTTP, invalid', 'resolve', { body: JSON.stringify({ prompt: '' }) })
+  // Two decisions in flight on one connection, each waiting on the key: its third is refused by the
+  // socket's limit, another connection's and the HTTP door's by the command bar's own.
+  const other = await LocalClient.connect(d)
+  const waiting = [client.request('command_bar', { request }, 60_000), client.request('command_bar', { request }, 60_000)]
+  await new Promise((done) => setTimeout(done, 3_000))
+  await ask('command_bar, a connection\'s third at once', client, { request })
+  await ask('command_bar, another connection beyond two at once', other, { request })
+  await http('command bar over HTTP beyond two at once', 'resolve', { body: JSON.stringify(request) })
+  // The key, written for every reader from now on: none, so each decision ends there. A pause after each
+  // write, or a reader still reading could be fed by the next writer forever and never reach its end.
+  const writer = spawn('/bin/sh', ['-c', 'while :; do printf "{}" > "$1"; sleep 0.2; done', 'sh', d.env.ORI_CREDENTIALS_PATH!], { stdio: 'ignore' })
+  try {
+    answers['command_bar, the two that waited'] = walk(await Promise.all(waiting))
+    await ask('command_bar', other, { request })
+    await http('command bar status over HTTP', 'status')
+    await http('command bar over HTTP', 'resolve', { body: JSON.stringify(request) })
+  } finally {
+    writer.kill()
+    other.close()
+  }
 }
 
 /** The scenario, on one daemon: what it answered, made comparable. */
@@ -222,6 +283,16 @@ async function scenario(d: IsolatedDaemon): Promise<Answers> {
     await ask(`terminal_info ${engine}`, 'terminal_info', { agentId: agent[engine] })
     await ask(`agent_read_file ${engine}`, 'agent_read_file', { agentId: agent[engine], path: 'README.md' })
     await ask(`git_pull_request ${engine}`, 'git_pull_request', { agentId: agent[engine] })
+    // Quiet-machine QA: the handoff's edge-host move must preserve both the reply and what the next
+    // engine actually reads. Empty/error replies cannot pass merely by matching each other.
+    const handoff = await ask(`agent_handoff_prepare ${engine}`, 'agent_handoff_prepare', {
+      agentId: agent[engine], changeId: '0123456789abcdef0123456789abcdef', targetEngine: engine === 'claude' ? 'codex' : 'claude',
+    })
+    expect(handoff.error, JSON.stringify(handoff)).toBeUndefined()
+    expect(handoff.file).toEqual(expect.any(String))
+    for (const [kind, path] of [['summary', handoff.file], ['transcript', handoff.file.replace(/\.md$/, '.transcript.md')]]) {
+      answers[`handoff ${kind} ${engine}`] = walk(readFileSync(join(cwd(engine), path), 'utf8'))
+    }
   }
   await ask('models_list', 'models_list')
   await ask('git_project_info', 'git_project_info', { path: cwd('claude') })
@@ -233,6 +304,17 @@ async function scenario(d: IsolatedDaemon): Promise<Answers> {
   await ask('agents_cleanup_preview', 'agents_cleanup_preview')
   await ask('harness_devices_list', 'harness_devices_list')
   await ask('theme_set', 'theme_set', { background: '#000000', foreground: '#ffffff' })
+  // Models, in its own process from step 7 (docs/design/2026-10-06-core-boundary-next.md): the pickers, the
+  // Model Manager and its grid commands, a create on a grid model. Nothing that sets grid up is asked: a
+  // Set up, a Get or a Use would install it.
+  await ask('grid_models_list', 'grid_models_list')
+  await ask('grid_models_list with row state', 'grid_models_list', { rowState: true })
+  await ask('grid_fleet_models_list', 'grid_fleet_models_list')
+  await ask('grid_fleet_capabilities', 'grid_fleet_capabilities')
+  await ask('grid_fleet_run', 'grid_fleet_run', { args: ['--remote', 'ls', '--json'], timeoutMs: 5_000 })
+  await ask('grid_fleet_cancel', 'grid_fleet_cancel', { commandId: 'compat-not-running' })
+  await ask('agent_create on a grid model', 'agent_create', { engine: 'codex', cwd: cwd('codex'), gridModel: 'Qwen3-Coder-30B', gridName: 'mine', bypassPermission: true })
+  await commandBar(d, answers, walk, client)
   await ask('a request nobody answers', 'compat_unknown_request')
   await ask('agent_create_status for no such creation', 'agent_create_status', { creationId: 'compat-no-such-creation' })
 
@@ -243,7 +325,9 @@ async function scenario(d: IsolatedDaemon): Promise<Answers> {
     'git_project_info', 'fs_list_dir', 'project_preview', 'session_tail', 'dsh_remove', 'dsh_install', 'dsh_update', 'theme_set',
     'agent_create', 'agent_create_status', 'agent_handoff_prepare', 'agent_worktree_delete', 'message',
     // Moved out of the socket's switch into services (docs/design/2026-10-06-core-boundary-next.md, step 4).
-    'git_pull_request', 'codex_profile_link', 'api_connections']
+    'git_pull_request', 'codex_profile_link', 'api_connections',
+    // Into models' own process (step 7). A Get and a Use are left out: they set grid up.
+    'grid_fleet_run', 'grid_fleet_cancel', 'grid_fleet_model_stop']
   for (const type of malformed) {
     // `cancel` and `message` are fire-and-forget: no build answers them, so waiting a minute shows nothing more.
     const ms = type === 'cancel' || type === 'message' ? 5_000 : 60_000
@@ -267,6 +351,9 @@ async function scenario(d: IsolatedDaemon): Promise<Answers> {
   await ask('session_get codex while stopped', 'session_get', { sessionId: session.codex, limit: 1 })
   await ask('sessions_list codex while stopped', 'sessions_list', { agentId: agent.codex })
   await ask('agent_recent codex while stopped', 'agent_recent', { agentId: agent.codex })
+  await ask('agent_handoff_prepare codex while stopped', 'agent_handoff_prepare', {
+    agentId: agent.codex, changeId: 'fedcba9876543210fedcba9876543210', targetEngine: 'claude',
+  })
   // The model a resumed agent runs is what its engine reports once it is back, a race with the reply
   // on either build: v0.3.58 and this build each answered null in some runs and the model in others.
   // It is compared settled, in the rows read at the end.
@@ -302,9 +389,11 @@ describe.skipIf(!FROM)('what the apps see, compared with the released build', ()
     copyFileSync(join(dirname(FROM!), 'notify.mjs'), join(released, 'notify.mjs'))
     for (const dir of [build, released]) writeFileSync(join(dir, 'package.json'), '{"type":"module"}\n')
 
+    // Where each side reads its OpenRouter key: a FIFO, so that a command bar decision can wait on it.
+    const ori = (side: string) => { const path = join(scratch, `${side}.ori`); execFileSync('mkfifo', [path]); return path }
     for (const [side, options] of [
-      ['released', { scriptPath: join(released, 'cli.js'), env: { ADAPTER_CLI_DIR: released } }],
-      ['this', { scriptPath: join(build, 'cli.js'), env: { ADAPTER_CLI_DIR: build } }],
+      ['released', { scriptPath: join(released, 'cli.js'), env: { ADAPTER_CLI_DIR: released, HARNESS_GRID_BIN: NO_GRID, ORI_CREDENTIALS_PATH: ori('released') } }],
+      ['this', { scriptPath: join(build, 'cli.js'), env: { ADAPTER_CLI_DIR: build, HARNESS_GRID_BIN: NO_GRID, ORI_CREDENTIALS_PATH: ori('this') } }],
     ] as const) {
       const d = await IsolatedDaemon.create(options)
       // tmux titles each new pane with the machine's name as it is then, and a daemon refuses that title

@@ -9,9 +9,11 @@
 import { execFileSync } from 'node:child_process'
 import { mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { LocalClient, type Frame } from './harness/client.js'
-import { IsolatedDaemon, until } from './harness/daemon.js'
+import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
+import { sharedCodex } from './harness/sharedCodex.js'
 
 type Engine = 'claude' | 'codex'
 type Row = Record<string, any>
@@ -51,6 +53,175 @@ const codexCommands = (sessionId: string): string[] =>
 describe('the person\'s engines keeping their data elsewhere', () => {
   let daemon: IsolatedDaemon | undefined
   afterEach(async () => { await daemon?.close(); daemon = undefined })
+
+  it.each(['claude', 'codex'] as const)('%s model picker follows the login shell home', async engine => {
+    const d = await IsolatedDaemon.create(); daemon = d
+    d.env.NODE_OPTIONS = `--import=${pathToFileURL(join(CLI_ROOT, 'e2e/harness/hiddenProcessEnv.mjs')).href}`
+    onTestFailed(() => console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`))
+    const home = join(d.root, `${engine}-models`)
+    mkdirSync(home)
+    const variable = engine === 'claude' ? 'CLAUDE_CONFIG_DIR' : 'CODEX_HOME'
+    writeFileSync(join(d.env.ZDOTDIR!, '.zshrc'), `export ${variable}=${JSON.stringify(home)}\n`)
+    if (engine === 'claude') {
+      writeFileSync(join(d.engineConfig.claudeProjectsDir, '..', 'settings.json'), JSON.stringify({ availableModels: ['haiku'] }))
+      writeFileSync(join(home, 'settings.json'), JSON.stringify({ availableModels: ['sonnet'] }))
+    } else {
+      const cache = (slug: string) => JSON.stringify({ models: [{ slug, display_name: slug, visibility: 'list', supported_reasoning_levels: [{ effort: 'high' }] }] })
+      writeFileSync(join(d.env.CODEX_HOME!, 'models_cache.json'), cache('wrong-login-model'))
+      writeFileSync(join(home, 'models_cache.json'), cache('gpt-6-luna'))
+    }
+    await d.start()
+    await until('the core to read the login shell', () => /\[env\] read \d+ variables/.test(d.log()))
+    const client = await LocalClient.connect(d)
+    const created = await client.request('agent_create', { engine, cwd: d.projectsDir, bypassPermission: true }, 90_000)
+    expect(created.error, JSON.stringify(created)).toBeUndefined()
+    const agent = await until('the model-picker agent to bind', async () => {
+      const now = await row(client, created.agent.id); return now?.sessionId ? now : null
+    }, 30_000)
+    if (engine === 'codex') expect(agent.codexHome).toBeNull()
+    const answer = await client.request('models_list', { agentId: agent.id }, 30_000)
+    expect(answer.error, JSON.stringify(answer)).toBeUndefined()
+    const ids = answer.models.map((model: Row) => model.id)
+    expect(ids).toContain(`runtime-v1:${agent.id}:${engine}:${engine === 'claude' ? 'sonnet' : 'gpt-6-luna'}@auto`)
+    expect(ids.some((id: string) => id.includes(engine === 'claude' ? ':haiku@' : ':wrong-login-model@'))).toBe(false)
+    client.close()
+  })
+
+  it.each(['activity', 'resources', 'close'] as const)('a moved shared Codex server supplies %s when process environment discovery is unavailable', async operation => {
+    const d = await IsolatedDaemon.create(); daemon = d
+    d.env.NODE_OPTIONS = `--import=${pathToFileURL(join(CLI_ROOT, 'e2e/harness/hiddenProcessEnv.mjs')).href}`
+    onTestFailed(() => console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`))
+    const home = join(d.root, 'codex-shared')
+    mkdirSync(home)
+    writeFileSync(join(d.env.ZDOTDIR!, '.zshrc'), `export CODEX_HOME=${JSON.stringify(home)}\n`)
+    // Older Codex releases have a shared server and no --no-daemon flag. Keep the actual CLI probe.
+    writeFileSync(join(d.root, 'bin', 'codex'), `#!${process.execPath}\nimport(${JSON.stringify(pathToFileURL(join(CLI_ROOT, 'e2e/harness/fakeEngine.mjs')).href)}).then(m => m.run('codex', ${JSON.stringify({ ...d.engineConfig, without: ['--no-daemon'] })}))\n`, { mode: 0o755 })
+    const server = await sharedCodex(home)
+    try {
+      await d.start()
+      await until('the core to read the login shell', () => /\[env\] read \d+ variables/.test(d.log()))
+      const client = await LocalClient.connect(d)
+      const created = await client.request('agent_create', { engine: 'codex', cwd: d.projectsDir, bypassPermission: true }, 90_000)
+      expect(created.error, JSON.stringify(created)).toBeUndefined()
+      const agent = await until('the shared conversation to bind', async () => {
+        const now = await row(client, created.agent.id); return now?.sessionId ? now : null
+      }, 30_000)
+      expect(agent.codexHome).toBeNull()
+      server.state.threadId = agent.sessionId
+      const started = client.next(isTurn('turn_started', agent.id), 30_000)
+      client.send('message', { agentId: agent.id, content: '!hold' })
+      await started
+      if (operation === 'activity') {
+        await until('the activity read at the moved server', () => server.state.requests.some(frame => frame.method === 'thread/read'), 45_000)
+        await until('the app to show verified working activity', async () => (await row(client, agent.id))?.activity?.state === 'working')
+      } else if (operation === 'resources') {
+        await until('the moved server in Harness Monitor', async () => {
+          const answer = await client.request('machine_resources', { harnesses: true })
+          expect(answer.harnesses?.shared, JSON.stringify(answer)).toEqual(expect.arrayContaining([
+            expect.objectContaining({ kind: 'codex', agentIds: expect.arrayContaining([agent.id]), memoryBytes: expect.any(Number) }),
+          ]))
+          return answer.harnesses.shared.some((value: Row) => value.kind === 'codex' && value.agentIds.includes(agent.id) && value.memoryBytes > 0)
+        }, 20_000)
+      } else {
+        const result = await client.request('agent_close', { agentId: agent.id, sessionId: agent.sessionId, createdAt: agent.createdAt, mode: 'now' }, 90_000)
+        expect(result.error, JSON.stringify(result)).toBeUndefined()
+        expect(server.state.requests.map(frame => frame.method)).toEqual(expect.arrayContaining(['thread/goal/set', 'turn/interrupt', 'thread/archive', 'thread/unarchive']))
+        expect(server.state.loaded).toBe(false)
+      }
+      client.close()
+    } finally { await server.close() }
+  })
+
+  it('a moved Codex home supplies the thread name shown on its agent', async () => {
+    const d = await IsolatedDaemon.create(); daemon = d
+    d.env.NODE_OPTIONS = `--import=${pathToFileURL(join(CLI_ROOT, 'e2e/harness/hiddenProcessEnv.mjs')).href}`
+    onTestFailed(() => console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`))
+    const home = join(d.root, 'codex-names')
+    mkdirSync(home)
+    writeFileSync(join(d.env.ZDOTDIR!, '.zshrc'), `export CODEX_HOME=${JSON.stringify(home)}\n`)
+    await d.start()
+    await until('the daemon to read the login shell', () => /\[env\] read \d+ variables/.test(d.log()))
+    const client = await LocalClient.connect(d)
+    const created = await client.request('agent_create', { engine: 'codex', cwd: d.projectsDir, bypassPermission: true }, 90_000)
+    expect(created.error, JSON.stringify(created)).toBeUndefined()
+    const agent = await until('the named agent to bind', async () => {
+      const now = await row(client, created.agent.id); return now?.sessionId ? now : null
+    }, 30_000)
+    // Codex can rename a thread from another client; the index changes without this pane's title changing.
+    for (const [folder, thread_name] of [[d.env.CODEX_HOME!, 'Wrong login name'], [home, 'Moved home conversation']]) {
+      writeFileSync(join(folder, 'session_index.jsonl'), JSON.stringify({ id: agent.sessionId, thread_name }) + '\n')
+    }
+    expect(agent.codexHome).toBeNull()
+    await until('the moved-home name on the agent', async () => (await row(client, agent.id))?.name === 'Moved home conversation', 20_000)
+    client.close()
+  })
+
+  it('a moved Codex home repairs a parent overwritten by its child when the daemon restarts', async () => {
+    const d = await IsolatedDaemon.create(); daemon = d
+    onTestFailed(() => console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`))
+    const home = join(d.root, 'codex-parent')
+    mkdirSync(home)
+    writeFileSync(join(d.env.ZDOTDIR!, '.zshrc'), `export CODEX_HOME=${JSON.stringify(home)}\n`)
+    await d.start()
+    const client = await LocalClient.connect(d)
+    const created = await client.request('agent_create', { engine: 'codex', cwd: d.projectsDir, bypassPermission: true }, 90_000)
+    const agent = await until('the parent to bind', async () => {
+      const now = await row(client, created.agent.id); return now?.sessionId ? now : null
+    }, 30_000)
+    await turn(client, agent.id, '!spawn scout')
+    client.close()
+    await d.stop()
+    const registryFile = join(d.dataDir, 'registry.json')
+    const saved = JSON.parse(readFileSync(registryFile, 'utf8')) as Row[]
+    const parent = saved.find(record => record.sessionId === agent.sessionId)!
+    const parentPath = parent.transcriptPath
+    const folder = join(home, 'sessions', '2026', '10', '03')
+    const child = readdirSync(folder).find(file => file.endsWith('.jsonl') && !file.includes(agent.sessionId))!
+    // Reproduce the on-disk damage an older hook left; current hooks already reject child bindings.
+    parent.transcriptPath = join(folder, child)
+    parent.codexHome = null // A legacy row from before successful process-environment discovery.
+    writeFileSync(registryFile, JSON.stringify(saved), { mode: 0o600 })
+    await d.start()
+    expect(d.log()).toContain(`[registry] repaired Codex parent ${agent.sessionId.slice(0, 8)}`)
+    const repaired = (JSON.parse(readFileSync(registryFile, 'utf8')) as Row[]).find(record => record.sessionId === agent.sessionId)
+    expect(repaired?.transcriptPath).toBe(parentPath)
+    const again = await LocalClient.connect(d)
+    await turn(again, agent.id, 'the parent keeps its own conversation')
+    again.close()
+  })
+
+  it.each(['claude', 'codex'] as const)('search finds external %s conversations in the moved home after startup', async engine => {
+    const d = await IsolatedDaemon.create(); daemon = d
+    onTestFailed(() => console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`))
+    const home = join(d.root, `${engine}-search`)
+    mkdirSync(home)
+    const variable = engine === 'claude' ? 'CLAUDE_CONFIG_DIR' : 'CODEX_HOME'
+    writeFileSync(join(d.env.ZDOTDIR!, '.zshrc'), `export ${variable}=${JSON.stringify(home)}\n`)
+    await d.start()
+    await until('the core to adopt the moved home', () => /\[env\] read \d+ variables/.test(d.log()))
+    const sessionId = '11111111-1111-4111-8111-111111111111', at = new Date().toISOString()
+    const folder = join(home, engine === 'claude' ? 'projects/project' : 'sessions/2026/10/06')
+    mkdirSync(folder, { recursive: true })
+    // Native records from a separate terminal, never registered as a Harness agent.
+    const records = engine === 'claude' ? [{ type: 'user', entrypoint: 'cli', sessionId, cwd: d.projectsDir,
+      timestamp: at, uuid: 'question', message: { role: 'user', content: 'movedhomepangolin' } }] : [
+      { type: 'session_meta', timestamp: at, payload: { id: sessionId, cwd: d.projectsDir, source: 'cli' } },
+      { type: 'event_msg', timestamp: at, payload: { type: 'task_started', turn_id: 'external-turn' } },
+      { type: 'event_msg', timestamp: at, payload: { type: 'item_completed', turn_id: 'external-turn', item: { type: 'UserMessage', content: [{ type: 'text', text: 'movedhomepangolin' }] } } },
+      { type: 'event_msg', timestamp: at, payload: { type: 'task_complete', turn_id: 'external-turn' } },
+    ]
+    writeFileSync(join(folder, engine === 'claude' ? `${sessionId}.jsonl` : `rollout-${sessionId}.jsonl`), records.map(record => JSON.stringify(record)).join('\n') + '\n')
+    const client = await LocalClient.connect(d)
+    await until('the search process to connect', () => d.log().includes('[service search] connected to the core'))
+    expect(await client.request('session_search', { query: 'movedhomepangolin' })).not.toHaveProperty('error')
+    await until('search to return the external moved-home conversation', async () => {
+      const answer = await client.request('session_search', { query: 'movedhomepangolin' }, 30_000)
+      expect(answer.error, JSON.stringify(answer)).toBeUndefined()
+      return JSON.stringify(answer).includes(sessionId)
+    }, 45_000, 1000)
+    expect(await rows(client)).toEqual([])
+    client.close()
+  })
 
   it.each([
     ['claude', 'CLAUDE_CONFIG_DIR', 'claude-work'],

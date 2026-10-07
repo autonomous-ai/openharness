@@ -8,6 +8,7 @@ import { ENGINES } from '../engines/types.js'
 import type { RegisteredSession } from './registry.js'
 import { TerminalStreamManager } from './terminalStreamManager.js'
 import type { TerminalBackendCoordinator } from './terminalBackendCoordinator.js'
+import { pasteRawIntoTmux } from './tmux.js'
 import { TmuxControlStream } from './tmuxStream.js'
 import { tmuxFeatures } from './tmuxVersion.js'
 import { TerminalBinaryKind, type TerminalBinaryClear } from './terminalBinary.js'
@@ -351,4 +352,32 @@ run('TmuxControlStream real tmux', () => {
       await opened.value.close()
     }
   })
+
+  it('keeps the tmux server up while terminals open and close side by side and messages are pasted', async () => {
+    // Before tmux 3.7 a notification for every control client (one going, a paste buffer set or deleted)
+    // that met one still attaching crashed the server, every agent's pane with it (tmux issue 4980,
+    // tmuxControlGate.ts). This is windows.e2e.ts's churn, which found it: on Ubuntu 24.04's tmux 3.4,
+    // without the gate, the server segfaulted within the first few hundred of these rounds.
+    const beside = `${session}-beside`
+    const besidePane = await tmux(['new-session', '-d', '-P', '-F', '#{pane_id}', '-s', beside, 'cat'])
+    const sink = { onData: () => {}, onClose: () => {} }
+    const openAndClose = async (pane: string, readOnly: boolean) => {
+      const opened = await TmuxControlStream.open(pane, { cols: 90, rows: 25 }, sink, readOnly)
+      expect(opened.state, opened.state === 'failed' ? opened.reason : '').toBe('succeeded')
+      if (opened.state === 'succeeded') await opened.value.close()
+    }
+    try {
+      for (let round = 0; round < 300; round++) {
+        await Promise.all([
+          openAndClose(paneId, false),
+          openAndClose(besidePane, true),
+          openAndClose(paneId, true),
+          pasteRawIntoTmux(besidePane, `round ${round}\n`),
+        ])
+      }
+      expect(await tmux(['display-message', '-p', '-t', paneId, '#{pane_id}'])).toBe(paneId)
+    } finally {
+      await tmux(['kill-session', '-t', beside]).catch(() => { /* best effort */ })
+    }
+  }, 120_000)
 })

@@ -1,14 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-const auth = vi.hoisted(() => ({
+// The core's sign-in, as the host is handed it (`CoreApi.account`): the host holds none of its own.
+const auth = {
   session: { autonomousEnv: 'prod' } as { autonomousEnv: string } | null,
   accessToken: vi.fn(),
-}))
-vi.mock('../lib/authSession.js', () => ({
-  readAuthSession: () => auth.session,
-  AuthSessionManager: class { accessToken = auth.accessToken },
-}))
-vi.mock('../lib/registry.js', () => ({ registry: {}, projectDisplayName: () => '' }))
+}
 vi.mock('../lib/voiceRouter.js', () => ({ routeVoiceTask: vi.fn() }))
 vi.mock('../config/env.js', () => ({ env: {
   BACKEND_WS_URL: 'wss://api.example.test/', CABLE_STT_PATH: '/api/voice/stt',
@@ -26,8 +22,11 @@ const rejected = (status: number, code: string, message = 'private response deta
 
 function setup() {
   const log = vi.fn()
-  // Transcription needs only log; use the real method to exercise its fetch/retry behavior.
-  const host = new DaemonCableHost({ log } as unknown as CableHostWiring)
+  // Transcription needs only the sign-in and log; use the real method to exercise its fetch/retry behavior.
+  const host = new DaemonCableHost({
+    log, accessToken: auth.accessToken, signedIn: () => auth.session !== null, environment: () => auth.session?.autonomousEnv ?? '',
+    sessions: () => [], displayName: () => '',
+  } as unknown as CableHostWiring)
   const fetchMock = vi.fn<typeof fetch>()
   vi.stubGlobal('fetch', fetchMock)
   return { host, log, fetchMock }

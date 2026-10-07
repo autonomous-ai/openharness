@@ -118,6 +118,8 @@ export class AgentStreams {
   }
 
   count(): number { return this.subs.size }
+  /** The agents subscribed to, each once. */
+  agents(): string[] { return [...new Set([...this.subs.values()].map(s => s.agentId))] }
 
   private watching(agentId: string, kind?: StreamKind): Subscription[] {
     const at = this.now()

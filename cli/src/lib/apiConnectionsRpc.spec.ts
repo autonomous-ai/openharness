@@ -82,20 +82,28 @@ describe('API connection RPC', () => {
   })
 
   it('requires a sealed owner web session for remote orchestration', async () => {
-    const socket = relaySocket('fixture'), internals = socket as any
+    const socket = relaySocket('fixture')
     const list = vi.fn().mockReturnValue([])
-    const service = vi.spyOn(internals, 'orchestration').mockReturnValue({ list })
+    // The orchestrator is a service the socket routes to (services/orchestrator.ts): it answers an owner alone.
+    const askers: Array<{ local: boolean; owner: boolean }> = []
+    socket.serviceRouter = (type, _payload, asker, reply) => {
+      if (type !== 'orchestrator') return false
+      askers.push(asker)
+      reply(asker.owner ? { projects: list() } : { error: 'OWNER_REQUIRED' })
+      return true
+    }
     vi.spyOn(gatewayOf(socket).e2ee, 'hasSession').mockReturnValue(true)
     const role = vi.spyOn(gatewayOf(socket).e2ee, 'sessionRole').mockReturnValue('web')
     const clear = { type: 'orchestrator', payload: { requestId: 'owner', action: 'list' } }
     vi.spyOn(gatewayOf(socket).e2ee, 'unwrapDown').mockReturnValue(clear)
     const sealedReply = vi.spyOn(gatewayOf(socket).e2ee, 'wrapRpcReply').mockReturnValue({ type: 'orchestrator_result', payload: { __e2e: 'sealed' } })
     await dispatchDown(socket, clear, 'remote')
-    expect(service).not.toHaveBeenCalled()
+    expect(askers).toEqual([])
     const sealed = { type: 'orchestrator', payload: { __e2e: { v: 1, k: 'p', n: 1, ct: 'fixture' } } }
     role.mockReturnValue('device')
     await dispatchDown(socket, sealed, 'remote')
-    expect(service).not.toHaveBeenCalled()
+    expect(askers).toMatchObject([{ local: false, owner: false }])
+    expect(list).not.toHaveBeenCalled()
     role.mockReturnValue('web')
     await dispatchDown(socket, sealed, 'remote')
     await vi.waitFor(() => expect(list).toHaveBeenCalledOnce())

@@ -7,7 +7,7 @@
  * user's processes can connect. A request that arrives over it is from this user, and needs none of
  * the address checks a TCP request does — its peer has no address at all.
  *
- * TCP stays: the CLI, engine hooks and the dashboard (a browser cannot reach a socket file) still use
+ * TCP stays: the CLI, engine hooks and scripts still use
  * it, as do app builds that predate this. Windows has no socket here; there everything is TCP.
  */
 import { randomBytes } from 'node:crypto'

@@ -1,0 +1,4 @@
+# Harness owns account setup only in its private Asahi image.
+enable harness-firstboot.service
+disable initial-setup.service
+disable initial-setup-reconfiguration.service

@@ -8,8 +8,9 @@ import { join } from 'node:path'
 import type { BackendSocket } from '../backendSocket.js'
 import { env } from '../config/env.js'
 import { createCloseRequests } from '../core/agents/close.js'
-import { createHandoffRequest, type Handoff, type HandoffRequest } from '../core/agents/handoff.js'
-import { createLaunchRequests, type RestartAgent, type ResumeAgent } from '../core/agents/launches.js'
+import { createHandoffRequest, type Handoff, type HandoffRequest } from '../services/handoffRequest.js'
+import { createLaunchRequests, type LaunchRequestDeps, type RestartAgent, type ResumeAgent } from '../core/agents/launches.js'
+import { MODELS_OFF } from '../core/api.js'
 import { createPurgeRequest, createStopRequest } from '../core/agents/lifecycle.js'
 import { createAgentList, type AgentListDeps } from '../core/agents/list.js'
 import { createAgentUpdate } from '../core/agents/update.js'
@@ -117,19 +118,27 @@ export function bindAgentUpdate(socket: BackendSocket): void {
   }).agentUpdate
 }
 
-/** `agent_handoff_prepare` (core/agents/handoff.ts), written by `prepare`, or by nothing when it is null. */
+/** The handoff service's request through the socket's normal service router. */
 export function bindHandoffRequest(socket: BackendSocket, prepare: ((req: HandoffRequest) => Promise<Handoff>) | null): void {
-  socket.handoffRequestProvider = createHandoffRequest({ prepare })
+  const previous = socket.serviceRouter
+  const answer = createHandoffRequest({ prepare })
+  socket.serviceRouter = (type, payload, asker, reply) => {
+    if (type !== 'agent_handoff_prepare') return previous?.(type, payload, asker, reply) ?? false
+    answer(payload, asker, reply)
+    return true
+  }
 }
 
-const launchers = new WeakMap<BackendSocket, { resume: ResumeAgent | null; restart: RestartAgent | null }>()
+type Launcher = { resume: ResumeAgent | null; restart: RestartAgent | null; modelTarget: LaunchRequestDeps['modelTarget'] | null }
+const launchers = new WeakMap<BackendSocket, Launcher>()
 /** `agent_create`, `agent_create_status`, `agent_resume`, `agent_restart` and `agent_fork`
  *  (core/agents/launches.ts), over the socket's create and fork slots and receipts of their own. A spec
- *  that resumes or restarts says through what; each call adds to what the last one said. */
-export function bindLaunchRequests(socket: BackendSocket, over: { resume?: ResumeAgent | null; restart?: RestartAgent | null } = {}): void {
+ *  that resumes, restarts or creates on a grid model says through what (with none, models reads as off);
+ *  each call adds to what the last one said. */
+export function bindLaunchRequests(socket: BackendSocket, over: Partial<Launcher> = {}): void {
   let launcher = launchers.get(socket)
   if (!launcher) {
-    const state = { resume: null as ResumeAgent | null, restart: null as RestartAgent | null }
+    const state: Launcher = { resume: null, restart: null, modelTarget: null }
     launcher = state
     launchers.set(socket, state)
     const launches = createLaunchRequests({
@@ -137,6 +146,7 @@ export function bindLaunchRequests(socket: BackendSocket, over: { resume?: Resum
       createAgent: () => socket.onCreateAgent, forkAgent: () => socket.onForkAgent,
       resumeAgent: () => state.resume, restartAgent: () => state.restart,
       byAgent: (id) => registry.byAgent(id), toProject: (s) => socket.toProject(s),
+      modelTarget: (selection) => (state.modelTarget ?? MODELS_OFF.launchTarget)(selection),
     })
     socket.createProvider = launches.create
     socket.createStatusProvider = launches.createStatus

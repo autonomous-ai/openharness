@@ -23,6 +23,9 @@ export interface ServiceProcessOptions {
 }
 type Runner = (options: ServiceProcessOptions) => ServiceProcess
 
+/** The processes the master runs that speak only to it, never to the core: they need no local socket. */
+const BESIDE_THE_CORE: ReadonlySet<string> = new Set(['updater'])
+
 /** Every service this build can run in its own process, and how to load its runner alone. */
 export const SERVICE_RUNNERS: ReadonlyMap<string, () => Promise<Runner>> = new Map<string, () => Promise<Runner>>([
   ['search', async () => (await import('./services/searchProcess.js')).runSearchService],
@@ -31,9 +34,20 @@ export const SERVICE_RUNNERS: ReadonlyMap<string, () => Promise<Runner>> = new M
   ['usage', async () => (await import('./services/usageProcess.js')).runUsageService],
   ['monitor', async () => (await import('./services/monitorProcess.js')).runMonitorService],
   ['projects', async () => (await import('./services/projectsProcess.js')).runProjectsService],
+  ['handoff', async () => (await import('./services/handoffProcess.js')).runHandoffService],
+  ['recaps', async () => (await import('./services/recapsProcess.js')).runRecapsService],
   ['store', async () => (await import('./services/storeProcess.js')).runStoreService],
   ['teams', async () => (await import('./services/teamsProcess.js')).runTeamsService],
+  ['collaboration', async () => (await import('./services/collaborationProcess.js')).runCollaborationService],
+  ['sharing', async () => (await import('./services/sharingProcess.js')).runSharingService],
+  ['orchestrator', async () => (await import('./services/orchestratorProcess.js')).runOrchestratorService],
+  ['commandBar', async () => (await import('./services/commandBarProcess.js')).runCommandBarService],
+  // Not a service the core knows: the master runs it beside them (harnessd/services.ts `UPDATER_HOST`).
+  ['updater', async () => (await import('./services/updaterProcess.js')).runUpdaterService],
   ['gateway', async () => (await import('./gateway/gatewayProcess.js')).runGatewayService],
+  ['models', async () => (await import('./services/modelsProcess.js')).runModelsService],
+  ['devices', async () => (await import('./services/devicesProcess.js')).runDevicesService],
+  ['wifi', async () => (await import('./services/wifiProcess.js')).runWifiService],
 ])
 
 export interface ServiceProcessDeps {
@@ -60,7 +74,9 @@ export async function startServiceProcess(named: string | undefined, deps: Servi
     console.error(`[service] ${unknown}: no such service in this build`)
     return exit(2)
   }
-  if (!socketPath) {
+  // The updater never reaches the core: it tells the master. Without a socket (a data folder too deep for
+  // one) it still runs, or that machine would never get the update that fixes it.
+  if (!socketPath && names.some((name) => !BESIDE_THE_CORE.has(name))) {
     console.error(`[service] ${names.join(',')}: the core has no local socket to reach`)
     return exit(2)
   }
@@ -79,7 +95,7 @@ export async function startServiceProcess(named: string | undefined, deps: Servi
   const loaded = await Promise.all(names.map(async (name) => [name, await runners.get(name)!()] as const))
   const options: ServiceProcessOptions = {
     dataDir: env.ADAPTER_DATA_DIR,
-    socketPath,
+    socketPath: socketPath ?? '',
     machineId: readOrMintComputerId(env.ADAPTER_COMPUTER_ID_FILE, env.ADAPTER_COMPUTER_ID),
     token: process.env.HARNESSD_SERVICE_TOKEN ?? '',
   }

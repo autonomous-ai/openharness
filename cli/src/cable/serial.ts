@@ -5,10 +5,11 @@
 // a per-platform release matrix into a distribution that is currently a download. A tty is a file, `stty`
 // puts it in raw mode, and that is the whole of what this needs.
 import { execFile } from 'node:child_process'
-import { closeSync, constants, existsSync, lstatSync, openSync, readFileSync, readdirSync } from 'node:fs'
+import { closeSync, constants, existsSync, lstatSync, openSync, readFileSync, readSync, readdirSync } from 'node:fs'
 import { basename } from 'node:path'
-import { ReadStream } from 'node:tty'
+import type { Socket } from 'node:net'
 import { promisify } from 'node:util'
+import { portStream } from './portStream.js'
 
 const runFile = promisify(execFile)
 
@@ -222,7 +223,7 @@ function findLinux(): DialPort[] {
 export class SerialLink {
   private constructor(
     readonly path: string,
-    private readonly stream: ReadStream,
+    private readonly stream: Socket,
     private readonly onData: (chunk: Buffer) => void,
     private readonly onClosed: (why: string) => void,
     private readonly claimFd?: number,
@@ -277,17 +278,32 @@ export class SerialLink {
       //
       // Measured 2026-08-24: the daemon died at the exact second the cable came out, every time, and the
       // dial then greeted an empty room until it timed out and showed no agents.
-      // FileHandle.read either occupies a worker while idle or needs EAGAIN polling. A TTY stream
-      // uses libuv readiness instead, including short writes/backpressure, without a polling timer.
-      // ReadStream is a net.Socket; opening O_RDWR and enabling both sides makes it full duplex.
+      // FileHandle.read either occupies a worker while idle or needs EAGAIN polling. A stream on libuv's
+      // readiness does neither, short writes and backpressure included, without a polling timer
+      // (portStream.ts); opening O_RDWR and enabling both sides makes it full duplex.
       const fd = openSync(path, constants.O_RDWR | constants.O_NOCTTY | constants.O_NONBLOCK)
-      let stream: ReadStream
-      try { stream = new ReadStream(fd, { readable: true, writable: true }) }
+      // A port whose far end is already gone is refused here, plainly: one read first, without waiting, ends
+      // (0) or fails, other than with "nothing yet", and what it read is the dial's and is handed to the
+      // stream ahead of the rest. It once stood between the stream and a reopen that waited forever for a
+      // far end that had gone (measured 2026-10-06, 40 s); the stream opens nothing now (portStream.ts),
+      // since the far end can also go just after this read.
+      let early: Buffer | null = null
+      try {
+        const probe = Buffer.alloc(4096)
+        const read = readSync(fd, probe, 0, probe.length, null)
+        if (read === 0) throw Object.assign(new Error('the port has no far end'), { code: 'EOF' })
+        early = probe.subarray(0, read)
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EAGAIN') { closeSync(fd); throw error }
+      }
+      let stream: Socket
+      try { stream = portStream(fd) }
       catch (error) { closeSync(fd); throw error }
-      // On POSIX libuv normally reopens the tty and owns a duplicate. On its fallback path it owns
-      // the supplied fd itself. Check the native handle exactly once so neither path leaks a
-      // descriptor or closes it twice. The managed Node runtime's real-PTY tests cover ownership.
-      const streamFd = (stream as ReadStream & { _handle: { fd: number } })._handle.fd
+      if (early) stream.unshift(early)
+      // The stream owns the descriptor it was given, unless it is a terminal stream (a Node without the
+      // pipe handle), which reopens the tty and owns a duplicate. Check the native handle exactly once so
+      // neither path leaks a descriptor or closes it twice. The real-PTY tests cover ownership.
+      const streamFd = (stream as Socket & { _handle: { fd: number } })._handle.fd
       if (streamFd !== fd) {
         try { closeSync(fd) }
         catch (error) { stream.destroy(); throw error }

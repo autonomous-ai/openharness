@@ -8,7 +8,7 @@
  * docs/design/2026-10-03-harnessd.md). The reconciler itself, with what it scans, stays there.
  */
 import { isTerminalEngine } from '../../engines/types.js'
-import type { AutonomousDeviceInput } from '../../lib/autonomous-device/input.js'
+import type { AutonomousDeviceInput } from '../deviceInput.js'
 import type { QuestionWatcher } from '../../lib/askQuestion.js'
 import { sameGridAssignment } from '../../lib/gridAssignment.js'
 import { sid } from '../../lib/log.js'

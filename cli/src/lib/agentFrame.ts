@@ -19,7 +19,9 @@ import type { ActivityFrame } from './turnActivity.js'
  * makes the shape testable without a registry, which is the whole reason the drift went unnoticed.
  */
 
-import { agentProject, type AgentProject } from './agentProject.js'
+import { agentProject } from './agentProject.js'
+import { describeScmProject } from '../scm/scmProjects.js'
+import type { ScmDescription } from '../scm/types.js'
 import { sessionGitContext, SessionGitContextReader, type SessionGitContext } from './sessionGitContext.js'
 import { sessionGitHistory } from './sessionGitHistory.js'
 import { transcriptActivityAt } from './transcriptActivity.js'
@@ -27,7 +29,7 @@ import type { AgentTokenUsage } from './agentTokenUsage.js'
 import type { AgentOutputStats } from './agentOutputStats.js'
 import type { GridAssignment } from './gridAssignment.js'
 import type { GridWebSearchStatus } from './gridLaunch.js'
-import { gridAnnotation, type GridAnnotation } from './gridModels.js'
+import type { AgentGridTarget, GridAnnotation } from './gridAnnotation.js'
 import { projectDisplayName, sessionDisplayTitle, type RegisteredSession } from './registry.js'
 import { engineCanFork } from './forkAgent.js'
 import { resumeMode, type ResumeMode } from './resumeCapability.js'
@@ -83,7 +85,9 @@ export type AgentFrame = {
   selectedModel: string | null
   grid: GridFrameBlock | null
   codexHome: string | null
-  project: AgentProject | null
+  /** The workspace as its SCM describes it, with `kind` (`git`, or `none` for a folder no SCM claims);
+   *  every other field is exactly what `agentProject` reports (scm/types.ts). */
+  project: ScmDescription | null
   /** Additive display context; project/cwd remain the registered launch workspace. */
   gitContext: SessionGitContext
   /** The domain-specific harness this agent was created as, or null for a plain engine. */
@@ -145,6 +149,9 @@ export interface AgentFrameContext {
   tokenUsage?: AgentTokenUsage | null
   /** The DSH companions' state for this agent; absent when the caller has none to give. */
   dsh?: AgentDshContext | null
+  /** What the models service says of the grid the agent is on (core/api.ts `ModelsPort.annotation`): from
+   *  memory, never I/O. Absent when the caller has none to give, and then the frame says nothing of it. */
+  gridAnnotation?: (grid: AgentGridTarget) => GridAnnotation | null
 }
 
 /**
@@ -185,8 +192,11 @@ const gitContexts = new SessionGitContextReader()
 
 export async function agentFrame(
   s: RegisteredSession,
-  { selectedModel, terminalAvailable, dsh, tokenUsage, activity: contextActivity }: AgentFrameContext,
+  { selectedModel, terminalAvailable, dsh, tokenUsage, activity: contextActivity, gridAnnotation }: AgentFrameContext,
 ): Promise<AgentFrame> {
+  // The git context is git's own display projection and keeps reading git directly; the frame's
+  // `project` goes through the SCM seam. Both resolve through agentProject's shared reader, so the
+  // seam adds no Git process.
   const home = agentProject(s.cwd)
   const context = gitContexts.read(JSON.stringify([s.agentId, s.sessionId, s.engine, s.codexHome, s.registeredAt]), async () => {
     const saved = await sessionGitHistory.get(s)
@@ -194,7 +204,7 @@ export async function agentFrame(
     value.history = await sessionGitHistory.observe(s, value)
     return value
   })
-  const [project, updatedAt, gitContext] = await Promise.all([home, lastActivityAt(s), context])
+  const [project, updatedAt, gitContext] = await Promise.all([describeScmProject(s.cwd), lastActivityAt(s), context])
   return {
     id: s.agentId,
     sessionId: s.sessionId,
@@ -229,7 +239,7 @@ export async function agentFrame(
     // the block — decided by the launch, kept on the row — so it is gone the moment the block is. So do
     // that grid's `state` and a `note` when the agent's model will not answer (issue 03), read from what
     // the model list last showed — no I/O, and absent for a grid this daemon is not tracking.
-    grid: s.grid ? { ...s.grid, ...(s.gridWebSearch ? { webSearch: s.gridWebSearch } : {}), ...gridAnnotation(s.grid) } : null,
+    grid: s.grid ? { ...s.grid, ...(s.gridWebSearch ? { webSearch: s.gridWebSearch } : {}), ...gridAnnotation?.(s.grid) } : null,
     // The Codex profile folder this agent launched against, if one was chosen instead of the
     // engine's own login. Codex only; null is a real answer ("uses ~/.codex") for the same reason
     // `grid: null` is above.

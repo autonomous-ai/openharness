@@ -831,10 +831,8 @@ export class RelayGateway implements GatewayPort {
 
   /** True after a paired device has completed the E2EE hello/welcome session. */
   deviceE2eeConnected(): boolean { return this.e2ee.deviceConnected() }
-  /** A browser waiting to pair (local dashboard), or null. */
+  /** A browser waiting to pair (`/api/status`), or null. */
   pendingPair(): ReturnType<E2eeManager['pendingPair']> { return this.e2ee.pendingPair() }
-  /** Record the local dashboard port so it's surfaced to the web (in e2e_status) for approve-via-web. */
-  setDashboardPort(port: number): void { this.e2ee.dashboardPort = port }
   /** Run CPace pairing for a code entered via `harness pair <code>` (delegated to the manager). */
   pair(code: string): Promise<PairResult> { return this.e2ee.onPair(code) }
   fingerprint(): string { return this.e2ee.fingerprint() }

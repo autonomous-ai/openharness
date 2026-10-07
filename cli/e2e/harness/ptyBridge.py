@@ -28,7 +28,9 @@ os.set_blocking(stdin, False)
 os.set_blocking(master, False)
 pending = b''
 while True:
-    readable, _, _ = select.select([master, stdin], [], [], 0.05)
+    # Woken as soon as the terminal can take more, so a test's burst reaches the daemon at the speed a
+    # terminal carries it, not one buffer every 50 ms.
+    readable, writable, _ = select.select([master, stdin], [master] if pending else [], [], 0.05)
     if stdin in readable:
         try:
             chunk = os.read(stdin, 65536)

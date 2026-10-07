@@ -140,6 +140,33 @@ describe('switching a Codex agent model and effort', () => {
     client.close()
   })
 
+  it('lists the choices from models\' own process, and switches with models killed: the switch is the core\'s', async () => {
+    const d = await fresh({ codexModel: 'gpt-5.5', env: { HARNESSD_SERVICE_INITIAL_BACKOFF_MS: '8000', HARNESSD_SERVICE_MAX_BACKOFF_MS: '8000' } })
+    await until('models to connect to the core', () => d.log().includes('[services] models connected') || null, 30_000, 200)
+    const client = await LocalClient.connect(d)
+    const agent = await create(d, client, 'apart')
+    await turn(client, agent.id, 'hello')
+    await runningOn(client, agent.id, 'gpt-5.5', 'high')
+    // The picker's choices come from models, in its own process (harnessd/services.ts), which asks the core
+    // for the agent's catalog.
+    const xhigh = profile(agent.id, 'gpt-6-luna', 'xhigh')
+    const offered = (await client.request<{ models: Array<{ id: string }> }>('models_list', { agentId: agent.id }, 30_000)).models
+    expect(offered.map((option) => option.id)).toContain(xhigh)
+
+    const pids = [...d.log().matchAll(/\[harnessd\] service models started \(pid (\d+)\)/g)].map((match) => Number(match[1]))
+    for (const pid of pids) { try { process.kill(pid, 'SIGKILL') } catch { /* already gone */ } }
+    await until('the core to see models gone', () => d.log().includes('[services] models disconnected') || null, 15_000, 100)
+    expect(await client.request('models_list', { agentId: agent.id }, 10_000)).toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'models', retryable: true })
+    // A switch the picker already offered is the core's to make, and the agent goes on on it.
+    const switched = await client.request('agent_update', { agentId: agent.id, selectedModel: xhigh }, 60_000)
+    expect(switched.error, JSON.stringify(switched)).toBeUndefined()
+    expect(applied(d, agent.sessionId)).toEqual([{ model: 'gpt-6-luna', effort: 'xhigh' }])
+    await turn(client, agent.id, 'while models was gone')
+    await runningOn(client, agent.id, 'gpt-6-luna', 'xhigh')
+    expect(d.coresStarted()).toBe(1)
+    client.close()
+  })
+
   it('offers an account held to the reserve model no other model, and changes the reserve effort', async () => {
     const d = await fresh({ codexModel: 'gpt-reserve' })
     const client = await LocalClient.connect(d)

@@ -5,19 +5,27 @@ import type { TerminalBackendCoordinator } from '../lib/terminalBackendCoordinat
 import { encodeTerminalLocal } from '../lib/terminalBinary.js'
 import { TerminalStreamManager } from '../lib/terminalStreamManager.js'
 import { HarnessGrantStore, inviteSchema, type HarnessGrant } from './grants.js'
-import { ownerHandshake, type ObserverCipher } from './crypto.js'
+import { ownerHandshake, signedOwnerHandshake, type ObserverCipher, type OwnerKey } from './crypto.js'
 import { HarnessCollaborationStore, linkVisibility, type CommentAuthor } from './collaboration.js'
 
 type Payload = Record<string, unknown>
 interface Observer { grant: HarnessGrant; cipher: ObserverCipher; linkId?: string; author: CommentAuthor | null }
+/** What reads an observer's terminal: the owner's own read-only stream manager, or the core's (`streams`). */
+export type ObserverStreams = Pick<TerminalStreamManager, 'handleFrame' | 'closeConnection' | 'stop'>
+
 export interface ShareOwnerDeps {
   machineId: () => string
-  identity: Identity
+  /** This machine's E2EE identity, which the owner signs its welcome with, or the key where it is held
+   *  (`key`): a Share in a process of its own holds no credential. One of the two. */
+  identity?: Identity
+  key?: OwnerKey
   grants: HarnessGrantStore
   collaboration?: HarnessCollaborationStore
   webOrigin?: string
   autonomousEnv?: string
-  terminals: TerminalBackendCoordinator
+  /** The terminals the owner's own read-only stream manager reads; or the core reads them (`streams`). */
+  terminals?: TerminalBackendCoordinator
+  streams?: (targets: { sendTarget(id: string, type: string, payload: Payload): boolean }) => ObserverStreams
   resolveAgent: (id: string) => RegisteredSession | undefined
   send: (connId: string, type: string, payload: Payload) => boolean
   publish: (method: 'PUT' | 'DELETE', path: string, body?: unknown) => Promise<{ status: number; body: unknown }>
@@ -29,14 +37,14 @@ export interface ShareOwnerDeps {
 export class HarnessShareOwner {
   private readonly observers = new Map<string, Observer>()
   private readonly viewers = new Map<string, () => void>()
-  private readonly streams: TerminalStreamManager
+  private readonly streams: ObserverStreams
   private readonly timer: ReturnType<typeof setInterval>
   private readonly now: () => number
   private syncing: Promise<void> | null = null
   private mutation: Promise<unknown> = Promise.resolve()
   constructor(private readonly deps: ShareOwnerDeps) {
     this.now = deps.now ?? (() => Date.now())
-    this.streams = new TerminalStreamManager({ readOnly: true, terminals: deps.terminals,
+    this.streams = deps.streams?.({ sendTarget: (id, type, payload) => this.send(id, { type, payload }) }) ?? new TerminalStreamManager({ readOnly: true, terminals: deps.terminals!,
       resolveAgent: deps.resolveAgent, streamingAvailable: true,
       sendTarget: (id, type, payload) => this.send(id, { type, payload }),
       sendBinaryTarget: (id, frame) => {
@@ -106,7 +114,9 @@ export class HarnessShareOwner {
         this.deps.send(connId, 'observer_closed', { reason: 'Sharing ended or invitation expired' }); return
       }
       try {
-        const { cipher, welcome } = ownerHandshake(this.deps.identity, grant.machineId, grant.id, String(payload.ephemeral))
+        const { cipher, welcome } = this.deps.key
+          ? await signedOwnerHandshake(this.deps.key, grant.machineId, grant.id, String(payload.ephemeral))
+          : ownerHandshake(this.deps.identity!, grant.machineId, grant.id, String(payload.ephemeral))
         this.observers.set(connId, { grant, cipher, author, ...(link ? { linkId: link.id } : {}) })
         if (!this.deps.send(connId, 'observer_welcome', welcome)) this.close(connId)
       } catch { this.deps.send(connId, 'observer_closed', { reason: 'Invalid observer handshake' }) }
@@ -165,7 +175,7 @@ export class HarnessShareOwner {
       if (!this.deps.collaboration) return { error: 'UNSUPPORTED' }
       if (!visibility.success) return { error: 'INVALID_VISIBILITY', detail: 'Choose Public or Private.' }
       this.deps.collaboration.set({ machineId, agentId, visibility: visibility.data,
-        name: projectDisplayName(session), engine: session.engine, ownerPublicKey: b64e(this.deps.identity.pub) })
+        name: projectDisplayName(session), engine: session.engine, ownerPublicKey: await this.ownerPublicKey() })
       if (visibility.data === 'off') {
         for (const grant of this.deps.grants.list(machineId, agentId)) this.deps.grants.revoke(grant.id, machineId, agentId)
       }
@@ -178,7 +188,7 @@ export class HarnessShareOwner {
       for (const email of new Set(parsed.data.emails)) {
         this.deps.grants.invite({ machineId, agentId, recipientEmail: email,
           name: projectDisplayName(session), engine: session.engine,
-          ownerPublicKey: b64e(this.deps.identity.pub),
+          ownerPublicKey: await this.ownerPublicKey(),
           expiresAt: new Date(this.now() + parsed.data.days * 86400_000).toISOString() })
       }
       await this.syncing
@@ -207,6 +217,9 @@ export class HarnessShareOwner {
       expired: Date.parse(grant.expiresAt) <= this.now(), pending: grant.pending, error: grant.publicationError,
       watching: [...this.observers.values()].filter(o => o.grant.agentId === agentId && o.grant.recipientEmail === grant.recipientEmail).length,
     })) }
+  }
+  private async ownerPublicKey(): Promise<string> {
+    return b64e(this.deps.key ? await this.deps.key.publicKey() : this.deps.identity!.pub)
   }
   private comments(action: string, agentId: string, author: CommentAuthor | null, payload: Payload): Payload {
     const store = this.deps.collaboration

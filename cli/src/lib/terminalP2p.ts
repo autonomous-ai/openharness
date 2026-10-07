@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { RTCPeerConnection, type RTCDataChannel, type RTCIceCandidateInit } from 'werift'
+import type { RTCPeerConnection, RTCDataChannel, RTCIceCandidateInit } from 'werift'
 import { env } from '../config/env.js'
 import { pickTurnUrl, selectStunUrls, type StunSelector } from './stunSelect.js'
 
@@ -291,7 +291,7 @@ export class TerminalP2pInitiator {
     this.timeout = setTimeout(() => this.fail('negotiation_timeout'), TERMINAL_P2P_NEGOTIATION_TIMEOUT_MS)
     this.timeout.unref?.()
     this.deps.onState?.('connecting', 0)
-    void this.begin()
+    void this.begin().catch(() => this.fail('offer_failed'))
   }
 
   private async begin(): Promise<void> {
@@ -302,7 +302,10 @@ export class TerminalP2pInitiator {
       stunUrls = selection.urls
       udpReachable = selection.udpReachable
     } catch { /* the selector contract is that it never rejects; keep the policy order regardless */ }
-    // stop()/fail() may have run while the race was in flight. Building the peer connection now would
+    // Found by QA on a quiet machine: idle gateways loaded werift without a single P2P signal.
+    // Node shares this deferred module across negotiations; relay-only connections never load it.
+    const { RTCPeerConnection } = await import('werift')
+    // stop()/fail() may have run while STUN or the import was in flight. Building the connection now would
     // strand it: nothing holds a reference any more, so its UDP sockets would never be closed.
     if (this.finished) return
     this.step('stun-raced')
@@ -656,7 +659,7 @@ export class TerminalP2pResponderPool {
   }
 
   /** STUN race + RTCPeerConnection construction shared by acceptOffer/acceptUpgradeOffer. `stillCurrent`
-   *  is re-checked after the only await in here (the STUN race) so a superseded offer never publishes a
+   *  is re-checked after STUN and the library load so a superseded offer never publishes a
    *  peer connection nothing would ever close. Returns null when superseded — caller just returns. */
   private async buildResponderEntry(
     connId: string,
@@ -672,6 +675,7 @@ export class TerminalP2pResponderPool {
     // The offerer raced these too, and may well have landed on a different server. That is fine: a
     // srflx candidate is each peer's own public address, so the two sides need not agree on who to ask.
     const selection = await this.selectStunUrls(offeredStunUrls)
+    const { RTCPeerConnection } = await import('werift')
     if (!stillCurrent()) return null
     const turn = turnChoice(readTurn(payload.turn), selection.udpReachable)
     const pc = new RTCPeerConnection(peerConfig(selection.urls, turn))

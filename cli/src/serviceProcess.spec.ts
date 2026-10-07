@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { SERVICE_RUNNERS, startServiceProcess, type ServiceProcessOptions } from './serviceProcess.js'
 import type { ServiceHost, ServiceHostOptions, ServiceProcess } from './services/process.js'
-import { KNOWN_SERVICES } from './harnessd/services.js'
+import { KNOWN_SERVICES, UPDATER_HOST } from './harnessd/services.js'
 
 const local = vi.hoisted(() => ({ socket: '/data/daemon-18473.sock' as string | null }))
 vi.mock('./lib/localSocket.js', async (real) => ({ ...await real<object>(), localSocketPath: () => local.socket }))
@@ -13,8 +13,8 @@ describe('a service in its own process', () => {
   const title = process.title
   afterEach(() => { process.title = title; local.socket = '/data/daemon-18473.sock'; vi.restoreAllMocks() })
 
-  it('can run every service the master knows, and loads each one\'s runner on its own', async () => {
-    expect([...SERVICE_RUNNERS.keys()].sort()).toEqual([...KNOWN_SERVICES].sort())
+  it('can run every service the master knows, and the updater it runs beside them, and loads each one\'s runner on its own', async () => {
+    expect([...SERVICE_RUNNERS.keys()].sort()).toEqual([...KNOWN_SERVICES, ...UPDATER_HOST.services].sort())
     for (const [name, load] of SERVICE_RUNNERS) expect(typeof await load(), name).toBe('function')
     // Every service's own code, imported: seconds on a loaded machine, not the default five.
   }, 60_000)
@@ -105,5 +105,22 @@ describe('a service in its own process', () => {
     const processExit = vi.spyOn(process, 'exit').mockImplementation(((code: number) => { throw new Error(`process.exit ${code}`) }) as never)
     await expect(startServiceProcess('nope', { runners: new Map() })).rejects.toThrow('process.exit 2')
     expect(processExit).toHaveBeenCalledWith(2)
+  })
+
+  it('runs the updater with no socket, since it speaks to the master alone, but nothing named with it that needs one', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const exit = vi.fn((code: number): never => { throw new Error(`exit ${code}`) })
+    const seen: ServiceProcessOptions[] = []
+    const runners = new Map([
+      ['updater', async () => (options: ServiceProcessOptions) => { seen.push(options); return { stop: () => {} } }],
+      ['search', async () => () => ({ stop: () => {} })],
+    ])
+    const { host, hosted } = fakeHost()
+    local.socket = null
+    await startServiceProcess('updater', { runners, host, exit })
+    expect(seen).toEqual([expect.objectContaining({ socketPath: '' })])
+    expect(hosted[0].options).toEqual({ name: 'updater', services: ['updater'] })
+    await expect(startServiceProcess('updater,search', { runners, host, exit })).rejects.toThrow('exit 2')
+    expect(error).toHaveBeenCalledWith('[service] updater,search: the core has no local socket to reach')
   })
 })

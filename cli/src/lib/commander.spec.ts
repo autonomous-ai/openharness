@@ -783,3 +783,55 @@ describe('CommanderMirror keeps the complete final answer beside the clipped one
     expect(Buffer.from(full, 'utf8').toString('utf8')).toBe(full)
   })
 })
+
+describe('what the mirror holds, as its process tells the core', () => {
+  let dir = ''
+  beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'adapter-commander-held-')) })
+  afterEach(() => { vi.restoreAllMocks(); rmSync(dir, { recursive: true, force: true }) })
+
+  it('says each change to a session\'s card or recaps, counts what was stored, and lists every session it holds', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const changed = vi.fn()
+    const mirror = new CommanderMirror({ send: () => {}, sendWeb: () => {}, hasDevice: () => true, summarize: async () => 'Recap\n\nBody', dataDir: dir, changed })
+    expect(mirror.snapshot('s1')).toBeNull()
+    expect(mirror.busy('s1')).toBe(false)
+    expect(mirror.revision('s1')).toBe(0)
+    mirror.ingest([{ type: 'turn_started', payload: { userMessage: 'why?' } }] as LiveEvent[], 's1')
+    expect(mirror.busy('s1')).toBe(true)
+    expect(mirror.revision('s1')).toBe(1)
+    expect(mirror.snapshot('s1')).toEqual({ latest: null, history: [], fullTexts: [], asks: ['why?'], busy: true })
+    mirror.ingest([{ type: 'text_delta', payload: { content: 'Because.' } }, { type: 'turn_ended', payload: {} }] as LiveEvent[], 's1')
+    await vi.waitFor(() => expect(mirror.revision('s1')).toBe(2))
+    expect(mirror.snapshot('s1')).toEqual({ latest: 'Recap\n\nBody', history: ['Recap\n\nBody'], fullTexts: ['Because.'], asks: ['why?'], busy: false })
+    expect(changed.mock.calls.every(([sessionId]) => sessionId === 's1')).toBe(true)
+    const said = changed.mock.calls.length
+    mirror.cancel('s1')
+    mirror.forget('s1')
+    mirror.inheritSummary('s1', 's2')
+    expect(changed.mock.calls.slice(said).map(([sessionId]) => sessionId)).toEqual(['s1', 's1', 's2'])
+    expect(mirror.sessions().sort()).toEqual(['s1', 's2'])
+    mirror.deleteHistory('s1')
+    expect(mirror.snapshot('s1')).toBeNull()
+    expect(mirror.sessions()).toEqual(['s2'])
+  })
+
+  it('says a turn that ends with nothing to recap, and one whose recap failed or came back empty', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const changed = vi.fn()
+    const summarize = vi.fn(async (): Promise<string | null> => null)
+    const mirror = new CommanderMirror({ send: () => {}, sendWeb: () => {}, hasDevice: () => true, summarize, dataDir: dir, changed })
+    const turn = (text: string) => mirror.ingest([
+      { type: 'turn_started', payload: { userMessage: 'go' } },
+      ...(text ? [{ type: 'text_delta', payload: { content: text } }] : []),
+      { type: 'turn_ended', payload: {} },
+    ] as LiveEvent[], 's1')
+    for (const [text, fail] of [['', false], ['an answer', false], ['an answer', true]] as const) {
+      if (fail) summarize.mockRejectedValueOnce(new Error('no'))
+      changed.mockClear()
+      turn(text)
+      await vi.waitFor(() => expect(mirror.busy('s1')).toBe(false))
+      expect(changed).toHaveBeenLastCalledWith('s1')
+    }
+  })
+})

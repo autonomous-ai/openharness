@@ -87,7 +87,6 @@ export function createGatewayLink(deps: GatewayLinkDeps) {
   let requestsOpen = true
   let dial: 'connect' | 'local' | null = null
   let localClients = 0
-  let dashboardPort: number | null = null
   let wifiService = false
   let reachable: string[] | null = null
   /** The remote clients the gateway registered, to forget each when it goes. */
@@ -171,6 +170,14 @@ export function createGatewayLink(deps: GatewayLinkDeps) {
     drop: (machineId) => { void lane('drop', { machineId }) },
   }
 
+  /** Share's owner's key, held by the gateway (gateway/observerKey.ts): each a call; none while it is away. */
+  const ownerKey = async (payload: Record<string, unknown>): Promise<string> => {
+    const answer = await deps.call(GATEWAY_CALLS.observerKey, payload, LANE_WAIT_MS)
+    if (typeof answer.key === 'string') return answer.key
+    // Its process down, or its gateway not started yet: no key to sign with.
+    throw new Error(typeof answer.error === 'string' && !answer.error.startsWith('SERVICE_') ? answer.error : 'the gateway holds no key just now: it is not running')
+  }
+
   const ops: GatewayOps = {
     status: async (): Promise<GatewayStatus> => {
       const answer = await deps.call(GATEWAY_CALLS.status, {}, 2_000)
@@ -205,12 +212,15 @@ export function createGatewayLink(deps: GatewayLinkDeps) {
         : { code: 'UNAVAILABLE', message: 'The Wi-Fi device link is not reachable on this computer right now. Try again.' }
       return { refused: why }
     },
-    dashboardPort: (port) => { dashboardPort = port; send('dashboardPort', { port }) },
     wifiService: (on) => { wifiService = on; send('wifiService', { on }) },
     revokeIdentity: (identity) => { send('revokeIdentity', { identity }) },
     account: (next) => { send('account', { account: next }) },
     reachable: (machineIds) => { reachable = machineIds; send('reachable', { machineIds }) },
     lane: laneOps,
+    observerKey: {
+      publicKey: () => ownerKey({ op: 'public' }),
+      signWelcome: (machineId, shareId, peer, ephemeral) => ownerKey({ op: 'sign', machineId, shareId, peer, ephemeral }),
+    },
   }
 
   /** A window's session through the gateway: to another of the owner's machines, or to a harness shared
@@ -371,7 +381,7 @@ export function createGatewayLink(deps: GatewayLinkDeps) {
       if (up) this.disconnected()
       up = true
       // The account as the core reads it now (`start`), which is never older than the last one it said.
-      send('start', { requestsOpen, dial, localClients, dashboardPort, wifiService, reachable, ...deps.start() })
+      send('start', { requestsOpen, dial, localClients, wifiService, reachable, ...deps.start() })
     },
     /** The gateway's process went: the relay with it, as far as everything in the core is concerned. */
     disconnected(): void {

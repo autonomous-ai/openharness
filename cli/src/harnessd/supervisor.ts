@@ -63,6 +63,13 @@ export interface SupervisorDeps {
    * since it started. Left out, such an exit is the update failing, as it was before.
    */
   bundle?(): string | null
+  /** Start the process that runs [service] on demand (./services.ts `ServiceSupervisor.want`): the core asked for it. */
+  want?(service: string): void
+  /**
+   * The core bound speaking an older protocol than this master (./services.ts `ServiceSupervisor.unasked`): it
+   * never asks for a process that became on demand after its protocol, and expects it to run, as it did.
+   */
+  unasked?(protocol: number): void
 }
 
 /**
@@ -172,7 +179,14 @@ export interface SupervisorStatus {
   reexecs: number
 }
 
-type TimerName = 'bindTimer' | 'readyTimer' | 'heartbeatTimer' | 'killTimer' | 'restartTimer' | 'probationTimer'
+type TimerName = 'bindTimer' | 'readyTimer' | 'heartbeatTimer' | 'killTimer' | 'restartTimer' | 'probationTimer' | 'handOverTimer'
+
+/**
+ * How long a core asked to hand over for an update (`harnessd:update`) has before the master stops it all
+ * the same: its teardown gives up after 15 s (core/updateHandoff.ts) and a grace of 1 s follows, so this
+ * is a core that did not hear, or did not act. Its exit then counts as the update's.
+ */
+export const HAND_OVER_GRACE_MS = 45_000
 
 const describeExit = (code: number | null, signal: NodeJS.Signals | null): string =>
   signal ? `signal ${signal}` : `code ${code}`
@@ -220,6 +234,7 @@ export class Supervisor {
   private heartbeatTimer: unknown = null
   private killTimer: unknown = null
   private restartTimer: unknown = null
+  private handOverTimer: unknown = null
   private readonly masterVersion: string | null
   private reexecs = 0
   private unproven = 0
@@ -301,6 +316,37 @@ export class Supervisor {
     })
   }
 
+  /**
+   * The updater (services/updaterProcess.ts) staged `version` on disk. The core used to stage it itself
+   * and exit 75; now the master asks it to (`harnessd:update`), and its exit is the update's, judged as
+   * before. A core that does not leave within `HAND_OVER_GRACE_MS` is stopped, and that exit counts as the
+   * update's too. With no core running (a restart's backoff, safe mode's), the next one starts on the new
+   * bundle at once, on probation, with a clean slate: whatever was crashing may be what it fixes.
+   */
+  updateStaged(version: string): void {
+    if (this.state === 'stopping' || this.state === 'stopped') return
+    const core = this.core
+    if (!core) {
+      this.update = 'pending'
+      this.crashes = []
+      this.safeMode = null
+      this.deps.log(`[harnessd] the updater staged ${version} — the next core starts on it`)
+      // Waiting out a backoff: no longer. Otherwise the next core is already being started (a
+      // re-execution deciding), and starts on the bundle on disk.
+      if (this.restartTimer !== null) this.scheduleSpawn(0)
+      return
+    }
+    if (this.handOverTimer !== null) return
+    this.deps.log(`[harnessd] the updater staged ${version} — asking the core to hand over`)
+    core.send({ type: 'harnessd:update', version })
+    this.armTimer('handOverTimer', () => {
+      this.handOverTimer = null
+      this.deps.log(`[harnessd] core did not hand over for ${version} within ${HAND_OVER_GRACE_MS} ms — stopping it`)
+      this.killReason = 'update'
+      this.end('restart', 'SIGTERM')
+    }, HAND_OVER_GRACE_MS)
+  }
+
   /** Stop the core and the master. A second call while stopping kills the core outright. */
   stop(reason: string): void {
     if (this.state === 'stopped') return
@@ -339,9 +385,11 @@ export class Supervisor {
     // HARNESSD_JUDGES_SUPERSEDED: this master judges a build its core on probation stages on its own
     // (#807). A master from before rolls back on any exit during probation, the update's own included,
     // and its core must not stage then: see `stageWhileJudged` in lib/selfUpdate.ts.
+    // HARNESSD_UPDATES: updates are this master's to run (services/updaterProcess.ts), not the core's. A core
+    // under a master from before it starts the updater beside itself (core/updaterBeside.ts).
     const env: Record<string, string> = {
       HARNESSD_SUPERVISED: '1', HARNESSD_RESTARTS: String(this.restarts), HARNESSD_WATCHDOG_MS: String(this.options.heartbeatTimeoutMs),
-      HARNESSD_JUDGES_SUPERSEDED: '1',
+      HARNESSD_JUDGES_SUPERSEDED: '1', HARNESSD_UPDATES: 'master',
     }
     if (this.lastExit) env.HARNESSD_LAST_EXIT = this.lastExit
     if (this.safeMode) env.HARNESSD_SAFE_MODE = this.safeMode
@@ -365,6 +413,7 @@ export class Supervisor {
         this.clearTimer('bindTimer')
         if (!this.claimed) { this.deps.claimPidFile(); this.claimed = true }
         this.deps.log(`[harnessd] core bound (pid ${core.pid ?? '?'}, protocol ${message.protocol})`)
+        if (message.protocol < HARNESSD_PROTOCOL) this.deps.unasked?.(message.protocol)
         this.watchHeartbeat()
         // A core from before `ready` is running once bound, and its update is judged from there.
         const readiness = message.protocol >= 2
@@ -397,6 +446,9 @@ export class Supervisor {
         this.deps.log(`[harnessd] core ready (pid ${core.pid ?? '?'})${message.safeMode === undefined ? '' : ` · in safe mode: ${message.safeMode}`}`)
         this.setState('running')
         this.up()
+        return
+      case 'harnessd:want':
+        if (this.bound) this.deps.want?.(message.service)
         return
       case 'harnessd:heartbeat': {
         if (!this.bound) return
@@ -449,7 +501,7 @@ export class Supervisor {
     const exit = describeExit(code, signal)
     const reason = this.killReason ?? (code === CORE_EXIT_UPDATE ? 'update' : 'crashed')
     const wasSafe = this.safeMode ?? this.coreSafeMode
-    for (const timer of ['bindTimer', 'readyTimer', 'heartbeatTimer', 'killTimer', 'probationTimer'] as const) this.clearTimer(timer)
+    for (const timer of ['bindTimer', 'readyTimer', 'heartbeatTimer', 'killTimer', 'probationTimer', 'handOverTimer'] as const) this.clearTimer(timer)
     this.core = null
     this.bound = false
     this.coreSafeMode = null

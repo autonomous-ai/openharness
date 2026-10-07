@@ -10,6 +10,7 @@ import { env } from '../config/env.js'
 import {
   buildHarnessSessionLabel, harnessPaneOwner, isLegacyHarnessSession, ownedHere, paneOwnerFormat, paneOwnerOf,
 } from './harnessSessionLabel.js'
+import { inTmuxRoom } from './tmuxControlGate.js'
 import { tmuxFeatures } from './tmuxVersion.js'
 import { isNoTmuxServerError, rememberTmuxServer, reviveRemovedTmuxSocket } from './tmux.js'
 
@@ -146,7 +147,9 @@ export async function adoptLegacyHarnessSessions(
     // to the next one.
     const to = buildHarnessSessionLabel(engine, now + seen.size - 1)
     // `=name` is tmux's exact match; a bare name may also be read as a prefix or a pane target.
-    const renamed = await execText('tmux', ['rename-session', '-t', `=${pane.tmuxSessionName}`, to], 2_000)
+    // A session renamed is a notification to every control client: on a tmux before 3.7, not while one
+    // attaches (tmuxControlGate.ts).
+    const renamed = await inTmuxRoom('notify', () => execText('tmux', ['rename-session', '-t', `=${pane.tmuxSessionName}`, to], 2_000))
     if (renamed.ok) adopted.push({ from: pane.tmuxSessionName, to, paneId: pane.tmuxPane })
   }
   return adopted

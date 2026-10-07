@@ -1,8 +1,9 @@
 import { mkdtemp, rm, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { agentFrame } from './agentFrame.js'
+import { agentProject } from './agentProject.js'
 import type { RegisteredSession } from './registry.js'
 
 function session(grid: RegisteredSession['grid'], codexHome: RegisteredSession['codexHome'] = null): RegisteredSession {
@@ -35,6 +36,18 @@ describe('agentFrame', () => {
       .toMatchObject({ grid: assignment })
   })
 
+  it('carries what models says of the agent\'s grid, asked of the grid it is on, and nothing when it has nothing to say', async () => {
+    const said = vi.fn(() => ({ state: 'asleep' as const, note: { reason: 'offline' as const, model: assignment.model, machine: 'Studio' } }))
+    expect((await agentFrame(session(assignment), { selectedModel: null, terminalAvailable: true, gridAnnotation: said })).grid)
+      .toEqual({ ...assignment, state: 'asleep', note: { reason: 'offline', model: assignment.model, machine: 'Studio' } })
+    expect(said).toHaveBeenCalledWith(assignment)
+    expect((await agentFrame(session(assignment), { selectedModel: null, terminalAvailable: true, gridAnnotation: () => null })).grid).toEqual(assignment)
+    // An agent on no grid is asked about none.
+    said.mockClear()
+    await agentFrame(session(null), { selectedModel: null, terminalAvailable: true, gridAnnotation: said })
+    expect(said).not.toHaveBeenCalled()
+  })
+
   it('never carries the grid launch — the key stays in the registry', async () => {
     const row = session(assignment)
     row.gridLaunch = { networkId: 'grid-abc', networkName: 'Team grid', baseUrl: assignment.baseUrl, apiKey: 'gridkey-SECRET' }
@@ -50,6 +63,21 @@ describe('agentFrame', () => {
     expect(frame.forkedFrom).toEqual({ agentId: 'p', name: 'P' })
     expect(JSON.stringify(frame)).not.toContain('p-sess.jsonl')
     expect(JSON.stringify(frame)).not.toContain('p-sess')
+  })
+
+  // The SCM seam (scm/scmProjects.ts) names the project's SCM and changes nothing else on it: every
+  // field a client reads is exactly what agentProject reports. A folder no SCM claims is `none`.
+  it('names the project\'s SCM beside exactly what agentProject reports, and none outside any repository', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'agent-frame-scm-'))
+    try {
+      const row = { ...session(null), cwd: dir }
+      const frame = await agentFrame(row, { selectedModel: null, terminalAvailable: true })
+      expect(frame.project).toEqual({ kind: 'none', ...await agentProject(dir) })
+      expect(frame.project).toMatchObject({ kind: 'none', cwd: dir, root: null, remote: null, branch: null })
+      expect((await agentFrame({ ...row, cwd: null }, { selectedModel: null, terminalAvailable: true })).project).toBeNull()
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
   })
 
   it('reports no assignment as null rather than omitting the field', async () => {

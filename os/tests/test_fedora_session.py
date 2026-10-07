@@ -116,6 +116,38 @@ class FedoraSession(unittest.TestCase):
         self.setup.disable()
         self.assert_original()
 
+    def test_asahi_remix_identity_can_enable_and_restore_the_existing_login(self):
+        for identity in ('fedora-asahi-remix', '"fedora-asahi-remix"', "'fedora-asahi-remix'"):
+            with self.subTest(identity=identity):
+                self.put('etc/os-release', f'NAME="Fedora Asahi Remix"\nID={identity}\nID_LIKE=fedora\nVERSION_ID=44\n')
+                self.setup.enable('owner')
+                self.assertEqual(self.setup.load()['phase'], 'enabled')
+                self.assertEqual(self.snapshot_protected(), self.protected)
+                self.setup.disable()
+                self.assert_original()
+
+    def test_foreign_or_malformed_distribution_cannot_change_login_policy(self):
+        for release in ('ID=arch\nID_LIKE=fedora\n', 'ID=another-fedora-remix\nID_LIKE=fedora\n',
+                        'ID=fedora-asahi-remix-extra\n', 'ID="fedora-asahi-remix\n',
+                        "ID='fedora-asahi-remix\"\n"):
+            with self.subTest(release=release):
+                self.put('etc/os-release', release)
+                with self.assertRaisesRegex(session.SetupError, 'native Fedora ARM'):
+                    self.setup.enable('owner')
+                self.assert_original()
+                self.assertEqual(self.setup.commands, [])
+
+    def test_asahi_identity_still_requires_the_native_fedora_runtime(self):
+        self.put('etc/os-release', 'ID=fedora-asahi-remix\nID_LIKE=fedora\n')
+        with patch.object(session.platform, 'machine', return_value='x86_64'):
+            with self.assertRaisesRegex(session.SetupError, 'native Fedora ARM'):
+                self.setup.enable('owner')
+        self.put('usr/share/harness-os/runtime.json', '{"system_profile":"arch"}\n')
+        with self.assertRaisesRegex(session.SetupError, 'native Fedora ARM'):
+            self.setup.enable('owner')
+        self.assert_original()
+        self.assertEqual(self.setup.commands, [])
+
     def test_idempotent_enable_checks_identity_and_does_not_rewrite(self):
         self.setup.enable('owner')
         before = {name: self.setup.path(name).lstat().st_mtime_ns for name in session.PATHS}
@@ -166,6 +198,27 @@ class FedoraSession(unittest.TestCase):
         with self.assertRaisesRegex(session.SetupError, 'external command failure'):
             self.setup.enable('owner')
         self.assert_original()
+
+    def test_valid_password_with_aging_disabled_is_preserved(self):
+        for last_change in ('', '-1'):
+            for maximum in ('', '1', '99999'):
+                with self.subTest(last_change=last_change, maximum=maximum):
+                    self.put('etc/shadow', f'owner:$y$j9T$existing-password-hash:{last_change}:0:{maximum}:7:::\n', 0o600)
+                    self.protected = self.snapshot_protected()
+                    self.setup.enable('owner')
+                    self.assertEqual(self.snapshot_protected(), self.protected)
+                    self.setup.disable()
+                    self.assert_original()
+
+    def test_forced_password_change_and_expired_accounts_are_still_rejected(self):
+        for last_change, maximum, expires in (('0', '99999', ''), ('1', '1', ''),
+                                               ('', '99999', '1'), ('-1', '', '1')):
+            with self.subTest(last_change=last_change, maximum=maximum, expires=expires):
+                self.put('etc/shadow', f'owner:$y$j9T$existing-password-hash:{last_change}:0:{maximum}:7::{expires}:\n', 0o600)
+                self.protected = self.snapshot_protected()
+                with self.assertRaisesRegex(session.SetupError, 'usable, unexpired password'):
+                    self.setup.enable('owner')
+                self.assert_original()
 
     def test_conflicting_configuration_is_never_overwritten(self):
         for name in (session.CONFIG, session.DROPIN, session.SUDOERS, session.ALIAS):

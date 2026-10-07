@@ -54,6 +54,8 @@ void main() {
       Agent(id: 'a0', name: 'Paused', engine: 'codex', status: 'stopped'),
     ];
     expect(harnessActivity(app, 'm', 'a0'), HarnessActivity.paused);
+    expect(HarnessActivity.paused.mark, '■');
+    expect(nativeActivityPayload(HarnessActivity.paused)['mark'], '■');
     machine.agents = const [
       Agent(
         id: 'a0',

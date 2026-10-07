@@ -20,6 +20,7 @@ from arm_boot import digest
 from arm_session import ROOT, SessionVM, failure_evidence, fixture_identity
 from arm_update_vm import UserSession, update_identity
 from fast_update_vm import exercise
+from graphical_session_vm import exercise as exercise_graphical_services
 from fedora_package_lifecycle import identity
 from session_vm import put
 
@@ -143,6 +144,7 @@ print(json.dumps({key:identity(value) for key,value in pids.items()},sort_keys=T
             machine.keys('ret')
             machine.wait_user('pgrep -u 1000 -x opencode >/dev/null', 60)
             machine.frame('02-packaged-agent', ['OpenCode', 'Ask anything'], 90)
+            result['graphical_services'] = exercise_graphical_services(machine)
             machine.command('rpm -V harness-os-session')
             runtime = json.loads(machine.read_file('/usr/share/harness-os/runtime.json'))
             assert runtime == final['runtime'], 'Boot did not use the RPM runtime identity'

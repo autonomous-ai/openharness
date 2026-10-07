@@ -10,7 +10,7 @@ import type { AgentFrame } from '../../lib/agentFrame.js'
 import { claudeTrusts, codexTrusts, preTrustClaudeProject, preTrustCodexProject } from '../../lib/claudeTrust.js'
 import { MAX_FIRST_PROMPT_CHARS, permissionModeApproves, permissionModeFlags, supportsFirstPrompt, supportsNamedAgent } from '../../lib/engineLaunch.js'
 import { parseGridLaunchOverride } from '../../lib/gridLaunch.js'
-import { parseNewAgentModel, resolveNewAgentModel } from '../../lib/newAgentModel.js'
+import { parseNewAgentModel } from '../../lib/newAgentModel.js'
 import { parseProjectFolder, prepareProjectFolder, ProjectFolderError } from '../../lib/projectFolder.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { createLaunchRequests, type CreateAgent, type ForkAgent, type LaunchRequestDeps, type RestartAgent, type ResumeAgent } from './launches.js'
@@ -28,7 +28,7 @@ vi.mock('../../lib/claudeTrust.js', async (real) => ({
 }))
 vi.mock('../../engines/opencode/version.js', async (real) => ({ ...await real<object>(), opencodeMajorVersion: vi.fn(() => 1) }))
 vi.mock('../../lib/newAgentModel.js', async (real) => ({
-  ...await real<object>(), parseNewAgentModel: vi.fn(() => ({ state: 'absent' })), resolveNewAgentModel: vi.fn(async () => ({ networkId: 'resolved' })),
+  ...await real<object>(), parseNewAgentModel: vi.fn(() => ({ state: 'absent' })),
 }))
 vi.mock('../../lib/gridLaunch.js', async (real) => ({ ...await real<object>(), parseGridLaunchOverride: vi.fn(() => ({ state: 'absent' })) }))
 vi.mock('../../dsh/installed.js', async (real) => ({ ...await real<object>(), installedDsh: vi.fn(() => undefined) }))
@@ -44,6 +44,8 @@ vi.mock('../../lib/projectFolder.js', async (real) => {
 })
 
 const CREATION = 'creation-0123456789abcdef'
+/** Where the models service resolves a new agent's grid model (core/api.ts `ModelsPort.launchTarget`). */
+const resolveNewAgentModel = vi.fn<LaunchRequestDeps['modelTarget']>()
 const session = (agentId = 'a1', over: Partial<RegisteredSession> = {}) => ({ agentId, sessionId: `${agentId}-session`, engine: 'claude', ...over }) as RegisteredSession
 const frameOf = (s: RegisteredSession) => ({ id: s.agentId }) as unknown as AgentFrame
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0))
@@ -71,6 +73,7 @@ function setup(over: Partial<LaunchRequestDeps> = {}, launches: { create?: Creat
     receipts: new AgentCreationReceipts(join(dir, `receipts-${++stores}`)),
     createAgent: () => create, forkAgent: () => fork, resumeAgent: () => resume, restartAgent: () => restart,
     byAgent: (id) => known.get(id), toProject: vi.fn(async (s: RegisteredSession) => frameOf(s)),
+    modelTarget: resolveNewAgentModel,
     ...over,
   }
   const requests = createLaunchRequests(deps)
@@ -214,7 +217,7 @@ describe('agent_create, launched', () => {
   it('points a model picked by name at its grid as read now, or says the model is unavailable', async () => {
     const { ask, create } = setup()
     vi.mocked(parseNewAgentModel).mockReturnValue({ state: 'ok', selection: { model: 'm' } } as never)
-    vi.mocked(resolveNewAgentModel).mockResolvedValueOnce({ networkId: 'resolved' } as never).mockResolvedValueOnce(null).mockRejectedValueOnce(new Error('offline'))
+    resolveNewAgentModel.mockResolvedValueOnce({ networkId: 'resolved' } as never).mockResolvedValueOnce(null).mockRejectedValueOnce(new Error('offline'))
     await ask({ engine: 'claude', cwd: '/w' })
     expect(vi.mocked(create!).mock.calls[0][0].grid).toEqual({ networkId: 'resolved' })
     const unavailable = { error: 'GRID_UNAVAILABLE', detail: 'The selected model is unavailable. Choose another model or refresh the list.' }
@@ -269,12 +272,24 @@ describe('agent_create with a receipt', () => {
     vi.mocked(installedDsh).mockReturnValue({ id: 'acme/notes', manifest: { kind: 'agent', name: 'Notes' } } as never)
     await ask({ engine: 'claude', projectSource: 'new', projectName: 'Docs', creationId: CREATION, dsh: 'acme/notes' })
     await vi.waitFor(() => expect(replies).toHaveLength(1))
-    expect(prepareProjectFolder).toHaveBeenCalledWith({ source: 'new', name: 'Docs' }, { label: 'Notes' })
+    expect(prepareProjectFolder).toHaveBeenCalledWith({ source: 'new', name: 'Docs' }, { label: 'Notes', onPrepared: expect.any(Function) })
     expect(vi.mocked(create!).mock.calls[0][0].cwd).toBe('/projects/prepared')
     vi.mocked(installedDsh).mockReturnValue(undefined)
     await ask({ engine: 'pi', projectSource: 'new', creationId: `${CREATION}-pi` })
     await vi.waitFor(() => expect(replies).toHaveLength(2))
-    expect(prepareProjectFolder).toHaveBeenLastCalledWith({ source: 'new' }, { label: 'Pi' })
+    expect(prepareProjectFolder).toHaveBeenLastCalledWith({ source: 'new' }, { label: 'Pi', onPrepared: expect.any(Function) })
+    expect(vi.mocked(create!).mock.calls[1][0].scmLaunchRecord).toBeNull()
+  })
+
+  it('hands the launch the SCM record the prepared workspace reported (registry `scmLaunch`)', async () => {
+    const { ask, create, replies } = setup()
+    vi.mocked(prepareProjectFolder).mockImplementationOnce(async (_project, options) => {
+      options?.onPrepared?.({ cwd: '/projects/prepared', scmLaunchRecord: { kind: 'git' } })
+      return '/projects/prepared'
+    })
+    await ask({ engine: 'claude', projectSource: 'worktree', gitSource: '/work/repo', branchRef: 'refs/heads/main', creationId: CREATION })
+    await vi.waitFor(() => expect(replies).toHaveLength(1))
+    expect(vi.mocked(create!).mock.calls[0][0]).toMatchObject({ cwd: '/projects/prepared', scmLaunchRecord: { kind: 'git' } })
   })
 
   it('records a folder it could not prepare as failed, in the folder\'s own words when it has them', async () => {
@@ -365,7 +380,7 @@ describe('agent_create with a receipt', () => {
   it('resolves a model picked by name inside the receipt, and records it unavailable when it cannot be read', async () => {
     const { ask, create, replies } = setup()
     vi.mocked(parseNewAgentModel).mockReturnValue({ state: 'ok', selection: { model: 'm' } } as never)
-    vi.mocked(resolveNewAgentModel).mockResolvedValueOnce({ networkId: 'resolved' } as never).mockRejectedValueOnce(new Error('offline'))
+    resolveNewAgentModel.mockResolvedValueOnce({ networkId: 'resolved' } as never).mockRejectedValueOnce(new Error('offline'))
     await ask({ engine: 'claude', cwd: '/w', creationId: CREATION })
     await ask({ engine: 'claude', cwd: '/w', creationId: `${CREATION}-2` })
     await vi.waitFor(() => expect(replies).toHaveLength(2))

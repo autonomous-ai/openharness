@@ -71,9 +71,10 @@ describe('a remote client, as the core hears it', () => {
     // A field in the payload claiming the owner's role is the sender's word; the session is the gateway's.
     await dispatchDown(socket, phone.seal('dsh_list', { requestId: 'p', owner: false }), 'phone-1')
     await dispatchDown(socket, dial.seal('dsh_list', { requestId: 'd', owner: true, local: true, role: 'web' }), 'dial-1')
+    // With the connection and the request id it asked under, which a service keys a connection's own work by.
     expect(asked).toEqual([
-      { type: 'dsh_list', asker: { local: false, owner: true } },
-      { type: 'dsh_list', asker: { local: false, owner: false } },
+      { type: 'dsh_list', asker: { local: false, owner: true, connection: 'phone-1', requestId: 'p' } },
+      { type: 'dsh_list', asker: { local: false, owner: false, connection: 'dial-1', requestId: 'd' } },
     ])
     await socket.stop()
   })

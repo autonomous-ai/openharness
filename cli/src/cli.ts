@@ -26,7 +26,8 @@ import { createInterface, emitKeypressEvents } from 'readline'
 import { homedir, hostname } from 'os'
 import { env } from './config/env.js'
 import { VERSION } from './version.js'
-import { runCore, runCoreInForeground } from './core/main.js'
+import { runCoreInForeground } from './core/main.js'
+import { startCoreProcess } from './coreProcess.js'
 import { GRID_MINT_TIMEOUT_MS, backendHttpBase, requestJson, postJson, controlPlaneAuth } from './lib/controlPlane.js'
 import { LEGACY_LOG_FILE, MACHINE_NAME_FILE, tildify, computerId, thisDeviceLabel, DAEMON_LOG_FILE, HARNESSD_STATUS_FILE, daemonPort, isAlive, isDaemonRunning, readPid } from './lib/daemonState.js'
 import { onError, BIND_WAIT_MS, connectFailure, defaultLaunchDeps, waitForBind } from './lib/daemonLaunch.js'
@@ -80,7 +81,8 @@ import { TrustGroupStore } from './lib/e2ee/trustGroup.js'
 import { confirm as confirmUpdate, fetchManifest, downloadVerified, canary, stage, semverGt, isLocalDevBuild, type UpdateEntry } from './lib/selfUpdate.js'
 import { managedNodePath } from './lib/nodeRuntime.js'
 import { updateManagedTui } from './tui/manage.js'
-import { ensureHnLauncher, ensureLauncher, ensureManagedGrid, ensureManagedRuntime } from './lib/runtimeInstall.js'
+import { ensureHnLauncher, ensureLauncher } from './lib/launchers.js'
+import { ensureManagedGrid, ensureManagedRuntime } from './lib/runtimeInstall.js'
 // Before ANY child is spawned: on Linux an absent locale makes tmux and ps mangle their output,
 // which silently costs the daemon every pane it would have discovered. See lib/childLocale.ts.
 ensureUtf8Locale()
@@ -1180,7 +1182,7 @@ async function restartDaemonForIdentity(stoppedDaemon = false): Promise<void> {
  * `VERSION` is a constant baked into whichever bundle is doing the printing, and that is not always the
  * one running: `harness update` downloads a new build, spawns it, and then prints this block — all from
  * the OLD process — so the block announced the version it was replacing (`✓ installed v0.0.22` followed
- * by `version v0.0.20`). Every other row here is a fact about the daemon (pid, sessions, dashboard); this
+ * by `version v0.0.20`). Every other row here is a fact about the daemon (pid, sessions, local api); this
  * makes the version one too. Falls back to the local constant when the daemon cannot be reached, which is
  * exactly the case where the printing process IS the only build there is.
  *
@@ -1255,7 +1257,9 @@ function printInfoBlock(opts: {
   if (opts.supervisor) console.log(row('supervisor', opts.supervisor))
   console.log(row('logs', tildify(LOG_FILE)))
   console.log(row('dial log', tildify(join(env.HARNESS_LOGS_DIR, 'dial-YYYYMMDD.log'))))
-  console.log(row('dashboard', `http://127.0.0.1:${daemonPort()}`))
+  // The daemon's loopback API, which scripts read (`/api/status`). It was the web dashboard's address
+  // until that page went: nothing opened it.
+  console.log(row('local api', `http://127.0.0.1:${daemonPort()}`))
   console.log(rule)
   console.log('  running in background · stop with: harness stop')
   console.log('')
@@ -1496,7 +1500,7 @@ async function daemonCall(method: 'GET' | 'POST', path: string, body?: unknown):
   const url = `http://127.0.0.1:${daemonPort()}${path}`
   let res: Response
   try {
-    const headers: Record<string, string> = { 'x-adapter-local': '1' } // passes the dashboard CSRF gate
+    const headers: Record<string, string> = { 'x-adapter-local': '1' } // passes the local API's CSRF gate
     if (body) headers['content-type'] = 'application/json'
     res = await fetch(url, { method, headers, body: body ? JSON.stringify(body) : undefined })
   } catch {
@@ -2446,7 +2450,8 @@ switch (cmd) {
     void startServiceProcess(rest[0])
     break
   case '__run': // internal: the detached daemon child reads the durable SSO session — or runs without one
-    runCore(SCRIPT_PATH)
+    // From the sources: cli.js and the lean bundle start it in coreProcess.ts without loading this file.
+    startCoreProcess(SCRIPT_PATH)
     break
   case 'autonomous-device':
     runAutonomousDeviceCommand(rest, env.ADAPTER_DATA_DIR, daemonPort()).then(code => { process.exitCode = code }).catch(onError)

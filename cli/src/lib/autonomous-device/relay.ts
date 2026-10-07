@@ -80,6 +80,22 @@ export class AutonomousDeviceRelay {
   emit(event: AutonomousDeviceFrame, deviceId?: string): void {
     for (const [connId, client] of this.clients) if (!deviceId || client.identity === deviceId) this.sendEvent(connId, client.identity, event)
   }
+  /** The sessions whose app said hello, by connection. */
+  helloed(): string[] { return [...this.clients.keys()] }
+  /**
+   * A session whose app said hello to this service's previous run: its process restarted, and the gateway
+   * kept the session (services/wifi.ts). It is served on, and told to resync, as a hello naming the previous
+   * instance is told (docs/autonomous-device-integration.md: the device re-reads its agents and reconciles
+   * its outstanding keys by receipt). Nothing for a session this run already serves, or no longer the
+   * identity's device.
+   */
+  restore(connId: string, identity: string): void {
+    if (this.clients.get(connId)?.identity === identity) return
+    if (this.crypto.sessionIdentity(connId) !== identity || this.crypto.sessionRole(connId) !== 'device') return
+    this.clients.set(connId, { identity, tokens: 20, at: Date.now(), active: 0 })
+    this.onClient?.(connId, identity)
+    this.service.replay(undefined, event => this.sendEvent(connId, identity, event))
+  }
   drop(connId: string): void {
     const client = this.clients.get(connId)
     this.clients.delete(connId)

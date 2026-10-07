@@ -15,9 +15,9 @@
  * prompt ("Claude Code"), or just the folder. Those fall through to the numbered default.
  */
 import { readFileSync, statSync } from 'node:fs'
-import { homedir } from 'node:os'
 import { basename, join } from 'node:path'
 import { ENGINES } from '../engines/types.js'
+import { launchCodexHome, sessionCodexHome } from './engineHomes.js'
 
 /** An engine's own name, which is what a session is titled before it is about anything. */
 const ENGINE_TITLES: ReadonlySet<string> = new Set([
@@ -73,7 +73,7 @@ let codexIndexCache: IndexCache | null = null
  */
 export function codexThreadName(sessionId: string | null | undefined, codexHome?: string | null): string | null {
   if (!sessionId) return null
-  const home = codexHome || process.env.CODEX_HOME || join(homedir(), '.codex')
+  const home = launchCodexHome(codexHome)
   const path = join(home, 'session_index.jsonl')
   let stat
   try { stat = statSync(path) } catch { return null }
@@ -104,11 +104,11 @@ export function resetCodexThreadNames(): void { codexIndexCache = null }
  * recorded before this existed is read the same way.
  */
 export function engineSessionTitle(
-  session: { engine?: string | null; sessionId?: string | null; codexHome?: string | null },
+  session: { engine?: string | null; sessionId?: string | null; codexHome?: string | null; transcriptPath?: string | null },
   terminalTitle: string | null | undefined,
 ): string | null {
   if (session.engine === 'codex') {
-    const named = codexThreadName(session.sessionId, session.codexHome)
+    const named = codexThreadName(session.sessionId, sessionCodexHome(session))
     if (named) return named
   }
   return terminalTitle ?? null

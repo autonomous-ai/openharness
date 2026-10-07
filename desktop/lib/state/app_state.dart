@@ -621,7 +621,11 @@ class AppNotifier extends ChangeNotifier {
   final _agentPauses = <(String, String), Future<String?>>{};
 
   /// The workspace supplies presentation; the model owns target identity and completion.
-  Future<bool> Function(List<(String, Agent)>, {String? tabName})?
+  Future<bool> Function(
+    List<(String, Agent)>, {
+    String? tabName,
+    bool Function(String machineId, String agentId)? canStop,
+  })?
   reviewSessionClose;
   final _viewCloseRequests = <String, Future<void>>{};
   final _closingViewAgents = <(String, String), int>{};
@@ -2082,32 +2086,44 @@ class AppNotifier extends ChangeNotifier {
         _tabStripHold = null;
       }
     }
+    selectedMachineId = focusedPane?.machineId;
     if (persist) _persistLayout();
     notifyListeners();
-    selectedMachineId = focusedPane?.machineId;
     _announceAppFocus();
     for (final machine in machineStates.values) {
-      // ⌘W closed a tab; the tiles it revealed are a person's.
-      _attachPendingPanes(machine, intent: AttachIntent.person);
+      // Closing is navigation, just like selecting a tab. Attach newly visible
+      // panes without retrying retained error streams in other tabs.
+      _attachPendingPanes(
+        machine,
+        retryExisting: false,
+        intent: AttachIntent.person,
+      );
     }
     for (final pane in removed.panes) {
       if (!allPanes.contains(pane)) await _detachSession(pane, sendClose: true);
     }
   }
 
-  /// Explicit user Close. The reusable Harness Monitor dismisses its views;
-  /// ordinary sessions are saved and stopped before their views close.
+  /// Close removes these views. A session stops only when this removes its
+  /// last view across all tabs; shared views keep their live terminal.
   Future<void> requestCloseSwarm(String id) {
     final tab = swarms.where((s) => s.id == id).firstOrNull;
     if (tab == null) return Future.value();
     final captured = tab.panes.toList();
-    return _requestViewClose('tab:$id', tab, captured, () async {
-      if (tab.panes.length != captured.length ||
-          !captured.every(tab.panes.contains)) {
-        return;
-      }
-      await closeSwarm(id);
-    }, tabName: tab.name);
+    return _requestViewClose(
+      'tab:$id',
+      tab,
+      captured,
+      () async {
+        if (tab.panes.length != captured.length ||
+            !captured.every(tab.panes.contains)) {
+          return;
+        }
+        await closeSwarm(id);
+      },
+      tabName: tab.name,
+      wholeTab: true,
+    );
   }
 
   Future<void> requestClosePane(int paneId) {
@@ -2136,14 +2152,44 @@ class AppNotifier extends ChangeNotifier {
     List<TerminalPane> closing,
     Future<void> Function() finish, {
     String? tabName,
+    bool wholeTab = false,
   }) {
     if (_disposed) return Future.value();
     if (_viewCloseRequests[key] case final pending?) return pending;
+    bool canStop(String machineId, String agentId) {
+      if (!swarms.contains(tab) ||
+          (wholeTab &&
+              (tab.panes.length != closing.length ||
+                  !closing.every(tab.panes.contains)))) {
+        return false;
+      }
+      bool showsAgent(TerminalPane pane) =>
+          pane.machineId == machineId &&
+          (pane.agentId ?? pane.ownerAgentId) == agentId;
+      if (!closing.any(
+        (pane) => showsAgent(pane) && tab.panes.contains(pane),
+      )) {
+        return false;
+      }
+      return !swarms.any(
+        (other) => other.panes.any(
+          (pane) =>
+              showsAgent(pane) &&
+              !(identical(other, tab) && closing.contains(pane)),
+        ),
+      );
+    }
+
     final targets = <(String, Agent)>[];
     final seen = <(String, String)>{};
     for (final pane in closing) {
       final id = pane.agentId;
-      if (pane.isWeb || id == null || !seen.add((pane.machineId, id))) continue;
+      if (pane.isWeb ||
+          id == null ||
+          !seen.add((pane.machineId, id)) ||
+          !canStop(pane.machineId, id)) {
+        continue;
+      }
       final machine = stateOf(pane.machineId);
       final agent = machine?.agents.where((a) => a.id == id).firstOrNull;
       if (machine?.machine.isShared == true ||
@@ -2159,8 +2205,14 @@ class AppNotifier extends ChangeNotifier {
       targets.add((pane.machineId, agent));
     }
     final revision = _authRevision;
-    for (final (machine, agent) in targets) {
-      final target = (machine, agent.id);
+    // The whole captured view belongs to Close, including sessions already
+    // stopped or served by an older CLI. Peer pruning must not trim its undo.
+    final held = {
+      for (final pane in closing)
+        if (pane.agentId ?? pane.ownerAgentId case final String id)
+          (pane.machineId, id),
+    };
+    for (final target in held) {
       _closingViewAgents[target] = (_closingViewAgents[target] ?? 0) + 1;
     }
     final completion = Completer<void>();
@@ -2171,31 +2223,15 @@ class AppNotifier extends ChangeNotifier {
         try {
           if (targets.isNotEmpty &&
               (reviewSessionClose == null ||
-                  !await reviewSessionClose!(targets, tabName: tabName))) {
+                  !await reviewSessionClose!(
+                    targets,
+                    tabName: tabName,
+                    canStop: canStop,
+                  ))) {
             return;
           }
           if (!_authWorkCurrent(revision) || !swarms.contains(tab)) return;
           await finish();
-          // Close is global: the acknowledged session also leaves any other
-          // tab holding it. Preserve each layout through the normal close path.
-          for (final (machineId, agent) in targets) {
-            final current = stateOf(machineId)?.agents
-                .where((candidate) => candidate.id == agent.id)
-                .firstOrNull;
-            if (current?.isStopped != true ||
-                current?.createdAt != agent.createdAt ||
-                current?.sessionId != agent.sessionId) {
-              continue;
-            }
-            for (final other in swarms.toList()) {
-              for (final pane in other.panes.toList()) {
-                if (!_authWorkCurrent(revision)) return;
-                if (pane.machineId == machineId && pane.agentId == agent.id) {
-                  await closePane(pane.id, swarmId: other.id);
-                }
-              }
-            }
-          }
         } catch (_) {
           if (_authWorkCurrent(revision)) {
             _lastError = 'Could not close this session safely. Check its state and try again.';
@@ -2203,8 +2239,7 @@ class AppNotifier extends ChangeNotifier {
             notifyListeners();
           }
         } finally {
-          for (final (machine, agent) in targets) {
-            final target = (machine, agent.id);
+          for (final target in held) {
             final remaining = (_closingViewAgents[target] ?? 1) - 1;
             if (remaining == 0) {
               _closingViewAgents.remove(target);
@@ -2214,6 +2249,11 @@ class AppNotifier extends ChangeNotifier {
           }
           if (identical(_viewCloseRequests[key], request)) {
             _viewCloseRequests.remove(key);
+          }
+          // A cancelled or partial close keeps its remaining local views. Once
+          // the operation releases them, share that intent with the desk too.
+          if (_authWorkCurrent(revision) && swarms.contains(tab)) {
+            _persistLayout();
           }
           completion.complete();
         }
@@ -2368,6 +2408,7 @@ class AppNotifier extends ChangeNotifier {
       target.focusedPaneId ??= target.panes.firstOrNull?.id;
       _paneFocusRequest++;
       selectSwarm(target.id);
+      _openSavedPanes(target.panes);
       return;
     }
     final restored =
@@ -2407,6 +2448,7 @@ class AppNotifier extends ChangeNotifier {
     restored.zoomedPaneId = paneAt(saved.zoom);
     swarms.insert(saved.index.clamp(0, swarms.length), restored);
     selectSwarm(restored.id);
+    _openSavedPanes(restored.panes);
   }
 
   /// Reopen the chosen closure, or the newest closure for Cmd-Shift-T.
@@ -2501,7 +2543,46 @@ class AppNotifier extends ChangeNotifier {
     _settlePins();
     _paneFocusRequest++;
     selectSwarm(target.id);
+    _openSavedPanes([pane]);
     return true;
+  }
+
+  void _openSavedPanes(Iterable<TerminalPane> restored) {
+    for (final pane in restored) {
+      final agent = stateOf(pane.machineId)?.agents
+          .where((agent) => agent.id == pane.agentId)
+          .firstOrNull;
+      if (agent?.isStopped == true) unawaited(openSavedPane(pane.id));
+    }
+  }
+
+  /// Explicit reopening resumes the saved conversation in its existing slot.
+  /// A delayed response cannot follow focus into another tab or reopen a pane
+  /// the person has since closed. Resume receipts deduplicate repeated clicks.
+  Future<void> openSavedPane(int paneId) async {
+    final pane = allPanes.where((pane) => pane.id == paneId).firstOrNull;
+    final agentId = pane?.agentId;
+    if (_disposed || pane == null || agentId == null) return;
+    final revision = _authRevision;
+    final request = resumeAgent(pane.machineId, agentId);
+    notifyListeners();
+    final result = await request;
+    if (!_authWorkCurrent(revision) ||
+        !allPanes.contains(pane) ||
+        pane.agentId != agentId) {
+      return;
+    }
+    if (result.error case final error?) {
+      _lastError = error;
+      _lastErrorRetryable = result.retryable;
+      notifyListeners();
+      return;
+    }
+    pane.claimOnFirstAttach = true;
+    if (panes.contains(pane) && _paneNeedsAttach(pane) && _canAttachPane(pane)) {
+      pane.claimOnFirstAttach = false;
+      await _reattachPane(pane, intent: AttachIntent.person);
+    }
   }
 
   /// Capture the destination before any network wait or tab change.
@@ -11474,6 +11555,9 @@ class AppNotifier extends ChangeNotifier {
     return true;
   }
 
+  AgentRestartAttempt? pendingAgentRestart(String machineId, String agentId) =>
+      _agentRestarts[(machineId, agentId)];
+
   /// Attach to a running harness or resume its saved conversation immediately.
   Future<RestartAgentResult> resumeAgent(String machineId, String agentId) {
     if (pendingAgentPause(machineId, agentId) != null) {
@@ -11871,10 +11955,12 @@ class AppNotifier extends ChangeNotifier {
 
   final _agentChanges = <(String, String), _AgentChange>{};
 
-  bool _keepsSwitchPane(TerminalPane pane) =>
-      _agentChanges[(pane.machineId, pane.agentId ?? pane.ownerAgentId)]
-          ?.preservingViews ==
-      true;
+  bool _keepsPendingAgent(String machineId, String? agentId) =>
+      _closingViewAgents.containsKey((machineId, agentId)) ||
+      _agentChanges[(machineId, agentId)]?.preservingViews == true;
+
+  bool _keepsPendingPane(TerminalPane pane) =>
+      _keepsPendingAgent(pane.machineId, pane.agentId ?? pane.ownerAgentId);
 
   Future<Map<String, dynamic>> Function(String sourceId, String engine)?
   changeCompanionAgent;
@@ -14158,9 +14244,9 @@ class AppNotifier extends ChangeNotifier {
   /// Called from [_persistLayout]: whatever just changed, said to the desk as ops.
   void _deskQueueDiff() {
     if (!_desk.enabled) return;
-    // A peer can prune the stopped source while its replacement starts.
-    // Keep that pane locally, but never advertise the stopped reference
-    // again. The successful switch publishes the replacement in its slot.
+    // A peer can prune stopped sessions while Close or a replacement is still
+    // pending. Keep their local slots for history, without publishing them back
+    // to the desk. The operation owns the final layout change.
     final projection = <DeskTab>[];
     for (final tab in _deskProjection()) {
       final synced = _desk.synced.where((t) => t.id == tab.id).firstOrNull;
@@ -14169,8 +14255,7 @@ class AppNotifier extends ChangeNotifier {
           .where(
             (p) =>
                 known.contains(p.key) ||
-                _agentChanges[(p.machineId, p.agentId)]?.preservingViews !=
-                    true,
+                !_keepsPendingAgent(p.machineId, p.agentId),
           )
           .toList();
       if (panes.length == tab.panes.length) {
@@ -14313,14 +14398,15 @@ class AppNotifier extends ChangeNotifier {
     final kept = <Swarm>[];
     for (final swarm in swarms) {
       if (_deskTracks(swarm) && !targetById.containsKey(swarm.id)) {
-        if (!swarm.panes.any(_keepsSwitchPane)) {
+        if (!swarm.panes.any(_keepsPendingPane)) {
           released.addAll(swarm.panes);
           continue;
         }
-        // Only the in-flight replacement owns a temporary local slot.
+        // Close keeps its complete layout until its acknowledgement can save
+        // history. A replacement similarly owns its temporary local slot.
         // Other panes still follow closures from another window.
         for (final pane in swarm.panes.toList()) {
-          if (_keepsSwitchPane(pane)) continue;
+          if (_keepsPendingPane(pane)) continue;
           swarm.remove(pane);
           released.add(pane);
         }
@@ -14350,7 +14436,7 @@ class AppNotifier extends ChangeNotifier {
       for (final pane in swarm.panes.toList()) {
         if (pane.agentId == null) continue;
         if (wanted.contains('${pane.machineId}\u0000${pane.agentId}')) continue;
-        if (_keepsSwitchPane(pane)) continue;
+        if (_keepsPendingPane(pane)) continue;
         swarm.remove(pane);
         released.add(pane);
         for (final viewer in swarm.panes.toList()) {
@@ -14443,7 +14529,7 @@ class AppNotifier extends ChangeNotifier {
       final holdingSlot = swarm.panes.any(
         (pane) =>
             pane.agentId != null &&
-            _keepsSwitchPane(pane) &&
+            _keepsPendingPane(pane) &&
             !wanted.contains('${pane.machineId}\u0000${pane.agentId}'),
       );
       if (layoutMoved &&

@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { describe, expect, it, vi } from 'vitest'
-import { CableFleet as SourceFleet, testDialDiscovery } from './cableFleet.js'
+import { CableFleet as SourceFleet, testDialDiscovery, type CableFleetOptions } from './cableFleet.js'
 import { CableSession, type CableHost, type CablePort } from './cableSession.js'
 import { CableDecoder, CableType, encodeCableFrame } from './cableFrame.js'
 import { DialLog } from './dialLog.js'
@@ -26,10 +26,11 @@ class Peer implements CablePort {
   }) }
   async close(why = 'disconnected') { if (this.isOpen) { this.isOpen = false; this.onClosed(why) } }
   say(message: Record<string, unknown>) { this.onData(Buffer.from(encodeCableFrame(CableType.Json, Buffer.from(JSON.stringify(message))))) }
+  raw(bytes: Buffer) { this.onData(bytes) }
   pcm(value: number) { this.onData(Buffer.from(encodeCableFrame(CableType.Pcm, Buffer.alloc(3200, value)))) }
 }
 
-function fixture() {
+function fixture(extra: Partial<CableFleetOptions> = {}, Log: typeof DialLog = DialLog) {
   let present = [device('/dev/tim', 'AA:01'), device('/dev/tux', 'BB:02')]
   const ports: Peer[] = []
   const host: CableHost = {
@@ -50,12 +51,15 @@ function fixture() {
   const logs = mkdtempSync(join(tmpdir(), 'usb-fleet-'))
   const options = {
     canUseUsb: vi.fn(() => true),
+    // Nobody else holds these ports. The default asks `lsof`, a process per port per scan, which on a
+    // loaded machine outlasts the second a test waits for both dials.
+    inUse: vi.fn(async () => false),
     discover: vi.fn(async () => present), intervalMs: 60_000,
     open: vi.fn(async (path: string, onData: (chunk: Buffer) => void, onClosed: (why: string) => void) => {
       const port = new Peer(path, onData, onClosed); ports.push(port); return port
     }),
   }
-  const fleet = new CableFleet(CableSession, host, logs, DialLog, options)
+  const fleet = new CableFleet(CableSession, host, logs, Log, { ...options, ...extra })
   async function start() { fleet.start(); await vi.waitFor(() => expect(ports).toHaveLength(2)); await greet(ports) }
   async function greet(peers: Peer[]) {
     for (const p of peers) p.say({ t: 'hello', product: 'harness', mac: p.path, fw: 'fixture', proto: 3 })
@@ -70,6 +74,105 @@ describe('the end-to-end suite\'s dial', () => {
     expect(testDialDiscovery('')).toEqual({})
     const { discover } = testDialDiscovery('/dev/ttys042')
     expect(await discover!()).toEqual([{ path: '/dev/ttys042', vendorId: 0x303a, productId: 0x1001, serialNumber: 'E2E-DIAL' }])
+  })
+
+  it('are the pseudo-terminals a file lists, read at every scan, so a test can plug and unplug them', async () => {
+    let listed = '[{"path":"/dev/ttys001","serial":"E2E-1"},{"path":"/dev/ttys002","serial":"E2E-2"},{"path":7},null]'
+    const { discover } = testDialDiscovery('/tmp/dials.json', () => listed)
+    expect((await discover!()).map((port) => [port.path, port.serialNumber])).toEqual([['/dev/ttys001', 'E2E-1'], ['/dev/ttys002', 'E2E-2']])
+    listed = '{"not": "a list"}'
+    expect(await discover!()).toEqual([])
+    listed = 'half a file'
+    expect(await discover!()).toEqual([])
+  })
+})
+
+describe('one dial failing', () => {
+  it('is dropped alone after five faults, its port looked at again after a wait, while the other dial goes on', async () => {
+    const f = fixture({ faults: new Set(['dial.AA:01']), dropBackoffMs: 300 })
+    const scan = () => (f.fleet as unknown as { scan(): Promise<void> }).scan()
+    try {
+      f.fleet.start()
+      await vi.waitFor(() => expect(f.ports).toHaveLength(2))
+      const [faulty, healthy] = f.ports
+      await f.greet([healthy])
+      // Every greeting the faulty dial sends fails in its session, as its firmware greets on a cadence.
+      for (let i = 0; i < 5; i++) faulty.say({ t: 'hello', product: 'harness', mac: faulty.path, fw: 'fixture', proto: 3 })
+      await vi.waitFor(() => expect(faulty.isOpen).toBe(false))
+      expect(f.host.log).toHaveBeenCalledWith(expect.stringMatching(/cable: \/dev\/tim dropped \(5 faults in a minute: injected fault: dial\.AA:01\) — this dial alone; its port is looked at again in 0 s \[usb AA:01\]/))
+      // The other dial is untouched: still attached, still told the desk's work.
+      expect(healthy.isOpen).toBe(true)
+      healthy.sent.length = 0
+      await f.fleet.turnStarted('a', 'working')
+      await vi.waitFor(() => expect(healthy.sent.some((m) => m.t === 'turn.started')).toBe(true))
+      expect(f.fleet.isConnected).toBe(true)
+      // Not before its wait is over; then it is opened again.
+      await scan()
+      expect(f.ports).toHaveLength(2)
+      await new Promise((resolve) => setTimeout(resolve, 350))
+      await scan()
+      expect(f.ports).toHaveLength(3)
+    } finally { await f.fleet.stop() }
+  })
+
+  it('is dropped at once when it floods the port with what no dial sends, and waits longer each time it does again', async () => {
+    const f = fixture({ dropBackoffMs: 100 })
+    const scan = () => (f.fleet as unknown as { scan(): Promise<void> }).scan()
+    try {
+      await f.start()
+      const [flooding, healthy] = f.ports
+      flooding.raw(Buffer.alloc(70 * 1024, 0x41))
+      await vi.waitFor(() => expect(flooding.isOpen).toBe(false))
+      expect(f.host.log).toHaveBeenCalledWith(expect.stringMatching(/cable: flooded · 716\d\d B that are no frames in a second, more than a dial sends/))
+      expect(f.host.log).toHaveBeenCalledWith(expect.stringMatching(/\/dev\/tim dropped \(flooding the port: .*\) — this dial alone; its port is looked at again in 0 s/))
+      expect(healthy.isOpen).toBe(true)
+      await new Promise((resolve) => setTimeout(resolve, 150))
+      await scan()
+      expect(f.ports).toHaveLength(3)
+      // Again, soon after: the wait doubles.
+      f.ports[2].raw(Buffer.alloc(70 * 1024, 0x41))
+      await vi.waitFor(() => expect(f.host.log).toHaveBeenCalledWith(expect.stringMatching(/\/dev\/tim dropped .* looked at again in 0 s/)))
+      await vi.waitFor(() => expect(f.ports[2].isOpen).toBe(false))
+      await new Promise((resolve) => setTimeout(resolve, 120))
+      await scan()
+      expect(f.ports).toHaveLength(3)
+      await new Promise((resolve) => setTimeout(resolve, 150))
+      await scan()
+      expect(f.ports).toHaveLength(4)
+    } finally { await f.fleet.stop() }
+  })
+
+  it('is dropped for a flood of frames, or for frames that take the decoder too long', async () => {
+    const f = fixture({ dropBackoffMs: 60_000 })
+    try {
+      await f.start()
+      const [chatty, healthy] = f.ports
+      const ping = Buffer.from(encodeCableFrame(CableType.Json, Buffer.from('{"t":"pong"}')))
+      chatty.raw(Buffer.concat(Array.from({ length: 2_100 }, () => ping)))
+      await vi.waitFor(() => expect(chatty.isOpen).toBe(false))
+      expect(f.host.log).toHaveBeenCalledWith(expect.stringMatching(/\d{4} frames in a second, more than a dial sends/))
+      expect(healthy.isOpen).toBe(true)
+      const budget = CableSession.BUDGET.decodeMs
+      ;(CableSession.BUDGET as { decodeMs: number }).decodeMs = -1
+      try {
+        healthy.say({ t: 'pong' })
+        await vi.waitFor(() => expect(healthy.isOpen).toBe(false))
+        expect(f.host.log).toHaveBeenCalledWith(expect.stringMatching(/ms of decoding in a second/))
+      } finally { (CableSession.BUDGET as { decodeMs: number }).decodeMs = budget }
+    } finally { await f.fleet.stop() }
+  })
+
+  it('keeps its own fault when what it sends throws as it is read, and the process goes on', async () => {
+    class ThrowingLog extends DialLog { device(): void { throw new Error('the log could not be written') } }
+    const f = fixture({ dropBackoffMs: 60_000 }, ThrowingLog)
+    try {
+      await f.start()
+      const [noisy, quiet] = f.ports
+      for (let i = 0; i < 5; i++) noisy.raw(Buffer.from(encodeCableFrame(CableType.Log, Buffer.from('I (12) boot: line'))))
+      await vi.waitFor(() => expect(noisy.isOpen).toBe(false))
+      expect(f.host.log).toHaveBeenCalledWith(expect.stringContaining('cable: fault · the log could not be written'))
+      expect(quiet.isOpen).toBe(true)
+    } finally { await f.fleet.stop() }
   })
 })
 

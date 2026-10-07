@@ -53,7 +53,6 @@ describe('the gateway in its own process, as the core sees it', () => {
     link.port.connect()
     link.port.holdRequests()
     link.port.localClients(2)
-    link.ops.dashboardPort(41000)
     link.ops.wifiService(true)
     link.ops.account({ machineId: 'm1', signIn: null })
     link.ops.reachable(['m2'])
@@ -62,7 +61,7 @@ describe('the gateway in its own process, as the core sees it', () => {
     expect(kinds()).toEqual(['start'])
     expect(sent[0]).toEqual({
       kind: 'start', machineId: 'm1', computerId: 'c1', autonomousEnv: 'prod', signedIn: true,
-      requestsOpen: false, dial: 'connect', localClients: 2, dashboardPort: 41000, wifiService: true, reachable: ['m2'],
+      requestsOpen: false, dial: 'connect', localClients: 2, wifiService: true, reachable: ['m2'],
     })
     link.port.openRequests()
     link.port.serveThisComputerOnly()
@@ -249,6 +248,21 @@ describe('the gateway in its own process, as the core sees it', () => {
     expect((await link.ops.wifi({ op: 'discover' })) as { refused: { code: string } }).toMatchObject({ refused: { code: 'UNAVAILABLE' } })
     answer = { error: 'SERVICE_UNAVAILABLE' }
     expect(await link.ops.wifi({ op: 'revoke', id: 'x' })).toMatchObject({ refused: { code: 'UNAVAILABLE' } })
+  })
+
+  it('asks the gateway for Share\'s owner\'s key, and says none is held while it cannot answer', async () => {
+    let answer: Record<string, unknown> = { key: 'cHVi' }
+    const { link, call } = setup({ call: async () => answer })
+    expect(await link.ops.observerKey.publicKey()).toBe('cHVi')
+    expect(call).toHaveBeenLastCalledWith(GATEWAY_CALLS.observerKey, { op: 'public' }, LANE_WAIT_MS)
+    expect(await link.ops.observerKey.signWelcome('m', 's', 'cA==', 'ZQ==')).toBe('cHVi')
+    expect(call).toHaveBeenLastCalledWith(GATEWAY_CALLS.observerKey, { op: 'sign', machineId: 'm', shareId: 's', peer: 'cA==', ephemeral: 'ZQ==' }, LANE_WAIT_MS)
+    answer = { error: 'not a welcome to an observer' }
+    await expect(link.ops.observerKey.signWelcome('m', 's', 'x', 'y')).rejects.toThrow('not a welcome to an observer')
+    for (const error of ['SERVICE_UNAVAILABLE', 'SERVICE_FAILED', undefined]) {
+      answer = error ? { error } : {}
+      await expect(link.ops.observerKey.publicKey()).rejects.toThrow(/not running/)
+    }
   })
 
   it('carries the fleet\'s lane to the gateway\'s sessions, every step a call in order, and never a frame back unsealed', async () => {

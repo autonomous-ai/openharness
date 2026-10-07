@@ -1,6 +1,6 @@
 import { basename } from 'node:path'
-import { env } from '../config/env.js'
-import { terminalActivityReading } from '../cable/terminalActivity.js'
+import { sessionCodexHome } from './engineHomes.js'
+import { terminalActivityReading } from './terminalActivity.js'
 import { connectCodexControl, type CodexControl } from './codexSessionLifecycle.js'
 import { codexStoppedGoal } from './codexTurnRecovery.js'
 import { argvTokens, processRows, type ProcessRow } from './tmux.js'
@@ -21,7 +21,7 @@ export class CodexActivityReader {
   constructor(private readonly deps = { connect: connectCodexControl, rows: processRows, now: () => performance.now() }) {}
   async read(session: RegisteredSession): Promise<ActivityState> {
     if (session.engine !== 'codex' || !session.processIdentity) return 'unknown'
-    const home = session.codexHome || env.CODEX_HOME
+    const home = sessionCodexHome(session)
     if ((this.retryAt.get(home) ?? 0) > this.deps.now()) return 'unknown'
     if (!this.rows || this.deps.now() - this.rowsAt > 2_000) {
       this.rowsAt = this.deps.now(); this.rows = this.deps.rows()

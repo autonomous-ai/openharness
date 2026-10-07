@@ -26,7 +26,7 @@
  */
 import { spawn, type ChildProcess } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { closeSync, openSync, readFileSync, readSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { PROBE_ANSWER, PROBE_COMMAND, PROBE_TIMEOUT_MS } from './protocol.js'
 import type { ExitReason, ReexecOutcome, ResumeState } from './supervisor.js'
 
@@ -42,9 +42,30 @@ export { PROBE_ANSWER, PROBE_COMMAND, PROBE_TIMEOUT_MS } from './protocol.js'
  */
 export const REEXEC_LIMIT = 3
 
+/** How much of a file `sha256File` holds at a time. */
+const HASH_PIECE_BYTES = 64 * 1024
+
+/**
+ * The sha256 of the file at [path], read a piece at a time. A master hashes cli.js, 6.5 MB, and every
+ * file of its lean bundle before each process it starts (./leanServices.ts), eight of them as it boots:
+ * read whole, each read was a buffer the size of the file, and at idle a master still held 35 to 45 MiB
+ * of them, which a collection would have freed but none came (measured 2026-10-06).
+ */
+export function sha256File(path: string): string {
+  const hash = createHash('sha256')
+  const fd = openSync(path, 'r')
+  try {
+    const piece = Buffer.allocUnsafe(HASH_PIECE_BYTES)
+    for (let read = readSync(fd, piece); read > 0; read = readSync(fd, piece)) hash.update(piece.subarray(0, read))
+  } finally {
+    closeSync(fd)
+  }
+  return hash.digest('hex')
+}
+
 /** A file's sha256: which bundle a master runs, or which is on disk; null when it cannot be read. */
-export function fingerprint(path: string, read: (path: string) => Buffer = readFileSync): string | null {
-  try { return createHash('sha256').update(read(path)).digest('hex') } catch { return null }
+export function fingerprint(path: string): string | null {
+  try { return sha256File(path) } catch { return null }
 }
 
 const EXIT_REASONS: readonly ExitReason[] = ['crashed', 'hung', 'did-not-bind', 'not-ready', 'memory', 'update', 'stopped']
