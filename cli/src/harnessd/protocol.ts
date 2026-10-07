@@ -15,7 +15,8 @@ import type { SupervisorStatus } from './supervisor.js'
 
 /** 2: `ready`, the event-loop delay on the heartbeat, and the exit-code contract below. 3: `want`, and the
  *  master's updater: the master tells its core to hand over for a build its updater staged (`harnessd:update`).
- *  4: `want` for the devices' process too, which runs only once there is a device (./services.ts `askedSince`). */
+ *  4: `want` for the devices' process too, which runs only once there is a device, and for models', which runs
+ *  only once grid is in use here or a request needs it (./services.ts `askedSince`). */
 export const HARNESSD_PROTOCOL = 4
 
 /** The command a bundle's master answers its probe on, and what it answers. */
@@ -63,8 +64,8 @@ export type CoreMessage =
    *  loop was held since the last one (protocol 2). */
   | { type: 'harnessd:heartbeat'; rssBytes: number; heapUsedBytes: number; loopDelayMs?: number }
   /** Start the process that runs this service (harnessd/services.ts `onDemand`): an experiment that is on now
-   *  (protocol 3), or the devices, now that there is one (protocol 4). A master from before ignores it, having
-   *  started every service at once. */
+   *  (protocol 3), or the devices, now that there is one, or models, now that grid is in use or asked for
+   *  (protocol 4). A master from before ignores it, having started every service at once. */
   | { type: 'harnessd:want'; service: string }
 
 export type MasterMessage =

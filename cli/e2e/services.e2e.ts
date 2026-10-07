@@ -8,7 +8,7 @@
  * (core/serviceHost.ts).
  */
 import { randomUUID } from 'node:crypto'
-import { mkdirSync } from 'node:fs'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { LocalClient, type Frame } from './harness/client.js'
@@ -64,6 +64,9 @@ describe('a failing service never takes the core down', () => {
     daemon = await IsolatedDaemon.create({ env: { HARNESSD_TEST_FAULTS: EVERY_PROCESS_FAILING, ...QUICK_TO_PARK } })
     const d = daemon
     onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-120).join('\n')}`) })
+    // Grid in use here, so that models is asked for as the core starts and fails with the others (core/modelsWake.ts).
+    mkdirSync(join(d.dataDir, 'local-models'), { recursive: true })
+    writeFileSync(join(d.dataDir, 'local-models', 'operations.json'), '[]')
     await d.start()
     // Each process fails as it starts, again and again, until the master parks it; the core never waits for one.
     for (const service of SERVICE_PROCESSES) {
@@ -76,6 +79,8 @@ describe('a failing service never takes the core down', () => {
     expect(await client.request('dsh_list', {})).toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'store', retryable: true })
     expect(await client.request('fs_list_dir', { path: d.projectsDir })).toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'projects', retryable: true })
     expect(await client.request('machine_resources', {})).toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'monitor', retryable: true })
+    // Models is on demand and never came up: its request waits no longer than a start (core/serviceLinks.ts
+    // `ON_DEMAND_START_MS`), and every one after it is answered at once.
     expect(await client.request('grid_fleet_models_list', {})).toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'models', retryable: true })
     // A create on a grid model, with models parked, is refused as the grid being unavailable, at once.
     const onGrid = await client.request('agent_create', { engine: 'codex', cwd: d.projectsDir, gridModel: 'Qwen-35B', gridName: 'mine', bypassPermission: true }, 30_000)
@@ -312,8 +317,7 @@ describe('a failing service never takes the core down', () => {
     const d = daemon
     onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-80).join('\n')}`) })
     await d.start()
-    // In its own process: asked before it has connected, it is answered SERVICE_UNAVAILABLE, retryable.
-    await until('models to connect', () => d.log().includes('[services] models connected') || null, 30_000, 200)
+    // In its own process, on demand: the first request starts it and waits for it (core/modelsWake.ts).
     const client = await LocalClient.connect(daemon)
     expect(await client.request('grid_models_list', {})).toMatchObject({ error: 'SERVICE_FAILED', service: 'models' })
     // The October 6 bundled run received the RPC before the master's stdout delivered this same
