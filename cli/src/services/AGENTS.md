@@ -176,14 +176,17 @@ like any other. Named in `HARNESSD_SERVICES`, it starts with the others.
   `src/core/main.ts`) asks for it and waits for it, within the request's own wait. The service is welcomed
   before its queued requests are delivered. Each experiment with saved state in the data folder is
   asked for as the core starts (`src/core/experiments.ts`). The devices are asked for once there is a device:
-  a dial's port in /dev, a paired Wi-Fi device, or its session (`src/core/devicesWake.ts`).
+  a dial's port in /dev, a paired Wi-Fi device, or its session (`src/core/devicesWake.ts`). Models is asked
+  for as the core starts when grid is in use here: a managed grid, whose pin it follows, saved grid pictures,
+  which agents' grid notes are read from, or local models (`src/core/modelsWake.ts`); otherwise its first
+  request asks for it.
 - **Older cores.** `askedSince` is the core protocol (`HARNESSD_PROTOCOL`, `src/harnessd/protocol.ts`) from
   which a core asks for this process. A core that speaks an older one never asks, so the master starts the
   process as that core binds (`ServiceSupervisor.unasked`). It is 3 by default, the experiments'; the
-  devices became on demand at protocol 4. Making another process on demand needs a protocol bump, and that
+  devices and models became on demand at protocol 4. Making another process on demand needs a protocol bump, and that
   number in its `askedSince`.
-- **Proof.** `e2e/experiments.e2e.ts` and `e2e/devicesOnDemand.e2e.ts`: off, it has no process; asked for, it
-  starts and answers.
+- **Proof.** `e2e/experiments.e2e.ts`, `e2e/devicesOnDemand.e2e.ts` and `e2e/modelsOnDemand.e2e.ts`: off, it has
+  no process; asked for, it starts and answers.
 
 ## Experiments
 

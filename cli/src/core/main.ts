@@ -150,6 +150,7 @@ import { BackendSocket, isLocalClientId } from '../backendSocket.js'
 import { createGatewayLink, laneOf } from './gatewayLink.js'
 import { createWifiCore, WIFI_START_MS } from './wifi.js'
 import { createDevicesWake, DEVICES_ON_DEMAND } from './devicesWake.js'
+import { wakeModels } from './modelsWake.js'
 import { createWifiLink } from './wifiLink.js'
 import { wifiDoors } from './wifiAgents.js'
 import { autonomousDeviceLocalRequest } from '../lib/autonomous-device/localApi.js'
@@ -1137,8 +1138,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     token: serviceToken,
     owned: Object.fromEntries([...outOfProcess].map((name) => [name, requestsOf[name] ?? []])),
     waits: LONG_ANSWERS,
-    // An experiment's process runs once it is on, the devices' once there is one: a request for one off asks for it.
-    onDemand: new Set([...experiments, ...DEVICES_ON_DEMAND]),
+    // An experiment's process runs once it is on, the devices' once there is one, models' once grid is used: a request asks.
+    onDemand: new Set([...experiments, ...DEVICES_ON_DEMAND, 'models']),
     want: (service) => experimentHooks.want(service),
     // The gateway's first: its `backend` reads (the device key log) were refused below as NOT_AN_EXPERIMENT.
     answer: async (service, query, payload) => (service === 'gateway' && gatewayLink ? gatewayLink.answer(query, payload) : null) ?? deliveries.answer(service, query, payload)
@@ -1761,6 +1762,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // bound core alone (core/experiments.ts). The others wait for their first request.
     wakeExperiments({ dataDir: env.ADAPTER_DATA_DIR, experiments: EXPERIMENTS, outOfProcess, want: (service) => experimentHooks.want(service) })
     devicesWake.start(outOfProcess)
+    wakeModels({ outOfProcess, dataDir: env.ADAPTER_DATA_DIR, runtimeDir: env.ADAPTER_RUNTIME_DIR, want: (service) => coreLink.want(service) })
   } else {
     try { writeFileSync(PID_FILE, String(process.pid) + '\n') } catch { /* best effort */ }
   }

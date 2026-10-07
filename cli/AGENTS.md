@@ -29,7 +29,7 @@ they show as `harnessd`, `harnessd-core` and `harnessd-<process>` (`src/harnessd
 | viewers | the harness viewers, their remote streams and rendered surfaces, and the Store | always |
 | edge | workspaces, usage, the monitor, the project readers, the change-agent handoff, the recaps | always |
 | gateway | the relay and its E2EE (`src/gateway/`) | always |
-| models | grid, local models, the Model Manager | always |
+| models | grid, local models, the Model Manager | on demand: once grid is in use here (a managed grid, saved grid pictures, local models), or on a models request |
 | updater | checks, downloads and stages a new build (`src/services/updaterProcess.ts`) | by the master, for the installed copy only |
 | devices | the dials, the window bridges, the fleet, the voice router, the Wi-Fi device | on demand: once there is a device |
 | orchestrator, teams (with Tab collaboration), sharing, commandBar | the experiments | on demand: on a request, or saved state at start |

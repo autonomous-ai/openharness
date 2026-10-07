@@ -163,6 +163,12 @@ class Service {
     if (this.state === 'off') this.start()
   }
 
+  /** A process on demand stopped with the others and started again with them: off, for whoever needs it next to
+   *  ask. Left stopped, no `want` started it again for the rest of the master's life. */
+  rest(): void {
+    if (this.state === 'stopped') this.setState('off')
+  }
+
   /** SIGTERM, then SIGKILL after the grace; `done` once it is gone. A parked or waiting one is simply stopped. */
   stop(done: () => void): void {
     if (this.state === 'stopped') { done(); return }
@@ -307,9 +313,14 @@ export class ServiceSupervisor {
     this.services = specs.map((spec) => new Service(spec, deps, options, env))
   }
 
-  /** Start every service but those on demand; none waits on another, or on the core. */
+  /** Start every service but those on demand, which wait to be asked for again; none waits on another, or on the
+   *  core. Found end to end (e2e/reexec.e2e.ts): a master whose re-execution was refused stops its services and
+   *  starts them again, and a process on demand stayed stopped, so a core too old to ask never got models. */
   start(): void {
-    for (const service of this.services) if (!service.spec.onDemand) service.start()
+    for (const service of this.services) {
+      if (!service.spec.onDemand) service.start()
+      else service.rest()
+    }
   }
 
   /** Start the process on demand that hosts [service], if it is not running yet: the core asked for it (`harnessd:want`). */
@@ -384,8 +395,10 @@ export const SERVICE_HOSTS: Readonly<Record<string, ServiceHostSpec>> = {
   // where a fault costs the remote clients and nothing else (docs/design/2026-10-06-core-boundary-next.md).
   gateway: { services: ['gateway'], heapLimitMiB: 512, rssLimitMiB: 1_024 },
   // Grid's pictures, the Model Manager's catalog and the models found on this machine. Its downloads, model
-  // servers and `grid` commands run in processes of their own, outside this budget.
-  models: { services: ['models'], heapLimitMiB: 512, rssLimitMiB: 1_024 },
+  // servers and `grid` commands run in processes of their own, outside this budget. Started only once grid is
+  // in use here or a request needs it (core/modelsWake.ts): about 70 MiB at idle, which a computer that uses
+  // no grid never pays.
+  models: { services: ['models'], heapLimitMiB: 512, rssLimitMiB: 1_024, onDemand: true, askedSince: 4 },
   // The devices (services/devicesProcess.ts): the dials on USB (pure-JS serial, a frame decoder whose buffer
   // is bounded per dial), the window bridges, the fleet's router and its lane, the voice router's engine
   // worker (a process of its own, outside this budget). Hardware that speaks whatever its firmware says:
