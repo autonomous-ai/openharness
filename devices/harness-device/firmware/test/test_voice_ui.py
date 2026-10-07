@@ -292,7 +292,7 @@ int main(void) {
 with tempfile.TemporaryDirectory(prefix='harness-voice-ui-') as directory:
     root = Path(directory)
     (root / 'voice_ui.c').write_text(harness)
-    subprocess.run(['cc', '-std=c11', '-Wall', '-Wextra', '-Werror', '-O1', '-g',
+    subprocess.run(['cc', '-std=c11', '-D_POSIX_C_SOURCE=200809L', '-Wall', '-Wextra', '-Werror', '-O1', '-g',
                     '-fsanitize=' + os.environ.get('SANITIZERS', 'undefined,bounds'),
                     '-I', str(native), str(root / 'voice_ui.c'), str(native / 'selection.c'), str(native / 'carry.c'), str(native / 'visit.c'), str(native / 'form.c'), str(native / 'draft.c'), str(native / 'workspace.c'),
                     '-o', str(root / 'voice_ui')], check=True)

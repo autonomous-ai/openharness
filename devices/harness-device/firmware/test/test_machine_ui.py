@@ -94,7 +94,7 @@ int main(void) {
 with tempfile.TemporaryDirectory(prefix='harness-machine-ui-') as folder:
     folder = Path(folder)
     (folder/'machine.c').write_text(code)
-    subprocess.run(['cc','-std=c11','-Wall','-Wextra','-Werror','-O1','-g',
+    subprocess.run(['cc','-std=c11', '-D_POSIX_C_SOURCE=200809L','-Wall','-Wextra','-Werror','-O1','-g',
         '-fsanitize='+os.environ.get('SANITIZERS','undefined,bounds'),str(folder/'machine.c'),
         '-o',str(folder/'machine')],check=True)
     subprocess.run([str(folder/'machine')],check=True)
