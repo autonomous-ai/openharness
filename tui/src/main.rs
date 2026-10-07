@@ -70,7 +70,6 @@ mod bar;
 mod bar_more;
 // ── models: the Models view (step 6) ──
 mod models;
-mod runtime_model;
 mod autoname;
 
 use std::io::{self, BufWriter, Write};

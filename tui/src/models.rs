@@ -429,15 +429,6 @@ pub fn pane_supports(app: &App, pane: u64) -> bool {
         && app.fleet.agent(&p.machine_id, &p.agent_id).is_some_and(|a| a.status != "stopped" && ["codex", "claude", "opencode"].contains(&a.engine.as_str()))
 }
 
-pub fn pane_label(app: &App, pane: u64) -> String {
-    let observed = app.panes.get(&pane).and_then(|p| app.fleet.agent(&p.machine_id, &p.agent_id)).and_then(|a| {
-        if !a.grid_model.is_empty() { Some(a.grid_model.clone()) }
-        else { crate::runtime_model::details(&a.model, &a.id, &a.engine).map(|m| m.name) }
-    });
-    let label = observed.unwrap_or_else(|| "Model".into()).chars().filter(|c| !c.is_control()).collect::<String>();
-    crate::format::clip_middle(&label, 24)
-}
-
 pub fn target(app: &App) -> Option<Target> {
     let of = |machine: String, agent: String| -> Option<Target> {
         if app.fleet.machine(&machine).is_some_and(|m| m.shared) { return None }
@@ -1836,7 +1827,8 @@ pub fn preview(app: &App, id: &str) -> Vec<Line<'static>> {
     if let Some(rest) = id.strip_prefix("mv:sub:") {
         let Some(sub) = subscriptions(app).into_iter().find(|s| format!("{}\t{}", s.engine, s.account) == rest) else { return vec![] };
         let low = sub.left.is_some_and(|l| l <= LOW_WATER);
-        let mut out = vec![bold(if sub.account.is_empty() { sub.title.clone() } else { format!("{} · key ···{}", sub.title, sub.account) })];
+        // (The subscription's name alone: its key is not shown.)
+        let mut out = vec![bold(sub.title.clone())];
         out.push(match sub.left { Some(_) if low => warn(format!("{} · Running low", sub.status)), Some(_) => Line::raw(format!("{} · Healthy", sub.status)), None => Line::raw(sub.status.clone()) });
         match sub_word(app, &sub, t).as_str() {
             SWITCHING => out.push(Line::raw(format!("{SWITCHING} this harness is going back to its own login"))),
