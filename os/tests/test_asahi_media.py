@@ -3,7 +3,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
-import shutil
+import struct
 import sys
 import tempfile
 import unittest
@@ -13,6 +13,7 @@ import xml.etree.ElementTree as ET
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'os/tools'))
 import asahi_media as build
+import asahi_media_check as check
 
 spec = importlib.util.spec_from_file_location('asahi_media_runtime', ROOT / 'os/platforms/apple-silicon/media.py')
 media = importlib.util.module_from_spec(spec)
@@ -130,6 +131,50 @@ class Media(unittest.TestCase):
         selected = {p.get('name') for p in recipe.findall('packages/package')}
         self.assertTrue({'dracut-kiwi-live', 'cryptsetup', 'rsync', 'grub2-efi-aa64-cdboot'} <= selected)
         self.assertFalse(selected & {'harness-os-session', 'greetd', 'chromium', 'initial-setup'})
+
+
+class FirmwareMedia(unittest.TestCase):
+    def test_only_one_bounded_gpt_esp_can_be_mounted(self):
+        partition = {'type': 'C12A7328-F81F-11D2-BA4B-00A0C93EC93B', 'start': 4096, 'size': 40960}
+        table = {'label': 'gpt', 'unit': 'sectors', 'sectorsize': 512, 'partitions': [partition]}
+        document = {'partitiontable': table}
+        self.assertEqual(check.efi_partition(document, 24 * 1024**2),
+                         {'offset': 2 * 1024**2, 'bytes': 20 * 1024**2})
+        for change in ({'label': 'dos'}, {'sectorsize': 4096}, {'partitions': []},
+                       {'partitions': [partition, partition]},
+                       {'partitions': [{**partition, 'start': 0}]},
+                       {'partitions': [{**partition, 'size': 100000}]}):
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                check.efi_partition({'partitiontable': {**table, **change}}, 24 * 1024**2)
+
+    def test_firmware_files_require_arm64_executables_and_configuration(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            esp = Path(tmp)
+            boot = esp / 'EFI/BOOT'
+            boot.mkdir(parents=True)
+            pe = bytearray(2048)
+            pe[:2] = b'MZ'
+            struct.pack_into('<I', pe, 0x3c, 128)
+            pe[128:132] = b'PE\0\0'
+            struct.pack_into('<H', pe, 132, 0xaa64)
+            struct.pack_into('<H', pe, 152, 0x20b)
+            struct.pack_into('<H', pe, 220, 10)
+            shim = boot / 'BOOTAA64.EFI'
+            shim.write_bytes(pe)
+            (boot / 'grubaa64.efi').write_bytes(pe)
+            config = boot / 'grub.cfg'
+            config.write_text('configfile /boot/grub2/grub.cfg\n')
+            self.assertEqual(len(check.inspect_efi(esp)), 3)
+            for offset, value in ((132, 0x8664), (152, 0x10b), (220, 3)):
+                bad = bytearray(pe)
+                struct.pack_into('<H', bad, offset, value)
+                shim.write_bytes(bad)
+                with self.subTest(offset=offset), self.assertRaisesRegex(ValueError, 'ARM64'):
+                    check.inspect_efi(esp)
+            shim.write_bytes(pe)
+            config.unlink()
+            with self.assertRaisesRegex(ValueError, 'Missing'):
+                check.inspect_efi(esp)
 
 
 if __name__ == '__main__':

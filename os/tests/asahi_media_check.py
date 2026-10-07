@@ -7,11 +7,55 @@ import os
 from pathlib import Path
 import re
 import stat
+import struct
 import subprocess
 import tempfile
 import time
 
 from asahi_image_check import digest
+
+
+def efi_partition(document, image_bytes):
+    """Use the GPT ESP that USB firmware reads, not the ISO9660 file mirror."""
+    table = document.get('partitiontable', {})
+    if table.get('label') != 'gpt' or table.get('unit') != 'sectors' or table.get('sectorsize') != 512:
+        raise ValueError('Expected a hybrid ISO with a 512-byte GPT.')
+    partitions = [p for p in table.get('partitions', [])
+                  if p.get('type', '').lower() == 'c12a7328-f81f-11d2-ba4b-00a0c93ec93b']
+    if len(partitions) != 1:
+        raise ValueError('Expected exactly one EFI system partition.')
+    part = partitions[0]
+    start, size = part.get('start'), part.get('size')
+    if (type(start) is not int or type(size) is not int or start < 64 or size < 2048 or
+            (start + size) * 512 > image_bytes):
+        raise ValueError('The EFI system partition is outside the image.')
+    return {'offset': start * 512, 'bytes': size * 512}
+
+
+def inspect_efi(esp):
+    files = {}
+    for relative in ('efi/boot/bootaa64.efi', 'efi/boot/grubaa64.efi', 'efi/boot/grub.cfg'):
+        matches = [p for p in esp.rglob('*') if str(p.relative_to(esp)).lower() == relative]
+        if len(matches) != 1 or matches[0].is_symlink() or not matches[0].is_file():
+            raise ValueError('Missing or ambiguous EFI boot file: ' + relative)
+        path = matches[0]
+        content = path.read_bytes()
+        if relative.endswith('.efi'):
+            # PE/COFF Machine=ARM64, PE32+, Subsystem=EFI application. A file
+            # called bootaa64.efi is not sufficient evidence of an ARM loader.
+            offset = struct.unpack_from('<I', content, 0x3c)[0] if len(content) >= 64 else len(content)
+            if (len(content) < 1024 or content[:2] != b'MZ' or offset + 94 > len(content) or
+                    content[offset:offset + 4] != b'PE\0\0' or
+                    struct.unpack_from('<H', content, offset + 4)[0] != 0xaa64 or
+                    struct.unpack_from('<H', content, offset + 24)[0] != 0x20b or
+                    struct.unpack_from('<H', content, offset + 92)[0] != 10):
+                raise ValueError('Not an ARM64 EFI application: ' + relative)
+        elif not content.strip():
+            raise ValueError('Empty EFI boot configuration.')
+        files[str(path.relative_to(esp))] = {'sha256': digest(path), 'bytes': path.stat().st_size}
+    if list(esp.rglob('boot.bin')):
+        raise ValueError('The USB must not provide m1n1/boot.bin.')
+    return files
 
 
 def inspect_root(root, identity):
@@ -69,32 +113,37 @@ def main():
     args.output.mkdir(parents=True, exist_ok=False)
     receipt = {'status': 'running', 'started_at': time.time(), 'media': identity,
                'scope': 'Actual ISO and compressed live root inspection; boot and hardware acceptance separate.'}
-    def run(*command):
+    def run(*command, separate_errors=False):
         result = subprocess.run(list(map(str, command)), check=True, text=True,
-                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=180)
+                                stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE if separate_errors else subprocess.STDOUT, timeout=180)
         return result.stdout
     try:
+        receipt['boot_layout'] = run('xorriso', '-indev', args.iso, '-report_el_torito', 'plain',
+                                     '-report_system_area', 'plain')
+        receipt['partition_table'] = json.loads(run('sfdisk', '--json', args.iso, separate_errors=True))
+        partition = efi_partition(receipt['partition_table'], args.iso.stat().st_size)
         with tempfile.TemporaryDirectory(prefix='harness-media-inspect-') as tmp, ExitStack() as cleanup:
-            iso, root = Path(tmp) / 'iso', Path(tmp) / 'root'
-            iso.mkdir(); root.mkdir()
+            iso, root, esp = (Path(tmp) / name for name in ('iso', 'root', 'esp'))
+            iso.mkdir(); root.mkdir(); esp.mkdir()
             run('mount', '-o', 'ro,loop', args.iso.resolve(), iso)
             cleanup.callback(run, 'umount', iso)
+            receipt['iso_efi_paths'] = [str(p.relative_to(iso)) for p in iso.rglob('*')
+                                        if p.name.lower() == 'bootaa64.efi']
+            options = f'ro,loop,offset={partition["offset"]},sizelimit={partition["bytes"]}'
+            run('mount', '-t', 'vfat', '-o', options, args.iso.resolve(), esp)
+            cleanup.callback(run, 'umount', esp)
+            receipt['uefi'] = {**partition, 'files': inspect_efi(esp)}
             squash = [p for p in iso.rglob('*') if p.name in ('squashfs.img', 'rootfs.squashfs')]
             if len(squash) != 1:
                 raise ValueError('Expected one compressed live root.')
             run('mount', '-t', 'squashfs', '-o', 'ro,loop', squash[0], root)
             cleanup.callback(run, 'umount', root)
             receipt['kernels'] = inspect_root(root, identity)
-            efi = [p for p in iso.rglob('*') if p.name.lower() == 'bootaa64.efi']
-            if len(efi) != 1 or efi[0].stat().st_size < 1024:
-                raise ValueError('The ARM UEFI fallback bootloader is missing.')
-            receipt['uefi'] = {'path': str(efi[0].relative_to(iso)), 'sha256': digest(efi[0])}
             if list(iso.rglob('boot.bin')):
                 raise ValueError('The USB must not provide m1n1/boot.bin.')
             inventory = run('chroot', root, 'rpm', '-qa', '--qf', '%{NAME}\t%{VERSION}\t%{RELEASE}\t%{ARCH}\n')
             (args.output / 'packages.tsv').write_text('\n'.join(sorted(inventory.splitlines())) + '\n')
-        receipt['boot_layout'] = run('xorriso', '-indev', args.iso, '-report_el_torito', 'plain',
-                                     '-report_system_area', 'plain')
         receipt.update(status='passed', artifact={'name': args.iso.name,
                        'bytes': args.iso.stat().st_size, 'sha256': digest(args.iso)})
     except BaseException as error:
