@@ -10753,7 +10753,9 @@ class AppNotifier extends ChangeNotifier {
           !models.sections.any(
             (section) =>
                 section.name == choices['gridName'] &&
-                section.models.any((model) => model.id == choices['gridModel']),
+                section.harnessModels.any(
+                  (model) => model.id == choices['gridModel'],
+                ),
           )) {
         return creation._complete(
           'The selected model is unavailable. Refresh models or use your subscription.',
