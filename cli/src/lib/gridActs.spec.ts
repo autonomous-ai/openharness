@@ -18,6 +18,11 @@ import { annotate, glanceFor } from './gridAnnotation.js'
 import { presentGridSections, resetGridModels, type GridModelsService, type GridSection } from './gridModels.js'
 import type { RegisteredSession } from './registry.js'
 
+// Every look starts the fake `grid`, a node process, for its list and each grid's info: the seam under test
+// is that subprocess, as in gridReads.spec.ts. A one-look case took 0.3 to 0.5 s under 12 busy loops (load
+// 50 to 72) and past vitest's 5 s in a full run under more. Room for a loaded machine, not for a hang.
+vi.setConfig({ testTimeout: 30_000 })
+
 const OWN = 'mine', OWN_ID = 'net-own', TEAM = 'team', TEAM_ID = 'net-team'
 const EMAIL = 'me@example.com', TOKEN = 'grid-token-123'
 const OVERVIEW = '/relay/v1/grid/overview', MODELS = '/relay/v1/models'
