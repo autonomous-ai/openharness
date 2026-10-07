@@ -14555,9 +14555,13 @@ class AppNotifier extends ChangeNotifier {
     }
 
     // Tab order: the desk's, with this window's local-only tabs where they were.
+    // A tab the desk has is placed by the desk's order alone, even one this
+    // window keeps to itself (a draft the desk learned while an agent was being
+    // made in it): placed twice, its id reached native's tab strip twice, which
+    // trapped on it and took the app down (1.2.57).
     final localOnly = <(int, Swarm)>[];
     for (var i = 0; i < kept.length; i++) {
-      if (!_deskTracks(kept[i]) || !targetById.containsKey(kept[i].id)) {
+      if (!targetById.containsKey(kept[i].id)) {
         localOnly.add((i, kept[i]));
       }
     }
@@ -14567,9 +14571,22 @@ class AppNotifier extends ChangeNotifier {
     for (final (index, swarm) in localOnly) {
       ordered.insert(index.clamp(0, ordered.length), swarm);
     }
-    swarms
-      ..clear()
-      ..addAll(ordered);
+    final placed = <String>{};
+    final duplicates = <String>[];
+    swarms.clear();
+    for (final swarm in ordered) {
+      if (placed.add(swarm.id)) {
+        swarms.add(swarm);
+      } else {
+        // The copy kept shows the same panes when it is the same tab; panes
+        // only this copy held are let go below, like a closed tab's.
+        duplicates.add(swarm.id);
+        released.addAll(swarm.panes);
+      }
+    }
+    if (duplicates.isNotEmpty) {
+      appLog.warn('desk', 'dropped duplicate tab ${duplicates.join(', ')}');
+    }
     if (swarms.isEmpty) swarms.add(Swarm(id: 'swarm-${_nextSwarmId++}'));
     if (!swarms.any((s) => s.id == _activeSwarmId)) {
       _activeSwarmId = swarms.first.id;
