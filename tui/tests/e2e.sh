@@ -32,6 +32,26 @@ cleanup() {
   tmux_ kill-server 2>/dev/null || true
   kill "$mock" 2>/dev/null || true
   wait "$mock" 2>/dev/null || true
+  # kill-server acknowledges before the UI's final session write. Wait for only
+  # this fixture's clients before removing HOME, so writers cannot recreate it.
+  python3 - "$bin" "$client" <<'PY'
+import os, signal, subprocess, sys, time
+binary, client = sys.argv[1:]
+def clients():
+    rows = subprocess.check_output(['ps', '-ax', '-o', 'pid=,command='], text=True).splitlines()
+    return [int(parts[0]) for row in rows if len(parts := row.strip().split(None, 1)) == 2
+            and parts[1].startswith(binary + ' ')
+            and any(f'-L {name} ' in parts[1] for name in (client, client + '-2'))]
+for pid in clients():
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+deadline = time.monotonic() + 5
+while clients() and time.monotonic() < deadline:
+    time.sleep(.05)
+assert not clients(), 'e2e fixture client did not exit; retaining its HOME'
+PY
   rm -rf "$home"
 }
 trap cleanup EXIT
@@ -53,13 +73,11 @@ wait_eq() { # wait_eq <what> <expected> <command…>: until the command prints w
   echo "✓ $what"
 }
 
-# The first window is ready for a task; Open Terminal is an explicit keyboard action.
-expect "starts with the task-first welcome" "Welcome to Harness" 5000
-tmux_ send-keys -t t Tab Tab Tab Tab Tab Tab Tab Tab Enter
-expect "Open Terminal opens a shell here" "Mock terminal (mock)" 5000
+# Keyboard startup goes straight to a shell. GUI creation is covered by welcome.py.
+expect "starts with an interactive shell" "Mock terminal (mock)" 5000
 status_tabs() { screen | tail -n 1 | grep -q '^ 0:' && echo yes; }
 wait_eq "status line starts with window tabs, without a session label" yes status_tabs
-expect "status line quotes the local machine's app name" '"mock-local"'
+expect "status line shows the local machine and model" 'mock-local · Agent default'
 wait_eq "desk=off: the first session is still tmux's 0" 0 hn display -p '#{session_name}'
 start_window=$(hn display -p '#{window_id}')
 tmux_ send-keys -t t C-b s
@@ -210,22 +228,59 @@ tmux_ send-keys -t t C-b 0
 expect "back to window 0" "Mock Codex (mock)"
 tmux_ send-keys -t t C-b w
 expect "C-b w: choose-tree" "windows (attached)"
+tree_pane=$(hn display -p '#{pane_id}')
+tree_window=$(hn display -p '#{window_id}')
+# Navigation and resize must stay in the chooser rather than type into its pane.
+tmux_ send-keys -t t End Home NPage PPage Right Left t T C-t O r v v
+for size in '40 12' '1 1' '120 32'; do
+  read -r width height <<< "$size"
+  tmux_ resize-window -t t -x "$width" -y "$height"
+  tmux_ send-keys -t t End Home
+done
+wait_eq "window chooser survives navigation and tiny resizes" 1 hn display -p '#{pane_in_mode}'
 tmux_ send-keys -t t q
+wait_eq "q leaves window chooser on its original pane" "$tree_pane" hn display -p '#{pane_id}'
+wait_eq "chooser navigation never changes the active window" "$tree_window" hn display -p '#{window_id}'
+# A paste-buffer chooser is still keyboard-first, including Unicode and a buffer
+# that disappears while it is open. Cancelling it must never paste the selection.
+while IFS= read -r buffer; do
+  [ -z "$buffer" ] || hn delete-buffer -b "$buffer"
+done < <(hn list-buffers -F '#{buffer_name}')
+hn choose-buffer
+wait_eq "empty paste-buffer chooser does not capture input" 0 hn display -p '#{pane_in_mode}'
+hn set-buffer -b audit-text 'BUFFER_CAFE_界'
+hn choose-buffer -N -F '#{buffer_name}:#{buffer_sample}'
+expect "paste-buffer chooser shows Unicode contents" 'audit-text:BUFFER_CAFE_界'
+tmux_ send-keys -t t Escape
+wait_eq "Escape leaves paste-buffer chooser" 0 hn display -p '#{pane_in_mode}'
+hn capture-pane -p | grep -qF 'BUFFER_CAFE_界' && fail "cancel pasted the selected buffer"
+hn choose-buffer -N -F '#{buffer_name}:#{buffer_sample}'
+expect "paste-buffer chooser reopens" 'audit-text:BUFFER_CAFE_界'
+tmux_ send-keys -t t Enter
+expect "Enter pastes the selected Unicode buffer" 'BUFFER_CAFE_界'
+wait_eq "pasting leaves chooser mode" 0 hn display -p '#{pane_in_mode}'
+hn choose-buffer -N
+wait_eq "buffer chooser is active before deletion" 1 hn display -p '#{pane_in_mode}'
+hn delete-buffer -b audit-text
+tmux_ send-keys -t t End Enter Escape
+wait_eq "deleting the final buffer leaves no trapped mode" 0 hn display -p '#{pane_in_mode}'
 tmux_ send-keys -t t C-b x
 expect "C-b x asks first" "(y/n)"
 tmux_ send-keys -t t n
-# C-b c: the same task-first composer, with recent sessions below it.
-before=$(dial "(d.deleted || []).length")
+# C-b c opens another shell without interrupting the keyboard flow with a form.
 tmux_ send-keys -t t C-b c
 expect "C-b c: another new window" "2:"
-expect "C-b c: the creation form and secondary session browser" "Browse All Sessions"
-# Explicitly opening its terminal reuses the backing shell; C-b & kills it with the window.
-tmux_ send-keys -t t Tab Tab Tab Tab Tab Tab Tab Tab Enter
-sleep 1
+expect "C-b c shows the new window's shell" "Mock terminal (mock)"
+wait_eq "the dial's new window has one shell" 1 dial "d.said.app_panes?.agentIds?.length"
+closing_window=$(hn display -p '#{window_id}')
+E2E_CLOSING_AGENT=$(dial "d.said.app_panes.agentIds[0]")
+export E2E_CLOSING_AGENT
 tmux_ send-keys -t t C-b '&'
 expect "C-b & asks first" "(y/n)"
 tmux_ send-keys -t t y
-wait_eq "C-b & kills the window's shell" $((before + 1)) dial "(d.deleted || []).length"
+wait_eq "C-b & kills the displayed shell exactly once" 1 dial "(d.deleted || []).filter(id => id === process.env.E2E_CLOSING_AGENT).length"
+closed_window() { hn list-windows -F '#{window_id}' | grep -qFx -- "$closing_window" || echo yes; }
+wait_eq "C-b & removes that window" yes closed_window
 # A question hook is bound to its original request, even when its shell test finishes later.
 # Hold the callback until the replacement question is visible, without relying on a timing race.
 hook_question() { push "{\"type\":\"commander_question\",\"agentId\":\"$claude\",\"dbSessionId\":\"$csess\",\"payload\":{\"requestId\":\"$1\",\"questions\":[{\"q\":\"$2\",\"options\":[\"Yes\",\"No\"]}]}}"; }
@@ -261,7 +316,7 @@ tmux_ has-session -t t 2>/dev/null && screen | grep -q "Mock" && fail "C-b d did
 echo "✓ C-b d detaches"
 # The last window closed ends hn, as the session's end ends tmux's client.
 tmux_ new-session -d -s u -x 120 -y 32 "env -u TMUX -u TMUX_PANE -u HN_SOCKET HN_SOCKET_NAME=$client-2 HOME=$home PORT=$port HARNESS_TUI_DESK=off HARNESS_TUI_NOTIFY=off HN_DESKTOP=off '$bin' -L '$client-2' --port '$port'; sleep 5"
-waited=0; until tmux_ capture-pane -p -t u | grep -qF "New Window"; do sleep 0.05; waited=$((waited + 50)); [ "$waited" -ge 5000 ] && fail "a second hn showed no new-window form"; done
+waited=0; until tmux_ capture-pane -p -t u | grep -qF "Mock terminal (mock)"; do sleep 0.05; waited=$((waited + 50)); [ "$waited" -ge 5000 ] && { tmux_ capture-pane -p -t u; fail "a second hn showed no interactive shell"; }; done
 tmux_ send-keys -t u C-b '&'
 sleep 0.3
 tmux_ send-keys -t u y

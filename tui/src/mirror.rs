@@ -59,11 +59,14 @@ pub fn show(app: &mut App, id: u32, readonly: bool) -> bool {
 /// panes it had kept (their panes' terminals stay open), the others made, those gone dropped.
 /// False when the row has no window.
 fn fill(app: &mut App, stash: &mut Stash, row: &Value, mut old: Vec<Tab>, size: (u16, u16)) -> bool {
+    let Some(row) = app.scoped_session(row) else { return false };
+    let row = &row;
     let before: HashSet<u64> = old.iter().flat_map(|t| t.panes()).collect();
     let mut tabs = Vec::new();
     let mut nums = HashMap::new();
     let mut seen = HashSet::new();
     for win in row.get("windows").and_then(Value::as_array).cloned().unwrap_or_default() {
+        let Some(win) = app.scoped_window(&win) else { continue };
         let panes: Vec<(String, String, Option<u64>)> = win.get("panes").and_then(Value::as_array).map(|a| a.iter().filter_map(|p| Some((
             p.get(0)?.as_str()?.to_string(), p.get(1)?.as_str()?.to_string(), p.get(3).and_then(Value::as_u64),
         ))).collect()).unwrap_or_default();
@@ -112,6 +115,7 @@ pub fn refresh(app: &mut App) {
     let Some(m) = app.mirror.clone() else { return };
     let name = app.session_name();
     let Some(row) = row_of(app.session_id, &name) else { return gone(app) };
+    let Some(row) = app.scoped_session(&row) else { return gone(app) };
     // Renamed where it is kept (rename-session, C-b $): named so here too.
     if let Some(now) = row.get("name").and_then(Value::as_str).filter(|n| *n != name) { app.session_alias = Some(now.to_string()) }
     let name = app.session_name();
@@ -120,7 +124,7 @@ pub fn refresh(app: &mut App) {
         None => {
             let path = crate::app::sessions_path(None);
             let lock = crate::ipc::lock(&path);
-            let row = row_of(app.session_id, &name).filter(|r| live_owner(r).is_none());
+            let row = row_of(app.session_id, &name).filter(|r| live_owner(r).is_none()).and_then(|row| app.scoped_session(&row));
             if let Some(row) = row {
                 rebuild(app, &row);
                 for p in row.get("windows").and_then(Value::as_array).cloned().unwrap_or_default().iter().flat_map(|w| w.get("panes").and_then(Value::as_array).cloned().unwrap_or_default()) {

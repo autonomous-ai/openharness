@@ -1,11 +1,13 @@
 //! New Harness: a compact keyboard-driven form, with a persistent draft and side choosers.
-mod data;
-mod receipt;
+pub(crate) mod data;
+pub(crate) mod receipt;
 mod task;
 mod welcome;
-pub(crate) use welcome::{Welcome, draw as draw_welcome, ensure as ensure_welcome, tick as welcome_tick};
+mod welcome_view;
+pub(crate) use welcome::{Welcome, draw as draw_welcome, tick as welcome_tick};
 pub(crate) use welcome::{key as welcome_key, mouse as welcome_mouse, paste as welcome_paste};
 pub(crate) use welcome::editing as welcome_editing;
+pub(crate) use welcome::remap as remap_welcome;
 pub(crate) use receipt::Creation;
 mod view;
 use crate::{
@@ -50,6 +52,7 @@ pub struct Draft {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Field {
     Agent,
+    Machine,
     Project,
     Task,
     Model,
@@ -76,7 +79,7 @@ enum Choice {
     Agent,
     Compatible(String),
     Project,
-    Machine(ProjectAction),
+    Machine(Option<ProjectAction>),
     Approvals,
     Model,
     Profile,
@@ -128,6 +131,7 @@ pub struct Form {
     git: Value,
     git_key: Option<(String, String)>,
     git_loading: bool,
+    submit_after_git: bool,
     git_generation: String,
     models: Value,
     profiles: Value,
@@ -151,7 +155,13 @@ impl Form {
         data::project_payload(&self.draft, &self.git)
     }
     fn fields(&self) -> Vec<Field> {
-        let mut fields = vec![Field::Task, Field::Agent, Field::Project, Field::Branch, Field::Worktree];
+        let page = matches!(self.surface, Surface::Window(_));
+        let git_controls = self.draft.what.engine != "terminal"
+            && (data::git(&self.git) || self.git_loading || self.git["error"].is_string());
+        let mut fields = vec![Field::Task, Field::Agent];
+        if page { fields.push(Field::Machine); }
+        fields.push(Field::Project);
+        if !page && git_controls { fields.extend([Field::Branch, Field::Worktree]); }
         if self.draft.what.engine != "terminal" {
             fields.push(Field::Model);
         }
@@ -161,11 +171,12 @@ impl Form {
         if self.draft.what.engine == "codex" && self.draft.model.is_none() {
             fields.push(Field::Profile);
         }
+        if page && git_controls { fields.extend([Field::Worktree, Field::Branch]); }
         fields.push(Field::Create);
-        if matches!(self.surface, Surface::Window(_)) {
-            fields.push(Field::Terminal);
-            fields.extend((0..self.recent.len()).map(Field::Recent));
+        if page {
             fields.push(Field::Browse);
+            fields.extend((0..self.recent.len()).map(Field::Recent));
+            fields.push(Field::Terminal);
         }
         fields
     }
@@ -218,25 +229,12 @@ impl Form {
         format!("{} @ {}", self.project_name(), self.machine_label)
     }
     fn hint(&self) -> String {
-        let page = matches!(self.surface, Surface::Window(_));
-        // The key hints read as every panel's do: `↑↓ move   enter run   esc back`.
-        if self.starting { return if page { "Launch continues if you change windows" } else { "esc close   launch continues" }.into() }
-        if self.attempt.is_some() { return if page { "enter check status" } else { "enter check status   esc close" }.into() }
-        if self.focus == Field::Task {
-            return if page { "tab move   enter start   esc close" } else { "tab move   enter start   alt-enter newline   esc close" }.into();
-        }
         if self.focus == Field::Project {
             if let Project::Folder(path) = &self.draft.project {
                 return format!("{} @ {}", short_path(path, &self.home), self.machine_label);
             }
         }
-        if self.focus == Field::Create {
-            if page { "tab move   enter start   esc close" } else { "↑↓ move   enter start   esc close" }.into()
-        } else if page && matches!(self.focus, Field::Terminal | Field::Recent(_) | Field::Browse) {
-            "tab move   enter open   esc close window".into()
-        } else {
-            "↑↓ move   enter choose   esc back".into()
-        }
+        String::new()
     }
     fn describe(&self, field: Field) -> (String, String) {
         let (label, value) = match field {
@@ -248,7 +246,10 @@ impl Form {
                 },
                 self.draft.what.label.clone(),
             ),
-            Field::Project => ("Project", self.project_label()),
+            Field::Machine => ("Machine", self.machine_label.clone()),
+            Field::Project => ("Project", if matches!(self.surface, Surface::Window(_)) {
+                self.project_name()
+            } else { self.project_label() }),
             Field::Task => ("Task", if self.draft.task.trim().is_empty() {
                 "Add a task (optional)".into()
             } else {
@@ -317,9 +318,9 @@ impl Form {
                 },
                 String::new(),
             ),
-            Field::Terminal => ("Open Terminal", String::new()),
+            Field::Terminal => ("New Terminal", String::new()),
             Field::Recent(i) => ("", self.recent_labels.get(i).map(|r| r.0.clone()).unwrap_or_default()),
-            Field::Browse => ("Browse All Sessions…", String::new()),
+            Field::Browse => ("All", String::new()),
         };
         (
             if field == Field::Create && !self.starting && self.attempt.is_none() {
@@ -356,6 +357,17 @@ fn defaults() -> Value {
         .ok()
         .and_then(|s| serde_json::from_slice(&s).ok())
         .unwrap_or(Value::Null)
+}
+fn saved_agent(saved: &Value) -> What {
+    // Older builds remembered Terminal as an agent. Shells now have their own action;
+    // do not reopen the task form with that unusable choice or its stale label.
+    let engine = saved["engine"].as_str().filter(|engine| *engine != "terminal").unwrap_or("opencode");
+    let same = saved["engine"].as_str() == Some(engine);
+    What {
+        engine: engine.into(),
+        label: same.then(|| saved["label"].as_str()).flatten().unwrap_or(theme::engine_label(engine)).into(),
+        dsh: same.then(|| saved["dsh"].as_str()).flatten().map(str::to_string),
+    }
 }
 fn remember(form: &Form) {
     use std::{io::Write, os::unix::fs::OpenOptionsExt};
@@ -441,8 +453,9 @@ pub fn open(app: &mut App, machine: Option<String>, cwd: Option<String>) {
 
 fn make_form(app: &mut App, machine: Option<String>, cwd: Option<String>, surface: Surface) -> Option<Box<Form>> {
     let saved = defaults();
+    // A window inherits its pane's machine and folder together. A temporarily offline
+    // machine must not redirect that folder (and the next task) to another computer.
     let machine = machine
-        .filter(|id| app.fleet.machines.iter().any(|m| m.id == *id && m.usable()))
         .or_else(|| app.fleet.registered_local_machine().filter(|m| m.usable()).map(|m| m.id.clone()))
         .or_else(|| {
             app.fleet
@@ -467,18 +480,8 @@ fn make_form(app: &mut App, machine: Option<String>, cwd: Option<String>, surfac
         .and_then(|f| app.panes.get(&f))
         .filter(|p| p.machine_id == machine)
         .and_then(|p| app.fleet.agent(&p.machine_id, &p.agent_id));
-    let engine = saved["engine"]
-        .as_str()
-        .unwrap_or("opencode")
-        .to_string();
-    let what = What {
-        label: saved["label"]
-            .as_str()
-            .unwrap_or(theme::engine_label(&engine))
-            .into(),
-        engine: engine.clone(),
-        dsh: saved["dsh"].as_str().map(str::to_string),
-    };
+    let what = saved_agent(&saved);
+    let engine = what.engine.clone();
     let project = cwd
         .or_else(|| saved["projects"][&machine].as_str().map(str::to_string))
         .or_else(|| current.map(|a| a.cwd.clone()).filter(|p| !p.is_empty()))
@@ -533,6 +536,7 @@ fn make_form(app: &mut App, machine: Option<String>, cwd: Option<String>, surfac
         git: Value::Null,
         git_key: None,
         git_loading: false,
+        submit_after_git: false,
         git_generation: String::new(),
         models: Value::Null,
         profiles: Value::Null,
@@ -547,6 +551,13 @@ fn make_form(app: &mut App, machine: Option<String>, cwd: Option<String>, surfac
 fn refresh_form(app: &App, form: &mut Form) {
     form.machine_label = machine_label(app, &form.draft.machine);
     form.local_only = crate::local::is_local(&form.draft.machine) && app.daemon_down;
+    // Git discovery can finish while its controls have keyboard focus.
+    if matches!(form.focus, Field::Branch | Field::Worktree) && !form.fields().contains(&form.focus) {
+        form.focus = Field::Project;
+        form.child = None;
+        form.child_active = false;
+        form.trail.clear();
+    }
     form.home = app
         .homes
         .get(&form.draft.machine)
@@ -576,8 +587,17 @@ fn refresh_form(app: &App, form: &mut Form) {
     let rows = match &c.kind {
         Choice::Agent => Some(agent_rows(app, &form.draft.machine)),
         Choice::Compatible(dsh) => Some(compatible_rows(app, &form.draft.machine, dsh)),
-        Choice::Project => Some(project_rows(app, &form.draft)),
-        Choice::Machine(_) => Some(modal::new_machine_rows(app, &app.fleet.local_id)),
+        Choice::Project => {
+            let mut rows = project_rows(app, &form.draft, !matches!(form.surface, Surface::Window(_)));
+            // The welcome header owns the destination; choosing a folder must
+            // not silently switch to a different computer with the same path.
+            if matches!(form.surface, Surface::Window(_)) {
+                rows.retain(|row| row.id.strip_prefix("at:").and_then(|s| s.split_once('\t'))
+                    .is_none_or(|(machine, _)| machine == form.draft.machine));
+            }
+            Some(rows)
+        }
+        Choice::Machine(_) => Some(modal::new_machine_rows(app, &form.draft.machine)),
         Choice::Approvals => Some(
             data::modes(&form.draft.what.engine)
                 .iter()
@@ -644,10 +664,11 @@ fn compatible_rows(app: &App, machine: &str, dsh: &str) -> Vec<Row> {
         .unwrap_or_else(|| vec![row.and_then(|r| r["engine"].as_str()).unwrap_or("claude")]);
     engines
         .into_iter()
+        .filter(|engine| *engine != "terminal")
         .map(|e| Row::new(format!("engine:{e}"), theme::engine_label(e)))
         .collect()
 }
-fn project_rows(app: &App, draft: &Draft) -> Vec<Row> {
+fn project_rows(app: &App, draft: &Draft, show_machine: bool) -> Vec<Row> {
     const PER_MACHINE: usize = 50;
     let mut rows = vec![];
     if draft.what.engine != "terminal" {
@@ -695,7 +716,7 @@ fn project_rows(app: &App, draft: &Draft) -> Vec<Row> {
         );
         let mut row = Row::new(
             format!("at:{machine}\t{}", a.cwd),
-            format!("{short} @ {}", machine_label(app, machine)),
+            if show_machine { format!("{short} @ {}", machine_label(app, machine)) } else { short },
         )
         .extra(app.fleet.machine_name(machine))
         .group("Recent projects");
@@ -749,11 +770,13 @@ fn sync_git(app: &mut App, form: &mut Form, force: bool) {
             .await
         },
         move |app, reply| {
+            let mut submit = false;
             with_form(app, &id, |app, form| {
                 if form.git_generation != generation {
                     return;
                 }
                 form.git_loading = false;
+                submit = std::mem::take(&mut form.submit_after_git);
                 if form.error == "Checking the project…" { form.error.clear(); }
                 form.git = reply.unwrap_or_else(|_| json!({"error":"UNAVAILABLE"}));
                 if let Some(main) = form.git["mainFolder"].as_str().map(str::to_string)
@@ -770,6 +793,12 @@ fn sync_git(app: &mut App, form: &mut Form, force: bool) {
                 }
                 refresh_form(app, form);
             });
+            // Enter may arrive before the initial project check. Honor it once,
+            // only while this form is still visible and no later input cancelled it.
+            let visible = matches!(&app.modal, Some(Modal::NewHarness(f)) if f.id == id)
+                || app.modal.is_none() && app.home_visible()
+                    && app.welcome.forms.get(&app.tab().id).is_some_and(|f| f.id == id);
+            if submit && visible { start(app); }
         },
     );
 }
@@ -780,11 +809,42 @@ fn store_form(app: &mut App, form: Box<Form>) {
         Surface::Window(tab) => { app.welcome.forms.insert(tab.clone(), form); }
     }
 }
+
+/// Preserve a local draft when first signing in, while invalidating every outstanding
+/// read/launch callback. An uncertain creation keeps its receipt and is checked, never replayed.
+pub(crate) fn account_changed(app: &mut App, local_before: Option<&str>, machine: &str) {
+    welcome::account_changed(app);
+    let mut forms: Vec<_> = std::mem::take(&mut app.welcome.forms).into_values().collect();
+    if let Some(form) = app.new_harness_draft.take() { forms.push(form); }
+    if matches!(app.modal, Some(Modal::NewHarness(_))) {
+        let Some(Modal::NewHarness(form)) = app.modal.take() else { unreachable!() }; forms.push(form);
+    }
+    let windows: std::collections::HashSet<_> = app.tabs.iter().chain(app.sessions.iter().flat_map(|s| s.tabs.iter())).map(|t| t.id.clone()).collect();
+    for mut form in forms {
+        let local = local_before == Some(form.draft.machine.as_str());
+        if !local && !crate::local::is_local(&form.draft.machine) { continue }
+        form.id = uuid::Uuid::new_v4().to_string();
+        form.starting = false; form.checking = false; form.git_loading = false; form.submit_after_git = false;
+        form.git_key = None; form.git = Value::Null; form.models = Value::Null; form.profiles = Value::Null;
+        form.child = None; form.child_active = false; form.trail.clear(); form.projects.clear();
+        form.recent.clear(); form.recent_labels.clear(); form.recent_status.clear();
+        if local {
+            form.draft.machine = machine.into(); form.local_only = false;
+            if let Some((host, _, _)) = &mut form.draft.profile { if local_before == Some(host.as_str()) { *host = machine.into(); } }
+            if let Some(attempt) = &mut form.attempt { if local_before == Some(attempt.machine.as_str()) { attempt.machine = machine.into(); } }
+        }
+        form.error = if form.attempt.is_some() { "Connection changed during launch. Check status to recover the same harness.".into() } else { String::new() };
+        if matches!(&form.surface, Surface::Window(tab) if !windows.contains(tab)) { form.surface = Surface::Dismissed; }
+        store_form(app, form);
+    }
+}
 fn dismiss(app: &mut App, mut form: Box<Form>) {
+    form.submit_after_git = false;
     if let Some(tab) = form.recovery_page.take().filter(|_| form.starting || form.attempt.is_some()) {
         form.surface = Surface::Window(tab);
     } else if matches!(form.surface, Surface::Window(_)) {
-        form.focus = Field::Task;
+        form.focus = Field::Agent;
+        if !form.starting && form.attempt.is_none() { form.error.clear(); }
     } else { form.surface = Surface::Dismissed; }
     store_form(app, form);
 }
@@ -930,7 +990,7 @@ fn child(app: &mut App, form: &mut Form, kind: Choice, initial: &str) {
                 None
             }
         }
-        Choice::Machine(_) => Some(app.fleet.local_id.clone()),
+        Choice::Machine(action) => Some(if action.is_none() { form.draft.machine.clone() } else { app.fleet.local_id.clone() }),
         Choice::Approvals => Some(form.draft.permission.clone()),
         Choice::Model => Some(
             form.draft
@@ -1018,6 +1078,7 @@ fn reveal(app: &mut App, form: &mut Form) {
     }
     let kind = match form.focus {
         Field::Agent => Choice::Agent,
+        Field::Machine => Choice::Machine(None),
         Field::Project => Choice::Project,
         Field::Task => return,
         Field::Model => Choice::Model,
@@ -1030,6 +1091,9 @@ fn reveal(app: &mut App, form: &mut Form) {
 }
 fn activate(app: &mut App, form: &mut Form) -> bool {
     form.error.clear();
+    // The compact welcome page has no persistent daemon hint. Let submission
+    // explain an unavailable launch and preserve the task instead of doing nothing.
+    if form.focus == Field::Create { return true }
     if form.blocked(form.focus).is_some() {
         if form.git["error"].is_string() {
             sync_git(app, form, true);
@@ -1078,6 +1142,7 @@ fn set_machine(app: &mut App, form: &mut Form, machine: &str) {
     set_project(form, project);
     form.models = Value::Null;
     form.profiles = Value::Null;
+    form.draft.profile = None;
     form.resource_generation.clear();
     crate::input::load_dsh(app, machine.into());
     refresh_form(app, form);
@@ -1108,6 +1173,15 @@ fn step_into(app: &mut App, form: &mut Form, previous: Child, kind: Choice, init
     form.trail.push(previous);
     child(app, form, kind, initial);
     form.child_active = true;
+}
+fn project_action(form: &Form, action: ProjectAction) -> Choice {
+    match action {
+        ProjectAction::Clone => Choice::Clone,
+        ProjectAction::New => Choice::NewFolder,
+        ProjectAction::Open => Choice::Folder(if let Project::Folder(path) = &form.draft.project {
+            path.clone()
+        } else { form.home.clone() }),
+    }
 }
 fn choose(app: &mut App, form: &mut Form) {
     let Some(c) = form.child.take() else { return };
@@ -1144,7 +1218,12 @@ fn choose(app: &mut App, form: &mut Form) {
                     "new" => ProjectAction::New,
                     _ => ProjectAction::Open,
                 };
-                step_into(app, form, c, Choice::Machine(action), "");
+                if matches!(form.surface, Surface::Window(_)) {
+                    let next = project_action(form, action);
+                    step_into(app, form, c, next, "");
+                } else {
+                    step_into(app, form, c, Choice::Machine(Some(action)), "");
+                }
                 return;
             }
             _ => {
@@ -1160,21 +1239,19 @@ fn choose(app: &mut App, form: &mut Form) {
             }
         },
         Choice::Machine(action) => {
+            // A machine may disconnect after the list was drawn.
+            if !app.fleet.machines.iter().any(|m| m.id == id && m.usable()) {
+                form.error = "That machine is not connected".into();
+                form.child = Some(c);
+                return;
+            }
             let action = *action;
             set_machine(app, form, &id);
-            let next = match action {
-                ProjectAction::Clone => Choice::Clone,
-                ProjectAction::New => Choice::NewFolder,
-                ProjectAction::Open => {
-                    Choice::Folder(if let Project::Folder(p) = &form.draft.project {
-                        p.clone()
-                    } else {
-                        form.home.clone()
-                    })
-                }
-            };
-            step_into(app, form, c, next, "");
-            return;
+            if let Some(action) = action {
+                let next = project_action(form, action);
+                step_into(app, form, c, next, "");
+                return;
+            }
         }
         Choice::Approvals => form.draft.permission = id,
         Choice::Model => {
@@ -1312,44 +1389,31 @@ fn back(app: &mut App, form: &mut Form) -> bool {
         false
     }
 }
-fn terminal_selected(form: &Form) -> bool {
-    form.child_active && form.child.as_ref().is_some_and(|child|
-        child.kind == Choice::Agent && child.picker.current_id().as_deref() == Some("engine:terminal"))
-}
-
-fn open_terminal(app: &mut App, mut form: Box<Form>) {
-    if matches!(form.surface, Surface::Window(_)) {
-        form.child = None;
-        form.child_active = false;
-        form.trail.clear();
-        form.focus = Field::Terminal;
-        return welcome::activate(app, form);
-    }
-    let machine = form.draft.machine.clone();
-    let cwd = match &form.draft.project {
-        Project::Folder(path) if !path.is_empty() => Some(path.clone()),
-        _ => (!form.home.is_empty()).then(|| form.home.clone()),
-    };
-    // Terminal is an immediate action. Keep the agent draft (including its task)
-    // for when New Harness is reopened; never send that task to a shell.
-    form.child = None;
-    form.child_active = false;
-    form.trail.clear();
-    dismiss(app, form);
-    crate::input::new_shell_from(app, Some((machine, String::new())), crate::app::Placement::Auto(None), cwd, None);
-}
-
 pub fn key(app: &mut App, mut form: Box<Form>, key: KeyEvent) {
+    if key.code != KeyCode::Enter || key.modifiers.intersects(KeyModifiers::ALT | KeyModifiers::SHIFT) {
+        form.submit_after_git = false;
+    }
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     if key.code == KeyCode::Esc || (ctrl && matches!(key.code, KeyCode::Char('c' | 'g'))) {
         if back(app, &mut form) {
             store_form(app, form);
-        } else if matches!(form.surface, Surface::Window(_)) && !form.starting && form.attempt.is_none() && app.tabs.len() > 1 {
+        } else if matches!(form.surface, Surface::Window(_)) && form.draft.task.trim().is_empty() && !form.starting && form.attempt.is_none() && app.tabs.len() > 1 {
             // The empty home window's form is not a modal you cancel with focus, it is the window
             // itself: Esc closes the window and returns to the one it came from (tmux's last-window).
             close_home_window(app, form);
         } else {
+            if matches!(form.surface, Surface::Window(_)) && form.draft.task.trim().is_empty() && !form.starting && form.attempt.is_none() {
+                form.focus = Field::Task;
+                store_form(app, form);
+                return;
+            }
+            // A welcome page is a window, not a modal. First leave the task editor;
+            // then return to the previous window, keeping this window's draft intact.
+            let previous = (matches!(form.surface, Surface::Window(_)) && form.focus != Field::Task)
+                .then(|| app.last_tab().and_then(|id| app.tabs.iter().position(|tab| &tab.id == id)))
+                .flatten();
             dismiss(app, form);
+            if let Some(index) = previous { app.select_tab(index); }
         }
         return;
     }
@@ -1365,10 +1429,6 @@ pub fn key(app: &mut App, mut form: Box<Form>, key: KeyEvent) {
         }
         return;
     }
-    if key.code == KeyCode::Enter && terminal_selected(&form) {
-        open_terminal(app, form);
-        return;
-    }
     if !form.child_active && matches!(key.code, KeyCode::Enter | KeyCode::Char(' '))
         && matches!(form.focus, Field::Terminal | Field::Recent(_) | Field::Browse) {
         return welcome::activate(app, form);
@@ -1376,15 +1436,25 @@ pub fn key(app: &mut App, mut form: Box<Form>, key: KeyEvent) {
     let mut launch = false;
     if !form.child_active && form.focus == Field::Task {
         match key.code {
-            KeyCode::Up | KeyCode::Down | KeyCode::Tab | KeyCode::BackTab => {
+            KeyCode::Tab | KeyCode::BackTab => {
                 form.move_by(match key.code { KeyCode::Up | KeyCode::BackTab => -1, _ => 1 });
                 reveal(app, &mut form);
             }
-            KeyCode::Enter if !key.modifiers.intersects(KeyModifiers::ALT | KeyModifiers::SHIFT) => launch = true,
-            _ => {
+            KeyCode::Up | KeyCode::Down => {
+                if !form.task_editor.key(&mut form.draft.task, key, form.task_area.width.max(1) as usize) {
+                    form.move_by(if key.code == KeyCode::Up { -1 } else { 1 });
+                    reveal(app, &mut form);
+                }
+            }
+            KeyCode::Enter if !key.modifiers.intersects(KeyModifiers::ALT | KeyModifiers::SHIFT) => {
+                form.focus = Field::Create;
+                form.child = None;
+            }
+            _ if form.blocked(Field::Task).is_none() => {
                 form.task_editor.key(&mut form.draft.task, key, form.task_area.width.max(1) as usize);
                 form.error.clear();
             }
+            _ => {}
         }
     } else if form.child_active {
         if let Some(c) = &mut form.child {
@@ -1503,12 +1573,15 @@ pub fn key(app: &mut App, mut form: Box<Form>, key: KeyEvent) {
     }
 }
 pub fn paste(form: &mut Form, text: &str) {
+    form.submit_after_git = false;
     if form.starting || form.attempt.is_some() {
         return;
     }
     if !form.child_active && form.focus == Field::Task {
-        form.task_editor.insert(&mut form.draft.task, text);
-        form.error.clear();
+        if form.blocked(Field::Task).is_none() {
+            form.task_editor.insert(&mut form.draft.task, text);
+            form.error.clear();
+        }
         return;
     }
     if let Some(c) = &mut form.child {
@@ -1531,6 +1604,9 @@ pub fn paste(form: &mut Form, text: &str) {
 }
 pub fn mouse(app: &mut App, mouse: MouseEvent) {
     let Some(mut form) = take_active(app) else { return };
+    if matches!(mouse.kind, MouseEventKind::Down(_) | MouseEventKind::ScrollUp | MouseEventKind::ScrollDown) {
+        form.submit_after_git = false;
+    }
     let pos = Position::new(mouse.column, mouse.row);
     let mut launch = false;
     if !form.starting && form.attempt.is_some() {
@@ -1568,10 +1644,6 @@ pub fn mouse(app: &mut App, mouse: MouseEvent) {
                 let c = form.child.as_mut().unwrap();
                 if let Some((_, index)) = c.picker.row_at.iter().find(|(y, _)| *y == mouse.row) {
                     c.picker.cursor = *index;
-                    if terminal_selected(&form) {
-                        open_terminal(app, form);
-                        return;
-                    }
                     choose(app, &mut form);
                 }
             } else if form.task_area.contains(pos) {
@@ -1621,9 +1693,13 @@ pub fn start(app: &mut App) {
     let fail = if form.local_only && form.draft.what.engine != "terminal" {
         Some("Run `harness start` to connect agents, then retry. Your task stays here.".into())
     } else if let Some(error) = task::error(&form.draft.what.engine, &form.draft.task) {
+        form.focus = Field::Task;
         Some(error)
     } else if form.git_loading {
+        form.submit_after_git = true;
         Some("Checking the project…".into())
+    } else if form.git["error"] == "OFFLINE" {
+        Some("That machine is not connected. Reconnect or choose another project.".into())
     } else if form.git["error"].is_string() {
         Some("Could not read this project. Choose Branch to retry.".into())
     } else {
@@ -1795,11 +1871,40 @@ pub fn completed(app: &mut App, id: &str, error: Option<String>) {
 mod tests {
     use super::*;
 
+    #[test]
+    fn terminal_is_an_action_not_an_agent_or_a_remembered_default() {
+        let rows = modal::new_what_rows(&[
+            json!({"id":"example/shell", "engine":"terminal", "name":"Shell"}),
+            json!({"id":"example/blender", "engine":"codex", "name":"Blender"}),
+        ]);
+        assert!(!rows.iter().any(|row| row.id.contains("terminal") || row.id.contains("example/shell")));
+        assert!(rows.iter().any(|row| row.id == "engine:codex"));
+        assert!(rows.iter().any(|row| row.id == "dsh:example/blender:codex"));
+        for saved in [Value::Null, json!({"engine":"terminal", "label":"Terminal", "dsh":"old/shell"})] {
+            let what = saved_agent(&saved);
+            assert_eq!(what.engine, "opencode");
+            assert_eq!(what.label, "OpenCode");
+            assert!(what.dsh.is_none());
+        }
+        let what = saved_agent(&json!({"engine":"codex", "label":"Blender · Codex", "dsh":"example/blender"}));
+        assert_eq!(what.engine, "codex");
+        assert_eq!(what.label, "Blender · Codex");
+        assert_eq!(what.dsh.as_deref(), Some("example/blender"));
+    }
+
+    #[tokio::test]
+    async fn store_compatibility_choices_also_exclude_shells() {
+        let mut app = app();
+        app.dsh.insert("local".into(), vec![json!({"id":"example/blender", "engine":"codex", "engines":["terminal", "codex"]})]);
+        let rows = compatible_rows(&app, "local", "example/blender");
+        assert_eq!(rows.iter().map(|row| row.id.as_str()).collect::<Vec<_>>(), vec!["engine:codex"]);
+    }
+
     fn app() -> App {
         let (sink, _) = tokio::sync::mpsc::unbounded_channel();
         let mut app = App::new(19789, sink, (150, 42));
         app.fleet.local_id = "local".into();
-        app.fleet.machines.push(crate::fleet::Machine {
+        app.fleet.machines.push(crate::fleet::Machine { shared: false,
             id: "local".into(),
             name: "studio".into(),
             local: true,
@@ -1830,7 +1935,7 @@ mod tests {
     async fn local_shell_entry_does_not_override_the_registered_launch_machine() {
         let mut app = app();
         let shell = crate::local::MACHINE;
-        app.fleet.machines.insert(0, crate::fleet::Machine {
+        app.fleet.machines.insert(0, crate::fleet::Machine { shared: false,
             id: shell.into(), name: "m0".into(), local: true,
             status: "running".into(), reach: crate::fleet::Reach::Ready,
         });
@@ -1851,7 +1956,7 @@ mod tests {
             app.fleet.agents.insert(agent.key(), agent);
         }
         let Some(Modal::NewHarness(form)) = &app.modal else { panic!() };
-        let rows = project_rows(&app, &form.draft);
+        let rows = project_rows(&app, &form.draft, true);
         let recent: Vec<_> = rows.iter().filter(|r| r.id.starts_with("at:")).collect();
         assert_eq!(recent.len(), 1);
         assert_eq!(recent[0].id, "at:local\t/home/dev/repo");
@@ -1862,7 +1967,7 @@ mod tests {
     async fn project_search_reaches_remote_machines_after_a_large_local_history() {
         let mut app = app();
         for name in ["office", "m2"] {
-            app.fleet.machines.push(crate::fleet::Machine {
+            app.fleet.machines.push(crate::fleet::Machine { shared: false,
                 id: name.into(), name: name.into(), local: false,
                 status: "running".into(), reach: crate::fleet::Reach::Ready,
             });
@@ -1902,7 +2007,7 @@ mod tests {
         let mut app = app();
         let shell = crate::local::MACHINE;
         for (id, local) in [(shell, true), ("office", false)] {
-            app.fleet.machines.push(crate::fleet::Machine {
+            app.fleet.machines.push(crate::fleet::Machine { shared: false,
                 id: id.into(), name: id.into(), local,
                 status: "running".into(), reach: crate::fleet::Reach::Ready,
             });
@@ -1930,7 +2035,7 @@ mod tests {
         }
         open(&mut app, None, None);
         let Some(Modal::NewHarness(form)) = &app.modal else { panic!() };
-        let rows = project_rows(&app, &form.draft);
+        let rows = project_rows(&app, &form.draft, true);
         for machine in ["local", "office"] {
             let prefix = format!("at:{machine}\t");
             let actual: Vec<_> = rows.iter().filter(|r| r.id.starts_with(&prefix)).map(|r| r.id.clone()).collect();
@@ -1967,7 +2072,7 @@ mod tests {
         for pending in [false, true] {
             let mut app = app();
             let shell = crate::local::MACHINE;
-            app.fleet.machines.insert(0, crate::fleet::Machine {
+            app.fleet.machines.insert(0, crate::fleet::Machine { shared: false,
                 id: shell.into(), name: "m0".into(), local: true,
                 status: "running".into(), reach: crate::fleet::Reach::Ready,
             });
@@ -2009,13 +2114,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn offline_submission_explains_recovery_and_preserves_the_task_on_both_surfaces() {
+        for window in [false, true] {
+            let mut app = app();
+            app.daemon_down = true;
+            app.fleet.machines[0].reach = crate::fleet::Reach::Offline;
+            app.tab_mut().home = window;
+            let surface = if window { Surface::Window(app.tab().id.clone()) } else { Surface::Dialog };
+            let mut form = make_form(&mut app, Some(crate::local::MACHINE.into()), Some("/home/dev/project".into()), surface).unwrap();
+            assert!(form.local_only);
+            form.draft.task = "Keep my offline task".into();
+            key(&mut app, form, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+            let form = take_active(&mut app).unwrap();
+            assert_eq!(form.focus, Field::Create);
+            assert!(form.error.is_empty());
+            key(&mut app, form, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+            let form = take_active(&mut app).unwrap();
+            assert!(form.error.contains("harness start"));
+            assert!(form.error.contains("task stays here"));
+            assert_eq!(form.draft.task, "Keep my offline task");
+            assert!(!form.starting && form.attempt.is_none());
+        }
+    }
+
+    #[tokio::test]
     async fn esc_closes_an_empty_home_window_form_and_returns_to_its_last_window() {
         let mut app = app();
         // A window new-window came from, then the empty home window it made.
         let from = app.tab().id.clone();
         app.new_tab();
         app.tab_mut().home = true;
-        ensure_welcome(&mut app, None, Some("/home/dev/project".into()));
+        welcome::ensure(&mut app, None, Some("/home/dev/project".into()));
         let home = app.tab().id.clone();
         assert!(app.home_visible(), "the home window shows the form");
         assert!(app.welcome.forms.contains_key(&home));
@@ -2032,7 +2161,7 @@ mod tests {
     async fn esc_keeps_the_only_home_window_open() {
         let mut app = app();
         app.tab_mut().home = true;
-        ensure_welcome(&mut app, None, Some("/home/dev/project".into()));
+        welcome::ensure(&mut app, None, Some("/home/dev/project".into()));
         let home = app.tab().id.clone();
         assert_eq!(app.tabs.len(), 1);
         let Some(form) = app.welcome.forms.remove(&home) else { panic!() };
@@ -2289,6 +2418,39 @@ mod tests {
         f.child_active = true;
         paste(&mut f, "owner/\r\nrepository");
         assert_eq!(f.child.as_ref().unwrap().picker.query, "owner/ repository");
+    }
+
+    #[tokio::test]
+    async fn submitting_during_git_discovery_can_be_cancelled_without_losing_the_draft() {
+        for action in ["escape", "arrow", "typing", "paste", "dismiss", "account"] {
+            let mut app = app();
+            open(&mut app, None, Some("/home/dev/repo".into()));
+            let Some(Modal::NewHarness(f)) = &mut app.modal else { panic!() };
+            f.git_loading = true;
+            f.draft.task = "Keep this task".into();
+            start(&mut app);
+            let Some(Modal::NewHarness(f)) = app.modal.take() else { panic!() };
+            assert!(f.submit_after_git);
+            assert!(!f.starting && f.attempt.is_none());
+            key(&mut app, f, KeyEvent::new_with_kind(KeyCode::Enter, KeyModifiers::NONE, KeyEventKind::Repeat));
+            let Some(Modal::NewHarness(mut f)) = app.modal.take() else { panic!() };
+            assert!(f.submit_after_git, "holding Enter keeps one pending submission");
+            match action {
+                "paste" => { paste(&mut f, " more"); store_form(&mut app, f); }
+                "dismiss" => dismiss(&mut app, f),
+                "account" => {
+                    let machine = f.draft.machine.clone();
+                    store_form(&mut app, f);
+                    account_changed(&mut app, Some(&machine), "signed-in-local");
+                }
+                action => key(&mut app, f, KeyEvent::new(match action {
+                    "escape" => KeyCode::Esc, "arrow" => KeyCode::Down, _ => KeyCode::Char('!'),
+                }, KeyModifiers::NONE)),
+            }
+            let f = if let Some(Modal::NewHarness(f)) = &app.modal { f } else { app.new_harness_draft.as_ref().unwrap() };
+            assert!(!f.submit_after_git, "{action} must cancel pending submission");
+            assert!(f.draft.task.contains("Keep this task"));
+        }
     }
 
     #[tokio::test]

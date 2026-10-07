@@ -52,7 +52,7 @@ describe('the gateway in its own process, as the core sees it', () => {
     const { link, sent, kinds } = setup()
     link.port.connect()
     link.port.holdRequests()
-    link.port.localClients(2)
+    link.port.localClients({ desktop: 1, tui: 1 })
     link.ops.wifiService(true)
     link.ops.account({ machineId: 'm1', signIn: null })
     link.ops.reachable(['m2'])
@@ -61,7 +61,7 @@ describe('the gateway in its own process, as the core sees it', () => {
     expect(kinds()).toEqual(['start'])
     expect(sent[0]).toEqual({
       kind: 'start', machineId: 'm1', computerId: 'c1', autonomousEnv: 'prod', signedIn: true,
-      requestsOpen: false, dial: 'connect', localClients: 2, wifiService: true, reachable: ['m2'],
+      requestsOpen: false, dial: 'connect', localClients: { desktop: 1, tui: 1 }, wifiService: true, reachable: ['m2'],
     })
     link.port.openRequests()
     link.port.serveThisComputerOnly()
@@ -90,7 +90,7 @@ describe('the gateway in its own process, as the core sees it', () => {
     expect(link.port.observer('observer:1', 'observer_frame', { b: 2 })).toBe(true)
     expect(link.port.device('phone-1', 'autonomous_device_result', { c: 3 })).toBe(true)
     link.port.deviceClient('phone-1', 'PUB')
-    link.port.windowOpened()
+    link.port.windowOpened('tui')
     await link.port.local('local:w', { type: 'e2ee_pairings_list', payload: {} })
     expect(link.port.terminalBinary('phone-1', bytesOf('hi'))).toBe(true)
     // An id the binary frame cannot carry: refused, never sent half-framed.

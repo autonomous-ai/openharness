@@ -8,8 +8,13 @@ import { LEAN_CORE_ENTRY, LEAN_ENTRY, readLeanBundle } from '../../src/harnessd/
 
 const { LEAN_MARKER, leanBlock } = await import('../../scripts/lib/leanBlock.mjs' as string) as {
   LEAN_MARKER: string
-  leanBlock: (files: Record<string, string | Uint8Array>) => string
+  leanBlock: (files: Record<string, string | Uint8Array>, options?: { quality: number }) => string
 }
+
+// The October 7 full E2E run exhausted updateHostile's five-minute setup compressing 15 made-up
+// releases at Brotli's maximum quality after the lean-core extraction. Fixtures need identical
+// decoded files and checksums, not release download sizes. The build still uses quality 11.
+const FIXTURE_COMPRESSION = { quality: 4 }
 
 /** [bundle] (cli.js's text) with every [from] made [to], in the lean bundle it carries too. */
 export function atVersion(bundle: string, from: string, to: string): string {
@@ -17,14 +22,14 @@ export function atVersion(bundle: string, from: string, to: string): string {
   if (!lean) return bundle.replaceAll(from, to)
   const head = bundle.slice(0, bundle.lastIndexOf(LEAN_MARKER)).replace(/\n$/, '')
   const files = Object.fromEntries([...lean.files].map(([name, code]) => [name, code.toString('utf8').replaceAll(from, to)]))
-  return head.replaceAll(from, to) + leanBlock(files)
+  return head.replaceAll(from, to) + leanBlock(files, FIXTURE_COMPRESSION)
 }
 
 /** [bundle] carrying [files] as its lean bundle instead of its own: a lean bundle that misbehaves. */
 export function withLean(bundle: string, files: Record<string, string>): string {
   const at = bundle.lastIndexOf(LEAN_MARKER)
   const head = at < 0 ? bundle : bundle.slice(0, at).replace(/\n$/, '')
-  return head + leanBlock(files)
+  return head + leanBlock(files, FIXTURE_COMPRESSION)
 }
 
 /**

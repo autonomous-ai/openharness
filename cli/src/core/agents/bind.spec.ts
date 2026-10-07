@@ -135,6 +135,21 @@ describe('binding a registered session to its agent', () => {
     expect(run.deps.syncRecapPool).not.toHaveBeenCalled()
   })
 
+  it('keeps the verified conversation when a native exit beats its pending startup attach', async () => {
+    let finish!: (attached: boolean) => void
+    const run = setup({ attachSession: vi.fn(() => new Promise<boolean>(resolve => { finish = resolve })) })
+    const entry = agent({ processIdentity: { pid: 42, startMarker: '2026-10-06T10:00:00Z', executable: 'claude' } })
+    const pending = run.binding.handleRegistered(entry, meta({ isNew: true, hookEvent: 'SessionStart' }))
+    await vi.waitFor(() => expect(run.deps.attachSession).toHaveBeenCalled())
+    finish(false)
+    await pending
+    expect(run.deps.registry.unbindSession).not.toHaveBeenCalled()
+    expect(entry.sessionId).toBe('s1')
+    expect(run.deps.announceSession).toHaveBeenCalledWith(entry)
+    expect(run.deps.stoppedAgents.save).not.toHaveBeenCalled()
+    expect(run.deps.clients.send).not.toHaveBeenCalled()
+  })
+
   it('keeps the binding of an agent a stop or a restart owns: its pane reads as gone only because of it', async () => {
     // The old engine's late SessionStart, registered as a stop or a restart ended that engine. Unbound,
     // the stop gave up with its engine already signalled, and a queued restart found nothing to resume.

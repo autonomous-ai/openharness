@@ -22,7 +22,7 @@ import { decodeTerminalLocal, encodeTerminalLocal } from '../lib/terminalBinary.
 import { answerAccountQuery } from './accountQueries.js'
 import { LANE_OFF } from './api.js'
 import type {
-  BackendNotice, GatewayEvents, GatewayOps, GatewayPort, GatewayRefusal, GatewayStatus, HttpAnswer, LaneSeal,
+  BackendNotice, GatewayEvents, LocalWindows, GatewayOps, GatewayPort, GatewayRefusal, GatewayStatus, HttpAnswer, LaneSeal,
   RemoteClient, RemoteRole, RemoteTransport, WindowRelay, WindowRelaySession, WindowRelaySink,
 } from './api.js'
 import type { ServiceFrame } from './serviceLinks.js'
@@ -86,7 +86,7 @@ export function createGatewayLink(deps: GatewayLinkDeps) {
   // What the gateway is told again whenever it connects.
   let requestsOpen = true
   let dial: 'connect' | 'local' | null = null
-  let localClients = 0
+  let localClients: LocalWindows = { desktop: 0, tui: 0 }
   let wifiService = false
   let reachable: string[] | null = null
   /** The remote clients the gateway registered, to forget each when it goes. */
@@ -131,8 +131,8 @@ export function createGatewayLink(deps: GatewayLinkDeps) {
       return !!bytes && deps.notifyBinary(bytes)
     },
     observer: (connId, type, payload) => up && linkUp && send('observer', { connId, type, payload }),
-    windowOpened: () => { send('windowOpened') },
-    localClients: (count) => { localClients = count; send('localClients', { count }) },
+    windowOpened: (surface) => { send('windowOpened', { surface }) },
+    localClients: (windows) => { localClients = windows; send('localClients', { windows }) },
     local: async (connId, frame) => { send('localFrame', { connId, frame }) },
     device: (connId, type, payload) => reachableClient(connId) && send('device', { connId, type, payload }),
     deviceClient: (connId, identity) => { send('deviceClient', { connId, identity }) },

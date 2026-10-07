@@ -569,6 +569,30 @@ model UserDailyPresence {
   @@map("user_daily_presence")
 }
 
+/// Per-day record of a user on a surface other than the desktop app — `UserDailyPresence` stays the
+/// desktop app's alone. One row per (user, surface, UTC day); DAU is a distinct `userId`.
+/// `surface`: 'tui' (`harness tui`, reported by the local daemon like a desktop window: adapter-ws
+/// `app_presence { surface: 'tui' }`, src/lib/adapterWs.ts), 'mobile' / 'web' (the app's and the
+/// browser's own web-ws sockets, declared with `?client=` — src/lib/webWs.ts; the daemon's relay
+/// socket declares nothing and is never counted). `connections` = sessions opened that day (for
+/// mobile/web one per machine socket); a session spanning midnight gives the next day `0`.
+/// No `machineId`: mobile and web hold a socket per machine they look at, and it is one person.
+model UserDailyClientPresence {
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+  userId      String
+  surface     String
+  dayUtc      DateTime
+  connections Int      @default(0)
+  firstSeenAt DateTime
+  lastSeenAt  DateTime
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([userId, surface, dayUtc])
+  @@index([surface, dayUtc])
+  @@map("user_daily_client_presence")
+}
+
 /// Per-day record of whether a user actually established a remote p2p connection to stream a
 /// terminal (signaled by a p2p_offer frame passing through the web-ws relay), scoped to the machine.
 model UserDailyRemoteUsage {

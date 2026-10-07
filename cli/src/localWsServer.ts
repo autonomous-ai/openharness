@@ -36,7 +36,7 @@ import type { WindowVoiceReply } from './cable/windowRoute.js'
 
 export interface LocalWsBackend {
   /** `tool`: `harness pair` or the harnessd MCP server — answered like any local client, never presence. */
-  registerLocalClient: (connId: string, sink: LocalClientSink, opts?: { tool?: boolean }) => boolean
+  registerLocalClient: (connId: string, sink: LocalClientSink, opts?: { tool?: boolean; surface?: 'tui' }) => boolean
   unregisterLocalClient: (connId: string) => Promise<void>
   handleLocalFrame: (connId: string, frame: Frame) => void
   handleLocalBinary: (connId: string, frame: TerminalBinaryClear) => Promise<void>
@@ -407,7 +407,9 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
       }
       if (requestedMachineId === options.machineId) {
         tool = payload.tool === true
-        if (!options.backend.registerLocalClient(connId, terminalSink, tool ? { tool: true } : {})) {
+        // `harness tui` says so; every other window is the desktop app. Each is its own presence.
+        const registration = tool ? { tool: true } : payload.client === 'tui' ? { surface: 'tui' as const } : {}
+        if (!options.backend.registerLocalClient(connId, terminalSink, registration)) {
           close(1011, 'local registration failed')
           return
         }

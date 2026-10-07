@@ -654,6 +654,7 @@ describe('the brain', () => {
 
   it('pairing coming on tells the window already on the socket, never a tool client or the cloud', async () => {
     const socket = relaySocket('token')
+    // The October 6 gateway extraction moved the cloud queue out of the core socket.
     const internals = upstreamOf(socket) as ReturnType<typeof upstreamOf> & { enqueue: (m: unknown) => void }
     const enqueued: string[] = []
     const enqueue = internals.enqueue.bind(internals)
