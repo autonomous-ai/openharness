@@ -154,4 +154,21 @@ void main() {
       );
     },
   );
+
+  testWidgets(
+    'a frozen device list says so beside the password, with the way to review it',
+    (tester) async {
+      final (app, _) = await pump(tester, _Links(const CliLinkConnectResult()));
+      expect(find.text('Your device list needs a review.'), findsNothing);
+
+      app.deviceListNeedsReviewForTest = true;
+      await tester.pump();
+      expect(find.text('Your device list needs a review.'), findsOneWidget);
+      expect(find.byKey(const ValueKey('device-list-review')), findsOneWidget);
+      expect(
+        find.byKey(const Key('remote-password-connect-field')),
+        findsOneWidget,
+      );
+    },
+  );
 }

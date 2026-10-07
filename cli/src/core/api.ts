@@ -453,7 +453,7 @@ export const MONITOR_REQUESTS = ['machine_resources'] as const
  *  `/api/command-bar/*`, which it asks as `command_bar_http`. */
 export const COMMAND_BAR_REQUESTS = ['command_bar', 'command_bar_http'] as const
 /** The project and folder readers (services/projects.ts). */
-export const PROJECTS_REQUESTS = ['git_pull_request', 'git_project_info', 'project_preview', 'fs_list_dir', 'agent_read_file'] as const
+export const PROJECTS_REQUESTS = ['git_pull_request', 'git_project_info', 'scm_project_info', 'project_preview', 'fs_list_dir', 'agent_read_file'] as const
 /** Change agent's handoff file, prepared in the edge host (services/handoff.ts). */
 export const HANDOFF_REQUESTS = ['agent_handoff_prepare'] as const
 /**
@@ -1158,8 +1158,8 @@ export interface GatewayStatus {
 export interface GatewayAccount {
   /** The machine id the backend gave this sign-in; null signed out. */
   machineId: string | null
-  /** Which sign-in by hand this is (lib/authSession.ts `signInOf`), or null. */
-  signIn: { epoch: string; adopted: boolean; at: number | null } | null
+  /** Which sign-in by hand this is, and the account it was made to (lib/authSession.ts `signInOf`), or null. */
+  signIn: { epoch: string; adopted: boolean; at: number | null; acct?: string } | null
 }
 
 /** A Wi-Fi device operation refused, with the code the device's local API answers it under. */

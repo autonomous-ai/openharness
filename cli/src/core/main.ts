@@ -779,7 +779,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // The relay and its E2EE (gateway/): the backend link, the sessions and the keys, which every remote
   // client's frames go through, held at the same gate. In its own process by default (core/gatewayLink.ts),
   // or here (gateway/start.ts); the socket hears it through `fromGateway` and speaks to it in the clear.
-  const account = (): GatewayAccount => ({ machineId: readAuthSession()?.machineId ?? null, signIn: signInOf(readAuthSession()?.signInEpoch) })
+  const account = (s = readAuthSession()): GatewayAccount => ({ machineId: s?.machineId ?? null, signIn: signInOf(s?.signInEpoch, s?.signInAcct) })
   let serviceLinksRef: ServiceLinks | null = null
   const gatewayLink = outOfProcess.has('gateway') ? createGatewayLink({
     events: backend.fromGateway,
@@ -1140,7 +1140,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // An experiment's process runs once it is on, the devices' once there is one: a request for one off asks for it.
     onDemand: new Set([...experiments, ...DEVICES_ON_DEMAND]),
     want: (service) => experimentHooks.want(service),
-    answer: async (service, query, payload) => deliveries.answer(service, query, payload)
+    // The gateway's first: its `backend` reads (the device key log) were refused below as NOT_AN_EXPERIMENT.
+    answer: async (service, query, payload) => (service === 'gateway' && gatewayLink ? gatewayLink.answer(query, payload) : null) ?? deliveries.answer(service, query, payload)
       ?? await answerExperimentQuery(coreApi, experiments, service, query, payload)
       ?? await terminalWatch.answer(service, query, payload)
       ?? (service === 'orchestrator' ? orchestratorLink.answer(query, payload) : null)
@@ -1152,8 +1153,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       : service === 'devices' ? devicesLink.answer(query, payload)
       : service === 'wifi' ? wifiLink.answer(query, payload)
       : service === 'handoff' ? answerConversationQuery(coreApi, query, payload)
-      : service === 'recaps' ? recapsLink.answer(query, payload)
-      : service === 'gateway' && gatewayLink ? gatewayLink.answer(query, payload) : answerAgentQuery(coreApi, query)),
+      : service === 'recaps' ? recapsLink.answer(query, payload) : answerAgentQuery(coreApi, query)),
     // The gateway's own traffic: its remote clients and what they sent, and its comings and goings; and what
     // the devices tell the core (a turn, a frame for the windows, a dial on the wire); a viewer stream's answers.
     notice: (service, payload) => { if (service === 'gateway') gatewayLink?.notice(payload); else if (service === 'devices') devicesLink.notice(payload); else if (service === 'wifi') wifiLink.notice(payload); else if (service === 'viewers') viewersLink.notice(payload); else if (service === 'recaps') recapsLink.notice(payload) },

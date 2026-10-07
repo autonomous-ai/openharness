@@ -319,6 +319,12 @@ class SwarmSearchController extends ChangeNotifier {
     // A decision model on a grid says it is serving. Enter copies how to call it, which the pane and
     // its hint say; "Copy" at the end of the row read as the model's state.
     if (_jevServing(entry)) return 'Serving';
+    // A decision model of yours says one of two things: Serving, or Start. "Running" (its engine up while
+    // the grid sleeps) is serving — the first call wakes the grid — and "Downloaded" beside Serving and
+    // Start read as a third state to work out, for a model that is only ever started.
+    if (entry.isJev && local.downloaded) {
+      return local.running ? 'Serving' : 'Start';
+    }
     return modelRowAction(row) ??
         (local.running
             ? 'Running'

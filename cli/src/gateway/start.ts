@@ -23,6 +23,7 @@ import { AutonomousDeviceDirect } from '../lib/autonomous-device/direct.js'
 import { startDevicePart } from '../lib/autonomous-device/parts.js'
 import type { AuthSessionManager } from '../lib/authSession.js'
 import { thisDeviceLabel } from '../lib/daemonState.js'
+import { switchAccountTrust } from '../lib/e2ee/accountTrust.js'
 import { b64d, b64e, fingerprint } from '../lib/e2ee/core.js'
 import { DeviceLogStore } from '../lib/e2ee/deviceLogStore.js'
 import { DeviceLogSyncer, type DeviceLogFetched, type DeviceLogTrustOutcome } from '../lib/e2ee/deviceLogSyncer.js'
@@ -185,6 +186,7 @@ export function startGateway(host: GatewayHost): StartedGateway {
     suspended: () => new Set(devLogSyncer?.suspendedKeys() ?? []),
     // Only a list the backend answered says who is offline; otherwise try every member.
     reachable: () => reachable,
+    ready: () => devLogSyncer?.current() ?? false,
     log: (line) => console.log(line),
   })
   groupSyncer = syncer
@@ -211,6 +213,17 @@ export function startGateway(host: GatewayHost): StartedGateway {
     // Which sign-in by hand this machine is under (minted by `harness login`, never a backend answer —
     // the machine id is one): the device log can start over only when THIS changes.
     signIn: () => account.signIn,
+    switchAccount: (from, to) => {
+      // Run once, whatever it throws: the log goes on to the new account either way, and its devices
+      // come back from that log. Run again, a half-done switch would put away what it already restored.
+      try { switchAccountTrust(from, to) } catch (err) {
+        console.log(`[devlog] could not swap the trust stores to the new account: ${err instanceof Error ? err.message : String(err)}`)
+      }
+      gateway.e2ee.reloadPaired()
+      // Sessions to the old account's machines, and who the group last synced with, are that account's.
+      relayPool.close()
+      syncer.reset()
+    },
     fetch: async (since) => {
       const r = await host.backend('GET', `/api/device-keys?since=${since}`)
       const data = r.status === 200 ? r.body.data as Partial<DeviceLogFetched> | undefined : undefined

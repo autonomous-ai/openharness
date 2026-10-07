@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest'
-import { mkdtempSync, readFileSync, rmSync } from 'fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 
@@ -523,6 +523,27 @@ describe('E2eeManager revoke', () => {
     expect(h.lastFor('z2', 'e2e_denied')).toBeTruthy()
     expect(h.mgr.hasSession('z1')).toBe(false)
     expect(h.mgr.hasSession('z2')).toBe(false)
+  })
+
+  it('reloadPaired: a key another account\'s stores left out loses its session; the rest keep theirs, re-keyed', async () => {
+    const h = machine()
+    const gone = await fullPair(h, 'k1')
+    const kept = await fullPair(h, 'k2')
+    await fullPair(h, 'kd', 'device')
+    // What accountTrust.ts leaves on disk: the account's browsers put away, the Wi-Fi device kept.
+    const file = join(process.env.ADAPTER_DATA_DIR as string, 'e2e', 'paired.json')
+    const pairs = JSON.parse(readFileSync(file, 'utf-8')) as Array<{ identityPub: string }>
+    writeFileSync(file, JSON.stringify(pairs.filter((p) => p.identityPub !== C.b64e(gone.identity.pub))))
+    h.mgr.reloadPaired()
+    expect((h.lastFor('k1', 'e2e_denied')!.payload as Record<string, unknown>).reason).toBe('revoked')
+    expect(h.mgr.hasSession('k1')).toBe(false)
+    expect(h.mgr.hasSession('k2')).toBe(true)
+    expect(h.mgr.hasSession('kd')).toBe(true)
+    expect(h.mgr.listPaired().map((p) => p.role).sort()).toEqual(['device', 'web'])
+    kept.onRekey(h.lastFor('k2', 'e2e_rekey')!)
+    const env = (h.mgr.wrapUp({ type: 'text_delta', dbSessionId: 's', payload: { content: 'b' } }).payload as import('./core.js').WrappedPayload).__e2e
+    expect(C.unwrapPayload(kept.session!.groupKey, env, 'text_delta', 's')).toEqual({ content: 'b' })
+    expect(C.unwrapPayload(gone.session!.groupKey, env, 'text_delta', 's')).toBeNull()
   })
 
   it('revoke NOT_FOUND for an unknown selector', async () => {

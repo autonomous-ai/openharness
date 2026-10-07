@@ -865,8 +865,12 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
         final mine = jev.local;
         final operating =
             mine != null && owner.operationFor(mine)?.active == true;
+        // An engine of yours its grid no longer serves (a `grid leave` from elsewhere) is started again,
+        // as its row says: Stop on a model the row calls not running read as the wrong button.
+        final restart =
+            mine != null && mine.canStop && mine.canStart && !mine.running;
         return [
-          if (mine != null && mine.canStop)
+          if (mine != null && mine.canStop && !restart)
             _ResourceAction(
               'Stop',
               busy || operating || owner.busy
@@ -1573,7 +1577,10 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
     ], controls: true);
   }
 
-  /// A Jev model's pane: what it is, and how to call it — no harness runs on it.
+  /// A Jev model's pane: what it is, and once a grid serves it, the one command that calls it. Lean on
+  /// purpose: the title, the line under it and the row already say its name, machine, grid and whether it
+  /// serves, so the pane does not say them again — and the request it shows is the endpoint, with the
+  /// grid's address loaded by its first line, where a bare `$OPENAI_BASE_URL` read as a value to fill in.
   Widget _jevPreview(ModelSearchEntry entry) {
     final served = entry.gridModel;
     final local = entry.local;
@@ -1589,29 +1596,33 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
     final machine = local != null
         ? '${here[0].toUpperCase()}${here.substring(1)}'
         : entry.node;
+    // Said only when there is something to do or under way; a model that serves says so in its row.
+    final String? status = local == null
+        ? null
+        : operation?.active == true
+        ? catalog.localStatus(local, controller: owner)
+        : operation?.error ??
+              (local.running
+                  ? null
+                  : local.downloaded
+                  ? 'Start runs it on your grid.'
+                  : 'Get downloads it and runs it on your grid.');
     return _details([
       entry.name,
       ['Jev model', ?machine, if (grid.isNotEmpty) grid].join(' · '),
       '',
-      'Answers questions about a state with probabilities: a choice between named options, '
-          'yes or no, or a score. It does not chat, so no harness runs on it.',
+      'Answers yes-or-no, choice and score questions with probabilities. It does not chat.',
+      if (status != null) ...['', status],
       if (local != null) ...[
         '',
-        if (operation?.active == true)
-          catalog.localStatus(local, controller: owner)
-        else if (operation?.error case final error?)
-          error
-        else if (local.running)
-          'Running on $here, on your grid.'
-        else if (local.downloaded)
-          'Downloaded. Start runs it on your grid, beside the models already running there.'
-        else
-          'Get downloads it${local.sizeBytes == null ? '' : ' (${gigabytesLabel(local.sizeBytes!)})'}, '
-              'updates Grid\'s model engine first if it is too old to serve Jev models, and runs it '
-              'on your grid, beside the models already running there.',
-        '',
         if (local.sizeBytes case final size?) ('Size', gigabytesLabel(size)),
-        ('Runs in', 'Grid\'s llama.cpp'),
+        // A decision model another app downloaded (Ollama's tev1) runs in that app.
+        (
+          'Runs in',
+          local.app == null || local.app == 'Grid'
+              ? 'Grid\'s llama.cpp'
+              : local.app!,
+        ),
       ],
       if (served == null)
         ...[]
@@ -1625,17 +1636,9 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
       ],
       if (served != null) ...[
         '',
-        ('Model', entry.name),
-        if (grid.isNotEmpty) ('Grid', grid),
-        ('Endpoint', 'POST \$OPENAI_BASE_URL/systemone'),
-        '',
         'Call it from a terminal:',
         _Code(jevRequest(grid, entry.name)),
         ?_messages[row!.id],
-        '',
-        'The first line loads this grid\'s address and key into your shell; the key is never '
-            'shown here. Each question is a choice (named options), a noul (yes or no) or a score '
-            '(2–10 ordered levels).',
       ],
     ], controls: true);
   }

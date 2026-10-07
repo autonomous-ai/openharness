@@ -4788,6 +4788,8 @@ class AppNotifier extends ChangeNotifier {
       }
       if (me != null) {
         currentUser = CurrentUserProfile.fromMe(me);
+        // A sign-in by hand: the device log keeps which account it was made to.
+        if (currentUser!.id case final id?) unawaited(_deviceLog?.signedInAs(id));
         notifyListeners();
       }
     } catch (error) {
@@ -5043,6 +5045,7 @@ class AppNotifier extends ChangeNotifier {
     _sharingDiscoveryTimer = null;
     _deafMachineListTimer?.cancel();
     _deafMachineListTimer = null;
+    _groupSyncedAt.clear();
     _sharingDiscoveryBusy = false;
     _sharingDiscoveryAgain = false;
     _daemonGateFailed = false;
@@ -7334,6 +7337,9 @@ class AppNotifier extends ChangeNotifier {
     final now = DateTime.now();
     final last = _groupSyncedAt[machineId];
     if (!spread && last != null && now.difference(last) < _groupResync) return;
+    // Not stamped while the device log is still the last account's (DirectLink.syncGroup skips it
+    // then): stamped, a machine reached right after an account switch went five minutes unsynced.
+    if (await _deviceLog?.ownsLog() == false) return;
     _groupSyncedAt[machineId] = now;
     // Fire-and-forget from the connection handler: a state file that is locked for a moment must not
     // surface as an unhandled error. The next session retries.

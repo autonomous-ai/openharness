@@ -317,7 +317,11 @@ const SERVICE_MAY_IMPORT: Record<string, string> = {
 // the edge host by default (services/recaps.ts). The core keeps the turn lifecycle it tells them, a port
 // that never waits (core/turns/recaps.ts, core/recapsLink.ts) and the reads of what they hold
 // (lib/recapReads.ts).
-const CORE_CLOSURE_BUDGET = 71_350
+//
+// Then at 71,855 in 337, from 71,244 in 332: the SCM seam (#752, scm/), which the core asks how to launch,
+// fork and relaunch an agent in a project and before it writes a project's instruction files. It is part
+// of launching an agent, which only the core does. The budget keeps 100 lines of room.
+const CORE_CLOSURE_BUDGET = 71_955
 
 /** What is not the core's, by path: each goes to a service or its own process, in the plan's order. */
 const EDGE: RegExp[] = [
