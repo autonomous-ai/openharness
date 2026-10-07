@@ -24,7 +24,7 @@ import { terminalActivity } from '../lib/terminalActivity.js'
 import { registry, projectDisplayName, validTranscriptPath, type RegisteredSession } from '../lib/registry.js'
 import { engineSessionTitle } from '../lib/sessionTitle.js'
 import { machineNames } from '../lib/machineNames.js'
-import { installCodexHooks } from '../lib/hooks.js'
+import { engineHooks as engineHookFacets } from '../engines/hooks.js'
 import { DAEMON_LOG_FILE, PID_FILE, daemonPort, isAlive, readPid, LEGACY_LOG_FILE, MACHINE_NAME_FILE, tildify, computerId, thisDeviceLabel } from '../lib/daemonState.js'
 import { clearSafeModeMarker, safeModeDisposition, safeModeStatusBody, SafeModeRequest, writeSafeModeMarker } from '../lib/daemonSafeMode.js'
 import { awakeTimeout } from '../lib/sleepAware.js'
@@ -1789,7 +1789,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     machine: gridLaunchMachine,
     writeGridConfigDir,
     tmuxSupportsSessionEnv,
-    installCodexHooks: (codexHome) => { if (!env.DISABLE_HOOK_INSTALL) installCodexHooks(hookPort, codexHome) },
+    installCodexHooks: (codexHome) => { if (!env.DISABLE_HOOK_INSTALL) engineHookFacets.codex.installIn(hookPort, codexHome) },
     dshLaunch: (id, workspace, engine, runtimeKey) => {
       const installed = installedDsh(id)
       if (!installed) {

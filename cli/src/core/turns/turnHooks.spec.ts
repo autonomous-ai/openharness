@@ -4,6 +4,7 @@ import type { TurnState } from '../../lib/normalize.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { createSessionNormalizers } from '../transcripts/normalizers.js'
 import { createTurnHooks, STOP_HOOK_GRACE_MS, type TurnHookDeps } from './turnHooks.js'
+import { engineHooks } from '../../engines/hooks.js'
 
 vi.mock('../../engines/cursor/pendingTasks.js', () => ({ removeCursorPendingTasks: vi.fn(async () => {}) }))
 
@@ -72,9 +73,26 @@ describe('turn hooks', () => {
     unknown.hooks.onTurnStop({ sessionId: 'nobody' })
     const pi = setup('pi')
     pi.hooks.onTurnStop({ sessionId: 's1' })
+    const codex = setup('codex')
+    codex.hooks.onTurnStop({ sessionId: 's1', status: 'error' })
     await vi.runAllTimersAsync()
     expect(unknown.deps.drain).not.toHaveBeenCalled()
     expect(pi.deps.drain).not.toHaveBeenCalled()
+    expect(codex.deps.drain).not.toHaveBeenCalled()
+    expect(codex.deps.emit).not.toHaveBeenCalled()
+  })
+
+  it('contains a synchronous engine failure and still handles another engine', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.spyOn(engineHooks.claude, 'onStop').mockImplementationOnce(() => { throw new Error('engine failed') })
+    expect(() => setup('claude').hooks.onTurnStop({ sessionId: 's1' })).not.toThrow()
+    const other = setup('commandcode')
+    const state = engineState()
+    put(other.normalizers.commandcodeNormalizers, state)
+    other.hooks.onTurnStop({ sessionId: 's1' })
+    await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS)
+    expect(other.deps.emit).toHaveBeenCalledWith('s1', END)
+    expect(error).toHaveBeenCalledWith('[hooks] claude stop hook failed:', 'engine failed')
   })
 
   describe('Claude Code', () => {

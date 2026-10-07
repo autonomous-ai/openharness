@@ -15,8 +15,10 @@ sub-agents, questions, completion. An engine is the translator between your agen
 that stream.
 
 **The engine interface is being migrated in small batches.** Claude Code and Codex now own their
-launch contracts and the history/last-turn readers behind `Engine` (`engine.ts`). `registry.ts` selects
-those engines; `launches.ts` exposes their launch metadata without loading transcript readers. The
+launch contracts, history/last-turn readers and hook behavior behind `Engine` (`engine.ts`). `registry.ts`
+selects those engines; `launches.ts` and `hooks.ts` expose their respective facets without loading history
+readers. Hook transport, process binding and event delivery stay with core. These adapters still run in
+the core process: the interface is a code boundary, not a separate worker process. The
 remaining facets and engines still use the shared paths below. This is an internal interface, not an
 external plugin API. When extending a migrated facet, put engine behavior in its folder and shared
 mechanics in `kit/`. See the [migration design](../../../docs/design/2026-10-05-engine-interface.md)

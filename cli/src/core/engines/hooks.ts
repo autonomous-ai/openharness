@@ -4,14 +4,14 @@
  *
  * Moved verbatim out of `runForeground` (the core boundary, step 12: docs/design/2026-10-03-harnessd.md).
  */
-import { dirname, join } from 'node:path'
+import { dirname } from 'node:path'
+import { engineHooks } from '../../engines/hooks.js'
 import { env } from '../../config/env.js'
 import { chooseHookAgent, type HookServerHandlers } from '../../hookServer.js'
 import { adoptEngineHomes, movedEngineHomes } from '../../lib/engineHomes.js'
 import {
-  installAgyHooks, installAmpPlugin, installCodexHooks, installCommandCodeHooks, installCopilotHooks, installCursorHooks,
+  installAgyHooks, installAmpPlugin, installCommandCodeHooks, installCopilotHooks, installCursorHooks,
   installDevinHooks, installGrokHooks, installHermesHooks, installKiloPlugin, installOpencodePlugin, installPiExtension,
-  installSessionHooks,
 } from '../../lib/hooks.js'
 import { sid } from '../../lib/log.js'
 import type { registry, RegisteredSession } from '../../lib/registry.js'
@@ -202,8 +202,9 @@ export function installEngineHooks(port: number, options: InstallEngineHooksOpti
   // once it has been read. That read is never waited on (cli.ts), so an engine started in the first
   // seconds of a daemon's very first start with a moved home may miss its first hook.
   const installIn = (homes: { claude: Array<string | null>; codex: Array<string | null> }): void => {
-    for (const home of homes.claude) if (home) hookStep('claude', () => installSessionHooks(port, join(home, 'settings.json')))
-    for (const home of homes.codex) if (home) hookStep('codex', () => installCodexHooks(port, home))
+    for (const engine of Object.keys(homes) as Array<keyof typeof homes>) {
+      for (const home of homes[engine]) if (home) hookStep(engine, () => engineHooks[engine].installIn(port, home))
+    }
   }
   const adopt = (environment: NodeJS.ProcessEnv): void => {
     const moved = adoptEngineHomes(environment, { claudeHome: dirname(env.CLAUDE_PROJECTS_DIR), codexHome: env.CODEX_HOME })
@@ -214,8 +215,7 @@ export function installEngineHooks(port: number, options: InstallEngineHooksOpti
   installIn(movedEngineHomes())
   adopt(options.environment ?? process.env)
   void options.loginShell?.then(adopt)
-  hookStep('claude', () => installSessionHooks(port))
-  hookStep('codex', () => installCodexHooks(port))
+  for (const [engine, hooks] of Object.entries(engineHooks)) hookStep(engine, () => hooks.install(port))
   hookStep('cursor', () => installCursorHooks(port))
   hookStep('opencode', () => installOpencodePlugin(port))
   hookStep('kilo', () => installKiloPlugin(port))
