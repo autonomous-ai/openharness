@@ -8,7 +8,7 @@ import '../settings/sections/account_device_history.dart';
 import '../settings/settings_screen.dart';
 import '../settings/settings_section.dart';
 import '../shared/theme/app_theme.dart' as grid;
-import '../state/account_devices.dart' show DeviceConflict;
+import '../state/account_devices.dart' show DeviceConflict, registerRefusalSentence;
 import '../state/app_state.dart';
 import '../viewer/device_log_sync.dart' show DeviceDepartedCopy, DeviceRemovalCopy, DeviceRemovalNotice;
 import 'window_chrome.dart';
@@ -287,28 +287,38 @@ void showDeviceListReview(BuildContext context, AppNotifier notifier) => unawait
   ),
 );
 
-/// The line under a machine's password prompt while this app's device list is frozen: the password is
-/// one way in, the review the other. Nothing while the list needs no review.
+/// The line under a machine's password prompt while this app's device list is frozen — or the backend
+/// refused this app a place on the account for having too many devices: the password is one way in,
+/// the devices list the other. Nothing while neither holds.
 class DeviceListReviewLine extends StatelessWidget {
   const DeviceListReviewLine({super.key, required this.notifier, this.center = false});
 
   final AppNotifier notifier;
   final bool center;
 
+  // Listens itself: it sits under prompts that do not rebuild when the device list changes.
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) =>
+      ListenableBuilder(listenable: notifier, builder: _build);
+
+  Widget _build(BuildContext context, Widget? _) {
     grid.AppTheme.watch(context);
-    if (!notifier.deviceListNeedsReview) return const SizedBox.shrink();
+    final review = notifier.deviceListNeedsReview, tooMany = notifier.deviceListTooMany;
+    if (!review && !tooMany) return const SizedBox.shrink();
     return Wrap(
       alignment: center ? WrapAlignment.center : WrapAlignment.start,
       crossAxisAlignment: WrapCrossAlignment.center,
       spacing: 4,
       children: [
-        Text(
-          'Your device list needs a review.',
-          textAlign: center ? TextAlign.center : TextAlign.start,
-          style: grid.AppType.body(color: grid.AppPalette.textSecondary),
-        ),
+        for (final line in [
+          if (review) 'Your device list needs a review.',
+          if (tooMany) registerRefusalSentence('TOO_MANY'),
+        ])
+          Text(
+            line,
+            textAlign: center ? TextAlign.center : TextAlign.start,
+            style: grid.AppType.body(color: grid.AppPalette.textSecondary),
+          ),
         TextButton(
           key: const Key('device-list-review'),
           onPressed: () => showDeviceListReview(context, notifier),

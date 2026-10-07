@@ -56,8 +56,11 @@ import {
   P2pSignalRateGuard,
   terminalP2pPolicy,
 } from './p2pSignaling.js'
-import { recordRemoteUsage } from './dailyTracking.js'
+import { presenceTracker, recordRemoteUsage, touchClientOnlineDay } from './dailyTracking.js'
 import { isBackendOnlyDownType } from './backendOnlyFrames.js'
+
+// How often an open mobile/web socket refreshes its person's `user_daily_client_presence` row.
+const WEB_CLIENT_PRESENCE_WRITE_MS = 5 * 60_000
 
 /** Down-frames only the backend may send — see lib/backendOnlyFrames.ts. Re-exported for existing callers. */
 export { BACKEND_ONLY_DOWN_TYPES } from './backendOnlyFrames.js'
@@ -89,12 +92,15 @@ export function handleWebUpgrade(req: IncomingMessage, socket: Duplex, head: Buf
   // PER-USER mode: profile validation is async, so authenticate before completing the upgrade.
   void (async () => {
     try {
-      const requestedEnvironment = parseAutonomousEnvironment(
-        new URL(req.url ?? '/api/web-ws', 'http://backend.local').searchParams.get('autonomousEnv'),
-      )
+      const query = new URL(req.url ?? '/api/web-ws', 'http://backend.local').searchParams
+      const requestedEnvironment = parseAutonomousEnvironment(query.get('autonomousEnv'))
+      // Who is on the other end, as the client declares it: the mobile app and the web viewer say so;
+      // the daemon's relay (and any older client) says nothing and is never counted as a person.
+      const declared = query.get('client')
+      const surface = declared === 'mobile' || declared === 'web' ? declared : null
       const user = await authenticateAccessToken(cred, requestedEnvironment)
       if (socket.destroyed) return
-      wss.handleUpgrade(req, socket, head, (ws) => attachUserClient(ws, user))
+      wss.handleUpgrade(req, socket, head, (ws) => attachUserClient(ws, user, surface))
     } catch (err) {
       if (socket.destroyed) return
       const invalid = err instanceof SsoAuthError && err.code === 'INVALID_TOKEN'
@@ -112,7 +118,7 @@ export function handleWebUpgrade(req: IncomingMessage, socket: Duplex, head: Buf
 }
 
 /** PER-USER socket: starts unattached; `machine_select` scopes it to one owned machine at a time. */
-function attachUserClient(ws: WebSocket, user: AuthUser): void {
+function attachUserClient(ws: WebSocket, user: AuthUser, surface: 'mobile' | 'web' | null): void {
   let client: HubClient | null = null
   let currentAgentId: string | null = null
   let currentBinding: Machine | null = null
@@ -128,10 +134,21 @@ function attachUserClient(ws: WebSocket, user: AuthUser): void {
   logger.info('web user connected', { userId: user.sub })
   send({ type: 'connected', payload: { userId: user.sub } })
 
-  // No daily-presence write here. This socket is not the person: the desktop app never dials it (the
-  // local daemon does, one per FOREIGN machine it relays), so counting upgrades measured relay
-  // reconnects and missed every single-machine user. `user_daily_presence` is fed by the app's own
-  // `app_presence` ping through the daemon's adapter-ws instead (lib/adapterWs.ts).
+  // The desktop app never dials this socket — the local daemon does, one per FOREIGN machine it relays —
+  // so it writes no `user_daily_presence` (that is the app's `app_presence` through adapter-ws,
+  // lib/adapterWs.ts). The mobile app and the web viewer DO dial it themselves and declare it
+  // (`?client=`): their person is counted in `user_daily_client_presence`, a session per socket, then
+  // `lastSeenAt` every WEB_CLIENT_PRESENCE_WRITE_MS while it stays open (so it lags by at most that).
+  let presenceTimer: ReturnType<typeof setInterval> | null = null
+  if (surface) {
+    const touchPresence = presenceTracker(
+      (now, isNewConnection) => touchClientOnlineDay(user.sub, surface, now, { isNewConnection }),
+      (kind, err) => logger.warn('client presence tracking failed', { userId: user.sub, surface, kind, error: String(err) }),
+      { pingFloorMs: WEB_CLIENT_PRESENCE_WRITE_MS, openFloorMs: 0 },
+    )
+    touchPresence('open')
+    presenceTimer = setInterval(() => touchPresence('ping'), WEB_CLIENT_PRESENCE_WRITE_MS)
+  }
 
   // An unattached socket (user parked on the Machines page, no agent selected) holds no hub client, so a
   // registry-driven sweep can't see it — it would be killed by LB idle timeouts, or never reaped when
@@ -511,6 +528,7 @@ function attachUserClient(ws: WebSocket, user: AuthUser): void {
     if (closed) return
     closed = true
     releaseLiveness()
+    if (presenceTimer) { clearInterval(presenceTimer); presenceTimer = null }
     client?.detach()
     client = null
     currentBinding = null

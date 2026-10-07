@@ -22,10 +22,10 @@ import { decodeTerminalLocal, encodeTerminalLocal } from '../lib/terminalBinary.
 import { answerAccountQuery } from './accountQueries.js'
 import { LANE_OFF } from './api.js'
 import type {
-  BackendNotice, GatewayEvents, GatewayOps, GatewayPort, GatewayRefusal, GatewayStatus, HttpAnswer, LaneSeal,
+  BackendNotice, GatewayEvents, LocalWindows, GatewayOps, GatewayPort, GatewayRefusal, GatewayStatus, HttpAnswer, LaneSeal,
   RemoteClient, RemoteRole, RemoteTransport, WindowRelay, WindowRelaySession, WindowRelaySink,
 } from './api.js'
-import type { ServiceFrame } from './serviceLinks.js'
+import { ON_DEMAND_START_MS, type ServiceFrame } from './serviceLinks.js'
 
 export interface GatewayLinkDeps {
   /** The core's side of what the gateway tells it (BackendSocket's `fromGateway`). */
@@ -41,6 +41,10 @@ export interface GatewayLinkDeps {
   tokens: { accessToken(opts?: { force?: boolean; failedToken?: string }): Promise<string> }
   /** A read of the backend's REST API under the account's session (the core's proxy). */
   backend(method: 'GET', path: string): Promise<HttpAnswer>
+  /** Ask the master for the gateway's process (harnessd/coreLink.ts `want`): it runs on demand (core/gatewayWake.ts). */
+  want?(): void
+  /** How long what waits for the gateway's first start waits (core/serviceLinks.ts `ON_DEMAND_START_MS`). */
+  startWaitMs?: number
   newId?: () => string
   now?: () => number
   log?: (line: string) => void
@@ -56,6 +60,9 @@ export const PAIR_WAIT_MS = 120_000
 
 /** The close a window on another machine gets when the gateway it went through is gone: try again shortly. */
 export const WINDOW_GATEWAY_GONE = 1013
+
+/** The most a window's E2EE requests and sessions to open wait for the gateway's first start; the oldest go. */
+export const OWED_MAX = 256
 
 /** How long the fleet's lane waits on the gateway to seal or open a frame. The frames behind it wait too,
  *  in order; a gateway that has not answered in this long is hung, and the master ends it soon after. */
@@ -81,12 +88,19 @@ export function createGatewayLink(deps: GatewayLinkDeps) {
   const newId = deps.newId ?? (() => `window-${++counter}`)
   /** The gateway's process is connected to this core. */
   let up = false
+  /** It has connected in this core's life. Before that it runs on demand: what needs it asks for it, once, and
+   *  what a window asked of it meanwhile (an E2EE request, a session to another machine) waits for it, in order,
+   *  to be told after its `start`. Gone again later it is the master's to restart, and nothing waits. */
+  let seen = false
+  let asked = false
+  const owed: Array<Record<string, unknown>> = []
+  let owedTimer: ReturnType<typeof setTimeout> | null = null
   /** The backend link, as the gateway last said. */
   let linkUp = false
   // What the gateway is told again whenever it connects.
   let requestsOpen = true
   let dial: 'connect' | 'local' | null = null
-  let localClients = 0
+  let localClients: LocalWindows = { desktop: 0, tui: 0 }
   let wifiService = false
   let reachable: string[] | null = null
   /** The remote clients the gateway registered, to forget each when it goes. */
@@ -111,9 +125,26 @@ export function createGatewayLink(deps: GatewayLinkDeps) {
   }
   const bulk = (kind: string, payload: Record<string, unknown>): boolean => up && fits() && send(kind, payload)
   const reachableClient = (connId: string): boolean => up && clients.has(connId)
+  const need = (): void => {
+    if (up || seen || asked) return
+    asked = true
+    deps.want?.()
+  }
+  /** What waits for the first start gives up when it has not come in time: a session to open is closed, to be
+   *  tried again; an E2EE request is left to the window's own deadline. */
+  const giveUp = (item: Record<string, unknown>): void => {
+    if (item.kind === 'windowOpen') closeWindow(text(item.id), WINDOW_GATEWAY_GONE, 'the relay did not start')
+  }
+  const owe = (kind: string, payload: Record<string, unknown>): void => {
+    owed.push({ ...payload, kind })
+    if (owed.length > OWED_MAX) giveUp(owed.shift()!)
+    need()
+    owedTimer ??= setTimeout(() => { owedTimer = null; for (const item of owed.splice(0)) giveUp(item) }, deps.startWaitMs ?? ON_DEMAND_START_MS)
+    owedTimer.unref?.()
+  }
 
   const port: GatewayPort = {
-    connect: () => { dial = 'connect'; send('connect') },
+    connect: () => { dial = 'connect'; need(); send('connect') },
     serveThisComputerOnly: () => { dial = 'local'; send('thisComputerOnly') },
     holdRequests: () => { requestsOpen = false; send('hold') },
     openRequests: () => { requestsOpen = true; send('open') },
@@ -131,9 +162,9 @@ export function createGatewayLink(deps: GatewayLinkDeps) {
       return !!bytes && deps.notifyBinary(bytes)
     },
     observer: (connId, type, payload) => up && linkUp && send('observer', { connId, type, payload }),
-    windowOpened: () => { send('windowOpened') },
-    localClients: (count) => { localClients = count; send('localClients', { count }) },
-    local: async (connId, frame) => { send('localFrame', { connId, frame }) },
+    windowOpened: (surface) => { send('windowOpened', { surface }) },
+    localClients: (windows) => { localClients = windows; send('localClients', { windows }) },
+    local: async (connId, frame) => { if (up || seen) send('localFrame', { connId, frame }); else owe('localFrame', { connId, frame }) },
     device: (connId, type, payload) => reachableClient(connId) && send('device', { connId, type, payload }),
     deviceClient: (connId, identity) => { send('deviceClient', { connId, identity }) },
     stop: async () => { send('stop') },
@@ -180,6 +211,9 @@ export function createGatewayLink(deps: GatewayLinkDeps) {
 
   const ops: GatewayOps = {
     status: async (): Promise<GatewayStatus> => {
+      // Never started, it has no pairing under way and nothing to say; `/api/status` is asked far too often to
+      // start it for.
+      if (!up && !seen) return { fingerprint: null, pairs: [], pending: null }
       const answer = await deps.call(GATEWAY_CALLS.status, {}, 2_000)
       return {
         fingerprint: typeof answer.fingerprint === 'string' ? answer.fingerprint : null,
@@ -212,7 +246,7 @@ export function createGatewayLink(deps: GatewayLinkDeps) {
         : { code: 'UNAVAILABLE', message: 'The Wi-Fi device link is not reachable on this computer right now. Try again.' }
       return { refused: why }
     },
-    wifiService: (on) => { wifiService = on; send('wifiService', { on }) },
+    wifiService: (on) => { wifiService = on; if (on) need(); send('wifiService', { on }) },
     revokeIdentity: (identity) => { send('revokeIdentity', { identity }) },
     account: (next) => { send('account', { account: next }) },
     reachable: (machineIds) => { reachable = machineIds; send('reachable', { machineIds }) },
@@ -227,10 +261,11 @@ export function createGatewayLink(deps: GatewayLinkDeps) {
    *  with this account (`share`). */
   const openWindow = (open: Record<string, unknown>, sink: WindowRelaySink, onClosed: (code: number, reason: string) => void): Promise<WindowRelaySession> =>
     new Promise((resolve, reject) => {
-      if (!up) { reject(new RelayConnectError('the relay is restarting', WINDOW_GATEWAY_GONE)); return }
+      if (!up && seen) { reject(new RelayConnectError('the relay is restarting', WINDOW_GATEWAY_GONE)); return }
       const id = newId()
       windows.set(id, { sink, onClosed, opening: { resolve, reject } })
-      send('windowOpen', { ...open, id })
+      if (up) send('windowOpen', { ...open, id })
+      else owe('windowOpen', { ...open, id })
     })
   const open = (isolated: boolean) => (machineId: string, autonomousEnv: string, selectFrame: Record<string, unknown>,
     sink: WindowRelaySink, onClosed: (code: number, reason: string) => void): Promise<WindowRelaySession> =>
@@ -380,8 +415,13 @@ export function createGatewayLink(deps: GatewayLinkDeps) {
       // all the same: what the core kept of the last one goes first.
       if (up) this.disconnected()
       up = true
+      seen = true
       // The account as the core reads it now (`start`), which is never older than the last one it said.
       send('start', { requestsOpen, dial, localClients, wifiService, reachable, ...deps.start() })
+      // Then what waited for its first start, in the order it came.
+      if (owedTimer) clearTimeout(owedTimer)
+      owedTimer = null
+      for (const { kind, ...payload } of owed.splice(0)) send(text(kind), payload)
     },
     /** The gateway's process went: the relay with it, as far as everything in the core is concerned. */
     disconnected(): void {

@@ -823,6 +823,9 @@ export interface TurnState {
   thinkingPrefix?: string
   /** The open turn is one a blocking Stop hook continued (`stopHookContinuation`), not a prompt's. */
   continued?: boolean
+  /** How many turns this state has opened: a Stop hook closes only the turn that was open as it arrived
+   *  (core/turns/turnHooks.ts). */
+  opened?: number
 }
 
 /**
@@ -950,6 +953,7 @@ export function lineToEvents(rawLine: string, state: TurnState): LiveEvent[] {
   if (continued !== null) {
     if (state.turnOpen) return []
     state.turnOpen = true
+    state.opened = (state.opened ?? 0) + 1
     state.pendingTools.clear()
     state.continued = true
     return [{ type: 'turn_started', payload: { userMessage: continued } }]
@@ -982,6 +986,7 @@ export function lineToEvents(rawLine: string, state: TurnState): LiveEvent[] {
       // New prompt (typed in the terminal OR injected from the web) — starts a turn.
       if (state.turnOpen) events.push({ type: 'turn_ended', payload: {} })
       state.turnOpen = true
+      state.opened = (state.opened ?? 0) + 1
       state.pendingTools.clear()
       state.continued = false
       events.push({ type: 'turn_started', payload: { userMessage: userText } })

@@ -85,6 +85,9 @@ export interface HookServerHandlers {
    *  it fires once per tool call, and every call after the first in a turn must be a no-op. */
   onTurnStart?: (body: { sessionId: string }) => void
   onPromptSubmitted?: (agentId: string, prompt: string) => void
+  /** A session's UserPromptSubmit hook, and when its engine ran it (`X-Harness-Hook-Fired-At`): what a Stop
+   *  that arrives late is told apart from the turn the prompt opened by (core/turns/turnHooks.ts). */
+  onPromptHook?: (sessionId: string, firedAt: number) => void
   onToolStart?: (body: {
     sessionId: string
     toolUseId: string
@@ -95,7 +98,12 @@ export interface HookServerHandlers {
     sessionId: string
     status?: string
     transcriptPath?: string
+    /** When the engine ran the hook; absent from a hook client too old to say. */
+    firedAt?: number
   }) => void
+  /** For the end-to-end suite only: how long a Stop hook is held before it is acted on, as the hook's own
+   *  verification can take under load (`HARNESSD_TEST_STOP_HOOK_DELAY_MS`). */
+  stopHookDelayMs?: number
   /** `harness pair <code>` from a second CLI process: run CPace toward the waiting browser. */
   onPair?: (code: string) => Promise<PairOutcome>
   /** `harness pairings` — list E2EE-paired browsers. */
@@ -172,6 +180,17 @@ function optionalBoundedString(value: unknown, max: number): boolean {
 function optionalBoundedJson(value: unknown, max: number): boolean {
   if (value === undefined) return true
   try { return Buffer.byteLength(JSON.stringify(value)) <= max } catch { return false }
+}
+
+/**
+ * When the engine ran a hook: the hook process's own start (hook/notify.mjs sends it as a header, which a
+ * daemon that does not read it ignores, where an unknown body field is refused). Undefined from a client too
+ * old to say. Not the hook's arrival: under load a hook reached the daemon seconds after its engine had
+ * moved on to the next prompt (found by the soak run, e2e/endurance.e2e.ts).
+ */
+export function hookFiredAt(req: Pick<http.IncomingMessage, 'headers'>): number | undefined {
+  const value = Number(req.headers['x-harness-hook-fired-at'])
+  return Number.isSafeInteger(value) && value > 0 ? value : undefined
 }
 
 function validHookBody(value: unknown): value is BoundHookBody {
@@ -544,6 +563,8 @@ export function startHookServer(
         }
         if (body.hookEvent === 'UserPromptSubmit') {
           handlers.onPromptSubmitted?.(processAgent.agentId, body.prompt ?? '')
+          const fired = hookFiredAt(req)
+          if (fired && body.sessionId) handlers.onPromptHook?.(body.sessionId, fired)
         }
         let result = registry.register(body)
         if (!result && body.transcriptPath && !existsSync(body.transcriptPath)) {
@@ -631,11 +652,10 @@ export function startHookServer(
         if (!await verifiedBoundMutation(body, handlers)) { json(403, { error: 'UNBOUND_HOOK' }); return }
         if (body.sessionId) {
           console.log(`[hooks] ${sid(body.sessionId)} turn-stop${body.status ? ` · status=${body.status}` : ''}`)
-          handlers.onTurnStop?.({
-            sessionId: body.sessionId,
-            status: body.status,
-            transcriptPath: body.transcriptPath,
-          })
+          const fired = hookFiredAt(req)
+          const stop = { sessionId: body.sessionId, status: body.status, transcriptPath: body.transcriptPath, ...(fired ? { firedAt: fired } : {}) }
+          if (handlers.stopHookDelayMs) setTimeout(() => handlers.onTurnStop?.(stop), handlers.stopHookDelayMs)
+          else handlers.onTurnStop?.(stop)
         }
         json(200, { ok: true })
         return

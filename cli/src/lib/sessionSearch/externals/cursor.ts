@@ -19,6 +19,7 @@
  */
 
 import { createHash } from 'node:crypto'
+import type { Dirent } from 'node:fs'
 import { readFile, realpath, stat } from 'node:fs/promises'
 import { basename, dirname, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -39,6 +40,9 @@ export interface CursorOptions {
   dataDir: string
   /** How a chat with no `meta.json` has its store read; null when this Node has no SQLite. Tests set it. */
   database?: CursorDatabase | null
+  /** How the walk for a lost folder lists a folder; the file system's own (`entries`) unless a test shows it
+   *  less: the walk starts at `/`, and a test's folders sit beside every other in a shared temp folder. */
+  listFolder?: (dir: string) => Promise<Dirent[]>
 }
 
 /** A chat's own account of itself, from `meta.json` or, when that is missing, its store. */
@@ -191,14 +195,14 @@ async function transcriptOf(
  * The folder whose bucket is [bucket] and whose slug is [slug], walked down to from `/` through real
  * folders whose slugs lead to it. The md5 decides: a slug alone never names a folder.
  */
-async function walkToFolder(slug: string, bucket: string): Promise<string | null> {
+async function walkToFolder(slug: string, bucket: string, list: (dir: string) => Promise<Dirent[]> = entries): Promise<string | null> {
   let reads = WALK_READS
   const walk = async (dir: string): Promise<string | null> => {
     const own = cursorSlug(dir)
     if (own === slug && cursorBucket(dir) === bucket) return dir
     if (own && own !== slug && !slug.startsWith(`${own}-`)) return null
     if (reads-- <= 0) return null
-    for (const entry of await entries(dir)) {
+    for (const entry of await list(dir)) {
       if (!entry.isDirectory()) continue
       const found = await walk(join(dir, entry.name))
       if (found) return found
@@ -292,7 +296,7 @@ export function cursorProvider(options: CursorOptions): ExternalProvider {
             const project = (await transcriptOf(options.dataDir, chat.sessionId, null, index))?.project
             if (!project || tried.has(project)) continue
             tried.add(project)
-            const folder = await walkToFolder(project, bucket.name)
+            const folder = await walkToFolder(project, bucket.name, options.listFolder)
             if (folder) return folder
           }
           return null

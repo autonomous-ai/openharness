@@ -270,7 +270,7 @@ int main(int argc,char **argv) {
 '''
 with tempfile.TemporaryDirectory(prefix='harness-question-ui-') as tmp:
     out=Path(tmp);(out/'question_ui.c').write_text(code)
-    subprocess.run(['cc','-std=c11','-Wall','-Wextra','-Werror','-O1','-g',
+    subprocess.run(['cc','-std=c11', '-D_POSIX_C_SOURCE=200809L','-Wall','-Wextra','-Werror','-O1','-g',
         '-fsanitize='+os.environ.get('SANITIZERS','undefined,bounds'),'-I',str(native),
         str(out/'question_ui.c'),str(native/'terminal.c'),str(native/'fonts.c'),'-o',str(out/'test')],check=True)
     args=[str(out/'test')]

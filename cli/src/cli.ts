@@ -252,6 +252,26 @@ async function resolveComputerMachine(signal?: AbortSignal): Promise<AuthSession
 }
 
 
+/**
+ * After a sign-in by hand: which account it was made to (`/api/auth/me`, under the token it just got),
+ * kept beside its epoch. The device key log then starts over for that account whenever it first reads
+ * it — a daemon started more than ten minutes after `harness login` used to freeze on the new account
+ * instead, and trusted none of its devices. Merged into the newest file, as `resolveComputerMachine`
+ * does, and only while the session is still this sign-in's. Never fails the sign-in: without it the
+ * log keeps to the ten-minute window.
+ */
+async function recordSignInAccount(accessToken: string, signInEpoch: string, autonomousEnv: string): Promise<void> {
+  try {
+    const me = await requestJson<{ user?: { id?: unknown } }>('GET', '/api/auth/me', undefined, {
+      authorization: `Bearer ${accessToken}`, 'x-autonomous-env': autonomousEnv,
+    })
+    const acct = me?.user?.id
+    const latest = readAuthSession()
+    if (typeof acct !== 'string' || !acct || latest?.signInEpoch !== signInEpoch) return
+    writeAuthSession({ ...latest, signInAcct: acct })
+  } catch { /* no account recorded */ }
+}
+
 /** This machine's device key code. Signing in is what puts the key into the account, so `create` makes
  *  the identity when it is missing; the read-only commands (`status`, `auth status`) only look, and
  *  show nothing rather than mint a key. Null whenever it cannot be had. */
@@ -594,17 +614,20 @@ async function qrSignInCommand(
   })
   if (!result.ok) return fail(result.code, result.message)
   const { tokens } = result
+  const signInEpoch = newSignInEpoch()
+  const autonomousEnv = tokens.autonomousEnv ?? env.AUTONOMOUS_ENV
   writeAuthSession({
     version: 1,
     accessToken: tokens.token,
     ...(tokens.refreshToken ? { refreshToken: tokens.refreshToken } : {}),
     ...(tokens.expiresIn ? { expiresAt: Date.now() + tokens.expiresIn * 1000 } : {}),
-    autonomousEnv: tokens.autonomousEnv ?? env.AUTONOMOUS_ENV,
+    autonomousEnv,
     computerId: computerId(),
     method: 'qr',
     updatedAt: Date.now(),
-    signInEpoch: newSignInEpoch(),
+    signInEpoch,
   })
+  await recordSignInAccount(tokens.token, signInEpoch, autonomousEnv)
   try {
     await resolveComputerMachine()
   } catch (err) {
@@ -693,6 +716,7 @@ async function browserSignIn(
       throw err
     }
     const id = computerId()
+    const signInEpoch = newSignInEpoch()
     const session: AuthSession = {
       version: 1,
       accessToken: exchanged.token,
@@ -704,9 +728,10 @@ async function browserSignIn(
       // the clients were split signs every sign-in in as its configured one, and names none.
       ...(knownSsoClientId(exchanged.clientId) ? { clientId: knownSsoClientId(exchanged.clientId) } : {}),
       updatedAt: Date.now(),
-      signInEpoch: newSignInEpoch(),
+      signInEpoch,
     }
     writeAuthSession(session)
+    await recordSignInAccount(session.accessToken, signInEpoch, session.autonomousEnv)
     try {
       await resolveComputerMachine()
     } catch (err) {
@@ -2522,6 +2547,9 @@ switch (cmd) {
       output: (line) => console.log(line),
       error: (line) => console.error(line),
     }).then((code) => { process.exitCode = code }).catch(onError)
+    break
+  case 'shell-launch':
+    import('./shellLaunch.js').then(({ shellLaunch }) => shellLaunch(rest)).then((code) => { process.exitCode = code }).catch(onError)
     break
   case 'tui':
     tuiCommand(rest, { port: env.PORT, dataDir: env.ADAPTER_DATA_DIR, identity: wantedDaemonIdentity }).then((code) => { process.exitCode = code }).catch(onError)

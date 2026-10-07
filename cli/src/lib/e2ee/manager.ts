@@ -204,6 +204,16 @@ export class E2eeManager {
     return true
   }
   pairedPeers(): ReturnType<E2eeStore['list']> { return this.store.list() }
+  /** paired.json changed under this manager (accountTrust.ts moved another account's keys in): read it
+   *  again, and close every session of a key no longer paired, as an unpair would — a browser of the
+   *  account this machine left must not keep its session, nor the group key. */
+  reloadPaired(): void {
+    const before = this.store.list().map((p) => p.identityPub)
+    this.store.reloadPaired()
+    const gone = before.filter((pub) => !this.store.isPaired(pub))
+    for (const pub of gone) this.denyAndDropSessionsFor(pub)
+    if (gone.length) this.rotateGroupKey()
+  }
   hasSession(connId: string): boolean { return this.sessions.has(connId) }
   sessionIdentity(connId: string): string | null { return this.sessions.get(connId)?.webIdentityPub ?? null }
   sessionRole(connId: string): C.PairRole | null { return this.sessions.get(connId)?.role ?? null }

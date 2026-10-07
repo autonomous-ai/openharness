@@ -27,11 +27,11 @@ on:
 permissions:
   contents: read
 
-# A newer merge to main replaces the run of an older one; a nightly or dispatched run is somebody's
-# record and is left to finish.
+# Let active main validation finish; retain only the newest pending main snapshot.
+# Explicit/nightly runs have independent identities and are never superseded.
 concurrency:
-  group: cli-e2e-${{ github.ref }}-${{ github.event_name }}
-  cancel-in-progress: ${{ github.event_name == 'push' }}
+  group: cli-e2e-${{ github.event_name }}-${{ github.event_name == 'push' && github.ref || github.run_id }}
+  cancel-in-progress: false
 
 # The managed runtime the CLI ships on; keep ci.yml's and release.yml's pins in sync.
 env:

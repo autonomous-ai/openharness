@@ -57,6 +57,9 @@ describe('harnessd\'s master and services lean', () => {
   const fresh = async (env: Record<string, string> = {}, scriptPath = bundle) => {
     const d = await IsolatedDaemon.create({ scriptPath, env })
     daemon = d
+    // Grid in use here, so that models' process starts with the others and is held lean too (core/modelsWake.ts).
+    mkdirSync(join(d.dataDir, 'local-models'), { recursive: true })
+    writeFileSync(join(d.dataDir, 'local-models', 'operations.json'), '[]')
     onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-120).join('\n')}`) })
     await d.start()
     await until('every service process', () => PROCESSES.every((name) => new RegExp(`service ${name} started`).test(d.log())) || null, 60_000, 200)

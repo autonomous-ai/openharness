@@ -310,6 +310,8 @@ class WsConn {
         queryParameters: {
           ...base.queryParameters,
           'autonomousEnv': autonomousEnv,
+          // Counts this person as on the mobile app today (backend user_daily_client_presence).
+          'client': 'mobile',
         },
       );
       // ⚠️ **Dialled BEFORE the codec is awaited (owner, 2026-10-01).** The socket needs only the
@@ -765,6 +767,10 @@ class WsConn {
   /// three — only a link can — so this stops and says so the way the CLI's own relay does, with
   /// 4404.
   void _refusePeer(String reason) {
+    appLog.info(
+      'ws',
+      'refused ${machineId.length > 8 ? machineId.substring(0, 8) : machineId}: $reason',
+    );
     _closing = true;
     _ready = false;
     _disposePlugin();

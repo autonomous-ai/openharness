@@ -186,9 +186,10 @@ static void scene_origin(const ht_pet_scene_t *sc, int bias, int *x, int *y);
 /*
  * THE ALERT (owner, 2026-10-05: no bell on the working face; the pet tells you, then a blue dot at 12 o'clock): a
  * notice that arrives while the working scene shows plays the pet's alert scene ONCE from f->notice_ms, in the
- * working scene's place, its bubble the overlay. An alert with no frames of its own (Claude's, owner 2026-10-06:
- * "bubble only") leaves the working scene playing and pops its bubble over it, placed from the working scene's
- * origin, in the run after the working scene's overlay. NULL when there is none to play now.
+ * working scene's place, its bubble the overlay. An alert with no frames of its own (every pet's now, owner
+ * 2026-10-07: "a blue bell everywhere") leaves the working scene playing and pops its bubble over it, placed from
+ * the working scene's origin, in the run after the working scene's overlay; one that covers_overlay hides that
+ * overlay meanwhile (Codex's sandbox bubble). NULL when there is none to play now.
  */
 static const ht_pet_scene_t *alert_scene(const ht_character_face_t *f, const char *recap, uint32_t *step)
 {
@@ -804,7 +805,7 @@ void ht_focus_face(ht_scene_t *s, const ht_character_face_t *f, uint8_t frame, u
             scene_origin(alert->frames ? alert : scene, 4, &sx, &sy);
             ht_cell_sprite(s, sx + alert->overlay->at[alert_step][0], sy + alert->overlay->at[alert_step][1],
                            &alert->overlay->frames[alert->overlay->loop[alert_step]]);
-        } else if (n == 0 && scene && scene->overlay && !(alert && alert->frames))
+        } else if (n == 0 && scene && scene->overlay && !(alert && (alert->frames || alert->covers_overlay)))
             scene_overlay(s, scene, 4, 0, f->clock_ms, rf);
         else no_text(s, rf);
     }

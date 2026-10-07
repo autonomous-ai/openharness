@@ -22,11 +22,13 @@ class FakeBackend implements LocalWsBackend {
   unregisters: string[] = []
   focuses: Array<[string, string | null]> = []
   tools: string[] = []
+  surfaces: Array<string | undefined> = []
 
-  registerLocalClient(connId: string, sink: LocalClientSink, opts: { tool?: boolean } = {}): boolean {
+  registerLocalClient(connId: string, sink: LocalClientSink, opts: { tool?: boolean; surface?: 'tui' } = {}): boolean {
     this.connId = connId
     this.sink = sink
     if (opts.tool) this.tools.push(connId)
+    this.surfaces.push(opts.surface)
     return true
   }
   async unregisterLocalClient(connId: string): Promise<void> {
@@ -99,6 +101,21 @@ describe('local CLI WebSocket', () => {
     // ws alone waits 30 s for it.
     expect(performance.now() - started).toBeLessThan(LOCAL_WS_CLOSE_GRACE_MS + 2_000)
     raw.destroy()
+  })
+
+  it('registers `harness tui` as its own surface, and every other window as the desktop app', async () => {
+    for (const [client, surface] of [['tui', 'tui'], [undefined, undefined], ['desktop', undefined]] as const) {
+      const backend = new FakeBackend()
+      const ws = new WebSocket(await start(backend))
+      await onceOpen(ws)
+      const connected = onceMessage(ws)
+      ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId, localProtocolVersion: 1, ...(client ? { client } : {}) } }))
+      await connected
+      expect(backend.surfaces).toEqual([surface])
+      ws.close()
+      await local!.close()
+      local = null
+    }
   })
 
   it('keeps notification identities on the local read and snapshot paths', async () => {

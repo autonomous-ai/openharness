@@ -1,6 +1,6 @@
 /**
  * Presence / remote-usage daily tracking — write path for `UserDailyPresence`,
- * `UserDailyRemoteUsage`, `UserDailyDevicePresence`, `MachineDailyPresence` and
+ * `UserDailyClientPresence`, `UserDailyRemoteUsage`, `UserDailyDevicePresence`, `MachineDailyPresence` and
  * `AgentDailyPresence` (prisma/schema.prisma). Separate model family and separate module from the
  * opt-in `Analytics*` telemetry in analyticsIngest.ts: these signals are derived directly from the
  * device-ws/adapter-ws relays (src/lib/deviceWs.ts, src/lib/adapterWs.ts) plus the p2p_offer tap on
@@ -161,4 +161,60 @@ export function presenceWriteDue(last: PresenceWriteState, now: Date, minInterva
   if (last.dayKey === null) return true
   if (utcDayKey(now) !== last.dayKey) return true
   return now.getTime() - last.wroteAt >= minIntervalMs
+}
+
+/** Surfaces other than the desktop app whose person is counted (`user_daily_client_presence`). */
+export type ClientSurface = 'tui' | 'mobile' | 'web'
+export const CLIENT_SURFACES: ReadonlySet<string> = new Set<ClientSurface>(['tui', 'mobile', 'web'])
+
+/**
+ * `touchUserOnlineDay` for the other surfaces, one row per (user, surface, day): the TUI reported by
+ * the daemon like a desktop window (`app_presence { surface: 'tui' }`, src/lib/adapterWs.ts), the
+ * mobile app and the web viewer from their own web-ws sockets (src/lib/webWs.ts). No machine: the
+ * mobile app and the web hold one socket per machine they look at, and the person is the same.
+ */
+export async function touchClientOnlineDay(
+  userId: string,
+  surface: ClientSurface,
+  now: Date,
+  opts: { isNewConnection: boolean },
+): Promise<void> {
+  const dayUtc = utcDayStart(now)
+  await prisma.userDailyClientPresence.upsert({
+    where: { userId_surface_dayUtc: { userId, surface, dayUtc } },
+    create: { userId, surface, dayUtc, connections: opts.isNewConnection ? 1 : 0, firstSeenAt: now, lastSeenAt: now },
+    update: {
+      lastSeenAt: now,
+      ...(opts.isNewConnection ? { connections: { increment: 1 } } : {}),
+    },
+  })
+}
+
+/**
+ * The write discipline every person-presence signal shares: `open` counts a session (at most once per
+ * `openFloorMs`, so a reconnect storm is not a hundred sessions), `ping` only refreshes `lastSeenAt`
+ * and at most every `pingFloorMs` (or on a new UTC day), and one write is in flight at a time.
+ * `write` gets `isNewConnection`; failures go to `onError` — callers never await this.
+ */
+export function presenceTracker(
+  write: (now: Date, isNewConnection: boolean) => Promise<void>,
+  onError: (kind: 'open' | 'ping', err: unknown) => void,
+  { pingFloorMs, openFloorMs }: { pingFloorMs: number; openFloorMs: number },
+): (kind: 'open' | 'ping') => void {
+  const last: PresenceWriteState = { dayKey: null, wroteAt: 0 }
+  let inFlight = false
+  let lastOpenAt = 0
+  return (kind) => {
+    const now = new Date()
+    if (kind === 'ping' && (inFlight || !presenceWriteDue(last, now, pingFloorMs))) return
+    if (kind === 'open') {
+      if (now.getTime() - lastOpenAt < openFloorMs) return
+      lastOpenAt = now.getTime()
+    }
+    inFlight = true
+    write(now, kind === 'open')
+      .then(() => { last.dayKey = utcDayKey(now); last.wroteAt = now.getTime() })
+      .catch((err) => onError(kind, err))
+      .finally(() => { inFlight = false })
+  }
 }

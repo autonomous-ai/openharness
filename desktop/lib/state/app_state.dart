@@ -116,6 +116,7 @@ import '../notify/system_notifications.dart' as notify_system;
 import 'account_devices.dart';
 import '../viewer/device_log.dart' show DevLogHead;
 import '../viewer/device_log_sync.dart';
+import '../e2ee/bytes.dart' show b64e;
 import '../viewer/device_history.dart' show DeviceLogHistory;
 
 enum AppStatus {
@@ -4788,6 +4789,8 @@ class AppNotifier extends ChangeNotifier {
       }
       if (me != null) {
         currentUser = CurrentUserProfile.fromMe(me);
+        // A sign-in by hand: the device log keeps which account it was made to.
+        if (currentUser!.id case final id?) unawaited(_deviceLog?.signedInAs(id));
         notifyListeners();
       }
     } catch (error) {
@@ -5043,6 +5046,7 @@ class AppNotifier extends ChangeNotifier {
     _sharingDiscoveryTimer = null;
     _deafMachineListTimer?.cancel();
     _deafMachineListTimer = null;
+    _groupSyncedAt.clear();
     _sharingDiscoveryBusy = false;
     _sharingDiscoveryAgain = false;
     _daemonGateFailed = false;
@@ -6862,6 +6866,17 @@ class AppNotifier extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// The backend refused this device a place on the account: it has too many devices (`TOO_MANY`).
+  /// A machine asking for its password says so, beside [deviceListNeedsReview].
+  bool get deviceListTooMany => _deviceListTooMany;
+  bool _deviceListTooMany = false;
+
+  @visibleForTesting
+  set deviceListTooManyForTest(bool tooMany) {
+    _deviceListTooMany = tooMany;
+    notifyListeners();
+  }
+
   /// Everything this window said about the account's devices belongs to the account that is leaving
   /// (logout and a runtime sign-out both): the banners, the unsaved dismissals, and any read still in
   /// flight, which must not write the old account's listing under the next one.
@@ -6875,6 +6890,7 @@ class AppNotifier extends ChangeNotifier {
     _dismissedDevices.clear();
     _baselineSeenLocally = false;
     _deviceListFrozen = false;
+    _deviceListTooMany = false;
     _pendingBootReadDone = false;
     _pendingSyncGeneration++;
   }
@@ -6897,7 +6913,11 @@ class AppNotifier extends ChangeNotifier {
     if (services == null) return;
     final log = _deviceLog = ViewerDeviceLog(
       keys: services.keys,
-      fetch: (since) => api.deviceKeys(since),
+      // This app's own key rides each read, so the backend counts it as used (not as abandoned).
+      fetch: (since) async => api.deviceKeys(
+        since,
+        self: await services.keys.identity().then<String?>((i) => b64e(i.pub), onError: (Object _) => null),
+      ),
       append: (entry) => api.appendDeviceKey(entry),
       label: _deviceLabel,
       onAnnounce: (m) => _whenSignedIn(() {
@@ -7014,9 +7034,11 @@ class AppNotifier extends ChangeNotifier {
       var daemon = false;
       var legacyDaemon = false;
       var frozen = false;
+      String? registerError;
       if (_deviceLog case final log?) {
         final listing = await log.list();
         frozen = listing.frozen != null;
+        registerError = listing.registerError;
         pending = listing.pending;
         departed = listing.departed;
         known = [for (final r in listing.members) NewDeviceNotice.fromMember(r.member, suspended: r.suspended)];
@@ -7032,6 +7054,7 @@ class AppNotifier extends ChangeNotifier {
         pending = devices?.pending ?? const [];
         departed = DeviceLogDeparted.listFromJson(raw['departed']);
         conflict = devices?.conflict;
+        registerError = devices?.registerError;
         known = [
           for (final d in devices?.devices ?? const <AccountDevice>[])
             NewDeviceNotice(
@@ -7050,8 +7073,10 @@ class AppNotifier extends ChangeNotifier {
       if (_disposed || generation != _pendingSyncGeneration || status == AppStatus.unauthenticated) return;
       _pendingBootReadDone = true;
       if (legacyDaemon) return;
-      var changed = frozen != _deviceListFrozen;
+      final tooMany = registerError == 'TOO_MANY';
+      var changed = frozen != _deviceListFrozen || tooMany != _deviceListTooMany;
       _deviceListFrozen = frozen;
+      _deviceListTooMany = tooMany;
       // Oldest first: the band names the first, and "(+n more)" the rest.
       final order = {for (var i = 0; i < pending.length; i++) pending[i]: i};
       final next = [
@@ -7334,6 +7359,9 @@ class AppNotifier extends ChangeNotifier {
     final now = DateTime.now();
     final last = _groupSyncedAt[machineId];
     if (!spread && last != null && now.difference(last) < _groupResync) return;
+    // Not stamped while the device log is still the last account's (DirectLink.syncGroup skips it
+    // then): stamped, a machine reached right after an account switch went five minutes unsynced.
+    if (await _deviceLog?.ownsLog() == false) return;
     _groupSyncedAt[machineId] = now;
     // Fire-and-forget from the connection handler: a state file that is locked for a moment must not
     // surface as an unhandled error. The next session retries.
@@ -10747,7 +10775,9 @@ class AppNotifier extends ChangeNotifier {
           !models.sections.any(
             (section) =>
                 section.name == choices['gridName'] &&
-                section.models.any((model) => model.id == choices['gridModel']),
+                section.harnessModels.any(
+                  (model) => model.id == choices['gridModel'],
+                ),
           )) {
         return creation._complete(
           'The selected model is unavailable. Refresh models or use your subscription.',
@@ -14549,9 +14579,13 @@ class AppNotifier extends ChangeNotifier {
     }
 
     // Tab order: the desk's, with this window's local-only tabs where they were.
+    // A tab the desk has is placed by the desk's order alone, even one this
+    // window keeps to itself (a draft the desk learned while an agent was being
+    // made in it): placed twice, its id reached native's tab strip twice, which
+    // trapped on it and took the app down (1.2.57).
     final localOnly = <(int, Swarm)>[];
     for (var i = 0; i < kept.length; i++) {
-      if (!_deskTracks(kept[i]) || !targetById.containsKey(kept[i].id)) {
+      if (!targetById.containsKey(kept[i].id)) {
         localOnly.add((i, kept[i]));
       }
     }
@@ -14561,9 +14595,22 @@ class AppNotifier extends ChangeNotifier {
     for (final (index, swarm) in localOnly) {
       ordered.insert(index.clamp(0, ordered.length), swarm);
     }
-    swarms
-      ..clear()
-      ..addAll(ordered);
+    final placed = <String>{};
+    final duplicates = <String>[];
+    swarms.clear();
+    for (final swarm in ordered) {
+      if (placed.add(swarm.id)) {
+        swarms.add(swarm);
+      } else {
+        // The copy kept shows the same panes when it is the same tab; panes
+        // only this copy held are let go below, like a closed tab's.
+        duplicates.add(swarm.id);
+        released.addAll(swarm.panes);
+      }
+    }
+    if (duplicates.isNotEmpty) {
+      appLog.warn('desk', 'dropped duplicate tab ${duplicates.join(', ')}');
+    }
     if (swarms.isEmpty) swarms.add(Swarm(id: 'swarm-${_nextSwarmId++}'));
     if (!swarms.any((s) => s.id == _activeSwarmId)) {
       _activeSwarmId = swarms.first.id;

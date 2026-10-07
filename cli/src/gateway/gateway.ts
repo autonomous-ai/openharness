@@ -15,6 +15,7 @@
  */
 import { env } from '../config/env.js'
 import type { GatewayEvents, GatewayPort, RemoteRole, RemoteTransport } from '../core/api.js'
+import { WINDOW_SURFACES, type LocalWindows, type WindowSurface } from '../lib/windowSurfaces.js'
 import { deviceDump } from '../lib/autonomous-device/dump.js'
 import type { AuthSessionManager } from '../lib/authSession.js'
 import { shouldReplayCommander } from '../lib/commanderReplay.js'
@@ -81,7 +82,7 @@ export class RelayGateway implements GatewayPort {
   private requestsOpen = true
   private openRequestGate: () => void = () => {}
   private requestGate: Promise<void> = Promise.resolve()
-  private localClientCount = 0
+  private localWindows: LocalWindows = { desktop: 0, tui: 0 }
   private readonly directDeviceSinks = new Map<string, (frame: Frame) => void>()
   private readonly directDevicePins = new Map<string, string>()
   /** The Wi-Fi device sessions whose app said hello to the device service (in the core), by connection:
@@ -121,7 +122,7 @@ export class RelayGateway implements GatewayPort {
         status: (connected) => this.core.status(connected),
         revoked: () => this.core.revoked(),
         busy: () => this.core.busy(),
-        localClients: () => this.localClientCount,
+        localClients: () => this.localWindows,
       },
     })
     this.e2ee = new E2eeManager({
@@ -208,11 +209,11 @@ export class RelayGateway implements GatewayPort {
     this.openRequestGate()
   }
 
-  windowOpened(): void { this.link.sendAppPresence('open') }
+  windowOpened(surface: WindowSurface): void { this.link.sendAppPresence('open', surface) }
 
-  localClients(count: number): void {
-    this.localClientCount = count
-    if (count === 0) this.link.noLocalClients()
+  localClients(windows: LocalWindows): void {
+    this.localWindows = windows
+    for (const surface of WINDOW_SURFACES) if (windows[surface] === 0) this.link.noLocalClients(surface)
   }
 
   // ── out, to remote clients ───────────────────────────────────────────────────────────────────────

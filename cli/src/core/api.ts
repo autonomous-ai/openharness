@@ -1014,6 +1014,10 @@ export type BackendNotice =
   | { type: 'machines_changed'; reason: string }
   | { type: 'device_keys_changed' }
 
+/** What a person has open on this computer, per surface (lib/windowSurfaces.ts). */
+export type { LocalWindows, WindowSurface } from '../lib/windowSurfaces.js'
+import type { LocalWindows, WindowSurface } from '../lib/windowSurfaces.js'
+
 /** What the core asks of the gateway: everything bound for a remote client, and the link's state. */
 export interface GatewayPort {
   /** Dial the backend: this daemon is signed in. */
@@ -1045,9 +1049,10 @@ export interface GatewayPort {
   observer(connId: string, type: string, payload: Record<string, unknown>): boolean
   /** A window opened on this computer: the backend counts it as the person's session at once, or when
    *  the link next comes up. */
-  windowOpened(): void
-  /** How many processes on this computer are attached, windows and tools. */
-  localClients(count: number): void
+  windowOpened(surface: WindowSurface): void
+  /** The windows attached on this computer, per surface — tools (`harness pair`, the MCP server) are
+   *  not windows and are not counted. */
+  localClients(windows: LocalWindows): void
   /** A local connection's request the gateway answers (the E2EE pairings), answered back to it through
    *  `GatewayEvents.toLocal`. */
   local(connId: string, frame: Record<string, unknown>): Promise<void>
@@ -1158,8 +1163,8 @@ export interface GatewayStatus {
 export interface GatewayAccount {
   /** The machine id the backend gave this sign-in; null signed out. */
   machineId: string | null
-  /** Which sign-in by hand this is (lib/authSession.ts `signInOf`), or null. */
-  signIn: { epoch: string; adopted: boolean; at: number | null } | null
+  /** Which sign-in by hand this is, and the account it was made to (lib/authSession.ts `signInOf`), or null. */
+  signIn: { epoch: string; adopted: boolean; at: number | null; acct?: string } | null
 }
 
 /** A Wi-Fi device operation refused, with the code the device's local API answers it under. */

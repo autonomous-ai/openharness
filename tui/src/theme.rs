@@ -574,14 +574,26 @@ pub fn fzf_spec(v: &str) -> (Option<Color>, Modifier) {
 
 /// What a list's change-* actions made of the look and the options (change-prompt, change-ghost,
 /// hide-input …): in force until the next list opens (fzf starts from its options each time).
+#[cfg(not(test))]
 static FZF_LIVE: std::sync::atomic::AtomicPtr<Fzf> = std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+#[cfg(not(test))]
 static OPTS_LIVE: std::sync::atomic::AtomicPtr<FzfOpts> = std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+// Each parallel test represents a separate UI client. Opening its picker must
+// not reset another test's in-progress frame or list options.
+#[cfg(test)]
+thread_local! {
+    static FZF_TEST_LIVE: std::cell::Cell<*mut Fzf> = const { std::cell::Cell::new(std::ptr::null_mut()) };
+    static OPTS_TEST_LIVE: std::cell::Cell<*mut FzfOpts> = const { std::cell::Cell::new(std::ptr::null_mut()) };
+}
 
 /// The look changed for this list (the one before stays: a reference to it may be held).
 pub fn fzf_change(f: impl FnOnce(&mut Fzf)) {
     let mut c = fzf().clone();
     f(&mut c);
+    #[cfg(not(test))]
     FZF_LIVE.store(Box::into_raw(Box::new(c)), std::sync::atomic::Ordering::Release);
+    #[cfg(test)]
+    FZF_TEST_LIVE.set(Box::into_raw(Box::new(c)));
 }
 
 /// The options changed for this list.
@@ -590,17 +602,29 @@ pub fn opts_change(f: impl FnOnce(&mut FzfOpts)) {
     f(&mut c);
     // (No list or preview in hn draws a scrollbar, whatever a list asks: see fzf_opts_base.)
     (c.scrollbar, c.preview_scrollbar) = (None, None);
+    #[cfg(not(test))]
     OPTS_LIVE.store(Box::into_raw(Box::new(c)), std::sync::atomic::Ordering::Release);
+    #[cfg(test)]
+    OPTS_TEST_LIVE.set(Box::into_raw(Box::new(c)));
 }
 
 /// A new list: the look and options as FZF_DEFAULT_OPTS has them.
 pub fn fzf_reset() {
+    #[cfg(not(test))]
     FZF_LIVE.store(std::ptr::null_mut(), std::sync::atomic::Ordering::Release);
+    #[cfg(not(test))]
     OPTS_LIVE.store(std::ptr::null_mut(), std::sync::atomic::Ordering::Release);
+    #[cfg(test)]
+    FZF_TEST_LIVE.set(std::ptr::null_mut());
+    #[cfg(test)]
+    OPTS_TEST_LIVE.set(std::ptr::null_mut());
 }
 
 pub fn fzf() -> &'static Fzf {
+    #[cfg(not(test))]
     let live = FZF_LIVE.load(std::sync::atomic::Ordering::Acquire);
+    #[cfg(test)]
+    let live = FZF_TEST_LIVE.get();
     // SAFETY: set only from a leaked Box, never freed.
     if !live.is_null() { return unsafe { &*live } }
     fzf_base()
@@ -857,7 +881,10 @@ pub struct FzfOpts { pub info_mode: String, pub prompt_top: bool, pub header_fir
     pub list_label_pos: (i64, bool), pub input_label_pos: (i64, bool), pub header_label_pos: (i64, bool), pub footer_label_pos: (i64, bool) }
 
 pub fn fzf_opts() -> &'static FzfOpts {
+    #[cfg(not(test))]
     let live = OPTS_LIVE.load(std::sync::atomic::Ordering::Acquire);
+    #[cfg(test)]
+    let live = OPTS_TEST_LIVE.get();
     // SAFETY: set only from a leaked Box, never freed.
     if !live.is_null() { return unsafe { &*live } }
     fzf_opts_base()

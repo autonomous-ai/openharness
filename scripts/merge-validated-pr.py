@@ -152,8 +152,10 @@ def finish(client, root, number, run_id, scope, head, base, output, *, merge=Fal
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("pr", type=int)
-    parser.add_argument("--run", type=int, required=True)
-    parser.add_argument("--scope", choices=ci.SCOPES, required=True)
+    parser.add_argument("--run", type=int, help="required for legacy direct merging; queue mode follows automatic CI")
+    parser.add_argument("--scope", choices=ci.SCOPES, help="required for legacy direct merging")
+    parser.add_argument("--queue", action="store_true", help="enqueue and verify the tested merge candidate")
+    parser.add_argument("--base-branch", default="main", help="queue target; use a disposable branch for rollout trials")
     parser.add_argument("--reviewed-head", required=True, help="full commit SHA already reviewed, including required non-CI checks")
     parser.add_argument("--reviewed-base", required=True, help="full main SHA included in the reviewed head")
     parser.add_argument("--repo", default="autonomous-ai/openharness")
@@ -162,19 +164,34 @@ def main():
     parser.add_argument("--timeout", type=float, default=90, help="budget for preflight and, separately, post-CI operations")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
-    if (args.pr < 1 or args.run < 1
+    if (args.pr < 1 or (args.run is not None and args.run < 1)
             or any(not re.fullmatch(r"[0-9a-f]{40}", sha) for sha in [args.reviewed_head, args.reviewed_base])
             or any(not 0 < value < float("inf") for value in [args.wait_timeout, args.timeout])
-            or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*", args.repo)):
+            or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*", args.repo)
+            or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_/-]*", args.base_branch)):
         parser.error("supply positive IDs/budgets, full reviewed SHAs, and a valid repository")
     root = Path(git(Path.cwd(), "rev-parse", "--show-toplevel")).resolve()
     output = args.output or root / ".harness/validation" / (datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ") + f"-merge-{args.pr}")
-    record = finish(ci.Client(args.repo, 0), root, args.pr, args.run, args.scope, args.reviewed_head,
-                    args.reviewed_base, output, merge=args.merge, wait_timeout=args.wait_timeout, timeout=args.timeout)
+    client = ci.Client(args.repo, time.monotonic() + args.timeout)
+    # Existing commands transparently use the queue once the target's rule is
+    # active. An explicit --queue supports testing before main is enforced.
+    rules = client.api(f"rules/branches/{args.base_branch}")
+    queued = args.queue or any(rule.get("type") == "merge_queue" for rule in rules)
+    if queued:
+        queue_spec = importlib.util.spec_from_file_location("queue_merge", Path(__file__).with_name("queue-validated-pr.py"))
+        queue = importlib.util.module_from_spec(queue_spec)
+        queue_spec.loader.exec_module(queue)
+        record = queue.finish(client, root, args.pr, args.reviewed_head, args.reviewed_base, output,
+                              merge=args.merge, wait_timeout=args.wait_timeout, timeout=args.timeout, branch=args.base_branch)
+    else:
+        if args.run is None or args.scope is None or args.base_branch != "main":
+            parser.error("direct merging requires --run, --scope and main; use --queue for queued integration")
+        record = finish(client, root, args.pr, args.run, args.scope, args.reviewed_head,
+                        args.reviewed_base, output, merge=args.merge, wait_timeout=args.wait_timeout, timeout=args.timeout)
     print(f"{record['status']}: {output / 'merge.md'}")
     if "error" in record:
         print(record["error"], file=sys.stderr)
-    return {"merged": 0, "ready": 0, "merged_source_review_required": 3}.get(record["status"], 1)
+    return {"merged": 0, "ready": 0, "ready_for_queue": 0, "merged_source_review_required": 3}.get(record["status"], 1)
 
 
 if __name__ == "__main__":

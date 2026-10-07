@@ -1,5 +1,27 @@
 import type { RegisteredSession } from '../../../cli/src/lib/registry.js'
-import type { readStartupProfile } from '../../../cli/src/lib/runtimeProfile.js'
+import { RuntimeProfileManager } from '../../../cli/src/lib/runtimeProfile.js'
+
+/** Pre-conversation evidence belongs to this companion, never the core's shared empty-session cache. */
+export async function readStartupProfile(session: RegisteredSession, pane: string): Promise<string | null> {
+  if (session.sessionId || !session.active || session.grid || session.gridLaunch || session.gateway) return null
+  pane = pane.replace(/\u001b\[[0-9;:]*[A-Za-z]/g, '').trimEnd()
+  if (/trust this (folder|directory)|trust the files|sign in|log in|select a login|choose.*theme/i.test(pane)) return null
+  if (session.engine === 'claude') {
+    if (!/\bClaude Code v\d+\.\d+/.test(pane) || !/^\s*❯\s*(?:Try\s+[^\n]*)?$/mu.test(pane)) return null
+  } else if (session.engine === 'codex') {
+    if (!/\bOpenAI Codex\b/.test(pane) || !/^\s*›(?!\s*\d+\.)[^\n]*$/mu.test(pane)) return null
+  } else return null
+  // Reuse the ordinary readers in a private cache and on a copy. Nothing is bound, written to the
+  // registry, or allowed to replace the model evidence of a real conversation.
+  const profiles = new RuntimeProfileManager(), probe = { ...session, sessionId: session.agentId }
+  await profiles.ingestConfig(probe, true)
+  profiles.ingestPane(probe, pane, true)
+  if (session.engine === 'claude') {
+    const change = [...pane.matchAll(/(?:^|\n)\s*(?:⎿\s*)?Set model to\s+([^\n]+)/gi)].at(-1)
+    if (change) profiles.ingest(probe, JSON.stringify({ type: 'system', content: change[0] }), true)
+  }
+  return profiles.selectedModel(probe)
+}
 
 export interface StartupProfile { processKey: string; profile: string }
 

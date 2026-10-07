@@ -403,8 +403,8 @@ pub fn draw(buf: &mut Buffer, app: &mut App) {
         let header = |buf: &mut Buffer, y: u16, title: &str| { put(buf, content.x, y, content.right(), &[(title.to_string(), Style::default().fg(c.muted).add_modifier(Modifier::BOLD))]); };
         // The top's header: the machine you are on — the focused pane's, else this computer.
         let here = app.focused().and_then(|f| app.panes.get(&f)).map(|p| p.machine_id.clone()).unwrap_or_else(|| app.fleet.local_id.clone());
-        put(buf, content.x + 1, top.y, content.right(), &machine_spans(app, &c, &here, width));
-        // (No buttons: a new harness and the commands are their keys' — prefix N, prefix Enter.)
+        put(buf, content.x + 1, top.y, content.right().saturating_sub(6), &machine_spans(app, &c, &here, width.saturating_sub(6)));
+        crate::workspace_controls::side_actions(buf, app, Rect::new(content.right().saturating_sub(5), top.y, 4, 1), Style::default().fg(c.muted), false);
         let area = Rect::new(top.x, top.y + HEADER, width, top_h.saturating_sub(HEADER));
         scroll_list(app, 0, &windows, area, follow);
         list(buf, area, &windows, app.bar.scroll[0], &c, &mut hits);
@@ -425,6 +425,7 @@ pub fn draw(buf: &mut Buffer, app: &mut App) {
         let fx = content.right().saturating_sub(1);
         put(buf, fx, content.bottom() - 1, content.right(), &[("«".into(), Style::default().fg(c.muted))]);
         hits.push((Rect::new(fx, content.bottom() - 1, 1, 1), Hit::Fold));
+        crate::workspace_controls::side_actions(buf, app, Rect::new(content.x + 1, content.bottom() - 1, width.saturating_sub(4), 1), Style::default().fg(c.muted), true);
     }
     app.bar.hits = hits;
 }
@@ -528,6 +529,7 @@ pub fn mouse(app: &mut App, ev: &MouseEvent) -> bool {
     let inside = ev.column >= bar.x && ev.column < bar.right() && ev.row >= bar.y && ev.row < bar.bottom();
     if !inside { return false }
     if app.mouse_state.drag.is_some() && matches!(ev.kind, MouseEventKind::Drag(_) | MouseEventKind::Up(_)) { return false }
+    if matches!(ev.kind, MouseEventKind::Down(_)) { crate::mouse::cancel_clicks(app); }
     let hit = hit_at(app, ev.column, ev.row);
     match ev.kind {
         MouseEventKind::Down(MouseButton::Left) => match hit {
@@ -559,8 +561,8 @@ mod tests {
         let (sink, _) = tokio::sync::mpsc::unbounded_channel();
         let mut app = App::new(19791, sink, size);
         app.fleet.local_id = "local".into();
-        app.fleet.machines.push(crate::fleet::Machine { id: "local".into(), name: "studio".into(), local: true, status: "online".into(), reach: crate::fleet::Reach::Ready });
-        app.fleet.machines.push(crate::fleet::Machine { id: "lab".into(), name: "lab".into(), local: false, status: "offline".into(), reach: crate::fleet::Reach::Offline });
+        app.fleet.machines.push(crate::fleet::Machine { shared: false, id: "local".into(), name: "studio".into(), local: true, status: "online".into(), reach: crate::fleet::Reach::Ready });
+        app.fleet.machines.push(crate::fleet::Machine { shared: false, id: "lab".into(), name: "lab".into(), local: false, status: "offline".into(), reach: crate::fleet::Reach::Offline });
         let repo = json!({"name": "autonomous-harness", "branch": "feat/grid-harness-codex", "cwd": "/src/autonomous-harness"});
         app.fleet.merge_roster("local", &[json!({"id": "a1", "name": "fix login", "engine": "claude", "project": repo}), json!({"id": "a2", "name": "tests", "engine": "codex", "project": repo})]);
         app.fleet.merge_roster("lab", &[json!({"id": "a3", "name": "deploy", "engine": "claude"}), json!({"id": "a4", "name": "", "engine": "terminal", "project": {"cwd": "/home/me/ops"}})]);
@@ -641,7 +643,7 @@ mod tests {
             let x0 = if side == "left" { 0 } else { 120 - WIDTH as usize + 1 };
             let bar = |y: usize| row(&s, y).chars().skip(x0).take(WIDTH as usize - 1).collect::<String>();
             // The machine you are on (the focused pane's), online.
-            assert_eq!(bar(0).trim_end(), " ✓ studio", "{s}");
+            assert!(bar(0).starts_with(" ✓ studio") && bar(0).contains("+  …"), "{s}");
             // (Each window named for its harness, as automatic-rename names it; idle harnesses and
             // shells have no mark, and no room kept for one — the name sits close.)
             assert!(bar(2).starts_with(" 0:fix login") && bar(2).trim_end().ends_with('3'), "{}", bar(2));

@@ -4,10 +4,31 @@ import { isAbsolute, join } from 'node:path'
 import type { CoreApi, ServiceRequests } from '../core/api.js'
 import { AgentCreationReceipts, AgentCreationReceiptError, creationFingerprint, validCreationId, type AgentCreationStatus } from '../lib/agentCreationReceipt.js'
 import { shellContextReply } from '../lib/shellContextReply.js'
+import { checkPidRuntime } from '../lib/deleteAgentFallback.js'
+import { tmuxPaneState } from '../lib/tmux.js'
 export { SHELL_REQUESTS } from '../lib/shellProtocol.js'
 
 export function startShell(core: CoreApi): ServiceRequests {
   const receipts = new AgentCreationReceipts(join(core.dataDir, 'shell-creations'))
+  const visits = new Map<string, Promise<Record<string, unknown>>>()
+  // This only restores a client's parked shell view. The core still owns archiving and resume.
+  // A banner or Ctrl-C is not proof: require the launcher's exit mark AND the exact process gone.
+  const visitStatus = async (agentId: string): Promise<Record<string, unknown>> => {
+    const row = core.agents.byAgent(agentId)
+    // Discovery clears a completed launch record when it binds the engine's conversation.
+    // October 6 shell-return E2E: a resumed process exited after discovery marked its row inactive,
+    // before retirement. That flag cannot suppress an exact exit probe or the parked shell is stranded.
+    if (!row || row.engine === 'terminal' || row.launch?.state === 'starting' || row.launch?.state === 'failed'
+      || !row.tmuxPane || !row.processIdentity?.startMarker) return { exited: false }
+    const session = { ...row, processIdentity: { ...row.processIdentity } }
+    const identity = (value: ReturnType<typeof core.agents.byAgent>) => JSON.stringify([value?.engine, value?.sessionId,
+      value?.registeredAt, value?.tmuxPane, value?.launch?.state, value?.processIdentity])
+    const before = identity(session)
+    const pane = await tmuxPaneState(session.tmuxPane)
+    if (pane === 'gone' || pane === 'unknown' || pane.engineExit == null) return { exited: false }
+    const process = await checkPidRuntime(session)
+    return { exited: process.state === 'gone' && identity(core.agents.byAgent(agentId)) === before }
+  }
   const describe = (status: AgentCreationStatus): Record<string, unknown> => {
     if (status.state !== 'created') return { ...status }
     const row = core.agents.byAgent(status.agentId)
@@ -26,6 +47,13 @@ export function startShell(core: CoreApi): ServiceRequests {
   return {
     shell_capabilities: (_, asker) => asker.owner ? { protocol: 1 } : { error: 'OWNER_REQUIRED' },
     shell_context_reply: (payload, asker) => asker.owner ? { ok: shellContextReply(payload) } : { error: 'OWNER_REQUIRED' },
+    shell_visit_status: (payload, asker) => {
+      if (!asker.owner) return { error: 'OWNER_REQUIRED' }
+      if (typeof payload.agentId !== 'string' || !payload.agentId || payload.agentId.length > 256) return { error: 'INVALID_AGENT_ID' }
+      const id = payload.agentId
+      if (!visits.has(id)) visits.set(id, visitStatus(id).finally(() => visits.delete(id)))
+      return visits.get(id)!
+    },
     shell_open_status: (payload, asker) => {
       if (!asker.owner) return { error: 'OWNER_REQUIRED' }
       if (!validCreationId(payload.creationId)) return { error: 'INVALID_CREATION_ID' }

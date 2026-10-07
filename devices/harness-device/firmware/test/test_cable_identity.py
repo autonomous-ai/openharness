@@ -20,6 +20,7 @@ def function(name):
 
 
 code = r'''
+#define _POSIX_C_SOURCE 200809L
 #include <limits.h>
 enum { native_name_max = NAME_MAX };
 #include "cable_client.h"

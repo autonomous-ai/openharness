@@ -2081,7 +2081,7 @@ int main(int argc, char **argv) {
         #undef XBARS
     }
     // THE WORKING SCENE and a notice (owner, 2026-10-05): no bell pill. For each engine with a scene the pet plays its
-    // alert once (its steps, its bubble in the overlay slot; Claude's is a bubble over the working scene), then a blue dot flies up round the rim, a
+    // alert once (a bell bubble over the working scene), then a blue dot flies up round the rim, a
     // ring goes out once, and the 12 px dot stays at 12 o'clock; a tap there opens the inbox, and a second notice
     // plays the alert again. The run count never changes while it does.
     {
@@ -2122,6 +2122,11 @@ int main(int argc, char **argv) {
             fake_ms = from + 5 * S + 3; scene_take();
             assert(ALERT_AT(5) && (al->frames ? s.pet_next_ms == from + 6 * S :
                                    s.pet_next_ms > fake_ms && s.pet_next_ms <= from + 6 * S));
+            // A bubble that covers the working overlay (Codex's sandboxes) hides it while it shows, and only then.
+            #define WORK_OV() ({ bool o_ = false; for (int i_ = 0; i_ < scene.count; i_++) for (unsigned k_ = 0; wk->overlay && \
+                k_ < wk->steps; k_++) o_ |= scene.runs[i_].sprite.cells && \
+                scene.runs[i_].sprite.cells == wk->overlay->frames[wk->overlay->loop[k_]].cells; o_; })
+            if (wk->overlay) { fake_ms = from + 8 * S; scene_take(); assert(ALERT_AT(8) && WORK_OV() == !al->covers_overlay); }
             fake_ms = from + A + 100; scene_take();                          // flying
             int b = BLUE_BOX(); assert(b >= 0 && scene.runs[b].box.h > 12 && scene.runs[b].box.h < 28);
             assert(HAS_SPRITE(wk) && s.pet_next_ms && s.pet_next_ms - fake_ms <= 40);
@@ -2148,11 +2153,12 @@ int main(int argc, char **argv) {
             fake_ms += 1000; ui_notif_replace(two,2); scene_take();
             assert(s.notice_ms == (fake_ms | 1) && ALERT_AT(0) && BLUE_BOX() < 0);
             // The dot opens the inbox, the name still the panes.
-            fake_ms += 3000; scene_take(); assert(BLUE_BOX() >= 0);
+            fake_ms += A + 1000; scene_take(); assert(BLUE_BOX() >= 0);
             tap(fake_ms + 10, 233, 10); assert(s.view == INBOX);
             #undef HAS_SPRITE
             #undef ALERT_AT
             #undef BLUE_BOX
+            #undef WORK_OV
         }
         cable_notif_t note={.agent_id="b",.name="Other",.summary="Done"};
         bool box = false, scene_run = false;
@@ -2778,7 +2784,7 @@ if os.environ.get('HABITAT_BRIDGE_TRACE'):
 with tempfile.TemporaryDirectory(prefix='harness-touch-ui-') as d:
     out = Path(d)
     (out / 'touch_ui.c').write_text(code)
-    subprocess.run(['cc','-std=c11','-Wall','-Wextra','-Werror','-O1','-g',
+    subprocess.run(['cc','-std=c11', '-D_POSIX_C_SOURCE=200809L','-Wall','-Wextra','-Werror','-O1','-g',
                     '-fsanitize='+os.environ.get('SANITIZERS','undefined,bounds'),
                     *extra_includes, '-I',str(native),str(out/'touch_ui.c'), *extra_sources, str(native/'gestures.c'),
                     str(native/'form.c'),str(native/'visit.c'),str(native/'draft.c'), str(native/'scroll.c'),str(native/'selection.c'),str(native/'carry.c'),str(native/'tim.c'),str(native/'character_motion.c'),str(native/'character_layout.c'),str(native/'character.c'),str(native/'illustrated.c'),str(native/'tux.c'),str(native/'focus.c'),str(native/'lvgl_fonts.c'),str(native/'lvgl_icons.c'),str(native/'focus_marks.c'),str(native/'focus_faces.c'),str(native/'pets.c'),str(native/'terminal.c'),

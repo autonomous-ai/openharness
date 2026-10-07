@@ -50,3 +50,5 @@ It keeps the core and the services running, and nothing else.
    The core sends `harnessd:want` for one of its services; from then on it is kept running like any other.
    A core that speaks an older protocol than the process's `askedSince` never asks, so `unasked` starts it
    as that core binds. Making a process on demand bumps `HARNESSD_PROTOCOL` and sets `askedSince` to it.
+   A `want` is heard before the core binds too: a core signed in asks for the gateway as it starts, so the
+   relay comes up beside it.

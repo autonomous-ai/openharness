@@ -81,6 +81,7 @@ class ViewerKeyStore {
   static const _devLogKey = 'viewer_e2ee_devlog';
   static const _devLogArchiveKey = 'viewer_e2ee_devlog_archive';
   static const _signInKey = 'viewer_e2ee_sign_in';
+  static const _signInAcctKey = 'viewer_e2ee_sign_in_acct';
 
   /// Minted on first use and kept: every linked machine has pinned it.
   Future<E2eeIdentity> identity() => _identity ??= _heldUnlessItFails(
@@ -221,6 +222,51 @@ class ViewerKeyStore {
 
   Future<void> writeSignInEpoch(String epoch) =>
       _storage.write(_signInKey, epoch);
+
+  /// The account the sign-in by hand [epoch] was made to, as the profile said right after it; null
+  /// when none was recorded for that sign-in (one recorded for an earlier sign-in never answers).
+  Future<String?> signInAcct(String epoch) async {
+    final raw = await _storage.read(_signInAcctKey);
+    if (raw == null) return null;
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is Map &&
+          decoded['epoch'] == epoch &&
+          decoded['acct'] is String) {
+        return decoded['acct'] as String;
+      }
+    } on FormatException {
+      // Unreadable: none recorded.
+    }
+    return null;
+  }
+
+  Future<void> writeSignInAcct(String epoch, String acct) => _storage.write(
+    _signInAcctKey,
+    jsonEncode({'epoch': epoch, 'acct': acct}),
+  );
+
+  /// What this device trusts — its pins and its trust group — as stored: kept with an account's
+  /// device key log when this device signs in to another one ([writeTrust] puts it back).
+  Future<Map<String, Object?>> trustSnapshot() async => {
+    'peers': await _storage.read(_peersKey),
+    'group': await _storage.read(_groupKey),
+  };
+
+  /// Trust exactly what [snapshot] ([trustSnapshot]) holds; an empty one trusts nothing. The held
+  /// pins ([_peers]) are let go of on both sides of the write, so none is believed from before it.
+  Future<void> writeTrust(Map<Object?, Object?> snapshot) async {
+    _peers = null;
+    try {
+      await _put(_peersKey, snapshot['peers']);
+    } finally {
+      _peers = null;
+    }
+    await _put(_groupKey, snapshot['group']);
+  }
+
+  Future<void> _put(String key, Object? value) =>
+      value is String ? _storage.write(key, value) : _storage.delete(key);
 
   /// This device was removed from the account's device key log: its identity is spent. The next one
   /// minted is a new device, which every other device announces as one. The log as this device

@@ -305,6 +305,9 @@ class WsConn {
             'autonomousEnv': autonomousEnv,
             if (_directObserver)
               (observerLink ? 'link' : 'share'): observerShareId!,
+            // The browser counts its person as on the web today (backend
+            // user_daily_client_presence). Not other viewer builds: they are not the web.
+            if (!_directObserver && kIsWeb) 'client': 'web',
           },
         );
       }

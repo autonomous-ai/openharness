@@ -46,7 +46,7 @@ def verify_checkout(root, scope, subset=False):
 def capture(root):
     verify_checkout(root, "process")
     sha = git(root, "rev-parse", "HEAD")
-    if os.environ.get("GITHUB_SHA") != sha:
+    if os.environ.get("CI_SOURCE_SHA", os.environ.get("GITHUB_SHA")) != sha:
         raise ValueError("checkout differs from the CI source")
     run, attempt = (int(os.environ[key]) for key in ("GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT"))
     if run < 1 or attempt < 1:

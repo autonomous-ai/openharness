@@ -31,7 +31,7 @@ bundle checks, the serial/login-shell OS/Node matrix, and the per-file 100% cove
 gates (`test:core`, `test:harnessd`, `test:resume`, `test:orchestrator`, `test:sharing`,
 `test:remote-viewers`, `test:portability`). `tui` includes its native
 CLI integration tests. Select `full` for cross-component changes or uncertain impact.
-The workflow remains on demand; this change does not introduce new required gates.
+Automatic PR and merge-group runs select all affected component scopes; manual scopes remain available.
 
 `desktop` runs all Desktop VM files on both macOS and Linux, split into four
 isolated runners per platform. It uses the release's pinned Flutter SDK and shared
@@ -176,9 +176,12 @@ removes those objects and the consumed candidate. It cannot publish a product.
 
 Native TUI CI tests and builds the shipped musl target in the same Cargo output
 directory. Dependency caches are keyed by target, Rust toolchain, and Cargo inputs;
-cache hits still run every test. The eleven native TUI fixtures run two at a time,
+cache hits still run every test. The native TUI fixtures run two at a time,
 using their own homes, socket names, and mock ports. CI retains each fixture's log
-and validation receipt as an artifact. To run the same set locally after building:
+and validation receipt as an artifact. Native comparisons use tmux 3.7c at the pinned
+commit in `.github/actions/reference-tmux`; Ubuntu's 3.4 loses the exit status in the
+live-window respawn comparison. CLI's older-tmux integration checks keep the
+distribution binary. To run the same set locally after building:
 
 ```bash
 python3 scripts/validate-tui-native.py tui/target/release/harness-tui
@@ -414,103 +417,112 @@ until they disappear.
 
 ## Merge an already-reviewed PR
 
-Once code review and required non-CI checks are complete and merging is authorized,
-start this command while the selected CI run is still running:
+After independent code review, required non-CI acceptance and merge authorization:
 
 ```bash
-make merge-pr ARGS="PR_NUMBER --run RUN_ID --scope SCOPE --reviewed-head HEAD_SHA --reviewed-base MAIN_SHA --merge"
+make merge-pr ARGS="PR_NUMBER --queue --reviewed-head HEAD_SHA --reviewed-base REVIEW_BASE_SHA --merge --wait-timeout 1800"
 ```
 
-Use full commit SHAs. The clean local checkout must be the reviewed head and include
-that reviewed `main` commit. Prepare the PR description with its check scope and CI
-run link first. The command waits for that attempt, verifies the same jobs/artifacts
-as the evidence collector, then rechecks the PR and the live `main` ref before one
-squash-merge request. GitHub must report the PR ready; the request includes the exact
-reviewed head and does not bypass branch rules or enable auto-merge/queueing.
+The checkout must be clean at the exact reviewed head and include the review-base
+commit. Main may advance after that review. The helper verifies successful automatic
+PR CI, enqueues with GitHub's `expectedHeadOid`, follows the same PR and verifies
+that its merged full tree matches successful `merge_group` CI and its immutable gate
+receipt. It retains source, run, attempt, artifact digest and phase timings under
+`.harness/validation/*-merge-*/`. Omit `--merge` for a read-only queue preview.
 
-Omit `--merge` for a read-only preview. Logs, CI evidence, per-phase timings and the
-merge outcome are saved under `.harness/validation/*-merge-*/`. `--wait-timeout`
-defaults to 900s; `--timeout` gives preflight and post-CI operations 90s each. The
-command records its intended mutation before sending it. If a response is lost, it
-inspects the same PR without replaying the merge request.
+Queue rejection, a changed head/target, missing coverage, failed/skipped required
+jobs or a lost response cannot report success. An uncertain enqueue is inspected
+without replaying the mutation. If the wait budget expires, follow that same queued
+PR; do not start another validation or merge request. GitHub enforces the required
+check and queue after rollout. Existing `--run/--scope` commands automatically use
+queue mode when the branch has that rule; legacy direct mode is retained for the
+bootstrap merge only and requires unchanged reviewed main.
 
-A changed head, dirty checkout, moved main, failed CI or blocked merge stops the
-command. Review new source differences and reuse only applicable evidence, as above;
-the command does not decide that impact or replace native checks and code review.
-After a merge, it verifies the actual Git tree against the reviewed target tree.
-The receipt separately reports whether the full tested tree matches; scoped CI
-reuse may preserve test inputs while other reviewed files differ. A merge tree
-different from the reviewed target is recorded as `merged_source_review_required`
-(exit 3), so resolve that source review before release. An unconfirmed write is
-recorded as `merge_not_confirmed`; inspect the same PR before further action. This
-command does not create release tags or dispatch release workflows.
+## Automatic CI and rollout
 
-## Complete the authorized release
+`ci.yml` runs on every PR revision and on `merge_group: checks_requested`.
+`scripts/ci-plan.py` reads the complete immutable Git diff, including both sides
+of renames, rather than GitHub's limited file list. PR runs check out the exact
+head; queue runs check out the combined candidate. Unknown paths fail planning
+until their checks are registered. CI uses read-only repository permissions and
+executes no contributor code with release credentials.
 
-Once required checks pass, merge, verify the resulting source, and tag that source
-using the existing release scripts. Do not introduce an additional full-suite phase.
-For a client/server change, publish required server support before exposing clients
-that need it. Independent product releases may build concurrently; preserve their
-source/version compatibility and manifest publication safeguards.
+Agents should open a draft PR while implementing and run targeted local checks
+before marking it ready. Draft pushes run workflow lint and repository process
+checks; expensive component suites wait for `ready_for_review`. The plan still
+records all affected suites, and `ci/required` stays blocked while the PR is a
+draft. Marking ready runs complete affected validation for that exact head;
+returning to draft defers component checks on later pushes. Keep a ready PR stable while CI and
+independent review finish. Push again when a correction is needed, rather than
+repeatedly dispatching the same full suite. Merge candidates and explicit runs
+always execute their complete selected scopes.
 
-Check the live version and artifact checksum, and give the user the release link
-promptly. Broader maintenance testing must not silently turn into another release
-gate after shipping. Record these UTC timestamps in the PR or release task:
+Coarse component selection retains the existing complete CLI coverage/native
+matrix and Desktop inventory on both platforms. Shared CLI and process/workflow
+inputs conservatively select all core suites; source boundaries are not narrowed
+as part of rollout. CLI changes also select Mobile's protocol contracts; changes to
+the shared planner or CI job graph select every component. Website, Store
+experiences/browser, logging, OS source contracts,
+provider, firmware host tests, Mobile VM tests and daemon contracts are selected
+for their declared inputs. Physical devices, full OS images/VM journeys, real engines,
+visual inspection and other acceptance selected by review remain separate required
+validation; automatic host tests do not substitute for those.
 
-- Request received; implementation ready; required validation started/completed.
-- Merge; each product's release trigger and live publication; completion reported.
-- Pauses and waiting, with their known reason. Mark missing data unknown.
+The dependency map determines test coverage, not workflow cancellation groups:
 
-For Desktop, use the existing release command with `--wait` to follow the exact
-tag and source through completion:
-
-```bash
-make release-desktop ARGS="--notes-file /path/to/reviewed-notes.md --wait"
+```mermaid
+flowchart LR
+  CLI[CLI protocols and runtime APIs] --> Desktop[Desktop contracts]
+  CLI --> Phone[Mobile protocol contracts]
+  CLI --> Companions[Companion cross-imports]
+  CLI --> TUI[TUI protocol and daemon integration]
+  Fixtures[Shared desk and daemon fixtures] --> Core[Core and Mobile checks]
+  Store[Store runtimes and viewers] --> Desktop
+  Store --> Browser[Experience and authoring browser checks]
+  Planner[Shared CI planner and job graph] --> All[Every component]
 ```
 
-The workflow's `publish` job downloads all six public artifacts three at a time,
-using the updater's Dart user agent, and checks every version, full SHA-256, and
-size. It starts immediately after publication on the same runner.
-Each transfer has a total deadline; any failure makes the workflow fail and keeps
-the JSON receipt in the `desktop-release-verification` artifact. A successful
-verification satisfies that release's download checks: report completion instead
-of downloading everything again locally. The watcher requires this job to pass
-and checks the tag's full SHA, so another release's success cannot satisfy it.
+Separate PR groups prevent cross-cancellation, but still share available runner
+capacity. Related branches validate independently; the merge queue validates
+their combined source before integration. Keep PRs small and coordinate edits to
+shared interfaces and frequently changed files. Main background validation may
+coalesce pending snapshots; distinct merge candidates must not share that group.
 
-Different Desktop versions may build concurrently. The shared release lock covers
-publication and its public verification, so a second workflow cannot change the
-live version midway through that check. Versions are checked before building and
-again immediately before publication. A late older version fails as superseded;
-do not retry it over a newer live release. All four platform manifests must contain
-exactly the six expected entries for one version. Artifact writes are create-only,
-and the final manifest write requires the GCS generation read by the publisher.
-Concurrent external changes therefore cause a failure instead of being lost.
+The stable `ci/required` job runs even after an upstream failure. It accepts only
+successful selected jobs and complete shard summaries. Deliberately inapplicable
+jobs may be skipped; a required skip, cancellation, failure or missing result fails
+integration. Manual `full` retains its prior core-suite meaning; `all` selects every
+automatic suite. Manual dispatch is extra evidence and cannot substitute for the
+automatic PR/merge-group gate.
 
-For publication changes, run the local process suite and the disposable GCS
-contract check on the candidate branch:
+Enable main's queue only after passing automatic CI and a disposable-branch queue
+trial. Start with three candidate builds, squash, ALLGREEN, a minimum of one PR and
+no batch accumulation delay. Check timeout is 60 minutes to permit required slower
+component work. Required checks are non-strict on the PR branch because the queue
+validates current main. Require PRs and resolved discussions, preserving the existing
+approval count instead of inventing a new human-review bottleneck. Preserve main's
+delete/force-push guards. Queue jumping invalidates work and is reserved for urgent
+integration. The queue's merge limits do not batch its CI builds.
 
-```bash
-gh workflow run release-desktop.yml --ref BRANCH -f version=0.0.0 -f test_publication=true
-```
+New revisions replace active checks for the same PR, job and matrix row. Cancellation
+locks belong to work jobs, leaving summaries and the always-running final gate independent: an obsolete
+gate waiting for a runner cannot block the next revision. Checks no longer selected
+by the new plan may finish, including when a ready PR returns to draft; they cannot
+validate a newer head. Explicit runs and distinct candidates have independent
+concurrency identities. Broad main E2E
+finishes its active snapshot and retains the newest pending snapshot; nightly and
+explicit E2E requests are separate and preserved. A passing older snapshot does
+not validate newer source. Broad E2E remains advisory until reliable, and missing
+required acceptance still prevents an authorized release.
 
-This mode skips all product build/release jobs. It uses tiny public fixture objects
-under `harness/desktop/.publication-check/<run>-<attempt>/`, checks actual GCS
-preconditions and downloads, and removes only that run's prefix. It exercises
-normal publication, duplicate/older versions, incomplete platform sets, concurrent
-manifest writes, and immutable artifact collisions. It cannot publish an app.
+Hourly **CI health** retains a bounded latest-100-run workload sample, execution
+observed in cancelled runs and the age/source of completed main E2E. These are job
+timestamps, not billed cost or a guarantee that current main passed. Use a week of
+traffic to tune candidate concurrency from runner waiting, rebuilds and ready-to-merge
+time. Investigate/revert confirmed main regressions promptly. Preserve explicit retry
+and incomplete-suite reporting; do not retry assertions until they disappear.
 
-For a release made before that job existed, or to investigate a download failure:
-
-```bash
-python3 scripts/verify-desktop-release.py 1.2.51
-```
-
-This is read-only. A failed verification after publication means the release may
-already be live; inspect the receipt and fix the cause rather than blindly
-retagging or retrying immutable artifact uploads.
-
-Report both total elapsed time and its stages. For small changes, aim to return to
-the team's previous 10–15 minute merge/release overhead; publishing duration alone
-does not demonstrate that target. At ten minutes without progress, identify the
-blocked phase and its next action instead of silently extending testing. Compare
-the next ten tasks using request-to-completion data before claiming an improvement.
+Release publication and Desktop prepared-package reuse retain their existing
+source/evidence, signing and artifact contracts. Release admission based on automatic
+candidate receipts is a subsequent rollout step after the queue is stable; no release
+workflow is bypassed by this integration change.

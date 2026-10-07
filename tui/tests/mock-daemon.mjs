@@ -177,6 +177,7 @@ const reconnect = process.env.MOCK_RECONNECT === '1'
 if (reconnect && !(port >= 19780 && port <= 19789)) throw new Error('unsafe reconnect test port')
 const creationReceipts = new Map()
 const connections = new Map()
+const unavailableMachines = new Set()
 const opens = []
 const inputs = []
 const readOnly = new Set()
@@ -222,10 +223,12 @@ const server = http.createServer((req, res) => {
     req.on('end', () => {
       const f = JSON.parse(body)
       if (f.action === 'watch') readOnly.add(f.agent)
+      if (f.action === 'offline') unavailableMachines.add(f.machine)
+      if (f.action === 'online') unavailableMachines.delete(f.machine)
       for (const c of connections.values()) {
         if (f.machine && c.machine !== f.machine) continue
         if (f.action === 'hang') c.hang = true
-        if (f.action === 'disconnect') c.ws.terminate()
+        if (f.action === 'disconnect' || f.action === 'offline') c.ws.terminate()
         if (f.action === 'close') for (const [id, s] of c.streams) {
           if (f.agent && s.agent.id !== f.agent) continue
           c.streams.delete(id)
@@ -353,6 +356,7 @@ wss.on('connection', (ws) => {
     if (type === 'machine_select') {
       machine = payload.machineId
       connection.machine = machine
+      if (unavailableMachines.has(machine)) return ws.close(1013, 'fixture machine offline')
       if (!agents[machine]) return ws.close(4403, 'machine mismatch')
       send('connected', { machineId: machine, transport: 'local', localProtocolVersion: 1 })
       // This machine's own connections are the daemon's windows (backend.sendLocal's audience).
@@ -400,11 +404,15 @@ wss.on('connection', (ws) => {
     switch (type) {
       case 'agents_list': return reply({ agents: agents[machine].filter((a) => payload.includeStopped || a.status !== 'stopped') })
       case 'models_list': return reply({ models: [{ id: 'runtime-v1:x:claude:opus@high', displayName: 'Opus / High' }, { id: 'runtime-v1:x:claude:sonnet@high', displayName: 'Sonnet / High' }] })
-      case 'git_project_info': return reply(process.env.MOCK_NEW_UI ? { isGit: !String(payload.path).includes('plain'), branch: 'main', branches: [
+      case 'git_project_info': {
+        const result = process.env.MOCK_NEW_UI ? { isGit: !String(payload.path).includes('plain'), branch: 'main', branches: [
         { ref: 'refs/heads/main', name: 'main', remote: false },
         { ref: 'refs/heads/feature', name: 'feature', remote: false },
         { ref: 'refs/heads/already-open', name: 'already-open', remote: false, worktree: '/home/demo/worktrees/already-open' },
-      ] } : { isGit: false })
+        ] } : { isGit: false }
+        if (welcomeTest && welcome.gitDelay) return setTimeout(() => reply(result), welcome.gitDelay)
+        return reply(result)
+      }
       case 'grid_models_list': return reply({ supportsModelLaunch: true, localModelEngines: ['codex', 'claude'], grids: [
         { name: 'studio', own: true, models: [{ id: 'demo-model', node: 'studio' }] },
       ] })
@@ -429,7 +437,15 @@ wss.on('connection', (ws) => {
       // What tmux says a pane runs and where (the real daemon asks its tmux; here, fixed).
       case 'terminal_info': return reply({ command: 'zsh', path: '/home/demo/src', pid: 4242, tty: '/dev/ttys042' })
       // The e2e reads which harnesses were deleted (a killed pane's shell goes with it).
-      case 'agent_delete': dial.deleted = [...(dial.deleted || []), payload.agentId]; return reply({ agent: agents[machine][0], deleted: true })
+      case 'agent_delete': {
+        dial.deleted = [...(dial.deleted || []), payload.agentId]
+        const removed = agents[machine].find(a => a.id === payload.agentId)
+        if (welcomeTest) {
+          agents[machine] = agents[machine].filter(a => a.id !== payload.agentId)
+          send('agent_deleted', { agentId: payload.agentId })
+        }
+        return reply({ agent: removed, deleted: true })
+      }
       case 'agent_update': case 'agent_resume': case 'agent_restart': return reply({ agent: agents[machine][0], deleted: true })
       case 'session_search': {
         if (welcomeTest) {
@@ -448,13 +464,17 @@ wss.on('connection', (ws) => {
         const rows = turns.map(([ask, answer], turn) => ({ turn, at: Date.now() - (turns.length - turn) * HOUR, ask, answer, tools: turn === 0 ? 'Read src/main.ts\nBash npm test' : '' }))
         return reply({ sessionId: payload.sessionId, rows, hasMore: false, total: rows.length, lastAt: x ? x.lastAt : Date.now(), lastAsk: rows[rows.length - 1], ...(x ? { external: { title: x.title, cwd: x.cwd, origin: x.origin, open: x.open } } : {}) })
       }
+      case 'shell_capabilities': return reply({ protocol: 1 })
+      case 'shell_open_status':
       case 'agent_create_status': {
         dial.creationChecks = [...(dial.creationChecks || []), payload]
         const receipt = creationReceipts.get(`${machine}:${payload.creationId}`)
         if (receipt?.pendingChecks) { receipt.pendingChecks--; return reply({ creationId: payload.creationId, state: 'pending' }) }
         return reply({ creationId: payload.creationId, ...(receipt?.outcome || { state: 'missing' }) })
       }
+      case 'shell_open':
       case 'agent_create': {
+        if (type === 'shell_open') payload.engine = 'terminal'
         dial.created = [...(dial.created || []), payload]
         const receiptKey = `${machine}:${payload.creationId}`
         const { requestId: _requestId, creationId: _creationId, ...choices } = payload
@@ -491,7 +511,8 @@ wss.on('connection', (ws) => {
           return reply({ agent: resumed })
         }
         const created = agent(randomUUID(), `Mock ${payload.engine}`, payload.engine)
-        if (welcomeTest && payload.cwd) created.project = { name: payload.cwd.split('/').pop(), cwd: payload.cwd, root: payload.cwd, branch: 'main' }
+        const cwd = payload.cwd || (payload.projectSource === 'branch' ? payload.gitSource : null)
+        if (welcomeTest && cwd) created.project = { name: cwd.split('/').pop(), cwd, root: cwd, branch: 'main' }
         agents[machine].push(created)
         if (process.env.MOCK_NEW_UI === '1') {
           const outcome = { state: 'created', agent: created }

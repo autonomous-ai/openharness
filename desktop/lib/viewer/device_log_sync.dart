@@ -167,6 +167,10 @@ const _resetWindowMs = 10 * 60 * 1000;
 const _appendAttempts = 5;
 const _pages = 20;
 
+/// The page cap while a log is first read ([_File.joining]) or reviewed ([ViewerDeviceLog.rebaseline]):
+/// 100,000 entries. A first read cut short at [_pages] would take every key past it for news.
+const _joinPages = 200;
+
 /// How many other accounts' logs are kept ([ViewerKeyStore.deviceLogArchive]); the oldest goes first.
 const _archivedKept = 4;
 
@@ -206,6 +210,7 @@ class DeviceLogListing {
     this.baseline = const [],
     this.baselineSeen = true,
     this.departed = const [],
+    this.registerError,
   });
 
   static const empty = DeviceLogListing(members: [], frozen: null, frozenPeers: []);
@@ -234,6 +239,10 @@ class DeviceLogListing {
   /// New keys removed before anyone marked them as seen (oldest first): flagged until [ViewerDeviceLog.dismiss]
   /// names them (`pub`, or `pubs`) or clears every one.
   final List<DeviceLogDeparted> departed;
+
+  /// Why the backend last refused to put this app's key into the log (`TOO_MANY`, …), until a
+  /// register lands; null when it never did (a lost race or no answer is not a refusal).
+  final String? registerError;
 }
 
 /// The newest hashes a `group_sync` carries, so a fork can be located.
@@ -366,6 +375,9 @@ class ViewerDeviceLog {
   /// Set while [register] runs.
   bool _registering = false;
 
+  /// [DeviceLogListing.registerError]: in memory only, never in the file.
+  String? _registerError;
+
   /// The [register] under way, which [ensureRegistered] lets finish before it judges.
   Future<void>? _registerRun;
   Future<DeviceLogRegistration>? _ensuring;
@@ -385,6 +397,9 @@ class ViewerDeviceLog {
 
   /// The write of the sign-in id [beginSignIn] minted; [register] waits for it.
   Future<void>? _epochSaving;
+
+  /// The sign-in by hand [beginSignIn] minted in this run, until [signedInAs] names its account.
+  String? _awaitingAcct;
 
   /// This app's key is gone from the log: sign out, once.
   Future<void> _signOut() async {
@@ -444,6 +459,7 @@ class ViewerDeviceLog {
           continue;
         }
         final mine = state.active[pub];
+        if (mine != null) _registerError = null;
         if (mine != null && (mine.label == name || mine.kind != 'viewer')) return;
         final entry = await signDevLogEntry(
           nextDevLogEntry(state, op: 'add', pub: pub, kind: 'viewer', machineId: '', label: name, signer: pub, at: _now()),
@@ -452,10 +468,14 @@ class ViewerDeviceLog {
         final answer = await append(entry);
         if (answer == null) return;
         if (answer.error == null) {
+          _registerError = null;
           await refresh();
           return;
         }
-        if (answer.error != 'STALE_HEAD') return;
+        if (answer.error != 'STALE_HEAD') {
+          _registerError = answer.error;
+          return;
+        }
         await refresh();
         await _sleep(Duration(milliseconds: 200 + _random.nextInt(800) * (attempt + 1)));
       }
@@ -509,10 +529,12 @@ class ViewerDeviceLog {
     // for the read that comes first ([_doRefresh] ends it), or until [register] takes over.
     _signingInAgain = fresh;
     _signInRound++;
+    _awaitingAcct = null;
     if (!fresh) return;
     final previous = _epoch;
     final minted = _mintEpoch();
     _epoch = minted;
+    _awaitingAcct = minted;
     _epochSaving = keys.writeSignInEpoch(minted).then(
       (_) {},
       onError: (Object _) {
@@ -520,6 +542,23 @@ class ViewerDeviceLog {
         if (_epoch == minted) _epoch = previous;
       },
     );
+  }
+
+  /// Who the person just signed in as, by hand: the profile's user id (`/api/auth/me`), which is what
+  /// the log names its account by. Kept beside the sign-in id, so the first read of that account
+  /// starts the list over whenever it comes ([_mayStartOver]). Only for the sign-in by hand
+  /// [beginSignIn] minted in this run — a stored session (the app opening) records nothing. Never
+  /// throws.
+  Future<void> signedInAs(String acct) async {
+    final epoch = _awaitingAcct;
+    if (epoch == null || acct.isEmpty) return;
+    _awaitingAcct = null;
+    try {
+      await _epochSaving;
+      if (_epoch == epoch) await keys.writeSignInAcct(epoch, acct);
+    } catch (_) {
+      // Not recorded: the sign-in falls back to the short window.
+    }
   }
 
   /// Read and verify whatever the log gained. Concurrent calls share one read. Never throws.
@@ -558,14 +597,33 @@ class ViewerDeviceLog {
       '${[for (var i = 0; i < 16; i++) _secure.nextInt(256).toRadixString(16).padLeft(2, '0')].join()}@${_now()}';
   static final _secure = Random.secure();
 
-  /// Whether [local] — a sign-in by hand the file is not yet the log of — may start it over for another
-  /// account: never an adopted one, and only shortly after it was made. A backend that holds the log
-  /// back after a sign-in must not keep that door open, to name another account days later.
-  bool _mayStartOver(String local) {
+  /// Whether [local] — a sign-in by hand the file is not yet the log of — may start it over for [acct]:
+  /// never an adopted one; the account the profile named for it ([signedInAs]) whenever its first read
+  /// comes, and no other; with none named, any only shortly after it was made. A backend that holds the
+  /// log back after a sign-in must not keep that door open, to name another account days later.
+  Future<bool> _mayStartOver(String local, String acct) async {
     if (local.startsWith(_adoptedSignIn)) return false;
+    try {
+      final named = await keys.signInAcct(local);
+      if (named != null) return named == acct;
+    } catch (_) {
+      // Unreadable: the window alone decides.
+    }
     final made = RegExp(r'@(\d{1,15})$').firstMatch(local);
     if (made == null) return false;
     return (_now() - int.parse(made.group(1)!)).abs() <= _resetWindowMs;
+  }
+
+  /// Whether the log this app holds is the one of the sign-in it is under — false while it may still be
+  /// the account just left, before the first read under a new sign-in. No log yet is nobody's: true.
+  /// Never throws (false when the file cannot be read).
+  Future<bool> ownsLog() async {
+    try {
+      final file = await _read();
+      return file.state == null || await _ownsFile(file);
+    } catch (_) {
+      return false;
+    }
   }
 
   /// Whether [file] is the log of the sign-in this app is under (or that cannot be told). Until a read
@@ -608,28 +666,39 @@ class ViewerDeviceLog {
     }
   }
 
-  /// Keep [file] — the log of an account this app is leaving — to restore if it comes back. Under the lock.
-  Future<void> _archiveIn(_File file) async {
+  /// Keep [file] — the log of an account this app is leaving — to restore if it comes back, with what
+  /// this app trusted under it ([trust]: [ViewerKeyStore.trustSnapshot]). [keep]: the account about
+  /// to be restored, never the one dropped to make room — it was, when it was the oldest kept, and
+  /// coming back to it then started its list over. Under the lock.
+  Future<void> _archiveIn(_File file, {Map<String, Object?>? trust, String? keep}) async {
     final acct = file.state?.acct;
     if (acct == null) return;
     final all = await _archived()
       ..remove(acct);
-    all[acct] = file.toJson();
-    while (all.length > _archivedKept) {
-      all.remove(all.keys.first);
+    all[acct] = {...file.toJson(), 'trust': ?trust};
+    while (all.length > _archivedKept + (all.containsKey(keep) ? 1 : 0)) {
+      all.remove(all.keys.firstWhere((k) => k != keep));
     }
     await keys.writeDeviceLogArchive(all);
   }
 
   /// The kept log of [acct], made the live file (this sign-in's: [owner]) and only then taken out of
   /// the archive — a crash in between leaves it in both, never in neither. Null when there is none.
-  /// Under the lock.
-  Future<_File?> _restoreIn(String acct, String? owner) async {
-    final kept = _File.parse((await _archived())[acct]);
+  /// With [swapTrust] (another account's log was live), what this app trusted under [acct] is trusted
+  /// again — and nothing of the account left. Under the lock.
+  Future<_File?> _restoreIn(String acct, String? owner, {required bool swapTrust}) async {
+    final raw = (await _archived())[acct];
+    final kept = _File.parse(raw);
     if (kept.state?.acct != acct) return null;
     kept.owner = owner ?? kept.owner;
     await _carrySuspensionsIn(kept);
     await _write(kept);
+    if (swapTrust) {
+      final trust = _trustOf(raw);
+      await keys.writeTrust(trust ?? const {});
+      // Kept by a build that did not keep trust with it: what the log names is trusted again.
+      if (trust == null && kept.frozen == null) await _trust(kept.state!.active.values.toList());
+    }
     final all = await _archived()
       ..remove(acct);
     await keys.writeDeviceLogArchive(all);
@@ -654,6 +723,10 @@ class ViewerDeviceLog {
       ..pending = {...file.pending, ...carried}.toList();
   }
 
+  /// What this app trusted under a kept log ([_archiveIn]); null in one kept before that existed.
+  static Map<Object?, Object?>? _trustOf(Object? kept) =>
+      kept is Map && kept['trust'] is Map ? kept['trust'] as Map<Object?, Object?> : null;
+
   /// A suspension lifted here holds for every kept account too: none of them keeps [pubs] out. Under
   /// the lock.
   Future<void> _unsuspendArchivedIn(Iterable<String> pubs) async {
@@ -664,7 +737,7 @@ class ViewerDeviceLog {
       final f = _File.parse(e.value);
       if (!f.suspended.any(lift.contains)) continue;
       f.suspended = [for (final k in f.suspended) if (!lift.contains(k)) k];
-      all[e.key] = f.toJson();
+      all[e.key] = {...f.toJson(), 'trust': ?_trustOf(e.value)};
       changed = true;
     }
     if (changed) await keys.writeDeviceLogArchive(all);
@@ -796,7 +869,8 @@ class ViewerDeviceLog {
   Future<void> _readPages() async {
     await _marks();
     var bootstrap = ((await _read()).state?.head.seq ?? 0) == 0;
-    for (var page = 0; page < _pages; page++) {
+    // The file's own `joining` decides, each page: the first page of a fresh log is what sets it.
+    for (var page = 0; page < ((await _read()).joining ? _joinPages : _pages); page++) {
       final seen = (await _read()).state;
       final since = seen?.head.seq ?? 0;
       final got = await fetch(since);
@@ -815,7 +889,7 @@ class ViewerDeviceLog {
             // Another account only after a sign-in by hand here. Otherwise it is the backend saying so
             // — and starting over would clear every mark a fork put on the list, the real log then
             // adopted whole.
-            if (local == null || !signedInAgain || !_mayStartOver(local)) {
+            if (local == null || !signedInAgain || !await _mayStartOver(local, got.acct)) {
               await _freezeIn(file, 'invalid', effects);
               return false;
             }
@@ -827,10 +901,17 @@ class ViewerDeviceLog {
           }
         }
         if (reset) {
-          if (file.state != null) await _archiveIn(file);
+          // Another account's log was live: it is kept with what this app trusted under it, none of
+          // which this account's machines are told of or trusted by. A first read keeps the pins: they
+          // are links made before the log existed.
+          final leaving = file.state != null;
+          if (leaving) {
+            await _archiveIn(file, trust: await keys.trustSnapshot(), keep: got.acct);
+            _frozenPeers.clear();
+          }
           // Back to an account this app was signed in to before: its log as verified then, and every
           // mark on it (frozen, suspended, pending), go on from where they were.
-          final kept = await _restoreIn(got.acct, local);
+          final kept = await _restoreIn(got.acct, local, swapTrust: leaving);
           if (kept != null) {
             bootstrap = (kept.state?.head.seq ?? 0) == 0;
             return true;
@@ -838,7 +919,9 @@ class ViewerDeviceLog {
           // First read, or signed in to another account here: that account's log starts from nothing.
           // `joinedSeq` starts at 0 and follows the head of each page this app VERIFIES ([_acceptIn]):
           // never the head the backend merely claims, or it could park it far ahead and have every key
-          // it forges below that adopted without a word. `preLog` is what was trusted already.
+          // it forges below that adopted without a word. `preLog` is what was trusted already — under
+          // this account, so nothing when another one's log was live.
+          if (leaving) await keys.writeTrust(const {});
           file = _File(
             DevLogState.empty(got.acct),
             [],
@@ -1192,7 +1275,7 @@ class ViewerDeviceLog {
     final entries = <Object?>[];
     var acct = '';
     DevLogHead? head;
-    for (var page = 0; page < _pages; page++) {
+    for (var page = 0; page < _joinPages; page++) {
       final got = await fetch(entries.length);
       if (got == null || !_isPosition(got.head.seq)) return null;
       acct = got.acct;
@@ -1228,7 +1311,12 @@ class ViewerDeviceLog {
       // live file, or — for another account — the one kept when this app left it (its marks go on), or
       // else nothing (every key on it is new here). Never against the account being left.
       final kept = same ? null : await _archivedFileIn(next.acct);
-      final base = same ? file : kept ?? _File(null, [], null, 0, joinedSeq: 0, preLog: [...file.preLog]);
+      // Moving from another account's live log: what this app trusted under each goes with it.
+      final switching = file.state != null && !same;
+      final keptTrust = kept == null ? null : _trustOf((await _archived())[next.acct]);
+      final base = same
+          ? file
+          : kept ?? _File(null, [], null, 0, joinedSeq: 0, preLog: switching ? [] : [...file.preLog]);
       final before = base.state?.active ?? const <String, DevLogMember>{};
       final added = [for (final m in next.active.values) if (before[m.pub] == null) m];
       final removed = [for (final m in before.values) if (next.active[m.pub] == null) m];
@@ -1250,7 +1338,10 @@ class ViewerDeviceLog {
         // The reviewed list is another account's: the one this app leaves is kept, as on a sign-in (and
         // what a fork suspended in it stays suspended here) — and a kept one of the reviewed account
         // goes on from where it was.
-        if (file.state != null && !same) await _archiveIn(file);
+        if (switching) {
+          await _archiveIn(file, trust: await keys.trustSnapshot());
+          _frozenPeers.clear();
+        }
         base
           ..state = next
           ..recent = parsed
@@ -1272,6 +1363,7 @@ class ViewerDeviceLog {
         await _carrySuspensionsIn(base);
         // Live first, then out of the archive: a crash in between leaves it in both, never in neither.
         await _write(base);
+        if (switching) await keys.writeTrust(keptTrust ?? const {});
         if (kept != null) {
           final all = await _archived();
           if (all.remove(next.acct) != null) await keys.writeDeviceLogArchive(all);
@@ -1298,6 +1390,7 @@ class ViewerDeviceLog {
     // The newest hashes let a peer that finds the logs forked say where they split.
     final from = max(0, state.hashes.length - _gossipHashes);
     return {
+      'acct': state.acct,
       'head': state.head.toJson(),
       'frozen': file.frozen != null,
       'hashes': [
@@ -1315,6 +1408,9 @@ class ViewerDeviceLog {
     // A sign-in waiting for its first read: the file may be the account left behind, and a machine of
     // the new one would freeze it as a fork. Nothing is judged until the log is this sign-in's.
     if (!await _ownsFile(file)) return;
+    // Another account's log (a machine still signed in to it): nothing in it says anything about this
+    // one. A machine too old to say which account is heard as before.
+    if (raw['acct'] != null && raw['acct'] != state.acct) return;
     _frozenPeers[machinePub] = raw['frozen'] == true;
     final theirs = DevLogHead.fromJson(raw['head']);
     if (theirs == null) return;
@@ -1541,6 +1637,7 @@ class ViewerDeviceLog {
       ],
       baselineSeen: file.baselineSeen,
       departed: file.departed,
+      registerError: _registerError,
     );
   }
 }

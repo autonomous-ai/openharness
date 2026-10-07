@@ -180,6 +180,9 @@ describe('login --force beside a start that lands mid-sign-in', () => {
             return { data: { machine: { machineId: 'm_new' } } }
           }
           return { status: 503, error: 'no daemon in this test' }
+        case '/api/auth/me':
+          // Asked under the token the sign-in just got: the account the new session was made to.
+          return req.headers.authorization === 'Bearer tok_new' ? { data: { user: { id: 'acct_new' } } } : { data: { user: { id: 'acct_old' } } }
         default:
           return { status: 404, error: 'not stubbed' }
       }
@@ -213,6 +216,6 @@ describe('login --force beside a start that lands mid-sign-in', () => {
       .map((line) => JSON.parse(line) as { type: string }).filter((line) => line.type === 'result')
     expect(results).toEqual([expect.objectContaining({ type: 'result', status: 'success' })])
     expect(JSON.parse(readFileSync(join(root, 'auth', 'session.json'), 'utf8')))
-      .toMatchObject({ accessToken: 'tok_new', machineId: 'm_new', signInEpoch: expect.stringMatching(/^[0-9a-f]{32}@\d+$/) })
+      .toMatchObject({ accessToken: 'tok_new', machineId: 'm_new', signInEpoch: expect.stringMatching(/^[0-9a-f]{32}@\d+$/), signInAcct: 'acct_new' })
   }, 30_000)
 })
