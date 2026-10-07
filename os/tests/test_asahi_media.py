@@ -126,6 +126,7 @@ class Media(unittest.TestCase):
         self.assertEqual(live.get('hybridpersistent'), 'false')
         self.assertNotIn('rd.live.overlay.persistent', live.get('kernelcmdline'))
         self.assertEqual(recipe.findtext('preferences/rpm-check-signatures'), 'true')
+        self.assertEqual(recipe.findtext('preferences/locale'), 'C.UTF-8')
         selected = {p.get('name') for p in recipe.findall('packages/package')}
         self.assertTrue({'dracut-kiwi-live', 'cryptsetup', 'rsync', 'grub2-efi-aa64-cdboot'} <= selected)
         self.assertFalse(selected & {'harness-os-session', 'greetd', 'chromium', 'initial-setup'})

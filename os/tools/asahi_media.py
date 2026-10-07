@@ -19,7 +19,7 @@ PACKAGES = (
     'fedora-release', 'systemd', 'systemd-udev', 'dbus', 'bash', 'python3',
     'util-linux', 'cryptsetup', 'btrfs-progs', 'e2fsprogs', 'dosfstools', 'gdisk',
     'rsync', 'policycoreutils', 'selinux-policy-targeted', 'kbd', 'ncurses-base',
-    'glibc-minimal-langpack', 'dracut-kiwi-live', 'grub2-efi-aa64-cdboot',
+    'glibc-minimal-langpack', 'shadow-utils', 'dracut-kiwi-live', 'grub2-efi-aa64-cdboot',
     'asahi-platform-metapackage-core', 'asahi-repos', 'tiny-dfr',
 )
 
@@ -59,6 +59,12 @@ def live_recipe(description):
     root.set('name', 'Harness-Asahi-Installer')
     root.set('displayname', 'Harness')
     root.find('description/specification').text = 'Private Harness offline installation media'
+    # C.UTF-8 is supplied by glibc-minimal-langpack and supports the terminal
+    # wordmark without pulling every language into the installation environment.
+    locale = root.find('preferences/locale')
+    if locale is None:
+        locale = ET.SubElement(root.find('preferences'), 'locale')
+    locale.text = 'C.UTF-8'
     keep = {'this://./repositories/core.xml', 'this://./repositories/asahi.xml', 'this://./components/boot.xml'}
     for node in list(root.findall('include')):
         if node.get('from') not in keep:

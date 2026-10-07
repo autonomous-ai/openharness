@@ -9,7 +9,7 @@ test -f /usr/share/harness-installer/payload.raw
 printf 'uninitialized\n' > /etc/machine-id
 printf 'harness\n' > /etc/hostname
 rm -f /var/lib/systemd/random-seed /etc/ssh/ssh_host_*_key /etc/reconfigSys
-passwd -l root
+usermod -L root
 
 # Removable media must not maintain the internal Asahi ESP or initialize an
 # installed OS. Firmware loading in dracut-asahi remains upstream-owned.
