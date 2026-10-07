@@ -521,7 +521,8 @@ def check_first_use(vm, user, folder, installed=False):
     version, _ = vm.command(user('/usr/bin/opencode --version'))
     (folder / 'bundled-opencode-version.txt').write_text(version)
     defaults = json.loads(vm.read_file('/home/me/.config/opencode/opencode.json'))
-    assert not set(defaults) & {'model', 'provider', 'providers'}, 'The image must retain upstream model and provider defaults'
+    assert defaults.get('model') == 'opencode/muse-spark-1.3-contributor-free', 'The image must start on the pinned free model'
+    assert not set(defaults) & {'provider', 'providers'}, 'The image must retain upstream provider defaults'
     assert defaults.get('update') == 'disable', 'The packaged agent must remain managed by system updates'
     if installed:
         vm.command('test ! -e /etc/harness-live && test "$(id -un)" = me')
