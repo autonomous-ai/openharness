@@ -1,10 +1,32 @@
+import { execFileSync } from 'node:child_process'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { env } from '../config/env.js'
 import { HANDOFF_REQUESTS, type CoreApi } from '../core/api.js'
 import { databaseHistory } from '../lib/databaseHistory.js'
+import { startHandoff } from './handoff.js'
 import { handoffCoreApi, runHandoffService } from './handoffProcess.js'
 import { runServiceProcess, type ServiceProcessOptions } from './process.js'
 
 vi.mock('./process.js', () => ({ runServiceProcess: vi.fn(() => ({ stop: vi.fn() })) }))
+// The SQLite binding, faked: an OpenCode store with one turn in it, and a count of the times it was loaded.
+const binding = vi.hoisted(() => ({ loads: 0, reads: [] as Array<{ path: string; sql: string; params: unknown[] }> }))
+vi.mock('../lib/sqliteBuiltin.js', () => {
+  binding.loads++
+  const part = (type: string, text: string) => JSON.stringify({ type, text })
+  return {
+    builtinSqlite: () => class {},
+    readBuiltin: (_database: unknown, path: string, sql: string, params: unknown[]) => {
+      binding.reads.push({ path, sql, params })
+      return { ok: true, via: 'builtin', rows: [
+        { mid: 'msg_1', mtc: 1, mdata: JSON.stringify({ role: 'user' }), pid: 'prt_1', pdata: part('text', 'add a login page') },
+        { mid: 'msg_2', mtc: 2, mdata: JSON.stringify({ role: 'assistant' }), pid: 'prt_2', pdata: part('text', 'Added the login page.') },
+      ] }
+    },
+  }
+})
 afterEach(() => vi.clearAllMocks())
 
 describe('the handoff in the edge host', () => {
@@ -75,5 +97,33 @@ describe('the handoff in the edge host', () => {
     expect(stop).toHaveBeenCalledOnce()
     runHandoffService({ dataDir: '/data', socketPath: '/data/daemon-1.sock', machineId: 'm', token: 't' })
     expect(Object.keys(vi.mocked(runServiceProcess).mock.calls.at(-1)![0].requests)).toEqual([...HANDOFF_REQUESTS])
+  })
+
+  it('loads the SQLite binding only for an engine that keeps its conversation in a store, and hands that one over', async () => {
+    const ws = mkdtempSync(join(tmpdir(), 'handoff-store-'))
+    try {
+      execFileSync('git', ['init', '-q'], { cwd: ws })
+      const agents: Record<string, Record<string, unknown>> = {
+        claude: { agentId: 'claude-1', sessionId: 's1', engine: 'claude', cwd: ws, transcriptPath: null, registeredAt: Date.now() - 60_000 },
+        opencode: { agentId: 'opencode-1', sessionId: 'ses_handoff1', engine: 'opencode', cwd: ws, transcriptPath: null, registeredAt: Date.now() - 60_000 },
+      }
+      const core = handoffCoreApi('/data', async (query, payload) => ({
+        value: query === 'resolve' ? Object.values(agents).find((agent) => agent.agentId === payload.id) ?? null
+          : query === 'recentAsks' || query === 'recaps' ? [] : null,
+      }))
+      // Claude Code and Codex keep a transcript file: nothing to read from a store, and the binding stays out.
+      expect(core.transcripts.databaseHistory(agents.claude as never)).toBeUndefined()
+      expect(core.transcripts.databaseHistory({ ...agents.claude, engine: 'codex' } as never)).toBeUndefined()
+      const prepare = startHandoff(core).agent_handoff_prepare!
+      const asker = { local: true, owner: true }
+      await prepare({ agentId: 'claude-1', changeId: 'c'.repeat(32), targetEngine: 'codex' }, asker)
+      expect(binding.loads).toBe(0)
+      // OpenCode: read through the binding, loaded for that read, and the turn it holds handed over.
+      const handed = await prepare({ agentId: 'opencode-1', changeId: 'a'.repeat(32), targetEngine: 'claude' }, asker) as { file: string | null }
+      expect(binding.loads).toBe(1)
+      expect(binding.reads).toEqual([{ path: join(env.OPENCODE_DATA_DIR, 'opencode.db'), sql: expect.stringContaining('FROM message m'), params: ['ses_handoff1'] }])
+      expect(handed.file).toEqual(expect.any(String))
+      expect(readFileSync(join(ws, handed.file!), 'utf8')).toContain('add a login page')
+    } finally { rmSync(ws, { recursive: true, force: true }) }
   })
 })

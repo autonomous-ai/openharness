@@ -6,7 +6,7 @@ import { cursorConfigDir, cursorDataDir } from './home.js'
 import { CursorTranscriptDiscovery } from './discovery.js'
 import { loadCursorReplayTaskLinks } from './subagent.js'
 import { cleanupCursorOneShotSession } from '../../lib/oneshot.js'
-import { builtinSqlite } from '../../lib/sqliteRead.js'
+import { builtinSqlite } from '../../lib/sqliteBuiltin.js'
 
 const parent = 'aaaaaaaa-1111-4222-8333-444444444444'
 const child = 'bbbbbbbb-1111-4222-8333-444444444444'
