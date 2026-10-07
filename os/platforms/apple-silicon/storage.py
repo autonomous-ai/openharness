@@ -270,6 +270,16 @@ def mountpoint(source, destination):
     shutil.copystat(source, destination)
 
 
+def copy_root(source, destination):
+    # The kernel supplies runtime filesystems on boot. Copying the image's
+    # temporary /dev nodes also tries to remove their SELinux labels, which an
+    # enforcing installer correctly refuses. Keep only the mount directories.
+    separate = ('boot', 'home', 'dev', 'proc', 'sys', 'run')
+    for name in separate:
+        mountpoint(source / name, destination / name)
+    copy_tree(source, destination, excludes=tuple('/' + name + '/***' for name in separate))
+
+
 def install(plan_path, payload, password, progress=None):
     """Enroll unique encrypted storage, then resume only its unfinished OS copy."""
     if not isinstance(password, str) or not password or any(c in password for c in '\0\n\r'):
@@ -317,11 +327,8 @@ def install(plan_path, payload, password, progress=None):
                 advance(path, state, 'filesystems')
                 advance(path, state, 'copying')
                 report('Copying Harness…')
-                # Mountpoints remain present even when rsync excludes their contents.
-                for name in ('boot', 'home'):
-                    mountpoint(payload.root / name, top / 'root' / name)
+                copy_root(payload.root, top / 'root')
                 mountpoint(payload.boot / 'efi', boot_path / 'efi')
-                copy_tree(payload.root, top / 'root', excludes=('/boot/***', '/home/***'))
                 copy_tree(payload.home, top / 'home')
                 copy_tree(payload.boot, boot_path, excludes=('/efi/***',))
                 run('sync', '-f', top)

@@ -37,6 +37,13 @@ def inspect():
             result['remaining'] = ui.target.remaining(plan, ui.target.read_table(fixture.DISK))
             for name in ('storage', 'startup'):
                 result[name] = json.loads(fixture.PLAN.with_name(name + '.json').read_text())
+            with ui.storage.encrypted_root('/dev/vdb6', result['storage'], b'firstboot-local-42') as device:
+                with ui.storage.work_directory() as work:
+                    with ui.storage.mounted(device, work / 'root', 'ro,rescue=nologreplay,subvol=root') as root:
+                        result['runtime_mountpoints'] = {
+                            name: sorted(p.name for p in (root / name).iterdir())
+                            for name in ('dev', 'proc', 'sys', 'run')}
+                        assert all(not entries for entries in result['runtime_mountpoints'].values())
         Path('/var/tmp/harness-install-inspection.json').write_text(json.dumps(result, indent=2) + '\n')
     finally:
         fixture.run('umount', fixture.ROOT)
