@@ -34,6 +34,34 @@ pub struct Items {
     pub folder: Option<String>,
     /// Canonical computer for the draft, including an implicit current computer.
     pub machine: Option<String>,
+    /// How the TUI looks now; every reply says it, `unchanged` ones too.
+    pub look: Option<Look>,
+}
+/// The TUI's look, for the picker to draw in: `#rrggbb` colours (empty: the terminal's own), the
+/// accent as `@hn-accent` takes it, and `lists` = "fzf" when the user chose fzf-styled lists.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Look { pub background: String, pub foreground: String, pub accent: String, pub lists: String }
+
+/// `look.lists` = "fzf": the composer keeps the fzf frame (the user's `@hn-lists fzf`, or fzf
+/// options of their own in the TUI's environment).
+static LISTS_FZF: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Draw with [look] from now on, through the setters the TUI's own chrome uses. True when
+/// anything changed.
+pub fn apply_look(look: &Look) -> bool {
+    let colours=(!look.background.is_empty() && !look.foreground.is_empty()).then(||(look.background.clone(),look.foreground.clone()));
+    let before=crate::term_out::accent_override();
+    let mut changed=crate::term_out::set_theme_colours(colours);
+    crate::term_out::set_accent_override((!look.accent.is_empty()).then(||look.accent.clone()));
+    changed|=crate::term_out::accent_override()!=before;
+    changed|=LISTS_FZF.swap(look.lists=="fzf",std::sync::atomic::Ordering::Relaxed)!=(look.lists=="fzf");
+    changed
+}
+
+/// The look the TUI exported as `HN_LOOK` into this shell, for the first frame. True when it applied.
+fn apply_env_look(json:Option<&str>)->bool {
+    json.and_then(|j|serde_json::from_str::<Look>(j).ok()).is_some_and(|look|{apply_look(&look);true})
 }
 impl Items {
     pub fn from_picker(picker: &Picker) -> Self {
@@ -525,6 +553,7 @@ pub fn run(args:&[String])->io::Result<i32> {
     let composing=source=="compose";
     let unified=source=="choose";
     if uuid::Uuid::parse_str(&std::env::var("_HN_CONTEXT").unwrap_or_default()).is_err() {return Err(io::Error::other("Open this picker from a Harness shell."))}
+    apply_env_look(std::env::var("HN_LOOK").ok().as_deref());
     let mut picker=Picker::new("","");
     picker.query=if automatic {draft.as_ref().unwrap().initial()} else if source=="compose" {String::new()} else {clean(args.get(1).map(String::as_str).unwrap_or("")).chars().take(128).collect()};picker.qend();
     let unified=unified || source=="compose";
@@ -588,6 +617,14 @@ pub fn run(args:&[String])->io::Result<i32> {
             } else if let Some(mut value)=polled? {
                 failures=0;
                 if failure.take().is_some() {dirty=true;}
+                // Before `unchanged`: a theme change does not change a catalog's revision.
+                if let Some(look)=&value.look {
+                    let panel=panel_now(&theme::default_opts());
+                    if apply_look(look) {
+                        dirty=true;
+                        if composing && panel!=panel_now(&theme::default_opts()) {compose_scope(&mut picker,kind);}
+                    }
+                }
                 if !value.unchanged {
                     // Older preview servers omit this optional field. The request
                     // still supplies the exact id; never associate it with today's cursor.
@@ -735,12 +772,14 @@ fn composer_kind(query:&str,agents:bool)->&'static str {
 }
 /// Whether the composer takes the command panel's look: it does unless the user drew their lists
 /// themselves with `--layout`/`--border`/`--info`/`--color` (or their short forms) in their fzf
-/// options. (Task 3 adds the TUI's `@hn-lists fzf` here, from the reply's `look.lists`.)
-fn composer_panel(opts:&[String])->bool {
+/// options.
+pub(crate) fn composer_panel(opts:&[String])->bool {
     const OWN:[&str;10]=["--layout","--reverse","+r","--border","--no-border","--info","--inline-info","--no-info","--color","--style"];
     !opts.iter().any(|v|OWN.contains(&v.split('=').next().unwrap_or(v)))
 }
-fn compose_scope(picker:&mut Picker,kind:&str) { compose_scope_with(picker,kind,composer_panel(&theme::default_opts())) }
+/// [composer_panel] for these options, and the TUI's look says the user did not choose fzf's lists.
+fn panel_now(opts:&[String])->bool { composer_panel(opts) && !LISTS_FZF.load(std::sync::atomic::Ordering::Relaxed) }
+fn compose_scope(picker:&mut Picker,kind:&str) { compose_scope_with(picker,kind,panel_now(&theme::default_opts())) }
 /// [compose_scope] with the look decided by the caller (`panel`), not by the environment.
 fn compose_scope_with(picker:&mut Picker,kind:&str,panel:bool) {
     picker.title=match kind {"agent"=>"Agent","host"=>"Computer","folder"=>"Project","model"=>"Model",_=>"Compose"}.into();
@@ -757,7 +796,54 @@ fn compose_scope_with(picker:&mut Picker,kind:&str,panel:bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ratatui::style::Modifier;
+    use ratatui::style::{Color,Modifier};
+    fn look(bg:&str,fg:&str,accent:&str,lists:&str)->Look {
+        Look{background:bg.into(),foreground:fg.into(),accent:accent.into(),lists:lists.into()}
+    }
+    fn reset_look() {
+        crate::term_out::set_theme_colours(None);crate::term_out::set_accent_override(None);apply_look(&look("","","",""));
+    }
+    #[test]
+    fn a_replys_look_changes_the_pickers_chrome() {
+        let _l=crate::term_out::colours_lock();
+        assert!(apply_look(&look("#ffffff","#111111","#ff0000","")));
+        assert_eq!(theme::accent(),Color::Rgb(255,0,0));
+        assert_eq!(crate::term_out::terminal_colours(),Some(("#ffffff".into(),"#111111".into())));
+        assert!(!apply_look(&look("#ffffff","#111111","#ff0000","")),"the same look changes nothing");
+        // An indexed accent is kept in the form `@hn-accent` takes.
+        assert!(apply_look(&look("#ffffff","#111111","colour33","")));
+        assert_eq!(theme::accent(),Color::Indexed(33));
+        // No colours in the look: the picker is back to the terminal's own.
+        assert!(apply_look(&look("","","","")));
+        assert_eq!(crate::term_out::accent_override(),None);
+        assert!(!crate::term_out::theme_chosen());
+        reset_look();
+    }
+    #[test]
+    fn the_looks_lists_decide_whether_the_composer_keeps_the_fzf_frame() {
+        let _l=crate::term_out::colours_lock();
+        assert!(panel_now(&[]));
+        assert!(apply_look(&look("","","","fzf")));
+        assert!(!panel_now(&[]));
+        let mut picker=Picker::new("","");
+        compose_scope(&mut picker,"model");
+        assert!(!picker.shell_panel);
+        assert!(apply_look(&look("","","","")));
+        assert!(panel_now(&[]));
+        reset_look();
+    }
+    #[test]
+    fn the_first_frame_uses_the_look_the_tui_exported() {
+        let _l=crate::term_out::colours_lock();
+        let json=r##"{"background":"#101010","foreground":"#eeeeee","accent":"#00ff00","lists":"fzf"}"##;
+        assert!(apply_env_look(Some(json)));
+        assert_eq!(theme::accent(),Color::Rgb(0,255,0));
+        assert!(!panel_now(&[]));
+        reset_look();
+        assert!(!apply_env_look(Some("not json")),"a broken look is ignored");
+        assert!(!apply_env_look(None));
+        reset_look();
+    }
     #[test]
     fn machine_identity_preserves_folders_for_current_computer_and_aliases() {
         let row=Row::new("M2","M2").extra("local-id");

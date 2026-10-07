@@ -18,6 +18,7 @@ use crate::theme;
 static FZF_LISTS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 pub fn set_fzf_lists(on: bool) { FZF_LISTS.store(on, std::sync::atomic::Ordering::Relaxed) }
+pub fn fzf_lists() -> bool { FZF_LISTS.load(std::sync::atomic::Ordering::Relaxed) }
 
 /// The lists drawn as this panel rather than as fzf's full-screen list: every one, unless
 /// `@hn-lists fzf` asks for fzf's.
