@@ -186,8 +186,18 @@ pub fn tmux_defaults() -> &'static BTreeMap<String, String> {
             let (_, name, value) = (it.next(), it.next().unwrap_or(""), it.next().unwrap_or(""));
             if !name.is_empty() { m.insert(name.to_string(), unescape(value)); }
         }
+        // tmux computes this one when it starts (options-table.c, then server's $SHELL): the
+        // fixture's `/bin/zsh` is the Mac it was captured on. A command window runs as
+        // `default-shell -c`, and on a Linux without zsh (Harness OS) the OS welcome died at once
+        // (`Pane is dead (status 1)`) instead of showing Wi-Fi.
+        m.insert("default-shell".into(), default_shell(std::env::var("SHELL").ok().as_deref()));
         m
     })
+}
+
+/// tmux's default-shell: $SHELL when it is a suitable shell, else /bin/sh (_PATH_BSHELL).
+fn default_shell(env: Option<&str>) -> String {
+    env.filter(|s| suitable_shell(s)).unwrap_or("/bin/sh").to_string()
 }
 
 /// Explicit user styles win; default surfaces follow the terminal's current theme. Only the
@@ -655,6 +665,17 @@ pub fn unescape(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The default shell is this computer's, as tmux's is, never the fixture's Mac `/bin/zsh`.
+    #[test]
+    fn the_default_shell_is_the_users_or_sh() {
+        assert_eq!(default_shell(Some("/bin/sh")), "/bin/sh");
+        assert_eq!(default_shell(Some("/nonexistent/zsh")), "/bin/sh");
+        assert_eq!(default_shell(Some("zsh")), "/bin/sh", "not a full path");
+        assert_eq!(default_shell(None), "/bin/sh");
+        let expected = default_shell(std::env::var("SHELL").ok().as_deref());
+        assert_eq!(tmux_defaults()["default-shell"], expected);
+    }
 
     /// Every `#{` of a tab's status text is closed: one short, and the harness icon after a tab's
     /// name (working, waiting on you) was never drawn.
