@@ -8,8 +8,10 @@
  * test cannot register anything with this machine's launchd or systemd, or stop the person's daemon.
  */
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { basename, join, resolve } from 'node:path'
+import { runInNewContext } from 'node:vm'
 
 export interface FakePlatformState {
   /** launchd: the user's GUI domain exists (someone is logged in at the screen). */
@@ -43,6 +45,20 @@ export interface FakePlatform {
   calls(): string[][]
   state(): FakePlatformState
   set(change: Partial<FakePlatformState>): void
+  /**
+   * The same fakes, run in this process instead of as one: `PlatformDeps.run` for a test that is about
+   * what harness does with launchd or systemd, not about how it starts their commands. Each call as a
+   * process costs a node start, and on macOS the first run of a freshly written executable waits on the
+   * system's check of it: 220 ms at a load of 100, 600 ms with 12 busy loops more, against 16 ms for one
+   * already run (2026-10-06). A test makes three such files and up to ten calls, and serviceCommand.spec.ts
+   * timed out 12 times in one loaded unit run.
+   */
+  run(command: string, args: string[]): { status: number | null; stdout: string; stderr: string; error?: string }
+}
+
+/** What `process.exit` throws inside an in-process run, so the script stops where it would have. */
+class FakeExit {
+  constructor(readonly status: number) {}
 }
 
 const DEFAULTS: FakePlatformState = {
@@ -153,5 +169,27 @@ export function fakePlatform(bin: string, initial: Partial<FakePlatformState> = 
     calls: () => existsSync(callsFile) ? readFileSync(callsFile, 'utf8').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line) as string[]) : [],
     state: () => JSON.parse(readFileSync(stateFile, 'utf8')) as FakePlatformState,
     set: (change) => writeFileSync(stateFile, JSON.stringify({ ...(JSON.parse(readFileSync(stateFile, 'utf8')) as FakePlatformState), ...change })),
+    run: (command, args) => {
+      // As a PATH of this folder alone: anything not faked is not found, never the real command.
+      if (!['launchctl', 'systemctl', 'loginctl'].includes(basename(command)) || command !== basename(command)) {
+        return { status: null, stdout: '', stderr: '', error: `spawnSync ${command} ENOENT` }
+      }
+      let stdout = ''
+      let stderr = ''
+      const fakeProcess = {
+        argv: [process.execPath, join(bin, command), ...args],
+        stdout: { write: (text: string) => { stdout += text; return true } },
+        stderr: { write: (text: string) => { stderr += text; return true } },
+        exit: (status: number) => { throw new FakeExit(status) },
+        kill: (pid: number, signal: NodeJS.Signals) => process.kill(pid, signal),
+      }
+      try {
+        runInNewContext(SCRIPT, { require: createRequire(import.meta.url), process: fakeProcess })
+      } catch (error) {
+        if (error instanceof FakeExit) return { status: error.status, stdout, stderr }
+        throw error
+      }
+      return { status: 0, stdout, stderr }
+    },
   }
 }

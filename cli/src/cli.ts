@@ -26,7 +26,8 @@ import { createInterface, emitKeypressEvents } from 'readline'
 import { homedir, hostname } from 'os'
 import { env } from './config/env.js'
 import { VERSION } from './version.js'
-import { runCore, runCoreInForeground } from './core/main.js'
+import { runCoreInForeground } from './core/main.js'
+import { startCoreProcess } from './coreProcess.js'
 import { GRID_MINT_TIMEOUT_MS, backendHttpBase, requestJson, postJson, controlPlaneAuth } from './lib/controlPlane.js'
 import { LEGACY_LOG_FILE, MACHINE_NAME_FILE, tildify, computerId, thisDeviceLabel, DAEMON_LOG_FILE, HARNESSD_STATUS_FILE, daemonPort, isAlive, isDaemonRunning, readPid } from './lib/daemonState.js'
 import { onError, BIND_WAIT_MS, connectFailure, defaultLaunchDeps, waitForBind } from './lib/daemonLaunch.js'
@@ -64,9 +65,9 @@ import { gridSetupCommand } from './lib/gridSetupCommand.js'
 import { WebSocket as NewCommandSocket } from 'ws'
 import { describeMasterStatus, readStatusFile } from './harnessd/master.js'
 import { namedNode } from './harnessd/processName.js'
-import { probeThisMaster, startMaster } from './masterProcess.js'
+import { probeThisMaster, startMaster, startMasterInForeground } from './masterProcess.js'
 import { startServiceProcess } from './serviceProcess.js'
-import { isLocalSocketName } from './lib/localSocket.js'
+import { isLocalSocketName, localSocketPath, refuseServedDataFolder } from './lib/localSocket.js'
 import { legacyDaemonStatus, localDaemonStatus } from './lib/daemonEndpoint.js'
 import { runAutonomousDeviceCommand } from './lib/autonomous-device/command.js'
 import { E2eeStore, identitySpent, peekIdentityPub } from './lib/e2ee/store.js'
@@ -80,7 +81,8 @@ import { TrustGroupStore } from './lib/e2ee/trustGroup.js'
 import { confirm as confirmUpdate, fetchManifest, downloadVerified, canary, stage, semverGt, isLocalDevBuild, type UpdateEntry } from './lib/selfUpdate.js'
 import { managedNodePath } from './lib/nodeRuntime.js'
 import { updateManagedTui } from './tui/manage.js'
-import { ensureHnLauncher, ensureLauncher, ensureManagedGrid, ensureManagedRuntime } from './lib/runtimeInstall.js'
+import { ensureHnLauncher, ensureLauncher } from './lib/launchers.js'
+import { ensureManagedGrid, ensureManagedRuntime } from './lib/runtimeInstall.js'
 // Before ANY child is spawned: on Linux an absent locale makes tmux and ps mangle their output,
 // which silently costs the daemon every pane it would have discovered. See lib/childLocale.ts.
 ensureUtf8Locale()
@@ -109,7 +111,8 @@ Machine:
   harness login --entry-point=desktop   record which surface started the sign-in (GUI clients; default cli)
   harness auth status --json   print {loggedIn,...} for this computer's saved session
   harness start                start the adapter using the saved SSO session
-  harness start -f             run the adapter in the FOREGROUND (for a supervisor; logs to stdout)
+  harness start -f             run the daemon in the FOREGROUND (for a supervisor; logs to stdout): harnessd's
+                               master, as launchd and systemd run it, its core and services its children
   harness start --device-dump[=<file>]
                                record every frame to/from the paired Autonomous device, decrypted, as
                                JSON lines (default ~/.harness/logs/device-dump-<time>.jsonl). Contains
@@ -1175,7 +1178,7 @@ async function restartDaemonForIdentity(stoppedDaemon = false): Promise<void> {
  * `VERSION` is a constant baked into whichever bundle is doing the printing, and that is not always the
  * one running: `harness update` downloads a new build, spawns it, and then prints this block — all from
  * the OLD process — so the block announced the version it was replacing (`✓ installed v0.0.22` followed
- * by `version v0.0.20`). Every other row here is a fact about the daemon (pid, sessions, dashboard); this
+ * by `version v0.0.20`). Every other row here is a fact about the daemon (pid, sessions, local api); this
  * makes the version one too. Falls back to the local constant when the daemon cannot be reached, which is
  * exactly the case where the printing process IS the only build there is.
  *
@@ -1250,7 +1253,9 @@ function printInfoBlock(opts: {
   if (opts.supervisor) console.log(row('supervisor', opts.supervisor))
   console.log(row('logs', tildify(LOG_FILE)))
   console.log(row('dial log', tildify(join(env.HARNESS_LOGS_DIR, 'dial-YYYYMMDD.log'))))
-  console.log(row('dashboard', `http://127.0.0.1:${daemonPort()}`))
+  // The daemon's loopback API, which scripts read (`/api/status`). It was the web dashboard's address
+  // until that page went: nothing opened it.
+  console.log(row('local api', `http://127.0.0.1:${daemonPort()}`))
   console.log(rule)
   console.log('  running in background · stop with: harness stop')
   console.log('')
@@ -1291,7 +1296,19 @@ async function launch(foreground: boolean, repair: boolean = false): Promise<voi
     const repaired = await repairManagedRuntimes(foreground)
     if (repaired) runtimeNode = repaired
   }
-  // Foreground mode (supervisor) OR dev/tsx (can't cleanly spawn a .ts detached) → run inline.
+  // Foreground mode (a supervisor: launchd, systemd, a terminal) → harnessd's master in this process, as
+  // launchd and systemd run it, the core its child. The core ran here on its own before, and a core with no
+  // master must hand each update over itself (core/updateHandoff.ts). HARNESS_NO_MASTER=1 still runs the
+  // core here alone, as `harness start` then spawns it.
+  if (foreground && process.env.HARNESS_NO_MASTER !== '1') {
+    // Beside a daemon that serves this data folder, leave at once and say so, as its core would have:
+    // the master would start its services and a core only to see the core refused, and end with 0.
+    await refuseServedDataFolder(localSocketPath(env.ADAPTER_DATA_DIR, env.PORT))
+    startMasterInForeground(SCRIPT_PATH)
+    return
+  }
+  // …and a dev/tsx run (a .ts is not spawned detached): the core inline, on its own. A repo run never updates
+  // itself (runForeground), so it has no update to hand over.
   if (foreground || SCRIPT_PATH.endsWith('.ts')) {
     if (!foreground) console.log('[cli] dev mode — running in the foreground (Ctrl-C to stop)')
     await runCoreInForeground(session, SCRIPT_PATH)
@@ -1479,7 +1496,7 @@ async function daemonCall(method: 'GET' | 'POST', path: string, body?: unknown):
   const url = `http://127.0.0.1:${daemonPort()}${path}`
   let res: Response
   try {
-    const headers: Record<string, string> = { 'x-adapter-local': '1' } // passes the dashboard CSRF gate
+    const headers: Record<string, string> = { 'x-adapter-local': '1' } // passes the local API's CSRF gate
     if (body) headers['content-type'] = 'application/json'
     res = await fetch(url, { method, headers, body: body ? JSON.stringify(body) : undefined })
   } catch {
@@ -2429,7 +2446,8 @@ switch (cmd) {
     void startServiceProcess(rest[0])
     break
   case '__run': // internal: the detached daemon child reads the durable SSO session — or runs without one
-    runCore(SCRIPT_PATH)
+    // From the sources: cli.js and the lean bundle start it in coreProcess.ts without loading this file.
+    startCoreProcess(SCRIPT_PATH)
     break
   case 'autonomous-device':
     runAutonomousDeviceCommand(rest, env.ADAPTER_DATA_DIR, daemonPort()).then(code => { process.exitCode = code }).catch(onError)

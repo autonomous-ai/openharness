@@ -4,6 +4,12 @@
  * verdict file its scripts write. Both are keyed on the agent, attached wherever an agent with a
  * `dsh` comes into being (create, restore, discovery) and detached where it is forgotten.
  *
+ * It also serves those viewers to a client that cannot reach this machine's loopback (the phone, the web,
+ * a window on another of the owner's machines): a viewer's pages streamed over the client's own connection
+ * (lib/viewerForwarder.ts), and frames of it rendered by a headless browser (lib/interactiveViewer.ts).
+ * They ran in the core's process until 6 October; here they run where the viewer servers they forward to
+ * do, and whatever they cost (a stalled stream, a browser per surface) is the viewers' alone.
+ *
  * A service on the core boundary (docs/design/2026-10-03-harnessd.md, step 13): it reads the core
  * only through `CoreApi`, and the core reaches it only through `ports.viewers`.
  */
@@ -16,8 +22,39 @@ import { DshVerdictWatcher, type DshVerdict } from '../dsh/verdict.js'
 import { DshViewerManager } from '../dsh/viewer.js'
 import { ViewerLedger } from '../dsh/viewerLedger.js'
 import type { AgentDshContext } from '../lib/agentFrame.js'
+import { InteractiveViewers } from '../lib/interactiveViewer.js'
 import { sid } from '../lib/log.js'
 import type { RegisteredSession } from '../lib/registry.js'
+import { ViewerForwarder } from '../lib/viewerForwarder.js'
+
+/** This machine's viewers, served to clients over their connections: what `ViewersPort` names `stream`,
+ *  `surface` and `closed`, and what follows a viewer that moved or stopped (`refresh`). */
+export function serveViewers(
+  /** Where an agent's viewer is served now, or null. */
+  target: (agentId: string) => string | null,
+  /** A stream's frame to the one connection that opened it (`CoreApi.clients.viewerFrame`). */
+  send: (connId: string, type: string, payload: Record<string, unknown>) => boolean,
+) {
+  const forwarder = new ViewerForwarder({ target, send })
+  const surfaces = new InteractiveViewers(target)
+  return {
+    stream: (connId: string, type: string, payload: Record<string, unknown>): boolean => {
+      forwarder.handle(connId, type, payload)
+      return true
+    },
+    surface: (connId: string, payload: Record<string, unknown>) => surfaces.request(connId, payload),
+    closed: (connId?: string): void => {
+      if (connId === undefined) { forwarder.closeAll(); surfaces.closeAll(); return }
+      forwarder.closeConnection(connId)
+      surfaces.closeConnection(connId)
+    },
+    /** Before another process can take the old viewer's port, nothing may still be forwarded to it. */
+    refresh: (agentId: string): void => {
+      forwarder.refresh(agentId)
+      surfaces.refresh(agentId)
+    },
+  }
+}
 
 export function startViewers(core: CoreApi, ports: CorePorts): void {
   const dshFrames = new Map<string, { viewerUrl: string | null; verdict: DshVerdict | null }>()
@@ -54,9 +91,11 @@ export function startViewers(core: CoreApi, ports: CorePorts): void {
   // restart. Only pids whose live start time matches what that daemon recorded are touched.
   const viewerLedger = new ViewerLedger({ log: (line) => console.log(line) })
   viewerLedger.reapOrphans()
+  const served = serveViewers((agentId) => dshViewers.forwardingUrl(agentId), (connId, type, payload) => core.clients.viewerFrame(connId, type, payload))
   const dshViewers = new DshViewerManager({
     onUrl: (agentId, url) => {
       dshFrameFor(agentId).viewerUrl = url
+      served.refresh(agentId)
       core.clients.viewerChanged(agentId)
       syncCompanion(agentId)
     },
@@ -103,8 +142,12 @@ export function startViewers(core: CoreApi, ports: CorePorts): void {
     forwardingUrl: (agentId) => dshViewers.forwardingUrl(agentId),
     // The next daemon starts its own viewers for the agents it restores; these must not hold the ports.
     stop: async () => {
+      served.closed()
       await dshViewers.stopAll()
       await dshVerdicts.stop()
     },
+    stream: served.stream,
+    surface: served.surface,
+    closed: served.closed,
   }
 }

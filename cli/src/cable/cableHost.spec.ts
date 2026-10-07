@@ -3,21 +3,17 @@ import { describe, expect, it, vi } from 'vitest'
 
 import { DaemonCableHost, cableEventFor, type CableHostWiring } from './cableHost.js'
 import type { FleetMachine, MachineFleet } from './machineFleet.js'
-import type { FleetRouting } from '../core/api.js'
+import type { FleetRouting } from '../services/fleet.js'
 import { ServiceUnavailableError } from '../core/serviceHost.js'
+import type { RegisteredSession } from '../lib/registry.js'
 
 const AGENTS: Array<{ agentId: string; registeredAt: number; active: boolean; terminalAvailable: boolean; engine: string }> = []
-vi.mock('../lib/registry.js', () => ({
-  registry: {
-    list: () => AGENTS,
-    active: () => AGENTS.filter((a) => a.active),
-    advertised: () => AGENTS.filter((a) => a.terminalAvailable),
-  },
-  projectDisplayName: (s: { agentId: string }) => s.agentId,
-}))
 
 function wiring(over: Partial<CableHostWiring> = {}): CableHostWiring {
   return {
+    // The core's advertised agents and their names: what the router this host keeps for itself reads.
+    sessions: () => AGENTS.filter((a) => a.terminalAvailable) as unknown as RegisteredSession[],
+    displayName: (s) => s.agentId,
     machineName: () => 'MacbookPro.local',
     machineId: () => 'mine',
     computerId: () => 'abc-123',

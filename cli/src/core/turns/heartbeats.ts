@@ -6,7 +6,7 @@
  * Moved verbatim out of `runForeground` (the core boundary, step 7: docs/design/2026-10-03-harnessd.md).
  */
 import { correlateAgentEvent, turnHeartbeatFrame } from '../../lib/agentEvent.js'
-import type { CommanderMirror } from '../../lib/commander.js'
+import type { TurnRecaps } from './recaps.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import type { RuntimeActivityReader } from '../../lib/runtimeActivity.js'
 import type { TurnActivity } from '../../lib/turnActivity.js'
@@ -17,7 +17,7 @@ export interface HeartbeatDeps {
   agentIdFor: (sessionId: string) => string
   runtimeActivity: Pick<RuntimeActivityReader, 'forget'>
   turnActivity: Pick<TurnActivity, 'check' | 'snapshot' | 'forget'>
-  mirror: Pick<CommanderMirror, 'heartbeat'>
+  mirror: Pick<TurnRecaps, 'heartbeat'>
   /** The app. */
   clients: { send(frame: ReturnType<typeof correlateAgentEvent>): void }
 }

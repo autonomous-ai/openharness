@@ -7,7 +7,7 @@
  * served only when Host names this server, and a browser request only when its Origin is that name too.
  *
  * Every native caller (the desktop app, the CLI, engine hooks, store agents) sends a loopback Host and
- * no Origin; the dashboard sends its own loopback origin. Nothing legitimate is refused.
+ * no Origin; a page the daemon served would send its own loopback origin. Nothing legitimate is refused.
  */
 import type { IncomingMessage } from 'http'
 

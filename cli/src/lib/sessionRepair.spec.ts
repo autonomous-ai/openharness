@@ -499,6 +499,47 @@ describe('session repair — Codex profiles', () => {
 })
 
 describe('session repair — a Codex process names its own rollout', () => {
+  it('reads the native child of the npm launcher, never another launcher or a nested tool', async () => {
+    const { codexProcessFiles } = await import('./sessionRepair.js')
+    const own = '/tmp/profile/sessions/rollout-own.jsonl'
+    const sibling = '/tmp/profile/sessions/rollout-sibling.jsonl'
+    const files = vi.fn(async (pid: number) => pid === 43 ? [own] : pid === 50 ? [sibling] : ['/dev/null'])
+    const rows = [
+      { pid: 42, parentPid: 1, executable: '/usr/bin/node', args: 'node /opt/codex/bin/codex.js' },
+      { pid: 43, parentPid: 42, executable: '/opt/vendor/codex', args: '/opt/vendor/codex' },
+      { pid: 50, parentPid: 1, executable: '/opt/vendor/codex', args: '/opt/vendor/codex' },
+      { pid: 51, parentPid: 43, executable: '/opt/vendor/codex', args: '/opt/vendor/codex' },
+    ]
+    await expect(codexProcessFiles(42, files, async () => rows)).resolves.toEqual(['/dev/null', own])
+    expect(files.mock.calls.map(([pid]) => pid)).toEqual([42, 43])
+    // macOS's comm column can truncate the full Node path; argv still names the executable.
+    await expect(codexProcessFiles(42, files, async () => rows.map(row => row.pid === 42
+      ? { ...row, executable: '/Users/demo/.ha', args: '/Users/demo/.harness/node/bin/node /tmp/bin/codex' } : row)))
+      .resolves.toEqual(['/dev/null', own])
+    await expect(codexProcessFiles(42, files, async () => null)).resolves.toEqual(['/dev/null'])
+    await expect(codexProcessFiles(42, files, async () => [])).resolves.toEqual(['/dev/null'])
+    await expect(codexProcessFiles(42, files, async () => rows.filter(row => row.pid !== 43))).resolves.toEqual(['/dev/null'])
+    await expect(codexProcessFiles(42, files, async () => [...rows, { ...rows[1], pid: 44 }])).resolves.toEqual(['/dev/null'])
+    // A native process owns its file directly. No walk into the tools it launched.
+    const table = vi.fn(async () => rows)
+    await expect(codexProcessFiles(43, files, table)).resolves.toEqual([own])
+    expect(table).not.toHaveBeenCalled()
+    await expect(codexProcessFiles(51, files, table)).resolves.toEqual(['/dev/null'])
+  })
+
+  it('does not give a starting process the only sibling rollout before its own file opens', async () => {
+    const profile = tempRoot()
+    const sibling = 'a1b2c3d4-1111-4a4a-8a8a-000000000009'
+    writeCodexRollout(profile, sibling, CWD, Date.now())
+    vi.resetModules()
+    const { codexProcessSession, findLiveSession } = await import('./sessionRepair.js')
+    // October 6 full E2E: two Codex processes start together, but only one has written
+    // its rollout yet. This process holds neither: a directory match is not ownership.
+    await expect(codexProcessSession(process.pid, join(profile, 'sessions'), CWD)).resolves.toBeNull()
+    await expect(findLiveSession('codex', CWD, Date.now() - 1_000,
+      { codexHome: profile, bornOnly: true, pid: process.pid })).resolves.toBeNull()
+  })
+
   it('names a fork among its siblings by the rollout its process holds open, where a scan must refuse', async () => {
     const profile = tempRoot()
     const fork = 'a1b2c3d4-1111-4a4a-8a8a-000000000003'

@@ -72,6 +72,10 @@ describe('opening connected shells', () => {
     const d = w.machine.daemon
     onTestFailed(() => console.log(d.log().split('\n').slice(-100).join('\n')))
     const options = { backend: w.backend, machineId: w.machine.machineId, machinePub: w.machine.identity.pub, ...w.phone }
+    // The machine on the relay first, as a phone finds it: a hello sent before then reaches nobody, and the
+    // relay client here does not say it again (gatewayProcess.e2e.ts waits the same way). The services'
+    // processes start together, so the gateway's link can come up a moment after the core says it is ready.
+    await until('the machine to be on the relay', () => w.backend.nodeUp(w.machine.machineId) || null, 30_000)
     const phone = new RelayPhone(options); clients.push(phone); await phone.open()
     const witness = new RelayPhone(options); clients.push(witness); await witness.open()
     const fixture = shell(d)

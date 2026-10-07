@@ -1,11 +1,12 @@
 /**
  * Services in their own processes, for Claude Code and Codex, on the real daemon: harnessd's master runs
- * search beside the core (`HARNESSD_SERVICES=search`), and the edge host, one process for several light
- * services (`HARNESSD_SERVICES=edge`: workspaces, usage, the monitor and the project readers). Whatever
- * happens to either process — killed outright, hung, leaking memory, crashing on every start — costs that
- * process alone. The core never restarts, every agent keeps working, a request asked while it is down is
- * answered SERVICE_UNAVAILABLE at once, and the master brings it back (or parks it, when it keeps
- * crashing), every service in it connected again.
+ * search beside the core (`HARNESSD_SERVICES=search`), the edge host, one process for several light
+ * services (`HARNESSD_SERVICES=edge`: workspaces, usage, the monitor and the project readers), and models
+ * (`HARNESSD_SERVICES=models`: grid, the Model Manager, the pickers). Whatever happens to any of them —
+ * killed outright, hung, leaking memory, crashing on every start — costs that process alone. The core
+ * never restarts, every agent keeps working, a request asked while it is down is answered
+ * SERVICE_UNAVAILABLE at once (a create on a grid model, GRID_UNAVAILABLE), and the master brings it back
+ * (or parks it, when it keeps crashing), every service in it connected again.
  */
 import { execFileSync } from 'node:child_process'
 import { mkdirSync } from 'node:fs'
@@ -167,7 +168,7 @@ function edgePids(d: IsolatedDaemon): number[] {
     .filter(([, pid, command]) => command.trim() === 'harnessd-edge' && ours.has(Number(pid))).map(([, pid]) => Number(pid))
 }
 /** The services the edge host runs, each on its own link to the core. */
-const EDGE = ['workspaces', 'usage', 'monitor', 'projects']
+const EDGE = ['workspaces', 'usage', 'monitor', 'projects', 'handoff', 'recaps']
 /** How many times each of the edge host's services has connected to the core. */
 const edgeConnections = (d: IsolatedDaemon): number => Math.min(...EDGE.map((service) => d.log().split(`[services] ${service} connected`).length - 1))
 /** The edge host answers, through the core: the home folder's subfolders, and the machine's own totals. */
@@ -274,6 +275,144 @@ describe('the edge host: several services in one process of their own', () => {
     const row = (await client.request('agents_list', { monitor: true }, 30_000)).agents.find((one: Record<string, any>) => one.id === agent.id)
     expect(row.monitor).toMatchObject({ rssBytes: null, cpu: null, processes: [], sampledAt: null })
     await turn(client, agent.id, 'the edge host is parked and nothing else cares')
+    expect(d.coresStarted()).toBe(1)
+    client.close()
+  })
+})
+
+/** This daemon's models process: titled `harnessd-models` AND started by its own master, by the pid it logged. */
+function modelsPids(d: IsolatedDaemon): number[] {
+  const ours = new Set([...d.log().matchAll(/\[harnessd\] service models started \(pid (\d+)\)/g)].map((match) => Number(match[1])))
+  const table = execFileSync('ps', ['-A', '-o', 'pid=,command=']).toString().trim().split('\n')
+  return table.map((line) => line.trim().match(/^(\d+)\s+(.*)$/)).filter((match): match is RegExpMatchArray => !!match)
+    .filter(([, pid, command]) => command.trim() === 'harnessd-models' && ours.has(Number(pid))).map(([, pid]) => Number(pid))
+}
+/** A create on a grid model: what the models picker sends, a model and the grid serving it. */
+const createOnGrid = (client: LocalClient, d: IsolatedDaemon): Promise<Record<string, any>> =>
+  client.request('agent_create', { engine: 'codex', cwd: join(d.projectsDir, 'on-a-grid'), gridModel: 'Qwen3-Coder-30B', gridName: 'mine', bypassPermission: true }, 30_000)
+/** Models answers, through the core: the Model Manager's list, signed out, says to sign in. */
+async function modelsAnswers(client: LocalClient): Promise<boolean> {
+  const manager = await client.request('grid_fleet_models_list', {}, 30_000)
+  return manager.error === undefined && Array.isArray(manager.models)
+}
+
+describe('models in its own process', () => {
+  let daemon: IsolatedDaemon | undefined
+  afterEach(async () => { await daemon?.close(); daemon = undefined })
+  const fresh = async (env: Record<string, string> = {}) => {
+    const d = await IsolatedDaemon.create({ env: {
+      HARNESSD_SERVICES: 'models',
+      HARNESSD_SERVICE_INITIAL_BACKOFF_MS: '200',
+      HARNESSD_SERVICE_MAX_BACKOFF_MS: '1000',
+      // No `grid` on this machine as far as the daemon can tell: never the developer's own.
+      HARNESS_GRID_BIN: '/nonexistent/harness-e2e/grid',
+      ...env,
+    } })
+    daemon = d
+    onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`) })
+    await d.start()
+    await until('models to connect to the core', () => d.log().includes('[services] models connected') || null, 30_000, 200)
+    return d
+  }
+  const restarts = (d: IsolatedDaemon) => d.log().split('\n').filter((line) => /\[harnessd\] service models started .* restart \d+/.test(line)).length
+
+  it('answers the pickers, the Model Manager and its grid commands through the core, and each agent\'s Model/Effort choices, for both engines', async () => {
+    const d = await fresh()
+    const client = await LocalClient.connect(d)
+    expect(modelsPids(d)).toHaveLength(1)
+    expect(await client.request('grid_models_list', {}, 30_000)).toMatchObject({ gridName: null, models: [], grids: [], gridCli: 'missing' })
+    expect(await client.request('grid_fleet_models_list', {}, 30_000)).toMatchObject({ models: [], notice: 'Sign in to find models for this computer.' })
+    // The commands' handshake is the core's own; the command runs in models' process, as this connection's job.
+    expect(await client.request('grid_fleet_capabilities', {})).toMatchObject({ protocol: 1, gridCli: 'missing' })
+    expect(await client.request('grid_fleet_run', { args: ['--remote', 'ls', '--json'], timeoutMs: 5_000 }, 30_000))
+      .toMatchObject({ ok: false, code: 127, error: 'Grid could not start on this machine. Check its Grid installation.' })
+    expect(await client.request('grid_fleet_run', { args: [] }, 30_000)).toMatchObject({ error: 'INVALID_GRID_COMMAND' })
+    expect(await client.request('grid_fleet_cancel', { commandId: 'not-running' }, 30_000)).toMatchObject({ cancelled: false })
+    for (const engine of ['claude', 'codex'] as const) {
+      const agent = await create(d, client, engine, `models-${engine}`)
+      await turn(client, agent.id, `with models apart (${engine})`)
+      const offered = await client.request('models_list', { agentId: agent.id }, 30_000)
+      expect(offered.error, JSON.stringify(offered)).toBeUndefined()
+      expect(Array.isArray(offered.models)).toBe(true)
+    }
+    // A create on a grid model that this machine's grid does not serve is refused, as in the core's process.
+    expect(await createOnGrid(client, d)).toMatchObject({ error: 'GRID_UNAVAILABLE' })
+    expect(d.coresStarted()).toBe(1)
+    client.close()
+  })
+
+  it('killed outright: the Model Manager says so at once, a create on a grid model answers GRID_UNAVAILABLE, every agent goes on, and the master brings it back', async () => {
+    // Slow to come back, so what is asked meanwhile finds it down.
+    const d = await fresh({ HARNESSD_SERVICE_INITIAL_BACKOFF_MS: '8000', HARNESSD_SERVICE_MAX_BACKOFF_MS: '8000' })
+    const client = await LocalClient.connect(d)
+    const agents = [await create(d, client, 'claude', 'models-killed-claude'), await create(d, client, 'codex', 'models-killed-codex')]
+    const before = modelsPids(d)
+    expect(before).toHaveLength(1)
+    for (const pid of before) process.kill(pid, 'SIGKILL')
+    await until('the core to see models gone', () => d.log().includes('[services] models disconnected') || null, 15_000, 100)
+    const asked = Date.now()
+    expect(await client.request('grid_fleet_models_list', {}, 10_000)).toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'models', retryable: true })
+    expect(await client.request('grid_models_list', {}, 10_000)).toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'models', retryable: true })
+    expect(await createOnGrid(client, d)).toMatchObject({ error: 'GRID_UNAVAILABLE' })
+    expect(Date.now() - asked).toBeLessThan(5_000)
+    // The agents never noticed, and their rows are as they were.
+    for (const agent of agents) await turn(client, agent.id, `while models was gone (${agent.engine})`)
+    expect((await client.request('agents_list', {}, 30_000)).agents.map((one: Record<string, any>) => one.id).sort()).toEqual(agents.map((one) => one.id).sort())
+    await until('the master to restart models', () => restarts(d) >= 1 || null, 30_000, 200)
+    await until('models to answer again', () => modelsAnswers(client).then((ok) => ok || null), 30_000, 500)
+    expect(modelsPids(d).some((pid) => !before.includes(pid))).toBe(true)
+    expect(d.coresStarted()).toBe(1)
+    client.close()
+  })
+
+  it('hung, it is killed by the master\'s heartbeat watch and started again; the core never waits on it', async () => {
+    const d = await fresh({ HARNESSD_SERVICE_HEARTBEAT_TIMEOUT_MS: '2000' })
+    const client = await LocalClient.connect(d)
+    const agent = await create(d, client, 'codex', 'models-hung')
+    for (const pid of modelsPids(d)) process.kill(pid, 'SIGSTOP')
+    // Frames read what models last said, and turns never ask it: neither waits.
+    const listed = Date.now()
+    expect((await client.request('agents_list', {}, 30_000)).agents.some((one: Record<string, any>) => one.id === agent.id)).toBe(true)
+    expect(Date.now() - listed).toBeLessThan(5_000)
+    await turn(client, agent.id, 'the core never waited on models')
+    // Asked while it is stopped: answered when the master kills it and the link lets go, never a hang.
+    const answer = await client.request('grid_fleet_models_list', {}, 40_000)
+    if (answer.error) expect(answer).toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'models' })
+    await until('the master to find models hung', () => d.log().includes('[harnessd] service models sent no heartbeat') || null, 30_000, 200)
+    await until('models to be started again', () => restarts(d) >= 1 || null, 30_000, 200)
+    await until('models to answer again', () => modelsAnswers(client).then((ok) => ok || null), 30_000, 500)
+    expect(d.coresStarted()).toBe(1)
+    client.close()
+  })
+
+  it('leaking, it is restarted at its memory budget, before it can hurt anything else', async () => {
+    const d = await fresh({ HARNESSD_TEST_FAULTS: 'models.leak', HARNESSD_SERVICE_HEAP_LIMIT_MIB: '128' })
+    const client = await LocalClient.connect(d)
+    const agent = await create(d, client, 'claude', 'models-leaking')
+    await until('the master to restart models for memory', () => /\[harnessd\] service models: (its heap is at|it is using)/.test(d.log()) || null, 60_000, 250)
+    await until('models to be started again', () => restarts(d) >= 1 || null, 30_000, 200)
+    await turn(client, agent.id, 'the leak was models\' alone')
+    expect(d.coresStarted()).toBe(1)
+    client.close()
+  })
+
+  it('crashing on every start, it is parked, and asked meanwhile says so; a create on a grid model is refused, and agents go on', async () => {
+    const d = await IsolatedDaemon.create({ env: {
+      HARNESSD_SERVICES: 'models', HARNESSD_TEST_FAULTS: 'models.crash', HARNESSD_SERVICE_PARK_CRASHES: '3',
+      HARNESSD_SERVICE_INITIAL_BACKOFF_MS: '200', HARNESSD_SERVICE_MAX_BACKOFF_MS: '1000', HARNESS_GRID_BIN: '/nonexistent/harness-e2e/grid',
+    } })
+    daemon = d
+    onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`) })
+    await d.start()
+    const client = await LocalClient.connect(d)
+    const agent = await create(d, client, 'codex', 'models-crash-loop')
+    await until('the master to park models', () => d.log().includes('[harnessd] service models ended 3 times') || null, 60_000, 250)
+    expect(await client.request('grid_fleet_models_list', {}, 10_000)).toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'models', retryable: true })
+    expect(await client.request('models_list', { agentId: agent.id }, 10_000)).toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'models', retryable: true })
+    expect(await createOnGrid(client, d)).toMatchObject({ error: 'GRID_UNAVAILABLE' })
+    // The handshake is the core's: the Grid harness is told its command was refused, not to update Harness.
+    expect(await client.request('grid_fleet_capabilities', {})).toMatchObject({ protocol: 1 })
+    await turn(client, agent.id, 'models is parked and nothing else cares')
     expect(d.coresStarted()).toBe(1)
     client.close()
   })

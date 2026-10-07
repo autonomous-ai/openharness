@@ -1,17 +1,19 @@
 /**
- * The lean bundle a release's cli.js carries, written out for the master and the services to run from.
+ * The lean bundle a release's cli.js carries, written out for the master, the core and the services to
+ * run from.
  *
  * Node parses the whole file a process is started on. Started on the 4.4 MB cli.js, harnessd's master
  * and each service paid about 45 MiB for that alone, at idle, before running a line of their own code
- * (measured 2026-10-05). The build therefore bundles the master and the services a second time on their
- * own, split into files so that each process parses only the ones its own code is in, and appends those
- * files to cli.js as a comment, which Node only skims (scripts/lib/leanBlock.mjs). This reads them back
- * and writes them where the master can start processes from them: `lean/<sha>/` in the data folder.
+ * (measured 2026-10-05), and the core parsed the CLI's commands with it. The build therefore bundles the
+ * master and the services a second time on their own, and the core apart from them, split into files so
+ * that each process parses only the ones its own code is in, and appends those files to cli.js as a
+ * comment, which Node only skims (scripts/lib/leanBlock.mjs). This reads them back and writes them where
+ * the master can start processes from them: `lean/<sha>/` in the data folder.
  *
  * Nothing here is needed for the daemon to run. A cli.js without the block (one built from the
  * sources, or a test's), a block that does not match its checksum, or a folder that cannot be written
- * leaves every process running from cli.js, as before; and a service is started from cli.js whenever
- * its master's lean files are gone or changed, or cli.js is no longer the bundle they came from
+ * leaves every process running from cli.js, as before; and a service or the core is started from cli.js
+ * whenever its master's lean files are gone or changed, or cli.js is no longer the bundle they came from
  * (./leanServices.ts).
  *
  * Several masters can share one data folder (a second `harness start`, two builds on one computer), and
@@ -25,12 +27,16 @@ import { lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, wr
 import { uptime } from 'node:os'
 import { dirname, join } from 'node:path'
 import { brotliDecompressSync } from 'node:zlib'
+import { sha256File } from './reexec.js'
 
 /** As scripts/lib/leanBlock.mjs writes it. Built in two pieces, so this file's own text never matches. */
 const MARKER = Buffer.from('/*@harness-' + 'lean:')
 const END = Buffer.from('*/')
 /** The file the master and the services start on (src/leanEntry.ts); the others are what it imports. */
 export const LEAN_ENTRY = 'harnessd.mjs'
+/** The file the core starts on (src/leanCoreEntry.ts). It and the files it imports, named `core-*`, are
+ *  built apart from the master's and the services', so that neither loads code only the other uses. */
+export const LEAN_CORE_ENTRY = 'harnessd-core.mjs'
 const FILE_NAME = /^[A-Za-z0-9_-][A-Za-z0-9_.-]*\.mjs$/
 const FOLDER = /^[0-9a-f]{16}$/
 const CLAIM = /^\.claim-(\d+)$/
@@ -96,7 +102,8 @@ export function folderFingerprint(folder: string): string | null {
   if (!names.includes(LEAN_ENTRY)) return null
   const hash = createHash('sha256')
   try {
-    for (const name of names) hash.update(`${name}\0${sha256(readFileSync(join(folder, name)))}\n`)
+    // A piece at a time, as cli.js is: before every process a master starts (./reexec.ts `sha256File`).
+    for (const name of names) hash.update(`${name}\0${sha256File(join(folder, name))}\n`)
   } catch {
     return null
   }

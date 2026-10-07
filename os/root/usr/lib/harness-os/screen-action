@@ -1,0 +1,97 @@
+#!/usr/bin/python3
+"""Send an OS shortcut to the hn client inside the supervised screen."""
+import argparse
+import os
+from pathlib import Path
+import re
+import socket
+import struct
+import subprocess
+
+PROC = Path('/proc')
+ACTIONS = ('terminal', 'new', 'connect', 'wifi', 'updates')
+
+
+def process(pid):
+    try:
+        path = PROC / str(pid)
+        fields = (path / 'stat').read_text().rsplit(')', 1)[1].split()
+        if path.stat().st_uid != os.getuid() or fields[0] in ('Z', 'X'):
+            return None
+        return dict(parent=int(fields[1]), group=int(fields[2]), tty=int(fields[4]),
+                    foreground=int(fields[5]), start=fields[19])
+    except (OSError, IndexError, ValueError):
+        return None
+
+
+def peer_pid(path):
+    # A stale pathname or the retained headless server must not own an action
+    # meant for the visible screen. Linux reports who actually listens here.
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+            connection.settimeout(.2)
+            connection.connect(str(path))
+            pid, uid, _ = struct.unpack('3i', connection.getsockopt(
+                socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize('3i')))
+            return pid if uid == os.getuid() else None
+    except OSError:
+        return None
+
+
+def screen_socket():
+    main = int(subprocess.check_output([
+        'systemctl', '--user', 'show', 'hn-screen.service', '--property=MainPID', '--value',
+    ], text=True, timeout=3).strip())
+    owner = process(main) if main > 0 else None
+    if not owner:
+        raise RuntimeError('Harness has no active screen.')
+    children = (PROC / str(main) / 'task' / str(main) / 'children').read_text().split()
+    matches = []
+    for value in children:
+        pid = int(value)
+        client = process(pid)
+        if not client or client['parent'] != main or not client['tty'] or client['group'] != client['foreground']:
+            continue
+        try:
+            env = dict(part.split('=', 1) for part in (PROC / value / 'environ').read_text().split('\0') if '=' in part)
+        except OSError:
+            continue
+        if env.get('HARNESS_OS') != '1':
+            continue
+        name = env.get('HN_SOCKET_NAME') or 'default'
+        base = Path(env.get('HN_TMPDIR') or env.get('TMUX_TMPDIR') or '/tmp')
+        if not base.is_absolute() or not re.fullmatch(r'[A-Za-z0-9_.-]+', name):
+            continue
+        directory = base / ('hn-' + str(os.getuid()))
+        for path in (directory / f'{name}@{pid}.sock', directory / f'{name}.sock'):
+            if peer_pid(path) == pid and process(pid) == client:
+                matches.append(str(path))
+                break
+    if len(matches) != 1 or process(main) != owner:
+        raise RuntimeError('The Harness screen is reconnecting. Try the shortcut again.')
+    return matches[0]
+
+
+def dispatch(action):
+    if action not in ACTIONS:
+        raise ValueError('Unknown screen action.')
+    target = screen_socket()
+    env = dict(os.environ, HN_SOCKET=target)
+    if action == 'updates':
+        command = ['/usr/lib/harness-os/open-updates']
+    else:
+        command = ['/usr/bin/hn', '-S', target, 'os-action', action]
+    os.execve(command[0], command, env)
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('action', choices=(*ACTIONS, 'socket'))
+    args = parser.parse_args()
+    try:
+        if args.action == 'socket':
+            print(screen_socket())
+        else:
+            dispatch(args.action)
+    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
+        raise SystemExit('Harness: ' + str(error))

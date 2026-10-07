@@ -11,7 +11,7 @@ import { AGENT_OPENED_THROTTLE_MS } from './core/agents/update.js'
 import { deviceAgentListItem, deviceAgentRow } from './core/agents/list.js'
 import { grokHistoryPage } from './core/transcripts/history.js'
 import { bindAgentList, bindAgentUpdate, bindCancelRequest, bindLaunchRequests, bindCloseRequests, bindMessageRequest, bindPurgeRequest, bindQuestionResponse, bindStopRequest, bindTerminalRequests } from './testing/socketCore.js'
-import { emptyPorts, MODELS_FALLBACKS, MONITOR_FALLBACKS } from './core/api.js'
+import { emptyPorts, MODELS_FALLBACKS, MODELS_OFF, MONITOR_FALLBACKS, type ModelsPort } from './core/api.js'
 import { createServiceHost, ServiceUnavailableError } from './core/serviceHost.js'
 import { MODELS_REQUESTS, startModels } from './services/models.js'
 import { SHELL_REQUESTS, startShell } from './services/shell.js'
@@ -41,7 +41,6 @@ import { randomUUID } from 'node:crypto'
 import { fakeGridAnswers, installFakeGrid, type FakeGrid } from './lib/__fixtures__/fakeGrid.js'
 import { clearGridMcpUrlCache } from './lib/gridMcpUrl.js'
 import { LocalModels } from './lib/localModels.js'
-import type { GridAttachResult } from './lib/gridAttach.js'
 import { STRICT_DOWN_TYPES, encryptDownFrame, encryptDownFrameFor, encryptRpcResult } from './lib/e2ee/applicationFrames.js'
 import { CloseAgentService } from './lib/closeAgentService.js'
 import { env } from './config/env.js'
@@ -397,7 +396,34 @@ describe('agent_update opened: one "last used" for every app', () => {
 })
 
 describe('viewer forwarding authentication', () => {
-  it.each(['command_bar', 'route_task', 'route_send'])('requires a sealed owner session for %s', async type => {
+  it('routes a sealed command_bar to the command bar with its connection, who asked, and nothing in the clear', async () => {
+    const socket = relaySocket('token')
+    const routed: Array<{ type: string; asker: unknown }> = []
+    socket.serviceRouter = (type, _payload, asker, reply) => { routed.push({ type, asker }); reply({ selectedId: null }); return true }
+    const ownerCommands = vi.spyOn(socket.ownerCommands, 'request')
+    vi.spyOn(gatewayOf(socket).e2ee, 'hasSession').mockReturnValue(true)
+    const role = vi.spyOn(gatewayOf(socket).e2ee, 'sessionRole').mockReturnValue('web')
+    const clear = { type: 'command_bar', payload: { requestId: 'one', request: { prompt: 'fixture', candidates: [] } } }
+    vi.spyOn(gatewayOf(socket).e2ee, 'unwrapDown').mockReturnValue(clear)
+    const sealedReply = vi.spyOn(gatewayOf(socket).e2ee, 'wrapRpcReply').mockReturnValue({ type: 'command_bar_result', payload: { __e2e: 'sealed' } })
+    await dispatchDown(socket, clear, 'remote')
+    expect(routed).toEqual([])
+    const sealed = { type: 'command_bar', payload: { __e2e: { v: 1, k: 'p', n: 1, ct: 'fixture' } } }
+    // A device's session asks as no owner: the command bar refuses it (services/commandBar.ts).
+    role.mockReturnValue('device')
+    await dispatchDown(socket, sealed, 'remote')
+    role.mockReturnValue('web')
+    await dispatchDown(socket, sealed, 'remote')
+    expect(routed).toEqual([
+      { type: 'command_bar', asker: { local: false, owner: false, connection: 'remote', requestId: 'one' } },
+      { type: 'command_bar', asker: { local: false, owner: true, connection: 'remote', requestId: 'one' } },
+    ])
+    expect(ownerCommands).not.toHaveBeenCalled()
+    expect(sealedReply).toHaveBeenCalledWith('remote', 'command_bar_result', 'one', { selectedId: null })
+    await socket.stop()
+  })
+
+  it.each(['route_task', 'route_send'])('requires a sealed owner session for %s', async type => {
     const socket = relaySocket('token'), internals = socket as any
     const request = vi.spyOn(socket.ownerCommands, 'request').mockResolvedValue({ ok: true })
     vi.spyOn(gatewayOf(socket).e2ee, 'hasSession').mockReturnValue(true)
@@ -421,7 +447,8 @@ describe('viewer forwarding authentication', () => {
   it('allows interactive viewers only on a sealed owner web connection or trusted loopback', async () => {
     const socket = relaySocket('token')
     const internals = socket as any
-    const request = vi.spyOn(socket.interactiveViewers, 'request').mockResolvedValue({ data: 'jpeg' })
+    const request = vi.fn(async () => ({ data: 'jpeg' }))
+    socket.viewerStreams = { frame: vi.fn(), surface: request, closed: vi.fn(), closedAll: vi.fn() }
     vi.spyOn(gatewayOf(socket).e2ee, 'hasSession').mockReturnValue(true)
     const role = vi.spyOn(gatewayOf(socket).e2ee, 'sessionRole').mockReturnValue('web')
     const clear = { type: 'viewer_surface', payload: { requestId: 'one', surfaceId: 'surface', agentId: 'a', op: 'frame' } }
@@ -440,14 +467,46 @@ describe('viewer forwarding authentication', () => {
     socket.registerLocalClient('local:viewer', { sendFrame: () => true, sendBinary: () => true })
     await dispatchDown(socket, clear, 'local:viewer')
     expect(request).toHaveBeenCalledWith('local:viewer', clear.payload)
+    // With nothing to render it, the surface is answered unavailable rather than left unanswered.
+    const local = vi.fn(() => true)
+    socket.registerLocalClient('local:none', { sendFrame: local, sendBinary: () => true })
+    socket.viewerStreams = null
+    await dispatchDown(socket, { ...clear, payload: { ...clear.payload, requestId: 'two' } }, 'local:none')
+    await vi.waitFor(() => expect(local).toHaveBeenCalledWith({ type: 'viewer_surface_result', payload: { requestId: 'two', error: 'VIEWER_UNAVAILABLE' } }))
     await socket.unregisterLocalClient('local:viewer')
     await socket.stop()
+  })
+
+  it('hands a viewer stream\'s answers to the one connection that opened it, and ends its streams as connections go', async () => {
+    const socket = relaySocket('token')
+    const streams = { frame: vi.fn(), surface: vi.fn(), closed: vi.fn(), closedAll: vi.fn() }
+    socket.viewerStreams = streams
+    const local = vi.fn(() => true)
+    socket.registerLocalClient('local:viewer', { sendFrame: local, sendBinary: () => true })
+    expect(socket.sendViewerFrame('local:viewer', 'viewer_response', { streamId: 's1', status: 200 })).toBe(true)
+    expect(local).toHaveBeenCalledWith({ type: 'viewer_response', payload: { streamId: 's1', status: 200 } })
+    // A remote connection's go through the gateway, which says whether it could take them.
+    const target = vi.spyOn(gatewayOf(socket), 'target').mockReturnValue(false)
+    expect(socket.sendViewerFrame('remote', 'viewer_data', { streamId: 's1', data: 'AA==' })).toBe(false)
+    expect(target).toHaveBeenCalledWith('remote', 'viewer_data', { streamId: 's1', data: 'AA==' })
+    await socket.unregisterLocalClient('local:viewer')
+    expect(streams.closed).toHaveBeenCalledWith('local:viewer')
+    socket.fromGateway.client('r1', { role: 'web', label: null, identity: 'PUB', direct: false })
+    socket.fromGateway.client('r1', null)
+    expect(streams.closed).toHaveBeenCalledWith('r1')
+    await socket.fromGateway.disconnected('r2')
+    expect(streams.closed).toHaveBeenCalledWith('r2')
+    socket.fromGateway.linkDown()
+    expect(streams.closedAll).toHaveBeenCalledTimes(1)
+    await socket.stop()
+    expect(streams.closedAll).toHaveBeenCalledTimes(2)
   })
 
   it('requires encryption and a web-role session remotely, while permitting trusted local clients', async () => {
     const socket = relaySocket('token')
     const internals = socket as any
-    const handle = vi.spyOn(socket.viewerForwarder, 'handle').mockImplementation(() => {})
+    const handle = vi.fn()
+    socket.viewerStreams = { frame: handle, surface: vi.fn(), closed: vi.fn(), closedAll: vi.fn() }
     const role = vi.spyOn(gatewayOf(socket).e2ee, 'sessionRole').mockReturnValue('web')
     const frame = { type: 'viewer_request', payload: { streamId: 'v', agentId: 'a' } }
     const unwrap = vi.spyOn(gatewayOf(socket).e2ee, 'unwrapDown').mockReturnValue(frame)
@@ -567,6 +626,12 @@ const wsMock = vi.hoisted(() => {
 })
 
 vi.mock('ws', () => ({ WebSocket: wsMock.MockWebSocket }))
+// Grid's set-up, which the models service asks for before a move onto a grid model: set up already here,
+// as on a machine that has used grid before. Never a real install or sign-in from a spec.
+vi.mock('./lib/gridAttach.js', async (real) => ({
+  ...await real<object>(),
+  createGridAccess: () => ({ ensure: async () => ({ status: 'converged', name: null, detail: 'set up already' }) }),
+}))
 // Never the person's real ~/.claude.json or ~/.codex/config.toml: creating an agent records folder trust,
 // and an unmocked run of these specs used to write test paths into the developer's own config.
 vi.mock('./lib/claudeTrust.js', () => ({
@@ -591,15 +656,17 @@ function sealedDown(socket: BackendSocket, connId: string, type: string, payload
 /** The models service (services/models.ts) answering the socket's models requests through a service host,
  *  as the daemon runs it: its core reads the grid name and this machine's name off the socket. */
 function serveModels(socket: BackendSocket, over: Parameters<typeof fakeCore>[0] = {}) {
-  const host = createServiceHost(emptyPorts(), { log: () => {} })
+  const ports = emptyPorts()
+  const host = createServiceHost(ports, { log: () => {} })
   const core = fakeCore({
     dataDir: process.env.ADAPTER_DATA_DIR,
     ...over,
-    account: { privateGridName: () => socket.privateGridName(), machineName: () => socket.machineName(), ...over.account },
+    account: { privateGridName: async () => socket.gridName(), machineName: () => socket.machineName(), ...over.account },
     clients: { gridModelsChanged: () => { void socket.pushGridModels() }, ...over.clients },
   })
   host.start('models', startModels, core, MODELS_FALLBACKS, MODELS_REQUESTS)
   socket.serviceRouter = (type, payload, asker, reply) => host.route(type, payload, asker, reply)
+  socket.models = () => ports.models ?? MODELS_OFF
   return host
 }
 
@@ -668,64 +735,13 @@ describe('BackendSocket outbound queue', () => {
     // A full disk: reading the orchestrator's state makes its folder, and that threw out of every send,
     // so a turn's end never reached a window (e2e/diskfull.e2e.ts).
     const socket = relaySocket('token')
-    ;(socket as unknown as { orchestratorService: { ingest(): void; stop(): void } }).orchestratorService = {
-      ingest: () => { throw new Error('ENOSPC: no space left on device, mkdir') }, stop: () => {},
-    }
+    socket.onFrameSent = () => { throw new Error('ENOSPC: no space left on device, mkdir') }
     socket.connect()
     const ws = wsMock.instances[0]
     ws.open()
     socket.send({ type: 'turn_ended', dbSessionId: 's1', payload: { sessionId: 's1' } })
     expect(parseSent(ws).map((sent) => (sent.frame as { type?: string }).type)).toContain('turn_ended')
     await socket.stop()
-  })
-
-  it('answers a turn end "no role" without building the orchestrator on a machine that has no project', async () => {
-    // Asked at every turn's end. Building the service makes its folder and parses every saved run on
-    // the core's event loop, and from then on every frame sent is handed to it.
-    const stateDir = join(process.env.ADAPTER_DATA_DIR!, 'orchestrator')
-    rmSync(stateDir, { recursive: true, force: true })
-    const socket = relaySocket('token')
-    try {
-      expect(socket.orchestratorRoleOf('agent-1')).toBeNull()
-      expect(socket.orchestratorRoleOf('agent-2')).toBeNull()
-      expect(existsSync(stateDir)).toBe(false)
-      expect((socket as unknown as { orchestratorService: unknown }).orchestratorService).toBeNull()
-    } finally { await socket.stop() }
-  })
-
-  it('answers a turn end from a project an earlier run of the daemon saved', async () => {
-    const stateDir = join(process.env.ADAPTER_DATA_DIR!, 'orchestrator')
-    rmSync(stateDir, { recursive: true, force: true })
-    mkdirSync(stateDir, { recursive: true, mode: 0o700 })
-    const id = 'a'.repeat(32)
-    const task = { id: 'part', title: 'Part', harness: 'cad', prompt: 'Draw the part', dependsOn: [], state: 'running', attempt: 1, agentId: 'agent-worker', cwd: stateDir, summary: '', error: null, uncertain: false, artifacts: [], inputs: {} }
-    writeFileSync(join(stateDir, `${id}.json`), JSON.stringify({
-      version: 1, id, fingerprint: 'f', prompt: 'Build the robot', engine: 'claude', bypassPermission: false, parallelism: 3,
-      root: stateDir, directorId: 'agent-director', directorWorking: false, state: 'active', error: null,
-      tasks: [task], messages: [], revision: 1, createdAt: 1, updatedAt: 1,
-    }), { mode: 0o600 })
-    const socket = relaySocket('token')
-    try {
-      expect(socket.orchestratorRoleOf('agent-worker')).toEqual({ role: 'worker' })
-      expect(socket.orchestratorRoleOf('agent-director')).toEqual({ role: 'director', busy: true })
-      expect(socket.orchestratorRoleOf('agent-other')).toBeNull()
-    } finally {
-      await socket.stop()
-      rmSync(stateDir, { recursive: true, force: true })
-    }
-  })
-
-  it('leaves an orchestrator folder it cannot list to the service to report, as before', async () => {
-    const stateDir = join(process.env.ADAPTER_DATA_DIR!, 'orchestrator')
-    rmSync(stateDir, { recursive: true, force: true })
-    writeFileSync(stateDir, 'not a folder')
-    const socket = relaySocket('token')
-    try {
-      expect(() => socket.orchestratorRoleOf('agent-1')).toThrow()
-    } finally {
-      await socket.stop()
-      rmSync(stateDir, { force: true })
-    }
   })
 
   it('signed out, seals and queues nothing for a cloud link that never opens, and still serves its windows', async () => {
@@ -1012,13 +1028,13 @@ describe('BackendSocket outbound queue', () => {
     await vi.waitFor(() => {
       expect(wrapReply).toHaveBeenCalledWith('web-1', 'session_search_result', 's-1', { hits: [], indexed: 3, pending: 0, ready: true, tookMs: 1 })
     })
-    expect(routed[0]).toEqual({ type: 'session_search', payload: { requestId: 's-1', query: 'dial scroll', limit: 12 }, asker: { local: false, owner: true } })
+    expect(routed[0]).toEqual({ type: 'session_search', payload: { requestId: 's-1', query: 'dial scroll', limit: 12 }, asker: { local: false, owner: true, connection: 'web-1', requestId: 's-1' } })
 
     // A device's session may not act as the owner, and the service is told so.
     role.mockReturnValue('device')
     ask('session_search', { requestId: 's-2', query: 'dial' })
     await vi.waitFor(() => expect(routed).toHaveLength(2))
-    expect(routed[1].asker).toEqual({ local: false, owner: false })
+    expect(routed[1].asker).toEqual({ local: false, owner: false, connection: 'web-1', requestId: 's-2' })
 
     // A type no service declared is the socket's own: an unknown one is refused at once, in the clear,
     // as a reply that carries nothing is.
@@ -1032,7 +1048,26 @@ describe('BackendSocket outbound queue', () => {
     socket.registerLocalClient('local:app', { sendFrame: (frame) => { frames.push(frame as Record<string, unknown>); return true }, sendBinary: () => true })
     socket.handleLocalFrame('local:app', { type: 'session_search', payload: { requestId: 'l-1', query: 'dial' } })
     await vi.waitFor(() => expect(frames).toContainEqual(expect.objectContaining({ type: 'session_search_result' })))
-    expect(routed.at(-1)?.asker).toEqual({ local: true, owner: true })
+    expect(routed.at(-1)?.asker).toEqual({ local: true, owner: true, connection: 'local:app', requestId: 'l-1' })
+    await socket.stop()
+  })
+
+  it('tells the services when a connection that may have asked them closes: a window, a remote client, the relay and its clients', async () => {
+    const socket = relaySocket('token')
+    const closed: string[] = []
+    socket.onConnectionClosed = (connId) => { closed.push(connId) }
+    socket.registerLocalClient('local:window', { sendFrame: () => true, sendBinary: () => true })
+    await socket.unregisterLocalClient('local:window')
+    const client = { role: 'web' as const, label: null, identity: 'id', direct: false }
+    for (const connId of ['web-1', 'web-2', 'web-3']) socket.fromGateway.client(connId, client)
+    socket.fromGateway.client('web-1', null)
+    // One the gateway never announced is no connection of the socket's.
+    socket.fromGateway.client('web-unknown', null)
+    await socket.fromGateway.disconnected('web-2')
+    // The relay gone: every remote client it still had went with it, and no window on this computer did.
+    socket.registerLocalClient('local:stays', { sendFrame: () => true, sendBinary: () => true })
+    socket.fromGateway.linkDown()
+    expect(closed).toEqual(['local:window', 'web-1', 'web-2', 'web-3'])
     await socket.stop()
   })
 
@@ -2966,6 +3001,8 @@ describe('agent_retarget onto a Local model resolves web tools', () => {
     const seen: Array<{ agentId: string; grid: unknown }> = []
     const socket = relaySocket('token')
     socket.onRetargetAgent = async (input) => { seen.push(input); return { ok: true } }
+    // Where the move goes is the models service's: it resolves the target from this machine's own grid.
+    serveModels(socket)
     socket.connect()
     const ws = wsMock.instances[0]
     ws.open()
@@ -3157,20 +3194,15 @@ describe('grid_models_list says whether this machine has a grid CLI', () => {
   })
 })
 
-describe('grid is set up on demand — by an act, never by a read', () => {
-  afterEach(() => { vi.restoreAllMocks() })
-
-  const READY: GridAttachResult = { status: 'signed-in', name: 'kelvin-1a2b3c4d', detail: '', ownGrid: 'created' }
-
-  /** A daemon whose grid set-up is a stub, asked over a local frame. The models picker's Set up and a
-   *  local model's Get and Use are the models service's (services/models.spec.ts); a Grid harness command
-   *  and a move onto a grid model are the socket's. */
-  function daemon(ready: GridAttachResult = READY) {
+describe('a move onto a grid model asks models where it goes', () => {
+  /** A daemon whose models is a stub, asked over a local frame. Where the move goes, grid's set-up before
+   *  it and the prewarm after it are the models service's (services/models.spec.ts). */
+  function daemon(moveTarget: ModelsPort['moveTarget'] | null) {
     const socket = relaySocket('token')
-    socket.deriveGridName = async () => 'kelvin-1a2b3c4d'
-    const ensureGrid = vi.fn(async (_request?: { ownGrid?: boolean }) => ready)
-    socket.ensureGrid = ensureGrid
-    socket.onRetargetAgent = async () => ({ ok: true })
+    const moved = vi.fn()
+    if (moveTarget) socket.models = () => ({ annotation: () => null, lists: () => Promise.reject(new Error('no lists')), moveTarget, moved })
+    const retargeted = vi.fn(async (_request: { agentId: string; grid: unknown }) => ({ ok: true as const }))
+    socket.onRetargetAgent = retargeted
     const frames: Array<Record<string, unknown>> = []
     socket.registerLocalClient('local:grid', { sendFrame: (frame) => { frames.push(frame); return true }, sendBinary: () => true })
     let asked = 0
@@ -3183,28 +3215,100 @@ describe('grid is set up on demand — by an act, never by a read', () => {
       await vi.waitFor(() => expect(answer()).toBeDefined())
       return answer()!
     }
-    return { socket, ensureGrid, ask, done: async () => { await socket.unregisterLocalClient('local:grid'); await socket.stop() } }
+    return { socket, moved, retargeted, ask, done: async () => { await socket.unregisterLocalClient('local:grid'); await socket.stop() } }
   }
+  const TARGET = { networkId: 'net-1', networkName: 'team-grid-0000aaaa', baseUrl: 'https://fixture.invalid/g/net-1/relay/v1', apiKey: 'fixture-key', model: 'Shared-Model' }
 
-  it('a Grid harness command runs against grid as it stands — its viewer asks on its own, so it never sets grid up', async () => {
-    const d = daemon()
-    const run = vi.fn(async () => ({ ok: true, code: 0, stdout: '[]', stderr: '', error: null }))
-    Object.assign(d.socket as unknown as Record<string, unknown>, { gridFleet: { run, cancel: () => false } })
-    await d.ask('grid_fleet_run', { args: ['--remote', 'ls', '--json'], timeoutMs: 5_000 })
-    expect(run).toHaveBeenCalledTimes(1)
-    expect(d.ensureGrid).not.toHaveBeenCalled()
+  it('moves onto what models resolved, from the grid the model was picked from, and has models start it', async () => {
+    const moveTarget = vi.fn(async () => ({ target: TARGET }))
+    const d = daemon(moveTarget)
+    expect(await d.ask('agent_retarget', { agentId: 'a1', gridModel: 'Shared-Model', gridName: ' team-grid-0000aaaa ' })).toEqual({ requestId: 'agent_retarget-1', retargeted: true })
+    expect(moveTarget).toHaveBeenCalledWith({ gridName: 'team-grid-0000aaaa', model: 'Shared-Model' })
+    expect(d.retargeted).toHaveBeenCalledWith({ agentId: 'a1', grid: TARGET })
+    expect(d.moved).toHaveBeenCalledWith(TARGET)
+    // The account's own grid when the picker names none.
+    await d.ask('agent_retarget', { agentId: 'a1', gridModel: 'Own-Model' })
+    expect(moveTarget).toHaveBeenLastCalledWith({ gridName: null, model: 'Own-Model' })
     await d.done()
   })
 
-  it("a move onto a grid model signs grid in first — with the account's own grid only when the model is on it", async () => {
-    // Refused, so the move stops at the set-up and no grid is read: what is pinned is what was asked.
-    const d = daemon({ status: 'handoff-failed', name: null, detail: 'no grid on this computer' })
+  it('says why it cannot move, in models\' words, and moves nothing', async () => {
+    const d = daemon(async () => ({ detail: 'no grid on this computer' }))
     expect(await d.ask('agent_retarget', { agentId: 'a1', gridModel: 'Shared-Model', gridName: 'team-grid-0000aaaa' }))
       .toMatchObject({ error: 'GRID_UNAVAILABLE', detail: 'no grid on this computer' })
-    expect(await d.ask('agent_retarget', { agentId: 'a1', gridModel: 'Own-Model' }))
-      .toMatchObject({ error: 'GRID_UNAVAILABLE' })
-    expect(d.ensureGrid.mock.calls).toEqual([[{ ownGrid: false }], [{ ownGrid: true }]])
+    expect(d.retargeted).not.toHaveBeenCalled()
+    expect(d.moved).not.toHaveBeenCalled()
     await d.done()
+  })
+
+  it('with models down or off, the move answers GRID_UNAVAILABLE at once', async () => {
+    for (const down of [async () => { throw new Error('models is down') }, null]) {
+      const d = daemon(down)
+      expect(await d.ask('agent_retarget', { agentId: 'a1', gridModel: 'Own-Model' }))
+        .toMatchObject({ error: 'GRID_UNAVAILABLE', detail: 'Models are unavailable. Try again.' })
+      expect(d.retargeted).not.toHaveBeenCalled()
+      await d.done()
+    }
+  })
+
+  it('a move onto an API, or back onto the own login, asks models nothing', async () => {
+    const moveTarget = vi.fn()
+    const d = daemon(moveTarget)
+    expect(await d.ask('agent_retarget', { agentId: 'a1', clearGrid: true })).toMatchObject({ retargeted: true })
+    expect(moveTarget).not.toHaveBeenCalled()
+    expect(d.moved).not.toHaveBeenCalled()
+    await d.done()
+  })
+})
+
+describe('the models lists pushed to the windows', () => {
+  it('pushes each window the list in the form it asked for, as models built it; nothing while models is off or failing', async () => {
+    const socket = relaySocket('token')
+    const rows: Array<Record<string, unknown>> = []
+    const plain: Array<Record<string, unknown>> = []
+    socket.registerLocalClient('local:rows', { sendFrame: (frame) => { rows.push(frame); return true }, sendBinary: () => true })
+    socket.registerLocalClient('local:plain', { sendFrame: (frame) => { plain.push(frame); return true }, sendBinary: () => true })
+    // A window that draws row state says so when it asks for the list.
+    socket.handleLocalFrame('local:rows', { type: 'grid_models_list', payload: { requestId: 'r1', rowState: true } })
+    await vi.waitFor(() => expect(rows.some((frame) => frame.type === 'grid_models_list_result')).toBe(true))
+    rows.length = 0
+    plain.length = 0
+
+    await socket.pushGridModels()
+    socket.models = () => ({ ...MODELS_OFF, lists: async () => ({ plain: { form: 'plain' }, rowState: { form: 'rows' } }) })
+    await socket.pushGridModels()
+    expect(rows).toEqual([{ type: 'grid_models_changed', payload: { form: 'rows' } }])
+    expect(plain).toEqual([{ type: 'grid_models_changed', payload: { form: 'plain' } }])
+    socket.models = () => MODELS_OFF
+    await socket.pushGridModels()
+    expect(rows).toHaveLength(1)
+    await socket.unregisterLocalClient('local:rows')
+    await socket.unregisterLocalClient('local:plain')
+    await socket.stop()
+  })
+
+  it('carries models\' note on the grid an agent is on in every frame it builds, and none while models is off', async () => {
+    const socket = relaySocket('token')
+    const grid = { baseUrl: 'https://fixture.invalid/g/n1/relay/v1', model: 'm' }
+    const agent = { agentId: 'a-note', sessionId: 's-note', engine: 'claude', cwd: '/tmp', runtimes: [], registeredAt: 1, active: true, grid } as unknown as RegisteredSession
+    expect((await socket.toProject(agent)).grid).toEqual(grid)
+    socket.models = () => ({ ...MODELS_OFF, annotation: () => ({ state: 'asleep' as const }) })
+    expect((await socket.toProject(agent)).grid).toEqual({ ...grid, state: 'asleep' })
+    expect((await socket.toStoppedProject(agent)).grid).toEqual({ ...grid, state: 'asleep' })
+    await socket.stop()
+  })
+
+  it('answers the grid commands\' handshake itself, so a Grid harness never reads models being down as "update Harness"', async () => {
+    const socket = relaySocket('token')
+    socket.models = () => MODELS_OFF
+    const frames: Array<Record<string, unknown>> = []
+    socket.registerLocalClient('local:grid', { sendFrame: (frame) => { frames.push(frame); return true }, sendBinary: () => true })
+    socket.handleLocalFrame('local:grid', { type: 'grid_fleet_capabilities', payload: { requestId: 'c1' } })
+    await vi.waitFor(() => expect(frames.some((frame) => frame.type === 'grid_fleet_capabilities_result')).toBe(true))
+    expect(frames.find((frame) => frame.type === 'grid_fleet_capabilities_result')!.payload)
+      .toMatchObject({ requestId: 'c1', protocol: 1, maxTimeoutMs: 30 * 60_000, thinkingControl: true, gridCli: expect.any(String) })
+    await socket.unregisterLocalClient('local:grid')
+    await socket.stop()
   })
 })
 
@@ -3220,9 +3324,9 @@ describe('the connect burst with no network', () => {
     // "offline" the whole time.
     const socket = relaySocket('token')
     bindAgentList(socket)
-    socket.deriveGridName = () => new Promise<null>(() => {}) // a grid read that never lands
-    // A vendor that never answers, asked of the usage service beside models.
-    serveModels(socket).serve('usage', (core) => startUsage(core, { read: () => new Promise(() => {}) }), fakeCore(), USAGE_REQUESTS)
+    // A grid name that never comes, as a grid read that never lands; and a vendor that never answers, asked
+    // of the usage service beside models.
+    serveModels(socket, { account: { privateGridName: () => new Promise<null>(() => {}) } }).serve('usage', (core) => startUsage(core, { read: () => new Promise(() => {}) }), fakeCore(), USAGE_REQUESTS)
     const frames: Array<Record<string, unknown>> = []
     socket.registerLocalClient('local:burst', { sendFrame: (frame) => { frames.push(frame); return true }, sendBinary: () => true })
 
@@ -3718,7 +3822,7 @@ describe('relay down-frames are default-deny: sealed, or the backend\'s own', ()
     const serviceRouter = vi.fn(() => true)
     socket.serviceRouter = serviceRouter
     await dispatch(sealedDown(socket, 'web-1', 'dsh_install', { requestId: 'r', id: 'acme/some-dsh' }).frame, 'web-1')
-    expect(serviceRouter).toHaveBeenCalledWith('dsh_install', expect.objectContaining({ id: 'acme/some-dsh' }), { local: false, owner: expect.any(Boolean) }, expect.any(Function))
+    expect(serviceRouter).toHaveBeenCalledWith('dsh_install', expect.objectContaining({ id: 'acme/some-dsh' }), { local: false, owner: expect.any(Boolean), connection: 'web-1', requestId: 'r' }, expect.any(Function))
   })
 
   it('refuses a plaintext RPC even from the backend itself (connId \'\'), which would read the reply', async () => {

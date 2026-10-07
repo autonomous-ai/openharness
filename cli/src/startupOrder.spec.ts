@@ -20,8 +20,10 @@ import { join } from 'node:path'
  * the source, rather than left to whoever next adds a helper below the restore block.
  */
 const SOURCE = readFileSync(join(import.meta.dirname, 'core', 'main.ts'), 'utf-8')
-/** The CLI, which starts the core for `harness __run` (core/main.ts `runCore`). */
+/** The CLI, which starts the core for `harness __run` (coreProcess.ts, then core/main.ts `runCore`). */
 const CLI_SOURCE = readFileSync(join(import.meta.dirname, 'cli.ts'), 'utf-8')
+/** The one start of the core's process, from cli.ts, cli.js and the lean bundle alike. */
+const CORE_PROCESS_SOURCE = readFileSync(join(import.meta.dirname, 'coreProcess.ts'), 'utf-8')
 
 /** `runForeground`'s own body. Other functions are indented the same way; their locals are not ours. */
 function runForegroundBody(source: string): { text: string; from: number } {
@@ -82,13 +84,10 @@ function callArguments(source: string, call: string): { text: string; at: number
 }
 
 /** Every call whose dependencies run DURING start-up, before `runForeground` has finished its body. */
-const STARTUP_CALLS = ['await repairClaudeCwd({', 'await restoreAgents({', 'startSelfUpdater({', 'startTuiUpdater({']
+const STARTUP_CALLS = ['await repairClaudeCwd({', 'await restoreAgents({']
 
-/** What the prologue is allowed to do before the updater is running: nothing that can throw. */
-const PROLOGUE_CALLS = new Set([
-  'installTimestampedConsole', 'startSelfUpdater', 'statSync', 'join', 'String', 'Number', 'Date',
-  'withSpawnLock', 'describeSpawnLockOwner',
-])
+/** What the prologue is allowed to do before the master's update is listened for: nothing that can throw. */
+const PROLOGUE_CALLS = new Set(['installTimestampedConsole'])
 const KEYWORDS = new Set(['if', 'for', 'while', 'switch', 'catch', 'return', 'typeof', 'new', 'await', 'function'])
 
 describe('the core\'s start-up order (core/main.ts)', () => {
@@ -101,16 +100,17 @@ describe('the core\'s start-up order (core/main.ts)', () => {
   })
 
   // ── The invariant the whole safe-boot design rests on ───────────────────────────────────────────
-  // A daemon that cannot finish starting can only be fixed by its own updater, and the updater can
-  // only run if start-up reached it. So it goes first, and everything that can throw or hang goes
-  // after. These three say so in the order they are worth reading.
+  // A daemon that cannot finish starting is fixed by the build the master's updater stages, and leaves for
+  // it only if start-up got as far as listening for the master's request. So that goes first, and
+  // everything that can throw or hang goes after. These three say so in the order they are worth reading.
 
-  it('starts the updater before anything that can throw or hang', () => {
+  it('listens for the master\'s update before anything that can throw or hang, and runs no updater itself', () => {
     const source = code(SOURCE)
-    const updater = source.indexOf('startSelfUpdater({')
-    expect(updater, 'core/main.ts still starts the self-updater').toBeGreaterThan(-1)
+    const updater = source.indexOf('coreLink.onUpdate(')
+    expect(updater, 'core/main.ts still listens for the master\'s update').toBeGreaterThan(-1)
+    // The updater is the master's, in its own process (services/updaterProcess.ts): the core downloads no build.
+    expect(source).not.toMatch(/startSelfUpdater\(|startTuiUpdater\(/)
     for (const risky of [
-      'startTuiUpdater(',          // optional hn download must never precede CLI recovery
       'requireTmuxAvailable(',      // throws outright when tmux is missing
       'await startHookServer(',     // EADDRINUSE on a fixed port with no fallback
       'installSessionHooks(',       // 13 vendor settings files, any of which can be unreadable
@@ -120,7 +120,7 @@ describe('the core\'s start-up order (core/main.ts)', () => {
     ]) {
       const at = source.indexOf(risky)
       if (at < 0) continue // renamed or gone; the TDZ lint above still covers what remains
-      expect(at, `\`${risky}\` must come after startSelfUpdater({ — a crash there would strand the machine`)
+      expect(at, `\`${risky}\` must come after coreLink.onUpdate( — a crash there would strand the machine`)
         .toBeGreaterThan(updater)
     }
   })
@@ -129,15 +129,15 @@ describe('the core\'s start-up order (core/main.ts)', () => {
     // Stronger than listing today's hazards: this is what catches the NEXT line somebody adds on top.
     const source = code(SOURCE)
     const from = source.indexOf('async function runForeground(')
-    const to = source.indexOf('startSelfUpdater({')
+    const to = source.indexOf('coreLink.onUpdate(')
     const prologue = source.slice(source.indexOf('{', from), to)
-    expect(prologue.includes('\n  await '), 'no await may precede the updater — a hang there is unrecoverable').toBe(false)
-    expect(/\n\s*throw /.test(prologue), 'no throw may precede the updater').toBe(false)
+    expect(prologue.includes('\n  await '), 'no await may precede the update — a hang there is unrecoverable').toBe(false)
+    expect(/\n\s*throw /.test(prologue), 'no throw may precede the update').toBe(false)
     const called = [...prologue.replace(/\.\s*[A-Za-z_$][\w$]*\s*\(/g, ' ').matchAll(/([A-Za-z_$][\w$]*)\s*\(/g)]
       .map(match => match[1])
       .filter(name => !KEYWORDS.has(name))
     expect([...new Set(called.filter(name => !PROLOGUE_CALLS.has(name)))].sort(),
-      'only calls that cannot fail belong above the updater; move this below it, or add it to PROLOGUE_CALLS with a reason')
+      'only calls that cannot fail belong above the update; move this below it, or add it to PROLOGUE_CALLS with a reason')
       .toEqual([])
   })
 
@@ -148,13 +148,16 @@ describe('the core\'s start-up order (core/main.ts)', () => {
     const source = code(SOURCE)
     const flip = source.indexOf('daemonBoot.applyStagedUpdate = ')
     expect(flip, 'the handoff handler is still swapped in core/main.ts').toBeGreaterThan(-1)
-    const body = callArguments(source, 'updateHandoff.restartForUpdate(')
-    expect(body.at, 'the handler is the one it swaps in').toBeGreaterThan(flip)
+    expect(callArguments(source, 'updateHandoff.restartForUpdate(').at, 'the handler is the one it swaps in').toBeGreaterThan(flip)
+    // Its teardown, which a core with no master hands over with too: built just before the swap.
+    const body = callArguments(source, 'const updateTeardown = (')
+    const teardown = { text: source.slice(body.at, source.indexOf('\n  ]\n', body.at)), at: body.at }
+    expect(teardown.at).toBeLessThan(flip)
     const declaredAt = localsOf(source)
-    const late = referencedIn(body.text).filter(used => (declaredAt.get(used) ?? -1) > flip).sort()
+    const late = referencedIn(teardown.text).filter(used => (declaredAt.get(used) ?? -1) > teardown.at).sort()
     expect(late, 'these are torn down by the update handoff but declared after it is armed').toEqual([])
     // What it tears down is all there is to it: the handoff module reaches nothing of runForeground's.
-    expect(referencedIn(body.text)).toEqual(expect.arrayContaining(['registry', 'hookServer', 'localWsServer', 'backend', 'watcher']))
+    expect(referencedIn(teardown.text)).toEqual(expect.arrayContaining(['registry', 'hookServer', 'localWsServer', 'backend', 'watcher']))
   })
 
   it('the daemon arm survives its own start-up failure', () => {
@@ -162,8 +165,12 @@ describe('the core\'s start-up order (core/main.ts)', () => {
     const cli = code(CLI_SOURCE)
     const start = cli.indexOf("case '__run'")
     const arm = cli.slice(start, cli.indexOf('break', start))
-    expect(arm, 'cli.ts starts the core through its entry').toContain('runCore(')
+    expect(arm, 'cli.ts starts the core through its process\'s start').toContain('startCoreProcess(')
     expect(arm, 'a daemon that exits here can never be updated').not.toContain('catch(onError)')
+    // That start, which entry.ts and the lean bundle's core entry call too, runs the core's entry.
+    const processStart = code(CORE_PROCESS_SOURCE)
+    expect(processStart, 'coreProcess.ts starts the core through its entry').toContain('runCore(')
+    expect(processStart, 'a daemon that exits here can never be updated').not.toContain('catch(onError)')
     // The entry it calls: what the arm did before the core had one of its own.
     const source = code(SOURCE)
     const from = source.indexOf('export function runCore(')

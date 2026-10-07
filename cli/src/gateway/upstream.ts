@@ -126,7 +126,7 @@ export class UpstreamLink {
     this.url = (computerId ? `${base}&computer=${encodeURIComponent(computerId)}` : base) + claim
   }
 
-  /** Live backend link state (local dashboard + E2EE gating). */
+  /** Live backend link state (`/api/status` + E2EE gating). */
   isConnected(): boolean {
     return this.ws?.readyState === WebSocket.OPEN
   }

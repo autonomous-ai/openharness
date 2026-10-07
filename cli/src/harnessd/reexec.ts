@@ -26,16 +26,15 @@
  */
 import { spawn, type ChildProcess } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { closeSync, openSync, readFileSync, readSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { PROBE_ANSWER, PROBE_COMMAND, PROBE_TIMEOUT_MS } from './protocol.js'
 import type { ExitReason, ReexecOutcome, ResumeState } from './supervisor.js'
 
 /** The environment variable that hands a master's state to the one it re-executes as. */
 export const RESUME_ENV = 'HARNESSD_RESUME'
-/** The command a bundle's master answers its probe on, and what it answers. */
-export const PROBE_COMMAND = '__harnessd-probe'
-export const PROBE_ANSWER = 'harnessd-probe ok'
-/** How long a probe may take: the updater gives its canary as long. */
-export const PROBE_TIMEOUT_MS = 15_000
+/** Asked by a core on its own too, before it hands an update to a master (core/updateHandoff.ts): in
+ *  ./protocol.ts, which the core's process loads anyway, where this module it does not need is not. */
+export { PROBE_ANSWER, PROBE_COMMAND, PROBE_TIMEOUT_MS } from './protocol.js'
 /**
  * This many re-executions in a row without a core coming up, and the master keeps its code: each new
  * master found yet another bundle before it could start one, and following them would be a loop. An
@@ -43,9 +42,30 @@ export const PROBE_TIMEOUT_MS = 15_000
  */
 export const REEXEC_LIMIT = 3
 
+/** How much of a file `sha256File` holds at a time. */
+const HASH_PIECE_BYTES = 64 * 1024
+
+/**
+ * The sha256 of the file at [path], read a piece at a time. A master hashes cli.js, 6.5 MB, and every
+ * file of its lean bundle before each process it starts (./leanServices.ts), eight of them as it boots:
+ * read whole, each read was a buffer the size of the file, and at idle a master still held 35 to 45 MiB
+ * of them, which a collection would have freed but none came (measured 2026-10-06).
+ */
+export function sha256File(path: string): string {
+  const hash = createHash('sha256')
+  const fd = openSync(path, 'r')
+  try {
+    const piece = Buffer.allocUnsafe(HASH_PIECE_BYTES)
+    for (let read = readSync(fd, piece); read > 0; read = readSync(fd, piece)) hash.update(piece.subarray(0, read))
+  } finally {
+    closeSync(fd)
+  }
+  return hash.digest('hex')
+}
+
 /** A file's sha256: which bundle a master runs, or which is on disk; null when it cannot be read. */
-export function fingerprint(path: string, read: (path: string) => Buffer = readFileSync): string | null {
-  try { return createHash('sha256').update(read(path)).digest('hex') } catch { return null }
+export function fingerprint(path: string): string | null {
+  try { return sha256File(path) } catch { return null }
 }
 
 const EXIT_REASONS: readonly ExitReason[] = ['crashed', 'hung', 'did-not-bind', 'not-ready', 'memory', 'update', 'stopped']

@@ -70,6 +70,101 @@ describe('service links', () => {
     plain.closed()
   })
 
+  it('asks for an experiment that is off, and sends the request that woke it once it connects, in order', () => {
+    const want = vi.fn()
+    const links = make({ owned: { orchestrator: ['orchestrator'] }, onDemand: new Set(['orchestrator']), want })
+    const replies: Array<Record<string, unknown>> = []
+    links.route('orchestrator', { action: 'list' }, ASKER, (result) => replies.push(result))
+    links.route('orchestrator', { action: 'catalog' }, ASKER, (result) => replies.push(result))
+    expect(want.mock.calls).toEqual([['orchestrator'], ['orchestrator']])
+    expect(replies).toEqual([])
+    const orchestrator = sink()
+    const link = links.accept('orchestrator', TOKEN, orchestrator, vi.fn())!
+    expect(orchestrator.sent).toEqual([
+      { type: 'orchestrator', payload: { action: 'list', requestId: 'route-1' }, asker: ASKER },
+      { type: 'orchestrator', payload: { action: 'catalog', requestId: 'route-2' }, asker: ASKER },
+    ])
+    link.receive({ type: 'orchestrator_result', payload: { requestId: 'route-2', projects: [] } })
+    link.receive({ type: 'orchestrator_result', payload: { requestId: 'route-1', projects: [] } })
+    expect(replies).toEqual([{ projects: [] }, { projects: [] }])
+    // Connected again later, nothing is sent twice.
+    const again = links.accept('orchestrator', TOKEN, sink(), vi.fn())!
+    expect(want).toHaveBeenCalledTimes(2)
+    // On, then down: answered at once, as any service is, and not asked for again.
+    again.closed()
+    const down = vi.fn()
+    links.route('orchestrator', { action: 'list' }, ASKER, down)
+    expect(down).toHaveBeenCalledWith({ error: 'SERVICE_UNAVAILABLE', service: 'orchestrator', retryable: true })
+    expect(want).toHaveBeenCalledTimes(2)
+  })
+
+  it('carries the connection through an experiment\'s start, and never sends what a connection that closed meanwhile asked', () => {
+    const links = make({ owned: { orchestrator: ['orchestrator'] }, onDemand: new Set(['orchestrator']), want: vi.fn() })
+    const gone = vi.fn(), stays = vi.fn(), core = vi.fn()
+    links.route('orchestrator', { action: 'list' }, { ...ASKER, connection: 'gone' }, gone)
+    links.route('orchestrator', { action: 'catalog' }, { ...ASKER, connection: 'stays' }, stays)
+    links.route('orchestrator', { action: 'status' }, ASKER, core)
+    links.closeConnection('gone')
+    // Answered where nobody is left to read it, and never sent.
+    expect(gone).toHaveBeenCalledWith({ error: 'SERVICE_UNAVAILABLE', service: 'orchestrator', retryable: true })
+    const orchestrator = sink()
+    links.accept('orchestrator', TOKEN, orchestrator, vi.fn())
+    expect(orchestrator.sent).toEqual([
+      { type: 'orchestrator', payload: { action: 'catalog', requestId: 'route-2' }, asker: { ...ASKER, connection: 'stays' } },
+      { type: 'orchestrator', payload: { action: 'status', requestId: 'route-3' }, asker: ASKER },
+    ])
+    expect(stays).not.toHaveBeenCalled()
+    expect(core).not.toHaveBeenCalled()
+    // Sent, it is the process's to abort when its connection closes.
+    links.closeConnection('stays')
+    expect(orchestrator.sent.at(-1)).toEqual({ type: 'service_connection_closed', payload: { connection: 'stays' } })
+    expect(stays).not.toHaveBeenCalled()
+  })
+
+  it('acknowledges an accepted service before held events and the requests that woke it', () => {
+    // Found by QA on a quiet machine: the first Share request saw no agent when it arrived before connected.
+    const links = make({ owned: { sharing: ['harness_share_link'] }, onDemand: new Set(['sharing']) })
+    links.notify('sharing', { type: 'service_event', payload: { kind: 'linkDown' } }, { untilDelivered: true })
+    const reply = vi.fn()
+    links.route('harness_share_link', { agentId: 'a1' }, ASKER, reply)
+    const sharing = sink()
+    const accepted = vi.fn(() => { sharing.sendFrame({ type: 'connected', payload: {} }) })
+    expect(links.accept('sharing', 'wrong', sharing, vi.fn(), accepted)).toBeNull()
+    expect(accepted).not.toHaveBeenCalled()
+    const link = links.accept('sharing', TOKEN, sharing, vi.fn(), accepted)!
+    expect(sharing.sent.map((frame) => frame.type)).toEqual(['connected', 'service_event', 'harness_share_link'])
+    expect(accepted).toHaveBeenCalledOnce()
+    link.receive({ type: 'harness_share_link_result', payload: { requestId: 'route-1', link: 'ready' } })
+    expect(reply).toHaveBeenCalledWith({ link: 'ready' })
+  })
+
+  it('answers SERVICE_UNAVAILABLE for one on demand that does not come in time, then at once until it comes, or will not take the request', () => {
+    const want = vi.fn()
+    const links = make({ owned: { orchestrator: ['orchestrator'], devices: ['harness_devices_list'], search: ['session_search'] }, onDemand: new Set(['orchestrator', 'devices']), want })
+    const late = vi.fn()
+    links.route('orchestrator', { action: 'list' }, ASKER, late)
+    vi.advanceTimersByTime(5_000)
+    expect(late).toHaveBeenCalledWith({ error: 'SERVICE_UNAVAILABLE', service: 'orchestrator', retryable: true })
+    // Its master could not start it: the next request does not wait the whole wait again, nor ask again.
+    const again = vi.fn()
+    links.route('orchestrator', { action: 'list' }, ASKER, again)
+    expect(again).toHaveBeenCalledWith({ error: 'SERVICE_UNAVAILABLE', service: 'orchestrator', retryable: true })
+    expect(want).toHaveBeenCalledTimes(1)
+    // Once it comes, it is served as any other.
+    const served = sink()
+    links.accept('orchestrator', TOKEN, served, vi.fn())
+    links.route('orchestrator', { action: 'list' }, ASKER, vi.fn())
+    expect(served.sent).toHaveLength(1)
+    const refused = vi.fn()
+    links.route('harness_devices_list', {}, ASKER, refused)
+    links.accept('devices', TOKEN, sink(false), vi.fn())
+    expect(refused).toHaveBeenCalledWith({ error: 'SERVICE_UNAVAILABLE', service: 'devices', retryable: true })
+    // A service that is not an experiment is never waited for.
+    const search = vi.fn()
+    links.route('session_search', {}, ASKER, search)
+    expect(search).toHaveBeenCalledWith({ error: 'SERVICE_UNAVAILABLE', service: 'search', retryable: true })
+  })
+
   it('waits as long as a call says it may (a pairing), and answers SERVICE_UNAVAILABLE after', async () => {
     const links = make({ owned: { gateway: [] } })
     links.accept('gateway', TOKEN, sink(), vi.fn())
@@ -103,6 +198,23 @@ describe('service links', () => {
     expect(reply).toHaveBeenCalledOnce()
     // What no service owns is the core's own.
     expect(links.route('agents_list', {}, ASKER, reply)).toBe(false)
+  })
+
+  it('routes with the connection that asked, and tells every service connected when a connection closes', () => {
+    const links = make({ owned: { search: ['session_search'], store: ['dsh_list'], viewers: [] } })
+    const search = sink(), store = sink()
+    links.accept('search', TOKEN, search, vi.fn())
+    links.accept('store', TOKEN, store, vi.fn())
+    links.route('session_search', { query: 'q' }, { ...ASKER, connection: 'conn-1' }, vi.fn())
+    expect(search.sent).toEqual([{ type: 'session_search', payload: { query: 'q', requestId: 'route-1' }, asker: { local: false, owner: true, connection: 'conn-1' } }])
+    links.closeConnection('conn-1')
+    const closed = { type: 'service_connection_closed', payload: { connection: 'conn-1' } }
+    expect(search.sent.at(-1)).toEqual(closed)
+    expect(store.sent).toEqual([closed])
+    // A service down when it closed is not told later: what it was answering went with it.
+    const viewers = sink()
+    links.accept('viewers', TOKEN, viewers, vi.fn())
+    expect(viewers.sent).toEqual([])
   })
 
   it('asks a service what the core itself needs, as the core, and settles every way a routed request does', async () => {
@@ -146,6 +258,37 @@ describe('service links', () => {
     expect(reply).not.toHaveBeenCalled()
     vi.advanceTimersByTime(1)
     expect(reply).toHaveBeenCalledWith({ error: 'SERVICE_UNAVAILABLE', service: 'search', retryable: true })
+  })
+
+  it('waits longer for the answers that take longer, by service and type, and the usual half minute for the rest', async () => {
+    const links = make({
+      owned: { search: ['session_search', 'session_tail'], models: ['grid_fleet_run'] },
+      waits: { models: { grid_fleet_run: 60_000, ensure: 30_000 }, search: { session_tail: 10_000 } },
+    })
+    links.accept('models', TOKEN, sink(), vi.fn())
+    links.accept('search', TOKEN, sink(), vi.fn())
+    const run = vi.fn()
+    const ensure = vi.fn()
+    const search = vi.fn()
+    const tail = vi.fn()
+    links.route('grid_fleet_run', {}, ASKER, run)
+    void links.call('models', 'ensure', {}).then(ensure)
+    links.route('session_search', {}, ASKER, search)
+    links.route('session_tail', {}, ASKER, tail)
+    vi.advanceTimersByTime(5_000)
+    expect(search).toHaveBeenCalledWith({ error: 'SERVICE_UNAVAILABLE', service: 'search', retryable: true })
+    expect(tail).not.toHaveBeenCalled()
+    vi.advanceTimersByTime(5_000)
+    expect(tail).toHaveBeenCalled()
+    vi.advanceTimersByTime(20_000)
+    await Promise.resolve()
+    expect(ensure).toHaveBeenCalledWith({ error: 'SERVICE_UNAVAILABLE', service: 'models', retryable: true })
+    expect(run).not.toHaveBeenCalled()
+    vi.advanceTimersByTime(30_000)
+    expect(run).toHaveBeenCalledWith({ error: 'SERVICE_UNAVAILABLE', service: 'models', retryable: true })
+    // A type the waits only inherit from Object's prototype waits as any other does.
+    links.route('session_search', {}, ASKER, vi.fn())
+    expect(links.call('models', 'toString', {})).toBeInstanceOf(Promise)
   })
 
   it('answers what was waiting on a service that goes, and lets a newer connection replace an older one', () => {

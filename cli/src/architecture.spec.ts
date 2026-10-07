@@ -141,19 +141,33 @@ const WALK_TIMEOUT_MS = 60_000
  *
  * RUN_FOREGROUND_BUDGET went up from 2,572 on 5 October, when the socket's request cases moved into core
  * modules: binding each of them is the wiring this function is for. backendSocket.ts lost 615 lines in
- * those moves, and runForeground gained 28.
+ * those moves, and runForeground gained 28. Down to 2,380 on 6 October (step 11), at 2,346: a core on its
+ * own hands an update to a master, which judges it, and no longer spawns, judges and rolls back a core.
+ *
+ * BACKEND_SOCKET_BUDGET came down again on 6 October (step 7): the Model Manager's grid commands, the grid
+ * name it worked out and the model lists it built moved to the models service, 1,457 → 1,391 lines.
+ *
+ * Lowered to 2,230 the same day (step 9, D1): the dial's host, its window bridges and the fleet left
+ * runForeground for the devices' own service (services/devices.ts), 2,375 lines to 2,213. Then 2,240 (step 9,
+ * D2): the devices' link to their own process and its routes, as every service there has, 2,213 to 2,232.
+ * Then 2,230 (step 9, D3): the Wi-Fi device's wiring went with them (core/wifi.ts, core/wifiAgents.ts),
+ * 2,232 lines to 2,227, though its link to the devices' process came in.
+ *
+ * Down to 2,215 the same day, at 2,209 from 2,228: the updater left the core for a process the master runs.
  */
-const RUN_FOREGROUND_BUDGET = 2_600
+const RUN_FOREGROUND_BUDGET = 2_215
 /** Lowered from 2,180 when the relay and its E2EE left the socket for the gateway (step 10, R1: 1,440).
  *  The Wi-Fi device's relay came back to it in R2, beside the device service it answers for, over the
- *  gateway's sessions (lib/autonomous-device/overGateway.ts): 1,460. */
-const BACKEND_SOCKET_BUDGET = 1_460
+ *  gateway's sessions (lib/autonomous-device/overGateway.ts): 1,460. Models' grid commands, grid name and
+ *  lists left it for the models service (step 7): 1,391. Then 1,200 when the Devices tab's requests
+ *  became the devices' own (step 9, D1), 1,207 → 1,194. Then 1,195 when the Wi-Fi device's relay left
+ *  it for the devices' process (step 9, D3): the socket hands its sessions' events on (core/wifi.ts). Then
+ *  1,182 when the viewer forwarder and the interactive viewers it held left for the viewers
+ *  (core/viewerStreams.ts). */
+const BACKEND_SOCKET_BUDGET = 1_185
 
 /** Exceptions, each with its reason. Keep this short. */
 const SERVICE_MAY_IMPORT: Record<string, string> = {
-  // The search process builds, in its own process, the core API search runs on; this reader is a pure
-  // function of a session row, the same one the core hands search through CoreApi.
-  'services/searchProcess.ts → ../core/transcripts/databaseHistory.js': 'the core API search runs on, built in its own process',
   // A pure function of a session row. Move it out of registry.ts when workspaces leaves the core's process.
   'services/workspaces.ts → ../lib/registry.js': 'sessionDisplayTitle, a pure helper',
 }
@@ -174,9 +188,6 @@ const SERVICE_MAY_IMPORT: Record<string, string> = {
  *
  * Grew by 58 for the turn a blocking Stop hook continues (a Claude /goal loop): it is the turn lifecycle,
  * which only the core's transcript normalizer and Stop-hook fallback can keep.
- *
- * Grew by 97 for the Jev catalog (#888, lib/localModels.ts and appModels.ts): the models service's own
- * code, in the core's process only until step 7 runs models in a process of its own and takes it out.
  *
  * Then at 102,019 in 430 with #893's shell launch (step 5), from 106,006 in 451: search, the viewers, workspaces, usage, the
  * monitor and the project readers run in processes of their own, and their code is loaded into the
@@ -211,127 +222,140 @@ const SERVICE_MAY_IMPORT: Record<string, string> = {
 // the session crypto it ran in the core's process (lib/e2ee/relayClient.ts and what it loads) is the
 // gateway's alone, and the Share relay (sharing/relay.ts) runs in the gateway with the relay's other sockets.
 // What a service in its own process may ask of the account (core/accountQueries.ts) is the 41 lines added.
-const CORE_CLOSURE_BUDGET = 95_440
+//
+// Then at 95,374 in 417 (step 11), from 95,380: a core on its own hands an update to a master on the new
+// build, which judges it, instead of spawning a core and judging it itself. Not the 180 lines the plan
+// counted on: a core still runs without a master when an older release's own handoff started it.
+//
+// Then at 89,632 in 401 (step 7), from 95,374 in 417: models runs in a process of its own, the Jev catalog's
+// 97 lines (#888) with it, and the core reaches grid only through its port (core/modelsLink.ts), keeping
+// which `grid` a pane runs (lib/gridBinary.ts), how a frame reads a grid's note (lib/gridAnnotation.ts) and
+// the launchers (lib/launchers.ts).
+//
+// Then at 89,761 in 402 (step 8, its first change), from 89,632 in 401: delivered turns (core/deliveries.ts), the one way the Wi-Fi
+// device, the teams and the orchestrator write a turn and hear of it, which lets the latter two run in
+// processes of their own. Its lines are added here, ahead of the moves that take the teams and the
+// orchestrator out of this process.
+//
+// Then at 89,443 in 402, from 89,796 in 402: the orchestrator is an experiment, in a process of its own
+// started only once it is on (services/orchestratorProcess.ts); its 640 lines leave. What stays is what any
+// experiment acts on the core through (core/experiments.ts, core/experimentQueries.ts) and what the core
+// keeps of the orchestrator (core/orchestratorLink.ts): 290 lines.
+//
+// Then at 88,080 in 392, from 89,443 in 402: Tab collaboration and teams are an experiment, in the teams'
+// process beside the prompt scopes (services/collaborationProcess.ts), started only once on; the team
+// service, its mailbox, the tab channels and their wire (1,700 lines) leave. What stays: the team write hold
+// the core reads a pane with as it writes a team's turn, now lib/teamWriteHold.ts, and what the core keeps of
+// the teams' process (core/teamsLink.ts: which deliveries may be written, the scopes' own questions) and of
+// the account's notices (core/experiments.ts).
+//
+// Then at 87,476 in 387, from 88,083 in 392: Share is an experiment, in a process of its own started only
+// once on (services/sharingProcess.ts), holding no credential: the owner, its stores, its crypto and the
+// identity store it signed with leave. Its welcomes are signed by the gateway (gateway/observerKey.ts), and
+// its observers' terminals are read by the core's read-only stream manager (core/terminalWatch.ts), which
+// stays with what the core keeps of Share (core/sharingLink.ts).
+//
+// Grew to 87,941 in 389 (step 9, D1), from 87,476 in 387: the devices behind a port of their own, still in
+// the core's process (services/devices.ts, services/devicesGuard.ts, the port and its `CoreApi` members in
+// core/api.ts). runForeground lost their wiring and the pane writer lock came into the core
+// (core/deviceInput.ts). D2 runs the devices in a process of their own, which takes them out: the dial,
+// the window bridges, the fleet's router and lane, and the voice router, about 10,000 lines.
+//
+// Then at 77,669 in 358 (step 9, D2), from 87,941 in 389: the devices run in a process of their own
+// (services/devicesProcess.ts; the core's side is core/devicesLink.ts), and the core loads their code only
+// to run them in its process instead (services/inline.ts). With them went the dial (cable/), the window
+// bridges, the fleet's router and its lane to the owner's other machines, and the voice router with its
+// engine worker pool, and the E2EE code the fleet read the linked machines with (lib/e2ee/machinePeers.ts).
+//
+// Then at 75,746 in 345 (step 9, D3), from 77,669 in 358: the Wi-Fi device's service, its relay, its
+// receipts and streams and its Store preparations run with the dials (services/wifi.ts, in the devices'
+// process; the core's side is core/wifi.ts and core/wifiLink.ts), and with them went the Store's installs
+// and catalog, which only the device's preparations reached from the core.
+//
+// Then at 75,456 in 344, from 75,746 in 345: the web dashboard (webui.ts, `GET /`, its log tail and stop
+// button, and its port in `e2e_status`) is deleted. Nothing opened it: no app, website, script or the
+// backend, and the web client that linked to it retired with the browser setup links (#348).
+//
+// Grew by 37 to 75,493 in 344, from 75,456, for the notice that the connection a routed request came over closed
+// (core/serviceHost.ts, core/serviceLinks.ts, the socket's close paths), held requests for an experiment
+// still starting included: what lets a service keep work per connection and stop it when its asker goes,
+// which held the command bar's two doors in the core (step 4).
+//
+// Then at 74,974 in 342, from 75,493 in 344: what serves this machine's viewers to a client over its
+// connection (lib/viewerForwarder.ts, lib/interactiveViewer.ts and the stream they run on, lib/viewerWire.ts)
+// runs in the viewers' process, beside the viewer servers it forwards to (services/viewers.ts), and with it
+// the headless browser capture the surfaces render with (sharing/viewer.ts), Share's other user. The core
+// keeps the frame types it gates (lib/viewerFrames.ts) and hands each frame on (core/viewerStreams.ts).
+//
+// Then at 74,629 in 340, from 74,974 in 342: the command bar is an experiment, in a process of its own
+// from its first request (services/commandBar.ts); its JEV decisions with their zod schemas
+// (lib/commandBar.ts) and the OpenRouter key reader only it still loaded here (lib/openrouter.ts) leave.
+// Its HTTP door stays, forwarding to it (lib/commandBarHttp.ts), and so does ⌘K's task delivery, the
+// devices'.
+//
+// Quiet-machine QA moves handoff history folding, redaction and file writes to the edge host;
+// the core keeps narrow conversation reads: 73,025 lines in 336 files after the command-bar extraction.
+//
+// Grew by 229 to 73,254 in 337 (step 9, the devices on demand), from 73,025 in 336: the devices' process runs
+// only once there is a device, about 72 MiB at idle that a computer with none no longer pays. What asks for
+// it is the core's (core/devicesWake.ts, 146: a dial's port in /dev every two seconds, a paired Wi-Fi
+// device); a Wi-Fi device's requests are held while it starts (core/wifi.ts, +50), and a process on demand
+// that did not come in time is answered at once (core/serviceLinks.ts).
+//
+// Grew by 157 to 73,411 in 338, from 73,254 in 337: the gate that keeps a terminal attaching apart from what
+// tmux tells every terminal (lib/tmuxControlGate.ts and its uses in the terminal stream, the pastes, and
+// session create, kill and rename). Before tmux 3.7 the two meeting crashed the tmux server, and every agent
+// with it (windows.e2e.ts, 7 of 27 CI runs on Ubuntu's 3.4). It guards the core's own terminals, so it
+// cannot move to a service. The budget keeps the 101 lines of room it had.
+//
+// Then at 72,134 in 333, from 73,411 in 338: the updater left the core for a process the master runs
+// (services/updaterProcess.ts), and the core never downloads a build. The CLI's and hn's updaters
+// (lib/selfUpdate.ts, tui/update.ts, tui/install.ts) went, with the spawn lock they staged under.
+//
+// Then at 71,244 in 332, from 72,134 in 333: the recaps (each turn's recap, the devices' turn cards and the
+// notification a finished turn rings: lib/commander.ts and lib/agentNotifications.ts) run as a service, in
+// the edge host by default (services/recaps.ts). The core keeps the turn lifecycle it tells them, a port
+// that never waits (core/turns/recaps.ts, core/recapsLink.ts) and the reads of what they hold
+// (lib/recapReads.ts).
+const CORE_CLOSURE_BUDGET = 71_350
 
 /** What is not the core's, by path: each goes to a service or its own process, in the plan's order. */
 const EDGE: RegExp[] = [
   /^gateway\//, /^lib\/e2ee\//, /^cable\//, /^device\//, /^lib\/autonomous-device\//, /^sharing\//, /^teams\//, /^orchestrator\//, /^services\//,
   /^lib\/grid(Attach|Credentials|Derive|Ensure|Exec|FleetRpc|Handoff|Install|McpUrl|Models|ModelsPayload|Picture|Presence|Reader|Target|Wake)\.ts$/,
   /^lib\/localModels\.ts$/,
+  // The change-agent handoff reads and redacts history and runs git: the edge host owns that work.
+  /^lib\/agentHandoff\.ts$/,
   // The relay's own parts, the gateway's alone: the windows' sessions to other machines, P2P and STUN, the
   // remote viewers' proxy, and the shaping of what goes up the link.
   /^lib\/(remoteRelay|terminalP2p|stunSelect|remoteViewerProxy|deviceRecentTrim|commanderReplay)\.ts$/,
+  // The viewers' own: a viewer served to a client over its connection, and the stream it runs on.
+  /^lib\/(viewerForwarder|interactiveViewer|viewerWire)\.ts$/,
+  // The recaps' own parts: the mirror that cuts each turn's recap and card, and the notification policy it
+  // shares with the questions the core tells it of (services/recaps.ts).
+  /^lib\/(commander|agentNotifications)\.ts$/,
   // The Store's and the viewers' parts of dsh; the launch path (installed, manifest, launch, runtime, …) is the core's.
   /^dsh\/(catalog|install|update|updates|registry|wire|service|lock|builtins|viewer|viewerLedger|verdict|artifacts)\.ts$/,
   // Search's index; the readers of other engines' sessions (external.ts, externals/) are the core's, for adoption.
   /^lib\/sessionSearch\/(?!external\.ts$|externals\/)/,
+  // Downloading builds: the updater's, in a process the master runs (services/updaterProcess.ts). The core
+  // never downloads a build.
+  /^lib\/(selfUpdate|runtimeInstall)\.ts$/, /^tui\/(update|install)\.ts$/,
 ]
 
 /**
  * The edge files the core's process still loads, each with the step of the plan that takes it out. The
  * list only shrinks: an entry no longer reached fails the test, so remove it with the move that ends it.
  */
-/** The Wi-Fi device lists, installs and checks harnesses with the Store's code, in the core's process
- *  (lib/autonomous-device/storeRuntime.ts). It reaches the Store through the Store's process once a port
- *  can carry an install's progress back to it, or it leaves with the device (step 10). */
-const STORE_BYPASS = 'step 10: the Wi-Fi device\'s own way into the Store, until it goes through the Store\'s process'
-
 const CORE_MAY_REACH: Record<string, string> = {
-  'cable/cableFleet.ts': 'step 9: the dial, in the devices process',
-  'cable/cableFrame.ts': 'step 9: the dial, in the devices process',
-  'cable/cableHost.ts': 'step 9: the dial, in the devices process',
-  'cable/cableSession.ts': 'step 9: the dial, in the devices process',
-  'cable/companionProtocol.ts': 'step 9: the dial, in the devices process',
-  'cable/dialLog.ts': 'step 9: the dial, in the devices process',
-  'cable/dialPortVerdicts.ts': 'step 9: the dial, in the devices process',
-  'cable/fwPush.ts': 'step 9: the dial, in the devices process',
-  'cable/machineFleet.ts': 'step 9: the dial, in the devices process',
-  'cable/notificationRead.ts': 'step 9: the dial, in the devices process',
-  'cable/passageCarry.ts': 'step 9: the dial, in the devices process',
-  'cable/questionInbox.ts': 'step 9: the dial, in the devices process',
-  'cable/serial.ts': 'step 9: the dial, in the devices process',
-  'cable/terminalActivity.ts': 'step 9: the dial, in the devices process',
-  'cable/usbConsoleUser.ts': 'step 9: the dial, in the devices process',
-  'cable/voiceDraft.ts': 'step 9: the dial, in the devices process',
-  'cable/windowForm.ts': 'step 9: the dial, in the devices process',
-  'cable/windowRoute.ts': 'step 9: the dial, in the devices process',
-  'cable/windowSelection.ts': 'step 9: the dial, in the devices process',
-  'cable/windowVisit.ts': 'step 9: the dial, in the devices process',
-  'device/deviceFleet.ts': 'step 9: the fleet, beside the dial',
-  'device/deviceLink.ts': 'step 9: the fleet, beside the dial',
-  'device/machineList.ts': 'step 9: the dial, in the devices process',
+  'device/machineList.ts': 'the account\'s machine list, which /api/machines answers from and the trust group reads: with the account proxies (step 10)',
   'dsh/builtins.ts': 'the bundled harnesses are put in place by the core\'s start, which cli.js carries them for anyway; in the Store\'s lean process they cost a second copy (core/main.ts)',
-  'dsh/catalog.ts': STORE_BYPASS,
-  'dsh/install.ts': STORE_BYPASS,
-  'dsh/lock.ts': STORE_BYPASS,
-  'dsh/registry.ts': STORE_BYPASS,
-  'dsh/service.ts': STORE_BYPASS,
-  'dsh/update.ts': STORE_BYPASS,
-  'dsh/updates.ts': STORE_BYPASS,
-  'lib/autonomous-device/dump.ts': 'step 10: the Wi-Fi device, into the devices process over the gateway',
-  'lib/autonomous-device/input.ts': 'step 9: the pane writer lock, into core/input.ts',
-  'lib/autonomous-device/localApi.ts': 'step 10: the Wi-Fi device, into the devices process over the gateway',
-  'lib/autonomous-device/overGateway.ts': 'step 10: the Wi-Fi device, into the devices process over the gateway',
-  'lib/autonomous-device/parts.ts': 'step 10: the Wi-Fi device, into the devices process over the gateway',
-  'lib/autonomous-device/relay.ts': 'step 10: the Wi-Fi device, into the devices process over the gateway',
-  'lib/autonomous-device/resultContract.ts': 'step 10: the Wi-Fi device, into the devices process over the gateway',
-  'lib/autonomous-device/resultEvidence.ts': 'step 10: the Wi-Fi device, into the devices process over the gateway',
-  'lib/autonomous-device/resultJournal.ts': 'step 10: the Wi-Fi device, into the devices process over the gateway',
-  'lib/autonomous-device/service.ts': 'step 10: the Wi-Fi device, into the devices process over the gateway',
-  'lib/autonomous-device/store.ts': 'step 10: the Wi-Fi device, into the devices process over the gateway',
-  'lib/autonomous-device/storeContract.ts': 'step 10: the Wi-Fi device, into the devices process over the gateway',
-  'lib/autonomous-device/storeRuntime.ts': 'step 10: the Wi-Fi device, into the devices process over the gateway',
-  'lib/autonomous-device/stream.ts': 'step 10: the Wi-Fi device, into the devices process over the gateway',
-  'lib/e2ee/core.ts': 'step 8: Share seals its own frames with it',
-  'lib/e2ee/machinePeers.ts': 'step 9: the fleet reads which machines are linked (their public keys, no credential), beside the dial',
-  'lib/e2ee/passwordPake.ts': 'with lib/e2ee/store.ts',
-  'lib/e2ee/store.ts': 'step 8: this machine\'s identity, for Share\'s owner',
-  'lib/gridAttach.ts': 'step 7: models, in its own process',
-  'lib/gridCredentials.ts': 'step 7: models, in its own process',
-  'lib/gridDerive.ts': 'step 7: models, in its own process',
-  'lib/gridEnsure.ts': 'step 7: models, in its own process',
-  'lib/gridExec.ts': 'step 7: models, in its own process',
-  'lib/gridFleetRpc.ts': 'step 7: models, in its own process',
-  'lib/gridHandoff.ts': 'step 7: models, in its own process',
-  'lib/gridInstall.ts': 'step 7: models, in its own process',
-  'lib/gridMcpUrl.ts': 'step 7: models, in its own process',
-  'lib/gridModels.ts': 'step 7: models, in its own process',
-  'lib/gridModelsPayload.ts': 'step 7: models, in its own process',
-  'lib/gridPicture.ts': 'step 7: models, in its own process',
-  'lib/gridPresence.ts': 'step 7: models, in its own process',
-  'lib/gridReader.ts': 'step 7: models, in its own process',
-  'lib/gridTarget.ts': 'step 7: models, in its own process',
-  'lib/gridWake.ts': 'step 7: models, in its own process',
-  'lib/localModels.ts': 'step 7: models, in its own process',
-  'lib/sessionSearch/sessionTurns.ts': 'the handoff (lib/agentHandoff.ts), in the edge host once CoreApi gives it the stopped agents, recaps and discovery it reads',
+  'dsh/lock.ts': 'with dsh/builtins.ts',
+  'dsh/registry.ts': 'with dsh/builtins.ts, which checks the bundled harnesses against the catalog\'s entries',
+  'dsh/updates.ts': 'with dsh/builtins.ts',
+  'lib/autonomous-device/localApi.ts': 'the hook server\'s routes for `harness device`, which the core serves: the pairings they answer are the gateway\'s, the receipts the Wi-Fi device\'s service\'s',
   'lib/sessionSearch/transcript.ts': 'the readers of other engines\' sessions keep this helper: it moves beside them, out of search\'s folder',
-  'lib/sessionSearch/turns.ts': 'the handoff (lib/agentHandoff.ts), in the edge host once CoreApi gives it the stopped agents, recaps and discovery it reads',
-  'orchestrator/artifacts.ts': 'step 8: the experimental host',
-  'orchestrator/model.ts': 'step 8: the experimental host',
-  'orchestrator/prompts.ts': 'step 8: the experimental host',
-  'orchestrator/service.ts': 'step 8: the experimental host',
-  'orchestrator/wire.ts': 'step 8: the experimental host',
-  'services/fleet.ts': 'step 9: the fleet, beside the dial',
-  'services/fleetRouter.ts': 'step 9: the fleet, beside the dial',
-  'services/models.ts': 'step 7: models, in its own process',
   'services/shell.ts': 'shell setup and launch receipts, in the edge host; only the argv launch stays in the core (#893)',
-  'services/requestErrors.ts': 'step 7: with the last service that uses it, models, out of the core\'s process',
-  'sharing/collaboration.ts': 'step 8: the experimental host',
-  'sharing/crypto.ts': 'step 8: the experimental host',
-  'sharing/grants.ts': 'step 8: the experimental host',
-  'sharing/owner.ts': 'step 8: the experimental host',
-  'sharing/protocol.ts': 'step 8: the experimental host',
-  'sharing/viewer.ts': 'step 8: the experimental host',
-  'teams/channels.ts': 'step 8: the experimental host',
-  'teams/client.ts': 'step 8: the experimental host',
-  'teams/mailbox.ts': 'step 8: the experimental host',
-  'teams/model.ts': 'step 8: the experimental host',
-  'teams/preflight.ts': 'step 8: the experimental host',
-  'teams/promptScope.ts': 'step 8: the experimental host',
-  'teams/prompts.ts': 'step 8: the experimental host',
-  'teams/service.ts': 'step 8: the experimental host',
-  'teams/store.ts': 'step 8: the experimental host',
-  'teams/wire.ts': 'step 8: the experimental host',
 }
 
 describe('the daemon\'s shape', () => {

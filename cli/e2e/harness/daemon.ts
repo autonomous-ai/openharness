@@ -39,6 +39,8 @@ export interface EngineConfig {
   version?: string
   without?: string[]
   startDelayMs?: number
+  /** Hold startup before the transcript opens until this disposable path's .release file exists. */
+  startupGate?: string
   firstHookDelayMs?: number
   updateAvailable?: string
   /** Ask whether to trust a folder the engine's own config has no answer for, as the real CLIs do. */
@@ -55,6 +57,10 @@ export interface DaemonOptions {
   codexModel?: string
   /** Boot the core on its own (`__run`) instead of under harnessd's master (`__harnessd`). */
   noMaster?: boolean
+  /** Start as a supervisor does, `harness start -f`: the master in the foreground, the core its child. */
+  foreground?: boolean
+  /** Start with these arguments to node instead (a launcher the test provides), in the daemon's environment. */
+  launch?: string[]
   /** Run this bundle (an installed `cli.js`) instead of the checkout's source. */
   scriptPath?: string
   /** Keep the daemon's data folder here instead of under the throwaway root (a test volume). The fake
@@ -300,19 +306,19 @@ export class IsolatedDaemon {
     // Checked at every start: a test writes a shell profile, or the data folder remembers a home, between them.
     assertHooksContained(this.root, this.env)
     const heap = this.options.heapMiB ? [`--max-old-space-size=${this.options.heapMiB}`] : []
-    const entry = this.options.noMaster ? '__run' : '__harnessd'
+    const entry = this.options.noMaster ? ['__run'] : this.options.foreground ? ['start', '-f'] : ['__harnessd']
     // Readiness is judged from what this start prints, never from an earlier boot's lines.
     const from = this.output.length
     // A test's own bundle (an old release), the run's bundle (`E2E_BUNDLE`, see bundle.ts), or the sources.
     const bundle = this.options.scriptPath ?? process.env.E2E_BUNDLE_PATH
     const script = bundle ? [bundle] : ['--import', 'tsx', 'src/cli.ts']
-    const child = spawn(process.execPath, [...heap, ...script, entry], {
+    const child = spawn(process.execPath, this.options.launch ?? [...heap, ...script, ...entry], {
       cwd: CLI_ROOT, env: this.env, stdio: ['ignore', 'pipe', 'pipe'],
     })
     this.child = child
     // The whole log, as files, for a failing test's CI artifacts (E2E_ARTIFACTS_DIR, artifacts.ts).
     const logName = `daemon-${this.port}.log`
-    artifactLog(logName, `---- ${new Date().toISOString()} start (pid ${child.pid}, ${script.at(-1)} ${entry}, data ${this.dataDir})\n`)
+    artifactLog(logName, `---- ${new Date().toISOString()} start (pid ${child.pid}, ${script.at(-1)} ${entry.join(' ')}, data ${this.dataDir})\n`)
     const take = (chunk: Buffer) => {
       const text = chunk.toString('utf8')
       this.output += text

@@ -31,12 +31,16 @@ function stubGateway() {
     trustLinkedPeer: vi.fn(async () => answer), groupList: vi.fn(async () => answer), groupSync: vi.fn(async () => answer),
     groupRemove: vi.fn(async () => answer), devicesList: vi.fn(async () => answer), devicesRemove: vi.fn(async () => answer),
     devicesHistory: vi.fn(async () => answer), devicesDismiss: vi.fn(async () => answer), devicesRebaseline: vi.fn(async () => answer),
-    wifi: vi.fn(async () => ({ result: { devices: [] } })), dashboardPort: vi.fn(), wifiService: vi.fn(), revokeIdentity: vi.fn(),
+    wifi: vi.fn(async () => ({ result: { devices: [] } })), wifiService: vi.fn(), revokeIdentity: vi.fn(),
     account: vi.fn(), reachable: vi.fn(),
     lane: {
       hello: vi.fn(async (machineId: string) => ({ type: 'e2e_hello', machineId })), welcome: vi.fn(async () => true),
       rekey: vi.fn(async () => {}), seal: vi.fn(async (_m: string, frame: Record<string, unknown>) => ({ frame: { ...frame, sealed: true } })),
       open: vi.fn(async () => ({ unreadable: true as const })), drop: vi.fn(),
+    },
+    observerKey: {
+      publicKey: vi.fn(async () => 'cHVi'),
+      signWelcome: vi.fn(async (_m: string, shareId: string) => { if (shareId === 'bad') throw new Error('not a welcome to an observer'); return 'c2ln' }),
     },
   } satisfies GatewayOps
   const sessions: Array<{ send: ReturnType<typeof vi.fn>; sendBinary: ReturnType<typeof vi.fn>; detach: ReturnType<typeof vi.fn> }> = []
@@ -97,7 +101,6 @@ describe('the gateway\'s process, spoken to by the core', () => {
     w.link.port.holdRequests()
     w.link.port.connect()
     w.link.port.localClients(1)
-    w.link.ops.dashboardPort(41000)
     w.link.ops.reachable(['m2'])
     w.link.ops.wifiService(true)
     expect(w.gateways).toHaveLength(0)
@@ -107,7 +110,6 @@ describe('the gateway\'s process, spoken to by the core', () => {
     expect(w.hosts[0]).toMatchObject({ machineId: 'machine-1', computerId: 'computer-1', autonomousEnv: 'prod', signedIn: true, account: { machineId: 'machine-1', signIn: null } })
     expect(gateway.port.holdRequests).toHaveBeenCalled()
     expect(gateway.port.localClients).toHaveBeenCalledWith(1)
-    expect(gateway.ops.dashboardPort).toHaveBeenCalledWith(41000)
     expect(gateway.ops.reachable).toHaveBeenCalledWith(['m2'])
     expect(gateway.ops.wifiService).toHaveBeenCalledWith(true)
     expect(gateway.port.connect).toHaveBeenCalled()
@@ -281,6 +283,19 @@ describe('the gateway\'s process, spoken to by the core', () => {
     expect(await w.options().requests[GATEWAY_CALLS.lane]({ op: 'nothing' }, { local: true, owner: true })).toEqual({ error: 'UNKNOWN_OP' })
     w.disconnect()
     expect(await lane.seal('m2', { type: 'message' })).toEqual({ lost: true })
+  })
+
+  it('signs Share\'s welcomes with the identity it holds, and none while it is not running', async () => {
+    const w = wire()
+    const key = w.link.ops.observerKey
+    await expect(key.publicKey()).rejects.toThrow(/not running/)
+    w.connect()
+    expect(await key.publicKey()).toBe('cHVi')
+    expect(await key.signWelcome('m', 'share-1', 'cA==', 'ZQ==')).toBe('c2ln')
+    expect(w.gateways[0].ops.observerKey.signWelcome).toHaveBeenCalledWith('m', 'share-1', 'cA==', 'ZQ==')
+    await expect(key.signWelcome('m', 'bad', 'cA==', 'ZQ==')).rejects.toThrow('not a welcome to an observer')
+    w.gateways[0].ops.observerKey.publicKey.mockRejectedValueOnce('odd')
+    await expect(key.publicKey()).rejects.toThrow('odd')
   })
 
   it('opens a window\'s session on another machine, carries it both ways, and fails it as the pool did', async () => {

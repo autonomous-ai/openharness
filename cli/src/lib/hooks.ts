@@ -29,11 +29,13 @@ const COPILOT_HOOKS_PATH = join(env.COPILOT_HOME, 'hooks', 'harness.json')
 
 // notify.mjs location depends on the layout (import.meta.url is the REAL executing file at runtime):
 //  - packaged/bundled: cli.js at ~/.harness/cli/cli.js → notify.mjs is a SIBLING (dist/ bundle too).
+//  - a core started from the lean bundle (leanEntry.ts): its file is lean/<sha>/ in the data folder, which
+//    holds no notify.mjs, and its script (process.argv[1]) is the cli.js it was read from: the sibling of that.
 //  - dev/per-file:      hooks.js at <appRoot>/{src,dist}/lib/ → notify.mjs at ../../hook/notify.mjs.
 // Prefer the sibling, fall back to the dev path.
 const cliDir = dirname(fileURLToPath(import.meta.url))
 const HOOK_SCRIPT =
-  [join(cliDir, 'notify.mjs'), join(cliDir, '..', '..', 'hook', 'notify.mjs')].find(existsSync) ??
+  [join(cliDir, 'notify.mjs'), ...(process.argv[1] ? [join(dirname(process.argv[1]), 'notify.mjs')] : []), join(cliDir, '..', '..', 'hook', 'notify.mjs')].find(existsSync) ??
   join(cliDir, '..', '..', 'hook', 'notify.mjs')
 
 // SessionStart/UserPromptSubmit bind mutable engine-session metadata to the process agent. SessionEnd

@@ -40,7 +40,7 @@ import { join, basename, dirname, relative, isAbsolute } from 'path'
 import { machineNames } from './machineNames.js'
 import { cursorDataDir } from '../engines/cursor/home.js'
 import { env } from '../config/env.js'
-import { claudeProjectsRoots, codexHomeRoots } from './engineHomes.js'
+import { claudeProjectsRoots, codexHomeRoots, sessionCodexHome } from './engineHomes.js'
 import { readCodexRolloutMeta, resolveCodexRollout } from '../engines/codex/rollout.js'
 import { ENGINES, isTerminalEngine, type AgentEngine } from '../engines/types.js'
 import type { GridAssignment } from './gridAssignment.js'
@@ -997,7 +997,7 @@ class Registry {
           const meta = readCodexRolloutMeta(transcriptPath)
           if (meta?.isSubagent) {
             const repaired = meta.parentThreadId === rawSessionId
-              ? resolveCodexRollout(rawSessionId, join(rawCodexHome || env.CODEX_HOME, 'sessions'))
+              ? resolveCodexRollout(rawSessionId, join(sessionCodexHome({ codexHome: rawCodexHome, transcriptPath }), 'sessions'))
               : null
             if (!repaired || !validTranscriptPath('codex', repaired, rawCodexHome) || readCodexRolloutMeta(repaired)?.isSubagent) {
               changed = true
@@ -2027,8 +2027,8 @@ class Registry {
    * the caller — a phone and a laptop whose clocks disagree would otherwise order the same agents
    * differently, which is the one thing this field exists to prevent.
    *
-   * `updatedAt` is left alone on purpose. That is the row's bookkeeping (the webui's "when" column,
-   * `session_get`'s timestamp), and looking at an agent changes nothing about the agent. The save
+   * `updatedAt` is left alone on purpose. That is the row's bookkeeping (`session_get`'s timestamp),
+   * and looking at an agent changes nothing about the agent. The save
    * still happens: a row is written whenever its bytes differ from the last write, whichever field
    * moved.
    */

@@ -417,7 +417,11 @@ void main() {
           if (native) {
             expect(lastUpdate(calls)['tabsFocused'], isTrue);
           } else {
-            expect(stripTab(tester, keptTab.id).highlighted, isTrue);
+            expect(
+              stripTab(tester, keptTab.id).highlighted,
+              isFalse,
+              reason: 'Closing keeps the normal selected appearance',
+            );
           }
 
           await tester.sendKeyEvent(LogicalKeyboardKey.enter);

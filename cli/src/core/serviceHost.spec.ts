@@ -22,7 +22,10 @@ const SEARCH = {
 const testPort = (h: { ports: CorePorts }): TestPort => h.ports.search as unknown as TestPort
 const VIEWERS: PortFallbacks<ViewersPort> = {
   attach: undefined, detach: undefined, frameContext: null, forwardingUrl: null, stop: later(undefined),
+  stream: false, surface: later({}), closed: undefined,
 }
+/** The viewer streams' members, which these tests never call. */
+const STREAMS = { stream: vi.fn(() => true), surface: vi.fn(async () => ({})), closed: vi.fn() }
 
 function host(options: Parameters<typeof createServiceHost>[1] = {}) {
   const ports = emptyPorts()
@@ -118,7 +121,7 @@ describe('hosting services so one that fails cannot take the core down', () => {
       const h = host()
       let viewersStop: () => Promise<void> = async () => { throw new Error('viewer hung') }
       h.services.start('viewers', (_core, ports) => {
-        ports.viewers = { attach: vi.fn(), detach: vi.fn(), frameContext: vi.fn(() => null), forwardingUrl: vi.fn(() => null), stop: () => viewersStop() }
+        ports.viewers = { attach: vi.fn(), detach: vi.fn(), frameContext: vi.fn(() => null), forwardingUrl: vi.fn(() => null), stop: () => viewersStop(), ...STREAMS }
       }, fakeCore(), VIEWERS)
       await expect(h.ports.viewers!.stop()).resolves.toBeUndefined()
       viewersStop = () => { throw new Error('sync throw in async member') }
@@ -129,7 +132,7 @@ describe('hosting services so one that fails cannot take the core down', () => {
     it('passes a promise that resolves straight through', async () => {
       const h = host()
       h.services.start('viewers', (_core, ports) => {
-        ports.viewers = { attach: vi.fn(), detach: vi.fn(), frameContext: vi.fn(() => null), forwardingUrl: vi.fn(() => 'http://v'), stop: async () => {} }
+        ports.viewers = { attach: vi.fn(), detach: vi.fn(), frameContext: vi.fn(() => null), forwardingUrl: vi.fn(() => 'http://v'), stop: async () => {}, ...STREAMS }
       }, fakeCore(), VIEWERS)
       expect(h.ports.viewers!.forwardingUrl('a1')).toBe('http://v')
       await expect(h.ports.viewers!.stop()).resolves.toBeUndefined()
@@ -192,7 +195,7 @@ describe('hosting services so one that fails cannot take the core down', () => {
 
       const async = host({ maxFailures: 1 })
       async.services.start('viewers', (_core, ports) => {
-        ports.viewers = { attach: () => { throw new Error('x') }, detach: vi.fn(), frameContext: vi.fn(() => null), forwardingUrl: vi.fn(() => null), stop: async () => { throw new Error('viewer stuck') } }
+        ports.viewers = { attach: () => { throw new Error('x') }, detach: vi.fn(), frameContext: vi.fn(() => null), forwardingUrl: vi.fn(() => null), stop: async () => { throw new Error('viewer stuck') }, ...STREAMS }
       }, fakeCore(), VIEWERS)
       async.ports.viewers!.attach({} as never)
       await new Promise((resolve) => setImmediate(resolve))
@@ -236,6 +239,31 @@ describe('hosting services so one that fails cannot take the core down', () => {
       await vi.waitFor(() => expect(got).toEqual([{ hits: [] }]))
       expect(seen).toEqual([[{ query: 'x' }, ASKER]])
       expect(h.services.route('agents_list', {}, ASKER, reply)).toBe(false)
+    })
+
+    it('tells a handler when the connection that asked closes, and no other connection\'s', async () => {
+      const h = host()
+      const asked = new Map<string, { closed: AbortSignal; answer: () => void }>()
+      h.services.serve('commands', () => ({
+        command: (payload, _asker, closed) => new Promise((resolve) => {
+          asked.set(String(payload.id), { closed: closed!, answer: () => resolve({ id: payload.id }) })
+        }),
+      }), fakeCore(), ['command'])
+      const { got, reply } = collect()
+      h.services.route('command', { id: 'a1' }, { ...ASKER, connection: 'conn-a' }, reply)
+      h.services.route('command', { id: 'a2' }, { ...ASKER, connection: 'conn-a' }, reply)
+      h.services.route('command', { id: 'b1' }, { ...ASKER, connection: 'conn-b' }, reply)
+      // The core's own asking, with no connection: never closed.
+      h.services.route('command', { id: 'core' }, ASKER, reply)
+      // A request already answered is forgotten: closing its connection reaches nothing.
+      asked.get('b1')!.answer()
+      await vi.waitFor(() => expect(got).toEqual([{ id: 'b1' }]))
+      h.services.closeConnection('conn-b')
+      h.services.closeConnection('conn-a')
+      expect([...asked.values()].map((one) => one.closed.aborted)).toEqual([true, true, false, false])
+      // Aborted or not, what the handler answers is replied: the socket drops what nobody can read.
+      asked.get('a1')!.answer()
+      await vi.waitFor(() => expect(got).toEqual([{ id: 'b1' }, { id: 'a1' }]))
     })
 
     it('returns at once, and replies when a promised answer comes', async () => {

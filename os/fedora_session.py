@@ -168,10 +168,14 @@ class Setup:
         shadows = [line.split(':') for line in self.path('etc/shadow').read_text().splitlines()]
         shadow = next((row for row in shadows if len(row) == 9 and row[0] == user), None)
         today = (datetime.date.today() - datetime.date(1970, 1, 1)).days
-        if (not shadow or not shadow[1] or shadow[1][0] in '!*' or not shadow[2] or int(shadow[2]) == 0 or
+        # shadow(5): an empty last-change field disables password aging. Asahi's
+        # initial-setup creates these valid accounts; only zero forces a change.
+        if (not shadow or not shadow[1] or shadow[1][0] in '!*' or
+                (shadow[2] and int(shadow[2]) == 0) or
                 not re.fullmatch(r'\$[^$\s:]+\$[^:\s]{10,}|[./0-9A-Za-z]{13}', shadow[1]) or
                 (shadow[7] and int(shadow[7]) >= 0 and int(shadow[7]) <= today) or
-                (shadow[4] and int(shadow[4]) >= 0 and int(shadow[2]) + int(shadow[4]) <= today)):
+                (shadow[2] and int(shadow[2]) > 0 and shadow[4] and int(shadow[4]) >= 0 and
+                 int(shadow[2]) + int(shadow[4]) <= today)):
             raise SetupError('The selected account needs a usable, unexpired password for recovery login.')
         # Query existing policy as root; do not authenticate or grant administrative access.
         self.run('/usr/bin/sudo', '-n', '-l', '-U', user, '--', '/usr/bin/harness-session-setup', 'disable')
@@ -179,7 +183,10 @@ class Setup:
 
     def preflight(self, user):
         release = self.path('etc/os-release').read_text()
-        if (platform.machine() != 'aarch64' or not re.search(r'^ID=[\"\']?fedora[\"\']?$', release, re.MULTILINE) or
+        # The maintained Asahi image identifies itself as fedora-asahi-remix.
+        # Accept these two explicit identities, not every ID_LIKE=fedora system.
+        fedora = re.search(r'''^ID=(["']?)(fedora|fedora-asahi-remix)\1$''', release, re.MULTILINE)
+        if (platform.machine() != 'aarch64' or not fedora or
                 json.loads(self.path('usr/share/harness-os/runtime.json').read_text()).get('system_profile') != 'fedora'):
             raise SetupError('This setup is only for the native Fedora ARM session package.')
         for binary in ('usr/bin/greetd', 'usr/bin/agreety', 'usr/bin/harness-session', 'usr/sbin/visudo'):

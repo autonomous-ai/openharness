@@ -111,38 +111,6 @@ export function clearSafeModeMarker(dataDir: string): void {
   try { rmSync(safeModeFile(dataDir), { force: true }) } catch { /* ignore */ }
 }
 
-export interface BootHandoffDeps {
-  /** The bound control port, if start-up ever got that far. */
-  closeServer: () => void
-  removePidFile: () => void
-  spawn: (extraEnv: Record<string, string>) => { pid?: number; unref: () => void }
-  exit: (code: number) => never
-  log: (message: string) => void
-}
-
-/**
- * Hand the machine to a newer build without finishing start-up.
- *
- * SYNCHRONOUS END TO END, and that is the whole safety argument: never awaiting means the half-built
- * boot cannot interleave between the port closing and the exit, so it can never reach the code that
- * would bind the port the successor is about to take. Two daemons are impossible by construction.
- * That is also why it does not supervise the child the way a normal update restart does — waiting
- * would leave this process running alongside the new one for up to a minute, both reconciling tmux
- * and writing the registry.
- *
- * It spawns rather than merely exiting because nothing supervises a daemon: on a machine with no
- * desktop app nothing else would ever start the successor.
- */
-export function runBootHandoff(from: string, to: string, deps: BootHandoffDeps): void {
-  deps.log(`[update] ${from} → ${to} staged during start-up — handing off without finishing boot`)
-  deps.closeServer()
-  deps.removePidFile()
-  const child = deps.spawn({ ADAPTER_UPDATED_TO: to })
-  child.unref()
-  deps.log(`[update] boot handoff → pid ${child.pid ?? '?'} · this process is leaving`)
-  deps.exit(0)
-}
-
 /** The marker, or null — including for one left behind by a process that is no longer running. */
 export function readSafeModeMarker(
   dataDir: string,

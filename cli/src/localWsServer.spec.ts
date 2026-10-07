@@ -303,7 +303,7 @@ describe('local CLI WebSocket', () => {
     ws.close()
   })
 
-  it.each(['local binary', 'remote JSON', 'remote binary', 'route task'] as const)(
+  it.each(['local binary', 'remote JSON', 'remote binary'] as const)(
     'keeps later messages behind an unfinished %s operation', async (kind) => {
       const backend = new FakeBackend(), pending = gate(), entered = gate()
       const trace: string[] = []
@@ -332,11 +332,6 @@ describe('local CLI WebSocket', () => {
             return relay
           },
         } as unknown as LocalWsServerOptions['relayPool'],
-        async onRouteTask(this: LocalWsServerOptions) {
-          expect(this.machineId).toBe(machineId)
-          await first()
-          return { agentId: '', machineId: '', name: '', confidence: 0, reason: '', candidates: [], weighed: 0, machines: 0, via: '' }
-        },
       }))
       await onceOpen(ws)
       const connected = onceMessage(ws)
@@ -345,7 +340,7 @@ describe('local CLI WebSocket', () => {
       if (kind.endsWith('binary')) {
         ws.send(encodeTerminalLocal({ kind: TerminalBinaryKind.input, streamId, seq: 1, bytes: new Uint8Array([97]), compressed: false })!)
       } else {
-        ws.send(JSON.stringify({ type: kind === 'route task' ? 'route_task' : 'agents_list', payload: { requestId: 'first', text: 'route me' } }))
+        ws.send(JSON.stringify({ type: 'agents_list', payload: { requestId: 'first', text: 'route me' } }))
       }
       ws.send(JSON.stringify({ type: 'agents_list', payload: { requestId: 'second' } }))
       await entered.promise
@@ -357,6 +352,43 @@ describe('local CLI WebSocket', () => {
       ws.close()
     },
   )
+
+  it.each(['route_task', 'route_send'] as const)('answers %s off the ordered chain: a window\'s later frames are never held behind it', async (type) => {
+    // The answer is the devices' (the fleet's router), which may be in a process of their own: one that
+    // hangs must not hold the window's typing until the request times out.
+    const backend = new FakeBackend(), pending = gate(), entered = gate()
+    const trace: string[] = []
+    const held = async () => { trace.push('route started'); entered.resolve(); await pending.promise; trace.push('route answered') }
+    backend.handleLocalFrame = () => { trace.push('next') }
+    const ws = new WebSocket(await start(backend, {
+      async onRouteTask(this: LocalWsServerOptions) {
+        expect(this.machineId).toBe(machineId)
+        await held()
+        return { agentId: '', machineId: '', name: '', confidence: 0, reason: '', candidates: [], weighed: 0, machines: 0, via: '' }
+      },
+      async onRouteSend(this: LocalWsServerOptions) {
+        expect(this.machineId).toBe(machineId)
+        await held()
+        return { ok: true as const }
+      },
+    }))
+    await onceOpen(ws)
+    const connected = onceMessage(ws)
+    ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId, localProtocolVersion: 1 } }))
+    await connected
+    const answered = new Promise<Frame>((resolve) => ws.on('message', (raw) => {
+      const frame = JSON.parse(raw.toString()) as Frame
+      if (frame.type === (type === 'route_task' ? 'route_result' : 'route_send_result')) resolve(frame)
+    }))
+    ws.send(JSON.stringify({ type, payload: { requestId: 'first', agentId: 'a1', text: 'route me' } }))
+    ws.send(JSON.stringify({ type: 'agents_list', payload: { requestId: 'second' } }))
+    await entered.promise
+    await vi.waitFor(() => expect(trace).toEqual(['route started', 'next']))
+    pending.resolve()
+    expect((await answered).payload).toMatchObject({ requestId: 'first' })
+    expect(trace).toEqual(['route started', 'next', 'route answered'])
+    ws.close()
+  })
 
   it.each(['local JSON', 'local binary', 'remote JSON', 'remote binary'] as const)(
     'closes the socket when %s dispatch fails', async (kind) => {
@@ -1004,7 +1036,7 @@ describe('local CLI WebSocket', () => {
     local = attachLocalWsServer(server, {
       machineId,
       backend,
-      onRouteSend: (agentId, text) => {
+      onRouteSend: async (agentId, text) => {
         sent.push({ agentId, text })
         return { ok: true as const }
       },
@@ -1042,7 +1074,7 @@ describe('local CLI WebSocket', () => {
     local = attachLocalWsServer(server, {
       machineId,
       backend,
-      onRouteSend: () => ({ ok: false as const, machine: 'mac-mini', reason: 'the last request to it did not come back' }),
+      onRouteSend: async () => ({ ok: false as const, machine: 'mac-mini', reason: 'the last request to it did not come back' }),
     })
     await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', resolve))
     const url = `ws://127.0.0.1:${(server.address() as AddressInfo).port}/api/local-ws`
@@ -1074,10 +1106,11 @@ describe('local CLI WebSocket', () => {
     const receiveBinary = vi.fn()
     let buffered: (() => number) | undefined
     const services = {
-      accept: (service: string, token: string, sink: { buffered(): number }) => {
+      accept: (service: string, token: string, sink: { buffered(): number }, _close: (code: number, reason: string) => void, welcome: () => void) => {
         if (token !== 'boot-token') return null
         accepted.push(service)
         buffered = sink.buffered
+        welcome()
         return { receive: vi.fn(), receiveBinary, closed: vi.fn() }
       },
     }

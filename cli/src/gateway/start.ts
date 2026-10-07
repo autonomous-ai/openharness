@@ -34,6 +34,7 @@ import { RemoteRelayPool } from '../lib/remoteRelay.js'
 import { HarnessShareRelay, type SharedMachineReference } from '../sharing/relay.js'
 import { RelayGateway } from './gateway.js'
 import { LaneSessions } from './lane.js'
+import { observerKey } from './observerKey.js'
 import { shareWindows } from './share.js'
 
 /** What the gateway needs of the core, in whichever process it runs. */
@@ -128,6 +129,8 @@ export function startGateway(host: GatewayHost): StartedGateway {
   const relayPeers = new MachinePeerStore()
   // The fleet's lane's sessions, sealed with the same identity (gateway/lane.ts).
   const lane = new LaneSessions(() => relayIdentityStore.getIdentity())
+  // Share's owner's welcomes, signed with the same identity (gateway/observerKey.ts).
+  const ownerKey = observerKey(() => relayIdentityStore.getIdentity())
   // The trust group and the device key log are built below; the pool's callbacks reach them through these.
   let groupSyncer: GroupSyncer | null = null
   let devLogSyncer: DeviceLogSyncer | null = null
@@ -407,7 +410,6 @@ export function startGateway(host: GatewayHost): StartedGateway {
         return { result: { revoked: 1 } }
       } catch (error) { return refusal(error) }
     },
-    dashboardPort: (port) => gateway.setDashboardPort(port),
     wifiService: (on) => {
       if (on) { startDirect(); return }
       direct?.stop()
@@ -421,6 +423,7 @@ export function startGateway(host: GatewayHost): StartedGateway {
     },
     reachable: (machineIds) => { reachable = machineIds ? new Set(machineIds) : null },
     lane,
+    observerKey: ownerKey,
   }
 
   return {

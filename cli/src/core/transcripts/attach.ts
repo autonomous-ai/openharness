@@ -27,7 +27,7 @@ import type { AgentEngine } from '../../engines/types.js'
 import { pollsQuestions, type QuestionWatcher } from '../../lib/askQuestion.js'
 import { attachTranscript, claudeAttachRules, codexAttachRules, type AttachRead } from '../../lib/attachTranscript.js'
 import { AttachTracker } from '../../lib/attachTracker.js'
-import type { AutonomousDeviceService } from '../../lib/autonomous-device/service.js'
+import type { WifiFeed } from '../wifi.js'
 import { sid } from '../../lib/log.js'
 import { foldTranscript, lineToEvents, newTurnState, TranscriptFold, type LiveEvent } from '../../lib/normalize.js'
 import type { RegisteredSession } from '../../lib/registry.js'
@@ -44,8 +44,8 @@ export interface AttachDeps {
   normalizers: SessionNormalizers
   watcher: Pick<Watcher, 'addSession' | 'hold' | 'tails'>
   cursorDiscovery: Pick<CursorTranscriptDiscovery, 'add'>
-  /** The Harness device service, once it exists: some subscriptions read the raw transcript. */
-  device: () => Pick<AutonomousDeviceService, 'needsTranscript' | 'observeTranscript'> | undefined
+  /** The Wi-Fi device's service, wherever it runs (core/wifi.ts): it proves its turns by the raw transcript. */
+  device: () => Pick<WifiFeed, 'needsTranscript' | 'observeTranscript'> | undefined
   runtimeProfiles: Pick<RuntimeProfileManager, 'transcriptFields' | 'beginHydrate' | 'hydrate' | 'ingestConfig' | 'ingestPane'>
   captureTerminal: (target: string, historyLines?: number) => Promise<string | null>
   emit: (sessionId: string, events: LiveEvent[], opts?: { resumed?: boolean }) => void
@@ -143,7 +143,7 @@ export function createAttach({
     const initialEvents: LiveEvent[] = []
     // Folding the transcript in below is deliberately silent — old turns must never replay live. But
     // when the history ENDS mid-turn the turn is still running, and dropping its `turn_started` costs
-    // the whole turn: CommanderMirror.onTurnEnded returns early while turnOpen is false, so the close
+    // the whole turn: the recaps' mirror (lib/commander.ts onTurnEnded) returns early while turnOpen is false, so the close
     // that follows produces no recap and no `done`. Keep the last start and replay exactly that one.
     //
     // The exception is a transcript BORN AFTER its agent — the file is then the live first turn rather

@@ -2,8 +2,8 @@
  * Find the session a live discovered engine process is running, when no hook has bound one yet.
  *
  * Process discovery can see an engine immediately, including after a daemon restart, but a session id is
- * owned by the engine and may not be present in argv. Ask the engine's own store which session belongs to
- * that pane's directory and process start time.
+ * owned by the engine and may not be present in argv. Prefer the engine's process evidence; when no
+ * exact process lookup applies, narrow the engine's store by directory and process start time.
  *
  * Two rules keep it honest:
  *   - **Started after the engine process did.** A session older than the process cannot be the one it is
@@ -28,6 +28,7 @@ import { sqlitePreflightMessage } from './sqliteAvailability.js'
 import { sqliteReadAll, type SqliteParam } from './sqliteRead.js'
 import { piSessionFolder, readPiHead } from './sessionSearch/externals/pi.js'
 import { claudeProjectsRoots, codexHomeRoots } from './engineHomes.js'
+import { argvTokens, engineProcessMatchScore, processRows, type ProcessRow } from './tmux.js'
 
 /**
  * Clock granularity only. `ps` reports start time to the second, so a file created in the same second
@@ -304,13 +305,15 @@ export async function findLiveSession(
       // The agent's own profile alone, else the daemon's home and every one the person moved, as
       // findResumedTranscript looks: the default alone missed a rollout in a moved CODEX_HOME.
       const sessions = (opts?.codexHome ? [opts.codexHome] : codexHomeRoots(env.CODEX_HOME)).map((home) => join(home, 'sessions'))
-      // Exact first, as for Claude: the rollout the process holds open (see `codexProcessSession`).
-      const exact = opts?.pid ? await codexProcessSession(opts.pid, sessions, cwd) : null
+      // October 6 parallel-create incident: the only rollout in a folder can belong to a sibling
+      // whose file opened first. A known Codex process must name its own open rollout; until then,
+      // leave it unbound for its next discovery pass or startup hook, never guess from the folder.
+      if (opts?.pid) return codexProcessSession(opts.pid, sessions, cwd)
       // Codex writes no `cwd` on line one; its rollout meta carries it — and says whether the rollout
       // belongs to a subagent, which must never become an agent of its own.
       // Its session id lives INSIDE the file: the name is `rollout-<timestamp>-<id>.jsonl`, so deriving
       // the id from the filename produced the literal string "rollout-…" (seen on a live pane).
-      return exact ?? fileEngineSession(sessions, cwd, startedAtMs, async (path) => {
+      return fileEngineSession(sessions, cwd, startedAtMs, async (path) => {
         const meta = readCodexRolloutMeta(path)
         return meta && !meta.isSubagent ? { cwd: meta.cwd, sessionId: meta.id || undefined } : null
       }, opts)
@@ -640,6 +643,24 @@ export async function openFiles(pid: number): Promise<string[]> {
   return stdout.split('\n').filter((line) => line.startsWith('n/')).map((line) => line.slice(1))
 }
 
+/** The rollout may be held by the native child of npm's Node launcher, not the launcher itself.
+ *  October 6 ownership E2E: removing the folder guess exposed that distinction for a manually started
+ *  Codex with no hook. Read only one direct Codex child of a Node launcher, never a nested tool. */
+export async function codexProcessFiles(
+  pid: number,
+  files: typeof openFiles = openFiles,
+  processes: () => Promise<readonly Pick<ProcessRow, 'pid' | 'parentPid' | 'executable' | 'args'>[] | null> = processRows,
+): Promise<string[]> {
+  const own = await files(pid)
+  if (own.some(path => /rollout-[^/]*\.jsonl$/.test(path))) return own
+  const rows = await processes()
+  const wrapper = rows?.find(row => row.pid === pid)
+  if (!wrapper || ![wrapper.executable, argvTokens(wrapper.args)[0] ?? '']
+    .some(path => /^node(?:js)?$/.test(basename(path)))) return own
+  const children = rows!.filter(row => row.parentPid === pid && engineProcessMatchScore(row, 'codex') > 0)
+  return children.length === 1 ? [...own, ...await files(children[0].pid)] : own
+}
+
 /**
  * The conversation a Codex process is writing: the rollout it holds open.
  *
@@ -652,7 +673,7 @@ export async function codexProcessSession(
   pid: number,
   sessionsRoot: string | string[],
   cwd: string,
-  files: (pid: number) => Promise<string[]> = openFiles,
+  files: (pid: number) => Promise<string[]> = codexProcessFiles,
 ): Promise<RepairedSession | null> {
   const roots = await Promise.all((typeof sessionsRoot === 'string' ? [sessionsRoot] : sessionsRoot)
     .map((one) => realpath(one).catch(() => one)))

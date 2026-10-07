@@ -12,7 +12,8 @@
  * fleet (its tests, and a daemon whose fleet service is off) without loading the cloud socket and the
  * E2EE stores the service starts.
  */
-import type { FleetRouting, ForkOutcome, ForkResult, SelectResult, SendResult } from '../core/api.js'
+import type { ForkResult, SendResult } from '../core/api.js'
+import type { FleetRouting, ForkOutcome, SelectResult } from './fleet.js'
 import { extendShortRecap } from '../lib/deviceRecap.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import type { RouterContinuity } from '../lib/voiceRouter.js'
@@ -48,9 +49,12 @@ export interface FleetLocal {
   answer: (agentId: string, requestId: string, answers: Record<string, string>) => void
   answerReviewed?: (answer: ReviewedAnswer) => Promise<boolean>
   /** Recaps of a local agent's last `n` completed turns. */
-  recent: (agentId: string, n: number) => RecentTurn[]
+  recent: (agentId: string, n: number) => RecentTurn[] | Promise<RecentTurn[]>
   /** The person's own last questions to a LOCAL agent, newest first. */
-  recentAsks: (agentId: string) => string[]
+  recentAsks: (agentId: string) => string[] | Promise<string[]>
+  /** Read this computer's agents again before a list is built from them: the devices in their own process
+   *  keep a copy of them, asked of the core when the dial's tick or ⌘K needs it. */
+  refresh?: () => Promise<void>
   updateAgent?: (agentId: string, model?: string, effort?: string) => void
   listModels?: (agentId: string) => Promise<Array<{ id: string }>>
   /** Fork a LOCAL agent — see lib/forkAgent.ts. Resolves to the new agent's id. */
@@ -229,6 +233,7 @@ export class FleetRouter implements FleetRouting {
    * `refreshRemotes()` does the asking, off to the side, on its own slower clock.
    */
   async listAgentsFlat(): Promise<CableAgent[]> {
+    await this.local.refresh?.()
     const out = this.localAgents()
     const { machines } = await this.listMachines()
     this.machineNames = new Map(machines.map((m) => [m.id, m.name]))
@@ -526,7 +531,7 @@ export class FleetRouter implements FleetRouting {
   /** The last few turns, newest first, in the shape the dial's tile draws: a headline and a body. */
   async recentSummaries(agentId: string): Promise<Array<{ recap: string; text: string; ask: string }>> {
     const raw = this.isLocalAgent(agentId)
-      ? this.local.recent(agentId, 3)
+      ? await this.local.recent(agentId, 3)
       : await this.fleet!.recentSummaries(this.machineOf(agentId), agentId)
     return raw
       .map((r) => ({ recap: extendShortRecap(r?.recap ?? '', r?.text ?? ''), text: r?.text ?? '', ask: r?.ask ?? '' }))
@@ -543,7 +548,7 @@ export class FleetRouter implements FleetRouting {
    */
   async recentAsks(agentId: string): Promise<string[]> {
     const raw = this.isLocalAgent(agentId)
-      ? this.local.recentAsks(agentId)
+      ? await this.local.recentAsks(agentId)
       : await this.fleet!.recentAsks(this.machineOf(agentId), agentId)
     return raw.map((a) => (a || '').replace(/\s+/g, ' ').trim()).filter(Boolean)
   }
