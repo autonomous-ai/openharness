@@ -149,6 +149,7 @@ export function formatDeviceList(
     members: DeviceRow[]; lastSeen?: Record<string, number>; pending?: string[]; suspended?: string[]
     conflict?: Pick<DevLogConflict, 'label' | 'fingerprint' | 'addedAt' | 'afterJoin'> | null
     departed?: Array<Pick<DevLogDeparted, 'label' | 'fingerprint' | 'removedBy' | 'removedByLabel' | 'selfRemoved'>>
+    registerError?: string
   },
   now: number,
   selfFallback?: { label: string; fp: string },
@@ -158,7 +159,17 @@ export function formatDeviceList(
   const lines: string[] = ['']
   const self = rows.find((r) => r.self)
   if (self) lines.push(`  This machine: ${nameOf(self)}  ${self.fingerprint}`, '')
-  else if (selfFallback) lines.push(`  This machine: ${selfFallback.label}  ${selfFallback.fp}  (not registered yet)`, '')
+  else if (selfFallback) {
+    lines.push(`  This machine: ${selfFallback.label}  ${selfFallback.fp}  (not registered yet)`)
+    // The backend refused this machine's key: say why, or the person waits for a join that never comes.
+    const why = listing.registerError
+    if (why) {
+      lines.push(why === 'TOO_MANY'
+        ? '  ⚠ This account has too many devices — remove unused ones: harness devices remove <fingerprint>'
+        : `  ⚠ The account refused this computer's key (${why}) — see the daemon's log`)
+    }
+    lines.push('')
+  }
   const c = listing.conflict
   if (c) {
     // No "added <when>": the holder's `addedAt` is whatever its signer wrote.

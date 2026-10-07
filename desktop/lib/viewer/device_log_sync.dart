@@ -167,6 +167,10 @@ const _resetWindowMs = 10 * 60 * 1000;
 const _appendAttempts = 5;
 const _pages = 20;
 
+/// The page cap while a log is first read ([_File.joining]) or reviewed ([ViewerDeviceLog.rebaseline]):
+/// 100,000 entries. A first read cut short at [_pages] would take every key past it for news.
+const _joinPages = 200;
+
 /// How many other accounts' logs are kept ([ViewerKeyStore.deviceLogArchive]); the oldest goes first.
 const _archivedKept = 4;
 
@@ -206,6 +210,7 @@ class DeviceLogListing {
     this.baseline = const [],
     this.baselineSeen = true,
     this.departed = const [],
+    this.registerError,
   });
 
   static const empty = DeviceLogListing(members: [], frozen: null, frozenPeers: []);
@@ -234,6 +239,10 @@ class DeviceLogListing {
   /// New keys removed before anyone marked them as seen (oldest first): flagged until [ViewerDeviceLog.dismiss]
   /// names them (`pub`, or `pubs`) or clears every one.
   final List<DeviceLogDeparted> departed;
+
+  /// Why the backend last refused to put this app's key into the log (`TOO_MANY`, …), until a
+  /// register lands; null when it never did (a lost race or no answer is not a refusal).
+  final String? registerError;
 }
 
 /// The newest hashes a `group_sync` carries, so a fork can be located.
@@ -366,6 +375,9 @@ class ViewerDeviceLog {
   /// Set while [register] runs.
   bool _registering = false;
 
+  /// [DeviceLogListing.registerError]: in memory only, never in the file.
+  String? _registerError;
+
   /// The [register] under way, which [ensureRegistered] lets finish before it judges.
   Future<void>? _registerRun;
   Future<DeviceLogRegistration>? _ensuring;
@@ -447,6 +459,7 @@ class ViewerDeviceLog {
           continue;
         }
         final mine = state.active[pub];
+        if (mine != null) _registerError = null;
         if (mine != null && (mine.label == name || mine.kind != 'viewer')) return;
         final entry = await signDevLogEntry(
           nextDevLogEntry(state, op: 'add', pub: pub, kind: 'viewer', machineId: '', label: name, signer: pub, at: _now()),
@@ -455,10 +468,14 @@ class ViewerDeviceLog {
         final answer = await append(entry);
         if (answer == null) return;
         if (answer.error == null) {
+          _registerError = null;
           await refresh();
           return;
         }
-        if (answer.error != 'STALE_HEAD') return;
+        if (answer.error != 'STALE_HEAD') {
+          _registerError = answer.error;
+          return;
+        }
         await refresh();
         await _sleep(Duration(milliseconds: 200 + _random.nextInt(800) * (attempt + 1)));
       }
@@ -852,7 +869,8 @@ class ViewerDeviceLog {
   Future<void> _readPages() async {
     await _marks();
     var bootstrap = ((await _read()).state?.head.seq ?? 0) == 0;
-    for (var page = 0; page < _pages; page++) {
+    // The file's own `joining` decides, each page: the first page of a fresh log is what sets it.
+    for (var page = 0; page < ((await _read()).joining ? _joinPages : _pages); page++) {
       final seen = (await _read()).state;
       final since = seen?.head.seq ?? 0;
       final got = await fetch(since);
@@ -1257,7 +1275,7 @@ class ViewerDeviceLog {
     final entries = <Object?>[];
     var acct = '';
     DevLogHead? head;
-    for (var page = 0; page < _pages; page++) {
+    for (var page = 0; page < _joinPages; page++) {
       final got = await fetch(entries.length);
       if (got == null || !_isPosition(got.head.seq)) return null;
       acct = got.acct;
@@ -1619,6 +1637,7 @@ class ViewerDeviceLog {
       ],
       baselineSeen: file.baselineSeen,
       departed: file.departed,
+      registerError: _registerError,
     );
   }
 }
