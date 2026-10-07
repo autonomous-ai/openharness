@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/auth/auth_session.dart';
@@ -42,6 +43,32 @@ const _capabilities = {
   'features': {'noTakeover': true},
 };
 
+// Inject a real push during response decoding, before AppNotifier can commit
+// the candidate. The caller must reject it after the helper returns.
+class DecodeHookMap extends MapBase<String, dynamic> {
+  DecodeHookMap(this.valuesByKey, this.onDecode);
+  final Map<String, dynamic> valuesByKey;
+  final void Function() onDecode;
+  bool scheduled = false;
+  @override
+  dynamic operator [](Object? key) {
+    if (key == 'sync' && !scheduled) {
+      scheduled = true;
+      onDecode();
+    }
+    return valuesByKey[key];
+  }
+
+  @override
+  void operator []=(String key, dynamic value) => valuesByKey[key] = value;
+  @override
+  Iterable<String> get keys => valuesByKey.keys;
+  @override
+  void clear() => valuesByKey.clear();
+  @override
+  dynamic remove(Object? key) => valuesByKey.remove(key);
+}
+
 class DiscoveryConnection extends WsConn {
   DiscoveryConnection()
     : super(
@@ -55,6 +82,7 @@ class DiscoveryConnection extends WsConn {
       );
 
   final calls = <String>[];
+  final inventoryRequests = <Map<String, dynamic>>[];
   final agents = <Completer<Map<String, dynamic>>>[];
   final capabilities = <Completer<Map<String, dynamic>>>[];
   final themes = <Map<String, dynamic>>[];
@@ -80,6 +108,7 @@ class DiscoveryConnection extends WsConn {
     final response = Completer<Map<String, dynamic>>();
     switch (type) {
       case 'agents_list':
+        inventoryRequests.add(Map.of(payload));
         agents.add(response);
       case 'terminal_capabilities':
         capabilities.add(response);
@@ -335,6 +364,79 @@ void main() {
       );
     },
   );
+
+  test('a push during inventory decode wins without advancing the delta baseline', () async {
+    final revision = '1' * 64;
+    final initial = app.reloadMachineData('m');
+    await _tick();
+    connection.agents.last.complete({
+      ..._agents,
+      'sync': {'version': 1, 'revision': revision},
+    });
+    connection.capabilities.last.complete(_capabilities);
+    await initial;
+    final refreshing = app.reloadMachineData('m');
+    await _tick();
+    connection.capabilities.last.complete(_capabilities);
+    connection.agents.last.complete(
+      DecodeHookMap(
+        {
+          'agents': [
+            {
+              ...(_agents['agents'] as List).single as Map,
+              'viewerName': 'Stale viewer',
+            },
+          ],
+          'sync': {
+            'version': 1,
+            'base': revision,
+            'revision': '2' * 64,
+            'order': ['a'],
+          },
+        },
+        () {
+          unawaited(
+            app.handleEventForTest('m', {
+              'type': 'agent_synced',
+              'payload': {
+                'agent': {
+                  ...(_agents['agents'] as List).single as Map,
+                  'viewerName': 'New viewer',
+                },
+              },
+            }),
+          );
+        },
+      ),
+    );
+    await refreshing;
+    expect(machine.agents.single.viewerName, 'New viewer');
+    // The rejected candidate did not change the server baseline. A following
+    // update compares with the original full response and installs fresh data.
+    final next = app.reloadMachineData('m');
+    await _tick();
+    expect(
+      (connection.inventoryRequests.last['sync'] as Map)['since'],
+      revision,
+    );
+    connection.capabilities.last.complete(_capabilities);
+    connection.agents.last.complete({
+      'agents': [
+        {
+          ...(_agents['agents'] as List).single as Map,
+          'viewerName': 'New viewer',
+        },
+      ],
+      'sync': {
+        'version': 1,
+        'base': revision,
+        'revision': '2' * 64,
+        'order': ['a'],
+      },
+    });
+    await next;
+    expect(machine.agents.single.viewerName, 'New viewer');
+  });
 
   test('an offline transition invalidates a pending agent inventory', () async {
     final old = app.reloadMachineData('m');

@@ -6617,6 +6617,25 @@ class AppNotifier extends ChangeNotifier {
     _agentSyncTimers.clear();
   }
 
+  Future<AgentInventorySnapshot?> _readAgentInventory(
+    MachineState machine,
+    WsConn connection,
+    Duration budget,
+  ) {
+    final clock = Stopwatch()..start();
+    return machine._agentInventory.read((sync) {
+      final remaining = budget - clock.elapsed;
+      if (remaining <= Duration.zero) {
+        throw const WsRequestTimeout('agents_list');
+      }
+      return connection.request(
+        'agents_list',
+        payload: {'includeStopped': true, 'sync': sync},
+        timeout: remaining,
+      );
+    }, observe: () => machine.agents);
+  }
+
   /// Silent safety-net reconciliation, ticked every [agentSyncInterval] while a machine is connected.
   /// Only writes/notifies if the fetched list actually differs from what's already shown — a steady
   /// state where push events (agent_synced et al.) have kept everything in sync produces zero visible
@@ -6634,19 +6653,16 @@ class AppNotifier extends ChangeNotifier {
     final connection = _conn(machine.machine.machineId);
     final nameRevision = machine._agentRevision;
     try {
-      final incoming = await machine._agentInventory.read(
-        (sync) => connection.request(
-          'agents_list',
-          payload: {'includeStopped': true, 'sync': sync},
-          timeout: const Duration(seconds: 10),
-        ),
-        observe: () => machine.agents,
+      final incoming = await _readAgentInventory(
+        machine,
+        connection,
+        const Duration(seconds: 10),
       );
       if (!_machineDiscoveryCurrent(machine, revision, discoveryRevision)) {
         return;
       }
-      if (incoming == null) return;
-      final agents = _agentSnapshot(machine, incoming, nameRevision);
+      if (incoming == null || !incoming.commit()) return;
+      final agents = _agentSnapshot(machine, incoming.agents, nameRevision);
       if (agentsEqual(machine.agents, agents)) return;
       _replaceAgents(machine, agents);
       notifyListeners();
@@ -8473,18 +8489,15 @@ class AppNotifier extends ChangeNotifier {
         revision,
         discoveryRevision,
       );
-      final incoming = await machine._agentInventory.read(
-        (sync) => connection.request(
-          'agents_list',
-          payload: {'includeStopped': true, 'sync': sync},
-          timeout: remaining,
-        ),
-        observe: () => machine.agents,
+      final incoming = await _readAgentInventory(
+        machine,
+        connection,
+        remaining,
       );
       if (!_machineDiscoveryCurrent(machine, revision, discoveryRevision)) {
         return;
       }
-      if (incoming == null) {
+      if (incoming == null || !incoming.commit()) {
         machine.agentsRefreshing = false;
         if (machine.agentLoadStatus == AgentLoadStatus.loading) {
           machine.agentLoadStatus = machine.agents.isEmpty
@@ -8494,7 +8507,7 @@ class AppNotifier extends ChangeNotifier {
         notifyListeners();
         return;
       }
-      final agents = _agentSnapshot(machine, incoming, nameRevision);
+      final agents = _agentSnapshot(machine, incoming.agents, nameRevision);
       _replaceAgents(machine, agents);
       machine.agentLoadStatus = AgentLoadStatus.loaded;
       machine.agentsRefreshing = false;

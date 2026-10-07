@@ -1,5 +1,7 @@
 import 'models.dart';
 
+typedef AgentInventorySnapshot = ({List<Agent> agents, bool Function() commit});
+
 /// The accepted server snapshot is separate from UI agents: pushes and optimistic
 /// edits must never change the baseline named by a delta's revision.
 class AgentInventory {
@@ -16,7 +18,7 @@ class AgentInventory {
 
   /// Retry once after a malformed delta or a concurrent UI mutation. A reconnect
   /// or a newer inventory request supersedes this one without touching its state.
-  Future<List<Agent>?> read(
+  Future<AgentInventorySnapshot?> read(
     Future<Map<String, dynamic>> Function(Map<String, dynamic> sync) request, {
     required Object Function() observe,
   }) async {
@@ -26,17 +28,28 @@ class AgentInventory {
       final observed = observe();
       final since = full ? null : _revision;
       final baseline = _agents;
-      final response = await request({
-        'version': 1,
-        if (since != null) 'since': since,
-      });
+      final response = await request({'version': 1, 'since': ?since});
       if (generation != _generation) return null;
       if (!identical(observed, observe())) continue;
       try {
         final next = _decode(response, since, baseline);
-        _agents = next.agents;
-        _revision = next.revision;
-        return _agents;
+        var committed = false;
+        return (
+          agents: next.agents,
+          commit: () {
+            // A push can run between this Future completing and its caller
+            // applying the result. Check again at the synchronous commit point.
+            if (committed ||
+                generation != _generation ||
+                !identical(observed, observe())) {
+              return false;
+            }
+            committed = true;
+            _agents = next.agents;
+            _revision = next.revision;
+            return true;
+          },
+        );
       } on FormatException {
         if (attempt == 1) rethrow;
         // Keep the last good baseline until the full retry succeeds.
@@ -61,9 +74,13 @@ class AgentInventory {
           (row['id'] as String).isEmpty) {
         invalid();
       }
-      final agent = Agent.fromJson(Map<String, dynamic>.from(row));
-      if (changed.containsKey(agent.id)) invalid();
-      changed[agent.id] = agent;
+      try {
+        final agent = Agent.fromJson(Map<String, dynamic>.from(row));
+        if (changed.containsKey(agent.id)) invalid();
+        changed[agent.id] = agent;
+      } catch (_) {
+        invalid();
+      }
     }
     final sync = response['sync'];
     if (sync == null) {

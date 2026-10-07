@@ -22,12 +22,7 @@ Map<String, dynamic> delta(
   List<String>? order,
 ]) => {
   'agents': agents,
-  'sync': {
-    'version': 1,
-    'base': base,
-    'revision': revision,
-    if (order != null) 'order': order,
-  },
+  'sync': {'version': 1, 'base': base, 'revision': revision, 'order': ?order},
 };
 void main() {
   late AgentInventory inventory;
@@ -36,11 +31,12 @@ void main() {
     inventory = AgentInventory();
     ui = Object();
   });
-  Future<List<String>?> read(Map<String, dynamic> result) async =>
-      (await inventory.read(
-        (_) async => result,
-        observe: () => ui,
-      ))?.map((a) => '${a.id}:${a.name}').toList();
+  Future<List<String>?> read(Map<String, dynamic> result) async {
+    final next = await inventory.read((_) async => result, observe: () => ui);
+    return next != null && next.commit()
+        ? next.agents.map((a) => '${a.id}:${a.name}').toList()
+        : null;
+  }
 
   test('first full list, unchanged, complete replacements, additions, ordering and deletions', () async {
     expect(await read(full([row('a'), row('b')], one)), ['a:a', 'b:b']);
@@ -116,7 +112,8 @@ void main() {
           return full([row('recovered')], two);
         }, observe: () => ui);
         expect(calls, 2);
-        expect(result!.single.id, 'recovered');
+        expect(result!.commit(), isTrue);
+        expect(result.agents.single.id, 'recovered');
       }
     },
   );
@@ -141,7 +138,8 @@ void main() {
         }
         return delta(one, two, [row('a', 'new')], ['a']);
       }, observe: () => ui);
-      expect(result!.single.name, 'new');
+      expect(result!.commit(), isTrue);
+      expect(result.agents.single.name, 'new');
       expect(calls, 2);
     },
   );
@@ -191,5 +189,23 @@ void main() {
       return ++calls == 1 ? delta(one, one, []) : full([row('safe')], two);
     }, observe: () => ui);
     expect(calls, 2);
+  });
+  test('a push after decoding but before UI application cannot commit the snapshot', () async {
+    await read(full([row('a')], one));
+    final candidate = await inventory.read(
+      (_) async => delta(one, two, [], []),
+      observe: () => ui,
+    );
+    ui = Object();
+    expect(candidate!.commit(), isFalse);
+    expect(await read(delta(one, one, [])), ['a:a']);
+  });
+  test('a candidate commits only once', () async {
+    final candidate = await inventory.read(
+      (_) async => full([row('a')], one),
+      observe: () => ui,
+    );
+    expect(candidate!.commit(), isTrue);
+    expect(candidate.commit(), isFalse);
   });
 }
