@@ -127,6 +127,11 @@ async function connect(host: CableHost = makeHost(), log = tmpLog()) {
 /** Let the microtask queue drain — every send is async. */
 const settle = () => new Promise((r) => setTimeout(r, 0))
 
+/** For a push that only the session's own tick sends: it ticks every second, and a change made just after a
+ *  tick waits a whole one. vi.waitFor's default second raced that tick, and lost under load (a full unit run
+ *  with 12 busy loops, load 93). Several ticks' room. */
+const NEXT_TICKS = { timeout: 5_000 }
+
 describe('cable session', () => {
   const companionSettings = {
     brightness: 40, character: 2, face: 466, muted: true, quiet: false,
@@ -709,7 +714,7 @@ describe('cable session', () => {
     await settle()
     expect(host.selectSwarm).toHaveBeenCalledWith('s2')
     swarms = { ...swarms, selected: 's2' }
-    await vi.waitFor(() => expect(port.sent.filter((m) => m.t === 'swarms')).toHaveLength(2))
+    await vi.waitFor(() => expect(port.sent.filter((m) => m.t === 'swarms')).toHaveLength(2), NEXT_TICKS)
     expect(port.sent.filter((m) => m.t === 'swarms')[1]).toMatchObject({ selected: 's2' })
     await session.stop()
   })
@@ -725,7 +730,7 @@ describe('cable session', () => {
     await vi.waitFor(() => expect(port.sent.filter((m) => m.t === 'swarms')).toHaveLength(1))
 
     swarms = { selected: 's1', swarms: [{ id: 's1', name: 'Shell', agents: 0, panes: 1 }], tiles: [] }
-    await vi.waitFor(() => expect(port.sent.filter((m) => m.t === 'swarms')).toHaveLength(2))
+    await vi.waitFor(() => expect(port.sent.filter((m) => m.t === 'swarms')).toHaveLength(2), NEXT_TICKS)
     expect(port.sent.filter((m) => m.t === 'swarms')[1]).toMatchObject({
       items: [{ id: 's1', agents: 0, panes: 1 }],
     })
