@@ -1,8 +1,9 @@
 name: CI
 
 # Fast PR checks: each changed component runs its own Linux unit tests. Native,
-# macOS, browser and end-to-end acceptance run in the release workflows. Merge
-# candidates rerun only the plan and process checks; the PR run covered the code.
+# macOS, coverage-gate, browser and end-to-end checks are outside PR CI; see
+# docs/validation-and-release.md#what-pr-ci-does-not-run. Merge candidates rerun
+# only the plan and process checks; the PR run covered the code.
 # Contributor code runs with a read-only token and no release credentials.
 on:
   pull_request:

@@ -200,8 +200,9 @@ source satisfies that full-suite check; do not run it again locally before relea
 Manual CI offers `cli`, `tui`, `backend`, `desktop`, and `full` scopes; `full` remains the default.
 CLI scope runs the typecheck and the default Vitest suite in four Linux shards.
 Desktop scope runs the VM suite in four Linux shards. PR CI runs only the suites of
-the components a PR changes; native, macOS, coverage-gate and end-to-end checks run in
-the release workflows.
+the components a PR changes. Coverage gates, serial/PTY specs, macOS Desktop tests and
+end to end are not part of PR CI: run the ones your change touches yourself (see
+[What PR CI does not run](docs/validation-and-release.md#what-pr-ci-does-not-run)).
 
 Two further suites exist and are
 **opt-in**, because they need software the machine may not have — they skip themselves rather than

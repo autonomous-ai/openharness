@@ -25,23 +25,34 @@ For product names, terminology, and visible copy, follow the
   validation cycle. Verify published versions and checksums, then report completion.
   Desktop's `--wait` follows the exact tag/SHA through the workflow's six-artifact
   verification; reuse that receipt instead of repeating the downloads manually.
-- Prepare the PR and complete code/native review while automatic CI runs. For an
-  agent implementation in progress, push to a draft PR: CI runs cheap workflow
-  and process checks. Mark ready after targeted local checks to start complete
-  affected suites, and keep the revision stable while CI and review finish.
-  The integration gate remains blocked on drafts. For an authorized merge, use
-  `make merge-pr` with the reviewed head/base SHAs and
-  `--queue --merge`; it enqueues the exact reviewed head, follows the queue and
-  verifies the merged tree against successful merge-group CI. Main advancing
-  does not invalidate the review base; the queue checks the combined candidate.
-  GitHub approval requirements remain as configured; this does not introduce
-  an additional human approval count. Keep review independent of implementation.
-  Existing `--run/--scope` commands automatically select queue mode when the
-  target's merge-queue rule is enabled; direct mode remains for rollout only.
-  For evidence outside the queue, use `scripts/record-ci-validation.py` and the
-  existing verified Process/Desktop source-input contracts. Other affected
-  native, browser, engine and hardware checks remain explicit review requirements.
-  Never replay an uncertain enqueue/merge mutation; inspect the same PR first.
+- CI rules (details in [docs/validation-and-release.md](docs/validation-and-release.md#pr-ci)):
+  - PR CI is fast on purpose. It runs only the Linux unit checks of the components
+    the PR changes; docs, workflow and script changes run process checks only. The
+    one required check is `ci/required`.
+  - Push work in progress to a draft PR (process checks only). Mark it ready to run
+    the component checks, then keep the head stable while CI and review finish.
+    Do the code review while CI runs, and keep review independent of implementation.
+  - Base the branch on current `main`. A branch older than #991 runs the old
+    planner and fails `ci/required`; use **Update branch** or rebase first.
+  - Merge with `make merge-pr ARGS="N --queue --reviewed-head SHA --reviewed-base SHA --merge"`.
+    The queue reruns only the plan and process checks. Do not use `--run/--scope`
+    (legacy direct mode). Never replay an uncertain enqueue or merge; inspect the PR.
+  - Do not start extra runs for a PR: no manual **CI → Run workflow** while its
+    automatic run exists, no repeated pushes to retrigger a red check. Read the
+    failure, fix it, push once. Rerun a job only for a recorded flaky test.
+  - Checks PR CI no longer runs are yours to run locally when you touch their area:
+    CLI coverage gates (`npm run test:core`, `test:harnessd`, `test:resume`,
+    `test:orchestrator`, `test:sharing`, `test:remote-viewers`, `test:portability`,
+    `test:local-models`), serial and PTY specs, and Desktop tests on macOS for
+    macOS-specific code. Record what you ran in the PR.
+  - Heavy workflows run only when started by hand: OS images and VM tests
+    (**Harness OS** and the other OS workflows) and CLI end to end (nightly too).
+    Start one only when the change needs it, once, and report its run link.
+  - The account runs at most 20 jobs at once, 5 on macOS. Do not run several
+    heavy manual workflows at the same time.
+  - Release workflows are not a full test suite (CLI release runs typecheck, Desktop
+    release builds and signs). A release failure is still a code failure: fix it
+    and cut the next version; never move a published tag.
 - For an authorized Desktop release, start `make release-desktop ARGS="--prepare"`
   from the final pushed PR branch alongside validation and review. It prepares
   verified packages without publishing; merge and release only after checks pass.

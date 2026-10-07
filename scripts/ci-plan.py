@@ -2,8 +2,8 @@
 """Select fast CI suites from a complete Git diff and verify their final results.
 
 A PR runs the unit suite of each component it changes, and nothing else. Merge
-groups run only the plan and process checks: the PR run already covered the code,
-and the release workflows carry native, macOS, browser and end-to-end acceptance.
+groups run only the plan and process checks: the PR run already covered the code.
+Checks outside PR CI are listed in docs/validation-and-release.md#what-pr-ci-does-not-run.
 """
 import argparse
 import json
