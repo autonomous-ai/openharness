@@ -127,10 +127,16 @@ def main():
         file.truncate(24 * 1024**3)
     subprocess.run(['zstd', '-d', '--sparse', args.fixture / 'guest.raw.zst', '-o', maintenance], check=True, timeout=120)
     assert digest(maintenance) == info['raw_disk']['sha256']
+    paths = [ROOT / 'platforms/apple-silicon' / name for name in media['media']['installer']]
+    paths += [Path(__file__).with_name(name) for name in ('asahi_live_vm.py', 'asahi_install_vm.py',
+        'asahi_install_guest.py', 'asahi_startup_vm.py', 'asahi_target_vm.py', 'asahi_target_guest.py',
+        'asahi_encryption_vm.py', 'asahi_encryption_guest.py', 'asahi_firstboot_vm.py',
+        'arm_boot.py', 'arm_session.py', 'fedora_session_vm.py', 'session_vm.py', 'vm.py')]
     receipt = {'status': 'running', 'started_at': time.time(), 'publication': False,
         'media_receipt_sha256': digest(args.media_receipt), 'media': media['artifact'],
         'media_source': media['media']['source_commit'], 'payload': media['media']['payload'],
-        'fixture_source': args.fixture_source, 'shutdowns': [],
+        'fixture_source': args.fixture_source, 'fixture_manifest_sha256': digest(args.fixture / 'manifest.json'),
+        'inputs': {str(path.relative_to(ROOT)): digest(path) for path in paths}, 'shutdowns': [],
         'limitations': ['QEMU firmware/ESP property, not physical Apple boot policy or m1n1 acceptance.',
                        'Protected partitions contain sentinel bytes, not actual macOS filesystems.',
                        'Known fixture password: never publish maintenance or installed target disks.',

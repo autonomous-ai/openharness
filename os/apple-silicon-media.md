@@ -39,8 +39,10 @@ the source before making any destination changes. A locked root account, masked
 login/SSH and installed-system setup services, and enforcing SELinux keep this
 media focused on installation.
 
-`os/tests/asahi_media_check.py` mounts the actual produced ISO and its compressed
-root read-only. It checks the payload bytes, installer files, UEFI loader,
+`os/tests/asahi_media_check.py` mounts the actual produced ISO, its GPT EFI system
+partition, and its compressed root read-only. The EFI partition is the firmware
+boot surface; the ISO9660 file mirror is only diagnostic evidence. The check
+requires ARM64 EFI executables and their boot configuration, then verifies payload bytes, installer files,
 platform kernel, automatic installer service, pristine account state and absence
 of machine secrets. Only an inspected ISO is retained as the private artifact.
 Construction alone does not prove that it boots or installs successfully.
@@ -68,7 +70,8 @@ adding only QEMU console/input configuration to that disposable installed disk.
 It then verifies wrong-password rejection, encrypted unlock, the frozen Harness
 workspace, accounts, SELinux, runtime files and clean shutdown.
 
-Receipts and real framebuffer screenshots are retained, including failures. The
+Receipts record the exact media, payload, fixture and observer inputs. Real
+framebuffer screenshots are retained, including failures. The
 test uses a known fixture password: neither its maintenance disk nor installed
 target may be published. QEMU acceptance does not establish Apple firmware or
 physical hardware support.
