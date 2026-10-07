@@ -2,9 +2,6 @@ name: Harness OS T2 kernel update
 
 on:
   workflow_dispatch:
-  push:
-    branches: ['os-checks/t2-kernel-*']
-    paths: ['os/**', '.github/workflows/os-t2-update.yml']
 
 permissions:
   contents: read

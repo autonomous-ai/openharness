@@ -8,7 +8,7 @@ import {
   type DevLogEntry, type DevLogState,
 } from './deviceLog.js'
 import { DeviceLogStore } from './deviceLogStore.js'
-import { DeviceLogSyncer, devLogDivergence, type DeviceLogAppendAnswer, type DeviceLogFetched, type DeviceLogRebaseline } from './deviceLogSyncer.js'
+import { DeviceLogSyncer, devLogDivergence, type DeviceKeysSeen, type DeviceLogAppendAnswer, type DeviceLogFetched, type DeviceLogRebaseline } from './deviceLogSyncer.js'
 import { ADOPTED_SIGN_IN } from '../authSession.js'
 import { b64d, fingerprint } from './core.js'
 
@@ -73,7 +73,7 @@ class FakeBackend {
 function setup(opts: {
   known?: string[]; tombstoned?: string[]; blocked?: string[]; store?: DeviceLogStore; backend?: FakeBackend; signIn?: () => string | null; signInAt?: number | null
   isTrusted?: (pub: string) => boolean; signInAcct?: () => string | null; switchAccount?: (from: string, to: string) => void
-  now?: () => number; seen?: () => Promise<Record<string, number> | null>; log?: (line: string) => void
+  now?: () => number; seen?: () => Promise<DeviceKeysSeen | null>; log?: (line: string) => void
 } = {}) {
   const backend = opts.backend ?? new FakeBackend()
   const store = opts.store ?? new DeviceLogStore(join(mkdtempSync(join(tmpdir(), 'devlog-')), 'devlog.json'))
@@ -2123,13 +2123,16 @@ describe('DeviceLogSyncer.sweepStale', () => {
   const larger = pool.find((k) => k.pub > me.pub)!
   let clock: number
   let seen: Record<string, number> | null
+  /** Since when the backend's record of last uses runs (null: it does not say). */
+  let since: number | null
   let lines: string[]
   let t: ReturnType<typeof setup>
   beforeEach(() => {
     clock = NOW
     seen = {}
+    since = 1_000
     lines = []
-    t = setup({ now: () => clock, seen: async () => seen, log: (l) => lines.push(l) })
+    t = setup({ now: () => clock, seen: async () => seen && { seen, since }, log: (l) => lines.push(l) })
   })
   const active = (pub: string): boolean => !!t.backend.state.active[pub]
 
@@ -2147,20 +2150,42 @@ describe('DeviceLogSyncer.sweepStale', () => {
     expect(active(stale.pub)).toBe(false)
     expect([usedLately, young, suspended, larger, me].every((k) => active(k.pub))).toBe(true)
     expect(t.backend.entries.at(-1)).toMatchObject({ op: 'remove', pub: stale.pub, signer: me.pub })
-    expect(lines).toContain(`[devlog] removed unused device old-browser (${fingerprint(b64d(stale.pub))}), last used 1970-01-01`)
+    expect(lines).toContain(`[devlog] removed unused device old-browser (${fingerprint(b64d(stale.pub))}), not used since 1970-01-01`)
   })
 
-  it('a key the backend has no last use for counts as used when it was added', async () => {
-    const recent = key(50)
-    t.backend.add(recent, 'viewer', '', 'app', NOW - 200 * DAY)
-    seen = { [recent.pub]: NOW - 100 * DAY }
+  it('a key last used over 180 days ago goes whatever the record says of the others', async () => {
+    const old = key(50)
+    t.backend.add(old, 'viewer', '', 'app', 1_000)
+    seen = { [old.pub]: 2_000 }
+    since = null
     await t.syncer.register()
     await t.syncer.sweepStale()
-    expect(active(recent.pub)).toBe(true)
+    expect(active(old.pub)).toBe(false)
+    expect(lines).toContain(`[devlog] removed unused device app (${fingerprint(b64d(old.pub))}), last used 1970-01-01`)
+  })
+
+  it('a key with no last use is unused only when the record has run since before the cutoff', async () => {
+    // A Redis that came back empty (restart, eviction) answers no last use for anyone: that is "not
+    // known", not "not used" — an app opened once a month must not be signed out by it.
+    const app = key(50)
+    t.backend.add(app, 'viewer', '', 'app', NOW - 200 * DAY)
+    seen = { [app.pub]: NOW - 100 * DAY }
+    await t.syncer.register()
+    await t.syncer.sweepStale()
+    expect(active(app.pub)).toBe(true)
     seen = {}
+    since = null // the record is gone, or a backend that does not say
     clock += 7 * 60 * 60_000
     await t.syncer.sweepStale()
-    expect(active(recent.pub)).toBe(false)
+    expect(active(app.pub)).toBe(true)
+    since = clock - 10 * DAY // the record started again 10 days ago
+    clock += 7 * 60 * 60_000
+    await t.syncer.sweepStale()
+    expect(active(app.pub)).toBe(true)
+    since = NOW - 190 * DAY // it has run for longer than the cutoff, and never saw this key
+    clock += 7 * 60 * 60_000
+    await t.syncer.sweepStale()
+    expect(active(app.pub)).toBe(false)
   })
 
   it('the machine with the smallest key goes first; the next takes over a day later', async () => {
