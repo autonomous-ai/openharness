@@ -3,7 +3,7 @@ import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { startHookServer, type HookServerHandlers, chooseHookAgent, knownTranscriptFor } from './hookServer.js'
+import { startHookServer, type HookServerHandlers, chooseHookAgent, hookFiredAt, knownTranscriptFor } from './hookServer.js'
 import { registry, type RegisteredSession } from './lib/registry.js'
 import { env } from './config/env.js'
 import { readHookCredential } from './lib/hookAuth.js'
@@ -253,6 +253,33 @@ describe('process-owned hook server', () => {
     expect(response.status).toBe(403)
     expect(await response.json()).toEqual({ error: 'UNBOUND_HOOK' })
     expect(handler).not.toHaveBeenCalled()
+  })
+
+  it('hands a Stop on with when its engine ran it, and holds it as long as a test asks', async () => {
+    const onTurnStop = vi.fn()
+    const resolveHookAgent = vi.fn(async () => ({ engine: 'claude', sessionId: 'real-session', agentId: 'agent-1' } as never))
+    const stop = (base: string, headers: Record<string, string>) => fetch(`${base}/api/hook/turn-stop`, {
+      method: 'POST', headers, body: JSON.stringify({ engine: 'claude', sessionId: 'real-session', tmuxPane: '%1', callerPid: 123 }),
+    })
+    const { base, headers } = await start({ onTurnStop, resolveHookAgent })
+    expect((await stop(base, { ...headers, 'x-harness-hook-fired-at': '1700000000000' })).status).toBe(200)
+    expect(onTurnStop).toHaveBeenLastCalledWith({ sessionId: 'real-session', status: undefined, transcriptPath: undefined, firedAt: 1_700_000_000_000 })
+    // A hook client too old to say: as before.
+    expect((await stop(base, headers)).status).toBe(200)
+    expect(onTurnStop).toHaveBeenLastCalledWith({ sessionId: 'real-session', status: undefined, transcriptPath: undefined })
+    server?.close()
+    const held = await start({ onTurnStop, resolveHookAgent, stopHookDelayMs: 50 })
+    onTurnStop.mockClear()
+    expect((await stop(held.base, held.headers)).status).toBe(200)
+    expect(onTurnStop).not.toHaveBeenCalled()
+    await vi.waitFor(() => expect(onTurnStop).toHaveBeenCalledOnce())
+  })
+
+  it('reads when a hook was run from its header, and nothing else as that', () => {
+    expect(hookFiredAt({ headers: { 'x-harness-hook-fired-at': '1700000000000' } })).toBe(1_700_000_000_000)
+    for (const value of [undefined, '', 'soon', '-5', '0', '1.5', '1e400']) {
+      expect(hookFiredAt({ headers: { 'x-harness-hook-fired-at': value } })).toBeUndefined()
+    }
   })
 
   it('answers a proxied control-plane read whose handler throws, instead of hanging it', async () => {

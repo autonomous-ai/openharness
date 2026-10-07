@@ -271,6 +271,9 @@ function boundedPrompt(prompt) {
  * permission mode or close plan the daemon kept, merged over its own at its next save
  * (e2e/stall.e2e.ts).
  */
+/** This process's start, epoch ms: the engine ran the hook then. */
+const FIRED_AT = Date.now() - Math.round(process.uptime() * 1000)
+
 function post(port, path, body, onResponse) {
   return new Promise((resolve) => {
     const payload = JSON.stringify(body)
@@ -287,6 +290,9 @@ function post(port, path, body, onResponse) {
           'Content-Type': 'application/json',
           'Content-Length': Buffer.byteLength(payload),
           'X-Harness-Hook-Token': credential,
+          // When the engine ran this hook: this process's start, not its arrival, which can be seconds later on
+          // a loaded machine, after the engine has moved on to its next prompt (src/hookServer.ts hookFiredAt).
+          'X-Harness-Hook-Fired-At': String(FIRED_AT),
         },
         timeout: Math.max(1, Math.min(500, remainingBudget())),
       },
