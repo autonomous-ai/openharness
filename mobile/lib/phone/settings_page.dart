@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
@@ -287,32 +288,81 @@ class _Body extends StatelessWidget {
           icon: LucideIcons.logOut300,
           label: 'Sign out',
           destructive: true,
-          onTap: () => unawaited(_confirmSignOut(context, notifier)),
+          onTap: () => unawaited(confirmSignOut(context, notifier)),
         ),
       ],
     );
   }
+}
 
-  /// Asked first, because a sign-out is more than leaving this screen: the phone's key leaves the
-  /// account's devices ([AppNotifier.logout]), and signing in again makes a new one — which every
-  /// other device then announces as a new device. One stray tap in the sheet used to be all of it.
-  Future<void> _confirmSignOut(
-    BuildContext context,
-    AppNotifier notifier,
-  ) async {
-    final confirmed = await confirmPhoneAction(
-      context,
-      // The sheet row's own icon — see [confirmPhoneAction].
-      icon: LucideIcons.logOut300,
-      title: 'Sign out?',
-      detail: notifier.currentUser?.email,
-      message:
-          'Your harnesses keep running on your computers. When you sign in again, '
-          'your other devices will see this phone as a new device.',
-      confirmLabel: 'Sign out',
+/// Sign out, asked first — from the account sheet here, and from "Not you? Sign out" on the page a
+/// phone waits for its first computer on (`welcome/connect_computer.dart`).
+///
+/// Asked first, because a sign-out is more than leaving this screen: the phone's key leaves the
+/// account's devices ([AppNotifier.logout]), and signing in again makes a new one — which every
+/// other device then announces as a new device. One stray tap in the sheet used to be all of it.
+Future<void> confirmSignOut(BuildContext context, AppNotifier notifier) async {
+  final confirmed = await confirmPhoneAction(
+    context,
+    // The sheet row's own icon — see [confirmPhoneAction].
+    icon: LucideIcons.logOut300,
+    title: 'Sign out?',
+    detail: notifier.currentUser?.email,
+    message:
+        'Your harnesses keep running on your computers. When you sign in again, '
+        'your other devices will see this phone as a new device.',
+    confirmLabel: 'Sign out',
+  );
+  if (!confirmed) return;
+  await notifier.logout();
+}
+
+/// Settings over the current page — the page Find and a terminal's menu push.
+void openPhoneSettings(BuildContext context, AppNotifier notifier) => unawaited(
+  Navigator.of(context)
+      .push(phoneRoute((_) => SettingsPage(notifier: notifier, large: false))),
+);
+
+/// Settings, at the top right of the screens a phone stands on before it can reach any harness:
+/// waiting for its first computer, unlocking the only one, the computers list while none is ready,
+/// pairing by a scanned code.
+///
+/// ⚠️ **The only way to Settings from those screens, and so to Sign out.** Find and a terminal's
+/// menu are where Settings otherwise opens, and both need a harness: a phone signed in to the wrong
+/// account — one with no computer on it — had no way out short of deleting the app.
+class PhoneSettingsButton extends StatelessWidget {
+  const PhoneSettingsButton({super.key, required this.notifier});
+
+  final AppNotifier notifier;
+
+  @override
+  Widget build(BuildContext context) {
+    final tty = Tty.of(context);
+    return Semantics(
+      button: true,
+      label: 'Settings',
+      excludeSemantics: true,
+      child: GestureDetector(
+        key: const ValueKey('phone-settings'),
+        behavior: HitTestBehavior.opaque,
+        onTap: () {
+          HapticFeedback.selectionClick();
+          openPhoneSettings(context, notifier);
+        },
+        // The back chevron's box, mirrored: the same touch target, the glyph on the right gutter.
+        child: SizedBox(
+          width: 52,
+          height: 44,
+          child: Padding(
+            padding: const EdgeInsets.only(right: Tty.origin - 2),
+            child: Align(
+              alignment: Alignment.centerRight,
+              child: Icon(LucideIcons.settings300, size: 21, color: tty.faint),
+            ),
+          ),
+        ),
+      ),
     );
-    if (!confirmed) return;
-    await notifier.logout();
   }
 }
 

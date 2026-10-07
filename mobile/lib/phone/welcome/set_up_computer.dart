@@ -131,7 +131,12 @@ class SetUpComputerPage extends StatefulWidget {
     this.trailing = const [],
     this.loadDownloads,
     this.account,
+    this.topTrailing,
   });
+
+  /// At the right of the top row, across from `‹ Back` — on the home screen, where there is no back,
+  /// the way to Settings (`PhoneSettingsButton`).
+  final Widget? topTrailing;
 
   /// The account this phone is signed in to, when it is: the computer has to sign in to the same
   /// one, and the steps say so by name. Null for a phone not signed in yet — its scan signs it in
@@ -223,13 +228,19 @@ class _SetUpComputerPageState extends State<SetUpComputerPage> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        if (widget.onBack case final onBack?)
-          Align(
-            alignment: Alignment.centerLeft,
-            child: TtyBackButton(onPressed: onBack),
-          )
-        else
-          const SizedBox(height: 44),
+        // One row whatever is in it: the back button's height, so the page starts at the same place
+        // with a back, a trailing control, both, or neither.
+        SizedBox(
+          height: 44,
+          child: Row(
+            children: [
+              if (widget.onBack case final onBack?)
+                TtyBackButton(onPressed: onBack),
+              const Spacer(),
+              ?widget.topTrailing,
+            ],
+          ),
+        ),
         Expanded(
           child: ListView(
             padding: const EdgeInsets.fromLTRB(Tty.origin, 8, Tty.origin, 24),

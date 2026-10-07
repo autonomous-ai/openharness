@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/state/app_state.dart';
 
+import '../settings_page.dart' show PhoneSettingsButton, confirmSignOut;
 import '../tty.dart';
 import '../tty_controls.dart';
 import 'scan_to_connect.dart';
@@ -102,7 +103,20 @@ class _ConnectComputerPageState extends State<ConnectComputerPage> {
   /// The code the new computer's Add Phone shows: the phone pairs with it there and then. The
   /// computer is asked for first — it may have joined the account a moment ago, too recently for
   /// the list the phone holds.
+  ///
+  /// ⚠️ **A code is never dropped because this page went.** At home this page is there only while
+  /// the account has no computer, so the computer this code is for turning up — in the 5-second
+  /// watch while the camera was open, or in the refresh below — takes the page away, and the code
+  /// went with it: the person had just scanned, and was shown "Scan its code" again. Gone, the page
+  /// hands the code to the home screen instead ([AppNotifier.holdPendingPairing]), which pairs with
+  /// it the way it pairs a code scanned at sign-in.
   Future<void> _scanToPair() async {
+    // Read before the camera: once this page is gone, its widget is not to be reached through.
+    final notifier = widget.notifier;
+    void holdIfGone(String machineId, String pairCode) {
+      if (!mounted) notifier.holdPendingPairing(machineId, pairCode);
+    }
+
     final code = await scanForCode(
       context,
       fallbackLabel: 'Not now',
@@ -111,8 +125,14 @@ class _ConnectComputerPageState extends State<ConnectComputerPage> {
       // what setting it up needs anyway.
       onSignInCode: (code) => unawaited(approveComputerSignIn(context, widget.notifier, code)),
     );
-    if (!mounted || code == null) return;
+    if (code == null) return;
     final machineId = code.machineId, pairCode = code.pairCode;
+    if (!mounted) {
+      if (machineId != null && pairCode != null) {
+        holdIfGone(machineId, pairCode);
+      }
+      return;
+    }
     if (machineId == null || pairCode == null) {
       _say(
         'That isn’t an Add Phone code. Open Add Phone… on the computer and '
@@ -133,7 +153,10 @@ class _ConnectComputerPageState extends State<ConnectComputerPage> {
         // ⚠️ A list that could not be read says nothing about whether the computer is on the
         // account, so it is not "isn't on your account" — and thrown on from here, it left
         // "Pairing…" up for good.
-        if (!mounted) return;
+        if (!mounted) {
+          holdIfGone(machineId, pairCode);
+          return;
+        }
         _say(
           "Couldn't reach your account. Check your connection and scan again.",
           failed: true,
@@ -141,7 +164,12 @@ class _ConnectComputerPageState extends State<ConnectComputerPage> {
         return;
       }
     }
-    if (!mounted) return;
+    // The refresh is what most often brings the computer in — and with it, at home, the page that
+    // replaces this one.
+    if (!mounted) {
+      holdIfGone(machineId, pairCode);
+      return;
+    }
     if (!widget.notifier.machineStates.containsKey(machineId)) {
       _say(
         "That computer isn't on your account. Sign in to Harness on it "
@@ -177,13 +205,39 @@ class _ConnectComputerPageState extends State<ConnectComputerPage> {
           onBack: widget.onBack,
           onScan: () => unawaited(_scanToPair()),
           loadDownloads: widget.loadDownloads,
-          // The computer has to join this account, so the steps name it.
-          account: widget.signedIn ? email : null,
+          // The computer has to join this account, so the steps name it — from Computers too
+          // ("Set up another computer", which does not watch), where a second computer signed in
+          // to another account is likeliest.
+          account: email,
+          // At home there is no back, and this page is where a phone signed in to an account with
+          // no computer stays: Settings — and Sign out — has to be reachable from it.
+          topTrailing: widget.onBack == null
+              ? PhoneSettingsButton(notifier: widget.notifier)
+              : null,
           status: widget.signedIn || scanned != null
               ? Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     if (widget.signedIn) _Watching(account: email),
+                    // Right under the account it names: the wrong one is the likeliest reason this
+                    // page never moves on — Continue with Google, and another of the person's
+                    // Google accounts.
+                    if (widget.signedIn && email != null)
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: Transform.translate(
+                          // The button's own inset, so its words sit on the gutter.
+                          offset: const Offset(-12, 0),
+                          child: TtyTextButton(
+                            key: const ValueKey('connect-sign-out'),
+                            label: 'Not you? Sign out',
+                            color: tty.faint,
+                            onPressed: () => unawaited(
+                              confirmSignOut(context, widget.notifier),
+                            ),
+                          ),
+                        ),
+                      ),
                     if (scanned != null)
                       Padding(
                         padding: const EdgeInsets.only(top: 10),

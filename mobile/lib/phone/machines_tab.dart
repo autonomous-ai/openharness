@@ -16,6 +16,7 @@ import 'machine_index.dart';
 import 'phone_card.dart';
 import 'phone_navigation.dart';
 import 'phone_status.dart';
+import 'settings_page.dart' show PhoneSettingsButton;
 
 /// The machines on the account, grouped by what they need.
 ///
@@ -54,18 +55,28 @@ class MachinesTab extends StatelessWidget {
                     onPressed: () => Navigator.of(context).maybePop(),
                   ),
                 ),
-              Padding(
-                padding: EdgeInsets.fromLTRB(
-                  Tty.origin,
-                  large ? 12 : 8,
-                  Tty.origin,
-                  4,
-                ),
-                child: TtyText(
-                  'Computers',
-                  size: large ? 24 : TtySize.title,
-                  weight: FontWeight.w600,
-                ),
+              Row(
+                children: [
+                  Expanded(
+                    child: Padding(
+                      padding: EdgeInsets.fromLTRB(
+                        Tty.origin,
+                        large ? 12 : 8,
+                        Tty.origin,
+                        4,
+                      ),
+                      child: TtyText(
+                        'Computers',
+                        size: large ? 24 : TtySize.title,
+                        weight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                  // Large, this is the home screen while no computer is ready — locked, or off —
+                  // and nothing else on it leads to Settings or Sign out. Pushed (small), it came
+                  // FROM Settings, and back is the way there.
+                  if (large) PhoneSettingsButton(notifier: notifier),
+                ],
               ),
               Expanded(child: _Body(notifier: notifier)),
             ],
