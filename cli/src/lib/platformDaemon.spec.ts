@@ -19,7 +19,8 @@ function world(platform: PlatformName) {
   const fake = fakePlatform(join(dir, 'bin'), { pidFile })
   const clock = { now: 0 }
   const dead = new Set<number>()
-  const service = new PlatformService(platform, defaultPlatformDeps({ env: { PATH: fake.bin }, uid: 501, home }))
+  // In this process (`fake.run`), as serviceCommand.spec.ts runs them: as processes they timed out under load.
+  const service = new PlatformService(platform, { ...defaultPlatformDeps({ env: { PATH: fake.bin }, uid: 501, home }), run: fake.run })
   const deps: PlatformDaemonDeps = {
     service,
     logFile: join(dir, 'data', 'harness.log'),
