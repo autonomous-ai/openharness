@@ -1762,22 +1762,28 @@ class AppNotifier extends ChangeNotifier {
   }
 
   /// The page [signInWithProvider] waits on, shown. One that cannot be shown ends that sign-in
-  /// with the reason — it would otherwise wait out its timeout on a page nobody can see — but
-  /// only while it is still the sign-in in flight: a later one is not this failure's to end.
+  /// with the reason — it would otherwise wait out its timeout on a page nobody can see — and one
+  /// the person closes ends it as a cancel ([DirectLogin.pageClosed]): the welcome screen is back
+  /// as it was, with nothing to say. Either only while it is still the sign-in in flight: a later
+  /// one is not this page's to end.
   Future<void> _openSignInPage(Uri url, DirectLogin login, int revision) async {
-    DirectAuthException reason;
+    bool inFlight() => _authWorkCurrent(revision) && signInProvider != null;
     try {
-      if (await openSignInPage(url)) return;
-      // iOS answers false for a page closed before it had loaded: the person's own cancel.
-      reason = const SignInCancelled();
+      await openSignInPage(
+        url,
+        onClosed: () {
+          if (inFlight()) login.pageClosed();
+        },
+      );
     } catch (error) {
       debugPrint('signInWithProvider: could not open the sign-in page: $error');
-      reason = const DirectAuthException(
-        'Could not open the sign-in page. Check your connection and try again.',
-      );
-    }
-    if (_authWorkCurrent(revision) && signInProvider != null) {
-      login.cancel(reason);
+      if (inFlight()) {
+        login.cancel(
+          const DirectAuthException(
+            'Could not open the sign-in page. Check your connection and try again.',
+          ),
+        );
+      }
     }
   }
 

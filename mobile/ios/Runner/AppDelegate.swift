@@ -1,4 +1,5 @@
 import Flutter
+import SafariServices
 import UIKit
 import UserNotifications
 
@@ -18,6 +19,7 @@ import UserNotifications
     GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
     DeviceNameChannel.register(with: engineBridge.pluginRegistry)
     ClipboardImageChannel.register(with: engineBridge.pluginRegistry)
+    SignInPageChannel.register(with: engineBridge.pluginRegistry)
   }
 }
 
@@ -91,5 +93,125 @@ enum DeviceNameChannel {
     return withUnsafePointer(to: &systemInfo.machine) {
       $0.withMemoryRebound(to: CChar.self, capacity: 1) { String(validatingCString: $0) ?? "" }
     }
+  }
+}
+
+/// `harness/sign_in_page` — the SSO page, in an SFSafariViewController over the app (Dart:
+/// `lib/viewer/sign_in_browser.dart`). url_launcher's in-app page tells Dart nothing once its first
+/// load is over, so a page closed with Done left its sign-in waiting out five minutes behind
+/// "Waiting for Google…" and a Cancel. Here Done — or a swipe down — is said back: `closed`, with the
+/// id Dart opened the page with.
+///
+/// `open` answers once the page is on its way up; `close` takes it down and says nothing, since Dart
+/// asked.
+final class SignInPageChannel: NSObject, SFSafariViewControllerDelegate,
+  UIAdaptivePresentationControllerDelegate
+{
+  private static var shared: SignInPageChannel?
+
+  private let registrar: FlutterPluginRegistrar
+  private let channel: FlutterMethodChannel
+  /// The page up now, and the id Dart opened it with; nil once it is closed or taken down.
+  private var page: (controller: SFSafariViewController, id: Int)?
+
+  static func register(with registry: FlutterPluginRegistry) {
+    guard let registrar = registry.registrar(forPlugin: "HarnessSignInPage") else { return }
+    shared = SignInPageChannel(registrar: registrar)
+  }
+
+  private init(registrar: FlutterPluginRegistrar) {
+    self.registrar = registrar
+    channel = FlutterMethodChannel(
+      name: "harness/sign_in_page", binaryMessenger: registrar.messenger())
+    super.init()
+    channel.setMethodCallHandler { [weak self] call, result in
+      self?.handle(call, result: result)
+    }
+  }
+
+  private func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
+    switch call.method {
+    case "open":
+      let arguments = call.arguments as? [String: Any]
+      guard let id = arguments?["id"] as? Int,
+        let url = (arguments?["url"] as? String).flatMap(URL.init(string:)),
+        let scheme = url.scheme?.lowercased(), scheme == "https" || scheme == "http"
+      else {
+        result(FlutterError(code: "bad-args", message: "Not a page to open", details: nil))
+        return
+      }
+      open(url, id: id, result: result)
+    case "close":
+      if let controller = take() { Self.takeDown(controller, animated: true) }
+      result(nil)
+    default:
+      result(FlutterMethodNotImplemented)
+    }
+  }
+
+  private func open(_ url: URL, id: Int, result: @escaping FlutterResult) {
+    // One page at a time: one an earlier sign-in left up goes first, without a word to Dart.
+    guard let old = take(), old.presentingViewController != nil else {
+      present(url, id: id, result: result)
+      return
+    }
+    Self.takeDown(old, animated: false) { self.present(url, id: id, result: result) }
+  }
+
+  private func present(_ url: URL, id: Int, result: @escaping FlutterResult) {
+    var presenter = registrar.viewController
+    while let presented = presenter?.presentedViewController, !presented.isBeingDismissed {
+      presenter = presented
+    }
+    guard let presenter else {
+      result(FlutterError(code: "no-ui", message: "Nothing on screen to open it over", details: nil))
+      return
+    }
+    let controller = SFSafariViewController(url: url)
+    controller.delegate = self
+    // Shown as a sheet, it can also be swiped away, which its own delegate does not hear.
+    controller.presentationController?.delegate = self
+    page = (controller, id)
+    presenter.present(controller, animated: true)
+    result(nil)
+  }
+
+  /// The page, no longer this channel's to watch.
+  private func take() -> SFSafariViewController? {
+    let controller = page?.controller
+    page = nil
+    return controller
+  }
+
+  /// Dismisses [controller] — once it is up, when it is still animating in: UIKit drops a dismiss
+  /// made during a presentation, and the page would stay up over a sign-in that had ended.
+  private static func takeDown(
+    _ controller: UIViewController, animated: Bool, then: (() -> Void)? = nil
+  ) {
+    if controller.isBeingPresented, let coordinator = controller.transitionCoordinator,
+      coordinator.animate(
+        alongsideTransition: nil,
+        completion: { _ in controller.dismiss(animated: animated, completion: then) })
+    {
+      return
+    }
+    controller.dismiss(animated: animated, completion: then)
+  }
+
+  /// The person closed [controller] — if it is still the page up, Dart is told.
+  private func closedByPerson(_ controller: UIViewController) {
+    guard let page, page.controller === controller else { return }
+    self.page = nil
+    channel.invokeMethod("closed", arguments: page.id)
+  }
+
+  // Done. The dismiss is url_launcher's own: harmless when the page has already gone by itself.
+  func safariViewControllerDidFinish(_ controller: SFSafariViewController) {
+    closedByPerson(controller)
+    controller.dismiss(animated: true)
+  }
+
+  func presentationControllerDidDismiss(_ presentationController: UIPresentationController) {
+    closedByPerson(presentationController.presentedViewController)
   }
 }

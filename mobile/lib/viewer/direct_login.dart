@@ -157,6 +157,15 @@ class DirectLogin implements SignInClient {
     callback?.cancel(error);
   }
 
+  /// The person closed the sign-in page themselves (`sign_in_browser.dart`). Before the redirect
+  /// came back that is a [cancel]; after it, the sign-in is already on its way in — the page then
+  /// says "Close this page to go back to Harness" — and carries on.
+  void pageClosed() {
+    final callback = _pending;
+    if (callback == null || callback.answered) return;
+    cancel();
+  }
+
   void _requireCurrent(int revision) {
     if (revision != _loginRevision) throw const SignInCancelled();
   }
@@ -184,6 +193,9 @@ class _LoopbackCallback {
   DirectAuthException? error;
 
   Future<({String code, String state})?> get result => _completer.future;
+
+  /// The redirect came back — or the sign-in was stopped — so there is nothing left to wait on.
+  bool get answered => _completer.isCompleted;
 
   /// Completes when [cancel] stops this sign-in — also after its redirect has landed, for an
   /// exchange that is waiting to try again ([DirectLogin._exchange]).

@@ -1,4 +1,8 @@
+import 'dart:async';
+import 'dart:io';
+
 import 'package:flutter/services.dart';
+import 'package:flutter/widgets.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 /// Where the SSO page opens: in the app — SFSafariViewController on iOS, a Custom Tab on Android —
@@ -13,22 +17,36 @@ import 'package:url_launcher/url_launcher.dart';
 /// ([closeSignInPage]): on Android the page's last screen goes back to the app through
 /// [signInReturnUrl] instead.
 ///
-/// True once the page is up; false when iOS's sheet was closed before its first page loaded.
-Future<bool> openSignInPage(Uri url) async {
+/// [onClosed]: the person closed the page themselves — iOS's Done, Android's ✕ — before
+/// [closeSignInPage] took it down. url_launcher says nothing of it, and the sign-in the page was
+/// for waited out its five minutes behind "Waiting for Google…" and a Cancel nobody had pressed.
+/// Not told once the page has been taken down, nor once another page has been opened.
+///
+/// Completes once the page is on its way up; throws when it cannot be shown.
+Future<void> openSignInPage(Uri url, {required VoidCallback onClosed}) async {
+  _stopWatching();
+  final id = _pageId;
+  _onClosed = onClosed;
   try {
-    return await launchUrl(url, mode: LaunchMode.inAppBrowserView);
-  } on PlatformException catch (error) {
-    // ⚠️ **The sheet is up — this is the sign-in page working, not failing.** Named a provider,
-    // auth-service's page replaces itself with Google's or Apple's (`location.replace`) before
-    // its own load finishes, so SFSafariViewController reports the first load as failed, and
-    // url_launcher_ios throws exactly this (`_failedSafariViewControllerLoadException`) while
-    // leaving the sheet where it is. Taking it as "could not open" cancelled every iOS sign-in
-    // and pulled the sheet out from under Google's account picker. A page that truly failed to
-    // load is still on screen, saying so, for the person to close.
-    if (error.code == 'Error' &&
-        (error.message ?? '').startsWith('Error while launching')) {
-      return true;
+    if (Platform.isIOS) {
+      _iosPage.setMethodCallHandler(_fromIosPage);
+      await _iosPage.invokeMethod<void>('open', {'id': id, 'url': '$url'});
+      return;
     }
+    // A Custom Tab says nothing when it is closed: the app coming back to the front is that close.
+    // Not at once — a redirect that came in while the app was frozen is only taken in once it
+    // runs again, and that sign-in is under way rather than closed ([DirectLogin.pageClosed]).
+    _resumeWatch = AppLifecycleListener(
+      onResume: () {
+        _closedGrace?.cancel();
+        _closedGrace = Timer(const Duration(seconds: 1), () => _closed(id));
+      },
+    );
+    if (!await launchUrl(url, mode: LaunchMode.inAppBrowserView)) {
+      throw StateError('No browser to open $url in');
+    }
+  } catch (_) {
+    if (id == _pageId) _stopWatching();
     rethrow;
   }
 }
@@ -40,9 +58,45 @@ const signInReturnUrl = 'ai.autonomous.harness.signin://signed-in';
 
 /// Takes down what [openSignInPage] put up, where the platform can. Best effort.
 Future<void> closeSignInPage() async {
+  _stopWatching();
   try {
-    if (await supportsCloseForLaunchMode(LaunchMode.inAppBrowserView)) {
+    if (Platform.isIOS) {
+      await _iosPage.invokeMethod<void>('close');
+    } else if (await supportsCloseForLaunchMode(LaunchMode.inAppBrowserView)) {
       await closeInAppWebView();
     }
   } catch (_) {}
+}
+
+/// iOS's page (`SignInPageChannel`, `ios/Runner/AppDelegate.swift`): url_launcher's
+/// SFSafariViewController cannot say when Done was pressed.
+const _iosPage = MethodChannel('harness/sign_in_page');
+
+/// The page [openSignInPage] last opened; bumped when it is let go, so what its platform says
+/// later is not taken for the next one's.
+int _pageId = 0;
+VoidCallback? _onClosed;
+AppLifecycleListener? _resumeWatch;
+Timer? _closedGrace;
+
+void _stopWatching() {
+  _pageId++;
+  _onClosed = null;
+  _resumeWatch?.dispose();
+  _resumeWatch = null;
+  _closedGrace?.cancel();
+  _closedGrace = null;
+}
+
+Future<void> _fromIosPage(MethodCall call) async {
+  if (call.method == 'closed' && call.arguments is int) {
+    _closed(call.arguments as int);
+  }
+}
+
+void _closed(int id) {
+  final onClosed = _onClosed;
+  if (id != _pageId || onClosed == null) return;
+  _stopWatching();
+  onClosed();
 }
