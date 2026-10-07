@@ -1421,7 +1421,7 @@ fn query_line(buf: &mut Buffer, app: &App, picker: &Picker, x: u16, y: u16, righ
 fn prompt_actions(buf: &mut Buffer, app: &App, x: u16, y: u16, w: u16, c: &Chrome) {
     let confirm = matches!(app.devices.ask, Some(Ask::Confirm { .. }));
     // A narrow panel says Next for Continue; the keys hint goes first (`Row::draw`), never a button.
-    let mut row = prompt_row(app, confirm, w < 19);
+    let mut row = prompt_row(app, confirm, w < 24);   // 24: the width of `[ Cancel ]  [ Continue ]`
     if w < row.buttons_width() { return }
     row.chosen = if app.devices.prompt_focus.get() { row.chosen } else { usize::MAX };
     let right = x + w;
@@ -1434,7 +1434,7 @@ fn prompt_actions(buf: &mut Buffer, app: &App, x: u16, y: u16, w: u16, c: &Chrom
 /// `[ Cancel ]  [ Yes ]`, or `[ Cancel ]  [ Continue ]` for a typed line, with the chosen button
 /// from the panel's state. [confirm] is passed because a key takes the ask out while it answers.
 fn prompt_row(app: &App, confirm: bool, narrow: bool) -> buttons::Row {
-    let (action, hint) = if confirm { ("Yes", "y yes · n no") } else if narrow { ("Next", "") } else { ("Continue", "") };
+    let (action, hint) = if confirm { ("Yes", "y yes · n no") } else if narrow { ("Next", "tab buttons") } else { ("Continue", "tab buttons") };
     let key = |ch: char| confirm.then_some(ch);
     buttons::Row {
         buttons: vec![Button { label: "Cancel".into(), key: key('n') }, Button { label: action.into(), key: key('y') }],
@@ -1939,6 +1939,25 @@ mod tests {
         press(&mut app, KeyCode::Tab);
         press(&mut app, KeyCode::Enter);
         assert!(matches!(app.devices.ask, Some(Ask::Confirm { .. })), "Tab back to the input: Enter continues");
+    }
+
+    #[test]
+    fn typed_line_prompts_say_next_when_narrow_and_continue_when_there_is_room() {
+        let mut app = app((150, 42));
+        app.mouse = true;
+        let log = fake(&mut app);
+        // (Screen width -> inner width: 28 -> 20 for `[ Cancel ]  [ Next ]`, 32 -> 24 for Continue.)
+        for (w, h, label) in [(28, 12, "[ Next ]"), (31, 12, "[ Next ]"), (32, 12, "[ Continue ]"), (80, 24, "[ Continue ]")] {
+            connect_to(&mut app, REMOTE.into());
+            typed(&mut app, "pw");
+            crate::input::handle(&mut app, crossterm::event::Event::Resize(w, h));
+            let (visible, _) = screen(&mut app, w, h);
+            assert!(visible.contains(label) && visible.contains("[ Cancel ]"), "{w}x{h}:\n{visible}");
+            click_prompt(&mut app, true);
+            assert!(matches!(app.devices.ask, Some(Ask::Confirm { .. })), "{w}x{h}: the click continues");
+            press(&mut app, KeyCode::Esc);
+        }
+        assert!(clis(&log, "link").iter().all(|r| !matches!(r, Req::Cli { args, .. } if args[1] == "connect")));
     }
 
     /// M-l on a machine (the machines list) is this same flow: the panel, its password asked for.
