@@ -1,22 +1,16 @@
-/**
- * Idempotently install the machine-adapter SessionStart / SessionEnd hooks into
- * ~/.claude/settings.json so claude notifies us when tmux sessions start/end.
- *
- * Changes to settings.json take effect on the NEXT claude session start.
- */
+/** Hook installers for engines still awaiting migration to their hooks facet. */
 
 import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync, unlinkSync } from 'fs'
 import { basename, join, dirname } from 'path'
-import { homedir } from 'os'
-import { fileURLToPath } from 'url'
 import { cursorConfigDir, cursorDataDir } from '../engines/cursor/home.js'
 import { env } from '../config/env.js'
 import { VERSION } from '../version.js'
 import { hermesConfigHomes } from '../engines/hermes/home.js'
 import { opencodeMajorVersion } from '../engines/opencode/version.js'
-import { managedNodePath } from './nodeRuntime.js'
+import { command, isOurs, writeJsonAtomic, type HookBlock, type Settings } from '../engines/kit/notifyHooks.js'
+export { installSessionHooks } from '../engines/claude/installHooks.js'
+export { installCodexHooks } from '../engines/codex/installHooks.js'
 
-const SETTINGS_PATH = join(homedir(), '.claude', 'settings.json')
 const GROK_HOOKS_PATH = join(env.GROK_HOME, 'hooks', 'harness.json')
 const CURSOR_HOOKS_PATH = join(cursorConfigDir(), 'hooks.json')
 // agy reads hooks from its SHARED customization root (~/.gemini/config), not from its own state dir —
@@ -26,193 +20,6 @@ const AGY_HOOKS_PATH = join(env.AGY_CONFIG_DIR, 'hooks.json')
 // Copilot reads every *.json in this directory, so Harness gets its own file and never edits the
 // user's. Measured: a file dropped here fires without any further opt-in.
 const COPILOT_HOOKS_PATH = join(env.COPILOT_HOME, 'hooks', 'harness.json')
-
-// notify.mjs location depends on the layout (import.meta.url is the REAL executing file at runtime):
-//  - packaged/bundled: cli.js at ~/.harness/cli/cli.js → notify.mjs is a SIBLING (dist/ bundle too).
-//  - a core started from the lean bundle (leanEntry.ts): its file is lean/<sha>/ in the data folder, which
-//    holds no notify.mjs, and its script (process.argv[1]) is the cli.js it was read from: the sibling of that.
-//  - dev/per-file:      hooks.js at <appRoot>/{src,dist}/lib/ → notify.mjs at ../../hook/notify.mjs.
-// Prefer the sibling, fall back to the dev path.
-const cliDir = dirname(fileURLToPath(import.meta.url))
-const HOOK_SCRIPT =
-  [join(cliDir, 'notify.mjs'), ...(process.argv[1] ? [join(dirname(process.argv[1]), 'notify.mjs')] : []), join(cliDir, '..', '..', 'hook', 'notify.mjs')].find(existsSync) ??
-  join(cliDir, '..', '..', 'hook', 'notify.mjs')
-
-// SessionStart/UserPromptSubmit bind mutable engine-session metadata to the process agent. SessionEnd
-// only asks discovery to reconcile: the process, not the hook, owns the tile lifetime. UserPromptSubmit
-// is the CATCH hook, so a SessionStart missed because the adapter started late is repaired on first input.
-// Stop/StopFailure are the authoritative turn-close signals (Stop = normal finish incl. max_tokens/
-// refusal; StopFailure = turn ended on an API error, where Stop does NOT fire) — they close a turn even
-// when the JSONL-derived turn_ended is missed. Neither supports a matcher (silently ignored).
-const EVENTS = ['SessionStart', 'SessionEnd', 'UserPromptSubmit', 'Stop', 'StopFailure'] as const
-
-interface CommandHook {
-  type: string
-  command: string
-  timeout?: number
-}
-interface HookBlock {
-  matcher?: string
-  hooks: CommandHook[]
-}
-type Settings = { hooks?: Record<string, HookBlock[]> } & Record<string, unknown>
-
-function shellQuote(value: string): string {
-  return `'${value.replace(/'/g, `'\\''`)}'`
-}
-
-function command(
-  port: number,
-  engine: 'claude' | 'codex' | 'cursor' | 'hermes' | 'commandcode' | 'devin' | 'grok' | 'agy' | 'copilot',
-  // Only ever non-default for 'codex': a per-agent CODEX_HOME profile gets its OWN hooks.json, and
-  // that file's baked --codex-home must match where it actually lives (see installCodexHooks).
-  codexHome: string = env.CODEX_HOME,
-  // Same rule for Hermes, and it was broken the same way: a `hermes -p <name>` profile has its own
-  // config.yaml, and the block in it carried the DEFAULT home — so the hook looked the session up in
-  // a store it was not in (openharness#191). See installHermesHooks.
-  hermesHome: string = env.HERMES_HOME,
-): string {
-  return [
-    // Absolute, never the bare word `node`. This string is executed later by the ENGINE, in a shell
-    // whose PATH is none of our business — and since the product ships its own Node, a computer with
-    // no `node` on PATH is normal. See managedNodePath(); a changed interpreter is picked up by the
-    // same drift comparison each installer already does for a changed path or port.
-    shellQuote(managedNodePath()),
-    shellQuote(HOOK_SCRIPT),
-    '--port', String(port),
-    '--data-dir', shellQuote(env.ADAPTER_DATA_DIR),
-    '--claude-projects-dir', shellQuote(env.CLAUDE_PROJECTS_DIR),
-    '--codex-home', shellQuote(codexHome),
-    '--grok-home', shellQuote(env.GROK_HOME),
-    '--cursor-home', shellQuote(cursorDataDir()),
-    '--hermes-home', shellQuote(hermesHome),
-    '--commandcode-home', shellQuote(env.COMMANDCODE_HOME),
-    '--devin-home', shellQuote(env.DEVIN_HOME),
-    '--agy-home', shellQuote(env.AGY_HOME),
-    '--copilot-home', shellQuote(env.COPILOT_HOME),
-    ...(engine !== 'claude' ? ['--engine', engine] : []),
-  ].join(' ')
-}
-
-/** True if a block already points at our notify.mjs script (any path — robust across layout/version). */
-function isOurs(block: HookBlock): boolean {
-  return Array.isArray(block?.hooks) && block.hooks.some((h) => h?.command?.includes('notify.mjs'))
-}
-
-/** `settingsPath`: another Claude Code home's settings, for a home the person moved (lib/engineHomes.ts). */
-export function installSessionHooks(port: number, settingsPath: string = SETTINGS_PATH): void {
-  let settings: Settings = {}
-  try {
-    settings = JSON.parse(readFileSync(settingsPath, 'utf-8')) as Settings
-  } catch {
-    // missing / unreadable → start from empty settings
-  }
-
-  if (!settings.hooks || typeof settings.hooks !== 'object') settings.hooks = {}
-  const cmd = command(port, 'claude')
-  let changed = false
-  let updated = false // true when an EXISTING block's command changed (path/port drift)
-
-  for (const event of EVENTS) {
-    const blocks = Array.isArray(settings.hooks[event]) ? settings.hooks[event] : []
-    // Collapse any duplicate "ours" blocks (e.g. from an earlier path) down to a single one, and
-    // keep every non-ours block untouched.
-    const foreign = blocks.filter((b) => !isOurs(b))
-    const oursBlocks = blocks.filter(isOurs)
-    if (oursBlocks.length > 1) changed = true // dropping duplicates is a change
-
-    // The one canonical block for this event with the CURRENT command (path + port). If a prior
-    // block existed with a different command (moved checkout / dev↔dist / changed port), this
-    // overwrites it in place.
-    const existingCmd = oursBlocks[0]?.hooks?.find((h) => isOurs({ hooks: [h] }))?.command
-    if (oursBlocks.length === 0) changed = true
-    else if (existingCmd !== cmd) { changed = true; updated = true }
-
-    settings.hooks[event] = [...foreign, { hooks: [{ type: 'command', command: cmd, timeout: 5 }] }]
-  }
-
-  if (!changed) {
-    console.log('[hooks] Claude session + turn (Stop/StopFailure) hooks already installed')
-    return
-  }
-
-  try {
-    mkdirSync(dirname(settingsPath), { recursive: true })
-    writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n')
-    // Both name the file written: a daemon can write several (every moved home gets its own), and the
-    // end-to-end harness checks each one it names is inside its throwaway root.
-    console.log(
-      updated
-        ? `[hooks] updated (path/port changed) → ${HOOK_SCRIPT} --port ${port} in ${settingsPath}`
-        : `[hooks] installed Claude session + turn (Stop/StopFailure) hooks → ${settingsPath}`,
-    )
-    console.log('[hooks] (takes effect on the next claude session start)')
-  } catch (err) {
-    console.error('[hooks] failed to write settings.json:', err)
-  }
-}
-
-function writeJsonAtomic(file: string, value: unknown): void {
-  mkdirSync(dirname(file), { recursive: true })
-  const tmp = `${file}.${process.pid}.tmp`
-  writeFileSync(tmp, JSON.stringify(value, null, 2) + '\n')
-  renameSync(tmp, file)
-}
-
-/**
- * Merge Machine's user-level Codex hooks without replacing unrelated hooks. A malformed existing
- * file is left untouched: silently replacing it could disable user security/automation hooks.
- *
- * `codexHome` defaults to this machine's own default profile, but a Codex agent launched against a
- * different CODEX_HOME profile (see `Agent.codexHome`/`agent_create`) reads hooks.json from THAT
- * folder, not this one — so `onCreateAgent` calls this again with the chosen profile before
- * spawning such an agent. Idempotent either way.
- */
-export function installCodexHooks(port: number, codexHome: string = env.CODEX_HOME): void {
-  const hooksPath = join(codexHome, 'hooks.json')
-  let settings: Settings = {}
-  if (existsSync(hooksPath)) {
-    try {
-      settings = JSON.parse(readFileSync(hooksPath, 'utf-8')) as Settings
-    } catch (err) {
-      console.error(`[hooks] Codex hooks file is invalid JSON; leaving it unchanged: ${hooksPath}`)
-      console.error('[hooks] fix the file, then restart harness login')
-      return
-    }
-  }
-  if (!settings.hooks || typeof settings.hooks !== 'object') settings.hooks = {}
-
-  const cmd = command(port, 'codex', codexHome)
-  const required: Array<{ event: 'SessionStart' | 'UserPromptSubmit'; matcher?: string }> = [
-    { event: 'SessionStart', matcher: 'startup|resume|clear|compact' },
-    { event: 'UserPromptSubmit' },
-  ]
-  let changed = false
-  for (const { event, matcher } of required) {
-    const blocks = Array.isArray(settings.hooks[event]) ? settings.hooks[event] : []
-    const foreign = blocks.filter((b) => !isOurs(b))
-    const ours = blocks.filter(isOurs)
-    const canonical: HookBlock = {
-      ...(matcher ? { matcher } : {}),
-      hooks: [{ type: 'command', command: cmd, timeout: 5 }],
-    }
-    const current = ours[0]
-    if (ours.length !== 1 || current?.matcher !== matcher || current?.hooks?.[0]?.command !== cmd) changed = true
-    settings.hooks[event] = [...foreign, canonical]
-  }
-
-  if (!changed) {
-    console.log(`[hooks] Codex SessionStart/UserPromptSubmit hooks already installed → ${hooksPath}`)
-    return
-  }
-  try {
-    writeJsonAtomic(hooksPath, settings)
-    console.log(`[hooks] installed Codex SessionStart/UserPromptSubmit hooks → ${hooksPath}`)
-    console.log('[hooks] Codex requires reviewing these user hooks with /hooks before normal use')
-  } catch (err) {
-    console.error('[hooks] failed to write Codex hooks.json:', err)
-  }
-}
 
 /** Merge the adapter's Grok lifecycle hooks into a dedicated global hook file. Grok loads every JSON
  * file in ~/.grok/hooks, so using our own file avoids touching the user's other hook packages. Normal

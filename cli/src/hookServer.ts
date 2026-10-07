@@ -5,10 +5,10 @@
  */
 
 import { existsSync } from 'node:fs'
-import { basename, join } from 'node:path'
+import { join } from 'node:path'
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { readCodexRolloutMeta } from './engines/codex/rollout.js'
+import { admitHook, hooksFor } from './engines/hooks.js'
 import { hermesSessionSource, isHermesInteractiveSource } from './engines/hermes/reader.js'
 import { hermesDbPath, listHermesHomes } from './engines/hermes/home.js'
 import { isRecentlyDeleted } from './lib/deletedSessions.js'
@@ -322,21 +322,13 @@ function registeredHookProcess(body: RegisterInput, engine: AgentEngine): Regist
   return body.tmuxPane ? registry.byPaneEngine(body.tmuxPane, engine) : undefined
 }
 
-/**
- * `claude --resume` from a folder other than the conversation's own: Claude Code announces a transcript
- * under the CURRENT cwd's project dir, then keeps writing the original file (measured: a resume of
- * 73f090ca from `cli/` announced `…-openharness-cli/73f090ca.jsonl`, and every later turn still landed
- * in `…-openharness/73f090ca.jsonl`). The announced file never appears, the hook is dropped, and the
- * resume is never confirmed — "Start failed" over a pane that is working. The row being resumed already
- * knows the real file; take it when it names this very conversation.
- */
+/** The engine may correct an announcement; a failed correction leaves registration's checks intact. */
 export function knownTranscriptFor(body: RegisterInput, agent: RegisteredSession | undefined): string | undefined {
-  const announced = body.transcriptPath
-  if (!announced || existsSync(announced) || (body.engine ?? 'claude') !== 'claude') return announced
-  const known = agent?.transcriptPath
-  if (!known || !body.sessionId || agent.sessionId !== body.sessionId) return announced
-  if (basename(known) !== `${body.sessionId}.jsonl` || !existsSync(known)) return announced
-  return known
+  const engine = body.engine ?? 'claude'
+  try { return hooksFor(engine)?.transcriptFor?.(body, agent) ?? body.transcriptPath } catch (error) {
+    console.warn(`[hooks] ${engine} transcript lookup failed:`, error instanceof Error ? error.message : error)
+    return body.transcriptPath
+  }
 }
 
 /**
@@ -547,10 +539,8 @@ export function startHookServer(
         // hook still fires — and the exact process may remain alive during SIGTERM grace. Without
         // this the tile the user just deleted re-registers itself and comes back.
         if (isRecentlyDeleted(body.sessionId)) { ignore('deleted'); return }
-        if (body.engine === 'codex' && body.transcriptPath && readCodexRolloutMeta(body.transcriptPath)?.isSubagent) {
-          ignore('codex_subagent')
-          return
-        }
+        const admission = admitHook(engine, body)
+        if (!admission.accepted) { ignore(admission.reason); return }
         // Same story for hermes, which reaches here through its own hooks rather than a transcript file:
         // every delegated sub-agent is a hermes session that runs those hooks from the parent's pane.
         if (body.engine === 'hermes' && body.sessionId) {
