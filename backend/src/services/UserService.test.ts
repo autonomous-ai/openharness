@@ -114,7 +114,8 @@ describe('SSO user identity', () => {
     expect(remove).toHaveBeenCalledWith({ where: { id: 'pending' } })
     expect(update).toHaveBeenCalledWith(expect.objectContaining({
       where: { id: 'real' },
-      data: { externalId: 'prod-sub-1' },
+      // A new production subject forgets the Google subject learned under the old one (lib/googleSubject.ts).
+      data: { externalId: 'prod-sub-1', googleSub: null, googleSubCheckedAt: null },
     }))
   })
 
