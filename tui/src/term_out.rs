@@ -44,7 +44,7 @@ fn sync_wanted(setting: &str) -> bool {
 /// A cluster whose width terminals may count otherwise than hn does: several code points (a
 /// base and its marks, ZWJ emoji, a keycap, VS16), or a script whose vowels some count as
 /// spacing and some as combining (Thai, Lao, Tibetan, Myanmar, Khmer).
-fn risky(symbol: &str) -> bool {
+pub(crate) fn risky(symbol: &str) -> bool {
     let mut n = 0;
     for c in symbol.chars() {
         n += 1;

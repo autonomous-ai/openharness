@@ -1,6 +1,7 @@
 //! A height-limited finder running in the shell's own PTY, like fzf --height.
 //! No alternate screen, application modal, shell evaluation, or extra executable.
 use std::fs::{File, OpenOptions};
+use std::collections::BTreeSet;
 use std::io::{self, Read, Write};
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::PathBuf;
@@ -302,7 +303,20 @@ fn render_diff(previous:Option<&Buffer>,next:&Buffer,at:Position)->io::Result<Ve
     let previous=previous.filter(|p|p.area==next.area).unwrap_or(&blank);
     let mut bytes=b"\x1b[?2026h\x1b[?7l\x1b[?25l".to_vec();
     let mut backend=CrosstermBackend::new(&mut bytes);
-    backend.draw(previous.diff(next).into_iter())?;
+    let cells=previous.diff(next);
+    // A row that holds (or held) a cluster the terminal may count otherwise is erased and written
+    // whole, as the main renderer does: a cell-by-cell update there leaves a stale character.
+    let held=|buf:&Buffer,y:u16|(next.area.x..next.area.right()).any(|x|crate::term_out::risky(buf[(x,y)].symbol()));
+    let whole:BTreeSet<u16>=cells.iter().map(|c|c.1).collect::<BTreeSet<_>>().into_iter()
+        .filter(|y|held(next,*y)||held(previous,*y)).collect();
+    backend.draw(cells.into_iter().filter(|c|!whole.contains(&c.1)))?;
+    if !whole.is_empty() {
+        let fresh=Buffer::empty(next.area).diff(next);
+        for y in whole {
+            write!(backend,"\x1b[{};1H\x1b[2K",y+1)?;
+            backend.draw(fresh.iter().filter(|c|c.1==y).map(|c|(c.0,c.1,c.2)))?;
+        }
+    }
     backend.set_cursor_position(at)?;
     write!(bytes,"\x1b[0m\x1b[?25h\x1b[?7h\x1b[?2026l")?;
     Ok(bytes)
@@ -840,6 +854,21 @@ mod tests {
         assert!(!moved.windows(4).any(|w|w==b"\x1b[2K"),"navigation erased a row");
         assert!(moved.len()<full.len()/2,"full={} move={}",full.len(),moved.len());
         theme::fzf_reset();
+    }
+    #[test]
+    fn a_row_with_a_risky_symbol_is_erased_and_written_whole() {
+        use ratatui::style::Style;
+        let area=Rect::new(0,4,20,3);
+        let mut first=Buffer::empty(area);
+        first.set_string(0,4,"plain",Style::default());
+        first.set_string(0,5,"go ⚡ now",Style::default());
+        let mut next=first.clone();
+        next.set_string(8,5,"x",Style::default()); // a one-cell change on the risky row
+        next.set_string(8,4,"y",Style::default()); // and on a plain row
+        let bytes=render_diff(Some(&first),&next,Position::new(0,4)).unwrap();
+        let s=String::from_utf8_lossy(&bytes);
+        assert_eq!(s.matches("\x1b[2K").count(),1,"only the risky row is erased: {s:?}");
+        assert!(s.contains("\x1b[6;1H\x1b[2K"),"row 5 (screen row 6) is erased from its first column: {s:?}");
     }
     #[test]
     fn paste_is_inserted_at_the_query_cursor_and_fzf_editing_keys_work() {
