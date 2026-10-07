@@ -111,9 +111,13 @@ def make_plan(root, event_name, event, scope="full", source=None):
     if git(root, "rev-parse", "HEAD") != head:
         raise ValueError("checkout differs from the requested source")
     base = None
+    draft = False
     paths, reasons = [], {}
     if event_name == "pull_request":
         pr = event["pull_request"]
+        draft = pr.get("draft", False)
+        if not isinstance(draft, bool):
+            raise ValueError("invalid PR draft state")
         if sha(pr["head"]["sha"]) != head:
             raise ValueError("PR head differs from the checkout")
         # Use Git, not the event's truncated paths or GitHub's limited file API.
@@ -136,7 +140,7 @@ def make_plan(root, event_name, event, scope="full", source=None):
             raise ValueError("invalid manual CI scope")
         suites = MANUAL[scope]
     required = {"process-checks"} | set().union(*(JOBS[name] for name in suites))
-    return dict(schema=1, kind="ci-plan", event=event_name, head=head, base=base,
+    return dict(schema=1, kind="ci-plan", event=event_name, head=head, base=base, draft=draft,
                 tree=git(root, "rev-parse", "HEAD^{tree}"), paths=paths, reasons=reasons,
                 suites=sorted(suites), required_jobs=sorted(required),
                 manual_acceptance="Review still selects relevant native, real-engine, hardware and visual acceptance.")
@@ -146,6 +150,8 @@ def verify(plan, needs, source):
     if plan.get("schema") != 1 or plan.get("kind") != "ci-plan" or plan.get("head") != sha(source):
         raise ValueError("CI plan identity does not match this source")
     sha(plan.get("tree"))
+    if plan.get("draft") is not False:
+        raise ValueError("Draft PR: complete component validation is deferred until ready_for_review")
     suites = plan.get("suites")
     if not isinstance(suites, list) or len(set(suites)) != len(suites) or not set(suites) <= SUITES:
         raise ValueError("invalid planned suites")
@@ -183,12 +189,15 @@ def main():
                            json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text()), args.scope, os.environ["CI_SOURCE_SHA"])
         with open(os.environ["GITHUB_OUTPUT"], "a") as output:
             output.write("plan=" + json.dumps(record, separators=(",", ":")) + "\n")
+            output.write(f"ready={'false' if record['draft'] else 'true'}\n")
             for suite in sorted(SUITES):
                 output.write(f"{suite}={'true' if suite in record['suites'] else 'false'}\n")
     args.output.write_text(json.dumps(record, indent=2) + "\n")
     with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
         summary.write(f"Source: `{record.get('head', record.get('source_sha'))}`\n\n")
         summary.write("Automatic suites: " + ", ".join(record["suites"] or ["repository process checks"]) + ".\n")
+        if record.get("draft"):
+            summary.write("Draft PR: only workflow/process checks run; mark ready for review to run the complete affected suites. The integration gate remains blocked.\n")
         summary.write("Native, real-engine, hardware and visual acceptance remain explicit review requirements.\n")
     print(json.dumps(record, indent=2))
 

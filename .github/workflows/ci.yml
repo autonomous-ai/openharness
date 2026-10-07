@@ -5,13 +5,13 @@ name: CI
 on:
   pull_request:
     branches: [main, 'ci-rollout/**']
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
   merge_group:
     types: [checks_requested]
   workflow_dispatch:
     inputs:
       scope:
-        description: 'Affected components (full for shared protocols or uncertain impact)'
+        description: 'Affected component; full for core suites, all for every component'
         type: choice
         options: [full, cli, tui, backend, desktop, process, all, companions, website, experience, authoring, home-assistant, desktop-logging, os, provider, firmware, mobile, daemons]
         default: full
@@ -49,6 +49,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       plan: ${{ steps.select.outputs.plan }}
+      ready: ${{ steps.select.outputs.ready }}
       cli: ${{ steps.select.outputs.cli }}
       desktop: ${{ steps.select.outputs.desktop }}
       tui: ${{ steps.select.outputs.tui }}
@@ -121,7 +122,7 @@ jobs:
 
   desktop-tests:
     needs: plan
-    if: needs.plan.outputs.desktop == 'true'
+    if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.desktop == 'true'
     name: desktop-tests (${{ matrix.os }}, ${{ matrix.shard }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
@@ -176,7 +177,7 @@ jobs:
 
   desktop-test-summary:
     needs: [plan, desktop-tests]
-    if: ${{ !cancelled() && needs.plan.outputs.desktop == 'true' }}
+    if: ${{ !cancelled() && needs.plan.outputs.ready == 'true' && needs.plan.outputs.desktop == 'true' }}
     runs-on: ubuntu-22.04
     timeout-minutes: 3
     steps:
@@ -214,7 +215,7 @@ jobs:
   # These are disposable PTYs; no USB device or existing daemon is touched.
   serial-native:
     needs: plan
-    if: needs.plan.outputs.cli == 'true'
+    if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.cli == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -246,7 +247,7 @@ jobs:
   # fixtures are private; no installed agent or running session is controlled.
   process-images-native:
     needs: plan
-    if: needs.plan.outputs.cli == 'true'
+    if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.cli == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -283,7 +284,7 @@ jobs:
   # deliberately checks core without installing or building this package.
   companion-subsystems:
     needs: plan
-    if: needs.plan.outputs.companions == 'true'
+    if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.companions == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     defaults:
@@ -313,7 +314,7 @@ jobs:
   # Typecheck and contract checks run alongside the default suite's four shards.
   cli-contracts:
     needs: plan
-    if: needs.plan.outputs.cli == 'true'
+    if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.cli == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     outputs:
@@ -404,7 +405,7 @@ jobs:
   # 5 October 2026 without anyone noticing. One step per gate, so a red run names the gate.
   cli-coverage-gates:
     needs: plan
-    if: needs.plan.outputs.cli == 'true'
+    if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.cli == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:
@@ -443,7 +444,7 @@ jobs:
 
   cli-tests:
     needs: plan
-    if: needs.plan.outputs.cli == 'true'
+    if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.cli == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -486,7 +487,7 @@ jobs:
   # or skipped shard/contract job cannot turn into a green aggregate check.
   typecheck-test:
     needs: [plan, cli-contracts, cli-tests]
-    if: ${{ !cancelled() && needs.plan.outputs.cli == 'true' }}
+    if: ${{ !cancelled() && needs.plan.outputs.ready == 'true' && needs.plan.outputs.cli == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 3
     outputs:
@@ -525,7 +526,7 @@ jobs:
   # remains on demand; it builds and tests without publishing or installing a release.
   tui-test:
     needs: plan
-    if: needs.plan.outputs.tui == 'true'
+    if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.tui == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -601,7 +602,7 @@ jobs:
 
   backend-desk:
     needs: plan
-    if: needs.plan.outputs.backend == 'true'
+    if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.backend == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     defaults:
@@ -622,32 +623,32 @@ jobs:
 
   website-checks:
     needs: plan
-    if: needs.plan.outputs.website == 'true'
+    if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.website == 'true'
     uses: ./.github/workflows/website-checks.yml
 
   experience-checks:
     needs: plan
-    if: needs.plan.outputs.experience == 'true'
+    if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.experience == 'true'
     uses: ./.github/workflows/experience-checks.yml
 
   authoring-checks:
     needs: plan
-    if: needs.plan.outputs.authoring == 'true'
+    if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.authoring == 'true'
     uses: ./.github/workflows/authoring-browser-checks.yml
 
   home-assistant-checks:
     needs: plan
-    if: needs.plan.outputs.home-assistant == 'true'
+    if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.home-assistant == 'true'
     uses: ./.github/workflows/home-assistant-checks.yml
 
   desktop-logging-checks:
     needs: plan
-    if: needs.plan.outputs.desktop-logging == 'true'
+    if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.desktop-logging == 'true'
     uses: ./.github/workflows/desktop-logging-checks.yml
 
   os-checks:
     needs: plan
-    if: needs.plan.outputs.os == 'true'
+    if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.os == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -659,7 +660,7 @@ jobs:
 
   provider-checks:
     needs: plan
-    if: needs.plan.outputs.provider == 'true'
+    if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.provider == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     strategy:
@@ -684,7 +685,7 @@ jobs:
 
   firmware-checks:
     needs: plan
-    if: needs.plan.outputs.firmware == 'true'
+    if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.firmware == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
@@ -716,14 +717,21 @@ jobs:
           import subprocess
           files = sorted(Path('devices/harness-device/firmware/test').glob('test_*.py'))
           assert files, 'firmware test inventory is empty'
+          failures = []
           for path in files:
               print(path, flush=True)
-              subprocess.run(['python3', str(path)], check=True, timeout=120)
+              try:
+                  subprocess.run(['python3', str(path)], check=True, timeout=120)
+              except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+                  failures.append(str(path))
+          if failures:
+              raise SystemExit('Failed firmware contracts: ' + ', '.join(failures))
+          print(f'Passed all {len(files)} firmware host contracts')
           PY
 
   mobile-checks:
     needs: plan
-    if: needs.plan.outputs.mobile == 'true'
+    if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.mobile == 'true'
     runs-on: ubuntu-22.04
     timeout-minutes: 15
     steps:
@@ -747,7 +755,7 @@ jobs:
 
   daemons-checks:
     needs: plan
-    if: needs.plan.outputs.daemons == 'true'
+    if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.daemons == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

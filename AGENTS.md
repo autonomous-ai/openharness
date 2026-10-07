@@ -26,7 +26,11 @@ For product names, terminology, and visible copy, follow the
   Desktop's `--wait` follows the exact tag/SHA through the workflow's six-artifact
   verification; reuse that receipt instead of repeating the downloads manually.
 - Prepare the PR and complete code/native review while automatic CI runs. For an
-  authorized merge, use `make merge-pr` with the reviewed head/base SHAs and
+  agent implementation in progress, push to a draft PR: CI runs cheap workflow
+  and process checks. Mark ready after targeted local checks to start complete
+  affected suites, and keep the revision stable while CI and review finish.
+  The integration gate remains blocked on drafts. For an authorized merge, use
+  `make merge-pr` with the reviewed head/base SHAs and
   `--queue --merge`; it enqueues the exact reviewed head, follows the queue and
   verifies the merged tree against successful merge-group CI. Main advancing
   does not invalidate the review base; the queue checks the combined candidate.

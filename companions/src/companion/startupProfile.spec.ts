@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { RegisteredSession } from '../../../cli/src/lib/registry.js'
-import { parseRuntimeProfile, readStartupProfile, RuntimeProfileManager } from '../../../cli/src/lib/runtimeProfile.js'
+import { encodeRuntimeProfile, parseRuntimeProfile, RuntimeProfileManager } from '../../../cli/src/lib/runtimeProfile.js'
 import { CompanionStartupProfile } from './startupProfile.js'
 import { CompanionIntelligence } from '../application/intelligence.js'
 import { ConversationReview } from '../application/lessons/conversationReview.js'
@@ -37,50 +37,17 @@ function session(extra: Partial<RegisteredSession> = {}): RegisteredSession {
     registeredAt: 1, touchedAt: 1, lastHookAt: 1, lastTranscriptAt: 1, ...extra }
 }
 
+// The CLI startup reader was retired in #845. Exercise this observer's read port
+// with explicit evidence; parsing engine banners belongs to the live runtime reader.
+const readFixtureProfile = async (value: RegisteredSession): Promise<string> => encodeRuntimeProfile({
+  sessionId: value.agentId, engine: 'claude', model: 'opus', effort: 'auto',
+})
+
 describe('companion readiness before its first message', () => {
-  it('reads the actual Claude startup banner and effective effort without an engine session ID', async () => {
-    const value = session()
-    expect(parseRuntimeProfile(await readStartupProfile(value, CLAUDE_READY))).toMatchObject({
-      sessionId: 'companion', engine: 'claude', model: 'opus', effort: 'auto',
-    })
-    writeFileSync(join(directory, '.claude', 'settings.local.json'), '{"effortLevel":"xhigh"}')
-    expect(parseRuntimeProfile(await readStartupProfile(value, CLAUDE_READY))?.effort).toBe('xhigh')
-    expect(parseRuntimeProfile(await readStartupProfile(value,
-      CLAUDE_READY.replace('Opus 5.5', 'Sonnet 5.5 with low effort')))).toMatchObject({ model: 'sonnet', effort: 'low' })
-    expect(parseRuntimeProfile(await readStartupProfile(value,
-      CLAUDE_READY + '\n⎿ Set model to Sonnet 5.5\n❯ '))?.model).toBe('sonnet')
-    // The ordinary cache still refuses the shared empty engine-session ID.
-    const profiles = new RuntimeProfileManager()
-    profiles.ingestPane(value, CLAUDE_READY)
-    expect(profiles.selectedModel(value)).toBeNull()
-    expect(value.sessionId).toBe('')
-  })
-
-  it('does not mistake setup dialogs, unknown models or other providers for readiness', async () => {
-    for (const pane of [
-      CLAUDE_READY.replace('❯\u00a0Try "edit <filepath> to..."', '❯ 1. Yes, I trust this folder'),
-      CLAUDE_READY + '\nPlease sign in to continue',
-      CLAUDE_READY.replace('Opus 5.5 · Claude Max', 'Unknown subscription'),
-      CLAUDE_READY.replace('❯\u00a0Try "edit <filepath> to..."', ''),
-    ]) expect(await readStartupProfile(session(), pane)).toBeNull()
-    expect(await readStartupProfile(session({ gateway: 'ori' }), CLAUDE_READY)).toBeNull()
-    expect(await readStartupProfile(session({ active: false }), CLAUDE_READY)).toBeNull()
-    expect(await readStartupProfile(session({ sessionId: 'now-bound' }), CLAUDE_READY)).toBeNull()
-  })
-
-  it('reads the Codex model and effort only at its ready prompt', async () => {
-    const value = session({ engine: 'codex', codexHome: '/profiles/companion' })
-    const pane = 'OpenAI Codex (v0.144.5)\n› Implement a feature\n  gpt-5.6-terra xhigh · 100% context left'
-    expect(parseRuntimeProfile(await readStartupProfile(value, pane))).toMatchObject({
-      sessionId: 'companion', engine: 'codex', model: 'gpt-5.6-terra', effort: 'xhigh',
-    })
-    expect(await readStartupProfile(value, pane.replace('› Implement a feature', '› 1. Sign in with ChatGPT'))).toBeNull()
-  })
-
   it('expires evidence and isolates agents, process restarts, homes, and newly bound conversations', async () => {
     let current: RegisteredSession | null = session(), now = 1_000
     const capture = vi.fn(async () => CLAUDE_READY)
-    const observer = new CompanionStartupProfile({ read: readStartupProfile, current: () => current, capture, now: () => now })
+    const observer = new CompanionStartupProfile({ read: readFixtureProfile, current: () => current, capture, now: () => now })
     await observer.refresh()
     const original = current
     expect(observer.selected(original)?.profile).toContain(':claude:opus@auto')
@@ -108,7 +75,7 @@ describe('companion readiness before its first message', () => {
 
   it('discards a capture that finishes after the companion changes', async () => {
     let current = session(), finish!: (pane: string) => void
-    const observer = new CompanionStartupProfile({ read: readStartupProfile, current: () => current,
+    const observer = new CompanionStartupProfile({ read: readFixtureProfile, current: () => current,
       capture: () => new Promise(resolve => { finish = resolve }) })
     const pending = observer.refresh()
     current = session({ agentId: 'other' })
@@ -128,7 +95,7 @@ describe('companion readiness before its first message', () => {
 
   it('resumes a queued history review into pending memories without sending a first message', async () => {
     const value = session(), now = Date.now()
-    const observer = new CompanionStartupProfile({ read: readStartupProfile, current: () => value, capture: async () => CLAUDE_READY })
+    const observer = new CompanionStartupProfile({ read: readFixtureProfile, current: () => value, capture: async () => CLAUDE_READY })
     const run = vi.fn(async () => ({ text: JSON.stringify({ lessons: [{ sources: ['1'],
       reason: 'The person specified the editor layout.',
       lesson: { kind: 'note', lines: ['Keep DSH viewers on the left and the agent terminal on the right.'] },

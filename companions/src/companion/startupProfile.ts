@@ -1,12 +1,11 @@
 import type { RegisteredSession } from '../../../cli/src/lib/registry.js'
-import type { readStartupProfile } from '../../../cli/src/lib/runtimeProfile.js'
 
 export interface StartupProfile { processKey: string; profile: string }
 
 interface StartupDeps {
   current: () => RegisteredSession | null
   capture: (agentId: string) => Promise<string | null>
-  read: typeof readStartupProfile
+  read: (session: RegisteredSession, pane: string) => Promise<string | null>
   now?: () => number
 }
 

@@ -444,15 +444,46 @@ head; queue runs check out the combined candidate. Unknown paths fail planning
 until their checks are registered. CI uses read-only repository permissions and
 executes no contributor code with release credentials.
 
+Agents should open a draft PR while implementing and run targeted local checks
+before marking it ready. Draft pushes run workflow lint and repository process
+checks; expensive component suites wait for `ready_for_review`. The plan still
+records all affected suites, and `ci/required` stays blocked while the PR is a
+draft. Marking ready runs complete affected validation for that exact head;
+returning to draft cancels its obsolete run. Keep a ready PR stable while CI and
+independent review finish. Push again when a correction is needed, rather than
+repeatedly dispatching the same full suite. Merge candidates and explicit runs
+always execute their complete selected scopes.
+
 Coarse component selection retains the existing complete CLI coverage/native
 matrix and Desktop inventory on both platforms. Shared CLI and process/workflow
 inputs conservatively select all core suites; source boundaries are not narrowed
 as part of rollout. CLI changes also select Mobile's protocol contracts; changes to
-the shared planner or CI job graph select every component. Website, Store experiences/browser, logging, OS source contracts,
+the shared planner or CI job graph select every component. Website, Store
+experiences/browser, logging, OS source contracts,
 provider, firmware host tests, Mobile VM tests and daemon contracts are selected
 for their declared inputs. Physical devices, full OS images/VM journeys, real engines,
 visual inspection and other acceptance selected by review remain separate required
 validation; automatic host tests do not substitute for those.
+
+The dependency map determines test coverage, not workflow cancellation groups:
+
+```mermaid
+flowchart LR
+  CLI[CLI protocols and runtime APIs] --> Desktop[Desktop contracts]
+  CLI --> Phone[Mobile protocol contracts]
+  CLI --> Companions[Companion cross-imports]
+  CLI --> TUI[TUI protocol and daemon integration]
+  Fixtures[Shared desk and daemon fixtures] --> Core[Core and Mobile checks]
+  Store[Store runtimes and viewers] --> Desktop
+  Store --> Browser[Experience and authoring browser checks]
+  Planner[Shared CI planner and job graph] --> All[Every component]
+```
+
+Separate PR groups prevent cross-cancellation, but still share available runner
+capacity. Related branches validate independently; the merge queue validates
+their combined source before integration. Keep PRs small and coordinate edits to
+shared interfaces and frequently changed files. Main background validation may
+coalesce pending snapshots; distinct merge candidates must not share that group.
 
 The stable `ci/required` job runs even after an upstream failure. It accepts only
 successful selected jobs and complete shard summaries. Deliberately inapplicable

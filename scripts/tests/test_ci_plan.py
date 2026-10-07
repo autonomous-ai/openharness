@@ -70,12 +70,29 @@ class GitPlanTests(unittest.TestCase):
         self.git("commit", "-qm", "fixture")
         return self.git("rev-parse", "HEAD")
 
-    def plan(self, event="pull_request", base=None):
+    def plan(self, event="pull_request", base=None, draft=False):
         head = self.git("rev-parse", "HEAD")
         base = base or self.base
-        payload = ({"pull_request": {"head": {"sha": head}, "base": {"sha": base}}} if event == "pull_request" else
+        payload = ({"pull_request": {"head": {"sha": head}, "base": {"sha": base}, "draft": draft}} if event == "pull_request" else
                    {"action": "checks_requested", "merge_group": {"head_sha": head, "base_sha": base}})
         return planner.make_plan(self.root, event, payload, source=head)
+
+    def test_draft_preserves_required_coverage_for_ready_event(self):
+        self.write("cli/src/lib/relayFrames.ts")
+        self.commit()
+        draft = self.plan(draft=True)
+        ready = self.plan()
+        self.assertTrue(draft["draft"])
+        self.assertFalse(ready["draft"])
+        self.assertEqual(draft["suites"], ready["suites"])
+        self.assertEqual(draft["required_jobs"], ready["required_jobs"])
+        self.assertIn("mobile-checks", draft["required_jobs"])
+        with self.assertRaisesRegex(ValueError, "invalid PR draft state"):
+            self.plan(draft="false")
+
+    def test_manual_and_merge_candidates_always_require_full_selected_validation(self):
+        self.assertFalse(self.plan("merge_group")["draft"])
+        self.assertFalse(planner.make_plan(self.root, "workflow_dispatch", {}, "all")["draft"])
 
     def test_all_paths_are_read_even_above_github_file_limits(self):
         for index in range(350):
@@ -137,6 +154,7 @@ class GateTests(unittest.TestCase):
     def setUp(self):
         self.head = "a" * 40
         self.plan = dict(schema=1, kind="ci-plan", head=self.head, tree="b" * 40, event="merge_group", base="c" * 40,
+                         draft=False,
                          suites=["desktop"], required_jobs=sorted({"process-checks"} | planner.JOBS["desktop"]))
         self.needs = {name: {"result": "success"} for name in self.plan["required_jobs"] + ["plan"]}
         self.needs["cli-tests"] = {"result": "skipped"}
@@ -145,6 +163,15 @@ class GateTests(unittest.TestCase):
         result = planner.verify(self.plan, self.needs, self.head)
         self.assertEqual(result["status"], "passed")
         self.assertEqual(result["source_sha"], self.head)
+
+    def test_draft_or_missing_state_never_claims_passing_full_validation(self):
+        for state in [True, None, "false", 0]:
+            with self.subTest(state=state), self.assertRaisesRegex(ValueError, "deferred"):
+                planner.verify(dict(self.plan, draft=state), self.needs, self.head)
+        plan = copy.deepcopy(self.plan)
+        del plan["draft"]
+        with self.assertRaises(ValueError):
+            planner.verify(plan, self.needs, self.head)
 
     def test_missing_skipped_cancelled_or_failed_required_job_blocks(self):
         for status in [None, "skipped", "cancelled", "failure", "in_progress"]:
