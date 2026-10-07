@@ -171,9 +171,16 @@ class Payload:
         self.device = str(device)
         self.sha256, self.source_commit = image_sha256, source_commit
         self.root = self.home = self.boot = self.esp = None
+        self._opened = False
 
     @contextmanager
     def open(self):
+        # Installation stages can share one verified, read-only mount lifetime.
+        # This is never cached across attempts: the outer exit clears the state
+        # and the next independent open verifies the whole source again.
+        if self._opened:
+            yield self
+            return
         info = os.stat(self.device, follow_symlinks=False)
         if not stat.S_ISBLK(info.st_mode) or run('blockdev', '--getro', self.device) != '1':
             raise StorageError('The verified source image must be a read-only block device.')
@@ -198,8 +205,10 @@ class Payload:
             self.root, self.home, self.boot = top / 'root', top / 'home', boot
             try:
                 self.verify_pristine()
+                self._opened = True
                 yield self
             finally:
+                self._opened = False
                 self.root = self.home = self.boot = self.esp = None
 
     def verify_pristine(self):
