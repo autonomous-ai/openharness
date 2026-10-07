@@ -9,7 +9,7 @@
  */
 import { lastAgyTurnText } from '../../engines/agy/normalizer.js'
 import { lastAmpTurnText } from '../../engines/amp/normalizer.js'
-import { readLastCodexTurnText } from '../../engines/codex/lastTurn.js'
+import { engineFor } from '../../engines/registry.js'
 import { lastCommandCodeTurnText } from '../../engines/commandcode/normalizer.js'
 import { lastCopilotTurnText } from '../../engines/copilot/normalizer.js'
 import { lastCursorTurnText } from '../../engines/cursor/normalizer.js'
@@ -24,9 +24,9 @@ import { lastMuseTurnText } from '../../engines/muse/normalizer.js'
 import { lastOpencodeTurnText } from '../../engines/opencode/normalizer.js'
 import { readOpencodeMessages } from '../../engines/opencode/reader.js'
 import { lastPiTurnText } from '../../engines/pi/normalizer.js'
-import { lastTurnTextFromRawLines, selectClaudeRecapLine, type LastTurnText } from '../../lib/normalize.js'
+import { lastTurnTextFromRawLines, type LastTurnText } from '../../lib/normalize.js'
 import type { RegisteredSession } from '../../lib/registry.js'
-import { tailFileCapped, tailFileUntil } from '../../lib/transcriptTail.js'
+import { tailFileCapped } from '../../lib/transcriptTail.js'
 
 export interface LastTurnDeps {
   bySession: (sessionId: string) => RegisteredSession | undefined
@@ -40,14 +40,13 @@ export function createLastTurnReader({ bySession, dbs, hermesDb }: LastTurnDeps)
   return async (sessionId: string): Promise<LastTurnText | null> => {
     const s = bySession(sessionId)
     if (!s) return null
+    const engine = engineFor(s.engine)
+    if (engine) return engine.transcript.lastTurnText(s)
     if (s.engine === 'opencode') return lastOpencodeTurnText(await readOpencodeMessages(dbs.opencode, sessionId))
     if (s.engine === 'kilo') return lastKiloTurnText(await readKiloMessages(dbs.kilo, sessionId))
     if (s.engine === 'hermes') return lastHermesTurnText(await readHermesMessages(await hermesDb(s), sessionId))
     if (s.engine === 'devin') return lastDevinTurnText(await readDevinMessages(dbs.devin, sessionId))
     if (!s.transcriptPath) return null
-    if (s.engine === 'codex') return readLastCodexTurnText(s.transcriptPath)
-    // Its last turn, read backward — not the whole conversation once per turn end.
-    if (s.engine === 'claude') return lastTurnTextFromRawLines(await tailFileUntil(s.transcriptPath, selectClaudeRecapLine))
     // Bounded from the end like every whole read of an engine without pages (lib/transcriptTail.ts):
     // the last turn is at the end, and a transcript past the cap would otherwise be read whole at
     // every turn's end.

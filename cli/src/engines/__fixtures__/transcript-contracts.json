@@ -1,0 +1,101 @@
+{
+  "claude": {
+    "whole": {
+      "sha256": "2823dd089ba9945ed35023c1f9daafc9d076b324ee6868806371fdee3d0be839",
+      "eventTypes": [
+        "user_message",
+        "tool_start",
+        "tool_end",
+        "tool_start",
+        "tool_end",
+        "tool_start",
+        "tool_end",
+        "text_delta",
+        "text_delta",
+        "text_delta",
+        "text_delta",
+        "done"
+      ],
+      "hasMore": null,
+      "oldestCursor": null
+    },
+    "latest": {
+      "sha256": "d231981690953025df01629ab9852098bf258c6974e2859c688370663802489a",
+      "eventTypes": [
+        "user_message",
+        "tool_start",
+        "tool_end",
+        "tool_start",
+        "tool_end",
+        "tool_start",
+        "tool_end",
+        "text_delta",
+        "text_delta",
+        "text_delta",
+        "text_delta",
+        "done"
+      ],
+      "hasMore": false,
+      "oldestCursor": "1fb3dd23-973c-4021-8ab4-e7b4ba90dd72"
+    },
+    "older": {
+      "sha256": "f60bb1820fb66bd91852af08030f45c1541dc6daf016975a8a5fcbec4d81f072",
+      "eventTypes": [],
+      "hasMore": false,
+      "oldestCursor": "1fb3dd23-973c-4021-8ab4-e7b4ba90dd72"
+    },
+    "stale": {
+      "sha256": "b68ad7d9e7a3a5f1a41946c3de08533975c510cf5b594d8bfba4f30086faea21",
+      "eventTypes": [],
+      "hasMore": false,
+      "oldestCursor": null
+    },
+    "lastTurn": {
+      "userMessage": "Chạy 3 sub-agent SONG SONG (launch cả 3 cùng một lượt), mỗi agent một việc độc lập rồi báo cáo lại:\n- Agent 1: Report giá coin BTC\n- Agent 2: Report giá coin ETH\n- Agent 3: Report giá coin BNB",
+      "assistantText": "Đã spawn 3 sub-agent song song cho BTC, ETH, BNB. Sẽ báo kết quả khi cả ba hoàn thành.\n\nSub-agent ETH xong: **~$1,860–$1,870** (~$225.36 tỷ vốn hóa). Đang chờ BTC, BNB.\n\nSub-agent BNB xong: **~$590.04** (+0.72% 24h). Chỉ còn chờ BTC.\n\nCả 3 sub-agent đã hoàn thành. Tổng hợp giá coin:\n\n| Coin | Giá (USD) | Thay đổi 24h | Vốn hóa thị trường |\n|---|---|---|---|\n| **BTC** | ~$63,500–$63,900 | +2.1% | ~$1,281 tỷ (#1) |\n| **ETH** | ~$1,860–$1,870 | ~+0.5–1.2% (chênh lệch giữa sàn) | ~$225.36 tỷ (#2) |\n| **BNB** | ~$590.04 | +0.72% | ~$78.57 tỷ (#4) |"
+    }
+  },
+  "codex": {
+    "whole": {
+      "sha256": "8181de8d8f57eafa6ca4fb01e94edf52abda2bc43611cb19533a9d8a7a03a169",
+      "eventTypes": [
+        "tool_start",
+        "tool_end",
+        "tool_start",
+        "tool_end",
+        "tool_start",
+        "tool_end",
+        "done"
+      ],
+      "hasMore": null,
+      "oldestCursor": null
+    },
+    "latest": {
+      "sha256": "07bd80e0799626ecb7a0f4393012df7ae0173db38a87687583293d8de6aa477f",
+      "eventTypes": [
+        "tool_start",
+        "tool_end",
+        "tool_start",
+        "tool_end",
+        "tool_start",
+        "tool_end",
+        "done"
+      ],
+      "hasMore": false,
+      "oldestCursor": "codex:0"
+    },
+    "older": {
+      "sha256": "268c766445dbece44dd2fae88f22669c88237bf5b4eb3e1bf3e07faf707ea8c8",
+      "eventTypes": [],
+      "hasMore": false,
+      "oldestCursor": "codex:0"
+    },
+    "stale": {
+      "sha256": "8c7f0262563ebce6a6af1d160fc65dc3f366d20d351fcd59e90d97126d54c575",
+      "eventTypes": [],
+      "hasMore": false,
+      "oldestCursor": null
+    },
+    "lastTurn": null
+  }
+}

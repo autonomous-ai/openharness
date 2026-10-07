@@ -14,12 +14,11 @@
  * four database engines: each had its own copy of the same windowing, and they now share one.
  */
 import { stat } from 'node:fs/promises'
-import { join } from 'node:path'
+import { engineFor } from '../../engines/registry.js'
+import { enrichSubagentStats } from '../../engines/kit/history.js'
 import { agyMessagesToEvents } from '../../engines/agy/normalizer.js'
 import { ampMessagesToEvents } from '../../engines/amp/normalizer.js'
 import { ampThreadToEvents, readAmpThread } from '../../engines/amp/threadExport.js'
-import { codexMessagesToEvents } from '../../engines/codex/normalizer.js'
-import { codexSubagentResolverFor } from '../../engines/codex/subagent.js'
 import { commandcodeMessagesToEvents, windowCommandCodeLines } from '../../engines/commandcode/normalizer.js'
 import { copilotMessagesToEvents } from '../../engines/copilot/normalizer.js'
 import { cursorConfigDir, cursorDataDir } from '../../engines/cursor/home.js'
@@ -38,10 +37,10 @@ import { readOpencodeMessages } from '../../engines/opencode/reader.js'
 import { piMessagesToEvents, windowPiLines } from '../../engines/pi/normalizer.js'
 import { sid } from '../../lib/log.js'
 import { lastActivityAt } from '../../lib/agentFrame.js'
-import { messagesToEvents, SubagentStats, windowRawLines, type SessionEvent } from '../../lib/normalize.js'
+import { messagesToEvents, windowRawLines, type SessionEvent } from '../../lib/normalize.js'
 import { projectDisplayName, type RegisteredSession } from '../../lib/registry.js'
 import type { TranscriptPager } from '../../lib/transcriptPages.js'
-import { streamRecords, tailFileCapped, WHOLE_READ_CAP_BYTES } from '../../lib/transcriptTail.js'
+import { tailFileCapped, WHOLE_READ_CAP_BYTES } from '../../lib/transcriptTail.js'
 
 export interface HistoryDeps {
   /** The registry's lookup, by agent or session id. */
@@ -100,29 +99,6 @@ export function copilotHistoryPage(lines: string[], paginated: boolean):
   { events: SessionEvent[]; hasMore?: false; oldestCursor?: null } {
   const events = copilotMessagesToEvents(lines)
   return paginated ? { events, hasMore: false, oldestCursor: null } : { events }
-}
-
-/** Fill in missing sub-agent aggregates on tool_end events by reading the sub-agent's own transcript
- *  (`<session>/subagents/agent-<id>.jsonl`). Async/background launchers only record
- *  `{status:'async_launched', agentId}` in the main transcript — without this join the delegation
- *  card shows "0 tools · worked for 0s" forever. Best-effort per agent; missing files are skipped. */
-async function enrichSubagentStats(events: SessionEvent[], transcriptPath: string): Promise<void> {
-  const subagentsDir = join(transcriptPath.replace(/\.jsonl$/, ''), 'subagents')
-  for (const e of events) {
-    if (e.type !== 'tool_end') continue
-    const sub = e.payload.subagent
-    if (!sub?.agentId || typeof sub.totalToolUseCount === 'number') continue
-    try {
-      // A line at a time: a long sub-agent's transcript is never held whole to count its calls.
-      const file = join(subagentsDir, `agent-${sub.agentId}.jsonl`)
-      const totals = new SubagentStats()
-      await streamRecords(file, 0, (await stat(file)).size, (line) => { totals.push(line) }, () => true)
-      const stats = totals.result()
-      sub.totalToolUseCount = stats.totalToolUseCount
-      if (sub.totalDurationMs === undefined) sub.totalDurationMs = stats.totalDurationMs
-      if (sub.totalTokens === undefined) sub.totalTokens = stats.totalTokens
-    } catch { /* subagent transcript absent (still spawning / pruned) — leave as-is */ }
-  }
 }
 
 /** What a window asks for: `limit` records before the `before` cursor. No limit asks for all of them. */
@@ -204,33 +180,10 @@ export function createHistory({ resolve, stopped, pages, dbs, hermesDb }: Histor
         oldestCursor: null,
       }
     }
-    if (s.engine === 'claude' || s.engine === 'codex') {
-      // Only the page asked for is read (lib/transcriptPages.ts): the whole history of a long session
-      // is more memory than the daemon has. Without a limit, the newest lines that fit a page, and
-      // the cursor to the rest when they do not all fit — a cursor the full-transcript reply never had.
-      const opts = limit ? { limit, before } : {}
-      const page = s.engine === 'codex'
-        ? await pages.codex(s.transcriptPath, opts)
-        : await pages.claude(s.transcriptPath, opts)
-      const st = await stat(s.transcriptPath).catch(() => null)
-      const timestamp = new Date(st?.mtimeMs ?? Date.now()).toISOString()
-      if (page.staleCursor) {
-        return { id: sessionId, title: projectDisplayName(s), events: [], timestamp, engine: s.engine, hasMore: false, oldestCursor: null, staleCursor: true }
-      }
-      const events = s.engine === 'codex'
-        ? codexMessagesToEvents(page.lines, codexSubagentResolverFor(s.codexHome))
-        : messagesToEvents(page.lines)
-      await enrichSubagentStats(events, s.transcriptPath)
-      // Older pages must not inject a spurious end-of-transcript marker mid-scroll.
-      if (limit && before && events[events.length - 1]?.type === 'done') events.pop()
-      return {
-        id: sessionId,
-        title: projectDisplayName(s),
-        events,
-        timestamp,
-        engine: s.engine,
-        ...(limit || page.hasMore ? { hasMore: page.hasMore, oldestCursor: page.oldestCursor } : {}),
-      }
+    const engine = engineFor(s.engine)
+    if (engine) {
+      const { events, timestamp, ...page } = await engine.transcript.historyPage(s, { limit, before }, pages)
+      return { id: sessionId, title: projectDisplayName(s), events, timestamp, engine: s.engine, ...page }
     }
     // Read from the end and bounded: these engines have no pages of their own yet, and one huge
     // transcript read whole would take the whole daemon down (lib/transcriptTail.ts). History past
