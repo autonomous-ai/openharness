@@ -135,6 +135,28 @@ describe('the devices in their own process', () => {
     await until('the last window to clear the dial', () => dial.messages.slice(since).some(m => m.t === 'agents.end' && m.tab === '') || null, 5000, 50)
   })
 
+  it('restores a non-first focused pane on late attachment and after the devices process restarts', async () => {
+    const { d, desk } = await fresh()
+    const window = await LocalClient.connect(d)
+    try {
+      const first = await create(d, window, 'devices-first-pane')
+      const focused = await create(d, window, 'devices-focused-pane')
+      onTab(window, [first, focused])
+      window.send('app_focus', { agentId: focused })
+      // The socket has processed the selection before there is a device service to hear it.
+      await window.request('agents_list', {})
+      const dial = await desk.plug('E2E-A', 'e2:e0:00:00:00:0a')
+      await heard(dial, 'focus', 0, focused, 20_000)
+      const beforeRestart = dial.messages.length
+      for (const pid of devicesPids(d)) process.kill(pid, 'SIGKILL')
+      await until('the devices to reconnect', () => connections(d) >= 2 || null, 30_000, 200)
+      await dial.welcomeAfter(beforeRestart, 30_000)
+      await heard(dial, 'focus', beforeRestart, focused, 20_000)
+      // No repeat app_focus was needed; the running window kept its original selection.
+      expect(d.coresStarted()).toBe(1)
+    } finally { window.close() }
+  })
+
   it('killed outright: agents and windows go on, ⌘K says so at once, and the dial comes back to its question and its working tile', async () => {
     const { d, desk } = await fresh()
     const window = await LocalClient.connect(d)
