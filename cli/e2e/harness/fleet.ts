@@ -38,7 +38,7 @@ export interface FleetOptions {
 }
 
 /** Every daemon setting whose default is a server somewhere else, all pointed at the fake. */
-function remoteSettings(backend: FakeBackend): Record<string, string> {
+export function remoteSettings(backend: FakeBackend): Record<string, string> {
   return {
     BACKEND_WS_URL: backend.wsUrl,
     WEB_URL: backend.httpUrl,
@@ -71,7 +71,7 @@ export function assertLocalOnly(env: NodeJS.ProcessEnv, backend: FakeBackend): v
 }
 
 /** Sign a daemon in, as `harness login` leaves a computer: a session for its machine on this account. */
-async function signIn(daemon: IsolatedDaemon, machine: FakeMachine): Promise<void> {
+export async function signIn(daemon: IsolatedDaemon, machine: FakeMachine): Promise<void> {
   await writeFile(join(daemon.root, 'auth', 'session.json'), JSON.stringify({
     version: 1, accessToken: machine.token, autonomousEnv: 'prod', computerId: machine.computerId,
     machineId: machine.machineId, expiresAt: Date.now() + 30 * 24 * 3600_000, updatedAt: Date.now(), signInEpoch: 'e2e',
@@ -79,7 +79,7 @@ async function signIn(daemon: IsolatedDaemon, machine: FakeMachine): Promise<voi
 }
 
 /** The E2EE files `harness link connect` and pairing leave, written before the daemon first starts. */
-async function writeE2ee(daemon: IsolatedDaemon, files: Record<string, unknown>): Promise<void> {
+export async function writeE2ee(daemon: IsolatedDaemon, files: Record<string, unknown>): Promise<void> {
   const dir = join(daemon.dataDir, 'e2e')
   await mkdir(dir, { recursive: true, mode: 0o700 })
   for (const [name, value] of Object.entries(files)) await writeFile(join(dir, name), JSON.stringify(value, null, 2), { mode: 0o600 })

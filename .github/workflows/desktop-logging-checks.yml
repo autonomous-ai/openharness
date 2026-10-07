@@ -1,19 +1,9 @@
 name: Desktop logging checks
 
+# Automatic invocations are selected by ci.yml; standalone runs remain available.
 on:
-  pull_request:
-    paths:
-      - 'desktop/lib/logging/**'
-      - 'desktop/test/app_log_test.dart'
-      - 'desktop/test/buffered_log_test.dart'
-      - 'desktop/test/crash_log_test.dart'
-      - 'desktop/test/dial_log_tail_test.dart'
-      - 'desktop/test/log_*_test.dart'
-      - 'desktop/test/export_logs_dialog_test.dart'
-      - 'desktop/test/cli_transcript_test.dart'
-      - 'desktop/tool/log_append_probe.dart'
-      - '.github/workflows/desktop-logging-checks.yml'
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
@@ -31,6 +21,8 @@ jobs:
         working-directory: desktop
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - id: toolchain
         run: |
           version="$(sed -n "s/^  FLUTTER_VERSION: '\([^']*\)'.*/\1/p" ../.github/workflows/release-desktop.yml)"

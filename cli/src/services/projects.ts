@@ -59,9 +59,9 @@ export function startProjects(core: CoreApi): ServiceRequests {
     }),
 
     // One-level remote directory listing for the New Agent folder browser.
-    fs_list_dir: internalOnThrow('fs_list_dir', (payload) => {
+    fs_list_dir: internalOnThrow('fs_list_dir', async (payload) => {
       const path = typeof payload.path === 'string' ? payload.path : ''
-      const result = listDir(path)
+      const result = await listDir(path)
       if ('error' in result) return { error: result.error }
       return { ...result }
     }),

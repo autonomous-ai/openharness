@@ -346,6 +346,16 @@ describe('ServiceSupervisor', () => {
     never.stop(done)
     expect(done).toHaveBeenCalledOnce()
     expect(never.status()[0].state).toBe('stopped')
+    // Started again with the others (a re-execution the new bundle refused): off, and started when asked.
+    never.start()
+    expect(never.status()[0].state).toBe('off')
+    never.unasked(2)
+    expect(children.map((child) => child.spec.name)).toEqual(['orchestrator', 'devices', 'teams'])
+    // One running then is stopped and started with the others, and waits to be asked for again.
+    never.stop(vi.fn())
+    latest('teams').exit(0)
+    never.start()
+    expect(never.status()[0].state).toBe('off')
   })
 
   it('with no services, starting does nothing and stopping is done at once', () => {
@@ -426,6 +436,14 @@ describe('ServiceSupervisor', () => {
     expect(devices).toMatchObject({ services: ['devices', 'wifi'], onDemand: true, askedSince: 4 })
     const [named] = serviceSpecs({ HARNESSD_SERVICES: 'devices' }, SERVICE_HOSTS)
     expect(named.services).toEqual(['devices', 'wifi'])
+    expect(named.onDemand).toBeUndefined()
+  })
+
+  it('runs models only once grid is in use or asked for, by a core of protocol 4, and from the start when named', () => {
+    const [models] = serviceSpecs({}, SERVICE_HOSTS).filter((spec) => spec.name === 'models')
+    expect(models).toMatchObject({ services: ['models'], onDemand: true, askedSince: 4 })
+    const [named] = serviceSpecs({ HARNESSD_SERVICES: 'models' }, SERVICE_HOSTS)
+    expect(named.services).toEqual(['models'])
     expect(named.onDemand).toBeUndefined()
   })
 

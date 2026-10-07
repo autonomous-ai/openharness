@@ -1,6 +1,7 @@
 import type { PurgeAgentService } from './lib/purgeAgentService.js'
-import { SHARE_REQUESTS, TEAMS_REQUESTS, type Asker, type BackendNotice, type GatewayEvents, type GatewayPort, type ModelsPort, type RemoteClient, type RemoteRole, type RemoteTransport } from './core/api.js'
+import { SHARE_REQUESTS, TEAMS_REQUESTS, type Asker, type LocalWindows, type WindowSurface, type BackendNotice, type GatewayEvents, type GatewayPort, type ModelsPort, type RemoteClient, type RemoteRole, type RemoteTransport } from './core/api.js'
 import { ServiceUnavailableError } from './core/serviceHost.js'
+import { countWindows } from './lib/windowSurfaces.js'
 import type { ViewerStreams } from './core/viewerStreams.js'
 import type { ActivityFrame } from './lib/turnActivity.js'
 import { MonitorCompletions } from './lib/harnessMonitor.js'
@@ -96,6 +97,8 @@ export class BackendSocket {
    * this computer — not presence, not a window to push to, and never what wakes the pair brain.
    */
   private readonly toolClients = new Set<string>()
+  /** The windows that are `harness tui`, not the desktop app: each surface is its own presence. */
+  private readonly tuiClients = new Set<string>()
   private terminalStreams: TerminalStreamManager | null = null
   private onStatus: (connected: boolean) => void
   /** Cross-instance commander (device) client count, as the gateway reads it from the backend. */
@@ -320,7 +323,7 @@ export class BackendSocket {
     this.gatewayPort = gateway
     if (!this.requestsOpen) gateway.holdRequests()
     if (this.thisComputerOnly) gateway.serveThisComputerOnly()
-    gateway.localClients(this.localClients.size)
+    gateway.localClients(this.localWindows())
   }
 
   get gateway(): GatewayPort | null { return this.gatewayPort }
@@ -596,16 +599,21 @@ export class BackendSocket {
   }
 
   /** Attach one authenticated loopback desktop client to the same RPC and event plane as cloud web. */
-  registerLocalClient(connId: string, sink: LocalClientSink, opts: { tool?: boolean } = {}): boolean {
+  registerLocalClient(connId: string, sink: LocalClientSink, opts: { tool?: boolean; surface?: WindowSurface } = {}): boolean {
     if (!isLocalClientId(connId) || this.localClients.has(connId)) return false
     this.localClients.set(connId, sink)
-    this.gatewayPort?.localClients(this.localClients.size)
-    if (opts.tool) { this.toolClients.add(connId); return true }
+    if (opts.tool) this.toolClients.add(connId)
+    else if (opts.surface === 'tui') this.tuiClients.add(connId)
+    this.gatewayPort?.localClients(this.localWindows())
+    if (opts.tool) return true
     // The window is the person's session: the backend counts it, now or when the link next comes up.
-    this.gatewayPort?.windowOpened()
+    this.gatewayPort?.windowOpened(opts.surface ?? 'desktop')
     this.onLocalClient?.(connId, true)
     return true
   }
+
+  /** The windows attached now, per surface; tools are not windows. */
+  private localWindows(): LocalWindows { return countWindows(this.localClients.size, this.toolClients.size, this.tuiClients.size) }
 
   /** A loopback client that said it is a tool (`harness pair`, the MCP server), not a window. */
   isToolClient(connId: string): boolean { return this.toolClients.has(connId) }
@@ -625,11 +633,12 @@ export class BackendSocket {
   async unregisterLocalClient(connId: string): Promise<void> {
     if (!this.localClients.delete(connId)) return
     if (!this.toolClients.delete(connId)) this.onLocalClient?.(connId, false)
+    this.tuiClients.delete(connId)
     this.rowStateWindows.delete(connId)
     this.viewerStreams?.closed(connId); this.ownerCommands.closeConnection(connId); this.onConnectionClosed?.(connId)
     // The last one leaving before any link could hear it attach: nothing happened, as far as the backend
     // is concerned, and the gateway does not tell a later link otherwise.
-    this.gatewayPort?.localClients(this.localClients.size)
+    this.gatewayPort?.localClients(this.localWindows())
     this.downChains.delete(connId)
     await this.terminalStreams?.closeConnection(connId, 'local client disconnected', false)
   }

@@ -31,6 +31,136 @@ mode. Its live USB offers Install and Try; an installed OS offers agents, termin
 These screens and installation shortcuts are absent from ordinary hn on macOS and other Linux
 systems. Installing or updating hn alone does not turn a computer into Harness OS.
 
+The shell-first flow opens your usual shell. `Ctrl+B c` makes a local window;
+`Ctrl+B Shift+N`, `%`, and `"` make shell panes. A split inherits its source
+computer, current directory, and selected model route. A new window uses native
+agent defaults and stays local, even when the focused pane is remote. It uses a
+local pane's directory, or the directory hn was launched from when leaving a remote pane.
+Keyboard New Tab (`Ctrl+B c`) and New Harness (`Ctrl+B Shift+N`, or
+`Ctrl+Shift+N` in terminals supporting extended keys) open the new shell's agent
+picker at its first prompt. Escape leaves a normal shell. Explicit terminal
+actions, scripted/detached windows, and native `%`/`"` splits remain plain shells.
+
+In these zsh/Bash shells, `ch` chooses a computer (`ch local`, `ch -`), and `cm`
+chooses a model route (`cm default` restores the agent's settings). These pickers
+open under the prompt, within the current terminal. Switching
+computers keeps each shell and its jobs alive. A route lasts for that pane;
+explicit native model/profile/resume options take precedence. Run `codex`, `claude`,
+`pi`, or another supported agent normally, and exit back to the shell. Missing
+agents use the CLI's shared installer in that terminal, then launch with the original
+arguments. An installation error returns to the prompt. Existing aliases/functions
+stay intact; `hn run <agent>` explicitly uses the integration in that case, and
+`command <agent>` bypasses it. Model routing currently supports Codex and Claude;
+other agents ask you to use `cm default` rather than silently ignoring the selection.
+
+At a Zsh or Bash 4+ prompt, **Ctrl+P** opens a blank search with sessions already
+listed. **Ctrl+N** opens a blank search with agents already listed; no `&` is
+displayed or required. Plain text filters that default list. Both use `@` for
+computers, `:` for project folders, and `%` for models. Removing the scope
+character returns to the original list. Explicit `&` agent search remains
+compatible. Agent and project choices compose the editable command; selecting
+a session opens it. Only Enter at the shell prompt launches a composed command.
+Choosing a different computer clears the old project folder and opens that
+computer's folders. The agent, model, and native arguments stay selected. Escape
+or Ctrl+C keeps the new computer without a folder; choosing the same computer
+(including its name or `local` alias) keeps the existing folder.
+
+Typing a fresh `@`, `:`, or `%` after an agent opens its suggestions automatically;
+type to filter, Enter to insert, or Escape to keep editing. Bracketed paste,
+quoted text, native option values, `--` passthrough, and unrelated commands do not
+open suggestions. `HN_AUTOCOMPLETE=0` disables automatic opening while keeping
+Ctrl+P and Ctrl+N available. Existing custom character bindings are respected.
+Deleting an automatically opened scope closes suggestions and returns to the
+composed command, preserving choices already made.
+The computer and folder may also share one token:
+
+```sh
+claude @office:~/code/my-app %sonnet
+claude %sonnet :~/code/my-app @office
+codex :~/code/my-app %default
+```
+
+Each selection edits the line. Adding the agent after choosing a folder returns
+the cursor to the end; deliberately editing a field in the middle stays there.
+Escape preserves the draft and cursor. Only Enter
+at the shell prompt launches. Fields replace earlier choices of the same kind;
+their order after the agent does not matter. Folder lists and models come from the
+selected computer. Remote paths use `/absolute/path` or `~/path`; local relative
+paths are resolved against the current shell directory. Missing/offline/ambiguous
+computers, missing folders, and conflicting selectors fail without falling back
+to another destination. The directory and model choices apply to this invocation;
+they do not change the shell's cwd or its `cm` route. `%default` uses native agent
+settings. `%sonnet` becomes a native model argument; grid picks use
+`%grid-name::model-id` (quoted automatically when needed). Native model names are
+ultimately validated by the agent; a typed name does not prove account access.
+
+In the `:` folder picker, fuzzy-search nested folders by name: from home,
+`autonomous-harness` or `atnmhrns` can find `~/code/work/autonomous-harness`.
+Candidates arrive as the selected computer's directory tree is scanned; typing
+filters them immediately without restarting discovery. **Tab** or **Right**
+searches inside the highlighted folder, **Alt+Up** goes to its parent, and
+**Enter** inserts the full folder path in the command. `code/` searches below
+that directory relative to the shell; `code/ap` fuzzy-matches its descendants.
+Recent projects outside the tree also appear in the initial list. Escape restores
+the original command without changing directory or starting an agent. Hidden
+folders and symlinks follow the existing directory API's exclusion policy.
+Dependency/build trees and macOS Library/app bundles are listed but not descended
+into until explicitly entered. Discovery is bounded to 10 seconds, 10,000 paths,
+and 1 MiB of path text, and refreshed after 30 seconds; narrow to a folder if a
+large tree reaches a limit. No `find`, Python, or `fzf` subprocess is required.
+
+Use `--` to pass everything after it literally to the agent, including tokens
+beginning with `@`, `:`, or `%`. Ordinary commands, pipelines, native completion,
+and user aliases/functions keep their behavior. Quotes around selector words
+protect spaces and shell punctuation; they do not disable selectors. Use the
+`--` boundary or `command claude` when those words are agent input.
+
+The existing `ch`, `cm`, and `hn sessions` commands stay available. `hn pick`
+keeps the context switcher (`@` computers, `%` model routes, with `:` as a legacy
+alias). Ctrl+P in a non-agent draft uses the same `@`, `:`, `%` scopes as the
+composer; picking a project inserts a quoted path, like file completion.
+Stock macOS Bash 3.2 cannot expose its draft through `bind -x`;
+it retains that switcher and accepts typed composed commands. The full editable
+Ctrl+P composer and Ctrl+N agent picker use Zsh (macOS default) or Bash 4+ (Linux).
+On Bash 3.2, Ctrl+N keeps its native history behavior.
+When the chosen agent exits, its pane returns to that original shell, keeping
+the working directory, model route, draft, and shortcuts. An exit in a background
+pane does not move focus; the shell returns when you select that pane again.
+
+On macOS, **Cmd+P** works when the terminal reports that key through the Kitty
+keyboard protocol, or when its profile maps Cmd+P to Ctrl+P (hex `0x10`). A
+terminal's own menu shortcut otherwise wins; hn cannot override it. No terminal
+settings are changed automatically. Ctrl+P also works on macOS. This binding is
+active only while the shell edits a command; agents and editors keep their own
+Ctrl+P. Up still recalls previous history. Set `HN_PICKER_KEY=''` in your shell rc
+to disable the binding, or e.g. `HN_PICKER_KEY='\C-g'` to choose another key. The
+Zsh widget is `hn-picker-widget`; the Bash bind-x function is `_hn_picker_widget`.
+Ctrl+N also belongs only to the shell prompt; running agents keep their own binding.
+Set `HN_NEW_KEY=''` to disable it or another key sequence to rebind it. Its Zsh
+widget is `hn-new-widget`, and its Bash function is `_hn_new_widget`.
+
+For shell-line completion, type `ch `, `cm `, or `hn sessions ` and press Tab.
+Search and press Enter to put the selection into the editable command; press Enter
+again to run it. Escape preserves the draft. Ordinary completion and existing
+fzf Ctrl+T, Ctrl+R, and Alt+C bindings stay in place. In Bash, an existing custom
+completion for one of these commands takes precedence.
+
+`hn sessions [query]` opens a compact inline finder in an integrated shell: fuzzy search through running
+sessions and indexed saved conversations, with transcript search and previews. With no query,
+they share one newest-first list by last activity; older conversations remain searchable. It reuses
+Ctrl+B s's rows, fuzzy matcher, transcript search, previews, and open/resume actions.
+Ctrl+/ toggles its preview; Alt+Up/Down scrolls it. Enter
+focuses an existing session or resumes a saved conversation here; Escape leaves
+the shell unchanged. Ctrl+B s remains the broader workspace browser. Saved history
+and remote shell helpers need the matching CLI build; unsupported shells still work
+as ordinary terminals.
+
+The inline finder defaults to 45% height, reverse layout, a rounded border, and
+inline counts. It uses supported layout, color, and key-binding options from
+`FZF_DEFAULT_OPTS`, with conversation previews on the right and a compact list in
+narrow panes. File-preview commands are not run on conversation IDs. Keep a `bat`
+file preview in `FZF_CTRL_T_OPTS` rather than the global options so fzf's history
+picker does not try to open a command as a filename.
 Harness OS also has a file manager, only there: `hn files [folder]` (Super+E) fills a terminal of
 its own with a folder as big tiles or a list (`v`), its folder tree to the left, and VS Code's
 explorer menu on a right click: new files and folders, cut, copy, paste, duplicate, rename, and
@@ -55,12 +185,20 @@ PTY supervisor keeps them running through detach, reconnect and a client crash. 
 sessions stay on this computer and remain intact when Harness reconnects.
 
 On a fresh computer `hn` starts your local daemon and opens without requiring an account.
-Sign in with `harness login` when you want your other machines and shared desk. If daemon startup
+Choose **Sign in** in the status bar, or run `account` from `C-b :`, when you want your other
+machines, shared desk and access from your phone. The Account panel explains these benefits and
+offers browser sign-in or a phone QR code; you confirm the account before connecting it.
+`harness login` remains available from a shell. Signing in keeps local work in place; changing
+accounts removes the previous account's views without stopping its harnesses. If daemon startup
 fails, hn still opens a local shell. Each OS user connects through their own private Unix socket;
 hn never attaches to another user's daemon merely because it occupies the default TCP port.
 Like `tmux new -A`, it restores your swarms if the desk has any,
-else window 0 is a shell on this computer, in the folder you ran `hn` in. `C-b s` finds every
+else window 0 opens your shell in the folder you ran `hn` from. `C-b s` finds every
 harness. Closing the last window ends `hn` (`[exited]`, as tmux says it); `C-b d` detaches.
+
+![Optional sign-in with local work still available](docs/account.png)
+
+<sub>Rendered from the isolated native fixture in `tests/workspace-controls.py`.</sub>
 
 **Sessions** are tmux's: `hn new -A -s main` (in a shell's rc, or a terminal profile) starts or
 attaches, `hn attach -t work` goes back to one, and a plain `hn` returns to where you were.
@@ -109,8 +247,9 @@ sessions retain tmux's resize behavior.
 
 Splits, `resize-pane`, the seven layouts, `swap-pane`, `rotate-window`, `join-pane`, `break-pane`
 and `select-pane` are tmux 3.5a's own arithmetic (layout.c, window.c): the same split sizes, the same
-pane numbers and the same active pane after each. hn draws these layouts as pane surfaces
-with one-cell gaps and inset terminal content. Panes have no drawn borders: background
+pane numbers and the same active pane after each. The default classic appearance draws thin
+pane borders. Choose **Appearance** from the workspace menu, or use `set -g @hn-look panes`,
+for pane surfaces with one-cell gaps and inset terminal content. In that appearance, panes have no drawn borders: background
 contrast identifies focus. The margins and gaps keep the terminal's native background. The focused
 pane uses a subtly contrasting fill (`#181818` on a black terminal), while inactive dark panes use
 `rgb(64, 64, 64)` with softer text. A lone or zoomed pane keeps the same focused surface. Light
@@ -140,8 +279,10 @@ with the pane surfaces. Window tabs start at the left, without a machine/session
 Local and remote machines use their names from the app everywhere, such as `"office"`.
 Local shell panes keep that same name across daemon disconnects and reconnects. Unnamed account
 machines use `machine-<id8>`, as on desktop and phone; before this computer is known, it is
-`This computer`. The status bar names the machine running hn, independent of the focused pane
-or session name.
+`This computer`. An integrated shell's status shows its current computer and persistent
+`cm` model route, or **Agent default** when none is selected. Per-command `%model`
+choices stay in the command and do not change that persistent route. Other panes
+keep the local-machine label. Custom formats can include `#{shell_context}`.
 Custom status formats and the prefix cue remain supported.
 Take Control (`C-b : take-control`, or `take`) reclaims all available local and remote panes
 across the TUI's tabs, including hidden ones, without changing focus. Typing into a watched pane
@@ -154,13 +295,14 @@ sends a plain Enter).
 | tmux keys | |
 |---|---|
 | `C-b s` | every harness on every machine — an fzf list with a live preview |
-| `C-b c` | new window with the task-first creation form. Type a task and Enter to start; Open Terminal opens a shell. Up to three recent sessions and Browse All Sessions appear below. `new-window` from a script, or with options (`-c`, a command…), makes the shell at once, as tmux does; `set -g @hn-new-window shell` (or `@hn-look tmux`) keeps that behavior for the key and startup too |
+| `C-b c` | new local shell window, using the local source folder or the folder hn was started in; the model route resets to agent defaults |
+| `C-b N` | new shell pane with the agent picker, inheriting its source computer, current folder, and model route |
 | `C-b %` `C-b "` (and `C-b \|` for `%`) | split right / below — a shell, at once, in this pane's machine and folder (`C-b -` is tmux's delete-buffer) |
 | `C-b o` `C-b ;` `C-b ←↑→↓` `C-b q` | next pane, last pane, pane in a direction, pane numbers |
 | `C-b z` `C-b space` `C-b M-1…7` `C-b { }` `C-b C-o` | zoom, next layout, a layout, swap, rotate |
 | `C-b C-←↑→↓` `C-b M-←↑→↓` | resize (repeatable, like tmux's `-r`) |
-| `C-b n` `C-b p` `C-b l` `C-b 0…9` `C-b w` `C-b ,` `C-b &` | windows |
-| `C-b x` | close the pane (the harness keeps running) |
+| `C-b n` `C-b p` `C-b l` `C-b 0…9` `C-b w` `C-b ,` | windows |
+| `C-b x` / `C-b &` | Stop Harness / Close Tab. Owned harnesses are saved and stopped; idle ones stop directly, while working, unknown or draft sessions ask first with Cancel selected. A failed save keeps the pane. Plain terminals ask before closing; shared or already-stopped harnesses only close their view. |
 | `C-b [` `C-b ]` | copy mode (tmux's, vi or emacs keys as `mode-keys` says), paste |
 | `C-b <` `C-b >` | the window and pane menus |
 | `C-b /` | what a key does |
@@ -168,37 +310,50 @@ sends a plain Enter).
 | `C-b ?` | every key and what it does (`list-keys -N`) — or just pause after `C-b` and they show |
 | `C-b d` | detach — everything keeps running |
 
-Harness's own, only on keys tmux leaves unbound (every tmux key does what tmux does):
+Harness's additional actions use keys tmux leaves unbound. The stock close bindings above use
+Harness's save-and-stop behavior; custom bindings and explicit `kill-pane` / `kill-window`
+commands keep their existing tmux behavior.
+A confirmed Stop removes that harness's other views across tabs and sessions too. Switching
+agents from another attached hn client updates both views, with one replacement process.
 
 | | |
 |---|---|
 | `C-b a` / `C-b A` | the next harness that needs you (`next-harness`) / all those waiting on you (`M-1…9` answers from the list; `M-a` types an answer — an option's number, several for a multi-choice question, `1,3`, or your own words) |
-| `C-b N` `C-b T` | New Harness popup / new terminal. The optional Task is focused first, above Agent, Project, Branch, Worktree, Model, Approvals and applicable Profile, with searchable choices. |
+| `C-b N` / `C-b T` | New shell pane with the agent picker / a plain shell, on the focused pane's computer and directory. |
 | `C-b I` `C-b @` `C-b S` | models, machines, the Harness Store |
 | `C-b g` `C-b B` | send a task (Harness picks the harness) / broadcast to the window |
 | `C-b R` `C-b P` `C-b K` | restart, pause, clone the harness |
 
-`C-b N` opens a compact, centered New Harness form with the task ready to type at the top.
+Clicking the footer `+` or a menu's **New Harness** opens a compact, centered form
+with the task ready to type at the top. **New Tab** in the workspace menu opens the
+GUI new-window screen, with the composer and recent sessions
+below it. The tmux keyboard shortcuts continue opening shells.
 Agent and Project follow, then Branch, Worktree, Model, Approvals and applicable Profile.
 All settings are visible without expanding Options. Project reads `project @ local`, or
 `project @ machine` for a remote destination; focusing it shows the full path below.
 The initial destination is the connected local Harness machine, with successful agent
 and project choices remembered. Explicit project commands keep their destination. Enter starts
 with the displayed choices; the action names the selected agent (for example, Start Codex).
-Tab/Shift-Tab moves between fields. Outside the task editor, Up/Down also moves between fields
-and previews their choices on the right. Enter, Right or typing enters a chooser; Enter accepts
-an item and focuses Start. Enter in the task editor starts immediately. The harness opens in
+Tab/Shift-Tab moves between fields. Up/Down edits multiline tasks and moves to the previous/next
+field at the first/last visual line. On other fields, it moves between fields and previews
+their choices on the right. Enter, Right or typing enters a chooser; Enter accepts
+an item and focuses Start. Enter in the task editor also focuses Start without launching.
+Enter on Start launches. The harness opens in
 the window that requested it, splitting beside the focused pane when needed. Switching windows
 while it starts leaves your new window focused. Lowercase `C-b n` remains next window.
+Escape backs out of a chooser or closes the popup without losing its draft. On New Window,
+Escape leaves task editing; another Escape returns to the previous window and keeps the draft.
 
 Agent combines coding agents and installed Store harnesses; a Store harness then offers its
-compatible coding agents. Project offers Clone Repository, Open Folder, New Folder and recent
+compatible coding agents. Terminal is a separate action: `C-b T` opens a shell directly,
+and Open Terminal on New Window is available by mouse. Neither sends task text to the shell.
+Project offers Clone Repository, Open Folder, New Folder and recent
 machine/folder pairs. Folder actions choose a machine first. Ctrl-L in the folder browser edits
 a path. Project search includes the 50 most recently active distinct folders per machine;
 duplicate sessions in one folder count once. Combine a machine name and folder, such as
 `office harness` or `m2 harness`, in either order. The local machine's actual
 name remains searchable when its label says `local`.
-Task is edited directly in the form: Enter starts, Alt-Enter inserts a newline, and pasted tasks
+Task is edited directly in the form: Enter focuses Start, Alt-Enter inserts a newline, and pasted tasks
 retain line breaks. Enhanced terminals can use Shift-Enter too. Arrow keys navigate wrapped
 lines; Home/End, Ctrl-A/E, word movement/deletion, Ctrl-U/K and Ctrl-Y work in the editor.
 On the welcome screen, `C-b ]` also pastes into the task, preserving its line breaks.
@@ -220,9 +375,14 @@ any prepared project folder on retry. A lost reply offers Check status for the o
 repeated Enter cannot start another harness while its outcome is unknown. Input in the form
 never reaches a working pane.
 
-A fresh startup and `C-b c` use the same form, with a separate draft per window. The welcome
-screen explains the first task; later windows inherit the machine and folder they were opened
-from. Up to three recent sessions appear below the creation actions; Browse All Sessions opens
+Mouse New Tab keeps a separate composer draft per window. A fresh startup opens
+a shell, and `C-b c` opens a local shell with its agent picker. Explicitly selecting
+a remote project in the GUI keeps that destination until you choose another
+project; starting an agent or terminal never silently falls back to a different machine.
+Submitting while the initial project check runs starts once it finishes. Escape, further
+editing, or leaving the form cancels that pending start and keeps the draft.
+Up to nine recent sessions appear below the composer, with fewer visible in short
+terminals; Browse All Sessions opens
 the full launcher. Existing Claude Code, Codex and other supported histories are discovered on
 connected machines. Loading, empty and unavailable history have distinct states; Ctrl-R retries
 discovery. Digits and plain-key bindings belong to the task while you type. Your modified prefix
@@ -412,10 +572,30 @@ keys to search as you type, fzf-style, is `C-b :keys` (or `hn keys` from a shell
 
 ## Mouse and clipboard
 
-tmux's mouse: a click selects a pane or a window, a drag on a border (or a title row) resizes, a
+The keyboard remains the primary path, and the same actions are reachable by mouse. Pane
+headers show the agent and model as plain text controls, followed by `…` and `×` when there
+is room. The menu keeps these actions available in narrow panes. Changing agents saves a
+handoff and replaces the agent in the same pane; changing models targets the pane you chose,
+even if focus moves while the picker is open. `×` uses the same safe Stop behavior as `C-b x`.
+Right-click a pane header or window tab for its actions.
+
+The status bar adds just `+` and `…`, plus **Sign in** when needed. `+` opens the GUI
+New Harness composer. `…` opens New Harness, New Tab, the harness/machine/model counts and their lists,
+Devices, Account, Appearance and Commands. Physical Harness devices are separate from machine
+connections. Devices shows each owned host's connected devices and reported brightness, sound,
+scrolling direction and voice language; settings are confirmed by the device before being shown
+as saved. These settings use the existing firmware and CLI interfaces.
+
+These controls follow `mouse on`, respect custom mouse bindings and leave custom status and
+pane-title formats intact. Add `#{hn_controls}` to a custom status format to opt its footer into
+the controls. `mouse off`, or the tmux appearance, keeps the keyboard-only presentation.
+Commands such as `workspace-menu`, `change-agent`, `models`, `hardware-devices` and `account`
+are also available from `C-b :`.
+
+The terminal body keeps tmux's mouse: a click selects a pane or a window, a drag on a border (or a title row) resizes, a
 drag in a pane selects and copies, a double-click copies a word and a triple-click a line, the
-wheel scrolls back in copy mode, and the right button opens tmux's pane, window and session
-menus. Each is a key binding you can change, as in tmux (`bind -n WheelUpPane …`, `bind -T
+wheel scrolls back in copy mode, and the right button opens tmux's pane menu. Each is a key
+binding you can change, as in tmux (`bind -n WheelUpPane …`, `bind -T
 copy-mode-vi MouseDragEnd1Pane …`); a program that asks for the mouse gets it. Hold `⇧` to select
 with your terminal instead. Copying uses OSC 52, so it lands on the clipboard of the computer you
 are sitting at, over SSH too.
@@ -508,6 +688,10 @@ arm64, musl) with a checksummed manifest that `harness tui --install` verifies.
 | `app.rs` | all state: machines, streams, tabs, desk sync |
 | `fleet.rs` | machines and harnesses, kept live from the daemon's frames |
 | `input.rs` | keys, mouse, the launcher's modes and actions |
+| `workspace_controls.rs` / `workspace_menu.rs` | pane and footer controls, stable action targets and compact menus |
+| `session_close.rs` / `agent_switch.rs` / `workspace_events.rs` | save-and-stop lifecycle, agent handoff and view updates between local clients |
+| `account.rs` / `account_scope.rs` | optional sign-in and account-aware workspace restoration |
+| `hardware.rs` / `workspace_resources.rs` | physical device settings and workspace counts |
 | `dial.rs` | the Harness device: the ring and windows it turns through, its focus, scroll, taps and spoken tasks |
 | `modal.rs` / `picker.rs` | the launcher's rows and its fzf matching (fzf.rs, ported from fzf) |
 | `ui.rs` | drawing |

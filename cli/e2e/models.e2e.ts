@@ -142,13 +142,12 @@ describe('switching a Codex agent model and effort', () => {
 
   it('lists the choices from models\' own process, and switches with models killed: the switch is the core\'s', async () => {
     const d = await fresh({ codexModel: 'gpt-5.5', env: { HARNESSD_SERVICE_INITIAL_BACKOFF_MS: '8000', HARNESSD_SERVICE_MAX_BACKOFF_MS: '8000' } })
-    await until('models to connect to the core', () => d.log().includes('[services] models connected') || null, 30_000, 200)
     const client = await LocalClient.connect(d)
     const agent = await create(d, client, 'apart')
     await turn(client, agent.id, 'hello')
     await runningOn(client, agent.id, 'gpt-5.5', 'high')
     // The picker's choices come from models, in its own process (harnessd/services.ts), which asks the core
-    // for the agent's catalog.
+    // for the agent's catalog. It is started by this first ask, which waits for it (core/modelsWake.ts).
     const xhigh = profile(agent.id, 'gpt-6-luna', 'xhigh')
     const offered = (await client.request<{ models: Array<{ id: string }> }>('models_list', { agentId: agent.id }, 30_000)).models
     expect(offered.map((option) => option.id)).toContain(xhigh)

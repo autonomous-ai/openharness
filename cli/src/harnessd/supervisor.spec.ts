@@ -116,15 +116,16 @@ describe('Supervisor', () => {
     expect(statuses).toHaveLength(3)
   })
 
-  it('starts the process a bound core asks for, and those a core too old to ask for them never would', () => {
+  it('starts the process a core asks for, bound or still starting, and those a core too old to ask for them never would', () => {
     const wanted: string[] = []
     const unasked: number[] = []
     make({}, { want: (service) => wanted.push(service), unasked: (protocol) => unasked.push(protocol) }).start()
-    core().say({ type: 'harnessd:want', service: 'orchestrator' })
-    expect(wanted).toEqual([])
+    // The gateway of a core signed in, asked for as it starts: up beside it, not a bind later.
+    core().say({ type: 'harnessd:want', service: 'gateway' })
+    expect(wanted).toEqual(['gateway'])
     core().bind()
     core().say({ type: 'harnessd:want', service: 'orchestrator' })
-    expect(wanted).toEqual(['orchestrator'])
+    expect(wanted).toEqual(['gateway', 'orchestrator'])
     expect(unasked).toEqual([])
     crash()
     core().bind(2)

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createServiceLinks, HELD_MAX, type ServiceFrame } from './serviceLinks.js'
+import { createServiceLinks, HELD_MAX, ON_DEMAND_START_MS, type ServiceFrame } from './serviceLinks.js'
 
 const TOKEN = 'a'.repeat(48)
 const ASKER = { local: false, owner: true }
@@ -136,6 +136,35 @@ describe('service links', () => {
     expect(accepted).toHaveBeenCalledOnce()
     link.receive({ type: 'harness_share_link_result', payload: { requestId: 'route-1', link: 'ready' } })
     expect(reply).toHaveBeenCalledWith({ link: 'ready' })
+  })
+
+  it('waits for one on demand to start no longer than its start wait, then for its answer as long as the request may', () => {
+    // Models' requests wait up to fifteen minutes for their answers: a models that cannot start must not hold
+    // one that long, and one that starts must have the whole wait to answer in.
+    const waits = { models: { grid_fleet_model_download: 900_000 } }
+    const links = make({ owned: { models: ['grid_fleet_model_download'] }, onDemand: new Set(['models']), want: vi.fn(), waits, startWaitMs: 20_000 })
+    const never = vi.fn()
+    links.route('grid_fleet_model_download', {}, ASKER, never)
+    vi.advanceTimersByTime(19_999)
+    expect(never).not.toHaveBeenCalled()
+    vi.advanceTimersByTime(1)
+    expect(never).toHaveBeenCalledWith({ error: 'SERVICE_UNAVAILABLE', service: 'models', retryable: true })
+
+    const fresh = make({ owned: { models: ['grid_fleet_model_download'] }, onDemand: new Set(['models']), want: vi.fn(), waits })
+    const slow = vi.fn(), lost = vi.fn()
+    fresh.route('grid_fleet_model_download', { modelId: 'a' }, ASKER, slow)
+    fresh.route('grid_fleet_model_download', { modelId: 'b' }, ASKER, lost)
+    vi.advanceTimersByTime(ON_DEMAND_START_MS - 1)
+    const models = sink()
+    const link = fresh.accept('models', TOKEN, models, vi.fn())!
+    expect(models.sent).toHaveLength(2)
+    // Well past the start wait, it is still waited for: the download takes as long as it takes.
+    vi.advanceTimersByTime(600_000)
+    link.receive({ type: 'grid_fleet_model_download_result', payload: { requestId: 'route-2', done: true } })
+    expect(slow).toHaveBeenCalledWith({ done: true })
+    // And the one never answered is let go at its own wait.
+    vi.advanceTimersByTime(300_000)
+    expect(lost).toHaveBeenCalledWith({ error: 'SERVICE_UNAVAILABLE', service: 'models', retryable: true })
   })
 
   it('answers SERVICE_UNAVAILABLE for one on demand that does not come in time, then at once until it comes, or will not take the request', () => {

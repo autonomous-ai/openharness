@@ -2784,7 +2784,7 @@ if os.environ.get('HABITAT_BRIDGE_TRACE'):
 with tempfile.TemporaryDirectory(prefix='harness-touch-ui-') as d:
     out = Path(d)
     (out / 'touch_ui.c').write_text(code)
-    subprocess.run(['cc','-std=c11','-Wall','-Wextra','-Werror','-O1','-g',
+    subprocess.run(['cc','-std=c11', '-D_POSIX_C_SOURCE=200809L','-Wall','-Wextra','-Werror','-O1','-g',
                     '-fsanitize='+os.environ.get('SANITIZERS','undefined,bounds'),
                     *extra_includes, '-I',str(native),str(out/'touch_ui.c'), *extra_sources, str(native/'gestures.c'),
                     str(native/'form.c'),str(native/'visit.c'),str(native/'draft.c'), str(native/'scroll.c'),str(native/'selection.c'),str(native/'carry.c'),str(native/'tim.c'),str(native/'character_motion.c'),str(native/'character_layout.c'),str(native/'character.c'),str(native/'illustrated.c'),str(native/'tux.c'),str(native/'focus.c'),str(native/'lvgl_fonts.c'),str(native/'lvgl_icons.c'),str(native/'focus_marks.c'),str(native/'focus_faces.c'),str(native/'pets.c'),str(native/'terminal.c'),

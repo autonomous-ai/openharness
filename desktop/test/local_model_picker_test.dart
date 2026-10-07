@@ -922,6 +922,78 @@ void main() {
   );
 
   testWidgets(
+    'a decision model of yours says only Serving or Start, whatever its engine is doing',
+    (tester) async {
+      final app = await _localFixture();
+      try {
+        Map<String, dynamic> jev(
+          String id,
+          String name,
+          String state, {
+          bool canStart = false,
+          bool? canStop,
+        }) => {
+          'id': id,
+          'name': name,
+          'kind': 'decision',
+          'state': state,
+          'sizeBytes': _gib,
+          'canStart': canStart,
+          'canStop': canStop ?? state == 'running',
+        };
+        app.localInventory = {
+          ..._inventory(),
+          'models': [
+            ...(_inventory()['models'] as List),
+            // Its engine is up and its grid sleeps, so the grid lists nothing: the first call wakes it.
+            jev('jev:ggml-org/Kev-0.8B-GGUF', 'kev-0.8b', 'running'),
+            // Here, and not startable this moment (another model's operation): what Enter does once it is.
+            jev('jev:ggml-org/Laya-GGUF', 'laya-english', 'downloaded'),
+            {
+              ...jev(
+                'jev:ollama:tev1:latest',
+                'tev1',
+                'downloaded',
+                canStart: true,
+              ),
+              'app': 'Ollama',
+            },
+            // Its engine runs on, but a `grid leave` from elsewhere took it off the grid: Start puts it back.
+            jev(
+              'jev:ggml-org/lev-GGUF',
+              'lev',
+              'downloaded',
+              canStart: true,
+              canStop: true,
+            ),
+          ],
+        };
+        app.inventory = const GridModels(gridName: 'home', models: []);
+        await app.modelManager.refresh(force: true);
+        final picker = await _open(tester, app);
+        expect(picker.modelRowStatus(_row(picker, 'kev-0.8b')), 'Serving');
+        expect(picker.modelRowStatus(_row(picker, 'laya-english')), 'Start');
+        expect(picker.modelRowStatus(_row(picker, 'tev1')), 'Start');
+        final dropped = _row(picker, 'lev');
+        expect(picker.modelRowStatus(dropped), 'Start');
+        picker.move(picker.rows.indexOf(dropped) - picker.cursor);
+        await tester.pumpAndSettle();
+        expect(
+          find.byKey(const ValueKey('resource-action:picker.model_start')),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(const ValueKey('resource-action:picker.model_stop')),
+          findsNothing,
+        );
+      } finally {
+        await tester.pumpWidget(const SizedBox());
+        app.dispose();
+      }
+    },
+  );
+
+  testWidgets(
     'Get on a Jev model starts it, never moves the harness, and then it is one Jev row to stop or call',
     (tester) async {
       const laya = 'jev:ggml-org/Laya-GGUF';
@@ -956,7 +1028,7 @@ void main() {
           find.descendant(
             of: find.byType(SwarmResourcePreview),
             matching: find.textContaining(
-              "updates Grid's model engine first if it is too old to serve Jev models",
+              'Get downloads it and runs it on your grid.',
             ),
           ),
           findsOneWidget,

@@ -18,6 +18,22 @@ struct Search {
     next: Instant,
 }
 
+/// Changing a tab's sole harness gives its shared desk identity a fresh key; its local draft
+/// and any receipt still belong to the same visible tab.
+pub(crate) fn remap(app: &mut App, old: &str, new: &str) {
+    if let Some(mut form) = app.welcome.forms.remove(old) {
+        if matches!(&form.surface, Surface::Window(id) if id == old) { form.surface = Surface::Window(new.into()); }
+        if let Some(target) = &mut form.launch_target { if target.tab == old { target.tab = new.into(); } }
+        if let Some(target) = form.attempt.as_mut().and_then(|a| a.target.as_mut()) { if target.tab == old { target.tab = new.into(); } }
+        app.welcome.forms.insert(new.into(), form);
+    }
+}
+
+pub(super) fn account_changed(app: &mut App) {
+    app.welcome.generation = app.welcome.generation.wrapping_add(1);
+    app.welcome.searches.clear(); app.welcome.shown = false;
+}
+
 /// Context is captured before creating the window; switching windows never replaces its draft.
 pub(crate) fn ensure(app: &mut App, from: Option<(String, String)>, cwd: Option<String>) {
     if crate::input::os_home(app) { return }
@@ -29,7 +45,7 @@ pub(crate) fn ensure(app: &mut App, from: Option<(String, String)>, cwd: Option<
             .and_then(|p| p.cwd.clone().or_else(|| p.live_path.clone()))
             .or_else(|| app.fleet.agent(m, a).map(|a| a.cwd.clone()).filter(|c| !c.is_empty()))
     })).or_else(|| machine.is_none().then(|| std::env::current_dir().ok().map(|p| p.display().to_string())).flatten());
-    let first = app.welcome.forms.is_empty() && defaults().is_null()
+    let first = app.tabs.iter().all(|t| t.panes().is_empty()) && app.welcome.forms.is_empty() && defaults().is_null()
         && !crate::app::state_dir().join("welcome-seen").exists();
     if let Some(mut form) = make_form(app, machine, cwd, Surface::Window(tab)) {
         form.first_run = first;
@@ -55,7 +71,7 @@ fn prepare(app: &App, form: &mut Form) {
     // silently becomes a different conversation under Enter.
     form.recent.retain(|r| available.iter().any(|a| a.key() == r.key()));
     for row in available {
-        if form.recent.len() >= 3 { break }
+        if form.recent.len() >= 9 { break }
         if !form.recent.iter().any(|r| r.key() == row.key()) { form.recent.push(row) }
     }
     if let Some(key) = selected {
@@ -81,8 +97,8 @@ fn prepare(app: &App, form: &mut Form) {
         "Some history is unavailable · Ctrl-R retry".into()
     } else if form.recent.is_empty() {
         if searches.is_empty() { "History appears when a machine connects".into() }
-        else { "No recent sessions · start with a task above".into() }
-    } else { "Recent sessions".into() };
+        else { "No recent harnesses".into() }
+    } else { "Recent harnesses".into() };
 }
 
 pub(crate) fn draw(buf: &mut Buffer, app: &mut App, area: Rect) -> Option<Position> {
@@ -90,7 +106,9 @@ pub(crate) fn draw(buf: &mut Buffer, app: &mut App, area: Rect) -> Option<Positi
     let tab = app.tab().id.clone();
     let mut form = app.welcome.forms.remove(&tab)?;
     prepare(app, &mut form);
-    let cursor = view::draw(buf, area, &mut form);
+    let cursor = if area.width >= 58 && area.height >= 22 {
+        super::welcome_view::draw(buf, app, area, &mut form)
+    } else { view::draw(buf, area, &mut form) };
     store_form(app, form);
     if app.modal.is_none() && !app.prefix { cursor } else { None }
 }
@@ -235,7 +253,7 @@ mod tests {
         let mut app = App::new(19789, sink, (150, 42));
         app.fleet.local_id = "local".into();
         app.fleet.machines.push(crate::fleet::Machine {
-            id: "local".into(), name: "office".into(), local: true,
+            id: "local".into(), name: "office".into(), local: true, shared: false,
             status: "online".into(), reach: crate::fleet::Reach::Ready,
         });
         app.tab_mut().home = true;
@@ -243,6 +261,215 @@ mod tests {
     }
     fn event(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
         crate::input::handle(app, crossterm::event::Event::Key(KeyEvent::new(code, modifiers)));
+    }
+
+    fn render(app: &mut App) {
+        let area = Rect::new(0, 0, 150, 41);
+        draw(&mut Buffer::empty(area), app, area);
+    }
+
+    #[tokio::test]
+    async fn welcome_composer_keeps_controls_and_recent_rows_inside_the_window() {
+        let mut app=app();
+        for i in 0..9 {
+            app.home_external.push(crate::app::External { machine:"local".into(),session_id:format!("s{i}"),engine:"codex".into(),
+                title:format!("Recent task {i}"),cwd:format!("/home/test/project-{i}"),open:false,last_at:crate::fleet::now_ms()-i*1000 });
+        }
+        ensure(&mut app,None,None);
+        let tab=app.tab().id.clone();
+        for (w,h) in [(58,22),(80,24),(94,34),(150,41),(240,60)] {
+            let area=Rect::new(0,0,w,h);
+            let mut buf=Buffer::empty(area);
+            draw(&mut buf,&mut app,area);
+            let text=(0..h).map(|y|(0..w).map(|x|buf[(x,y)].symbol()).collect::<String>()).collect::<Vec<_>>().join("\n");
+            for expected in ["What task should this agent work on?","New Harness","All","New Terminal","Recent task"] {
+                assert!(text.contains(expected),"{w}x{h} missing {expected}: {text}");
+            }
+            for removed in ["machines connected", " Task ", "Browse All Harnesses", "Open Terminal", "Enter start", "Task is optional"] {
+                assert!(!text.contains(removed), "{w}x{h} still shows {removed}: {text}");
+            }
+            let form=&app.welcome.forms[&tab];
+            for (hit,_) in &form.hits { assert_eq!(hit.intersection(area),*hit); }
+            for field in [Field::Agent,Field::Machine,Field::Project,Field::Task,Field::Worktree,Field::Branch,Field::Model,Field::Create] {
+                assert!(form.hits.iter().any(|(_,f)|*f==field),"{w}x{h}: {field:?}");
+            }
+            let form=app.welcome.forms.get_mut(&tab).unwrap();form.focus=Field::Recent(8);
+            draw(&mut Buffer::empty(area),&mut app,area);
+            assert!(app.welcome.forms[&tab].hits.iter().any(|(_,f)|*f==Field::Recent(8)),"selected recent row must scroll into view");
+            app.welcome.forms.get_mut(&tab).unwrap().focus=Field::Task;
+        }
+    }
+
+    #[tokio::test]
+    async fn machine_header_scopes_projects_and_remembers_each_destinations_folder() {
+        let mut app = app();
+        app.homes.insert("local".into(), "/home/test".into());
+        app.homes.insert("remote".into(), "/srv/test".into());
+        app.fleet.machines.push(crate::fleet::Machine {
+            id: "remote".into(), name: "remote-server".into(), local: false, shared: false,
+            status: "online".into(), reach: crate::fleet::Reach::Ready,
+        });
+        for (machine, folder) in [("local", "/home/test/repo"), ("remote", "/srv/test/repo")] {
+            let agent = crate::fleet::agent_from(machine, &json!({
+                "id":"test", "engine":"codex", "project":{"cwd":folder},
+            }), None);
+            app.fleet.agents.insert(agent.key(), agent);
+        }
+        ensure(&mut app, None, Some("/home/test/repo".into()));
+        let mut form = take_active(&mut app).unwrap();
+        form.draft.task = "Keep this task while changing computers".into();
+        form.draft.profile = Some(("local".into(), "profile".into(), "Local account".into()));
+        form.focus = Field::Machine;
+        reveal(&mut app, &mut form);
+        assert_eq!(form.child.as_ref().unwrap().picker.current_id().as_deref(), Some("local"));
+        form.child.as_mut().unwrap().picker.select("remote");
+        choose(&mut app, &mut form);
+        assert_eq!(form.draft.machine, "remote");
+        assert!(matches!(&form.draft.project, Project::New(_)), "never reuse a local path on another computer");
+        assert!(form.draft.profile.is_none(), "profiles belong to their computer");
+        assert_eq!(form.focus, Field::Create);
+        assert!(!form.starting);
+
+        child(&mut app, &mut form, Choice::Project, "");
+        let folders: Vec<_> = form.child.as_ref().unwrap().picker.rows.iter()
+            .filter(|row| row.id.starts_with("at:")).map(|row| row.id.as_str()).collect();
+        assert_eq!(folders, vec!["at:remote\t/srv/test/repo"]);
+        form.child.as_mut().unwrap().picker.select("folder");
+        choose(&mut app, &mut form);
+        assert_eq!(form.child.as_ref().unwrap().kind, Choice::Folder("/srv/test".into()),
+            "Open Folder goes directly to the selected machine");
+        set_project(&mut form, Project::Folder("/srv/test/repo".into()));
+
+        for (machine, folder) in [("local", "/home/test/repo"), ("remote", "/srv/test/repo")] {
+            child(&mut app, &mut form, Choice::Machine(None), "");
+            form.child.as_mut().unwrap().picker.select(machine);
+            choose(&mut app, &mut form);
+            assert_eq!(form.draft.machine, machine);
+            assert!(matches!(&form.draft.project, Project::Folder(path) if path == folder));
+        }
+        assert_eq!(form.draft.task, "Keep this task while changing computers");
+
+        child(&mut app, &mut form, Choice::Machine(None), "");
+        form.child.as_mut().unwrap().picker.select("local");
+        app.fleet.machine_mut("local").unwrap().reach = crate::fleet::Reach::Offline;
+        choose(&mut app, &mut form);
+        assert_eq!(form.draft.machine, "remote", "a stale enabled row cannot pick an offline machine");
+        assert!(form.error.contains("not connected"));
+    }
+
+    #[tokio::test]
+    async fn a_new_window_keeps_its_remote_machine_and_folder_while_disconnected() {
+        for known in [true, false] {
+            let mut app = app();
+            if known {
+                app.fleet.machines.push(crate::fleet::Machine {
+                    id: "remote".into(), name: "remote-server".into(), local: false, shared: false,
+                    status: "offline".into(), reach: crate::fleet::Reach::Offline,
+                });
+            }
+            ensure(&mut app, Some(("remote".into(), "previous-pane".into())), Some("/srv/remote-project".into()));
+            let tab = app.tab().id.clone();
+            assert_eq!(app.welcome.forms[&tab].draft.machine, "remote",
+                "an explicit remote context must never fall back to the local machine");
+            assert!(matches!(&app.welcome.forms[&tab].draft.project,
+                Project::Folder(path) if path == "/srv/remote-project"));
+            crate::input::handle(&mut app, crossterm::event::Event::Paste("keep this remote task".into()));
+            event(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+            assert_eq!(app.welcome.forms[&tab].focus, Field::Create);
+            assert!(app.welcome.forms[&tab].error.is_empty(), "task Enter only selects Start");
+            event(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+            let form = &app.welcome.forms[&tab];
+            assert_eq!(form.draft.machine, "remote");
+            assert_eq!(form.draft.task, "keep this remote task");
+            assert!(form.error.contains("machine is not connected"), "{}", form.error);
+            assert!(!form.starting);
+            assert!(form.attempt.is_none());
+            event(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+            assert!(!editing(&app));
+        }
+    }
+
+    #[tokio::test]
+    async fn task_arrows_leave_at_visual_edges_and_keep_multiline_editing_inside() {
+        let mut app = app();
+        ensure(&mut app, None, None);
+        let tab = app.tab().id.clone();
+        crate::input::handle(&mut app, crossterm::event::Event::Paste("first\nsecond".into()));
+        render(&mut app);
+        event(&mut app, KeyCode::Up, KeyModifiers::NONE);
+        assert_eq!(app.welcome.forms[&tab].focus, Field::Task);
+        assert_eq!(app.welcome.forms[&tab].task_editor.cursor, "first".len());
+        event(&mut app, KeyCode::Down, KeyModifiers::NONE);
+        assert_eq!(app.welcome.forms[&tab].focus, Field::Task);
+        assert_eq!(app.welcome.forms[&tab].task_editor.cursor, "first\nsecond".len());
+        event(&mut app, KeyCode::Down, KeyModifiers::NONE);
+        assert_eq!(app.welcome.forms[&tab].focus, Field::Agent);
+        event(&mut app, KeyCode::Up, KeyModifiers::NONE);
+        assert_eq!(app.welcome.forms[&tab].focus, Field::Task);
+        event(&mut app, KeyCode::Home, KeyModifiers::CONTROL);
+        event(&mut app, KeyCode::Up, KeyModifiers::NONE);
+        assert_eq!(app.welcome.forms[&tab].focus, Field::Terminal);
+        assert_eq!(app.welcome.forms[&tab].draft.task, "first\nsecond");
+    }
+
+    #[tokio::test]
+    async fn escape_leaves_a_rejected_task_and_restores_plain_prefix_navigation() {
+        let mut app = app();
+        ensure(&mut app, None, None);
+        let tab = app.tab().id.clone();
+        let mut form = take_active(&mut app).unwrap();
+        form.task_editor.insert(&mut form.draft.task, "fsf");
+        set_engine(&mut form, "terminal");
+        form.focus = Field::Task;
+        store_form(&mut app, form);
+        render(&mut app);
+        event(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+        assert_eq!(app.welcome.forms[&tab].focus, Field::Create);
+        event(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+        assert!(app.welcome.forms[&tab].error.contains("cannot start with a task"));
+        event(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+        assert_eq!(app.welcome.forms[&tab].focus, Field::Agent);
+        assert!(!editing(&app));
+        assert_eq!(app.welcome.forms[&tab].draft.task, "fsf");
+        assert!(app.welcome.forms[&tab].error.is_empty());
+        app.keymap.prefix = crate::keys::parse("`").unwrap();
+        event(&mut app, KeyCode::Char('`'), KeyModifiers::NONE);
+        assert!(app.prefix, "Escape must release the task's ownership of plain keys");
+    }
+
+    #[tokio::test]
+    async fn unsupported_empty_task_rejects_text_and_paste_but_allows_navigation() {
+        let mut app = app();
+        ensure(&mut app, None, None);
+        let tab = app.tab().id.clone();
+        let mut form = take_active(&mut app).unwrap();
+        set_engine(&mut form, "terminal");
+        form.focus = Field::Task;
+        store_form(&mut app, form);
+        render(&mut app);
+        event(&mut app, KeyCode::Char('x'), KeyModifiers::NONE);
+        crate::input::handle(&mut app, crossterm::event::Event::Paste("do not execute this".into()));
+        assert!(app.welcome.forms[&tab].draft.task.is_empty());
+        event(&mut app, KeyCode::Down, KeyModifiers::NONE);
+        assert_eq!(app.welcome.forms[&tab].focus, Field::Agent);
+    }
+
+    #[tokio::test]
+    async fn escape_returns_to_the_previous_window_without_discarding_the_new_window_draft() {
+        let mut app = app();
+        let first = app.tab().id.clone();
+        app.new_tab();
+        ensure(&mut app, None, None);
+        let second = app.tab().id.clone();
+        crate::input::handle(&mut app, crossterm::event::Event::Paste("unfinished task".into()));
+        event(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+        assert_eq!(app.tab().id, second, "first Escape leaves text editing");
+        event(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+        assert_eq!(app.tab().id, first, "second Escape returns to the previous window");
+        assert_eq!(app.welcome.forms[&second].draft.task, "unfinished task");
+        let index = app.tabs.iter().position(|t| t.id == second).unwrap();
+        app.select_tab(index);
+        assert_eq!(app.welcome.forms[&second].draft.task, "unfinished task");
     }
 
     #[tokio::test]
@@ -284,6 +511,19 @@ mod tests {
         assert!(matches!(app.modal, Some(Modal::Confirm { .. })));
         assert_eq!(app.welcome.forms[&first].error, "Only the first window");
         assert!(app.welcome.forms[&second].error.is_empty());
+    }
+
+    #[tokio::test]
+    async fn forwarded_prefix_edits_a_welcome_tab_without_a_backing_pane() {
+        let mut app = app();
+        ensure(&mut app, None, Some("/work/project".into()));
+        let tab = app.tab().id.clone();
+        assert!(app.focused().is_none());
+        paste(&mut app, "word.");
+        event(&mut app, KeyCode::Char('b'), KeyModifiers::CONTROL);
+        event(&mut app, KeyCode::Char('b'), KeyModifiers::CONTROL);
+        event(&mut app, KeyCode::Char('!'), KeyModifiers::NONE);
+        assert_eq!(app.welcome.forms[&tab].draft.task, "word!.");
     }
 
     #[tokio::test]
@@ -333,7 +573,7 @@ mod tests {
         assert_eq!(app.welcome.forms[&tab].draft.machine, crate::local::MACHINE);
         app.fleet.local_id = "registered-local".into();
         app.fleet.machines.push(crate::fleet::Machine {
-            id: "registered-local".into(), name: "office".into(), local: true,
+            id: "registered-local".into(), name: "office".into(), local: true, shared: false,
             status: "online".into(), reach: crate::fleet::Reach::Ready,
         });
         super::super::refresh(&mut app);

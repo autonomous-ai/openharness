@@ -469,6 +469,7 @@ describe('harness login --json', () => {
         '/api/auth/qr/poll': () => ({ status: 'approved', email: 'dee@example.com' }),
         '/api/auth/qr/claim': () => ({ token: 'tok_qr', refreshToken: 'r', expiresIn: 3600, email: 'dee@example.com' }),
         '/api/auth/qr/cancel': () => ({ cancelled: true }),
+        '/api/auth/me': () => ({ user: { id: 'acct_qr' } }),
       },
       // Held open so the app's pipe has closed well before the sign-in is done.
       resolveComputer: () => later(500, { machine: { machineId: 'm_qr' } }),
@@ -481,7 +482,8 @@ describe('harness login --json', () => {
     expect(await login.exit).toBe(0)
     const session = JSON.parse(readFileSync(join(root, 'auth', 'session.json'), 'utf8')) as Record<string, unknown>
     // A sign-in by hand: a sign-in epoch of its own, which the device key log keeps its marks by.
-    expect(session).toMatchObject({ accessToken: 'tok_qr', method: 'qr', signInEpoch: expect.stringMatching(/^[0-9a-f]{32}@\d+$/) })
+    // And the account it was made to, which lets the device key log start over for it at any time.
+    expect(session).toMatchObject({ accessToken: 'tok_qr', method: 'qr', signInEpoch: expect.stringMatching(/^[0-9a-f]{32}@\d+$/), signInAcct: 'acct_qr' })
     expect(calls.map((c) => c.url)).not.toContain('/api/auth/qr/cancel')
   }, 30_000)
 
@@ -504,11 +506,15 @@ describe('harness login --json', () => {
     const root = tempRoot()
     seedSession(root)
     const gridCalls = recordingGrid(root)
-    const { base } = await fakeBackend({
+    const { base, calls } = await fakeBackend({
       resolveComputer: () => ({ machine: { machineId: 'm_seeded' } }),
+      routes: { '/api/auth/me': () => ({ user: { id: 'acct_other' } }) },
     })
     const result = await runAsync(root, ['login', '--json'], base)
     expect(result.status).toBe(0)
+    // Not a sign-in by hand: the account it was made to is not asked again, nor written.
+    expect(calls.map((c) => c.url)).not.toContain('/api/auth/me')
+    expect(JSON.parse(readFileSync(join(root, 'auth', 'session.json'), 'utf8'))).not.toHaveProperty('signInAcct')
     const lines = result.stdout.trim().split('\n').map((l) => JSON.parse(l))
     // Harness only: grid is an add-on, signed in the first time a grid feature is used — so the line
     // says nothing about grid, and not one `grid` command ran, though a `grid` was right there.
@@ -568,6 +574,8 @@ describe('harness login --json', () => {
       await login.exit
       const session = JSON.parse(readFileSync(join(root, 'auth', 'session.json'), 'utf8')) as Record<string, unknown>
       expect(session.clientId).toBe(kept)
+      // `/api/auth/me` is not answered here: the sign-in goes on, with no account recorded.
+      expect(session).not.toHaveProperty('signInAcct')
     }
   }, 45_000)
 
@@ -578,6 +586,7 @@ describe('harness login --json', () => {
       authorizeNative: (body) => { capturedRedirectUri = body.redirectUri; return { authorizeUrl: 'https://sso.example.test/authorize?tx=abc', tx: 'tx_abc' } },
       exchange: () => ({ token: 'tok_new', refreshToken: 'refresh_new', expiresIn: 3600, autonomousEnv: 'prod' }),
       resolveComputer: () => ({ machine: { machineId: 'm_new' } }),
+      routes: { '/api/auth/me': () => ({ user: { id: 'acct_new' } }) },
     })
 
     const gridCalls = recordingGrid(root)
@@ -614,6 +623,7 @@ describe('harness login --json', () => {
     expect(lines[1]).toEqual({ type: 'result', status: 'success', fingerprint: expect.stringMatching(FP) })
     expect(lines[1].fingerprint).toBe(fingerprintOnDisk(root))
     expect(existsSync(gridCalls)).toBe(false)
+    expect(JSON.parse(readFileSync(join(root, 'auth', 'session.json'), 'utf8'))).toMatchObject({ machineId: 'm_new', signInAcct: 'acct_new' })
   }, 15_000)
 
   it('already signed in with no key yet: makes the key and reports its fingerprint', async () => {

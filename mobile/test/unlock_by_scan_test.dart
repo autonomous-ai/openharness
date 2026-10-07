@@ -154,4 +154,40 @@ void main() {
       );
     },
   );
+
+  testWidgets(
+    'a frozen device list says so beside the password, with the way to review it',
+    (tester) async {
+      final (app, _) = await pump(tester, _Links(const CliLinkConnectResult()));
+      expect(find.text('Your device list needs a review.'), findsNothing);
+
+      app.deviceListNeedsReviewForTest = true;
+      await tester.pump();
+      expect(find.text('Your device list needs a review.'), findsOneWidget);
+      expect(find.byKey(const ValueKey('device-list-review')), findsOneWidget);
+      expect(
+        find.byKey(const Key('remote-password-connect-field')),
+        findsOneWidget,
+      );
+    },
+  );
+
+  testWidgets(
+    'too many devices on the account says so beside the password, with the way to the list',
+    (tester) async {
+      final (app, _) = await pump(tester, _Links(const CliLinkConnectResult()));
+      expect(find.textContaining('too many devices'), findsNothing);
+
+      app.deviceListTooManyForTest = true;
+      await tester.pump();
+      expect(
+        find.text(
+          'This device couldn’t join: your account has too many devices. Remove ones you no longer use.',
+        ),
+        findsOneWidget,
+      );
+      expect(find.textContaining('needs a review'), findsNothing);
+      expect(find.byKey(const ValueKey('device-list-review')), findsOneWidget);
+    },
+  );
 }

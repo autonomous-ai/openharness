@@ -111,6 +111,11 @@ void main() {
           ConnectionStatus.connected,
         ]);
         expect(conn.endpointKey, 'cloud:${relay.url}:test');
+        // Counted as the mobile app today (backend user_daily_client_presence).
+        expect(relay.dialledUris.single.queryParameters, {
+          'autonomousEnv': 'test',
+          'client': 'mobile',
+        });
       },
     );
 

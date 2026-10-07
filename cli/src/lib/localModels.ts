@@ -704,7 +704,7 @@ export class LocalModels {
   private async savedApps(): Promise<{ at: number; value: AppModel[] } | undefined> {
     try {
       const value = rows(JSON.parse(await readFile(this.appsFile, 'utf8'))).filter(a =>
-        str(a.id).startsWith('app:') && str(a.name) && ['ollama', 'lm-studio', 'llama.cpp'].includes(a.app) &&
+        (str(a.id).startsWith('app:') || str(a.id).startsWith('jev:ollama:')) && str(a.name) && ['ollama', 'lm-studio', 'llama.cpp'].includes(a.app) &&
         ['ollama', 'lm-studio', 'llama.cpp', 'grid'].includes(a.engine) && str(a.ref)) as AppModel[]
       return { at: 0, value }
     } catch { return undefined }
@@ -830,7 +830,7 @@ export class LocalModels {
         canStart: !inventoryError && !record, canStop: !inventoryError && !!record,
         operation: operation?.modelId === id ? operation : undefined, ...(running && !listed ? { gridAsleep: true } : {}) }
     }
-    for (const app of apps.filter(a => a.engine !== 'grid' || recorded(a.id))) {
+    for (const app of apps.filter(a => a.kind !== 'decision' && (a.engine !== 'grid' || recorded(a.id)))) {
       models.push(await appRow(app.id, app.name, app.app, records.find(r => r.modelId === app.id),
         { sizeBytes: app.sizeBytes, ...(app.quant ? { quant: app.quant } : {}) }))
     }
@@ -843,6 +843,10 @@ export class LocalModels {
     // Only those that can start here are offered: one this computer has no memory for is listed only once it
     // is here — running, downloaded, or part way.
     const jevBudget = modelBudget(this.device)
+    // An engine of ours the grid does not list is started again: the Grid app's `grid leave` took Kev off its grid
+    // while its llama-server ran on, and the row, neither serving nor startable, said only "Downloaded" [run].
+    const restartable = (row: LocalModel, record?: AppEngineRecord): Partial<LocalModel> =>
+      record && row.state !== 'running' && !inventoryError ? { canStart: true } : {}
     for (const jev of this.options.appEngines ? JEV_MODELS : []) {
       const record = jevRecords.find(r => r.modelId === jev.id)
       const quant = await this.jevQuant(jev, jevBudget)
@@ -850,7 +854,17 @@ export class LocalModels {
       const shown = quant ?? jev.quants[0]!
       const have = await this.fileComplete(shown.file, shown.size)
       const row = await appRow(jev.id, jev.name, 'llama.cpp', record, { sizeBytes: shown.size, quant: shown.quant, kind: 'decision' })
-      models.push({ ...row, app: GRID_LABEL, state: row.state === 'running' ? 'running' : have ? 'downloaded' : 'available' })
+      models.push({ ...row, app: GRID_LABEL, state: row.state === 'running' ? 'running' : have ? 'downloaded' : 'available', ...restartable(row, record) })
+    }
+    // Decision models another app downloaded (Ollama's tev1): listed whatever their size, since they are here —
+    // Start is what says when there is no memory for one. A record whose model has since gone keeps a row to stop it by.
+    for (const app of this.options.appEngines ? apps.filter(a => a.kind === 'decision') : []) {
+      const record = jevRecords.find(r => r.modelId === app.id)
+      const row = await appRow(app.id, app.name, app.app, record, { sizeBytes: app.sizeBytes, ...(app.quant ? { quant: app.quant } : {}), kind: 'decision' })
+      models.push({ ...row, ...restartable(row, record) })
+    }
+    for (const record of jevRecords.filter(r => !JEV_MODELS.some(j => j.id === r.modelId) && !apps.some(a => a.id === r.modelId))) {
+      models.push({ ...await appRow(record.modelId, record.name, record.engine, record, { kind: 'decision' }), canStart: false })
     }
     const freeDiskBytes = await statfs(join(this.home, 'models')).catch(() => statfs(this.home))
       .then(disk => disk.bavail * disk.bsize, () => undefined)
@@ -1116,8 +1130,9 @@ export class LocalModels {
   }
 
   /**
-   * A Jev model's Get, Start and Stop. Get is the whole of it: the weights, an engine that can serve them,
-   * and the model on the grid — so a person never meets "too old" for an engine they did not choose.
+   * A decision model's Get, Start and Stop. For a Jev model Get is the whole of it: the weights, an engine that
+   * can serve them, and the model on the grid — so a person never meets "too old" for an engine they did not
+   * choose. Another app's decision model (Ollama's tev1) is here already, so Start is all there is to it.
    *
    * ⚠️ Grid's own llama.cpp is updated in place (`grid engine install llama.cpp`) when it is older than
    * [MIN_JEV_BUILD], exactly as a missing one is installed for a chat model: nothing else upgrades the engine
@@ -1127,65 +1142,122 @@ export class LocalModels {
   private async performJev(grid: string, operation: ModelOperation,
     change: (stage: ModelOperation['stage']) => Promise<void>,
     must: (args: string[], message: string, output?: (chunk: string) => void) => Promise<void>): Promise<void> {
-    const jev = JEV_MODELS.find(m => m.id === operation.modelId)
-    const ops = this.options.appEngines
-    if (!jev || !ops) throw new ModelError('This model could not be checked. Refresh and try again.')
-    const records = await readAppRecords(this.appRecordsFile)
-    const record = records.find(r => r.modelId === jev.id && r.grid === grid)
-    const takeDown = async (started: AppEngineRecord) => {
-      await this.run(['--remote', 'leave', grid, '--engine', started.alias], undefined, 5 * 60_000)
-      await ops.stop(started)
-      await writeAppRecords(this.appRecordsFile, (await readAppRecords(this.appRecordsFile)).filter(r => !(r.modelId === jev.id && r.grid === grid)))
+    if (!this.options.appEngines) throw new ModelError('This model could not be checked. Refresh and try again.')
+    let record = (await readAppRecords(this.appRecordsFile)).find(r => r.modelId === operation.modelId && r.grid === grid)
+    // Start on one the grid does not serve takes its engine down first, and starts it again: its process may
+    // have gone with it, and a fresh start is the one path that checks every step.
+    if (record && operation.action === 'start' && !await this.decisionServing(grid, record)) {
+      await this.stopDecision(grid, record)
+      record = undefined
     }
     if (operation.action === 'stop') {
-      if (record) await takeDown(record)
+      if (record) await this.stopDecision(grid, record)
     } else if (!record) {
-      const quant = await this.jevQuant(jev, modelBudget(await this.readDevice()))
-      if (!quant) throw new ModelError(`This computer does not have the memory to run ${jev.name}. Close some apps, or choose a smaller model.`)
-      if (!await this.fileComplete(quant.file, quant.size)) {
-        await mkdir(join(this.home, 'models'), { recursive: true })
-        const disk = await statfs(join(this.home, 'models'))
-        if (disk.bavail * disk.bsize < quant.size + GiB) throw new ModelError('Free up disk space, then start again.')
-        await change('downloading')
-        let last = 0, progressWrites = Promise.resolve()
-        await must(['pull', `${jev.repo}:${quant.file}`], 'The download stopped. Start again to resume.', chunk => {
-          const matches = [...chunk.matchAll(/(\d+(?:\.\d+)?)\s*%/g)]
-          const percent = matches.length ? Number(matches.at(-1)![1]) : NaN
-          if (Number.isFinite(percent) && percent >= 0 && percent <= 100 && Date.now() - last > 500) {
-            last = Date.now(); operation.progress = percent / 100
-            progressWrites = progressWrites.then(() => this.save(grid, operation)).catch(() => {})
-          }
-        })
-        await progressWrites
-        if (!await this.fileComplete(quant.file, quant.size)) throw new ModelError('The download is incomplete. Start again to resume.')
-      }
-      if (operation.action === 'start') {
-        const binary = await this.jevEngine(jev, change, must)
-        await change('starting')
-        if (DOWN.has(await this.gridStatus(grid).catch(() => ''))) await must(['--remote', 'start', grid], 'Your grid could not start. Try again.')
-        const model: AppModel = { id: jev.id, name: jev.name, app: 'llama.cpp', engine: 'llama.cpp', ref: join(this.home, 'models', quant.file), binary, sizeBytes: quant.size }
-        let started: AppEngineRecord
-        try {
-          started = { spec: 1, modelId: jev.id, grid, name: jev.name, ...await ops.start(model, JEV_CONTEXT, join(this.options.stateDir, 'logs'), JEV_SLOTS) }
-        } catch (error) {
-          throw new ModelError(error instanceof AppStartError ? error.message : 'The model could not start. Try again.')
-        }
-        await writeAppRecords(this.appRecordsFile, [...(await readAppRecords(this.appRecordsFile)).filter(r => !(r.modelId === jev.id && r.grid === grid)), started])
-        const named = this.options.machineName?.()?.trim()
-        const joined = await this.run(['--remote', 'join', grid, '--at', `http://127.0.0.1:${started.port}/v1`, '-m', started.served,
-          '--advertise-as', started.alias, ...concurrencyArgs(await this.gridConcurrency(grid, false)),
-          ...(named && validArg(named) ? ['--name', named] : [])], undefined, 10 * 60_000)
-        if (!joined.ok) { await takeDown(started); throw new ModelError('The model could not join your grid. Try again.') }
-        await change('verifying')
-        try { await this.verifyDecision(grid, started.alias) } catch (error) {
-          await takeDown(started)
-          throw error instanceof ModelError ? error : new ModelError('The model did not answer. Try again.')
-        }
-      }
+      const jev = JEV_MODELS.find(m => m.id === operation.modelId)
+      const model = jev ? await this.getJev(grid, jev, operation, change, must) : await this.appDecision(operation.modelId)
+      await this.startIfAsked(grid, model, operation, change, must)
     }
     operation.phase = 'done'
     delete operation.progress
     await this.save(grid, operation)
+  }
+
+  /** [jev]'s weights, downloaded when they are not here; for a start, the model as Grid's llama.cpp runs it. */
+  /** Starts [model] when the operation is a Start. Its own function: in line after the awaits above, which throw
+   *  for a model this computer cannot run, v8 counted the branch as taken -33 times and the coverage gate read it
+   *  as never taken. */
+  private async startIfAsked(grid: string, model: AppModel | undefined, operation: ModelOperation,
+    change: (stage: ModelOperation['stage']) => Promise<void>,
+    must: (args: string[], message: string, output?: (chunk: string) => void) => Promise<void>): Promise<void> {
+    if (model && operation.action === 'start') await this.startDecision(grid, model, change, must)
+  }
+
+  private async getJev(grid: string, jev: JevModel, operation: ModelOperation,
+    change: (stage: ModelOperation['stage']) => Promise<void>,
+    must: (args: string[], message: string, output?: (chunk: string) => void) => Promise<void>): Promise<AppModel | undefined> {
+    const quant = await this.jevQuant(jev, modelBudget(await this.readDevice()))
+    if (!quant) throw new ModelError(`This computer does not have the memory to run ${jev.name}. Close some apps, or choose a smaller model.`)
+    if (!await this.fileComplete(quant.file, quant.size)) {
+      await mkdir(join(this.home, 'models'), { recursive: true })
+      const disk = await statfs(join(this.home, 'models'))
+      if (disk.bavail * disk.bsize < quant.size + GiB) throw new ModelError('Free up disk space, then start again.')
+      await change('downloading')
+      let last = 0, progressWrites = Promise.resolve()
+      await must(['pull', `${jev.repo}:${quant.file}`], 'The download stopped. Start again to resume.', chunk => {
+        const matches = [...chunk.matchAll(/(\d+(?:\.\d+)?)\s*%/g)]
+        const percent = matches.length ? Number(matches.at(-1)![1]) : NaN
+        if (Number.isFinite(percent) && percent >= 0 && percent <= 100 && Date.now() - last > 500) {
+          last = Date.now(); operation.progress = percent / 100
+          progressWrites = progressWrites.then(() => this.save(grid, operation)).catch(() => {})
+        }
+      })
+      await progressWrites
+      if (!await this.fileComplete(quant.file, quant.size)) throw new ModelError('The download is incomplete. Start again to resume.')
+    }
+    if (operation.action !== 'start') return undefined
+    return { id: jev.id, name: jev.name, app: 'llama.cpp', engine: 'llama.cpp', ref: join(this.home, 'models', quant.file),
+      binary: await this.jevEngine(jev, change, must), sizeBytes: quant.size }
+  }
+
+  /** Another app's decision model, from the last scan — or a new one, when the model clicked is not in it — once
+   *  its app is new enough and this computer has the memory for it. */
+  private async appDecision(modelId: string): Promise<AppModel> {
+    let apps = await this.apps()
+    if (!apps.some(a => a.id === modelId)) apps = await this.scanApps()
+    const app = apps.find(a => a.id === modelId && a.kind === 'decision')
+    if (!app) throw new ModelError('This model could not be checked. Refresh and try again.')
+    const label = APP_LABEL[app.app]
+    if (app.needs) throw new ModelError(`${app.name} needs ${label} ${app.needs} or newer. Update ${label}, then start again.`)
+    const budget = modelBudget(await this.readDevice())
+    if (budget !== undefined && jevMemory(app.sizeBytes) > budget) {
+      throw new ModelError(`This computer does not have the memory to run ${app.name}. Close some apps, or choose a smaller model.`)
+    }
+    return app
+  }
+
+  /** Runs decision [model] on its own loopback port with [JEV_SLOTS] slots and joins it to [grid] `--at`, beside
+   *  whatever runs there; up once a decision through the grid is answered, and taken down when it is not. */
+  private async startDecision(grid: string, model: AppModel,
+    change: (stage: ModelOperation['stage']) => Promise<void>,
+    must: (args: string[], message: string) => Promise<void>): Promise<void> {
+    await change('starting')
+    if (DOWN.has(await this.gridStatus(grid).catch(() => ''))) await must(['--remote', 'start', grid], 'Your grid could not start. Try again.')
+    let started: AppEngineRecord
+    try {
+      started = { spec: 1, modelId: model.id, grid, name: model.name,
+        ...await this.options.appEngines!.start(model, JEV_CONTEXT, join(this.options.stateDir, 'logs'), JEV_SLOTS) }
+    } catch (error) {
+      throw new ModelError(error instanceof AppStartError ? error.message : 'The model could not start. Try again.')
+    }
+    await writeAppRecords(this.appRecordsFile, [...(await readAppRecords(this.appRecordsFile)).filter(r => !(r.modelId === model.id && r.grid === grid)), started])
+    const named = this.options.machineName?.()?.trim()
+    const joined = await this.run(['--remote', 'join', grid, '--at', `http://127.0.0.1:${started.port}/v1`, '-m', started.served,
+      '--advertise-as', started.alias, ...concurrencyArgs(await this.gridConcurrency(grid, false)),
+      ...(named && validArg(named) ? ['--name', named] : [])], undefined, 10 * 60_000)
+    if (!joined.ok) { await this.stopDecision(grid, started); throw new ModelError('The model could not join your grid. Try again.') }
+    await change('verifying')
+    try { await this.verifyDecision(grid, started.alias) } catch (error) {
+      await this.stopDecision(grid, started)
+      throw error instanceof ModelError ? error : new ModelError('The model did not answer. Try again.')
+    }
+  }
+
+  /** Whether [record]'s engine is up and [grid] lists it — or the grid sleeps, which lists nothing, and it is parked. */
+  private async decisionServing(grid: string, record: AppEngineRecord): Promise<boolean> {
+    if (!await this.options.appEngines!.alive(record)) return false
+    const inventory = await this.options.inventory(grid, true).catch(() => null)
+    // Unread is not "not served": an engine that may be serving is never taken down on a guess.
+    if (!inventory || (inventory.state === 'unknown' && !DOWN.has(inventory.status ?? ''))) return true
+    if (inventory.state === 'asleep' || inventory.status === 'asleep') return true
+    return rows(inventory.nodes).some(n => n.online === true && (Array.isArray(n.models) ? n.models : [])
+      .some((m: unknown) => modelKey(str(typeof m === 'string' ? m : obj(m).model)) === modelKey(record.alias)))
+  }
+
+  /** A decision engine off [grid], stopped, and its record gone. */
+  private async stopDecision(grid: string, started: AppEngineRecord): Promise<void> {
+    await this.run(['--remote', 'leave', grid, '--engine', started.alias], undefined, 5 * 60_000)
+    await this.options.appEngines?.stop(started)
+    await writeAppRecords(this.appRecordsFile, (await readAppRecords(this.appRecordsFile)).filter(r => !(r.modelId === started.modelId && r.grid === grid)))
   }
 
   /** Grid's llama-server, brought up to a build that runs [jev] first when it is older (or missing). */

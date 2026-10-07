@@ -470,7 +470,9 @@ class _GridModelPickerState extends State<GridModelPicker> {
   /// Unless it has something to SAY ([SectionWords.speaks] — only ever from a newer daemon).
   List<GridSection> _sectionsToDraw(GridModels answer) {
     final sections = answer.sections
-        .where((s) => s.own || s.models.isNotEmpty || sectionWords(s).speaks)
+        .where(
+          (s) => s.own || s.harnessModels.isNotEmpty || sectionWords(s).speaks,
+        )
         .toList();
     if (sections.any((s) => s.own)) return sections;
     return [
@@ -690,9 +692,9 @@ class _ModelPickerPanelState extends State<_ModelPickerPanel>
   /// zeus" is the same question as "where is DeepSeek", and a search that read only ids would
   /// answer one of them.
   List<GridModel> _matching(GridSection section) {
-    if (_needle.isEmpty) return section.models;
+    if (_needle.isEmpty) return section.harnessModels;
     final needle = _needle.toLowerCase();
-    return section.models
+    return section.harnessModels
         .where(
           (m) =>
               m.id.toLowerCase().contains(needle) ||

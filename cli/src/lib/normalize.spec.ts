@@ -253,3 +253,19 @@ describe('harness web tools render as the native cards', () => {
     expect(events.find((e) => e.type === 'tool_start')).toMatchObject({ payload: { tool: 'mcp__github__get_issue', input: { number: 1 } } })
   })
 })
+
+describe('the turns a transcript opens, counted', () => {
+  // What a Stop hook checks it closes only the turn it arrived during (core/turns/turnHooks.ts).
+  it('counts each turn a prompt or a blocking Stop hook opens, and nothing else', () => {
+    const state = newTurnState()
+    lineToEvents(userPrompt('one'), state)
+    lineToEvents(assistantText('done', 'end_turn'), state)
+    expect(state.opened).toBe(1)
+    lineToEvents(userPrompt('two'), state)
+    lineToEvents(JSON.stringify({ type: 'attachment', attachment: { type: 'goal_status', met: false, condition: 'tests pass', reason: 'one fails' } }), state)
+    expect(state.opened).toBe(2)
+    lineToEvents(assistantText('passed', 'end_turn'), state)
+    lineToEvents(JSON.stringify({ type: 'attachment', attachment: { type: 'goal_status', met: false, condition: 'tests pass', reason: 'one fails' } }), state)
+    expect(state.opened).toBe(3)
+  })
+})

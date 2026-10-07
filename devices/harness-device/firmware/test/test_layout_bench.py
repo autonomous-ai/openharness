@@ -75,7 +75,7 @@ with tempfile.TemporaryDirectory(prefix='harness-layout-bench-') as d:
         defines=[f'-DDEVICE_LAYOUT_BASELINE{baseline}=1'] if baseline!=48 else []
         sources=[f'reference{baseline}/terminal_ref.c'] if baseline!=82 else []
         if baseline==48: sources+=['reference48/octopus_ref.c']
-        subprocess.run(['cc','-std=c11','-Wall','-Wextra','-Werror','-O1','-g','-DDEVICE_LAYOUT_BENCH=1',*defines,
+        subprocess.run(['cc','-std=c11', '-D_POSIX_C_SOURCE=200809L','-Wall','-Wextra','-Werror','-O1','-g','-DDEVICE_LAYOUT_BENCH=1',*defines,
         '-fsanitize='+os.environ.get('SANITIZERS','undefined,bounds'),'-I',str(native),'-I',str(Path(__file__).resolve().parent),
         str(out/'bench.c'),*[str(native/f) for f in ['octopus.c','ascii_clip.c','octopus_font.c','tim.c','character_motion.c','character_layout.c','terminal.c','fonts.c']],
         *[str(Path(__file__).resolve().parent/f) for f in sources],

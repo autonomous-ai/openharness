@@ -173,12 +173,13 @@ Security reports go through [SECURITY.md](SECURITY.md).
    to select checks, bound their runtime, and reuse results. Say exactly what ran and what did not.
 3. **Make it reproducible.** Use the PR template to describe the result, how to try it, and the
    validation. Remove credentials and private project content from logs and recordings.
-4. **Review together.** A maintainer checks the change and may ask you to refine it. CI is
-   currently run manually through **Actions → CI → Run workflow**; a PR does not automatically
-   exercise the app, real engines, or hardware. Report those checks separately.
-5. **Merge and release.** PRs are squash-merged. Rebase on the latest `main` when needed to keep
-   the diff readable. Harness catalog changes publish automatically after merge. App, CLI, and
-   firmware releases have their own schedules.
+4. **Review together.** A maintainer checks the change while automatic CI selects complete
+   component suites from its Git diff. Native, browser, real-engine and hardware acceptance
+   still need the checks relevant to the change; report those separately.
+5. **Merge and release.** Reviewed PRs enter the merge queue, which validates them with current
+   `main` and changes ahead in the queue before squash merging. Rebase to resolve conflicts;
+   ordinary main movement does not require another manual validation/rebase cycle. Harness
+   catalog changes publish after merge; app, CLI and firmware releases keep their schedules.
 
 ## Conventions across this repository
 

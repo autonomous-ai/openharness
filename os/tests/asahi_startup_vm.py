@@ -47,10 +47,12 @@ assert '/dev/vda6' in run('cryptsetup','status','harness-root')
 assert run('findmnt','-no','SOURCE','/boot')=='/dev/vda5'
 assert run('findmnt','-no','SOURCE','/boot/efi')=='/dev/vda2'
 assert run('systemctl','--failed','--no-pager','--no-legend')==''
+boot_labels=['/boot/grub2/grub.cfg',*[str(p) for p in pathlib.Path('/boot/loader/entries').glob('*.conf')]]
+assert len(boot_labels)>1
 subprocess.run(['matchpathcon','-V','/etc/passwd','/etc/shadow','/etc/group','/etc/gshadow',
- '/etc/greetd/harness.toml','/home','/home/me'],check=True)
+ '/etc/greetd/harness.toml','/home','/home/me',*boot_labels],check=True)
 record={'kernel':run('uname','-r'),'root':run('findmnt','-no','SOURCE','/'),
- 'selinux':run('getenforce'),'failed_units':[],
+ 'selinux':run('getenforce'),'boot_labels_verified':boot_labels,'failed_units':[],
  'journal':run('journalctl','-b','--no-pager','-o','cat','-u','systemd-cryptsetup@harness\\\\x2droot.service')}
 pathlib.Path('/tmp/harness-startup-installed.json').write_text(json.dumps(record,indent=2)+'\\n')
 '''

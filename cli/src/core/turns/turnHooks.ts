@@ -22,6 +22,8 @@ import type { SessionNormalizers } from '../transcripts/normalizers.js'
 // only if the turn is still open after this grace + a re-poll do we force-close (by then the assistant
 // text is on disk, so the natural close usually wins and the recap isn't empty).
 export const STOP_HOOK_GRACE_MS = 1_500
+/** How many sessions' latest prompt hooks are remembered. */
+const PROMPT_HOOKS_KEPT = 512
 
 export interface TurnHookDeps {
   resolve: (id: string) => RegisteredSession | undefined
@@ -54,10 +56,19 @@ export function createTurnHooks({
     if (!normalizer) return
     emit(sessionId, normalizer.openTurn())   // no-op after the turn's first tool call
   }
+  /** When each session's latest prompt hook was run by its engine: a Stop run before it is about an earlier
+   *  turn. Bounded: a session's entry outlives it only until enough newer ones come. */
+  const promptFiredAt = new Map<string, number>()
+  const onPromptHook = (sessionId: string, firedAt: number): void => {
+    if (firedAt <= (promptFiredAt.get(sessionId) ?? 0)) return
+    promptFiredAt.delete(sessionId)
+    promptFiredAt.set(sessionId, firedAt)
+    if (promptFiredAt.size > PROMPT_HOOKS_KEPT) promptFiredAt.delete(promptFiredAt.keys().next().value!)
+  }
   const onToolStart = ({ sessionId, toolUseId, toolName, input: toolInput }: { sessionId: string; toolUseId: string; toolName: string; input: unknown }): void => {
     if (toolName === 'Task') onCursorTaskStart(sessionId, toolUseId, toolInput)
   }
-  const onTurnStop = ({ sessionId, status }: { sessionId: string; status?: string }): void => {
+  const onTurnStop = ({ sessionId, status, firedAt }: { sessionId: string; status?: string; firedAt?: number }): void => {
     const session = resolve(sessionId)
     if (!session) return
     if (session.engine === 'cursor') {
@@ -195,6 +206,18 @@ export function createTurnHooks({
     // turn_duration: the Stop of the pass before it reached the daemon 520 ms after it began (end to end,
     // under load) and force-closed it while it ran. Only a StopFailure still closes one here.
     const leftToTranscript = (st: TurnState): boolean => st.continued === true && status !== 'error'
+    // A Stop closes only the turn it is about. Found by the soak run (e2e/endurance.e2e.ts): under load a turn's
+    // Stop reached the daemon 6 s late, after the next prompt's turn had opened, and force-closed that turn
+    // with a question open in it, which was then never shown. So:
+    // - a Stop its engine ran before the session's latest prompt hook is about an earlier turn, and closes
+    //   nothing (the time each hook was run comes with it, hook/notify.mjs);
+    // - otherwise it is about the turn open as it arrives, and not one opened after that (read in the drain
+    //   below), whose prompt hook has not come in yet; a StopFailure closes whichever turn is open.
+    // A turn left open with no end of its own is closed by the next prompt (lib/normalize.ts).
+    const stale = firedAt !== undefined && (promptFiredAt.get(sessionId) ?? 0) > firedAt
+    const arrived = turnStates.get(sessionId)
+    const about = arrived?.turnOpen ? arrived.opened ?? 0 : null
+    const itsTurn = (st: TurnState): boolean => !stale && (status === 'error' || (st === arrived && about !== null && (st.opened ?? 0) === about))
     void (async () => {
       await drain(sessionId)
       // A Stop hook is the one precise "the engine stopped writing" signal we get. When the mirror is
@@ -203,13 +226,13 @@ export function createTurnHooks({
       // to the punch (measured: recap at 10:18:41, wrap-up written at 10:18:44).
       mirror.noteEngineStopped(sessionId)
       const open = turnStates.get(sessionId)
-      if (!open?.turnOpen || leftToTranscript(open)) return // natural JSONL close already won → nothing to do
+      if (!open?.turnOpen || leftToTranscript(open) || !itsTurn(open)) return // natural JSONL close already won → nothing to do
       // Still open: the transcript may just be lagging the Stop hook. Wait, re-poll, and only force-close
       // if it STILL hasn't closed — a genuinely wedged turn, whose assistant text is on disk by now.
       await new Promise((r) => setTimeout(r, STOP_HOOK_GRACE_MS))
       await drain(sessionId)
       const st = turnStates.get(sessionId)
-      if (st?.turnOpen && !leftToTranscript(st)) {
+      if (st?.turnOpen && !leftToTranscript(st) && itsTurn(st)) {
         st.turnOpen = false
         st.pendingTools.clear()
         console.log(`[turn] ${sid(sessionId)} force-closed by ${status === 'error' ? 'StopFailure' : 'Stop'} hook (after grace)`)
@@ -219,5 +242,5 @@ export function createTurnHooks({
       console.error('[hooks] claude stop hook failed:', err instanceof Error ? err.message : err)
     })
   }
-  return { onTurnStart, onToolStart, onTurnStop }
+  return { onTurnStart, onToolStart, onTurnStop, onPromptHook }
 }

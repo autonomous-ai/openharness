@@ -58,6 +58,11 @@ export interface GroupSyncerDeps {
   suspended?: () => ReadonlySet<string>
   /** Machines worth dialing now; null = unknown, try every member. */
   reachable?: () => Set<string> | null
+  /** Whether the roster here is the account's this machine is signed in to (deviceLogSyncer `current`).
+   *  While not, nothing is swapped: a daemon started after a switch of accounts read the new account's
+   *  log only after its first rounds, and handed the roster of the account it left to the new one's
+   *  machines. */
+  ready?: () => boolean
   now?: () => number
   log?: (line: string) => void
 }
@@ -69,6 +74,8 @@ export class GroupSyncer {
   private fanOutTimer: ReturnType<typeof setTimeout> | null = null
   private periodic: ReturnType<typeof setInterval> | null = null
   private retryRound = 0
+  /** Bumped when the account changes: an exchange started before is not merged into the new roster. */
+  private generation = 0
   /** Set once the device key log is wired up; the exchange works without it, as with an older peer. */
   devlog: GroupSyncLogGossip | null = null
   /** A member the GROUP removed (a tombstone that arrived by `group_sync` — from a device that
@@ -97,6 +104,14 @@ export class GroupSyncer {
   }
 
   roster(): Roster { return this.deps.store.read() }
+
+  /** The trust stores were swapped for another account's (accountTrust.ts): who was synced, and what is
+   *  on its way, belong to the one left. */
+  reset(): void {
+    this.generation++
+    this.lastSynced.clear()
+    this.inFlight.clear()
+  }
 
   /** A device just linked to or from this machine over the remote password: it joins the group, and the
    *  rest of the group hears of it. */
@@ -184,6 +199,10 @@ export class GroupSyncer {
 
   /** Responder side of `group_sync`, for a sealed request from the session identity `peerPub`. */
   handle(peerPub: string, payload: Record<string, unknown>): Record<string, unknown> {
+    if (this.deps.ready?.() === false) {
+      const none: Roster = { members: [], removed: [] }
+      return { ...none, digest: rosterDigest(none) }
+    }
     const now = this.now()
     const incoming = parseRoster(payload, now)
     const self = parseMember(payload.self, now)
@@ -211,6 +230,7 @@ export class GroupSyncer {
 
   /** Every reachable machine member (and every machine pinned outside the roster), one at a time. */
   async syncAll(): Promise<void> {
+    if (this.deps.ready?.() === false) { this.retryLater(); return }
     // Put back any pin the relay dropped. A member can hear of another before that one hears of it,
     // and its first dial is then refused — remoteRelay.ts unlinks a peer that answers e2e_denied. The
     // roster still says they belong together, so they are re-pinned and tried again on this round.
@@ -229,6 +249,10 @@ export class GroupSyncer {
     const members = new Set(this.deps.store.read().members.map((m) => m.machineId))
     const missed = due.some((machineId, i) => !answered[i] && members.has(machineId))
     if (!missed) { this.retryRound = 0; return }
+    this.retryLater()
+  }
+
+  private retryLater(): void {
     const delay = RETRY_MS[this.retryRound]
     if (delay === undefined) return // the periodic round takes over
     this.retryRound++
@@ -237,7 +261,8 @@ export class GroupSyncer {
 
   private async exchange(machineId: string): Promise<boolean> {
     const pin = this.deps.peers.get(machineId)
-    if (!pin) return false
+    if (!pin || this.deps.ready?.() === false) return false
+    const generation = this.generation
     const local = this.deps.store.read()
     const devlog = this.devlog?.gossip()
     const reply = await this.deps.request(machineId, {
@@ -247,7 +272,7 @@ export class GroupSyncer {
         ...(devlog ? { devlog } : {}),
       },
     }, SYNC_TIMEOUT_MS).catch(() => null)
-    if (!reply) return false
+    if (!reply || generation !== this.generation) return false
     this.lastSynced.set(machineId, this.now())
     const payload = (reply.payload ?? {}) as Record<string, unknown>
     if (typeof payload.error === 'string') return false

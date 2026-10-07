@@ -25,18 +25,23 @@ For product names, terminology, and visible copy, follow the
   validation cycle. Verify published versions and checksums, then report completion.
   Desktop's `--wait` follows the exact tag/SHA through the workflow's six-artifact
   verification; reuse that receipt instead of repeating the downloads manually.
-- Prepare the PR and review while checks run. For an authorized merge after review
-  and required non-CI checks, use `make merge-pr` with the reviewed head/main SHAs,
-  CI run/scope, and `--merge` (see the validation guide). It collects CI evidence,
-  rechecks the source, merges, and verifies the resulting tree. For evidence only,
-  use `scripts/record-ci-validation.py RUN_ID --scope SCOPE --pr PR_NUMBER --wait`.
-  Retain routine results in the ignored receipt and PR body instead of another
-  documentation commit. Resolve source differences explicitly before reusing evidence.
-  Process and Desktop VM CI can retain the original run across unrelated changes
-  when their verified source-input contracts match; pass that run to the same
-  collector/merge helper. Check its changed-path list and validate other affected
-  scopes separately. Changes to included tests, dependencies or workflows require
-  new evidence; see the validation guide for the complete input boundaries.
+- Prepare the PR and complete code/native review while automatic CI runs. For an
+  agent implementation in progress, push to a draft PR: CI runs cheap workflow
+  and process checks. Mark ready after targeted local checks to start complete
+  affected suites, and keep the revision stable while CI and review finish.
+  The integration gate remains blocked on drafts. For an authorized merge, use
+  `make merge-pr` with the reviewed head/base SHAs and
+  `--queue --merge`; it enqueues the exact reviewed head, follows the queue and
+  verifies the merged tree against successful merge-group CI. Main advancing
+  does not invalidate the review base; the queue checks the combined candidate.
+  GitHub approval requirements remain as configured; this does not introduce
+  an additional human approval count. Keep review independent of implementation.
+  Existing `--run/--scope` commands automatically select queue mode when the
+  target's merge-queue rule is enabled; direct mode remains for rollout only.
+  For evidence outside the queue, use `scripts/record-ci-validation.py` and the
+  existing verified Process/Desktop source-input contracts. Other affected
+  native, browser, engine and hardware checks remain explicit review requirements.
+  Never replay an uncertain enqueue/merge mutation; inspect the same PR first.
 - For an authorized Desktop release, start `make release-desktop ARGS="--prepare"`
   from the final pushed PR branch alongside validation and review. It prepares
   verified packages without publishing; merge and release only after checks pass.

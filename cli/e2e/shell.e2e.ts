@@ -84,6 +84,7 @@ describe('opening connected shells', () => {
     expect(created).toMatchObject({ state: 'created', agent: { engine: 'terminal', terminal: { available: true } } })
     await written(fixture)
     expect(await phone.request('shell_open_status', fixture.payload)).toMatchObject({ state: 'created', agent: { id: created.agent.id } })
+    expect(await phone.request('shell_visit_status', { agentId: created.agent.id })).toMatchObject({ exited: false })
     expect(await phone.request('shell_open', { ...fixture.payload, creationId: randomUUID(), command: 'echo unsafe' })).toMatchObject({ error: 'INVALID_ARGV' })
     for (const type of SHELL_REQUESTS) {
       const requestId = randomUUID()
