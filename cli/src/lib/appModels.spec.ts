@@ -1,18 +1,17 @@
 import { describe, expect, it } from 'vitest'
-import { APP_CONTEXT, appContext, cacheName, llamaServerArgs, scanAppModels } from './appModels.js'
+import { APP_CONTEXT, appContext, appEngineOps, cacheName, llamaServerArgs, lmsKey, scanAppModels } from './appModels.js'
 
 const GiB = 1024 ** 3
 const grid = { kind: 'llama.cpp', path: '/home/me/.grid/bin/llama-server', version: 'version: 10369', note: "Grid's own engine" }
 const gguf = (over: Record<string, unknown> = {}) => ({ format: 'gguf', bytes: 2 * GiB, quant: 'Q4_K_M',
   gguf: { contextLength: 131072, toolCalls: true, kvBytesPerToken: 114688 }, ...over })
 
-/** `fleet models --json` and `lms ls --json` as the scan reads them; anything else fails. */
-function fake(found: Record<string, unknown>, lms: unknown[] = []) {
+/** `fleet models --json` as the scan reads it; anything else fails. */
+function fake(found: Record<string, unknown>) {
   const seen: string[][] = []
   const run = async (file: string, args: string[]) => {
     seen.push([file, ...args])
     if (args.includes('models') && args.includes('--json')) return { ok: true, stdout: JSON.stringify(found), stderr: '' }
-    if (args[0] === 'ls') return { ok: true, stdout: JSON.stringify(lms), stderr: '' }
     return { ok: false, stdout: '', stderr: 'unexpected' }
   }
   return { run, seen }
@@ -73,26 +72,62 @@ describe('models other apps downloaded', () => {
     ])
   })
 
-  it("lists LM Studio's models from `lms ls`, the only place that names the key `lms load` takes", async () => {
-    const lms = '/home/me/.lmstudio/bin/lms'
-    const { run } = fake({
-      machine: { canRun: ['llama.cpp', 'mlx-lm', 'ollama', 'lm-studio'], engines: [grid, { kind: 'lm-studio', path: lms, version: null }] },
-      // The scan's view of the same files is not used: it knows paths, not keys.
-      models: [gguf({ name: 'gemma-4-E2B-it-Q4_K_M', source: 'lm-studio', path: '/s/g.gguf', startWith: { engine: 'lm-studio', label: 'lm-studio' } })],
-    }, [
-      { type: 'llm', modelKey: 'google/gemma-4-e2b', format: 'gguf', sizeBytes: 4414806160, trainedForToolUse: true, maxContextLength: 131072 },
-      { type: 'llm', modelKey: 'mlx-community/qwen3-4b', format: 'mlx', sizeBytes: 2e9, maxContextLength: 262144 },
-      { type: 'embedding', modelKey: 'text-embedding-nomic', format: 'gguf', sizeBytes: 84106624, maxContextLength: 2048 },
-      { type: 'llm', modelKey: 'old/short', format: 'gguf', sizeBytes: 1e9, maxContextLength: 8192 },
-      { type: 'llm', modelKey: 'org/no-tools', format: 'gguf', sizeBytes: 1e9, maxContextLength: 131072, trainedForToolUse: false },
-    ])
+  it("lists LM Studio's models from its folders on disk and never runs `lms`, which would start LM Studio", async () => {
+    const lms = '/home/me/.lmstudio/bin/lms', root = '/home/me/.lmstudio/models'
+    const { run, seen } = fake({
+      machine: { canRun: ['llama.cpp', 'mlx-lm', 'ollama', 'lm-studio'], engines: [grid,
+        { kind: 'ollama', path: '/usr/local/bin/ollama', version: '0.32.5' }, { kind: 'lm-studio', path: lms, version: null }] },
+      models: [
+        gguf({ name: 'gemma-4-E2B-it-Q4_K_M', source: 'lm-studio', path: `${root}/google/gemma-4-E2B-it-GGUF/gemma-4-E2B-it-Q4_K_M.gguf`,
+          startWith: { engine: 'lm-studio', label: 'lm-studio' } }),
+        { name: 'mlx-community/Qwen3-4B-4bit', format: 'mlx', source: 'lm-studio', bytes: 2e9, path: `${root}/mlx-community/Qwen3-4B-4bit`,
+          startWith: { engine: 'lm-studio', label: 'lm-studio' } },
+        // A file Ollama shares with LM Studio: the scan's Ollama model, with LM Studio's copy beside it.
+        gguf({ name: 'qwen3:8b', source: 'ollama', path: '/m/blobs/sha256-a', startWith: { engine: 'ollama', label: 'ollama' },
+          alsoAt: [{ source: 'lm-studio', path: `${root}/ollama-reuse/qwen3-8b/qwen3-8b.gguf`, name: null }] }),
+        gguf({ name: 'short', source: 'lm-studio', path: `${root}/old/short.gguf`, gguf: { contextLength: 8192, toolCalls: true } }),
+        gguf({ name: 'no-tools', source: 'lm-studio', path: `${root}/org/no-tools.gguf`, gguf: { contextLength: 131072, toolCalls: false } }),
+      ],
+    })
     const models = await scanAppModels({ node: '/node', packageDir: '/pkg', env: {}, run })
-    expect(models).toEqual([
-      { id: 'app:lm-studio:google/gemma-4-e2b', name: 'gemma-4-e2b', app: 'lm-studio', engine: 'lm-studio', ref: 'google/gemma-4-e2b', binary: lms,
-        sizeBytes: 4414806160, contextLength: 131072 },
-      { id: 'app:lm-studio:mlx-community/qwen3-4b', name: 'qwen3-4b', app: 'lm-studio', engine: 'lm-studio', ref: 'mlx-community/qwen3-4b', binary: lms,
-        sizeBytes: 2e9, contextLength: 262144 },
+    expect(seen).toEqual([['/node', '/pkg/toolchain/fleet.mjs', 'models', '--json']])
+    expect(models.filter(m => m.app === 'lm-studio')).toEqual([
+      { id: 'app:lm-studio:gemma-4-E2B-it-Q4_K_M.gguf', name: 'gemma-4-E2B-it-Q4_K_M', app: 'lm-studio', engine: 'lm-studio',
+        ref: `${root}/google/gemma-4-E2B-it-GGUF/gemma-4-E2B-it-Q4_K_M.gguf`, binary: lms,
+        sizeBytes: 2 * GiB, quant: 'Q4_K_M', contextLength: 131072, kvBytesPerToken: 114688 },
+      { id: 'app:lm-studio:Qwen3-4B-4bit', name: 'Qwen3-4B-4bit', app: 'lm-studio', engine: 'lm-studio', ref: `${root}/mlx-community/Qwen3-4B-4bit`,
+        binary: lms, sizeBytes: 2e9 },
+      { id: 'app:lm-studio:qwen3-8b.gguf', name: 'qwen3-8b', app: 'lm-studio', engine: 'lm-studio', ref: `${root}/ollama-reuse/qwen3-8b/qwen3-8b.gguf`,
+        binary: lms, sizeBytes: 2 * GiB, quant: 'Q4_K_M', contextLength: 131072, kvBytesPerToken: 114688 },
     ])
+  })
+
+  it("finds LM Studio's key for a file from `lms ls`, wherever its models folder is", () => {
+    const listed = [
+      { modelKey: 'qwen2.5-0.5b-instruct', path: 'Qwen/Qwen2.5-0.5B-Instruct-GGUF/qwen2.5-0.5b-instruct-q8_0.gguf' },
+      { modelKey: 'other', path: 'Qwen2.5-0.5B-Instruct-GGUF/qwen2.5-0.5b-instruct-q8_0.gguf' },
+      { modelKey: 'qwen3-4b', path: 'mlx-community\\Qwen3-4B-4bit' },
+    ]
+    expect(lmsKey(listed, '/Volumes/AI/lms/Qwen/Qwen2.5-0.5B-Instruct-GGUF/qwen2.5-0.5b-instruct-q8_0.gguf')).toBe('qwen2.5-0.5b-instruct')
+    expect(lmsKey(listed, 'C:\\Users\\me\\.lmstudio\\models\\mlx-community\\Qwen3-4B-4bit')).toBe('qwen3-4b')
+    expect(lmsKey(listed, '/home/me/.lmstudio/models/x/Qwen3-4B-4bit')).toBe('')
+  })
+
+  it('starts an LM Studio model by the key `lms ls` gives its file, and says so when LM Studio does not list it', async () => {
+    const lms = '/home/me/.lmstudio/bin/lms', file = '/home/me/.lmstudio/models/google/gemma-4-E2B-it-GGUF/gemma-4-E2B-it-Q4_K_M.gguf'
+    const model = { id: 'app:lm-studio:gemma-4-E2B-it-Q4_K_M.gguf', name: 'gemma-4-E2B-it-Q4_K_M', app: 'lm-studio' as const, engine: 'lm-studio' as const,
+      ref: file, binary: lms, sizeBytes: 2 * GiB }
+    const seen: string[][] = []
+    const run = async (_file: string, args: string[]) => {
+      seen.push(args)
+      if (args[0] === 'ls') return { ok: true, stdout: JSON.stringify([{ modelKey: 'google/gemma-4-e2b', path: 'google/gemma-4-E2B-it-GGUF/gemma-4-E2B-it-Q4_K_M.gguf' }]), stderr: '' }
+      if (args[0] === 'server') return { ok: true, stdout: JSON.stringify({ running: true, port: 1234 }), stderr: '' }
+      return { ok: true, stdout: '', stderr: '' }
+    }
+    const ops = appEngineOps({}, fetch, run)
+    expect(await ops.start(model, 65536, '/tmp/logs')).toMatchObject({ engine: 'lm-studio', served: model.name, port: 1234 })
+    expect(seen.find(args => args[0] === 'load')?.slice(0, 2)).toEqual(['load', 'google/gemma-4-e2b'])
+    await expect(ops.start({ ...model, ref: '/elsewhere/gone.gguf' }, 65536, '/tmp/logs')).rejects.toThrow('LM Studio does not list this model')
   })
 
   it('is no models, never an error, without the Model Manager or with a scan that fails', async () => {

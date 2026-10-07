@@ -22,7 +22,8 @@ export interface AppModel {
   id: string; name: string; app: AppEngine
   /** What starts it: its own app, or Grid's llama.cpp (`grid`) when that app is not installed here. */
   engine: AppEngine | 'grid'
-  /** Ollama: `name:tag`. LM Studio: its model key. llama.cpp and `grid`: the weights file. */
+  /** Ollama: `name:tag`. LM Studio: its file (an MLX model's folder), whose key Start looks up. llama.cpp and
+   *  `grid`: the weights file. */
   ref: string
   /** The app's own binary (`ollama`, `lms`, `llama-server`); absent for `grid`. */
   binary?: string
@@ -57,10 +58,9 @@ export function cacheName(name: string): string {
 }
 
 /**
- * The picker's models from other apps: Ollama's and llama.cpp's from the Model Manager's own scan
- * (`fleet models --json`, whose `startWith` is the rule), LM Studio's from `lms ls`, the only place that
- * names the key `lms load` takes. Only what a coding agent can run: 64K or more, tool calls not ruled out,
- * and a file the engine reads. A scan that fails is no models, never an error over the whole picker.
+ * The picker's models from other apps, all from the Model Manager's own scan of the disk (`fleet models
+ * --json`, whose `startWith` is the rule). Only what a coding agent can run: 64K or more, tool calls not
+ * ruled out, and a file the engine reads. A scan that fails is no models, never an error over the whole picker.
  */
 export async function scanAppModels({ node, packageDir, env, run = exec }: {
   node: string; packageDir: string | null; env: NodeJS.ProcessEnv; run?: Exec
@@ -100,23 +100,45 @@ export async function scanAppModels({ node, packageDir, env, run = exec }: {
   }
 
   if (lmsUsable) {
-    const listed = await run(lms, ['ls', '--json'], { env, timeout: 30_000 })
-    let models: Record<string, any>[] = []
-    try { models = listed.ok ? rows(JSON.parse(listed.stdout)) : [] } catch { /* none */ }
+    // LM Studio's models from its folders on disk, never from `lms ls`: every `lms` command starts LM Studio's
+    // background app, and the TUI reads this list every minute, so LM Studio came back a minute after the
+    // person quit it (2026-10-07, traced to `lms ls --json` run by harnessd-core). A file Ollama shares with
+    // LM Studio is the scan's Ollama model with LM Studio's copy in `alsoAt`, listed here as LM Studio's too.
     const canRun = Array.isArray(obj(found.machine).canRun) ? obj(found.machine).canRun as string[] : []
-    for (const m of models) {
-      const modelKey = str(m.modelKey)
-      if (m.type !== 'llm' || !safe(modelKey) || m.trainedForToolUse === false) continue
+    const ids = new Set<string>()
+    for (const m of rows(found.models)) {
+      if (m.missingFiles || m.error) continue
       if (!(m.format === 'gguf' || (m.format === 'mlx' && canRun.includes('lm-studio')))) continue
-      const context = num(m.maxContextLength)
-      if (context !== undefined && context < MIN_APP_CONTEXT) continue
-      // The key's last part is what the grid lists it as: an API name, where the display name has spaces.
-      const name = modelKey.split('/').pop()!
-      result.push({ id: `app:lm-studio:${modelKey}`, name, app: 'lm-studio', engine: 'lm-studio', ref: modelKey, binary: lms,
-        sizeBytes: num(m.sizeBytes) ?? 0, ...(context ? { contextLength: context } : {}) })
+      const gguf = obj(m.gguf)
+      const context = num(gguf.contextLength)
+      if ((context !== undefined && context < MIN_APP_CONTEXT) || gguf.toolCalls === false) continue
+      const copies = [...(m.source === 'lm-studio' ? [str(m.path)] : []), ...rows(m.alsoAt).filter(a => a.source === 'lm-studio').map(a => str(a.path))]
+      for (const file of copies) {
+        // The file's own name is what the grid lists it as: an API name, where a display name has spaces.
+        const id = `app:lm-studio:${basename(file)}`, name = basename(file).replace(/\.gguf$/i, '')
+        if (!file || ids.has(id) || !safe(name) || !safe(file)) continue
+        ids.add(id)
+        result.push({ id, name, app: 'lm-studio', engine: 'lm-studio', ref: file, binary: lms,
+          sizeBytes: num(m.bytes) ?? 0, ...(str(m.quant) ? { quant: str(m.quant) } : {}),
+          ...(context ? { contextLength: context } : {}), ...(num(gguf.kvBytesPerToken) ? { kvBytesPerToken: num(gguf.kvBytesPerToken) } : {}) })
+      }
     }
   }
   return result
+}
+
+/** LM Studio's key for [file], the one `lms load` takes: the model `lms ls --json` lists at that path. Its
+ *  paths are inside whichever models folder LM Studio uses (the person can move it), so the longest that
+ *  ends [file] wins. Empty when LM Studio does not list the file. */
+export function lmsKey(listed: Record<string, any>[], file: string): string {
+  const slash = (path: string) => path.replace(/\\/g, '/')
+  const target = slash(file)
+  let best = { key: '', length: 0 }
+  for (const m of listed) {
+    const path = slash(str(m.path)).replace(/^\/+/, ''), key = str(m.modelKey)
+    if (path && safe(key) && (target === path || target.endsWith(`/${path}`)) && path.length > best.length) best = { key, length: path.length }
+  }
+  return best.key
 }
 
 /** The window to start [model] with: [APP_CONTEXT] when it holds that, else 64K, within [budget] bytes of
@@ -221,8 +243,13 @@ export function appEngineOps(env: NodeJS.ProcessEnv, request: typeof fetch = fet
         }
         return { engine: 'llama.cpp', served: model.name, alias: model.name, port, binary, pid }
       }
-      // LM Studio: its own background server, started when it is off, and the model loaded with the window
+      // LM Studio: its key for the file, asked only now — `lms` starts LM Studio, which is what Start asks
+      // for — then its own background server, started when it is off, and the model loaded with the window
       // given here — a model it loads on demand gets 8K [run].
+      const listed = await run(binary, ['ls', '--json'], { env, timeout: 30_000 })
+      let key = ''
+      try { key = lmsKey(rows(JSON.parse(listed.stdout)), model.ref) } catch { /* none */ }
+      if (!key) throw new AppStartError('LM Studio does not list this model yet. Open LM Studio once, then try again.')
       let status = await lmsJson(binary, ['server', 'status', '--json'])
       let startedServer = false
       if (status.running !== true) {
@@ -232,7 +259,7 @@ export function appEngineOps(env: NodeJS.ProcessEnv, request: typeof fetch = fet
       }
       const port = typeof status.port === 'number' ? status.port : 0
       if (!port) throw new AppStartError('LM Studio could not start its server. Open LM Studio and try again.')
-      const loaded = await run(binary, ['load', model.ref, '--context-length', String(ctx), '--gpu', 'max', '--parallel', String(slots),
+      const loaded = await run(binary, ['load', key, '--context-length', String(ctx), '--gpu', 'max', '--parallel', String(slots),
         '--identifier', model.name, '-y'], { env, timeout: 10 * 60_000 })
       if (!loaded.ok) {
         if (startedServer) await run(binary, ['server', 'stop'], { env, timeout: 30_000 })
