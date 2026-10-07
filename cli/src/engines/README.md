@@ -14,13 +14,13 @@ agent already writes* and turns it into a live event stream: turns, tool calls, 
 sub-agents, questions, completion. An engine is the translator between your agent's transcript and
 that stream.
 
-**Set expectations before you start.** This is not a plugin API. There is no registry to append to
-and no interface to implement in one file. The codebase branches on `session.engine` in about twenty
-shared files, and a new engine touches most of them. That is a real cost and we are not going to
-pretend otherwise — but it is a *known* list, not a search, and this page is that list in dependency
-order. Two engines were each added in a single commit — Muse Code (`b6c58e6`) and Amp (`f15924f`) —
-and reading either alongside this page shows every item below in context. Read Amp's if your agent
-does not write a transcript at all; see "When your agent writes nothing to disk".
+**The engine interface is being migrated in small batches.** Claude Code and Codex now own their
+launch contracts and the history/last-turn readers behind `Engine` (`engine.ts`). `registry.ts` selects
+those engines; `launches.ts` exposes their launch metadata without loading transcript readers. The
+remaining facets and engines still use the shared paths below. This is an internal interface, not an
+external plugin API. When extending a migrated facet, put engine behavior in its folder and shared
+mechanics in `kit/`. See the [migration design](../../../docs/design/2026-10-05-engine-interface.md)
+for the remaining work.
 
 **Launchers are not engines.** A wrapper that configures an environment and then hands the pane to a
 vendor CLI — `ori claude`, an `env`-prefixed alias, a shell function — produces an agent of the

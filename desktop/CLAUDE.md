@@ -442,6 +442,11 @@ add a kind there, not at the call site.
 - `macos/Runner/MainFlutterWindow.swift` installs native menu items and calls into Dart over the
   `harness/app_menu` MethodChannel (`checkForUpdates`, `flashFirmware`, `showShortcuts`, terminal font
   size). Keep the menu in Swift; only the handler lives in `RootShell`.
+- `macos/Runner/SurfaceCacheGuard.swift` patches Flutter's private macOS back-buffer cache, which can
+  hand a frame a surface of another size after an A → B → A resize or a display replug; Impeller then
+  dereferences a null color texture in `Canvas::SetupRenderPass` ([flutter#185394](https://github.com/flutter/flutter/issues/185394)).
+  It checks every private class, selector and type encoding and stays inert if they change. On a
+  Flutter bump, check whether `removeSurfaceForSize:` compares each surface's size; delete it if so.
 - **Agent-account usage is what the native Models menu reads** (`lib/usage/`,
   `usage/models_menu_controller.dart`, `SwarmSubscriptionView` in `SwarmTitlebar.swift`): what the
   Claude and Codex accounts on this machine — and on the remote machines that answer `usage_read` —
