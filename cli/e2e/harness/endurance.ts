@@ -24,7 +24,7 @@ export function harnessdProcesses(d: IsolatedDaemon): Map<string, number> {
 
 /** Every pid this daemon's master ever said it started, cores and services: none may outlive it. */
 export function everyPid(d: IsolatedDaemon): number[] {
-  return [...d.log().matchAll(/\[harnessd\] (?:core|service \S+) started \(pid (\d+)\)/g)].map((match) => Number(match[1]))
+  return [...(d.pid ? [d.pid] : []), ...[...d.log().matchAll(/\[harnessd\] (?:core|service \S+) started \(pid (\d+)\)/g)].map((match) => Number(match[1]))]
 }
 
 export function alive(pid: number): boolean {
@@ -42,16 +42,16 @@ export async function measure(pid: number): Promise<Omit<Sample, 'at' | 'name' |
       return { rssMiB: rss, footprintMiB: null, fds: readdirSync(`/proc/${pid}/fd`).length }
     } catch { return null }
   }
-  const rss = await exec('ps', ['-o', 'rss=', '-p', String(pid)]).then(({ stdout }) => Number(stdout.trim()) / 1024, () => 0)
+  const rss = await exec('ps', ['-o', 'rss=', '-p', String(pid)], { timeout: 3000 }).then(({ stdout }) => Number(stdout.trim()) / 1024, () => 0)
   if (!rss) return null
-  const footprint = await exec('footprint', ['-p', String(pid)], { timeout: 15_000 }).then(({ stdout }) => {
+  const footprint = await exec('footprint', ['-p', String(pid)], { timeout: 3000 }).then(({ stdout }) => {
     const match = /Footprint:\s+([\d.]+)\s+(KB|MB|GB)/.exec(stdout)
     if (!match) return null
     const value = Number(match[1])
     return match[2] === 'KB' ? value / 1024 : match[2] === 'GB' ? value * 1024 : value
   }, () => null)
-  const fds = await exec('lsof', ['-n', '-P', '-p', String(pid)], { timeout: 15_000, maxBuffer: 16 * 1024 * 1024 })
-    .then(({ stdout }) => Math.max(0, stdout.trim().split('\n').length - 1), () => null)
+  const fds = await exec('lsof', ['-n', '-P', '-a', '-p', String(pid), '-F', 'f'], { timeout: 3000, maxBuffer: 16 * 1024 * 1024 })
+    .then(({ stdout }) => stdout.split('\n').filter(line => /^f\d+$/.test(line)).length, () => null)
   return { rssMiB: rss, footprintMiB: footprint, fds }
 }
 
@@ -59,10 +59,13 @@ export async function measure(pid: number): Promise<Omit<Sample, 'at' | 'name' |
 export function startSampler(d: IsolatedDaemon, everyMs: number, csv: string, samples: Sample[]): () => Promise<void> {
   appendFileSync(csv, 'at,name,pid,rssMiB,footprintMiB,fds\n')
   let stopped = false
+  let failure: unknown
   let running: Promise<void> = Promise.resolve()
+  let timer: ReturnType<typeof setTimeout> | undefined
   const round = async (): Promise<void> => {
     const at = Date.now()
     for (const [name, pid] of harnessdProcesses(d)) {
+      if (stopped) break
       if (!alive(pid)) continue
       const measured = await measure(pid)
       if (!measured) continue
@@ -71,12 +74,14 @@ export function startSampler(d: IsolatedDaemon, everyMs: number, csv: string, sa
       appendFileSync(csv, `${at},${name},${pid},${measured.rssMiB.toFixed(1)},${measured.footprintMiB?.toFixed(1) ?? ''},${measured.fds ?? ''}\n`)
     }
   }
-  const timer = setInterval(() => { if (!stopped) running = running.then(round, round) }, everyMs)
-  running = round()
-  return async () => { stopped = true; clearInterval(timer); await running }
+  const tick = (): void => {
+    running = round().catch(error => { failure = error; stopped = true }).finally(() => { if (!stopped) timer = setTimeout(tick, everyMs) })
+  }
+  tick()
+  return async () => { stopped = true; clearTimeout(timer); await running; if (failure) throw failure }
 }
 
-export interface Slope { name: string; samples: number; first: number; last: number; perHour: number; fdsFirst: number | null; fdsLast: number | null; fdsPerHour: number | null; restarts: number }
+export interface Slope { name: string; samples: number; first: number; last: number; perHour: number | null; windows: number; fdsFirst: number | null; fdsLast: number | null; fdsPerHour: number | null; restarts: number }
 
 /** Least squares over (minutes, value). */
 function fit(points: Array<[number, number]>): number {
@@ -117,7 +122,8 @@ export function slopes(samples: Sample[], warmupMs: number, windowMs: number): S
       samples: mine.length,
       first: mine[0]?.rssMiB ?? 0,
       last: mine[mine.length - 1]?.rssMiB ?? 0,
-      perHour: fit(lows.map((sample) => [minutes(sample), sample.rssMiB])) * 60,
+      perHour: lows.length >= 3 ? fit(lows.map((sample) => [minutes(sample), sample.rssMiB])) * 60 : null,
+      windows: lows.length,
       fdsFirst: fdLows[0]?.fds ?? null,
       fdsLast: fdLows[fdLows.length - 1]?.fds ?? null,
       fdsPerHour: fdLows.length >= 2 ? fit(fdLows.map((sample) => [minutes(sample), sample.fds!])) * 60 : null,
@@ -157,8 +163,11 @@ export class TurnLedger {
   differences(): string[] {
     this.drain()
     const out: string[] = []
-    for (const [agentId, sent] of this.sent) {
+    for (const agentId of new Set([...this.sent.keys(), ...this.seen.keys()])) {
+      const sent = this.sent.get(agentId) ?? []
       const seen = this.seen.get(agentId) ?? []
+      const unexpected = seen.filter(token => !sent.includes(token))
+      if (unexpected.length) out.push(`${agentId.slice(0, 8)}: never sent ${unexpected.slice(0, 5).join(' ')}`)
       const twice = seen.filter((token, at) => seen.indexOf(token) !== at)
       if (twice.length) out.push(`${agentId.slice(0, 8)}: seen twice ${twice.slice(0, 5).join(' ')}`)
       const missing = sent.filter((token) => !seen.includes(token))
@@ -183,12 +192,12 @@ export function forget(client: LocalClient): void {
 
 /** tmux clients attached on the daemon's private server: one per open terminal stream. */
 export async function tmuxClients(d: IsolatedDaemon): Promise<number> {
-  const listed = await d.tmux.run('list-clients').catch(() => '')
+  const listed = await d.tmux.run('list-clients')
   return listed.trim() ? listed.trim().split('\n').length : 0
 }
 
 /** Processes still running whose command line names this daemon's root: its engines, viewer servers, workers. */
 export async function strays(d: IsolatedDaemon): Promise<string[]> {
-  const { stdout } = await exec('ps', ['-A', '-o', 'pid=,command=']).catch(() => ({ stdout: '' }))
+  const { stdout } = await exec('ps', ['-A', '-o', 'pid=,command='], { timeout: 5000 })
   return stdout.split('\n').filter((line) => line.includes(d.root) && !line.includes(' ps -A')).map((line) => line.trim())
 }

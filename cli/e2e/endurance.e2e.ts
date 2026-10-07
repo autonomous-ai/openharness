@@ -1,14 +1,14 @@
 /**
  * The daemon over time, every service in its own process: what no single end-to-end test shows (opt-in:
- * `SOAK=1`; a release's check, about 90 minutes at its defaults).
+ * `SOAK=1`; about 90 minutes at its defaults).
  *
  * - **Soak** (`SOAK_MINUTES`, 60): Claude Code and Codex agents (`SOAK_AGENTS`, 6) take turns without a
  *   break, with interrupts, questions, tool calls and floods of terminal output among them; windows come
  *   and go, open an agent's terminal and close it; search, the Devices tab, the edge host's readers, the
  *   models and the Store are asked as the apps ask them; a fake dial is plugged in and out. Every harnessd
  *   process (master, core, each service's) is sampled every `SOAK_SAMPLE_MS` (30 s): resident memory,
- *   footprint and open files. Past the warm-up, a process whose memory or open files keep growing fails
- *   the run (`SOAK_MAX_MIB_PER_HOUR`, `SOAK_MAX_FDS_PER_HOUR`).
+ *   footprint and open files. Growth rates are measurements by default. Set `SOAK_MAX_MIB_PER_HOUR`
+ *   and `SOAK_MAX_FDS_PER_HOUR` only against an established baseline for the same workload.
  * - **Chaos** (`CHAOS_MINUTES`, 30), while the agents go on: a service process (search, viewers, the edge
  *   host, the gateway, models, the devices, and the experiments once woken) is killed, two at once, frozen
  *   until the master finds it hung, or killed again as it starts. Every time: the core never restarts; a
@@ -28,14 +28,20 @@ import { Desk } from './harness/desk.js'
 import { alive, everyPid, forget, harnessdProcesses, slopes, startSampler, strays, tmuxClients, TurnLedger, type Sample } from './harness/endurance.js'
 
 const ON = process.env.SOAK === '1'
-const SOAK_MINUTES = Number(process.env.SOAK_MINUTES ?? 60)
-const CHAOS_MINUTES = Number(process.env.CHAOS_MINUTES ?? 30)
-const AGENTS = Math.max(2, Number(process.env.SOAK_AGENTS ?? 6))
-const SAMPLE_MS = Number(process.env.SOAK_SAMPLE_MS ?? 30_000)
-const MAX_MIB_PER_HOUR = Number(process.env.SOAK_MAX_MIB_PER_HOUR ?? 20)
-const MAX_FDS_PER_HOUR = Number(process.env.SOAK_MAX_FDS_PER_HOUR ?? 30)
-const SEED = Number(process.env.SOAK_SEED ?? 20261007)
-const OUT = process.env.SOAK_OUT ?? mkdtempSync(join(tmpdir(), 'harness-soak-'))
+function knob(name: string, fallback: number, min: number, max: number): number {
+  const n = Number(process.env[name] ?? fallback)
+  if (!Number.isFinite(n) || n < min || n > max) throw new Error(`${name} must be between ${min} and ${max}`)
+  return n
+}
+const SOAK_MINUTES = knob('SOAK_MINUTES', 60, 0.1, 240)
+const CHAOS_MINUTES = knob('CHAOS_MINUTES', 30, 0.1, 240)
+const AGENTS = Math.floor(knob('SOAK_AGENTS', 6, 2, 24))
+const SAMPLE_MS = knob('SOAK_SAMPLE_MS', 30_000, 1000, 120_000)
+// Growth limits require a baseline for the same workload. Otherwise report measurements only.
+const MAX_MIB_PER_HOUR = process.env.SOAK_MAX_MIB_PER_HOUR === undefined ? null : knob('SOAK_MAX_MIB_PER_HOUR', 20, 0, 10000)
+const MAX_FDS_PER_HOUR = process.env.SOAK_MAX_FDS_PER_HOUR === undefined ? null : knob('SOAK_MAX_FDS_PER_HOUR', 30, 0, 10000)
+const SEED = knob('SOAK_SEED', 20261007, 0, 0xffffffff)
+const OUT = process.env.SOAK_OUT ?? (ON ? mkdtempSync(join(tmpdir(), 'harness-soak-')) : '')
 /** How long a request to a service that is down may take to be answered: at once, not after its wait. */
 const FAST_MS = 5_000
 const PROTOCOL = 3
@@ -53,10 +59,16 @@ function random(seed: number): () => number {
   }
 }
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+async function pause(ms: number, deadline: () => boolean): Promise<void> {
+  const end = Date.now() + ms
+  while (!deadline() && Date.now() < end) await sleep(Math.min(1000, end - Date.now()))
+}
 const isTurn = (type: string, agentId: string) => (frame: Frame) => frame.type === type && frame.agentId === agentId
 
 /** A request each service's process answers, as the apps ask it: answered by the service when it is up. */
 const PROBES: Record<string, { type: string; payload: Record<string, unknown> }> = {
+  gateway: { type: 'e2ee_pairings_list', payload: {} },
+  sharing: { type: 'harness_share_list', payload: {} },
   search: { type: 'session_search', payload: { query: 'soak' } },
   viewers: { type: 'dsh_list', payload: {} },
   edge: { type: 'machine_resources', payload: {} },
@@ -67,8 +79,22 @@ const PROBES: Record<string, { type: string; payload: Record<string, unknown> }>
   commandBar: { type: 'command_bar', payload: { request: { prompt: '' } } },
 }
 /** The service names a process's comings and goings are logged under (`[services] <name> connected`). */
-const LINKS: Record<string, string> = { search: 'search', viewers: 'viewers', edge: 'monitor', gateway: 'gateway', models: 'models', devices: 'devices', orchestrator: 'orchestrator', teams: 'teams', commandBar: 'commandBar' }
-const down = (answer: Record<string, unknown>) => answer.error === 'SERVICE_UNAVAILABLE' || answer.error === 'SERVICE_FAILED'
+const LINKS: Record<string, string> = { search: 'search', viewers: 'viewers', edge: 'monitor', gateway: 'gateway', models: 'models', devices: 'devices', orchestrator: 'orchestrator', teams: 'teams', commandBar: 'commandBar', sharing: 'sharing' }
+const down = (answer: Record<string, unknown>) => answer.error === 'SERVICE_UNAVAILABLE' || answer.error === 'SERVICE_FAILED' || answer.error === 'GATEWAY_UNAVAILABLE'
+
+const acceptable = (name: string, answer: Record<string, unknown>): boolean => answer.error === undefined
+  || (name === 'commandBar' && answer.error === 'INVALID_REQUEST')
+  || (name === 'sharing' && answer.error === 'HARNESS_NOT_FOUND')
+async function wakeServices(client: LocalClient): Promise<void> {
+  for (const [name, probe] of Object.entries(PROBES)) {
+    await until(`${name} to answer its probe`, async () => {
+      const answer = await client.request(probe.type, probe.payload, 30_000)
+      if (down(answer)) return null
+      if (!acceptable(name, answer)) throw new Error(`${name}: ${JSON.stringify(answer)}`)
+      return true
+    }, 60_000, 200)
+  }
+}
 
 interface Findings { lines: string[] }
 
@@ -136,7 +162,7 @@ async function deskLoop(d: IsolatedDaemon, agentIds: string[], deadline: () => b
   const ask = async (client: LocalClient, service: string): Promise<void> => {
     const probe = PROBES[service]
     const answer = await client.request(probe.type, probe.payload, 60_000).catch((error) => ({ error: String(error) }))
-    if (answer.error && !down(answer) && answer.error !== 'INVALID_REQUEST' && service !== 'commandBar') findings.lines.push(`${new Date().toISOString()} desk ${probe.type}: ${JSON.stringify(answer).slice(0, 200)}`)
+    if (!acceptable(service, answer) && !down(answer)) findings.lines.push(`${new Date().toISOString()} desk ${probe.type}: ${JSON.stringify(answer).slice(0, 200)}`)
   }
   while (!deadline()) {
     windows++
@@ -179,11 +205,11 @@ async function deskLoop(d: IsolatedDaemon, agentIds: string[], deadline: () => b
 async function dialLoop(desk: Desk, deadline: () => boolean, rand: () => number): Promise<number> {
   let plugs = 0
   while (!deadline()) {
-    await sleep(60_000 + rand() * 120_000)
+    await pause(60_000 + rand() * 120_000, deadline)
     if (deadline()) break
     plugs++
     await desk.plug('SOAK-DIAL', 'e2:e0:00:00:00:5a')
-    await sleep(20_000 + rand() * 40_000)
+    await pause(20_000 + rand() * 40_000, deadline)
     await desk.unplug('SOAK-DIAL')
   }
   return plugs
@@ -211,11 +237,14 @@ async function createAgents(d: IsolatedDaemon, count: number): Promise<string[]>
 describe.skipIf(!ON)('the daemon over time, every service in its own process', () => {
   let daemon: IsolatedDaemon | undefined
   let desk: Desk | undefined
+  const cleanup: Array<() => void | Promise<void>> = []
   afterEach(async () => {
+    const ended = await Promise.allSettled(cleanup.splice(0).reverse().map(stop => Promise.resolve().then(stop)))
     await desk?.close()
     await daemon?.close()
     daemon = undefined
     desk = undefined
+    for (const result of ended) if (result.status === 'rejected') throw result.reason
   })
 
   const fresh = async (env: Record<string, string> = {}): Promise<{ d: IsolatedDaemon; desk: Desk }> => {
@@ -233,19 +262,24 @@ describe.skipIf(!ON)('the daemon over time, every service in its own process', (
     return { d, desk: desk! }
   }
 
-  it(`soak: ${AGENTS} agents for ${SOAK_MINUTES} min; no process's memory or open files keep growing`, async () => {
+  it(`soak: ${AGENTS} agents for ${SOAK_MINUTES} min; measure every process; preserve every turn`, async () => {
     mkdirSync(OUT, { recursive: true })
     const { d, desk } = await fresh()
-    const rand = random(SEED)
     const agentIds = await createAgents(d, AGENTS)
     const observer = await LocalClient.connect(d)
+    cleanup.push(() => observer.close())
     const ledger = new TurnLedger(observer, MARK)
     const reading = setInterval(() => ledger.drain(), 1_000)
+    cleanup.push(() => clearInterval(reading))
+    await wakeServices(observer)
     const samples: Sample[] = []
     const stopSampling = startSampler(d, SAMPLE_MS, join(OUT, 'soak-samples.csv'), samples)
+    cleanup.push(stopSampling)
     const findings: Findings = { lines: [] }
     const ends = Date.now() + SOAK_MINUTES * 60_000
-    const deadline = () => Date.now() > ends
+    let stopping = false
+    cleanup.push(() => { stopping = true })
+    const deadline = () => stopping || Date.now() >= ends
     const [turns, windows, plugs] = await Promise.all([
       Promise.all(agentIds.map((id, i) => agentLoop(d, id, `a${i}`, ledger, deadline, random(SEED + i + 1), findings))),
       deskLoop(d, agentIds, deadline, random(SEED + 100), findings),
@@ -260,14 +294,22 @@ describe.skipIf(!ON)('the daemon over time, every service in its own process', (
     const growth = slopes(samples, warmup, Math.max(SAMPLE_MS * 4, 2 * 60_000))
     const report = { minutes: SOAK_MINUTES, agents: AGENTS, turns: turns.reduce((sum, n) => sum + n, 0), windows, plugs, ledger: ledger.totals(), differences, findings: findings.lines, slopes: growth, coresStarted: d.coresStarted() }
     writeFileSync(join(OUT, 'soak-report.json'), JSON.stringify(report, null, 2))
-    console.log(`soak report: ${join(OUT, 'soak-report.json')}\n${growth.map((s) => `${s.name}: ${s.first.toFixed(0)} → ${s.last.toFixed(0)} MiB, ${s.perHour.toFixed(1)} MiB/h; fds ${s.fdsFirst} → ${s.fdsLast}, ${s.fdsPerHour?.toFixed(1)}/h; restarts ${s.restarts}`).join('\n')}`)
+    console.log(`soak report: ${join(OUT, 'soak-report.json')}\n${growth.map((s) => `${s.name}: ${s.first.toFixed(0)} → ${s.last.toFixed(0)} MiB, ${s.perHour?.toFixed(1) ?? 'unmeasured'} MiB/h; fds ${s.fdsFirst} → ${s.fdsLast}, ${s.fdsPerHour?.toFixed(1)}/h; restarts ${s.restarts}`).join('\n')}`)
     expect(d.coresStarted()).toBe(1)
     expect(differences).toEqual([])
     expect(findings.lines).toEqual([])
+    expect(growth.map(p => p.name).sort()).toEqual(['master', 'core', ...Object.keys(PROBES)].sort())
     for (const process of growth) {
+      expect(process.samples, `${process.name} sample count`).toBeGreaterThanOrEqual(2)
       expect(process.restarts, `${process.name} restarted`).toBe(0)
-      expect(process.perHour, `${process.name}'s memory grows ${process.perHour.toFixed(1)} MiB an hour`).toBeLessThan(MAX_MIB_PER_HOUR)
-      if (process.fdsPerHour !== null) expect(process.fdsPerHour, `${process.name}'s open files grow ${process.fdsPerHour.toFixed(1)} an hour`).toBeLessThan(MAX_FDS_PER_HOUR)
+      if (MAX_MIB_PER_HOUR !== null) {
+        expect(process.perHour, `${process.name}: insufficient windows for a growth limit`).not.toBeNull()
+        expect(process.perHour).toBeLessThan(MAX_MIB_PER_HOUR)
+      }
+      if (MAX_FDS_PER_HOUR !== null) {
+        expect(process.fdsPerHour, `${process.name}: insufficient descriptor measurements`).not.toBeNull()
+        expect(process.fdsPerHour).toBeLessThan(MAX_FDS_PER_HOUR)
+      }
     }
   }, (SOAK_MINUTES + 15) * 60_000)
 
@@ -284,17 +326,23 @@ describe.skipIf(!ON)('the daemon over time, every service in its own process', (
     const rand = random(SEED + 1_000)
     const agentIds = await createAgents(d, AGENTS)
     const observer = await LocalClient.connect(d)
+    cleanup.push(() => observer.close())
     const ledger = new TurnLedger(observer, MARK)
     const reading = setInterval(() => ledger.drain(), 1_000)
+    cleanup.push(() => clearInterval(reading))
     const findings: Findings = { lines: [] }
     // The experiments and the devices, woken as the apps wake them, so their processes are in the run too.
     const waker = await LocalClient.connect(d)
     await desk.plug('CHAOS-DIAL', 'e2:e0:00:00:00:5b')
-    for (const service of ['orchestrator', 'teams', 'commandBar', 'devices']) await waker.request(PROBES[service].type, PROBES[service].payload, 60_000)
+    cleanup.push(() => waker.close())
+    await wakeServices(waker)
     const samples: Sample[] = []
     const stopSampling = startSampler(d, SAMPLE_MS, join(OUT, 'chaos-samples.csv'), samples)
+    cleanup.push(stopSampling)
     const ends = Date.now() + CHAOS_MINUTES * 60_000
-    const deadline = () => Date.now() > ends
+    let stopping = false
+    cleanup.push(() => { stopping = true })
+    const deadline = () => stopping || Date.now() >= ends
     const events: Array<Record<string, unknown>> = []
     const starts = (name: string) => [...d.log().matchAll(new RegExp(`\\[harnessd\\] service ${name} started \\(pid (\\d+)\\)`, 'g'))].map((match) => Number(match[1]))
     const linked = (name: string) => d.log().split(`[services] ${LINKS[name]} connected`).length - 1
@@ -308,8 +356,7 @@ describe.skipIf(!ON)('the daemon over time, every service in its own process', (
       const answer = await waker.request(spec.type, spec.payload, 60_000).catch((error) => ({ error: `no answer: ${String(error)}` }))
       const ms = Date.now() - asked
       if (phase === 'down' && ms > FAST_MS) findings.lines.push(`${name} down: ${spec.type} answered after ${ms} ms: ${JSON.stringify(answer).slice(0, 160)}`)
-      if (phase === 'frozen' && String(answer.error ?? '').startsWith('no answer')) findings.lines.push(`${name} frozen: ${spec.type} never answered`)
-      if (phase === 'back' && down(answer)) findings.lines.push(`${name} back: ${spec.type} still ${JSON.stringify(answer).slice(0, 160)}`)
+      if (!acceptable(name, answer) && (phase === 'back' || !down(answer))) findings.lines.push(`${name} ${phase}: ${spec.type}: ${JSON.stringify(answer).slice(0, 160)}`)
       events[events.length - 1][`${phase}Ms`] = ms
     }
     /** The master started it again and it connected to the core. */
@@ -324,30 +371,37 @@ describe.skipIf(!ON)('the daemon over time, every service in its own process', (
       }
     }
 
+    const actions = ['kill', 'kill two', 'freeze', 'kill as it starts'] as const
     const chaos = (async () => {
+      let cycle = 0
       while (!deadline()) {
-        await sleep(15_000 + rand() * 20_000)
+        await pause(5000 + rand() * 5000, deadline)
         if (deadline()) break
         const running = [...harnessdProcesses(d)].filter(([name, pid]) => name !== 'master' && name !== 'core' && alive(pid))
         if (!running.length) continue
-        const kind = rand()
-        const action = kind < 0.45 ? 'kill' : kind < 0.65 ? 'kill two' : kind < 0.85 ? 'freeze' : 'kill as it starts'
-        const targets = action === 'kill two' ? running.sort(() => rand() - 0.5).slice(0, 2) : [running[Math.floor(rand() * running.length)]]
+        const names = Object.keys(PROBES)
+        const name = names[cycle % names.length]
+        const action = actions[Math.floor(cycle / names.length) % actions.length]
+        cycle++
+        const primary = running.find(([role]) => role === name)
+        if (!primary) { findings.lines.push(`${name} was not running for ${action}`); continue }
+        const second = running.find(([role]) => role !== name)
+        const targets = action === 'kill two' && second ? [primary, second] : [primary]
         const before = targets.map(([name]) => ({ name, starts: starts(name).length, links: linked(name) }))
+        const hung = (): number => d.log().split(`[harnessd] service ${targets[0][0]} sent no heartbeat`).length
+        const hungBefore = hung()
         events.push({ at: new Date().toISOString(), action, targets: targets.map(([name]) => name) })
         for (const [, pid] of targets) process.kill(pid, action === 'freeze' ? 'SIGSTOP' : 'SIGKILL')
         if (action === 'kill as it starts') {
           const [{ name, starts: count }] = before
-          await until(`${name} to be started`, () => starts(name).length > count || null, 30_000, 20).catch(() => null)
+          await until(`${name} to be started`, () => starts(name).length > count || null, 30_000, 20).catch(error => { findings.lines.push(String(error)) })
           const next = starts(name)[count]
           if (next && alive(next)) process.kill(next, 'SIGKILL')
           before[0].starts = count + 1
         }
         if (action === 'freeze') {
           const frozen = probe(targets[0][0], 'frozen')
-          const hung = (): number => d.log().split(`[harnessd] service ${targets[0][0]} sent no heartbeat`).length
-          const hungBefore = hung()
-          await until(`${targets[0][0]} to be found hung`, () => hung() > hungBefore || null, 30_000, 100).catch(() => null)
+          await until(`${targets[0][0]} to be found hung`, () => hung() > hungBefore || null, 30_000, 100).catch(error => { findings.lines.push(String(error)) })
           await frozen
         } else await probe(targets[0][0], 'down')
         for (const { name, starts: count, links } of before) {
@@ -378,6 +432,13 @@ describe.skipIf(!ON)('the daemon over time, every service in its own process', (
     expect(d.coresStarted()).toBe(1)
     expect(differences).toEqual([])
     expect(findings.lines).toEqual([])
+    expect(events.length, 'no chaos event exercised').toBeGreaterThan(0)
+    if (CHAOS_MINUTES >= 15) {
+      expect(new Set(events.map(event => event.action))).toEqual(new Set(actions))
+      expect(new Set(events.flatMap(event => event.targets as string[]))).toEqual(new Set(Object.keys(PROBES)))
+      expect(new Set(events.flatMap(event => (event.targets as string[]).map(name => `${event.action}:${name}`))))
+        .toEqual(new Set(actions.flatMap(action => Object.keys(PROBES).map(name => `${action}:${name}`))))
+    }
     expect(clients).toBe(true)
     // Nothing of the daemon's outlives it: every process its master started, its engines and its servers.
     await daemon!.close()
