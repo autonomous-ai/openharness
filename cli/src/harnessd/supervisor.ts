@@ -63,12 +63,13 @@ export interface SupervisorDeps {
    * since it started. Left out, such an exit is the update failing, as it was before.
    */
   bundle?(): string | null
+  /** Start the process that runs [service] on demand (./services.ts `ServiceSupervisor.want`): the core asked for it. */
+  want?(service: string): void
   /**
-   * Start the experiment's process that runs [service] (./services.ts `ServiceSupervisor.want`): the core
-   * asked for it. Null for every experiment: a core from before `want` (protocol 2 or less) never asks,
-   * and expects each service it routes to run, as every one did.
+   * The core bound speaking an older protocol than this master (./services.ts `ServiceSupervisor.unasked`): it
+   * never asks for a process that became on demand after its protocol, and expects it to run, as it did.
    */
-  want?(service: string | null): void
+  unasked?(protocol: number): void
 }
 
 /**
@@ -371,7 +372,7 @@ export class Supervisor {
         this.clearTimer('bindTimer')
         if (!this.claimed) { this.deps.claimPidFile(); this.claimed = true }
         this.deps.log(`[harnessd] core bound (pid ${core.pid ?? '?'}, protocol ${message.protocol})`)
-        if (message.protocol < 3) this.deps.want?.(null)
+        if (message.protocol < HARNESSD_PROTOCOL) this.deps.unasked?.(message.protocol)
         this.watchHeartbeat()
         // A core from before `ready` is running once bound, and its update is judged from there.
         const readiness = message.protocol >= 2

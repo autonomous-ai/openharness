@@ -67,7 +67,8 @@ export interface CoreLink {
   /** Start-up is done and requests are served — or it gave way to safe mode, and why: the master stops
    *  waiting for it either way, and rolls back an update whose first core ends up in safe mode. */
   ready(safeMode?: string): void
-  /** Ask the master to start the experiment's process that runs [service]: it is on (protocol 3). */
+  /** Ask the master to start the process on demand that runs [service]: an experiment that is on (protocol 3),
+   *  or the devices, now that there is one (protocol 4). */
   want(service: string): void
   /** Tell the master, every `heartbeatInterval`, that this core is alive and how big it is. */
   startHeartbeat(): void

@@ -116,17 +116,21 @@ describe('Supervisor', () => {
     expect(statuses).toHaveLength(3)
   })
 
-  it('starts the experiment a bound core asks for, and every experiment for a core too old to ask', () => {
-    const wanted: Array<string | null> = []
-    make({}, { want: (service) => wanted.push(service) }).start()
+  it('starts the process a bound core asks for, and those a core too old to ask for them never would', () => {
+    const wanted: string[] = []
+    const unasked: number[] = []
+    make({}, { want: (service) => wanted.push(service), unasked: (protocol) => unasked.push(protocol) }).start()
     core().say({ type: 'harnessd:want', service: 'orchestrator' })
     expect(wanted).toEqual([])
     core().bind()
     core().say({ type: 'harnessd:want', service: 'orchestrator' })
     expect(wanted).toEqual(['orchestrator'])
+    expect(unasked).toEqual([])
     crash()
     core().bind(2)
-    expect(wanted).toEqual(['orchestrator', null])
+    crash()
+    core().bind(3)
+    expect(unasked).toEqual([2, 3])
     // A master with no services to start ignores both.
     make().start()
     core().bind(2)

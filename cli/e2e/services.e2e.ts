@@ -331,7 +331,9 @@ describe('a failing service never takes the core down', () => {
     expect(await client.request('route_send', { agentId, text: 'sent by cmd-k' })).toMatchObject({ ok: true })
     expect((await started).payload?.userMessage).toBe('sent by cmd-k')
     await ended
-    expect(daemon.log()).toContain('[devices] dial failed · injected fault: dial')
+    // ⌘K started the devices (core/devicesWake.ts); the window's tab, as a desktop says it, reaches the dial.
+    client.send('app_panes', { agentIds: [agentId], foreground: true })
+    await until('the dial to fail', () => daemon?.log().includes('[devices] dial failed · injected fault: dial') || null, 15_000, 100)
     expect(daemon.coresStarted()).toBe(1)
     client.close()
   })

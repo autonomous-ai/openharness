@@ -57,11 +57,12 @@ export interface ServiceLinksOptions {
   /** Longer waits for the answers that take longer, by service and then by type (core/api.ts
    *  `LONG_ANSWERS`): a grid command, grid's set-up, a harness's install. */
   waits?: Readonly<Record<string, Readonly<Record<string, number>>>>
-  /** The experiments: services whose process runs only once it is on (core/api.ts `EXPERIMENTS`). A request
-   *  for one that has not connected yet asks for it (`want`) and waits for it to connect, within the same
-   *  time. One that has connected and is down again is answered as any service is, at once. */
+  /** The services whose process runs only once asked for: the experiments (core/api.ts `EXPERIMENTS`) and the
+   *  devices (core/devicesWake.ts). A request for one that has not connected yet asks for it (`want`) and waits
+   *  for it to connect, within the same time. One that has connected and is down again is answered as any
+   *  service is, at once; so is one that did not connect within a request's wait, until it does. */
   onDemand?: ReadonlySet<string>
-  /** Ask the master for an experiment's process (harnessd/coreLink.ts `want`). */
+  /** Ask the master for a process on demand (harnessd/coreLink.ts `want`). */
   want?(service: string): void
   log?: (line: string) => void
   newId?: () => string
@@ -100,6 +101,10 @@ export function createServiceLinks(options: ServiceLinksOptions) {
   const links = new Map<string, Connected>()
   /** The services that have connected in this core's life: an experiment among them is on, not off. */
   const seen = new Set<string>()
+  /** Asked for and not connected within a request's wait: the master could not start it (it ends as it starts,
+   *  and is parked). Its requests are answered at once, as a service that is down is, instead of each waiting
+   *  the whole wait again (⌘K's 25 s, found end to end with the devices crashing on every start). */
+  const unstarted = new Set<string>()
   const waiting = new Map<string, Waiting>()
   /** What a service must hear even if it is down when it is said (a purge's forgetting), delivered on
    *  its next connection; bounded, the oldest dropped first. */
@@ -129,13 +134,16 @@ export function createServiceLinks(options: ServiceLinksOptions) {
    *  not connected is asked for, and the request goes once it connects: off, it costs nothing until asked. */
   const ask = (service: string, type: string, payload: Record<string, unknown>, asker: Asker, reply: (result: Record<string, unknown>) => void, waitMs?: number): void => {
     const link = links.get(service)
-    const starting = !link && !!options.onDemand?.has(service) && !seen.has(service)
+    const starting = !link && !!options.onDemand?.has(service) && !seen.has(service) && !unstarted.has(service)
     if (!link && !starting) { reply(unavailable(service)); return }
     const id = newId()
     const frame: ServiceFrame = { type, payload: { ...payload, requestId: id }, asker }
     const entry: Waiting = { service, type, reply, timer: null, ...(starting ? { frame } : {}) }
     // Cleared whenever the entry is settled, so it only ever fires for one still waiting.
-    entry.timer = setTimer(() => settle(id, entry, unavailable(service)), waitMs ?? waitFor(service, type))
+    entry.timer = setTimer(() => {
+      if (entry.frame) unstarted.add(service)
+      settle(id, entry, unavailable(service))
+    }, waitMs ?? waitFor(service, type))
     waiting.set(id, entry)
     if (starting) { options.want?.(service); return }
     if (!link!.sink.sendFrame(frame)) settle(id, entry, unavailable(service))

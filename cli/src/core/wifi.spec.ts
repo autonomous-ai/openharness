@@ -1,7 +1,7 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { LiveEvent } from '../lib/normalize.js'
 import { WIFI_OFF, type RemoteClient, type WifiPort } from './api.js'
-import { createWifiCore } from './wifi.js'
+import { createWifiCore, WIFI_HELD_MAX, WIFI_HELD_MS } from './wifi.js'
 
 const device = (identity: string, direct = false): RemoteClient => ({ role: 'device', label: 'Desk', identity, direct })
 
@@ -17,9 +17,12 @@ function harness() {
   const joined = vi.fn()
   const ready = vi.fn()
   const fullText = vi.fn((agentId: string) => (agentId === 'a' ? 'the whole answer' : undefined))
-  const wifi = createWifiCore({ port: () => on, gateway, remoteClient: (connId) => clients.get(connId) ?? null, fullText, joined, ready, doors: WIFI_OFF })
-  return { wifi, port, clients, gateway, joined, ready, fullText, off: () => { on = null } }
+  const want = vi.fn(() => true)
+  const wifi = createWifiCore({ port: () => on, gateway, remoteClient: (connId) => clients.get(connId) ?? null, fullText, joined, ready, want, doors: WIFI_OFF })
+  return { wifi, port, clients, gateway, joined, ready, fullText, want, off: () => { on = null }, on: () => { on = port } }
 }
+/** What `started` hands on after the service was resumed, a few promise turns later. */
+const settled = async (): Promise<void> => { for (let i = 0; i < 4; i++) await Promise.resolve() }
 
 describe('the Wi-Fi device, as the core keeps it', () => {
   it('counts a device as watching only while its app said hello on a session still its own, with the service there', () => {
@@ -159,8 +162,10 @@ describe('the Wi-Fi device, as the core keeps it', () => {
     expect(fullText).toHaveBeenCalledTimes(1)
   })
 
-  it('passes the gateway\'s device sessions on, and forgets a phone\'s', () => {
+  it('passes the gateway\'s device sessions on, and forgets a phone\'s', async () => {
     const { wifi, port, gateway } = harness()
+    wifi.started(null)
+    await settled()
     wifi.fromGateway.session('phone', { role: 'web', label: null, identity: 'p', direct: false })
     wifi.fromGateway.session('phone', null)
     expect(port.session).not.toHaveBeenCalled()
@@ -223,5 +228,110 @@ describe('the Wi-Fi device, as the core keeps it', () => {
     expect(wifi.focusRevision()).toBe('r1')
     wifi.stopped()
     expect(wifi.focusRevision()).toBeUndefined()
+  })
+})
+
+describe('the Wi-Fi device while its service is not there', () => {
+  afterEach(() => { vi.useRealTimers() })
+  const hello = { type: 'autonomous_device_request' }
+
+  it('asks for its process when a device\'s session comes, and not for a phone\'s or once it is there', async () => {
+    const { wifi, want } = harness()
+    wifi.fromGateway.session('phone', { role: 'web', label: null, identity: 'p', direct: false })
+    wifi.fromGateway.session('c1', null)
+    expect(want).not.toHaveBeenCalled()
+    wifi.fromGateway.session('c1', device('id-1'))
+    expect(want).toHaveBeenCalledTimes(1)
+    wifi.started(null)
+    wifi.fromGateway.session('c2', device('id-2'))
+    expect(want).toHaveBeenCalledTimes(1)
+  })
+
+  it('holds what its devices send, asks for it, and hands it on in order once the service has been resumed', async () => {
+    const { wifi, port, want } = harness()
+    wifi.fromGateway.session('c1', device('id-1'))
+    wifi.fromGateway.request('c1', hello, { payload: { n: 1 } })
+    wifi.fromGateway.request('c1', hello, { payload: { n: 2 } })
+    expect(port.request).not.toHaveBeenCalled()
+    expect(want).toHaveBeenCalledTimes(3)
+    wifi.started(null)
+    // Not before the resume has been said: a request for a session the service has not been handed is lost.
+    wifi.fromGateway.request('c1', hello, { payload: { n: 3 } })
+    expect(port.request).not.toHaveBeenCalled()
+    await settled()
+    expect(port.resume).toHaveBeenCalledTimes(1)
+    expect(port.request.mock.calls.map((call) => ((call as unknown[])[2] as { payload: { n: number } }).payload.n)).toEqual([1, 2, 3])
+    expect(port.resume.mock.invocationCallOrder[0]).toBeLessThan(port.request.mock.invocationCallOrder[0])
+    // From then on, straight through; and held again while the service is away (its process starting again).
+    wifi.fromGateway.request('c1', hello, { payload: { n: 4 } })
+    expect(port.request).toHaveBeenCalledTimes(4)
+    wifi.stopped()
+    wifi.fromGateway.request('c1', hello, { payload: { n: 5 } })
+    expect(port.request).toHaveBeenCalledTimes(4)
+    wifi.started(null)
+    await settled()
+    expect(port.request).toHaveBeenCalledTimes(5)
+  })
+
+  it('hands on a request held only as long as its device would wait for it, and holds a bounded number', async () => {
+    vi.useFakeTimers()
+    const { wifi, port } = harness()
+    const sent = (): number[] => port.request.mock.calls.map((call) => ((call as unknown[])[2] as { payload: { n: number } }).payload.n)
+    wifi.fromGateway.request('c1', hello, { payload: { n: 0 } })
+    vi.advanceTimersByTime(WIFI_HELD_MS + 1)
+    wifi.fromGateway.request('c1', hello, { payload: { n: 1 } })
+    wifi.started(null)
+    await settled()
+    // The stale one is dropped: the device retried it by its key, or gave up on it.
+    expect(sent()).toEqual([1])
+    const bounded = harness()
+    for (let n = 0; n <= WIFI_HELD_MAX; n++) bounded.wifi.fromGateway.request('c1', hello, { payload: { n } })
+    bounded.wifi.started(null)
+    await settled()
+    const kept = bounded.port.request.mock.calls.map((call) => ((call as unknown[])[2] as { payload: { n: number } }).payload.n)
+    // The oldest beyond the bound goes first.
+    expect(kept).toHaveLength(WIFI_HELD_MAX)
+    expect(kept[0]).toBe(1)
+  })
+
+  it('keeps holding while the service went before it was handed what it held or has no port, and hands it on after a failed resume', async () => {
+    const { wifi, port, off, on } = harness()
+    wifi.fromGateway.request('c1', hello, { payload: { n: 1 } })
+    wifi.started(null)
+    wifi.stopped()
+    await settled()
+    expect(port.request).not.toHaveBeenCalled()
+    off()
+    wifi.started(null)
+    await settled()
+    on()
+    port.resume.mockRejectedValueOnce(new Error('gone'))
+    wifi.started(null)
+    await settled()
+    expect(port.request).toHaveBeenCalledTimes(1)
+  })
+
+  it('waits for the service to serve, asking for it, before a pairing goes through the direct links', async () => {
+    vi.useFakeTimers()
+    const { wifi, want, ready } = harness()
+    const served = wifi.serving(1_000)
+    expect(want).toHaveBeenCalledTimes(1)
+    wifi.started(null)
+    wifi.api.ready()
+    expect(ready).toHaveBeenCalled()
+    await expect(served).resolves.toBe(true)
+    // Serving now: at once, without asking.
+    await expect(wifi.serving(1_000)).resolves.toBe(true)
+    expect(want).toHaveBeenCalledTimes(1)
+    // Gone again: asked for, and not there in time.
+    wifi.stopped()
+    const late = wifi.serving(1_000)
+    vi.advanceTimersByTime(1_001)
+    await expect(late).resolves.toBe(false)
+    wifi.api.ready()
+    // In the core's process, with nothing to ask for: not waited on.
+    wifi.stopped()
+    want.mockReturnValueOnce(false)
+    await expect(wifi.serving(1_000)).resolves.toBe(false)
   })
 })

@@ -14,7 +14,7 @@
 > | 6 The Store into the viewers' process | #879 | |
 > | 7 Models in its own process | #896 | Found: routed requests were cut off at 30 s (`LONG_ANSWERS`) |
 > | 8 The experimental host, move only | #921, #924, #932, #933 | On-demand processes per experiment: orchestrator, Tab collaboration, Share |
-> | 9 Devices in their own process | #918, #928, #929 | Per-device guards in one devices process; the Wi-Fi device on the gateway |
+> | 9 Devices in their own process | #918, #928, #929, #946 | Per-device guards in one devices process; the Wi-Fi device on the gateway; the process on demand, once there is a device |
 > | 10 The relay: the gateway process | #899, #905, #911 | |
 > | 11 The unsupervised handoff | #895 | `harness start -f` runs the master; the updater leaves the core in #925 |
 >
@@ -440,6 +440,11 @@ in or a Wi-Fi device is paired, the experimental host when the account turns an 
 app sends one of its requests. Today the dial's USB watch is itself the devices' code (an `ioreg`
 spawn every 2 s); the cheap watch would run in the edge host and ask the master to start the devices.
 This is a decision for the owner (below); without it, both run always, at 350 MiB in all.
+
+*Decided and done (6 October):* the devices are on demand. The cheap watch runs in the core
+(core/devicesWake.ts: a listing of /dev every two seconds, no `ioreg`, no open), with a paired Wi-Fi
+device, its session, a pairing and the Devices tab's and ⌘K's requests. Idle with no device, the
+daemon's processes went from 660–669 to 592–594 MiB RSS.
 
 ## The order
 

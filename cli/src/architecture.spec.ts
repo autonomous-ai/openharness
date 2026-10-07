@@ -293,7 +293,13 @@ const SERVICE_MAY_IMPORT: Record<string, string> = {
 //
 // Quiet-machine QA moves handoff history folding, redaction and file writes to the edge host;
 // the core keeps narrow conversation reads: 73,025 lines in 336 files after the command-bar extraction.
-const CORE_CLOSURE_BUDGET = 73_125
+//
+// Grew by 229 to 73,254 in 337 (step 9, the devices on demand), from 73,025 in 336: the devices' process runs
+// only once there is a device, about 72 MiB at idle that a computer with none no longer pays. What asks for
+// it is the core's (core/devicesWake.ts, 146: a dial's port in /dev every two seconds, a paired Wi-Fi
+// device); a Wi-Fi device's requests are held while it starts (core/wifi.ts, +50), and a process on demand
+// that did not come in time is answered at once (core/serviceLinks.ts).
+const CORE_CLOSURE_BUDGET = 73_355
 
 /** What is not the core's, by path: each goes to a service or its own process, in the plan's order. */
 const EDGE: RegExp[] = [

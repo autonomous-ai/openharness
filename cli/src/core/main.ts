@@ -146,7 +146,8 @@ import { publishHookRoute } from '../lib/hookRoutes.js'
 import { routedCommandBar } from '../lib/commandBarHttp.js'
 import { BackendSocket, isLocalClientId } from '../backendSocket.js'
 import { createGatewayLink, laneOf } from './gatewayLink.js'
-import { createWifiCore } from './wifi.js'
+import { createWifiCore, WIFI_START_MS } from './wifi.js'
+import { createDevicesWake, DEVICES_ON_DEMAND } from './devicesWake.js'
 import { createWifiLink } from './wifiLink.js'
 import { wifiDoors } from './wifiAgents.js'
 import { autonomousDeviceLocalRequest } from '../lib/autonomous-device/localApi.js'
@@ -278,6 +279,9 @@ function startMasterHere(): void {
 /** This process's channel to a harnessd master, when one started it (see harnessd/coreLink.ts).
  *  Inert otherwise: a daemon run on its own claims its pid file and hands off updates itself. */
 const coreLink = connectToMaster()
+/** When the devices' process starts: once there is a device, a dial's port, a Wi-Fi device or a request for one
+ *  (core/devicesWake.ts). Asked of the master through the channel above. */
+const devicesWake = createDevicesWake({ want: (service) => coreLink.want(service), dataDir: env.ADAPTER_DATA_DIR, cableDisabled: env.CABLE_DISABLE, testDialPort: process.env.HARNESSD_TEST_DIAL_PORT })
 
 const daemonBoot: {
   updater: Poller | null
@@ -645,6 +649,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // Its direct links are the gateway's, started only once it serves: a device they connected to a service
     // that could not be built would be answered by nothing.
     ready: () => gatewayOps.wifiService(true),
+    want: () => devicesWake.ask('wifi', 'a Wi-Fi device'),
     doors: wifiDoors({
       registry, machineId: machineIdNow, displayName: projectDisplayName, running: (sessionId) => turnStartedAt.has(sessionId),
       socket: () => backendRef ?? null, deviceInput: () => deviceInput, answer: (request) => questions.answer(request),
@@ -1185,8 +1190,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     token: serviceToken,
     owned: Object.fromEntries([...outOfProcess].map((name) => [name, requestsOf[name] ?? []])),
     waits: LONG_ANSWERS,
-    // An experiment's process runs only once it is on: a request for one that is off asks the master for it.
-    onDemand: experiments,
+    // An experiment's process runs once it is on, the devices' once there is one: a request for one off asks for it.
+    onDemand: new Set([...experiments, ...DEVICES_ON_DEMAND]),
     want: (service) => experimentHooks.want(service),
     answer: async (service, query, payload) => deliveries.answer(service, query, payload)
       ?? await answerExperimentQuery(coreApi, experiments, service, query, payload)
@@ -1210,6 +1215,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       if (service === 'teams') teamsLink.on()
       if (service === 'devices') devicesLink.connected()
       if (service === 'wifi') wifiCore.started(appVoiceFocus ?? null)
+      devicesWake.connected(service)
     },
     disconnected: (service) => {
       if (service === 'gateway') gatewayLink?.disconnected()
@@ -1722,8 +1728,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
         return answer.result
       }
       return autonomousDeviceLocalRequest({
-        discover: () => viaGateway({ op: 'discover' }),
-        pairStart: ({ code, device }) => viaGateway({ op: 'pair', code, device }),
+        discover: async () => { await wifiCore.serving(WIFI_START_MS); return viaGateway({ op: 'discover' }) },
+        pairStart: async ({ code, device }) => { await wifiCore.serving(WIFI_START_MS); return viaGateway({ op: 'pair', code, device }) },
         pairStatus: () => viaGateway({ op: 'pairStatus' }),
         list: () => viaGateway({ op: 'list' }),
         status: async () => ({ transport: 'direct', connected: wifiCore.directSessions() > 0,
@@ -1801,6 +1807,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // The experiments with saved state are on: their processes are asked for now, the master heeding a
     // bound core alone (core/experiments.ts). The others wait for their first request.
     wakeExperiments({ dataDir: env.ADAPTER_DATA_DIR, experiments: EXPERIMENTS, outOfProcess, want: (service) => experimentHooks.want(service) })
+    devicesWake.start(outOfProcess)
   } else {
     try { writeFileSync(PID_FILE, String(process.pid) + '\n') } catch { /* best effort */ }
   }
