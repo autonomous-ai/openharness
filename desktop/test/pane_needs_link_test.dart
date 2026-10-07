@@ -235,6 +235,24 @@ void main() {
     await finish(tester);
   });
 
+  testWidgets('too many devices on the account is said on the tile too', (
+    tester,
+  ) async {
+    app = appWith()..deviceListTooManyForTest = true;
+    final session = terminal('a0', <TerminalBinaryFrame>[]);
+    app.adoptSessionForTest(session);
+    app.panes.single.machineId = 'remote-1';
+    await pump(tester);
+
+    expect(
+      find.textContaining('your account has too many devices'),
+      findsOneWidget,
+    );
+    expect(find.textContaining('needs a review'), findsNothing);
+    expect(find.text('Your devices'), findsOneWidget);
+    await finish(tester);
+  });
+
   testWidgets('a list that needs no review says nothing about it', (
     tester,
   ) async {

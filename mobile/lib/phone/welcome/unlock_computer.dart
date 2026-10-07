@@ -176,11 +176,14 @@ class _UnlockComputerState extends State<UnlockComputer> {
           'On $name, open Harness ▸ Add Phone…, then scan the QR code.',
           style: tty.style(size: TtySize.row, color: tty.faint),
         ),
-        // This phone's copy of the device list is frozen, so it pins no computer from it: a review is
-        // the other way in, beside the code and the password.
+        // This phone's copy of the device list is frozen, so it pins no computer from it — or the
+        // account has too many devices to let this phone in: the list is the other way in, beside the
+        // code and the password.
         ListenableBuilder(
           listenable: widget.notifier,
-          builder: (context, _) => !widget.notifier.deviceListNeedsReview
+          builder: (context, _) =>
+              !widget.notifier.deviceListNeedsReview &&
+                  !widget.notifier.deviceListTooMany
               ? const SizedBox.shrink()
               : Padding(
                   padding: const EdgeInsets.only(top: 12),
@@ -188,7 +191,13 @@ class _UnlockComputerState extends State<UnlockComputer> {
                     children: [
                       Expanded(
                         child: Text(
-                          'Your device list needs a review.',
+                          [
+                            if (widget.notifier.deviceListNeedsReview)
+                              'Your device list needs a review.',
+                            if (widget.notifier.deviceListTooMany)
+                              'This device couldn’t join: your account has too many devices. '
+                                  'Remove ones you no longer use.',
+                          ].join('\n'),
                           style: tty.style(
                             size: TtySize.meta,
                             color: tty.yellow,
