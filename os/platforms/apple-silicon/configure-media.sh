@@ -16,7 +16,8 @@ usermod -L root
 rm -rf /boot/efi/m1n1
 rm -f /boot/efi/.builder
 systemctl mask getty@.service serial-getty@.service sshd.service \
-    first-boot.service initial-setup.service asahi-setup-swap-firstboot.service asahi-extras-firstboot.service
+    systemd-firstboot.service first-boot.service initial-setup.service \
+    asahi-setup-swap-firstboot.service asahi-extras-firstboot.service
 systemctl enable harness-installer.service
 systemctl set-default multi-user.target
 

@@ -126,6 +126,7 @@ class Media(unittest.TestCase):
         self.assertEqual(live.get('filesystem'), 'squashfs')
         self.assertEqual(live.get('hybridpersistent'), 'false')
         self.assertNotIn('rd.live.overlay.persistent', live.get('kernelcmdline'))
+        self.assertIn('systemd.unit=multi-user.target', live.get('kernelcmdline'))
         self.assertEqual(recipe.findtext('preferences/rpm-check-signatures'), 'true')
         self.assertEqual(recipe.findtext('preferences/locale'), 'C')
         selected = {p.get('name') for p in recipe.findall('packages/package')}

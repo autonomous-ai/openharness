@@ -87,7 +87,10 @@ def inspect_root(root, identity):
     enabled = root / 'etc/systemd/system/multi-user.target.wants/harness-installer.service'
     if not enabled.is_symlink() or os.readlink(enabled) != '/usr/lib/systemd/system/harness-installer.service':
         raise ValueError('The installer does not start automatically.')
-    for name in ('getty@', 'serial-getty@', 'sshd', 'first-boot', 'initial-setup',
+    preset = root / 'usr/lib/systemd/system-preset/00-harness-installer.preset'
+    if preset.read_text().strip() != 'enable harness-installer.service':
+        raise ValueError('First-boot presets must keep the installer enabled.')
+    for name in ('getty@', 'serial-getty@', 'sshd', 'systemd-firstboot', 'first-boot', 'initial-setup',
                  'asahi-setup-swap-firstboot', 'asahi-extras-firstboot'):
         mask = root / ('etc/systemd/system/' + name + '.service')
         if not mask.is_symlink() or os.readlink(mask) != '/dev/null':

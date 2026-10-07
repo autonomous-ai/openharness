@@ -78,7 +78,7 @@ def live_recipe(description):
     prefs = ET.SubElement(root, 'preferences', {'profiles': 'HarnessInstall'})
     live = ET.SubElement(prefs, 'type', {'image': 'iso', 'flags': 'overlay', 'filesystem': 'squashfs',
         'firmware': 'uefi', 'hybridpersistent': 'false', 'volid': 'HARNESS_INSTALL',
-        'kernelcmdline': 'console=tty0 quiet systemd.show_status=false rd.udev.log_level=3'})
+        'kernelcmdline': 'console=tty0 quiet systemd.show_status=false rd.udev.log_level=3 systemd.unit=multi-user.target'})
     ET.SubElement(live, 'bootloader', {'name': 'grub2', 'console': 'none', 'timeout': '0'})
     packages = ET.SubElement(root, 'packages', {'type': 'image', 'profiles': 'HarnessInstall'})
     for name in PACKAGES:
@@ -134,6 +134,11 @@ def prepare(upstream, image, receipt_path, producer_path, image_source, output, 
     unit = description / 'root/usr/lib/systemd/system/harness-installer.service'
     unit.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(platform / unit.name, unit)
+    # PID 1 reapplies vendor presets when the live overlay gets its first
+    # machine identity. Explicit enablement alone is undone by Fedora's default.
+    preset = description / 'root/usr/lib/systemd/system-preset/00-harness-installer.preset'
+    preset.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(platform / preset.name, preset)
     (output / 'media-inputs.json').write_text(json.dumps(identity, indent=2) + '\n')
     return identity
 
