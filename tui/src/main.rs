@@ -506,9 +506,10 @@ async fn run(config: config::Config) -> io::Result<()> {
     let mut last_draw = Instant::now() - frame_budget;
     let mut need_draw = true;
     // A full repaint asked for, kept until the pass that draws: its clear and its frame are one
-    // synchronized update, never split across passes. `repaint_hard` is a repaint that erases.
+    // synchronized update, never split across passes.
     let mut repaint_due = false;
-    let mut repaint_hard = false;
+    // The size the terminal was last drawn at: a repaint erases only when it differs.
+    let mut drawn_size = term.size()?;
     // Rendered animation and timed UI messages schedule their next frame.
     // Maintenance and incoming input/output keep their own cadence.
     let mut next_repaint: Option<Instant> = None;
@@ -601,11 +602,14 @@ async fn run(config: config::Config) -> io::Result<()> {
         let settle = app::scroll_settle_in(app.scrolled_at, Instant::now()) == Some(Duration::ZERO);
         if settle { app.scrolled_at = None }
         // Two requests in one pass (or one that waited for the frame budget) are one repaint.
-        if std::mem::take(&mut app.redraw_all) { repaint_due = true; repaint_hard = true; need_draw = true; }
+        if std::mem::take(&mut app.redraw_all) { repaint_due = true; need_draw = true; }
         else if settle { repaint_due = true; need_draw = true; }
         if need_draw && last_draw.elapsed() >= frame_budget {
-            if std::mem::take(&mut repaint_due) {
-                if !std::mem::take(&mut repaint_hard) { term.backend_mut().soft_clear_next() }
+            // A changed size is cleared by `draw`'s own resize, inside the frame's update; a clear
+            // here would be a second erase, and a soft one would leave text outside the new rows.
+            let size_changed = !term_out::repaint_is_soft(drawn_size, term.size()?);
+            if std::mem::take(&mut repaint_due) && !size_changed {
+                term.backend_mut().soft_clear_next();
                 term.clear()?;
             }
             // (The backend makes each frame's changes one synchronized update, and writes nothing
@@ -619,6 +623,7 @@ async fn run(config: config::Config) -> io::Result<()> {
             }
             let done = term.draw(|frame| ui::draw(frame, &mut app))?;
             if let Some(v) = verifier.as_mut() { v.check(done.buffer) }
+            drawn_size = term.size()?;
             // The focused program's cursor shape (vim's block and bar), passed through as tmux does.
             let shape = app.focused().filter(|_| app.modal.is_none()).and_then(|f| app.panes.get(&f)).map(|p| p.cursor_style()).unwrap_or(cursor::SetCursorStyle::DefaultUserShape);
             let code = format!("{shape:?}");

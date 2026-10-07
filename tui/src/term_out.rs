@@ -134,6 +134,10 @@ pub fn set_extra(x: u16, y: u16, extra: Extra) {
     if let Ok(mut f) = FRAME.lock() { if let Some(f) = f.as_mut() { f.extras.insert((x, y), extra); } }
 }
 
+/// A full repaint rewrites rows over what the terminal holds, unless its size changed: then the
+/// terminal reflowed its own cells and only an erase leaves no text outside the new rows.
+pub fn repaint_is_soft(drawn: Size, now: Size) -> bool { drawn == now }
+
 /// An overlay owns its cells; pane metadata underneath must not bleed through it.
 pub fn clear_extras(area: ratatui::layout::Rect) {
     if let Ok(mut frame) = FRAME.lock() { if let Some(frame) = frame.as_mut() {
@@ -668,6 +672,37 @@ mod tests {
         let mut pane = crate::pane::Pane::new(1, "m", "a", 20, 2);
         pane.feed(&written);
         assert_eq!(pane.term.grid()[Line(0)][Column(2)].c, 'b', "b lands where hn drew it");
+    }
+
+    #[test]
+    fn a_repaint_is_soft_unless_the_size_changed() {
+        assert!(repaint_is_soft(Size::new(80, 24), Size::new(80, 24)));
+        assert!(!repaint_is_soft(Size::new(80, 24), Size::new(100, 24)));
+        assert!(!repaint_is_soft(Size::new(80, 24), Size::new(80, 20)));
+    }
+
+    #[test]
+    fn a_soft_clear_erases_each_row_once_inside_one_update_and_never_the_screen() {
+        let mut written = Vec::new();
+        let mut backend = TmuxBackend::with_sync(&mut written);
+        let mut cells = Vec::new();
+        for y in 0..3u16 { let mut c = Cell::default(); c.set_char('x'); cells.push((0u16, y, c)) }
+        backend.draw(cells.iter().map(|(x, y, c)| (*x, *y, c))).unwrap();
+        Backend::flush(&mut backend).unwrap();
+        backend.soft_clear_next();
+        Backend::clear_region(&mut backend, ClearType::All).unwrap();
+        backend.draw(cells.iter().map(|(x, y, c)| (*x, *y, c))).unwrap();
+        Backend::flush(&mut backend).unwrap();
+        drop(backend);
+        let s = String::from_utf8_lossy(&written);
+        assert!(!s.contains("\x1b[2J"), "{s:?}");
+        // (the size query fails or answers for the developer's own window here, so: at least the three rows drawn)
+        assert!(s.matches("\x1b[2K").count() >= 3, "{s:?}");
+        assert_eq!(s.matches("\x1b[?2026h").count(), 2, "one update per frame: {s:?}");
+        assert_eq!(s.matches("\x1b[?2026l").count(), 2, "{s:?}");
+        // The soft frame's update opens before its first row is written.
+        let after_first = &s[s.find("\x1b[?2026l").unwrap()..];
+        assert!(after_first.find("\x1b[?2026h").unwrap() < after_first.find("\x1b[2K").unwrap(), "{s:?}");
     }
 
     #[test]
