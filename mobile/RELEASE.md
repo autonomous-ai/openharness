@@ -127,8 +127,9 @@ may lack symbolicated stacks until the matching symbols are supplied.
 | `1.0.1 (56)` | 2026-10-05 | TestFlight. Copy and paste in the terminal (the key strip's `paste` asks iOS `hasImages`, which never brings up the paste prompt); computers and profiles can be renamed, removed and retried; Devices DSH frames sealed as the CLI requires. Built from `feat/mobile-ios-android` at `28e95521` |
 | `1.0.1 (57)` | 2026-10-06 | TestFlight. Typing in the terminal no longer lags or drops keys: keys echo locally and go out before the IME resets. Remote scroll is smoother, with a native-like fling and a scroll mirror that follows the finger; the stray cursor is hidden; p2p holds when late relay frames arrive. Onboarding explains its sign-in steps and sign-outs, and scanning a computer's sign-in QR signs the phone in first. Uploaded with the Xcode account from the second Mac; Xcode again reported the non-blocking missing WebRTC dSYM. Built from `feat/mobile-ios-android` at `b896acd8` |
 | `1.0.1 (58)` | 2026-10-06 | TestFlight. Remote scroll for Claude Code is faster and steadier: page keys and paced wheels fetch rows, each agent keeps its rows, and rows above are prefetched while idle. The key strip's hide-keyboard key is larger. Onboarding says where Add Phone is and which account to use, offers Scan again after a failed pairing, and shortens the scan page's sign-in hint. Uploaded with the Xcode account (`release-ios.sh`); Xcode again reported the non-blocking missing WebRTC dSYM. Built from `feat/mobile-ios-android` at `8b174045` after merging `main` |
+| `1.0.1 (59)` | 2026-10-07 | TestFlight. Onboarding gets exits and shorter sign-in waits (`fix/mobile-onboarding-exits`), on top of 58. Built from `feat/mobile-ios-android` at `421c54d3` |
 
-`pubspec.yaml` is now at `1.0.1+59`, the next build number. Build 58 is the last iOS upload (54 went
+`pubspec.yaml` is now at `1.0.1+60`, the next build number. Build 59 is the last iOS upload (54 went
 up outside this record) and 53 went to Play only; do not upload any of them again. Check App Store Connect before uploading if another release has happened meanwhile.
 
 ### Why the app is iPhone-only
