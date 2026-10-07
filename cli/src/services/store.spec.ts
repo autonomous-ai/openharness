@@ -7,6 +7,7 @@ const ASKER = { local: true, owner: true }
 
 function setup(over: Partial<StoreDeps> = {}) {
   const deps: StoreDeps = {
+    prepare: vi.fn(() => true),
     refresh: vi.fn(async () => [{ id: 'acme/thing' }] as never),
     rows: vi.fn((_installed, catalog) => (catalog ?? []).map((entry: { id: string }) => ({ id: entry.id, installed: false }))),
     remove: vi.fn(() => ({ ok: true as const })),
@@ -18,6 +19,10 @@ function setup(over: Partial<StoreDeps> = {}) {
 }
 
 describe('the store service', () => {
+  it('prepares the release-owned harnesses before answering requests', () => {
+    const { deps } = setup()
+    expect(deps.prepare).toHaveBeenCalledOnce()
+  })
   it('answers exactly the requests it declares', () => {
     expect(Object.keys(setup().requests).sort()).toEqual([...STORE_REQUESTS].sort())
     // Started as the daemon starts it, with the real catalog and installs behind it.

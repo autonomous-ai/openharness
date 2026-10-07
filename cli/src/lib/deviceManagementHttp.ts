@@ -1,4 +1,4 @@
-/** Thin local facade for the existing relay pairing manager. */
+/** Local HTTP validation only. Pairing and device state stay behind the gateway and Wi-Fi ports. */
 export interface AutonomousDeviceManagement {
   discover(): unknown | Promise<unknown>
   pairStart(options: { code: string; device: string }): unknown | Promise<unknown>

@@ -20,6 +20,8 @@ import { RelayConnectError } from '../lib/relayFrames.js'
 import { decodeGatewayBinary, encodeGatewayBinary, GatewayBinary, GATEWAY_CALLS } from '../lib/gatewayWire.js'
 import { decodeTerminalLocal, encodeTerminalLocal } from '../lib/terminalBinary.js'
 import { answerAccountQuery } from './accountQueries.js'
+import { guestMachineList, withStaleMarker } from '../lib/machineListReply.js'
+import type { GatewayMachines } from './api.js'
 import { LANE_OFF } from './api.js'
 import type {
   BackendNotice, GatewayEvents, LocalWindows, GatewayOps, GatewayPort, GatewayRefusal, GatewayStatus, HttpAnswer, LaneSeal,
@@ -41,6 +43,8 @@ export interface GatewayLinkDeps {
   tokens: { accessToken(opts?: { force?: boolean; failedToken?: string }): Promise<string> }
   /** A read of the backend's REST API under the account's session (the core's proxy). */
   backend(method: 'GET', path: string): Promise<HttpAnswer>
+  /** The last machine list reported by the gateway, for the models service's presence labels. */
+  machines?(state: GatewayMachines): void
   /** Ask the master for the gateway's process (harnessd/coreLink.ts `want`): it runs on demand (core/gatewayWake.ts). */
   want?(): void
   /** How long what waits for the gateway's first start waits (core/serviceLinks.ts `ON_DEMAND_START_MS`). */
@@ -103,6 +107,7 @@ export function createGatewayLink(deps: GatewayLinkDeps) {
   let localClients: LocalWindows = { desktop: 0, tui: 0 }
   let wifiService = false
   let reachable: string[] | null = null
+  let machines: GatewayMachines | null = null
   /** The remote clients the gateway registered, to forget each when it goes. */
   const clients = new Set<string>()
   const windows = new Map<string, Window>()
@@ -210,6 +215,32 @@ export function createGatewayLink(deps: GatewayLinkDeps) {
   }
 
   const ops: GatewayOps = {
+    backend: (method, path, body) => http(GATEWAY_CALLS.backend, { method, path, ...(body === undefined ? {} : { body }) }, 25_000),
+    machines: async (fallback = false) => {
+      const state = deps.start()
+      if (state.signedIn === false) {
+        const body = guestMachineList(text(state.computerId), text(state.machineName), text(state.hostname))
+        deps.machines?.({ owner: null, body, fetchedAt: now() })
+        return { status: 200, body }
+      }
+      const answer = await http(GATEWAY_CALLS.machines, { fallback }, 25_000)
+      const requestedOwner = text(record(state.account).machineId)
+      const currentOwner = text(record(deps.start().account).machineId)
+      if (requestedOwner !== currentOwner) return { status: 409, body: { success: false, error: { code: 'ACCOUNT_CHANGED', message: 'The account changed. Refresh and try again.' } } }
+      if (answer.status === 401 || answer.status === 403) machines = null
+      const owner = currentOwner
+      // A crashed gateway costs the network, not the app's last known roster. Never cross accounts or
+      // hide a real sign-out with rows cached for an earlier session.
+      if (fallback && answer.status >= 500 && owner && machines?.owner === owner && machines.body) {
+        return { status: 200, body: withStaleMarker(machines.body, machines.fetchedAt) }
+      }
+      return answer
+    },
+    mintGridName: async () => {
+      const answer = await deps.call(GATEWAY_CALLS.mintGridName, {}, 15_000)
+      if (typeof answer.error === 'string') throw new Error(answer.error)
+      return typeof answer.name === 'string' ? answer.name : null
+    },
     status: async (): Promise<GatewayStatus> => {
       // Never started, it has no pairing under way and nothing to say; `/api/status` is asked far too often to
       // start it for.
@@ -341,6 +372,13 @@ export function createGatewayLink(deps: GatewayLinkDeps) {
       case 'notice':
         events.notice(record(payload.notice) as unknown as BackendNotice)
         return
+      case 'machines': {
+        const body = payload.body && typeof payload.body === 'object' && !Array.isArray(payload.body) ? record(payload.body) : null
+        machines = { owner: typeof payload.owner === 'string' ? payload.owner : null, body,
+          fetchedAt: typeof payload.fetchedAt === 'number' && Number.isFinite(payload.fetchedAt) && Math.abs(payload.fetchedAt) <= 8.64e15 ? payload.fetchedAt : now() }
+        deps.machines?.(machines)
+        return
+      }
       case 'revoked':
         events.revoked()
         return

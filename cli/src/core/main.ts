@@ -9,7 +9,6 @@
  * or `start -f` with `HARNESS_NO_MASTER=1`), calls in here. `start -f` runs harnessd's master, which starts
  * the core with `__run`.
  */
-import { ensureBundledCoreHarnesses } from '../dsh/builtins.js'
 import { readFileSync, writeFileSync, openSync, existsSync, rmSync, statSync } from 'fs'
 import { join } from 'path'
 import { execFile, spawn } from 'child_process'
@@ -22,7 +21,6 @@ import { warmLoginShellEnvironment } from '../lib/loginShellEnv.js'
 import type { AppSwarms } from '../cable/cableSession.js'
 import type { UnreadNotification } from '../lib/notificationRead.js'
 import { terminalActivity } from '../lib/terminalActivity.js'
-import { MachineListCache, withStaleMarker } from '../device/machineList.js'
 import { registry, projectDisplayName, validTranscriptPath, type RegisteredSession } from '../lib/registry.js'
 import { engineSessionTitle } from '../lib/sessionTitle.js'
 import { machineNames } from '../lib/machineNames.js'
@@ -32,7 +30,7 @@ import { clearSafeModeMarker, safeModeDisposition, safeModeStatusBody, SafeModeR
 import { awakeTimeout } from '../lib/sleepAware.js'
 import { removePidFileIf, onError } from '../lib/daemonLaunch.js'
 import { ensureTmuxOnPath } from '../lib/tmuxOnPath.js'
-import { AUTH_DIR, AuthSessionError, AuthSessionManager, clearAuthSession, ensureSignInEpoch, readAuthSession, signInOf, type AuthSession } from '../lib/authSession.js'
+import { AUTH_DIR, AuthSessionManager, clearAuthSession, ensureSignInEpoch, readAuthSession, signInOf, type AuthSession } from '../lib/authSession.js'
 import { ENGINES, enginePathOverride } from '../lib/engineBin.js'
 import { isTerminalEngine } from '../engines/types.js'
 import { engineInstallRecipe } from '../lib/engineInstall.js'
@@ -154,7 +152,7 @@ import { wakeModels } from './modelsWake.js'
 import { wakeGateway } from './gatewayWake.js'
 import { createWifiLink } from './wifiLink.js'
 import { wifiDoors } from './wifiAgents.js'
-import { autonomousDeviceLocalRequest } from '../lib/autonomous-device/localApi.js'
+import { autonomousDeviceLocalRequest } from '../lib/deviceManagementHttp.js'
 import { attachLocalWsServer, LOCAL_WS_PATH, LOCAL_WS_PROTOCOL_VERSION } from '../localWsServer.js'
 import { TERMINAL_BINARY_VERSION } from '../lib/terminalBinary.js'
 import { isLoopbackRequest, loopbackHosts } from '../lib/loopbackRequest.js'
@@ -174,7 +172,7 @@ import { agentTokenUsage } from '../lib/agentTokenUsage.js'
 import { RuntimeProfileManager, type RuntimeModelOption } from '../lib/runtimeProfile.js'
 import { RuntimeProfileController } from '../lib/runtimeProfileController.js'
 import { installTimestampedConsole, sid, prepareLogFile, trimLogFile, LOG_CHECK_INTERVAL_MS } from '../lib/log.js'
-import { PROXY_BACKEND_TIMEOUT_MS, GRID_MINT_TIMEOUT_MS, backendHttpBase, postJson, controlPlaneAuth } from '../lib/controlPlane.js'
+import { backendHttpBase } from '../lib/controlPlane.js'
 
 // Daemon stdout/stderr. Capped at LOG_MAX_BYTES — see prepareLogFile/trimLogFile in lib/log.ts.
 const LOG_FILE = DAEMON_LOG_FILE
@@ -632,10 +630,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // The backend mints and remembers the account's grid name; this CLI holds neither the account's
     // email nor its id. An older backend (no route) answers nothing, which the grid reconcile treats as
     // "no grid yet". Bounded so a stalled control-plane connection cannot hold the attempt open.
-    mintGridName: async () => {
-      const { headers } = await controlPlaneAuth()
-      return (await postJson<{ gridName?: string }>('/api/grid/name', {}, headers, AbortSignal.timeout(GRID_MINT_TIMEOUT_MS))).gridName ?? null
-    },
+    mintGridName: () => gatewayOps.mintGridName(),
     accessToken: (options) => auth.accessToken(options),
     // The fleet's lane's sessions are the gateway's, which holds this machine's E2EE identity; it starts
     // below, before the devices whose fleet seals through it.
@@ -643,7 +638,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     signedIn: () => readAuthSession() !== null,
     environment: () => readAuthSession()?.autonomousEnv ?? env.AUTONOMOUS_ENV,
     // Built further down, with the account proxies: read when the devices ask, never now.
-    machines: () => machinesNow(),
+    machines: () => gatewayOps.machines(),
     machine: {
       id: () => backendRef?.machineId ?? '',
       computerId: () => computerId(),
@@ -782,7 +777,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // The relay and its E2EE (gateway/): the backend link, the sessions and the keys, which every remote
   // client's frames go through, held at the same gate. In its own process by default (core/gatewayLink.ts),
   // or here (gateway/start.ts); the socket hears it through `fromGateway` and speaks to it in the clear.
-  const account = (s = readAuthSession()): GatewayAccount => ({ machineId: s?.machineId ?? null, signIn: signInOf(s?.signInEpoch, s?.signInAcct) })
+  const account = (s = readAuthSession()): GatewayAccount => ({ machineId: s?.machineId ?? null, signIn: signInOf(s?.signInEpoch, s?.signInAcct), autonomousEnv: s?.autonomousEnv ?? env.AUTONOMOUS_ENV })
   let serviceLinksRef: ServiceLinks | null = null
   const gatewayLink = outOfProcess.has('gateway') ? createGatewayLink({
     events: backend.fromGateway,
@@ -790,12 +785,14 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     notifyBinary: (bytes) => serviceLinksRef?.notifyBinary('gateway', bytes) ?? false,
     buffered: () => serviceLinksRef?.buffered('gateway') ?? 0,
     call: (type, payload, waitMs) => serviceLinksRef?.call('gateway', type, payload, waitMs) ?? Promise.resolve({ error: 'SERVICE_UNAVAILABLE' }),
-    start: () => ({ machineId: backend.machineId, computerId: computerId(), autonomousEnv, signedIn: !!session?.machineId, account: account() }),
+    start: () => ({ machineId: backend.machineId, computerId: computerId(), autonomousEnv, signedIn: !!session?.machineId, account: account(), machineName: terminalHintMachineName(), hostname: hostname() }),
     tokens: auth, backend: (method, path) => proxyBackend(method, path), want: () => coreLink.want('gateway'),
+    machines: ({ body }) => ports.models?.machines(body, computerId()),
   }) : null
   const gateway = gatewayLink ?? inline!.startGateway({
     events: backend.fromGateway, machineId: backend.machineId, computerId: computerId(), autonomousEnv,
-    signedIn: !!session?.machineId, tokens: auth, backend: (method, path) => proxyBackend(method, path), account: account(),
+    signedIn: !!session?.machineId, tokens: auth, account: account(), machineName: terminalHintMachineName(), hostname: hostname(),
+    machines: ({ body }) => ports.models?.machines(body, computerId()),
   })
   backend.useGateway(gateway.port)
   backend.useWifi(wifiCore.fromGateway)
@@ -810,12 +807,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   }
   // This machine's viewers, served to a client over its connection by the viewers (core/viewerStreams.ts).
   backend.viewerStreams = createViewerStreams(() => ports.viewers, (connId, type, payload) => backend.sendViewerFrame(connId, type, payload))
-
-  // The harnesses the release bundles (the Model Manager, Devices, the Harness Monitor), before restore
-  // relaunches an agent on one. Here and not in the Store's process: its lean bundle would carry a second
-  // copy of their files (571 KB more cli.js) and the viewers' process held 12 MiB more at idle (measured
-  // 2026-10-06), while cli.js, which the core runs, carries them anyway.
-  ensureBundledCoreHarnesses()
 
   /**
    * Is ANY device surface watching this machine?
@@ -1425,157 +1416,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     },
   })
 
-  /** Proxy a control-plane call to backend using THIS daemon's own SSO session — the local caller
-   *  (e.g. the desktop app) never needs a bearer token of its own, loopback trust does the
-   *  authenticating. Forwards backend's response status/body verbatim, success or error alike, so a
-   *  local client's model layer needs zero special-casing versus talking to backend directly. */
-  //
-  //  A backend that cannot be reached, or does not answer in time, is reported in the SAME shape
-  //  (`{success:false, error:{code,message}}`, 502/504) rather than thrown: the hook server runs each
-  //  request as a void-discarded async, so a throw here was an unhandledRejection and a local request
-  //  that NEVER got a response — the desktop app then sat on its 30s receive timeout and printed a
-  //  DioException where "the backend is down" belonged. Same for a backend that accepts the request
-  //  and hangs (a Redis presence lookup, say): `fetch` waits forever by default, and the app's
-  //  timeout fired first. The bound is shorter than that timeout on purpose, so the daemon is the one
-  //  that answers, with a sentence.
-  async function proxyBackend(method: string, path: string, body?: unknown): Promise<{ status: number; body: Record<string, unknown> }> {
-    const failure = (status: number, code: string, message: string): { status: number; body: Record<string, unknown> } =>
-      ({ status, body: { success: false, error: { code, message } } })
-    let accessToken: string
-    try {
-      accessToken = await auth.accessToken()
-    } catch (err) {
-      // No session, or one the SSO service will never renew, is the caller's 401 — the answer the
-      // backend itself would give — not a backend fault; a refresh the service could not serve right
-      // now is. Telling them apart is what lets a local client say "sign in again" only when true.
-      const signedOut = err instanceof AuthSessionError && err.code !== 'UNAVAILABLE'
-      return failure(signedOut ? 401 : 502, signedOut ? 'NOT_SIGNED_IN' : 'AUTH_UNAVAILABLE', err instanceof Error ? err.message : String(err))
-    }
-    const latest = readAuthSession()
-    let res: Response
-    try {
-      res = await fetch(`${backendHttpBase()}${path}`, {
-        method,
-        headers: {
-          authorization: `Bearer ${accessToken}`,
-          'x-autonomous-env': latest?.autonomousEnv ?? env.AUTONOMOUS_ENV,
-          ...(body !== undefined ? { 'content-type': 'application/json' } : {}),
-        },
-        ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-        signal: AbortSignal.timeout(PROXY_BACKEND_TIMEOUT_MS),
-      })
-    } catch (err) {
-      const e = err as Error & { cause?: { message?: string } }
-      if (e.name === 'TimeoutError' || e.name === 'AbortError') {
-        return failure(504, 'BACKEND_TIMEOUT', `The Harness backend did not answer ${method} ${path} within ${PROXY_BACKEND_TIMEOUT_MS / 1000}s. Try again in a moment.`)
-      }
-      // undici wraps the socket error as `TypeError: fetch failed` with the real one in `cause`.
-      const why = e.cause?.message ?? e.message
-      return failure(502, 'BACKEND_UNREACHABLE', `Could not reach the Harness backend (${why}). Check the connection and try again.`)
-    }
-    const json = await res.json().catch(() => ({})) as Record<string, unknown>
-    const result = { status: res.status, body: json }
-    return result
+  // Account HTTP and the persistent machine cache belong to the gateway. The core routes the request
+  // and keeps only state reported by that service, so a backend outage cannot stall an agent's loop.
+  function proxyBackend(method: string, path: string, body?: unknown): Promise<{ status: number; body: Record<string, unknown> }> {
+    return gatewayOps.backend(method, path, body)
   }
-
-  /**
-   * The machine list a signed-out daemon answers with: this computer, alone.
-   *
-   * Null when there is a session — then the backend's own list is the answer, and this must not shadow
-   * it. `authMode: 'remote'` is what a computer-backed machine is once it has an account, said now so
-   * nothing downstream has to special-case a guest row.
-   */
-  function guestMachinesBody(): Record<string, unknown> | null {
-    if (readAuthSession()) return null
-    const id = computerId()
-    return {
-      success: true,
-      data: {
-        machines: [{
-          machineId: id,
-          computerId: id,
-          name: terminalHintMachineName(),
-          hostname: hostname(),
-          status: 'online',
-          authMode: 'remote',
-        }],
-        stale: false,
-        guest: true,
-      },
-    }
-  }
-
-  const machineListCache = new MachineListCache(
-    () => proxyBackend('GET', '/api/machines'),
-    computerId,
-    (line) => console.log(`[cable] ${line}`),
-    undefined,
-    // A machine row is per (user, computer): the one local fact that distinguishes two ACCOUNTS here.
-    // Read fresh each time — a re-login swaps it under a daemon that never restarted.
-    () => readAuthSession()?.machineId ?? null,
-  )
-  // Which of the owner's other computers have been reading offline — a label on the models only they
-  // serve on a sleeping grid, never a removal (grid-reads-without-waking issue 03).
-  machineListCache.listen((body) => ports.models?.machines(body, computerId()))
-  // The trust group swaps rosters only with the members the backend last said were online (gateway/start.ts).
-  machineListCache.listen(() => {
-    const { machines, source } = machineListCache.list()
-    gatewayOps.reachable(source !== 'backend' ? null : machines.filter((m) => m.state !== 'offline').map((m) => m.machineId))
-  })
-
-  /**
-   * The owner's machines as the devices read them (`CoreApi.account.machines`): this computer alone when
-   * signed out, else the backend's answer now. The core's own list takes it first, as its own refresh would,
-   * so the windows' fallback and the trust group stay as fresh as the dial's wheel.
-   */
-  async function machinesNow(): Promise<{ status: number; body: Record<string, unknown> }> {
-    const guest = guestMachinesBody()
-    if (guest) {
-      machineListCache.adopt(guest)
-      return { status: 200, body: guest }
-    }
-    return (await machineListCache.refresh()) ?? { status: 502, body: { error: { code: 'BACKEND_UNREACHABLE' } } }
-  }
-
-  /**
-   * `GET /api/machines` for local clients, answered from the last known-good list when the backend leg
-   * is down.
-   *
-   * The daemon already keeps that list: it re-reads it every 60s for the dial's wheel and persists it to
-   * `machines.json`, with the explicit policy that an outage keeps the rows and stops claiming they are
-   * live. The desktop app was the one consumer that got none of that — a bare pass-through handed it the
-   * 502 and it had nothing to draw, so a ten-second network blip emptied the machine list and left every
-   * pane spinning. Stale rows are not wrong rows; the marker below says which they are.
-   */
-  async function machinesListWithFallback(): Promise<{ status: number; body: Record<string, unknown> }> {
-    // ⚠️ SIGNED OUT, THE LIST IS THIS COMPUTER — never the backend's 401.
-    //
-    // 401 is the one status the desktop app reads as "the session ended": it tears its connections
-    // down and puts a sign-in wall in front of agents that were running fine a moment ago. Nothing
-    // here needs the backend to say what this computer is. The row is the shape the backend would
-    // send, keyed by the durable computer id this daemon is already serving under, so the app
-    // classifies it exactly as it will after a sign-in — local by computerId — with no guest-only
-    // branch for anyone to forget.
-    const guest = guestMachinesBody()
-    if (guest) {
-      // Into the same cache the dial's wheel reads, so the two surfaces cannot disagree about a
-      // machine list one of them was handed directly.
-      machineListCache.adopt(guest)
-      return { status: 200, body: guest }
-    }
-    const res = await proxyBackend('GET', '/api/machines')
-    if (res.status === 200) {
-      // Feed the cache the answer we already have rather than making it fetch the same thing again.
-      machineListCache.adopt(res.body)
-      return res
-    }
-    // A real end of session is the caller's answer, not an outage: never serve a list from behind it.
-    if (res.status === 401 || res.status === 403) return res
-    const cached = machineListCache.lastResponse()
-    if (!cached) return res
-    return { status: 200, body: withStaleMarker(cached.body, cached.fetchedAt) }
-  }
-
 
   // The daemon's status (GET /api/status, read by `harness status`, the desktop's discovery and scripts):
   // health, the computer's fingerprint and its local pairings. It deliberately does NOT expose chat or
@@ -1729,7 +1574,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     onDevicesDismiss: (body) => gatewayOps.devicesDismiss(body),
     onDevicesRebaseline: (confirm, head) => gatewayOps.devicesRebaseline(confirm, head),
     onStatus: async () => statusBody(await gatewayOps.status()),
-    onMachinesList: () => machinesListWithFallback(),
+    onMachinesList: () => gatewayOps.machines(true),
     onMachineRename: (machineId, name) => proxyBackend('PATCH', `/api/machines/${encodeURIComponent(machineId)}`, { name }),
     onMachineDelete: (machineId) => proxyBackend('DELETE', `/api/machines/${encodeURIComponent(machineId)}`),
     onAuthMe: () => proxyBackend('GET', '/api/auth/me'),
@@ -1972,6 +1817,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   } catch (error) {
     console.warn(`[repair] cwd repair skipped · ${error instanceof Error ? error.message : error}`)
   }
+  // Bundled harness installation is the Store's. Wait for its first preparation before restore reads
+  // the index, with a deadline so a broken Store never prevents ordinary agents from coming back.
+  if (outOfProcess.has('store') && !await storeLink.ready()) console.warn('[store] preparation unavailable · restoring with the installed harnesses')
   watcher.start()
   await cursorDiscovery.start()
   // What a restored agent's engine writes from here on is live: the first attach of each folds its

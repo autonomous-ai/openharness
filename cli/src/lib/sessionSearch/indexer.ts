@@ -15,7 +15,7 @@ import { stat } from 'node:fs/promises'
 import { performance } from 'node:perf_hooks'
 
 import type { LiveEvent } from '../normalize.js'
-import { forEachLine, lineNormalizer, lineTime, skipPredicate } from './transcript.js'
+import { forEachLine, lineNormalizer, lineTime, skipPredicate } from '../transcriptReader.js'
 import { TurnCollector } from './turns.js'
 import type { ExternalHit, IndexedSession, SearchHit, SessionSearchStore, SessionTail } from './store.js'
 

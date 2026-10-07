@@ -170,13 +170,6 @@ const EDGE: RegExp[] = [
  * list only shrinks: an entry no longer reached fails the test, so remove it with the move that ends it.
  */
 const CORE_MAY_REACH: Record<string, string> = {
-  'device/machineList.ts': 'the account\'s machine list, which /api/machines answers from and the trust group reads: with the account proxies (step 10)',
-  'dsh/builtins.ts': 'the bundled harnesses are put in place by the core\'s start, which cli.js carries them for anyway; in the Store\'s lean process they cost a second copy (core/main.ts)',
-  'dsh/lock.ts': 'with dsh/builtins.ts',
-  'dsh/registry.ts': 'with dsh/builtins.ts, which checks the bundled harnesses against the catalog\'s entries',
-  'dsh/updates.ts': 'with dsh/builtins.ts',
-  'lib/autonomous-device/localApi.ts': 'the hook server\'s routes for `harness device`, which the core serves: the pairings they answer are the gateway\'s, the receipts the Wi-Fi device\'s service\'s',
-  'lib/sessionSearch/transcript.ts': 'the readers of other engines\' sessions keep this helper: it moves beside them, out of search\'s folder',
   'services/shell.ts': 'shell setup and launch receipts, in the edge host; only the argv launch stays in the core (#893)',
 }
 

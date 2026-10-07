@@ -54,6 +54,17 @@ describe('the lean bundle a release carries', () => {
   const runnerOf = (name: string): string | undefined => Object.entries(RUNNER).find(([, runner]) => name.startsWith(`${runner}-`))?.[0]
   const hasZod = (names: Set<string>): boolean => [...names].some((name) => files.get(name)!.includes('$ZodType'))
 
+  it('loads the bundled harness assets in the Store alone and shares their bytes across lean builds', () => {
+    const asset = 'harness-builtin-assets.mjs'
+    expect(files.has(asset)).toBe(true)
+    expect(loads('store').has(asset)).toBe(true)
+    for (const role of ['master', 'core', 'search', 'workspaces']) expect(loads(role).has(asset), role).toBe(false)
+    // The bytes occur once in the combined lean files, even though inline mode can load the Store too.
+    const marker = '"builtinFiles")'
+    expect(files.get(asset)?.includes(marker)).toBe(true)
+    expect([...files].filter(([, code]) => code.includes(marker)).map(([name]) => name)).toEqual([asset])
+  })
+
   it('is files of their own for the master, the core and each service, the code it runs and no other role\'s', () => {
     for (const role of ROLES) {
       const others = [...loads(role)].map(runnerOf).filter((owner) => owner && owner !== role)

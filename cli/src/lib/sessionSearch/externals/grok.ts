@@ -18,7 +18,7 @@ import { basename, join } from 'node:path'
 
 import { agentCommandOwnershipSnapshot } from '../../engineBin.js'
 import { argvTokens, engineProcessMatch } from '../../tmux.js'
-import { forEachLine } from '../transcript.js'
+import { forEachLine } from '../../transcriptReader.js'
 import { absoluteFolder, entries, epochMs, fileStamp, parseLine, readJson, readTail, record, text, UUID } from './support.js'
 import type { ExternalProvider, ExternalSession, OwnerClaim, ProcessView, RunningProcess, ScanContext } from './types.js'
 
