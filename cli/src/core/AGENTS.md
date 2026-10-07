@@ -72,3 +72,5 @@ questions. Everything else is a service ([../services/AGENTS.md](../services/AGE
   agent made for a Store harness); `wifiLink.ts`: its service in the devices' process. `devicesWake.ts`: when
   that process is asked for, once there is a device (a dial's port in /dev, a paired Wi-Fi device).
   `modelsWake.ts`: when models' process is asked for as the core starts, once grid is in use here.
+  `gatewayWake.ts`: when the gateway's process is asked for as the core starts, before it binds: signed in, or
+  anything paired here.

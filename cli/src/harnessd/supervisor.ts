@@ -448,7 +448,10 @@ export class Supervisor {
         this.up()
         return
       case 'harnessd:want':
-        if (this.bound) this.deps.want?.(message.service)
+        // Before its bind too: a core signed in asks for the gateway as it starts, so that the relay comes up
+        // beside it, as it did when the gateway started with every other process. A core too old to ask sends
+        // none, before or after.
+        this.deps.want?.(message.service)
         return
       case 'harnessd:heartbeat': {
         if (!this.bound) return

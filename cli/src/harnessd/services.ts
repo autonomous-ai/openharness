@@ -393,7 +393,10 @@ export const SERVICE_HOSTS: Readonly<Record<string, ServiceHostSpec>> = {
   // The relay and its E2EE (gateway/gatewayProcess.ts): the backend link, every remote client's session,
   // the terminals' WebRTC channels and their queues. Network, crypto and pure-JS WebRTC, the attack surface,
   // where a fault costs the remote clients and nothing else (docs/design/2026-10-06-core-boundary-next.md).
-  gateway: { services: ['gateway'], heapLimitMiB: 512, rssLimitMiB: 1_024 },
+  // Started as the core starts when it is signed in or anything is paired here, and otherwise by the first
+  // thing that needs it (core/gatewayWake.ts): about 75 MiB at idle a computer signed out with nothing
+  // paired never pays.
+  gateway: { services: ['gateway'], heapLimitMiB: 512, rssLimitMiB: 1_024, onDemand: true, askedSince: 4 },
   // Grid's pictures, the Model Manager's catalog and the models found on this machine. Its downloads, model
   // servers and `grid` commands run in processes of their own, outside this budget. Started only once grid is
   // in use here or a request needs it (core/modelsWake.ts): about 70 MiB at idle, which a computer that uses

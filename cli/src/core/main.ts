@@ -151,6 +151,7 @@ import { createGatewayLink, laneOf } from './gatewayLink.js'
 import { createWifiCore, WIFI_START_MS } from './wifi.js'
 import { createDevicesWake, DEVICES_ON_DEMAND } from './devicesWake.js'
 import { wakeModels } from './modelsWake.js'
+import { wakeGateway } from './gatewayWake.js'
 import { createWifiLink } from './wifiLink.js'
 import { wifiDoors } from './wifiAgents.js'
 import { autonomousDeviceLocalRequest } from '../lib/autonomous-device/localApi.js'
@@ -382,6 +383,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // move (it tears down two dozen subsystems declared further down). Until it is ready, a staged update is
   // applied by `bootHandoff`, which hands the machine over without finishing start-up.
   coreLink.onUpdate((version) => { void daemonBoot.applyStagedUpdate(version) })
+  wakeGateway({ outOfProcess: servicesTheMasterRuns(process.env, KNOWN_SERVICES), signedIn: !!session, dataDir: env.ADAPTER_DATA_DIR, want: (service) => coreLink.want(service) })
   // …or, under a master too old to run the updater, from the updater this core runs beside itself
   // (core/updaterBeside.ts), in a process of its own: the core downloads no build either way.
   if (needsUpdaterBeside(process.env, coreLink.supervised, isInstalledCopy(SCRIPT_PATH, env.ADAPTER_CLI_DIR), env.ADAPTER_UPDATE_DISABLE)) {
@@ -789,7 +791,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     buffered: () => serviceLinksRef?.buffered('gateway') ?? 0,
     call: (type, payload, waitMs) => serviceLinksRef?.call('gateway', type, payload, waitMs) ?? Promise.resolve({ error: 'SERVICE_UNAVAILABLE' }),
     start: () => ({ machineId: backend.machineId, computerId: computerId(), autonomousEnv, signedIn: !!session?.machineId, account: account() }),
-    tokens: auth, backend: (method, path) => proxyBackend(method, path),
+    tokens: auth, backend: (method, path) => proxyBackend(method, path), want: () => coreLink.want('gateway'),
   }) : null
   const gateway = gatewayLink ?? inline!.startGateway({
     events: backend.fromGateway, machineId: backend.machineId, computerId: computerId(), autonomousEnv,
@@ -1138,8 +1140,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     token: serviceToken,
     owned: Object.fromEntries([...outOfProcess].map((name) => [name, requestsOf[name] ?? []])),
     waits: LONG_ANSWERS,
-    // An experiment's process runs once it is on, the devices' once there is one, models' once grid is used: a request asks.
-    onDemand: new Set([...experiments, ...DEVICES_ON_DEMAND, 'models']),
+    // An experiment's process runs once on, the devices' once there is one, models' and the gateway's once needed: a request asks.
+    onDemand: new Set([...experiments, ...DEVICES_ON_DEMAND, 'models', 'gateway']),
     want: (service) => experimentHooks.want(service),
     // The gateway's first: its `backend` reads (the device key log) were refused below as NOT_AN_EXPERIMENT.
     answer: async (service, query, payload) => (service === 'gateway' && gatewayLink ? gatewayLink.answer(query, payload) : null) ?? deliveries.answer(service, query, payload)
