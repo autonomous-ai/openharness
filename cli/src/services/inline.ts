@@ -7,9 +7,9 @@
  *
  * The core imports this module only then, and only dynamically (core/main.ts): what it reaches is the
  * services' own code, which the core's process then never loads by default. That is how a service in its
- * own process leaves the core's import closure, which src/architecture.spec.ts holds to a budget and
- * walks without following this one import (docs/design/2026-10-06-core-boundary-next.md, "The target,
- * and its test"). The core still routes these services' requests and holds their fallbacks: both are
+ * own process leaves the core's import closure, which src/architecture.spec.ts checks for forbidden
+ * dependencies without following this one import (docs/design/2026-10-06-core-boundary-next.md, "The
+ * target, and its test"). The core still routes these services' requests and holds their fallbacks: both are
  * declared in core/api.ts, which it loads either way.
  */
 export { startGateway } from '../gateway/start.js'
