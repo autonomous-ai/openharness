@@ -56,6 +56,7 @@ mod os_welcome;
 mod paste;
 mod pane;
 mod pane_frame;
+mod pane_drag;
 mod picker;
 mod proto;
 mod theme;

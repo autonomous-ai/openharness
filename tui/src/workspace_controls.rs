@@ -304,7 +304,7 @@ pub fn run(app: &mut App, token: &str, verb: &str) {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crossterm::event::{Event, KeyModifiers};
     use serde_json::json;
@@ -341,7 +341,7 @@ mod tests {
         }
     }
 
-    fn app(width: u16) -> App {
+    pub(crate) fn app(width: u16) -> App {
         let (sink, _) = tokio::sync::mpsc::unbounded_channel();
         let mut app = App::new(19799, sink, (width, 32));
         app.handed_over = true;
@@ -368,7 +368,7 @@ mod tests {
         app
     }
 
-    fn render(app: &mut App) -> Buffer {
+    pub(crate) fn render(app: &mut App) -> Buffer {
         let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(app.size.0, app.size.1)).unwrap();
         terminal.draw(|f| crate::ui::draw(f, app)).unwrap();
         terminal.backend().buffer().clone()
