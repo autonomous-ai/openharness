@@ -80,12 +80,13 @@ master too old to run it starts it beside itself, still in its own process (`src
   a service whose start throws there is left off while the others in its process run. The core's
   in-process starts are in `inline.ts`, which the core loads only when a service runs in its process:
   a service in its own leaves the core's import closure (`src/architecture.spec.ts`). From a release,
-  it runs on the lean bundle cli.js carries for the master and the services
-  (`src/harnessd/leanBundle.ts`), split so that a service loads its own code and nothing else: 61 to 77
-  MiB resident at idle (20 to 35 MiB physical footprint), against 118 to 131 (54 to 90) when each
-  started on cli.js (2026-10-05). It is only an optimisation: the master starts a service from cli.js
-  whenever the lean bundle cannot be used (`src/harnessd/leanServices.ts`), and the release script
-  refuses one that does not load (`scripts/check-lean-bundle.mjs`).
+  it runs on the lean bundle cli.js carries for the master and the services, built apart from the
+  core's own entry (`src/harnessd/leanBundle.ts`, `src/leanCoreEntry.ts`), split so that a service
+  loads its own code and nothing else: 61 to 77 MiB resident at idle (20 to 35 MiB physical
+  footprint), against 118 to 131 (54 to 90) when each started on cli.js (2026-10-05). It is only an
+  optimisation: the master starts a service from cli.js whenever the lean bundle cannot be used
+  (`src/harnessd/leanServices.ts`), and the release script refuses one that does not load
+  (`scripts/check-lean-bundle.mjs`).
 - **What a service imports is what its process costs.** Import from small modules: one schema module
   pulled in for a constant brought zod to search and workspaces, 8 MiB each (`src/dsh/id.ts`). A
   failing import fails the service's start, loudly, and the master parks it. `src/leanEntry.spec.ts`

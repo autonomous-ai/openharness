@@ -7,8 +7,8 @@
  * a file of its own with what only it uses, so a process loads this file, its own and the shared ones it
  * imports: the master never the services' code, a service never the master's nor another service's
  * (leanEntry.spec.ts holds it to that). A master started on cli.js re-executes on this file
- * (masterProcess.ts `startMasterFromBundle`) and starts the services from it. The core and the CLI
- * always run from cli.js.
+ * (masterProcess.ts `startMasterFromBundle`) and starts the services from it. The core has an entry of
+ * its own, built apart (leanCoreEntry.ts), and the CLI always runs from cli.js.
  */
 import { fileURLToPath } from 'node:url'
 

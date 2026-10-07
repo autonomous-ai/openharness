@@ -9,10 +9,10 @@ import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from 'nod
 import { performance } from 'node:perf_hooks'
 import { ignoreLogWriteErrors, trimLogFile, ts } from '../lib/log.js'
 import { folderFingerprint } from './leanBundle.js'
-import { leanServices } from './leanServices.js'
+import { CORE, leanServices } from './leanServices.js'
 import { platformFromEnv, type PlatformName } from './platform.js'
 import { baseNode, namedNode } from './processName.js'
-import type { MasterMessage } from './protocol.js'
+import { LEAN_CORE_SCRIPT_ENV, type MasterMessage } from './protocol.js'
 import {
   PROBE_ANSWER, RESUME_ENV, createReexec, decodeResume, fingerprint, readMarker, recoverFailedReexec, removeMarker, runProbe, writeMarker,
 } from './reexec.js'
@@ -31,15 +31,15 @@ export interface MasterConfig {
   /** The managed runtime's folder: a node inside it runs each process under its own name
    *  (./processName.ts); any other node runs as `node`. */
   runtimeDir?: string
-  /** The CLI entry (`cli.js`, or `src/cli.ts` under tsx): what the core runs, and what an update
-   *  replaces on disk. */
+  /** The CLI entry (`cli.js`, or `src/cli.ts` under tsx): what the core and the services fall back on,
+   *  and what an update replaces on disk. */
   scriptPath: string
-  /** What the services run instead, when it is not the CLI entry: the lean bundle the entry carries
-   *  (./leanBundle.ts), so each service parses its own code and not the whole CLI's. Only ever an
-   *  optimisation: a service starts from `scriptPath` whenever it cannot be used (./leanServices.ts). */
+  /** What the services and the core run instead, when it is not the CLI entry: the lean bundle the entry
+   *  carries (./leanBundle.ts), so each parses its own code and not the whole CLI's. Only ever an
+   *  optimisation: each starts from `scriptPath` whenever it cannot be used (./leanServices.ts). */
   serviceScriptPath?: string
   /** What the lean bundle's folder fingerprints to as this master starts (./leanBundle.ts
-   *  `leanFingerprint`): checked before every service is started from it. */
+   *  `leanFingerprint`): checked before every service and every core is started from it. */
   leanFingerprint?: string
   /** The sha256 of the bundle this master's code came from, when the master was not started on
    *  `scriptPath` itself but on the lean bundle read from it: the bundle it runs is the one it was read
@@ -332,11 +332,23 @@ export function runMaster(config: MasterConfig): Supervisor {
     log,
   }) : null
   supervisor = new Supervisor({
-    spawnCore: (extra) => coreHandle(spawn(named('harnessd-core'), [...execArgv, config.scriptPath, '__run'], {
-      // Told which services this master runs, so it routes to exactly those and runs the rest itself.
-      env: { ...env, ...extra, HARNESSD_SERVICE_TOKEN: token, ...serviceProcessesEnv(specs) },
-      stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
-    })),
+    spawnCore: (extra) => {
+      // From the lean bundle on the core's own code when it can be, as a service is, by the same rules
+      // (./leanServices.ts), and from cli.js otherwise. The supervisor judges the core it is given the
+      // same either way: an update's first core, lean or not, is on probation as before.
+      const script = lean.scriptFor(CORE)
+      const handle = coreHandle(spawn(named('harnessd-core'), [...execArgv, script, '__run'], {
+        // Told which services this master runs, so it routes to exactly those and runs the rest itself;
+        // and, from the lean bundle, which cli.js is its CLI (leanCoreEntry.ts).
+        env: {
+          ...env, ...extra, HARNESSD_SERVICE_TOKEN: token, ...serviceProcessesEnv(specs),
+          ...(script === config.scriptPath ? {} : { [LEAN_CORE_SCRIPT_ENV]: config.scriptPath }),
+        },
+        stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
+      }))
+      lean.started(CORE, script, handle)
+      return handle
+    },
     now: () => performance.now(),
     wallClock: () => Date.now(),
     writeStatus: (status) => { if (config.statusFile) writeStatusFile(config.statusFile, { ...status, masterPid: process.pid, ...(platform ? { platform } : {}) }) },

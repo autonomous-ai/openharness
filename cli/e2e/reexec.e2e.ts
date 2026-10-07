@@ -21,7 +21,7 @@ import { dirname, join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it, onTestFailed } from 'vitest'
 import { LocalClient, type Frame } from './harness/client.js'
 import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
-import { atVersion } from './harness/release.js'
+import { atVersion, withFault } from './harness/release.js'
 import { PROBE_COMMAND, runProbe } from '../src/harnessd/reexec.js'
 
 const FIRST = '42.0.1'
@@ -78,7 +78,8 @@ describe('the master re-executing itself on an update', () => {
   const daemonProcesses = (): Array<{ pid: number; ppid: number; command: string }> =>
     execFileSync('ps', ['-axo', 'pid=,ppid=,command='], { encoding: 'utf8' }).split('\n')
       .map((line) => /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(line))
-      .filter((match): match is RegExpExecArray => !!match && match[3].includes(join(cliDir(), 'cli.js')))
+      // The core and the services from the lean bundle in the data folder, or from cli.js.
+      .filter((match): match is RegExpExecArray => !!match && (match[3].includes(join(cliDir(), 'cli.js')) || (!!daemon && match[3].includes(join(daemon.dataDir, 'lean')))))
       .map((match) => ({ pid: Number(match[1]), ppid: Number(match[2]), command: match[3] }))
   const nothingOrphaned = async (masterPid: number) => {
     // A probe is over within the update; give one a moment to end.
@@ -98,7 +99,7 @@ describe('the master re-executing itself on an update', () => {
     const release = (version: string, inject = ''): void => {
       // The version is baked in at build time; the others are the same bytes with it swapped, and a
       // fault put in at the top where a test needs one.
-      const source = atVersion(first, FIRST, version).replace('\n', `\n${inject}\n`)
+      const source = withFault(atVersion(first, FIRST, version), inject)
       const file = join(out, `cli-${version}.js`)
       writeFileSync(file, source)
       expect(execFileSync(process.execPath, [file, 'version'], { encoding: 'utf8' }).trim()).toBe(version)

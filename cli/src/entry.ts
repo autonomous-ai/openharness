@@ -8,8 +8,8 @@
  * to 160, so isolating the services cost more memory than everything else the daemon does. Here the
  * master and the services load only their own modules: esbuild, bundling without code splitting, turns
  * each dynamic import below into a module initialised the first time it is imported, so the code a
- * process never imports is parsed but never run. Everything else, the core (`__run`) included, is the
- * CLI as it always was.
+ * process never imports is parsed but never run. The core (`__run`) starts as it does from the lean bundle
+ * (coreProcess.ts), and everything else is the CLI as it always was.
  *
  * Nothing heavy may be imported statically here: it would be evaluated by every process.
  */
@@ -24,6 +24,9 @@ if (command === '__harnessd') {
   process.exitCode = (await import('./masterProcess.js')).probeThisMaster()
 } else if (command === '__service') {
   await (await import('./serviceProcess.js')).startServiceProcess(name)
+} else if (command === '__run') {
+  // The core: started the one way it is started from the lean bundle too (coreProcess.ts), on cli.js.
+  (await import('./coreProcess.js')).startCoreProcess(fileURLToPath(import.meta.url))
 } else {
   await import('./cli.js')
 }

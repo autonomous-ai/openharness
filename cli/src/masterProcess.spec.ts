@@ -64,7 +64,7 @@ describe('a master started on cli.js', () => {
     const { given, calls } = deps({ execve: null })
     startMasterFromBundle('/cli/cli.js', given)
     expect(calls.starts).toEqual([{ scriptPath: '/cli/cli.js', serviceScriptPath: '/data/lean/harnessd-aaaa.mjs', leanFingerprint: PRINT }])
-    expect(calls.logs).toEqual(['[harnessd] this Node cannot re-execute the master: it runs from /cli/cli.js, the services from /data/lean/harnessd-aaaa.mjs'])
+    expect(calls.logs).toEqual(['[harnessd] this Node cannot re-execute the master: it runs from /cli/cli.js, the core and the services from /data/lean/harnessd-aaaa.mjs'])
     const failing = deps({ execve: () => { throw new Error('E2BIG') } })
     startMasterFromBundle('/cli/cli.js', failing.given)
     expect(failing.calls.starts).toEqual([{ scriptPath: '/cli/cli.js', serviceScriptPath: '/data/lean/harnessd-aaaa.mjs', leanFingerprint: PRINT }])
@@ -82,7 +82,7 @@ describe('a master started on cli.js', () => {
       startMasterFromBundle('/cli/cli.js', given)
       expect(calls.execs).toEqual([])
       expect(calls.starts).toEqual([{ scriptPath: '/cli/cli.js' }])
-      expect(calls.logs).toEqual([`[harnessd] ${gone} is not there to re-execute on: the master and the services run from /cli/cli.js`])
+      expect(calls.logs).toEqual([`[harnessd] ${gone} is not there to re-execute on: the master, the core and the services run from /cli/cli.js`])
     }
   })
 
@@ -91,7 +91,7 @@ describe('a master started on cli.js', () => {
     startMasterFromBundle('/cli/cli.js', given)
     expect(calls.starts).toEqual([{ scriptPath: '/cli/cli.js' }])
     expect(calls.probes).toEqual([])
-    expect(calls.logs).toEqual([`[harnessd] ${LEAN_OFF_FILE} is there: the master and the services run from /cli/cli.js`])
+    expect(calls.logs).toEqual([`[harnessd] ${LEAN_OFF_FILE} is there: the master, the core and the services run from /cli/cli.js`])
   })
 
   it('runs everything from cli.js when the lean bundle is not there to use, and says why', () => {
@@ -111,7 +111,7 @@ describe('a master started on cli.js', () => {
     const none = deps()
     startMasterFromBundle('/cli/cli.js', none.given)
     expect(none.calls.starts).toEqual([{ scriptPath: '/cli/cli.js' }])
-    expect(none.calls.logs).toEqual(['[harnessd] no lean bundle in /cli/cli.js: the master and the services run from it'])
+    expect(none.calls.logs).toEqual(['[harnessd] no lean bundle in /cli/cli.js: the master, the core and the services run from it'])
   })
 
   it('runs everything from cli.js, quietly, with HARNESSD_LEAN=off', () => {

@@ -24,7 +24,7 @@ import { join } from 'node:path'
 import { afterAll, afterEach, beforeAll, describe, expect, it, onTestFailed } from 'vitest'
 import { LocalClient, type Frame } from './harness/client.js'
 import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
-import { atVersion } from './harness/release.js'
+import { atVersion, withFault } from './harness/release.js'
 
 const FIRST = '43.0.1'
 const DISKFULL = process.env.DISKFULL === '1' && process.platform === 'darwin'
@@ -67,8 +67,8 @@ class Releases {
   readonly cli = new Map<string, Buffer>()
   readonly notify = new Map<string, Buffer>()
   add(version: string, inject = ''): void {
-    // In the lean bundle cli.js carries for the master and the services too (e2e/harness/release.ts).
-    const source = atVersion(built, FIRST, version).replace('\n', `\n${inject}\n`)
+    // In the lean bundle cli.js carries for the master, the services and the core too (e2e/harness/release.ts).
+    const source = withFault(atVersion(built, FIRST, version), inject)
     const file = join(buildDir, `cli-${version}.js`)
     writeFileSync(file, source)
     expect(execFileSync(process.execPath, [file, 'version'], { encoding: 'utf8' }).trim()).toBe(version)
@@ -296,7 +296,7 @@ class Installed {
   daemonProcesses(): Array<{ pid: number; ppid: number; command: string }> {
     return execFileSync('ps', ['-axo', 'pid=,ppid=,command='], { encoding: 'utf8' }).split('\n')
       .map((line) => /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(line))
-      .filter((match): match is RegExpExecArray => !!match && match[3].includes(join(this.cliDir, 'cli.js')))
+      .filter((match): match is RegExpExecArray => !!match && (match[3].includes(join(this.cliDir, 'cli.js')) || (!!this.daemon && match[3].includes(join(this.daemon.dataDir, 'lean')))))
       .map((match) => ({ pid: Number(match[1]), ppid: Number(match[2]), command: match[3] }))
   }
 

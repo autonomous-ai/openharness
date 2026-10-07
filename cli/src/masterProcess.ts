@@ -6,8 +6,8 @@
  * process evaluated the whole bundle, and Node parses all of the file a process is started on whatever
  * it runs. Measured from the bundle at idle (2026-10-05): the master 160 MiB resident, each service 115
  * to 160. So a master started on cli.js re-executes itself, same pid, on the lean bundle cli.js carries
- * (harnessd/leanBundle.ts), and starts the services from it too: each then parses its own code and not
- * the whole CLI's 4.4 MB.
+ * (harnessd/leanBundle.ts), and starts the services and the core from it too: each then parses its own
+ * code and not the whole CLI's 4.4 MB.
  */
 import { spawnSync } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
@@ -162,26 +162,26 @@ export function startMasterFromBundle(bundlePath: string, deps: BundleMasterDeps
     deps.start({ scriptPath: bundlePath, ...(lean ? { serviceScriptPath: lean.path, leanFingerprint: lean.fingerprint } : {}) })
   }
   if (deps.env.HARNESSD_LEAN === 'off') { fromBundle(null); return }
-  if (deps.leanOff()) { fromBundle(`${LEAN_OFF_FILE} is there: the master and the services run from ${bundlePath}`); return }
+  if (deps.leanOff()) { fromBundle(`${LEAN_OFF_FILE} is there: the master, the core and the services run from ${bundlePath}`); return }
   let written: { lean: LeanBundle; path: string } | null
   try {
     const lean = readLeanBundle(deps.read(bundlePath))
     written = lean ? { lean, path: deps.write(lean) } : null
   } catch (error) {
-    fromBundle(`the lean bundle could not be written out (${error instanceof Error ? error.message : String(error)}): the master and the services run from ${bundlePath}`)
+    fromBundle(`the lean bundle could not be written out (${error instanceof Error ? error.message : String(error)}): the master, the core and the services run from ${bundlePath}`)
     return
   }
-  if (!written) { fromBundle(`no lean bundle in ${bundlePath}: the master and the services run from it`); return }
+  if (!written) { fromBundle(`no lean bundle in ${bundlePath}: the master, the core and the services run from it`); return }
   const { lean, path: leanPath } = written
   const fingerprint = leanFingerprint(lean)
   const leanEnv = { ...deps.env, [BUNDLE_ENV]: bundlePath, [BUNDLE_SHA256_ENV]: lean.bundleSha256, [LEAN_FINGERPRINT_ENV]: fingerprint }
   const probed = deps.probe(leanPath, leanEnv)
   if (!probed.ok) {
-    fromBundle(`the lean bundle ${leanPath} did not answer its probe (${probed.detail}): the master and the services run from ${bundlePath}`)
+    fromBundle(`the lean bundle ${leanPath} did not answer its probe (${probed.detail}): the master, the core and the services run from ${bundlePath}`)
     return
   }
   if (!deps.execve) {
-    fromBundle(`this Node cannot re-execute the master: it runs from ${bundlePath}, the services from ${leanPath}`, { path: leanPath, fingerprint })
+    fromBundle(`this Node cannot re-execute the master: it runs from ${bundlePath}, the core and the services from ${leanPath}`, { path: leanPath, fingerprint })
     return
   }
   // An exec that fails cannot be caught once it has begun: on Node 22.23 a node binary that is not there
@@ -190,13 +190,13 @@ export function startMasterFromBundle(bundlePath: string, deps: BundleMasterDeps
   const node = deps.node?.() ?? process.execPath
   const missing = [node, leanPath].find((path) => !deps.exists(path))
   if (missing) {
-    fromBundle(`${missing} is not there to re-execute on: the master and the services run from ${bundlePath}`)
+    fromBundle(`${missing} is not there to re-execute on: the master, the core and the services run from ${bundlePath}`)
     return
   }
   try {
     deps.execve(node, [node, ...process.execArgv, leanPath, '__harnessd'], leanEnv)
   } catch (error) {
     // Only what `process.execve` refuses before it begins: arguments it cannot take.
-    fromBundle(`the master could not re-execute on ${leanPath} (${error instanceof Error ? error.message : String(error)}): it runs from ${bundlePath}, the services from ${leanPath}`, { path: leanPath, fingerprint })
+    fromBundle(`the master could not re-execute on ${leanPath} (${error instanceof Error ? error.message : String(error)}): it runs from ${bundlePath}, the core and the services from ${leanPath}`, { path: leanPath, fingerprint })
   }
 }

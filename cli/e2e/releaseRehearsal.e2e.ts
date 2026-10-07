@@ -66,7 +66,8 @@ describe.skipIf(!FROM)('a release rehearsal: the update from a published release
   const daemonProcesses = (): Array<{ pid: number; ppid: number; command: string }> =>
     execFileSync('ps', ['-axo', 'pid=,ppid=,command='], { encoding: 'utf8' }).split('\n')
       .map((line) => /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(line))
-      .filter((match): match is RegExpExecArray => !!match && match[3].includes(join(cliDir(), 'cli.js')))
+      // The core and the services from the lean bundle in the data folder, or from cli.js.
+      .filter((match): match is RegExpExecArray => !!match && (match[3].includes(join(cliDir(), 'cli.js')) || (!!daemon && match[3].includes(join(daemon.dataDir, 'lean')))))
       .map((match) => ({ pid: Number(match[1]), ppid: Number(match[2]), command: match[3] }))
   /** The pids answering on the daemon's port: whatever runs it now, a successor nothing started for us included. */
   const listeners = (): number[] => {
