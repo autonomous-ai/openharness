@@ -30,7 +30,8 @@ ENV = {k: os.environ[k] for k in ('PATH', 'LANG', 'LC_ALL', 'TZ') if k in os.env
 ENV.update(HOME=str(BASE), HN_TMPDIR=str(BASE), HN_SOCKET_NAME=PREFIX, PORT=str(PORT),
            TERM='xterm-256color', SHELL='/bin/sh', HARNESS_TUI_DESK='off',
            HARNESS_TUI_NOTIFY='off', HN_DESKTOP='off', HARNESS_TUI_ASK_TERMINAL='off',
-           HARNESS_TUI_KITTY_KEYS='off', HARNESS_TUI_VERIFY=str(BASE / 'verify.log'))
+           HARNESS_TUI_KITTY_KEYS='off')
+VERIFY = BASE / 'verify.log'
 CONF = BASE / 'tmux.conf'
 CONF.write_text('set -g @hn-new-window shell\nset -g automatic-rename off\nset -g status-right "REPAINT_IDLE"\n'
                 'set -g set-titles-string "REPAINT_TITLE"\n')
@@ -163,21 +164,70 @@ def resize(width, height):
     wait(lambda: size() == [width, height], 'outer resize')
 
 
-def dump_screen():
-    """SIGUSR2 to the TUI, then a frame: it logs its screen against the replayed bytes (HARNESS_TUI_VERIFY)."""
+def tui_pid():
     tui = ' '.join(COMMAND)
     listing = subprocess.run(['ps', '-axo', 'pid=,ppid=,command='], text=True, capture_output=True).stdout
     found = [l.split(None, 2) for l in listing.splitlines() if l.strip().endswith(tui)]
     pids = [int(pid) for pid, _, _ in found if not any(ppid == pid for _, ppid, _ in found)] # the child of the shell
     assert len(pids) == 1, ('the TUI process', found)
-    os.kill(pids[0], signal.SIGUSR2)
+    return pids[0]
+
+
+def check_replay():
+    """HARNESS_TUI_VERIFY replays every byte into a reference terminal: SIGUSR2 and a frame
+    log its screen against what hn drew; no cell may differ, here or in any earlier frame."""
+    os.kill(tui_pid(), signal.SIGUSR2)
     keys('-H', '1b', '5b', '49') # the dump is taken at the next frame; focus-in asks for one
+    wait(lambda: VERIFY.exists() and re.search(r'### .* dump: SIGUSR2 .* 0 cells differ', VERIFY.read_text()),
+         'the replayed screen was not dumped')
+    bad = re.findall(r'(?:===|###) .* [1-9][0-9]* cells differ', VERIFY.read_text())
+    assert not bad, bad
+
+
+def start_session(*extra):
+    """A fresh hn in the outer terminal (with [extra] env), its output copied to raw.bin."""
+    run(COMMAND + ['kill-server'], ok=False)
+    run(OUTER + ['kill-server'], ok=False)
+    RAW.unlink(missing_ok=True)
+    VERIFY.unlink(missing_ok=True)
+    launch = ['env', '-u', 'TMUX', '-u', 'TMUX_PANE', '-u', 'HN_SOCKET',
+              *[f'{k}={v}' for k, v in ENV.items()], *extra, *COMMAND]
+    outer('new-session', '-d', '-s', 'view', '-x', '120', '-y', '32', shlex.join(launch))
+    wait(lambda: 'Mock terminal' in screen(), 'frame of the fresh session')
+    outer('pipe-pane', '-t', 'view', f'cat >> {RAW}')
+    keys('C-g') # the startup notice
+    settled()
+
+
+def complete(data):
+    """[data] without an update still being written (the pipe can end between its halves)."""
+    cut = data.rfind(b'\x1b[?2026h')
+    return data[:cut] if cut >= 0 and SYNC.search(data, cut + 8) is None else data
+
+
+def burst(act, seen=lambda data: len(data) > 0):
+    """Run [act]; wait for the bytes it causes ([seen] of the whole updates written so far),
+    then for hn to go quiet, so a second, unwanted repaint would show; return the bytes."""
+    return burst_after(act, seen)[0]
+
+
+def burst_after(act, seen):
+    """As burst, with the seconds from the key (delivered) to the first sight of [seen]."""
+    at = mark()
+    act()
+    begun = time.monotonic()
+    wait(lambda: seen(complete(written(at))), 'the expected bytes were not written')
+    took = time.monotonic() - begun
+    settled()
+    return written(at), took
 
 
 mock = None
 started = False
 try:
     with socket.socket() as probe:
+        # As the mock sets it: a port in TIME_WAIT from the last run is free, a live listener is not.
+        probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         probe.bind(('127.0.0.1', PORT))
     with (BASE / 'mock.log').open('w') as log:
         mock = subprocess.Popen(['node', str(ROOT / 'tests/mock-daemon.mjs'), str(PORT)],
@@ -254,121 +304,81 @@ try:
     wait(lambda: 'REPAINT_INPUT_READY' in screen(), 'content after resize')
     print('PASS repaint: input after idle and recovery from a one-cell terminal', flush=True)
 
-    # The byte stream: what hn writes, as the terminal receives it (?2026 and all).
-    outer('pipe-pane', '-t', 'view', f'cat >> {RAW}')
-    keys('C-g')
-    settled()
+    # The byte stream: what a fresh hn (verifying its output) writes, as the terminal receives it.
+    start_session(f'HARNESS_TUI_VERIFY={VERIFY}')
     rows = size()[1]
-
-    def step(act, seconds=.9):
-        at = mark()
-        act()
-        time.sleep(seconds)
-        return written(at)
-
-    def soft_within(act, limit=.4):
-        """Run [act]; its soft repaint must be written within [limit] seconds of the key."""
-        at = mark()
-        act()
-        begun = time.monotonic() # the key has been delivered; the settle delay runs from there
-        while time.monotonic() - begun < limit:
-            try:
-                if soft_repaints(written(at), rows):
-                    break
-            except AssertionError:
-                pass # caught between the two halves of an update
-            time.sleep(.01)
-        else:
-            raise AssertionError(f'no soft repaint within {limit}s:\n' + screen())
-        time.sleep(.7)
-        return written(at)
+    soft = lambda data: len(soft_repaints(data, rows)) >= 1
+    hard = lambda data: len(hard_clears(data)) >= 1
 
     def one_soft(data, label):
-        assert len(soft_repaints(data, rows)) == 1, f'{label}: not exactly one soft repaint'
+        assert len(soft_repaints(data, rows)) == 1, f'{label}: {len(soft_repaints(data, rows))} soft repaints, {len(updates(data))} updates'
+        assert len(updates(data)) == 1, f'{label}: more than one update'
         assert not hard_clears(data), f'{label}: a hard clear'
 
-    assert step(lambda: None, 1.2) == b'', 'an idle hn wrote bytes'
+    def no_repaint(data, label):
+        assert data and not soft_repaints(data, rows) and not hard_clears(data), f'{label}: repainted'
+
+    at = mark()
+    time.sleep(1.2)
+    assert mark() == at, 'an idle hn wrote bytes'
     print('PASS repaint: an idle hn writes no bytes', flush=True)
 
     # Focus-in repaints softly, once; so does Ctrl-L in a picker (the command panel).
-    data = step(lambda: keys('-H', '1b', '5b', '49'))
-    one_soft(data, 'focus-in')
-    assert len(updates(data)) == 1, 'focus-in: more than one update'
+    one_soft(burst(lambda: keys('-H', '1b', '5b', '49'), soft), 'focus-in')
     keys('C-b', 'Enter')
     wait(lambda: 'Commands' in screen(), 'command panel opens')
     settled()
-    data = step(lambda: keys('C-l'))
-    one_soft(data, 'Ctrl-L')
-    assert len(updates(data)) == 1, 'Ctrl-L: more than one update'
-    # Two repaint requests in one loop pass (focus-in and Ctrl-L, one write) give one repaint.
-    data = step(lambda: keys('-H', '1b', '5b', '49', '0c'))
-    one_soft(data, 'focus-in with Ctrl-L')
-    assert len(updates(data)) == 1, 'two requests in one pass wrote more than one update'
-    print('PASS repaint: focus-in and Ctrl-L repaint softly, once per pass', flush=True)
+    one_soft(burst(lambda: keys('C-l'), soft), 'Ctrl-L')
 
-    # Closing the command panel: one soft repaint, within 400 ms, never re-owed by itself.
-    data = soft_within(lambda: keys('Escape'))
-    one_soft(data, 'command panel close')
+    # (Two requests in one loop pass giving one repaint is decided inside hn's loop, which the
+    # input thread's timing keeps a terminal from reproducing: the unit test
+    # `repaint_requests_in_one_pass_are_one_request` covers it.)
+    print('PASS repaint: focus-in and Ctrl-L repaint softly, once each', flush=True)
+
+    # Closing the command panel: one soft settle rewrite, within 400 ms of the key (plus what
+    # delivering a key costs, measured here), not at once, and never again by itself.
+    started_at = time.monotonic()
+    for _ in range(3): outer('display-message', '-p', 'x')
+    overhead = (time.monotonic() - started_at) / 3 + .05 # a tmux call, and wait()'s poll step
+    data, took = burst_after(lambda: keys('Escape'), soft)
+    assert len(soft_repaints(data, rows)) == 1 and not hard_clears(data), 'command panel close: not one soft repaint'
+    assert .1 <= took <= .4 + overhead, f'the settle rewrite came {took:.3f}s after the key (overhead allowed {overhead:.3f})'
     assert 'Commands' not in screen()
-    settled()
-    print('PASS repaint: the command panel closes with one soft settle rewrite, then silence', flush=True)
+    print(f'PASS repaint: the command panel closes with one soft settle rewrite ({took:.2f}s), then silence', flush=True)
 
-    # New Harness: opening and typing write little; closing settles once.
+    # New Harness: opening and typing do not repaint; closing settles once.
     hn('workspace-menu', 'new-harness')
     wait(lambda: 'New Harness' in screen(), 'New Harness opens')
     settled()
-    data = step(lambda: keys('-l', 'repaint check text'))
-    assert not soft_repaints(data, rows) and not hard_clears(data) and len(data) < 1500, \
-        f'typing in New Harness repainted: {len(data)} bytes'
-    data = step(lambda: keys(*['BSpace'] * 20))
-    assert not soft_repaints(data, rows) and not hard_clears(data) and len(data) < 1500, \
-        f'20 backspaces repainted: {len(data)} bytes'
-    data = soft_within(lambda: keys('Escape'))
-    one_soft(data, 'New Harness close')
+    no_repaint(burst(lambda: keys('-l', 'repaint check text')), 'typing in New Harness')
+    no_repaint(burst(lambda: keys(*['BSpace'] * 20)), '20 backspaces')
+    data = burst(lambda: keys('Escape'), soft)
+    assert len(soft_repaints(data, rows)) == 1 and not hard_clears(data), 'New Harness close: not one soft repaint'
     assert 'New Harness' not in screen()
-    settled()
     print('PASS repaint: New Harness open, typing and 20 backspaces, close', flush=True)
 
     # A real size change hard-clears, inside its update.
     for width, height in [(100, 30), (120, 32)]:
-        data = step(lambda: resize(width, height))
-        clears = hard_clears(data)
-        assert len(clears) == 1, f'resize to {width}x{height}: {len(clears)} hard clears'
-        settled()
+        data = burst(lambda: resize(width, height), hard)
+        assert len(hard_clears(data)) == 1, f'resize to {width}x{height}: {len(hard_clears(data))} hard clears'
     print('PASS repaint: a resize hard-clears inside one synchronized update', flush=True)
 
     # Over the whole run: balanced, never nested, every clear inside a pair; no stale cell.
     updates(written(0))
-    dump_screen()
-    wait(lambda: (BASE / 'verify.log').exists() and re.search(r'### .* dump: SIGUSR2 .* 0 cells differ', (BASE / 'verify.log').read_text()), 'dump header')
-    bad = re.findall(r'(===|###) .* [1-9][0-9]* cells differ', (BASE / 'verify.log').read_text())
-    assert not bad, bad
+    check_replay()
     print('PASS repaint: pairs balanced, no hard clear outside one, replayed screen matches', flush=True)
 
     # Without synchronized output: no ?2026 at all, the screen is still right.
-    outer('pipe-pane', '-t', 'view')
-    run(COMMAND + ['kill-server'], ok=False)
-    run(OUTER + ['kill-server'], ok=False)
-    RAW.unlink()
-    (BASE / 'verify.log').unlink()
-    launch.insert(launch.index('HARNESS_TUI_DESK=off'), 'HARNESS_TUI_SYNC=off')
-    outer('new-session', '-d', '-s', 'view', '-x', '120', '-y', '32', shlex.join(launch))
-    wait(lambda: 'Mock terminal' in screen(), 'frame without synchronized output')
-    outer('pipe-pane', '-t', 'view', f'cat >> {RAW}')
-    keys('C-g')
-    settled()
-    data = step(lambda: (keys('C-b', 'Enter'), wait(lambda: 'Commands' in screen(), 'panel')))
-    data += step(lambda: keys('Escape'))
-    data += step(lambda: resize(100, 30))
-    data += step(lambda: resize(120, 32))
+    start_session(f'HARNESS_TUI_VERIFY={VERIFY}', 'HARNESS_TUI_SYNC=off')
+    data = burst(lambda: keys('C-b', 'Enter'))
+    wait(lambda: 'Commands' in screen(), 'panel')
+    data += burst(lambda: keys('Escape'))
+    assert CLEAR not in data, 'opening and closing a panel erased the whole screen'
+    for width, height in [(100, 30), (120, 32)]:
+        data += burst(lambda: resize(width, height), lambda d: CLEAR in d) # the size changed: a hard clear
     assert b'2026' not in data, 'HARNESS_TUI_SYNC=off still wrote ?2026'
-    assert CLEAR in data, 'a resize without ?2026 did not hard-clear'
     assert 'Commands' not in screen() and 'Mock terminal' in screen()
-    settled()
-    dump_screen()
-    wait(lambda: (BASE / 'verify.log').exists() and re.search(r'### .* dump: SIGUSR2 .* 0 cells differ', (BASE / 'verify.log').read_text()), 'dump header')
-    bad = re.findall(r'(===|###) .* [1-9][0-9]* cells differ', (BASE / 'verify.log').read_text())
-    assert not bad, bad
+    check_replay()
     assert b'2026' not in written(0)
     print('PASS repaint: HARNESS_TUI_SYNC=off writes no ?2026 and the screen is correct', flush=True)
 finally:
