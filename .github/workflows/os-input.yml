@@ -14,9 +14,6 @@ on:
         options: [laptop-input, apple-boot, t2-boot, install-preflight, update-pane, update-context]
         default: laptop-input
         required: true
-  push:
-    branches: ['os-polish/laptop-input']
-    paths: ['os/tests/input_*.py', 'os/root/usr/share/harness-os/labwc*/rc.xml', '.github/workflows/os-input.yml']
 
 permissions:
   contents: read

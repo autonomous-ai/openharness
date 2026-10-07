@@ -354,4 +354,31 @@ void main() {
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets(
+    'a machine asking for its password says why when the account has no room for this app',
+    (tester) async {
+      // The password is one way in; the devices list is the other — under the search panel's prompt
+      // too, which is where a browser that could not join the device list is sent first.
+      final app = _App();
+      addTearDown(app.dispose);
+      await _mount(
+        tester,
+        MachinePickerForm(
+          app: app,
+          kind: MachinePickerFormKind.connect,
+          machineId: 'm',
+          onClose: (_) {},
+          onFocusChanged: (_) {},
+        ),
+      );
+      final line = find.textContaining('your account has too many devices');
+      expect(line, findsNothing);
+      app.deviceListTooManyForTest = true;
+      await tester.pump();
+      expect(line, findsOneWidget);
+      expect(find.byKey(const Key('device-list-review')), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
 }

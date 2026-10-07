@@ -454,6 +454,8 @@ export const MONITOR_REQUESTS = ['machine_resources'] as const
 export const COMMAND_BAR_REQUESTS = ['command_bar', 'command_bar_http'] as const
 /** The project and folder readers (services/projects.ts). */
 export const PROJECTS_REQUESTS = ['git_pull_request', 'git_project_info', 'scm_project_info', 'project_preview', 'fs_list_dir', 'agent_read_file'] as const
+/** A window's name for its repo and its work, by a small model in the background (services/windowNames.ts). */
+export const WINDOW_NAMES_REQUESTS = ['window_name'] as const
 /** Change agent's handoff file, prepared in the edge host (services/handoff.ts). */
 export const HANDOFF_REQUESTS = ['agent_handoff_prepare'] as const
 /**
@@ -620,6 +622,9 @@ export type TurnLifecycle =
   /** A device joined: every session's card is said again. `working`: the sessions whose turn is
    *  verifiably working now, whose busy card is said with it. */
   | { kind: 'rejoined'; working: string[] }
+  /** The session attached with its last turn already over, so its end was read as history: recapped quietly
+   *  if it has none yet (it ended while the daemon was stopped). */
+  | { kind: 'settled'; session: RecapSession }
 
 /** The core's calls into the recaps: the lifecycle, and what they hold of a session, read in line. */
 export interface RecapsPort {

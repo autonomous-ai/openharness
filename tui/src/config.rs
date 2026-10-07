@@ -148,6 +148,8 @@ pub struct Look {
     /// How a tab's name is shown in the status bar: `tmux` (default: the window's short name) |
     /// `pane` (the window's full name).
     pub window_name: Option<String>,
+    /// `on`: a window with a repo is named for it and its work, in the background (`off` unless chosen).
+    pub auto_rename: Option<String>,
 }
 
 pub struct Config {
@@ -215,6 +217,7 @@ impl Look {
         if let Some(b) = &self.border_style { out.push(("@hn-border".into(), b.clone())) }
         if let Some(w) = &self.status_bar_width { out.push(("@hn-status-bar-width".into(), w.clone())) }
         if let Some(d) = &self.dim { out.push(("@hn-dim".into(), d.clone())) }
+        if let Some(a) = &self.auto_rename { out.push(("@hn-auto-rename".into(), a.clone())) }
         // ── status bar tabs ──
         // Two options shape the window list in the status bar: how the current tab is marked and
         // how a tab's name is shown. `@hn-window-active`/`@hn-window-name` carry the choice for the
@@ -222,7 +225,7 @@ impl Look {
         if let Some(a) = &self.window_active { out.push(("@hn-window-active".into(), a.clone())) }
         if let Some(n) = &self.window_name { out.push(("@hn-window-name".into(), n.clone())) }
         // The window-status-* overrides these two options need (empty for the tmux + star defaults).
-        let name = self.window_name.as_deref().unwrap_or("tmux");
+        let name = self.window_name.as_deref().unwrap_or(crate::options::DEFAULT_TAB_NAME);
         let active = self.window_active.as_deref().unwrap_or("star");
         for (o, v) in crate::options::window_status_overrides(name, active) { out.push((o, v)) }
         out
@@ -396,6 +399,7 @@ fn look_of(look: &toml::Table, problems: &mut Vec<String>) -> Look {
     field(look, "dim", &mut l.dim);
     field(look, "window_active", &mut l.window_active);
     field(look, "window_name", &mut l.window_name);
+    field(look, "auto_rename", &mut l.auto_rename);
     // (An older file's `tabs` is left alone: the tabs over the panes are gone, the bar lists the windows.)
     l
 }
@@ -434,6 +438,7 @@ fn format_look(look: &Look) -> String {
     push(&look.dim, "dim", &mut s);
     push(&look.window_active, "window_active", &mut s);
     push(&look.window_name, "window_name", &mut s);
+    push(&look.auto_rename, "auto_rename", &mut s);
     s
 }
 
@@ -586,21 +591,24 @@ mod tests {
     #[test]
     fn window_status_options_emit_format_and_style_overrides() {
         let get = |a: &[(String, String)], n: &str| a.iter().find(|(k, _)| k == n).map(|(_, v)| v.clone());
-        // The defaults (tmux + star) put just the two @hn markers; no format/style overrides, so
-        // the tmux defaults draw the bar.
-        let star = Look { window_active: Some("star".into()), window_name: Some("tmux".into()), ..Default::default() }.assignments();
-        assert_eq!(get(&star, "@hn-window-active").as_deref(), Some("star"));
-        assert_eq!(get(&star, "@hn-window-name").as_deref(), Some("tmux"));
-        assert!(get(&star, "window-status-format").is_none(), "default keeps tmux's format");
-        assert!(get(&star, "window-status-current-format").is_none());
-        assert!(get(&star, "window-status-current-style").is_none());
-        // `pane` names the window with its active pane's title; `filled` drops the `*` and the tab
-        // takes the status line's own colours swapped (a solid block, as the preview draws it).
+        // The defaults (pane + star) put just the two @hn markers; no format/style overrides, so
+        // the defaults draw the bar: the selected pane's title, or auto rename's name.
+        for star in [Look { window_active: Some("star".into()), window_name: Some("pane".into()), ..Default::default() }.assignments(), Look::default().assignments()] {
+            assert!(get(&star, "window-status-format").is_none(), "the default format");
+            assert!(get(&star, "window-status-current-format").is_none());
+            assert!(get(&star, "window-status-current-style").is_none());
+        }
+        // `tmux` (from an older tui.toml) shows the window's name instead.
+        let tmux = Look { window_active: Some("star".into()), window_name: Some("tmux".into()), ..Default::default() }.assignments();
+        assert_eq!(get(&tmux, "@hn-window-name").as_deref(), Some("tmux"));
+        let normal = get(&tmux, "window-status-format").unwrap();
+        assert!(normal.contains("#{window_short_name}") && !normal.contains("#{pane_title}"), "{normal}");
+        // `filled` drops the `*` and the tab takes the status line's own colours swapped (a solid
+        // block, as the preview draws it).
         let filled = Look { window_active: Some("filled".into()), window_name: Some("pane".into()), ..Default::default() }.assignments();
-        let normal = get(&filled, "window-status-format").unwrap();
+        assert!(get(&filled, "window-status-format").is_none(), "the other tabs: the default");
         let current = get(&filled, "window-status-current-format").unwrap();
-        assert!(normal.contains("#{pane_title}"), "pane uses the active pane's title: {normal}");
-        assert!(current.contains("#{pane_title}"));
+        assert!(current.contains("#{pane_title}"), "pane uses the active pane's title: {current}");
         assert!(!current.contains("#{window_active,*"), "filled leaves no `*`: {current}");
         let style = get(&filled, "window-status-current-style").unwrap();
         assert!(style.contains("bold"), "{style}");

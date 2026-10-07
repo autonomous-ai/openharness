@@ -2,9 +2,6 @@ name: Harness OS native runtimes
 
 on:
   workflow_dispatch:
-  push:
-    branches: ['os-polish/arm-runtime']
-    paths: ['os/tools/build-runtime.sh', 'os/tests/runtime_native.py', '.github/workflows/os-runtime.yml']
 
 permissions:
   contents: read
@@ -43,7 +40,16 @@ jobs:
       - name: Native build tools and portable OS checks
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends musl-tools libevent-dev libncurses-dev libutf8proc-dev bison
+          sudo apt-get install -y --no-install-recommends musl-tools libevent-dev libncurses-dev libutf8proc-dev bison zsh
+          # Ubuntu's global zshrc runs compinit, which stops at "insecure directories ... continue [y]
+          # or abort compinit [n]?" for the runner image's group-writable completion folders; a zsh
+          # login shell under test then waits there (as cli-e2e.yml found). Fixed as zsh says.
+          insecure=$(zsh -fc 'autoload -U compaudit && compaudit' 2>/dev/null | grep '^/' | sort -u || true)
+          if [ -n "$insecure" ]; then
+            echo "$insecure" | xargs sudo chown root:root
+            echo "$insecure" | xargs sudo chmod g-w,o-w
+          fi
+          zsh -fc 'autoload -U compaudit && compaudit'
           make -C os check
       - name: Use the OS tmux release for native comparison
         run: |

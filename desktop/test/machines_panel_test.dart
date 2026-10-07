@@ -611,6 +611,26 @@ void main() {
     await tester.pumpWidget(const SizedBox());
   });
 
+  testWidgets(
+    'too many devices on the account is said beside a machine\'s password',
+    (tester) async {
+      app
+        ..add('remote', 'Mac mini')
+        ..deviceListTooManyForTest = true;
+      await mount(tester);
+      const line =
+          'This device couldn’t join: your account has too many devices. Remove ones you no longer use.';
+      expect(find.text(line), findsOneWidget);
+      expect(find.text('Your device list needs a review.'), findsNothing);
+      expect(find.byKey(const Key('device-list-review')), findsOneWidget);
+
+      app.deviceListTooManyForTest = false;
+      await tester.pumpAndSettle();
+      expect(find.text(line), findsNothing);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
   testWidgets('connection continues across closing and reopening', (
     tester,
   ) async {

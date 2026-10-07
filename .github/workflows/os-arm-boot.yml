@@ -2,13 +2,6 @@ name: Harness OS ARM kernel acceptance
 
 on:
   workflow_dispatch:
-  push:
-    branches: ['os-polish/arm-boot']
-    paths:
-      - 'os/tests/arm_boot*'
-      - 'os/tests/arm-boot.lock.json'
-      - 'os/tests/runtime_native.py'
-      - '.github/workflows/os-arm-boot.yml'
 
 permissions:
   contents: read

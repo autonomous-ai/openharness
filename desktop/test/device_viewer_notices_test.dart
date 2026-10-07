@@ -119,7 +119,11 @@ class _Backend {
     ],
   );
 
+  /// Every append is refused with this code while set.
+  String? refuse;
+
   Future<DeviceLogAppendAnswer> append(DevLogEntry entry) async {
+    if (refuse case final code?) return (head: null, error: code);
     if (entry.seq != state.head.seq + 1 || entry.prev != state.head.hash) {
       return (head: state.head, error: 'STALE_HEAD');
     }
@@ -139,9 +143,14 @@ class _Api extends ApiClient {
   /// When set, the last-seen request waits on it (the backend can delay it as long as it likes).
   Completer<void>? seenGate;
 
+  /// The `self` every read of the log named.
+  final selves = <String?>[];
+
   @override
-  Future<DeviceLogFetched?> deviceKeys(int since) async =>
-      offline ? null : backend.fetch(since);
+  Future<DeviceLogFetched?> deviceKeys(int since, {String? self}) async {
+    selves.add(self);
+    return offline ? null : backend.fetch(since);
+  }
 
   @override
   Future<DeviceLogAppendAnswer?> appendDeviceKey(DevLogEntry entry) =>
@@ -297,6 +306,24 @@ void main() {
     await settle();
     return app;
   }
+
+  test('every read of the log names this app\'s key; too many devices is said until a register lands', () async {
+    await backend.add(box2, 'machine', 'b' * 32, 'box2');
+    backend.refuse = 'TOO_MANY';
+    final app = await openAs(backend, 'user-a');
+    final me = b64e((await keys.identity()).pub);
+    final api = app.api as _Api;
+    expect(api.selves, isNotEmpty);
+    expect(api.selves.toSet(), {me});
+    expect(app.deviceListTooMany, isTrue);
+    expect((await logOf(app).list()).registerError, 'TOO_MANY');
+
+    backend.refuse = null;
+    await logOf(app).register();
+    await settle();
+    expect(backend.state.active[me], isNotNull);
+    expect(app.deviceListTooMany, isFalse);
+  });
 
   test('with no machine to hear pushes from, the machine list is read again on its own and on coming back to the tab', () async {
     final app = AppNotifier(

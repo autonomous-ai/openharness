@@ -183,6 +183,13 @@ def painted_workspace(alpha, beta):
                for name, (x, y, w) in positions)
 
 
+def pane_menu_item(item, row):
+    """The first pane's … in title row [row], then [item]: the agent and the model change there."""
+    click_text('…', row=row)
+    shown(item)
+    click_text(item)
+
+
 def alpha_agent_picker():
     wait(lambda: any('Change agent' in line and 'Alpha task' in line for line in screen().splitlines()),
          'the visible agent picker belongs to Alpha')
@@ -332,13 +339,15 @@ def mirror_journey(command, source):
     shown(source)
     wait(lambda: value('#{client_width} #{client_height}') == ' '.join(original_size), 'second client reaches the owner viewport size')
     before_launches = len(requests('agent_create'))
-    click_text('Codex', row=0)
+    pane_menu_item('Change agent…', row=0)
     shown('Change agent')
     tmux('send-keys', '-l', '-t', TARGET, 'Claude')
     shown('› Claude')
     click_text('Claude Code', before=85)
-    wait(lambda: 'Claude Code' in tmux('capture-pane', '-p', '-t', 'test:0').splitlines()[0], 'agent replacement reaches session owner')
-    shown('Claude Code')
+    # (The title names no agent: the replacement is the daemon's new Claude harness, and the Stop
+    # below, from the owner's same pane, reaches it.)
+    wait(lambda: any(a['engine'] == 'claude' and a['name'] == source and a['status'] != 'stopped' for a in api()['agents'][api()['local']]),
+         'agent replacement reaches session owner')
     assert len(requests('agent_create')) == before_launches + 1
     assert value('#{pane_id}') == original_pane
     assert value('#{window_layout}') == original_geometry, (original_geometry, value('#{window_layout}'))
@@ -465,12 +474,13 @@ try:
     assert not login_events()
     wait(lambda: 'Continue with Google' not in screen(), 'back to local workspace')
 
-    # The right header labels act on the captured pane even if external focus changes.
+    # The pane menu's agent and model act on the captured pane even if external focus changes.
     x, y = map(int, value('#{pane_left} #{pane_top}', alpha).split())
-    click_text('Codex', row=y - 1)
+    assert 'Codex' not in screen().splitlines()[y - 1] and 'GPT-6 Astra' not in screen().splitlines()[y - 1], 'no agent or model label in the title'
+    pane_menu_item('Change agent…', row=y - 1)
     alpha_agent_picker()
     keys('Escape')
-    click_text('GPT-6 Astra', row=y - 1)
+    pane_menu_item('Change model…', row=y - 1)
     shown('Fixture local model')
     hn('select-pane', '-t', beta)
     click_text('Fixture local model', before=85)
@@ -544,7 +554,8 @@ try:
     print('PASS workspace: removed computer drops views and resource counts without stopping its harness', flush=True)
 
     # A tab menu and its rename prompt retain the original tab across a focus change.
-    click_text('Workspace', button=2, row=43)
+    # (Its tab shows the selected pane's title, the default tab name: found by its number.)
+    click_text(value('#{window_index}', workspace) + ':', button=2, row=43)
     shown('Arrange panes')
     click_text('Rename')
     shown('Tab name')
@@ -615,7 +626,7 @@ try:
     assert events[0]['text'] == '\x1b[<0;5;5M', events
     assert events[1]['text'] == '\x1b[<0;5;5m', events
     before = len(api()['inputs'])
-    click_text('Codex', row=y - 1)
+    pane_menu_item('Change agent…', row=y - 1)
     shown('Change agent')
     assert len(api()['inputs']) == before, 'header clicks do not become program input'
     keys('Escape')
@@ -631,7 +642,7 @@ try:
     # forces a view-only retry: exactly one new process, unchanged pane id, focus and geometry.
     api({'action': 'config', 'patch': {'closeFailure': None, 'pruneOnClose': True, 'closeDelay': 350, 'deskFailures': 1}})
     original_layout = value('#{window_layout}')
-    click_text('Codex', row=y - 1)
+    pane_menu_item('Change agent…', row=y - 1)
     alpha_agent_picker()
     tmux('send-keys', '-l', '-t', 'test', 'Claude')
     shown('› Claude')

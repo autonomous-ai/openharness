@@ -48,6 +48,26 @@ class AppearanceSection extends StatelessWidget {
               ),
             ),
           ),
+          const SizedBox(height: 10),
+          ValueListenableBuilder<AppearancePrefs>(
+            valueListenable: preferences,
+            builder: (context, prefs, _) => SettingRow(
+              title: 'Auto rename',
+              controlSemanticLabel: 'Auto rename tabs',
+              detail:
+                  'Names a tab for its repo and the work in it, in the '
+                  'background — e.g. Harness TUI LMStudio',
+              control: Align(
+                alignment: Alignment.centerLeft,
+                child: Switch(
+                  key: const ValueKey('auto-rename-tabs'),
+                  value: prefs.autoRenameTabs,
+                  onChanged: (enabled) =>
+                      unawaited(preferences.setAutoRenameTabs(enabled)),
+                ),
+              ),
+            ),
+          ),
           const SizedBox(height: 24),
           PaletteSection(store: store),
           // Room under the last card so a scrolled-to-bottom pane does not end

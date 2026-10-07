@@ -11,6 +11,7 @@ import '../api/api_client.dart';
 import '../viewer/direct_auth_api.dart';
 import '../viewer/direct_link.dart';
 import '../viewer/group_sync.dart';
+import '../e2ee/bytes.dart' show b64e;
 import '../viewer/viewer_services.dart';
 import '../auth/auth_session.dart';
 import '../auth/peer_link_client.dart';
@@ -1565,6 +1566,7 @@ class AppNotifier extends ChangeNotifier {
     deviceRemovals.clear();
     _failedDismissals.clear();
     _deviceListFrozen = false;
+    _deviceListTooMany = false;
   }
 
   /// What an account leaving takes with it: the refusals being settled, the machine list re-read
@@ -2294,6 +2296,17 @@ class AppNotifier extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// The backend refused this phone a place on the account: it has too many devices (`TOO_MANY`).
+  /// A machine asking for its password says so, beside [deviceListNeedsReview].
+  bool get deviceListTooMany => _deviceListTooMany;
+  bool _deviceListTooMany = false;
+
+  @visibleForTesting
+  set deviceListTooManyForTest(bool tooMany) {
+    _deviceListTooMany = tooMany;
+    notifyListeners();
+  }
+
   /// Devices this phone dismissed whose write to the log failed: the banner must not bring them back
   /// on the next read of `pending`. Gone with the sign-in, or when the key is announced afresh.
   final Set<String> _failedDismissals = {};
@@ -2312,7 +2325,11 @@ class AppNotifier extends ChangeNotifier {
   void _initDeviceLog() {
     final log = _deviceLog = ViewerDeviceLog(
       keys: viewer.keys,
-      fetch: (since) => api.deviceKeys(since),
+      // This phone's own key rides each read, so the backend counts it as used (not as abandoned).
+      fetch: (since) async => api.deviceKeys(
+        since,
+        self: await viewer.keys.identity().then<String?>((i) => b64e(i.pub), onError: (Object _) => null),
+      ),
       append: (entry) => api.appendDeviceKey(entry),
       label: () => phoneClientDescriptor().name,
       // The log saves "announced" before it calls back, so a call that found the app still starting
@@ -2389,8 +2406,10 @@ class AppNotifier extends ChangeNotifier {
     }
     if (_disposed || gen != _pendingSyncGen || status != AppStatus.authenticated) return;
     final frozen = listing.frozen != null;
-    final frozenChanged = frozen != _deviceListFrozen;
+    final tooMany = listing.registerError == 'TOO_MANY';
+    final frozenChanged = frozen != _deviceListFrozen || tooMany != _deviceListTooMany;
     _deviceListFrozen = frozen;
+    _deviceListTooMany = tooMany;
     final pending = listing.pending.toSet();
     _suspendedNew
       ..clear()

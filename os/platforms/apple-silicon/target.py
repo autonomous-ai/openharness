@@ -7,6 +7,7 @@ partitions are never removed, moved, resized or formatted by this module.
 from __future__ import annotations
 
 from contextlib import contextmanager
+import ctypes
 import hashlib
 import fcntl
 import json
@@ -267,6 +268,18 @@ def private_directory(fd):
         raise TargetError('Save the plan in a private, owned directory.')
 
 
+def sync_directory(fd):
+    os.fsync(fd)
+    if platform.system() == 'Linux':
+        # On FAT, fsync(file) + rename + fsync(parent) can leave the old entry
+        # after a power loss. Flush this filesystem before the next disk stage.
+        syncfs = ctypes.CDLL(None, use_errno=True).syncfs
+        syncfs.argtypes, syncfs.restype = [ctypes.c_int], ctypes.c_int
+        if syncfs(fd) != 0:
+            error = ctypes.get_errno()
+            raise OSError(error, os.strerror(error))
+
+
 def save_plan(path, plan):
     """Atomically persist before disk writes, including on the FAT boot partition.
 
@@ -294,7 +307,7 @@ def save_plan(path, plan):
             os.fsync(stream.fileno())
         os.rename(temporary, path)
         temporary = None
-        os.fsync(directory)
+        sync_directory(directory)
     finally:
         if temporary is not None:
             os.unlink(temporary)

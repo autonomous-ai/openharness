@@ -110,7 +110,7 @@ def save_state(path, state):
             os.fsync(stream.fileno())
         os.replace(temporary, path)
         temporary = None
-        os.fsync(directory)
+        target.sync_directory(directory)
     finally:
         if temporary is not None:
             os.unlink(temporary)
@@ -171,9 +171,16 @@ class Payload:
         self.device = str(device)
         self.sha256, self.source_commit = image_sha256, source_commit
         self.root = self.home = self.boot = self.esp = None
+        self._opened = False
 
     @contextmanager
     def open(self):
+        # Installation stages can share one verified, read-only mount lifetime.
+        # This is never cached across attempts: the outer exit clears the state
+        # and the next independent open verifies the whole source again.
+        if self._opened:
+            yield self
+            return
         info = os.stat(self.device, follow_symlinks=False)
         if not stat.S_ISBLK(info.st_mode) or run('blockdev', '--getro', self.device) != '1':
             raise StorageError('The verified source image must be a read-only block device.')
@@ -198,8 +205,10 @@ class Payload:
             self.root, self.home, self.boot = top / 'root', top / 'home', boot
             try:
                 self.verify_pristine()
+                self._opened = True
                 yield self
             finally:
+                self._opened = False
                 self.root = self.home = self.boot = self.esp = None
 
     def verify_pristine(self):
@@ -258,9 +267,15 @@ def subvolumes(top):
         run('btrfs', 'subvolume', 'show', path)
 
 
-def copy_tree(source, destination, excludes=()):
+def copy_tree(source, destination, excludes=(), *, copy_selinux=True):
+    # Some generated boot files are unlabeled. Keep destination labels until
+    # startup applies the installed policy, rather than removing those labels
+    # under enforcement. Root/home retain their source labels. An explicit
+    # xattr rule also requires preserving rsync's system.* exclusion.
+    filters = () if copy_selinux else ('--filter=-x system.*', '--filter=-x security.selinux')
     run('rsync', '-aHAX', '--numeric-ids', '--one-file-system', '--delete', '--checksum',
-        *('--exclude=' + value for value in excludes), str(source) + '/', str(destination) + '/', timeout=300)
+        *filters, *('--exclude=' + value for value in excludes),
+        str(source) + '/', str(destination) + '/', timeout=300)
 
 
 def mountpoint(source, destination):
@@ -268,6 +283,16 @@ def mountpoint(source, destination):
         raise StorageError('An installation mountpoint has changed.')
     destination.mkdir(exist_ok=True)
     shutil.copystat(source, destination)
+
+
+def copy_root(source, destination):
+    # The kernel supplies runtime filesystems on boot. Copying the image's
+    # temporary /dev nodes also tries to remove their SELinux labels, which an
+    # enforcing installer correctly refuses. Keep only the mount directories.
+    separate = ('boot', 'home', 'dev', 'proc', 'sys', 'run')
+    for name in separate:
+        mountpoint(source / name, destination / name)
+    copy_tree(source, destination, excludes=tuple('/' + name + '/***' for name in separate))
 
 
 def install(plan_path, payload, password, progress=None):
@@ -317,13 +342,10 @@ def install(plan_path, payload, password, progress=None):
                 advance(path, state, 'filesystems')
                 advance(path, state, 'copying')
                 report('Copying Harness…')
-                # Mountpoints remain present even when rsync excludes their contents.
-                for name in ('boot', 'home'):
-                    mountpoint(payload.root / name, top / 'root' / name)
+                copy_root(payload.root, top / 'root')
                 mountpoint(payload.boot / 'efi', boot_path / 'efi')
-                copy_tree(payload.root, top / 'root', excludes=('/boot/***', '/home/***'))
                 copy_tree(payload.home, top / 'home')
-                copy_tree(payload.boot, boot_path, excludes=('/efi/***',))
+                copy_tree(payload.boot, boot_path, excludes=('/efi/***',), copy_selinux=False)
                 run('sync', '-f', top)
                 run('sync', '-f', boot_path)
                 current = target.read_table(plan['original']['device'])

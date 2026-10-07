@@ -192,6 +192,27 @@ void main() {
       await tester.pump();
     }
 
+    testWidgets('a refusal to register is said: too many devices plainly, any other with its code', (tester) async {
+      await open(tester, AccountDevices.fromDaemon({
+        'members': <Object>[],
+        'pending': <Object>[],
+        'registerError': 'TOO_MANY',
+      })!);
+      expect(
+        find.text('This device couldn’t join: your account has too many devices. Remove ones you no longer use.'),
+        findsOneWidget,
+      );
+      await tester.pumpWidget(const SizedBox());
+      app.dispose();
+      await open(tester, AccountDevices(devices: [fakeDevice('me', self: true)], registerError: 'FORBIDDEN'));
+      expect(find.text('This device couldn’t join your account’s device list (FORBIDDEN).'), findsOneWidget);
+      await tester.pumpWidget(const SizedBox());
+      app.dispose();
+      // A daemon that predates the field: nothing.
+      await open(tester, AccountDevices.fromDaemon({'members': <Object>[], 'pending': <Object>[]})!);
+      expect(find.byKey(const Key('account-devices-refused')), findsNothing);
+    });
+
     testWidgets('a device the daemon kept as pending is badged New though no banner is up', (tester) async {
       await open(tester, AccountDevices(
         devices: [fakeDevice('me', self: true), fakeDevice('old'), fakeDevice('late', label: 'Late iPad')],

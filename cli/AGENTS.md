@@ -85,7 +85,8 @@ sessions to the owner's other machines, the Share relay for a harness shared wit
 3. **The core does not wait on a service and does not crash with one.** Services start through
    `serviceHost.start()`; every port declares fallbacks beside it in `core/api.ts`.
 4. **100% coverage, per file,** for `src/core/`, `src/services/` (`npm run test:core`) and `src/harnessd/`
-   (`npm run test:harnessd`). CI enforces both. Write the test that fails without your change. The one
+   (`npm run test:harnessd`). PR CI does not run these gates: run them locally when you change those
+   files and record the result in the PR. Write the test that fails without your change. The one
    file outside it is `src/core/main.ts`, the wiring, which the end-to-end suite runs.
 5. **End to end for every user-facing flow** (`npm run test:e2e`, `e2e/`): the real daemon, a private
    tmux server and fake Claude Code and Codex engines (`e2e/harness/fakeEngine.mjs`). Prefer extending

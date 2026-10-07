@@ -355,6 +355,22 @@ class _DevicesPageState extends State<DevicesPage> {
                 ],
               ),
             ],
+            if (listing?.registerError case final code?) ...[
+              const SizedBox(height: 12),
+              SettingsGroup(
+                children: [
+                  SettingsRow(
+                    key: const ValueKey('devices-refused'),
+                    title: 'This device couldn’t join',
+                    detail: code == 'TOO_MANY'
+                        ? 'Your account has too many devices. Remove ones you no longer use.'
+                        : 'Harness refused it a place on your account’s device list ($code).',
+                    destructive: true,
+                    detailLines: null,
+                  ),
+                ],
+              ),
+            ],
             if (listing != null &&
                 !listing.baselineSeen &&
                 !_baselineHidden) ...[

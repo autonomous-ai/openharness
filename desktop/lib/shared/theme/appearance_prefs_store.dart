@@ -24,6 +24,7 @@ class AppearancePrefs {
     this.custom = const CustomBackground(),
     this.paneOpacity = paneOpacityDefault,
     this.shadeInactivePanes = false,
+    this.autoRenameTabs = false,
     this.prompt = const PromptPrefs(),
   });
 
@@ -42,6 +43,11 @@ class AppearancePrefs {
 
   /// Whether panes outside the current focus receive a neutral-gray veil.
   final bool shadeInactivePanes;
+
+  /// Whether a tab without a custom name asks its machine's daemon for one
+  /// (`window_name`) and shows it instead of the voted label. Off, no request
+  /// is made and every label is the one it always was.
+  final bool autoRenameTabs;
 
   /// Whether a running harness tab paints the background at all: Blank has
   /// nothing to show through.
@@ -70,6 +76,7 @@ class AppearancePrefs {
     CustomBackground? custom,
     double? paneOpacity,
     bool? shadeInactivePanes,
+    bool? autoRenameTabs,
     PromptPrefs? prompt,
     bool clearUiFamily = false,
   }) => AppearancePrefs(
@@ -80,6 +87,7 @@ class AppearancePrefs {
     custom: custom ?? this.custom,
     paneOpacity: paneOpacity ?? this.paneOpacity,
     shadeInactivePanes: shadeInactivePanes ?? this.shadeInactivePanes,
+    autoRenameTabs: autoRenameTabs ?? this.autoRenameTabs,
     prompt: prompt ?? this.prompt,
   );
 
@@ -93,6 +101,7 @@ class AppearancePrefs {
       other.custom == custom &&
       other.paneOpacity == paneOpacity &&
       other.shadeInactivePanes == shadeInactivePanes &&
+      other.autoRenameTabs == autoRenameTabs &&
       other.prompt == prompt;
 
   @override
@@ -104,6 +113,7 @@ class AppearancePrefs {
     custom,
     paneOpacity,
     shadeInactivePanes,
+    autoRenameTabs,
     prompt,
   );
 }
@@ -130,6 +140,7 @@ class AppearancePrefsStore extends ValueNotifier<AppearancePrefs> {
   // Named for the retired on/off choice; it now holds only pane opacity.
   static const _paneOpacityKey = 'harness_background_behind_harnesses';
   static const _shadeInactivePanesKey = 'harness_shade_inactive_panes';
+  static const _autoRenameTabsKey = 'harness_auto_rename_tabs';
   static const _promptKey = 'workspace_prompt_v1';
   Future<void>? _promptSave;
   Future<void>? _paletteSave;
@@ -137,6 +148,7 @@ class AppearancePrefsStore extends ValueNotifier<AppearancePrefs> {
   Future<void>? _customSave;
   Future<void>? _paneOpacitySave;
   Future<void>? _shadeInactivePanesSave;
+  Future<void>? _autoRenameTabsSave;
 
   final LocalKeyValueStore _storage;
   final Directory? _backgroundsDirectory;
@@ -168,6 +180,7 @@ class AppearancePrefsStore extends ValueNotifier<AppearancePrefs> {
         _customKey,
         _paneOpacityKey,
         _shadeInactivePanesKey,
+        _autoRenameTabsKey,
         _promptKey,
       ]);
       final custom = _customFrom(saved[_customKey]);
@@ -184,6 +197,7 @@ class AppearancePrefsStore extends ValueNotifier<AppearancePrefs> {
         custom: custom,
         paneOpacity: _paneOpacityFrom(saved[_paneOpacityKey]),
         shadeInactivePanes: saved[_shadeInactivePanesKey] == 'true',
+        autoRenameTabs: saved[_autoRenameTabsKey] == 'true',
         prompt: _promptFrom(saved[_promptKey]),
       );
     } catch (_) {
@@ -337,6 +351,29 @@ class AppearancePrefsStore extends ValueNotifier<AppearancePrefs> {
     }
   }
 
+  /// Same ordering as [setShadeInactivePanes].
+  Future<void> setAutoRenameTabs(bool enabled) {
+    if (value.autoRenameTabs == enabled) {
+      return _autoRenameTabsSave ?? Future.value();
+    }
+    value = value.copyWith(autoRenameTabs: enabled);
+    return _autoRenameTabsSave ??= _saveAutoRenameTabs();
+  }
+
+  Future<void> _saveAutoRenameTabs() async {
+    try {
+      while (true) {
+        final enabled = value.autoRenameTabs;
+        await _storage.write(_autoRenameTabsKey, enabled.toString());
+        if (value.autoRenameTabs == enabled) break;
+      }
+    } catch (_) {
+      // Keep the choice for this run if storage is unavailable.
+    } finally {
+      _autoRenameTabsSave = null;
+    }
+  }
+
   /// Older builds also saved an `on` flag here; it is ignored.
   static double _paneOpacityFrom(String? raw) {
     try {
@@ -430,6 +467,7 @@ class AppearancePrefsStore extends ValueNotifier<AppearancePrefs> {
     await _customSave;
     await _paneOpacitySave;
     await _shadeInactivePanesSave;
+    await _autoRenameTabsSave;
     await _promptSave;
     try {
       await _storage.delete(_familyKey);
@@ -439,6 +477,7 @@ class AppearancePrefsStore extends ValueNotifier<AppearancePrefs> {
       await _storage.delete(_customKey);
       await _storage.delete(_paneOpacityKey);
       await _storage.delete(_shadeInactivePanesKey);
+      await _storage.delete(_autoRenameTabsKey);
       await _storage.delete(_promptKey);
     } catch (_) {
       // See above.

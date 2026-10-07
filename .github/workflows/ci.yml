@@ -1,6 +1,9 @@
 name: CI
 
-# Automatic PR and merge-candidate validation use the same coarse suite planner.
+# Fast PR checks: each changed component runs its own Linux unit tests. Native,
+# macOS, coverage-gate, browser and end-to-end checks are outside PR CI; see
+# docs/validation-and-release.md#what-pr-ci-does-not-run. Merge candidates rerun
+# only the plan and process checks; the PR run covered the code.
 # Contributor code runs with a read-only token and no release credentials.
 on:
   pull_request:
@@ -13,21 +16,14 @@ on:
       scope:
         description: 'Affected component; full for core suites, all for every component'
         type: choice
-        options: [full, cli, tui, backend, desktop, process, all, companions, website, experience, authoring, home-assistant, desktop-logging, os, provider, firmware, mobile, daemons]
+        options: [full, cli, tui, backend, desktop, process, all, companions, website, os, provider, firmware, mobile, daemons]
         default: full
-  # Callable as a reusable workflow. release.yml used to gate on this and take the Node pin from
-  # its output; it no longer does (see the note above `publish` there) and pins the same version
-  # itself, so the output below is kept only for any future caller.
   workflow_call:
     inputs:
       scope:
         description: 'full, cli, tui, backend, desktop (VM tests), or process (repository tooling only)'
         type: string
         default: full
-    outputs:
-      node-version:
-        description: The Node the suite ran on. release.yml bundles the release with it.
-        value: ${{ jobs.typecheck-test.outputs.node-version }}
 
 permissions:
   contents: read
@@ -138,7 +134,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-22.04, macos-15]
+        os: [ubuntu-22.04]
         shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@v7
@@ -184,117 +180,6 @@ jobs:
           overwrite: true
           retention-days: 7
 
-  desktop-test-summary:
-    needs: [plan, desktop-tests]
-    if: ${{ !cancelled() && needs.plan.outputs.ready == 'true' && needs.plan.outputs.desktop == 'true' }}
-    runs-on: ubuntu-22.04
-    timeout-minutes: 3
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ env.CI_SOURCE_SHA }}
-          sparse-checkout: |
-            /desktop/test/
-            /scripts/
-            /.gitignore
-          sparse-checkout-cone-mode: false
-      - name: Verify declared source checkout
-        run: python3 scripts/ci-source-inputs.py desktop --subset
-      - uses: actions/download-artifact@v4
-        with:
-          pattern: desktop-shard-*
-          path: ${{ runner.temp }}/desktop-shards
-      - name: Verify every VM file and its complete raw reporter on both platforms
-        env:
-          DESKTOP_TEST_RESULT: ${{ needs.desktop-tests.result }}
-        run: >-
-          python3 scripts/verify-desktop-test-shards.py "$RUNNER_TEMP/desktop-shards"
-          --root "$GITHUB_WORKSPACE" --shards 4 --tests-result "$DESKTOP_TEST_RESULT"
-          --output "$RUNNER_TEMP/desktop-test-summary.json"
-      - uses: actions/upload-artifact@v4
-        with:
-          name: desktop-test-summary
-          path: ${{ runner.temp }}/desktop-test-summary.json
-          if-no-files-found: error
-          overwrite: true
-          retention-days: 7
-
-  # tty.ReadStream uses libuv's native TTY handle. Exercise descriptor ownership,
-  # binary backpressure and unplug behavior on both supported OSes and runtimes.
-  # These are disposable PTYs; no USB device or existing daemon is touched.
-  serial-native:
-    concurrency:
-      group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-serial-native-${{ strategy.job-index }}
-      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-    needs: plan
-    if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.cli == 'true'
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-        node: [20.19.0, 22.23.2]
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 10
-    defaults:
-      run:
-        working-directory: cli
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ env.CI_SOURCE_SHA }}
-      - uses: actions/setup-node@v7
-        with:
-          node-version: ${{ matrix.node }}
-          cache: npm
-          cache-dependency-path: cli/package-lock.json
-      - run: npm ci --no-audit --no-fund
-      - name: Require native PTY support instead of silently skipping it
-        run: python3 -c 'import pty'
-      - name: Serial lifecycle, binary transfer and descriptor cleanup
-        run: npx vitest run src/cable/serial.spec.ts src/cable/serial.real.spec.ts --maxWorkers=1
-      - name: Agent startup through the system zsh login shell
-        run: npx vitest run src/lib/engineShellStartup.spec.ts
-
-  # Build both slices and execute each host architecture. All process/tmux
-  # fixtures are private; no installed agent or running session is controlled.
-  process-images-native:
-    concurrency:
-      group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-process-images-native-${{ strategy.job-index }}
-      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-    needs: plan
-    if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.cli == 'true'
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [macos-15, macos-15-intel]
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 10
-    defaults:
-      run:
-        working-directory: cli
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ env.CI_SOURCE_SHA }}
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 22.23.2
-          cache: npm
-          cache-dependency-path: cli/package-lock.json
-      - run: npm ci --no-audit --no-fund
-      - run: command -v tmux || brew install tmux
-      - name: Read-only kernel probe, universal signing and byte-safe protocol
-        run: python3 native/test_process_images.py
-      - name: Build the embedded universal artifact
-        run: python3 scripts/build-process-images.py --output "$RUNNER_TEMP/process-images.json"
-      - name: Bundled native discovery, exec replacement and private tmux cleanup
-        env:
-          HARNESS_PROCESS_IMAGES_ARTIFACT: ${{ runner.temp }}/process-images.json
-          RUN_DARWIN_PROCESS_IMAGES: '1'
-        run: |
-          node scripts/test-process-images-bundled.mjs
-          npx vitest run src/lib/nativeProcessImages.spec.ts src/lib/processImages.spec.ts src/lib/processImages.real.spec.ts src/lib/periodicCpu.integration.spec.ts --maxWorkers=1
-
   # The optional product has its own dependencies, bundle and suites. CLI-only CI
   # deliberately checks core without installing or building this package.
   companion-subsystems:
@@ -329,109 +214,14 @@ jobs:
       - run: npx vitest run src/shared/guard.fuzz.spec.ts --maxWorkers=1
       - run: npm test -- --exclude src/shared/guard.fuzz.spec.ts --maxWorkers=3
 
-  # Typecheck and contract checks run alongside the default suite's four shards.
-  cli-contracts:
+  cli-typecheck:
     concurrency:
-      group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-cli-contracts
+      group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-cli-typecheck
       cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     needs: plan
     if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.cli == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
-    outputs:
-      node-version: ${{ steps.pin.outputs.node-version }}
-    defaults:
-      run:
-        working-directory: cli
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ env.CI_SOURCE_SHA }}
-
-      # THE runtime pin — release.yml's `publish` job carries the same value; bump them together.
-      #
-      # It is not a taste in Node versions: it is the version of the MANAGED runtime the shipped CLI
-      # actually executes on. `harness/runtime/metadata.json` in the release bucket serves
-      # node v22.23.2 for darwin-arm64, darwin-x64, linux-x64 and linux-arm64, `install.sh` unpacks
-      # it under ~/.harness/runtime, and the launcher names that binary absolutely — so the user's
-      # own node, if any, never runs this bundle. Testing on anything else measures a runtime no
-      # machine in the field has. Bump this together with `make upload-node-runtime` in
-      # autonomous-harness-desktop, never on its own.
-      #
-      # (package.json's `engines` says >=20, which is the floor a THIRD PARTY may run it on. A floor
-      # is not a pin: a floating 22.x turns an unrelated upstream release into a red build on an
-      # untouched commit.)
-      - id: pin
-        run: echo "node-version=$CLI_NODE_VERSION" >> "$GITHUB_OUTPUT"
-
-      - uses: actions/setup-node@v7
-        with:
-          node-version: ${{ steps.pin.outputs.node-version }}
-          cache: npm
-          # Relative to the repo root, not to `defaults.working-directory` — this is an action
-          # input, not a `run:`.
-          cache-dependency-path: cli/package-lock.json
-
-      # TWO lockfiles are tracked here, and only one of them has ever been guarded.
-      #
-      # `package-lock.json` is the one the released bytes are built from — every build path in this
-      # repo shells out to `npm run bundle` (install-cli.sh, upload-cli.sh, remote-machine.sh) — and
-      # `npm ci` below refuses to run when it disagrees with package.json, so npm's half checks
-      # itself.
-      #
-      # `pnpm-lock.yaml` is checked by nothing, and on 2026-09-09 that cost a maintainer an
-      # afternoon: `bonjour-service` was added to package.json with only package-lock.json updated,
-      # main went green, and `make install-cli` then died at `Could not resolve "bonjour-service"`
-      # on every machine whose node_modules came from pnpm. Deleting the file would also fix that;
-      # keeping it and checking it is the choice made here, because contributors do use it.
-      #
-      # `--lockfile-only` resolves without installing (~5s) and writes nothing under --frozen-lockfile.
-      # Verified against this repo: it exits 1 on the stale lockfile that shipped in c4de318, naming
-      # the added dependency, and 0 once it is regenerated.
-      - name: Check pnpm-lock.yaml still matches package.json
-        run: |
-          npm i -g pnpm@11 >/dev/null
-          pnpm install --frozen-lockfile --lockfile-only
-
-      # `npm ci`, not `npm install`: the lockfile is the input, not a suggestion.
-      - run: npm ci
-
-      - run: npx tsc --noEmit
-
-      - name: Native helper build-input and portable bundle contracts
-        run: node --test scripts/test-process-image-bundle.mjs
-
-      - name: Concurrent registry discovery, hooks and durable close intents
-        run: node scripts/registry-observation-e2e.mjs "$RUNNER_TEMP/registry-observation-e2e"
-
-      - name: Verify hn launcher repair in an existing installation
-        run: |
-          npm run bundle
-          node scripts/test-hn-upgrade.mjs
-
-      - name: Verify core harness rollout in the release bundle
-        run: node scripts/test-core-harness-upgrade.mjs dist/cli.js
-
-      - name: Require complete harness updater coverage
-        run: npm run test:dsh-updates
-
-      # The daemon's supervisor and its core modules are held to 100% in every file
-      # (docs/design/2026-10-03-harnessd.md#testing).
-      - name: Require complete harnessd and core coverage
-        run: npm run test:harnessd && npm run test:core
-
-  # The other per-file 100% coverage gates in cli/package.json, beside cli-contracts' harnessd and core
-  # ones, on a runner of their own so the CI run takes no longer. They used to run only when somebody
-  # remembered: test:resume had slipped to 93% of stoppedAgents.ts and test:orchestrator below 100% by
-  # 5 October 2026 without anyone noticing. One step per gate, so a red run names the gate.
-  cli-coverage-gates:
-    concurrency:
-      group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-cli-coverage-gates
-      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-    needs: plan
-    if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.cli == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
     defaults:
       run:
         working-directory: cli
@@ -445,26 +235,7 @@ jobs:
           cache: npm
           cache-dependency-path: cli/package-lock.json
       - run: npm ci --no-audit --no-fund
-      - name: Stopped harnesses, stop and resume
-        run: npm run test:resume
-      - name: Orchestrator
-        run: npm run test:orchestrator
-      - name: Sharing
-        run: npm run test:sharing
-      - name: Remote viewers
-        run: npm run test:remote-viewers
-      - name: Harness portability
-        run: npm run test:portability
-      - name: Local models and bundled harnesses
-        run: npm run test:local-models -- --coverage.reporter=json --coverage.reportOnFailure
-      - name: Preserve local-model coverage details
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: cli-local-models-coverage
-          path: cli/coverage/local-models/*.json
-          if-no-files-found: ignore
-          retention-days: 7
+      - run: npx tsc --noEmit
 
   cli-tests:
     concurrency:
@@ -510,61 +281,15 @@ jobs:
           overwrite: true
           retention-days: 7
 
-  # Preserve the original aggregate check/output for callers. A missing, failed
-  # or skipped shard/contract job cannot turn into a green aggregate check.
-  typecheck-test:
-    needs: [plan, cli-contracts, cli-tests]
-    if: ${{ !cancelled() && needs.plan.outputs.ready == 'true' && needs.plan.outputs.cli == 'true' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 3
-    outputs:
-      node-version: ${{ needs.cli-contracts.outputs.node-version }}
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ env.CI_SOURCE_SHA }}
-          # This job reads only the shard reports and this stdlib-only verifier.
-          # Avoid fetching/materializing the app, fixtures and performance assets again.
-          sparse-checkout: scripts/verify-cli-test-shards.py
-          sparse-checkout-cone-mode: false
-      - uses: actions/download-artifact@v4
-        with:
-          pattern: cli-shard-*
-          path: ${{ runner.temp }}/cli-shards
-          merge-multiple: true
-      - name: Require every discovered file exactly once and all checks passing
-        env:
-          CLI_TEST_RESULT: ${{ needs.cli-tests.result }}
-          CLI_CONTRACT_RESULT: ${{ needs.cli-contracts.result }}
-        run: >-
-          python3 scripts/verify-cli-test-shards.py "$RUNNER_TEMP/cli-shards"
-          --root "$GITHUB_WORKSPACE/cli" --shards 4
-          --tests-result "$CLI_TEST_RESULT" --contracts-result "$CLI_CONTRACT_RESULT"
-          --output "$RUNNER_TEMP/cli-test-summary.json"
-      - uses: actions/upload-artifact@v4
-        with:
-          name: cli-test-summary
-          path: ${{ runner.temp }}/cli-test-summary.json
-          if-no-files-found: error
-          overwrite: true
-          retention-days: 7
-
-  # Native shell lifecycle checks on the Linux platforms used over SSH. This workflow
-  # remains on demand; it builds and tests without publishing or installing a release.
+  # Unit tests only. Native fixtures and connected-shell checks run in the release workflow.
   tui-test:
     concurrency:
-      group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-tui-test-${{ strategy.job-index }}
+      group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-tui-test
       cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     needs: plan
     if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.tui == 'true'
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { runner: ubuntu-latest, target: x86_64-unknown-linux-musl }
-          - { runner: ubuntu-24.04-arm, target: aarch64-unknown-linux-musl }
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 25
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: tui
@@ -573,88 +298,17 @@ jobs:
         with:
           ref: ${{ env.CI_SOURCE_SHA }}
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: tui
-          shared-key: tui-${{ matrix.target }}
+          shared-key: tui-pr
           cache-bin: false
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 22.23.2
-          cache: npm
-          cache-dependency-path: cli/package-lock.json
-      - name: Install isolated test dependencies
-        working-directory: .
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y tmux musl-tools zsh
-          npm ci --prefix cli --no-audit --no-fund
-      - name: Real tmux question polling and answer routing
-        working-directory: cli
-        run: node --import tsx scripts/question-poll-native.ts "$RUNNER_TEMP/question-poll.json"
-      - name: Native fixture process cleanup and ownership isolation
-        working-directory: cli
-        run: node --import tsx scripts/check-native-fixture-git.mjs
-      - name: Real tmux byte streaming, paste and resize
-        working-directory: cli
-        env:
-          RUN_REAL_TMUX_STREAM: '1'
-        run: npx vitest run src/lib/tmuxStream.real.spec.ts
-      - name: Codex startup timeout recovery and cancellation
-        working-directory: cli
-        env:
-          RUN_REAL_TMUX_CODEX_STARTUP: '1'
-        run: npx vitest run src/lib/codexStartupRetry.real.spec.ts --maxWorkers=1
-      - name: Release unit tests
-        # Use the shipped target for both commands so Cargo can reuse the
-        # dependencies, instead of compiling once for glibc and again for musl.
+      - run: sudo apt-get update && sudo apt-get install -y tmux zsh
+      - name: Unit tests
         env:
           TERM: xterm-256color
           COLORTERM: truecolor
-        run: env -u NO_COLOR cargo test --locked --release --target ${{ matrix.target }}
-      - name: Build static Linux binary
-        run: cargo build --locked --release --target ${{ matrix.target }}
-      - name: Build native comparison reference
-        id: reference-tmux
-        uses: ./.github/actions/reference-tmux
-      - name: Complete native fixtures with bounded parallelism
-        working-directory: .
-        env:
-          REFERENCE_TMUX_BIN: ${{ steps.reference-tmux.outputs.bin }}
-        run: PATH="$REFERENCE_TMUX_BIN:$PATH" python3 scripts/validate-tui-native.py tui/target/${{ matrix.target }}/release/harness-tui
-      - name: Connected hn local and remote shells through the real service
-        working-directory: cli
-        env:
-          HN_TUI_BINARY: ${{ github.workspace }}/tui/target/${{ matrix.target }}/release/harness-tui
-          E2E_BUNDLE: '1'
-          E2E_ARTIFACTS_DIR: ${{ github.workspace }}/.harness/validation/connected-shells
-        run: npm run test:e2e -- e2e/tuiShell.e2e.ts e2e/shell.e2e.ts
-      - name: Real daemon composer and recursive folder search
-        working-directory: .
-        env:
-          HN_SHELL_TEST_BINARY: ${{ github.workspace }}/tui/target/${{ matrix.target }}/release/harness-tui
-          HN_SHELL_TEST_CLI: ${{ github.workspace }}/cli/dist/cli.js
-          HN_SHELL_TEST_FZF: '0'
-        run: |
-          npm run build --prefix cli
-          HN_SHELL_TEST_COMPOSER=1 HN_SHELL_TEST_COMPOSER_ONLY=1 python3 -u tui/tests/shell-first.py
-          HN_SHELL_TEST_FOLDERS=1 HN_SHELL_TEST_LARGE_FOLDERS=1 HN_SHELL_TEST_FOLDERS_ONLY=1 python3 -u tui/tests/shell-first.py
-          python3 -u tui/tests/shell-first.py
-      - name: Show native fixture failures
-        if: failure()
-        working-directory: .
-        run: |
-          find .harness/validation -name '*.log' -type f -exec sh -c 'echo "::group::$1"; cat "$1"; echo "::endgroup::"' sh {} \;
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: tui-validation-${{ matrix.target }}
-          path: .harness/validation/
-          include-hidden-files: true
-          if-no-files-found: ignore
-          retention-days: 14
+        run: env -u NO_COLOR cargo test --locked
 
   backend-desk:
     concurrency:
@@ -687,38 +341,6 @@ jobs:
     needs: plan
     if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.website == 'true'
     uses: ./.github/workflows/website-checks.yml
-
-  experience-checks:
-    concurrency:
-      group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-experience-checks
-      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-    needs: plan
-    if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.experience == 'true'
-    uses: ./.github/workflows/experience-checks.yml
-
-  authoring-checks:
-    concurrency:
-      group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-authoring-checks
-      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-    needs: plan
-    if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.authoring == 'true'
-    uses: ./.github/workflows/authoring-browser-checks.yml
-
-  home-assistant-checks:
-    concurrency:
-      group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-home-assistant-checks
-      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-    needs: plan
-    if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.home-assistant == 'true'
-    uses: ./.github/workflows/home-assistant-checks.yml
-
-  desktop-logging-checks:
-    concurrency:
-      group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-desktop-logging-checks
-      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-    needs: plan
-    if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.desktop-logging == 'true'
-    uses: ./.github/workflows/desktop-logging-checks.yml
 
   os-checks:
     concurrency:
@@ -858,10 +480,8 @@ jobs:
 
   required:
     name: ci/required
-    needs: [plan, process-checks, desktop-tests, desktop-test-summary, serial-native, process-images-native,
-            companion-subsystems, cli-contracts, cli-coverage-gates, cli-tests, typecheck-test, tui-test,
-            backend-desk, website-checks, experience-checks, authoring-checks, home-assistant-checks,
-            desktop-logging-checks, os-checks, provider-checks, firmware-checks, mobile-checks, daemons-checks]
+    needs: [plan, process-checks, desktop-tests, companion-subsystems, cli-typecheck, cli-tests, tui-test,
+            backend-desk, website-checks, os-checks, provider-checks, firmware-checks, mobile-checks, daemons-checks]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 3

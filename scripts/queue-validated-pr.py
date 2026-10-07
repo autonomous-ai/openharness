@@ -87,12 +87,17 @@ def gate_evidence(client, run, output):
                 suites=receipt["suites"], artifact_id=artifact["id"], artifact_digest=artifact["digest"])
 
 
-def pr_gate(client, head, output):
+def pr_run(client, head):
     runs = client.pages("actions/workflows/ci.yml/runs?event=pull_request&head_sha=" + head, "workflow_runs")
-    candidates = sorted((r for r in runs if r.get("head_sha") == head), key=lambda r: r["id"], reverse=True)
+    candidates = sorted((r for r in runs if r.get("head_sha") == head and r.get("event") == "pull_request"),
+                        key=lambda r: r["id"], reverse=True)
     if not candidates:
         raise ValueError("automatic CI has not run for the reviewed PR head")
-    return gate_evidence(client, candidates[0], output)
+    return candidates[0]
+
+
+def pr_gate(client, head, output):
+    return gate_evidence(client, pr_run(client, head), output)
 
 
 def merged_gate(client, tree, branch, started_at, output):

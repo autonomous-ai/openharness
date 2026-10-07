@@ -1,11 +1,14 @@
 import copy
+import hashlib
 import importlib.util
+import io
 import json
 from pathlib import Path
 import subprocess
 import tempfile
 import unittest
 from unittest import mock
+import zipfile
 
 spec = importlib.util.spec_from_file_location("merge_pr", Path(__file__).resolve().parents[1] / "merge-validated-pr.py")
 merger = importlib.util.module_from_spec(spec)
@@ -43,11 +46,81 @@ class MergeTests(unittest.TestCase):
         self.addCleanup(patcher.stop)
         return value
 
-    def finish(self, merge=True):
-        result = merger.finish(self.client, self.root, 5, 123, "process", self.head, self.base,
+    def finish(self, merge=True, automatic=False):
+        self.client.required_gate = automatic
+        result = merger.finish(self.client, self.root, 5, None if automatic else 123,
+                               None if automatic else "process", self.head, self.base,
                                self.output, merge=merge)
         self.assertEqual(json.loads((self.output / "receipt.json").read_text()), result)
         return result
+
+    def test_automatic_pr_gate_merges_without_queue_or_legacy_job_inventory(self):
+        self.patch(merger.ci, "collect", side_effect=AssertionError("legacy collector must not run"))
+        result = self.finish(automatic=True)
+        self.assertEqual(result["status"], "merged")
+        self.assertEqual(result["run_id"], 123)
+        self.assertEqual(result["pr_evidence"]["source_sha"], self.head)
+        self.assertTrue(result["merge"]["same_tested_tree"])
+        self.assertEqual(len(self.client.writes), 1)
+        self.assertIn("sha=" + self.head, self.client.writes[0])
+        self.assertTrue((self.output / "ci/ci-required.zip").is_file())
+        self.assertIn("automatic PR CI", (self.output / "merge.md").read_text())
+
+    def test_automatic_preview_verifies_the_gate_without_merging(self):
+        self.assertEqual(self.finish(merge=False, automatic=True)["status"], "ready")
+        self.assertEqual(self.client.writes, [])
+
+    def test_failed_automatic_ci_or_missing_gate_cannot_merge(self):
+        self.client.run["conclusion"] = "failure"
+        self.assertEqual(self.finish(automatic=True)["status"], "not_merged")
+        self.output = self.output.with_name("missing-gate")
+        self.client.run["conclusion"] = "success"
+        self.client.gate_jobs = []
+        result = self.finish(automatic=True)
+        self.assertIn("required CI gate did not pass", result["error"])
+        self.assertEqual(self.client.writes, [])
+
+    def test_manual_ci_cannot_replace_automatic_pr_ci(self):
+        self.client.run["event"] = "workflow_dispatch"
+        result = self.finish(automatic=True)
+        self.assertEqual(result["status"], "not_merged")
+        self.assertIn("automatic CI has not run", result["error"])
+        self.assertEqual(self.client.writes, [])
+
+    def test_automatic_gate_must_cover_the_local_reviewed_tree(self):
+        self.client.tested_tree = "e" * 40
+        result = self.finish(automatic=True)
+        self.assertEqual(result["status"], "not_merged")
+        self.assertIn("does not cover the reviewed source", result["error"])
+        self.assertEqual(self.client.writes, [])
+
+    def test_superseded_automatic_run_or_attempt_cannot_authorize_merge(self):
+        for change in [dict(id=124), dict(run_attempt=2)]:
+            self.client = FakeClient(self)
+            self.client.superseding_run = dict(self.client.run, **change)
+            self.output = self.output.with_name("superseded-" + next(iter(change)))
+            with self.subTest(change=change):
+                result = self.finish(automatic=True)
+                self.assertEqual(result["status"], "not_merged")
+                self.assertIn("CI changed during verification", result["error"])
+                self.assertEqual(self.client.writes, [])
+
+    def test_default_command_uses_direct_merge_unless_github_requires_queue(self):
+        direct = self.patch(merger, "finish", return_value={"status": "ready"})
+        queued = self.patch(merger.queue, "finish", return_value={"status": "ready_for_queue"})
+        self.patch(merger, "git", return_value=str(self.root))
+        self.patch(merger.ci, "Client", return_value=self.client)
+        self.patch(merger.sys, "argv", new=["merge-validated-pr.py", "5", "--reviewed-head", self.head,
+                                         "--reviewed-base", self.base])
+        self.patch(merger, "print", create=True)
+        self.assertEqual(merger.main(), 0)
+        self.assertEqual(direct.call_args.args[2:5], (5, None, None))
+        queued.assert_not_called()
+        direct.reset_mock()
+        self.client.rules = [{"type": "merge_queue"}]
+        self.assertEqual(merger.main(), 0)
+        queued.assert_called_once()
+        direct.assert_not_called()
 
     def test_preview_verifies_full_evidence_without_mutating_github(self):
         result = self.finish(merge=False)
@@ -208,18 +281,25 @@ class FakeClient:
         self.deadline, self.run_reads = 0, 0
         self.writes, self.behavior = [], "success"
         self.merged_sha, self.merged_tree = "c" * 40, fixture.tree
+        self.tested_tree = fixture.tree
+        self.required_gate, self.run_list_reads, self.superseding_run = False, 0, None
+        self.rules = []
         self.pr = dict(number=5, state="open", draft=False, merged=False, mergeable=True, mergeable_state="clean",
                        html_url="https://github.com/owner/repo/pull/5", head=dict(sha=fixture.head),
                        base=dict(sha=fixture.base, ref="main", repo=dict(full_name=self.repository)))
         self.run = dict(id=123, repository=dict(full_name=self.repository), path=".github/workflows/ci.yml",
+                        event="pull_request",
                         head_sha=fixture.head, run_attempt=1, status="completed", conclusion="success",
                         html_url="https://github.com/owner/repo/actions/runs/123",
                         created_at="2026-10-03T00:00:00Z", updated_at="2026-10-03T00:01:00Z")
         self.jobs = [dict(id=1, name="process-checks", run_id=123, run_attempt=1, head_sha=fixture.head,
                           status="completed", conclusion="success", steps=[],
                           started_at="2026-10-03T00:00:01Z", completed_at="2026-10-03T00:01:00Z")]
+        self.gate_jobs = [dict(self.jobs[0], name="ci/required")]
 
     def api(self, path):
+        if path == "rules/branches/main":
+            return copy.deepcopy(self.rules)
         if path == "pulls/5":
             return copy.deepcopy(self.pr)
         if path == "git/ref/heads/main":
@@ -229,13 +309,36 @@ class FakeClient:
             return copy.deepcopy(self.run)
         if path == f"git/commits/{self.merged_sha}":
             return dict(sha=self.merged_sha, tree=dict(sha=self.merged_tree), parents=[dict(sha=self.actual_base)])
+        if path == f"git/commits/{self.fixture.head}":
+            return dict(sha=self.fixture.head, tree=dict(sha=self.tested_tree))
         raise AssertionError(path)
 
     def pages(self, path, key):
+        if key == "workflow_runs":
+            self.run_list_reads += 1
+            return [copy.deepcopy(self.superseding_run if self.run_list_reads > 1 and self.superseding_run else self.run)]
+        if self.required_gate:
+            if key == "jobs":
+                return copy.deepcopy(self.gate_jobs)
+            if key == "artifacts":
+                receipt = dict(schema=1, kind="ci-required", status="passed", source_sha=self.fixture.head,
+                               source_tree=self.tested_tree, event="pull_request", run_id=123, run_attempt=1,
+                               suites=[], required_jobs=["process-checks"],
+                               results={"plan": "success", "process-checks": "success"})
+                buf = io.BytesIO()
+                with zipfile.ZipFile(buf, "w") as bundle:
+                    bundle.writestr("ci-required.json", json.dumps(receipt))
+                self.archive = buf.getvalue()
+                return [dict(id=20, name="ci-required", expired=False, size_in_bytes=len(self.archive),
+                             workflow_run=dict(id=123, head_sha=self.fixture.head),
+                             digest="sha256:" + hashlib.sha256(self.archive).hexdigest())]
         assert key in {"jobs", "artifacts"}, key
         return copy.deepcopy(self.jobs) if key == "jobs" else []
 
     def command(self, *args, binary=False):
+        if binary:
+            assert args == ("api", "repos/owner/repo/actions/artifacts/20/zip")
+            return self.archive
         self.writes.append(args)
         before = json.loads((self.fixture.output / "receipt.json").read_text())
         assert before["status"] == "merge_requested" and before["reviewed_head"] == self.fixture.head

@@ -282,7 +282,10 @@ describe('the window bridges, wired to the core', () => {
     expect(selection.wiring.focus()).toBeUndefined()
     expect(visit.wiring.focus()).toBeUndefined()
     expect(form.wiring.focus()).toBeUndefined()
+    expect(seen.host.appFocus!()).toBeUndefined()
     port.windowFocus({ voice: { machineId: 'm1', agentId: 'a1', connId: 'w1' }, form: { machineId: 'm1', connId: 'w1' } })
+    expect(seen.host.appFocus!()).toMatchObject({ machineId: 'm1', agentId: 'a1' })
+    expect(calls('followApp')).toEqual([['m1', 'a1']])
     expect(selection.wiring.focus()).toEqual({ machineId: 'm1', agentId: 'a1', connId: 'w1' })
     expect(visit.wiring.focus()).toEqual({ machineId: 'm1', agentId: 'a1', connId: 'w1' })
     expect(form.wiring.focus()).toEqual({ machineId: 'm1', connId: 'w1' })
@@ -305,6 +308,9 @@ describe('the window bridges, wired to the core', () => {
       { type: 'voice_route_request', payload: { voiceId: 'v2', text: 'fix it', cmd: 'review' } },
     ])
     expect(logs).toContain('[route] voice → the window · 6 bytes · /review')
+    port.windowFocus({ voice: null, form: null })
+    expect(seen.host.appFocus!()).toBeUndefined()
+    expect(calls('followApp')).toEqual([['m1', 'a1']])
   })
 
   it('hand each window\'s answer to its bridge, and tell them a window left', () => {

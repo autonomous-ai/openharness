@@ -81,7 +81,7 @@ describe('a message goes only into the engine\'s own composer', () => {
     await until('the suggestions to be drawn', async () => (await d.capture(agent.tmuxPane)).includes('Set the AI model') || null, 15_000, 250)
     const refused = refusal(client, agent.id, 15_000)
     client.send('message', { agentId: agent.id, content: 'what changed?' })
-    expect(String((await refused).payload?.message)).toBe(`${name(engine)} has a list of suggestions open in its prompt, where Enter would pick one. Close it with Esc in its terminal, then send the message again.`)
+    expect(String((await refused).payload?.message)).toBe(`${name(engine)} message not sent. Close suggestions with Esc in its terminal, then retry.`)
     await d.tmux.run('send-keys', '-t', agent.tmuxPane, 'Escape', 'BSpace', 'BSpace', 'BSpace')
     await until('the suggestions to be put away', async () => !(await d.capture(agent.tmuxPane)).includes('Set the AI model') || null, 15_000, 250)
     await turn(client, agent.id, 'what changed?')
@@ -98,6 +98,19 @@ describe('a message goes only into the engine\'s own composer', () => {
     const second = client.next((frame) => isTurn('turn_started', agent.id)(frame) && frame.payload?.userMessage === 'and then this', 45_000, 'the second turn')
     client.send('message', { agentId: agent.id, content: 'and then this' })
     await second
+    client.close()
+  })
+
+  it('codex: command examples in the conversation do not block a message appended to an ordinary draft', async () => {
+    const d = await fresh()
+    const client = await LocalClient.connect(d)
+    const agent = await create(d, client, 'codex', 'command-example')
+    await turn(client, agent.id, 'Explain this command:\n  /model     choose what model to use')
+    await d.tmux.run('send-keys', '-t', agent.tmuxPane, '-l', 'look in /model')
+    await until('the ordinary draft to be drawn', async () => (await d.capture(agent.tmuxPane)).includes('› look in /model') || null, 15_000, 250)
+    const started = client.next(isTurn('turn_started', agent.id), 15_000, 'the appended message')
+    client.send('message', { agentId: agent.id, content: '/notes' })
+    expect((await started).payload?.userMessage).toBe('look in /model/notes')
     client.close()
   })
 

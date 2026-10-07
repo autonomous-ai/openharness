@@ -361,7 +361,12 @@ class NewHarnessOption {
     this.synthetic = false,
     this.risky = false,
     this.why,
+    this.meta,
   });
+
+  /// What the row says of itself at its end — a subscription's allowance left ("79% remaining"),
+  /// where the Models picker shows it too, rather than run on after the account in its detail.
+  final String? meta;
 
   /// A row the box adds rather than finds — "New project", "Use this folder".
   /// It is never a match, so it is in neither half of the `2 of 14`.
@@ -956,7 +961,7 @@ class NewHarnessController extends ChangeNotifier {
       _modelCatalog!.sections.any(
         (section) =>
             section.name == model.grid &&
-            section.models.any((candidate) => candidate.id == model.id),
+            section.harnessModels.any((candidate) => candidate.id == model.id),
       );
 
   String? get modelNotice {
@@ -975,7 +980,7 @@ class NewHarnessController extends ChangeNotifier {
     if (_model != null && !_modelAvailable(_model!)) {
       return 'The selected model is unavailable. Choose another model or your subscription.';
     }
-    if (catalog.sections.every((section) => section.models.isEmpty)) {
+    if (catalog.sections.every((section) => section.harnessModels.isEmpty)) {
       return 'No models are running on your machines. Open Manage Models to start one.';
     }
     return null;
@@ -1017,10 +1022,11 @@ class NewHarnessController extends ChangeNotifier {
         NewHarnessOption(
           id: defaultModelId,
           title: subscriptionLabel,
-          detail: [
-            '${_profile?.label ?? 'Default account'} on $machineLabel',
-            if (subscription?['status'] case final String status) status,
-          ].join(' · '),
+          detail: '${_profile?.label ?? 'Default account'} on $machineLabel',
+          meta: switch (subscription?['status']) {
+            final String status => status,
+            _ => null,
+          },
           group: 'Subscription',
           engine: _engine,
           machineId: _machineId,
@@ -1030,7 +1036,7 @@ class NewHarnessController extends ChangeNotifier {
           catalog!.canRunLocally(_engine))
         for (final section in catalog.sections)
           ..._ranked([
-            for (final model in section.models)
+            for (final model in section.harnessModels)
               NewHarnessOption(
                 id: _modelId(
                   GridModel(id: model.id, node: model.node, grid: section.name),
@@ -1042,9 +1048,9 @@ class NewHarnessController extends ChangeNotifier {
                   final offline? => offlineNodeLabel(offline.machine),
                   null => model.node,
                 },
-                group: section.own
-                    ? 'On your machines'
-                    : 'Shared · ${section.name}',
+                // The Models picker's names for the same two lists. Its machine on the row's second
+                // line tells two grids' copies of a model apart, as it does there.
+                group: section.own ? 'Your models' : 'Shared with you',
                 model: GridModel(
                   id: model.id,
                   node: model.node,
@@ -1070,7 +1076,7 @@ class NewHarnessController extends ChangeNotifier {
         (catalog?.supportsModelLaunch == true && catalog!.canRunLocally(_engine)
             ? catalog.sections.fold<int>(
                 0,
-                (count, section) => count + section.models.length,
+                (count, section) => count + section.harnessModels.length,
               )
             : 0);
     return groups;
