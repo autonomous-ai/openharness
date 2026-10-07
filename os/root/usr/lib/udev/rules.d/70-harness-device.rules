@@ -1,0 +1,5 @@
+# The Harness device (an ESP32-S3 dial on USB serial, cli/src/cable/serial.ts DIAL_VENDOR_ID and
+# DIAL_PRODUCT_ID). Arch gives a serial port to root:uucp 0660, and the account is not in uucp, so
+# the daemon's `stty` on it failed with "Permission denied" and the device never connected. uaccess
+# grants the person at the seat access while they use it, as for a webcam or a game controller.
+SUBSYSTEM=="tty", ATTRS{idVendor}=="303a", ATTRS{idProduct}=="1001", TAG+="uaccess"

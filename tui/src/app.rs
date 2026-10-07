@@ -4473,8 +4473,11 @@ impl App {
     }
 
     pub fn sync_titles(&mut self) {
+        // Harness OS signed in: a desk tab is called what the desktop app calls it.
+        let desk_names = if self.desk_mode == DeskMode::Account && self.session_desk { self.desk_tab_names() } else { HashMap::new() };
         for index in 0..self.tabs.len() {
             if self.tabs[index].named || self.tabs[index].home { continue }
+            if let Some(name) = desk_names.get(&self.tabs[index].id) { self.tabs[index].name = name.clone(); continue }
             // tmux's automatic-rename (unless it is off): an unnamed window is called after its
             // active pane — a shell by what runs in it (automatic-rename-format: `zsh`, `vim`,
             // `[tmux]` in copy mode), a harness by its name.
@@ -5559,9 +5562,7 @@ impl App {
             if id.is_empty() || panes.is_empty() { continue }
             seen.push(id.clone());
             let name = row.get("name").and_then(Value::as_str).unwrap_or("tab").to_string();
-            // On Harness OS a tab is called what the desktop app calls it, not what its window runs:
-            // the same tabs side by side on two computers read the same.
-            let named = row.get("nameIsCustom").and_then(Value::as_bool).unwrap_or(false) || self.desk_mode == DeskMode::Account;
+            let named = row.get("nameIsCustom").and_then(Value::as_bool).unwrap_or(false);
             let layout_doc = row.get("layout").cloned().unwrap_or(json!({}));
             match self.tabs.iter().position(|t| t.id == id) {
                 Some(index) => {
@@ -5688,8 +5689,65 @@ impl App {
         }
         if self.tabs.is_empty() { self.tabs.push(Tab::home()) }
         self.active = self.active.min(self.tabs.len() - 1);
+        if self.desk_mode == DeskMode::Account { self.follow_desk_order(&seen) }
         self.sync_titles();
         self.fit_panes();
+    }
+
+    /// Harness OS signed in: the tabs in the desk's order and numbered from base-index in it, as
+    /// the desktop app's ⌘1… are their places. A window kept from before the desk (its own tab
+    /// order, numbers with gaps where tabs closed elsewhere) read differently on each computer.
+    fn follow_desk_order(&mut self, order: &[String]) {
+        let active = self.tabs.get(self.active).map(|t| t.id.clone());
+        // A stable sort: a tab only this window has keeps its order, after the desk's.
+        self.tabs.sort_by_key(|t| order.iter().position(|id| *id == t.id).unwrap_or(usize::MAX));
+        if let Some(id) = active { self.active = self.tabs.iter().position(|t| t.id == id).unwrap_or(0) }
+        self.renumber_all();
+    }
+
+    /// What the desktop app calls each desk tab with no name of its own (workspaceTabNames,
+    /// desktop/lib/state/workspace_status.dart), so a tab reads the same on Harness OS: each
+    /// harness in it votes its type (`code` for a coding agent), project and machine; the trait
+    /// with the most votes names it, then the one fewer other tabs share, then type, project,
+    /// machine in that order. A tab with no harness the app knows is `New Tab`.
+    pub fn desk_tab_names(&self) -> HashMap<String, String> {
+        const CODE: [&str; 14] = ["claude", "codex", "cursor", "opencode", "pi", "hermes", "commandcode", "devin", "muse", "amp", "kilo", "grok", "copilot", "agy"];
+        let mut candidates: Vec<(String, Vec<(usize, String, usize)>)> = Vec::new();
+        for tab in self.tabs.iter().filter(|t| t.on_desk && !t.named) {
+            let mut votes: [Vec<(String, usize)>; 3] = Default::default();
+            let mut vote = |kind: usize, label: String| {
+                if label.is_empty() { return }
+                match votes[kind].iter_mut().find(|(l, _)| *l == label) { Some((_, n)) => *n += 1, None => votes[kind].push((label, 1)) }
+            };
+            let mut seen = HashSet::new();
+            for id in tab.panes() {
+                let Some(pane) = self.panes.get(&id) else { continue };
+                if !seen.insert((pane.machine_id.clone(), pane.agent_id.clone())) { continue }
+                if let Some(agent) = self.fleet.agent(&pane.machine_id, &pane.agent_id) {
+                    let engine = if agent.dsh.is_empty() { agent.engine.to_lowercase() } else { agent.dsh.to_lowercase() };
+                    if !engine.is_empty() {
+                        vote(0, if CODE.contains(&engine.as_str()) { "code".into() } else { engine.rsplit('/').next().unwrap_or(&engine).to_string() });
+                    }
+                    vote(1, agent.project.clone());
+                }
+                vote(2, self.fleet.machine_name(&pane.machine_id));
+            }
+            // Per trait, the label with the most votes; a tie keeps the earlier one.
+            let best: Vec<(usize, String, usize)> = votes.into_iter().enumerate().filter_map(|(kind, labels)| {
+                labels.into_iter().fold(None, |best: Option<(String, usize)>, (l, n)| match best { Some((_, m)) if m >= n => best, _ => Some((l, n)) })
+                    .map(|(label, count)| (kind, label, count))
+            }).collect();
+            candidates.push((tab.id.clone(), best));
+        }
+        let repetitions = |kind: usize, label: &str| candidates.iter().filter(|(_, c)| c.iter().any(|(k, l, _)| *k == kind && l == label)).count();
+        candidates.iter().map(|(id, best)| {
+            let name = best.iter().fold(None::<&(usize, String, usize)>, |a, b| match a {
+                None => Some(b),
+                Some(a) if b.2 != a.2 => Some(if b.2 > a.2 { b } else { a }),
+                Some(a) => Some(if repetitions(b.0, &b.1) < repetitions(a.0, &a.1) { b } else { a }),
+            }).map(|(_, label, _)| label.clone()).unwrap_or_else(|| "New Tab".into());
+            (id.clone(), name)
+        }).collect()
     }
 
     fn desk_pane_added(&mut self, tab_id: &str, machine_id: &str, agent_id: &str) {
@@ -6362,6 +6420,52 @@ mod recovery_tests {
     /// Account (Harness OS), as the desktop app: at sign-in this computer's windows join the
     /// account's shared tabs; at sign-out what runs on this computer stays in its windows, and a
     /// harness on another machine goes with the account.
+    /// Harness OS signed in: the tabs read as the desktop app's do. Their order and numbers are
+    /// the desk's (no gap where a tab closed elsewhere), and a tab with no name of its own is
+    /// called what the app calls it: its harnesses' type, project or machine.
+    #[tokio::test]
+    async fn the_os_orders_numbers_and_names_desk_tabs_as_the_desktop_app() {
+        let mut app = fixture();
+        app.desk_mode = DeskMode::Account;
+        app.session_desk = true;
+        app.fleet.merge_roster("test-peer", &[
+            json!({"id": "agent-1", "name": "fix login", "engine": "claude", "project": {"name": "webapp"}}),
+            json!({"id": "agent-2", "name": "tests", "engine": "codex", "project": {"name": "webapp"}}),
+            json!({"id": "agent-3", "name": "", "engine": "terminal", "project": {"name": "ops"}}),
+        ]);
+        let tab = |name: &str, wid: u64, panes: &[u64], on_desk: bool| {
+            let mut t = Tab::with_wid(name, wid);
+            let mut root = Node::new(panes[0], 80, 23);
+            for p in &panes[1..] { root.split(panes[0], *p, Dir::Horizontal); }
+            t.root = Some(root);
+            t.on_desk = on_desk;
+            t
+        };
+        let (coding, shell, own) = (tab("a", 1, &[1, 2], true), tab("b", 2, &[3], true), tab("mine", 3, &[4], false));
+        let order = vec![coding.id.clone(), shell.id.clone()];
+        app.tabs = vec![shell, own, coding];
+        app.active = 2;
+        app.nums = HashMap::from([(app.tabs[0].id.clone(), 7), (app.tabs[1].id.clone(), 1), (app.tabs[2].id.clone(), 4)]);
+
+        app.follow_desk_order(&order);
+        assert_eq!(app.tabs.iter().map(|t| t.id.clone()).collect::<Vec<_>>()[..2], order[..], "the desk's order");
+        assert_eq!(app.tabs[2].name, "mine", "a tab only this window has comes after");
+        assert_eq!(app.active, 0, "the same tab stays in front");
+        let base = app.base_index();
+        assert_eq!(app.tabs.iter().map(|t| app.nums[&t.id]).collect::<Vec<_>>(), vec![base, base + 1, base + 2]);
+
+        app.sync_titles();
+        // Two coding agents in one project: `code`, the type, wins a tie the machine (in both
+        // tabs) loses. A terminal is its own type.
+        assert_eq!(app.tabs[0].name, "code");
+        assert_eq!(app.tabs[1].name, "terminal");
+        // A name given on purpose is the desk's, untouched.
+        app.tabs[0].named = true;
+        app.tabs[0].name = "discussion".into();
+        app.sync_titles();
+        assert_eq!(app.tabs[0].name, "discussion");
+    }
+
     #[tokio::test]
     async fn the_os_joins_its_windows_to_the_account_and_keeps_its_own_harnesses_after() {
         let mut app = fixture();
