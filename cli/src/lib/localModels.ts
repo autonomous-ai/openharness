@@ -1155,7 +1155,7 @@ export class LocalModels {
     } else if (!record) {
       const jev = JEV_MODELS.find(m => m.id === operation.modelId)
       const model = jev ? await this.getJev(grid, jev, operation, change, must) : await this.appDecision(operation.modelId)
-      if (model && operation.action === 'start') await this.startDecision(grid, model, change, must)
+      await this.startIfAsked(grid, model, operation, change, must)
     }
     operation.phase = 'done'
     delete operation.progress
@@ -1163,6 +1163,15 @@ export class LocalModels {
   }
 
   /** [jev]'s weights, downloaded when they are not here; for a start, the model as Grid's llama.cpp runs it. */
+  /** Starts [model] when the operation is a Start. Its own function: in line after the awaits above, which throw
+   *  for a model this computer cannot run, v8 counted the branch as taken -33 times and the coverage gate read it
+   *  as never taken. */
+  private async startIfAsked(grid: string, model: AppModel | undefined, operation: ModelOperation,
+    change: (stage: ModelOperation['stage']) => Promise<void>,
+    must: (args: string[], message: string, output?: (chunk: string) => void) => Promise<void>): Promise<void> {
+    if (model && operation.action === 'start') await this.startDecision(grid, model, change, must)
+  }
+
   private async getJev(grid: string, jev: JevModel, operation: ModelOperation,
     change: (stage: ModelOperation['stage']) => Promise<void>,
     must: (args: string[], message: string, output?: (chunk: string) => void) => Promise<void>): Promise<AppModel | undefined> {

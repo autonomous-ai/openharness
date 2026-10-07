@@ -2375,5 +2375,69 @@ describe('Jev models: Get brings Grid\'s llama.cpp up to a build that serves the
       expect(ops.stop).toHaveBeenCalledWith(expect.objectContaining({ modelId: TEV }))
       expect(await tev(models)).toEqual([])
     })
+
+    it('is listed from the scan a daemon saved, before its first scan answers, with no quant when its app names none', async () => {
+      const { quant: _quant, ...unquantized } = tev1
+      await mkdir(stateDir, { recursive: true })
+      await writeFile(join(stateDir, 'app-models.json'), JSON.stringify([unquantized]))
+      // Its first scan answers later: the list before it is the saved one.
+      const models = jevService({}, { appModels: () => new Promise<AppModel[]>(resolve => setTimeout(() => resolve([unquantized]), 50)) })
+      const [row] = await tev(models)
+      expect(row).toMatchObject({ name: 'tev1', kind: 'decision', app: 'Ollama', state: 'downloaded', canStart: true })
+      expect(row).not.toHaveProperty('quant')
+    })
+
+    it('downloads nothing and starts nothing on a Get: it is here already, in its own app', async () => {
+      const models = jevService({}, { appModels: async () => [tev1] })
+      await models.act('home', TEV, 'download'); await models.settled()
+      expect(ops.start).not.toHaveBeenCalled()
+      expect(calls.some(args => args[0] === 'pull' || args[0] === 'engine' || args.includes('join'))).toBe(false)
+      expect(await tev(models)).toEqual([expect.objectContaining({ state: 'downloaded', canStart: true, operation: expect.objectContaining({ phase: 'done' }) })])
+    })
+
+    it('keeps a row to stop one whose model a later scan no longer finds', async () => {
+      let apps = [tev1]
+      const models = jevService({}, { appModels: async () => apps })
+      await models.act('home', TEV, 'start'); await models.settled()
+      apps = []
+      // A scan that no longer finds it: the record's own row, with nothing of the model's left to say but its name.
+      await (models as any).scanApps()
+      const [row] = await tev(models)
+      expect(row).toMatchObject({ name: 'tev1', kind: 'decision', state: 'running', canStart: false, canStop: true })
+      expect(row).not.toHaveProperty('sizeBytes')
+      await models.act('home', TEV, 'stop'); await models.settled()
+      expect(ops.stop).toHaveBeenCalledWith(expect.objectContaining({ modelId: TEV }))
+      expect(await tev(models)).toEqual([])
+    })
+  })
+
+  it('starts one again only when its engine is gone or its grid is read and does not list it', async () => {
+    await engine('0.5.0-dev (build 11378, commit edd6e2bbd)')
+    const models = jevService()
+    const listed = inventory.getMockImplementation()!
+    const start = async (answer?: unknown) => {
+      if (answer !== undefined) inventory.mockImplementation(async () => answer as GridInventory)
+      await models.act('home', LAYA, 'start'); await models.settled()
+      inventory.mockImplementation(listed)
+    }
+    await start()
+    expect(ops.start).toHaveBeenCalledOnce()
+    // Served, or not known not to be: an unread grid, a sleeping one, and a node listing it by object, not by name.
+    await start({ state: 'unknown', status: 'running', nodes: [] })
+    await start({ state: 'asleep', status: 'asleep', nodes: [] })
+    await start({ state: 'unknown', status: 'asleep', nodes: [] })
+    await start({ state: 'awake', status: 'running', nodes: [{ node_id: 'local-node', online: true, models: [{ model: 'laya-english' }] }] })
+    expect(ops.start).toHaveBeenCalledOnce()
+    expect(ops.stop).not.toHaveBeenCalled()
+    // A node whose models are not a list lists nothing: started again.
+    await start({ state: 'awake', status: 'running', nodes: [{ node_id: 'local-node', online: true, models: 'laya-english' }] })
+    expect(ops.stop).toHaveBeenCalledOnce()
+    expect(ops.start).toHaveBeenCalledTimes(2)
+    // Its engine gone: started again, whatever the grid says.
+    up.delete(LAYA)
+    await start()
+    expect(ops.stop).toHaveBeenCalledTimes(2)
+    expect(ops.start).toHaveBeenCalledTimes(3)
+    expect(await laya(models)).toMatchObject({ state: 'running', operation: { phase: 'done' } })
   })
 })
