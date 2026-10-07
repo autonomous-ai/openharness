@@ -18,6 +18,7 @@ import urllib.parse
 ROOT = Path(__file__).resolve().parents[1]
 TOKEN = '8c73ea55-683a-4207-a9aa-ab8a9e813bea'
 REQUEST = re.compile(rb'\x1b\]633;hn;([^;]+);([^;]+);([^;]+);([^\x07]*)\x07')
+PICKED = b'\x1b]633;picked\x07'
 AGENTS = ('codex', 'claude', 'cursor-agent', 'opencode', 'pi', 'hermes', 'cmd', 'devin', 'muse', 'amp', 'kilo', 'grok', 'agy', 'copilot')
 
 class Shell:
@@ -31,7 +32,9 @@ class Shell:
             path.write_text('#!/usr/bin/env python3\nimport os,sys,json\nwith open(os.environ["CALLS"],"a") as f: f.write(json.dumps(sys.argv)+"\\n")\n')
             path.chmod(0o755)
         picker=binpath/'native-picker'
-        picker.write_text('#!/bin/sh\n[ -f "$HOME/picker-choice" ] || exit 130\ncat "$HOME/picker-choice"\n')
+        # With picker-mark, it also marks on the terminal the moment the choice is made.
+        picker.write_text('#!/bin/sh\n[ -f "$HOME/picker-choice" ] || exit 130\n'
+                          '[ ! -f "$HOME/picker-mark" ] || printf \'\\033]633;picked\\007\' >&2\ncat "$HOME/picker-choice"\n')
         picker.chmod(0o755)
         for rc in ('.zshenv', '.zprofile', '.zshrc', '.zlogin', '.bashrc'):
             text = f"printf '%s\\n' '{rc}' >> \"$STARTUP\"\n"
@@ -52,6 +55,11 @@ class Shell:
         bootstrap = (ROOT / 'src/shell_bootstrap.sh').read_text().replace('@INTEGRATION@', (ROOT / 'src/shell_integration.sh').read_text())
         self.pid, self.fd = pty.fork()
         if not self.pid:
+            # A terminal (tmux too) starts its shell with default signals. A runner
+            # started with `&` ignores SIGINT, and a shell can never trap a signal
+            # ignored on entry, so Ctrl-C could not cancel anything.
+            signal.signal(signal.SIGINT, signal.SIG_DFL)
+            signal.signal(signal.SIGQUIT, signal.SIG_DFL)
             os.chdir(root)
             env = {k:v for k,v in os.environ.items() if k in ('LANG','LC_ALL','TZ')}
             env.update(HOME=str(root), SHELL=shell, PATH=str(binpath)+':/usr/bin:/bin:/usr/sbin:/sbin', _HN_CLI=str(binpath/'harness'),
@@ -142,11 +150,15 @@ with tempfile.TemporaryDirectory(prefix='hn-shell-test-') as tmp:
                 # A computer that never answers: the widget says at once what it waits
                 # for, Ctrl-C gives the prompt back with the line unchanged, and the
                 # next pick is served.
+                # The wait starts once the choice is made, not while the picker starts.
                 (root/'picker-choice').write_text('host\nGone\n')
+                (root/'picker-mark').touch()
                 s.send("printf 'GONE_%s\\n' LRIGHT")
                 s.send('\x02'*5+'\x10')
+                seen=s.read_until(PICKED).split(PICKED,1)[1]
                 t0=time.monotonic()
-                seen=s.read_until(REQUEST)
+                (root/'picker-mark').unlink()
+                if not REQUEST.search(seen): seen+=s.read_until(REQUEST)
                 first=REQUEST.search(seen)
                 assert first[3]==b'host-inline' and base64.b64decode(first[4])==b'Gone'
                 progress='Opening a shell on Gone… Ctrl-C to cancel'.encode()

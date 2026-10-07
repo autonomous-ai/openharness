@@ -2,6 +2,35 @@
 _hn_request() (
     exec 4<>/dev/tty
     [ -t 4 ] || { printf '%s\n' 'Run this command at an interactive Harness prompt.' >&2; exit 1; }
+    # Ctrl-C cancels at any moment; before the request has an id there is
+    # nothing to cancel yet.
+    _hn_id='' _hn_stop=''
+    _hn_cancel() {
+        [ -z "$_hn_id" ] || printf '\033]633;hn;%s;%s;cancel;\007' "$_HN_CONTEXT" "$_hn_id" >&4
+        [ "$1" != 130 ] || printf '%s\n' 'Cancelled.' >&2
+        exit "$1"
+    }
+    # zsh runs a trap inside its signal handler, even halfway through a builtin's
+    # write. Exiting from there forks the EXIT trap's rm while the write holds the
+    # stdio lock; the child waits on that lock forever and the shell freezes. So
+    # zsh only notes the signal and the loop cancels; its read returns at once.
+    # Bash runs a trap between builtins or in a blocking read, where acting at
+    # once is safe (its read would wait out the timeout).
+    if [ -n "${ZSH_VERSION-}" ]; then
+        trap '_hn_stop=130' INT; trap '_hn_stop=143' TERM HUP
+    else
+        trap '_hn_cancel 130' INT; trap '_hn_cancel 143' TERM HUP
+    fi
+    _hn_who=''
+    case "$1" in
+        host-inline) _hn_who=${2-}; _hn_who=${_hn_who//[[:cntrl:]]/}; _hn_what="Opening a shell on ${_hn_who:-the computer}…" ;;
+        model-inline) _hn_what='Switching model…' ;;
+        session-inline) _hn_what='Opening session…' ;;
+        *) _hn_what='' ;;
+    esac
+    # Drawn first, before any helper process starts, so a silent computer never
+    # looks like a frozen shell, even on a busy machine.
+    [ -z "$_hn_what" ] || printf '\n%s Ctrl-C to cancel\r\n' "$_hn_what" >&4
     # zsh subshells inherit the same RANDOM state. Use fresh OS randomness so
     # successive commands cannot accidentally reuse a completed request id.
     _hn_nonce=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \r\n')
@@ -13,8 +42,6 @@ _hn_request() (
     _hn_fifo="$_hn_dir/$_hn_id"
     mkfifo -- "$_hn_fifo" || exit 1
     trap 'rm -f -- "$_hn_fifo"; rmdir -- "$_hn_dir" 2>/dev/null || true' EXIT
-    trap 'printf "\\033]633;hn;%s;%s;cancel;\\007" "$_HN_CONTEXT" "$_hn_id" >&4; printf "Cancelled.\\n" >&2; exit 130' INT
-    trap 'printf "\\033]633;hn;%s;%s;cancel;\\007" "$_HN_CONTEXT" "$_hn_id" >&4; exit 143' TERM HUP
     exec 3<>"$_hn_fifo" || exit 1
     _hn_query=$(printf '%s' "${2-}" | base64 | tr -d '\r\n')
     # A freshly reattached stream may miss its first output event. Retry the same
@@ -25,18 +52,10 @@ _hn_request() (
         picker-ready) _hn_attempts=5 ;;
         *) _hn_attempts=120 ;;
     esac
-    _hn_who=''
-    case "$1" in
-        host-inline) _hn_who=$(printf '%s' "${2-}" | tr -d '[:cntrl:]'); _hn_what="Opening a shell on ${_hn_who:-the computer}…" ;;
-        model-inline) _hn_what='Switching model…' ;;
-        session-inline) _hn_what='Opening session…' ;;
-        *) _hn_what='' ;;
-    esac
-    # Drawn at once, so a silent computer never looks like a frozen shell.
-    [ -z "$_hn_what" ] || printf '\n%s Ctrl-C to cancel\r\n' "$_hn_what" >&4
-    while [ "$_hn_attempt" -lt "$_hn_attempts" ]; do
+    while [ -z "$_hn_stop" ] && [ "$_hn_attempt" -lt "$_hn_attempts" ]; do
         _hn_attempt=$((_hn_attempt + 1))
         printf '\033]633;hn;%s;%s;%s;%s\007' "$_HN_CONTEXT" "$_hn_id" "$1" "$_hn_query" >&4
+        [ -z "$_hn_stop" ] || break
         IFS= read -r -t 1 _hn_reply <&3 || continue
         case "$_hn_reply" in
             "HN:$_hn_id:"*)
@@ -52,6 +71,7 @@ _hn_request() (
                 ;;
         esac
     done
+    [ -z "$_hn_stop" ] || _hn_cancel "$_hn_stop"
     case "$1" in
         *-inline)
             printf '\033]633;hn;%s;%s;cancel;\007' "$_HN_CONTEXT" "$_hn_id" >&4
