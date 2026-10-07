@@ -362,6 +362,50 @@ pub fn put(buf: &mut Buffer, x: u16, y: u16, width: u16, text: &str, style: Styl
     used as u16
 }
 
+/// The parts of [ghost] (`   `-separated: `@ computer   : project`) that fit [w] whole, joined by
+/// `   `. A ghost without separators is returned as is (the caller cuts it with `…`).
+pub fn whole_parts(ghost: &str, w: u16) -> String {
+    if !ghost.contains("   ") { return ghost.to_string() }
+    let mut out = String::new();
+    for part in ghost.split("   ") {
+        let next = if out.is_empty() { part.to_string() } else { format!("{out}   {part}") };
+        if next.width() > w as usize && !out.is_empty() { break }
+        out = next;
+    }
+    out
+}
+
+/// `› query` (or the ghost, muted, when empty) at [x, y], [w] wide. Returns the text cursor and the
+/// columns the query or ghost took (the launcher puts its tabs after it).
+pub fn query_line(buf: &mut Buffer, picker: &Picker, x: u16, y: u16, w: u16, ghost: &str, c: &Chrome) -> (Position, u16) {
+    put(buf, x, y, 2, "›", c.accent);
+    let room = w.saturating_sub(2);
+    let ghost = whole_parts(ghost, room);
+    let shown = if picker.query.is_empty() { (ghost.as_str(), c.muted) } else { (picker.query.as_str(), c.base) };
+    let used = put(buf, x + 2, y, room, shown.0, shown.1);
+    picker.prompt_at.set((y, x + 2));
+    let before: String = picker.query.chars().take(picker.qcursor).collect();
+    (Position::new((x + 2 + before.width() as u16).min(x + w), y), used)
+}
+
+/// `shown/total ───…` (and ` (marked)` after the total when [marked] is Some) in muted across [w].
+pub fn count_rule(buf: &mut Buffer, shown: usize, total: usize, marked: Option<usize>, x: u16, y: u16, w: u16, c: &Chrome) {
+    let count = match marked { Some(m) => format!("{shown}/{total} ({m})"), None => format!("{shown}/{total}") };
+    let cw = put(buf, x, y, w, &count, c.muted);
+    for cx in x + cw + 1..x + w { put(buf, cx, y, 1, "─", c.muted.remove_modifier(Modifier::BOLD)); }
+}
+
+/// `key what · key what`, the keys bold, the words muted; stops at [w].
+pub fn keys_line(buf: &mut Buffer, keys: &[(&str, &str)], x: u16, y: u16, w: u16, c: &Chrome) {
+    let (mut kx, right) = (x, x + w);
+    for (i, (k, what)) in keys.iter().enumerate() {
+        if i > 0 { kx += put(buf, kx, y, right.saturating_sub(kx), " · ", c.muted); }
+        kx += put(buf, kx, y, right.saturating_sub(kx), k, c.base.add_modifier(Modifier::BOLD));
+        kx += put(buf, kx, y, right.saturating_sub(kx), &format!(" {what}"), c.muted);
+        if kx >= right { break }
+    }
+}
+
 // ── sizes ──
 
 /// A panel's size: Large for a list with a preview, Palette for a short menu near the top, Form
@@ -459,13 +503,8 @@ pub fn draw(buf: &mut Buffer, app: &App, body: Rect, kind: &PickerKind, picker: 
     // of the launcher's lists, fzf's way, its keys and its count over it (below).
     let launcher = crate::modal::is_launcher(kind);
     let qy = if launcher { r.bottom().saturating_sub(2) } else { r.y + 3 };
-    put(buf, x, qy, 2, "›", c.accent);
     let hint = if launcher { format!("Search {}", title(app, kind, picker).to_lowercase()) } else { picker.placeholder.clone() };
-    let shown = if picker.query.is_empty() { (hint.as_str(), c.muted) } else { (picker.query.as_str(), c.base) };
-    let qw = put(buf, x + 2, qy, inner_w.saturating_sub(2), shown.0, shown.1);
-    picker.prompt_at.set((qy, x + 2));
-    let before: String = picker.query.chars().take(picker.qcursor).collect();
-    let cursor = Position::new((x + 2 + before.width() as u16).min(right), qy);
+    let (cursor, qw) = query_line(buf, picker, x, qy, inner_w, &hint, &c);
     // (On the tab row the keys are not the query's: no text cursor.)
     let cursor = Some(cursor).filter(|_| !picker.on_tabs);
 
@@ -483,19 +522,11 @@ pub fn draw(buf: &mut Buffer, app: &App, body: Rect, kind: &PickerKind, picker: 
             sx += put(buf, sx, qy, right.saturating_sub(sx), &text, style) + 3;
         }
         // Over it: how many rows match of how many (and how many marked), a rule after.
-        let count = format!("{}/{} ({})", picker.visible.len(), picker.rows.len(), picker.marked.len());
-        let cw = put(buf, x, qy - 1, inner_w, &count, c.muted);
-        for cx in x + cw + 1..right { put(buf, cx, qy - 1, 1, "─", c.muted.remove_modifier(Modifier::BOLD)); }
+        count_rule(buf, picker.visible.len(), picker.rows.len(), Some(picker.marked.len()), x, qy - 1, inner_w, &c);
         // Over that: this list's keys, `key what` · `key what`, the keys bold (the tab row's own,
         // while it has the keys).
-        let mut kx = x;
         let tab_keys = [("← →", "switch"), ("↑", "list"), ("type", "to search")];
-        for (i, (k, what)) in if picker.on_tabs { &tab_keys[..] } else { &picker.hints[..] }.iter().enumerate() {
-            if i > 0 { kx += put(buf, kx, qy - 2, right.saturating_sub(kx), " · ", c.muted); }
-            kx += put(buf, kx, qy - 2, right.saturating_sub(kx), k, c.base.add_modifier(Modifier::BOLD));
-            kx += put(buf, kx, qy - 2, right.saturating_sub(kx), &format!(" {what}"), c.muted);
-            if kx >= right { break }
-        }
+        keys_line(buf, if picker.on_tabs { &tab_keys[..] } else { &picker.hints[..] }, x, qy - 2, inner_w, &c);
     }
 
     // The list, and beside it the preview when there is room for both.
@@ -1248,5 +1279,82 @@ mod tests {
         // `with` read the knob, and the filled tab has no `*` beside its name.
         assert_eq!(Look::of(&app).with(Some("window_active:filled")).window_active, "filled");
         assert!(row(&filled, 19).contains("0:claude") && !row(&filled, 19).contains("0:claude*"), "{}", text(&filled));
+    }
+    /// Every cell of [buf] as `symbol fg bg modifiers`, a row per line.
+    fn dump(buf: &Buffer) -> String {
+        let a = buf.area;
+        (a.y..a.bottom()).map(|y| (a.x..a.right()).map(|x| { let c = &buf[(x, y)]; format!("{}|{:?}|{:?}|{:?}", c.symbol(), c.fg, c.bg, c.modifier) }).collect::<Vec<_>>().join(" ")).collect::<Vec<_>>().join("\n")
+    }
+
+    fn launcher_buffer(query: &str, on_tabs: bool) -> (Buffer, Option<Position>) {
+        let app = app((100, 30));
+        let body = Rect::new(0, 0, 100, 29);
+        let kind = PickerKind::Open { filter: modal::Filter::All, machine: None, project: None };
+        let mut p = Picker::new("harnesses", "");
+        p.hints = vec![("↑↓", "move"), ("enter", "open")];
+        p.set_rows(vec![crate::picker::Row::new("a", "alpha"), crate::picker::Row::new("b", "beta"), crate::picker::Row::new("c", "alpine")]);
+        if !query.is_empty() { p.set_query(query); }
+        p.marked = vec!["a".into()];
+        p.on_tabs = on_tabs;
+        let mut buf = Buffer::empty(body);
+        let (cursor, _) = draw(&mut buf, &app, body, &kind, &mut p);
+        (buf, cursor)
+    }
+
+    /// The launcher's every cell, symbols and styles, as it was before its query, count and keys
+    /// lines became shared pieces (`launcher.golden`, taken from that code).
+    #[test]
+    fn the_launcher_looks_as_it_did() {
+        let _l = crate::term_out::colours_lock();
+        let mut out = String::new();
+        for (query, tabs) in [("", false), ("al", false), ("", true)] {
+            let (buf, cursor) = launcher_buffer(query, tabs);
+            out.push_str(&format!("== {query:?} tabs={tabs} cursor={cursor:?}\n{}\n", dump(&buf)));
+        }
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/src/launcher.golden");
+        if std::env::var_os("HN_BLESS").is_some() { std::fs::write(path, &out).unwrap(); }
+        assert!(out == include_str!("launcher.golden"), "the launcher's cells changed");
+    }
+
+    #[test]
+    fn the_launcher_draws_keys_count_and_query_in_three_rows() {
+        let _l = crate::term_out::colours_lock();
+        let app = app((100, 30));
+        let body = Rect::new(0, 0, 100, 29);
+        let kind = PickerKind::Open { filter: modal::Filter::All, machine: None, project: None };
+        let mut p = Picker::new("harnesses", "");
+        p.hints = vec![("↑↓", "move"), ("enter", "open")];
+        p.set_rows(vec![crate::picker::Row::new("a", "alpha"), crate::picker::Row::new("b", "beta")]);
+        let mut buf = Buffer::empty(body);
+        let (cursor, _) = draw(&mut buf, &app, body, &kind, &mut p);
+        let r = p.screen_area.get();
+        let qy = r.bottom() - 2;
+        let row = |y: u16| (r.x..r.right()).map(|x| buf[(x, y)].symbol().to_string()).collect::<String>();
+        assert!(row(qy).contains('›'), "{}", row(qy));
+        assert!(row(qy - 1).trim_start().starts_with("2/2 (0) ─"), "{}", row(qy - 1));
+        assert!(row(qy - 2).contains("↑↓ move · enter open"), "{}", row(qy - 2));
+        assert_eq!(cursor, Some(Position::new(r.x + 2 + 2, qy)));
+    }
+
+    #[test]
+    fn the_query_line_is_the_panels() {
+        let _l = crate::term_out::colours_lock();
+        let c = chrome();
+        let mut buf = Buffer::empty(Rect::new(0, 0, 40, 3));
+        let mut p = Picker::new("", "");
+        p.query = "gpt".into(); p.qcursor = 3;
+        let (at, used) = query_line(&mut buf, &p, 0, 0, 40, "@ computer", &c);
+        assert_eq!(buf[(0, 0)].symbol(), "›");
+        assert_eq!(buf[(0, 0)].fg, c.accent.fg.unwrap());
+        assert_eq!((buf[(2, 0)].symbol(), at, used), ("g", Position::new(5, 0), 3));
+        p.query.clear(); p.qcursor = 0;
+        let mut buf = Buffer::empty(Rect::new(0, 0, 40, 3));
+        query_line(&mut buf, &p, 0, 0, 40, "@ computer", &c);
+        assert_eq!(buf[(2, 0)].fg, c.muted.fg.unwrap(), "the ghost is muted");
+        // whole scopes only, never a scope cut in half
+        let mut buf = Buffer::empty(Rect::new(0, 0, 20, 1));
+        query_line(&mut buf, &p, 0, 0, 20, "@ computer   : project   % model", &c);
+        let line: String = (0..20).map(|x| buf[(x, 0)].symbol().to_string()).collect();
+        assert!(line.contains("@ computer") && !line.contains("proj") && !line.contains('…'), "{line}");
     }
 }
