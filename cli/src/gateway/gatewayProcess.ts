@@ -10,7 +10,8 @@
  * and the core going away stops it: a core's restart is the relay's, as it always was, so a remote client
  * that kept its socket opens a new session, as it did when both ran in one process.
  */
-import { localWindowsOf, windowSurfaceOf, type GatewayAccount, type GatewayEvents, type WindowRelaySession } from '../core/api.js'
+import type { GatewayAccount, GatewayEvents, WindowRelaySession } from '../core/api.js'
+import { localWindowsOf, windowSurfaceOf } from '../lib/windowSurfaces.js'
 import { decodeGatewayBinary, encodeGatewayBinary, GatewayBinary, GATEWAY_CALLS } from '../lib/gatewayWire.js'
 import { RelayConnectError } from '../lib/relayFrames.js'
 import { decodeTerminalLocal, encodeTerminalLocal } from '../lib/terminalBinary.js'
