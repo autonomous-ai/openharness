@@ -19,7 +19,7 @@ vi.mock('node:child_process', async (importOriginal) => {
 })
 
 const { managedNodePath } = await import('../lib/nodeRuntime.js')
-const { dshNodeFallback, dshShellArgv, isShellNoise, killProcessGroup, runDshCommand, spawnDshCommand } = await import('./shell.js')
+const { dshNodeFallback, dshShellArgv, isKilledJobReport, isShellNoise, killProcessGroup, runDshCommand, spawnDshCommand } = await import('./shell.js')
 
 describe('dshShellArgv', () => {
   const original = process.env.SHELL
@@ -131,6 +131,27 @@ describe('runDshCommand', () => {
     expect(result.timedOut).toBe(true)
     expect(result.lines).toEqual(['started'])
     expect(Date.now() - started).toBeLessThan(10_000)
+  })
+
+  it('does not take the shell\'s report of the job its stop ended for the command\'s output', async () => {
+    // The shell outlives its job here on purpose: it ignores SIGTERM, so it is in `wait` when the job the stop
+    // ended dies, and reports it, as it did under load when the job's death reached it first.
+    const report = '/bin/sh: line 1: 31849 Terminated: 15          sleep 30'
+    const result = await runDshCommand(`echo started; trap 'echo "${report}" >&2; printf "${report}" >&2; exit 0' TERM; sleep 30 & wait`, { cwd: dir, timeoutMs: 300 })
+    expect(result.timedOut).toBe(true)
+    expect(result.lines).toEqual(['started'])
+    // Before a stop, the same words are the command's own.
+    expect((await runDshCommand(`echo "${report}"`, { cwd: dir })).lines).toEqual([report])
+  })
+
+  it('knows the shell\'s report of a job a signal ended, as bash words it on macOS and Linux', () => {
+    expect(isKilledJobReport('/bin/sh: line 1: 31849 Terminated: 15          sleep 30')).toBe(true)
+    expect(isKilledJobReport('bash: line 1: 10678 Terminated: 15          ( sleep 0.2; kill -TERM $$ )')).toBe(true)
+    expect(isKilledJobReport('bash: line 1:  4242 Terminated              sleep 30')).toBe(true)
+    expect(isKilledJobReport('bash: line 3: 86178 Killed: 9               sleep 30')).toBe(true)
+    expect(isKilledJobReport('Terminated: 15')).toBe(false)
+    expect(isKilledJobReport('sh: line 1: 12 Segmentation fault: 11  ./tool')).toBe(false)
+    expect(isKilledJobReport('started')).toBe(false)
   })
 
   it('a command that cannot start is exit 127 with the reason as its one line, never a rejection', async () => {
