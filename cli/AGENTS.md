@@ -72,10 +72,12 @@ sessions to the owner's other machines, the Share relay for a harness shared wit
 ## Rules
 
 1. **No logic in `runForeground` or the `backendSocket.ts` request switch.** Wiring and dispatch only:
-   a handler there is one call into a module or service. `src/architecture.spec.ts` fails when either
-   grows; move the logic out instead of raising the budget. It also walks the imports from
-   `src/core/main.ts` and holds what the core's process loads to `CORE_CLOSURE_BUDGET`, with no file from
-   an edge folder (a service, the dial, the relay, …) but those it lists, each with the step that ends it
+   a handler there is one call into a module or service. Review changes for that responsibility.
+   `src/architecture.spec.ts` enforces import boundaries and walks the imports from `src/core/main.ts`:
+   no file from an edge folder (a service, the dial, the relay, …) but those it lists, each with the
+   reason and the step that ends it. New exceptions need a separate architecture review; remove an
+   exception as soon as it is no longer reached. Source line counts are informational, never a merge
+   gate or a proxy for runtime cost
    ([../docs/design/2026-10-06-core-boundary-next.md](../docs/design/2026-10-06-core-boundary-next.md)).
 2. **A feature is a service.** It runs against `CoreApi` and is reached through a port in `CorePorts`,
    both in `src/core/api.ts`. A service never imports core modules, the registry, `cli.ts` or
@@ -93,6 +95,11 @@ sessions to the owner's other machines, the Share relay for a harness shared wit
    `TMUX` and `TMUX_PANE`, and point `TMUX_TMPDIR` at a folder that exists (`src/testing/isolatedTmux.ts`).
 7. **Comments say why, in plain sentences.** Name the incident or the measurement that made the code
    the way it is; that history is what keeps the next change from undoing it.
+8. **Measure runtime cost with the workload it affects.** For changes to startup, the input path or
+   recurring work, compare CPU, memory and latency on the same workload and toolchain against a
+   recorded baseline. `e2e/perf.e2e.ts` provides an opt-in workload and JSON measurements; these are not
+   an automatic performance gate. Keep failure-isolation and deadline tests mandatory. A new numerical
+   performance limit needs measured evidence, not a source-size estimate.
 
 ## Commands
 
