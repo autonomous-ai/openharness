@@ -8,6 +8,7 @@ This module is deliberately not installed or connected to the session updater.
 from contextlib import contextmanager
 import argparse
 import base64
+import configparser
 import ctypes
 import hashlib
 import importlib.util
@@ -82,6 +83,19 @@ def read_json(path):
     finally:
         if fd is not None:
             os.close(fd)
+
+
+def text_file(root, name):
+    """Read only a bounded regular configuration file, never a FIFO/device."""
+    path = checked(root, name)
+    if not stat.S_ISREG(path.lstat().st_mode):
+        raise Error('The recovery configuration is not a regular file: ' + name)
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd) as stream:
+        info = os.fstat(stream.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_size > 2 * 1024**2:
+            raise Error('The recovery configuration is not a bounded regular file: ' + name)
+        return stream.read()
 
 
 def save(path, value):
@@ -209,8 +223,8 @@ def boundary(root):
 
 def profile(root):
     """Check the narrow layout without executing the installation's programs."""
-    release = checked(root, 'usr/lib/os-release').read_text()
-    runtime = json.loads(checked(root, 'usr/share/harness-os/runtime.json').read_text())
+    release = text_file(root, 'usr/lib/os-release')
+    runtime = json.loads(text_file(root, 'usr/share/harness-os/runtime.json'))
     if not re.search(r'^ID=[\"\']?fedora[\"\']?$', release, re.M) or runtime.get('system_profile') != 'fedora':
         raise Error('This checkpoint requires the Fedora session installation.')
     if (not checked(root, 'usr/lib/sysimage/rpm').is_dir() or
@@ -221,10 +235,85 @@ def profile(root):
     for name in PAIRED[:2]:
         if not checked(root, name).is_dir():
             raise Error('The Fedora paired package state is missing.')
-    text = checked(root, 'etc/selinux/semanage.conf').read_text()
+    text = text_file(root, 'etc/selinux/semanage.conf')
     for key, value in re.findall(r'^\s*(module-store|store-root)\s*=\s*([^#\n]+)', text, re.M):
         if value.strip() != {'module-store': 'direct', 'store-root': '/var/lib/selinux'}[key]:
             raise Error('A custom SELinux policy store is unsupported.')
+    dnf_layout(root)
+    rpm_layout(root)
+
+
+def dnf_layout(root):
+    """Read DNF5's maintained main/drop-in order without running target code."""
+    files = {}
+    for name in ('usr/share/dnf5/libdnf.conf.d', 'etc/dnf/libdnf5.conf.d'):
+        directory = checked(root, name)
+        if directory.exists():
+            if not directory.is_dir():
+                raise Error('The DNF configuration directory is redirected.')
+            for path in directory.glob('*.conf'):
+                files[path.name] = checked(root, str(path.relative_to(root)))
+    paths = [files[name] for name in sorted(files)]
+    main = checked(root, 'etc/dnf/dnf.conf')
+    if main.exists():
+        paths.append(main)
+    values = {}
+    for path in paths:
+        config = configparser.ConfigParser(interpolation=None, strict=False, allow_no_value=True,
+                                           default_section='__unsupported_defaults__')
+        try:
+            config.read_string(text_file(root, str(path.relative_to(root))))
+        except configparser.Error as error:
+            raise Error('The DNF configuration needs inspection before checkpointing.') from error
+        if config.defaults():
+            raise Error('An unsupported DNF configuration defaults section is present.')
+        if config.has_section('main'):
+            values.update(config.items('main'))
+    for key, expected in (('system_state_dir', 'usr/lib/sysimage/libdnf5'),
+                          ('transaction_history_dir', 'usr/lib/sysimage/libdnf5'), ('persistdir', 'var/lib/dnf')):
+        if key in values and values[key] != '/' + expected:
+            raise Error('Custom DNF state paths are unsupported: ' + key)
+        checked(root, expected)
+
+
+def rpm_layout(root):
+    """Accept literal defaults and Fedora's one maintained _usr expression.
+
+    Macro files are declarative, but expansion can execute code or load more
+    definitions. Do not emulate expansion in maintenance. Also inspect masked
+    platform/user definitions: this narrow adapter may refuse harmless custom
+    configuration instead of silently omitting a package database in /var.
+    """
+    patterns = ('usr/lib/rpm/macros', 'usr/lib/rpm/macros.d/macros.*',
+                'usr/lib/rpm/platform/*/macros', 'usr/lib/rpm/fileattrs/*.attr',
+                'usr/lib/rpm/*/macros', 'etc/rpm/macros', 'etc/rpm/macros.*',
+                'etc/rpm/*/macros', 'root/.config/rpm/macros', 'root/.rpmmacros')
+    definitions, usr_definitions, needs_usr = 0, 0, False
+    for pattern in patterns:
+        for path in root.glob(pattern):
+            text = text_file(root, str(path.relative_to(root)))
+            for line in text.splitlines():
+                # Reject parameters, continuations and macro/lua/load bodies.
+                # Matching the name boundary also catches %_dbpath(opts).
+                if re.match(r'^\s*%(?:(?:define|global)\s+)?_dbpath(?=\s|\(|$)', line):
+                    if not re.fullmatch(r'\s*%_dbpath\s+(?:/(?:usr/lib/sysimage/rpm|var/lib/rpm)|%\{_usr\}/lib/sysimage/rpm)\s*', line):
+                        raise Error('Custom or expanded RPM database paths are unsupported.')
+                    definitions += 1
+                    needs_usr |= '%{_usr}' in line
+                if re.match(r'^\s*%(?:(?:define|global)\s+)?_usr(?=\s|\(|$)', line):
+                    if not re.fullmatch(r'\s*%_usr\s+/usr\s*', line):
+                        raise Error('The standard RPM _usr definition is required.')
+                    usr_definitions += 1
+    if not definitions:
+        raise Error('The standard RPM database definition is missing.')
+    if needs_usr and not usr_definitions:
+        raise Error('The standard RPM _usr definition is missing.')
+    for pattern in ('usr/lib/rpm/rpmrc', 'usr/lib/rpm/*/rpmrc', 'etc/rpmrc',
+                    'root/.rpmrc', 'root/.config/rpm/rpmrc'):
+        for path in root.glob(pattern):
+            text = text_file(root, str(path.relative_to(root)))
+            if re.search(r'^\s*(?:macrofiles|include)\s*:', text, re.M | re.I):
+                raise Error('Custom RPM macro-file loading is unsupported.')
 
 
 def raw_labels():
@@ -341,6 +430,26 @@ def probe(device):
     return dict(line.split('=', 1) for line in result.splitlines() if '=' in line)
 
 
+def single_device(mapper, root_uuid):
+    # All present superblock copies must describe the supported one-device
+    # filesystem before even a no-replay mount can discover another device.
+    text = run('btrfs', 'inspect-internal', 'dump-super', '--all', mapper)
+    ids = re.findall(r'^fsid\s+(\S+)\s*$', text, re.M)
+    devices = re.findall(r'^num_devices\s+(\S+)\s*$', text, re.M)
+    checksums = re.findall(r'^csum\s+0x[0-9a-f]+\s+\[match\]\s*$', text, re.M)
+    if not ids or any(value != root_uuid for value in ids) or devices != ['1'] * len(ids) or len(checksums) != len(ids):
+        raise Error('Recovery requires the verified single-device Btrfs filesystem.')
+
+
+def mounted_device(mapper, root_uuid):
+    """Confirm the no-replay kernel mount selected only the verified mapper."""
+    device = os.stat(mapper).st_rdev
+    expected = f'{os.major(device)}:{os.minor(device)}'
+    members = list((Path('/sys/fs/btrfs') / root_uuid / 'devices').iterdir())
+    if len(members) != 1 or (members[0] / 'dev').read_text().strip() != expected:
+        raise Error('The mounted Btrfs device set differs from the verified mapper.')
+
+
 def remap(plan, disk):
     result = json.loads(json.dumps(plan))
     original = plan['original']['device']
@@ -359,6 +468,7 @@ def unmounted(devices, esp_device, esp_path, root_uuid):
         raise Error('The target Btrfs filesystem is mounted; use maintenance Linux.')
     identities = {os.stat(path).st_rdev for path in devices}
     esp_identity = os.stat(esp_device).st_rdev
+    own_namespace = os.readlink('/proc/self/ns/mnt')
     namespaces = set()
     for process in Path('/proc').iterdir():
         if not process.name.isdigit():
@@ -383,7 +493,8 @@ def unmounted(devices, esp_device, esp_path, root_uuid):
             major, minor = map(int, fields[2].split(':'))
             mounted_device = os.makedev(major, minor)
             if (device in identities or mounted_device in identities or
-                    (esp_identity in (device, mounted_device) and mount != str(esp_path))):
+                    (esp_identity in (device, mounted_device) and
+                     (namespace != own_namespace or mount != str(esp_path)))):
                 raise Error('The target is mounted; use an independent maintenance system.')
             if mount.startswith(str(esp_path) + '/'):
                 raise Error('An unexpected filesystem is mounted below the owned ESP.')
@@ -399,7 +510,7 @@ def mounted(device, path, options):
         run('umount', path)
 
 
-def inspect_cold(mapper, boot, work):
+def inspect_cold(mapper, boot, work, root_uuid):
     """Reject unsupported trees without replaying either filesystem's journal.
 
     Ordinary ro mounts can write during journal replay. After this inspection,
@@ -407,6 +518,7 @@ def inspect_cold(mapper, boot, work):
     the normal mounts and Engine must validate the resulting trees again.
     """
     with mounted(mapper, work / 'inspect-root', 'ro,subvolid=5,nologreplay,noatime') as top:
+        mounted_device(mapper, root_uuid)
         validate_layout(top)
         if (top / 'root').exists():
             boundary(top / 'root')
@@ -467,12 +579,14 @@ def installation(plan_path, mapper):
             raise Error('The unlocked mapper belongs to another encrypted device.')
         storage.require_filesystem(probe(mapper), 'btrfs', state['root_uuid'])
         unmounted((mapper, boot, encrypted), esp_part['node'], esp, state['root_uuid'])
+        single_device(mapper, state['root_uuid'])
         identity = {key: state[key] for key in ('luks_uuid', 'root_uuid', 'boot_uuid', 'image_sha256', 'source_commit')}
         identity.update(esp_partuuid=plan['esp_uuid'], disk_guid=plan['original']['id'],
                         plan_sha256=storage.fingerprint(plan), storage_sha256=storage.fingerprint(state))
         with storage.work_directory() as work:
-            inspect_cold(mapper, boot, work)
+            inspect_cold(mapper, boot, work, state['root_uuid'])
             with mounted(mapper, work / 'top', 'ro,subvolid=5,noatime') as top, mounted(boot, work / 'boot', 'ro,noatime') as boot_path:
+                mounted_device(mapper, state['root_uuid'])
                 validate_layout(top)
                 if (top / 'root').exists():
                     boundary(top / 'root')
@@ -555,6 +669,14 @@ class Engine:
         save(folder / 'recovery.json', updated)
         state.update(updated)
 
+    def verify_boot_stages(self, checkpoint, phase):
+        if (phase in ('boot', 'efi', 'root-moved') and
+                inventory(self.boot, exclude=('efi',)) != checkpoint['boot']):
+            raise Error('The completed boot restoration changed; no later stage was written.')
+        if (phase in ('efi', 'root-moved') and
+                inventory(self.esp, include=efi_owned, metadata=False) != checkpoint['efi']):
+            raise Error('The completed EFI restoration changed; no later stage was written.')
+
     def recover(self, name):
         folder = self.folder(name)
         checkpoint = self.verify_checkpoint(folder)
@@ -607,6 +729,7 @@ class Engine:
             if (subvolume(prepared, readonly=False)['UUID'] != state['candidate_root'] or
                     system_digest(prepared) != checkpoint['system'] or work_digest(prepared) != state['work']):
                 raise Error('The prepared candidate changed; no boot files were restored.')
+        self.verify_boot_stages(checkpoint, state['phase'])
         self.writable()
         if not journal.exists():
             save(journal, state)
@@ -646,9 +769,11 @@ class Engine:
             copy_tree(folder / 'boot', self.boot, exclude=('efi',))
             self.advance(folder, state, 'boot')
         if state['phase'] == 'boot':
+            self.verify_boot_stages(checkpoint, 'boot')
             copy_efi(folder / 'efi', self.esp)
             self.advance(folder, state, 'efi')
         if state['phase'] == 'efi':
+            self.verify_boot_stages(checkpoint, 'efi')
             if root.exists():
                 if replaced.exists():
                     raise Error('Another replaced root occupies this recovery generation.')
@@ -660,6 +785,7 @@ class Engine:
                 raise Error('The retained original root contents changed.')
             self.advance(folder, state, 'root-moved')
         if state['phase'] == 'root-moved':
+            self.verify_boot_stages(checkpoint, 'root-moved')
             if not root.exists():
                 if subvolume(candidate)['UUID'] != state['candidate_root']:
                     raise Error('The candidate identity changed.')

@@ -78,6 +78,7 @@ class Recovery(unittest.TestCase):
         for name in ('usr/lib/sysimage/rpm', 'var/lib/selinux', 'var/lib/alternatives', recovery.DNF_STATE, recovery.DNF_DATA):
             (self.root / name).mkdir(parents=True, exist_ok=True)
         self.write(self.root, 'usr/lib/os-release', 'ID=fedora\n')
+        self.write(self.root, 'usr/lib/rpm/macros', '%_usr /usr\n%_dbpath %{_usr}/lib/sysimage/rpm\n')
         self.write(self.root, 'usr/share/harness-os/runtime.json', '{"system_profile":"fedora"}')
         self.write(self.root, 'etc/selinux/semanage.conf', 'module-store = direct\n')
         (self.root / 'var/lib/rpm').symlink_to('../../usr/lib/sysimage/rpm')
@@ -237,15 +238,41 @@ class Recovery(unittest.TestCase):
         self.engine.recover(self.name)
         self.assert_recovered()
 
-    def pause_at_candidate(self):
+    def pause_at_candidate(self, stop='candidate'):
         original = self.engine.advance
         def interrupt(folder, state, phase):
             original(folder, state, phase)
-            if phase == 'candidate':
+            if phase == stop:
                 raise Interruption()
         with patch.object(self.engine, 'advance', interrupt), self.assertRaises(Interruption):
             self.engine.recover(self.name)
         self.writes.clear()
+
+    def test_completed_boot_stages_are_rechecked_before_retry_mutates_anything(self):
+        self.checkpoint_then_change()
+        folder = self.engine.folder(self.name)
+        for phase in ('boot', 'efi', 'root-moved'):
+            self.pause_at_candidate(phase)
+            paths = [self.boot / 'vmlinuz-old']
+            if phase != 'boot':
+                paths.append(self.esp / 'EFI/fedora/grub.cfg')
+            for path in paths:
+                with self.subTest(phase=phase, damaged=str(path)):
+                    previous, info = path.read_bytes(), path.stat()
+                    journal = (folder / 'recovery.json').read_bytes()
+                    roots = {str(p): self.subvolume(p)['UUID'] for p in
+                             (self.root, folder / 'candidate', folder / 'replaced-root') if p.exists()}
+                    path.write_bytes(b'changed after durable restoration')
+                    with self.assertRaisesRegex(recovery.Error, 'completed .* restoration changed'):
+                        self.engine.recover(self.name)
+                    self.assertEqual((folder / 'recovery.json').read_bytes(), journal)
+                    self.assertEqual({str(p): self.subvolume(p)['UUID'] for p in
+                                      (self.root, folder / 'candidate', folder / 'replaced-root') if p.exists()}, roots)
+                    self.assertFalse(self.writes)
+                    path.write_bytes(previous)
+                    os.utime(path, ns=(info.st_atime_ns, info.st_mtime_ns))
+        self.engine.recover(self.name)
+        self.assert_recovered()
 
     def test_changed_candidate_rejects_before_any_boot_write(self):
         self.checkpoint_then_change()
@@ -334,6 +361,68 @@ class Recovery(unittest.TestCase):
             self.engine.checkpoint(self.name)
         self.assertFalse(self.writes)
 
+    def test_custom_dnf_state_paths_from_every_main_config_source_are_refused(self):
+        for source in ('usr/share/dnf5/libdnf.conf.d/20-state.conf',
+                       'etc/dnf/libdnf5.conf.d/20-state.conf', 'etc/dnf/dnf.conf'):
+            for option in ('system_state_dir', 'transaction_history_dir', 'persistdir'):
+                path = self.write(self.root, source, '[main]\n' + option + '=/var/lib/custom-dnf\n')
+                with self.subTest(source=source, option=option), self.assertRaisesRegex(recovery.Error, 'Custom DNF state'):
+                    self.engine.checkpoint(self.name)
+                self.assertFalse(self.writes)
+                path.unlink()
+
+    def test_dnf_dropin_masking_and_main_precedence_match_maintained_order(self):
+        self.write(self.root, 'usr/share/dnf5/libdnf.conf.d/20-state.conf', '[main]\nsystem_state_dir=/custom\n')
+        self.write(self.root, 'etc/dnf/libdnf5.conf.d/20-state.conf', '[main]\nsystem_state_dir=/usr/lib/sysimage/libdnf5\n')
+        recovery.profile(self.root)
+        self.write(self.root, 'etc/dnf/libdnf5.conf.d/90-state.conf', '[main]\ntransaction_history_dir=/custom\n')
+        with self.assertRaisesRegex(recovery.Error, 'Custom DNF state'):
+            recovery.profile(self.root)
+        self.write(self.root, 'etc/dnf/dnf.conf', '[main]\ntransaction_history_dir=/usr/lib/sysimage/libdnf5\n')
+        recovery.profile(self.root)
+
+    def test_nonregular_configuration_is_refused_without_opening_it(self):
+        path = self.root / 'etc/dnf/dnf.conf'
+        path.parent.mkdir()
+        os.mkfifo(path, 0o600)
+        with patch.object(recovery.os, 'open') as opened, self.assertRaisesRegex(recovery.Error, 'not a regular file'):
+            recovery.text_file(self.root, 'etc/dnf/dnf.conf')
+        opened.assert_not_called()
+
+    def test_rpm_database_overrides_parameters_and_expansion_are_refused(self):
+        for source in ('etc/rpm/macros.custom', 'etc/rpm/aarch64-linux/macros',
+                       'root/.config/rpm/macros', 'root/.rpmmacros'):
+            for content in ('%_dbpath /var/lib/custom-rpm\n', '%_dbpath() /var/lib/custom-rpm\n',
+                            '%_dbpath %{lua:print("/var/lib/custom-rpm")}\n',
+                            '%_dbpath /usr/lib/sysimage/rpm\\\n/changed\n',
+                            '%global _dbpath /var/lib/custom-rpm\n'):
+                path = self.write(self.root, source, content)
+                with self.subTest(source=source, content=content), self.assertRaisesRegex(recovery.Error, 'RPM database paths'):
+                    self.engine.checkpoint(self.name)
+                self.assertFalse(self.writes)
+                path.unlink()
+
+    def test_rpm_rc_cannot_redirect_the_macro_search_path(self):
+        for source in ('etc/rpmrc', 'root/.rpmrc', 'root/.config/rpm/rpmrc'):
+            for directive in ('macrofiles:', 'Include:'):
+                path = self.write(self.root, source, directive + ' /var/lib/custom-macros\n')
+                with self.subTest(source=source, directive=directive), self.assertRaisesRegex(recovery.Error, 'RPM macro-file loading'):
+                    recovery.profile(self.root)
+                path.unlink()
+
+    def test_fedora_rpm_dbpath_expression_requires_literal_usr_in_every_definition(self):
+        recovery.profile(self.root)
+        path = self.write(self.root, 'etc/rpm/macros.custom', '%_usr /var/custom\n')
+        with self.assertRaisesRegex(recovery.Error, 'standard RPM _usr definition'):
+            recovery.profile(self.root)
+        path.write_text('%_usr() /usr\n')
+        with self.assertRaisesRegex(recovery.Error, 'standard RPM _usr definition'):
+            recovery.profile(self.root)
+        path.unlink()
+        self.write(self.root, 'usr/lib/rpm/macros', '%_dbpath %{_usr}/lib/sysimage/rpm\n')
+        with self.assertRaisesRegex(recovery.Error, 'standard RPM _usr definition is missing'):
+            recovery.profile(self.root)
+
     def test_empty_directory_left_before_first_record_can_resume_checkpoint(self):
         folder = self.engine.folder(self.name)
         folder.parent.mkdir(mode=0o700)
@@ -376,6 +465,12 @@ class MountBoundary(unittest.TestCase):
         patcher = patch.object(recovery.os, 'stat', device)
         patcher.start()
         self.addCleanup(patcher.stop)
+        original_readlink = os.readlink
+        def namespace(value, *args, **kwargs):
+            return 'mnt:[1]' if str(value) == '/proc/self/ns/mnt' else original_readlink(value, *args, **kwargs)
+        patcher = patch.object(recovery.os, 'readlink', namespace)
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def test_an_unresolvable_device_alias_cannot_hide_a_mounted_partition(self):
         self.info.write_text('1 0 8:33 / /busy rw - ext4 /dev/missing-alias rw\n')
@@ -392,8 +487,28 @@ class MountBoundary(unittest.TestCase):
         with self.assertRaisesRegex(recovery.Error, 'below the owned ESP'):
             recovery.unmounted(('/dev/root-target',), '/dev/esp', Path('/owned-esp'), 'fixture')
 
+    def test_esp_at_the_same_path_in_another_namespace_is_refused(self):
+        recovery.unmounted(('/dev/root-target',), '/dev/esp', Path('/owned-esp'), 'fixture')
+        other = self.area / 'proc/2'
+        (other / 'ns').mkdir(parents=True)
+        (other / 'ns/mnt').symlink_to('mnt:[2]')
+        (other / 'mountinfo').write_text(self.info.read_text())
+        with self.assertRaisesRegex(recovery.Error, 'target is mounted'):
+            recovery.unmounted(('/dev/root-target',), '/dev/esp', Path('/owned-esp'), 'fixture')
+
 
 class ColdInspection(unittest.TestCase):
+    def test_every_superblock_copy_must_bind_one_device_and_the_receipt_uuid(self):
+        identity = '00000000-0000-4000-8000-000000000001'
+        single = 'fsid ' + identity + '\nnum_devices 1\ncsum 0xabc123 [match]\n'
+        with patch.object(recovery, 'run', return_value=single * 2):
+            recovery.single_device('/mapper', identity)
+        for second in (single.replace('num_devices 1', 'num_devices 2'),
+                       single.replace(identity, 'another-filesystem'), single.replace('[match]', '[DON\'T MATCH]')):
+            with self.subTest(second=second), patch.object(recovery, 'run', return_value=single + second):
+                with self.assertRaisesRegex(recovery.Error, 'single-device Btrfs'):
+                    recovery.single_device('/mapper', identity)
+
     def test_unsupported_layout_is_refused_before_normal_journal_replay(self):
         with tempfile.TemporaryDirectory() as area:
             path = Path(area)
@@ -403,9 +518,9 @@ class ColdInspection(unittest.TestCase):
             def mount(device, destination, value):
                 options.append(value)
                 yield path
-            with patch.object(recovery, 'mounted', mount), patch.object(recovery, 'validate_layout', side_effect=recovery.Error('nested subvolume')):
+            with patch.object(recovery, 'mounted', mount), patch.object(recovery, 'mounted_device'), patch.object(recovery, 'validate_layout', side_effect=recovery.Error('nested subvolume')):
                 with self.assertRaisesRegex(recovery.Error, 'nested subvolume'):
-                    recovery.inspect_cold('/mapper', '/boot', path)
+                    recovery.inspect_cold('/mapper', '/boot', path, 'fixture')
             self.assertEqual(options, ['ro,subvolid=5,nologreplay,noatime'])
 
 

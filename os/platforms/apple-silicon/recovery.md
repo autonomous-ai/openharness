@@ -21,12 +21,14 @@ Btrfs UUID and ext4 UUID. Device names may change between boots; partition numbe
 extents and identities must still match. It writes no partition tables, formats no
 filesystems, and never opens Apple/vendor partitions for writing.
 
-The supported layout has exactly the `root` and `home` Btrfs subvolumes, `/var`
+The supported layout has single-device Btrfs with exactly the `root` and `home` subvolumes, `/var`
 inside `root`, ext4 `/boot`, and the owned FAT ESP. Additional subvolumes, mounts,
 top-level content, redirected state paths, and hardlinks across the system/workload
 restore boundary are refused. Only the engine's recorded recovery subvolumes are
 allowed alongside `root` and `home`. This prototype does not migrate layouts or
 move `/var` into a new subvolume.
+Every present Btrfs superblock copy must bind one device and the recorded UUID;
+the no-replay kernel mount must select only the verified LUKS mapper.
 
 The maintenance environment and source must be trusted and writable only by root.
 Stage `recovery.py`, `storage.py`, and `target.py` together from the same reviewed
@@ -55,7 +57,19 @@ reads. It does not disable SELinux or load a different policy.
 The checkpoint profile requires Fedora, the packaged Fedora session marker,
 RPMDB in `/usr/lib/sysimage/rpm` with the standard `/var/lib/rpm` symlink, the
 default `/var/lib/alternatives`, and the local SELinux store in `/var/lib/selinux`.
-The private acceptance target uses DNF5's default state layout. Custom DNF paths,
+RPM macro configuration is deliberately restricted: the database definition must
+be literal at those standard locations, or Fedora's `%{_usr}/lib/sysimage/rpm`
+with every `_usr` definition literally `/usr`. Parameterized definitions, arbitrary
+expansion, redirected/nonregular files, and rpmrc macro-file/include directives
+are refused. This is a conservative supported profile, not an interpreter or a
+proof that arbitrary RPM macro programs are safe. It inspects system, vendor,
+platform, host, and root's current/legacy macro locations; some otherwise harmless
+custom settings may therefore require inspection instead of automatic recovery.
+DNF5 main/drop-in configuration must retain the default `system_state_dir` and
+`transaction_history_dir` in `/usr/lib/sysimage/libdnf5` and `persistdir` in
+`/var/lib/dnf`. Configuration is read in the maintained distribution/user masking
+and load order without executing target programs; redirected files are refused.
+The private acceptance target uses these defaults. Custom DNF state paths,
 other offline updaters, remote SELinux stores, and custom alternatives directories
 are outside this adapter's supported scope.
 
