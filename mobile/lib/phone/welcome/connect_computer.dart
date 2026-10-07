@@ -135,13 +135,20 @@ class _ConnectComputerPageState extends State<ConnectComputerPage> {
     // Read before the camera: once this page is gone, its widget is not to be reached through.
     final notifier = widget.notifier;
     final atHome = widget.onBack == null;
+    // ⚠️ Where an approval is asked from if this page is gone by the time the camera hands back a
+    // computer's sign-in code — taken away under it, at home, by a computer turning up. Its own
+    // context then reads as unmounted (it threw, and the approval was dropped); the root
+    // navigator's outlives any one page, and the approval's dialog stands on it anyway.
+    final approveFrom = Navigator.of(context, rootNavigator: true).context;
     final code = await scanForCode(
       context,
       fallbackLabel: 'Not now',
       camera: widget.scanCamera,
       // The computer may be showing its sign-in QR instead: approving that signs it in, which is
       // what setting it up needs anyway.
-      onSignInCode: (code) => unawaited(approveComputerSignIn(context, widget.notifier, code)),
+      onSignInCode: (code) => unawaited(
+        approveComputerSignIn(mounted ? context : approveFrom, notifier, code),
+      ),
     );
     if (code == null) return;
     final machineId = code.machineId, pairCode = code.pairCode;
@@ -246,7 +253,21 @@ class _ConnectComputerPageState extends State<ConnectComputerPage> {
           topTrailing: widget.onBack == null
               ? PhoneSettingsButton(notifier: widget.notifier)
               : null,
-          status: widget.signedIn || scanned != null
+          // Under the button that started it ([SetUpComputerPage.scanStatus]), not up here.
+          scanStatus: scanned == null
+              ? null
+              : Padding(
+                  padding: const EdgeInsets.only(bottom: 4),
+                  child: Text(
+                    _scanFailed ? '✗ $scanned' : scanned,
+                    key: const ValueKey('connect-scan-status'),
+                    style: tty.style(
+                      size: TtySize.meta,
+                      color: _scanFailed ? tty.red : tty.faint,
+                    ),
+                  ),
+                ),
+          status: widget.signedIn
               ? Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
@@ -267,18 +288,6 @@ class _ConnectComputerPageState extends State<ConnectComputerPage> {
                             onPressed: () => unawaited(
                               confirmSignOut(context, widget.notifier),
                             ),
-                          ),
-                        ),
-                      ),
-                    if (scanned != null)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 10),
-                        child: Text(
-                          _scanFailed ? '✗ $scanned' : scanned,
-                          key: const ValueKey('connect-scan-status'),
-                          style: tty.style(
-                            size: TtySize.meta,
-                            color: _scanFailed ? tty.red : tty.faint,
                           ),
                         ),
                       ),

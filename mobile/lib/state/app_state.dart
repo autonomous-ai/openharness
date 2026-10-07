@@ -1788,11 +1788,41 @@ class AppNotifier extends ChangeNotifier {
     viewer.login.cancel();
   }
 
+  /// The Sign out by hand under way, from the confirm to the welcome screen — see [logout].
+  Future<void>? _signingOut;
+
+  /// A Sign out by hand is under way: it takes a few seconds (the device log, the sockets) before
+  /// the welcome screen comes up, and the screens that offer it say so meanwhile.
+  bool get signingOut => _signingOut != null;
+
   /// Sign out by hand — Settings ▸ account ▸ Sign out. The welcome screen it lands on says nothing:
   /// the person knows why they are there.
+  ///
+  /// ⚠️ **One at a time: a second call joins the first.** The first can take up to 5 seconds with
+  /// nothing on screen changing ([_endSession] waits on the device log), long enough to press Sign
+  /// out again — and the second, finishing after the first, invalidated the auth work of a sign-in
+  /// the person had started on the welcome screen meanwhile (Continue with Google, into the right
+  /// account): dropped, with nothing said.
   Future<void> logout() {
+    final running = _signingOut;
+    if (running != null) return running;
     _leftByHand = true;
-    return _endSession();
+    late final Future<void> run;
+    run = () async {
+      try {
+        await _endSession();
+      } finally {
+        if (identical(_signingOut, run)) {
+          _signingOut = null;
+          // A sign-out cut short (another sign-in or -out moved the session on) changes no status
+          // of its own: whatever drew "Signing out…" is told it is over.
+          if (!_disposed) notifyListeners();
+        }
+      }
+    }();
+    _signingOut = run;
+    notifyListeners();
+    return run;
   }
 
   /// Everything a sign-out does, whoever asked for it. [reason] is what the welcome screen says
@@ -2481,7 +2511,8 @@ class AppNotifier extends ChangeNotifier {
     if (result.error != null) return result.error;
     final targetId = result.linkedMachineId ?? machineId;
     final state = machineStates[targetId];
-    if (state != null) {
+    // Already in by another way meanwhile — see [_keepsOpenConnection]: nothing to redial.
+    if (state != null && !_keepsOpenConnection(state)) {
       state.needsLink = false;
       state.agentLoadStatus = AgentLoadStatus.idle;
       notifyListeners();
@@ -2951,10 +2982,13 @@ class AppNotifier extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// A code scanned, signed in, for [machineId] by a page that was gone by the time it could pair
-  /// with it — "Waiting for your computer…", taken away under the camera by the very computer it
-  /// was waiting for (`phone/welcome/connect_computer.dart`). Held like a code scanned at sign-in:
+  /// A code scanned, signed in, on "Waiting for your computer…" (`phone/welcome/connect_computer.dart`)
+  /// — a page the very computer it was waiting for takes away. Held like a code scanned at sign-in:
   /// the home screen pairs with it once that computer is there and locked ([pendingPairing]).
+  ///
+  /// That page looks the computer up on the account first, and holds no code the account answered
+  /// without; one held while the account could not be asked is let go by the next list that
+  /// answers without its computer ([_refreshMachines]).
   ///
   /// Not for a computer already open: nothing is left to pair, and a code kept would be spent the
   /// next time it locks, in place of its password form (see where [pendingPairing] is cleared on
@@ -3047,7 +3081,7 @@ class AppNotifier extends ChangeNotifier {
     );
     if (result.error != null) return result.error;
     final state = machineStates[result.linkedMachineId ?? machineId];
-    if (state != null) {
+    if (state != null && !_keepsOpenConnection(state)) {
       state.needsLink = false;
       state.agentLoadStatus = AgentLoadStatus.idle;
       notifyListeners();
@@ -3057,6 +3091,18 @@ class AppNotifier extends ChangeNotifier {
     unawaited(_syncGroup(result.linkedMachineId ?? machineId, spread: true));
     return null;
   }
+
+  /// Whether a machine just linked (by password or code) is already connected — let in meanwhile
+  /// by another way, the device log's vouched redial above all ([_redialOnceVouched]), which goes
+  /// on dialling behind a machine shown locked.
+  ///
+  /// ⚠️ **Then the link leaves its connection alone.** Both links used to close the machine and
+  /// dial it again whatever its state, to replace a socket that refused this phone — and an open
+  /// one went with it: the terminal on screen read "Connection lost. Reconnecting…" a moment after
+  /// the unlock that was meant to open it. A connected socket has passed the machine's welcome
+  /// (`WsConn._markReady`), so it is no refused one.
+  bool _keepsOpenConnection(MachineState state) =>
+      state.connectionStatus == ConnectionStatus.connected;
 
   /// A test's stand-in for the trust-group roster swap; null uses [DirectLink.syncGroup].
   late final GroupSync? _groupSyncOverride;

@@ -301,20 +301,82 @@ class _Body extends StatelessWidget {
 /// Asked first, because a sign-out is more than leaving this screen: the phone's key leaves the
 /// account's devices ([AppNotifier.logout]), and signing in again makes a new one — which every
 /// other device then announces as a new device. One stray tap in the sheet used to be all of it.
+///
+/// ⚠️ **"Signing out…" from the confirm on.** The sign-out takes up to 5 seconds before the welcome
+/// screen comes up ([AppNotifier.logout]), and the page it was asked from used to stand there
+/// unchanged meanwhile, its Sign out still there to press again. A page that cannot be left now
+/// says what is happening; the signed-in screen, and it with it, goes when the sign-out lands.
 Future<void> confirmSignOut(BuildContext context, AppNotifier notifier) async {
+  if (notifier.signingOut) return;
   final confirmed = await confirmPhoneAction(
     context,
     // The sheet row's own icon — see [confirmPhoneAction].
     icon: LucideIcons.logOut300,
     title: 'Sign out?',
     detail: notifier.currentUser?.email,
-    message:
-        'Your harnesses keep running on your computers. When you sign in again, '
-        'your other devices will see this phone as a new device.',
+    // "Your harnesses keep running" is news only to somebody who has harnesses: the account with
+    // no computer is the wrong-account case "Not you? Sign out" is for.
+    message: notifier.machines.isEmpty
+        ? 'When you sign in again, your other devices will see this phone as a '
+              'new device.'
+        : 'Your harnesses keep running on your computers. When you sign in again, '
+              'your other devices will see this phone as a new device.',
     confirmLabel: 'Sign out',
   );
   if (!confirmed) return;
-  await notifier.logout();
+  // The sign-out itself never waits on the page: one asked for is carried out.
+  Route<void>? shown;
+  if (context.mounted) {
+    final route = phoneRoute(
+      (_) => const _SigningOut(),
+      swipeToGoBack: false,
+    );
+    unawaited(Navigator.of(context).push(route));
+    shown = route;
+  }
+  try {
+    await notifier.logout();
+  } finally {
+    // Gone with the signed-in screen when the sign-out lands; still here only if it was cut short.
+    if (shown != null && shown.isActive) shown.navigator?.removeRoute(shown);
+  }
+}
+
+/// The page a Sign out by hand stands on until the welcome screen comes up — see [confirmSignOut].
+/// No way back from it: there is nothing left to go back to.
+class _SigningOut extends StatelessWidget {
+  const _SigningOut();
+
+  @override
+  Widget build(BuildContext context) {
+    AppTheme.watch(context);
+    return PopScope(
+      canPop: false,
+      child: Scaffold(
+        backgroundColor: AppPalette.windowBg,
+        body: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SizedBox.square(
+                dimension: 22,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: AppPalette.accent,
+                ),
+              ),
+              const SizedBox(height: 14),
+              Text(
+                'Signing out…',
+                key: const ValueKey('signing-out'),
+                style: TextStyle(color: AppPalette.textSecondary, fontSize: 14),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 /// Settings over the current page — the page Find and a terminal's menu push.

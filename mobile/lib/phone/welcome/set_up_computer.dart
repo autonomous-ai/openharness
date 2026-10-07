@@ -132,11 +132,20 @@ class SetUpComputerPage extends StatefulWidget {
     this.loadDownloads,
     this.account,
     this.topTrailing,
+    this.scanStatus,
   });
 
   /// At the right of the top row, across from `‹ Back` — on the home screen, where there is no back,
   /// the way to Settings (`PhoneSettingsButton`).
   final Widget? topTrailing;
+
+  /// What the last scan came to — pairing, or why it did not — right under "Scan to connect ›".
+  ///
+  /// ⚠️ **Under the button that started it, not under the title.** [status] is the page's top, and
+  /// the button its foot, some 600pt of downloads and steps apart: on a small phone, scrolled down
+  /// to press it, the person came back from the camera to a page that looked unchanged — the
+  /// answer had gone in above the screen's edge, and pushed the button down besides.
+  final Widget? scanStatus;
 
   /// The account this phone is signed in to, when it is: the computer has to sign in to the same
   /// one, and the steps say so by name. Null for a phone not signed in yet — its scan signs it in
@@ -352,6 +361,7 @@ class _SetUpComputerPageState extends State<SetUpComputerPage> {
                   ),
                 ),
               ),
+              ?widget.scanStatus,
               const SizedBox(height: 32),
               // Not at the computer: what it is like, in 30 seconds.
               Align(

@@ -186,7 +186,8 @@ class _PhoneWelcomeState extends State<PhoneWelcome> {
     final sent = await _sendCode();
     if (!mounted) return;
     setState(() => _signingInWithScan = false);
-    if (sent) return;
+    // Left meanwhile for another way in: its failure is not the screen's to take over.
+    if (sent || _step != _Step.scan) return;
     _go(_Step.email, error: _error);
   }
 
@@ -240,14 +241,23 @@ class _PhoneWelcomeState extends State<PhoneWelcome> {
       setState(() => _error = 'That doesn’t look like an email address.');
       return false;
     }
+    final from = _step;
     final ok = await _run(
       () => (widget.sendCode ?? widget.notifier.sendLoginCode)(email),
     );
-    if (!ok || !mounted) return false;
+    if (!mounted) return false;
+    if (!ok) {
+      // Nor its failure, under a step that is not about the email.
+      if (_step != from) setState(() => _error = null);
+      return false;
+    }
     _sentTo = email;
     _code.clear();
     _startResend();
-    _go(_Step.code);
+    // ⚠️ On from the step it was sent from only. Back pressed while it went — from the scan page's
+    // "Signing in…", say — had the first screen jump to "Check your email" a second later, under
+    // somebody who had just left the email way behind.
+    if (_step == from) _go(_Step.code);
     return true;
   }
 
@@ -557,10 +567,11 @@ class _Hello extends StatelessWidget {
                     _SignedOutNotice(reason: reason),
                     const SizedBox(height: 18),
                   ],
-                  TtyText(
+                  // Wraps where it does not fit — a 320pt phone at the largest text size — rather than
+                  // losing its question mark at the edge, as a one-line TtyText did.
+                  Text(
                     'Is Harness on your computer?',
-                    color: tty.faint,
-                    size: TtySize.row,
+                    style: tty.style(color: tty.faint, size: TtySize.row),
                   ),
                   const SizedBox(height: 12),
                   _Answer(label: 'Yes — scan to connect', onTap: onScan),
@@ -778,11 +789,12 @@ class _Answer extends StatelessWidget {
           ),
           child: Row(
             children: [
+              // Wraps rather than cut "Yes — scan to connect" short on a narrow phone at a large
+              // text size; one line wherever it fits.
               Expanded(
-                child: TtyText(
+                child: Text(
                   label,
-                  size: TtySize.row,
-                  weight: FontWeight.w600,
+                  style: tty.style(size: TtySize.row, weight: FontWeight.w600),
                 ),
               ),
               Icon(LucideIcons.chevronRight300, size: 18, color: tty.faint),
@@ -892,7 +904,9 @@ class _Form extends StatelessWidget {
           child: ListView(
             padding: const EdgeInsets.fromLTRB(Tty.origin, 12, Tty.origin, 16),
             children: [
-              TtyText(title, size: 24, weight: FontWeight.w600),
+              // A title that wraps: "Check your email" at 24pt is more than a 320pt phone holds at
+              // the largest text size, and a one-line TtyText cut it there.
+              Text(title, style: tty.style(size: 24, weight: FontWeight.w600)),
               const SizedBox(height: 12),
               for (final line in lines)
                 Padding(

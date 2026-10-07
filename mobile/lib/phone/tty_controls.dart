@@ -104,11 +104,19 @@ class _TtyPrimaryButtonState extends State<TtyPrimaryButton> {
             borderRadius: BorderRadius.circular(6),
           ),
           alignment: Alignment.center,
-          child: TtyText(
+          // One line, as a [TtyText] — but ending in "…" where it does not fit, not cut at the
+          // edge: a busy label names the computer ("Pairing with Tonys-MacBook-Pro.local…"), and
+          // a hostname that long lost its end, and the ellipsis that says it is still working.
+          child: Text(
             widget.busy ? (widget.busyLabel ?? widget.label) : widget.label,
-            color: ink,
-            weight: FontWeight.w600,
-            size: TtySize.title,
+            maxLines: 1,
+            softWrap: false,
+            overflow: TextOverflow.ellipsis,
+            style: tty.style(
+              color: ink,
+              weight: FontWeight.w600,
+              size: TtySize.title,
+            ),
           ),
         ),
       ),

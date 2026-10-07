@@ -118,12 +118,19 @@ class _Body extends StatelessWidget {
       );
     }
     if (ordered.isEmpty) {
-      return const EmptyState(
+      // ⚠️ With the way to set one up, as the list's own last row offers it: reached from Settings
+      // on a phone with no computer yet, this was a sentence and nothing to press.
+      return EmptyState(
         icon: LucideIcons.laptopMinimal300,
         title: 'No computers yet',
         message:
             'Set up Harness on your computer, signed in to this account, and it '
             'appears here.',
+        action: FilledButton(
+          key: const ValueKey('machines-set-up'),
+          onPressed: () => _setUpComputer(context),
+          child: const Text('Set up a computer'),
+        ),
       );
     }
 
@@ -147,20 +154,26 @@ class _Body extends StatelessWidget {
           const SizedBox(height: 8),
           FindAddRow(
             label: 'Set up another computer',
-            onTap: () => Navigator.of(context).push(
-              phoneRoute(
-                (route) => ConnectComputerPage(
-                  notifier: notifier,
-                  signedIn: false,
-                  onBack: () => Navigator.of(route).maybePop(),
-                ),
-              ),
-            ),
+            onTap: () => _setUpComputer(context),
           ),
         ],
       ),
     );
   }
+
+  /// The set-up page over this list — downloads, steps, and a scan that pairs — for a computer not
+  /// on the account yet.
+  void _setUpComputer(BuildContext context) => unawaited(
+    Navigator.of(context).push(
+      phoneRoute(
+        (route) => ConnectComputerPage(
+          notifier: notifier,
+          signedIn: false,
+          onBack: () => Navigator.of(route).maybePop(),
+        ),
+      ),
+    ),
+  );
 
   Widget _row(BuildContext context, MachineState state, Tty tty) {
     final status = phoneMachineStatusOf(state);

@@ -120,15 +120,20 @@ class _UnlockComputerState extends State<UnlockComputer> {
     }
   }
 
+  /// The camera is up for [_scan]. ⚠️ [_pairing] is only set once a code is back: a quick second
+  /// tap before that opened a second camera, and paired a second time by the same one-time code.
+  bool _scanning = false;
+
   /// The camera, over this page; a code of this computer's pairs the phone with it, the way the
   /// first one was added — its one-time code, armed by its Add Phone dialog, and no password.
   Future<void> _scan() async {
-    if (_busy || _pairing) return;
+    if (_busy || _pairing || _scanning) return;
+    _scanning = true;
     final code = await scanForCode(
       context,
       fallbackLabel: 'Use its password instead',
       camera: widget.scanCamera,
-    );
+    ).whenComplete(() => _scanning = false);
     if (!mounted || code == null) return;
     final machine = widget.machineState.machine;
     final pairCode = code.pairCode;

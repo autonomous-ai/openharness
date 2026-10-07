@@ -130,15 +130,25 @@ class _FocusHintsState extends State<FocusHints> {
               ? CrossAxisAlignment.center
               : CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
+          // Text that wraps, not one-line [TtyText]s: the two swipe hints share the width, and on
+          // a 320pt phone or at the largest text size "all your harnesses" was cut at the edge.
+          // A line that fits is drawn exactly as before.
           children: [
-            TtyText(
+            Text(
               big,
-              size: TtySize.title,
-              weight: FontWeight.w600,
-              color: tty.green,
+              textAlign: align,
+              style: tty.style(
+                size: TtySize.title,
+                weight: FontWeight.w600,
+                color: tty.green,
+              ),
             ),
             const SizedBox(height: 2),
-            TtyText(small, size: TtySize.meta, color: tty.text),
+            Text(
+              small,
+              textAlign: align,
+              style: tty.style(size: TtySize.meta, color: tty.text),
+            ),
           ],
         );
     // ⚠️ **The touch goes THROUGH.** A hint that swallowed the swipe it teaches ("swipe right")
