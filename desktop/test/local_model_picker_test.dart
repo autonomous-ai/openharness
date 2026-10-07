@@ -1028,7 +1028,7 @@ void main() {
           find.descendant(
             of: find.byType(SwarmResourcePreview),
             matching: find.textContaining(
-              "updates Grid's model engine first if it is too old to serve Jev models",
+              'Get downloads it and runs it on your grid.',
             ),
           ),
           findsOneWidget,
