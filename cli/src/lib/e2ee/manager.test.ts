@@ -105,6 +105,20 @@ class WebPeer {
   }
 }
 
+/**
+ * A joiner's stretched password, computed once per password for the whole file. `stretchPassword` is
+ * deterministic for a password and machine, and each call is a real scrypt (~0.5-1 s and 128 MB idle;
+ * the cost is a security control, never lowered for a test). Under a loaded full run (load 36, six
+ * workers) "keeps at most two password attempts in flight" spent five of them, one per joiner, and
+ * timed out. The manager's own stretch (`setRemotePassword`) is still real every time.
+ */
+const stretchedPasswords = new Map<string, Promise<Uint8Array>>()
+function stretchedOnce(password: string): Promise<Uint8Array> {
+  let stretched = stretchedPasswords.get(password)
+  if (!stretched) stretchedPasswords.set(password, stretched = stretchPassword(password, AGENT))
+  return stretched
+}
+
 /** A minimal remote-password joiner that runs the CPace 'b' role directly against the manager via
  *  handleFrame — mirrors WebPeer above, but for the persistent remote-password flow: no human "arm"
  *  step (intent() carries the stretched password straight away), and connId-keyed on the manager side
@@ -118,7 +132,7 @@ class PwPeer {
 
   async intent(password: string): Promise<Frame> {
     const sid = C.newPairId()
-    const stretched = await stretchPassword(password, AGENT)
+    const stretched = await stretchedOnce(password)
     this.pr = { sid, sidB64: C.b64e(sid), stretched }
     return { type: 'e2e_pw_pair_intent', payload: { requestId: 'pwr1', sid: this.pr.sidB64 } }
   }
@@ -518,7 +532,9 @@ describe('E2eeManager revoke', () => {
   })
 })
 
-describe('E2eeManager persistent remote-password pairing', () => {
+// Every case here runs at least one real scrypt in the manager (`setRemotePassword`) and one for its
+// joiner: PW_SCRYPT_TEST_TIMEOUT_MS, the budget the lockout cases already carried, for all of them.
+describe('E2eeManager persistent remote-password pairing', { timeout: PW_SCRYPT_TEST_TIMEOUT_MS }, () => {
   const PASSWORD = 'correct horse battery staple'
 
   it('NO_REMOTE_PASSWORD when no password has been set', async () => {

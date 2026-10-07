@@ -47,7 +47,18 @@ const HOOK_STARTED_AT = performance.now()
 // parallel test run, a busy CI box) a cold Node start plus lock retries can eat it before the offline
 // registry fallback is reached, and the fallback then silently does nothing. Tests set it explicitly so
 // they measure behaviour instead of the host's load. Clamped, and never below the shipped default.
-const HOOK_DEADLINE_MS = Math.min(60_000, Math.max(4500, Number(process.env.HARNESS_HOOK_DEADLINE_MS) || 0))
+const SHIPPED_DEADLINE_MS = 4500
+const HOOK_DEADLINE_MS = Math.min(60_000, Math.max(SHIPPED_DEADLINE_MS, Number(process.env.HARNESS_HOOK_DEADLINE_MS) || 0))
+// Each step's own limit (tmux 2 s, ps and sqlite3 3 s, lsof 1.5 s, …) is a wall-clock assumption too, and
+// the override has to move them with the budget or it does not do what it says: under a loaded full test
+// run (load 36, six workers) the Hermes fallback's fake tmux, ps and sqlite3 each took longer than their
+// step's limit with 30 s of budget left, the lookup read as no answer, and no registry was written
+// (hookNotify.spec.ts, 3 of 3 Hermes cases). 1 with the shipped budget: a hook as shipped is unchanged.
+const STEP_SCALE = HOOK_DEADLINE_MS / SHIPPED_DEADLINE_MS
+/** A step's limit under the budget in force. Whole milliseconds: child_process refuses a fractional timeout. */
+function stepLimit(ms) {
+  return Math.round(ms * STEP_SCALE)
+}
 const EXIT_RESERVE_MS = 500
 const LOCK_RETRIES = 60
 const LOCK_RETRY_MS = 25
@@ -393,7 +404,11 @@ function sleep(ms) {
 
 function execFileText(cmd, args, timeout, env) {
   return new Promise((resolve) => {
-    const budget = Math.min(timeout, remainingBudget())
+    // Whole milliseconds. What is left of the budget is a fraction off the whole (performance.now()),
+    // and `execFile` throws ERR_OUT_OF_RANGE on a fractional timeout: once less was left than a step's
+    // own limit, as on the shipped 4.5 s budget after a second of earlier steps on a loaded machine, the
+    // step threw, and the offline registration it was part of was dropped.
+    const budget = Math.floor(Math.min(stepLimit(timeout), remainingBudget()))
     if (budget < 50) { resolve(null); return }
     execFile(cmd, args, { timeout: budget, ...(env && { env }) }, (err, stdout) => {
       resolve(err ? null : stdout)
@@ -900,7 +915,7 @@ function currentBootId() {
   } catch { /* not Linux */ }
   if (process.platform === 'darwin') {
     try {
-      const value = execFileSync('/usr/sbin/sysctl', ['-n', 'kern.bootsessionuuid'], { encoding: 'utf8', timeout: 1000 }).trim()
+      const value = execFileSync('/usr/sbin/sysctl', ['-n', 'kern.bootsessionuuid'], { encoding: 'utf8', timeout: stepLimit(1000) }).trim()
       if (/^[0-9a-f-]{36}$/i.test(value)) return (bootId = `macos:${value}`)
     } catch { /* sysctl unavailable: the moment the boot began, below */ }
   }
@@ -1026,7 +1041,7 @@ function processStartMarker(pid) {
   } catch { /* non-Linux or exited process; use ps below */ }
   try {
     const started = execFileSync('ps', ['-p', String(pid), '-o', 'lstart='], {
-      encoding: 'utf8', timeout: 1000, env: { ...psEnv(), TZ: 'UTC' },
+      encoding: 'utf8', timeout: stepLimit(1000), env: { ...psEnv(), TZ: 'UTC' },
     }).trim()
     return started ? `ps-c:${started}` : null
   } catch { return null }
