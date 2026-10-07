@@ -52,6 +52,7 @@ vi.mock('./bus.js', () => ({
       const ops: Array<() => void> = []
       const chain = {
         hset: (key: string, field: string, value: string) => { ops.push(() => { m.hsetCalls++; (m.seen[key] ??= {})[field] = value }); return chain },
+        hsetnx: (key: string, field: string, value: string) => { ops.push(() => { (m.seen[key] ??= {})[field] ??= value }); return chain },
         expire: () => chain,
         exec: async () => { for (const op of ops) op(); return [] },
       }
@@ -290,14 +291,23 @@ describe('when a key was last seen', () => {
     touchDeviceKey('user-seen', pubKey, 1_000_000)
     touchDeviceKey('user-seen', pubKey, 1_000_000 + 60_000)
     await vi.waitFor(() => expect(m.hsetCalls).toBe(1))
-    expect(await deviceKeysSeen('user-seen')).toEqual({ [pubKey]: 1_000_000 })
+    expect(await deviceKeysSeen('user-seen')).toEqual({ seen: { [pubKey]: 1_000_000 }, since: 1_000_000 })
     touchDeviceKey('user-seen', pubKey, 1_000_000 + 2 * 60 * 60 * 1000)
     await vi.waitFor(() => expect(m.hsetCalls).toBe(2))
   })
 
-  it('ignores anything that is not a key', async () => {
+  it('keeps when the record began, which a later key does not move', async () => {
+    touchDeviceKey('user-since', key(7).pub, 5_000)
+    touchDeviceKey('user-since', key(8).pub, 9_000)
+    await vi.waitFor(() => expect(m.hsetCalls).toBe(2))
+    expect(await deviceKeysSeen('user-since')).toEqual({ seen: { [key(7).pub]: 5_000, [key(8).pub]: 9_000 }, since: 5_000 })
+  })
+
+  it('ignores anything that is not a key, and has no beginning when nothing was recorded', async () => {
     touchDeviceKey('user-seen-2', 'not a key')
     touchDeviceKey('user-seen-2', undefined)
-    expect(await deviceKeysSeen('user-seen-2')).toEqual({})
+    expect(await deviceKeysSeen('user-seen-2')).toEqual({ seen: {}, since: null })
+    m.seen['devkeys:seen:user-seen-3'] = { _since: 'x', junk: '5' }
+    expect(await deviceKeysSeen('user-seen-3')).toEqual({ seen: {}, since: null })
   })
 })

@@ -42,13 +42,15 @@ export async function deviceKeyRoutes(app: FastifyInstance): Promise<void> {
   })
 
   // When each key last opened a session — a hint for the Devices list, which offers to remove apps not
-  // seen in a long while (a browser whose data was cleared never signs its own removal).
+  // seen in a long while (a browser whose data was cleared never signs its own removal) — and `since`,
+  // when that record began. A Redis that cannot be read is an error, never `{seen: {}}`: a machine's
+  // sweep read that empty answer as "no app used in months" and would remove every old app key.
   app.get('/api/device-keys/seen', async (req, reply) => {
     reply.header('Cache-Control', 'no-store')
     try {
-      sendSuccess(reply, { seen: await deviceKeysSeen(req.user!.sub) })
+      sendSuccess(reply, await deviceKeysSeen(req.user!.sub))
     } catch {
-      sendSuccess(reply, { seen: {} })
+      sendError(reply, 'When your devices were last used cannot be read right now.', 'SEEN_UNAVAILABLE', 503)
     }
   })
 

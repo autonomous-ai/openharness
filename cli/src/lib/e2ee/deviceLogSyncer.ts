@@ -96,9 +96,9 @@ export interface DeviceLogSyncerDeps {
   resume?: () => void
   /** This machine's own key was removed from the log: it is signed out. */
   signedOut: () => void
-  /** When each key last opened a session or read the log (ms), from the backend; null when it could not
+  /** When each key last opened a session or read the log, from the backend; null when it could not
    *  be asked. Only `sweepStale` reads it. */
-  seen?: () => Promise<Record<string, number> | null>
+  seen?: () => Promise<DeviceKeysSeen | null>
   /** Something a window shows changed (the list, the frozen line). */
   changed?: () => void
   log?: (line: string) => void
@@ -181,6 +181,10 @@ const JOIN_PAGES = 200
  *  a browser whose storage was cleared, an app reinstalled, never comes back for its key, and at 256
  *  active keys (DEVLOG_MAX_ACTIVE) no new device can join the account. */
 export const STALE_AFTER_MS = 180 * 24 * 60 * 60_000
+/** When each key was last used (ms, by pub), and since when that record runs (null: unknown). A key with
+ *  no time is unused only if the record is older than the question: a Redis that came back empty once
+ *  read as "no app used in months", and the sweep would have removed every old app key. */
+export interface DeviceKeysSeen { seen: Record<string, number>; since: number | null }
 /** At most one sweep per this long on a machine; the timer that offers it runs every 10 minutes. */
 const SWEEP_EVERY_MS = 6 * 60 * 60_000
 /** At most this many removals per sweep (the next one goes on), each SWEEP_GAP_MS apart: the backend
@@ -195,6 +199,7 @@ const GOSSIP_HASHES = 64
 interface Known { label: string; kind: DevLogMember['kind'] }
 
 const fp = (pub: string): string => fingerprint(b64d(pub))
+const day = (ms: number): string => new Date(ms).toISOString().slice(0, 10)
 const uniq = (xs: readonly string[]): string[] => [...new Set(xs)]
 
 /**
@@ -828,14 +833,22 @@ export class DeviceLogSyncer {
       const turn = machines.indexOf(selfPub)
       if (turn < 0) return
       this.lastSweep = now
-      const lastUsed = await seen()
+      const got = await seen()
       // Not asked: try again on the next offer rather than read every key as never used.
-      if (!lastUsed) { this.lastSweep = null; return }
+      if (!got) { this.lastSweep = null; return }
       const cutoff = now - STALE_AFTER_MS - turn * SWEEP_TURN_MS
       const suspended = this.suspendedKeys()
-      const usedAt = (m: DevLogMember): number => { const t = lastUsed[m.pub]; return typeof t === 'number' && Number.isFinite(t) ? t : m.addedAt }
+      // A key with no time is unused only when the record has run since before the cutoff.
+      const usedAt = (m: DevLogMember): number | null => {
+        const t = got.seen[m.pub]
+        return typeof t === 'number' && Number.isFinite(t) ? t : null
+      }
+      const unusedSinceCutoff = (m: DevLogMember): boolean => {
+        const t = usedAt(m)
+        return t !== null ? t < cutoff : got.since !== null && got.since < cutoff
+      }
       const stale = Object.values(state.active)
-        .filter((m) => m.kind === 'viewer' && m.pub !== selfPub && !suspended.includes(m.pub) && m.addedAt < cutoff && usedAt(m) < cutoff)
+        .filter((m) => m.kind === 'viewer' && m.pub !== selfPub && !suspended.includes(m.pub) && m.addedAt < cutoff && unusedSinceCutoff(m))
         .sort((a, b) => a.seq - b.seq)
         .slice(0, SWEEP_MAX)
       for (const [i, m] of stale.entries()) {
@@ -844,7 +857,9 @@ export class DeviceLogSyncer {
         // Already out of the log (another machine's sweep, a person's own removal): nothing to do.
         if (!r.ok && r.error === 'NOT_IN_LOG') continue
         if (!r.ok) { this.deps.log?.(`[devlog] could not remove unused device ${m.label || '(no name)'} (${fp(m.pub)}): ${r.detail ?? r.error}`); return }
-        this.deps.log?.(`[devlog] removed unused device ${m.label || '(no name)'} (${fp(m.pub)}), last used ${new Date(usedAt(m)).toISOString().slice(0, 10)}`)
+        const t = usedAt(m)
+        const when = t !== null ? `last used ${day(t)}` : `not used since ${day(got.since!)}`
+        this.deps.log?.(`[devlog] removed unused device ${m.label || '(no name)'} (${fp(m.pub)}), ${when}`)
       }
     } catch (err) {
       this.deps.log?.(`[devlog] sweep failed: ${err instanceof Error ? err.message : String(err)}`)
