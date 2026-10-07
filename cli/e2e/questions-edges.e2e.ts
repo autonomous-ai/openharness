@@ -1,8 +1,8 @@
 /**
  * An agent's question at its edges, for Claude Code and Codex: asked while no window is open, answered
  * in the terminal by hand, answered by two windows at once, cancelled with Esc, and still open across a
- * daemon restart. Every window ends with the same answer to "is this question still open?", and the
- * agent gets exactly one answer.
+ * daemon restart, and asked in a turn the previous turn's late Stop hook arrives in. Every window ends with
+ * the same answer to "is this question still open?", and the agent gets exactly one answer.
  */
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
@@ -43,13 +43,44 @@ async function pickInPane(daemon: IsolatedDaemon, engine: Engine, pane: string, 
 describe('a question at its edges', () => {
   let daemon: IsolatedDaemon | undefined
   afterEach(async () => { await daemon?.close(); daemon = undefined })
-  const fresh = async () => {
-    const d = await IsolatedDaemon.create()
+  const fresh = async (env: Record<string, string> = {}) => {
+    const d = await IsolatedDaemon.create({ env })
     daemon = d
     onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`) })
     await d.start()
     return d
   }
+
+  // Found by the soak run (e2e/endurance.e2e.ts): under load a turn's Stop reached the daemon 6 s late, after the
+  // next prompt's turn had opened, and force-closed that turn with its question open, which no window was shown.
+  it('claude: a turn\'s Stop that arrives after the next turn opened leaves that turn, and its question, open', async () => {
+    // Each turn's Stop is acted on 2.5 s after it reached the daemon, as its verification took under load.
+    const d = await fresh({ HARNESSD_TEST_STOP_HOOK_DELAY_MS: '2500' })
+    const client = await LocalClient.connect(d)
+    const agent = await create(d, client, 'claude', 'ask-late-stop')
+    const first = client.next(isTurn('turn_ended', agent.id), 45_000, 'the first turn ending')
+    const stops = () => d.log().split(`${String(agent.sessionId).slice(0, 8)} turn-stop`).length
+    const stopsBefore = stops()
+    client.send('message', { agentId: agent.id, content: 'before the question' })
+    await first
+    // At once, the question; the first turn's Stop arrives in it.
+    const question = client.next(asked(agent.id), 30_000, 'commander_question')
+    const started = client.next(isTurn('turn_started', agent.id), 30_000, 'the question\'s turn starting')
+    client.send('message', { agentId: agent.id, content: '!ask' })
+    await started
+    const shown = await question
+    const since = client.frames.length
+    await until('the first turn\'s Stop to arrive', () => stops() > stopsBefore || null, 15_000, 100)
+    // Past its hold and the Stop hook's grace: the question's turn is still open.
+    await new Promise((resolve) => setTimeout(resolve, 6_000))
+    expect(client.frames.slice(since).filter(isTurn('turn_ended', agent.id))).toEqual([])
+    const ended = client.next(isTurn('turn_ended', agent.id), 45_000, 'the question\'s turn ending once answered')
+    const result = await answer(client, agent.id, shown.payload!.requestId, { [shown.payload!.questions[0].q]: 'Coffee' })
+    expect(result.error, JSON.stringify(result)).toBeUndefined()
+    await ended
+    expect(await d.capture(agent.tmuxPane)).toContain('you chose Coffee')
+    client.close()
+  })
 
   it.each(engines)('%s: asked while no window is open, it reaches the window that opens next, and its answer is the one used', async (engine) => {
     const d = await fresh()
