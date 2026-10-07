@@ -2420,6 +2420,37 @@ describe('BackendSocket outbound queue', () => {
     await socket.stop()
   })
 
+  it('reports the TUI as its own surface, and a tool as no one', async () => {
+    vi.useFakeTimers()
+    const socket = relaySocket('token')
+    const sink = { sendFrame: () => true, sendBinary: () => true }
+    const presence = (ws: InstanceType<typeof wsMock.MockWebSocket>) => parseSent(ws)
+      .filter((m) => (m.frame as { type?: string } | undefined)?.type === 'app_presence')
+      .map((m) => (m.frame as { payload: Record<string, unknown> }).payload)
+    socket.connect()
+    const ws = wsMock.instances[0]
+    ws.open()
+
+    // A tool (`harness pair`, the MCP server) is not a person at a window: nothing, now or on the tick.
+    expect(socket.registerLocalClient('local:tool', sink, { tool: true })).toBe(true)
+    vi.advanceTimersByTime(60_000)
+    expect(presence(ws)).toEqual([])
+
+    // The TUI names its surface; the desktop app's frame stays exactly as it was.
+    expect(socket.registerLocalClient('local:tui', sink, { surface: 'tui' })).toBe(true)
+    expect(socket.registerLocalClient('local:app', sink)).toBe(true)
+    expect(presence(ws)).toEqual([{ kind: 'open', surface: 'tui' }, { kind: 'open' }])
+
+    // Each pings for itself while it stays — and only it, once the other has gone.
+    vi.advanceTimersByTime(60_000)
+    expect(presence(ws).slice(2)).toEqual([{ kind: 'ping' }, { kind: 'ping', surface: 'tui' }])
+    await socket.unregisterLocalClient('local:app')
+    vi.advanceTimersByTime(60_000)
+    expect(presence(ws).slice(4)).toEqual([{ kind: 'ping', surface: 'tui' }])
+
+    await socket.stop()
+  })
+
   it('reports commander presence only when it crosses zero', async () => {
     const socket = relaySocket('token')
     const changes: boolean[] = []

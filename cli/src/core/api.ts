@@ -1015,6 +1015,19 @@ export type BackendNotice =
   | { type: 'device_keys_changed' }
 
 /** What the core asks of the gateway: everything bound for a remote client, and the link's state. */
+/** What a person has open on this computer: the desktop app, or `harness tui`. Each is its own presence. */
+export type WindowSurface = 'desktop' | 'tui'
+export type LocalWindows = Record<WindowSurface, number>
+export const WINDOW_SURFACES: readonly WindowSurface[] = ['desktop', 'tui']
+/** A surface off the core↔gateway pipe: anything but `tui` is the desktop app. */
+export const windowSurfaceOf = (value: unknown): WindowSurface => (value === 'tui' ? 'tui' : 'desktop')
+/** Window counts off the core↔gateway pipe; anything unreadable is none. */
+export const localWindowsOf = (value: unknown): LocalWindows => {
+  const counts = (value ?? {}) as Partial<Record<WindowSurface, unknown>>
+  const count = (n: unknown): number => (typeof n === 'number' && Number.isFinite(n) && n > 0 ? Math.floor(n) : 0)
+  return { desktop: count(counts.desktop), tui: count(counts.tui) }
+}
+
 export interface GatewayPort {
   /** Dial the backend: this daemon is signed in. */
   connect(): void
@@ -1045,9 +1058,10 @@ export interface GatewayPort {
   observer(connId: string, type: string, payload: Record<string, unknown>): boolean
   /** A window opened on this computer: the backend counts it as the person's session at once, or when
    *  the link next comes up. */
-  windowOpened(): void
-  /** How many processes on this computer are attached, windows and tools. */
-  localClients(count: number): void
+  windowOpened(surface: WindowSurface): void
+  /** The windows attached on this computer, per surface — tools (`harness pair`, the MCP server) are
+   *  not windows and are not counted. */
+  localClients(windows: LocalWindows): void
   /** A local connection's request the gateway answers (the E2EE pairings), answered back to it through
    *  `GatewayEvents.toLocal`. */
   local(connId: string, frame: Record<string, unknown>): Promise<void>

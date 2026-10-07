@@ -268,6 +268,8 @@ class WsConn {
         queryParameters: {
           ...base.queryParameters,
           'autonomousEnv': autonomousEnv,
+          // Counts this person as on the mobile app today (backend user_daily_client_presence).
+          'client': 'mobile',
         },
       );
       final channel = dialing = (connectChannel ?? WebSocketChannel.connect)(
