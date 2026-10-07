@@ -11,7 +11,7 @@ import { join } from 'node:path'
 
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
-import { builtinSqlite, closeSqliteHandles, overrideBuiltinSqlite } from '../../sqliteRead.js'
+import { builtinSqlite, closeSqliteHandles, overrideBuiltinSqlite } from '../../sqliteBuiltin.js'
 import { devinListSql, devinProvider, devinTurnOpen, lockPid } from './devin.js'
 import { LIST_LIMIT, ownerRecord, readSql, type SqlRead } from './opencode.js'
 import { scanMemo } from './support.js'

@@ -3,9 +3,8 @@ import { execFileSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import {
-  builtinSqlite, closeSqliteHandles, idleWalStore, inlineSqlParams, overrideBuiltinSqlite, sqliteReadAll,
-} from './sqliteRead.js'
+import { builtinSqlite, closeSqliteHandles, overrideBuiltinSqlite } from './sqliteBuiltin.js'
+import { idleWalStore, inlineSqlParams, sqliteReadAll } from './sqliteRead.js'
 
 const hasCli = (() => {
   try { execFileSync('sqlite3', ['-version'], { stdio: 'ignore' }); return true } catch { return false }
