@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/state/app_state.dart';
 
+import '../settings_page.dart' show PhoneSettingsButton;
 import '../tty.dart';
 import '../tty_controls.dart';
 import 'scan_to_connect.dart';
@@ -114,66 +115,74 @@ class _PairingWithCodeState extends State<PairingWithCode> {
     return Scaffold(
       backgroundColor: tty.ground,
       body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(Tty.origin, 48, Tty.origin, 24),
-          // Scrolls when it does not fit — a long computer name at a large text size is more lines
-          // than a small phone has, and the button was pushed off the foot of an overflowing column.
-          child: LayoutBuilder(
-            builder: (context, box) => SingleChildScrollView(
-              child: ConstrainedBox(
-                constraints: BoxConstraints(minHeight: box.maxHeight),
-                child: IntrinsicHeight(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Text(
-                        error == null
-                            ? 'Connecting to\n$name…'
-                            : 'Couldn’t connect',
-                        style: tty
-                            .style(
-                              size: TtySize.display,
-                              weight: FontWeight.w600,
-                            )
-                            .copyWith(height: 34 / 28, letterSpacing: -0.6),
-                      ),
-                      const SizedBox(height: 12),
-                      // A Text that wraps, not a one-line TtyText: the error here is a sentence, and
-                      // cut at the screen's edge it lost the half that says what to do. Named for the
-                      // computer, not "your Mac" — Add Phone is on Linux too.
-                      Text(
-                        error ?? 'Keep “Add Phone” open on $name.',
-                        style: tty.style(
-                          size: TtySize.row,
-                          color: error == null ? tty.faint : tty.red,
-                        ),
-                      ),
-                      const Spacer(),
-                      if (error != null) ...[
-                        TtyPrimaryButton(
-                          key: const ValueKey('pairing-scan-again'),
-                          label: 'Scan again',
-                          onPressed: _scanning
-                              ? null
-                              : () => unawaited(_scanAgain(name)),
-                        ),
-                        const SizedBox(height: 4),
-                        Center(
-                          child: TtyTextButton(
-                            label: 'Use its password instead',
-                            color: tty.faint,
-                            onPressed: _scanning ? null : _usePassword,
-                          ),
-                        ),
-                      ],
-                    ],
-                  ),
-                ),
-              ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // This page is the home screen while it is up: Settings, and Sign out, from here too.
+            // Its row stands where the title's top margin was, so the title has not moved.
+            Align(
+              alignment: Alignment.centerRight,
+              child: PhoneSettingsButton(notifier: widget.notifier),
             ),
-          ),
+            Expanded(child: _body(tty, name, error)),
+          ],
         ),
       ),
     );
   }
+
+  Widget _body(Tty tty, String name, String? error) => Padding(
+    padding: const EdgeInsets.fromLTRB(Tty.origin, 4, Tty.origin, 24),
+    // Scrolls when it does not fit — a long computer name at a large text size is more lines
+    // than a small phone has, and the button was pushed off the foot of an overflowing column.
+    child: LayoutBuilder(
+      builder: (context, box) => SingleChildScrollView(
+        child: ConstrainedBox(
+          constraints: BoxConstraints(minHeight: box.maxHeight),
+          child: IntrinsicHeight(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  error == null ? 'Connecting to\n$name…' : 'Couldn’t connect',
+                  style: tty
+                      .style(size: TtySize.display, weight: FontWeight.w600)
+                      .copyWith(height: 34 / 28, letterSpacing: -0.6),
+                ),
+                const SizedBox(height: 12),
+                // A Text that wraps, not a one-line TtyText: the error here is a sentence, and
+                // cut at the screen's edge it lost the half that says what to do. Named for the
+                // computer, not "your Mac" — Add Phone is on Linux too.
+                Text(
+                  error ?? 'Keep “Add Phone” open on $name.',
+                  style: tty.style(
+                    size: TtySize.row,
+                    color: error == null ? tty.faint : tty.red,
+                  ),
+                ),
+                const Spacer(),
+                if (error != null) ...[
+                  TtyPrimaryButton(
+                    key: const ValueKey('pairing-scan-again'),
+                    label: 'Scan again',
+                    onPressed: _scanning
+                        ? null
+                        : () => unawaited(_scanAgain(name)),
+                  ),
+                  const SizedBox(height: 4),
+                  Center(
+                    child: TtyTextButton(
+                      label: 'Use its password instead',
+                      color: tty.faint,
+                      onPressed: _scanning ? null : _usePassword,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
 }

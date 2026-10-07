@@ -299,7 +299,13 @@ class _AgentHomeState extends State<AgentHome> {
     final notifier = widget.notifier;
     final machine = notifier.stateOf(machineId);
     if (machine == null) {
-      return notifier.machines.isEmpty || notifier.machinesLoading;
+      // Not on the list: coming only while the list itself is. ⚠️ An empty list that has ANSWERED
+      // is the account's word that the machine is not on it — the record names a computer since
+      // removed, or one of another account's (it is never cleared). Read as "not answered yet", it
+      // held an account with no computer on "Connecting to your computer…" for the whole
+      // [_restoreTimeout] before its set-up page came up.
+      return notifier.machinesLoading ||
+          (notifier.machines.isEmpty && !notifier.machinesAnswered);
     }
     return switch (phoneMachineStatusOf(machine)) {
       PhoneMachineStatus.needsPassword => false,

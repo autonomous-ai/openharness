@@ -104,12 +104,18 @@ class _PhoneWelcomeState extends State<PhoneWelcome> {
   /// ([_emailCodeFromScan]): the step says why an email is in the way. Kept on the code step only.
   bool _codeFromScan = false;
 
+  /// Where the camera was opened from — the first screen's "Yes", or "Scan to connect ›" on the
+  /// set-up page — and so where back from it goes ([_backFrom]). Back from the camera always went
+  /// to the first screen, and somebody who had stepped over from set-up — the steps they were
+  /// following on it — had to find their way back to them.
+  _Step _scanFrom = _Step.hello;
+
   /// Under the scan page's hint. A desktop app opens signed out (its guest mode), and its Add Phone
   /// then shows no code, only "Sign in to add your phone." beside a Sign in… button. Google or
   /// Apple by name: the sign-in's third way, "Scan with your phone", needs a phone already signed
   /// in. Two lines at most — it shares the page with the camera.
   static const _signInThereFirst =
-      'Asks you to sign in? Sign in on the computer with Google or Apple first.';
+      'Computer asks you to sign in? Sign in there with Google or Apple first.';
 
   String? _error;
   int _resendIn = 0;
@@ -210,6 +216,12 @@ class _PhoneWelcomeState extends State<PhoneWelcome> {
     if (step == _Step.hello || step == _Step.setUp || step == _Step.scan) {
       widget.notifier.pendingComputerSignIn = null;
     }
+    // Only a step that opens the camera says where it was opened from: back from the computer's
+    // own sign-in step ([_SignInFirst]) returns to the camera, which still goes back where it was
+    // first opened from.
+    if (step == _Step.scan && (_step == _Step.hello || _step == _Step.setUp)) {
+      _scanFrom = _step;
+    }
     setState(() {
       _step = step;
       _error = error;
@@ -292,6 +304,7 @@ class _PhoneWelcomeState extends State<PhoneWelcome> {
     _Step.code => _Step.email,
     _Step.email when _forComputer => _Step.signInFirst,
     _Step.signInFirst => _Step.scan,
+    _Step.scan => _scanFrom,
     _ => _Step.hello,
   };
 
@@ -360,7 +373,7 @@ class _PhoneWelcomeState extends State<PhoneWelcome> {
               note: _signInThereFirst,
               signingIn: _signingInWithScan,
               onUseEmail: () => _go(_Step.email),
-              onBack: () => _go(_Step.hello),
+              onBack: () => _go(_backFrom(_Step.scan)),
             ),
             _Step.signInFirst => _SignInFirst(
               onBack: () => _go(_backFrom(_Step.signInFirst)),
@@ -379,8 +392,10 @@ class _PhoneWelcomeState extends State<PhoneWelcome> {
                     // The computer is not signed in yet: the account is chosen here, for both.
                     ? 'The account to sign this phone and your computer in with. We’ll send you a '
                           '4-digit code.'
-                    : 'The one Harness on your computer is signed in with. We’ll send you a '
-                          '4-digit code.',
+                    // Not "the one Harness on your computer is signed in with": a desktop app
+                    // opens signed out, and this step is where its person may be choosing it.
+                    : 'The account to use on this phone and on your computer. We’ll send you '
+                          'a 4-digit code.',
               ],
               field: TtyField(
                 key: const Key('welcome-email'),

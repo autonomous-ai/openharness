@@ -2014,6 +2014,20 @@ class AppNotifier extends ChangeNotifier {
   /// dropped with the page that started it. Keyed to the sign-in, so the next one starts over.
   int? _machinesFetchedFor;
 
+  /// The sign-in whose machine list has come back from the account — unlike [_machinesFetchedFor],
+  /// not set by a fetch that failed.
+  int? _machinesAnsweredFor;
+
+  /// Whether this sign-in's machine list has come back at least once, empty or not: from then on a
+  /// machine missing from [machines] is one the account does not have, not one still on its way.
+  ///
+  /// ⚠️ An empty [machines] cannot say this alone — it is also what a list not asked for yet looks
+  /// like. The home screen read "empty" as "not answered" and held the agent of a previous run (a
+  /// record never cleared, `core/last_opened_agent.dart`) as still coming: an account with no
+  /// computer — a first sign-in on a phone used before, another account's agent remembered — sat
+  /// on "Connecting to your computer…" for the whole 30-second restore wait (`AgentHome`).
+  bool get machinesAnswered => _machinesAnsweredFor == _authRevision;
+
   Future<void> refreshMachines() async {
     final revision = _authRevision;
     if (!_authWorkCurrent(revision)) return;
@@ -2025,6 +2039,12 @@ class AppNotifier extends ChangeNotifier {
     }
     try {
       await _refreshMachines(revision);
+      if (_authWorkCurrent(revision) && _machinesAnsweredFor != revision) {
+        _machinesAnsweredFor = revision;
+        // The list's own notify came before this was set. The first fetch notifies again below
+        // (dropping [machinesLoading]); one that answers only after an earlier failure does not.
+        if (!machinesLoading) notifyListeners();
+      }
     } finally {
       if (_authWorkCurrent(revision)) _machinesFetchedFor = revision;
       // Said out loud: the list's own notify fires before this, so a flag
@@ -2611,17 +2631,31 @@ class AppNotifier extends ChangeNotifier {
   /// screen fell through to the machines list, "locked · scan its code", in between. While this is
   /// set it waits on a locked machine instead (`phone/agent_home.dart` `_loadingMessage`); once it
   /// clears, a machine still locked really wants its password.
+  ///
+  /// ⚠️ **Only the first [_vouchedRedialsHeld] redials count, not all of them.** Every step of
+  /// [_vouchedRedialDelays] used to: a machine that never read this phone's key held a fresh sign-in
+  /// on "Connecting to your computer…" for the whole schedule — 36s, measured — before its "scan its
+  /// code" came up, the one thing that could let the phone in.
   bool get deviceTrustSettling =>
-      _registeringDevice || _awaitingVouched.isNotEmpty;
+      _registeringDevice ||
+      _awaitingVouched.any(
+        (id) => (_vouchedRedials[id] ?? 0) <= _vouchedRedialsHeld,
+      );
 
   bool _registeringDevice = false;
 
   /// When this phone's key last went into the log, in this sign-in — see [_vouchedRedialWindow].
   DateTime? _deviceRegisteredAt;
 
-  /// Machines waiting out a [_vouchedRedialDelays] step, and how many each has been through.
+  /// Machines waiting out a [_vouchedRedialDelays] step, and how many each has been through (the
+  /// step under way included).
   final Set<String> _awaitingVouched = {};
   final Map<String, int> _vouchedRedials = {};
+
+  /// How many of [_vouchedRedialDelays] hold the screen ([deviceTrustSettling]): a machine that
+  /// reads the log when it hears `device_keys_changed` has read this phone's key by then. The rest
+  /// are dialled behind the machine shown locked, and one that lets the phone in opens it by itself.
+  static const _vouchedRedialsHeld = 2;
 
   /// [_deviceTrustSettleCap]: a log that never answers still lets the screen move on.
   static const _deviceTrustSettleCap = Duration(seconds: 20);
@@ -2667,10 +2701,14 @@ class AppNotifier extends ChangeNotifier {
   /// phone's key went in — so the machine, still behind, answered `e2e_denied` to a dial nobody
   /// retried, and a fresh sign-in sat on "locked" over a machine that would have let it in seconds
   /// later. Outside [_vouchedRedialWindow] a refusal stands: that is trust revoked, not trust late.
+  ///
+  /// Past [_vouchedRedialsHeld] the machine stays locked through the redial: on screen it is the
+  /// machine to pair by its code, and a dial that gets in unlocks it ([_onConnectionStatus]).
   Future<void> _redialOnceVouched(String machineId) async {
     final revision = _authRevision;
     final attempt = _vouchedRedials[machineId] ?? 0;
     if (attempt >= _vouchedRedialDelays.length) return;
+    final held = attempt < _vouchedRedialsHeld;
     final registeredAt = _deviceRegisteredAt;
     final keyIsNew =
         _registeringDevice ||
@@ -2689,11 +2727,14 @@ class AppNotifier extends ChangeNotifier {
     if (!_authWorkCurrent(revision)) return;
     _awaitingVouched.remove(machineId);
     final state = machineStates[machineId];
+    // Still locked: a password or a code that linked it meanwhile already redialled it.
     if (state != null && state.needsLink && state.nodeOnline != false) {
-      // Unlocked before the socket goes, as [_redialNewlyTrusted] does: the screen reads it as
-      // connecting from here on, never as locked in between.
-      state.needsLink = false;
-      state.agentLoadStatus = AgentLoadStatus.idle;
+      if (held) {
+        // Unlocked before the socket goes, as [_redialNewlyTrusted] does: the screen reads it as
+        // connecting from here on, never as locked in between.
+        state.needsLink = false;
+        state.agentLoadStatus = AgentLoadStatus.idle;
+      }
       await _pool?.closeMachine(machineId);
       _connectMachine(state);
     }
@@ -2890,6 +2931,25 @@ class AppNotifier extends ChangeNotifier {
   void dropPendingPairing() {
     if (pendingPairing == null) return;
     pendingPairing = null;
+    notifyListeners();
+  }
+
+  /// A code scanned, signed in, for [machineId] by a page that was gone by the time it could pair
+  /// with it — "Waiting for your computer…", taken away under the camera by the very computer it
+  /// was waiting for (`phone/welcome/connect_computer.dart`). Held like a code scanned at sign-in:
+  /// the home screen pairs with it once that computer is there and locked ([pendingPairing]).
+  ///
+  /// Not for a computer already open: nothing is left to pair, and a code kept would be spent the
+  /// next time it locks, in place of its password form (see where [pendingPairing] is cleared on
+  /// connect). Not once signed out either: the page then went because the account did, and its
+  /// code is for a computer on that account — a sign-out clears [pendingPairing] for the same reason.
+  void holdPendingPairing(String machineId, String code) {
+    if (status != AppStatus.authenticated) return;
+    if (machineStates[machineId]?.connectionStatus ==
+        ConnectionStatus.connected) {
+      return;
+    }
+    pendingPairing = (machineId: machineId, code: code);
     notifyListeners();
   }
 
