@@ -148,6 +148,52 @@ void main() {
     await file('preview.html', '<h1>My page</h1>');
     expect((await build())['viewerPath'], 'preview.html');
   });
+  test(
+    'shows a picture of the viewer when the project has no page of its own',
+    () async {
+      const poster = '<img src="data:image/png;base64,AA==">';
+      await file('preview.html', poster);
+      await file('main.typ', '= My changes');
+      await file(
+        'OPEN-HARNESS.json',
+        jsonEncode({
+          'viewerPath': 'preview.html',
+          'files': [
+            {'path': 'preview.html', 'content': poster},
+          ],
+        }),
+      );
+      final draft = await buildPublicationDraft(
+        folder: root.path,
+        title: 'Light that travels',
+        engine: 'codex',
+        harnessId: 'autonomous/typst',
+        viewerPicture: 'SNAPSHOT',
+      );
+      final files = draft['files'] as List;
+      final output = files.firstWhere((f) => f['path'] == 'preview.html');
+      expect(output['content'], contains('data:image/jpeg;base64,SNAPSHOT'));
+      expect(files.where((f) => f['path'] == 'preview.html'), hasLength(1));
+      expect(draft['cover'], 'data:image/jpeg;base64,SNAPSHOT');
+      expect(draft['harnessId'], 'autonomous/typst');
+      expect(draft['contextNote'], contains('a picture of your viewer'));
+
+      await file('preview.html', '<h1>My own page</h1>');
+      final own = await buildPublicationDraft(
+        folder: root.path,
+        title: 'Light that travels',
+        engine: 'codex',
+        viewerPicture: 'SNAPSHOT',
+      );
+      expect(
+        (own['files'] as List).firstWhere(
+          (f) => f['path'] == 'preview.html',
+        )['content'],
+        '<h1>My own page</h1>',
+      );
+      expect(own['contextNote'], isNot(contains('a picture of your viewer')));
+    },
+  );
   test('leaves out what does not fit and names it, keeping the output and the harness source', () async {
     await file('preview.html', '<p>Ready</p>');
     await file('sim/hello.py', 'print("marker")');

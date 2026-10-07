@@ -35,6 +35,9 @@ const hubMaxFileChars = 3000000;
 /// The project's share of the Hub's 6 MB snapshot, leaving room for the conversation.
 const hubMaxProjectChars = 5600000;
 
+/// A cover's data URL, as the Hub stores it.
+const hubMaxCoverChars = 350000;
+
 const hubBinaryExtensions = {'.png', '.jpg', '.jpeg', '.webp', '.glb', '.pdf'};
 const hubTextExtensions = {
   '.html',

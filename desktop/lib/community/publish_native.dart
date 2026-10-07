@@ -2,6 +2,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../state/app_state.dart';
 import 'publish_project.dart';
+import 'viewer_picture.dart';
 
 final _hubPublish = Uri.parse('https://harness.autonomous.ai/hub/publish');
 
@@ -26,12 +27,19 @@ Future<String> publishHarness(
   final tail = agent.sessionId == null
       ? null
       : await app.readSessionTail(machineId, agent.sessionId!, maxChars: 60000);
+  // What the harness shows now, for a result the project has no page of its own for.
+  final picture = agent.viewerUrl == null
+      ? null
+      : await captureViewer(
+          (payload) => app.viewerSurface(machineId, agentId, payload),
+        );
   final snapshot = await buildPublicationDraft(
     folder: agent.project!.cwd,
     title: agent.title ?? agent.name,
     engine: agent.engine ?? 'codex',
     harnessId: agent.dsh,
     tail: tail,
+    viewerPicture: picture,
   );
   final handoff = await PublicationHandoff.start(snapshot);
   try {

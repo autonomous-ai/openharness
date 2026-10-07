@@ -8,6 +8,7 @@ import 'package:path/path.dart' as p;
 import 'hub_contract.dart';
 import 'publish_conversation.dart';
 import 'publish_files.dart';
+import 'viewer_picture.dart';
 
 /// A Hub draft of the project in [folder]: its portable files, the recent conversation, and notes
 /// telling the person what to review or add before publishing. Nothing here publishes.
@@ -17,6 +18,7 @@ Future<Map<String, dynamic>> buildPublicationDraft({
   required String engine,
   String? harnessId,
   Map<String, dynamic>? tail,
+  String? viewerPicture,
 }) async {
   final marker = hubHarnessMarkers[harnessId];
   final previous = await _openHarness(folder);
@@ -24,8 +26,14 @@ Future<Map<String, dynamic>> buildPublicationDraft({
     folder,
     marker: marker,
     viewer: previous['viewerPath'] is String ? previous['viewerPath'] : null,
+    original: _originalFiles(previous),
+    picture: viewerPicture == null
+        ? null
+        : viewerPosterPage(title, viewerPicture),
   );
-  _refuseUnchangedOutput(previous, selection);
+  final cover = viewerPicture == null
+      ? null
+      : 'data:image/jpeg;base64,$viewerPicture';
   final conversation = publicationTurns(tail);
   final hasMarker = selection.files.any((file) => file['path'] == marker);
   final agent = hubEngines[engine];
@@ -46,8 +54,10 @@ Future<Map<String, dynamic>> buildPublicationDraft({
           ]
         : conversation,
     if (previous['forkedFrom'] is String) 'forkedFrom': previous['forkedFrom'],
+    if (cover != null && cover.length <= hubMaxCoverChars) 'cover': cover,
     'contextNote': [
       _conversationNote(conversation, tail),
+      if (selection.pictured) 'The output is a picture of your viewer, taken just now. A fork opens the real thing.',
       if (selection.leftOut.isNotEmpty) _leftOutNote(selection.leftOut),
       if (!selection.scannedAll)
         'This folder is larger than one harness, so only part of it was read.',
@@ -59,25 +69,12 @@ Future<Map<String, dynamic>> buildPublicationDraft({
   };
 }
 
-/// A fork's output exactly as it arrived shows the original, not this version: a featured
-/// starter's preview.html is only its poster, while the real result lives in the harness's viewer.
-void _refuseUnchangedOutput(
-  Map<String, dynamic> previous,
-  ProjectSelection selection,
-) {
-  final original = (previous['files'] as List? ?? const [])
-      .whereType<Map>()
-      .where((file) => file['path'] == selection.viewerPath)
-      .firstOrNull;
-  final current = selection.files
-      .where((file) => file['path'] == selection.viewerPath)
-      .first;
-  if (original == null || original['content'] != current['content']) return;
-  throw FormatException(
-    '${selection.viewerPath} is still the original\'s and has none of your changes. '
-    'Ask your agent to update it to show the current result, then publish again.',
-  );
-}
+/// A fork's text files as they arrived, to tell its output apart from a new version of it.
+Map<String, String> _originalFiles(Map<String, dynamic> previous) => {
+  for (final file in (previous['files'] as List? ?? const []).whereType<Map>())
+    if (file['path'] is String && file['content'] is String)
+      file['path'] as String: file['content'] as String,
+};
 
 String _conversationNote(
   List<Map<String, String>> conversation,

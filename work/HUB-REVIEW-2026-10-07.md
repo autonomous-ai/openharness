@@ -200,7 +200,11 @@ Steps 1–5 are done on `fix/hub-review`:
   the real result (a Typst PDF, a Blender model) lives in the harness's own viewer. Republishing a
   fork would have shown the original's picture. Now the desktop and the review page refuse an
   output identical to the one the fork arrived with, and ask for a page showing the current result.
-  Showing native outputs (PDF, GLB) on the Hub is still open.
+- **A native result reaches the Hub as a picture of its viewer.** When a project has no page of its
+  own, or a fork's page is unchanged, the desktop asks the machine's daemon for a frame of the
+  harness's viewer (the existing `viewer_surface`, headless Chrome) and publishes it as `preview.html`
+  and the cover. Checked on a Typst fork: the current PDF, about 65 KB. Without Chrome on that machine
+  it falls back to asking for a page.
 
 Checks: backend typecheck and the full suite (1153 tests), website `tsc`, the full suite (103) and
 lint (no new findings), desktop `flutter analyze` and the community, fork and share tests (89), and

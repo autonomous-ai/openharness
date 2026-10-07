@@ -57,6 +57,7 @@ void main() {
     expect(hubMaxFileChars, limit('fileChars'));
     expect(hubMaxTurns, limit('turns'));
     expect(hubMaxTurnChars, limit('turnChars'));
+    expect(hubMaxCoverChars, limit('coverChars'));
     expect(hubMaxProjectChars, lessThan(limit('snapshotBytes')));
     expect(hubReservedName.pattern, pattern('communityReservedName'));
     expect(hubReservedName.isCaseSensitive, isFalse);

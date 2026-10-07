@@ -24,6 +24,7 @@ class ProjectSelection {
     required this.viewerPath,
     required this.leftOut,
     required this.scannedAll,
+    this.pictured = false,
   });
 
   /// `{path, content, encoding?}` rows in path order, as the Hub reads them.
@@ -35,12 +36,19 @@ class ProjectSelection {
 
   /// False when the folder was deeper or larger than one publication is ever read.
   final bool scannedAll;
+
+  /// True when the output is the picture of the viewer rather than a page of the project.
+  final bool pictured;
 }
 
 class _Candidate {
-  _Candidate(this.path, this.file);
+  _Candidate(this.path, this.file) : page = null;
+  _Candidate.page(this.path, String this.page) : file = null;
   final String path;
-  final File file;
+  final File? file;
+
+  /// A page made for this publication rather than read from the project.
+  final String? page;
   bool get binary =>
       hubBinaryExtensions.contains(p.extension(path).toLowerCase());
   int get depth => '/'.allMatches(path).length;
@@ -54,28 +62,44 @@ class _Candidate {
 ///
 /// The output is [viewer] (the page a fork was published with) or else `preview.html`. Any other
 /// page is never assumed: an app's `index.html` usually needs files the Hub's sandbox cannot load.
+/// A page still as it is in [original] (the fork's files as they arrived) shows the original, not
+/// this version. Without a page of its own, the output is [picture], a page showing the viewer.
 Future<ProjectSelection> selectProjectFiles(
   String folder, {
   String? marker,
   String? viewer,
+  Map<String, String> original = const {},
+  String? picture,
 }) async {
   final root = Directory(await Directory(folder).resolveSymbolicLinks());
   final (candidates, scannedAll) = await _candidates(root);
-  final output = _output(candidates, viewer);
-  if (output == null) {
-    throw const FormatException(
-      'The Hub shows what a session made. Ask your agent for a preview.html that runs on its own '
-      '(for a review, a page presenting it), then publish again.',
-    );
+  var output = _output(candidates, viewer);
+  final unchanged =
+      output != null &&
+      original.containsKey(output.path) &&
+      await _content(output) == original[output.path];
+  if (output == null || unchanged) {
+    if (picture == null) {
+      throw FormatException(
+        unchanged
+            ? '${output.path} is still the original\'s and has none of your changes. '
+                  'Ask your agent to update it to show the current result, then publish again.'
+            : 'The Hub shows what a session made. Ask your agent for a preview.html that runs on '
+                  'its own (for a review, a page presenting it), then publish again.',
+      );
+    }
+    output = _Candidate.page('preview.html', picture);
   }
-  final rest = candidates.where((c) => c != output && c.path != marker).toList()
-    ..sort(
-      (a, b) =>
-          a.depth != b.depth ? a.depth - b.depth : a.path.compareTo(b.path),
-    );
+  final shown = output;
+  final rest =
+      candidates.where((c) => c.path != shown.path && c.path != marker).toList()
+        ..sort(
+          (a, b) =>
+              a.depth != b.depth ? a.depth - b.depth : a.path.compareTo(b.path),
+        );
   final ordered = [
-    output,
-    ...candidates.where((c) => c.path == marker && c != output),
+    shown,
+    ...candidates.where((c) => c.path == marker && c.path != shown.path),
     ...rest,
   ];
   final files = <Map<String, String>>[], leftOut = <String>[];
@@ -90,9 +114,9 @@ Future<ProjectSelection> selectProjectFiles(
         content.length <= hubMaxFileChars &&
         size + weight <= hubMaxProjectChars;
     if (!fits) {
-      if (candidate == output) {
+      if (candidate == shown) {
         throw FormatException(
-          '${output.path} is too large to publish. Keep the preview under 3 MB.',
+          '${shown.path} is too large to publish. Keep the preview under 3 MB.',
         );
       }
       leftOut.add(candidate.path);
@@ -108,9 +132,10 @@ Future<ProjectSelection> selectProjectFiles(
   files.sort((a, b) => a['path']!.compareTo(b['path']!));
   return ProjectSelection(
     files: files,
-    viewerPath: output.path,
+    viewerPath: shown.path,
     leftOut: leftOut..sort(),
     scannedAll: scannedAll,
+    pictured: shown.page != null,
   );
 }
 
@@ -127,8 +152,10 @@ _Candidate? _output(List<_Candidate> candidates, String? viewer) {
 
 /// The file as the Hub stores it, or null when a text file is not UTF-8 or too large to read.
 Future<String?> _content(_Candidate candidate) async {
-  if (await candidate.file.length() > hubMaxFileChars) return null;
-  final bytes = await candidate.file.readAsBytes();
+  final file = candidate.file;
+  if (file == null) return candidate.page;
+  if (await file.length() > hubMaxFileChars) return null;
+  final bytes = await file.readAsBytes();
   if (candidate.binary) return base64Encode(bytes);
   try {
     return utf8.decode(bytes);
