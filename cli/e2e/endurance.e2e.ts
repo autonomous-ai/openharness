@@ -72,6 +72,16 @@ const down = (answer: Record<string, unknown>) => answer.error === 'SERVICE_UNAV
 
 interface Findings { lines: string[] }
 
+/** An agent's pane as it is now, kept beside the report (`SOAK_OUT`) once per agent and token. */
+async function keepPane(d: IsolatedDaemon, agentId: string, name: string): Promise<void> {
+  try {
+    const client = await LocalClient.connect(d)
+    const row = ((await client.request('agents_list', {}, 15_000)).agents as Array<Record<string, any>>).find((agent) => agent.id === agentId)
+    client.close()
+    if (row?.tmuxPane) writeFileSync(join(OUT, `pane-${name}.txt`), await d.capture(String(row.tmuxPane)))
+  } catch { /* a pane that cannot be read: the finding stands without it */ }
+}
+
 /** One agent's turns, one after another until `until`: plain, a tool call, a question answered, an
  *  interrupt, a flood of output; each carries a token the ledger checks. */
 async function agentLoop(d: IsolatedDaemon, agentId: string, tag: string, ledger: TurnLedger, deadline: () => boolean, rand: () => number, findings: Findings): Promise<number> {
@@ -108,6 +118,8 @@ async function agentLoop(d: IsolatedDaemon, agentId: string, tag: string, ledger
         await ended
       } catch (error) {
         findings.lines.push(`${new Date().toISOString()} ${tag} ${kind} ${token}: ${error instanceof Error ? error.message : String(error)}`)
+        // What the agent's pane showed then: what the daemon read, to tell its mistake from the engine's.
+        await keepPane(d, agentId, `${tag}-${token}`)
         await ended?.catch(() => {})
       }
       forget(client)
