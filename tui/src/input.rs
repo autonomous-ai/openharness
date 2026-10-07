@@ -1644,6 +1644,18 @@ pub(crate) fn modal_key(app: &mut App, key: KeyEvent) {
                     return;
                 }
             }
+            // A confirmation's buttons own the keys; the vertical menu's keys (q, j, k …) do nothing here.
+            if let Some(b) = menu.buttons.as_mut() {
+                use crate::buttons::Answer;
+                let command = match b.row.key(key.code, key.modifiers) {
+                    Answer::Chosen(i) => b.actions.get(i).cloned(),
+                    Answer::Cancel => b.actions.first().cloned(),
+                    Answer::Moved | Answer::Ignored => None,
+                };
+                if let Some(command) = command { return commands::execute_in(app, &command, menu.mouse.clone()) }
+                app.modal = Some(Modal::Menu(menu));
+                return;
+            }
             if let Some(i) = menu.items.iter().position(|it| !it.disabled && !it.separator && !it.key.is_empty() && it.key == name) {
                 menu.choice = Some(i);
                 return menu_chosen(app, menu);
@@ -1973,7 +1985,7 @@ fn prompt_menu(app: &App, p: &Prompt, items: Vec<crate::modal::MenuItem>, list: 
     let y = if app.status_top { lines } else { app.size.1.saturating_sub(3 + height) };
     let x = (offset + unicode_width::UnicodeWidthStr::width(p.label.as_str())).saturating_sub(2) as u16;
     let x = x.min(app.size.0.saturating_sub(width + 4));
-    crate::modal::Menu { title: String::new(), items, choice: Some(0), x, y, width, stay_open: false, no_mouse: true, mouse: None, tree: None, responsive: None,
+    crate::modal::Menu { title: String::new(), items, choice: Some(0), x, y, width, stay_open: false, no_mouse: true, mouse: None, tree: None, responsive: None, buttons: None,
         complete: Some(Box::new(crate::modal::Complete { prompt: p.clone(), list, flag, window_target })) }
 }
 
@@ -3556,7 +3568,8 @@ pub fn menu_mouse(app: &mut App, m: &crate::mouse::Event) {
         app.modal = Some(Modal::Menu(menu));
         return;
     }
-    let count = menu.items.len() as u16;
+    // A confirmation's blank row and button row sit under its notes.
+    let count = menu.items.len() as u16 + if menu.buttons.is_some() { 2 } else { 0 };
     let (px, py, width) = (menu.x, menu.y, menu.width);
     if m.x < px || m.x > px + 4 + width || m.y < py + 1 || m.y > py + count {
         let close = if !menu.stay_open { is_release(m.b) } else { !is_release(m.b) && !is_wheel(m.b) && !is_drag(m.b) };
@@ -3566,6 +3579,13 @@ pub fn menu_mouse(app: &mut App, m: &crate::mouse::Event) {
         return;
     }
     let chosen = if !menu.stay_open { is_release(m.b) } else { !is_release(m.b) && !is_wheel(m.b) && !is_drag(m.b) };
+    if let Some(b) = &menu.buttons {
+        // Only a button does anything: the notes, the blank row and the gaps and hint keep the dialog.
+        let hit = if chosen { b.row.click(m.x, m.y, px + 2 + width, py + count) } else { None };
+        if let Some(command) = hit.and_then(|i| b.actions.get(i)).cloned() { return commands::execute_in(app, &command, menu.mouse.clone()) }
+        app.modal = Some(Modal::Menu(menu));
+        return;
+    }
     // The click's row is authoritative even if no mouse-motion report preceded it.
     // In particular, a menu opened by the keyboard must not run its previous selection.
     menu.choice = Some((m.y - (py + 1)) as usize);
@@ -3666,6 +3686,34 @@ mod tests {
         mouse.row = 4;
         handle(&mut app, CEvent::Mouse(mouse));
         assert_eq!(app.options.get("@clicked", "", None).as_deref(), Some("yes"));
+    }
+
+    #[tokio::test]
+    async fn a_click_on_a_confirmation_button_runs_it_and_between_buttons_nothing() {
+        let (sink, _) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(19789, sink, (100, 30));
+        app.mouse = true;
+        let button = |label: &str, key| crate::buttons::Button { label: label.into(), key };
+        let row = crate::buttons::Row { buttons: vec![button("Cancel", None), button("Stop", Some('s'))], chosen: 0, hint: String::new() };
+        let ask = |app: &mut App| {
+            let row = row.clone();
+            assert!(crate::workspace_menu::open_buttons(app, "Close Tab", vec![crate::workspace_menu::note("Stop?")], row,
+                vec!["set -g @clicked cancel".into(), "set -g @clicked stop".into()]));
+        };
+        ask(&mut app);
+        let Some(Modal::Menu(m)) = &app.modal else { panic!("closed") };
+        let (right, y) = (m.x + 2 + m.width, m.y + 1 + m.items.len() as u16 + 1);
+        let cells = m.buttons.as_ref().unwrap().row.cells(right);
+        let press = |x, y| MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: x, row: y, modifiers: KeyModifiers::NONE };
+        let gap = cells[0].1 + cells[0].2;
+        handle(&mut app, CEvent::Mouse(press(gap, y)));
+        assert!(matches!(app.modal, Some(Modal::Menu(_))), "the gap between the buttons keeps the dialog");
+        assert!(app.options.get("@clicked", "", None).is_none());
+        handle(&mut app, CEvent::Mouse(press(cells[1].1 + 2, y - 1)));
+        assert!(matches!(app.modal, Some(Modal::Menu(_))), "the blank row above the buttons does nothing");
+        handle(&mut app, CEvent::Mouse(press(cells[1].1 + 2, y)));
+        assert!(app.modal.is_none());
+        assert_eq!(app.options.get("@clicked", "", None).as_deref(), Some("stop"));
     }
 
     #[test]

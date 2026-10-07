@@ -148,7 +148,8 @@ fn begin(app: &mut App, panes: Vec<u64>, title: &str, return_to_shell: bool) {
 }
 
 fn showing(app: &App, id: &str) -> bool {
-    matches!(&app.modal, Some(Modal::Menu(m)) if m.items.iter().any(|i| i.command == format!("close-harness -x {id}")))
+    let cancel = format!("close-harness -x {id}");
+    matches!(&app.modal, Some(Modal::Menu(m)) if m.buttons.as_ref().is_some_and(|b| b.actions.contains(&cancel)))
 }
 
 fn show(app: &mut App, message: &str, confirm: bool) -> bool {
@@ -170,10 +171,12 @@ fn show(app: &mut App, message: &str, confirm: bool) -> bool {
         if op.shells && items.len() < room { items.push(menu::note("The terminal and its running commands will end.")); }
     }
     if !message.is_empty() { items.push(menu::note(message)); }
-    let cancel = items.len();
-    items.push(menu::item(if matches!(op.stage, Stage::Failed | Stage::Stop) { "Back" } else { "Cancel" }, "Escape", format!("close-harness -x {id}")));
-    if confirm { items.push(menu::item("Stop", "s", format!("close-harness -y {id}"))); }
-    menu::open(app, &title, items, None, Some(cancel))
+    let button = |label: &str, key| crate::buttons::Button { label: label.into(), key };
+    let mut buttons = vec![button(if matches!(op.stage, Stage::Failed | Stage::Stop) { "Back" } else { "Cancel" }, None)];
+    if confirm { buttons.push(button("Stop", Some('s'))); }
+    let hint = if confirm { "s stop · esc cancel" } else { "" };
+    let row = crate::buttons::Row { buttons, chosen: 0, hint: hint.into() };
+    menu::open_buttons(app, &title, items, row, vec![format!("close-harness -x {id}"), format!("close-harness -y {id}")])
 }
 
 fn fail(app: &mut App, message: String) {
@@ -426,6 +429,20 @@ mod tests {
             assert_eq!(modes(&app), ["inspect"]);
             assert!(app.panes.contains_key(&1));
         }
+    }
+
+    #[tokio::test]
+    async fn right_then_enter_stops_and_the_buttons_are_one_row_model() {
+        let mut app = app();
+        pane(&mut app, 1);
+        answer(&mut app, "inspect", json!({"activity":"working"}));
+        let Some(Modal::Menu(m)) = &app.modal else { panic!("no confirmation") };
+        let b = m.buttons.as_ref().expect("a button row");
+        assert_eq!(b.row.buttons.iter().map(|x| x.label.as_str()).collect::<Vec<_>>(), ["Cancel", "Stop"]);
+        assert_eq!(b.row.chosen, 0, "a destructive action starts on Cancel");
+        key(&mut app, KeyCode::Right);
+        key(&mut app, KeyCode::Enter);
+        assert_eq!(modes(&app), ["inspect", "now"]);
     }
 
     #[tokio::test]

@@ -311,7 +311,10 @@ fn menu(buf: &mut Buffer, app: &App, m: &crate::modal::Menu) {
     let border = plain(crate::draw::style_over(&opt("menu-border-style", "default"), style));
     let lines = opt("menu-border-lines", "single");
     let (tl, tr, bl, br, hz, vt, lj, rj) = box_set(&lines);
-    let (w, h) = (m.width + 4, m.items.len() as u16 + 2);
+    // A menu with buttons is a dialog: its box takes the command panel's surface so the box and
+    // its buttons match; the vertical menus keep menu-style.
+    let (style, border) = if m.buttons.is_some() { let c = crate::settings::chrome(); (c.base, c.muted) } else { (style, border) };
+    let (w, h) = (m.width + 4, m.items.len() as u16 + 2 + if m.buttons.is_some() { 2 } else { 0 });
     let (x0, y0) = (m.x, m.y);
     crate::term_out::clear_extras(Rect::new(x0, y0, w, h));
     let put = |buf: &mut Buffer, x: u16, y: u16, s: &str, st: Style| { if let Some(c) = buf.cell_mut((x, y)) { c.set_symbol(s); c.set_style(st); } };
@@ -337,9 +340,13 @@ fn menu(buf: &mut Buffer, app: &App, m: &crate::modal::Menu) {
         // screen_write_menu: the row padded first, then a disabled item's words drawn dim.
         let pad = if m.choice == Some(i) && !it.disabled { selected } else { style };
         for x in x0 + 1..x0 + 1 + m.width + 2 { put(buf, x, y, " ", pad) }
-        let st = if it.disabled { style.add_modifier(Modifier::DIM) } else { pad };
+        let st = if it.disabled && m.buttons.is_none() { style.add_modifier(Modifier::DIM) } else { pad };
         let text = if it.key.is_empty() { it.label.clone() } else { format!("{}#[default] #[align=right]({})", it.label, it.key) };
         draw_at(buf, x0 + 2, y, &text, st, m.width);
+    }
+    // (The blank row above the buttons is already painted by the fill.)
+    if let Some(b) = &m.buttons {
+        b.row.draw(buf, x0 + 2, x0 + 2 + m.width, y0 + 1 + m.items.len() as u16 + 1, &crate::settings::chrome());
     }
 }
 
@@ -3379,6 +3386,26 @@ mod theme_render_tests {
         crate::input::run(&mut app, "keybinds");
         assert!(matches!(&app.modal, Some(Modal::Picker { kind: PickerKind::Keybinds, picker }) if !picker.from_commands));
         key(&mut app, KeyCode::Esc);
+        assert!(app.modal.is_none());
+    }
+
+    /// Close Tab / Stop Harness end in one row, `[ Cancel ]  [ Stop ]`, the way out first.
+    #[test]
+    fn a_confirmation_draws_its_buttons_on_one_row_and_keys_choose() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let mut app = app();
+        let button = |label: &str, key| crate::buttons::Button { label: label.into(), key };
+        let row = crate::buttons::Row { buttons: vec![button("Cancel", None), button("Stop", Some('s'))], chosen: 0, hint: "s stop · esc cancel".into() };
+        assert!(crate::workspace_menu::open_buttons(&mut app, "Close Tab · zsh", vec![crate::workspace_menu::note("Stop? Saved history will remain.")],
+            row, vec!["close-harness -x x".into(), "close-harness -y x".into()]));
+        let s = screen(&mut app);
+        let line = s.lines().find(|l| l.contains("[ Cancel ]")).unwrap_or_else(|| panic!("no button row:\n{s}"));
+        assert!(line.contains("[ Stop ]") && line.find("[ Cancel ]") < line.find("[ Stop ]"), "{line}");
+        assert!(line.contains("esc cancel"), "{line}");
+        let key = |app: &mut App, code| crate::input::modal_key(app, KeyEvent::new(code, KeyModifiers::NONE));
+        key(&mut app, KeyCode::Right);
+        assert!(matches!(app.modal, Some(Modal::Menu(_))), "moving keeps the menu");
+        key(&mut app, KeyCode::Enter);
         assert!(app.modal.is_none());
     }
 }

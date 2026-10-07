@@ -359,7 +359,7 @@ def mirror_journey(command, source):
     before_stop = len(requests('agent_close'))
     click_text('×', row=0)
     shown('Stop? Saved history will remain.')
-    click_text('(s)')
+    click_text('[ Stop ]')
     wait(lambda: original_pane not in hn('list-panes', '-s', '-t', 'mirror-review', '-F', '#{pane_id}').splitlines(), 'confirmed Stop closes the owning session view')
     wait(lambda: source not in tmux('capture-pane', '-p', '-t', 'test:0').splitlines()[0], 'owner no longer shows the stopped harness')
     stop_calls = [r['payload']['mode'] for r in requests('agent_close')[before_stop:] if r['payload']['agentId'] == replacement_agent]
@@ -604,7 +604,7 @@ try:
     assert len(hn('list-panes', '-F', '#{pane_id}').splitlines()) == 2
     click_text('×', occurrence=1, row=y - 1)
     shown('Stop? Saved history will remain.')
-    click_text('(s)')
+    click_text('[ Stop ]')
     shown('could not save')
     assert len(hn('list-panes', '-F', '#{pane_id}').splitlines()) == 2
     snapshot('stop-save-failed')

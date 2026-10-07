@@ -148,6 +148,8 @@ pub struct Menu {
     /// Harness menus reflow from their original labels when the terminal changes size.
     /// Explicit tmux display-menu coordinates keep tmux's existing behavior.
     pub responsive: Option<Box<crate::workspace_menu::Layout>>,
+    /// A confirmation's buttons, drawn on the row under the notes.
+    pub buttons: Option<crate::workspace_menu::Buttons>,
 }
 
 /// What a completion menu completes: the prompt, the words its items stand for, the flag they

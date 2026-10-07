@@ -37,7 +37,8 @@ impl Row {
         self.buttons_width().saturating_add(GAP).saturating_add(cols(&self.hint))
     }
 
-    /// Each button's columns on a row whose right edge is [right]: (index, x, width).
+    /// Each button's columns on a row whose right edge is [right]: (index, x, width). The row
+    /// must be at least `buttons_width()` wide (callers fit the dialog to it first), or cells overlap.
     pub fn cells(&self, right: u16) -> Vec<(usize, u16, u16)> {
         let mut x = right;
         let mut out: Vec<_> = self.buttons.iter().enumerate().rev().map(|(i, b)| {
@@ -51,7 +52,8 @@ impl Row {
         out
     }
 
-    /// Draws the hint at [left] and the buttons right-aligned to [right] on row [y].
+    /// Draws the hint at [left] and the buttons right-aligned to [right] on row [y]. As for
+    /// `cells`, `right - left` must be at least `buttons_width()`.
     pub fn draw(&self, buf: &mut Buffer, left: u16, right: u16, y: u16, c: &crate::settings::Chrome) {
         let cells = self.cells(right);
         if let Some(&(_, first, _)) = cells.first() {
