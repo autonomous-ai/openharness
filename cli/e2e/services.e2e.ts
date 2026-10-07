@@ -54,7 +54,7 @@ const QUICK_TO_PARK = { HARNESSD_SERVICE_PARK_CRASHES: '3', HARNESSD_SERVICE_INI
 /** The processes the services run in by default, and what makes every one of them fail as it starts. The
  *  experiments' (the teams', the orchestrator's) start only once they are on: e2e/experiments.e2e.ts. */
 const SERVICE_PROCESSES = ['search', 'viewers', 'edge', 'models'] as const
-const EVERY_PROCESS_FAILING = 'search,viewers,store,workspaces,usage,monitor,projects,handoff,recaps,models'
+const EVERY_PROCESS_FAILING = 'search,viewers,store,workspaces,usage,monitor,projects,handoff,recaps,windowNames,models'
 
 describe('a failing service never takes the core down', () => {
   let daemon: IsolatedDaemon | undefined
@@ -78,6 +78,7 @@ describe('a failing service never takes the core down', () => {
     expect(await client.request('session_search', { query: 'first' })).toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'search' })
     expect(await client.request('dsh_list', {})).toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'store', retryable: true })
     expect(await client.request('fs_list_dir', { path: d.projectsDir })).toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'projects', retryable: true })
+    expect(await client.request('window_name', { agentIds: [agentId] })).toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'windowNames', retryable: true })
     expect(await client.request('machine_resources', {})).toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'monitor', retryable: true })
     // Models is on demand and never came up: its request waits no longer than a start (core/serviceLinks.ts
     // `ON_DEMAND_START_MS`), and every one after it is answered at once.
@@ -140,10 +141,10 @@ describe('a failing service never takes the core down', () => {
   })
 
   it('with every service in the core failing to start, the core starts, runs an agent through turns and a restart, and says each service is off', async () => {
-    daemon = await IsolatedDaemon.create({ env: { HARNESSD_TEST_FAULTS: 'search,viewers,models,workspaces,store,usage,monitor,projects,recaps', ...IN_THE_CORE } })
+    daemon = await IsolatedDaemon.create({ env: { HARNESSD_TEST_FAULTS: 'search,viewers,models,workspaces,store,usage,monitor,projects,recaps,windowNames', ...IN_THE_CORE } })
     onTestFailed(() => { console.log(`---- daemon log\n${daemon?.log().split('\n').slice(-80).join('\n')}`) })
     await daemon.start()
-    for (const service of ['search', 'viewers', 'models', 'workspaces', 'store', 'usage', 'monitor', 'projects', 'recaps']) {
+    for (const service of ['search', 'viewers', 'models', 'workspaces', 'store', 'usage', 'monitor', 'projects', 'recaps', 'windowNames']) {
       expect(daemon.log()).toContain(`[services] ${service} did not start · injected fault: ${service} · the core runs without it`)
     }
     const client = await LocalClient.connect(daemon)
@@ -168,6 +169,8 @@ describe('a failing service never takes the core down', () => {
     for (const type of ['git_pull_request', 'git_project_info', 'project_preview', 'fs_list_dir', 'agent_read_file']) {
       expect(await client.request(type, { agentId, path: daemon.projectsDir }), type).toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'projects', retryable: false })
     }
+    // A window's name off: the apps keep the names they have.
+    expect(await client.request('window_name', { agentIds: [agentId] })).toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'windowNames', retryable: false })
     // With the monitor off, the Monitor's list is still the list: its rows, without readings.
     const monitored = (await client.request('agents_list', { monitor: true })).agents.find((agent: Record<string, any>) => agent.id === agentId)
     expect(monitored.monitor).toMatchObject({ rssBytes: null, cpu: null, processes: [] })

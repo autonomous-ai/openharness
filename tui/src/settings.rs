@@ -737,7 +737,7 @@ impl Look {
             boxes: o.border_style() == "box",
             dim: o.dim_others(),
             window_active: get("@hn-window-active", "star"),
-            window_name: get("@hn-window-name", "tmux"),
+            window_name: get("@hn-window-name", crate::options::DEFAULT_TAB_NAME),
         }
     }
 
