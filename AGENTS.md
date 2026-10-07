@@ -34,9 +34,16 @@ For product names, terminology, and visible copy, follow the
     Do the code review while CI runs, and keep review independent of implementation.
   - Base the branch on current `main`. A branch older than #991 runs the old
     planner and fails `ci/required`; use **Update branch** or rebase first.
-  - Merge with `make merge-pr ARGS="N --queue --reviewed-head SHA --reviewed-base SHA --merge"`.
-    The queue reruns only the plan and process checks. Do not use `--run/--scope`
-    (legacy direct mode). Never replay an uncertain enqueue or merge; inspect the PR.
+  - Merge with `make merge-pr ARGS="N --reviewed-head SHA --reviewed-base SHA --merge"`.
+    It verifies automatic `ci/required` evidence and directly squash-merges the
+    reviewed head. A merge queue is not a prerequisite for merging or releasing;
+    do not add `--queue` or ask for queue setup. The helper respects a queue only
+    if GitHub actually requires it. Do not use `--run/--scope` for ordinary merges
+    (legacy manual evidence). Never replay an uncertain merge; inspect the PR.
+    If another merge advances `main`, fetch and integrate it, review the combined
+    change, reuse unchanged validation and run only newly affected checks. Then
+    continue the authorized merge without another permission question. Do not
+    toggle repository rules based on how many PRs or CI jobs are running.
   - Do not start extra runs for a PR: no manual **CI → Run workflow** while its
     automatic run exists, no repeated pushes to retrigger a red check. Read the
     failure, fix it, push once. Rerun a job only for a recorded flaky test.
