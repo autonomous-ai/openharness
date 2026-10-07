@@ -19,6 +19,7 @@ import { PROBE_ANSWER, PROBE_TIMEOUT_MS } from './harnessd/reexec.js'
 import { ensureUtf8Locale } from './lib/childLocale.js'
 import { DAEMON_LOG_FILE, HARNESSD_STATUS_FILE, PID_FILE } from './lib/daemonState.js'
 import { isInstalledCopy } from './lib/installedCopy.js'
+import { localSocketPath } from './lib/localSocket.js'
 import { leanFingerprint, readLeanBundle, releaseLeanClaim, writeLeanBundle, type LeanBundle } from './harnessd/leanBundle.js'
 import { ts } from './lib/log.js'
 import { confirm as confirmUpdate, restore as restoreUpdate, unjudgedUpdate } from './lib/selfUpdate.js'
@@ -50,6 +51,19 @@ export interface MasterStart {
   leanFingerprint?: string
 }
 
+/**
+ * The master's environment, with the services kept in the core's process when the core will have no local
+ * socket for them to reach it by: its path in this data folder is too long for one (lib/localSocket.ts, 96
+ * bytes) or the platform has none. Every service process reaches the core only through that socket, and one
+ * started without it exits at once, again and again until the master parks it: on such a machine search, the
+ * viewers, the gateway and every other service answered SERVICE_UNAVAILABLE for good (e2e/noSocket.e2e.ts).
+ */
+export function masterEnv(given: NodeJS.ProcessEnv, socketPath: string | null, log: (line: string) => void = (line) => console.log(line)): NodeJS.ProcessEnv {
+  if (socketPath !== null || given.HARNESSD_SERVICES === 'none') return given
+  log(`${ts()} [harnessd] this data folder is too deep for the daemon's local socket — the services run in the core's process`)
+  return { ...given, HARNESSD_SERVICES: 'none' }
+}
+
 /** Run the master. */
 export function startMaster(start: MasterStart, exit: (code: number) => void = (code) => process.exit(code)): ReturnType<typeof runMaster> {
   // Before it starts anything: on Linux an absent locale makes tmux and ps mangle their output, and the
@@ -58,6 +72,7 @@ export function startMaster(start: MasterStart, exit: (code: number) => void = (
   ensureUtf8Locale()
   const { serviceScriptPath } = start
   return runMaster({
+    env: masterEnv(process.env, localSocketPath(env.ADAPTER_DATA_DIR, env.PORT)),
     nodePath: baseNode(process.execPath),
     execArgv: process.execArgv,
     runtimeDir: env.ADAPTER_RUNTIME_DIR,
