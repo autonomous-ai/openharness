@@ -100,12 +100,19 @@ interface Findings { lines: string[] }
 
 /** An agent's pane as it is now, kept beside the report (`SOAK_OUT`) once per agent and token. */
 async function keepPane(d: IsolatedDaemon, agentId: string, name: string): Promise<void> {
+  let client: LocalClient | undefined
   try {
-    const client = await LocalClient.connect(d)
+    client = await LocalClient.connect(d)
     const row = ((await client.request('agents_list', {}, 15_000)).agents as Array<Record<string, any>>).find((agent) => agent.id === agentId)
-    client.close()
-    if (row?.tmuxPane) writeFileSync(join(OUT, `pane-${name}.txt`), await d.capture(String(row.tmuxPane)))
+    if (row?.tmuxPane) {
+      writeFileSync(join(OUT, `pane-${name}.txt`), await d.capture(String(row.tmuxPane)))
+      // Input and question readers include scrollback. Keeping only the visible pane hid the old
+      // dialog they still read after its answer, while the screen already showed the next composer.
+      const capture = await d.tmux.run('capture-pane', '-p', '-e', '-J', '-S', '-100', '-t', String(row.tmuxPane))
+      writeFileSync(join(OUT, `pane-${name}-history.txt`), capture)
+    }
   } catch { /* a pane that cannot be read: the finding stands without it */ }
+  finally { client?.close() }
 }
 
 /** One agent's turns, one after another until `until`: plain, a tool call, a question answered, an
