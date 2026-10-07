@@ -39,12 +39,16 @@ namespace. Stop automounters and other privileged disk tools. The disk advisory
 lock coordinates cooperating installer/recovery processes, not arbitrary root
 programs.
 
-Preflight mounts use Btrfs `nologreplay` and ext4 `noload` to inspect the supported
+Preflight mounts use Btrfs `rescue=nologreplay` and ext4 `noload` to inspect the supported
 layout before filesystem recovery can write. The engine then remounts normally
 and revalidates: kernel journal replay is needed to retain committed work after
 a crash. A later refusal may therefore follow kernel journal replay; it must not
 be described as an unconditional zero-write disk inspection. Restoration writes
 remain fenced by the identity, layout, ownership and content checks.
+The documented [Btrfs rescue option](https://btrfs.readthedocs.io/en/latest/ch-mount-options.html#rescue)
+replaces the standalone `nologreplay` flag and requires a read-only mount. The
+inspection mount is fully unmounted before the ordinary mount; it is never
+remounted writable, and no other rescue/checksum-bypass option is enabled.
 
 Python 3.11 or later, Btrfs tools, util-linux, cryptsetup and rsync with ACL/xattr
 support must already be available in the maintenance environment. All subprocesses

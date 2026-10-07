@@ -559,7 +559,7 @@ class ColdInspection(unittest.TestCase):
             with patch.object(recovery, 'mounted', mount), patch.object(recovery, 'mounted_device'), patch.object(recovery, 'validate_layout', side_effect=recovery.Error('nested subvolume')):
                 with self.assertRaisesRegex(recovery.Error, 'nested subvolume'):
                     recovery.inspect_cold('/mapper', '/boot', path, 'fixture')
-            self.assertEqual(options, ['ro,subvolid=5,nologreplay,noatime'])
+            self.assertEqual(options, ['ro,subvolid=5,rescue=nologreplay,noatime'])
 
 
 class TrustedCommands(unittest.TestCase):

@@ -527,7 +527,7 @@ def inspect_cold(mapper, boot, work, root_uuid):
     normal kernel replay is necessary to retain committed work from a crash;
     the normal mounts and Engine must validate the resulting trees again.
     """
-    with mounted(mapper, work / 'inspect-root', 'ro,subvolid=5,nologreplay,noatime') as top:
+    with mounted(mapper, work / 'inspect-root', 'ro,subvolid=5,rescue=nologreplay,noatime') as top:
         mounted_device(mapper, root_uuid)
         validate_layout(top)
         if (top / 'root').exists():
