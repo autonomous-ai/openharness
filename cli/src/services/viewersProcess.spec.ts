@@ -262,6 +262,7 @@ describe('the viewers in their own process', () => {
     api.clients.viewerChanged('a1')
     expect(tell.mock.calls).toEqual([['a1'], ['a1']])
     expect(api.transcripts.databaseHistory(agent())).toBeUndefined()
+    expect(await api.transcripts.lastTurn('s1')).toBeNull()
     expect(api.external.sessions.list()).toEqual([])
     await expect(api.external.sessions.scan()).resolves.toEqual([])
     expect(api.external.open.known().size).toBe(0)
@@ -287,6 +288,8 @@ describe('the viewers in their own process', () => {
     expect(api.clients.observer('observer:x', 'observer_frame', {})).toBe(false)
     // Built on its own, it reaches no client.
     expect(api.clients.viewerFrame('c1', 'viewer_data', {})).toBe(false)
+    api.clients.turnCard({ type: 'commander_event', agentId: 'a', dbSessionId: 's', payload: {} })
+    api.clients.turnSummary({ type: 'turn_summary' })
   })
 
   it('runs as a real service by default: its viewers, on its own link to the core', async () => {

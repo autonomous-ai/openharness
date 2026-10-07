@@ -128,6 +128,8 @@ import { createWorkspacesLink } from './workspacesLink.js'
 import { createMonitorLink } from './monitorLink.js'
 import { createStoreLink } from './storeLink.js'
 import { createModelsLink } from './modelsLink.js'
+import { createRecapsLink } from './recapsLink.js'
+import { RECAPS_FALLBACKS } from './api.js'
 import { answerAgentQuery } from './agentQueries.js'
 import { createDeliveries } from './deliveries.js'
 import { createTerminalWatch } from './terminalWatch.js'
@@ -622,6 +624,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     backend: (method, path, body) => proxyBackend(method, path, body),
     onNotice: (listener) => experimentHooks.onNotice(listener),
     dshInstallStatus: (status) => backendRef?.send({ type: 'dsh_install_status', payload: status }),
+    // The recaps' cards and recaps (services/recaps.ts) down the doors they took from here, and a turn's final answer.
+    turnCard: (frame) => backendRef?.sendCommander(frame), turnSummary: (frame) => backendRef?.send(frame), lastTurn: (sessionId) => readLastTurn(sessionId),
     // The backend mints and remembers the account's grid name; this CLI holds neither the account's
     // email nor its id. An older backend (no route) answers nothing, which the grid reconcile treats as
     // "no grid yet". Bounded so a stalled control-plane connection cannot hold the attempt open.
@@ -665,7 +669,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       // A dial attaching is shown what is still being asked and what is still working, as a device joining
       // through the backend is (onCommanderJoin): one whose devices' process restarted comes back to tiles
       // mid-turn, and to a question nobody has answered yet.
-      if (attached) for (const frame of [...openQuestions.values(), ...mirror.liveCards()]) ports.devices?.card(frame)
+      // The working tiles are the recaps' to say: asked, and sent to the dial when they answer.
+      if (attached) for (const frame of openQuestions.values()) ports.devices?.card(frame)
+      if (attached) void mirror.liveCards().then((cards) => { for (const frame of cards) ports.devices?.card(frame) })
     },
     // What a device or another machine asks of an agent here: the SAME handlers the backend socket
     // drives, called directly — the slash-command adaptation and the turn and question plumbing live there.
@@ -1033,7 +1039,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // The monitor's readings, through its port (services/monitor.ts): none while it is off.
     harnessResourcesReader: () => (ports.monitor ?? MONITOR_OFF).resources(), harnessStorageReader: (agents, invalidate) => (ports.monitor ?? MONITOR_OFF).storage(agents, invalidate),
   }).agentsList
-  const agentNotifications = asking.agentNotifications
   const questionWatcher = asking.questionWatcher
 
 
@@ -1043,22 +1048,14 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     dbs: { opencode: OPENCODE_DB, kilo: KILO_DB, devin: DEVIN_DB },
     hermesDb: (s) => hermesDbForSession(s),
   })
-  // Recaps: turn cards on the dial and the window, notifications on the phone (core/turns/recaps.ts).
+  // Recaps: turn cards, notifications, cut by the recaps (services/recaps.ts) from the lifecycle the core tells (core/turns/recaps.ts).
   const recaps = createRecaps({
-    notifications: agentNotifications,
-    turnActivity,
-    clients: backend,
-    deviceIsWatching,
-    cableWatchingLocal,
-    bySession: (sessionId) => registry.bySession(sessionId),
-    resolve: (id) => registry.resolve(id),
+    port: () => ports.recaps, turnActivity, clients: backend, deviceIsWatching, cableWatchingLocal, sessionTurnOpen,
+    bySession: (sessionId) => registry.bySession(sessionId), resolve: (id) => registry.resolve(id), live: () => registry.list(),
     stopped: (agentId) => stoppedAgents.get(agentId),
     orchestratorRoleOf: (agentId) => ports.orchestrator?.roleOf(agentId) ?? null,
-    readLastTurn,
-    dataDir: env.ADAPTER_DATA_DIR,
-    recapForce: env.RECAP_FORCE,
-    recapWithoutDevice: () => env.RECAP_WITHOUT_DEVICE,
   })
+  asking.hearQuestions(recaps.question) // a turn waiting on the person is not announced as done
   const isSubagentSession = recaps.isSubagentSession
   const mirror = recaps.mirror
   // Recaps are STORED under the engine session id — that is what lets `--resume` bring the last recap
@@ -1131,6 +1128,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // Its port from the start: its process connects as soon as the socket answers, before the rest of the
   // core is wired, and is resumed through this port then (core/wifi.ts `started`).
   if (outOfProcess.has('wifi')) ports.wifi = wifiLink.port
+  // What the core tells the recaps in their own process, and reads back from what they said (core/recapsLink.ts).
+  const recapsLink = createRecapsLink({ notify: (frame, opts) => serviceLinks.notify('recaps', frame, opts), buffered: () => serviceLinks.buffered('recaps'),
+    call: (type, payload) => serviceLinks.call('recaps', type, payload), clients: coreApi.clients, lastTurn: coreApi.transcripts.lastTurn })
   const serviceLinks = createServiceLinks({
     token: serviceToken,
     owned: Object.fromEntries([...outOfProcess].map((name) => [name, requestsOf[name] ?? []])),
@@ -1150,10 +1150,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       : service === 'devices' ? devicesLink.answer(query, payload)
       : service === 'wifi' ? wifiLink.answer(query, payload)
       : service === 'handoff' ? answerConversationQuery(coreApi, query, payload)
+      : service === 'recaps' ? recapsLink.answer(query, payload)
       : service === 'gateway' && gatewayLink ? gatewayLink.answer(query, payload) : answerAgentQuery(coreApi, query)),
     // The gateway's own traffic: its remote clients and what they sent, and its comings and goings; and what
     // the devices tell the core (a turn, a frame for the windows, a dial on the wire); a viewer stream's answers.
-    notice: (service, payload) => { if (service === 'gateway') gatewayLink?.notice(payload); else if (service === 'devices') devicesLink.notice(payload); else if (service === 'wifi') wifiLink.notice(payload); else if (service === 'viewers') viewersLink.notice(payload) },
+    notice: (service, payload) => { if (service === 'gateway') gatewayLink?.notice(payload); else if (service === 'devices') devicesLink.notice(payload); else if (service === 'wifi') wifiLink.notice(payload); else if (service === 'viewers') viewersLink.notice(payload); else if (service === 'recaps') recapsLink.notice(payload) },
     binary: (service, bytes) => { if (service === 'gateway') gatewayLink?.binary(bytes) },
     connected: (service) => {
       if (service === 'gateway') gatewayLink?.connected()
@@ -1166,6 +1167,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       if (service === 'gateway') gatewayLink?.disconnected()
       if (service === 'devices') devicesLink.disconnected()
       if (service === 'wifi') wifiCore.stopped()
+      if (service === 'recaps') recapsLink.disconnected()
       void terminalWatch.gone(service)
     },
   })
@@ -1224,6 +1226,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   if (!outOfProcess.has('projects')) serviceHost.serve('projects', inline!.startProjects, coreApi, PROJECTS_REQUESTS)
   if (!outOfProcess.has('commandBar')) serviceHost.serve('commandBar', inline!.startCommandBar, coreApi, COMMAND_BAR_REQUESTS)
   if (!outOfProcess.has('handoff')) serviceHost.serve('handoff', inline!.startHandoff, coreApi, HANDOFF_REQUESTS)
+  // The recaps: in this process, or in the edge host (services/recapsProcess.ts), told each turn's lifecycle.
+  if (outOfProcess.has('recaps')) ports.recaps = recapsLink.port; else serviceHost.start('recaps', inline!.startRecaps, coreApi, RECAPS_FALLBACKS)
   serviceHost.serve('shell', startShell, coreApi, SHELL_REQUESTS)
   // Models: grid access and its pin, the model pictures on agents' frames, the keystroke prewarm, where an
   // agent on a grid model sends its inference, and the models requests the apps send (services/models.ts):

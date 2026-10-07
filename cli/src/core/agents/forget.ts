@@ -9,7 +9,7 @@ import { removeCursorPendingTasks } from '../../engines/cursor/pendingTasks.js'
 import type { CursorTranscriptDiscovery } from '../../engines/cursor/discovery.js'
 import type { CursorSubagentManager } from '../../engines/cursor/subagent.js'
 import type { AutonomousDeviceInput } from '../deviceInput.js'
-import type { CommanderMirror } from '../../lib/commander.js'
+import type { TurnRecaps } from '../turns/recaps.js'
 import { sid } from '../../lib/log.js'
 import type { registry } from '../../lib/registry.js'
 import type { RuntimeProfileManager } from '../../lib/runtimeProfile.js'
@@ -40,7 +40,7 @@ export interface ForgetDeps {
   input: Pick<SessionInputController, 'forget'>
   deviceInput: Pick<AutonomousDeviceInput, 'forget'>
   detachDsh: (agentId: string) => void
-  mirror: Pick<CommanderMirror, 'forget'>
+  mirror: Pick<TurnRecaps, 'forget'>
   /** The app (`send`) and the dial (`sendCommander`). */
   clients: { send(frame: Frame): void; sendCommander(frame: Frame): void }
   dataDir: string

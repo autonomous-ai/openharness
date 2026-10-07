@@ -133,6 +133,7 @@ describe('search in its own process', () => {
     api.questions.answer('live', 'q', {})
     await expect(api.questions.answerReviewed({} as never)).resolves.toBe(false)
     expect(api.transcripts.databaseHistory({ engine: 'claude' } as never)).toBeUndefined()
+    expect(await api.transcripts.lastTurn('s1')).toBeNull()
     expect(api.external.sessions.list()).toEqual([])
     await expect(api.account.mintGridName()).resolves.toBeNull()
     await expect(api.account.accessToken()).rejects.toThrow('search holds no credential')
@@ -145,6 +146,8 @@ describe('search in its own process', () => {
     api.clients.dshInstallStatus({ phase: 'clone' })
     api.clients.windows({ type: 'orchestrator_changed', payload: {} })
     expect(api.clients.observer('observer:x', 'observer_frame', {})).toBe(false)
+    api.clients.turnCard({ type: 'commander_event', agentId: 'a', dbSessionId: 's', payload: {} })
+    api.clients.turnSummary({ type: 'turn_summary' })
   })
 
   it('runs as a real service process, over the conversations this machine has, by default', () => {

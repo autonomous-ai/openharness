@@ -50,8 +50,8 @@ A service that can crash natively, hang or leak should run in a process of its o
 that process. A process per risk, not per feature: search (native `node:sqlite`), the viewers (their
 servers) with the Store (its minutes-long installs), each experiment (below), models (grid's installs,
 downloads and commands), the devices (the dials' serial ports, the fleet's lane, the voice router's
-worker, and the Wi-Fi device), and the edge host, one process for the light services that only answer requests
-(workspaces, usage, the monitor, the project readers). A fault in one of the edge host's services can
+worker, and the Wi-Fi device), and the edge host, one process for the light services
+(workspaces, usage, the monitor, the project readers, the recaps). A fault in one of the edge host's services can
 cost the others in it, never the core. Every service in `KNOWN_SERVICES` runs out of the core's process
 by default, unless `HARNESSD_SERVICES` names a subset, by service (`search,usage`) or by process
 (`edge`), and `HARNESSD_SERVICES=none` runs them all inside the core's process (for debugging or a quick
@@ -134,6 +134,13 @@ way back).
   Their process runs only once there is a device (`onDemand`, asked for since protocol 4): a dial's port in
   /dev, a paired Wi-Fi device or its session, or a request for them (src/core/devicesWake.ts);
   what a Wi-Fi device sends while it starts is held by the core. `e2e/devicesOnDemand.e2e.ts` proves it.
+- A service the core tells what happens and never waits on: the recaps (`src/services/recapsProcess.ts`,
+  `src/core/recapsLink.ts`) hear each turn's lifecycle as a notification, and one they miss costs that
+  turn its recap, nothing else; what would pile up on a hung process is dropped. What they put in front
+  of a person goes back as a notice the core checks the type of (`clients.turnCard`, `turnSummary`), and
+  what the core reads back in line it reads from what they last said of each session.
+  `e2e/recapsProcess.e2e.ts` proves turns end on time with them killed, hung or slow, and
+  `e2e/recapsCompat.e2e.ts` that the dial and the windows hear the same cards and recaps as before.
 - State built from every change must get every change exactly once. The teams show how
   (`src/services/teamsProcess.ts`, `src/core/teamsLink.ts`): the core numbers each change and keeps it
   until the process acknowledges it; on each connection the process says what it applied and gets

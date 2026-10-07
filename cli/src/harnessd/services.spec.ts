@@ -412,7 +412,7 @@ describe('ServiceSupervisor', () => {
     const hosted = Object.values(SERVICE_HOSTS).flatMap((host) => host.services)
     expect(KNOWN_SERVICES).toEqual(hosted)
     expect(new Set(hosted).size).toBe(hosted.length)
-    expect(SERVICE_HOSTS.edge.services).toEqual(['workspaces', 'usage', 'monitor', 'projects', 'handoff'])
+    expect(SERVICE_HOSTS.edge.services).toEqual(['workspaces', 'usage', 'monitor', 'projects', 'handoff', 'recaps'])
   })
 })
 
@@ -428,7 +428,7 @@ describe('which services the core leaves to its master', () => {
     expect(serviceProcessesEnv(serviceSpecs({ HARNESSD_SERVICES: 'store' }, SERVICE_HOSTS))).toMatchObject({ [SERVICE_PROCESSES_ENV]: 'store' })
     // By service, not by process: a core from before the edge host routes the services it knows of it.
     const hosted = serviceSpecs({ HARNESSD_SERVICES: 'edge' }, SERVICE_HOSTS)
-    expect(serviceProcessesEnv(hosted)).toEqual({ [SERVICE_PROCESSES_ENV]: 'workspaces,usage,monitor,projects,handoff', HARNESSD_SERVICES: 'workspaces,usage,monitor,projects,handoff' })
+    expect(serviceProcessesEnv(hosted)).toEqual({ [SERVICE_PROCESSES_ENV]: 'workspaces,usage,monitor,projects,handoff,recaps', HARNESSD_SERVICES: 'workspaces,usage,monitor,projects,handoff,recaps' })
     expect([...servicesTheMasterRuns({ ...supervised, ...serviceProcessesEnv(hosted) }, known)]).toEqual(['workspaces'])
     expect(serviceProcessesEnv([])).toEqual({ [SERVICE_PROCESSES_ENV]: '', HARNESSD_SERVICES: 'none' })
     expect([...servicesTheMasterRuns({ ...supervised, ...serviceProcessesEnv(specs) }, known)]).toEqual(['search', 'workspaces'])

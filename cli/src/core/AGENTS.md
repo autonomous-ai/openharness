@@ -44,7 +44,9 @@ questions. Everything else is a service ([../services/AGENTS.md](../services/AGE
   frames, handed to the viewers, and refused at once while they are down. `workspacesLink.ts`: what the core tells workspaces in
   theirs. `teamsLink.ts`: every change to the teams' prompt scopes, kept until their process has it once Tab
   collaboration is on, which of its deliveries may be written, and the scopes' own two questions.
-  `monitorLink.ts`: the monitor's port, asked of its process. `storeLink.ts`: what the Store in its
+  `monitorLink.ts`: the monitor's port, asked of its process. `recapsLink.ts`: the recaps in their process,
+  told each turn's lifecycle and never waited on, and read back from what they last said
+  (`turns/recaps.ts` is the core's whole side of them). `storeLink.ts`: what the Store in its
   process tells the core. `modelsLink.ts`: what the core keeps of models in its process for frames and
   keystrokes, and how it asks it the rest. `agentQueries.ts`: what a service in its own process may ask of the agents;
   `accountQueries.ts`: of the account (a token, and the fleet's lane's sealing), so it holds no credential.

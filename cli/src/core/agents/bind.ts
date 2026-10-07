@@ -12,7 +12,7 @@ import { copilotSessionForPid, findCopilotTranscript } from '../../engines/copil
 import { findCursorTranscript } from '../../engines/cursor/discovery.js'
 import { cursorDataDir } from '../../engines/cursor/home.js'
 import { findGrokTranscript } from '../../engines/grok/session.js'
-import type { CommanderMirror } from '../../lib/commander.js'
+import type { TurnRecaps } from '../turns/recaps.js'
 import type { AutonomousDeviceInput } from '../deviceInput.js'
 import { isRecentlyDeleted } from '../../lib/deletedSessions.js'
 import { transcriptIsFirstTurn } from '../../lib/firstTurnReplay.js'
@@ -53,7 +53,7 @@ export type RegisteredMeta = {
 
 export interface BindDeps {
   registry: Pick<typeof registry, 'inheritName' | 'unbindSession' | 'byAgent' | 'byProcess' | 'register' | 'has' | 'bySession'>
-  mirror: Pick<CommanderMirror, 'inheritSummary'>
+  mirror: Pick<TurnRecaps, 'inheritSummary'>
   forgetSession: (id: string, opts?: { force?: boolean; keepAgent?: boolean; agentId?: string }) => void
   /** The app. */
   clients: { send(frame: { type: string; payload: Record<string, unknown> }): void }

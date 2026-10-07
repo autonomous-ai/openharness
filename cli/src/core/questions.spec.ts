@@ -77,11 +77,21 @@ describe('questions', () => {
     const remember = vi.spyOn(asking.questions, 'remember')
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     const shaped = [{ q: 'Ship it?', options: [] }]
+    // Before the recaps hear questions, one is nobody else's news; after, they hear each.
+    given(asking.questionWatcher).onQuestion('s1', 'r0', shaped)
+    vi.mocked(deps.clients.sendCommander).mockClear()
+    vi.mocked(deps.clients.sendLocal).mockClear()
+    log.mockClear()
+    const heard = vi.fn()
+    asking.hearQuestions(heard)
     given(asking.questionWatcher).onQuestion('s1', 'r1', shaped)
+    expect(heard).toHaveBeenCalledWith('asked', 's1', 'r1')
     expect(deps.deviceInput.setUserAction).toHaveBeenCalledWith('a1', true)
     expect(remember).toHaveBeenCalledWith('r1', 's1')
     const asked = vi.mocked(deps.clients.sendLocal).mock.calls[0][0]
     expect(asked).toMatchObject({ type: 'commander_question', agentId: 'a1', dbSessionId: 's1', payload: { requestId: 'r1', questions: shaped } })
+    // A question is always news: the person is needed.
+    expect(asked.payload.notification).toEqual({ id: 'r1', kind: 'needsYou' })
     expect(vi.mocked(deps.clients.sendCommander).mock.calls).toEqual([[waiting('s1', 'a1')], [asked]])
     expect(asking.openQuestions.get('s1')).toBe(asked)
     expect(log.mock.calls[0][0]).toContain('asking the user · "Ship it?" · req=r1')
@@ -101,12 +111,19 @@ describe('questions', () => {
 
   it('closes a question answered elsewhere on every client it was shown on', () => {
     const { deps, asking } = setup()
-    const answered = vi.spyOn(asking.agentNotifications, 'answered')
+    const answered = vi.fn()
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    // Before the recaps hear questions, an answer is closed all the same.
+    given(asking.questionWatcher).onQuestionGone('s1', 'r0')
+    vi.mocked(deps.clients.sendCommander).mockClear()
+    vi.mocked(deps.clients.sendLocal).mockClear()
+    vi.mocked(deps.deviceInput.setUserAction).mockClear()
+    log.mockClear()
+    asking.hearQuestions(answered)
     asking.openQuestions.set('s1', {})
     given(asking.questionWatcher).onQuestionGone('s1', 'r1')
     const closed = { type: 'commander_question_close', agentId: 'a1', dbSessionId: 's1', payload: { requestId: 'r1' } }
-    expect(answered).toHaveBeenCalledWith('s1', 'r1')
+    expect(answered).toHaveBeenCalledWith('answered', 's1', 'r1')
     expect(deps.deviceInput.setUserAction).toHaveBeenCalledWith('a1', false)
     expect(deps.clients.sendCommander).toHaveBeenCalledWith(closed)
     expect(deps.clients.sendLocal).toHaveBeenCalledWith(closed)
