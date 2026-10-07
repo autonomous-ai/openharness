@@ -23,6 +23,9 @@ export interface ServiceProcessOptions {
 }
 type Runner = (options: ServiceProcessOptions) => ServiceProcess
 
+/** The processes the master runs that speak only to it, never to the core: they need no local socket. */
+const BESIDE_THE_CORE: ReadonlySet<string> = new Set(['updater'])
+
 /** Every service this build can run in its own process, and how to load its runner alone. */
 export const SERVICE_RUNNERS: ReadonlyMap<string, () => Promise<Runner>> = new Map<string, () => Promise<Runner>>([
   ['search', async () => (await import('./services/searchProcess.js')).runSearchService],
@@ -71,7 +74,9 @@ export async function startServiceProcess(named: string | undefined, deps: Servi
     console.error(`[service] ${unknown}: no such service in this build`)
     return exit(2)
   }
-  if (!socketPath) {
+  // The updater never reaches the core: it tells the master. Without a socket (a data folder too deep for
+  // one) it still runs, or that machine would never get the update that fixes it.
+  if (!socketPath && names.some((name) => !BESIDE_THE_CORE.has(name))) {
     console.error(`[service] ${names.join(',')}: the core has no local socket to reach`)
     return exit(2)
   }
@@ -90,7 +95,7 @@ export async function startServiceProcess(named: string | undefined, deps: Servi
   const loaded = await Promise.all(names.map(async (name) => [name, await runners.get(name)!()] as const))
   const options: ServiceProcessOptions = {
     dataDir: env.ADAPTER_DATA_DIR,
-    socketPath,
+    socketPath: socketPath ?? '',
     machineId: readOrMintComputerId(env.ADAPTER_COMPUTER_ID_FILE, env.ADAPTER_COMPUTER_ID),
     token: process.env.HARNESSD_SERVICE_TOKEN ?? '',
   }

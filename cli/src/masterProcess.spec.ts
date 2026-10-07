@@ -12,7 +12,7 @@ const leanBundle = vi.hoisted(() => ({ read: vi.fn((_bundle: Buffer): LeanBundle
 vi.mock('./harnessd/leanBundle.js', async (real) => ({ ...await real<object>(), readLeanBundle: (bundle: Buffer) => leanBundle.read(bundle) }))
 
 const {
-  BUNDLE_ENV, BUNDLE_SHA256_ENV, LEAN_DIR, LEAN_FINGERPRINT_ENV, LEAN_OFF_FILE, probeLean, probeThisMaster, processBundleDeps, startMaster, startMasterFromBundle, startMasterInForeground,
+  BUNDLE_ENV, BUNDLE_SHA256_ENV, LEAN_DIR, LEAN_FINGERPRINT_ENV, LEAN_OFF_FILE, masterEnv, probeLean, probeThisMaster, processBundleDeps, startMaster, startMasterFromBundle, startMasterInForeground,
 } = await import('./masterProcess.js')
 type Deps = Parameters<typeof startMasterFromBundle>[1] & object
 
@@ -175,6 +175,31 @@ describe('starting the master', () => {
     expect((runMaster.mock.calls[0][0] as { updater: boolean }).updater).toBe(true)
     expect(LEAN_DIR).toMatch(/[\\/]lean$/)
     expect(LEAN_OFF_FILE).toMatch(/[\\/]lean-off$/)
+  })
+
+  it('keeps the services in the core when the core will have no local socket for them to reach it by', () => {
+    const given = { HOME: '/home/someone' }
+    const logs: string[] = []
+    // A socket: the master runs on its environment as it is, the services in their own processes.
+    expect(masterEnv(given, '/data/daemon-18473.sock', (line) => logs.push(line))).toBe(given)
+    // None (a data folder too deep for one): every service in the core's process, and the log says why.
+    expect(masterEnv(given, null, (line) => logs.push(line))).toEqual({ HOME: '/home/someone', HARNESSD_SERVICES: 'none' })
+    expect(given).toEqual({ HOME: '/home/someone' })
+    expect(logs).toEqual([expect.stringMatching(/\[harnessd\] this data folder is too deep for the daemon's local socket/)])
+    // Already none: nothing to change or say.
+    const none = { HARNESSD_SERVICES: 'none' }
+    expect(masterEnv(none, null, (line) => logs.push(line))).toBe(none)
+    expect(logs).toHaveLength(1)
+    // Its own log line goes to the master's console, which is the daemon's log.
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    try {
+      masterEnv({}, null)
+      expect(log).toHaveBeenCalledWith(expect.stringMatching(/the services run in the core's process$/))
+    } finally { log.mockRestore() }
+    // startMaster hands runMaster an environment: this one's, or this one's with the services kept in.
+    runMaster.mockClear()
+    startMaster({ scriptPath: '/cli/cli.js' })
+    expect((runMaster.mock.calls[0][0] as { env: NodeJS.ProcessEnv }).env).toMatchObject({ PATH: process.env.PATH })
   })
 
   it('gives up its claim on the lean bundle as it exits cleanly', () => {

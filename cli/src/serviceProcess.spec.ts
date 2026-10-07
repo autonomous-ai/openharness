@@ -106,4 +106,21 @@ describe('a service in its own process', () => {
     await expect(startServiceProcess('nope', { runners: new Map() })).rejects.toThrow('process.exit 2')
     expect(processExit).toHaveBeenCalledWith(2)
   })
+
+  it('runs the updater with no socket, since it speaks to the master alone, but nothing named with it that needs one', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const exit = vi.fn((code: number): never => { throw new Error(`exit ${code}`) })
+    const seen: ServiceProcessOptions[] = []
+    const runners = new Map([
+      ['updater', async () => (options: ServiceProcessOptions) => { seen.push(options); return { stop: () => {} } }],
+      ['search', async () => () => ({ stop: () => {} })],
+    ])
+    const { host, hosted } = fakeHost()
+    local.socket = null
+    await startServiceProcess('updater', { runners, host, exit })
+    expect(seen).toEqual([expect.objectContaining({ socketPath: '' })])
+    expect(hosted[0].options).toEqual({ name: 'updater', services: ['updater'] })
+    await expect(startServiceProcess('updater,search', { runners, host, exit })).rejects.toThrow('exit 2')
+    expect(error).toHaveBeenCalledWith('[service] updater,search: the core has no local socket to reach')
+  })
 })
