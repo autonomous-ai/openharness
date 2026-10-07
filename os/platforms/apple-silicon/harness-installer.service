@@ -1,0 +1,24 @@
+[Unit]
+Description=Harness installation
+After=systemd-vconsole-setup.service systemd-udev-settle.service
+Wants=systemd-udev-settle.service
+Conflicts=getty@tty1.service
+
+[Service]
+Type=simple
+ExecStartPre=/usr/bin/chvt 1
+ExecStart=/usr/bin/python3 /usr/lib/harness-installer/media.py
+StandardInput=tty
+StandardOutput=tty
+StandardError=journal
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+Environment=TERM=linux LANG=C.UTF-8
+UMask=0077
+LimitCORE=0
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
