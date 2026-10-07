@@ -26,7 +26,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: fd79b9c2b8ecae82cb37e126894480b8f7469b23
+          ref: 48b13b4a8998ec2dbcb528076334764152acdaba
       - uses: actions/checkout@v7
         with:
           repository: tmux/tmux
@@ -91,7 +91,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() }}
         with:
-          name: detached-core-fd79b9-${{ matrix.suite }}
+          name: detached-core-48b13b-${{ matrix.suite }}
           path: .harness/validation/
           if-no-files-found: error
           include-hidden-files: true
