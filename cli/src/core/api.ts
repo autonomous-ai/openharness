@@ -1014,20 +1014,11 @@ export type BackendNotice =
   | { type: 'machines_changed'; reason: string }
   | { type: 'device_keys_changed' }
 
-/** What the core asks of the gateway: everything bound for a remote client, and the link's state. */
-/** What a person has open on this computer: the desktop app, or `harness tui`. Each is its own presence. */
-export type WindowSurface = 'desktop' | 'tui'
-export type LocalWindows = Record<WindowSurface, number>
-export const WINDOW_SURFACES: readonly WindowSurface[] = ['desktop', 'tui']
-/** A surface off the core↔gateway pipe: anything but `tui` is the desktop app. */
-export const windowSurfaceOf = (value: unknown): WindowSurface => (value === 'tui' ? 'tui' : 'desktop')
-/** Window counts off the core↔gateway pipe; anything unreadable is none. */
-export const localWindowsOf = (value: unknown): LocalWindows => {
-  const counts = (value ?? {}) as Partial<Record<WindowSurface, unknown>>
-  const count = (n: unknown): number => (typeof n === 'number' && Number.isFinite(n) && n > 0 ? Math.floor(n) : 0)
-  return { desktop: count(counts.desktop), tui: count(counts.tui) }
-}
+/** What a person has open on this computer, per surface (lib/windowSurfaces.ts). */
+export type { LocalWindows, WindowSurface } from '../lib/windowSurfaces.js'
+import type { LocalWindows, WindowSurface } from '../lib/windowSurfaces.js'
 
+/** What the core asks of the gateway: everything bound for a remote client, and the link's state. */
 export interface GatewayPort {
   /** Dial the backend: this daemon is signed in. */
   connect(): void
