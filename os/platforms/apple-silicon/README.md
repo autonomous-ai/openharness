@@ -6,8 +6,9 @@ hn, OpenCode with upstream defaults, terminal panes and the optional Chromium
 browser. It selects no GNOME or KDE desktop profile.
 
 This is private installation work, **not an installable Harness release**. Installer
-media/UI, Fedora base-system updates/recovery and physical Apple hardware acceptance remain
-required. The image contains no pre-created user or known login password. Never
+media, Fedora base-system updates/recovery and physical Apple hardware acceptance remain
+required. A private terminal installer joins the tested stages below; bootable
+installer media is still pending. The image contains no pre-created user or known login password. Never
 flash this raw disk over a Mac's disk or use the PC whole-disk installer on Apple
 Silicon. No public installer metadata or download feed is generated.
 
@@ -113,7 +114,8 @@ It reads Asahi's firmware-provided EFI partition identity and uses only the
 unallocated space immediately after that partition. It never shrinks, moves,
 formats or removes existing macOS, recovery or other operating-system partitions.
 The prepared gap must hold a 1 GiB boot partition and at least 12 GiB for the
-encrypted root. This module is not yet packaged or connected to an installer UI.
+encrypted root. The private terminal installer uses this module; it is not yet
+packaged into bootable installer media.
 
 Before either GPT entry is written, a plan is atomically saved in a private
 directory on the owning FAT EFI partition. Mount that ESP with root ownership,
@@ -139,7 +141,8 @@ kernel partition geometry, repeated execution, and refusal of changed or damaged
 metadata. QEMU injects the firmware ESP identity; its protected partitions contain
 sentinels, not macOS filesystems. These checks do not establish physical Apple
 support or recovery from a torn GPT write. Fresh encryption, payload copying,
-boot configuration and installer-media integration remain the next stages.
+boot configuration and installer-media integration require their separate checks
+below; partition preparation alone does not install an operating system.
 
 ## Private encrypted payload copy
 
@@ -225,6 +228,52 @@ services. The observer adds only QEMU console and keyboard configuration.
 
 This does not validate Apple's boot policy, m1n1 handoff, physical hardware or
 recovery from arbitrary power loss. The existing Apple boot chain still needs its
-platform integration and hardware acceptance. These modules are not yet packaged
-into installer media or connected to a user-facing installation screen. Never
-publish the test disk, which contains a known fixture password.
+platform integration and hardware acceptance. The terminal installer below joins
+these stages, but bootable installer media is still pending. Never publish the test
+disk, which contains a known fixture password.
+
+## Private terminal installer
+
+`install.py` presents the prepared storage, enabled encryption, **Password**,
+**Repeat password**, and **Install Harness**. Password is focused initially; Tab,
+Enter and ordinary field-editing keys work. Labels stay unhighlighted, entered
+characters stay masked, and the install button gains emphasis when focused. The
+same centered wordmark and status placement carry through progress and completion.
+
+Actual private ARM VM console, with the password field focused and then the install
+button focused. These are interface checks, not physical Apple hardware evidence.
+
+![Password field focused; install button gray](screenshots/install.png)
+![Install button focused; black text on white](screenshots/install-focused.png)
+
+Asahi firmware identifies the destination. There is no whole-disk picker or
+macOS partition-resizing action. Opening or canceling the form mounts the owning
+EFI partition read-only and creates no installation record. Pressing Install
+first verifies the payload checksum, rechecks the target, and only then saves
+the plan and runs partition preparation, encryption, copying, account enrollment
+and boot setup. A mounted installation is refused. Existing progress resumes
+through the stages' durable records; passwords are never written to them.
+
+The command takes a read-only raw image block device, SHA-256 and producer commit
+from private media. It enters a private mount namespace and takes an installer
+lock. It accepts no password in arguments or configuration. Diagnostics go to
+root-only `/var/log/harness-asahi-install.log`; a failed attempt returns to the
+form. Completion unmounts the target before offering **Shut down**. A failed
+shutdown stays on that completed screen and never reruns installation.
+
+```sh
+python3 os/tests/asahi_install_vm.py \
+  --image /path/to/harness-asahi-private.raw --sha256 IMAGE_SHA256 \
+  --image-source FULL_IMAGE_COMMIT \
+  --fixture /path/to/verified-arm-fixture --fixture-source FULL_FIXTURE_COMMIT \
+  --output os/test-results/asahi-install
+```
+
+The native observer drives the actual terminal with graphical keyboard input.
+It checks cancellation, mismatched passwords and an invalid image checksum
+against unchanged target metadata and full EFI bytes; then completes installation
+offline, uses the screen's shutdown action, and unlocks the resulting target into
+OpenCode and two terminals. Protected partition sentinels, image provenance,
+frozen runtime files, SELinux and account configuration remain checked. Screenshots
+and failed attempts are retained. This uses QEMU's firmware and console; physical
+Apple boot, keyboard and pointer acceptance remain separate.
