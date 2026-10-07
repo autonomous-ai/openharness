@@ -34,6 +34,7 @@ pub struct What { pub engine: String, pub dsh: Option<String>, pub label: String
 
 #[derive(Clone, Debug)]
 pub enum PickerKind {
+    ShellContext,
     /// Harnesses — optionally inside one machine or one project folder.
     Open { filter: Filter, machine: Option<String>, project: Option<String> },
     Palette,
@@ -61,11 +62,17 @@ pub enum PickerKind {
     // ── machines & devices ──
     /// Connect a machine, Add phone, Machines & devices: the desktop's machine screens in the panel.
     Devices(crate::devices::View),
+    /// Optional Harness account and its browser/phone sign-in flow.
+    Account,
+    /// Software selection for one captured harness, sharing the desktop handoff lifecycle.
+    AgentSwitch,
+    /// Physical USB devices on owned computers; distinct from machine connections.
+    Hardware,
 }
 
 #[derive(Clone, Debug)]
 pub enum PromptKind {
-    RenameTab,
+    RenameTab { session: u32, window: String, owner: String },
     RenameHarness { machine: String, agent: String },
     Send,
     Broadcast,
@@ -138,6 +145,9 @@ pub struct Menu {
     /// A prompt's completion menu (status_prompt_complete_list_menu): the prompt under it, back
     /// when it closes, the chosen word put in it.
     pub complete: Option<Box<Complete>>,
+    /// Harness menus reflow from their original labels when the terminal changes size.
+    /// Explicit tmux display-menu coordinates keep tmux's existing behavior.
+    pub responsive: Option<Box<crate::workspace_menu::Layout>>,
 }
 
 /// What a completion menu completes: the prompt, the words its items stand for, the flag they
@@ -167,38 +177,39 @@ pub enum Modal {
     Copy { pane: u64 },
 }
 
-pub const ENGINES: [&str; 14] = ["claude", "codex", "opencode", "cursor", "pi", "amp", "hermes", "kilo", "grok", "devin", "copilot", "commandcode", "muse", "terminal"];
+pub const ENGINES: [&str; 15] = ["claude", "codex", "opencode", "cursor", "pi", "amp", "hermes", "kilo", "grok", "devin", "copilot", "commandcode", "muse", "agy", "terminal"];
 
 /// The palette's commands: (id, title, keys, hint, group).
 pub const COMMANDS: &[(&str, &str, &str, &str, &str)] = &[
+    ("account", "Account / sign in…", "", "connect computers, sync your workspace and add your phone", "General"),
     ("open", "Harnesses…", "⌥P", "every harness on every machine", "Harness"),
     ("projects", "Projects…", "⌥O", "a project, then one of its harnesses", "Harness"),
     ("models", "Models…", "⌥I", "local, shared, subscriptions, APIs — use one on this harness", "Harness"),
-    ("new", "New harness…", "⌥N", "", "Harness"),
-    ("terminal", "New terminal", "⌥⇧T", "a shell on this pane's machine", "Harness"),
+    ("change-agent", "Change agent…", "", "continue this project with another agent", "Harness"),
+    ("terminal", "New pane", "⌥N", "a shell on this pane's machine", "Harness"),
     ("inbox", "Harnesses needing input", "⌥⇧I", "", "Harness"),
     ("next-waiting", "Next harness waiting on you", "⌥A", "oldest question first", "Harness"),
     ("send", "Send to harness…", "⌥B", "type a task — Harness picks who", "Harness"),
-    ("broadcast", "Broadcast to this swarm…", "", "one message to every harness in the swarm", "Harness"),
+    ("broadcast", "Broadcast to this tab…", "", "one message to every harness in the tab", "Harness"),
     ("clone", "Clone harness", "⌥⇧N", "a second one with this one's history", "Harness"),
     ("restart", "Restart harness", "⌥⇧E", "", "Harness"),
     ("pause", "Pause harness", "", "stop the engine, keep the conversation", "Harness"),
     ("rename", "Rename harness…", "", "", "Harness"),
     ("take", "Take control", "", "reclaim all panes across every tab", "General"),
-    ("tab", "New swarm", "⌥T", "", "Swarms"),
-    ("rename-tab", "Rename swarm…", "⌥⇧R", "", "Swarms"),
-    ("close-tab", "Close swarm", "⌥⇧W", "harnesses keep running", "Swarms"),
-    ("next-tab", "Next swarm", "⌥}", "", "Swarms"),
-    ("prev-tab", "Previous swarm", "⌥{", "", "Swarms"),
-    ("tab-left", "Move swarm left", "⌥<", "", "Swarms"),
-    ("tab-right", "Move swarm right", "⌥>", "", "Swarms"),
+    ("tab", "New Tab", "⌥T", "", "Tabs"),
+    ("rename-tab", "Rename Tab…", "⌥⇧R", "", "Tabs"),
+    ("close-tab", "Close Tab", "⌥⇧W", "save and stop; confirm active work", "Tabs"),
+    ("next-tab", "Next Tab", "⌥}", "", "Tabs"),
+    ("prev-tab", "Previous Tab", "⌥{", "", "Tabs"),
+    ("tab-left", "Move Tab left", "⌥<", "", "Tabs"),
+    ("tab-right", "Move Tab right", "⌥>", "", "Tabs"),
     ("split-right", "Split right", "⌥\\", "", "Panes"),
     ("split-down", "Split down", "⌥-", "", "Panes"),
-    ("close-pane", "Close pane", "⌥W", "the harness keeps running", "Panes"),
+    ("close-pane", "Stop harness", "⌥W", "save its history; confirm active work", "Panes"),
     ("zoom", "Zoom pane", "⌥Z", "", "Panes"),
     ("layout", "Layout…", "⌥L", "grid, columns, main + stack…", "Panes"),
     ("equalize", "Equalize panes", "⌥=", "", "Panes"),
-    ("pane-tab", "Move pane to a new swarm", "", "", "Panes"),
+    ("pane-tab", "Move pane to a new tab", "", "", "Panes"),
     ("find", "Find in pane…", "⌥⇧F", "search this pane's history", "Panes"),
     // (Not "keyboard": `keyb` is Keybinds.)
     ("copy-mode", "Copy mode", "⌥V", "move over the pane's text, select and copy", "Panes"),
@@ -207,7 +218,8 @@ pub const COMMANDS: &[(&str, &str, &str, &str, &str)] = &[
     // ── machines & devices ──
     ("connect-machine", "Connect a computer…", "", "a computer not linked yet, with its remote password", "Machines"),
     ("add-phone", "Add phone…", "", "a QR code your phone scans to sign in and pair", "Machines"),
-    ("devices", "Machines & devices…", "", "this computer's password, your machines, links, add a machine", "Machines"),
+    ("devices", "Machines…", "", "this computer's password, your machines, links, add a machine", "Machines"),
+    ("hardware-devices", "Devices…", "", "Harness hardware, brightness, sound and voice language", "Machines"),
     // (hn itself: how it looks, its keys, and closing it.)
     ("theme", "Appearance…", "", "theme, status bar, borders, focus, layout — settings", "Settings & help"),
     ("keybinds", "Keybinds…", "", "every command's key after the prefix — Enter changes one", "Settings & help"),
@@ -295,19 +307,22 @@ pub fn agent_rows(app: &App, filter: Filter, machine: Option<&str>, project: Opt
 /// harness; one open in another terminal or app is marked so, and not opened twice.
 pub fn external_rows(app: &App) -> Vec<Row> {
     let many = app.fleet.visible_machines().filter(|m| m.usable()).count() > 1;
-    app.said.iter().filter_map(|s| s.external.as_ref()).map(|x| {
+    app.said.iter().chain(app.shell_context.catalog.iter().filter(|_| app.shell_context.sessions_machine.is_some())).filter_map(|s| s.external.as_ref())
+        .filter(|x| !app.fleet.agents.values().any(|a| a.machine_id == x.machine && a.session_id == x.session_id)).map(|x| {
         let (mark, mark_color) = engine_mark(&x.engine);
         let folder = x.cwd.trim_end_matches('/').rsplit('/').next().unwrap_or("").to_string();
         let title = if x.title.is_empty() { folder.clone() } else { x.title.clone() };
-        let note = if x.open { "open elsewhere" } else { "not in Harness" };
+        let note = if x.open { "open elsewhere" } else if x.cwd.is_empty() { "folder unavailable" } else { "saved" };
         let right = [note.to_string(), if many { app.fleet.machine_name(&x.machine) } else { String::new() }, ago(x.last_at)].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join("  ");
-        Row::new(format!("external:{}:{}", x.machine, x.session_id), title)
+        let mut row = Row::new(format!("external:{}:{}", x.machine, x.session_id), title)
             .extra(format!("{} {} {} {}", x.cwd, x.engine, engine_label(&x.engine), app.fleet.machine_name(&x.machine)))
-            .group("Not in Harness")
+            .group("Saved conversations")
             .lead(vec![span("‖", fg(theme::MUTED)), span(" ", Style::default()), span(mark, fg(mark_color)), span(" ", Style::default())])
             .detail(vec![span(folder, fg(theme::MUTED))])
             .right(right)
-            .right_narrow(ago(x.last_at))
+            .right_narrow(ago(x.last_at));
+        row.disabled = x.cwd.is_empty();
+        row
     }).collect()
 }
 
@@ -379,6 +394,7 @@ pub fn is_launcher(kind: &PickerKind) -> bool {
 /// (title, placeholder) for a launcher mode.
 pub fn launcher_title(app: &App, kind: &PickerKind) -> (String, String) {
     match kind {
+        PickerKind::Open { .. } if app.shell_context.sessions_machine.is_some() => ("Sessions on this computer".into(), "Search sessions".into()),
         PickerKind::Open { machine: Some(m), project: None, .. } => (format!("harnesses · @{}", app.fleet.machine_name(m)), "Search this machine's harnesses — esc back".into()),
         PickerKind::Open { project: Some(p), .. } => (format!("harnesses · #{}", p.rsplit('/').next().unwrap_or(p)), "Search this project's harnesses — esc back".into()),
         PickerKind::Open { .. } => ("harnesses".into(), "Search harnesses   > commands   @ machines   # projects   : models   * store   ? help".into()),
@@ -387,7 +403,7 @@ pub fn launcher_title(app: &App, kind: &PickerKind) -> (String, String) {
         PickerKind::Projects => ("projects".into(), "Choose a project, then one of its harnesses".into()),
         // (Which harness Enter moves, in the title: the focused one, or the only one on screen.)
         PickerKind::Models => (crate::models::target(app).and_then(|t| app.fleet.agent(&t.machine, &t.agent)).map(|a| format!("models · for {}", a.name)).unwrap_or_else(|| "models".into()),
-            "Search models — Enter uses one on the focused harness".into()),
+            "Search models — Enter uses one on this harness".into()),
         PickerKind::Store => ("store".into(), "Find a harness in the Store".into()),
         PickerKind::Help => ("quick access".into(), "What this box can do".into()),
         _ => (String::new(), String::new()),
@@ -564,9 +580,9 @@ pub const KEYBINDS: &[(&str, &str, &str)] = &[
     ("Pane right", "select-pane -R", "Navigation"),
     ("Pane up", "select-pane -U", "Navigation"),
     ("Pane down", "select-pane -D", "Navigation"),
-    ("Next swarm", "next-window", "Navigation"),
-    ("Previous swarm", "previous-window", "Navigation"),
-    ("Last swarm", "last-window", "Navigation"),
+    ("Next Tab", "next-window", "Navigation"),
+    ("Previous Tab", "previous-window", "Navigation"),
+    ("Last Tab", "last-window", "Navigation"),
     ("Split right", "split-window -h", "Panes"),
     ("Split down", "split-window", "Panes"),
     ("Close pane", "kill-pane", "Panes"),
@@ -575,11 +591,11 @@ pub const KEYBINDS: &[(&str, &str, &str)] = &[
     ("Next layout", "next-layout", "Panes"),
     ("Copy mode", "copy-mode", "Panes"),
     ("Find in pane…", "find-window", "Panes"),
-    ("New swarm", "new-window", "Swarms (windows)"),
-    ("Rename swarm…", "rename-window", "Swarms (windows)"),
-    ("Close swarm", "kill-window", "Swarms (windows)"),
-    ("Move pane to a new swarm", "break-pane", "Swarms (windows)"),
-    ("New harness…", "new-harness", "Harnesses"),
+    ("New Tab", "new-window", "Tabs (tmux windows)"),
+    ("Rename Tab…", "rename-window", "Tabs (tmux windows)"),
+    ("Close Tab", "kill-window", "Tabs (tmux windows)"),
+    ("Move pane to a new tab", "break-pane", "Tabs (tmux windows)"),
+    ("New Harness…", "new-harness", "Harnesses"),
     ("New terminal", "new-terminal", "Harnesses"),
     ("Models…", "choose-tree -i", "Harnesses"),
     ("Send to harness…", "send-task", "Harnesses"),
@@ -688,7 +704,9 @@ pub fn theme_sections(app: &App) -> Vec<Row> {
         sec("section:boxes", "Borders", "every pane its own box", if border_style_of(app) == "box" { "on" } else { "off" }),
         // ── status bar tabs ──
         sec("section:tab", "Tab", "how the current tab is marked", tab_active_of(app)),
-        sec("section:tabname", "Tab name", "how a tab's name is shown", tab_name_of(app)),
+        // (No "Tab name": a tab shows the selected pane's title, or auto rename's name. `@hn-window-name
+        // tmux` in a tmux.conf or tui.toml still shows the window's name instead.)
+        sec("section:autorename", "Auto rename", "a window named for its repo and its work", if app.options.auto_rename() { "on" } else { "off" }),
         // (Keys are Keybinds', a panel of their own in Commands.)
     ]
 }
@@ -703,9 +721,6 @@ fn border_style_of(app: &App) -> &'static str { app.options.border_style() }
 
 /// How the current tab is marked: `star` (default) | `filled` (`@hn-window-active`).
 fn tab_active_of(app: &App) -> &'static str { if app.options.get("@hn-window-active", "", None).as_deref() == Some("filled") { "filled" } else { "star" } }
-
-/// A tab's name source: `tmux` (default) | `pane` (`@hn-window-name`).
-fn tab_name_of(app: &App) -> &'static str { if app.options.get("@hn-window-name", "", None).as_deref() == Some("pane") { "pane" } else { "tmux" } }
 
 /// The look/theme picker, level two: the options of one section. Enter on one applies it (and the
 /// ▼ moves to it); Left/Esc returns to the section list.
@@ -751,9 +766,10 @@ pub fn theme_options(app: &App, section: &str) -> Vec<Row> {
         "tab" => { let cur = tab_active_of(app);
             [("star", "star", "the current tab is marked *"), ("filled", "filled", "the current tab is filled (inverted)")]
                 .iter().map(|(v, label, hint)| opt(format!("window_active:{v}"), label, cur == *v, hint)).collect() }
-        "tabname" => { let cur = tab_name_of(app);
-            [("tmux", "tmux", "the window's short name"), ("pane", "pane", "the window's full name")]
-                .iter().map(|(v, label, hint)| opt(format!("window_name:{v}"), label, cur == *v, hint)).collect() }
+        "autorename" => { let cur = if o.auto_rename() { "on" } else { "off" };
+            [("on", "a window with a repo is named for it and its work, by a small model, in the background (Harness TUI LMStudio)"),
+             ("off", "windows keep the names they have")]
+                .iter().map(|(v, hint)| opt(format!("auto_rename:{v}"), v, cur == *v, hint)).collect() }
         _ => vec![],
     }
 }
@@ -772,11 +788,10 @@ pub fn new_machine_rows(app: &App, prefer: &str) -> Vec<Row> {
 }
 
 pub fn new_what_rows(catalog: &[Value]) -> Vec<Row> {
-    let mut rows: Vec<Row> = ENGINES.iter().map(|e| {
+    let mut rows: Vec<Row> = ENGINES.iter().filter(|e| **e != "terminal").map(|e| {
         let (mark, color) = engine_mark(e);
         Row::new(format!("engine:{e}"), engine_label(e)).extra(*e).group("Agents")
             .lead(vec![span(mark, fg(color)), span(" ", Style::default())])
-            .detail(vec![span(if *e == "terminal" { "a plain shell" } else { "" }, fg(theme::MUTED))])
     }).collect();
     for row in catalog {
         if row.get("installed").and_then(Value::as_bool) == Some(false) || row.get("kind").and_then(Value::as_str) == Some("viewer") { continue }
@@ -784,6 +799,7 @@ pub fn new_what_rows(catalog: &[Value]) -> Vec<Row> {
         let name = row.get("name").and_then(Value::as_str).unwrap_or(id);
         let description = row.get("description").and_then(Value::as_str).unwrap_or("");
         let engine = row.get("engine").and_then(Value::as_str).unwrap_or("claude");
+        if engine == "terminal" { continue }
         rows.push(Row::new(format!("dsh:{id}:{engine}"), name).extra(format!("{id} {description}")).group("From the Store")
             .lead(vec![span("◆ ", fg(theme::TEAL))]).detail(vec![span(description.to_string(), fg(theme::MUTED))]));
     }
@@ -829,7 +845,7 @@ mod theme_row_tests {
         let (sink, _) = tokio::sync::mpsc::unbounded_channel();
         let mut app = App::new(19789, sink, (150, 42));
         app.fleet.local_id = "local".into();
-        app.fleet.machines.push(crate::fleet::Machine {
+        app.fleet.machines.push(crate::fleet::Machine { shared: false,
             id: "local".into(), name: "studio".into(), local: true, status: "online".into(), reach: crate::fleet::Reach::Ready,
         });
         app.homes.insert("local".into(), "/home/dev".into());
@@ -843,7 +859,7 @@ mod theme_row_tests {
         let ids: Vec<&str> = rows.iter().map(|r| r.id.as_str()).collect();
         assert_eq!(ids, vec!["section:theme", "section:status", "section:focus",
             // ── status bar ──
-            "section:bar", "section:boxes", "section:tab", "section:tabname"]);
+            "section:bar", "section:boxes", "section:tab", "section:autorename"]);
         // Each section shows its current value and opens onto a non-empty option list.
         assert!(rows.iter().all(|r| !r.right.is_empty()), "each section shows a value");
         for r in &rows {
@@ -889,14 +905,11 @@ mod theme_row_tests {
     }
 
     #[test]
-    fn the_tab_and_tab_name_sections_list_their_choices() {
+    fn the_tab_section_lists_its_choices_and_there_is_no_tab_name_section() {
         let a0 = app();
         let tab_rows = theme_options(&a0, "tab");
         let tab_ids: Vec<&str> = tab_rows.iter().map(|r| r.id.as_str()).collect();
         assert_eq!(tab_ids, vec!["window_active:star", "window_active:filled"]);
-        let name_rows = theme_options(&a0, "tabname");
-        let name_ids: Vec<&str> = name_rows.iter().map(|r| r.id.as_str()).collect();
-        assert_eq!(name_ids, vec!["window_name:tmux", "window_name:pane"]);
         // The mark follows the option in use.
         let mut a1 = app();
         let global = crate::options::SetFlags { global: true, ..Default::default() };
@@ -904,10 +917,23 @@ mod theme_row_tests {
         let filled = theme_options(&a1, "tab");
         let idx = filled.iter().position(|r| r.id == "window_active:filled").unwrap();
         assert!(filled[idx].lead.iter().any(|s| s.content.as_ref() == "✓ "));
-        let _ = a1.options.set("@hn-window-name", Some("pane"), &global, "", 0);
-        let pane = theme_options(&a1, "tabname");
-        let idx = pane.iter().position(|r| r.id == "window_name:pane").unwrap();
-        assert!(pane[idx].lead.iter().any(|s| s.content.as_ref() == "✓ "));
+        // No Tab name: a tab shows the selected pane's title, or auto rename's name.
+        assert!(theme_options(&a0, "tabname").is_empty());
+        assert!(!theme_sections(&a0).iter().any(|r| r.id == "section:tabname"));
+    }
+
+    /// Auto rename is a switch of its own in Appearance, off until turned on, and saved to tui.toml.
+    #[test]
+    fn auto_rename_is_a_switch_off_until_turned_on() {
+        let mut app = app();
+        let section = |app: &App| theme_sections(app).into_iter().find(|r| r.id == "section:autorename").map(|r| r.right).unwrap();
+        assert_eq!(section(&app), "off");
+        assert_eq!(theme_options(&app, "autorename").iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), vec!["auto_rename:on", "auto_rename:off"]);
+        assert_eq!(app.set_look("auto_rename", "on"), "auto rename: on");
+        assert!(app.options.auto_rename());
+        assert_eq!(section(&app), "on");
+        let look = crate::config::Look { auto_rename: Some("on".into()), ..Default::default() };
+        assert!(look.assignments().contains(&("@hn-auto-rename".into(), "on".into())), "tui.toml's auto_rename turns it on at start");
     }
 
     // ── keys ──
@@ -952,7 +978,7 @@ mod theme_row_tests {
         let tmux: Vec<&Row> = inside.iter().collect();
         // Sentence case: no word after the first starts with a capital (but hn and names).
         for r in &own {
-            let caps: Vec<&str> = r.label.split_whitespace().skip(1).filter(|w| w.starts_with(|c: char| c.is_uppercase())).collect();
+            let caps: Vec<&str> = r.label.split_whitespace().skip(1).filter(|w| w.starts_with(|c: char| c.is_uppercase()) && !["Tab", "Tab…", "Harness…"].contains(w)).collect();
             assert!(caps.is_empty(), "{:?} {caps:?}", r.label);
         }
         // Grouped: each group's rows together, every group named for tmux.
@@ -981,7 +1007,7 @@ mod theme_row_tests {
         assert_eq!((rows[1].id.as_str(), rows[1].right.as_str()), ("prefix2", "none"));
         let mut groups: Vec<String> = Vec::new();
         for g in rows.iter().filter_map(|r| r.group.clone()) { if groups.last() != Some(&g) { groups.push(g) } }
-        assert_eq!(groups, ["Prefix", "Navigation", "Panes", "Swarms (windows)", "Harnesses", "General"]);
+        assert_eq!(groups, ["Prefix", "Navigation", "Panes", "Tabs (tmux windows)", "Harnesses", "General"]);
         assert_eq!(right(&app, "Split right"), "C-b %");
         assert!(theme_sections(&app).iter().all(|r| r.id != "section:keys") && theme_options(&app, "keys").is_empty());
     }
@@ -1026,7 +1052,7 @@ mod theme_row_tests {
         assert_eq!(runs(&app, KeyCode::Char('%'), KeyModifiers::NONE), None);
         assert_eq!(right(&app, "Split right"), "C-b h");
         assert!(app.capturing.is_none());
-        let _ = change(&mut app, "Rename swarm…");
+        let _ = change(&mut app, "Rename Tab…");
         press(&mut app, KeyCode::F(5), KeyModifiers::NONE);
         assert!(runs(&app, KeyCode::F(5), KeyModifiers::NONE).is_some_and(|c| c.contains("command-prompt") && c.contains("rename-window")));
         assert_eq!(runs(&app, KeyCode::Char(','), KeyModifiers::NONE), None);
@@ -1038,14 +1064,14 @@ mod theme_row_tests {
     fn a_key_in_use_needs_a_second_press() {
         let mut app = app();
         let _ = change(&mut app, "Split right");
-        assert_eq!(press(&mut app, KeyCode::Char('n'), KeyModifiers::NONE), "C-b n is Next swarm — n again to replace · Esc to keep");
+        assert_eq!(press(&mut app, KeyCode::Char('n'), KeyModifiers::NONE), "C-b n is Next Tab — n again to replace · Esc to keep");
         assert!(app.capturing.is_some(), "still waiting");
         assert_eq!(runs(&app, KeyCode::Char('n'), KeyModifiers::NONE).as_deref(), Some("next-window"));
         assert_eq!(runs(&app, KeyCode::Char('%'), KeyModifiers::NONE).as_deref(), Some("split-window -h"));
         assert!(press(&mut app, KeyCode::Char('n'), KeyModifiers::NONE).starts_with("Split right: C-b n"));
         assert!(app.capturing.is_none());
         assert_eq!(runs(&app, KeyCode::Char('n'), KeyModifiers::NONE).as_deref(), Some("split-window -h"));
-        assert_ne!(right(&app, "Next swarm"), "C-b n");
+        assert_ne!(right(&app, "Next Tab"), "C-b n");
         // A command with no title of its own is named by its command.
         let _ = change(&mut app, "Split down");
         assert!(press(&mut app, KeyCode::Char('t'), KeyModifiers::NONE).starts_with("C-b t is clock-mode — t again"));

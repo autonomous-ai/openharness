@@ -377,5 +377,11 @@ describe.skipIf(!RELEASED)('a released master and this one, each over the other\
     expect(daemon!.log().slice(from)).toContain(releasedCanReexec
       ? `now v${releasedVersion}`
       : 'did not answer its probe (Unknown command: __harnessd-probe) — keeping this master')
+    // This master over a core too old to ask for a process on demand starts each as that core binds
+    // (harnessd/services.ts `unasked`): models, which a core of protocol 4 asks for only once grid is in use,
+    // and the gateway, which it asks for only signed in or with something paired.
+    for (const name of releasedCanReexec ? [] : ['models', 'gateway']) {
+      await until(`this master to start ${name} for the older core`, () => daemon!.log().slice(from).includes(`[harnessd] service ${name} started`) || null, 30_000, 200)
+    }
   })
 })

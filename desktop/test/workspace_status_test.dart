@@ -2,6 +2,7 @@ import 'dart:io';
 import 'dart:ui' as ui;
 import 'dart:convert';
 
+import 'package:fake_async/fake_async.dart';
 import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/gestures.dart';
@@ -92,6 +93,26 @@ class _PRConnection extends WsConn {
       'state': 'Merged',
       'url': 'https://github.com/acme/repo/pull/298',
     };
+  }
+}
+
+/// A daemon that answers `window_name` from [replies] in order, the last one
+/// for every question after it, and remembers what it was asked.
+class _WindowNameConnection extends _PRConnection {
+  final asked = <List<String>>[];
+  final replies = <Map<String, dynamic>>[];
+  @override
+  Future<Map<String, dynamic>> request(
+    String type, {
+    Map<String, dynamic> payload = const {},
+    Duration timeout = const Duration(seconds: 20),
+  }) async {
+    if (type != 'window_name') {
+      return super.request(type, payload: payload, timeout: timeout);
+    }
+    asked.add([...(payload['agentIds'] as List).cast<String>()]);
+    if (replies.isEmpty) return {'name': null};
+    return replies.length == 1 ? replies.first : replies.removeAt(0);
   }
 }
 
@@ -1174,6 +1195,362 @@ void main() {
         TerminalPane(id: id.codeUnitAt(0), machineId: 'm', agentId: id),
     ]);
     expect(workspaceTabNames(app).values.single, 'Test host');
+  });
+
+  group('Auto rename', () {
+    late AppearancePrefs saved;
+    setUp(() => saved = appearancePrefsStore.value);
+    tearDown(() => appearancePrefsStore.value = saved);
+    void autoRename(bool on) => appearancePrefsStore.value =
+        appearancePrefsStore.value.copyWith(autoRenameTabs: on);
+
+    const repo = AgentProject(
+      name: 'harness',
+      cwd: '/harness',
+      root: '/harness',
+      branch: 'main',
+    );
+    const folder = AgentProject(name: 'notes', cwd: '/notes');
+    Agent agent(
+      String id, {
+      String? name,
+      AgentProject? project = repo,
+      String engine = 'claude',
+    }) => Agent(
+      id: id,
+      name: name ?? 'Work $id',
+      engine: engine,
+      project: project,
+    );
+    TerminalPane pane(int id, String machineId, String agentId) =>
+        TerminalPane(id: id, machineId: machineId, agentId: agentId);
+
+    /// Machine `m` and a second connected machine `b`, each answered by its
+    /// own daemon in [daemons]. Both are local unless [relayed] says `b` is
+    /// reached through the relay.
+    AppNotifier appWith(
+      Map<String, _WindowNameConnection> daemons, {
+      bool relayed = false,
+    }) {
+      final app = createApp(
+        connectionForTest: (id) =>
+            daemons.putIfAbsent(id, _WindowNameConnection.new),
+        connected: true,
+      );
+      const box = Machine(
+        machineId: 'b',
+        authMode: MachineAuthMode.remote,
+        name: 'Box',
+      );
+      app.machines = [...app.machines, box];
+      app.machineStates['m']!.localOnly = true;
+      app.machineStates['b'] = MachineState(box)
+        ..localOnly = !relayed
+        ..nodeOnline = true
+        ..connectionStatus = ConnectionStatus.connected
+        ..agentLoadStatus = AgentLoadStatus.loaded;
+      return app;
+    }
+
+    List<List<String>> asked(
+      Map<String, _WindowNameConnection> daemons,
+      String machineId,
+    ) => daemons[machineId]?.asked ?? const [];
+
+    test('off asks nothing and leaves every label as it was', () async {
+      final daemons = <String, _WindowNameConnection>{};
+      final app = appWith(daemons);
+      addTearDown(app.dispose);
+      app.stateOf('m')!.agents = [agent('x'), agent('y')];
+      app.activeSwarm.panes.addAll([pane(1, 'm', 'x'), pane(2, 'm', 'y')]);
+      final id = app.activeSwarmId;
+      autoRename(false);
+      expect(workspaceTabNames(app)[id], 'code');
+      await pumpEventQueue();
+      expect(asked(daemons, 'm'), isEmpty);
+
+      // A daemon with no name for it keeps the label too, and is not asked
+      // again for the same panes.
+      autoRename(true);
+      expect(workspaceTabNames(app)[id], 'code');
+      await pumpEventQueue();
+      expect(workspaceTabNames(app)[id], 'code');
+      await pumpEventQueue();
+      expect(asked(daemons, 'm'), hasLength(1));
+
+      daemons['m']!.replies.add({'name': 'Harness Tabs'});
+      app.stateOf('m')!.agents = [agent('x', name: 'Fix tabs'), agent('y')];
+      autoRename(false);
+      expect(workspaceTabNames(app)[id], 'code');
+      await pumpEventQueue();
+      expect(asked(daemons, 'm'), hasLength(1));
+    });
+
+    test('on asks the machine of the repo panes, in pane order, and shows its name', () async {
+      final daemons = <String, _WindowNameConnection>{};
+      final app = appWith(daemons);
+      addTearDown(app.dispose);
+      app.stateOf('m')!.agents = [
+        agent('t', engine: 'terminal'),
+        agent('x'),
+        agent('y', engine: 'codex'),
+      ];
+      app.stateOf('b')!.agents = [agent('z', project: folder)];
+      app.activeSwarm.panes.addAll([
+        pane(1, 'm', 't'),
+        pane(2, 'b', 'z'),
+        pane(3, 'm', 'x'),
+        TerminalPane(
+          id: 4,
+          machineId: 'm',
+          kind: PaneKind.web,
+          ownerAgentId: 'x',
+        ),
+        pane(5, 'm', 'y'),
+      ]);
+      final id = app.activeSwarmId;
+      daemons.putIfAbsent('m', _WindowNameConnection.new).replies.add({
+        'name': 'Harness TUI LMStudio',
+      });
+      autoRename(true);
+      var notified = 0;
+      app.addListener(() => notified++);
+      final today = workspaceTabNames(app)[id];
+      expect(today, isNot('Harness TUI LMStudio'));
+      // Read again before the answer: still one question in flight.
+      expect(workspaceTabNames(app)[id], today);
+      await pumpEventQueue();
+      expect(asked(daemons, 'm'), [
+        ['t', 'x', 'y'],
+      ]);
+      expect(asked(daemons, 'b'), isEmpty);
+      expect(notified, greaterThan(0));
+      expect(workspaceTabNames(app)[id], 'Harness TUI LMStudio');
+      await pumpEventQueue();
+      expect(asked(daemons, 'm'), hasLength(1));
+
+      autoRename(false);
+      expect(workspaceTabNames(app)[id], today);
+    });
+
+    test('a custom name wins and is never asked about', () async {
+      final daemons = <String, _WindowNameConnection>{};
+      final app = appWith(daemons);
+      addTearDown(app.dispose);
+      app.stateOf('m')!.agents = [agent('x')];
+      app.activeSwarm.panes.add(pane(1, 'm', 'x'));
+      final id = app.activeSwarmId;
+      app.renameSwarm(id, 'My release');
+      daemons.putIfAbsent('m', _WindowNameConnection.new).replies.add({
+        'name': 'Harness Tabs',
+      });
+      autoRename(true);
+      expect(workspaceTabNames(app)[id], 'My release');
+      await pumpEventQueue();
+      expect(asked(daemons, 'm'), isEmpty);
+      expect(workspaceTabNames(app)[id], 'My release');
+    });
+
+    test('pending is asked again once, five seconds later', () {
+      fakeAsync((async) {
+        final daemons = <String, _WindowNameConnection>{};
+        final app = appWith(daemons);
+        app.stateOf('m')!.agents = [agent('x')];
+        app.activeSwarm.panes.add(pane(1, 'm', 'x'));
+        final id = app.activeSwarmId;
+        daemons.putIfAbsent('m', _WindowNameConnection.new).replies.addAll([
+          {'name': null, 'pending': true},
+          {'name': 'Mobile Test'},
+        ]);
+        autoRename(true);
+        final today = workspaceTabNames(app)[id];
+        async.flushMicrotasks();
+        expect(asked(daemons, 'm'), hasLength(1));
+        for (var i = 0; i < 20; i++) {
+          expect(workspaceTabNames(app)[id], today);
+          async.elapse(const Duration(milliseconds: 200));
+        }
+        expect(asked(daemons, 'm'), hasLength(1));
+        async.elapse(const Duration(seconds: 1));
+        workspaceTabNames(app);
+        async.flushMicrotasks();
+        expect(asked(daemons, 'm'), hasLength(2));
+        expect(workspaceTabNames(app)[id], 'Mobile Test');
+        app.dispose();
+      });
+    });
+
+    test('no name is asked about again only after ten minutes', () {
+      fakeAsync((async) {
+        final daemons = <String, _WindowNameConnection>{};
+        final app = appWith(daemons);
+        app.stateOf('m')!.agents = [agent('x')];
+        app.activeSwarm.panes.add(pane(1, 'm', 'x'));
+        final id = app.activeSwarmId;
+        daemons.putIfAbsent('m', _WindowNameConnection.new).replies.addAll([
+          {'name': null},
+          {'name': 'Harness Tabs'},
+        ]);
+        autoRename(true);
+        final today = workspaceTabNames(app)[id];
+        async.flushMicrotasks();
+        async.elapse(const Duration(minutes: 9));
+        expect(workspaceTabNames(app)[id], today);
+        async.flushMicrotasks();
+        expect(asked(daemons, 'm'), hasLength(1));
+        async.elapse(const Duration(minutes: 1));
+        workspaceTabNames(app);
+        async.flushMicrotasks();
+        expect(asked(daemons, 'm'), hasLength(2));
+        expect(workspaceTabNames(app)[id], 'Harness Tabs');
+        app.dispose();
+      });
+    });
+
+    test('an error keeps the label and quiets that machine for a while', () {
+      fakeAsync((async) {
+        final daemons = <String, _WindowNameConnection>{};
+        final app = appWith(daemons);
+        app.stateOf('m')!.agents = [agent('x'), agent('y')];
+        app.activeSwarm.panes.add(pane(1, 'm', 'x'));
+        app.newSwarm();
+        app.activeSwarm.panes.add(pane(2, 'm', 'y'));
+        daemons.putIfAbsent('m', _WindowNameConnection.new).replies.add({
+          'name': null,
+          'error': 'UNSUPPORTED',
+        });
+        autoRename(false);
+        final today = workspaceTabNames(app);
+        autoRename(true);
+        expect(workspaceTabNames(app), today);
+        async.flushMicrotasks();
+        // Both tabs asked at once; neither, nor anything after, again.
+        expect(asked(daemons, 'm'), hasLength(2));
+        for (var i = 0; i < 30; i++) {
+          expect(workspaceTabNames(app), today);
+          async.elapse(const Duration(seconds: 1));
+        }
+        app.stateOf('m')!.agents = [agent('x', name: 'Fix tabs'), agent('y')];
+        expect(workspaceTabNames(app), today);
+        async.flushMicrotasks();
+        expect(asked(daemons, 'm'), hasLength(2));
+
+        async.elapse(const Duration(minutes: 10));
+        workspaceTabNames(app);
+        async.flushMicrotasks();
+        expect(asked(daemons, 'm'), hasLength(4));
+        app.dispose();
+      });
+    });
+
+    test('a pane title change asks again', () async {
+      final daemons = <String, _WindowNameConnection>{};
+      final app = appWith(daemons);
+      addTearDown(app.dispose);
+      app.stateOf('m')!.agents = [agent('x'), agent('y')];
+      app.activeSwarm.panes.addAll([pane(1, 'm', 'x'), pane(2, 'm', 'y')]);
+      final id = app.activeSwarmId;
+      daemons.putIfAbsent('m', _WindowNameConnection.new).replies.addAll([
+        {'name': 'Harness Tabs'},
+        {'name': 'Harness Rename'},
+      ]);
+      autoRename(true);
+      workspaceTabNames(app);
+      await pumpEventQueue();
+      expect(workspaceTabNames(app)[id], 'Harness Tabs');
+
+      app.stateOf('m')!.agents = [agent('x', name: 'Rename tabs'), agent('y')];
+      // The old name stays while the new question is out.
+      expect(workspaceTabNames(app)[id], 'Harness Tabs');
+      await pumpEventQueue();
+      expect(asked(daemons, 'm'), [
+        ['x', 'y'],
+        ['x', 'y'],
+      ]);
+      expect(workspaceTabNames(app)[id], 'Harness Rename');
+    });
+
+    test('the machine with the most repo panes is asked, not the one with the most panes', () async {
+      final daemons = <String, _WindowNameConnection>{};
+      final app = appWith(daemons);
+      addTearDown(app.dispose);
+      app.stateOf('m')!.agents = [
+        agent('p', project: folder),
+        agent('q', project: null),
+        agent('s', engine: 'terminal'),
+      ];
+      app.stateOf('b')!.agents = [agent('r'), agent('v')];
+      app.activeSwarm.panes.addAll([
+        pane(1, 'm', 'p'),
+        pane(2, 'm', 'q'),
+        pane(3, 'm', 's'),
+        pane(4, 'b', 'r'),
+      ]);
+      // A tie goes to the machine of the first repo pane.
+      app.newSwarm();
+      app.stateOf('m')!.agents = [...app.stateOf('m')!.agents, agent('w')];
+      app.activeSwarm.panes.addAll([pane(5, 'b', 'v'), pane(6, 'm', 'w')]);
+      autoRename(true);
+      workspaceTabNames(app);
+      await pumpEventQueue();
+      expect(asked(daemons, 'b'), [
+        ['r'],
+        ['v'],
+      ]);
+      expect(asked(daemons, 'm'), isEmpty);
+    });
+
+    test(
+      'a relayed machine is not asked until window_name is sealed',
+      () async {
+        final daemons = <String, _WindowNameConnection>{};
+        final app = appWith(daemons, relayed: true);
+        addTearDown(app.dispose);
+        app.stateOf('b')!.agents = [agent('r')];
+        app.activeSwarm.panes.add(pane(1, 'b', 'r'));
+        final id = app.activeSwarmId;
+        daemons.putIfAbsent('b', _WindowNameConnection.new).replies.add({
+          'name': 'Harness Tabs',
+        });
+        autoRename(false);
+        final today = workspaceTabNames(app)[id];
+        autoRename(true);
+        expect(workspaceTabNames(app)[id], today);
+        await pumpEventQueue();
+        expect(asked(daemons, 'b'), isEmpty);
+        expect(workspaceTabNames(app)[id], today);
+      },
+    );
+
+    test('a tab with no harness in a repo asks nothing', () async {
+      final daemons = <String, _WindowNameConnection>{};
+      final app = appWith(daemons);
+      addTearDown(app.dispose);
+      app.stateOf('m')!.agents = [
+        agent('p', project: folder),
+        agent('q', project: null),
+        agent('s', engine: 'terminal'),
+        agent(
+          'u',
+          project: const AgentProject(
+            name: 'harness',
+            cwd: '/harness',
+            branch: '',
+          ),
+        ),
+      ];
+      app.activeSwarm.panes.addAll([
+        for (final (index, id) in ['p', 'q', 's', 'u'].indexed)
+          pane(index + 1, 'm', id),
+      ]);
+      final id = app.activeSwarmId;
+      autoRename(false);
+      final today = workspaceTabNames(app)[id];
+      autoRename(true);
+      expect(workspaceTabNames(app)[id], today);
+      await pumpEventQueue();
+      expect(asked(daemons, 'm'), isEmpty);
+    });
   });
 
   test('status presets retain real metadata and omit missing Git context', () {

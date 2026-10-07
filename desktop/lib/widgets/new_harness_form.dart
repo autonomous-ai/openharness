@@ -406,7 +406,9 @@ class NewHarnessFormState extends State<NewHarnessForm> {
       'title': _picking ? _label(_row) : 'New Harness',
       'label': _picking ? option?.title ?? 'No matches' : _label(_row),
       'detail': _picking
-          ? option?.detail ?? ''
+          ? option == null
+                ? ''
+                : _detailWithMeta(option)
           : _row == _Row.start
           ? '${box.launchAgentLabel}\n${box.launchProjectLabel}'
           : _value(_row),
@@ -1938,7 +1940,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
             _desktopField(
               order: 5,
               anchor: _desktopAnchors[_Row.model]!,
-              child: _desktopChoiceButton(_Row.model, AppIcons.sparkles),
+              child: _desktopChoiceButton(_Row.model, AppIcons.brain),
             ),
           if (box.hasModes)
             _desktopField(
@@ -2336,24 +2338,42 @@ class NewHarnessFormState extends State<NewHarnessForm> {
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
                           if (_headingBefore(i))
-                            SizedBox(
-                              height: _desktopGroupHeight,
-                              child: Padding(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 8,
-                                ),
-                                child: Align(
-                                  alignment: Alignment.centerLeft,
-                                  child: Text(
-                                    box.options[i].group!,
-                                    style: DesktopChrome.text(
-                                      size: 11,
-                                      color: DesktopChrome.muted,
-                                    ),
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                ),
+                            Container(
+                              height:
+                                  _desktopGroupHeight(i) -
+                                  _desktopHeadingGap(i),
+                              // Each list after the first starts under a line, so where
+                              // Subscription ends and Shared with you begins is seen, not read.
+                              margin: EdgeInsets.only(
+                                top: _desktopHeadingGap(i),
+                              ),
+                              decoration: _desktopModelRows && i > 0
+                                  ? BoxDecoration(
+                                      border: Border(
+                                        top: BorderSide(
+                                          color: DesktopChrome.rim,
+                                        ),
+                                      ),
+                                    )
+                                  : null,
+                              // On the model rows' text edge: they carry no mark before it.
+                              padding: EdgeInsets.symmetric(
+                                horizontal: _desktopModelRows ? 10 : 8,
+                              ),
+                              alignment: Alignment.centerLeft,
+                              child: Text(
+                                box.options[i].group!,
+                                style: _desktopModelRows
+                                    ? DesktopChrome.text(
+                                        size: 13,
+                                        color: DesktopChrome.foreground,
+                                      ).copyWith(fontWeight: FontWeight.w600)
+                                    : DesktopChrome.text(
+                                        size: 11,
+                                        color: DesktopChrome.muted,
+                                      ),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
                               ),
                             ),
                           if (_desktopRecentDivider(i))
@@ -2406,7 +2426,19 @@ class NewHarnessFormState extends State<NewHarnessForm> {
   double _desktopLineHeight(String text, double size) =>
       _desktopTextSize(text, size).height.ceilToDouble();
 
-  double get _desktopGroupHeight => _desktopLineHeight('Ag', 11) + 12;
+  /// The model chooser reads as the Models picker does: a row with no mark on it, the name at the
+  /// picker's size with the machine under it, what the row says of itself at its end, and the
+  /// picker's headings. The same mark on every row said nothing, and the smaller type made the
+  /// same models look like a different list.
+  bool get _desktopModelRows => box.field == NewHarnessField.model;
+  double get _desktopTitleSize => _desktopModelRows ? 14 : 13;
+
+  /// A heading's slot, with the line and gap above every model list after the first. The model
+  /// lists' headings are the menu's landmarks: the picker's muted small type read as one more row.
+  double _desktopGroupHeight(int i) => _desktopModelRows
+      ? _desktopLineHeight('Ag', 13) + 16 + _desktopHeadingGap(i)
+      : _desktopLineHeight('Ag', 11) + 12;
+  double _desktopHeadingGap(int i) => _desktopModelRows && i > 0 ? 6 : 0;
   double get _desktopSearchHeight =>
       _desktopLineHeight('Ag', 14).clamp(32.0, double.infinity);
   bool _desktopRecentDivider(int i) =>
@@ -2415,12 +2447,15 @@ class NewHarnessFormState extends State<NewHarnessForm> {
       !box.options[i].synthetic &&
       box.options[i - 1].synthetic;
   double _desktopChoiceHeight(int i) =>
-      16 +
-      _desktopLineHeight(_desktopOptionTitle(box.options[i]), 13) +
+      (_desktopModelRows ? 20 : 16) +
+      _desktopLineHeight(
+        _desktopOptionTitle(box.options[i]),
+        _desktopTitleSize,
+      ) +
       (_desktopOptionDetail(box.options[i]).isEmpty
           ? 0
           : 3 + _desktopLineHeight(_desktopOptionDetail(box.options[i]), 12)) +
-      (_headingBefore(i) ? _desktopGroupHeight : 0) +
+      (_headingBefore(i) ? _desktopGroupHeight(i) : 0) +
       (_desktopRecentDivider(i) ? 13 : 0);
 
   bool _desktopOpensFolderPicker(NewHarnessOption option) =>
@@ -2489,7 +2524,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
       NewHarnessField.project ||
       NewHarnessField.projectName => AppIcons.folder,
       NewHarnessField.projectRepository => AppIcons.code,
-      NewHarnessField.model => AppIcons.sparkles,
+      NewHarnessField.model => AppIcons.brain,
       NewHarnessField.profile => AppIcons.user,
       NewHarnessField.mode => AppIcons.shieldCheck,
       _ => AppIcons.code,
@@ -2506,10 +2541,11 @@ class NewHarnessFormState extends State<NewHarnessForm> {
         ? DesktopChrome.selectionDetail
         : DesktopChrome.muted;
     final titleStyle = DesktopChrome.text(
-      size: 13,
+      size: _desktopTitleSize,
       color: option.enabled ? ink : muted,
     );
     final detail = _desktopOptionDetail(option);
+    final meta = _desktopModelRows ? option.meta : null;
     final current = box.isCurrent(option) && !_isDoor(option);
     final note = box.field == NewHarnessField.machine
         ? _unlinked(option)
@@ -2549,10 +2585,14 @@ class NewHarnessFormState extends State<NewHarnessForm> {
             onTap: !box.locked ? () => _acceptChoice(option) : null,
             child: Padding(
               key: highlighted ? _choiceKey : null,
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              padding: EdgeInsets.symmetric(
+                horizontal: 10,
+                vertical: _desktopModelRows ? 10 : 8,
+              ),
               child: Row(
                 children: [
-                  if (box.field != NewHarnessField.machine) ...[
+                  if (box.field != NewHarnessField.machine &&
+                      !_desktopModelRows) ...[
                     if ((box.field == NewHarnessField.harness ||
                             box.field == NewHarnessField.agent) &&
                         !_isDoor(option))
@@ -2599,7 +2639,9 @@ class NewHarnessFormState extends State<NewHarnessForm> {
                           const SizedBox(height: 3),
                           Text(
                             detail,
-                            style: DesktopChrome.text(size: 12, color: muted),
+                            style: _desktopModelRows
+                                ? DesktopChrome.metadata(color: muted)
+                                : DesktopChrome.text(size: 12, color: muted),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                           ),
@@ -2607,6 +2649,19 @@ class NewHarnessFormState extends State<NewHarnessForm> {
                       ],
                     ),
                   ),
+                  if (meta?.isNotEmpty == true) ...[
+                    const SizedBox(width: 12),
+                    // Shares the row with the name rather than pushing past its end: at 390
+                    // points and twice the text size, a fixed "79% remaining" overflowed by 111.
+                    Flexible(
+                      child: Text(
+                        meta!,
+                        style: DesktopChrome.metadata(color: muted),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ],
                   if (note?.isNotEmpty == true) ...[
                     const SizedBox(width: 8),
                     ConstrainedBox(
@@ -3443,10 +3498,15 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     return machine.isLocalMachine ? 'This machine' : null;
   }
 
+  /// A choice's description with what it says of itself ([NewHarnessOption.meta]) after it, for the
+  /// layouts that have no column at the row's end.
+  String _detailWithMeta(NewHarnessOption option) =>
+      [if (option.detail.isNotEmpty) option.detail, ?option.meta].join(' · ');
+
   /// Whether a choice carries a description under its name.
   bool _showsDetail(NewHarnessOption option) =>
       (_row == _Row.model || _row == _Row.profile) &&
-      option.detail.isNotEmpty &&
+      _detailWithMeta(option).isNotEmpty &&
       !_isDoor(option);
 
   /// A machine this computer has not linked yet. On screen it looks like
@@ -3533,7 +3593,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
                     Expanded(
                       child: _oneRow(
                         Text(
-                          option.detail,
+                          _detailWithMeta(option),
                           style: _ink(_faint),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,

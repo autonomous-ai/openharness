@@ -34,6 +34,7 @@ export const SERVICE_RUNNERS: ReadonlyMap<string, () => Promise<Runner>> = new M
   ['usage', async () => (await import('./services/usageProcess.js')).runUsageService],
   ['monitor', async () => (await import('./services/monitorProcess.js')).runMonitorService],
   ['projects', async () => (await import('./services/projectsProcess.js')).runProjectsService],
+  ['windowNames', async () => (await import('./services/windowNamesProcess.js')).runWindowNamesService],
   ['handoff', async () => (await import('./services/handoffProcess.js')).runHandoffService],
   ['recaps', async () => (await import('./services/recapsProcess.js')).runRecapsService],
   ['store', async () => (await import('./services/storeProcess.js')).runStoreService],

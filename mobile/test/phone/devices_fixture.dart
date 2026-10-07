@@ -145,7 +145,11 @@ class DevicesApp extends AppNotifier {
     baseline: baseline,
     baselineSeen: baselineSeen,
     departed: departed,
+    registerError: registerError,
   );
+
+  /// Why the backend last refused this phone a place in the log.
+  String? registerError;
 
   /// When set, [deviceHistory] waits for it before answering (a read still in flight).
   Completer<void>? historyGate;

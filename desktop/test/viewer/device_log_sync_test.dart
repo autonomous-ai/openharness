@@ -1,11 +1,16 @@
 import 'dart:async';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/auth/auth_session.dart';
+import 'package:harness/core/config.dart';
 import 'package:harness/core/local_key_value_store.dart';
 import 'package:harness/e2ee/bytes.dart';
 import 'package:harness/e2ee/keys.dart';
 import 'package:harness/viewer/device_log.dart';
 import 'package:harness/viewer/device_log_sync.dart';
+import 'package:harness/viewer/direct_auth.dart';
+import 'package:harness/viewer/direct_auth_api.dart';
+import 'package:harness/viewer/direct_link.dart';
 import 'package:harness/viewer/group_sync.dart';
 import 'package:harness/viewer/viewer_key_store.dart';
 
@@ -101,6 +106,18 @@ class _LostSignIn extends _Memory {
   }
 }
 
+/// A sign-in that counts how often a token is asked for, and has none.
+class _Auth extends DirectAuth {
+  _Auth() : super(session: AuthSession(storage: _Memory()), api: DirectAuthApi(config: AppConfig.dev));
+  int asked = 0;
+
+  @override
+  Future<String> accessToken({bool force = false, String? failedToken}) async {
+    asked++;
+    throw StateError('signed out');
+  }
+}
+
 /// Lets whatever is runnable run (crypto included), for at most [ms].
 Future<void> _settle(Future<void> f, [int ms = 300]) =>
     Future.any([f, Future<void>.delayed(Duration(milliseconds: ms))]);
@@ -162,7 +179,11 @@ class _Backend {
     return (acct: acct, head: head, entries: [for (final e in log) if (e.seq > since) e.toJson()]);
   }
 
+  /// Every append is refused with this code while set.
+  String? refuse;
+
   Future<DeviceLogAppendAnswer?> append(DevLogEntry entry) async {
+    if (refuse case final code?) return (head: null, error: code);
     if (entry.seq != state.head.seq + 1 || entry.prev != state.head.hash) {
       return (head: state.head, error: 'STALE_HEAD');
     }
@@ -203,6 +224,31 @@ void main() {
     signedOut = 0;
     box2 = await E2eeIdentity.fromSeed(List.filled(32, 2));
     box3 = await E2eeIdentity.fromSeed(List.filled(32, 3));
+  });
+
+  test('a refusal to register is kept for the listing until a register lands; no answer is no refusal', () async {
+    var reachable = false;
+    final log = ViewerDeviceLog(
+      keys: keys,
+      fetch: backend.fetch,
+      append: (e) async => reachable ? backend.append(e) : null,
+      label: () => 'my-phone',
+      now: () => 5000,
+      sleep: (_) async {},
+    );
+    await log.register();
+    expect((await log.list()).registerError, isNull);
+    reachable = true;
+    backend.refuse = 'TOO_MANY';
+    await log.register();
+    expect((await log.list()).registerError, 'TOO_MANY');
+    // Nothing of it is written down.
+    expect((await keys.deviceLog())! as Map, isNot(contains('registerError')));
+    backend.refuse = null;
+    await log.register();
+    final me = b64e((await keys.identity()).pub);
+    expect(backend.state.active[me], isNotNull);
+    expect((await log.list()).registerError, isNull);
   });
 
   test('registers this app and pins every machine already in the log, announcing none', () async {
@@ -829,6 +875,39 @@ void main() {
       expect((await log.list()).pending, [b64e(evil.pub)]);
     });
 
+    /// The backend's answers one entry at a time: a log of n entries is n pages.
+    Future<DeviceLogFetched?> onePerPage(int since) async {
+      final got = await backend.fetch(since);
+      return got == null ? null : (acct: got.acct, head: got.head, entries: got.entries.take(1).toList());
+    }
+
+    Future<void> addViewers(int n) async {
+      for (var i = 0; i < n; i++) {
+        await backend.add(await E2eeIdentity.fromSeed(List.filled(32, 100 + i)), 'viewer', '', 'app $i');
+      }
+    }
+
+    test('a first read longer than the usual page cap is all joined: none of it is news', () async {
+      await addViewers(25);
+      final log = logWith(onePerPage);
+      await log.refresh();
+      await log.refresh();
+      expect(announced, isEmpty);
+      expect((await log.list()).joinedSeq, 25);
+      // Past the join, the usual cap (and news) again.
+      await backend.add(evil, 'viewer', '', 'evil');
+      await log.refresh();
+      expect(announced.map((m) => m.label), ['evil']);
+    });
+
+    test('a review reads a list longer than the usual page cap', () async {
+      await addViewers(25);
+      final preview = await logWith(onePerPage).rebaseline(confirm: false);
+      expect(preview, isNotNull);
+      expect(preview!.head, backend.state.head);
+      expect(preview.added, hasLength(25));
+    });
+
     test('a head that is not a position is not read at all', () async {
       await backend.add(box2, 'machine', _mid2, 'box2');
       final log = logWith((since) async {
@@ -1218,6 +1297,24 @@ void main() {
       expect((await keys.deviceLogArchive()).keys, ['acct-b0', 'acct-b1', 'acct-b2', 'acct-b3']);
     });
 
+    test('the oldest kept account is not the one dropped when it is the one being come back to', () async {
+      var current = backend;
+      final log = at(() => current);
+      await backend.add(box2, 'machine', _mid2, 'box2');
+      await log.register(freshSignIn: true);
+      for (var i = 0; i < 4; i++) {
+        current = _Backend('acct-b$i');
+        await log.register(freshSignIn: true);
+      }
+      // Four kept, the first account the oldest of them: back to it, it is restored, not started over.
+      expect((await keys.deviceLogArchive()).keys.first, _acct);
+      current = backend;
+      await log.register(freshSignIn: true);
+      expect(((await file())['state'] as Map)['acct'], _acct);
+      expect(await keys.peer(_mid2), isNotNull, reason: 'what it trusted comes back with it');
+      expect((await keys.deviceLogArchive()).keys, ['acct-b0', 'acct-b1', 'acct-b2', 'acct-b3']);
+    });
+
     test('a session from before sign-in ids takes the list over but never starts it over', () async {
       var current = backend;
       final log = at(() => current);
@@ -1522,8 +1619,9 @@ void main() {
       const now = 30 * 60 * 1000;
 
       /// Signed in on [backend] (box3 new there), then the sign-in [epoch] (not yet the list's), whose
-      /// first read — at [now] — is of another account.
-      Future<void> later(String epoch) async {
+      /// first read — at [now] — is of another account. [acct]: the account the profile named for
+      /// the sign-in [acctEpoch] (by default [epoch]).
+      Future<void> later(String epoch, {String? acct, String? acctEpoch}) async {
         var current = backend;
         final log = at(() => current);
         await backend.add(box2, 'machine', _mid2, 'box2');
@@ -1532,6 +1630,7 @@ void main() {
         await backend.add(box3, 'machine', _mid3, 'box3');
         await log.refresh();
         await keys.writeSignInEpoch(epoch);
+        if (acct != null) await keys.writeSignInAcct(acctEpoch ?? epoch, acct);
         final restarted = at(() => current, now: now);
         current = _Backend('acct-2');
         await restarted.refresh();
@@ -1555,6 +1654,131 @@ void main() {
         await later('${'f' * 32}@${now - 9 * 60 * 1000}');
         expect(((await file())['state'] as Map)['acct'], 'acct-2');
         expect((await keys.deviceLogArchive()).keys, [_acct]);
+      });
+
+      test('one made long ago to the account the profile named starts it over', () async {
+        await later('${'f' * 32}@${now - 11 * 60 * 1000}', acct: 'acct-2');
+        expect(((await file())['state'] as Map)['acct'], 'acct-2');
+        expect((await file())['frozen'], isNull);
+        expect((await keys.deviceLogArchive()).keys, [_acct]);
+      });
+
+      test('one made long ago to another account than the one served only freezes', () async {
+        await later('${'f' * 32}@${now - 11 * 60 * 1000}', acct: 'acct-3');
+        expect(((await file())['state'] as Map)['acct'], _acct);
+        expect((await file())['frozen'], containsPair('reason', 'invalid'));
+        expect(await keys.deviceLogArchive(), isEmpty);
+      });
+
+      test('one made just now to another account than the one served only freezes', () async {
+        // The profile named this sign-in's account: a different one minutes later is the backend's word
+        // against it, which the window must not let through.
+        await later('${'f' * 32}@${now - 60 * 1000}', acct: 'acct-3');
+        expect(((await file())['state'] as Map)['acct'], _acct);
+        expect((await file())['frozen'], containsPair('reason', 'invalid'));
+      });
+
+      test('the account an earlier sign-in was made to says nothing about this one', () async {
+        await later('${'f' * 32}@${now - 11 * 60 * 1000}', acct: 'acct-2', acctEpoch: '${'e' * 32}@1');
+        expect(((await file())['state'] as Map)['acct'], _acct);
+        expect((await file())['frozen'], containsPair('reason', 'invalid'));
+      });
+    });
+
+    group('what this app trusts is kept per account', () {
+      final midD = 'd' * 32, midPw = 'e' * 32;
+      late E2eeIdentity boxD;
+      setUp(() async => boxD = await E2eeIdentity.fromSeed(List.filled(32, 4)));
+
+      Future<Set<String>> rosterPubs() async =>
+          {for (final m in GroupRoster.parse(await keys.groupRoster()).members) m.pub};
+
+      /// box3 linked by password before the log existed, box2 on the first account's log; then signed
+      /// in by hand to acct-2, whose log has boxD.
+      Future<(ViewerDeviceLog, _Backend)> switched() async {
+        var current = backend;
+        final log = at(() => current);
+        await keys.pin(midPw, box3.pub, label: 'pw');
+        await backend.add(box2, 'machine', _mid2, 'box2');
+        await log.register(freshSignIn: true);
+        // A first read keeps the links made before the log.
+        expect(await keys.peer(midPw), isNotNull);
+        expect((await file())['preLog'], [b64e(box3.pub)]);
+        final b = _Backend('acct-2');
+        await b.add(boxD, 'machine', midD, 'boxD');
+        current = b;
+        await log.register(freshSignIn: true);
+        expect(((await file())['state'] as Map)['acct'], 'acct-2');
+        return (log, b);
+      }
+
+      test('another account trusts none of the first one\'s machines; back to it, they are trusted again', () async {
+        final (log, b) = await switched();
+        expect(await keys.peer(_mid2), isNull);
+        expect(await keys.peer(midPw), isNull);
+        expect(await keys.peer(midD), isNotNull);
+        expect(await rosterPubs(), {b64e(boxD.pub)});
+        expect(((await keys.deviceLogArchive())[_acct] as Map)['trust'], isA<Map>());
+        // What the first account trusted is not "already known" here: on this log it is news.
+        expect((await file())['preLog'], isEmpty);
+        await b.add(box2, 'machine', _mid2, 'box2');
+        await log.refresh();
+        expect(announced.map((m) => m.label), ['box2']);
+        await at(() => backend).register(freshSignIn: true);
+        expect(((await file())['state'] as Map)['acct'], _acct);
+        expect(await keys.peer(_mid2), isNotNull);
+        expect(await keys.peer(midPw), isNotNull);
+        expect(await keys.peer(midD), isNull);
+        expect(await rosterPubs(), isNot(contains(b64e(boxD.pub))));
+      });
+
+      test('a kept list from before trust was kept with it trusts what its log names again', () async {
+        await switched();
+        final all = await keys.deviceLogArchive();
+        await keys.writeDeviceLogArchive({_acct: {...(all[_acct] as Map).cast<String, Object?>()}..remove('trust')});
+        await at(() => backend).register(freshSignIn: true);
+        expect(((await file())['state'] as Map)['acct'], _acct);
+        expect(await keys.peer(_mid2), isNotNull);
+        expect(await keys.peer(midD), isNull);
+      });
+
+      test('…unless it is frozen: nothing is trusted from it', () async {
+        await switched();
+        final all = await keys.deviceLogArchive();
+        final kept = {...(all[_acct] as Map).cast<String, Object?>()}..remove('trust');
+        kept['frozen'] = {'reason': 'fork', 'at': 1, 'lastGoodHead': backend.state.head.toJson()};
+        await keys.writeDeviceLogArchive({_acct: kept});
+        await at(() => backend).register(freshSignIn: true);
+        expect(((await file())['state'] as Map)['acct'], _acct);
+        expect(await keys.peer(_mid2), isNull);
+        expect(await keys.peer(midD), isNull);
+      });
+
+      test('"It\'s mine" lifting a kept list\'s suspension keeps what that list trusted', () async {
+        final (log, _) = await switched();
+        final pub = b64e(boxD.pub);
+        final all = await keys.deviceLogArchive();
+        await keys.writeDeviceLogArchive({_acct: {...(all[_acct] as Map).cast<String, Object?>(), 'suspended': [pub]}});
+        await keys.writeDeviceLog({...(await file()).cast<String, Object?>(), 'suspended': [pub]});
+        await log.dismiss(pub: pub);
+        final kept = (await keys.deviceLogArchive())[_acct] as Map;
+        expect(kept['suspended'], isNull);
+        expect(kept['trust'], isA<Map>());
+        await at(() => backend).register(freshSignIn: true);
+        expect(await keys.peer(midPw), isNotNull);
+      });
+
+      test('the group is not swapped while the log may still be the account left', () async {
+        final (log, _) = await switched();
+        final auth = _Auth();
+        final link = DirectLink(keys: keys, auth: auth, config: AppConfig.dev)..deviceLog = log;
+        expect(await log.ownsLog(), isTrue);
+        await link.syncGroup(_mid2, label: 'my-phone');
+        expect(auth.asked, 1); // goes on to the swap
+        log.beginSignIn(fresh: true);
+        expect(await log.ownsLog(), isFalse);
+        expect(await link.syncGroup(_mid2, label: 'my-phone'), same(GroupSyncOutcome.none));
+        expect(auth.asked, 1);
       });
     });
 
@@ -1592,6 +1816,24 @@ void main() {
       await log.register(); // same account: the list is this sign-in's now
       expect(await log.gossip(), isNotNull);
       await log.heard(b64e(box2.pub), {'head': other.state.head.toJson(), 'frozen': false, 'hashes': hashes});
+      expect((await file())['frozen'], containsPair('reason', 'fork'));
+    });
+
+    test('gossip names its account; a machine gossiping another account\'s log is not heard', () async {
+      final log = at(() => backend);
+      await backend.add(box2, 'machine', _mid2, 'box2');
+      await log.register(freshSignIn: true);
+      expect((await log.gossip())?['acct'], _acct);
+      final other = _Backend('acct-2');
+      await other.add(evil, 'viewer', '', 'evil');
+      await other.add(phone, 'viewer', '', 'phone');
+      final hashes = [for (var i = 0; i < other.state.hashes.length; i++) {'seq': i + 1, 'hash': other.state.hashes[i]}];
+      final theirs = {'head': other.state.head.toJson(), 'frozen': true, 'hashes': hashes};
+      await log.heard(b64e(box2.pub), {...theirs, 'acct': 'acct-2'});
+      expect((await file())['frozen'], isNull);
+      expect((await log.list()).frozenPeers, isEmpty);
+      // A machine too old to say which account: heard as before.
+      await log.heard(b64e(box2.pub), theirs);
       expect((await file())['frozen'], containsPair('reason', 'fork'));
     });
 
@@ -1638,6 +1880,22 @@ void main() {
         log.beginSignIn(fresh: false);
         await log.register();
         expect(await keys.signInEpoch(), before);
+      });
+
+      test('the account a sign-in by hand was made to is kept with it; a stored session keeps none', () async {
+        final log = makeLog();
+        log.beginSignIn(fresh: true);
+        await log.signedInAs('acct-2');
+        final epoch = (await keys.signInEpoch())!;
+        expect(await keys.signInAcct(epoch), 'acct-2');
+        await log.signedInAs('acct-3'); // once, for the sign-in it was made for
+        expect(await keys.signInAcct(epoch), 'acct-2');
+        final restarted = makeLog()..beginSignIn(fresh: false);
+        await restarted.signedInAs('acct-3');
+        expect(await keys.signInAcct(epoch), 'acct-2');
+        log.beginSignIn(fresh: true);
+        await log.register();
+        expect(await keys.signInAcct((await keys.signInEpoch())!), isNull);
       });
 
       test('this app\'s old key removed, read before register: no sign-out', () async {
@@ -1727,6 +1985,7 @@ void main() {
     test('a review of another account\'s list after a sign-in keeps the one it leaves', () async {
       await backend.add(box2, 'machine', _mid2, 'box2');
       await makeLog().register();
+      await keys.pin('e' * 32, box3.pub, label: 'pw');
       final f = Map<String, Object?>.from(await file());
       f['state'] = {...(f['state'] as Map).cast<String, Object?>(), 'acct': 'old'};
       f['suspended'] = ['k'];
@@ -1738,6 +1997,11 @@ void main() {
       expect(((await file())['state'] as Map)['acct'], _acct);
       expect((await file())['owner'], 'f' * 32);
       expect((await keys.deviceLogArchive()).keys, ['old']);
+      // What was trusted under the account left goes with it; this one trusts what its list names.
+      expect(((await keys.deviceLogArchive())['old'] as Map)['trust'], isA<Map>());
+      expect(await keys.peer('e' * 32), isNull);
+      expect(await keys.peer(_mid2), isNotNull);
+      expect((await file())['preLog'], isEmpty);
     });
 
     group('another account\'s list under the sign-in the live list belongs to', () {
@@ -1942,11 +2206,14 @@ void main() {
         final f = Map<String, Object?>.from(await file())..['suspended'] = [b64e(evil.pub)];
         await keys.writeDeviceLog(f);
         await keys.unlink(_mid3); // as the suspension does
+        await keys.pin('e' * 32, phone.pub, label: 'pw');
         final b = _Backend('acct-2');
         await b.add(k5, 'viewer', '', 'k5');
         current = b;
         await log.register(freshSignIn: true);
         expect(((await file())['state'] as Map)['acct'], 'acct-2');
+        expect(await keys.peer(_mid2), isNull);
+        expect(await keys.peer('e' * 32), isNull);
         current = backend; // no sign-in: the backend says the first account
         await log.refresh();
         expect(((await file())['state'] as Map)['acct'], 'acct-2');
@@ -1987,6 +2254,8 @@ void main() {
         expect(pubs(f['departed']), [b64e(k7.pub)]);
         expect(announced, isEmpty);
         expect(await keys.peer(_mid3), isNull);
+        expect(await keys.peer(_mid2), isNotNull);
+        expect(await keys.peer('e' * 32), isNotNull);
         final row = (await log.list()).members.firstWhere((r) => r.member.pub == b64e(evil.pub));
         expect([row.suspended, row.pending], [true, true]);
         expect((await keys.deviceLogArchive()).keys, isNot(contains(_acct)));

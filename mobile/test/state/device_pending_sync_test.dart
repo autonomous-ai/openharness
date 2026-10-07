@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/auth/auth_session.dart';
 import 'package:harness_mobile/core/config.dart';
 import 'package:harness_mobile/core/local_key_value_store.dart';
+import 'package:harness_mobile/core/models.dart';
 import 'package:harness_mobile/e2ee/bytes.dart';
 import 'package:harness_mobile/e2ee/keys.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
@@ -101,7 +102,12 @@ class _Backend {
     ],
   );
 
+  /// Every append is refused while set: this phone never gets into the log.
+  bool refuseAppends = false;
+  String refuseWith = 'FORBIDDEN';
+
   Future<DeviceLogAppendAnswer?> append(DevLogEntry entry) async {
+    if (refuseAppends) return (head: null, error: refuseWith);
     if (entry.seq != state.head.seq + 1 || entry.prev != state.head.hash) {
       return (head: state.head, error: 'STALE_HEAD');
     }
@@ -115,8 +121,14 @@ class _Api extends FakeApi {
 
   final _Backend backend;
 
+  /// The `self` every read of the log named.
+  final selves = <String?>[];
+
   @override
-  Future<DeviceLogFetched?> deviceKeys(int since) => backend.fetch(since);
+  Future<DeviceLogFetched?> deviceKeys(int since, {String? self}) {
+    selves.add(self);
+    return backend.fetch(since);
+  }
 
   @override
   Future<DeviceLogAppendAnswer?> appendDeviceKey(DevLogEntry entry) =>
@@ -300,6 +312,25 @@ void main() {
     expect(pubs(second.newDevices), [b64e(box3.pub)]);
     // The OS was told once already.
     expect(secondNotices.keys, isEmpty);
+  });
+
+  test('every read of the log names this phone\'s key; too many devices is said until a register lands', () async {
+    await backend.add(box2, 'machine', _mid2, 'box2');
+    backend
+      ..refuseAppends = true
+      ..refuseWith = 'TOO_MANY';
+    final (app, _) = await launch();
+    final me = b64e((await app.viewer.keys.identity()).pub);
+    final api = app.api as _Api;
+    expect(api.selves, isNotEmpty);
+    expect(api.selves.toSet(), {me});
+    expect(app.deviceListTooMany, isTrue);
+
+    backend.refuseAppends = false;
+    await app.deviceLog!.register();
+    await settle();
+    expect(backend.state.active[me], isNotNull);
+    expect(app.deviceListTooMany, isFalse);
   });
 
   test('"It’s mine" on one device holds across a restart', () async {
@@ -943,6 +974,19 @@ void main() {
       },
     );
 
+    test('a sign-in by hand keeps the profile\'s account beside its id; a stored session does not', () async {
+      final (first, _) = await launch(fresh: true, profileId: _acct);
+      expect(jsonDecode(disk.values['viewer_e2ee_sign_in_acct']!), {
+        'epoch': disk.values['viewer_e2ee_sign_in'],
+        'acct': _acct,
+      });
+      first.dispose();
+      apps.remove(first);
+      disk.values.remove('viewer_e2ee_sign_in_acct');
+      await launch(profileId: _acct);
+      expect(disk.values['viewer_e2ee_sign_in_acct'], isNull);
+    });
+
     test(
       'a sign-in by hand mints the log\'s own id, not the profile\'s',
       () async {
@@ -989,6 +1033,202 @@ void main() {
         listing.members.map((r) => r.member.pub),
         contains(b64e(box2.pub)),
       );
+    });
+  });
+
+  // A phone signed in first, then `harness login` on a computer: the machine is new to this phone's
+  // copy of the log (or the phone to the machine's), and the refusal says nothing more than "early".
+  // It is settled — the phone joins the log, reads it, dials again — before a password is asked for.
+  group('a machine that refuses this phone for want of trust', () {
+    Future<AppNotifier> withMachine() async {
+      final (app, _) = await launch();
+      (app.api as _Api).onMachines = () async => [remoteMachine(_mid2)];
+      await app.refreshMachines();
+      await settle();
+      return app;
+    }
+
+    Future<void> until(bool Function() done) async {
+      for (var i = 0; i < 500 && !done(); i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+    }
+
+    /// The phone's own key store, whose pins it holds in memory.
+    ViewerKeyStore keysOf(AppNotifier app) => app.viewer.keys;
+
+    test(
+      'the log names it: pinned and dialled again, no password asked',
+      () async {
+        final app = await withMachine();
+        final keys = keysOf(app);
+        await backend.add(box2, 'machine', _mid2, 'box2');
+        expect(
+          await keys.peer(_mid2),
+          isNull,
+          reason: 'the phone has not read the log since',
+        );
+        final redialled = <String>[];
+        app.onRedialForTest = redialled.add;
+
+        app.localFailureForTest(_mid2, 4404, 'NO_PEER_LINK');
+        expect(
+          app.stateOf(_mid2)!.needsLink,
+          isFalse,
+          reason: 'still connecting while it is settled',
+        );
+        app.connectionStatusForTest(_mid2, ConnectionStatus.disconnected);
+        expect(
+          app.stateOf(_mid2)!.connectionStatus,
+          ConnectionStatus.connecting,
+        );
+        await until(() => redialled.isNotEmpty);
+
+        expect(redialled, [_mid2]);
+        expect(app.stateOf(_mid2)!.needsLink, isFalse);
+        expect(await keys.peer(_mid2), isNotNull);
+      },
+    );
+
+    test(
+      'a key that lands while it is settled ends the wait at once',
+      () async {
+        final app = await withMachine()
+          ..trustSettleRound = const Duration(seconds: 30);
+        final redialled = <String>[];
+        app.onRedialForTest = redialled.add;
+        app.localFailureForTest(_mid2, 4404, 'NO_PEER_LINK');
+        await settle();
+        await backend.add(box2, 'machine', _mid2, 'box2');
+        await app.deviceLog!.refresh(); // a `device_keys_changed`
+        await until(() => redialled.isNotEmpty);
+        expect(redialled, [_mid2]);
+        expect(app.stateOf(_mid2)!.needsLink, isFalse);
+      },
+    );
+
+    test('denied once, then let in: never asks for a password', () async {
+      final app = await withMachine()
+        ..trustDeniedWait = const Duration(milliseconds: 10);
+      await keysOf(app).pin(_mid2, box2.pub, label: 'box2');
+      final redialled = <String>[];
+      app.onRedialForTest = redialled.add;
+
+      app.localFailureForTest(_mid2, 4404, 'E2E_DENIED');
+      await until(() => redialled.isNotEmpty);
+      await settle();
+
+      expect(redialled, [_mid2]);
+      expect(app.stateOf(_mid2)!.needsLink, isFalse);
+      expect(
+        app.stateOf(_mid2)!.agentLoadStatus,
+        isNot(AgentLoadStatus.needsLink),
+      );
+    });
+
+    test('still refused after the grace: the password it is', () async {
+      final app = await withMachine()
+        ..trustSettleRound = const Duration(milliseconds: 20);
+      var redials = 0;
+      // Each dial again is refused again: nothing names this machine.
+      app.onRedialForTest = (id) {
+        redials++;
+        scheduleMicrotask(
+          () => app.localFailureForTest(id, 4404, 'NO_PEER_LINK'),
+        );
+      };
+
+      app.localFailureForTest(_mid2, 4404, 'NO_PEER_LINK');
+      await until(() => app.stateOf(_mid2)!.needsLink);
+
+      expect(app.stateOf(_mid2)!.needsLink, isTrue);
+      expect(app.stateOf(_mid2)!.agentLoadStatus, AgentLoadStatus.needsLink);
+      expect(redials, 2, reason: 'two rounds, then the password');
+      expect(app.deviceListNeedsReview, isFalse);
+    });
+
+    test('a frozen log settles nothing: the password at once, and the list asks for a review', () async {
+      backend.refuseAppends =
+          true; // this phone is not in it, and cannot get in while it is frozen
+      final app = await withMachine();
+      final keys = keysOf(app);
+      final file = Map<String, Object?>.from(await keys.deviceLog() as Map);
+      file['frozen'] = {
+        'reason': 'fork',
+        'at': 1,
+        'lastGoodHead': backend.state.head.toJson(),
+      };
+      await keys.writeDeviceLog(file);
+      final redialled = <String>[];
+      app.onRedialForTest = redialled.add;
+
+      app.localFailureForTest(_mid2, 4404, 'NO_PEER_LINK');
+      await until(
+        () => app.stateOf(_mid2)!.needsLink && app.deviceListNeedsReview,
+      );
+
+      expect(app.stateOf(_mid2)!.needsLink, isTrue);
+      expect(app.deviceListNeedsReview, isTrue);
+      expect(redialled, isEmpty);
+
+      await app.logout();
+      expect(
+        app.deviceListNeedsReview,
+        isFalse,
+        reason: 'the next sign-in may be another account',
+      );
+    });
+  });
+
+  group('a phone that hears no machine', () {
+    test('reads the machine list again on its own, and on coming back, until a machine connects', () async {
+      final (app, _) = await launch();
+      final api = app.api as _Api;
+      api.onMachines = () async => [remoteMachine(_mid2)];
+      app.handleAppPaused();
+      app.deafMachineListInterval = const Duration(milliseconds: 40);
+
+      // Back in front (the person was signing in their computer): asked at once, then now and then.
+      var before = api.machineFetches;
+      app.handleAppResumed();
+      await settle();
+      expect(api.machineFetches, greaterThan(before));
+      before = api.machineFetches;
+      await Future<void>.delayed(const Duration(milliseconds: 130));
+      await settle();
+      expect(api.machineFetches, greaterThan(before));
+
+      // In a pocket: not asked at all.
+      app.handleAppPaused();
+      await settle();
+      before = api.machineFetches;
+      await Future<void>.delayed(const Duration(milliseconds: 130));
+      expect(api.machineFetches, before);
+
+      // A machine connected: its pushes say what changes.
+      app.handleAppResumed();
+      await settle();
+      app.connectionStatusForTest(_mid2, ConnectionStatus.connected);
+      await settle();
+      before = api.machineFetches;
+      await Future<void>.delayed(const Duration(milliseconds: 130));
+      await settle();
+      expect(api.machineFetches, before);
+    });
+
+    test('a `machines_changed` push reads the list again', () async {
+      final (app, _) = await launch();
+      final api = app.api as _Api;
+      api.onMachines = () async => [remoteMachine(_mid2)];
+      await app.refreshMachines();
+      await settle();
+      final before = api.machineFetches;
+      await app.handleMachineEventForTest(_mid2, {
+        'type': 'machines_changed',
+        'payload': {'reason': 'created'},
+      });
+      await settle();
+      expect(api.machineFetches, before + 1);
     });
   });
 }

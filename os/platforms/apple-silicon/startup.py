@@ -192,6 +192,13 @@ def offline(root):
     with ExitStack() as mounts:
         mounts.enter_context(mount_at('proc', root / 'proc', 'nosuid,nodev,noexec', 'proc'))
         mounts.enter_context(mount_at('sysfs', root / 'sys', 'ro,nosuid,nodev,noexec', 'sysfs'))
+        if Path('/sys/fs/selinux/enforce').exists():
+            # Account tools must see the running SELinux policy when replacing
+            # passwd/shadow files. A bare sysfs makes them assume it is disabled
+            # even though the kernel still enforces labels. Policy queries use
+            # writable selinuxfs request files; /sys itself remains read-only.
+            mounts.enter_context(mount_at('selinuxfs', root / 'sys/fs/selinux',
+                                          'nosuid,nodev,noexec', 'selinuxfs'))
         # --rbind is needed for /dev/pts. The outer private namespace prevents
         # propagation into installer services; recursive unmount releases it.
         dev = root / 'dev'
@@ -226,15 +233,25 @@ def verify_runtime(root, payload):
 def label_files(root, *paths):
     # restorecon can silently do nothing when the installer kernel has SELinux
     # disabled. setfiles explicitly labels an offline filesystem with the
-    # installed policy, regardless of the installer's enforcement mode.
-    run('chroot', root, '/usr/sbin/setfiles', '-F', '-e', '/boot/efi',
+    # installed policy, which can contain types absent from the smaller live
+    # policy. Validate against its binary rather than the running kernel policy.
+    policies = [p for p in checked(root, 'etc/selinux/targeted/policy').iterdir()
+                if re.fullmatch(r'policy\.\d+', p.name)]
+    if len(policies) != 1:
+        raise Error('Use the verified image with one installed SELinux policy.')
+    policy = str(policies[0].relative_to(root))
+    snapshot(root, policy)
+    # These are explicitly mounted target filesystems. A maintenance kernel can
+    # omit their seclabel mount flag; automatic mount-table exclusions then
+    # silently skip recursive labeling. Keep only our explicit EFI exclusion.
+    run('chroot', root, '/usr/sbin/setfiles', '-m', '-F', '-c', '/' + policy, '-e', '/boot/efi',
         '/etc/selinux/targeted/contexts/files/file_contexts', *paths, timeout=90)
 
 
 def build_boot(root, configs):
     for name, content in configs.items():
         atomic(checked(root, name), content.encode(), 0o600 if name == 'etc/crypttab' else 0o644)
-    label_files(root, *('/' + name for name in configs))
+    label_files(root, *('/' + name for name in configs), '/boot')
     run('chroot', root, 'grubby', '--update-kernel=ALL', '--remove-args=root rd.luks.uuid rd.luks.name',
         '--args=' + configs['etc/kernel/cmdline'].strip())
     run('chroot', root, 'grub2-mkconfig', '-o', '/boot/grub2/grub.cfg')

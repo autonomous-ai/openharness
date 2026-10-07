@@ -2227,7 +2227,14 @@ private final class SwarmTabStrip: NSView {
     daemonButton.foreground = terminalForeground
     voiceLabel.font = barFont
     updateDaemon(state["daemon"] as? [String: Any] ?? [:])
-    let rows = state["tabs"] as? [[String: Any]] ?? []
+    // One tab per id, the first row kept. A payload that listed a tab twice
+    // left two buttons with one id here, and the next update trapped building
+    // `previous` from them, taking the app down (1.2.57).
+    var seenIds = Set<String>()
+    let rows = (state["tabs"] as? [[String: Any]] ?? []).filter { row in
+      guard let id = row["id"] as? String else { return true }
+      return seenIds.insert(id).inserted
+    }
     let nextActiveId = state["activeId"] as? String ?? ""
     // A closed tab left the keyboard with Flutter (Dart's `tabStripFocused`).
     // Expose the Return hint without drawing a focus ring for this passive hold.
@@ -2238,7 +2245,7 @@ private final class SwarmTabStrip: NSView {
     let previousOrder = tabs.map(\.swarmId)
     tabOrderChanged = tabOrderChanged || ids != previousOrder
     for tab in tabs where !ids.contains(tab.swarmId) { tab.removeFromSuperview() }
-    let previous = Dictionary(uniqueKeysWithValues: tabs.map { ($0.swarmId, $0) })
+    let previous = Dictionary(tabs.map { ($0.swarmId, $0) }, uniquingKeysWith: { first, _ in first })
     tabs = rows.enumerated().compactMap { index, row in
       guard let id = row["id"] as? String else { return nil }
       let tab = previous[id] ?? SwarmTabButton(id: id)

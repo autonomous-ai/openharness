@@ -98,6 +98,6 @@ int main(void){
 '''
 with tempfile.TemporaryDirectory(prefix='harness-draft-ui-') as d:
     root=Path(d);(root/'test.c').write_text(code)
-    subprocess.run(['cc','-std=c11','-Wall','-Wextra','-Werror','-O1','-g','-fsanitize='+os.environ.get('SANITIZERS','undefined,bounds'),
+    subprocess.run(['cc','-std=c11', '-D_POSIX_C_SOURCE=200809L','-Wall','-Wextra','-Werror','-O1','-g','-fsanitize='+os.environ.get('SANITIZERS','undefined,bounds'),
         '-I',str(native),str(root/'test.c'),str(native/'draft.c'),str(native/'carry.c'),str(native/'terminal.c'),str(native/'fonts.c'),'-o',str(root/'test')],check=True)
     subprocess.run([str(root/'test')],check=True)

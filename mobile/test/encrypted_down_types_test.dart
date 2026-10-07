@@ -23,18 +23,22 @@ void main() {
     return file.readAsStringSync();
   }
 
-  /// The quoted names in the set literal that follows [start], `//` comments stripped first — the
-  /// CLI's comments quote type names too.
-  Set<String> namesIn(String source, String start) {
-    final from = source.indexOf(start);
-    if (from < 0) throw StateError('could not find $start');
-    final body = source.substring(from, source.indexOf('])', from));
-    final code = body
+  /// Quoted names in a declared set/array literal, including typed declarations.
+  /// Comments also quote frame names, so exclude them from the contract.
+  Set<String> namesIn(String source, String name) {
+    final code = source
         .split('\n')
         .map((line) => line.split('//').first)
         .join('\n');
+    final declaration = RegExp(
+      r'\b' +
+          RegExp.escape(name) +
+          r'(?:\s*:[^=]+)?\s*=\s*(?:new Set(?:<[^>]+>)?\(\s*)?\[([\s\S]*?)\]',
+    ).firstMatch(code);
+    if (declaration == null) throw StateError('could not find $name literal');
     return {
-      for (final match in RegExp(r"'([a-z0-9_]+)'").allMatches(code)) match[1]!,
+      for (final match in RegExp(r"'([a-z0-9_]+)'").allMatches(declaration[1]!))
+        match[1]!,
     };
   }
 
@@ -46,21 +50,24 @@ void main() {
 
   late Set<String> core, machineRequests, pairRequests, unwrapped;
   setUpAll(() {
-    core = namesIn(
-      cli('lib/e2ee/core.ts'),
-      'ENCRYPTED_DOWN_TYPES = new Set<string>([',
-    );
+    core = namesIn(cli('lib/e2ee/core.ts'), 'ENCRYPTED_DOWN_TYPES');
     final frames = cli('lib/e2ee/applicationFrames.ts');
-    machineRequests = namesIn(frames, 'MACHINE_REQUESTS = new Set([');
-    pairRequests = namesIn(frames, 'PAIR_REQUESTS = new Set([');
+    final relay = cli('lib/relayFrames.ts');
+    machineRequests = {
+      ...namesIn(frames, 'MACHINE_REQUESTS'),
+      ...namesIn(cli('lib/shellProtocol.ts'), 'SHELL_REQUESTS'),
+      ...namesIn(relay, 'OWNER_COMMAND_TYPES'),
+      ...namesIn(relay, 'ROUTE_COMMAND_TYPES'),
+    };
+    pairRequests = namesIn(relay, 'PAIR_REQUESTS');
     unwrapped = {
       ...pairRequests,
       ...core,
       ...machineRequests,
-      ...namesIn(frames, 'FLEET_REQUESTS = new Set(['),
-      ...namesIn(cli('sharing/protocol.ts'), 'SHARE_REQUEST_TYPES = new Set(['),
-      ...namesIn(cli('teams/wire.ts'), 'TEAM_REQUEST_TYPES = new Set(['),
-      ...namesIn(cli('lib/viewerWire.ts'), 'VIEWER_DOWN_TYPES = new Set(['),
+      ...namesIn(frames, 'FLEET_REQUESTS'),
+      ...namesIn(cli('sharing/protocol.ts'), 'SHARE_REQUEST_TYPES'),
+      ...namesIn(cli('teams/wire.ts'), 'TEAM_REQUEST_TYPES'),
+      ...namesIn(cli('lib/viewerFrames.ts'), 'VIEWER_DOWN_TYPES'),
     };
   });
 

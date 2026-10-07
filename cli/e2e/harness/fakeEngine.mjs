@@ -526,6 +526,9 @@ export async function run(engine, config = {}, { native = false } = {}) {
   const suggestions = (text) => {
     const token = text.split(/\s/).at(-1) ?? ''
     if (bottom || token === dismissed || !/^[/@]/.test(token)) return null
+    // Codex only suggests a slash command at the beginning of its first line (sync_command_popup).
+    // A path in ordinary prose must not open a menu just because it ends the draft.
+    if (engine === 'codex' && token.startsWith('/') && !text.startsWith('/')) return null
     const found = token.startsWith('/')
       ? COMMANDS.filter(([name]) => name.startsWith(token))
       : FILES.filter((file) => file.startsWith(token.slice(1))).map((file) => [file, ''])

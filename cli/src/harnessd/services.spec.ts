@@ -346,6 +346,16 @@ describe('ServiceSupervisor', () => {
     never.stop(done)
     expect(done).toHaveBeenCalledOnce()
     expect(never.status()[0].state).toBe('stopped')
+    // Started again with the others (a re-execution the new bundle refused): off, and started when asked.
+    never.start()
+    expect(never.status()[0].state).toBe('off')
+    never.unasked(2)
+    expect(children.map((child) => child.spec.name)).toEqual(['orchestrator', 'devices', 'teams'])
+    // One running then is stopped and started with the others, and waits to be asked for again.
+    never.stop(vi.fn())
+    latest('teams').exit(0)
+    never.start()
+    expect(never.status()[0].state).toBe('off')
   })
 
   it('with no services, starting does nothing and stopping is done at once', () => {
@@ -429,11 +439,19 @@ describe('ServiceSupervisor', () => {
     expect(named.onDemand).toBeUndefined()
   })
 
+  it('runs models only once grid is in use or asked for, by a core of protocol 4, and from the start when named', () => {
+    const [models] = serviceSpecs({}, SERVICE_HOSTS).filter((spec) => spec.name === 'models')
+    expect(models).toMatchObject({ services: ['models'], onDemand: true, askedSince: 4 })
+    const [named] = serviceSpecs({ HARNESSD_SERVICES: 'models' }, SERVICE_HOSTS)
+    expect(named.services).toEqual(['models'])
+    expect(named.onDemand).toBeUndefined()
+  })
+
   it('knows every service each process this build runs hosts, and each in one process only', () => {
     const hosted = Object.values(SERVICE_HOSTS).flatMap((host) => host.services)
     expect(KNOWN_SERVICES).toEqual(hosted)
     expect(new Set(hosted).size).toBe(hosted.length)
-    expect(SERVICE_HOSTS.edge.services).toEqual(['workspaces', 'usage', 'monitor', 'projects', 'handoff', 'recaps'])
+    expect(SERVICE_HOSTS.edge.services).toEqual(['workspaces', 'usage', 'monitor', 'projects', 'handoff', 'recaps', 'windowNames'])
   })
 })
 
@@ -449,7 +467,7 @@ describe('which services the core leaves to its master', () => {
     expect(serviceProcessesEnv(serviceSpecs({ HARNESSD_SERVICES: 'store' }, SERVICE_HOSTS))).toMatchObject({ [SERVICE_PROCESSES_ENV]: 'store' })
     // By service, not by process: a core from before the edge host routes the services it knows of it.
     const hosted = serviceSpecs({ HARNESSD_SERVICES: 'edge' }, SERVICE_HOSTS)
-    expect(serviceProcessesEnv(hosted)).toEqual({ [SERVICE_PROCESSES_ENV]: 'workspaces,usage,monitor,projects,handoff,recaps', HARNESSD_SERVICES: 'workspaces,usage,monitor,projects,handoff,recaps' })
+    expect(serviceProcessesEnv(hosted)).toEqual({ [SERVICE_PROCESSES_ENV]: 'workspaces,usage,monitor,projects,handoff,recaps,windowNames', HARNESSD_SERVICES: 'workspaces,usage,monitor,projects,handoff,recaps,windowNames' })
     expect([...servicesTheMasterRuns({ ...supervised, ...serviceProcessesEnv(hosted) }, known)]).toEqual(['workspaces'])
     expect(serviceProcessesEnv([])).toEqual({ [SERVICE_PROCESSES_ENV]: '', HARNESSD_SERVICES: 'none' })
     expect([...servicesTheMasterRuns({ ...supervised, ...serviceProcessesEnv(specs) }, known)]).toEqual(['search', 'workspaces'])

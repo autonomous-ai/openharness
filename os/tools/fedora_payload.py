@@ -51,6 +51,7 @@ def stage(source, runtime, destination, commit, runtime_commit, agent=None):
         'usr/bin/hn', 'usr/bin/harness', 'usr/bin/hn-browser',
         'usr/share/harness-os/foot.ini', 'usr/share/harness-os/tmux.conf',
         'usr/share/harness-os/lock/layout.ui', 'usr/share/harness-os/lock/style.css',
+        'usr/lib/udev/rules.d/70-harness-device.rules',
         *['usr/share/harness-os/labwc/' + name for name in ['autostart', 'shutdown', 'rc.xml']],
         *['usr/lib/harness-os/' + name for name in
           ['session', 'session-settings.py', 'runtime-path', 'wait-runtime', 'virtio-2d', 'open-wifi', 'open-updates', 'screen-action', 'screenshot', 'lock', 'files']],

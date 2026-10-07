@@ -20,6 +20,9 @@ use crate::pane::{self, Pane, Phase};
 use crate::proto::{self, Kind};
 use crate::theme;
 
+#[path = "account_scope.rs"]
+mod account_scope;
+
 /// What tmux's parser asks of the server: its global environment, formats, home folders.
 impl crate::cmdparse::Env for App {
     fn var(&self, name: &str) -> Option<String> { self.global_env.get(name).and_then(|e| e.value.clone()) }
@@ -350,7 +353,7 @@ impl Tab {
         Tab::with_wid(name, crate::ids::next(crate::ids::Kind::Window))
     }
     /// The empty window a session has before its first pane (numbered when first asked for).
-    pub fn home() -> Tab { Tab::with_wid("home", NO_WID) }
+    pub fn home() -> Tab { Tab::with_wid("New Tab", NO_WID) }
     /// A window with the id it had (a session another client kept, the desk's).
     pub fn with_wid(name: &str, wid: u64) -> Tab {
         Tab { id: Uuid::new_v4().simple().to_string(), wid: std::cell::Cell::new(wid), size: None, name: name.to_string(), named: false, home: false, root: None, focus: None, zoomed: false, last: Vec::new(), order: Vec::new(), points: HashMap::new(), alerts: 0, last_output: Instant::now(), activity: crate::format::now_secs(), layout_at: None, on_desk: false, sync: false, first_named: false, layout: json!({}), desk_layout: json!({}), desk_panes: Vec::new(), desk_preset: None, shared_geometry: None }
@@ -452,6 +455,14 @@ pub struct App {
     pub fleet: Fleet,
     links: HashMap<String, LinkState>,
     generation: u64,
+    /// The daemon identity survives temporary local-PTY fallback. Account-scoped replies
+    /// carry this epoch so a previous daemon cannot refill the new account's workspace.
+    pub account_epoch: u64,
+    boot_request: u64,
+    machines_request: u64,
+    removed_machines: HashSet<String>,
+    daemon_identity: Option<account_scope::Identity>,
+    local_tabs_to_sync: HashSet<String>,
     pub tabs: Vec<Tab>,
     pub active: usize,
     pub panes: HashMap<u64, Pane>,
@@ -536,6 +547,8 @@ pub struct App {
     /// Sessions' latest turns (session_tail), by session id: read once each time C-b s opens.
     pub tails: HashMap<String, Value>,
     pub tails_asked: HashSet<String>,
+    /// Auto rename's names and its one ask at a time (`autoname.rs`).
+    pub autoname: crate::autoname::Namer,
     pub desk_mode: DeskMode,
     /// The daemon on this computer is signed in (its `/api/status`): with DeskMode::Account, the
     /// desk is in front, with this computer's windows joined to it.
@@ -554,6 +567,7 @@ pub struct App {
     pub welcome: crate::new_harness::Welcome,
     /// ── models: the Models view's replies (local models, grids, APIs) and a Use under way ──
     pub models_view: crate::models::Models,
+    pub shell_context: crate::shell_context::State,
     /// Each machine's last measured round trip (the live roster request), for `@`.
     pub rtt: HashMap<String, Duration>,
     pub homes: HashMap<String, String>,
@@ -834,6 +848,11 @@ pub struct App {
     // ── machines & devices ──
     /// The panel's machine and device views: what the CLI and the daemon last said (devices.rs).
     pub devices: crate::devices::Devices,
+    pub session_close: crate::session_close::State,
+    pub account: crate::account::State,
+    pub controls: crate::workspace_controls::State,
+    pub agent_switch: crate::agent_switch::State,
+    pub hardware: crate::hardware::State,
 }
 
 impl App {
@@ -853,6 +872,12 @@ impl App {
             fleet: Fleet::default(),
             links: HashMap::new(),
             generation: 0,
+            account_epoch: 0,
+            boot_request: 0,
+            machines_request: 0,
+            removed_machines: HashSet::new(),
+            daemon_identity: None,
+            local_tabs_to_sync: HashSet::new(),
             tabs: vec![Tab::home()],
             active: 0,
             panes: HashMap::new(),
@@ -1006,6 +1031,7 @@ impl App {
             said: Vec::new(),
             tails: HashMap::new(),
             tails_asked: HashSet::new(),
+            autoname: Default::default(),
             desk_mode,
             signed_in: false,
             desk_revision: -1,
@@ -1021,6 +1047,7 @@ impl App {
             new_harness_draft: None,
             welcome: Default::default(),
             models_view: Default::default(),
+            shell_context: crate::shell_context::State::load(),
             rtt: HashMap::new(),
             homes: HashMap::new(),
             last_focus_sent: None,
@@ -1047,6 +1074,11 @@ impl App {
             fleet_marked: false,
             bar: Default::default(),
             devices: Default::default(),
+            session_close: Default::default(),
+            account: Default::default(),
+            controls: Default::default(),
+            agent_switch: Default::default(),
+            hardware: Default::default(),
         }
     }
 
@@ -1159,21 +1191,32 @@ impl App {
         self.links.get(machine_id).and_then(|s| s.link.clone()).filter(|_| self.fleet.machine(machine_id).map(Machine::usable).unwrap_or(false))
     }
 
+    /// A captured lifecycle operation belongs to this connection, even when a machine ID
+    /// reappears after reconnect or account changes.
+    pub fn connection_generation(&self, machine_id: &str) -> Option<u64> {
+        self.link(machine_id).map(|link| link.generation)
+    }
+
     // ── start: this machine, the account's machines, the desk ─────────────────
 
     pub fn boot(&mut self) {
         let port = self.port;
-        self.spawn(async move { http_json(port, "GET", "/api/status", None).await }, |app, status| match status {
+        self.boot_request = self.boot_request.wrapping_add(1);
+        let request = self.boot_request;
+        self.spawn(async move { http_json(port, "GET", "/api/status", None).await }, move |app, status| {
+            if request != app.boot_request { return }
+            match status {
             Ok(status) => {
                 app.daemon_down = false;
                 app.viewer_web_url = status.get("webUrl").and_then(Value::as_str).unwrap_or("").to_string();
                 let id = status.get("machineId").and_then(Value::as_str).unwrap_or("").to_string();
                 if id.is_empty() { return }
+                app.adopt_daemon_identity(&status);
                 if app.fleet.agents.is_empty() && app.fleet.machines.is_empty() { app.fleet.load_cache(&id) }
                 app.fleet.local_id = id.clone();
                 for machine in &mut app.fleet.machines { machine.local = machine.id == id || crate::local::is_local(&machine.id); }
                 if app.fleet.machine(&id).is_none() {
-                    app.fleet.machines.insert(0, Machine { id: id.clone(), name: fleet::machine_display_name(&id, None), local: true, status: "running".into(), reach: Reach::Unknown });
+                    app.fleet.machines.insert(0, Machine { shared: false, id: id.clone(), name: fleet::machine_display_name(&id, None), local: true, status: "running".into(), reach: Reach::Unknown });
                 }
                 // Signed out, this computer is its computer id; signed in, the account's machine id.
                 // Windows saved under the other one stayed `Connecting…` (after a sign-in) or `not
@@ -1200,7 +1243,7 @@ impl App {
                 app.maybe_start_shell();
                 app.retry_boot();
             }
-        });
+        }});
     }
 
     /// Once a desk window contains a local PTY, keep this client's windows as an ordinary
@@ -1219,7 +1262,7 @@ impl App {
 
     fn ensure_local_shells(&mut self) {
         if self.fleet.machine(crate::local::MACHINE).is_none() {
-            self.fleet.machines.insert(0, Machine { id: crate::local::MACHINE.into(), name: "This computer".into(), local: true, status: "running".into(), reach: Reach::Unknown });
+            self.fleet.machines.insert(0, Machine { shared: false, id: crate::local::MACHINE.into(), name: "This computer".into(), local: true, status: "running".into(), reach: Reach::Unknown });
         }
         self.connect(crate::local::MACHINE);
     }
@@ -1234,18 +1277,25 @@ impl App {
 
     pub fn refresh_machines(&mut self) {
         let port = self.port;
-        self.spawn(async move { http_json(port, "GET", "/api/machines", None).await }, |app, reply| {
+        let epoch = self.account_epoch;
+        self.machines_request = self.machines_request.wrapping_add(1);
+        let request = self.machines_request;
+        self.spawn(async move { http_json(port, "GET", "/api/machines", None).await }, move |app, reply| {
+            if app.account_epoch != epoch || request != app.machines_request { return }
             let Ok(reply) = reply else { return };
-            let rows = reply.get("machines").and_then(Value::as_array).cloned().unwrap_or_default();
+            let Some(rows) = reply.get("machines").and_then(Value::as_array) else { return };
             let local = app.fleet.local_id.clone();
+            // Only a fresh response is authoritative for removals. Outage caches may
+            // predate a connected computer, so their omissions must retain its views.
+            app.reconcile_account_machines(rows, reply["stale"] == true);
             for row in rows {
                 let id = row.get("machineId").and_then(Value::as_str).unwrap_or("").to_string();
-                if id.is_empty() { continue }
+                if id.is_empty() || app.removed_machines.contains(&id) { continue }
                 let name = fleet::machine_display_name(&id, row.get("name").and_then(Value::as_str));
                 let status = row.get("status").and_then(Value::as_str).unwrap_or("unknown").to_string();
                 match app.fleet.machine_mut(&id) {
-                    Some(machine) => { machine.name = name; machine.status = status; machine.local = id == local }
-                    None => app.fleet.machines.push(Machine { local: id == local, id: id.clone(), name, status, reach: Reach::Unknown }),
+                    Some(machine) => { machine.name = name; machine.status = status; machine.local = id == local; machine.shared = row["shared"] == true }
+                    None => app.fleet.machines.push(Machine { shared: row["shared"] == true, local: id == local, id: id.clone(), name, status, reach: Reach::Unknown }),
                 }
             }
             // This computer first, then the ones that are up.
@@ -1253,6 +1303,8 @@ impl App {
             let ids: Vec<String> = app.fleet.machines.iter().filter(|m| m.online() && matches!(m.reach, Reach::Unknown | Reach::Error(_))).map(|m| m.id.clone()).collect();
             for id in ids { app.connect(&id) }
             for machine in app.fleet.machines.iter_mut() { if !machine.online() && machine.reach == Reach::Unknown { machine.reach = Reach::Offline } }
+            crate::workspace_controls::refresh_workspace(app);
+            crate::input::refill(app);
         });
     }
 
@@ -1272,37 +1324,9 @@ impl App {
     /// dialling the old id and showed `daemon down` beside a running daemon until it was restarted
     /// (seen on Harness OS after a phone sign-in). Ask the daemon who it is now, and follow it.
     fn recheck_local_identity(&mut self) {
-        let port = self.port;
-        self.spawn(async move { http_json(port, "GET", "/api/status", None).await }, |app, status| {
-            let Ok(status) = status else { return };
-            let id = status.get("machineId").and_then(Value::as_str).unwrap_or("");
-            if id.is_empty() || id == app.fleet.local_id || crate::local::is_local(&app.fleet.local_id) { return }
-            app.adopt_local_identity(id.to_string());
-            app.follow_account(status.get("signedIn").and_then(Value::as_bool).unwrap_or(false));
-        });
-    }
-
-    /// Everything hn held under this computer's old id moves to the new one: its panes reopen
-    /// there, and its harnesses are listed again from the daemon, which kept them.
-    pub(crate) fn adopt_local_identity(&mut self, id: String) {
-        let old = std::mem::replace(&mut self.fleet.local_id, id.clone());
-        // A link to the new id made while it looked like another machine is dropped with the old
-        // one: the fresh link's Connected is what clears `daemon down` and reopens the panes.
-        if let Some(state) = self.links.remove(&id) { if let Some(link) = state.link { link.close() } }
-        for pane in self.panes.values_mut().filter(|p| p.machine_id == id) {
-            pane.stream = None;
-            pane.opening = false;
-            pane.takeover_pending = false;
-            pane.open_token += 1;
-            pane.dirty = true;
-        }
-        self.move_machine(&old, &id);
-        for machine in &mut self.fleet.machines { machine.local = machine.id == id || crate::local::is_local(&machine.id) }
-        if self.fleet.machine(&id).is_none() {
-            self.fleet.machines.insert(0, Machine { id: id.clone(), name: fleet::machine_display_name(&id, None), local: true, status: "running".into(), reach: Reach::Unknown });
-        }
-        self.connect(&id);
-        self.refresh_machines();
+        // Use the same generation-checked transition as startup: a new account
+        // must invalidate old requests and shell contexts as well as pane links.
+        self.boot();
     }
 
     /// What hn holds under machine `old` becomes `id`'s: its panes, which of them are shells and
@@ -1377,7 +1401,9 @@ impl App {
                 if !self.homes.contains_key(&machine_id) {
                     if let Some(link) = self.link(&machine_id) {
                         let id = machine_id.clone();
+                        let generation = link.generation;
                         self.spawn(async move { link.rpc("fs_list_dir", json!({}), Duration::from_secs(20)).await }, move |app, reply| {
+                            if app.connection_generation(&id) != Some(generation) { return }
                             if let Some(path) = reply.ok().and_then(|r| r.get("path").and_then(Value::as_str).map(str::to_string)) { app.homes.insert(id, path); }
                         });
                     }
@@ -1403,6 +1429,7 @@ impl App {
                 if machine_id == self.fleet.local_id && !crate::local::is_local(&machine_id) && matches!(error.code.as_str(), "DAEMON_UNREACHABLE" | "HEARTBEAT_TIMEOUT" | "DISCONNECTED") {
                     self.daemon_down = true;
                     self.ensure_local_shells();
+                    self.retry_boot();
                 }
                 if machine_id == self.fleet.local_id && !crate::local::is_local(&machine_id) { self.recheck_local_identity() }
                 for pane in self.panes.values_mut().filter(|p| p.machine_id == machine_id) {
@@ -1429,12 +1456,14 @@ impl App {
 
     pub fn relist(&mut self, machine_id: &str) {
         let Some(link) = self.link(machine_id) else { return };
+        let generation = link.generation;
         let id = machine_id.to_string();
         // Live harnesses first: the daemon answers those in milliseconds, while the list with every
         // paused one costs it most of a second. Paint what is running, then fold the rest in.
         let fast = link.clone();
         let fast_id = id.clone();
         self.spawn(async move { let t = Instant::now(); (fast.rpc("agents_list", json!({}), Duration::from_secs(20)).await, t.elapsed()) }, move |app, (reply, took)| {
+            if app.connection_generation(&fast_id) != Some(generation) { return }
             if reply.is_ok() { app.rtt.insert(fast_id.clone(), took); }
             if let Ok(reply) = reply {
                 let rows = reply.get("agents").and_then(Value::as_array).cloned().unwrap_or_default();
@@ -1445,6 +1474,7 @@ impl App {
         });
         let asked = Instant::now();
         self.spawn(async move { link.rpc("agents_list", json!({ "includeStopped": true }), Duration::from_secs(20)).await }, move |app, reply| {
+            if app.connection_generation(&id) != Some(generation) { return }
             if let Ok(reply) = reply {
                 let rows = reply.get("agents").and_then(Value::as_array).cloned().unwrap_or_default();
                 app.fleet.replace_roster(&id, &rows, asked);
@@ -1466,6 +1496,7 @@ impl App {
     }
 
     fn on_frame(&mut self, machine_id: &str, ty: &str, payload: Value) {
+        if matches!(ty, "dial_status" | "harness_devices_changed") { crate::hardware::push(self, machine_id, ty, &payload); }
         // The dial's frames come from this computer's daemon, to the windows on it.
         if machine_id == self.fleet.local_id && crate::dial::on_frame(self, ty, &payload) { return }
         if payload.get("activity").is_some() {
@@ -1481,9 +1512,12 @@ impl App {
         match ty {
             "agent_synced" | "agent_created" | "agent_renamed" => {
                 let row = payload.get("agent").cloned().unwrap_or(payload.clone());
-                let Some(id) = row.get("id").and_then(Value::as_str).map(str::to_string) else { return };
+                // (The daemon's `agent_renamed` is `{agentId, name, engine}`: a name, not a row.)
+                let Some(id) = row.get("id").or_else(|| row.get("agentId")).and_then(Value::as_str).map(str::to_string) else { return };
                 let key = (machine_id.to_string(), id);
-                if ty == "agent_renamed" && row.get("engine").is_none() {
+                if ty == "agent_renamed" && payload.get("agent").is_none() {
+                    // Its name only (a rename, or its engine's new title: `projectDisplayName`) —
+                    // never an agent rebuilt from a partial row.
                     if let (Some(agent), Some(name)) = (self.fleet.agents.get_mut(&key), row.get("name").and_then(Value::as_str)) { agent.name = name.to_string() }
                 } else {
                     let previous = self.fleet.agents.get(&key);
@@ -1784,6 +1818,7 @@ impl App {
                     if belled && self.options.get("monitor-bell", &tab.id, None).as_deref() == Some("on") { tab.alerts |= BELL }
                 }
             }
+            crate::shell_context::output(self, id, &bytes);
         }
     }
 
@@ -2022,16 +2057,35 @@ impl App {
     pub fn resume(&mut self, pane_id: u64) {
         let Some(pane) = self.panes.get_mut(&pane_id) else { return };
         let Some(link) = self.links.get(&pane.machine_id).and_then(|s| s.link.clone()) else { return };
+        // Selecting a saved conversation may have opened its old terminal already.
+        // Hold the input until resume finishes; a late open must not send the first
+        // keystrokes to the shell in which the previous agent exited.
+        pane.open_token += 1;
+        let token = pane.open_token;
+        pane.opening = true;
+        if let Some(stream) = pane.stream.take() {
+            link.send("terminal_close", json!({ "streamId": stream.to_string() }));
+        }
         pane.phase = Phase::Connecting("Resuming the conversation…".into());
         let agent_id = pane.agent_id.clone();
         let machine_id = pane.machine_id.clone();
         let close_key = self.keymap.hint("confirm-before -p \"kill-pane #P? (y/n)\" kill-pane").unwrap_or_else(|| "C-b x".into());
-        self.spawn(async move { link.rpc("agent_resume", json!({ "agentId": agent_id }), Duration::from_secs(120)).await }, move |app, reply| match reply {
+        let visit = crate::shell_context::resuming(self, pane_id);
+        let epoch = self.account_epoch;
+        let generation = link.generation;
+        let expected_agent = agent_id.clone();
+        self.spawn(async move { link.rpc("agent_resume", json!({ "agentId": agent_id }), Duration::from_secs(120)).await }, move |app, reply| {
+            if let Some(visit) = visit { crate::shell_context::resumed(app, &visit); }
+            if app.account_epoch != epoch || app.connection_generation(&machine_id) != Some(generation)
+                || app.panes.get(&pane_id).is_none_or(|p| p.agent_id != expected_agent || p.machine_id != machine_id || p.open_token != token) { return }
+            if let Some(pane) = app.panes.get_mut(&pane_id) { pane.opening = false; }
+            match reply {
             Ok(_) => { app.relist(&machine_id); app.open_stream(pane_id, true) }
             Err(error) => {
                 if let Some(pane) = app.panes.get_mut(&pane_id) {
                     pane.phase = Phase::Card { title: "Could not resume".into(), detail: error.to_string(), keys: vec![("enter".into(), "try again".into()), (close_key, "close pane".into())] };
                 }
+            }
             }
         });
     }
@@ -2514,6 +2568,7 @@ impl App {
             let doc = read_sessions(&path);
             let mut rows = Vec::new();
             for row in doc["sessions"].as_array().cloned().unwrap_or_default() {
+                let Some(row) = self.scoped_session(&row) else { continue };
                 if row.get("desk").and_then(Value::as_bool).unwrap_or(false) { continue }
                 let Some(name) = row.get("name").and_then(Value::as_str).map(str::to_string) else { continue };
                 if me.is_some() && row.get("owner").and_then(Value::as_str) == me.as_deref() { continue }
@@ -3147,6 +3202,7 @@ impl App {
         // …and each session's options and environment (set-environment from the other client).
         sig.push_str(&format!("{:?}{:?}{:?}{:?}{}", self.options.session, self.session_env, self.session_group, self.lastw, self.session_alerts(self.session_id)));
         for s in self.sessions.iter().filter(|s| !s.desk && s.mirror.is_none()) { sig.push_str(&format!("{:?}{:?}{:?}{:?}{}", s.options, s.env, s.group, s.lastw, self.session_alerts(s.id))) }
+        sig.push_str(&json!(crate::agent_switch::saved_placements(self)).to_string());
         if sig != self.sessions_sig { self.sessions_sig = sig; self.save_sessions() }
     }
 
@@ -3181,7 +3237,7 @@ impl App {
                 // tabs arrive, including when a detached server starts before the next client.
                 for (id, kept) in &self.desk_windows_saved { if !state.iter().any(|w| w["id"].as_str() == Some(id)) { state.push(kept.clone()) } }
                 let active = self.desk_active_saved.unwrap_or(s.active);
-                desk = Some(json!({ "name": s.alias, "desk": true, "created": s.created, "active": active, "windows": [], "options": s.options, "env": env_json(&s.env), "group": s.group, "path": s.path, "window_state": state }));
+                desk = Some(json!({ "name": s.alias, "desk": true, "harnessIdentity": self.saved_identity(), "created": s.created, "active": active, "windows": [], "options": s.options, "env": env_json(&s.env), "group": s.group, "path": s.path, "window_state": state }));
                 continue
             }
             // Another client's, shown here: that client writes it.
@@ -3196,7 +3252,7 @@ impl App {
             let at = |id: &String| kept.iter().position(|t| t.id == *id);
             let active = tabs.get(s.active).and_then(|t| at(&t.id)).unwrap_or(0);
             let last: Vec<usize> = lastw.iter().filter_map(at).collect();
-            ours.push(json!({ "name": name, "id": (s.id != UNNUMBERED).then_some(s.id), "desk": false, "created": s.created, "activity": s.activity, "last_attached": s.last_attached, "active": active, "last": last, "windows": windows,
+            ours.push(json!({ "name": name, "id": (s.id != UNNUMBERED).then_some(s.id), "desk": false, "harnessIdentity": self.saved_identity(), "created": s.created, "activity": s.activity, "last_attached": s.last_attached, "active": active, "last": last, "windows": windows,
                 "owner": if left { Value::Null } else { json!(me) }, "front": front && !left && !self.headless, "headless": self.headless && !left,
                 "mirrors": if left { 0 } else { self.mirrors.values().filter(|m| **m == s.id).count() },
                 "attached_clients": if left { Vec::<(u64, String)>::new() } else { self.session_clients(s.id) }, "alerts": self.session_alerts(s.id),
@@ -3207,7 +3263,10 @@ impl App {
         let mut rows = Vec::new();
         if !self.forget_sessions {
             // The others: every session as its client wrote it, but for one this client has now.
-            for row in doc["sessions"].as_array().cloned().unwrap_or_default() {
+            for mut row in doc["sessions"].as_array().cloned().unwrap_or_default() {
+                if row["harnessIdentity"].is_null() {
+                    row["harnessIdentity"] = if doc["harnessIdentity"].is_null() { self.saved_identity() } else { doc["harnessIdentity"].clone() };
+                }
                 if row.get("desk").and_then(Value::as_bool).unwrap_or(false) { if desk.is_none() { rows.push(row) } continue }
                 if me.is_some() && row.get("owner").and_then(Value::as_str) == me.as_deref() { continue }
                 if row.get("name").and_then(Value::as_str).map(|n| names.contains(n)).unwrap_or(true) { continue }
@@ -3223,7 +3282,8 @@ impl App {
         // down (the local-shells stand-in): the file keeps the id it had.
         let local = if self.fleet.local_id.is_empty() || crate::local::is_local(&self.fleet.local_id) { doc.get("local").cloned().unwrap_or(Value::Null) }
             else { json!(self.fleet.local_id) };
-        let doc = json!({ "current": current, "local": local, "sessions": rows });
+        let pending = crate::agent_switch::merge_saved_placements(self, &doc, how == Save::Leave);
+        let doc = json!({ "current": current, "local": local, "harnessIdentity": self.saved_identity(), "sessions": rows, "pending_workspace": pending });
         if let Some(dir) = path.parent() { let _ = std::fs::create_dir_all(dir); }
         let temp = path.with_extension(format!("json.{}.tmp", std::process::id()));
         if std::fs::write(&temp, doc.to_string()).is_ok() { let _ = std::fs::rename(temp, &path); }
@@ -3244,7 +3304,7 @@ impl App {
         let options = self.options.windows.get(&t.id).cloned().unwrap_or_default();
         let pane_options: serde_json::Map<String, Value> = t.panes().iter().filter_map(|p| self.options.panes.get(p).map(|m| (p.to_string(), json!(m)))).collect();
         let titles: serde_json::Map<String, Value> = t.panes().iter().filter_map(|p| self.panes.get(p).filter(|x| !x.title.is_empty()).map(|x| (p.to_string(), json!(x.title)))).collect();
-        json!({ "id": t.id, "home": t.home, "titles": titles, "name": t.name, "named": t.named, "first_named": t.first_named, "num": num, "wid": t.wid(), "layout": t.root.as_ref().map(|r| r.to_tmux()).unwrap_or_default(), "panes": panes, "focus": focus, "alerts": t.alerts, "zoomed": t.zoomed && panes.len() > 1, "options": options, "pane_options": pane_options })
+        json!({ "id": t.id, "harnessIdentity": self.saved_identity(), "home": t.home, "titles": titles, "name": t.name, "named": t.named, "first_named": t.first_named, "num": num, "wid": t.wid(), "layout": t.root.as_ref().map(|r| r.to_tmux()).unwrap_or_default(), "panes": panes, "focus": focus, "alerts": t.alerts, "zoomed": t.zoomed && panes.len() > 1, "options": options, "pane_options": pane_options })
     }
 
     /// A window's own state that a client leaving keeps for the next (the desk's windows, whose
@@ -3260,6 +3320,8 @@ impl App {
     /// The desk session's own state from the file: on the desk session (in front or kept), its
     /// windows' as their tabs come (apply_desk).
     fn take_desk_row(&mut self, row: &Value) {
+        let Some(row) = self.scoped_session(row) else { return };
+        let row = &row;
         let (options, env) = (options_from(row), env_from(row));
         let group = row.get("group").and_then(Value::as_str).map(str::to_string);
         let path = row.get("path").and_then(Value::as_str).map(str::to_string);
@@ -3315,6 +3377,8 @@ impl App {
     /// A window made again from window_json (its panes' harnesses, ids and shells taken on here),
     /// with its number if it had one. None when it has no pane.
     pub fn tab_from_json(&mut self, win: &Value) -> Option<(Tab, Option<usize>)> {
+        let win = self.scoped_window(win)?;
+        let win = &win;
         let (w, h) = (self.body().width, self.body().height);
         let panes: Vec<(String, String)> = win.get("panes").and_then(Value::as_array).map(|a| a.iter().filter_map(|p| Some((p.get(0)?.as_str()?.to_string(), p.get(1)?.as_str()?.to_string()))).collect()).unwrap_or_default();
         if panes.is_empty() { return None }
@@ -3377,6 +3441,8 @@ impl App {
     }
 
     fn stash_from_row(&mut self, row: &Value, id: u32) -> Option<Stash> {
+        let row = self.scoped_session(row)?;
+        let row = &row;
         let name = row.get("name").and_then(Value::as_str)?.to_string();
         // Its own id ($N), kept wherever it goes — unless this client has a session by that id.
         let id = row.get("id").and_then(Value::as_u64).map(|i| i as u32).filter(|i| *i != self.session_id && !self.sessions.iter().any(|s| s.id == *i)).unwrap_or(id);
@@ -3402,11 +3468,12 @@ impl App {
     pub fn load_sessions(&mut self) {
         let mut doc = read_sessions(&Self::sessions_path());
         self.saved_local = doc.get("local").and_then(Value::as_str).map(str::to_string);
+        self.restore_saved_identity(&doc);
         let me = crate::ipc::here().map(|p| p.display().to_string());
         // A headless hn (tmux's server with no client) hands everything to the first client that
         // attaches: one holder of the sessions again, as tmux has one server.
         if !self.headless {
-            let held: HashSet<String> = doc["sessions"].as_array().map(|rows| rows.iter().filter(|r| r.get("headless").and_then(Value::as_bool).unwrap_or(false)).filter_map(live_owner).filter(|owner| Some(owner) != me.as_ref()).collect()).unwrap_or_default();
+            let held: HashSet<String> = doc["sessions"].as_array().map(|rows| rows.iter().filter(|r| self.scoped_session(r).is_some()).filter(|r| r.get("headless").and_then(Value::as_bool).unwrap_or(false)).filter_map(live_owner).filter(|owner| Some(owner) != me.as_ref()).collect()).unwrap_or_default();
             for owner in &held { let _ = crate::ipc::ask(std::path::Path::new(owner), &["hn-hand-over".into()]); }
         }
         // The rows no client has are read and made this client's while the file is held: two
@@ -3431,6 +3498,7 @@ impl App {
             let id = row.get("id").and_then(Value::as_u64).map(|i| i as u32).filter(|i| *i != self.session_id && !self.sessions.iter().any(|s| s.id == *i)).unwrap_or_else(|| self.remote_id(&name));
             if let Some(stash) = self.stash_from_row(&row, id) { self.sessions.push(stash) }
         }
+        crate::agent_switch::restore_placements(self, &doc);
         self.write_sessions_held(Save::Stay);
         drop(lock);
         self.remote.borrow_mut().stamp = None;
@@ -4099,6 +4167,112 @@ impl App {
 
     pub fn new_pane(&mut self, machine_id: &str, agent_id: &str) -> u64 { self.new_pane_as(machine_id, agent_id, None) }
 
+    /// Change an agent reference without rebuilding its layout or moving focus. Old terminal
+    /// callbacks are invalidated before a replacement opens, including views in another session.
+    pub fn replace_harness_views(&mut self, machine: &str, previous: &str, next: &str) -> usize {
+        let ids: HashSet<u64> = self.panes.iter().filter(|(_, p)| p.machine_id == machine && p.agent_id == previous).map(|(id, _)| *id).collect();
+        self.replace_harness_view_ids(machine, previous, next, ids, true)
+    }
+
+    pub fn owned_harness_views(&self, machine: &str, agent: &str) -> Vec<(u32, u64)> {
+        std::iter::once((self.session_id, self.session_desk, self.mirror.is_some(), &self.tabs))
+            .chain(self.sessions.iter().map(|s| (s.id, s.desk, s.mirror.is_some(), &s.tabs)))
+            .filter(|(_, _, mirror, _)| !mirror)
+            .flat_map(|(sid, _, _, tabs)| tabs.iter().flat_map(move |t| t.panes().into_iter().map(move |pane| (sid, pane))))
+            .filter(|(_, id)| self.panes.get(id).is_some_and(|p| p.machine_id == machine && p.agent_id == agent)).collect()
+    }
+
+    pub fn owned_ordinary_views(&self, machine: &str, agent: &str) -> Vec<(u32, u64)> {
+        self.owned_harness_views(machine, agent).into_iter().filter(|(sid, _)| {
+            if *sid == self.session_id { !self.session_desk } else { self.sessions.iter().any(|s| s.id == *sid && !s.desk) }
+        }).collect()
+    }
+
+    pub fn replace_ordinary_harness_views(&mut self, machine: &str, previous: &str, next: &str) -> usize {
+        let ids = self.owned_ordinary_views(machine, previous).into_iter().map(|(_, id)| id).collect();
+        self.replace_harness_view_ids(machine, previous, next, ids, false)
+    }
+
+    fn replace_harness_view_ids(&mut self, machine: &str, previous: &str, next: &str, ids: HashSet<u64>, share: bool) -> usize {
+        if ids.is_empty() { return 0 }
+        let back = self.session_id;
+        if share && !self.session_desk { if let Some(id) = self.sessions.iter().find(|s| s.desk).map(|s| s.id) { self.swap_session(id); } }
+        for id in &ids {
+            let old = self.panes.remove(id).unwrap();
+            if let (Some(stream), Some(link)) = (old.stream, self.link(machine)) { link.send("terminal_close", json!({"streamId":stream.to_string()})); }
+            if let Some(stream) = old.stream { self.orphans.remove(&stream); self.orphan_exits.remove(&stream); }
+            let mut pane = Pane::new(*id, machine, next, old.cols, old.rows);
+            pane.open_token = old.open_token.wrapping_add(1);
+            pane.title = old.title;
+            pane.input_off = old.input_off;
+            self.panes.insert(*id, pane);
+        }
+        let mut renamed = HashMap::new();
+        let mut ops = Vec::new();
+        for (index, tab) in self.tabs.iter_mut().enumerate() {
+            let panes = tab.panes();
+            if !panes.iter().any(|id| ids.contains(id)) { continue }
+            if share && self.session_desk && tab.on_desk {
+                let old_id = tab.id.clone();
+                // A queued peer close for the old single-harness tab must not close its
+                // replacement. Keep its local window identity, number, focus and geometry.
+                let fresh = panes.iter().all(|id| ids.contains(id));
+                if fresh {
+                    tab.id = Uuid::new_v4().simple().to_string();
+                    renamed.insert(old_id.clone(), tab.id.clone());
+                    crate::ids::desk_set(crate::ids::Kind::Window, &tab.id, tab.wid());
+                    ops.push(json!({"op":"tab.create", "id":tab.id, "name":tab.name, "nameIsCustom":tab.named, "index":index}));
+                }
+                let at = panes.iter().position(|id| ids.contains(id)).unwrap();
+                ops.push(json!({"op":"pane.add", "tabId":tab.id, "machineId":machine, "agentId":next, "index":at}));
+                if fresh { ops.push(json!({"op":"tab.close", "id":old_id})); }
+                else { ops.push(json!({"op":"pane.remove", "tabId":tab.id, "machineId":machine, "agentId":previous})); }
+                if let Some(root) = &tab.root {
+                    if !tab.layout.is_object() { tab.layout = json!({}); }
+                    tab.layout["tmux"] = json!(root.to_tmux());
+                    let geometry = tab.shared_geometry.get_or_insert_with(|| crate::desk_layout::Geometry::capture(root));
+                    geometry.write(&mut tab.layout);
+                    ops.push(json!({"op":"tab.layout", "id":tab.id, "layout":tab.layout}));
+                }
+            }
+            for (_, agent) in tab.desk_panes.iter_mut().filter(|(m, a)| m == machine && a == previous) { *agent = next.into(); }
+        }
+        if let Some(id) = self.tabs.iter().filter(|t| self.session_desk && t.on_desk).flat_map(|t| t.panes()).filter(|id| ids.contains(id)).min() {
+            crate::ids::desk_set(crate::ids::Kind::Pane, &format!("{machine}:{next}"), id);
+        }
+        for (old, new) in &renamed {
+            if let Some(options) = self.options.windows.remove(old) { self.options.windows.insert(new.clone(), options); }
+            if self.desk_layouts.remove(old) { self.desk_layouts.insert(new.clone()); }
+            if let Some(mut state) = self.desk_windows_saved.remove(old) { state["id"] = json!(new); self.desk_windows_saved.insert(new.clone(), state); }
+            self.desk_acked_layouts.remove(old);
+            crate::new_harness::remap_welcome(self, old, new);
+        }
+        let remap = |nums: &mut HashMap<String, usize>, last: &mut Vec<String>| {
+            for (old, new) in &renamed {
+                if let Some(n) = nums.remove(old) { nums.insert(new.clone(), n); }
+                for id in last.iter_mut().filter(|id| *id == old) { *id = new.clone(); }
+            }
+        };
+        remap(&mut self.nums, &mut self.lastw);
+        for stash in &mut self.sessions {
+            for tab in &mut stash.tabs {
+                if let Some(id) = renamed.get(&tab.id) { tab.id = id.clone(); }
+                for (_, agent) in tab.desk_panes.iter_mut().filter(|(m, a)| m == machine && a == previous) { *agent = next.into(); }
+            }
+            remap(&mut stash.nums, &mut stash.lastw);
+        }
+        crate::agent_switch::retain_placement(self, machine, next, &ops);
+        self.desk_ops(ops);
+        if back != self.session_id { self.swap_session(back); }
+        self.sync_titles(); self.fit_panes(); self.server_dirty = true;
+        // The pane ID and title can stay identical while its agent reference changes.
+        // Force persistence so another attached client cannot restore that old reference.
+        self.sessions_sig.clear();
+        let focused = self.focused();
+        for id in &ids { self.open_stream(*id, focused == Some(*id)); }
+        ids.len()
+    }
+
     /// A pane for a harness, with the id it had ([id]: a session moved from another client, a
     /// desk's pane), else a new one (tmux's %N, unique among the clients of this server name).
     pub fn new_pane_as(&mut self, machine_id: &str, agent_id: &str, id: Option<u64>) -> u64 {
@@ -4272,7 +4446,7 @@ impl App {
         let tab_id = tab.id.clone();
         if let Some(p) = self.panes.get(&id) { let op = json!({ "op": "pane.remove", "tabId": tab_id, "machineId": p.machine_id, "agentId": p.agent_id }); self.desk_op(op) }
         if self.tabs[index].root.is_none() && self.tabs.len() > 1 { self.close_tab(index) }
-        else if self.tabs[index].root.is_none() && !self.tabs[index].named { self.tabs[index].name = "home".into() }
+        else if self.tabs[index].root.is_none() && !self.tabs[index].named { self.tabs[index].name = "New Tab".into() }
     }
 
     /// tmux's join-pane / move-pane: `src` splits `at.pane` where `at` says, keeping its id; in
@@ -4473,8 +4647,21 @@ impl App {
     }
 
     pub fn sync_titles(&mut self) {
+        // Harness OS signed in: a desk tab is called what the desktop app calls it.
+        let desk_names = if self.desk_mode == DeskMode::Account && self.session_desk { self.desk_tab_names() } else { HashMap::new() };
+        let auto_rename = self.options.auto_rename();
         for index in 0..self.tabs.len() {
             if self.tabs[index].named || self.tabs[index].home { continue }
+            // Auto rename: a window with a repo, for the repo and its work (autoname.rs); until its
+            // name comes, and without a repo, as before.
+            if auto_rename { if let Some(name) = self.auto_name(index) { self.tabs[index].name = name; continue } }
+            // Auto rename off, a window still called what it named it: named again as before — also
+            // where automatic-rename is off, which would otherwise keep the name it found.
+            else if crate::autoname::given(self, index).is_some_and(|name| name == self.tabs[index].name) {
+                self.tabs[index].first_named = false;
+                self.name_tab_after_first_at(index);
+            }
+            if let Some(name) = desk_names.get(&self.tabs[index].id) { self.tabs[index].name = name.clone(); continue }
             // tmux's automatic-rename (unless it is off): an unnamed window is called after its
             // active pane — a shell by what runs in it (automatic-rename-format: `zsh`, `vim`,
             // `[tmux]` in copy mode), a harness by its name.
@@ -4964,8 +5151,19 @@ impl App {
 
     pub fn rename_tab(&mut self, name: &str) { let i = self.active; self.rename_tab_at(i, name) }
 
-    /// rename-window -t: that window.
+    /// rename-window -t: that window. An empty name gives the window back to automatic naming:
+    /// it is called what it would be had nobody named it.
     pub fn rename_tab_at(&mut self, index: usize, name: &str) {
+        if name.trim().is_empty() {
+            let Some(tab) = self.tabs.get_mut(index) else { return };
+            tab.named = false;
+            tab.first_named = false;
+            let (id, on_desk) = (tab.id.clone(), tab.on_desk);
+            if let Some(options) = self.options.windows.get_mut(&id) { options.remove("automatic-rename"); }
+            self.sync_titles();
+            if on_desk { let name = self.tabs[index].name.clone(); self.desk_op(json!({ "op": "tab.rename", "id": id, "name": name, "nameIsCustom": false })) }
+            return;
+        }
         let Some(tab) = self.tabs.get_mut(index) else { return };
         tab.name = name.to_string();
         tab.named = true;
@@ -5313,6 +5511,7 @@ impl App {
             }
             "border_style" => ("@hn-border", format!("border style: {value}")),
             "dim" => ("@hn-dim", format!("dim other panes: {value}")),
+            "auto_rename" => ("@hn-auto-rename", format!("auto rename: {value}")),
             // ── status bar tabs ──
             // The two tab options decide the window-status-* format and current-tab style; set the
             // remembered choice now, then reconcile those derived options the way `[look]` would
@@ -5330,6 +5529,7 @@ impl App {
         // (The bar and the frames change the panes' room: every program is told its size.)
         if matches!(knob, "status_bar" | "border_style" | "window_active" | "window_name") { self.redraw_all = true }
         if matches!(knob, "status_bar" | "border_style") { self.fit_panes() }
+        if knob == "auto_rename" { self.sync_titles(); self.redraw_all = true }
         let i = self.active;
         self.view_layout_changed(i);
         self.persist_look();
@@ -5338,8 +5538,8 @@ impl App {
 
     /// Recompute the status bar's `window-status-*` overrides from `@hn-window-name` and
     /// `@hn-window-active` (which together decide them), the same pair `[look]` emits at boot.
-    fn sync_window_status(&mut self) {
-        let name = self.options.get("@hn-window-name", "", None).unwrap_or_else(|| "tmux".into());
+    pub(crate) fn sync_window_status(&mut self) {
+        let name = self.options.get("@hn-window-name", "", None).unwrap_or_else(|| crate::options::DEFAULT_TAB_NAME.into());
         let active = self.options.get("@hn-window-active", "", None).unwrap_or_else(|| "star".into());
         let overrides = crate::options::window_status_overrides(&name, &active);
         let global = crate::options::SetFlags { global: true, ..Default::default() };
@@ -5354,6 +5554,17 @@ impl App {
                 let _ = self.options.set(opt, None, &unset, "", 0);
             }
         }
+    }
+
+    /// The status bar's `window-status-*` formats derived again by this build, when they are hn's own
+    /// (`status_window_format`'s, whatever build derived them) and not as this build derives them —
+    /// never a format somebody wrote. Whether they changed.
+    pub fn rederive_window_status(&mut self) -> bool {
+        let names = ["window-status-format", "window-status-current-format"];
+        let now: Vec<Option<String>> = names.iter().map(|n| self.options.get(n, "", None)).collect();
+        if !now.iter().flatten().all(|v| crate::options::derived_window_status(v)) { return false }
+        self.sync_window_status();
+        names.iter().map(|n| self.options.get(n, "", None)).collect::<Vec<_>>() != now
     }
 
     /// Write the current look (as the options hold it) to tui.toml's `[look]`, best-effort.
@@ -5374,6 +5585,7 @@ impl App {
         look.dim = self.options.get("@hn-dim", "", None);
         look.window_active = self.options.get("@hn-window-active", "", None);
         look.window_name = self.options.get("@hn-window-name", "", None);
+        look.auto_rename = self.options.get("@hn-auto-rename", "", None);
         if let Err(e) = crate::config::write_look(&look) { self.say(format!("could not write tui.toml: {e}"), crate::theme::DANGER) }
     }
 
@@ -5391,7 +5603,7 @@ impl App {
     }
 
     /// This client's changes to the desk's windows are written to it.
-    fn desk_syncs(&self) -> bool {
+    pub(crate) fn desk_syncs(&self) -> bool {
         self.desk_mode == DeskMode::Sync || self.desk_mode == DeskMode::Account && self.signed_in
     }
 
@@ -5511,22 +5723,16 @@ impl App {
         // The desk's first shell: where hn was started (-c: where it was asked to), running what
         // `hn new` asked for.
         let start = self.start_session.take().unwrap_or_default();
-        let welcome = start.command.is_none() && start.cwd.is_none() && start.window.is_none()
-            && !start.create && self.options.get("@hn-new-window", "", None).as_deref() != Some("shell")
-            && self.options.get("@hn-look", "", None).as_deref() != Some("tmux");
         let cwd = start.cwd.or_else(|| std::env::current_dir().ok().map(|d| d.display().to_string()));
-        if welcome {
-            self.tab_mut().home = true;
-            crate::new_harness::ensure_welcome(self, None, cwd.clone());
-            let tab = self.tab().id.clone();
-            crate::input::new_shell_from(self, None, Placement::Fill(tab), cwd, start.command);
-        } else { crate::input::new_shell_from(self, None, Placement::Auto(None), cwd, start.command); }
+        crate::input::new_shell_from(self, None, Placement::Auto(None), cwd, start.command);
     }
 
     fn fetch_desk(&mut self) {
         if self.desk_inflight { self.desk_stale = true; return }
         let port = self.port;
-        self.spawn(async move { http_json(port, "GET", "/api/desk", None).await }, |app, desk| {
+        let epoch = self.account_epoch;
+        self.spawn(async move { http_json(port, "GET", "/api/desk", None).await }, move |app, desk| {
+            if app.account_epoch != epoch { return }
             if app.desk_inflight { app.desk_stale = true; return }
             if let Ok(desk) = desk { app.apply_desk(&desk) }
             if !app.desk_answered { app.desk_answered = true; app.maybe_start_shell() }
@@ -5535,7 +5741,7 @@ impl App {
 
     /// Reconcile tabs to the desk: new tabs appear, closed ones go, panes follow. What a window
     /// keeps for itself (active tab, focus, zoom, sizes) is left alone.
-    fn apply_desk(&mut self, desk: &Value) {
+    pub(crate) fn apply_desk(&mut self, desk: &Value) {
         // The desk is one session's windows: that session in front while they are reconciled.
         if !self.session_desk {
             let Some(id) = self.sessions.iter().find(|s| s.desk).map(|s| s.id) else { return };
@@ -5547,7 +5753,11 @@ impl App {
             return;
         }
         let revision = desk.get("revision").and_then(Value::as_i64).unwrap_or(0);
+        let local_front = (!self.local_tabs_to_sync.is_empty()).then(|| self.tab().id.clone());
+        crate::agent_switch::desk_observed(self, desk);
         if revision <= self.desk_revision { return }
+        let guarded = self.desk_with_switch_views(desk);
+        let desk = &guarded;
         self.desk_revision = revision;
         let acknowledged = std::mem::take(&mut self.desk_acked_layouts);
         let Some(rows) = desk.get("tabs").and_then(Value::as_array) else { return };
@@ -5555,16 +5765,20 @@ impl App {
         let mut seen = Vec::new();
         for row in rows {
             let id = row.get("id").and_then(Value::as_str).unwrap_or("").to_string();
-            let panes: Vec<(String, String)> = row.get("panes").and_then(Value::as_array).map(|a| a.iter().filter_map(|p| Some((p.get("machineId")?.as_str()?.to_string(), p.get("agentId")?.as_str()?.to_string()))).collect()).unwrap_or_default();
+            let panes: Vec<(String, String)> = row.get("panes").and_then(Value::as_array).map(|a| a.iter().filter_map(|p| Some((p.get("machineId")?.as_str()?.to_string(), p.get("agentId")?.as_str()?.to_string()))).filter(|(m, _)| !self.removed_machines.contains(m)).collect()).unwrap_or_default();
             if id.is_empty() || panes.is_empty() { continue }
             seen.push(id.clone());
             let name = row.get("name").and_then(Value::as_str).unwrap_or("tab").to_string();
-            // On Harness OS a tab is called what the desktop app calls it, not what its window runs:
-            // the same tabs side by side on two computers read the same.
-            let named = row.get("nameIsCustom").and_then(Value::as_bool).unwrap_or(false) || self.desk_mode == DeskMode::Account;
+            let named = row.get("nameIsCustom").and_then(Value::as_bool).unwrap_or(false);
             let layout_doc = row.get("layout").cloned().unwrap_or(json!({}));
             match self.tabs.iter().position(|t| t.id == id) {
                 Some(index) => {
+                    // A name given elsewhere and cleared there (an empty rename): automatic naming is
+                    // back here too — as `rename_tab_at` leaves it — or the old name would stay.
+                    if !named && self.tabs[index].named {
+                        self.tabs[index].first_named = false;
+                        if let Some(options) = self.options.windows.get_mut(&id) { options.remove("automatic-rename"); }
+                    }
                     let tab = &mut self.tabs[index];
                     // A name given (rename-window) is every terminal's; one automatic-rename gave
                     // stays as automatic-rename gives it here, from what the window runs.
@@ -5687,9 +5901,95 @@ impl App {
             self.active = self.desk_active_saved.take().unwrap_or(0);
         }
         if self.tabs.is_empty() { self.tabs.push(Tab::home()) }
+        if let Some(index) = local_front.and_then(|id| self.tabs.iter().position(|t| t.id == id)) { self.active = index; }
         self.active = self.active.min(self.tabs.len() - 1);
+        if self.desk_mode == DeskMode::Account { self.follow_desk_order(&seen) }
         self.sync_titles();
         self.fit_panes();
+        self.sync_local_tabs_after_sign_in();
+    }
+
+    /// A peer may prune a stopped source while Change agent waits for its replacement.
+    /// Keep only those explicitly retained views; unrelated tabs still reconcile normally.
+    fn desk_with_switch_views(&self, desk: &Value) -> Value {
+        let mut desk = desk.clone();
+        let Some(rows) = desk.get_mut("tabs").and_then(Value::as_array_mut) else { return desk };
+        for (index, tab) in self.tabs.iter().enumerate().filter(|(_, t)| t.on_desk) {
+            let retained: Vec<_> = tab.panes().iter().enumerate().filter(|(_, id)| crate::agent_switch::preserves(self, **id))
+                .filter_map(|(i, id)| self.panes.get(id).map(|p| (i, json!({"machineId":p.machine_id, "agentId":p.agent_id})))).collect();
+            if retained.is_empty() { continue }
+            let at = if let Some(at) = rows.iter().position(|r| r["id"] == tab.id) { at }
+            else {
+                let at = index.min(rows.len());
+                rows.insert(at, json!({"id":tab.id, "name":tab.name, "nameIsCustom":tab.named, "layout":tab.layout, "panes":[]})); at
+            };
+            if let Some(panes) = rows[at]["panes"].as_array_mut() {
+                let mut inserted = false;
+                for (i, pane) in retained {
+                    if !panes.iter().any(|p| p["machineId"] == pane["machineId"] && p["agentId"] == pane["agentId"]) { panes.insert(i.min(panes.len()), pane); inserted = true; }
+                }
+                // The peer's smaller-pane layout was only valid while this retained view was
+                // absent. Keep the actual geometry until its replacement is acknowledged.
+                if inserted { rows[at]["layout"] = tab.layout.clone(); }
+            }
+        }
+        desk
+    }
+
+    /// Harness OS signed in: the tabs in the desk's order and numbered from base-index in it, as
+    /// the desktop app's ⌘1… are their places. A window kept from before the desk (its own tab
+    /// order, numbers with gaps where tabs closed elsewhere) read differently on each computer.
+    fn follow_desk_order(&mut self, order: &[String]) {
+        let active = self.tabs.get(self.active).map(|t| t.id.clone());
+        // A stable sort: a tab only this window has keeps its order, after the desk's.
+        self.tabs.sort_by_key(|t| order.iter().position(|id| *id == t.id).unwrap_or(usize::MAX));
+        if let Some(id) = active { self.active = self.tabs.iter().position(|t| t.id == id).unwrap_or(0) }
+        self.renumber_all();
+    }
+
+    /// What the desktop app calls each desk tab with no name of its own (workspaceTabNames,
+    /// desktop/lib/state/workspace_status.dart), so a tab reads the same on Harness OS: each
+    /// harness in it votes its type (`code` for a coding agent), project and machine; the trait
+    /// with the most votes names it, then the one fewer other tabs share, then type, project,
+    /// machine in that order. A tab with no harness the app knows is `New Tab`.
+    pub fn desk_tab_names(&self) -> HashMap<String, String> {
+        const CODE: [&str; 14] = ["claude", "codex", "cursor", "opencode", "pi", "hermes", "commandcode", "devin", "muse", "amp", "kilo", "grok", "copilot", "agy"];
+        let mut candidates: Vec<(String, Vec<(usize, String, usize)>)> = Vec::new();
+        for tab in self.tabs.iter().filter(|t| t.on_desk && !t.named) {
+            let mut votes: [Vec<(String, usize)>; 3] = Default::default();
+            let mut vote = |kind: usize, label: String| {
+                if label.is_empty() { return }
+                match votes[kind].iter_mut().find(|(l, _)| *l == label) { Some((_, n)) => *n += 1, None => votes[kind].push((label, 1)) }
+            };
+            let mut seen = HashSet::new();
+            for id in tab.panes() {
+                let Some(pane) = self.panes.get(&id) else { continue };
+                if !seen.insert((pane.machine_id.clone(), pane.agent_id.clone())) { continue }
+                if let Some(agent) = self.fleet.agent(&pane.machine_id, &pane.agent_id) {
+                    let engine = if agent.dsh.is_empty() { agent.engine.to_lowercase() } else { agent.dsh.to_lowercase() };
+                    if !engine.is_empty() {
+                        vote(0, if CODE.contains(&engine.as_str()) { "code".into() } else { engine.rsplit('/').next().unwrap_or(&engine).to_string() });
+                    }
+                    vote(1, agent.project.clone());
+                }
+                vote(2, self.fleet.machine_name(&pane.machine_id));
+            }
+            // Per trait, the label with the most votes; a tie keeps the earlier one.
+            let best: Vec<(usize, String, usize)> = votes.into_iter().enumerate().filter_map(|(kind, labels)| {
+                labels.into_iter().fold(None, |best: Option<(String, usize)>, (l, n)| match best { Some((_, m)) if m >= n => best, _ => Some((l, n)) })
+                    .map(|(label, count)| (kind, label, count))
+            }).collect();
+            candidates.push((tab.id.clone(), best));
+        }
+        let repetitions = |kind: usize, label: &str| candidates.iter().filter(|(_, c)| c.iter().any(|(k, l, _)| *k == kind && l == label)).count();
+        candidates.iter().map(|(id, best)| {
+            let name = best.iter().fold(None::<&(usize, String, usize)>, |a, b| match a {
+                None => Some(b),
+                Some(a) if b.2 != a.2 => Some(if b.2 > a.2 { b } else { a }),
+                Some(a) => Some(if repetitions(b.0, &b.1) < repetitions(a.0, &a.1) { b } else { a }),
+            }).map(|(_, label, _)| label.clone()).unwrap_or_else(|| "New Tab".into());
+            (id.clone(), name)
+        }).collect()
     }
 
     fn desk_pane_added(&mut self, tab_id: &str, machine_id: &str, agent_id: &str) {
@@ -5735,8 +6035,11 @@ impl App {
         let layouts: HashMap<String, Value> = ops.iter().filter(|o| o["op"] == "tab.layout")
             .filter_map(|o| Some((o["id"].as_str()?.to_string(), o["layout"].clone()))).collect();
         let port = self.port;
+        let epoch = self.account_epoch;
         self.desk_inflight = true;
+        let written = ops.clone();
         self.spawn(async move { http_json(port, "POST", "/api/desk/ops", Some(&json!({ "ops": ops }))).await }, move |app, reply| {
+            if app.account_epoch != epoch { return }
             app.desk_inflight = false;
             // Network/auth/server failures do not mean the schema lacks tmux layouts.
             if let (Err(error), Some(ops)) = (&reply, again) { if error.code == "HTTP_400" {
@@ -5745,7 +6048,8 @@ impl App {
                 app.send_desk_ops();
                 return;
             } }
-            if reply.is_ok() { app.desk_acked_layouts.extend(layouts) }
+            if let Ok(desk) = &reply { app.desk_acked_layouts.extend(layouts); crate::agent_switch::desk_write_replied(app, &written, desk); }
+            else { crate::agent_switch::desk_write_failed(app, &written); }
             if !app.desk_pending.is_empty() { app.desk_stale = true; app.send_desk_ops(); return }
             match reply {
                 Ok(desk) => app.apply_desk(&desk),
@@ -5779,7 +6083,9 @@ impl App {
             let ids: Vec<String> = self.fleet.machines.iter().filter(|m| m.usable()).map(|m| m.id.clone()).collect();
             for id in ids {
                 let Some(link) = self.link(&id) else { continue };
+                let generation = link.generation;
                 self.spawn(async move { link.rpc("usage_read", json!({}), Duration::from_secs(30)).await }, move |app, reply| {
+                    if app.connection_generation(&id) != Some(generation) { return }
                     let Ok(reply) = reply else { return };
                     let readings: Vec<fleet::Usage> = reply.get("providers").and_then(Value::as_array).map(|p| p.iter().filter_map(fleet::usage_from).collect()).unwrap_or_default();
                     app.usage.insert(id, readings);
@@ -5804,7 +6110,9 @@ impl App {
                 if let Some(a) = self.fleet.agents.get_mut(&(machine.clone(), agent_id.clone())) { a.recap_asked = true }
                 self.enriching += 1;
                 let (m, id, link) = (machine.clone(), agent_id.clone(), link.clone());
+                let epoch = self.account_epoch;
                 self.spawn(async move { link.rpc("agent_recent", json!({ "agentId": id, "n": 1 }), Duration::from_secs(15)).await }, move |app, reply| {
+                    if app.account_epoch != epoch { return }
                     app.enriching = app.enriching.saturating_sub(1);
                     let Ok(reply) = reply else { return };
                     let Some(a) = app.fleet.agents.get_mut(&(m.clone(), agent_id_of(&reply).unwrap_or_default())) else { return };
@@ -5841,7 +6149,9 @@ impl App {
                 self.enriching += 1;
                 self.pr_asking.insert(branch_key.clone());
                 let (m, id) = (machine.clone(), agent_id.clone());
+                let epoch = self.account_epoch;
                 self.spawn(async move { link.rpc("git_pull_request", json!({ "agentId": id }), Duration::from_secs(30)).await }, move |app, reply| {
+                    if app.account_epoch != epoch { return }
                     app.enriching = app.enriching.saturating_sub(1);
                     app.pr_asking.remove(&branch_key);
                     let Ok(reply) = reply else { return };
@@ -5918,7 +6228,8 @@ impl App {
         let searches = crate::picker::said_searches(&query);
         let generation = self.said_generation;
         self.said_pending = 0;
-        let machines: Vec<String> = self.fleet.machines.iter().filter(|m| m.usable()).map(|m| m.id.clone()).collect();
+        let scope = match &self.modal { Some(crate::modal::Modal::Picker { kind: crate::modal::PickerKind::Open { machine, .. }, .. }) => machine.as_deref(), _ => self.shell_context.inline.as_ref().filter(|i| i.kind == "sessions").and(self.shell_context.sessions_machine.as_deref()) };
+        let machines: Vec<String> = self.fleet.machines.iter().filter(|m| m.usable() && scope.is_none_or(|s| m.id == s)).map(|m| m.id.clone()).collect();
         for machine in machines {
             for search in &searches {
                 let Some(link) = self.link(&machine) else { continue };
@@ -5948,15 +6259,20 @@ impl App {
     fn ask_tails(&mut self) {
         let Some(crate::modal::Modal::Picker { kind: crate::modal::PickerKind::Open { .. }, picker }) = &self.modal else { return };
         let ids: Vec<String> = picker.visible.iter().skip(picker.cursor).take(3).map(|(i, _)| picker.rows[*i].id.clone()).collect();
-        for id in ids {
-            let Some((machine, session)) = self.row_session(&id) else { continue };
-            if session.is_empty() || !self.tails_asked.insert(session.clone()) { continue }
-            let Some(link) = self.link(&machine) else { continue };
-            let s = session.clone();
-            self.spawn(async move { link.rpc("session_tail", json!({ "sessionId": s, "maxChars": 16_000 }), Duration::from_secs(10)).await }, move |app, reply| {
-                if let Ok(tail) = reply { app.tails.insert(session, tail); }
-            });
-        }
+        for id in ids { self.ask_tail_for(&id); }
+    }
+
+    /// Shared lazy preview loading for the overlay and the inline shell finder.
+    pub fn ask_tail_for(&mut self, id: &str) {
+        let Some((machine, session)) = self.row_session(id) else { return };
+        if session.is_empty() || !self.tails_asked.insert(session.clone()) { return }
+        let Some(link) = self.link(&machine) else { return };
+        let s = session.clone();
+        let generation = link.generation;
+        self.spawn(async move { link.rpc("session_tail", json!({ "sessionId": s, "maxChars": 16_000 }), Duration::from_secs(10)).await }, move |app, reply| {
+            if app.connection_generation(&machine) != Some(generation) { return }
+            if let Ok(tail) = reply { app.tails.insert(session, tail); }
+        });
     }
 
     /// A C-b s row's machine and session: a harness's (`machine:agent`), or a conversation's.
@@ -5988,6 +6304,10 @@ impl App {
         self.enrich();
         // ── models: this computer's models read as often as the Models view needs ──
         crate::models::tick(self);
+        crate::account::tick(self);
+        crate::shell_context::tick(self);
+        crate::agent_switch::tick(self);
+        crate::hardware::tick(self);
         self.maybe_start_shell();
         self.release_waiting();
         self.release_cli();
@@ -6312,7 +6632,7 @@ mod recovery_tests {
     fn fixture() -> App {
         let (sink, _) = tokio::sync::mpsc::unbounded_channel();
         let mut app = App::new(19789, sink, (80, 24));
-        app.fleet.machines.push(Machine { id: "test-peer".into(), name: "Peer".into(), local: false, status: "running".into(), reach: Reach::Ready });
+        app.fleet.machines.push(Machine { shared: false, id: "test-peer".into(), name: "Peer".into(), local: false, status: "running".into(), reach: Reach::Ready });
         let link = Link::spawn(app.port, "test-peer", 1, app.sink.clone());
         app.links.insert("test-peer".into(), LinkState { link: Some(link), generation: 1, attempts: 0, retry_at: None });
         for id in 1..=4 {
@@ -6337,11 +6657,13 @@ mod recovery_tests {
         app.fleet.machines[0].local = true;
         app.fleet.local_id = "test-peer".into();
         // The account's id was already listed, as if another machine, with a link of its own.
-        app.fleet.machines.push(Machine { id: "account-id".into(), name: "harness".into(), local: false, status: "running".into(), reach: Reach::Ready });
+        app.fleet.machines.push(Machine { shared: false, id: "account-id".into(), name: "harness".into(), local: false, status: "running".into(), reach: Reach::Ready });
         app.links.insert("account-id".into(), LinkState { link: Some(Link::spawn(app.port, "account-id", 2, app.sink.clone())), generation: 2, attempts: 0, retry_at: None });
         app.daemon_down = true;
         app.generation = 2;
-        app.adopt_local_identity("account-id".into());
+        app.adopt_daemon_identity(&json!({"machineId":"test-peer","computerId":"test-peer","signedIn":false}));
+        app.adopt_daemon_identity(&json!({"machineId":"account-id","computerId":"test-peer","signedIn":true}));
+        app.connect("account-id");
         assert_eq!(app.fleet.local_id, "account-id");
         assert!(app.fleet.machine("test-peer").is_none());
         assert!(app.fleet.machine("account-id").is_some_and(|m| m.local));
@@ -6353,7 +6675,7 @@ mod recovery_tests {
             assert!(app.panes[&id].stream.is_none());
             assert_eq!(app.panes[&id].open_token, 8);
         }
-        assert_eq!(app.panes[&4].machine_id, "other-peer");
+        assert!(!app.panes.contains_key(&4), "remote views are scoped to the new account");
         assert!(app.shells.contains(&("account-id".into(), "agent-2".into())));
         app.on_machine("account-id".into(), generation, MachineEvent::Connected);
         assert!(!app.daemon_down);
@@ -6362,6 +6684,95 @@ mod recovery_tests {
     /// Account (Harness OS), as the desktop app: at sign-in this computer's windows join the
     /// account's shared tabs; at sign-out what runs on this computer stays in its windows, and a
     /// harness on another machine goes with the account.
+    /// Harness OS signed in: the tabs read as the desktop app's do. Their order and numbers are
+    /// the desk's (no gap where a tab closed elsewhere), and a tab with no name of its own is
+    /// called what the app calls it: its harnesses' type, project or machine.
+    #[tokio::test]
+    async fn the_os_orders_numbers_and_names_desk_tabs_as_the_desktop_app() {
+        let mut app = fixture();
+        app.desk_mode = DeskMode::Account;
+        app.session_desk = true;
+        app.fleet.merge_roster("test-peer", &[
+            json!({"id": "agent-1", "name": "fix login", "engine": "claude", "project": {"name": "webapp"}}),
+            json!({"id": "agent-2", "name": "tests", "engine": "codex", "project": {"name": "webapp"}}),
+            json!({"id": "agent-3", "name": "", "engine": "terminal", "project": {"name": "ops"}}),
+        ]);
+        let tab = |name: &str, wid: u64, panes: &[u64], on_desk: bool| {
+            let mut t = Tab::with_wid(name, wid);
+            let mut root = Node::new(panes[0], 80, 23);
+            for p in &panes[1..] { root.split(panes[0], *p, Dir::Horizontal); }
+            t.root = Some(root);
+            t.on_desk = on_desk;
+            t
+        };
+        let (coding, shell, own) = (tab("a", 1, &[1, 2], true), tab("b", 2, &[3], true), tab("mine", 3, &[4], false));
+        let order = vec![coding.id.clone(), shell.id.clone()];
+        app.tabs = vec![shell, own, coding];
+        app.active = 2;
+        app.nums = HashMap::from([(app.tabs[0].id.clone(), 7), (app.tabs[1].id.clone(), 1), (app.tabs[2].id.clone(), 4)]);
+
+        app.follow_desk_order(&order);
+        assert_eq!(app.tabs.iter().map(|t| t.id.clone()).collect::<Vec<_>>()[..2], order[..], "the desk's order");
+        assert_eq!(app.tabs[2].name, "mine", "a tab only this window has comes after");
+        assert_eq!(app.active, 0, "the same tab stays in front");
+        let base = app.base_index();
+        assert_eq!(app.tabs.iter().map(|t| app.nums[&t.id]).collect::<Vec<_>>(), vec![base, base + 1, base + 2]);
+
+        app.sync_titles();
+        // Two coding agents in one project: `code`, the type, wins a tie the machine (in both
+        // tabs) loses. A terminal is its own type.
+        assert_eq!(app.tabs[0].name, "code");
+        assert_eq!(app.tabs[1].name, "terminal");
+        // A name given on purpose is the desk's, untouched.
+        app.tabs[0].named = true;
+        app.tabs[0].name = "discussion".into();
+        app.sync_titles();
+        assert_eq!(app.tabs[0].name, "discussion");
+    }
+
+    /// The daemon's `agent_renamed` as it really is (`cli/src/core/agents/events.ts`: `{agentId,
+    /// name, engine}`): the harness is called that at once, and the rest known about it stays.
+    #[tokio::test]
+    async fn a_real_agent_renamed_renames_the_harness_and_keeps_the_rest() {
+        let mut app = fixture();
+        app.fleet.merge_roster("test-peer", &[json!({"id": "agent-1", "name": "Claude harness 10-7 14:04", "engine": "claude", "project": {"name": "webapp", "branch": "main"}})]);
+        app.on_frame("test-peer", "agent_renamed", json!({"agentId": "agent-1", "name": "Deploy checklist", "engine": "claude"}));
+        let agent = app.fleet.agent("test-peer", "agent-1").unwrap();
+        assert_eq!((agent.name.as_str(), agent.engine.as_str(), agent.project.as_str(), agent.branch.as_str()), ("Deploy checklist", "claude", "webapp", "main"));
+    }
+
+    /// `set -g @hn-window-name …` by hand (or from a config file) changes the tab as Appearance does.
+    #[tokio::test]
+    async fn setting_the_tab_name_source_by_hand_changes_the_tab_at_once() {
+        let mut app = fixture();
+        let format = |app: &App| app.options.get("window-status-format", "", None).unwrap_or_default();
+        crate::commands::execute(&mut app, "set -g @hn-window-name pane");
+        assert!(format(&app).contains("#{pane_title}"), "{}", format(&app));
+        crate::commands::execute(&mut app, "set -g @hn-window-name tmux");
+        assert!(format(&app).contains("#{window_short_name}") && !format(&app).contains("#{pane_title}"), "{}", format(&app));
+    }
+
+    /// Renaming a window to nothing gives it back to automatic naming; a name stays its own.
+    #[tokio::test]
+    async fn an_empty_rename_gives_the_window_back_to_automatic_naming() {
+        let mut app = fixture();
+        app.fleet.merge_roster("test-peer", &[json!({"id": "agent-1", "name": "Fix flaky login test", "engine": "claude", "project": {"name": "webapp"}})]);
+        let mut tab = Tab::with_wid("w", 1);
+        tab.root = Some(Node::new(1, 80, 23));
+        tab.focus = Some(1);
+        app.tabs = vec![tab];
+        app.active = 0;
+        app.rename_tab_at(0, "release");
+        app.sync_titles();
+        assert!(app.tabs[0].named && app.tabs[0].name == "release", "a name you set is never overwritten");
+        let id = app.tabs[0].id.clone();
+        assert_eq!(app.options.windows.get(&id).and_then(|o| o.get("automatic-rename")).map(String::as_str), Some("off"));
+        app.rename_tab_at(0, "  ");
+        assert!(!app.tabs[0].named);
+        assert_eq!(app.tabs[0].name, "Fix flaky login test");
+        assert!(app.options.windows.get(&id).is_none_or(|o| !o.contains_key("automatic-rename")), "tmux's automatic-rename is back on");
+    }
+
     #[tokio::test]
     async fn the_os_joins_its_windows_to_the_account_and_keeps_its_own_harnesses_after() {
         let mut app = fixture();
@@ -6427,7 +6838,7 @@ mod recovery_tests {
         let mut app = fixture();
         app.fleet.machines[0].local = true;
         app.fleet.local_id = "test-peer".into();
-        app.fleet.machines.push(Machine { id: "other-peer".into(), name: "Remote".into(), local: false, status: "running".into(), reach: Reach::Ready });
+        app.fleet.machines.push(Machine { shared: false, id: "other-peer".into(), name: "Remote".into(), local: false, status: "running".into(), reach: Reach::Ready });
         app.links.insert("other-peer".into(), LinkState { link: Some(Link::spawn(app.port, "other-peer", 1, app.sink.clone())), generation: 1, attempts: 0, retry_at: None });
         let mut controlled = Pane::new(5, "test-peer", "already-controlled", 80, 24);
         controlled.stream = Some(Uuid::new_v4());
@@ -6492,6 +6903,25 @@ mod recovery_tests {
         app.opened(2, "test-peer", 7, (80, 24), Ok(("terminal_ready".into(), json!({"streamId":Uuid::new_v4().to_string(),"readOnly":true}))));
         assert!(matches!(app.panes[&2].phase, Phase::Watching(_)));
         assert!(!app.panes[&2].opening);
+        app.links["test-peer"].link.as_ref().unwrap().close();
+    }
+
+    #[tokio::test]
+    async fn resume_holds_input_when_the_old_terminal_finishes_opening() {
+        let mut app = fixture();
+        app.panes.get_mut(&1).unwrap().queued.push(b"q".to_vec());
+        app.resume(1);
+        assert!(app.panes[&1].opening);
+        assert!(app.panes[&1].stream.is_none());
+        assert_eq!(app.panes[&1].open_token, 8);
+        app.opened(1, "test-peer", 7, (80, 24), Ok(("terminal_ready".into(), json!({"streamId":Uuid::new_v4().to_string(),"readOnly":false}))));
+        assert!(matches!(app.panes[&1].phase, Phase::Connecting(_)));
+        assert_eq!(app.panes[&1].queued, [b"q".to_vec()]);
+        // Reconnect/takeover gestures cannot bypass the pending resume either.
+        app.open_stream(1, true);
+        assert!(app.panes[&1].opening);
+        assert!(app.panes[&1].stream.is_none());
+        assert_eq!(app.panes[&1].open_token, 8);
         app.links["test-peer"].link.as_ref().unwrap().close();
     }
 
@@ -6651,6 +7081,27 @@ mod desk_layout_tests {
         update["tabs"][0]["panes"].as_array_mut().unwrap().rotate_right(1);
         app.apply_desk(&update);
         assert_eq!(desk_pane_ids(app.tabs[0].root.as_ref().unwrap()), vec![3, 2, 1]);
+    }
+
+    /// A name given on the desktop is every terminal's; cleared there (an empty rename), the window
+    /// is named automatically here again — not left with the old name.
+    #[test]
+    fn a_name_cleared_on_the_desk_is_automatic_here_again() {
+        let mut app = fixture();
+        app.fleet.merge_roster("layout-peer", &[json!({"id": "agent-1", "name": "Task 1", "engine": "claude", "project": {"name": "webapp"}})]);
+        app.tabs[0].focus = Some(1);
+        let mut named = desk(2, app.tabs[0].layout.clone());
+        named["tabs"][0]["name"] = json!("release");
+        named["tabs"][0]["nameIsCustom"] = json!(true);
+        app.apply_desk(&named);
+        app.sync_titles();
+        assert!(app.tabs[0].named && app.tabs[0].name == "release");
+        let mut cleared = desk(3, app.tabs[0].layout.clone());
+        cleared["tabs"][0]["name"] = json!("New Swarm");
+        app.apply_desk(&cleared);
+        app.sync_titles();
+        assert!(!app.tabs[0].named);
+        assert_eq!(app.tabs[0].name, "Task 1");
     }
 
     #[test]

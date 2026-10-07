@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/auth/cli_link.dart';
 import 'package:harness_mobile/core/models.dart';
@@ -10,13 +12,28 @@ import 'viewer_app_fixture.dart';
 /// Linking a phone to a machine: by its password, by the code an "Add phone" QR
 /// carries, and taking the link away again.
 void main() {
+  /// [machineId] refuses this phone for want of a link, and goes on refusing after the device list
+  /// was checked (two short rounds, each dial refused again): it wants its password.
+  Future<void> refuse(ViewerRig rig, String machineId) async {
+    rig.app
+      ..trustSettleRound = Duration.zero
+      ..onRedialForTest = (id) => scheduleMicrotask(
+        () => rig.app.localFailureForTest(id, 4404, 'NO_PEER_LINK'),
+      );
+    rig.app.localFailureForTest(machineId, 4404, 'NO_PEER_LINK');
+    for (var i = 0; i < 200 && !rig.app.stateOf(machineId)!.needsLink; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+    }
+    expect(rig.app.stateOf(machineId)!.needsLink, isTrue);
+  }
+
   /// Signed in to an account with one machine, `m`, that wants its password.
   Future<ViewerRig> lockedMachine() async {
     final rig = viewerApp();
     rig.api.onMachines = () async => [remoteMachine('m')];
     await rig.app.bootstrap();
     await settle();
-    rig.app.localFailureForTest('m', 4404, 'NO_PEER_LINK');
+    await refuse(rig, 'm');
     return rig;
   }
 
@@ -70,8 +87,8 @@ void main() {
       rig.api.onMachines = () async => [remoteMachine('m'), remoteMachine('n')];
       await rig.app.bootstrap();
       await settle();
-      rig.app.localFailureForTest('m', 4404, 'NO_PEER_LINK');
-      rig.app.localFailureForTest('n', 4404, 'NO_PEER_LINK');
+      await refuse(rig, 'm');
+      await refuse(rig, 'n');
       rig.links.connectResult = const CliLinkConnectResult(
         linkedMachineId: 'n',
       );
@@ -182,6 +199,8 @@ void main() {
         rig.app.localFailureForTest('m', 4404, 'NO_PEER_LINK');
 
         expect(rig.app.pendingPairing, (machineId: 'm', code: 'K7QM'));
+        // Not settled against the device list first: the pairing screen is the way in, at once.
+        expect(rig.app.stateOf('m')!.needsLink, isTrue);
       },
     );
   });
@@ -247,9 +266,9 @@ void main() {
       rig.api.onMachines = () async => [remoteMachine('m')];
       await rig.app.bootstrap();
       await settle();
+      await refuse(rig, 'm');
       final asked = rig.conn('m').requests.length;
 
-      rig.app.localFailureForTest('m', 4404, 'NO_PEER_LINK');
       await Future<void>.delayed(
         AppNotifier.offlineRetryInterval + const Duration(milliseconds: 200),
       );

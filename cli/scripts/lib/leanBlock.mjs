@@ -19,11 +19,11 @@ import { brotliCompressSync, brotliDecompressSync, constants } from 'node:zlib'
 export const LEAN_MARKER = '/*@harness-lean:'
 
 /** The comment that carries [files] (file name to code), to append to cli.js. */
-export function leanBlock(files) {
+export function leanBlock(files, { quality = 11 } = {}) {
   const named = Object.fromEntries(Object.entries(files).map(([name, code]) => [name, Buffer.from(code).toString('utf8')]))
   const payload = Buffer.from(JSON.stringify(named))
   const sha256 = createHash('sha256').update(payload).digest('hex')
-  const packed = brotliCompressSync(payload, { params: { [constants.BROTLI_PARAM_QUALITY]: 11 } }).toString('base64')
+  const packed = brotliCompressSync(payload, { params: { [constants.BROTLI_PARAM_QUALITY]: quality } }).toString('base64')
   return `\n${LEAN_MARKER}${sha256}:${packed}*/\n`
 }
 

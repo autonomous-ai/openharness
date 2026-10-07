@@ -219,8 +219,8 @@ void main() {
     await load(box);
     expect(box.options.where((o) => !o.synthetic).map((o) => o.group), [
       'Subscription',
-      'On your machines',
-      'Shared · team-grid',
+      'Your models',
+      'Shared with you',
     ]);
     final remote = localChoice(box, 'team-grid');
     box.applyOption(remote);
@@ -530,6 +530,34 @@ void main() {
       );
     }
   });
+  test('decision models are never offered to run a harness on', () async {
+    final box = controller();
+    final decisions = [
+      {'id': 'tev1', 'node': 'Mac Studio', 'kind': 'decision'},
+      {'id': 'kev-0.8b', 'node': 'Mac Studio', 'kind': 'decision'},
+    ];
+    final mixed = catalog();
+    final own = (mixed['grids'] as List).first as Map<String, dynamic>;
+    own['models'] = [...own['models'] as List, ...decisions];
+    connections.putIfAbsent('m', _Connection.new).answer = mixed;
+    await load(box);
+    expect(
+      box.options.where((o) => o.model != null).map((o) => o.title).toList(),
+      ['Qwen-35B', 'Qwen-35B'],
+    );
+    expect(box.modelNotice, isNull);
+
+    // A grid serving only decision models runs nothing a harness can use.
+    connections['m']!.answer = {
+      ...catalog(),
+      'grids': [
+        {'name': 'my-grid', 'own': true, 'models': decisions},
+      ],
+    };
+    await load(box);
+    expect(box.options.where((o) => o.model != null), isEmpty);
+    expect(box.modelNotice, contains('No models are running'));
+  });
   test('disposed controllers ignore outstanding model reads', () async {
     final box = NewHarnessController(
       app,
@@ -590,11 +618,12 @@ void main() {
     final box = controller(usage: menu);
     await load(box);
     expect(box.options.first.title, 'OpenAI');
-    expect(box.options.first.detail, contains('60% remaining'));
+    expect(box.options.first.meta, '60% remaining');
+    expect(box.options.first.detail, isNot(contains('remaining')));
     select(box, NewHarnessField.agent, 'claude');
     await load(box);
     expect(box.options.first.title, 'Anthropic');
-    expect(box.options.first.detail, isNot(contains('60%')));
+    expect(box.options.first.meta, isNot(contains('60%')));
   });
   for (final width in [1100.0, 600.0]) {
     testWidgets(
@@ -630,8 +659,8 @@ void main() {
         expect(positions, orderedEquals([...positions]..sort()));
         await openLaunchRow(tester, 'model');
         expect(find.text('Subscription'), findsOneWidget);
-        expect(find.text('On your machines'), findsOneWidget);
-        expect(find.text('Shared · team-grid'), findsOneWidget);
+        expect(find.text('Your models'), findsOneWidget);
+        expect(find.text('Shared with you'), findsOneWidget);
         await typeHarnessQuery(tester, 'studio');
         await tester.sendKeyEvent(LogicalKeyboardKey.enter);
         await tester.pumpAndSettle();

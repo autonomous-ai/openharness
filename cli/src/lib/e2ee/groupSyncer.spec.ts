@@ -36,6 +36,8 @@ interface Node {
   trusted: Map<string, { kind?: string; machineId?: string }>
   syncer: InstanceType<typeof S.GroupSyncer>
   online: boolean
+  /** What `ready` answers: the device key log is this sign-in's. */
+  ready: boolean
   droppedSessions: string[]
 }
 
@@ -61,6 +63,7 @@ function fleet(): { add: (name: string, machine?: boolean) => Node; link: (joine
       peers: new MemPeers(),
       trusted: new Map(),
       online: true,
+      ready: true,
       droppedSessions: [],
     } as unknown as Node
     node.syncer = new S.GroupSyncer({
@@ -80,6 +83,7 @@ function fleet(): { add: (name: string, machine?: boolean) => Node; link: (joine
         return { type: 'group_sync_result', payload: target.syncer.handle(node.pub, frame.payload as Record<string, unknown>) }
       },
       dropSessions: (machineId) => { node.droppedSessions.push(machineId) },
+      ready: () => node.ready,
       now: () => ++clock,
     })
     nodes.push(node)
@@ -186,6 +190,30 @@ describe('GroupSyncer', () => {
     await c.syncer.syncWith(a.machineId!) // refused: A no longer trusts C
     a.syncer.handle(c.pub, { self: { pub: c.pub, kind: 'machine', machineId: c.machineId, label: 'c', at: S.SELF_STAMP }, members: [], removed: [] })
     expect(a.trusted.has(c.pub)).toBe(false)
+    for (const n of f.nodes) n.syncer.stop()
+  })
+
+  it('while the device key log is not this sign-in\'s, no roster is swapped either way', async () => {
+    vi.useFakeTimers()
+    const f = fleet()
+    const [a, b] = [f.add('a'), f.add('b')]
+    f.link(a, b)
+    const stranger = { pub: C.b64e(C.newIdentity().pub), kind: 'viewer', label: 'old account', at: 5 }
+    b.ready = false
+    // Answered with nothing, and nothing taken in.
+    const reply = b.syncer.handle(a.pub, { self: { pub: a.pub, kind: 'machine', label: 'a', at: S.SELF_STAMP, machineId: a.machineId }, members: [stranger], removed: [] })
+    expect(reply).toEqual({ members: [], removed: [], digest: G.rosterDigest({ members: [], removed: [] }) })
+    expect(b.syncer.roster().members.some((m) => m.pub === stranger.pub)).toBe(false)
+    // Nor sent: no dial at all.
+    b.ready = true
+    a.ready = false
+    const handle = vi.spyOn(b.syncer, 'handle')
+    await a.syncer.syncAll()
+    expect(await a.syncer.syncWith(b.machineId!)).toBe(false)
+    expect(handle).not.toHaveBeenCalled()
+    a.ready = true
+    expect(await a.syncer.syncWith(b.machineId!)).toBe(true)
+    expect(handle).toHaveBeenCalledTimes(1)
     for (const n of f.nodes) n.syncer.stop()
   })
 

@@ -10,16 +10,10 @@ name: CLI end to end
 # merge-pr`) refuses to merge anything GitHub does not report clean: a per-PR run that failed would
 # block every CLI merge. The suite had only ever run on macOS, and its first Linux runs found real
 # failures (zsh's new-user menu took every agent's pane, engineLaunch.ts zshNewUserGuard) beside
-# runner-specific ones. So it runs after a merge to main, every night, and on demand from a branch
-# (Actions -> CLI end to end -> Run workflow) when a change needs it. Promote it to pull requests,
-# and then to a required check collected by record-ci-validation.py, once it has stayed green.
+# runner-specific ones. So it runs every night and on demand from a branch (Actions -> CLI end to
+# end -> Run workflow) when a change needs it. It no longer runs on every merge to main: each run
+# held nine of the account's twenty concurrent runners, and the next merge usually cancelled it.
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'cli/**'
-      - '.github/workflows/cli-e2e.yml'
-      - 'scripts/verify-cli-test-shards.py'
   schedule:
     - cron: '17 6 * * *'
   workflow_dispatch:
@@ -27,11 +21,11 @@ on:
 permissions:
   contents: read
 
-# A newer merge to main replaces the run of an older one; a nightly or dispatched run is somebody's
-# record and is left to finish.
+# Let active main validation finish; retain only the newest pending main snapshot.
+# Explicit/nightly runs have independent identities and are never superseded.
 concurrency:
-  group: cli-e2e-${{ github.ref }}-${{ github.event_name }}
-  cancel-in-progress: ${{ github.event_name == 'push' }}
+  group: cli-e2e-${{ github.event_name }}-${{ github.event_name == 'push' && github.ref || github.run_id }}
+  cancel-in-progress: false
 
 # The managed runtime the CLI ships on; keep ci.yml's and release.yml's pins in sync.
 env:

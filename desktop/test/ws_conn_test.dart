@@ -20,6 +20,7 @@ class FakeHub {
   final List<Map<String, dynamic>> frames = [];
   final List<String> protocols = [];
   final List<String?> environments = [];
+  final List<String?> declaredClients = [];
   final Map<String, int> machineSelected = {};
   final List<WebSocket> clients = [];
   Map<String, dynamic> closeResponse = {'activity': 'idle'};
@@ -42,6 +43,7 @@ class FakeHub {
       final protocol = request.headers.value('sec-websocket-protocol') ?? '';
       hub.protocols.add(protocol);
       hub.environments.add(request.uri.queryParameters['autonomousEnv']);
+      hub.declaredClients.add(request.uri.queryParameters['client']);
       final ws = await WebSocketTransformer.upgrade(
         request,
         protocolSelector: (protocols) =>
@@ -213,6 +215,8 @@ void main() {
       final result = await conn!.request('agents_list');
       expect(hub.protocols, ['access-token']);
       expect(hub.environments, ['prod']);
+      // A native build is not the web: no presence surface declared.
+      expect(hub.declaredClients, [null]);
       expect(hub.machineSelected['m1'], 1);
       expect((result['agents'] as List).first['id'], 'a1');
     },

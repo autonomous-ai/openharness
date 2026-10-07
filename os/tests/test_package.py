@@ -29,7 +29,10 @@ class PackageIdentity(unittest.TestCase):
             self.assertIn('Super+n', (destination / 'usr/share/harness-os/guide.md').read_text())
             settings = json.loads((config / 'opencode.json').read_text())
             self.assertEqual(settings['update'], 'disable')
-            self.assertFalse(set(settings) & {'model', 'provider', 'providers', 'instructions'})
+            # One free Zen model that answers with tools (upstream's Exo Free default fails every
+            # tool call with "Endpoint is unavailable"); providers and instructions stay upstream's.
+            self.assertEqual(settings['model'], 'opencode/muse-spark-1.3-contributor-free')
+            self.assertFalse(set(settings) & {'provider', 'providers', 'instructions'})
             self.assertEqual(settings['permissions'], [
                 {'action': 'external_directory', 'resource': '/usr/share/harness-os/*', 'effect': 'allow'},
                 {'action': 'read', 'resource': '/usr/share/harness-os/*', 'effect': 'allow'},

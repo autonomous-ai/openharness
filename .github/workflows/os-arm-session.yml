@@ -7,17 +7,6 @@ on:
         description: 'Prepare a private fixture for accelerated local acceptance; does not claim a passing VM test'
         type: boolean
         default: true
-  push:
-    branches: ['os-polish/arm-graphical']
-    paths:
-      - 'os/tests/arm_session*'
-      - 'os/tests/test_arm_session.py'
-      - 'os/tests/arm-session.lock.json'
-      - 'os/tools/fedora_payload.py'
-      - 'os/tools/opencode_payload.py'
-      - 'os/tools/build-fedora-package.py'
-      - 'os/packaging/fedora/**'
-      - '.github/workflows/os-arm-session.yml'
 
 permissions:
   contents: read
@@ -68,7 +57,7 @@ jobs:
           sudo chown -R "$USER:$(id -gn)" os/work/fedora-package
       - name: Prepare the fresh fixture or exercise the full graphical session
         env:
-          PREPARE_ONLY: ${{ github.event_name == 'push' || inputs.prepare_only }}
+          PREPARE_ONLY: ${{ inputs.prepare_only }}
         run: |
           args=()
           if [[ "$PREPARE_ONLY" == true ]]; then args+=(--prepare-only); fi
@@ -92,7 +81,7 @@ jobs:
           retention-days: 14
           compression-level: 6
       - name: Retain the private fixture for accelerated acceptance
-        if: success() && (github.event_name == 'push' || inputs.prepare_only)
+        if: success() && inputs.prepare_only
         uses: actions/upload-artifact@v6
         with:
           name: harness-arm-session-fixture

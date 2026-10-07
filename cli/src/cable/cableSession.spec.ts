@@ -355,7 +355,8 @@ describe('cable session', () => {
       ? { ok: true, selectionId: 'pick-1', revision: 4, rows: 2, extending: true,
           excerpt: 'source output', text: '  source line\nsecond line' }
       : { ok: false, error: 'Closed' })
-    const host = makeHost({ selectPassage, transcribe: vi.fn(async () => 'Compare this with your plan.'), route: vi.fn() })
+    const host = makeHost({ selectPassage, transcribe: vi.fn(async () => 'Compare this with your plan.'), route: vi.fn(),
+      appFocus: () => ({ machineId: 'mac-local', agentId: 'a1' }) })
     const { session, port } = await connect(host)
     try {
       port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' }); await settle()
@@ -502,7 +503,8 @@ describe('cable session', () => {
       ? { ok: true, selectionId: 'selection-1', revision: 4, rows: 2, extending: true,
           excerpt: 'quoted output', text: '  first line\nsecond line' }
       : { ok: false, error: 'Selection closed.' })
-    const host = makeHost({ selectPassage, transcribe: vi.fn(async () => 'Explain this.') })
+    const host = makeHost({ selectPassage, transcribe: vi.fn(async () => 'Explain this.'),
+      appFocus: () => ({ machineId: 'mac-local', agentId: 'a1' }) })
     const { session, port } = await connect(host)
     try {
       port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
@@ -1220,6 +1222,23 @@ describe('cable session', () => {
     await session.stop()
   })
 
+  it.each([{ selections: ['a2'] }, { selections: ['a1', 'a2'] }])('delivers the latest focus when $selections supersedes an unsent selection', async ({ selections }) => {
+    const { session, port, host } = await connect()
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+      await settle()
+      port.sent.length = 0
+      let finish!: () => void
+      vi.spyOn(host, 'listAgents').mockImplementationOnce(() => new Promise(resolve => { finish = () => resolve(AGENTS) }))
+      const first = session.followApp('mac-local', 'a2')
+      await vi.waitFor(() => expect(finish).toBeDefined())
+      const pending = selections.map(agentId => session.followApp('mac-local', agentId))
+      finish()
+      await Promise.all([first, ...pending])
+      expect(port.sent.filter(m => m.t === 'focus')).toEqual([{ t: 'focus', agentId: 'a2' }])
+    } finally { await session.stop() }
+  })
+
   it('forwards a whole stroke, including the reports that carry no travel', async () => {
     // The ends of a stroke are the point of the message, not padding around it: a `down` with nothing in
     // it is what stops a fling still running on the far side, and an `up` with nothing in it is a finger
@@ -1376,7 +1395,7 @@ describe('cable session', () => {
   })
 
   it('routes a voice turn that names no agent', async () => {
-    const host = makeHost()
+    const host = makeHost({ appFocus: () => ({ machineId: 'mac-local', agentId: 'a2' }) })
     const { session, port } = await connect(host)
     port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
     await settle()
@@ -1501,6 +1520,43 @@ describe('cable session', () => {
     expect(route).not.toHaveBeenCalled()
     expect(host.sendTurn).toHaveBeenCalledWith('a2', 'fix the login screen')
     await session.stop()
+  })
+
+  it('pins ordinary dictation to the pane focused when recording begins, even if the dial is stale', async () => {
+    let focused = 'a2'
+    let finish!: (text: string) => void
+    const transcribe = vi.fn(() => new Promise<string>(resolve => { finish = resolve }))
+    const host = makeHost({
+      appFocus: () => ({ machineId: 'mac-local', agentId: focused }),
+      transcribe,
+      route: vi.fn(),
+    })
+    const { session, port } = await connect(host)
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+      await settle()
+      port.say({ t: 'voice.begin', agentId: 'a1', uploadId: 'focused-pane' })
+      port.pcm(Buffer.alloc(3200, 1))
+      // Focus can change during capture and during the asynchronous transcription.
+      focused = 'a1'
+      port.say({ t: 'voice.end', uploadId: 'focused-pane' })
+      await vi.waitFor(() => expect(transcribe).toHaveBeenCalledOnce())
+      finish('one two three four five')
+      await vi.waitFor(() => expect(host.sendTurn).toHaveBeenCalledOnce())
+      expect(host.sendTurn).toHaveBeenCalledWith('a2', 'one two three four five')
+      expect(host.route).not.toHaveBeenCalled()
+      expect(port.sent).toContainEqual(expect.objectContaining({ t: 'voice.transcript', agentId: 'a2' }))
+    } finally { await session.stop() }
+  })
+
+  it('restores the focused pane when a dial attaches after the window selected it', async () => {
+    const host = makeHost({ appFocus: () => ({ machineId: 'mac-local', agentId: 'a2' }) })
+    const { session, port } = await connect(host)
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+      await vi.waitFor(() => expect(port.sent).toContainEqual({ t: 'focus', agentId: 'a2' }))
+      expect(port.types().indexOf('agents.end')).toBeLessThan(port.types().indexOf('focus'))
+    } finally { await session.stop() }
   })
 
   it('transcribes at the rate the dial states, not a guess', async () => {

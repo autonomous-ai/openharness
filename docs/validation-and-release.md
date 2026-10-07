@@ -25,38 +25,66 @@ compiling, or starting a broad suite. Do not clean other sessions' files to make
 Run independent checks concurrently, with enough capacity for their workers;
 two commands each spawning every CPU is not useful parallelism.
 
-Manual **CI → Run workflow** accepts `scope`: `cli`, `tui`, `backend`, `desktop`, or `full`
-(the default). `cli` includes typecheck, all CLI tests, updater coverage, release
-bundle checks, the serial/login-shell OS/Node matrix, and the per-file 100% coverage
-gates (`test:core`, `test:harnessd`, `test:resume`, `test:orchestrator`, `test:sharing`,
-`test:remote-viewers`, `test:portability`). `tui` includes its native
-CLI integration tests. Select `full` for cross-component changes or uncertain impact.
-The workflow remains on demand; this change does not introduce new required gates.
+## PR CI
 
-`desktop` runs all Desktop VM files on both macOS and Linux, split into four
-isolated runners per platform. It uses the release's pinned Flutter SDK and shared
-dependency caches. Each shard has four test workers and the bounded runner's
-ten-minute budget; startup recovery retains the same narrow rules below. `full`
-includes this matrix alongside the existing component checks. Changed Dart
-analysis and browser/native integration checks remain separate where relevant.
+PR CI is deliberately fast. Each changed component runs only its own Linux suite:
 
-The Desktop aggregate reads each raw test log, verifies its hash and complete-file
-result, and compares every shard's inventory with the checked-out test files.
-Every file must finish exactly once per platform. Failed jobs, missing or duplicate
-files, changed source/environment, malformed reports and incomplete tests fail it.
-Platform-specific skips and any pre-test loader recovery remain explicit in the
-summary. Logs, receipts and the summary are retained for seven days. Collect the
-result with `scripts/record-ci-validation.py RUN_ID --scope desktop --pr PR_NUMBER`.
+| Changed directory | PR check | Typical time |
+| --- | --- | --- |
+| `cli/`, `tests/` | `cli-typecheck` and `cli-tests` (default Vitest suite, four shards) | 3–5 min |
+| `desktop/` | `desktop-tests` (VM suite, four Linux shards) | 5–7 min |
+| `tui/` | `tui-test` (`cargo test`) | a few minutes |
+| `backend/`, `companions/`, `website/`, `os/`, `provider/`, `mobile/`, `daemons/` | that component's one check | 1–4 min |
+| `devices/` | `firmware-checks` | 1–2 min |
+| anything else (docs, workflows, scripts, store) | `process-checks` only | about 1.5 min |
+
+`plan` (actionlint and suite selection), `process-checks` and `ci/required` always
+run; `ci/required` is the only required check. On a draft PR only those three run
+and `ci/required` stays blocked; marking the PR ready runs the component checks.
+Normal merges directly squash the reviewed head after successful PR CI. If GitHub
+requires a merge queue, its runs rerun only the three always-on jobs (about 2 minutes):
+the PR run already tested the change. Queue setup is not required to merge or release.
+
+The `plan` and `ci/required` jobs run `scripts/ci-plan.py` from the PR head. A branch
+created before #991 still carries the old planner, which expects removed jobs and
+fails `ci/required` for CLI, Desktop, workflow and script changes. Update the branch
+from `main` before relying on its CI.
+
+### What PR CI does not run
+
+| Check | Where it runs now | When you must run it yourself |
+| --- | --- | --- |
+| CLI per-file coverage gates (`test:core`, `test:harnessd`, `test:resume`, `test:orchestrator`, `test:sharing`, `test:remote-viewers`, `test:portability`, `test:local-models`) | nowhere automatically | when you change files those gates cover (`src/core/`, `src/services/`, `src/harnessd/` and each gate's area) |
+| CLI serial, PTY and login-shell specs; macOS process images | CLI release builds and verifies process images only | when you change `src/cable/` serial code, shell startup or process images; run the specs on macOS |
+| CLI end to end (`cli/e2e`) | nightly and **Actions → CLI end to end → Run workflow** | for user-facing CLI flows; start one run on the branch |
+| Desktop tests on macOS | nowhere automatically | when you change macOS-specific Desktop code; `make desktop-test` on a Mac |
+| TUI native fixtures and connected shells | the TUI release (`release-tui.yml`) | optional locally: `scripts/validate-tui-native.py` |
+| Experience, authoring, Home Assistant and Desktop logging browser checks | **Run workflow** on their own workflows | when you change their area |
+| OS image builds, VM and hardware acceptance | **Actions → Harness OS** and the other OS workflows, by hand only | for installer, image or session changes; start once with the needed inputs |
+
+Record what you ran, with run links, in the PR. Release workflows are not a full
+test suite: the CLI release runs typecheck and bundle checks, and the Desktop release
+builds, signs and verifies downloads. A release failure is still a code failure: fix
+it and cut the next version.
+
+Do not add CI runs to a PR. Don't start **CI → Run workflow** for a PR that already has
+an automatic run, and don't push again just to retrigger a failed check. Read the
+failure, fix it and push once. The account runs at most 20 jobs at once (5 on macOS),
+and every extra run delays every other PR.
+
+### Suite details
+
+Manual **CI → Run workflow** accepts `scope`: `cli`, `tui`, `backend`, `desktop`,
+`full` (the default, all five core components), `all`, or one extra component. It
+runs the same fast jobs as PR CI.
+
+`desktop-tests` uses the release's pinned Flutter SDK and shared dependency caches.
+Each shard has four test workers and the bounded runner's ten-minute budget. Logs
+and receipts are retained for seven days.
 
 CLI's default Vitest suite runs as four file shards on separate runners, retaining
-its worker cap and isolation. Typecheck, lockfile checks, guard fuzz, registry and
-release-bundle integration, and updater coverage run alongside them. Guard fuzz
-keeps its own process and timing budget. The existing `typecheck-test` job is the
-aggregate: it requires passing shard/contract jobs and verifies that their JSON
-reports cover every discovered file exactly once. Missing, duplicated, failed or
-unfinished results fail it. Review the complete workflow result, including the
-serial/login-shell matrix, rather than one early finishing job. Shard reports,
-inventories and the combined summary are retained as artifacts for seven days.
+its worker cap and isolation. Shard reports and inventories are retained as
+artifacts for seven days.
 
 CI's `vitest.ci.config.ts` uses the slow-file timing hints in `cli/ci-test-durations.json`
 to distribute estimated work across the same four runners. The complete discovered
@@ -70,8 +98,8 @@ the CI assignment locally. The aggregate still requires every discovered file
 exactly once, independent of these estimates.
 
 The CLI's end-to-end suite (`cli/e2e`) runs in its own workflow, **CLI end to end**
-(`.github/workflows/cli-e2e.yml`): after each merge to `main` that touches `cli/`, nightly,
-and on demand from a branch (Actions → CLI end to end → Run workflow).
+(`.github/workflows/cli-e2e.yml`): nightly and on demand from a branch
+(Actions → CLI end to end → Run workflow).
 Eight Linux runners each take a shard, planned from `cli/ci-e2e-durations.json` the same
 way (`--config vitest.e2e.ci.config.ts --shard=N/8` reproduces one locally). Each shard
 installs tmux, zsh, tcsh and dash, starts every daemon from one bundle (`E2E_BUNDLE=1`) and
@@ -174,11 +202,13 @@ candidates are removed by their owning workflow. For process maintenance, dispat
 it requires reuse, promotes to disposable paths, verifies all six downloads, then
 removes those objects and the consumed candidate. It cannot publish a product.
 
-Native TUI CI tests and builds the shipped musl target in the same Cargo output
-directory. Dependency caches are keyed by target, Rust toolchain, and Cargo inputs;
-cache hits still run every test. The eleven native TUI fixtures run two at a time,
+PR CI runs the TUI unit tests only. The TUI release builds the shipped musl targets
+and runs the native fixtures against them. The native TUI fixtures run two at a time,
 using their own homes, socket names, and mock ports. CI retains each fixture's log
-and validation receipt as an artifact. To run the same set locally after building:
+and validation receipt as an artifact. Native comparisons use tmux 3.7c at the pinned
+commit in `.github/actions/reference-tmux`; Ubuntu's 3.4 loses the exit status in the
+live-window respawn comparison. CLI's older-tmux integration checks keep the
+distribution binary. To run the same set locally after building:
 
 ```bash
 python3 scripts/validate-tui-native.py tui/target/release/harness-tui
@@ -280,8 +310,11 @@ before merge and then again on the merged commit. Check the merged source identi
 and rerun only validation invalidated by the merge. Native checks absent from CI
 still need their own evidence.
 
-Prepare the PR description and review the diff while CI is running. Once it passes,
-collect its record with one read-only command:
+Prepare the PR description and review the diff while CI is running. For a normal
+merge you need nothing more: `make merge-pr` collects and verifies the
+`ci/required` receipt itself. The collector below is for manual runs only, and its
+`cli` and `desktop` scopes still expect the job set from before #991, so they fail
+on current runs; `process` still works. To collect a manual run's record:
 
 ```sh
 python3 scripts/record-ci-validation.py RUN_ID --scope cli --pr PR_NUMBER
@@ -414,103 +447,97 @@ until they disappear.
 
 ## Merge an already-reviewed PR
 
-Once code review and required non-CI checks are complete and merging is authorized,
-start this command while the selected CI run is still running:
+After independent code review, required non-CI acceptance and merge authorization:
 
 ```bash
-make merge-pr ARGS="PR_NUMBER --run RUN_ID --scope SCOPE --reviewed-head HEAD_SHA --reviewed-base MAIN_SHA --merge"
+make merge-pr ARGS="PR_NUMBER --reviewed-head HEAD_SHA --reviewed-base REVIEW_BASE_SHA --merge --wait-timeout 1800"
 ```
 
-Use full commit SHAs. The clean local checkout must be the reviewed head and include
-that reviewed `main` commit. Prepare the PR description with its check scope and CI
-run link first. The command waits for that attempt, verifies the same jobs/artifacts
-as the evidence collector, then rechecks the PR and the live `main` ref before one
-squash-merge request. GitHub must report the PR ready; the request includes the exact
-reviewed head and does not bypass branch rules or enable auto-merge/queueing.
+The checkout must be clean at the exact reviewed head and include the reviewed
+`main` commit. The helper follows the latest automatic PR CI for that head, verifies
+its immutable `ci/required` receipt, rechecks the source and GitHub mergeability,
+then directly squash-merges with the exact reviewed head. It verifies that the
+merged full tree matches the reviewed and tested tree. It retains source, run,
+attempt, artifact digest and phase timings under `.harness/validation/*-merge-*/`.
+Omit `--merge` for a read-only preview.
 
-Omit `--merge` for a read-only preview. Logs, CI evidence, per-phase timings and the
-merge outcome are saved under `.harness/validation/*-merge-*/`. `--wait-timeout`
-defaults to 900s; `--timeout` gives preflight and post-CI operations 90s each. The
-command records its intended mutation before sending it. If a response is lost, it
-inspects the same PR without replaying the merge request.
+A merge queue is not a prerequisite for merging or releasing. Do not add `--queue`
+to ordinary commands or stop an authorized merge to request queue setup. If GitHub
+actually enforces a queue, the helper detects its rule and uses it, verifying the
+merged tree against successful candidate CI. Explicit `--queue` is only for an
+intentionally configured queue, such as a disposable integration trial.
 
-A changed head, dirty checkout, moved main, failed CI or blocked merge stops the
-command. Review new source differences and reuse only applicable evidence, as above;
-the command does not decide that impact or replace native checks and code review.
-After a merge, it verifies the actual Git tree against the reviewed target tree.
-The receipt separately reports whether the full tested tree matches; scoped CI
-reuse may preserve test inputs while other reviewed files differ. A merge tree
-different from the reviewed target is recorded as `merged_source_review_required`
-(exit 3), so resolve that source review before release. An unconfirmed write is
-recorded as `merge_not_confirmed`; inspect the same PR before further action. This
-command does not create release tags or dispatch release workflows.
+If `main` moved before a direct merge, inspect and integrate the new source, then
+supply the updated reviewed head/base. Reuse validation only for unchanged inputs;
+rerun checks affected by the integration. This is routine handling of concurrent
+merges: continue the user's already-authorized merge without asking for permission
+again. A quiet branch takes the direct path immediately after checks and review;
+concurrent changes require only the additional review and validation they affect.
+Do not enable or disable a queue based on the number of open PRs or running jobs.
 
-## Complete the authorized release
+A changed head/target, missing coverage,
+failed/skipped required jobs or a lost response cannot report success. Inspect an
+uncertain merge or enqueue without replaying the mutation. If a wait expires,
+follow the same run or queued PR; do not start another validation or merge request.
+Do not use `--run/--scope` for normal merges: that legacy manual-evidence mode
+depends on the collector's pre-#991 job lists.
 
-Once required checks pass, merge, verify the resulting source, and tag that source
-using the existing release scripts. Do not introduce an additional full-suite phase.
-For a client/server change, publish required server support before exposing clients
-that need it. Independent product releases may build concurrently; preserve their
-source/version compatibility and manifest publication safeguards.
+## Automatic CI and rollout
 
-Check the live version and artifact checksum, and give the user the release link
-promptly. Broader maintenance testing must not silently turn into another release
-gate after shipping. Record these UTC timestamps in the PR or release task:
+`ci.yml` runs on every PR revision and on `merge_group: checks_requested`.
+`scripts/ci-plan.py` reads the complete immutable Git diff, including both sides
+of renames, rather than GitHub's limited file list. PR runs check out the exact
+head; queue runs check out the combined candidate. Each changed path selects only
+its own component's suite ([PR CI](#pr-ci)); paths outside a component select no
+suite. CI uses read-only repository permissions and executes no contributor code
+with release credentials.
 
-- Request received; implementation ready; required validation started/completed.
-- Merge; each product's release trigger and live publication; completion reported.
-- Pauses and waiting, with their known reason. Mark missing data unknown.
+Cross-component effects are not tested on PRs. A CLI change does not run the
+Desktop, TUI, companion or mobile suites even where they read CLI protocol files.
+When a change alters a protocol, wire format or shared fixture another component
+reads, say so in the PR and run that component's tests locally or with
+**CI → Run workflow** (`scope=desktop`, `tui`, `companions` or `mobile`).
 
-For Desktop, use the existing release command with `--wait` to follow the exact
-tag and source through completion:
+Separate PR groups prevent cross-cancellation, but still share available runner
+capacity. Related branches validate independently. Keep PRs small, inspect changes
+from `main` before direct integration, and coordinate edits to shared interfaces
+and frequently changed files. Main background validation may coalesce pending
+snapshots; any configured queue's distinct candidates must not share that group.
 
-```bash
-make release-desktop ARGS="--notes-file /path/to/reviewed-notes.md --wait"
-```
+The stable `ci/required` job runs even after an upstream failure. It accepts only
+successful selected jobs. Deliberately inapplicable jobs may be skipped; a required
+skip, cancellation, failure or missing result fails integration. Manual `full`
+selects the five core suites; `all` selects every suite. Manual dispatch is extra
+evidence and cannot substitute for the automatic PR gate.
 
-The workflow's `publish` job downloads all six public artifacts three at a time,
-using the updater's Dart user agent, and checks every version, full SHA-256, and
-size. It starts immediately after publication on the same runner.
-Each transfer has a total deadline; any failure makes the workflow fail and keeps
-the JSON receipt in the `desktop-release-verification` artifact. A successful
-verification satisfies that release's download checks: report completion instead
-of downloading everything again locally. The watcher requires this job to pass
-and checks the tag's full SHA, so another release's success cannot satisfy it.
+Do not enable or change repository protection rules as part of an ordinary merge
+or release. Preserve configured PR, discussion, approval, deletion and force-push
+rules. Optional queue rollout is separate repository administration, not a step
+agents must complete before shipping a reviewed change.
 
-Different Desktop versions may build concurrently. The shared release lock covers
-publication and its public verification, so a second workflow cannot change the
-live version midway through that check. Versions are checked before building and
-again immediately before publication. A late older version fails as superseded;
-do not retry it over a newer live release. All four platform manifests must contain
-exactly the six expected entries for one version. Artifact writes are create-only,
-and the final manifest write requires the GCS generation read by the publisher.
-Concurrent external changes therefore cause a failure instead of being lost.
+New revisions replace active checks for the same PR, job and matrix row. Cancellation
+locks belong to work jobs, leaving summaries and the always-running final gate independent: an obsolete
+gate waiting for a runner cannot block the next revision. Checks no longer selected
+by the new plan may finish, including when a ready PR returns to draft; they cannot
+validate a newer head. Explicit runs and distinct candidates have independent
+concurrency identities. CLI end to end runs nightly and on demand; it no longer
+runs after each merge. A passing older run does not validate newer source. It
+remains advisory, and missing required acceptance still prevents an authorized
+release.
 
-For publication changes, run the local process suite and the disposable GCS
-contract check on the candidate branch:
+OS workflows run only when started by hand. Pushing to an `os/**`, `os-polish/*` or
+`os-candidate/*` branch builds nothing. Start **Harness OS** (or the specific OS
+workflow) on the branch once, with the inputs the change needs, and reuse its
+`image_run_id` for follow-up assessments instead of building again.
 
-```bash
-gh workflow run release-desktop.yml --ref BRANCH -f version=0.0.0 -f test_publication=true
-```
+Hourly **CI health** retains a bounded latest-100-run workload sample, execution
+observed in cancelled runs and the age/source of completed main E2E. These are job
+timestamps, not billed cost or a guarantee that current main passed. Use a week of
+traffic to tune candidate concurrency from runner waiting, rebuilds and ready-to-merge
+time. Investigate/revert confirmed main regressions promptly. Preserve explicit retry
+and incomplete-suite reporting; do not retry assertions until they disappear.
 
-This mode skips all product build/release jobs. It uses tiny public fixture objects
-under `harness/desktop/.publication-check/<run>-<attempt>/`, checks actual GCS
-preconditions and downloads, and removes only that run's prefix. It exercises
-normal publication, duplicate/older versions, incomplete platform sets, concurrent
-manifest writes, and immutable artifact collisions. It cannot publish an app.
-
-For a release made before that job existed, or to investigate a download failure:
-
-```bash
-python3 scripts/verify-desktop-release.py 1.2.51
-```
-
-This is read-only. A failed verification after publication means the release may
-already be live; inspect the receipt and fix the cause rather than blindly
-retagging or retrying immutable artifact uploads.
-
-Report both total elapsed time and its stages. For small changes, aim to return to
-the team's previous 10–15 minute merge/release overhead; publishing duration alone
-does not demonstrate that target. At ten minutes without progress, identify the
-blocked phase and its next action instead of silently extending testing. Compare
-the next ten tasks using request-to-completion data before claiming an improvement.
+Release publication and Desktop prepared-package reuse retain their existing
+source/evidence, signing and artifact contracts. They do not depend on a merge
+queue or queue rollout. After the authorized merge, follow the component's normal
+release workflow and verify its published artifacts.

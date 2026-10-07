@@ -163,6 +163,12 @@ class Service {
     if (this.state === 'off') this.start()
   }
 
+  /** A process on demand stopped with the others and started again with them: off, for whoever needs it next to
+   *  ask. Left stopped, no `want` started it again for the rest of the master's life. */
+  rest(): void {
+    if (this.state === 'stopped') this.setState('off')
+  }
+
   /** SIGTERM, then SIGKILL after the grace; `done` once it is gone. A parked or waiting one is simply stopped. */
   stop(done: () => void): void {
     if (this.state === 'stopped') { done(); return }
@@ -307,9 +313,14 @@ export class ServiceSupervisor {
     this.services = specs.map((spec) => new Service(spec, deps, options, env))
   }
 
-  /** Start every service but those on demand; none waits on another, or on the core. */
+  /** Start every service but those on demand, which wait to be asked for again; none waits on another, or on the
+   *  core. Found end to end (e2e/reexec.e2e.ts): a master whose re-execution was refused stops its services and
+   *  starts them again, and a process on demand stayed stopped, so a core too old to ask never got models. */
   start(): void {
-    for (const service of this.services) if (!service.spec.onDemand) service.start()
+    for (const service of this.services) {
+      if (!service.spec.onDemand) service.start()
+      else service.rest()
+    }
   }
 
   /** Start the process on demand that hosts [service], if it is not running yet: the core asked for it (`harnessd:want`). */
@@ -363,8 +374,9 @@ export const SERVICE_HOSTS: Readonly<Record<string, ServiceHostSpec>> = {
   // samples in ps's and ioreg's; what it holds is the agents the core sent it and one parsed sample.
   // The monitor parses up to 8 MB of ioreg output per Monitor poll on a Mac with a GPU, hence more
   // than workspaces alone had. The recaps hold each session's last three recaps, answers (8 KiB each at
-  // most) and asks, as the core did while they ran in it, and a few timers per open turn.
-  edge: { services: ['workspaces', 'usage', 'monitor', 'projects', 'handoff', 'recaps'], heapLimitMiB: 384, rssLimitMiB: 768 },
+  // most) and asks, as the core did while they ran in it, and a few timers per open turn. The window
+  // names hold at most 400 short names; their model runs in its own process (lib/oneshot.ts).
+  edge: { services: ['workspaces', 'usage', 'monitor', 'projects', 'handoff', 'recaps', 'windowNames'], heapLimitMiB: 384, rssLimitMiB: 768 },
   // The orchestrator (services/orchestratorProcess.ts), an experiment: started only once it is on, for a
   // saved project or a request (core/api.ts `EXPERIMENTS`). Its projects' files and the frames of their
   // Directors; the agents it runs are the core's.
@@ -382,10 +394,15 @@ export const SERVICE_HOSTS: Readonly<Record<string, ServiceHostSpec>> = {
   // The relay and its E2EE (gateway/gatewayProcess.ts): the backend link, every remote client's session,
   // the terminals' WebRTC channels and their queues. Network, crypto and pure-JS WebRTC, the attack surface,
   // where a fault costs the remote clients and nothing else (docs/design/2026-10-06-core-boundary-next.md).
-  gateway: { services: ['gateway'], heapLimitMiB: 512, rssLimitMiB: 1_024 },
+  // Started as the core starts when it is signed in or anything is paired here, and otherwise by the first
+  // thing that needs it (core/gatewayWake.ts): about 75 MiB at idle a computer signed out with nothing
+  // paired never pays.
+  gateway: { services: ['gateway'], heapLimitMiB: 512, rssLimitMiB: 1_024, onDemand: true, askedSince: 4 },
   // Grid's pictures, the Model Manager's catalog and the models found on this machine. Its downloads, model
-  // servers and `grid` commands run in processes of their own, outside this budget.
-  models: { services: ['models'], heapLimitMiB: 512, rssLimitMiB: 1_024 },
+  // servers and `grid` commands run in processes of their own, outside this budget. Started only once grid is
+  // in use here or a request needs it (core/modelsWake.ts): about 70 MiB at idle, which a computer that uses
+  // no grid never pays.
+  models: { services: ['models'], heapLimitMiB: 512, rssLimitMiB: 1_024, onDemand: true, askedSince: 4 },
   // The devices (services/devicesProcess.ts): the dials on USB (pure-JS serial, a frame decoder whose buffer
   // is bounded per dial), the window bridges, the fleet's router and its lane, the voice router's engine
   // worker (a process of its own, outside this budget). Hardware that speaks whatever its firmware says:

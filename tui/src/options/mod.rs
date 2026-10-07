@@ -105,13 +105,13 @@ pub fn defaults() -> &'static BTreeMap<String, String> {
         // One cell at each outer edge aligns status text with the pane surfaces.
         // Two spaces separate the window list from the information on the right.
         m.insert("status-left".into(), " #{?client_prefix,#[bold]›#[nobold] ,}".into());
-        m.insert("status-right".into(), "  #{?daemon_down,#[bold]daemon down#[nobold]  ,}#{?model_progress,#{model_progress}  ,}#{?usage_remaining,#{usage_remaining_mark}  ,}#{?fleet,#{s/ /  /:fleet}  ,}#{?pane_watching,[watching]  ,}\"#{=/21/…:local_machine}\"  %H:%M ".into());
+        m.insert("status-right".into(), "  #{?hn_controls,#{hn_controls}  ,}#{?daemon_down,#[bold]daemon down#[nobold]  ,}#{?model_progress,#{model_progress}  ,}#{?usage_remaining,#{usage_remaining_mark}  ,}#{?fleet,#{s/ /  /:fleet}  ,}#{?pane_watching,[watching]  ,}#{?shell_context,#{=/36/…:shell_context},\"#{=/21/…:local_machine}\"}  %H:%M ".into());
         // Each window's most urgent harness at a glance (the symbol its pane titles show) and its
         // name in a few whole words (#{window_short_name}): a harness is named for its task.
         // Keep tmux's familiar current/previous markers beside the name, then any other
         // flags, then the harness state. The selected tab needs no filled badge.
         for name in ["window-status-format", "window-status-current-format"] {
-            m.insert(name.into(), status_window_format("tmux", true));
+            m.insert(name.into(), status_window_format(DEFAULT_TAB_NAME, true));
         }
         // Unread activity and bells already carry #/! markers. Keep a continuous status
         // background and emphasize text instead of introducing inverted tab badges.
@@ -142,23 +142,36 @@ pub fn defaults() -> &'static BTreeMap<String, String> {
     })
 }
 
+/// What a tab shows unless `@hn-window-name` says otherwise: the selected pane's title (`pane`), or
+/// auto rename's name for the window. (No longer a choice in Appearance; `tmux` from a tmux.conf or
+/// an older tui.toml still shows the window's name.)
+pub const DEFAULT_TAB_NAME: &str = "pane";
+
 /// The status bar's per-window text. [name] is the tab name source (`tmux` = the window's short
 /// name, `pane` = the window's full name); [star] is whether the window you are on is marked `*`
 /// (`false` for a filled tab, which needs no `*` beside its name).
 pub fn status_window_format(name: &str, star: bool) -> String {
     // `tmux` keeps hn's window name, `pane` the active pane's own title (a harness's task, not the
-    // window's auto-renamed name) — the two can differ, which is the point of the option.
-    let name_part = if name == "pane" { "#{pane_title}" } else { "#{window_short_name}" };
+    // window's auto-renamed name) — the two can differ, which is the point of the option. A window
+    // auto rename has named (its repo and its work) shows that name either way, whole: it is four
+    // words at most already.
+    let name_part = if name == "pane" { "#{?window_auto_named,#{window_name},#{pane_title}}" } else { "#{?window_auto_named,#{window_name},#{window_short_name}}" };
     let mark = if star { "#{?window_active,*,#{?window_last_flag,-,}}" } else { "#{?window_last_flag,-,}" };
     // (Two closing braces: the idle test's and the icon's. With one, the icon never showed.)
     format!("#I:{name_part}{mark}#{{s/[*-]//:window_flags}}#{{?#{{==:#{{window_agent_state}},idle}},,#{{?window_agent_icon, #{{window_agent_icon}},}}}}")
 }
 
+/// Whether [format] is one [status_window_format] derived, by this build or an older one (whose
+/// name part or closing braces may differ), as opposed to one somebody wrote in tmux.conf.
+pub fn derived_window_status(format: &str) -> bool {
+    format.starts_with("#I:") && format.contains("#{s/[*-]//:window_flags}#{?#{==:#{window_agent_state},idle},,#{?window_agent_icon, #{window_agent_icon},}")
+}
+
 /// The status bar's `window-status-*` overrides for a tab name source [name] (`tmux`|`pane`) and a
-/// current-tab [active] (`star`|`filled`). Empty when they match the defaults (tmux + star), so a
-/// caller can leave the tmux defaults in place. Shared by boot (from `[look]`) and a live pick.
+/// current-tab [active] (`star`|`filled`). Empty when they match the defaults ([DEFAULT_TAB_NAME] +
+/// star), so a caller can leave the defaults in place. Shared by boot (from `[look]`) and a live pick.
 pub fn window_status_overrides(name: &str, active: &str) -> Vec<(String, String)> {
-    let default_win = status_window_format("tmux", true);
+    let default_win = status_window_format(DEFAULT_TAB_NAME, true);
     let mut out = Vec::new();
     let normal = status_window_format(name, true);
     let current = status_window_format(name, active == "star");
@@ -186,8 +199,18 @@ pub fn tmux_defaults() -> &'static BTreeMap<String, String> {
             let (_, name, value) = (it.next(), it.next().unwrap_or(""), it.next().unwrap_or(""));
             if !name.is_empty() { m.insert(name.to_string(), unescape(value)); }
         }
+        // tmux computes this one when it starts (options-table.c, then server's $SHELL): the
+        // fixture's `/bin/zsh` is the Mac it was captured on. A command window runs as
+        // `default-shell -c`, and on a Linux without zsh (Harness OS) the OS welcome died at once
+        // (`Pane is dead (status 1)`) instead of showing Wi-Fi.
+        m.insert("default-shell".into(), default_shell(std::env::var("SHELL").ok().as_deref()));
         m
     })
+}
+
+/// tmux's default-shell: $SHELL when it is a suitable shell, else /bin/sh (_PATH_BSHELL).
+fn default_shell(env: Option<&str>) -> String {
+    env.filter(|s| suitable_shell(s)).unwrap_or("/bin/sh").to_string()
 }
 
 /// Explicit user styles win; default surfaces follow the terminal's current theme. Only the
@@ -321,6 +344,10 @@ impl Store {
     /// `@hn-dim on` (tui.toml `dim`): the panes you are not in, a little quieter — with borders or
     /// blurred surfaces alike. Off unless chosen.
     pub fn dim_others(&self) -> bool { self.get("@hn-dim", "", None).as_deref() == Some("on") }
+
+    /// `@hn-auto-rename on` (tui.toml `auto_rename`): a window with a repo is named for it and its
+    /// work (`autoname.rs`). Off unless chosen.
+    pub fn auto_rename(&self) -> bool { self.get("@hn-auto-rename", "", None).as_deref() == Some("on") }
 
     /// `@hn-border` as chosen — `box` unless it says `line`. (`@hn-look classic` is not a choice
     /// of lines: hn wrote it into every `[look]` it saved, a theme picked or a status bar moved.)
@@ -655,6 +682,17 @@ pub fn unescape(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The default shell is this computer's, as tmux's is, never the fixture's Mac `/bin/zsh`.
+    #[test]
+    fn the_default_shell_is_the_users_or_sh() {
+        assert_eq!(default_shell(Some("/bin/sh")), "/bin/sh");
+        assert_eq!(default_shell(Some("/nonexistent/zsh")), "/bin/sh");
+        assert_eq!(default_shell(Some("zsh")), "/bin/sh", "not a full path");
+        assert_eq!(default_shell(None), "/bin/sh");
+        let expected = default_shell(std::env::var("SHELL").ok().as_deref());
+        assert_eq!(tmux_defaults()["default-shell"], expected);
+    }
 
     /// Every `#{` of a tab's status text is closed: one short, and the harness icon after a tab's
     /// name (working, waiting on you) was never drawn.

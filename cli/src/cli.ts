@@ -252,6 +252,26 @@ async function resolveComputerMachine(signal?: AbortSignal): Promise<AuthSession
 }
 
 
+/**
+ * After a sign-in by hand: which account it was made to (`/api/auth/me`, under the token it just got),
+ * kept beside its epoch. The device key log then starts over for that account whenever it first reads
+ * it — a daemon started more than ten minutes after `harness login` used to freeze on the new account
+ * instead, and trusted none of its devices. Merged into the newest file, as `resolveComputerMachine`
+ * does, and only while the session is still this sign-in's. Never fails the sign-in: without it the
+ * log keeps to the ten-minute window.
+ */
+async function recordSignInAccount(accessToken: string, signInEpoch: string, autonomousEnv: string): Promise<void> {
+  try {
+    const me = await requestJson<{ user?: { id?: unknown } }>('GET', '/api/auth/me', undefined, {
+      authorization: `Bearer ${accessToken}`, 'x-autonomous-env': autonomousEnv,
+    })
+    const acct = me?.user?.id
+    const latest = readAuthSession()
+    if (typeof acct !== 'string' || !acct || latest?.signInEpoch !== signInEpoch) return
+    writeAuthSession({ ...latest, signInAcct: acct })
+  } catch { /* no account recorded */ }
+}
+
 /** This machine's device key code. Signing in is what puts the key into the account, so `create` makes
  *  the identity when it is missing; the read-only commands (`status`, `auth status`) only look, and
  *  show nothing rather than mint a key. Null whenever it cannot be had. */
@@ -305,9 +325,11 @@ async function authStatusCommand(json: boolean): Promise<void> {
   if (json) console.log(JSON.stringify(payload))
   else {
     console.log(`\n  ${payload.loggedIn ? '✓ Signed in' : '✗ Not signed in'}${payload.machineId ? ` (machine ${payload.machineId})` : ''}${payload.loggedIn && payload.method === 'qr' ? ' — by your phone' : ''}\n`)
-    // A session a phone approved is Harness's own: the Autonomous services behind billing and grid
-    // do not take it. Say so where the person looks, not only when one of them refuses.
-    if (payload.loggedIn && payload.method === 'qr') console.log('  Billing and grid need a Google or Apple sign-in: harness login --force\n')
+    // A session a phone approved is Harness's own, and billing's Autonomous service does not take it.
+    // Say so where the person looks, not only when billing refuses. Grid is not named: it learns who
+    // holds a Harness-issued sign-in from the Harness backend (autonomous-grid ADR 0046), and naming
+    // it sent people to sign in again with Google or Apple for nothing.
+    if (payload.loggedIn && payload.method === 'qr') console.log('  Billing needs a Google or Apple sign-in: harness login --force\n')
   }
 }
 
@@ -594,17 +616,20 @@ async function qrSignInCommand(
   })
   if (!result.ok) return fail(result.code, result.message)
   const { tokens } = result
+  const signInEpoch = newSignInEpoch()
+  const autonomousEnv = tokens.autonomousEnv ?? env.AUTONOMOUS_ENV
   writeAuthSession({
     version: 1,
     accessToken: tokens.token,
     ...(tokens.refreshToken ? { refreshToken: tokens.refreshToken } : {}),
     ...(tokens.expiresIn ? { expiresAt: Date.now() + tokens.expiresIn * 1000 } : {}),
-    autonomousEnv: tokens.autonomousEnv ?? env.AUTONOMOUS_ENV,
+    autonomousEnv,
     computerId: computerId(),
     method: 'qr',
     updatedAt: Date.now(),
-    signInEpoch: newSignInEpoch(),
+    signInEpoch,
   })
+  await recordSignInAccount(tokens.token, signInEpoch, autonomousEnv)
   try {
     await resolveComputerMachine()
   } catch (err) {
@@ -693,6 +718,7 @@ async function browserSignIn(
       throw err
     }
     const id = computerId()
+    const signInEpoch = newSignInEpoch()
     const session: AuthSession = {
       version: 1,
       accessToken: exchanged.token,
@@ -704,9 +730,10 @@ async function browserSignIn(
       // the clients were split signs every sign-in in as its configured one, and names none.
       ...(knownSsoClientId(exchanged.clientId) ? { clientId: knownSsoClientId(exchanged.clientId) } : {}),
       updatedAt: Date.now(),
-      signInEpoch: newSignInEpoch(),
+      signInEpoch,
     }
     writeAuthSession(session)
+    await recordSignInAccount(session.accessToken, signInEpoch, session.autonomousEnv)
     try {
       await resolveComputerMachine()
     } catch (err) {
@@ -781,13 +808,15 @@ async function gridLoginCommand(force: boolean, json: boolean): Promise<void> {
   }))
 }
 
-/** What `grid` itself said, carried out on the result line beside this command's own classification.
+/** What `grid` itself said, carried out on the result line beside `message` — which is already `grid`'s
+ *  own sentence when it refused with its `--json` envelope (`lib/gridHandoff.ts`), else the hand-off's.
  *
  *  `grid`'s answer on success is a JSON document on stdout, so it travels parsed, under `grid`. Its
  *  refusals go to **stderr** — every one of them already names its own way forward — and those
- *  travel verbatim under `detail`, because a client reading NDJSON off stdout would otherwise have
- *  the exit code and no sentence to show anybody. Both are omitted when empty rather than sent as
- *  `null`: an absent key reads as "the child said nothing there", which is what it means. */
+ *  travel verbatim under `detail` (the envelope line included), because a client reading NDJSON off
+ *  stdout would otherwise have the exit code and no sentence to show anybody. Both are omitted when
+ *  empty rather than sent as `null`: an absent key reads as "the child said nothing there", which is
+ *  what it means. */
 function gridSaid(handoff: { stdout: string; stderr: string }): Record<string, unknown> {
   const out = handoff.stdout.trim()
   const err = handoff.stderr.trim()
@@ -2522,6 +2551,9 @@ switch (cmd) {
       output: (line) => console.log(line),
       error: (line) => console.error(line),
     }).then((code) => { process.exitCode = code }).catch(onError)
+    break
+  case 'shell-launch':
+    import('./shellLaunch.js').then(({ shellLaunch }) => shellLaunch(rest)).then((code) => { process.exitCode = code }).catch(onError)
     break
   case 'tui':
     tuiCommand(rest, { port: env.PORT, dataDir: env.ADAPTER_DATA_DIR, identity: wantedDaemonIdentity }).then((code) => { process.exitCode = code }).catch(onError)

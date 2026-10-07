@@ -1,6 +1,9 @@
-import { describe, expect, it, vi } from 'vitest'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { reconcileGridAttach, createGridAccess, type GridAttachDeps, type GridAttachResult } from './gridAttach.js'
-import type { GridHandoffResult } from './gridHandoff.js'
+import { handOffToGrid, type GridHandoffResult } from './gridHandoff.js'
 import type { EnsureResult } from './gridEnsure.js'
 
 const NAME = 'someone-7f3a91c4'
@@ -190,6 +193,39 @@ describe('reconcileGridAttach — bringing grid into line for a grid feature', (
     expect(await reconcileGridAttach(d, { ownGrid: true, signedInThisRun: true })).toMatchObject({ status: 'signed-in', ownGrid: 'created' })
     expect(d.handoff).not.toHaveBeenCalled()
     expect(d.ensure).toHaveBeenCalledWith(NAME)
+  })
+})
+
+/**
+ * The hand-off as the models picker's Set up runs it (`services/models.ts`): the real
+ * `handOffToGrid` in json mode against a `grid` that refuses. `detail` is all the picker shows, so a
+ * refusal that names its own way forward must arrive there in `grid`'s words.
+ */
+describe('reconcileGridAttach — a hand-off grid refuses', () => {
+  const savedBin = process.env.HARNESS_GRID_BIN
+  const dirs: string[] = []
+  afterEach(() => {
+    if (savedBin === undefined) delete process.env.HARNESS_GRID_BIN
+    else process.env.HARNESS_GRID_BIN = savedBin
+    for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('carries grid\'s own sentence as the detail', async () => {
+    const sentence = 'POST https://cp.example.test/v1/grid/auth/harness failed (401): {"detail":"This Harness '
+      + 'sign-in has lapsed. Run `harness login` again."}'
+    const dir = mkdtempSync(join(tmpdir(), 'grid-attach-'))
+    dirs.push(dir)
+    writeFileSync(join(dir, 'stderr.txt'), `${JSON.stringify({ error: { code: null, message: sentence, status: 401 } })}\n${sentence}\n`)
+    const bin = join(dir, 'grid')
+    writeFileSync(bin, ['#!/bin/sh', '/bin/cat > /dev/null', `/bin/cat "${join(dir, 'stderr.txt')}" >&2`, 'exit 1', ''].join('\n'), { mode: 0o755 })
+    process.env.HARNESS_GRID_BIN = bin
+
+    const r = await reconcileGridAttach(deps({
+      signedInEmail: () => null,
+      handoff: vi.fn((token: string) => handOffToGrid(token, { json: true })),
+    }))
+
+    expect(r).toMatchObject({ status: 'handoff-failed', name: NAME, detail: sentence })
   })
 })
 

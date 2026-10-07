@@ -135,11 +135,16 @@ jobs:
         env:
           HARNESS_TUI_BIN: ${{ runner.temp }}/dist/harness-tui-linux-x64
         run: bash tui/tests/e2e.sh
+      - name: Build native comparison reference
+        if: matrix.platform == 'linux-x64'
+        id: reference-tmux
+        uses: ./.github/actions/reference-tmux
       - name: Native terminal lifecycle and concurrent window creation
         if: matrix.platform == 'linux-x64'
         env:
           HN_NATIVE_TEST_BINARY: ${{ runner.temp }}/dist/harness-tui-linux-x64
-        run: python3 -u tui/tests/native-terminal.py
+          REFERENCE_TMUX_BIN: ${{ steps.reference-tmux.outputs.bin }}
+        run: PATH="$REFERENCE_TMUX_BIN:$PATH" python3 -u tui/tests/native-terminal.py
       - uses: actions/upload-artifact@v4
         with:
           name: harness-tui-${{ matrix.platform }}

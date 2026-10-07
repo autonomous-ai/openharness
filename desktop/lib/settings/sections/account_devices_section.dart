@@ -236,6 +236,7 @@ class _AccountDevicesSectionState extends State<AccountDevicesSection> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             if (devices != null && devices.frozen) _FrozenLine(devices: devices, onTrustAgain: _trustAgain),
+            if (devices?.registerError case final code?) _RefusedLine(code: code),
             if (devices != null && !devices.baselineSeen && !_baselineDone && !_app.baselineSeenLocally && devices.baseline.isNotEmpty)
               _BaselinePanel(devices: devices.baseline, onGotIt: () => unawaited(_gotIt())),
             if (_error case final error?)
@@ -389,6 +390,33 @@ class _BaselinePanel extends StatelessWidget {
               ),
             ),
           ],
+        ),
+      ),
+    ),
+  );
+}
+
+/// The backend refused this device a place on the account ([AccountDevices.registerError]).
+class _RefusedLine extends StatelessWidget {
+  const _RefusedLine({required this.code});
+
+  final String code;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.only(bottom: 12),
+    child: DecoratedBox(
+      decoration: BoxDecoration(
+        color: grid.AppPalette.warn.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: grid.AppPalette.warn.withValues(alpha: 0.28)),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Text(
+          registerRefusalSentence(code),
+          key: const Key('account-devices-refused'),
+          style: grid.AppType.body(color: grid.AppPalette.textPrimary),
         ),
       ),
     ),

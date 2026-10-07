@@ -40,6 +40,10 @@ export interface DevLogSignIn {
   adopted: boolean
   /** When it was made (ms); null when not known — then it never starts the log over either. */
   at: number | null
+  /** The account it was made to, as the backend named it right after (authSession `signInAcct`); absent
+   *  when that could not be asked (then only DEVLOG_RESET_WINDOW_MS opens the door), never for an
+   *  adopted one. */
+  acct?: string | null
 }
 
 /** How long after a sign-in by hand a read of another account may start the log over: past it, with
@@ -53,15 +57,19 @@ export interface DeviceLogSyncerDeps {
   /** How this machine describes itself in the log; no machineId = not signed in, nothing to register. */
   self: () => { machineId: string | null; label: string }
   /** Which sign-in by hand this machine is under; null when not known. The log of another account is
-   *  started (or a kept one restored) only when this changed AND the backend's account differs AND it
-   *  was made less than DEVLOG_RESET_WINDOW_MS ago — never for an adopted one. Otherwise a different
-   *  account id from the backend freezes the log. While the file is not this sign-in's yet (no read of
-   *  it so far), what peers gossip is not taken either. */
+   *  started (or a kept one restored) only when this changed AND the backend's account differs AND it is
+   *  the account that sign-in was made to, or it was made less than DEVLOG_RESET_WINDOW_MS ago — never
+   *  for an adopted one. Otherwise a different account id from the backend freezes the log. While the
+   *  file is not this sign-in's yet (no read of it so far), what peers gossip is not taken either. */
   signIn: () => DevLogSignIn | null
   /** The log from `since`; null when the backend has none to give (an older backend, or unreachable). */
   fetch: (since: number) => Promise<DeviceLogFetched | null>
   /** Append one signed entry; null when the backend could not be reached. */
   append: (entry: DevLogEntry) => Promise<DeviceLogAppendAnswer | null>
+  /** This machine is moving from one account's log to another's (a sign-in by hand, or a review of the
+   *  other account's list): put away what `from` trusted here and bring back what `to` did. Called before
+   *  the new log is written, so what it snapshots as already trusted (`trustedNow`) is `to`'s. */
+  switchAccount?: (from: string, to: string) => void
   /** Trust these keys here (and tell the trust group, so devices that predate the log learn of them). */
   adopt: (members: DevLogMember[]) => void
   /** Stop trusting a key here (and tombstone it in the trust group). */
@@ -88,6 +96,9 @@ export interface DeviceLogSyncerDeps {
   resume?: () => void
   /** This machine's own key was removed from the log: it is signed out. */
   signedOut: () => void
+  /** When each key last opened a session or read the log, from the backend; null when it could not
+   *  be asked. Only `sweepStale` reads it. */
+  seen?: () => Promise<DeviceKeysSeen | null>
   /** Something a window shows changed (the list, the frozen line). */
   changed?: () => void
   log?: (line: string) => void
@@ -117,6 +128,9 @@ export interface DeviceLogListing {
   conflict: DevLogConflict | null
   /** New keys removed before anyone marked them as seen: flagged until dismissed (oldest first). */
   departed: DevLogDeparted[]
+  /** Why the backend last refused this machine's own key (`TOO_MANY`, …), until a register gets through.
+   *  Without it a refusal only reached the daemon's log, and the machine just stayed "not registered". */
+  registerError?: string
 }
 
 /** A device taken out of the account's log after this machine joined it. */
@@ -160,12 +174,32 @@ export interface DeviceLogRebaseline {
 
 const APPEND_ATTEMPTS = 5
 const PAGES = 20
+/** The page cap of a first read of a log (and of a review): 100,000 entries. At PAGES a log past 10,000
+ *  entries ended its join part-way, and every key after the cut was announced as a new device. */
+const JOIN_PAGES = 200
+/** `sweepStale`: an app key unused this long, and added at least this long ago, is taken out of the log —
+ *  a browser whose storage was cleared, an app reinstalled, never comes back for its key, and at 256
+ *  active keys (DEVLOG_MAX_ACTIVE) no new device can join the account. */
+export const STALE_AFTER_MS = 180 * 24 * 60 * 60_000
+/** When each key was last used (ms, by pub), and since when that record runs (null: unknown). A key with
+ *  no time is unused only if the record is older than the question: a Redis that came back empty once
+ *  read as "no app used in months", and the sweep would have removed every old app key. */
+export interface DeviceKeysSeen { seen: Record<string, number>; since: number | null }
+/** At most one sweep per this long on a machine; the timer that offers it runs every 10 minutes. */
+const SWEEP_EVERY_MS = 6 * 60 * 60_000
+/** At most this many removals per sweep (the next one goes on), each SWEEP_GAP_MS apart: the backend
+ *  takes 10 appends a minute from a machine, and a person's own `devices remove` must still get through. */
+const SWEEP_MAX = 20
+const SWEEP_GAP_MS = 10_000
+/** How much later each next machine (by key order) takes over a sweep the ones before it have not done. */
+const SWEEP_TURN_MS = 24 * 60 * 60_000
 /** The newest hashes a `group_sync` carries, so a fork can be located. */
 const GOSSIP_HASHES = 64
 
 interface Known { label: string; kind: DevLogMember['kind'] }
 
 const fp = (pub: string): string => fingerprint(b64d(pub))
+const day = (ms: number): string => new Date(ms).toISOString().slice(0, 10)
 const uniq = (xs: readonly string[]): string[] => [...new Set(xs)]
 
 /**
@@ -211,6 +245,11 @@ export class DeviceLogSyncer {
   private historying: Promise<DeviceLogHistory> | null = null
   /** Every entry fetched for the history so far (seq 1..n), this run only: never written to disk. */
   private histCache: { acct: string; entries: DevLogEntry[] } | null = null
+  /** Why the backend last refused this machine's own key; this run only (the file format stays as older
+   *  versions read it). */
+  private registerError: string | null = null
+  /** When `sweepStale` last ran here (ms); this run only. */
+  private lastSweep: number | null = null
 
   constructor(private readonly deps: DeviceLogSyncerDeps) {
     this.now = deps.now ?? (() => Date.now())
@@ -231,6 +270,7 @@ export class DeviceLogSyncer {
         if (state.removed.includes(pub)) { this.deps.signedOut(); return }
         const mine = state.active[pub]
         if (mine) {
+          this.registerError = null
           this.clearConflict()
           if (mine.label === self.label || mine.machineId !== self.machineId) return
         } else {
@@ -242,8 +282,13 @@ export class DeviceLogSyncer {
         }, this.now()), priv)
         const answer = await this.deps.append(entry)
         if (!answer) return
-        if ('head' in answer && !('error' in answer)) { await this.refresh(); return }
-        if (answer.error !== 'STALE_HEAD') { this.deps.log?.(`[devlog] register refused: ${answer.error}`); return }
+        if ('head' in answer && !('error' in answer)) { this.registerError = null; await this.refresh(); return }
+        if (answer.error !== 'STALE_HEAD') {
+          this.registerError = answer.error
+          this.deps.log?.(`[devlog] register refused: ${answer.error}`)
+          this.deps.changed?.()
+          return
+        }
         await this.refresh()
         await this.sleep(200 + Math.floor(Math.random() * 800) * (attempt + 1))
       }
@@ -307,6 +352,14 @@ export class DeviceLogSyncer {
    *  log after a sign-in must not keep that door open, to name another account days later. */
   private mayStartOver(local: DevLogSignIn): boolean {
     return !local.adopted && local.at !== null && Math.abs(this.now() - local.at) <= DEVLOG_RESET_WINDOW_MS
+  }
+
+  /** Whether the trust group may swap rosters now: the log is this sign-in's (or none was read yet) and
+   *  not frozen on an account it was not signed in to. Before that the roster here may still be the
+   *  account this machine just left, and handing it out would carry its devices into the new one. */
+  current(): boolean {
+    const file = this.deps.store.read()
+    return !file.state || (this.ownsFile(file) && file.frozen?.reason !== 'invalid')
   }
 
   /** Whether the file is the log of the sign-in this machine is under (or that cannot be told). Until a
@@ -458,7 +511,9 @@ export class DeviceLogSyncer {
     // The first read of a log (a new install, or an existing sign-in from before the log existed) only
     // learns what is there: every key it adopts, and none of it is news (it is before `joinedSeq`).
     let bootstrap = !this.deps.store.read().state?.head.seq
-    for (let page = 0; page < PAGES; page++) {
+    // The cap is read each page: a first read only learns what is there, so it may go far; once it is
+    // over (`endJoin`, unconditional below) a stalled or endless backend gets the usual PAGES.
+    for (let page = 0; page < (this.deps.store.read().joining ? JOIN_PAGES : PAGES); page++) {
       const file = this.deps.store.read()
       const since = file.state?.head.seq ?? 0
       const got = await this.deps.fetch(since)
@@ -479,10 +534,10 @@ export class DeviceLogSyncer {
       if (now) {
         const signedInAgain = local !== null && latest.owner !== local.epoch
         if (now.acct !== got.acct) {
-          // Another account only right after a sign-in by hand here. Otherwise it is the backend saying
-          // so — and starting over would clear every mark a fork put on the list, the real log then
-          // adopted whole.
-          if (!signedInAgain || !this.mayStartOver(local)) {
+          // Another account only after a sign-in by hand here: the account it was made to, whenever; with
+          // none recorded, any one right after it. Otherwise it is the backend saying so — and starting
+          // over would clear every mark a fork put on the list, the real log then adopted whole.
+          if (!signedInAgain || (local.acct ? local.acct !== got.acct : !this.mayStartOver(local))) {
             this.freeze('invalid')
             return
           }
@@ -493,7 +548,11 @@ export class DeviceLogSyncer {
         }
       }
       if (reset) {
-        if (now) this.deps.store.archive(latest)
+        if (now) {
+          // What the account left behind trusted goes with its log, and comes back with it.
+          this.deps.switchAccount?.(now.acct, got.acct)
+          this.deps.store.archive(latest)
+        }
         // Back to an account this machine was signed in to before: its log as verified then, and every
         // mark on it (frozen, suspended, pending), go on from where they were.
         const kept = this.deps.store.restore(got.acct, (k) => this.carrySuspensions({ ...k, ...(local ? { owner: local.epoch } : {}) }))
@@ -714,7 +773,11 @@ export class DeviceLogSyncer {
     const running = this.inFlightRemovals.get(pub)
     if (running) return running
     this.removing.add(pub)
-    const task = this.removeOnce(pub).finally(() => { this.removing.delete(pub); this.inFlightRemovals.delete(pub) })
+    // Started a tick later, once it is in the map: `removeOnce` drops the key before its first await, and
+    // that drop's `onDropped` asks again at once — begun right away, the second ask found no entry and
+    // appended its own removal, and this one came back NOT_IN_LOG for a key it had just taken out.
+    const task = Promise.resolve().then(() => this.removeOnce(pub))
+      .finally(() => { this.removing.delete(pub); this.inFlightRemovals.delete(pub) })
     this.inFlightRemovals.set(pub, task)
     return task
   }
@@ -744,6 +807,66 @@ export class DeviceLogSyncer {
   }
 
   /**
+   * Take out of the log the app keys nobody has used in STALE_AFTER_MS (and added that long ago too), at
+   * most SWEEP_MAX at a time and one sweep per SWEEP_EVERY_MS. The machine whose key is the smallest of
+   * the active machine keys goes first; each next one in that order waits a further SWEEP_TURN_MS before
+   * it takes a key, so one machine does it with no coordination — and when that one is a build from before
+   * the sweep (seen on a rollout: it never would) or is off, the next takes over a day later. Two that
+   * both do get NOT_ACTIVE on the second removal, harmless. Never a machine key: when a machine was last used
+   * is not something the backend can tell. Only on this sign-in's log, and never while it is frozen.
+   * Never throws.
+   *
+   * ponytail: last-seen comes from the backend unverified, so a backend that lies about it can have a
+   * machine remove an app key older than STALE_AFTER_MS (the removal is in every device's history, signed
+   * by this machine). Upgrade path: a last-used time the app signs itself.
+   */
+  async sweepStale(): Promise<void> {
+    try {
+      const seen = this.deps.seen
+      const now = this.now()
+      if (!seen || (this.lastSweep !== null && now - this.lastSweep < SWEEP_EVERY_MS) || !this.current()) return
+      const file = this.deps.store.read()
+      const state = file.state
+      if (!state || file.frozen) return
+      const selfPub = this.deps.identity().pub
+      const machines = Object.values(state.active).filter((m) => m.kind === 'machine').map((m) => m.pub).sort()
+      const turn = machines.indexOf(selfPub)
+      if (turn < 0) return
+      this.lastSweep = now
+      const got = await seen()
+      // Not asked: try again on the next offer rather than read every key as never used.
+      if (!got) { this.lastSweep = null; return }
+      const cutoff = now - STALE_AFTER_MS - turn * SWEEP_TURN_MS
+      const suspended = this.suspendedKeys()
+      // A key with no time is unused only when the record has run since before the cutoff.
+      const usedAt = (m: DevLogMember): number | null => {
+        const t = got.seen[m.pub]
+        return typeof t === 'number' && Number.isFinite(t) ? t : null
+      }
+      const unusedSinceCutoff = (m: DevLogMember): boolean => {
+        const t = usedAt(m)
+        return t !== null ? t < cutoff : got.since !== null && got.since < cutoff
+      }
+      const stale = Object.values(state.active)
+        .filter((m) => m.kind === 'viewer' && m.pub !== selfPub && !suspended.includes(m.pub) && m.addedAt < cutoff && unusedSinceCutoff(m))
+        .sort((a, b) => a.seq - b.seq)
+        .slice(0, SWEEP_MAX)
+      for (const [i, m] of stale.entries()) {
+        if (i) await this.sleep(SWEEP_GAP_MS)
+        const r = await this.remove(m.pub)
+        // Already out of the log (another machine's sweep, a person's own removal): nothing to do.
+        if (!r.ok && r.error === 'NOT_IN_LOG') continue
+        if (!r.ok) { this.deps.log?.(`[devlog] could not remove unused device ${m.label || '(no name)'} (${fp(m.pub)}): ${r.detail ?? r.error}`); return }
+        const t = usedAt(m)
+        const when = t !== null ? `last used ${day(t)}` : `not used since ${day(got.since!)}`
+        this.deps.log?.(`[devlog] removed unused device ${m.label || '(no name)'} (${fp(m.pub)}), ${when}`)
+      }
+    } catch (err) {
+      this.deps.log?.(`[devlog] sweep failed: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+
+  /**
    * What trusting the backend's log again would change; with `confirm`, do it. `expected` is the head
    * the person was shown in the preview: if the backend's log is not that one any more, nothing is
    * done (`LOG_CHANGED`) — what gets trusted is what was reviewed.
@@ -752,7 +875,8 @@ export class DeviceLogSyncer {
     const entries: unknown[] = []
     let acct = ''
     let head: DevLogHead = emptyDevLogState('').head
-    for (let page = 0; page < PAGES; page++) {
+    // A review reads the whole list, so a log past PAGES' worth can still be reviewed.
+    for (let page = 0; page < JOIN_PAGES; page++) {
       const got = await this.deps.fetch(entries.length)
       if (!got) return null
       if (!Number.isSafeInteger(got.head.seq) || got.head.seq < 0) return null
@@ -804,7 +928,10 @@ export class DeviceLogSyncer {
       // The reviewed list is another account's: the one this machine leaves is kept, as on a sign-in
       // (and what a fork suspended in it stays suspended here) — and a kept one of the reviewed account
       // goes on from where it was.
-      if (file.state && !same) this.deps.store.archive(file)
+      if (file.state && !same) {
+        this.deps.switchAccount?.(file.state.acct, next.acct)
+        this.deps.store.archive(file)
+      }
       const { joining: _j, ...rest } = base
       const reviewed: DevLogFile = this.carrySuspensions({
         ...rest,
@@ -838,7 +965,9 @@ export class DeviceLogSyncer {
     if (!file.state || !this.ownsFile(file)) return undefined
     // The newest hashes let a peer that finds the logs forked say where they split.
     const hashes = file.state.hashes.slice(-GOSSIP_HASHES).map((hash, i, all) => ({ seq: file.state!.head.seq - (all.length - 1 - i), hash }))
-    return { head: file.state.head, frozen: file.frozen !== null, hashes }
+    // The account rides along: a device still signed in to the one this machine left must not have its
+    // log taken for a fork of this one.
+    return { acct: file.state.acct, head: file.state.head, frozen: file.frozen !== null, hashes }
   }
 
   /**
@@ -853,7 +982,10 @@ export class DeviceLogSyncer {
     if (!this.ownsFile(file)) return undefined
     const mine = this.gossip()
     if (!state || !raw || typeof raw !== 'object') return mine
-    const p = raw as { head?: unknown; frozen?: unknown; tail?: unknown }
+    const p = raw as { acct?: unknown; head?: unknown; frozen?: unknown; tail?: unknown }
+    // Another account's log says nothing about this one. A peer from before the account rode along
+    // sends none, and is judged as before.
+    if (p.acct !== undefined && p.acct !== state.acct) return undefined
     this.frozenPeers.set(peerPub, p.frozen === true)
     const head = p.head as { seq?: unknown; hash?: unknown } | undefined
     if (!head || typeof head.seq !== 'number' || !Number.isSafeInteger(head.seq) || head.seq < 0 || typeof head.hash !== 'string') return mine
@@ -1033,6 +1165,7 @@ export class DeviceLogSyncer {
     return {
       head: file.state?.head ?? null, frozen: file.frozen, self: selfPub, members: withSeen, frozenPeers,
       pending, suspended, joinedSeq, baseline, baselineSeen: file.baselineSeen ?? true, conflict, departed: file.departed ?? [],
+      ...(this.registerError ? { registerError: this.registerError } : {}),
     }
   }
 }
