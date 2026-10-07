@@ -23,6 +23,7 @@ import { forkName, planFork } from '../../lib/forkAgent.js'
 import { buildHarnessSessionLabel } from '../../lib/harnessSessionLabel.js'
 import { projectDisplayName, type registry, type RegisteredSession } from '../../lib/registry.js'
 import type { TmuxBackend } from '../../lib/tmuxBackend.js'
+import { prepareInstructionWrites, scmLaunchEnv } from '../../scm/scmProjects.js'
 import type { createLaunchHelpers } from './launch.js'
 import { mergedLaunchEnv } from './launchEnv.js'
 import type { createPaneWatcher } from './newPane.js'
@@ -75,6 +76,7 @@ export function createAgentForker({
     if (!plan.ok) return { ok: false, error: plan.error, detail: plan.detail }
 
     const label = buildHarnessSessionLabel(engine)
+    await prepareInstructionWrites(source.cwd)
     // Fork the source's saved harness context. Workspace templates and init are not run again.
     let dshEnv: Record<string, string> | undefined
     let dshArgs: string[] = []
@@ -134,9 +136,12 @@ export function createAgentForker({
       cwd: source.cwd,
       sessionLabel: label,
       argv,
-      env: mergedLaunchEnv(Object.keys(built.overrides.env).length ? built.overrides.env : undefined, dshEnv),
+      // The SCM's environment last, after the harness context's, as at create and relaunch.
+      env: mergedLaunchEnv(mergedLaunchEnv(Object.keys(built.overrides.env).length ? built.overrides.env : undefined, dshEnv), scmLaunchEnv(source.scmLaunch)),
       grid: null,
       gridLaunchRecord: null,
+      // Same folder as the source, so the same workspace binding.
+      scmLaunchRecord: source.scmLaunch ?? null,
       codexHome: source.codexHome ?? null,
       dshRuntime: source.dsh ? label : null,
       dsh: source.dsh ?? null,

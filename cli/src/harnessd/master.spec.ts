@@ -53,8 +53,13 @@ describe('the core\'s flags', () => {
   })
 
   it('gives the core exactly the heap limit its budget is a share of, or V8\'s own when that is 0', () => {
-    expect(coreExecArgv(['--import', 'tsx', '--max-old-space-size=256'], 512)).toEqual(['--import', 'tsx', '--max-old-space-size=512'])
-    expect(coreExecArgv(['--max_old_space_size=256'], 0)).toEqual([])
+    expect(coreExecArgv(['--import', 'tsx', '--max-old-space-size=256'], 512))
+      .toEqual(['--import', 'tsx', '--max-semi-space-size=4', '--max-old-space-size=512'])
+    expect(coreExecArgv(['--max_old_space_size=256'], 0)).toEqual(['--max-semi-space-size=4'])
+  })
+
+  it('keeps a young-generation size the master was given', () => {
+    expect(coreExecArgv(['--max_semi_space_size=8'], 512)).toEqual(['--max_semi_space_size=8', '--max-old-space-size=512'])
   })
 })
 
@@ -414,7 +419,7 @@ describe('runMaster', { timeout: 60_000 }, () => {
       exit: (code) => exits.push(code), onSignal: (signal, listener) => signals.set(signal, listener),
     })
     await until('the core to be ready', () => readStatusFile(statusFile, process.pid)?.state === 'running')
-    expect(JSON.parse(readFileSync(flags, 'utf8'))).toEqual(['--max-old-space-size=300'])
+    expect(JSON.parse(readFileSync(flags, 'utf8'))).toEqual(['--max-semi-space-size=4', '--max-old-space-size=300'])
     signals.get('SIGTERM')!()
     await until('the master to finish', () => exits.length > 0)
     expect(readStatusFile(statusFile, process.pid)).toMatchObject({ state: 'stopped', lastExitReason: 'stopped' })
@@ -475,11 +480,11 @@ describe('runMaster', { timeout: 60_000 }, () => {
     await until('the crashed service to be restarted', () => lines().filter((line) => line.role === 'service:search').length === 2)
     // The light services share one process, the edge host, which runs each of those named.
     await until('the edge host to start', () => lines().some((line) => line.role === 'service:usage,monitor'))
-    expect(lines().find((line) => line.role === 'service:usage,monitor')).toMatchObject({ name: 'edge', flags: ['--max-old-space-size=384'] })
+    expect(lines().find((line) => line.role === 'service:usage,monitor')).toMatchObject({ name: 'edge', flags: ['--max-semi-space-size=4', '--max-old-space-size=384'] })
     const core = lines().find((line) => line.role === '__run')!
     const services = lines().filter((line) => line.role === 'service:search')
     expect(services.map((service) => service.restarts)).toEqual(['0', '1'])
-    expect(services[0]).toMatchObject({ name: 'search', flags: ['--max-old-space-size=1024'] })
+    expect(services[0]).toMatchObject({ name: 'search', flags: ['--max-semi-space-size=4', '--max-old-space-size=1024'] })
     expect(services[0].token).toMatch(/^[0-9a-f]{48}$/)
     expect(core.token).toBe(services[0].token)
     // The core is told exactly what runs out here, in a form a core from before the list reads too.
@@ -524,6 +529,47 @@ describe('runMaster', { timeout: 60_000 }, () => {
       expect(said()).toContainEqual({ role: '__run', what: 'asked for 9.9.9', restarts: '0' })
       expect(lines.some((line) => line.endsWith('[harnessd] the updater staged 9.9.9 — asking the core to hand over'))).toBe(true)
       expect(lines.some((line) => line.endsWith('[harnessd] core exited (code 75) for an update — restarting'))).toBe(true)
+      signals.get('SIGTERM')!()
+      await until('the master to finish', () => exits.length > 0)
+    } finally { log.mockRestore() }
+  })
+
+  it('hands over for a staged build only when the updater staged it, never another service', async () => {
+    const pidFile = join(dir, 'adapter.pid')
+    const seen = join(dir, 'seen')
+    const script = join(dir, 'daemon.cjs')
+    // Search says it staged a build, as only the updater may: the core must not be asked to hand over.
+    writeFileSync(script, `
+      const { appendFileSync } = require('node:fs')
+      const role = process.argv[2] === '__service' ? 'service:' + process.argv[3] : process.argv[2]
+      const say = (what) => appendFileSync(${JSON.stringify(seen)}, JSON.stringify({ role, what }) + '\\n')
+      say('started')
+      if (role === '__run') {
+        process.send({ type: 'harnessd:bound', protocol: 4, port: 1 }); process.send({ type: 'harnessd:ready' })
+        process.on('message', (message) => { if (message.type === 'harnessd:update') { say('asked for ' + message.version); process.exit(75) } })
+      }
+      if (role === 'service:search') setTimeout(() => { process.send({ type: 'harnessd:staged', version: '6.6.6' }); say('staged') }, 100)
+      setInterval(() => process.send({ type: 'harnessd:heartbeat', rssBytes: 1, heapUsedBytes: 1, loopDelayMs: 0 }), 50)
+      process.on('SIGTERM', () => process.exit(0))
+    `)
+    const exits: number[] = []
+    const signals = new Map<string, () => void>()
+    const lines: string[] = []
+    const log = vi.spyOn(console, 'log').mockImplementation((line: string) => { lines.push(line) })
+    try {
+      runMaster({
+        nodePath: process.execPath, execArgv: [], scriptPath: script, pidFile, updater: true,
+        restoreUpdate: () => {}, confirmUpdate: () => {},
+        env: { ...process.env, HARNESSD_SERVICES: 'search' },
+        exit: (code) => exits.push(code), onSignal: (signal, listener) => signals.set(signal, listener),
+      })
+      const said = (): Array<Record<string, string>> => existsSync(seen) ? readFileSync(seen, 'utf8').trim().split('\n').map((line) => JSON.parse(line)) : []
+      await until('search to say it staged a build', () => said().some((line) => line.role === 'service:search' && line.what === 'staged'))
+      // Long enough for a handover the master had asked for to reach the core.
+      await new Promise((resolve) => setTimeout(resolve, 500))
+      expect(said().filter((line) => line.role === '__run')).toEqual([{ role: '__run', what: 'started' }])
+      expect(lines.some((line) => line.includes('asking the core to hand over'))).toBe(false)
+      expect(lines.some((line) => line.endsWith('[harnessd] service search said it staged 6.6.6, which only the updater may — ignored'))).toBe(true)
       signals.get('SIGTERM')!()
       await until('the master to finish', () => exits.length > 0)
     } finally { log.mockRestore() }

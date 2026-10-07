@@ -44,6 +44,8 @@ interface RunHookOpts {
   /** The tmux session the pane is in, and the daemon tag on it (`@harness_daemon`). */
   paneSession?: string
   paneOwner?: string
+  /** How long the fake tmux takes to answer each call, in seconds: a hook that spent its budget early. */
+  tmuxDelaySeconds?: number
   /** Override the fixture's ps `comm` and full argv to exercise install-root-independent matching. */
   processExecutable?: string
   processArgs?: string
@@ -56,7 +58,9 @@ interface RunHookOpts {
   hermesHome?: string
   /** Fake Hermes SQLite source; null means the session row has not appeared. */
   hermesSource?: 'cli' | 'tui' | 'subagent' | null
-  /** How long Hermes' store takes to answer: a loaded machine. */
+  /** How long Hermes' store takes to answer, in the shipped hook's seconds: a loaded machine. Stretched
+   *  as the hook stretches its own step limits under HARNESS_HOOK_DEADLINE_MS (notify.mjs STEP_SCALE),
+   *  so the delay keeps the same share of the sqlite3 limit whatever the budget. */
   hermesDelaySeconds?: number
   grokHome?: string
   devinHome?: string
@@ -90,7 +94,8 @@ function runHook(opts: RunHookOpts): Promise<string> {
       // The pane as tmux describes it: its root process, and the session and tag that say whose agent it
       // is (a Harness session, untagged, unless the test says otherwise).
       const paneFacts = `${opts.paneSession ?? 'harness-claude-1790000000000'}|${opts.paneOwner ?? ''}`
-      writeFileSync(join(binDir, 'tmux'), `#!/bin/sh\nprintf '%s\\n' ${shellQuote(`7000|${paneFacts}`)}\n`, { mode: 0o755 })
+      const tmuxDelay = opts.tmuxDelaySeconds ? `sleep ${opts.tmuxDelaySeconds}\n` : ''
+      writeFileSync(join(binDir, 'tmux'), `#!/bin/sh\n${tmuxDelay}printf '%s\\n' ${shellQuote(`7000|${paneFacts}`)}\n`, { mode: 0o755 })
       env.PATH = `${binDir}:${env.PATH ?? ''}`
     }
     if (opts.processEngine) {
@@ -113,7 +118,8 @@ function runHook(opts: RunHookOpts): Promise<string> {
       }
       if (opts.hermesSource !== undefined) {
         const rows = opts.hermesSource === null ? '[]' : JSON.stringify([{ source: opts.hermesSource }])
-        const delay = opts.hermesDelaySeconds ? `sleep ${opts.hermesDelaySeconds}\n` : ''
+        const stepScale = Number(env.HARNESS_HOOK_DEADLINE_MS) / 4500
+        const delay = opts.hermesDelaySeconds ? `sleep ${opts.hermesDelaySeconds * stepScale}\n` : ''
         writeFileSync(join(binDir, 'sqlite3'), `#!/bin/sh\n${delay}printf '%s\\n' '${rows}'\n`, { mode: 0o755 })
       }
       env.PATH = `${binDir}:${env.PATH ?? ''}`
@@ -592,6 +598,33 @@ describe('hook notify terminal scope', () => {
     }
   })
 
+  // A step's limit is cut to what is left of the hook's budget, and what is left is a fraction of a
+  // millisecond off the whole: `execFile` refuses a fractional timeout (ERR_OUT_OF_RANGE), so once the
+  // budget left was under a step's own limit, that step threw, and the offline registration with it.
+  // On the shipped 4.5 s budget that is any hook whose earlier steps took a second, as a loaded machine's
+  // do. Here tmux answers each of its two calls in 1.5 s of a 9 s budget, which leaves the process scan
+  // under its 6 s limit.
+  it('still registers offline when its earlier steps took a third of its budget', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'adapter-hook-late-'))
+    tmpDirs.push(dir)
+    const claudeProjectsDir = join(dir, 'claude-projects')
+    const dataDir = join(dir, 'data')
+    const transcriptPath = join(claudeProjectsDir, 'demo', 'session-late.jsonl')
+    mkdirSync(join(claudeProjectsDir, 'demo'), { recursive: true })
+    writeFileSync(transcriptPath, '{}\n')
+    await runHook({
+      port: 9,
+      tmuxPane: '%7',
+      processEngine: 'claude',
+      tmuxDelaySeconds: 1.5,
+      env: { HARNESS_HOOK_DEADLINE_MS: '9000' },
+      dataDir,
+      claudeProjectsDir,
+      input: { hook_event_name: 'SessionStart', session_id: 'session-late', transcript_path: transcriptPath, cwd: '/tmp/demo' },
+    })
+    expect(JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf-8'))).toMatchObject([{ sessionId: 'session-late', tmuxPane: '%7' }])
+  })
+
   it('falls back with Codex engine under CODEX_HOME/sessions', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'adapter-hook-codex-'))
     tmpDirs.push(dir)
@@ -723,7 +756,11 @@ describe('hook notify terminal scope', () => {
       hermesHome: join(dir, 'hermes'),
       dataDir,
       hermesSource: 'cli',
+      // 1.5 s against the shipped 3 s limit: a store slower than the old 1 s limit still binds. Twice the
+      // shipped budget doubles both (3 s against 6 s), and leaves a loaded machine 3 s to start sqlite3,
+      // rather than the 20 s limit and 10 s wait the suite's 30 s budget would make of them.
       hermesDelaySeconds: 1.5,
+      env: { HARNESS_HOOK_DEADLINE_MS: '9000' },
       input: { hook_event_name: 'on_session_start', session_id: '20260810_120003_a1b2c3' },
     })
     expect(JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf8'))).toMatchObject([{

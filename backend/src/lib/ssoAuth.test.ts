@@ -250,7 +250,9 @@ describe('authenticated user resolution', () => {
 
   it('asks the profile service once for a token used on back-to-back requests', async () => {
     profileFetch('prod-sub-1', 'owner@example.com')
-    const existing = { id: 'u1', email: 'owner@example.com', externalId: 'prod-sub-1', role: 'user', autonomousEnv: 'prod' }
+    // Google subject checked today, so the fill (lib/googleSubject.ts) has nothing to read and every
+    // `fetch` counted here is a validation.
+    const existing = { id: 'u1', email: 'owner@example.com', externalId: 'prod-sub-1', role: 'user', autonomousEnv: 'prod', googleSubCheckedAt: new Date() }
     findByEmail.mockResolvedValue(existing)
     upsertFromSso.mockResolvedValue(existing)
 

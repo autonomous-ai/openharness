@@ -27,6 +27,8 @@ import {
 } from './gridLaunch.js'
 import { TMUX_SESSION_ENV_MIN } from './tmuxVersion.js'
 import { harnessEnvToClear, type DshLaunch } from '../dsh/launch.js'
+import { scmLaunchEnv } from '../scm/scmProjects.js'
+import type { ScmLaunchRecord } from '../scm/types.js'
 
 export interface LaunchOverrides {
   /** Layered over the pane's inherited environment. The grid key lives here, and only here. */
@@ -97,6 +99,11 @@ export interface LaunchSource {
   dshRuntime?: string | null
   /** The workspace, for the DSH's `${workspace}` — the registry row's `cwd`. */
   cwd?: string | null
+  /**
+   * What the workspace's SCM needs re-applied to the pane — the registry row's `scmLaunch`. A git
+   * worktree asks for nothing. Absent or null: no SCM prepared this folder, or the row predates it.
+   */
+  scmLaunch?: ScmLaunchRecord | null
   /**
    * The engine's named agent this pane was opened as (`agent_create`'s `agent`, opencode
    * `--agent <name>`). Part of every relaunch, unlike a first prompt: a pane opened as `harness-compute`
@@ -169,6 +176,11 @@ export async function buildLaunchOverrides(
       extraArgs: [...overrides.extraArgs, ...dsh.args],
     }
   }
+  // The workspace's own SCM binding layers last: it is the daemon's, like `HARNESS_*`, and neither a
+  // grid nor a DSH has a say in which workspace the pane is bound to. Nothing for git, so a git row's
+  // overrides are exactly what they were.
+  const scmEnv = scmLaunchEnv(source.scmLaunch)
+  if (scmEnv) overrides = { ...overrides, env: { ...overrides.env, ...scmEnv } }
   // The named agent rides every relaunch, in the same argv slot `agent_create` put it in. Only an
   // engine with a contract could have had it recorded (create refuses the rest, AGENT_UNSUPPORTED),
   // so the guard is for a row edited by hand — it relaunches as a general session rather than

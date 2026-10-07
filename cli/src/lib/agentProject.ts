@@ -202,6 +202,12 @@ async function metadataStamp(cwd: string, project: AgentProject): Promise<string
   } catch { return null }
 }
 
+/** A `cwd` worth running Git in: absolute, bounded, printable. Exported for the SCM seam
+ *  (`scm/scmProjects.ts`), which must answer null for exactly the folders this does. */
+export function validProjectCwd(cwd: string | null | undefined): cwd is string {
+  return !!cwd && isAbsolute(cwd) && cwd.length <= 4096 && !/[\x00-\x1f\x7f]/.test(cwd)
+}
+
 export function createAgentProjectReader(lookup: (cwd: string) => Promise<AgentProject> = inspect) {
   type Entry = { at: number; gitAt: number; pending: boolean; stamp: string | null; value: Promise<AgentProject> }
   const cache = new Map<string, Entry>()
@@ -214,7 +220,7 @@ export function createAgentProjectReader(lookup: (cwd: string) => Promise<AgentP
     }
   }
   const read = (cwd: string | null, now = Date.now()): Promise<AgentProject | null> => {
-    if (!cwd || !isAbsolute(cwd) || cwd.length > 4096 || /[\x00-\x1f\x7f]/.test(cwd)) return Promise.resolve(null)
+    if (!validProjectCwd(cwd)) return Promise.resolve(null)
     const found = cache.get(cwd)
     if (found && (found.pending || now - found.at < 15_000)) {
       cache.delete(cwd)

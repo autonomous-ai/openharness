@@ -10,6 +10,7 @@ import { readGitProject } from '../lib/gitProject.js'
 import { MediaPreviewError, readMediaPreviewChunk } from '../lib/mediaPreview.js'
 import { projectPreview } from '../lib/projectPreview.js'
 import { readSessionGitPullRequest, type ExpectedGitContext } from '../lib/sessionGitPullRequest.js'
+import { detectScmProject } from '../scm/scmProjects.js'
 import { internalOnThrow } from './requestErrors.js'
 
 /** The requests the project readers answer for the apps, declared in core/api.ts for the core to route. */
@@ -41,6 +42,15 @@ export function startProjects(core: CoreApi): ServiceRequests {
       const path = typeof payload.path === 'string' ? payload.path : ''
       return readGitProject(path, { refresh: payload.refresh === true, knownRoots: knownRoots() })
         .then((result) => result, () => ({ error: 'UNAVAILABLE' }))
+    }),
+
+    // The same probe through the SCM seam, answering `{kind, git?, error?}`. Beside `git_project_info`,
+    // not in its place: an older client keeps asking the old question and gets the old answer. Same
+    // fence and refresh as above.
+    scm_project_info: internalOnThrow('scm_project_info', (payload) => {
+      const path = typeof payload.path === 'string' ? payload.path : ''
+      return detectScmProject(path, { refresh: payload.refresh === true, knownRoots: knownRoots() })
+        .then((result) => result, () => ({ kind: 'none', error: 'UNAVAILABLE' }))
     }),
 
     project_preview: internalOnThrow('project_preview', (payload) => {
