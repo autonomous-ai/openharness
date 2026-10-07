@@ -5,7 +5,7 @@
 import { randomUUID } from 'node:crypto'
 import { chmodSync, existsSync, lstatSync, mkdirSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join } from 'node:path'
-import { builtinSqlite } from '../../../cli/src/lib/sqliteRead.js'
+import { builtinSqlite } from '../../../cli/src/lib/sqliteBuiltin.js'
 import { redact } from '../shared/guard.js'
 import { admission, assertSafe, canonical, digest, proposalFingerprint } from './admission.js'
 import type { ProjectLocator } from './project.js'

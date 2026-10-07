@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { CodingMemoryStore } from './store.js'
-import { builtinSqlite } from '../../../cli/src/lib/sqliteRead.js'
+import { builtinSqlite } from '../../../cli/src/lib/sqliteBuiltin.js'
 import type { MemoryAccess, MemoryDraft, SourceEvent } from './types.js'
 
 const access: MemoryAccess = { profileId: 'owner', projectIds: ['project_a'], includeProfile: true }

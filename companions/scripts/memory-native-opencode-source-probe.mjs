@@ -54,7 +54,7 @@ try {
     `export { NativeMemoryCapture } from ${JSON.stringify(join(cli, 'src/memory/capture.ts'))};`,
     `export { CodingMemoryStore } from ${JSON.stringify(join(cli, 'src/memory/store.ts'))};`,
     `export { QUEUE_OPERATIONS } from ${JSON.stringify(join(cli, 'src/memory/operations.ts'))};`,
-    `export { closeSqliteHandles } from ${JSON.stringify(join(cli, 'src/lib/sqliteRead.ts'))};`,
+    `export { closeSqliteHandles } from ${JSON.stringify(join(cli, 'src/lib/sqliteBuiltin.ts'))};`,
     `export { opencodeMemoryPluginSource } from ${JSON.stringify(join(cli, 'src/lib/opencodeMemoryPlugin.ts'))};`,
   ].join('\n'), resolveDir: cli }, outfile: bundle, bundle: true, platform: 'node', format: 'esm', target: 'node22',
     banner: { js: "import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);" } })
