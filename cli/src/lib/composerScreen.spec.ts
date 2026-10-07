@@ -102,6 +102,17 @@ describe('Codex\'s composer', () => {
     expect(composerState('codex', codexComposer('ask @sa'))).toBe('ready')
   })
 
+  it('does not mistake conversation text for a popup after suggestions were dismissed', () => {
+    const commandExample = '  /model     choose what model and reasoning effort to use'
+    expect(composerState('codex', `${commandExample}\n${codexComposer('/m')}`)).toBe('ready')
+    // A path at the end of ordinary prose cannot open Codex's initial /command menu.
+    expect(composerState('codex', `${commandExample}\n${codexComposer('look in /model')}`)).toBe('ready')
+    const oldMenu = ['\u001b[1;7m› /model     choose what model\u001b[0m', '', '• The menu is closed.']
+    expect(composerState('codex', [...oldMenu, codexComposer('/m')].join('\n'))).toBe('ready')
+    const oldMention = ['  enter/tab insert · esc close · ↑/↓ select · ←/→ filter', '', '• The menu is closed.']
+    expect(composerState('codex', [...oldMention, codexComposer('look at @src')].join('\n'))).toBe('ready')
+  })
+
   it('is absent under its session picker, whose highlighted row is drawn two columns in', () => {
     // resume_picker/layout.rs renders the list at `list.x + 2`, the header and search one column in, a dim
     // rule over its footer; the selected row is `› ` in the selection style (resume_picker.rs
