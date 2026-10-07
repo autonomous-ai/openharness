@@ -160,7 +160,7 @@ def seed():
         stream.seek(1024**2)
         stream.write(b'Before checkpoint')
     assert disk.stat().st_blocks * 512 < disk.stat().st_size // 8
-    with sqlite3.connect(WORK / 'data.sqlite') as database:
+    with contextlib.closing(sqlite3.connect(WORK / 'data.sqlite')) as database, database:
         database.execute('CREATE TABLE work (id INTEGER PRIMARY KEY, note TEXT NOT NULL)')
         database.execute('INSERT INTO work(note) VALUES (?)', ('before checkpoint',))
     CONFIG.write_text('System before checkpoint.\n')
@@ -393,7 +393,9 @@ def damage():
             with (work_root / 'virtual-disk.img').open('r+b') as stream:
                 stream.seek(2 * 1024**2)
                 stream.write(b'New virtual-machine work after checkpoint')
-            with sqlite3.connect(work_root / 'data.sqlite') as database:
+            # The connection context commits but does not close the file.
+            # Close before leaving view(), which must unmount this filesystem.
+            with contextlib.closing(sqlite3.connect(work_root / 'data.sqlite')) as database, database:
                 database.execute('INSERT INTO work(note) VALUES (?)', ('after checkpoint',))
             rooted(root, CONFIG).write_text('Changed system after checkpoint.\n')
             # Deliberately make the installed boot path unusable; maintenance remains independent.
@@ -458,7 +460,7 @@ def verify():
     assert work() == latest
     assert not os.path.lexists('/system-update')
     assert empty(STATE) and empty(DEST)
-    with sqlite3.connect('file:' + str(WORK / 'data.sqlite') + '?mode=ro', uri=True) as database:
+    with contextlib.closing(sqlite3.connect('file:' + str(WORK / 'data.sqlite') + '?mode=ro', uri=True)) as database:
         assert database.execute('PRAGMA integrity_check').fetchone() == ('ok',)
         rows = database.execute('SELECT note FROM work ORDER BY id').fetchall()
         assert rows == [('before checkpoint',), ('after checkpoint',)]
