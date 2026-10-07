@@ -23,16 +23,22 @@ questions. Everything else is a service ([../services/AGENTS.md](../services/AGE
 
 ## Where things are
 
-- `agents/`: create, fork, restart, retarget, stop, resume, close, discovery, binding.
+- `agents/`: create, fork, restart, retarget, stop, resume, close, discovery, adoption, binding, the list.
 - `transcripts/`: attach (bounded reads from the end), ingest, live tail, relaunch marks, normalizers.
-- `turns/`: working/idle, the event funnel, cancel, recaps, heartbeats, hooks.
-- `terminals/`: who controls a pane (the control lease).
+- `turns/`: working/idle, the event funnel, cancel, heartbeats, hooks, and `recaps.ts`, the core's whole
+  side of the recaps: the turn lifecycle it tells them, and what it reads back.
+- `terminals/`: who controls a pane (the control lease), opening a terminal with a literal argv (`open.ts`),
+  and the requests about a terminal itself (`requests.ts`: `terminal_info`, `theme_set`).
 - `engines/`: the engines' hooks.
 - `input.ts`, `questions.ts`: messages into a pane; an agent's question and its answer.
   `deviceInput.ts`: the pane writer lock every write takes, and a device's queued turns behind it.
   `cardText.ts`: an engine's error, rewritten for a device's card.
 - `deliveries.ts`: delivered turns, the Wi-Fi device's, a team's and the orchestrator's: text written into an
   agent under a delivery id of its maker's, and what became of it, told back to that maker in its process.
+- `updateHandoff.ts`: the core handing over to a build the updater staged (exit 75, when the master asks),
+  and a core with no master handing itself to one. `updaterBeside.ts`: the updater started beside a core whose
+  master is too old to run it, still in its own process.
+- `stall.ts`: a test-only fault that holds the core's event loop still (`HARNESSD_TEST_FAULTS=core.stall:…`).
 - `main.ts`: the core's entry (`harness __run`) and composition root, `runForeground`: it builds these
   modules, starts the services through `serviceHost` and wires the socket. The one core file that imports
   services and the socket, and the one outside the 100% coverage: wiring only, run end to end. The
@@ -53,7 +59,8 @@ questions. Everything else is a service ([../services/AGENTS.md](../services/AGE
   `experimentQueries.ts`: what an experiment acts on the core through; `experiments.ts`: which are on as the
   core starts; `orchestratorLink.ts`: what the core keeps of the orchestrator in its own process;
   `sharingLink.ts`: Share's observers' frames to its process; `terminalWatch.ts`: a read-only view of the
-  agents' terminals, which Share shows its observers.
+  agents' terminals, which Share shows its observers. `conversationQueries.ts`: the conversation facts the
+  change-agent handoff in the edge host asks for, one at a time.
   `gatewayLink.ts`: the relay and its E2EE in their own process (src/gateway/), as the core sees them:
   the link's state and the remote clients it reads in line, the frames it hands over in the clear, a
   window's sessions to another machine or a shared harness, and the fleet's lane's sealing

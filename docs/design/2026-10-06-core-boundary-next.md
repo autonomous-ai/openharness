@@ -1,28 +1,37 @@
 # The core boundary, next
 
-> **Status, 2026-10-07.** Steps 1–11 have landed, except where noted. The core's closure, measured by
-> `cli/src/architecture.spec.ts`, went from 114,622 lines in 488 files (walked from `cli.ts`) to 75,746
-> lines in 345 files.
+> **Status, 2026-10-07.** Steps 1 to 11 have landed, and so have moves the plan did not list: the recaps,
+> the viewers' remote serving and the updater. The core's closure went from 114,622 lines in 488 files
+> (walked from `cli.ts`) to **71,244 lines in 332 files** on `main` at b4027cbd1. That is measured by
+> `cli/src/architecture.spec.ts` with `CORE_CLOSURE_BUDGET` set to 1. The target was 61,000.
 >
 > | Step | Landed as | Note |
 > |---|---|---|
 > | 1 The core's own entry, and its size test | #871 | |
-> | 2 Dead code | #845 | |
+> | 2 Dead code | #845, #919 | #919 deleted the web dashboard (`webui.ts`): nothing opened it |
 > | 3 Slow work off the event loop | #826 | |
-> | 4 Requests into services | #851 | Left behind: the command bar (#927, #937) and the change-agent handoff (#931) |
-> | 5 Several services per process, the edge host | #875 | |
-> | 6 The Store into the viewers' process | #879 | |
+> | 4 Requests into services | #851, #931, #937 | The change-agent handoff runs in the edge host (#931). The command bar is an on-demand experiment (#937). A routed request knows its connection, and its service hears when that connection closes (#927) |
+> | 5 Several services per process, the edge host | #875 | The edge host now runs workspaces, usage, the monitor, the project readers, the handoff and the recaps |
+> | 6 The Store into the viewers' process | #879, #922 | The viewer forwarder and the rendered viewer surfaces followed the viewers (#922) |
 > | 7 Models in its own process | #896 | Found: routed requests were cut off at 30 s (`LONG_ANSWERS`) |
-> | 8 The experimental host, move only | #921, #924, #932, #933 | On-demand processes per experiment: orchestrator, Tab collaboration, Share |
-> | 9 Devices in their own process | #918, #928, #929, #946 | Per-device guards in one devices process; the Wi-Fi device on the gateway; the process on demand, once there is a device |
+> | 8 The experimental host, move only | #921, #924, #932, #933, #937 | One on-demand process per experiment: the orchestrator, Tab collaboration, Share, the command bar. Found: a cold experiment got its first request before it was welcomed (#940) |
+> | 9 Devices in their own process | #918, #928, #929, #946 | One devices process, with a guard per device, and the Wi-Fi device beside the dials. It starts only once there is a device (protocol 4, #946). A dial's port is streamed over its own descriptor (#953) |
 > | 10 The relay: the gateway process | #899, #905, #911 | |
-> | 11 The unsupervised handoff | #895 | `harness start -f` runs the master; the updater leaves the core in #925 |
+> | 11 The unsupervised handoff | #895, #925 | `harness start -f` runs the master. The updater runs in a process the master runs; the core never downloads a build (#925) |
+> | Recaps (not in the plan) | #923 | The plan kept the commander mirror in the core. The recaps now run in the edge host, and the core only tells them each turn's lifecycle |
 >
-> What still loads in the core and isn't session machinery: the engines' own code (the engine-interface
-> refactor, docs/design/2026-10-05-engine-interface.md, is paused), and the in-flight moves above. The
-> core's process still parses all of cli.js, so its memory falls only with a lean core bundle (in
-> progress).
-
+> The processes now: the master, the core, search, the viewers with the Store, the edge host, the gateway,
+> models, and the updater (the master's, for the installed copy). Five more start on demand: the devices,
+> the orchestrator, the teams with Tab collaboration, Share and the command bar. Each process and what it
+> hosts is in [../../cli/src/services/AGENTS.md](../../cli/src/services/AGENTS.md).
+>
+> What is left:
+> - **The engines' own code still loads in the core.** The engine-interface refactor
+>   ([2026-10-05-engine-interface.md](2026-10-05-engine-interface.md)) is paused.
+> - **The core's process still parses all of cli.js.** Its memory falls only with a lean core bundle, which
+>   is in progress (#955).
+> - **The core grew where every session needs it.** #950 added a gate for tmux before 3.7, whose server
+>   crashes when a terminal attaches during a notification (`lib/tmuxControlGate.ts`).
 
 A plan, not a change. It takes stock of everything that still runs in the core's process and is not
 session handling, decides where each piece goes, and orders the moves so that each lands green on its

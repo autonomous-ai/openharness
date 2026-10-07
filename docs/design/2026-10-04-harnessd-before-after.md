@@ -4,6 +4,10 @@ A one-page picture of what changed in the daemon between the last release (v0.3.
 and the harnessd rebuild, for explaining the refactor to the team. The full design, its rules and
 its plan are in [2026-10-03-harnessd.md](2026-10-03-harnessd.md). Paths are under `cli/src/`.
 
+The "after" picture below is the rebuild as it was on 4 October. [Today](#today-one-process-per-risk)
+shows where it went next: most services now run in processes of their own
+([2026-10-06-core-boundary-next.md](2026-10-06-core-boundary-next.md)).
+
 ## Before: one process, one function
 
 ```
@@ -104,11 +108,11 @@ and it crash-looped: every agent on the machine lost its daemon at once.
    ask the core what `CoreApi` offers.
 2. If the apps call it, declare its requests (`<NAME>_REQUESTS`) and return their handlers from its
    start. The core routes each request to it, with who asked. Nothing changes in `backendSocket.ts`
-   or `cli.ts` but the one line that starts the service. While it is off, its requests are answered
+   or `core/main.ts` but the one line that starts the service. While it is off, its requests are answered
    `SERVICE_UNAVAILABLE`.
 3. If the core must call it, add a port to `CorePorts` in `core/api.ts`, with fallbacks beside it:
    what the core does while the service is off or failing. Most features need no port.
-4. Start it in `cli.ts` through `serviceHost.serve(...)`, or `serviceHost.start(...)` when it has a
+4. Start it in `core/main.ts` through `serviceHost.serve(...)`, or `serviceHost.start(...)` when it has a
    port; never directly. The host guards its start, every call and every request, and switches it off
    when it keeps failing.
 5. Hold the file to 100% (`npm run test:core` covers `src/services/`). For the end-to-end suite,
@@ -147,10 +151,41 @@ desk of 50 agents runs in 268 MiB, and all of them are back 8.3 s after a restar
 
 The full list is in the design doc's "Found while mapping".
 
+## Today: one process per risk
+
+Most services now run in processes of their own, which the master starts and watches beside the core.
+The core keeps sessions, and reaches each service only through its link. Measured on `main` at b4027cbd1:
+
+```
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ MASTER  harnessd            starts, watches and restarts every process below │
+└───────┬──────────────────────────────────────────────────────────────────────┘
+        │ spawn channel, heartbeats, memory budgets, crash-loop parking
+        ├── CORE  harnessd-core    sessions: agents · terminals · transcripts ·
+        │                          turns · input · questions   (71,244 lines loaded,
+        │                          from 114,622; runForeground 2,211 lines)
+        ├── search                 session search
+        ├── viewers                harness viewers, their remote streams · the Store
+        ├── edge                   workspaces · usage · monitor · project readers ·
+        │                          change-agent handoff · recaps
+        ├── gateway                the relay and its E2EE: every remote client
+        ├── models                 grid · local models · the Model Manager
+        ├── updater                checks and stages a new build (installed copy only)
+        │
+        │   on demand: no process until it is needed
+        ├── devices                dials · window bridges · fleet · Wi-Fi device
+        ├── orchestrator           experiment
+        ├── teams                  experiment: Tab collaboration
+        ├── sharing                experiment: Share
+        └── commandBar             experiment: the command bar
+```
+
+One service failing costs its own process, and the master restarts it. The core answers its requests
+`SERVICE_UNAVAILABLE` meanwhile, and every agent goes on. `HARNESSD_SERVICES=none` still runs every service
+inside the core's process, for debugging. The end-to-end suite has 82 files.
+
 ## Next
 
-Search already runs in its own process when `HARNESSD_SERVICES=search` is set. Killed, hung, leaking
-or crash-looping, it costs search alone (`e2e/serviceProcesses.e2e.ts`). It is off by default until
-it has been run for real. The other services follow the same way, devices next, so that a native crash
-or a memory leak in any of them cannot touch the core either. After that come platform supervision
-(launchd, systemd) and the state directory move.
+The core still loads the engines' own code: the engine-interface refactor
+([2026-10-05-engine-interface.md](2026-10-05-engine-interface.md)) is paused. The core's process still
+parses all of cli.js, so its memory falls only with a lean core bundle, which is in progress.

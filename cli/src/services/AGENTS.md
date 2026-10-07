@@ -47,15 +47,30 @@ let several people build features at once without touching the core or each othe
 ## Running in its own process
 
 A service that can crash natively, hang or leak should run in a process of its own, where it costs only
-that process. A process per risk, not per feature: search (native `node:sqlite`), the viewers (their
-servers) with the Store (its minutes-long installs), each experiment (below), models (grid's installs,
-downloads and commands), the devices (the dials' serial ports, the fleet's lane, the voice router's
-worker, and the Wi-Fi device), and the edge host, one process for the light services
-(workspaces, usage, the monitor, the project readers, the recaps). A fault in one of the edge host's services can
-cost the others in it, never the core. Every service in `KNOWN_SERVICES` runs out of the core's process
-by default, unless `HARNESSD_SERVICES` names a subset, by service (`search,usage`) or by process
-(`edge`), and `HARNESSD_SERVICES=none` runs them all inside the core's process (for debugging or a quick
-way back).
+that process. A process per risk, not per feature (`SERVICE_HOSTS` in `src/harnessd/services.ts`):
+
+| Process | Services | Why its own | Started |
+|---|---|---|---|
+| `search` | search | native `node:sqlite`, the index's memory | always |
+| `viewers` | viewers, store | the viewer servers, the remote viewer streams and rendered surfaces, minutes-long installs | always |
+| `edge` | workspaces, usage, monitor, projects, handoff, recaps | light pure-JS services: isolated from the core, not from each other | always |
+| `gateway` | gateway | network, crypto and pure-JS WebRTC: the attack surface | always |
+| `models` | models | grid's installs, downloads and commands | always |
+| `devices` | devices, wifi | the dials' serial ports, the fleet's lane, the voice router's worker, the Wi-Fi device | on demand |
+| `orchestrator` | orchestrator | an experiment | on demand |
+| `teams` | teams, collaboration | an experiment: Tab collaboration beside the prompt scopes | on demand |
+| `sharing` | sharing | an experiment: Share | on demand |
+| `commandBar` | commandBar | an experiment: the command bar | on demand |
+
+A fault in one of the edge host's services can cost the others in it, never the core. Every service in
+`KNOWN_SERVICES` runs out of the core's process by default, unless `HARNESSD_SERVICES` names a subset, by
+service (`search,usage`) or by process (`edge`). `HARNESSD_SERVICES=none` runs them all inside the core's
+process (for debugging or a quick way back). The shell service always runs in the core's process.
+
+The updater is not in `SERVICE_HOSTS`: the core neither routes to it nor runs it, and `HARNESSD_SERVICES` does
+not turn it off. The master runs it (`UPDATER_HOST`, `src/services/updaterProcess.ts`) for the installed copy,
+with updates on. It stages a new build and tells the master, which has the core hand over. A core under a
+master too old to run it starts it beside itself, still in its own process (`src/core/updaterBeside.ts`).
 
 - `src/harnessd/services.ts` runs it (`SERVICE_HOSTS`: each process, the services it hosts and its
   memory budget, one heartbeat for all of them). The core routes the requests it declared (its
@@ -74,7 +89,7 @@ way back).
 - **What a service imports is what its process costs.** Import from small modules: one schema module
   pulled in for a constant brought zod to search and workspaces, 8 MiB each (`src/dsh/id.ts`). A
   failing import fails the service's start, loudly, and the master parks it. `src/leanEntry.spec.ts`
-  holds each process to its own code, and the master, search and the edge host to no zod.
+  holds each process to its own code, and the master, search, the updater and the edge host to no zod.
 - `src/services/process.ts` is the process's side: `hostServices` beats to the master and stops every
   service before the process exits; `runServiceProcess` is each service's own connection to the core,
   with the master's token, reconnecting after core restarts. `<host>.crash` and `<host>.leak`, or a
@@ -88,7 +103,9 @@ way back).
   `serviceLinks.call`, under types only it sends (the port's member names, so a test's fault names the
   same member either way), and reads an answer that does not come as the port's fallbacks. A light
   service that reads the agents asks for them as each request starts (`service_query live` or
-  `advertised`, `src/core/agentQueries.ts`; `src/services/processCoreApi.ts`).
+  `advertised`, `src/core/agentQueries.ts`; `src/services/processCoreApi.ts`). The change-agent handoff
+  asks for each conversation fact as it needs it (`core.conversations`, `src/core/conversationQueries.ts`,
+  `src/services/handoffProcess.ts`) and keeps no copy of the registry.
 - A port the core calls in line (while it builds a frame, say) cannot wait on another process. The
   viewers show how (`src/services/viewersProcess.ts`, `src/core/viewersLink.ts`): the process tells
   the core its answers whenever they change (a `service_query` kind the core answers), the core keeps
@@ -147,6 +164,25 @@ way back).
   what it lacks, or starts over. A value the core reads back synchronously is answered from what the
   process last reported, and is "unknown" (the fallback) while a change to it is on its way.
   `e2e/teamsProcess.e2e.ts` proves it.
+
+## On demand
+
+A process with `onDemand: true` in `SERVICE_HOSTS` is not started with the others. The master starts it when
+the core asks for one of its services (`harnessd:want`, sent by `coreLink.want`), and then keeps it running
+like any other. Named in `HARNESSD_SERVICES`, it starts with the others.
+
+- **What asks.** A request for a service that has not connected yet (`serviceLinks` `onDemand`, in
+  `src/core/main.ts`) asks for it and waits for it, within the request's own wait. The service is welcomed
+  before its queued requests are delivered. Each experiment with saved state in the data folder is
+  asked for as the core starts (`src/core/experiments.ts`). The devices are asked for once there is a device:
+  a dial's port in /dev, a paired Wi-Fi device, or its session (`src/core/devicesWake.ts`).
+- **Older cores.** `askedSince` is the core protocol (`HARNESSD_PROTOCOL`, `src/harnessd/protocol.ts`) from
+  which a core asks for this process. A core that speaks an older one never asks, so the master starts the
+  process as that core binds (`ServiceSupervisor.unasked`). It is 3 by default, the experiments'; the
+  devices became on demand at protocol 4. Making another process on demand needs a protocol bump, and that
+  number in its `askedSince`.
+- **Proof.** `e2e/experiments.e2e.ts` and `e2e/devicesOnDemand.e2e.ts`: off, it has no process; asked for, it
+  starts and answers.
 
 ## Experiments
 
