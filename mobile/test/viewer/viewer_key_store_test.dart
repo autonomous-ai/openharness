@@ -177,4 +177,49 @@ void main() {
       });
     });
   });
+
+  group('what one account trusts', () {
+    test('a snapshot put back is the pins and the trust group it was taken of — never the held pins', () async {
+      final storage = _FlakyStore();
+      final store = ViewerKeyStore(storage: storage);
+      await store.pin('a', List.filled(32, 1), label: 'A');
+      await store.writeGroupRoster({'members': [], 'removed': []});
+      final snapshot = await store.trustSnapshot();
+
+      await store.writeTrust(const {});
+      expect(
+        await store.peers(),
+        isEmpty,
+        reason: 'the held list is replaced, not read stale',
+      );
+      expect(await store.groupRoster(), isNull);
+
+      await store.pin('b', List.filled(32, 2));
+      await store.writeTrust(snapshot);
+      expect([for (final p in await store.peers()) p.machineId], ['a']);
+      final reads = storage.reads;
+      expect((await store.peer('a'))!.label, 'A');
+      expect(storage.reads, reads, reason: 'read once, then held again');
+      expect(await store.groupRoster(), {'members': [], 'removed': []});
+      // And on disk, for the next launch.
+      expect(
+        [
+          for (final p in await ViewerKeyStore(storage: storage).peers())
+            p.machineId,
+        ],
+        ['a'],
+      );
+    });
+
+    test(
+      'the account of a sign-in by hand answers for that sign-in only',
+      () async {
+        final store = ViewerKeyStore(storage: MemoryKeyValueStore());
+        expect(await store.signInAcct('e1'), isNull);
+        await store.writeSignInAcct('e1', 'acct-1');
+        expect(await store.signInAcct('e1'), 'acct-1');
+        expect(await store.signInAcct('e2'), isNull);
+      },
+    );
+  });
 }

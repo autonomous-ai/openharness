@@ -164,13 +164,16 @@ class DirectLink implements PeerLinkClient {
     String machineId, {
     required String label,
   }) async {
+    final log = deviceLog;
+    // Until the log is this sign-in's, the pins and the roster may still be the account just left's:
+    // none of it goes to this account's machines, and nothing they say is taken in beside it.
+    if (log != null && !await log.ownsLog()) return GroupSyncOutcome.none;
     final String token;
     try {
       token = await auth.accessToken();
     } catch (_) {
       return GroupSyncOutcome.none;
     }
-    final log = deviceLog;
     return syncTrustGroup(
       machineId: machineId,
       keys: keys,

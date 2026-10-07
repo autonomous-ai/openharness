@@ -1158,8 +1158,8 @@ export interface GatewayStatus {
 export interface GatewayAccount {
   /** The machine id the backend gave this sign-in; null signed out. */
   machineId: string | null
-  /** Which sign-in by hand this is (lib/authSession.ts `signInOf`), or null. */
-  signIn: { epoch: string; adopted: boolean; at: number | null } | null
+  /** Which sign-in by hand this is, and the account it was made to (lib/authSession.ts `signInOf`), or null. */
+  signIn: { epoch: string; adopted: boolean; at: number | null; acct?: string } | null
 }
 
 /** A Wi-Fi device operation refused, with the code the device's local API answers it under. */

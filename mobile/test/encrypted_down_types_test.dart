@@ -51,8 +51,16 @@ void main() {
       'ENCRYPTED_DOWN_TYPES = new Set<string>([',
     );
     final frames = cli('lib/e2ee/applicationFrames.ts');
-    machineRequests = namesIn(frames, 'MACHINE_REQUESTS = new Set([');
-    pairRequests = namesIn(frames, 'PAIR_REQUESTS = new Set([');
+    final relay = cli('lib/relayFrames.ts');
+    // `MACHINE_REQUESTS` also spreads the owner commands in; those are read where they are declared,
+    // as are the pair frames.
+    machineRequests = {
+      ...namesIn(frames, 'MACHINE_REQUESTS = new Set(['),
+      ...namesIn(relay, 'OWNER_COMMAND_TYPES = new Set(['),
+      // ...which spread the route commands in from their own set.
+      ...namesIn(relay, 'ROUTE_COMMAND_TYPES: ReadonlySet<string> = new Set(['),
+    };
+    pairRequests = namesIn(relay, 'PAIR_REQUESTS = new Set([');
     unwrapped = {
       ...pairRequests,
       ...core,
@@ -60,7 +68,7 @@ void main() {
       ...namesIn(frames, 'FLEET_REQUESTS = new Set(['),
       ...namesIn(cli('sharing/protocol.ts'), 'SHARE_REQUEST_TYPES = new Set(['),
       ...namesIn(cli('teams/wire.ts'), 'TEAM_REQUEST_TYPES = new Set(['),
-      ...namesIn(cli('lib/viewerWire.ts'), 'VIEWER_DOWN_TYPES = new Set(['),
+      ...namesIn(cli('lib/viewerFrames.ts'), 'VIEWER_DOWN_TYPES = new Set(['),
     };
   });
 

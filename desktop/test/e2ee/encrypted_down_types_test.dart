@@ -51,6 +51,8 @@ void main() {
     machineRequests = {
       ...namesIn(frames, 'MACHINE_REQUESTS = new Set(['),
       ...namesIn(relay, 'OWNER_COMMAND_TYPES = new Set(['),
+      // ...which spread the route commands in from their own set.
+      ...namesIn(relay, 'ROUTE_COMMAND_TYPES: ReadonlySet<string> = new Set(['),
     };
     unwrapped = {
       ...core,
@@ -59,7 +61,7 @@ void main() {
       ...namesIn(relay, 'PAIR_REQUESTS = new Set(['),
       ...namesIn(cli('sharing/protocol.ts'), 'SHARE_REQUEST_TYPES = new Set(['),
       ...namesIn(cli('teams/wire.ts'), 'TEAM_REQUEST_TYPES = new Set(['),
-      ...namesIn(cli('lib/viewerWire.ts'), 'VIEWER_DOWN_TYPES = new Set(['),
+      ...namesIn(cli('lib/viewerFrames.ts'), 'VIEWER_DOWN_TYPES = new Set(['),
     };
   });
 

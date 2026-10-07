@@ -40,6 +40,10 @@ export interface DevLogSignIn {
   adopted: boolean
   /** When it was made (ms); null when not known — then it never starts the log over either. */
   at: number | null
+  /** The account it was made to, as the backend named it right after (authSession `signInAcct`); absent
+   *  when that could not be asked (then only DEVLOG_RESET_WINDOW_MS opens the door), never for an
+   *  adopted one. */
+  acct?: string | null
 }
 
 /** How long after a sign-in by hand a read of another account may start the log over: past it, with
@@ -53,15 +57,19 @@ export interface DeviceLogSyncerDeps {
   /** How this machine describes itself in the log; no machineId = not signed in, nothing to register. */
   self: () => { machineId: string | null; label: string }
   /** Which sign-in by hand this machine is under; null when not known. The log of another account is
-   *  started (or a kept one restored) only when this changed AND the backend's account differs AND it
-   *  was made less than DEVLOG_RESET_WINDOW_MS ago — never for an adopted one. Otherwise a different
-   *  account id from the backend freezes the log. While the file is not this sign-in's yet (no read of
-   *  it so far), what peers gossip is not taken either. */
+   *  started (or a kept one restored) only when this changed AND the backend's account differs AND it is
+   *  the account that sign-in was made to, or it was made less than DEVLOG_RESET_WINDOW_MS ago — never
+   *  for an adopted one. Otherwise a different account id from the backend freezes the log. While the
+   *  file is not this sign-in's yet (no read of it so far), what peers gossip is not taken either. */
   signIn: () => DevLogSignIn | null
   /** The log from `since`; null when the backend has none to give (an older backend, or unreachable). */
   fetch: (since: number) => Promise<DeviceLogFetched | null>
   /** Append one signed entry; null when the backend could not be reached. */
   append: (entry: DevLogEntry) => Promise<DeviceLogAppendAnswer | null>
+  /** This machine is moving from one account's log to another's (a sign-in by hand, or a review of the
+   *  other account's list): put away what `from` trusted here and bring back what `to` did. Called before
+   *  the new log is written, so what it snapshots as already trusted (`trustedNow`) is `to`'s. */
+  switchAccount?: (from: string, to: string) => void
   /** Trust these keys here (and tell the trust group, so devices that predate the log learn of them). */
   adopt: (members: DevLogMember[]) => void
   /** Stop trusting a key here (and tombstone it in the trust group). */
@@ -309,6 +317,14 @@ export class DeviceLogSyncer {
     return !local.adopted && local.at !== null && Math.abs(this.now() - local.at) <= DEVLOG_RESET_WINDOW_MS
   }
 
+  /** Whether the trust group may swap rosters now: the log is this sign-in's (or none was read yet) and
+   *  not frozen on an account it was not signed in to. Before that the roster here may still be the
+   *  account this machine just left, and handing it out would carry its devices into the new one. */
+  current(): boolean {
+    const file = this.deps.store.read()
+    return !file.state || (this.ownsFile(file) && file.frozen?.reason !== 'invalid')
+  }
+
   /** Whether the file is the log of the sign-in this machine is under (or that cannot be told). Until a
    *  read of it under a new sign-in, it may be another account's: what a peer says is not judged
    *  against it — a peer of the new account would read as a fork of the old one. */
@@ -479,10 +495,10 @@ export class DeviceLogSyncer {
       if (now) {
         const signedInAgain = local !== null && latest.owner !== local.epoch
         if (now.acct !== got.acct) {
-          // Another account only right after a sign-in by hand here. Otherwise it is the backend saying
-          // so — and starting over would clear every mark a fork put on the list, the real log then
-          // adopted whole.
-          if (!signedInAgain || !this.mayStartOver(local)) {
+          // Another account only after a sign-in by hand here: the account it was made to, whenever; with
+          // none recorded, any one right after it. Otherwise it is the backend saying so — and starting
+          // over would clear every mark a fork put on the list, the real log then adopted whole.
+          if (!signedInAgain || (local.acct ? local.acct !== got.acct : !this.mayStartOver(local))) {
             this.freeze('invalid')
             return
           }
@@ -493,7 +509,11 @@ export class DeviceLogSyncer {
         }
       }
       if (reset) {
-        if (now) this.deps.store.archive(latest)
+        if (now) {
+          // What the account left behind trusted goes with its log, and comes back with it.
+          this.deps.switchAccount?.(now.acct, got.acct)
+          this.deps.store.archive(latest)
+        }
         // Back to an account this machine was signed in to before: its log as verified then, and every
         // mark on it (frozen, suspended, pending), go on from where they were.
         const kept = this.deps.store.restore(got.acct, (k) => this.carrySuspensions({ ...k, ...(local ? { owner: local.epoch } : {}) }))
@@ -804,7 +824,10 @@ export class DeviceLogSyncer {
       // The reviewed list is another account's: the one this machine leaves is kept, as on a sign-in
       // (and what a fork suspended in it stays suspended here) — and a kept one of the reviewed account
       // goes on from where it was.
-      if (file.state && !same) this.deps.store.archive(file)
+      if (file.state && !same) {
+        this.deps.switchAccount?.(file.state.acct, next.acct)
+        this.deps.store.archive(file)
+      }
       const { joining: _j, ...rest } = base
       const reviewed: DevLogFile = this.carrySuspensions({
         ...rest,
@@ -838,7 +861,9 @@ export class DeviceLogSyncer {
     if (!file.state || !this.ownsFile(file)) return undefined
     // The newest hashes let a peer that finds the logs forked say where they split.
     const hashes = file.state.hashes.slice(-GOSSIP_HASHES).map((hash, i, all) => ({ seq: file.state!.head.seq - (all.length - 1 - i), hash }))
-    return { head: file.state.head, frozen: file.frozen !== null, hashes }
+    // The account rides along: a device still signed in to the one this machine left must not have its
+    // log taken for a fork of this one.
+    return { acct: file.state.acct, head: file.state.head, frozen: file.frozen !== null, hashes }
   }
 
   /**
@@ -853,7 +878,10 @@ export class DeviceLogSyncer {
     if (!this.ownsFile(file)) return undefined
     const mine = this.gossip()
     if (!state || !raw || typeof raw !== 'object') return mine
-    const p = raw as { head?: unknown; frozen?: unknown; tail?: unknown }
+    const p = raw as { acct?: unknown; head?: unknown; frozen?: unknown; tail?: unknown }
+    // Another account's log says nothing about this one. A peer from before the account rode along
+    // sends none, and is judged as before.
+    if (p.acct !== undefined && p.acct !== state.acct) return undefined
     this.frozenPeers.set(peerPub, p.frozen === true)
     const head = p.head as { seq?: unknown; hash?: unknown } | undefined
     if (!head || typeof head.seq !== 'number' || !Number.isSafeInteger(head.seq) || head.seq < 0 || typeof head.hash !== 'string') return mine
