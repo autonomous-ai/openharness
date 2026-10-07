@@ -733,9 +733,20 @@ fn composer_kind(query:&str,agents:bool)->&'static str {
         _=>if agents {"agent"} else {"sessions"},
     }
 }
+/// Whether the composer takes the command panel's look: it does unless the user drew their lists
+/// themselves with `--layout`/`--border`/`--info`/`--color` (or their short forms) in their fzf
+/// options. (Task 3 adds the TUI's `@hn-lists fzf` here, from the reply's `look.lists`.)
+fn composer_panel(opts:&[String])->bool {
+    const OWN:[&str;9]=["--layout","--reverse","+r","--border","--no-border","--info","--inline-info","--no-info","--color"];
+    !opts.iter().any(|v|{let name=v.split('=').next().unwrap_or(v);OWN.contains(&name)||name=="--style"})
+}
 fn compose_scope(picker:&mut Picker,kind:&str) {
     picker.title=match kind {"agent"=>"Agent","host"=>"Computer","folder"=>"Project","model"=>"Model",_=>"Compose"}.into();
-    picker.placeholder=match kind {"sessions"=>"Search sessions","agent"=>"Search agents","part"=>"@ computer   : project   % model",_=>"Search"}.into();
+    picker.placeholder=match kind {
+        "sessions"=>"Search sessions   @ computer   : project   % model   & agent",
+        "agent"=>"Search agents   @ computer   : project   % model   & agent",
+        "part"=>"@ computer   : project   % model",_=>"Search"}.into();
+    picker.shell_panel=kind!="sessions" && composer_panel(&theme::default_opts());
     picker.prefixed=!["part","sessions"].contains(&kind) && picker.query.starts_with(['&','@',':','%']);
     picker.scope_prefix=match kind {"agent"=>Some('&'),"model"=>Some('%'),_=>None};
     picker.preview=kind=="sessions";
@@ -744,6 +755,7 @@ fn compose_scope(picker:&mut Picker,kind:&str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ratatui::style::Modifier;
     #[test]
     fn machine_identity_preserves_folders_for_current_computer_and_aliases() {
         let row=Row::new("M2","M2").extra("local-id");
@@ -842,6 +854,83 @@ mod tests {
             let mut picker=Picker::new("","");picker.query=format!("{prefix}{query}");picker.qend();compose_scope(&mut picker,kind);
             picker.set_rows(vec![Row::new("chosen",label)]);assert_eq!(picker.current_id().as_deref(),Some("chosen"),"{kind}");
             picker.clear_query();assert_eq!(picker.query,prefix.to_string());picker.backspace(false);assert!(picker.query.is_empty());
+        }
+    }
+    fn composer_picker(labels:&[&str])->Picker {
+        let mut p=Picker::new("","");
+        p.query="%gpt".into();p.qend();
+        compose_scope(&mut p,"model");
+        p.set_rows(labels.iter().map(|l|Row::new(*l,*l).detail(vec![ratatui::text::Span::raw("OpenAI")])).collect());
+        p
+    }
+    fn row_text(buf:&Buffer,y:u16,w:u16)->String { (0..w).map(|x|buf[(x,y)].symbol().to_string()).collect() }
+    #[test]
+    fn the_composer_is_drawn_like_the_command_panel() {
+        let _l=crate::term_out::colours_lock();
+        let c=crate::settings::chrome();
+        let mut picker=composer_picker(&["gpt-6-astra","gpt-6-astra-fast"]);
+        assert!(picker.shell_panel);
+        let area=Rect::new(0,0,60,6);
+        let mut buf=Buffer::empty(area);
+        crate::ui::inline_fzf(&mut buf,area,&mut picker,false,vec![],false);
+        let row=|y:u16|row_text(&buf,y,60);
+        assert!(!row(0).contains('╭') && !row(0).contains('│'),"no border: {}",row(0));
+        assert!(row(0).trim_start().starts_with("› %gpt"),"{}",row(0));
+        assert!(row(1).starts_with(" 2/2 ─"),"{}",row(1));
+        assert!(row(5).contains("↑↓ move") && row(5).contains("esc back"),"{}",row(5));
+        let sel=(0..60).find(|x|buf[(*x,2)].symbol()=="g").unwrap();
+        assert_eq!(buf[(sel,2)].bg,c.selected.bg.unwrap(),"the chosen row on the panel's lifted band");
+        assert!(buf[(sel,2)].modifier.contains(Modifier::BOLD));
+        assert_ne!(buf[(sel,3)].bg,c.selected.bg.unwrap());
+    }
+    #[test]
+    fn the_ghost_shows_whole_scopes_and_the_panel_survives_tiny_areas() {
+        let _l=crate::term_out::colours_lock();
+        let mut picker=Picker::new("","");
+        compose_scope(&mut picker,"agent");
+        picker.set_rows(vec![Row::new("claude","Claude Code")]);
+        assert_eq!(picker.placeholder,"Search agents   @ computer   : project   % model   & agent");
+        for w in [1,8,23,24,30,60,140] { for h in 1..12 {
+            let area=Rect::new(0,0,w,h);
+            let mut buf=Buffer::empty(area);
+            let at=crate::ui::inline_fzf(&mut buf,area,&mut picker,false,vec![],false);
+            assert!(area.contains(at),"{w}x{h}: {at:?}");
+            let first=row_text(&buf,0,w);
+            assert!(!first.contains("Search agents1"),"{w}x{h}: {first}");
+        } }
+        let area=Rect::new(0,0,140,6);
+        let mut buf=Buffer::empty(area);
+        crate::ui::inline_fzf(&mut buf,area,&mut picker,false,vec![],false);
+        let first=row_text(&buf,0,140);
+        for scope in ["@ computer",": project","% model","& agent"] {assert!(first.contains(scope),"{scope}: {first}");}
+        let area=Rect::new(0,0,40,6);
+        let mut buf=Buffer::empty(area);
+        crate::ui::inline_fzf(&mut buf,area,&mut picker,false,vec![],false);
+        let first=row_text(&buf,0,40);
+        assert!(first.contains("@ computer") && !first.contains("% model") && !first.contains('…'),"whole scopes only: {first}");
+    }
+    #[test]
+    fn the_panel_spins_in_the_rule_while_loading_and_the_sessions_list_keeps_fzfs_frame() {
+        let _l=crate::term_out::colours_lock();
+        let mut picker=composer_picker(&["gpt-6-astra"]);
+        picker.status="Searching models…".into();
+        let area=Rect::new(0,0,60,6);
+        let mut buf=Buffer::empty(area);
+        paint_inline(&mut buf,area,&mut picker,true,vec![],false);
+        let rule=row_text(&buf,1,60);
+        assert!(rule.contains("Searching models…") && rule.contains("1/1"),"{rule}");
+        assert!(picker.busy.is_none());
+        let mut sessions=Picker::new("","");
+        compose_scope(&mut sessions,"sessions");
+        assert!(!sessions.shell_panel);
+    }
+    #[test]
+    fn the_users_own_fzf_look_keeps_the_fzf_frame() {
+        let words=|s:&str|s.split(' ').map(String::from).collect::<Vec<_>>();
+        assert!(composer_panel(&[]));
+        assert!(composer_panel(&words("--height=40% --multi")));
+        for opts in ["--layout=reverse","--border=rounded","--info=inline","--color=light","--reverse","--no-border","--style=full"] {
+            assert!(!composer_panel(&words(opts)),"{opts}");
         }
     }
     #[test]

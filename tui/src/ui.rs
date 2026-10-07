@@ -1456,7 +1456,7 @@ fn fzf_in_frame(buf: &mut Buffer, frame: FzfFrame, picker: &mut Picker, kind: &P
         // --ghost: yours, cut at the edge as fzf cuts it.
         pbuf.set_stringn(ia.x + pw, prompt_y, ghost, q_room, pal.ghost.style());
         typed_w = ghost.width().min(q_room) as u16;
-        shift = typed_w as i32;
+        shift = typed_w as i32 + 2;
     } else if picker.query.is_empty() && !picker.placeholder.is_empty() {
         // The placeholder (fzf's --ghost), whole scopes only, leaving an inline count its place.
         let room = if mode.starts_with("inline") { q_room.saturating_sub(16) } else { q_room };
@@ -1464,7 +1464,7 @@ fn fzf_in_frame(buf: &mut Buffer, frame: FzfFrame, picker: &mut Picker, kind: &P
         for part in picker.placeholder.split("   ") { if text.width() + part.width() + 3 > room { break } if !text.is_empty() { text.push_str("   ") } text.push_str(part) }
         pbuf.set_stringn(ia.x + pw, prompt_y, &text, q_room, pal.ghost.style());
         typed_w = text.width() as u16;
-        if !text.is_empty() { shift = typed_w as i32 }
+        if !text.is_empty() { shift = typed_w as i32 + 2 }
     }
     let cursor = Position::new(ia.x + pw + before_w as u16, prompt_y);
     picker.prompt_at.set((prompt_y, ia.x + pw));
@@ -2506,6 +2506,7 @@ fn preview_text(buf: &mut Buffer, picker: &Picker, pb: &PreviewBox, text: Vec<Li
 /// The shell owns a reserved region below its prompt. Draw the very same finder
 /// there, without applying --height a second time or accessing application state.
 pub(crate) fn inline_fzf(buf: &mut Buffer, area: Rect, picker: &mut Picker, busy: bool, text: Vec<Line<'static>>, bottom_up: bool) -> Position {
+    if picker.shell_panel { return inline_panel(buf, area, picker, busy) }
     let kind = PickerKind::ShellContext;
     let frame = fzf_frame_at(area);
     let inner = frame.inner;
@@ -2525,6 +2526,31 @@ pub(crate) fn inline_fzf(buf: &mut Buffer, area: Rect, picker: &mut Picker, busy
         preview_text(buf, picker, &pb, text, bottom_up, true, true);
     }
     at
+}
+
+/// The shell composer, drawn with the command panel's own pieces (`settings::chrome()` and its
+/// query line, count rule, rows and keys line) in the reserved region: always top-down, no border.
+fn inline_panel(buf: &mut Buffer, area: Rect, picker: &mut Picker, busy: bool) -> Position {
+    let c = crate::settings::chrome();
+    crate::settings::fill(buf, area, c.base);
+    let ghost = picker.placeholder.clone();
+    let inside = |p: Position| Position::new(p.x.min(area.right().saturating_sub(1)), p.y);
+    // Too small for the list: the query alone, as the panel's own too-small notice keeps its title.
+    if area.height < 4 || area.width < 24 {
+        let (at, _) = crate::settings::query_line(buf, picker, area.x, area.y, area.width, &ghost, &c);
+        return inside(at);
+    }
+    let (x, w) = (area.x + 1, area.width - 2);
+    let (at, _) = crate::settings::query_line(buf, picker, x, area.y, w, &ghost, &c);
+    let total = picker.total_rows.unwrap_or_else(|| picker.rows.iter().filter(|r| !r.disabled).count());
+    // While it waits on something the rule ends in the usual spinner (and what is being waited for).
+    let wait = busy.then(|| if picker.status.is_empty() { theme::spinner(0).to_string() } else { format!("{} {}", theme::spinner(0), picker.status) });
+    let room = wait.as_ref().map_or(0, |t| (t.width() as u16 + 1).min(w / 2));
+    crate::settings::count_rule(buf, picker.visible.len(), total, None, x, area.y + 1, w - room, &c);
+    if let Some(t) = wait { crate::settings::put(buf, x + w - room + 1, area.y + 1, room.saturating_sub(1), &t, c.muted); }
+    crate::settings::list_from(buf, picker, Rect::new(x, area.y + 2, w, area.height - 3), &c, true, false);
+    crate::settings::keys_line(buf, &[("↑↓", "move"), ("enter", "choose"), ("esc", "back")], x, area.bottom() - 1, w, &c);
+    inside(at)
 }
 
 /// A pane's terminal, drawn into a preview box: its bottom, where the work is.
