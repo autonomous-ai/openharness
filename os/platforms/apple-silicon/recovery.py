@@ -259,10 +259,18 @@ def dnf_layout(root):
         paths.append(main)
     values = {}
     for path in paths:
-        config = configparser.ConfigParser(interpolation=None, strict=False, allow_no_value=True,
+        text = text_file(root, str(path.relative_to(root)))
+        # DNF treats indented comments as value continuation, unlike Python.
+        # The private factory profile refuses these forms instead of claiming
+        # that ConfigParser implements every DNF syntax/expansion rule.
+        if any(line[:1] in (' ', '\t', '\r') and line.strip() for line in text.splitlines()):
+            raise Error('Indented DNF configuration needs inspection before checkpointing.')
+        config = configparser.ConfigParser(interpolation=None, strict=False, delimiters=('=',),
+                                           empty_lines_in_values=False,
                                            default_section='__unsupported_defaults__')
+        config.optionxform = str  # DNF option names are case-sensitive.
         try:
-            config.read_string(text_file(root, str(path.relative_to(root))))
+            config.read_string(text)
         except configparser.Error as error:
             raise Error('The DNF configuration needs inspection before checkpointing.') from error
         if config.defaults():
@@ -294,13 +302,15 @@ def rpm_layout(root):
             text = text_file(root, str(path.relative_to(root)))
             for line in text.splitlines():
                 # Reject parameters, continuations and macro/lua/load bodies.
-                # Matching the name boundary also catches %_dbpath(opts).
-                if re.match(r'^\s*%(?:(?:define|global)\s+)?_dbpath(?=\s|\(|$)', line):
+                # RPM permits blanks after %, and any non-name character
+                # ends COPYNAME (even '/' with only a warning). Recognize all
+                # those candidates, then require our strict canonical form.
+                if re.match(r'^\s*%\s*(?:(?:define|global)\s+)?_dbpath(?![A-Za-z0-9_])', line):
                     if not re.fullmatch(r'\s*%_dbpath\s+(?:/(?:usr/lib/sysimage/rpm|var/lib/rpm)|%\{_usr\}/lib/sysimage/rpm)\s*', line):
                         raise Error('Custom or expanded RPM database paths are unsupported.')
                     definitions += 1
                     needs_usr |= '%{_usr}' in line
-                if re.match(r'^\s*%(?:(?:define|global)\s+)?_usr(?=\s|\(|$)', line):
+                if re.match(r'^\s*%\s*(?:(?:define|global)\s+)?_usr(?![A-Za-z0-9_])', line):
                     if not re.fullmatch(r'\s*%_usr\s+/usr\s*', line):
                         raise Error('The standard RPM _usr definition is required.')
                     usr_definitions += 1

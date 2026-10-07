@@ -57,18 +57,27 @@ reads. It does not disable SELinux or load a different policy.
 The checkpoint profile requires Fedora, the packaged Fedora session marker,
 RPMDB in `/usr/lib/sysimage/rpm` with the standard `/var/lib/rpm` symlink, the
 default `/var/lib/alternatives`, and the local SELinux store in `/var/lib/selinux`.
-RPM macro configuration is deliberately restricted: the database definition must
+The explicit RPM `_dbpath` and `_usr` definitions are checked conservatively: the database definition must
 be literal at those standard locations, or Fedora's `%{_usr}/lib/sysimage/rpm`
 with every `_usr` definition literally `/usr`. Parameterized definitions, arbitrary
 expansion, redirected/nonregular files, and rpmrc macro-file/include directives
-are refused. This is a conservative supported profile, not an interpreter or a
+are refused for those definitions. This is a conservative factory profile, not an interpreter or a
 proof that arbitrary RPM macro programs are safe. It inspects system, vendor,
 platform, host, and root's current/legacy macro locations; some otherwise harmless
 custom settings may therefore require inspection instead of automatic recovery.
+Static reading cannot establish effective database state under other Lua/macro
+expansion, caller environment, or `--macros`/`--dbpath` overrides. This private
+adapter requires the known factory configuration used by native acceptance.
+Before automatic checkpointing on customized installations, require a trusted
+factory configuration manifest or a healthy effective-state receipt bound to
+the configuration bytes, and refuse configurations whose state cannot be proved.
 DNF5 main/drop-in configuration must retain the default `system_state_dir` and
 `transaction_history_dir` in `/usr/lib/sysimage/libdnf5` and `persistdir` in
 `/var/lib/dnf`. Configuration is read in the maintained distribution/user masking
 and load order without executing target programs; redirected files are refused.
+Option names retain DNF's case sensitivity. Indented nonempty configuration is
+refused because DNF and Python differ on indented comments/continuations; even
+harmless customized indentation may therefore require inspection.
 The private acceptance target uses these defaults. Custom DNF state paths,
 other offline updaters, remote SELinux stores, and custom alternatives directories
 are outside this adapter's supported scope.

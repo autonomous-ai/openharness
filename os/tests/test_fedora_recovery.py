@@ -381,6 +381,32 @@ class Recovery(unittest.TestCase):
         self.write(self.root, 'etc/dnf/dnf.conf', '[main]\ntransaction_history_dir=/usr/lib/sysimage/libdnf5\n')
         recovery.profile(self.root)
 
+    def test_dnf_uppercase_unknown_options_cannot_mask_custom_lowercase_paths(self):
+        for option, default in (('system_state_dir', '/usr/lib/sysimage/libdnf5'),
+                                ('transaction_history_dir', '/usr/lib/sysimage/libdnf5'),
+                                ('persistdir', '/var/lib/dnf')):
+            lower = option + '=/var/custom\n'
+            upper = option.upper() + '=' + default + '\n'
+            path = self.write(self.root, 'etc/dnf/dnf.conf', '[main]\n' + lower + upper)
+            with self.subTest(option=option, mode='same file'), self.assertRaisesRegex(recovery.Error, 'Custom DNF state'):
+                self.engine.checkpoint(self.name)
+            path.unlink()
+            earlier = self.write(self.root, 'usr/share/dnf5/libdnf.conf.d/20-state.conf', '[main]\n' + lower)
+            later = self.write(self.root, 'etc/dnf/libdnf5.conf.d/90-state.conf', '[main]\n' + upper)
+            with self.subTest(option=option, mode='drop-ins'), self.assertRaisesRegex(recovery.Error, 'Custom DNF state'):
+                self.engine.checkpoint(self.name)
+            earlier.unlink()
+            later.unlink()
+            self.assertFalse(self.writes)
+
+    def test_dnf_indented_comments_cannot_hide_nondefault_path_continuation(self):
+        for suffix in (' # suffix', '\t; suffix', ' /custom'):
+            path = self.write(self.root, 'etc/dnf/dnf.conf', '[main]\npersistdir=/var/lib/dnf\n' + suffix + '\n')
+            with self.subTest(suffix=suffix), self.assertRaisesRegex(recovery.Error, 'Indented DNF configuration'):
+                self.engine.checkpoint(self.name)
+            self.assertFalse(self.writes)
+            path.unlink()
+
     def test_nonregular_configuration_is_refused_without_opening_it(self):
         path = self.root / 'etc/dnf/dnf.conf'
         path.parent.mkdir()
@@ -409,6 +435,18 @@ class Recovery(unittest.TestCase):
                 with self.subTest(source=source, directive=directive), self.assertRaisesRegex(recovery.Error, 'RPM macro-file loading'):
                     recovery.profile(self.root)
                 path.unlink()
+
+    def test_rpm_noncanonical_name_boundaries_cannot_hide_database_relocation(self):
+        for name in ('_dbpath', '_usr'):
+            for content in ('% ' + name + ' /var/custom\n', '%\t' + name + ' /var/custom\n',
+                            '%' + name + '/var/custom\n', '% ' + name + '/var/custom\n'):
+                path = self.write(self.root, 'etc/rpm/macros.custom', content)
+                with self.subTest(content=content), self.assertRaises(recovery.Error):
+                    self.engine.checkpoint(self.name)
+                self.assertFalse(self.writes)
+                path.unlink()
+        self.write(self.root, 'etc/rpm/macros.custom', '%_dbpath_rebuild %{_dbpath}\n%_usr_other /var/other\n')
+        recovery.profile(self.root)
 
     def test_fedora_rpm_dbpath_expression_requires_literal_usr_in_every_definition(self):
         recovery.profile(self.root)
