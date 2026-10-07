@@ -182,6 +182,9 @@ export function createServiceLinks(options: ServiceLinksOptions) {
       const owed = held.get(service) ?? []
       held.delete(service)
       for (const frame of owed) sink.sendFrame(frame)
+      // What the core tells it as it connects comes before the requests that woke it: the gateway answers
+      // nothing until it is told what to start from (core/gatewayLink.ts `connected`).
+      options.connected?.(service)
       // The requests that woke an experiment, in the order they came.
       for (const [id, entry] of waiting) {
         if (entry.service !== service || !entry.frame) continue
@@ -192,7 +195,6 @@ export function createServiceLinks(options: ServiceLinksOptions) {
         clearTimer(entry.timer)
         entry.timer = setTimer(() => settle(id, entry, unavailable(service)), entry.wait)
       }
-      options.connected?.(service)
       return {
         receive: (frame) => {
           const payload = frame.payload ?? {}

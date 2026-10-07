@@ -23,8 +23,8 @@ export const DEVICES_ON_DEMAND = ['devices', 'wifi'] as const
 export const DIAL_LOOK_MS = 2_000
 /** The Wi-Fi device's direct links (lib/autonomous-device/direct.ts) and the gateway's pairings (lib/e2ee/store.ts),
  *  read no further than this. */
-const DIRECT_LINKS = 'autonomous-device-connections.json'
-const PAIRINGS = join('e2e', 'paired.json')
+export const DIRECT_LINKS = 'autonomous-device-connections.json'
+export const PAIRINGS = join('e2e', 'paired.json')
 const SAVED_MAX = 1_048_576
 
 /** Whether a dial's port may be there: a USB modem's node, or one of the end-to-end suite's dials (a
@@ -43,20 +43,24 @@ export function dialPortThere(deps: { platform: NodeJS.Platform; listDev: () => 
   }
 }
 
+/** The rows of one of the gateway's saved lists in the data folder, read no further than a bound; none when it is
+ *  not there, too big or not a list. */
+export function savedRows(dataDir: string, name: string, read: (file: string) => string = (file) => readFileSync(file, 'utf8')): unknown[] {
+  const file = join(dataDir, name)
+  try {
+    if (statSync(file).size > SAVED_MAX) return []
+    const listed: unknown = JSON.parse(read(file))
+    return Array.isArray(listed) ? listed : []
+  } catch {
+    return []
+  }
+}
+
 /** Whether a Wi-Fi device is paired here: the gateway's pairings name one as a device, or its direct links
  *  connect out to one. */
 export function wifiDeviceSaved(dataDir: string, read: (file: string) => string = (file) => readFileSync(file, 'utf8')): boolean {
-  const rows = (name: string): unknown[] => {
-    const file = join(dataDir, name)
-    try {
-      if (statSync(file).size > SAVED_MAX) return []
-      const listed: unknown = JSON.parse(read(file))
-      return Array.isArray(listed) ? listed : []
-    } catch {
-      return []
-    }
-  }
-  return rows(DIRECT_LINKS).length > 0 || rows(PAIRINGS).some((pair) => (pair as { role?: unknown } | null)?.role === 'device')
+  return savedRows(dataDir, DIRECT_LINKS, read).length > 0
+    || savedRows(dataDir, PAIRINGS, read).some((pair) => (pair as { role?: unknown } | null)?.role === 'device')
 }
 
 export interface DevicesWakeDeps {
