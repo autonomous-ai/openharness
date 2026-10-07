@@ -101,6 +101,7 @@ export interface CableHostWiring {
   scrolled?: (phase: 'down' | 'move' | 'up', dy: number, velocity: number) => void
   /** The dial came, went, or started taking an update — see CableSession's onDialStatus. */
   dialStatus?: (status: DialStatus) => void
+  appFocus?: CableHost['appFocus']
   /** Offer a spoken task to the desktop window's palette. Omitted when there is no window plumbing. */
   routeInWindow?: (text: string, cmd?: string) => Promise<WindowRoute>
   selectPassage?: (command: SelectionCommand) => Promise<SelectionResult>
@@ -314,6 +315,10 @@ export class DaemonCableHost implements CableHost {
     // the person holding it may well speak something other than this laptop is set to.
     const locale = process.env.LANG ?? ''
     return locale.startsWith('vi') ? 'vi' : 'en'
+  }
+
+  appFocus(): { machineId: string; agentId: string } | undefined {
+    return this.wiring.appFocus?.()
   }
 
   /**

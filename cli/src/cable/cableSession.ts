@@ -251,6 +251,8 @@ export interface CableHost {
   selectSwarm(swarmId: string): void
   appName(): string
   voiceLang(): string
+  /** The window's latest selected pane, including selections made before this dial attached. */
+  appFocus?(): { machineId: string; agentId: string } | undefined
   /** The active tab's agents, in tile order — and nothing else. Empty with no window or an empty tab. */
   listAgents(): Promise<CableAgent[]>
   /** Pane rows and workspace identity from the same desktop announcement. */
@@ -528,6 +530,8 @@ export class CableSession {
    * and it is the only thing the daemon ever re-asserts.
    */
   private desiredFocus = ''
+  /** A superseded list refresh can record the selection without ever writing its focus frame. */
+  private appFocusUnsent = false
   /**
    * App-driven machine/focus changes are one transaction. Without this queue, two quick desktop clicks
    * can interleave their machine lists and let the older click focus last.
@@ -1007,6 +1011,8 @@ export class CableSession {
           // screen. A repeat greeting from the same dial on the same image is a keepalive and is skipped,
           // which is the whole reason the branch exists.
           await this.pushAgents()
+          const focused = this.host.appFocus?.()
+          if (focused) await this.followApp(focused.machineId, focused.agentId)
         }
         // Offered on every greeting, but only ONCE per version per session: accepting makes the dial erase
         // a flash slot before it answers, so a cadence of retries would spend erase cycles on the user's
@@ -1100,6 +1106,7 @@ export class CableSession {
           // Remember where the dial IS, not just that it said so: followApp() compares against this to
           // avoid echoing the dial's own move back at it.
           this.desiredFocus = agentId
+          this.appFocusUnsent = false
           this.host.focus(agentId)
         }
         return
@@ -1303,8 +1310,13 @@ export class CableSession {
             : Promise.resolve({ ok: false, error: 'Choose a passage before searching.' } as const))
             .catch(() => ({ ok: false, error: 'Could not open output search. Try again.' })) }
         }
+        // The dial can still name the previous pane while a focus frame is in flight, or after the
+        // devices process restarted. Ordinary dictation belongs to the window's selection at capture
+        // start. Quoted text, carried text, questions and edits already have their own pinned targets.
+        const focused = str('agentId') && !formVoice && !searchVoice && !draftVoice && !questionVoice &&
+          !carryVoice && !('selectionId' in msg) ? this.host.appFocus?.() : undefined
         this.voice = {
-          agentId: str('agentId'),
+          agentId: focused?.agentId ?? str('agentId'),
           cmd: str('cmd'),
           lang: str('lang') ?? this.host.voiceLang(),
           // The DIAL's rate, never this side's guess. Describing 8 kHz audio as 16 kHz does not make the
@@ -2229,7 +2241,8 @@ export class CableSession {
 
   async focusAgent(agentId: string): Promise<void> {
     this.desiredFocus = agentId
-    await this.send({ t: 'focus', agentId })
+    const sent = await this.send({ t: 'focus', agentId })
+    if (sent && this.desiredFocus === agentId) this.appFocusUnsent = false
   }
 
   /**
@@ -2266,7 +2279,7 @@ export class CableSession {
         // this older transaction focus after it finishes.
         // Already where the window is: nothing to command. The record is right either way — this is the
         // window FOLLOWING the dial, and the dial's own report wrote it.
-        if (generation !== this.appFocusGeneration || agentId === this.desiredFocus) return
+        if (generation !== this.appFocusGeneration || (agentId === this.desiredFocus && !this.appFocusUnsent)) return
         // Said before the frame goes out, not after: the frame itself succeeds either way.
         const unknown = this.host.knows?.(agentId) === false
         this.log(`cable: following the app to agent ${agentId}${unknown ? ' — NOT in this daemon\'s list, the dial has no tile for it' : ''}`)
@@ -2286,6 +2299,7 @@ export class CableSession {
         // we are moving to, not the one we are leaving — otherwise the dial visibly steps onto the old
         // tile on its way. Cheap when nothing changed: syncAgents returns without sending a frame.
         this.desiredFocus = agentId
+        this.appFocusUnsent = true
         await this.syncAgents()
         if (generation !== this.appFocusGeneration) return
         await this.focusAgent(agentId)   // writes the record

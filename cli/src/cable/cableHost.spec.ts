@@ -44,6 +44,17 @@ function fleetOf(machines: FleetMachine[]): MachineFleet {
 
 const REMOTE: FleetMachine = { machineId: 'other', name: 'office-imac', state: 'ready', authMode: 'remote' }
 
+it('reads the current window selection for each recording instead of caching it with the roster', () => {
+  let focused: { machineId: string; agentId: string } | undefined
+  const host = new DaemonCableHost(wiring({ appFocus: () => focused }))
+  expect(host.appFocus()).toBeUndefined()
+  focused = { machineId: 'other', agentId: 'a2' }
+  expect(host.appFocus()).toEqual(focused)
+  focused = { machineId: 'mine', agentId: 'a1' }
+  expect(host.appFocus()).toEqual(focused)
+  expect(new DaemonCableHost(wiring()).appFocus()).toBeUndefined()
+})
+
 describe('notification read receipts', () => {
   it('routes the exact occurrence to its machine without focusing or answering', () => {
     const w = wiring({ notificationRead: vi.fn(), opened: vi.fn(), focused: vi.fn() })
