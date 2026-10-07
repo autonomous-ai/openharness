@@ -24,9 +24,11 @@ jobs:
         run: |
           bash store/agents/home-assistant/toolchain/setup.sh
           node store/agents/home-assistant/node_modules/playwright-core/cli.js install --with-deps chromium
-          echo "HA_PYTHON=$GITHUB_WORKSPACE/store/agents/home-assistant/.runtime/core/bin/python" >> "$GITHUB_ENV"
-          echo "HA_DSH_DIR=$GITHUB_WORKSPACE/store/agents/home-assistant" >> "$GITHUB_ENV"
-          echo "PLAYWRIGHT_MODULE=$GITHUB_WORKSPACE/store/agents/home-assistant/node_modules/playwright-core/index.mjs" >> "$GITHUB_ENV"
+          {
+            echo "HA_PYTHON=$GITHUB_WORKSPACE/store/agents/home-assistant/.runtime/core/bin/python"
+            echo "HA_DSH_DIR=$GITHUB_WORKSPACE/store/agents/home-assistant"
+            echo "PLAYWRIGHT_MODULE=$GITHUB_WORKSPACE/store/agents/home-assistant/node_modules/playwright-core/index.mjs"
+          } >> "$GITHUB_ENV"
       - name: Test native timers, fixtures, isolation, drafts and failure preservation
         run: node --test store/agents/home-assistant/test/*.test.mjs
       - name: Edit, revise, export and reopen distinct automation workflows in Chromium

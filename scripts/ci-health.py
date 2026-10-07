@@ -7,13 +7,22 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import time
 
 
 def api(path):
     repository = os.environ["GITHUB_REPOSITORY"]
-    result = subprocess.run(["gh", "api", f"repos/{repository}/{path}"], check=True,
-                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30, text=True)
-    return json.loads(result.stdout)
+    # These are read-only GETs. A transient API failure must not discard the
+    # entire workload report; retry within the workflow's bounded deadline.
+    for attempt in range(3):
+        try:
+            result = subprocess.run(["gh", "api", f"repos/{repository}/{path}"], check=True,
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30, text=True)
+            return json.loads(result.stdout)
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+            if attempt == 2:
+                raise
+            time.sleep(2 ** attempt)
 
 
 def stamp(value):

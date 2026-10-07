@@ -56,7 +56,7 @@ jobs:
           server_pid=$!
           trap 'kill "$server_pid" 2>/dev/null || true' EXIT
           ready=false
-          for attempt in $(seq 1 30); do
+          for ((attempt=1; attempt<=30; attempt++)); do
             if curl --fail --silent http://127.0.0.1:3000/os > /dev/null; then
               ready=true
               break
