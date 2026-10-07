@@ -865,8 +865,12 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
         final mine = jev.local;
         final operating =
             mine != null && owner.operationFor(mine)?.active == true;
+        // An engine of yours its grid no longer serves (a `grid leave` from elsewhere) is started again,
+        // as its row says: Stop on a model the row calls not running read as the wrong button.
+        final restart =
+            mine != null && mine.canStop && mine.canStart && !mine.running;
         return [
-          if (mine != null && mine.canStop)
+          if (mine != null && mine.canStop && !restart)
             _ResourceAction(
               'Stop',
               busy || operating || owner.busy
@@ -1611,7 +1615,13 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
               'on your grid, beside the models already running there.',
         '',
         if (local.sizeBytes case final size?) ('Size', gigabytesLabel(size)),
-        ('Runs in', 'Grid\'s llama.cpp'),
+        // A decision model another app downloaded (Ollama's tev1) runs in that app.
+        (
+          'Runs in',
+          local.app == null || local.app == 'Grid'
+              ? 'Grid\'s llama.cpp'
+              : local.app!,
+        ),
       ],
       if (served == null)
         ...[]
