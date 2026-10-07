@@ -692,6 +692,8 @@ describe('cableEventFor', () => {
     expect(cableEventFor(base)).toEqual({ kind: 'summary', agentId: 'a1', text: 'body', recap: 'recap', subagent: false })
     expect(cableEventFor({ ...base, payload: { ...base.payload, subagent: true } })?.subagent).toBe(true)
     expect(cableEventFor({ ...base, payload: { ...base.payload, subagent: 'yes' } })?.subagent).toBe(false)
+    // A turn recapped after it ended unseen is history: drawn as quietly as a sub-agent's.
+    expect(cableEventFor({ ...base, payload: { ...base.payload, restored: true } })?.subagent).toBe(true)
     expect(cableEventFor({ ...base, payload: { kind: 'tool', text: 'Bash' } })).toBeNull()
   })
 })
