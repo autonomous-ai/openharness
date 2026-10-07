@@ -69,7 +69,7 @@ it.skipIf(!hasPty).each(['duplex', 'disconnect', 'close'])(
   }, 15_000,
 )
 
-it.skipIf(!hasPty).each(['gone', 'early'])('opens a port whose far end is %s without waiting in open()', async (mode) => {
+it.skipIf(!hasPty).each(['gone', 'early', 'raced'])('opens a port whose far end is %s without waiting in open()', async (mode) => {
   const scratch = await mkdtemp(join(tmpdir(), 'serial-gone-'))
   try {
     const worker = join(scratch, 'serial-gone.mjs')
@@ -81,7 +81,19 @@ it.skipIf(!hasPty).each(['gone', 'early'])('opens a port whose far end is %s wit
     const { stdout } = await promisify(execFile)('python3', [driver, process.execPath, worker, mode], { timeout: 12_000 })
     const result = JSON.parse(stdout)
     if (mode === 'gone') expect(result).toMatchObject({ mode, opened: false })
-    else expect(result).toEqual({ mode, opened: true, received: 'before after' })
+    // Opened over the descriptor it has, never again by name: a terminal stream reopened it and waited there
+    // for the far end, in open(), the process's event loop with it (measured 2026-10-06, 40 s).
+    // Never waits, and either opens or is refused at once, as each kernel has it. macOS lets a terminal whose
+    // master has gone be configured and opened without waiting: it opens, with nothing to read, and waits for
+    // the dial's greeting as for any dial, its first write (EIO) or its silence ending it (cableSession.ts).
+    // Linux hangs such a terminal up: `stty` on it fails (EIO), so it is refused before anything is opened.
+    else if (mode === 'raced' && process.platform === 'darwin') {
+      expect(result).toMatchObject({ mode, opened: true, received: '' })
+      expect(result.openMs).toBeLessThan(2_000)
+    } else if (mode === 'raced') {
+      expect(result).toMatchObject({ mode, opened: false })
+      expect(result.ms).toBeLessThan(2_000)
+    } else expect(result).toMatchObject({ mode, opened: true, received: 'before after', closed: 'done' })
   } finally {
     await rm(scratch, { recursive: true, force: true })
   }

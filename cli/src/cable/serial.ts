@@ -7,8 +7,9 @@
 import { execFile } from 'node:child_process'
 import { closeSync, constants, existsSync, lstatSync, openSync, readFileSync, readSync, readdirSync } from 'node:fs'
 import { basename } from 'node:path'
-import { ReadStream } from 'node:tty'
+import type { Socket } from 'node:net'
 import { promisify } from 'node:util'
+import { portStream } from './portStream.js'
 
 const runFile = promisify(execFile)
 
@@ -222,7 +223,7 @@ function findLinux(): DialPort[] {
 export class SerialLink {
   private constructor(
     readonly path: string,
-    private readonly stream: ReadStream,
+    private readonly stream: Socket,
     private readonly onData: (chunk: Buffer) => void,
     private readonly onClosed: (why: string) => void,
     private readonly claimFd?: number,
@@ -277,18 +278,15 @@ export class SerialLink {
       //
       // Measured 2026-08-24: the daemon died at the exact second the cable came out, every time, and the
       // dial then greeted an empty room until it timed out and showed no agents.
-      // FileHandle.read either occupies a worker while idle or needs EAGAIN polling. A TTY stream
-      // uses libuv readiness instead, including short writes/backpressure, without a polling timer.
-      // ReadStream is a net.Socket; opening O_RDWR and enabling both sides makes it full duplex.
+      // FileHandle.read either occupies a worker while idle or needs EAGAIN polling. A stream on libuv's
+      // readiness does neither, short writes and backpressure included, without a polling timer
+      // (portStream.ts); opening O_RDWR and enabling both sides makes it full duplex.
       const fd = openSync(path, constants.O_RDWR | constants.O_NOCTTY | constants.O_NONBLOCK)
-      // THE FAR END MUST STILL BE THERE, OR THE NEXT LINE NEVER RETURNS. libuv reopens a tty by its name
-      // with a plain, blocking open() (uv_tty_init), and a terminal whose other end has closed blocks such an
-      // open until something opens that end again: measured 2026-10-06, a fake dial on a pseudo-terminal
-      // unplugged while its port was being opened (during `stty` above) held the devices' process in that
-      // open for 40 s, until the master killed it as hung, and the other dial with it. A dial on USB is a
-      // callout device (cu.*) that does not wait, but nothing here should rest on that. So one read first,
-      // without waiting: it ends (0) or fails, other than with "nothing yet", when the far end is gone, and
-      // what it read is the dial's and is handed to the stream ahead of the rest.
+      // A port whose far end is already gone is refused here, plainly: one read first, without waiting, ends
+      // (0) or fails, other than with "nothing yet", and what it read is the dial's and is handed to the
+      // stream ahead of the rest. It once stood between the stream and a reopen that waited forever for a
+      // far end that had gone (measured 2026-10-06, 40 s); the stream opens nothing now (portStream.ts),
+      // since the far end can also go just after this read.
       let early: Buffer | null = null
       try {
         const probe = Buffer.alloc(4096)
@@ -298,14 +296,14 @@ export class SerialLink {
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'EAGAIN') { closeSync(fd); throw error }
       }
-      let stream: ReadStream
-      try { stream = new ReadStream(fd, { readable: true, writable: true }) }
+      let stream: Socket
+      try { stream = portStream(fd) }
       catch (error) { closeSync(fd); throw error }
       if (early) stream.unshift(early)
-      // On POSIX libuv normally reopens the tty and owns a duplicate. On its fallback path it owns
-      // the supplied fd itself. Check the native handle exactly once so neither path leaks a
-      // descriptor or closes it twice. The managed Node runtime's real-PTY tests cover ownership.
-      const streamFd = (stream as ReadStream & { _handle: { fd: number } })._handle.fd
+      // The stream owns the descriptor it was given, unless it is a terminal stream (a Node without the
+      // pipe handle), which reopens the tty and owns a duplicate. Check the native handle exactly once so
+      // neither path leaks a descriptor or closes it twice. The real-PTY tests cover ownership.
+      const streamFd = (stream as Socket & { _handle: { fd: number } })._handle.fd
       if (streamFd !== fd) {
         try { closeSync(fd) }
         catch (error) { stream.destroy(); throw error }

@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const io = vi.hoisted(() => ({ open: vi.fn(), close: vi.fn(), configure: vi.fn(), stream: vi.fn(), readdir: vi.fn(), lstat: vi.fn(), read: vi.fn() }))
 vi.mock('node:fs', async (original) => ({ ...await original<typeof import('node:fs')>(), openSync: io.open, closeSync: io.close, readdirSync: io.readdir, lstatSync: io.lstat, readSync: io.read }))
-vi.mock('node:tty', () => ({ ReadStream: io.stream }))
+vi.mock('./portStream.js', () => ({ portStream: io.stream }))
 vi.mock('node:child_process', () => ({ execFile: io.configure }))
 
 import { SerialLink, findDialPorts } from './serial.js'
@@ -59,7 +59,7 @@ describe('event-driven serial link', () => {
     const link = await SerialLink.open('/dev/fake', received, closed)
     expect(io.open).toHaveBeenCalledWith('/dev/fake', constants.O_RDWR | constants.O_NOCTTY | constants.O_NONBLOCK)
     expect(io.close).toHaveBeenCalledExactlyOnceWith(42)
-    expect(io.stream).toHaveBeenCalledWith(42, { readable: true, writable: true })
+    expect(io.stream).toHaveBeenCalledWith(42)
     expect(vi.getTimerCount()).toBe(0)
     await vi.advanceTimersByTimeAsync(60_000)
     expect(received).not.toHaveBeenCalled()
